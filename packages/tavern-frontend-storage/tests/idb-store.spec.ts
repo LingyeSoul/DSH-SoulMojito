@@ -17,6 +17,7 @@ import {
   deleteIdbDatabase,
   deleteIdbRecord,
   getIdbRecord,
+  listIdbKeys,
   openIdbDatabase,
   putIdbRecordFromFile,
 } from '../src/index.js'
@@ -48,6 +49,7 @@ describe('host-backed virtual IndexedDB', () => {
     await createIdbStore(root, CHARACTER, DATABASE, 'records', 'key')
     const again = await openIdbDatabase(root, CHARACTER, DATABASE, 1)
     expect(again).toMatchObject({ version: 1, previousVersion: 1, stores: ['records'] })
+    expect(again.storeKeyPaths).toEqual({ records: 'key' })
 
     const put = await putIdbRecordFromFile(
       root,
@@ -75,9 +77,11 @@ describe('host-backed virtual IndexedDB', () => {
     const second = await getIdbRecord(root, CHARACTER, DATABASE, 'second-store', 'same-key')
     expect(readFileSync(first?.path ?? '', 'utf8')).toBe('first')
     expect(readFileSync(second?.path ?? '', 'utf8')).toBe('second')
+    expect(await listIdbKeys(root, CHARACTER, DATABASE, 'records')).toEqual({ keys: ['pack-1', 'same-key'] })
 
     expect(await deleteIdbRecord(root, CHARACTER, DATABASE, 'records', 'same-key')).toEqual({ deleted: true })
     expect(await getIdbRecord(root, CHARACTER, DATABASE, 'records', 'same-key')).toBeUndefined()
+    expect(await listIdbKeys(root, CHARACTER, DATABASE, 'records')).toEqual({ keys: ['pack-1'] })
     expect(await getIdbRecord(root, CHARACTER, DATABASE, 'second-store', 'same-key')).toBeDefined()
 
     expect(await clearIdbStore(root, CHARACTER, DATABASE, 'second-store')).toEqual({ cleared: 1 })

@@ -45,6 +45,7 @@ export interface IdbOpenResult {
   version: number
   previousVersion: number
   stores: string[]
+  storeKeyPaths: Record<string, string>
 }
 
 export interface IdbRecordFile {
@@ -204,7 +205,12 @@ export async function openIdbDatabase(
     else if (requested > database.version) database.version = requested
     database.updatedAt = Date.now()
     await writeDatabase(root, character, database)
-    return { version: database.version, previousVersion, stores: Object.keys(database.stores) }
+    return {
+      version: database.version,
+      previousVersion,
+      stores: Object.keys(database.stores),
+      storeKeyPaths: Object.fromEntries(Object.entries(database.stores).map(([name, descriptor]) => [name, descriptor.keyPath])),
+    }
   })
 }
 
@@ -268,6 +274,24 @@ export async function putIdbRecordFromFile(
     }
     return { key, size }
   })
+}
+
+/** List keys in a store (backs the virtual IndexedDB `getAll` / `getAllKeys`). */
+export async function listIdbKeys(
+  root: string,
+  character: string,
+  nameValue: unknown,
+  storeValue: unknown,
+): Promise<{ keys: string[] }> {
+  const name = requireDatabaseName(nameValue)
+  const store = requireStoreName(storeValue)
+  const database = await readDatabase(root, character, name)
+  if (database.stores[store] === undefined) return { keys: [] }
+  return {
+    keys: Object.values(database.records)
+      .filter((record) => record.store === store)
+      .map((record) => record.key),
+  }
 }
 
 /** Resolve a record file for the binary GET route. */

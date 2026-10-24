@@ -430,6 +430,59 @@ describe('TavernHelper runtime source', () => {
     ])
   })
 
+  it('accepts the legacy setChatMessage(text, message_id, option) swipe switch', async () => {
+    // Cards switch to an alternate greeting with the three-argument form:
+    //   setChatMessage(swipes[1], 0, { swipe_id: 1, refresh: '...' })
+    // The old shim only accepted the object form, so the string was forwarded
+    // as a message object and the server rejected the whole batch with
+    // "messages[] must be an object".
+    const { window, posted } = boot(null, baseSnapshot({
+      messages: [{
+        message_id: 0,
+        name: 'ExampleChar',
+        role: 'assistant',
+        is_hidden: false,
+        message: 'first greeting',
+        data: {},
+        extra: {},
+        swipe_id: 0,
+        swipes: ['first greeting', 'second greeting'],
+      }],
+    }))
+    // The RPC stays pending in this sandbox (no host reply); the posted payload
+    // is what the contract test needs.
+    void window.setChatMessage('second greeting', 0, { swipe_id: 1, refresh: 'affected' })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const request = posted.find((message) => message.op === 'messages.set')
+    expect(request?.payload?.messages).toEqual([
+      { message: 'second greeting', message_id: 0, swipe_id: 1 },
+    ])
+  })
+
+  it('exposes the ST slash-command registry some card scripts bootstrap through', async () => {
+    const { window, posted } = boot(null, null)
+    const st = window.SillyTavern as unknown as Record<string, any>
+    expect(typeof st.SlashCommandParser.addCommandObject).toBe('function')
+    expect(st.SlashCommandParser.commands).toBeTypeOf('object')
+    expect(typeof st.SlashCommand.fromProps).toBe('function')
+
+    let opened = 0
+    const command = st.SlashCommand.fromProps({
+      name: 'openpanel',
+      callback: () => { opened += 1; return '' },
+      helpString: 'Open the card panel.',
+    })
+    st.SlashCommandParser.addCommandObject(command)
+    // Registration is verified by object identity, not by a return flag.
+    expect(st.SlashCommandParser.commands.openpanel).toBe(command)
+
+    // A locally registered command must run in the iframe: the host interpreter
+    // does not know it and would reject it as an unsupported command.
+    await (window as unknown as { triggerSlash(command: string): Promise<string> }).triggerSlash('/openpanel')
+    expect(opened).toBe(1)
+    expect(posted.some((message) => message.op === 'slash')).toBe(false)
+  })
+
   it('scopes script variables per script inside one shared frontend document', async () => {
     const { window, posted } = boot(
       null,

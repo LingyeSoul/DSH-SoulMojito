@@ -59,6 +59,11 @@ window.__ModuleLoader__.load({
 
     const API = '/api/dsh-soulmojito'
     const FRONTEND_HEIGHT_MESSAGE = 'dsh-soulmojito:frontend-height'
+    // Shared absolute ceiling for a card frontend iframe. Auto height and the
+    // manual drag both use it so a tall welcome/status page can settle at its
+    // content height instead of the legacy 1200px clip; beyond this the iframe
+    // scrolls internally.
+    const FRONTEND_FRAME_MAX_HEIGHT = 4000
     const FRONTEND_THEME_MESSAGE = 'dsh-soulmojito:theme'
     const FRONTEND_RESOURCE_SOURCES = [
       'https://cdn.jsdelivr.net',
@@ -79,7 +84,7 @@ window.__ModuleLoader__.load({
       "media-src data: blob: https:",
       "worker-src blob:",
       // Blob URLs are card-local pack assets; allowing them keeps
-      // RiiPack-style cards working without opening any network origin.
+      // pack-style cards working without opening any network origin.
       "connect-src blob:",
       "frame-src 'none'",
       "object-src 'none'",
@@ -701,7 +706,7 @@ window.__ModuleLoader__.load({
         // Visible frames keep at least one control row: the action console reports
         // its panel height, and a 0/1px clamp would clip the whole console while
         // leaving the frame in the layout.
-        frame.style.setProperty('height', `${Math.min(Math.max(Math.ceil(prefs.height), 36), 1200)}px`, 'important')
+        frame.style.setProperty('height', `${Math.min(Math.max(Math.ceil(prefs.height), 36), FRONTEND_FRAME_MAX_HEIGHT)}px`, 'important')
       } else {
         frame.style.removeProperty('height')
       }
@@ -962,7 +967,7 @@ window.__ModuleLoader__.load({
     }
 
     const FRONTEND_AUTO_MIN_HEIGHT = 80
-    const FRONTEND_AUTO_MAX_HEIGHT = 1200
+    const FRONTEND_AUTO_MAX_HEIGHT = FRONTEND_FRAME_MAX_HEIGHT
 
     function FrontendFrame({ html, token, binding, refreshKey, messageId, hostSessionId, identity, onScriptButtons }) {
       const t = useTranslate()
@@ -1059,7 +1064,7 @@ window.__ModuleLoader__.load({
     // grows past the initial iframe and the panel stays clipped. The handle
     // lets the user own the height; null means "follow the card's report".
     const FRONTEND_MANUAL_MIN_HEIGHT = 120
-    const FRONTEND_MANUAL_MAX_HEIGHT = 4000
+    const FRONTEND_MANUAL_MAX_HEIGHT = FRONTEND_FRAME_MAX_HEIGHT
     const FRONTEND_MANUAL_STEP = 40
 
     function useFrontendResize(frameRef, autoHeight, ready) {

@@ -58,6 +58,11 @@ window.__ModuleLoader__.load({
 
     const API = '/api/dsh-soulmojito'
     const FRONTEND_HEIGHT_MESSAGE = 'dsh-soulmojito:frontend-height'
+    // Shared absolute ceiling for a card frontend iframe. Auto height and the
+    // manual drag both use it so a tall welcome/status page can settle at its
+    // content height instead of the legacy 1200px clip; beyond this the iframe
+    // scrolls internally.
+    const FRONTEND_FRAME_MAX_HEIGHT = 4000
     const FRONTEND_THEME_MESSAGE = 'dsh-soulmojito:theme'
     const FRONTEND_RESOURCE_SOURCES = [
       'https://cdn.jsdelivr.net',
@@ -78,7 +83,7 @@ window.__ModuleLoader__.load({
       "media-src data: blob: https:",
       "worker-src blob:",
       // Blob URLs are card-local pack assets; allowing them keeps
-      // RiiPack-style cards working without opening any network origin.
+      // pack-style cards working without opening any network origin.
       "connect-src blob:",
       "frame-src 'none'",
       "object-src 'none'",

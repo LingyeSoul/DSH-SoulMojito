@@ -110,8 +110,16 @@ describe('client frontend sidebar (main.js source check)', () => {
     expect(source).toContain('${csp}${unloadCompat}${formCompat}${reset}${viewport}${theme}${helper}')
   })
 
+  it('auto-expands tall frontends up to the shared frame ceiling', () => {
+    // Tall welcome/status pages must settle above the legacy 1200px limit;
+    // card-driven frame.prefs heights share the same ceiling.
+    expect(source).toContain('const FRONTEND_FRAME_MAX_HEIGHT = 4000')
+    expect(source).toContain('const FRONTEND_AUTO_MAX_HEIGHT = FRONTEND_FRAME_MAX_HEIGHT')
+    expect(source).toContain('Math.max(Math.ceil(prefs.height), 36), FRONTEND_FRAME_MAX_HEIGHT')
+  })
+
   it('lets the user drag the frontend height and keeps it across card frame prefs', () => {
-    expect(source).toContain("const FRONTEND_MANUAL_MAX_HEIGHT = 4000")
+    expect(source).toContain('const FRONTEND_MANUAL_MAX_HEIGHT = FRONTEND_FRAME_MAX_HEIGHT')
     expect(source).toContain('const [manualHeight, setManualHeight] = useState(null)')
     expect(source).toContain('className: \'dt-frontend-resize-handle\'')
     expect(source).toContain('setPointerCapture(event.pointerId)')

@@ -225,6 +225,34 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
     expect((afterDelete.body?.value as Record<string, unknown>).lastMessageId).toBe(2)
   })
 
+  it('selects a swipe and writes the replacement text into that slot', async () => {
+    // Cards switch to an alternate greeting with setChatMessage(text, 0, {swipe_id: 1}).
+    // The update must write the new text into that swipe slot and select it;
+    // selecting only the previous slot would drop the text the card supplied.
+    const swipeChatId = await store.createChat(CHARACTER, HEADER, [{
+      name: CHARACTER,
+      is_user: false,
+      is_system: false,
+      send_date: '',
+      mes: 'first greeting',
+      swipes: ['first greeting', 'second greeting'],
+      swipe_id: 0,
+    }])
+    const result = await call({
+      op: 'messages.set',
+      character: CHARACTER,
+      chatId: swipeChatId,
+      messages: [{ message_id: 0, message: 'second greeting', swipe_id: 1 }],
+    })
+    expect(result.status).toBe(200)
+    const snapshot = await store.getChatSnapshot(CHARACTER, swipeChatId)
+    expect(snapshot?.chat.messages[0]).toMatchObject({
+      mes: 'second greeting',
+      swipe_id: 1,
+      swipes: ['first greeting', 'second greeting'],
+    })
+  })
+
   it('runs an STscript subset and persists variable writes', async () => {
     const result = await call({ op: 'slash', character: CHARACTER, chatId, command: '/setvar 心情 平静 | /getvar 心情' })
     expect(result.body?.value).toMatchObject({ output: '平静' })
@@ -257,6 +285,16 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
     const result = await call({ op: 'not-a-helper-op', character: CHARACTER, chatId })
     expect(result.status).toBe(500)
     expect(String(result.body?.message)).toContain('unsupported helper op')
+  })
+
+  it('lists virtual IndexedDB keys through the helper control plane', async () => {
+    const opened = await call({ op: 'idb.open', character: CHARACTER, chatId, name: 'keys-db', version: 1 })
+    expect(opened.status).toBe(200)
+    const created = await call({ op: 'idb.store.create', character: CHARACTER, chatId, db: 'keys-db', store: 'rows', keyPath: 'id' })
+    expect(created.status).toBe(200)
+    const keys = await call({ op: 'idb.keys', character: CHARACTER, chatId, db: 'keys-db', store: 'rows' })
+    expect(keys.status).toBe(200)
+    expect(keys.body?.value).toEqual({ keys: [] })
   })
 
   it('persists frontend localStorage per character', async () => {

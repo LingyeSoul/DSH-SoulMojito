@@ -166,6 +166,8 @@ type ChatMessageSwiped = ChatMessage & {
 | `getLastMessageId()` | ✅ | 同步，最新楼层号；空聊天为 `-1` |
 | `getCurrentMessageId()` | ✅ | 当前 iframe 所属楼层号；侧栏 / MVU 状态模板为 `-1`（最新） |
 | `setChatMessages(list, option?)` | ✅ | 可改 `message` / `name` / `role` / `is_hidden` / `data` / `extra` / `swipes` / `swipe_id` / `swipes_info` |
+| `setChatMessage(message, option?)` | ✅ | 对象式；等价于单条 `setChatMessages` |
+| `setChatMessage(text, message_id, option?)` | ✅ | 旧版三段式（部分卡用它切第二个开场白）：`text` 写入指定楼层的当前 `swipe_id` 槽并选中；`option.swipe_id` 会提升到消息更新 |
 | `createChatMessages(list, option?)` | ✅ | `insert_before`（或旧名 `insert_at`）；`'end'` 或数字（支持负数） |
 | `deleteChatMessages(ids, option?)` | ✅ | 支持负数；重复 id 会去重；返回后快照已同步 |
 | `rotateChatMessages(begin, middle, end)` | ❌ | 未实现。需要时用 `getChatMessages` + `deleteChatMessages` + `createChatMessages` 组合，注意引用会变 |
@@ -322,15 +324,18 @@ JSR 卡可以带自己的 OpenAI 兼容 API 源（URL + Key + 模型），并在
 - `sessionStorage`：iframe 内存实现，页面重载即失（与 JSR 的 per-tab 语义近似，
   但不跨文档）。
 - `indexedDB`：**虚拟 IndexedDB**。`indexedDB.open` / `createObjectStore` /
-  `transaction` / `objectStore().get/put/delete/clear` / `deleteDatabase` 由 shim
-  经宿主 RPC 转发，记录体走 `frontend/idb/put|get` 二进制路由，按角色落在
-  `$DSH_HOME/soulmojito/frontend-idb/`（名字与 key 均 SHA-256 后落盘）。单条上限
-  1GB、单角色上限 2GB；写入先写临时文件再原子 rename。卡把数百 MB 级资源包缓存到
-  IndexedDB 后，刷新/重开聊天不会重新下载。
-  支持范围：单 object store 的 keyPath、get/put/delete/clear/deleteDatabase；
-  **不支持** index、cursor、多 store 复合事务、`IDBKeyRange`——调用这些缺口会
-  显式抛错，不会静默返回空。`localStorage` 的内容也不会进入真实浏览器存储，
-  卡无法借此读取宿主 Cookie 或别的角色数据。
+  `transaction` / `objectStore().get/put/delete/clear/getAll/getAllKeys` /
+  `deleteDatabase` 由 shim 经宿主 RPC 转发，记录体走 `frontend/idb/put|get`
+  二进制路由，按角色落在 `$DSH_HOME/soulmojito/frontend-idb/`（名字与 key 均
+  SHA-256 后落盘）。单条上限 1GB、单角色上限 2GB；写入先写临时文件再原子
+  rename。卡把数百 MB 级资源包缓存到 IndexedDB 后，刷新/重开聊天不会重新下载。
+  两种记录形态共用同一通道：带 `bytes: ArrayBuffer` 的二进制记录（资源包缓存）
+  原样落盘；普通对象记录（例如把聊天历史存成普通行的前端）按 JSON 编码后落盘，
+  `get` / `getAll` 自动解码回原对象，`put` 的 key 支持显式第二参数或 `keyPath`。
+  支持范围：单 object store 的 keyPath、get/put/delete/clear/getAll/getAllKeys/
+  deleteDatabase；**不支持** index、cursor、多 store 复合事务、`IDBKeyRange`
+  ——调用这些缺口会显式抛错，不会静默返回空。`localStorage` 的内容也不会进入
+  真实浏览器存储，卡无法借此读取宿主 Cookie 或别的角色数据。
 
 ---
 
@@ -421,6 +426,7 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 | 函数 | 状态 | 说明 |
 |---|:--:|---|
 | `SillyTavern.getContext()` | ⚠️ | 只返回最小只读面：`chatId` / `chat` / `chat_metadata` / `name1`（你）/ `name2`（角色）/ `characterId`（恒 0）/ `characters`（当前角色卡）/ `getCharacterCardFields()`（恒空字段）。`getContext()` 里仍没有 `extensionSettings`、`eventSource`、`eventTypes`；这些兼容字段直接挂在 `SillyTavern.*`（`extensionSettings` / `chatCompletionSettings` 为 iframe 内存，`saveChat` / `saveSettingsDebounced` 为 Promise/空操作——变量与楼层已由 helper RPC 落盘，不会写宿主设置） |
+| `SillyTavern.SlashCommandParser` / `SillyTavern.SlashCommand` | ✅ | iframe 本地命令注册面：`fromProps({name, callback, helpString})` + `addCommandObject(command)` + `commands`；`triggerSlash` 优先命中本地命令并在 iframe 内执行回调，带 `\|` 的管道仍交给宿主解释器（见 §6） |
 | `SillyTavern.loadWorldInfo(name)` | ✅ | 读当前聊天的世界书并返回 ST 形状 `{ entries: { [uid]: entry } }`；优先会话副本，其次基础资产/卡内嵌书。只读，写回仍走 `updateWorldbookWith` 的会话副本 |
 | `getCurrentMessageId()` | ✅ | 当前 iframe 所属楼层；侧栏/MVU 模板为 `-1`（最新）。没有楼层绑定时也不要拿它做范围上界，优先 `getLastMessageId()` |
 | `getLorebook(name)` / `getWorldbook(name)` | ✅ | 返回条目数组，含 `world` 字段、ST 原字段和 JSR 别名（`name` / `enabled` / `strategy.keys`）。名字缺省取角色卡绑定的世界书，其次全局激活的第一本，最后卡内嵌书名。**优先读当前聊天的会话副本**，没有副本才读基础 `worlds/` 资产；写回时 JSR 别名转回 ST 字段，且只写会话副本 |
@@ -482,7 +488,7 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 | `playAudio(type, {url, title?})` / `pauseAudio(type)` / `audioEnable` / `audioImport` / `audioMode` / `audioPlay` / `audioSelect` | ✅ | iframe 内 `<audio>`，`bgm` / `ambient` 两通道 |
 | `getAudioList` / `replaceAudioList` / `appendAudioList` / `getAudioSettings` / `setAudioSettings` / `getCurrentAudio` | ⚠️ | 进程内音频状态，语义对齐 JSR 的可观察字段；不持久化、不跨 iframe |
 | `localStorage` | ✅ | 按角色持久，见 §2.5（上限 512KB/角色）；`sessionStorage` 仍为 iframe 内存 |
-| `indexedDB` | ⚠️ | 虚拟 IndexedDB，见 §2.5：单 store 的 open/create/transaction/get/put/delete/clear/deleteDatabase；不支持 index/cursor/多 store 事务 |
+| `indexedDB` | ✅ | 虚拟 IndexedDB，见 §2.5：单 store 的 open/create/transaction/get/put/delete/clear/getAll/getAllKeys/deleteDatabase；二进制与普通对象两种记录都支持；不支持 index/cursor/多 store 事务 |
 | `getCharNames()` / `getCharacterNames()` | ✅ | 角色名列表 |
 | `builtin.renderMarkdown` / `copyText` / `parseRegexFromString` / `uuidv4` / `saveSettings` / `addOneMessage` | ✅ | 宿主无关的子集；`addOneMessage` 映射到 `createChatMessages`（会真实落盘） |
 | `builtin.reloadEditor` / `renderPromptManager` / `promptManager` / `getImageTokenCost` / `getVideoTokenCost` | ❌ | 触及宿主 DOM/生成管线，显式抛错 |
@@ -546,6 +552,19 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 await triggerSlash('/setvar mood calm')
 ```
 
+**iframe 本地命令注册（2026-10-24）**：部分卡与面板脚本会用 ST 的注册面注册自己的
+命令（`SillyTavern.SlashCommand.fromProps` + `SillyTavern.SlashCommandParser.addCommandObject`）。
+这两个对象由 `tavern-jsr` 提供，命令表是 iframe 本地的；`triggerSlash('/<name>')`
+命中本地命令时**直接在该 iframe 执行回调**，不再转给宿主解释器（宿主不认识它们，
+会按未知命令报错）。带 `|` 的管道仍交给宿主解释器，保证受控的 `/send …|/trigger` 语义不变。
+
+```js
+SillyTavern.SlashCommandParser.addCommandObject(
+  SillyTavern.SlashCommand.fromProps({ name: 'openpanel', callback: () => { openPanel(); return ''; } }),
+);
+await triggerSlash('/openpanel'); // 本地执行，不产生 helper 请求
+```
+
 生成控制里只有 `/trigger` 接通了受控路径（见 §5.1）：它把本次写入的用户楼层交给宿主
 composer，由 AgentLoop 生成一次；`/regenerate` / `/stop` 仍显式报错。
 
@@ -559,6 +578,7 @@ composer，由 AgentLoop 生成一次；`/regenerate` / `/stop` 仍显式报错�
 | 正则 | `/regex name=x` | ✅ |
 | 生成 | `/trigger`（含 `/send 文本\|/trigger` 管道） | ✅ 受控：本次写入的用户楼层交给宿主 composer（见 §5.1） |
 | 生成 | `/regenerate` `/stop` | ❌ 抛错（见 §5.1） |
+| iframe 本地注册命令（`SlashCommandParser.addCommandObject`） | ✅ 在 iframe 内执行回调，不经宿主 |
 | 其它 ST 命令（`/echo` 之外的显示类、`/sys`、`/impersonate`…） | ❌ 解析失败 |
 
 `/echo` 被接受但丢弃输出（没有宿主输入框可放）。
@@ -624,6 +644,8 @@ composer，由 AgentLoop 生成一次；`/regenerate` / `/stop` 仍显式报错�
 | 结构化生成报 `returned no text (finish_reason=tool_calls)` | 供应商把结果放进 `message.tool_calls`，`content` 为 null；旧桥只读 content | 更新构建：`generate` 代理在 content 为空时返回 `tool_calls[].function.arguments` / 旧式 `function_call.arguments` 的文本 |
 | 卡报 `Connecting to 'blob:null/…' violates ... connect-src https:` / `Fetch API cannot load blob:` | 资源包或 WASM 加载器把本地数据包成 blob URL 再 `fetch`；旧 CSP 只放行 `https:` | 更新构建：开启「允许美化前端加载外部资源」后 `connect-src` 为 `https: blob:`；blob 不增加外网可达面 |
 | 控制台反复出现 `[Violation] Permissions policy violation: unload is not allowed in this document` | Chromium 默认禁止跨源 iframe 注册 `unload`；沙箱 `srcdoc` 没有响应头，`allow="unload"` 也无法把它打开 | 宿主注入垫片，把 iframe 内 `window` / `document` 的 `unload` 监听转成 `pagehide`；卡代码无需改 |
+| 面板脚本报 `... Tavern bootstrap failed ... SillyTavern slash-command API is unavailable` | 这类脚本启动时用 `SillyTavern.SlashCommand.fromProps` + `SlashCommandParser.addCommandObject` 注册自己的命令；旧 shim 没有这两个对象 | 更新构建：iframe 提供本地注册面，`triggerSlash('/<name>')` 在 iframe 内执行回调（§6） |
+| 同一类脚本接着报 `Accessible SillyTavern parent window was not found` | 它会沿 `window.parent` 找带 `#chat` 的祖先窗口，并要 `getOneCharacter` / ST HTTP 端点；沙箱只有本 iframe 文档 | 🧱 结构性限制，不是 shim 缺口：完整支持需要定义角色/设置读取与会话写入边界，属于独立提案；详见交付说明 |
 | `Invalid or unexpected token` 出现在插件 client bundle | 加载了包含模板字面量注释的旧/中间构建 | 重新构建并重启 DSH；`client/index.js` 必须通过 `node --check` |
 | 字体报 `font-src ... blocked` | 旧 CSP 只允许 `data: https:`，卡用 blob URL 字体 | 更新构建：`font-src data: blob: https:` |
 

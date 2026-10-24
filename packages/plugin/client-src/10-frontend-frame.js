@@ -577,7 +577,7 @@
         // Visible frames keep at least one control row: the action console reports
         // its panel height, and a 0/1px clamp would clip the whole console while
         // leaving the frame in the layout.
-        frame.style.setProperty('height', `${Math.min(Math.max(Math.ceil(prefs.height), 36), 1200)}px`, 'important')
+        frame.style.setProperty('height', `${Math.min(Math.max(Math.ceil(prefs.height), 36), FRONTEND_FRAME_MAX_HEIGHT)}px`, 'important')
       } else {
         frame.style.removeProperty('height')
       }
@@ -838,7 +838,7 @@
     }
 
     const FRONTEND_AUTO_MIN_HEIGHT = 80
-    const FRONTEND_AUTO_MAX_HEIGHT = 1200
+    const FRONTEND_AUTO_MAX_HEIGHT = FRONTEND_FRAME_MAX_HEIGHT
 
     function FrontendFrame({ html, token, binding, refreshKey, messageId, hostSessionId, identity, onScriptButtons }) {
       const t = useTranslate()

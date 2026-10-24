@@ -3,7 +3,7 @@
     // grows past the initial iframe and the panel stays clipped. The handle
     // lets the user own the height; null means "follow the card's report".
     const FRONTEND_MANUAL_MIN_HEIGHT = 120
-    const FRONTEND_MANUAL_MAX_HEIGHT = 4000
+    const FRONTEND_MANUAL_MAX_HEIGHT = FRONTEND_FRAME_MAX_HEIGHT
     const FRONTEND_MANUAL_STEP = 40
 
     function useFrontendResize(frameRef, autoHeight, ready) {

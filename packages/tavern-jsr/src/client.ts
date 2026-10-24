@@ -1199,8 +1199,30 @@ export function buildIframeScript(
       .then(afterMessageMutation).then(function () { return undefined; });
   };
 
-  window.setChatMessage = function (message, option) {
-    return window.setChatMessages([message], option);
+  // JSR has two historical signatures:
+  //   setChatMessage(messageObject, option?)
+  //   setChatMessage(textOrObject, message_id, option?)
+  // The second one is still used by cards to switch swipes:
+  //   setChatMessage(swipes[1], 0, { swipe_id: 1, refresh: '...' })
+  // Without it the string lands in messages[] and the server rejects the whole
+  // batch with "messages[] must be an object".
+  window.setChatMessage = function (message, messageIdOrOption, option) {
+    var update = message && typeof message === 'object' && !Array.isArray(message)
+      ? clone(message)
+      : { message: typeof message === 'string' ? message : '' };
+    var settings = option;
+    if (typeof messageIdOrOption === 'number') {
+      update.message_id = messageIdOrOption;
+    } else if (messageIdOrOption && typeof messageIdOrOption === 'object') {
+      settings = messageIdOrOption;
+    }
+    // swipe_id belongs to the message row, not the RPC envelope. Cards pass it
+    // in the options bag; lift it into the update so applyMessageUpdate can
+    // select the requested swipe.
+    if (settings && typeof settings === 'object' && typeof settings.swipe_id === 'number') {
+      update.swipe_id = settings.swipe_id;
+    }
+    return window.setChatMessages([update], settings);
   };
 
   window.rotateChatMessages = function (begin, middle, end, option) {
@@ -1727,10 +1749,91 @@ export function buildIframeScript(
     window.replaceScriptButtons(next);
   };
 
+  // ST slash-command registry surface (2026-10-24): some card scripts and
+  // panel bootstraps register their own commands through
+  //   SillyTavern.SlashCommandParser.addCommandObject(
+  //     SillyTavern.SlashCommand.fromProps({ name, callback, helpString }))
+  // They only use this to bind a command to opening their panel; the command
+  // never runs through the host interpreter. The registry therefore lives in
+  // the iframe and triggerSlash executes a locally registered command instead
+  // of sending it to the server, where it would be rejected as unknown.
+  var localSlashCommands = Object.create(null);
+  var slashCommandFactory = {
+    fromProps: function (props) {
+      var source = props && typeof props === 'object' ? props : {};
+      var name = typeof source.name === 'string' ? source.name.trim() : '';
+      if (name === '') throw new Error('SillyTavern.SlashCommand.fromProps requires a name');
+      var command = {};
+      Object.keys(source).forEach(function (key) { command[key] = source[key]; });
+      command.name = name;
+      command.aliases = Array.isArray(source.aliases) ? source.aliases.map(String) : [];
+      command.callback = typeof source.callback === 'function' ? source.callback : function () { return ''; };
+      command.helpString = typeof source.helpString === 'string' ? source.helpString : '';
+      return command;
+    },
+  };
+  var slashCommandParser = {
+    // A null-prototype table so a command named toString cannot collide with
+    // Object.prototype members; Workshop compares object identity after add.
+    commands: localSlashCommands,
+    addCommandObject: function (command) {
+      if (!command || typeof command !== 'object' || typeof command.name !== 'string' || command.name === '') {
+        throw new Error('SillyTavern.SlashCommandParser.addCommandObject requires a command object');
+      }
+      localSlashCommands[command.name] = command;
+      (Array.isArray(command.aliases) ? command.aliases : []).forEach(function (alias) {
+        localSlashCommands[String(alias)] = command;
+      });
+      return command;
+    },
+    commandExists: function (name) {
+      return Object.prototype.hasOwnProperty.call(localSlashCommands, String(name));
+    },
+    getCommandObject: function (name) {
+      return localSlashCommands[String(name)];
+    },
+  };
+  function localSlashCommandFor(text) {
+    // Manual parse instead of a regex: this block is emitted inside a template
+    // literal, where backslash escapes would be consumed before the iframe sees
+    // them.
+    if (text.charAt(0) !== '/') return null;
+    var rest = text.slice(1);
+    var splitAt = -1;
+    for (var index = 0; index < rest.length; index += 1) {
+      var char = rest.charAt(index);
+      // Escaped for the surrounding template literal: the emitted iframe source
+      // must contain '\\t' / '\\n' inside the string literal, not raw newlines.
+      if (char === ' ' || char === '\\t' || char === '\\n' || char === '|') { splitAt = index; break; }
+    }
+    var name = splitAt === -1 ? rest : rest.slice(0, splitAt);
+    if (name === '') return null;
+    var command = localSlashCommands[name];
+    if (command === undefined) return null;
+    return { command: command, args: splitAt === -1 ? '' : rest.slice(splitAt + 1).trim() };
+  }
+  function runLocalSlashCommand(text) {
+    // Pipelines and named-argument syntax stay with the host interpreter; a
+    // locally registered command is a single slash-command call with one free
+    // text argument (that is all Workshop and cards pass).
+    if (text.indexOf('|') !== -1) return null;
+    var hit = localSlashCommandFor(text);
+    if (hit === null) return null;
+    var unnamed = hit.args === '' ? [] : [hit.args];
+    var result = hit.command.callback({}, unnamed);
+    if (result && typeof result.then === 'function') {
+      return result.then(function (value) { return String(value == null ? '' : value); });
+    }
+    return String(result == null ? '' : result);
+  }
+
   // triggerSlash：只接不与宿主生成循环冲突的命令子集（变量/分支/发送/裁剪/正则）。
   // /trigger、/regenerate、/stop 会由服务端解释器明确报错（生成归宿主 AgentLoop）。
   window.triggerSlash = function (command) {
-    return call('slash', { command: String(command) }).then(function (value) { return value.output; });
+    var text = String(command == null ? '' : command).trim();
+    var local = runLocalSlashCommand(text);
+    if (local !== null) return Promise.resolve(local);
+    return call('slash', { command: text }).then(function (value) { return value.output; });
   };
   window.triggerSlashWithResult = window.triggerSlash;
 
@@ -2444,6 +2547,11 @@ export function buildIframeScript(
     unregisterMacro: window.unregisterMacroLike || function () {},
     registerFunctionTool: function () {},
     unregisterFunctionTool: function () {},
+    // Card scripts register their panel-opening commands through these two
+    // objects. They only register iframe-local commands; the host interpreter
+    // still owns real STscript execution.
+    SlashCommandParser: slashCommandParser,
+    SlashCommand: slashCommandFactory,
     ToolManager: {
       isToolCallingSupported: function () { return false; },
     },

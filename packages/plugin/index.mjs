@@ -13813,7 +13813,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.6.9".trim() : "";
-  const commit = true ? normalizeCommit("b9ce158") : void 0;
+  const commit = true ? normalizeCommit("a0ca6ae") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -29615,7 +29615,12 @@ async function openIdbDatabase(root, character, value, versionValue) {
     else if (requested > database.version) database.version = requested;
     database.updatedAt = Date.now();
     await writeDatabase(root, character, database);
-    return { version: database.version, previousVersion, stores: Object.keys(database.stores) };
+    return {
+      version: database.version,
+      previousVersion,
+      stores: Object.keys(database.stores),
+      storeKeyPaths: Object.fromEntries(Object.entries(database.stores).map(([name3, descriptor]) => [name3, descriptor.keyPath]))
+    };
   });
 }
 async function createIdbStore(root, character, nameValue, storeValue, keyPathValue) {
@@ -29661,6 +29666,15 @@ async function putIdbRecordFromFile(root, character, nameValue, storeValue, keyV
     }
     return { key, size };
   });
+}
+async function listIdbKeys(root, character, nameValue, storeValue) {
+  const name2 = requireDatabaseName(nameValue);
+  const store5 = requireStoreName(storeValue);
+  const database = await readDatabase(root, character, name2);
+  if (database.stores[store5] === void 0) return { keys: [] };
+  return {
+    keys: Object.values(database.records).filter((record) => record.store === store5).map((record) => record.key)
+  };
 }
 async function getIdbRecord(root, character, nameValue, storeValue, keyValue) {
   const name2 = requireDatabaseName(nameValue);
@@ -30679,6 +30693,13 @@ async function handleHelperApi(req, res, db) {
       return sendJson(res, 200, {
         ok: true,
         value: await createIdbStore(tavernDataRoot(), character, body?.db, body?.store, body?.keyPath)
+      });
+    }
+    case "idb.keys": {
+      requireSessionChatId(chatId, "idb.keys");
+      return sendJson(res, 200, {
+        ok: true,
+        value: await listIdbKeys(tavernDataRoot(), character, body?.db, body?.store)
       });
     }
     case "idb.delete": {
@@ -31753,7 +31774,8 @@ function parseRange2(range, lastMessageId) {
   return [Math.max(0, Math.min(start, end)), Math.min(lastMessageId, Math.max(start, end))];
 }
 function applyMessageUpdate(message, update) {
-  if (typeof update.message === "string") message.mes = update.message;
+  const nextMessage = typeof update.message === "string" ? update.message : void 0;
+  if (nextMessage !== void 0) message.mes = nextMessage;
   if (typeof update.name === "string") message.name = update.name;
   if (update.role === "system" || update.role === "assistant" || update.role === "user") {
     message.is_system = update.role === "system";
@@ -31771,10 +31793,15 @@ function applyMessageUpdate(message, update) {
     const clamped = Math.max(0, Math.min(Math.trunc(swipeId), swipes.length - 1));
     message.swipe_id = clamped;
     message.mes = swipes[clamped];
-  } else if (typeof update.swipe_id === "number" && Array.isArray(message.swipes) && message.swipes.length > 0) {
-    const clamped = Math.max(0, Math.min(Math.trunc(update.swipe_id), message.swipes.length - 1));
-    message.swipe_id = clamped;
-    message.mes = String(message.swipes[clamped] ?? message.mes ?? "");
+  } else if (Array.isArray(message.swipes) && message.swipes.length > 0) {
+    const requested = typeof update.swipe_id === "number" ? update.swipe_id : void 0;
+    const current = typeof message.swipe_id === "number" ? message.swipe_id : 0;
+    const clamped = Math.max(0, Math.min(Math.trunc(requested ?? current), message.swipes.length - 1));
+    if (nextMessage !== void 0) message.swipes[clamped] = nextMessage;
+    if (requested !== void 0) {
+      message.swipe_id = clamped;
+      message.mes = String(message.swipes[clamped] ?? message.mes ?? "");
+    }
   }
   if (Array.isArray(update.swipes_info)) message.swipe_info = cloneJson(update.swipes_info);
 }

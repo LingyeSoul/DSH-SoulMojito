@@ -290,6 +290,19 @@ window.__ModuleLoader__.load({
         request.error = error;
         try { if (request.onerror) request.onerror({ target: request, error: error }); } catch (cause) { console.error('[idb] onerror failed', cause); }
       }
+      // Rows written as plain objects are JSON-encoded by put() and tagged with
+      // meta.format = 'json'. Binary rows keep their original key/bytes shape so
+      // existing consumers (asset caches) are untouched.
+      function decodeRecord(record) {
+        if (record === null || typeof record !== 'object') return record;
+        if (record.format !== 'json' || !(record.bytes instanceof ArrayBuffer)) return record;
+        try {
+          return JSON.parse(new TextDecoder().decode(new Uint8Array(record.bytes)));
+        } catch (error) {
+          console.error('[idb] failed to decode JSON record', error);
+          return record;
+        }
+      }
       function IdbDatabase(name) {
         var self = this;
         self.name = name;
@@ -386,7 +399,7 @@ window.__ModuleLoader__.load({
         var tx = this.transaction;
         var promise = call('idb.get', { db: tx.db.name, store: this.name, key: key }).then(function (value) {
           var record = value && value.record !== undefined ? value.record : undefined;
-          idbFire(request, record);
+          idbFire(request, decodeRecord(record));
           return record;
         }, function (error) {
           idbFail(request, error);
@@ -395,24 +408,92 @@ window.__ModuleLoader__.load({
         tx._track(promise);
         return request;
       };
-      IdbObjectStore.prototype.put = function (value) {
+      // getAll / getAllKeys back ordinary object-store usage: some card frontends
+      // keep their history table as plain rows (keyPath such as chatId / key)
+      // instead of binary blobs.
+      IdbObjectStore.prototype.getAll = function () {
+        var request = idbRequest();
+        var tx = this.transaction;
+        var self = this;
+        var promise = call('idb.keys', { db: tx.db.name, store: this.name }).then(function (value) {
+          var keys = value && Array.isArray(value.keys) ? value.keys : [];
+          return Promise.all(keys.map(function (key) {
+            return call('idb.get', { db: tx.db.name, store: self.name, key: key }).then(function (row) {
+              var record = row && row.record !== undefined ? row.record : undefined;
+              return decodeRecord(record);
+            });
+          })).then(function (records) {
+            idbFire(request, records);
+            return records;
+          });
+        }, function (error) {
+          idbFail(request, error);
+          throw error;
+        });
+        tx._track(promise);
+        return request;
+      };
+      IdbObjectStore.prototype.getAllKeys = function () {
+        var request = idbRequest();
+        var tx = this.transaction;
+        var promise = call('idb.keys', { db: tx.db.name, store: this.name }).then(function (value) {
+          var keys = value && Array.isArray(value.keys) ? value.keys : [];
+          idbFire(request, keys);
+          return keys;
+        }, function (error) {
+          idbFail(request, error);
+          throw error;
+        });
+        tx._track(promise);
+        return request;
+      };
+      IdbObjectStore.prototype.put = function (value, explicitKey) {
         var request = idbRequest();
         var tx = this.transaction;
         var record = value && typeof value === 'object' ? value : null;
+        // Two record shapes share this bridge:
+        // - binary rows (asset caches) carry an ArrayBuffer bytes field;
+        // - ordinary object stores carry plain values with a keyPath such as
+        //   chatId / key.
+        // The host always persists bytes, so object rows are JSON-encoded and tagged
+        // in metadata; get() decodes them back into the original value.
         var bytes = record !== null ? record.bytes : null;
         if (ArrayBuffer.isView(bytes)) bytes = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-        if (!(bytes instanceof ArrayBuffer)) {
-          var error = new Error('idb.put requires a record with an ArrayBuffer bytes field');
-          idbFail(request, error);
-          tx._track(Promise.reject(error));
-          return request;
-        }
-        var key = record !== null ? record.key : undefined;
+        var binary = bytes instanceof ArrayBuffer;
+        var key = explicitKey;
         var meta = {};
-        if (record !== null) {
-          Object.keys(record).forEach(function (name) {
-            if (name !== 'bytes') meta[name] = clone(record[name]);
-          });
+        if (binary) {
+          if (record !== null) {
+            Object.keys(record).forEach(function (name) {
+              if (name !== 'bytes') meta[name] = clone(record[name]);
+            });
+          }
+          if (key === undefined && record !== null && record.key !== undefined) key = record.key;
+        } else {
+          if (record === null) {
+            var typeError = new Error('idb.put requires an object record');
+            idbFail(request, typeError);
+            tx._track(Promise.reject(typeError));
+            return request;
+          }
+          if (key === undefined && this.keyPath !== '') {
+            var path = String(this.keyPath).split('.');
+            var cursor = record;
+            for (var index = 0; index < path.length; index += 1) {
+              if (cursor === null || typeof cursor !== 'object' || !(path[index] in cursor)) { cursor = undefined; break; }
+              cursor = cursor[path[index]];
+            }
+            key = cursor;
+          }
+          if (key === undefined || key === null || (typeof key !== 'string' && typeof key !== 'number')) {
+            var keyError = new Error('idb.put requires a key (pass it directly or provide a valid keyPath)');
+            idbFail(request, keyError);
+            tx._track(Promise.reject(keyError));
+            return request;
+          }
+          var encoded = new TextEncoder().encode(JSON.stringify(record));
+          bytes = encoded.buffer.slice(encoded.byteOffset, encoded.byteOffset + encoded.byteLength);
+          meta.format = 'json';
         }
         var promise = call('idb.put', { db: tx.db.name, store: this.name, key: key, meta: meta, bytes: bytes }, [bytes]).then(function (result) {
           idbFire(request, key);
@@ -457,7 +538,11 @@ window.__ModuleLoader__.load({
           call('idb.open', { name: String(name), version: version }).then(function (value) {
             db.version = value && typeof value.version === 'number' ? value.version : 0;
             var stores = value && Array.isArray(value.stores) ? value.stores : [];
-            stores.forEach(function (storeName) { db._stores[String(storeName)] = { keyPath: '' }; });
+            var keyPaths = value && value.storeKeyPaths && typeof value.storeKeyPaths === 'object' ? value.storeKeyPaths : {};
+            stores.forEach(function (storeName) {
+              var storeKeyPath = keyPaths[String(storeName)];
+              db._stores[String(storeName)] = { keyPath: typeof storeKeyPath === 'string' ? storeKeyPath : '' };
+            });
             var previousVersion = value && typeof value.previousVersion === 'number' ? value.previousVersion : 0;
             var requested = typeof version === 'number' && version > 0 ? version : 1;
             request.result = db;
@@ -2043,8 +2128,30 @@ window.__ModuleLoader__.load({
           .then(afterMessageMutation).then(function () { return undefined; });
       };
 
-      window.setChatMessage = function (message, option) {
-        return window.setChatMessages([message], option);
+      // JSR has two historical signatures:
+      //   setChatMessage(messageObject, option?)
+      //   setChatMessage(textOrObject, message_id, option?)
+      // The second one is still used by cards to switch swipes:
+      //   setChatMessage(swipes[1], 0, { swipe_id: 1, refresh: '...' })
+      // Without it the string lands in messages[] and the server rejects the whole
+      // batch with "messages[] must be an object".
+      window.setChatMessage = function (message, messageIdOrOption, option) {
+        var update = message && typeof message === 'object' && !Array.isArray(message)
+          ? clone(message)
+          : { message: typeof message === 'string' ? message : '' };
+        var settings = option;
+        if (typeof messageIdOrOption === 'number') {
+          update.message_id = messageIdOrOption;
+        } else if (messageIdOrOption && typeof messageIdOrOption === 'object') {
+          settings = messageIdOrOption;
+        }
+        // swipe_id belongs to the message row, not the RPC envelope. Cards pass it
+        // in the options bag; lift it into the update so applyMessageUpdate can
+        // select the requested swipe.
+        if (settings && typeof settings === 'object' && typeof settings.swipe_id === 'number') {
+          update.swipe_id = settings.swipe_id;
+        }
+        return window.setChatMessages([update], settings);
       };
 
       window.rotateChatMessages = function (begin, middle, end, option) {
@@ -2571,10 +2678,91 @@ window.__ModuleLoader__.load({
         window.replaceScriptButtons(next);
       };
 
+      // ST slash-command registry surface (2026-10-24): some card scripts and
+      // panel bootstraps register their own commands through
+      //   SillyTavern.SlashCommandParser.addCommandObject(
+      //     SillyTavern.SlashCommand.fromProps({ name, callback, helpString }))
+      // They only use this to bind a command to opening their panel; the command
+      // never runs through the host interpreter. The registry therefore lives in
+      // the iframe and triggerSlash executes a locally registered command instead
+      // of sending it to the server, where it would be rejected as unknown.
+      var localSlashCommands = Object.create(null);
+      var slashCommandFactory = {
+        fromProps: function (props) {
+          var source = props && typeof props === 'object' ? props : {};
+          var name = typeof source.name === 'string' ? source.name.trim() : '';
+          if (name === '') throw new Error('SillyTavern.SlashCommand.fromProps requires a name');
+          var command = {};
+          Object.keys(source).forEach(function (key) { command[key] = source[key]; });
+          command.name = name;
+          command.aliases = Array.isArray(source.aliases) ? source.aliases.map(String) : [];
+          command.callback = typeof source.callback === 'function' ? source.callback : function () { return ''; };
+          command.helpString = typeof source.helpString === 'string' ? source.helpString : '';
+          return command;
+        },
+      };
+      var slashCommandParser = {
+        // A null-prototype table so a command named toString cannot collide with
+        // Object.prototype members; Workshop compares object identity after add.
+        commands: localSlashCommands,
+        addCommandObject: function (command) {
+          if (!command || typeof command !== 'object' || typeof command.name !== 'string' || command.name === '') {
+            throw new Error('SillyTavern.SlashCommandParser.addCommandObject requires a command object');
+          }
+          localSlashCommands[command.name] = command;
+          (Array.isArray(command.aliases) ? command.aliases : []).forEach(function (alias) {
+            localSlashCommands[String(alias)] = command;
+          });
+          return command;
+        },
+        commandExists: function (name) {
+          return Object.prototype.hasOwnProperty.call(localSlashCommands, String(name));
+        },
+        getCommandObject: function (name) {
+          return localSlashCommands[String(name)];
+        },
+      };
+      function localSlashCommandFor(text) {
+        // Manual parse instead of a regex: this block is emitted inside a template
+        // literal, where backslash escapes would be consumed before the iframe sees
+        // them.
+        if (text.charAt(0) !== '/') return null;
+        var rest = text.slice(1);
+        var splitAt = -1;
+        for (var index = 0; index < rest.length; index += 1) {
+          var char = rest.charAt(index);
+          // Escaped for the surrounding template literal: the emitted iframe source
+          // must contain '\\t' / '\\n' inside the string literal, not raw newlines.
+          if (char === ' ' || char === '\\t' || char === '\\n' || char === '|') { splitAt = index; break; }
+        }
+        var name = splitAt === -1 ? rest : rest.slice(0, splitAt);
+        if (name === '') return null;
+        var command = localSlashCommands[name];
+        if (command === undefined) return null;
+        return { command: command, args: splitAt === -1 ? '' : rest.slice(splitAt + 1).trim() };
+      }
+      function runLocalSlashCommand(text) {
+        // Pipelines and named-argument syntax stay with the host interpreter; a
+        // locally registered command is a single slash-command call with one free
+        // text argument (that is all Workshop and cards pass).
+        if (text.indexOf('|') !== -1) return null;
+        var hit = localSlashCommandFor(text);
+        if (hit === null) return null;
+        var unnamed = hit.args === '' ? [] : [hit.args];
+        var result = hit.command.callback({}, unnamed);
+        if (result && typeof result.then === 'function') {
+          return result.then(function (value) { return String(value == null ? '' : value); });
+        }
+        return String(result == null ? '' : result);
+      }
+
       // triggerSlash：只接不与宿主生成循环冲突的命令子集（变量/分支/发送/裁剪/正则）。
       // /trigger、/regenerate、/stop 会由服务端解释器明确报错（生成归宿主 AgentLoop）。
       window.triggerSlash = function (command) {
-        return call('slash', { command: String(command) }).then(function (value) { return value.output; });
+        var text = String(command == null ? '' : command).trim();
+        var local = runLocalSlashCommand(text);
+        if (local !== null) return Promise.resolve(local);
+        return call('slash', { command: text }).then(function (value) { return value.output; });
       };
       window.triggerSlashWithResult = window.triggerSlash;
 
@@ -3288,6 +3476,11 @@ window.__ModuleLoader__.load({
         unregisterMacro: window.unregisterMacroLike || function () {},
         registerFunctionTool: function () {},
         unregisterFunctionTool: function () {},
+        // Card scripts register their panel-opening commands through these two
+        // objects. They only register iframe-local commands; the host interpreter
+        // still owns real STscript execution.
+        SlashCommandParser: slashCommandParser,
+        SlashCommand: slashCommandFactory,
         ToolManager: {
           isToolCallingSupported: function () { return false; },
         },
@@ -3687,6 +3880,11 @@ window.__ModuleLoader__.load({
 
     const API = '/api/dsh-soulmojito'
     const FRONTEND_HEIGHT_MESSAGE = 'dsh-soulmojito:frontend-height'
+    // Shared absolute ceiling for a card frontend iframe. Auto height and the
+    // manual drag both use it so a tall welcome/status page can settle at its
+    // content height instead of the legacy 1200px clip; beyond this the iframe
+    // scrolls internally.
+    const FRONTEND_FRAME_MAX_HEIGHT = 4000
     const FRONTEND_THEME_MESSAGE = 'dsh-soulmojito:theme'
     const FRONTEND_RESOURCE_SOURCES = [
       'https://cdn.jsdelivr.net',
@@ -3707,7 +3905,7 @@ window.__ModuleLoader__.load({
       "media-src data: blob: https:",
       "worker-src blob:",
       // Blob URLs are card-local pack assets; allowing them keeps
-      // RiiPack-style cards working without opening any network origin.
+      // pack-style cards working without opening any network origin.
       "connect-src blob:",
       "frame-src 'none'",
       "object-src 'none'",
@@ -4329,7 +4527,7 @@ window.__ModuleLoader__.load({
         // Visible frames keep at least one control row: the action console reports
         // its panel height, and a 0/1px clamp would clip the whole console while
         // leaving the frame in the layout.
-        frame.style.setProperty('height', `${Math.min(Math.max(Math.ceil(prefs.height), 36), 1200)}px`, 'important')
+        frame.style.setProperty('height', `${Math.min(Math.max(Math.ceil(prefs.height), 36), FRONTEND_FRAME_MAX_HEIGHT)}px`, 'important')
       } else {
         frame.style.removeProperty('height')
       }
@@ -4590,7 +4788,7 @@ window.__ModuleLoader__.load({
     }
 
     const FRONTEND_AUTO_MIN_HEIGHT = 80
-    const FRONTEND_AUTO_MAX_HEIGHT = 1200
+    const FRONTEND_AUTO_MAX_HEIGHT = FRONTEND_FRAME_MAX_HEIGHT
 
     function FrontendFrame({ html, token, binding, refreshKey, messageId, hostSessionId, identity, onScriptButtons }) {
       const t = useTranslate()
@@ -4687,7 +4885,7 @@ window.__ModuleLoader__.load({
     // grows past the initial iframe and the panel stays clipped. The handle
     // lets the user own the height; null means "follow the card's report".
     const FRONTEND_MANUAL_MIN_HEIGHT = 120
-    const FRONTEND_MANUAL_MAX_HEIGHT = 4000
+    const FRONTEND_MANUAL_MAX_HEIGHT = FRONTEND_FRAME_MAX_HEIGHT
     const FRONTEND_MANUAL_STEP = 40
 
     function useFrontendResize(frameRef, autoHeight, ready) {

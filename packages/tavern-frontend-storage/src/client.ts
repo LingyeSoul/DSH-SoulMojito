@@ -96,6 +96,19 @@ export function indexedDbIframeSource(): string {
     request.error = error;
     try { if (request.onerror) request.onerror({ target: request, error: error }); } catch (cause) { console.error('[idb] onerror failed', cause); }
   }
+  // Rows written as plain objects are JSON-encoded by put() and tagged with
+  // meta.format = 'json'. Binary rows keep their original key/bytes shape so
+  // existing consumers (asset caches) are untouched.
+  function decodeRecord(record) {
+    if (record === null || typeof record !== 'object') return record;
+    if (record.format !== 'json' || !(record.bytes instanceof ArrayBuffer)) return record;
+    try {
+      return JSON.parse(new TextDecoder().decode(new Uint8Array(record.bytes)));
+    } catch (error) {
+      console.error('[idb] failed to decode JSON record', error);
+      return record;
+    }
+  }
   function IdbDatabase(name) {
     var self = this;
     self.name = name;
@@ -192,7 +205,7 @@ export function indexedDbIframeSource(): string {
     var tx = this.transaction;
     var promise = call('idb.get', { db: tx.db.name, store: this.name, key: key }).then(function (value) {
       var record = value && value.record !== undefined ? value.record : undefined;
-      idbFire(request, record);
+      idbFire(request, decodeRecord(record));
       return record;
     }, function (error) {
       idbFail(request, error);
@@ -201,24 +214,92 @@ export function indexedDbIframeSource(): string {
     tx._track(promise);
     return request;
   };
-  IdbObjectStore.prototype.put = function (value) {
+  // getAll / getAllKeys back ordinary object-store usage: some card frontends
+  // keep their history table as plain rows (keyPath such as chatId / key)
+  // instead of binary blobs.
+  IdbObjectStore.prototype.getAll = function () {
+    var request = idbRequest();
+    var tx = this.transaction;
+    var self = this;
+    var promise = call('idb.keys', { db: tx.db.name, store: this.name }).then(function (value) {
+      var keys = value && Array.isArray(value.keys) ? value.keys : [];
+      return Promise.all(keys.map(function (key) {
+        return call('idb.get', { db: tx.db.name, store: self.name, key: key }).then(function (row) {
+          var record = row && row.record !== undefined ? row.record : undefined;
+          return decodeRecord(record);
+        });
+      })).then(function (records) {
+        idbFire(request, records);
+        return records;
+      });
+    }, function (error) {
+      idbFail(request, error);
+      throw error;
+    });
+    tx._track(promise);
+    return request;
+  };
+  IdbObjectStore.prototype.getAllKeys = function () {
+    var request = idbRequest();
+    var tx = this.transaction;
+    var promise = call('idb.keys', { db: tx.db.name, store: this.name }).then(function (value) {
+      var keys = value && Array.isArray(value.keys) ? value.keys : [];
+      idbFire(request, keys);
+      return keys;
+    }, function (error) {
+      idbFail(request, error);
+      throw error;
+    });
+    tx._track(promise);
+    return request;
+  };
+  IdbObjectStore.prototype.put = function (value, explicitKey) {
     var request = idbRequest();
     var tx = this.transaction;
     var record = value && typeof value === 'object' ? value : null;
+    // Two record shapes share this bridge:
+    // - binary rows (asset caches) carry an ArrayBuffer bytes field;
+    // - ordinary object stores carry plain values with a keyPath such as
+    //   chatId / key.
+    // The host always persists bytes, so object rows are JSON-encoded and tagged
+    // in metadata; get() decodes them back into the original value.
     var bytes = record !== null ? record.bytes : null;
     if (ArrayBuffer.isView(bytes)) bytes = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-    if (!(bytes instanceof ArrayBuffer)) {
-      var error = new Error('idb.put requires a record with an ArrayBuffer bytes field');
-      idbFail(request, error);
-      tx._track(Promise.reject(error));
-      return request;
-    }
-    var key = record !== null ? record.key : undefined;
+    var binary = bytes instanceof ArrayBuffer;
+    var key = explicitKey;
     var meta = {};
-    if (record !== null) {
-      Object.keys(record).forEach(function (name) {
-        if (name !== 'bytes') meta[name] = clone(record[name]);
-      });
+    if (binary) {
+      if (record !== null) {
+        Object.keys(record).forEach(function (name) {
+          if (name !== 'bytes') meta[name] = clone(record[name]);
+        });
+      }
+      if (key === undefined && record !== null && record.key !== undefined) key = record.key;
+    } else {
+      if (record === null) {
+        var typeError = new Error('idb.put requires an object record');
+        idbFail(request, typeError);
+        tx._track(Promise.reject(typeError));
+        return request;
+      }
+      if (key === undefined && this.keyPath !== '') {
+        var path = String(this.keyPath).split('.');
+        var cursor = record;
+        for (var index = 0; index < path.length; index += 1) {
+          if (cursor === null || typeof cursor !== 'object' || !(path[index] in cursor)) { cursor = undefined; break; }
+          cursor = cursor[path[index]];
+        }
+        key = cursor;
+      }
+      if (key === undefined || key === null || (typeof key !== 'string' && typeof key !== 'number')) {
+        var keyError = new Error('idb.put requires a key (pass it directly or provide a valid keyPath)');
+        idbFail(request, keyError);
+        tx._track(Promise.reject(keyError));
+        return request;
+      }
+      var encoded = new TextEncoder().encode(JSON.stringify(record));
+      bytes = encoded.buffer.slice(encoded.byteOffset, encoded.byteOffset + encoded.byteLength);
+      meta.format = 'json';
     }
     var promise = call('idb.put', { db: tx.db.name, store: this.name, key: key, meta: meta, bytes: bytes }, [bytes]).then(function (result) {
       idbFire(request, key);
@@ -263,7 +344,11 @@ export function indexedDbIframeSource(): string {
       call('idb.open', { name: String(name), version: version }).then(function (value) {
         db.version = value && typeof value.version === 'number' ? value.version : 0;
         var stores = value && Array.isArray(value.stores) ? value.stores : [];
-        stores.forEach(function (storeName) { db._stores[String(storeName)] = { keyPath: '' }; });
+        var keyPaths = value && value.storeKeyPaths && typeof value.storeKeyPaths === 'object' ? value.storeKeyPaths : {};
+        stores.forEach(function (storeName) {
+          var storeKeyPath = keyPaths[String(storeName)];
+          db._stores[String(storeName)] = { keyPath: typeof storeKeyPath === 'string' ? storeKeyPath : '' };
+        });
         var previousVersion = value && typeof value.previousVersion === 'number' ? value.previousVersion : 0;
         var requested = typeof version === 'number' && version > 0 ? version : 1;
         request.result = db;

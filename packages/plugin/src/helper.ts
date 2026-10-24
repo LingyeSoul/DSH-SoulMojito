@@ -28,6 +28,7 @@ import {
   deleteIdbDatabase,
   deleteIdbRecord,
   frontendStorageFor,
+  listIdbKeys,
   openIdbDatabase,
   putFrontendStorage,
   resetFrontendStorage,
@@ -123,6 +124,13 @@ export async function handleHelperApi(req: unknown, res: unknown, db: TavernStor
       return sendJson(res, 200, {
         ok: true,
         value: await createIdbStore(tavernDataRoot(), character, body?.db, body?.store, body?.keyPath),
+      })
+    }
+    case 'idb.keys': {
+      requireSessionChatId(chatId, 'idb.keys')
+      return sendJson(res, 200, {
+        ok: true,
+        value: await listIdbKeys(tavernDataRoot(), character, body?.db, body?.store),
       })
     }
     case 'idb.delete': {
@@ -1505,7 +1513,8 @@ function parseRange(range: unknown, lastMessageId: number): [number, number] {
 }
 
 function applyMessageUpdate(message: ChatMessage, update: JsonObject): void {
-  if (typeof update.message === 'string') message.mes = update.message
+  const nextMessage = typeof update.message === 'string' ? update.message : undefined
+  if (nextMessage !== undefined) message.mes = nextMessage
   if (typeof update.name === 'string') message.name = update.name
   if (update.role === 'system' || update.role === 'assistant' || update.role === 'user') {
     message.is_system = update.role === 'system'
@@ -1523,10 +1532,18 @@ function applyMessageUpdate(message: ChatMessage, update: JsonObject): void {
     const clamped = Math.max(0, Math.min(Math.trunc(swipeId), swipes.length - 1))
     message.swipe_id = clamped
     message.mes = swipes[clamped]
-  } else if (typeof update.swipe_id === 'number' && Array.isArray(message.swipes) && message.swipes.length > 0) {
-    const clamped = Math.max(0, Math.min(Math.trunc(update.swipe_id), message.swipes.length - 1))
-    message.swipe_id = clamped
-    message.mes = String(message.swipes[clamped] ?? message.mes ?? '')
+  } else if (Array.isArray(message.swipes) && message.swipes.length > 0) {
+    // `message` is the current swipe text. Keep the swipe array in sync so a
+    // later swipe switch cannot resurrect the stale text (MVU appends
+    // <UpdateVariable> through setChatMessages on floors that have swipes).
+    const requested = typeof update.swipe_id === 'number' ? update.swipe_id : undefined
+    const current = typeof message.swipe_id === 'number' ? message.swipe_id : 0
+    const clamped = Math.max(0, Math.min(Math.trunc(requested ?? current), message.swipes.length - 1))
+    if (nextMessage !== undefined) message.swipes[clamped] = nextMessage
+    if (requested !== undefined) {
+      message.swipe_id = clamped
+      message.mes = String(message.swipes[clamped] ?? message.mes ?? '')
+    }
   }
   if (Array.isArray(update.swipes_info)) message.swipe_info = cloneJson(update.swipes_info) as Record<string, unknown>[]
 }

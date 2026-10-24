@@ -92,6 +92,60 @@ describe('sandbox storage shim sources', () => {
     expect(urls[0]).toContain('/api/frontend/idb/get?')
   })
 
+  it('round-trips plain object rows through the virtual IndexedDB', async () => {
+    const calls: Array<{ op: string; payload: Record<string, unknown> }> = []
+    const rows = new Map<string, { bytes: ArrayBuffer; meta: Record<string, unknown> }>()
+    const sandbox: Record<string, unknown> = {
+      window: {},
+      console,
+      setTimeout,
+      Promise,
+      ArrayBuffer,
+      TextEncoder,
+      TextDecoder,
+      call: (op: string, payload: Record<string, unknown>) => {
+        calls.push({ op, payload })
+        if (op === 'idb.open') return Promise.resolve({ version: 1, previousVersion: 0, stores: ['histories'], storeKeyPaths: { histories: 'chatId' } })
+        if (op === 'idb.store.create') return Promise.resolve({ stores: ['histories'] })
+        if (op === 'idb.put') {
+          rows.set(String(payload.key), {
+            bytes: payload.bytes as ArrayBuffer,
+            meta: payload.meta as Record<string, unknown>,
+          })
+          return Promise.resolve({ key: payload.key, size: 0 })
+        }
+        if (op === 'idb.get') {
+          const row = rows.get(String(payload.key))
+          if (row === undefined) return Promise.resolve({ record: undefined })
+          return Promise.resolve({ record: { key: payload.key, bytes: row.bytes, ...row.meta } })
+        }
+        if (op === 'idb.keys') return Promise.resolve({ keys: [...rows.keys()] })
+        return Promise.resolve({})
+      },
+      clone: <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T,
+    }
+    vm.runInNewContext(indexedDbIframeSource(), sandbox)
+    const window = sandbox.window as {
+      indexedDB: { open(name: string, version: number): { result?: { transaction(stores: string[], mode: string): { objectStore(name: string): Record<string, unknown> } }; onsuccess: (() => void) | null } }
+    }
+    const opened = window.indexedDB.open('phone', 1)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const db = opened.result as { transaction(stores: string[], mode: string): { objectStore(name: string): Record<string, any> } }
+    const store = db.transaction(['histories'], 'readwrite').objectStore('histories')
+    const write = store.put({ chatId: 'chat-1', value: { messages: ['a'] } })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(write.error).toBeNull()
+    expect(calls.some((entry) => entry.op === 'idb.put' && entry.payload.key === 'chat-1')).toBe(true)
+
+    const read = store.get('chat-1') as Record<string, unknown> & { onsuccess: (() => void) | null }
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(read.result).toEqual({ chatId: 'chat-1', value: { messages: ['a'] } })
+
+    const all = store.getAll() as Record<string, unknown> & { onsuccess: (() => void) | null }
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(all.result).toEqual([{ chatId: 'chat-1', value: { messages: ['a'] } }])
+  })
+
   it('round-trips binary metadata through the base64url channel helpers', () => {
     const value = JSON.stringify({ sha256: 'abc', note: '资源包' })
     expect(decodeBase64Url(encodeBase64Url(value))).toBe(value)
