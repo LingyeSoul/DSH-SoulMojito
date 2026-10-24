@@ -250,9 +250,14 @@ describe('TavernHelper runtime source', () => {
       'window.eventOn = function',
       'window.generate = function (config)',
       "call('generate', { config: request })",
+      "call('generate.stop'",
+      "call('generate.stop-all'",
+      'window.TavernHelper.iframe',
+      'persistentSettings',
       "call('idb.put', { db: tx.db.name, store: this.name, key: key, meta: meta, bytes: bytes }, [bytes])",
       'window.__dshTavernStorage',
       'Object.defineProperty(window, \'indexedDB\'',
+      'Object.defineProperty(window, \'IDBKeyRange\'',
     ]) {
       expect(script).toContain(marker)
     }

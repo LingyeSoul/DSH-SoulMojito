@@ -21,8 +21,15 @@ import { dirname, join } from 'node:path'
 export const IDB_MAX_RECORD_BYTES = 1024 * 1024 * 1024
 export const IDB_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 
+export interface IdbIndexDescriptor {
+  keyPath: string
+  unique: boolean
+  multiEntry: boolean
+}
+
 export interface IdbStoreDescriptor {
   keyPath: string
+  indexes: Record<string, IdbIndexDescriptor>
 }
 
 export interface IdbRecordDescriptor {
@@ -46,6 +53,7 @@ export interface IdbOpenResult {
   previousVersion: number
   stores: string[]
   storeKeyPaths: Record<string, string>
+  storeIndexes: Record<string, Record<string, IdbIndexDescriptor>>
 }
 
 export interface IdbRecordFile {
@@ -86,6 +94,22 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined
 }
 
+function normalizeIndexes(value: unknown): Record<string, IdbIndexDescriptor> {
+  const indexes: Record<string, IdbIndexDescriptor> = {}
+  const record = asRecord(value)
+  if (record === undefined) return indexes
+  for (const [indexName, descriptor] of Object.entries(record)) {
+    const entry = asRecord(descriptor)
+    if (entry === undefined || typeof entry.keyPath !== 'string' || entry.keyPath.trim() === '') continue
+    indexes[indexName] = {
+      keyPath: entry.keyPath,
+      unique: entry.unique === true,
+      multiEntry: entry.multiEntry === true,
+    }
+  }
+  return indexes
+}
+
 function normalizeDatabase(value: unknown, name: string): IdbDatabaseDescriptor {
   const record = asRecord(value)
   if (record === undefined) return emptyDatabase(name)
@@ -95,7 +119,10 @@ function normalizeDatabase(value: unknown, name: string): IdbDatabaseDescriptor 
     for (const [storeName, descriptor] of Object.entries(rawStores)) {
       const entry = asRecord(descriptor)
       if (entry === undefined) continue
-      stores[storeName] = { keyPath: typeof entry.keyPath === 'string' ? entry.keyPath : '' }
+      stores[storeName] = {
+        keyPath: typeof entry.keyPath === 'string' ? entry.keyPath : '',
+        indexes: normalizeIndexes(entry.indexes),
+      }
     }
   }
   const records: Record<string, IdbRecordDescriptor> = {}
@@ -210,6 +237,7 @@ export async function openIdbDatabase(
       previousVersion,
       stores: Object.keys(database.stores),
       storeKeyPaths: Object.fromEntries(Object.entries(database.stores).map(([name, descriptor]) => [name, descriptor.keyPath])),
+      storeIndexes: Object.fromEntries(Object.entries(database.stores).map(([name, descriptor]) => [name, descriptor.indexes])),
     }
   })
 }
@@ -221,16 +249,18 @@ export async function createIdbStore(
   nameValue: unknown,
   storeValue: unknown,
   keyPathValue: unknown,
-): Promise<{ stores: string[] }> {
+  indexesValue?: unknown,
+): Promise<{ stores: string[]; indexes: Record<string, IdbIndexDescriptor> }> {
   const name = requireDatabaseName(nameValue)
   const store = requireStoreName(storeValue)
   const keyPath = typeof keyPathValue === 'string' ? keyPathValue : ''
+  const indexes = normalizeIndexes(indexesValue)
   return withDatabaseLock(root, character, name, async () => {
     const database = await readDatabase(root, character, name)
-    database.stores[store] = { keyPath }
+    database.stores[store] = { keyPath, indexes }
     database.updatedAt = Date.now()
     await writeDatabase(root, character, database)
-    return { stores: Object.keys(database.stores) }
+    return { stores: Object.keys(database.stores), indexes }
   })
 }
 

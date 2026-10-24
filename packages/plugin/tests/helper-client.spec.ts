@@ -79,6 +79,14 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
       'handOffTriggeredSlash(result.value)',
       "value.triggerRequested !== true",
       'await conversation.send(text)',
+      'streamFrontendGenerate',
+      '`${API}/frontend/generate`',
+      'STREAM_TOKEN_RECEIVED_INCREMENTALLY',
+      "call('generate.stop-all'",
+      'MESSAGE_SWIPED',
+      'PRESET_CHANGED',
+      'helperFrameEmitters',
+      "data.op === 'iframe.broadcast'",
     ]) {
       expect(source).toContain(marker)
     }

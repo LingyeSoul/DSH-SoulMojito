@@ -15,6 +15,7 @@
  * (get/set/create/delete), character read, lorebook read, slash commands, regex
  * list/replace, plus a snapshot used for synchronous iframe reads.
  */
+import { randomUUID } from 'node:crypto'
 import type { ChatLogIR, ChatMessage, LoreEntry, WorldBookIR } from '../../tavern-format/src/index.js'
 import { RegexPlacement, cardDataToRaw, normalizeEntry, parseCharacterBook, parseRegexScripts } from '../../tavern-format/src/index.js'
 import { createMacroEngine } from '../../tavern-macros/src/index.js'
@@ -34,9 +35,18 @@ import {
   resetFrontendStorage,
 } from '../../tavern-frontend-storage/src/index.js'
 import { readJson, sendJson } from './http/io.js'
-import { generateWithCustomApi, listCustomApiModels } from './frontend-generation.js'
+import {
+  abortAllFrontendGenerations,
+  abortFrontendGeneration,
+  finishFrontendGeneration,
+  generateWithCustomApi,
+  generateWithCustomApiStream,
+  listCustomApiModels,
+  registerFrontendGeneration,
+} from './frontend-generation.js'
 import { applyFrontendWorldbookScan } from './frontend-generation-context.js'
 import { tavernDataRoot } from './dsh-home.js'
+import { abortStGeneration } from './generation/pipeline.js'
 import { overlayChatScopedVariables, readChatVariables } from './mvu.js'
 import { ensureChatVariables } from './agent-tavern/mvu-compat.js'
 import { emitChatSaved } from './mods/events.js'
@@ -81,9 +91,38 @@ export async function handleHelperApi(req: unknown, res: unknown, db: TavernStor
     case 'generate': {
       requireSessionChatId(chatId, 'generate')
       const config = await applyFrontendWorldbookScan(db, state, character, chatId, body?.config)
+      const generationId = generationIdOf(config)
+      const controller = new AbortController()
+      registerFrontendGeneration(character, chatId, generationId, controller)
+      try {
+        return sendJson(res, 200, {
+          ok: true,
+          value: { text: await generateWithCustomApi(config, controller.signal) },
+        })
+      } finally {
+        finishFrontendGeneration(character, chatId, generationId, controller)
+      }
+    }
+    case 'generate.stop': {
+      requireSessionChatId(chatId, 'generate.stop')
+      const generationId = requireString(body?.generationId, 'generationId')
       return sendJson(res, 200, {
         ok: true,
-        value: { text: await generateWithCustomApi(config) },
+        value: { stopped: abortFrontendGeneration(character, chatId, generationId) },
+      })
+    }
+    case 'generate.stop-all': {
+      requireSessionChatId(chatId, 'generate.stop-all')
+      return sendJson(res, 200, {
+        ok: true,
+        value: { stopped: abortAllFrontendGenerations(character, chatId) },
+      })
+    }
+    case 'generation.stop': {
+      requireSessionChatId(chatId, 'generation.stop')
+      return sendJson(res, 200, {
+        ok: true,
+        value: { stopped: abortStGeneration(character, chatId) },
       })
     }
     // 沙箱 localStorage 持久层（2026-10-22）：按角色保存小型设置，供下一次
@@ -123,7 +162,7 @@ export async function handleHelperApi(req: unknown, res: unknown, db: TavernStor
       requireSessionChatId(chatId, 'idb.store.create')
       return sendJson(res, 200, {
         ok: true,
-        value: await createIdbStore(tavernDataRoot(), character, body?.db, body?.store, body?.keyPath),
+        value: await createIdbStore(tavernDataRoot(), character, body?.db, body?.store, body?.keyPath, body?.indexes),
       })
     }
     case 'idb.keys': {
@@ -319,6 +358,58 @@ export async function handleHelperApi(req: unknown, res: unknown, db: TavernStor
     }
     default:
       throw new Error(`unsupported helper op '${op}'`)
+  }
+}
+
+interface FrontendStreamResponse {
+  statusCode: number
+  writableEnded: boolean
+  setHeader: (name: string, value: string) => void
+  write: (chunk: string) => boolean
+  end: (chunk?: string) => void
+}
+
+/**
+ * Streaming variant of the `generate` helper op. The iframe cannot consume an
+ * HTTP stream directly, so the host client reads this NDJSON response and
+ * forwards deltas over the existing postMessage event channel. The final
+ * `done` line carries the same text the non-streaming helper returns.
+ */
+export async function handleFrontendGenerationStream(req: unknown, res: unknown, db: TavernStore): Promise<void> {
+  const out = res as FrontendStreamResponse
+  const body = await readJson(req as never, 8 * 1024 * 1024)
+  const character = requireString(body?.character, 'character')
+  const chatId = requireString(body?.chatId, 'chatId')
+  const state = await db.getState()
+  const config = await applyFrontendWorldbookScan(db, state, character, chatId, body?.config)
+  const generationId = generationIdOf(config)
+  const controller = new AbortController()
+  registerFrontendGeneration(character, chatId, generationId, controller)
+  out.statusCode = 200
+  out.setHeader('content-type', 'application/x-ndjson; charset=utf-8')
+  out.setHeader('cache-control', 'no-cache')
+  out.write(`${JSON.stringify({ type: 'start', generationId })}\n`)
+  try {
+    const text = await generateWithCustomApiStream(
+      config,
+      (delta) => { out.write(`${JSON.stringify({ type: 'delta', text: delta })}\n`) },
+      controller.signal,
+    )
+    if (!out.writableEnded) {
+      out.write(`${JSON.stringify({ type: 'done', text })}\n`)
+      out.end()
+    }
+  } catch (error) {
+    if (!out.writableEnded) {
+      const aborted = controller.signal.aborted
+      out.write(`${JSON.stringify({
+        type: aborted ? 'aborted' : 'error',
+        message: aborted ? 'generation aborted' : (error instanceof Error ? error.message : String(error)),
+      })}\n`)
+      out.end()
+    }
+  } finally {
+    finishFrontendGeneration(character, chatId, generationId, controller)
   }
 }
 
@@ -1135,6 +1226,12 @@ function requireIndex(value: unknown, label: string, total: number): number {
 
 function requireSessionChatId(chatId: string, op: string): void {
   if (chatId === '') throw new Error(`chatId is required for ${op} (session scope only)`)
+}
+
+function generationIdOf(config: unknown): string {
+  const record = isPlainObject(config) ? config : {}
+  const value = record['generation_id']
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : randomUUID()
 }
 
 /**

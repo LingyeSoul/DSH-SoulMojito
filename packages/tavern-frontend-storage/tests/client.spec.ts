@@ -146,6 +146,69 @@ describe('sandbox storage shim sources', () => {
     expect(all.result).toEqual([{ chatId: 'chat-1', value: { messages: ['a'] } }])
   })
 
+  it('supports index cursors and IDBKeyRange in the virtual IndexedDB', async () => {
+    const rows = new Map<string, { bytes: ArrayBuffer; meta: Record<string, unknown> }>()
+    const sandbox: Record<string, unknown> = {
+      window: {},
+      console,
+      setTimeout,
+      Promise,
+      ArrayBuffer,
+      TextEncoder,
+      TextDecoder,
+      call: (op: string, payload: Record<string, unknown>) => {
+        if (op === 'idb.open') {
+          return Promise.resolve({
+            version: 1,
+            previousVersion: 0,
+            stores: ['histories'],
+            storeKeyPaths: { histories: 'chatId' },
+            storeIndexes: { histories: { byKind: { keyPath: 'kind', unique: false, multiEntry: false } } },
+          })
+        }
+        if (op === 'idb.store.create') return Promise.resolve({ stores: ['histories'], indexes: {} })
+        if (op === 'idb.put') {
+          rows.set(String(payload.key), {
+            bytes: payload.bytes as ArrayBuffer,
+            meta: payload.meta as Record<string, unknown>,
+          })
+          return Promise.resolve({ key: payload.key, size: 0 })
+        }
+        if (op === 'idb.get') {
+          const row = rows.get(String(payload.key))
+          if (row === undefined) return Promise.resolve({ record: undefined })
+          return Promise.resolve({ record: { key: payload.key, bytes: row.bytes, ...row.meta } })
+        }
+        if (op === 'idb.keys') return Promise.resolve({ keys: [...rows.keys()] })
+        return Promise.resolve({})
+      },
+      clone: <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T,
+    }
+    vm.runInNewContext(indexedDbIframeSource(), sandbox)
+    const window = sandbox.window as {
+      IDBKeyRange: { only(value: unknown): unknown }
+      indexedDB: { open(name: string, version: number): { result?: { transaction(stores: string[], mode: string): { objectStore(name: string): Record<string, any> } }; onsuccess: (() => void) | null } }
+    }
+    const opened = window.indexedDB.open('phone', 1)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const db = opened.result as { transaction(stores: string[], mode: string): { objectStore(name: string): Record<string, any> } }
+    const store = db.transaction(['histories'], 'readwrite').objectStore('histories')
+    store.put({ chatId: 'a', kind: 'x' })
+    store.put({ chatId: 'b', kind: 'y' })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    const index = store.index('byKind')
+    const keys: string[] = []
+    const request = index.openCursor(window.IDBKeyRange.only('y')) as Record<string, any>
+    request.onsuccess = () => {
+      const cursor = request.result
+      if (cursor === null || cursor === undefined) return
+      keys.push(String(cursor.primaryKey))
+      cursor.continue()
+    }
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(keys).toEqual(['b'])
+  })
+
   it('round-trips binary metadata through the base64url channel helpers', () => {
     const value = JSON.stringify({ sha256: 'abc', note: '资源包' })
     expect(decodeBase64Url(encodeBase64Url(value))).toBe(value)

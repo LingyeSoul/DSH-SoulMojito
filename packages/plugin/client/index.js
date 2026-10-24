@@ -303,6 +303,200 @@ window.__ModuleLoader__.load({
           return record;
         }
       }
+      function indexKeyOf(record, keyPath) {
+        if (keyPath === '' || record === null || typeof record !== 'object') return undefined;
+        var path = String(keyPath).split('.');
+        var cursor = record;
+        for (var index = 0; index < path.length; index += 1) {
+          if (cursor === null || typeof cursor !== 'object' || !(path[index] in cursor)) return undefined;
+          cursor = cursor[path[index]];
+        }
+        return cursor;
+      }
+      function compareIdbKeys(left, right) {
+        if (left === right) return 0;
+        if (left === undefined) return 1;
+        if (right === undefined) return -1;
+        if (typeof left === 'number' && typeof right === 'number') return left - right;
+        var leftText = String(left);
+        var rightText = String(right);
+        return leftText < rightText ? -1 : leftText > rightText ? 1 : 0;
+      }
+      function keyInRange(key, range) {
+        if (range === undefined || range === null || typeof range !== 'object') return true;
+        if (range.lower !== undefined) {
+          var lower = compareIdbKeys(key, range.lower);
+          if (lower < 0 || (range.lowerOpen === true && lower === 0)) return false;
+        }
+        if (range.upper !== undefined) {
+          var upper = compareIdbKeys(key, range.upper);
+          if (upper > 0 || (range.upperOpen === true && upper === 0)) return false;
+        }
+        return true;
+      }
+      function IdbKeyRange(lower, upper, lowerOpen, upperOpen) {
+        this.lower = lower;
+        this.upper = upper;
+        this.lowerOpen = lowerOpen === true;
+        this.upperOpen = upperOpen === true;
+      }
+      IdbKeyRange.only = function (value) { return new IdbKeyRange(value, value, false, false); };
+      IdbKeyRange.lowerBound = function (value, open) { return new IdbKeyRange(value, undefined, open === true, true); };
+      IdbKeyRange.upperBound = function (value, open) { return new IdbKeyRange(undefined, value, true, open === true); };
+      IdbKeyRange.bound = function (lower, upper, lowerOpen, upperOpen) {
+        return new IdbKeyRange(lower, upper, lowerOpen === true, upperOpen === true);
+      };
+      function readStoreEntries(db, storeName) {
+        return call('idb.keys', { db: db.name, store: storeName }).then(function (value) {
+          var keys = value && Array.isArray(value.keys) ? value.keys : [];
+          return Promise.all(keys.map(function (key) {
+            return call('idb.get', { db: db.name, store: storeName, key: key }).then(function (row) {
+              var record = row && row.record !== undefined ? row.record : undefined;
+              return { key: key, value: decodeRecord(record), raw: record };
+            });
+          }));
+        });
+      }
+      function cursorEntries(db, storeName, indexKeyPath) {
+        return readStoreEntries(db, storeName).then(function (entries) {
+          var output = [];
+          entries.forEach(function (entry) {
+            var indexKey = indexKeyPath === '' ? entry.key : indexKeyOf(entry.value !== undefined ? entry.value : entry.raw, indexKeyPath);
+            if (indexKey === undefined) return;
+            output.push({ key: indexKey, primaryKey: entry.key, value: entry.value });
+          });
+          return output;
+        });
+      }
+      function sortCursorEntries(entries, direction) {
+        var sorted = entries.slice().sort(function (left, right) {
+          return compareIdbKeys(left.key, right.key) || compareIdbKeys(left.primaryKey, right.primaryKey);
+        });
+        if (direction === 'prev' || direction === 'prevunique') sorted.reverse();
+        if (direction === 'nextunique' || direction === 'prevunique') {
+          var seen = {};
+          sorted = sorted.filter(function (entry) {
+            var key = String(entry.key);
+            if (Object.prototype.hasOwnProperty.call(seen, key)) return false;
+            seen[key] = true;
+            return true;
+          });
+        }
+        return sorted;
+      }
+      function IdbCursor(request, entries, direction, db, storeName, indexName, done) {
+        var self = this;
+        self.key = undefined;
+        self.primaryKey = undefined;
+        self.value = undefined;
+        self.direction = direction || 'next';
+        self._entries = sortCursorEntries(entries, self.direction);
+        self._position = -1;
+        self._request = request;
+        function fire() {
+          self._position += 1;
+          if (self._position >= self._entries.length) {
+            self.key = undefined;
+            self.primaryKey = undefined;
+            self.value = undefined;
+            request.result = null;
+            try { if (request.onsuccess) request.onsuccess({ target: request }); } catch (error) { console.error('[idb] cursor onsuccess failed', error); }
+            if (typeof done === 'function') done();
+            return;
+          }
+          var entry = self._entries[self._position];
+          self.key = entry.key;
+          self.primaryKey = entry.primaryKey;
+          self.value = entry.value;
+          request.result = self;
+          try { if (request.onsuccess) request.onsuccess({ target: request }); } catch (error) { console.error('[idb] cursor onsuccess failed', error); }
+        }
+        self.continue = function () { fire(); };
+        self.advance = function (count) {
+          var steps = typeof count === 'number' && count > 0 ? count : 1;
+          self._position += steps - 1;
+          fire();
+        };
+        self.delete = function () {
+          return call('idb.delete', { db: db.name, store: storeName, key: self.primaryKey });
+        };
+        self.update = function () {
+          throw new Error('idb cursor.update is not supported in the virtual IndexedDB');
+        };
+        setTimeout(fire, 0);
+      }
+      function openIdbCursor(db, storeName, indexKeyPath, range, direction, transaction) {
+        var request = idbRequest();
+        var done = null;
+        if (transaction) {
+          transaction._track(new Promise(function (resolve) { done = resolve; }));
+        }
+        var promise = cursorEntries(db, storeName, indexKeyPath).then(function (entries) {
+          var filtered = entries.filter(function (entry) { return keyInRange(entry.key, range); });
+          new IdbCursor(request, filtered, direction, db, storeName, indexKeyPath, done);
+        }, function (error) {
+          idbFail(request, error);
+        });
+        if (transaction) transaction._track(promise);
+        return request;
+      }
+      function IdbIndex(db, storeName, indexName, transaction) {
+        var descriptor = db._stores[storeName] && db._stores[storeName].indexes ? db._stores[storeName].indexes[indexName] : undefined;
+        this.db = db;
+        this.storeName = storeName;
+        this.name = indexName;
+        this.transaction = transaction;
+        this.keyPath = descriptor && typeof descriptor.keyPath === 'string' ? descriptor.keyPath : '';
+        this.unique = descriptor ? descriptor.unique === true : false;
+        this.multiEntry = descriptor ? descriptor.multiEntry === true : false;
+      }
+      IdbIndex.prototype.openCursor = function (range, direction) {
+        return openIdbCursor(this.db, this.storeName, this.keyPath, range, direction, this.transaction);
+      };
+      IdbIndex.prototype._track = function (promise) {
+        if (this.transaction) this.transaction._track(promise);
+        return promise;
+      };
+      IdbIndex.prototype.openKeyCursor = function (range, direction) {
+        var request = openIdbCursor(this.db, this.storeName, this.keyPath, range, direction, this.transaction);
+        var original = request.onsuccess;
+        request.onsuccess = function (event) {
+          if (request.result) request.result.value = undefined;
+          if (original) original(event);
+        };
+        return request;
+      };
+      IdbIndex.prototype.get = function (key) {
+        var request = idbRequest();
+        this._track(cursorEntries(this.db, this.storeName, this.keyPath).then(function (entries) {
+          var hit = entries.filter(function (entry) { return compareIdbKeys(entry.key, key) === 0; })[0];
+          idbFire(request, hit === undefined ? undefined : hit.value);
+        }, function (error) { idbFail(request, error); }));
+        return request;
+      };
+      IdbIndex.prototype.getAll = function (query, count) {
+        var request = idbRequest();
+        this._track(cursorEntries(this.db, this.storeName, this.keyPath).then(function (entries) {
+          var values = entries.filter(function (entry) { return keyInRange(entry.key, query); }).map(function (entry) { return entry.value; });
+          idbFire(request, typeof count === 'number' && count >= 0 ? values.slice(0, count) : values);
+        }, function (error) { idbFail(request, error); }));
+        return request;
+      };
+      IdbIndex.prototype.getAllKeys = function (query, count) {
+        var request = idbRequest();
+        this._track(cursorEntries(this.db, this.storeName, this.keyPath).then(function (entries) {
+          var keys = entries.filter(function (entry) { return keyInRange(entry.key, query); }).map(function (entry) { return entry.key; });
+          idbFire(request, typeof count === 'number' && count >= 0 ? keys.slice(0, count) : keys);
+        }, function (error) { idbFail(request, error); }));
+        return request;
+      };
+      IdbIndex.prototype.count = function (query) {
+        var request = idbRequest();
+        this._track(cursorEntries(this.db, this.storeName, this.keyPath).then(function (entries) {
+          idbFire(request, entries.filter(function (entry) { return keyInRange(entry.key, query); }).length);
+        }, function (error) { idbFail(request, error); }));
+        return request;
+      };
       function IdbDatabase(name) {
         var self = this;
         self.name = name;
@@ -315,14 +509,46 @@ window.__ModuleLoader__.load({
           get length() { return Object.keys(self._stores).length; },
         };
       }
+      function IdbStoreHandle(db, name) {
+        this.db = db;
+        this.name = name;
+        this.keyPath = db._stores[name] && typeof db._stores[name].keyPath === 'string' ? db._stores[name].keyPath : '';
+      }
+      IdbStoreHandle.prototype.createIndex = function (indexName, keyPath, options) {
+        var name = String(indexName);
+        var descriptor = {
+          keyPath: String(keyPath),
+          unique: options && options.unique === true,
+          multiEntry: options && options.multiEntry === true,
+        };
+        var store = this.db._stores[this.name];
+        store.indexes[name] = descriptor;
+        this.db._pending.push(call('idb.store.create', {
+          db: this.db.name,
+          store: this.name,
+          keyPath: store.keyPath,
+          indexes: store.indexes,
+        }));
+        return new IdbIndex(this.db, this.name, name, null);
+      };
+      IdbStoreHandle.prototype.deleteIndex = function (indexName) {
+        var store = this.db._stores[this.name];
+        delete store.indexes[String(indexName)];
+        this.db._pending.push(call('idb.store.create', {
+          db: this.db.name,
+          store: this.name,
+          keyPath: store.keyPath,
+          indexes: store.indexes,
+        }));
+      };
       IdbDatabase.prototype.createObjectStore = function (storeName, options) {
         var name = String(storeName);
         var keyPath = options && typeof options.keyPath === 'string' ? options.keyPath : '';
-        this._stores[name] = { keyPath: keyPath };
+        this._stores[name] = { keyPath: keyPath, indexes: {} };
         var dbName = this.name;
-        var pending = call('idb.store.create', { db: dbName, store: name, keyPath: keyPath });
+        var pending = call('idb.store.create', { db: dbName, store: name, keyPath: keyPath, indexes: {} });
         this._pending.push(pending);
-        return { name: name, keyPath: keyPath };
+        return new IdbStoreHandle(this, name);
       };
       IdbDatabase.prototype.transaction = function (storeNames, mode) {
         return new IdbTransaction(this, storeNames, mode);
@@ -393,7 +619,32 @@ window.__ModuleLoader__.load({
         this.name = name;
         var descriptor = transaction.db._stores[name];
         this.keyPath = descriptor && typeof descriptor.keyPath === 'string' ? descriptor.keyPath : '';
+        this.indexNames = {
+          contains: function (indexName) {
+            return !!(descriptor && descriptor.indexes && descriptor.indexes[String(indexName)] !== undefined);
+          },
+          item: function (index) {
+            var names = descriptor && descriptor.indexes ? Object.keys(descriptor.indexes) : [];
+            return names[index] || null;
+          },
+          get length() { return descriptor && descriptor.indexes ? Object.keys(descriptor.indexes).length : 0; },
+        };
       }
+      IdbObjectStore.prototype.index = function (indexName) {
+        return new IdbIndex(this.transaction.db, this.name, String(indexName), this.transaction);
+      };
+      IdbObjectStore.prototype.openCursor = function (range, direction) {
+        return openIdbCursor(this.transaction.db, this.name, '', range, direction, this.transaction);
+      };
+      IdbObjectStore.prototype.openKeyCursor = function (range, direction) {
+        var request = openIdbCursor(this.transaction.db, this.name, '', range, direction, this.transaction);
+        var original = request.onsuccess;
+        request.onsuccess = function (event) {
+          if (request.result) request.result.value = undefined;
+          if (original) original(event);
+        };
+        return request;
+      };
       IdbObjectStore.prototype.get = function (key) {
         var request = idbRequest();
         var tx = this.transaction;
@@ -532,6 +783,7 @@ window.__ModuleLoader__.load({
         return request;
       };
       var idbShim = {
+        cmp: compareIdbKeys,
         open: function (name, version) {
           var request = idbRequest();
           var db = new IdbDatabase(String(name));
@@ -539,9 +791,14 @@ window.__ModuleLoader__.load({
             db.version = value && typeof value.version === 'number' ? value.version : 0;
             var stores = value && Array.isArray(value.stores) ? value.stores : [];
             var keyPaths = value && value.storeKeyPaths && typeof value.storeKeyPaths === 'object' ? value.storeKeyPaths : {};
+            var storeIndexes = value && value.storeIndexes && typeof value.storeIndexes === 'object' ? value.storeIndexes : {};
             stores.forEach(function (storeName) {
               var storeKeyPath = keyPaths[String(storeName)];
-              db._stores[String(storeName)] = { keyPath: typeof storeKeyPath === 'string' ? storeKeyPath : '' };
+              var indexes = storeIndexes[String(storeName)];
+              db._stores[String(storeName)] = {
+                keyPath: typeof storeKeyPath === 'string' ? storeKeyPath : '',
+                indexes: indexes && typeof indexes === 'object' ? indexes : {},
+              };
             });
             var previousVersion = value && typeof value.previousVersion === 'number' ? value.previousVersion : 0;
             var requested = typeof version === 'number' && version > 0 ? version : 1;
@@ -568,6 +825,11 @@ window.__ModuleLoader__.load({
         Object.defineProperty(window, 'indexedDB', { value: idbShim, configurable: true });
       } catch (_) {
         try { window.indexedDB = idbShim; } catch (_) {}
+      }
+      try {
+        Object.defineProperty(window, 'IDBKeyRange', { value: IdbKeyRange, configurable: true });
+      } catch (_) {
+        try { window.IDBKeyRange = IdbKeyRange; } catch (_) {}
       }
 
     })(call, clone);
@@ -1425,16 +1687,54 @@ window.__ModuleLoader__.load({
       // 首屏 manageSprites 里调用）。这里按 bgm/ambient 两个通道落到 iframe 内
       // <audio>，自动播放被浏览器拦截时只记 warning，不向卡抛错。
       var audioChannels = {};
+      function readAudioStore() {
+        try {
+          var parsed = JSON.parse(window.localStorage.getItem('__dshTavernAudio') || '{}');
+          return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+        } catch (_) {
+          return {};
+        }
+      }
+      function persistAudio(type, channel) {
+        try {
+          var store = readAudioStore();
+          store[type] = {
+            list: clone(channel.list),
+            current: clone(channel.current),
+            settings: clone(channel.settings),
+          };
+          window.localStorage.setItem('__dshTavernAudio', JSON.stringify(store));
+        } catch (error) {
+          console.error('[audio] persist failed', error);
+        }
+      }
       function audioChannel(type) {
         if (type !== 'bgm' && type !== 'ambient') {
           throw new Error('DSH-SoulMojito: audio type "' + String(type) + '" is not supported (bgm/ambient)');
         }
         if (!audioChannels[type]) {
+          var saved = readAudioStore()[type];
+          var savedList = saved && Array.isArray(saved.list) ? saved.list : [];
+          var savedCurrent = saved && saved.current && typeof saved.current.url === 'string' ? saved.current : null;
+          var savedSettings = saved && saved.settings && typeof saved.settings === 'object' ? saved.settings : {};
           audioChannels[type] = {
             element: null,
-            list: [],
-            current: null,
-            settings: { enabled: true, mode: 'repeat_all', muted: false, volume: 100 },
+            list: savedList.filter(function (entry) {
+              return entry && typeof entry.url === 'string' && entry.url !== '';
+            }).map(function (entry) {
+              return { title: typeof entry.title === 'string' ? entry.title : '', url: entry.url };
+            }),
+            current: savedCurrent,
+            settings: {
+              enabled: typeof savedSettings.enabled === 'boolean' ? savedSettings.enabled : true,
+              mode: savedSettings.mode === 'repeat_one' || savedSettings.mode === 'shuffle' || savedSettings.mode === 'play_one_and_stop'
+                ? savedSettings.mode
+                : 'repeat_all',
+              muted: savedSettings.muted === true,
+              volume: typeof savedSettings.volume === 'number' && isFinite(savedSettings.volume)
+                ? Math.max(0, Math.min(100, Math.round(savedSettings.volume)))
+                : 100,
+            },
           };
         }
         return audioChannels[type];
@@ -1474,6 +1774,7 @@ window.__ModuleLoader__.load({
         if (!channel.list.some(function (existing) { return existing.url === entry.url || existing.title === entry.title; })) {
           channel.list.push(entry);
         }
+        persistAudio(type, channel);
         var element = ensureAudioElement(channel);
         element.src = entry.url;
         applyAudioSettings(channel);
@@ -1497,6 +1798,7 @@ window.__ModuleLoader__.load({
         channel.list = (Array.isArray(audioList) ? audioList : [])
           .filter(function (audio) { return audio && typeof audio.url === 'string' && audio.url !== ''; })
           .map(audioEntry);
+        persistAudio(type, channel);
       };
       window.appendAudioList = function (type, audioList) {
         var channel = audioChannel(type);
@@ -1506,6 +1808,7 @@ window.__ModuleLoader__.load({
           if (channel.list.some(function (existing) { return existing.url === entry.url || existing.title === entry.title; })) return;
           channel.list.push(entry);
         });
+        persistAudio(type, channel);
       };
       window.getAudioSettings = function (type) {
         return Object.assign({}, audioChannel(type).settings);
@@ -1522,6 +1825,7 @@ window.__ModuleLoader__.load({
           channel.settings.volume = Math.max(0, Math.min(100, Math.round(next.volume)));
         }
         applyAudioSettings(channel);
+        persistAudio(type, channel);
       };
       window.getCurrentAudio = function (type) {
         var channel = audioChannel(type);
@@ -2822,7 +3126,7 @@ window.__ModuleLoader__.load({
         emitLocally(HELPER_TAVERN_EVENTS.CHAT_COMPLETION_SETTINGS_READY, [{
           model: typeof customApi.model === 'string' ? customApi.model : '',
           messages: generationPromptMessages(request),
-          stream: false,
+          stream: request.should_stream === true,
         }]);
         return call('generate', { config: request }).then(function (value) {
           var text = value && typeof value.text === 'string' ? value.text : '';
@@ -2836,8 +3140,18 @@ window.__ModuleLoader__.load({
         });
       };
       window.generateRaw = function (config) { return window.generate(config); };
-      window.stopGenerationById = function () { return false; };
-      window.stopAllGeneration = function () { return false; };
+      window.stopGenerationById = function (generationId) {
+        var id = typeof generationId === 'string' ? generationId : String(generationId == null ? '' : generationId);
+        if (id === '') return Promise.resolve(false);
+        return call('generate.stop', { generationId: id }).then(function (value) {
+          return value != null && value.stopped === true;
+        }, function () { return false; });
+      };
+      window.stopAllGeneration = function () {
+        return call('generate.stop-all', {}).then(function (value) {
+          return value != null && typeof value.stopped === 'number' && value.stopped > 0;
+        }, function () { return false; });
+      };
 
       // Regex compatibility (JSR signature): getTavernRegexes(option) returns the
       // ST-shaped entries synchronously; formatAsTavernRegexedString(text, source,
@@ -3414,14 +3728,64 @@ window.__ModuleLoader__.load({
       window.TavernHelper.Mvu = window.Mvu;
       window.TavernHelper.toastr = window.toastr;
       window.TavernHelper.eventSource = window.eventSource;
+      // Cross-iframe relay. eventEmit stays local (JSR semantics); this namespace
+      // is the explicit bridge for scripts that need to notify sibling containers.
+      window.TavernHelper.iframe = {
+        self: function () { return token; },
+        list: function () {
+          return call('iframe.list', {}).then(function (value) {
+            return value && Array.isArray(value.iframes) ? value.iframes : [];
+          });
+        },
+        broadcast: function (type) {
+          var args = Array.prototype.slice.call(arguments, 1);
+          return call('iframe.broadcast', { event: String(type), args: args }).then(function (value) {
+            return value && typeof value.delivered === 'number' ? value.delivered : 0;
+          });
+        },
+        emitTo: function (name, type) {
+          var target = String(name);
+          var args = Array.prototype.slice.call(arguments, 2);
+          return call('iframe.broadcast', { target: target, event: String(type), args: args }).then(function (value) {
+            return value && typeof value.delivered === 'number' ? value.delivered : 0;
+          });
+        },
+      };
       window.TavernHelper.EjsTemplate = window.EjsTemplate;
       window.TavernHelper.addEventListener = window.eventOn;
       window.TavernHelper.removeEventListener = window.eventRemoveListener;
 
 
-      // iframe-local settings objects MagVarUpdate reads directly.
-      window.__dshTavernExtensionSettings = window.__dshTavernExtensionSettings || {};
-      window.__dshTavernChatCompletionSettings = window.__dshTavernChatCompletionSettings || {};
+      // iframe-local settings objects MagVarUpdate reads directly. They are backed
+      // by the sandbox localStorage shim so settings survive a page reload without
+      // leaking into the host's real storage.
+      function persistentSettings(key) {
+        var initial = {};
+        try {
+          var stored = window.localStorage.getItem(key);
+          var parsed = stored === null ? null : JSON.parse(stored);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) initial = parsed;
+        } catch (_) {}
+        function persist(target) {
+          try { window.localStorage.setItem(key, JSON.stringify(target)); } catch (error) {
+            console.error('[TavernHelper] settings persist failed', error);
+          }
+        }
+        return new Proxy(initial, {
+          set: function (target, property, value) {
+            target[property] = value;
+            persist(target);
+            return true;
+          },
+          deleteProperty: function (target, property) {
+            delete target[property];
+            persist(target);
+            return true;
+          },
+        });
+      }
+      window.__dshTavernExtensionSettings = persistentSettings('__dshTavernExtensionSettings');
+      window.__dshTavernChatCompletionSettings = persistentSettings('__dshTavernChatCompletionSettings');
 
       // ST-shaped chat view for cards that read SillyTavern.getContext().chat
       // (mes / is_user / is_system / swipes) instead of TavernHelper messages.
@@ -3502,10 +3866,14 @@ window.__ModuleLoader__.load({
             chatId: state.chatId,
             chat: stChat(),
             chat_metadata: state.chatMetadata,
+            chatMetadata: state.chatMetadata,
             name1: state.userName,
             name2: state.characterName,
+            characterName: state.characterName,
+            userName: state.userName,
             characterId: String(state.characterId === undefined ? 0 : state.characterId),
             characters: window.SillyTavern.characters,
+            characterNames: clone((state.characters && state.characters.names) || []),
             eventSource: window.eventSource,
             eventTypes: window.tavern_events,
             extensionSettings: window.SillyTavern.extensionSettings,
@@ -3518,13 +3886,34 @@ window.__ModuleLoader__.load({
             getCurrentChatId: function () { return state.chatId; },
             getCharacterCardFields: function () {
               var data = state.characterData || {};
+              var mesExamples = typeof data.mes_example === 'string'
+                ? data.mes_example
+                : (typeof data.mesExamples === 'string' ? data.mesExamples : '');
               return {
                 description: typeof data.description === 'string' ? data.description : '',
                 personality: typeof data.personality === 'string' ? data.personality : '',
                 scenario: typeof data.scenario === 'string' ? data.scenario : '',
-                mesExamples: typeof data.mes_example === 'string'
-                  ? data.mes_example
-                  : (typeof data.mesExamples === 'string' ? data.mesExamples : ''),
+                mesExamples: mesExamples,
+                systemPrompt: typeof data.system_prompt === 'string'
+                  ? data.system_prompt
+                  : (typeof data.systemPrompt === 'string' ? data.systemPrompt : ''),
+                postHistoryInstructions: typeof data.post_history_instructions === 'string'
+                  ? data.post_history_instructions
+                  : (typeof data.postHistoryInstructions === 'string' ? data.postHistoryInstructions : ''),
+                firstMessage: typeof data.first_mes === 'string'
+                  ? data.first_mes
+                  : (typeof data.firstMessage === 'string' ? data.firstMessage : ''),
+                alternateGreetings: Array.isArray(data.alternate_greetings)
+                  ? data.alternate_greetings.slice()
+                  : (Array.isArray(data.alternateGreetings) ? data.alternateGreetings.slice() : []),
+                creatorNotes: typeof data.creator_notes === 'string'
+                  ? data.creator_notes
+                  : (typeof data.creatorNotes === 'string' ? data.creatorNotes : ''),
+                creator: typeof data.creator === 'string' ? data.creator : '',
+                characterVersion: typeof data.character_version === 'string'
+                  ? data.character_version
+                  : (typeof data.characterVersion === 'string' ? data.characterVersion : ''),
+                tags: Array.isArray(data.tags) ? data.tags.filter(function (tag) { return typeof tag === 'string'; }) : [],
               };
             },
           };
@@ -3961,6 +4350,10 @@ window.__ModuleLoader__.load({
     //   ——改写它们需 calc(var(...) * 0.5) 乘法形态，语义变更面大；
     // - 注释与字符串字面量里的 100vh 原样保留（content:"100vh" 是显示文本）。
     // 服务端 mod HTML 出口（src/mods/http.ts renderModHtmlDocument）同构同款。
+    // Cross-iframe event relay for TavernHelper.iframe. Each mounted helper
+    // bridge registers its own emit function; the token is the iframe identity.
+    const helperFrameEmitters = new Map()
+
     const VIEWPORT_MESSAGE = 'dsh-soulmojito:viewport'
     const VIEWPORT_CSS_VAR = '--dt-viewport-height'
     const FRONTEND_BACKGROUND_CSS_VAR = '--dt-host-background'
@@ -4560,6 +4953,55 @@ window.__ModuleLoader__.load({
         const emitEvent = (event, args) => {
           reply({ type: HELPER_EVENT_MESSAGE, event, args: Array.isArray(args) ? args : [] })
         }
+        helperFrameEmitters.set(token, emitEvent)
+        const streamFrontendGenerate = async (current, config) => {
+          const generationId = config && typeof config.generation_id === 'string' ? config.generation_id : ''
+          emitEvent(HELPER_TAVERN_EVENTS.GENERATION_STARTED, [generationId])
+          const response = await fetch(`${API}/frontend/generate`, {
+            method: 'POST',
+            headers: jsonHeaders(),
+            body: JSON.stringify({ character: current.character, chatId: current.chatId, config }),
+          })
+          if (!response.ok) {
+            const body = await response.json().catch(() => ({}))
+            throw new Error(body.message || `HTTP ${response.status}`)
+          }
+          if (response.body === null) throw new Error('generation stream has no response body')
+          const reader = response.body.getReader()
+          const decoder = new TextDecoder()
+          let buffer = ''
+          let text = ''
+          try {
+            for (;;) {
+              const chunk = await reader.read()
+              if (chunk.done) break
+              buffer += decoder.decode(chunk.value, { stream: true })
+              let newline = buffer.indexOf('\n')
+              while (newline >= 0) {
+                const line = buffer.slice(0, newline).trim()
+                buffer = buffer.slice(newline + 1)
+                if (line !== '') {
+                  const event = JSON.parse(line)
+                  if (event.type === 'delta' && typeof event.text === 'string') {
+                    text += event.text
+                    emitEvent(HELPER_IFRAME_EVENTS.STREAM_TOKEN_RECEIVED_INCREMENTALLY, [event.text, generationId])
+                  } else if (event.type === 'done' && typeof event.text === 'string') {
+                    text = event.text
+                  } else if (event.type === 'error') {
+                    throw new Error(typeof event.message === 'string' ? event.message : 'generation failed')
+                  } else if (event.type === 'aborted') {
+                    throw new Error('generation aborted')
+                  }
+                }
+                newline = buffer.indexOf('\n')
+              }
+            }
+          } finally {
+            reader.releaseLock()
+          }
+          emitEvent(HELPER_IFRAME_EVENTS.STREAM_TOKEN_RECEIVED_FULLY, [text, generationId])
+          return { text }
+        }
         const diff = (previous, next) => {
           if (!next) return
           if (previous === null) {
@@ -4567,6 +5009,9 @@ window.__ModuleLoader__.load({
             return
           }
           if (previous.chatId !== next.chatId) emitEvent(HELPER_TAVERN_EVENTS.CHAT_CHANGED, [next.chatId])
+          const previousPreset = previous.presets && typeof previous.presets === 'object' ? previous.presets.active : null
+          const nextPreset = next.presets && typeof next.presets === 'object' ? next.presets.active : null
+          if (previousPreset !== nextPreset) emitEvent(HELPER_TAVERN_EVENTS.PRESET_CHANGED, [nextPreset])
           const before = Array.isArray(previous.messages) ? previous.messages : []
           const after = Array.isArray(next.messages) ? next.messages : []
           const byId = new Map(before.map((message) => [message.message_id, message]))
@@ -4586,6 +5031,11 @@ window.__ModuleLoader__.load({
                 emitEvent(HELPER_TAVERN_EVENTS.STREAM_TOKEN_RECEIVED, [String(message.message ?? ''), String(message.message_id)])
               }
               continue
+            }
+            const oldSwipes = Array.isArray(old.swipes) ? old.swipes.length : 0
+            const nextSwipes = Array.isArray(message.swipes) ? message.swipes.length : 0
+            if (old.swipe_id !== message.swipe_id || oldSwipes !== nextSwipes) {
+              emitEvent(HELPER_TAVERN_EVENTS.MESSAGE_SWIPED, [message.message_id])
             }
             if (old.message !== message.message || old.name !== message.name) {
               emitEvent(HELPER_TAVERN_EVENTS.MESSAGE_EDITED, [message.message_id])
@@ -4652,6 +5102,42 @@ window.__ModuleLoader__.load({
             reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value: { applied: frame !== null } })
             return
           }
+          if (data.op === 'generate') {
+            const config = data.payload && typeof data.payload.config === 'object' ? data.payload.config : {}
+            streamFrontendGenerate(current, config)
+              .then((value) => reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value }))
+              .catch((cause) => {
+                const message = cause instanceof Error ? cause.message : String(cause)
+                if (message === 'generation aborted') {
+                  const generationId = typeof config.generation_id === 'string' ? config.generation_id : ''
+                  emitEvent(HELPER_TAVERN_EVENTS.GENERATION_STOPPED, [generationId])
+                }
+                fail(message)
+              })
+            return
+          }
+          if (data.op === 'iframe.list') {
+            reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value: { iframes: [...helperFrameEmitters.keys()] } })
+            return
+          }
+          if (data.op === 'iframe.broadcast') {
+            const event = typeof data.payload?.event === 'string' ? data.payload.event : ''
+            if (event === '') {
+              fail('iframe.broadcast needs an event name')
+              return
+            }
+            const args = Array.isArray(data.payload?.args) ? data.payload.args : []
+            const target = typeof data.payload?.target === 'string' ? data.payload.target : ''
+            let delivered = 0
+            for (const [frameToken, emit] of helperFrameEmitters) {
+              if (frameToken === token) continue
+              if (target !== '' && frameToken !== target) continue
+              emit(event, args)
+              delivered += 1
+            }
+            reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value: { delivered } })
+            return
+          }
           if (DshFrontendStorage.isIdbBridgeOp(data.op)) {
             const payload = data.payload && typeof data.payload === 'object' ? data.payload : {}
             void DshFrontendStorage.handleIdbBridge(data.op, payload, current.character, API, fetch)
@@ -4716,6 +5202,58 @@ window.__ModuleLoader__.load({
             await handOffUserFloor(text)
             return { output: '', chatChanged: value.chatChanged === true }
           }
+          if (data.op === 'slash' && String(data.payload?.command ?? '').trim().toLowerCase() === '/stop') {
+            if (typeof hostSessionId === 'string' && hostSessionId !== '') {
+              stopGeneration(hostSessionId)
+              emitEvent(HELPER_TAVERN_EVENTS.GENERATION_STOPPED, [hostSessionId])
+            }
+            Promise.all([
+              api('helper', {
+                method: 'POST',
+                headers: jsonHeaders(),
+                body: JSON.stringify({
+                  op: 'generate.stop-all',
+                  character: current.character,
+                  chatId: current.chatId,
+                }),
+              }),
+              api('helper', {
+                method: 'POST',
+                headers: jsonHeaders(),
+                body: JSON.stringify({
+                  op: 'generation.stop',
+                  character: current.character,
+                  chatId: current.chatId,
+                }),
+              }),
+            ])
+              .then(() => reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value: { output: '', chatChanged: false } }))
+              .catch((cause) => fail(cause instanceof Error ? cause.message : String(cause)))
+            return
+          }
+          if (data.op === 'slash' && String(data.payload?.command ?? '').trim().toLowerCase() === '/regenerate') {
+            if (typeof hostSessionId !== 'string' || hostSessionId === '') {
+              fail('/regenerate is not available in this context (no host session)')
+              return
+            }
+            if (bindingArchitecture(bindingRef.current) !== 'st') {
+              fail('/regenerate is only available in the ST architecture')
+              return
+            }
+            if (snapshot.runs[hostSessionId]?.busy) {
+              fail('/regenerate is not available while a generation is running')
+              return
+            }
+            generateFor(hostSessionId, bindingRef.current, 'regenerate', '')
+              .then(() => {
+                const run = snapshot.runs[hostSessionId]
+                if (run && typeof run.error === 'string' && run.error !== '') throw new Error(run.error)
+                postSnapshot()
+                reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value: { output: '', chatChanged: true } })
+              })
+              .catch((cause) => fail(cause instanceof Error ? cause.message : String(cause)))
+            return
+          }
           if (data.op === 'slash' && String(data.payload?.command ?? '') === '/trigger') {
             const pending = pendingTriggerRef.current
             // Only a user floor created by this iframe can be replaced. Other
@@ -4740,6 +5278,13 @@ window.__ModuleLoader__.load({
             }),
           }).then(async (result) => {
             const value = data.op === 'slash' ? await handOffTriggeredSlash(result.value) : result.value
+            const stopped = value && typeof value === 'object'
+              ? (value.stopped === true || (typeof value.stopped === 'number' && value.stopped > 0))
+              : false
+            if ((data.op === 'generate.stop' || data.op === 'generate.stop-all') && stopped) {
+              const generationId = typeof data.payload?.generationId === 'string' ? data.payload.generationId : ''
+              emitEvent(HELPER_TAVERN_EVENTS.GENERATION_STOPPED, [generationId])
+            }
             reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value })
             if (data.op === 'storage.set') frontendStorageCache.delete(current.character)
             if (data.op === 'messages.create') {
@@ -4774,6 +5319,7 @@ window.__ModuleLoader__.load({
         return () => {
           frame?.removeEventListener('load', onFrameLoad)
           removeEventListener('message', onMessage)
+          helperFrameEmitters.delete(token)
           emitEvent(HELPER_IFRAME_EVENTS.MESSAGE_IFRAME_RENDER_ENDED, [token])
         }
       }, [token, refreshKey, hostSessionId])

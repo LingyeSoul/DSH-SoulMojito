@@ -17,6 +17,45 @@ const MAX_PROMPT_CHARS = 2_000_000
 const MAX_MESSAGES = 256
 const MAX_API_KEY_CHARS = 8192
 
+// The HTTP helper request is the only handle the sandbox has on a generation.
+// The client cannot abort its own fetch through postMessage, so the server keeps
+// a chat-scoped controller table and resolves stop requests against it.
+const activeGenerationControllers = new Map<string, AbortController>()
+
+export function frontendGenerationKey(character: string, chatId: string, generationId: string): string {
+  return `${character}\u0000${chatId}\u0000${generationId}`
+}
+
+export function registerFrontendGeneration(character: string, chatId: string, generationId: string, controller: AbortController): void {
+  activeGenerationControllers.set(frontendGenerationKey(character, chatId, generationId), controller)
+}
+
+export function finishFrontendGeneration(character: string, chatId: string, generationId: string, controller: AbortController): void {
+  const key = frontendGenerationKey(character, chatId, generationId)
+  if (activeGenerationControllers.get(key) === controller) activeGenerationControllers.delete(key)
+}
+
+export function abortFrontendGeneration(character: string, chatId: string, generationId: string): boolean {
+  const key = frontendGenerationKey(character, chatId, generationId)
+  const controller = activeGenerationControllers.get(key)
+  if (controller === undefined) return false
+  activeGenerationControllers.delete(key)
+  controller.abort()
+  return true
+}
+
+export function abortAllFrontendGenerations(character: string, chatId: string): number {
+  const prefix = `${character}\u0000${chatId}\u0000`
+  let stopped = 0
+  for (const [key, controller] of activeGenerationControllers) {
+    if (!key.startsWith(prefix)) continue
+    activeGenerationControllers.delete(key)
+    controller.abort()
+    stopped += 1
+  }
+  return stopped
+}
+
 type ChatRole = 'system' | 'user' | 'assistant'
 
 interface ChatMessage {
@@ -124,11 +163,13 @@ async function requestJson(
   secret: string,
 ): Promise<unknown> {
   let response: Response
+  const externalSignal = init.signal instanceof AbortSignal ? init.signal : undefined
+  const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS)
   try {
     response = await fetch(endpoint, {
       ...init,
       redirect: 'error',
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: externalSignal === undefined ? timeoutSignal : AbortSignal.any([externalSignal, timeoutSignal]),
     })
   } catch (cause) {
     const reason = cause instanceof Error ? cause.message : String(cause)
@@ -293,7 +334,7 @@ function completionText(payload: unknown): string {
  * `overrides.chat_history.prompts` participate. `should_stream` is accepted and
  * served as one final response (the card's default setting is off).
  */
-export async function generateWithCustomApi(value: unknown): Promise<string> {
+export async function generateWithCustomApi(value: unknown, signal?: AbortSignal): Promise<string> {
   const config = asRecord(value)
   if (config === undefined) throw new FrontendGenerationError('generate config must be an object')
   const target = parseApiTarget(config.custom_api, true)
@@ -304,6 +345,7 @@ export async function generateWithCustomApi(value: unknown): Promise<string> {
       method: 'POST',
       headers: authHeaders(target),
       body: JSON.stringify({ model: target.model, messages, stream: false }),
+      ...(signal === undefined ? {} : { signal }),
     },
     'chat/completions',
     target.key,
@@ -311,6 +353,149 @@ export async function generateWithCustomApi(value: unknown): Promise<string> {
   const text = completionText(payload)
   if (text.trim() === '') {
     throw new FrontendGenerationError('custom API /chat/completions returned an empty response')
+  }
+  return text
+}
+
+type StreamDelta = (text: string) => void
+
+function textFromContent(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (!Array.isArray(value)) return ''
+  return value.map((part) => {
+    if (typeof part === 'string') return part
+    const item = asRecord(part)
+    return item !== undefined && typeof item.text === 'string' ? item.text : ''
+  }).join('')
+}
+
+function deltaText(payload: unknown): string {
+  const record = asRecord(payload)
+  const choices = record !== undefined && Array.isArray(record.choices) ? record.choices : []
+  if (choices.length === 0) return ''
+  const first = asRecord(choices[0])
+  if (first === undefined) return ''
+  const delta = asRecord(first.delta)
+  if (delta !== undefined) {
+    const content = textFromContent(delta.content)
+    if (content !== '') return content
+  }
+  const message = asRecord(first.message)
+  if (message !== undefined) {
+    const content = textFromContent(message.content)
+    if (content !== '') return content
+  }
+  return typeof first.text === 'string' ? first.text : ''
+}
+
+function streamChunkText(line: string, secret: string): string {
+  const trimmed = line.trim()
+  if (trimmed === '' || trimmed === '[DONE]') return ''
+  if (trimmed.startsWith(':') || trimmed.startsWith('event:') || trimmed.startsWith('id:') || trimmed.startsWith('retry:')) return ''
+  const raw = trimmed.startsWith('data:') ? trimmed.slice('data:'.length).trim() : trimmed
+  if (raw === '' || raw === '[DONE]') return ''
+  let payload: unknown
+  try {
+    payload = JSON.parse(raw) as unknown
+  } catch {
+    throw new FrontendGenerationError(`custom API stream returned invalid JSON: ${bodySnippet(raw, secret)}`)
+  }
+  return deltaText(payload)
+}
+
+/**
+ * Streaming `TavernHelper.generate` equivalent. Returns the final text while
+ * forwarding every text delta. The caller owns the abort signal; an aborted
+ * request is reported as an explicit error rather than an empty success.
+ */
+export async function generateWithCustomApiStream(
+  value: unknown,
+  onDelta: StreamDelta,
+  signal: AbortSignal,
+): Promise<string> {
+  const config = asRecord(value)
+  if (config === undefined) throw new FrontendGenerationError('generate config must be an object')
+  const target = parseApiTarget(config.custom_api, true)
+  const messages = buildMessages(config)
+  let response: Response
+  try {
+    response = await fetch(`${target.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: authHeaders(target),
+      body: JSON.stringify({ model: target.model, messages, stream: true }),
+      redirect: 'error',
+      signal: AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
+    })
+  } catch (cause) {
+    if (signal.aborted) throw new FrontendGenerationError('custom API generation was aborted')
+    const reason = cause instanceof Error ? cause.message : String(cause)
+    throw new FrontendGenerationError(`custom API chat/completions request failed: ${redactSecret(reason, target.key)}`)
+  }
+  const contentType = response.headers.get('content-type') ?? ''
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    throw new FrontendGenerationError(
+      `custom API chat/completions failed: HTTP ${response.status} ${response.statusText}: ${bodySnippet(text, target.key)}`,
+    )
+  }
+  if (!contentType.includes('text/event-stream')) {
+    const text = await response.text()
+    if (text.length > MAX_RESPONSE_BYTES) {
+      throw new FrontendGenerationError(`custom API chat/completions response is too large (${text.length} characters)`)
+    }
+    let payload: unknown
+    try {
+      payload = JSON.parse(text) as unknown
+    } catch {
+      throw new FrontendGenerationError(`custom API chat/completions returned invalid JSON: ${bodySnippet(text, target.key)}`)
+    }
+    const finalText = completionText(payload)
+    if (finalText.trim() === '') {
+      throw new FrontendGenerationError('custom API /chat/completions returned an empty response')
+    }
+    onDelta(finalText)
+    return finalText
+  }
+  if (response.body === null) {
+    throw new FrontendGenerationError('custom API stream has no response body')
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let text = ''
+  try {
+    for (;;) {
+      const chunk = await reader.read()
+      if (chunk.done) break
+      buffer += decoder.decode(chunk.value, { stream: true })
+      let newline = buffer.indexOf('\n')
+      while (newline >= 0) {
+        const line = buffer.slice(0, newline)
+        buffer = buffer.slice(newline + 1)
+        const delta = streamChunkText(line, target.key)
+        if (delta !== '') {
+          text += delta
+          if (text.length > MAX_RESPONSE_BYTES) {
+            throw new FrontendGenerationError(`custom API stream is too large (${text.length} characters)`)
+          }
+          onDelta(delta)
+        }
+        newline = buffer.indexOf('\n')
+      }
+    }
+    if (buffer.trim() !== '') {
+      const delta = streamChunkText(buffer, target.key)
+      if (delta !== '') {
+        text += delta
+        onDelta(delta)
+      }
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  if (signal.aborted) throw new FrontendGenerationError('custom API generation was aborted')
+  if (text.trim() === '') {
+    throw new FrontendGenerationError('custom API /chat/completions stream returned no text')
   }
   return text
 }

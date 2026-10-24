@@ -23,6 +23,22 @@ import { beginTavernSessionTurn, finishTavernSessionTrace, recordTavernSessionAs
 import { collectRegexScripts, collectWorldInfoBooks } from '../tavern-assets.js'
 import { createGenerationTemplates, mergeTemplateLocalVars, type GenerationTemplates } from '../template.js'
 
+// ST generation has no client handle to the in-flight LLM stream. The composer
+// can send `/stop` in a separate request while `/generate` is still running, so
+// the controller is registered by chat and resolved by the slash command.
+const activeStGeneration = new Map<string, AbortController>()
+
+function stGenerationKey(character: string, chatId: string): string {
+  return `${character}\u0000${chatId}`
+}
+
+export function abortStGeneration(character: string, chatId: string): boolean {
+  const controller = activeStGeneration.get(stGenerationKey(character, chatId))
+  if (controller === undefined) return false
+  controller.abort()
+  return true
+}
+
 export async function generate(ctx, req, res, db) {
   const body = await readJson(req)
   const state = await db.getState()
@@ -51,6 +67,7 @@ export async function generate(ctx, req, res, db) {
   const ac = new AbortController()
   req.on?.('aborted', () => ac.abort())
   res.on?.('close', () => { if (!res.writableEnded) ac.abort() })
+  activeStGeneration.set(stGenerationKey(characterName, chatId), ac)
   const write = (event) => res.write(JSON.stringify(event) + '\n')
 
   try {
@@ -81,6 +98,9 @@ export async function generate(ctx, req, res, db) {
       write({ type: 'error', message, code })
       res.end()
     }
+  } finally {
+    const key = stGenerationKey(characterName, chatId)
+    if (activeStGeneration.get(key) === ac) activeStGeneration.delete(key)
   }
 }
 
@@ -835,6 +855,8 @@ export async function runTavernScript(ctx, req, res, db) {
   const chat = snapshot.chat
   let revision = snapshot.revision
   const character = await db.getCharacter(characterName)
+  const scriptController = new AbortController()
+  activeStGeneration.set(stGenerationKey(characterName, chatId), scriptController)
 
   const macros = createMacroEngine({
     char: character?.card.data.nickname || character?.card.data.name || characterName,
@@ -869,7 +891,7 @@ export async function runTavernScript(ctx, req, res, db) {
       group,
       triggerMember: member,
       write: () => {},
-      signal: new AbortController().signal,
+      signal: scriptController.signal,
     })
     // 内核会保存并替换 chat 对象；同步回本作用域
     chat.messages = result.chat.messages
@@ -903,13 +925,13 @@ export async function runTavernScript(ctx, req, res, db) {
         userText: '',
         group,
         write: () => {},
-        signal: new AbortController().signal,
+        signal: scriptController.signal,
       })
       chat.messages = regen.chat.messages
       chat.header = regen.chat.header
       revision = regen.revision
     },
-    stop: () => {},
+    stop: () => { abortStGeneration(characterName, chatId) },
     cut: async (from, to) => {
       const total = chat.messages.length
       const start = from < 0 ? total + from : from
@@ -927,6 +949,9 @@ export async function runTavernScript(ctx, req, res, db) {
       if (!script) return text
       return applyRegexScript(text, script, RegexPlacement.SLASH_COMMAND, { expand: (t) => macros.expand(t) }) ?? text
     },
+  }).finally(() => {
+    const key = stGenerationKey(characterName, chatId)
+    if (activeStGeneration.get(key) === scriptController) activeStGeneration.delete(key)
   })
 
   // 全局变量持久化

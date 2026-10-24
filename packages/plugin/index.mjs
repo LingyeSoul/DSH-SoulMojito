@@ -13843,7 +13843,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("ef10fa3") : void 0;
+  const commit = true ? normalizeCommit("2a85bbf") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -29545,6 +29545,21 @@ function emptyDatabase(name2) {
 function asRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
 }
+function normalizeIndexes(value) {
+  const indexes = {};
+  const record = asRecord(value);
+  if (record === void 0) return indexes;
+  for (const [indexName, descriptor] of Object.entries(record)) {
+    const entry = asRecord(descriptor);
+    if (entry === void 0 || typeof entry.keyPath !== "string" || entry.keyPath.trim() === "") continue;
+    indexes[indexName] = {
+      keyPath: entry.keyPath,
+      unique: entry.unique === true,
+      multiEntry: entry.multiEntry === true
+    };
+  }
+  return indexes;
+}
 function normalizeDatabase(value, name2) {
   const record = asRecord(value);
   if (record === void 0) return emptyDatabase(name2);
@@ -29554,7 +29569,10 @@ function normalizeDatabase(value, name2) {
     for (const [storeName, descriptor] of Object.entries(rawStores)) {
       const entry = asRecord(descriptor);
       if (entry === void 0) continue;
-      stores[storeName] = { keyPath: typeof entry.keyPath === "string" ? entry.keyPath : "" };
+      stores[storeName] = {
+        keyPath: typeof entry.keyPath === "string" ? entry.keyPath : "",
+        indexes: normalizeIndexes(entry.indexes)
+      };
     }
   }
   const records = {};
@@ -29649,20 +29667,22 @@ async function openIdbDatabase(root, character, value, versionValue) {
       version: database.version,
       previousVersion,
       stores: Object.keys(database.stores),
-      storeKeyPaths: Object.fromEntries(Object.entries(database.stores).map(([name3, descriptor]) => [name3, descriptor.keyPath]))
+      storeKeyPaths: Object.fromEntries(Object.entries(database.stores).map(([name3, descriptor]) => [name3, descriptor.keyPath])),
+      storeIndexes: Object.fromEntries(Object.entries(database.stores).map(([name3, descriptor]) => [name3, descriptor.indexes]))
     };
   });
 }
-async function createIdbStore(root, character, nameValue, storeValue, keyPathValue) {
+async function createIdbStore(root, character, nameValue, storeValue, keyPathValue, indexesValue) {
   const name2 = requireDatabaseName(nameValue);
   const store5 = requireStoreName(storeValue);
   const keyPath = typeof keyPathValue === "string" ? keyPathValue : "";
+  const indexes = normalizeIndexes(indexesValue);
   return withDatabaseLock(root, character, name2, async () => {
     const database = await readDatabase(root, character, name2);
-    database.stores[store5] = { keyPath };
+    database.stores[store5] = { keyPath, indexes };
     database.updatedAt = Date.now();
     await writeDatabase(root, character, database);
-    return { stores: Object.keys(database.stores) };
+    return { stores: Object.keys(database.stores), indexes };
   });
 }
 async function putIdbRecordFromFile(root, character, nameValue, storeValue, keyValue, temporaryPath, metaValue) {
@@ -30321,12 +30341,45 @@ async function handleGamesApi(options) {
   }
 }
 
+// packages/plugin/src/helper.ts
+import { randomUUID as randomUUID5 } from "node:crypto";
+
 // packages/plugin/src/frontend-generation.ts
 var REQUEST_TIMEOUT_MS = 18e4;
 var MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 var MAX_PROMPT_CHARS = 2e6;
 var MAX_MESSAGES = 256;
 var MAX_API_KEY_CHARS = 8192;
+var activeGenerationControllers = /* @__PURE__ */ new Map();
+function frontendGenerationKey(character, chatId, generationId) {
+  return `${character}\0${chatId}\0${generationId}`;
+}
+function registerFrontendGeneration(character, chatId, generationId, controller) {
+  activeGenerationControllers.set(frontendGenerationKey(character, chatId, generationId), controller);
+}
+function finishFrontendGeneration(character, chatId, generationId, controller) {
+  const key = frontendGenerationKey(character, chatId, generationId);
+  if (activeGenerationControllers.get(key) === controller) activeGenerationControllers.delete(key);
+}
+function abortFrontendGeneration(character, chatId, generationId) {
+  const key = frontendGenerationKey(character, chatId, generationId);
+  const controller = activeGenerationControllers.get(key);
+  if (controller === void 0) return false;
+  activeGenerationControllers.delete(key);
+  controller.abort();
+  return true;
+}
+function abortAllFrontendGenerations(character, chatId) {
+  const prefix = `${character}\0${chatId}\0`;
+  let stopped = 0;
+  for (const [key, controller] of activeGenerationControllers) {
+    if (!key.startsWith(prefix)) continue;
+    activeGenerationControllers.delete(key);
+    controller.abort();
+    stopped += 1;
+  }
+  return stopped;
+}
 var FrontendGenerationError = class extends Error {
   constructor(message) {
     super(message);
@@ -30403,11 +30456,13 @@ function bodySnippet(value, secret) {
 }
 async function requestJson(endpoint, init, label, secret) {
   let response;
+  const externalSignal = init.signal instanceof AbortSignal ? init.signal : void 0;
+  const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
   try {
     response = await fetch(endpoint, {
       ...init,
       redirect: "error",
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+      signal: externalSignal === void 0 ? timeoutSignal : AbortSignal.any([externalSignal, timeoutSignal])
     });
   } catch (cause) {
     const reason = cause instanceof Error ? cause.message : String(cause);
@@ -30551,7 +30606,7 @@ function completionText(payload) {
   const finishReason = typeof first.finish_reason === "string" ? first.finish_reason : "unknown";
   throw new FrontendGenerationError(`custom API /chat/completions returned no text or tool arguments (finish_reason=${finishReason})`);
 }
-async function generateWithCustomApi(value) {
+async function generateWithCustomApi(value, signal) {
   const config = asRecord2(value);
   if (config === void 0) throw new FrontendGenerationError("generate config must be an object");
   const target = parseApiTarget(config.custom_api, true);
@@ -30561,7 +30616,8 @@ async function generateWithCustomApi(value) {
     {
       method: "POST",
       headers: authHeaders(target),
-      body: JSON.stringify({ model: target.model, messages, stream: false })
+      body: JSON.stringify({ model: target.model, messages, stream: false }),
+      ...signal === void 0 ? {} : { signal }
     },
     "chat/completions",
     target.key
@@ -30569,6 +30625,134 @@ async function generateWithCustomApi(value) {
   const text = completionText(payload);
   if (text.trim() === "") {
     throw new FrontendGenerationError("custom API /chat/completions returned an empty response");
+  }
+  return text;
+}
+function textFromContent(value) {
+  if (typeof value === "string") return value;
+  if (!Array.isArray(value)) return "";
+  return value.map((part) => {
+    if (typeof part === "string") return part;
+    const item = asRecord2(part);
+    return item !== void 0 && typeof item.text === "string" ? item.text : "";
+  }).join("");
+}
+function deltaText(payload) {
+  const record = asRecord2(payload);
+  const choices = record !== void 0 && Array.isArray(record.choices) ? record.choices : [];
+  if (choices.length === 0) return "";
+  const first = asRecord2(choices[0]);
+  if (first === void 0) return "";
+  const delta = asRecord2(first.delta);
+  if (delta !== void 0) {
+    const content = textFromContent(delta.content);
+    if (content !== "") return content;
+  }
+  const message = asRecord2(first.message);
+  if (message !== void 0) {
+    const content = textFromContent(message.content);
+    if (content !== "") return content;
+  }
+  return typeof first.text === "string" ? first.text : "";
+}
+function streamChunkText(line, secret) {
+  const trimmed = line.trim();
+  if (trimmed === "" || trimmed === "[DONE]") return "";
+  if (trimmed.startsWith(":") || trimmed.startsWith("event:") || trimmed.startsWith("id:") || trimmed.startsWith("retry:")) return "";
+  const raw = trimmed.startsWith("data:") ? trimmed.slice("data:".length).trim() : trimmed;
+  if (raw === "" || raw === "[DONE]") return "";
+  let payload;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    throw new FrontendGenerationError(`custom API stream returned invalid JSON: ${bodySnippet(raw, secret)}`);
+  }
+  return deltaText(payload);
+}
+async function generateWithCustomApiStream(value, onDelta, signal) {
+  const config = asRecord2(value);
+  if (config === void 0) throw new FrontendGenerationError("generate config must be an object");
+  const target = parseApiTarget(config.custom_api, true);
+  const messages = buildMessages(config);
+  let response;
+  try {
+    response = await fetch(`${target.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: authHeaders(target),
+      body: JSON.stringify({ model: target.model, messages, stream: true }),
+      redirect: "error",
+      signal: AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])
+    });
+  } catch (cause) {
+    if (signal.aborted) throw new FrontendGenerationError("custom API generation was aborted");
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    throw new FrontendGenerationError(`custom API chat/completions request failed: ${redactSecret(reason, target.key)}`);
+  }
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!response.ok) {
+    const text2 = await response.text().catch(() => "");
+    throw new FrontendGenerationError(
+      `custom API chat/completions failed: HTTP ${response.status} ${response.statusText}: ${bodySnippet(text2, target.key)}`
+    );
+  }
+  if (!contentType.includes("text/event-stream")) {
+    const text2 = await response.text();
+    if (text2.length > MAX_RESPONSE_BYTES) {
+      throw new FrontendGenerationError(`custom API chat/completions response is too large (${text2.length} characters)`);
+    }
+    let payload;
+    try {
+      payload = JSON.parse(text2);
+    } catch {
+      throw new FrontendGenerationError(`custom API chat/completions returned invalid JSON: ${bodySnippet(text2, target.key)}`);
+    }
+    const finalText = completionText(payload);
+    if (finalText.trim() === "") {
+      throw new FrontendGenerationError("custom API /chat/completions returned an empty response");
+    }
+    onDelta(finalText);
+    return finalText;
+  }
+  if (response.body === null) {
+    throw new FrontendGenerationError("custom API stream has no response body");
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let text = "";
+  try {
+    for (; ; ) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, { stream: true });
+      let newline = buffer.indexOf("\n");
+      while (newline >= 0) {
+        const line = buffer.slice(0, newline);
+        buffer = buffer.slice(newline + 1);
+        const delta = streamChunkText(line, target.key);
+        if (delta !== "") {
+          text += delta;
+          if (text.length > MAX_RESPONSE_BYTES) {
+            throw new FrontendGenerationError(`custom API stream is too large (${text.length} characters)`);
+          }
+          onDelta(delta);
+        }
+        newline = buffer.indexOf("\n");
+      }
+    }
+    if (buffer.trim() !== "") {
+      const delta = streamChunkText(buffer, target.key);
+      if (delta !== "") {
+        text += delta;
+        onDelta(delta);
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (signal.aborted) throw new FrontendGenerationError("custom API generation was aborted");
+  if (text.trim() === "") {
+    throw new FrontendGenerationError("custom API /chat/completions stream returned no text");
   }
   return text;
 }
@@ -30646,6 +30830,978 @@ async function applyFrontendWorldbookScan(db, state, character, chatId, config) 
   };
 }
 
+// packages/plugin/src/template.ts
+var INITIAL_VARIABLES_KEY4 = "initial_variables";
+function toSpecialEntry(kind, arg, content, ifCondition, source) {
+  const entry = {
+    kind,
+    book: source.book,
+    uid: source.uid,
+    comment: source.comment ?? "",
+    content,
+    order: source.order ?? 100,
+    ...source.probability !== void 0 ? { probability: source.probability } : {},
+    ...source.useProbability !== void 0 ? { useProbability: source.useProbability } : {}
+  };
+  if (arg !== void 0) entry.arg = arg;
+  if (ifCondition !== void 0) entry.ifCondition = ifCondition;
+  return entry;
+}
+function classifyRawEntry(raw) {
+  if ((raw.comment ?? "") === "" && (raw.content ?? "") === "") return null;
+  return classifySpecialEntry({ comment: raw.comment, content: raw.content ?? "" });
+}
+function partitionSpecialLore(lore, books) {
+  const generate2 = [];
+  const render = [];
+  const inject2 = [];
+  const seenInject = /* @__PURE__ */ new Set();
+  const isSpecial = /* @__PURE__ */ new Set();
+  for (const activated of lore.allActivated) {
+    const raw = activated.entry;
+    const classified = classifyRawEntry({ comment: raw.comment, content: raw.content });
+    if (classified === null) continue;
+    isSpecial.add(activated.entryId);
+    const source = {
+      book: activated.book,
+      uid: activated.uid,
+      comment: raw.comment,
+      order: typeof raw.order === "number" ? raw.order : activated.order,
+      probability: typeof raw.probability === "number" ? raw.probability : void 0,
+      useProbability: raw.useProbability === true ? true : void 0
+    };
+    const special = toSpecialEntry(classified.kind, classified.arg, classified.content, classified.ifCondition, source);
+    if (classified.kind === "inject") {
+      if (!seenInject.has(`${activated.book}#${activated.uid}`)) {
+        seenInject.add(`${activated.book}#${activated.uid}`);
+        inject2.push(special);
+      }
+    } else if (classified.kind.startsWith("render")) {
+      render.push(special);
+    } else if (classified.kind !== "initial") {
+      generate2.push(special);
+    }
+  }
+  const initial = [];
+  for (const book of books) {
+    for (const raw of book.entries) {
+      const classified = classifyRawEntry({ comment: raw.comment, content: raw.content });
+      if (classified === null) continue;
+      if (classified.kind === "inject" && !seenInject.has(`${book.name ?? ""}#${raw.uid}`)) {
+        seenInject.add(`${book.name ?? ""}#${raw.uid}`);
+        inject2.push(toSpecialEntry("inject", classified.arg, classified.content, classified.ifCondition, {
+          book: book.name ?? "",
+          uid: raw.uid,
+          comment: raw.comment,
+          order: typeof raw.order === "number" ? raw.order : 100,
+          probability: typeof raw.probability === "number" ? raw.probability : void 0,
+          useProbability: raw.useProbability === true ? true : void 0
+        }));
+        continue;
+      }
+      if (classified.kind === "initial" && raw.disable !== true) {
+        initial.push(toSpecialEntry("initial", void 0, classified.content, classified.ifCondition, {
+          book: book.name ?? "",
+          uid: raw.uid,
+          comment: raw.comment,
+          order: typeof raw.order === "number" ? raw.order : 100
+        }));
+      }
+    }
+  }
+  const normal = (entries) => entries.filter((e) => !isSpecial.has(e.entryId));
+  const joinText = (entries) => entries.map((e) => e.content).filter((text) => text.length > 0).join("\n");
+  return {
+    generate: generate2,
+    render,
+    inject: inject2,
+    initial,
+    normalBefore: normal(lore.worldInfoBefore.entries),
+    normalAfter: normal(lore.worldInfoAfter.entries),
+    normalBeforeExamples: normal(lore.beforeExamples.entries),
+    normalAfterExamples: normal(lore.afterExamples.entries),
+    normalAtDepth: lore.atDepth.map((group2) => {
+      const entries = group2.entries.filter((e) => !isSpecial.has(e.entryId));
+      return { depth: group2.depth, role: group2.role, text: joinText(entries) };
+    }).filter((group2) => group2.text !== "")
+  };
+}
+function ensureMetadataObject(metadata, key) {
+  const existing = metadata[key];
+  if (existing !== null && typeof existing === "object" && !Array.isArray(existing)) return existing;
+  const created = {};
+  metadata[key] = created;
+  return created;
+}
+async function createGenerationTemplates(options) {
+  const { chat, state, books, lore, card, preset, turnMessages, userName, characterName, chatId, model } = options;
+  const warnings = [];
+  const warn = (message) => {
+    warnings.push(message);
+    options.onWarning?.(message);
+  };
+  const partition = partitionSpecialLore(lore, books);
+  const localVars = ensureMetadataObject(chat.header.chat_metadata, "variables");
+  const initialVars = ensureMetadataObject(chat.header.chat_metadata, INITIAL_VARIABLES_KEY4);
+  const cardName2 = card.data.nickname || card.data.name;
+  const lastUserIdx = (() => {
+    for (let i = turnMessages.length - 1; i >= 0; i--) if (turnMessages[i].is_user) return i;
+    return -1;
+  })();
+  const lastCharIdx = (() => {
+    for (let i = turnMessages.length - 1; i >= 0; i--) {
+      const m = turnMessages[i];
+      if (!m.is_user && !m.is_system) return i;
+    }
+    return -1;
+  })();
+  const host = {
+    runType: "generate",
+    userName,
+    charName: cardName2,
+    chatId,
+    characterId: characterName,
+    model,
+    charAvatar: typeof card.data.extensions["avatar"] === "string" ? card.data.extensions["avatar"] : "",
+    messages: turnMessages.map((m) => ({ name: m.name, mes: m.mes, is_user: m.is_user, is_system: m.is_system })),
+    lastUserMessageId: lastUserIdx,
+    lastCharMessageId: lastCharIdx,
+    findWorldEntries: (title, book) => {
+      const out = [];
+      for (const lorebook of books) {
+        if (book !== void 0 && lorebook.name !== book) continue;
+        for (const entry of lorebook.entries) {
+          const comment = entry.comment ?? "";
+          const matched = typeof title === "number" ? entry.uid === title : comment === title;
+          if (!matched) continue;
+          out.push({
+            uid: entry.uid,
+            book: lorebook.name ?? "",
+            comment,
+            content: entry.content ?? "",
+            ...typeof entry.order === "number" ? { order: entry.order } : {},
+            disable: entry.disable === true
+          });
+        }
+      }
+      return out;
+    },
+    getCard: (name2) => {
+      if (name2 !== void 0 && name2 !== characterName && name2 !== cardName2) return null;
+      const depthPrompt = card.data.extensions["depth_prompt"];
+      return {
+        name: cardName2,
+        systemPrompt: card.data.systemPrompt,
+        personality: card.data.personality,
+        description: card.data.description,
+        scenario: card.data.scenario,
+        firstMes: card.data.firstMes,
+        mesExample: card.data.mesExample,
+        creatorNotes: card.data.creatorNotes,
+        depthPrompt: depthPrompt !== null && typeof depthPrompt === "object" ? String(depthPrompt.prompt ?? "") : "",
+        data: card.data
+      };
+    },
+    findPresetPrompt: (name2) => {
+      for (const prompt of preset.prompts) {
+        if ("marker" in prompt && prompt.marker) continue;
+        if (prompt.name === name2) return { name: prompt.name, content: prompt.content ?? "" };
+      }
+      return null;
+    },
+    renderNested: async () => ""
+  };
+  const runtime = createTemplateRuntime({
+    host,
+    stores: {
+      local: localVars,
+      global: state.scriptGlobals,
+      initial: initialVars
+    },
+    onWarning: warn
+  });
+  host.renderNested = (source, extra) => runtime.renderText(source, extra);
+  const renderText = async (text, where) => {
+    try {
+      return await runtime.renderText(text, void 0, where);
+    } catch (err2) {
+      warn(`template render failed${where ? ` (${where})` : ""}: ${err2 instanceof Error ? err2.message : String(err2)} \u2014 keeping original text`);
+      return text;
+    }
+  };
+  if (partition.initial.length > 0) {
+    const initialData = {};
+    for (const entry of partition.initial) {
+      const rendered = await renderText(entry.content, `initial-variables ${entry.book}#${entry.uid}`);
+      const parsed = runtime.parseInitialVariables(rendered);
+      if (parsed) deepMerge(initialData, parsed);
+    }
+    runtime.setInitialVariables(initialData);
+  }
+  const prerenderGenerate = async (kinds) => {
+    const ordered = partition.generate.filter((entry) => kinds.includes(entry.kind)).sort((a, b) => a.order - b.order || a.uid - b.uid);
+    for (const entry of ordered) {
+      entry.renderedContent = await renderText(entry.content, `generate ${entry.book}#${entry.uid}`);
+    }
+  };
+  await prerenderGenerate(["generate-before"]);
+  const preRenderCard = async (input) => {
+    const data = input.data;
+    return {
+      ...input,
+      data: {
+        ...data,
+        description: await renderText(data.description, "card.description"),
+        personality: await renderText(data.personality, "card.personality"),
+        scenario: await renderText(data.scenario, "card.scenario"),
+        systemPrompt: await renderText(data.systemPrompt, "card.systemPrompt"),
+        postHistoryInstructions: await renderText(data.postHistoryInstructions, "card.postHistoryInstructions"),
+        mesExample: await renderText(data.mesExample, "card.mesExample")
+      }
+    };
+  };
+  const preRenderPreset = async (input) => ({
+    ...input,
+    prompts: await Promise.all(input.prompts.map(async (prompt) => {
+      if ("marker" in prompt && prompt.marker) return prompt;
+      const content = prompt.content ?? "";
+      return { ...prompt, content: await renderText(content, `preset.${prompt.name}`) };
+    }))
+  });
+  const applyPromptInjections = async (messages) => {
+    let out = await runtime.applyGenerateInjections(messages, partition.generate);
+    out = await runtime.applyInjectEntries(out, partition.inject);
+    return out;
+  };
+  const renderOutput = async (text) => {
+    host.runType = "render";
+    try {
+      const rendered = await renderText(text, "llm-output");
+      return await runtime.applyRenderInjections(rendered, partition.render);
+    } finally {
+      host.runType = "generate";
+    }
+  };
+  return {
+    runtime,
+    partition,
+    warnings,
+    renderText,
+    setModel: (model2) => {
+      host.model = model2;
+    },
+    preRenderCard,
+    preRenderPreset,
+    prerenderGenerateAfter: () => prerenderGenerate(["generate-after"]),
+    applyPromptInjections,
+    renderOutput
+  };
+}
+function mergeTemplateLocalVars(chat, macroLocalSnapshot) {
+  const metadata = chat.header.chat_metadata;
+  const existing = metadata["variables"];
+  const merged = existing !== null && typeof existing === "object" && !Array.isArray(existing) ? existing : {};
+  for (const [key, value] of Object.entries(macroLocalSnapshot)) merged[key] = value;
+  if (Object.keys(merged).length > 0) metadata["variables"] = merged;
+  else delete metadata["variables"];
+  if (Object.keys(ensureMetadataObject(metadata, INITIAL_VARIABLES_KEY4)).length === 0) {
+    delete metadata[INITIAL_VARIABLES_KEY4];
+  }
+}
+
+// packages/plugin/src/generation/pipeline.ts
+var activeStGeneration = /* @__PURE__ */ new Map();
+function stGenerationKey(character, chatId) {
+  return `${character}\0${chatId}`;
+}
+function abortStGeneration(character, chatId) {
+  const controller = activeStGeneration.get(stGenerationKey(character, chatId));
+  if (controller === void 0) return false;
+  controller.abort();
+  return true;
+}
+async function generate(ctx, req, res, db) {
+  const body = await readJson(req);
+  const state = await db.getState();
+  assertStGenerationBinding(state, body.sessionId);
+  const characterName = typeof body.character === "string" ? body.character : state.activeCharacter;
+  const chatId = body.chatId;
+  const userText = typeof body.message === "string" ? body.message.trim() : "";
+  const mode = body.mode === "regenerate" ? "regenerate" : "send";
+  let feedback;
+  if (mode === "regenerate") feedback = optionalFeedback(body.feedback);
+  else if (body.feedback !== void 0) throw new Error("feedback is only allowed when mode is regenerate");
+  if (!characterName || typeof chatId !== "string") throw new Error("character and chatId are required");
+  if (mode === "send" && userText === "") throw new Error("message is empty");
+  if (typeof body.revision !== "string") throw new Error("revision is required");
+  const bindingGroup = body.group === true || await isGroupChat(db, characterName, chatId);
+  const snapshot2 = await db.getChatSnapshot(characterName, chatId);
+  if (!snapshot2) throw new Error("character or chat not found");
+  if (body.revision !== snapshot2.revision) {
+    throw new ChatRevisionConflictError(body.revision, snapshot2.revision);
+  }
+  res.statusCode = 200;
+  res.setHeader("content-type", "application/x-ndjson; charset=utf-8");
+  res.setHeader("cache-control", "no-cache");
+  const ac = new AbortController();
+  req.on?.("aborted", () => ac.abort());
+  res.on?.("close", () => {
+    if (!res.writableEnded) ac.abort();
+  });
+  activeStGeneration.set(stGenerationKey(characterName, chatId), ac);
+  const write = (event) => res.write(JSON.stringify(event) + "\n");
+  try {
+    const result = await runGeneration(ctx, db, {
+      state,
+      characterName,
+      chatId,
+      snapshot: snapshot2,
+      mode,
+      userText,
+      feedback,
+      group: bindingGroup,
+      triggerMember: typeof body.triggerMember === "string" ? body.triggerMember : void 0,
+      sessionId: typeof body.sessionId === "string" ? body.sessionId : void 0,
+      provider: typeof body.provider === "string" ? body.provider : void 0,
+      model: typeof body.model === "string" ? body.model : void 0,
+      reasoningEffort: typeof body.reasoningEffort === "string" ? body.reasoningEffort : void 0,
+      write,
+      signal: ac.signal,
+      hostAgent: typeof body.sessionId === "string" ? ctx.agents?.get?.(body.sessionId) : void 0
+    });
+    write({ type: "saved", chat: result.chat, revision: result.revision });
+    res.end();
+  } catch (error) {
+    if (!res.writableEnded) {
+      const message = error instanceof Error ? error.message : String(error);
+      const code = error instanceof ChatRevisionConflictError ? error.code : void 0;
+      write({ type: "error", message, code });
+      res.end();
+    }
+  } finally {
+    const key = stGenerationKey(characterName, chatId);
+    if (activeStGeneration.get(key) === ac) activeStGeneration.delete(key);
+  }
+}
+async function previewGeneration(ctx, req, res, db) {
+  const body = await readJson(req);
+  const state = await db.getState();
+  const characterName = typeof body.character === "string" ? body.character : state.activeCharacter;
+  const chatId = body.chatId;
+  const userText = typeof body.userText === "string" ? body.userText.trim() : "";
+  if (!characterName || typeof chatId !== "string") {
+    return sendJson(res, 400, { ok: false, message: "character and chatId are required" });
+  }
+  if (userText === "") return sendJson(res, 400, { ok: false, message: "userText is empty" });
+  const snapshot2 = await db.getChatSnapshot(characterName, chatId);
+  if (!snapshot2) return sendJson(res, 404, { ok: false, message: "character or chat not found" });
+  const group2 = body.group === true || await isGroupChat(db, characterName, chatId);
+  const ac = new AbortController();
+  req.on?.("aborted", () => ac.abort());
+  res.on?.("close", () => {
+    if (!res.writableEnded) ac.abort();
+  });
+  const chat = structuredClone(snapshot2.chat);
+  const userName = state.activePersona ?? DEFAULT_USER2;
+  const { speakerName, groupDef, nudge, turnMessages: initialTurnMessages } = await resolveGenerationSpeaker(db, state, {
+    characterName,
+    chat,
+    mode: "send",
+    group: group2
+  });
+  const character = await db.getCharacter(speakerName);
+  if (!character) throw new Error(`character '${speakerName}' not found`);
+  const scripts = collectRegexScripts(state, character);
+  const transformed = applyRegexScripts(userText, scripts, RegexPlacement2.USER_INPUT, { expand: (t) => t });
+  chat.messages.push({ name: userName, is_user: true, is_system: false, send_date: (/* @__PURE__ */ new Date()).toISOString(), mes: transformed });
+  const turnMessages = group2 ? rebuildGroupTurn(groupDef, speakerName, userName, chat.messages) : initialTurnMessages;
+  const boundSessions = Object.entries(state.sessionBindings ?? {}).filter(([, binding]) => binding?.architecture === "st" && binding.character === characterName && binding.chatId === chatId).map(([id]) => id);
+  const sessionId = boundSessions.find((id) => state.modelSelections?.[id] !== void 0);
+  try {
+    const assembly = await buildGenerationLlmRequest(ctx, db, {
+      state,
+      speakerName,
+      character,
+      chatId,
+      chat,
+      turnMessages,
+      nudge,
+      group: group2,
+      ...groupDef !== void 0 ? { groupDef } : {},
+      phase: "send",
+      scripts,
+      userName,
+      ...sessionId !== void 0 ? { sessionId } : {}
+    });
+    const request = assembly.request;
+    let text = "";
+    let usage;
+    let finish;
+    for await (const chunk of ctx.llm.stream({
+      provider: request.params.provider,
+      model: request.params.model,
+      messages: request.messages,
+      ...request.system !== void 0 ? { system: request.system } : {},
+      ...request.params.reasoningEffort !== void 0 ? { reasoningEffort: request.params.reasoningEffort } : {},
+      temperature: request.params.temperature,
+      maxTokens: request.params.maxTokens,
+      signal: ac.signal
+    })) {
+      if (chunk.type === "usage") usage = chunk.usage;
+      else if (chunk.type === "text-delta") text += chunk.text;
+      else if (chunk.type === "finish") {
+        if (chunk.reason.kind === "error" || chunk.reason.kind === "aborted") throw new Error(chunk.reason.failure.message);
+        finish = chunk.reason.kind;
+      }
+    }
+    if (!res.writableEnded) {
+      return sendJson(res, 200, {
+        ok: true,
+        text,
+        provider: request.params.provider,
+        model: request.params.model,
+        ...usage !== void 0 ? { usage } : {},
+        ...finish !== void 0 ? { finish } : {}
+      });
+    }
+  } catch (error) {
+    if (!res.writableEnded) {
+      return sendJson(res, 500, { ok: false, message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+}
+async function resolveGenerationSpeaker(db, state, options) {
+  const { characterName, chat, mode, group: group2, triggerMember } = options;
+  if (!group2) {
+    return { speakerName: characterName, groupDef: void 0, turnMessages: chat.messages, nudge: void 0 };
+  }
+  const groupDef = await db.getGroup(characterName);
+  if (!groupDef) throw new Error(`group '${characterName}' not found`);
+  const chatGroupMeta = chat.header.chat_metadata?.group;
+  const members = Array.isArray(chatGroupMeta?.members) && chatGroupMeta.members.length > 0 ? chatGroupMeta.members.filter((x) => typeof x === "string") : groupDef.members;
+  const disabled = Array.isArray(chatGroupMeta?.disabledMembers) ? chatGroupMeta.disabledMembers.filter((x) => typeof x === "string") : groupDef.disabledMembers;
+  const lastSpeaker = [...chat.messages].reverse().find((m) => !m.is_user && !m.is_system)?.name;
+  const talkativeness = /* @__PURE__ */ new Map();
+  for (const member of members) {
+    const file = await db.getCharacter(member);
+    const raw = file?.card?.data?.extensions?.talkativeness;
+    talkativeness.set(member, typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : 0.5);
+  }
+  const speakerName = triggerMember ?? (mode === "regenerate" ? members.includes(lastSpeaker) ? lastSpeaker : void 0 : void 0) ?? pickGroupMember({
+    strategy: groupDef.activationStrategy,
+    members,
+    disabled,
+    talkativeness: (member) => talkativeness.get(member) ?? 0.5,
+    lastSpeaker,
+    allowSelfResponses: groupDef.allowSelfResponses
+  });
+  if (!speakerName || !members.includes(speakerName)) throw new Error("no eligible group member to reply");
+  const rawNudge = await presetSamplerValue(db, state, "group_nudge_prompt");
+  const turn = buildGroupTurn({
+    speaker: speakerName,
+    members,
+    userName: state.activePersona ?? DEFAULT_USER2,
+    messages: chat.messages,
+    ...typeof rawNudge === "string" && rawNudge.trim() !== "" ? { groupNudgePrompt: rawNudge } : {}
+  });
+  return { speakerName, groupDef, turnMessages: turn.messages, nudge: turn.nudge };
+}
+function rebuildGroupTurn(groupDef, speakerName, userName, messages) {
+  return buildGroupTurn({
+    speaker: speakerName,
+    members: groupDef?.members ?? [speakerName],
+    userName,
+    messages
+  }).messages;
+}
+async function buildGenerationLlmRequest(ctx, db, options) {
+  const { state, speakerName, character, chatId, chat, turnMessages, nudge, groupDef, scripts, userName } = options;
+  const presetName = state.activePreset;
+  let presetObject = presetName ? await db.getPreset(presetName) : void 0;
+  if (!presetObject) presetObject = defaultPreset();
+  const preset = parsePreset(presetObject);
+  const persona = state.activePersona ? await db.getPersona(state.activePersona) : void 0;
+  const books = await collectWorldInfoBooks(db, state, speakerName, character, chatId);
+  const lore = activateWorldInfo({
+    books,
+    chat: turnMessages.map((m) => ({ name: m.name, content: m.mes, isUser: m.is_user })),
+    contextSize: Number(preset.sampler.openai_max_context ?? 4096),
+    trigger: options.phase === "regenerate" ? "regenerate" : options.phase === "trigger" ? "quiet" : "normal",
+    scanSources: {
+      personaDescription: persona?.description,
+      characterDescription: character.card.data.description,
+      characterPersonality: character.card.data.personality,
+      scenario: character.card.data.scenario,
+      creatorNotes: character.card.data.creatorNotes
+    },
+    settings: { recursive: true, scanDepth: 2, budgetPercent: 25 },
+    timedState: typeof chat.header.chat_metadata?.timedWorldInfo === "object" && chat.header.chat_metadata.timedWorldInfo ? chat.header.chat_metadata.timedWorldInfo : void 0,
+    messageCount: turnMessages.length
+  });
+  chat.header.chat_metadata.timedWorldInfo = lore.timedState;
+  const templatesActive = templatesEnabledFlagValue() && templatesEnabled();
+  const templateGlobalsBefore = templatesActive ? JSON.stringify(state.scriptGlobals) : void 0;
+  const tpl = templatesActive ? await createGenerationTemplates({
+    chat,
+    state,
+    books,
+    lore,
+    card: character.card,
+    preset,
+    turnMessages,
+    userName,
+    characterName: speakerName,
+    chatId
+  }) : null;
+  const wiDeps = { expand: (text) => text };
+  const loreBeforeBase = (tpl ? tpl.partition.normalBefore : lore.worldInfoBefore.entries).map((e) => applyRegexScripts(e.content, scripts, RegexPlacement2.WORLD_INFO, wiDeps));
+  const loreAfterBase = (tpl ? tpl.partition.normalAfter : lore.worldInfoAfter.entries).map((e) => applyRegexScripts(e.content, scripts, RegexPlacement2.WORLD_INFO, wiDeps));
+  const loreBefore = tpl ? await Promise.all(loreBeforeBase.map((t) => tpl.renderText(t, "wi-before"))) : loreBeforeBase;
+  const loreAfter = tpl ? await Promise.all(loreAfterBase.map((t) => tpl.renderText(t, "wi-after"))) : loreAfterBase;
+  const lastUser = [...turnMessages].reverse().find((m) => m.is_user);
+  const lastChar = [...turnMessages].reverse().find((m) => !m.is_user && !m.is_system);
+  const enabledMembers = groupDef ? groupDef.members.filter((member) => !groupDef.disabledMembers.includes(member)) : void 0;
+  const macros = createMacroEngine({
+    char: character.card.data.nickname || character.card.data.name,
+    user: userName,
+    ...enabledMembers ? { group: enabledMembers.join(", ") } : {},
+    persona: persona?.description,
+    card: {
+      description: character.card.data.description,
+      personality: character.card.data.personality,
+      scenario: character.card.data.scenario,
+      mesExample: character.card.data.mesExample,
+      systemPrompt: character.card.data.systemPrompt,
+      postHistoryInstructions: character.card.data.postHistoryInstructions,
+      creatorNotes: character.card.data.creatorNotes
+    },
+    lastMessage: turnMessages[turnMessages.length - 1]?.mes,
+    lastUserMessage: lastUser?.mes,
+    lastCharMessage: lastChar?.mes,
+    lastMessageId: turnMessages.length - 1,
+    chatId,
+    local: chatVariables(chat),
+    global: state.scriptGlobals
+  });
+  const expand = (text) => macros.expand(text);
+  const countTokens = (text) => Math.ceil(text.length / 3.5);
+  const personaInjections = [];
+  let personaDescription = persona?.description;
+  if (persona) {
+    const position = typeof persona.position === "number" ? persona.position : 0;
+    if (position === 4) {
+      personaInjections.push({ depth: persona.depth ?? 4, role: roleName(persona.role ?? 0), text: persona.description });
+      personaDescription = void 0;
+    } else if (position === 2 || position === 3) {
+      personaInjections.push({ depth: position === 2 ? 4 : 0, role: "system", text: persona.description });
+      personaDescription = void 0;
+    } else if (position === 9) {
+      personaDescription = void 0;
+    }
+  }
+  if (tpl && personaDescription) personaDescription = await tpl.renderText(personaDescription, "persona");
+  const promptOnlyScripts = scripts.filter((script) => script.promptOnly && !script.markdownOnly);
+  const historyRegexed = promptOnlyScripts.length > 0 ? turnMessages.map((m, index) => ({
+    ...m,
+    mes: applyRegexScripts(m.mes, promptOnlyScripts, RegexPlacement2.AI_OUTPUT, {}, { depth: turnMessages.length - 1 - index })
+  })) : turnMessages;
+  const historyForPrompt = tpl ? await Promise.all(historyRegexed.map((m, index) => tpl.renderText(m.mes, `history#${index}`).then((mes) => ({ ...m, mes })))) : historyRegexed;
+  const atDepthSource = tpl ? tpl.partition.normalAtDepth : lore.atDepth.map((g) => ({ depth: g.depth, role: g.role, text: g.text }));
+  const anTopText = tpl && lore.topOfAuthorsNote.text ? await tpl.renderText(lore.topOfAuthorsNote.text, "an-top") : lore.topOfAuthorsNote.text;
+  const anBottomText = tpl && lore.bottomOfAuthorsNote.text ? await tpl.renderText(lore.bottomOfAuthorsNote.text, "an-bottom") : lore.bottomOfAuthorsNote.text;
+  const depthInjectionsRaw = [
+    ...atDepthSource.map((g) => ({ depth: g.depth, role: roleName(g.role), text: g.text })),
+    ...anTopText ? [{ depth: 4, role: "system", text: anTopText }] : [],
+    ...anBottomText ? [{ depth: 0, role: "system", text: anBottomText }] : [],
+    ...personaInjections
+  ];
+  const depthInjections = tpl ? await Promise.all(depthInjectionsRaw.map(async (inj) => ({ ...inj, text: await tpl.renderText(inj.text, "depth-injection") }))) : depthInjectionsRaw;
+  const nudgeMessage = nudge !== void 0 ? { name: userName, is_user: true, is_system: false, send_date: "", mes: expand(nudge.content) } : void 0;
+  const assembleDraft = {
+    card: tpl ? await tpl.preRenderCard(character.card) : character.card,
+    preset: tpl ? await tpl.preRenderPreset(preset) : preset,
+    personaDescription,
+    messages: nudgeMessage ? [...historyForPrompt, nudgeMessage] : historyForPrompt,
+    worldInfoBefore: loreBefore,
+    worldInfoAfter: loreAfter,
+    beforeExamples: tpl ? await Promise.all(tpl.partition.normalBeforeExamples.map((e, i) => tpl.renderText(e.content, `wi-em-before#${i}`))) : lore.beforeExamples.entries.map((e) => e.content),
+    afterExamples: tpl ? await Promise.all(tpl.partition.normalAfterExamples.map((e, i) => tpl.renderText(e.content, `wi-em-after#${i}`))) : lore.afterExamples.entries.map((e) => e.content),
+    depthInjections
+  };
+  const hookedDraft = options.onDraft !== void 0 ? await options.onDraft(assembleDraft) : assembleDraft;
+  const assembled = assemblePrompt(hookedDraft, { expand, countTokens });
+  const fallback = ctx.agentDefaultModel.currentSelection();
+  const saved = options.sessionId ? state.modelSelections?.[options.sessionId] : void 0;
+  const explicit = options.provider !== void 0 && options.model !== void 0 ? {
+    provider: options.provider,
+    model: options.model,
+    ...options.reasoningEffort !== void 0 ? { reasoningEffort: options.reasoningEffort } : {}
+  } : void 0;
+  const choice = explicit ?? saved ?? fallback;
+  const provider = choice.provider;
+  const model = choice.model;
+  tpl?.setModel(model);
+  const reasoningEffort = explicit?.reasoningEffort ?? saved?.reasoningEffort ?? (provider === fallback.provider && model === fallback.model ? fallback.reasoningEffort : void 0);
+  if (tpl) await tpl.prerenderGenerateAfter();
+  const boundScriptId = boundScriptOf(character.card);
+  if (boundScriptId !== void 0) {
+    const scriptRecord = await getScript(tavernDataRoot(), boundScriptId);
+    if (scriptRecord !== void 0 && scriptRecord.chunks.length > 0) {
+      const prior = normalizeScriptProgress(chat.header.chat_metadata?.scriptProgress);
+      let chunkIndex = prior !== void 0 && prior.scriptName === boundScriptId ? Math.min(prior.chunkIndex, scriptRecord.chunks.length - 1) : 0;
+      const lastAssistantFloor = [...chat.messages].reverse().find((m) => m.is_user === false && !m.is_system);
+      const advanced = lastAssistantFloor !== void 0 && chunkIndex < scriptRecord.chunks.length - 1 && shouldAdvance(scriptRecord.chunks[chunkIndex].text, [...chat.messages].reverse().filter((m) => m.is_user === false && !m.is_system).slice(0, 3).map((m) => m.mes));
+      if (advanced) chunkIndex += 1;
+      if (advanced || prior === void 0 || prior.scriptName !== boundScriptId || prior.chunkIndex !== chunkIndex) {
+        chat.header.chat_metadata = {
+          ...chat.header.chat_metadata,
+          scriptProgress: { scriptName: boundScriptId, chunkIndex, alignedAt: (/* @__PURE__ */ new Date()).toISOString() }
+        };
+      }
+      const scriptBlock = formatScriptBlock(scriptRecord.chunks.map((chunk) => chunk.text), chunkIndex);
+      if (scriptBlock !== void 0) assembled.messages.unshift({ role: "system", content: scriptBlock });
+    }
+  }
+  const finalMessages = tpl ? await tpl.applyPromptInjections(assembled.messages) : assembled.messages;
+  const requestMessages = [...finalMessages];
+  const systemParts = [];
+  while (requestMessages[0]?.role === "system") systemParts.push(requestMessages.shift().content);
+  const guidesBlock = formatGuidesBlock(chat.header.chat_metadata?.guides);
+  if (guidesBlock !== void 0) systemParts.push(guidesBlock);
+  const llmMessages = requestMessages.map((m) => createMessage({
+    role: m.role,
+    content: [{ type: "text", text: m.content }],
+    // 仅进 ctx.llm.stream 的请求消息，不落会话日志（该调用不带 sessionId），
+    // dsh-llm 对 source 不校验；v0 形状在此保留——装配作用域内没有会话对象
+    // 可供格式探测。
+    source: m.role === "assistant" ? { kind: "model", provider, model } : m.role === "user" ? { kind: "user" } : { kind: "plugin", plugin: "dsh-soulmojito" }
+  }));
+  const rewriteBlock = formatRewriteBlock(options.feedback);
+  if (rewriteBlock) systemParts.push(rewriteBlock);
+  const llmRequest = {
+    messages: llmMessages,
+    system: systemParts.length > 0 ? systemParts.join("\n\n") : void 0,
+    params: {
+      provider,
+      model,
+      ...reasoningEffort !== void 0 ? { reasoningEffort } : {},
+      temperature: numberOr(preset.sampler.temperature, void 0),
+      maxTokens: numberOr(preset.sampler.openai_max_tokens, void 0)
+    }
+  };
+  const hookedLlmRequest = options.onLlmRequest !== void 0 ? await options.onLlmRequest(llmRequest) : llmRequest;
+  return {
+    request: hookedLlmRequest,
+    lore,
+    tpl,
+    macros,
+    templateGlobalsBefore,
+    // SSE 'start' 事件的载荷（runGeneration 消费；试写预览忽略）。provider/model
+    // 是选择器结论（pre-hook）——hook 改写后的实参以 request.params 为准。
+    start: {
+      provider,
+      model,
+      speaker: speakerName,
+      lore: lore.allActivated.map((e) => ({ uid: e.uid, book: e.book, comment: e.entry.comment })),
+      stats: assembled.stats
+    }
+  };
+}
+async function runGeneration(ctx, db, options) {
+  const { state, characterName, chatId, snapshot: snapshot2, mode, group: group2, write, signal } = options;
+  const chat = snapshot2.chat;
+  const mvuVariablesBefore = snapshotChatVariables(chat);
+  let revision = snapshot2.revision;
+  let hostTrace;
+  const userName = state.activePersona ?? DEFAULT_USER2;
+  try {
+    const { speakerName, groupDef, nudge, turnMessages: initialTurnMessages } = await resolveGenerationSpeaker(db, state, {
+      characterName,
+      chat,
+      mode,
+      group: group2,
+      ...options.triggerMember !== void 0 ? { triggerMember: options.triggerMember } : {}
+    });
+    let turnMessages = initialTurnMessages;
+    const character = await db.getCharacter(speakerName);
+    if (!character) throw new Error(`character '${speakerName}' not found`);
+    let regenerated;
+    let hostUserText = "";
+    const scripts = collectRegexScripts(state, character);
+    if (mode === "send") {
+      const hookedUserText = await generationHooks.dispatch("user-input", options.userText, { mode, character: speakerName, chatId, group: group2 });
+      const transformed = applyRegexScripts(hookedUserText, scripts, RegexPlacement2.USER_INPUT, { expand: (t) => t });
+      hostUserText = transformed;
+      chat.messages.push({ name: userName, is_user: true, is_system: false, send_date: (/* @__PURE__ */ new Date()).toISOString(), mes: transformed });
+      if (group2) turnMessages = rebuildGroupTurn(groupDef, speakerName, userName, chat.messages);
+      revision = await db.saveChat(characterName, chatId, chat, revision);
+      await emitChatSaved(characterName, chatId, revision, chat.messages.length);
+    } else {
+      const last = chat.messages[chat.messages.length - 1];
+      if (last?.is_user === false && !last.is_system) {
+        regenerated = chat.messages.pop();
+        if (group2) turnMessages = rebuildGroupTurn(groupDef, speakerName, userName, chat.messages);
+      }
+    }
+    hostTrace = beginTavernSessionTurn(options.hostAgent, hostUserText);
+    const assembly = await buildGenerationLlmRequest(ctx, db, {
+      state,
+      speakerName,
+      character,
+      chatId,
+      chat,
+      turnMessages,
+      nudge,
+      group: group2,
+      ...groupDef !== void 0 ? { groupDef } : {},
+      phase: mode,
+      scripts,
+      userName,
+      ...options.feedback !== void 0 ? { feedback: options.feedback } : {},
+      ...options.sessionId !== void 0 ? { sessionId: options.sessionId } : {},
+      ...options.provider !== void 0 ? { provider: options.provider } : {},
+      ...options.model !== void 0 ? { model: options.model } : {},
+      ...options.reasoningEffort !== void 0 ? { reasoningEffort: options.reasoningEffort } : {},
+      onDraft: (draft) => generationHooks.dispatch("pre-assemble", draft, { mode, character: speakerName, chatId, group: group2 }),
+      onLlmRequest: (request) => generationHooks.dispatch("pre-llm", request, { mode, character: speakerName, chatId, group: group2 })
+    });
+    const lore = assembly.lore;
+    const tpl = assembly.tpl;
+    const macros = assembly.macros;
+    const templateGlobalsBefore = assembly.templateGlobalsBefore;
+    const hookedLlmRequest = assembly.request;
+    const expand = (text2) => macros.expand(text2);
+    write({ type: "start", ...assembly.start });
+    const usedProvider = hookedLlmRequest.params.provider;
+    const usedModel = hookedLlmRequest.params.model;
+    recordPromptView({
+      character: speakerName,
+      chatId,
+      mode,
+      request: hookedLlmRequest,
+      lore
+    }, ctx.logger);
+    let text = "";
+    let reasoning = "";
+    let hostUsage;
+    hostTrace = startTavernSessionStep(hostTrace);
+    beginStreamEpoch();
+    for await (const chunk of ctx.llm.stream({
+      provider: hookedLlmRequest.params.provider,
+      model: hookedLlmRequest.params.model,
+      messages: hookedLlmRequest.messages,
+      ...hookedLlmRequest.system !== void 0 ? { system: hookedLlmRequest.system } : {},
+      ...hookedLlmRequest.params.reasoningEffort !== void 0 ? { reasoningEffort: hookedLlmRequest.params.reasoningEffort } : {},
+      temperature: hookedLlmRequest.params.temperature,
+      maxTokens: hookedLlmRequest.params.maxTokens,
+      signal
+    })) {
+      if (chunk.type === "usage") hostUsage = chunk.usage;
+      if (chunk.type === "text-delta") {
+        text += chunk.text;
+        write({ type: "delta", text: chunk.text });
+        emitStreamDelta({ mode, character: speakerName, chatId, text, delta: chunk.text });
+      } else if (chunk.type === "reasoning-delta") {
+        reasoning += chunk.text;
+        write({ type: "reasoning", text: chunk.text });
+      } else if (chunk.type === "finish") {
+        if (chunk.reason.kind === "error" || chunk.reason.kind === "aborted") throw new Error(chunk.reason.failure.message);
+        write({ type: "finish", reason: chunk.reason.kind });
+      }
+    }
+    if (text.trim() === "") throw new Error("model returned no text");
+    const outputText = await generationHooks.dispatch("post-output", text, { mode, character: speakerName, chatId, group: group2 });
+    const saveScripts = scripts.filter((script) => !script.promptOnly && !script.markdownOnly);
+    let finalText = saveScripts.length > 0 ? applyRegexScripts(outputText, saveScripts, RegexPlacement2.AI_OUTPUT, { expand }) : outputText;
+    if (tpl) finalText = await tpl.renderOutput(finalText);
+    const finalReasoning = reasoning ? applyRegexScripts(reasoning, scripts, RegexPlacement2.REASONING, { expand }) : reasoning;
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const oldSwipes = regenerated ? Array.isArray(regenerated.swipes) && regenerated.swipes.length > 0 ? regenerated.swipes : [regenerated.mes] : [];
+    const oldSwipeInfo = regenerated ? Array.isArray(regenerated.swipe_info) ? regenerated.swipe_info : oldSwipes.map(() => ({})) : [];
+    chat.messages.push({
+      ...regenerated ?? {},
+      name: character.card.data.nickname || character.card.data.name,
+      is_user: false,
+      is_system: false,
+      send_date: now,
+      mes: finalText,
+      swipe_id: oldSwipes.length,
+      swipes: [...oldSwipes, finalText],
+      swipe_info: [...oldSwipeInfo, { send_date: now, extra: { provider: usedProvider, model: usedModel, reasoning: finalReasoning || void 0, ...options.feedback ? { feedback: options.feedback } : {} } }],
+      extra: {
+        ...regenerated?.extra ?? {},
+        api: usedProvider,
+        model: usedModel,
+        reasoning: finalReasoning || void 0,
+        activatedLore: lore.allActivated.map((e) => e.entryId),
+        ...tpl && tpl.warnings.length > 0 ? { templateWarnings: tpl.warnings } : {}
+      }
+    });
+    const varSnapshot = macros.snapshotVars().local;
+    if (tpl) {
+      mergeTemplateLocalVars(chat, varSnapshot);
+      if (JSON.stringify(state.scriptGlobals) !== templateGlobalsBefore) {
+        await db.updateState((current) => ({ scriptGlobals: { ...current.scriptGlobals, ...state.scriptGlobals } }));
+      }
+    } else if (Object.keys(varSnapshot).length > 0) {
+      chat.header.chat_metadata.variables = varSnapshot;
+    } else {
+      delete chat.header.chat_metadata.variables;
+    }
+    const mvuGuard = applyMvuSettlementGuard(chat, character.card, mvuVariablesBefore);
+    const mvuRules = await applyMvuSettlementRules(chat, character.card, mvuVariablesBefore);
+    recordMvuTurnReceipt(chat, mvuVariablesBefore, {
+      turnKey: String(chat.messages.length - 1),
+      failures: [...tpl?.warnings ?? [], ...mvuGuard.failures, ...mvuRules.failures],
+      changeNotes: mergeMvuRuleNotes(mvuGuard.notes, mvuRules.notes)
+    });
+    revision = await db.saveChat(characterName, chatId, chat, revision);
+    await emitChatSaved(characterName, chatId, revision, chat.messages.length);
+    await generationHooks.dispatch("post-save", { chat, revision, speaker: speakerName, finalText }, { mode, character: speakerName, chatId, group: group2 });
+    hostTrace = recordTavernSessionAssistant(hostTrace, finalText, finalReasoning, usedProvider, usedModel, hostUsage);
+    return { chat, revision, speaker: speakerName };
+  } finally {
+    finishTavernSessionTrace(hostTrace);
+  }
+}
+function chatVariables(chat) {
+  const vars = chat?.header?.chat_metadata?.variables;
+  if (vars && typeof vars === "object" && !Array.isArray(vars)) {
+    return Object.fromEntries(Object.entries(vars).filter(([, value]) => typeof value === "string" || typeof value === "number" || typeof value === "boolean"));
+  }
+  return {};
+}
+async function runTavernScript(ctx, req, res, db) {
+  const body = await readJson(req);
+  const state = await db.getState();
+  assertStGenerationBinding(state, body.sessionId);
+  const characterName = typeof body.character === "string" ? body.character : state.activeCharacter;
+  const chatId = body.chatId;
+  if (!characterName || typeof chatId !== "string") throw new Error("character and chatId are required");
+  const snapshot2 = await db.getChatSnapshot(characterName, chatId);
+  if (!snapshot2) throw new Error("chat not found");
+  const group2 = body.group === true || await isGroupChat(db, characterName, chatId);
+  const chat = snapshot2.chat;
+  let revision = snapshot2.revision;
+  const character = await db.getCharacter(characterName);
+  const scriptController = new AbortController();
+  activeStGeneration.set(stGenerationKey(characterName, chatId), scriptController);
+  const macros = createMacroEngine({
+    char: character?.card.data.nickname || character?.card.data.name || characterName,
+    user: state.activePersona ?? DEFAULT_USER2,
+    persona: state.activePersona ? (await db.getPersona(state.activePersona))?.description : void 0,
+    lastMessage: chat.messages[chat.messages.length - 1]?.mes,
+    lastUserMessage: [...chat.messages].reverse().find((m) => m.is_user)?.mes,
+    lastCharMessage: [...chat.messages].reverse().find((m) => !m.is_user && !m.is_system)?.mes,
+    lastMessageId: chat.messages.length - 1,
+    chatId,
+    local: chatVariables(chat),
+    global: state.scriptGlobals
+  });
+  const persist = async () => {
+    const vars = macros.snapshotVars().local;
+    if (Object.keys(vars).length > 0) chat.header.chat_metadata.variables = vars;
+    else delete chat.header.chat_metadata.variables;
+    revision = await db.saveChat(characterName, chatId, chat, revision);
+    await emitChatSaved(characterName, chatId, revision, chat.messages.length);
+  };
+  const triggerGeneration = async (member) => {
+    const fresh = await db.getChatSnapshot(characterName, chatId);
+    const result2 = await runGeneration(ctx, db, {
+      state: await db.getState(),
+      characterName,
+      chatId,
+      snapshot: fresh ?? { chat, revision },
+      mode: "trigger",
+      userText: "",
+      group: group2,
+      triggerMember: member,
+      write: () => {
+      },
+      signal: scriptController.signal
+    });
+    chat.messages = result2.chat.messages;
+    chat.header = result2.chat.header;
+    revision = result2.revision;
+  };
+  const result = await runScript(typeof body.script === "string" ? body.script : "", {
+    expand: (text) => macros.expand(text),
+    getVar: (name2) => macros.getVar(name2),
+    setVar: (name2, value) => {
+      macros.setVar(name2, value);
+    },
+    deleteVar: (name2) => macros.deleteVar(name2),
+    getGlobalVar: (name2) => macros.getGlobalVar(name2),
+    setGlobalVar: (name2, value) => {
+      macros.setGlobalVar(name2, value);
+    },
+    deleteGlobalVar: (name2) => macros.deleteGlobalVar(name2),
+    send: async (text) => {
+      const trimmed = text.trim();
+      if (trimmed === "") return;
+      chat.messages.push({ name: state.activePersona ?? DEFAULT_USER2, is_user: true, is_system: false, send_date: (/* @__PURE__ */ new Date()).toISOString(), mes: trimmed });
+      await persist();
+    },
+    trigger: async (member) => {
+      await triggerGeneration(member);
+    },
+    regenerate: async () => {
+      const fresh = await db.getChatSnapshot(characterName, chatId);
+      const regen = await runGeneration(ctx, db, {
+        state: await db.getState(),
+        characterName,
+        chatId,
+        snapshot: fresh ?? { chat, revision },
+        mode: "regenerate",
+        userText: "",
+        group: group2,
+        write: () => {
+        },
+        signal: scriptController.signal
+      });
+      chat.messages = regen.chat.messages;
+      chat.header = regen.chat.header;
+      revision = regen.revision;
+    },
+    stop: () => {
+      abortStGeneration(characterName, chatId);
+    },
+    cut: async (from, to) => {
+      const total = chat.messages.length;
+      const start = from < 0 ? total + from : from;
+      const end = (to < 0 ? total + to : to) + 1;
+      chat.messages.splice(Math.max(0, start), Math.max(0, end - Math.max(0, start)));
+      await persist();
+    },
+    echo: () => {
+    },
+    applyRegex: (scriptName, text) => {
+      const script = collectRegexScripts(state, character).find((candidate) => candidate.scriptName.toLowerCase() === scriptName.toLowerCase());
+      if (!script) return text;
+      return applyRegexScript(text, script, RegexPlacement2.SLASH_COMMAND, { expand: (t) => macros.expand(t) }) ?? text;
+    }
+  }).finally(() => {
+    const key = stGenerationKey(characterName, chatId);
+    if (activeStGeneration.get(key) === scriptController) activeStGeneration.delete(key);
+  });
+  const globals = macros.snapshotVars().global;
+  await db.updateState(() => ({ scriptGlobals: globals }));
+  const freshSnapshot = await db.getChatSnapshot(characterName, chatId);
+  return sendJson(res, 200, {
+    ok: true,
+    output: result.output,
+    chatChanged: result.chatChanged,
+    chat: freshSnapshot?.chat ?? chat,
+    revision: freshSnapshot?.revision ?? revision
+  });
+}
+function roleName(role) {
+  return role === 1 ? "user" : role === 2 ? "assistant" : "system";
+}
+function numberOr(value, fallback) {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
 // packages/plugin/src/helper.ts
 var VARIABLE_NAME = /^[\p{L}_][\p{L}\p{N}_.-]{0,63}$/u;
 async function handleHelperApi(req, res, db) {
@@ -30680,9 +31836,38 @@ async function handleHelperApi(req, res, db) {
     case "generate": {
       requireSessionChatId(chatId, "generate");
       const config = await applyFrontendWorldbookScan(db, state, character, chatId, body?.config);
+      const generationId = generationIdOf(config);
+      const controller = new AbortController();
+      registerFrontendGeneration(character, chatId, generationId, controller);
+      try {
+        return sendJson(res, 200, {
+          ok: true,
+          value: { text: await generateWithCustomApi(config, controller.signal) }
+        });
+      } finally {
+        finishFrontendGeneration(character, chatId, generationId, controller);
+      }
+    }
+    case "generate.stop": {
+      requireSessionChatId(chatId, "generate.stop");
+      const generationId = requireString(body?.generationId, "generationId");
       return sendJson(res, 200, {
         ok: true,
-        value: { text: await generateWithCustomApi(config) }
+        value: { stopped: abortFrontendGeneration(character, chatId, generationId) }
+      });
+    }
+    case "generate.stop-all": {
+      requireSessionChatId(chatId, "generate.stop-all");
+      return sendJson(res, 200, {
+        ok: true,
+        value: { stopped: abortAllFrontendGenerations(character, chatId) }
+      });
+    }
+    case "generation.stop": {
+      requireSessionChatId(chatId, "generation.stop");
+      return sendJson(res, 200, {
+        ok: true,
+        value: { stopped: abortStGeneration(character, chatId) }
       });
     }
     // 沙箱 localStorage 持久层（2026-10-22）：按角色保存小型设置，供下一次
@@ -30722,7 +31907,7 @@ async function handleHelperApi(req, res, db) {
       requireSessionChatId(chatId, "idb.store.create");
       return sendJson(res, 200, {
         ok: true,
-        value: await createIdbStore(tavernDataRoot(), character, body?.db, body?.store, body?.keyPath)
+        value: await createIdbStore(tavernDataRoot(), character, body?.db, body?.store, body?.keyPath, body?.indexes)
       });
     }
     case "idb.keys": {
@@ -30908,6 +32093,49 @@ async function handleHelperApi(req, res, db) {
     }
     default:
       throw new Error(`unsupported helper op '${op}'`);
+  }
+}
+async function handleFrontendGenerationStream(req, res, db) {
+  const out = res;
+  const body = await readJson(req, 8 * 1024 * 1024);
+  const character = requireString(body?.character, "character");
+  const chatId = requireString(body?.chatId, "chatId");
+  const state = await db.getState();
+  const config = await applyFrontendWorldbookScan(db, state, character, chatId, body?.config);
+  const generationId = generationIdOf(config);
+  const controller = new AbortController();
+  registerFrontendGeneration(character, chatId, generationId, controller);
+  out.statusCode = 200;
+  out.setHeader("content-type", "application/x-ndjson; charset=utf-8");
+  out.setHeader("cache-control", "no-cache");
+  out.write(`${JSON.stringify({ type: "start", generationId })}
+`);
+  try {
+    const text = await generateWithCustomApiStream(
+      config,
+      (delta) => {
+        out.write(`${JSON.stringify({ type: "delta", text: delta })}
+`);
+      },
+      controller.signal
+    );
+    if (!out.writableEnded) {
+      out.write(`${JSON.stringify({ type: "done", text })}
+`);
+      out.end();
+    }
+  } catch (error) {
+    if (!out.writableEnded) {
+      const aborted = controller.signal.aborted;
+      out.write(`${JSON.stringify({
+        type: aborted ? "aborted" : "error",
+        message: aborted ? "generation aborted" : error instanceof Error ? error.message : String(error)
+      })}
+`);
+      out.end();
+    }
+  } finally {
+    finishFrontendGeneration(character, chatId, generationId, controller);
   }
 }
 async function buildSnapshot(db, state, character, chatId) {
@@ -31523,6 +32751,11 @@ function requireIndex(value, label, total) {
 function requireSessionChatId(chatId, op) {
   if (chatId === "") throw new Error(`chatId is required for ${op} (session scope only)`);
 }
+function generationIdOf(config) {
+  const record = isPlainObject4(config) ? config : {};
+  const value = record["generation_id"];
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : randomUUID5();
+}
 function requireScriptTrees(value) {
   if (!Array.isArray(value)) throw new Error("scriptTrees must be an array of card script nodes");
   return value.map((node, index) => {
@@ -31988,958 +33221,6 @@ function cloneJson(value) {
   }
 }
 
-// packages/plugin/src/template.ts
-var INITIAL_VARIABLES_KEY4 = "initial_variables";
-function toSpecialEntry(kind, arg, content, ifCondition, source) {
-  const entry = {
-    kind,
-    book: source.book,
-    uid: source.uid,
-    comment: source.comment ?? "",
-    content,
-    order: source.order ?? 100,
-    ...source.probability !== void 0 ? { probability: source.probability } : {},
-    ...source.useProbability !== void 0 ? { useProbability: source.useProbability } : {}
-  };
-  if (arg !== void 0) entry.arg = arg;
-  if (ifCondition !== void 0) entry.ifCondition = ifCondition;
-  return entry;
-}
-function classifyRawEntry(raw) {
-  if ((raw.comment ?? "") === "" && (raw.content ?? "") === "") return null;
-  return classifySpecialEntry({ comment: raw.comment, content: raw.content ?? "" });
-}
-function partitionSpecialLore(lore, books) {
-  const generate2 = [];
-  const render = [];
-  const inject2 = [];
-  const seenInject = /* @__PURE__ */ new Set();
-  const isSpecial = /* @__PURE__ */ new Set();
-  for (const activated of lore.allActivated) {
-    const raw = activated.entry;
-    const classified = classifyRawEntry({ comment: raw.comment, content: raw.content });
-    if (classified === null) continue;
-    isSpecial.add(activated.entryId);
-    const source = {
-      book: activated.book,
-      uid: activated.uid,
-      comment: raw.comment,
-      order: typeof raw.order === "number" ? raw.order : activated.order,
-      probability: typeof raw.probability === "number" ? raw.probability : void 0,
-      useProbability: raw.useProbability === true ? true : void 0
-    };
-    const special = toSpecialEntry(classified.kind, classified.arg, classified.content, classified.ifCondition, source);
-    if (classified.kind === "inject") {
-      if (!seenInject.has(`${activated.book}#${activated.uid}`)) {
-        seenInject.add(`${activated.book}#${activated.uid}`);
-        inject2.push(special);
-      }
-    } else if (classified.kind.startsWith("render")) {
-      render.push(special);
-    } else if (classified.kind !== "initial") {
-      generate2.push(special);
-    }
-  }
-  const initial = [];
-  for (const book of books) {
-    for (const raw of book.entries) {
-      const classified = classifyRawEntry({ comment: raw.comment, content: raw.content });
-      if (classified === null) continue;
-      if (classified.kind === "inject" && !seenInject.has(`${book.name ?? ""}#${raw.uid}`)) {
-        seenInject.add(`${book.name ?? ""}#${raw.uid}`);
-        inject2.push(toSpecialEntry("inject", classified.arg, classified.content, classified.ifCondition, {
-          book: book.name ?? "",
-          uid: raw.uid,
-          comment: raw.comment,
-          order: typeof raw.order === "number" ? raw.order : 100,
-          probability: typeof raw.probability === "number" ? raw.probability : void 0,
-          useProbability: raw.useProbability === true ? true : void 0
-        }));
-        continue;
-      }
-      if (classified.kind === "initial" && raw.disable !== true) {
-        initial.push(toSpecialEntry("initial", void 0, classified.content, classified.ifCondition, {
-          book: book.name ?? "",
-          uid: raw.uid,
-          comment: raw.comment,
-          order: typeof raw.order === "number" ? raw.order : 100
-        }));
-      }
-    }
-  }
-  const normal = (entries) => entries.filter((e) => !isSpecial.has(e.entryId));
-  const joinText = (entries) => entries.map((e) => e.content).filter((text) => text.length > 0).join("\n");
-  return {
-    generate: generate2,
-    render,
-    inject: inject2,
-    initial,
-    normalBefore: normal(lore.worldInfoBefore.entries),
-    normalAfter: normal(lore.worldInfoAfter.entries),
-    normalBeforeExamples: normal(lore.beforeExamples.entries),
-    normalAfterExamples: normal(lore.afterExamples.entries),
-    normalAtDepth: lore.atDepth.map((group2) => {
-      const entries = group2.entries.filter((e) => !isSpecial.has(e.entryId));
-      return { depth: group2.depth, role: group2.role, text: joinText(entries) };
-    }).filter((group2) => group2.text !== "")
-  };
-}
-function ensureMetadataObject(metadata, key) {
-  const existing = metadata[key];
-  if (existing !== null && typeof existing === "object" && !Array.isArray(existing)) return existing;
-  const created = {};
-  metadata[key] = created;
-  return created;
-}
-async function createGenerationTemplates(options) {
-  const { chat, state, books, lore, card, preset, turnMessages, userName, characterName, chatId, model } = options;
-  const warnings = [];
-  const warn = (message) => {
-    warnings.push(message);
-    options.onWarning?.(message);
-  };
-  const partition = partitionSpecialLore(lore, books);
-  const localVars = ensureMetadataObject(chat.header.chat_metadata, "variables");
-  const initialVars = ensureMetadataObject(chat.header.chat_metadata, INITIAL_VARIABLES_KEY4);
-  const cardName2 = card.data.nickname || card.data.name;
-  const lastUserIdx = (() => {
-    for (let i = turnMessages.length - 1; i >= 0; i--) if (turnMessages[i].is_user) return i;
-    return -1;
-  })();
-  const lastCharIdx = (() => {
-    for (let i = turnMessages.length - 1; i >= 0; i--) {
-      const m = turnMessages[i];
-      if (!m.is_user && !m.is_system) return i;
-    }
-    return -1;
-  })();
-  const host = {
-    runType: "generate",
-    userName,
-    charName: cardName2,
-    chatId,
-    characterId: characterName,
-    model,
-    charAvatar: typeof card.data.extensions["avatar"] === "string" ? card.data.extensions["avatar"] : "",
-    messages: turnMessages.map((m) => ({ name: m.name, mes: m.mes, is_user: m.is_user, is_system: m.is_system })),
-    lastUserMessageId: lastUserIdx,
-    lastCharMessageId: lastCharIdx,
-    findWorldEntries: (title, book) => {
-      const out = [];
-      for (const lorebook of books) {
-        if (book !== void 0 && lorebook.name !== book) continue;
-        for (const entry of lorebook.entries) {
-          const comment = entry.comment ?? "";
-          const matched = typeof title === "number" ? entry.uid === title : comment === title;
-          if (!matched) continue;
-          out.push({
-            uid: entry.uid,
-            book: lorebook.name ?? "",
-            comment,
-            content: entry.content ?? "",
-            ...typeof entry.order === "number" ? { order: entry.order } : {},
-            disable: entry.disable === true
-          });
-        }
-      }
-      return out;
-    },
-    getCard: (name2) => {
-      if (name2 !== void 0 && name2 !== characterName && name2 !== cardName2) return null;
-      const depthPrompt = card.data.extensions["depth_prompt"];
-      return {
-        name: cardName2,
-        systemPrompt: card.data.systemPrompt,
-        personality: card.data.personality,
-        description: card.data.description,
-        scenario: card.data.scenario,
-        firstMes: card.data.firstMes,
-        mesExample: card.data.mesExample,
-        creatorNotes: card.data.creatorNotes,
-        depthPrompt: depthPrompt !== null && typeof depthPrompt === "object" ? String(depthPrompt.prompt ?? "") : "",
-        data: card.data
-      };
-    },
-    findPresetPrompt: (name2) => {
-      for (const prompt of preset.prompts) {
-        if ("marker" in prompt && prompt.marker) continue;
-        if (prompt.name === name2) return { name: prompt.name, content: prompt.content ?? "" };
-      }
-      return null;
-    },
-    renderNested: async () => ""
-  };
-  const runtime = createTemplateRuntime({
-    host,
-    stores: {
-      local: localVars,
-      global: state.scriptGlobals,
-      initial: initialVars
-    },
-    onWarning: warn
-  });
-  host.renderNested = (source, extra) => runtime.renderText(source, extra);
-  const renderText = async (text, where) => {
-    try {
-      return await runtime.renderText(text, void 0, where);
-    } catch (err2) {
-      warn(`template render failed${where ? ` (${where})` : ""}: ${err2 instanceof Error ? err2.message : String(err2)} \u2014 keeping original text`);
-      return text;
-    }
-  };
-  if (partition.initial.length > 0) {
-    const initialData = {};
-    for (const entry of partition.initial) {
-      const rendered = await renderText(entry.content, `initial-variables ${entry.book}#${entry.uid}`);
-      const parsed = runtime.parseInitialVariables(rendered);
-      if (parsed) deepMerge(initialData, parsed);
-    }
-    runtime.setInitialVariables(initialData);
-  }
-  const prerenderGenerate = async (kinds) => {
-    const ordered = partition.generate.filter((entry) => kinds.includes(entry.kind)).sort((a, b) => a.order - b.order || a.uid - b.uid);
-    for (const entry of ordered) {
-      entry.renderedContent = await renderText(entry.content, `generate ${entry.book}#${entry.uid}`);
-    }
-  };
-  await prerenderGenerate(["generate-before"]);
-  const preRenderCard = async (input) => {
-    const data = input.data;
-    return {
-      ...input,
-      data: {
-        ...data,
-        description: await renderText(data.description, "card.description"),
-        personality: await renderText(data.personality, "card.personality"),
-        scenario: await renderText(data.scenario, "card.scenario"),
-        systemPrompt: await renderText(data.systemPrompt, "card.systemPrompt"),
-        postHistoryInstructions: await renderText(data.postHistoryInstructions, "card.postHistoryInstructions"),
-        mesExample: await renderText(data.mesExample, "card.mesExample")
-      }
-    };
-  };
-  const preRenderPreset = async (input) => ({
-    ...input,
-    prompts: await Promise.all(input.prompts.map(async (prompt) => {
-      if ("marker" in prompt && prompt.marker) return prompt;
-      const content = prompt.content ?? "";
-      return { ...prompt, content: await renderText(content, `preset.${prompt.name}`) };
-    }))
-  });
-  const applyPromptInjections = async (messages) => {
-    let out = await runtime.applyGenerateInjections(messages, partition.generate);
-    out = await runtime.applyInjectEntries(out, partition.inject);
-    return out;
-  };
-  const renderOutput = async (text) => {
-    host.runType = "render";
-    try {
-      const rendered = await renderText(text, "llm-output");
-      return await runtime.applyRenderInjections(rendered, partition.render);
-    } finally {
-      host.runType = "generate";
-    }
-  };
-  return {
-    runtime,
-    partition,
-    warnings,
-    renderText,
-    setModel: (model2) => {
-      host.model = model2;
-    },
-    preRenderCard,
-    preRenderPreset,
-    prerenderGenerateAfter: () => prerenderGenerate(["generate-after"]),
-    applyPromptInjections,
-    renderOutput
-  };
-}
-function mergeTemplateLocalVars(chat, macroLocalSnapshot) {
-  const metadata = chat.header.chat_metadata;
-  const existing = metadata["variables"];
-  const merged = existing !== null && typeof existing === "object" && !Array.isArray(existing) ? existing : {};
-  for (const [key, value] of Object.entries(macroLocalSnapshot)) merged[key] = value;
-  if (Object.keys(merged).length > 0) metadata["variables"] = merged;
-  else delete metadata["variables"];
-  if (Object.keys(ensureMetadataObject(metadata, INITIAL_VARIABLES_KEY4)).length === 0) {
-    delete metadata[INITIAL_VARIABLES_KEY4];
-  }
-}
-
-// packages/plugin/src/generation/pipeline.ts
-async function generate(ctx, req, res, db) {
-  const body = await readJson(req);
-  const state = await db.getState();
-  assertStGenerationBinding(state, body.sessionId);
-  const characterName = typeof body.character === "string" ? body.character : state.activeCharacter;
-  const chatId = body.chatId;
-  const userText = typeof body.message === "string" ? body.message.trim() : "";
-  const mode = body.mode === "regenerate" ? "regenerate" : "send";
-  let feedback;
-  if (mode === "regenerate") feedback = optionalFeedback(body.feedback);
-  else if (body.feedback !== void 0) throw new Error("feedback is only allowed when mode is regenerate");
-  if (!characterName || typeof chatId !== "string") throw new Error("character and chatId are required");
-  if (mode === "send" && userText === "") throw new Error("message is empty");
-  if (typeof body.revision !== "string") throw new Error("revision is required");
-  const bindingGroup = body.group === true || await isGroupChat(db, characterName, chatId);
-  const snapshot2 = await db.getChatSnapshot(characterName, chatId);
-  if (!snapshot2) throw new Error("character or chat not found");
-  if (body.revision !== snapshot2.revision) {
-    throw new ChatRevisionConflictError(body.revision, snapshot2.revision);
-  }
-  res.statusCode = 200;
-  res.setHeader("content-type", "application/x-ndjson; charset=utf-8");
-  res.setHeader("cache-control", "no-cache");
-  const ac = new AbortController();
-  req.on?.("aborted", () => ac.abort());
-  res.on?.("close", () => {
-    if (!res.writableEnded) ac.abort();
-  });
-  const write = (event) => res.write(JSON.stringify(event) + "\n");
-  try {
-    const result = await runGeneration(ctx, db, {
-      state,
-      characterName,
-      chatId,
-      snapshot: snapshot2,
-      mode,
-      userText,
-      feedback,
-      group: bindingGroup,
-      triggerMember: typeof body.triggerMember === "string" ? body.triggerMember : void 0,
-      sessionId: typeof body.sessionId === "string" ? body.sessionId : void 0,
-      provider: typeof body.provider === "string" ? body.provider : void 0,
-      model: typeof body.model === "string" ? body.model : void 0,
-      reasoningEffort: typeof body.reasoningEffort === "string" ? body.reasoningEffort : void 0,
-      write,
-      signal: ac.signal,
-      hostAgent: typeof body.sessionId === "string" ? ctx.agents?.get?.(body.sessionId) : void 0
-    });
-    write({ type: "saved", chat: result.chat, revision: result.revision });
-    res.end();
-  } catch (error) {
-    if (!res.writableEnded) {
-      const message = error instanceof Error ? error.message : String(error);
-      const code = error instanceof ChatRevisionConflictError ? error.code : void 0;
-      write({ type: "error", message, code });
-      res.end();
-    }
-  }
-}
-async function previewGeneration(ctx, req, res, db) {
-  const body = await readJson(req);
-  const state = await db.getState();
-  const characterName = typeof body.character === "string" ? body.character : state.activeCharacter;
-  const chatId = body.chatId;
-  const userText = typeof body.userText === "string" ? body.userText.trim() : "";
-  if (!characterName || typeof chatId !== "string") {
-    return sendJson(res, 400, { ok: false, message: "character and chatId are required" });
-  }
-  if (userText === "") return sendJson(res, 400, { ok: false, message: "userText is empty" });
-  const snapshot2 = await db.getChatSnapshot(characterName, chatId);
-  if (!snapshot2) return sendJson(res, 404, { ok: false, message: "character or chat not found" });
-  const group2 = body.group === true || await isGroupChat(db, characterName, chatId);
-  const ac = new AbortController();
-  req.on?.("aborted", () => ac.abort());
-  res.on?.("close", () => {
-    if (!res.writableEnded) ac.abort();
-  });
-  const chat = structuredClone(snapshot2.chat);
-  const userName = state.activePersona ?? DEFAULT_USER2;
-  const { speakerName, groupDef, nudge, turnMessages: initialTurnMessages } = await resolveGenerationSpeaker(db, state, {
-    characterName,
-    chat,
-    mode: "send",
-    group: group2
-  });
-  const character = await db.getCharacter(speakerName);
-  if (!character) throw new Error(`character '${speakerName}' not found`);
-  const scripts = collectRegexScripts(state, character);
-  const transformed = applyRegexScripts(userText, scripts, RegexPlacement2.USER_INPUT, { expand: (t) => t });
-  chat.messages.push({ name: userName, is_user: true, is_system: false, send_date: (/* @__PURE__ */ new Date()).toISOString(), mes: transformed });
-  const turnMessages = group2 ? rebuildGroupTurn(groupDef, speakerName, userName, chat.messages) : initialTurnMessages;
-  const boundSessions = Object.entries(state.sessionBindings ?? {}).filter(([, binding]) => binding?.architecture === "st" && binding.character === characterName && binding.chatId === chatId).map(([id]) => id);
-  const sessionId = boundSessions.find((id) => state.modelSelections?.[id] !== void 0);
-  try {
-    const assembly = await buildGenerationLlmRequest(ctx, db, {
-      state,
-      speakerName,
-      character,
-      chatId,
-      chat,
-      turnMessages,
-      nudge,
-      group: group2,
-      ...groupDef !== void 0 ? { groupDef } : {},
-      phase: "send",
-      scripts,
-      userName,
-      ...sessionId !== void 0 ? { sessionId } : {}
-    });
-    const request = assembly.request;
-    let text = "";
-    let usage;
-    let finish;
-    for await (const chunk of ctx.llm.stream({
-      provider: request.params.provider,
-      model: request.params.model,
-      messages: request.messages,
-      ...request.system !== void 0 ? { system: request.system } : {},
-      ...request.params.reasoningEffort !== void 0 ? { reasoningEffort: request.params.reasoningEffort } : {},
-      temperature: request.params.temperature,
-      maxTokens: request.params.maxTokens,
-      signal: ac.signal
-    })) {
-      if (chunk.type === "usage") usage = chunk.usage;
-      else if (chunk.type === "text-delta") text += chunk.text;
-      else if (chunk.type === "finish") {
-        if (chunk.reason.kind === "error" || chunk.reason.kind === "aborted") throw new Error(chunk.reason.failure.message);
-        finish = chunk.reason.kind;
-      }
-    }
-    if (!res.writableEnded) {
-      return sendJson(res, 200, {
-        ok: true,
-        text,
-        provider: request.params.provider,
-        model: request.params.model,
-        ...usage !== void 0 ? { usage } : {},
-        ...finish !== void 0 ? { finish } : {}
-      });
-    }
-  } catch (error) {
-    if (!res.writableEnded) {
-      return sendJson(res, 500, { ok: false, message: error instanceof Error ? error.message : String(error) });
-    }
-  }
-}
-async function resolveGenerationSpeaker(db, state, options) {
-  const { characterName, chat, mode, group: group2, triggerMember } = options;
-  if (!group2) {
-    return { speakerName: characterName, groupDef: void 0, turnMessages: chat.messages, nudge: void 0 };
-  }
-  const groupDef = await db.getGroup(characterName);
-  if (!groupDef) throw new Error(`group '${characterName}' not found`);
-  const chatGroupMeta = chat.header.chat_metadata?.group;
-  const members = Array.isArray(chatGroupMeta?.members) && chatGroupMeta.members.length > 0 ? chatGroupMeta.members.filter((x) => typeof x === "string") : groupDef.members;
-  const disabled = Array.isArray(chatGroupMeta?.disabledMembers) ? chatGroupMeta.disabledMembers.filter((x) => typeof x === "string") : groupDef.disabledMembers;
-  const lastSpeaker = [...chat.messages].reverse().find((m) => !m.is_user && !m.is_system)?.name;
-  const talkativeness = /* @__PURE__ */ new Map();
-  for (const member of members) {
-    const file = await db.getCharacter(member);
-    const raw = file?.card?.data?.extensions?.talkativeness;
-    talkativeness.set(member, typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : 0.5);
-  }
-  const speakerName = triggerMember ?? (mode === "regenerate" ? members.includes(lastSpeaker) ? lastSpeaker : void 0 : void 0) ?? pickGroupMember({
-    strategy: groupDef.activationStrategy,
-    members,
-    disabled,
-    talkativeness: (member) => talkativeness.get(member) ?? 0.5,
-    lastSpeaker,
-    allowSelfResponses: groupDef.allowSelfResponses
-  });
-  if (!speakerName || !members.includes(speakerName)) throw new Error("no eligible group member to reply");
-  const rawNudge = await presetSamplerValue(db, state, "group_nudge_prompt");
-  const turn = buildGroupTurn({
-    speaker: speakerName,
-    members,
-    userName: state.activePersona ?? DEFAULT_USER2,
-    messages: chat.messages,
-    ...typeof rawNudge === "string" && rawNudge.trim() !== "" ? { groupNudgePrompt: rawNudge } : {}
-  });
-  return { speakerName, groupDef, turnMessages: turn.messages, nudge: turn.nudge };
-}
-function rebuildGroupTurn(groupDef, speakerName, userName, messages) {
-  return buildGroupTurn({
-    speaker: speakerName,
-    members: groupDef?.members ?? [speakerName],
-    userName,
-    messages
-  }).messages;
-}
-async function buildGenerationLlmRequest(ctx, db, options) {
-  const { state, speakerName, character, chatId, chat, turnMessages, nudge, groupDef, scripts, userName } = options;
-  const presetName = state.activePreset;
-  let presetObject = presetName ? await db.getPreset(presetName) : void 0;
-  if (!presetObject) presetObject = defaultPreset();
-  const preset = parsePreset(presetObject);
-  const persona = state.activePersona ? await db.getPersona(state.activePersona) : void 0;
-  const books = await collectWorldInfoBooks(db, state, speakerName, character, chatId);
-  const lore = activateWorldInfo({
-    books,
-    chat: turnMessages.map((m) => ({ name: m.name, content: m.mes, isUser: m.is_user })),
-    contextSize: Number(preset.sampler.openai_max_context ?? 4096),
-    trigger: options.phase === "regenerate" ? "regenerate" : options.phase === "trigger" ? "quiet" : "normal",
-    scanSources: {
-      personaDescription: persona?.description,
-      characterDescription: character.card.data.description,
-      characterPersonality: character.card.data.personality,
-      scenario: character.card.data.scenario,
-      creatorNotes: character.card.data.creatorNotes
-    },
-    settings: { recursive: true, scanDepth: 2, budgetPercent: 25 },
-    timedState: typeof chat.header.chat_metadata?.timedWorldInfo === "object" && chat.header.chat_metadata.timedWorldInfo ? chat.header.chat_metadata.timedWorldInfo : void 0,
-    messageCount: turnMessages.length
-  });
-  chat.header.chat_metadata.timedWorldInfo = lore.timedState;
-  const templatesActive = templatesEnabledFlagValue() && templatesEnabled();
-  const templateGlobalsBefore = templatesActive ? JSON.stringify(state.scriptGlobals) : void 0;
-  const tpl = templatesActive ? await createGenerationTemplates({
-    chat,
-    state,
-    books,
-    lore,
-    card: character.card,
-    preset,
-    turnMessages,
-    userName,
-    characterName: speakerName,
-    chatId
-  }) : null;
-  const wiDeps = { expand: (text) => text };
-  const loreBeforeBase = (tpl ? tpl.partition.normalBefore : lore.worldInfoBefore.entries).map((e) => applyRegexScripts(e.content, scripts, RegexPlacement2.WORLD_INFO, wiDeps));
-  const loreAfterBase = (tpl ? tpl.partition.normalAfter : lore.worldInfoAfter.entries).map((e) => applyRegexScripts(e.content, scripts, RegexPlacement2.WORLD_INFO, wiDeps));
-  const loreBefore = tpl ? await Promise.all(loreBeforeBase.map((t) => tpl.renderText(t, "wi-before"))) : loreBeforeBase;
-  const loreAfter = tpl ? await Promise.all(loreAfterBase.map((t) => tpl.renderText(t, "wi-after"))) : loreAfterBase;
-  const lastUser = [...turnMessages].reverse().find((m) => m.is_user);
-  const lastChar = [...turnMessages].reverse().find((m) => !m.is_user && !m.is_system);
-  const enabledMembers = groupDef ? groupDef.members.filter((member) => !groupDef.disabledMembers.includes(member)) : void 0;
-  const macros = createMacroEngine({
-    char: character.card.data.nickname || character.card.data.name,
-    user: userName,
-    ...enabledMembers ? { group: enabledMembers.join(", ") } : {},
-    persona: persona?.description,
-    card: {
-      description: character.card.data.description,
-      personality: character.card.data.personality,
-      scenario: character.card.data.scenario,
-      mesExample: character.card.data.mesExample,
-      systemPrompt: character.card.data.systemPrompt,
-      postHistoryInstructions: character.card.data.postHistoryInstructions,
-      creatorNotes: character.card.data.creatorNotes
-    },
-    lastMessage: turnMessages[turnMessages.length - 1]?.mes,
-    lastUserMessage: lastUser?.mes,
-    lastCharMessage: lastChar?.mes,
-    lastMessageId: turnMessages.length - 1,
-    chatId,
-    local: chatVariables(chat),
-    global: state.scriptGlobals
-  });
-  const expand = (text) => macros.expand(text);
-  const countTokens = (text) => Math.ceil(text.length / 3.5);
-  const personaInjections = [];
-  let personaDescription = persona?.description;
-  if (persona) {
-    const position = typeof persona.position === "number" ? persona.position : 0;
-    if (position === 4) {
-      personaInjections.push({ depth: persona.depth ?? 4, role: roleName(persona.role ?? 0), text: persona.description });
-      personaDescription = void 0;
-    } else if (position === 2 || position === 3) {
-      personaInjections.push({ depth: position === 2 ? 4 : 0, role: "system", text: persona.description });
-      personaDescription = void 0;
-    } else if (position === 9) {
-      personaDescription = void 0;
-    }
-  }
-  if (tpl && personaDescription) personaDescription = await tpl.renderText(personaDescription, "persona");
-  const promptOnlyScripts = scripts.filter((script) => script.promptOnly && !script.markdownOnly);
-  const historyRegexed = promptOnlyScripts.length > 0 ? turnMessages.map((m, index) => ({
-    ...m,
-    mes: applyRegexScripts(m.mes, promptOnlyScripts, RegexPlacement2.AI_OUTPUT, {}, { depth: turnMessages.length - 1 - index })
-  })) : turnMessages;
-  const historyForPrompt = tpl ? await Promise.all(historyRegexed.map((m, index) => tpl.renderText(m.mes, `history#${index}`).then((mes) => ({ ...m, mes })))) : historyRegexed;
-  const atDepthSource = tpl ? tpl.partition.normalAtDepth : lore.atDepth.map((g) => ({ depth: g.depth, role: g.role, text: g.text }));
-  const anTopText = tpl && lore.topOfAuthorsNote.text ? await tpl.renderText(lore.topOfAuthorsNote.text, "an-top") : lore.topOfAuthorsNote.text;
-  const anBottomText = tpl && lore.bottomOfAuthorsNote.text ? await tpl.renderText(lore.bottomOfAuthorsNote.text, "an-bottom") : lore.bottomOfAuthorsNote.text;
-  const depthInjectionsRaw = [
-    ...atDepthSource.map((g) => ({ depth: g.depth, role: roleName(g.role), text: g.text })),
-    ...anTopText ? [{ depth: 4, role: "system", text: anTopText }] : [],
-    ...anBottomText ? [{ depth: 0, role: "system", text: anBottomText }] : [],
-    ...personaInjections
-  ];
-  const depthInjections = tpl ? await Promise.all(depthInjectionsRaw.map(async (inj) => ({ ...inj, text: await tpl.renderText(inj.text, "depth-injection") }))) : depthInjectionsRaw;
-  const nudgeMessage = nudge !== void 0 ? { name: userName, is_user: true, is_system: false, send_date: "", mes: expand(nudge.content) } : void 0;
-  const assembleDraft = {
-    card: tpl ? await tpl.preRenderCard(character.card) : character.card,
-    preset: tpl ? await tpl.preRenderPreset(preset) : preset,
-    personaDescription,
-    messages: nudgeMessage ? [...historyForPrompt, nudgeMessage] : historyForPrompt,
-    worldInfoBefore: loreBefore,
-    worldInfoAfter: loreAfter,
-    beforeExamples: tpl ? await Promise.all(tpl.partition.normalBeforeExamples.map((e, i) => tpl.renderText(e.content, `wi-em-before#${i}`))) : lore.beforeExamples.entries.map((e) => e.content),
-    afterExamples: tpl ? await Promise.all(tpl.partition.normalAfterExamples.map((e, i) => tpl.renderText(e.content, `wi-em-after#${i}`))) : lore.afterExamples.entries.map((e) => e.content),
-    depthInjections
-  };
-  const hookedDraft = options.onDraft !== void 0 ? await options.onDraft(assembleDraft) : assembleDraft;
-  const assembled = assemblePrompt(hookedDraft, { expand, countTokens });
-  const fallback = ctx.agentDefaultModel.currentSelection();
-  const saved = options.sessionId ? state.modelSelections?.[options.sessionId] : void 0;
-  const explicit = options.provider !== void 0 && options.model !== void 0 ? {
-    provider: options.provider,
-    model: options.model,
-    ...options.reasoningEffort !== void 0 ? { reasoningEffort: options.reasoningEffort } : {}
-  } : void 0;
-  const choice = explicit ?? saved ?? fallback;
-  const provider = choice.provider;
-  const model = choice.model;
-  tpl?.setModel(model);
-  const reasoningEffort = explicit?.reasoningEffort ?? saved?.reasoningEffort ?? (provider === fallback.provider && model === fallback.model ? fallback.reasoningEffort : void 0);
-  if (tpl) await tpl.prerenderGenerateAfter();
-  const boundScriptId = boundScriptOf(character.card);
-  if (boundScriptId !== void 0) {
-    const scriptRecord = await getScript(tavernDataRoot(), boundScriptId);
-    if (scriptRecord !== void 0 && scriptRecord.chunks.length > 0) {
-      const prior = normalizeScriptProgress(chat.header.chat_metadata?.scriptProgress);
-      let chunkIndex = prior !== void 0 && prior.scriptName === boundScriptId ? Math.min(prior.chunkIndex, scriptRecord.chunks.length - 1) : 0;
-      const lastAssistantFloor = [...chat.messages].reverse().find((m) => m.is_user === false && !m.is_system);
-      const advanced = lastAssistantFloor !== void 0 && chunkIndex < scriptRecord.chunks.length - 1 && shouldAdvance(scriptRecord.chunks[chunkIndex].text, [...chat.messages].reverse().filter((m) => m.is_user === false && !m.is_system).slice(0, 3).map((m) => m.mes));
-      if (advanced) chunkIndex += 1;
-      if (advanced || prior === void 0 || prior.scriptName !== boundScriptId || prior.chunkIndex !== chunkIndex) {
-        chat.header.chat_metadata = {
-          ...chat.header.chat_metadata,
-          scriptProgress: { scriptName: boundScriptId, chunkIndex, alignedAt: (/* @__PURE__ */ new Date()).toISOString() }
-        };
-      }
-      const scriptBlock = formatScriptBlock(scriptRecord.chunks.map((chunk) => chunk.text), chunkIndex);
-      if (scriptBlock !== void 0) assembled.messages.unshift({ role: "system", content: scriptBlock });
-    }
-  }
-  const finalMessages = tpl ? await tpl.applyPromptInjections(assembled.messages) : assembled.messages;
-  const requestMessages = [...finalMessages];
-  const systemParts = [];
-  while (requestMessages[0]?.role === "system") systemParts.push(requestMessages.shift().content);
-  const guidesBlock = formatGuidesBlock(chat.header.chat_metadata?.guides);
-  if (guidesBlock !== void 0) systemParts.push(guidesBlock);
-  const llmMessages = requestMessages.map((m) => createMessage({
-    role: m.role,
-    content: [{ type: "text", text: m.content }],
-    // 仅进 ctx.llm.stream 的请求消息，不落会话日志（该调用不带 sessionId），
-    // dsh-llm 对 source 不校验；v0 形状在此保留——装配作用域内没有会话对象
-    // 可供格式探测。
-    source: m.role === "assistant" ? { kind: "model", provider, model } : m.role === "user" ? { kind: "user" } : { kind: "plugin", plugin: "dsh-soulmojito" }
-  }));
-  const rewriteBlock = formatRewriteBlock(options.feedback);
-  if (rewriteBlock) systemParts.push(rewriteBlock);
-  const llmRequest = {
-    messages: llmMessages,
-    system: systemParts.length > 0 ? systemParts.join("\n\n") : void 0,
-    params: {
-      provider,
-      model,
-      ...reasoningEffort !== void 0 ? { reasoningEffort } : {},
-      temperature: numberOr(preset.sampler.temperature, void 0),
-      maxTokens: numberOr(preset.sampler.openai_max_tokens, void 0)
-    }
-  };
-  const hookedLlmRequest = options.onLlmRequest !== void 0 ? await options.onLlmRequest(llmRequest) : llmRequest;
-  return {
-    request: hookedLlmRequest,
-    lore,
-    tpl,
-    macros,
-    templateGlobalsBefore,
-    // SSE 'start' 事件的载荷（runGeneration 消费；试写预览忽略）。provider/model
-    // 是选择器结论（pre-hook）——hook 改写后的实参以 request.params 为准。
-    start: {
-      provider,
-      model,
-      speaker: speakerName,
-      lore: lore.allActivated.map((e) => ({ uid: e.uid, book: e.book, comment: e.entry.comment })),
-      stats: assembled.stats
-    }
-  };
-}
-async function runGeneration(ctx, db, options) {
-  const { state, characterName, chatId, snapshot: snapshot2, mode, group: group2, write, signal } = options;
-  const chat = snapshot2.chat;
-  const mvuVariablesBefore = snapshotChatVariables(chat);
-  let revision = snapshot2.revision;
-  let hostTrace;
-  const userName = state.activePersona ?? DEFAULT_USER2;
-  try {
-    const { speakerName, groupDef, nudge, turnMessages: initialTurnMessages } = await resolveGenerationSpeaker(db, state, {
-      characterName,
-      chat,
-      mode,
-      group: group2,
-      ...options.triggerMember !== void 0 ? { triggerMember: options.triggerMember } : {}
-    });
-    let turnMessages = initialTurnMessages;
-    const character = await db.getCharacter(speakerName);
-    if (!character) throw new Error(`character '${speakerName}' not found`);
-    let regenerated;
-    let hostUserText = "";
-    const scripts = collectRegexScripts(state, character);
-    if (mode === "send") {
-      const hookedUserText = await generationHooks.dispatch("user-input", options.userText, { mode, character: speakerName, chatId, group: group2 });
-      const transformed = applyRegexScripts(hookedUserText, scripts, RegexPlacement2.USER_INPUT, { expand: (t) => t });
-      hostUserText = transformed;
-      chat.messages.push({ name: userName, is_user: true, is_system: false, send_date: (/* @__PURE__ */ new Date()).toISOString(), mes: transformed });
-      if (group2) turnMessages = rebuildGroupTurn(groupDef, speakerName, userName, chat.messages);
-      revision = await db.saveChat(characterName, chatId, chat, revision);
-      await emitChatSaved(characterName, chatId, revision, chat.messages.length);
-    } else {
-      const last = chat.messages[chat.messages.length - 1];
-      if (last?.is_user === false && !last.is_system) {
-        regenerated = chat.messages.pop();
-        if (group2) turnMessages = rebuildGroupTurn(groupDef, speakerName, userName, chat.messages);
-      }
-    }
-    hostTrace = beginTavernSessionTurn(options.hostAgent, hostUserText);
-    const assembly = await buildGenerationLlmRequest(ctx, db, {
-      state,
-      speakerName,
-      character,
-      chatId,
-      chat,
-      turnMessages,
-      nudge,
-      group: group2,
-      ...groupDef !== void 0 ? { groupDef } : {},
-      phase: mode,
-      scripts,
-      userName,
-      ...options.feedback !== void 0 ? { feedback: options.feedback } : {},
-      ...options.sessionId !== void 0 ? { sessionId: options.sessionId } : {},
-      ...options.provider !== void 0 ? { provider: options.provider } : {},
-      ...options.model !== void 0 ? { model: options.model } : {},
-      ...options.reasoningEffort !== void 0 ? { reasoningEffort: options.reasoningEffort } : {},
-      onDraft: (draft) => generationHooks.dispatch("pre-assemble", draft, { mode, character: speakerName, chatId, group: group2 }),
-      onLlmRequest: (request) => generationHooks.dispatch("pre-llm", request, { mode, character: speakerName, chatId, group: group2 })
-    });
-    const lore = assembly.lore;
-    const tpl = assembly.tpl;
-    const macros = assembly.macros;
-    const templateGlobalsBefore = assembly.templateGlobalsBefore;
-    const hookedLlmRequest = assembly.request;
-    const expand = (text2) => macros.expand(text2);
-    write({ type: "start", ...assembly.start });
-    const usedProvider = hookedLlmRequest.params.provider;
-    const usedModel = hookedLlmRequest.params.model;
-    recordPromptView({
-      character: speakerName,
-      chatId,
-      mode,
-      request: hookedLlmRequest,
-      lore
-    }, ctx.logger);
-    let text = "";
-    let reasoning = "";
-    let hostUsage;
-    hostTrace = startTavernSessionStep(hostTrace);
-    beginStreamEpoch();
-    for await (const chunk of ctx.llm.stream({
-      provider: hookedLlmRequest.params.provider,
-      model: hookedLlmRequest.params.model,
-      messages: hookedLlmRequest.messages,
-      ...hookedLlmRequest.system !== void 0 ? { system: hookedLlmRequest.system } : {},
-      ...hookedLlmRequest.params.reasoningEffort !== void 0 ? { reasoningEffort: hookedLlmRequest.params.reasoningEffort } : {},
-      temperature: hookedLlmRequest.params.temperature,
-      maxTokens: hookedLlmRequest.params.maxTokens,
-      signal
-    })) {
-      if (chunk.type === "usage") hostUsage = chunk.usage;
-      if (chunk.type === "text-delta") {
-        text += chunk.text;
-        write({ type: "delta", text: chunk.text });
-        emitStreamDelta({ mode, character: speakerName, chatId, text, delta: chunk.text });
-      } else if (chunk.type === "reasoning-delta") {
-        reasoning += chunk.text;
-        write({ type: "reasoning", text: chunk.text });
-      } else if (chunk.type === "finish") {
-        if (chunk.reason.kind === "error" || chunk.reason.kind === "aborted") throw new Error(chunk.reason.failure.message);
-        write({ type: "finish", reason: chunk.reason.kind });
-      }
-    }
-    if (text.trim() === "") throw new Error("model returned no text");
-    const outputText = await generationHooks.dispatch("post-output", text, { mode, character: speakerName, chatId, group: group2 });
-    const saveScripts = scripts.filter((script) => !script.promptOnly && !script.markdownOnly);
-    let finalText = saveScripts.length > 0 ? applyRegexScripts(outputText, saveScripts, RegexPlacement2.AI_OUTPUT, { expand }) : outputText;
-    if (tpl) finalText = await tpl.renderOutput(finalText);
-    const finalReasoning = reasoning ? applyRegexScripts(reasoning, scripts, RegexPlacement2.REASONING, { expand }) : reasoning;
-    const now = (/* @__PURE__ */ new Date()).toISOString();
-    const oldSwipes = regenerated ? Array.isArray(regenerated.swipes) && regenerated.swipes.length > 0 ? regenerated.swipes : [regenerated.mes] : [];
-    const oldSwipeInfo = regenerated ? Array.isArray(regenerated.swipe_info) ? regenerated.swipe_info : oldSwipes.map(() => ({})) : [];
-    chat.messages.push({
-      ...regenerated ?? {},
-      name: character.card.data.nickname || character.card.data.name,
-      is_user: false,
-      is_system: false,
-      send_date: now,
-      mes: finalText,
-      swipe_id: oldSwipes.length,
-      swipes: [...oldSwipes, finalText],
-      swipe_info: [...oldSwipeInfo, { send_date: now, extra: { provider: usedProvider, model: usedModel, reasoning: finalReasoning || void 0, ...options.feedback ? { feedback: options.feedback } : {} } }],
-      extra: {
-        ...regenerated?.extra ?? {},
-        api: usedProvider,
-        model: usedModel,
-        reasoning: finalReasoning || void 0,
-        activatedLore: lore.allActivated.map((e) => e.entryId),
-        ...tpl && tpl.warnings.length > 0 ? { templateWarnings: tpl.warnings } : {}
-      }
-    });
-    const varSnapshot = macros.snapshotVars().local;
-    if (tpl) {
-      mergeTemplateLocalVars(chat, varSnapshot);
-      if (JSON.stringify(state.scriptGlobals) !== templateGlobalsBefore) {
-        await db.updateState((current) => ({ scriptGlobals: { ...current.scriptGlobals, ...state.scriptGlobals } }));
-      }
-    } else if (Object.keys(varSnapshot).length > 0) {
-      chat.header.chat_metadata.variables = varSnapshot;
-    } else {
-      delete chat.header.chat_metadata.variables;
-    }
-    const mvuGuard = applyMvuSettlementGuard(chat, character.card, mvuVariablesBefore);
-    const mvuRules = await applyMvuSettlementRules(chat, character.card, mvuVariablesBefore);
-    recordMvuTurnReceipt(chat, mvuVariablesBefore, {
-      turnKey: String(chat.messages.length - 1),
-      failures: [...tpl?.warnings ?? [], ...mvuGuard.failures, ...mvuRules.failures],
-      changeNotes: mergeMvuRuleNotes(mvuGuard.notes, mvuRules.notes)
-    });
-    revision = await db.saveChat(characterName, chatId, chat, revision);
-    await emitChatSaved(characterName, chatId, revision, chat.messages.length);
-    await generationHooks.dispatch("post-save", { chat, revision, speaker: speakerName, finalText }, { mode, character: speakerName, chatId, group: group2 });
-    hostTrace = recordTavernSessionAssistant(hostTrace, finalText, finalReasoning, usedProvider, usedModel, hostUsage);
-    return { chat, revision, speaker: speakerName };
-  } finally {
-    finishTavernSessionTrace(hostTrace);
-  }
-}
-function chatVariables(chat) {
-  const vars = chat?.header?.chat_metadata?.variables;
-  if (vars && typeof vars === "object" && !Array.isArray(vars)) {
-    return Object.fromEntries(Object.entries(vars).filter(([, value]) => typeof value === "string" || typeof value === "number" || typeof value === "boolean"));
-  }
-  return {};
-}
-async function runTavernScript(ctx, req, res, db) {
-  const body = await readJson(req);
-  const state = await db.getState();
-  assertStGenerationBinding(state, body.sessionId);
-  const characterName = typeof body.character === "string" ? body.character : state.activeCharacter;
-  const chatId = body.chatId;
-  if (!characterName || typeof chatId !== "string") throw new Error("character and chatId are required");
-  const snapshot2 = await db.getChatSnapshot(characterName, chatId);
-  if (!snapshot2) throw new Error("chat not found");
-  const group2 = body.group === true || await isGroupChat(db, characterName, chatId);
-  const chat = snapshot2.chat;
-  let revision = snapshot2.revision;
-  const character = await db.getCharacter(characterName);
-  const macros = createMacroEngine({
-    char: character?.card.data.nickname || character?.card.data.name || characterName,
-    user: state.activePersona ?? DEFAULT_USER2,
-    persona: state.activePersona ? (await db.getPersona(state.activePersona))?.description : void 0,
-    lastMessage: chat.messages[chat.messages.length - 1]?.mes,
-    lastUserMessage: [...chat.messages].reverse().find((m) => m.is_user)?.mes,
-    lastCharMessage: [...chat.messages].reverse().find((m) => !m.is_user && !m.is_system)?.mes,
-    lastMessageId: chat.messages.length - 1,
-    chatId,
-    local: chatVariables(chat),
-    global: state.scriptGlobals
-  });
-  const persist = async () => {
-    const vars = macros.snapshotVars().local;
-    if (Object.keys(vars).length > 0) chat.header.chat_metadata.variables = vars;
-    else delete chat.header.chat_metadata.variables;
-    revision = await db.saveChat(characterName, chatId, chat, revision);
-    await emitChatSaved(characterName, chatId, revision, chat.messages.length);
-  };
-  const triggerGeneration = async (member) => {
-    const fresh = await db.getChatSnapshot(characterName, chatId);
-    const result2 = await runGeneration(ctx, db, {
-      state: await db.getState(),
-      characterName,
-      chatId,
-      snapshot: fresh ?? { chat, revision },
-      mode: "trigger",
-      userText: "",
-      group: group2,
-      triggerMember: member,
-      write: () => {
-      },
-      signal: new AbortController().signal
-    });
-    chat.messages = result2.chat.messages;
-    chat.header = result2.chat.header;
-    revision = result2.revision;
-  };
-  const result = await runScript(typeof body.script === "string" ? body.script : "", {
-    expand: (text) => macros.expand(text),
-    getVar: (name2) => macros.getVar(name2),
-    setVar: (name2, value) => {
-      macros.setVar(name2, value);
-    },
-    deleteVar: (name2) => macros.deleteVar(name2),
-    getGlobalVar: (name2) => macros.getGlobalVar(name2),
-    setGlobalVar: (name2, value) => {
-      macros.setGlobalVar(name2, value);
-    },
-    deleteGlobalVar: (name2) => macros.deleteGlobalVar(name2),
-    send: async (text) => {
-      const trimmed = text.trim();
-      if (trimmed === "") return;
-      chat.messages.push({ name: state.activePersona ?? DEFAULT_USER2, is_user: true, is_system: false, send_date: (/* @__PURE__ */ new Date()).toISOString(), mes: trimmed });
-      await persist();
-    },
-    trigger: async (member) => {
-      await triggerGeneration(member);
-    },
-    regenerate: async () => {
-      const fresh = await db.getChatSnapshot(characterName, chatId);
-      const regen = await runGeneration(ctx, db, {
-        state: await db.getState(),
-        characterName,
-        chatId,
-        snapshot: fresh ?? { chat, revision },
-        mode: "regenerate",
-        userText: "",
-        group: group2,
-        write: () => {
-        },
-        signal: new AbortController().signal
-      });
-      chat.messages = regen.chat.messages;
-      chat.header = regen.chat.header;
-      revision = regen.revision;
-    },
-    stop: () => {
-    },
-    cut: async (from, to) => {
-      const total = chat.messages.length;
-      const start = from < 0 ? total + from : from;
-      const end = (to < 0 ? total + to : to) + 1;
-      chat.messages.splice(Math.max(0, start), Math.max(0, end - Math.max(0, start)));
-      await persist();
-    },
-    echo: () => {
-    },
-    applyRegex: (scriptName, text) => {
-      const script = collectRegexScripts(state, character).find((candidate) => candidate.scriptName.toLowerCase() === scriptName.toLowerCase());
-      if (!script) return text;
-      return applyRegexScript(text, script, RegexPlacement2.SLASH_COMMAND, { expand: (t) => macros.expand(t) }) ?? text;
-    }
-  });
-  const globals = macros.snapshotVars().global;
-  await db.updateState(() => ({ scriptGlobals: globals }));
-  const freshSnapshot = await db.getChatSnapshot(characterName, chatId);
-  return sendJson(res, 200, {
-    ok: true,
-    output: result.output,
-    chatChanged: result.chatChanged,
-    chat: freshSnapshot?.chat ?? chat,
-    revision: freshSnapshot?.revision ?? revision
-  });
-}
-function roleName(role) {
-  return role === 1 ? "user" : role === 2 ? "assistant" : "system";
-}
-function numberOr(value, fallback) {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
-}
-
 // packages/plugin/src/workspace.ts
 import { mkdir as mkdir5 } from "node:fs/promises";
 var TAVERN_WORKSPACE_TITLE = "Tavern (internal)";
@@ -32959,7 +33240,7 @@ async function prepareWorkbenchWorkspace() {
 import { resolve as resolve5 } from "node:path";
 
 // packages/plugin/src/memory-maintenance.ts
-import { randomUUID as randomUUID5 } from "node:crypto";
+import { randomUUID as randomUUID6 } from "node:crypto";
 var MAINTENANCE_MAX_LLM_REQUESTS = 24;
 var MAINTENANCE_OPENING_MAX_CHARS = 1e5;
 var MAINTENANCE_PAGE_RECORDS = 32;
@@ -32987,7 +33268,7 @@ async function startMemoryMaintenance(ctx, deps, scope) {
   const existing = activeRuns.get(key);
   if (existing !== void 0) throw new MaintenanceRunConflictError(scope.character, scope.chatId, existing.runId);
   const active = {
-    runId: randomUUID5(),
+    runId: randomUUID6(),
     character: scope.character,
     chatId: scope.chatId,
     startedAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -33187,7 +33468,7 @@ async function executeRun(ctx, deps, scope, active) {
       opening = buildOpeningMessage(run, listing);
     }
     const messages = [
-      { role: "user", id: randomUUID5(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
+      { role: "user", id: randomUUID6(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
     ];
     let outcome = "completed";
     let errorMessage3;
@@ -33244,7 +33525,7 @@ async function executeRun(ctx, deps, scope, active) {
         blocks.push({ type: "text", text: textBuffer });
       }
       const toolCalls = blocks.filter((block) => block.type === "tool-call");
-      messages.push({ role: "assistant", id: randomUUID5(), content: blocks, source: { kind: "model", provider: run.provider, model: run.model } });
+      messages.push({ role: "assistant", id: randomUUID6(), content: blocks, source: { kind: "model", provider: run.provider, model: run.model } });
       if (toolCalls.length === 0) {
         report = textBuffer !== "" ? textBuffer : blocks.filter((block) => block.type === "text").map((block) => String(block.text ?? "")).join("");
         break;
@@ -33258,7 +33539,7 @@ async function executeRun(ctx, deps, scope, active) {
         const result = await executeToolCall(run, call);
         messages.push({
           role: "tool",
-          id: randomUUID5(),
+          id: randomUUID6(),
           content: [{ type: "text", text: safeJson(result.payload) }],
           source: { kind: "tool", callId: call.id },
           toolCallId: call.id,
@@ -37387,6 +37668,9 @@ async function handleApi(ctx, req, res) {
   }
   if (method === "POST" && route === "helper") {
     return handleHelperApi(req, res, db);
+  }
+  if (method === "POST" && route === "frontend/generate") {
+    return handleFrontendGenerationStream(req, res, db);
   }
   if (method === "GET" && route === "card/scripts") {
     const character = url.searchParams.get("character");

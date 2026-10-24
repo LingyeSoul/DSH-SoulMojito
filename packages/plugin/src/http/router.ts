@@ -21,7 +21,7 @@ import { runCandidateGeneration } from '../candidates.js'
 import { tavernDataRoot } from '../dsh-home.js'
 import { latestFrontendMessage, stripFrontendDocuments } from '../frontend-documents.js'
 import { handleGamesApi, isGamesRoute } from '../games/http.js'
-import { handleHelperApi } from '../helper.js'
+import { handleFrontendGenerationStream, handleHelperApi } from '../helper.js'
 import { generate, previewGeneration, runTavernScript } from '../generation/pipeline.js'
 import { buildModelCatalog, clampIdentitySummary, publicCard, publicGroup, refreshActivePrompt } from '../model-catalog.js'
 import { emitAssetsSaved, emitChatSaved } from '../mods/events.js'
@@ -1126,6 +1126,10 @@ export async function handleApi(ctx, req, res) {
   // 无法寻址别的聊天。
   if (method === 'POST' && route === 'helper') {
     return handleHelperApi(req, res, db)
+  }
+
+  if (method === 'POST' && route === 'frontend/generate') {
+    return handleFrontendGenerationStream(req, res, db)
   }
 
   // 卡脚本右栏（2026-10-21）：JSR 卡的常驻脚本树在

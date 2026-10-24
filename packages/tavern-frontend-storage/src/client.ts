@@ -109,6 +109,200 @@ export function indexedDbIframeSource(): string {
       return record;
     }
   }
+  function indexKeyOf(record, keyPath) {
+    if (keyPath === '' || record === null || typeof record !== 'object') return undefined;
+    var path = String(keyPath).split('.');
+    var cursor = record;
+    for (var index = 0; index < path.length; index += 1) {
+      if (cursor === null || typeof cursor !== 'object' || !(path[index] in cursor)) return undefined;
+      cursor = cursor[path[index]];
+    }
+    return cursor;
+  }
+  function compareIdbKeys(left, right) {
+    if (left === right) return 0;
+    if (left === undefined) return 1;
+    if (right === undefined) return -1;
+    if (typeof left === 'number' && typeof right === 'number') return left - right;
+    var leftText = String(left);
+    var rightText = String(right);
+    return leftText < rightText ? -1 : leftText > rightText ? 1 : 0;
+  }
+  function keyInRange(key, range) {
+    if (range === undefined || range === null || typeof range !== 'object') return true;
+    if (range.lower !== undefined) {
+      var lower = compareIdbKeys(key, range.lower);
+      if (lower < 0 || (range.lowerOpen === true && lower === 0)) return false;
+    }
+    if (range.upper !== undefined) {
+      var upper = compareIdbKeys(key, range.upper);
+      if (upper > 0 || (range.upperOpen === true && upper === 0)) return false;
+    }
+    return true;
+  }
+  function IdbKeyRange(lower, upper, lowerOpen, upperOpen) {
+    this.lower = lower;
+    this.upper = upper;
+    this.lowerOpen = lowerOpen === true;
+    this.upperOpen = upperOpen === true;
+  }
+  IdbKeyRange.only = function (value) { return new IdbKeyRange(value, value, false, false); };
+  IdbKeyRange.lowerBound = function (value, open) { return new IdbKeyRange(value, undefined, open === true, true); };
+  IdbKeyRange.upperBound = function (value, open) { return new IdbKeyRange(undefined, value, true, open === true); };
+  IdbKeyRange.bound = function (lower, upper, lowerOpen, upperOpen) {
+    return new IdbKeyRange(lower, upper, lowerOpen === true, upperOpen === true);
+  };
+  function readStoreEntries(db, storeName) {
+    return call('idb.keys', { db: db.name, store: storeName }).then(function (value) {
+      var keys = value && Array.isArray(value.keys) ? value.keys : [];
+      return Promise.all(keys.map(function (key) {
+        return call('idb.get', { db: db.name, store: storeName, key: key }).then(function (row) {
+          var record = row && row.record !== undefined ? row.record : undefined;
+          return { key: key, value: decodeRecord(record), raw: record };
+        });
+      }));
+    });
+  }
+  function cursorEntries(db, storeName, indexKeyPath) {
+    return readStoreEntries(db, storeName).then(function (entries) {
+      var output = [];
+      entries.forEach(function (entry) {
+        var indexKey = indexKeyPath === '' ? entry.key : indexKeyOf(entry.value !== undefined ? entry.value : entry.raw, indexKeyPath);
+        if (indexKey === undefined) return;
+        output.push({ key: indexKey, primaryKey: entry.key, value: entry.value });
+      });
+      return output;
+    });
+  }
+  function sortCursorEntries(entries, direction) {
+    var sorted = entries.slice().sort(function (left, right) {
+      return compareIdbKeys(left.key, right.key) || compareIdbKeys(left.primaryKey, right.primaryKey);
+    });
+    if (direction === 'prev' || direction === 'prevunique') sorted.reverse();
+    if (direction === 'nextunique' || direction === 'prevunique') {
+      var seen = {};
+      sorted = sorted.filter(function (entry) {
+        var key = String(entry.key);
+        if (Object.prototype.hasOwnProperty.call(seen, key)) return false;
+        seen[key] = true;
+        return true;
+      });
+    }
+    return sorted;
+  }
+  function IdbCursor(request, entries, direction, db, storeName, indexName, done) {
+    var self = this;
+    self.key = undefined;
+    self.primaryKey = undefined;
+    self.value = undefined;
+    self.direction = direction || 'next';
+    self._entries = sortCursorEntries(entries, self.direction);
+    self._position = -1;
+    self._request = request;
+    function fire() {
+      self._position += 1;
+      if (self._position >= self._entries.length) {
+        self.key = undefined;
+        self.primaryKey = undefined;
+        self.value = undefined;
+        request.result = null;
+        try { if (request.onsuccess) request.onsuccess({ target: request }); } catch (error) { console.error('[idb] cursor onsuccess failed', error); }
+        if (typeof done === 'function') done();
+        return;
+      }
+      var entry = self._entries[self._position];
+      self.key = entry.key;
+      self.primaryKey = entry.primaryKey;
+      self.value = entry.value;
+      request.result = self;
+      try { if (request.onsuccess) request.onsuccess({ target: request }); } catch (error) { console.error('[idb] cursor onsuccess failed', error); }
+    }
+    self.continue = function () { fire(); };
+    self.advance = function (count) {
+      var steps = typeof count === 'number' && count > 0 ? count : 1;
+      self._position += steps - 1;
+      fire();
+    };
+    self.delete = function () {
+      return call('idb.delete', { db: db.name, store: storeName, key: self.primaryKey });
+    };
+    self.update = function () {
+      throw new Error('idb cursor.update is not supported in the virtual IndexedDB');
+    };
+    setTimeout(fire, 0);
+  }
+  function openIdbCursor(db, storeName, indexKeyPath, range, direction, transaction) {
+    var request = idbRequest();
+    var done = null;
+    if (transaction) {
+      transaction._track(new Promise(function (resolve) { done = resolve; }));
+    }
+    var promise = cursorEntries(db, storeName, indexKeyPath).then(function (entries) {
+      var filtered = entries.filter(function (entry) { return keyInRange(entry.key, range); });
+      new IdbCursor(request, filtered, direction, db, storeName, indexKeyPath, done);
+    }, function (error) {
+      idbFail(request, error);
+    });
+    if (transaction) transaction._track(promise);
+    return request;
+  }
+  function IdbIndex(db, storeName, indexName, transaction) {
+    var descriptor = db._stores[storeName] && db._stores[storeName].indexes ? db._stores[storeName].indexes[indexName] : undefined;
+    this.db = db;
+    this.storeName = storeName;
+    this.name = indexName;
+    this.transaction = transaction;
+    this.keyPath = descriptor && typeof descriptor.keyPath === 'string' ? descriptor.keyPath : '';
+    this.unique = descriptor ? descriptor.unique === true : false;
+    this.multiEntry = descriptor ? descriptor.multiEntry === true : false;
+  }
+  IdbIndex.prototype.openCursor = function (range, direction) {
+    return openIdbCursor(this.db, this.storeName, this.keyPath, range, direction, this.transaction);
+  };
+  IdbIndex.prototype._track = function (promise) {
+    if (this.transaction) this.transaction._track(promise);
+    return promise;
+  };
+  IdbIndex.prototype.openKeyCursor = function (range, direction) {
+    var request = openIdbCursor(this.db, this.storeName, this.keyPath, range, direction, this.transaction);
+    var original = request.onsuccess;
+    request.onsuccess = function (event) {
+      if (request.result) request.result.value = undefined;
+      if (original) original(event);
+    };
+    return request;
+  };
+  IdbIndex.prototype.get = function (key) {
+    var request = idbRequest();
+    this._track(cursorEntries(this.db, this.storeName, this.keyPath).then(function (entries) {
+      var hit = entries.filter(function (entry) { return compareIdbKeys(entry.key, key) === 0; })[0];
+      idbFire(request, hit === undefined ? undefined : hit.value);
+    }, function (error) { idbFail(request, error); }));
+    return request;
+  };
+  IdbIndex.prototype.getAll = function (query, count) {
+    var request = idbRequest();
+    this._track(cursorEntries(this.db, this.storeName, this.keyPath).then(function (entries) {
+      var values = entries.filter(function (entry) { return keyInRange(entry.key, query); }).map(function (entry) { return entry.value; });
+      idbFire(request, typeof count === 'number' && count >= 0 ? values.slice(0, count) : values);
+    }, function (error) { idbFail(request, error); }));
+    return request;
+  };
+  IdbIndex.prototype.getAllKeys = function (query, count) {
+    var request = idbRequest();
+    this._track(cursorEntries(this.db, this.storeName, this.keyPath).then(function (entries) {
+      var keys = entries.filter(function (entry) { return keyInRange(entry.key, query); }).map(function (entry) { return entry.key; });
+      idbFire(request, typeof count === 'number' && count >= 0 ? keys.slice(0, count) : keys);
+    }, function (error) { idbFail(request, error); }));
+    return request;
+  };
+  IdbIndex.prototype.count = function (query) {
+    var request = idbRequest();
+    this._track(cursorEntries(this.db, this.storeName, this.keyPath).then(function (entries) {
+      idbFire(request, entries.filter(function (entry) { return keyInRange(entry.key, query); }).length);
+    }, function (error) { idbFail(request, error); }));
+    return request;
+  };
   function IdbDatabase(name) {
     var self = this;
     self.name = name;
@@ -121,14 +315,46 @@ export function indexedDbIframeSource(): string {
       get length() { return Object.keys(self._stores).length; },
     };
   }
+  function IdbStoreHandle(db, name) {
+    this.db = db;
+    this.name = name;
+    this.keyPath = db._stores[name] && typeof db._stores[name].keyPath === 'string' ? db._stores[name].keyPath : '';
+  }
+  IdbStoreHandle.prototype.createIndex = function (indexName, keyPath, options) {
+    var name = String(indexName);
+    var descriptor = {
+      keyPath: String(keyPath),
+      unique: options && options.unique === true,
+      multiEntry: options && options.multiEntry === true,
+    };
+    var store = this.db._stores[this.name];
+    store.indexes[name] = descriptor;
+    this.db._pending.push(call('idb.store.create', {
+      db: this.db.name,
+      store: this.name,
+      keyPath: store.keyPath,
+      indexes: store.indexes,
+    }));
+    return new IdbIndex(this.db, this.name, name, null);
+  };
+  IdbStoreHandle.prototype.deleteIndex = function (indexName) {
+    var store = this.db._stores[this.name];
+    delete store.indexes[String(indexName)];
+    this.db._pending.push(call('idb.store.create', {
+      db: this.db.name,
+      store: this.name,
+      keyPath: store.keyPath,
+      indexes: store.indexes,
+    }));
+  };
   IdbDatabase.prototype.createObjectStore = function (storeName, options) {
     var name = String(storeName);
     var keyPath = options && typeof options.keyPath === 'string' ? options.keyPath : '';
-    this._stores[name] = { keyPath: keyPath };
+    this._stores[name] = { keyPath: keyPath, indexes: {} };
     var dbName = this.name;
-    var pending = call('idb.store.create', { db: dbName, store: name, keyPath: keyPath });
+    var pending = call('idb.store.create', { db: dbName, store: name, keyPath: keyPath, indexes: {} });
     this._pending.push(pending);
-    return { name: name, keyPath: keyPath };
+    return new IdbStoreHandle(this, name);
   };
   IdbDatabase.prototype.transaction = function (storeNames, mode) {
     return new IdbTransaction(this, storeNames, mode);
@@ -199,7 +425,32 @@ export function indexedDbIframeSource(): string {
     this.name = name;
     var descriptor = transaction.db._stores[name];
     this.keyPath = descriptor && typeof descriptor.keyPath === 'string' ? descriptor.keyPath : '';
+    this.indexNames = {
+      contains: function (indexName) {
+        return !!(descriptor && descriptor.indexes && descriptor.indexes[String(indexName)] !== undefined);
+      },
+      item: function (index) {
+        var names = descriptor && descriptor.indexes ? Object.keys(descriptor.indexes) : [];
+        return names[index] || null;
+      },
+      get length() { return descriptor && descriptor.indexes ? Object.keys(descriptor.indexes).length : 0; },
+    };
   }
+  IdbObjectStore.prototype.index = function (indexName) {
+    return new IdbIndex(this.transaction.db, this.name, String(indexName), this.transaction);
+  };
+  IdbObjectStore.prototype.openCursor = function (range, direction) {
+    return openIdbCursor(this.transaction.db, this.name, '', range, direction, this.transaction);
+  };
+  IdbObjectStore.prototype.openKeyCursor = function (range, direction) {
+    var request = openIdbCursor(this.transaction.db, this.name, '', range, direction, this.transaction);
+    var original = request.onsuccess;
+    request.onsuccess = function (event) {
+      if (request.result) request.result.value = undefined;
+      if (original) original(event);
+    };
+    return request;
+  };
   IdbObjectStore.prototype.get = function (key) {
     var request = idbRequest();
     var tx = this.transaction;
@@ -338,6 +589,7 @@ export function indexedDbIframeSource(): string {
     return request;
   };
   var idbShim = {
+    cmp: compareIdbKeys,
     open: function (name, version) {
       var request = idbRequest();
       var db = new IdbDatabase(String(name));
@@ -345,9 +597,14 @@ export function indexedDbIframeSource(): string {
         db.version = value && typeof value.version === 'number' ? value.version : 0;
         var stores = value && Array.isArray(value.stores) ? value.stores : [];
         var keyPaths = value && value.storeKeyPaths && typeof value.storeKeyPaths === 'object' ? value.storeKeyPaths : {};
+        var storeIndexes = value && value.storeIndexes && typeof value.storeIndexes === 'object' ? value.storeIndexes : {};
         stores.forEach(function (storeName) {
           var storeKeyPath = keyPaths[String(storeName)];
-          db._stores[String(storeName)] = { keyPath: typeof storeKeyPath === 'string' ? storeKeyPath : '' };
+          var indexes = storeIndexes[String(storeName)];
+          db._stores[String(storeName)] = {
+            keyPath: typeof storeKeyPath === 'string' ? storeKeyPath : '',
+            indexes: indexes && typeof indexes === 'object' ? indexes : {},
+          };
         });
         var previousVersion = value && typeof value.previousVersion === 'number' ? value.previousVersion : 0;
         var requested = typeof version === 'number' && version > 0 ? version : 1;
@@ -374,6 +631,11 @@ export function indexedDbIframeSource(): string {
     Object.defineProperty(window, 'indexedDB', { value: idbShim, configurable: true });
   } catch (_) {
     try { window.indexedDB = idbShim; } catch (_) {}
+  }
+  try {
+    Object.defineProperty(window, 'IDBKeyRange', { value: IdbKeyRange, configurable: true });
+  } catch (_) {
+    try { window.IDBKeyRange = IdbKeyRange; } catch (_) {}
   }
 
 })(call, clone);

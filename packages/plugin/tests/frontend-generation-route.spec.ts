@@ -13,7 +13,12 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { normalizeEntry } from '../../tavern-format/src/index.js'
 import { TavernStore } from '../../tavern-store/src/index.js'
-import { handleHelperApi } from '../src/helper.js'
+import { handleFrontendGenerationStream, handleHelperApi } from '../src/helper.js'
+import {
+  abortAllFrontendGenerations,
+  abortFrontendGeneration,
+  registerFrontendGeneration,
+} from '../src/frontend-generation.js'
 
 const CHARACTER = 'ExampleCard'
 const WORLD = 'Example World'
@@ -111,6 +116,20 @@ describe('frontend generation helper route', () => {
     server = createServer(async (req, res) => {
       if (req.method === 'POST' && req.url === '/v1/chat/completions') {
         lastChatRequest = JSON.parse(await readBody(req)) as unknown
+        const streamed = lastChatRequest !== null
+          && typeof lastChatRequest === 'object'
+          && (lastChatRequest as { stream?: unknown }).stream === true
+        if (streamed) {
+          res.statusCode = 200
+          res.setHeader('content-type', 'text/event-stream')
+          res.write('data: {"choices":[{"delta":{"content":"first"}}]}\n\n')
+          setTimeout(() => {
+            if (res.writableEnded) return
+            res.write('data: {"choices":[{"delta":{"content":" second"}}]}\n\n')
+            res.end()
+          }, 200)
+          return
+        }
         res.statusCode = 200
         res.setHeader('content-type', 'application/json')
         res.end(JSON.stringify({ choices: [{ message: { content: 'generated text' } }] }))
@@ -162,5 +181,56 @@ describe('frontend generation helper route', () => {
     // The shared asset and the session copy keep their own contents.
     expect((await store.getWorld(WORLD))?.entries[0]?.content).toBe('<example_contract>BASE_ONLY</example_contract>')
     expect((await store.getChatWorld(CHARACTER, chatId, WORLD))?.entries[0]?.content).toBe('<example_contract>SESSION_ONLY</example_contract>')
+  })
+
+  it('streams NDJSON deltas and a final done line', async () => {
+    const response = makeResponse()
+    await handleFrontendGenerationStream(makeRequest({
+      character: CHARACTER,
+      chatId,
+      config: {
+        custom_api: { apiurl: baseUrl, model: 'example-model' },
+        user_input: 'Stream the example payload.',
+        should_stream: true,
+        generation_id: 'gen-route-stream',
+      },
+    }), response, store)
+    const events = response.chunks.join('').trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>)
+    expect(events[0]).toMatchObject({ type: 'start', generationId: 'gen-route-stream' })
+    expect(events.some((event) => event.type === 'done' && event.text === 'first second')).toBe(true)
+  })
+
+  it('writes an aborted event when the active stream is stopped', async () => {
+    const response = makeResponse()
+    const pending = handleFrontendGenerationStream(makeRequest({
+      character: CHARACTER,
+      chatId,
+      config: {
+        custom_api: { apiurl: baseUrl, model: 'example-model' },
+        user_input: 'Stream until stopped.',
+        should_stream: true,
+        generation_id: 'gen-route-abort',
+      },
+    }), response, store)
+    const deadline = Date.now() + 2000
+    while (!response.chunks.join('').includes('"type":"delta"') && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    expect(response.chunks.join('')).toContain('"type":"delta"')
+    expect(abortAllFrontendGenerations(CHARACTER, chatId)).toBe(1)
+    await pending
+    expect(response.chunks.join('')).toContain('"type":"aborted"')
+  })
+
+  it('aborts registered generations by id and by chat', () => {
+    const first = new AbortController()
+    const second = new AbortController()
+    registerFrontendGeneration(CHARACTER, chatId, 'gen-stop-one', first)
+    registerFrontendGeneration(CHARACTER, chatId, 'gen-stop-two', second)
+    expect(abortFrontendGeneration(CHARACTER, chatId, 'gen-stop-one')).toBe(true)
+    expect(first.signal.aborted).toBe(true)
+    expect(second.signal.aborted).toBe(false)
+    expect(abortAllFrontendGenerations(CHARACTER, chatId)).toBe(1)
+    expect(second.signal.aborted).toBe(true)
   })
 })

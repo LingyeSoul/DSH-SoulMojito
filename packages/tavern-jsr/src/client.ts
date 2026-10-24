@@ -496,16 +496,54 @@ export function buildIframeScript(
   // 首屏 manageSprites 里调用）。这里按 bgm/ambient 两个通道落到 iframe 内
   // <audio>，自动播放被浏览器拦截时只记 warning，不向卡抛错。
   var audioChannels = {};
+  function readAudioStore() {
+    try {
+      var parsed = JSON.parse(window.localStorage.getItem('__dshTavernAudio') || '{}');
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch (_) {
+      return {};
+    }
+  }
+  function persistAudio(type, channel) {
+    try {
+      var store = readAudioStore();
+      store[type] = {
+        list: clone(channel.list),
+        current: clone(channel.current),
+        settings: clone(channel.settings),
+      };
+      window.localStorage.setItem('__dshTavernAudio', JSON.stringify(store));
+    } catch (error) {
+      console.error('[audio] persist failed', error);
+    }
+  }
   function audioChannel(type) {
     if (type !== 'bgm' && type !== 'ambient') {
       throw new Error('DSH-SoulMojito: audio type "' + String(type) + '" is not supported (bgm/ambient)');
     }
     if (!audioChannels[type]) {
+      var saved = readAudioStore()[type];
+      var savedList = saved && Array.isArray(saved.list) ? saved.list : [];
+      var savedCurrent = saved && saved.current && typeof saved.current.url === 'string' ? saved.current : null;
+      var savedSettings = saved && saved.settings && typeof saved.settings === 'object' ? saved.settings : {};
       audioChannels[type] = {
         element: null,
-        list: [],
-        current: null,
-        settings: { enabled: true, mode: 'repeat_all', muted: false, volume: 100 },
+        list: savedList.filter(function (entry) {
+          return entry && typeof entry.url === 'string' && entry.url !== '';
+        }).map(function (entry) {
+          return { title: typeof entry.title === 'string' ? entry.title : '', url: entry.url };
+        }),
+        current: savedCurrent,
+        settings: {
+          enabled: typeof savedSettings.enabled === 'boolean' ? savedSettings.enabled : true,
+          mode: savedSettings.mode === 'repeat_one' || savedSettings.mode === 'shuffle' || savedSettings.mode === 'play_one_and_stop'
+            ? savedSettings.mode
+            : 'repeat_all',
+          muted: savedSettings.muted === true,
+          volume: typeof savedSettings.volume === 'number' && isFinite(savedSettings.volume)
+            ? Math.max(0, Math.min(100, Math.round(savedSettings.volume)))
+            : 100,
+        },
       };
     }
     return audioChannels[type];
@@ -545,6 +583,7 @@ export function buildIframeScript(
     if (!channel.list.some(function (existing) { return existing.url === entry.url || existing.title === entry.title; })) {
       channel.list.push(entry);
     }
+    persistAudio(type, channel);
     var element = ensureAudioElement(channel);
     element.src = entry.url;
     applyAudioSettings(channel);
@@ -568,6 +607,7 @@ export function buildIframeScript(
     channel.list = (Array.isArray(audioList) ? audioList : [])
       .filter(function (audio) { return audio && typeof audio.url === 'string' && audio.url !== ''; })
       .map(audioEntry);
+    persistAudio(type, channel);
   };
   window.appendAudioList = function (type, audioList) {
     var channel = audioChannel(type);
@@ -577,6 +617,7 @@ export function buildIframeScript(
       if (channel.list.some(function (existing) { return existing.url === entry.url || existing.title === entry.title; })) return;
       channel.list.push(entry);
     });
+    persistAudio(type, channel);
   };
   window.getAudioSettings = function (type) {
     return Object.assign({}, audioChannel(type).settings);
@@ -593,6 +634,7 @@ export function buildIframeScript(
       channel.settings.volume = Math.max(0, Math.min(100, Math.round(next.volume)));
     }
     applyAudioSettings(channel);
+    persistAudio(type, channel);
   };
   window.getCurrentAudio = function (type) {
     var channel = audioChannel(type);
@@ -1893,7 +1935,7 @@ export function buildIframeScript(
     emitLocally(HELPER_TAVERN_EVENTS.CHAT_COMPLETION_SETTINGS_READY, [{
       model: typeof customApi.model === 'string' ? customApi.model : '',
       messages: generationPromptMessages(request),
-      stream: false,
+      stream: request.should_stream === true,
     }]);
     return call('generate', { config: request }).then(function (value) {
       var text = value && typeof value.text === 'string' ? value.text : '';
@@ -1907,8 +1949,18 @@ export function buildIframeScript(
     });
   };
   window.generateRaw = function (config) { return window.generate(config); };
-  window.stopGenerationById = function () { return false; };
-  window.stopAllGeneration = function () { return false; };
+  window.stopGenerationById = function (generationId) {
+    var id = typeof generationId === 'string' ? generationId : String(generationId == null ? '' : generationId);
+    if (id === '') return Promise.resolve(false);
+    return call('generate.stop', { generationId: id }).then(function (value) {
+      return value != null && value.stopped === true;
+    }, function () { return false; });
+  };
+  window.stopAllGeneration = function () {
+    return call('generate.stop-all', {}).then(function (value) {
+      return value != null && typeof value.stopped === 'number' && value.stopped > 0;
+    }, function () { return false; });
+  };
 
   // Regex compatibility (JSR signature): getTavernRegexes(option) returns the
   // ST-shaped entries synchronously; formatAsTavernRegexedString(text, source,
@@ -2485,14 +2537,64 @@ export function buildIframeScript(
   window.TavernHelper.Mvu = window.Mvu;
   window.TavernHelper.toastr = window.toastr;
   window.TavernHelper.eventSource = window.eventSource;
+  // Cross-iframe relay. eventEmit stays local (JSR semantics); this namespace
+  // is the explicit bridge for scripts that need to notify sibling containers.
+  window.TavernHelper.iframe = {
+    self: function () { return token; },
+    list: function () {
+      return call('iframe.list', {}).then(function (value) {
+        return value && Array.isArray(value.iframes) ? value.iframes : [];
+      });
+    },
+    broadcast: function (type) {
+      var args = Array.prototype.slice.call(arguments, 1);
+      return call('iframe.broadcast', { event: String(type), args: args }).then(function (value) {
+        return value && typeof value.delivered === 'number' ? value.delivered : 0;
+      });
+    },
+    emitTo: function (name, type) {
+      var target = String(name);
+      var args = Array.prototype.slice.call(arguments, 2);
+      return call('iframe.broadcast', { target: target, event: String(type), args: args }).then(function (value) {
+        return value && typeof value.delivered === 'number' ? value.delivered : 0;
+      });
+    },
+  };
   window.TavernHelper.EjsTemplate = window.EjsTemplate;
   window.TavernHelper.addEventListener = window.eventOn;
   window.TavernHelper.removeEventListener = window.eventRemoveListener;
 
 
-  // iframe-local settings objects MagVarUpdate reads directly.
-  window.__dshTavernExtensionSettings = window.__dshTavernExtensionSettings || {};
-  window.__dshTavernChatCompletionSettings = window.__dshTavernChatCompletionSettings || {};
+  // iframe-local settings objects MagVarUpdate reads directly. They are backed
+  // by the sandbox localStorage shim so settings survive a page reload without
+  // leaking into the host's real storage.
+  function persistentSettings(key) {
+    var initial = {};
+    try {
+      var stored = window.localStorage.getItem(key);
+      var parsed = stored === null ? null : JSON.parse(stored);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) initial = parsed;
+    } catch (_) {}
+    function persist(target) {
+      try { window.localStorage.setItem(key, JSON.stringify(target)); } catch (error) {
+        console.error('[TavernHelper] settings persist failed', error);
+      }
+    }
+    return new Proxy(initial, {
+      set: function (target, property, value) {
+        target[property] = value;
+        persist(target);
+        return true;
+      },
+      deleteProperty: function (target, property) {
+        delete target[property];
+        persist(target);
+        return true;
+      },
+    });
+  }
+  window.__dshTavernExtensionSettings = persistentSettings('__dshTavernExtensionSettings');
+  window.__dshTavernChatCompletionSettings = persistentSettings('__dshTavernChatCompletionSettings');
 
   // ST-shaped chat view for cards that read SillyTavern.getContext().chat
   // (mes / is_user / is_system / swipes) instead of TavernHelper messages.
@@ -2573,10 +2675,14 @@ export function buildIframeScript(
         chatId: state.chatId,
         chat: stChat(),
         chat_metadata: state.chatMetadata,
+        chatMetadata: state.chatMetadata,
         name1: state.userName,
         name2: state.characterName,
+        characterName: state.characterName,
+        userName: state.userName,
         characterId: String(state.characterId === undefined ? 0 : state.characterId),
         characters: window.SillyTavern.characters,
+        characterNames: clone((state.characters && state.characters.names) || []),
         eventSource: window.eventSource,
         eventTypes: window.tavern_events,
         extensionSettings: window.SillyTavern.extensionSettings,
@@ -2589,13 +2695,34 @@ export function buildIframeScript(
         getCurrentChatId: function () { return state.chatId; },
         getCharacterCardFields: function () {
           var data = state.characterData || {};
+          var mesExamples = typeof data.mes_example === 'string'
+            ? data.mes_example
+            : (typeof data.mesExamples === 'string' ? data.mesExamples : '');
           return {
             description: typeof data.description === 'string' ? data.description : '',
             personality: typeof data.personality === 'string' ? data.personality : '',
             scenario: typeof data.scenario === 'string' ? data.scenario : '',
-            mesExamples: typeof data.mes_example === 'string'
-              ? data.mes_example
-              : (typeof data.mesExamples === 'string' ? data.mesExamples : ''),
+            mesExamples: mesExamples,
+            systemPrompt: typeof data.system_prompt === 'string'
+              ? data.system_prompt
+              : (typeof data.systemPrompt === 'string' ? data.systemPrompt : ''),
+            postHistoryInstructions: typeof data.post_history_instructions === 'string'
+              ? data.post_history_instructions
+              : (typeof data.postHistoryInstructions === 'string' ? data.postHistoryInstructions : ''),
+            firstMessage: typeof data.first_mes === 'string'
+              ? data.first_mes
+              : (typeof data.firstMessage === 'string' ? data.firstMessage : ''),
+            alternateGreetings: Array.isArray(data.alternate_greetings)
+              ? data.alternate_greetings.slice()
+              : (Array.isArray(data.alternateGreetings) ? data.alternateGreetings.slice() : []),
+            creatorNotes: typeof data.creator_notes === 'string'
+              ? data.creator_notes
+              : (typeof data.creatorNotes === 'string' ? data.creatorNotes : ''),
+            creator: typeof data.creator === 'string' ? data.creator : '',
+            characterVersion: typeof data.character_version === 'string'
+              ? data.character_version
+              : (typeof data.characterVersion === 'string' ? data.characterVersion : ''),
+            tags: Array.isArray(data.tags) ? data.tags.filter(function (tag) { return typeof tag === 'string'; }) : [],
           };
         },
       };

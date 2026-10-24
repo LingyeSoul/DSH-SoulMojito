@@ -12,7 +12,18 @@
 
 ---
 
-## 0. 0. 2026-10-23 兼容层升级摘要
+## 0. 0. 2026-10-24 P0/P1 补齐摘要
+
+这一轮把「能调用」推进到「生成、控制、跨帧和存储真正闭环」：
+
+- **生成**：`TavernHelper.generate` 支持 `should_stream:true`，宿主把 SSE/JSON 增量转成 iframe 事件，最终 Promise 仍返回完整文本；`stopGenerationById` / `stopAllGeneration` 通过宿主 `AbortController` 真正中止。
+- **事件**：新增 `MESSAGE_SWIPED`、`PRESET_CHANGED`、`GENERATION_STARTED`、`GENERATION_STOPPED`，以及 `STREAM_TOKEN_RECEIVED_INCREMENTALLY/FULLY` 两个 iframe 事件。
+- **命令**：`/stop` 现在同时中止 ST 主生成与卡内生成桥；`/regenerate` 在 ST 架构且宿主空闲时走 `generateFor`（AgentTavern 仍显式报错）。
+- **跨帧**：新增 `TavernHelper.iframe.self/list/broadcast/emitTo`，宿主按 token 注册表转发事件；`eventEmit` 仍保持 iframe 本地语义。
+- **存储**：虚拟 IndexedDB 补 `createIndex`、index 查询与 cursor、`IDBKeyRange`；`extensionSettings` / `chatCompletionSettings` 与音频状态改为沙箱 localStorage 持久。
+- **框架面**：`getContext()` 补 `chatMetadata` / `characterNames` / 完整 `getCharacterCardFields()`。
+
+## 0. 0.0 2026-10-23 兼容层升级摘要
 
 这一轮把「名字能对上」推进到「契约能对上」：
 
@@ -170,7 +181,7 @@ type ChatMessageSwiped = ChatMessage & {
 | `setChatMessage(text, message_id, option?)` | ✅ | 旧版三段式（部分卡用它切第二个开场白）：`text` 写入指定楼层的当前 `swipe_id` 槽并选中；`option.swipe_id` 会提升到消息更新 |
 | `createChatMessages(list, option?)` | ✅ | `insert_before`（或旧名 `insert_at`）；`'end'` 或数字（支持负数） |
 | `deleteChatMessages(ids, option?)` | ✅ | 支持负数；重复 id 会去重；返回后快照已同步 |
-| `rotateChatMessages(begin, middle, end)` | ❌ | 未实现。需要时用 `getChatMessages` + `deleteChatMessages` + `createChatMessages` 组合，注意引用会变 |
+| `rotateChatMessages(begin, middle, end)` | ✅ | `[begin,middle)` 与 `[middle,end)` 两段交换；要求 `begin <= middle <= end`，越界会报错 |
 
 `option.refresh` 会被接收但**不做任何事**：本插件的段落渲染由宿主驱动，
 你的前端无法强制别的楼层重新渲染。改了当前楼层数据后，请自己重绘。
@@ -296,9 +307,9 @@ JSR 卡可以带自己的 OpenAI 兼容 API 源（URL + Key + 模型），并在
 | 函数 | 状态 | 语义 |
 |---|---|---|
 | `getModelList({apiurl, key})` | ✅ | 宿主 `GET <apiurl>/models`，返回去重排序后的模型 id 数组。API Key 只进 outbound `Authorization`，不回传、不落盘、不写日志 |
-| `generate(config)` | ✅ | 非流式 `POST <apiurl>/chat/completions`，返回字符串正文。支持 `custom_api` / `user_input` / `injects` / `overrides.chat_history.prompts`；`should_scan:true` 的 scan-only inject（`position:"none"`）会先按当前聊天世界书（会话副本优先）扫描并注入命中条目；`should_stream` 被接受但按最终文本一次返回 |
+| `generate(config)` | ✅ | `POST <apiurl>/chat/completions`，默认返回最终文本；`should_stream:true` 时宿主转发 SSE/JSON 增量（`iframe_events.STREAM_TOKEN_RECEIVED_INCREMENTALLY` / `..._FULLY`），最终 `Promise` 仍解析为完整文本。支持 `custom_api` / `user_input` / `injects` / `overrides.chat_history.prompts`；`should_scan:true` 的 scan-only inject（`position:"none"`）会先按当前聊天世界书（会话副本优先）扫描并注入命中条目 |
 | `generateRaw(config)` | ⚠️ | `generate` 的别名；没有 JSR 的 raw 注入细节 |
-| `stopGenerationById` / `stopAllGeneration` | ⚠️ | 返回 `false`：非流式请求没有可取消的句柄 |
+| `stopGenerationById(id)` / `stopAllGeneration()` | ✅ | 通过 `generate.stop` / `generate.stop-all` 中止宿主侧请求，返回 `Promise<boolean>`；`/stop` 也会同时中止 ST 主生成 |
 | `getModelList` 的 URL 规则 | — | 必须是无 query/hash 的 base URL；`https://`，或仅 loopback（`localhost` / `127.0.0.1` / `::1`）允许 `http://`；URL 内不能带账号密码 |
 | 请求上限 | — | 180s 超时、8MB 响应、2M 字符提示词、256 条消息；错误信息会 redact API Key |
 
@@ -306,6 +317,11 @@ JSR 卡可以带自己的 OpenAI 兼容 API 源（URL + Key + 模型），并在
 （参数 `(text, generationId)`）与 `tavern_events.CHAT_COMPLETION_SETTINGS_READY`，
 卡前端用它记录请求/响应；`tavern_events.GENERATION_ENDED` 不会伪造（没有真实楼层
 写入时发它只会让卡去读一个不存在的楼层）。
+
+流式请求的 `CHAT_COMPLETION_SETTINGS_READY` 里 `stream` 为 `true`；宿主在请求开始、
+每个增量、最终文本和停止时分别派发 `GENERATION_STARTED`、`STREAM_TOKEN_RECEIVED_INCREMENTALLY`、
+`STREAM_TOKEN_RECEIVED_FULLY`、`GENERATION_STOPPED`。停止接口返回 `Promise<boolean>`；
+句柄不存在时返回 `false`，不会伪报成功。
 
 > 卡内的 API Key 存在卡自己的 localStorage 里（通常是 WebCrypto 密文）。插件只
 > 在这一次 RPC 中把它转发给宿主，宿主用完即弃；不会进入 snapshot、state.json、
@@ -332,10 +348,14 @@ JSR 卡可以带自己的 OpenAI 兼容 API 源（URL + Key + 模型），并在
   两种记录形态共用同一通道：带 `bytes: ArrayBuffer` 的二进制记录（资源包缓存）
   原样落盘；普通对象记录（例如把聊天历史存成普通行的前端）按 JSON 编码后落盘，
   `get` / `getAll` 自动解码回原对象，`put` 的 key 支持显式第二参数或 `keyPath`。
-  支持范围：单 object store 的 keyPath、get/put/delete/clear/getAll/getAllKeys/
-  deleteDatabase；**不支持** index、cursor、多 store 复合事务、`IDBKeyRange`
-  ——调用这些缺口会显式抛错，不会静默返回空。`localStorage` 的内容也不会进入
-  真实浏览器存储，卡无法借此读取宿主 Cookie 或别的角色数据。
+  支持范围：单 object store 的 keyPath、get/put/delete/clear/getAll/getAllKeys、
+  `createIndex`、`index.get/getAll/getAllKeys/count`、`objectStore.openCursor`、
+  `index.openCursor/openKeyCursor`、`IDBKeyRange.only/lowerBound/upperBound/bound`、
+  `deleteDatabase`。索引描述随 store 元数据落盘，刷新后 `open` 能恢复。
+  **不支持**：`unique`/`multiEntry` 的写入约束、`index.delete`、`cursor.update`
+  （`cursor.delete` 可用）、多 store 复合事务的原子性；这些缺口不会被伪装成成功。
+  `localStorage` 的内容也不会进入真实浏览器存储，卡无法借此读取宿主 Cookie 或
+  别的角色数据。
 
 ---
 
@@ -367,21 +387,28 @@ JSR 卡可以带自己的 OpenAI 兼容 API 源（URL + Key + 模型），并在
 | `tavern_events.MESSAGE_SENT` | `message_sent` | 出现新的**用户**楼层 | `(message_id)` |
 | `tavern_events.MESSAGE_RECEIVED` | `message_received` | 出现新的**非用户**楼层 | `(message_id)` |
 | `tavern_events.MESSAGE_EDITED` | `message_edited` | 已有楼层正文或发言人变化 | `(message_id)` |
+| `tavern_events.MESSAGE_SWIPED` | `message_swiped` | 楼层 `swipe_id` 或 `swipes` 数量变化 | `(message_id)` |
 | `tavern_events.MESSAGE_DELETED` | `message_deleted` | 楼层消失 | `(第一个被删的 message_id)` |
 | `tavern_events.CHAT_CHANGED` | `chat_id_changed` | 绑定的聊天切换 | `(chatId)` |
+| `tavern_events.PRESET_CHANGED` | `preset_changed` | 快照里的激活预设变化 | `(presetName)` |
+| `tavern_events.GENERATION_STARTED` | `generation_started` | `TavernHelper.generate` 请求开始 | `(generationId)` |
+| `tavern_events.GENERATION_STOPPED` | `generation_stopped` | `stopGenerationById` / `stopAllGeneration` / `/stop` 中止 | `(generationId)` |
 | `iframe_events.MESSAGE_IFRAME_RENDER_STARTED` | `message_iframe_render_started` | 本 iframe 挂载 | `(token)` |
 | `iframe_events.MESSAGE_IFRAME_RENDER_ENDED` | `message_iframe_render_ended` | 本 iframe 卸载 | `(token)` |
 | `iframe_events.GENERATION_ENDED` | `js_generation_ended` | `TavernHelper.generate` 成功返回后 | `(text, generationId)` |
+| `iframe_events.STREAM_TOKEN_RECEIVED_INCREMENTALLY` | `js_stream_token_received_incrementally` | `should_stream:true` 的每个增量 | `(delta, generationId)` |
+| `iframe_events.STREAM_TOKEN_RECEIVED_FULLY` | `js_stream_token_received_fully` | 流式请求结束 | `(text, generationId)` |
 | `tavern_events.STREAM_TOKEN_RECEIVED` | `stream_token_received` | 快照比对发现**新/改**的非用户楼层 | `(最终正文, 楼层 id)`；只发一次最终文本，不是增量 token |
 | `tavern_events.CHARACTER_MESSAGE_RENDERED` | `character_message_rendered` | 同上 | `(楼层 id, 'normal')` |
 | `tavern_events.USER_MESSAGE_RENDERED` | `user_message_rendered` | 新/改用户楼层 | `(楼层 id)` |
-| `tavern_events.CHAT_COMPLETION_SETTINGS_READY` | `chat_completion_settings_ready` | `TavernHelper.generate` 发起前 | `({ model, messages, stream:false })`；供卡记录请求，不是宿主生成循环 |
+| `tavern_events.CHAT_COMPLETION_SETTINGS_READY` | `chat_completion_settings_ready` | `TavernHelper.generate` 发起前 | `({ model, messages, stream })`；`stream` 跟随 `should_stream`，供卡记录请求，不是宿主生成循环 |
 
 **其余常量**（`tavern_events` 共 82 个名字，`iframe_events` 共 9 个）：
 
-- **名字全部存在**（`tavern_events.MESSAGE_SWIPED`、`WORLD_INFO_ACTIVATED`、`PRESET_CHANGED` 都是字符串，`eventOn` 不会因 `undefined` 炸）；2026-10-23 起按 JSR 4.11.3 的完整词汇表安装。
+- **名字全部存在**（`WORLD_INFO_ACTIVATED` 等未桥接项也是字符串，`eventOn` 不会因 `undefined` 炸）；2026-10-23 起按 JSR 4.11.3 的完整词汇表安装。
 - **但只有上表列出的会被触发**。这是刻意的：宿主没有该信号的观测面，凭空发事件等于给你的
-  前端假数据，会让「等事件再渲染」的逻辑永久卡住。
+  前端假数据，会让「等事件再渲染」的逻辑永久卡住；`WORLD_INFO_ACTIVATED` 仍未桥接，
+  需要世界书激活轨迹时请看提示词查看器或轮询。
 
 > 实践建议：**要刷新就轮询自己的数据**（`getVariables` / `getChatMessages` + `setInterval`，
 > 或者像内置状态栏那样在 `eventOn(MESSAGE_RECEIVED)` 之外再加一个 1-2s 的低频 `setInterval`）。
@@ -425,7 +452,7 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 
 | 函数 | 状态 | 说明 |
 |---|:--:|---|
-| `SillyTavern.getContext()` | ⚠️ | 只返回最小只读面：`chatId` / `chat` / `chat_metadata` / `name1`（你）/ `name2`（角色）/ `characterId`（恒 0）/ `characters`（当前角色卡）/ `getCharacterCardFields()`（恒空字段）。`getContext()` 里仍没有 `extensionSettings`、`eventSource`、`eventTypes`；这些兼容字段直接挂在 `SillyTavern.*`（`extensionSettings` / `chatCompletionSettings` 为 iframe 内存，`saveChat` / `saveSettingsDebounced` 为 Promise/空操作——变量与楼层已由 helper RPC 落盘，不会写宿主设置） |
+| `SillyTavern.getContext()` | ⚠️ | 返回只读面：`chatId` / `chat` / `chat_metadata` / `chatMetadata` / `name1`（你）/ `name2`（角色）/ `characterId`（当前索引）/ `characters`（当前角色卡）/ `characterNames` / `eventSource` / `eventTypes` / `extensionSettings` / `chatCompletionSettings` / `getCharacterCardFields()`（当前卡真实字段）。`extensionSettings` / `chatCompletionSettings` 由沙箱 localStorage 持久（页面重载仍在），`saveChat` / `saveSettingsDebounced` 为 Promise/空操作——变量与楼层已由 helper RPC 落盘，不会写宿主设置 |
 | `SillyTavern.SlashCommandParser` / `SillyTavern.SlashCommand` | ✅ | iframe 本地命令注册面：`fromProps({name, callback, helpString})` + `addCommandObject(command)` + `commands`；`triggerSlash` 优先命中本地命令并在 iframe 内执行回调，带 `\|` 的管道仍交给宿主解释器（见 §6） |
 | `SillyTavern.loadWorldInfo(name)` | ✅ | 读当前聊天的世界书并返回 ST 形状 `{ entries: { [uid]: entry } }`；优先会话副本，其次基础资产/卡内嵌书。只读，写回仍走 `updateWorldbookWith` 的会话副本 |
 | `getCurrentMessageId()` | ✅ | 当前 iframe 所属楼层；侧栏/MVU 模板为 `-1`（最新）。没有楼层绑定时也不要拿它做范围上界，优先 `getLastMessageId()` |
@@ -451,6 +478,7 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 | `getAllEnabledScriptButtons()` | ✅ | 聚合三种来源里启用脚本的可见按钮（`{ [scriptId]: [{ button_id, button_name }] }`） |
 | `getButtonEvent(name)` / `eventOnButton(name, fn)` | ✅ | 事件 id 为 `<scriptId>_<hash>`；容器按钮条按同一 id 派发 |
 | `getIframeName()` / `getMessageId(name)` / `reloadIframe()` | ✅ | 消息 iframe 为 `TH-message-<id>`，脚本容器为 `TH-script-<id>`；未知名字抛错 |
+| `TavernHelper.iframe.self()` / `list()` / `broadcast(type, ...args)` / `emitTo(token, type, ...args)` | ✅ | 跨 iframe 显式通道：`self` 返回本 iframe 的 token，`list` 返回当前挂载的全部 token，广播不回声给发送者；`eventEmit` 仍是 iframe 本地语义 |
 | `generate(config)` / `generateRaw(config)` | ⚠️ | 见 §2.4：宿主代理卡内 OpenAI 兼容 API，非流式返回文本；仍需 `custom_api` |
 | `getModelList({apiurl, key})` | ✅ | 见 §2.4：返回模型 id 数组；Key 不回传 |
 | `stopGenerationById` / `stopAllGeneration` | ⚠️ | 返回 `false`（非流式无可取消句柄） |
@@ -488,7 +516,7 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 | `playAudio(type, {url, title?})` / `pauseAudio(type)` / `audioEnable` / `audioImport` / `audioMode` / `audioPlay` / `audioSelect` | ✅ | iframe 内 `<audio>`，`bgm` / `ambient` 两通道 |
 | `getAudioList` / `replaceAudioList` / `appendAudioList` / `getAudioSettings` / `setAudioSettings` / `getCurrentAudio` | ⚠️ | 进程内音频状态，语义对齐 JSR 的可观察字段；不持久化、不跨 iframe |
 | `localStorage` | ✅ | 按角色持久，见 §2.5（上限 512KB/角色）；`sessionStorage` 仍为 iframe 内存 |
-| `indexedDB` | ✅ | 虚拟 IndexedDB，见 §2.5：单 store 的 open/create/transaction/get/put/delete/clear/getAll/getAllKeys/deleteDatabase；二进制与普通对象两种记录都支持；不支持 index/cursor/多 store 事务 |
+| `indexedDB` | ✅ | 虚拟 IndexedDB，见 §2.5：单 store 的 open/create/transaction/get/put/delete/clear/getAll/getAllKeys/deleteDatabase、createIndex、index 查询与 cursor、`IDBKeyRange`；二进制与普通对象两种记录都支持；`unique`/`multiEntry`/`index.delete`/`cursor.update` 与多 store 原子事务仍不支持 |
 | `getCharNames()` / `getCharacterNames()` | ✅ | 角色名列表 |
 | `builtin.renderMarkdown` / `copyText` / `parseRegexFromString` / `uuidv4` / `saveSettings` / `addOneMessage` | ✅ | 宿主无关的子集；`addOneMessage` 映射到 `createChatMessages`（会真实落盘） |
 | `builtin.reloadEditor` / `renderPromptManager` / `promptManager` / `getImageTokenCost` / `getVideoTokenCost` | ❌ | 触及宿主 DOM/生成管线，显式抛错 |
@@ -501,10 +529,10 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 
 | 函数 | 结果 |
 |---|---|
-| `generate()` / `generateRaw()` | ✅ / ⚠️ 见 §2.4：卡内 OpenAI 兼容源由宿主代理，非流式返回文本 |
-| `stopGenerationById()` / `stopAllGeneration()` | ⚠️ 返回 `false`（非流式无可取消句柄） |
+| `generate()` / `generateRaw()` | ✅ / ⚠️ 见 §2.4：卡内 OpenAI 兼容源由宿主代理，支持流式增量，最终 Promise 返回完整文本 |
+| `stopGenerationById()` / `stopAllGeneration()` | ✅ 通过宿主 AbortController 中止，返回 `Promise<boolean>` |
 | `triggerSlash('/trigger')` | ✅（受控）**两种姿势**：① 同一次调用里 `/send 文本\|/trigger`（卡最常见的开局/行动写法）；② 本 iframe 先用 `createChatMessages` 建用户楼层，再单独 `/trigger`。桥接层把这次写入的**用户楼层**替换成一次宿主 composer 发送，随后由 AgentLoop 生成；两条都不成立时抛 `trigger is not available in this context` |
-| `triggerSlash('/regenerate')` / `'/stop'` | ❌ 没有接驱动，会抛 `/regenerate is not available in this context` 一类错误 |
+| `triggerSlash('/regenerate')` / `'/stop'` | ⚠️ `/regenerate` 仅在 **ST 架构 + 宿主会话空闲**时可用（走宿主 `generateFor`）；AgentTavern 或生成中会显式报错。`/stop` 同时中止 ST 主生成与卡内 `generate` 桥，返回空输出 |
 
 生成由宿主 AgentLoop 驱动。卡前端只能通过上述受控路径把**自己刚写入的那一条用户楼层**交给宿主；不能让前端任意改写已有历史或重复结算，这是架构边界，不是"还没做"。
 
@@ -536,7 +564,7 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 | `errorCatched` / `getMessageId` | ✅ 均已提供 |
 | `registerVariableSchema` | ⚠️ 保存 schema 供 iframe 内变量管理器读取，不参与服务端校验 |
 | `injectPrompts` / `uninjectPrompts` | ⚠️ 只影响本 iframe 的 `TavernHelper.generate`，不进入宿主 AgentLoop |
-| `TavernHelper.iframe` 家族（跨 iframe 通信） | ❌ 不存在（本插件没有跨 iframe 注册表） |
+| `TavernHelper.iframe` 家族（跨 iframe 通信） | ✅ `self` / `list` / `broadcast` / `emitTo`；token 注册表由宿主维护，发送者不自收 |
 
 **调用不存在或明确不支持的函数会抛带原因的 error**——这是特性：
 它让"照抄的代码"在第一时间显式失败，而不是悄悄什么都不做。
@@ -565,8 +593,9 @@ SillyTavern.SlashCommandParser.addCommandObject(
 await triggerSlash('/openpanel'); // 本地执行，不产生 helper 请求
 ```
 
-生成控制里只有 `/trigger` 接通了受控路径（见 §5.1）：它把本次写入的用户楼层交给宿主
-composer，由 AgentLoop 生成一次；`/regenerate` / `/stop` 仍显式报错。
+生成控制里 `/trigger` 把本次写入的用户楼层交给宿主 composer，由 AgentLoop 生成一次；
+`/regenerate` 在 ST 架构走宿主 `generateFor`（AgentTavern 或生成中显式报错）；
+`/stop` 同时中止 ST 主生成与卡内 `generate` 桥。
 
 服务端可用命令（`POST /helper` 的 `slash` op）：
 
@@ -577,7 +606,7 @@ composer，由 AgentLoop 生成一次；`/regenerate` / `/stop` 仍显式报错�
 | 聊天 | `/send` `/sys` `/cut` | ✅ |
 | 正则 | `/regex name=x` | ✅ |
 | 生成 | `/trigger`（含 `/send 文本\|/trigger` 管道） | ✅ 受控：本次写入的用户楼层交给宿主 composer（见 §5.1） |
-| 生成 | `/regenerate` `/stop` | ❌ 抛错（见 §5.1） |
+| 生成 | `/regenerate` `/stop` | ⚠️ `/regenerate` 仅 ST 架构可用；`/stop` 两架构都可用（中止在途生成） |
 | iframe 本地注册命令（`SlashCommandParser.addCommandObject`） | ✅ 在 iframe 内执行回调，不经宿主 |
 | 其它 ST 命令（`/echo` 之外的显示类、`/impersonate`…） | ❌ 解析失败 |
 

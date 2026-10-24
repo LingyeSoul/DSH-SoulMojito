@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   FrontendGenerationError,
   generateWithCustomApi,
+  generateWithCustomApiStream,
   listCustomApiModels,
 } from '../src/frontend-generation.js'
 
@@ -52,6 +53,18 @@ beforeAll(async () => {
         return
       }
       lastChatRequest = JSON.parse(await readBody(req)) as unknown
+      const streamed = lastChatRequest !== null
+        && typeof lastChatRequest === 'object'
+        && (lastChatRequest as { stream?: unknown }).stream === true
+      if (streamed) {
+        res.statusCode = 200
+        res.setHeader('content-type', 'text/event-stream')
+        res.write('data: {"choices":[{"delta":{"content":"streamed "}}]}\n\n')
+        res.write('data: {"choices":[{"delta":{"content":"text"}}]}\n\n')
+        res.write('data: [DONE]\n\n')
+        res.end()
+        return
+      }
       sendJson(res, 200, chatResponse)
       return
     }
@@ -97,6 +110,19 @@ describe('frontend generation bridge', () => {
         { role: 'user', content: 'main instruction' },
       ],
     })
+  })
+
+  it('streams text deltas and returns the final concatenated text', async () => {
+    const deltas: string[] = []
+    const text = await generateWithCustomApiStream({
+      custom_api: { apiurl: baseUrl, key: API_KEY, model: 'model-a' },
+      user_input: 'stream this',
+      should_stream: true,
+      generation_id: 'gen-stream',
+    }, (delta) => { deltas.push(delta) }, new AbortController().signal)
+    expect(text).toBe('streamed text')
+    expect(deltas.join('')).toBe('streamed text')
+    expect(lastChatRequest).toMatchObject({ stream: true })
   })
 
   it('returns tool-call arguments when the provider sends content: null', async () => {

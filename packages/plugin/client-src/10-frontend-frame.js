@@ -11,6 +11,10 @@
     //   ——改写它们需 calc(var(...) * 0.5) 乘法形态，语义变更面大；
     // - 注释与字符串字面量里的 100vh 原样保留（content:"100vh" 是显示文本）。
     // 服务端 mod HTML 出口（src/mods/http.ts renderModHtmlDocument）同构同款。
+    // Cross-iframe event relay for TavernHelper.iframe. Each mounted helper
+    // bridge registers its own emit function; the token is the iframe identity.
+    const helperFrameEmitters = new Map()
+
     const VIEWPORT_MESSAGE = 'dsh-soulmojito:viewport'
     const VIEWPORT_CSS_VAR = '--dt-viewport-height'
     const FRONTEND_BACKGROUND_CSS_VAR = '--dt-host-background'
@@ -610,6 +614,55 @@
         const emitEvent = (event, args) => {
           reply({ type: HELPER_EVENT_MESSAGE, event, args: Array.isArray(args) ? args : [] })
         }
+        helperFrameEmitters.set(token, emitEvent)
+        const streamFrontendGenerate = async (current, config) => {
+          const generationId = config && typeof config.generation_id === 'string' ? config.generation_id : ''
+          emitEvent(HELPER_TAVERN_EVENTS.GENERATION_STARTED, [generationId])
+          const response = await fetch(`${API}/frontend/generate`, {
+            method: 'POST',
+            headers: jsonHeaders(),
+            body: JSON.stringify({ character: current.character, chatId: current.chatId, config }),
+          })
+          if (!response.ok) {
+            const body = await response.json().catch(() => ({}))
+            throw new Error(body.message || `HTTP ${response.status}`)
+          }
+          if (response.body === null) throw new Error('generation stream has no response body')
+          const reader = response.body.getReader()
+          const decoder = new TextDecoder()
+          let buffer = ''
+          let text = ''
+          try {
+            for (;;) {
+              const chunk = await reader.read()
+              if (chunk.done) break
+              buffer += decoder.decode(chunk.value, { stream: true })
+              let newline = buffer.indexOf('\n')
+              while (newline >= 0) {
+                const line = buffer.slice(0, newline).trim()
+                buffer = buffer.slice(newline + 1)
+                if (line !== '') {
+                  const event = JSON.parse(line)
+                  if (event.type === 'delta' && typeof event.text === 'string') {
+                    text += event.text
+                    emitEvent(HELPER_IFRAME_EVENTS.STREAM_TOKEN_RECEIVED_INCREMENTALLY, [event.text, generationId])
+                  } else if (event.type === 'done' && typeof event.text === 'string') {
+                    text = event.text
+                  } else if (event.type === 'error') {
+                    throw new Error(typeof event.message === 'string' ? event.message : 'generation failed')
+                  } else if (event.type === 'aborted') {
+                    throw new Error('generation aborted')
+                  }
+                }
+                newline = buffer.indexOf('\n')
+              }
+            }
+          } finally {
+            reader.releaseLock()
+          }
+          emitEvent(HELPER_IFRAME_EVENTS.STREAM_TOKEN_RECEIVED_FULLY, [text, generationId])
+          return { text }
+        }
         const diff = (previous, next) => {
           if (!next) return
           if (previous === null) {
@@ -617,6 +670,9 @@
             return
           }
           if (previous.chatId !== next.chatId) emitEvent(HELPER_TAVERN_EVENTS.CHAT_CHANGED, [next.chatId])
+          const previousPreset = previous.presets && typeof previous.presets === 'object' ? previous.presets.active : null
+          const nextPreset = next.presets && typeof next.presets === 'object' ? next.presets.active : null
+          if (previousPreset !== nextPreset) emitEvent(HELPER_TAVERN_EVENTS.PRESET_CHANGED, [nextPreset])
           const before = Array.isArray(previous.messages) ? previous.messages : []
           const after = Array.isArray(next.messages) ? next.messages : []
           const byId = new Map(before.map((message) => [message.message_id, message]))
@@ -636,6 +692,11 @@
                 emitEvent(HELPER_TAVERN_EVENTS.STREAM_TOKEN_RECEIVED, [String(message.message ?? ''), String(message.message_id)])
               }
               continue
+            }
+            const oldSwipes = Array.isArray(old.swipes) ? old.swipes.length : 0
+            const nextSwipes = Array.isArray(message.swipes) ? message.swipes.length : 0
+            if (old.swipe_id !== message.swipe_id || oldSwipes !== nextSwipes) {
+              emitEvent(HELPER_TAVERN_EVENTS.MESSAGE_SWIPED, [message.message_id])
             }
             if (old.message !== message.message || old.name !== message.name) {
               emitEvent(HELPER_TAVERN_EVENTS.MESSAGE_EDITED, [message.message_id])
@@ -702,6 +763,42 @@
             reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value: { applied: frame !== null } })
             return
           }
+          if (data.op === 'generate') {
+            const config = data.payload && typeof data.payload.config === 'object' ? data.payload.config : {}
+            streamFrontendGenerate(current, config)
+              .then((value) => reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value }))
+              .catch((cause) => {
+                const message = cause instanceof Error ? cause.message : String(cause)
+                if (message === 'generation aborted') {
+                  const generationId = typeof config.generation_id === 'string' ? config.generation_id : ''
+                  emitEvent(HELPER_TAVERN_EVENTS.GENERATION_STOPPED, [generationId])
+                }
+                fail(message)
+              })
+            return
+          }
+          if (data.op === 'iframe.list') {
+            reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value: { iframes: [...helperFrameEmitters.keys()] } })
+            return
+          }
+          if (data.op === 'iframe.broadcast') {
+            const event = typeof data.payload?.event === 'string' ? data.payload.event : ''
+            if (event === '') {
+              fail('iframe.broadcast needs an event name')
+              return
+            }
+            const args = Array.isArray(data.payload?.args) ? data.payload.args : []
+            const target = typeof data.payload?.target === 'string' ? data.payload.target : ''
+            let delivered = 0
+            for (const [frameToken, emit] of helperFrameEmitters) {
+              if (frameToken === token) continue
+              if (target !== '' && frameToken !== target) continue
+              emit(event, args)
+              delivered += 1
+            }
+            reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value: { delivered } })
+            return
+          }
           if (DshFrontendStorage.isIdbBridgeOp(data.op)) {
             const payload = data.payload && typeof data.payload === 'object' ? data.payload : {}
             void DshFrontendStorage.handleIdbBridge(data.op, payload, current.character, API, fetch)
@@ -766,6 +863,58 @@
             await handOffUserFloor(text)
             return { output: '', chatChanged: value.chatChanged === true }
           }
+          if (data.op === 'slash' && String(data.payload?.command ?? '').trim().toLowerCase() === '/stop') {
+            if (typeof hostSessionId === 'string' && hostSessionId !== '') {
+              stopGeneration(hostSessionId)
+              emitEvent(HELPER_TAVERN_EVENTS.GENERATION_STOPPED, [hostSessionId])
+            }
+            Promise.all([
+              api('helper', {
+                method: 'POST',
+                headers: jsonHeaders(),
+                body: JSON.stringify({
+                  op: 'generate.stop-all',
+                  character: current.character,
+                  chatId: current.chatId,
+                }),
+              }),
+              api('helper', {
+                method: 'POST',
+                headers: jsonHeaders(),
+                body: JSON.stringify({
+                  op: 'generation.stop',
+                  character: current.character,
+                  chatId: current.chatId,
+                }),
+              }),
+            ])
+              .then(() => reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value: { output: '', chatChanged: false } }))
+              .catch((cause) => fail(cause instanceof Error ? cause.message : String(cause)))
+            return
+          }
+          if (data.op === 'slash' && String(data.payload?.command ?? '').trim().toLowerCase() === '/regenerate') {
+            if (typeof hostSessionId !== 'string' || hostSessionId === '') {
+              fail('/regenerate is not available in this context (no host session)')
+              return
+            }
+            if (bindingArchitecture(bindingRef.current) !== 'st') {
+              fail('/regenerate is only available in the ST architecture')
+              return
+            }
+            if (snapshot.runs[hostSessionId]?.busy) {
+              fail('/regenerate is not available while a generation is running')
+              return
+            }
+            generateFor(hostSessionId, bindingRef.current, 'regenerate', '')
+              .then(() => {
+                const run = snapshot.runs[hostSessionId]
+                if (run && typeof run.error === 'string' && run.error !== '') throw new Error(run.error)
+                postSnapshot()
+                reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value: { output: '', chatChanged: true } })
+              })
+              .catch((cause) => fail(cause instanceof Error ? cause.message : String(cause)))
+            return
+          }
           if (data.op === 'slash' && String(data.payload?.command ?? '') === '/trigger') {
             const pending = pendingTriggerRef.current
             // Only a user floor created by this iframe can be replaced. Other
@@ -790,6 +939,13 @@
             }),
           }).then(async (result) => {
             const value = data.op === 'slash' ? await handOffTriggeredSlash(result.value) : result.value
+            const stopped = value && typeof value === 'object'
+              ? (value.stopped === true || (typeof value.stopped === 'number' && value.stopped > 0))
+              : false
+            if ((data.op === 'generate.stop' || data.op === 'generate.stop-all') && stopped) {
+              const generationId = typeof data.payload?.generationId === 'string' ? data.payload.generationId : ''
+              emitEvent(HELPER_TAVERN_EVENTS.GENERATION_STOPPED, [generationId])
+            }
             reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value })
             if (data.op === 'storage.set') frontendStorageCache.delete(current.character)
             if (data.op === 'messages.create') {
@@ -824,6 +980,7 @@
         return () => {
           frame?.removeEventListener('load', onFrameLoad)
           removeEventListener('message', onMessage)
+          helperFrameEmitters.delete(token)
           emitEvent(HELPER_IFRAME_EVENTS.MESSAGE_IFRAME_RENDER_ENDED, [token])
         }
       }, [token, refreshKey, hostSessionId])

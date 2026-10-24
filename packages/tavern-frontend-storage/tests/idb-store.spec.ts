@@ -46,10 +46,15 @@ describe('host-backed virtual IndexedDB', () => {
   it('opens, creates stores and round-trips records with metadata', async () => {
     const opened = await openIdbDatabase(root, CHARACTER, DATABASE, 1)
     expect(opened).toMatchObject({ version: 1, previousVersion: 0, stores: [] })
-    await createIdbStore(root, CHARACTER, DATABASE, 'records', 'key')
+    await createIdbStore(root, CHARACTER, DATABASE, 'records', 'key', {
+      byChat: { keyPath: 'chatId', unique: false, multiEntry: false },
+    })
     const again = await openIdbDatabase(root, CHARACTER, DATABASE, 1)
     expect(again).toMatchObject({ version: 1, previousVersion: 1, stores: ['records'] })
     expect(again.storeKeyPaths).toEqual({ records: 'key' })
+    expect(again.storeIndexes).toEqual({
+      records: { byChat: { keyPath: 'chatId', unique: false, multiEntry: false } },
+    })
 
     const put = await putIdbRecordFromFile(
       root,
