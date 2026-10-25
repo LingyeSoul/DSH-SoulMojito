@@ -11,11 +11,13 @@
  *     records/<sha256(key)>.bin  raw ArrayBuffer payload
  *
  * Names are always hashed, so a card cannot escape its directory. Records are
- * written to a temp file and renamed atomically; metadata writes are serialized
- * per database. Quotas are per record and per character, not global.
+ * written to a temp file and renamed atomically (cross-device staging falls
+ * back to copy + fsync); metadata is replaced by a same-directory rename so a
+ * crash keeps the previous meta.json. Metadata writes are serialized per
+ * database. Quotas are per record and per character, not global.
  */
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 export const IDB_MAX_RECORD_BYTES = 1024 * 1024 * 1024
@@ -161,14 +163,62 @@ async function readDatabase(root: string, character: string, name: string): Prom
   }
 }
 
+let temporarySeq = 0
+
+/** Unique sibling temp name; same directory as the target, so rename stays on-device. */
+function temporarySibling(target: string): string {
+  temporarySeq += 1
+  return `${target}.${process.pid}.${Date.now()}.${temporarySeq}.tmp`
+}
+
+/** Flush file content before publishing it with rename (rename only orders names). */
+async function syncFile(path: string): Promise<void> {
+  const handle = await open(path, 'r+')
+  try {
+    await handle.sync()
+  } finally {
+    await handle.close()
+  }
+}
+
+/**
+ * Publish `source` at `target` with rename. POSIX rename replaces atomically; a
+ * Windows handle on the target can make rename fail (EPERM/EACCES/EBUSY/EEXIST),
+ * and only then is remove + rename the recovery path (it leaves a small window
+ * where the target is absent, unlike the rename-only path).
+ */
+async function renameReplacing(source: string, target: string): Promise<void> {
+  try {
+    await rename(source, target)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY' && code !== 'EEXIST') throw error
+    await rm(target, { force: true })
+    await rename(source, target)
+  }
+}
+
+function describeFsError(error: unknown): string {
+  if (error instanceof Error) {
+    const code = (error as NodeJS.ErrnoException).code
+    return code === undefined ? error.message : `${code}: ${error.message}`
+  }
+  return String(error)
+}
+
 async function writeDatabase(root: string, character: string, database: IdbDatabaseDescriptor): Promise<void> {
   const dir = databaseDir(root, character, database.name)
   await mkdir(dir, { recursive: true })
   const target = metaPath(dir)
-  const temporary = `${target}.${process.pid}.${Date.now()}.tmp`
-  await writeFile(temporary, `${JSON.stringify(database)}`, 'utf8')
-  await rm(target, { force: true })
-  await rename(temporary, target)
+  const temporary = temporarySibling(target)
+  try {
+    await writeFile(temporary, `${JSON.stringify(database)}`, 'utf8')
+    await syncFile(temporary)
+    await renameReplacing(temporary, target)
+  } catch (error) {
+    await rm(temporary, { force: true })
+    throw error
+  }
 }
 
 function withDatabaseLock<T>(root: string, character: string, name: string, operation: () => Promise<T>): Promise<T> {
@@ -264,6 +314,48 @@ export async function createIdbStore(
   })
 }
 
+/**
+ * Move the caller's staged upload into its record slot. A same-device rename is
+ * atomic. EXDEV (staging in os.tmpdir() tmpfs, or a data root on another drive)
+ * falls back to copy + fsync in the destination directory, rename there, then
+ * unlink the source; the source survives until the destination is published.
+ */
+async function moveRecordFile(source: string, destination: string): Promise<void> {
+  try {
+    await rename(source, destination)
+    return
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'EXDEV') {
+      await copyRecordAcrossDevices(source, destination)
+      return
+    }
+    if (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY' && code !== 'EEXIST') {
+      throw new Error(`idb record could not be moved to '${destination}': ${describeFsError(error)}`)
+    }
+  }
+  try {
+    await renameReplacing(source, destination)
+  } catch (error) {
+    throw new Error(`idb record could not be moved to '${destination}': ${describeFsError(error)}`)
+  }
+}
+
+async function copyRecordAcrossDevices(source: string, destination: string): Promise<void> {
+  const staged = temporarySibling(destination)
+  try {
+    await copyFile(source, staged)
+    await syncFile(staged)
+    await renameReplacing(staged, destination)
+  } catch (error) {
+    await rm(staged, { force: true })
+    throw new Error(
+      `idb record could not be copied from '${source}' to '${destination}' after a cross-device rename failed (EXDEV): ${describeFsError(error)}`,
+    )
+  }
+  await rm(source, { force: true })
+}
+
 /** Move a temp upload into the record slot and update metadata. */
 export async function putIdbRecordFromFile(
   root: string,
@@ -292,8 +384,7 @@ export async function putIdbRecordFromFile(
       throw new Error(`idb storage for '${character}' exceeds ${IDB_MAX_TOTAL_BYTES} bytes`)
     }
     await mkdir(dirname(destination), { recursive: true })
-    await rm(destination, { force: true })
-    await rename(temporaryPath, destination)
+    await moveRecordFile(temporaryPath, destination)
     database.records[keyHash] = { store, key, size, updatedAt: Date.now(), meta }
     database.updatedAt = Date.now()
     try {

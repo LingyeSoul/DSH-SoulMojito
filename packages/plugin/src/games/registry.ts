@@ -31,7 +31,7 @@ import type { Dirent } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { unzipArchive } from '../../../tavern-format/src/index.js'
+import { unzipArchive, ZipLimitError } from '../../../tavern-format/src/index.js'
 import { satisfiesVersionRange } from '../mods/manifest.js'
 import { gitClone, parseGitSource } from '../mods/install.js'
 import { blackjack } from './builtin/blackjack.js'
@@ -315,13 +315,14 @@ export class GameRegistry {
 
   /**
    * 从 zip 字节导入（面板导入口，`POST games/install {zipBase64}`，2026-10-17）：
-   * base64 解码 → tavern-format 解包（fflate）→ 路径清洗（穿越/绝对路径拒绝，
-   * 垃圾条目跳过，三道上限见 GAME_ZIP_*）→ 单层包装目录自动下潜 → 落临时目录 →
+   * base64 解码 → tavern-format 解包（fflate，三道上限在解压前按声明尺寸校验，
+   * 见 unzipGamePackage）→ 路径清洗（穿越/绝对路径拒绝，垃圾条目跳过）→
+   * 单层包装目录自动下潜 → 落临时目录 →
    * 复用 installFromPath 的全量校验与落地（installed/<id>/ + 装载 + 返回快照）。
    * 临时目录 finally 清理；任何校验失败抛可读错误（service 层统一转 400）。
    */
   async installFromZip(zipBase64: string, force = false): Promise<GameSummary> {
-    const files = selectGamePackageFiles(unzipArchive(decodeZipBase64(zipBase64)))
+    const files = selectGamePackageFiles(unzipGamePackage(decodeZipBase64(zipBase64)))
     const workRoot = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-gamezip-'))
     try {
       for (const [name, data] of files) {
@@ -441,12 +442,32 @@ function decodeZipBase64(zipBase64: string): Uint8Array {
 }
 
 /**
+ * 解包上传的 zip：三道上限在 fflate 解压每个条目前按中央目录声明校验（deflate
+ * bomb 不会先占内存）；ZipLimitError 翻回面板/游戏包作者既有的中文文案。
+ */
+function unzipGamePackage(bytes: Uint8Array): Record<string, Uint8Array> {
+  try {
+    return unzipArchive(bytes, {
+      maxEntries: GAME_ZIP_MAX_ENTRIES,
+      maxFileBytes: GAME_ZIP_MAX_FILE_BYTES,
+      maxTotalBytes: GAME_ZIP_MAX_TOTAL_BYTES,
+    })
+  } catch (cause) {
+    if (!(cause instanceof ZipLimitError)) throw cause
+    if (cause.kind === 'entries') throw new Error(`zip 条目数超过上限（${GAME_ZIP_MAX_ENTRIES}）`)
+    if (cause.kind === 'total-size') throw new Error(`zip 解包总量超过 ${GAME_ZIP_MAX_TOTAL_BYTES} 字节上限`)
+    throw new Error(`zip 内文件 '${cause.entry ?? ''}' 超过 ${GAME_ZIP_MAX_FILE_BYTES} 字节上限`)
+  }
+}
+
+/**
  * zip 条目 → 游戏包文件集（安全与体积纪律，面板上传路径）：
  * - 反斜杠归一为正斜杠；目录条目（尾 `/`）与 `__MACOSX/`、`.DS_Store` 垃圾跳过
  *   （macOS 压缩产物的常见噪声，不该让导入失败）；
  * - 绝对路径（前导 `/` 或盘符）与含 `.` / `..` / 空段的路径一律拒绝（zip-slip
- *   防线）；条目数 / 单文件 / 总量三道上限（解包后校验——与 CHARX 的 unzipSync
- *   同信任级，防的是误用而非密码学级对抗）；
+ *   防线）；条目数 / 单文件 / 总量三道上限在这里按解压后实际字节再验一遍
+ *   （unzipGamePackage 已按中央目录声明在解压前拒绝，这里是纵深防御，防声明
+ *   尺寸与真实尺寸不符）；
  * - 全部条目同属一个顶层目录且根无 game.json 时剥掉该层（「压缩文件夹」形态）；
  * - 最终必须存在 game.json（三件套其余两件由 loadInstalled 校验，缺失入 broken 册）。
  */

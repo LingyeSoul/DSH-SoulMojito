@@ -24,7 +24,7 @@ describe('panel asset editors use a modal dialog', () => {
     expect(source).toContain("h('div', { className: 'dt-editor-modal-head' }")
     expect(source).toContain("h('div', { className: 'dt-editor-modal-body' }, children)")
     // The dialog wraps the dirty guard so overlay/Escape cannot discard drafts.
-    expect(EDITOR_DIALOG_RETURN).toBeTruthy()
+    expect(source).toContain(EDITOR_DIALOG_RETURN)
   })
 
   it('mounts the character, world book, preset, regex and persona editors in dialogs', () => {

@@ -1937,6 +1937,13 @@ function unzipSync(data, opts) {
   return files;
 }
 
+// packages/tavern-format/src/zip.ts
+var DEFAULT_ZIP_LIMITS = {
+  maxEntries: 256,
+  maxFileBytes: 64 * 1024 * 1024,
+  maxTotalBytes: 128 * 1024 * 1024
+};
+
 // packages/tavern-store/src/store.ts
 import { createHash } from "node:crypto";
 import { promises as fs2 } from "node:fs";
@@ -2623,6 +2630,65 @@ function serializeChatLog(ir) {
   return lines.join("\n") + "\n";
 }
 
+// packages/tavern-format/lib/zip.js
+var ZipArchiveError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ZipArchiveError";
+  }
+};
+var ZipLimitError = class extends ZipArchiveError {
+  kind;
+  entry;
+  constructor(message, kind, entry) {
+    super(message);
+    this.name = "ZipLimitError";
+    this.kind = kind;
+    this.entry = entry;
+  }
+};
+var DEFAULT_ZIP_LIMITS2 = {
+  maxEntries: 256,
+  maxFileBytes: 64 * 1024 * 1024,
+  maxTotalBytes: 128 * 1024 * 1024
+};
+function requireLimit(value, name2) {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new ZipArchiveError(`invalid zip limit '${name2}': ${String(value)}`);
+  }
+  return value;
+}
+function unzipArchive2(bytes, limits) {
+  const source = limits ?? DEFAULT_ZIP_LIMITS2;
+  const maxEntries = requireLimit(source.maxEntries, "maxEntries");
+  const maxFileBytes = requireLimit(source.maxFileBytes, "maxFileBytes");
+  const maxTotalBytes = requireLimit(source.maxTotalBytes, "maxTotalBytes");
+  let entries = 0;
+  let totalBytes = 0;
+  try {
+    return unzipSync(bytes, {
+      filter: (file) => {
+        entries += 1;
+        if (entries > maxEntries) {
+          throw new ZipLimitError(`zip has more than ${maxEntries} entries (at '${file.name}')`, "entries", file.name);
+        }
+        if (file.originalSize > maxFileBytes) {
+          throw new ZipLimitError(`zip entry '${file.name}' declares ${file.originalSize} bytes, over the ${maxFileBytes}-byte per-file limit`, "file-size", file.name);
+        }
+        totalBytes += file.originalSize;
+        if (totalBytes > maxTotalBytes) {
+          throw new ZipLimitError(`zip declares ${totalBytes} bytes total (at '${file.name}'), over the ${maxTotalBytes}-byte total limit`, "total-size", file.name);
+        }
+        return true;
+      }
+    });
+  } catch (cause) {
+    if (cause instanceof ZipArchiveError)
+      throw cause;
+    throw new ZipArchiveError(`not a valid zip: ${cause instanceof Error ? cause.message : String(cause)}`);
+  }
+}
+
 // packages/tavern-format/lib/charx.js
 var CharxFormatError = class extends Error {
   constructor(message) {
@@ -2630,13 +2696,15 @@ var CharxFormatError = class extends Error {
     this.name = "CharxFormatError";
   }
 };
-function decodeCharx(bytes) {
-  let files;
+function unzipCharx(bytes) {
   try {
-    files = unzipSync(bytes);
+    return unzipArchive2(bytes);
   } catch (cause) {
-    throw new CharxFormatError(`not a valid zip: ${String(cause)}`);
+    throw new CharxFormatError(cause instanceof Error ? cause.message : String(cause));
   }
+}
+function decodeCharx(bytes) {
+  const files = unzipCharx(bytes);
   const cardJson = files["card.json"];
   if (cardJson === void 0)
     throw new CharxFormatError("CHARX has no 'card.json' at zip root");
@@ -2645,12 +2713,7 @@ function decodeCharx(bytes) {
   return { card, assetPaths };
 }
 function decodeCharxAsset(bytes, path5) {
-  let files;
-  try {
-    files = unzipSync(bytes);
-  } catch (cause) {
-    throw new CharxFormatError(`not a valid zip: ${String(cause)}`);
-  }
+  const files = unzipCharx(bytes);
   const asset = files[path5];
   if (asset === void 0)
     throw new CharxFormatError(`CHARX has no asset '${path5}'`);
@@ -4113,6 +4176,7 @@ function mergeRegexScripts(current, imported) {
 }
 function safeFileName(name2) {
   const cleaned = name2.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").trim();
+  if (cleaned === "." || cleaned === "..") throw new Error(`invalid file name '${name2}'`);
   return cleaned.length > 0 ? cleaned.slice(0, 120) : "_unnamed";
 }
 function parseChatWorldsFile(file, bytes) {
@@ -8000,6 +8064,11 @@ function boundScriptOf(card) {
   if (typeof scriptId !== "string" || scriptId.trim() === "") return void 0;
   return scriptId;
 }
+var EPUB_ZIP_LIMITS = {
+  maxEntries: 256,
+  maxFileBytes: 64 * 1024 * 1024,
+  maxTotalBytes: 128 * 1024 * 1024
+};
 async function getScript(dir, name2) {
   return readScriptRecord(path4.join(dir, "scripts", safeScriptName(name2), "script.json"));
 }
@@ -8028,6 +8097,7 @@ async function readScriptRecord(file) {
 }
 function safeScriptName(name2) {
   const cleaned = name2.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").trim();
+  if (cleaned === "." || cleaned === "..") throw new Error(`invalid script name '${name2}'`);
   return cleaned.length > 0 ? cleaned.slice(0, 120) : "_unnamed";
 }
 

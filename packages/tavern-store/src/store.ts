@@ -1932,6 +1932,10 @@ function mergeRegexScripts(current: RegexScriptIR[], imported: RegexScriptIR[]):
 
 export function safeFileName(name: string): string {
   const cleaned = name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim()
+  // Reject dot segments before they reach path.join: `..` would escape the data
+  // root (deleteCharacter recursively removes chats/<name>) and `.` would target
+  // the chats directory itself, wiping every chat.
+  if (cleaned === '.' || cleaned === '..') throw new Error(`invalid file name '${name}'`)
   return cleaned.length > 0 ? cleaned.slice(0, 120) : '_unnamed'
 }
 

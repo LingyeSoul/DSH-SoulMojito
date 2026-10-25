@@ -222,6 +222,18 @@ export function boundScriptOf(card: Pick<CharacterCardIR, 'data'> | undefined | 
 /* ------------------------------ EPUB ------------------------------ */
 
 /**
+ * EPUB zip bounds mirror `DEFAULT_ZIP_LIMITS` in packages/tavern-format/src/zip.ts
+ * (256 entries / 64 MiB per file / 128 MiB total). Importing the format helper
+ * here would resolve to its built lib, so the numbers are stated locally and the
+ * filter below applies the same pre-extraction checks with fflate.
+ */
+const EPUB_ZIP_LIMITS = {
+  maxEntries: 256,
+  maxFileBytes: 64 * 1024 * 1024,
+  maxTotalBytes: 128 * 1024 * 1024,
+}
+
+/**
  * 解析 EPUB（OCF 容器）为纯文本（提案 0014 P2）：fflate 解压 zip →
  * META-INF/container.xml 找 OPF → spine 顺序取 XHTML 文档 → 每文档剥标签抽
  * 正文（`<p>`/`<br>`/块级标签转换行，h1-h6 保留为独立行，XML 处理指令/注释/
@@ -238,10 +250,27 @@ export function parseEpubText(buffer: Uint8Array): string {
     throw new Error('not a valid EPUB: missing zip magic (PK)')
   }
   let files: Record<string, Uint8Array>
+  let entries = 0
+  let totalBytes = 0
   try {
-    files = unzipSync(buffer)
+    files = unzipSync(buffer, {
+      filter: (file) => {
+        entries += 1
+        if (entries > EPUB_ZIP_LIMITS.maxEntries) {
+          throw new Error(`more than ${EPUB_ZIP_LIMITS.maxEntries} zip entries`)
+        }
+        if (file.originalSize > EPUB_ZIP_LIMITS.maxFileBytes) {
+          throw new Error(`entry '${file.name}' declares ${file.originalSize} bytes, over the ${EPUB_ZIP_LIMITS.maxFileBytes}-byte per-file limit`)
+        }
+        totalBytes += file.originalSize
+        if (totalBytes > EPUB_ZIP_LIMITS.maxTotalBytes) {
+          throw new Error(`declares ${totalBytes} bytes total, over the ${EPUB_ZIP_LIMITS.maxTotalBytes}-byte limit`)
+        }
+        return true
+      },
+    })
   } catch (cause) {
-    throw new Error(`not a valid EPUB: corrupted zip (${String(cause)})`)
+    throw new Error(`not a valid EPUB: corrupted zip or archive limit exceeded (${cause instanceof Error ? cause.message : String(cause)})`)
   }
   const container = files['META-INF/container.xml']
   if (container === undefined) throw new Error('not a valid EPUB: missing META-INF/container.xml')
@@ -479,6 +508,9 @@ async function readScriptRecord(file: string): Promise<ScriptRecord | undefined>
 
 function safeScriptName(name: string): string {
   const cleaned = name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim()
+  // Reject dot segments before they reach path.join: `scripts/..` resolves to the
+  // data root, so script.json would be written outside scripts/.
+  if (cleaned === '.' || cleaned === '..') throw new Error(`invalid script name '${name}'`)
   return cleaned.length > 0 ? cleaned.slice(0, 120) : '_unnamed'
 }
 

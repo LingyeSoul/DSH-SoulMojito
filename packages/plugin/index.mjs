@@ -2310,6 +2310,65 @@ function unzipSync(data, opts) {
   return files;
 }
 
+// packages/tavern-format/lib/zip.js
+var ZipArchiveError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ZipArchiveError";
+  }
+};
+var ZipLimitError = class extends ZipArchiveError {
+  kind;
+  entry;
+  constructor(message, kind, entry) {
+    super(message);
+    this.name = "ZipLimitError";
+    this.kind = kind;
+    this.entry = entry;
+  }
+};
+var DEFAULT_ZIP_LIMITS = {
+  maxEntries: 256,
+  maxFileBytes: 64 * 1024 * 1024,
+  maxTotalBytes: 128 * 1024 * 1024
+};
+function requireLimit(value, name2) {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new ZipArchiveError(`invalid zip limit '${name2}': ${String(value)}`);
+  }
+  return value;
+}
+function unzipArchive(bytes, limits) {
+  const source = limits ?? DEFAULT_ZIP_LIMITS;
+  const maxEntries = requireLimit(source.maxEntries, "maxEntries");
+  const maxFileBytes = requireLimit(source.maxFileBytes, "maxFileBytes");
+  const maxTotalBytes = requireLimit(source.maxTotalBytes, "maxTotalBytes");
+  let entries = 0;
+  let totalBytes = 0;
+  try {
+    return unzipSync(bytes, {
+      filter: (file) => {
+        entries += 1;
+        if (entries > maxEntries) {
+          throw new ZipLimitError(`zip has more than ${maxEntries} entries (at '${file.name}')`, "entries", file.name);
+        }
+        if (file.originalSize > maxFileBytes) {
+          throw new ZipLimitError(`zip entry '${file.name}' declares ${file.originalSize} bytes, over the ${maxFileBytes}-byte per-file limit`, "file-size", file.name);
+        }
+        totalBytes += file.originalSize;
+        if (totalBytes > maxTotalBytes) {
+          throw new ZipLimitError(`zip declares ${totalBytes} bytes total (at '${file.name}'), over the ${maxTotalBytes}-byte total limit`, "total-size", file.name);
+        }
+        return true;
+      }
+    });
+  } catch (cause) {
+    if (cause instanceof ZipArchiveError)
+      throw cause;
+    throw new ZipArchiveError(`not a valid zip: ${cause instanceof Error ? cause.message : String(cause)}`);
+  }
+}
+
 // packages/tavern-format/lib/charx.js
 var CharxFormatError = class extends Error {
   constructor(message) {
@@ -2317,13 +2376,15 @@ var CharxFormatError = class extends Error {
     this.name = "CharxFormatError";
   }
 };
-function decodeCharx(bytes) {
-  let files;
+function unzipCharx(bytes) {
   try {
-    files = unzipSync(bytes);
+    return unzipArchive(bytes);
   } catch (cause) {
-    throw new CharxFormatError(`not a valid zip: ${String(cause)}`);
+    throw new CharxFormatError(cause instanceof Error ? cause.message : String(cause));
   }
+}
+function decodeCharx(bytes) {
+  const files = unzipCharx(bytes);
   const cardJson = files["card.json"];
   if (cardJson === void 0)
     throw new CharxFormatError("CHARX has no 'card.json' at zip root");
@@ -2332,12 +2393,7 @@ function decodeCharx(bytes) {
   return { card, assetPaths };
 }
 function decodeCharxAsset(bytes, path12) {
-  let files;
-  try {
-    files = unzipSync(bytes);
-  } catch (cause) {
-    throw new CharxFormatError(`not a valid zip: ${String(cause)}`);
-  }
+  const files = unzipCharx(bytes);
   const asset = files[path12];
   if (asset === void 0)
     throw new CharxFormatError(`CHARX has no asset '${path12}'`);
@@ -3803,6 +3859,7 @@ function mergeRegexScripts(current, imported) {
 }
 function safeFileName(name2) {
   const cleaned = name2.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").trim();
+  if (cleaned === "." || cleaned === "..") throw new Error(`invalid file name '${name2}'`);
   return cleaned.length > 0 ? cleaned.slice(0, 120) : "_unnamed";
 }
 function parseChatWorldsFile(file, bytes) {
@@ -5984,12 +6041,12 @@ async function isLiveDshWriter(pid) {
   return DSH_HOST_COMMAND.test(command);
 }
 function foldActiveDuration(run, nowMs) {
-  const open = run.status === "active" && run.activeWindowStart !== void 0 && run.activeWindowStart !== null ? Math.max(0, nowMs - Date.parse(run.activeWindowStart)) : 0;
-  return { activeDurationMs: (run.activeDurationMs ?? 0) + open, activeWindowStart: null };
+  const open2 = run.status === "active" && run.activeWindowStart !== void 0 && run.activeWindowStart !== null ? Math.max(0, nowMs - Date.parse(run.activeWindowStart)) : 0;
+  return { activeDurationMs: (run.activeDurationMs ?? 0) + open2, activeWindowStart: null };
 }
 function elapsedActiveDuration(run, nowMs) {
-  const open = run.status === "active" && run.activeWindowStart !== void 0 && run.activeWindowStart !== null ? Math.max(0, nowMs - Date.parse(run.activeWindowStart)) : 0;
-  return (run.activeDurationMs ?? 0) + open;
+  const open2 = run.status === "active" && run.activeWindowStart !== void 0 && run.activeWindowStart !== null ? Math.max(0, nowMs - Date.parse(run.activeWindowStart)) : 0;
+  return (run.activeDurationMs ?? 0) + open2;
 }
 function parseOwnerFile(novelId, ownerPath, raw) {
   try {
@@ -8316,15 +8373,37 @@ function boundScriptOf(card) {
   if (typeof scriptId !== "string" || scriptId.trim() === "") return void 0;
   return scriptId;
 }
+var EPUB_ZIP_LIMITS = {
+  maxEntries: 256,
+  maxFileBytes: 64 * 1024 * 1024,
+  maxTotalBytes: 128 * 1024 * 1024
+};
 function parseEpubText(buffer) {
   if (buffer.length < 4 || buffer[0] !== 80 || buffer[1] !== 75) {
     throw new Error("not a valid EPUB: missing zip magic (PK)");
   }
   let files;
+  let entries = 0;
+  let totalBytes = 0;
   try {
-    files = unzipSync(buffer);
+    files = unzipSync(buffer, {
+      filter: (file) => {
+        entries += 1;
+        if (entries > EPUB_ZIP_LIMITS.maxEntries) {
+          throw new Error(`more than ${EPUB_ZIP_LIMITS.maxEntries} zip entries`);
+        }
+        if (file.originalSize > EPUB_ZIP_LIMITS.maxFileBytes) {
+          throw new Error(`entry '${file.name}' declares ${file.originalSize} bytes, over the ${EPUB_ZIP_LIMITS.maxFileBytes}-byte per-file limit`);
+        }
+        totalBytes += file.originalSize;
+        if (totalBytes > EPUB_ZIP_LIMITS.maxTotalBytes) {
+          throw new Error(`declares ${totalBytes} bytes total, over the ${EPUB_ZIP_LIMITS.maxTotalBytes}-byte limit`);
+        }
+        return true;
+      }
+    });
   } catch (cause) {
-    throw new Error(`not a valid EPUB: corrupted zip (${String(cause)})`);
+    throw new Error(`not a valid EPUB: corrupted zip or archive limit exceeded (${cause instanceof Error ? cause.message : String(cause)})`);
   }
   const container = files["META-INF/container.xml"];
   if (container === void 0) throw new Error("not a valid EPUB: missing META-INF/container.xml");
@@ -8485,6 +8564,7 @@ async function readScriptRecord(file) {
 }
 function safeScriptName(name2) {
   const cleaned = name2.replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").trim();
+  if (cleaned === "." || cleaned === "..") throw new Error(`invalid script name '${name2}'`);
   return cleaned.length > 0 ? cleaned.slice(0, 120) : "_unnamed";
 }
 function jsonBytes3(obj) {
@@ -8743,6 +8823,76 @@ function parsePreset(obj) {
   return { prompts, promptOrder, sampler };
 }
 
+// packages/tavern-format/src/zip.ts
+var ZipArchiveError2 = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ZipArchiveError";
+  }
+};
+var ZipLimitError2 = class extends ZipArchiveError2 {
+  kind;
+  entry;
+  constructor(message, kind, entry) {
+    super(message);
+    this.name = "ZipLimitError";
+    this.kind = kind;
+    this.entry = entry;
+  }
+};
+var DEFAULT_ZIP_LIMITS2 = {
+  maxEntries: 256,
+  maxFileBytes: 64 * 1024 * 1024,
+  maxTotalBytes: 128 * 1024 * 1024
+};
+function requireLimit2(value, name2) {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new ZipArchiveError2(`invalid zip limit '${name2}': ${String(value)}`);
+  }
+  return value;
+}
+function unzipArchive2(bytes, limits) {
+  const source = limits ?? DEFAULT_ZIP_LIMITS2;
+  const maxEntries = requireLimit2(source.maxEntries, "maxEntries");
+  const maxFileBytes = requireLimit2(source.maxFileBytes, "maxFileBytes");
+  const maxTotalBytes = requireLimit2(source.maxTotalBytes, "maxTotalBytes");
+  let entries = 0;
+  let totalBytes = 0;
+  try {
+    return unzipSync(bytes, {
+      filter: (file) => {
+        entries += 1;
+        if (entries > maxEntries) {
+          throw new ZipLimitError2(
+            `zip has more than ${maxEntries} entries (at '${file.name}')`,
+            "entries",
+            file.name
+          );
+        }
+        if (file.originalSize > maxFileBytes) {
+          throw new ZipLimitError2(
+            `zip entry '${file.name}' declares ${file.originalSize} bytes, over the ${maxFileBytes}-byte per-file limit`,
+            "file-size",
+            file.name
+          );
+        }
+        totalBytes += file.originalSize;
+        if (totalBytes > maxTotalBytes) {
+          throw new ZipLimitError2(
+            `zip declares ${totalBytes} bytes total (at '${file.name}'), over the ${maxTotalBytes}-byte total limit`,
+            "total-size",
+            file.name
+          );
+        }
+        return true;
+      }
+    });
+  } catch (cause) {
+    if (cause instanceof ZipArchiveError2) throw cause;
+    throw new ZipArchiveError2(`not a valid zip: ${cause instanceof Error ? cause.message : String(cause)}`);
+  }
+}
+
 // packages/tavern-format/src/charx.ts
 var CharxFormatError2 = class extends Error {
   constructor(message) {
@@ -8750,31 +8900,18 @@ var CharxFormatError2 = class extends Error {
     this.name = "CharxFormatError";
   }
 };
-function decodeCharxAsset2(bytes, path12) {
-  let files;
+function unzipCharx2(bytes) {
   try {
-    files = unzipSync(bytes);
+    return unzipArchive2(bytes);
   } catch (cause) {
-    throw new CharxFormatError2(`not a valid zip: ${String(cause)}`);
+    throw new CharxFormatError2(cause instanceof Error ? cause.message : String(cause));
   }
+}
+function decodeCharxAsset2(bytes, path12) {
+  const files = unzipCharx2(bytes);
   const asset = files[path12];
   if (asset === void 0) throw new CharxFormatError2(`CHARX has no asset '${path12}'`);
   return asset;
-}
-
-// packages/tavern-format/src/zip.ts
-var ZipArchiveError = class extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "ZipArchiveError";
-  }
-};
-function unzipArchive(bytes) {
-  try {
-    return unzipSync(bytes);
-  } catch (cause) {
-    throw new ZipArchiveError(`not a valid zip: ${cause instanceof Error ? cause.message : String(cause)}`);
-  }
 }
 
 // packages/tavern-format/src/regex-script.ts
@@ -12607,20 +12744,20 @@ function createMacroEngine(init) {
       out += c;
     };
     for (; ; ) {
-      const open = text.indexOf("{{", pos);
-      if (open === -1) {
+      const open2 = text.indexOf("{{", pos);
+      if (open2 === -1) {
         appendText(text.slice(pos));
         break;
       }
-      appendText(text.slice(pos, open));
-      const close = text.indexOf("}}", open + 2);
+      appendText(text.slice(pos, open2));
+      const close = text.indexOf("}}", open2 + 2);
       if (close === -1) {
-        appendText(text.slice(open));
+        appendText(text.slice(open2));
         break;
       }
-      const result = evalInside(text.slice(open + 2, close), open, rawHash);
+      const result = evalInside(text.slice(open2 + 2, close), open2, rawHash);
       if (result === null) {
-        appendText(text.slice(open, close + 2));
+        appendText(text.slice(open2, close + 2));
       } else if (result === TRIM) {
         out = out.replace(/(?:\r?\n)+$/, "");
         skipNewlines = true;
@@ -14010,7 +14147,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("a67ed76") : void 0;
+  const commit = true ? normalizeCommit("6daabfc") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -14593,7 +14730,7 @@ function rewriteViewportUnits(document) {
     scripts.push(whole);
     return `\0dt-vh-script-${scripts.length - 1}\0`;
   });
-  const rewritten = shielded.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)/gi, (_whole, open, css, close) => `${open}${rewriteViewportUnitsInCssText(css)}${close}`).replace(/(\bstyle\s*=\s*)(["'])([^"']*)\2/gi, (_whole, prefix, quote, css) => `${prefix}${quote}${rewriteViewportUnitsInCssText(css)}${quote}`);
+  const rewritten = shielded.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)/gi, (_whole, open2, css, close) => `${open2}${rewriteViewportUnitsInCssText(css)}${close}`).replace(/(\bstyle\s*=\s*)(["'])([^"']*)\2/gi, (_whole, prefix, quote, css) => `${prefix}${quote}${rewriteViewportUnitsInCssText(css)}${quote}`);
   return rewritten.replace(/\u0000dt-vh-script-(\d+)\u0000/g, (_whole, index) => scripts[Number(index)]);
 }
 function modViewportScript() {
@@ -16390,6 +16527,11 @@ function shippedEntries(sourceDir) {
   return [.../* @__PURE__ */ new Set(["package.json", ...files.map((entry) => entry.replace(/^\.\//, ""))])];
 }
 var FILE_LOCK_RETRY_DELAYS_MS = [20, 50, 100, 200];
+var atomicTempSequence = 0;
+function atomicTempPath(target) {
+  atomicTempSequence += 1;
+  return `${target}.${process.pid}.${Date.now()}.${atomicTempSequence}.dsh-soulmojito-partial`;
+}
 function isTransientLockError(error) {
   const code = error?.code;
   return code === "EBUSY" || code === "EPERM" || code === "EACCES";
@@ -16398,7 +16540,7 @@ function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 function replaceFileAtomic(source, target) {
-  const temp = `${target}.dsh-soulmojito-partial`;
+  const temp = atomicTempPath(target);
   copyFileSync(source, temp);
   for (let attempt = FILE_LOCK_RETRY_DELAYS_MS.length; ; attempt -= 1) {
     try {
@@ -16415,7 +16557,7 @@ function replaceFileAtomic(source, target) {
   }
 }
 function writeFileAtomic(target, data) {
-  const temp = `${target}.dsh-soulmojito-partial`;
+  const temp = atomicTempPath(target);
   writeFileSync(temp, data);
   for (let attempt = FILE_LOCK_RETRY_DELAYS_MS.length; ; attempt -= 1) {
     try {
@@ -25439,13 +25581,14 @@ var GameRegistry = class _GameRegistry {
   }
   /**
    * 从 zip 字节导入（面板导入口，`POST games/install {zipBase64}`，2026-10-17）：
-   * base64 解码 → tavern-format 解包（fflate）→ 路径清洗（穿越/绝对路径拒绝，
-   * 垃圾条目跳过，三道上限见 GAME_ZIP_*）→ 单层包装目录自动下潜 → 落临时目录 →
+   * base64 解码 → tavern-format 解包（fflate，三道上限在解压前按声明尺寸校验，
+   * 见 unzipGamePackage）→ 路径清洗（穿越/绝对路径拒绝，垃圾条目跳过）→
+   * 单层包装目录自动下潜 → 落临时目录 →
    * 复用 installFromPath 的全量校验与落地（installed/<id>/ + 装载 + 返回快照）。
    * 临时目录 finally 清理；任何校验失败抛可读错误（service 层统一转 400）。
    */
   async installFromZip(zipBase64, force = false) {
-    const files = selectGamePackageFiles(unzipArchive(decodeZipBase64(zipBase64)));
+    const files = selectGamePackageFiles(unzipGamePackage(decodeZipBase64(zipBase64)));
     const workRoot = mkdtempSync3(join16(tmpdir3(), "dsh-soulmojito-gamezip-"));
     try {
       for (const [name2, data] of files) {
@@ -25550,6 +25693,20 @@ function decodeZipBase64(zipBase64) {
     throw new Error("zipBase64 \u4E0D\u662F\u6709\u6548\u7684 base64\uFF08\u9762\u677F\u4E0A\u4F20\u5E94\u53D1\u9001\u6E38\u620F\u5305 zip \u7684 base64 \u5B57\u8282\uFF09");
   }
   return new Uint8Array(Buffer.from(normalized, "base64"));
+}
+function unzipGamePackage(bytes) {
+  try {
+    return unzipArchive2(bytes, {
+      maxEntries: GAME_ZIP_MAX_ENTRIES,
+      maxFileBytes: GAME_ZIP_MAX_FILE_BYTES,
+      maxTotalBytes: GAME_ZIP_MAX_TOTAL_BYTES
+    });
+  } catch (cause) {
+    if (!(cause instanceof ZipLimitError2)) throw cause;
+    if (cause.kind === "entries") throw new Error(`zip \u6761\u76EE\u6570\u8D85\u8FC7\u4E0A\u9650\uFF08${GAME_ZIP_MAX_ENTRIES}\uFF09`);
+    if (cause.kind === "total-size") throw new Error(`zip \u89E3\u5305\u603B\u91CF\u8D85\u8FC7 ${GAME_ZIP_MAX_TOTAL_BYTES} \u5B57\u8282\u4E0A\u9650`);
+    throw new Error(`zip \u5185\u6587\u4EF6 '${cause.entry ?? ""}' \u8D85\u8FC7 ${GAME_ZIP_MAX_FILE_BYTES} \u5B57\u8282\u4E0A\u9650`);
+  }
 }
 function selectGamePackageFiles(archive) {
   const files = /* @__PURE__ */ new Map();
@@ -28813,6 +28970,16 @@ function textBlocks(content) {
   return content.filter((block) => typeof block === "object" && block !== null && block.type === "text").map((block) => typeof block.text === "string" ? block.text : "").join("").trim();
 }
 
+// packages/plugin/src/http/errors.ts
+var HttpError = class extends Error {
+  status;
+  constructor(status2, message) {
+    super(message);
+    this.name = "HttpError";
+    this.status = status2;
+  }
+};
+
 // packages/plugin/src/http/io.ts
 function sendJson(res, status2, body) {
   res.statusCode = status2;
@@ -28820,13 +28987,17 @@ function sendJson(res, status2, body) {
   res.end(JSON.stringify(body));
 }
 function readJson(req, maxBytes = 2 * 1024 * 1024) {
+  const contentType = headerValue(req?.headers?.["content-type"]);
+  if (contentType !== void 0 && !contentType.toLowerCase().startsWith("application/json")) {
+    return Promise.reject(new HttpError(415, `unsupported content-type '${contentType}'; expected application/json`));
+  }
   return new Promise((resolve6, reject) => {
     let bytes = 0;
     const chunks = [];
     req.on("data", (chunk) => {
       bytes += chunk.length;
       if (bytes > maxBytes) {
-        reject(new Error(`request exceeds ${maxBytes} bytes`));
+        reject(new HttpError(413, `request exceeds ${maxBytes} bytes`));
         req.destroy?.();
       } else chunks.push(chunk);
     });
@@ -28834,11 +29005,15 @@ function readJson(req, maxBytes = 2 * 1024 * 1024) {
       try {
         resolve6(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
       } catch {
-        reject(new Error("invalid JSON body"));
+        reject(new HttpError(400, "invalid JSON body"));
       }
     });
     req.on("error", reject);
   });
+}
+function headerValue(value) {
+  const first = Array.isArray(value) ? value[0] : value;
+  return typeof first === "string" && first.trim() !== "" ? first.trim() : void 0;
 }
 
 // packages/plugin/src/http/novel.ts
@@ -29740,7 +29915,7 @@ import { pipeline } from "node:stream/promises";
 
 // packages/tavern-frontend-storage/src/idb-store.ts
 import { createHash as createHash12 } from "node:crypto";
-import { mkdir as mkdir4, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir as mkdir4, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname as dirname13, join as join20 } from "node:path";
 var IDB_MAX_RECORD_BYTES = 1024 * 1024 * 1024;
 var IDB_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
@@ -29830,14 +30005,49 @@ async function readDatabase(root, character, name2) {
     throw new Error(`idb metadata for '${name2}' is unreadable: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
+var temporarySeq = 0;
+function temporarySibling(target) {
+  temporarySeq += 1;
+  return `${target}.${process.pid}.${Date.now()}.${temporarySeq}.tmp`;
+}
+async function syncFile(path12) {
+  const handle = await open(path12, "r+");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+async function renameReplacing(source, target) {
+  try {
+    await rename(source, target);
+  } catch (error) {
+    const code = error.code;
+    if (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY" && code !== "EEXIST") throw error;
+    await rm(target, { force: true });
+    await rename(source, target);
+  }
+}
+function describeFsError(error) {
+  if (error instanceof Error) {
+    const code = error.code;
+    return code === void 0 ? error.message : `${code}: ${error.message}`;
+  }
+  return String(error);
+}
 async function writeDatabase(root, character, database) {
   const dir = databaseDir(root, character, database.name);
   await mkdir4(dir, { recursive: true });
   const target = metaPath(dir);
-  const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(database)}`, "utf8");
-  await rm(target, { force: true });
-  await rename(temporary, target);
+  const temporary = temporarySibling(target);
+  try {
+    await writeFile(temporary, `${JSON.stringify(database)}`, "utf8");
+    await syncFile(temporary);
+    await renameReplacing(temporary, target);
+  } catch (error) {
+    await rm(temporary, { force: true });
+    throw error;
+  }
 }
 function withDatabaseLock(root, character, name2, operation) {
   const key = `${root}\0${character}\0${name2}`;
@@ -29906,6 +30116,40 @@ async function createIdbStore(root, character, nameValue, storeValue, keyPathVal
     return { stores: Object.keys(database.stores), indexes };
   });
 }
+async function moveRecordFile(source, destination) {
+  try {
+    await rename(source, destination);
+    return;
+  } catch (error) {
+    const code = error.code;
+    if (code === "EXDEV") {
+      await copyRecordAcrossDevices(source, destination);
+      return;
+    }
+    if (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY" && code !== "EEXIST") {
+      throw new Error(`idb record could not be moved to '${destination}': ${describeFsError(error)}`);
+    }
+  }
+  try {
+    await renameReplacing(source, destination);
+  } catch (error) {
+    throw new Error(`idb record could not be moved to '${destination}': ${describeFsError(error)}`);
+  }
+}
+async function copyRecordAcrossDevices(source, destination) {
+  const staged = temporarySibling(destination);
+  try {
+    await copyFile(source, staged);
+    await syncFile(staged);
+    await renameReplacing(staged, destination);
+  } catch (error) {
+    await rm(staged, { force: true });
+    throw new Error(
+      `idb record could not be copied from '${source}' to '${destination}' after a cross-device rename failed (EXDEV): ${describeFsError(error)}`
+    );
+  }
+  await rm(source, { force: true });
+}
 async function putIdbRecordFromFile(root, character, nameValue, storeValue, keyValue, temporaryPath, metaValue) {
   const name2 = requireDatabaseName(nameValue);
   const store5 = requireStoreName(storeValue);
@@ -29925,8 +30169,7 @@ async function putIdbRecordFromFile(root, character, nameValue, storeValue, keyV
       throw new Error(`idb storage for '${character}' exceeds ${IDB_MAX_TOTAL_BYTES} bytes`);
     }
     await mkdir4(dirname13(destination), { recursive: true });
-    await rm(destination, { force: true });
-    await rename(temporaryPath, destination);
+    await moveRecordFile(temporaryPath, destination);
     database.records[keyHash] = { store: store5, key, size, updatedAt: Date.now(), meta };
     database.updatedAt = Date.now();
     try {
@@ -32256,6 +32499,7 @@ async function handleHelperApi(req, res, db) {
         value: await putSessionPersona(db, character, chatId, body)
       });
     case "template.render":
+      if (!templatesEnabledFlagValue()) throw new HttpError(403, "template rendering is disabled");
       return sendJson(res, 200, {
         ok: true,
         value: { text: await renderFrontendTemplate(db, state, character, chatId, body) }
@@ -38133,6 +38377,137 @@ async function handleApi(ctx, req, res) {
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
 }
 
+// packages/plugin/src/http/trust.ts
+var MUTATING_METHODS = /* @__PURE__ */ new Set(["POST", "PUT", "PATCH", "DELETE"]);
+var UNSAFE_FETCH_SITES = /* @__PURE__ */ new Set(["cross-site", "same-site"]);
+var LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "::1", "0:0:0:0:0:0:0:1"];
+function requestTrustFailure(req, options) {
+  const headers = normalizeHeaders(req.headers);
+  const method = typeof req.method === "string" ? req.method.toUpperCase() : "GET";
+  const hostHeader = firstHeader(headers, "host");
+  const address = hostHeader === void 0 ? void 0 : parseHost(hostHeader);
+  if (hostHeader !== void 0 && address === void 0) {
+    return { status: 403, message: `malformed Host header '${hostHeader}'` };
+  }
+  if (address !== void 0 && !hostAllowed(address, options)) {
+    return { status: 403, message: `Host '${hostHeader ?? ""}' is not allowed` };
+  }
+  if (!MUTATING_METHODS.has(method)) return void 0;
+  const fetchSite = firstHeader(headers, "sec-fetch-site")?.toLowerCase();
+  if (fetchSite !== void 0 && UNSAFE_FETCH_SITES.has(fetchSite)) {
+    return { status: 403, message: `cross-site request rejected (sec-fetch-site: ${fetchSite})` };
+  }
+  const originHeader = firstHeader(headers, "origin");
+  if (originHeader !== void 0) {
+    const origin = parseOrigin(originHeader);
+    if (origin === void 0) {
+      return { status: 403, message: `Origin '${originHeader}' is not a valid http(s) origin` };
+    }
+    if (address === void 0) {
+      return { status: 403, message: "Origin header without a Host header is not allowed" };
+    }
+    if (!sameOrigin(origin, address)) {
+      return { status: 403, message: `cross-origin request rejected (Origin ${originHeader}, Host ${hostHeader})` };
+    }
+  }
+  if (options.allowNonJsonBody === true) return void 0;
+  const contentType = firstHeader(headers, "content-type");
+  if (contentType !== void 0 && !isJsonContentType(contentType)) {
+    return { status: 415, message: `unsupported content-type '${contentType}'; expected application/json` };
+  }
+  return void 0;
+}
+function normalizeHeaders(headers) {
+  const normalized = {};
+  if (headers === void 0) return normalized;
+  for (const [name2, value] of Object.entries(headers)) normalized[name2.toLowerCase()] = value;
+  return normalized;
+}
+function firstHeader(headers, name2) {
+  const value = headers[name2];
+  const first = Array.isArray(value) ? value[0] : value;
+  return typeof first === "string" && first.trim() !== "" ? first.trim() : void 0;
+}
+function hostAllowed(address, options) {
+  for (const allowed of allowedAddresses(options)) {
+    if (allowed.hostname !== address.hostname) continue;
+    if (allowed.port === void 0 || allowed.port === address.port) return true;
+  }
+  return false;
+}
+function allowedAddresses(options) {
+  const allowed = LOOPBACK_HOSTS.map((hostname) => ({ hostname, port: void 0 }));
+  const configuredHost = normalizedHostname(options.host);
+  if (configuredHost !== void 0) {
+    const port = validPort(options.port);
+    allowed.push({ hostname: configuredHost, port });
+  }
+  if (options.origin !== void 0) {
+    const origin = parseOrigin(options.origin);
+    if (origin !== void 0) allowed.push(origin);
+  }
+  return allowed;
+}
+function sameOrigin(origin, host) {
+  if (origin.hostname !== host.hostname) return false;
+  if (host.port !== void 0) return origin.port === host.port;
+  return origin.port === 80 || origin.port === 443;
+}
+function parseHost(value) {
+  const trimmed = value.trim();
+  if (trimmed === "") return void 0;
+  let hostnamePart;
+  let portPart;
+  if (trimmed.startsWith("[")) {
+    const end = trimmed.indexOf("]");
+    if (end < 0) return void 0;
+    hostnamePart = trimmed.slice(1, end);
+    const rest = trimmed.slice(end + 1);
+    if (rest !== "") {
+      if (!rest.startsWith(":")) return void 0;
+      portPart = rest.slice(1);
+    }
+  } else {
+    const firstColon = trimmed.indexOf(":");
+    if (firstColon >= 0 && firstColon === trimmed.lastIndexOf(":")) {
+      hostnamePart = trimmed.slice(0, firstColon);
+      portPart = trimmed.slice(firstColon + 1);
+    } else {
+      hostnamePart = trimmed;
+    }
+  }
+  const hostname = normalizedHostname(hostnamePart);
+  if (hostname === void 0) return void 0;
+  if (portPart === void 0) return { hostname, port: void 0 };
+  const port = validPort(Number(portPart));
+  if (port === void 0) return void 0;
+  return { hostname, port };
+}
+function parseOrigin(value) {
+  let url;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    return void 0;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return void 0;
+  const hostname = normalizedHostname(url.hostname);
+  if (hostname === void 0) return void 0;
+  const port = url.port === "" ? url.protocol === "https:" ? 443 : 80 : Number(url.port);
+  return { hostname, port };
+}
+function normalizedHostname(value) {
+  if (typeof value !== "string") return void 0;
+  const normalized = value.trim().toLowerCase().replace(/^\[(.*)\]$/, "$1").replace(/\.$/, "");
+  return normalized === "" ? void 0 : normalized;
+}
+function validPort(value) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 65535 ? value : void 0;
+}
+function isJsonContentType(value) {
+  return value.trim().toLowerCase().startsWith("application/json");
+}
+
 // packages/plugin/src/index.ts
 var name = "dsh-soulmojito";
 var inject = ["llm", "agentDefaultModel", "webServer", "systemPrompt", "commands", "agents", "agentPresets", "tools", "compaction"];
@@ -38265,6 +38640,24 @@ function apply(ctx, config = {}) {
     kind: "prefix",
     path: API,
     handler: async (req, res) => {
+      const webServer = ctx.webServer;
+      let reportedOrigin;
+      try {
+        const value = typeof webServer?.getOrigin === "function" ? webServer.getOrigin() : void 0;
+        if (typeof value === "string" && value !== "") reportedOrigin = value;
+      } catch {
+      }
+      const trustFailure = requestTrustFailure(req, {
+        host: typeof webServer?.host === "string" ? webServer.host : void 0,
+        port: typeof webServer?.port === "number" ? webServer.port : void 0,
+        origin: reportedOrigin,
+        // The virtual IndexedDB upload is the one route whose body is raw bytes.
+        allowNonJsonBody: (req.url ?? "").split("?")[0] === `${API}/frontend/idb/put`
+      });
+      if (trustFailure !== void 0) {
+        sendJson(res, trustFailure.status, { ok: false, message: trustFailure.message });
+        return;
+      }
       try {
         await handleApi(ctx, req, res);
       } catch (error) {
@@ -38279,7 +38672,7 @@ function apply(ctx, config = {}) {
             res.write(JSON.stringify({ type: "error", message, code }) + "\n");
             res.end();
           } else {
-            const status2 = error instanceof ChatRevisionConflictError || error instanceof TavernArchitectureConflictError ? 409 : novelFailure?.status ?? 500;
+            const status2 = error instanceof HttpError ? error.status : error instanceof ChatRevisionConflictError || error instanceof TavernArchitectureConflictError ? 409 : novelFailure?.status ?? 500;
             sendJson(res, status2, { ok: false, message, code, ...novelFailure?.extra ?? {} });
           }
         }

@@ -16,6 +16,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 // The runtime and virtual storage now live in workspace packages that the build
 // inlines into client/index.js; main.js only carries the fragments and slots.
 const source = readFileSync(join(here, '../client/index.js'), 'utf8')
+const frameSource = readFileSync(join(here, '../client-src/10-frontend-frame.js'), 'utf8')
 const zh = readFileSync(join(here, '../client-src/41-i18n-zh.js'), 'utf8')
 const en = readFileSync(join(here, '../client-src/40-i18n-en.js'), 'utf8')
 const store = readFileSync(join(here, '../../tavern-store/src/store.ts'), 'utf8')
@@ -198,7 +199,9 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
     expect(source).toContain('composer.fill')
     expect(source).toContain('composer.send')
     // 绑定只能来自宿主侧 sessionBindings，iframe 报什么都不能改身份
-    expect(source).toContain("op: data.op,\n              character: current.character,\n              chatId: current.chatId")
+    expect(frameSource).toContain('delete helperPayload.character')
+    expect(frameSource).toContain('delete helperPayload.chatId')
+    expect(frameSource).toContain('...helperPayload,')
   })
 
   it('recovers the first-frame snapshot when the mount push is lost', () => {

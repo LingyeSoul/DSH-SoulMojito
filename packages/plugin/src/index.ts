@@ -42,7 +42,9 @@ import {
 import { bindSession, TavernArchitectureConflictError } from './session/binding.js'
 import { registerTavernSessionCommand } from './session/command.js'
 import { API, handleApi } from './http/router.js'
+import { HttpError } from './http/errors.js'
 import { sendJson } from './http/io.js'
+import { requestTrustFailure } from './http/trust.js'
 import { ensureAgentPresetDeclared, handleNovelSessionEvent, novelHttpFailure, recoverMountedNovels } from './http/novel.js'
 
 export const name = 'dsh-soulmojito'
@@ -215,6 +217,29 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
     kind: 'prefix',
     path: API,
     handler: async (req, res) => {
+      // The host web server owns dispatch but no origin/auth policy, so this
+      // route owns the browser trust boundary (see http/trust.ts).
+      const webServer = ctx.webServer as
+        | { host?: unknown; port?: unknown; getOrigin?: () => unknown }
+        | undefined
+      let reportedOrigin: string | undefined
+      try {
+        const value = typeof webServer?.getOrigin === 'function' ? webServer.getOrigin() : undefined
+        if (typeof value === 'string' && value !== '') reportedOrigin = value
+      } catch {
+        // A host without origin reporting keeps the loopback-only fallback.
+      }
+      const trustFailure = requestTrustFailure(req, {
+        host: typeof webServer?.host === 'string' ? webServer.host : undefined,
+        port: typeof webServer?.port === 'number' ? webServer.port : undefined,
+        origin: reportedOrigin,
+        // The virtual IndexedDB upload is the one route whose body is raw bytes.
+        allowNonJsonBody: (req.url ?? '').split('?')[0] === `${API}/frontend/idb/put`,
+      })
+      if (trustFailure !== undefined) {
+        sendJson(res, trustFailure.status, { ok: false, message: trustFailure.message })
+        return
+      }
       try {
         await handleApi(ctx, req, res)
       } catch (error) {
@@ -236,9 +261,11 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
             res.write(JSON.stringify({ type: 'error', message, code }) + '\n')
             res.end()
           } else {
-            const status = error instanceof ChatRevisionConflictError || error instanceof TavernArchitectureConflictError
-              ? 409
-              : novelFailure?.status ?? 500
+            const status = error instanceof HttpError
+              ? error.status
+              : error instanceof ChatRevisionConflictError || error instanceof TavernArchitectureConflictError
+                ? 409
+                : novelFailure?.status ?? 500
             sendJson(res, status, { ok: false, message, code, ...(novelFailure?.extra ?? {}) })
           }
         }

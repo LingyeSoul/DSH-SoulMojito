@@ -2,9 +2,10 @@
  * CHARX（V3 容器）：zip 包，根目录 card.json，资源按 assets/ 目录约定存放。
  */
 
-import { unzipSync, zipSync, strToU8, strFromU8 } from 'fflate'
+import { zipSync, strToU8, strFromU8 } from 'fflate'
 import { encodeCharacterCardJson, decodeCharacterCard } from './card.js'
 import type { CharacterCardIR } from './types.js'
+import { unzipArchive } from './zip.js'
 
 export class CharxFormatError extends Error {
   constructor(message: string) {
@@ -19,13 +20,22 @@ export interface CharxIR {
   assetPaths: string[]
 }
 
-export function decodeCharx(bytes: Uint8Array): CharxIR {
-  let files: Record<string, Uint8Array>
+/**
+ * CHARX containers use DEFAULT_ZIP_LIMITS (256 entries / 64 MiB per file /
+ * 128 MiB total): generous for card art and embedded audio, bounded against
+ * deflate bombs. Zip errors are rethrown as CharxFormatError for this module's
+ * callers.
+ */
+function unzipCharx(bytes: Uint8Array): Record<string, Uint8Array> {
   try {
-    files = unzipSync(bytes)
+    return unzipArchive(bytes)
   } catch (cause) {
-    throw new CharxFormatError(`not a valid zip: ${String(cause)}`)
+    throw new CharxFormatError(cause instanceof Error ? cause.message : String(cause))
   }
+}
+
+export function decodeCharx(bytes: Uint8Array): CharxIR {
+  const files = unzipCharx(bytes)
   const cardJson = files['card.json']
   if (cardJson === undefined) throw new CharxFormatError("CHARX has no 'card.json' at zip root")
   const card = decodeCharacterCard(JSON.parse(strFromU8(cardJson)))
@@ -35,12 +45,7 @@ export function decodeCharx(bytes: Uint8Array): CharxIR {
 
 /** 取 CHARX 内指定资源的字节（embeded:// URI 对应的路径）。 */
 export function decodeCharxAsset(bytes: Uint8Array, path: string): Uint8Array {
-  let files: Record<string, Uint8Array>
-  try {
-    files = unzipSync(bytes)
-  } catch (cause) {
-    throw new CharxFormatError(`not a valid zip: ${String(cause)}`)
-  }
+  const files = unzipCharx(bytes)
   const asset = files[path]
   if (asset === undefined) throw new CharxFormatError(`CHARX has no asset '${path}'`)
   return asset

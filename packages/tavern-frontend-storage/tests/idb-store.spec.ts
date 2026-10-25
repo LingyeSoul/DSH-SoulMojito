@@ -7,7 +7,8 @@
  * from character/database names, so a traversal-looking name stays inside the
  * supplied root.
  */
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -32,6 +33,18 @@ function temporaryFile(content: string): string {
   const path = join(root, `staged-${temporarySeq}.bin`)
   writeFileSync(path, content)
   return path
+}
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex')
+}
+
+function databasePath(character: string, database: string): string {
+  return join(root, 'frontend-idb', sha256(character), sha256(database))
+}
+
+function tempLeftovers(directory: string): string[] {
+  return readdirSync(directory).filter((entry) => entry.endsWith('.tmp'))
 }
 
 beforeAll(() => {
@@ -100,4 +113,33 @@ describe('host-backed virtual IndexedDB', () => {
     expect(await deleteIdbDatabase(root, CHARACTER, DATABASE)).toEqual({ deleted: true })
     expect(await getIdbRecord(root, CHARACTER, DATABASE, 'records', 'pack-1')).toBeUndefined()
   })
+
+  it('replaces meta.json by rename: repeated writes stay readable and leave no temp file', async () => {
+    const database = 'atomic-meta'
+    for (let version = 1; version <= 5; version += 1) {
+      const opened = await openIdbDatabase(root, CHARACTER, database, version)
+      expect(opened.version).toBe(version)
+    }
+    const dir = databasePath(CHARACTER, database)
+    expect(tempLeftovers(dir)).toEqual([])
+    const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8')) as { name: string; version: number }
+    expect(meta).toMatchObject({ name: database, version: 5 })
+  })
+
+  it('overwrites an existing record slot in place without staging leftovers', async () => {
+    const database = 'record-replace'
+    await openIdbDatabase(root, CHARACTER, database, 1)
+    await createIdbStore(root, CHARACTER, database, 'records', 'key')
+    await putIdbRecordFromFile(root, CHARACTER, database, 'records', 'k', temporaryFile('first'), {})
+    const replaced = await putIdbRecordFromFile(root, CHARACTER, database, 'records', 'k', temporaryFile('second'), {})
+    expect(replaced).toEqual({ key: 'k', size: 6 })
+    const record = await getIdbRecord(root, CHARACTER, database, 'records', 'k')
+    expect(readFileSync(record?.path ?? '', 'utf8')).toBe('second')
+    expect(tempLeftovers(join(databasePath(CHARACTER, database), 'records'))).toEqual([])
+  })
+
+  // EXDEV needs the staging file and the data root on different devices, which
+  // cannot be arranged deterministically in CI (no drive/mount control here).
+  // The same-device rename paths above run for real; the cross-device branch in
+  // src/idb-store.ts is intentionally not exercised with mocks.
 })

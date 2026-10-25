@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { apply } from '../src/index.js'
+import { setTemplatesEnabledFlag } from '../src/runtime.js'
 import { TavernStore } from '../../tavern-store/src/index.js'
 
 const CHARACTER = 'Helper Probe'
@@ -20,11 +21,12 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
   let apiHandler: (req: unknown, res: unknown) => Promise<void>
   let chatId: string
 
-  function makeRequest(body: unknown, url: string, method = 'POST') {
+  function makeRequest(body: unknown, url: string, method = 'POST', headers?: Record<string, string>) {
     const listeners = new Map<string, (value?: unknown) => void>()
     return {
       method,
       url,
+      headers: headers ?? {},
       on: (event: string, listener: (value?: unknown) => void) => {
         listeners.set(event, listener)
         if (event === 'end') {
@@ -713,5 +715,65 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
     })
     expect(rendered.status).toBe(200)
     expect((rendered.body?.value as Record<string, unknown>).text).toBe(`7-${HEADER.user_name}`)
+  })
+
+  it('honors the profile template kill switch on template.render', async () => {
+    setTemplatesEnabledFlag(false)
+    try {
+      const rendered = await call({
+        op: 'template.render',
+        character: CHARACTER,
+        chatId,
+        code: '<%= 1 + 1 %>',
+        context: {},
+      })
+      expect(rendered.status).toBe(403)
+      expect(String(rendered.body?.message)).toContain('template rendering is disabled')
+    } finally {
+      setTemplatesEnabledFlag(true)
+    }
+  })
+
+  it('rejects cross-site mutating requests at the route boundary', async () => {
+    const res = makeResponse()
+    await apiHandler(makeRequest(
+      { op: 'snapshot', character: CHARACTER, chatId },
+      '/api/dsh-soulmojito/helper',
+      'POST',
+      {
+        host: '127.0.0.1:3456',
+        origin: 'https://evil.example',
+        'content-type': 'application/json',
+      },
+    ), res)
+    expect(res.statusCode).toBe(403)
+    expect(String(JSON.parse(res.chunks.join('')).message)).toContain('cross-origin')
+  })
+
+  it('rejects a form-encoded helper body with 415 before routing', async () => {
+    const res = makeResponse()
+    await apiHandler(makeRequest(
+      { op: 'snapshot', character: CHARACTER, chatId },
+      '/api/dsh-soulmojito/helper',
+      'POST',
+      { host: '127.0.0.1:3456', 'content-type': 'text/plain' },
+    ), res)
+    expect(res.statusCode).toBe(415)
+    expect(String(JSON.parse(res.chunks.join('')).message)).toContain('content-type')
+  })
+
+  it('lets a loopback same-origin JSON helper call through the guard', async () => {
+    const res = makeResponse()
+    await apiHandler(makeRequest(
+      { op: 'snapshot', character: CHARACTER, chatId },
+      '/api/dsh-soulmojito/helper',
+      'POST',
+      {
+        host: '127.0.0.1:3456',
+        origin: 'http://127.0.0.1:3456',
+        'content-type': 'application/json',
+      },
+    ), res)
+    expect(res.statusCode).toBe(200)
   })
 })

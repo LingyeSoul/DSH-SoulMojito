@@ -5444,14 +5444,20 @@ window.__ModuleLoader__.load({
               return
             }
           }
+          // Identity is bound by the host, never by the sandboxed card: strip
+          // character/chatId from the op payload and apply the session values
+          // last so a payload copy cannot address another chat.
+          const helperPayload = Object.assign({}, data.payload && typeof data.payload === 'object' ? data.payload : {})
+          delete helperPayload.character
+          delete helperPayload.chatId
           void api('helper', {
             method: 'POST',
             headers: jsonHeaders(),
             body: JSON.stringify({
+              ...helperPayload,
               op: data.op,
               character: current.character,
               chatId: current.chatId,
-              ...(data.payload && typeof data.payload === 'object' ? data.payload : {}),
             }),
           }).then(async (result) => {
             const value = data.op === 'slash' ? await handOffTriggeredSlash(result.value) : result.value

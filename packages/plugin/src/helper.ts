@@ -54,11 +54,12 @@ import {
 import { applyFrontendWorldbookScan } from './frontend-generation-context.js'
 import { tavernDataRoot } from './dsh-home.js'
 import { abortStGeneration } from './generation/pipeline.js'
+import { HttpError } from './http/errors.js'
 import { overlayChatScopedVariables, readChatVariables } from './mvu.js'
 import { ensureChatVariables } from './agent-tavern/mvu-compat.js'
 import { emitChatSaved } from './mods/events.js'
 import { DEFAULT_USER } from './prompt-context.js'
-import { variables } from './runtime.js'
+import { templatesEnabledFlagValue, variables } from './runtime.js'
 
 type JsonObject = Record<string, unknown>
 
@@ -299,6 +300,10 @@ export async function handleHelperApi(req: unknown, res: unknown, db: TavernStor
         value: await putSessionPersona(db, character, chatId, body),
       })
     case 'template.render':
+      // Prompt Template is a profile-level kill switch (templateEnabled: false
+      // or DSH_SOULMOJITO_DISABLE_TEMPLATES). The generation pipeline honors
+      // it; the helper surface must not reopen it for card frontends.
+      if (!templatesEnabledFlagValue()) throw new HttpError(403, 'template rendering is disabled')
       return sendJson(res, 200, {
         ok: true,
         value: { text: await renderFrontendTemplate(db, state, character, chatId, body) },

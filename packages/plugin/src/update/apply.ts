@@ -86,6 +86,16 @@ function shippedEntries(sourceDir: string): string[] {
 /** Windows 上杀毒/索引器对刚落盘文件的瞬时锁：有界重试，仍失败才上抛。 */
 const FILE_LOCK_RETRY_DELAYS_MS = [20, 50, 100, 200]
 
+/**
+ * Unique same-directory temp name. A fixed suffix made two concurrent writers
+ * of the same target share one partial file (the fs-atomic collision class).
+ */
+let atomicTempSequence = 0
+function atomicTempPath(target: string): string {
+  atomicTempSequence += 1
+  return `${target}.${process.pid}.${Date.now()}.${atomicTempSequence}.dsh-soulmojito-partial`
+}
+
 function isTransientLockError(error: unknown): boolean {
   const code = (error as { code?: string } | null)?.code
   return code === 'EBUSY' || code === 'EPERM' || code === 'EACCES'
@@ -102,7 +112,7 @@ function sleepSync(ms: number): void {
  * 半旧内容的窗口从整个拷贝时长缩到 rename 一瞬；瞬时锁做有界重试。
  */
 function replaceFileAtomic(source: string, target: string): void {
-  const temp = `${target}.dsh-soulmojito-partial`
+  const temp = atomicTempPath(target)
   copyFileSync(source, temp)
   for (let attempt = FILE_LOCK_RETRY_DELAYS_MS.length; ; attempt -= 1) {
     try {
@@ -121,7 +131,7 @@ function replaceFileAtomic(source: string, target: string): void {
 
 /** 同 {@link replaceFileAtomic}，但内容来自内存（client 目录逐文件覆盖、update 缓存落盘共用）。 */
 export function writeFileAtomic(target: string, data: string | NodeJS.ArrayBufferView): void {
-  const temp = `${target}.dsh-soulmojito-partial`
+  const temp = atomicTempPath(target)
   writeFileSync(temp, data)
   for (let attempt = FILE_LOCK_RETRY_DELAYS_MS.length; ; attempt -= 1) {
     try {
