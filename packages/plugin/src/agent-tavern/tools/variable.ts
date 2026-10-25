@@ -1,6 +1,7 @@
 /** AgentTavern variable tool slice (registration order 10-14). */
 
 import { clampInt, stringArg } from '../../tool-args.js'
+import type { JsonValue } from '../../../../tavern-store/src/index.js'
 import {
   assertWriteScopeAllowed,
   bindingFor,
@@ -39,7 +40,7 @@ export function variableTools(): ToolDefinition[] {
         target.scope,
         target.scopeId,
         stringArg(args.name),
-        args.value as never,
+        jsonValueOf(args.value),
         typeof args.expectedRevision === 'string' ? args.expectedRevision : undefined,
       )
       return { found: true, scope: target.scope, name: snapshot.name, value: snapshot.value, revision: snapshot.revision, updatedAt: snapshot.updatedAt }
@@ -71,7 +72,7 @@ export function variableTools(): ToolDefinition[] {
         const entry = change as Record<string, unknown>
         return {
           name: stringArg(entry.name),
-          value: entry.value as never,
+          value: jsonValueOf(entry.value),
           ...(typeof entry.expectedRevision === 'string' ? { expectedRevision: entry.expectedRevision } : {}),
         }
       })
@@ -141,4 +142,23 @@ const variableDeleteOutput = objectOutput(
 )
 function variableSummary(snapshot: { name: string; value: unknown; revision: string; updatedAt: string }): Record<string, unknown> {
   return { name: snapshot.name, value: snapshot.value, revision: snapshot.revision, updatedAt: snapshot.updatedAt }
+}
+
+/** Narrow a tool argument to the JSON value the variable store accepts. */
+function jsonValueOf(value: unknown): JsonValue {
+  if (value === undefined || typeof value === 'function' || typeof value === 'symbol') {
+    throw new Error('invalid variable value')
+  }
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new Error('variable number must be finite')
+    return value
+  }
+  if (Array.isArray(value)) return value.map(jsonValueOf)
+  if (typeof value === 'object') {
+    const record: { [key: string]: JsonValue } = {}
+    for (const [key, item] of Object.entries(value)) record[key] = jsonValueOf(item)
+    return record
+  }
+  throw new Error('invalid variable value')
 }

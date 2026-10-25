@@ -25,10 +25,11 @@ import { pathToFileURL } from 'node:url'
 import { onGuidesChanged } from '../guides.js'
 import { resolveGamesService } from '../games/handle.js'
 import { envCompat } from '../env-compat.js'
-import { generationHooks, type GenerationHookPhase } from '../generation-hooks.js'
+import { generationHooks, type GenerationHookHandler, type GenerationHookPhase } from '../generation-hooks.js'
+import type { HostLlmRequest, HostLlmService } from '../host-contract.js'
 import { builtinMacroNames } from '../../../tavern-macros/src/index.js'
 import { hostMacroSnapshot, registerHostMacro } from '../../../tavern-macros/src/index.js'
-import { registerStscriptCommand, stscriptCommandNames } from '../../../tavern-script/src/index.js'
+import { registerStscriptCommand, stscriptCommandNames, type StscriptCommandHandler, type StscriptCommandSpec } from '../../../tavern-script/src/index.js'
 import type { TavernStore } from '../../../tavern-store/src/index.js'
 import { MutationTail } from '../../../tavern-store/src/index.js'
 import { ModAuditLog, type ModAuditEvent } from './audit.js'
@@ -104,9 +105,7 @@ export interface ModHostContext {
   }
   effect?: (callback: () => (() => void) | void, label?: string) => unknown
   /** ctx.llm 代理面（提案 0015 §3.3 api.llm）：仅声明 `llm` 能力的 Mod 可见。 */
-  llm?: {
-    stream?: (request: Record<string, unknown>) => AsyncIterable<Record<string, unknown>>
-  }
+  llm?: Pick<HostLlmService, 'stream'>
 }
 
 export interface ModHostOptions {
@@ -522,7 +521,7 @@ export class ModHost {
         throw new Error('mod entry must export an async setup(api) function')
       }
       const returned = await module.setup(this.createApi(record))
-      if (typeof returned === 'function') record.disposers.push(returned)
+      if (typeof returned === 'function') record.disposers.push(returned as () => void | Promise<void>)
       this.loaded.set(id, record)
       this.loadErrors.delete(id)
       await this.audit.record(id, 'load')
@@ -618,7 +617,7 @@ export class ModHost {
       },
       assets: createModAssets(this.options.dbProvider),
       events: {
-        on: (kind: string, handler: (payload: never) => unknown) => {
+        on: (kind: string, handler: (payload: unknown) => unknown) => {
           if (!modEvents.isKind(kind)) throw new Error(`unknown mod event kind '${String(kind)}' (expected chat-saved | assets-saved | guides-changed | stream-delta)`)
           if (typeof handler !== 'function') throw new Error('mod event handler must be a function')
           // A-3 审计防洪：stream-delta 是逐 chunk 高频事件，handler 逐 chunk 抛错
@@ -695,13 +694,13 @@ export class ModHost {
       hooks: {
         // 提案 §3.4 五相位：接 P0 总线；顺序按 loadingOrder；owner 归因让降级
         // 审计落到本 mod；失败/超时/忘 return 的降级不中断生成由总线保证。
-        on: (phase: string, handler: (payload: never, context: never) => unknown) => {
+        on: (phase: string, handler: (payload: unknown, context: unknown) => unknown) => {
           if (typeof phase !== 'string' || !GENERATION_HOOK_PHASES.has(phase as GenerationHookPhase)) {
             throw new Error(`unknown generation hook phase '${String(phase)}' (expected ${[...GENERATION_HOOK_PHASES].join(' | ')})`)
           }
           if (typeof handler !== 'function') throw new Error('generation hook handler must be a function')
           record.surfaces.hooks.add(phase)
-          return tracked(generationHooks.register(phase as GenerationHookPhase, handler as never, record.manifest.loadingOrder, id))
+          return tracked(generationHooks.register(phase as GenerationHookPhase, handler as GenerationHookHandler<GenerationHookPhase>, record.manifest.loadingOrder, id))
         },
       },
       tools: {
@@ -814,7 +813,12 @@ export class ModHost {
           if (aliases !== undefined && (!Array.isArray(aliases) || aliases.some((alias) => typeof alias !== 'string' || !/^[a-z0-9_]+$/.test(alias)))) {
             throw new Error('stscript command aliases must be [a-z0-9_]+ strings')
           }
-          const fullSpec = { ...(spec as Record<string, unknown>), name: commandName } as never
+          const fullSpec: StscriptCommandSpec = {
+            ...(spec as Record<string, unknown>),
+            name: commandName,
+            ...(aliases !== undefined ? { aliases: aliases as string[] } : {}),
+            run: handler as StscriptCommandHandler,
+          }
           const off = registerStscriptCommand(fullSpec)
           return tracked(off)
         },
@@ -915,7 +919,7 @@ function checkModToolDefinition(def: unknown, modId: string): ModToolDefinition 
  */
 const MACRO_NONDETERMINISM_PATTERN = /Math\.random|Date\.now|new\s+Date\b|performance\.now|hrtime|crypto\.|setTimeout|setInterval|process\.env/
 
-export function screenMacroDeterminism(fn: (...args: never[]) => unknown): string | undefined {
+export function screenMacroDeterminism(fn: { toString(): string }): string | undefined {
   try {
     const match = MACRO_NONDETERMINISM_PATTERN.exec(fn.toString())
     return match === null ? undefined : match[0]
@@ -955,7 +959,15 @@ function createModLlmFace(
     void audit.record(id, 'llm-call', `${model}${tokens}`)
   }
   async function* streamChunks(request: Record<string, unknown>): AsyncIterable<Record<string, unknown>> {
-    const chunks = requireStream()(request)
+    const provider = request['provider']
+    const model = request['model']
+    const messages = request['messages']
+    if (typeof provider !== 'string' || typeof model !== 'string' || !Array.isArray(messages)) {
+      throw new Error('llm request requires provider, model and a messages array')
+    }
+    // Mod requests are free-form JSON; the required routing fields are checked
+    // above and the host adapter validates the remaining optional members.
+    const chunks = requireStream()({ ...request, provider, model, messages } as HostLlmRequest)
     let usage: unknown
     try {
       for await (const chunk of chunks) {
@@ -986,7 +998,12 @@ function createModLlmFace(
           if (kind === 'text-delta' && typeof chunk['text'] === 'string') text += chunk['text']
           else if (kind === 'reasoning-delta' && typeof chunk['text'] === 'string') reasoning += chunk['text']
           else if (kind === 'usage') usage = chunk['usage']
-          else if (kind === 'finish') finish = typeof chunk['reason']?.['kind'] === 'string' ? chunk['reason']['kind'] : undefined
+          else if (kind === 'finish') {
+            const reason = chunk['reason']
+            finish = typeof reason === 'object' && reason !== null && typeof (reason as Record<string, unknown>)['kind'] === 'string'
+              ? (reason as Record<string, unknown>)['kind'] as string
+              : undefined
+          }
         }
         return { text, reasoning, usage, finish }
       })()

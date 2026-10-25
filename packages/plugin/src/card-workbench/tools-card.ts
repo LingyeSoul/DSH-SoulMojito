@@ -329,6 +329,7 @@ export const cardCreateTool: ToolDefinition = tool('card_create', 'Create a new 
 }, cardCreateOutput, async (args, exec) => {
   if (args.confirmed !== true) throw new Error(CONFIRMATION_ERROR)
   const name = editableValue('name', args.name)
+  if (typeof name !== 'string') throw new Error('name must be a string')
   const fields = parseCreateFields(args.fields)
   if (typeof fields.name === 'string' && fields.name !== name) {
     throw new Error(`fields.name ('${fields.name}') must match the name argument ('${name}')`)
@@ -464,6 +465,7 @@ async function nameSessionAfterCreatedCard(exec: ToolExecution, cardName: string
     const agent = exec.agent
     const agentId = agent?.id
     if (typeof agentId !== 'string' || agentId.trim() === '') return
+    if (agent === undefined) return
     const db = await tavernStore()
     const binding = (await db.getState()).sessionBindings[agentId]
     if (binding?.architecture !== 'card-workbench') return

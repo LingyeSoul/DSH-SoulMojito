@@ -153,7 +153,9 @@ export function resolveMvuSchema(raw: unknown): GuardNode | undefined {
   const cached = schemaCache.get(raw)
   if (cached !== undefined || schemaCache.has(raw)) return cached
   const resolved = resolveTemplateNode(raw)
-  const root = resolved !== undefined && resolved.objectMode === 'locked' ? { ...resolved, objectMode: 'open' } : resolved
+  const root: GuardNode | undefined = resolved !== undefined && resolved.objectMode === 'locked'
+    ? { ...resolved, objectMode: 'open' as const }
+    : resolved
   schemaCache.set(raw, root)
   return root
 }

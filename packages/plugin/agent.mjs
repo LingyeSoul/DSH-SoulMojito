@@ -6311,6 +6311,15 @@ function assembleResult(allActivated, diagnostics, timedState) {
 }
 
 // packages/plugin/src/tavern-assets.ts
+function formatEntriesToLore(entries) {
+  return entries.map((entry) => ({
+    ...entry,
+    position: entry.position,
+    selectiveLogic: entry.selectiveLogic,
+    role: entry.role,
+    triggers: entry.triggers
+  }));
+}
 async function collectWorldInfoBooks(db, state, characterName, character, chatId) {
   const worldNames = new Set(state.activeWorlds);
   const follow = state.worldFollowsCharacter !== false;
@@ -6325,7 +6334,7 @@ async function collectWorldInfoBooks(db, state, characterName, character, chatId
     const copy = chatScope !== void 0 && typeof db.getChatWorld === "function" ? await db.getChatWorld(characterName, chatScope, worldName) : void 0;
     const world = copy === void 0 ? await db.getWorld(worldName) : copy;
     if (world) {
-      books.push({ name: copy === void 0 ? world.name : worldName, entries: world.entries });
+      books.push({ name: copy === void 0 ? world.name : worldName, entries: formatEntriesToLore(world.entries) });
       if (worldName === linkedName) linkedImported = true;
     }
   }
@@ -6335,7 +6344,7 @@ async function collectWorldInfoBooks(db, state, characterName, character, chatId
     const embedded = parseCharacterBook(characterBook);
     books.unshift({
       name: `${characterName}:embedded`,
-      entries: embedded.entries,
+      entries: formatEntriesToLore(embedded.entries),
       scanDepth: characterBook.scan_depth,
       tokenBudget: characterBook.token_budget,
       recursiveScanning: characterBook.recursive_scanning
@@ -6709,6 +6718,7 @@ async function embedBatchOnce(config, batch, options) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs);
   let response;
+  if (config.provider === "local") throw new Error("local memory embedding does not use the HTTP embeddings endpoint");
   try {
     response = await options.fetchImpl(`${config.baseURL}/embeddings`, {
       method: "POST",
@@ -8514,7 +8524,8 @@ var INITIAL_VARIABLES_KEY2 = "initial_variables";
 function cardRules(card) {
   const holder = card?.data?.extensions?.["agentTavern"];
   if (!isPlainObject2(holder)) return void 0;
-  return holder.initialVariables?.$rules;
+  const initial = holder["initialVariables"];
+  return isPlainObject2(initial) ? initial["$rules"] : void 0;
 }
 function treeRules(tree) {
   return isPlainObject2(tree) ? tree.$rules : void 0;
@@ -9320,7 +9331,8 @@ function deductionTools() {
             continue;
           }
           const current = existing !== void 0 ? existing.value : getMvuTreePath(seedTree, request.name);
-          const guarded = guardSchema === void 0 ? void 0 : guardMvuWrite(guardSchema, request.name, request.value, current);
+          const requestValue = jsonValueOf(request.value);
+          const guarded = guardSchema === void 0 ? void 0 : guardMvuWrite(guardSchema, request.name, requestValue, current);
           if (guarded !== void 0 && !guarded.ok) {
             failed.push({ name: request.name, error: `guard ${guarded.kind}: ${guarded.reason}` });
             auditChanges.push({
@@ -9333,7 +9345,7 @@ function deductionTools() {
             "chat",
             binding.chatId,
             request.name,
-            guarded === void 0 ? request.value : guarded.value,
+            guarded === void 0 ? requestValue : jsonValueOf(guarded.value),
             existing?.revision
           );
           applied.push(request.name);
@@ -9376,7 +9388,7 @@ function deductionTools() {
           for (const write of [...new Map(run.writes.map((write2) => [write2.path, write2])).values()]) {
             try {
               const existing = await store3.get("chat", binding.chatId, write.path);
-              const written = await store3.set("chat", binding.chatId, write.path, write.value, existing?.revision);
+              const written = await store3.set("chat", binding.chatId, write.path, jsonValueOf(write.value), existing?.revision);
               const before = getMvuTreePath(preTree, write.path);
               const reason = run.notes[write.path] ?? `rule:${write.rule}`;
               const change = receiptChanges.find((entry) => entry.name === write.path);
@@ -9439,6 +9451,23 @@ var settleOutput = objectOutput({
   failed: { type: "array", items: { type: "object", additionalProperties: true } },
   receipt: { type: "object", additionalProperties: true }
 });
+function jsonValueOf(value) {
+  if (value === void 0 || typeof value === "function" || typeof value === "symbol") {
+    throw new Error("invalid variable value");
+  }
+  if (typeof value === "string" || typeof value === "boolean" || value === null) return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error("variable number must be finite");
+    return value;
+  }
+  if (Array.isArray(value)) return value.map(jsonValueOf);
+  if (typeof value === "object") {
+    const record = {};
+    for (const [key, item] of Object.entries(value)) record[key] = jsonValueOf(item);
+    return record;
+  }
+  throw new Error("invalid variable value");
+}
 
 // packages/plugin/src/agent-tavern/tools/games.ts
 function gameTools() {
@@ -9564,8 +9593,10 @@ function gameTools() {
       if (typeof action.type !== "string" || action.type === "") {
         throw new Error("action requires a non-empty type field");
       }
+      const actionRecord = action;
+      const gameAction = { ...actionRecord, type: actionRecord["type"] };
       const sessionId = args.sessionId === void 0 ? await resolveActiveSession(service, binding) : stringArg(args.sessionId);
-      const outcome = await service.agentMove(sessionId, action);
+      const outcome = await service.agentMove(sessionId, gameAction);
       await refreshAgentGamesSummaries(binding.character, binding.chatId);
       return {
         sessionId: outcome.session.id,
@@ -10171,7 +10202,7 @@ function variableTools() {
         target.scope,
         target.scopeId,
         stringArg(args.name),
-        args.value,
+        jsonValueOf2(args.value),
         typeof args.expectedRevision === "string" ? args.expectedRevision : void 0
       );
       return { found: true, scope: target.scope, name: snapshot2.name, value: snapshot2.value, revision: snapshot2.revision, updatedAt: snapshot2.updatedAt };
@@ -10205,7 +10236,7 @@ function variableTools() {
         const entry = change;
         return {
           name: stringArg(entry.name),
-          value: entry.value,
+          value: jsonValueOf2(entry.value),
           ...typeof entry.expectedRevision === "string" ? { expectedRevision: entry.expectedRevision } : {}
         };
       });
@@ -10274,6 +10305,23 @@ var variableDeleteOutput = objectOutput(
 );
 function variableSummary(snapshot2) {
   return { name: snapshot2.name, value: snapshot2.value, revision: snapshot2.revision, updatedAt: snapshot2.updatedAt };
+}
+function jsonValueOf2(value) {
+  if (value === void 0 || typeof value === "function" || typeof value === "symbol") {
+    throw new Error("invalid variable value");
+  }
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error("variable number must be finite");
+    return value;
+  }
+  if (Array.isArray(value)) return value.map(jsonValueOf2);
+  if (typeof value === "object") {
+    const record = {};
+    for (const [key, item] of Object.entries(value)) record[key] = jsonValueOf2(item);
+    return record;
+  }
+  throw new Error("invalid variable value");
 }
 
 // packages/plugin/src/agent-tavern/agent.ts

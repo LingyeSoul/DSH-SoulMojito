@@ -398,6 +398,8 @@ function handledRequirementsArg(value: unknown): HandledRequirement[] {
  * foreshadowing) to [] — on create absence has exactly one empty meaning,
  * while on revise absence means carry-forward (§6.1 overlay, 2026-10-09) and
  * must pass through to the store untouched. */
+function normalizeOutlinePayload(value: unknown, mode: 'create'): NovelOutlinePayload
+function normalizeOutlinePayload(value: unknown, mode: 'revise'): NovelOutlinePayload | NovelOutlineChanges
 function normalizeOutlinePayload(value: unknown, mode: 'create' | 'revise'): NovelOutlinePayload | NovelOutlineChanges {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return value as NovelOutlinePayload
   const outline = { ...(value as Record<string, unknown>) }

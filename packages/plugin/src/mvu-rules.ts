@@ -87,7 +87,8 @@ const INITIAL_VARIABLES_KEY = 'initial_variables'
 function cardRules(card: CharacterCardIR | undefined): unknown {
   const holder = card?.data?.extensions?.['agentTavern']
   if (!isPlainObject(holder)) return undefined
-  return holder.initialVariables?.$rules
+  const initial = holder['initialVariables']
+  return isPlainObject(initial) ? initial['$rules'] : undefined
 }
 
 function treeRules(tree: unknown): unknown {

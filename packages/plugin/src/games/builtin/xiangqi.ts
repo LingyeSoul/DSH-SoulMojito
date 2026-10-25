@@ -208,7 +208,8 @@ function pseudoMoves(board: Board, x: number, y: number): Point[] {
       let cy = y + dy!
       let screen = false
       while (isOnBoard(cx, cy)) {
-        const target = board[cy]![cx]
+        const target = board[cy]?.[cx]
+        if (target === undefined) break
         if (!screen) {
           if (target === null) {
             // 车：空点即走点；炮：空点是无子平移的走点。

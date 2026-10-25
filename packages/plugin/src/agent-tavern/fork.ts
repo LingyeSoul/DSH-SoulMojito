@@ -16,6 +16,7 @@
  */
 import { hostSessionForkInfo, type HostSessionLog } from '../../../bind/src/index.js'
 import type { ChatLogIR } from '../../../tavern-format/src/index.js'
+import type { TavernContextMode } from '../../../tavern-store/src/index.js'
 import type { MemoryRecord, MemoryVectorEntry, TavernState, VariableSnapshot } from '../../../tavern-store/src/index.js'
 
 export type ForkAdoptionOutcome = 'adopted' | 'skipped' | 'bound'
@@ -62,7 +63,7 @@ export interface ForkVectorsLike {
 export interface ForkAdoptionDependencies {
   store: ForkStoreLike
   /** index.ts 的 bindSession：继承 contextMode、世界书跟随与 activeCharacter 语义与正常激活一致。 */
-  bind: (sessionId: string, character: string, chatId: string, contextMode: string) => Promise<unknown>
+  bind: (sessionId: string, character: string, chatId: string, contextMode: TavernContextMode) => Promise<unknown>
   variables: ForkVariablesLike
   memories?: ForkMemoriesLike
   vectors?: ForkVectorsLike
@@ -83,6 +84,7 @@ export function adoptAgentTavernFork(
 ): Promise<ForkAdoptionOutcome> {
   const sessionId = typeof session?.id === 'string' ? session.id : undefined
   if (sessionId === undefined || sessionId === '') return Promise.resolve('skipped')
+  if (session === null || session === undefined) return Promise.resolve('skipped')
   const previous = forkAdoptionTails.get(sessionId)
   if (previous) return previous
   const current = adoptOne(sessionId, session, deps).finally(() => {

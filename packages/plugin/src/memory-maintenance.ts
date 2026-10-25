@@ -24,6 +24,7 @@
 
 import { randomUUID } from 'node:crypto'
 import type { ChatLogIR, ChatMessage } from '../../tavern-format/src/index.js'
+import type { HostLlmChunk, PluginContext } from './host-contract.js'
 import {
   MemoryMaintenanceStore,
   MemoryStore,
@@ -92,17 +93,12 @@ export interface MemoryMaintenanceDeps {
 
 /** 宿主 ctx 的最小结构面：llm.stream（部署默认模型）+ agentDefaultModel + logger。 */
 export interface MaintenanceLlmContext {
-  llm: { stream(options: unknown): AsyncIterable<MaintenanceStreamChunk> }
-  agentDefaultModel: { currentSelection(): { provider: string; model: string } }
+  llm: PluginContext['llm']
+  agentDefaultModel: PluginContext['agentDefaultModel']
   logger?: { info?: (message: string) => void; warn?: (message: string) => void }
 }
 
-export type MaintenanceStreamChunk =
-  | { type: 'block-end'; index: number; block: { type: string; text?: string; id?: string; name?: string; arguments?: string } }
-  | { type: 'text-delta'; index: number; text: string }
-  | { type: 'reasoning-delta'; index: number; text: string }
-  | { type: 'usage'; usage: unknown }
-  | { type: 'finish'; reason: { kind: string; failure?: { message?: string; code?: string } } }
+export type MaintenanceStreamChunk = HostLlmChunk
 
 interface MaintenanceLoopMessage {
   role: 'user' | 'assistant' | 'tool'
@@ -260,7 +256,7 @@ async function computePending(
     snapshot = undefined
   }
   if (snapshot === undefined) {
-    return { pending: [], validReceipts: receipts, retiredReasons: ['chat snapshot unavailable; pending ranges unknown'], totalFloors: 0, chatMissing: true }
+    return { pending: [], validReceipts: [...receipts], retiredReasons: ['chat snapshot unavailable; pending ranges unknown'], totalFloors: 0, chatMissing: true }
   }
   const floors = snapshot.chat.messages
   const valid: MaintenanceReceipt[] = []
@@ -336,6 +332,7 @@ async function executeRun(
 
     // run 开始即落 running（进程重启后 GET 侧 interrupted 扫描依赖这条记录）。
     await stateStore.write(scope.character, scope.chatId, {
+      version: 1,
       receipts: computation.validReceipts,
       lastRun: { runId: active.runId, status: 'running', startedAt: active.startedAt, summary },
     })
@@ -835,8 +832,8 @@ function parseEdits(value: unknown): ParsedEdit[] {
         expectedRevision: record.expectedRevision,
         ...(record.content === undefined ? {} : { content: record.content }),
         ...(record.tags === undefined ? {} : { tags: record.tags as string[] }),
-        ...(record.importance === undefined ? {} : { importance: Math.max(0, Math.min(1, record.importance)) }),
-        ...(record.confidence === undefined ? {} : { confidence: Math.max(0, Math.min(1, record.confidence)) }),
+        ...(record.importance === undefined ? {} : { importance: Math.max(0, Math.min(1, numberField(record.importance, 'importance'))) }),
+        ...(record.confidence === undefined ? {} : { confidence: Math.max(0, Math.min(1, numberField(record.confidence, 'confidence'))) }),
         ...(record.reason === 'merge' ? { reason: 'merge' as const } : {}),
       })
       return
@@ -856,8 +853,8 @@ function parseEdits(value: unknown): ParsedEdit[] {
         content: record.content,
         kind: record.kind,
         ...(record.tags === undefined ? {} : { tags: record.tags as string[] }),
-        ...(record.importance === undefined ? {} : { importance: Math.max(0, Math.min(1, record.importance)) }),
-        ...(record.confidence === undefined ? {} : { confidence: Math.max(0, Math.min(1, record.confidence)) }),
+        ...(record.importance === undefined ? {} : { importance: Math.max(0, Math.min(1, numberField(record.importance, 'importance'))) }),
+        ...(record.confidence === undefined ? {} : { confidence: Math.max(0, Math.min(1, numberField(record.confidence, 'confidence'))) }),
       })
       return
     }
@@ -1079,4 +1076,9 @@ async function toolCompleteMaintenance(run: MaintenanceRunState, args: Record<st
 
   run.summary.completion = { baseFloor: base, headFloor: head }
   return { payload: { ok: true, baseFloor: base, headFloor: head, coveredRecords: records.length }, isError: false }
+}
+
+function numberField(value: unknown, label: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`${label} must be a finite number`)
+  return value
 }

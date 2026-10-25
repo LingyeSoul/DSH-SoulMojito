@@ -114,7 +114,7 @@ function tryParseJson(text: string): unknown {
 export interface ImportPartPromptInput {
   bookTitle: string
   chapterTitle: string
-  part: ImportedPart
+  part: ImportedPart & { text: string }
   partCount: number
   /** Last characters of the preceding part, for cross-part continuity only. */
   precedingTail: string

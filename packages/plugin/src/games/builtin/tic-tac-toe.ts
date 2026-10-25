@@ -24,7 +24,7 @@ const CROSS = 1 // X
 const NOUGHT = 2 // O
 /** 建议集上限远大于棋盘（9 格），天然有界——§3.2 的 ≤64 约束自然满足。 */
 const COLUMNS = 'ABC'
-const DIRECTIONS = [[1, 0], [0, 1], [1, 1], [1, -1]]
+const DIRECTIONS: ReadonlyArray<readonly [number, number]> = [[1, 0], [0, 1], [1, 1], [1, -1]]
 
 /** 引擎唯一权威清单（内置游戏的 manifest 与 meta 同源同值）。 */
 /** 引擎唯一权威清单（内置游戏的 manifest 与 meta 同源同值）。engines 刻意

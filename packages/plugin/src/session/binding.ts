@@ -1,4 +1,5 @@
 import { getAgentTavernCapabilities, getAgentTavernCapabilitiesPromise } from '../runtime.js'
+import type { TavernArchitecture, TavernContextMode, TavernSessionBinding, TavernState, TavernStore } from '../../../tavern-store/src/index.js'
 import { activeCharacterPatch } from './active-character.js'
 
 export class TavernArchitectureConflictError extends Error {
@@ -9,15 +10,15 @@ export class TavernArchitectureConflictError extends Error {
   }
 }
 export async function bindSession(
-  db,
-  sessionId,
-  character,
-  chatId,
+  db: TavernStore,
+  sessionId: string,
+  character: string,
+  chatId: string,
   group = false,
-  architecture = 'st',
-  contextMode = 'dsh-native',
+  architecture: TavernArchitecture = 'st',
+  contextMode: TavernContextMode = 'dsh-native',
   initializationPending = false,
-) {
+): Promise<TavernState> {
   // 绑定即进入某张卡的会话：先把旧 state 的卡级 regex 归属补齐一次（字段存在
   // 后为纯读），保证本会话第一次生成就按角色卡过滤。
   await db.ensureRegexScriptOwners()
@@ -32,8 +33,8 @@ export async function bindSession(
       && existing.character === character
       && existing.chatId === chatId
     const pending = initializationPending
-      && (existing?.initializationPending === true || !sameAgentBinding)
-    const binding = architecture === 'agent-tavern' && !group
+      && ((existing?.architecture === 'agent-tavern' && existing.initializationPending === true) || !sameAgentBinding)
+    const binding: TavernSessionBinding = architecture === 'agent-tavern' && !group
       ? {
           architecture: 'agent-tavern', contextMode, character, chatId,
           ...(pending ? { initializationPending: true } : {}),
@@ -50,7 +51,10 @@ export async function bindSession(
   })
 }
 
-export async function assertAgentTavernAvailable(architecture, contextMode) {
+export async function assertAgentTavernAvailable(
+  architecture: TavernArchitecture,
+  contextMode: TavernContextMode,
+): Promise<void> {
   if (architecture !== 'agent-tavern') return
   const capabilities = await getAgentTavernCapabilitiesPromise() ?? getAgentTavernCapabilities()
   const status = contextMode === 'agent-managed' ? capabilities.managed : capabilities.native
@@ -59,19 +63,22 @@ export async function assertAgentTavernAvailable(architecture, contextMode) {
   }
 }
 
-export function requestedArchitecture(value) {
+export function requestedArchitecture(value: unknown): 'st' | 'agent-tavern' {
   if (value === undefined || value === 'st') return 'st'
   if (value === 'agent-tavern') return value
   throw new Error(`unsupported Tavern architecture '${String(value)}'`)
 }
 
-export function requestedContextMode(value) {
+export function requestedContextMode(value: unknown): TavernContextMode {
   if (value === undefined || value === 'dsh-native') return 'dsh-native'
   if (value === 'agent-managed') return value
   throw new Error(`unsupported AgentTavern context mode '${String(value)}'`)
 }
 
-export function assertStGenerationBinding(state, sessionId) {
+export function assertStGenerationBinding(
+  state: Pick<TavernState, 'sessionBindings'>,
+  sessionId: unknown,
+): void {
   if (typeof sessionId !== 'string') return
   const binding = state.sessionBindings[sessionId]
   if (binding?.architecture === 'agent-tavern') {

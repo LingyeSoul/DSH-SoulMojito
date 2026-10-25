@@ -1,5 +1,6 @@
 // Shared JSON request/response helpers for the plugin HTTP surface.
 
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import { HttpError } from './errors.js'
 
 /**
@@ -26,6 +27,12 @@ export interface JsonRequest {
   on(event: string, listener: (chunk?: unknown) => void): unknown
   destroy?(): void
 }
+
+/** Route request shape: the host web server hands over a Node IncomingMessage. */
+export type HttpRequest = IncomingMessage
+
+/** Route response shape: the host web server hands over a Node ServerResponse. */
+export type HttpResponse = ServerResponse
 
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024
 

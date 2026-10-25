@@ -67,7 +67,7 @@
  */
 
 import { randomInt } from 'node:crypto'
-import type { GameEngine, GameManifest } from '../standard.js'
+import type { GameAction, GameEngine, GameManifest } from '../standard.js'
 
 /** 引擎唯一权威清单（内置自我门控无意义，engines 刻意缺席）。 */
 const MANIFEST: GameManifest = {
@@ -339,7 +339,7 @@ function engagedMonsterOf(state: DungeonState): Monster | undefined {
 }
 
 /** 动作收尾的回合判定：战斗中在双方间交替，其余恒回英雄（引擎即节奏作者）。 */
-function settleTurn(next: DungeonState, actor: Role): void {
+function settleTurn(next: WorkState, actor: Role): void {
   if (next.finished) return
   const engaged = engagedMonsterOf(next) !== undefined
   next.turn = engaged ? (actor === 'hero' ? 'world' : 'hero') : 'hero'
@@ -360,7 +360,7 @@ function readDir(action: Record<string, unknown>): Dir {
 }
 
 /** 英雄移动：探索 / 拾取 / 陷阱 / 踏入怪物格遭遇。 */
-function heroMove(next: DungeonState, action: Record<string, unknown>): void {
+function heroMove(next: WorkState, action: Record<string, unknown>): void {
   const dir = readDir(action)
   const [dx, dy] = DIR_DELTA[dir]
   const tx = next.hero.x + dx!
@@ -435,7 +435,7 @@ function heroMove(next: DungeonState, action: Record<string, unknown>): void {
 }
 
 /** 英雄攻击：±1 浮动，架势防御减半；击杀结算掉落（金币恒掉、20% 药水）。 */
-function heroAttack(next: DungeonState): void {
+function heroAttack(next: WorkState): void {
   const monster = engagedMonsterOf(next)
   if (monster === undefined) {
     throw new Error('英雄面前没有怪物——先移动到怪物格才能攻击')
@@ -469,7 +469,7 @@ function heroAttack(next: DungeonState): void {
 }
 
 /** 英雄喝药：+12 HP（不超上限）；战斗中喝药把回合让给怪物。 */
-function heroDrink(next: DungeonState): void {
+function heroDrink(next: WorkState): void {
   if (next.hero.potions <= 0) {
     throw new Error('没有治疗药水了')
   }
@@ -483,7 +483,7 @@ function heroDrink(next: DungeonState): void {
 }
 
 /** 英雄下楼：弃当前层揭示（楼梯坍塌，无回溯），新层入口重揭示。 */
-function heroDescend(next: DungeonState): void {
+function heroDescend(next: WorkState): void {
   const tile = next.tiles[keyOf(next.hero.x, next.hero.y)]
   if (tile?.kind !== 'stairs') {
     throw new Error('这里没有向下的石阶——找到 🪜 才能下楼')
@@ -500,7 +500,7 @@ function heroDescend(next: DungeonState): void {
 }
 
 /** 怪物回合三择：attack / heavy（35% 落空、命中 ×2）/ defend（下一击减半）。 */
-function worldAct(next: DungeonState, action: Record<string, unknown>): void {
+function worldAct(next: WorkState, action: Record<string, unknown>): void {
   const monster = engagedMonsterOf(next)
   if (monster === undefined) {
     throw new Error('当前没有与英雄接战的怪物')
@@ -569,10 +569,10 @@ const engine: GameEngine = {
     return { state }
   },
 
-  legalActions(state: DungeonState): Array<Record<string, unknown>> {
+  legalActions(state: DungeonState): GameAction[] {
     if (state.finished) return []
     const plan = carveFloor(state.seed, state.depth)
-    const actions: Array<Record<string, unknown>> = []
+    const actions: GameAction[] = []
     if (state.turn === 'hero') {
       for (const dir of ['up', 'down', 'left', 'right'] as const) {
         const [dx, dy] = DIR_DELTA[dir]

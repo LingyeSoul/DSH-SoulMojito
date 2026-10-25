@@ -11192,7 +11192,7 @@ function importTools() {
             prompt: renderImportPartPrompt({
               bookTitle: snapshot.config.title,
               chapterTitle: chapter?.title ?? part.chapterId,
-              part: source.part,
+              part: { ...source.part, text: source.text },
               partCount: state.parts.length,
               precedingTail: preceding
             })

@@ -1,6 +1,7 @@
 import { tavernUpdate } from '../runtime.js'
 import { updateChangelog } from '../update/service.js'
-import { readJson, sendJson } from './io.js'
+import type { PluginContext } from '../host-contract.js'
+import { readJson, sendJson, type HttpRequest, type HttpResponse } from './io.js'
 
 /**
  * `/api/dsh-soulmojito/update` 路由族：
@@ -10,7 +11,14 @@ import { readJson, sendJson } from './io.js'
  *   立刻返回，客户端轮询 `GET update` 读进度（安装本身跑在本进程里，不会因
  *   浏览器断开而中断）。
  */
-export async function handleUpdateApi(ctx, req, res, url, route, method) {
+export async function handleUpdateApi(
+  ctx: PluginContext,
+  req: HttpRequest,
+  res: HttpResponse,
+  url: URL,
+  route: string,
+  method: string,
+): Promise<void> {
   const service = tavernUpdate(ctx)
   if (method === 'GET' && route === 'update') {
     const refresh = url.searchParams.get('refresh')

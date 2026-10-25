@@ -2,6 +2,7 @@
 
 import { beginGameWait, onGamesChanged, resolveGamesService } from '../../games/handle.js'
 import type { GameMoveRecord, GameSessionSummary } from '../../games/sessions.js'
+import type { GameAction } from '../../games/standard.js'
 import { createLazyProjection } from '../../lazy-projection.js'
 import { createHostPromptExpander, hostPromptSafe } from '../../prompt-safety.js'
 import { clampInt, stringArg } from '../../tool-args.js'
@@ -150,10 +151,12 @@ export function gameTools(): ToolDefinition[] {
       if (typeof (action as Record<string, unknown>).type !== 'string' || (action as Record<string, unknown>).type === '') {
         throw new Error('action requires a non-empty type field')
       }
+      const actionRecord = action as Record<string, unknown>
+      const gameAction: GameAction = { ...actionRecord, type: actionRecord['type'] as string }
       const sessionId = args.sessionId === undefined
         ? await resolveActiveSession(service, binding)
         : stringArg(args.sessionId)
-      const outcome = await service.agentMove(sessionId, action as Record<string, unknown>)
+      const outcome = await service.agentMove(sessionId, gameAction)
       await refreshAgentGamesSummaries(binding.character, binding.chatId)
       // 增量面（2026-10-14 增量修订）：describe + 轮次 + 终局态——服务端
       // GameActionResult 的 view 保留给 HTTP 面，工具面「读归读、写归写」。

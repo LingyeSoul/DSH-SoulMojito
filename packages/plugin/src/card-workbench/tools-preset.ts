@@ -71,10 +71,11 @@ export const presetTools: ToolDefinition[] = [
     if (raw === undefined) throw new Error(`preset '${preset}' not found`)
     if (!Array.isArray(raw.prompts)) throw new Error(`preset '${preset}' has no prompts array`)
     const next = { ...raw, prompts: raw.prompts.map((prompt) => ({ ...(prompt as Record<string, unknown>) })) }
-    const orderSets = Array.isArray(next.prompt_order) ? next.prompt_order as Array<Record<string, unknown>> : []
+    const prompts = next.prompts
+    const orderSets = Array.isArray(raw['prompt_order']) ? raw['prompt_order'] as Array<Record<string, unknown>> : []
     const applied: Array<{ name: string; identifiers: string[]; fields: string[] }> = []
     for (const edit of edits) {
-      const matches = next.prompts.filter((prompt) => (prompt as Record<string, unknown>)?.name === edit.name)
+      const matches = prompts.filter((prompt) => (prompt as Record<string, unknown>)?.name === edit.name)
       if (matches.length === 0) throw new Error(`prompt '${edit.name}' not found in preset '${preset}'`)
       const identifiers: string[] = []
       const fields: string[] = []
@@ -105,7 +106,7 @@ export const presetTools: ToolDefinition[] = [
     await db.putPreset(preset, next)
     // 写穿 AgentTavern 预设投影（激活预设被改动时下一次装配即时生效）。
     await emitAgentPresetChanged()
-    return { preset, promptCount: next.prompts.length, edits: applied }
+    return { preset, promptCount: prompts.length, edits: applied }
   }),
   tool('chat_log_read', 'Read a bounded range of floors from a stored Tavern chat log (character + chatId) — the debugging entry point: compare what the model actually produced against regex/beautification output before touching resources. At most 50 messages per call, each message body truncated to 2000 characters.', {
     character: { type: 'string', required: true, description: 'Character name the chat belongs to.' },

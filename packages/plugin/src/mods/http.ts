@@ -60,7 +60,7 @@ export interface ModReply {
   html(document: string, csp?: string): void
 }
 
-export type ModRouteHandler = (req: ModHttpRequest, reply: ModReply) => void | Promise<void>
+export type ModRouteHandler = (req: ModHttpRequest, reply: ModReply) => unknown
 
 export interface ModRouteTable {
   register(method: string, path: string, handler: ModRouteHandler): () => void
@@ -251,7 +251,7 @@ export function rewriteViewportUnits(document: string): string {
   const rewritten = shielded
     .replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)/gi, (_whole, open: string, css: string, close: string) => `${open}${rewriteViewportUnitsInCssText(css)}${close}`)
     .replace(/(\bstyle\s*=\s*)(["'])([^"']*)\2/gi, (_whole, prefix: string, quote: string, css: string) => `${prefix}${quote}${rewriteViewportUnitsInCssText(css)}${quote}`)
-  return rewritten.replace(/\u0000dt-vh-script-(\d+)\u0000/g, (_whole, index: string) => scripts[Number(index)])
+  return rewritten.replace(/\u0000dt-vh-script-(\d+)\u0000/g, (_whole, index: string) => scripts[Number(index)] ?? '')
 }
 
 /** 视口变量脚本：初始化用 iframe 自身 innerHeight（宿主 load 投递后即刻纠正）。 */

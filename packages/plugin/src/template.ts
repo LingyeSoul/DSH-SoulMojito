@@ -21,6 +21,7 @@ import {
 } from '../../tavern-template/src/index.js'
 import type { ActivatedEntry, ActivationResult, Lorebook, LoreEntry } from '../../tavern-lore/src/index.js'
 import type { CharacterCardIR, ChatMessage, PresetIR } from '../../tavern-format/src/index.js'
+import type { JsonObject } from '../../tavern-template/src/paths.js'
 
 const INITIAL_VARIABLES_KEY = 'initial_variables'
 
@@ -277,7 +278,7 @@ export async function createGenerationTemplates(options: GenerationTemplateOptio
           depthPrompt: depthPrompt !== null && typeof depthPrompt === 'object'
             ? String((depthPrompt as { prompt?: unknown }).prompt ?? '')
             : '',
-          data: card.data as unknown as Record<string, unknown>,
+          data: jsonObjectOf(card.data),
         }
     },
     findPresetPrompt: (name) => {
@@ -313,11 +314,11 @@ export async function createGenerationTemplates(options: GenerationTemplateOptio
   // InitialVariables：逐条渲染 → JSON/YAML 解析 → 汇总后一次性重置 initial 并重建视图
   // （须先于 GENERATE:BEFORE 预渲染，对齐 ST 顺序渲染的变量可见性）
   if (partition.initial.length > 0) {
-    const initialData: Record<string, unknown> = {}
+    const initialData: JsonObject = {}
     for (const entry of partition.initial) {
       const rendered = await renderText(entry.content, `initial-variables ${entry.book}#${entry.uid}`)
       const parsed = runtime.parseInitialVariables(rendered)
-      if (parsed) deepMerge(initialData as never, parsed as never)
+      if (parsed) deepMerge(initialData, parsed)
     }
     runtime.setInitialVariables(initialData)
   }
@@ -411,4 +412,9 @@ export function mergeTemplateLocalVars(
   if (Object.keys(ensureMetadataObject(metadata, INITIAL_VARIABLES_KEY)).length === 0) {
     delete metadata[INITIAL_VARIABLES_KEY]
   }
+}
+
+/** Template hosts consume JSON values; card data is JSON by contract. */
+function jsonObjectOf(value: unknown): JsonObject {
+  return JSON.parse(JSON.stringify(value)) as JsonObject
 }

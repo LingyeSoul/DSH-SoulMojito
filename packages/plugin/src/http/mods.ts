@@ -1,6 +1,7 @@
 import type { ModHost } from '../mods/host.js'
 import { modHost } from '../runtime.js'
-import { readJson, sendJson } from './io.js'
+import type { PluginContext } from '../host-contract.js'
+import { readJson, sendJson, type HttpRequest, type HttpResponse } from './io.js'
 
 /**
  * `/api/dsh-soulmojito/mods` 路由族（提案 0015 §3.2/§3.3 P1）：
@@ -15,7 +16,14 @@ import { readJson, sendJson } from './io.js'
  * 404（不泄露 Mod 是否存在）。管理面在宿主初始化失败时 GET 回空快照、写路径
  * 上抛（bootstrap 不 500 的教义只覆盖读面）。
  */
-export async function handleModsApi(ctx, req, res, url, route, method) {
+export async function handleModsApi(
+  ctx: PluginContext,
+  req: HttpRequest,
+  res: HttpResponse,
+  url: URL,
+  route: string,
+  method: string,
+): Promise<void> {
   const notFound = () => sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
   const segments = route === 'mods' ? [] : route.slice('mods/'.length).split('/')
   const modId = segments[0] ?? ''

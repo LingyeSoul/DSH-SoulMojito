@@ -17,6 +17,7 @@
 import { ChatRevisionConflictError, type ChatSnapshot, type TavernModelSelection } from '../../tavern-store/src/index.js'
 import type { ChatLogIR } from '../../tavern-format/src/index.js'
 import { GUIDES_BLOCK_HEADER } from './guides.js'
+import type { PluginContext } from './host-contract.js'
 import { optionalFeedback } from './rewrite.js'
 
 const CANDIDATE_HISTORY_WINDOW = 10
@@ -277,15 +278,11 @@ interface CandidateDb {
   saveChat(characterName: string, chatId: string, log: ChatLogIR, expectedRevision?: string): Promise<string>
 }
 
-type CandidateStreamChunk =
-  | { type: 'text-delta'; text: string }
-  | { type: 'reasoning-delta'; text: string }
-  | { type: 'usage'; usage: unknown }
-  | { type: 'finish'; reason: { kind: string; failure?: { message?: string } } }
+type CandidateStreamChunk = import('./host-contract.js').HostLlmChunk
 
 interface CandidateContext {
-  llm: { stream: (request: unknown) => AsyncIterable<CandidateStreamChunk> }
-  agentDefaultModel: { currentSelection(): TavernModelSelection }
+  llm: PluginContext['llm']
+  agentDefaultModel: PluginContext['agentDefaultModel']
 }
 
 export interface CandidateGenerationOptions {

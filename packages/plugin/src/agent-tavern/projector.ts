@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { ChatRevisionConflictError, KeyedMutationTails, MutationTail, type ChatScriptsFile, type TavernSessionBinding, type TavernState } from '../../../tavern-store/src/index.js'
 import { RegexPlacement, type CharacterCardIR, type ChatLogIR, type ChatMessage, type RegexScriptIR } from '../../../tavern-format/src/index.js'
 import { applyRegexScripts } from '../../../tavern-script/src/index.js'
-import { hostPluginMessageSource, hostSessionFormatVersion, isHostPluginMessageSource, sessionEvents, LEGACY_PLUGIN_NAME, PLUGIN_NAME, type HostSessionLog } from '../../../bind/src/index.js'
+import { hostPluginMessageSource, hostSessionFormatVersion, isHostPluginMessageSource, sessionEvents, LEGACY_PLUGIN_NAME, PLUGIN_NAME, type HostSessionEventData, type HostSessionLog } from '../../../bind/src/index.js'
 import { applyUpdateVariableToChat, ensureChatVariables, messageStatVariables, seedJsrMvuVariables } from './mvu-compat.js'
 import { collectSessionRegexScripts } from '../regex-session.js'
 
@@ -12,7 +12,7 @@ export interface NativeSessionEvent {
   type: string
   seq: number
   time: number
-  data: any
+  data?: HostSessionEventData
 }
 
 /** 一次宿主 Session.append 的计划项；surfaceOp 缺省表示 log-only 事件。 */
@@ -22,11 +22,8 @@ export interface SessionImportAppend {
   surfaceOp?: 'append'
 }
 
-export interface NativeSession {
+export interface NativeSession extends HostSessionLog {
   id: string
-  /** 投影器规范化视图；宿主原生会话（rc.6 events / 0.1.2 snapshotEvents）经
-   * host-session 兼容层读取，不要求本形状完整。 */
-  events: readonly NativeSessionEvent[]
 }
 
 export interface ProjectorStore {
@@ -192,7 +189,8 @@ function projectMessage(
   scripts: RegexScriptIR[],
 ): ChatMessage | undefined {
   if (event.type === 'user/message') {
-    if (event.data?.source?.kind !== 'user') return undefined
+    const source = event.data?.source
+    if (typeof source !== 'object' || source === null || Array.isArray(source) || (source as Record<string, unknown>)['kind'] !== 'user') return undefined
     const text = messageText(event.data?.content)
     if (text === '') return undefined
     return {
@@ -230,8 +228,8 @@ function projectionExtra(
   session: NativeSession,
   event: NativeSessionEvent,
   contextMode: string,
-  turn?: number,
-  step?: number,
+  turn?: unknown,
+  step?: unknown,
 ): Record<string, unknown> {
   return {
     agentTavern: {
@@ -240,8 +238,8 @@ function projectionExtra(
       sessionId: session.id,
       eventSeq: event.seq,
       messageId: event.type === 'assistant/message' ? event.data?.message?.id : event.data?.id,
-      ...(Number.isSafeInteger(turn) ? { turn } : {}),
-      ...(Number.isSafeInteger(step) ? { step } : {}),
+      ...(typeof turn === 'number' && Number.isSafeInteger(turn) ? { turn } : {}),
+      ...(typeof step === 'number' && Number.isSafeInteger(step) ? { step } : {}),
     },
   }
 }
@@ -501,7 +499,7 @@ function turnAt(session: NativeSession, cursor: number): number | undefined {
   let turn: number | undefined
   for (const event of sessionEvents(session) as readonly NativeSessionEvent[]) {
     if (event.seq > cursor) break
-    if (event.type === 'turn/start' && Number.isSafeInteger(event.data?.turn)) turn = event.data.turn
+    if (event.type === 'turn/start' && typeof event.data?.turn === 'number' && Number.isSafeInteger(event.data.turn)) turn = event.data.turn
   }
   return turn
 }

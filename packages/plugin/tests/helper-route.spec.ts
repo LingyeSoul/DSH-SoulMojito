@@ -99,6 +99,16 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
     home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-helper-e2e-'))
     process.env.DSH_HOME = home
     store = await TavernStore.open(join(home, 'soulmojito'))
+    await store.importCharacter({
+      spec: 'chara_card_v2',
+      spec_version: '2.0',
+      data: {
+        name: CHARACTER, description: 'Helper probe card', personality: '', scenario: '',
+        first_mes: 'Hello from the card', mes_example: 'Example dialogue', creator_notes: 'Creator notes',
+        system_prompt: '', post_history_instructions: '', alternate_greetings: [], tags: [], creator: '',
+        character_version: '',
+      },
+    })
     chatId = await store.createChat(CHARACTER, HEADER, [
       { name: CHARACTER, is_user: false, is_system: false, send_date: '', mes: 'greeting' },
       { name: 'User', is_user: true, is_system: false, send_date: '', mes: 'hello' },
@@ -152,6 +162,18 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
     const messages = value.messages as Array<Record<string, unknown>>
     expect(messages.map((message) => message.role)).toEqual(['assistant', 'user', 'assistant'])
     expect(messages[2]).toMatchObject({ message_id: 2, message: 'reply', data: { mood: 'calm' } })
+  })
+
+  it('getchar exposes imported card text under TavernHelper field names', async () => {
+    const result = await call({
+      op: 'template.render',
+      character: CHARACTER,
+      chatId,
+      code: '<%= getchar().first_message %>|<%= getchar().message_example %>|<%= getchar().creator_notes %>',
+    })
+    expect(result.status).toBe(200)
+    const text = String((result.body?.value as { text?: unknown } | undefined)?.text)
+    expect(text).toBe('Hello from the card|Example dialogue|Creator notes')
   })
 
   it('binds helper identity to a server-issued token and ignores spoofed payload identity', async () => {

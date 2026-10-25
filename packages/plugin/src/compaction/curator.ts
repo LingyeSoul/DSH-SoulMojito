@@ -21,6 +21,7 @@
  * 宿主 basic 的默认 summarizer 同为 ctx.llm.stream 辅助调用。
  */
 import { hostPluginMessageSource, importHostPackage } from '../../../bind/src/index.js'
+import type { HostLlmChunk, HostLlmRequest } from '../host-contract.js'
 import { tavernDataRoot } from '../dsh-home.js'
 import { TavernStore } from '../../../tavern-store/src/index.js'
 import {
@@ -48,7 +49,7 @@ interface HostCompactionSummary {
 }
 
 interface HostCompactionInput {
-  system?: unknown
+  system?: string
   tools?: readonly unknown[]
   messages: readonly unknown[]
 }
@@ -61,13 +62,29 @@ interface HostAgent {
   options?: { provider?: string; model?: string }
 }
 
-interface HostBasicEngine {
-  new (ctx: unknown, config?: Record<string, unknown>): {
-    ctx: any
-    config: Record<string, unknown>
-    compactIfNeeded(agent: HostAgent, trigger: string, signal?: AbortSignal): Promise<unknown>
-    summarize(input: HostCompactionInput, agent: HostAgent, signal?: AbortSignal): Promise<HostCompactionSummary>
+interface HostCompactionContext {
+  llm: {
+    stream(options: HostLlmRequest): AsyncIterable<HostLlmChunk>
   }
+  logger?: { info?: (message: string) => void; warn?: (message: string) => void }
+  sessionProjections?: {
+    stateOf?: (session: HostAgent['session'], key: string) => unknown
+  }
+}
+
+interface HostBasicEngineInstance {
+  ctx: HostCompactionContext
+  config: Record<string, unknown>
+  compactIfNeeded(agent: HostAgent, trigger: string, signal?: AbortSignal): Promise<unknown>
+  summarize(input: HostCompactionInput, agent: HostAgent, signal?: AbortSignal): Promise<HostCompactionSummary>
+}
+
+interface HostBasicEngine {
+  new (ctx: HostCompactionContext, config?: Record<string, unknown>): HostBasicEngineInstance
+}
+
+interface HostBasicModule {
+  BasicCompactionEngine: HostBasicEngine
 }
 
 interface HostBlockAssembler {
@@ -97,7 +114,7 @@ const BASIC_CONFIG_KEYS = new Set([
  * 满即整体清空，活跃会话至多重新告警一次。 */
 const UNANCHORED_WARN_DEDUP_LIMIT = 1024
 
-const { BasicCompactionEngine } = await importHostPackage<HostBasicEngine>('@deepseek-ai/dsh-compaction-basic')
+const { BasicCompactionEngine } = await importHostPackage<HostBasicModule>('@deepseek-ai/dsh-compaction-basic')
 const { BlockAssembler, createUserMessage, contentHasImage, LlmError } = await importHostPackage<HostLlmModule>('@deepseek-ai/dsh-llm')
 
 export class TavernCompactionCurator extends BasicCompactionEngine {
@@ -108,7 +125,7 @@ export class TavernCompactionCurator extends BasicCompactionEngine {
   /** 闸门未锚定告警的去重键（session:reason）；服务是单例，实例级去重即进程级。 */
   private readonly unanchoredWarnings = new Set<string>()
 
-  constructor(ctx: unknown, config: Record<string, unknown> = {}) {
+  constructor(ctx: HostCompactionContext, config: Record<string, unknown> = {}) {
     super(ctx, basicConfigOnly(config))
     this.curator = readCuratorOptions(config)
     this.usageThresholdRatio = this.curator.usageThresholdRatio ?? DEFAULT_USAGE_THRESHOLD_RATIO
@@ -192,7 +209,7 @@ type PressureStateRead = { ok: true; state: UsagePressureState } | { ok: false; 
  * 返回 failure（提案 0006 §4.4 降级路径），不新增 static inject 硬依赖。
  * 降级不再无声：failure 会经 warnGateUnanchoredOnce 落日志——静默降级曾让
  * 0006 闸门在真机形同虚设（2026-09-18 churn 事故），重启会话后也无人察觉。 */
-function pressureStateOf(ctx: any, session: HostAgent['session']): PressureStateRead {
+function pressureStateOf(ctx: HostCompactionContext, session: HostAgent['session']): PressureStateRead {
   try {
     const service = ctx.sessionProjections
     if (typeof service?.stateOf !== 'function') return { ok: false, failure: 'sessionProjections service unavailable or shape-drifted' }
@@ -216,7 +233,7 @@ function unanchoredReasonOf(state: UsagePressureState): string {
   return 'projection not anchorable (unknown reason)'
 }
 
-function warn(ctx: any, message: string): void {
+function warn(ctx: HostCompactionContext, message: string): void {
   try {
     ctx.logger?.warn?.(message)
   } catch {
@@ -224,7 +241,7 @@ function warn(ctx: any, message: string): void {
   }
 }
 
-function info(ctx: any, message: string): void {
+function info(ctx: HostCompactionContext, message: string): void {
   try {
     ctx.logger?.info?.(message)
   } catch {
@@ -260,7 +277,7 @@ async function resolveCuratorTarget(
 
 /** 复刻 basic 默认 summarizer 的调用与 fail-closed 语义，仅替换指令模板。 */
 async function summarizeStoryCheckpoint(
-  ctx: any,
+  ctx: HostCompactionContext,
   config: Record<string, unknown>,
   curator: CuratorOptions,
   input: HostCompactionInput,

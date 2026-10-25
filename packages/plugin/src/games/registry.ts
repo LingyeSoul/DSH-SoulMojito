@@ -357,7 +357,7 @@ export class GameRegistry {
 
     // 双子段冗余对账（game.json 与 meta 的同款纪律，注册期逐字段强制相等）。
     const manifest = engine.meta
-    const redundant: Array<[string, unknown]> = [
+    const redundant: Array<[keyof GameManifest, unknown]> = [
       ['id', record.id],
       ['name', record.name],
       ['version', record.version],

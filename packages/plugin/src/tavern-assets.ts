@@ -2,10 +2,11 @@ import {
   parseCharacterBook,
   parseRegexScripts,
   type CharacterCardIR,
+  type LoreEntry as FormatLoreEntry,
   type RegexScriptIR,
   type WorldBookIR,
 } from '../../tavern-format/src/index.js'
-import type { Lorebook } from '../../tavern-lore/src/index.js'
+import type { LoreEntry, Lorebook } from '../../tavern-lore/src/index.js'
 import type { TavernState, TavernStore } from '../../tavern-store/src/index.js'
 
 interface CharacterAsset {
@@ -22,6 +23,22 @@ interface ChatWorldSource {
 }
 
 const AGENT_TAVERN_PRELOAD_MAX_CHARS = 32_000
+
+/**
+ * The format IR keeps ST's on-disk numeric enums while the lore engine types
+ * the same fields as literal unions. `normalizeEntry` inside the engine
+ * re-validates every entry, so this boundary only re-labels the two
+ * discriminator fields instead of widening the engine's public enums.
+ */
+export function formatEntriesToLore(entries: FormatLoreEntry[]): LoreEntry[] {
+  return entries.map((entry) => ({
+    ...entry,
+    position: entry.position as LoreEntry['position'],
+    selectiveLogic: entry.selectiveLogic as LoreEntry['selectiveLogic'],
+    role: entry.role as LoreEntry['role'],
+    triggers: entry.triggers as LoreEntry['triggers'],
+  }))
+}
 
 export async function collectWorldInfoBooks(
   db: Pick<TavernStore, 'getWorld'> & ChatWorldSource,
@@ -52,7 +69,7 @@ export async function collectWorldInfoBooks(
     const world = copy === undefined ? await db.getWorld(worldName) : copy
     if (world) {
       // A copy keeps the linked world name so activation identity is stable.
-      books.push({ name: copy === undefined ? world.name : worldName, entries: world.entries })
+      books.push({ name: copy === undefined ? world.name : worldName, entries: formatEntriesToLore(world.entries) })
       if (worldName === linkedName) linkedImported = true
     }
   }
@@ -65,7 +82,7 @@ export async function collectWorldInfoBooks(
     const embedded = parseCharacterBook(characterBook)
     books.unshift({
       name: `${characterName}:embedded`,
-      entries: embedded.entries,
+      entries: formatEntriesToLore(embedded.entries),
       scanDepth: characterBook.scan_depth,
       tokenBudget: characterBook.token_budget,
       recursiveScanning: characterBook.recursive_scanning,

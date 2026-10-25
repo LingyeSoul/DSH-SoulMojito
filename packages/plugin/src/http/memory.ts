@@ -10,6 +10,7 @@ import { tavernDataRoot } from '../dsh-home.js'
 import { clearEmbedStatus, embedBreakerOpen, embedProbe, readEmbedStatus } from '../memory-embed.js'
 import { detectLocalQuantizations, inferLocalModelSettings, installLocalEmbedRuntime, isLocalEmbedRuntimeInstalled, validateLocalModelDir } from '../memory-embed-local.js'
 import { MaintenanceRunConflictError, memoryMaintenanceStatus, startMemoryMaintenance, type MemoryMaintenanceDeps } from '../memory-maintenance.js'
+import type { MaintenanceLlmContext } from '../memory-maintenance.js'
 import { memories, memoryVectors } from '../runtime.js'
 import { readJson, sendJson } from './io.js'
 import { readGuidesSnapshot } from './panel.js'
@@ -125,6 +126,9 @@ export async function handleMemoryEmbedApi(
         })
       }
       const autoFilled: Record<string, { value: number | 'cls' | 'mean'; source: string }> = {}
+      if (config.provider !== 'local') {
+        throw new Error('local memory embedding normalization returned a non-local provider')
+      }
       if (!explicitPooling && config.pooling !== undefined) {
         autoFilled.pooling = { value: config.pooling, source: inferred.sources.pooling ?? 'default (cls)' }
       }
@@ -262,7 +266,7 @@ export async function handleMemoryEmbedApi(
  * summary 里——预算耗尽是纪律内收尾不是 error）。
  */
 export async function handleMemoryMaintenanceApi(
-  ctx,
+  ctx: MaintenanceLlmContext,
   req: NovelApiRequest,
   res: NovelApiResponse,
   url: URL,
@@ -282,7 +286,7 @@ export async function handleMemoryMaintenanceApi(
       return sendJson(res, 404, { ok: false, message: `chat '${body.character}/${body.chatId}' not found` })
     }
     try {
-      const { runId } = await startMemoryMaintenance(ctx, maintenanceDeps(db), {
+      const { runId } = await startMemoryMaintenance(ctx, await maintenanceDeps(db), {
         character: body.character,
         chatId: body.chatId,
       })
@@ -301,7 +305,7 @@ export async function handleMemoryMaintenanceApi(
     if (character === null || chatId === null || character === '' || chatId === '') {
       return sendJson(res, 400, { ok: false, message: 'character and chatId query params are required' })
     }
-    const view = await memoryMaintenanceStatus(maintenanceDeps(db), { character, chatId })
+    const view = await memoryMaintenanceStatus(await maintenanceDeps(db), { character, chatId })
     return sendJson(res, 200, { ok: true, ...view })
   }
 
@@ -309,11 +313,11 @@ export async function handleMemoryMaintenanceApi(
 }
 
 /** 维护 run 依赖面：全部走 memoized 实例（单写者纪律）。 */
-function maintenanceDeps(db: TavernStore): MemoryMaintenanceDeps {
+async function maintenanceDeps(db: TavernStore): Promise<MemoryMaintenanceDeps> {
   return {
     root: tavernDataRoot(),
     db,
-    memory: memories(),
-    vectors: memoryVectors(),
+    memory: await memories(),
+    vectors: await memoryVectors(),
   }
 }

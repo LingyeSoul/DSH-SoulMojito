@@ -88,6 +88,11 @@ function plainObject(value: unknown): Record<string, unknown> | undefined {
   return value as Record<string, unknown>
 }
 
+/** Template runtimes consume JSON values; card data is JSON by contract. */
+function jsonObjectOf(value: unknown): JsonObject {
+  return JSON.parse(JSON.stringify(value)) as JsonObject
+}
+
 /** 读 `chat_metadata.variables` 的活引用（缺省/形状不合返回新空对象，不写回）。 */
 export function readChatVariables(chat: ChatLogIR): Record<string, unknown> {
   return plainObject(chat?.header?.chat_metadata?.variables) ?? {}
@@ -382,12 +387,16 @@ export function createMvuRuntime(input: MvuRuntimeInput, stores: Parameters<type
   const card = character.card
   const cardName = card.data.nickname || card.data.name || characterName
   const lastUserMessageId = (() => {
-    for (let i = chat.messages.length - 1; i >= 0; i--) if (chat.messages[i].is_user) return i
+    for (let i = chat.messages.length - 1; i >= 0; i--) {
+      const message = chat.messages[i]
+      if (message !== undefined && message.is_user) return i
+    }
     return -1
   })()
   const lastCharMessageId = (() => {
     for (let i = chat.messages.length - 1; i >= 0; i--) {
-      if (!chat.messages[i].is_user && !chat.messages[i].is_system) return i
+      const message = chat.messages[i]
+      if (message !== undefined && !message.is_user && !message.is_system) return i
     }
     return -1
   })()
@@ -437,7 +446,7 @@ export function createMvuRuntime(input: MvuRuntimeInput, stores: Parameters<type
         mesExample: card.data.mesExample,
         creatorNotes: card.data.creatorNotes,
         depthPrompt: '',
-        data: card.data as unknown as Record<string, unknown>,
+        data: jsonObjectOf(card.data),
       }
     },
     findPresetPrompt: () => null,
@@ -549,10 +558,11 @@ export async function retryMvuSettlement(
   let floorIndex = -1
   for (let i = chat.messages.length - 1; i >= 0; i--) {
     const message = chat.messages[i]
-    if (!message.is_user && !message.is_system) { floorIndex = i; break }
+    if (message !== undefined && !message.is_user && !message.is_system) { floorIndex = i; break }
   }
   if (floorIndex === -1) throw new Error('no assistant floor to settle')
   const floor = chat.messages[floorIndex]
+  if (floor === undefined) throw new Error('no assistant floor to settle')
 
   // 群聊楼层名义上是成员：characterName 是组名时按楼层发言人回落
   const character = (await db.getCharacter(characterName)) ?? (await db.getCharacter(floor.name))

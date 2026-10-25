@@ -11,18 +11,18 @@ export type HostSessionShape = 'events' | 'snapshotEvents' | 'log' | 'unreadable
 
 export interface DshContextLike {
   agentPresets?: {
-    mount?: (agentContext: unknown, presetId: string) => Promise<unknown>
+    mount?(...args: unknown[]): Promise<unknown>
   }
   systemPrompt?: {
-    section?: (...args: unknown[]) => unknown
-    context?: (...args: unknown[]) => unknown
+    section?(...args: unknown[]): unknown
+    context?(...args: unknown[]): unknown
   }
   tools?: {
-    register?: (...args: unknown[]) => unknown
+    register?(...args: unknown[]): unknown
   }
   agents?: {
-    get?: (...args: unknown[]) => unknown
-    create?: (...args: unknown[]) => unknown
+    get?(...args: unknown[]): unknown
+    create?(...args: unknown[]): unknown
   }
 }
 

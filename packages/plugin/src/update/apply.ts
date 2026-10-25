@@ -51,8 +51,22 @@ export interface TavernInstallOutcome {
   installed: TavernLocalBuild
 }
 
+export interface PluginManagerLike {
+  installBundle(spec: string, options: { requestId: string; enabled: boolean }): Promise<unknown>
+}
+
+/** Host context seams used by the update path (Cordis service access is dynamic). */
+export interface UpdateHostContext {
+  pluginManager?: unknown
+  logger?: { info?: (message: string) => void; warn?: (message: string) => void; error?: (message: string) => void }
+  get?(name: string): unknown
+  on?(event: string, handler: (payload: unknown) => void): unknown
+  inject?(deps: readonly string[], callback: (context: UpdateHostContext) => unknown): unknown
+  profileContext?: { name?: unknown }
+}
+
 export interface TavernInstallRequest {
-  ctx: any
+  ctx: UpdateHostContext
   repository: string
   ref: string
   /** 目标 commit；未知时退回分支 ref。 */
@@ -63,7 +77,7 @@ export interface TavernInstallRequest {
   log: (line: string) => void
   timeoutMs?: number
   /** 已由 watchPluginManager 捕获到的服务实例；缺省时在调用点重新解析。 */
-  pluginManager?: any
+  pluginManager?: PluginManagerLike | null
 }
 
 const DEFAULT_INSTALL_TIMEOUT_MS = 10 * 60 * 1000
@@ -149,7 +163,7 @@ export function writeFileAtomic(target: string, data: string | NodeJS.ArrayBuffe
 }
 
 export async function installUpdate(request: TavernInstallRequest): Promise<TavernInstallOutcome> {
-  let pluginManager: any = request.pluginManager ?? null
+  let pluginManager: PluginManagerLike | null = request.pluginManager ?? null
   const outcome = await runInstallChain(request, [
     { name: 'cli', run: () => installViaCli(request) },
     {
@@ -223,14 +237,14 @@ export async function runInstallChain(
  * 没有该服务的宿主整插件不挂载），因此三个面都试一遍并逐个容错：
  * 动态 inject 的捕获（watchPluginManager）、ctx.get('pluginManager')、ctx.pluginManager。
  */
-export function resolvePluginManager(ctx: any): any {
+export function resolvePluginManager(ctx: UpdateHostContext): PluginManagerLike | null {
   for (const read of [
     () => ctx?.pluginManager,
     () => ctx?.get?.('pluginManager'),
   ]) {
     try {
-      const service = read()
-      if (service !== undefined && service !== null && typeof service.installBundle === 'function') return service
+      const service = pluginManagerOf(read())
+      if (service !== undefined) return service
     } catch {
       // Cordis 对未声明 inject 的服务属性会抛错，继续试下一个面。
     }
@@ -246,19 +260,23 @@ export function resolvePluginManager(ctx: any): any {
  * 函数——`typeof returned === 'function'` 恒 false 会把监听 fiber 永远留在
  * 宿主上。Fiber 的卸载方法是 `.dispose()`，两种形状都兼容。
  */
-export function watchPluginManager(ctx: any, onReady: (service: any) => void): () => void {
+export function watchPluginManager(ctx: UpdateHostContext | undefined, onReady: (service: PluginManagerLike) => void): () => void {
   if (typeof ctx?.inject !== 'function') return () => {}
   try {
-    const returned: any = ctx.inject(['pluginManager'], (serviceCtx: any) => {
+    const returned = ctx.inject(['pluginManager'], (serviceCtx) => {
       try {
-        if (serviceCtx?.pluginManager !== undefined) onReady(serviceCtx.pluginManager)
+        const service = serviceCtx?.pluginManager
+        if (service !== undefined && service !== null) onReady(service as PluginManagerLike)
       } catch {
       }
     })
     return () => {
       try {
-        if (typeof returned?.dispose === 'function') returned.dispose()
-        else if (typeof returned === 'function') returned()
+        if (typeof returned === 'object' && returned !== null && typeof (returned as { dispose?: unknown }).dispose === 'function') {
+          (returned as { dispose(): void }).dispose()
+        } else if (typeof returned === 'function') {
+          (returned as () => void)()
+        }
       } catch {
       }
     }
@@ -272,7 +290,7 @@ export function watchPluginManager(ctx: any, onReady: (service: any) => void): (
  * 里出现），dsh 启动的 profile 会挂 `ctx.profileContext.name`
  * （dsh-app-boot 的 ProfileContext）；两级探测后仍未知则回退 'desktop'。
  */
-export function resolveProfileName(ctx: any): string {
+export function resolveProfileName(ctx: UpdateHostContext): string {
   for (const read of [() => ctx?.profileContext?.name, () => process.env.DSH_PROFILE]) {
     try {
       const value = read()
@@ -338,7 +356,7 @@ export async function installViaCli(request: TavernInstallRequest): Promise<Tave
 
 export async function installViaPluginManager(
   request: TavernInstallRequest,
-  pluginManager: any,
+  pluginManager: PluginManagerLike,
 ): Promise<TavernInstallOutcome | null> {
   const spec = pluginInstallSpec(request.repository, request.ref, request.commit)
   const requestId = `dsh-soulmojito-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
@@ -346,9 +364,10 @@ export async function installViaPluginManager(
   const dispose = subscribeInstallEvents(request, requestId)
   try {
     const result = await pluginManager.installBundle(spec, { requestId, enabled: true })
-    const application = normalizeApplication(result?.application, result)
+    const record = asRecord(result)
+    const application = normalizeApplication(record?.['application'], record)
     const failed = application === 'failed' || application === 'cancelled'
-    const detail = failed ? describeFailure(result) : ''
+    const detail = failed ? describeFailure(record) : ''
     // git 依赖的 manifest 值永远是裸仓库 URL（commit 只记在 lockfile 里），
     // plugin-manager 的「diff 定位目标包」因此对已安装的 git 源必然歧义并回滚。
     const ambiguous = detail.includes('ambiguous-install')
@@ -390,23 +409,25 @@ export async function installViaPluginManager(
  */
 function subscribeInstallEvents(request: TavernInstallRequest, requestId: string): () => void {
   const handlers: Array<() => void> = []
-  const on = (event: string, handler: (payload: any) => void) => {
+  const on = (event: string, handler: (payload: unknown) => void) => {
     try {
       const dispose = request.ctx?.on?.(event, handler)
-      if (typeof dispose === 'function') handlers.push(dispose)
+      if (typeof dispose === 'function') handlers.push(dispose as () => void)
     } catch {
     }
   }
-  on('plugin-manager/install-log', (chunk) => {
-    if (chunk?.requestId !== requestId) return
-    const text = typeof chunk?.text === 'string' ? chunk.text.trimEnd() : ''
-    if (text !== '') request.log(`pnpm ${chunk?.stream ?? 'out'}: ${text}`)
-    if (typeof chunk?.exitCode === 'number') request.log(`pnpm exited with ${chunk.exitCode}`)
+  on('plugin-manager/install-log', (raw) => {
+    const chunk = asRecord(raw)
+    if (chunk?.['requestId'] !== requestId) return
+    const text = typeof chunk['text'] === 'string' ? chunk['text'].trimEnd() : ''
+    if (text !== '') request.log(`pnpm ${String(chunk['stream'] ?? 'out')}: ${text}`)
+    if (typeof chunk['exitCode'] === 'number') request.log(`pnpm exited with ${chunk['exitCode']}`)
   })
-  on('plugin-manager/install-state', (state) => {
-    if (state?.requestId !== requestId) return
-    const attempt = state?.attempt
-    request.log(`plugin-manager: ${state?.phase ?? 'working'}${attempt?.registry === undefined ? '' : ` (${attempt.registry} ${attempt.index}/${attempt.total})`}`)
+  on('plugin-manager/install-state', (raw) => {
+    const state = asRecord(raw)
+    if (state?.['requestId'] !== requestId) return
+    const attempt = asRecord(state['attempt'])
+    request.log(`plugin-manager: ${String(state['phase'] ?? 'working')}${attempt?.['registry'] === undefined ? '' : ` (${String(attempt['registry'])} ${String(attempt['index'])}/${String(attempt['total'])})`}`)
   })
   return () => {
     for (const dispose of handlers.splice(0)) {
@@ -418,20 +439,34 @@ function subscribeInstallEvents(request: TavernInstallRequest, requestId: string
   }
 }
 
-function normalizeApplication(application: unknown, result: any): TavernInstallApplication {
+function normalizeApplication(application: unknown, result: Record<string, unknown> | undefined): TavernInstallApplication {
   if (application === 'applied' || application === 'restart-required' || application === 'cancelled' || application === 'failed') {
     return application
   }
-  if (result?.error !== undefined) return 'failed'
+  if (result?.['error'] !== undefined) return 'failed'
   return 'unknown'
 }
 
-function describeFailure(result: any): string {
-  const error = result?.error
-  const code = typeof error?.code === 'string' ? error.code : ''
-  const message = typeof error?.message === 'string' ? error.message : ''
-  const output = typeof result?.packageResult?.output === 'string' ? result.packageResult.output.trim() : ''
+function describeFailure(result: Record<string, unknown> | undefined): string {
+  const error = asRecord(result?.['error'])
+  const code = typeof error?.['code'] === 'string' ? error['code'] : ''
+  const message = typeof error?.['message'] === 'string' ? error['message'] : ''
+  const packageResult = asRecord(result?.['packageResult'])
+  const output = typeof packageResult?.['output'] === 'string' ? packageResult['output'].trim() : ''
   return [code, message, output.split('\n').slice(-4).join(' ')].filter((item) => item !== '').join(' | ')
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
+}
+
+function pluginManagerOf(value: unknown): PluginManagerLike | undefined {
+  const record = asRecord(value)
+  return record !== undefined && typeof record['installBundle'] === 'function'
+    ? record as unknown as PluginManagerLike
+    : undefined
 }
 
 export async function installViaCheckout(request: TavernInstallRequest): Promise<TavernInstallOutcome> {

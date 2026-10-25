@@ -221,7 +221,7 @@ function validateWorldEntryShape(entry: unknown, index: number): WorldPlanEntryC
   if (note !== undefined && (typeof note !== 'string' || note.length > MAX_NOTE_LENGTH)) {
     throw new Error(`entries[${index}].note must be a string of at most ${MAX_NOTE_LENGTH} characters`)
   }
-  const base = { uid: uid as number, action, fields: parsedFields }
+  const base: WorldPlanEntryChange = { uid: uid as number, action, fields: parsedFields }
   return note === undefined ? base : { ...base, note }
 }
 
@@ -244,9 +244,12 @@ function normalizeWorldPlan(raw: Record<string, unknown>): WorldPlan | undefined
       if (field.currentValue !== undefined && !isValidWorldPlanValue(field.currentValue)) return undefined
       fields.push(field.currentValue === undefined ? { field: field.field, newValue: field.newValue } : { field: field.field, currentValue: field.currentValue, newValue: field.newValue })
     }
-    entries.push(record.note === undefined
+    const note = record.note
+    if (note !== undefined && typeof note !== 'string') return undefined
+    const parsed: WorldPlanEntryChange = note === undefined
       ? { uid: record.uid as number, action: record.action, fields }
-      : { uid: record.uid as number, action: record.action, fields, note: record.note })
+      : { uid: record.uid as number, action: record.action, fields, note }
+    entries.push(parsed)
   }
   return {
     kind: 'world',

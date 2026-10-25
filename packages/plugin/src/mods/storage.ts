@@ -75,9 +75,10 @@ export class ModStorage {
     }
     return this.mutate(async () => {
       const file = await this.readFile() ?? { version: 1, values: {}, updatedAt: new Date(0).toISOString() }
+      const stored = jsonValueOf(value)
       const next: StorageFile = {
         version: 1,
-        values: { ...file.values, [key]: structuredClone(value) },
+        values: { ...file.values, [key]: structuredClone(stored) },
         updatedAt: new Date().toISOString(),
       }
       await this.writeFile(next)
@@ -159,4 +160,9 @@ function inspectValue(value: unknown): ValueProblem | undefined {
     return { message: 'mod storage value exceeds the size limit (256KB)', quota: true }
   }
   return undefined
+}
+
+/** inspectValue accepted the value; a JSON round-trip gives the stored representation. */
+function jsonValueOf(value: unknown): JsonValue {
+  return JSON.parse(JSON.stringify(value)) as JsonValue
 }

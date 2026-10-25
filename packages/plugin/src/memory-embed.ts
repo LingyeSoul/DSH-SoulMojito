@@ -284,6 +284,7 @@ async function embedBatchOnce(
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), options.timeoutMs)
   let response: Response
+  if (config.provider === 'local') throw new Error('local memory embedding does not use the HTTP embeddings endpoint')
   try {
     response = await options.fetchImpl(`${config.baseURL}/embeddings`, {
       method: 'POST',

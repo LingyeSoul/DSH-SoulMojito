@@ -229,13 +229,18 @@ export function parseCommitResponse(value: unknown): TavernUpdateCommit | null {
 
 /** GitHub REST `/compare/{base}...{head}` 响应：commits 倒序（最新在前）+ files。 */
 export function parseCompareResponse(value: unknown): { commits: TavernUpdateCommit[], files: string[], filesKnown: boolean } {
-  const record = (typeof value === 'object' && value !== null ? value : {}) as Record<string, any>
-  const filesKnown = Array.isArray(record.files)
-  const commits = Array.isArray(record.commits)
-    ? record.commits.map(commitFromApi).filter((item): item is TavernUpdateCommit => item !== null)
+  const record = (typeof value === 'object' && value !== null ? value : {}) as Record<string, unknown>
+  const filesRaw = record['files']
+  const filesKnown = Array.isArray(filesRaw)
+  const commits = Array.isArray(record['commits'])
+    ? record['commits'].map(commitFromApi).filter((item): item is TavernUpdateCommit => item !== null)
     : []
   const files = filesKnown
-    ? record.files.map((file: any) => (typeof file?.filename === 'string' ? file.filename : '')).filter(Boolean)
+    ? filesRaw.map((file: unknown) => {
+        const entry = typeof file === 'object' && file !== null ? file as Record<string, unknown> : undefined
+        const filename = entry?.['filename']
+        return typeof filename === 'string' ? filename : ''
+      }).filter((filename) => filename !== '')
     : []
   return { commits: commits.reverse(), files, filesKnown }
 }

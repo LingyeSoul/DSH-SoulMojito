@@ -848,7 +848,7 @@ export async function assembleWriterPackInput(deps: {
 
 /* ----------------------------- orchestration ----------------------------- */
 
-function writerTextOf(output: ContentBlockLike[]): string {
+function writerTextOf(output: readonly ContentBlockLike[]): string {
   return output
     .filter((block) => block?.type === 'text' && typeof block.text === 'string')
     .map((block) => block.text ?? '')

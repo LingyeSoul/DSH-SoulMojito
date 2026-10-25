@@ -1,6 +1,8 @@
 import { hostPromptSafe } from './prompt-safety.js'
 import { tavernMacroExpand } from './prompt-context.js'
 import { store } from './runtime.js'
+import type { CharacterCardIR, GroupIR } from '../../tavern-format/src/index.js'
+import type { PluginContext } from './host-contract.js'
 
 let activeAgentPrompt = ''
 
@@ -8,7 +10,7 @@ export function getActiveAgentPrompt(): string {
   return activeAgentPrompt
 }
 
-export function publicGroup(group) {
+export function publicGroup(group: GroupIR) {
   return {
     name: group.name,
     members: group.members,
@@ -20,7 +22,7 @@ export function publicGroup(group) {
   }
 }
 
-export async function buildModelCatalog(ctx) {
+export async function buildModelCatalog(ctx: PluginContext) {
   const catalog = await Promise.all(ctx.llm.listProviders().map(async (provider) => {
     try {
       const models = await ctx.llm.listModels(provider.id)
@@ -41,9 +43,9 @@ export async function buildModelCatalog(ctx) {
           ...(reasoning === undefined ? {} : { reasoning }),
         }
       }))
-      return { kind: 'group', group: { id: provider.id, name: provider.name, models: entries } }
+      return { kind: 'group' as const, group: { id: provider.id, name: provider.name, models: entries } }
     } catch (error) {
-      return { kind: 'failure', failure: { id: provider.id, name: provider.name, message: error instanceof Error ? error.message : String(error) } }
+      return { kind: 'failure' as const, failure: { id: provider.id, name: provider.name, message: error instanceof Error ? error.message : String(error) } }
     }
   }))
   return {
@@ -74,20 +76,22 @@ export async function refreshActivePrompt() {
   }
 }
 
-export function publicCard(card) {
+export function publicCard(card: CharacterCardIR) {
   return { spec: card.spec, specVersion: card.specVersion, data: card.data }
 }
 
 /** 角色短身份摘要存在 data.extensions.agentTavern 下；服务端钳制长度，非字符串直接拒绝。 */
-export function clampIdentitySummary(card) {
-  const extensions = card?.data?.extensions
-  const agentTavern = extensions?.agentTavern
+export function clampIdentitySummary(card: unknown): void {
+  const record = typeof card === 'object' && card !== null ? card as { data?: { extensions?: Record<string, unknown> } } : undefined
+  const extensions = record?.data?.extensions
+  const agentTavern = extensions?.['agentTavern']
   if (!agentTavern || typeof agentTavern !== 'object' || Array.isArray(agentTavern)) return
-  const summary = agentTavern.identitySummary
+  const fields = agentTavern as Record<string, unknown>
+  const summary = fields['identitySummary']
   if (summary === undefined || summary === null || summary === '') {
-    delete agentTavern.identitySummary
+    delete fields['identitySummary']
     return
   }
   if (typeof summary !== 'string') throw new Error('identitySummary must be a string')
-  agentTavern.identitySummary = summary.slice(0, 2000)
+  fields['identitySummary'] = summary.slice(0, 2000)
 }

@@ -1,10 +1,49 @@
 import { confirmSessionAppend, hostSessionFormatVersion, readSessionEvents, sessionEvents } from '../../../bind/src/index.js'
+import type { HostSessionLog } from '../../../bind/src/index.js'
 import { createMessage } from '../message.js'
 import { requestedArchitecture, requestedContextMode } from './binding.js'
 
-export function occupyHostSession(agent, ctx?) {
+export interface TraceSession extends HostSessionLog {
+  append?(type: string, data: unknown, opts?: unknown): unknown
+}
+
+export interface TraceAgentLike {
+  id?: string
+  session?: TraceSession
+  phase?: unknown
+}
+
+export interface TavernSessionTrace {
+  session: TraceSession & { append(type: string, data: unknown, opts?: unknown): unknown }
+  turn: number
+  step: number
+  stepOpen: boolean
+  turnOpen: boolean
+  logging: boolean
+  completed: boolean
+  agent?: TraceAgentLike
+}
+
+interface LoopPhaseLike {
+  kind?: unknown
+  lastTurn?: unknown
+}
+
+interface TraceContext {
+  logger?: { warn?: (message: string) => void }
+}
+
+function isAppendableSession(
+  session: TraceSession | undefined,
+): session is TraceSession & { append(type: string, data: unknown, opts?: unknown): unknown } {
+  return session !== undefined && typeof session.append === 'function'
+}
+
+export function occupyHostSession(agent: TraceAgentLike, ctx?: TraceContext): void {
+  const session = agent.session
+  if (!isAppendableSession(session)) return
   try {
-    if (sessionEvents(agent.session).some((event) => event.type === 'turn/start')) return
+    if (sessionEvents(session).some((event) => event.type === 'turn/start')) return
     if (!canAdvanceHostTurnBase(agent)) return
     // D-2 confirmable write（决策 2026-10-11-confirmable-session-writes，逐条确
     // 认）：占位 turn 对是「必须成立」写入——基线推进依赖它在场，静默丢失会让
@@ -14,16 +53,16 @@ export function occupyHostSession(agent, ctx?) {
     const started = confirmSessionAppend({
       session: agent.session,
       logger: ctx?.logger,
-      label: `session occupation turn/start (${agent.id})`,
-      append: () => agent.session.append('turn/start', { turn: 1 }),
+      label: `session occupation turn/start (${agent.id ?? 'unknown'})`,
+      append: () => session.append('turn/start', { turn: 1 }),
       present: (events) => events.some((event) => event.type === 'turn/start' && event.data?.turn === 1),
     })
     if (!started) return
     const ended = confirmSessionAppend({
       session: agent.session,
       logger: ctx?.logger,
-      label: `session occupation turn/end (${agent.id})`,
-      append: () => agent.session.append('turn/end', { turn: 1, reason: { kind: 'completed' } }),
+      label: `session occupation turn/end (${agent.id ?? 'unknown'})`,
+      append: () => session.append('turn/end', { turn: 1, reason: { kind: 'completed' } }),
       present: (events) => events.some((event) => event.type === 'turn/end' && event.data?.turn === 1),
     })
     if (!ended) return
@@ -42,16 +81,16 @@ export function occupyHostSession(agent, ctx?) {
  * 该字段不是宿主的公开 seam，因此只在确认「存在、idle、可写」时使用；探测失败时
  * 调用方必须放弃写入 turn 边界（见 canAdvanceHostTurnBase）。
  */
-function loopPhase(agent) {
+function loopPhase(agent: TraceAgentLike | null | undefined): LoopPhaseLike | undefined {
   const phase = agent?.phase
-  return typeof phase === 'object' && phase !== null ? phase : undefined
+  return typeof phase === 'object' && phase !== null ? phase as LoopPhaseLike : undefined
 }
 
 /** 探测 live loop 的轮次基线是否可推进：phase 存在、idle、且字段可写。 */
-export function canAdvanceHostTurnBase(agent) {
+export function canAdvanceHostTurnBase(agent: TraceAgentLike | null | undefined): boolean {
   const phase = loopPhase(agent)
   if (phase === undefined || phase.kind !== 'idle') return false
-  if (!Number.isSafeInteger(phase.lastTurn)) return false
+  if (typeof phase.lastTurn !== 'number' || !Number.isSafeInteger(phase.lastTurn)) return false
   // 回写同值：冻结对象 / 只读 getter 会让写入静默失败，这里提前发现。
   const before = phase.lastTurn
   try {
@@ -63,11 +102,11 @@ export function canAdvanceHostTurnBase(agent) {
 }
 
 /** 把 live loop 的轮次基线推进到 turn（只增不减）。返回是否生效。 */
-export function advanceHostTurnBase(agent, turn) {
+export function advanceHostTurnBase(agent: TraceAgentLike | null | undefined, turn: number): boolean {
   if (!Number.isSafeInteger(turn) || turn < 1) return false
   const phase = loopPhase(agent)
   if (phase === undefined || phase.kind !== 'idle') return false
-  if (Number.isSafeInteger(phase.lastTurn) && phase.lastTurn >= turn) return true
+  if (typeof phase.lastTurn === 'number' && Number.isSafeInteger(phase.lastTurn) && phase.lastTurn >= turn) return true
   try {
     phase.lastTurn = turn
   } catch {
@@ -77,12 +116,12 @@ export function advanceHostTurnBase(agent, turn) {
 }
 
 /** 会话日志里已写入的最大 turn/start 轮号；没有 turn 边界时返回 undefined。 */
-export function lastLoggedTurn(agent) {
-  let last
+export function lastLoggedTurn(agent: TraceAgentLike): number | undefined {
+  let last: number | undefined
   for (const event of sessionEvents(agent.session)) {
     if (event.type !== 'turn/start') continue
     const value = event.data?.turn
-    if (Number.isSafeInteger(value) && (last === undefined || value > last)) last = value
+    if (typeof value === 'number' && Number.isSafeInteger(value) && (last === undefined || value > last)) last = value
   }
   return last
 }
@@ -92,32 +131,36 @@ export function lastLoggedTurn(agent) {
  * 否则半个导入会留下未关闭的 turn，live loop 的下一个 turn/start 会被准入拒绝。
  * 返回日志里已写入的最大轮号（供调用方推进基线）。
  */
-export function closeImportBracket(agent, reason) {
-  let openTurn
-  let openStep
-  for (const event of sessionEvents(agent.session)) {
-    if (event.type === 'turn/start' && Number.isSafeInteger(event.data?.turn)) {
-      openTurn = event.data.turn
+export function closeImportBracket(agent: TraceAgentLike, reason: unknown): number | undefined {
+  const session = agent.session
+  if (!isAppendableSession(session)) return undefined
+  let openTurn: number | undefined
+  let openStep: { turn: number; step: number } | undefined
+  for (const event of sessionEvents(session)) {
+    const turn = event.data?.turn
+    const step = event.data?.step
+    if (event.type === 'turn/start' && typeof turn === 'number' && Number.isSafeInteger(turn)) {
+      openTurn = turn
       openStep = undefined
       continue
     }
     if (event.type === 'turn/end') { openTurn = undefined; openStep = undefined; continue }
-    if (event.type === 'step/start' && Number.isSafeInteger(event.data?.step)) {
-      openStep = { turn: event.data.turn, step: event.data.step }
+    if (event.type === 'step/start' && typeof turn === 'number' && typeof step === 'number' && Number.isSafeInteger(step)) {
+      openStep = { turn, step }
       continue
     }
     if (event.type === 'step/end') openStep = undefined
   }
   if (openStep !== undefined) {
     try {
-      agent.session.append('step/end', { turn: openStep.turn, step: openStep.step })
+      session.append('step/end', { turn: openStep.turn, step: openStep.step })
     } catch {
       // 兜底关闭失败不再递归处理。
     }
   }
   if (openTurn !== undefined) {
     try {
-      agent.session.append('turn/end', { turn: openTurn, reason })
+      session.append('turn/end', { turn: openTurn, reason })
     } catch {
       // 同上。
     }
@@ -128,9 +171,9 @@ export function closeImportBracket(agent, reason) {
 // Tavern generation runs outside the native agent loop. Mirror its durable
 // boundaries into the host session so native projections (stats/token usage)
 // observe the same work as the injected Tavern surface.
-export function beginTavernSessionTurn(agent, userText) {
+export function beginTavernSessionTurn(agent: TraceAgentLike | null | undefined, userText: string): TavernSessionTrace | null {
   const session = agent?.session
-  if (!session?.append || readSessionEvents(session) === undefined) return null
+  if (!isAppendableSession(session) || readSessionEvents(session) === undefined) return null
   const logEvents = sessionEvents(session)
   let openTurn = false
   for (const event of logEvents) {
@@ -139,8 +182,8 @@ export function beginTavernSessionTurn(agent, userText) {
   }
   if (openTurn) return null
   const turn = Math.max(0, ...logEvents
-    .filter((event) => event.type === 'turn/start' && Number.isSafeInteger(event.data?.turn))
-    .map((event) => event.data.turn)) + 1
+    .filter((event) => event.type === 'turn/start' && typeof event.data?.turn === 'number' && Number.isSafeInteger(event.data.turn))
+    .map((event) => event.data?.turn as number)) + 1
   let started = false
   try {
     session.append('turn/start', { turn })
@@ -153,7 +196,7 @@ export function beginTavernSessionTurn(agent, userText) {
       }), { surfaceOp: 'append' })
     }
     // agent 随 trace 走：ST 的 turn 闭合时要用它推进 live loop 轮次基线。
-    return { session, turn, step: 1, stepOpen: false, turnOpen: true, logging: true, completed: false, agent }
+    return { session, turn, step: 1, stepOpen: false, turnOpen: true, logging: true, completed: false, ...(agent !== null && agent !== undefined ? { agent } : {}) }
   } catch {
     if (started) {
       try {
@@ -169,7 +212,7 @@ export function beginTavernSessionTurn(agent, userText) {
   }
 }
 
-export function startTavernSessionStep(trace) {
+export function startTavernSessionStep(trace: TavernSessionTrace | null): TavernSessionTrace | null {
   if (!trace?.logging) return trace
   try {
     trace.session.append('step/start', { turn: trace.turn, step: trace.step })
@@ -180,10 +223,17 @@ export function startTavernSessionStep(trace) {
   return trace
 }
 
-export function recordTavernSessionAssistant(trace, text, reasoning, provider, model, usage) {
+export function recordTavernSessionAssistant(
+  trace: TavernSessionTrace | null,
+  text: string,
+  reasoning: string,
+  provider: string,
+  model: string,
+  usage: unknown,
+): TavernSessionTrace | null {
   if (!trace?.logging || !trace.stepOpen) return trace
   try {
-    const content = [{ type: 'text', text }]
+    const content: Array<{ type: 'text'; text: string } | { type: 'reasoning'; text: string }> = [{ type: 'text', text }]
     if (reasoning) content.push({ type: 'reasoning', text: reasoning })
     const version = hostSessionFormatVersion(trace.session)
     trace.session.append('assistant/message', {
@@ -208,7 +258,7 @@ export function recordTavernSessionAssistant(trace, text, reasoning, provider, m
   return trace
 }
 
-export function finishTavernSessionTrace(trace) {
+export function finishTavernSessionTrace(trace: TavernSessionTrace | null | undefined): void {
   if (!trace?.turnOpen) return
   if (trace.stepOpen) {
     try {
@@ -240,44 +290,62 @@ export function finishTavernSessionTrace(trace) {
   trace.turnOpen = false
 }
 
-export function normalizeChatId(name) {
+export function normalizeChatId(name: string): string {
   const stem = name.replace(/\.jsonl$/i, '').trim()
   if (stem === '') throw new Error('chat name is required')
   return `${stem}.jsonl`
 }
 
-export function parseTavernSessionCommand(rawInput) {
+export type TavernSessionCommand =
+  | { action: 'close' }
+  | { action: 'novel-open'; novelId: string }
+  | { action: 'workbench-open'; sourceCharacter: string; sourceChatId: string }
+  | {
+      action: 'open'
+      character: string
+      chatId: string
+      group: boolean
+      architecture: ReturnType<typeof requestedArchitecture>
+      contextMode: ReturnType<typeof requestedContextMode>
+    }
+
+export function parseTavernSessionCommand(rawInput: string): TavernSessionCommand | null {
   const payload = rawInput.trim()
   if (payload === '') return null
   try {
-    const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))
-    if (parsed.action === 'close') return { action: 'close' }
+    const parsed: unknown = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'))
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    const record = parsed as Record<string, unknown>
+    if (record['action'] === 'close') return { action: 'close' }
     // AgentNovel bridge (proposal 0005 §4.2): management commands ride the
     // existing internal bridge and are never registered as author directives.
-    if (parsed.action === 'novel-open') {
-      return typeof parsed.novelId === 'string' && parsed.novelId.trim() !== ''
-        ? { action: 'novel-open', novelId: parsed.novelId }
+    if (record['action'] === 'novel-open') {
+      const novelId = record['novelId']
+      return typeof novelId === 'string' && novelId.trim() !== ''
+        ? { action: 'novel-open', novelId }
         : null
     }
     // CardWorkbench bridge（提案 0013）：面板「新建角色卡」引导的写卡 Agent
     // 会话启动；sourceCharacter/sourceChatId 成对可选——聊天侧「交给工作台」
     // 携带来源聊天身份（每个聊天对应一个写卡工作会话），面板自由拉起不带。
-    if (parsed.action === 'workbench-open') {
-      const sourceCharacter = typeof parsed.sourceCharacter === 'string' ? parsed.sourceCharacter : ''
-      const sourceChatId = typeof parsed.sourceChatId === 'string' ? parsed.sourceChatId : ''
+    if (record['action'] === 'workbench-open') {
+      const sourceCharacter = typeof record['sourceCharacter'] === 'string' ? record['sourceCharacter'] : ''
+      const sourceChatId = typeof record['sourceChatId'] === 'string' ? record['sourceChatId'] : ''
       if ((sourceCharacter !== '') !== (sourceChatId !== '')) return null
       return { action: 'workbench-open', sourceCharacter, sourceChatId }
     }
-    if (typeof parsed.character !== 'string' || typeof parsed.chatId !== 'string') return null
-    const group = parsed.group === true
-    const architecture = group ? 'st' : requestedArchitecture(parsed.architecture)
+    const character = record['character']
+    const chatId = record['chatId']
+    if (typeof character !== 'string' || typeof chatId !== 'string') return null
+    const group = record['group'] === true
+    const architecture = group ? 'st' : requestedArchitecture(record['architecture'])
     return {
       action: 'open',
-      character: parsed.character,
-      chatId: parsed.chatId,
+      character,
+      chatId,
       group,
       architecture,
-      contextMode: requestedContextMode(parsed.contextMode),
+      contextMode: requestedContextMode(record['contextMode']),
     }
   } catch {
     return null

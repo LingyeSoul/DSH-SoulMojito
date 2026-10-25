@@ -4624,7 +4624,10 @@ function normalizeWorldPlan(raw) {
       if (field.currentValue !== void 0 && !isValidWorldPlanValue(field.currentValue)) return void 0;
       fields.push(field.currentValue === void 0 ? { field: field.field, newValue: field.newValue } : { field: field.field, currentValue: field.currentValue, newValue: field.newValue });
     }
-    entries.push(record.note === void 0 ? { uid: record.uid, action: record.action, fields } : { uid: record.uid, action: record.action, fields, note: record.note });
+    const note = record.note;
+    if (note !== void 0 && typeof note !== "string") return void 0;
+    const parsed = note === void 0 ? { uid: record.uid, action: record.action, fields } : { uid: record.uid, action: record.action, fields, note };
+    entries.push(parsed);
   }
   return {
     kind: "world",
@@ -5060,6 +5063,7 @@ var cardCreateTool = tool("card_create", "Create a new Tavern character card fro
 }, cardCreateOutput, async (args, exec) => {
   if (args.confirmed !== true) throw new Error(CONFIRMATION_ERROR);
   const name2 = editableValue("name", args.name);
+  if (typeof name2 !== "string") throw new Error("name must be a string");
   const fields = parseCreateFields(args.fields);
   if (typeof fields.name === "string" && fields.name !== name2) {
     throw new Error(`fields.name ('${fields.name}') must match the name argument ('${name2}')`);
@@ -5161,6 +5165,7 @@ async function nameSessionAfterCreatedCard(exec, cardName) {
     const agent = exec.agent;
     const agentId = agent?.id;
     if (typeof agentId !== "string" || agentId.trim() === "") return;
+    if (agent === void 0) return;
     const db = await tavernStore();
     const binding = (await db.getState()).sessionBindings[agentId];
     if (binding?.architecture !== "card-workbench") return;
@@ -5547,32 +5552,32 @@ var worldTools = [
       throw new Error(`world '${world}' not found; set create: true to plan a new book, or world_list shows the library`);
     }
     if (!Array.isArray(args.entries) || args.entries.length === 0) throw new Error("entries must be a non-empty array");
+    const rawEntries = args.entries;
     const noteAt = (index) => {
-      const raw = args.entries[index];
+      const raw = rawEntries[index];
       if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return void 0;
       const note = raw.note;
       if (note === void 0) return void 0;
       if (typeof note !== "string" || note.length > 500) throw new Error(`note for entry ${index + 1} must be a string of at most 500 characters`);
       return note;
     };
-    const cleaned = args.entries.map((raw, index) => {
+    const cleaned = rawEntries.map((raw, index) => {
       const note = noteAt(index);
       if (note === void 0) return raw;
       const { note: _drop, ...rest } = raw;
       return rest;
     });
     const byUid = new Map((book?.entries ?? []).map((entry) => [entry.uid, entry]));
-    const proposed = create ? parseWorldSeedEntries(cleaned) : parseWorldEdits(cleaned);
-    const entries = proposed.map((edit, index) => {
+    const entries = create ? parseWorldSeedEntries(cleaned).map((edit, index) => {
       const note = noteAt(index);
-      if (create) {
-        return {
-          uid: index,
-          action: "create",
-          fields: Object.entries(edit.values).map(([field, newValue]) => ({ field, newValue })),
-          ...note !== void 0 ? { note } : {}
-        };
-      }
+      return {
+        uid: index,
+        action: "create",
+        fields: Object.entries(edit.values).map(([field, newValue]) => ({ field, newValue })),
+        ...note !== void 0 ? { note } : {}
+      };
+    }) : parseWorldEdits(cleaned).map((edit, index) => {
+      const note = noteAt(index);
       const existing = byUid.get(edit.uid);
       if (edit.remove) {
         if (existing === void 0) throw new Error(`uid ${edit.uid} not found in world '${world}'; removal matches existing entries only (see world_get)`);
@@ -5867,7 +5872,11 @@ async function executeWorldPlan(plan) {
       world: plan.world,
       entryCount: entries2.length,
       nextUid: entries2.length,
-      touched: entries2.map((_entry, uid) => ({ uid, created: true, fields: plan.entries[uid].fields.map((field) => field.field) }))
+      touched: entries2.map((_entry, uid) => {
+        const planEntry = plan.entries[uid];
+        if (planEntry === void 0) throw new Error(`plan '${plan.id}' has no entry ${uid}`);
+        return { uid, created: true, fields: planEntry.fields.map((field) => field.field) };
+      })
     };
   }
   const book = await db.getWorld(plan.world);
@@ -6063,9 +6072,13 @@ function worldLiveValue(entry, field) {
   if (spec.invert === true) return typeof raw === "boolean" ? !raw : true;
   if (raw === void 0) {
     if (Array.isArray(spec.fallback)) return [];
-    return spec.fallback ?? null;
+    return isWorldPlanValue(spec.fallback) ? spec.fallback : null;
   }
-  return raw;
+  return isWorldPlanValue(raw) ? raw : null;
+}
+function isWorldPlanValue(value) {
+  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") return true;
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 function worldPlanValueMatches(live, recorded) {
   if (Array.isArray(live) || Array.isArray(recorded)) {
@@ -6210,10 +6223,11 @@ var presetTools = [
     if (raw === void 0) throw new Error(`preset '${preset}' not found`);
     if (!Array.isArray(raw.prompts)) throw new Error(`preset '${preset}' has no prompts array`);
     const next = { ...raw, prompts: raw.prompts.map((prompt) => ({ ...prompt })) };
-    const orderSets = Array.isArray(next.prompt_order) ? next.prompt_order : [];
+    const prompts = next.prompts;
+    const orderSets = Array.isArray(raw["prompt_order"]) ? raw["prompt_order"] : [];
     const applied = [];
     for (const edit of edits) {
-      const matches = next.prompts.filter((prompt) => prompt?.name === edit.name);
+      const matches = prompts.filter((prompt) => prompt?.name === edit.name);
       if (matches.length === 0) throw new Error(`prompt '${edit.name}' not found in preset '${preset}'`);
       const identifiers = [];
       const fields = [];
@@ -6243,7 +6257,7 @@ var presetTools = [
     }
     await db.putPreset(preset, next);
     await emitAgentPresetChanged();
-    return { preset, promptCount: next.prompts.length, edits: applied };
+    return { preset, promptCount: prompts.length, edits: applied };
   }),
   tool("chat_log_read", "Read a bounded range of floors from a stored Tavern chat log (character + chatId) \u2014 the debugging entry point: compare what the model actually produced against regex/beautification output before touching resources. At most 50 messages per call, each message body truncated to 2000 characters.", {
     character: { type: "string", required: true, description: "Character name the chat belongs to." },

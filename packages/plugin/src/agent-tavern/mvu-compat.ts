@@ -14,7 +14,7 @@
  * Agent 模式下的变量闭环与前端可读性。
  */
 
-import type { CharacterCardIR, ChatLogIR, ChatMessage } from '../../tavern-format/src/index.js'
+import type { CharacterCardIR, ChatLogIR, ChatMessage } from '../../../tavern-format/src/index.js'
 import { parseJSON } from '../../../tavern-template/src/index.js'
 
 export type MvuJsonObject = Record<string, unknown>

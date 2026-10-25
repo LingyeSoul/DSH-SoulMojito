@@ -37,10 +37,11 @@ import { isNovelAuthorMessage, receiveAuthorMessage } from '../agent-novel/requi
 import { subagentRuntimeOf, type DeductionExecAgent, type SubagentRuntimeLike } from '../agent-tavern/deduce.js'
 import { isTavernSessionMarker } from '../agent-tavern/projector.js'
 import { getAgentNovelCapabilities, getNovelDriverPromise, getNovelProjectorPromise, memories, novelStore, store } from '../runtime.js'
+import type { PluginContext } from '../host-contract.js'
 import { TavernArchitectureConflictError } from '../session/binding.js'
 import { lastSelectedPresetId } from '../session/preset-marker.js'
 import { occupyHostSession } from '../session/trace.js'
-import { readJson, sendJson } from './io.js'
+import { readJson, sendJson, type HttpRequest, type HttpResponse } from './io.js'
 
 const CARD_WORKBENCH_PRESET_ID = 'card-workbench'
 
@@ -70,18 +71,8 @@ const NOVEL_SUBPATHS = [
 ] as const
 type NovelSubpath = (typeof NOVEL_SUBPATHS)[number]
 
-export interface NovelApiRequest {
-  method?: string
-  url?: string
-  on?: (event: string, listener: (chunk?: unknown) => void) => unknown
-  destroy?: () => void
-}
-
-export interface NovelApiResponse {
-  statusCode: number
-  setHeader: (name: string, value: string) => void
-  end: (chunk?: string | Uint8Array) => void
-}
+export type NovelApiRequest = HttpRequest
+export type NovelApiResponse = HttpResponse
 
 export interface NovelHttpFailure {
   status: number
@@ -813,7 +804,7 @@ function driverCompatibleAgent(agent: unknown): agent is DriverAgentLike {
  * numbering intact for client replay.
  */
 export async function handleNovelOpenCommand(
-  ctx: NovelPluginContext & { agentPresets?: { recompose?: (agentCtx: unknown, presetId: string) => Promise<{ id: string }> } },
+  ctx: NovelPluginContext & Pick<PluginContext, 'agentPresets'>,
   agent: NovelCommandAgent,
   novelId: string,
 ): Promise<{ kind: string; text: string }> {
@@ -886,7 +877,7 @@ async function bindNovelSession(db: TavernStore, sessionId: string, novelId: str
  * 2026-08-16 同款机制）。
  */
 export async function handleWorkbenchOpenCommand(
-  ctx: NovelPluginContext & { agentPresets?: { recompose?: (agentCtx: unknown, presetId: string) => Promise<{ id: string }> } },
+  ctx: NovelPluginContext & Pick<PluginContext, 'agentPresets'>,
   agent: NovelCommandAgent,
   payload: { sourceCharacter: string; sourceChatId: string },
 ): Promise<{ kind: string; text: string }> {

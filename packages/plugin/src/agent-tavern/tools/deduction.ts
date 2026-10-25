@@ -8,6 +8,7 @@ import {
   type MvuReceipt,
   type MvuVariableChange,
 } from '../../mvu.js'
+import type { JsonValue } from '../../../../tavern-store/src/index.js'
 import { getMvuTreePath, guardMvuWrite, readMvuSchema } from '../../mvu-guard.js'
 import { readMvuRules, runMvuRules } from '../../mvu-rules.js'
 import {
@@ -76,7 +77,7 @@ export function deductionTools(): ToolDefinition[] {
         }
         return {
           name: entry.name,
-          value: entry.value as never,
+          value: entry.value,
           reason: typeof entry.reason === 'string' && entry.reason.trim() !== '' ? entry.reason.slice(0, 200) : undefined,
         }
       })
@@ -138,9 +139,12 @@ export function deductionTools(): ToolDefinition[] {
             continue
           }
           const current = existing !== undefined ? existing.value : getMvuTreePath(seedTree, request.name)
+          // Validate the value at the same point the store would (after the name
+          // check) so a malformed item still fails alone instead of the batch.
+          const requestValue = jsonValueOf(request.value)
           // 守卫先行：clamp/step 调整值落库并记 reason；reject（type-mismatch /
           // enum-violation / readonly / structure）走既有单项失败路径，可重试。
-          const guarded = guardSchema === undefined ? undefined : guardMvuWrite(guardSchema, request.name, request.value, current)
+          const guarded = guardSchema === undefined ? undefined : guardMvuWrite(guardSchema, request.name, requestValue, current)
           if (guarded !== undefined && !guarded.ok) {
             failed.push({ name: request.name, error: `guard ${guarded.kind}: ${guarded.reason}` })
             auditChanges.push({
@@ -154,7 +158,7 @@ export function deductionTools(): ToolDefinition[] {
           // 之间的真并发写仍会冲突并落 failures，交给下一次结算重试。
           const written = await store.set(
             'chat', binding.chatId, request.name,
-            guarded === undefined ? request.value : guarded.value,
+            guarded === undefined ? requestValue : jsonValueOf(guarded.value),
             existing?.revision,
           )
           applied.push(request.name)
@@ -205,7 +209,7 @@ export function deductionTools(): ToolDefinition[] {
           for (const write of [...new Map(run.writes.map((write) => [write.path, write])).values()]) {
             try {
               const existing = await store.get('chat', binding.chatId, write.path)
-              const written = await store.set('chat', binding.chatId, write.path, write.value as never, existing?.revision)
+              const written = await store.set('chat', binding.chatId, write.path, jsonValueOf(write.value), existing?.revision)
               const before = getMvuTreePath(preTree, write.path)
               const reason = run.notes[write.path] ?? `rule:${write.rule}`
               const change = receiptChanges.find((entry) => entry.name === write.path)
@@ -275,3 +279,22 @@ const settleOutput = objectOutput({
   failed: { type: 'array', items: { type: 'object', additionalProperties: true } },
   receipt: { type: 'object', additionalProperties: true },
 })
+
+/** Narrow a tool argument to the JSON value the variable store accepts. */
+function jsonValueOf(value: unknown): JsonValue {
+  if (value === undefined || typeof value === 'function' || typeof value === 'symbol') {
+    throw new Error('invalid variable value')
+  }
+  if (typeof value === 'string' || typeof value === 'boolean' || value === null) return value
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new Error('variable number must be finite')
+    return value
+  }
+  if (Array.isArray(value)) return value.map(jsonValueOf)
+  if (typeof value === 'object') {
+    const record: { [key: string]: JsonValue } = {}
+    for (const [key, item] of Object.entries(value)) record[key] = jsonValueOf(item)
+    return record
+  }
+  throw new Error('invalid variable value')
+}

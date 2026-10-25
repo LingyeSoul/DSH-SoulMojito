@@ -46,7 +46,11 @@ interface PreStepDecisionLike {
  * 原样透传——本监听只旁观，是链条上唯一的「零改写」参与者。
  */
 export function registerAgentTavernPromptCapture(ctx: {
-  on?: (event: string, listener: (payload: unknown, next: () => unknown) => unknown, options?: unknown) => unknown
+  on?: (
+    event: string,
+    listener: (payload: PreStepPayloadLike, next: () => Promise<PreStepDecisionLike>) => unknown,
+    options?: unknown,
+  ) => unknown
 }): void {
   ctx.on?.('agent/pre-step', async (payload: PreStepPayloadLike, next: () => Promise<PreStepDecisionLike>) => {
     const decision = await next()

@@ -33,7 +33,7 @@ export function extractFrontendDocuments(value: unknown): string[] {
   FENCED_DOCUMENT.lastIndex = 0
   let match: RegExpExecArray | null
   while ((match = FENCED_DOCUMENT.exec(text)) !== null) {
-    const candidate = match[1].trim()
+    const candidate = match[1]?.trim() ?? ''
     if (isFrontendDocument(candidate)) documents.push(candidate)
   }
   if (documents.length > 0) return documents

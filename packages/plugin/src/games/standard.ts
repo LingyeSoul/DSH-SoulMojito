@@ -69,11 +69,9 @@ export interface GameEngine {
   describe(state: unknown, actor: string, action: unknown): string
 }
 
-export interface GameManifestCheck {
-  ok: boolean
-  manifest?: GameManifest
-  errors: string[]
-}
+export type GameManifestCheck =
+  | { ok: true; manifest: GameManifest; errors: string[] }
+  | { ok: false; manifest?: undefined; errors: string[] }
 
 /** state 序列化上限（§3.2：64KB；棋盘类天然满足，防滥用）。 */
 export const GAME_STATE_MAX_BYTES = 65_536
@@ -139,6 +137,8 @@ export function checkGameManifest(raw: unknown, options: { directory?: string } 
     errors.push('actionVocabulary must be a non-empty string')
   }
   if (errors.length > 0) return { ok: false, errors }
+  // Every field above is validated; this narrows the record for the manifest literal.
+  const playersSpec = players as { min: number; max: number; roles: string[] }
   return {
     ok: true,
     errors,
@@ -147,18 +147,16 @@ export function checkGameManifest(raw: unknown, options: { directory?: string } 
       name: value.name as string,
       version: value.version as string,
       ...(value.engines === undefined ? {} : { engines: value.engines as GameManifest['engines'] }),
-      players: { min: players.min as number, max: players.max as number, roles: [...(players.roles as string[])] },
+      players: { min: playersSpec.min, max: playersSpec.max, roles: [...playersSpec.roles] },
       turnBased: true,
       actionVocabulary: value.actionVocabulary as string,
     },
   }
 }
 
-export interface GameEngineCheck {
-  ok: boolean
-  engine?: GameEngine
-  errors: string[]
-}
+export type GameEngineCheck =
+  | { ok: true; engine: GameEngine; errors: string[] }
+  | { ok: false; engine?: undefined; errors: string[] }
 
 /** 引擎 duck 校验：默认导出对象带合法 meta + 四个函数面（§3.2）。 */
 export function checkGameEngine(candidate: unknown): GameEngineCheck {
@@ -173,7 +171,7 @@ export function checkGameEngine(candidate: unknown): GameEngineCheck {
     if (typeof value[member] !== 'function') errors.push(`engine.${member} must be a function`)
   }
   if (errors.length > 0) return { ok: false, errors }
-  return { ok: true, engine: candidate as GameEngine }
+  return { ok: true, engine: candidate as GameEngine, errors: [] }
 }
 
 /** 深度 JSON-safe 判定：stringify→parse 往返 deep-equal（函数/undefined/NaN 会现形）。 */

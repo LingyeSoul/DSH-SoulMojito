@@ -11,7 +11,8 @@
     "build": "tsc -b",
     "build:plugin": "node scripts/build-plugin.mjs",
     "typecheck:security": "node node_modules/typescript/bin/tsc -p packages/plugin/tsconfig.security.json --pretty false",
-    "check": "tsc -b --pretty false && node node_modules/typescript/bin/tsc -p packages/plugin/tsconfig.security.json --pretty false && vitest run && node scripts/build-plugin.mjs && node packages/plugin/scripts/gates/run.mjs"
+    "typecheck:plugin": "node node_modules/typescript/bin/tsc -p packages/plugin/tsconfig.json --pretty false",
+    "check": "tsc -b --pretty false && node node_modules/typescript/bin/tsc -p packages/plugin/tsconfig.security.json --pretty false && node node_modules/typescript/bin/tsc -p packages/plugin/tsconfig.json --pretty false && vitest run && node scripts/build-plugin.mjs && node packages/plugin/scripts/gates/run.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

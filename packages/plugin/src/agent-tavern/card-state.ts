@@ -15,13 +15,14 @@ import { createHash, randomUUID } from 'node:crypto'
 import { hostPluginMessageSource, type HostSessionLog } from '../../../bind/src/index.js'
 import { parseCharacterBook, type CharacterCardIR, type ChatLogIR } from '../../../tavern-format/src/index.js'
 import type { LoreEntry } from '../../../tavern-lore/src/index.js'
-import type { TavernState } from '../../../tavern-store/src/index.js'
+import type { TavernState, TavernStore } from '../../../tavern-store/src/index.js'
 import { createHostPromptExpander, hostPromptSafe } from '../prompt-safety.js'
 import { createMvuRuntime, overlayChatScopedVariables, readChatVariables } from '../mvu.js'
 import { DEFAULT_USER } from '../prompt-context.js'
-import { collectWorldInfoBooks } from '../tavern-assets.js'
+import { collectWorldInfoBooks, formatEntriesToLore } from '../tavern-assets.js'
 import { store as tavernStore, templatesEnabledFlagValue, templatesEnvEnabled, variables as variableStore } from '../runtime.js'
 import { cardUsesJsrMvu, seedJsrMvuVariables } from './mvu-compat.js'
+import type { JsonObject } from '../../../tavern-template/src/paths.js'
 
 export const CARD_STATE_MAX_CHARS = 120_000
 export const CARD_STATE_FULL_REFRESH_TURNS = 8
@@ -43,12 +44,21 @@ interface CardStateStore {
   getState(): Promise<TavernState>
   getCharacter(name: string): Promise<{ card: CharacterCardIR } | undefined>
   getChatSnapshot(character: string, chatId: string): Promise<{ chat: ChatLogIR } | undefined>
-  getWorld(name: string): Promise<{ name?: string; entries: LoreEntry[] } | undefined>
+  getWorld(name: string): Promise<Awaited<ReturnType<TavernStore['getWorld']>>>
 }
 
 function plainObject(value: unknown): Record<string, unknown> | undefined {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
   return value as Record<string, unknown>
+}
+
+/** Chat metadata is JSON by construction; the template store requires that shape. */
+function initialVariablesOf(chat: ChatLogIR): JsonObject {
+  return jsonObjectOf(chat.header.chat_metadata['initial_variables'] ?? {})
+}
+
+function jsonObjectOf(value: unknown): JsonObject {
+  return JSON.parse(JSON.stringify(value)) as JsonObject
 }
 
 function sectionHash(text: string): string {
@@ -77,7 +87,7 @@ export async function renderCardStateSections(
   // the default path. Plain constant lore still reaches the model through the
   // normal lore pipeline; only the per-turn EJS state block is skipped.
   if (!templatesEnabledFlagValue() || !templatesEnvEnabled()) return undefined
-  const books = await collectWorldInfoBooks(db as never, state, characterName, character, chatId)
+  const books = await collectWorldInfoBooks(db, state, characterName, character, chatId)
   // 卡内嵌书是这张卡的规则本体；worldFollowsCharacter 关闭或链接书未导入时，
   // 聚合层不会带上它。MVU 卡的规则不能因此静默消失，这里补回内嵌书（按名字去重）。
   const embeddedName = `${characterName}:embedded`
@@ -88,7 +98,7 @@ export async function renderCardStateSections(
     const embedded = parseCharacterBook(card.data.characterBook)
     books.unshift({
       name: embeddedName,
-      entries: embedded.entries,
+      entries: formatEntriesToLore(embedded.entries),
       scanDepth: card.data.characterBook.scan_depth,
       tokenBudget: card.data.characterBook.token_budget,
       recursiveScanning: card.data.characterBook.recursive_scanning,
@@ -104,7 +114,7 @@ export async function renderCardStateSections(
   }
   // Constant plain text is already covered by lore search / preload; only EJS
   // cards need a per-turn renderer. Avoid re-injecting static rulebooks.
-  if (!entries.some(({ entry }) => entry.content.includes('<%'))) return undefined
+  if (!entries.some(({ entry }) => entry.content?.includes('<%') === true)) return undefined
   entries.sort((left, right) => {
     const order = (left.entry.order ?? 100) - (right.entry.order ?? 100)
     if (order !== 0) return order
@@ -126,9 +136,9 @@ export async function renderCardStateSections(
       onWarning: (message) => warnings.push(message),
     },
     {
-      local: tree as never,
+      local: jsonObjectOf(tree),
       global: { ...state.scriptGlobals },
-      initial: structuredClone(plainObject(chat.header.chat_metadata['initial_variables']) ?? {}),
+      initial: initialVariablesOf(chat),
     },
   )
 
@@ -140,16 +150,17 @@ export async function renderCardStateSections(
   const sections: CardStateSection[] = []
   let truncated = false
   for (const { book, entry } of entries) {
-    let rendered = entry.content
-    if (entry.content.includes('<%')) {
+    const content = entry.content ?? ''
+    let rendered: string | undefined = content
+    if (content.includes('<%')) {
       try {
-        rendered = await runtime.renderText(entry.content, undefined, `card-state:${book}#${entry.uid}`)
+        rendered = await runtime.renderText(content, undefined, `card-state:${book}#${entry.uid}`)
       } catch (cause) {
         warnings.push(`${book}#${entry.uid}: ${cause instanceof Error ? cause.message : String(cause)}`)
         continue
       }
     }
-    const text = hostPromptSafe(rendered.trim(), expand)
+    const text = hostPromptSafe((rendered ?? '').trim(), expand)
     if (text === '') continue
     if (used + text.length > CARD_STATE_MAX_CHARS) {
       truncated = true
@@ -208,7 +219,7 @@ export interface CardStateRegistrationOptions {
  */
 export function registerAgentTavernCardState(
   ctx: {
-    on?: (event: string, listener: (payload: unknown, next: () => unknown) => unknown, options?: unknown) => unknown
+    on?: (event: string, listener: (payload: PreStepPayloadLike, next: () => Promise<PreStepDecisionLike>) => unknown, options?: unknown) => unknown
     logger?: { warn?: (message: string) => unknown }
   },
   options: CardStateRegistrationOptions = {},

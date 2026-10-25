@@ -509,7 +509,7 @@ const engine: GameEngine = {
 
     const events = [moveText(from, to, piece)]
     const summaryParts = [moveText(from, to, piece)]
-    if (captured !== null) {
+    if (captured !== null && outcome !== 'move') {
       const text = combatText(outcome, captured)
       events.push(text)
       summaryParts.push(text)

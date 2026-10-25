@@ -210,6 +210,7 @@ var forkAdoptionTails = /* @__PURE__ */ new Map();
 function adoptAgentTavernFork(session, deps) {
   const sessionId = typeof session?.id === "string" ? session.id : void 0;
   if (sessionId === void 0 || sessionId === "") return Promise.resolve("skipped");
+  if (session === null || session === void 0) return Promise.resolve("skipped");
   const previous = forkAdoptionTails.get(sessionId);
   if (previous) return previous;
   const current = adoptOne(sessionId, session, deps).finally(() => {
@@ -12619,6 +12620,15 @@ function applyLenientPatch(root, ops) {
 
 // packages/plugin/src/tavern-assets.ts
 var AGENT_TAVERN_PRELOAD_MAX_CHARS = 32e3;
+function formatEntriesToLore(entries) {
+  return entries.map((entry) => ({
+    ...entry,
+    position: entry.position,
+    selectiveLogic: entry.selectiveLogic,
+    role: entry.role,
+    triggers: entry.triggers
+  }));
+}
 async function collectWorldInfoBooks(db, state, characterName, character, chatId) {
   const worldNames = new Set(state.activeWorlds);
   const follow = state.worldFollowsCharacter !== false;
@@ -12633,7 +12643,7 @@ async function collectWorldInfoBooks(db, state, characterName, character, chatId
     const copy = chatScope !== void 0 && typeof db.getChatWorld === "function" ? await db.getChatWorld(characterName, chatScope, worldName) : void 0;
     const world = copy === void 0 ? await db.getWorld(worldName) : copy;
     if (world) {
-      books.push({ name: copy === void 0 ? world.name : worldName, entries: world.entries });
+      books.push({ name: copy === void 0 ? world.name : worldName, entries: formatEntriesToLore(world.entries) });
       if (worldName === linkedName) linkedImported = true;
     }
   }
@@ -12643,7 +12653,7 @@ async function collectWorldInfoBooks(db, state, characterName, character, chatId
     const embedded = parseCharacterBook2(characterBook);
     books.unshift({
       name: `${characterName}:embedded`,
-      entries: embedded.entries,
+      entries: formatEntriesToLore(embedded.entries),
       scanDepth: characterBook.scan_depth,
       tokenBudget: characterBook.token_budget,
       recursiveScanning: characterBook.recursive_scanning
@@ -13026,7 +13036,8 @@ var AgentTavernProjector = class _AgentTavernProjector {
 };
 function projectMessage(session, event, binding, scripts) {
   if (event.type === "user/message") {
-    if (event.data?.source?.kind !== "user") return void 0;
+    const source = event.data?.source;
+    if (typeof source !== "object" || source === null || Array.isArray(source) || source["kind"] !== "user") return void 0;
     const text2 = messageText(event.data?.content);
     if (text2 === "") return void 0;
     return {
@@ -13063,8 +13074,8 @@ function projectionExtra(session, event, contextMode, turn, step) {
       sessionId: session.id,
       eventSeq: event.seq,
       messageId: event.type === "assistant/message" ? event.data?.message?.id : event.data?.id,
-      ...Number.isSafeInteger(turn) ? { turn } : {},
-      ...Number.isSafeInteger(step) ? { step } : {}
+      ...typeof turn === "number" && Number.isSafeInteger(turn) ? { turn } : {},
+      ...typeof step === "number" && Number.isSafeInteger(step) ? { step } : {}
     }
   };
 }
@@ -13207,7 +13218,7 @@ function turnAt(session, cursor) {
   let turn;
   for (const event of sessionEvents(session)) {
     if (event.seq > cursor) break;
-    if (event.type === "turn/start" && Number.isSafeInteger(event.data?.turn)) turn = event.data.turn;
+    if (event.type === "turn/start" && typeof event.data?.turn === "number" && Number.isSafeInteger(event.data.turn)) turn = event.data.turn;
   }
   return turn;
 }
@@ -14235,7 +14246,8 @@ var INITIAL_VARIABLES_KEY2 = "initial_variables";
 function cardRules(card) {
   const holder = card?.data?.extensions?.["agentTavern"];
   if (!isPlainObject2(holder)) return void 0;
-  return holder.initialVariables?.$rules;
+  const initial = holder["initialVariables"];
+  return isPlainObject2(initial) ? initial["$rules"] : void 0;
 }
 function treeRules(tree) {
   return isPlainObject2(tree) ? tree.$rules : void 0;
@@ -14473,6 +14485,9 @@ function plainObject3(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
   return value;
 }
+function jsonObjectOf(value) {
+  return JSON.parse(JSON.stringify(value));
+}
 function readChatVariables(chat) {
   return plainObject3(chat?.header?.chat_metadata?.variables) ?? {};
 }
@@ -14655,12 +14670,16 @@ function createMvuRuntime(input, stores) {
   const card = character.card;
   const cardName2 = card.data.nickname || card.data.name || characterName;
   const lastUserMessageId = (() => {
-    for (let i = chat.messages.length - 1; i >= 0; i--) if (chat.messages[i].is_user) return i;
+    for (let i = chat.messages.length - 1; i >= 0; i--) {
+      const message = chat.messages[i];
+      if (message !== void 0 && message.is_user) return i;
+    }
     return -1;
   })();
   const lastCharMessageId = (() => {
     for (let i = chat.messages.length - 1; i >= 0; i--) {
-      if (!chat.messages[i].is_user && !chat.messages[i].is_system) return i;
+      const message = chat.messages[i];
+      if (message !== void 0 && !message.is_user && !message.is_system) return i;
     }
     return -1;
   })();
@@ -14710,7 +14729,7 @@ function createMvuRuntime(input, stores) {
         mesExample: card.data.mesExample,
         creatorNotes: card.data.creatorNotes,
         depthPrompt: "",
-        data: card.data
+        data: jsonObjectOf(card.data)
       };
     },
     findPresetPrompt: () => null,
@@ -14762,13 +14781,14 @@ async function retryMvuSettlement(db, options) {
   let floorIndex = -1;
   for (let i = chat.messages.length - 1; i >= 0; i--) {
     const message = chat.messages[i];
-    if (!message.is_user && !message.is_system) {
+    if (message !== void 0 && !message.is_user && !message.is_system) {
       floorIndex = i;
       break;
     }
   }
   if (floorIndex === -1) throw new Error("no assistant floor to settle");
   const floor = chat.messages[floorIndex];
+  if (floor === void 0) throw new Error("no assistant floor to settle");
   const character = await db.getCharacter(characterName) ?? await db.getCharacter(floor.name);
   if (!character) throw new Error(`character '${characterName}' not found`);
   const failures = [];
@@ -14998,8 +15018,9 @@ function parsePresetOrThrow(data) {
 }
 function compactionOverrideOf(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
-  const provider = typeof value.curatorProvider === "string" ? value.curatorProvider.trim() : "";
-  const model = typeof value.curatorModel === "string" ? value.curatorModel.trim() : "";
+  const record = value;
+  const provider = typeof record["curatorProvider"] === "string" ? record["curatorProvider"].trim() : "";
+  const model = typeof record["curatorModel"] === "string" ? record["curatorModel"].trim() : "";
   return provider !== "" && model !== "" ? { curatorProvider: provider, curatorModel: model } : void 0;
 }
 
@@ -15271,7 +15292,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("39d6c55") : void 0;
+  const commit = true ? normalizeCommit("48012a9") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -15417,25 +15438,29 @@ function withTimeout(promise, ms) {
 }
 function createGenerationHookBus(options = {}) {
   const timeoutMs = options.timeoutMs ?? GENERATION_HOOK_TIMEOUT_MS;
-  const table = /* @__PURE__ */ new Map();
+  const table = {
+    "user-input": [],
+    "pre-assemble": [],
+    "pre-llm": [],
+    "post-output": [],
+    "post-save": []
+  };
   const degradationListeners = /* @__PURE__ */ new Set();
   let nextId = 1;
   let degradations = 0;
   function register(phase, handler, order = 100, owner) {
     const id = nextId++;
-    const list = table.get(phase) ?? [];
+    const list = table[phase];
     list.push({ id, order, handler, ...owner !== void 0 ? { owner } : {} });
     list.sort((a, b) => a.order - b.order || a.id - b.id);
-    table.set(phase, list);
     return () => {
-      const current = table.get(phase);
-      if (current === void 0) return;
-      table.set(phase, current.filter((registration) => registration.id !== id));
+      const index = list.findIndex((registration) => registration.id === id);
+      if (index >= 0) list.splice(index, 1);
     };
   }
   async function dispatch(phase, payload, context) {
-    const list = table.get(phase);
-    if (list === void 0 || list.length === 0) return payload;
+    const list = table[phase];
+    if (list.length === 0) return payload;
     const fullContext = { ...context, phase };
     let current = payload;
     for (const registration of [...list]) {
@@ -15855,7 +15880,7 @@ function rewriteViewportUnits(document) {
     return `\0dt-vh-script-${scripts.length - 1}\0`;
   });
   const rewritten = shielded.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)/gi, (_whole, open2, css, close) => `${open2}${rewriteViewportUnitsInCssText(css)}${close}`).replace(/(\bstyle\s*=\s*)(["'])([^"']*)\2/gi, (_whole, prefix, quote, css) => `${prefix}${quote}${rewriteViewportUnitsInCssText(css)}${quote}`);
-  return rewritten.replace(/\u0000dt-vh-script-(\d+)\u0000/g, (_whole, index) => scripts[Number(index)]);
+  return rewritten.replace(/\u0000dt-vh-script-(\d+)\u0000/g, (_whole, index) => scripts[Number(index)] ?? "");
 }
 function modViewportScript() {
   return `(function () {
@@ -16246,9 +16271,10 @@ var ModStorage = class {
     }
     return this.mutate(async () => {
       const file = await this.readFile() ?? { version: 1, values: {}, updatedAt: (/* @__PURE__ */ new Date(0)).toISOString() };
+      const stored = jsonValueOf(value);
       const next = {
         version: 1,
-        values: { ...file.values, [key]: structuredClone(value) },
+        values: { ...file.values, [key]: structuredClone(stored) },
         updatedAt: (/* @__PURE__ */ new Date()).toISOString()
       };
       await this.writeFile(next);
@@ -16323,6 +16349,9 @@ function inspectValue(value) {
     return { message: "mod storage value exceeds the size limit (256KB)", quota: true };
   }
   return void 0;
+}
+function jsonValueOf(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
 // packages/plugin/src/mods/install.ts
@@ -16465,9 +16494,14 @@ function parseCommitResponse(value) {
 }
 function parseCompareResponse(value) {
   const record = typeof value === "object" && value !== null ? value : {};
-  const filesKnown = Array.isArray(record.files);
-  const commits = Array.isArray(record.commits) ? record.commits.map(commitFromApi).filter((item) => item !== null) : [];
-  const files = filesKnown ? record.files.map((file) => typeof file?.filename === "string" ? file.filename : "").filter(Boolean) : [];
+  const filesRaw = record["files"];
+  const filesKnown = Array.isArray(filesRaw);
+  const commits = Array.isArray(record["commits"]) ? record["commits"].map(commitFromApi).filter((item) => item !== null) : [];
+  const files = filesKnown ? filesRaw.map((file) => {
+    const entry = typeof file === "object" && file !== null ? file : void 0;
+    const filename = entry?.["filename"];
+    return typeof filename === "string" ? filename : "";
+  }).filter((filename) => filename !== "") : [];
   return { commits: commits.reverse(), files, filesKnown };
 }
 function parsePackageVersion(value) {
@@ -17440,7 +17474,12 @@ var ModHost = class _ModHost {
           if (aliases !== void 0 && (!Array.isArray(aliases) || aliases.some((alias) => typeof alias !== "string" || !/^[a-z0-9_]+$/.test(alias)))) {
             throw new Error("stscript command aliases must be [a-z0-9_]+ strings");
           }
-          const fullSpec = { ...spec, name: commandName };
+          const fullSpec = {
+            ...spec,
+            name: commandName,
+            ...aliases !== void 0 ? { aliases } : {},
+            run: handler
+          };
           const off = registerStscriptCommand(fullSpec);
           return tracked(off);
         }
@@ -17542,7 +17581,13 @@ function createModLlmFace(hostLlm, id, audit, logger, observed) {
     void audit.record(id, "llm-call", `${model}${tokens}`);
   };
   async function* streamChunks(request) {
-    const chunks = requireStream()(request);
+    const provider = request["provider"];
+    const model = request["model"];
+    const messages = request["messages"];
+    if (typeof provider !== "string" || typeof model !== "string" || !Array.isArray(messages)) {
+      throw new Error("llm request requires provider, model and a messages array");
+    }
+    const chunks = requireStream()({ ...request, provider, model, messages });
     let usage;
     try {
       for await (const chunk of chunks) {
@@ -17573,7 +17618,10 @@ function createModLlmFace(hostLlm, id, audit, logger, observed) {
           if (kind === "text-delta" && typeof chunk["text"] === "string") text += chunk["text"];
           else if (kind === "reasoning-delta" && typeof chunk["text"] === "string") reasoning += chunk["text"];
           else if (kind === "usage") usage = chunk["usage"];
-          else if (kind === "finish") finish = typeof chunk["reason"]?.["kind"] === "string" ? chunk["reason"]["kind"] : void 0;
+          else if (kind === "finish") {
+            const reason = chunk["reason"];
+            finish = typeof reason === "object" && reason !== null && typeof reason["kind"] === "string" ? reason["kind"] : void 0;
+          }
         }
         return { text, reasoning, usage, finish };
       })();
@@ -17749,8 +17797,8 @@ function resolvePluginManager(ctx) {
     () => ctx?.get?.("pluginManager")
   ]) {
     try {
-      const service = read();
-      if (service !== void 0 && service !== null && typeof service.installBundle === "function") return service;
+      const service = pluginManagerOf(read());
+      if (service !== void 0) return service;
     } catch {
     }
   }
@@ -17762,14 +17810,18 @@ function watchPluginManager(ctx, onReady) {
   try {
     const returned = ctx.inject(["pluginManager"], (serviceCtx) => {
       try {
-        if (serviceCtx?.pluginManager !== void 0) onReady(serviceCtx.pluginManager);
+        const service = serviceCtx?.pluginManager;
+        if (service !== void 0 && service !== null) onReady(service);
       } catch {
       }
     });
     return () => {
       try {
-        if (typeof returned?.dispose === "function") returned.dispose();
-        else if (typeof returned === "function") returned();
+        if (typeof returned === "object" && returned !== null && typeof returned.dispose === "function") {
+          returned.dispose();
+        } else if (typeof returned === "function") {
+          returned();
+        }
       } catch {
       }
     };
@@ -17833,9 +17885,10 @@ async function installViaPluginManager(request, pluginManager) {
   const dispose = subscribeInstallEvents(request, requestId);
   try {
     const result = await pluginManager.installBundle(spec, { requestId, enabled: true });
-    const application = normalizeApplication(result?.application, result);
+    const record = asRecord(result);
+    const application = normalizeApplication(record?.["application"], record);
     const failed = application === "failed" || application === "cancelled";
-    const detail = failed ? describeFailure(result) : "";
+    const detail = failed ? describeFailure(record) : "";
     const ambiguous = detail.includes("ambiguous-install");
     return {
       ok: !failed,
@@ -17872,16 +17925,18 @@ function subscribeInstallEvents(request, requestId) {
     } catch {
     }
   };
-  on("plugin-manager/install-log", (chunk) => {
-    if (chunk?.requestId !== requestId) return;
-    const text = typeof chunk?.text === "string" ? chunk.text.trimEnd() : "";
-    if (text !== "") request.log(`pnpm ${chunk?.stream ?? "out"}: ${text}`);
-    if (typeof chunk?.exitCode === "number") request.log(`pnpm exited with ${chunk.exitCode}`);
+  on("plugin-manager/install-log", (raw) => {
+    const chunk = asRecord(raw);
+    if (chunk?.["requestId"] !== requestId) return;
+    const text = typeof chunk["text"] === "string" ? chunk["text"].trimEnd() : "";
+    if (text !== "") request.log(`pnpm ${String(chunk["stream"] ?? "out")}: ${text}`);
+    if (typeof chunk["exitCode"] === "number") request.log(`pnpm exited with ${chunk["exitCode"]}`);
   });
-  on("plugin-manager/install-state", (state) => {
-    if (state?.requestId !== requestId) return;
-    const attempt = state?.attempt;
-    request.log(`plugin-manager: ${state?.phase ?? "working"}${attempt?.registry === void 0 ? "" : ` (${attempt.registry} ${attempt.index}/${attempt.total})`}`);
+  on("plugin-manager/install-state", (raw) => {
+    const state = asRecord(raw);
+    if (state?.["requestId"] !== requestId) return;
+    const attempt = asRecord(state["attempt"]);
+    request.log(`plugin-manager: ${String(state["phase"] ?? "working")}${attempt?.["registry"] === void 0 ? "" : ` (${String(attempt["registry"])} ${String(attempt["index"])}/${String(attempt["total"])})`}`);
   });
   return () => {
     for (const dispose of handlers.splice(0)) {
@@ -17896,15 +17951,23 @@ function normalizeApplication(application, result) {
   if (application === "applied" || application === "restart-required" || application === "cancelled" || application === "failed") {
     return application;
   }
-  if (result?.error !== void 0) return "failed";
+  if (result?.["error"] !== void 0) return "failed";
   return "unknown";
 }
 function describeFailure(result) {
-  const error = result?.error;
-  const code = typeof error?.code === "string" ? error.code : "";
-  const message = typeof error?.message === "string" ? error.message : "";
-  const output = typeof result?.packageResult?.output === "string" ? result.packageResult.output.trim() : "";
+  const error = asRecord(result?.["error"]);
+  const code = typeof error?.["code"] === "string" ? error["code"] : "";
+  const message = typeof error?.["message"] === "string" ? error["message"] : "";
+  const packageResult = asRecord(result?.["packageResult"]);
+  const output = typeof packageResult?.["output"] === "string" ? packageResult["output"].trim() : "";
   return [code, message, output.split("\n").slice(-4).join(" ")].filter((item) => item !== "").join(" | ");
+}
+function asRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
+}
+function pluginManagerOf(value) {
+  const record = asRecord(value);
+  return record !== void 0 && typeof record["installBundle"] === "function" ? record : void 0;
 }
 async function installViaCheckout(request) {
   const spec = pluginInstallSpec(request.repository, request.ref, request.commit);
@@ -18387,7 +18450,8 @@ function emptyInstallState() {
   };
 }
 function sameLocal(left, right) {
-  return typeof left?.version === "string" && typeof left?.commit === "string" && left.version === right.version && left.commit === right.commit;
+  const record = typeof left === "object" && left !== null ? left : void 0;
+  return typeof record?.version === "string" && typeof record?.commit === "string" && record.version === right.version && record.commit === right.commit;
 }
 function isCommitText(value) {
   return typeof value === "string" && /^[0-9a-f]{7,40}$/i.test(value.trim());
@@ -18549,9 +18613,11 @@ function setGamesServicePromise(value) {
 // packages/plugin/src/agent-tavern/card-state.ts
 var CARD_STATE_MAX_CHARS = 12e4;
 var CARD_STATE_FULL_REFRESH_TURNS = 8;
-function plainObject4(value) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
-  return value;
+function initialVariablesOf(chat) {
+  return jsonObjectOf2(chat.header.chat_metadata["initial_variables"] ?? {});
+}
+function jsonObjectOf2(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 function sectionHash(text) {
   return createHash8("sha256").update(text).digest("hex").slice(0, 16);
@@ -18571,7 +18637,7 @@ async function renderCardStateSections(db, state, characterName, character, chat
     const embedded = parseCharacterBook2(card.data.characterBook);
     books.unshift({
       name: embeddedName,
-      entries: embedded.entries,
+      entries: formatEntriesToLore(embedded.entries),
       scanDepth: card.data.characterBook.scan_depth,
       tokenBudget: card.data.characterBook.token_budget,
       recursiveScanning: card.data.characterBook.recursive_scanning
@@ -18585,7 +18651,7 @@ async function renderCardStateSections(db, state, characterName, character, chat
       entries.push({ book: book.name ?? "", entry });
     }
   }
-  if (!entries.some(({ entry }) => entry.content.includes("<%"))) return void 0;
+  if (!entries.some(({ entry }) => entry.content?.includes("<%") === true)) return void 0;
   entries.sort((left, right) => {
     const order = (left.entry.order ?? 100) - (right.entry.order ?? 100);
     if (order !== 0) return order;
@@ -18607,9 +18673,9 @@ async function renderCardStateSections(db, state, characterName, character, chat
       onWarning: (message) => warnings.push(message)
     },
     {
-      local: tree,
+      local: jsonObjectOf2(tree),
       global: { ...state.scriptGlobals },
-      initial: structuredClone(plainObject4(chat.header.chat_metadata["initial_variables"]) ?? {})
+      initial: initialVariablesOf(chat)
     }
   );
   const expand = createHostPromptExpander(
@@ -18620,16 +18686,17 @@ async function renderCardStateSections(db, state, characterName, character, chat
   const sections = [];
   let truncated = false;
   for (const { book, entry } of entries) {
-    let rendered = entry.content;
-    if (entry.content.includes("<%")) {
+    const content = entry.content ?? "";
+    let rendered = content;
+    if (content.includes("<%")) {
       try {
-        rendered = await runtime.renderText(entry.content, void 0, `card-state:${book}#${entry.uid}`);
+        rendered = await runtime.renderText(content, void 0, `card-state:${book}#${entry.uid}`);
       } catch (cause) {
         warnings.push(`${book}#${entry.uid}: ${cause instanceof Error ? cause.message : String(cause)}`);
         continue;
       }
     }
-    const text = hostPromptSafe(rendered.trim(), expand);
+    const text = hostPromptSafe((rendered ?? "").trim(), expand);
     if (text === "") continue;
     if (used + text.length > CARD_STATE_MAX_CHARS) {
       truncated = true;
@@ -20745,6 +20812,7 @@ function checkGameManifest(raw, options = {}) {
     errors.push("actionVocabulary must be a non-empty string");
   }
   if (errors.length > 0) return { ok: false, errors };
+  const playersSpec = players;
   return {
     ok: true,
     errors,
@@ -20753,7 +20821,7 @@ function checkGameManifest(raw, options = {}) {
       name: value.name,
       version: value.version,
       ...value.engines === void 0 ? {} : { engines: value.engines },
-      players: { min: players.min, max: players.max, roles: [...players.roles] },
+      players: { min: playersSpec.min, max: playersSpec.max, roles: [...playersSpec.roles] },
       turnBased: true,
       actionVocabulary: value.actionVocabulary
     }
@@ -20771,7 +20839,7 @@ function checkGameEngine(candidate) {
     if (typeof value[member] !== "function") errors.push(`engine.${member} must be a function`);
   }
   if (errors.length > 0) return { ok: false, errors };
-  return { ok: true, engine: candidate };
+  return { ok: true, engine: candidate, errors: [] };
 }
 function isJsonSafe(value) {
   try {
@@ -23122,7 +23190,7 @@ var engine5 = {
     }
     const events = [moveText2(from, to, piece)];
     const summaryParts = [moveText2(from, to, piece)];
-    if (captured !== null) {
+    if (captured !== null && outcome !== "move") {
       const text = combatText(outcome, captured);
       events.push(text);
       summaryParts.push(text);
@@ -25667,7 +25735,8 @@ function pseudoMoves(board, x, y) {
       let cy = y + dy;
       let screen = false;
       while (isOnBoard4(cx, cy)) {
-        const target = board[cy][cx];
+        const target = board[cy]?.[cx];
+        if (target === void 0) break;
         if (!screen) {
           if (target === null) {
             moves.push({ x: cx, y: cy });
@@ -27471,16 +27540,18 @@ function publicCard(card) {
   return { spec: card.spec, specVersion: card.specVersion, data: card.data };
 }
 function clampIdentitySummary(card) {
-  const extensions = card?.data?.extensions;
-  const agentTavern = extensions?.agentTavern;
+  const record = typeof card === "object" && card !== null ? card : void 0;
+  const extensions = record?.data?.extensions;
+  const agentTavern = extensions?.["agentTavern"];
   if (!agentTavern || typeof agentTavern !== "object" || Array.isArray(agentTavern)) return;
-  const summary = agentTavern.identitySummary;
+  const fields = agentTavern;
+  const summary = fields["identitySummary"];
   if (summary === void 0 || summary === null || summary === "") {
-    delete agentTavern.identitySummary;
+    delete fields["identitySummary"];
     return;
   }
   if (typeof summary !== "string") throw new Error("identitySummary must be a string");
-  agentTavern.identitySummary = summary.slice(0, 2e3);
+  fields["identitySummary"] = summary.slice(0, 2e3);
 }
 
 // packages/plugin/src/session/active-character.ts
@@ -27511,7 +27582,7 @@ async function bindSession(db, sessionId, character, chatId, group2 = false, arc
   return db.updateState((state) => {
     const existing = state.sessionBindings[sessionId];
     const sameAgentBinding = existing?.architecture === "agent-tavern" && existing.character === character && existing.chatId === chatId;
-    const pending = initializationPending && (existing?.initializationPending === true || !sameAgentBinding);
+    const pending = initializationPending && (existing?.architecture === "agent-tavern" && existing.initializationPending === true || !sameAgentBinding);
     const binding = architecture === "agent-tavern" && !group2 ? {
       architecture: "agent-tavern",
       contextMode,
@@ -27573,23 +27644,28 @@ function deepFreeze(value) {
 }
 
 // packages/plugin/src/session/trace.ts
+function isAppendableSession(session) {
+  return session !== void 0 && typeof session.append === "function";
+}
 function occupyHostSession(agent, ctx) {
+  const session = agent.session;
+  if (!isAppendableSession(session)) return;
   try {
-    if (sessionEvents(agent.session).some((event) => event.type === "turn/start")) return;
+    if (sessionEvents(session).some((event) => event.type === "turn/start")) return;
     if (!canAdvanceHostTurnBase(agent)) return;
     const started = confirmSessionAppend({
       session: agent.session,
       logger: ctx?.logger,
-      label: `session occupation turn/start (${agent.id})`,
-      append: () => agent.session.append("turn/start", { turn: 1 }),
+      label: `session occupation turn/start (${agent.id ?? "unknown"})`,
+      append: () => session.append("turn/start", { turn: 1 }),
       present: (events) => events.some((event) => event.type === "turn/start" && event.data?.turn === 1)
     });
     if (!started) return;
     const ended = confirmSessionAppend({
       session: agent.session,
       logger: ctx?.logger,
-      label: `session occupation turn/end (${agent.id})`,
-      append: () => agent.session.append("turn/end", { turn: 1, reason: { kind: "completed" } }),
+      label: `session occupation turn/end (${agent.id ?? "unknown"})`,
+      append: () => session.append("turn/end", { turn: 1, reason: { kind: "completed" } }),
       present: (events) => events.some((event) => event.type === "turn/end" && event.data?.turn === 1)
     });
     if (!ended) return;
@@ -27604,7 +27680,7 @@ function loopPhase(agent) {
 function canAdvanceHostTurnBase(agent) {
   const phase = loopPhase(agent);
   if (phase === void 0 || phase.kind !== "idle") return false;
-  if (!Number.isSafeInteger(phase.lastTurn)) return false;
+  if (typeof phase.lastTurn !== "number" || !Number.isSafeInteger(phase.lastTurn)) return false;
   const before = phase.lastTurn;
   try {
     phase.lastTurn = before;
@@ -27617,7 +27693,7 @@ function advanceHostTurnBase(agent, turn) {
   if (!Number.isSafeInteger(turn) || turn < 1) return false;
   const phase = loopPhase(agent);
   if (phase === void 0 || phase.kind !== "idle") return false;
-  if (Number.isSafeInteger(phase.lastTurn) && phase.lastTurn >= turn) return true;
+  if (typeof phase.lastTurn === "number" && Number.isSafeInteger(phase.lastTurn) && phase.lastTurn >= turn) return true;
   try {
     phase.lastTurn = turn;
   } catch {
@@ -27630,16 +27706,20 @@ function lastLoggedTurn(agent) {
   for (const event of sessionEvents(agent.session)) {
     if (event.type !== "turn/start") continue;
     const value = event.data?.turn;
-    if (Number.isSafeInteger(value) && (last === void 0 || value > last)) last = value;
+    if (typeof value === "number" && Number.isSafeInteger(value) && (last === void 0 || value > last)) last = value;
   }
   return last;
 }
 function closeImportBracket(agent, reason) {
+  const session = agent.session;
+  if (!isAppendableSession(session)) return void 0;
   let openTurn;
   let openStep;
-  for (const event of sessionEvents(agent.session)) {
-    if (event.type === "turn/start" && Number.isSafeInteger(event.data?.turn)) {
-      openTurn = event.data.turn;
+  for (const event of sessionEvents(session)) {
+    const turn = event.data?.turn;
+    const step = event.data?.step;
+    if (event.type === "turn/start" && typeof turn === "number" && Number.isSafeInteger(turn)) {
+      openTurn = turn;
       openStep = void 0;
       continue;
     }
@@ -27648,21 +27728,21 @@ function closeImportBracket(agent, reason) {
       openStep = void 0;
       continue;
     }
-    if (event.type === "step/start" && Number.isSafeInteger(event.data?.step)) {
-      openStep = { turn: event.data.turn, step: event.data.step };
+    if (event.type === "step/start" && typeof turn === "number" && typeof step === "number" && Number.isSafeInteger(step)) {
+      openStep = { turn, step };
       continue;
     }
     if (event.type === "step/end") openStep = void 0;
   }
   if (openStep !== void 0) {
     try {
-      agent.session.append("step/end", { turn: openStep.turn, step: openStep.step });
+      session.append("step/end", { turn: openStep.turn, step: openStep.step });
     } catch {
     }
   }
   if (openTurn !== void 0) {
     try {
-      agent.session.append("turn/end", { turn: openTurn, reason });
+      session.append("turn/end", { turn: openTurn, reason });
     } catch {
     }
   }
@@ -27670,7 +27750,7 @@ function closeImportBracket(agent, reason) {
 }
 function beginTavernSessionTurn(agent, userText) {
   const session = agent?.session;
-  if (!session?.append || readSessionEvents(session) === void 0) return null;
+  if (!isAppendableSession(session) || readSessionEvents(session) === void 0) return null;
   const logEvents = sessionEvents(session);
   let openTurn = false;
   for (const event of logEvents) {
@@ -27678,7 +27758,7 @@ function beginTavernSessionTurn(agent, userText) {
     else if (event.type === "turn/end") openTurn = false;
   }
   if (openTurn) return null;
-  const turn = Math.max(0, ...logEvents.filter((event) => event.type === "turn/start" && Number.isSafeInteger(event.data?.turn)).map((event) => event.data.turn)) + 1;
+  const turn = Math.max(0, ...logEvents.filter((event) => event.type === "turn/start" && typeof event.data?.turn === "number" && Number.isSafeInteger(event.data.turn)).map((event) => event.data?.turn)) + 1;
   let started = false;
   try {
     session.append("turn/start", { turn });
@@ -27690,7 +27770,7 @@ function beginTavernSessionTurn(agent, userText) {
         source: { kind: "user" }
       }), { surfaceOp: "append" });
     }
-    return { session, turn, step: 1, stepOpen: false, turnOpen: true, logging: true, completed: false, agent };
+    return { session, turn, step: 1, stepOpen: false, turnOpen: true, logging: true, completed: false, ...agent !== null && agent !== void 0 ? { agent } : {} };
   } catch {
     if (started) {
       try {
@@ -27774,26 +27854,31 @@ function parseTavernSessionCommand(rawInput) {
   if (payload === "") return null;
   try {
     const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    if (parsed.action === "close") return { action: "close" };
-    if (parsed.action === "novel-open") {
-      return typeof parsed.novelId === "string" && parsed.novelId.trim() !== "" ? { action: "novel-open", novelId: parsed.novelId } : null;
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const record = parsed;
+    if (record["action"] === "close") return { action: "close" };
+    if (record["action"] === "novel-open") {
+      const novelId = record["novelId"];
+      return typeof novelId === "string" && novelId.trim() !== "" ? { action: "novel-open", novelId } : null;
     }
-    if (parsed.action === "workbench-open") {
-      const sourceCharacter = typeof parsed.sourceCharacter === "string" ? parsed.sourceCharacter : "";
-      const sourceChatId = typeof parsed.sourceChatId === "string" ? parsed.sourceChatId : "";
+    if (record["action"] === "workbench-open") {
+      const sourceCharacter = typeof record["sourceCharacter"] === "string" ? record["sourceCharacter"] : "";
+      const sourceChatId = typeof record["sourceChatId"] === "string" ? record["sourceChatId"] : "";
       if (sourceCharacter !== "" !== (sourceChatId !== "")) return null;
       return { action: "workbench-open", sourceCharacter, sourceChatId };
     }
-    if (typeof parsed.character !== "string" || typeof parsed.chatId !== "string") return null;
-    const group2 = parsed.group === true;
-    const architecture = group2 ? "st" : requestedArchitecture(parsed.architecture);
+    const character = record["character"];
+    const chatId = record["chatId"];
+    if (typeof character !== "string" || typeof chatId !== "string") return null;
+    const group2 = record["group"] === true;
+    const architecture = group2 ? "st" : requestedArchitecture(record["architecture"]);
     return {
       action: "open",
-      character: parsed.character,
-      chatId: parsed.chatId,
+      character,
+      chatId,
       group: group2,
       architecture,
-      contextMode: requestedContextMode(parsed.contextMode)
+      contextMode: requestedContextMode(record["contextMode"])
     };
   } catch {
     return null;
@@ -29388,6 +29473,7 @@ async function embedBatchOnce(config, batch, options) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs);
   let response;
+  if (config.provider === "local") throw new Error("local memory embedding does not use the HTTP embeddings endpoint");
   try {
     response = await options.fetchImpl(`${config.baseURL}/embeddings`, {
       method: "POST",
@@ -30949,6 +31035,9 @@ function registerTavernSessionCommand(ctx) {
         await emitAgentPresetChanged();
       }
       if (preloadSnapshot !== void 0) {
+        if (agent.inject === void 0) {
+          throw new TavernArchitectureConflictError("This host cannot preload AgentTavern session context.");
+        }
         agent.inject(createMessage({
           role: "user",
           content: [{ type: "text", text: preloadSnapshot }],
@@ -31063,15 +31152,15 @@ function metaPath(dir) {
 function emptyDatabase(name2) {
   return { name: name2, version: 0, stores: {}, records: {}, updatedAt: 0 };
 }
-function asRecord(value) {
+function asRecord2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
 }
 function normalizeIndexes(value) {
   const indexes = {};
-  const record = asRecord(value);
+  const record = asRecord2(value);
   if (record === void 0) return indexes;
   for (const [indexName, descriptor] of Object.entries(record)) {
-    const entry = asRecord(descriptor);
+    const entry = asRecord2(descriptor);
     if (entry === void 0 || typeof entry.keyPath !== "string" || entry.keyPath.trim() === "") continue;
     indexes[indexName] = {
       keyPath: entry.keyPath,
@@ -31082,13 +31171,13 @@ function normalizeIndexes(value) {
   return indexes;
 }
 function normalizeDatabase(value, name2) {
-  const record = asRecord(value);
+  const record = asRecord2(value);
   if (record === void 0) return emptyDatabase(name2);
   const stores = {};
-  const rawStores = asRecord(record.stores);
+  const rawStores = asRecord2(record.stores);
   if (rawStores !== void 0) {
     for (const [storeName, descriptor] of Object.entries(rawStores)) {
-      const entry = asRecord(descriptor);
+      const entry = asRecord2(descriptor);
       if (entry === void 0) continue;
       stores[storeName] = {
         keyPath: typeof entry.keyPath === "string" ? entry.keyPath : "",
@@ -31097,10 +31186,10 @@ function normalizeDatabase(value, name2) {
     }
   }
   const records = {};
-  const rawRecords = asRecord(record.records);
+  const rawRecords = asRecord2(record.records);
   if (rawRecords !== void 0) {
     for (const [keyHash, descriptor] of Object.entries(rawRecords)) {
-      const entry = asRecord(descriptor);
+      const entry = asRecord2(descriptor);
       if (entry === void 0) continue;
       if (typeof entry.key !== "string" || typeof entry.size !== "number" || !Number.isFinite(entry.size) || entry.size < 0) continue;
       records[keyHash] = {
@@ -31108,7 +31197,7 @@ function normalizeDatabase(value, name2) {
         key: entry.key,
         size: entry.size,
         updatedAt: typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt) ? entry.updatedAt : 0,
-        meta: asRecord(entry.meta) ?? {}
+        meta: asRecord2(entry.meta) ?? {}
       };
     }
   }
@@ -31201,7 +31290,7 @@ function requireKey(value) {
   return key;
 }
 function normalizeRecordMeta(value) {
-  const record = asRecord(value) ?? {};
+  const record = asRecord2(value) ?? {};
   const text = JSON.stringify(record);
   if (text.length > 64 * 1024) throw new Error("idb record metadata is too large (max 64KB)");
   return record;
@@ -31493,7 +31582,7 @@ function walkScriptNodes(nodes, scripts, includeDisabled) {
   }
 }
 function cardScriptNodes(card) {
-  const helper = plainObject5(card.data.extensions["tavern_helper"]);
+  const helper = plainObject4(card.data.extensions["tavern_helper"]);
   return Array.isArray(helper?.["scripts"]) ? helper["scripts"] : [];
 }
 function cardWorldName(card) {
@@ -31507,7 +31596,7 @@ function nonEmptyString(value) {
 function isPlainObject3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function plainObject5(value) {
+function plainObject4(value) {
   return isPlainObject3(value) ? value : void 0;
 }
 
@@ -31779,7 +31868,7 @@ function extractFrontendDocuments(value) {
   FENCED_DOCUMENT.lastIndex = 0;
   let match;
   while ((match = FENCED_DOCUMENT.exec(text)) !== null) {
-    const candidate = match[1].trim();
+    const candidate = match[1]?.trim() ?? "";
     if (isFrontendDocument(candidate)) documents.push(candidate);
   }
   if (documents.length > 0) return documents;
@@ -31886,7 +31975,13 @@ async function handleGamesApi(options) {
       if (action === null || typeof action !== "object" || Array.isArray(action)) {
         throw new GameBridgeError("invalid", "expected { action }");
       }
-      const { session, view } = await service.humanAction(sessionId, action);
+      const actionRecord = action;
+      const actionType = actionRecord["type"];
+      if (typeof actionType !== "string" || actionType === "") {
+        throw new GameBridgeError("invalid", "action.type is required");
+      }
+      const gameAction = { ...actionRecord, type: actionType };
+      const { session, view } = await service.humanAction(sessionId, gameAction);
       return sendJson2(res, 200, { ok: true, session, view });
     }
     if (method === "GET" && route.startsWith("games/") && route.includes("/view/")) {
@@ -31975,7 +32070,7 @@ var FrontendGenerationError = class extends Error {
     this.name = "FrontendGenerationError";
   }
 };
-function asRecord2(value) {
+function asRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
 }
 function requireText(value, field, maxChars) {
@@ -32000,7 +32095,7 @@ function normalizeBaseUrl(url) {
   return base;
 }
 function parseApiTarget(value, requireModel) {
-  const record = asRecord2(value);
+  const record = asRecord3(value);
   if (record === void 0) throw new FrontendGenerationError("custom_api must be an object");
   const rawUrl = requireText(record.apiurl, "custom_api.apiurl", 2048);
   let url;
@@ -32078,7 +32173,7 @@ async function requestJson(endpoint, init, label, secret) {
   }
 }
 function modelIds(payload) {
-  const record = asRecord2(payload);
+  const record = asRecord3(payload);
   const list = record === void 0 ? [] : Array.isArray(record.data) ? record.data : Array.isArray(record.models) ? record.models : [];
   const ids = [];
   for (const entry of list) {
@@ -32087,7 +32182,7 @@ function modelIds(payload) {
       if (id2 !== "") ids.push(id2);
       continue;
     }
-    const item = asRecord2(entry);
+    const item = asRecord3(entry);
     if (item === void 0) continue;
     const id = typeof item.id === "string" ? item.id.trim() : typeof item.name === "string" ? item.name.trim() : "";
     if (id !== "") ids.push(id);
@@ -32115,17 +32210,17 @@ function buildMessages(config) {
   const messages = [];
   const injects = Array.isArray(config.injects) ? config.injects : [];
   for (const entry of injects) {
-    const inject2 = asRecord2(entry);
+    const inject2 = asRecord3(entry);
     if (inject2 === void 0) continue;
     if (inject2.position === "none") continue;
     if (typeof inject2.content !== "string" || inject2.content.trim() === "") continue;
     messages.push({ role: parseRole(inject2.role, "system"), content: inject2.content });
   }
-  const overrides = asRecord2(config.overrides);
-  const history = asRecord2(overrides?.chat_history);
+  const overrides = asRecord3(config.overrides);
+  const history = asRecord3(overrides?.chat_history);
   const prompts = history !== void 0 && Array.isArray(history.prompts) ? history.prompts : [];
   for (const entry of prompts) {
-    const prompt = asRecord2(entry);
+    const prompt = asRecord3(entry);
     if (prompt === void 0) continue;
     if (typeof prompt.content !== "string") {
       throw new FrontendGenerationError("overrides.chat_history.prompts[].content must be a string");
@@ -32150,9 +32245,9 @@ function toolCallArgumentsText(message) {
   if (message === void 0) return "";
   const parts = [];
   const collect = (value) => {
-    const call = asRecord2(value);
+    const call = asRecord3(value);
     if (call === void 0) return;
-    const fn = asRecord2(call.function);
+    const fn = asRecord3(call.function);
     const raw = fn?.arguments ?? call.arguments;
     if (typeof raw === "string") {
       if (raw.trim() !== "") parts.push(raw);
@@ -32172,19 +32267,19 @@ function toolCallArgumentsText(message) {
   return parts.join("\n");
 }
 function completionText(payload) {
-  const record = asRecord2(payload);
+  const record = asRecord3(payload);
   const choices = record !== void 0 && Array.isArray(record.choices) ? record.choices : [];
-  const first = choices.length > 0 ? asRecord2(choices[0]) : void 0;
+  const first = choices.length > 0 ? asRecord3(choices[0]) : void 0;
   if (first === void 0) {
     throw new FrontendGenerationError("custom API /chat/completions returned no choices");
   }
-  const message = asRecord2(first.message);
+  const message = asRecord3(first.message);
   const content = message?.content;
   if (typeof content === "string" && content.trim() !== "") return content;
   if (Array.isArray(content)) {
     const joined = content.map((part) => {
       if (typeof part === "string") return part;
-      const item = asRecord2(part);
+      const item = asRecord3(part);
       return item !== void 0 && typeof item.text === "string" ? item.text : "";
     }).join("");
     if (joined.trim() !== "") return joined;
@@ -32196,7 +32291,7 @@ function completionText(payload) {
   throw new FrontendGenerationError(`custom API /chat/completions returned no text or tool arguments (finish_reason=${finishReason})`);
 }
 async function generateWithCustomApi(value, signal) {
-  const config = asRecord2(value);
+  const config = asRecord3(value);
   if (config === void 0) throw new FrontendGenerationError("generate config must be an object");
   const target = parseApiTarget(config.custom_api, true);
   const messages = buildMessages(config);
@@ -32222,22 +32317,22 @@ function textFromContent(value) {
   if (!Array.isArray(value)) return "";
   return value.map((part) => {
     if (typeof part === "string") return part;
-    const item = asRecord2(part);
+    const item = asRecord3(part);
     return item !== void 0 && typeof item.text === "string" ? item.text : "";
   }).join("");
 }
 function deltaText(payload) {
-  const record = asRecord2(payload);
+  const record = asRecord3(payload);
   const choices = record !== void 0 && Array.isArray(record.choices) ? record.choices : [];
   if (choices.length === 0) return "";
-  const first = asRecord2(choices[0]);
+  const first = asRecord3(choices[0]);
   if (first === void 0) return "";
-  const delta = asRecord2(first.delta);
+  const delta = asRecord3(first.delta);
   if (delta !== void 0) {
     const content = textFromContent(delta.content);
     if (content !== "") return content;
   }
-  const message = asRecord2(first.message);
+  const message = asRecord3(first.message);
   if (message !== void 0) {
     const content = textFromContent(message.content);
     if (content !== "") return content;
@@ -32259,7 +32354,7 @@ function streamChunkText(line, secret) {
   return deltaText(payload);
 }
 async function generateWithCustomApiStream(value, onDelta, signal) {
-  const config = asRecord2(value);
+  const config = asRecord3(value);
   if (config === void 0) throw new FrontendGenerationError("generate config must be an object");
   const target = parseApiTarget(config.custom_api, true);
   const messages = buildMessages(config);
@@ -32588,7 +32683,7 @@ async function createGenerationTemplates(options) {
         mesExample: card.data.mesExample,
         creatorNotes: card.data.creatorNotes,
         depthPrompt: depthPrompt !== null && typeof depthPrompt === "object" ? String(depthPrompt.prompt ?? "") : "",
-        data: card.data
+        data: jsonObjectOf3(card.data)
       };
     },
     findPresetPrompt: (name2) => {
@@ -32697,6 +32792,9 @@ function mergeTemplateLocalVars(chat, macroLocalSnapshot) {
     delete metadata[INITIAL_VARIABLES_KEY4];
   }
 }
+function jsonObjectOf3(value) {
+  return JSON.parse(JSON.stringify(value));
+}
 
 // packages/plugin/src/generation/pipeline.ts
 var activeStGeneration = /* @__PURE__ */ new Map();
@@ -32738,7 +32836,9 @@ async function generate(ctx, req, res, db) {
     if (!res.writableEnded) ac.abort();
   });
   activeStGeneration.set(stGenerationKey(characterName, chatId), ac);
-  const write = (event) => res.write(JSON.stringify(event) + "\n");
+  const write = (event) => {
+    res.write(JSON.stringify(event) + "\n");
+  };
   try {
     const result = await runGeneration(ctx, db, {
       state,
@@ -32756,7 +32856,7 @@ async function generate(ctx, req, res, db) {
       reasoningEffort: typeof body.reasoningEffort === "string" ? body.reasoningEffort : void 0,
       write,
       signal: ac.signal,
-      hostAgent: typeof body.sessionId === "string" ? ctx.agents?.get?.(body.sessionId) : void 0
+      hostAgent: typeof body.sessionId === "string" ? ctx.agents?.get?.(body.sessionId) ?? void 0 : void 0
     });
     write({ type: "saved", chat: result.chat, revision: result.revision });
     res.end();
@@ -32839,7 +32939,7 @@ async function previewGeneration(ctx, req, res, db) {
       if (chunk.type === "usage") usage = chunk.usage;
       else if (chunk.type === "text-delta") text += chunk.text;
       else if (chunk.type === "finish") {
-        if (chunk.reason.kind === "error" || chunk.reason.kind === "aborted") throw new Error(chunk.reason.failure.message);
+        if (chunk.reason.kind === "error" || chunk.reason.kind === "aborted") throw new Error(chunk.reason.failure?.message ?? "model stream failed");
         finish = chunk.reason.kind;
       }
     }
@@ -32866,17 +32966,19 @@ async function resolveGenerationSpeaker(db, state, options) {
   }
   const groupDef = await db.getGroup(characterName);
   if (!groupDef) throw new Error(`group '${characterName}' not found`);
-  const chatGroupMeta = chat.header.chat_metadata?.group;
-  const members = Array.isArray(chatGroupMeta?.members) && chatGroupMeta.members.length > 0 ? chatGroupMeta.members.filter((x) => typeof x === "string") : groupDef.members;
-  const disabled = Array.isArray(chatGroupMeta?.disabledMembers) ? chatGroupMeta.disabledMembers.filter((x) => typeof x === "string") : groupDef.disabledMembers;
+  const chatGroup = asRecord4(chat.header.chat_metadata?.group);
+  const chatMembers = stringArray2(chatGroup?.["members"]);
+  const members = chatMembers !== void 0 && chatMembers.length > 0 ? chatMembers : groupDef.members;
+  const disabled = stringArray2(chatGroup?.["disabledMembers"]) ?? groupDef.disabledMembers;
   const lastSpeaker = [...chat.messages].reverse().find((m) => !m.is_user && !m.is_system)?.name;
   const talkativeness = /* @__PURE__ */ new Map();
   for (const member of members) {
     const file = await db.getCharacter(member);
-    const raw = file?.card?.data?.extensions?.talkativeness;
+    const extensions = asRecord4(file?.card?.data?.extensions);
+    const raw = extensions?.["talkativeness"];
     talkativeness.set(member, typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : 0.5);
   }
-  const speakerName = triggerMember ?? (mode === "regenerate" ? members.includes(lastSpeaker) ? lastSpeaker : void 0 : void 0) ?? pickGroupMember({
+  const speakerName = triggerMember ?? (mode === "regenerate" ? lastSpeaker !== void 0 && members.includes(lastSpeaker) ? lastSpeaker : void 0 : void 0) ?? pickGroupMember({
     strategy: groupDef.activationStrategy,
     members,
     disabled,
@@ -32924,7 +33026,7 @@ async function buildGenerationLlmRequest(ctx, db, options) {
       creatorNotes: character.card.data.creatorNotes
     },
     settings: { recursive: true, scanDepth: 2, budgetPercent: 25 },
-    timedState: typeof chat.header.chat_metadata?.timedWorldInfo === "object" && chat.header.chat_metadata.timedWorldInfo ? chat.header.chat_metadata.timedWorldInfo : void 0,
+    timedState: asTimedEffectsState(chat.header.chat_metadata?.timedWorldInfo),
     messageCount: turnMessages.length
   });
   chat.header.chat_metadata.timedWorldInfo = lore.timedState;
@@ -33054,7 +33156,11 @@ async function buildGenerationLlmRequest(ctx, db, options) {
   const finalMessages = tpl ? await tpl.applyPromptInjections(assembled.messages) : assembled.messages;
   const requestMessages = [...finalMessages];
   const systemParts = [];
-  while (requestMessages[0]?.role === "system") systemParts.push(requestMessages.shift().content);
+  while (true) {
+    const first = requestMessages[0];
+    if (first === void 0 || first.role !== "system") break;
+    systemParts.push(requestMessages.shift().content);
+  }
   const guidesBlock = formatGuidesBlock(chat.header.chat_metadata?.guides);
   if (guidesBlock !== void 0) systemParts.push(guidesBlock);
   const llmMessages = requestMessages.map((m) => createMessage({
@@ -33194,7 +33300,7 @@ async function runGeneration(ctx, db, options) {
         reasoning += chunk.text;
         write({ type: "reasoning", text: chunk.text });
       } else if (chunk.type === "finish") {
-        if (chunk.reason.kind === "error" || chunk.reason.kind === "aborted") throw new Error(chunk.reason.failure.message);
+        if (chunk.reason.kind === "error" || chunk.reason.kind === "aborted") throw new Error(chunk.reason.failure?.message ?? "model stream failed");
         write({ type: "finish", reason: chunk.reason.kind });
       }
     }
@@ -33254,9 +33360,13 @@ async function runGeneration(ctx, db, options) {
   }
 }
 function chatVariables(chat) {
-  const vars = chat?.header?.chat_metadata?.variables;
+  const vars = chat.header.chat_metadata?.variables;
   if (vars && typeof vars === "object" && !Array.isArray(vars)) {
-    return Object.fromEntries(Object.entries(vars).filter(([, value]) => typeof value === "string" || typeof value === "number" || typeof value === "boolean"));
+    const result = {};
+    for (const [key, value] of Object.entries(vars)) {
+      if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") result[key] = value;
+    }
+    return result;
   }
   return {};
 }
@@ -33390,6 +33500,16 @@ function roleName(role) {
 }
 function numberOr(value, fallback) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+function asRecord4(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
+}
+function stringArray2(value) {
+  if (!Array.isArray(value)) return void 0;
+  return value.filter((item) => typeof item === "string");
+}
+function asTimedEffectsState(value) {
+  return asRecord4(value) === void 0 ? void 0 : value;
 }
 
 // packages/plugin/src/helper-bindings.ts
@@ -33830,7 +33950,7 @@ async function buildSnapshot(db, state, character, chatId) {
       messageCount: 0,
       lastMessageId: -1,
       variables: {
-        global: cloneJson(plainObject6(state.scriptGlobals) ?? {}),
+        global: cloneJson(plainObject5(state.scriptGlobals) ?? {}),
         chat: {},
         message: {},
         character: characterVariablesFor(state, character, file?.card.data.extensions?.["variables"])
@@ -33863,6 +33983,7 @@ async function buildSnapshot(db, state, character, chatId) {
     shared.personas.ids = shared.personas.names.map((name2) => name2);
   }
   const lastIndex = chat.messages.length - 1;
+  const lastMessage = lastIndex >= 0 ? chat.messages[lastIndex] : void 0;
   const persona = state.activePersona ? await db.getPersona(state.activePersona) : void 0;
   const presetTrees = state.activePreset === void 0 ? null : await activePresetScriptTrees(db, state.activePreset);
   const sessionRegex = parseSessionRegexScripts(overlay?.regexScripts);
@@ -33875,9 +33996,9 @@ async function buildSnapshot(db, state, character, chatId) {
     messageCount: chat.messages.length,
     lastMessageId: lastIndex,
     variables: {
-      global: cloneJson(plainObject6(state.scriptGlobals) ?? {}),
+      global: cloneJson(plainObject5(state.scriptGlobals) ?? {}),
       chat: cloneJson(chatVariables2),
-      message: lastIndex >= 0 ? cloneJson(readMessageVariables(chat.messages[lastIndex])) : {},
+      message: lastMessage === void 0 ? {} : cloneJson(readMessageVariables(lastMessage)),
       character: characterVariablesFor(state, character, file?.card.data.extensions?.["variables"])
     },
     scriptTrees: overlay === void 0 ? null : cloneJson(overlay.trees?.character ?? overlay.scriptTrees),
@@ -33908,15 +34029,15 @@ function characterWorldLinks(file) {
   };
 }
 function chatWorldName(chat) {
-  const world = plainObject6(chat.header.chat_metadata)?.["world"];
+  const world = plainObject5(chat.header.chat_metadata)?.["world"];
   return typeof world === "string" && world.trim() !== "" ? world.trim() : null;
 }
 async function activePresetScriptTrees(db, presetName) {
   const preset = await db.getPreset(presetName);
-  const extensions = plainObject6(preset?.["extensions"]);
-  const helper = plainObject6(extensions?.["tavern_helper"]);
+  const extensions = plainObject5(preset?.["extensions"]);
+  const helper = plainObject5(extensions?.["tavern_helper"]);
   const scripts = helper?.["scripts"];
-  return Array.isArray(scripts) ? cloneJson(scripts) : null;
+  return Array.isArray(scripts) ? requireScriptTreeArray(scripts, `preset '${presetName}' tavern_helper.scripts`) : null;
 }
 function splitRegexScripts(state, file) {
   const cardName2 = file?.card.data.name;
@@ -33937,9 +34058,9 @@ function splitRegexScripts(state, file) {
   return { global, character, preset };
 }
 function characterVariablesFor(state, character, cardVariables) {
-  const overlay = plainObject6(state.characterVariables?.[character]);
+  const overlay = plainObject5(state.characterVariables?.[character]);
   if (overlay !== void 0) return cloneJson(overlay);
-  return cloneJson(plainObject6(cardVariables) ?? {});
+  return cloneJson(plainObject5(cardVariables) ?? {});
 }
 function avatarPath(character) {
   return `/api/dsh-soulmojito/avatar/${encodeURIComponent(character)}`;
@@ -33986,6 +34107,7 @@ async function replaceVariables(db, state, character, chatId, body) {
     const snapshot2 = await requireChat(db, character, chatId);
     const index = resolveMessageId(snapshot2.chat.messages, body?.messageId);
     const message = snapshot2.chat.messages[index];
+    if (message === void 0) throw new Error(`message_id ${index} is out of range`);
     message.variables = tree;
     await persistChat(db, character, chatId, snapshot2.chat, snapshot2.revision);
     return tree;
@@ -34003,8 +34125,9 @@ async function replaceMvuData(db, character, chatId, body) {
     if (chat.messages.length > 0) {
       messageId = body?.messageId === void 0 ? chat.messages.length - 1 : resolveMessageId(chat.messages, body.messageId);
       const message = chat.messages[messageId];
+      if (message === void 0) throw new Error(`message_id ${messageId} is out of range`);
       message.variables = {
-        ...plainObject6(message.variables) ?? {},
+        ...plainObject5(message.variables) ?? {},
         stat_data: cloneJson(stat2)
       };
     }
@@ -34012,7 +34135,7 @@ async function replaceMvuData(db, character, chatId, body) {
     try {
       const store5 = await variables();
       const existing = await store5.get("chat", chatId, "stat_data");
-      await store5.set("chat", chatId, "stat_data", stat2, existing?.revision);
+      await store5.set("chat", chatId, "stat_data", jsonValueOf2(stat2), existing?.revision);
     } catch (error) {
       console.warn(`dsh-soulmojito: MVU chat-scope mirror skipped: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -34028,7 +34151,7 @@ async function mirrorChatScope(chatId, tree) {
     await store5.delete("chat", chatId, entry.name);
   }
   if (entries.length > 0) {
-    await store5.patch("chat", chatId, entries.map((entry) => ({ name: entry.name, value: entry.value })));
+    await store5.patch("chat", chatId, entries.map((entry) => ({ name: entry.name, value: jsonValueOf2(entry.value) })));
   }
 }
 function variableEntriesForMirror(tree) {
@@ -34108,7 +34231,8 @@ async function loadLorebook(db, character, chatId, name2) {
   const world = await db.getWorld(name2);
   if (world !== void 0) return world;
   const card = (await db.getCharacter(character))?.card;
-  const book = card?.data.characterBook;
+  if (card === void 0) return void 0;
+  const book = card.data.characterBook;
   if (book === void 0) return void 0;
   const linked = card.data.extensions["world"];
   const linkedName = typeof linked === "string" && linked.trim() !== "" ? linked.trim() : void 0;
@@ -34274,7 +34398,7 @@ async function renderFrontendTemplate(db, state, character, chatId, body) {
   const chat = chatId === "" ? void 0 : (await requireChat(db, character, chatId)).chat;
   const messages = chat?.messages ?? [];
   const chatVariables2 = chat === void 0 ? {} : readChatVariables(chat);
-  const globalVariables = plainObject6(state.scriptGlobals) ?? {};
+  const globalVariables = plainObject5(state.scriptGlobals) ?? {};
   let variablesDirty = false;
   const readVar = (scope, path12) => {
     const tree = scope === "chat" ? chatVariables2 : globalVariables;
@@ -34314,9 +34438,9 @@ async function renderFrontendTemplate(db, state, character, chatId, body) {
         description: data.description,
         personality: data.personality,
         scenario: data.scenario,
-        first_message: data.first_mes,
-        message_example: data.mes_example,
-        creator_notes: data.creator_notes
+        first_message: data.firstMes,
+        message_example: data.mesExample,
+        creator_notes: data.creatorNotes
       };
     },
     getpreset: async (name2) => {
@@ -34373,7 +34497,7 @@ function writeTreePath(tree, path12, value) {
     }
     cursor = next;
   }
-  cursor[leaf] = cloneJson(value);
+  cursor[leaf] = cloneJson(jsonValueOf2(value));
 }
 async function rotateMessages(db, character, chatId, body) {
   return serializeSessionWrite(chatWriteKey(character, chatId), () => retryChatWrite(async () => {
@@ -34450,9 +34574,12 @@ function generationIdOf(config) {
 }
 function requireScriptTrees(value) {
   if (!Array.isArray(value)) throw new Error("scriptTrees must be an array of card script nodes");
+  return requireScriptTreeArray(value, "scriptTrees");
+}
+function requireScriptTreeArray(value, label) {
   return value.map((node, index) => {
     if (!isPlainObject4(node)) {
-      throw new Error(`scriptTrees[${index}] must be an object (got ${node === null ? "null" : typeof node})`);
+      throw new Error(`${label}[${index}] must be an object (got ${node === null ? "null" : typeof node})`);
     }
     return cloneJson(node);
   });
@@ -34466,16 +34593,16 @@ async function readScriptTrees(db, state, character, chatId, type) {
   const overlay = await db.getChatJsrOverlay(character, chatId);
   const characterTree = overlay === void 0 ? null : overlay.trees !== void 0 ? overlay.trees.character ?? null : overlay.scriptTrees;
   if (type === "character") {
-    return { type, preset: null, scriptTrees: characterTree === null ? null : cloneJson(characterTree) };
+    return { type, preset: null, scriptTrees: characterTree === null ? null : requireScriptTreeArray(characterTree, "trees.character") };
   }
   if (type === "global") {
     const trees = overlay?.trees?.global;
-    return { type, preset: null, scriptTrees: trees === void 0 ? null : cloneJson(trees) };
+    return { type, preset: null, scriptTrees: trees === void 0 ? null : requireScriptTreeArray(trees, "trees.global") };
   }
   const presetName = state.activePreset ?? null;
   if (presetName === null) return { type, preset: null, scriptTrees: null };
   const own = overlay?.trees?.preset?.[presetName];
-  if (own !== void 0) return { type, preset: presetName, scriptTrees: cloneJson(own) };
+  if (own !== void 0) return { type, preset: presetName, scriptTrees: requireScriptTreeArray(own, `trees.preset.${presetName}`) };
   return { type, preset: presetName, scriptTrees: await activePresetScriptTrees(db, presetName) };
 }
 async function putChatScripts(db, state, character, chatId, body) {
@@ -34509,10 +34636,10 @@ async function patchScriptNode(db, character, chatId, body) {
   return serializeSessionWrite(`scripts:${character}\0${chatId}`, async () => {
     const overlay = await db.getChatJsrOverlay(character, chatId);
     const current = overlay?.trees !== void 0 ? overlay.trees.character ?? [] : overlay?.scriptTrees ?? [];
-    const patched = patchNodeById(current, scriptId, (node) => {
+    const patched = patchNodeById(requireScriptTreeArray(current, "trees.character"), scriptId, (node) => {
       if (info !== void 0) node["info"] = info;
       if (buttons !== void 0) {
-        node["button"] = { ...plainObject6(node["button"]) ?? {}, enabled: true, buttons };
+        node["button"] = { ...plainObject5(node["button"]) ?? {}, enabled: true, buttons };
       }
     });
     if (patched.node === null) throw new Error(`script node '${scriptId}' not found in this chat's script tree`);
@@ -34626,7 +34753,9 @@ async function mutateMessages(db, character, chatId, action, body) {
       for (const raw of updates) {
         const update = requireObject2(raw, "messages[]");
         const index = resolveMessageId(chat.messages, update.message_id);
-        applyMessageUpdate(chat.messages[index], update);
+        const message = chat.messages[index];
+        if (message === void 0) throw new Error(`message_id ${index} is out of range`);
+        applyMessageUpdate(message, update);
       }
     } else if (action === "create") {
       const entries = requireArray2(body?.messages, "messages");
@@ -34664,10 +34793,10 @@ function messageRole(message) {
   return message.is_user === true ? "user" : "assistant";
 }
 function isHidden(message) {
-  return message.is_hidden === true || plainObject6(message.extra)?.["is_hidden"] === true;
+  return message.is_hidden === true || plainObject5(message.extra)?.["is_hidden"] === true;
 }
 function toJsrMessage(message, index) {
-  const extra = plainObject6(message.extra) ?? {};
+  const extra = plainObject5(message.extra) ?? {};
   const swipes = Array.isArray(message.swipes) && message.swipes.length > 0 ? message.swipes.map((swipe) => String(swipe)) : [typeof message.mes === "string" ? message.mes : ""];
   return {
     message_id: index,
@@ -34675,7 +34804,7 @@ function toJsrMessage(message, index) {
     role: messageRole(message),
     is_hidden: isHidden(message),
     message: typeof message.mes === "string" ? message.mes : "",
-    data: cloneJson(plainObject6(message.variables) ?? extra),
+    data: cloneJson(plainObject5(message.variables) ?? extra),
     extra: cloneJson(extra),
     swipe_id: typeof message.swipe_id === "number" ? message.swipe_id : 0,
     swipes
@@ -34689,14 +34818,14 @@ function toJsrSwiped(message, index) {
     swipe_id: typeof message.swipe_id === "number" ? message.swipe_id : 0,
     swipes,
     swipes_data: swipes.map((_, swipeIndex) => {
-      const info = plainObject6(swipeInfo[swipeIndex]);
-      return cloneJson(plainObject6(info?.["extra"]) ?? {});
+      const info = plainObject5(swipeInfo[swipeIndex]);
+      return cloneJson(plainObject5(info?.["extra"]) ?? {});
     }),
     swipes_info: cloneJson(swipeInfo)
   };
 }
 function readMessageVariables(message) {
-  return plainObject6(message.variables) ?? plainObject6(plainObject6(message.extra)?.["variables"]) ?? {};
+  return plainObject5(message.variables) ?? plainObject5(plainObject5(message.extra)?.["variables"]) ?? {};
 }
 function resolveMessageId(messages, value) {
   if (typeof value !== "number" || !Number.isFinite(value)) throw new Error("message_id must be a finite number");
@@ -34725,7 +34854,9 @@ function parseRange2(range, lastMessageId) {
     const value = Number(raw);
     return value < 0 ? lastMessageId + 1 + value : value;
   };
-  const start = toIndex(match[1]);
+  const startRaw = match[1];
+  if (startRaw === void 0) throw new Error(`unsupported message range '${range}'`);
+  const start = toIndex(startRaw);
   const end = match[2] === void 0 ? start : toIndex(match[2]);
   return [Math.max(0, Math.min(start, end)), Math.min(lastMessageId, Math.max(start, end))];
 }
@@ -34738,17 +34869,18 @@ function applyMessageUpdate(message, update) {
     message.is_user = update.role === "user";
   }
   if (typeof update.is_hidden === "boolean") message.is_hidden = update.is_hidden;
-  const data = plainObject6(update.data);
-  const extra = plainObject6(update.extra);
+  const data = plainObject5(update.data);
+  const extra = plainObject5(update.extra);
   if (data !== void 0) message.variables = cloneJson(data);
-  if (extra !== void 0) message.extra = { ...plainObject6(message.extra) ?? {}, ...cloneJson(extra) };
+  if (extra !== void 0) message.extra = { ...plainObject5(message.extra) ?? {}, ...cloneJson(extra) };
   if (Array.isArray(update.swipes)) {
     const swipes = update.swipes.map((swipe) => String(swipe));
     message.swipes = swipes;
     const swipeId = typeof update.swipe_id === "number" ? update.swipe_id : typeof message.swipe_id === "number" ? message.swipe_id : 0;
     const clamped = Math.max(0, Math.min(Math.trunc(swipeId), swipes.length - 1));
     message.swipe_id = clamped;
-    message.mes = swipes[clamped];
+    const nextSwipe = swipes[clamped];
+    if (nextSwipe !== void 0) message.mes = nextSwipe;
   } else if (Array.isArray(message.swipes) && message.swipes.length > 0) {
     const requested = typeof update.swipe_id === "number" ? update.swipe_id : void 0;
     const current = typeof message.swipe_id === "number" ? message.swipe_id : 0;
@@ -34764,7 +34896,7 @@ function applyMessageUpdate(message, update) {
 function toCreatedMessage(entry, userName, characterName) {
   const role = entry.role === "system" || entry.role === "user" ? entry.role : "assistant";
   const name2 = typeof entry.name === "string" && entry.name !== "" ? entry.name : role === "user" ? userName : role === "system" ? "System" : characterName;
-  const extra = { ...plainObject6(entry.data) ?? {}, ...plainObject6(entry.extra) ?? {} };
+  const extra = { ...plainObject5(entry.data) ?? {}, ...plainObject5(entry.extra) ?? {} };
   return {
     name: name2,
     is_user: role === "user",
@@ -34791,7 +34923,7 @@ async function runHelperSlash(db, state, character, chatId, command) {
     lastMessageId: chat.messages.length - 1,
     chatId,
     local: scalarVariables(readChatVariables(chat)),
-    global: scalarVariables(plainObject6(state.scriptGlobals) ?? {})
+    global: scalarVariables(plainObject5(state.scriptGlobals) ?? {})
   });
   let chatChanged = false;
   let triggerRequested = false;
@@ -34883,7 +35015,11 @@ async function runHelperSlash(db, state, character, chatId, command) {
   };
 }
 function scalarVariables(tree) {
-  return Object.fromEntries(Object.entries(tree).filter(([, value]) => typeof value === "string" || typeof value === "number" || typeof value === "boolean"));
+  const result = {};
+  for (const [key, value] of Object.entries(tree)) {
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") result[key] = value;
+  }
+  return result;
 }
 function requireVariableScope(value) {
   if (value === "global" || value === "chat" || value === "message" || value === "character") return value;
@@ -34904,7 +35040,7 @@ function requireObject2(value, label) {
 function isPlainObject4(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function plainObject6(value) {
+function plainObject5(value) {
   return isPlainObject4(value) ? value : void 0;
 }
 function cloneJson(value) {
@@ -34913,6 +35049,23 @@ function cloneJson(value) {
   } catch {
     throw new Error("value is not JSON-serializable");
   }
+}
+function jsonValueOf2(value) {
+  if (value === void 0 || typeof value === "function" || typeof value === "symbol") {
+    throw new Error("invalid variable value");
+  }
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error("variable number must be finite");
+    return value;
+  }
+  if (Array.isArray(value)) return value.map(jsonValueOf2);
+  if (typeof value === "object") {
+    const record = {};
+    for (const [key, item] of Object.entries(value)) record[key] = jsonValueOf2(item);
+    return record;
+  }
+  throw new Error("invalid variable value");
 }
 
 // packages/plugin/src/workspace.ts
@@ -35060,7 +35213,7 @@ async function computePending(deps, scope, receipts) {
     snapshot2 = void 0;
   }
   if (snapshot2 === void 0) {
-    return { pending: [], validReceipts: receipts, retiredReasons: ["chat snapshot unavailable; pending ranges unknown"], totalFloors: 0, chatMissing: true };
+    return { pending: [], validReceipts: [...receipts], retiredReasons: ["chat snapshot unavailable; pending ranges unknown"], totalFloors: 0, chatMissing: true };
   }
   const floors = snapshot2.chat.messages;
   const valid = [];
@@ -35107,6 +35260,7 @@ async function executeRun(ctx, deps, scope, active) {
     summary.retiredReasons = computation.retiredReasons;
     let run;
     await stateStore.write(scope.character, scope.chatId, {
+      version: 1,
       receipts: computation.validReceipts,
       lastRun: { runId: active.runId, status: "running", startedAt: active.startedAt, summary }
     });
@@ -35536,8 +35690,8 @@ function parseEdits(value) {
         expectedRevision: record.expectedRevision,
         ...record.content === void 0 ? {} : { content: record.content },
         ...record.tags === void 0 ? {} : { tags: record.tags },
-        ...record.importance === void 0 ? {} : { importance: Math.max(0, Math.min(1, record.importance)) },
-        ...record.confidence === void 0 ? {} : { confidence: Math.max(0, Math.min(1, record.confidence)) },
+        ...record.importance === void 0 ? {} : { importance: Math.max(0, Math.min(1, numberField(record.importance, "importance"))) },
+        ...record.confidence === void 0 ? {} : { confidence: Math.max(0, Math.min(1, numberField(record.confidence, "confidence"))) },
         ...record.reason === "merge" ? { reason: "merge" } : {}
       });
       return;
@@ -35557,8 +35711,8 @@ function parseEdits(value) {
         content: record.content,
         kind: record.kind,
         ...record.tags === void 0 ? {} : { tags: record.tags },
-        ...record.importance === void 0 ? {} : { importance: Math.max(0, Math.min(1, record.importance)) },
-        ...record.confidence === void 0 ? {} : { confidence: Math.max(0, Math.min(1, record.confidence)) }
+        ...record.importance === void 0 ? {} : { importance: Math.max(0, Math.min(1, numberField(record.importance, "importance"))) },
+        ...record.confidence === void 0 ? {} : { confidence: Math.max(0, Math.min(1, numberField(record.confidence, "confidence"))) }
       });
       return;
     }
@@ -35765,6 +35919,10 @@ async function toolCompleteMaintenance(run, args) {
   run.summary.completion = { baseFloor: base, headFloor: head };
   return { payload: { ok: true, baseFloor: base, headFloor: head, coveredRecords: records.length }, isError: false };
 }
+function numberField(value, label) {
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${label} must be a finite number`);
+  return value;
+}
 
 // packages/plugin/src/preset-mount.ts
 var DEFAULT_USER5 = "User";
@@ -35957,7 +36115,10 @@ function normalizeWorldPlan(raw) {
       if (field.currentValue !== void 0 && !isValidWorldPlanValue(field.currentValue)) return void 0;
       fields.push(field.currentValue === void 0 ? { field: field.field, newValue: field.newValue } : { field: field.field, currentValue: field.currentValue, newValue: field.newValue });
     }
-    entries.push(record.note === void 0 ? { uid: record.uid, action: record.action, fields } : { uid: record.uid, action: record.action, fields, note: record.note });
+    const note = record.note;
+    if (note !== void 0 && typeof note !== "string") return void 0;
+    const parsed = note === void 0 ? { uid: record.uid, action: record.action, fields } : { uid: record.uid, action: record.action, fields, note };
+    entries.push(parsed);
   }
   return {
     kind: "world",
@@ -36422,6 +36583,7 @@ var cardCreateTool = tool3("card_create", "Create a new Tavern character card fr
 }, cardCreateOutput, async (args, exec) => {
   if (args.confirmed !== true) throw new Error(CONFIRMATION_ERROR);
   const name2 = editableValue("name", args.name);
+  if (typeof name2 !== "string") throw new Error("name must be a string");
   const fields = parseCreateFields(args.fields);
   if (typeof fields.name === "string" && fields.name !== name2) {
     throw new Error(`fields.name ('${fields.name}') must match the name argument ('${name2}')`);
@@ -36523,6 +36685,7 @@ async function nameSessionAfterCreatedCard(exec, cardName2) {
     const agent = exec.agent;
     const agentId = agent?.id;
     if (typeof agentId !== "string" || agentId.trim() === "") return;
+    if (agent === void 0) return;
     const db = await tavernStore3();
     const binding = (await db.getState()).sessionBindings[agentId];
     if (binding?.architecture !== "card-workbench") return;
@@ -36909,32 +37072,32 @@ var worldTools = [
       throw new Error(`world '${world}' not found; set create: true to plan a new book, or world_list shows the library`);
     }
     if (!Array.isArray(args.entries) || args.entries.length === 0) throw new Error("entries must be a non-empty array");
+    const rawEntries = args.entries;
     const noteAt = (index) => {
-      const raw = args.entries[index];
+      const raw = rawEntries[index];
       if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return void 0;
       const note = raw.note;
       if (note === void 0) return void 0;
       if (typeof note !== "string" || note.length > 500) throw new Error(`note for entry ${index + 1} must be a string of at most 500 characters`);
       return note;
     };
-    const cleaned = args.entries.map((raw, index) => {
+    const cleaned = rawEntries.map((raw, index) => {
       const note = noteAt(index);
       if (note === void 0) return raw;
       const { note: _drop, ...rest } = raw;
       return rest;
     });
     const byUid = new Map((book?.entries ?? []).map((entry) => [entry.uid, entry]));
-    const proposed = create ? parseWorldSeedEntries(cleaned) : parseWorldEdits(cleaned);
-    const entries = proposed.map((edit, index) => {
+    const entries = create ? parseWorldSeedEntries(cleaned).map((edit, index) => {
       const note = noteAt(index);
-      if (create) {
-        return {
-          uid: index,
-          action: "create",
-          fields: Object.entries(edit.values).map(([field, newValue]) => ({ field, newValue })),
-          ...note !== void 0 ? { note } : {}
-        };
-      }
+      return {
+        uid: index,
+        action: "create",
+        fields: Object.entries(edit.values).map(([field, newValue]) => ({ field, newValue })),
+        ...note !== void 0 ? { note } : {}
+      };
+    }) : parseWorldEdits(cleaned).map((edit, index) => {
+      const note = noteAt(index);
       const existing = byUid.get(edit.uid);
       if (edit.remove) {
         if (existing === void 0) throw new Error(`uid ${edit.uid} not found in world '${world}'; removal matches existing entries only (see world_get)`);
@@ -37229,7 +37392,11 @@ async function executeWorldPlan(plan) {
       world: plan.world,
       entryCount: entries2.length,
       nextUid: entries2.length,
-      touched: entries2.map((_entry, uid) => ({ uid, created: true, fields: plan.entries[uid].fields.map((field) => field.field) }))
+      touched: entries2.map((_entry, uid) => {
+        const planEntry = plan.entries[uid];
+        if (planEntry === void 0) throw new Error(`plan '${plan.id}' has no entry ${uid}`);
+        return { uid, created: true, fields: planEntry.fields.map((field) => field.field) };
+      })
     };
   }
   const book = await db.getWorld(plan.world);
@@ -37425,9 +37592,13 @@ function worldLiveValue(entry, field) {
   if (spec.invert === true) return typeof raw === "boolean" ? !raw : true;
   if (raw === void 0) {
     if (Array.isArray(spec.fallback)) return [];
-    return spec.fallback ?? null;
+    return isWorldPlanValue(spec.fallback) ? spec.fallback : null;
   }
-  return raw;
+  return isWorldPlanValue(raw) ? raw : null;
+}
+function isWorldPlanValue(value) {
+  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") return true;
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 function worldPlanValueMatches(live, recorded) {
   if (Array.isArray(live) || Array.isArray(recorded)) {
@@ -37572,10 +37743,11 @@ var presetTools = [
     if (raw === void 0) throw new Error(`preset '${preset}' not found`);
     if (!Array.isArray(raw.prompts)) throw new Error(`preset '${preset}' has no prompts array`);
     const next = { ...raw, prompts: raw.prompts.map((prompt) => ({ ...prompt })) };
-    const orderSets = Array.isArray(next.prompt_order) ? next.prompt_order : [];
+    const prompts = next.prompts;
+    const orderSets = Array.isArray(raw["prompt_order"]) ? raw["prompt_order"] : [];
     const applied = [];
     for (const edit of edits) {
-      const matches = next.prompts.filter((prompt) => prompt?.name === edit.name);
+      const matches = prompts.filter((prompt) => prompt?.name === edit.name);
       if (matches.length === 0) throw new Error(`prompt '${edit.name}' not found in preset '${preset}'`);
       const identifiers = [];
       const fields = [];
@@ -37605,7 +37777,7 @@ var presetTools = [
     }
     await db.putPreset(preset, next);
     await emitAgentPresetChanged();
-    return { preset, promptCount: next.prompts.length, edits: applied };
+    return { preset, promptCount: prompts.length, edits: applied };
   }),
   tool3("chat_log_read", "Read a bounded range of floors from a stored Tavern chat log (character + chatId) \u2014 the debugging entry point: compare what the model actually produced against regex/beautification output before touching resources. At most 50 messages per call, each message body truncated to 2000 characters.", {
     character: { type: "string", required: true, description: "Character name the chat belongs to." },
@@ -37851,8 +38023,12 @@ async function handleGuidesApi(req, res, route, method, db) {
   if ((method === "GET" || method === "POST") && route.startsWith("guides/")) {
     const segments = route.slice("guides/".length).split("/");
     if (segments.length !== 2) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
-    const character = decodeURIComponent(segments[0]);
-    const chatId = decodeURIComponent(segments[1]);
+    const [characterSegment, chatIdSegment] = segments;
+    if (characterSegment === void 0 || chatIdSegment === void 0) {
+      return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+    }
+    const character = decodeURIComponent(characterSegment);
+    const chatId = decodeURIComponent(chatIdSegment);
     const snapshot2 = await readGuidesSnapshot(db, character, chatId);
     if (!snapshot2) return sendJson(res, 404, { ok: false, message: "chat not found" });
     if (method === "GET") {
@@ -37877,9 +38053,13 @@ async function handleGuidesApi(req, res, route, method, db) {
   if (method === "DELETE" && route.startsWith("guides/")) {
     const segments = route.slice("guides/".length).split("/");
     if (segments.length !== 3) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
-    const character = decodeURIComponent(segments[0]);
-    const chatId = decodeURIComponent(segments[1]);
-    const id = decodeURIComponent(segments[2]);
+    const [characterSegment, chatIdSegment, idSegment] = segments;
+    if (characterSegment === void 0 || chatIdSegment === void 0 || idSegment === void 0) {
+      return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+    }
+    const character = decodeURIComponent(characterSegment);
+    const chatId = decodeURIComponent(chatIdSegment);
+    const id = decodeURIComponent(idSegment);
     const snapshot2 = await readGuidesSnapshot(db, character, chatId);
     if (!snapshot2) return sendJson(res, 404, { ok: false, message: "chat not found" });
     const removed = removeGuide(normalizeGuides(snapshot2.chat.header.chat_metadata?.guides), id);
@@ -37900,13 +38080,15 @@ async function handleGuidesApi(req, res, route, method, db) {
 async function handleScriptApi(req, res, route, method, db) {
   if (method === "POST" && route === "script/import") {
     const body = await readJson(req, 8 * 1024 * 1024);
+    const name2 = typeof body.name === "string" ? body.name : "";
+    const format = scriptFormatOf(body.format);
     let imported;
     try {
       imported = await importScript(
         tavernDataRoot(),
-        body.name,
-        body.format === "epub" ? Buffer.from(typeof body.content === "string" ? body.content : "", "base64") : body.content,
-        body.format
+        name2,
+        body.format === "epub" ? Buffer.from(typeof body.content === "string" ? body.content : "", "base64") : scriptContentOf(body.content),
+        format
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -37935,8 +38117,12 @@ async function handleScriptApi(req, res, route, method, db) {
   if (method === "GET" && route.startsWith("script/progress/")) {
     const segments = route.slice("script/progress/".length).split("/");
     if (segments.length !== 2) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
-    const character = decodeURIComponent(segments[0]);
-    const chatId = decodeURIComponent(segments[1]);
+    const [characterSegment, chatIdSegment] = segments;
+    if (characterSegment === void 0 || chatIdSegment === void 0) {
+      return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+    }
+    const character = decodeURIComponent(characterSegment);
+    const chatId = decodeURIComponent(chatIdSegment);
     const file = await db.getCharacter(character);
     if (!file) return sendJson(res, 404, { ok: false, message: "character not found" });
     const scriptName = boundScriptOf(file.card);
@@ -38103,17 +38289,18 @@ async function handleWorkbenchApi(req, res, url, route, method, db) {
     if (title === "") {
       return sendJson(res, 400, { ok: false, message: "title must be a non-empty string", code: "TAVERN_WORKBENCH" });
     }
-    const binding = (await db.getState()).sessionBindings[body.sessionId];
+    const sessionId = body.sessionId;
+    const binding = (await db.getState()).sessionBindings[sessionId];
     if (binding?.architecture !== "card-workbench") {
-      return sendJson(res, 404, { ok: false, message: `session '${body.sessionId}' is not a CardWorkbench session`, code: "TAVERN_WORKBENCH" });
+      return sendJson(res, 404, { ok: false, message: `session '${sessionId}' is not a CardWorkbench session`, code: "TAVERN_WORKBENCH" });
     }
     const state = await db.updateState((current) => ({
       sessionBindings: {
         ...current.sessionBindings,
-        [body.sessionId]: { ...binding, title }
+        [sessionId]: { ...binding, title }
       }
     }));
-    return sendJson(res, 200, { ok: true, state, binding: state.sessionBindings[body.sessionId] });
+    return sendJson(res, 200, { ok: true, state, binding: state.sessionBindings[sessionId] });
   }
   if (method === "GET" && route === "card-workbench/plans") {
     const statusParam = url.searchParams.get("status") ?? "pending";
@@ -38156,6 +38343,15 @@ async function handleWorkbenchApi(req, res, url, route, method, db) {
     }
   }
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+}
+function scriptFormatOf(value) {
+  if (value === void 0) return void 0;
+  if (value === "txt" || value === "md" || value === "epub") return value;
+  throw new Error(`script format must be one of 'txt', 'md' or 'epub' (got ${JSON.stringify(value)})`);
+}
+function scriptContentOf(value) {
+  if (typeof value === "string" || value instanceof Uint8Array) return value;
+  throw new Error("script content must be a string or Uint8Array/Buffer");
 }
 
 // packages/plugin/src/http/memory.ts
@@ -38235,6 +38431,9 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
         });
       }
       const autoFilled = {};
+      if (config2.provider !== "local") {
+        throw new Error("local memory embedding normalization returned a non-local provider");
+      }
       if (!explicitPooling && config2.pooling !== void 0) {
         autoFilled.pooling = { value: config2.pooling, source: inferred.sources.pooling ?? "default (cls)" };
       }
@@ -38350,7 +38549,7 @@ async function handleMemoryMaintenanceApi(ctx, req, res, url, route, method, db)
       return sendJson(res, 404, { ok: false, message: `chat '${body.character}/${body.chatId}' not found` });
     }
     try {
-      const { runId } = await startMemoryMaintenance(ctx, maintenanceDeps(db), {
+      const { runId } = await startMemoryMaintenance(ctx, await maintenanceDeps(db), {
         character: body.character,
         chatId: body.chatId
       });
@@ -38368,17 +38567,17 @@ async function handleMemoryMaintenanceApi(ctx, req, res, url, route, method, db)
     if (character === null || chatId === null || character === "" || chatId === "") {
       return sendJson(res, 400, { ok: false, message: "character and chatId query params are required" });
     }
-    const view = await memoryMaintenanceStatus(maintenanceDeps(db), { character, chatId });
+    const view = await memoryMaintenanceStatus(await maintenanceDeps(db), { character, chatId });
     return sendJson(res, 200, { ok: true, ...view });
   }
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
 }
-function maintenanceDeps(db) {
+async function maintenanceDeps(db) {
   return {
     root: tavernDataRoot(),
     db,
-    memory: memories(),
-    vectors: memoryVectors()
+    memory: await memories(),
+    vectors: await memoryVectors()
   };
 }
 
@@ -38614,12 +38813,12 @@ async function handleApi(ctx, req, res) {
     }
     const agent = ctx.agents?.get?.(sessionId);
     const session = agent?.session;
-    if (!session || readSessionEvents(session) === void 0) {
+    if (!session || typeof session.id !== "string" || readSessionEvents(session) === void 0) {
       throw new Error("AgentTavern session is not loaded in this host process; open the chat first and retry.");
     }
     const projector = await getAgentTavernProjectorPromise();
     if (!projector) throw new Error("AgentTavern projector is unavailable");
-    await projector.replay(session);
+    await projector.replay({ ...session, id: session.id });
     return sendJson(res, 200, { ok: true, projection: await projector.status(sessionId) });
   }
   if (method === "POST" && route === "compact") {
@@ -38767,19 +38966,21 @@ async function handleApi(ctx, req, res) {
   if (method === "POST" && route === "model") {
     const body = await readJson(req);
     if (typeof body.sessionId !== "string") throw new Error("expected { sessionId, selection }");
+    const sessionId = body.sessionId;
     let selection = null;
-    if (body.selection !== null && body.selection !== void 0) {
-      if (typeof body.selection?.provider !== "string" || typeof body.selection?.model !== "string") {
+    const selectionBody = asRecord5(body.selection);
+    if (selectionBody !== void 0) {
+      if (typeof selectionBody["provider"] !== "string" || typeof selectionBody["model"] !== "string") {
         throw new Error("selection must be { provider, model, reasoningEffort? }");
       }
       selection = {
-        provider: body.selection.provider,
-        model: body.selection.model,
-        ...typeof body.selection.reasoningEffort === "string" ? { reasoningEffort: body.selection.reasoningEffort } : {}
+        provider: selectionBody["provider"],
+        model: selectionBody["model"],
+        ...typeof selectionBody["reasoningEffort"] === "string" ? { reasoningEffort: selectionBody["reasoningEffort"] } : {}
       };
     }
     const state = await db.updateState((current) => ({
-      modelSelections: selection === null ? Object.fromEntries(Object.entries(current.modelSelections ?? {}).filter(([id]) => id !== body.sessionId)) : { ...current.modelSelections ?? {}, [body.sessionId]: selection }
+      modelSelections: selection === null ? Object.fromEntries(Object.entries(current.modelSelections ?? {}).filter(([id]) => id !== sessionId)) : { ...current.modelSelections ?? {}, [sessionId]: selection }
     }));
     return sendJson(res, 200, { ok: true, state });
   }
@@ -38802,6 +39003,8 @@ async function handleApi(ctx, req, res) {
       const switched = await activeCharacterPatch(db, current, requestedActiveCharacter);
       requestedActiveWorlds = switched.activeWorlds;
     }
+    const requestedDefaultArchitecture = body.defaultArchitecture === "agent-tavern" || body.defaultArchitecture === "st" ? body.defaultArchitecture : void 0;
+    const requestedDefaultContextMode = body.defaultContextMode === "dsh-native" || body.defaultContextMode === "agent-managed" ? body.defaultContextMode : void 0;
     const patch = {
       ...switchingActiveCharacter ? { activeCharacter: requestedActiveCharacter } : {},
       ...requestedActiveWorlds !== void 0 ? { activeWorlds: requestedActiveWorlds } : {},
@@ -38809,8 +39012,8 @@ async function handleApi(ctx, req, res) {
       ...typeof body.activePreset === "string" || body.activePreset === null ? { activePreset: body.activePreset || void 0 } : {},
       ...typeof body.activePersona === "string" || body.activePersona === null ? { activePersona: body.activePersona || void 0 } : {},
       ...typeof body.nativeAgentPersona === "boolean" ? { nativeAgentPersona: body.nativeAgentPersona } : {},
-      ...body.defaultArchitecture === "agent-tavern" || body.defaultArchitecture === "st" ? { defaultArchitecture: body.defaultArchitecture } : {},
-      ...body.defaultContextMode === "dsh-native" || body.defaultContextMode === "agent-managed" ? { defaultContextMode: body.defaultContextMode } : {},
+      ...requestedDefaultArchitecture !== void 0 ? { defaultArchitecture: requestedDefaultArchitecture } : {},
+      ...requestedDefaultContextMode !== void 0 ? { defaultContextMode: requestedDefaultContextMode } : {},
       ...typeof body.agentTavernPreloadAssets === "boolean" ? { agentTavernPreloadAssets: body.agentTavernPreloadAssets } : {},
       ...typeof body.agentTavernAllowGlobalWrites === "boolean" ? { agentTavernAllowGlobalWrites: body.agentTavernAllowGlobalWrites } : {},
       // 美化前端右栏 tab 自动展开（2026-10-20 用户需求）：翻转即时生效——
@@ -38860,19 +39063,21 @@ async function handleApi(ctx, req, res) {
   }
   if (method === "POST" && route === "import/world") {
     const body = await readJson(req);
-    if (typeof body.name !== "string" || !body.data || typeof body.data !== "object") throw new Error("expected { name, data }");
-    const book = await db.importWorldFile(body.name, body.data);
+    const data = asRecord5(body.data);
+    if (typeof body.name !== "string" || data === void 0) throw new Error("expected { name, data }");
+    const book = await db.importWorldFile(body.name, data);
     await emitAssetsSaved("world", book.name);
     return sendJson(res, 200, { ok: true, name: book.name, entries: book.entries.length });
   }
   if (method === "POST" && route === "import/preset") {
     const body = await readJson(req);
-    if (typeof body.name !== "string" || !body.data || typeof body.data !== "object") throw new Error("expected { name, data }");
-    parsePresetOrThrow(body.data);
-    const result = await db.importPreset(body.name, body.data);
+    const data = asRecord5(body.data);
+    if (typeof body.name !== "string" || data === void 0) throw new Error("expected { name, data }");
+    parsePresetOrThrow(data);
+    const result = await db.importPreset(body.name, data);
     await emitAssetsSaved("preset", body.name);
     await emitAgentPresetChanged();
-    return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(body.data), importedRegex: result.importedRegex });
+    return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(data), importedRegex: result.importedRegex });
   }
   if (method === "GET" && route.startsWith("preset/")) {
     const name2 = decodeURIComponent(route.slice("preset/".length));
@@ -38883,22 +39088,24 @@ async function handleApi(ctx, req, res) {
   if (method === "PUT" && route.startsWith("preset/")) {
     const oldName = decodeURIComponent(route.slice("preset/".length));
     const body = await readJson(req, 10 * 1024 * 1024);
-    if (typeof body.name !== "string" || body.name.trim() === "" || !body.data || typeof body.data !== "object" || Array.isArray(body.data)) {
+    const data = asRecord5(body.data);
+    if (typeof body.name !== "string" || body.name.trim() === "" || data === void 0) {
       throw new Error("expected { name, data }");
     }
-    parsePresetOrThrow(body.data);
-    await db.putPreset(body.name, body.data);
-    await emitAssetsSaved("preset", body.name);
-    if (body.name !== oldName) await db.deletePreset(oldName);
+    const name2 = body.name;
+    parsePresetOrThrow(data);
+    await db.putPreset(name2, data);
+    await emitAssetsSaved("preset", name2);
+    if (name2 !== oldName) await db.deletePreset(oldName);
     const state = await db.updateState((current) => ({
-      activePreset: current.activePreset === oldName ? body.name : current.activePreset,
-      ...body.name !== oldName && current.regexScriptPresetOwners !== void 0 ? {
-        regexScriptPresetOwners: Object.fromEntries(Object.entries(current.regexScriptPresetOwners).map(([id, owner]) => [id, owner === oldName ? body.name : owner]))
+      activePreset: current.activePreset === oldName ? name2 : current.activePreset,
+      ...name2 !== oldName && current.regexScriptPresetOwners !== void 0 ? {
+        regexScriptPresetOwners: Object.fromEntries(Object.entries(current.regexScriptPresetOwners).map(([id, owner]) => [id, owner === oldName ? name2 : owner]))
       } : {}
     }));
     await emitAgentPresetChanged();
     await refreshActivePrompt();
-    return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(body.data), data: body.data, state });
+    return sendJson(res, 200, { ok: true, name: name2, kind: detectPresetKind(data), data, state });
   }
   if (method === "POST" && route === "import/persona") {
     const body = await readJson(req, 25 * 1024 * 1024);
@@ -38991,6 +39198,7 @@ async function handleApi(ctx, req, res) {
     });
     await emitAssetsSaved("group", body.name);
     const group2 = await db.getGroup(body.name);
+    if (group2 === void 0) throw new Error(`group '${body.name}' was not saved`);
     return sendJson(res, 200, { ok: true, group: publicGroup(group2) });
   }
   if (method === "PUT" && route === "group") {
@@ -39010,7 +39218,9 @@ async function handleApi(ctx, req, res) {
       ...typeof body.allowSelfResponses === "boolean" ? { allowSelfResponses: body.allowSelfResponses } : {}
     });
     await emitAssetsSaved("group", body.name);
-    return sendJson(res, 200, { ok: true, group: publicGroup(await db.getGroup(body.name)) });
+    const savedGroup = await db.getGroup(body.name);
+    if (savedGroup === void 0) throw new Error(`group '${body.name}' was not saved`);
+    return sendJson(res, 200, { ok: true, group: publicGroup(savedGroup) });
   }
   if (method === "DELETE" && route === "group") {
     const name2 = url.searchParams.get("name");
@@ -39041,9 +39251,10 @@ async function handleApi(ctx, req, res) {
   if (method === "DELETE" && route === "binding") {
     const body = await readJson(req);
     if (typeof body.sessionId !== "string") throw new Error("expected { sessionId }");
+    const sessionId = body.sessionId;
     const next = await db.updateState((state) => {
       const sessionBindings = { ...state.sessionBindings };
-      delete sessionBindings[body.sessionId];
+      delete sessionBindings[sessionId];
       return { sessionBindings };
     });
     return sendJson(res, 200, { ok: true, state: next });
@@ -39102,17 +39313,16 @@ async function handleApi(ctx, req, res) {
     const found = await db.getCharacter(character);
     if (!found) throw new Error(`character '${character}' not found`);
     const seedVariables = (() => {
-      const holder = found.card.data.extensions.agentTavern;
-      if (typeof holder !== "object" || holder === null || Array.isArray(holder)) return void 0;
-      const initial = holder.initialVariables;
-      if (typeof initial !== "object" || initial === null || Array.isArray(initial) || Object.keys(initial).length === 0) return void 0;
+      const holder = asRecord5(found.card.data.extensions.agentTavern);
+      const initial = asRecord5(holder?.["initialVariables"]);
+      if (initial === void 0 || Object.keys(initial).length === 0) return void 0;
       return structuredClone(initial);
     })();
     const variablesSeed = seedVariables ?? {};
     const mvuSeeded = seedJsrMvuVariables(found.card, variablesSeed);
     const greetings = [found.card.data.firstMes, ...found.card.data.alternateGreetings];
     const greetingIndex = body.greetingIndex === void 0 ? 0 : body.greetingIndex;
-    if (!Number.isSafeInteger(greetingIndex) || greetingIndex < 0 || greetingIndex >= greetings.length) {
+    if (typeof greetingIndex !== "number" || !Number.isSafeInteger(greetingIndex) || greetingIndex < 0 || greetingIndex >= greetings.length) {
       throw new Error(`greetingIndex must be an integer in [0, ${greetings.length - 1}]`);
     }
     const id = await db.createChat(character, {
@@ -39124,7 +39334,7 @@ async function handleApi(ctx, req, res) {
       is_user: false,
       is_system: false,
       send_date: now,
-      mes: greetings[greetingIndex],
+      mes: greetings[greetingIndex] ?? "",
       swipe_id: greetingIndex,
       swipes: greetings,
       swipe_info: greetings.map(() => ({ send_date: now }))
@@ -39138,9 +39348,10 @@ async function handleApi(ctx, req, res) {
       throw new Error("expected { character, chatId, messageId, revision }");
     }
     if (typeof body.revision !== "string") throw new Error("revision is required");
+    const branchName = typeof body.name === "string" ? body.name : void 0;
     const originArchitecture = body.originArchitecture === "agent-tavern" ? "agent-tavern" : "st";
     const targetArchitecture = body.targetArchitecture === "agent-tavern" ? "agent-tavern" : "st";
-    const result = await db.branchChat(body.character, body.chatId, body.messageId, body.revision, body.name, {
+    const result = await db.branchChat(body.character, body.chatId, body.messageId, body.revision, branchName, {
       agentTavernOrigin: {
         architecture: originArchitecture,
         targetArchitecture,
@@ -39219,14 +39430,16 @@ async function handleApi(ctx, req, res) {
   if (method === "PUT" && route.startsWith("world/")) {
     const oldName = decodeURIComponent(route.slice("world/".length));
     const body = await readJson(req, 10 * 1024 * 1024);
-    if (typeof body.name !== "string" || body.name.trim() === "" || !body.data || typeof body.data !== "object" || Array.isArray(body.data)) {
+    const data = asRecord5(body.data);
+    if (typeof body.name !== "string" || body.name.trim() === "" || data === void 0) {
       throw new Error("expected { name, data }");
     }
-    const book = await db.importWorldFile(body.name, body.data);
+    const name2 = body.name;
+    const book = await db.importWorldFile(name2, data);
     await emitAssetsSaved("world", book.name);
-    if (body.name !== oldName) {
+    if (name2 !== oldName) {
       await db.deleteWorld(oldName);
-      await db.updateState((current) => ({ activeWorlds: current.activeWorlds.map((name2) => name2 === oldName ? body.name : name2) }));
+      await db.updateState((current) => ({ activeWorlds: current.activeWorlds.map((item) => item === oldName ? name2 : item) }));
     }
     return sendJson(res, 200, { ok: true, name: book.name, book });
   }
@@ -39511,12 +39724,13 @@ async function handleApi(ctx, req, res) {
     }
     if (method === "PUT") {
       const body = await readJson(req);
-      if (!body.chat || !Array.isArray(body.chat.messages) || typeof body.revision !== "string") {
+      const chat = asChatLog(body.chat);
+      if (chat === void 0 || typeof body.revision !== "string") {
         throw new Error("expected { chat, revision }");
       }
-      const revision = await db.saveChat(character, chatId, body.chat, body.revision);
-      await emitChatSaved(character, chatId, revision, body.chat.messages.length);
-      return sendJson(res, 200, { ok: true, chat: body.chat, revision });
+      const revision = await db.saveChat(character, chatId, chat, body.revision);
+      await emitChatSaved(character, chatId, revision, chat.messages.length);
+      return sendJson(res, 200, { ok: true, chat, revision });
     }
     if (method === "PATCH") {
       const body = await readJson(req);
@@ -39528,7 +39742,7 @@ async function handleApi(ctx, req, res) {
       const state2 = await db.updateState((current) => ({
         sessionBindings: Object.fromEntries(Object.entries(current.sessionBindings).map(([sessionId, binding]) => [
           sessionId,
-          binding.character === character && binding.chatId === chatId ? { character, chatId: nextChatId, ...binding.group ? { group: true } : {} } : binding
+          binding.character === character && binding.chatId === chatId ? { ...binding, character, chatId: nextChatId } : binding
         ]))
       }));
       const snapshot2 = await db.getChatSnapshot(character, nextChatId);
@@ -39561,6 +39775,18 @@ async function handleApi(ctx, req, res) {
     return runTavernScript(ctx, req, res, db);
   }
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+}
+function asRecord5(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
+}
+function asChatLog(value) {
+  const record = asRecord5(value);
+  if (record === void 0) return void 0;
+  const header = asRecord5(record["header"]);
+  if (header === void 0) return void 0;
+  if (typeof header["user_name"] !== "string" || typeof header["character_name"] !== "string") return void 0;
+  if (!Array.isArray(record["messages"])) return void 0;
+  return value;
 }
 
 // packages/plugin/src/http/trust.ts
@@ -39759,7 +39985,10 @@ function apply(ctx, config = {}) {
       void emitAgentPresetChanged().then(() => refreshActivePrompt()).catch(() => {
       });
     }
-    void getAgentTavernProjectorPromise().then((projector) => projector.replay(agent.session)).catch((error) => ctx.logger?.warn?.(`AgentTavern projection replay failed: ${error instanceof Error ? error.message : String(error)}`));
+    const session = agent.session;
+    if (session !== void 0) {
+      void getAgentTavernProjectorPromise().then((projector) => projector.replay(session)).catch((error) => ctx.logger?.warn?.(`AgentTavern projection replay failed: ${error instanceof Error ? error.message : String(error)}`));
+    }
   });
   void refreshActivePrompt();
   void recoverMountedNovels(ctx);

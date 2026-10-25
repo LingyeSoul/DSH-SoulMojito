@@ -187,7 +187,14 @@ interface AnchorDecisionLike {
  * 非 AgentTavern 会话、非注入点、拒绝/中止路径全部原样透传。
  */
 export function registerAgentTavernAnchor(ctx: {
-  on?: (event: string, listener: (payload: unknown, next: () => unknown) => unknown, options?: unknown) => unknown
+  on?: (
+    event: string,
+    listener: (
+      payload: { agent?: AnchorAgentLike; turn?: unknown; step?: unknown; signal?: { aborted?: boolean } },
+      next: () => Promise<AnchorDecisionLike>,
+    ) => unknown,
+    options?: unknown,
+  ) => unknown
 }, options: { everyTurns?: unknown; isTavernSession?: (sessionId: string) => Promise<boolean> } = {}): void {
   const everyTurns = resolveAnchorEveryTurns(options.everyTurns)
   if (everyTurns <= 0) return

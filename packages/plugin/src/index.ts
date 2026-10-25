@@ -45,11 +45,12 @@ import { API, handleApi } from './http/router.js'
 import { HttpError } from './http/errors.js'
 import { sendJson } from './http/io.js'
 import { requestTrustFailure } from './http/trust.js'
+import type { PluginContext } from './host-contract.js'
 import { ensureAgentPresetDeclared, handleNovelSessionEvent, novelHttpFailure, recoverMountedNovels } from './http/novel.js'
 
 export const name = 'dsh-soulmojito'
 export const inject = ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands', 'agents', 'agentPresets', 'tools', 'compaction']
-export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates?: unknown, templateEnabled?: unknown } = {}) {
+export function apply(ctx: PluginContext, config: { anchorEveryTurns?: unknown, checkForUpdates?: unknown, templateEnabled?: unknown } = {}): void {
   registerAgentTavernAnchor(ctx, { everyTurns: config.anchorEveryTurns })
   // 卡内 EJS 世界书注入：默认注册（inner），提示词查看器 prepend 在更外层，
   // 因此捕获面能看到锚定 + 卡内状态两条插件注入。
@@ -135,8 +136,11 @@ export function apply(ctx, config: { anchorEveryTurns?: unknown, checkForUpdates
       // 不拖串行 dispatch；首轮懒装载路径照常兜底。
       void emitAgentPresetChanged().then(() => refreshActivePrompt()).catch(() => {})
     }
-    void getAgentTavernProjectorPromise()!.then((projector) => projector.replay(agent.session))
-      .catch((error) => ctx.logger?.warn?.(`AgentTavern projection replay failed: ${error instanceof Error ? error.message : String(error)}`))
+    const session = agent.session
+    if (session !== undefined) {
+      void getAgentTavernProjectorPromise()!.then((projector) => projector.replay(session))
+        .catch((error) => ctx.logger?.warn?.(`AgentTavern projection replay failed: ${error instanceof Error ? error.message : String(error)}`))
+    }
   })
   void refreshActivePrompt()
   // §12.3 restart recovery runs after apply returns; it never blocks mounting.

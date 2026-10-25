@@ -22,6 +22,7 @@ import { createMacroEngine } from '../../tavern-macros/src/index.js'
 import { renderSandboxed } from '../../tavern-template/src/index.js'
 import { applyRegexScript, applyRegexScripts, runScript } from '../../tavern-script/src/index.js'
 import type { ChatScriptsFile, TavernState, TavernStore } from '../../tavern-store/src/index.js'
+import type { JsonValue } from '../../tavern-store/src/index.js'
 import { ChatRevisionConflictError, KeyedMutationTails } from '../../tavern-store/src/index.js'
 import {
   collectSessionRegexScripts,
@@ -41,7 +42,7 @@ import {
   putFrontendStorage,
   resetFrontendStorage,
 } from '../../tavern-frontend-storage/src/index.js'
-import { readJson, sendJson } from './http/io.js'
+import { readJson, sendJson, type HttpRequest, type HttpResponse, type JsonRequest, type JsonResponse } from './http/io.js'
 import {
   abortAllFrontendGenerations,
   abortFrontendGeneration,
@@ -66,9 +67,9 @@ type JsonObject = Record<string, unknown>
 
 const VARIABLE_NAME = /^[\p{L}_][\p{L}\p{N}_.-]{0,63}$/u
 
-export async function handleHelperApi(req: unknown, res: unknown, db: TavernStore): Promise<void> {
+export async function handleHelperApi(req: JsonRequest, res: JsonResponse, db: TavernStore): Promise<void> {
   const { character, chatId } = helperIdentity(req)
-  const body = await readJson(req as never, 8 * 1024 * 1024)
+  const body = await readJson(req, 8 * 1024 * 1024)
   const op = typeof body?.op === 'string' ? body.op : ''
   const state = await db.getState()
 
@@ -406,10 +407,10 @@ interface FrontendStreamResponse {
  * forwards deltas over the existing postMessage event channel. The final
  * `done` line carries the same text the non-streaming helper returns.
  */
-export async function handleFrontendGenerationStream(req: unknown, res: unknown, db: TavernStore): Promise<void> {
-  const out = res as FrontendStreamResponse
+export async function handleFrontendGenerationStream(req: HttpRequest, res: HttpResponse, db: TavernStore): Promise<void> {
+  const out = res
   const identity = helperIdentity(req)
-  const body = await readJson(req as never, 8 * 1024 * 1024)
+  const body = await readJson(req, 8 * 1024 * 1024)
   const character = identity.character
   const chatId = requireString(identity.chatId, 'chatId')
   const state = await db.getState()
@@ -452,7 +453,7 @@ export async function handleFrontendGenerationStream(req: unknown, res: unknown,
  * when it forges the body. Missing, unknown or expired tokens fail closed with
  * 401; there is no legacy payload fallback.
  */
-function helperIdentity(req: unknown): { character: string; chatId: string } {
+function helperIdentity(req: JsonRequest): { character: string; chatId: string } {
   const token = helperTokenFromRequest(req)
   if (token === undefined) throw new HttpError(401, 'helper binding required (x-dsh-helper-token)')
   const binding = resolveHelperBinding(token)
@@ -543,6 +544,7 @@ async function buildSnapshot(db: TavernStore, state: TavernState, character: str
     shared.personas.ids = shared.personas.names.map((name) => name)
   }
   const lastIndex = chat.messages.length - 1
+  const lastMessage = lastIndex >= 0 ? chat.messages[lastIndex] : undefined
   const persona = state.activePersona ? await db.getPersona(state.activePersona) : undefined
   const presetTrees = state.activePreset === undefined
     ? null
@@ -559,7 +561,7 @@ async function buildSnapshot(db: TavernStore, state: TavernState, character: str
     variables: {
       global: cloneJson(plainObject(state.scriptGlobals) ?? {}),
       chat: cloneJson(chatVariables),
-      message: lastIndex >= 0 ? cloneJson(readMessageVariables(chat.messages[lastIndex])) : {},
+      message: lastMessage === undefined ? {} : cloneJson(readMessageVariables(lastMessage)),
       character: characterVariablesFor(state, character, file?.card.data.extensions?.['variables']),
     },
     scriptTrees: overlay === undefined ? null : cloneJson(overlay.trees?.character ?? overlay.scriptTrees),
@@ -599,12 +601,12 @@ function chatWorldName(chat: ChatLogIR): string | null {
 }
 
 /** Active preset's embedded JSR script tree, read-only for the sandbox. */
-async function activePresetScriptTrees(db: TavernStore, presetName: string): Promise<unknown[] | null> {
+async function activePresetScriptTrees(db: TavernStore, presetName: string): Promise<JsonObject[] | null> {
   const preset = await db.getPreset(presetName)
   const extensions = plainObject(preset?.['extensions'])
   const helper = plainObject(extensions?.['tavern_helper'])
   const scripts = helper?.['scripts']
-  return Array.isArray(scripts) ? cloneJson(scripts) : null
+  return Array.isArray(scripts) ? requireScriptTreeArray(scripts, `preset '${presetName}' tavern_helper.scripts`) : null
 }
 
 /**
@@ -670,7 +672,10 @@ async function replaceVariables(
   const scope = requireVariableScope(body?.scope)
   const tree = requireObject(body?.variables, 'variables')
   if (scope === 'global') {
-    await db.updateState(() => ({ scriptGlobals: tree }))
+    // TavernHelper's global scope accepts JSON trees (JSR getGlobalVariable);
+    // the scalar-only state declaration narrows the shape for the macro engine.
+    // Keep the compatibility surface persisting the tree verbatim.
+    await db.updateState(() => ({ scriptGlobals: tree as unknown as Record<string, string | number | boolean> }))
     return tree
   }
   // Character scope writes an overlay in state.json; the card file and its
@@ -708,6 +713,7 @@ async function replaceVariables(
     const snapshot = await requireChat(db, character, chatId)
     const index = resolveMessageId(snapshot.chat.messages, body?.messageId)
     const message = snapshot.chat.messages[index]
+    if (message === undefined) throw new Error(`message_id ${index} is out of range`)
     message.variables = tree
     await persistChat(db, character, chatId, snapshot.chat, snapshot.revision)
     return tree
@@ -741,6 +747,7 @@ async function replaceMvuData(
     if (chat.messages.length > 0) {
       messageId = body?.messageId === undefined ? chat.messages.length - 1 : resolveMessageId(chat.messages, body.messageId)
       const message = chat.messages[messageId]
+      if (message === undefined) throw new Error(`message_id ${messageId} is out of range`)
       message.variables = {
         ...(plainObject(message.variables) ?? {}),
         stat_data: cloneJson(stat),
@@ -750,7 +757,7 @@ async function replaceMvuData(
     try {
       const store = await variables()
       const existing = await store.get('chat', chatId, 'stat_data')
-      await store.set('chat', chatId, 'stat_data', stat as never, existing?.revision)
+      await store.set('chat', chatId, 'stat_data', jsonValueOf(stat), existing?.revision)
     } catch (error) {
       console.warn(`dsh-soulmojito: MVU chat-scope mirror skipped: ${error instanceof Error ? error.message : String(error)}`)
     }
@@ -767,7 +774,7 @@ async function mirrorChatScope(chatId: string, tree: JsonObject): Promise<void> 
     await store.delete('chat', chatId, entry.name)
   }
   if (entries.length > 0) {
-    await store.patch('chat', chatId, entries.map((entry) => ({ name: entry.name, value: entry.value as never })))
+    await store.patch('chat', chatId, entries.map((entry) => ({ name: entry.name, value: jsonValueOf(entry.value) })))
   }
 }
 
@@ -878,7 +885,8 @@ async function loadLorebook(
   const world = await db.getWorld(name)
   if (world !== undefined) return world
   const card = (await db.getCharacter(character))?.card
-  const book = card?.data.characterBook
+  if (card === undefined) return undefined
+  const book = card.data.characterBook
   if (book === undefined) return undefined
   const linked = card.data.extensions['world']
   const linkedName = typeof linked === 'string' && linked.trim() !== '' ? linked.trim() : undefined
@@ -1172,9 +1180,9 @@ async function renderFrontendTemplate(
         description: data.description,
         personality: data.personality,
         scenario: data.scenario,
-        first_message: data.first_mes,
-        message_example: data.mes_example,
-        creator_notes: data.creator_notes,
+        first_message: data.firstMes,
+        message_example: data.mesExample,
+        creator_notes: data.creatorNotes,
       }
     },
     getpreset: async (name: string) => {
@@ -1204,7 +1212,7 @@ async function renderFrontendTemplate(
       await persistChat(db, character, chatId, chat, snapshot.revision)
     }
   }
-  if (variablesDirty) await db.updateState(() => ({ scriptGlobals: globalVariables as never }))
+  if (variablesDirty) await db.updateState(() => ({ scriptGlobals: globalVariables as unknown as Record<string, string | number | boolean> }))
   return text
 }
 
@@ -1235,7 +1243,7 @@ function writeTreePath(tree: JsonObject, path: string, value: unknown): void {
     }
     cursor = next
   }
-  cursor[leaf] = cloneJson(value as never)
+  cursor[leaf] = cloneJson(jsonValueOf(value))
 }
 
 /** JSR `rotateChatMessages(begin, middle, end)`: `[b,m) [m,e)` → `[m,e) [b,m)`. */
@@ -1352,9 +1360,13 @@ function generationIdOf(config: unknown): string {
  */
 function requireScriptTrees(value: unknown): JsonObject[] {
   if (!Array.isArray(value)) throw new Error('scriptTrees must be an array of card script nodes')
+  return requireScriptTreeArray(value, 'scriptTrees')
+}
+
+function requireScriptTreeArray(value: unknown[], label: string): JsonObject[] {
   return value.map((node, index) => {
     if (!isPlainObject(node)) {
-      throw new Error(`scriptTrees[${index}] must be an object (got ${node === null ? 'null' : typeof node})`)
+      throw new Error(`${label}[${index}] must be an object (got ${node === null ? 'null' : typeof node})`)
     }
     return cloneJson(node)
   })
@@ -1386,16 +1398,16 @@ async function readScriptTrees(
     ? null
     : (overlay.trees !== undefined ? overlay.trees.character ?? null : overlay.scriptTrees)
   if (type === 'character') {
-    return { type, preset: null, scriptTrees: characterTree === null ? null : cloneJson(characterTree) }
+    return { type, preset: null, scriptTrees: characterTree === null ? null : requireScriptTreeArray(characterTree, 'trees.character') }
   }
   if (type === 'global') {
     const trees = overlay?.trees?.global
-    return { type, preset: null, scriptTrees: trees === undefined ? null : cloneJson(trees) }
+    return { type, preset: null, scriptTrees: trees === undefined ? null : requireScriptTreeArray(trees, 'trees.global') }
   }
   const presetName = state.activePreset ?? null
   if (presetName === null) return { type, preset: null, scriptTrees: null }
   const own = overlay?.trees?.preset?.[presetName]
-  if (own !== undefined) return { type, preset: presetName, scriptTrees: cloneJson(own) }
+  if (own !== undefined) return { type, preset: presetName, scriptTrees: requireScriptTreeArray(own, `trees.preset.${presetName}`) }
   return { type, preset: presetName, scriptTrees: await activePresetScriptTrees(db, presetName) }
 }
 
@@ -1449,7 +1461,7 @@ async function patchScriptNode(
     const current = overlay?.trees !== undefined
       ? overlay.trees.character ?? []
       : overlay?.scriptTrees ?? []
-    const patched = patchNodeById(current, scriptId, (node) => {
+    const patched = patchNodeById(requireScriptTreeArray(current, 'trees.character'), scriptId, (node) => {
       if (info !== undefined) node['info'] = info
       if (buttons !== undefined) {
         node['button'] = { ...(plainObject(node['button']) ?? {}), enabled: true, buttons }
@@ -1597,7 +1609,9 @@ async function mutateMessages(
       for (const raw of updates) {
         const update = requireObject(raw, 'messages[]')
         const index = resolveMessageId(chat.messages, update.message_id)
-        applyMessageUpdate(chat.messages[index], update)
+        const message = chat.messages[index]
+        if (message === undefined) throw new Error(`message_id ${index} is out of range`)
+        applyMessageUpdate(message, update)
       }
     } else if (action === 'create') {
       const entries = requireArray(body?.messages, 'messages')
@@ -1716,7 +1730,9 @@ function parseRange(range: unknown, lastMessageId: number): [number, number] {
     const value = Number(raw)
     return value < 0 ? lastMessageId + 1 + value : value
   }
-  const start = toIndex(match[1])
+  const startRaw = match[1]
+  if (startRaw === undefined) throw new Error(`unsupported message range '${range}'`)
+  const start = toIndex(startRaw)
   const end = match[2] === undefined ? start : toIndex(match[2])
   return [Math.max(0, Math.min(start, end)), Math.min(lastMessageId, Math.max(start, end))]
 }
@@ -1740,7 +1756,8 @@ function applyMessageUpdate(message: ChatMessage, update: JsonObject): void {
     const swipeId = typeof update.swipe_id === 'number' ? update.swipe_id : (typeof message.swipe_id === 'number' ? message.swipe_id : 0)
     const clamped = Math.max(0, Math.min(Math.trunc(swipeId), swipes.length - 1))
     message.swipe_id = clamped
-    message.mes = swipes[clamped]
+    const nextSwipe = swipes[clamped]
+    if (nextSwipe !== undefined) message.mes = nextSwipe
   } else if (Array.isArray(message.swipes) && message.swipes.length > 0) {
     // `message` is the current swipe text. Keep the swipe array in sync so a
     // later swipe switch cannot resurrect the stale text (MVU appends
@@ -1912,8 +1929,11 @@ async function runHelperSlash(
 
 /** STscript variables are scalars; nested trees stay out of the macro engine. */
 function scalarVariables(tree: JsonObject): Record<string, string | number | boolean> {
-  return Object.fromEntries(Object.entries(tree).filter(([, value]) =>
-    typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'))
+  const result: Record<string, string | number | boolean> = {}
+  for (const [key, value] of Object.entries(tree)) {
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') result[key] = value
+  }
+  return result
 }
 
 /* ------------------------------- contracts ------------------------------- */
@@ -1955,6 +1975,25 @@ function cloneJson<T>(value: T): T {
   } catch {
     throw new Error('value is not JSON-serializable')
   }
+}
+
+/** Narrow a Helper payload to the JSON value the variable/template stores accept. */
+function jsonValueOf(value: unknown): JsonValue {
+  if (value === undefined || typeof value === 'function' || typeof value === 'symbol') {
+    throw new Error('invalid variable value')
+  }
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new Error('variable number must be finite')
+    return value
+  }
+  if (Array.isArray(value)) return value.map(jsonValueOf)
+  if (typeof value === 'object') {
+    const record: { [key: string]: JsonValue } = {}
+    for (const [key, item] of Object.entries(value)) record[key] = jsonValueOf(item)
+    return record
+  }
+  throw new Error('invalid variable value')
 }
 
 export { HELPER_SCOPES as HELPER_VARIABLE_SCOPES }

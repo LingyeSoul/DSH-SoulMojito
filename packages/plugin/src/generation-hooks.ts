@@ -16,6 +16,8 @@
  * owner 归因（mod id），降级经 onDegradation 订阅进审计线与面板计数。
  */
 
+import type { AssembleInput } from '../../tavern-pipeline/src/index.js'
+
 /** 五个相位。key 字符串是 P1 api.hooks.on 的契约，不得变更。 */
 export type GenerationHookPhase =
   | 'user-input'
@@ -34,17 +36,29 @@ export interface GenerationHookContext {
 }
 
 /** 各相位的 payload 形状（P1 api.hooks.on 的类型基座）。 */
+export interface GenerationLlmRequestPayload {
+  messages: unknown[]
+  system: string | undefined
+  params: {
+    provider: string
+    model: string
+    reasoningEffort?: string
+    temperature?: number
+    maxTokens?: number
+  }
+}
+
 export interface GenerationHookPayloads {
   /** 用户输入原文（send 模式；regex 变换之前）。 */
   'user-input': string
   /** assemblePrompt 的装配输入 draft（字段同 AssembleInput）。 */
-  'pre-assemble': Record<string, unknown>
+  'pre-assemble': AssembleInput
   /** 进 llm.stream 的最终请求（messages 已是 LlmMessage 形状）。 */
-  'pre-llm': { messages: unknown[]; system: string | undefined; params: Record<string, unknown> }
+  'pre-llm': GenerationLlmRequestPayload
   /** 模型输出原文（AI_OUTPUT regex 与模板输出渲染之前）。 */
   'post-output': string
   /** 落盘后的只读观察（handler 返回值被丢弃）。 */
-  'post-save': { chat: unknown; revision: number; speaker: string; finalText: string }
+  'post-save': { chat: unknown; revision: string; speaker: string; finalText: string }
 }
 
 export type GenerationHookHandler<P extends keyof GenerationHookPayloads = keyof GenerationHookPayloads> = (
@@ -63,12 +77,14 @@ export interface HookDegradation {
   owner?: unknown
 }
 
-interface Registration {
+interface Registration<P extends GenerationHookPhase> {
   id: number
   order: number
-  handler: GenerationHookHandler
+  handler: GenerationHookHandler<P>
   owner?: unknown
 }
+
+type HookTable = { [P in GenerationHookPhase]: Array<Registration<P>> }
 
 /** 单 hook 超时（提案 §3.4：10s，Promise.race 降级）。测试经 options.timeoutMs 注入短值。 */
 export const GENERATION_HOOK_TIMEOUT_MS = 10_000
@@ -115,7 +131,13 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 
 export function createGenerationHookBus(options: GenerationHookBusOptions = {}): GenerationHookBus {
   const timeoutMs = options.timeoutMs ?? GENERATION_HOOK_TIMEOUT_MS
-  const table = new Map<GenerationHookPhase, Registration[]>()
+  const table: HookTable = {
+    'user-input': [],
+    'pre-assemble': [],
+    'pre-llm': [],
+    'post-output': [],
+    'post-save': [],
+  }
   const degradationListeners = new Set<(degradation: HookDegradation) => void>()
   let nextId = 1
   let degradations = 0
@@ -127,14 +149,12 @@ export function createGenerationHookBus(options: GenerationHookBusOptions = {}):
     owner?: unknown,
   ): () => void {
     const id = nextId++
-    const list = table.get(phase) ?? []
-    list.push({ id, order, handler: handler as GenerationHookHandler, ...(owner !== undefined ? { owner } : {}) })
+    const list = table[phase]
+    list.push({ id, order, handler, ...(owner !== undefined ? { owner } : {}) })
     list.sort((a, b) => a.order - b.order || a.id - b.id)
-    table.set(phase, list)
     return () => {
-      const current = table.get(phase)
-      if (current === undefined) return
-      table.set(phase, current.filter((registration) => registration.id !== id))
+      const index = list.findIndex((registration) => registration.id === id)
+      if (index >= 0) list.splice(index, 1)
     }
   }
 
@@ -143,9 +163,9 @@ export function createGenerationHookBus(options: GenerationHookBusOptions = {}):
     payload: GenerationHookPayloads[P],
     context: Omit<GenerationHookContext, 'phase'>,
   ): Promise<GenerationHookPayloads[P]> {
-    const list = table.get(phase)
+    const list = table[phase]
     // 空相位快路径：P0 恒走此分支，原样返回（引用不变）。
-    if (list === undefined || list.length === 0) return payload
+    if (list.length === 0) return payload
     const fullContext: GenerationHookContext = { ...context, phase }
     let current = payload
     // 快照遍历：waterfall 过程中的注册/反注册不改变本轮集合。

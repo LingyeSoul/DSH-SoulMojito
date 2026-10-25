@@ -413,7 +413,7 @@ const PREVIEW = (() => {
     if (suggestions.length === 0) break
     const pick = suggestions[(ply * 3 + 1) % suggestions.length]!
     const result = engine.applyAction(state, pick, state.turn)
-    state = result.state
+    state = result.state as ChineseCheckersState
     if (state.finished) break
   }
   return { state, legal: (engine.legalActions(state) as MoveAction[]).slice(0, 8) }

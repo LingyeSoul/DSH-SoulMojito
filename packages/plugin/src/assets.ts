@@ -1,6 +1,13 @@
 import { decodeCharxAsset } from '../../tavern-format/src/index.js'
+import type { CharacterFile, TavernStore } from '../../tavern-store/src/index.js'
+import type { HttpResponse } from './http/io.js'
 
-export async function serveCharacterAvatar(res, db, name, found) {
+export async function serveCharacterAvatar(
+  res: HttpResponse,
+  db: Pick<TavernStore, 'exportCharacter'>,
+  name: string,
+  found: CharacterFile,
+): Promise<void> {
   let bytes
   let contentType = 'image/png'
   if (found.kind === 'png') {
@@ -27,7 +34,7 @@ export async function serveCharacterAvatar(res, db, name, found) {
  * 中间值；客户端全部头像位都是正方形 + object-fit:cover，一张 1:1 viewBox 的
  * SVG 覆盖所有渲染面，无需客户端改动。实体不存在仍然 404（真正的错误）。
  */
-export function sendAvatarFallback(res, name) {
+export function sendAvatarFallback(res: HttpResponse, name: string): void {
   let hash = 0x811c9dc5
   for (let index = 0; index < name.length; index++) {
     hash ^= name.charCodeAt(index)
@@ -46,11 +53,15 @@ export function sendAvatarFallback(res, name) {
   res.end(svg)
 }
 
-export async function isGroupChat(db, characterName, chatId) {
+export async function isGroupChat(
+  db: Pick<TavernStore, 'getChat'>,
+  characterName: string,
+  chatId: string,
+): Promise<boolean> {
   const chat = await db.getChat(characterName, chatId)
   return chat?.header?.chat_metadata?.group !== undefined
 }
-function imageContentType(ext) {
+function imageContentType(ext: unknown): string {
   const normalized = String(ext || '').toLowerCase()
   return normalized === 'jpg' || normalized === 'jpeg'
     ? 'image/jpeg'

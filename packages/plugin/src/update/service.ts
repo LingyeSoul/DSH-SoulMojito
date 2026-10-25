@@ -34,9 +34,11 @@ import {
   installUpdate,
   watchPluginManager,
   writeFileAtomic,
+  type PluginManagerLike,
   type TavernInstallOutcome,
   type TavernInstallRequest,
   type TavernInstallStrategy,
+  type UpdateHostContext,
 } from './apply.js'
 
 export const UPDATE_CACHE_FILE = 'update-state.json'
@@ -80,7 +82,7 @@ export interface TavernUpdateSnapshot {
 }
 
 export interface TavernUpdateServiceOptions {
-  ctx?: any
+  ctx?: UpdateHostContext
   /** 缓存目录（数据根：新装 `$DSH_HOME/soulmojito`，旧装 `$DSH_HOME/tavern`）。 */
   home: string
   /** 已安装插件目录（host bundle 的 `import.meta.dirname`）。 */
@@ -117,7 +119,7 @@ export class TavernUpdateService {
   private timer: ReturnType<typeof setTimeout> | undefined
   private disposed = false
   private started = false
-  private pluginManager: any = null
+  private pluginManager: PluginManagerLike | null = null
   private disposePluginManagerWatch: (() => void) | undefined
 
   constructor(options: TavernUpdateServiceOptions) {
@@ -454,9 +456,10 @@ function emptyInstallState(): TavernUpdateInstallState {
   }
 }
 
-function sameLocal(left: any, right: TavernLocalBuild): boolean {
-  return typeof left?.version === 'string' && typeof left?.commit === 'string'
-    && left.version === right.version && left.commit === right.commit
+function sameLocal(left: unknown, right: TavernLocalBuild): boolean {
+  const record = typeof left === 'object' && left !== null ? left as { version?: unknown; commit?: unknown } : undefined
+  return typeof record?.version === 'string' && typeof record?.commit === 'string'
+    && record.version === right.version && record.commit === right.commit
 }
 
 function isCommitText(value: unknown): value is string {

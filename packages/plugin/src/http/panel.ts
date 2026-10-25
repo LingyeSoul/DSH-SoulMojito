@@ -61,8 +61,12 @@ export async function handleGuidesApi(
   if ((method === 'GET' || method === 'POST') && route.startsWith('guides/')) {
     const segments = route.slice('guides/'.length).split('/')
     if (segments.length !== 2) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
-    const character = decodeURIComponent(segments[0])
-    const chatId = decodeURIComponent(segments[1])
+    const [characterSegment, chatIdSegment] = segments
+    if (characterSegment === undefined || chatIdSegment === undefined) {
+      return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+    }
+    const character = decodeURIComponent(characterSegment)
+    const chatId = decodeURIComponent(chatIdSegment)
     const snapshot = await readGuidesSnapshot(db, character, chatId)
     if (!snapshot) return sendJson(res, 404, { ok: false, message: 'chat not found' })
     if (method === 'GET') {
@@ -88,9 +92,13 @@ export async function handleGuidesApi(
   if (method === 'DELETE' && route.startsWith('guides/')) {
     const segments = route.slice('guides/'.length).split('/')
     if (segments.length !== 3) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
-    const character = decodeURIComponent(segments[0])
-    const chatId = decodeURIComponent(segments[1])
-    const id = decodeURIComponent(segments[2])
+    const [characterSegment, chatIdSegment, idSegment] = segments
+    if (characterSegment === undefined || chatIdSegment === undefined || idSegment === undefined) {
+      return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+    }
+    const character = decodeURIComponent(characterSegment)
+    const chatId = decodeURIComponent(chatIdSegment)
+    const id = decodeURIComponent(idSegment)
     const snapshot = await readGuidesSnapshot(db, character, chatId)
     if (!snapshot) return sendJson(res, 404, { ok: false, message: 'chat not found' })
     const removed = removeGuide(normalizeGuides(snapshot.chat.header.chat_metadata?.guides), id)
@@ -120,17 +128,19 @@ export async function handleScriptApi(
 ): Promise<void> {
   if (method === 'POST' && route === 'script/import') {
     const body = await readJson(req, 8 * 1024 * 1024)
+    const name = typeof body.name === 'string' ? body.name : ''
+    const format = scriptFormatOf(body.format)
     let imported
     try {
       // EPUB（提案 0014 P2）：content 为 base64 编码的 zip 字节，解码后走
       // importScript 的二进制分支（parseEpubText）；8MB 上限对 base64 文本照旧。
       imported = await importScript(
         tavernDataRoot(),
-        body.name,
+        name,
         body.format === 'epub'
           ? Buffer.from(typeof body.content === 'string' ? body.content : '', 'base64')
-          : body.content,
-        body.format,
+          : scriptContentOf(body.content),
+        format,
       )
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -162,8 +172,12 @@ export async function handleScriptApi(
   if (method === 'GET' && route.startsWith('script/progress/')) {
     const segments = route.slice('script/progress/'.length).split('/')
     if (segments.length !== 2) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
-    const character = decodeURIComponent(segments[0])
-    const chatId = decodeURIComponent(segments[1])
+    const [characterSegment, chatIdSegment] = segments
+    if (characterSegment === undefined || chatIdSegment === undefined) {
+      return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+    }
+    const character = decodeURIComponent(characterSegment)
+    const chatId = decodeURIComponent(chatIdSegment)
     const file = await db.getCharacter(character)
     if (!file) return sendJson(res, 404, { ok: false, message: 'character not found' })
     const scriptName = boundScriptOf(file.card)
@@ -377,17 +391,18 @@ export async function handleWorkbenchApi(
     if (title === '') {
       return sendJson(res, 400, { ok: false, message: 'title must be a non-empty string', code: 'TAVERN_WORKBENCH' })
     }
-    const binding = (await db.getState()).sessionBindings[body.sessionId]
+    const sessionId = body.sessionId
+    const binding = (await db.getState()).sessionBindings[sessionId]
     if (binding?.architecture !== 'card-workbench') {
-      return sendJson(res, 404, { ok: false, message: `session '${body.sessionId}' is not a CardWorkbench session`, code: 'TAVERN_WORKBENCH' })
+      return sendJson(res, 404, { ok: false, message: `session '${sessionId}' is not a CardWorkbench session`, code: 'TAVERN_WORKBENCH' })
     }
     const state = await db.updateState((current) => ({
       sessionBindings: {
         ...current.sessionBindings,
-        [body.sessionId]: { ...binding, title },
+        [sessionId]: { ...binding, title },
       },
     }))
-    return sendJson(res, 200, { ok: true, state, binding: state.sessionBindings[body.sessionId] })
+    return sendJson(res, 200, { ok: true, state, binding: state.sessionBindings[sessionId] })
   }
 
   // 方案 = card_plan_propose / world_plan_propose 落库的 pending 计划
@@ -439,4 +454,15 @@ export async function handleWorkbenchApi(
   }
 
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+}
+
+function scriptFormatOf(value: unknown): 'txt' | 'md' | 'epub' | undefined {
+  if (value === undefined) return undefined
+  if (value === 'txt' || value === 'md' || value === 'epub') return value
+  throw new Error(`script format must be one of 'txt', 'md' or 'epub' (got ${JSON.stringify(value)})`)
+}
+
+function scriptContentOf(value: unknown): string | Uint8Array {
+  if (typeof value === 'string' || value instanceof Uint8Array) return value
+  throw new Error('script content must be a string or Uint8Array/Buffer')
 }

@@ -23,6 +23,7 @@
 import { readModRequestBody } from '../mods/http.js'
 import { GameBridgeError } from './sessions.js'
 import type { GamesService } from './service.js'
+import type { GameAction } from './standard.js'
 
 /** games/install 请求体上限（zip 上传：base64 约放大 4/3；客户端预检 5MB zip）。 */
 const GAMES_INSTALL_BODY_MAX_BYTES = 8 * 1024 * 1024
@@ -35,7 +36,7 @@ export interface GamesHttpRequest {
 
 export interface GamesHttpResponse {
   statusCode: number
-  writableEnded: boolean
+  readonly writableEnded?: boolean
   setHeader: (name: string, value: string) => void
   end: (chunk?: string | Uint8Array) => void
 }
@@ -148,7 +149,13 @@ export async function handleGamesApi(options: GamesHttpOptions): Promise<void> {
       if (action === null || typeof action !== 'object' || Array.isArray(action)) {
         throw new GameBridgeError('invalid', 'expected { action }')
       }
-      const { session, view } = await service.humanAction(sessionId, action as Record<string, unknown>)
+      const actionRecord = action as Record<string, unknown>
+      const actionType = actionRecord['type']
+      if (typeof actionType !== 'string' || actionType === '') {
+        throw new GameBridgeError('invalid', 'action.type is required')
+      }
+      const gameAction: GameAction = { ...actionRecord, type: actionType }
+      const { session, view } = await service.humanAction(sessionId, gameAction)
       return sendJson(res, 200, { ok: true, session, view })
     }
 

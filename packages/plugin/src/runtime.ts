@@ -7,11 +7,12 @@ import { BUILD_INFO, TAVERN_COMMIT } from './build-info.js'
 import { tavernDataRoot } from './dsh-home.js'
 import { envCompat } from './env-compat.js'
 import type { GamesService } from './games/service.js'
+import type { PluginContext } from './host-contract.js'
 import { ModHost, type ModHostContext, type ModHostSnapshot } from './mods/host.js'
 import { TavernUpdateService } from './update/service.js'
 import { MemoryStore, MemoryVectorStore, NovelStore, TavernStore, VariableStore } from '../../tavern-store/src/index.js'
 
-let storePromise
+let storePromise: Promise<TavernStore> | undefined
 let memoryStorePromise: Promise<MemoryStore> | undefined
 let variableStorePromise: Promise<VariableStore> | undefined
 let agentTavernCapabilities: AgentTavernCapabilities = inspectAgentTavernCapabilities({})
@@ -42,15 +43,15 @@ let gamesServicePromise: Promise<GamesService> | undefined
 // switch 始终优先。无模板标签时链路直通，无额外开销。
 let templatesEnabledFlag = false
 
-export function store() {
+export function store(): Promise<TavernStore> {
   return (storePromise ??= TavernStore.open(tavernDataRoot()))
 }
 
-export function memories() {
+export function memories(): Promise<MemoryStore> {
   return (memoryStorePromise ??= MemoryStore.open(tavernDataRoot()))
 }
 
-export function variables() {
+export function variables(): Promise<VariableStore> {
   return (variableStorePromise ??= VariableStore.open(tavernDataRoot()))
 }
 
@@ -76,7 +77,7 @@ export function modHost(): Promise<ModHost> {
 }
 
 /** bootstrap 的 mods 投影（提案 0015 §3.5）：宿主初始化失败时回空数组不 500。 */
-export async function modHostProjection(ctx): Promise<unknown[]> {
+export async function modHostProjection(ctx: PluginContext): Promise<unknown[]> {
   try {
     const snapshot: ModHostSnapshot = await modHost().then((host) => host.snapshot())
     return snapshot.mods.map((mod) => ({
@@ -114,7 +115,7 @@ export function novelStore(): Promise<NovelStore> {
  * 成功后统一落戳）优先，构建期 define 只是旁车缺席时的兜底；靠恒滞后一拍的
  * 字面量做身份会让 restart-required 永远解除不了（决策 2026-10-12）。
  */
-export function tavernUpdate(ctx): TavernUpdateService {
+export function tavernUpdate(ctx: PluginContext): TavernUpdateService {
   // HMR recompose 复用同一 module generation 重挂时，旧实例已被上一个 effect
   // 的 disposer 走到 dispose()——它的定时器与 pluginManager 监听都已拆除，
   // start() 会短路。这里检测已 dispose 就地重建，自动检查才不会静默死亡

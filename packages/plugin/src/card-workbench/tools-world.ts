@@ -173,47 +173,49 @@ export const worldTools: ToolDefinition[] = [
       throw new Error(`world '${world}' not found; set create: true to plan a new book, or world_list shows the library`)
     }
     if (!Array.isArray(args.entries) || args.entries.length === 0) throw new Error('entries must be a non-empty array')
+    const rawEntries: unknown[] = args.entries
     // note 不在条目白名单里，解析前剥离单独校验（长度上限对齐方案存储层）
     const noteAt = (index: number): string | undefined => {
-      const raw = args.entries[index]
+      const raw = rawEntries[index]
       if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
       const note = (raw as Record<string, unknown>).note
       if (note === undefined) return undefined
       if (typeof note !== 'string' || note.length > 500) throw new Error(`note for entry ${index + 1} must be a string of at most 500 characters`)
       return note
     }
-    const cleaned = args.entries.map((raw, index) => {
+    const cleaned = rawEntries.map((raw, index) => {
       const note = noteAt(index)
       if (note === undefined) return raw
       const { note: _drop, ...rest } = raw as Record<string, unknown>
       return rest
     })
     const byUid = new Map((book?.entries ?? []).map((entry) => [entry.uid, entry]))
-    const proposed = create ? parseWorldSeedEntries(cleaned) : parseWorldEdits(cleaned)
-    const entries = proposed.map((edit, index) => {
-      const note = noteAt(index)
-      if (create) {
-        // 建书方案：全部 create 动作，uid 按数组顺序（与 world_create 同款分配）
-        return {
-          uid: index,
-          action: 'create' as const,
-          fields: Object.entries(edit.values).map(([field, newValue]) => ({ field, newValue: newValue as WorldPlanValue })),
-          ...(note !== undefined ? { note } : {}),
-        }
-      }
-      const existing = byUid.get(edit.uid)
-      if (edit.remove) {
-        if (existing === undefined) throw new Error(`uid ${edit.uid} not found in world '${world}'; removal matches existing entries only (see world_get)`)
-        return { uid: edit.uid, action: 'remove' as const, fields: [], ...(note !== undefined ? { note } : {}) }
-      }
-      // currentValue 一律以活书为准（不信任模型复述），diff 面向用户保真
-      const fields = edit.fields.map((field) => ({
-        field,
-        ...(existing !== undefined ? { currentValue: worldLiveValue(existing, field as WorldEditableField) } : {}),
-        newValue: edit.values[field] as WorldPlanValue,
-      }))
-      return { uid: edit.uid, action: existing === undefined ? 'create' as const : 'update' as const, fields, ...(note !== undefined ? { note } : {}) }
-    })
+    const entries = create
+      ? parseWorldSeedEntries(cleaned).map((edit, index) => {
+          const note = noteAt(index)
+          // 建书方案：全部 create 动作，uid 按数组顺序（与 world_create 同款分配）
+          return {
+            uid: index,
+            action: 'create' as const,
+            fields: Object.entries(edit.values).map(([field, newValue]) => ({ field, newValue: newValue as WorldPlanValue })),
+            ...(note !== undefined ? { note } : {}),
+          }
+        })
+      : parseWorldEdits(cleaned).map((edit, index) => {
+          const note = noteAt(index)
+          const existing = byUid.get(edit.uid)
+          if (edit.remove) {
+            if (existing === undefined) throw new Error(`uid ${edit.uid} not found in world '${world}'; removal matches existing entries only (see world_get)`)
+            return { uid: edit.uid, action: 'remove' as const, fields: [], ...(note !== undefined ? { note } : {}) }
+          }
+          // currentValue 一律以活书为准（不信任模型复述），diff 面向用户保真
+          const fields = edit.fields.map((field) => ({
+            field,
+            ...(existing !== undefined ? { currentValue: worldLiveValue(existing, field as WorldEditableField) } : {}),
+            newValue: edit.values[field] as WorldPlanValue,
+          }))
+          return { uid: edit.uid, action: existing === undefined ? 'create' as const : 'update' as const, fields, ...(note !== undefined ? { note } : {}) }
+        })
     const plan = await proposeWorldPlan(tavernDataRoot(), world, {
       op: create ? 'create' : 'edit',
       title,
@@ -510,7 +512,11 @@ export async function executeWorldPlan(plan: WorldPlan): Promise<WorldPlanExecut
       world: plan.world,
       entryCount: entries.length,
       nextUid: entries.length,
-      touched: entries.map((_entry, uid) => ({ uid, created: true, fields: plan.entries[uid].fields.map((field) => field.field) })),
+      touched: entries.map((_entry, uid) => {
+        const planEntry = plan.entries[uid]
+        if (planEntry === undefined) throw new Error(`plan '${plan.id}' has no entry ${uid}`)
+        return { uid, created: true, fields: planEntry.fields.map((field) => field.field) }
+      }),
     }
   }
   const book = await db.getWorld(plan.world)
@@ -561,7 +567,7 @@ export async function executeWorldPlan(plan: WorldPlan): Promise<WorldPlanExecut
 function worldEditableProperties(): Record<string, unknown> {
   const properties: Record<string, unknown> = {}
   for (const name of WORLD_EDITABLE_FIELDS) {
-    const spec = WORLD_ENTRY_FIELDS[name]
+    const spec: WorldEntryFieldSpec = WORLD_ENTRY_FIELDS[name]
     const hint = { description: spec.hint }
     const range = {
       ...(spec.min !== undefined ? { minimum: spec.min } : {}),
@@ -592,7 +598,7 @@ function worldEditableProperties(): Record<string, unknown> {
 }
 
 function worldFieldValue(name: WorldEditableField, raw: unknown, label: string): unknown {
-  const spec = WORLD_ENTRY_FIELDS[name]
+  const spec: WorldEntryFieldSpec = WORLD_ENTRY_FIELDS[name]
   const at = `${name}${label}`
   switch (spec.type) {
     case 'string':
@@ -682,7 +688,7 @@ function parseWorldSeedEntries(value: unknown): Array<{ values: Record<string, u
 /** 白名单字段值 → LoreEntry 目标键值对（enabled → disable 取反；其余按表映射）。 */
 function worldFieldRawEntries(values: Record<string, unknown>): Array<[string, unknown]> {
   return Object.entries(values).map(([name, value]) => {
-    const spec = WORLD_ENTRY_FIELDS[name as WorldEditableField]
+    const spec: WorldEntryFieldSpec = WORLD_ENTRY_FIELDS[name as WorldEditableField]
     return [spec.loreKey ?? name, spec.invert === true ? !(value as boolean) : value] as [string, unknown]
   })
 }
@@ -736,15 +742,20 @@ function applyWorldEdits(
 
 /** 活条目上白名单字段的现行值（可编辑形态视角：enabled 是 disable 取反；缺失去表缺省）。 */
 function worldLiveValue(entry: LoreEntry, field: WorldEditableField): WorldPlanValue {
-  const spec = WORLD_ENTRY_FIELDS[field]
+  const spec: WorldEntryFieldSpec = WORLD_ENTRY_FIELDS[field]
   const record = entry as unknown as Record<string, unknown>
   const raw = record[spec.loreKey ?? field]
   if (spec.invert === true) return typeof raw === 'boolean' ? !raw : true
   if (raw === undefined) {
     if (Array.isArray(spec.fallback)) return []
-    return spec.fallback ?? null
+    return isWorldPlanValue(spec.fallback) ? spec.fallback : null
   }
-  return raw as WorldPlanValue
+  return isWorldPlanValue(raw) ? raw : null
+}
+
+function isWorldPlanValue(value: unknown): value is WorldPlanValue {
+  if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return true
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
 }
 
 /** 方案过期检测的值等价：标量严格相等，数组逐项深比（引用不等 ≠ 值不等）。 */
@@ -840,7 +851,7 @@ function worldSummary(world: string, entries: LoreEntry[], selected?: number[]):
       const record = entry as unknown as Record<string, unknown>
       for (const name of WORLD_EDITABLE_FIELDS) {
         if (WORLD_CORE_SUMMARY_FIELDS.has(name)) continue
-        const spec = WORLD_ENTRY_FIELDS[name]
+        const spec: WorldEntryFieldSpec = WORLD_ENTRY_FIELDS[name]
         const value = record[spec.loreKey ?? name]
         // 数组缺省按空数组语义比较（表里的 fallback 数组是另一份引用）
         const isDefault = Array.isArray(spec.fallback)

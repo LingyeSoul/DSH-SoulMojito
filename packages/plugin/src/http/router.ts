@@ -1,4 +1,5 @@
 import { detectPresetKind, parseRegexScripts } from '../../../tavern-format/src/index.js'
+import type { ChatLogIR } from '../../../tavern-format/src/index.js'
 import { createReadStream, createWriteStream } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -55,7 +56,8 @@ import { activeCharacterPatch } from '../session/active-character.js'
 import { normalizeChatId } from '../session/trace.js'
 import { prepareInternalWorkspace, prepareWorkbenchWorkspace } from '../workspace.js'
 import { HttpError } from './errors.js'
-import { readJson, sendJson } from './io.js'
+import type { PluginContext } from '../host-contract.js'
+import { readJson, sendJson, type HttpRequest, type HttpResponse } from './io.js'
 import { handleMemoryEmbedApi, handleMemoryMaintenanceApi } from './memory.js'
 import { handleModsApi } from './mods.js'
 import { handleNovelsApi } from './novel.js'
@@ -63,7 +65,7 @@ import { handleGuidesApi, handleMvuApi, handleScriptApi, handleWorkbenchApi } fr
 import { handleUpdateApi } from './update.js'
 
 export const API = '/api/dsh-soulmojito'
-export async function handleApi(ctx, req, res) {
+export async function handleApi(ctx: PluginContext, req: HttpRequest, res: HttpResponse): Promise<void> {
   const url = new URL(req.url ?? API, 'http://localhost')
   const route = url.pathname.slice(API.length).replace(/^\//, '')
   const method = req.method ?? 'GET'
@@ -111,7 +113,7 @@ export async function handleApi(ctx, req, res) {
       const persona = await db.getPersona(name)
       if (persona) personas.push(persona)
     }
-    const presetKinds = {}
+    const presetKinds: Record<string, string> = {}
     for (const name of await db.listPresets()) {
       const preset = await db.getPreset(name)
       if (preset) presetKinds[name] = detectPresetKind(preset)
@@ -119,7 +121,7 @@ export async function handleApi(ctx, req, res) {
     // 世界书条目数投影：面板列表不点开书也显示真实条目数（书本内容仍按浏览/
     // 编辑懒加载）。与 presetKinds 同款服务端轻量投影；单本损坏只缺数不断路，
     // bootstrap 不因坏书 500，点开该书仍走既有 fetch 错误路径。
-    const worldEntryCounts = {}
+    const worldEntryCounts: Record<string, number> = {}
     for (const name of await db.listWorlds()) {
       try {
         const book = await db.getWorld(name)
@@ -210,12 +212,12 @@ export async function handleApi(ctx, req, res) {
     }
     const agent = ctx.agents?.get?.(sessionId) as { session?: HostSessionLog } | undefined
     const session = agent?.session
-    if (!session || readSessionEvents(session) === undefined) {
+    if (!session || typeof session.id !== 'string' || readSessionEvents(session) === undefined) {
       throw new Error('AgentTavern session is not loaded in this host process; open the chat first and retry.')
     }
     const projector = await getAgentTavernProjectorPromise()
     if (!projector) throw new Error('AgentTavern projector is unavailable')
-    await projector.replay(session as never)
+    await projector.replay({ ...session, id: session.id })
     return sendJson(res, 200, { ok: true, projection: await projector.status(sessionId) })
   }
 
@@ -396,21 +398,23 @@ export async function handleApi(ctx, req, res) {
   if (method === 'POST' && route === 'model') {
     const body = await readJson(req)
     if (typeof body.sessionId !== 'string') throw new Error('expected { sessionId, selection }')
+    const sessionId = body.sessionId
     let selection: TavernModelSelection | null = null
-    if (body.selection !== null && body.selection !== undefined) {
-      if (typeof body.selection?.provider !== 'string' || typeof body.selection?.model !== 'string') {
+    const selectionBody = asRecord(body.selection)
+    if (selectionBody !== undefined) {
+      if (typeof selectionBody['provider'] !== 'string' || typeof selectionBody['model'] !== 'string') {
         throw new Error('selection must be { provider, model, reasoningEffort? }')
       }
       selection = {
-        provider: body.selection.provider,
-        model: body.selection.model,
-        ...(typeof body.selection.reasoningEffort === 'string' ? { reasoningEffort: body.selection.reasoningEffort } : {}),
+        provider: selectionBody['provider'],
+        model: selectionBody['model'],
+        ...(typeof selectionBody['reasoningEffort'] === 'string' ? { reasoningEffort: selectionBody['reasoningEffort'] } : {}),
       }
     }
     const state = await db.updateState((current) => ({
       modelSelections: selection === null
-        ? Object.fromEntries(Object.entries(current.modelSelections ?? {}).filter(([id]) => id !== body.sessionId))
-        : { ...(current.modelSelections ?? {}), [body.sessionId]: selection },
+        ? Object.fromEntries(Object.entries(current.modelSelections ?? {}).filter(([id]) => id !== sessionId))
+        : { ...(current.modelSelections ?? {}), [sessionId]: selection },
     }))
     return sendJson(res, 200, { ok: true, state })
   }
@@ -442,6 +446,12 @@ export async function handleApi(ctx, req, res) {
       const switched = await activeCharacterPatch(db, current, requestedActiveCharacter)
       requestedActiveWorlds = switched.activeWorlds
     }
+    const requestedDefaultArchitecture: 'agent-tavern' | 'st' | undefined = body.defaultArchitecture === 'agent-tavern' || body.defaultArchitecture === 'st'
+      ? body.defaultArchitecture
+      : undefined
+    const requestedDefaultContextMode: 'dsh-native' | 'agent-managed' | undefined = body.defaultContextMode === 'dsh-native' || body.defaultContextMode === 'agent-managed'
+      ? body.defaultContextMode
+      : undefined
     const patch = {
       ...(switchingActiveCharacter ? { activeCharacter: requestedActiveCharacter } : {}),
       ...(requestedActiveWorlds !== undefined ? { activeWorlds: requestedActiveWorlds } : {}),
@@ -451,12 +461,8 @@ export async function handleApi(ctx, req, res) {
       ...(typeof body.activePreset === 'string' || body.activePreset === null ? { activePreset: body.activePreset || undefined } : {}),
       ...(typeof body.activePersona === 'string' || body.activePersona === null ? { activePersona: body.activePersona || undefined } : {}),
       ...(typeof body.nativeAgentPersona === 'boolean' ? { nativeAgentPersona: body.nativeAgentPersona } : {}),
-      ...(body.defaultArchitecture === 'agent-tavern' || body.defaultArchitecture === 'st'
-        ? { defaultArchitecture: body.defaultArchitecture }
-        : {}),
-      ...(body.defaultContextMode === 'dsh-native' || body.defaultContextMode === 'agent-managed'
-        ? { defaultContextMode: body.defaultContextMode }
-        : {}),
+      ...(requestedDefaultArchitecture !== undefined ? { defaultArchitecture: requestedDefaultArchitecture } : {}),
+      ...(requestedDefaultContextMode !== undefined ? { defaultContextMode: requestedDefaultContextMode } : {}),
       ...(typeof body.agentTavernPreloadAssets === 'boolean'
         ? { agentTavernPreloadAssets: body.agentTavernPreloadAssets }
         : {}),
@@ -534,23 +540,25 @@ export async function handleApi(ctx, req, res) {
 
   if (method === 'POST' && route === 'import/world') {
     const body = await readJson(req)
-    if (typeof body.name !== 'string' || !body.data || typeof body.data !== 'object') throw new Error('expected { name, data }')
-    const book = await db.importWorldFile(body.name, body.data)
+    const data = asRecord(body.data)
+    if (typeof body.name !== 'string' || data === undefined) throw new Error('expected { name, data }')
+    const book = await db.importWorldFile(body.name, data)
     await emitAssetsSaved('world', book.name)
     return sendJson(res, 200, { ok: true, name: book.name, entries: book.entries.length })
   }
 
   if (method === 'POST' && route === 'import/preset') {
     const body = await readJson(req)
-    if (typeof body.name !== 'string' || !body.data || typeof body.data !== 'object') throw new Error('expected { name, data }')
-    parsePresetOrThrow(body.data)
+    const data = asRecord(body.data)
+    if (typeof body.name !== 'string' || data === undefined) throw new Error('expected { name, data }')
+    parsePresetOrThrow(data)
     // 预设内嵌 extensions.regex_scripts（ST preset-scoped regex）随导入物化为
     // 全局脚本；非法脚本不阻断预设落盘，只在回执里如实给出导入条数。
-    const result = await db.importPreset(body.name, body.data)
+    const result = await db.importPreset(body.name, data)
     await emitAssetsSaved('preset', body.name)
     // 同名的激活预设被覆盖时 AgentTavern 投影必须跟着变（写穿，best-effort）。
     await emitAgentPresetChanged()
-    return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(body.data), importedRegex: result.importedRegex })
+    return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(data), importedRegex: result.importedRegex })
   }
 
   if (method === 'GET' && route.startsWith('preset/')) {
@@ -563,26 +571,28 @@ export async function handleApi(ctx, req, res) {
   if (method === 'PUT' && route.startsWith('preset/')) {
     const oldName = decodeURIComponent(route.slice('preset/'.length))
     const body = await readJson(req, 10 * 1024 * 1024)
-    if (typeof body.name !== 'string' || body.name.trim() === '' || !body.data || typeof body.data !== 'object' || Array.isArray(body.data)) {
+    const data = asRecord(body.data)
+    if (typeof body.name !== 'string' || body.name.trim() === '' || data === undefined) {
       throw new Error('expected { name, data }')
     }
-    parsePresetOrThrow(body.data)
-    await db.putPreset(body.name, body.data)
-    await emitAssetsSaved('preset', body.name)
-    if (body.name !== oldName) await db.deletePreset(oldName)
+    const name = body.name
+    parsePresetOrThrow(data)
+    await db.putPreset(name, data)
+    await emitAssetsSaved('preset', name)
+    if (name !== oldName) await db.deletePreset(oldName)
     const state = await db.updateState((current) => ({
-      activePreset: current.activePreset === oldName ? body.name : current.activePreset,
-      ...(body.name !== oldName && current.regexScriptPresetOwners !== undefined
+      activePreset: current.activePreset === oldName ? name : current.activePreset,
+      ...(name !== oldName && current.regexScriptPresetOwners !== undefined
         ? {
             regexScriptPresetOwners: Object.fromEntries(Object.entries(current.regexScriptPresetOwners)
-              .map(([id, owner]) => [id, owner === oldName ? body.name : owner])),
+              .map(([id, owner]) => [id, owner === oldName ? name : owner])),
           }
         : {}),
     }))
     // 内容或名字变化都要写穿 AgentTavern 投影缓存（激活预设可能是这个）。
     await emitAgentPresetChanged()
     await refreshActivePrompt()
-    return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(body.data), data: body.data, state })
+    return sendJson(res, 200, { ok: true, name, kind: detectPresetKind(data), data, state })
   }
 
   if (method === 'POST' && route === 'import/persona') {
@@ -683,6 +693,7 @@ export async function handleApi(ctx, req, res) {
     })
     await emitAssetsSaved('group', body.name)
     const group = await db.getGroup(body.name)
+    if (group === undefined) throw new Error(`group '${body.name}' was not saved`)
     return sendJson(res, 200, { ok: true, group: publicGroup(group) })
   }
 
@@ -703,7 +714,9 @@ export async function handleApi(ctx, req, res) {
       ...(typeof body.allowSelfResponses === 'boolean' ? { allowSelfResponses: body.allowSelfResponses } : {}),
     })
     await emitAssetsSaved('group', body.name)
-    return sendJson(res, 200, { ok: true, group: publicGroup(await db.getGroup(body.name)) })
+    const savedGroup = await db.getGroup(body.name)
+    if (savedGroup === undefined) throw new Error(`group '${body.name}' was not saved`)
+    return sendJson(res, 200, { ok: true, group: publicGroup(savedGroup) })
   }
 
   if (method === 'DELETE' && route === 'group') {
@@ -738,9 +751,10 @@ export async function handleApi(ctx, req, res) {
   if (method === 'DELETE' && route === 'binding') {
     const body = await readJson(req)
     if (typeof body.sessionId !== 'string') throw new Error('expected { sessionId }')
+    const sessionId = body.sessionId
     const next = await db.updateState((state) => {
       const sessionBindings = { ...state.sessionBindings }
-      delete sessionBindings[body.sessionId]
+      delete sessionBindings[sessionId]
       return { sessionBindings }
     })
     return sendJson(res, 200, { ok: true, state: next })
@@ -803,12 +817,10 @@ export async function handleApi(ctx, req, res) {
     // extensions.agentTavern.initialVariables）给新聊天播种初始变量——深拷贝
     // 进 chat.header.chat_metadata.variables（与 0008 模板变量的 local 作用域
     // 同位，改聊天变量不回写卡）；缺省/非非空对象时不写键。
-    const seedVariables = (() => {
-      const holder = found.card.data.extensions.agentTavern
-      if (typeof holder !== 'object' || holder === null || Array.isArray(holder)) return undefined
-      const initial = (holder as Record<string, unknown>).initialVariables
-      if (typeof initial !== 'object' || initial === null || Array.isArray(initial)
-        || Object.keys(initial).length === 0) return undefined
+    const seedVariables: Record<string, unknown> | undefined = (() => {
+      const holder = asRecord(found.card.data.extensions.agentTavern)
+      const initial = asRecord(holder?.['initialVariables'])
+      if (initial === undefined || Object.keys(initial).length === 0) return undefined
       return structuredClone(initial)
     })()
     // JSR MVU 卡（MagVarUpdate / <UpdateVariable> / StatusPlaceHolder）需要
@@ -823,7 +835,7 @@ export async function handleApi(ctx, req, res) {
     // the ST swipe UI afterwards. The chosen index (default 0) becomes the
     // opening message and the initial swipe position.
     const greetingIndex = body.greetingIndex === undefined ? 0 : body.greetingIndex
-    if (!Number.isSafeInteger(greetingIndex) || greetingIndex < 0 || greetingIndex >= greetings.length) {
+    if (typeof greetingIndex !== 'number' || !Number.isSafeInteger(greetingIndex) || greetingIndex < 0 || greetingIndex >= greetings.length) {
       throw new Error(`greetingIndex must be an integer in [0, ${greetings.length - 1}]`)
     }
     const id = await db.createChat(character, {
@@ -832,7 +844,7 @@ export async function handleApi(ctx, req, res) {
     }, [{
       name: found.card.data.nickname || found.card.data.name,
       is_user: false, is_system: false, send_date: now,
-      mes: greetings[greetingIndex],
+      mes: greetings[greetingIndex] ?? '',
       swipe_id: greetingIndex,
       swipes: greetings,
       swipe_info: greetings.map(() => ({ send_date: now })),
@@ -847,9 +859,10 @@ export async function handleApi(ctx, req, res) {
       throw new Error('expected { character, chatId, messageId, revision }')
     }
     if (typeof body.revision !== 'string') throw new Error('revision is required')
+    const branchName = typeof body.name === 'string' ? body.name : undefined
     const originArchitecture = body.originArchitecture === 'agent-tavern' ? 'agent-tavern' : 'st'
     const targetArchitecture = body.targetArchitecture === 'agent-tavern' ? 'agent-tavern' : 'st'
-    const result = await db.branchChat(body.character, body.chatId, body.messageId, body.revision, body.name, {
+    const result = await db.branchChat(body.character, body.chatId, body.messageId, body.revision, branchName, {
       agentTavernOrigin: {
         architecture: originArchitecture,
         targetArchitecture,
@@ -971,14 +984,16 @@ export async function handleApi(ctx, req, res) {
   if (method === 'PUT' && route.startsWith('world/')) {
     const oldName = decodeURIComponent(route.slice('world/'.length))
     const body = await readJson(req, 10 * 1024 * 1024)
-    if (typeof body.name !== 'string' || body.name.trim() === '' || !body.data || typeof body.data !== 'object' || Array.isArray(body.data)) {
+    const data = asRecord(body.data)
+    if (typeof body.name !== 'string' || body.name.trim() === '' || data === undefined) {
       throw new Error('expected { name, data }')
     }
-    const book = await db.importWorldFile(body.name, body.data)
+    const name = body.name
+    const book = await db.importWorldFile(name, data)
     await emitAssetsSaved('world', book.name)
-    if (body.name !== oldName) {
+    if (name !== oldName) {
       await db.deleteWorld(oldName)
-      await db.updateState((current) => ({ activeWorlds: current.activeWorlds.map((name) => name === oldName ? body.name : name) }))
+      await db.updateState((current) => ({ activeWorlds: current.activeWorlds.map((item) => item === oldName ? name : item) }))
     }
     return sendJson(res, 200, { ok: true, name: book.name, book })
   }
@@ -1332,12 +1347,13 @@ export async function handleApi(ctx, req, res) {
     }
     if (method === 'PUT') {
       const body = await readJson(req)
-      if (!body.chat || !Array.isArray(body.chat.messages) || typeof body.revision !== 'string') {
+      const chat = asChatLog(body.chat)
+      if (chat === undefined || typeof body.revision !== 'string') {
         throw new Error('expected { chat, revision }')
       }
-      const revision = await db.saveChat(character, chatId, body.chat, body.revision)
-      await emitChatSaved(character, chatId, revision, body.chat.messages.length)
-      return sendJson(res, 200, { ok: true, chat: body.chat, revision })
+      const revision = await db.saveChat(character, chatId, chat, body.revision)
+      await emitChatSaved(character, chatId, revision, chat.messages.length)
+      return sendJson(res, 200, { ok: true, chat, revision })
     }
     if (method === 'PATCH') {
       const body = await readJson(req)
@@ -1350,7 +1366,7 @@ export async function handleApi(ctx, req, res) {
         sessionBindings: Object.fromEntries(Object.entries(current.sessionBindings).map(([sessionId, binding]) => [
           sessionId,
           binding.character === character && binding.chatId === chatId
-            ? { character, chatId: nextChatId, ...(binding.group ? { group: true } : {}) }
+            ? { ...binding, character, chatId: nextChatId }
             : binding,
         ])),
       }))
@@ -1390,4 +1406,25 @@ export async function handleApi(ctx, req, res) {
   }
 
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
+}
+
+/**
+ * Structural admission for a client-supplied chat log. The store re-validates
+ * the full message shape on write; this guard only ensures the fields routing
+ * touches exist before the log enters the store.
+ */
+function asChatLog(value: unknown): ChatLogIR | undefined {
+  const record = asRecord(value)
+  if (record === undefined) return undefined
+  const header = asRecord(record['header'])
+  if (header === undefined) return undefined
+  if (typeof header['user_name'] !== 'string' || typeof header['character_name'] !== 'string') return undefined
+  if (!Array.isArray(record['messages'])) return undefined
+  return value as ChatLogIR
 }

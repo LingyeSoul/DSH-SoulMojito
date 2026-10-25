@@ -3,6 +3,7 @@ import { ensureChatVariables, seedJsrMvuVariables } from '../agent-tavern/mvu-co
 import { historyImportAppends, isTavernSessionMarker, lastImportedTurn } from '../agent-tavern/projector.js'
 import { emitAgentPresetChanged } from '../agent-tavern/preset.js'
 import { confirmSessionAppend, hostPluginMessageSource, landedPlanAppends, sessionEvents } from '../../../bind/src/index.js'
+import type { HostSessionEvent, HostSessionLog } from '../../../bind/src/index.js'
 import type { SessionImportAppend } from '../agent-tavern/projector.js'
 import { createMessage } from '../message.js'
 import { refreshActivePrompt } from '../model-catalog.js'
@@ -14,8 +15,21 @@ import { lastSelectedPresetId } from './preset-marker.js'
 import { buildAgentTavernPreloadSnapshot } from '../tavern-assets.js'
 import { collectSessionRegexScripts } from '../regex-session.js'
 import { handleNovelOpenCommand, handleWorkbenchOpenCommand } from '../http/novel.js'
+import type { PluginContext } from '../host-contract.js'
 
-export function registerTavernSessionCommand(ctx): void {
+interface SessionCommandAgent {
+  id: string
+  ctx: unknown
+  session: HostSessionLog & { append(type: string, data: unknown, opts?: unknown): unknown }
+  inject?: (message: unknown) => unknown
+}
+
+interface SessionCommandInput {
+  agent: SessionCommandAgent
+  rawInput: string
+}
+
+export function registerTavernSessionCommand(ctx: PluginContext): void {
   ctx.commands.register({
     // Internal bridge for the client binding API. It is intentionally separate
     // from the public slash-command surface.
@@ -23,7 +37,7 @@ export function registerTavernSessionCommand(ctx): void {
     description: 'internal dsh-soulmojito session bridge',
     input: { hint: '<character> <chat-id>' },
     recordInput: false,
-    handler: async ({ agent, rawInput }) => {
+    handler: async ({ agent, rawInput }: SessionCommandInput) => {
       const parsed = parseTavernSessionCommand(rawInput)
       if (!parsed) return { kind: 'error', text: 'Invalid Tavern activation payload.' }
       const db = await store()
@@ -168,6 +182,9 @@ export function registerTavernSessionCommand(ctx): void {
         await emitAgentPresetChanged()
       }
       if (preloadSnapshot !== undefined) {
+        if (agent.inject === undefined) {
+          throw new TavernArchitectureConflictError('This host cannot preload AgentTavern session context.')
+        }
         agent.inject(createMessage({
           role: 'user',
           content: [{ type: 'text', text: preloadSnapshot }],
@@ -250,7 +267,7 @@ export function registerTavernSessionCommand(ctx): void {
         // composer 从此不接管。读回验证 + 一次重写；仍不在场如实抛错——比
         // 「绑定成功但 composer 永不接管」可诊断。
         const markerSummary = `Tavern: ${parsed.character}`
-        const markerPresent = (events: readonly { type?: unknown; data?: any }[]) => events.some((event) => event.type === 'user/message'
+        const markerPresent = (events: readonly HostSessionEvent[]) => events.some((event) => event.type === 'user/message'
           && isTavernSessionMarker(event.data?.source)
           && (event.data?.source as { summary?: unknown } | undefined)?.summary === markerSummary)
         const bindingChanged = previous?.character !== parsed.character || previous.chatId !== parsed.chatId

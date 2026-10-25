@@ -13,11 +13,19 @@ export interface HostSessionLog {
   [key: string]: unknown
 }
 
+export interface HostSessionEventData {
+  source?: unknown
+  message?: { id?: unknown; source?: unknown; content?: unknown }
+  turn?: unknown
+  step?: unknown
+  [key: string]: unknown
+}
+
 export interface HostSessionEvent {
   type?: unknown
   seq?: unknown
   time?: unknown
-  data?: any
+  data?: HostSessionEventData
 }
 
 export function readSessionEvents(session: HostSessionLog | null | undefined): readonly unknown[] | undefined {

@@ -1,15 +1,20 @@
 import { RegexPlacement, parsePreset } from '../../../tavern-format/src/index.js'
+import type { ChatLogIR, ChatMessage, CharacterCardIR, GroupIR, PresetIR, RegexScriptIR } from '../../../tavern-format/src/index.js'
 import { activateWorldInfo } from '../../../tavern-lore/src/index.js'
+import type { TimedEffectsState } from '../../../tavern-lore/src/index.js'
 import { createMacroEngine } from '../../../tavern-macros/src/index.js'
 import { assemblePrompt, buildGroupTurn, pickGroupMember } from '../../../tavern-pipeline/src/index.js'
+import type { AssembleInput, DepthInjection, LlmMessage } from '../../../tavern-pipeline/src/index.js'
 import { applyRegexScript, applyRegexScripts, runScript } from '../../../tavern-script/src/index.js'
 import { ChatRevisionConflictError, boundScriptOf, formatScriptBlock, getScript, normalizeScriptProgress, shouldAdvance } from '../../../tavern-store/src/index.js'
+import type { CharacterFile, ChatSnapshot, Persona, TavernState, TavernStore } from '../../../tavern-store/src/index.js'
 import { defaultPreset } from '../agent-tavern/preset.js'
 import { isGroupChat } from '../assets.js'
 import { tavernDataRoot } from '../dsh-home.js'
-import { generationHooks } from '../generation-hooks.js'
+import { generationHooks, type GenerationLlmRequestPayload } from '../generation-hooks.js'
 import { formatGuidesBlock } from '../guides.js'
-import { readJson, sendJson } from '../http/io.js'
+import { readJson, sendJson, type HttpRequest, type HttpResponse } from '../http/io.js'
+import type { HostAgentLike, PluginContext } from '../host-contract.js'
 import { createMessage } from '../message.js'
 import { beginStreamEpoch, emitChatSaved, emitStreamDelta } from '../mods/events.js'
 import { applyMvuSettlementGuard, recordMvuTurnReceipt, snapshotChatVariables } from '../mvu.js'
@@ -40,7 +45,7 @@ export function abortStGeneration(character: string, chatId: string): boolean {
   return true
 }
 
-export async function generate(ctx, req, res, db) {
+export async function generate(ctx: PluginContext, req: HttpRequest, res: HttpResponse, db: TavernStore): Promise<void> {
   const body = await readJson(req)
   const state = await db.getState()
   assertStGenerationBinding(state, body.sessionId)
@@ -69,7 +74,7 @@ export async function generate(ctx, req, res, db) {
   req.on?.('aborted', () => ac.abort())
   res.on?.('close', () => { if (!res.writableEnded) ac.abort() })
   activeStGeneration.set(stGenerationKey(characterName, chatId), ac)
-  const write = (event) => res.write(JSON.stringify(event) + '\n')
+  const write = (event: Record<string, unknown>): void => { res.write(JSON.stringify(event) + '\n') }
 
   try {
     const result = await runGeneration(ctx, db, {
@@ -88,7 +93,7 @@ export async function generate(ctx, req, res, db) {
       reasoningEffort: typeof body.reasoningEffort === 'string' ? body.reasoningEffort : undefined,
       write,
       signal: ac.signal,
-      hostAgent: typeof body.sessionId === 'string' ? ctx.agents?.get?.(body.sessionId) : undefined,
+      hostAgent: typeof body.sessionId === 'string' ? ctx.agents?.get?.(body.sessionId) ?? undefined : undefined,
     })
     write({ type: 'saved', chat: result.chat, revision: result.revision })
     res.end()
@@ -122,7 +127,7 @@ export async function generate(ctx, req, res, db) {
  * character+chatId 且 architecture 'st'），未命中回落部署默认——与 composer
  * 未选模型时同款。
  */
-export async function previewGeneration(ctx, req, res, db) {
+export async function previewGeneration(ctx: PluginContext, req: HttpRequest, res: HttpResponse, db: TavernStore): Promise<void> {
   const body = await readJson(req)
   const state = await db.getState()
   const characterName = typeof body.character === 'string' ? body.character : state.activeCharacter
@@ -198,7 +203,7 @@ export async function previewGeneration(ctx, req, res, db) {
       if (chunk.type === 'usage') usage = chunk.usage
       else if (chunk.type === 'text-delta') text += chunk.text
       else if (chunk.type === 'finish') {
-        if (chunk.reason.kind === 'error' || chunk.reason.kind === 'aborted') throw new Error(chunk.reason.failure.message)
+        if (chunk.reason.kind === 'error' || chunk.reason.kind === 'aborted') throw new Error(chunk.reason.failure?.message ?? 'model stream failed')
         finish = chunk.reason.kind
       }
     }
@@ -220,10 +225,10 @@ export async function previewGeneration(ctx, req, res, db) {
 }
 
 export interface GenerationOptions {
-  state
+  state: TavernState
   characterName: string
   chatId: string
-  snapshot
+  snapshot: ChatSnapshot
   /** send=追加用户消息；regenerate=弹出旧回复重掷；trigger=按现状生成（STscript /trigger） */
   mode: 'send' | 'regenerate' | 'trigger'
   userText: string
@@ -235,9 +240,9 @@ export interface GenerationOptions {
   provider?: string
   model?: string
   reasoningEffort?: string
-  write: (event: unknown) => void
+  write: (event: Record<string, unknown>) => void
   signal: AbortSignal
-  hostAgent?: unknown
+  hostAgent?: HostAgentLike
 }
 
 /* ------------- 装配共享助手（runGeneration 与 D-4 试写预览 preview 共用） ------------- */
@@ -248,36 +253,43 @@ export interface GenerationOptions {
  * （send 语义：本轮用户消息尚未 push）；调用方随后的 push/pop 自行重建回合视图
  * （rebuildGroupTurn）。
  */
-export async function resolveGenerationSpeaker(db, state, options: {
-  characterName: string
-  chat
-  mode: 'send' | 'regenerate' | 'trigger'
-  group: boolean
-  triggerMember?: string
-}) {
+export async function resolveGenerationSpeaker(
+  db: TavernStore,
+  state: TavernState,
+  options: {
+    characterName: string
+    chat: ChatLogIR
+    mode: 'send' | 'regenerate' | 'trigger'
+    group: boolean
+    triggerMember?: string
+  },
+): Promise<{
+  speakerName: string
+  groupDef: GroupIR | undefined
+  turnMessages: ChatMessage[]
+  nudge: { role: 'user'; content: string } | undefined
+}> {
   const { characterName, chat, mode, group, triggerMember } = options
   if (!group) {
     return { speakerName: characterName, groupDef: undefined, turnMessages: chat.messages, nudge: undefined }
   }
   const groupDef = await db.getGroup(characterName)
   if (!groupDef) throw new Error(`group '${characterName}' not found`)
-  const chatGroupMeta = chat.header.chat_metadata?.group
-  const members = Array.isArray(chatGroupMeta?.members) && chatGroupMeta.members.length > 0
-    ? chatGroupMeta.members.filter((x) => typeof x === 'string')
-    : groupDef.members
-  const disabled = Array.isArray(chatGroupMeta?.disabledMembers)
-    ? chatGroupMeta.disabledMembers.filter((x) => typeof x === 'string')
-    : groupDef.disabledMembers
+  const chatGroup = asRecord(chat.header.chat_metadata?.group)
+  const chatMembers = stringArray(chatGroup?.['members'])
+  const members = chatMembers !== undefined && chatMembers.length > 0 ? chatMembers : groupDef.members
+  const disabled = stringArray(chatGroup?.['disabledMembers']) ?? groupDef.disabledMembers
   const lastSpeaker = [...chat.messages].reverse().find((m) => !m.is_user && !m.is_system)?.name
-  const talkativeness = new Map()
+  const talkativeness = new Map<string, number>()
   for (const member of members) {
     const file = await db.getCharacter(member)
-    const raw = file?.card?.data?.extensions?.talkativeness
+    const extensions = asRecord(file?.card?.data?.extensions)
+    const raw = extensions?.['talkativeness']
     talkativeness.set(member, typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : 0.5)
   }
   const speakerName = triggerMember
     ?? (mode === 'regenerate'
-      ? (members.includes(lastSpeaker) ? lastSpeaker : undefined)
+      ? (lastSpeaker !== undefined && members.includes(lastSpeaker) ? lastSpeaker : undefined)
       : undefined)
     ?? pickGroupMember({
       strategy: groupDef.activationStrategy,
@@ -300,7 +312,12 @@ export async function resolveGenerationSpeaker(db, state, options: {
 }
 
 /** send 落用户消息 / regenerate 弹出旧回复后，重建群聊回合视图（不带 nudge）。 */
-export function rebuildGroupTurn(groupDef, speakerName, userName, messages) {
+export function rebuildGroupTurn(
+  groupDef: GroupIR | undefined,
+  speakerName: string,
+  userName: string,
+  messages: ChatMessage[],
+): ChatMessage[] {
   return buildGroupTurn({
     speaker: speakerName,
     members: groupDef?.members ?? [speakerName],
@@ -310,19 +327,19 @@ export function rebuildGroupTurn(groupDef, speakerName, userName, messages) {
 }
 
 export interface GenerationAssemblyOptions {
-  state
+  state: TavernState
   speakerName: string
-  character
+  character: CharacterFile
   chatId: string
   /** 工作副本（装配会写 timedWorldInfo / scriptProgress / 模板变量；调用方决定是否落盘）。 */
-  chat
-  turnMessages
-  nudge
+  chat: ChatLogIR
+  turnMessages: ChatMessage[]
+  nudge: { role: 'user'; content: string } | undefined
   group: boolean
-  groupDef
+  groupDef?: GroupIR
   /** 相位：lore 激活 trigger 与 hook 上下文的 mode。 */
   phase: 'send' | 'regenerate' | 'trigger'
-  scripts
+  scripts: RegexScriptIR[]
   userName: string
   feedback?: string
   sessionId?: string
@@ -330,9 +347,9 @@ export interface GenerationAssemblyOptions {
   model?: string
   reasoningEffort?: string
   /** pre-assemble 相位 seam：runGeneration 注入 generationHooks.dispatch；试写预览不传（hook 全跳过）。 */
-  onDraft?: (draft) => unknown
+  onDraft?: (draft: AssembleInput) => AssembleInput | Promise<AssembleInput>
   /** pre-llm 相位 seam：同上。 */
-  onLlmRequest?: (request) => unknown
+  onLlmRequest?: (request: GenerationLlmRequestPayload) => GenerationLlmRequestPayload | Promise<GenerationLlmRequestPayload>
 }
 
 /**
@@ -345,7 +362,24 @@ export interface GenerationAssemblyOptions {
  * pre-llm 两相位 hook 经 seam 由调用方决定（runGeneration 注入总线，试写预览
  * 不注入——mod 副作用不可控，v1 如实跳过）。
  */
-export async function buildGenerationLlmRequest(ctx, db, options: GenerationAssemblyOptions) {
+export async function buildGenerationLlmRequest(
+  ctx: PluginContext,
+  db: TavernStore,
+  options: GenerationAssemblyOptions,
+): Promise<{
+  request: GenerationLlmRequestPayload
+  lore: ReturnType<typeof activateWorldInfo>
+  tpl: GenerationTemplates | null
+  macros: ReturnType<typeof createMacroEngine>
+  templateGlobalsBefore: string | undefined
+  start: {
+    provider: string
+    model: string
+    speaker: string
+    lore: Array<{ uid: number; book: string; comment: string | undefined }>
+    stats: { promptTokens: number; historyKept: number; historyDropped: number }
+  }
+}> {
   const { state, speakerName, character, chatId, chat, turnMessages, nudge, groupDef, scripts, userName } = options
 
   // ---- 预设 / persona / 世界书 ----
@@ -370,9 +404,7 @@ export async function buildGenerationLlmRequest(ctx, db, options: GenerationAsse
       creatorNotes: character.card.data.creatorNotes,
     },
     settings: { recursive: true, scanDepth: 2, budgetPercent: 25 },
-    timedState: typeof chat.header.chat_metadata?.timedWorldInfo === 'object' && chat.header.chat_metadata.timedWorldInfo
-      ? chat.header.chat_metadata.timedWorldInfo
-      : undefined,
+    timedState: asTimedEffectsState(chat.header.chat_metadata?.timedWorldInfo),
     messageCount: turnMessages.length,
   })
   chat.header.chat_metadata.timedWorldInfo = lore.timedState
@@ -391,7 +423,7 @@ export async function buildGenerationLlmRequest(ctx, db, options: GenerationAsse
     : null
 
   // WI 内容进 prompt 前过 WORLD_INFO regex；模板开启时特殊条目已剔除、再过 EJS 渲染
-  const wiDeps = { expand: (text) => text }
+  const wiDeps = { expand: (text: string): string => text }
   const loreBeforeBase = (tpl ? tpl.partition.normalBefore : lore.worldInfoBefore.entries)
     .map((e) => applyRegexScripts(e.content, scripts, RegexPlacement.WORLD_INFO, wiDeps))
   const loreAfterBase = (tpl ? tpl.partition.normalAfter : lore.worldInfoAfter.entries)
@@ -426,11 +458,11 @@ export async function buildGenerationLlmRequest(ctx, db, options: GenerationAsse
     local: chatVariables(chat),
     global: state.scriptGlobals,
   })
-  const expand = (text) => macros.expand(text)
-  const countTokens = (text) => Math.ceil(text.length / 3.5)
+  const expand = (text: string): string => macros.expand(text)
+  const countTokens = (text: string): number => Math.ceil(text.length / 3.5)
 
   // persona 位置：IN_PROMPT（默认）/AT_DEPTH/顶部AN/底部AN
-  const personaInjections = []
+  const personaInjections: DepthInjection[] = []
   let personaDescription = persona?.description
   if (persona) {
     const position = typeof persona.position === 'number' ? persona.position : 0
@@ -460,13 +492,15 @@ export async function buildGenerationLlmRequest(ctx, db, options: GenerationAsse
         tpl.renderText(m.mes, `history#${index}`).then((mes) => ({ ...m, mes }))))
     : historyRegexed
 
-  const atDepthSource = tpl ? tpl.partition.normalAtDepth : lore.atDepth.map((g) => ({ depth: g.depth, role: g.role, text: g.text }))
+  const atDepthSource: Array<{ depth: number; role: number; text: string }> = tpl
+    ? tpl.partition.normalAtDepth
+    : lore.atDepth.map((g) => ({ depth: g.depth, role: g.role, text: g.text }))
   const anTopText = tpl && lore.topOfAuthorsNote.text ? await tpl.renderText(lore.topOfAuthorsNote.text, 'an-top') : lore.topOfAuthorsNote.text
   const anBottomText = tpl && lore.bottomOfAuthorsNote.text ? await tpl.renderText(lore.bottomOfAuthorsNote.text, 'an-bottom') : lore.bottomOfAuthorsNote.text
-  const depthInjectionsRaw = [
+  const depthInjectionsRaw: DepthInjection[] = [
     ...atDepthSource.map((g) => ({ depth: g.depth, role: roleName(g.role), text: g.text })),
-    ...(anTopText ? [{ depth: 4, role: 'system', text: anTopText }] : []),
-    ...(anBottomText ? [{ depth: 0, role: 'system', text: anBottomText }] : []),
+    ...(anTopText ? [{ depth: 4, role: 'system' as const, text: anTopText }] : []),
+    ...(anBottomText ? [{ depth: 0, role: 'system' as const, text: anBottomText }] : []),
     ...personaInjections,
   ]
   const depthInjections = tpl
@@ -480,7 +514,7 @@ export async function buildGenerationLlmRequest(ctx, db, options: GenerationAsse
   // {{char}} 已在 buildGroupTurn 按发言者替换，其余宏在此展开（ST substituteParams
   // 语义）。合成楼层不落 chat.messages。本注入点即提案 0015 的 pre-assemble hook
   // 位：mod 在 draft（装配输入）中可见并可改写这条 nudge。
-  const nudgeMessage = nudge !== undefined
+  const nudgeMessage: ChatMessage | undefined = nudge !== undefined
     ? { name: userName, is_user: true, is_system: false, send_date: '', mes: expand(nudge.content) }
     : undefined
 
@@ -488,7 +522,7 @@ export async function buildGenerationLlmRequest(ctx, db, options: GenerationAsse
   // draft 中可见并可改写 nudge 合成楼层（该 hook 的第一个既有受益者）。经 seam
   // 注入（runGeneration 传 generationHooks.dispatch；试写预览不传 = 恒等跳过）。
   // draft 字段与 assemblePrompt 入参同形。
-  const assembleDraft = {
+  const assembleDraft: AssembleInput = {
     card: tpl ? await tpl.preRenderCard(character.card) : character.card,
     preset: tpl ? await tpl.preRenderPreset(preset) : preset,
     personaDescription,
@@ -564,8 +598,12 @@ export async function buildGenerationLlmRequest(ctx, db, options: GenerationAsse
 
   // ---- system 段提取 + 最终请求 ----
   const requestMessages = [...finalMessages]
-  const systemParts = []
-  while (requestMessages[0]?.role === 'system') systemParts.push(requestMessages.shift().content)
+  const systemParts: string[] = []
+  while (true) {
+    const first = requestMessages[0]
+    if (first === undefined || first.role !== 'system') break
+    systemParts.push(requestMessages.shift()!.content)
+  }
   // 持续指引（提案 0009）：会话级用户指令作为 system 段末尾块注入——位于所有
   // 已装配 system 块之后；不进楼层内容，导出纯对话不携带。块自带 user
   // directives 标注，不伪装世界书或角色设定。
@@ -621,7 +659,7 @@ export async function buildGenerationLlmRequest(ctx, db, options: GenerationAsse
  * 生成内核：send/regenerate 共用；群聊与文本补全在此分叉。
  * 结构：CAS 校验已在调用方完成（snapshot 即当前 revision）。
  */
-export async function runGeneration(ctx, db, options: GenerationOptions) {
+export async function runGeneration(ctx: PluginContext, db: TavernStore, options: GenerationOptions) {
   const { state, characterName, chatId, snapshot, mode, group, write, signal } = options
   const chat = snapshot.chat
   // MVU 回执（提案 0012 P1）：深拷贝本轮结算前的变量基线，保存前 diff 出变更集落回执
@@ -703,7 +741,7 @@ export async function runGeneration(ctx, db, options: GenerationOptions) {
   const macros = assembly.macros
   const templateGlobalsBefore = assembly.templateGlobalsBefore
   const hookedLlmRequest = assembly.request
-  const expand = (text) => macros.expand(text)
+  const expand = (text: string): string => macros.expand(text)
   write({ type: 'start', ...assembly.start })
   // pre-llm 后的实参是落盘元数据的唯一权威：mod 改写 provider/model 时，
   // swipe_info[].extra / 消息 extra / 宿主会话轨迹不得与实际请求分叉
@@ -753,7 +791,7 @@ export async function runGeneration(ctx, db, options: GenerationOptions) {
     }
     else if (chunk.type === 'reasoning-delta') { reasoning += chunk.text; write({ type: 'reasoning', text: chunk.text }) }
     else if (chunk.type === 'finish') {
-      if (chunk.reason.kind === 'error' || chunk.reason.kind === 'aborted') throw new Error(chunk.reason.failure.message)
+      if (chunk.reason.kind === 'error' || chunk.reason.kind === 'aborted') throw new Error(chunk.reason.failure?.message ?? 'model stream failed')
       write({ type: 'finish', reason: chunk.reason.kind })
     }
   }
@@ -834,16 +872,19 @@ export async function runGeneration(ctx, db, options: GenerationOptions) {
 
 /* --------------------------- STscript 执行 --------------------------- */
 
-export function chatVariables(chat): Record<string, string | number | boolean> {
-  const vars = chat?.header?.chat_metadata?.variables
+export function chatVariables(chat: ChatLogIR): Record<string, string | number | boolean> {
+  const vars = chat.header.chat_metadata?.variables
   if (vars && typeof vars === 'object' && !Array.isArray(vars)) {
-    return Object.fromEntries(Object.entries(vars).filter(([, value]) =>
-      typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'))
+    const result: Record<string, string | number | boolean> = {}
+    for (const [key, value] of Object.entries(vars as Record<string, unknown>)) {
+      if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') result[key] = value
+    }
+    return result
   }
   return {}
 }
 
-export async function runTavernScript(ctx, req, res, db) {
+export async function runTavernScript(ctx: PluginContext, req: HttpRequest, res: HttpResponse, db: TavernStore): Promise<void> {
   const body = await readJson(req)
   const state = await db.getState()
   assertStGenerationBinding(state, body.sessionId)
@@ -882,7 +923,7 @@ export async function runTavernScript(ctx, req, res, db) {
     await emitChatSaved(characterName, chatId, revision, chat.messages.length)
   }
 
-  const triggerGeneration = async (member) => {
+  const triggerGeneration = async (member: string | undefined): Promise<void> => {
     const fresh = await db.getChatSnapshot(characterName, chatId)
     const result = await runGeneration(ctx, db, {
       state: await db.getState(),
@@ -969,10 +1010,25 @@ export async function runTavernScript(ctx, req, res, db) {
     revision: freshSnapshot?.revision ?? revision,
   })
 }
-function roleName(role) {
+function roleName(role: unknown): DepthInjection['role'] {
   return role === 1 ? 'user' : role === 2 ? 'assistant' : 'system'
 }
 
-function numberOr(value, fallback) {
+function numberOr(value: unknown, fallback: number | undefined): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
+}
+
+function stringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  return value.filter((item): item is string => typeof item === 'string')
+}
+
+function asTimedEffectsState(value: unknown): TimedEffectsState | undefined {
+  return asRecord(value) === undefined ? undefined : value as TimedEffectsState
 }
