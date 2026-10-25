@@ -8,7 +8,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { HELPER_TOKEN_HEADER, resetHelperBindingsForTests } from '../src/helper-bindings.js'
+import { HELPER_TOKEN_HEADER, createHelperBinding, expireHelperBindingsForTests, resetHelperBindingsForTests } from '../src/helper-bindings.js'
 import { apply } from '../src/index.js'
 import { setTemplatesEnabledFlag } from '../src/runtime.js'
 import { TavernStore } from '../../tavern-store/src/index.js'
@@ -64,8 +64,34 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
     return { status: res.statusCode, body: res.chunks.length > 0 ? JSON.parse(res.chunks.join('')) as Record<string, unknown> : null }
   }
 
-  function call(body: unknown, headers?: Record<string, string>) {
-    return post('helper', body, headers)
+  const tokens = new Map<string, string>()
+
+  async function issueToken(forCharacter: string, forChatId: string): Promise<string> {
+    const bind = await post('helper/bind', { character: forCharacter, chatId: forChatId })
+    const issued = bind.body?.token
+    if (bind.status !== 200 || typeof issued !== 'string' || issued === '') {
+      throw new Error(`helper/bind failed for '${forCharacter}/${forChatId}': ${JSON.stringify(bind.body)}`)
+    }
+    tokens.set(`${forCharacter}\u0000${forChatId}`, issued)
+    return issued
+  }
+
+  async function tokenFor(forCharacter: string, forChatId: string): Promise<string> {
+    const cached = tokens.get(`${forCharacter}\u0000${forChatId}`)
+    return cached === undefined ? issueToken(forCharacter, forChatId) : cached
+  }
+
+  function callWithToken(body: unknown, token: string) {
+    return post('helper', body, { [HELPER_TOKEN_HEADER]: token })
+  }
+
+  async function call(body: unknown, headers?: Record<string, string>) {
+    if (headers?.[HELPER_TOKEN_HEADER] !== undefined) return post('helper', body, headers)
+    return callWithToken(body, await tokenFor(CHARACTER, chatId))
+  }
+
+  async function callFor(forChatId: string, body: unknown) {
+    return callWithToken(body, await tokenFor(CHARACTER, forChatId))
   }
 
   beforeAll(async () => {
@@ -102,6 +128,8 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
     // apply() derives the flag from profile config; another change makes the
     // default off, so re-enable after wiring for the template surface test.
     setTemplatesEnabledFlag(true)
+    // Bind once for the default chat; per-chat tokens are issued on demand.
+    await issueToken(CHARACTER, chatId)
   })
 
   afterAll(() => {
@@ -163,6 +191,19 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
       { [HELPER_TOKEN_HEADER]: token },
     )
     expect(afterUnbind.status).toBe(401)
+  })
+
+  it('rejects helper/bind for a chat that does not belong to the character', async () => {
+    const emptyChat = await post('helper/bind', { character: CHARACTER, chatId: ' ' })
+    expect(emptyChat.status).toBe(400)
+
+    const missingChat = await post('helper/bind', { character: CHARACTER, chatId: 'missing-chat' })
+    expect(missingChat.status).toBe(404)
+    expect(String(missingChat.body?.message)).toContain("chat 'missing-chat' not found")
+
+    const foreignOwner = await post('helper/bind', { character: 'Other Character', chatId })
+    expect(foreignOwner.status).toBe(404)
+    expect(String(foreignOwner.body?.message)).toContain(`chat '${chatId}' not found for character 'Other Character'`)
   })
 
   it('writes global and chat variables, and mirrors the chat scope for AgentTavern', async () => {
@@ -288,7 +329,7 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
       swipes: ['first greeting', 'second greeting'],
       swipe_id: 0,
     }])
-    const result = await call({
+    const result = await callFor(swipeChatId, {
       op: 'messages.set',
       character: CHARACTER,
       chatId: swipeChatId,
@@ -315,7 +356,7 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
     // with the host loop: the helper keeps the floor and reports the request,
     // the client bridge hands that floor to the composer.
     const triggerChatId = await store.createChat(CHARACTER, HEADER)
-    const result = await call({
+    const result = await callFor(triggerChatId, {
       op: 'slash',
       character: CHARACTER,
       chatId: triggerChatId,
@@ -323,20 +364,20 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
     })
     expect(result.status).toBe(200)
     expect(result.body?.value).toMatchObject({ triggerRequested: true, sentText: '开局的地板' })
-    const snapshot = await call({ op: 'snapshot', character: CHARACTER, chatId: triggerChatId })
+    const snapshot = await callFor(triggerChatId, { op: 'snapshot', character: CHARACTER, chatId: triggerChatId })
     const messages = (snapshot.body?.value as Record<string, unknown>).messages as Array<Record<string, unknown>>
     expect(messages[messages.length - 1]).toMatchObject({ role: 'user', message: '开局的地板' })
 
-    const plain = await call({ op: 'slash', character: CHARACTER, chatId: triggerChatId, command: '/send 普通一句' })
+    const plain = await callFor(triggerChatId, { op: 'slash', character: CHARACTER, chatId: triggerChatId, command: '/send 普通一句' })
     expect(plain.body?.value).toMatchObject({ triggerRequested: false, sentText: null })
   })
 
   it('inserts a system floor through /sys', async () => {
     const sysChatId = await store.createChat(CHARACTER, HEADER)
-    const result = await call({ op: 'slash', character: CHARACTER, chatId: sysChatId, command: '/sys 状态已同步' })
+    const result = await callFor(sysChatId, { op: 'slash', character: CHARACTER, chatId: sysChatId, command: '/sys 状态已同步' })
     expect(result.status).toBe(200)
     expect(result.body?.value).toMatchObject({ output: '', chatChanged: true })
-    const snapshot = await call({ op: 'snapshot', character: CHARACTER, chatId: sysChatId })
+    const snapshot = await callFor(sysChatId, { op: 'snapshot', character: CHARACTER, chatId: sysChatId })
     const messages = (snapshot.body?.value as Record<string, unknown>).messages as Array<Record<string, unknown>>
     expect(messages[messages.length - 1]).toMatchObject({
       role: 'system',
@@ -374,8 +415,11 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
     const bad = await call({ op: 'storage.set', character: CHARACTER, chatId, storage: { x: 1 } })
     expect(bad.status).toBe(500)
     expect(String(bad.body?.message)).toContain('must be a string')
-    const unscoped = await call({ op: 'storage.set', character: CHARACTER, chatId: '', storage })
-    expect(unscoped.status).toBe(500)
+    // Payload identity is never authoritative: a blank/foreign payload scope
+    // still reads the token's chat/character binding.
+    const tokenBound = await call({ op: 'storage.get', character: 'Spoofed Card', chatId: '' })
+    expect(tokenBound.status).toBe(200)
+    expect(tokenBound.body?.value).toMatchObject({ storage })
   })
 
   it('opens, creates and deletes virtual IndexedDB through helper control ops', async () => {
@@ -416,7 +460,7 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
     expect((copy.body?.value as { entries: Array<Record<string, unknown>> }).entries[0]?.content).toBe('script lore')
     // 其它聊天仍读基础资产
     const otherChatId = await store.createChat(CHARACTER, HEADER)
-    const other = await call({ op: 'lorebook.get', character: CHARACTER, chatId: otherChatId, name: 'Helper Lore' })
+    const other = await callFor(otherChatId, { op: 'lorebook.get', character: CHARACTER, chatId: otherChatId, name: 'Helper Lore' })
     expect((other.body?.value as { entries: Array<Record<string, unknown>> }).entries[0]?.content).toBe('base lore')
   })
 
@@ -484,10 +528,9 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
     expect(storedCopy?.entries[0]).not.toHaveProperty('strategy')
   })
 
-  it('lorebook.put 拒绝缺少会话作用域或形状非法的 entries', async () => {
-    const noChat = await call({ op: 'lorebook.put', character: CHARACTER, chatId: '', name: 'Helper Lore', entries: [] })
-    expect(noChat.status).toBe(500)
-    expect(String(noChat.body?.message)).toContain('chatId is required for lorebook.put')
+  it('lorebook.put 拒绝形状非法的 entries 并忽略 payload 身份', async () => {
+    const payloadScope = await call({ op: 'lorebook.get', character: 'Spoofed Card', chatId: '', name: 'Helper Lore' })
+    expect(payloadScope.status).toBe(200)
 
     const notArray = await call({ op: 'lorebook.put', character: CHARACTER, chatId, name: 'Helper Lore', entries: 'nope' })
     expect(String(notArray.body?.message)).toContain('entries must be an array')
@@ -518,7 +561,7 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
     expect((snapshot.body?.value as Record<string, unknown>).scriptTrees).toEqual(trees)
     // 其他聊天没有副本
     const otherChatId = await store.createChat(CHARACTER, HEADER)
-    const other = await call({ op: 'scripts.get', character: CHARACTER, chatId: otherChatId })
+    const other = await callFor(otherChatId, { op: 'scripts.get', character: CHARACTER, chatId: otherChatId })
     expect(other.body?.value).toEqual({ type: 'character', preset: null, scriptTrees: null })
 
     const reset = await call({ op: 'scripts.reset', character: CHARACTER, chatId })
@@ -527,15 +570,10 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
     expect(afterReset.body?.value).toEqual({ type: 'character', preset: null, scriptTrees: null })
   })
 
-  it('scripts.get/put/reset 拒绝缺少 chatId 或形状非法的脚本树', async () => {
-    const noGet = await call({ op: 'scripts.get', character: CHARACTER, chatId: '' })
-    expect(String(noGet.body?.message)).toContain('chatId is required for scripts.get')
-
-    const noPut = await call({ op: 'scripts.put', character: CHARACTER, chatId: '', scriptTrees: [] })
-    expect(String(noPut.body?.message)).toContain('chatId is required for scripts.put')
-
-    const noReset = await call({ op: 'scripts.reset', character: CHARACTER, chatId: '' })
-    expect(String(noReset.body?.message)).toContain('chatId is required for scripts.reset')
+  it('scripts.put 拒绝形状非法的脚本树并忽略 payload 身份', async () => {
+    const payloadScope = await call({ op: 'scripts.get', character: 'Spoofed Card', chatId: '' })
+    expect(payloadScope.status).toBe(200)
+    expect(payloadScope.body?.value).toMatchObject({ type: 'character' })
 
     const notArray = await call({ op: 'scripts.put', character: CHARACTER, chatId, scriptTrees: {} })
     expect(String(notArray.body?.message)).toContain('scriptTrees must be an array')
@@ -622,9 +660,9 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
     expect((formattedAfterReset.body?.value as Record<string, unknown>).text).toBe('BASE')
   })
 
-  it('regex.put-session/reset-session 拒绝缺少会话作用域或非法负载', async () => {
-    const noChat = await call({ op: 'regex.put-session', character: CHARACTER, chatId: '', type: 'global', scripts: [] })
-    expect(String(noChat.body?.message)).toContain('chatId is required for regex.put-session')
+  it('regex.put-session 拒绝非法负载并忽略 payload 身份', async () => {
+    const payloadScope = await call({ op: 'regex.get', character: 'Spoofed Card', chatId: '' })
+    expect(payloadScope.status).toBe(200)
 
     const badType = await call({ op: 'regex.put-session', character: CHARACTER, chatId, type: 'bogus', scripts: [] })
     expect(String(badType.body?.message)).toContain("unsupported regex type 'bogus'")
@@ -637,9 +675,6 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
       scripts: [{ script_name: 'Broken', find_regex: '', replace_string: 'x' }],
     })
     expect(String(badEntry.body?.message)).toContain('scripts[0] has an empty find_regex')
-
-    const noResetChat = await call({ op: 'regex.reset-session', character: CHARACTER, chatId: '' })
-    expect(String(noResetChat.body?.message)).toContain('chatId is required for regex.reset-session')
   })
 
   it('keeps script trees per source and patches script info/buttons in the session copy', async () => {
@@ -671,7 +706,7 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
 
   it('creates and deletes session-scoped world books without touching shared assets', async () => {
     const sessionChatId = await store.createChat(CHARACTER, HEADER)
-    const created = await call({
+    const created = await callFor(sessionChatId, {
       op: 'lorebook.create',
       character: CHARACTER,
       chatId: sessionChatId,
@@ -680,21 +715,21 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
     })
     expect(created.status).toBe(200)
     expect(created.body?.value).toMatchObject({ name: 'Session Book' })
-    const read = await call({ op: 'lorebook.get', character: CHARACTER, chatId: sessionChatId, name: 'Session Book' })
+    const read = await callFor(sessionChatId, { op: 'lorebook.get', character: CHARACTER, chatId: sessionChatId, name: 'Session Book' })
     expect((read.body?.value as Record<string, unknown>).entries).toHaveLength(1)
-    const names = await call({ op: 'lorebook.list', character: CHARACTER, chatId: sessionChatId })
+    const names = await callFor(sessionChatId, { op: 'lorebook.list', character: CHARACTER, chatId: sessionChatId })
     expect((names.body?.value as Record<string, unknown>).names).toContain('Session Book')
     // A shared asset name cannot be re-created by a frontend.
-    const duplicate = await call({ op: 'lorebook.create', character: CHARACTER, chatId: sessionChatId, name: 'Helper Lore', entries: [] })
+    const duplicate = await callFor(sessionChatId, { op: 'lorebook.create', character: CHARACTER, chatId: sessionChatId, name: 'Helper Lore', entries: [] })
     expect(String(duplicate.body?.message)).toContain('shared asset')
 
-    const deleted = await call({ op: 'lorebook.delete', character: CHARACTER, chatId: sessionChatId, name: 'Session Book' })
+    const deleted = await callFor(sessionChatId, { op: 'lorebook.delete', character: CHARACTER, chatId: sessionChatId, name: 'Session Book' })
     expect(deleted.body?.value).toEqual({ name: 'Session Book', deleted: true })
-    const gone = await call({ op: 'lorebook.get', character: CHARACTER, chatId: sessionChatId, name: 'Session Book' })
+    const gone = await callFor(sessionChatId, { op: 'lorebook.get', character: CHARACTER, chatId: sessionChatId, name: 'Session Book' })
     expect(gone.status).toBe(500)
     // The base asset is still readable in a chat without an overlay.
     const otherChatId = await store.createChat(CHARACTER, HEADER)
-    const base = await call({ op: 'lorebook.get', character: CHARACTER, chatId: otherChatId, name: 'Helper Lore' })
+    const base = await callFor(otherChatId, { op: 'lorebook.get', character: CHARACTER, chatId: otherChatId, name: 'Helper Lore' })
     expect((base.body?.value as Record<string, unknown>).entries).toHaveLength(1)
   })
 
@@ -738,23 +773,23 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
       { name: CHARACTER, is_user: false, is_system: false, send_date: '', mes: 'c' },
       { name: CHARACTER, is_user: false, is_system: false, send_date: '', mes: 'd' },
     ])
-    const rotated = await call({ op: 'messages.rotate', character: CHARACTER, chatId: rotateChatId, begin: 0, middle: 2, end: 4 })
+    const rotated = await callFor(rotateChatId, { op: 'messages.rotate', character: CHARACTER, chatId: rotateChatId, begin: 0, middle: 2, end: 4 })
     expect(rotated.status).toBe(200)
-    const read = await call({ op: 'messages.get', character: CHARACTER, chatId: rotateChatId, range: '0-3' })
+    const read = await callFor(rotateChatId, { op: 'messages.get', character: CHARACTER, chatId: rotateChatId, range: '0-3' })
     const messages = read.body?.value as Array<Record<string, unknown>>
     expect(messages.map((message) => message.message)).toEqual(['c', 'd', 'a', 'b'])
   })
 
   it('renders card-authored EJS with the chat variable scope', async () => {
     const evalChatId = await store.createChat(CHARACTER, HEADER)
-    await call({
+    await callFor(evalChatId, {
       op: 'variables.replace',
       character: CHARACTER,
       chatId: evalChatId,
       scope: 'chat',
       variables: { affection: 7 },
     })
-    const rendered = await call({
+    const rendered = await callFor(evalChatId, {
       op: 'template.render',
       character: CHARACTER,
       chatId: evalChatId,
@@ -779,6 +814,26 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
       expect(String(rendered.body?.message)).toContain('template rendering is disabled')
     } finally {
       setTemplatesEnabledFlag(true)
+    }
+  })
+
+  it('rejects session-scoped ops for a malformed token with no chatId', async () => {
+    // `helper/bind` refuses an empty chatId, so this can only come from a future
+    // issuer bug. Keep the defense-in-depth checks covered anyway.
+    const malformed = createHelperBinding(CHARACTER, '')
+    const cases: Array<{ body: Record<string, unknown>; message: string }> = [
+      { body: { op: 'scripts.get' }, message: 'chatId is required for scripts.get' },
+      { body: { op: 'scripts.put', scriptTrees: [] }, message: 'chatId is required for scripts.put' },
+      { body: { op: 'scripts.reset' }, message: 'chatId is required for scripts.reset' },
+      { body: { op: 'lorebook.put', name: 'Helper Lore', entries: [] }, message: 'chatId is required for lorebook.put' },
+      { body: { op: 'regex.put-session', type: 'global', scripts: [] }, message: 'chatId is required for regex.put-session' },
+      { body: { op: 'regex.reset-session' }, message: 'chatId is required for regex.reset-session' },
+      { body: { op: 'storage.set', storage: {} }, message: 'chatId is required for storage.set' },
+    ]
+    for (const entry of cases) {
+      const result = await callWithToken({ ...entry.body, character: CHARACTER, chatId }, malformed)
+      expect(result.status).toBe(500)
+      expect(String(result.body?.message)).toContain(entry.message)
     }
   })
 
@@ -812,6 +867,7 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
 
   it('lets a loopback same-origin JSON helper call through the guard', async () => {
     const res = makeResponse()
+    const token = await tokenFor(CHARACTER, chatId)
     await apiHandler(makeRequest(
       { op: 'snapshot', character: CHARACTER, chatId },
       '/api/dsh-soulmojito/helper',
@@ -820,8 +876,31 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
         host: '127.0.0.1:3456',
         origin: 'http://127.0.0.1:3456',
         'content-type': 'application/json',
+        [HELPER_TOKEN_HEADER]: token,
       },
     ), res)
     expect(res.statusCode).toBe(200)
+  })
+
+  it('requires a helper token and rebinds after the token expired', async () => {
+    const missing = await post('helper', { op: 'snapshot', character: CHARACTER, chatId })
+    expect(missing.status).toBe(401)
+    expect(String(missing.body?.message)).toContain('helper binding required')
+
+    const invalid = await callWithToken({ op: 'snapshot', character: CHARACTER, chatId }, 'not-issued')
+    expect(invalid.status).toBe(401)
+    expect(String(invalid.body?.message)).toContain('invalid or expired helper binding token')
+
+    const first = await issueToken(CHARACTER, chatId)
+    expect((await callWithToken({ op: 'snapshot', character: CHARACTER, chatId }, first)).status).toBe(200)
+
+    expireHelperBindingsForTests()
+    const expired = await callWithToken({ op: 'snapshot', character: CHARACTER, chatId }, first)
+    expect(expired.status).toBe(401)
+
+    const rebound = await issueToken(CHARACTER, chatId)
+    expect(rebound).not.toBe(first)
+    const retried = await callWithToken({ op: 'snapshot', character: CHARACTER, chatId }, rebound)
+    expect(retried.status).toBe(200)
   })
 })

@@ -16,13 +16,13 @@
  *
  * 方案按 kind 判别联合：卡方案（kind: 'card'，按卡字段建模）与世界书方案
  * （kind: 'world'，按条目动作建模）。存量卡方案文件没有 kind 字段，读取边界
- * 归一化为 'card'。写纪律对齐 tavern-store/originals.ts：tmp+rename 原子，
- * tmp 名带 pid+随机后缀防并发踩踏；一个方案一个文件使决定/应用状态推进
- * 天然无读-改-写竞争。
+ * 归一化为 'card'。写纪律走 tavern-store/fs-atomic.ts（唯一 tmp 名 + Windows
+ * rename 重试）；一个方案一个文件使决定/应用状态推进天然无读-改-写竞争。
  */
 
 import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
+import { writeAtomicText } from '../../../tavern-store/src/fs-atomic.js'
 
 export type CardPlanStatus = 'pending' | 'approved' | 'rejected' | 'applied'
 
@@ -104,13 +104,6 @@ export function plansDir(dir: string): string {
 
 function planFile(dir: string, planId: string): string {
   return path.join(plansDir(dir), `${planId}.json`)
-}
-
-/** tmp+rename 原子写；tmp 名带 pid+随机后缀，并发写互不踩踏（对齐 originals.ts）。 */
-async function writeAtomicText(file: string, text: string): Promise<void> {
-  const tmp = `${file}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 10)}`
-  await fs.writeFile(tmp, text, 'utf8')
-  await fs.rename(tmp, file)
 }
 
 function newPlanId(): string {

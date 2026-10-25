@@ -646,15 +646,25 @@ import * as path from "node:path";
 // packages/tavern-store/src/fs-atomic.ts
 import { promises as fs } from "node:fs";
 var tmpCounter = 0;
+var RENAME_ATTEMPTS = 5;
+async function moveAtomic(from, to) {
+  await renameWithWindowsRetry(from, to, RENAME_ATTEMPTS);
+}
 async function writeAtomicBytes(file, bytes) {
   const tmp = `${file}.${process.pid}.${Date.now()}.${tmpCounter++}.tmp`;
-  await fs.writeFile(tmp, bytes);
-  await renameWithWindowsRetry(tmp, file);
+  try {
+    await fs.writeFile(tmp, bytes);
+    await moveAtomic(tmp, file);
+  } catch (cause) {
+    await fs.rm(tmp, { force: true }).catch(() => {
+    });
+    throw cause;
+  }
 }
 async function writeAtomicText(file, text) {
   await writeAtomicBytes(file, new Uint8Array(Buffer.from(text, "utf8")));
 }
-async function renameWithWindowsRetry(from, to, attempts = 5) {
+async function renameWithWindowsRetry(from, to, attempts) {
   for (let attempt = 1; ; attempt += 1) {
     try {
       await fs.rename(from, to);
@@ -6091,38 +6101,36 @@ async function writeImmutableBytes(file, bytes) {
     if (cause.code !== "ENOENT") throw cause;
   }
   const tmp = `${file}.${process.pid}.${Date.now()}.${randomBytes2(2).toString("hex")}.tmp`;
-  const fh = await fs8.open(tmp, "w");
   try {
-    await fh.writeFile(bytes);
-    await fh.sync();
-  } finally {
-    await fh.close();
+    await writeSyncedTmp(tmp, bytes);
+    await moveAtomic(tmp, file);
+  } catch (cause) {
+    await discardTmp(tmp);
+    throw cause;
   }
-  await fs8.rename(tmp, file);
 }
 async function replaceHead(head, bytes) {
   const tmp = `${head}.${process.pid}.${Date.now()}.${randomBytes2(2).toString("hex")}.tmp`;
-  const fh = await fs8.open(tmp, "w");
+  try {
+    await writeSyncedTmp(tmp, bytes);
+    await moveAtomic(tmp, head);
+  } catch (cause) {
+    await discardTmp(tmp);
+    throw cause;
+  }
+}
+async function writeSyncedTmp(file, bytes) {
+  const fh = await fs8.open(file, "w");
   try {
     await fh.writeFile(bytes);
     await fh.sync();
   } finally {
     await fh.close();
   }
-  try {
-    await fs8.rename(tmp, head);
-  } catch (cause) {
-    const code = cause.code;
-    if (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY") {
-      try {
-        await fs8.rm(tmp, { force: true });
-      } catch {
-      }
-      throw cause;
-    }
-    await new Promise((resolve6) => setTimeout(resolve6, 25));
-    await fs8.rename(tmp, head);
-  }
+}
+async function discardTmp(file) {
+  await fs8.rm(file, { force: true }).catch(() => {
+  });
 }
 async function readDirectories2(root) {
   try {
@@ -8233,7 +8241,7 @@ async function moveOriginalSnapshot(root, fromName, toName) {
   } catch (cause) {
     if (cause.code !== "ENOENT") throw cause;
   }
-  await fs10.rename(from, to);
+  await moveAtomic(from, to);
   return true;
 }
 async function restoreOriginal(root, characterName) {
@@ -9545,6 +9553,9 @@ async function runScript(script, env) {
 
 // packages/tavern-template/src/paths.ts
 function parsePath(path12) {
+  if (typeof path12 !== "string") {
+    throw new TypeError(`template variable path must be a string, got ${typeof path12}`);
+  }
   if (path12 === "") return [];
   const segments = [];
   let buf = "";
@@ -9571,6 +9582,9 @@ function parsePath(path12) {
     }
   }
   if (buf !== "") segments.push(buf);
+  if (segments.includes("__proto__")) {
+    throw new TypeError("template variable path cannot address __proto__");
+  }
   return segments;
 }
 function isObjectLike(value) {
@@ -9580,7 +9594,15 @@ function deepClone(value) {
   if (Array.isArray(value)) return value.map((item) => deepClone(item));
   if (isObjectLike(value)) {
     const out = {};
-    for (const [key, item] of Object.entries(value)) out[key] = deepClone(item);
+    for (const [key, item] of Object.entries(value)) {
+      if (key === "__proto__") continue;
+      Object.defineProperty(out, key, {
+        value: deepClone(item),
+        writable: true,
+        enumerable: true,
+        configurable: true
+      });
+    }
     return out;
   }
   return value;
@@ -9657,6 +9679,7 @@ function unsetPath(root, path12, index) {
   if (isObjectLike(cur) || Array.isArray(cur)) delete cur[last];
 }
 function insertAtPath(root, path12, value, index) {
+  if (index === "__proto__") throw new TypeError("insert path cannot use __proto__ as an index");
   const target = getPath(root, path12);
   if (Array.isArray(target)) {
     const idx = index === void 0 ? target.length : Number(index);
@@ -9672,6 +9695,7 @@ function insertAtPath(root, path12, value, index) {
 }
 function deepMerge(target, source) {
   for (const [key, value] of Object.entries(source)) {
+    if (key === "__proto__") continue;
     if (value === void 0) continue;
     const dst = target[key];
     if (isObjectLike(dst) && isObjectLike(value)) {
@@ -9725,12 +9749,18 @@ function createTemplateEnv(options) {
       title = lorebookOrTitle;
       data = titleOrData;
     } else if (titleOrData !== void 0) {
-      book = String(lorebookOrTitle);
+      book = requireString(lorebookOrTitle, "getwi: lorebook");
       title = titleOrData;
       if (maybeData !== null && typeof maybeData === "object") data = maybeData;
+      else if (maybeData !== void 0) throw new TypeError("getwi: data must be an object");
     } else {
       title = lorebookOrTitle;
     }
+    if (title !== void 0 && typeof title !== "string" && typeof title !== "number") {
+      throw new TypeError("getwi: title must be a string or number");
+    }
+    if (book !== void 0) requireString(book, "getwi: lorebook");
+    if (data === null || typeof data !== "object") throw new TypeError("getwi: data must be an object");
     if (title === void 0 || title === "") return "";
     if (depth.current >= MAX_GETWI_DEPTH) {
       host.onWarning?.(`getwi recursion depth exceeded (${MAX_GETWI_DEPTH}) at "${String(title)}"`);
@@ -9754,6 +9784,11 @@ function createTemplateEnv(options) {
     }
   }
   async function getchar(nameOrTemplate, templateArg, dataArg) {
+    if (nameOrTemplate !== void 0 && typeof nameOrTemplate !== "string" && typeof nameOrTemplate !== "number") {
+      throw new TypeError("getchar: name must be a string or number");
+    }
+    if (templateArg !== void 0 && typeof templateArg !== "string") requireObject(templateArg, "getchar: data");
+    if (dataArg !== void 0) requireObject(dataArg, "getchar: data");
     let name2;
     let template = DEFAULT_CHAR_DEFINE;
     let data = {};
@@ -9783,6 +9818,8 @@ function createTemplateEnv(options) {
     return await host.renderNested(template, fields);
   }
   async function getpreset(name2, data = {}) {
+    requireString(name2, "getpreset: name");
+    requireObject(data, "getpreset: data");
     const prompt = host.findPresetPrompt(name2);
     if (!prompt) return "";
     return await host.renderNested(prompt.content, { preset_prompt_name: prompt.name, ...data });
@@ -9792,6 +9829,8 @@ function createTemplateEnv(options) {
     return idx < 0 ? messages.length + idx : idx;
   }
   function getChatMessage(idx, role) {
+    requireFiniteNumber(idx, "getChatMessage: index");
+    if (role !== void 0 && !isRole(role)) throw new TypeError("getChatMessage: role must be user, assistant or system");
     const resolved = resolveMessageIdx(idx);
     const msg = host.messages[resolved];
     if (!msg) return "";
@@ -9799,10 +9838,15 @@ function createTemplateEnv(options) {
     return msg.mes;
   }
   function getChatMessages(a, b, c) {
+    requireFiniteNumber(a, "getChatMessages: start");
+    if (b !== void 0 && typeof b !== "number" && !isRole(b)) {
+      throw new TypeError("getChatMessages: second argument must be an index or role");
+    }
+    if (c !== void 0 && !isRole(c)) throw new TypeError("getChatMessages: role must be user, assistant or system");
     let start;
     let end;
     let role;
-    if (b === void 0 || b === "user" || b === "assistant" || b === "system") {
+    if (b === void 0 || isRole(b)) {
       start = -a;
       role = b;
     } else {
@@ -9822,6 +9866,21 @@ function createTemplateEnv(options) {
     return out;
   }
   function matchChatMessages(pattern, options2 = {}) {
+    const isPattern = (value) => typeof value === "string" || isRegExp(value);
+    if (!isPattern(pattern)) {
+      if (!Array.isArray(pattern) || !pattern.every(isPattern)) {
+        throw new TypeError("matchChatMessages: pattern must be a string, RegExp or an array of them");
+      }
+    }
+    if (options2 === null || typeof options2 !== "object") throw new TypeError("matchChatMessages: options must be an object");
+    if (options2.start !== void 0) requireFiniteNumber(options2.start, "matchChatMessages: start");
+    if (options2.end !== void 0 && options2.end !== null) requireFiniteNumber(options2.end, "matchChatMessages: end");
+    if (options2.role !== void 0 && !isRole(options2.role)) {
+      throw new TypeError("matchChatMessages: role must be user, assistant or system");
+    }
+    if (options2.and !== void 0 && typeof options2.and !== "boolean") {
+      throw new TypeError("matchChatMessages: and must be a boolean");
+    }
     const from = resolveMessageIdx(options2.start ?? -2);
     const to = options2.end === null || options2.end === void 0 ? host.messages.length - 1 : resolveMessageIdx(options2.end);
     const role = options2.role;
@@ -9866,11 +9925,16 @@ function createTemplateEnv(options) {
     delMessageVar: message.del,
     insertMessageVar: message.ins,
     patchVariables: (key, change, options2) => {
+      if (key !== null && typeof key !== "string") throw new TypeError("patchVariables: key must be a string or null");
+      requireArray(change, "patchVariables: change");
       const current = vars.getVar(key, { scope: "local" }) ?? {};
       const patched = applyJsonPatch(isObjectLike(current) ? deepClone(current) : {}, change);
       return vars.setVar(key, patched, options2);
     },
     define: (name2, value, merge = false) => {
+      requireString(name2, "define: name");
+      if (name2 === "__proto__") throw new TypeError("define: name cannot be __proto__");
+      if (typeof merge !== "boolean") throw new TypeError("define: merge must be a boolean");
       const registry = defines;
       if (merge && isObjectLike(registry[name2]) && isObjectLike(value)) {
         deepMerge(registry[name2], value);
@@ -9890,16 +9954,27 @@ function createTemplateEnv(options) {
     getpreset,
     getPresetPrompt: getpreset,
     getCharData: (name2) => {
+      if (name2 !== void 0 && typeof name2 !== "string" && typeof name2 !== "number") {
+        throw new TypeError("getCharData: name must be a string or number");
+      }
       const card = host.getCard(name2);
       return card ? deepClone(card.data) : null;
     },
     getChatMessage,
     getChatMessages,
     matchChatMessages,
-    evalTemplate: async (content, data = {}) => host.renderNested(content, data),
+    evalTemplate: async (content, data = {}) => {
+      requireString(content, "evalTemplate: content");
+      requireObject(data, "evalTemplate: data");
+      return host.renderNested(content, data);
+    },
     /* ---- JSON 工具 ---- */
     parseJSON,
-    jsonPatch: (dest, change) => applyJsonPatch(deepClone(dest), change),
+    jsonPatch: (dest, change) => {
+      requireObject(dest, "jsonPatch: destination");
+      requireArray(change, "jsonPatch: change");
+      return applyJsonPatch(deepClone(dest), change);
+    },
     /* ---- 常量 ---- */
     runType: host.runType,
     userName: host.userName,
@@ -9938,7 +10013,30 @@ function optAsRecord(input) {
 function errorMessage(err2) {
   return err2 instanceof Error ? err2.message : String(err2);
 }
+function requireString(value, label) {
+  if (typeof value !== "string") throw new TypeError(`${label} must be a string`);
+  return value;
+}
+function requireFiniteNumber(value, label) {
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new TypeError(`${label} must be a finite number`);
+  return value;
+}
+function requireObject(value, label) {
+  if (value === null || typeof value !== "object") throw new TypeError(`${label} must be an object`);
+  return value;
+}
+function requireArray(value, label) {
+  if (!Array.isArray(value)) throw new TypeError(`${label} must be an array`);
+  return value;
+}
+function isRegExp(value) {
+  return value instanceof RegExp;
+}
+function isRole(value) {
+  return value === "user" || value === "assistant" || value === "system";
+}
 function parseJSON(text) {
+  if (typeof text !== "string") throw new TypeError("parseJSON: text must be a string");
   try {
     return JSON.parse(text);
   } catch {
@@ -9963,10 +10061,53 @@ function parseJSON(text) {
     throw new Error("parseJSON: not valid JSON even after cleanup");
   }
 }
+function sanitizeForJson(value, stack) {
+  if (value === null) return null;
+  const type = typeof value;
+  if (type === "string" || type === "number" || type === "boolean") return value;
+  if (type !== "object") return void 0;
+  const object = value;
+  if (stack.has(object)) throw new TypeError("json conversion: circular structure");
+  stack.add(object);
+  try {
+    if (Array.isArray(value)) {
+      const out2 = [];
+      for (let i = 0; i < value.length; i++) {
+        const item = sanitizeForJson(value[i], stack);
+        out2.push(item === void 0 ? null : item);
+      }
+      return out2;
+    }
+    if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString();
+    if (value instanceof RegExp) return {};
+    const record = value;
+    const out = {};
+    for (const key of Object.keys(record)) {
+      const item = sanitizeForJson(record[key], stack);
+      if (item === void 0) continue;
+      Object.defineProperty(out, key, {
+        value: item,
+        writable: true,
+        enumerable: true,
+        configurable: true
+      });
+    }
+    return out;
+  } finally {
+    stack.delete(object);
+  }
+}
+function safeJsonStringify(value) {
+  const sanitized = sanitizeForJson(value, /* @__PURE__ */ new Set());
+  return sanitized === void 0 ? void 0 : JSON.stringify(sanitized);
+}
 function decodePointer(pointer) {
+  if (typeof pointer !== "string") throw new TypeError("jsonPatch: path must be a string");
   if (pointer === "") throw new Error("jsonPatch: empty JSON pointer");
   if (!pointer.startsWith("/")) throw new Error(`jsonPatch: invalid JSON pointer "${pointer}"`);
-  return pointer.slice(1).split("/").map((seg) => seg.replace(/~1/g, "/").replace(/~0/g, "~"));
+  const segments = pointer.slice(1).split("/").map((seg) => seg.replace(/~1/g, "/").replace(/~0/g, "~"));
+  if (segments.includes("__proto__")) throw new TypeError("jsonPatch: JSON pointer cannot address __proto__");
+  return segments;
 }
 function applyJsonPatch(dest, change) {
   const root = deepClone(dest);
@@ -9986,6 +10127,8 @@ function applyJsonPatch(dest, change) {
   };
   for (const raw of change) {
     const op = raw;
+    if (op === null || typeof op !== "object") throw new TypeError("jsonPatch: each change must be an object");
+    if (typeof op.op !== "string") throw new TypeError("jsonPatch: op must be a string");
     const segs = decodePointer(op.path);
     const parent = parentOf(segs.slice(0, -1));
     if (parent === void 0) throw new Error(`jsonPatch: parent path missing for "${op.path}"`);
@@ -10037,12 +10180,12 @@ function applyJsonPatch(dest, change) {
     }
     if (op.op === "test") {
       const actual = walk(segs);
-      if (JSON.stringify(actual) !== JSON.stringify(op.value)) {
+      if (safeJsonStringify(actual) !== safeJsonStringify(op.value)) {
         throw new Error(`jsonPatch: test failed at "${op.path}"`);
       }
       continue;
     }
-    throw new Error(`jsonPatch: unknown op "${String(raw.op)}"`);
+    throw new Error(`jsonPatch: unknown op "${op.op}"`);
   }
   return wrap[""];
 }
@@ -10060,7 +10203,11 @@ var miniLodash = {
   set: (obj, path12, value) => setPath(obj, path12, value),
   has: (obj, path12) => getPath(obj, path12) !== void 0,
   merge: (dest, ...sources) => {
-    for (const src of sources) deepMerge(dest, src);
+    requireObject(dest, "_.merge: destination");
+    for (const src of sources) {
+      requireObject(src, "_.merge: source");
+      deepMerge(dest, src);
+    }
     return dest;
   },
   cloneDeep: deepClone,
@@ -10080,6 +10227,9 @@ var miniLodash = {
   last: (v) => v[v.length - 1],
   identity: (v) => v,
   random: (lower, upper, floating) => {
+    if (lower !== void 0) requireFiniteNumber(lower, "_.random: lower");
+    if (upper !== void 0) requireFiniteNumber(upper, "_.random: upper");
+    if (floating !== void 0 && typeof floating !== "boolean") throw new TypeError("_.random: floating must be a boolean");
     if (lower === void 0) return Math.random();
     const min = upper === void 0 ? 0 : lower;
     const max2 = upper === void 0 ? lower : upper;
@@ -10094,6 +10244,7 @@ var miniLodash = {
     return values.length === 0 ? void 0 : values[Math.floor(Math.random() * values.length)];
   },
   sampleSize: (collection, size) => {
+    requireFiniteNumber(size, "_.sampleSize: size");
     const values = collectionValues(collection);
     const count = Math.max(0, Math.min(Math.trunc(size), values.length));
     for (let index = values.length - 1; index > 0; index--) {
@@ -10102,10 +10253,16 @@ var miniLodash = {
     }
     return values.slice(0, count);
   },
-  clamp: (value, lower, upper) => Math.min(Math.max(value, lower), upper),
+  clamp: (value, lower, upper) => {
+    requireFiniteNumber(value, "_.clamp: value");
+    requireFiniteNumber(lower, "_.clamp: lower");
+    requireFiniteNumber(upper, "_.clamp: upper");
+    return Math.min(Math.max(value, lower), upper);
+  },
   uniq: (values) => [...new Set(values)],
-  isEqual: (left, right) => JSON.stringify(left) === JSON.stringify(right),
+  isEqual: (left, right) => safeJsonStringify(left) === safeJsonStringify(right),
   unset: (obj, path12) => {
+    requireObject(obj, "_.unset: object");
     const existed = getPath(obj, path12) !== void 0;
     unsetPath(obj, path12);
     return existed;
@@ -10236,12 +10393,537 @@ function compileTemplate(source) {
   return parts.join("\n");
 }
 
+// packages/tavern-template/src/sandbox-bootstrap.ts
+var BOOTSTRAP_SOURCE = `(function (__descriptorJson, __dispatch) {
+  'use strict'
+  var __ObjectCreate = Object.create
+  var __ObjectKeys = Object.keys
+  var __ObjectFreeze = Object.freeze
+  var __ObjectDefineProperty = Object.defineProperty
+  var __ObjectHasOwn = Object.prototype.hasOwnProperty
+  var __ObjectToString = Object.prototype.toString
+  var __ObjectIs = Object.is
+  var __Array = Array
+  var __ArrayIsArray = Array.isArray
+  var __String = String
+  var __Number = Number
+  var __NumberIsNaN = Number.isNaN
+  var __NumberIsInteger = Number.isInteger
+  var __JSONParse = JSON.parse
+  var __JSONStringify = JSON.stringify
+  var __Map = Map
+  var __MapGet = Map.prototype.get
+  var __MapSet = Map.prototype.set
+  var __Promise = Promise
+  var __RegExp = RegExp
+  var __Date = Date
+  var __Error = Error
+  var __BigInt = BigInt
+  var __ReflectApply = Reflect.apply
+  var __StringReplace = String.prototype.replace
+
+  var pending = __ObjectCreate(null)
+  var wrappers = __ObjectCreate(null)
+  var bridgeThis = __ObjectFreeze(__ObjectCreate(null))
+  var nextToken = 0
+
+  function hasOwn(target, key) {
+    return __ReflectApply(__ObjectHasOwn, target, [key])
+  }
+
+  function isRecord(value) {
+    return value !== null && typeof value === 'object' && !__ArrayIsArray(value)
+  }
+
+  function malformed(detail) {
+    return new __Error('malformed sandbox bridge payload: ' + detail)
+  }
+
+  function requireRecord(value, label) {
+    if (!isRecord(value)) throw malformed(label + ' is not an object')
+    return value
+  }
+
+  function requireArray(value, label) {
+    if (!__ArrayIsArray(value)) throw malformed(label + ' is not an array')
+    return value
+  }
+
+  function requireString(value, label) {
+    if (typeof value !== 'string') throw malformed(label + ' is not a string')
+    return value
+  }
+
+  function requireInteger(value, label) {
+    if (typeof value !== 'number' || !__NumberIsInteger(value) || value < 0) {
+      throw malformed(label + ' is not a non-negative integer')
+    }
+    return value
+  }
+
+  function requireIndex(value, limit, label) {
+    var index = requireInteger(value, label)
+    if (limit !== undefined && index >= limit) throw malformed(label + ' is out of range')
+    return index
+  }
+
+  function requireLength(value, label) {
+    var length = requireInteger(value, label)
+    if (length > 4294967295) throw malformed(label + ' is too large')
+    return length
+  }
+
+  function lastIndexValue(value) {
+    return typeof value === 'number' && __NumberIsInteger(value) && value >= 0 ? value : 0
+  }
+
+  function decodeNumber(raw) {
+    if (typeof raw === 'number' && !__NumberIsNaN(raw) && raw !== Infinity && raw !== -Infinity) return raw
+    if (raw === 'NaN') return NaN
+    if (raw === 'Infinity') return Infinity
+    if (raw === '-Infinity') return -Infinity
+    if (raw === '-0') return -0
+    throw malformed('invalid number')
+  }
+
+  function decodeEnc(enc, built) {
+    var value = requireRecord(enc, 'wire value')
+    switch (value.t) {
+      case 'null': return null
+      case 'u': return undefined
+      case 's': return requireString(value.v, 'string value')
+      case 'b':
+        if (typeof value.v !== 'boolean') throw malformed('invalid boolean')
+        return value.v
+      case 'n': return decodeNumber(value.v)
+      case 'big': return __BigInt(requireString(value.v, 'bigint value'))
+      case 'ref': {
+        var index = requireIndex(value.v, built.length, 'wire reference')
+        return built[index]
+      }
+      default: throw malformed('unknown value tag ' + __String(value.t))
+    }
+  }
+
+  function errorFrom(value) {
+    var name = 'Error'
+    var message
+    try {
+      if (value !== null && typeof value === 'object') {
+        if (typeof value.name === 'string' && value.name !== '') name = value.name
+        message = typeof value.message === 'string' ? value.message : __String(value)
+      } else {
+        message = __String(value)
+      }
+    } catch (error) {
+      message = 'the template sandbox bridge returned an unprintable error'
+    }
+    var result = new __Error(message)
+    result.name = name
+    return result
+  }
+
+  function makeWrapper(id) {
+    var key = 'f' + id
+    if (hasOwn(wrappers, key)) return wrappers[key]
+    var wrapper = function () {
+      var args = []
+      for (var i = 0; i < arguments.length; i++) args[i] = arguments[i]
+      return invoke(id, args)
+    }
+    __ObjectDefineProperty(wrappers, key, { value: wrapper, writable: false, enumerable: false, configurable: false })
+    return wrapper
+  }
+
+  function materialize(wire) {
+    var root = requireRecord(wire, 'wire')
+    var nodes = requireArray(root.nodes, 'wire nodes')
+    var built = new __Array(nodes.length)
+    var i
+    for (i = 0; i < nodes.length; i++) {
+      var node = requireRecord(nodes[i], 'wire node')
+      switch (node.t) {
+        case 'o': built[i] = {}; break
+        case 'a': built[i] = new __Array(requireLength(node.n, 'array length')); break
+        case 'f': built[i] = makeWrapper(requireIndex(node.v, undefined, 'function id')); break
+        case 'r': {
+          var regexp = new __RegExp(requireString(node.s, 'regexp source'), requireString(node.f, 'regexp flags'))
+          regexp.lastIndex = requireInteger(node.l, 'regexp lastIndex')
+          built[i] = regexp
+          break
+        }
+        case 'd': {
+          var rawDate = requireString(node.v, 'date value')
+          built[i] = rawDate === 'Invalid' ? new __Date(NaN) : new __Date(rawDate)
+          break
+        }
+        default: throw malformed('unknown node tag ' + __String(node.t))
+      }
+    }
+    for (i = 0; i < nodes.length; i++) {
+      var entry = requireRecord(nodes[i], 'wire node')
+      if (entry.t === 'o') {
+        var objectEntries = requireArray(entry.e, 'object entries')
+        for (var j = 0; j < objectEntries.length; j++) {
+          var pair = requireArray(objectEntries[j], 'object entry')
+          if (pair.length !== 2) throw malformed('object entry is not a pair')
+          var key = requireString(pair[0], 'object key')
+          __ObjectDefineProperty(built[i], key, {
+            value: decodeEnc(pair[1], built),
+            writable: true,
+            enumerable: true,
+            configurable: true,
+          })
+        }
+      } else if (entry.t === 'a') {
+        var arrayEntries = requireArray(entry.e, 'array entries')
+        var arrayLength = requireLength(entry.n, 'array length')
+        for (var k = 0; k < arrayEntries.length; k++) {
+          var item = requireArray(arrayEntries[k], 'array entry')
+          if (item.length !== 2) throw malformed('array entry is not a pair')
+          built[i][requireIndex(item[0], arrayLength, 'array index')] = decodeEnc(item[1], built)
+        }
+      }
+    }
+    return decodeEnc(root.root, built)
+  }
+
+  function encodeArgs(args) {
+    var nodes = []
+    var seen = new __Map()
+    var fns = []
+
+    function enc(value) {
+      if (value === null) return { t: 'null' }
+      var type = typeof value
+      if (type === 'undefined') return { t: 'u' }
+      if (type === 'string') return { t: 's', v: value }
+      if (type === 'boolean') return { t: 'b', v: value }
+      if (type === 'number') {
+        var raw = __NumberIsNaN(value) ? 'NaN' : value === Infinity ? 'Infinity' : value === -Infinity ? '-Infinity' : __ObjectIs(value, -0) ? '-0' : value
+        return { t: 'n', v: raw }
+      }
+      if (type === 'bigint') return { t: 'big', v: value.toString() }
+      if (type === 'symbol') throw new __Error('cannot pass a symbol to a host function')
+      if (type === 'function') {
+        var fnIndex = fns.length
+        fns[fnIndex] = value
+        nodes[nodes.length] = { t: 'f', v: fnIndex }
+        return { t: 'ref', v: nodes.length - 1 }
+      }
+
+      var seenIndex = __ReflectApply(__MapGet, seen, [value])
+      if (seenIndex !== undefined) return { t: 'ref', v: seenIndex }
+
+      var tag = __ReflectApply(__ObjectToString, value, [])
+      if (tag === '[object Promise]') throw new __Error('cannot pass a Promise to a host function')
+      if (tag === '[object Map]' || tag === '[object Set]' || tag === '[object WeakMap]' || tag === '[object WeakSet]') {
+        throw new __Error('cannot pass a ' + tag.slice(8, -1) + ' to a host function')
+      }
+      if (/^\\[object (?:Uint|Int|Float|BigUint|BigInt)\\w*Array\\]$/.test(tag) || tag === '[object ArrayBuffer]' || tag === '[object SharedArrayBuffer]' || tag === '[object DataView]') {
+        throw new __Error('cannot pass a ' + tag.slice(8, -1) + ' to a host function')
+      }
+
+      if (__ArrayIsArray(value)) {
+        var arrayIndex = nodes.length
+        nodes[arrayIndex] = null
+        __ReflectApply(__MapSet, seen, [value, arrayIndex])
+        var arrayEntries = []
+        var arrayKeys = __ObjectKeys(value)
+        for (var ai = 0; ai < arrayKeys.length; ai++) {
+          var arrayKey = arrayKeys[ai]
+          var numeric = __Number(arrayKey)
+          if (__String(numeric) === arrayKey && numeric >= 0 && numeric < value.length) {
+            arrayEntries[arrayEntries.length] = [numeric, enc(value[numeric])]
+          }
+        }
+        nodes[arrayIndex] = { t: 'a', n: value.length, e: arrayEntries }
+        return { t: 'ref', v: arrayIndex }
+      }
+
+      if (tag === '[object RegExp]') {
+        var regexpIndex = nodes.length
+        nodes[regexpIndex] = null
+        __ReflectApply(__MapSet, seen, [value, regexpIndex])
+        nodes[regexpIndex] = {
+          t: 'r',
+          s: __String(value.source),
+          f: __String(value.flags),
+          l: lastIndexValue(value.lastIndex),
+        }
+        return { t: 'ref', v: regexpIndex }
+      }
+
+      if (tag === '[object Date]') {
+        var dateIndex = nodes.length
+        nodes[dateIndex] = null
+        __ReflectApply(__MapSet, seen, [value, dateIndex])
+        var time = __ReflectApply(__Date.prototype.getTime, value, [])
+        nodes[dateIndex] = { t: 'd', v: __NumberIsNaN(time) ? 'Invalid' : new __Date(time).toISOString() }
+        return { t: 'ref', v: dateIndex }
+      }
+
+      var objectIndex = nodes.length
+      nodes[objectIndex] = null
+      __ReflectApply(__MapSet, seen, [value, objectIndex])
+      var objectKeys = __ObjectKeys(value)
+      var objectEntries = []
+      for (var oi = 0; oi < objectKeys.length; oi++) {
+        objectEntries[objectEntries.length] = [objectKeys[oi], enc(value[objectKeys[oi]])]
+      }
+      nodes[objectIndex] = { t: 'o', e: objectEntries }
+      return { t: 'ref', v: objectIndex }
+    }
+
+    return { wire: { root: enc(args), nodes: nodes }, fns: fns }
+  }
+
+  function reconcile(existing, enc, nodes, memo) {
+    var value = requireRecord(enc, 'mutation value')
+    if (value.t !== 'ref') return decodeEnc(value, [])
+    var nodeIndex = requireIndex(value.v, nodes.length, 'wire reference')
+    var node = requireRecord(nodes[nodeIndex], 'wire node')
+
+    if (node.t === 'keep') return existing
+    if (node.t === 'f') return typeof existing === 'function' ? existing : makeWrapper(requireIndex(node.v, undefined, 'function id'))
+
+    if (node.t === 'r') {
+      if (__ReflectApply(__ObjectToString, existing, []) === '[object RegExp]'
+        && existing.source === node.s && existing.flags === node.f) {
+        existing.lastIndex = requireInteger(node.l, 'regexp lastIndex')
+        return existing
+      }
+      var regexp = new __RegExp(requireString(node.s, 'regexp source'), requireString(node.f, 'regexp flags'))
+      regexp.lastIndex = requireInteger(node.l, 'regexp lastIndex')
+      return regexp
+    }
+
+    if (node.t === 'd') {
+      var rawDate = requireString(node.v, 'date value')
+      if (__ReflectApply(__ObjectToString, existing, []) === '[object Date]') {
+        __ReflectApply(__Date.prototype.setTime, existing, [rawDate === 'Invalid' ? NaN : new __Date(rawDate).getTime()])
+        return existing
+      }
+      return rawDate === 'Invalid' ? new __Date(NaN) : new __Date(rawDate)
+    }
+
+    var memoized = __ReflectApply(__MapGet, memo, [nodeIndex])
+    if (memoized !== undefined) return memoized
+
+    if (node.t === 'o') {
+      var existingTag = existing !== null && typeof existing === 'object' ? __ReflectApply(__ObjectToString, existing, []) : ''
+      var target = existingTag === '[object Object]' ? existing : {}
+      __ReflectApply(__MapSet, memo, [nodeIndex, target])
+      var entries = requireArray(node.e, 'object entries')
+      var previous = __ObjectKeys(target)
+      var keep = __ObjectCreate(null)
+      for (var pi = 0; pi < previous.length; pi++) keep[previous[pi]] = true
+      for (var ei = 0; ei < entries.length; ei++) {
+        var pair = requireArray(entries[ei], 'object entry')
+        if (pair.length !== 2) throw malformed('object entry is not a pair')
+        var key = requireString(pair[0], 'object key')
+        delete keep[key]
+        __ObjectDefineProperty(target, key, {
+          value: reconcile(target[key], pair[1], nodes, memo),
+          writable: true,
+          enumerable: true,
+          configurable: true,
+        })
+      }
+      var stale = __ObjectKeys(keep)
+      for (var si = 0; si < stale.length; si++) delete target[stale[si]]
+      return target
+    }
+
+    if (node.t === 'a') {
+      var array = __ArrayIsArray(existing) ? existing : []
+      __ReflectApply(__MapSet, memo, [nodeIndex, array])
+      var length = requireLength(node.n, 'array length')
+      var oldKeys = __ObjectKeys(array)
+      array.length = length
+      var present = __ObjectCreate(null)
+      var arrayEntries = requireArray(node.e, 'array entries')
+      for (var ai = 0; ai < arrayEntries.length; ai++) {
+        var item = requireArray(arrayEntries[ai], 'array entry')
+        if (item.length !== 2) throw malformed('array entry is not a pair')
+        var index = requireIndex(item[0], length, 'array index')
+        present[index] = true
+        array[index] = reconcile(array[index], item[1], nodes, memo)
+      }
+      for (var oi = 0; oi < oldKeys.length; oi++) {
+        if (!hasOwn(present, oldKeys[oi])) delete array[oldKeys[oi]]
+      }
+      return array
+    }
+
+    throw malformed('unknown node tag ' + __String(node.t))
+  }
+
+  function reconcileRoot(args, wire) {
+    if (wire === undefined || wire === null) return
+    var root = requireRecord(wire, 'mutation wire')
+    var nodes = requireArray(root.nodes, 'mutation nodes')
+    reconcile(args, root.root, nodes, new __Map())
+  }
+
+  function settle(token, ok, payloadJson) {
+    var key = 't' + token
+    var entry = hasOwn(pending, key) ? pending[key] : undefined
+    if (entry === undefined) return
+    delete pending[key]
+    var payload
+    try {
+      payload = __JSONParse(payloadJson)
+    } catch (error) {
+      entry.reject(errorFrom(error))
+      return
+    }
+    if (!isRecord(payload)) {
+      entry.reject(new __Error('template sandbox bridge returned a malformed payload'))
+      return
+    }
+    try {
+      reconcileRoot(entry.args, payload.p)
+    } catch (error) {
+      entry.reject(errorFrom(error))
+      return
+    }
+    if (ok === 1 && payload.ok === 1) {
+      var value
+      try {
+        value = materialize(payload.v)
+      } catch (error) {
+        entry.reject(errorFrom(error))
+        return
+      }
+      entry.resolve(value)
+      return
+    }
+    entry.reject(errorFrom(payload.e))
+  }
+
+  function invoke(id, args) {
+    var encoded
+    try {
+      encoded = encodeArgs(args)
+    } catch (error) {
+      throw errorFrom(error)
+    }
+
+    var token = ++nextToken
+    var key = 't' + token
+    var promise = new __Promise(function (resolve, reject) {
+      pending[key] = { resolve: resolve, reject: reject, args: args }
+    })
+    var raw
+    try {
+      raw = __dispatch(id, __JSONStringify(encoded.wire), encoded.fns, args, token, settle, bridgeThis)
+    } catch (error) {
+      delete pending[key]
+      throw errorFrom(error)
+    }
+
+    var reply
+    try {
+      reply = __JSONParse(raw)
+    } catch (error) {
+      delete pending[key]
+      throw new __Error('template sandbox bridge returned a malformed reply')
+    }
+    if (!isRecord(reply) || (reply.a !== 0 && reply.a !== 1)) {
+      delete pending[key]
+      throw new __Error('template sandbox bridge returned a malformed reply')
+    }
+    if (reply.a === 1) return promise
+
+    delete pending[key]
+    try {
+      reconcileRoot(args, reply.p)
+    } catch (error) {
+      throw errorFrom(error)
+    }
+    if (reply.ok === 1) {
+      try {
+        return materialize(reply.v)
+      } catch (error) {
+        throw errorFrom(error)
+      }
+    }
+    throw errorFrom(reply.e)
+  }
+
+  function escapeHtml(text) {
+    var value = __ReflectApply(__StringReplace, text, [/&/g, '&amp;'])
+    value = __ReflectApply(__StringReplace, value, [/</g, '&lt;'])
+    value = __ReflectApply(__StringReplace, value, [/>/g, '&gt;'])
+    value = __ReflectApply(__StringReplace, value, [/"/g, '&quot;'])
+    value = __ReflectApply(__StringReplace, value, [/'/g, '&#39;'])
+    return value
+  }
+
+  var descriptor = requireRecord(__JSONParse(__descriptorJson), 'descriptor')
+  var source = materialize(descriptor)
+  var env = __ObjectCreate(null)
+  var keys = __ObjectKeys(source)
+  for (var i = 0; i < keys.length; i++) {
+    __ObjectDefineProperty(env, keys[i], {
+      value: source[keys[i]],
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    })
+  }
+
+  var out = ''
+  __ObjectDefineProperty(env, '__out', {
+    get: function () { return out },
+    set: function (value) { out = value === null || value === undefined ? '' : __String(value) },
+    enumerable: false,
+    configurable: true,
+  })
+  __ObjectDefineProperty(env, '__append', {
+    value: function (value) { out += value === null || value === undefined ? '' : __String(value) },
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  })
+  __ObjectDefineProperty(env, '__escape', {
+    value: escapeHtml,
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  })
+  __ObjectDefineProperty(env, 'print', {
+    value: function () {
+      for (var i = 0; i < arguments.length; i++) {
+        if (i > 0) out += ' '
+        var value = arguments[i]
+        out += value === null || value === undefined ? '' : __String(value)
+      }
+    },
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  })
+  __ObjectDefineProperty(env, 'await', {
+    value: function (value) {
+      if (value !== null && typeof value === 'object' && typeof value.then === 'function') {
+        throw new __Error('async template expression used inside a synchronous callback is not supported')
+      }
+      return value
+    },
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  })
+
+  return env
+})`;
+
 // packages/tavern-template/src/runtime.ts
 function protectBlocks(source) {
+  if (typeof source !== "string") throw new TypeError("template source must be a string");
   return source.replace(/<#escape-ejs>([\s\S]*?)<#\/escape-ejs>/g, (_m, inner) => `<#escape-ejs>${inner.replace(/<%/g, "<%%").replace(/%>/g, "%%>")}<#/escape-ejs>`).replace(/<(thinking|think|reasoning)>([\s\S]*?)<\/\1>/g, (m, tag, inner) => inner.includes("<%") ? `<${tag}>${inner.replace(/<%/g, "<%%").replace(/%>/g, "%%>")}</${tag}>` : m);
-}
-function htmlEscape(text) {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 var compileCache = /* @__PURE__ */ new Map();
 var COMPILE_CACHE_MAX = 256;
@@ -10262,61 +10944,467 @@ ${body}
   return entry;
 }
 function hasTemplateTag(source) {
-  return source.includes("<%");
+  return typeof source === "string" && source.includes("<%");
 }
-function buildSandboxEnv(env) {
-  let out = "";
-  const sandboxEnv = /* @__PURE__ */ Object.create(null);
-  Object.assign(sandboxEnv, env);
-  const defineHidden = (key, descriptor) => {
-    Object.defineProperty(sandboxEnv, key, { ...descriptor, enumerable: false, configurable: true });
-  };
-  defineHidden("__out", {
-    get: () => out,
-    set: (value) => {
-      out = String(value ?? "");
-    }
-  });
-  defineHidden("__append", {
-    value: (value) => {
-      out += value === null || value === void 0 ? "" : String(value);
-    }
-  });
-  defineHidden("__escape", { value: htmlEscape });
-  defineHidden("print", {
-    value: (...args) => {
-      out += args.map((a) => a === null || a === void 0 ? "" : String(a)).join(" ");
-    }
-  });
-  defineHidden("await", {
-    value: (value) => {
-      if (value !== null && typeof value === "object" && typeof value.then === "function") {
-        throw new Error("async template expression used inside a synchronous callback is not supported");
+var CONTEXT_FUNCTIONS = /* @__PURE__ */ new WeakSet();
+var UNSUPPORTED_OBJECT_TAGS = /* @__PURE__ */ new Set([
+  "[object Promise]",
+  "[object Map]",
+  "[object Set]",
+  "[object WeakMap]",
+  "[object WeakSet]",
+  "[object ArrayBuffer]",
+  "[object SharedArrayBuffer]",
+  "[object DataView]"
+]);
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function encodeNumber(value) {
+  if (Number.isNaN(value)) return "NaN";
+  if (value === Infinity) return "Infinity";
+  if (value === -Infinity) return "-Infinity";
+  if (Object.is(value, -0)) return "-0";
+  return value;
+}
+function normalizeLastIndex(value) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0;
+}
+function isUnsupportedObjectTag(tag) {
+  if (UNSUPPORTED_OBJECT_TAGS.has(tag)) return true;
+  return /^\[object (?:Uint|Int|Float|BigUint|BigInt)\w*Array\]$/.test(tag);
+}
+function hostFunctionId(state, fn) {
+  const contextOrigin = CONTEXT_FUNCTIONS.has(fn);
+  const existing = state.ids.get(fn);
+  if (existing !== void 0) {
+    const entry = state.functions[existing];
+    if (entry !== void 0 && contextOrigin && entry.origin === "host") entry.origin = "context";
+    return existing;
+  }
+  const id = state.functions.length;
+  state.functions.push({ fn, origin: contextOrigin ? "context" : "host" });
+  state.ids.set(fn, id);
+  return id;
+}
+function markContextFunction(value) {
+  if (typeof value === "function") CONTEXT_FUNCTIONS.add(value);
+}
+function markContextFunctionsDeep(value, seen) {
+  if (typeof value === "function") {
+    CONTEXT_FUNCTIONS.add(value);
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+  if (seen.has(value)) return;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const item of value) markContextFunctionsDeep(item, seen);
+    return;
+  }
+  const tag = Object.prototype.toString.call(value);
+  if (tag === "[object Date]" || tag === "[object RegExp]") return;
+  const record = value;
+  for (const key of Object.keys(record)) markContextFunctionsDeep(record[key], seen);
+}
+function encodeWire(value, state, mode) {
+  const nodes = [];
+  const seen = /* @__PURE__ */ new Map();
+  const encode = (input) => {
+    if (input === null) return { t: "null" };
+    switch (typeof input) {
+      case "undefined":
+        return { t: "u" };
+      case "string":
+        return { t: "s", v: input };
+      case "boolean":
+        return { t: "b", v: input };
+      case "number":
+        return { t: "n", v: encodeNumber(input) };
+      case "bigint":
+        return { t: "big", v: input.toString() };
+      case "symbol":
+        throw new TypeError("cannot cross a symbol through the template sandbox boundary");
+      case "function": {
+        if (mode === "keep") {
+          nodes.push({ t: "keep" });
+        } else {
+          if (state === void 0) throw new Error("host function registry is missing");
+          nodes.push({ t: "f", v: hostFunctionId(state, input) });
+        }
+        return { t: "ref", v: nodes.length - 1 };
       }
-      return value;
+      case "object":
+        break;
+      default:
+        throw new TypeError(`cannot cross a ${typeof input} through the template sandbox boundary`);
     }
-  });
-  return sandboxEnv;
+    const objectValue = input;
+    const existing = seen.get(objectValue);
+    if (existing !== void 0) return { t: "ref", v: existing };
+    if (Array.isArray(input)) {
+      const index2 = nodes.length;
+      nodes.push({ t: "a", n: input.length, e: [] });
+      seen.set(objectValue, index2);
+      const entries2 = [];
+      for (const key of Object.keys(input)) {
+        const numeric = Number(key);
+        if (String(numeric) === key && numeric >= 0 && numeric < input.length) {
+          entries2.push([numeric, encode(input[numeric])]);
+        }
+      }
+      nodes[index2] = { t: "a", n: input.length, e: entries2 };
+      return { t: "ref", v: index2 };
+    }
+    const tag = Object.prototype.toString.call(input);
+    if (tag === "[object RegExp]") {
+      const index2 = nodes.length;
+      nodes.push({ t: "r", s: "", f: "", l: 0 });
+      seen.set(objectValue, index2);
+      const regexp = input;
+      nodes[index2] = { t: "r", s: String(regexp.source), f: String(regexp.flags), l: normalizeLastIndex(regexp.lastIndex) };
+      return { t: "ref", v: index2 };
+    }
+    if (tag === "[object Date]") {
+      const index2 = nodes.length;
+      nodes.push({ t: "d", v: "Invalid" });
+      seen.set(objectValue, index2);
+      const time = Date.prototype.getTime.call(input);
+      nodes[index2] = { t: "d", v: Number.isNaN(time) ? "Invalid" : new Date(time).toISOString() };
+      return { t: "ref", v: index2 };
+    }
+    if (isUnsupportedObjectTag(tag)) {
+      throw new TypeError(`cannot cross a ${tag.slice(8, -1)} through the template sandbox boundary`);
+    }
+    const index = nodes.length;
+    nodes.push({ t: "o", e: [] });
+    seen.set(objectValue, index);
+    const record = input;
+    const entries = [];
+    for (const key of Object.keys(record)) entries.push([key, encode(record[key])]);
+    nodes[index] = { t: "o", e: entries };
+    return { t: "ref", v: index };
+  };
+  return { root: encode(value), nodes };
+}
+function wireInteger(value, label) {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new TypeError(`malformed sandbox bridge payload: ${label} is not a non-negative integer`);
+  }
+  return value;
+}
+function wireLength(value, label) {
+  const length = wireInteger(value, label);
+  if (length > 4294967295) throw new TypeError(`malformed sandbox bridge payload: ${label} is too large`);
+  return length;
+}
+function wireString(value, label) {
+  if (typeof value !== "string") throw new TypeError(`malformed sandbox bridge payload: ${label} is not a string`);
+  return value;
+}
+function wireNumber(value) {
+  if (typeof value === "number" && !Number.isNaN(value) && value !== Infinity && value !== -Infinity) return value;
+  if (value === "NaN") return NaN;
+  if (value === "Infinity") return Infinity;
+  if (value === "-Infinity") return -Infinity;
+  if (value === "-0") return -0;
+  throw new TypeError("malformed sandbox bridge payload: invalid number");
+}
+function wrapNestedContextFunction(fn) {
+  return (...args) => {
+    for (const arg of args) {
+      if (arg !== null && (typeof arg === "object" || typeof arg === "function")) {
+        throw new TypeError("host callback arguments must be primitive when invoking a template function from host code");
+      }
+    }
+    const result = Reflect.apply(fn, void 0, args);
+    if (isThenableValue(result)) {
+      throw new TypeError("template callbacks invoked from host code must be synchronous");
+    }
+    return result;
+  };
+}
+function decodeWire(wire, resolveFunction, dropPrototypeKey) {
+  if (!isRecord(wire) || !Array.isArray(wire.nodes)) {
+    throw new TypeError("malformed sandbox bridge payload: nodes missing");
+  }
+  const nodes = wire.nodes;
+  const built = new Array(nodes.length);
+  const rootArrayIndex = isRecord(wire.root) && wire.root.t === "ref" ? wireInteger(wire.root.v, "root reference") : -1;
+  const nestedCallbacks = /* @__PURE__ */ new Map();
+  const callbackFor = (fn) => {
+    const cached = nestedCallbacks.get(fn);
+    if (cached !== void 0) return cached;
+    const wrapped = wrapNestedContextFunction(fn);
+    nestedCallbacks.set(fn, wrapped);
+    return wrapped;
+  };
+  const decode = (enc, wrapFunction) => {
+    if (!isRecord(enc)) throw new TypeError("malformed sandbox bridge payload: value missing");
+    switch (enc.t) {
+      case "null":
+        return null;
+      case "u":
+        return void 0;
+      case "s":
+        return wireString(enc.v, "string value");
+      case "b":
+        if (typeof enc.v !== "boolean") throw new TypeError("malformed sandbox bridge payload: invalid boolean");
+        return enc.v;
+      case "n":
+        return wireNumber(enc.v);
+      case "big":
+        return BigInt(wireString(enc.v, "bigint value"));
+      case "ref": {
+        const index = wireInteger(enc.v, "reference");
+        if (index >= built.length) throw new TypeError("malformed sandbox bridge payload: reference out of range");
+        const value = built[index];
+        if (wrapFunction && typeof value === "function") {
+          const node = nodes[index];
+          if (isRecord(node) && node.t === "f") return callbackFor(value);
+        }
+        return value;
+      }
+      default:
+        throw new TypeError(`malformed sandbox bridge payload: unknown value tag ${String(enc.t)}`);
+    }
+  };
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    if (!isRecord(node)) throw new TypeError("malformed sandbox bridge payload: node missing");
+    switch (node.t) {
+      case "o":
+        built[i] = {};
+        break;
+      case "a":
+        built[i] = new Array(wireLength(node.n, "array length"));
+        break;
+      case "f":
+        built[i] = resolveFunction(wireInteger(node.v, "function id"));
+        break;
+      case "r": {
+        const regexp = new RegExp(wireString(node.s, "regexp source"), wireString(node.f, "regexp flags"));
+        regexp.lastIndex = wireInteger(node.l, "regexp lastIndex");
+        built[i] = regexp;
+        break;
+      }
+      case "d": {
+        const raw = wireString(node.v, "date value");
+        built[i] = raw === "Invalid" ? /* @__PURE__ */ new Date(NaN) : new Date(raw);
+        break;
+      }
+      default:
+        throw new TypeError(`malformed sandbox bridge payload: unknown node tag ${String(node.t)}`);
+    }
+  }
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    if (!isRecord(node)) continue;
+    if (node.t === "o") {
+      if (!Array.isArray(node.e)) throw new TypeError("malformed sandbox bridge payload: object entries missing");
+      for (const rawEntry of node.e) {
+        if (!Array.isArray(rawEntry) || rawEntry.length !== 2) throw new TypeError("malformed sandbox bridge payload: object entry missing");
+        const key = wireString(rawEntry[0], "object key");
+        if (dropPrototypeKey && key === "__proto__") continue;
+        const value = decode(rawEntry[1], true);
+        if ((key === "valueOf" || key === "toString" || key === "toJSON") && typeof value === "function") continue;
+        Object.defineProperty(built[i], key, {
+          value,
+          writable: true,
+          enumerable: true,
+          configurable: true
+        });
+      }
+    } else if (node.t === "a") {
+      if (!Array.isArray(node.e)) throw new TypeError("malformed sandbox bridge payload: array entries missing");
+      const length = wireLength(node.n, "array length");
+      for (const rawEntry of node.e) {
+        if (!Array.isArray(rawEntry) || rawEntry.length !== 2) throw new TypeError("malformed sandbox bridge payload: array entry missing");
+        const index = wireInteger(rawEntry[0], "array index");
+        if (index >= length) throw new TypeError("malformed sandbox bridge payload: array index out of range");
+        built[i][index] = decode(rawEntry[1], i !== rootArrayIndex);
+      }
+    }
+  }
+  return decode(wire.root, false);
+}
+function readErrorInfo(error) {
+  try {
+    if (error !== null && typeof error === "object") {
+      const record = error;
+      const name2 = typeof record.name === "string" && record.name !== "" ? record.name : "Error";
+      const message = typeof record.message === "string" ? record.message : String(error);
+      return { name: name2, message };
+    }
+    return { name: "Error", message: String(error) };
+  } catch {
+    return { name: "Error", message: "host function threw an unprintable value" };
+  }
+}
+function decodeArgumentWire(argsJson, contextFunctions) {
+  if (typeof argsJson !== "string" || !Array.isArray(contextFunctions)) {
+    throw new TypeError("malformed sandbox bridge call");
+  }
+  for (const fn of contextFunctions) markContextFunction(fn);
+  const wire = JSON.parse(argsJson);
+  const value = decodeWire(wire, (id) => {
+    if (id >= contextFunctions.length) throw new TypeError(`template sandbox function id ${id} is out of range`);
+    const fn = contextFunctions[id];
+    if (typeof fn !== "function") throw new TypeError(`template sandbox function id ${id} is not callable`);
+    return fn;
+  }, true);
+  if (!Array.isArray(value)) throw new TypeError("malformed sandbox bridge call: arguments are not an array");
+  return value;
+}
+function encodePostState(args) {
+  if (!args.some((arg) => arg !== null && typeof arg === "object")) return void 0;
+  try {
+    return encodeWire(args, void 0, "keep");
+  } catch {
+    return void 0;
+  }
+}
+function isThenableValue(value) {
+  return value !== null && (typeof value === "object" || typeof value === "function") && typeof value.then === "function";
+}
+function createHostDispatch(state) {
+  return (id, argsJson, contextFunctions, contextArgs, token, settle, contextThis) => {
+    try {
+      if (contextThis === null || typeof contextThis !== "object") {
+        throw new Error("malformed sandbox bridge call: missing context this binding");
+      }
+      const entry = state.functions[id];
+      if (entry === void 0) throw new Error(`unknown host function id ${id}`);
+      if (Array.isArray(contextFunctions)) for (const fn of contextFunctions) markContextFunction(fn);
+      if (Array.isArray(contextArgs)) for (const value of contextArgs) markContextFunction(value);
+      if (entry.origin === "context") {
+        if (!Array.isArray(contextArgs)) throw new TypeError("malformed sandbox bridge call: context arguments are not an array");
+        let result2;
+        try {
+          result2 = Reflect.apply(entry.fn, contextThis, contextArgs);
+        } catch (error) {
+          return JSON.stringify({ a: 0, ok: 0, e: readErrorInfo(error) });
+        }
+        markContextFunctionsDeep(result2, /* @__PURE__ */ new Set());
+        if (isThenableValue(result2)) {
+          return JSON.stringify({
+            a: 0,
+            ok: 0,
+            e: {
+              name: "TypeError",
+              message: "context function returned a thenable; only host-native Promises can cross the template sandbox boundary"
+            }
+          });
+        }
+        return JSON.stringify({ a: 0, ok: 1, v: encodeWire(result2, state, "wrap") });
+      }
+      const args = decodeArgumentWire(argsJson, contextFunctions);
+      let result;
+      try {
+        result = Reflect.apply(entry.fn, contextThis, args);
+      } catch (error) {
+        return JSON.stringify({ a: 0, ok: 0, e: readErrorInfo(error), p: encodePostState(args) });
+      }
+      if (isThenableValue(result)) {
+        if (!(result instanceof Promise)) {
+          return JSON.stringify({
+            a: 0,
+            ok: 0,
+            e: {
+              name: "TypeError",
+              message: "host function returned a non-native thenable; only host-native Promises can cross the template sandbox boundary"
+            }
+          });
+        }
+        void Promise.resolve(result).then(
+          (value) => {
+            let payload;
+            try {
+              payload = { ok: 1, v: encodeWire(value, state, "wrap"), p: encodePostState(args) };
+            } catch (error) {
+              payload = { ok: 0, e: readErrorInfo(error) };
+            }
+            try {
+              settle(token, 1, JSON.stringify(payload));
+            } catch {
+            }
+          },
+          (error) => {
+            try {
+              settle(token, 0, JSON.stringify({ ok: 0, e: readErrorInfo(error), p: encodePostState(args) }));
+            } catch {
+            }
+          }
+        );
+        return JSON.stringify({ a: 1 });
+      }
+      return JSON.stringify({ a: 0, ok: 1, v: encodeWire(result, state, "wrap"), p: encodePostState(args) });
+    } catch (error) {
+      return JSON.stringify({ a: 0, ok: 0, e: readErrorInfo(error) });
+    }
+  };
+}
+function createHostEnvelope(env) {
+  const state = { functions: [], ids: /* @__PURE__ */ new Map() };
+  const wire = encodeWire(env, state, "wrap");
+  return { descriptorJson: JSON.stringify(wire), state };
+}
+var BOOTSTRAP_SCRIPT = new vm.Script(BOOTSTRAP_SOURCE, { filename: "tavern-template-bootstrap.js" });
+function createSandboxRealm(env) {
+  const context = vm.createContext(/* @__PURE__ */ Object.create(null));
+  const bootstrap = BOOTSTRAP_SCRIPT.runInContext(context);
+  const envelope = createHostEnvelope(env);
+  const dispatch = createHostDispatch(envelope.state);
+  const sandboxEnv = bootstrap(envelope.descriptorJson, dispatch);
+  if (sandboxEnv === null || typeof sandboxEnv !== "object") {
+    throw new Error("sandbox bootstrap did not return a context environment");
+  }
+  return { context, env: sandboxEnv };
+}
+function describeThrown(err2) {
+  try {
+    if (err2 !== null && typeof err2 === "object") {
+      const record = err2;
+      const name2 = typeof record.name === "string" && record.name !== "" ? record.name : void 0;
+      const message = typeof record.message === "string" ? record.message : void 0;
+      if (name2 !== void 0 && message !== void 0) return `${name2}: ${message}`;
+      if (message !== void 0) return message;
+    }
+    return String(err2);
+  } catch {
+    return "unprintable error value";
+  }
 }
 async function renderSandboxed(source, env, options = {}) {
   try {
-    const protectedSource = protectBlocks(source);
-    const sandboxEnv = buildSandboxEnv(env);
-    const factory = compile(protectedSource).script.runInNewContext(sandboxEnv);
-    return await factory(sandboxEnv);
+    const entry = compile(protectBlocks(source));
+    const realm = createSandboxRealm(env);
+    const factory = entry.script.runInContext(realm.context);
+    const result = await factory(realm.env);
+    return typeof result === "string" ? result : String(result);
   } catch (err2) {
     const where = options.where ? ` (${options.where})` : "";
-    const message = err2 instanceof Error ? `${err2.name}: ${err2.message}` : String(err2);
-    throw new Error(`template execution failed${where}: ${message}`);
+    throw new Error(`template execution failed${where}: ${describeThrown(err2)}`);
   }
 }
 async function evalExpressionSandboxed(expression, env) {
+  if (typeof expression !== "string") throw new TypeError("template expression must be a string");
   const wrapper = `(async function (__env) { with (__env) { return await (${expression}); } })`;
   const script = new vm.Script(wrapper, { filename: "tavern-template-expr.ejs" });
-  const sandboxEnv = /* @__PURE__ */ Object.create(null);
-  Object.assign(sandboxEnv, env);
-  const factory = script.runInNewContext(sandboxEnv);
-  return await factory(sandboxEnv);
+  const realm = createSandboxRealm(env);
+  const factory = script.runInContext(realm.context);
+  const result = await factory(realm.env);
+  if (typeof result === "function") {
+    throw new TypeError("template expression returned a function; functions cannot cross the template sandbox boundary");
+  }
+  if (typeof result === "symbol") {
+    throw new TypeError("template expression returned a symbol; symbols cannot cross the template sandbox boundary");
+  }
+  try {
+    return structuredClone(result);
+  } catch (error) {
+    throw new TypeError(`template expression result cannot be cloned across the template sandbox boundary: ${describeThrown(error)}`);
+  }
 }
 
 // packages/tavern-template/src/yaml.ts
@@ -10944,6 +12032,9 @@ var TemplateVariableSystem = class {
     setPath(this.scopeStore(scope), key, deepClone(value));
   }
   getVar(key, options = {}) {
+    if (key !== null && typeof key !== "string") {
+      throw new TypeError(`getvar: variable key must be a string or null, got ${typeof key}`);
+    }
     const opts = normalizeOptions(options, {
       scope: "cache",
       inscope: "cache",
@@ -10958,6 +12049,9 @@ var TemplateVariableSystem = class {
     return opts.clone ? deepClone(value) : value;
   }
   setVar(key, value, options = {}) {
+    if (key !== null && typeof key !== "string") {
+      throw new TypeError(`setvar: variable key must be a string or null, got ${typeof key}`);
+    }
     const opts = normalizeOptions(options, {
       scope: "message",
       inscope: "cache",
@@ -10988,6 +12082,8 @@ var TemplateVariableSystem = class {
     }
   }
   incDecVar(key, delta, options = {}, sign) {
+    if (typeof key !== "string") throw new TypeError(`incvar/decvar: variable key must be a string, got ${typeof key}`);
+    if (typeof delta !== "number" || !Number.isFinite(delta)) throw new TypeError("incvar/decvar: delta must be a finite number");
     const opts = normalizeOptions(options, {
       scope: "message",
       inscope: "cache",
@@ -11007,6 +12103,10 @@ var TemplateVariableSystem = class {
     return this.setVar(key, next, { ...optionsAsRecord(options), scope: opts.outscope, results: opts.results, defaults: void 0 });
   }
   delVar(key, index, options = {}) {
+    if (typeof key !== "string") throw new TypeError(`delvar: variable key must be a string, got ${typeof key}`);
+    if (index !== void 0 && typeof index !== "string" && typeof index !== "number") {
+      throw new TypeError("delvar: index must be a string or number");
+    }
     const opts = normalizeOptions(options, {
       scope: "message",
       inscope: "cache",
@@ -11022,6 +12122,10 @@ var TemplateVariableSystem = class {
     return opts.results === "old" ? old : opts.results === "fullcache" ? deepClone(this.cache) : true;
   }
   insVar(key, value, index, options = {}) {
+    if (typeof key !== "string") throw new TypeError(`insvar: variable key must be a string, got ${typeof key}`);
+    if (index !== void 0 && typeof index !== "string" && typeof index !== "number") {
+      throw new TypeError("insvar: index must be a string or number");
+    }
     const opts = normalizeOptions(options, {
       scope: "message",
       inscope: "cache",
@@ -11036,19 +12140,39 @@ var TemplateVariableSystem = class {
   }
   /* ------------------------- injectPrompt 注册表 ------------------------- */
   injectPrompt(key, prompt, order = 100, _sticky = 0, uid = "") {
+    if (typeof key !== "string") throw new TypeError("injectPrompt: key must be a string");
+    if (typeof prompt !== "string") throw new TypeError("injectPrompt: prompt must be a string");
+    if (typeof order !== "number" || !Number.isFinite(order)) throw new TypeError("injectPrompt: order must be a finite number");
+    if (typeof _sticky !== "number" || !Number.isFinite(_sticky)) throw new TypeError("injectPrompt: sticky must be a finite number");
+    if (typeof uid !== "string") throw new TypeError("injectPrompt: uid must be a string");
     const list = this.injected.get(key) ?? [];
     list.push({ prompt, order, uid, seq: this.injectSeq++ });
     this.injected.set(key, list);
   }
   getPromptsInjected(key, postprocess = []) {
+    if (typeof key !== "string") throw new TypeError("getPromptsInjected: key must be a string");
+    if (!Array.isArray(postprocess)) throw new TypeError("getPromptsInjected: postprocess must be an array");
     const list = [...this.injected.get(key) ?? []].sort((a, b) => a.order - b.order || a.seq - b.seq);
     return list.map((item) => {
+      if (typeof item.prompt !== "string") throw new TypeError("getPromptsInjected: injected prompt must be a string");
       let text = item.prompt;
-      for (const rule of postprocess) text = text.replace(rule.search, rule.replace);
+      for (const rule of postprocess) {
+        if (rule === null || typeof rule !== "object") {
+          throw new TypeError("getPromptsInjected: each postprocess rule must be an object");
+        }
+        if (typeof rule.replace !== "string") {
+          throw new TypeError("getPromptsInjected: each postprocess rule requires a string replace value");
+        }
+        if (typeof rule.search !== "string" && !(rule.search instanceof RegExp)) {
+          throw new TypeError("getPromptsInjected: each postprocess rule requires a string or RegExp search value");
+        }
+        text = text.replace(rule.search, rule.replace);
+      }
       return text;
     }).join("\n");
   }
   hasPromptsInjected(key) {
+    if (typeof key !== "string") throw new TypeError("hasPromptsInjected: key must be a string");
     return this.injected.has(key);
   }
 };
@@ -11644,7 +12768,7 @@ ${bounded}`);
 
 // packages/plugin/src/regex-session.ts
 var REGEX_SCOPES = ["global", "character", "preset"];
-function isRecord(value) {
+function isRecord2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function stringField(value) {
@@ -11659,7 +12783,7 @@ function trimStringsOf(value) {
   return [];
 }
 function parseSessionRegexEntry(raw, label) {
-  if (!isRecord(raw)) throw new Error(`${label} must be a regex script object`);
+  if (!isRecord2(raw)) throw new Error(`${label} must be a regex script object`);
   const looksLikeTavernRegex = "find_regex" in raw || "script_name" in raw || "source" in raw || "destination" in raw;
   if (!looksLikeTavernRegex) {
     try {
@@ -11670,7 +12794,7 @@ function parseSessionRegexEntry(raw, label) {
   }
   const findRegex = stringField(raw["find_regex"]) || stringField(raw["findRegex"]);
   if (findRegex === "") throw new Error(`${label} has an empty find_regex`);
-  const source = isRecord(raw["source"]) ? raw["source"] : void 0;
+  const source = isRecord2(raw["source"]) ? raw["source"] : void 0;
   let placement = [];
   if (source !== void 0) {
     const bits2 = [
@@ -11685,7 +12809,7 @@ function parseSessionRegexEntry(raw, label) {
     placement = raw["placement"].filter((entry) => typeof entry === "number" && Number.isFinite(entry));
   }
   if (placement.length === 0) placement = [2];
-  const destination = isRecord(raw["destination"]) ? raw["destination"] : void 0;
+  const destination = isRecord2(raw["destination"]) ? raw["destination"] : void 0;
   try {
     return parseRegexScript2({
       id: stringField(raw["id"]),
@@ -11712,7 +12836,7 @@ function parseSessionRegexList(value, label) {
 }
 function parseSessionRegexScripts(raw) {
   if (raw === void 0) return void 0;
-  if (!isRecord(raw)) throw new Error("chat regex overlay must be an object");
+  if (!isRecord2(raw)) throw new Error("chat regex overlay must be an object");
   const parsed = {};
   for (const [scope, list] of Object.entries(raw)) {
     if (scope !== "global" && scope !== "character" && scope !== "preset") {
@@ -14147,7 +15271,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("6340a56") : void 0;
+  const commit = true ? normalizeCommit("39d6c55") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -16469,39 +17593,39 @@ function salvageManifestFields(raw) {
   };
 }
 function createModAssets(dbProvider) {
-  const requireString2 = (value, label) => {
+  const requireString3 = (value, label) => {
     if (typeof value !== "string" || value === "") throw new Error(`${label} is required`);
     return value;
   };
   return {
     listCharacters: async () => structuredClone(await (await dbProvider()).listCharacters()),
     getCharacter: async (name2) => {
-      const found = await (await dbProvider()).getCharacter(requireString2(name2, "character name"));
+      const found = await (await dbProvider()).getCharacter(requireString3(name2, "character name"));
       return found === void 0 ? null : structuredClone({ kind: found.kind, card: { spec: found.card.spec, specVersion: found.card.specVersion, data: found.card.data } });
     },
     listWorlds: async () => structuredClone(await (await dbProvider()).listWorlds()),
     getWorld: async (name2) => {
-      const book = await (await dbProvider()).getWorld(requireString2(name2, "world name"));
+      const book = await (await dbProvider()).getWorld(requireString3(name2, "world name"));
       return book === void 0 ? null : structuredClone(book);
     },
     listPresets: async () => structuredClone(await (await dbProvider()).listPresets()),
     getPreset: async (name2) => {
-      const preset = await (await dbProvider()).getPreset(requireString2(name2, "preset name"));
+      const preset = await (await dbProvider()).getPreset(requireString3(name2, "preset name"));
       return preset === void 0 ? null : structuredClone(preset);
     },
     listPersonas: async () => structuredClone(await (await dbProvider()).listPersonas()),
     getPersona: async (name2) => {
-      const persona = await (await dbProvider()).getPersona(requireString2(name2, "persona name"));
+      const persona = await (await dbProvider()).getPersona(requireString3(name2, "persona name"));
       return persona === void 0 ? null : structuredClone(persona);
     },
     listGroups: async () => structuredClone(await (await dbProvider()).listGroups()),
     getGroup: async (name2) => {
-      const group2 = await (await dbProvider()).getGroup(requireString2(name2, "group name"));
+      const group2 = await (await dbProvider()).getGroup(requireString3(name2, "group name"));
       return group2 === void 0 ? null : structuredClone(group2);
     },
-    listChats: async (character) => structuredClone(await (await dbProvider()).listChats(requireString2(character, "character name"))),
+    listChats: async (character) => structuredClone(await (await dbProvider()).listChats(requireString3(character, "character name"))),
     getChat: async (character, chatId) => {
-      const chat = await (await dbProvider()).getChat(requireString2(character, "character name"), requireString2(chatId, "chat id"));
+      const chat = await (await dbProvider()).getChat(requireString3(character, "character name"), requireString3(chatId, "chat id"));
       return chat === void 0 ? null : structuredClone(chat);
     }
   };
@@ -18605,11 +19729,11 @@ var NovelProjector = class _NovelProjector {
     for (const [chapterId, commitGroups] of paragraphsByChapter) {
       const parts = [`# ${titleByChapter.get(chapterId) ?? chapterId}`, ""];
       for (const paragraphs of commitGroups) parts.push(paragraphs.join(PARAGRAPH_SEPARATOR3), "");
-      await writeAtomicText2(path9.join(projectionsDir, "chapters", `${chapterId}.md`), `${parts.join(PARAGRAPH_SEPARATOR3).trimEnd()}
+      await writeAtomicText(path9.join(projectionsDir, "chapters", `${chapterId}.md`), `${parts.join(PARAGRAPH_SEPARATOR3).trimEnd()}
 `);
     }
     const summary = summarizeNovel(snapshot2);
-    await writeAtomicText2(path9.join(projectionsDir, "status.json"), JSON.stringify({
+    await writeAtomicText(path9.join(projectionsDir, "status.json"), JSON.stringify({
       novelId: snapshot2.novelId,
       revision: snapshot2.revision,
       contentRevision: snapshot2.contentRevision,
@@ -18845,11 +19969,6 @@ function sanitizeFilename(value) {
 }
 function textBytes2(text) {
   return new Uint8Array(Buffer.from(text, "utf8"));
-}
-async function writeAtomicText2(file, text) {
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  await fs15.writeFile(tmp, text, "utf8");
-  await fs15.rename(tmp, file);
 }
 var ZIP_UTF8_FLAG = 2048;
 var DOS_TIME = 0;
@@ -32311,9 +33430,9 @@ function helperTokenFromRequest(req) {
 // packages/plugin/src/helper.ts
 var VARIABLE_NAME = /^[\p{L}_][\p{L}\p{N}_.-]{0,63}$/u;
 async function handleHelperApi(req, res, db) {
+  const { character, chatId } = helperIdentity(req);
   const body = await readJson(req, 8 * 1024 * 1024);
   const op = typeof body?.op === "string" ? body.op : "";
-  const { character, chatId } = helperIdentity(req, body);
   const state = await db.getState();
   switch (op) {
     case "snapshot":
@@ -32355,7 +33474,7 @@ async function handleHelperApi(req, res, db) {
     }
     case "generate.stop": {
       requireSessionChatId(chatId, "generate.stop");
-      const generationId = requireString(body?.generationId, "generationId");
+      const generationId = requireString2(body?.generationId, "generationId");
       return sendJson(res, 200, {
         ok: true,
         value: { stopped: abortFrontendGeneration(character, chatId, generationId) }
@@ -32468,7 +33587,7 @@ async function handleHelperApi(req, res, db) {
     case "slash":
       return sendJson(res, 200, {
         ok: true,
-        value: await runHelperSlash(db, state, character, chatId, requireString(body?.command, "command"))
+        value: await runHelperSlash(db, state, character, chatId, requireString2(body?.command, "command"))
       });
     case "character.list":
       return sendJson(res, 200, { ok: true, value: { names: await db.listCharacters() } });
@@ -32516,7 +33635,7 @@ async function handleHelperApi(req, res, db) {
         value: await deleteLorebookSession(db, character, chatId, body)
       });
     case "lorebook.reset": {
-      const name2 = requireString(body?.name, "name");
+      const name2 = requireString2(body?.name, "name");
       if (chatId === "") throw new Error("chatId is required for lorebook.reset (session scope only)");
       await serializeSessionWrite(`${character}\0${chatId}\0${name2}`, async () => {
         await db.deleteChatWorld(character, chatId, name2);
@@ -32620,10 +33739,10 @@ async function handleHelperApi(req, res, db) {
 }
 async function handleFrontendGenerationStream(req, res, db) {
   const out = res;
+  const identity = helperIdentity(req);
   const body = await readJson(req, 8 * 1024 * 1024);
-  const identity = helperIdentity(req, body);
   const character = identity.character;
-  const chatId = requireString(identity.chatId, "chatId");
+  const chatId = requireString2(identity.chatId, "chatId");
   const state = await db.getState();
   const config = await applyFrontendWorldbookScan(db, state, character, chatId, body?.config);
   const generationId = generationIdOf(config);
@@ -32662,17 +33781,12 @@ async function handleFrontendGenerationStream(req, res, db) {
     finishFrontendGeneration(character, chatId, generationId, controller);
   }
 }
-function helperIdentity(req, body) {
+function helperIdentity(req) {
   const token = helperTokenFromRequest(req);
-  if (token !== void 0) {
-    const binding = resolveHelperBinding(token);
-    if (binding === void 0) throw new HttpError(401, "invalid or expired helper binding token");
-    return { character: binding.character, chatId: binding.chatId };
-  }
-  return {
-    character: requireString(body?.character, "character"),
-    chatId: typeof body?.chatId === "string" ? body.chatId : ""
-  };
+  if (token === void 0) throw new HttpError(401, "helper binding required (x-dsh-helper-token)");
+  const binding = resolveHelperBinding(token);
+  if (binding === void 0) throw new HttpError(401, "invalid or expired helper binding token");
+  return { character: binding.character, chatId: binding.chatId };
 }
 async function buildSnapshot(db, state, character, chatId) {
   const file = await db.getCharacter(character);
@@ -32839,7 +33953,7 @@ async function readChatScope(db, chat, chatId) {
 }
 async function replaceVariables(db, state, character, chatId, body) {
   const scope = requireVariableScope(body?.scope);
-  const tree = requireObject(body?.variables, "variables");
+  const tree = requireObject2(body?.variables, "variables");
   if (scope === "global") {
     await db.updateState(() => ({ scriptGlobals: tree }));
     return tree;
@@ -32881,7 +33995,7 @@ async function replaceMvuData(db, character, chatId, body) {
   return serializeSessionWrite(chatWriteKey(character, chatId), () => retryChatWrite(async () => {
     const snapshot2 = await requireChat(db, character, chatId);
     const chat = snapshot2.chat;
-    const stat2 = requireObject(body?.statData, "statData");
+    const stat2 = requireObject2(body?.statData, "statData");
     const chatVariables2 = ensureChatVariables(chat);
     chatVariables2["stat_data"] = stat2;
     chatVariables2["initialized_lorebooks"] = true;
@@ -33023,7 +34137,7 @@ async function retryChatWrite(operation) {
   throw lastError;
 }
 async function putLorebook(db, character, chatId, body) {
-  const name2 = requireString(body?.name, "name").trim();
+  const name2 = requireString2(body?.name, "name").trim();
   if (chatId === "") throw new Error("chatId is required for lorebook.put (scripts write the session copy)");
   const raw = requireLorebookEntries(body?.entries);
   return serializeSessionWrite(`${character}\0${chatId}\0${name2}`, async () => {
@@ -33082,7 +34196,7 @@ async function visibleWorldNames(db, character, chatId) {
 }
 async function createLorebook(db, character, chatId, body) {
   requireSessionChatId(chatId, "lorebook.create");
-  const name2 = requireString(body?.name, "name").trim();
+  const name2 = requireString2(body?.name, "name").trim();
   const raw = body?.entries === void 0 ? [] : requireLorebookEntries(body.entries);
   const entries = normalizeLorebookEntries(raw);
   return serializeSessionWrite(`${character}\0${chatId}\0${name2}`, async () => {
@@ -33098,7 +34212,7 @@ async function createLorebook(db, character, chatId, body) {
 }
 async function deleteLorebookSession(db, character, chatId, body) {
   requireSessionChatId(chatId, "lorebook.delete");
-  const name2 = requireString(body?.name, "name").trim();
+  const name2 = requireString2(body?.name, "name").trim();
   return serializeSessionWrite(`${character}\0${chatId}\0${name2}`, async () => {
     const base = await db.getWorld(name2);
     const copy = await db.getChatWorld(character, chatId, name2);
@@ -33118,7 +34232,7 @@ async function deleteLorebookSession(db, character, chatId, body) {
 async function setChatWorld(db, character, chatId, body) {
   requireSessionChatId(chatId, "chat.world.set");
   const raw = body?.name;
-  const name2 = raw === null || raw === void 0 || raw === "" ? null : requireString(raw, "name").trim();
+  const name2 = raw === null || raw === void 0 || raw === "" ? null : requireString2(raw, "name").trim();
   return serializeSessionWrite(chatWriteKey(character, chatId), () => retryChatWrite(async () => {
     const snapshot2 = await requireChat(db, character, chatId);
     const chat = snapshot2.chat;
@@ -33131,8 +34245,8 @@ async function setChatWorld(db, character, chatId, body) {
 }
 async function putSessionPreset(db, character, chatId, body) {
   requireSessionChatId(chatId, "presets.put");
-  const name2 = requireString(body?.name, "name").trim();
-  const preset = requireObject(body?.preset, "preset");
+  const name2 = requireString2(body?.name, "name").trim();
+  const preset = requireObject2(body?.preset, "preset");
   return serializeSessionWrite(`scripts:${character}\0${chatId}`, async () => {
     await db.putChatJsrOverlay(character, chatId, (current) => {
       const base = current ?? { version: 1, scriptTrees: [] };
@@ -33143,8 +34257,8 @@ async function putSessionPreset(db, character, chatId, body) {
 }
 async function putSessionPersona(db, character, chatId, body) {
   requireSessionChatId(chatId, "personas.put");
-  const name2 = requireString(body?.name, "name").trim();
-  const persona = requireObject(body?.persona, "persona");
+  const name2 = requireString2(body?.name, "name").trim();
+  const persona = requireObject2(body?.persona, "persona");
   return serializeSessionWrite(`scripts:${character}\0${chatId}`, async () => {
     await db.putChatJsrOverlay(character, chatId, (current) => {
       const base = current ?? { version: 1, scriptTrees: [] };
@@ -33154,7 +34268,7 @@ async function putSessionPersona(db, character, chatId, body) {
   });
 }
 async function renderFrontendTemplate(db, state, character, chatId, body) {
-  const code = requireString(body?.code, "code");
+  const code = requireString2(body?.code, "code");
   const context = isPlainObject4(body?.context) ? cloneJson(body.context) : {};
   const file = await db.getCharacter(character);
   const chat = chatId === "" ? void 0 : (await requireChat(db, character, chatId)).chat;
@@ -33389,7 +34503,7 @@ async function putChatScripts(db, state, character, chatId, body) {
 }
 async function patchScriptNode(db, character, chatId, body) {
   requireSessionChatId(chatId, "scripts.patch");
-  const scriptId = requireString(body?.scriptId, "scriptId");
+  const scriptId = requireString2(body?.scriptId, "scriptId");
   const info = body?.info === void 0 ? void 0 : String(body.info);
   const buttons = body?.buttons === void 0 ? void 0 : requireScriptButtons(body.buttons);
   return serializeSessionWrite(`scripts:${character}\0${chatId}`, async () => {
@@ -33417,7 +34531,7 @@ function requireScriptButtons(value) {
   if (!Array.isArray(value)) throw new Error("buttons must be an array");
   return value.map((button, index) => {
     if (!isPlainObject4(button)) throw new Error(`buttons[${index}] must be an object`);
-    const name2 = requireString(button["name"], `buttons[${index}].name`);
+    const name2 = requireString2(button["name"], `buttons[${index}].name`);
     return { name: name2, visible: button["visible"] !== false };
   });
 }
@@ -33439,8 +34553,8 @@ function patchNodeById(nodes, scriptId, mutate) {
   return { nodes: copy, node: found };
 }
 async function replaceScriptVariables(db, character, chatId, body) {
-  const scriptId = requireString(body?.scriptId, "scriptId");
-  const variables2 = requireObject(body?.variables, "variables");
+  const scriptId = requireString2(body?.scriptId, "scriptId");
+  const variables2 = requireObject2(body?.variables, "variables");
   return serializeSessionWrite(`scripts:${character}\0${chatId}`, async () => {
     await db.putChatJsrOverlay(character, chatId, (current) => {
       const base = current ?? { version: 1, scriptTrees: [] };
@@ -33508,19 +34622,19 @@ async function mutateMessages(db, character, chatId, action, body) {
     const chat = snapshot2.chat;
     const state = await db.getState();
     if (action === "set") {
-      const updates = requireArray(body?.messages, "messages");
+      const updates = requireArray2(body?.messages, "messages");
       for (const raw of updates) {
-        const update = requireObject(raw, "messages[]");
+        const update = requireObject2(raw, "messages[]");
         const index = resolveMessageId(chat.messages, update.message_id);
         applyMessageUpdate(chat.messages[index], update);
       }
     } else if (action === "create") {
-      const entries = requireArray(body?.messages, "messages");
+      const entries = requireArray2(body?.messages, "messages");
       const at = body?.insertBefore === "end" || body.insertBefore === void 0 ? chat.messages.length : normalizeInsertIndex(chat.messages.length, body.insertBefore);
-      const created = entries.map((raw) => toCreatedMessage(requireObject(raw, "messages[]"), state.activePersona ?? DEFAULT_USER2, character));
+      const created = entries.map((raw) => toCreatedMessage(requireObject2(raw, "messages[]"), state.activePersona ?? DEFAULT_USER2, character));
       chat.messages.splice(at, 0, ...created);
     } else {
-      const ids = requireArray(body?.messageIds, "messageIds");
+      const ids = requireArray2(body?.messageIds, "messageIds");
       const indexes = [...new Set(ids.map((id) => resolveMessageId(chat.messages, id)))].sort((a, b) => b - a);
       for (const index of indexes) chat.messages.splice(index, 1);
     }
@@ -33775,15 +34889,15 @@ function requireVariableScope(value) {
   if (value === "global" || value === "chat" || value === "message" || value === "character") return value;
   throw new Error(`unsupported variable scope '${String(value)}' (supported: global, chat, message, character)`);
 }
-function requireString(value, label) {
+function requireString2(value, label) {
   if (typeof value !== "string" || value.trim() === "") throw new Error(`${label} is required`);
   return value;
 }
-function requireArray(value, label) {
+function requireArray2(value, label) {
   if (!Array.isArray(value) || value.length === 0) throw new Error(`${label} must be a non-empty array`);
   return value;
 }
-function requireObject(value, label) {
+function requireObject2(value, label) {
   if (!isPlainObject4(value)) throw new Error(`${label} must be an object`);
   return cloneJson(value);
 }
@@ -34724,11 +35838,6 @@ function plansDir(dir) {
 function planFile(dir, planId) {
   return path11.join(plansDir(dir), `${planId}.json`);
 }
-async function writeAtomicText3(file, text) {
-  const tmp = `${file}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
-  await fs19.writeFile(tmp, text, "utf8");
-  await fs19.rename(tmp, file);
-}
 function newPlanId() {
   return `plan-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -34892,7 +36001,7 @@ async function proposeCardPlan(dir, character, input) {
     status: "pending"
   };
   await fs19.mkdir(plansDir(dir), { recursive: true });
-  await writeAtomicText3(planFile(dir, plan.id), `${JSON.stringify(plan, null, 2)}
+  await writeAtomicText(planFile(dir, plan.id), `${JSON.stringify(plan, null, 2)}
 `);
   return plan;
 }
@@ -34922,7 +36031,7 @@ async function proposeWorldPlan(dir, world, input) {
     status: "pending"
   };
   await fs19.mkdir(plansDir(dir), { recursive: true });
-  await writeAtomicText3(planFile(dir, plan.id), `${JSON.stringify(plan, null, 2)}
+  await writeAtomicText(planFile(dir, plan.id), `${JSON.stringify(plan, null, 2)}
 `);
   return plan;
 }
@@ -34962,7 +36071,7 @@ async function decidePlan(dir, planId, approve) {
   if (plan === void 0) throw new Error(`plan '${planId}' not found`);
   if (plan.status !== "pending") throw new Error(`plan '${planId}' is already ${plan.status}`);
   const decided = { ...plan, status: approve ? "approved" : "rejected", decidedAt: (/* @__PURE__ */ new Date()).toISOString() };
-  await writeAtomicText3(planFile(dir, plan.id), `${JSON.stringify(decided, null, 2)}
+  await writeAtomicText(planFile(dir, plan.id), `${JSON.stringify(decided, null, 2)}
 `);
   return decided;
 }
@@ -34972,7 +36081,7 @@ async function applyPlan(dir, planId) {
   if (plan.status === "rejected") throw new Error(`plan '${planId}' was rejected and cannot be applied`);
   if (plan.status === "applied") throw new Error(`plan '${planId}' was already applied`);
   const applied = { ...plan, status: "applied", appliedAt: (/* @__PURE__ */ new Date()).toISOString() };
-  await writeAtomicText3(planFile(dir, plan.id), `${JSON.stringify(applied, null, 2)}
+  await writeAtomicText(planFile(dir, plan.id), `${JSON.stringify(applied, null, 2)}
 `);
   return applied;
 }
@@ -38252,6 +39361,15 @@ async function handleApi(ctx, req, res) {
     const chatId = typeof body?.chatId === "string" ? body.chatId : "";
     if (character.trim() === "" || chatId.trim() === "") {
       throw new HttpError(400, "character and chatId are required");
+    }
+    let exists = false;
+    try {
+      exists = await db.getChatSnapshot(character, chatId) !== void 0;
+    } catch (error) {
+      if (!(error instanceof Error) || error.message !== "invalid chat id") throw error;
+    }
+    if (!exists) {
+      throw new HttpError(404, `chat '${chatId}' not found for character '${character}'`);
     }
     return sendJson(res, 200, { ok: true, token: createHelperBinding(character, chatId) });
   }

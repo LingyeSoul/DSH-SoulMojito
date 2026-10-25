@@ -118,13 +118,19 @@ export function createTemplateEnv(options: TemplateEnvOptions): Record<string, u
       data = titleOrData
     } else if (titleOrData !== undefined) {
       // getwi(lorebook, title[, data])
-      book = String(lorebookOrTitle)
+      book = requireString(lorebookOrTitle, 'getwi: lorebook')
       title = titleOrData
       if (maybeData !== null && typeof maybeData === 'object') data = maybeData
+      else if (maybeData !== undefined) throw new TypeError('getwi: data must be an object')
     } else {
       // getwi(title)
       title = lorebookOrTitle as string | number
     }
+    if (title !== undefined && typeof title !== 'string' && typeof title !== 'number') {
+      throw new TypeError('getwi: title must be a string or number')
+    }
+    if (book !== undefined) requireString(book, 'getwi: lorebook')
+    if (data === null || typeof data !== 'object') throw new TypeError('getwi: data must be an object')
     if (title === undefined || title === '') return ''
     if (depth.current >= MAX_GETWI_DEPTH) {
       host.onWarning?.(`getwi recursion depth exceeded (${MAX_GETWI_DEPTH}) at "${String(title)}"`)
@@ -153,6 +159,11 @@ export function createTemplateEnv(options: TemplateEnvOptions): Record<string, u
    * 首参为含 `<%` 的字符串时视为模板变体 getchar(template, data)（当前卡）。
    */
   async function getchar(nameOrTemplate?: string | number, templateArg?: string | Record<string, unknown>, dataArg?: Record<string, unknown>): Promise<string> {
+    if (nameOrTemplate !== undefined && typeof nameOrTemplate !== 'string' && typeof nameOrTemplate !== 'number') {
+      throw new TypeError('getchar: name must be a string or number')
+    }
+    if (templateArg !== undefined && typeof templateArg !== 'string') requireObject(templateArg, 'getchar: data')
+    if (dataArg !== undefined) requireObject(dataArg, 'getchar: data')
     let name: string | number | undefined
     let template = DEFAULT_CHAR_DEFINE
     let data: Record<string, unknown> = {}
@@ -183,6 +194,8 @@ export function createTemplateEnv(options: TemplateEnvOptions): Record<string, u
   }
 
   async function getpreset(name: string, data: Record<string, unknown> = {}): Promise<string> {
+    requireString(name, 'getpreset: name')
+    requireObject(data, 'getpreset: data')
     const prompt = host.findPresetPrompt(name)
     if (!prompt) return ''
     return await host.renderNested(prompt.content, { preset_prompt_name: prompt.name, ...data })
@@ -194,6 +207,8 @@ export function createTemplateEnv(options: TemplateEnvOptions): Record<string, u
   }
 
   function getChatMessage(idx: number, role?: 'user' | 'assistant' | 'system'): string {
+    requireFiniteNumber(idx, 'getChatMessage: index')
+    if (role !== undefined && !isRole(role)) throw new TypeError('getChatMessage: role must be user, assistant or system')
     const resolved = resolveMessageIdx(idx)
     const msg = host.messages[resolved]
     if (!msg) return ''
@@ -202,10 +217,15 @@ export function createTemplateEnv(options: TemplateEnvOptions): Record<string, u
   }
 
   function getChatMessages(a: number, b?: number | 'user' | 'assistant' | 'system', c?: 'user' | 'assistant' | 'system'): string[] {
+    requireFiniteNumber(a, 'getChatMessages: start')
+    if (b !== undefined && typeof b !== 'number' && !isRole(b)) {
+      throw new TypeError('getChatMessages: second argument must be an index or role')
+    }
+    if (c !== undefined && !isRole(c)) throw new TypeError('getChatMessages: role must be user, assistant or system')
     let start: number
     let end: number | undefined
     let role: 'user' | 'assistant' | 'system' | undefined
-    if (b === undefined || b === 'user' || b === 'assistant' || b === 'system') {
+    if (b === undefined || isRole(b)) {
       start = -a
       role = b
     } else {
@@ -229,6 +249,21 @@ export function createTemplateEnv(options: TemplateEnvOptions): Record<string, u
     pattern: string | RegExp | Array<string | RegExp>,
     options: { start?: number; end?: number | null; role?: 'user' | 'assistant' | 'system'; and?: boolean } = {},
   ): boolean {
+    const isPattern = (value: unknown): value is string | RegExp => typeof value === 'string' || isRegExp(value)
+    if (!isPattern(pattern)) {
+      if (!Array.isArray(pattern) || !pattern.every(isPattern)) {
+        throw new TypeError('matchChatMessages: pattern must be a string, RegExp or an array of them')
+      }
+    }
+    if (options === null || typeof options !== 'object') throw new TypeError('matchChatMessages: options must be an object')
+    if (options.start !== undefined) requireFiniteNumber(options.start, 'matchChatMessages: start')
+    if (options.end !== undefined && options.end !== null) requireFiniteNumber(options.end, 'matchChatMessages: end')
+    if (options.role !== undefined && !isRole(options.role)) {
+      throw new TypeError('matchChatMessages: role must be user, assistant or system')
+    }
+    if (options.and !== undefined && typeof options.and !== 'boolean') {
+      throw new TypeError('matchChatMessages: and must be a boolean')
+    }
     const from = resolveMessageIdx(options.start ?? -2)
     const to = options.end === null || options.end === undefined ? host.messages.length - 1 : resolveMessageIdx(options.end)
     const role = options.role
@@ -261,11 +296,16 @@ export function createTemplateEnv(options: TemplateEnvOptions): Record<string, u
     getGlobalVar: global.get, setGlobalVar: global.set, incGlobalVar: global.inc, decGlobalVar: global.dec, delGlobalVar: global.del, insertGlobalVar: global.ins,
     getMessageVar: message.get, setMessageVar: message.set, incMessageVar: message.inc, decMessageVar: message.dec, delMessageVar: message.del, insertMessageVar: message.ins,
     patchVariables: (key: string | null, change: unknown[], options?: unknown) => {
+      if (key !== null && typeof key !== 'string') throw new TypeError('patchVariables: key must be a string or null')
+      requireArray(change, 'patchVariables: change')
       const current = (vars.getVar(key, { scope: 'local' }) ?? {}) as JsonObject
       const patched = applyJsonPatch(isObjectLike(current) ? deepClone(current) : {}, change)
       return vars.setVar(key, patched, options)
     },
     define: (name: string, value: unknown, merge = false) => {
+      requireString(name, 'define: name')
+      if (name === '__proto__') throw new TypeError('define: name cannot be __proto__')
+      if (typeof merge !== 'boolean') throw new TypeError('define: merge must be a boolean')
       const registry = defines!
       if (merge && isObjectLike(registry[name]) && isObjectLike(value)) {
         deepMerge(registry[name] as JsonObject, value as JsonObject)
@@ -287,17 +327,28 @@ export function createTemplateEnv(options: TemplateEnvOptions): Record<string, u
     getpreset,
     getPresetPrompt: getpreset,
     getCharData: (name?: string | number) => {
+      if (name !== undefined && typeof name !== 'string' && typeof name !== 'number') {
+        throw new TypeError('getCharData: name must be a string or number')
+      }
       const card = host.getCard(name)
       return card ? deepClone(card.data) : null
     },
     getChatMessage,
     getChatMessages,
     matchChatMessages,
-    evalTemplate: async (content: string, data: Record<string, unknown> = {}) => host.renderNested(content, data),
+    evalTemplate: async (content: string, data: Record<string, unknown> = {}) => {
+      requireString(content, 'evalTemplate: content')
+      requireObject(data, 'evalTemplate: data')
+      return host.renderNested(content, data)
+    },
 
     /* ---- JSON 工具 ---- */
     parseJSON,
-    jsonPatch: (dest: JsonObject, change: unknown[]) => applyJsonPatch(deepClone(dest), change),
+    jsonPatch: (dest: JsonObject, change: unknown[]) => {
+      requireObject(dest, 'jsonPatch: destination')
+      requireArray(change, 'jsonPatch: change')
+      return applyJsonPatch(deepClone(dest), change)
+    },
 
     /* ---- 常量 ---- */
     runType: host.runType,
@@ -343,10 +394,39 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
+function requireString(value: unknown, label: string): string {
+  if (typeof value !== 'string') throw new TypeError(`${label} must be a string`)
+  return value
+}
+
+function requireFiniteNumber(value: unknown, label: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new TypeError(`${label} must be a finite number`)
+  return value
+}
+
+function requireObject(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== 'object') throw new TypeError(`${label} must be an object`)
+  return value as Record<string, unknown>
+}
+
+function requireArray(value: unknown, label: string): unknown[] {
+  if (!Array.isArray(value)) throw new TypeError(`${label} must be an array`)
+  return value
+}
+
+function isRegExp(value: unknown): value is RegExp {
+  return value instanceof RegExp
+}
+
+function isRole(value: unknown): value is 'user' | 'assistant' | 'system' {
+  return value === 'user' || value === 'assistant' || value === 'system'
+}
+
 /* ------------------------------ parseJSON ------------------------------ */
 
 /** 宽容 JSON 解析：剥代码围栏、去尾逗号、智能引号归一后重试（对照 ST parseJSON 定位）。 */
 export function parseJSON(text: string): unknown {
+  if (typeof text !== 'string') throw new TypeError('parseJSON: text must be a string')
   try {
     return JSON.parse(text)
   } catch {
@@ -382,10 +462,56 @@ export function parseJSON(text: string): unknown {
 
 type PatchOp = { op: 'add' | 'remove' | 'replace' | 'move' | 'copy' | 'test'; path: string; from?: string; value?: unknown }
 
+/** JSON 语义的安全序列化：不调用 context 提供的 toJSON/函数，避免宿主回调。 */
+function sanitizeForJson(value: unknown, stack: Set<object>): unknown {
+  if (value === null) return null
+  const type = typeof value
+  if (type === 'string' || type === 'number' || type === 'boolean') return value
+  if (type !== 'object') return undefined
+  const object = value as object
+  if (stack.has(object)) throw new TypeError('json conversion: circular structure')
+  stack.add(object)
+  try {
+    if (Array.isArray(value)) {
+      const out: unknown[] = []
+      for (let i = 0; i < value.length; i++) {
+        const item = sanitizeForJson(value[i], stack)
+        out.push(item === undefined ? null : item)
+      }
+      return out
+    }
+    if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString()
+    if (value instanceof RegExp) return {}
+    const record = value as Record<string, unknown>
+    const out: Record<string, unknown> = {}
+    for (const key of Object.keys(record)) {
+      const item = sanitizeForJson(record[key], stack)
+      if (item === undefined) continue
+      Object.defineProperty(out, key, {
+        value: item,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      })
+    }
+    return out
+  } finally {
+    stack.delete(object)
+  }
+}
+
+function safeJsonStringify(value: unknown): string | undefined {
+  const sanitized = sanitizeForJson(value, new Set())
+  return sanitized === undefined ? undefined : JSON.stringify(sanitized)
+}
+
 function decodePointer(pointer: string): string[] {
+  if (typeof pointer !== 'string') throw new TypeError('jsonPatch: path must be a string')
   if (pointer === '') throw new Error('jsonPatch: empty JSON pointer')
   if (!pointer.startsWith('/')) throw new Error(`jsonPatch: invalid JSON pointer "${pointer}"`)
-  return pointer.slice(1).split('/').map((seg) => seg.replace(/~1/g, '/').replace(/~0/g, '~'))
+  const segments = pointer.slice(1).split('/').map((seg) => seg.replace(/~1/g, '/').replace(/~0/g, '~'))
+  if (segments.includes('__proto__')) throw new TypeError('jsonPatch: JSON pointer cannot address __proto__')
+  return segments
 }
 
 /** RFC 6902 子集：add/remove/replace/move/copy/test（数组 add 支持末位 `-` 与移位插入）。 */
@@ -408,6 +534,8 @@ export function applyJsonPatch(dest: JsonObject, change: unknown[]): JsonObject 
 
   for (const raw of change) {
     const op = raw as PatchOp
+    if (op === null || typeof op !== 'object') throw new TypeError('jsonPatch: each change must be an object')
+    if (typeof op.op !== 'string') throw new TypeError('jsonPatch: op must be a string')
     const segs = decodePointer(op.path)
     const parent = parentOf(segs.slice(0, -1))
     if (parent === undefined) throw new Error(`jsonPatch: parent path missing for "${op.path}"`)
@@ -460,12 +588,12 @@ export function applyJsonPatch(dest: JsonObject, change: unknown[]): JsonObject 
     }
     if (op.op === 'test') {
       const actual = walk(segs)
-      if (JSON.stringify(actual) !== JSON.stringify(op.value)) {
+      if (safeJsonStringify(actual) !== safeJsonStringify(op.value)) {
         throw new Error(`jsonPatch: test failed at "${op.path}"`)
       }
       continue
     }
-    throw new Error(`jsonPatch: unknown op "${String((raw as { op?: string }).op)}"`)
+    throw new Error(`jsonPatch: unknown op "${op.op}"`)
   }
   return wrap[''] as JsonObject
 }
@@ -488,7 +616,11 @@ const miniLodash = {
   set: (obj: JsonObject, path: string, value: unknown) => setPath(obj, path, value),
   has: (obj: unknown, path: string) => getPath(obj, path) !== undefined,
   merge: (dest: JsonObject, ...sources: JsonObject[]) => {
-    for (const src of sources) deepMerge(dest, src)
+    requireObject(dest, '_.merge: destination')
+    for (const src of sources) {
+      requireObject(src, '_.merge: source')
+      deepMerge(dest, src)
+    }
     return dest
   },
   cloneDeep: deepClone,
@@ -509,6 +641,9 @@ const miniLodash = {
   last: (v: unknown[]) => v[v.length - 1],
   identity: <T>(v: T) => v,
   random: (lower?: number, upper?: number, floating?: boolean) => {
+    if (lower !== undefined) requireFiniteNumber(lower, '_.random: lower')
+    if (upper !== undefined) requireFiniteNumber(upper, '_.random: upper')
+    if (floating !== undefined && typeof floating !== 'boolean') throw new TypeError('_.random: floating must be a boolean')
     if (lower === undefined) return Math.random()
     const min = upper === undefined ? 0 : lower
     const max = upper === undefined ? lower : upper
@@ -523,6 +658,7 @@ const miniLodash = {
     return values.length === 0 ? undefined : values[Math.floor(Math.random() * values.length)]
   },
   sampleSize: (collection: unknown, size: number) => {
+    requireFiniteNumber(size, '_.sampleSize: size')
     const values = collectionValues(collection)
     const count = Math.max(0, Math.min(Math.trunc(size), values.length))
     for (let index = values.length - 1; index > 0; index--) {
@@ -531,10 +667,16 @@ const miniLodash = {
     }
     return values.slice(0, count)
   },
-  clamp: (value: number, lower: number, upper: number) => Math.min(Math.max(value, lower), upper),
+  clamp: (value: number, lower: number, upper: number) => {
+    requireFiniteNumber(value, '_.clamp: value')
+    requireFiniteNumber(lower, '_.clamp: lower')
+    requireFiniteNumber(upper, '_.clamp: upper')
+    return Math.min(Math.max(value, lower), upper)
+  },
   uniq: (values: unknown[]) => [...new Set(values)],
-  isEqual: (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right),
+  isEqual: (left: unknown, right: unknown) => safeJsonStringify(left) === safeJsonStringify(right),
   unset: (obj: JsonObject, path: string) => {
+    requireObject(obj, '_.unset: object')
     const existed = getPath(obj, path) !== undefined
     unsetPath(obj, path)
     return existed

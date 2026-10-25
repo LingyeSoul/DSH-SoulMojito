@@ -26,6 +26,7 @@ import {
   countEffectiveCharacters,
   isValidNovelId,
   summarizeNovel,
+  writeAtomicText,
   type BodyCommit,
   type BodyRevisionRecord,
   type MemoryStore,
@@ -415,12 +416,6 @@ function sanitizeFilename(value: string): string {
 
 function textBytes(text: string): Uint8Array {
   return new Uint8Array(Buffer.from(text, 'utf8'))
-}
-
-async function writeAtomicText(file: string, text: string): Promise<void> {
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
-  await fs.writeFile(tmp, text, 'utf8')
-  await fs.rename(tmp, file)
 }
 
 /* --------------------------- stored ZIP writer (§14.2) --------------------------- */

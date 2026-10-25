@@ -1137,6 +1137,19 @@ export async function handleApi(ctx, req, res) {
     if (character.trim() === '' || chatId.trim() === '') {
       throw new HttpError(400, 'character and chatId are required')
     }
+    // Identity is only issued for a chat that exists and belongs to the named
+    // character; a token is never minted for a guessed or foreign chat id.
+    let exists = false
+    try {
+      exists = await db.getChatSnapshot(character, chatId) !== undefined
+    } catch (error) {
+      // The store rejects malformed chat ids before touching disk; that is still
+      // "no such chat", not a server fault.
+      if (!(error instanceof Error) || error.message !== 'invalid chat id') throw error
+    }
+    if (!exists) {
+      throw new HttpError(404, `chat '${chatId}' not found for character '${character}'`)
+    }
     return sendJson(res, 200, { ok: true, token: createHelperBinding(character, chatId) })
   }
 

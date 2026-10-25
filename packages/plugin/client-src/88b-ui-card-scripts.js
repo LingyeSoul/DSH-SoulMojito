@@ -137,9 +137,27 @@
       const autoRunEnabledRef = useRef(false)
       // 竞态取消：切换角色/聊天后旧请求的响应直接丢弃，不覆盖新列表。
       const requestRef = useRef(0)
+      const helperSlotRef = useRef(null)
       const key = binding === undefined
         ? ''
         : `${sessionId}\u0000${binding.character}\u0000${binding.chatId}\u0000${architecture}`
+      // Card-scripts resets proxy through the same host helper binding as the
+      // FrontendFrame bridge. The slot is tied to this panel's session binding
+      // and retries once after a 401 (expired token / plugin restart).
+      useEffect(() => {
+        const character = binding?.character
+        const chatId = binding?.chatId
+        helperSlotRef.current = null
+        if (typeof character !== 'string' || character === '' || typeof chatId !== 'string' || chatId === '') {
+          return undefined
+        }
+        const slot = acquireHelperToken({ character, chatId })
+        helperSlotRef.current = slot
+        return () => {
+          helperSlotRef.current = null
+          slot.release()
+        }
+      }, [binding?.character, binding?.chatId])
       // bundle 绑定所属聊天 key：切换聊天后的第一帧不会把上一场聊天的脚本当成
       // 当前聊天运行（list/auto-run 都只看 currentBundle）。
       const currentBundle = bundle !== null && bundle.key === key ? bundle : null
@@ -247,17 +265,16 @@
       const resetWorldbook = () => {
         if (!supported || currentBundle === null || currentBundle.world === null) return
         if (typeof window.confirm === 'function' && !window.confirm(t('cardScripts.resetConfirm'))) return
+        const slot = helperSlotRef.current
+        if (slot === null) {
+          setError('helper binding is not ready for this session')
+          return
+        }
         setResetting(true)
         setResetDone(false)
-        void api('helper', {
-          method: 'POST',
-          headers: jsonHeaders(),
-          body: JSON.stringify({
-            op: 'lorebook.reset',
-            character: binding.character,
-            chatId: binding.chatId,
-            name: currentBundle.world,
-          }),
+        void slot.request('helper', {
+          op: 'lorebook.reset',
+          name: currentBundle.world,
         }).then(() => {
           setResetDone(true)
         }).catch((cause) => {
@@ -270,17 +287,16 @@
       const resetScripts = () => {
         if (!supported) return
         if (typeof window.confirm === 'function' && !window.confirm(t('cardScripts.resetScriptsConfirm'))) return
+        const slot = helperSlotRef.current
+        if (slot === null) {
+          setError('helper binding is not ready for this session')
+          return
+        }
         setResettingScripts(true)
         setScriptsResetDone(false)
         setResetDone(false)
-        void api('helper', {
-          method: 'POST',
-          headers: jsonHeaders(),
-          body: JSON.stringify({
-            op: 'scripts.reset',
-            character: binding.character,
-            chatId: binding.chatId,
-          }),
+        void slot.request('helper', {
+          op: 'scripts.reset',
         }).then(() => {
           // 副本没了：停止自动运行与手动脚本，列表回卡原版。AgentTavern 的自动
           // 运行宿主在「美化前端」另一个 React 树里，用窗口事件同步停止它。

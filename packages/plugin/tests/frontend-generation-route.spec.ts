@@ -71,6 +71,7 @@ describe('frontend generation helper route', () => {
   let home: string
   let store: TavernStore
   let chatId: string
+  let helperToken: string
   let server: Server
   let baseUrl = ''
   let lastChatRequest: unknown = null
@@ -107,6 +108,7 @@ describe('frontend generation helper route', () => {
       },
     })
     chatId = await store.createChat(CHARACTER, CHAT_HEADER)
+    helperToken = createHelperBinding(CHARACTER, chatId)
     const sessionEntry = normalizeEntry({
       uid: 0,
       key: ['[TAG:EXAMPLE]'],
@@ -169,7 +171,7 @@ describe('frontend generation helper route', () => {
         ],
         overrides: { chat_history: { prompts: [{ role: 'user', content: '' }] } },
       },
-    }), response, store)
+    }, { [HELPER_TOKEN_HEADER]: helperToken }), response, store)
     expect(response.statusCode).toBe(200)
     expect(JSON.parse(response.chunks.join(''))).toMatchObject({ ok: true, value: { text: 'generated text' } })
 
@@ -196,15 +198,15 @@ describe('frontend generation helper route', () => {
         should_stream: true,
         generation_id: 'gen-route-stream',
       },
-    }), response, store)
+    }, { [HELPER_TOKEN_HEADER]: helperToken }), response, store)
     const events = response.chunks.join('').trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>)
     expect(events[0]).toMatchObject({ type: 'start', generationId: 'gen-route-stream' })
     expect(events.some((event) => event.type === 'done' && event.text === 'first second')).toBe(true)
   })
 
   it('resolves stream identity from a binding token when the payload omits it', async () => {
-    // Without a token the payload would fail (character/chatId are missing);
-    // a valid token supplies the server-side binding for the stream.
+    // Without a token the call fails closed; a valid token supplies the
+    // server-side binding for the stream even when the payload omits identity.
     const token = createHelperBinding(CHARACTER, chatId)
     const response = makeResponse()
     await handleFrontendGenerationStream(makeRequest({
@@ -220,6 +222,18 @@ describe('frontend generation helper route', () => {
     expect(events.some((event) => event.type === 'done' && event.text === 'first second')).toBe(true)
   })
 
+  it('rejects a frontend generation stream without a helper binding token', async () => {
+    const response = makeResponse()
+    await expect(handleFrontendGenerationStream(makeRequest({
+      character: CHARACTER,
+      chatId,
+      config: { custom_api: { apiurl: baseUrl, model: 'example-model' }, should_stream: true },
+    }), response, store)).rejects.toMatchObject({ status: 401 })
+    // The handler fails before writing any stream headers.
+    expect(response.statusCode).toBe(0)
+    expect(response.chunks).toEqual([])
+  })
+
   it('writes an aborted event when the active stream is stopped', async () => {
     const response = makeResponse()
     const pending = handleFrontendGenerationStream(makeRequest({
@@ -231,7 +245,7 @@ describe('frontend generation helper route', () => {
         should_stream: true,
         generation_id: 'gen-route-abort',
       },
-    }), response, store)
+    }, { [HELPER_TOKEN_HEADER]: helperToken }), response, store)
     const deadline = Date.now() + 2000
     while (!response.chunks.join('').includes('"type":"delta"') && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 10))

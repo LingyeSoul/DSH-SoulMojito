@@ -19,7 +19,7 @@
 
 import { promises as fs } from 'node:fs'
 import * as path from 'node:path'
-import { writeAtomicText } from './fs-atomic.js'
+import { moveAtomic, writeAtomicText } from './fs-atomic.js'
 import { decodeCharacterCard, encodeCharacterCardJson, type CharacterCardIR } from '@dsh-soulmojito/format'
 import { TavernStore, safeFileName, type CharacterFile } from './store.js'
 
@@ -93,7 +93,7 @@ export async function moveOriginalSnapshot(root: string, fromName: string, toNam
   } catch (cause) {
     if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause
   }
-  await fs.rename(from, to)
+  await moveAtomic(from, to)
   return true
 }
 

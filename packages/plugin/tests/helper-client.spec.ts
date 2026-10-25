@@ -17,6 +17,8 @@ const here = dirname(fileURLToPath(import.meta.url))
 // inlines into client/index.js; main.js only carries the fragments and slots.
 const source = readFileSync(join(here, '../client/index.js'), 'utf8')
 const frameSource = readFileSync(join(here, '../client-src/10-frontend-frame.js'), 'utf8')
+const helperTokenSource = readFileSync(join(here, '../client-src/09-helper-token.js'), 'utf8')
+const cardScriptsSource = readFileSync(join(here, '../client-src/88b-ui-card-scripts.js'), 'utf8')
 const zh = readFileSync(join(here, '../client-src/41-i18n-zh.js'), 'utf8')
 const en = readFileSync(join(here, '../client-src/40-i18n-en.js'), 'utf8')
 const store = readFileSync(join(here, '../../tavern-store/src/store.ts'), 'utf8')
@@ -81,7 +83,7 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
       "value.triggerRequested !== true",
       'await conversation.send(text)',
       'streamFrontendGenerate',
-      '`${API}/frontend/generate`',
+      "'frontend/generate'",
       'STREAM_TOKEN_RECEIVED_INCREMENTALLY',
       "call('generate.stop-all'",
       'MESSAGE_SWIPED',
@@ -191,7 +193,7 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
     expect(source).toContain("sandbox: 'allow-scripts allow-modals allow-forms'")
     expect(source).toContain("connect-src blob:")
     expect(source).toContain("form-action 'self' about: blob:")
-    expect(frameSource).toContain('function useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId, manualHeightRef, helperTokenRef, onScriptButtons)')
+    expect(frameSource).toContain('function useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId, manualHeightRef, helperSlotRef, onScriptButtons)')
     expect(source).toContain("if (event.source !== frameRef.current?.contentWindow) return")
     expect(source).toContain("data.token !== token")
     expect(source).toContain('this frontend is not bound to a Tavern chat')
@@ -207,13 +209,28 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
   it('mints a server-side helper binding token on mount and sends it on every call', () => {
     // 2026-10-25: the host page exchanges its binding for a server-issued token;
     // helper and frontend/generate requests carry it so the payload identity is
-    // never authoritative. Every existing fetch site uses helperHeaders().
-    expect(frameSource).toContain("const HELPER_TOKEN_HEADER = 'x-dsh-helper-token'")
-    expect(frameSource).toContain('function helperHeaders(token)')
-    expect(frameSource).toContain("api('helper/bind'")
-    expect(frameSource).toContain("api('helper/unbind'")
-    expect(frameSource).toContain('headers: helperHeaders(helperTokenRef.current)')
-    expect((frameSource.match(/headers: helperHeaders\(helperTokenRef\.current\)/g) ?? []).length).toBe(8)
+    // never authoritative. The frame bridge and the card-scripts panel share one
+    // token provider, including the 401 re-bind/retry path.
+    expect(helperTokenSource).toContain("const HELPER_TOKEN_HEADER = 'x-dsh-helper-token'")
+    expect(helperTokenSource).toContain('function helperHeaders(token)')
+    expect(helperTokenSource).toContain("api('helper/bind'")
+    expect(helperTokenSource).toContain("api('helper/unbind'")
+    expect(helperTokenSource).toContain('function acquireHelperToken(binding)')
+    expect(helperTokenSource).toContain('error?.status !== 401')
+    expect(helperTokenSource).toContain('clearIfCurrent(token)')
+    expect(helperTokenSource).toContain('return send(path, payload, await bind())')
+    expect(helperTokenSource).toContain('return rawFetch(await bind())')
+    // The frame bridge uses the shared provider for both JSON and stream calls.
+    expect(frameSource).toContain('acquireHelperToken({ character, chatId })')
+    expect(frameSource).toContain("slot.request('helper'")
+    expect(frameSource).toContain("helperFetch('frontend/generate'")
+    expect(helperTokenSource).toContain('const rawFetch = (token) => fetch(')
+    expect(frameSource).not.toContain('headers: jsonHeaders()')
+    // Card-script resets use the same provider instead of a bespoke call layer.
+    expect(cardScriptsSource).toContain('const helperSlotRef = useRef(null)')
+    expect(cardScriptsSource).toContain('acquireHelperToken({ character, chatId })')
+    expect(cardScriptsSource).toContain("slot.request('helper'")
+    expect(cardScriptsSource).not.toContain("api('helper'")
   })
 
   it('recovers the first-frame snapshot when the mount push is lost', () => {

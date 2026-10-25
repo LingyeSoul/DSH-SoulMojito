@@ -15,17 +15,6 @@
     // bridge registers its own emit function; the token is the iframe identity.
     const helperFrameEmitters = new Map()
 
-    // Server-issued helper binding header. FrontendFrame exchanges its host
-    // binding for a token on mount; helper and frontend/generate calls carry it
-    // so the server resolves identity from the host page, not the iframe payload.
-    const HELPER_TOKEN_HEADER = 'x-dsh-helper-token'
-
-    function helperHeaders(token) {
-      return typeof token === 'string' && token !== ''
-        ? { ...jsonHeaders(), [HELPER_TOKEN_HEADER]: token }
-        : jsonHeaders()
-    }
-
     const VIEWPORT_MESSAGE = 'dsh-soulmojito:viewport'
     const VIEWPORT_CSS_VAR = '--dt-viewport-height'
     const FRONTEND_BACKGROUND_CSS_VAR = '--dt-host-background'
@@ -598,7 +587,7 @@
       }
     }
 
-    function useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId, manualHeightRef, helperTokenRef, onScriptButtons) {
+    function useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId, manualHeightRef, helperSlotRef, onScriptButtons) {
       const bindingRef = useRef(binding)
       bindingRef.current = binding
       const previousRef = useRef(null)
@@ -606,6 +595,16 @@
       const composerChainRef = useRef(Promise.resolve())
       const onScriptButtonsRef = useRef(onScriptButtons)
       onScriptButtonsRef.current = onScriptButtons
+      const helperRequest = (payload) => {
+        const slot = helperSlotRef.current
+        if (slot === null) return Promise.reject(new Error('this frontend is not bound to a Tavern chat'))
+        return slot.request('helper', payload)
+      }
+      const helperFetch = (path, payload) => {
+        const slot = helperSlotRef.current
+        if (slot === null) return Promise.reject(new Error('this frontend is not bound to a Tavern chat'))
+        return slot.fetch(path, payload)
+      }
       // A card's createChatMessages + /trigger pair is common. A Tavern floor cannot start a DSH turn by itself, so the
       // bridge remembers the text created by this iframe and, on /trigger,
       // replaces that floor with one host composer send. Without this the card
@@ -629,11 +628,7 @@
         const streamFrontendGenerate = async (current, config) => {
           const generationId = config && typeof config.generation_id === 'string' ? config.generation_id : ''
           emitEvent(HELPER_TAVERN_EVENTS.GENERATION_STARTED, [generationId])
-          const response = await fetch(`${API}/frontend/generate`, {
-            method: 'POST',
-            headers: helperHeaders(helperTokenRef.current),
-            body: JSON.stringify({ character: current.character, chatId: current.chatId, config }),
-          })
+          const response = await helperFetch('frontend/generate', { config })
           if (!response.ok) {
             const body = await response.json().catch(() => ({}))
             throw new Error(body.message || `HTTP ${response.status}`)
@@ -725,11 +720,7 @@
         const postSnapshot = () => {
           const current = bindingRef.current
           if (!current) return
-          void api('helper', {
-            method: 'POST',
-            headers: helperHeaders(helperTokenRef.current),
-            body: JSON.stringify({ op: 'snapshot', character: current.character, chatId: current.chatId }),
-          }).then((result) => {
+          void helperRequest({ op: 'snapshot', character: current.character, chatId: current.chatId }).then((result) => {
             const snapshot = result.value
             reply({ type: HELPER_SNAPSHOT_MESSAGE, snapshot })
             diff(previousRef.current, snapshot)
@@ -829,32 +820,18 @@
             if (conversation === undefined) {
               throw new Error('/trigger is not available in this context (no AgentTavern session)')
             }
-            const snapshot = await api('helper', {
-              method: 'POST',
-              headers: helperHeaders(helperTokenRef.current),
-              body: JSON.stringify({ op: 'snapshot', character: current.character, chatId: current.chatId }),
-            })
+            const snapshot = await helperRequest({ op: 'snapshot', character: current.character, chatId: current.chatId })
             const messages = Array.isArray(snapshot?.value?.messages) ? snapshot.value.messages : []
             const last = messages[messages.length - 1]
             if (last !== undefined && last.role === 'user' && last.message === text) {
-              await api('helper', {
-                method: 'POST',
-                headers: helperHeaders(helperTokenRef.current),
-                body: JSON.stringify({
-                  op: 'messages.delete',
-                  character: current.character,
-                  chatId: current.chatId,
-                  messageIds: [last.message_id],
-                }),
+              await helperRequest({
+                op: 'messages.delete',
+                messageIds: [last.message_id],
               })
               // Keep the next diff from reporting the replaced floor as a
               // deletion; the host send below will surface as the new user
               // message instead.
-              const afterDelete = await api('helper', {
-                method: 'POST',
-                headers: helperHeaders(helperTokenRef.current),
-                body: JSON.stringify({ op: 'snapshot', character: current.character, chatId: current.chatId }),
-              })
+              const afterDelete = await helperRequest({ op: 'snapshot' })
               if (afterDelete?.value !== undefined) previousRef.current = afterDelete.value
             }
             await conversation.send(text)
@@ -880,23 +857,15 @@
               emitEvent(HELPER_TAVERN_EVENTS.GENERATION_STOPPED, [hostSessionId])
             }
             Promise.all([
-              api('helper', {
-                method: 'POST',
-                headers: helperHeaders(helperTokenRef.current),
-                body: JSON.stringify({
-                  op: 'generate.stop-all',
-                  character: current.character,
-                  chatId: current.chatId,
-                }),
+              helperRequest({
+                op: 'generate.stop-all',
+                character: current.character,
+                chatId: current.chatId,
               }),
-              api('helper', {
-                method: 'POST',
-                headers: helperHeaders(helperTokenRef.current),
-                body: JSON.stringify({
-                  op: 'generation.stop',
-                  character: current.character,
-                  chatId: current.chatId,
-                }),
+              helperRequest({
+                op: 'generation.stop',
+                character: current.character,
+                chatId: current.chatId,
               }),
             ])
               .then(() => reply({ type: HELPER_RESULT_MESSAGE, id: data.id, ok: true, value: { output: '', chatChanged: false } }))
@@ -945,15 +914,11 @@
           const helperPayload = Object.assign({}, data.payload && typeof data.payload === 'object' ? data.payload : {})
           delete helperPayload.character
           delete helperPayload.chatId
-          void api('helper', {
-            method: 'POST',
-            headers: helperHeaders(helperTokenRef.current),
-            body: JSON.stringify({
-              ...helperPayload,
-              op: data.op,
-              character: current.character,
-              chatId: current.chatId,
-            }),
+          void helperRequest({
+            ...helperPayload,
+            op: data.op,
+            character: current.character,
+            chatId: current.chatId,
           }).then(async (result) => {
             const value = data.op === 'slash' ? await handOffTriggeredSlash(result.value) : result.value
             const stopped = value && typeof value === 'object'
@@ -1018,7 +983,7 @@
     function FrontendFrame({ html, token, binding, refreshKey, messageId, hostSessionId, identity, onScriptButtons }) {
       const t = useTranslate()
       const frameRef = useRef(null)
-      const helperTokenRef = useRef(null)
+      const helperSlotRef = useRef(null)
       // Initial canvas color: resolve the DSH native background once on first
       // render; later theme flips go through postMessage, so the srcdoc is not
       // rebuilt (a rebuild would lose card state).
@@ -1040,48 +1005,28 @@
       } = useFrontendResize(frameRef, height, storageSeed !== null)
       const postViewport = useViewportBridge(frameRef)
       const postTheme = useThemeBridge(frameRef)
-      // Server-issued helper binding (2026-10-25): exchange the host binding
-      // for a token before the bridge can issue helper calls, and unbind on
-      // teardown or when the host binding changes. A bind response that lands
-      // after cleanup is unbound immediately so the token table does not leak.
+      // Server-issued helper binding (2026-10-25): acquire the shared token for
+      // this host binding before the bridge can issue helper calls, and release
+      // it on teardown or when the host binding changes. The provider unbinds
+      // only after the last surface using that chat releases its slot.
       useEffect(() => {
         const character = binding?.character
         const chatId = binding?.chatId
-        helperTokenRef.current = null
+        helperSlotRef.current = null
         if (typeof character !== 'string' || character === '' || typeof chatId !== 'string' || chatId === '') {
           return undefined
         }
-        let cancelled = false
-        let issued = null
-        const unbind = (value) => {
-          void api('helper/unbind', {
-            method: 'POST',
-            headers: helperHeaders(value),
-            body: '{}',
-          }).catch(() => {})
-        }
-        void api('helper/bind', {
-          method: 'POST',
-          headers: jsonHeaders(),
-          body: JSON.stringify({ character, chatId }),
-        }).then((result) => {
-          if (typeof result.token !== 'string' || result.token === '') {
-            throw new Error('helper/bind returned no token')
-          }
-          issued = result.token
-          if (cancelled) {
-            unbind(issued)
-            return
-          }
-          helperTokenRef.current = issued
-        }).catch(() => {})
+        const slot = acquireHelperToken({ character, chatId })
+        helperSlotRef.current = slot
+        // Eager bind keeps the first snapshot from racing an unissued token;
+        // request() also binds lazily and retries once after a 401.
+        void slot.bind().catch(() => {})
         return () => {
-          cancelled = true
-          helperTokenRef.current = null
-          if (issued !== null) unbind(issued)
+          helperSlotRef.current = null
+          slot.release()
         }
       }, [binding?.character, binding?.chatId])
-      useHelperBridge(frameRef, token, binding, `${refreshKey}:${storageSeed === null ? 'seed' : 'ready'}`, hostSessionId, manualHeightRef, helperTokenRef, onScriptButtons)
+      useHelperBridge(frameRef, token, binding, `${refreshKey}:${storageSeed === null ? 'seed' : 'ready'}`, hostSessionId, manualHeightRef, helperSlotRef, onScriptButtons)
       useEffect(() => {
         let cancelled = false
         const character = binding?.character

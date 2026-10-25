@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const source = readFileSync(join(here, '../client/main.js'), 'utf8')
+const cardScriptsSource = readFileSync(join(here, '../client-src/88b-ui-card-scripts.js'), 'utf8')
 const zh = readFileSync(join(here, '../client-src/41-i18n-zh.js'), 'utf8')
 const en = readFileSync(join(here, '../client-src/40-i18n-en.js'), 'utf8')
 const store = readFileSync(join(here, '../../tavern-store/src/store.ts'), 'utf8')
@@ -92,6 +93,19 @@ describe('client card scripts sidebar (main.js source check)', () => {
     const resetBlock = source.slice(resetStart, source.indexOf('if (!supported) {', resetStart))
     expect(resetBlock).toContain('setRunningId(null)')
     expect(resetBlock).toContain('void loadRef.current()')
+  })
+
+  it('sends card-script resets through the shared helper token provider', () => {
+    // Both reset buttons proxy /helper; the token belongs to the panel's own
+    // session binding and the shared client retries once after a 401.
+    expect(cardScriptsSource).toContain('const helperSlotRef = useRef(null)')
+    expect(cardScriptsSource).toContain('acquireHelperToken({ character, chatId })')
+    expect(cardScriptsSource).toContain('slot.release()')
+    expect(cardScriptsSource).toContain("slot.request('helper'")
+    expect(cardScriptsSource).toContain("op: 'lorebook.reset'")
+    expect(cardScriptsSource).toContain("op: 'scripts.reset'")
+    expect(cardScriptsSource).not.toContain("api('helper'")
+    expect(cardScriptsSource).not.toContain('headers: jsonHeaders()')
   })
 
   it('ships every i18n key in both dictionaries', () => {

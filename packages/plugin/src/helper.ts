@@ -67,9 +67,9 @@ type JsonObject = Record<string, unknown>
 const VARIABLE_NAME = /^[\p{L}_][\p{L}\p{N}_.-]{0,63}$/u
 
 export async function handleHelperApi(req: unknown, res: unknown, db: TavernStore): Promise<void> {
+  const { character, chatId } = helperIdentity(req)
   const body = await readJson(req as never, 8 * 1024 * 1024)
   const op = typeof body?.op === 'string' ? body.op : ''
-  const { character, chatId } = helperIdentity(req, body)
   const state = await db.getState()
 
   switch (op) {
@@ -408,8 +408,8 @@ interface FrontendStreamResponse {
  */
 export async function handleFrontendGenerationStream(req: unknown, res: unknown, db: TavernStore): Promise<void> {
   const out = res as FrontendStreamResponse
+  const identity = helperIdentity(req)
   const body = await readJson(req as never, 8 * 1024 * 1024)
-  const identity = helperIdentity(req, body)
   const character = identity.character
   const chatId = requireString(identity.chatId, 'chatId')
   const state = await db.getState()
@@ -446,26 +446,18 @@ export async function handleFrontendGenerationStream(req: unknown, res: unknown,
 }
 
 /**
- * Resolves the character/chat identity for a helper call. A token issued by
- * `POST helper/bind` wins over the payload: the host page owns the binding, so
- * sandbox-supplied identity is ignored even when it disagrees. Unknown or
- * expired tokens fail closed with 401.
- *
- * Direct/local callers that predate the bind handshake may omit the token; the
- * browser client binds on mount and sends the header after the server issues
- * the token.
+ * Resolves the character/chat identity for a helper call exclusively from the
+ * server-issued token minted by `POST helper/bind`. Payload character/chatId are
+ * never authoritative, so a sandboxed card cannot address another chat even
+ * when it forges the body. Missing, unknown or expired tokens fail closed with
+ * 401; there is no legacy payload fallback.
  */
-function helperIdentity(req: unknown, body: JsonObject | undefined): { character: string; chatId: string } {
+function helperIdentity(req: unknown): { character: string; chatId: string } {
   const token = helperTokenFromRequest(req)
-  if (token !== undefined) {
-    const binding = resolveHelperBinding(token)
-    if (binding === undefined) throw new HttpError(401, 'invalid or expired helper binding token')
-    return { character: binding.character, chatId: binding.chatId }
-  }
-  return {
-    character: requireString(body?.character, 'character'),
-    chatId: typeof body?.chatId === 'string' ? body.chatId : '',
-  }
+  if (token === undefined) throw new HttpError(401, 'helper binding required (x-dsh-helper-token)')
+  const binding = resolveHelperBinding(token)
+  if (binding === undefined) throw new HttpError(401, 'invalid or expired helper binding token')
+  return { character: binding.character, chatId: binding.chatId }
 }
 
 /* ------------------------------- snapshot ------------------------------- */

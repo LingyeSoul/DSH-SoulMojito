@@ -17,12 +17,27 @@
 import { promises as fs } from 'node:fs'
 
 let tmpCounter = 0
+const RENAME_ATTEMPTS = 5
 
-/** 字节原子写：唯一 tmp 名 + Windows 瞬态 rename 有界退避重试。 */
+/**
+ * Rename with bounded backoff for transient Windows sharing violations.
+ * Exported for callers that must preserve an existing tmp+fsync write discipline
+ * (novel HEAD / immutable objects) instead of using writeAtomicBytes.
+ */
+export async function moveAtomic(from: string, to: string): Promise<void> {
+  await renameWithWindowsRetry(from, to, RENAME_ATTEMPTS)
+}
+
+/** Byte-atomic write: unique tmp name + bounded Windows rename retry; failure removes the tmp file. */
 export async function writeAtomicBytes(file: string, bytes: Uint8Array): Promise<void> {
   const tmp = `${file}.${process.pid}.${Date.now()}.${tmpCounter++}.tmp`
-  await fs.writeFile(tmp, bytes)
-  await renameWithWindowsRetry(tmp, file)
+  try {
+    await fs.writeFile(tmp, bytes)
+    await moveAtomic(tmp, file)
+  } catch (cause) {
+    await fs.rm(tmp, { force: true }).catch(() => {})
+    throw cause
+  }
 }
 
 /** 文本原子写（UTF-8）。 */
@@ -36,7 +51,7 @@ export async function writeAtomicText(file: string, text: string): Promise<void>
  * 即可收敛，占用方是毫秒级的读句柄；非占用类错误原样上抛。Linux/macOS 的
  * rename 不受打开句柄影响，首次即成功，重试路径不生效。
  */
-async function renameWithWindowsRetry(from: string, to: string, attempts = 5): Promise<void> {
+async function renameWithWindowsRetry(from: string, to: string, attempts: number): Promise<void> {
   for (let attempt = 1; ; attempt += 1) {
     try {
       await fs.rename(from, to)

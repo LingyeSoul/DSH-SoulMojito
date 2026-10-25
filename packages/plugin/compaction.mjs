@@ -85,12 +85,22 @@ import * as path from "node:path";
 // packages/tavern-store/src/fs-atomic.ts
 import { promises as fs } from "node:fs";
 var tmpCounter = 0;
+var RENAME_ATTEMPTS = 5;
+async function moveAtomic(from, to) {
+  await renameWithWindowsRetry(from, to, RENAME_ATTEMPTS);
+}
 async function writeAtomicBytes(file, bytes) {
   const tmp = `${file}.${process.pid}.${Date.now()}.${tmpCounter++}.tmp`;
-  await fs.writeFile(tmp, bytes);
-  await renameWithWindowsRetry(tmp, file);
+  try {
+    await fs.writeFile(tmp, bytes);
+    await moveAtomic(tmp, file);
+  } catch (cause) {
+    await fs.rm(tmp, { force: true }).catch(() => {
+    });
+    throw cause;
+  }
 }
-async function renameWithWindowsRetry(from, to, attempts = 5) {
+async function renameWithWindowsRetry(from, to, attempts) {
   for (let attempt = 1; ; attempt += 1) {
     try {
       await fs.rename(from, to);

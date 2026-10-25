@@ -1,6 +1,7 @@
 {
   "fragments": [
     "00-shell-head.js",
+    "09-helper-token.js",
     "10-frontend-frame.js",
     "10b-frontend-resize.js",
     "11-helper-bridge.js",

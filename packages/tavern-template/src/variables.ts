@@ -198,6 +198,9 @@ export class TemplateVariableSystem {
   }
 
   getVar(key: string | null, options: unknown = {}): unknown {
+    if (key !== null && typeof key !== 'string') {
+      throw new TypeError(`getvar: variable key must be a string or null, got ${typeof key}`)
+    }
     const opts = normalizeOptions(options, {
       scope: 'cache', inscope: 'cache', outscope: 'message',
       flags: 'n', results: 'new', clone: false,
@@ -209,6 +212,9 @@ export class TemplateVariableSystem {
   }
 
   setVar(key: string | null, value: unknown, options: unknown = {}): unknown {
+    if (key !== null && typeof key !== 'string') {
+      throw new TypeError(`setvar: variable key must be a string or null, got ${typeof key}`)
+    }
     const opts = normalizeOptions(options, {
       scope: 'message', inscope: 'cache', outscope: 'message',
       flags: 'n', results: 'new', clone: false,
@@ -234,6 +240,8 @@ export class TemplateVariableSystem {
   }
 
   incDecVar(key: string, delta: number, options: unknown = {}, sign: 1 | -1): unknown {
+    if (typeof key !== 'string') throw new TypeError(`incvar/decvar: variable key must be a string, got ${typeof key}`)
+    if (typeof delta !== 'number' || !Number.isFinite(delta)) throw new TypeError('incvar/decvar: delta must be a finite number')
     const opts = normalizeOptions(options, {
       scope: 'message', inscope: 'cache', outscope: 'message',
       flags: 'n', results: 'new', clone: false, defaults: 0,
@@ -249,6 +257,10 @@ export class TemplateVariableSystem {
   }
 
   delVar(key: string, index?: string | number, options: unknown = {}): unknown {
+    if (typeof key !== 'string') throw new TypeError(`delvar: variable key must be a string, got ${typeof key}`)
+    if (index !== undefined && typeof index !== 'string' && typeof index !== 'number') {
+      throw new TypeError('delvar: index must be a string or number')
+    }
     const opts = normalizeOptions(options, {
       scope: 'message', inscope: 'cache', outscope: 'message',
       flags: 'n', results: 'new', clone: false,
@@ -261,6 +273,10 @@ export class TemplateVariableSystem {
   }
 
   insVar(key: string, value: unknown, index?: string | number, options: unknown = {}): unknown {
+    if (typeof key !== 'string') throw new TypeError(`insvar: variable key must be a string, got ${typeof key}`)
+    if (index !== undefined && typeof index !== 'string' && typeof index !== 'number') {
+      throw new TypeError('insvar: index must be a string or number')
+    }
     const opts = normalizeOptions(options, {
       scope: 'message', inscope: 'cache', outscope: 'message',
       flags: 'n', results: 'new', clone: false,
@@ -273,23 +289,46 @@ export class TemplateVariableSystem {
   /* ------------------------- injectPrompt 注册表 ------------------------- */
 
   injectPrompt(key: string, prompt: string, order = 100, _sticky = 0, uid = ''): void {
+    if (typeof key !== 'string') throw new TypeError('injectPrompt: key must be a string')
+    if (typeof prompt !== 'string') throw new TypeError('injectPrompt: prompt must be a string')
+    if (typeof order !== 'number' || !Number.isFinite(order)) throw new TypeError('injectPrompt: order must be a finite number')
+    if (typeof _sticky !== 'number' || !Number.isFinite(_sticky)) throw new TypeError('injectPrompt: sticky must be a finite number')
+    if (typeof uid !== 'string') throw new TypeError('injectPrompt: uid must be a string')
     const list = this.injected.get(key) ?? []
     list.push({ prompt, order, uid, seq: this.injectSeq++ })
     this.injected.set(key, list)
   }
 
   getPromptsInjected(key: string, postprocess: Array<{ search: string | RegExp; replace: string }> = []): string {
+    if (typeof key !== 'string') throw new TypeError('getPromptsInjected: key must be a string')
+    if (!Array.isArray(postprocess)) throw new TypeError('getPromptsInjected: postprocess must be an array')
     const list = [...(this.injected.get(key) ?? [])].sort((a, b) => a.order - b.order || a.seq - b.seq)
     return list
       .map((item) => {
+        if (typeof item.prompt !== 'string') throw new TypeError('getPromptsInjected: injected prompt must be a string')
         let text = item.prompt
-        for (const rule of postprocess) text = text.replace(rule.search, rule.replace)
+        for (const rule of postprocess) {
+          // The template sandbox hands context functions across as callables; a
+          // function replacement would make host `String.replace` invoke it with
+          // host-owned match/group objects. This API only supports string values.
+          if (rule === null || typeof rule !== 'object') {
+            throw new TypeError('getPromptsInjected: each postprocess rule must be an object')
+          }
+          if (typeof rule.replace !== 'string') {
+            throw new TypeError('getPromptsInjected: each postprocess rule requires a string replace value')
+          }
+          if (typeof rule.search !== 'string' && !(rule.search instanceof RegExp)) {
+            throw new TypeError('getPromptsInjected: each postprocess rule requires a string or RegExp search value')
+          }
+          text = text.replace(rule.search, rule.replace)
+        }
         return text
       })
       .join('\n')
   }
 
   hasPromptsInjected(key: string): boolean {
+    if (typeof key !== 'string') throw new TypeError('hasPromptsInjected: key must be a string')
     return this.injected.has(key)
   }
 }

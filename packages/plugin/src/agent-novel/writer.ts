@@ -26,6 +26,7 @@ import { recordWriterRunUsage } from './usage.js'
 import { limitText } from '../tool-args.js'
 import {
   effectiveNovelCharacters,
+  tokenizeQuery,
   type Foreshadowing,
   type ImportBibleRecord,
   type ImportTimelineEvent,
@@ -106,13 +107,11 @@ export const WRITER_TRUNCATION_MARKER = '…[truncated]'
 // 维持 agent.ts 的既有 import 面，本模块内部使用同一定义。
 export { limitText }
 
-// 注意：这不是全仓唯一 tokenizer——tavern-store/src/tokenize.ts 已提供 CJK
-// bigram 分词（决策 2026-10-11-cjk-tokenization）。本副本服务于 novel lore 的
-// key 包含激活分支与 novel_body_search 有序扫描语义，暂未接入，待 agent-novel
-// 中文检索单独立项时统一。
-export function tokenizeQuery(value: string): string[] {
-  return [...new Set(value.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])]
-}
+// tokenizeQuery reuses the tavern-store CJK bigram implementation
+// (decision 2026-10-11-cjk-tokenization). This module only keeps the novel-side
+// matching semantics: matchesAllTokens is a strict AND over tokens, while lore
+// matching keeps its any-token content hit.
+export { tokenizeQuery }
 
 export function matchesAllTokens(text: string, tokens: string[]): boolean {
   const haystack = text.toLocaleLowerCase()

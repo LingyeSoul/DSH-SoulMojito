@@ -2,6 +2,7 @@
 
 import { createHash, randomBytes } from 'node:crypto'
 import { promises as fs } from 'node:fs'
+import { moveAtomic } from './fs-atomic.js'
 import { stableStringify } from './novel-model.js'
 
 
@@ -43,42 +44,45 @@ export async function writeImmutableBytes(file: string, bytes: Uint8Array): Prom
     if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause
   }
   const tmp = `${file}.${process.pid}.${Date.now()}.${randomBytes(2).toString('hex')}.tmp`
-  const fh = await fs.open(tmp, 'w')
   try {
-    await fh.writeFile(bytes)
-    await fh.sync()
-  } finally {
-    await fh.close()
+    await writeSyncedTmp(tmp, bytes)
+    await moveAtomic(tmp, file)
+  } catch (cause) {
+    await discardTmp(tmp)
+    throw cause
   }
-  await fs.rename(tmp, file)
 }
 
 /**
  * HEAD replacement (§10.2 step 4): tmp + fsync + rename is the logical commit
  * point. On Windows, Node's fs.rename replaces the existing target
  * (MoveFileExW MOVEFILE_REPLACE_EXISTING), verified by the test suite on a
- * real NTFS filesystem; one retry covers transient EPERM/EBUSY contention.
+ * real NTFS filesystem; moveAtomic covers transient EPERM/EACCES/EBUSY sharing
+ * violations with bounded backoff.
  */
 export async function replaceHead(head: string, bytes: Uint8Array): Promise<void> {
   const tmp = `${head}.${process.pid}.${Date.now()}.${randomBytes(2).toString('hex')}.tmp`
-  const fh = await fs.open(tmp, 'w')
+  try {
+    await writeSyncedTmp(tmp, bytes)
+    await moveAtomic(tmp, head)
+  } catch (cause) {
+    await discardTmp(tmp)
+    throw cause
+  }
+}
+
+async function writeSyncedTmp(file: string, bytes: Uint8Array): Promise<void> {
+  const fh = await fs.open(file, 'w')
   try {
     await fh.writeFile(bytes)
     await fh.sync()
   } finally {
     await fh.close()
   }
-  try {
-    await fs.rename(tmp, head)
-  } catch (cause) {
-    const code = (cause as NodeJS.ErrnoException).code
-    if (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY') {
-      try { await fs.rm(tmp, { force: true }) } catch { /* best effort */ }
-      throw cause
-    }
-    await new Promise((resolve) => setTimeout(resolve, 25))
-    await fs.rename(tmp, head)
-  }
+}
+
+async function discardTmp(file: string): Promise<void> {
+  await fs.rm(file, { force: true }).catch(() => {})
 }
 
 export async function readDirectories(root: string): Promise<string[]> {

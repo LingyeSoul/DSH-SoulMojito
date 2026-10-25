@@ -5,7 +5,7 @@ import { promises as fsPromises } from 'node:fs'
 import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { MemoryStore, TavernStore, VariableStore, normalizeMemoryEmbedding } from '../src/index.js'
+import { MemoryStore, TavernStore, VariableStore, normalizeMemoryEmbedding, writeAtomicText } from '../src/index.js'
 import { decodeCharacterCard, encodeCharx, encodeCharacterCardPng, normalizeEntry, parseRegexScripts, stableDeepEqual } from '@dsh-soulmojito/format'
 import type { WorldBookIR } from '@dsh-soulmojito/format'
 import { syntheticCardPng, syntheticWorldRaw } from '../../tavern-format/tests/helpers/synthetic.js'
@@ -63,6 +63,19 @@ describe('TavernStore', () => {
     } finally {
       rename.mockRestore()
     }
+  }))
+
+  it('writeAtomic 失败时清理唯一 tmp 文件', withStore(async (_store, dir) => {
+    const target = path.join(dir, 'atomic-cleanup.json')
+    const rename = vi.spyOn(fsPromises, 'rename').mockRejectedValue(
+      Object.assign(new Error('cross-device link'), { code: 'EXDEV' }),
+    )
+    try {
+      await expect(writeAtomicText(target, 'payload')).rejects.toThrow('cross-device link')
+    } finally {
+      rename.mockRestore()
+    }
+    expect((await fsPromises.readdir(dir)).filter((entry) => entry.includes('.tmp'))).toEqual([])
   }))
 
   it('变更水位：资产写入推进、无写入稳定、聊天写入不参与', withStore(async (store) => {

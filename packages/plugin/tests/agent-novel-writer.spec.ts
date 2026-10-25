@@ -30,6 +30,7 @@ import {
   renderWriterPackFull,
   renderWriterPackTrimmed,
   runDelegatedWriter,
+  tokenizeQuery,
   type ContentBlockLike,
   type ProjectCharacterPage,
   type SubagentRuntimeLike,
@@ -959,6 +960,19 @@ describe('agent-novel writer tool integration', () => {
 
   beforeEach(() => {
     for (const runId of [...delegationTable().keys()]) removeWriterDelegation(runId)
+  })
+
+  it('tokenizes a Chinese lore query into bigrams and matches through novel_lore_search', async () => {
+    const query = '海鸟为何提前逃走'
+    const tokens = tokenizeQuery(query)
+    expect(tokens).toContain('海鸟')
+    expect(tokens).toContain('逃走')
+    expect(tokens).not.toContain(query)
+
+    const lore = await tools.get('novel_lore_search')!.execute({ query }, authorExec)
+    expect(lore.sourceCount).toBe(1)
+    expect(lore.hits[0]).toMatchObject({ book: '风暴志', uid: 0, keys: ['风暴'] })
+    expect(lore.hits[0].content).toContain('海鸟')
   })
 
   function execWithRuntime(runtime: SubagentRuntimeLike, agentId: string = AUTHOR) {

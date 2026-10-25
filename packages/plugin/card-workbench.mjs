@@ -1744,15 +1744,25 @@ import * as path from "node:path";
 // packages/tavern-store/src/fs-atomic.ts
 import { promises as fs } from "node:fs";
 var tmpCounter = 0;
+var RENAME_ATTEMPTS = 5;
+async function moveAtomic(from, to) {
+  await renameWithWindowsRetry(from, to, RENAME_ATTEMPTS);
+}
 async function writeAtomicBytes(file, bytes) {
   const tmp = `${file}.${process.pid}.${Date.now()}.${tmpCounter++}.tmp`;
-  await fs.writeFile(tmp, bytes);
-  await renameWithWindowsRetry(tmp, file);
+  try {
+    await fs.writeFile(tmp, bytes);
+    await moveAtomic(tmp, file);
+  } catch (cause) {
+    await fs.rm(tmp, { force: true }).catch(() => {
+    });
+    throw cause;
+  }
 }
 async function writeAtomicText(file, text) {
   await writeAtomicBytes(file, new Uint8Array(Buffer.from(text, "utf8")));
 }
-async function renameWithWindowsRetry(from, to, attempts = 5) {
+async function renameWithWindowsRetry(from, to, attempts) {
   for (let attempt = 1; ; attempt += 1) {
     try {
       await fs.rename(from, to);
@@ -4159,7 +4169,7 @@ async function moveOriginalSnapshot(root, fromName, toName) {
   } catch (cause) {
     if (cause.code !== "ENOENT") throw cause;
   }
-  await fs3.rename(from, to);
+  await moveAtomic(from, to);
   return true;
 }
 async function restoreOriginal(root, characterName) {
@@ -4495,11 +4505,6 @@ function plansDir(dir) {
 function planFile(dir, planId) {
   return path4.join(plansDir(dir), `${planId}.json`);
 }
-async function writeAtomicText2(file, text) {
-  const tmp = `${file}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
-  await fs5.writeFile(tmp, text, "utf8");
-  await fs5.rename(tmp, file);
-}
 function newPlanId() {
   return `plan-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -4663,7 +4668,7 @@ async function proposeCardPlan(dir, character, input) {
     status: "pending"
   };
   await fs5.mkdir(plansDir(dir), { recursive: true });
-  await writeAtomicText2(planFile(dir, plan.id), `${JSON.stringify(plan, null, 2)}
+  await writeAtomicText(planFile(dir, plan.id), `${JSON.stringify(plan, null, 2)}
 `);
   return plan;
 }
@@ -4693,7 +4698,7 @@ async function proposeWorldPlan(dir, world, input) {
     status: "pending"
   };
   await fs5.mkdir(plansDir(dir), { recursive: true });
-  await writeAtomicText2(planFile(dir, plan.id), `${JSON.stringify(plan, null, 2)}
+  await writeAtomicText(planFile(dir, plan.id), `${JSON.stringify(plan, null, 2)}
 `);
   return plan;
 }
@@ -4714,7 +4719,7 @@ async function applyPlan(dir, planId) {
   if (plan.status === "rejected") throw new Error(`plan '${planId}' was rejected and cannot be applied`);
   if (plan.status === "applied") throw new Error(`plan '${planId}' was already applied`);
   const applied = { ...plan, status: "applied", appliedAt: (/* @__PURE__ */ new Date()).toISOString() };
-  await writeAtomicText2(planFile(dir, plan.id), `${JSON.stringify(applied, null, 2)}
+  await writeAtomicText(planFile(dir, plan.id), `${JSON.stringify(applied, null, 2)}
 `);
   return applied;
 }

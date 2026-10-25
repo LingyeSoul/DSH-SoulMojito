@@ -8,7 +8,8 @@
  * cannot address another chat even if it forges character/chatId.
  *
  * Tokens are process-local and expire after 30 minutes. A plugin restart drops
- * the table; the client binds again on the next FrontendFrame mount.
+ * the table; the client drops a 401 token, binds again and retries that call
+ * once.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -51,6 +52,12 @@ export function deleteHelperBinding(token: string): boolean {
 /** Test-only: start a test from a clean token table. */
 export function resetHelperBindingsForTests(): void {
   bindings.clear()
+}
+
+/** Test-only: move every issued token past the 30-minute TTL. */
+export function expireHelperBindingsForTests(): void {
+  const createdAt = Date.now() - HELPER_BINDING_TTL_MS
+  for (const binding of bindings.values()) binding.createdAt = createdAt
 }
 
 /**

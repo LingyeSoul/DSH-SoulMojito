@@ -23,6 +23,7 @@ describe('frontend/latest route e2e through the real HTTP surface', () => {
   let emptyChatId: string
   let httpServer: Server
   let baseUrl = ''
+  let helperToken = ''
 
   function makeRequest(url: string, method = 'GET') {
     const listeners = new Map<string, (value?: unknown) => void>()
@@ -97,6 +98,16 @@ describe('frontend/latest route e2e through the real HTTP surface', () => {
     const address = httpServer.address()
     if (address === null || typeof address === 'string') throw new Error('frontend route test server has no port')
     baseUrl = `http://127.0.0.1:${address.port}/api/dsh-soulmojito`
+    const bind = await fetch(`${baseUrl}/helper/bind`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ character: CHARACTER, chatId }),
+    })
+    const bound = await bind.json() as { token?: string }
+    if (typeof bound.token !== 'string' || bound.token === '') {
+      throw new Error(`helper/bind failed: ${JSON.stringify(bound)}`)
+    }
+    helperToken = bound.token
   })
 
   afterAll(async () => {
@@ -142,7 +153,7 @@ describe('frontend/latest route e2e through the real HTTP surface', () => {
   })
 
   it('streams virtual IndexedDB record bytes through the real HTTP routes', async () => {
-    const headers = { 'content-type': 'application/json' }
+    const headers = { 'content-type': 'application/json', 'x-dsh-helper-token': helperToken }
     const open = await fetch(`${baseUrl}/helper`, {
       method: 'POST',
       headers,
@@ -207,7 +218,7 @@ describe('frontend/latest route e2e through the real HTTP surface', () => {
     })
     const response = await fetch(`${baseUrl}/helper`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-dsh-helper-token': helperToken },
       body: JSON.stringify({ op: 'snapshot', character: CHARACTER, chatId }),
     })
     expect(response.status).toBe(200)

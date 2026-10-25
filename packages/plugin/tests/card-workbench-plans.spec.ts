@@ -1,8 +1,8 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, promises as fsPromises } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { apply as applyPlugin } from '../src/index.js'
 import { apply, type AgentContextLike } from '../src/card-workbench/agent.js'
 import {
@@ -183,6 +183,33 @@ describe('Card Workbench plan confirmation protocol (proposal 0013 P2)', () => {
     // 人可读可 diff 的规范 JSON,且可原样读回。
     expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ id: plan.id, status: 'pending', character: CHARACTER })
     expect((await getPlan(tavern, plan.id))!.title).toBe('Soften the personality')
+  })
+
+  it('plan writes retry a transient Windows rename sharing violation', async () => {
+    const rename = vi.spyOn(fsPromises, 'rename').mockImplementationOnce(async () => {
+      const error = new Error('operation not permitted') as NodeJS.ErrnoException
+      error.code = 'EPERM'
+      throw error
+    })
+    try {
+      const plan = await proposeCardPlan(tavern, CHARACTER, {
+        title: 'retry transient rename',
+        changes: [{ field: 'scenario', currentValue: 'A planning room.', newValue: 'A quiet room.' }],
+      })
+      expect(rename).toHaveBeenCalledTimes(2)
+      expect((await getPlan(tavern, plan.id))?.title).toBe('retry transient rename')
+    } finally {
+      rename.mockRestore()
+    }
+  })
+
+  it('plan and projector writes reuse the shared tavern-store atomic helper', () => {
+    const plansSource = readFileSync(join(import.meta.dirname, '..', 'src', 'card-workbench', 'plans.ts'), 'utf8')
+    expect(plansSource).toContain("import { writeAtomicText } from '../../../tavern-store/src/fs-atomic.js'")
+    expect(plansSource).not.toContain('async function writeAtomicText')
+    const projectorSource = readFileSync(join(import.meta.dirname, '..', 'src', 'agent-novel', 'projector.ts'), 'utf8')
+    expect(projectorSource).toContain('writeAtomicText,')
+    expect(projectorSource).not.toContain('async function writeAtomicText')
   })
 
   it('listPlans filters by character/status and decides transitions round-trip', async () => {

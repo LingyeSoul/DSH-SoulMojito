@@ -13,6 +13,9 @@ export type PrimitiveValue = string | number | boolean
 
 /** 解析路径为段列表；空路径返回 []。 */
 export function parsePath(path: string): string[] {
+  if (typeof path !== 'string') {
+    throw new TypeError(`template variable path must be a string, got ${typeof path}`)
+  }
   if (path === '') return []
   const segments: string[] = []
   let buf = ''
@@ -40,6 +43,9 @@ export function parsePath(path: string): string[] {
     }
   }
   if (buf !== '') segments.push(buf)
+  if (segments.includes('__proto__')) {
+    throw new TypeError('template variable path cannot address __proto__')
+  }
   return segments
 }
 
@@ -51,7 +57,15 @@ export function deepClone<T>(value: T): T {
   if (Array.isArray(value)) return value.map((item) => deepClone(item)) as T
   if (isObjectLike(value)) {
     const out: JsonObject = {}
-    for (const [key, item] of Object.entries(value)) out[key] = deepClone(item)
+    for (const [key, item] of Object.entries(value)) {
+      if (key === '__proto__') continue
+      Object.defineProperty(out, key, {
+        value: deepClone(item),
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      })
+    }
     return out as T
   }
   return value
@@ -143,6 +157,7 @@ export function unsetPath(root: JsonObject, path: string, index?: string | numbe
  * 字符串在 index 处插入（缺省尾部）。其他类型静默无操作（对照 ST insvar）。
  */
 export function insertAtPath(root: JsonObject, path: string, value: unknown, index?: string | number): void {
+  if (index === '__proto__') throw new TypeError('insert path cannot use __proto__ as an index')
   const target = getPath(root, path)
   if (Array.isArray(target)) {
     const idx = index === undefined ? target.length : Number(index)
@@ -160,6 +175,7 @@ export function insertAtPath(root: JsonObject, path: string, value: unknown, ind
 /** 深合并：对象递归，数组与其他类型用 source 替换；source undefined 的键跳过。 */
 export function deepMerge(target: JsonObject, source: JsonObject): JsonObject {
   for (const [key, value] of Object.entries(source)) {
+    if (key === '__proto__') continue
     if (value === undefined) continue
     const dst = target[key]
     if (isObjectLike(dst) && isObjectLike(value)) {
