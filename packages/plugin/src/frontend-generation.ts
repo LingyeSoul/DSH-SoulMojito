@@ -7,9 +7,14 @@
  *
  * The bridge is deliberately narrow: /models (GET) and /chat/completions (POST,
  * non-streaming), no redirects, no credentials in the URL, HTTPS only except for
- * loopback development proxies. The key is used only in the outgoing request and
- * is redacted from every error message.
+ * loopback development proxies. Literal private/link-local/metadata destinations
+ * are rejected by frontend-target-policy.ts. The key is used only in the
+ * outgoing request and is redacted from every error message.
  */
+import {
+  decideCustomApiTarget,
+  type CustomApiTargetBlockReason,
+} from './frontend-target-policy.js'
 
 const REQUEST_TIMEOUT_MS = 180_000
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024
@@ -76,6 +81,23 @@ export class FrontendGenerationError extends Error {
   }
 }
 
+/**
+ * Structured destination-policy rejection. Callers may branch on `code` /
+ * `reason`; the message is client-visible and never contains the API key.
+ */
+export class FrontendTargetBlockedError extends FrontendGenerationError {
+  readonly code = 'TAVERN_FRONTEND_TARGET_BLOCKED'
+  readonly reason: CustomApiTargetBlockReason
+  readonly host: string
+
+  constructor(reason: CustomApiTargetBlockReason, host: string, detail: string) {
+    super(`custom API target ${host} is blocked: ${reason} [TAVERN_FRONTEND_TARGET_BLOCKED] (${detail})`)
+    this.name = 'FrontendTargetBlockedError'
+    this.reason = reason
+    this.host = host
+  }
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -88,11 +110,6 @@ function requireText(value: unknown, field: string, maxChars: number): string {
   if (text === '') throw new FrontendGenerationError(`${field} must not be empty`)
   if (text.length > maxChars) throw new FrontendGenerationError(`${field} is too long (${text.length} > ${maxChars})`)
   return text
-}
-
-function isLoopbackHostname(hostname: string): boolean {
-  const name = hostname.toLowerCase()
-  return name === 'localhost' || name === '127.0.0.1' || name === '[::1]' || name === '::1'
 }
 
 function normalizeBaseUrl(url: URL): string {
@@ -122,8 +139,9 @@ function parseApiTarget(value: unknown, requireModel: boolean): CustomApiTarget 
   if (url.username !== '' || url.password !== '') {
     throw new FrontendGenerationError('custom_api.apiurl must not contain credentials; put the key in the API key field')
   }
-  if (url.protocol === 'http:' && !isLoopbackHostname(url.hostname)) {
-    throw new FrontendGenerationError('custom_api.apiurl must use https:// for non-loopback hosts')
+  const destination = decideCustomApiTarget(url)
+  if (!destination.allowed) {
+    throw new FrontendTargetBlockedError(destination.reason, destination.hostname, destination.detail)
   }
   if (record.key !== undefined && typeof record.key !== 'string') {
     throw new FrontendGenerationError('custom_api.key must be a string when present')

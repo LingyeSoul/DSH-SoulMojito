@@ -11,10 +11,12 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   FrontendGenerationError,
+  FrontendTargetBlockedError,
   generateWithCustomApi,
   generateWithCustomApiStream,
   listCustomApiModels,
 } from '../src/frontend-generation.js'
+import { decideCustomApiTarget } from '../src/frontend-target-policy.js'
 
 const API_KEY = 'test-key-6b0f'
 let server: Server
@@ -173,5 +175,97 @@ describe('frontend generation bridge', () => {
     await expect(generateWithCustomApi({
       custom_api: { apiurl: baseUrl, key: API_KEY, model: 'model-a' },
     })).rejects.toThrow('user_input or chat history prompts')
+  })
+})
+
+describe('custom API destination policy', () => {
+  it('allows public HTTPS hosts and explicit loopback proxies', () => {
+    for (const raw of ['https://api.example.com/v1', 'https://example.test/v1']) {
+      expect(decideCustomApiTarget(new URL(raw))).toEqual({
+        allowed: true,
+        hostname: new URL(raw).hostname,
+        loopback: false,
+      })
+    }
+    for (const raw of [
+      'http://localhost:8181/v1',
+      'http://127.0.0.1:8181/v1',
+      'http://[::1]:8181/v1',
+      'https://localhost/v1',
+    ]) {
+      expect(decideCustomApiTarget(new URL(raw))).toMatchObject({ allowed: true, loopback: true })
+    }
+  })
+
+  it('lets a public HTTPS target pass the policy into request validation', async () => {
+    // The empty prompt is rejected after the target check, before any fetch, so
+    // this proves the public endpoint is accepted without touching the network.
+    await expect(generateWithCustomApi({
+      custom_api: { apiurl: 'https://api.example.com/v1', model: 'model-a' },
+    })).rejects.toThrow('user_input or chat history prompts')
+  })
+
+  it('blocks private, link-local, unique-local, unspecified and metadata literals', () => {
+    const blocked: Array<[string, string]> = [
+      ['https://10.1.2.3/v1', 'private-address'],
+      ['https://172.16.0.1/v1', 'private-address'],
+      ['https://172.31.255.254/v1', 'private-address'],
+      ['https://192.168.1.1/v1', 'private-address'],
+      ['https://127.0.0.2/v1', 'private-address'],
+      ['https://169.254.169.254/latest/meta-data', 'private-address'],
+      ['https://0.0.0.0/v1', 'private-address'],
+      ['https://100.100.100.200/v1', 'private-address'],
+      ['https://[fe80::1]/v1', 'private-address'],
+      ['https://[fd00::1]/v1', 'private-address'],
+      ['https://[::]/v1', 'private-address'],
+      ['https://[::ffff:10.0.0.1]/v1', 'private-address'],
+      ['https://[64:ff9b::10.0.0.1]/v1', 'private-address'],
+      ['https://[2001:db8::1]/v1', 'private-address'],
+    ]
+    for (const [raw, reason] of blocked) {
+      expect(decideCustomApiTarget(new URL(raw))).toMatchObject({ allowed: false, reason })
+    }
+  })
+
+  it('blocks metadata, private-use and single-label hostnames', () => {
+    const blocked: Array<[string, string]> = [
+      ['https://metadata.google.internal/v1', 'metadata-host'],
+      ['https://metadata.goog/v1', 'metadata-host'],
+      ['https://instance-data/v1', 'metadata-host'],
+      ['https://printer/v1', 'private-hostname'],
+      ['https://gateway.internal/v1', 'private-hostname'],
+      ['https://gateway.local/v1', 'private-hostname'],
+      ['https://gateway.localhost/v1', 'private-hostname'],
+    ]
+    for (const [raw, reason] of blocked) {
+      expect(decideCustomApiTarget(new URL(raw))).toMatchObject({ allowed: false, reason })
+    }
+  })
+
+  it('rejects a private endpoint with a structured error before fetching', async () => {
+    let caught: unknown = null
+    try {
+      await listCustomApiModels({ apiurl: 'https://192.168.10.20/v1', key: API_KEY })
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toBeInstanceOf(FrontendTargetBlockedError)
+    expect(caught).toBeInstanceOf(FrontendGenerationError)
+    expect(caught).toMatchObject({
+      code: 'TAVERN_FRONTEND_TARGET_BLOCKED',
+      reason: 'private-address',
+      host: '192.168.10.20',
+    })
+  })
+
+  it('rejects a metadata hostname during generation without redirecting', async () => {
+    await expect(generateWithCustomApi({
+      custom_api: { apiurl: 'https://metadata.google.internal/v1', model: 'model-a' },
+      user_input: 'probe',
+    })).rejects.toMatchObject({
+      code: 'TAVERN_FRONTEND_TARGET_BLOCKED',
+      reason: 'metadata-host',
+      host: 'metadata.google.internal',
+    })
   })
 })

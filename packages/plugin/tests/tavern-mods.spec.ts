@@ -420,6 +420,7 @@ export async function setup(api) {
   api.http.route('GET', 'ping', (req, reply) => reply.json({ pong: true, version: api.version }))
   api.http.route('GET', 'page', (req, reply) => reply.html('<p>hello</p>'))
   api.http.route('GET', 'boom', () => { throw new Error('kaboom') })
+  api.http.route('GET', 'leak', () => { throw new Error('failed to read C:\\\\SyntheticWorkspace\\\\ExampleUser\\\\state.json and /synthetic/home/example-user/state.json') })
   let ticks = Number((await api.storage.get('ticks')) ?? 0)
   api.timers.setInterval(() => { ticks += 1; void api.storage.set('ticks', ticks) }, 15)
   return () => mark('outer')
@@ -505,6 +506,17 @@ export async function setup(api) {
     expect(boom.handled).toBe(true)
     expect(boom.res.statusCode).toBe(500)
     expect(JSON.parse(boom.res.chunks[0]!)).toMatchObject({ ok: false })
+
+    // Mod code is third-party: an absolute path in its error must not reach
+    // the HTTP body (synthetic placeholders only).
+    const leak = await route(host, 'sample.mod/leak')
+    expect(leak.handled).toBe(true)
+    expect(leak.res.statusCode).toBe(500)
+    const leakBody = leak.res.chunks.join('')
+    expect(leakBody).not.toContain('SyntheticWorkspace')
+    expect(leakBody).not.toContain('ExampleUser')
+    expect(leakBody).not.toContain('/synthetic/home')
+    expect(JSON.parse(leakBody)).toMatchObject({ ok: false, message: expect.stringContaining('internal storage error') })
   })
 
   it('skips broken mods and engine mismatches without breaking the rest', async () => {

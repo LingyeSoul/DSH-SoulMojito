@@ -14,7 +14,23 @@ import type { MaintenanceLlmContext } from '../memory-maintenance.js'
 import { memories, memoryVectors } from '../runtime.js'
 import { readJson, sendJson } from './io.js'
 import { readGuidesSnapshot } from './panel.js'
+import { INTERNAL_ERROR_MESSAGE, publicErrorMessage } from './public-error.js'
 import type { NovelApiRequest, NovelApiResponse } from './novel.js'
+
+/**
+ * Process output can contain absolute profile/model paths. It is useful for
+ * server-side diagnosis but never safe to echo verbatim; keep it in the log
+ * and omit it from the HTTP body when it looks sensitive.
+ */
+function safeInstallOutput(outputTail: string): string | undefined {
+  if (outputTail === '') return undefined
+  if (publicErrorMessage(new Error(outputTail)) !== INTERNAL_ERROR_MESSAGE) return outputTail
+  console.warn('dsh-soulmojito: local embed runtime install output withheld', {
+    operation: 'embed-runtime-install',
+    outputTail,
+  })
+  return undefined
+}
 
 /* ---------- 记忆语义检索 embed 管理面（提案 0016 §配置面） ---------- */
 
@@ -195,17 +211,24 @@ export async function handleMemoryEmbedApi(
     try {
       const outcome = await installPromise
       if (!outcome.ok) {
+        const detail = publicErrorMessage(new Error(outcome.message ?? 'install failed'))
+        const outputTail = safeInstallOutput(outcome.outputTail)
         return sendJson(res, 400, {
           ok: false,
-          message: outcome.message ?? 'install failed',
-          ...(outcome.outputTail !== '' ? { outputTail: outcome.outputTail } : {}),
+          // A raw pnpm/cause message can carry a profile or model path; the
+          // original output is logged below instead of echoed.
+          message: detail === INTERNAL_ERROR_MESSAGE
+            ? 'local runtime install failed; see the server log for details'
+            : detail,
+          ...(outputTail === undefined ? {} : { outputTail }),
         })
       }
+      const outputTail = safeInstallOutput(outcome.outputTail)
       return sendJson(res, 200, {
         ok: true,
         alreadyInstalled: outcome.alreadyInstalled,
         ...(outcome.message !== undefined ? { message: outcome.message } : {}),
-        ...(outcome.outputTail !== '' ? { outputTail: outcome.outputTail } : {}),
+        ...(outputTail === undefined ? {} : { outputTail }),
       })
     } finally {
       localRuntimeInstallInFlight = undefined
@@ -248,7 +271,11 @@ export async function handleMemoryEmbedApi(
       const result = await embedProbe(root, config)
       return sendJson(res, 200, { ok: true, ...result })
     } catch (cause) {
-      return sendJson(res, 400, { ok: false, message: cause instanceof Error ? cause.message : String(cause) })
+      const message = publicErrorMessage(cause)
+      // A local runtime failure can embed a model path; rethrow so the outer
+      // handler logs the full cause and answers with the shared internal body.
+      if (message === INTERNAL_ERROR_MESSAGE) throw cause
+      return sendJson(res, 400, { ok: false, message })
     }
   }
 

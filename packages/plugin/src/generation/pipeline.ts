@@ -14,6 +14,7 @@ import { tavernDataRoot } from '../dsh-home.js'
 import { generationHooks, type GenerationLlmRequestPayload } from '../generation-hooks.js'
 import { formatGuidesBlock } from '../guides.js'
 import { readJson, sendJson, type HttpRequest, type HttpResponse } from '../http/io.js'
+import { publicError } from '../http/public-error.js'
 import type { HostAgentLike, PluginContext } from '../host-contract.js'
 import { createMessage } from '../message.js'
 import { beginStreamEpoch, emitChatSaved, emitStreamDelta } from '../mods/events.js'
@@ -219,7 +220,12 @@ export async function previewGeneration(ctx: PluginContext, req: HttpRequest, re
     }
   } catch (error) {
     if (!res.writableEnded) {
-      return sendJson(res, 500, { ok: false, message: error instanceof Error ? error.message : String(error) })
+      const failure = publicError(error, { operation: 'preview-generation', logger: ctx.logger })
+      return sendJson(res, failure.status, {
+        ok: false,
+        message: failure.message,
+        ...(failure.code === undefined ? {} : { code: failure.code }),
+      })
     }
   }
 }

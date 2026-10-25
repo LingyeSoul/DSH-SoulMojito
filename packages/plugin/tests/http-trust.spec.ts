@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { HttpError } from '../src/http/errors.js'
 import { readJson } from '../src/http/io.js'
-import { requestTrustFailure, type TrustRequest } from '../src/http/trust.js'
+import { normalizeAllowedHosts, requestTrustFailure, type TrustRequest } from '../src/http/trust.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const frameSource = readFileSync(join(here, '../client-src/10-frontend-frame.js'), 'utf8')
@@ -120,10 +120,84 @@ describe('HTTP trust boundary', () => {
       'content-type': 'application/json',
     }), bind)).toMatchObject({ status: 403 })
     expect(requestTrustFailure(request('POST', {
-      host: '192.168.1.5:7000',
-      origin: 'http://192.168.1.5:7000',
+      host: 'sibling.internal:7000',
+      origin: 'http://sibling.internal:7000',
       'content-type': 'application/json',
     }), bind)).toMatchObject({ status: 403 })
+  })
+
+  it('allows explicitly configured deployment hosts with and without a port', () => {
+    const bind = { host: '127.0.0.1', port: 3456 }
+    // No port on the entry: any port on that host is accepted.
+    expect(requestTrustFailure(request('POST', {
+      host: 'tavern.internal:8123',
+      origin: 'http://tavern.internal:8123',
+      'content-type': 'application/json',
+    }), { ...bind, allowedHosts: ['tavern.internal'] })).toBeUndefined()
+    // An explicit port narrows the entry to exactly that port.
+    expect(requestTrustFailure(request('POST', {
+      host: 'tavern.internal:8443',
+      origin: 'http://tavern.internal:8443',
+      'content-type': 'application/json',
+    }), { ...bind, allowedHosts: ['tavern.internal:8443'] })).toBeUndefined()
+    expect(requestTrustFailure(request('POST', {
+      host: 'tavern.internal:8444',
+      origin: 'http://tavern.internal:8444',
+      'content-type': 'application/json',
+    }), { ...bind, allowedHosts: ['tavern.internal:8443'] })).toMatchObject({ status: 403 })
+  })
+
+  it('still rejects hosts outside the explicit allowlist', () => {
+    const bind = { host: '127.0.0.1', port: 3456, allowedHosts: ['tavern.internal'] }
+    expect(requestTrustFailure(request('GET', { host: 'evil.example:3456' }), bind)).toMatchObject({ status: 403 })
+    // A malformed wildcard entry is ignored even if it bypasses apply-time validation.
+    expect(requestTrustFailure(request('GET', { host: '*' }), { ...bind, allowedHosts: ['*'] })).toMatchObject({ status: 403 })
+  })
+
+  it('keeps origin and content-type checks on allowed custom hosts', () => {
+    const bind = { host: '127.0.0.1', port: 3456, allowedHosts: ['tavern.internal'] }
+    expect(requestTrustFailure(request('POST', {
+      host: 'tavern.internal:3456',
+      origin: 'https://evil.example',
+      'content-type': 'application/json',
+    }), bind)).toMatchObject({ status: 403 })
+    expect(requestTrustFailure(request('POST', {
+      host: 'tavern.internal:3456',
+      origin: 'http://tavern.internal:3456',
+      'content-type': 'text/plain',
+    }), bind)).toMatchObject({ status: 415 })
+  })
+
+  it('normalizes allowed host case and trailing DNS dots', () => {
+    expect(normalizeAllowedHosts(['Tavern.Internal.', 'Tavern.Internal.:8443'])).toEqual([
+      'tavern.internal',
+      'tavern.internal:8443',
+    ])
+    expect(requestTrustFailure(request('GET', { host: 'tavern.internal:3456' }), {
+      host: '127.0.0.1',
+      port: 3456,
+      allowedHosts: normalizeAllowedHosts(['Tavern.Internal.']),
+    })).toBeUndefined()
+  })
+
+  it('rejects malformed allowedHosts config', () => {
+    for (const value of [
+      'tavern.internal',
+      [''],
+      ['   '],
+      ['*'],
+      ['*.example'],
+      ['https://tavern.internal'],
+      ['tavern.internal/path'],
+      ['user:pass'],
+      ['tavern.internal:0'],
+      ['tavern.internal:70000'],
+      ['tavern.internal:port'],
+      [42],
+    ]) {
+      expect(() => normalizeAllowedHosts(value), JSON.stringify(value)).toThrow()
+    }
+    expect(normalizeAllowedHosts(undefined)).toEqual([])
   })
 
   it('rejects a bodyless cross-site POST', () => {
@@ -203,6 +277,8 @@ describe('index wiring (source check)', () => {
     expect(guardIndex).toBeGreaterThanOrEqual(0)
     expect(routeIndex).toBeGreaterThan(guardIndex)
     expect(indexSource.slice(guardIndex, routeIndex)).toContain('`${API}/frontend/idb/put`')
+    expect(indexSource.slice(guardIndex, routeIndex)).toContain('allowedHosts')
+    expect(indexSource).toContain('normalizeAllowedHosts(config.allowedHosts)')
   })
 })
 

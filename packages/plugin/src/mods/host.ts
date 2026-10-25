@@ -43,6 +43,7 @@ import {
   registerModTool,
   type ModToolDefinition,
 } from './cross-bundle.js'
+import { publicErrorMessage } from '../http/public-error.js'
 import { createModRouteTable, isValidModHttpPath, makeModReply, readModRequestBody, type ModHttpRequest, type ModReply, type ModRouteTable } from './http.js'
 import { checkModManifest, modButtonNameError, satisfiesVersionRange, MOD_ID_PATTERN, type ModCapability, type ModManifest } from './manifest.js'
 import { ModStorage } from './storage.js'
@@ -359,7 +360,7 @@ export class ModHost {
       if (!res.writableEnded) {
         res.statusCode = 500
         res.setHeader('content-type', 'application/json; charset=utf-8')
-        res.end(JSON.stringify({ ok: false, message: `mod route failed: ${message}` }))
+        res.end(JSON.stringify({ ok: false, message: `mod route failed: ${publicErrorMessage(cause)}` }))
       }
     }
     return true

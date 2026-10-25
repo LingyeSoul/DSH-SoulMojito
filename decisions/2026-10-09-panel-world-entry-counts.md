@@ -48,5 +48,6 @@
 - bootstrap 载荷新增一个每书一个数字的映射；`worldEntryCounts` 投影与坏文件
   容错（坏书进名字列表、缺计数、bootstrap 仍 200）由 tavern-command.spec.ts
   用例锁定，防止后续路由改造无声破坏。
-- 若未来世界书规模大到计数遍历成为 bootstrap 瓶颈，可再下沉为 store 层缓存
-  或并入 store-revision 水位机制；当前量级（家庭酒馆场景）无此需求。
+- 条目数投影按 store 数据根 + 书名 + 文件 size/mtime 做进程内有界缓存
+  （`packages/plugin/src/http/world-entry-counts.ts`），bootstrap 只重读改过的书；
+  坏书负缓存且仍只缺数。缓存不跨数据根共享，测试可显式重置。

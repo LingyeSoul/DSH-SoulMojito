@@ -22,7 +22,24 @@ dsh plugin --profile desktop add github:LingyeSoul/DSH-SoulMojito#path:/packages
 
 ## 包级运行面
 
-以下四件事是本包的特性，不在根 README 展开。
+以下几件事是本包的特性，不在根 README 展开。
+
+### HTTP 信任边界与自定义 Host
+
+插件 API 默认只信任 loopback（任意端口）、宿主上报的 bind host/origin；浏览器跨站 Origin、`sec-fetch-site: cross-site|same-site`、非 JSON 请求体与不匹配的 Host 仍会被拒绝。局域网、反向代理或自定义域名部署时，在 profile 的 `dsh-soulmojito` 行追加 `allowedHosts`：
+
+```yaml
+- id: dsh-soulmojito
+  config:
+    allowedHosts:
+      - tavern.internal
+      - tavern.internal:8443
+```
+
+- 条目是 `host` 或 `host:port`；不带端口表示该主机的任意端口，带端口只放行该端口。
+- 大小写与末尾 DNS 根点会归一化（`Tavern.Internal.` → `tavern.internal`）。
+- 不接受通配符 `*`、scheme、路径或凭据；非法配置在 `apply` 时直接报错，不会静默回退。
+- 追加 allowlist **不会**放宽 Origin、`sec-fetch-site` 或 Content-Type 检查；反向代理必须保留原始 Host/Origin 语义。
 
 ### Compaction curator
 

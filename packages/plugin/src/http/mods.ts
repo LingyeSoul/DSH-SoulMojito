@@ -2,6 +2,7 @@ import type { ModHost } from '../mods/host.js'
 import { modHost } from '../runtime.js'
 import type { PluginContext } from '../host-contract.js'
 import { readJson, sendJson, type HttpRequest, type HttpResponse } from './io.js'
+import { publicError } from './public-error.js'
 
 /**
  * `/api/dsh-soulmojito/mods` 路由族（提案 0015 §3.2/§3.3 P1）：
@@ -93,7 +94,14 @@ export async function handleModsApi(
       return sendJson(res, 200, { ok: true, handled: outcome === 'handled' })
     } catch (cause) {
       // handler 抛错：button-error 审计已在 dispatchButton 落账，这里只兜 500。
-      return sendJson(res, 500, { ok: false, message: cause instanceof Error ? cause.message : String(cause) })
+      // Third-party messages stay readable when safe; paths/filesystem details
+      // collapse to the shared internal body and are logged through ctx.
+      const failure = publicError(cause, { operation: 'mod-button-dispatch', logger: ctx.logger })
+      return sendJson(res, failure.status, {
+        ok: false,
+        message: failure.message,
+        ...(failure.code === undefined ? {} : { code: failure.code }),
+      })
     }
   }
   if (segments.length >= 1 && modId !== '') {

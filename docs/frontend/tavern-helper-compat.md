@@ -312,6 +312,7 @@ JSR 卡可以带自己的 OpenAI 兼容 API 源（URL + Key + 模型），并在
 | `generateRaw(config)` | ⚠️ | `generate` 的别名；没有 JSR 的 raw 注入细节 |
 | `stopGenerationById(id)` / `stopAllGeneration()` | ✅ | 通过 `generate.stop` / `generate.stop-all` 中止宿主侧请求，返回 `Promise<boolean>`；`/stop` 也会同时中止 ST 主生成 |
 | `getModelList` 的 URL 规则 | — | 必须是无 query/hash 的 base URL；`https://`，或仅 loopback（`localhost` / `127.0.0.1` / `::1`）允许 `http://`；URL 内不能带账号密码 |
+| 目标地址策略 | — | 非 loopback 必须是 `https://`。拒绝 RFC1918、link-local、unique-local、CGNAT、`0.0.0.0`、组播/保留/文档地址及其 IPv4-mapped / NAT64 形式，也拒绝云元数据主机名、单标签主机名和 `.local` / `.internal` / `.home.arpa` 等私有用途域名。拒绝是结构化的 `TAVERN_FRONTEND_TARGET_BLOCKED`（含 `reason` 与 `host`），不会改连其它端点 |
 | 请求上限 | — | 180s 超时、8MB 响应、2M 字符提示词、256 条消息；错误信息会 redact API Key |
 
 生成成功后 shim 还会在 iframe 内派发 `iframe_events.GENERATION_ENDED`
@@ -327,6 +328,12 @@ JSR 卡可以带自己的 OpenAI 兼容 API 源（URL + Key + 模型），并在
 > 卡内的 API Key 存在卡自己的 localStorage 里（通常是 WebCrypto 密文）。插件只
 > 在这一次 RPC 中把它转发给宿主，宿主用完即弃；不会进入 snapshot、state.json、
 > 管理面板或错误消息。
+
+> **没有新增 `frontendAllowPrivateNetwork` 开关**：卡的 API 源来自不可信前端，
+> 若把开关落进 `state.json`，就要新增持久字段、面板控件与客户端 bundle，等于给
+> 「SSRF 代理」留一个长期可开启的入口。本地或局域网推理服务应通过只监听 loopback
+> 的隧道/反向代理暴露，继续走既有 loopback 例外。若将来确有需求，开关必须默认
+> 关闭、在设置页展示风险，并在每次请求时重新读取（不能缓存授权结果）。
 
 ### 2.5 沙箱存储：localStorage 与虚拟 IndexedDB（2026-10-22）
 
@@ -732,5 +739,9 @@ await triggerSlash('/openpanel'); // 本地执行，不产生 helper 请求
 - `TavernHelper.generate` 的 `custom_api.key` 只随单次 RPC 进入宿主 Node 进程，
   用于 outbound `Authorization`；不写 snapshot/state.json/日志，错误消息会 redact。
   只对信任的卡配置 API 源。
+- `TavernHelper.generate` 只允许公网 `https://` 主机或显式 loopback；私有网段、
+  link-local、unique-local、云元数据地址会被结构化拒绝（`TAVERN_FRONTEND_TARGET_BLOCKED`），
+  不会改连其它端点。策略只检查 URL 字面，不做 DNS 解析，因此公网域名重绑定到内网
+  仍是残余风险；不要把 loopback 代理或内网服务暴露到公网。
 - `replaceVariables` 是**整表替换**：忘了展开旧值就等于把所有变量清空。
   不确定时用 `insertOrAssignVariables` 或 `updateVariablesWith`。

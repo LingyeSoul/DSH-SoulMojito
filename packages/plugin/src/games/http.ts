@@ -20,6 +20,7 @@
  * 400。其余未预期异常上抛给外层 prefix handler 兜 500（与 mods 面同款）。
  */
 
+import { INTERNAL_ERROR_MESSAGE, publicErrorMessage } from '../http/public-error.js'
 import { readModRequestBody } from '../mods/http.js'
 import { GameBridgeError } from './sessions.js'
 import type { GamesService } from './service.js'
@@ -85,7 +86,12 @@ function sendHtml(res: GamesHttpResponse, document: string): void {
 /** 错误出口：GameBridgeError 结构化应答；其余上抛（外层 500）。 */
 function sendError(res: GamesHttpResponse, cause: unknown): void {
   if (cause instanceof GameBridgeError) {
-    sendJson(res, statusOf(cause.code), { ok: false, message: cause.message, code: cause.code })
+    // Domain errors keep their status/code, but a third-party engine message
+    // that happens to carry an absolute path rethrows so the outer handler
+    // logs the original and answers with the shared internal body.
+    const message = publicErrorMessage(cause)
+    if (message === INTERNAL_ERROR_MESSAGE) throw cause
+    sendJson(res, statusOf(cause.code), { ok: false, message, code: cause.code })
     return
   }
   throw cause

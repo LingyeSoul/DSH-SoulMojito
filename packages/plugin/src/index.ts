@@ -10,7 +10,6 @@ import { inspectAgentNovelCapabilities } from './agent-novel/capabilities.js'
 import { NovelDriver } from './agent-novel/driver.js'
 import { NovelProjector } from './agent-novel/projector.js'
 import { describeHostShape } from '../../bind/src/index.js'
-import { ChatRevisionConflictError } from '../../tavern-store/src/index.js'
 import { BUILD_INFO } from './build-info.js'
 import { tavernDataRoot } from './dsh-home.js'
 import { openGamesService } from './games/service.js'
@@ -39,18 +38,21 @@ import {
   updateChecksEnabled,
   variables,
 } from './runtime.js'
-import { bindSession, TavernArchitectureConflictError } from './session/binding.js'
+import { bindSession } from './session/binding.js'
 import { registerTavernSessionCommand } from './session/command.js'
 import { API, handleApi } from './http/router.js'
-import { HttpError } from './http/errors.js'
 import { sendJson } from './http/io.js'
-import { requestTrustFailure } from './http/trust.js'
+import { sendApiError } from './http/public-error.js'
+import { normalizeAllowedHosts, requestTrustFailure } from './http/trust.js'
 import type { PluginContext } from './host-contract.js'
 import { ensureAgentPresetDeclared, handleNovelSessionEvent, novelHttpFailure, recoverMountedNovels } from './http/novel.js'
 
 export const name = 'dsh-soulmojito'
 export const inject = ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands', 'agents', 'agentPresets', 'tools', 'compaction']
-export function apply(ctx: PluginContext, config: { anchorEveryTurns?: unknown, checkForUpdates?: unknown, templateEnabled?: unknown } = {}): void {
+export function apply(ctx: PluginContext, config: { anchorEveryTurns?: unknown, checkForUpdates?: unknown, templateEnabled?: unknown, allowedHosts?: unknown } = {}): void {
+  // Fail fast before mounting any surface: a malformed allowlist must not
+  // silently fall back to loopback-only (or, worse, reflect Host values).
+  const allowedHosts = normalizeAllowedHosts(config.allowedHosts)
   registerAgentTavernAnchor(ctx, { everyTurns: config.anchorEveryTurns })
   // 卡内 EJS 世界书注入：默认注册（inner），提示词查看器 prepend 在更外层，
   // 因此捕获面能看到锚定 + 卡内状态两条插件注入。
@@ -237,6 +239,7 @@ export function apply(ctx: PluginContext, config: { anchorEveryTurns?: unknown, 
         host: typeof webServer?.host === 'string' ? webServer.host : undefined,
         port: typeof webServer?.port === 'number' ? webServer.port : undefined,
         origin: reportedOrigin,
+        allowedHosts,
         // The virtual IndexedDB upload is the one route whose body is raw bytes.
         allowNonJsonBody: (req.url ?? '').split('?')[0] === `${API}/frontend/idb/put`,
       })
@@ -247,32 +250,13 @@ export function apply(ctx: PluginContext, config: { anchorEveryTurns?: unknown, 
       try {
         await handleApi(ctx, req, res)
       } catch (error) {
-        if (!res.writableEnded) {
-          // Novel domain errors map onto structured HTTP statuses (§13); the
-          // original detail is logged server-side because corruption and
-          // ownership messages carry internal paths and pids.
-          const novelFailure = novelHttpFailure(error)
-          if (novelFailure !== undefined) {
-            ctx.logger?.warn?.(`dsh-soulmojito: novel route failed (${novelFailure.code}): ${error instanceof Error ? error.message : String(error)}`, { operation: 'novels-api', errorCode: novelFailure.code })
-          }
-          const message = novelFailure?.sanitized === true
-            ? `Novel failure '${novelFailure.code}'; see the server log for details.`
-            : error instanceof Error ? error.message : String(error)
-          const code = error instanceof ChatRevisionConflictError || error instanceof TavernArchitectureConflictError
-            ? error.code
-            : novelFailure?.code
-          if (res.headersSent) {
-            res.write(JSON.stringify({ type: 'error', message, code }) + '\n')
-            res.end()
-          } else {
-            const status = error instanceof HttpError
-              ? error.status
-              : error instanceof ChatRevisionConflictError || error instanceof TavernArchitectureConflictError
-                ? 409
-                : novelFailure?.status ?? 500
-            sendJson(res, status, { ok: false, message, code, ...(novelFailure?.extra ?? {}) })
-          }
-        }
+        // Novel domain errors map onto structured HTTP statuses (§13); every
+        // infrastructure detail stays in the server log, never in the body.
+        sendApiError(res, error, {
+          operation: 'http-api',
+          logger: ctx.logger,
+          novelFailure: novelHttpFailure(error),
+        })
       }
     },
   }), 'dsh-soulmojito: API')

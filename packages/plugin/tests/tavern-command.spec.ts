@@ -1,11 +1,12 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { apply } from '../src/index.js'
 import { apply as applyAgentTavern, type AgentContextLike } from '../src/agent-tavern/agent.js'
 import { MemoryStore, TavernStore } from '../../tavern-store/src/index.js'
 import { parseRegexScripts } from '../../tavern-format/src/index.js'
+import { resetWorldEntryCountCache } from '../src/http/world-entry-counts.js'
 
 const CHARACTER = '露西'
 
@@ -799,6 +800,54 @@ describe('internal Tavern session bridge occupation', () => {
       expect(body.worldEntryCounts).toEqual({ 'Active Lore': 3, 'Linked Lore': 1 })
     } finally {
       rmSync(corruptPath, { force: true })
+    }
+  })
+
+  it('does not re-parse unchanged world books on the next bootstrap', async () => {
+    const cacheWorld = 'Cache Probe Lore'
+    const makeBook = (count: number) => ({
+      entries: Object.fromEntries(Array.from({ length: count }, (_, uid) => [String(uid), {
+        uid,
+        key: [],
+        keysecondary: [],
+        comment: `probe ${uid}`,
+        content: `cached lore ${uid}`,
+        constant: true,
+        selective: false,
+        order: 100,
+        position: 0,
+        disable: false,
+      }])),
+    })
+    await store.importWorldFile(cacheWorld, makeBook(1))
+    resetWorldEntryCountCache()
+    const reads = vi.spyOn(TavernStore.prototype, 'getWorld')
+    const bootstrap = async () => {
+      const res = makeResponse()
+      await apiHandler(makeGetRequest('/api/dsh-soulmojito/bootstrap'), res)
+      expect(res.statusCode).toBe(200)
+      return JSON.parse(res.chunks.join('')) as { worldEntryCounts: Record<string, number> }
+    }
+    try {
+      const first = await bootstrap()
+      expect(first.worldEntryCounts[cacheWorld]).toBe(1)
+
+      // A second bootstrap with no file change must answer from the cache.
+      reads.mockClear()
+      const second = await bootstrap()
+      expect(second.worldEntryCounts).toEqual(first.worldEntryCounts)
+      expect(reads).not.toHaveBeenCalled()
+
+      // Only the edited book is re-parsed; unchanged books stay cached.
+      await store.importWorldFile(cacheWorld, makeBook(2))
+      reads.mockClear()
+      const third = await bootstrap()
+      expect(third.worldEntryCounts[cacheWorld]).toBe(2)
+      expect(reads.mock.calls.map(([name]) => name)).toEqual([cacheWorld])
+    } finally {
+      reads.mockRestore()
+      await store.deleteWorld(cacheWorld)
+      resetWorldEntryCountCache()
     }
   })
 

@@ -29,6 +29,7 @@ import { stripMvuControl } from '../mvu-guard.js'
 import { templatesEnabledFlagValue, templatesEnvEnabled, variables } from '../runtime.js'
 import { assertStGenerationBinding } from '../session/binding.js'
 import { readJson, sendJson } from './io.js'
+import { INTERNAL_ERROR_MESSAGE, publicErrorMessage } from './public-error.js'
 import type { NovelApiRequest, NovelApiResponse } from './novel.js'
 
 /** guides 路由的聊天快照读取：store 的 safeChatFileName 对空/畸形 chatId 抛
@@ -143,7 +144,9 @@ export async function handleScriptApi(
         format,
       )
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
+      const message = publicErrorMessage(error)
+      // Internal failures rethrow so the outer handler logs the full error.
+      if (message === INTERNAL_ERROR_MESSAGE) throw error
       return sendJson(res, 400, { ok: false, message, code: 'TAVERN_SCRIPT' })
     }
     return sendJson(res, 200, {
@@ -223,7 +226,7 @@ export async function handleScriptApi(
     try {
       await applyScriptBinding(db, characterName, binding)
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
+      const message = publicErrorMessage(error)
       if (message.includes('not found')) return sendJson(res, 404, { ok: false, message })
       throw error
     }
@@ -449,7 +452,10 @@ export async function handleWorkbenchApi(
       const decided = await decidePlan(tavernDataRoot(), planId, false)
       return sendJson(res, 200, { ok: true, plan: decided })
     } catch (error) {
-      return sendJson(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error), code: 'TAVERN_WORKBENCH' })
+      const message = publicErrorMessage(error)
+      // Internal failures rethrow so the outer handler logs the full error.
+      if (message === INTERNAL_ERROR_MESSAGE) throw error
+      return sendJson(res, 400, { ok: false, message, code: 'TAVERN_WORKBENCH' })
     }
   }
 

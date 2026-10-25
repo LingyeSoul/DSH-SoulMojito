@@ -187,6 +187,8 @@ dsh --profile desktop
 > spec **必须**落到 `packages/plugin`：仓库根是 monorepo 容器，不声明 `dsh.bundle.patch`，插件管理器会以「这个包没有声明组合包，不能作为插件管理」拒绝并回滚配置。已有源码检出时也可挂本地绝对路径。
 >
 > git spec 固定到安装时的提交、不跟随源码更新；`version.json` 不纳入 Git，设置页显示的是构建期注入的版本与 commit。
+>
+> 默认只接受 loopback 与宿主绑定的 Host。局域网、反向代理或自定义域名部署时，在 profile 的 `dsh-soulmojito` 行配置 `allowedHosts`（`host` 或 `host:port`，不支持通配符）；Origin 与 Content-Type 检查不会因此放宽。配置示例见 [`packages/plugin/README.md`](packages/plugin/README.md)。
 
 ### 首次使用
 

@@ -478,6 +478,11 @@ export class TavernStore {
     return new TavernStore(root)
   }
 
+  /** Absolute data root of this store instance (process-local cache namespace). */
+  get rootPath(): string {
+    return this.root
+  }
+
   /* ---------------------------- 变更水位 ---------------------------- */
 
   /**
@@ -791,6 +796,22 @@ export class TavernStore {
   async listWorlds(): Promise<string[]> {
     const files = await this.listDir('worlds')
     return files.filter((f) => f.endsWith('.json')).map((f) => f.replace(/\.json$/, '')).sort()
+  }
+
+  /**
+   * Metadata-only listing for cheap change detection: world name, byte size and
+   * mtime, without parsing the JSON body. A file deleted between readdir and
+   * stat is skipped; callers keep listWorlds() as the authoritative name list.
+   */
+  async worldFileFingerprints(): Promise<Array<{ name: string; size: number; mtimeMs: number }>> {
+    const fingerprints: Array<{ name: string; size: number; mtimeMs: number }> = []
+    for (const file of await this.listDir('worlds')) {
+      if (!file.endsWith('.json')) continue
+      const stat = await fs.stat(path.join(this.root, 'worlds', file)).catch(() => undefined)
+      if (stat === undefined) continue
+      fingerprints.push({ name: file.replace(/\.json$/, ''), size: stat.size, mtimeMs: stat.mtimeMs })
+    }
+    return fingerprints.sort((left, right) => left.name.localeCompare(right.name))
   }
 
   async getWorld(name: string): Promise<WorldBookIR | undefined> {

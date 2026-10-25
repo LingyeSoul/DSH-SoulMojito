@@ -202,4 +202,19 @@ describe('mod P2 e2e: generation hooks, panel surface and projections', () => {
     expect(bad.status).toBe(500)
     expect(bad.body!.message).toContain('expected { url }')
   })
+
+  it('does not echo absolute paths from a failed install through the real route', async () => {
+    for (const source of [
+      'C:\\SyntheticWorkspace\\ExampleUser\\mods\\example',
+      '/synthetic/home/example-user/mods/example',
+    ]) {
+      const failed = await call('POST', '/api/dsh-soulmojito/mods/install', { url: source })
+      expect(failed.status).toBe(500)
+      expect(failed.body).toMatchObject({ ok: false, message: 'internal storage error', code: 'INTERNAL_STORAGE_ERROR' })
+      expect(failed.text).not.toContain('SyntheticWorkspace')
+      expect(failed.text).not.toContain('ExampleUser')
+      expect(failed.text).not.toContain('synthetic/home')
+      expect(failed.text).not.toContain(source)
+    }
+  })
 })

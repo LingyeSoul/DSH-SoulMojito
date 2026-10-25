@@ -486,7 +486,7 @@ export async function installLocalEmbedRuntime(input: {
     return {
       ok: false,
       alreadyInstalled: false,
-      message: `auto-install is unavailable for link:/source mounts (plugin directory '${input.pluginDir}' is not under a node_modules install): run "pnpm add ${TRANSFORMERS_PACKAGE}" manually in the DSH profile root`,
+      message: `auto-install is unavailable for link:/source mounts: run "pnpm add ${TRANSFORMERS_PACKAGE}" manually in the DSH profile root`,
       outputTail: '',
     }
   }

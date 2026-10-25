@@ -22,6 +22,12 @@ export interface TrustOptions {
   /** Public origin reported by the web server service, when it exposes one. */
   origin?: string
   /**
+   * Extra deployment hosts ("host" or "host:port") beyond loopback and the
+   * bind host. Entries are normalized by normalizeAllowedHosts at apply time;
+   * a portless entry accepts any port, an explicit port accepts only that one.
+   */
+  allowedHosts?: readonly string[]
+  /**
    * The route owns a raw binary body instead of JSON (virtual IndexedDB
    * upload), so the media-type check must not apply.
    */
@@ -46,13 +52,36 @@ const UNSAFE_FETCH_SITES = new Set(['cross-site', 'same-site'])
 const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '::1', '0:0:0:0:0:0:0:1']
 
 /**
+ * Validates and normalizes the `allowedHosts` plugin config. Accepts hostnames
+ * or IP literals with an optional port; rejects empty entries, wildcards,
+ * schemes, paths, credentials and malformed ports. Values are lowercased and
+ * one trailing DNS root dot is stripped (via parseHost).
+ */
+export function normalizeAllowedHosts(value: unknown): string[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) throw new Error('allowedHosts must be an array of host names')
+  return value.map((entry, index) => {
+    if (typeof entry !== 'string') throw new Error(`allowedHosts[${index}] must be a string`)
+    const trimmed = entry.trim()
+    if (trimmed === '') throw new Error(`allowedHosts[${index}] must not be empty`)
+    if (trimmed.includes('*')) throw new Error(`allowedHosts[${index}] must not contain a wildcard`)
+    const address = parseAllowedHost(trimmed)
+    if (address === undefined) {
+      throw new Error(`allowedHosts[${index}] must be a host name or host:port without a scheme, path or credentials`)
+    }
+    return formatAddress(address)
+  })
+}
+
+/**
  * Returns the rejection for a request that must not reach a route, or
  * undefined when the request passes the trust boundary.
  *
  * Allowed:
  * - no Host header (HTTP/1.0 and in-process local callers);
  * - loopback Host values on any port;
- * - the configured bind host/port and the origin reported by the host service;
+ * - the configured bind host/port, the origin reported by the host service,
+ *   and explicit `allowedHosts` deployment entries;
  * - missing sec-fetch-site / origin headers (local non-browser clients);
  * - missing content-type on mutating requests (local non-browser clients).
  *
@@ -144,7 +173,30 @@ function allowedAddresses(options: TrustOptions): HostAddress[] {
     const origin = parseOrigin(options.origin)
     if (origin !== undefined) allowed.push(origin)
   }
+  for (const value of options.allowedHosts ?? []) {
+    const address = parseAllowedHost(value)
+    // Invalid entries are ignored rather than reflected: apply() already
+    // rejects them, and a bypassed option must never widen the boundary.
+    if (address !== undefined) allowed.push(address)
+  }
   return allowed
+}
+
+/**
+ * Validates one allowlist entry. Unlike the Host header parser this rejects
+ * whitespace, path separators, query/fragment markers, credentials, percent
+ * escapes (IPv6 zone ids) and wildcards before delegating to parseHost.
+ */
+function parseAllowedHost(value: string): HostAddress | undefined {
+  const trimmed = value.trim()
+  if (trimmed === '') return undefined
+  if (/[\s/\\?#@%*]/.test(trimmed)) return undefined
+  return parseHost(trimmed)
+}
+
+function formatAddress(address: HostAddress): string {
+  const hostname = address.hostname.includes(':') ? `[${address.hostname}]` : address.hostname
+  return address.port === undefined ? hostname : `${hostname}:${address.port}`
 }
 
 function sameOrigin(origin: HostAddress, host: HostAddress): boolean {

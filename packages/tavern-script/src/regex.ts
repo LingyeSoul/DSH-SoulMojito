@@ -10,10 +10,40 @@
 
 import { parseRegexFromString } from '@dsh-soulmojito/lore'
 import { hasPlacement, type RegexScriptIR } from '@dsh-soulmojito/format'
+import { inspectRegexSafety, MAX_SCRIPT_REGEX_PATTERN_LENGTH } from './regex-safety.js'
+
+export {
+  inspectRegexSafety,
+  MAX_SCRIPT_REGEX_PATTERN_LENGTH,
+  type RegexSafetyReason,
+  type RegexSafetyVerdict,
+} from './regex-safety.js'
+
+/**
+ * Hard limit for one script application, measured in UTF-16 code units.
+ * 100k characters is generous for a chat message while keeping worst-case
+ * backtracking work bounded.
+ */
+export const MAX_SCRIPT_REGEX_INPUT_LENGTH = 100_000
+
+export type RegexScriptWarningCode = 'invalid-regex' | 'unsafe-regex' | 'input-too-long'
+
+export interface RegexScriptWarning {
+  readonly code: RegexScriptWarningCode
+  readonly scriptName: string
+  readonly detail: string
+}
 
 export interface RegexApplyDeps {
   /** substituteRegex 脚本的宏展开通道。 */
   expand?: (text: string) => string
+  /**
+   * Observability for skipped scripts. Called synchronously when a script is
+   * skipped because its regex is invalid, fails the safety gate, or the input
+   * exceeds MAX_SCRIPT_REGEX_INPUT_LENGTH. Exceptions from the callback
+   * propagate to the caller.
+   */
+  onWarning?: (warning: RegexScriptWarning) => void
 }
 
 export interface RegexDepthOptions {
@@ -21,16 +51,44 @@ export interface RegexDepthOptions {
   depth?: number | null
 }
 
-/** 编译脚本正则；不合法返回 null（脚本跳过，ST 容错行为）。 */
+/**
+ * 编译脚本正则；不合法或未通过 ReDoS 安全门返回 null（脚本跳过，ST 容错行为）。
+ * A skipped script is never treated as a successful replacement.
+ */
 export function compileScriptRegex(script: RegexScriptIR, deps: RegexApplyDeps = {}): RegExp | null {
   const raw = script.substituteRegex && deps.expand ? deps.expand(script.findRegex) : script.findRegex
-  try {
-    const literal = parseRegexFromString(raw)
-    if (literal !== null) return new RegExp(literal.source, literal.flags.includes('g') ? literal.flags : `${literal.flags}g`)
-    return new RegExp(raw, 'g')
-  } catch {
+  if (raw.length > MAX_SCRIPT_REGEX_PATTERN_LENGTH) {
+    deps.onWarning?.({
+      code: 'unsafe-regex',
+      scriptName: script.scriptName,
+      detail: `pattern-too-long: pattern length ${raw.length} exceeds ${MAX_SCRIPT_REGEX_PATTERN_LENGTH}`,
+    })
     return null
   }
+  let regex: RegExp
+  try {
+    const literal = parseRegexFromString(raw)
+    regex = literal !== null
+      ? new RegExp(literal.source, literal.flags.includes('g') ? literal.flags : `${literal.flags}g`)
+      : new RegExp(raw, 'g')
+  } catch {
+    deps.onWarning?.({
+      code: 'invalid-regex',
+      scriptName: script.scriptName,
+      detail: 'pattern could not be compiled',
+    })
+    return null
+  }
+  const verdict = inspectRegexSafety(regex.source, regex.flags)
+  if (!verdict.safe) {
+    deps.onWarning?.({
+      code: 'unsafe-regex',
+      scriptName: script.scriptName,
+      detail: `${verdict.reason}: ${verdict.detail}`,
+    })
+    return null
+  }
+  return regex
 }
 
 /**
@@ -69,7 +127,12 @@ function expandReplacement(
     })
 }
 
-/** 按位应用一个脚本；返回 null 表示脚本被跳过（禁用/placement/深度不符/正则不合法）。 */
+/**
+ * 按位应用一个脚本；返回 null 表示脚本被跳过（禁用/placement/深度不符/正则不合法/
+ * ReDoS 安全门拒绝/输入超过 MAX_SCRIPT_REGEX_INPUT_LENGTH）。
+ * A skipped script must leave the caller's text unchanged, never report a
+ * successful replacement.
+ */
 export function applyRegexScript(
   text: string,
   script: RegexScriptIR,
@@ -84,6 +147,14 @@ export function applyRegexScript(
   }
   const regex = compileScriptRegex(script, deps)
   if (regex === null) return null
+  if (text.length > MAX_SCRIPT_REGEX_INPUT_LENGTH) {
+    deps.onWarning?.({
+      code: 'input-too-long',
+      scriptName: script.scriptName,
+      detail: `input length ${text.length} exceeds ${MAX_SCRIPT_REGEX_INPUT_LENGTH}`,
+    })
+    return null
+  }
   const replacement = script.substituteRegex && deps.expand
     ? deps.expand(script.replaceString)
     : script.replaceString

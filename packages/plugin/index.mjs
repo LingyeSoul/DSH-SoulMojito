@@ -2727,6 +2727,10 @@ var TavernStore = class _TavernStore {
     }
     return new _TavernStore(root);
   }
+  /** Absolute data root of this store instance (process-local cache namespace). */
+  get rootPath() {
+    return this.root;
+  }
   /* ---------------------------- 变更水位 ---------------------------- */
   /**
    * 资产变更水位：characters/worlds/presets/personas(+avatars)/groups 的目录项
@@ -2997,6 +3001,21 @@ var TavernStore = class _TavernStore {
   async listWorlds() {
     const files = await this.listDir("worlds");
     return files.filter((f) => f.endsWith(".json")).map((f) => f.replace(/\.json$/, "")).sort();
+  }
+  /**
+   * Metadata-only listing for cheap change detection: world name, byte size and
+   * mtime, without parsing the JSON body. A file deleted between readdir and
+   * stat is skipped; callers keep listWorlds() as the authoritative name list.
+   */
+  async worldFileFingerprints() {
+    const fingerprints = [];
+    for (const file of await this.listDir("worlds")) {
+      if (!file.endsWith(".json")) continue;
+      const stat2 = await fs2.stat(path.join(this.root, "worlds", file)).catch(() => void 0);
+      if (stat2 === void 0) continue;
+      fingerprints.push({ name: file.replace(/\.json$/, ""), size: stat2.size, mtimeMs: stat2.mtimeMs });
+    }
+    return fingerprints.sort((left, right) => left.name.localeCompare(right.name));
   }
   async getWorld(name2) {
     const bytes = await this.tryRead(path.join(this.root, "worlds", `${safeFileName(name2)}.json`));
@@ -7498,10 +7517,10 @@ ${tail}`;
       if (current.run.pauseReason === "awaiting-approval") {
         throw new NovelPreconditionError({ rule: "awaiting-approval", violations: ["use approveOutline or requestRevision (\xA79.2)"] });
       }
-      const blocked = current.requirements.filter((record) => record.status === "blocked");
+      const blocked2 = current.requirements.filter((record) => record.status === "blocked");
       const pending = current.requirements.filter((record) => record.status === "pending");
       const importing = current.import !== null && current.import !== void 0 && current.import.bibleHash === null;
-      const phase = importing ? "importing" : current.outline === null ? "outlining" : blocked.length > 0 || pending.length > 0 ? "revising" : "writing";
+      const phase = importing ? "importing" : current.outline === null ? "outlining" : blocked2.length > 0 || pending.length > 0 ? "revising" : "writing";
       const imported = importing ? {
         ...current.import,
         parts: current.import.parts.map((part) => part.status === "extracted" ? part : { ...part, attempts: 0, status: "pending", error: null })
@@ -7524,7 +7543,7 @@ ${tail}`;
           stalledTurns: 0,
           activeDurationMs: 0,
           activeWindowStart: (/* @__PURE__ */ new Date()).toISOString(),
-          resumeHint: blocked.length > 0 ? "planning authorized; body claims stay blocked until conflicts are resolved (\xA79.4)" : null
+          resumeHint: blocked2.length > 0 ? "planning authorized; body claims stay blocked until conflicts are resolved (\xA79.4)" : null
         }
       };
       const revision = await this.publish(dir, current.revision, next, "resume");
@@ -8089,7 +8108,7 @@ ${tail}`;
   }
   /** Run-state transitions after an outline create/revise (§4.3, §9.4). */
   runAfterOutlineChange(run, approvalMode, outlineRevision, requirements, initialOutline) {
-    const blocked = requirements.some((record) => record.status === "blocked");
+    const blocked2 = requirements.some((record) => record.status === "blocked");
     if (run.awaitingApprovalRevision !== null || approvalMode === "manual" && (run.pauseReason === "awaiting-approval" || initialOutline)) {
       return {
         ...run,
@@ -8101,7 +8120,7 @@ ${tail}`;
         awaitingApprovalRevision: outlineRevision
       };
     }
-    if (blocked) {
+    if (blocked2) {
       return { ...run, status: "paused", phase: run.phase === "outlining" ? "outlining" : run.phase, pauseReason: "requirement-conflict", pauseDetail: "a requirement was marked blocked during the outline change", resumeHint: "clarify or withdraw blocked requirements, then resume (\xA79.4)" };
     }
     if (run.status === "active") {
@@ -9087,16 +9106,680 @@ function parseRegexFromString(input) {
 // packages/tavern-lore/lib/buffer.js
 var JOINER = "\n" + MESSAGE_BOUNDARY;
 
+// packages/tavern-script/src/regex-safety.ts
+var MAX_SCRIPT_REGEX_PATTERN_LENGTH = 1e5;
+var REPEAT_HAZARD_MAX = 10;
+var MAX_REGEX_NESTING_DEPTH = 100;
+var MAX_PAIRWISE_ALTERNATION_BRANCHES = 64;
+var MAX_CHARSET_RANGES = 1024;
+var ANY_CHAR = { kind: "any" };
+var DIGIT_RANGES = [[48, 57]];
+var WORD_RANGES = [[48, 57], [65, 90], [95, 95], [97, 122]];
+var WHITESPACE_RANGES = [
+  [9, 13],
+  [32, 32],
+  [160, 160],
+  [5760, 5760],
+  [8192, 8202],
+  [8232, 8233],
+  [8239, 8239],
+  [8287, 8287],
+  [12288, 12288],
+  [65279, 65279]
+];
+function unsafeError(reason, detail) {
+  throw Object.assign(new Error(detail), { reason });
+}
+function isUnsafeError(value) {
+  return value instanceof Error && typeof value.reason === "string";
+}
+function mergeRanges(ranges) {
+  const sorted = [...ranges].sort((left, right) => left[0] - right[0]);
+  const merged = [];
+  for (const range of sorted) {
+    const last = merged[merged.length - 1];
+    if (last !== void 0 && range[0] <= last[1] + 1) {
+      merged[merged.length - 1] = [last[0], Math.max(last[1], range[1])];
+    } else {
+      merged.push(range);
+    }
+  }
+  return merged;
+}
+function rangesSet(ranges) {
+  const merged = mergeRanges(ranges);
+  if (merged.length > MAX_CHARSET_RANGES) return ANY_CHAR;
+  return { kind: "ranges", ranges: merged };
+}
+function rangesIntersect(left, right) {
+  return left.some((a) => right.some((b) => a[0] <= b[1] && b[0] <= a[1]));
+}
+function firstSetsOverlap(left, right) {
+  if (left === null || right === null) return false;
+  if (left.kind === "any" || right.kind === "any") return true;
+  return rangesIntersect(left.ranges, right.ranges);
+}
+function repeatsOverlap(left, right) {
+  if (left === null || right === null) return false;
+  if (left.kind === "any" || right.kind === "any") {
+    return left.kind === "any" && right.kind === "any";
+  }
+  return rangesIntersect(left.ranges, right.ranges);
+}
+function addLength(left, right) {
+  if (left === Infinity || right === Infinity) return Infinity;
+  return Math.min(Number.MAX_SAFE_INTEGER, left + right);
+}
+function multiplyLength(length, factor) {
+  if (length === 0 || factor === 0) return 0;
+  if (length === Infinity || factor === Infinity) return Infinity;
+  return Math.min(Number.MAX_SAFE_INTEGER, length * factor);
+}
+function zeroWidthNode() {
+  return {
+    minLength: 0,
+    maxLength: 0,
+    nullable: true,
+    first: null,
+    literalPrefix: "",
+    hasQuantifier: false,
+    hasBackreference: false,
+    hasAmbiguousAlternation: false,
+    unboundedRepeat: false
+  };
+}
+function backreferenceNode() {
+  return {
+    minLength: 0,
+    maxLength: Infinity,
+    nullable: true,
+    first: ANY_CHAR,
+    literalPrefix: null,
+    hasQuantifier: false,
+    hasBackreference: true,
+    hasAmbiguousAlternation: false,
+    unboundedRepeat: false
+  };
+}
+function literalFirstSet(value, caseInsensitive) {
+  const codePoint = value.codePointAt(0);
+  if (codePoint === void 0 || codePoint > 65535) return ANY_CHAR;
+  if (!caseInsensitive) return rangesSet([[codePoint, codePoint]]);
+  if (codePoint > 127) return ANY_CHAR;
+  const ranges = [[codePoint, codePoint]];
+  if (codePoint >= 65 && codePoint <= 90) ranges.push([codePoint + 32, codePoint + 32]);
+  if (codePoint >= 97 && codePoint <= 122) ranges.push([codePoint - 32, codePoint - 32]);
+  return rangesSet(ranges);
+}
+function literalNode(value, caseInsensitive) {
+  return {
+    minLength: value.length,
+    maxLength: value.length,
+    nullable: value.length === 0,
+    first: value.length === 0 ? null : literalFirstSet(value, caseInsensitive),
+    literalPrefix: caseInsensitive || value.length === 0 ? null : value,
+    hasQuantifier: false,
+    hasBackreference: false,
+    hasAmbiguousAlternation: false,
+    unboundedRepeat: false
+  };
+}
+function charClassNode(first) {
+  return {
+    minLength: 1,
+    maxLength: 1,
+    nullable: false,
+    first,
+    literalPrefix: null,
+    hasQuantifier: false,
+    hasBackreference: false,
+    hasAmbiguousAlternation: false,
+    unboundedRepeat: false
+  };
+}
+function commonLiteralPrefix(branches) {
+  const first = branches[0];
+  if (first === void 0 || first.literalPrefix === null) return null;
+  let prefix = first.literalPrefix;
+  for (const branch of branches.slice(1)) {
+    if (branch.literalPrefix === null) return null;
+    let shared = 0;
+    const limit = Math.min(prefix.length, branch.literalPrefix.length);
+    while (shared < limit && prefix[shared] === branch.literalPrefix[shared]) shared += 1;
+    prefix = prefix.slice(0, shared);
+    if (prefix === "") return "";
+  }
+  return prefix;
+}
+function branchesOverlap(left, right) {
+  if (left.maxLength === 0 || right.maxLength === 0) return true;
+  const leftPrefix = left.literalPrefix;
+  const rightPrefix = right.literalPrefix;
+  if (leftPrefix !== null && rightPrefix !== null) {
+    const limit = Math.min(leftPrefix.length, rightPrefix.length);
+    for (let index = 0; index < limit; index += 1) {
+      if (leftPrefix[index] !== rightPrefix[index]) return false;
+    }
+    return true;
+  }
+  if (left.first === null || right.first === null) return true;
+  return firstSetsOverlap(left.first, right.first);
+}
+function makeAlternation(branches) {
+  if (branches.length === 1) return branches[0];
+  let nullable = false;
+  let hasQuantifier = false;
+  let hasBackreference = false;
+  let hasAmbiguousAlternation = false;
+  let minLength = Infinity;
+  let maxLength = 0;
+  const consumingFirsts = [];
+  for (const branch of branches) {
+    nullable = nullable || branch.nullable;
+    hasQuantifier = hasQuantifier || branch.hasQuantifier;
+    hasBackreference = hasBackreference || branch.hasBackreference;
+    hasAmbiguousAlternation = hasAmbiguousAlternation || branch.hasAmbiguousAlternation;
+    minLength = Math.min(minLength, branch.minLength);
+    maxLength = branch.maxLength === Infinity ? Infinity : Math.max(maxLength, branch.maxLength);
+    if (branch.maxLength > 0 && branch.first !== null) consumingFirsts.push(branch.first);
+  }
+  let ambiguous = hasAmbiguousAlternation || nullable;
+  if (!ambiguous && branches.length > MAX_PAIRWISE_ALTERNATION_BRANCHES) {
+    ambiguous = true;
+  }
+  if (!ambiguous) {
+    for (let left = 0; left < branches.length && !ambiguous; left += 1) {
+      for (let right = left + 1; right < branches.length; right += 1) {
+        if (branchesOverlap(branches[left], branches[right])) {
+          ambiguous = true;
+          break;
+        }
+      }
+    }
+  }
+  let first;
+  if (consumingFirsts.length === 0) {
+    first = null;
+  } else if (consumingFirsts.some((entry) => entry.kind === "any")) {
+    first = ANY_CHAR;
+  } else {
+    const ranges = consumingFirsts.flatMap((entry) => entry.kind === "ranges" ? entry.ranges : []);
+    first = rangesSet(ranges);
+  }
+  return {
+    minLength: minLength === Infinity ? 0 : minLength,
+    maxLength,
+    nullable,
+    first,
+    literalPrefix: commonLiteralPrefix(branches),
+    hasQuantifier,
+    hasBackreference,
+    hasAmbiguousAlternation: ambiguous,
+    unboundedRepeat: false
+  };
+}
+function makeSequence(atoms) {
+  let minLength = 0;
+  let maxLength = 0;
+  let nullable = true;
+  let hasQuantifier = false;
+  let hasBackreference = false;
+  let hasAmbiguousAlternation = false;
+  let first = null;
+  let literalPrefix = "";
+  let previousRepeat = null;
+  for (const atom of atoms) {
+    minLength = addLength(minLength, atom.minLength);
+    maxLength = addLength(maxLength, atom.maxLength);
+    nullable = nullable && atom.nullable;
+    hasQuantifier = hasQuantifier || atom.hasQuantifier;
+    hasBackreference = hasBackreference || atom.hasBackreference;
+    hasAmbiguousAlternation = hasAmbiguousAlternation || atom.hasAmbiguousAlternation;
+    if (atom.maxLength > 0) {
+      if (first === null) first = atom.first ?? ANY_CHAR;
+      if (previousRepeat !== null && previousRepeat.unboundedRepeat && atom.unboundedRepeat) {
+        if (repeatsOverlap(previousRepeat.first, atom.first)) {
+          unsafeError(
+            "overlapping-repeat",
+            "adjacent unbounded quantifiers can consume the same characters"
+          );
+        }
+      }
+      previousRepeat = atom;
+    }
+    if (literalPrefix === null) continue;
+    if (atom.maxLength === 0) continue;
+    if (atom.literalPrefix === null) {
+      literalPrefix = null;
+      continue;
+    }
+    literalPrefix += atom.literalPrefix;
+    if (atom.minLength !== atom.maxLength || atom.maxLength !== atom.literalPrefix.length) break;
+  }
+  return {
+    minLength,
+    maxLength,
+    nullable,
+    first,
+    literalPrefix,
+    hasQuantifier,
+    hasBackreference,
+    hasAmbiguousAlternation,
+    unboundedRepeat: false
+  };
+}
+function quantify(body, min, max2) {
+  const repeatsEnough = max2 === Infinity || max2 >= REPEAT_HAZARD_MAX;
+  if (repeatsEnough && body.hasQuantifier) {
+    unsafeError("nested-quantifier", "a repeated group contains another quantifier");
+  }
+  if (repeatsEnough && body.hasAmbiguousAlternation) {
+    unsafeError("ambiguous-alternation", "a repeated group has overlapping alternatives");
+  }
+  if (max2 === Infinity && body.nullable) {
+    unsafeError("nullable-repeat", "an unbounded quantifier can repeat an empty match");
+  }
+  if (max2 === Infinity && body.hasBackreference) {
+    unsafeError("backreference-repeat", "an unbounded quantifier repeats a backreference");
+  }
+  return {
+    minLength: multiplyLength(body.minLength, min),
+    maxLength: multiplyLength(body.maxLength, max2),
+    nullable: min === 0 || body.nullable,
+    first: body.first,
+    literalPrefix: min > 0 ? body.literalPrefix : null,
+    hasQuantifier: true,
+    hasBackreference: body.hasBackreference,
+    hasAmbiguousAlternation: body.hasAmbiguousAlternation,
+    unboundedRepeat: max2 === Infinity
+  };
+}
+function peek(state) {
+  return state.source[state.index];
+}
+function parseAlternation(state, depth) {
+  const branches = [parseSequence(state, depth)];
+  while (peek(state) === "|") {
+    state.index += 1;
+    branches.push(parseSequence(state, depth));
+  }
+  return makeAlternation(branches);
+}
+function parseSequence(state, depth) {
+  const atoms = [];
+  for (; ; ) {
+    const next = peek(state);
+    if (next === void 0 || next === "|" || next === ")") break;
+    const atom = parseAtom(state, depth);
+    atoms.push(parseQuantifier(state, atom));
+  }
+  return makeSequence(atoms);
+}
+function parseAtom(state, depth) {
+  const char = peek(state);
+  if (char === void 0) throw new Error("unexpected end of pattern");
+  if (char === "^" || char === "$") {
+    state.index += 1;
+    return zeroWidthNode();
+  }
+  if (char === "\\") return parseEscape(state);
+  if (char === "[") return parseCharacterClass(state);
+  if (char === ".") {
+    state.index += 1;
+    return charClassNode(ANY_CHAR);
+  }
+  if (char === "(") return parseGroup(state, depth);
+  if (char === "*" || char === "+" || char === "?") {
+    throw new Error("quantifier without a preceding atom");
+  }
+  state.index += 1;
+  return literalNode(char, state.caseInsensitive);
+}
+function parseQuantifier(state, atom) {
+  const char = peek(state);
+  let min;
+  let max2;
+  if (char === "*") {
+    min = 0;
+    max2 = Infinity;
+    state.index += 1;
+  } else if (char === "+") {
+    min = 1;
+    max2 = Infinity;
+    state.index += 1;
+  } else if (char === "?") {
+    min = 0;
+    max2 = 1;
+    state.index += 1;
+  } else if (char === "{") {
+    const match = /^\{(\d+)(?:,(\d*))?\}/.exec(state.source.slice(state.index));
+    if (match === null) return atom;
+    min = Number(match[1]);
+    max2 = match[2] === void 0 ? min : match[2] === "" ? Infinity : Number(match[2]);
+    state.index += match[0].length;
+  } else {
+    return atom;
+  }
+  if (peek(state) === "?") state.index += 1;
+  return quantify(atom, min, max2);
+}
+function isHex(value) {
+  return value !== void 0 && /^[0-9a-fA-F]$/.test(value);
+}
+function parseHexEscape(state, digits) {
+  let value = "";
+  for (let count = 0; count < digits; count += 1) {
+    const char = peek(state);
+    if (!isHex(char)) return null;
+    value += char;
+    state.index += 1;
+  }
+  return String.fromCharCode(Number.parseInt(value, 16));
+}
+function parseUnicodeEscape(state) {
+  if (peek(state) === "{") {
+    state.index += 1;
+    let value = "";
+    while (peek(state) !== "}") {
+      const char = peek(state);
+      if (!isHex(char)) return null;
+      value += char;
+      state.index += 1;
+    }
+    state.index += 1;
+    const codePoint = Number.parseInt(value, 16);
+    if (!Number.isFinite(codePoint) || codePoint > 1114111) return null;
+    return String.fromCodePoint(codePoint);
+  }
+  return parseHexEscape(state, 4);
+}
+function parseControlEscape(state) {
+  const char = peek(state);
+  if (char === void 0) return null;
+  const codePoint = char.toUpperCase().charCodeAt(0);
+  if (codePoint < 65 || codePoint > 90) return null;
+  state.index += 1;
+  return String.fromCharCode(codePoint - 64);
+}
+function parsePropertyEscape(state) {
+  if (peek(state) !== "{") return;
+  state.index += 1;
+  while (peek(state) !== void 0 && peek(state) !== "}") state.index += 1;
+  if (peek(state) === "}") state.index += 1;
+}
+function parseNamedBackreference(state) {
+  if (peek(state) !== "<") return;
+  state.index += 1;
+  while (peek(state) !== void 0 && peek(state) !== ">") state.index += 1;
+  if (peek(state) === ">") state.index += 1;
+}
+function parseEscape(state) {
+  state.index += 1;
+  const char = peek(state);
+  if (char === void 0) throw new Error("trailing escape");
+  if (char >= "0" && char <= "9") {
+    while (peek(state) !== void 0 && peek(state) >= "0" && peek(state) <= "9") {
+      state.index += 1;
+    }
+    return backreferenceNode();
+  }
+  state.index += 1;
+  switch (char) {
+    case "b":
+    case "B":
+      return zeroWidthNode();
+    case "d":
+      return charClassNode(rangesSet(DIGIT_RANGES));
+    case "D":
+      return charClassNode(ANY_CHAR);
+    case "w":
+      return charClassNode(rangesSet(WORD_RANGES));
+    case "W":
+      return charClassNode(ANY_CHAR);
+    case "s":
+      return charClassNode(rangesSet(WHITESPACE_RANGES));
+    case "S":
+      return charClassNode(ANY_CHAR);
+    case "p":
+    case "P":
+      parsePropertyEscape(state);
+      return charClassNode(ANY_CHAR);
+    case "k":
+      parseNamedBackreference(state);
+      return backreferenceNode();
+    case "n":
+      return literalNode("\n", state.caseInsensitive);
+    case "r":
+      return literalNode("\r", state.caseInsensitive);
+    case "t":
+      return literalNode("	", state.caseInsensitive);
+    case "f":
+      return literalNode("\f", state.caseInsensitive);
+    case "v":
+      return literalNode("\v", state.caseInsensitive);
+    case "0":
+      return literalNode("\0", state.caseInsensitive);
+    case "x": {
+      const value = parseHexEscape(state, 2);
+      return literalNode(value ?? "x", state.caseInsensitive);
+    }
+    case "u": {
+      const value = parseUnicodeEscape(state);
+      return literalNode(value ?? "u", state.caseInsensitive);
+    }
+    case "c": {
+      const value = parseControlEscape(state);
+      return literalNode(value ?? "c", state.caseInsensitive);
+    }
+    default:
+      return literalNode(char, state.caseInsensitive);
+  }
+}
+function parseClassAtom(state) {
+  const char = peek(state);
+  if (char === void 0) throw new Error("unterminated character class");
+  if (char !== "\\") {
+    state.index += char.length;
+    const codePoint2 = char.codePointAt(0);
+    if (codePoint2 === void 0 || codePoint2 > 65535) return { kind: "any" };
+    return { kind: "single", code: codePoint2 };
+  }
+  state.index += 1;
+  const escaped = peek(state);
+  if (escaped === void 0) throw new Error("trailing escape in character class");
+  state.index += 1;
+  if (escaped === "d") return { kind: "ranges", ranges: DIGIT_RANGES };
+  if (escaped === "w") return { kind: "ranges", ranges: WORD_RANGES };
+  if (escaped === "s") return { kind: "ranges", ranges: WHITESPACE_RANGES };
+  if (escaped === "D" || escaped === "W" || escaped === "S") return { kind: "any" };
+  if (escaped === "p" || escaped === "P") {
+    parsePropertyEscape(state);
+    return { kind: "any" };
+  }
+  if (escaped === "b") return { kind: "single", code: 8 };
+  if (escaped >= "0" && escaped <= "9") {
+    while (peek(state) !== void 0 && peek(state) >= "0" && peek(state) <= "9") state.index += 1;
+    return { kind: "any" };
+  }
+  if (escaped === "n") return { kind: "single", code: 10 };
+  if (escaped === "r") return { kind: "single", code: 13 };
+  if (escaped === "t") return { kind: "single", code: 9 };
+  if (escaped === "f") return { kind: "single", code: 12 };
+  if (escaped === "v") return { kind: "single", code: 11 };
+  if (escaped === "0") return { kind: "single", code: 0 };
+  if (escaped === "x") {
+    const value = parseHexEscape(state, 2);
+    if (value === null || value.length !== 1) return { kind: "any" };
+    return { kind: "single", code: value.charCodeAt(0) };
+  }
+  if (escaped === "u") {
+    const value = parseUnicodeEscape(state);
+    if (value === null || value.length !== 1) return { kind: "any" };
+    return { kind: "single", code: value.charCodeAt(0) };
+  }
+  if (escaped === "c") {
+    const value = parseControlEscape(state);
+    if (value === null) return { kind: "any" };
+    return { kind: "single", code: value.charCodeAt(0) };
+  }
+  const codePoint = escaped.codePointAt(0);
+  if (codePoint === void 0 || codePoint > 65535) return { kind: "any" };
+  return { kind: "single", code: codePoint };
+}
+function parseCharacterClass(state) {
+  state.index += 1;
+  let negated = false;
+  if (peek(state) === "^") {
+    negated = true;
+    state.index += 1;
+  }
+  const ranges = [];
+  let forceAny = negated || state.caseInsensitive;
+  let closed = false;
+  while (state.index < state.source.length) {
+    if (peek(state) === "]") {
+      state.index += 1;
+      closed = true;
+      break;
+    }
+    const first = parseClassAtom(state);
+    if (first.kind === "any") {
+      forceAny = true;
+    } else if (first.kind === "ranges") {
+      ranges.push(...first.ranges);
+    } else if (peek(state) === "-" && state.source[state.index + 1] !== void 0 && state.source[state.index + 1] !== "]") {
+      state.index += 1;
+      const second = parseClassAtom(state);
+      if (second.kind === "single") {
+        ranges.push([Math.min(first.code, second.code), Math.max(first.code, second.code)]);
+      } else {
+        forceAny = true;
+      }
+    } else {
+      ranges.push([first.code, first.code]);
+    }
+  }
+  if (!closed) throw new Error("unterminated character class");
+  if (forceAny || ranges.length === 0) return charClassNode(ANY_CHAR);
+  return charClassNode(rangesSet(ranges));
+}
+function parseGroup(state, depth) {
+  if (depth >= MAX_REGEX_NESTING_DEPTH) {
+    unsafeError("nesting-too-deep", "regular expression groups are nested too deeply");
+  }
+  state.index += 1;
+  let assertion = false;
+  if (peek(state) === "?") {
+    state.index += 1;
+    const marker = peek(state);
+    if (marker === ":") {
+      state.index += 1;
+    } else if (marker === "=" || marker === "!") {
+      state.index += 1;
+      assertion = true;
+    } else if (marker === "<") {
+      state.index += 1;
+      const lookbehind = peek(state);
+      if (lookbehind === "=" || lookbehind === "!") {
+        state.index += 1;
+        assertion = true;
+      } else {
+        while (peek(state) !== void 0 && peek(state) !== ">") state.index += 1;
+        if (peek(state) !== ">") throw new Error("unterminated named group");
+        state.index += 1;
+      }
+    } else if (marker !== void 0 && /[ims-]/.test(marker)) {
+      let modifiers = "";
+      while (peek(state) !== void 0 && peek(state) !== ":") {
+        modifiers += peek(state);
+        state.index += 1;
+      }
+      if (peek(state) !== ":") throw new Error("unsupported inline modifier group");
+      state.index += 1;
+      const previous = state.caseInsensitive;
+      const withoutCase = /-i(?:$|[ims])/.test(modifiers);
+      const withCase = /(^|[^-])i(?:$|[ims])/.test(modifiers);
+      if (withoutCase) state.caseInsensitive = false;
+      if (withCase) state.caseInsensitive = true;
+      const body2 = parseAlternation(state, depth + 1);
+      state.caseInsensitive = previous;
+      if (peek(state) !== ")") throw new Error("unterminated group");
+      state.index += 1;
+      return body2;
+    } else {
+      throw new Error("unsupported group syntax");
+    }
+  }
+  const body = parseAlternation(state, depth + 1);
+  if (peek(state) !== ")") throw new Error("unterminated group");
+  state.index += 1;
+  return assertion ? zeroWidthNode() : body;
+}
+function inspectRegexSafety(source, flags) {
+  if (source.length > MAX_SCRIPT_REGEX_PATTERN_LENGTH) {
+    return {
+      safe: false,
+      reason: "pattern-too-long",
+      detail: `pattern length ${source.length} exceeds ${MAX_SCRIPT_REGEX_PATTERN_LENGTH}`
+    };
+  }
+  const state = {
+    source,
+    index: 0,
+    caseInsensitive: flags.includes("i")
+  };
+  try {
+    parseAlternation(state, 0);
+    if (state.index !== source.length) {
+      return { safe: false, reason: "unparsable-pattern", detail: "unparsed trailing pattern syntax" };
+    }
+    return { safe: true };
+  } catch (error) {
+    if (isUnsafeError(error)) {
+      return { safe: false, reason: error.reason, detail: error.message };
+    }
+    return {
+      safe: false,
+      reason: "unparsable-pattern",
+      detail: error instanceof Error ? error.message : "unknown pattern parse failure"
+    };
+  }
+}
+
 // packages/tavern-script/src/regex.ts
+var MAX_SCRIPT_REGEX_INPUT_LENGTH = 1e5;
 function compileScriptRegex(script, deps = {}) {
   const raw = script.substituteRegex && deps.expand ? deps.expand(script.findRegex) : script.findRegex;
-  try {
-    const literal = parseRegexFromString(raw);
-    if (literal !== null) return new RegExp(literal.source, literal.flags.includes("g") ? literal.flags : `${literal.flags}g`);
-    return new RegExp(raw, "g");
-  } catch {
+  if (raw.length > MAX_SCRIPT_REGEX_PATTERN_LENGTH) {
+    deps.onWarning?.({
+      code: "unsafe-regex",
+      scriptName: script.scriptName,
+      detail: `pattern-too-long: pattern length ${raw.length} exceeds ${MAX_SCRIPT_REGEX_PATTERN_LENGTH}`
+    });
     return null;
   }
+  let regex;
+  try {
+    const literal = parseRegexFromString(raw);
+    regex = literal !== null ? new RegExp(literal.source, literal.flags.includes("g") ? literal.flags : `${literal.flags}g`) : new RegExp(raw, "g");
+  } catch {
+    deps.onWarning?.({
+      code: "invalid-regex",
+      scriptName: script.scriptName,
+      detail: "pattern could not be compiled"
+    });
+    return null;
+  }
+  const verdict = inspectRegexSafety(regex.source, regex.flags);
+  if (!verdict.safe) {
+    deps.onWarning?.({
+      code: "unsafe-regex",
+      scriptName: script.scriptName,
+      detail: `${verdict.reason}: ${verdict.detail}`
+    });
+    return null;
+  }
+  return regex;
 }
 function expandReplacement(template, match, captures, named, trimStrings) {
   const trim = (value) => {
@@ -9124,6 +9807,14 @@ function applyRegexScript(text, script, placement, deps = {}, depth = {}) {
   }
   const regex = compileScriptRegex(script, deps);
   if (regex === null) return null;
+  if (text.length > MAX_SCRIPT_REGEX_INPUT_LENGTH) {
+    deps.onWarning?.({
+      code: "input-too-long",
+      scriptName: script.scriptName,
+      detail: `input length ${text.length} exceeds ${MAX_SCRIPT_REGEX_INPUT_LENGTH}`
+    });
+    return null;
+  }
   const replacement = script.substituteRegex && deps.expand ? deps.expand(script.replaceString) : script.replaceString;
   let result = text.replace(regex, (match, ...rest) => {
     const tail = rest[rest.length - 1];
@@ -15292,7 +15983,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("48012a9") : void 0;
+  const commit = true ? normalizeCommit("0bb3852") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -15737,6 +16428,163 @@ function claimedToolNames() {
   const names = new Set(store2().builtinNames);
   for (const entry of store2().tools.values()) names.add(entry.definition.name);
   return names;
+}
+
+// packages/plugin/src/http/errors.ts
+var HttpError = class extends Error {
+  status;
+  constructor(status2, message) {
+    super(message);
+    this.name = "HttpError";
+    this.status = status2;
+  }
+};
+
+// packages/plugin/src/http/io.ts
+var DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
+function sendJson(res, status2, body) {
+  res.statusCode = status2;
+  res.setHeader("content-type", "application/json; charset=utf-8");
+  res.end(JSON.stringify(body));
+}
+function readJson(req, maxBytes) {
+  const limit = maxBytes ?? DEFAULT_MAX_BYTES;
+  const contentType = headerValue(req.headers?.["content-type"]);
+  if (contentType !== void 0 && !contentType.toLowerCase().startsWith("application/json")) {
+    return Promise.reject(new HttpError(415, `unsupported content-type '${contentType}'; expected application/json`));
+  }
+  return new Promise((resolve6, reject) => {
+    let bytes = 0;
+    const chunks = [];
+    req.on("data", (rawChunk) => {
+      const chunk = rawChunk;
+      bytes += chunk.length;
+      if (bytes > limit) {
+        reject(new HttpError(413, `request exceeds ${limit} bytes`));
+        req.destroy?.();
+      } else chunks.push(chunk);
+    });
+    req.on("end", () => {
+      try {
+        resolve6(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      } catch {
+        reject(new HttpError(400, "invalid JSON body"));
+      }
+    });
+    req.on("error", reject);
+  });
+}
+function headerValue(value) {
+  const first = Array.isArray(value) ? value[0] : value;
+  return typeof first === "string" && first.trim() !== "" ? first.trim() : void 0;
+}
+
+// packages/plugin/src/http/public-error.ts
+var INTERNAL_ERROR_MESSAGE = "internal storage error";
+var INTERNAL_ERROR_CODE = "INTERNAL_STORAGE_ERROR";
+var MAX_PUBLIC_MESSAGE_LENGTH = 500;
+var WINDOWS_PATH = /(?:^|[\s"'`(=])(?:[A-Za-z]:[\\/]|\\\\)/;
+var POSIX_PATH = /(?:^|[\s"'`(=~])\/[A-Za-z0-9._-]/;
+var HOME_PATH = /(?:%USERPROFILE%|\$HOME|~[\\/])/i;
+var FILE_URL = /file:\/\//i;
+var INTERNAL_FILE_NAME = /\b[\w.-]+\.(?:jsonl(?:\.zst)?|zst|lock|tmp|bin)\b/i;
+var FILE_SYSTEM_CODE = /\b(?:EACCES|EBUSY|EEXIST|EIO|EISDIR|ELOOP|EMFILE|ENAMETOOLONG|ENFILE|ENOENT|ENOSPC|ENOTDIR|EPERM|EROFS)\b/;
+function publicErrorMessage(error) {
+  if (!(error instanceof Error) && typeof error !== "string") return INTERNAL_ERROR_MESSAGE;
+  const message = rawErrorMessage(error);
+  if (message.trim() === "") return INTERNAL_ERROR_MESSAGE;
+  if (isSensitiveErrorMessage(message) || hasInternalErrorShape(error)) return INTERNAL_ERROR_MESSAGE;
+  return message;
+}
+function publicError(error, options) {
+  let failure;
+  if (options.novelFailure !== void 0) {
+    const novel = options.novelFailure;
+    failure = {
+      status: novel.status,
+      message: novel.sanitized === true ? `Novel failure '${novel.code}'; see the server log for details.` : rawErrorMessage(error),
+      code: novel.code,
+      ...novel.extra === void 0 ? {} : { extra: novel.extra }
+    };
+  } else {
+    const conflict = conflictFailure(error);
+    if (error instanceof HttpError) {
+      failure = { status: error.status, message: error.message };
+    } else if (conflict !== void 0) {
+      failure = conflict;
+    } else {
+      const message = publicErrorMessage(error);
+      failure = message === INTERNAL_ERROR_MESSAGE ? { status: 500, message, code: INTERNAL_ERROR_CODE } : { status: 500, message };
+    }
+  }
+  if (failure.status >= 500 || options.novelFailure !== void 0) logFailure(error, failure, options);
+  return failure;
+}
+function sendApiError(res, error, options) {
+  const failure = publicError(error, options);
+  if (res.writableEnded === true) return;
+  if (res.headersSent === true) {
+    res.write?.(`${JSON.stringify({
+      type: "error",
+      message: failure.message,
+      code: failure.code
+    })}
+`);
+    res.end();
+    return;
+  }
+  sendJson(res, failure.status, {
+    ok: false,
+    message: failure.message,
+    ...failure.code === void 0 ? {} : { code: failure.code },
+    ...failure.extra ?? {}
+  });
+}
+function conflictFailure(error) {
+  if (!(error instanceof Error)) return void 0;
+  const code = error.code;
+  if (error.name === "ChatRevisionConflictError" && code === "CHAT_REVISION_CONFLICT") {
+    return { status: 409, message: error.message, code };
+  }
+  if (error.name === "TavernArchitectureConflictError" && code === "TAVERN_ARCHITECTURE_CONFLICT") {
+    return { status: 409, message: error.message, code };
+  }
+  return void 0;
+}
+function rawErrorMessage(error) {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+function isSensitiveErrorMessage(message) {
+  if (message.length > MAX_PUBLIC_MESSAGE_LENGTH || message.includes("\n")) return true;
+  return WINDOWS_PATH.test(message) || POSIX_PATH.test(message) || HOME_PATH.test(message) || FILE_URL.test(message) || INTERNAL_FILE_NAME.test(message) || FILE_SYSTEM_CODE.test(message);
+}
+function hasInternalErrorShape(error) {
+  if (typeof error !== "object" || error === null) return false;
+  const record = error;
+  if (record["name"] === "InternalError") return true;
+  const code = record["code"];
+  if (typeof code === "string" && FILE_SYSTEM_CODE.test(code)) return true;
+  return typeof record["path"] === "string" || typeof record["dest"] === "string" || typeof record["syscall"] === "string";
+}
+function logFailure(error, failure, options) {
+  const warn = options.logger?.warn;
+  if (typeof warn !== "function") return;
+  const record = typeof error === "object" && error !== null ? error : void 0;
+  warn("dsh-soulmojito: API request failed", {
+    operation: options.operation,
+    status: failure.status,
+    code: failure.code ?? "none",
+    errorName: error instanceof Error ? error.name : typeof error,
+    errorMessage: rawErrorMessage(error),
+    errorStack: error instanceof Error ? error.stack : void 0,
+    cause: causeRecordOf(record?.["cause"])
+  });
+}
+function causeRecordOf(cause) {
+  if (cause === void 0) return void 0;
+  if (cause instanceof Error) return { name: cause.name, message: cause.message, stack: cause.stack };
+  return { message: String(cause) };
 }
 
 // packages/plugin/src/mods/http.ts
@@ -17041,7 +17889,7 @@ var ModHost = class _ModHost {
       if (!res.writableEnded) {
         res.statusCode = 500;
         res.setHeader("content-type", "application/json; charset=utf-8");
-        res.end(JSON.stringify({ ok: false, message: `mod route failed: ${message}` }));
+        res.end(JSON.stringify({ ok: false, message: `mod route failed: ${publicErrorMessage(cause)}` }));
       }
     }
     return true;
@@ -17166,7 +18014,7 @@ var ModHost = class _ModHost {
     this.blocked.clear();
     for (const [id, disc] of nextDiscovered) this.discovered.set(id, disc);
     for (const [id, broken] of nextBroken) this.broken.set(id, broken);
-    for (const [id, blocked] of nextBlocked) this.blocked.set(id, blocked);
+    for (const [id, blocked2] of nextBlocked) this.blocked.set(id, blocked2);
     for (const id of [...this.loadErrors.keys()]) {
       if (!this.discovered.has(id)) this.loadErrors.delete(id);
     }
@@ -18726,7 +19574,7 @@ function formatCardStateMessage(sections, note) {
   return lines.join("\n");
 }
 function registerAgentTavernCardState(ctx, options = {}) {
-  const cache = /* @__PURE__ */ new Map();
+  const cache2 = /* @__PURE__ */ new Map();
   const openStore = options.openStore ?? (async () => await store3());
   ctx.on?.("agent/pre-step", async (payload, next) => {
     const decision = await next();
@@ -18747,7 +19595,7 @@ function registerAgentTavernCardState(ctx, options = {}) {
         ctx.logger?.warn?.(`dsh-soulmojito: card state render warnings: ${rendered.warnings.slice(0, 4).join(" | ")}`);
       }
       const cacheKey = `${sessionId}\0${binding.character}\0${binding.chatId}`;
-      const previous = cache.get(cacheKey);
+      const previous = cache2.get(cacheKey);
       const turn = typeof payload.turn === "number" && Number.isSafeInteger(payload.turn) ? payload.turn : 0;
       const full = previous === void 0 || turn === 0 || turn - previous.fullTurn >= CARD_STATE_FULL_REFRESH_TURNS;
       const changed = rendered.sections.filter((section) => previous?.hashes.get(section.key) !== section.hash);
@@ -18760,15 +19608,15 @@ function registerAgentTavernCardState(ctx, options = {}) {
         content: [{ type: "text", text: formatCardStateMessage(sections, note) }],
         source: hostPluginMessageSource(payload.agent?.session)
       };
-      cache.delete(cacheKey);
-      cache.set(cacheKey, {
+      cache2.delete(cacheKey);
+      cache2.set(cacheKey, {
         hashes: new Map(rendered.sections.map((section) => [section.key, section.hash])),
         fullTurn: full ? turn : previous?.fullTurn ?? turn
       });
-      while (cache.size > 16) {
-        const oldest = cache.keys().next().value;
+      while (cache2.size > 16) {
+        const oldest = cache2.keys().next().value;
         if (oldest === void 0) break;
-        cache.delete(oldest);
+        cache2.delete(oldest);
       }
       return { ...decision, messages: [...decision.messages ?? [], message] };
     } catch (error) {
@@ -28033,7 +28881,7 @@ async function optimizeChapterViaSubagent(deps) {
 
 // packages/plugin/src/lazy-projection.ts
 function createLazyProjection(options) {
-  const cache = /* @__PURE__ */ new Map();
+  const cache2 = /* @__PURE__ */ new Map();
   const started = /* @__PURE__ */ new Set();
   const tickets = /* @__PURE__ */ new Map();
   let preheatDone = false;
@@ -28041,7 +28889,7 @@ function createLazyProjection(options) {
     const ticket = (tickets.get(agentId) ?? 0) + 1;
     tickets.set(agentId, ticket);
     const settle = (value) => {
-      if (tickets.get(agentId) === ticket) cache.set(agentId, value);
+      if (tickets.get(agentId) === ticket) cache2.set(agentId, value);
     };
     try {
       await options.load(agentId, settle);
@@ -28072,7 +28920,7 @@ function createLazyProjection(options) {
         started.add(agentId);
         void enqueueLoad(agentId);
       }
-      return cache.get(agentId);
+      return cache2.get(agentId);
     },
     refreshWhere,
     preheatWhere(match) {
@@ -29246,7 +30094,7 @@ async function installLocalEmbedRuntime(input) {
     return {
       ok: false,
       alreadyInstalled: false,
-      message: `auto-install is unavailable for link:/source mounts (plugin directory '${input.pluginDir}' is not under a node_modules install): run "pnpm add ${TRANSFORMERS_PACKAGE}" manually in the DSH profile root`,
+      message: `auto-install is unavailable for link:/source mounts: run "pnpm add ${TRANSFORMERS_PACKAGE}" manually in the DSH profile root`,
       outputTail: ""
     };
   }
@@ -30176,55 +31024,6 @@ function extractAuthorMessage(event) {
 function textBlocks(content) {
   if (!Array.isArray(content)) return "";
   return content.filter((block) => typeof block === "object" && block !== null && block.type === "text").map((block) => typeof block.text === "string" ? block.text : "").join("").trim();
-}
-
-// packages/plugin/src/http/errors.ts
-var HttpError = class extends Error {
-  status;
-  constructor(status2, message) {
-    super(message);
-    this.name = "HttpError";
-    this.status = status2;
-  }
-};
-
-// packages/plugin/src/http/io.ts
-var DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
-function sendJson(res, status2, body) {
-  res.statusCode = status2;
-  res.setHeader("content-type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(body));
-}
-function readJson(req, maxBytes) {
-  const limit = maxBytes ?? DEFAULT_MAX_BYTES;
-  const contentType = headerValue(req.headers?.["content-type"]);
-  if (contentType !== void 0 && !contentType.toLowerCase().startsWith("application/json")) {
-    return Promise.reject(new HttpError(415, `unsupported content-type '${contentType}'; expected application/json`));
-  }
-  return new Promise((resolve6, reject) => {
-    let bytes = 0;
-    const chunks = [];
-    req.on("data", (rawChunk) => {
-      const chunk = rawChunk;
-      bytes += chunk.length;
-      if (bytes > limit) {
-        reject(new HttpError(413, `request exceeds ${limit} bytes`));
-        req.destroy?.();
-      } else chunks.push(chunk);
-    });
-    req.on("end", () => {
-      try {
-        resolve6(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
-      } catch {
-        reject(new HttpError(400, "invalid JSON body"));
-      }
-    });
-    req.on("error", reject);
-  });
-}
-function headerValue(value) {
-  const first = Array.isArray(value) ? value[0] : value;
-  return typeof first === "string" && first.trim() !== "" ? first.trim() : void 0;
 }
 
 // packages/plugin/src/http/novel.ts
@@ -31927,7 +32726,9 @@ function sendHtml(res, document) {
 }
 function sendError(res, cause) {
   if (cause instanceof GameBridgeError) {
-    sendJson2(res, statusOf(cause.code), { ok: false, message: cause.message, code: cause.code });
+    const message = publicErrorMessage(cause);
+    if (message === INTERNAL_ERROR_MESSAGE) throw cause;
+    sendJson2(res, statusOf(cause.code), { ok: false, message, code: cause.code });
     return;
   }
   throw cause;
@@ -32028,6 +32829,233 @@ async function handleGamesApi(options) {
 // packages/plugin/src/helper.ts
 import { randomUUID as randomUUID6 } from "node:crypto";
 
+// packages/plugin/src/frontend-target-policy.ts
+import { isIP } from "node:net";
+var METADATA_HOSTNAMES = /* @__PURE__ */ new Set([
+  "metadata",
+  "metadata.google.internal",
+  "metadata.goog",
+  "metadata.azure.com",
+  "metadata.packet.net",
+  "metadata.tencentyun.com",
+  "metadata.tencent-cloud.com",
+  "instance-data"
+]);
+var PRIVATE_HOSTNAME_SUFFIXES = [
+  ".localhost",
+  ".local",
+  ".internal",
+  ".home.arpa",
+  ".lan",
+  ".localdomain",
+  ".intranet",
+  ".corp",
+  ".private"
+];
+function decideCustomApiTarget(url) {
+  const hostname = normalizeHostname(url.hostname);
+  if (isLoopbackHostname(hostname)) {
+    return { allowed: true, hostname, loopback: true };
+  }
+  if (url.protocol === "http:") {
+    return blocked(
+      hostname,
+      "https-required",
+      "use https:// for non-loopback hosts; http:// is allowed only for loopback proxies"
+    );
+  }
+  if (METADATA_HOSTNAMES.has(hostname)) {
+    return blocked(hostname, "metadata-host", "cloud metadata endpoints are blocked");
+  }
+  const address = addressVerdict(hostname);
+  if (address !== void 0) {
+    return address.blocked ? blocked(hostname, "private-address", address.reason) : { allowed: true, hostname, loopback: false };
+  }
+  if (isPrivateHostname(hostname)) {
+    return blocked(
+      hostname,
+      "private-hostname",
+      "single-label and private-use hostnames are blocked; use a public HTTPS host or a loopback proxy"
+    );
+  }
+  return { allowed: true, hostname, loopback: false };
+}
+function blocked(hostname, reason, detail) {
+  return { allowed: false, hostname, reason, detail };
+}
+function normalizeHostname(hostname) {
+  return hostname.toLowerCase().replace(/\.+$/, "");
+}
+function stripBrackets(hostname) {
+  return hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+}
+function isLoopbackHostname(hostname) {
+  if (hostname === "localhost") return true;
+  const literal = stripBrackets(hostname);
+  const version = isIP(literal);
+  if (version === 4) return literal === "127.0.0.1";
+  if (version !== 6) return false;
+  const hextets = ipv6Hextets(literal);
+  if (hextets === void 0) return false;
+  if (isIpv6Loopback(hextets)) return true;
+  const mapped = mappedIpv4(hextets);
+  return mapped !== void 0 && isIpv4Loopback(mapped);
+}
+function isPrivateHostname(hostname) {
+  if (!hostname.includes(".")) return true;
+  return PRIVATE_HOSTNAME_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
+}
+function addressVerdict(hostname) {
+  const literal = stripBrackets(hostname);
+  const version = isIP(literal);
+  if (version !== 4 && version !== 6) return void 0;
+  if (version === 4) {
+    const octets = ipv4Octets(literal);
+    if (octets === void 0) return { blocked: true, reason: "invalid IPv4 literal" };
+    const reason2 = ipv4BlockReason(octets);
+    return reason2 === void 0 ? { blocked: false } : { blocked: true, reason: reason2 };
+  }
+  const hextets = ipv6Hextets(literal);
+  if (hextets === void 0) return { blocked: true, reason: "invalid IPv6 literal" };
+  const reason = ipv6BlockReason(hextets);
+  return reason === void 0 ? { blocked: false } : { blocked: true, reason };
+}
+function ipv6BlockReason(hextets) {
+  if (isIpv6Unspecified(hextets)) return ":: (unspecified address)";
+  if (isIpv6LinkLocal(hextets)) return "fe80::/10 (link-local)";
+  if (isIpv6UniqueLocal(hextets)) return "fc00::/7 (unique local)";
+  if (isIpv6Multicast(hextets)) return "ff00::/8 (multicast)";
+  if (isIpv6Documentation(hextets)) return "2001:db8::/32 (documentation)";
+  if (isIpv6SixToFour(hextets)) return "6to4 range (embeds an arbitrary IPv4 address)";
+  if (isIpv6Teredo(hextets)) return "Teredo range (embeds an arbitrary IPv4 address)";
+  const mapped = mappedIpv4(hextets);
+  if (mapped !== void 0) return mappedBlockReason(mapped, "IPv4-mapped IPv6");
+  const nat64 = nat64Ipv4(hextets);
+  if (nat64 !== void 0) return mappedBlockReason(nat64, "NAT64");
+  if (isDeprecatedIpv4Compatible(hextets)) return "deprecated IPv4-compatible IPv6 address";
+  if (hextets[0] === 100 && hextets[1] === 65435 && hextets[2] === 1) {
+    return "64:ff9b:1::/48 (local-use NAT64 prefix)";
+  }
+  return void 0;
+}
+function mappedBlockReason(octets, label) {
+  const reason = ipv4BlockReason(octets);
+  return reason === void 0 ? void 0 : `${label} address ${octets.join(".")}: ${reason}`;
+}
+function ipv4BlockReason([a, b, c]) {
+  if (a === 0) return "0.0.0.0/8 (this network / unspecified)";
+  if (a === 10) return "10.0.0.0/8 (RFC1918)";
+  if (a === 100 && b >= 64 && b <= 127) {
+    return "100.64.0.0/10 (carrier-grade NAT; includes cloud metadata ranges)";
+  }
+  if (a === 127) return "127.0.0.0/8 (loopback; only 127.0.0.1 is accepted)";
+  if (a === 169 && b === 254) return "169.254.0.0/16 (link-local / cloud metadata)";
+  if (a === 172 && b >= 16 && b <= 31) return "172.16.0.0/12 (RFC1918)";
+  if (a === 192 && b === 168) return "192.168.0.0/16 (RFC1918)";
+  if (a === 192 && b === 0 && (c === 0 || c === 2)) return "192.0.0.0/24 or 192.0.2.0/24 (IETF/documentation)";
+  if (a === 192 && b === 88 && c === 99) return "6to4 relay anycast range";
+  if (a === 198 && (b === 18 || b === 19)) return "198.18.0.0/15 (benchmarking)";
+  if (a === 198 && b === 51 && c === 100) return "198.51.100.0/24 (documentation)";
+  if (a === 203 && b === 0 && c === 113) return "203.0.113.0/24 (documentation)";
+  if (a >= 224) return "224.0.0.0/4 or above (multicast / reserved)";
+  return void 0;
+}
+function isIpv4Loopback([a, b, c, d]) {
+  return a === 127 && b === 0 && c === 0 && d === 1;
+}
+function ipv4Octets(text) {
+  const parts = text.split(".");
+  if (parts.length !== 4) return void 0;
+  const values = [];
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return void 0;
+    const value = Number(part);
+    if (value > 255) return void 0;
+    values.push(value);
+  }
+  return toIpv4(values);
+}
+function toIpv4(values) {
+  if (values.length !== 4) return void 0;
+  const [a, b, c, d] = values;
+  if (a === void 0 || b === void 0 || c === void 0 || d === void 0) return void 0;
+  return [a, b, c, d];
+}
+function ipv6Hextets(input) {
+  const text = stripBrackets(input);
+  if (text === "" || text.includes("%")) return void 0;
+  const halves = text.split("::");
+  if (halves.length > 2) return void 0;
+  const head = parseHextets(halves[0] ?? "");
+  const tail = halves.length === 2 ? parseHextets(halves[1] ?? "") : [];
+  if (head === void 0 || tail === void 0) return void 0;
+  if (halves.length === 1) {
+    if (head.length !== 8) return void 0;
+    return toIpv6(head);
+  }
+  const missing = 8 - head.length - tail.length;
+  if (missing < 1) return void 0;
+  return toIpv6([...head, ...Array.from({ length: missing }, () => 0), ...tail]);
+}
+function parseHextets(side) {
+  if (side === "") return [];
+  const values = [];
+  for (const part of side.split(":")) {
+    if (!/^[0-9a-f]{1,4}$/i.test(part)) return void 0;
+    values.push(Number.parseInt(part, 16));
+  }
+  return values;
+}
+function toIpv6(values) {
+  if (values.length !== 8) return void 0;
+  const [a, b, c, d, e, f, g, h] = values;
+  if (a === void 0 || b === void 0 || c === void 0 || d === void 0 || e === void 0 || f === void 0 || g === void 0 || h === void 0) {
+    return void 0;
+  }
+  return [a, b, c, d, e, f, g, h];
+}
+function isIpv6Loopback(hextets) {
+  return hextets.every((value, index) => index === 7 ? value === 1 : value === 0);
+}
+function isIpv6Unspecified(hextets) {
+  return hextets.every((value) => value === 0);
+}
+function isIpv6LinkLocal(hextets) {
+  return (hextets[0] & 65472) === 65152;
+}
+function isIpv6UniqueLocal(hextets) {
+  return (hextets[0] & 65024) === 64512;
+}
+function isIpv6Multicast(hextets) {
+  return (hextets[0] & 65280) === 65280;
+}
+function isIpv6Documentation(hextets) {
+  return hextets[0] === 8193 && hextets[1] === 3512;
+}
+function isIpv6SixToFour(hextets) {
+  return hextets[0] === 8194;
+}
+function isIpv6Teredo(hextets) {
+  return hextets[0] === 8193 && hextets[1] === 0;
+}
+function mappedIpv4(hextets) {
+  const [a, b, c, d, e, f, g, h] = hextets;
+  if (a === 0 && b === 0 && c === 0 && d === 0 && e === 0 && f === 65535) {
+    return [g >> 8 & 255, g & 255, h >> 8 & 255, h & 255];
+  }
+  return void 0;
+}
+function nat64Ipv4(hextets) {
+  const [a, b, c, d, e, f, g, h] = hextets;
+  if (a === 100 && b === 65435 && c === 0 && d === 0 && e === 0 && f === 0) {
+    return [g >> 8 & 255, g & 255, h >> 8 & 255, h & 255];
+  }
+  return void 0;
+}
+function isDeprecatedIpv4Compatible(hextets) {
+  return hextets[0] === 0 && hextets[1] === 0 && hextets[2] === 0 && hextets[3] === 0 && hextets[4] === 0 && hextets[5] === 0;
+}
+
 // packages/plugin/src/frontend-generation.ts
 var REQUEST_TIMEOUT_MS = 18e4;
 var MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
@@ -32070,6 +33098,17 @@ var FrontendGenerationError = class extends Error {
     this.name = "FrontendGenerationError";
   }
 };
+var FrontendTargetBlockedError = class extends FrontendGenerationError {
+  code = "TAVERN_FRONTEND_TARGET_BLOCKED";
+  reason;
+  host;
+  constructor(reason, host, detail) {
+    super(`custom API target ${host} is blocked: ${reason} [TAVERN_FRONTEND_TARGET_BLOCKED] (${detail})`);
+    this.name = "FrontendTargetBlockedError";
+    this.reason = reason;
+    this.host = host;
+  }
+};
 function asRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
 }
@@ -32079,10 +33118,6 @@ function requireText(value, field, maxChars) {
   if (text === "") throw new FrontendGenerationError(`${field} must not be empty`);
   if (text.length > maxChars) throw new FrontendGenerationError(`${field} is too long (${text.length} > ${maxChars})`);
   return text;
-}
-function isLoopbackHostname(hostname) {
-  const name2 = hostname.toLowerCase();
-  return name2 === "localhost" || name2 === "127.0.0.1" || name2 === "[::1]" || name2 === "::1";
 }
 function normalizeBaseUrl(url) {
   if (url.search !== "" || url.hash !== "") {
@@ -32110,8 +33145,9 @@ function parseApiTarget(value, requireModel) {
   if (url.username !== "" || url.password !== "") {
     throw new FrontendGenerationError("custom_api.apiurl must not contain credentials; put the key in the API key field");
   }
-  if (url.protocol === "http:" && !isLoopbackHostname(url.hostname)) {
-    throw new FrontendGenerationError("custom_api.apiurl must use https:// for non-loopback hosts");
+  const destination = decideCustomApiTarget(url);
+  if (!destination.allowed) {
+    throw new FrontendTargetBlockedError(destination.reason, destination.hostname, destination.detail);
   }
   if (record.key !== void 0 && typeof record.key !== "string") {
     throw new FrontendGenerationError("custom_api.key must be a string when present");
@@ -32955,7 +33991,12 @@ async function previewGeneration(ctx, req, res, db) {
     }
   } catch (error) {
     if (!res.writableEnded) {
-      return sendJson(res, 500, { ok: false, message: error instanceof Error ? error.message : String(error) });
+      const failure = publicError(error, { operation: "preview-generation", logger: ctx.logger });
+      return sendJson(res, failure.status, {
+        ok: false,
+        message: failure.message,
+        ...failure.code === void 0 ? {} : { code: failure.code }
+      });
     }
   }
 }
@@ -33890,9 +34931,17 @@ async function handleFrontendGenerationStream(req, res, db) {
   } catch (error) {
     if (!out.writableEnded) {
       const aborted = controller.signal.aborted;
+      if (!aborted) {
+        console.warn("dsh-soulmojito: frontend generation stream failed", {
+          operation: "frontend-generation-stream",
+          errorName: error instanceof Error ? error.name : typeof error,
+          errorMessage: error instanceof Error ? error.message : String(error),
+          errorStack: error instanceof Error ? error.stack : void 0
+        });
+      }
       out.write(`${JSON.stringify({
         type: aborted ? "aborted" : "error",
-        message: aborted ? "generation aborted" : error instanceof Error ? error.message : String(error)
+        message: aborted ? "generation aborted" : publicErrorMessage(error)
       })}
 `);
       out.end();
@@ -38091,7 +39140,8 @@ async function handleScriptApi(req, res, route, method, db) {
         format
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = publicErrorMessage(error);
+      if (message === INTERNAL_ERROR_MESSAGE) throw error;
       return sendJson(res, 400, { ok: false, message, code: "TAVERN_SCRIPT" });
     }
     return sendJson(res, 200, {
@@ -38166,7 +39216,7 @@ async function handleScriptApi(req, res, route, method, db) {
     try {
       await applyScriptBinding(db, characterName, binding);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = publicErrorMessage(error);
       if (message.includes("not found")) return sendJson(res, 404, { ok: false, message });
       throw error;
     }
@@ -38339,7 +39389,9 @@ async function handleWorkbenchApi(req, res, url, route, method, db) {
       const decided = await decidePlan(tavernDataRoot(), planId, false);
       return sendJson(res, 200, { ok: true, plan: decided });
     } catch (error) {
-      return sendJson(res, 400, { ok: false, message: error instanceof Error ? error.message : String(error), code: "TAVERN_WORKBENCH" });
+      const message = publicErrorMessage(error);
+      if (message === INTERNAL_ERROR_MESSAGE) throw error;
+      return sendJson(res, 400, { ok: false, message, code: "TAVERN_WORKBENCH" });
     }
   }
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
@@ -38355,6 +39407,15 @@ function scriptContentOf(value) {
 }
 
 // packages/plugin/src/http/memory.ts
+function safeInstallOutput(outputTail) {
+  if (outputTail === "") return void 0;
+  if (publicErrorMessage(new Error(outputTail)) !== INTERNAL_ERROR_MESSAGE) return outputTail;
+  console.warn("dsh-soulmojito: local embed runtime install output withheld", {
+    operation: "embed-runtime-install",
+    outputTail
+  });
+  return void 0;
+}
 var localRuntimeInstallInFlight;
 async function handleMemoryEmbedApi(req, res, route, method, db) {
   const root = tavernDataRoot();
@@ -38489,17 +39550,22 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
     try {
       const outcome = await installPromise;
       if (!outcome.ok) {
+        const detail = publicErrorMessage(new Error(outcome.message ?? "install failed"));
+        const outputTail2 = safeInstallOutput(outcome.outputTail);
         return sendJson(res, 400, {
           ok: false,
-          message: outcome.message ?? "install failed",
-          ...outcome.outputTail !== "" ? { outputTail: outcome.outputTail } : {}
+          // A raw pnpm/cause message can carry a profile or model path; the
+          // original output is logged below instead of echoed.
+          message: detail === INTERNAL_ERROR_MESSAGE ? "local runtime install failed; see the server log for details" : detail,
+          ...outputTail2 === void 0 ? {} : { outputTail: outputTail2 }
         });
       }
+      const outputTail = safeInstallOutput(outcome.outputTail);
       return sendJson(res, 200, {
         ok: true,
         alreadyInstalled: outcome.alreadyInstalled,
         ...outcome.message !== void 0 ? { message: outcome.message } : {},
-        ...outcome.outputTail !== "" ? { outputTail: outcome.outputTail } : {}
+        ...outputTail === void 0 ? {} : { outputTail }
       });
     } finally {
       localRuntimeInstallInFlight = void 0;
@@ -38533,7 +39599,9 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
       const result = await embedProbe(root, config);
       return sendJson(res, 200, { ok: true, ...result });
     } catch (cause) {
-      return sendJson(res, 400, { ok: false, message: cause instanceof Error ? cause.message : String(cause) });
+      const message = publicErrorMessage(cause);
+      if (message === INTERNAL_ERROR_MESSAGE) throw cause;
+      return sendJson(res, 400, { ok: false, message });
     }
   }
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
@@ -38640,7 +39708,12 @@ async function handleModsApi(ctx, req, res, url, route, method) {
       if (outcome === "not-found") return notFound();
       return sendJson(res, 200, { ok: true, handled: outcome === "handled" });
     } catch (cause) {
-      return sendJson(res, 500, { ok: false, message: cause instanceof Error ? cause.message : String(cause) });
+      const failure = publicError(cause, { operation: "mod-button-dispatch", logger: ctx.logger });
+      return sendJson(res, failure.status, {
+        ok: false,
+        message: failure.message,
+        ...failure.code === void 0 ? {} : { code: failure.code }
+      });
     }
   }
   if (segments.length >= 1 && modId !== "") {
@@ -38687,6 +39760,46 @@ async function handleUpdateApi(ctx, req, res, url, route, method) {
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
 }
 
+// packages/plugin/src/http/world-entry-counts.ts
+var MAX_CACHE_ENTRIES = 4096;
+var cache = /* @__PURE__ */ new Map();
+async function collectWorldEntryCounts(db, namespace) {
+  const fingerprints = await db.worldFileFingerprints();
+  const prefix = `${namespace}\0`;
+  const seen = /* @__PURE__ */ new Set();
+  const counts = {};
+  for (const fingerprint of fingerprints) {
+    const key = `${prefix}${fingerprint.name}`;
+    seen.add(key);
+    const cached = cache.get(key);
+    if (cached !== void 0 && cached.size === fingerprint.size && cached.mtimeMs === fingerprint.mtimeMs) {
+      if (cached.count !== null) counts[fingerprint.name] = cached.count;
+      continue;
+    }
+    let count = null;
+    try {
+      const book = await db.getWorld(fingerprint.name);
+      if (book !== void 0) count = book.entries.length;
+    } catch {
+    }
+    cache.delete(key);
+    cache.set(key, { size: fingerprint.size, mtimeMs: fingerprint.mtimeMs, count });
+    if (count !== null) counts[fingerprint.name] = count;
+    evictOverflow();
+  }
+  for (const key of cache.keys()) {
+    if (key.startsWith(prefix) && !seen.has(key)) cache.delete(key);
+  }
+  return counts;
+}
+function evictOverflow() {
+  while (cache.size > MAX_CACHE_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (oldest === void 0) return;
+    cache.delete(oldest);
+  }
+}
+
 // packages/plugin/src/http/router.ts
 var API = "/api/dsh-soulmojito";
 async function handleApi(ctx, req, res) {
@@ -38730,20 +39843,14 @@ async function handleApi(ctx, req, res) {
       const preset = await db.getPreset(name2);
       if (preset) presetKinds[name2] = detectPresetKind(preset);
     }
-    const worldEntryCounts = {};
-    for (const name2 of await db.listWorlds()) {
-      try {
-        const book = await db.getWorld(name2);
-        if (book) worldEntryCounts[name2] = book.entries.length;
-      } catch {
-      }
-    }
+    const worlds = await db.listWorlds();
+    const worldEntryCounts = await collectWorldEntryCounts(db, db.rootPath);
     return sendJson(res, 200, {
       ok: true,
       storeRevision,
       state,
       characters: await db.listCharacters(),
-      worlds: await db.listWorlds(),
+      worlds,
       worldEntryCounts,
       presets: await db.listPresets(),
       presetKinds,
@@ -39793,6 +40900,21 @@ function asChatLog(value) {
 var MUTATING_METHODS = /* @__PURE__ */ new Set(["POST", "PUT", "PATCH", "DELETE"]);
 var UNSAFE_FETCH_SITES = /* @__PURE__ */ new Set(["cross-site", "same-site"]);
 var LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "::1", "0:0:0:0:0:0:0:1"];
+function normalizeAllowedHosts(value) {
+  if (value === void 0) return [];
+  if (!Array.isArray(value)) throw new Error("allowedHosts must be an array of host names");
+  return value.map((entry, index) => {
+    if (typeof entry !== "string") throw new Error(`allowedHosts[${index}] must be a string`);
+    const trimmed = entry.trim();
+    if (trimmed === "") throw new Error(`allowedHosts[${index}] must not be empty`);
+    if (trimmed.includes("*")) throw new Error(`allowedHosts[${index}] must not contain a wildcard`);
+    const address = parseAllowedHost(trimmed);
+    if (address === void 0) {
+      throw new Error(`allowedHosts[${index}] must be a host name or host:port without a scheme, path or credentials`);
+    }
+    return formatAddress(address);
+  });
+}
 function requestTrustFailure(req, options) {
   const headers = normalizeHeaders(req.headers);
   const method = typeof req.method === "string" ? req.method.toUpperCase() : "GET";
@@ -39858,7 +40980,21 @@ function allowedAddresses(options) {
     const origin = parseOrigin(options.origin);
     if (origin !== void 0) allowed.push(origin);
   }
+  for (const value of options.allowedHosts ?? []) {
+    const address = parseAllowedHost(value);
+    if (address !== void 0) allowed.push(address);
+  }
   return allowed;
+}
+function parseAllowedHost(value) {
+  const trimmed = value.trim();
+  if (trimmed === "") return void 0;
+  if (/[\s/\\?#@%*]/.test(trimmed)) return void 0;
+  return parseHost(trimmed);
+}
+function formatAddress(address) {
+  const hostname = address.hostname.includes(":") ? `[${address.hostname}]` : address.hostname;
+  return address.port === void 0 ? hostname : `${hostname}:${address.port}`;
 }
 function sameOrigin(origin, host) {
   if (origin.hostname !== host.hostname) return false;
@@ -39924,6 +41060,7 @@ function isJsonContentType(value) {
 var name = "dsh-soulmojito";
 var inject = ["llm", "agentDefaultModel", "webServer", "systemPrompt", "commands", "agents", "agentPresets", "tools", "compaction"];
 function apply(ctx, config = {}) {
+  const allowedHosts = normalizeAllowedHosts(config.allowedHosts);
   registerAgentTavernAnchor(ctx, { everyTurns: config.anchorEveryTurns });
   registerAgentTavernCardState(ctx);
   registerAgentTavernPromptCapture(ctx);
@@ -40066,6 +41203,7 @@ function apply(ctx, config = {}) {
         host: typeof webServer?.host === "string" ? webServer.host : void 0,
         port: typeof webServer?.port === "number" ? webServer.port : void 0,
         origin: reportedOrigin,
+        allowedHosts,
         // The virtual IndexedDB upload is the one route whose body is raw bytes.
         allowNonJsonBody: (req.url ?? "").split("?")[0] === `${API}/frontend/idb/put`
       });
@@ -40076,21 +41214,11 @@ function apply(ctx, config = {}) {
       try {
         await handleApi(ctx, req, res);
       } catch (error) {
-        if (!res.writableEnded) {
-          const novelFailure = novelHttpFailure(error);
-          if (novelFailure !== void 0) {
-            ctx.logger?.warn?.(`dsh-soulmojito: novel route failed (${novelFailure.code}): ${error instanceof Error ? error.message : String(error)}`, { operation: "novels-api", errorCode: novelFailure.code });
-          }
-          const message = novelFailure?.sanitized === true ? `Novel failure '${novelFailure.code}'; see the server log for details.` : error instanceof Error ? error.message : String(error);
-          const code = error instanceof ChatRevisionConflictError || error instanceof TavernArchitectureConflictError ? error.code : novelFailure?.code;
-          if (res.headersSent) {
-            res.write(JSON.stringify({ type: "error", message, code }) + "\n");
-            res.end();
-          } else {
-            const status2 = error instanceof HttpError ? error.status : error instanceof ChatRevisionConflictError || error instanceof TavernArchitectureConflictError ? 409 : novelFailure?.status ?? 500;
-            sendJson(res, status2, { ok: false, message, code, ...novelFailure?.extra ?? {} });
-          }
-        }
+        sendApiError(res, error, {
+          operation: "http-api",
+          logger: ctx.logger,
+          novelFailure: novelHttpFailure(error)
+        });
       }
     }
   }), "dsh-soulmojito: API");

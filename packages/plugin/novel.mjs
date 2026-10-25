@@ -3043,6 +3043,10 @@ var TavernStore = class _TavernStore {
     }
     return new _TavernStore(root);
   }
+  /** Absolute data root of this store instance (process-local cache namespace). */
+  get rootPath() {
+    return this.root;
+  }
   /* ---------------------------- 变更水位 ---------------------------- */
   /**
    * 资产变更水位：characters/worlds/presets/personas(+avatars)/groups 的目录项
@@ -3313,6 +3317,21 @@ var TavernStore = class _TavernStore {
   async listWorlds() {
     const files = await this.listDir("worlds");
     return files.filter((f) => f.endsWith(".json")).map((f) => f.replace(/\.json$/, "")).sort();
+  }
+  /**
+   * Metadata-only listing for cheap change detection: world name, byte size and
+   * mtime, without parsing the JSON body. A file deleted between readdir and
+   * stat is skipped; callers keep listWorlds() as the authoritative name list.
+   */
+  async worldFileFingerprints() {
+    const fingerprints = [];
+    for (const file of await this.listDir("worlds")) {
+      if (!file.endsWith(".json")) continue;
+      const stat = await fs2.stat(path.join(this.root, "worlds", file)).catch(() => void 0);
+      if (stat === void 0) continue;
+      fingerprints.push({ name: file.replace(/\.json$/, ""), size: stat.size, mtimeMs: stat.mtimeMs });
+    }
+    return fingerprints.sort((left, right) => left.name.localeCompare(right.name));
   }
   async getWorld(name2) {
     const bytes = await this.tryRead(path.join(this.root, "worlds", `${safeFileName(name2)}.json`));

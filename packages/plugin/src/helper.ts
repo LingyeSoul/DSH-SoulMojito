@@ -43,6 +43,7 @@ import {
   resetFrontendStorage,
 } from '../../tavern-frontend-storage/src/index.js'
 import { readJson, sendJson, type HttpRequest, type HttpResponse, type JsonRequest, type JsonResponse } from './http/io.js'
+import { publicErrorMessage } from './http/public-error.js'
 import {
   abortAllFrontendGenerations,
   abortFrontendGeneration,
@@ -435,9 +436,19 @@ export async function handleFrontendGenerationStream(req: HttpRequest, res: Http
   } catch (error) {
     if (!out.writableEnded) {
       const aborted = controller.signal.aborted
+      // No ctx reaches this streaming handler; keep the full cause in the
+      // process log with structured fields while the wire message stays safe.
+      if (!aborted) {
+        console.warn('dsh-soulmojito: frontend generation stream failed', {
+          operation: 'frontend-generation-stream',
+          errorName: error instanceof Error ? error.name : typeof error,
+          errorMessage: error instanceof Error ? error.message : String(error),
+          errorStack: error instanceof Error ? error.stack : undefined,
+        })
+      }
       out.write(`${JSON.stringify({
         type: aborted ? 'aborted' : 'error',
-        message: aborted ? 'generation aborted' : (error instanceof Error ? error.message : String(error)),
+        message: aborted ? 'generation aborted' : publicErrorMessage(error),
       })}\n`)
       out.end()
     }
