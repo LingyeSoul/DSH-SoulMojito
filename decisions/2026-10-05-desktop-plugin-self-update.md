@@ -34,11 +34,11 @@
 
 ### 2. 三个来源降级 + curl 兜底
 
-`api`（api.github.com commits/compare + raw package.json）→ `raw-git`（raw package.json + `git ls-remote`）→ `atom`（commits atom feed）。
+`api`（api.github.com commits/compare + contents 读 package.json，raw 兜底）→ `raw-git`（raw package.json + `git ls-remote`）→ `atom`（commits atom feed）。
 
 **本机实测的重要事实：node 的 `fetch` 到 GitHub 全部失败**（`unable to verify the first certificate` —— 企业 TLS 中间人的根证书在 Windows 证书库里，不在 node 的 CA bundle 里），而 `curl.exe`（Schannel，走系统证书库）与 `git` 都正常。因此每个 HTTP 请求都是 `fetch → curl` 两级：fetch 失败后用 `curl --fail --location --max-time` 重试。没有这层兜底，`api`/`raw`/`atom` 全部不可用，只剩 commit 判定（`source: raw-git`）。
 
-`curl` 兜底开销是每个请求一个子进程（一次检查最多 3 个），`DSH_TAVERN_DISABLE_CURL=1` 可关闭，`DSH_TAVERN_CURL` 可指定路径；`GITHUB_TOKEN`/`GH_TOKEN` 存在时给 fetch 加 `authorization`（curl 分支不带，避免把 token 暴露在命令行）。
+`curl` 兜底开销是每个请求一个子进程（一次检查最多 3 个），`DSH_TAVERN_DISABLE_CURL=1` 可关闭，`DSH_TAVERN_CURL` 可指定路径；`GITHUB_TOKEN`/`GH_TOKEN` 存在时只给 `api.github.com` 的 fetch 加 `authorization`（curl 分支不带，避免把 token 暴露在命令行）。**不能发给 raw.githubusercontent.com：它收到带认证的请求会回 404**，版本号会因此变成 `unknown`（面板显示「GitHub v?」）。5xx/429/连接抖动重试一次，避免一次瞬时 502 被缓存成 6h 的「版本未知」。
 
 ### 3. 落地顺序：CLI → plugin-manager → checkout
 

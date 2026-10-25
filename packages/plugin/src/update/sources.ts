@@ -19,14 +19,17 @@
 import { execFile } from 'node:child_process'
 import {
   UNKNOWN_FIELD,
+  UPDATE_PLUGIN_MANIFEST,
   commitsApiUrl,
   commitsAtomUrl,
   compareApiUrl,
+  contentsApiUrl,
   isCommit,
   packageJsonUrl,
   parseAtomFeed,
   parseCommitResponse,
   parseCompareResponse,
+  parseContentsJson,
   parsePackageVersion,
   shortCommit,
   type TavernRemoteBuild,
@@ -66,6 +69,9 @@ export interface FetchRemoteResult {
 
 const DEFAULT_TIMEOUT_MS = 8000
 const DEFAULT_MAX_COMMITS = 12
+/** 5xx/网络抖动只重试一次：单发请求把一次 502 变成「版本号未知」并缓存 6h。 */
+const HTTP_ATTEMPTS = 2
+const HTTP_RETRY_DELAY_MS = 200
 
 export async function fetchRemoteBuild(options: FetchRemoteOptions): Promise<FetchRemoteResult> {
   const failures: string[] = []
@@ -88,12 +94,7 @@ async function fetchFromApi(options: FetchRemoteOptions): Promise<TavernRemoteBu
   const now = options.now ?? (() => new Date())
   const latest = parseCommitResponse(await getJson(options, commitsApiUrl(repository, ref)))
   if (latest === null) return null
-  let version = UNKNOWN_FIELD
-  try {
-    version = parsePackageVersion(await getJson(options, packageJsonUrl(repository, latest.sha)))
-  } catch {
-    // version 读不到不影响 commit 判定；比较规则会退化为「版本相同 + 文件改动」。
-  }
+  const version = await readPackageVersion(options, latest.sha, true)
   let commits: TavernUpdateCommit[] = [latest]
   let changedPluginFiles: string[] = []
   let filesKnown = false
@@ -126,7 +127,7 @@ async function fetchFromRawAndGit(options: FetchRemoteOptions): Promise<TavernRe
   const { repository, ref } = options
   const now = options.now ?? (() => new Date())
   const [version, commit] = await Promise.all([
-    getJson(options, packageJsonUrl(repository, ref)).then(parsePackageVersion).catch(() => UNKNOWN_FIELD),
+    readPackageVersion(options, ref, false),
     (options.resolveCommitImpl ?? resolveRemoteCommit)(repository, ref, options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
   ])
   if (!isCommit(commit)) return null
@@ -155,11 +156,7 @@ async function fetchFromAtom(options: FetchRemoteOptions): Promise<TavernRemoteB
   const commits = parseAtomFeed(xml)
   const latest = commits[0]
   if (latest === undefined) return null
-  let version = UNKNOWN_FIELD
-  try {
-    version = parsePackageVersion(await getJson(options, packageJsonUrl(repository, latest.sha)))
-  } catch {
-  }
+  const version = await readPackageVersion(options, latest.sha, false)
   return {
     ref,
     version,
@@ -170,6 +167,35 @@ async function fetchFromAtom(options: FetchRemoteOptions): Promise<TavernRemoteB
     filesKnown: false,
     checkedAt: now().toISOString(),
   }
+}
+
+/**
+ * 读远端 package.json 的 version。两条只读路线互为兜底：
+ * - `api`  → api.github.com/contents（带 token 可用，与 commits/compare 同源）；
+ * - `raw`  → raw.githubusercontent.com（不吃配额，且 token 不会发过去）。
+ * api 来源优先 api 路线（它已被证明可达）；raw-git/atom 来源优先 raw，但 raw
+ * 偶发 502 时会重试一次再换 api 路线——api 只剩版本口可用时也能读到版本号。
+ *
+ * 版本读不到不影响 commit 判定（比较规则会退化为「版本相同 + 文件改动」），
+ * 因此这里降级为 unknown 而不是把整个来源判死。
+ */
+async function readPackageVersion(
+  options: FetchRemoteOptions,
+  ref: string,
+  preferApi: boolean,
+): Promise<string> {
+  const routes = preferApi ? ['api', 'raw'] as const : ['raw', 'api'] as const
+  for (const route of routes) {
+    try {
+      const raw = await getJson(options, route === 'api'
+        ? contentsApiUrl(options.repository, UPDATE_PLUGIN_MANIFEST, ref)
+        : packageJsonUrl(options.repository, ref))
+      const version = parsePackageVersion(route === 'api' ? parseContentsJson(raw) : raw)
+      if (version !== UNKNOWN_FIELD) return version
+    } catch {
+    }
+  }
+  return UNKNOWN_FIELD
 }
 
 /** `git ls-remote` 是 raw 来源取 commit 的唯一手段；超时/缺失一律返回空串。 */
@@ -204,10 +230,31 @@ async function getText(options: FetchRemoteOptions, url: string, accept: string)
  * fetch → curl 的两级抓取。两级都失败时把两边的原因一起抛出去，便于在快照的
  * `error` 里分辨「网络不通」「证书不受信」「HTTP 4xx」。
  * `DSH_SOULMOJITO_DISABLE_CURL=1` 可关掉 curl 兜底（不装 curl 的宿主、离线测试）。
+ * 5xx / 429 / 连接抖动重试一次：单发请求把一次瞬时 502 变成「版本号未知」并
+ * 缓存 6h，正是「GitHub v?」的来源。证书与 4xx 重试没有新信息，直接失败。
  * P2 起导出：mod git 安装的元数据预读复用同一降级链（提案 0015 §4）。
  */
 export async function httpGet(options: FetchRemoteOptions, url: string, accept: string): Promise<string> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  let lastError: Error | null = null
+  for (let attempt = 1; attempt <= HTTP_ATTEMPTS; attempt += 1) {
+    try {
+      return await httpGetOnce(options, url, accept, timeoutMs)
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error))
+      if (attempt >= HTTP_ATTEMPTS || !isTransientHttpFailure(lastError)) break
+      await delay(HTTP_RETRY_DELAY_MS * attempt)
+    }
+  }
+  throw lastError ?? new Error(`GET ${url} failed without a captured error`)
+}
+
+async function httpGetOnce(
+  options: FetchRemoteOptions,
+  url: string,
+  accept: string,
+  timeoutMs: number,
+): Promise<string> {
   const failures: string[] = []
   const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike)
   if (typeof fetchImpl === 'function') {
@@ -217,7 +264,9 @@ export async function httpGet(options: FetchRemoteOptions, url: string, accept: 
         headers: {
           accept,
           'user-agent': 'dsh-soulmojito-update-check',
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
+          // raw.githubusercontent.com 收到 authorization 会回 404（不是 401），
+          // 于是带 token 的用户读不到 package.json，面板显示「GitHub v?」。
+          ...(token !== '' && acceptsToken(url) ? { authorization: `Bearer ${token}` } : {}),
         },
         signal: AbortSignal.timeout(timeoutMs),
       })
@@ -236,6 +285,27 @@ export async function httpGet(options: FetchRemoteOptions, url: string, accept: 
     }
   }
   throw new Error(failures.join(' | '))
+}
+
+/** 只有 api.github.com 接受 Authorization；raw/codeload 收到它反而回 404。 */
+function acceptsToken(url: string): boolean {
+  try {
+    return new URL(url).hostname.toLowerCase() === 'api.github.com'
+  } catch {
+    return false
+  }
+}
+
+/** 只重试瞬时失败；证书问题、401/403/404 再打一次也不会有新结果。 */
+function isTransientHttpFailure(error: Error): boolean {
+  const message = error.message
+  if (/certificate|cert_|self.signed|unable to verify/i.test(message)) return false
+  if (/HTTP\s*(?:5\d\d|429)/i.test(message)) return true
+  return /ECONNRESET|EPIPE|EAI_AGAIN|socket hang up|network is unreachable/i.test(message)
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function describeError(error: unknown): string {

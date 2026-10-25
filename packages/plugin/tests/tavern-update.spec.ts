@@ -5,9 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   compareBuilds,
   compareTavernVersions,
+  contentsApiUrl,
   parseAtomFeed,
   parseCommitResponse,
   parseCompareResponse,
+  parseContentsJson,
   parsePackageVersion,
   pluginFilesIn,
   pluginInstallSpec,
@@ -188,6 +190,16 @@ describe('GitHub 响应解析', () => {
     expect(parsePackageVersion({})).toBe('unknown')
     expect(parsePackageVersion(null)).toBe('unknown')
   })
+
+  it('解析 contents API 的 base64 文件内容', () => {
+    const content = Buffer.from(JSON.stringify({ version: '0.7.0' }), 'utf8').toString('base64')
+    expect(parseContentsJson({ encoding: 'base64', content })).toEqual({ version: '0.7.0' })
+    expect(parseContentsJson({ encoding: 'base64', content: Buffer.from('{bad').toString('base64') })).toBeNull()
+    expect(parseContentsJson({ encoding: 'none', content: '' })).toBeNull()
+    expect(parseContentsJson(null)).toBeNull()
+    expect(contentsApiUrl('LingyeSoul/DSH-SoulMojito.git', '/packages/plugin/package.json', 'main'))
+      .toBe('https://api.github.com/repos/LingyeSoul/DSH-SoulMojito/contents/packages/plugin/package.json?ref=main')
+  })
 })
 
 describe('pluginInstallSpec', () => {
@@ -216,6 +228,80 @@ describe('fetchRemoteBuild', () => {
     expect(result.build?.commit).toBe(REMOTE_SHA)
     expect(result.build?.changedPluginFiles).toEqual(['packages/plugin/index.mjs'])
     expect(result.build?.checkedAt).toBe('2026-10-05T00:00:00.000Z')
+  })
+
+  it('api 来源优先用 contents API 读版本，不再碰 raw（raw 带 token 会 404）', async () => {
+    let rawAsked = false
+    const stub = fetchStub((url) => {
+      if (url.includes('/commits/')) return jsonResponse({ sha: REMOTE_SHA, commit: { message: 'feat' } })
+      if (url.includes('/contents/')) {
+        return jsonResponse({ encoding: 'base64', content: Buffer.from('{"version":"0.7.0"}').toString('base64') })
+      }
+      if (url.includes('/compare/')) return jsonResponse({ commits: [{ sha: REMOTE_SHA, commit: { message: 'feat' } }], files: [] })
+      if (url.includes('raw.githubusercontent.com')) {
+        rawAsked = true
+        return jsonResponse({}, 404)
+      }
+      return jsonResponse({}, 404)
+    })
+    const result = await fetchRemoteBuild({ ...base, fetchImpl: stub.impl })
+    expect(result.build?.source).toBe('api')
+    expect(result.build?.version).toBe('0.7.0')
+    expect(rawAsked).toBe(false)
+  })
+
+  it('authorization 只发给 api.github.com，不发给 raw', async () => {
+    const previous = process.env.GITHUB_TOKEN
+    process.env.GITHUB_TOKEN = 'test-token'
+    try {
+      const seen: Array<{ url: string, authorization: string }> = []
+      const impl = async (url: string, init?: Record<string, unknown>) => {
+        const headers = (init?.headers ?? {}) as Record<string, string>
+        seen.push({ url, authorization: headers.authorization ?? '' })
+        if (url.includes('/commits/')) return jsonResponse({ sha: REMOTE_SHA, commit: { message: 'feat' } })
+        if (url.includes('/contents/')) return jsonResponse({}, 404)
+        if (url.includes('raw.githubusercontent.com')) return jsonResponse({ version: '0.7.0' })
+        return jsonResponse({}, 404)
+      }
+      const result = await fetchRemoteBuild({ ...base, fetchImpl: impl as never })
+      expect(result.build?.version).toBe('0.7.0')
+      expect(seen.find((call) => call.url.includes('/commits/'))?.authorization).toBe('Bearer test-token')
+      expect(seen.find((call) => call.url.includes('raw.githubusercontent.com'))?.authorization).toBe('')
+    } finally {
+      if (previous === undefined) delete process.env.GITHUB_TOKEN
+      else process.env.GITHUB_TOKEN = previous
+    }
+  })
+
+  it('瞬时 502 重试一次，版本号不会因为一次抖动变成 unknown', async () => {
+    let rawCalls = 0
+    const stub = fetchStub((url) => {
+      if (url.includes('/commits/')) return jsonResponse({ sha: REMOTE_SHA, commit: { message: 'feat' } })
+      if (url.includes('/contents/')) return jsonResponse({}, 404)
+      if (url.includes('raw.githubusercontent.com')) {
+        rawCalls += 1
+        return rawCalls === 1 ? jsonResponse({}, 502) : jsonResponse({ version: '0.7.0' })
+      }
+      if (url.includes('/compare/')) return jsonResponse({ commits: [{ sha: REMOTE_SHA, commit: { message: 'feat' } }], files: [] })
+      return jsonResponse({}, 404)
+    })
+    const result = await fetchRemoteBuild({ ...base, fetchImpl: stub.impl })
+    expect(rawCalls).toBe(2)
+    expect(result.build?.version).toBe('0.7.0')
+  })
+
+  it('raw 读不到版本时用 contents API 兜底（api 只剩版本口可用也能判断）', async () => {
+    const stub = fetchStub((url) => {
+      if (url.includes('/commits/')) return jsonResponse({ message: 'blocked' }, 502)
+      if (url.includes('/contents/')) {
+        return jsonResponse({ encoding: 'base64', content: Buffer.from('{"version":"0.7.0"}').toString('base64') })
+      }
+      if (url.includes('raw.githubusercontent.com')) return jsonResponse({}, 502)
+      return jsonResponse({}, 404)
+    })
+    const result = await fetchRemoteBuild({ ...base, fetchImpl: stub.impl, resolveCommitImpl: async () => REMOTE_SHA })
+    expect(result.build?.source).toBe('raw-git')
+    expect(result.build?.version).toBe('0.7.0')
   })
 
   it('api 不可用时退到 raw + git ls-remote', async () => {
@@ -471,6 +557,35 @@ describe('TavernUpdateService', () => {
     const newer = new TavernUpdateService({ home, pluginDir: home, local: { version: '0.3.9', commit: REMOTE_SHA }, fetchImpl: stubOfRemote() })
     expect(newer.snapshot().status).toBe('unknown')
     expect(newer.snapshot().remote).toBeNull()
+  })
+
+  it('缓存里的远端版本号读不到时立刻重查，不在 TTL 内复读「GitHub v?」', async () => {
+    const home = tempDir('tavern-update-stale-')
+    const cachedAt = new Date().toISOString()
+    writeFileSync(join(home, 'update-state.json'), JSON.stringify({
+      schemaVersion: 1,
+      status: 'up-to-date',
+      reason: 'already at a1b2c3d',
+      checkedAt: cachedAt,
+      source: 'api',
+      local,
+      remote: {
+        ref: 'main',
+        version: 'unknown',
+        commit: REMOTE_SHA,
+        source: 'api',
+        commits: [],
+        changedPluginFiles: [],
+        filesKnown: true,
+        checkedAt: cachedAt,
+      },
+    }, null, 2))
+    const stub = fetchStub(remoteHandler('0.7.0'))
+    const instance = new TavernUpdateService({ home, pluginDir: home, local, fetchImpl: stub.impl })
+    expect(instance.snapshot().checkedAt).toBeNull()
+    const snapshot = await instance.check()
+    expect(stub.calls.length).toBeGreaterThan(0)
+    expect(snapshot.remote?.version).toBe('0.7.0')
   })
 })
 

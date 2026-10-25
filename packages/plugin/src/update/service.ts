@@ -22,6 +22,7 @@ import {
   UPDATE_REF,
   UPDATE_REPOSITORY,
   compareBuilds,
+  isKnownVersion,
   pluginInstallSpec,
   shortCommit,
   type TavernLocalBuild,
@@ -407,6 +408,11 @@ export class TavernUpdateService {
         this.pendingRestart = null
         this.status = 'unknown'
         this.reason = 'local build changed since the cached check'
+      }
+      // 远端版本号读不到（旧版把 token 发给 raw 导致 404、或一次瞬时 502）时
+      // 不要在 TTL 里复读「GitHub v?」：作废检查时间，启动后的首查立刻重读。
+      if (this.remote !== null && !isKnownVersion(this.remote.version)) {
+        this.checkedAt = null
       }
     } catch {
     }

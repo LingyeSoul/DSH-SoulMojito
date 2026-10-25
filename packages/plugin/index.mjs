@@ -14010,7 +14010,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("252fa81") : void 0;
+  const commit = true ? normalizeCommit("1666215") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -15077,6 +15077,7 @@ import { execFile as execFile2 } from "node:child_process";
 var UPDATE_REPOSITORY = "LingyeSoul/DSH-SoulMojito";
 var UPDATE_REF = "main";
 var UPDATE_PLUGIN_PATH = "/packages/plugin";
+var UPDATE_PLUGIN_MANIFEST = "packages/plugin/package.json";
 var UNKNOWN_FIELD = "unknown";
 function isCommit(value) {
   return typeof value === "string" && /^[0-9a-f]{7,40}$/i.test(value.trim());
@@ -15094,7 +15095,20 @@ function compareApiUrl(repository, base, head) {
   return `https://api.github.com/repos/${repositorySlug(repository)}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`;
 }
 function packageJsonUrl(repository, ref) {
-  return `https://raw.githubusercontent.com/${repositorySlug(repository)}/${encodeURIComponent(ref)}/packages/plugin/package.json`;
+  return `https://raw.githubusercontent.com/${repositorySlug(repository)}/${encodeURIComponent(ref)}/${UPDATE_PLUGIN_MANIFEST}`;
+}
+function contentsApiUrl(repository, path12, ref) {
+  const cleanPath = path12.replace(/^\/+/, "");
+  return `https://api.github.com/repos/${repositorySlug(repository)}/contents/${cleanPath}?ref=${encodeURIComponent(ref)}`;
+}
+function parseContentsJson(value) {
+  const record = typeof value === "object" && value !== null ? value : {};
+  if (record.encoding !== "base64" || typeof record.content !== "string") return null;
+  try {
+    return JSON.parse(Buffer.from(record.content.replace(/\s+/g, ""), "base64").toString("utf8"));
+  } catch {
+    return null;
+  }
 }
 function commitsAtomUrl(repository, ref) {
   return `https://github.com/${repositorySlug(repository)}/commits/${encodeURIComponent(ref)}.atom`;
@@ -15230,6 +15244,8 @@ function pluginInstallSpec(repository, ref, commit) {
 // packages/plugin/src/update/sources.ts
 var DEFAULT_TIMEOUT_MS = 8e3;
 var DEFAULT_MAX_COMMITS = 12;
+var HTTP_ATTEMPTS = 2;
+var HTTP_RETRY_DELAY_MS = 200;
 async function fetchRemoteBuild(options) {
   const failures = [];
   for (const source of ["api", "raw-git", "atom"]) {
@@ -15248,11 +15264,7 @@ async function fetchFromApi(options) {
   const now = options.now ?? (() => /* @__PURE__ */ new Date());
   const latest = parseCommitResponse(await getJson(options, commitsApiUrl(repository, ref)));
   if (latest === null) return null;
-  let version = UNKNOWN_FIELD;
-  try {
-    version = parsePackageVersion(await getJson(options, packageJsonUrl(repository, latest.sha)));
-  } catch {
-  }
+  const version = await readPackageVersion(options, latest.sha, true);
   let commits = [latest];
   let changedPluginFiles = [];
   let filesKnown = false;
@@ -15282,7 +15294,7 @@ async function fetchFromRawAndGit(options) {
   const { repository, ref } = options;
   const now = options.now ?? (() => /* @__PURE__ */ new Date());
   const [version, commit] = await Promise.all([
-    getJson(options, packageJsonUrl(repository, ref)).then(parsePackageVersion).catch(() => UNKNOWN_FIELD),
+    readPackageVersion(options, ref, false),
     (options.resolveCommitImpl ?? resolveRemoteCommit)(repository, ref, options.timeoutMs ?? DEFAULT_TIMEOUT_MS)
   ]);
   if (!isCommit(commit)) return null;
@@ -15310,11 +15322,7 @@ async function fetchFromAtom(options) {
   const commits = parseAtomFeed(xml);
   const latest = commits[0];
   if (latest === void 0) return null;
-  let version = UNKNOWN_FIELD;
-  try {
-    version = parsePackageVersion(await getJson(options, packageJsonUrl(repository, latest.sha)));
-  } catch {
-  }
+  const version = await readPackageVersion(options, latest.sha, false);
   return {
     ref,
     version,
@@ -15325,6 +15333,18 @@ async function fetchFromAtom(options) {
     filesKnown: false,
     checkedAt: now().toISOString()
   };
+}
+async function readPackageVersion(options, ref, preferApi) {
+  const routes = preferApi ? ["api", "raw"] : ["raw", "api"];
+  for (const route of routes) {
+    try {
+      const raw = await getJson(options, route === "api" ? contentsApiUrl(options.repository, UPDATE_PLUGIN_MANIFEST, ref) : packageJsonUrl(options.repository, ref));
+      const version = parsePackageVersion(route === "api" ? parseContentsJson(raw) : raw);
+      if (version !== UNKNOWN_FIELD) return version;
+    } catch {
+    }
+  }
+  return UNKNOWN_FIELD;
 }
 function resolveRemoteCommit(repository, ref, timeoutMs) {
   return new Promise((resolve6) => {
@@ -15352,6 +15372,19 @@ async function getText(options, url, accept) {
 }
 async function httpGet(options, url, accept) {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  let lastError = null;
+  for (let attempt = 1; attempt <= HTTP_ATTEMPTS; attempt += 1) {
+    try {
+      return await httpGetOnce(options, url, accept, timeoutMs);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (attempt >= HTTP_ATTEMPTS || !isTransientHttpFailure(lastError)) break;
+      await delay(HTTP_RETRY_DELAY_MS * attempt);
+    }
+  }
+  throw lastError ?? new Error(`GET ${url} failed without a captured error`);
+}
+async function httpGetOnce(options, url, accept, timeoutMs) {
   const failures = [];
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   if (typeof fetchImpl === "function") {
@@ -15361,7 +15394,9 @@ async function httpGet(options, url, accept) {
         headers: {
           accept,
           "user-agent": "dsh-soulmojito-update-check",
-          ...token ? { authorization: `Bearer ${token}` } : {}
+          // raw.githubusercontent.com 收到 authorization 会回 404（不是 401），
+          // 于是带 token 的用户读不到 package.json，面板显示「GitHub v?」。
+          ...token !== "" && acceptsToken(url) ? { authorization: `Bearer ${token}` } : {}
         },
         signal: AbortSignal.timeout(timeoutMs)
       });
@@ -15380,6 +15415,22 @@ async function httpGet(options, url, accept) {
     }
   }
   throw new Error(failures.join(" | "));
+}
+function acceptsToken(url) {
+  try {
+    return new URL(url).hostname.toLowerCase() === "api.github.com";
+  } catch {
+    return false;
+  }
+}
+function isTransientHttpFailure(error) {
+  const message = error.message;
+  if (/certificate|cert_|self.signed|unable to verify/i.test(message)) return false;
+  if (/HTTP\s*(?:5\d\d|429)/i.test(message)) return true;
+  return /ECONNRESET|EPIPE|EAI_AGAIN|socket hang up|network is unreachable/i.test(message);
+}
+function delay(ms) {
+  return new Promise((resolve6) => setTimeout(resolve6, ms));
 }
 function describeError(error) {
   if (error instanceof Error) {
@@ -17027,6 +17078,9 @@ var TavernUpdateService = class {
         this.pendingRestart = null;
         this.status = "unknown";
         this.reason = "local build changed since the cached check";
+      }
+      if (this.remote !== null && !isKnownVersion(this.remote.version)) {
+        this.checkedAt = null;
       }
     } catch {
     }
@@ -28047,7 +28101,7 @@ async function embedBatchWithRetry(config, batch, options) {
       const error = cause instanceof EmbedHttpError ? cause : new EmbedHttpError("network", cause instanceof Error ? cause.message : String(cause), void 0, true);
       lastError = error;
       if (!error.retriable || attempt >= 2) throw lastError;
-      await delay(EMBED_RETRY_BACKOFF_MS);
+      await delay2(EMBED_RETRY_BACKOFF_MS);
     }
   }
 }
@@ -28122,7 +28176,7 @@ function parseEmbeddings(payload, count, expectedDims2) {
   }
   return vectors;
 }
-function delay(ms) {
+function delay2(ms) {
   return new Promise((resolve6) => setTimeout(resolve6, ms));
 }
 async function embedProbe(root, config, options = {}) {

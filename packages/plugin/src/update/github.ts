@@ -14,6 +14,8 @@ export const UPDATE_REPOSITORY = 'LingyeSoul/DSH-SoulMojito'
 export const UPDATE_REF = 'main'
 /** 插件包在 monorepo 中的子目录（pnpm git spec 的 `path:` 段）。 */
 export const UPDATE_PLUGIN_PATH = '/packages/plugin'
+/** 版本号所在的清单文件（相对仓库根）。 */
+export const UPDATE_PLUGIN_MANIFEST = 'packages/plugin/package.json'
 /** 构建 stamp 缺失时的兜底：只有版本号可比，commit 不明。 */
 export const UNKNOWN_FIELD = 'unknown'
 
@@ -73,7 +75,31 @@ export function compareApiUrl(repository: string, base: string, head: string): s
 
 /** raw.githubusercontent 不消耗 API 配额，用于只读一个 version 字段。 */
 export function packageJsonUrl(repository: string, ref: string): string {
-  return `https://raw.githubusercontent.com/${repositorySlug(repository)}/${encodeURIComponent(ref)}/packages/plugin/package.json`
+  return `https://raw.githubusercontent.com/${repositorySlug(repository)}/${encodeURIComponent(ref)}/${UPDATE_PLUGIN_MANIFEST}`
+}
+
+/**
+ * 与 commits/compare 同源的清单读取口。api 来源下优先用它：raw.githubusercontent
+ * 对带 `authorization` 的请求一律回 404（GitHub 的既有行为），且偶发 502；
+ * 而走到 api 来源时 api.github.com 已被证明可达。
+ */
+export function contentsApiUrl(repository: string, path: string, ref: string): string {
+  const cleanPath = path.replace(/^\/+/, '')
+  return `https://api.github.com/repos/${repositorySlug(repository)}/contents/${cleanPath}?ref=${encodeURIComponent(ref)}`
+}
+
+/**
+ * `/contents/{path}` 响应 → 文件里的 JSON。GitHub 对普通文件返回 base64；
+ * `encoding: none`（超过 1MB）或响应形状不对时返回 null，交给 raw 兜底。
+ */
+export function parseContentsJson(value: unknown): unknown | null {
+  const record = (typeof value === 'object' && value !== null ? value : {}) as Record<string, unknown>
+  if (record.encoding !== 'base64' || typeof record.content !== 'string') return null
+  try {
+    return JSON.parse(Buffer.from(record.content.replace(/\s+/g, ''), 'base64').toString('utf8'))
+  } catch {
+    return null
+  }
 }
 
 export function commitsAtomUrl(repository: string, ref: string): string {
