@@ -109,6 +109,32 @@
       return value === undefined ? value : JSON.parse(JSON.stringify(value))
     }
 
+    // Shared modal shell for asset editors (2026-10-25 user request): editing a
+    // card / world book / preset / regex script opens a dedicated dialog instead
+    // of expanding the form inline in the panel list. onClose goes through the
+    // editor's own dirty guard, so overlay and Escape keep the unsaved-changes
+    // confirmation while the form is open.
+    function EditorDialog({ title, onClose, closeLabel, children, footer, className = '' }) {
+      return h(Modal, {
+        open: true,
+        onClose,
+        title,
+        closeLabel,
+        headless: true,
+        className: `dt-editor-modal ${className}`.trim(),
+      },
+      h('div', { className: 'dt-editor-modal-head' },
+        h('h2', null, title),
+        h('button', {
+          type: 'button',
+          className: 'dt-panel-close',
+          'aria-label': closeLabel,
+          onClick: onClose,
+        }, h(IconCloseOutline16))),
+      h('div', { className: 'dt-editor-modal-body' }, children),
+      footer ? h('div', { className: 'dt-editor-modal-foot' }, footer) : null)
+    }
+
     function EditorField({ label, value, onChange, multiline = false, type = 'text', min, max, step, className = '', hint, placeholder, disabled }) {
       const props = {
         value: value ?? '',
@@ -188,13 +214,18 @@
           .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
           .finally(() => setSaving(false))
       }
-      if (!draft) return h('p', { className: 'dt-muted' }, t('nav.loading'))
-      return h('div', { className: 'dt-editor' },
-        h('div', { className: 'dt-editor-toolbar' },
-          h('div', { className: 'dt-editor-status' }, dirty ? t('panel.unsaved') : t('panel.saved')),
-          h('div', { className: 'dt-editor-actions' },
-            h(Button, { size: 'sm', variant: 'ghost', onClick: cancel }, t('panel.cancel')),
-            h(Button, { size: 'sm', variant: 'primary', disabled: saving || !String(data.name || '').trim(), onClick: save }, saving ? t('settings.importing') : t('panel.save')))),
+      const title = name !== ''
+        ? t('panel.characters.editTitle', { name })
+        : t('panel.characters.createTitle')
+      if (!draft) return h(EditorDialog, { title, onClose: cancel, closeLabel: t('panel.close') },
+        h('p', { className: 'dt-muted' }, t('nav.loading')))
+      const toolbar = h('div', { className: 'dt-editor-toolbar' },
+        h('div', { className: 'dt-editor-status' }, dirty ? t('panel.unsaved') : t('panel.saved')),
+        h('div', { className: 'dt-editor-actions' },
+          h(Button, { size: 'sm', variant: 'ghost', onClick: cancel }, t('panel.cancel')),
+          h(Button, { size: 'sm', variant: 'primary', disabled: saving || !String(data.name || '').trim(), onClick: save }, saving ? t('settings.importing') : t('panel.save'))))
+      return h(EditorDialog, { title, onClose: cancel, closeLabel: t('panel.close'), footer: toolbar },
+        h('div', { className: 'dt-editor' },
         h('p', { className: 'dt-hint' }, hint || t('panel.characters.editHint')),
         h('div', { className: 'dt-editor-grid' },
           h(EditorField, { label: t('panel.rename'), value: data.name, onChange: (value) => setData('name', value) }),
@@ -212,7 +243,7 @@
           h(EditorField, { label: t('panel.characters.postHistory'), value: data.postHistoryInstructions, onChange: (value) => setData('postHistoryInstructions', value), multiline: true, className: 'dt-editor-wide' }),
           h(EditorField, { label: t('panel.characters.creatorNotes'), value: data.creatorNotes, onChange: (value) => setData('creatorNotes', value), multiline: true, className: 'dt-editor-wide' }),
           h(EditorField, { label: t('panel.characters.advancedJson'), value: advanced, onChange: setAdvanced, multiline: true, className: 'dt-editor-wide dt-editor-json' })),
-        error ? h('p', { className: 'dt-error' }, error) : null)
+        error ? h('p', { className: 'dt-error' }, error) : null))
     }
 
     function CharacterCardFields({ card }) {
@@ -305,12 +336,16 @@
       }
       const editCard = (name) => {
         if (editing === name) { setEditing(''); return }
+        setCreating(false)
         setEditing(name)
         setViewing(name)
         if (!(name in cards)) {
           setCards((current) => ({ ...current, [name]: null }))
           void fetchCharacterCard(name).then((card) => setCards((current) => ({ ...current, [name]: card })))
-            .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+            .catch((cause) => {
+              setEditing('')
+              setError(cause instanceof Error ? cause.message : String(cause))
+            })
         }
       }
       const save = (name, card) => saveCharacterCard(name, card).then((saved) => {
@@ -381,18 +416,11 @@
             : visibleCharacters.length === 0
               ? h('p', { className: 'dt-muted' }, t('panel.filterEmpty'))
               : h('div', { className: 'dt-card-grid' },
-              creating
-                ? h('div', { className: 'dt-card dt-card-editing' },
-                  h('div', { className: 'dt-card-head' },
-                    h('div', { className: 'dt-card-title' },
-                      h('strong', null, t('panel.characters.creating')))),
-                  h(CardEditor, { card: BLANK_CHARACTER_CARD, name: '', hint: t('panel.characters.createEditorHint'), onSave: createCharacter, onCancel: () => setCreating(false) }))
-                : null,
               visibleCharacters.map((name) => {
               const active = activeCharacter === name
                 || (activeCharacter !== '' && normalizeTavernName(activeCharacter) === normalizeTavernName(name))
               const card = cards[name]
-              return h('div', { key: name, className: `dt-card ${editing === name ? 'dt-card-editing' : ''}` },
+              return h('div', { key: name, className: 'dt-card' },
                 h('div', { className: 'dt-card-head' },
                   h('img', { src: `${API}/avatar/${encodeURIComponent(name)}`, alt: '' }),
                   h('div', { className: 'dt-card-title' },
@@ -403,7 +431,7 @@
                     ? h(Pill, { active: true }, t('panel.characters.active'))
                     : h(Button, { size: 'sm', variant: 'outline', onClick: () => run(patchState({ activeCharacter: name })) }, t('panel.characters.setActive')),
                   h(Button, { size: 'sm', variant: 'ghost', onClick: () => viewCard(name) }, t(viewing === name ? 'panel.characters.hideCard' : 'panel.characters.viewCard')),
-                  h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editCard(name) }, t(editing === name ? 'panel.cancel' : 'panel.edit')),
+                  h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editCard(name) }, t('panel.edit')),
                   h(Button, {
                     size: 'sm',
                     variant: 'ghost',
@@ -422,10 +450,14 @@
                       if (window.confirm(t('panel.characters.deleteConfirm', { name }))) run(deleteCharacterAsset(name))
                     },
                   })),
-                editing === name
-                  ? h(CardEditor, { card, name, onSave: (next) => save(name, next), onCancel: () => setEditing('') })
-                  : viewing === name ? h(CharacterCardFields, { card }) : null)
+                viewing === name ? h(CharacterCardFields, { card }) : null)
             }))),
+        creating
+          ? h(CardEditor, { card: BLANK_CHARACTER_CARD, name: '', hint: t('panel.characters.createEditorHint'), onSave: createCharacter, onCancel: () => setCreating(false) })
+          : null,
+        editing !== ''
+          ? h(CardEditor, { card: cards[editing] ?? null, name: editing, onSave: (next) => save(editing, next), onCancel: () => setEditing('') })
+          : null,
         guideOpen
           ? h(NovelModalFrame, {
             title: t('panel.characters.createTitle'),
@@ -443,7 +475,7 @@
               h('div', { className: 'dt-create-choice-copy' },
                 h('h3', null, t('panel.characters.createManualTitle')),
                 h('p', { className: 'dt-hint' }, t('panel.characters.createManualHint'))),
-              h(Button, { size: 'sm', variant: 'outline', icon: h(IconEditOutline16), onClick: () => { setGuideOpen(false); setCreating(true) } }, t('panel.characters.createManualStart')))),
+              h(Button, { size: 'sm', variant: 'outline', icon: h(IconEditOutline16), onClick: () => { setGuideOpen(false); setEditing(''); setCreating(true) } }, t('panel.characters.createManualStart')))),
           error ? h('p', { className: 'dt-error' }, error) : null)
           : null,
         error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
@@ -483,13 +515,19 @@
           .finally(() => setSaving(false))
       }
       const cancel = () => { if (!dirty || window.confirm(`${t('panel.unsaved')}?`)) onCancel() }
-      if (!draft) return h('p', { className: 'dt-muted' }, t('nav.loading'))
-      return h('div', { className: 'dt-editor' },
-        h('div', { className: 'dt-editor-toolbar' },
-          h('div', { className: 'dt-editor-status' }, dirty ? t('panel.unsaved') : t('panel.saved')),
-          h('div', { className: 'dt-editor-actions' },
-            h(Button, { size: 'sm', variant: 'ghost', onClick: cancel }, t('panel.cancel')),
-            h(Button, { size: 'sm', variant: 'primary', disabled: saving || !String(draft.name || '').trim(), onClick: save }, saving ? t('settings.importing') : t('panel.save')))),
+      const bookName = String(book?.name || '').trim()
+      const title = bookName !== ''
+        ? t('panel.worlds.editTitle', { name: bookName })
+        : t('panel.worlds.creating')
+      if (!draft) return h(EditorDialog, { title, onClose: cancel, closeLabel: t('panel.close') },
+        h('p', { className: 'dt-muted' }, t('nav.loading')))
+      const toolbar = h('div', { className: 'dt-editor-toolbar' },
+        h('div', { className: 'dt-editor-status' }, dirty ? t('panel.unsaved') : t('panel.saved')),
+        h('div', { className: 'dt-editor-actions' },
+          h(Button, { size: 'sm', variant: 'ghost', onClick: cancel }, t('panel.cancel')),
+          h(Button, { size: 'sm', variant: 'primary', disabled: saving || !String(draft.name || '').trim(), onClick: save }, saving ? t('settings.importing') : t('panel.save'))))
+      return h(EditorDialog, { title, onClose: cancel, closeLabel: t('panel.close'), footer: toolbar },
+        h('div', { className: 'dt-editor' },
         h('div', { className: 'dt-editor-grid' },
           h(EditorField, { label: t('panel.worlds.name'), value: draft.name, onChange: (value) => setBook('name', value) })),
         h('div', { className: 'dt-editor-section-title' },
@@ -511,7 +549,7 @@
               h(ToggleField, { label: t('panel.worlds.enabled'), checked: !entry.disable, onChange: (value) => setEntry(entry.uid, 'disable', !value) }),
               h(ToggleField, { label: t('panel.worlds.constant'), checked: entry.constant, onChange: (value) => setEntry(entry.uid, 'constant', value) }),
               h(ToggleField, { label: t('panel.worlds.selective'), checked: entry.selective, onChange: (value) => setEntry(entry.uid, 'selective', value) })))))),
-        error ? h('p', { className: 'dt-error' }, error) : null)
+        error ? h('p', { className: 'dt-error' }, error) : null))
     }
 
     function PanelWorlds({ useSessions }) {
@@ -573,7 +611,10 @@
         if (!(name in books)) {
           setBooks((current) => ({ ...current, [name]: null }))
           void fetchWorldBook(name).then((book) => setBooks((current) => ({ ...current, [name]: book })))
-            .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+            .catch((cause) => {
+              setEditing('')
+              setError(cause instanceof Error ? cause.message : String(cause))
+            })
         }
       }
       const save = (name, book) => saveWorldBook(name, book).then((saved) => {
@@ -661,25 +702,25 @@
               }))))),
          browse !== '' ? h('section', { className: 'dt-settings-band' },
            h('h3', null, browse),
-           editing === browse && book
-             ? h(WorldBookEditor, { book, onSave: (next) => save(browse, next), onCancel: () => setEditing('') })
-             : h(React.Fragment, null,
-               h('div', { className: 'dt-imports' },
-                 h(Input, { icon: h(IconSearchOutline16), placeholder: t('panel.worlds.search'), value: filter, onChange: (event) => setFilter(event.target.value) })),
-               !book
-                 ? h('p', { className: 'dt-muted' }, t('nav.loading'))
-                 : entries.length === 0
-                   ? h('p', { className: 'dt-muted' }, t('panel.worlds.noEntries'))
-                   : h('div', { className: 'dt-entry-list' }, entries.map((entry, index) => h('div', { key: entry.uid ?? index, className: `dt-entry ${entry.disable ? 'dt-entry-off' : ''}` },
-                     h('div', { className: 'dt-entry-head' },
-                       h('strong', null, entry.comment || `#${entry.uid ?? index + 1}`),
-                       h('span', { className: 'dt-entry-keys' }, t('panel.worlds.keys', { keys: loreKeys(entry) }))),
-                     h('div', { className: 'dt-entry-content' }, entry.content)))))) : null,
+           h('div', { className: 'dt-imports' },
+             h(Input, { icon: h(IconSearchOutline16), placeholder: t('panel.worlds.search'), value: filter, onChange: (event) => setFilter(event.target.value) })),
+           !book
+             ? h('p', { className: 'dt-muted' }, t('nav.loading'))
+             : entries.length === 0
+               ? h('p', { className: 'dt-muted' }, t('panel.worlds.noEntries'))
+               : h('div', { className: 'dt-entry-list' }, entries.map((entry, index) => h('div', { key: entry.uid ?? index, className: `dt-entry ${entry.disable ? 'dt-entry-off' : ''}` },
+                 h('div', { className: 'dt-entry-head' },
+                   h('strong', null, entry.comment || `#${entry.uid ?? index + 1}`),
+                   h('span', { className: 'dt-entry-keys' }, t('panel.worlds.keys', { keys: loreKeys(entry) }))),
+                 h('div', { className: 'dt-entry-content' }, entry.content))))) : null,
+         editing !== '' && book
+           ? h(WorldBookEditor, { book, onSave: (next) => save(editing, next), onCancel: () => setEditing('') })
+           : editing !== ''
+             ? h(EditorDialog, { title: t('panel.worlds.editTitle', { name: editing }), onClose: () => setEditing(''), closeLabel: t('panel.close') },
+               h('p', { className: 'dt-muted' }, t('nav.loading')))
+             : null,
          creating
-           ? h('section', { className: 'dt-settings-band' },
-               h('h3', null, t('panel.worlds.creating')),
-               h('p', { className: 'dt-hint' }, t('panel.worlds.createEditorHint')),
-               h(WorldBookEditor, { book: BLANK_WORLD_BOOK, onSave: createWorld, onCancel: () => setCreating(false) }))
+           ? h(WorldBookEditor, { book: BLANK_WORLD_BOOK, onSave: createWorld, onCancel: () => setCreating(false) })
            : null,
          error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
     }

@@ -39,7 +39,7 @@
         }))
     }
 
-    function RegexScriptEditor({ script, onSave, onCancel }) {
+    function RegexScriptEditor({ script, title, onSave, onCancel }) {
       const t = useTranslate()
       const [draft, setDraft] = useState(() => cloneValue(script))
       const [saving, setSaving] = useState(false)
@@ -77,12 +77,13 @@
           .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
           .finally(() => setSaving(false))
       }
-      return h('div', { className: 'dt-editor' },
-        h('div', { className: 'dt-editor-toolbar' },
-          h('div', { className: 'dt-editor-status' }, dirty ? t('panel.unsaved') : t('panel.saved')),
-          h('div', { className: 'dt-editor-actions' },
-            h(Button, { size: 'sm', variant: 'ghost', onClick: cancel }, t('panel.cancel')),
-            h(Button, { size: 'sm', variant: 'primary', disabled: saving, onClick: save }, saving ? t('settings.importing') : t('panel.save')))),
+      const toolbar = h('div', { className: 'dt-editor-toolbar' },
+        h('div', { className: 'dt-editor-status' }, dirty ? t('panel.unsaved') : t('panel.saved')),
+        h('div', { className: 'dt-editor-actions' },
+          h(Button, { size: 'sm', variant: 'ghost', onClick: cancel }, t('panel.cancel')),
+          h(Button, { size: 'sm', variant: 'primary', disabled: saving, onClick: save }, saving ? t('settings.importing') : t('panel.save'))))
+      return h(EditorDialog, { title, onClose: cancel, closeLabel: t('panel.close'), footer: toolbar },
+        h('div', { className: 'dt-editor' },
         h('div', { className: 'dt-editor-grid' },
           h(EditorField, { label: t('settings.regexName'), value: draft.scriptName, onChange: (value) => setField('scriptName', value) }),
           h('div', { className: 'dt-editor-field' },
@@ -104,7 +105,7 @@
             h(ToggleField, { label: t('settings.regexPromptOnly'), checked: draft.promptOnly === true, onChange: (value) => setField('promptOnly', value) }),
             h(ToggleField, { label: t('settings.regexRunOnEdit'), checked: draft.runOnEdit === true, onChange: (value) => setField('runOnEdit', value) }),
             h(ToggleField, { label: t('settings.regexSubstitute'), checked: draft.substituteRegex === true, onChange: (value) => setField('substituteRegex', value) }))),
-        error ? h('p', { className: 'dt-error' }, error) : null)
+        error ? h('p', { className: 'dt-error' }, error) : null))
     }
 
     function RegexBand({ useSessions }) {
@@ -114,6 +115,7 @@
       const [notice, setNotice] = useState('')
       const [syncing, setSyncing] = useState('')
       const [editing, setEditing] = useState('')
+      const [newScript, setNewScript] = useState(null)
       const [regexFilter, setRegexFilter] = useState('')
       // 分区折叠（2026-10-23 用户需求）：默认全部收起，只留段头一行；
       // 展开状态按分区键记忆，过滤或编辑中的分区强制展开（见 groupOpen）。
@@ -208,6 +210,7 @@
         return saveRegexScripts(next).then(() => {
           revealScript(script)
           setEditing('')
+          setNewScript(null)
         })
       }
       // 归属别的来源时开关仍可切换，但当前会话不生效；给一条回执解释，避免
@@ -279,7 +282,13 @@
       }
       const syncFromCards = () => sync('cards', syncRegexScriptsFromCards, 'settings.regexSyncDone')
       const syncFromPresets = () => sync('presets', syncRegexScriptsFromPresets, 'settings.regexSyncPresetsDone')
-      const closeEditor = () => setEditing('')
+      const closeEditor = () => {
+        setEditing('')
+        setNewScript(null)
+      }
+      const editingScript = editing !== '' && editing !== 'new'
+        ? scripts.find((item) => item.id === editing)
+        : null
       const scriptItem = (script) => h('div', { key: script.id, className: 'dt-regex-item' },
         h('div', { className: `dt-regex-row ${script.disabled || autoInactive(script) ? 'dt-regex-off' : ''}` },
           // Checkbox keeps its own control surface; the script name is read
@@ -345,21 +354,13 @@
                 if (!window.confirm(t('settings.regexDeleteConfirm', { name: script.scriptName }))) return
                 run(saveRegexScripts(scripts.filter((item) => item.id !== script.id)))
               },
-            }, h(IconTrashOutline16)))),
-        editing === script.id
-          ? h('div', { className: 'dt-regex-editor-wrap' },
-            h(RegexScriptEditor, { script, onSave: saveScript, onCancel: closeEditor }))
-          : null)
+            }, h(IconTrashOutline16)))))
       return h('section', { className: 'dt-settings-band' },
         h('div', { className: 'dt-band-actions' },
-          h(Button, { size: 'sm', variant: 'primary', icon: h(IconPlusOutline16), disabled: editing !== '', onClick: () => setEditing('new') }, t('settings.regexCreate')),
+          h(Button, { size: 'sm', variant: 'primary', icon: h(IconPlusOutline16), disabled: editing !== '', onClick: () => { setNewScript(newRegexScript()); setEditing('new') } }, t('settings.regexCreate')),
           h(UploadButton, { kind: 'regex', label: t('settings.importRegex'), accept: '.json,application/json' }),
           h(Button, { size: 'sm', variant: 'ghost', icon: h(IconRefreshOutline16), disabled: syncing !== '', onClick: syncFromCards }, syncing === 'cards' ? t('settings.importing') : t('settings.regexSyncCards')),
           h(Button, { size: 'sm', variant: 'ghost', icon: h(IconRefreshOutline16), disabled: syncing !== '', onClick: syncFromPresets }, syncing === 'presets' ? t('settings.importing') : t('settings.regexSyncPresets'))),
-        editing === 'new'
-          ? h('div', { key: 'new', className: 'dt-regex-editor-wrap' },
-            h(RegexScriptEditor, { script: newRegexScript(), onSave: saveScript, onCancel: closeEditor }))
-          : null,
         scripts.length > 0 && editing === '' ? h('div', { className: 'dt-filter-row' },
           h(Input, { icon: h(IconSearchOutline16), placeholder: t('panel.filterPlaceholder'), 'aria-label': t('panel.filterPlaceholder'), value: regexFilter, onChange: (event) => setRegexFilter(event.target.value) })) : null,
         scripts.length === 0 && editing !== 'new' ? h('p', { className: 'dt-muted' }, t('settings.regexEmpty')) : visibleCount === 0
@@ -409,6 +410,23 @@
                   }, h(IconTrashOutline16), h('span', null, t('settings.regexDeleteGroupShort')))),
                 open ? h('div', { id: listId, className: 'dt-regex-list' }, visible.map(scriptItem)) : null)
             })),
+        editingScript
+          ? h(RegexScriptEditor, {
+            key: editingScript.id,
+            script: editingScript,
+            title: t('settings.regexEdit', { name: editingScript.scriptName }),
+            onSave: saveScript,
+            onCancel: closeEditor,
+          })
+          : editing === 'new' && newScript
+            ? h(RegexScriptEditor, {
+              key: 'new',
+              script: newScript,
+              title: t('settings.regexCreate'),
+              onSave: saveScript,
+              onCancel: closeEditor,
+            })
+            : null,
         notice ? h('p', { className: 'dt-muted' }, notice) : null,
         error ? h('p', { className: 'dt-error' }, error) : null)
     }

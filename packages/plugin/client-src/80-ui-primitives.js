@@ -32,11 +32,64 @@
         error ? h('span', { className: 'dt-upload-error', title: error }, '!') : null)
     }
 
+    function PersonaEditor({ persona, existingNames, onSave, onCancel }) {
+      const t = useTranslate()
+      const editing = persona !== null
+      const [name, setName] = useState(editing ? String(persona.name || '') : '')
+      const [description, setDescription] = useState(editing ? String(persona.description || '') : '')
+      const [saving, setSaving] = useState(false)
+      const [error, setError] = useState('')
+      const baselineDescription = editing ? String(persona.description || '') : ''
+      const dirty = editing
+        ? description !== baselineDescription
+        : name.trim() !== '' || description !== ''
+      const cancel = () => { if (!dirty || window.confirm(`${t('panel.unsaved')}?`)) onCancel() }
+      const save = () => {
+        const trimmed = name.trim()
+        if (trimmed === '') { setError(t('settings.personaNameRequired')); return }
+        if (!editing && existingNames.some((existing) => existing.toLowerCase() === trimmed.toLowerCase())) {
+          setError(t('settings.personaDuplicate', { name: trimmed }))
+          return
+        }
+        setSaving(true)
+        setError('')
+        void Promise.resolve(onSave(editing ? { name: persona.name, description } : { name: trimmed, description }))
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setSaving(false))
+      }
+      const title = editing
+        ? t('settings.personaEditTitle', { name: persona.name })
+        : t('settings.personaNew')
+      const toolbar = h('div', { className: 'dt-editor-toolbar' },
+        h('div', { className: 'dt-editor-status' }, dirty ? t('panel.unsaved') : t('panel.saved')),
+        h('div', { className: 'dt-editor-actions' },
+          h(Button, { size: 'sm', variant: 'ghost', onClick: cancel }, t('panel.cancel')),
+          h(Button, { size: 'sm', variant: 'primary', disabled: saving || name.trim() === '', onClick: save }, saving ? t('settings.importing') : t('panel.save'))))
+      return h(EditorDialog, { title, onClose: cancel, closeLabel: t('panel.close'), footer: toolbar, className: 'dt-persona-editor' },
+        h('div', { className: 'dt-editor' },
+          h(EditorField, {
+            label: t('settings.personaNamePrompt'),
+            value: name,
+            onChange: setName,
+            disabled: editing,
+            hint: editing ? t('settings.personaNameFixed') : undefined,
+          }),
+          h(EditorField, {
+            label: t('settings.personaDescPrompt'),
+            value: description,
+            onChange: setDescription,
+            multiline: true,
+            className: 'dt-editor-wide',
+          }),
+          error ? h('p', { className: 'dt-error' }, error) : null))
+    }
+
     function PersonaBand() {
       const state = useTavernStore()
       const t = useTranslate()
       const [error, setError] = useState('')
       const [personaFilter, setPersonaFilter] = useState('')
+      const [editor, setEditor] = useState(null)
       const personas = state.bootstrap.personas || []
       // 名称/描述过滤（2026-10-21 分页 UX）：与角色/预设/剧本/正则清单同款模式。
       const personaQuery = personaFilter.trim().toLowerCase()
@@ -53,11 +106,7 @@
             size: 'sm',
             variant: 'primary',
             icon: h(IconPlusOutline16),
-            onClick: () => {
-              const name = window.prompt(t('settings.personaNamePrompt'), '')
-              if (name === null || name.trim() === '') return
-              run(createPersona(name.trim(), ''))
-            },
+            onClick: () => setEditor({ persona: null }),
           }, t('settings.personaNew')),
           h(UploadButton, { kind: 'persona', label: t('settings.personaImport'), accept: '.png,image/png' })),
         personas.length > 0 ? h('div', { className: 'dt-filter-row' },
@@ -82,11 +131,7 @@
                   type: 'button',
                   title: t('settings.personaEdit', { name: persona.name }),
                   'aria-label': t('settings.personaEdit', { name: persona.name }),
-                  onClick: () => {
-                    const next = window.prompt(t('settings.personaDescPrompt'), persona.description)
-                    if (next === null) return
-                    run(savePersona(persona.name, next))
-                  },
+                  onClick: () => setEditor({ persona }),
                 }, h(IconEditOutline16)),
                 h('button', {
                   type: 'button',
@@ -97,6 +142,16 @@
                   },
                 }, h(IconTrashOutline16))))
           })),
+        editor
+          ? h(PersonaEditor, {
+            persona: editor.persona,
+            existingNames: personas.map((persona) => persona.name),
+            onSave: ({ name: nextName, description }) => (editor.persona === null
+              ? createPersona(nextName, description)
+              : savePersona(editor.persona.name, description)).then(() => setEditor(null)),
+            onCancel: () => setEditor(null),
+          })
+          : null,
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
 

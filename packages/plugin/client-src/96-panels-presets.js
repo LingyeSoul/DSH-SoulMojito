@@ -59,12 +59,16 @@
           .finally(() => setSaving(false))
       }
       const cancel = () => { if (!dirty || window.confirm(`${t('panel.unsaved')}?`)) onCancel() }
-      return h('div', { className: 'dt-editor' },
-        h('div', { className: 'dt-editor-toolbar' },
-          h('div', { className: 'dt-editor-status' }, dirty ? t('panel.unsaved') : t('panel.saved')),
-          h('div', { className: 'dt-editor-actions' },
-            h(Button, { size: 'sm', variant: 'ghost', onClick: cancel }, t('panel.cancel')),
-            h(Button, { size: 'sm', variant: 'primary', disabled: saving || !presetName.trim(), onClick: save }, saving ? t('settings.importing') : t('panel.save')))),
+      const title = name !== ''
+        ? t('panel.presets.editTitle', { name })
+        : t('panel.presets.creating')
+      const toolbar = h('div', { className: 'dt-editor-toolbar' },
+        h('div', { className: 'dt-editor-status' }, dirty ? t('panel.unsaved') : t('panel.saved')),
+        h('div', { className: 'dt-editor-actions' },
+          h(Button, { size: 'sm', variant: 'ghost', onClick: cancel }, t('panel.cancel')),
+          h(Button, { size: 'sm', variant: 'primary', disabled: saving || !presetName.trim(), onClick: save }, saving ? t('settings.importing') : t('panel.save'))))
+      return h(EditorDialog, { title, onClose: cancel, closeLabel: t('panel.close'), footer: toolbar },
+        h('div', { className: 'dt-editor' },
         h('p', { className: 'dt-hint' }, t('panel.presets.editHint')),
         h('div', { className: 'dt-editor-grid' }, h(EditorField, { label: t('panel.rename'), value: presetName, onChange: setPresetName })),
         chatPreset ? h('div', { className: 'dt-editor-section-title' },
@@ -81,7 +85,7 @@
               h(ToggleField, { label: t('panel.presets.marker'), checked: prompt.marker === true, onChange: (value) => setPrompt(index, 'marker', value) }),
               h(ToggleField, { label: t('panel.presets.enabled'), checked: prompt.system_prompt !== false, onChange: (value) => setPrompt(index, 'system_prompt', value) })))))) : null,
         h(EditorField, { label: t('panel.presets.sampler'), value: advanced, onChange: setAdvanced, multiline: true, className: 'dt-editor-wide dt-editor-json' }),
-        error ? h('p', { className: 'dt-error' }, error) : null)
+        error ? h('p', { className: 'dt-error' }, error) : null))
     }
 
     function PanelPresets() {
@@ -98,7 +102,10 @@
         if (!(name in presets)) {
           setPresets((current) => ({ ...current, [name]: null }))
           void fetchPreset(name).then((data) => setPresets((current) => ({ ...current, [name]: data })))
-            .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+            .catch((cause) => {
+              setEditing('')
+              setError(cause instanceof Error ? cause.message : String(cause))
+            })
         }
       }
       const save = (name, data, nextName) => savePreset(name, data, nextName).then((saved) => {
@@ -175,7 +182,7 @@
               : h('div', { className: 'dt-preset-list' }, visiblePresets.map((name) => h('div', { key: name, className: 'dt-preset-row' },
                 h('strong', { className: 'dt-preset-name' }, name),
                 h(Pill, null, kinds[name] || 'preset'),
-                h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editPreset(name) }, t(editing === name ? 'panel.cancel' : 'panel.edit')),
+                h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editPreset(name) }, t('panel.edit')),
                 h(Button, { size: 'sm', variant: 'ghost', icon: h(IconDownloadOutline16), 'aria-label': t('panel.exportJson'), title: t('panel.exportJson'), onClick: () => downloadAsset(`export/preset/${encodeURIComponent(name)}`, `${name}.json`) }),
                 state.bootstrap.state.activePreset === name
                   ? h(Pill, { active: true }, t('panel.characters.active'))
@@ -189,13 +196,15 @@
                   onClick: () => {
                     if (window.confirm(t('panel.presets.deleteConfirm', { name }))) run(deletePresetAsset(name))
                   },
-                }),
-                editing === name ? h('div', { className: 'dt-preset-editor-wrap' }, presets[name] ? h(PresetEditor, { name, kind: kinds[name], data: presets[name], onSave: (data, nextName) => save(name, data, nextName), onCancel: () => setEditing('') }) : h('p', { className: 'dt-muted' }, t('nav.loading'))) : null)))),
+                }))))),
+        editing !== '' && presets[editing]
+          ? h(PresetEditor, { name: editing, kind: kinds[editing], data: presets[editing], onSave: (data, nextName) => save(editing, data, nextName), onCancel: () => setEditing('') })
+          : editing !== ''
+            ? h(EditorDialog, { title: t('panel.presets.editTitle', { name: editing }), onClose: () => setEditing(''), closeLabel: t('panel.close') },
+              h('p', { className: 'dt-muted' }, t('nav.loading')))
+            : null,
         creating
-          ? h('section', { className: 'dt-settings-band' },
-              h('h3', null, t('panel.presets.creating')),
-              h('p', { className: 'dt-hint' }, t('panel.presets.createEditorHint')),
-              h(PresetEditor, { name: '', kind: 'chat-completion', data: BLANK_PRESET, onSave: createPreset, onCancel: () => setCreating(false) }))
+          ? h(PresetEditor, { name: '', kind: 'chat-completion', data: BLANK_PRESET, onSave: createPreset, onCancel: () => setCreating(false) })
           : null,
         error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
     }

@@ -6746,7 +6746,11 @@ window.__ModuleLoader__.load({
       'settings.personaImport': 'Persona PNG',
       'settings.personaNamePrompt': 'Persona name',
       'settings.personaDescPrompt': 'Persona description',
+      'settings.personaNameFixed': 'The persona name cannot be changed after creation.',
+      'settings.personaNameRequired': 'Persona name is required.',
+      'settings.personaDuplicate': 'Persona "{name}" already exists.',
       'settings.personaEdit': 'Edit {name}',
+      'settings.personaEditTitle': 'Edit persona: {name}',
       'settings.personaDelete': 'Delete {name}',
       'settings.personaDeleteConfirm': 'Delete persona "{name}"?',
       'settings.groups': 'Groups',
@@ -7043,6 +7047,7 @@ window.__ModuleLoader__.load({
       'panel.characters.createManualHint': 'Open a blank card right here and fill in the fields yourself.',
       'panel.characters.createManualStart': 'Open blank card',
       'panel.characters.creating': 'New card (unsaved)',
+      'panel.characters.editTitle': 'Edit character: {name}',
       'panel.characters.createEditorHint': 'Filling the name and at least a description is usually enough to start; everything else is optional.',
       'panel.characters.duplicate': 'Character "{name}" already exists; creating it again would overwrite that card. Pick another name or delete the existing card first.',
       'panel.characters.createFailed': 'Failed to create card: {message}',
@@ -7072,6 +7077,7 @@ window.__ModuleLoader__.load({
       'panel.worlds.addEntry': 'Add entry',
       'panel.worlds.new': 'New world book',
       'panel.worlds.creating': 'New world book (unsaved)',
+      'panel.worlds.editTitle': 'Edit world book: {name}',
       'panel.worlds.createEditorHint': 'Give the book a name and add entries; a book with no entries is still saved and can be filled in later.',
       'panel.worlds.duplicate': 'World book "{name}" already exists; creating it again would overwrite that book. Pick another name or delete the existing book first.',
       'panel.worlds.createFailed': 'Failed to create world book: {message}',
@@ -7099,6 +7105,7 @@ window.__ModuleLoader__.load({
       'panel.presets.editHint': 'Prompt order and unknown sampler fields are preserved on save.',
       'panel.presets.new': 'New preset',
       'panel.presets.creating': 'New preset (unsaved)',
+      'panel.presets.editTitle': 'Edit preset: {name}',
       'panel.presets.createEditorHint': 'Starts as an empty chat completion preset: add prompts to the stack, then save.',
       'panel.presets.duplicate': 'Preset "{name}" already exists; creating it again would overwrite that preset. Pick another name or delete the existing preset first.',
       'panel.presets.createFailed': 'Failed to create preset: {message}',
@@ -7657,7 +7664,11 @@ window.__ModuleLoader__.load({
       'settings.personaImport': '人设 PNG',
       'settings.personaNamePrompt': '人设名称',
       'settings.personaDescPrompt': '人设描述',
+      'settings.personaNameFixed': '人设名称创建后不可修改',
+      'settings.personaNameRequired': '人设名称不能为空',
+      'settings.personaDuplicate': '已存在同名用户人设「{name}」',
       'settings.personaEdit': '编辑{name}',
+      'settings.personaEditTitle': '编辑用户人设：{name}',
       'settings.personaDelete': '删除{name}',
       'settings.personaDeleteConfirm': '删除人设“{name}”？',
       'settings.groups': '群聊',
@@ -7951,6 +7962,7 @@ window.__ModuleLoader__.load({
       'panel.characters.createManualHint': '在当前面板直接打开空白卡面，自己填写各字段。',
       'panel.characters.createManualStart': '打开空白卡面',
       'panel.characters.creating': '新卡（未保存）',
+      'panel.characters.editTitle': '编辑角色卡：{name}',
       'panel.characters.createEditorHint': '填好名称和描述通常就够开聊了，其余字段都可以留空。',
       'panel.characters.duplicate': '已存在同名角色「{name}」，再次创建会覆盖原卡。请换个名字，或先删除已有角色。',
       'panel.characters.createFailed': '新建角色卡失败：{message}',
@@ -7980,6 +7992,7 @@ window.__ModuleLoader__.load({
       'panel.worlds.addEntry': '新增条目',
       'panel.worlds.new': '新建世界书',
       'panel.worlds.creating': '新建世界书（未保存）',
+      'panel.worlds.editTitle': '编辑世界书：{name}',
       'panel.worlds.createEditorHint': '填好书名并添加条目即可；空书也会保存，之后可随时补充条目。',
       'panel.worlds.duplicate': '已存在同名世界书「{name}」，再次创建会覆盖原书。请换个名字，或先删除已有世界书。',
       'panel.worlds.createFailed': '新建世界书失败：{message}',
@@ -8007,6 +8020,7 @@ window.__ModuleLoader__.load({
       'panel.presets.editHint': '保存时会保留提示词顺序与未知采样字段。',
       'panel.presets.new': '新建预设',
       'panel.presets.creating': '新建预设（未保存）',
+      'panel.presets.editTitle': '编辑预设：{name}',
       'panel.presets.createEditorHint': '从空白聊天补全预设开始：往提示词堆栈添加条目后保存。',
       'panel.presets.duplicate': '已存在同名预设「{name}」，再次创建会覆盖原预设。请换个名字，或先删除已有预设。',
       'panel.presets.createFailed': '新建预设失败：{message}',
@@ -10371,11 +10385,64 @@ window.__ModuleLoader__.load({
         error ? h('span', { className: 'dt-upload-error', title: error }, '!') : null)
     }
 
+    function PersonaEditor({ persona, existingNames, onSave, onCancel }) {
+      const t = useTranslate()
+      const editing = persona !== null
+      const [name, setName] = useState(editing ? String(persona.name || '') : '')
+      const [description, setDescription] = useState(editing ? String(persona.description || '') : '')
+      const [saving, setSaving] = useState(false)
+      const [error, setError] = useState('')
+      const baselineDescription = editing ? String(persona.description || '') : ''
+      const dirty = editing
+        ? description !== baselineDescription
+        : name.trim() !== '' || description !== ''
+      const cancel = () => { if (!dirty || window.confirm(`${t('panel.unsaved')}?`)) onCancel() }
+      const save = () => {
+        const trimmed = name.trim()
+        if (trimmed === '') { setError(t('settings.personaNameRequired')); return }
+        if (!editing && existingNames.some((existing) => existing.toLowerCase() === trimmed.toLowerCase())) {
+          setError(t('settings.personaDuplicate', { name: trimmed }))
+          return
+        }
+        setSaving(true)
+        setError('')
+        void Promise.resolve(onSave(editing ? { name: persona.name, description } : { name: trimmed, description }))
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setSaving(false))
+      }
+      const title = editing
+        ? t('settings.personaEditTitle', { name: persona.name })
+        : t('settings.personaNew')
+      const toolbar = h('div', { className: 'dt-editor-toolbar' },
+        h('div', { className: 'dt-editor-status' }, dirty ? t('panel.unsaved') : t('panel.saved')),
+        h('div', { className: 'dt-editor-actions' },
+          h(Button, { size: 'sm', variant: 'ghost', onClick: cancel }, t('panel.cancel')),
+          h(Button, { size: 'sm', variant: 'primary', disabled: saving || name.trim() === '', onClick: save }, saving ? t('settings.importing') : t('panel.save'))))
+      return h(EditorDialog, { title, onClose: cancel, closeLabel: t('panel.close'), footer: toolbar, className: 'dt-persona-editor' },
+        h('div', { className: 'dt-editor' },
+          h(EditorField, {
+            label: t('settings.personaNamePrompt'),
+            value: name,
+            onChange: setName,
+            disabled: editing,
+            hint: editing ? t('settings.personaNameFixed') : undefined,
+          }),
+          h(EditorField, {
+            label: t('settings.personaDescPrompt'),
+            value: description,
+            onChange: setDescription,
+            multiline: true,
+            className: 'dt-editor-wide',
+          }),
+          error ? h('p', { className: 'dt-error' }, error) : null))
+    }
+
     function PersonaBand() {
       const state = useTavernStore()
       const t = useTranslate()
       const [error, setError] = useState('')
       const [personaFilter, setPersonaFilter] = useState('')
+      const [editor, setEditor] = useState(null)
       const personas = state.bootstrap.personas || []
       // 名称/描述过滤（2026-10-21 分页 UX）：与角色/预设/剧本/正则清单同款模式。
       const personaQuery = personaFilter.trim().toLowerCase()
@@ -10392,11 +10459,7 @@ window.__ModuleLoader__.load({
             size: 'sm',
             variant: 'primary',
             icon: h(IconPlusOutline16),
-            onClick: () => {
-              const name = window.prompt(t('settings.personaNamePrompt'), '')
-              if (name === null || name.trim() === '') return
-              run(createPersona(name.trim(), ''))
-            },
+            onClick: () => setEditor({ persona: null }),
           }, t('settings.personaNew')),
           h(UploadButton, { kind: 'persona', label: t('settings.personaImport'), accept: '.png,image/png' })),
         personas.length > 0 ? h('div', { className: 'dt-filter-row' },
@@ -10421,11 +10484,7 @@ window.__ModuleLoader__.load({
                   type: 'button',
                   title: t('settings.personaEdit', { name: persona.name }),
                   'aria-label': t('settings.personaEdit', { name: persona.name }),
-                  onClick: () => {
-                    const next = window.prompt(t('settings.personaDescPrompt'), persona.description)
-                    if (next === null) return
-                    run(savePersona(persona.name, next))
-                  },
+                  onClick: () => setEditor({ persona }),
                 }, h(IconEditOutline16)),
                 h('button', {
                   type: 'button',
@@ -10436,6 +10495,16 @@ window.__ModuleLoader__.load({
                   },
                 }, h(IconTrashOutline16))))
           })),
+        editor
+          ? h(PersonaEditor, {
+            persona: editor.persona,
+            existingNames: personas.map((persona) => persona.name),
+            onSave: ({ name: nextName, description }) => (editor.persona === null
+              ? createPersona(nextName, description)
+              : savePersona(editor.persona.name, description)).then(() => setEditor(null)),
+            onCancel: () => setEditor(null),
+          })
+          : null,
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
 
@@ -10580,7 +10649,7 @@ window.__ModuleLoader__.load({
         }))
     }
 
-    function RegexScriptEditor({ script, onSave, onCancel }) {
+    function RegexScriptEditor({ script, title, onSave, onCancel }) {
       const t = useTranslate()
       const [draft, setDraft] = useState(() => cloneValue(script))
       const [saving, setSaving] = useState(false)
@@ -10618,12 +10687,13 @@ window.__ModuleLoader__.load({
           .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
           .finally(() => setSaving(false))
       }
-      return h('div', { className: 'dt-editor' },
-        h('div', { className: 'dt-editor-toolbar' },
-          h('div', { className: 'dt-editor-status' }, dirty ? t('panel.unsaved') : t('panel.saved')),
-          h('div', { className: 'dt-editor-actions' },
-            h(Button, { size: 'sm', variant: 'ghost', onClick: cancel }, t('panel.cancel')),
-            h(Button, { size: 'sm', variant: 'primary', disabled: saving, onClick: save }, saving ? t('settings.importing') : t('panel.save')))),
+      const toolbar = h('div', { className: 'dt-editor-toolbar' },
+        h('div', { className: 'dt-editor-status' }, dirty ? t('panel.unsaved') : t('panel.saved')),
+        h('div', { className: 'dt-editor-actions' },
+          h(Button, { size: 'sm', variant: 'ghost', onClick: cancel }, t('panel.cancel')),
+          h(Button, { size: 'sm', variant: 'primary', disabled: saving, onClick: save }, saving ? t('settings.importing') : t('panel.save'))))
+      return h(EditorDialog, { title, onClose: cancel, closeLabel: t('panel.close'), footer: toolbar },
+        h('div', { className: 'dt-editor' },
         h('div', { className: 'dt-editor-grid' },
           h(EditorField, { label: t('settings.regexName'), value: draft.scriptName, onChange: (value) => setField('scriptName', value) }),
           h('div', { className: 'dt-editor-field' },
@@ -10645,7 +10715,7 @@ window.__ModuleLoader__.load({
             h(ToggleField, { label: t('settings.regexPromptOnly'), checked: draft.promptOnly === true, onChange: (value) => setField('promptOnly', value) }),
             h(ToggleField, { label: t('settings.regexRunOnEdit'), checked: draft.runOnEdit === true, onChange: (value) => setField('runOnEdit', value) }),
             h(ToggleField, { label: t('settings.regexSubstitute'), checked: draft.substituteRegex === true, onChange: (value) => setField('substituteRegex', value) }))),
-        error ? h('p', { className: 'dt-error' }, error) : null)
+        error ? h('p', { className: 'dt-error' }, error) : null))
     }
 
     function RegexBand({ useSessions }) {
@@ -10655,6 +10725,7 @@ window.__ModuleLoader__.load({
       const [notice, setNotice] = useState('')
       const [syncing, setSyncing] = useState('')
       const [editing, setEditing] = useState('')
+      const [newScript, setNewScript] = useState(null)
       const [regexFilter, setRegexFilter] = useState('')
       // 分区折叠（2026-10-23 用户需求）：默认全部收起，只留段头一行；
       // 展开状态按分区键记忆，过滤或编辑中的分区强制展开（见 groupOpen）。
@@ -10749,6 +10820,7 @@ window.__ModuleLoader__.load({
         return saveRegexScripts(next).then(() => {
           revealScript(script)
           setEditing('')
+          setNewScript(null)
         })
       }
       // 归属别的来源时开关仍可切换，但当前会话不生效；给一条回执解释，避免
@@ -10820,7 +10892,13 @@ window.__ModuleLoader__.load({
       }
       const syncFromCards = () => sync('cards', syncRegexScriptsFromCards, 'settings.regexSyncDone')
       const syncFromPresets = () => sync('presets', syncRegexScriptsFromPresets, 'settings.regexSyncPresetsDone')
-      const closeEditor = () => setEditing('')
+      const closeEditor = () => {
+        setEditing('')
+        setNewScript(null)
+      }
+      const editingScript = editing !== '' && editing !== 'new'
+        ? scripts.find((item) => item.id === editing)
+        : null
       const scriptItem = (script) => h('div', { key: script.id, className: 'dt-regex-item' },
         h('div', { className: `dt-regex-row ${script.disabled || autoInactive(script) ? 'dt-regex-off' : ''}` },
           // Checkbox keeps its own control surface; the script name is read
@@ -10886,21 +10964,13 @@ window.__ModuleLoader__.load({
                 if (!window.confirm(t('settings.regexDeleteConfirm', { name: script.scriptName }))) return
                 run(saveRegexScripts(scripts.filter((item) => item.id !== script.id)))
               },
-            }, h(IconTrashOutline16)))),
-        editing === script.id
-          ? h('div', { className: 'dt-regex-editor-wrap' },
-            h(RegexScriptEditor, { script, onSave: saveScript, onCancel: closeEditor }))
-          : null)
+            }, h(IconTrashOutline16)))))
       return h('section', { className: 'dt-settings-band' },
         h('div', { className: 'dt-band-actions' },
-          h(Button, { size: 'sm', variant: 'primary', icon: h(IconPlusOutline16), disabled: editing !== '', onClick: () => setEditing('new') }, t('settings.regexCreate')),
+          h(Button, { size: 'sm', variant: 'primary', icon: h(IconPlusOutline16), disabled: editing !== '', onClick: () => { setNewScript(newRegexScript()); setEditing('new') } }, t('settings.regexCreate')),
           h(UploadButton, { kind: 'regex', label: t('settings.importRegex'), accept: '.json,application/json' }),
           h(Button, { size: 'sm', variant: 'ghost', icon: h(IconRefreshOutline16), disabled: syncing !== '', onClick: syncFromCards }, syncing === 'cards' ? t('settings.importing') : t('settings.regexSyncCards')),
           h(Button, { size: 'sm', variant: 'ghost', icon: h(IconRefreshOutline16), disabled: syncing !== '', onClick: syncFromPresets }, syncing === 'presets' ? t('settings.importing') : t('settings.regexSyncPresets'))),
-        editing === 'new'
-          ? h('div', { key: 'new', className: 'dt-regex-editor-wrap' },
-            h(RegexScriptEditor, { script: newRegexScript(), onSave: saveScript, onCancel: closeEditor }))
-          : null,
         scripts.length > 0 && editing === '' ? h('div', { className: 'dt-filter-row' },
           h(Input, { icon: h(IconSearchOutline16), placeholder: t('panel.filterPlaceholder'), 'aria-label': t('panel.filterPlaceholder'), value: regexFilter, onChange: (event) => setRegexFilter(event.target.value) })) : null,
         scripts.length === 0 && editing !== 'new' ? h('p', { className: 'dt-muted' }, t('settings.regexEmpty')) : visibleCount === 0
@@ -10950,6 +11020,23 @@ window.__ModuleLoader__.load({
                   }, h(IconTrashOutline16), h('span', null, t('settings.regexDeleteGroupShort')))),
                 open ? h('div', { id: listId, className: 'dt-regex-list' }, visible.map(scriptItem)) : null)
             })),
+        editingScript
+          ? h(RegexScriptEditor, {
+            key: editingScript.id,
+            script: editingScript,
+            title: t('settings.regexEdit', { name: editingScript.scriptName }),
+            onSave: saveScript,
+            onCancel: closeEditor,
+          })
+          : editing === 'new' && newScript
+            ? h(RegexScriptEditor, {
+              key: 'new',
+              script: newScript,
+              title: t('settings.regexCreate'),
+              onSave: saveScript,
+              onCancel: closeEditor,
+            })
+            : null,
         notice ? h('p', { className: 'dt-muted' }, notice) : null,
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
@@ -15034,6 +15121,32 @@ window.__ModuleLoader__.load({
       return value === undefined ? value : JSON.parse(JSON.stringify(value))
     }
 
+    // Shared modal shell for asset editors (2026-10-25 user request): editing a
+    // card / world book / preset / regex script opens a dedicated dialog instead
+    // of expanding the form inline in the panel list. onClose goes through the
+    // editor's own dirty guard, so overlay and Escape keep the unsaved-changes
+    // confirmation while the form is open.
+    function EditorDialog({ title, onClose, closeLabel, children, footer, className = '' }) {
+      return h(Modal, {
+        open: true,
+        onClose,
+        title,
+        closeLabel,
+        headless: true,
+        className: `dt-editor-modal ${className}`.trim(),
+      },
+      h('div', { className: 'dt-editor-modal-head' },
+        h('h2', null, title),
+        h('button', {
+          type: 'button',
+          className: 'dt-panel-close',
+          'aria-label': closeLabel,
+          onClick: onClose,
+        }, h(IconCloseOutline16))),
+      h('div', { className: 'dt-editor-modal-body' }, children),
+      footer ? h('div', { className: 'dt-editor-modal-foot' }, footer) : null)
+    }
+
     function EditorField({ label, value, onChange, multiline = false, type = 'text', min, max, step, className = '', hint, placeholder, disabled }) {
       const props = {
         value: value ?? '',
@@ -15113,13 +15226,18 @@ window.__ModuleLoader__.load({
           .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
           .finally(() => setSaving(false))
       }
-      if (!draft) return h('p', { className: 'dt-muted' }, t('nav.loading'))
-      return h('div', { className: 'dt-editor' },
-        h('div', { className: 'dt-editor-toolbar' },
-          h('div', { className: 'dt-editor-status' }, dirty ? t('panel.unsaved') : t('panel.saved')),
-          h('div', { className: 'dt-editor-actions' },
-            h(Button, { size: 'sm', variant: 'ghost', onClick: cancel }, t('panel.cancel')),
-            h(Button, { size: 'sm', variant: 'primary', disabled: saving || !String(data.name || '').trim(), onClick: save }, saving ? t('settings.importing') : t('panel.save')))),
+      const title = name !== ''
+        ? t('panel.characters.editTitle', { name })
+        : t('panel.characters.createTitle')
+      if (!draft) return h(EditorDialog, { title, onClose: cancel, closeLabel: t('panel.close') },
+        h('p', { className: 'dt-muted' }, t('nav.loading')))
+      const toolbar = h('div', { className: 'dt-editor-toolbar' },
+        h('div', { className: 'dt-editor-status' }, dirty ? t('panel.unsaved') : t('panel.saved')),
+        h('div', { className: 'dt-editor-actions' },
+          h(Button, { size: 'sm', variant: 'ghost', onClick: cancel }, t('panel.cancel')),
+          h(Button, { size: 'sm', variant: 'primary', disabled: saving || !String(data.name || '').trim(), onClick: save }, saving ? t('settings.importing') : t('panel.save'))))
+      return h(EditorDialog, { title, onClose: cancel, closeLabel: t('panel.close'), footer: toolbar },
+        h('div', { className: 'dt-editor' },
         h('p', { className: 'dt-hint' }, hint || t('panel.characters.editHint')),
         h('div', { className: 'dt-editor-grid' },
           h(EditorField, { label: t('panel.rename'), value: data.name, onChange: (value) => setData('name', value) }),
@@ -15137,7 +15255,7 @@ window.__ModuleLoader__.load({
           h(EditorField, { label: t('panel.characters.postHistory'), value: data.postHistoryInstructions, onChange: (value) => setData('postHistoryInstructions', value), multiline: true, className: 'dt-editor-wide' }),
           h(EditorField, { label: t('panel.characters.creatorNotes'), value: data.creatorNotes, onChange: (value) => setData('creatorNotes', value), multiline: true, className: 'dt-editor-wide' }),
           h(EditorField, { label: t('panel.characters.advancedJson'), value: advanced, onChange: setAdvanced, multiline: true, className: 'dt-editor-wide dt-editor-json' })),
-        error ? h('p', { className: 'dt-error' }, error) : null)
+        error ? h('p', { className: 'dt-error' }, error) : null))
     }
 
     function CharacterCardFields({ card }) {
@@ -15230,12 +15348,16 @@ window.__ModuleLoader__.load({
       }
       const editCard = (name) => {
         if (editing === name) { setEditing(''); return }
+        setCreating(false)
         setEditing(name)
         setViewing(name)
         if (!(name in cards)) {
           setCards((current) => ({ ...current, [name]: null }))
           void fetchCharacterCard(name).then((card) => setCards((current) => ({ ...current, [name]: card })))
-            .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+            .catch((cause) => {
+              setEditing('')
+              setError(cause instanceof Error ? cause.message : String(cause))
+            })
         }
       }
       const save = (name, card) => saveCharacterCard(name, card).then((saved) => {
@@ -15306,18 +15428,11 @@ window.__ModuleLoader__.load({
             : visibleCharacters.length === 0
               ? h('p', { className: 'dt-muted' }, t('panel.filterEmpty'))
               : h('div', { className: 'dt-card-grid' },
-              creating
-                ? h('div', { className: 'dt-card dt-card-editing' },
-                  h('div', { className: 'dt-card-head' },
-                    h('div', { className: 'dt-card-title' },
-                      h('strong', null, t('panel.characters.creating')))),
-                  h(CardEditor, { card: BLANK_CHARACTER_CARD, name: '', hint: t('panel.characters.createEditorHint'), onSave: createCharacter, onCancel: () => setCreating(false) }))
-                : null,
               visibleCharacters.map((name) => {
               const active = activeCharacter === name
                 || (activeCharacter !== '' && normalizeTavernName(activeCharacter) === normalizeTavernName(name))
               const card = cards[name]
-              return h('div', { key: name, className: `dt-card ${editing === name ? 'dt-card-editing' : ''}` },
+              return h('div', { key: name, className: 'dt-card' },
                 h('div', { className: 'dt-card-head' },
                   h('img', { src: `${API}/avatar/${encodeURIComponent(name)}`, alt: '' }),
                   h('div', { className: 'dt-card-title' },
@@ -15328,7 +15443,7 @@ window.__ModuleLoader__.load({
                     ? h(Pill, { active: true }, t('panel.characters.active'))
                     : h(Button, { size: 'sm', variant: 'outline', onClick: () => run(patchState({ activeCharacter: name })) }, t('panel.characters.setActive')),
                   h(Button, { size: 'sm', variant: 'ghost', onClick: () => viewCard(name) }, t(viewing === name ? 'panel.characters.hideCard' : 'panel.characters.viewCard')),
-                  h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editCard(name) }, t(editing === name ? 'panel.cancel' : 'panel.edit')),
+                  h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editCard(name) }, t('panel.edit')),
                   h(Button, {
                     size: 'sm',
                     variant: 'ghost',
@@ -15347,10 +15462,14 @@ window.__ModuleLoader__.load({
                       if (window.confirm(t('panel.characters.deleteConfirm', { name }))) run(deleteCharacterAsset(name))
                     },
                   })),
-                editing === name
-                  ? h(CardEditor, { card, name, onSave: (next) => save(name, next), onCancel: () => setEditing('') })
-                  : viewing === name ? h(CharacterCardFields, { card }) : null)
+                viewing === name ? h(CharacterCardFields, { card }) : null)
             }))),
+        creating
+          ? h(CardEditor, { card: BLANK_CHARACTER_CARD, name: '', hint: t('panel.characters.createEditorHint'), onSave: createCharacter, onCancel: () => setCreating(false) })
+          : null,
+        editing !== ''
+          ? h(CardEditor, { card: cards[editing] ?? null, name: editing, onSave: (next) => save(editing, next), onCancel: () => setEditing('') })
+          : null,
         guideOpen
           ? h(NovelModalFrame, {
             title: t('panel.characters.createTitle'),
@@ -15368,7 +15487,7 @@ window.__ModuleLoader__.load({
               h('div', { className: 'dt-create-choice-copy' },
                 h('h3', null, t('panel.characters.createManualTitle')),
                 h('p', { className: 'dt-hint' }, t('panel.characters.createManualHint'))),
-              h(Button, { size: 'sm', variant: 'outline', icon: h(IconEditOutline16), onClick: () => { setGuideOpen(false); setCreating(true) } }, t('panel.characters.createManualStart')))),
+              h(Button, { size: 'sm', variant: 'outline', icon: h(IconEditOutline16), onClick: () => { setGuideOpen(false); setEditing(''); setCreating(true) } }, t('panel.characters.createManualStart')))),
           error ? h('p', { className: 'dt-error' }, error) : null)
           : null,
         error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
@@ -15408,13 +15527,19 @@ window.__ModuleLoader__.load({
           .finally(() => setSaving(false))
       }
       const cancel = () => { if (!dirty || window.confirm(`${t('panel.unsaved')}?`)) onCancel() }
-      if (!draft) return h('p', { className: 'dt-muted' }, t('nav.loading'))
-      return h('div', { className: 'dt-editor' },
-        h('div', { className: 'dt-editor-toolbar' },
-          h('div', { className: 'dt-editor-status' }, dirty ? t('panel.unsaved') : t('panel.saved')),
-          h('div', { className: 'dt-editor-actions' },
-            h(Button, { size: 'sm', variant: 'ghost', onClick: cancel }, t('panel.cancel')),
-            h(Button, { size: 'sm', variant: 'primary', disabled: saving || !String(draft.name || '').trim(), onClick: save }, saving ? t('settings.importing') : t('panel.save')))),
+      const bookName = String(book?.name || '').trim()
+      const title = bookName !== ''
+        ? t('panel.worlds.editTitle', { name: bookName })
+        : t('panel.worlds.creating')
+      if (!draft) return h(EditorDialog, { title, onClose: cancel, closeLabel: t('panel.close') },
+        h('p', { className: 'dt-muted' }, t('nav.loading')))
+      const toolbar = h('div', { className: 'dt-editor-toolbar' },
+        h('div', { className: 'dt-editor-status' }, dirty ? t('panel.unsaved') : t('panel.saved')),
+        h('div', { className: 'dt-editor-actions' },
+          h(Button, { size: 'sm', variant: 'ghost', onClick: cancel }, t('panel.cancel')),
+          h(Button, { size: 'sm', variant: 'primary', disabled: saving || !String(draft.name || '').trim(), onClick: save }, saving ? t('settings.importing') : t('panel.save'))))
+      return h(EditorDialog, { title, onClose: cancel, closeLabel: t('panel.close'), footer: toolbar },
+        h('div', { className: 'dt-editor' },
         h('div', { className: 'dt-editor-grid' },
           h(EditorField, { label: t('panel.worlds.name'), value: draft.name, onChange: (value) => setBook('name', value) })),
         h('div', { className: 'dt-editor-section-title' },
@@ -15436,7 +15561,7 @@ window.__ModuleLoader__.load({
               h(ToggleField, { label: t('panel.worlds.enabled'), checked: !entry.disable, onChange: (value) => setEntry(entry.uid, 'disable', !value) }),
               h(ToggleField, { label: t('panel.worlds.constant'), checked: entry.constant, onChange: (value) => setEntry(entry.uid, 'constant', value) }),
               h(ToggleField, { label: t('panel.worlds.selective'), checked: entry.selective, onChange: (value) => setEntry(entry.uid, 'selective', value) })))))),
-        error ? h('p', { className: 'dt-error' }, error) : null)
+        error ? h('p', { className: 'dt-error' }, error) : null))
     }
 
     function PanelWorlds({ useSessions }) {
@@ -15498,7 +15623,10 @@ window.__ModuleLoader__.load({
         if (!(name in books)) {
           setBooks((current) => ({ ...current, [name]: null }))
           void fetchWorldBook(name).then((book) => setBooks((current) => ({ ...current, [name]: book })))
-            .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+            .catch((cause) => {
+              setEditing('')
+              setError(cause instanceof Error ? cause.message : String(cause))
+            })
         }
       }
       const save = (name, book) => saveWorldBook(name, book).then((saved) => {
@@ -15586,25 +15714,25 @@ window.__ModuleLoader__.load({
               }))))),
          browse !== '' ? h('section', { className: 'dt-settings-band' },
            h('h3', null, browse),
-           editing === browse && book
-             ? h(WorldBookEditor, { book, onSave: (next) => save(browse, next), onCancel: () => setEditing('') })
-             : h(React.Fragment, null,
-               h('div', { className: 'dt-imports' },
-                 h(Input, { icon: h(IconSearchOutline16), placeholder: t('panel.worlds.search'), value: filter, onChange: (event) => setFilter(event.target.value) })),
-               !book
-                 ? h('p', { className: 'dt-muted' }, t('nav.loading'))
-                 : entries.length === 0
-                   ? h('p', { className: 'dt-muted' }, t('panel.worlds.noEntries'))
-                   : h('div', { className: 'dt-entry-list' }, entries.map((entry, index) => h('div', { key: entry.uid ?? index, className: `dt-entry ${entry.disable ? 'dt-entry-off' : ''}` },
-                     h('div', { className: 'dt-entry-head' },
-                       h('strong', null, entry.comment || `#${entry.uid ?? index + 1}`),
-                       h('span', { className: 'dt-entry-keys' }, t('panel.worlds.keys', { keys: loreKeys(entry) }))),
-                     h('div', { className: 'dt-entry-content' }, entry.content)))))) : null,
+           h('div', { className: 'dt-imports' },
+             h(Input, { icon: h(IconSearchOutline16), placeholder: t('panel.worlds.search'), value: filter, onChange: (event) => setFilter(event.target.value) })),
+           !book
+             ? h('p', { className: 'dt-muted' }, t('nav.loading'))
+             : entries.length === 0
+               ? h('p', { className: 'dt-muted' }, t('panel.worlds.noEntries'))
+               : h('div', { className: 'dt-entry-list' }, entries.map((entry, index) => h('div', { key: entry.uid ?? index, className: `dt-entry ${entry.disable ? 'dt-entry-off' : ''}` },
+                 h('div', { className: 'dt-entry-head' },
+                   h('strong', null, entry.comment || `#${entry.uid ?? index + 1}`),
+                   h('span', { className: 'dt-entry-keys' }, t('panel.worlds.keys', { keys: loreKeys(entry) }))),
+                 h('div', { className: 'dt-entry-content' }, entry.content))))) : null,
+         editing !== '' && book
+           ? h(WorldBookEditor, { book, onSave: (next) => save(editing, next), onCancel: () => setEditing('') })
+           : editing !== ''
+             ? h(EditorDialog, { title: t('panel.worlds.editTitle', { name: editing }), onClose: () => setEditing(''), closeLabel: t('panel.close') },
+               h('p', { className: 'dt-muted' }, t('nav.loading')))
+             : null,
          creating
-           ? h('section', { className: 'dt-settings-band' },
-               h('h3', null, t('panel.worlds.creating')),
-               h('p', { className: 'dt-hint' }, t('panel.worlds.createEditorHint')),
-               h(WorldBookEditor, { book: BLANK_WORLD_BOOK, onSave: createWorld, onCancel: () => setCreating(false) }))
+           ? h(WorldBookEditor, { book: BLANK_WORLD_BOOK, onSave: createWorld, onCancel: () => setCreating(false) })
            : null,
          error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
     }
@@ -18184,7 +18312,7 @@ window.__ModuleLoader__.load({
         .dt-member-chip{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 8px 0 3px;border:1px solid var(--dsw-alias-border-l2);border-radius:14px;background:transparent;color:inherit;font-size:12px;cursor:pointer}.dt-member-chip>img{width:22px;height:22px;border-radius:50%;object-fit:cover}.dt-member-chip-off{opacity:.45}.dt-member-chip-off>span{text-decoration:line-through}.dt-member-chip-active{border-color:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-state-business-primary)}.dt-member-chip>button{color:inherit;background:transparent;border:0;cursor:pointer;padding:0 2px;font-size:11px}
         .dt-band-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 12px}.dt-band-actions>.dt-upload{height:32px;font-size:13px}.dt-band-actions>.dt-upload:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-band-actions>button{min-height:32px;font-size:13px}
         .dt-regex-list{display:flex;flex-direction:column;gap:6px}.dt-regex-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;padding:7px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;transition:background .12s}.dt-regex-row:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-regex-row.dt-regex-off{opacity:.55}.dt-regex-check{min-height:0;flex:none}.dt-regex-main{display:flex;flex-direction:column;gap:1px;min-width:0}.dt-regex-head{display:flex;align-items:baseline;gap:8px;min-width:0}.dt-regex-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:18px;color:var(--dsw-alias-label-primary)}.dt-regex-owner{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-regex-placements{flex:none;max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-regex-pattern{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;line-height:16px}.dt-regex-actions{display:flex;gap:2px;flex:none}.dt-regex-actions button{width:28px;height:28px;border-radius:6px;display:grid;place-items:center;color:inherit;background:transparent;border:0;cursor:pointer}
-.dt-regex-actions button.dt-regex-release{width:auto;padding:0 7px;font-size:11px;line-height:16px;white-space:nowrap}.dt-regex-actions button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.dt-regex-actions button:disabled{opacity:.4;cursor:not-allowed}.dt-regex-item{display:flex;flex-direction:column;gap:4px}.dt-regex-editor-wrap{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:12px}
+.dt-regex-actions button.dt-regex-release{width:auto;padding:0 7px;font-size:11px;line-height:16px;white-space:nowrap}.dt-regex-actions button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.dt-regex-actions button:disabled{opacity:.4;cursor:not-allowed}.dt-regex-item{display:flex;flex-direction:column;gap:4px}
         /* 正则按来源分区（2026-10-23 用户需求）：段头一行放来源名、当前标记、
            条数与清空按钮；窄屏允许换行，名字独占剩余宽度并省略。 */
         .dt-regex-groups{display:flex;flex-direction:column;gap:14px}.dt-regex-group{display:flex;flex-direction:column;gap:6px}.dt-regex-group-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.dt-regex-group-fold{display:flex;align-items:center;gap:6px;flex:1;min-width:0;flex-wrap:wrap;margin:0;padding:2px 4px;border:0;border-radius:6px;color:inherit;background:transparent;cursor:pointer;font:inherit;text-align:left}.dt-regex-group-fold:hover{background:var(--dsw-alias-interactive-bg-hover)}.dt-regex-group-fold:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}.dt-regex-group-fold svg{flex:none;color:var(--dsw-alias-label-tertiary);transform:rotate(-90deg);transition:transform .15s}.dt-regex-group-fold svg.dt-chevron-open{transform:rotate(0)}.dt-regex-group-fold-static{cursor:default}.dt-regex-group-fold-static:hover{background:transparent}.dt-regex-group-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;font-weight:600}.dt-regex-group-active{padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 14%,transparent);color:var(--dsw-alias-state-business-primary);font-size:11px;line-height:16px}.dt-regex-group-inactive{padding:0 6px;border-radius:999px;background:color-mix(in srgb,var(--dsw-alias-label-tertiary) 14%,transparent);color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-regex-group-count{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}.dt-regex-group-delete{display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 7px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-tertiary);background:transparent;font-size:11px;line-height:16px;cursor:pointer}.dt-regex-group-delete:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary)}.dt-regex-group-delete:disabled{opacity:.4;cursor:not-allowed}.dt-regex-group-toggle{min-height:0;gap:0}.dt-regex-group-toggle input{width:14px;height:14px;margin:0;accent-color:var(--dsw-alias-state-business-primary);cursor:pointer}.dt-regex-group-toggle input:disabled{cursor:not-allowed;opacity:.4}
@@ -18265,7 +18393,6 @@ window.__ModuleLoader__.load({
         .dt-about-row a:hover,.dt-about-row a:focus-visible{text-decoration:underline}
         .dt-card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
         .dt-card{display:flex;flex-direction:column;gap:9px;padding:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px}
-        .dt-card-editing{grid-column:1 / -1;border-color:var(--dsw-alias-state-business-primary);box-shadow:0 0 0 1px color-mix(in srgb,var(--dsw-alias-state-business-primary) 22%,transparent)}
         .dt-card-head{display:flex;align-items:center;gap:9px}
         .dt-card-head>img{width:40px;height:40px;border-radius:8px;object-fit:cover;flex:none}
         .dt-card-title{display:flex;flex-direction:column;min-width:0;flex:1}
@@ -18292,7 +18419,6 @@ window.__ModuleLoader__.load({
         .dt-preset-list{display:flex;flex-direction:column;gap:6px}
         .dt-preset-row{display:flex;align-items:center;gap:8px;min-height:36px;padding:6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;flex-wrap:wrap}
         .dt-preset-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
-        .dt-preset-editor-wrap{flex-basis:100%;min-width:0;border-top:1px solid var(--dsw-alias-border-l2);padding-top:8px}
         .dt-editor{display:flex;flex-direction:column;gap:12px;min-width:0}
         .dt-editor-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:34px;flex-wrap:wrap}
         .dt-editor-status{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
@@ -18386,6 +18512,14 @@ window.__ModuleLoader__.load({
         .dt-novel-approve{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px}
         .dt-novel-approve input{box-sizing:border-box;width:130px;min-height:30px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:5px 8px;font:inherit;font-size:12px}
         .dt-novel-modal{pointer-events:auto;display:flex;flex-direction:column;width:min(760px,calc(100vw - 48px));height:min(680px,calc(100vh - 64px));max-width:100%;max-height:100%;padding:0;gap:0;border-color:var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base)}
+        .dt-editor-modal{pointer-events:auto;display:flex;flex-direction:column;width:min(900px,calc(100vw - 48px));height:min(780px,calc(100vh - 64px));max-width:100%;max-height:100%;padding:0;gap:0;border-color:var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base)}
+        .dt-editor-modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:52px;padding:8px 16px;border-bottom:1px solid var(--dsw-alias-border-l2)}
+        .dt-editor-modal-head h2{margin:0;font-size:16px;line-height:22px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .dt-editor-modal-body{flex:1;min-height:0;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:12px}
+        .dt-editor-modal-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 16px;border-top:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-base)}
+        .dt-persona-editor{width:min(640px,calc(100vw - 48px));height:auto;max-height:min(720px,calc(100vh - 64px))}
+        .dt-persona-editor .dt-editor-modal-body{flex:0 1 auto;min-height:0;overflow-y:auto}
+        @media(max-width:700px){.dt-editor-modal{width:calc(100vw - 24px);height:calc(100vh - 24px)}.dt-editor-modal-body{padding:12px}.dt-persona-editor{height:auto;max-height:calc(100vh - 24px)}}
         .dt-novel-modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:52px;padding:8px 16px;border-bottom:1px solid var(--dsw-alias-border-l2)}
         .dt-novel-modal-head h2{margin:0;font-size:16px;line-height:22px;font-weight:600}
         .dt-novel-modal-body{flex:1;min-height:0;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:12px}
@@ -18769,12 +18903,16 @@ window.__ModuleLoader__.load({
           .finally(() => setSaving(false))
       }
       const cancel = () => { if (!dirty || window.confirm(`${t('panel.unsaved')}?`)) onCancel() }
-      return h('div', { className: 'dt-editor' },
-        h('div', { className: 'dt-editor-toolbar' },
-          h('div', { className: 'dt-editor-status' }, dirty ? t('panel.unsaved') : t('panel.saved')),
-          h('div', { className: 'dt-editor-actions' },
-            h(Button, { size: 'sm', variant: 'ghost', onClick: cancel }, t('panel.cancel')),
-            h(Button, { size: 'sm', variant: 'primary', disabled: saving || !presetName.trim(), onClick: save }, saving ? t('settings.importing') : t('panel.save')))),
+      const title = name !== ''
+        ? t('panel.presets.editTitle', { name })
+        : t('panel.presets.creating')
+      const toolbar = h('div', { className: 'dt-editor-toolbar' },
+        h('div', { className: 'dt-editor-status' }, dirty ? t('panel.unsaved') : t('panel.saved')),
+        h('div', { className: 'dt-editor-actions' },
+          h(Button, { size: 'sm', variant: 'ghost', onClick: cancel }, t('panel.cancel')),
+          h(Button, { size: 'sm', variant: 'primary', disabled: saving || !presetName.trim(), onClick: save }, saving ? t('settings.importing') : t('panel.save'))))
+      return h(EditorDialog, { title, onClose: cancel, closeLabel: t('panel.close'), footer: toolbar },
+        h('div', { className: 'dt-editor' },
         h('p', { className: 'dt-hint' }, t('panel.presets.editHint')),
         h('div', { className: 'dt-editor-grid' }, h(EditorField, { label: t('panel.rename'), value: presetName, onChange: setPresetName })),
         chatPreset ? h('div', { className: 'dt-editor-section-title' },
@@ -18791,7 +18929,7 @@ window.__ModuleLoader__.load({
               h(ToggleField, { label: t('panel.presets.marker'), checked: prompt.marker === true, onChange: (value) => setPrompt(index, 'marker', value) }),
               h(ToggleField, { label: t('panel.presets.enabled'), checked: prompt.system_prompt !== false, onChange: (value) => setPrompt(index, 'system_prompt', value) })))))) : null,
         h(EditorField, { label: t('panel.presets.sampler'), value: advanced, onChange: setAdvanced, multiline: true, className: 'dt-editor-wide dt-editor-json' }),
-        error ? h('p', { className: 'dt-error' }, error) : null)
+        error ? h('p', { className: 'dt-error' }, error) : null))
     }
 
     function PanelPresets() {
@@ -18808,7 +18946,10 @@ window.__ModuleLoader__.load({
         if (!(name in presets)) {
           setPresets((current) => ({ ...current, [name]: null }))
           void fetchPreset(name).then((data) => setPresets((current) => ({ ...current, [name]: data })))
-            .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+            .catch((cause) => {
+              setEditing('')
+              setError(cause instanceof Error ? cause.message : String(cause))
+            })
         }
       }
       const save = (name, data, nextName) => savePreset(name, data, nextName).then((saved) => {
@@ -18885,7 +19026,7 @@ window.__ModuleLoader__.load({
               : h('div', { className: 'dt-preset-list' }, visiblePresets.map((name) => h('div', { key: name, className: 'dt-preset-row' },
                 h('strong', { className: 'dt-preset-name' }, name),
                 h(Pill, null, kinds[name] || 'preset'),
-                h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editPreset(name) }, t(editing === name ? 'panel.cancel' : 'panel.edit')),
+                h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editPreset(name) }, t('panel.edit')),
                 h(Button, { size: 'sm', variant: 'ghost', icon: h(IconDownloadOutline16), 'aria-label': t('panel.exportJson'), title: t('panel.exportJson'), onClick: () => downloadAsset(`export/preset/${encodeURIComponent(name)}`, `${name}.json`) }),
                 state.bootstrap.state.activePreset === name
                   ? h(Pill, { active: true }, t('panel.characters.active'))
@@ -18899,13 +19040,15 @@ window.__ModuleLoader__.load({
                   onClick: () => {
                     if (window.confirm(t('panel.presets.deleteConfirm', { name }))) run(deletePresetAsset(name))
                   },
-                }),
-                editing === name ? h('div', { className: 'dt-preset-editor-wrap' }, presets[name] ? h(PresetEditor, { name, kind: kinds[name], data: presets[name], onSave: (data, nextName) => save(name, data, nextName), onCancel: () => setEditing('') }) : h('p', { className: 'dt-muted' }, t('nav.loading'))) : null)))),
+                }))))),
+        editing !== '' && presets[editing]
+          ? h(PresetEditor, { name: editing, kind: kinds[editing], data: presets[editing], onSave: (data, nextName) => save(editing, data, nextName), onCancel: () => setEditing('') })
+          : editing !== ''
+            ? h(EditorDialog, { title: t('panel.presets.editTitle', { name: editing }), onClose: () => setEditing(''), closeLabel: t('panel.close') },
+              h('p', { className: 'dt-muted' }, t('nav.loading')))
+            : null,
         creating
-          ? h('section', { className: 'dt-settings-band' },
-              h('h3', null, t('panel.presets.creating')),
-              h('p', { className: 'dt-hint' }, t('panel.presets.createEditorHint')),
-              h(PresetEditor, { name: '', kind: 'chat-completion', data: BLANK_PRESET, onSave: createPreset, onCancel: () => setCreating(false) }))
+          ? h(PresetEditor, { name: '', kind: 'chat-completion', data: BLANK_PRESET, onSave: createPreset, onCancel: () => setCreating(false) })
           : null,
         error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
     }
