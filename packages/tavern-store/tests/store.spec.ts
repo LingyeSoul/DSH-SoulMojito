@@ -115,6 +115,68 @@ describe('TavernStore', () => {
     expect(await store.deleteCharacter('Ghost')).toBe(false)
   }))
 
+  it('角色：删除角色卡同时清掉它的卡级 regex 脚本', withStore(async (store) => {
+    const card = (name: string, scriptName: string) => ({
+      ...sampleCard,
+      data: {
+        ...sampleCard.data,
+        name,
+        extensions: {
+          regex_scripts: [{ id: `${name}-script`, scriptName, findRegex: name, replaceString: '' }],
+        },
+      },
+    })
+    await store.importCharacter(card('Doomed Card', 'Doomed Strip'))
+    await store.importCharacter(card('Kept Card', 'Kept Strip'))
+    await store.importRegexScripts([{ id: 'global-script', scriptName: 'Global Strip', findRegex: 'global', replaceString: '' }])
+
+    expect(await store.deleteCharacter('Doomed Card')).toBe(true)
+    const state = await store.getState()
+    expect(state.regexScripts.map((script) => script.scriptName).sort())
+      .toEqual(['Global Strip', 'Kept Strip'])
+    expect(Object.values(state.regexScriptOwners ?? {})).toEqual(['Kept Card'])
+
+    // 同名新卡只带自己的脚本：被删卡的旧脚本不能借同名归属复活。
+    await store.importCharacter(card('Doomed Card', 'Fresh Strip'))
+    const reimported = await store.getState()
+    expect(reimported.regexScripts.some((script) => script.scriptName === 'Doomed Strip')).toBe(false)
+    expect(reimported.regexScripts.find((script) => script.scriptName === 'Fresh Strip')).toBeDefined()
+    expect(reimported.regexScriptOwners?.['Doomed Card-script']).toBe('Doomed Card')
+  }))
+
+  it('regex：卡文件缺失时剪掉遗留的卡级脚本（历史脏数据自愈）', withStore(async (store, dir) => {
+    const card = (name: string, scriptName: string) => ({
+      ...sampleCard,
+      data: {
+        ...sampleCard.data,
+        name,
+        extensions: {
+          regex_scripts: [{ id: `${name}-script`, scriptName, findRegex: name, replaceString: '' }],
+        },
+      },
+    })
+    await store.importCharacter(card('Ghost Owner', 'Ghost Script'))
+    await store.importCharacter(card('Live Owner', 'Live Script'))
+    await store.importPreset('Live Preset', {
+      prompts: [],
+      extensions: { regex_scripts: [{ id: 'preset-script', scriptName: 'Preset Script', findRegex: 'preset', replaceString: '' }] },
+    })
+    // 完成一次归属迁移，让后续 ensure 走「版本已最新」的常规路径。
+    await store.ensureRegexScriptOwners()
+    // 模拟旧版本删卡只删卡文件、state 里留下归属脚本的脏数据。
+    await fsPromises.rm(path.join(dir, 'characters', 'Ghost Owner.json'), { force: true })
+
+    await store.ensureRegexScriptOwners()
+    const state = await store.getState()
+    expect(state.regexScripts.map((script) => script.scriptName).sort()).toEqual(['Live Script', 'Preset Script'])
+    expect(Object.values(state.regexScriptOwners ?? {})).toEqual(['Live Owner'])
+
+    // 预设脚本保持既有语义：删除预设后自然停用，不随卡级清理一起删除。
+    await store.deletePreset('Live Preset')
+    await store.ensureRegexScriptOwners()
+    expect((await store.getState()).regexScripts.map((script) => script.scriptName)).toContain('Preset Script')
+  }))
+
   it('角色：PNG 原样导入（合成 ExampleCard），导出保留图像与卡数据', withStore(async (store) => {
     const png = syntheticCardPng()
     const { card } = await store.importCharacter(png)

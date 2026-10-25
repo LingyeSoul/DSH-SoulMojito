@@ -3298,6 +3298,10 @@ var TavernStore = class _TavernStore {
     }
     if (deleted) {
       await fs2.rm(path.join(this.root, "chats", safeFileName(name2)), { recursive: true, force: true });
+      await this.updateState((current) => {
+        const owned = new Set(Object.entries(current.regexScriptOwners ?? {}).filter(([, owner]) => owner === name2).map(([id]) => id));
+        return owned.size === 0 ? {} : dropRegexScriptsById(current, owned);
+      });
     }
     return deleted;
   }
@@ -3839,13 +3843,22 @@ var TavernStore = class _TavernStore {
     return { imported, skipped: counters.skipped + pending.length - imported, invalid: counters.invalid, scanned };
   }
   /**
+   * 正则归属管理入口（bootstrap / GET regex 调用）：先跑版本迁移，再清掉没有
+   * 对应角色卡文件的卡级脚本。后者是旧版本删卡只删文件留下的脏数据：脚本仍带着
+   * 已删卡的归属，同名新卡导入后会被当成它的脚本重新生效。
+   */
+  async ensureRegexScriptOwners() {
+    await this.migrateRegexScriptOwners();
+    await this.pruneOrphanedCardRegexScripts();
+  }
+  /**
    * 归属表迁移（版本 3，2026-10-23）：扫描全部角色卡/预设，确保每个来源的
    * 每条内嵌脚本都有自己的实体与归属；同名跨来源拆分，修复「别的卡同名脚本
    * 把本卡脚本占掉后开关失灵」的识别问题。v3 额外修复 v2 按名认领造成的
    * 「归属是 A、内容却是 B」错位（见 repairForeignRegexContent）。只跑一次
    * （写盘版本号后跳过）；来源文件不可读/条目非法时跳过该来源，不阻断面板加载。
    */
-  async ensureRegexScriptOwners() {
+  async migrateRegexScriptOwners() {
     const current = await this.getState();
     const needsMigration = current.regexScriptOwners === void 0 || current.regexScriptPresetOwners === void 0 || (current.regexOwnershipVersion ?? 1) < 3;
     if (!needsMigration) return;
@@ -3894,6 +3907,26 @@ var TavernStore = class _TavernStore {
         regexScriptPresetOwners: pruneRegexScriptOwners(presetOwners ?? {}, scripts) ?? {},
         regexOwnershipVersion: 3
       };
+    });
+  }
+  /**
+   * 卡级脚本由卡文件派生：卡文件已不存在时（旧版本删卡只删文件，或外部直接删
+   * 文件），这些脚本不能再留在列表里——同名新卡导入后会继承旧卡的归属并生效。
+   * 只在确有孤儿时写盘，常规 bootstrap 轮询不产生额外水位变化。
+   */
+  async pruneOrphanedCardRegexScripts() {
+    const state = await this.getState();
+    const owners = state.regexScriptOwners;
+    if (owners === void 0) return;
+    const stems = new Set(await this.listCharacters());
+    const orphaned = /* @__PURE__ */ new Map();
+    for (const [id, owner] of Object.entries(owners)) {
+      if (!stems.has(safeFileName(owner))) orphaned.set(id, owner);
+    }
+    if (orphaned.size === 0) return;
+    await this.updateState((current) => {
+      const ids = new Set(Object.entries(current.regexScriptOwners ?? {}).filter(([id, owner]) => orphaned.get(id) === owner).map(([id]) => id));
+      return ids.size === 0 ? {} : dropRegexScriptsById(current, ids);
     });
   }
   /* ------------------------------ 内部 ------------------------------ */
@@ -4074,6 +4107,16 @@ function pruneRegexScriptOwners(owners, scripts) {
     if (ids.has(id)) pruned[id] = owner;
   }
   return pruned;
+}
+function dropRegexScriptsById(state, ids) {
+  const scripts = state.regexScripts.filter((script) => !ids.has(script.id));
+  const owners = pruneRegexScriptOwners(state.regexScriptOwners, scripts);
+  const presetOwners = pruneRegexScriptOwners(state.regexScriptPresetOwners, scripts);
+  return {
+    regexScripts: scripts,
+    ...owners === void 0 ? {} : { regexScriptOwners: owners },
+    ...presetOwners === void 0 ? {} : { regexScriptPresetOwners: presetOwners }
+  };
 }
 function presetExtensions(preset) {
   const extensions = preset["extensions"];

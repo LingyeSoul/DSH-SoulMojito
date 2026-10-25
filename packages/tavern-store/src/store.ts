@@ -773,6 +773,14 @@ export class TavernStore {
     // 对齐 ST 语义：删角色连同其聊天记录（chats/<name>/ 一并移除）。
     if (deleted) {
       await fs.rm(path.join(this.root, 'chats', safeFileName(name)), { recursive: true, force: true })
+      // 卡级 regex 由卡文件派生：卡删除后物化副本必须一起走，否则同名新卡导入
+      // 时会接管这些旧脚本（旧版本只删卡文件，脚本在 state 里留着复活）。
+      await this.updateState((current) => {
+        const owned = new Set(Object.entries(current.regexScriptOwners ?? {})
+          .filter(([, owner]) => owner === name)
+          .map(([id]) => id))
+        return owned.size === 0 ? {} : dropRegexScriptsById(current, owned)
+      })
     }
     return deleted
   }
@@ -1406,13 +1414,23 @@ export class TavernStore {
   }
 
   /**
+   * 正则归属管理入口（bootstrap / GET regex 调用）：先跑版本迁移，再清掉没有
+   * 对应角色卡文件的卡级脚本。后者是旧版本删卡只删文件留下的脏数据：脚本仍带着
+   * 已删卡的归属，同名新卡导入后会被当成它的脚本重新生效。
+   */
+  async ensureRegexScriptOwners(): Promise<void> {
+    await this.migrateRegexScriptOwners()
+    await this.pruneOrphanedCardRegexScripts()
+  }
+
+  /**
    * 归属表迁移（版本 3，2026-10-23）：扫描全部角色卡/预设，确保每个来源的
    * 每条内嵌脚本都有自己的实体与归属；同名跨来源拆分，修复「别的卡同名脚本
    * 把本卡脚本占掉后开关失灵」的识别问题。v3 额外修复 v2 按名认领造成的
    * 「归属是 A、内容却是 B」错位（见 repairForeignRegexContent）。只跑一次
    * （写盘版本号后跳过）；来源文件不可读/条目非法时跳过该来源，不阻断面板加载。
    */
-  async ensureRegexScriptOwners(): Promise<void> {
+  private async migrateRegexScriptOwners(): Promise<void> {
     const current = await this.getState()
     const needsMigration = current.regexScriptOwners === undefined
       || current.regexScriptPresetOwners === undefined
@@ -1465,6 +1483,30 @@ export class TavernStore {
         regexScriptPresetOwners: pruneRegexScriptOwners(presetOwners ?? {}, scripts) ?? {},
         regexOwnershipVersion: 3,
       }
+    })
+  }
+
+  /**
+   * 卡级脚本由卡文件派生：卡文件已不存在时（旧版本删卡只删文件，或外部直接删
+   * 文件），这些脚本不能再留在列表里——同名新卡导入后会继承旧卡的归属并生效。
+   * 只在确有孤儿时写盘，常规 bootstrap 轮询不产生额外水位变化。
+   */
+  private async pruneOrphanedCardRegexScripts(): Promise<void> {
+    const state = await this.getState()
+    const owners = state.regexScriptOwners
+    if (owners === undefined) return
+    const stems = new Set(await this.listCharacters())
+    const orphaned = new Map<string, string>()
+    for (const [id, owner] of Object.entries(owners)) {
+      if (!stems.has(safeFileName(owner))) orphaned.set(id, owner)
+    }
+    if (orphaned.size === 0) return
+    await this.updateState((current) => {
+      // 只删仍挂在同一归属下的条目：读盘到写盘之间同 id 可能已被别的来源接管。
+      const ids = new Set(Object.entries(current.regexScriptOwners ?? {})
+        .filter(([id, owner]) => orphaned.get(id) === owner)
+        .map(([id]) => id))
+      return ids.size === 0 ? {} : dropRegexScriptsById(current, ids)
     })
   }
 
@@ -1720,6 +1762,21 @@ function pruneRegexScriptOwners(
     if (ids.has(id)) pruned[id] = owner
   }
   return pruned
+}
+
+/** 按 id 删除脚本并同步剪掉两张归属表；删除卡级脚本的唯一出口。 */
+function dropRegexScriptsById(
+  state: Pick<TavernState, 'regexScripts' | 'regexScriptOwners' | 'regexScriptPresetOwners'>,
+  ids: ReadonlySet<string>,
+): Partial<TavernState> {
+  const scripts = state.regexScripts.filter((script) => !ids.has(script.id))
+  const owners = pruneRegexScriptOwners(state.regexScriptOwners, scripts)
+  const presetOwners = pruneRegexScriptOwners(state.regexScriptPresetOwners, scripts)
+  return {
+    regexScripts: scripts,
+    ...(owners === undefined ? {} : { regexScriptOwners: owners }),
+    ...(presetOwners === undefined ? {} : { regexScriptPresetOwners: presetOwners }),
+  }
 }
 
 /** 预设扩展袋（ST preset extension 的读写位置）；非对象按空袋处理。 */
