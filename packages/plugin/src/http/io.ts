@@ -2,14 +2,42 @@
 
 import { HttpError } from './errors.js'
 
-export function sendJson(res, status, body) {
+/**
+ * Minimal structural view of the Node response fields these helpers touch.
+ * `http.ServerResponse` satisfies it; route test doubles may implement only
+ * these members too.
+ */
+export interface JsonResponse {
+  statusCode: number
+  setHeader(name: string, value: string): void
+  end(body?: string | Uint8Array): void
+  readonly writableEnded?: boolean
+}
+
+/**
+ * Minimal structural view of a readable request body. `http.IncomingMessage`
+ * satisfies it, as do the route test doubles, which type listeners as
+ * `(chunk?: unknown) => void`. The host's own request type is looser still
+ * (e.g. optional `on`), so call sites that hand over that type may need to
+ * narrow it themselves.
+ */
+export interface JsonRequest {
+  headers?: Record<string, string | string[] | undefined>
+  on(event: string, listener: (chunk?: unknown) => void): unknown
+  destroy?(): void
+}
+
+const DEFAULT_MAX_BYTES = 2 * 1024 * 1024
+
+export function sendJson(res: JsonResponse, status: number, body: unknown): void {
   res.statusCode = status
   res.setHeader('content-type', 'application/json; charset=utf-8')
   res.end(JSON.stringify(body))
 }
 
-export function readJson(req, maxBytes = 2 * 1024 * 1024) {
-  const contentType = headerValue(req?.headers?.['content-type'])
+export function readJson(req: JsonRequest, maxBytes?: number): Promise<Record<string, unknown>> {
+  const limit = maxBytes ?? DEFAULT_MAX_BYTES
+  const contentType = headerValue(req.headers?.['content-type'])
   // Local non-browser clients may omit content-type; a present non-JSON type
   // is a cross-site form/simple request (or a caller bug) and must not parse.
   if (contentType !== undefined && !contentType.toLowerCase().startsWith('application/json')) {
@@ -17,14 +45,20 @@ export function readJson(req, maxBytes = 2 * 1024 * 1024) {
   }
   return new Promise((resolve, reject) => {
     let bytes = 0
-    const chunks = []
-    req.on('data', (chunk) => {
+    const chunks: Buffer[] = []
+    req.on('data', (rawChunk) => {
+      // Node's IncomingMessage emits Buffer chunks for 'data' unless the route
+      // asked for string encoding; this helper never does.
+      const chunk = rawChunk as Buffer
       bytes += chunk.length
-      if (bytes > maxBytes) { reject(new HttpError(413, `request exceeds ${maxBytes} bytes`)); req.destroy?.() }
+      if (bytes > limit) { reject(new HttpError(413, `request exceeds ${limit} bytes`)); req.destroy?.() }
       else chunks.push(chunk)
     })
     req.on('end', () => {
-      try { resolve(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString('utf8'))) }
+      // Callers treat a parsed body as an object; non-object JSON is already
+      // outside their accepted shapes and gets the same unsupported-op/field
+      // errors it got before. Parse failures still map to 400.
+      try { resolve(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>) }
       catch { reject(new HttpError(400, 'invalid JSON body')) }
     })
     req.on('error', reject)

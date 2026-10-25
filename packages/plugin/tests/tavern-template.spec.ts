@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { apply } from '../src/index.js'
+import { templatesEnabledFlagValue } from '../src/runtime.js'
 import { TavernStore } from '../../tavern-store/src/index.js'
 
 const CHARACTER = '小樱'
@@ -135,7 +136,8 @@ describe('Prompt Template generation wiring (proposal 0008)', () => {
         fn()
         return () => {}
       },
-    } as never)
+    } as never, { templateEnabled: true })
+    expect(templatesEnabledFlagValue()).toBe(true)
   })
 
   afterAll(() => {

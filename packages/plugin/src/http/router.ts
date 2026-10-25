@@ -22,6 +22,7 @@ import { tavernDataRoot } from '../dsh-home.js'
 import { latestFrontendMessage, stripFrontendDocuments } from '../frontend-documents.js'
 import { handleGamesApi, isGamesRoute } from '../games/http.js'
 import { handleFrontendGenerationStream, handleHelperApi } from '../helper.js'
+import { createHelperBinding, deleteHelperBinding, helperTokenFromRequest } from '../helper-bindings.js'
 import { generate, previewGeneration, runTavernScript } from '../generation/pipeline.js'
 import { buildModelCatalog, clampIdentitySummary, publicCard, publicGroup, refreshActivePrompt } from '../model-catalog.js'
 import { emitAssetsSaved, emitChatSaved } from '../mods/events.js'
@@ -53,6 +54,7 @@ import {
 import { activeCharacterPatch } from '../session/active-character.js'
 import { normalizeChatId } from '../session/trace.js'
 import { prepareInternalWorkspace, prepareWorkbenchWorkspace } from '../workspace.js'
+import { HttpError } from './errors.js'
 import { readJson, sendJson } from './io.js'
 import { handleMemoryEmbedApi, handleMemoryMaintenanceApi } from './memory.js'
 import { handleModsApi } from './mods.js'
@@ -1121,6 +1123,28 @@ export async function handleApi(ctx, req, res) {
       regexScriptOwners: state.regexScriptOwners ?? {},
       regexScriptPresetOwners: state.regexScriptPresetOwners ?? {},
     })
+  }
+
+  // Server-issued helper binding (2026-10-25): the host page owns the session
+  // binding, so its FrontendFrame exchanges the current character/chatId for a
+  // token on mount. Helper and frontend/generate routes resolve identity from
+  // the token instead of trusting the sandbox payload. Both routes sit inside
+  // the same origin/content-type trust guard as the rest of the API.
+  if (method === 'POST' && route === 'helper/bind') {
+    const body = await readJson(req)
+    const character = typeof body?.character === 'string' ? body.character : ''
+    const chatId = typeof body?.chatId === 'string' ? body.chatId : ''
+    if (character.trim() === '' || chatId.trim() === '') {
+      throw new HttpError(400, 'character and chatId are required')
+    }
+    return sendJson(res, 200, { ok: true, token: createHelperBinding(character, chatId) })
+  }
+
+  if (method === 'POST' && route === 'helper/unbind') {
+    const body = await readJson(req)
+    const token = helperTokenFromRequest(req) ?? (typeof body?.token === 'string' ? body.token.trim() : '')
+    if (token !== '') deleteHelperBinding(token)
+    return sendJson(res, 200, { ok: true })
   }
 
   // 酒馆助手兼容面（2026-10-20）：美化前端 iframe 经 token 校验的 postMessage

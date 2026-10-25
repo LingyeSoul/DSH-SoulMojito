@@ -37,9 +37,10 @@ let modHostContext: ModHostContext | undefined
 // 句柄发布（agent bundle 的 game_* 工具逐调用解析，见 src/games/handle.ts）。
 // 单进程单实例；apply 打开、effect 清理时 dispose 摘句柄。
 let gamesServicePromise: Promise<GamesService> | undefined
-// Prompt Template（提案 0008）总开关：默认开启；profile 行 templateEnabled: false
-// 或 DSH_SOULMOJITO_DISABLE_TEMPLATES=1 关闭。无模板标签时链路直通，无额外开销。
-let templatesEnabledFlag = true
+// Prompt Template（提案 0008）总开关：默认关闭（安全默认）；profile 行
+// templateEnabled: true 显式开启，DSH_SOULMOJITO_DISABLE_TEMPLATES 环境 kill
+// switch 始终优先。无模板标签时链路直通，无额外开销。
+let templatesEnabledFlag = false
 
 export function store() {
   return (storePromise ??= TavernStore.open(tavernDataRoot()))
@@ -140,13 +141,22 @@ export function updateChecksEnabled(config: { checkForUpdates?: unknown } = {}):
 }
 
 /**
- * Prompt Template 开关（提案 0008）：profile 的 dsh-soulmojito 行 `templateEnabled: false`
- * 或环境变量 `DSH_SOULMOJITO_DISABLE_TEMPLATES` 非空即关闭。
+ * 环境变量 kill switch（实时读）：`DSH_SOULMOJITO_DISABLE_TEMPLATES` 非空且不为
+ * `0` / `false` 即关闭。生成/重试链路用它和 profile 的显式 opt-in 组合，env 关闭优先。
  */
-export function templatesEnabled(config: { templateEnabled?: unknown } = {}): boolean {
-  if (config.templateEnabled === false) return false
+export function templatesEnvEnabled(): boolean {
   const disabled = envCompat('DISABLE_TEMPLATES')?.trim()
   return !(disabled !== undefined && disabled !== '' && disabled !== '0' && disabled !== 'false')
+}
+
+/**
+ * Prompt Template 开关（提案 0008）：默认关闭，只有 profile 的 dsh-soulmojito 行
+ * 显式写 `templateEnabled: true` 才开启；环境变量 `DSH_SOULMOJITO_DISABLE_TEMPLATES`
+ * 非空且不为 `0` / `false` 时始终关闭（优先于 profile）。模板面向可信卡作者，
+ * 不是零信任沙箱。
+ */
+export function templatesEnabled(config: { templateEnabled?: unknown } = {}): boolean {
+  return config.templateEnabled === true && templatesEnvEnabled()
 }
 
 // Mutable runtime state shared across the server modules. The apply wiring owns

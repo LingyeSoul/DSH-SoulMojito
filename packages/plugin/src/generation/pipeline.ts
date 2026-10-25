@@ -17,7 +17,7 @@ import { applyMvuSettlementRules, mergeMvuRuleNotes } from '../mvu-rules.js'
 import { DEFAULT_USER, presetSamplerValue } from '../prompt-context.js'
 import { recordPromptView } from '../prompt-viewer.js'
 import { formatRewriteBlock, optionalFeedback } from '../rewrite.js'
-import { templatesEnabled, templatesEnabledFlagValue } from '../runtime.js'
+import { templatesEnabledFlagValue, templatesEnvEnabled } from '../runtime.js'
 import { assertStGenerationBinding } from '../session/binding.js'
 import { beginTavernSessionTurn, finishTavernSessionTrace, recordTavernSessionAssistant, startTavernSessionStep } from '../session/trace.js'
 import { collectWorldInfoBooks } from '../tavern-assets.js'
@@ -378,8 +378,8 @@ export async function buildGenerationLlmRequest(ctx, db, options: GenerationAsse
   chat.header.chat_metadata.timedWorldInfo = lore.timedState
 
   // ---- Prompt Template 预备（提案 0008）：激活分区 + InitialVariables + 运行时 ----
-  // templatesEnabledFlag 承载 profile 配置决策；templatesEnabled() 实时读 env 覆盖
-  const templatesActive = templatesEnabledFlagValue() && templatesEnabled()
+  // templatesEnabledFlag 承载 profile 的显式 opt-in；templatesEnvEnabled() 实时读 env 覆盖
+  const templatesActive = templatesEnabledFlagValue() && templatesEnvEnabled()
   const templateGlobalsBefore = templatesActive ? JSON.stringify(state.scriptGlobals) : undefined
   const tpl: GenerationTemplates | null = templatesActive
     ? await createGenerationTemplates({

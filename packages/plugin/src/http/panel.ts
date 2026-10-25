@@ -26,7 +26,7 @@ import {
   undoMvuStSettlement,
 } from '../mvu.js'
 import { stripMvuControl } from '../mvu-guard.js'
-import { templatesEnabled, templatesEnabledFlagValue, variables } from '../runtime.js'
+import { templatesEnabledFlagValue, templatesEnvEnabled, variables } from '../runtime.js'
 import { assertStGenerationBinding } from '../session/binding.js'
 import { readJson, sendJson } from './io.js'
 import type { NovelApiRequest, NovelApiResponse } from './novel.js'
@@ -245,7 +245,7 @@ export async function handleMvuApi(
       snapshot,
       revision: body.revision,
       sessionId: typeof body.sessionId === 'string' ? body.sessionId : undefined,
-      templatesActive: templatesEnabledFlagValue() && templatesEnabled(),
+      templatesActive: templatesEnabledFlagValue() && templatesEnvEnabled(),
     })
     return sendJson(res, 200, { ok: true, receipt: result.receipt, revision: result.revision, variables: result.variables })
   }
@@ -334,7 +334,7 @@ export async function handleMvuApi(
     const character = await db.getCharacter(characterName)
     const statusTemplate = character ? statusTemplateOf(character.card) : undefined
     let renderedHtml: string | undefined
-    if (statusTemplate !== undefined) {
+    if (statusTemplate !== undefined && templatesEnabledFlagValue() && templatesEnvEnabled()) {
       try {
         renderedHtml = await renderMvuStatusTemplate({
           db, state, characterName, character: character!, chat, chatId, template: statusTemplate,

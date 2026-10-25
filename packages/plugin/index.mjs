@@ -14147,7 +14147,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("6daabfc") : void 0;
+  const commit = true ? normalizeCommit("6340a56") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -17293,7 +17293,7 @@ var updateChecksEnabledFlag = true;
 var modHostPromise;
 var modHostContext;
 var gamesServicePromise;
-var templatesEnabledFlag = true;
+var templatesEnabledFlag = false;
 function store3() {
   return storePromise ??= TavernStore.open(tavernDataRoot());
 }
@@ -17360,10 +17360,12 @@ function updateChecksEnabled(config = {}) {
   const disabled = envCompat("DISABLE_UPDATE_CHECK")?.trim();
   return !(disabled !== void 0 && disabled !== "" && disabled !== "0" && disabled !== "false");
 }
-function templatesEnabled(config = {}) {
-  if (config.templateEnabled === false) return false;
+function templatesEnvEnabled() {
   const disabled = envCompat("DISABLE_TEMPLATES")?.trim();
   return !(disabled !== void 0 && disabled !== "" && disabled !== "0" && disabled !== "false");
+}
+function templatesEnabled(config = {}) {
+  return config.templateEnabled === true && templatesEnvEnabled();
 }
 function setUpdateChecksEnabledFlag(value) {
   updateChecksEnabledFlag = value;
@@ -17436,6 +17438,7 @@ function cardStateEntryKey(book, entry) {
 async function renderCardStateSections(db, state, characterName, character, chat, chatId) {
   const card = character.card;
   if (!cardUsesJsrMvu(card)) return void 0;
+  if (!templatesEnabledFlagValue() || !templatesEnvEnabled()) return void 0;
   const books = await collectWorldInfoBooks(db, state, characterName, character, chatId);
   const embeddedName = `${characterName}:embedded`;
   const linkedWorld = card.data.extensions["world"];
@@ -18171,15 +18174,15 @@ var NovelDriver = class _NovelDriver {
       this.logWarn("recovery-list-failed", { operation: "recover", errorCode: errorCodeOf(error) });
       return;
     }
-    let bindings;
+    let bindings2;
     try {
-      bindings = (await this.tavern.getState()).sessionBindings;
+      bindings2 = (await this.tavern.getState()).sessionBindings;
     } catch (error) {
       this.logWarn("recovery-bindings-failed", { operation: "recover", errorCode: errorCodeOf(error) });
       return;
     }
     const sessionsByNovel = /* @__PURE__ */ new Map();
-    for (const [sessionId, binding] of Object.entries(bindings)) {
+    for (const [sessionId, binding] of Object.entries(bindings2)) {
       if (binding.architecture !== "agent-novel" || typeof binding.novelId !== "string") continue;
       const list = sessionsByNovel.get(binding.novelId) ?? [];
       list.push(sessionId);
@@ -28981,23 +28984,26 @@ var HttpError = class extends Error {
 };
 
 // packages/plugin/src/http/io.ts
+var DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
 function sendJson(res, status2, body) {
   res.statusCode = status2;
   res.setHeader("content-type", "application/json; charset=utf-8");
   res.end(JSON.stringify(body));
 }
-function readJson(req, maxBytes = 2 * 1024 * 1024) {
-  const contentType = headerValue(req?.headers?.["content-type"]);
+function readJson(req, maxBytes) {
+  const limit = maxBytes ?? DEFAULT_MAX_BYTES;
+  const contentType = headerValue(req.headers?.["content-type"]);
   if (contentType !== void 0 && !contentType.toLowerCase().startsWith("application/json")) {
     return Promise.reject(new HttpError(415, `unsupported content-type '${contentType}'; expected application/json`));
   }
   return new Promise((resolve6, reject) => {
     let bytes = 0;
     const chunks = [];
-    req.on("data", (chunk) => {
+    req.on("data", (rawChunk) => {
+      const chunk = rawChunk;
       bytes += chunk.length;
-      if (bytes > maxBytes) {
-        reject(new HttpError(413, `request exceeds ${maxBytes} bytes`));
+      if (bytes > limit) {
+        reject(new HttpError(413, `request exceeds ${limit} bytes`));
         req.destroy?.();
       } else chunks.push(chunk);
     });
@@ -30806,7 +30812,7 @@ async function handleGamesApi(options) {
 }
 
 // packages/plugin/src/helper.ts
-import { randomUUID as randomUUID5 } from "node:crypto";
+import { randomUUID as randomUUID6 } from "node:crypto";
 
 // packages/plugin/src/frontend-generation.ts
 var REQUEST_TIMEOUT_MS = 18e4;
@@ -31803,7 +31809,7 @@ async function buildGenerationLlmRequest(ctx, db, options) {
     messageCount: turnMessages.length
   });
   chat.header.chat_metadata.timedWorldInfo = lore.timedState;
-  const templatesActive = templatesEnabledFlagValue() && templatesEnabled();
+  const templatesActive = templatesEnabledFlagValue() && templatesEnvEnabled();
   const templateGlobalsBefore = templatesActive ? JSON.stringify(state.scriptGlobals) : void 0;
   const tpl = templatesActive ? await createGenerationTemplates({
     chat,
@@ -32267,13 +32273,47 @@ function numberOr(value, fallback) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
+// packages/plugin/src/helper-bindings.ts
+import { randomUUID as randomUUID5 } from "node:crypto";
+var HELPER_TOKEN_HEADER = "x-dsh-helper-token";
+var HELPER_BINDING_TTL_MS = 30 * 60 * 1e3;
+var bindings = /* @__PURE__ */ new Map();
+function pruneExpired(now) {
+  for (const [token, binding] of bindings) {
+    if (now - binding.createdAt >= HELPER_BINDING_TTL_MS) bindings.delete(token);
+  }
+}
+function createHelperBinding(character, chatId) {
+  const now = Date.now();
+  pruneExpired(now);
+  const token = randomUUID5();
+  bindings.set(token, { character, chatId, createdAt: now });
+  return token;
+}
+function resolveHelperBinding(token) {
+  pruneExpired(Date.now());
+  return bindings.get(token);
+}
+function deleteHelperBinding(token) {
+  return bindings.delete(token);
+}
+function helperTokenFromRequest(req) {
+  const headers = req?.headers;
+  if (headers === void 0 || headers === null) return void 0;
+  for (const [name2, value] of Object.entries(headers)) {
+    if (name2.toLowerCase() !== HELPER_TOKEN_HEADER) continue;
+    const first = Array.isArray(value) ? value[0] : value;
+    return typeof first === "string" && first.trim() !== "" ? first.trim() : void 0;
+  }
+  return void 0;
+}
+
 // packages/plugin/src/helper.ts
 var VARIABLE_NAME = /^[\p{L}_][\p{L}\p{N}_.-]{0,63}$/u;
 async function handleHelperApi(req, res, db) {
   const body = await readJson(req, 8 * 1024 * 1024);
   const op = typeof body?.op === "string" ? body.op : "";
-  const character = requireString(body?.character, "character");
-  const chatId = typeof body?.chatId === "string" ? body.chatId : "";
+  const { character, chatId } = helperIdentity(req, body);
   const state = await db.getState();
   switch (op) {
     case "snapshot":
@@ -32581,8 +32621,9 @@ async function handleHelperApi(req, res, db) {
 async function handleFrontendGenerationStream(req, res, db) {
   const out = res;
   const body = await readJson(req, 8 * 1024 * 1024);
-  const character = requireString(body?.character, "character");
-  const chatId = requireString(body?.chatId, "chatId");
+  const identity = helperIdentity(req, body);
+  const character = identity.character;
+  const chatId = requireString(identity.chatId, "chatId");
   const state = await db.getState();
   const config = await applyFrontendWorldbookScan(db, state, character, chatId, body?.config);
   const generationId = generationIdOf(config);
@@ -32620,6 +32661,18 @@ async function handleFrontendGenerationStream(req, res, db) {
   } finally {
     finishFrontendGeneration(character, chatId, generationId, controller);
   }
+}
+function helperIdentity(req, body) {
+  const token = helperTokenFromRequest(req);
+  if (token !== void 0) {
+    const binding = resolveHelperBinding(token);
+    if (binding === void 0) throw new HttpError(401, "invalid or expired helper binding token");
+    return { character: binding.character, chatId: binding.chatId };
+  }
+  return {
+    character: requireString(body?.character, "character"),
+    chatId: typeof body?.chatId === "string" ? body.chatId : ""
+  };
 }
 async function buildSnapshot(db, state, character, chatId) {
   const file = await db.getCharacter(character);
@@ -33279,7 +33332,7 @@ async function resetSessionRegexScripts(db, character, chatId, type) {
 function generationIdOf(config) {
   const record = isPlainObject4(config) ? config : {};
   const value = record["generation_id"];
-  return typeof value === "string" && value.trim() !== "" ? value.trim() : randomUUID5();
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : randomUUID6();
 }
 function requireScriptTrees(value) {
   if (!Array.isArray(value)) throw new Error("scriptTrees must be an array of card script nodes");
@@ -33767,7 +33820,7 @@ async function prepareWorkbenchWorkspace() {
 import { resolve as resolve5 } from "node:path";
 
 // packages/plugin/src/memory-maintenance.ts
-import { randomUUID as randomUUID6 } from "node:crypto";
+import { randomUUID as randomUUID7 } from "node:crypto";
 var MAINTENANCE_MAX_LLM_REQUESTS = 24;
 var MAINTENANCE_OPENING_MAX_CHARS = 1e5;
 var MAINTENANCE_PAGE_RECORDS = 32;
@@ -33795,7 +33848,7 @@ async function startMemoryMaintenance(ctx, deps, scope) {
   const existing = activeRuns.get(key);
   if (existing !== void 0) throw new MaintenanceRunConflictError(scope.character, scope.chatId, existing.runId);
   const active = {
-    runId: randomUUID6(),
+    runId: randomUUID7(),
     character: scope.character,
     chatId: scope.chatId,
     startedAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -33995,7 +34048,7 @@ async function executeRun(ctx, deps, scope, active) {
       opening = buildOpeningMessage(run, listing);
     }
     const messages = [
-      { role: "user", id: randomUUID6(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
+      { role: "user", id: randomUUID7(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
     ];
     let outcome = "completed";
     let errorMessage3;
@@ -34052,7 +34105,7 @@ async function executeRun(ctx, deps, scope, active) {
         blocks.push({ type: "text", text: textBuffer });
       }
       const toolCalls = blocks.filter((block) => block.type === "tool-call");
-      messages.push({ role: "assistant", id: randomUUID6(), content: blocks, source: { kind: "model", provider: run.provider, model: run.model } });
+      messages.push({ role: "assistant", id: randomUUID7(), content: blocks, source: { kind: "model", provider: run.provider, model: run.model } });
       if (toolCalls.length === 0) {
         report = textBuffer !== "" ? textBuffer : blocks.filter((block) => block.type === "text").map((block) => String(block.text ?? "")).join("");
         break;
@@ -34066,7 +34119,7 @@ async function executeRun(ctx, deps, scope, active) {
         const result = await executeToolCall(run, call);
         messages.push({
           role: "tool",
-          id: randomUUID6(),
+          id: randomUUID7(),
           content: [{ type: "text", text: safeJson(result.payload) }],
           source: { kind: "tool", callId: call.id },
           toolCallId: call.id,
@@ -35812,19 +35865,19 @@ var worldTools = [
   tool3("world_list", "List the Tavern world-book library: every stored book name with its entry count and the character cards linking it (extensions.world). Call it before world_create to pick a free name, before world_delete/world_rename to check linked cards, or when the user refers to a world book and you are not sure of its exact name.", {}, worldListOutput, async (_args, exec) => {
     exec?.signal?.throwIfAborted();
     const db = await tavernStore3();
-    const bindings = /* @__PURE__ */ new Map();
+    const bindings2 = /* @__PURE__ */ new Map();
     for (const characterName of await db.listCharacters()) {
       const file = await db.getCharacter(characterName);
       const bound = file?.card.data.extensions["world"];
       if (typeof bound !== "string" || bound.trim() === "") continue;
-      const list = bindings.get(bound) ?? [];
+      const list = bindings2.get(bound) ?? [];
       list.push(characterName);
-      bindings.set(bound, list);
+      bindings2.set(bound, list);
     }
     const worlds = [];
     for (const name2 of await db.listWorlds()) {
       const book = await db.getWorld(name2);
-      worlds.push({ name: name2, entryCount: book?.entries.length ?? 0, linkedCards: bindings.get(name2) ?? [] });
+      worlds.push({ name: name2, entryCount: book?.entries.length ?? 0, linkedCards: bindings2.get(name2) ?? [] });
     }
     return { count: worlds.length, worlds };
   }),
@@ -36584,14 +36637,14 @@ var materialTools = [
     exec?.signal?.throwIfAborted();
     const summaries = await listScripts(tavernDataRoot());
     const db = await tavernStore3();
-    const bindings = /* @__PURE__ */ new Map();
+    const bindings2 = /* @__PURE__ */ new Map();
     for (const characterName of await db.listCharacters()) {
       const file = await db.getCharacter(characterName);
       const bound = file === void 0 ? void 0 : boundScriptOf(file.card);
       if (bound === void 0) continue;
-      const list = bindings.get(bound) ?? [];
+      const list = bindings2.get(bound) ?? [];
       list.push(characterName);
-      bindings.set(bound, list);
+      bindings2.set(bound, list);
     }
     return {
       count: summaries.length,
@@ -36601,7 +36654,7 @@ var materialTools = [
         chunkCount: summary.chunkCount,
         totalCharacters: summary.totalCharacters,
         importedAt: summary.importedAt,
-        boundCards: bindings.get(summary.name) ?? []
+        boundCards: bindings2.get(summary.name) ?? []
       }))
     };
   }),
@@ -36762,13 +36815,13 @@ async function handleScriptApi(req, res, route, method, db) {
   }
   if (method === "GET" && route === "scripts") {
     const scripts = await listScripts(tavernDataRoot());
-    const bindings = {};
+    const bindings2 = {};
     for (const name2 of await db.listCharacters()) {
       const file = await db.getCharacter(name2);
       const bound = file === void 0 ? void 0 : boundScriptOf(file.card);
-      if (bound !== void 0) bindings[name2] = bound;
+      if (bound !== void 0) bindings2[name2] = bound;
     }
-    return sendJson(res, 200, { ok: true, scripts, bindings });
+    return sendJson(res, 200, { ok: true, scripts, bindings: bindings2 });
   }
   if (method === "GET" && route.startsWith("script/progress/")) {
     const segments = route.slice("script/progress/".length).split("/");
@@ -36844,7 +36897,7 @@ async function handleMvuApi(req, res, route, method, db) {
       snapshot: snapshot2,
       revision: body.revision,
       sessionId: typeof body.sessionId === "string" ? body.sessionId : void 0,
-      templatesActive: templatesEnabledFlagValue() && templatesEnabled()
+      templatesActive: templatesEnabledFlagValue() && templatesEnvEnabled()
     });
     return sendJson(res, 200, { ok: true, receipt: result.receipt, revision: result.revision, variables: result.variables });
   }
@@ -36905,7 +36958,7 @@ async function handleMvuApi(req, res, route, method, db) {
     const character = await db.getCharacter(characterName);
     const statusTemplate = character ? statusTemplateOf(character.card) : void 0;
     let renderedHtml;
-    if (statusTemplate !== void 0) {
+    if (statusTemplate !== void 0 && templatesEnabledFlagValue() && templatesEnvEnabled()) {
       try {
         renderedHtml = await renderMvuStatusTemplate({
           db,
@@ -38192,6 +38245,21 @@ async function handleApi(ctx, req, res) {
       regexScriptOwners: state.regexScriptOwners ?? {},
       regexScriptPresetOwners: state.regexScriptPresetOwners ?? {}
     });
+  }
+  if (method === "POST" && route === "helper/bind") {
+    const body = await readJson(req);
+    const character = typeof body?.character === "string" ? body.character : "";
+    const chatId = typeof body?.chatId === "string" ? body.chatId : "";
+    if (character.trim() === "" || chatId.trim() === "") {
+      throw new HttpError(400, "character and chatId are required");
+    }
+    return sendJson(res, 200, { ok: true, token: createHelperBinding(character, chatId) });
+  }
+  if (method === "POST" && route === "helper/unbind") {
+    const body = await readJson(req);
+    const token = helperTokenFromRequest(req) ?? (typeof body?.token === "string" ? body.token.trim() : "");
+    if (token !== "") deleteHelperBinding(token);
+    return sendJson(res, 200, { ok: true });
   }
   if (method === "POST" && route === "helper") {
     return handleHelperApi(req, res, db);

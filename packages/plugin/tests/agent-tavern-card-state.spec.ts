@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { formatCardStateMessage, registerAgentTavernCardState, renderCardStateSections } from '../src/agent-tavern/card-state.js'
+import { setTemplatesEnabledFlag } from '../src/runtime.js'
 import { TavernStore } from '../../tavern-store/src/index.js'
 
 const CHARACTER = 'Card State Probe'
@@ -12,6 +13,9 @@ let store: TavernStore
 let chatId: string
 
 beforeAll(async () => {
+  // Prompt Template is opt-in since 2026-10-25; this suite exercises the
+  // enabled card-state path explicitly.
+  setTemplatesEnabledFlag(true)
   home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-card-state-'))
   process.env.DSH_HOME = home
   store = await TavernStore.open(join(home, 'soulmojito'))
@@ -79,6 +83,7 @@ beforeAll(async () => {
 })
 
 afterAll(() => {
+  setTemplatesEnabledFlag(false)
   delete process.env.DSH_HOME
   rmSync(home, { recursive: true, force: true })
 })
@@ -97,6 +102,19 @@ describe('AgentTavern card state rendering', () => {
     expect(byComment.get('callback')).toBe('item 1;item 2;')
     expect(byComment.get('lodash')).toMatch(/^rolled:[ab];[xyz]\+[xyz]$/)
     expect(byComment.has('disabled')).toBe(false)
+  })
+
+  it('skips card EJS when templates are disabled', async () => {
+    setTemplatesEnabledFlag(false)
+    try {
+      const state = await store.getState()
+      const character = await store.getCharacter(CHARACTER)
+      const snapshot = await store.getChatSnapshot(CHARACTER, chatId)
+      const rendered = await renderCardStateSections(store, state, CHARACTER, character!, snapshot!.chat, chatId)
+      expect(rendered).toBeUndefined()
+    } finally {
+      setTemplatesEnabledFlag(true)
+    }
   })
 
   it('injects the rendered card state at step 1 through the pre-step listener', async () => {

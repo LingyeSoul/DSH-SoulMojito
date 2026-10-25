@@ -48,7 +48,7 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 - **Chat Completion preset** — `prompts[]` / `prompt_order[]` / marker 与采样参数；context、instruct、textgen 走高级 JSON 编辑全部字段。
 - **正则脚本** — ST regex 扩展形态导入，全局 + 卡级 + 预设内嵌（`extensions.regex_scripts`）合并，存量卡与预设可在面板一键回填；卡级脚本跟随角色卡、预设级脚本跟随 `activePreset`。同名脚本在不同来源各持一条实体（互不顶掉），面板开关可切换并提示当前是否生效，也可一键「转为全局」；正则列表按来源分区（全局 / 每张角色卡 / 每个预设），分区头提供三态总开关（一键启停该来源的全部脚本）与整段清空；`USER_INPUT/AI_OUTPUT/WORLD_INFO/REASONING` placement、`minDepth/maxDepth`、`substituteRegex`、`trimStrings`。酒馆助手的正则写面（`replaceTavernRegexes` / `updateTavernRegexesWith`）只写当前聊天的会话覆盖层，生成/预览/STscript `/regex`/浏览器展示与 AgentTavern 投影读同一份合并集合；基础资产与别的聊天不受影响。
 - **STscript** — 管道、变量（聊天局部 + 全局）、`/if` 条件、随机/掷骰与聊天动作（`/send`、`/trigger`、`/regenerate`、`/cut`），composer `/` 前缀触发。
-- **Prompt Template（EJS）** — `node:vm` 沙箱执行 `<% %>`；`getvar/setvar` 族作用域变量、`[GENERATE:*]`/`[RENDER:*]` 注入、`@INJECT` 整消息插队、`getwi/getchar/getpreset` 资产读取。详见 [`docs/proposals/0008-prompt-template.md`](docs/proposals/0008-prompt-template.md)。
+- **Prompt Template（EJS，默认关闭）** — `node:vm` 隔离执行 `<% %>`；`getvar/setvar` 族作用域变量、`[GENERATE:*]`/`[RENDER:*]` 注入、`@INJECT` 整消息插队、`getwi/getchar/getpreset` 资产读取。默认不执行卡内模板；确认信任卡作者后，在 profile 的 `dsh-soulmojito` 行配置 `templateEnabled: true` 启用，`DSH_SOULMOJITO_DISABLE_TEMPLATES=1` 可随时硬关。EJS 在插件进程内运行，`node:vm` **不是零信任沙箱**，只应对可信角色卡/世界书开启。详见 [`docs/proposals/0008-prompt-template.md`](docs/proposals/0008-prompt-template.md)。
 - **Persona** — PNG 导入（内嵌描述提取）、头像、增删改、激活选择与 `position/depth/role` 注入。
 - **群聊** — 成员管理、talkativeness 加权 / 列表激活、成员点触发言、`group_only_greetings`、group nudge 与 `{{group}}` 宏。
 - **聊天记录** — ST JSONL（header / messages / `swipes` / `swipe_id` / `swipe_info`）；任意消息一键分支为新聊天（bookmark 回链，视图可跳回父聊天）。

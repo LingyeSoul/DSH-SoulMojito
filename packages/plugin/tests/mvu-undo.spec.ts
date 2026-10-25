@@ -207,7 +207,7 @@ describe('MVU receipt undo (integration)', () => {
       agents: { get: () => undefined },
       effect: (fn: () => void) => { fn(); return () => {} },
     } as never
-    await apply(ctx)
+    await apply(ctx, { templateEnabled: true })
     expect(apiHandler).toBeDefined()
     // AgentTavern 框架（settle 工具）与 HTTP 面共享同一 DSH_HOME：settle 产回执，撤销走路由
     await applyAgentTavern(ctx)

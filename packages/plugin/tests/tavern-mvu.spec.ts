@@ -248,7 +248,7 @@ describe('MVU settlement receipts (integration)', () => {
       agentDefaultModel: { currentSelection: () => ({ provider: 'test-provider', model: 'test-model' }) },
       agents: { get: () => undefined },
       effect: (fn: () => void) => { fn(); return () => {} },
-    } as never)
+    } as never, { templateEnabled: true })
     expect(apiHandler).toBeDefined()
   })
 

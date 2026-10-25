@@ -319,7 +319,7 @@ describe('MVU $rules settlement (integration)', () => {
       agents: { get: () => undefined },
       effect: (fn: () => void) => { fn(); return () => {} },
     } as never
-    await apply(ctx)
+    await apply(ctx, { templateEnabled: true })
     await applyAgentTavern(ctx)
     expect(apiHandler).toBeDefined()
     expect(tools.has('tavern_variable_settle')).toBe(true)

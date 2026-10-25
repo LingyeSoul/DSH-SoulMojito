@@ -20,7 +20,7 @@ import { createHostPromptExpander, hostPromptSafe } from '../prompt-safety.js'
 import { createMvuRuntime, overlayChatScopedVariables, readChatVariables } from '../mvu.js'
 import { DEFAULT_USER } from '../prompt-context.js'
 import { collectWorldInfoBooks } from '../tavern-assets.js'
-import { store as tavernStore, variables as variableStore } from '../runtime.js'
+import { store as tavernStore, templatesEnabledFlagValue, templatesEnvEnabled, variables as variableStore } from '../runtime.js'
 import { cardUsesJsrMvu, seedJsrMvuVariables } from './mvu-compat.js'
 
 export const CARD_STATE_MAX_CHARS = 120_000
@@ -73,6 +73,10 @@ export async function renderCardStateSections(
 ): Promise<CardStateRender | undefined> {
   const card = character.card
   if (!cardUsesJsrMvu(card)) return undefined
+  // Prompt Template is opt-in (2026-10-25): card constant EJS must not run on
+  // the default path. Plain constant lore still reaches the model through the
+  // normal lore pipeline; only the per-turn EJS state block is skipped.
+  if (!templatesEnabledFlagValue() || !templatesEnvEnabled()) return undefined
   const books = await collectWorldInfoBooks(db as never, state, characterName, character, chatId)
   // 卡内嵌书是这张卡的规则本体；worldFollowsCharacter 关闭或链接书未导入时，
   // 聚合层不会带上它。MVU 卡的规则不能因此静默消失，这里补回内嵌书（按名字去重）。

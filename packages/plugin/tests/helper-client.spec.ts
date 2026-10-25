@@ -191,7 +191,7 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
     expect(source).toContain("sandbox: 'allow-scripts allow-modals allow-forms'")
     expect(source).toContain("connect-src blob:")
     expect(source).toContain("form-action 'self' about: blob:")
-    expect(source).toContain('function useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId, manualHeightRef, onScriptButtons)')
+    expect(frameSource).toContain('function useHelperBridge(frameRef, token, binding, refreshKey, hostSessionId, manualHeightRef, helperTokenRef, onScriptButtons)')
     expect(source).toContain("if (event.source !== frameRef.current?.contentWindow) return")
     expect(source).toContain("data.token !== token")
     expect(source).toContain('this frontend is not bound to a Tavern chat')
@@ -202,6 +202,18 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
     expect(frameSource).toContain('delete helperPayload.character')
     expect(frameSource).toContain('delete helperPayload.chatId')
     expect(frameSource).toContain('...helperPayload,')
+  })
+
+  it('mints a server-side helper binding token on mount and sends it on every call', () => {
+    // 2026-10-25: the host page exchanges its binding for a server-issued token;
+    // helper and frontend/generate requests carry it so the payload identity is
+    // never authoritative. Every existing fetch site uses helperHeaders().
+    expect(frameSource).toContain("const HELPER_TOKEN_HEADER = 'x-dsh-helper-token'")
+    expect(frameSource).toContain('function helperHeaders(token)')
+    expect(frameSource).toContain("api('helper/bind'")
+    expect(frameSource).toContain("api('helper/unbind'")
+    expect(frameSource).toContain('headers: helperHeaders(helperTokenRef.current)')
+    expect((frameSource.match(/headers: helperHeaders\(helperTokenRef\.current\)/g) ?? []).length).toBe(8)
   })
 
   it('recovers the first-frame snapshot when the mount push is lost', () => {

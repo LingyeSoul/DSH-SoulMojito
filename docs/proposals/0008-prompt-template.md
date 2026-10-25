@@ -24,6 +24,10 @@ ST-Prompt-Template 的核心价值是在提示词中执行 JavaScript（EJS 语�
 **明确裁剪**（不做，理由：宿主无对应面或属于 UI/浏览器生态）：
 faker / jQuery / toastr / dayjs / Monaco 代码编辑器 / iframe 渲染（`@@iframe`、`@@message_formatting`）/ web worker 后台编译 / 缓存策略开关 / `activateRegex` / `activewi` / Quick Reply（`getqr`）/ `execute`（STscript 桥）/ zod `setVariableSchema` / swipe 与 message 作用域变量（无楼层渲染面）/ token 计数全局变量（`LAST_SEND_TOKENS` 由宿主 usage 事件承载）。
 
+> 信任模型：EJS 面向**可信卡作者**，模板在插件进程内执行；`node:vm` 只做全局隔离，
+> **不是零信任沙箱**，不能用来运行不可信第三方卡。默认关闭，profile 显式
+> `templateEnabled: true` 才启用（见 §3 开关）。
+
 **已文档化的适配偏差**：
 1. `scope='message'` 映射到 local（dsh-soulmojito 无楼层变量）。
 2. global 作用域仅接受标量（`scriptGlobals` 既有类型约束）；对象树应写 local。
@@ -60,8 +64,9 @@ packages/plugin/src/template.ts   宿主接线：lore 分区、预渲染、消�
 5. LLM 流式输出 → AI_OUTPUT regex → 输出模板渲染（runType='render'）→ `[RENDER:*]` 前后缀
    → 落盘（模板写穿的 local/initial 变量随 chat 持久化；global 写穿 `state.scriptGlobals`）。
 
-开关：profile 的 dsh-soulmojito 行 `templateEnabled: false` 或环境变量 `DSH_SOULMOJITO_DISABLE_TEMPLATES=1`
-（默认开启；无模板标签/`<%` 时整条链路为直通，不产生额外开销）。
+开关：Prompt Template **默认关闭**。信任卡作者的部署在 profile 的 dsh-soulmojito 行写
+`templateEnabled: true` 显式启用；环境变量 `DSH_SOULMOJITO_DISABLE_TEMPLATES=1` 仍可随时
+硬关（关闭优先，profile 打开也无效）。无模板标签/`<%` 时整条链路为直通，不产生额外开销。
 
 ## 4. 语义对照要点
 

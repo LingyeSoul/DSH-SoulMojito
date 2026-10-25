@@ -506,7 +506,7 @@ export interface MvuRetryOptions {
   /** CAS 期望 revision（与 generate/candidates 同语义）。 */
   revision: string
   sessionId?: string
-  /** 与 runGeneration 同推导的模板开关（templatesEnabledFlag && templatesEnabled()）。 */
+  /** 与 runGeneration 同推导的模板开关（templatesEnabledFlag && templatesEnvEnabled()）。 */
   templatesActive: boolean
 }
 

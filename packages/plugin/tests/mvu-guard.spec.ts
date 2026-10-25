@@ -286,7 +286,7 @@ describe('MVU $schema guard on the ST settlement path (integration)', () => {
       agentDefaultModel: { currentSelection: () => ({ provider: 'test-provider', model: 'test-model' }) },
       agents: { get: () => undefined },
       effect: (fn: () => void) => { fn(); return () => {} },
-    } as never)
+    } as never, { templateEnabled: true })
     expect(apiHandler).toBeDefined()
   })
 

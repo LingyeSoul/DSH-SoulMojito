@@ -13,6 +13,7 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { normalizeEntry } from '../../tavern-format/src/index.js'
 import { TavernStore } from '../../tavern-store/src/index.js'
+import { HELPER_TOKEN_HEADER, createHelperBinding } from '../src/helper-bindings.js'
 import { handleFrontendGenerationStream, handleHelperApi } from '../src/helper.js'
 import {
   abortAllFrontendGenerations,
@@ -24,11 +25,12 @@ const CHARACTER = 'ExampleCard'
 const WORLD = 'Example World'
 const CHAT_HEADER = { user_name: 'User', character_name: CHARACTER, chat_metadata: {} }
 
-function makeRequest(body: unknown) {
+function makeRequest(body: unknown, headers?: Record<string, string>) {
   const listeners = new Map<string, (value?: unknown) => void>()
   return {
     method: 'POST',
     url: '/api/dsh-soulmojito/helper',
+    headers,
     on: (event: string, listener: (value?: unknown) => void) => {
       listeners.set(event, listener)
       if (event === 'end') {
@@ -197,6 +199,24 @@ describe('frontend generation helper route', () => {
     }), response, store)
     const events = response.chunks.join('').trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>)
     expect(events[0]).toMatchObject({ type: 'start', generationId: 'gen-route-stream' })
+    expect(events.some((event) => event.type === 'done' && event.text === 'first second')).toBe(true)
+  })
+
+  it('resolves stream identity from a binding token when the payload omits it', async () => {
+    // Without a token the payload would fail (character/chatId are missing);
+    // a valid token supplies the server-side binding for the stream.
+    const token = createHelperBinding(CHARACTER, chatId)
+    const response = makeResponse()
+    await handleFrontendGenerationStream(makeRequest({
+      config: {
+        custom_api: { apiurl: baseUrl, model: 'example-model' },
+        user_input: 'Stream with a bound identity.',
+        should_stream: true,
+        generation_id: 'gen-route-token',
+      },
+    }, { [HELPER_TOKEN_HEADER]: token }), response, store)
+    const events = response.chunks.join('').trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>)
+    expect(events[0]).toMatchObject({ type: 'start', generationId: 'gen-route-token' })
     expect(events.some((event) => event.type === 'done' && event.text === 'first second')).toBe(true)
   })
 

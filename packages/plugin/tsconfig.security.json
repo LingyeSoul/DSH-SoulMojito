@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "src",
+    "types": ["node"]
+  },
+  "include": ["src/http/trust.ts", "src/http/errors.ts", "src/http/io.ts"]
+}

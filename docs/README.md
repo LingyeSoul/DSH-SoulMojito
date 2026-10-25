@@ -53,6 +53,7 @@
 ### 架构与范围
 
 - [`2026-08-15-v2-feature-scope.md`](../decisions/2026-08-15-v2-feature-scope.md) — v2 功能面的范围与形态选择
+- [`2026-10-25-template-default-off.md`](../decisions/2026-10-25-template-default-off.md) — Prompt Template（EJS）默认关闭，profile 显式 opt-in
 
 ### 宿主兼容与 DSH 版本适配
 

@@ -8,6 +8,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { HELPER_TOKEN_HEADER, resetHelperBindingsForTests } from '../src/helper-bindings.js'
 import { apply } from '../src/index.js'
 import { setTemplatesEnabledFlag } from '../src/runtime.js'
 import { TavernStore } from '../../tavern-store/src/index.js'
@@ -57,13 +58,18 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
     return response
   }
 
-  async function call(body: unknown) {
+  async function post(route: string, body: unknown, headers?: Record<string, string>) {
     const res = makeResponse()
-    await apiHandler(makeRequest(body, '/api/dsh-soulmojito/helper'), res)
+    await apiHandler(makeRequest(body, `/api/dsh-soulmojito/${route}`, 'POST', headers), res)
     return { status: res.statusCode, body: res.chunks.length > 0 ? JSON.parse(res.chunks.join('')) as Record<string, unknown> : null }
   }
 
+  function call(body: unknown, headers?: Record<string, string>) {
+    return post('helper', body, headers)
+  }
+
   beforeAll(async () => {
+    resetHelperBindingsForTests()
     home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-helper-e2e-'))
     process.env.DSH_HOME = home
     store = await TavernStore.open(join(home, 'soulmojito'))
@@ -93,6 +99,9 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
       effect: (fn) => { fn(); return () => {} },
     } as never)
     expect(apiHandler).toBeDefined()
+    // apply() derives the flag from profile config; another change makes the
+    // default off, so re-enable after wiring for the template surface test.
+    setTemplatesEnabledFlag(true)
   })
 
   afterAll(() => {
@@ -115,6 +124,45 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
     const messages = value.messages as Array<Record<string, unknown>>
     expect(messages.map((message) => message.role)).toEqual(['assistant', 'user', 'assistant'])
     expect(messages[2]).toMatchObject({ message_id: 2, message: 'reply', data: { mood: 'calm' } })
+  })
+
+  it('binds helper identity to a server-issued token and ignores spoofed payload identity', async () => {
+    const malformed = await post('helper/bind', { character: ' ', chatId })
+    expect(malformed.status).toBe(400)
+    expect(String(malformed.body?.message)).toContain('character and chatId are required')
+
+    const bind = await post('helper/bind', { character: CHARACTER, chatId })
+    expect(bind.status).toBe(200)
+    const token = bind.body?.token
+    if (typeof token !== 'string' || token === '') throw new Error('helper/bind did not return a token')
+
+    const stored = await store.getChatSnapshot(CHARACTER, chatId)
+    // 'other-chat' does not exist, so falling back to the payload would fail;
+    // a 200 here proves the server resolved the bound character/chat instead.
+    const snapshot = await call(
+      { op: 'snapshot', character: 'Spoofed Card', chatId: 'other-chat' },
+      { [HELPER_TOKEN_HEADER]: token },
+    )
+    expect(snapshot.status).toBe(200)
+    const value = snapshot.body?.value as Record<string, unknown>
+    expect(value.characterName).toBe(CHARACTER)
+    expect(value.chatId).toBe(chatId)
+    expect(value.messageCount).toBe(stored?.chat.messages.length)
+
+    const forged = await call(
+      { op: 'snapshot', character: CHARACTER, chatId },
+      { [HELPER_TOKEN_HEADER]: 'not-a-issued-token' },
+    )
+    expect(forged.status).toBe(401)
+    expect(String(forged.body?.message)).toContain('invalid or expired helper binding token')
+
+    const unbind = await post('helper/unbind', { token })
+    expect(unbind.status).toBe(200)
+    const afterUnbind = await call(
+      { op: 'snapshot', character: CHARACTER, chatId },
+      { [HELPER_TOKEN_HEADER]: token },
+    )
+    expect(afterUnbind.status).toBe(401)
   })
 
   it('writes global and chat variables, and mirrors the chat scope for AgentTavern', async () => {
