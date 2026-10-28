@@ -422,6 +422,22 @@ export function appendBodyEvent(deps: BodyRuntimeDeps, data: BodyEventData): unk
   return requireRecordWriter(deps)(deps.session, BODY_EVENT_TYPE, data)
 }
 
+/**
+ * `op-start` payload with the durable write rollback plan (proposal 0022 §10.4).
+ *
+ * The shared `BodyEventData` vocabulary in `body.ts` is ledger-owned and has no
+ * plan field, so this type extends its `op-start` member instead of duplicating
+ * it. The record writer accepts `unknown`, which keeps the extra field out of
+ * the ledger's strict parser while staying readable after a reload.
+ */
+export type BodyStartEventData = Extract<BodyEventData, { readonly op: 'op-start' }> & {
+  readonly rollbackPlan?: BodyRollbackPlan
+}
+
+export function appendBodyStartEvent(deps: BodyRuntimeDeps, data: BodyStartEventData): unknown {
+  return requireRecordWriter(deps)(deps.session, BODY_EVENT_TYPE, data)
+}
+
 export function appendOpFinish(
   deps: BodyRuntimeDeps,
   opId: string,

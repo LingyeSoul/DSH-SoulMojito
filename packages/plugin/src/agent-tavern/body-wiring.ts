@@ -14,11 +14,16 @@
 
 import { importHostPackage } from '../../../bind/src/index.js'
 import { memories, store as tavernStore, variables } from '../runtime.js'
+import { tavernDataRoot } from '../dsh-home.js'
+import { embedMemoryRecord } from '../memory-hybrid.js'
+import { embedBreakerOpen, readEmbedStatus } from '../memory-embed.js'
 import type { HostSessionsService, PluginContext } from '../host-contract.js'
+import { memoryEmbeddingConfig, memoryVectorStore } from './tools/stores.js'
 import { createBodyProjection } from './body.js'
 import {
   createBodyWriteRollbackPort,
   type BodyRollbackMemoryStore,
+  type BodyRollbackMemoryVectors,
   type BodyRollbackStore,
   type BodyRollbackVariableStore,
 } from './body-rollback.js'
@@ -157,6 +162,7 @@ export async function createBodyDeps(
     store: lazyRollbackStore(),
     memoryStore: lazyRollbackMemoryStore(),
     variableStore: lazyRollbackVariableStore(),
+    memoryVectors: lazyRollbackMemoryVectors(),
     sessionEvents: () => wiringEvents(agent.session),
     ...(ctx.logger === undefined ? {} : { logger: ctx.logger }),
   })
@@ -207,6 +213,42 @@ function lazyRollbackVariableStore(): BodyRollbackVariableStore {
     delete: async (scope, scopeId, name, expectedRevision) => (
       (await variables()).delete(scope, scopeId, name, expectedRevision)
     ),
+  }
+}
+
+/**
+ * Lazy `MemoryVectorStore` adapter (proposal 0022 §8).
+ *
+ * No embedding config means the vector cache is disabled, so the sync is a
+ * no-op. Otherwise a tombstoned record drops its vector and a live record is
+ * re-embedded and persisted. `embedMemoryRecord` reports failure as `false`
+ * (breaker open, empty vector or request error); that is turned into an error
+ * carrying the memory id so the rollback layer can record `vector-sync-failed`.
+ */
+function lazyRollbackMemoryVectors(): BodyRollbackMemoryVectors {
+  return {
+    sync: async (record) => {
+      const config = await memoryEmbeddingConfig()
+      if (config === undefined) return
+      const vectorStore = await memoryVectorStore()
+      if (record.deletedAt !== undefined) {
+        await vectorStore.delete(record.id, record.scope, record.scopeId)
+        return
+      }
+      const embedded = await embedMemoryRecord({
+        root: tavernDataRoot(),
+        config,
+        vectorStore,
+        record,
+      })
+      if (!embedded) {
+        const status = await readEmbedStatus(tavernDataRoot())
+        const reason = embedBreakerOpen(status)
+          ? `embedding breaker is open${status.lastError === undefined ? '' : `: ${status.lastError}`}`
+          : 'embedMemoryRecord returned false (empty vector or embedding request failed)'
+        throw new Error(`memory vector sync failed for memory '${record.id}': ${reason}`)
+      }
+    },
   }
 }
 

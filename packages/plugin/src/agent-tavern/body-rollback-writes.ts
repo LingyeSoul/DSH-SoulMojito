@@ -20,6 +20,7 @@ import {
   BodyRollbackError,
   errorMessage,
   log,
+  type BodyRollbackDiagnostic,
   type BodyRollbackJournalWrite,
   type BodyRollbackMemoryWrite,
   type BodyRollbackStage,
@@ -68,6 +69,8 @@ type JournalOperation =
 export interface JournalApplyResult {
   /** Store operations actually executed (planners skip already-restored targets). */
   readonly applied: number
+  /** Non-blocking vector-cache sync failures, one per affected memory. */
+  readonly diagnostics: readonly BodyRollbackDiagnostic[]
 }
 
 export async function applyJournalWrites(
@@ -80,17 +83,20 @@ export async function applyJournalWrites(
   // right before writing them: an earlier group's undo changes the revision a
   // later group must expect when the same variable/memory is written twice.
   const ordered = direction === 'undo' ? [...writes].reverse() : [...writes]
+  const diagnostics: BodyRollbackDiagnostic[] = []
   let applied = 0
   for (const write of ordered) {
     const operations = write.kind === 'memory'
       ? await planMemoryOperations(deps, write, direction)
       : await planVariableOperations(deps, write, direction)
     for (const operation of operations) {
-      await executeOperation(deps, operation, direction)
+      const outcome = await executeOperation(deps, operation, direction)
+      const diagnostic = await syncMemoryVector(deps, outcome, operation.journalId, direction)
+      if (diagnostic !== undefined) diagnostics.push(diagnostic)
       applied += 1
     }
   }
-  return { applied }
+  return { applied, diagnostics }
 }
 
 async function planMemoryOperations(
@@ -249,25 +255,43 @@ function stageOf(direction: JournalDirection): BodyRollbackStage {
   return direction === 'undo' ? 'journal-rollback' : 'journal-replay'
 }
 
+/** What one executed operation changed, enough to reconcile the vector cache. */
+type OperationOutcome =
+  | { readonly kind: 'memory-record'; readonly record: MemoryRecord }
+  | {
+      readonly kind: 'memory-forgotten'
+      readonly id: string
+      readonly scope: MemoryScope
+      readonly scopeId: string
+    }
+  | { readonly kind: 'variable' }
+
 async function executeOperation(
   deps: BodyWriteRollbackDeps,
   operation: JournalOperation,
   direction: JournalDirection,
-): Promise<void> {
+): Promise<OperationOutcome> {
   const stage: BodyRollbackStage = stageOf(direction)
   try {
     switch (operation.kind) {
-      case 'memory-forget':
+      case 'memory-forget': {
         await deps.memoryStore.forget(
           operation.id,
           operation.scope,
           operation.scopeId,
           operation.expectedRevision,
         )
-        return
-      case 'memory-restore':
-        await deps.memoryStore.restore(operation.record, operation.expectedRevision)
-        return
+        return {
+          kind: 'memory-forgotten',
+          id: operation.id,
+          scope: operation.scope,
+          scopeId: operation.scopeId,
+        }
+      }
+      case 'memory-restore': {
+        const record = await deps.memoryStore.restore(operation.record, operation.expectedRevision)
+        return { kind: 'memory-record', record }
+      }
       case 'variable-set':
         await deps.variableStore.set(
           operation.scope,
@@ -276,7 +300,7 @@ async function executeOperation(
           operation.value,
           operation.expectedRevision,
         )
-        return
+        return { kind: 'variable' }
       case 'variable-delete':
         await deps.variableStore.delete(
           operation.scope,
@@ -284,7 +308,7 @@ async function executeOperation(
           operation.name,
           operation.expectedRevision,
         )
-        return
+        return { kind: 'variable' }
     }
   } catch (error) {
     const subject = operationSubject(operation)
@@ -300,6 +324,43 @@ async function executeOperation(
       `body rollback ${direction} failed for ${subject} in journal '${operation.journalId}': ${errorMessage(error)}`,
       { stage, journalId: operation.journalId, cause: error },
     )
+  }
+}
+
+/**
+ * Reconcile the vector cache for one executed memory operation.
+ *
+ * A success returns `undefined`. A failure returns a `vector-sync-failed`
+ * diagnostic and logs a warning instead of throwing, so the remaining journal
+ * entries still roll back (proposal 0022 §8). The tombstone of a forget is read
+ * back from the store because `forget` returns no record.
+ */
+async function syncMemoryVector(
+  deps: BodyWriteRollbackDeps,
+  outcome: OperationOutcome,
+  journalId: string,
+  direction: JournalDirection,
+): Promise<BodyRollbackDiagnostic | undefined> {
+  if (outcome.kind === 'variable' || deps.memoryVectors === undefined) return undefined
+  const memoryId = outcome.kind === 'memory-record' ? outcome.record.id : outcome.id
+  try {
+    const record = outcome.kind === 'memory-record'
+      ? outcome.record
+      : await deps.memoryStore.read(outcome.id, outcome.scope, outcome.scopeId, true)
+    if (record === undefined) {
+      throw new Error(`memory '${memoryId}' is missing after forget, so its vector cannot be deleted`)
+    }
+    await deps.memoryVectors.sync(record)
+    return undefined
+  } catch (error) {
+    const message = `memory vector sync failed for memory '${memoryId}' after journal '${journalId}' (${direction}): ${errorMessage(error)}`
+    log(deps.logger, 'warn', 'dsh-soulmojito body rollback: memory vector sync failed', {
+      journalId,
+      memoryId,
+      direction,
+      error: errorMessage(error),
+    })
+    return { code: 'vector-sync-failed', message, memoryId }
   }
 }
 

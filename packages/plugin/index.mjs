@@ -16280,7 +16280,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("c1dc84d") : void 0;
+  const commit = true ? normalizeCommit("d1ca102") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -20355,6 +20355,640 @@ function setGamesServicePromise(value) {
   gamesServicePromise = value;
 }
 
+// packages/plugin/src/memory-embed.ts
+import { promises as fs15 } from "node:fs";
+import * as path9 from "node:path";
+
+// packages/plugin/src/memory-embed-local.ts
+import { createHash as createHash8 } from "node:crypto";
+import { spawn as spawn2 } from "node:child_process";
+import { readdirSync as readdirSync3, readFileSync as readFileSync5, realpathSync as realpathSync2, statSync as statSync2 } from "node:fs";
+import { createRequire as createRequire3 } from "node:module";
+import { basename as basename2, dirname as dirname10, join as join15 } from "node:path";
+import { fileURLToPath, pathToFileURL as pathToFileURL3 } from "node:url";
+var TRANSFORMERS_PACKAGE = "@huggingface/transformers";
+var TRANSFORMERS_INSTALL_HINT = `local ONNX embed requires '${TRANSFORMERS_PACKAGE}' (not bundled with the plugin): run "pnpm add ${TRANSFORMERS_PACKAGE}" in the DSH profile root (the directory whose node_modules contains the installed dsh-soulmojito, NOT the dsh-soulmojito source repository), then restart DSH`;
+var SESSION_CACHE_LIMIT = 2;
+function localModelFingerprint(modelDir) {
+  try {
+    const parts = [];
+    for (const entry of readdirSync3(modelDir).sort()) {
+      const full = join15(modelDir, entry);
+      const info2 = statSync2(full);
+      if (info2.isFile()) {
+        parts.push(`${entry}:${info2.size}:${Math.round(info2.mtimeMs)}`);
+      } else if (info2.isDirectory()) {
+        for (const child of readdirSync3(full).sort()) {
+          const childInfo = statSync2(join15(full, child));
+          if (childInfo.isFile()) parts.push(`${entry}/${child}:${childInfo.size}:${Math.round(childInfo.mtimeMs)}`);
+        }
+      }
+    }
+    if (parts.length === 0) return "unreadable";
+    return createHash8("sha256").update(parts.join("|")).digest("hex").slice(0, 16);
+  } catch {
+    return "unreadable";
+  }
+}
+function localModelIdentity(config) {
+  return `local-onnx:${basename2(config.modelDir)}@${localModelFingerprint(config.modelDir)}:${config.pooling ?? "cls"}:${resolveLocalDtype(config) ?? "auto"}`;
+}
+var DTYPE_FILE_SUFFIXES = [
+  ["fp32", ""],
+  ["fp16", "_fp16"],
+  ["q8", "_quantized"],
+  ["int8", "_int8"],
+  ["uint8", "_uint8"],
+  ["q4", "_q4"],
+  ["q4f16", "_q4f16"],
+  ["q2", "_q2"],
+  ["q2f16", "_q2f16"],
+  ["q1", "_q1"],
+  ["q1f16", "_q1f16"]
+];
+var AUTO_DTYPE_PRIORITY = ["fp16", "q8", "q4", "q4f16", "int8", "uint8", "q2", "q2f16", "q1", "q1f16", "fp32"];
+function detectLocalQuantizations(modelDir) {
+  let names;
+  try {
+    names = readdirSync3(join15(modelDir, "onnx"));
+  } catch {
+    return [];
+  }
+  const found = [];
+  for (const [dtype, suffix] of DTYPE_FILE_SUFFIXES) {
+    const file = `onnx/model${suffix}.onnx`;
+    try {
+      const info2 = statSync2(join15(modelDir, file));
+      if (info2.isFile()) found.push({ precision: dtype, file, sizeBytes: info2.size });
+    } catch {
+    }
+  }
+  return found.sort((a, b) => AUTO_DTYPE_PRIORITY.indexOf(a.precision) - AUTO_DTYPE_PRIORITY.indexOf(b.precision));
+}
+function resolveLocalDtype(config) {
+  if (config.precision !== void 0 && config.precision !== "auto") return config.precision;
+  return detectLocalQuantizations(config.modelDir)[0]?.precision;
+}
+function readJsonFile(file) {
+  try {
+    return JSON.parse(readFileSync5(file, "utf8"));
+  } catch {
+    return void 0;
+  }
+}
+function inferLocalModelSettings(modelDir) {
+  const result = { sources: {} };
+  const config = readJsonFile(join15(modelDir, "config.json"));
+  const configRecord = config !== null && typeof config === "object" && !Array.isArray(config) ? config : void 0;
+  const hiddenSize = configRecord?.hidden_size;
+  if (typeof hiddenSize === "number" && Number.isFinite(hiddenSize)) {
+    result.dims = Math.max(1, Math.min(8192, Math.round(hiddenSize)));
+    result.sources.dims = "config.json hidden_size";
+  }
+  const modules = readJsonFile(join15(modelDir, "modules.json"));
+  if (Array.isArray(modules)) {
+    for (const entry of modules) {
+      if (!Array.isArray(entry) || entry[0] !== "sentence-transformers" || entry[1] !== "Pooling") continue;
+      const flags = entry[2];
+      if (flags !== null && typeof flags === "object" && !Array.isArray(flags)) {
+        const record = flags;
+        if (record.pooling_mode_cls === true) {
+          result.pooling = "cls";
+          result.sources.pooling = "modules.json";
+        } else if (record.pooling_mode_mean === true) {
+          result.pooling = "mean";
+          result.sources.pooling = "modules.json";
+        }
+      }
+      break;
+    }
+  }
+  if (result.pooling === void 0 && (configRecord?.pooling === "cls" || configRecord?.pooling === "mean")) {
+    result.pooling = configRecord.pooling;
+    result.sources.pooling = "config.json pooling";
+  }
+  if (result.pooling === void 0) {
+    const haystack = `${basename2(modelDir)} ${typeof configRecord?._name_or_path === "string" ? configRecord._name_or_path : ""}`.toLowerCase();
+    if (/(^|[^a-z])(bge|bert)/.test(haystack)) {
+      result.pooling = "cls";
+      result.sources.pooling = "model family (bge/bert \u2192 cls)";
+    } else if (/(minilm|mpnet|e5|gte|gtr|sentence-t5)/.test(haystack)) {
+      result.pooling = "mean";
+      result.sources.pooling = "model family (mean-pooled)";
+    }
+  }
+  return result;
+}
+function validateLocalModelDir(modelDir) {
+  let info2;
+  try {
+    info2 = statSync2(modelDir);
+  } catch {
+    return `modelDir '${modelDir}' does not exist`;
+  }
+  if (!info2.isDirectory()) return `modelDir '${modelDir}' is not a directory`;
+  const names = readdirSync3(modelDir);
+  if (!names.includes("tokenizer.json")) {
+    return `modelDir '${modelDir}' has no tokenizer.json (expected a Hugging Face ONNX layout: tokenizer.json + config.json + onnx/model.onnx)`;
+  }
+  let onnxNames = [];
+  try {
+    onnxNames = statSync2(join15(modelDir, "onnx")).isDirectory() ? readdirSync3(join15(modelDir, "onnx")) : [];
+  } catch {
+  }
+  const hasOnnx = onnxNames.some((name2) => name2.endsWith(".onnx"));
+  if (!hasOnnx) {
+    return names.some((name2) => name2.endsWith(".onnx")) ? `modelDir '${modelDir}' has .onnx files at the top level but no onnx/ subdirectory: transformers.js only loads weights from 'onnx/' (e.g. onnx/model_fp16.onnx) \u2014 move the weights into an onnx/ subdirectory` : `modelDir '${modelDir}' has no .onnx weights (expected onnx/model_fp16.onnx, onnx/model_quantized.onnx or onnx/model.onnx)`;
+  }
+  return null;
+}
+function resolutionAnchors() {
+  const candidates = [];
+  const push = (value) => {
+    if (typeof value !== "string" || value === "" || candidates.includes(value)) return;
+    candidates.push(value);
+  };
+  if (import.meta.url.startsWith("file:")) {
+    try {
+      push(fileURLToPath(import.meta.url));
+    } catch {
+    }
+  }
+  if (typeof process.argv[1] === "string" && process.argv[1] !== "") {
+    push(process.argv[1]);
+    try {
+      push(realpathSync2(process.argv[1]));
+    } catch {
+    }
+  }
+  return candidates;
+}
+function isLocalEmbedRuntimeInstalled() {
+  for (const anchor of resolutionAnchors()) {
+    try {
+      createRequire3(anchor).resolve(TRANSFORMERS_PACKAGE);
+      return true;
+    } catch {
+    }
+  }
+  return false;
+}
+async function importTransformers() {
+  for (const anchor of resolutionAnchors()) {
+    try {
+      const resolved = createRequire3(anchor).resolve(TRANSFORMERS_PACKAGE);
+      return await import(pathToFileURL3(resolved).href);
+    } catch {
+    }
+  }
+  return await importHostPackage(TRANSFORMERS_PACKAGE);
+}
+var defaultLocalEmbedRuntime = {
+  async load(modelDir, options = {}) {
+    let transformers;
+    try {
+      transformers = await importTransformers();
+    } catch (cause) {
+      throw new Error(`${TRANSFORMERS_INSTALL_HINT} (resolution failed: ${cause instanceof Error ? cause.message : String(cause)})`);
+    }
+    transformers.env.allowRemoteModels = false;
+    transformers.env.allowLocalModels = true;
+    let pipeline2;
+    if (options.dtype !== void 0) {
+      pipeline2 = await transformers.pipeline("feature-extraction", modelDir, { dtype: options.dtype });
+    } else {
+      const chain = ["fp16", "q8", "fp32"];
+      let lastError;
+      for (const dtype of chain) {
+        try {
+          pipeline2 = await transformers.pipeline("feature-extraction", modelDir, { dtype });
+          break;
+        } catch (cause) {
+          lastError = cause;
+        }
+      }
+      if (pipeline2 === void 0) {
+        throw lastError instanceof Error ? lastError : new Error(String(lastError));
+      }
+    }
+    return {
+      async embed(texts) {
+        const output = await pipeline2([...texts], {
+          pooling: options.pooling ?? "cls",
+          normalize: true
+        });
+        return output.tolist();
+      }
+    };
+  }
+};
+var LOCAL_RUNTIME_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
+var INSTALL_OUTPUT_TAIL = 8e3;
+function localRuntimeProfileRoot(pluginDir) {
+  const parent = dirname10(pluginDir);
+  if (basename2(parent) !== "node_modules") return void 0;
+  return dirname10(parent);
+}
+function defaultSpawnRunner(command, args, options) {
+  return new Promise((resolve6, reject) => {
+    const child = spawn2(command, [...args], {
+      cwd: options.cwd,
+      shell: process.platform === "win32",
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: process.env
+    });
+    let output = "";
+    const feed = (chunk) => {
+      output += chunk.toString("utf8");
+      if (output.length > 1e6) output = output.slice(-1e6);
+    };
+    child.stdout?.on("data", feed);
+    child.stderr?.on("data", feed);
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error(`pnpm timed out after ${options.timeoutMs}ms`));
+    }, options.timeoutMs);
+    timer.unref?.();
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      resolve6({ code: code ?? -1, output });
+    });
+  });
+}
+async function installLocalEmbedRuntime(input) {
+  if (isLocalEmbedRuntimeInstalled()) {
+    return { ok: true, alreadyInstalled: true, outputTail: "" };
+  }
+  const profileRoot = localRuntimeProfileRoot(input.pluginDir);
+  if (profileRoot === void 0) {
+    return {
+      ok: false,
+      alreadyInstalled: false,
+      message: `auto-install is unavailable for link:/source mounts: run "pnpm add ${TRANSFORMERS_PACKAGE}" manually in the DSH profile root`,
+      outputTail: ""
+    };
+  }
+  const run = input.spawnRunner ?? defaultSpawnRunner;
+  try {
+    const result = await run("pnpm", ["add", TRANSFORMERS_PACKAGE], {
+      cwd: profileRoot,
+      timeoutMs: input.timeoutMs ?? LOCAL_RUNTIME_INSTALL_TIMEOUT_MS
+    });
+    const outputTail = result.output.slice(-INSTALL_OUTPUT_TAIL);
+    if (result.code !== 0) {
+      return { ok: false, alreadyInstalled: false, message: `pnpm exited with ${result.code}`, outputTail };
+    }
+    if (!isLocalEmbedRuntimeInstalled()) {
+      return { ok: false, alreadyInstalled: false, message: "pnpm succeeded but the runtime is still not resolvable (restart DSH and retry the probe)", outputTail };
+    }
+    return { ok: true, alreadyInstalled: false, outputTail };
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    return {
+      ok: false,
+      alreadyInstalled: false,
+      message: `pnpm add failed: ${detail}${/ENOENT|not found|not recognized/i.test(detail) ? ` (is pnpm on PATH?)` : ""}`,
+      outputTail: ""
+    };
+  }
+}
+var sessionCache = /* @__PURE__ */ new Map();
+function sessionKey(config, options) {
+  return `${config.modelDir}|${localModelFingerprint(config.modelDir)}|${options.pooling ?? "cls"}|${resolveLocalDtype(config) ?? "auto"}`;
+}
+function loadLocalEmbedModel(config, runtime = defaultLocalEmbedRuntime) {
+  const options = {};
+  if (config.pooling !== void 0) options.pooling = config.pooling;
+  const dtype = resolveLocalDtype(config);
+  if (dtype !== void 0) options.dtype = dtype;
+  const key = sessionKey(config, options);
+  const cached = sessionCache.get(key);
+  if (cached !== void 0) return cached;
+  const promise = runtime.load(config.modelDir, options).catch((cause) => {
+    sessionCache.delete(key);
+    throw cause;
+  });
+  sessionCache.set(key, promise);
+  while (sessionCache.size > SESSION_CACHE_LIMIT) {
+    const oldest = sessionCache.keys().next().value;
+    if (oldest === void 0) break;
+    sessionCache.delete(oldest);
+  }
+  return promise;
+}
+
+// packages/plugin/src/memory-embed.ts
+var EMBED_BREAKER_MS = 6e4;
+var EMBED_RETRY_BACKOFF_MS = 250;
+var EMBED_INPUT_MAX_CHARS = 6e3;
+var EMBED_PROBE_TEXT = "dsh-soulmojito embed probe";
+function emptyStatus() {
+  return { version: 1, breakerUntil: 0 };
+}
+var EmbedHttpError = class extends Error {
+  constructor(kind, message, status2, retriable = false) {
+    super(message);
+    this.kind = kind;
+    this.status = status2;
+    this.retriable = retriable;
+    this.name = "EmbedHttpError";
+  }
+};
+function embedStatusPath(root) {
+  return path9.join(root, "memory-vectors", "status.json");
+}
+async function readEmbedStatus(root) {
+  try {
+    const parsed = JSON.parse(await fs15.readFile(embedStatusPath(root), "utf8"));
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return emptyStatus();
+    return {
+      version: 1,
+      ...typeof parsed.model === "string" && parsed.model !== "" ? { model: parsed.model } : {},
+      ...typeof parsed.dims === "number" && Number.isFinite(parsed.dims) && parsed.dims > 0 ? { dims: parsed.dims } : {},
+      ...typeof parsed.lastError === "string" && parsed.lastError !== "" ? { lastError: parsed.lastError } : {},
+      ...typeof parsed.lastErrorAt === "string" ? { lastErrorAt: parsed.lastErrorAt } : {},
+      ...typeof parsed.lastSuccessAt === "string" ? { lastSuccessAt: parsed.lastSuccessAt } : {},
+      breakerUntil: typeof parsed.breakerUntil === "number" && Number.isFinite(parsed.breakerUntil) ? parsed.breakerUntil : 0
+    };
+  } catch {
+    return emptyStatus();
+  }
+}
+async function writeEmbedStatus(root, status2) {
+  await fs15.mkdir(path9.dirname(embedStatusPath(root)), { recursive: true });
+  await writeAtomicText(embedStatusPath(root), `${JSON.stringify(status2)}
+`);
+}
+function embedBreakerOpen(status2, now = Date.now()) {
+  return now < status2.breakerUntil;
+}
+async function recordEmbedFailure(root, message) {
+  const status2 = await readEmbedStatus(root);
+  await writeEmbedStatus(root, {
+    ...status2,
+    lastError: message.slice(0, 300),
+    lastErrorAt: (/* @__PURE__ */ new Date()).toISOString(),
+    breakerUntil: Date.now() + EMBED_BREAKER_MS
+  });
+}
+async function recordEmbedSuccess(root, info2) {
+  const status2 = await readEmbedStatus(root);
+  await writeEmbedStatus(root, {
+    ...status2,
+    model: info2.model,
+    dims: info2.dims,
+    lastSuccessAt: (/* @__PURE__ */ new Date()).toISOString(),
+    breakerUntil: 0
+  });
+}
+async function clearEmbedStatus(root) {
+  await fs15.rm(embedStatusPath(root), { force: true });
+}
+function resolveApiKey(config) {
+  if (config.provider === "local") return void 0;
+  if (config.apiKeyEnv === "") return void 0;
+  const value = process.env[config.apiKeyEnv];
+  if (value === void 0) return void 0;
+  const trimmed = value.trim();
+  return trimmed === "" ? void 0 : trimmed;
+}
+function embedModelIdentity(config) {
+  if (config.provider === "local") return localModelIdentity(config);
+  return config.model;
+}
+function expectedDims(config, status2) {
+  return config.dims ?? status2.dims;
+}
+async function embedTexts(config, texts, options = {}) {
+  if (texts.length === 0) return [];
+  if (config.provider === "local") return embedTextsLocal(config, texts, options);
+  const batchSize = config.batchSize ?? 16;
+  const timeoutMs = config.timeoutMs ?? 1e4;
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const vectors = [];
+  for (let start = 0; start < texts.length; start += batchSize) {
+    const batch = texts.slice(start, start + batchSize);
+    vectors.push(...await embedBatchWithRetry(config, batch, { ...options, timeoutMs, fetchImpl }));
+  }
+  return vectors;
+}
+async function embedTextsLocal(config, texts, options) {
+  let model;
+  try {
+    model = await loadLocalEmbedModel(config, options.localRuntime ?? defaultLocalEmbedRuntime);
+  } catch (cause) {
+    throw new EmbedHttpError(
+      "runtime",
+      cause instanceof Error ? cause.message : String(cause),
+      void 0,
+      false
+    );
+  }
+  const batchSize = config.batchSize ?? 16;
+  const vectors = [];
+  for (let start = 0; start < texts.length; start += batchSize) {
+    const batch = texts.slice(start, start + batchSize);
+    let embedded;
+    try {
+      embedded = await model.embed(batch);
+    } catch (cause) {
+      throw new EmbedHttpError(
+        "runtime",
+        cause instanceof Error ? cause.message : String(cause),
+        void 0,
+        false
+      );
+    }
+    if (embedded.length !== batch.length) {
+      throw new EmbedHttpError(
+        "payload",
+        `local embed returned ${embedded.length} vectors for ${batch.length} inputs`,
+        void 0,
+        false
+      );
+    }
+    vectors.push(...validateLocalVectors(embedded, options.expectedDims));
+  }
+  return vectors;
+}
+function validateLocalVectors(embedded, expectedDims2) {
+  if (embedded.length === 0) {
+    throw new EmbedHttpError("payload", "local embed returned no vectors", void 0, false);
+  }
+  const dims = embedded[0]?.length ?? 0;
+  if (dims === 0 || embedded.some((vector) => vector.length !== dims)) {
+    throw new EmbedHttpError(
+      "dims",
+      `local embed dimensions inconsistent (batch dims: ${embedded.map((vector) => vector.length).join(",")})`,
+      void 0,
+      false
+    );
+  }
+  for (const vector of embedded) {
+    if (vector.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
+      throw new EmbedHttpError("payload", "local embed vector is not a finite number array", void 0, false);
+    }
+  }
+  if (expectedDims2 !== void 0 && dims !== expectedDims2) {
+    throw new EmbedHttpError("dims", `local embed has ${dims} dims, expected ${expectedDims2}`, void 0, false);
+  }
+  return [...embedded];
+}
+async function embedBatchWithRetry(config, batch, options) {
+  let lastError;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await embedBatchOnce(config, batch, options);
+    } catch (cause) {
+      const error = cause instanceof EmbedHttpError ? cause : new EmbedHttpError("network", cause instanceof Error ? cause.message : String(cause), void 0, true);
+      lastError = error;
+      if (!error.retriable || attempt >= 2) throw lastError;
+      await delay2(EMBED_RETRY_BACKOFF_MS);
+    }
+  }
+}
+async function embedBatchOnce(config, batch, options) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs);
+  let response;
+  if (config.provider === "local") throw new Error("local memory embedding does not use the HTTP embeddings endpoint");
+  try {
+    response = await options.fetchImpl(`${config.baseURL}/embeddings`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        // 免密反代：无 key 时不带 Authorization 头（不是带空串）。
+        ...resolveApiKey(config) !== void 0 ? { authorization: `Bearer ${resolveApiKey(config)}` } : {}
+      },
+      body: JSON.stringify({ model: config.model, input: batch }),
+      signal: controller.signal
+    });
+  } catch (cause) {
+    if (controller.signal.aborted) {
+      throw new EmbedHttpError("timeout", `embed request timed out after ${options.timeoutMs}ms`, void 0, true);
+    }
+    throw new EmbedHttpError("network", cause instanceof Error ? cause.message : String(cause), void 0, true);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!response.ok) {
+    const retriable = response.status === 429 || response.status >= 500;
+    const detail = await response.text().then((text) => text.slice(0, 200)).catch(() => "");
+    throw new EmbedHttpError(
+      "http",
+      `embed endpoint returned ${response.status}${detail === "" ? "" : `: ${detail}`}`,
+      response.status,
+      retriable
+    );
+  }
+  let payload;
+  try {
+    payload = await response.json();
+  } catch (cause) {
+    throw new EmbedHttpError("payload", `embed response is not JSON: ${cause instanceof Error ? cause.message : String(cause)}`);
+  }
+  return parseEmbeddings(payload, batch.length, options.expectedDims);
+}
+function parseEmbeddings(payload, count, expectedDims2) {
+  if (payload === null || typeof payload !== "object" || !Array.isArray(payload.data)) {
+    throw new EmbedHttpError("payload", "embed response has no data array");
+  }
+  const data = payload.data;
+  if (data.length !== count) {
+    throw new EmbedHttpError("payload", `embed response count mismatch: sent ${count}, received ${data.length}`);
+  }
+  const items = data.map((item) => {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) {
+      throw new EmbedHttpError("payload", "embed response item is not an object");
+    }
+    return item;
+  });
+  const ordered = items.every((item) => typeof item.index === "number") ? items.slice().sort((left, right) => left.index - right.index) : items;
+  const vectors = ordered.map((item) => {
+    if (!Array.isArray(item.embedding) || item.embedding.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
+      throw new EmbedHttpError("payload", "embed response embedding is not a finite number array");
+    }
+    return item.embedding;
+  });
+  const dims = vectors[0]?.length ?? 0;
+  if (dims === 0 || vectors.some((vector) => vector.length !== dims)) {
+    throw new EmbedHttpError("dims", `embed response dimensions inconsistent (batch dims: ${vectors.map((vector) => vector.length).join(",")})`);
+  }
+  if (expectedDims2 !== void 0 && dims !== expectedDims2) {
+    throw new EmbedHttpError("dims", `embed response has ${dims} dims, expected ${expectedDims2}`);
+  }
+  return vectors;
+}
+function delay2(ms) {
+  return new Promise((resolve6) => setTimeout(resolve6, ms));
+}
+async function embedProbe(root, config, options = {}) {
+  const status2 = await readEmbedStatus(root);
+  const startedAt = Date.now();
+  const model = embedModelIdentity(config);
+  try {
+    const [vector] = await embedTexts(config, [EMBED_PROBE_TEXT], {
+      ...options,
+      expectedDims: expectedDims(config, status2)
+    });
+    const dims = vector?.length ?? 0;
+    const result = { dims, latencyMs: Date.now() - startedAt, model };
+    await recordEmbedSuccess(root, { model, dims });
+    return result;
+  } catch (cause) {
+    await recordEmbedFailure(root, cause instanceof Error ? cause.message : String(cause));
+    throw cause;
+  }
+}
+
+// packages/plugin/src/memory-hybrid.ts
+async function embedMemoryRecord(input) {
+  const { root, config, vectorStore, record, fetchImpl, localRuntime } = input;
+  const status2 = await readEmbedStatus(root);
+  if (embedBreakerOpen(status2)) return false;
+  const modelId = embedModelIdentity(config);
+  try {
+    const [vector] = await embedTexts(
+      config,
+      [record.content.slice(0, EMBED_INPUT_MAX_CHARS)],
+      { expectedDims: expectedDims(config, status2), fetchImpl, localRuntime }
+    );
+    if (vector === void 0) return false;
+    await recordEmbedSuccess(root, { model: modelId, dims: vector.length });
+    await vectorStore.put([{
+      id: record.id,
+      scope: record.scope,
+      scopeId: record.scopeId,
+      digest: memoryContentDigest(modelId, record.content),
+      model: modelId,
+      vector: encodeVector(vector)
+    }]);
+    return true;
+  } catch (cause) {
+    await recordEmbedFailure(root, cause instanceof Error ? cause.message : String(cause));
+    return false;
+  }
+}
+
+// packages/plugin/src/agent-tavern/tools/stores.ts
+var tavernStorePromise;
+var memoryVectorStorePromise2;
+function tavernStore() {
+  return tavernStorePromise ??= TavernStore.open(tavernDataRoot());
+}
+function memoryVectorStore() {
+  return memoryVectorStorePromise2 ??= MemoryVectorStore.open(tavernDataRoot());
+}
+async function memoryEmbeddingConfig() {
+  const state = await (await tavernStore()).getState();
+  return normalizeMemoryEmbedding(state.memoryEmbedding);
+}
+
 // packages/plugin/src/agent-tavern/body-rollback-support.ts
 var BodyRollbackError = class extends Error {
   code;
@@ -20376,6 +21010,44 @@ var BodyRollbackError = class extends Error {
     this.compensated = options.compensated === true;
   }
 };
+async function readAgentTavernBinding(store5, agentId) {
+  let state;
+  try {
+    state = await store5.getState();
+  } catch (error) {
+    throw new BodyRollbackError(
+      "body-state-unsafe",
+      `body rollback cannot read tavern state for session '${agentId}': ${errorMessage2(error)}`,
+      { detail: "binding-unavailable", stage: "prepare", sessionId: agentId, cause: error }
+    );
+  }
+  const bindings2 = state.sessionBindings;
+  const binding = isRecord4(bindings2) ? bindings2[agentId] : void 0;
+  if (!isRecord4(binding) || binding["architecture"] !== "agent-tavern") {
+    throw new BodyRollbackError(
+      "body-state-unsafe",
+      `body rollback requires an agent-tavern binding for session '${agentId}'`,
+      { detail: "binding-unavailable", stage: "prepare", sessionId: agentId }
+    );
+  }
+  if (binding["group"] === true) {
+    throw new BodyRollbackError(
+      "body-state-unsafe",
+      `body rollback does not apply to group session '${agentId}'`,
+      { detail: "binding-unavailable", stage: "prepare", sessionId: agentId }
+    );
+  }
+  const character = binding["character"];
+  const chatId = binding["chatId"];
+  if (typeof character !== "string" || character === "" || typeof chatId !== "string" || chatId === "") {
+    throw new BodyRollbackError(
+      "body-state-unsafe",
+      `body rollback binding for session '${agentId}' has no character/chatId`,
+      { detail: "binding-unavailable", stage: "prepare", sessionId: agentId }
+    );
+  }
+  return { character, chatId };
+}
 function requireNonEmptyString(value, field) {
   if (!isNonEmptyString(value)) {
     throw new BodyRollbackError(
@@ -20418,15 +21090,18 @@ function isRecord4(value) {
 // packages/plugin/src/agent-tavern/body-rollback-writes.ts
 async function applyJournalWrites(deps, writes, direction) {
   const ordered = direction === "undo" ? [...writes].reverse() : [...writes];
+  const diagnostics = [];
   let applied = 0;
   for (const write of ordered) {
     const operations = write.kind === "memory" ? await planMemoryOperations(deps, write, direction) : await planVariableOperations(deps, write, direction);
     for (const operation of operations) {
-      await executeOperation(deps, operation, direction);
+      const outcome = await executeOperation(deps, operation, direction);
+      const diagnostic = await syncMemoryVector(deps, outcome, operation.journalId, direction);
+      if (diagnostic !== void 0) diagnostics.push(diagnostic);
       applied += 1;
     }
   }
-  return { applied };
+  return { applied, diagnostics };
 }
 async function planMemoryOperations(deps, write, direction) {
   const current = await readMemory(deps, write, direction);
@@ -20557,17 +21232,24 @@ async function executeOperation(deps, operation, direction) {
   const stage = stageOf(direction);
   try {
     switch (operation.kind) {
-      case "memory-forget":
+      case "memory-forget": {
         await deps.memoryStore.forget(
           operation.id,
           operation.scope,
           operation.scopeId,
           operation.expectedRevision
         );
-        return;
-      case "memory-restore":
-        await deps.memoryStore.restore(operation.record, operation.expectedRevision);
-        return;
+        return {
+          kind: "memory-forgotten",
+          id: operation.id,
+          scope: operation.scope,
+          scopeId: operation.scopeId
+        };
+      }
+      case "memory-restore": {
+        const record = await deps.memoryStore.restore(operation.record, operation.expectedRevision);
+        return { kind: "memory-record", record };
+      }
       case "variable-set":
         await deps.variableStore.set(
           operation.scope,
@@ -20576,7 +21258,7 @@ async function executeOperation(deps, operation, direction) {
           operation.value,
           operation.expectedRevision
         );
-        return;
+        return { kind: "variable" };
       case "variable-delete":
         await deps.variableStore.delete(
           operation.scope,
@@ -20584,7 +21266,7 @@ async function executeOperation(deps, operation, direction) {
           operation.name,
           operation.expectedRevision
         );
-        return;
+        return { kind: "variable" };
     }
   } catch (error) {
     const subject = operationSubject(operation);
@@ -20600,6 +21282,27 @@ async function executeOperation(deps, operation, direction) {
       `body rollback ${direction} failed for ${subject} in journal '${operation.journalId}': ${errorMessage2(error)}`,
       { stage, journalId: operation.journalId, cause: error }
     );
+  }
+}
+async function syncMemoryVector(deps, outcome, journalId, direction) {
+  if (outcome.kind === "variable" || deps.memoryVectors === void 0) return void 0;
+  const memoryId = outcome.kind === "memory-record" ? outcome.record.id : outcome.id;
+  try {
+    const record = outcome.kind === "memory-record" ? outcome.record : await deps.memoryStore.read(outcome.id, outcome.scope, outcome.scopeId, true);
+    if (record === void 0) {
+      throw new Error(`memory '${memoryId}' is missing after forget, so its vector cannot be deleted`);
+    }
+    await deps.memoryVectors.sync(record);
+    return void 0;
+  } catch (error) {
+    const message = `memory vector sync failed for memory '${memoryId}' after journal '${journalId}' (${direction}): ${errorMessage2(error)}`;
+    log(deps.logger, "warn", "dsh-soulmojito body rollback: memory vector sync failed", {
+      journalId,
+      memoryId,
+      direction,
+      error: errorMessage2(error)
+    });
+    return { code: "vector-sync-failed", message, memoryId };
   }
 }
 function operationSubject(operation) {
@@ -20854,335 +21557,6 @@ function isRecord5(value) {
 function invalid(where, detail) {
   return new WriteJournalError("invalid-write-journal", `${where}: ${detail}`);
 }
-
-// packages/plugin/src/agent-tavern/body-rollback-journal.ts
-async function readEvents(deps, agentId, turn) {
-  let events;
-  try {
-    events = await deps.sessionEvents(agentId);
-  } catch (error) {
-    throw new BodyRollbackError(
-      "body-state-unsafe",
-      `body rollback cannot read the session log of '${agentId}': ${errorMessage2(error)}`,
-      { detail: "session-unreadable", stage: "prepare", sessionId: agentId, turn, cause: error }
-    );
-  }
-  if (events === void 0) {
-    throw new BodyRollbackError(
-      "body-state-unsafe",
-      `body rollback cannot read the session log of '${agentId}'`,
-      { detail: "session-unreadable", stage: "prepare", sessionId: agentId, turn }
-    );
-  }
-  return events;
-}
-function toolNamesInTurn(events, turn) {
-  const names = [];
-  let open2;
-  for (const event of events) {
-    if (!isRecord4(event)) continue;
-    const type = event["type"];
-    if (type === "turn/start") {
-      open2 = turnNumberOf(event["data"]);
-      continue;
-    }
-    if (type === "turn/end") {
-      open2 = void 0;
-      continue;
-    }
-    if (type !== "assistant/message") continue;
-    const data = isRecord4(event["data"]) ? event["data"] : void 0;
-    if (data === void 0) continue;
-    const eventTurn = typeof data["turn"] === "number" ? data["turn"] : open2;
-    if (eventTurn !== turn) continue;
-    const message = isRecord4(data["message"]) ? data["message"] : void 0;
-    const content = message?.["content"];
-    if (!Array.isArray(content)) continue;
-    for (const block of content) {
-      if (!isRecord4(block) || block["type"] !== "tool-call") continue;
-      const name2 = block["name"];
-      if (typeof name2 === "string" && name2 !== "") names.push(name2);
-    }
-  }
-  return names;
-}
-function turnNumberOf(data) {
-  if (!isRecord4(data)) return void 0;
-  const turn = data["turn"];
-  return typeof turn === "number" && Number.isSafeInteger(turn) && turn >= 0 ? turn : void 0;
-}
-function buildJournalWrites(events, agentId, turn) {
-  let entries;
-  try {
-    entries = readWriteJournal(events);
-  } catch (error) {
-    throw new BodyRollbackError(
-      "body-state-unsafe",
-      `body rollback cannot read the write journal of session '${agentId}' turn ${turn}: ${errorMessage2(error)}`,
-      { detail: "write-journal-missing", stage: "prepare", sessionId: agentId, turn, cause: error }
-    );
-  }
-  const groups = /* @__PURE__ */ new Map();
-  for (const entry of entries) {
-    if (entry.sessionId !== agentId || entry.turn !== turn) continue;
-    const group2 = groups.get(entry.journalId);
-    if (group2 === void 0) groups.set(entry.journalId, [entry]);
-    else group2.push(entry);
-  }
-  const writes = [];
-  const uncommitted = [];
-  const tools = /* @__PURE__ */ new Set();
-  for (const [journalId, group2] of groups) {
-    const kind = group2[0]?.kind;
-    if (kind === void 0) continue;
-    if (group2.some((entry) => entry.kind !== kind)) {
-      throw journalUnsafe(journalId, agentId, turn, "mixes memory and variable records");
-    }
-    for (const entry of group2) tools.add(entry.tool);
-    const before = group2.filter((entry) => entry.phase === "before");
-    const after = group2.filter((entry) => entry.phase === "after");
-    if (before.length > 1 || after.length > 1) {
-      throw journalUnsafe(journalId, agentId, turn, "has duplicate phase records");
-    }
-    if (after.length === 0) {
-      uncommitted.push(journalId);
-      continue;
-    }
-    const beforeEntry = before[0];
-    const afterEntry = after[0];
-    if (beforeEntry === void 0) {
-      throw journalUnsafe(journalId, agentId, turn, "has an after record without a before record");
-    }
-    if (beforeEntry.kind !== afterEntry.kind || beforeEntry.tool !== afterEntry.tool) {
-      throw journalUnsafe(journalId, agentId, turn, "has mismatched kind/tool phases");
-    }
-    writes.push(
-      beforeEntry.kind === "memory" ? memoryWriteOf(beforeEntry, afterEntry, journalId, agentId, turn) : variableWriteOf(beforeEntry, afterEntry, journalId, agentId, turn)
-    );
-  }
-  return { writes, uncommitted, tools };
-}
-function memoryWriteOf(beforeEntry, afterEntry, journalId, agentId, turn) {
-  if (!sameMemoryTarget(beforeEntry.target, afterEntry.target)) {
-    throw journalUnsafe(journalId, agentId, turn, "targets two different memories");
-  }
-  const before = requireMemoryBefore(beforeEntry, journalId, agentId, turn);
-  const after = requireMemoryAfter(afterEntry, journalId, agentId, turn);
-  assertMemoryRecordMatches(before, beforeEntry.target, journalId, agentId, turn);
-  assertMemoryRecordMatches(after, beforeEntry.target, journalId, agentId, turn);
-  if (beforeEntry.tool === "memory_write" && before !== null) {
-    throw journalUnsafe(journalId, agentId, turn, "memory_write must record a null before state");
-  }
-  if (beforeEntry.tool !== "memory_write" && before === null) {
-    throw journalUnsafe(journalId, agentId, turn, `memory_${beforeEntry.tool} requires a before record`);
-  }
-  if (beforeEntry.tool !== "memory_forget" && after === null) {
-    throw journalUnsafe(journalId, agentId, turn, `${beforeEntry.tool} requires an after record`);
-  }
-  return {
-    kind: "memory",
-    journalId,
-    tool: beforeEntry.tool,
-    target: beforeEntry.target,
-    before,
-    after
-  };
-}
-function variableWriteOf(beforeEntry, afterEntry, journalId, agentId, turn) {
-  if (beforeEntry.target.scope !== afterEntry.target.scope || beforeEntry.target.scopeId !== afterEntry.target.scopeId) {
-    throw journalUnsafe(journalId, agentId, turn, "targets two different variable scopes");
-  }
-  const before = requireSnapshotsBefore(beforeEntry, journalId, agentId, turn);
-  const after = requireSnapshotsAfter(afterEntry, journalId, agentId, turn);
-  assertSnapshotsMatch(before, beforeEntry.target, journalId, agentId, turn);
-  assertSnapshotsMatch(after, beforeEntry.target, journalId, agentId, turn);
-  if (beforeEntry.tool === "variable_delete" && after !== null) {
-    throw journalUnsafe(journalId, agentId, turn, "variable_delete must record a null after state");
-  }
-  if (beforeEntry.tool !== "variable_delete" && after === null) {
-    throw journalUnsafe(journalId, agentId, turn, `${beforeEntry.tool} requires an after snapshot list`);
-  }
-  return {
-    kind: "variable",
-    journalId,
-    tool: beforeEntry.tool,
-    target: beforeEntry.target,
-    before,
-    after
-  };
-}
-function sameMemoryTarget(left, right) {
-  return left.id === right.id && left.scope === right.scope && left.scopeId === right.scopeId;
-}
-function requireMemoryBefore(entry, journalId, agentId, turn) {
-  if (!("before" in entry) || entry.before === void 0) {
-    throw journalUnsafe(journalId, agentId, turn, "has a before record without a before state");
-  }
-  return entry.before;
-}
-function requireMemoryAfter(entry, journalId, agentId, turn) {
-  if (!("after" in entry) || entry.after === void 0) {
-    throw journalUnsafe(journalId, agentId, turn, "has an after record without an after state");
-  }
-  return entry.after;
-}
-function requireSnapshotsBefore(entry, journalId, agentId, turn) {
-  if (!("before" in entry) || entry.before === void 0) {
-    throw journalUnsafe(journalId, agentId, turn, "has a before record without a before state");
-  }
-  return entry.before;
-}
-function requireSnapshotsAfter(entry, journalId, agentId, turn) {
-  if (!("after" in entry) || entry.after === void 0) {
-    throw journalUnsafe(journalId, agentId, turn, "has an after record without an after state");
-  }
-  return entry.after;
-}
-function assertMemoryRecordMatches(record, target, journalId, agentId, turn) {
-  if (record === null) return;
-  if (record.id !== target.id || record.scope !== target.scope || record.scopeId !== target.scopeId) {
-    throw journalUnsafe(journalId, agentId, turn, `records memory '${record.id}' outside its target`);
-  }
-}
-function assertSnapshotsMatch(snapshots, target, journalId, agentId, turn) {
-  if (snapshots === null) return;
-  for (const snapshot2 of snapshots) {
-    if (snapshot2.scope !== target.scope || snapshot2.scopeId !== target.scopeId) {
-      throw journalUnsafe(journalId, agentId, turn, `records variable '${snapshot2.name}' outside its target scope`);
-    }
-  }
-}
-async function loadTurnJournal(deps, agentId, turn) {
-  const events = await readEvents(deps, agentId, turn);
-  return {
-    journal: buildJournalWrites(events, agentId, turn),
-    toolNames: toolNamesInTurn(events, turn)
-  };
-}
-async function assertJournalCoverage(deps, toolNames, journal, agentId, turn) {
-  const requested = [...new Set(toolNames)].filter(
-    (name2) => MEMORY_TOOL_SET.has(name2) || VARIABLE_TOOL_SET.has(name2)
-  );
-  const missing = requested.filter((name2) => !journal.tools.has(name2));
-  if (missing.length === 0) return;
-  const writer = await journalWriterAvailable(deps, agentId, turn);
-  if (!writer) {
-    throw new BodyRollbackError(
-      "body-state-unsafe",
-      `body rollback for session '${agentId}' turn ${turn} cannot roll back ${missing.join(", ")}: the host does not expose appendPluginRecord (write journal unavailable)`,
-      { detail: "write-journal-unavailable", stage: "prepare", sessionId: agentId, turn }
-    );
-  }
-  throw new BodyRollbackError(
-    "body-state-unsafe",
-    `body rollback for session '${agentId}' turn ${turn} cannot roll back ${missing.join(", ")}: the tool call has no write journal record`,
-    { detail: "write-journal-missing", stage: "prepare", sessionId: agentId, turn }
-  );
-}
-async function journalWriterAvailable(deps, agentId, turn) {
-  try {
-    const writer = deps.resolveJournalWriter === void 0 ? await resolveWriteJournalWriter() : await deps.resolveJournalWriter();
-    return writer !== void 0;
-  } catch (error) {
-    log(deps.logger, "warn", "dsh-soulmojito body rollback: write journal probe failed", {
-      sessionId: agentId,
-      turn,
-      error: errorMessage2(error)
-    });
-    return false;
-  }
-}
-function buildJournalDiagnostics(journal, logger, agentId, turn) {
-  const diagnostics = [];
-  if (journal.uncommitted.length > 0) {
-    diagnostics.push({
-      code: "journal-uncommitted-skipped",
-      message: `${journal.uncommitted.length} write journal group(s) have no after record and were treated as uncommitted: ${journal.uncommitted.join(", ")}`
-    });
-  }
-  if (journal.writes.some((write) => write.kind === "memory")) {
-    const message = "memory vectors are not restored by the rollback port (embedWrittenMemory is outside this seam); stale vectors are left for lazy re-embedding";
-    diagnostics.push({ code: "vector-restore-skipped", message });
-    log(logger, "warn", "dsh-soulmojito body rollback: memory vectors skipped", {
-      sessionId: agentId,
-      turn,
-      reason: "vector-restore-skipped"
-    });
-  }
-  return diagnostics;
-}
-async function rollbackTurnWritesImpl(deps, agentId, turn) {
-  requireNonEmptyString(agentId, "agentId");
-  requireNonNegativeInteger(turn, "turn");
-  const events = await readEvents(deps, agentId, turn);
-  const journal = buildJournalWrites(events, agentId, turn);
-  const failures = [];
-  let undone = 0;
-  const ordered = [...journal.writes].reverse();
-  for (const write of ordered) {
-    try {
-      const applied = await applyJournalWrites(deps, [write], "undo");
-      if (applied.applied > 0) undone += 1;
-    } catch (error) {
-      const failure = {
-        journalId: write.journalId,
-        kind: write.kind,
-        tool: write.tool,
-        code: error instanceof BodyRollbackError ? error.code : "unknown",
-        message: errorMessage2(error)
-      };
-      failures.push(failure);
-      log(deps.logger, "warn", "dsh-soulmojito body rollback: new-turn write undo failed", {
-        sessionId: agentId,
-        turn,
-        journalId: write.journalId,
-        kind: write.kind,
-        tool: write.tool,
-        error: failure.message
-      });
-    }
-  }
-  const result = {
-    sessionId: agentId,
-    turn,
-    undone,
-    skippedUncommitted: [...journal.uncommitted],
-    failures
-  };
-  log(deps.logger, "info", "dsh-soulmojito body rollback: rolled back new-turn writes", {
-    sessionId: agentId,
-    turn,
-    undone,
-    skippedUncommitted: result.skippedUncommitted.length,
-    failures: failures.length
-  });
-  return result;
-}
-function asJournalError(error, agentId, turn, compensation) {
-  const code = compensation.ok ? error instanceof BodyRollbackError ? error.code : "body-rollback-failed" : "body-rollback-partial";
-  return new BodyRollbackError(
-    code,
-    `body rollback for session '${agentId}' turn ${turn} failed to roll back the write journal: ${errorMessage2(error)}${compensation.note}`,
-    {
-      ...error instanceof BodyRollbackError && error.detail !== void 0 ? { detail: error.detail } : {},
-      stage: "journal-rollback",
-      sessionId: agentId,
-      turn,
-      ...error instanceof BodyRollbackError && error.journalId !== void 0 ? { journalId: error.journalId } : {},
-      compensated: compensation.ok,
-      cause: error
-    }
-  );
-}
-function journalUnsafe(journalId, agentId, turn, detail) {
-  return new BodyRollbackError(
-    "body-state-unsafe",
-    `body rollback for session '${agentId}' turn ${turn} refused: write journal '${journalId}' ${detail}`,
-    { detail: "write-journal-missing", stage: "prepare", sessionId: agentId, turn, journalId }
-  );
-}
-var MEMORY_TOOL_SET = new Set(MEMORY_WRITE_JOURNAL_TOOLS);
-var VARIABLE_TOOL_SET = new Set(VARIABLE_WRITE_JOURNAL_TOOLS);
 
 // packages/plugin/src/agent-tavern/body-rollback-receipts.ts
 function readBodyReceipts(chat, previousMessageId, floorIndex, agentId, turn) {
@@ -21446,6 +21820,461 @@ function jsonValuesEqual(left, right) {
   return false;
 }
 
+// packages/plugin/src/agent-tavern/body-rollback-journal.ts
+async function readEvents(deps, agentId, turn) {
+  let events;
+  try {
+    events = await deps.sessionEvents(agentId);
+  } catch (error) {
+    throw new BodyRollbackError(
+      "body-state-unsafe",
+      `body rollback cannot read the session log of '${agentId}': ${errorMessage2(error)}`,
+      { detail: "session-unreadable", stage: "prepare", sessionId: agentId, turn, cause: error }
+    );
+  }
+  if (events === void 0) {
+    throw new BodyRollbackError(
+      "body-state-unsafe",
+      `body rollback cannot read the session log of '${agentId}'`,
+      { detail: "session-unreadable", stage: "prepare", sessionId: agentId, turn }
+    );
+  }
+  return events;
+}
+function toolNamesInTurn(events, turn) {
+  const names = [];
+  let open2;
+  for (const event of events) {
+    if (!isRecord4(event)) continue;
+    const type = event["type"];
+    if (type === "turn/start") {
+      open2 = turnNumberOf(event["data"]);
+      continue;
+    }
+    if (type === "turn/end") {
+      open2 = void 0;
+      continue;
+    }
+    if (type !== "assistant/message") continue;
+    const data = isRecord4(event["data"]) ? event["data"] : void 0;
+    if (data === void 0) continue;
+    const eventTurn = typeof data["turn"] === "number" ? data["turn"] : open2;
+    if (eventTurn !== turn) continue;
+    const message = isRecord4(data["message"]) ? data["message"] : void 0;
+    const content = message?.["content"];
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      if (!isRecord4(block) || block["type"] !== "tool-call") continue;
+      const name2 = block["name"];
+      if (typeof name2 === "string" && name2 !== "") names.push(name2);
+    }
+  }
+  return names;
+}
+function turnNumberOf(data) {
+  if (!isRecord4(data)) return void 0;
+  const turn = data["turn"];
+  return typeof turn === "number" && Number.isSafeInteger(turn) && turn >= 0 ? turn : void 0;
+}
+function buildJournalWrites(events, agentId, turn) {
+  let entries;
+  try {
+    entries = readWriteJournal(events);
+  } catch (error) {
+    throw new BodyRollbackError(
+      "body-state-unsafe",
+      `body rollback cannot read the write journal of session '${agentId}' turn ${turn}: ${errorMessage2(error)}`,
+      { detail: "write-journal-missing", stage: "prepare", sessionId: agentId, turn, cause: error }
+    );
+  }
+  const groups = /* @__PURE__ */ new Map();
+  for (const entry of entries) {
+    if (entry.sessionId !== agentId || entry.turn !== turn) continue;
+    const group2 = groups.get(entry.journalId);
+    if (group2 === void 0) groups.set(entry.journalId, [entry]);
+    else group2.push(entry);
+  }
+  const writes = [];
+  const uncommitted = [];
+  const tools = /* @__PURE__ */ new Set();
+  for (const [journalId, group2] of groups) {
+    const kind = group2[0]?.kind;
+    if (kind === void 0) continue;
+    if (group2.some((entry) => entry.kind !== kind)) {
+      throw journalUnsafe(journalId, agentId, turn, "mixes memory and variable records");
+    }
+    for (const entry of group2) tools.add(entry.tool);
+    const before = group2.filter((entry) => entry.phase === "before");
+    const after = group2.filter((entry) => entry.phase === "after");
+    if (before.length > 1 || after.length > 1) {
+      throw journalUnsafe(journalId, agentId, turn, "has duplicate phase records");
+    }
+    if (after.length === 0) {
+      uncommitted.push(journalId);
+      continue;
+    }
+    const beforeEntry = before[0];
+    const afterEntry = after[0];
+    if (beforeEntry === void 0) {
+      throw journalUnsafe(journalId, agentId, turn, "has an after record without a before record");
+    }
+    if (beforeEntry.kind !== afterEntry.kind || beforeEntry.tool !== afterEntry.tool) {
+      throw journalUnsafe(journalId, agentId, turn, "has mismatched kind/tool phases");
+    }
+    writes.push(
+      beforeEntry.kind === "memory" ? memoryWriteOf(beforeEntry, afterEntry, journalId, agentId, turn) : variableWriteOf(beforeEntry, afterEntry, journalId, agentId, turn)
+    );
+  }
+  return { writes, uncommitted, tools };
+}
+function memoryWriteOf(beforeEntry, afterEntry, journalId, agentId, turn) {
+  if (!sameMemoryTarget(beforeEntry.target, afterEntry.target)) {
+    throw journalUnsafe(journalId, agentId, turn, "targets two different memories");
+  }
+  const before = requireMemoryBefore(beforeEntry, journalId, agentId, turn);
+  const after = requireMemoryAfter(afterEntry, journalId, agentId, turn);
+  assertMemoryRecordMatches(before, beforeEntry.target, journalId, agentId, turn);
+  assertMemoryRecordMatches(after, beforeEntry.target, journalId, agentId, turn);
+  if (beforeEntry.tool === "memory_write" && before !== null) {
+    throw journalUnsafe(journalId, agentId, turn, "memory_write must record a null before state");
+  }
+  if (beforeEntry.tool !== "memory_write" && before === null) {
+    throw journalUnsafe(journalId, agentId, turn, `memory_${beforeEntry.tool} requires a before record`);
+  }
+  if (beforeEntry.tool !== "memory_forget" && after === null) {
+    throw journalUnsafe(journalId, agentId, turn, `${beforeEntry.tool} requires an after record`);
+  }
+  return {
+    kind: "memory",
+    journalId,
+    tool: beforeEntry.tool,
+    target: beforeEntry.target,
+    before,
+    after
+  };
+}
+function variableWriteOf(beforeEntry, afterEntry, journalId, agentId, turn) {
+  if (beforeEntry.target.scope !== afterEntry.target.scope || beforeEntry.target.scopeId !== afterEntry.target.scopeId) {
+    throw journalUnsafe(journalId, agentId, turn, "targets two different variable scopes");
+  }
+  const before = requireSnapshotsBefore(beforeEntry, journalId, agentId, turn);
+  const after = requireSnapshotsAfter(afterEntry, journalId, agentId, turn);
+  assertSnapshotsMatch(before, beforeEntry.target, journalId, agentId, turn);
+  assertSnapshotsMatch(after, beforeEntry.target, journalId, agentId, turn);
+  if (beforeEntry.tool === "variable_delete" && after !== null) {
+    throw journalUnsafe(journalId, agentId, turn, "variable_delete must record a null after state");
+  }
+  if (beforeEntry.tool !== "variable_delete" && after === null) {
+    throw journalUnsafe(journalId, agentId, turn, `${beforeEntry.tool} requires an after snapshot list`);
+  }
+  return {
+    kind: "variable",
+    journalId,
+    tool: beforeEntry.tool,
+    target: beforeEntry.target,
+    before,
+    after
+  };
+}
+function sameMemoryTarget(left, right) {
+  return left.id === right.id && left.scope === right.scope && left.scopeId === right.scopeId;
+}
+function requireMemoryBefore(entry, journalId, agentId, turn) {
+  if (!("before" in entry) || entry.before === void 0) {
+    throw journalUnsafe(journalId, agentId, turn, "has a before record without a before state");
+  }
+  return entry.before;
+}
+function requireMemoryAfter(entry, journalId, agentId, turn) {
+  if (!("after" in entry) || entry.after === void 0) {
+    throw journalUnsafe(journalId, agentId, turn, "has an after record without an after state");
+  }
+  return entry.after;
+}
+function requireSnapshotsBefore(entry, journalId, agentId, turn) {
+  if (!("before" in entry) || entry.before === void 0) {
+    throw journalUnsafe(journalId, agentId, turn, "has a before record without a before state");
+  }
+  return entry.before;
+}
+function requireSnapshotsAfter(entry, journalId, agentId, turn) {
+  if (!("after" in entry) || entry.after === void 0) {
+    throw journalUnsafe(journalId, agentId, turn, "has an after record without an after state");
+  }
+  return entry.after;
+}
+function assertMemoryRecordMatches(record, target, journalId, agentId, turn) {
+  if (record === null) return;
+  if (record.id !== target.id || record.scope !== target.scope || record.scopeId !== target.scopeId) {
+    throw journalUnsafe(journalId, agentId, turn, `records memory '${record.id}' outside its target`);
+  }
+}
+function assertSnapshotsMatch(snapshots, target, journalId, agentId, turn) {
+  if (snapshots === null) return;
+  for (const snapshot2 of snapshots) {
+    if (snapshot2.scope !== target.scope || snapshot2.scopeId !== target.scopeId) {
+      throw journalUnsafe(journalId, agentId, turn, `records variable '${snapshot2.name}' outside its target scope`);
+    }
+  }
+}
+async function loadTurnJournal(deps, agentId, turn) {
+  const events = await readEvents(deps, agentId, turn);
+  return {
+    journal: buildJournalWrites(events, agentId, turn),
+    toolNames: toolNamesInTurn(events, turn)
+  };
+}
+async function assertJournalCoverage(deps, toolNames, journal, agentId, turn) {
+  const requested = [...new Set(toolNames)].filter(
+    (name2) => MEMORY_TOOL_SET.has(name2) || VARIABLE_TOOL_SET.has(name2)
+  );
+  const missing = requested.filter((name2) => !journal.tools.has(name2));
+  if (missing.length === 0) return;
+  const writer = await journalWriterAvailable(deps, agentId, turn);
+  if (!writer) {
+    throw new BodyRollbackError(
+      "body-state-unsafe",
+      `body rollback for session '${agentId}' turn ${turn} cannot roll back ${missing.join(", ")}: the host does not expose appendPluginRecord (write journal unavailable)`,
+      { detail: "write-journal-unavailable", stage: "prepare", sessionId: agentId, turn }
+    );
+  }
+  throw new BodyRollbackError(
+    "body-state-unsafe",
+    `body rollback for session '${agentId}' turn ${turn} cannot roll back ${missing.join(", ")}: the tool call has no write journal record`,
+    { detail: "write-journal-missing", stage: "prepare", sessionId: agentId, turn }
+  );
+}
+async function journalWriterAvailable(deps, agentId, turn) {
+  try {
+    const writer = deps.resolveJournalWriter === void 0 ? await resolveWriteJournalWriter() : await deps.resolveJournalWriter();
+    return writer !== void 0;
+  } catch (error) {
+    log(deps.logger, "warn", "dsh-soulmojito body rollback: write journal probe failed", {
+      sessionId: agentId,
+      turn,
+      error: errorMessage2(error)
+    });
+    return false;
+  }
+}
+function buildJournalDiagnostics(journal, logger, agentId, turn, memoryVectorsInjected) {
+  const diagnostics = [];
+  if (journal.uncommitted.length > 0) {
+    diagnostics.push({
+      code: "journal-uncommitted-skipped",
+      message: `${journal.uncommitted.length} write journal group(s) have no after record and were treated as uncommitted: ${journal.uncommitted.join(", ")}`
+    });
+  }
+  if (!memoryVectorsInjected && journal.writes.some((write) => write.kind === "memory")) {
+    const message = "memory vectors are not restored by the rollback port (memoryVectors is not injected); stale vectors are left for lazy re-embedding";
+    diagnostics.push({ code: "vector-restore-skipped", message });
+    log(logger, "warn", "dsh-soulmojito body rollback: memory vectors skipped", {
+      sessionId: agentId,
+      turn,
+      reason: "vector-restore-skipped"
+    });
+  }
+  return diagnostics;
+}
+async function rollbackTurnWritesImpl(deps, agentId, turn) {
+  requireNonEmptyString(agentId, "agentId");
+  requireNonNegativeInteger(turn, "turn");
+  const events = await readEvents(deps, agentId, turn);
+  const journal = buildJournalWrites(events, agentId, turn);
+  const failures = [];
+  const diagnostics = [];
+  let undone = 0;
+  const ordered = [...journal.writes].reverse();
+  for (const write of ordered) {
+    try {
+      const applied = await applyJournalWrites(deps, [write], "undo");
+      diagnostics.push(...applied.diagnostics);
+      if (applied.applied > 0) undone += 1;
+    } catch (error) {
+      const failure = {
+        journalId: write.journalId,
+        kind: write.kind,
+        tool: write.tool,
+        code: error instanceof BodyRollbackError ? error.code : "unknown",
+        message: errorMessage2(error)
+      };
+      failures.push(failure);
+      log(deps.logger, "warn", "dsh-soulmojito body rollback: new-turn write undo failed", {
+        sessionId: agentId,
+        turn,
+        journalId: write.journalId,
+        kind: write.kind,
+        tool: write.tool,
+        error: failure.message
+      });
+    }
+  }
+  const receiptsUndone = await rollbackTurnSettleReceipts(deps, agentId, turn, failures);
+  const result = {
+    sessionId: agentId,
+    turn,
+    undone,
+    receiptsUndone,
+    skippedUncommitted: [...journal.uncommitted],
+    failures,
+    diagnostics
+  };
+  log(deps.logger, "info", "dsh-soulmojito body rollback: rolled back new-turn writes", {
+    sessionId: agentId,
+    turn,
+    undone,
+    receiptsUndone,
+    skippedUncommitted: result.skippedUncommitted.length,
+    failures: failures.length,
+    vectorSyncFailures: diagnostics.length
+  });
+  return result;
+}
+async function rollbackTurnSettleReceipts(deps, agentId, turn, failures) {
+  let binding;
+  try {
+    binding = await readAgentTavernBinding(deps.store, agentId);
+  } catch (error) {
+    recordSettleFailure(deps, failures, agentId, turn, [], settleRollbackError(error, agentId, turn));
+    return 0;
+  }
+  let snapshot2;
+  try {
+    snapshot2 = await deps.store.getChatSnapshot(binding.character, binding.chatId);
+  } catch (error) {
+    recordSettleFailure(deps, failures, agentId, turn, [], error instanceof BodyRollbackError ? error : new BodyRollbackError(
+      "body-state-unsafe",
+      `body rollback for session '${agentId}' turn ${turn} cannot read chat '${binding.chatId}': ${errorMessage2(error)}`,
+      { detail: "chat-unreadable", stage: "mvu-undo", sessionId: agentId, turn, cause: error }
+    ));
+    return 0;
+  }
+  if (snapshot2 === void 0) {
+    recordSettleFailure(deps, failures, agentId, turn, [], new BodyRollbackError(
+      "body-state-unsafe",
+      `body rollback for session '${agentId}' turn ${turn} cannot read the chat that owns its settle receipts`,
+      { detail: "chat-unreadable", stage: "mvu-undo", sessionId: agentId, turn }
+    ));
+    return 0;
+  }
+  const chat = snapshot2.chat;
+  const receipts = settleReceiptsForTurn(chat, turn);
+  if (receipts.length === 0) return 0;
+  let undone;
+  try {
+    undone = (await applyReceiptRollback(deps, chat, receipts, "undo", binding)).settleReceipts;
+  } catch (error) {
+    recordSettleFailure(deps, failures, agentId, turn, receipts, settleRollbackError(error, agentId, turn));
+    return 0;
+  }
+  if (undone === 0) return 0;
+  try {
+    await deps.store.saveChat(binding.character, binding.chatId, chat, snapshot2.revision);
+  } catch (error) {
+    const compensation = await compensateSettleReceipts(deps, chat, receipts, undone, binding);
+    const code = !compensation.ok ? "body-rollback-partial" : error instanceof ChatRevisionConflictError ? "body-rollback-conflict" : "body-rollback-save-failed";
+    recordSettleFailure(deps, failures, agentId, turn, receipts, new BodyRollbackError(
+      code,
+      `body rollback for session '${agentId}' turn ${turn} could not save the chat after undoing its settle receipts: ${errorMessage2(error)}${compensation.note}`,
+      { stage: "chat-save", sessionId: agentId, turn, cause: error }
+    ));
+    return 0;
+  }
+  log(deps.logger, "info", "dsh-soulmojito body rollback: undid new-turn settle receipts", {
+    sessionId: agentId,
+    turn,
+    receipts: undone,
+    floors: receipts.map((receipt) => receipt.turnKey)
+  });
+  return undone;
+}
+async function compensateSettleReceipts(deps, chat, receipts, undone, binding) {
+  try {
+    const applied = await applyReceiptRollback(deps, chat, receipts, "redo", binding);
+    if (applied.settleReceipts === undone) {
+      return { ok: true, note: "; the flat-store undo was replayed because the chat could not be saved" };
+    }
+    return {
+      ok: false,
+      note: `; the flat-store undo was only replayed for ${applied.settleReceipts} of ${undone} receipt(s)`
+    };
+  } catch (error) {
+    log(deps.logger, "error", "dsh-soulmojito body rollback: settle compensation failed", {
+      sessionId: binding.chatId,
+      error: errorMessage2(error)
+    });
+    return { ok: false, note: `; the flat-store undo could not be replayed: ${errorMessage2(error)}` };
+  }
+}
+function settleReceiptsForTurn(chat, turn) {
+  return readMvuReceipts(chat).filter((receipt) => {
+    if (receipt.undoneAt !== void 0) return false;
+    if (!/^\d+$/.test(receipt.turnKey)) return false;
+    const floor = Number(receipt.turnKey);
+    if (!Number.isSafeInteger(floor)) return false;
+    if (floor === chat.messages.length) return true;
+    return messageTurnNumber(chat.messages[floor]) === turn;
+  });
+}
+function messageTurnNumber(message) {
+  const extra = message?.extra;
+  const tavern = isRecord4(extra) ? extra["agentTavern"] : void 0;
+  if (!isRecord4(tavern)) return void 0;
+  const turn = tavern["turn"];
+  return typeof turn === "number" && Number.isSafeInteger(turn) ? turn : void 0;
+}
+function settleRollbackError(error, agentId, turn) {
+  if (error instanceof BodyRollbackError) return error;
+  return new BodyRollbackError(
+    error instanceof ChatRevisionConflictError ? "body-rollback-conflict" : "body-rollback-failed",
+    `body rollback for session '${agentId}' turn ${turn} cannot undo its settle receipts: ${errorMessage2(error)}`,
+    { stage: "mvu-undo", sessionId: agentId, turn, cause: error }
+  );
+}
+function recordSettleFailure(deps, failures, agentId, turn, receipts, error) {
+  const floors = receipts.length === 0 ? "none located" : [...new Set(receipts.map((receipt) => receipt.turnKey))].join(", ");
+  const failure = {
+    journalId: `settle-receipts:${receipts.length === 0 ? String(turn) : floors}`,
+    kind: "variable",
+    tool: "tavern_variable_settle",
+    code: error.code,
+    message: `new-turn settle receipt rollback for session '${agentId}' turn ${turn} failed at floor(s) ${floors}: ${error.message}`
+  };
+  failures.push(failure);
+  log(deps.logger, "warn", "dsh-soulmojito body rollback: new-turn settle receipt undo failed", {
+    sessionId: agentId,
+    turn,
+    receiptFloors: floors,
+    code: failure.code,
+    error: failure.message
+  });
+}
+function asJournalError(error, agentId, turn, compensation) {
+  const code = compensation.ok ? error instanceof BodyRollbackError ? error.code : "body-rollback-failed" : "body-rollback-partial";
+  return new BodyRollbackError(
+    code,
+    `body rollback for session '${agentId}' turn ${turn} failed to roll back the write journal: ${errorMessage2(error)}${compensation.note}`,
+    {
+      ...error instanceof BodyRollbackError && error.detail !== void 0 ? { detail: error.detail } : {},
+      stage: "journal-rollback",
+      sessionId: agentId,
+      turn,
+      ...error instanceof BodyRollbackError && error.journalId !== void 0 ? { journalId: error.journalId } : {},
+      compensated: compensation.ok,
+      cause: error
+    }
+  );
+}
+function journalUnsafe(journalId, agentId, turn, detail) {
+  return new BodyRollbackError(
+    "body-state-unsafe",
+    `body rollback for session '${agentId}' turn ${turn} refused: write journal '${journalId}' ${detail}`,
+    { detail: "write-journal-missing", stage: "prepare", sessionId: agentId, turn, journalId }
+  );
+}
+var MEMORY_TOOL_SET = new Set(MEMORY_WRITE_JOURNAL_TOOLS);
+var VARIABLE_TOOL_SET = new Set(VARIABLE_WRITE_JOURNAL_TOOLS);
+
 // packages/plugin/src/agent-tavern/body-rollback.ts
 function createBodyWriteRollbackPort(deps) {
   return {
@@ -21462,7 +22291,7 @@ async function prepareBodyRollback(deps, agentId, turn, previousMessageId) {
   requireNonEmptyString(agentId, "agentId");
   requireNonNegativeInteger(turn, "turn");
   requireNonEmptyString(previousMessageId, "previousMessageId");
-  const binding = await readBinding(deps.store, agentId);
+  const binding = await readAgentTavernBinding(deps.store, agentId);
   await readCard(deps.store, binding.character, agentId, turn);
   const snapshot2 = await readChatSnapshot(deps.store, binding, agentId, turn);
   const chat = snapshot2.chat;
@@ -21480,13 +22309,21 @@ async function prepareBodyRollback(deps, agentId, turn, previousMessageId) {
   const receipts = readBodyReceipts(chat, previousMessageId, floorIndex, agentId, turn);
   assertReceiptCoverage(bodyText, toolNames, receipts, previousMessageId, floorIndex, agentId, turn);
   await assertJournalCoverage(deps, toolNames, journal, agentId, turn);
-  const diagnostics = buildJournalDiagnostics(journal, deps.logger, agentId, turn);
+  const diagnostics = buildJournalDiagnostics(
+    journal,
+    deps.logger,
+    agentId,
+    turn,
+    deps.memoryVectors !== void 0
+  );
+  let appliedJournal;
   try {
-    await applyJournalWrites(deps, journal.writes, "undo");
+    appliedJournal = await applyJournalWrites(deps, journal.writes, "undo");
   } catch (error) {
     const compensation = await compensateJournal(deps, journal.writes, "replay");
     throw asJournalError(error, agentId, turn, compensation);
   }
+  diagnostics.push(...appliedJournal.diagnostics);
   let rolledBack;
   try {
     rolledBack = await applyReceiptRollback(deps, chat, receipts, "undo", binding);
@@ -21540,8 +22377,9 @@ async function restoreBodyRollback(deps, plan) {
   requirePlan(plan);
   const snapshot2 = await readPlanChatSnapshot(deps.store, plan);
   const chat = snapshot2.chat;
+  let appliedJournal;
   try {
-    await applyJournalWrites(deps, plan.journal, "replay");
+    appliedJournal = await applyJournalWrites(deps, plan.journal, "replay");
   } catch (error) {
     const compensation = await compensateJournal(deps, plan.journal, "undo");
     throw restoreError(error, "journal-replay", plan, compensation);
@@ -21567,7 +22405,8 @@ async function restoreBodyRollback(deps, plan) {
     previousMessageId: plan.previousMessageId,
     journalWrites: plan.journal.length,
     bodyReceipts: redone.bodyReceipts,
-    settleReceipts: redone.settleReceipts
+    settleReceipts: redone.settleReceipts,
+    vectorSyncFailures: appliedJournal.diagnostics.length
   });
 }
 function restoreError(error, stage, plan, compensation) {
@@ -21608,44 +22447,6 @@ function receiptUndoError(error, agentId, turn, compensation) {
       cause: error
     }
   );
-}
-async function readBinding(store5, agentId) {
-  let state;
-  try {
-    state = await store5.getState();
-  } catch (error) {
-    throw new BodyRollbackError(
-      "body-state-unsafe",
-      `body rollback cannot read tavern state for session '${agentId}': ${errorMessage2(error)}`,
-      { detail: "binding-unavailable", stage: "prepare", sessionId: agentId, cause: error }
-    );
-  }
-  const bindings2 = state.sessionBindings;
-  const binding = isRecord4(bindings2) ? bindings2[agentId] : void 0;
-  if (!isRecord4(binding) || binding["architecture"] !== "agent-tavern") {
-    throw new BodyRollbackError(
-      "body-state-unsafe",
-      `body rollback requires an agent-tavern binding for session '${agentId}'`,
-      { detail: "binding-unavailable", stage: "prepare", sessionId: agentId }
-    );
-  }
-  if (binding["group"] === true) {
-    throw new BodyRollbackError(
-      "body-state-unsafe",
-      `body rollback does not apply to group session '${agentId}'`,
-      { detail: "binding-unavailable", stage: "prepare", sessionId: agentId }
-    );
-  }
-  const character = binding["character"];
-  const chatId = binding["chatId"];
-  if (typeof character !== "string" || character === "" || typeof chatId !== "string" || chatId === "") {
-    throw new BodyRollbackError(
-      "body-state-unsafe",
-      `body rollback binding for session '${agentId}' has no character/chatId`,
-      { detail: "binding-unavailable", stage: "prepare", sessionId: agentId }
-    );
-  }
-  return { character, chatId };
 }
 async function readCard(store5, character, agentId, turn) {
   let found;
@@ -22245,6 +23046,9 @@ function assertRecordWriter(deps) {
 function appendBodyEvent(deps, data) {
   return requireRecordWriter(deps)(deps.session, BODY_EVENT_TYPE, data);
 }
+function appendBodyStartEvent(deps, data) {
+  return requireRecordWriter(deps)(deps.session, BODY_EVENT_TYPE, data);
+}
 function appendOpFinish(deps, opId, result, anchorId, reason) {
   appendBodyEvent(deps, {
     op: "op-finish",
@@ -22281,6 +23085,154 @@ function failureFor(error, context, op) {
   if (isBodyFailure(error) && error.detail !== void 0) failure.detail = error.detail;
   if (op !== void 0) failure.op = op;
   return failure;
+}
+
+// packages/plugin/src/agent-tavern/body-runtime-plan.ts
+var PLAN_FIELD = "rollbackPlan";
+function rollbackPlanOfEvent(value, seq) {
+  if (!isRecord6(value)) throw planError(seq, "", "an object");
+  return {
+    sessionId: requirePlanString(value["sessionId"], seq, "sessionId"),
+    turn: requirePlanInteger(value["turn"], seq, "turn"),
+    previousMessageId: requirePlanString(value["previousMessageId"], seq, "previousMessageId"),
+    binding: bindingOf(value["binding"], seq),
+    floorIndex: requirePlanInteger(value["floorIndex"], seq, "floorIndex"),
+    bodyText: requirePlanText(value["bodyText"], seq, "bodyText"),
+    chatRevision: requirePlanString(value["chatRevision"], seq, "chatRevision"),
+    preparedRevision: requirePlanString(value["preparedRevision"], seq, "preparedRevision"),
+    journal: journalOf(value["journal"], seq),
+    mvuReceipts: receiptsOf(value["mvuReceipts"], seq),
+    diagnostics: diagnosticsOf(value["diagnostics"], seq),
+    preparedAt: requirePlanString(value["preparedAt"], seq, "preparedAt")
+  };
+}
+function durableRollbackPlan(plan) {
+  requireJsonValue(plan, PLAN_FIELD, /* @__PURE__ */ new Set());
+  return plan;
+}
+function journalOf(value, seq) {
+  if (!Array.isArray(value)) throw planError(seq, "journal", "an array of journal writes");
+  const writes = [];
+  for (const [index, entry] of value.entries()) {
+    writes.push(journalWriteOf(entry, seq, `journal[${index}]`));
+  }
+  return writes;
+}
+function journalWriteOf(value, seq, path12) {
+  if (!isRecord6(value)) throw planError(seq, path12, "a journal write object");
+  const kind = value["kind"];
+  if (kind !== "memory" && kind !== "variable") {
+    throw planError(seq, `${path12}.kind`, "'memory' or 'variable'");
+  }
+  requirePlanString(value["journalId"], seq, `${path12}.journalId`);
+  requirePlanString(value["tool"], seq, `${path12}.tool`);
+  if (!isRecord6(value["target"])) throw planError(seq, `${path12}.target`, "an object");
+  if (!("before" in value) || !("after" in value)) {
+    throw planError(seq, path12, "a before/after journal pair");
+  }
+  return value;
+}
+function receiptsOf(value, seq) {
+  if (!Array.isArray(value)) throw planError(seq, "mvuReceipts", "an array of MVU receipts");
+  const receipts = [];
+  for (const [index, entry] of value.entries()) {
+    receipts.push(receiptOf(entry, seq, `mvuReceipts[${index}]`));
+  }
+  return receipts;
+}
+function receiptOf(value, seq, path12) {
+  if (!isRecord6(value)) throw planError(seq, path12, "an MVU receipt object");
+  requirePlanString(value["at"], seq, `${path12}.at`);
+  requirePlanString(value["turnKey"], seq, `${path12}.turnKey`);
+  const status2 = value["status"];
+  if (status2 !== "updated" && status2 !== "unchanged" && status2 !== "failed") {
+    throw planError(seq, `${path12}.status`, "'updated', 'unchanged' or 'failed'");
+  }
+  if (!Array.isArray(value["changes"])) throw planError(seq, `${path12}.changes`, "an array");
+  const failures = value["failures"];
+  if (!Array.isArray(failures) || failures.some((item) => typeof item !== "string")) {
+    throw planError(seq, `${path12}.failures`, "an array of strings");
+  }
+  const undoneAt = value["undoneAt"];
+  if (undoneAt !== void 0 && typeof undoneAt !== "string") {
+    throw planError(seq, `${path12}.undoneAt`, "a string when present");
+  }
+  return value;
+}
+function diagnosticsOf(value, seq) {
+  if (!Array.isArray(value)) throw planError(seq, "diagnostics", "an array of diagnostics");
+  const diagnostics = [];
+  for (const [index, entry] of value.entries()) {
+    const path12 = `diagnostics[${index}]`;
+    if (!isRecord6(entry)) throw planError(seq, path12, "a diagnostic object");
+    requirePlanString(entry["code"], seq, `${path12}.code`);
+    requirePlanText(entry["message"], seq, `${path12}.message`);
+    const memoryId = entry["memoryId"];
+    if (memoryId !== void 0 && typeof memoryId !== "string") {
+      throw planError(seq, `${path12}.memoryId`, "a string when present");
+    }
+    diagnostics.push(entry);
+  }
+  return diagnostics;
+}
+function bindingOf(value, seq) {
+  if (!isRecord6(value)) throw planError(seq, "binding", "an object with character and chatId");
+  return {
+    character: requirePlanString(value["character"], seq, "binding.character"),
+    chatId: requirePlanString(value["chatId"], seq, "binding.chatId")
+  };
+}
+function requirePlanString(value, seq, field) {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw planError(seq, field, "a non-empty string");
+  }
+  return value;
+}
+function requirePlanText(value, seq, field) {
+  if (typeof value !== "string") throw planError(seq, field, "a string");
+  return value;
+}
+function requirePlanInteger(value, seq, field) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw planError(seq, field, "a non-negative safe integer");
+  }
+  return value;
+}
+function planError(seq, field, expectation) {
+  const path12 = field === "" ? PLAN_FIELD : `${PLAN_FIELD}.${field}`;
+  return bodyRuntimeError("invalid-event", `body event at seq ${seq} requires ${path12} to be ${expectation}`);
+}
+function requireJsonValue(value, path12, ancestors) {
+  if (value === null) return;
+  if (typeof value === "string" || typeof value === "boolean") return;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw notSerializable(path12, "the plan carries a non-finite number");
+    return;
+  }
+  if (typeof value !== "object") throw notSerializable(path12, `the plan carries a ${typeof value}`);
+  if (ancestors.has(value)) throw notSerializable(path12, "the plan graph is cyclic");
+  if (Array.isArray(value)) {
+    ancestors.add(value);
+    for (const [index, item] of value.entries()) requireJsonValue(item, `${path12}[${index}]`, ancestors);
+    ancestors.delete(value);
+    return;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw notSerializable(path12, "the plan carries a class instance");
+  }
+  ancestors.add(value);
+  for (const [key, item] of Object.entries(value)) requireJsonValue(item, `${path12}.${key}`, ancestors);
+  ancestors.delete(value);
+}
+function notSerializable(path12, detail) {
+  return bodyRuntimeError(
+    "body-state-unsafe",
+    `body regenerate refused: the prepared write rollback plan is not JSON-serializable at ${path12}: ${detail}`
+  );
+}
+function isRecord6(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 // packages/plugin/src/agent-tavern/body-runtime-session.ts
@@ -22476,12 +23428,16 @@ function pendingEventOf(event) {
     if (event.data.kind !== "regenerate") {
       throw bodyRuntimeError("invalid-event", `body op-start at seq ${event.seq} has unsupported kind '${String(event.data.kind)}'`);
     }
+    const rollbackPlan = event.data.rollbackPlan;
     return {
       kind: "start",
       opId: pendingNonEmptyString(event.data.opId, event.seq, "opId"),
       groupId: pendingNonEmptyString(event.data.groupId, event.seq, "groupId"),
       previousAnchorId: pendingNonEmptyString(event.data.previousAnchorId, event.seq, "previousAnchorId"),
-      previousIndex: pendingInteger(event.data.previousIndex, event.seq, "previousIndex")
+      previousIndex: pendingInteger(event.data.previousIndex, event.seq, "previousIndex"),
+      // A missing plan is a legacy `op-start`; a present plan is validated in
+      // full so recovery never restores a partially accepted payload.
+      ...rollbackPlan === void 0 ? {} : { rollbackPlan: rollbackPlanOfEvent(rollbackPlan, event.seq) }
     };
   }
   if (op === "op-finish") {
@@ -23312,13 +24268,17 @@ async function startRegenerate(deps, request) {
     };
     let opStarted = false;
     try {
-      const startEvent = appendBodyEvent(deps, {
+      const startEvent = appendBodyStartEvent(deps, {
         op: "op-start",
         opId,
         groupId: request.groupId,
         kind: "regenerate",
         previousAnchorId: request.expectedAnchorId,
-        previousIndex
+        previousIndex,
+        // Proposal 0022 §10.4: the prepared plan is durable, so a restart can
+        // replay it without this process's `pendingByAgent` entry. The write
+        // check refuses anything JSONL cannot keep before the record is written.
+        ...rollbackPlan === void 0 ? {} : { rollbackPlan: durableRollbackPlan(rollbackPlan) }
       });
       opStarted = true;
       active.startSeq = eventSeqOf(startEvent) ?? nextEventSeq(events);
@@ -23464,7 +24424,8 @@ function foldPendingOps(events) {
         previousAnchorId: data.previousAnchorId,
         previousIndex: data.previousIndex,
         startSeq: event.seq,
-        triggerMessageId: triggerMessageIdFor(data.opId)
+        triggerMessageId: triggerMessageIdFor(data.opId),
+        ...data.rollbackPlan === void 0 ? {} : { rollbackPlan: data.rollbackPlan }
       });
       continue;
     }
@@ -23493,7 +24454,7 @@ function errorLog(ctx, message, fields) {
   }
 }
 function failureCodeOf(error) {
-  if (!isRecord6(error)) return void 0;
+  if (!isRecord7(error)) return void 0;
   const code = error["code"];
   return typeof code === "string" && code !== "" ? code : void 0;
 }
@@ -23506,7 +24467,7 @@ function nonEmptyString(value) {
 function agentIdOf(agent) {
   return nonEmptyString(agent.id) ?? nonEmptyString(agent.session.id);
 }
-function isRecord6(value) {
+function isRecord7(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isSeq(value) {
@@ -23520,11 +24481,11 @@ function wiringEvents(session) {
   if (values === void 0) return void 0;
   const events = [];
   for (const value of values) {
-    if (!isRecord6(value)) return void 0;
+    if (!isRecord7(value)) return void 0;
     const type = value["type"];
     const seq = value["seq"];
     const data = value["data"];
-    if (typeof type !== "string" || !isSeq(seq) || !isRecord6(data)) return void 0;
+    if (typeof type !== "string" || !isSeq(seq) || !isRecord7(data)) return void 0;
     events.push({ type, seq, data });
   }
   events.sort((left, right) => left.seq - right.seq);
@@ -23536,7 +24497,7 @@ function eventAt(events, seq) {
 function messageOf3(event) {
   if (event.type === "user/message") return event.data;
   const message = event.data["message"];
-  return isRecord6(message) ? message : void 0;
+  return isRecord7(message) ? message : void 0;
 }
 function messageIdOf2(event) {
   const message = messageOf3(event);
@@ -23551,7 +24512,7 @@ function hasToolCall2(message) {
 }
 function surfaceNodes(session) {
   const surface = session.surface;
-  if (!isRecord6(surface)) return void 0;
+  if (!isRecord7(surface)) return void 0;
   const nodes = surface["nodes"];
   if (!Array.isArray(nodes)) return void 0;
   const parsed = [];
@@ -23639,7 +24600,7 @@ function inspectAnchorInEvents(events, surface, anchorMessageId) {
   return { onSurface: true, last: true };
 }
 function bodyAgentOf(value) {
-  if (!isRecord6(value)) return void 0;
+  if (!isRecord7(value)) return void 0;
   const session = value["session"];
   if (!isBodySession(session)) return void 0;
   if (typeof value["followup"] !== "function") return void 0;
@@ -23676,8 +24637,8 @@ function listLiveAgents(ctx) {
   return agentsOut;
 }
 async function resolveBodyBinding(ctx, sessionId) {
-  const bindingOf = ctx.bindingOf;
-  if (typeof bindingOf !== "function") {
+  const bindingOf2 = ctx.bindingOf;
+  if (typeof bindingOf2 !== "function") {
     warn2(ctx, "dsh-soulmojito body: no binding resolver is wired; body operations disabled", {
       reason: "architecture-mismatch",
       sessionId
@@ -23685,7 +24646,7 @@ async function resolveBodyBinding(ctx, sessionId) {
     return void 0;
   }
   try {
-    return await bindingOf(sessionId);
+    return await bindingOf2(sessionId);
   } catch (error) {
     warn2(ctx, "dsh-soulmojito body: binding lookup failed", { sessionId, error: errorMessage4(error) });
     return void 0;
@@ -23695,17 +24656,17 @@ function bodyBindingEligible(binding) {
   return binding !== void 0 && binding.architecture === "agent-tavern" && binding.group !== true;
 }
 function isBodySession(value) {
-  if (!isRecord6(value)) return false;
+  if (!isRecord7(value)) return false;
   return typeof value["append"] === "function";
 }
 function contentOf2(message) {
   const content = message["content"];
   if (!Array.isArray(content)) return [];
-  return content.filter((block) => isRecord6(block));
+  return content.filter((block) => isRecord7(block));
 }
 function sourceOf2(message) {
   const source = message["source"];
-  return isRecord6(source) ? source : void 0;
+  return isRecord7(source) ? source : void 0;
 }
 function foldBodyLedgerFromEvents(events, groupId) {
   const last = events[events.length - 1];
@@ -23739,11 +24700,11 @@ function bodyHistoricalMvuStateOf(character, chat) {
     return true;
   }
   const metadata = chat.header.chat_metadata;
-  const variables2 = isRecord6(metadata["variables"]) ? metadata["variables"] : void 0;
+  const variables2 = isRecord7(metadata["variables"]) ? metadata["variables"] : void 0;
   if (variables2 !== void 0 && Object.prototype.hasOwnProperty.call(variables2, "stat_data")) {
     return true;
   }
-  const mvu = isRecord6(metadata["mvu"]) ? metadata["mvu"] : void 0;
+  const mvu = isRecord7(metadata["mvu"]) ? metadata["mvu"] : void 0;
   return mvu !== void 0 && Array.isArray(mvu["receipts"]);
 }
 function bodyMutationSafetyOf(action, character, chat) {
@@ -23878,12 +24839,12 @@ function bodyRejectStatus(code) {
   }
 }
 function failureCodeOf2(error) {
-  if (!isRecord6(error)) return void 0;
+  if (!isRecord7(error)) return void 0;
   const code = error["code"];
   return typeof code === "string" && code !== "" ? code : void 0;
 }
 function failureDetailOf(error) {
-  if (!isRecord6(error)) return void 0;
+  if (!isRecord7(error)) return void 0;
   const detail = error["detail"];
   return typeof detail === "string" && detail !== "" ? detail : void 0;
 }
@@ -24134,14 +25095,14 @@ function turnOfUserMessage2(events, messageId) {
 }
 
 // packages/plugin/src/agent-tavern/body-wiring.ts
-function bodyWiringContext(host, bindingOf) {
+function bodyWiringContext(host, bindingOf2) {
   return {
     ...host.logger === void 0 ? {} : { logger: host.logger },
     ...host.sessions === void 0 ? {} : { sessions: host.sessions },
     ...host.agents === void 0 ? {} : { agents: host.agents },
     effect: (callback, label) => host.effect(callback, label),
     on: (event, listener) => host.on?.(event, listener),
-    bindingOf
+    bindingOf: bindingOf2
   };
 }
 var recordSeamWarningEmitted = false;
@@ -24179,6 +25140,7 @@ async function createBodyDeps(ctx, agent) {
     store: lazyRollbackStore(),
     memoryStore: lazyRollbackMemoryStore(),
     variableStore: lazyRollbackVariableStore(),
+    memoryVectors: lazyRollbackMemoryVectors(),
     sessionEvents: () => wiringEvents(agent.session),
     ...ctx.logger === void 0 ? {} : { logger: ctx.logger }
   });
@@ -24213,6 +25175,30 @@ function lazyRollbackVariableStore() {
     get: async (scope, scopeId, name2) => (await variables()).get(scope, scopeId, name2),
     set: async (scope, scopeId, name2, value, expectedRevision) => (await variables()).set(scope, scopeId, name2, value, expectedRevision),
     delete: async (scope, scopeId, name2, expectedRevision) => (await variables()).delete(scope, scopeId, name2, expectedRevision)
+  };
+}
+function lazyRollbackMemoryVectors() {
+  return {
+    sync: async (record) => {
+      const config = await memoryEmbeddingConfig();
+      if (config === void 0) return;
+      const vectorStore = await memoryVectorStore();
+      if (record.deletedAt !== void 0) {
+        await vectorStore.delete(record.id, record.scope, record.scopeId);
+        return;
+      }
+      const embedded = await embedMemoryRecord({
+        root: tavernDataRoot(),
+        config,
+        vectorStore,
+        record
+      });
+      if (!embedded) {
+        const status2 = await readEmbedStatus(tavernDataRoot());
+        const reason = embedBreakerOpen(status2) ? `embedding breaker is open${status2.lastError === void 0 ? "" : `: ${status2.lastError}`}` : "embedMemoryRecord returned false (empty vector or embedding request failed)";
+        throw new Error(`memory vector sync failed for memory '${record.id}': ${reason}`);
+      }
+    }
   };
 }
 function registerBodyProjection(ctx) {
@@ -24278,7 +25264,7 @@ function registerBodyTurnStopping(ctx) {
   return dispose;
 }
 async function handleBodyTurnStopping(ctx, payload) {
-  const record = isRecord7(payload) ? payload : void 0;
+  const record = isRecord8(payload) ? payload : void 0;
   const payloadAgent = bodyAgentOf(record?.agent);
   const payloadAgentId = nonEmptyString2(record?.agentId);
   const agentId = payloadAgent === void 0 ? payloadAgentId : agentIdOf(payloadAgent);
@@ -24343,7 +25329,7 @@ function warnRecordSeamOnce(ctx, message, fields) {
   recordSeamWarningEmitted = true;
   warn2(ctx, message, fields);
 }
-function isRecord7(value) {
+function isRecord8(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function nonEmptyString2(value) {
@@ -24469,7 +25455,7 @@ function registerAgentTavernAnchor(ctx, options = {}) {
 }
 
 // packages/plugin/src/agent-tavern/card-state.ts
-import { createHash as createHash8, randomUUID as randomUUID7 } from "node:crypto";
+import { createHash as createHash9, randomUUID as randomUUID7 } from "node:crypto";
 
 // packages/plugin/src/prompt-safety.ts
 function createHostPromptExpander(char, user, frozen) {
@@ -24556,7 +25542,7 @@ function jsonObjectOf2(value) {
   return JSON.parse(JSON.stringify(value));
 }
 function sectionHash(text) {
-  return createHash8("sha256").update(text).digest("hex").slice(0, 16);
+  return createHash9("sha256").update(text).digest("hex").slice(0, 16);
 }
 function cardStateEntryKey(book, entry) {
   return `${book}#${entry.uid}`;
@@ -25639,9 +26625,9 @@ function errorCodeOf(error) {
 }
 
 // packages/plugin/src/agent-novel/projector.ts
-import { promises as fs15 } from "node:fs";
+import { promises as fs16 } from "node:fs";
 import { crc32 as crc322 } from "node:zlib";
-import * as path9 from "node:path";
+import * as path10 from "node:path";
 
 // packages/plugin/src/agent-novel/scope.ts
 function novelScopeId(novelId) {
@@ -25706,10 +26692,10 @@ var NovelProjector = class _NovelProjector {
   /** Whether the store's reading projection carries a projection-pending marker (§13). */
   async projectionPending(novelId) {
     this.assertNovelId(novelId);
-    const statusPath = path9.join(this.novelDir(novelId), "projections", "status.json");
+    const statusPath = path10.join(this.novelDir(novelId), "projections", "status.json");
     let raw;
     try {
-      raw = await fs15.readFile(statusPath, "utf8");
+      raw = await fs16.readFile(statusPath, "utf8");
     } catch (cause) {
       if (cause.code === "ENOENT") return false;
       throw cause;
@@ -25725,18 +26711,18 @@ var NovelProjector = class _NovelProjector {
   async repairProjections(novelId) {
     const snapshot2 = await this.requireSnapshot(novelId);
     const paragraphsByChapter = await this.readAllBodyParagraphs(novelId, snapshot2);
-    const projectionsDir = path9.join(this.novelDir(novelId), "projections");
-    await fs15.rm(path9.join(projectionsDir, "chapters"), { recursive: true, force: true });
-    await fs15.mkdir(path9.join(projectionsDir, "chapters"), { recursive: true });
+    const projectionsDir = path10.join(this.novelDir(novelId), "projections");
+    await fs16.rm(path10.join(projectionsDir, "chapters"), { recursive: true, force: true });
+    await fs16.mkdir(path10.join(projectionsDir, "chapters"), { recursive: true });
     const titleByChapter = new Map((snapshot2.outline?.chapters ?? []).map((chapter) => [chapter.chapterId, chapter.title]));
     for (const [chapterId, commitGroups] of paragraphsByChapter) {
       const parts = [`# ${titleByChapter.get(chapterId) ?? chapterId}`, ""];
       for (const paragraphs of commitGroups) parts.push(paragraphs.join(PARAGRAPH_SEPARATOR3), "");
-      await writeAtomicText(path9.join(projectionsDir, "chapters", `${chapterId}.md`), `${parts.join(PARAGRAPH_SEPARATOR3).trimEnd()}
+      await writeAtomicText(path10.join(projectionsDir, "chapters", `${chapterId}.md`), `${parts.join(PARAGRAPH_SEPARATOR3).trimEnd()}
 `);
     }
     const summary = summarizeNovel(snapshot2);
-    await writeAtomicText(path9.join(projectionsDir, "status.json"), JSON.stringify({
+    await writeAtomicText(path10.join(projectionsDir, "status.json"), JSON.stringify({
       novelId: snapshot2.novelId,
       revision: snapshot2.revision,
       contentRevision: snapshot2.contentRevision,
@@ -25792,7 +26778,7 @@ var NovelProjector = class _NovelProjector {
   }
   novelDir(novelId) {
     this.assertNovelId(novelId);
-    return path9.join(this.tavernRoot, "novels", novelId);
+    return path10.join(this.tavernRoot, "novels", novelId);
   }
   async requireSnapshot(novelId) {
     this.assertNovelId(novelId);
@@ -25807,10 +26793,10 @@ var NovelProjector = class _NovelProjector {
    * must count exactly `effectiveCharacters`).
    */
   async readCommitParagraphs(novelId, commit) {
-    const bodyPath = path9.join(this.novelDir(novelId), "bodies", `${commit.bodyHash}.txt`);
+    const bodyPath = path10.join(this.novelDir(novelId), "bodies", `${commit.bodyHash}.txt`);
     let raw;
     try {
-      raw = await fs15.readFile(bodyPath, "utf8");
+      raw = await fs16.readFile(bodyPath, "utf8");
     } catch (cause) {
       if (cause.code === "ENOENT") {
         throw new NovelStorageCorruptionError({ novelId, path: bodyPath, detail: `committed body object of ${commit.commitId} is missing` });
@@ -25855,10 +26841,10 @@ var NovelProjector = class _NovelProjector {
     return byChapter;
   }
   async readRevisionParagraphs(novelId, revision) {
-    const bodyPath = path9.join(this.novelDir(novelId), "bodies", `${revision.bodyHash}.txt`);
+    const bodyPath = path10.join(this.novelDir(novelId), "bodies", `${revision.bodyHash}.txt`);
     let raw;
     try {
-      raw = await fs15.readFile(bodyPath, "utf8");
+      raw = await fs16.readFile(bodyPath, "utf8");
     } catch (cause) {
       if (cause.code === "ENOENT") {
         throw new NovelStorageCorruptionError({ novelId, path: bodyPath, detail: `body revision object of ${revision.revisionId} is missing` });
@@ -25877,10 +26863,10 @@ var NovelProjector = class _NovelProjector {
   }
   /** Enumerates the raw memory records of the novel namespace (MemoryStore layout). */
   async existingMemoryRecords(novelId) {
-    const dir = path9.join(this.tavernRoot, "memories", "chat", encodeURIComponent(novelScopeId(novelId)));
+    const dir = path10.join(this.tavernRoot, "memories", "chat", encodeURIComponent(novelScopeId(novelId)));
     let files;
     try {
-      files = await fs15.readdir(dir);
+      files = await fs16.readdir(dir);
     } catch (cause) {
       if (cause.code === "ENOENT") return [];
       throw cause;
@@ -25888,7 +26874,7 @@ var NovelProjector = class _NovelProjector {
     const records = [];
     for (const file of files) {
       if (!file.endsWith(".json")) continue;
-      const parsed = JSON.parse(await fs15.readFile(path9.join(dir, file), "utf8"));
+      const parsed = JSON.parse(await fs16.readFile(path10.join(dir, file), "utf8"));
       if (typeof parsed.id === "string" && typeof parsed.revision === "string") {
         records.push({ id: parsed.id, revision: parsed.revision });
       }
@@ -26045,11 +27031,11 @@ function buildStoredZip(entries) {
 }
 
 // packages/plugin/src/games/registry.ts
-import { promises as fs16 } from "node:fs";
+import { promises as fs17 } from "node:fs";
 import { cpSync as cpSync2, existsSync as existsSync3, mkdirSync as mkdirSync3, mkdtempSync as mkdtempSync3, rmSync as rmSync3, writeFileSync as writeFileSync2 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
-import { dirname as dirname10, join as join16, resolve as resolve4 } from "node:path";
-import { pathToFileURL as pathToFileURL3 } from "node:url";
+import { dirname as dirname12, join as join18, resolve as resolve4 } from "node:path";
+import { pathToFileURL as pathToFileURL4 } from "node:url";
 
 // packages/plugin/src/games/builtin/blackjack.ts
 import { randomInt } from "node:crypto";
@@ -32529,7 +33515,7 @@ var GameRegistry = class _GameRegistry {
     return registry;
   }
   get installedRoot() {
-    return join16(this.options.root, "games", "installed");
+    return join18(this.options.root, "games", "installed");
   }
   /** 注册表快照（按 id 稳定排序；三源合一——builtin/imported/mod）。 */
   summaries() {
@@ -32593,15 +33579,15 @@ var GameRegistry = class _GameRegistry {
     }
   }
   async scanInstalled() {
-    const entries = await fs16.readdir(this.installedRoot, { withFileTypes: true }).catch((cause) => {
+    const entries = await fs17.readdir(this.installedRoot, { withFileTypes: true }).catch((cause) => {
       if (cause.code === "ENOENT") return [];
       throw cause;
     });
     const directories = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
     for (const directory of directories) {
-      const entry = await this.loadInstalled(join16(this.installedRoot, directory)).catch((cause) => {
+      const entry = await this.loadInstalled(join18(this.installedRoot, directory)).catch((cause) => {
         const message = cause instanceof Error ? cause.message : String(cause);
-        return { source: "imported", manifest: brokenFallbackManifest(directory), engine: null, viewHtml: null, status: "broken", reason: message, directory: join16(this.installedRoot, directory) };
+        return { source: "imported", manifest: brokenFallbackManifest(directory), engine: null, viewHtml: null, status: "broken", reason: message, directory: join18(this.installedRoot, directory) };
       });
       const shadowed = this.games.get(entry.manifest.id);
       if (shadowed?.source === "builtin") {
@@ -32617,7 +33603,7 @@ var GameRegistry = class _GameRegistry {
     const broken = (manifest10, reason) => ({ source: "imported", manifest: manifest10, engine: null, viewHtml: null, status: "broken", reason, directory });
     let raw;
     try {
-      raw = JSON.parse(await fs16.readFile(join16(directory, "game.json"), "utf8"));
+      raw = JSON.parse(await fs17.readFile(join18(directory, "game.json"), "utf8"));
     } catch (cause) {
       return broken(brokenFallbackManifest(directoryNameOf(directory)), `game.json \u7F3A\u5931\u6216\u4E0D\u53EF\u8BFB: ${cause instanceof Error ? cause.message : String(cause)}`);
     }
@@ -32631,18 +33617,18 @@ var GameRegistry = class _GameRegistry {
     }
     let viewHtml10;
     try {
-      viewHtml10 = await fs16.readFile(join16(directory, "view.html"), "utf8");
+      viewHtml10 = await fs17.readFile(join18(directory, "view.html"), "utf8");
     } catch {
       return broken(check.manifest, "view.html \u7F3A\u5931\uFF08\u6807\u51C6\u6E38\u620F\u5305\u5FC5\u987B\u4E09\u4EF6\u5957\u9F50\u5168\uFF09");
     }
     const viewProblem = staticViewCheck(viewHtml10);
     if (viewProblem !== void 0) return broken(check.manifest, `view.html ${viewProblem}`);
-    const enginePath = join16(directory, "engine.mjs");
-    const stat2 = await fs16.stat(enginePath).catch(() => void 0);
+    const enginePath = join18(directory, "engine.mjs");
+    const stat2 = await fs17.stat(enginePath).catch(() => void 0);
     if (stat2?.isFile() !== true) return broken(check.manifest, "engine.mjs \u7F3A\u5931\uFF08\u6807\u51C6\u6E38\u620F\u5305\u5FC5\u987B\u4E09\u4EF6\u5957\u9F50\u5168\uFF09");
     let imported;
     try {
-      imported = await import(`${pathToFileURL3(enginePath).href}?v=${stat2.mtimeMs}`);
+      imported = await import(`${pathToFileURL4(enginePath).href}?v=${stat2.mtimeMs}`);
     } catch (cause) {
       return broken(check.manifest, `engine.mjs \u5BFC\u5165\u5931\u8D25: ${cause instanceof Error ? cause.message : String(cause)}`);
     }
@@ -32665,19 +33651,19 @@ var GameRegistry = class _GameRegistry {
   async installFromPath(sourcePath, force = false) {
     const source = resolve4(sourcePath);
     if (!existsSync3(source)) throw new Error(`\u6E38\u620F\u5305\u76EE\u5F55\u4E0D\u5B58\u5728: ${sourcePath}`);
-    const stat2 = await fs16.stat(source);
+    const stat2 = await fs17.stat(source);
     if (!stat2.isDirectory()) throw new Error(`\u6E38\u620F\u5305\u8DEF\u5F84\u5FC5\u987B\u662F\u76EE\u5F55: ${sourcePath}`);
     let raw;
     try {
-      raw = JSON.parse(await fs16.readFile(join16(source, "game.json"), "utf8"));
+      raw = JSON.parse(await fs17.readFile(join18(source, "game.json"), "utf8"));
     } catch (cause) {
       throw new Error(`\u6E90\u76EE\u5F55\u7F3A\u5C11\u53EF\u8BFB\u7684 game.json: ${cause instanceof Error ? cause.message : String(cause)}`);
     }
     const id = typeof raw?.["id"] === "string" ? raw["id"] : "";
     const check = checkGameManifest(raw, { directory: id || void 0 });
     if (!check.ok || !check.manifest) throw new Error(`\u6E38\u620F\u6E05\u5355\u6821\u9A8C\u5931\u8D25: ${check.errors.join("; ")}`);
-    const target = join16(this.installedRoot, check.manifest.id);
-    await fs16.mkdir(this.installedRoot, { recursive: true });
+    const target = join18(this.installedRoot, check.manifest.id);
+    await fs17.mkdir(this.installedRoot, { recursive: true });
     if (existsSync3(target)) {
       if (force !== true) throw new Error(`\u6E38\u620F '${check.manifest.id}' \u5DF2\u5B89\u88C5\uFF08force=true \u53EF\u8986\u76D6\uFF09`);
       rmSync3(target, { recursive: true, force: true });
@@ -32697,9 +33683,9 @@ var GameRegistry = class _GameRegistry {
   async installFromGit(url, force = false, options = {}) {
     const timeoutMs = options.timeoutMs ?? 6e4;
     const source = parseGitSource(url);
-    const workRoot = mkdtempSync3(join16(tmpdir3(), "dsh-soulmojito-gameinstall-"));
+    const workRoot = mkdtempSync3(join18(tmpdir3(), "dsh-soulmojito-gameinstall-"));
     try {
-      const cloneDir = join16(workRoot, "clone");
+      const cloneDir = join18(workRoot, "clone");
       await (options.cloneImpl ?? gitClone)(source.cloneUrl, cloneDir, source.ref, timeoutMs);
       return await this.installFromPath(cloneDir, force);
     } finally {
@@ -32716,11 +33702,11 @@ var GameRegistry = class _GameRegistry {
    */
   async installFromZip(zipBase64, force = false) {
     const files = selectGamePackageFiles(unzipGamePackage(decodeZipBase64(zipBase64)));
-    const workRoot = mkdtempSync3(join16(tmpdir3(), "dsh-soulmojito-gamezip-"));
+    const workRoot = mkdtempSync3(join18(tmpdir3(), "dsh-soulmojito-gamezip-"));
     try {
       for (const [name2, data] of files) {
-        const target = join16(workRoot, ...name2.split("/"));
-        mkdirSync3(dirname10(target), { recursive: true });
+        const target = join18(workRoot, ...name2.split("/"));
+        mkdirSync3(dirname12(target), { recursive: true });
         writeFileSync2(target, data);
       }
       return await this.installFromPath(workRoot, force);
@@ -32877,9 +33863,9 @@ function unwrapSingleRootDirectory(files) {
 }
 
 // packages/plugin/src/games/sessions.ts
-import { createHash as createHash9, randomBytes as randomBytes4 } from "node:crypto";
-import { promises as fs17 } from "node:fs";
-import { join as join17 } from "node:path";
+import { createHash as createHash10, randomBytes as randomBytes4 } from "node:crypto";
+import { promises as fs18 } from "node:fs";
+import { join as join19 } from "node:path";
 var GAME_HISTORY_DEFAULT_LIMIT = 20;
 var GAME_HISTORY_MAX_LIMIT = 200;
 var GameBridgeError = class extends Error {
@@ -32899,19 +33885,19 @@ var GameSessionStore = class _GameSessionStore {
   }
   tail = Promise.resolve();
   static async open(options) {
-    await fs17.mkdir(join17(options.root, "games", "sessions"), { recursive: true });
+    await fs18.mkdir(join19(options.root, "games", "sessions"), { recursive: true });
     return new _GameSessionStore(options);
   }
   get sessionsRoot() {
-    return join17(this.options.root, "games", "sessions");
+    return join19(this.options.root, "games", "sessions");
   }
   /* ------------------------------ 查询面 ------------------------------ */
   /** 会话目录 name+size+mtimeMs 的 sha256（镜像 tavern-store storeRevision 的便宜纪律：只 stat 不读内容）。 */
   async revision() {
-    const hash = createHash9("sha256");
-    const names = (await fs17.readdir(this.sessionsRoot).catch(() => [])).filter((name2) => name2.endsWith(".json")).sort();
+    const hash = createHash10("sha256");
+    const names = (await fs18.readdir(this.sessionsRoot).catch(() => [])).filter((name2) => name2.endsWith(".json")).sort();
     for (const name2 of names) {
-      const stat2 = await fs17.stat(join17(this.sessionsRoot, name2)).catch(() => void 0);
+      const stat2 = await fs18.stat(join19(this.sessionsRoot, name2)).catch(() => void 0);
       hash.update(`${name2}\0${stat2 === void 0 ? "missing" : `${stat2.size}\0${stat2.mtimeMs}`}
 `);
     }
@@ -33094,8 +34080,8 @@ var GameSessionStore = class _GameSessionStore {
   }
   /* ------------------------------ 内部 ------------------------------ */
   async persist(session) {
-    await fs17.mkdir(this.sessionsRoot, { recursive: true });
-    writeFileAtomic(join17(this.sessionsRoot, `${session.id}.json`), `${JSON.stringify(session, null, 2)}
+    await fs18.mkdir(this.sessionsRoot, { recursive: true });
+    writeFileAtomic(join19(this.sessionsRoot, `${session.id}.json`), `${JSON.stringify(session, null, 2)}
 `);
   }
   async load(sessionId) {
@@ -33104,7 +34090,7 @@ var GameSessionStore = class _GameSessionStore {
     }
     let raw;
     try {
-      raw = await fs17.readFile(join17(this.sessionsRoot, `${sessionId}.json`), "utf8");
+      raw = await fs18.readFile(join19(this.sessionsRoot, `${sessionId}.json`), "utf8");
     } catch {
       throw new GameBridgeError("not-found", `\u4F1A\u8BDD '${sessionId}' \u4E0D\u5B58\u5728`);
     }
@@ -33119,7 +34105,7 @@ var GameSessionStore = class _GameSessionStore {
     }
   }
   async loadAll() {
-    const names = (await fs17.readdir(this.sessionsRoot).catch(() => [])).filter((name2) => name2.endsWith(".json")).sort();
+    const names = (await fs18.readdir(this.sessionsRoot).catch(() => [])).filter((name2) => name2.endsWith(".json")).sort();
     const sessions = [];
     for (const name2 of names) {
       try {
@@ -34575,632 +35561,6 @@ function assembleResult(allActivated, diagnostics, timedState) {
     diagnostics,
     timedState
   };
-}
-
-// packages/plugin/src/memory-embed.ts
-import { promises as fs18 } from "node:fs";
-import * as path10 from "node:path";
-
-// packages/plugin/src/memory-embed-local.ts
-import { createHash as createHash10 } from "node:crypto";
-import { spawn as spawn2 } from "node:child_process";
-import { readdirSync as readdirSync3, readFileSync as readFileSync5, realpathSync as realpathSync2, statSync as statSync2 } from "node:fs";
-import { createRequire as createRequire3 } from "node:module";
-import { basename as basename2, dirname as dirname11, join as join18 } from "node:path";
-import { fileURLToPath, pathToFileURL as pathToFileURL4 } from "node:url";
-var TRANSFORMERS_PACKAGE = "@huggingface/transformers";
-var TRANSFORMERS_INSTALL_HINT = `local ONNX embed requires '${TRANSFORMERS_PACKAGE}' (not bundled with the plugin): run "pnpm add ${TRANSFORMERS_PACKAGE}" in the DSH profile root (the directory whose node_modules contains the installed dsh-soulmojito, NOT the dsh-soulmojito source repository), then restart DSH`;
-var SESSION_CACHE_LIMIT = 2;
-function localModelFingerprint(modelDir) {
-  try {
-    const parts = [];
-    for (const entry of readdirSync3(modelDir).sort()) {
-      const full = join18(modelDir, entry);
-      const info2 = statSync2(full);
-      if (info2.isFile()) {
-        parts.push(`${entry}:${info2.size}:${Math.round(info2.mtimeMs)}`);
-      } else if (info2.isDirectory()) {
-        for (const child of readdirSync3(full).sort()) {
-          const childInfo = statSync2(join18(full, child));
-          if (childInfo.isFile()) parts.push(`${entry}/${child}:${childInfo.size}:${Math.round(childInfo.mtimeMs)}`);
-        }
-      }
-    }
-    if (parts.length === 0) return "unreadable";
-    return createHash10("sha256").update(parts.join("|")).digest("hex").slice(0, 16);
-  } catch {
-    return "unreadable";
-  }
-}
-function localModelIdentity(config) {
-  return `local-onnx:${basename2(config.modelDir)}@${localModelFingerprint(config.modelDir)}:${config.pooling ?? "cls"}:${resolveLocalDtype(config) ?? "auto"}`;
-}
-var DTYPE_FILE_SUFFIXES = [
-  ["fp32", ""],
-  ["fp16", "_fp16"],
-  ["q8", "_quantized"],
-  ["int8", "_int8"],
-  ["uint8", "_uint8"],
-  ["q4", "_q4"],
-  ["q4f16", "_q4f16"],
-  ["q2", "_q2"],
-  ["q2f16", "_q2f16"],
-  ["q1", "_q1"],
-  ["q1f16", "_q1f16"]
-];
-var AUTO_DTYPE_PRIORITY = ["fp16", "q8", "q4", "q4f16", "int8", "uint8", "q2", "q2f16", "q1", "q1f16", "fp32"];
-function detectLocalQuantizations(modelDir) {
-  let names;
-  try {
-    names = readdirSync3(join18(modelDir, "onnx"));
-  } catch {
-    return [];
-  }
-  const found = [];
-  for (const [dtype, suffix] of DTYPE_FILE_SUFFIXES) {
-    const file = `onnx/model${suffix}.onnx`;
-    try {
-      const info2 = statSync2(join18(modelDir, file));
-      if (info2.isFile()) found.push({ precision: dtype, file, sizeBytes: info2.size });
-    } catch {
-    }
-  }
-  return found.sort((a, b) => AUTO_DTYPE_PRIORITY.indexOf(a.precision) - AUTO_DTYPE_PRIORITY.indexOf(b.precision));
-}
-function resolveLocalDtype(config) {
-  if (config.precision !== void 0 && config.precision !== "auto") return config.precision;
-  return detectLocalQuantizations(config.modelDir)[0]?.precision;
-}
-function readJsonFile(file) {
-  try {
-    return JSON.parse(readFileSync5(file, "utf8"));
-  } catch {
-    return void 0;
-  }
-}
-function inferLocalModelSettings(modelDir) {
-  const result = { sources: {} };
-  const config = readJsonFile(join18(modelDir, "config.json"));
-  const configRecord = config !== null && typeof config === "object" && !Array.isArray(config) ? config : void 0;
-  const hiddenSize = configRecord?.hidden_size;
-  if (typeof hiddenSize === "number" && Number.isFinite(hiddenSize)) {
-    result.dims = Math.max(1, Math.min(8192, Math.round(hiddenSize)));
-    result.sources.dims = "config.json hidden_size";
-  }
-  const modules = readJsonFile(join18(modelDir, "modules.json"));
-  if (Array.isArray(modules)) {
-    for (const entry of modules) {
-      if (!Array.isArray(entry) || entry[0] !== "sentence-transformers" || entry[1] !== "Pooling") continue;
-      const flags = entry[2];
-      if (flags !== null && typeof flags === "object" && !Array.isArray(flags)) {
-        const record = flags;
-        if (record.pooling_mode_cls === true) {
-          result.pooling = "cls";
-          result.sources.pooling = "modules.json";
-        } else if (record.pooling_mode_mean === true) {
-          result.pooling = "mean";
-          result.sources.pooling = "modules.json";
-        }
-      }
-      break;
-    }
-  }
-  if (result.pooling === void 0 && (configRecord?.pooling === "cls" || configRecord?.pooling === "mean")) {
-    result.pooling = configRecord.pooling;
-    result.sources.pooling = "config.json pooling";
-  }
-  if (result.pooling === void 0) {
-    const haystack = `${basename2(modelDir)} ${typeof configRecord?._name_or_path === "string" ? configRecord._name_or_path : ""}`.toLowerCase();
-    if (/(^|[^a-z])(bge|bert)/.test(haystack)) {
-      result.pooling = "cls";
-      result.sources.pooling = "model family (bge/bert \u2192 cls)";
-    } else if (/(minilm|mpnet|e5|gte|gtr|sentence-t5)/.test(haystack)) {
-      result.pooling = "mean";
-      result.sources.pooling = "model family (mean-pooled)";
-    }
-  }
-  return result;
-}
-function validateLocalModelDir(modelDir) {
-  let info2;
-  try {
-    info2 = statSync2(modelDir);
-  } catch {
-    return `modelDir '${modelDir}' does not exist`;
-  }
-  if (!info2.isDirectory()) return `modelDir '${modelDir}' is not a directory`;
-  const names = readdirSync3(modelDir);
-  if (!names.includes("tokenizer.json")) {
-    return `modelDir '${modelDir}' has no tokenizer.json (expected a Hugging Face ONNX layout: tokenizer.json + config.json + onnx/model.onnx)`;
-  }
-  let onnxNames = [];
-  try {
-    onnxNames = statSync2(join18(modelDir, "onnx")).isDirectory() ? readdirSync3(join18(modelDir, "onnx")) : [];
-  } catch {
-  }
-  const hasOnnx = onnxNames.some((name2) => name2.endsWith(".onnx"));
-  if (!hasOnnx) {
-    return names.some((name2) => name2.endsWith(".onnx")) ? `modelDir '${modelDir}' has .onnx files at the top level but no onnx/ subdirectory: transformers.js only loads weights from 'onnx/' (e.g. onnx/model_fp16.onnx) \u2014 move the weights into an onnx/ subdirectory` : `modelDir '${modelDir}' has no .onnx weights (expected onnx/model_fp16.onnx, onnx/model_quantized.onnx or onnx/model.onnx)`;
-  }
-  return null;
-}
-function resolutionAnchors() {
-  const candidates = [];
-  const push = (value) => {
-    if (typeof value !== "string" || value === "" || candidates.includes(value)) return;
-    candidates.push(value);
-  };
-  if (import.meta.url.startsWith("file:")) {
-    try {
-      push(fileURLToPath(import.meta.url));
-    } catch {
-    }
-  }
-  if (typeof process.argv[1] === "string" && process.argv[1] !== "") {
-    push(process.argv[1]);
-    try {
-      push(realpathSync2(process.argv[1]));
-    } catch {
-    }
-  }
-  return candidates;
-}
-function isLocalEmbedRuntimeInstalled() {
-  for (const anchor of resolutionAnchors()) {
-    try {
-      createRequire3(anchor).resolve(TRANSFORMERS_PACKAGE);
-      return true;
-    } catch {
-    }
-  }
-  return false;
-}
-async function importTransformers() {
-  for (const anchor of resolutionAnchors()) {
-    try {
-      const resolved = createRequire3(anchor).resolve(TRANSFORMERS_PACKAGE);
-      return await import(pathToFileURL4(resolved).href);
-    } catch {
-    }
-  }
-  return await importHostPackage(TRANSFORMERS_PACKAGE);
-}
-var defaultLocalEmbedRuntime = {
-  async load(modelDir, options = {}) {
-    let transformers;
-    try {
-      transformers = await importTransformers();
-    } catch (cause) {
-      throw new Error(`${TRANSFORMERS_INSTALL_HINT} (resolution failed: ${cause instanceof Error ? cause.message : String(cause)})`);
-    }
-    transformers.env.allowRemoteModels = false;
-    transformers.env.allowLocalModels = true;
-    let pipeline2;
-    if (options.dtype !== void 0) {
-      pipeline2 = await transformers.pipeline("feature-extraction", modelDir, { dtype: options.dtype });
-    } else {
-      const chain = ["fp16", "q8", "fp32"];
-      let lastError;
-      for (const dtype of chain) {
-        try {
-          pipeline2 = await transformers.pipeline("feature-extraction", modelDir, { dtype });
-          break;
-        } catch (cause) {
-          lastError = cause;
-        }
-      }
-      if (pipeline2 === void 0) {
-        throw lastError instanceof Error ? lastError : new Error(String(lastError));
-      }
-    }
-    return {
-      async embed(texts) {
-        const output = await pipeline2([...texts], {
-          pooling: options.pooling ?? "cls",
-          normalize: true
-        });
-        return output.tolist();
-      }
-    };
-  }
-};
-var LOCAL_RUNTIME_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
-var INSTALL_OUTPUT_TAIL = 8e3;
-function localRuntimeProfileRoot(pluginDir) {
-  const parent = dirname11(pluginDir);
-  if (basename2(parent) !== "node_modules") return void 0;
-  return dirname11(parent);
-}
-function defaultSpawnRunner(command, args, options) {
-  return new Promise((resolve6, reject) => {
-    const child = spawn2(command, [...args], {
-      cwd: options.cwd,
-      shell: process.platform === "win32",
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: process.env
-    });
-    let output = "";
-    const feed = (chunk) => {
-      output += chunk.toString("utf8");
-      if (output.length > 1e6) output = output.slice(-1e6);
-    };
-    child.stdout?.on("data", feed);
-    child.stderr?.on("data", feed);
-    const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error(`pnpm timed out after ${options.timeoutMs}ms`));
-    }, options.timeoutMs);
-    timer.unref?.();
-    child.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.once("close", (code) => {
-      clearTimeout(timer);
-      resolve6({ code: code ?? -1, output });
-    });
-  });
-}
-async function installLocalEmbedRuntime(input) {
-  if (isLocalEmbedRuntimeInstalled()) {
-    return { ok: true, alreadyInstalled: true, outputTail: "" };
-  }
-  const profileRoot = localRuntimeProfileRoot(input.pluginDir);
-  if (profileRoot === void 0) {
-    return {
-      ok: false,
-      alreadyInstalled: false,
-      message: `auto-install is unavailable for link:/source mounts: run "pnpm add ${TRANSFORMERS_PACKAGE}" manually in the DSH profile root`,
-      outputTail: ""
-    };
-  }
-  const run = input.spawnRunner ?? defaultSpawnRunner;
-  try {
-    const result = await run("pnpm", ["add", TRANSFORMERS_PACKAGE], {
-      cwd: profileRoot,
-      timeoutMs: input.timeoutMs ?? LOCAL_RUNTIME_INSTALL_TIMEOUT_MS
-    });
-    const outputTail = result.output.slice(-INSTALL_OUTPUT_TAIL);
-    if (result.code !== 0) {
-      return { ok: false, alreadyInstalled: false, message: `pnpm exited with ${result.code}`, outputTail };
-    }
-    if (!isLocalEmbedRuntimeInstalled()) {
-      return { ok: false, alreadyInstalled: false, message: "pnpm succeeded but the runtime is still not resolvable (restart DSH and retry the probe)", outputTail };
-    }
-    return { ok: true, alreadyInstalled: false, outputTail };
-  } catch (cause) {
-    const detail = cause instanceof Error ? cause.message : String(cause);
-    return {
-      ok: false,
-      alreadyInstalled: false,
-      message: `pnpm add failed: ${detail}${/ENOENT|not found|not recognized/i.test(detail) ? ` (is pnpm on PATH?)` : ""}`,
-      outputTail: ""
-    };
-  }
-}
-var sessionCache = /* @__PURE__ */ new Map();
-function sessionKey(config, options) {
-  return `${config.modelDir}|${localModelFingerprint(config.modelDir)}|${options.pooling ?? "cls"}|${resolveLocalDtype(config) ?? "auto"}`;
-}
-function loadLocalEmbedModel(config, runtime = defaultLocalEmbedRuntime) {
-  const options = {};
-  if (config.pooling !== void 0) options.pooling = config.pooling;
-  const dtype = resolveLocalDtype(config);
-  if (dtype !== void 0) options.dtype = dtype;
-  const key = sessionKey(config, options);
-  const cached = sessionCache.get(key);
-  if (cached !== void 0) return cached;
-  const promise = runtime.load(config.modelDir, options).catch((cause) => {
-    sessionCache.delete(key);
-    throw cause;
-  });
-  sessionCache.set(key, promise);
-  while (sessionCache.size > SESSION_CACHE_LIMIT) {
-    const oldest = sessionCache.keys().next().value;
-    if (oldest === void 0) break;
-    sessionCache.delete(oldest);
-  }
-  return promise;
-}
-
-// packages/plugin/src/memory-embed.ts
-var EMBED_BREAKER_MS = 6e4;
-var EMBED_RETRY_BACKOFF_MS = 250;
-var EMBED_INPUT_MAX_CHARS = 6e3;
-var EMBED_PROBE_TEXT = "dsh-soulmojito embed probe";
-function emptyStatus() {
-  return { version: 1, breakerUntil: 0 };
-}
-var EmbedHttpError = class extends Error {
-  constructor(kind, message, status2, retriable = false) {
-    super(message);
-    this.kind = kind;
-    this.status = status2;
-    this.retriable = retriable;
-    this.name = "EmbedHttpError";
-  }
-};
-function embedStatusPath(root) {
-  return path10.join(root, "memory-vectors", "status.json");
-}
-async function readEmbedStatus(root) {
-  try {
-    const parsed = JSON.parse(await fs18.readFile(embedStatusPath(root), "utf8"));
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return emptyStatus();
-    return {
-      version: 1,
-      ...typeof parsed.model === "string" && parsed.model !== "" ? { model: parsed.model } : {},
-      ...typeof parsed.dims === "number" && Number.isFinite(parsed.dims) && parsed.dims > 0 ? { dims: parsed.dims } : {},
-      ...typeof parsed.lastError === "string" && parsed.lastError !== "" ? { lastError: parsed.lastError } : {},
-      ...typeof parsed.lastErrorAt === "string" ? { lastErrorAt: parsed.lastErrorAt } : {},
-      ...typeof parsed.lastSuccessAt === "string" ? { lastSuccessAt: parsed.lastSuccessAt } : {},
-      breakerUntil: typeof parsed.breakerUntil === "number" && Number.isFinite(parsed.breakerUntil) ? parsed.breakerUntil : 0
-    };
-  } catch {
-    return emptyStatus();
-  }
-}
-async function writeEmbedStatus(root, status2) {
-  await fs18.mkdir(path10.dirname(embedStatusPath(root)), { recursive: true });
-  await writeAtomicText(embedStatusPath(root), `${JSON.stringify(status2)}
-`);
-}
-function embedBreakerOpen(status2, now = Date.now()) {
-  return now < status2.breakerUntil;
-}
-async function recordEmbedFailure(root, message) {
-  const status2 = await readEmbedStatus(root);
-  await writeEmbedStatus(root, {
-    ...status2,
-    lastError: message.slice(0, 300),
-    lastErrorAt: (/* @__PURE__ */ new Date()).toISOString(),
-    breakerUntil: Date.now() + EMBED_BREAKER_MS
-  });
-}
-async function recordEmbedSuccess(root, info2) {
-  const status2 = await readEmbedStatus(root);
-  await writeEmbedStatus(root, {
-    ...status2,
-    model: info2.model,
-    dims: info2.dims,
-    lastSuccessAt: (/* @__PURE__ */ new Date()).toISOString(),
-    breakerUntil: 0
-  });
-}
-async function clearEmbedStatus(root) {
-  await fs18.rm(embedStatusPath(root), { force: true });
-}
-function resolveApiKey(config) {
-  if (config.provider === "local") return void 0;
-  if (config.apiKeyEnv === "") return void 0;
-  const value = process.env[config.apiKeyEnv];
-  if (value === void 0) return void 0;
-  const trimmed = value.trim();
-  return trimmed === "" ? void 0 : trimmed;
-}
-function embedModelIdentity(config) {
-  if (config.provider === "local") return localModelIdentity(config);
-  return config.model;
-}
-function expectedDims(config, status2) {
-  return config.dims ?? status2.dims;
-}
-async function embedTexts(config, texts, options = {}) {
-  if (texts.length === 0) return [];
-  if (config.provider === "local") return embedTextsLocal(config, texts, options);
-  const batchSize = config.batchSize ?? 16;
-  const timeoutMs = config.timeoutMs ?? 1e4;
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const vectors = [];
-  for (let start = 0; start < texts.length; start += batchSize) {
-    const batch = texts.slice(start, start + batchSize);
-    vectors.push(...await embedBatchWithRetry(config, batch, { ...options, timeoutMs, fetchImpl }));
-  }
-  return vectors;
-}
-async function embedTextsLocal(config, texts, options) {
-  let model;
-  try {
-    model = await loadLocalEmbedModel(config, options.localRuntime ?? defaultLocalEmbedRuntime);
-  } catch (cause) {
-    throw new EmbedHttpError(
-      "runtime",
-      cause instanceof Error ? cause.message : String(cause),
-      void 0,
-      false
-    );
-  }
-  const batchSize = config.batchSize ?? 16;
-  const vectors = [];
-  for (let start = 0; start < texts.length; start += batchSize) {
-    const batch = texts.slice(start, start + batchSize);
-    let embedded;
-    try {
-      embedded = await model.embed(batch);
-    } catch (cause) {
-      throw new EmbedHttpError(
-        "runtime",
-        cause instanceof Error ? cause.message : String(cause),
-        void 0,
-        false
-      );
-    }
-    if (embedded.length !== batch.length) {
-      throw new EmbedHttpError(
-        "payload",
-        `local embed returned ${embedded.length} vectors for ${batch.length} inputs`,
-        void 0,
-        false
-      );
-    }
-    vectors.push(...validateLocalVectors(embedded, options.expectedDims));
-  }
-  return vectors;
-}
-function validateLocalVectors(embedded, expectedDims2) {
-  if (embedded.length === 0) {
-    throw new EmbedHttpError("payload", "local embed returned no vectors", void 0, false);
-  }
-  const dims = embedded[0]?.length ?? 0;
-  if (dims === 0 || embedded.some((vector) => vector.length !== dims)) {
-    throw new EmbedHttpError(
-      "dims",
-      `local embed dimensions inconsistent (batch dims: ${embedded.map((vector) => vector.length).join(",")})`,
-      void 0,
-      false
-    );
-  }
-  for (const vector of embedded) {
-    if (vector.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
-      throw new EmbedHttpError("payload", "local embed vector is not a finite number array", void 0, false);
-    }
-  }
-  if (expectedDims2 !== void 0 && dims !== expectedDims2) {
-    throw new EmbedHttpError("dims", `local embed has ${dims} dims, expected ${expectedDims2}`, void 0, false);
-  }
-  return [...embedded];
-}
-async function embedBatchWithRetry(config, batch, options) {
-  let lastError;
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      return await embedBatchOnce(config, batch, options);
-    } catch (cause) {
-      const error = cause instanceof EmbedHttpError ? cause : new EmbedHttpError("network", cause instanceof Error ? cause.message : String(cause), void 0, true);
-      lastError = error;
-      if (!error.retriable || attempt >= 2) throw lastError;
-      await delay2(EMBED_RETRY_BACKOFF_MS);
-    }
-  }
-}
-async function embedBatchOnce(config, batch, options) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs);
-  let response;
-  if (config.provider === "local") throw new Error("local memory embedding does not use the HTTP embeddings endpoint");
-  try {
-    response = await options.fetchImpl(`${config.baseURL}/embeddings`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        // 免密反代：无 key 时不带 Authorization 头（不是带空串）。
-        ...resolveApiKey(config) !== void 0 ? { authorization: `Bearer ${resolveApiKey(config)}` } : {}
-      },
-      body: JSON.stringify({ model: config.model, input: batch }),
-      signal: controller.signal
-    });
-  } catch (cause) {
-    if (controller.signal.aborted) {
-      throw new EmbedHttpError("timeout", `embed request timed out after ${options.timeoutMs}ms`, void 0, true);
-    }
-    throw new EmbedHttpError("network", cause instanceof Error ? cause.message : String(cause), void 0, true);
-  } finally {
-    clearTimeout(timer);
-  }
-  if (!response.ok) {
-    const retriable = response.status === 429 || response.status >= 500;
-    const detail = await response.text().then((text) => text.slice(0, 200)).catch(() => "");
-    throw new EmbedHttpError(
-      "http",
-      `embed endpoint returned ${response.status}${detail === "" ? "" : `: ${detail}`}`,
-      response.status,
-      retriable
-    );
-  }
-  let payload;
-  try {
-    payload = await response.json();
-  } catch (cause) {
-    throw new EmbedHttpError("payload", `embed response is not JSON: ${cause instanceof Error ? cause.message : String(cause)}`);
-  }
-  return parseEmbeddings(payload, batch.length, options.expectedDims);
-}
-function parseEmbeddings(payload, count, expectedDims2) {
-  if (payload === null || typeof payload !== "object" || !Array.isArray(payload.data)) {
-    throw new EmbedHttpError("payload", "embed response has no data array");
-  }
-  const data = payload.data;
-  if (data.length !== count) {
-    throw new EmbedHttpError("payload", `embed response count mismatch: sent ${count}, received ${data.length}`);
-  }
-  const items = data.map((item) => {
-    if (item === null || typeof item !== "object" || Array.isArray(item)) {
-      throw new EmbedHttpError("payload", "embed response item is not an object");
-    }
-    return item;
-  });
-  const ordered = items.every((item) => typeof item.index === "number") ? items.slice().sort((left, right) => left.index - right.index) : items;
-  const vectors = ordered.map((item) => {
-    if (!Array.isArray(item.embedding) || item.embedding.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
-      throw new EmbedHttpError("payload", "embed response embedding is not a finite number array");
-    }
-    return item.embedding;
-  });
-  const dims = vectors[0]?.length ?? 0;
-  if (dims === 0 || vectors.some((vector) => vector.length !== dims)) {
-    throw new EmbedHttpError("dims", `embed response dimensions inconsistent (batch dims: ${vectors.map((vector) => vector.length).join(",")})`);
-  }
-  if (expectedDims2 !== void 0 && dims !== expectedDims2) {
-    throw new EmbedHttpError("dims", `embed response has ${dims} dims, expected ${expectedDims2}`);
-  }
-  return vectors;
-}
-function delay2(ms) {
-  return new Promise((resolve6) => setTimeout(resolve6, ms));
-}
-async function embedProbe(root, config, options = {}) {
-  const status2 = await readEmbedStatus(root);
-  const startedAt = Date.now();
-  const model = embedModelIdentity(config);
-  try {
-    const [vector] = await embedTexts(config, [EMBED_PROBE_TEXT], {
-      ...options,
-      expectedDims: expectedDims(config, status2)
-    });
-    const dims = vector?.length ?? 0;
-    const result = { dims, latencyMs: Date.now() - startedAt, model };
-    await recordEmbedSuccess(root, { model, dims });
-    return result;
-  } catch (cause) {
-    await recordEmbedFailure(root, cause instanceof Error ? cause.message : String(cause));
-    throw cause;
-  }
-}
-
-// packages/plugin/src/memory-hybrid.ts
-async function embedMemoryRecord(input) {
-  const { root, config, vectorStore, record, fetchImpl, localRuntime } = input;
-  const status2 = await readEmbedStatus(root);
-  if (embedBreakerOpen(status2)) return false;
-  const modelId = embedModelIdentity(config);
-  try {
-    const [vector] = await embedTexts(
-      config,
-      [record.content.slice(0, EMBED_INPUT_MAX_CHARS)],
-      { expectedDims: expectedDims(config, status2), fetchImpl, localRuntime }
-    );
-    if (vector === void 0) return false;
-    await recordEmbedSuccess(root, { model: modelId, dims: vector.length });
-    await vectorStore.put([{
-      id: record.id,
-      scope: record.scope,
-      scopeId: record.scopeId,
-      digest: memoryContentDigest(modelId, record.content),
-      model: modelId,
-      vector: encodeVector(vector)
-    }]);
-    return true;
-  } catch (cause) {
-    await recordEmbedFailure(root, cause instanceof Error ? cause.message : String(cause));
-    return false;
-  }
-}
-
-// packages/plugin/src/agent-tavern/tools/stores.ts
-var tavernStorePromise;
-function tavernStore() {
-  return tavernStorePromise ??= TavernStore.open(tavernDataRoot());
 }
 
 // packages/plugin/src/agent-tavern/tools/shared.ts

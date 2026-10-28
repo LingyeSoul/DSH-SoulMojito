@@ -7,7 +7,9 @@
  */
 
 import { BODY_EVENT_TYPE } from './body.js'
+import type { BodyRollbackPlan } from './body-rollback.js'
 import { bodyRuntimeError, type BodySessionLike, type PendingBodyOperation } from './body-runtime-core.js'
+import { rollbackPlanOfEvent } from './body-runtime-plan.js'
 
 export interface RuntimeEvent {
   type: string
@@ -241,7 +243,15 @@ export function operationFinished(events: readonly RuntimeEvent[], opId: string)
 }
 
 export type PendingEvent =
-  | { kind: 'start'; opId: string; groupId: string; previousAnchorId: string; previousIndex: number }
+  | {
+      kind: 'start'
+      opId: string
+      groupId: string
+      previousAnchorId: string
+      previousIndex: number
+      /** Durable plan; absent for records written before proposal 0022 §10.4. */
+      rollbackPlan?: BodyRollbackPlan
+    }
   | { kind: 'finish'; opId: string }
 
 /**
@@ -256,12 +266,16 @@ export function pendingEventOf(event: RuntimeEvent): PendingEvent | undefined {
     if (event.data.kind !== 'regenerate') {
       throw bodyRuntimeError('invalid-event', `body op-start at seq ${event.seq} has unsupported kind '${String(event.data.kind)}'`)
     }
+    const rollbackPlan = event.data.rollbackPlan
     return {
       kind: 'start',
       opId: pendingNonEmptyString(event.data.opId, event.seq, 'opId'),
       groupId: pendingNonEmptyString(event.data.groupId, event.seq, 'groupId'),
       previousAnchorId: pendingNonEmptyString(event.data.previousAnchorId, event.seq, 'previousAnchorId'),
       previousIndex: pendingInteger(event.data.previousIndex, event.seq, 'previousIndex'),
+      // A missing plan is a legacy `op-start`; a present plan is validated in
+      // full so recovery never restores a partially accepted payload.
+      ...(rollbackPlan === undefined ? {} : { rollbackPlan: rollbackPlanOfEvent(rollbackPlan, event.seq) }),
     }
   }
   if (op === 'op-finish') {

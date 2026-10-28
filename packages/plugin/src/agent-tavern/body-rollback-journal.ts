@@ -3,11 +3,15 @@
  *
  * This shard owns the session-log side: turn tool calls, journal folding into
  * committed memory/variable writes, journal coverage checks, diagnostics and
- * the `rollbackTurnWrites` implementation. It delegates every store mutation to
- * `body-rollback-writes.ts` and never reads the chat or MVU receipts.
+ * the `rollbackTurnWrites` implementation. It delegates journal mutations to
+ * `body-rollback-writes.ts` and settle receipts to
+ * `body-rollback-receipts.ts`, so the flat `VariableStore` and
+ * `mvu.receipts` move in one direction.
  */
 
-import type { MemoryRecord, VariableSnapshot } from '../../../tavern-store/src/index.js'
+import type { ChatLogIR } from '../../../tavern-format/src/index.js'
+import { ChatRevisionConflictError, type MemoryRecord, type VariableSnapshot } from '../../../tavern-store/src/index.js'
+import { readMvuReceipts, type MvuReceipt } from '../mvu.js'
 import {
   MEMORY_WRITE_JOURNAL_TOOLS,
   VARIABLE_WRITE_JOURNAL_TOOLS,
@@ -26,9 +30,11 @@ import {
   errorMessage,
   isRecord,
   log,
+  readAgentTavernBinding,
   requireNonEmptyString,
   requireNonNegativeInteger,
   type BodyNewTurnRollback,
+  type BodyRollbackBinding,
   type BodyRollbackDiagnostic,
   type BodyRollbackErrorCode,
   type BodyRollbackJournalWrite,
@@ -39,6 +45,7 @@ import {
   type BodyWriteRollbackDeps,
 } from './body-rollback-support.js'
 import { applyJournalWrites, type CompensationResult } from './body-rollback-writes.js'
+import { applyReceiptRollback } from './body-rollback-receipts.js'
 
 /* ------------------------------- session log ------------------------------- */
 
@@ -393,6 +400,7 @@ export function buildJournalDiagnostics(
   logger: BodyRollbackLogger | undefined,
   agentId: string,
   turn: number,
+  memoryVectorsInjected: boolean,
 ): BodyRollbackDiagnostic[] {
   const diagnostics: BodyRollbackDiagnostic[] = []
   if (journal.uncommitted.length > 0) {
@@ -401,8 +409,8 @@ export function buildJournalDiagnostics(
       message: `${journal.uncommitted.length} write journal group(s) have no after record and were treated as uncommitted: ${journal.uncommitted.join(', ')}`,
     })
   }
-  if (journal.writes.some((write) => write.kind === 'memory')) {
-    const message = 'memory vectors are not restored by the rollback port (embedWrittenMemory is outside this seam); stale vectors are left for lazy re-embedding'
+  if (!memoryVectorsInjected && journal.writes.some((write) => write.kind === 'memory')) {
+    const message = 'memory vectors are not restored by the rollback port (memoryVectors is not injected); stale vectors are left for lazy re-embedding'
     diagnostics.push({ code: 'vector-restore-skipped', message })
     log(logger, 'warn', 'dsh-soulmojito body rollback: memory vectors skipped', {
       sessionId: agentId,
@@ -416,17 +424,20 @@ export function buildJournalDiagnostics(
 /* --------------------------- new-turn rollback ----------------------------- */
 
 /**
- * Undo one turn's committed writes from its own journal (proposal 0022 §10.3).
+ * Undo one turn's committed writes from its own journal and settle receipts
+ * (proposal 0022 §10.3).
  *
- * The new turn may have written memories and flat variables before it failed
- * or was cancelled. `restore(plan)` only knows the old turn, so the runtime
- * calls this for the new turn before restoring the old plan. The method reads
- * only `sessionId + turn` journal entries, never the chat or MVU receipts, and
- * leaves the old plan untouched.
+ * The new turn may have written memories, flat variables and a settle receipt
+ * before it failed or was cancelled. `restore(plan)` only knows the old turn,
+ * so the runtime calls this for the new turn before restoring the old plan.
+ * Journal entries are unwound first; settle receipts are matched afterwards by
+ * their floor (`extra.agentTavern.turn === turn`, or the next floor index) and
+ * persisted with `undoneAt`. Body receipts and the old plan stay untouched.
  *
- * Idempotency is state-based: every planner skips a target whose current
- * revision already matches the journal's before state, so a repeated call
- * performs no second mutation and reports `undone: 0`.
+ * Idempotency is state-based: journal planners skip a target whose current
+ * revision already matches the before state, and already-undone receipts are
+ * never selected again, so a repeated call reports `undone: 0` and
+ * `receiptsUndone: 0` without writing any store.
  */
 export async function rollbackTurnWritesImpl(
   deps: BodyWriteRollbackDeps,
@@ -439,6 +450,7 @@ export async function rollbackTurnWritesImpl(
   const events = await readEvents(deps, agentId, turn)
   const journal = buildJournalWrites(events, agentId, turn)
   const failures: BodyTurnRollbackFailure[] = []
+  const diagnostics: BodyRollbackDiagnostic[] = []
   let undone = 0
 
   // Newest-first across journal groups; each group's planner reads the target
@@ -447,6 +459,7 @@ export async function rollbackTurnWritesImpl(
   for (const write of ordered) {
     try {
       const applied = await applyJournalWrites(deps, [write], 'undo')
+      diagnostics.push(...applied.diagnostics)
       if (applied.applied > 0) undone += 1
     } catch (error) {
       const failure: BodyTurnRollbackFailure = {
@@ -468,21 +481,209 @@ export async function rollbackTurnWritesImpl(
     }
   }
 
+  const receiptsUndone = await rollbackTurnSettleReceipts(deps, agentId, turn, failures)
+
   const result: BodyNewTurnRollback = {
     sessionId: agentId,
     turn,
     undone,
+    receiptsUndone,
     skippedUncommitted: [...journal.uncommitted],
     failures,
+    diagnostics,
   }
   log(deps.logger, 'info', 'dsh-soulmojito body rollback: rolled back new-turn writes', {
     sessionId: agentId,
     turn,
     undone,
+    receiptsUndone,
     skippedUncommitted: result.skippedUncommitted.length,
     failures: failures.length,
+    vectorSyncFailures: diagnostics.length,
   })
   return result
+}
+
+/* ------------------------- new-turn settle receipts ------------------------ */
+
+/**
+ * Undo the settle receipts that belong to one turn and persist `undoneAt`.
+ *
+ * A settle receipt keeps the floor index in `turnKey` (proposal 0022 §4). The
+ * floor belongs to this turn when the projected message there carries
+ * `extra.agentTavern.turn === turn`, or when the index equals the current
+ * message count (settle runs before the assistant floor is projected). Only
+ * receipts still awaiting undo are selected. When nothing matches, the chat is
+ * read but neither the flat store nor the chat is written.
+ *
+ * A save failure replays the just-undone receipts so the flat store matches
+ * the still-active receipts in the persisted chat; the failure is reported
+ * either way instead of being swallowed.
+ */
+async function rollbackTurnSettleReceipts(
+  deps: BodyWriteRollbackDeps,
+  agentId: string,
+  turn: number,
+  failures: BodyTurnRollbackFailure[],
+): Promise<number> {
+  let binding: BodyRollbackBinding
+  try {
+    binding = await readAgentTavernBinding(deps.store, agentId)
+  } catch (error) {
+    recordSettleFailure(deps, failures, agentId, turn, [], settleRollbackError(error, agentId, turn))
+    return 0
+  }
+  let snapshot: { readonly chat: ChatLogIR; readonly revision: string } | undefined
+  try {
+    snapshot = await deps.store.getChatSnapshot(binding.character, binding.chatId)
+  } catch (error) {
+    recordSettleFailure(deps, failures, agentId, turn, [], error instanceof BodyRollbackError
+      ? error
+      : new BodyRollbackError(
+          'body-state-unsafe',
+          `body rollback for session '${agentId}' turn ${turn} cannot read chat '${binding.chatId}': ${errorMessage(error)}`,
+          { detail: 'chat-unreadable', stage: 'mvu-undo', sessionId: agentId, turn, cause: error },
+        ))
+    return 0
+  }
+  if (snapshot === undefined) {
+    recordSettleFailure(deps, failures, agentId, turn, [], new BodyRollbackError(
+      'body-state-unsafe',
+      `body rollback for session '${agentId}' turn ${turn} cannot read the chat that owns its settle receipts`,
+      { detail: 'chat-unreadable', stage: 'mvu-undo', sessionId: agentId, turn },
+    ))
+    return 0
+  }
+
+  const chat = snapshot.chat
+  const receipts = settleReceiptsForTurn(chat, turn)
+  if (receipts.length === 0) return 0
+
+  let undone: number
+  try {
+    undone = (await applyReceiptRollback(deps, chat, receipts, 'undo', binding)).settleReceipts
+  } catch (error) {
+    recordSettleFailure(deps, failures, agentId, turn, receipts, settleRollbackError(error, agentId, turn))
+    return 0
+  }
+  if (undone === 0) return 0
+
+  try {
+    await deps.store.saveChat(binding.character, binding.chatId, chat, snapshot.revision)
+  } catch (error) {
+    const compensation = await compensateSettleReceipts(deps, chat, receipts, undone, binding)
+    const code: BodyRollbackErrorCode = !compensation.ok
+      ? 'body-rollback-partial'
+      : error instanceof ChatRevisionConflictError
+        ? 'body-rollback-conflict'
+        : 'body-rollback-save-failed'
+    recordSettleFailure(deps, failures, agentId, turn, receipts, new BodyRollbackError(
+      code,
+      `body rollback for session '${agentId}' turn ${turn} could not save the chat after undoing its settle receipts: ${errorMessage(error)}${compensation.note}`,
+      { stage: 'chat-save', sessionId: agentId, turn, cause: error },
+    ))
+    return 0
+  }
+
+  log(deps.logger, 'info', 'dsh-soulmojito body rollback: undid new-turn settle receipts', {
+    sessionId: agentId,
+    turn,
+    receipts: undone,
+    floors: receipts.map((receipt) => receipt.turnKey),
+  })
+  return undone
+}
+
+interface SettleCompensation {
+  readonly ok: boolean
+  readonly note: string
+}
+
+/** Replay the undone settle receipts after the chat save failed. */
+async function compensateSettleReceipts(
+  deps: BodyWriteRollbackDeps,
+  chat: ChatLogIR,
+  receipts: readonly MvuReceipt[],
+  undone: number,
+  binding: BodyRollbackBinding,
+): Promise<SettleCompensation> {
+  try {
+    const applied = await applyReceiptRollback(deps, chat, receipts, 'redo', binding)
+    if (applied.settleReceipts === undone) {
+      return { ok: true, note: '; the flat-store undo was replayed because the chat could not be saved' }
+    }
+    return {
+      ok: false,
+      note: `; the flat-store undo was only replayed for ${applied.settleReceipts} of ${undone} receipt(s)`,
+    }
+  } catch (error) {
+    log(deps.logger, 'error', 'dsh-soulmojito body rollback: settle compensation failed', {
+      sessionId: binding.chatId,
+      error: errorMessage(error),
+    })
+    return { ok: false, note: `; the flat-store undo could not be replayed: ${errorMessage(error)}` }
+  }
+}
+
+/**
+ * Select the un-undone settle receipts whose floor belongs to `turn`.
+ *
+ * `body:<messageId>` receipts are body receipts and are never selected here.
+ */
+function settleReceiptsForTurn(chat: ChatLogIR, turn: number): MvuReceipt[] {
+  return readMvuReceipts(chat).filter((receipt) => {
+    if (receipt.undoneAt !== undefined) return false
+    if (!/^\d+$/.test(receipt.turnKey)) return false
+    const floor = Number(receipt.turnKey)
+    if (!Number.isSafeInteger(floor)) return false
+    if (floor === chat.messages.length) return true
+    return messageTurnNumber(chat.messages[floor]) === turn
+  })
+}
+
+function messageTurnNumber(message: ChatLogIR['messages'][number] | undefined): number | undefined {
+  const extra = message?.extra
+  const tavern = isRecord(extra) ? extra['agentTavern'] : undefined
+  if (!isRecord(tavern)) return undefined
+  const turn = tavern['turn']
+  return typeof turn === 'number' && Number.isSafeInteger(turn) ? turn : undefined
+}
+
+function settleRollbackError(error: unknown, agentId: string, turn: number): BodyRollbackError {
+  if (error instanceof BodyRollbackError) return error
+  return new BodyRollbackError(
+    error instanceof ChatRevisionConflictError ? 'body-rollback-conflict' : 'body-rollback-failed',
+    `body rollback for session '${agentId}' turn ${turn} cannot undo its settle receipts: ${errorMessage(error)}`,
+    { stage: 'mvu-undo', sessionId: agentId, turn, cause: error },
+  )
+}
+
+function recordSettleFailure(
+  deps: BodyWriteRollbackDeps,
+  failures: BodyTurnRollbackFailure[],
+  agentId: string,
+  turn: number,
+  receipts: readonly MvuReceipt[],
+  error: BodyRollbackError,
+): void {
+  const floors = receipts.length === 0
+    ? 'none located'
+    : [...new Set(receipts.map((receipt) => receipt.turnKey))].join(', ')
+  const failure: BodyTurnRollbackFailure = {
+    journalId: `settle-receipts:${receipts.length === 0 ? String(turn) : floors}`,
+    kind: 'variable',
+    tool: 'tavern_variable_settle',
+    code: error.code,
+    message: `new-turn settle receipt rollback for session '${agentId}' turn ${turn} failed at floor(s) ${floors}: ${error.message}`,
+  }
+  failures.push(failure)
+  log(deps.logger, 'warn', 'dsh-soulmojito body rollback: new-turn settle receipt undo failed', {
+    sessionId: agentId,
+    turn,
+    receiptFloors: floors,
+    code: failure.code,
+    error: failure.message,
+  })
 }
 
 /* --------------------------------- errors ---------------------------------- */

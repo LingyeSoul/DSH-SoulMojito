@@ -10,7 +10,7 @@
  */
 
 import type { CharacterCardIR, ChatLogIR } from '../../../tavern-format/src/index.js'
-import { ChatRevisionConflictError, type TavernState } from '../../../tavern-store/src/index.js'
+import { ChatRevisionConflictError } from '../../../tavern-store/src/index.js'
 import {
   BodyRollbackError,
   errorMessage,
@@ -18,6 +18,7 @@ import {
   isNonNegativeInteger,
   isRecord,
   log,
+  readAgentTavernBinding,
   requireNonEmptyString,
   requireNonNegativeInteger,
   type BodyRollbackBinding,
@@ -33,6 +34,7 @@ import {
   applyJournalWrites,
   compensateJournal,
   type CompensationResult,
+  type JournalApplyResult,
 } from './body-rollback-writes.js'
 import {
   asJournalError,
@@ -59,6 +61,7 @@ export type {
   BodyRollbackJournalWrite,
   BodyRollbackLogger,
   BodyRollbackMemoryStore,
+  BodyRollbackMemoryVectors,
   BodyRollbackMemoryWrite,
   BodyRollbackPlan,
   BodyRollbackSessionEvents,
@@ -68,6 +71,7 @@ export type {
   BodyRollbackVariableStore,
   BodyRollbackVariableWrite,
   BodyTurnRollbackFailure,
+  BodyTurnRollbackTool,
   BodyWriteRollbackDeps,
   BodyWriteRollbackPort,
 } from './body-rollback-support.js'
@@ -101,7 +105,7 @@ async function prepareBodyRollback(
   requireNonNegativeInteger(turn, 'turn')
   requireNonEmptyString(previousMessageId, 'previousMessageId')
 
-  const binding = await readBinding(deps.store, agentId)
+  const binding = await readAgentTavernBinding(deps.store, agentId)
   await readCard(deps.store, binding.character, agentId, turn)
   const snapshot = await readChatSnapshot(deps.store, binding, agentId, turn)
   const chat = snapshot.chat
@@ -124,14 +128,22 @@ async function prepareBodyRollback(
   assertReceiptCoverage(bodyText, toolNames, receipts, previousMessageId, floorIndex, agentId, turn)
   await assertJournalCoverage(deps, toolNames, journal, agentId, turn)
 
-  const diagnostics = buildJournalDiagnostics(journal, deps.logger, agentId, turn)
+  const diagnostics = buildJournalDiagnostics(
+    journal,
+    deps.logger,
+    agentId,
+    turn,
+    deps.memoryVectors !== undefined,
+  )
 
+  let appliedJournal: JournalApplyResult
   try {
-    await applyJournalWrites(deps, journal.writes, 'undo')
+    appliedJournal = await applyJournalWrites(deps, journal.writes, 'undo')
   } catch (error) {
     const compensation = await compensateJournal(deps, journal.writes, 'replay')
     throw asJournalError(error, agentId, turn, compensation)
   }
+  diagnostics.push(...appliedJournal.diagnostics)
 
   let rolledBack: ReceiptRollbackResult
   try {
@@ -196,8 +208,9 @@ async function restoreBodyRollback(deps: BodyWriteRollbackDeps, plan: BodyRollba
   const snapshot = await readPlanChatSnapshot(deps.store, plan)
   const chat = snapshot.chat
 
+  let appliedJournal: JournalApplyResult
   try {
-    await applyJournalWrites(deps, plan.journal, 'replay')
+    appliedJournal = await applyJournalWrites(deps, plan.journal, 'replay')
   } catch (error) {
     const compensation = await compensateJournal(deps, plan.journal, 'undo')
     throw restoreError(error, 'journal-replay', plan, compensation)
@@ -227,6 +240,7 @@ async function restoreBodyRollback(deps: BodyWriteRollbackDeps, plan: BodyRollba
     journalWrites: plan.journal.length,
     bodyReceipts: redone.bodyReceipts,
     settleReceipts: redone.settleReceipts,
+    vectorSyncFailures: appliedJournal.diagnostics.length,
   })
 }
 
@@ -290,45 +304,6 @@ function receiptUndoError(
 }
 
 /* ------------------------------ chat / binding ----------------------------- */
-
-async function readBinding(store: BodyRollbackStore, agentId: string): Promise<BodyRollbackBinding> {
-  let state: Pick<TavernState, 'sessionBindings'>
-  try {
-    state = await store.getState()
-  } catch (error) {
-    throw new BodyRollbackError(
-      'body-state-unsafe',
-      `body rollback cannot read tavern state for session '${agentId}': ${errorMessage(error)}`,
-      { detail: 'binding-unavailable', stage: 'prepare', sessionId: agentId, cause: error },
-    )
-  }
-  const bindings = state.sessionBindings
-  const binding = isRecord(bindings) ? bindings[agentId] : undefined
-  if (!isRecord(binding) || binding['architecture'] !== 'agent-tavern') {
-    throw new BodyRollbackError(
-      'body-state-unsafe',
-      `body rollback requires an agent-tavern binding for session '${agentId}'`,
-      { detail: 'binding-unavailable', stage: 'prepare', sessionId: agentId },
-    )
-  }
-  if (binding['group'] === true) {
-    throw new BodyRollbackError(
-      'body-state-unsafe',
-      `body rollback does not apply to group session '${agentId}'`,
-      { detail: 'binding-unavailable', stage: 'prepare', sessionId: agentId },
-    )
-  }
-  const character = binding['character']
-  const chatId = binding['chatId']
-  if (typeof character !== 'string' || character === '' || typeof chatId !== 'string' || chatId === '') {
-    throw new BodyRollbackError(
-      'body-state-unsafe',
-      `body rollback binding for session '${agentId}' has no character/chatId`,
-      { detail: 'binding-unavailable', stage: 'prepare', sessionId: agentId },
-    )
-  }
-  return { character, chatId }
-}
 
 async function readCard(
   store: BodyRollbackStore,

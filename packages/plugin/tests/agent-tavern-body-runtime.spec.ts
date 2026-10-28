@@ -16,6 +16,10 @@ import {
   type BodySessionEvent,
 } from '../src/agent-tavern/body.js'
 import {
+  recoverBodyOperationWith,
+  type BodyRecoveryHost,
+} from '../src/agent-tavern/body-recovery.js'
+import {
   BodyRollbackError,
   type BodyRollbackPlan,
 } from '../src/agent-tavern/body-rollback.js'
@@ -38,6 +42,7 @@ import {
   type BodyRuntimeTurnRollback,
   type BodySessionLike,
 } from '../src/agent-tavern/body-runtime.js'
+import { pendingByAgent } from '../src/agent-tavern/body-runtime-core.js'
 
 interface FakeEvent {
   type: string
@@ -1537,5 +1542,324 @@ describe('AgentTavern body runtime', () => {
       throw expected
     })).rejects.toBe(expected)
     expect(await withBodyLock(harness.deps, async () => 'after-failure')).toBe('after-failure')
+  })
+})
+
+/* ------------------ durable rollback plan (proposal 0022 §10.4) ----------- */
+
+function recoveryHost(): BodyRecoveryHost {
+  return {
+    bindingOf: () => ({ architecture: 'agent-tavern', character: 'Character', chatId: 'chat.jsonl' }),
+    safetyOf: () => ({ safe: true }),
+  }
+}
+
+function appendLegacyOpStart(harness: Harness, opId: string): void {
+  harness.session.append(BODY_EVENT_TYPE, {
+    op: 'op-start',
+    opId,
+    groupId: 'anchor-1',
+    kind: 'regenerate',
+    previousAnchorId: 'anchor-1',
+    previousIndex: 0,
+  })
+}
+
+describe('AgentTavern durable body rollback plan', () => {
+  it('writes the prepared rollback plan into the op-start payload', async () => {
+    const harness = createHarness({
+      status: 'idle',
+      phaseKind: 'idle',
+      lastTurn: 0,
+      followupError: undefined,
+      restrictError: undefined,
+      appendRecord: true,
+      rollback: createRollbackPort({}, []),
+    })
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+
+    const started = await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+
+    const opStart = bodyEvent(harness.events, 'op-start')
+    expect(opStart?.data).toMatchObject({ opId: started.opId, kind: 'regenerate', previousIndex: 0 })
+    expect(opStart?.data.rollbackPlan).toEqual(rollbackPlan(harness.agentId, 1, 'anchor-1'))
+    expect(started.op.rollbackPlan).toEqual(rollbackPlan(harness.agentId, 1, 'anchor-1'))
+    // The plan must survive the JSONL round trip the host will perform.
+    const persisted = JSON.parse(JSON.stringify(opStart?.data.rollbackPlan)) as unknown
+    expect(persisted).toEqual(opStart?.data.rollbackPlan)
+  })
+
+  it('rebuilds the durable rollback plan when folding pending ops', async () => {
+    const harness = createHarness({
+      status: 'idle',
+      phaseKind: 'idle',
+      lastTurn: 0,
+      followupError: undefined,
+      restrictError: undefined,
+      appendRecord: true,
+      rollback: createRollbackPort({}, []),
+    })
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+
+    const started = await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+
+    const pending = foldPendingOps(harness.events)
+    expect(pending).toHaveLength(1)
+    expect(pending[0]).toMatchObject({
+      opId: started.opId,
+      groupId: 'anchor-1',
+      previousAnchorId: 'anchor-1',
+      previousIndex: 0,
+      triggerMessageId: started.triggerMessageId,
+    })
+    expect(pending[0]?.rollbackPlan).toEqual(rollbackPlan(harness.agentId, 1, 'anchor-1'))
+  })
+
+  it('keeps nested journal, receipt and diagnostic entries through the op-start fold', async () => {
+    const harness = createHarness({
+      status: 'idle',
+      phaseKind: 'idle',
+      lastTurn: 0,
+      followupError: undefined,
+      restrictError: undefined,
+      appendRecord: true,
+      rollback: createRollbackPort({
+        prepare: async (agentId, turn, previousMessageId) => ({
+          ...rollbackPlan(agentId, turn, previousMessageId),
+          journal: [{
+            kind: 'memory',
+            journalId: 'journal-1',
+            tool: 'memory_write',
+            target: { id: 'mem-1', scope: 'character', scopeId: 'Character' },
+            before: null,
+            after: null,
+          }],
+          mvuReceipts: [{
+            at: '2026-10-28T00:00:00.000Z',
+            turnKey: '1',
+            status: 'updated',
+            changes: [{ name: 'mvu.favor', after: 2 }],
+            failures: [],
+          }],
+          diagnostics: [{ code: 'journal-uncommitted-skipped', message: 'before-only journal id skipped' }],
+        }),
+      }, []),
+    })
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+
+    await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+
+    const pending = foldPendingOps(harness.events)
+    const plan = pending[0]?.rollbackPlan
+    if (plan === undefined) throw new Error('foldPendingOps dropped the durable plan')
+    expect(plan.journal[0]).toMatchObject({ kind: 'memory', journalId: 'journal-1', tool: 'memory_write' })
+    expect(plan.journal[0]?.before).toBeNull()
+    expect(plan.journal[0]?.after).toBeNull()
+    expect(plan.mvuReceipts[0]).toMatchObject({ turnKey: '1', status: 'updated' })
+    expect(plan.mvuReceipts[0]?.changes).toEqual([{ name: 'mvu.favor', after: 2 }])
+    expect(plan.diagnostics[0]).toEqual({ code: 'journal-uncommitted-skipped', message: 'before-only journal id skipped' })
+  })
+
+  it('restores the durable plan after a restart cleared the in-process map', async () => {
+    const calls: string[] = []
+    const restoredPlans: BodyRollbackPlan[] = []
+    const harness = createHarness({
+      status: 'idle',
+      phaseKind: 'idle',
+      lastTurn: 0,
+      followupError: undefined,
+      restrictError: undefined,
+      appendRecord: true,
+      rollback: createRollbackPort({
+        restore: async (plan) => { restoredPlans.push(plan) },
+      }, calls),
+    })
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+    const trigger = firstFollowup(harness)
+    appendTriggerTurn(harness, 3, trigger, undefined, false)
+    closeTurn(harness, 3)
+
+    // Simulated process restart: the durable log is all recovery may use.
+    pendingByAgent.clear()
+
+    const outcome = await recoverBodyOperationWith(
+      recoveryHost(),
+      harness.deps.agent,
+      async () => harness.deps,
+    )
+
+    expect(outcome).toMatchObject({ agentId: harness.agentId, status: 'restored', pending: 1 })
+    expect(calls).toEqual([
+      `prepare:${harness.agentId}:1:anchor-1`,
+      'rollback-turn:3',
+      'restore:1',
+    ])
+    expect(restoredPlans).toHaveLength(1)
+    expect(restoredPlans[0]).toEqual(rollbackPlan(harness.agentId, 1, 'anchor-1'))
+
+    const restoreEvent = bodyEvent(harness.events, 'restore')
+    const restoredId = restoreEvent?.data.messageId
+    if (typeof restoredId !== 'string') throw new Error('recovery did not record a restore message')
+    const restoredSeq = seqOfMessage(harness.events, restoredId)
+    expect(restoredSeq).toBeDefined()
+    const restoredEvent = harness.events.find((event) => event.seq === restoredSeq)
+    const restoredMessage = restoredEvent === undefined ? undefined : messageOf(restoredEvent)
+    expect((restoredMessage?.content as Array<Record<string, unknown>>)[0]).toEqual({ type: 'text', text: 'old body' })
+    expect(harness.surface()).toContain(restoredSeq)
+  })
+
+  it('restores a legacy op without a plan and never calls plan restore', async () => {
+    const calls: string[] = []
+    const harness = createHarness({
+      status: 'idle',
+      phaseKind: 'idle',
+      lastTurn: 0,
+      followupError: undefined,
+      restrictError: undefined,
+      appendRecord: true,
+      rollback: createRollbackPort({}, calls),
+    })
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    appendLegacyOpStart(harness, 'body-op-legacy')
+    harness.session.append('turn/start', { turn: 2 })
+    harness.session.append('step/start', { turn: 2, step: 1 })
+    harness.session.append('user/message', {
+      id: 'body-trigger-body-op-legacy',
+      role: 'user',
+      content: [{ type: 'text', text: 'regenerate' }],
+      source: { form: 'body-regenerate', opId: 'body-op-legacy', groupId: 'anchor-1' },
+    }, { surfaceOp: 'append' })
+    harness.session.append('step/end', { turn: 2, step: 1 })
+    closeTurn(harness, 2)
+
+    const folded = foldPendingOps(harness.events)
+    expect(folded).toHaveLength(1)
+    expect(folded[0]?.rollbackPlan).toBeUndefined()
+
+    const outcome = await recoverBodyOperationWith(
+      recoveryHost(),
+      harness.deps.agent,
+      async () => harness.deps,
+    )
+
+    expect(outcome).toMatchObject({ agentId: harness.agentId, status: 'restored', pending: 1 })
+    expect(calls).toEqual(['rollback-turn:2'])
+    expect(calls.some((call) => call.startsWith('restore:'))).toBe(false)
+    const restoreEvent = bodyEvent(harness.events, 'restore')
+    expect(restoreEvent?.data).toMatchObject({ groupId: 'anchor-1', index: 0 })
+  })
+
+  it('rejects a malformed durable plan with invalid-event instead of a partial accept', async () => {
+    const malformed = { ...rollbackPlan('agent-legacy', 1, 'anchor-1'), journal: 'not-an-array' }
+    const standalone = [{
+      type: BODY_EVENT_TYPE,
+      seq: 7,
+      data: {
+        op: 'op-start',
+        opId: 'op-bad',
+        groupId: 'g-1',
+        kind: 'regenerate',
+        previousAnchorId: 'm-0',
+        previousIndex: 0,
+        rollbackPlan: malformed,
+      },
+    }]
+
+    let thrown: unknown
+    try {
+      foldPendingOps(standalone)
+    } catch (error) {
+      thrown = error
+    }
+    const failure = bodyFailureOf(thrown)
+    expect(failure.code).toBe('invalid-event')
+    expect(failure.message).toContain('seq 7')
+    expect(failure.message).toContain('rollbackPlan.journal')
+
+    const harness = healthyHarness()
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const reported: Record<string, unknown>[] = []
+    const host: BodyRecoveryHost = {
+      ...recoveryHost(),
+      logger: {
+        error: (...args: unknown[]) => {
+          const fields = args[1]
+          if (isRecord(fields)) reported.push(fields)
+        },
+      },
+    }
+    const badSeq = harness.events.length
+    harness.session.append(BODY_EVENT_TYPE, {
+      op: 'op-start',
+      opId: 'op-bad',
+      groupId: 'anchor-1',
+      kind: 'regenerate',
+      previousAnchorId: 'anchor-1',
+      previousIndex: 0,
+      rollbackPlan: malformed,
+    })
+
+    const outcome = await recoverBodyOperationWith(
+      host,
+      harness.deps.agent,
+      async () => harness.deps,
+    )
+
+    expect(outcome).toMatchObject({ agentId: harness.agentId, status: 'failed', pending: 0, reason: 'invalid-event' })
+    expect(bodyEventsWithOp(harness.events, 'op-finish')).toHaveLength(0)
+    const foldReport = reported.find((fields) => fields.code === 'invalid-event')
+    if (foldReport === undefined) throw new Error('recovery did not report the invalid event')
+    expect(String(foldReport.error)).toContain(`seq ${badSeq}`)
+    expect(String(foldReport.error)).toContain('rollbackPlan.journal')
+  })
+
+  it('refuses a plan that cannot survive a JSONL round trip and replays it', async () => {
+    const calls: string[] = []
+    const harness = createHarness({
+      status: 'idle',
+      phaseKind: 'idle',
+      lastTurn: 0,
+      followupError: undefined,
+      restrictError: undefined,
+      appendRecord: true,
+      rollback: createRollbackPort({
+        prepare: async (agentId, turn, previousMessageId) => ({
+          ...rollbackPlan(agentId, turn, previousMessageId),
+          bodyText: (() => 'old body') as unknown as string,
+        }),
+      }, calls),
+    })
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+
+    await expect(startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })).rejects.toMatchObject({
+      code: 'body-state-unsafe',
+      message: expect.stringContaining('rollbackPlan.bodyText'),
+    })
+
+    expect(calls).toEqual([`prepare:${harness.agentId}:1:anchor-1`, 'restore:1'])
+    expect(bodyEventsOf(harness.events)).toHaveLength(0)
+    expect(harness.followups).toHaveLength(0)
+    expect(harness.surface()).toContain(anchorSeq)
   })
 })

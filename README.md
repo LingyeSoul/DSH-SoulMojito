@@ -63,7 +63,7 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 - **宿主分叉收养** — 用宿主会话菜单分叉一个 AgentTavern 会话，子会话首次运行时自动物化新 Tavern 聊天，继承 guides、变量、记忆与向量，并把继承前缀投影回填为新楼层。详见 [`decisions/2026-10-11-agent-tavern-host-fork.md`](decisions/2026-10-11-agent-tavern-host-fork.md)。
 - **锚定提醒** — 首个真实用户轮注入一次性开场装载引导；此后默认每 5 turn 注入周期维护提醒，把工具职责拉回注意力。追加写在 durable log 之后永不改写，对 KV 前缀缓存透明。
 - **compaction curator** — AgentTavern 会话使用 RP 检查点摘要模板（Story So Far / Characters / World Canon / Open Threads / Current Scene / Memory Maintenance / Critical Context），其余会话原样透传宿主默认摘要。
-- **正文编辑 / 重生成 / 正文候选** — AgentTavern 最后一组正文可在原生会话里编辑、带意见重新生成、生成并左右切换候选；候选以 `plugin:dsh-soulmojito/body` 记录持久化，只有选中正文进入模型上下文，不 fork 会话。重生成写入回滚覆盖 MVU 变量与记忆/变量工具 journal：旧 turn 写入先回滚，新 turn 失败时先撤销新写入再恢复旧状态，脚本推进与游戏落子仍禁用；MVU 的编辑/候选切换仍显式拒绝。详见 [提案 0021](docs/proposals/0021-agent-tavern-body-ops.md)、[提案 0022](docs/proposals/0022-agent-tavern-write-rollback.md) 与 [决策](decisions/2026-10-28-agent-tavern-body-plugin-records.md)。
+- **正文编辑 / 重生成 / 正文候选** — AgentTavern 最后一组正文可在原生会话里编辑、带意见重新生成、生成并左右切换候选；候选以 `plugin:dsh-soulmojito/body` 记录持久化，只有选中正文进入模型上下文，不 fork 会话。重生成写入回滚覆盖 MVU 变量、记忆/变量工具 journal、settle receipt 与记忆向量：旧 turn 写入先回滚，新 turn 失败时先撤销新写入再恢复旧状态，回滚计划随 `op-start` 落盘以支持重启恢复；脚本推进与游戏落子仍禁用，MVU 的编辑/候选切换仍显式拒绝。详见 [提案 0021](docs/proposals/0021-agent-tavern-body-ops.md)、[提案 0022](docs/proposals/0022-agent-tavern-write-rollback.md) 与 [决策](decisions/2026-10-28-agent-tavern-body-plugin-records.md)。
 - **多 Agent 推演** — `tavern_deduce` 为 2-5 个命名角色各派生一个纯推理子 Agent，按 1-3 轮交叉站位，结论由主 Agent 织入叙事，保持单一叙事声音。
 - **边界不伪装** — 缺宿主能力时保持 native 或 ST 的明确边界，不把 compaction 误称为 managed context。
 

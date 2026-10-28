@@ -18,6 +18,7 @@ import {
   type BodyRollbackStore,
   type BodyRollbackLogger,
   type BodyRollbackMemoryStore,
+  type BodyRollbackMemoryVectors,
   type BodyRollbackVariableStore,
   type BodyWriteRollbackPort,
 } from '../src/agent-tavern/body-rollback.js'
@@ -77,6 +78,7 @@ interface PortOptions {
   readonly store?: BodyRollbackStore
   readonly memoryStore?: BodyRollbackMemoryStore
   readonly variableStore?: BodyRollbackVariableStore
+  readonly memoryVectors?: BodyRollbackMemoryVectors
   readonly resolveJournalWriter?: () => Promise<WriteJournalRecordWriter | undefined>
   readonly logger?: BodyRollbackLogger
 }
@@ -287,10 +289,29 @@ function createPort(fixture: Fixture, options: PortOptions): BodyWriteRollbackPo
     store: options.store ?? fixture.store,
     memoryStore: options.memoryStore ?? fixture.memory,
     variableStore: options.variableStore ?? fixture.variables,
+    ...(options.memoryVectors === undefined ? {} : { memoryVectors: options.memoryVectors }),
     sessionEvents: async () => fixture.events,
     resolveJournalWriter: options.resolveJournalWriter ?? (async () => writer),
     ...(options.logger === undefined ? {} : { logger: options.logger }),
   })
+}
+
+interface VectorSyncCall {
+  readonly id: string
+  readonly content: string
+  readonly deleted: boolean
+}
+
+function recordingMemoryVectors(calls: VectorSyncCall[]): BodyRollbackMemoryVectors {
+  return {
+    sync: async (record) => {
+      calls.push({
+        id: record.id,
+        content: record.content,
+        deleted: record.deletedAt !== undefined,
+      })
+    },
+  }
 }
 
 async function putMemory(fixture: Fixture, content: string): Promise<MemoryRecord> {
@@ -324,6 +345,45 @@ async function chatOf(fixture: Fixture): Promise<ChatLogIR> {
   const snapshot = await fixture.store.getChatSnapshot(CHARACTER, fixture.chatId)
   if (snapshot === undefined) throw new Error('fixture chat is missing')
   return snapshot.chat
+}
+
+async function saveMutatedChat(fixture: Fixture, mutate: (chat: ChatLogIR) => void): Promise<string> {
+  const snapshot = await fixture.store.getChatSnapshot(CHARACTER, fixture.chatId)
+  if (snapshot === undefined) throw new Error('fixture chat is missing')
+  mutate(snapshot.chat)
+  return fixture.store.saveChat(CHARACTER, fixture.chatId, snapshot.chat, snapshot.revision)
+}
+
+function settleFloorReceipt(at: string, floor: number, before: number, after: number): MvuReceipt {
+  return {
+    at,
+    turnKey: String(floor),
+    status: 'updated',
+    changes: [{ name: 'mvu.favor', before, after }],
+    failures: [],
+  }
+}
+
+/** Project the failed turn's assistant floor and its settle receipt in one save. */
+async function appendNewTurnSettleFloor(
+  fixture: Fixture,
+  turn: number,
+  settle: { readonly at: string; readonly before: number; readonly after: number },
+): Promise<{ readonly floor: number; readonly revision: string }> {
+  const snapshot = await fixture.store.getChatSnapshot(CHARACTER, fixture.chatId)
+  if (snapshot === undefined) throw new Error('fixture chat is missing')
+  const floor = snapshot.chat.messages.length
+  snapshot.chat.messages.push({
+    name: CHARACTER,
+    is_user: false,
+    is_system: false,
+    send_date: JOURNAL_AT,
+    mes: 'new turn body',
+    extra: { agentTavern: { turn } },
+  })
+  appendMvuReceipt(snapshot.chat, settleFloorReceipt(settle.at, floor, settle.before, settle.after))
+  const revision = await fixture.store.saveChat(CHARACTER, fixture.chatId, snapshot.chat, snapshot.revision)
+  return { floor, revision }
 }
 
 async function captureError(operation: Promise<unknown>): Promise<BodyRollbackError> {
@@ -693,6 +753,180 @@ describe('AgentTavern body write rollback (proposal 0022 §5)', () => {
     })
   })
 
+  it('undoes the new turn settle receipt in the flat store and marks it undone', async () => {
+    const newTurn = TURN + 1
+    const fixture = await createFixture({
+      bodyText: 'Old body.',
+      variables: {},
+      receipts: [{
+        at: '2026-10-28T03:00:00.000Z',
+        turnKey: '1',
+        status: 'updated',
+        changes: [{ name: 'legacy.favor', before: 1, after: 2 }],
+        failures: [],
+      }],
+    })
+    const seeded = await appendNewTurnSettleFloor(fixture, newTurn, {
+      at: '2026-10-28T03:00:01.000Z',
+      before: 1,
+      after: 2,
+    })
+    await fixture.variables.set('chat', fixture.chatId, 'mvu.favor', 2)
+    await fixture.variables.set('chat', fixture.chatId, 'oldTurnVar', 'kept')
+    const port = createPort(fixture, {})
+
+    const result = await port.rollbackTurnWrites(SESSION_ID, newTurn)
+
+    expect(result).toMatchObject({
+      sessionId: SESSION_ID,
+      turn: newTurn,
+      undone: 0,
+      receiptsUndone: 1,
+      skippedUncommitted: [],
+      failures: [],
+    })
+    expect(await fixture.variables.get('chat', fixture.chatId, 'mvu.favor')).toMatchObject({ value: 1 })
+    expect(await fixture.variables.get('chat', fixture.chatId, 'oldTurnVar')).toMatchObject({ value: 'kept' })
+
+    const chat = await chatOf(fixture)
+    const receipts = readMvuReceipts(chat)
+    expect(receipts[0]).toMatchObject({ turnKey: '1' })
+    expect(receipts[0]?.undoneAt).toBeUndefined()
+    expect(receipts[1]).toMatchObject({ turnKey: String(seeded.floor) })
+    expect(receipts[1]?.undoneAt).toBeDefined()
+    const after = await fixture.store.getChatSnapshot(CHARACTER, fixture.chatId)
+    expect(after?.revision).not.toBe(seeded.revision)
+  })
+
+  it('undoes a settle receipt for the next floor before its assistant message is projected', async () => {
+    const newTurn = TURN + 1
+    const fixture = await createFixture(plainSeed())
+    const snapshot = await fixture.store.getChatSnapshot(CHARACTER, fixture.chatId)
+    if (snapshot === undefined) throw new Error('fixture chat is missing')
+    const floor = snapshot.chat.messages.length
+    appendMvuReceipt(snapshot.chat, settleFloorReceipt('2026-10-28T03:00:02.000Z', floor, 1, 2))
+    await fixture.store.saveChat(CHARACTER, fixture.chatId, snapshot.chat, snapshot.revision)
+    await fixture.variables.set('chat', fixture.chatId, 'mvu.favor', 2)
+    const port = createPort(fixture, {})
+
+    const result = await port.rollbackTurnWrites(SESSION_ID, newTurn)
+
+    expect(result).toMatchObject({ receiptsUndone: 1, failures: [] })
+    expect(await fixture.variables.get('chat', fixture.chatId, 'mvu.favor')).toMatchObject({ value: 1 })
+    const chat = await chatOf(fixture)
+    expect(readMvuReceipts(chat)[0]?.undoneAt).toBeDefined()
+  })
+
+  it('reports receiptsUndone 0 on a repeated settle rollback and keeps the chat unchanged', async () => {
+    const newTurn = TURN + 1
+    const fixture = await createFixture(plainSeed())
+    await appendNewTurnSettleFloor(fixture, newTurn, {
+      at: '2026-10-28T03:01:00.000Z',
+      before: 1,
+      after: 2,
+    })
+    await fixture.variables.set('chat', fixture.chatId, 'mvu.favor', 2)
+    const port = createPort(fixture, {})
+
+    const first = await port.rollbackTurnWrites(SESSION_ID, newTurn)
+    expect(first).toMatchObject({ undone: 0, receiptsUndone: 1, failures: [] })
+    const afterFirst = await fixture.store.getChatSnapshot(CHARACTER, fixture.chatId)
+    if (afterFirst === undefined) throw new Error('fixture chat is missing')
+    const undoneAt = readMvuReceipts(afterFirst.chat)[0]?.undoneAt
+    expect(undoneAt).toBeDefined()
+
+    const second = await port.rollbackTurnWrites(SESSION_ID, newTurn)
+
+    expect(second).toMatchObject({ undone: 0, receiptsUndone: 0, failures: [] })
+    const afterSecond = await fixture.store.getChatSnapshot(CHARACTER, fixture.chatId)
+    if (afterSecond === undefined) throw new Error('fixture chat is missing')
+    expect(afterSecond.revision).toBe(afterFirst.revision)
+    expect(readMvuReceipts(afterSecond.chat)[0]?.undoneAt).toBe(undoneAt)
+    expect(await fixture.variables.get('chat', fixture.chatId, 'mvu.favor')).toMatchObject({ value: 1 })
+  })
+
+  it('does not undo a settle receipt whose floor belongs to an older turn', async () => {
+    const newTurn = TURN + 1
+    const fixture = await createFixture(plainSeed())
+    const revision = await saveMutatedChat(fixture, (chat) => {
+      const oldFloor = chat.messages[1]
+      if (oldFloor === undefined) throw new Error('fixture old floor is missing')
+      oldFloor.extra = {
+        agentTavern: {
+          bodyGroupId: GROUP_ID,
+          anchorMessageId: PREVIOUS_MESSAGE_ID,
+          turn: TURN,
+        },
+      }
+      appendMvuReceipt(chat, settleFloorReceipt('2026-10-28T03:02:00.000Z', 1, 1, 2))
+    })
+    await fixture.variables.set('chat', fixture.chatId, 'mvu.favor', 2)
+    const port = createPort(fixture, {})
+
+    const result = await port.rollbackTurnWrites(SESSION_ID, newTurn)
+
+    expect(result).toMatchObject({ receiptsUndone: 0, failures: [] })
+    expect(await fixture.variables.get('chat', fixture.chatId, 'mvu.favor')).toMatchObject({ value: 2 })
+    const chat = await chatOf(fixture)
+    expect(readMvuReceipts(chat)[0]?.undoneAt).toBeUndefined()
+    const after = await fixture.store.getChatSnapshot(CHARACTER, fixture.chatId)
+    expect(after?.revision).toBe(revision)
+  })
+
+  it('reports a CAS conflict when the settle receipt undo cannot be saved and replays the store', async () => {
+    const newTurn = TURN + 1
+    const fixture = await createFixture(plainSeed())
+    const seeded = await appendNewTurnSettleFloor(fixture, newTurn, {
+      at: '2026-10-28T03:03:00.000Z',
+      before: 1,
+      after: 2,
+    })
+    await fixture.variables.set('chat', fixture.chatId, 'mvu.favor', 2)
+    const port = createPort(fixture, {
+      store: failingStore(fixture, new ChatRevisionConflictError('stale-revision', 'current-revision')),
+    })
+
+    const result = await port.rollbackTurnWrites(SESSION_ID, newTurn)
+
+    expect(result.receiptsUndone).toBe(0)
+    expect(result.failures).toHaveLength(1)
+    expect(result.failures[0]).toMatchObject({
+      journalId: `settle-receipts:${seeded.floor}`,
+      kind: 'variable',
+      tool: 'tavern_variable_settle',
+      code: 'body-rollback-conflict',
+    })
+    expect(result.failures[0]?.message).toContain(`floor(s) ${seeded.floor}`)
+    expect(result.failures[0]?.message).toContain('changed in another tab')
+    expect(await fixture.variables.get('chat', fixture.chatId, 'mvu.favor')).toMatchObject({ value: 2 })
+    const chat = await chatOf(fixture)
+    expect(readMvuReceipts(chat)[0]?.undoneAt).toBeUndefined()
+  })
+
+  it('reports a generic chat save failure for the settle receipt undo', async () => {
+    const newTurn = TURN + 1
+    const fixture = await createFixture(plainSeed())
+    await appendNewTurnSettleFloor(fixture, newTurn, {
+      at: '2026-10-28T03:04:00.000Z',
+      before: 1,
+      after: 2,
+    })
+    await fixture.variables.set('chat', fixture.chatId, 'mvu.favor', 2)
+    const port = createPort(fixture, { store: failingStore(fixture, new Error('disk is full')) })
+
+    const result = await port.rollbackTurnWrites(SESSION_ID, newTurn)
+
+    expect(result.receiptsUndone).toBe(0)
+    expect(result.failures).toHaveLength(1)
+    expect(result.failures[0]).toMatchObject({
+      kind: 'variable',
+      tool: 'tavern_variable_settle',
+      code: 'body-rollback-save-failed',
+    })
+    expect(result.failures[0]?.message).toContain('disk is full')
+    expect(await fixture.variables.get('chat', fixture.chatId, 'mvu.favor')).toMatchObject({ value: 2 })
+  })
+
   it('reports per-entry failures from rollbackTurnWrites and continues with other entries', async () => {
     const newTurn = TURN + 1
     const fixture = await createFixture(plainSeed())
@@ -887,5 +1121,140 @@ describe('AgentTavern body write rollback (proposal 0022 §5)', () => {
 
     const error = await captureError(port.restore(malformed))
     expect(error).toMatchObject({ code: 'invalid-arguments', stage: 'restore' })
+  })
+
+  it('syncs a vector delete when a memory create is rolled back', async () => {
+    const fixture = await createFixture(plainSeed())
+    const created = await putMemory(fixture, 'created by the old turn')
+    pushToolCall(fixture, 'memory_write')
+    pushJournal(fixture, memoryJournal('journal-write', 'memory_write', 'before', created, null))
+    pushJournal(fixture, memoryJournal('journal-write', 'memory_write', 'after', created, created))
+
+    const synced: VectorSyncCall[] = []
+    const port = createPort(fixture, { memoryVectors: recordingMemoryVectors(synced) })
+    const plan = await port.prepare(SESSION_ID, TURN, PREVIOUS_MESSAGE_ID)
+
+    expect(plan.diagnostics).toEqual([])
+    expect(synced).toEqual([{ id: created.id, content: 'created by the old turn', deleted: true }])
+    expect((await fixture.memory.read(created.id, 'chat', fixture.chatId, true))?.deletedAt).toBeDefined()
+  })
+
+  it('syncs the before record on memory update/forget undo and the after record on restore', async () => {
+    const fixture = await createFixture(plainSeed())
+    const updateBefore = await putMemory(fixture, 'update before')
+    const updateAfter = await updateMemory(fixture, updateBefore, 'update after')
+    const forgetBefore = await putMemory(fixture, 'forget before')
+    await fixture.memory.forget(forgetBefore.id, 'chat', fixture.chatId, forgetBefore.revision)
+    const forgetAfter = await fixture.memory.read(forgetBefore.id, 'chat', fixture.chatId, true)
+    if (forgetAfter === undefined) throw new Error('fixture forgotten record is missing')
+
+    pushToolCall(fixture, 'memory_update')
+    pushToolCall(fixture, 'memory_forget')
+    pushJournal(fixture, memoryJournal('journal-update', 'memory_update', 'before', updateBefore, updateBefore))
+    pushJournal(fixture, memoryJournal('journal-update', 'memory_update', 'after', updateBefore, updateAfter))
+    pushJournal(fixture, memoryJournal('journal-forget', 'memory_forget', 'before', forgetBefore, forgetBefore))
+    pushJournal(fixture, memoryJournal('journal-forget', 'memory_forget', 'after', forgetBefore, forgetAfter))
+
+    const synced: VectorSyncCall[] = []
+    const port = createPort(fixture, { memoryVectors: recordingMemoryVectors(synced) })
+    const plan = await port.prepare(SESSION_ID, TURN, PREVIOUS_MESSAGE_ID)
+
+    expect(synced).toEqual([
+      { id: forgetBefore.id, content: 'forget before', deleted: false },
+      { id: updateBefore.id, content: 'update before', deleted: false },
+    ])
+
+    synced.length = 0
+    await port.restore(plan)
+
+    expect(synced).toEqual([
+      { id: updateBefore.id, content: 'update after', deleted: false },
+      { id: forgetBefore.id, content: 'forget before', deleted: true },
+    ])
+  })
+
+  it('records vector-sync-failed and keeps rolling back other entries when a sync fails', async () => {
+    const fixture = await createFixture(plainSeed())
+    const updatedBefore = await putMemory(fixture, 'update before')
+    const updatedAfter = await updateMemory(fixture, updatedBefore, 'update after')
+    const created = await putMemory(fixture, 'created by the old turn')
+
+    pushToolCall(fixture, 'memory_update')
+    pushToolCall(fixture, 'memory_write')
+    pushJournal(fixture, memoryJournal('journal-update', 'memory_update', 'before', updatedBefore, updatedBefore))
+    pushJournal(fixture, memoryJournal('journal-update', 'memory_update', 'after', updatedBefore, updatedAfter))
+    pushJournal(fixture, memoryJournal('journal-write', 'memory_write', 'before', created, null))
+    pushJournal(fixture, memoryJournal('journal-write', 'memory_write', 'after', created, created))
+
+    const warnings: Array<Record<string, unknown> | undefined> = []
+    const logger: BodyRollbackLogger = {
+      warn: (_message, fields) => { warnings.push(fields) },
+    }
+    const synced: string[] = []
+    const port = createPort(fixture, {
+      logger,
+      memoryVectors: {
+        sync: async (record) => {
+          if (record.id === created.id) throw new Error('embed endpoint is down')
+          synced.push(record.id)
+        },
+      },
+    })
+    const plan = await port.prepare(SESSION_ID, TURN, PREVIOUS_MESSAGE_ID)
+
+    expect(synced).toEqual([updatedBefore.id])
+    expect(plan.diagnostics).toHaveLength(1)
+    expect(plan.diagnostics[0]).toMatchObject({
+      code: 'vector-sync-failed',
+      memoryId: created.id,
+    })
+    expect(plan.diagnostics[0]?.message).toContain(created.id)
+    expect(plan.diagnostics[0]?.message).toContain('embed endpoint is down')
+    expect(plan.diagnostics.some((entry) => entry.code === 'vector-restore-skipped')).toBe(false)
+    expect(warnings).toContainEqual(expect.objectContaining({ memoryId: created.id, direction: 'undo' }))
+    expect((await fixture.memory.read(created.id, 'chat', fixture.chatId, true))?.deletedAt).toBeDefined()
+    expect(await fixture.memory.read(updatedBefore.id, 'chat', fixture.chatId, true)).toMatchObject({
+      content: 'update before',
+      revision: updatedBefore.revision,
+    })
+  })
+
+  it('syncs vectors for rollbackTurnWrites as well', async () => {
+    const newTurn = TURN + 1
+    const fixture = await createFixture(plainSeed())
+    const created = await putMemory(fixture, 'new turn create')
+    const updateBefore = await putMemory(fixture, 'new turn update before')
+    const updateAfter = await updateMemory(fixture, updateBefore, 'new turn update after')
+
+    nextEvent(fixture.events, 'turn/start', { turn: newTurn })
+    pushToolCallInTurn(fixture, 'memory_write', newTurn)
+    pushToolCallInTurn(fixture, 'memory_update', newTurn)
+    pushJournal(fixture, memoryJournalInTurn('new-create', 'memory_write', 'before', created, null, newTurn))
+    pushJournal(fixture, memoryJournalInTurn('new-create', 'memory_write', 'after', created, created, newTurn))
+    pushJournal(fixture, memoryJournalInTurn('new-update', 'memory_update', 'before', updateBefore, updateBefore, newTurn))
+    pushJournal(fixture, memoryJournalInTurn('new-update', 'memory_update', 'after', updateBefore, updateAfter, newTurn))
+
+    const synced: VectorSyncCall[] = []
+    const port = createPort(fixture, { memoryVectors: recordingMemoryVectors(synced) })
+    const result = await port.rollbackTurnWrites(SESSION_ID, newTurn)
+
+    expect(result).toMatchObject({ undone: 2, failures: [], diagnostics: [] })
+    expect(synced).toEqual([
+      { id: updateBefore.id, content: 'new turn update before', deleted: false },
+      { id: created.id, content: 'new turn create', deleted: true },
+    ])
+  })
+
+  it('keeps the vector-restore-skipped diagnostic when no vector port is injected', async () => {
+    const fixture = await createFixture(plainSeed())
+    const created = await putMemory(fixture, 'created by the old turn')
+    pushToolCall(fixture, 'memory_write')
+    pushJournal(fixture, memoryJournal('journal-write', 'memory_write', 'before', created, null))
+    pushJournal(fixture, memoryJournal('journal-write', 'memory_write', 'after', created, created))
+
+    const port = createPort(fixture, {})
+    const plan = await port.prepare(SESSION_ID, TURN, PREVIOUS_MESSAGE_ID)
+
+    expect(plan.diagnostics).toEqual([expect.objectContaining({ code: 'vector-restore-skipped' })])
   })
 })

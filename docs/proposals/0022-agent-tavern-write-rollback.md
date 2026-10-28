@@ -160,11 +160,12 @@ interface BodyWriteRollbackPort {
 1. `prepare` 成功后才隐藏旧 anchor / trigger 新 turn。
 2. 新 turn 成功：`commit`，旧写入已被回滚，新写入保留。
 3. 新 turn 失败/取消：
-   - 先 `restore(plan)` 恢复旧 turn 的写入与 variables/receipts；
+   - 先 `rollbackTurnWrites(newTurn)` 撤销新 turn 自己的 memory/variable journal 与 settle receipt；
+   - 再 `restore(plan)` 恢复旧 turn 的写入与 variables/receipts；
    - 再用现有 `restoreBodyAfterFailure` 放回旧正文；
    - 若恢复失败，保留 op-start 待启动恢复，不假装成功。
-4. 崩溃恢复：`op-start` 无 `op-finish` 时，若存在回滚计划，按 `restore` 重试；计划本身落盘在
-   journal/checkpoint 中，不依赖进程内状态。
+4. 崩溃恢复：`op-start` 无 `op-finish` 时，`rollbackPlan` 直接随 `op-start.rollbackPlan`
+   落盘；重启后 `foldPendingOps` 严格校验并重建，再按 `restore` 重试，不依赖进程内状态。
 
 ## 11. 开工前检查表
 
@@ -172,7 +173,8 @@ interface BodyWriteRollbackPort {
    `body-runtime.ts`（调用时序）、`mvu.ts`/projector（receipt）、memory/variable 工具（journal 写入）。
 2. **唯一事实来源**：Session 日志的 write record + MVU receipt；MemoryStore / VariableStore 是当前值。
 3. **持久态及理由**：journal 与 receipt 必须落盘，保证失败/重启后可回滚；候选状态仍由 0021 ledger 管。
-4. **临时态**：回滚计划、pending op；重启由 journal + op-start 重建。
+4. **临时态**：pending op 只在进程内；回滚计划随 `op-start.rollbackPlan` 落盘，重启由
+   `foldPendingOps` 重建。
 5. **外部依赖**：`appendPluginRecord`（0.2.1+）、现有 `MemoryStore` / `VariableStore` / MVU receipt。
 6. **注册入口**：工具写入 journal；body-wiring 组装 rollback port；body-runtime 调用 prepare/restore/commit。
 7. **删除路径**：停止写 journal 只影响新 turn；旧 journal 保留但 body 操作可拒绝；不删除历史记录。
@@ -193,16 +195,19 @@ interface BodyWriteRollbackPort {
 
 | 项 | 结果 |
 |---|---|
-| `npm run check` | 156 test files / 2365 passed + 1 skipped；`build:plugin` 成功；18/18 gate PASS（含 `source-file-budget`、`v4-session-admission`、`client-bundle`） |
-| body + journal 聚焦 | 10 个 spec / 166 tests |
+| `npm run check` | 157 test files / 2385 passed + 1 skipped；`build:plugin` 成功；18/18 gate PASS（含 `source-file-budget`、`v4-session-admission`、`client-bundle`） |
+| body + journal 聚焦 | 11 个 spec / 186 tests |
 | 写入 journal | `agent-tavern-write-journal.spec.ts` 17 tests |
-| 回滚端口 | `agent-tavern-body-rollback.spec.ts` 16 tests |
+| 回滚端口 | `agent-tavern-body-rollback.spec.ts` 27 tests（含 settle receipt、向量同步、新 turn 撤销） |
+| 回滚集成 | `agent-tavern-body-rollback-integration.spec.ts` 2 tests（真实 store + 真实工具 journal） |
 | MVU 正文回执 | `agent-tavern-body-mvu-rollback.spec.ts` 7 tests |
-| runtime 时序 | `agent-tavern-body-runtime.spec.ts` 26 tests |
+| runtime 时序 / 恢复 | `agent-tavern-body-runtime.spec.ts` 33 tests（含 durable plan 与重启恢复） |
 | wiring / gate | `agent-tavern-body-wiring.spec.ts` 28 tests |
 
 实现分片（每文件 ≤800 行）：`body-rollback.ts`（门面/编排）、`body-rollback-support.ts`、
-`body-rollback-writes.ts`（journal undo/redo）、`body-rollback-journal.ts`（事件折叠与
-`rollbackTurnWrites`）、`body-rollback-receipts.ts`（body / settle 回执分流）。
+`body-rollback-writes.ts`（journal undo/redo + 向量同步）、`body-rollback-journal.ts`（事件折叠、
+`rollbackTurnWrites` 与 settle receipt 撤销）、`body-rollback-receipts.ts`（body / settle 回执分流）、
+`body-runtime-plan.ts`（`rollbackPlan` 的写侧 JSON 校验与读侧严格解析）。
 
-未覆盖项与残余风险见 §10.4（崩溃恢复计划未持久化）与落地决策的“风险与未完成”表。
+残余风险见 §10 与落地决策的“风险与未完成”表（prepare→op-start 崩溃窗口、plan 体积、
+settle 楼层判定、无跨 store 2PC、edit/select 仍严格）。

@@ -14,12 +14,16 @@ flat 变量与记忆不能简单叠加到新 turn；新 turn 失败或取消时�
 
 1. **MVU 变量**：正文投影写 `body:<messageId>` receipt（seed 后、patch 前抓基线）；settle
    receipt 走 flat `VariableStore`。重生成前按 receipt 回滚旧正文变量，新正文投影自己的
-   receipt；失败时按 receipt 的 after 值重放旧状态。
+   receipt；失败时按 receipt 的 after 值重放旧状态。新 turn 失败时先撤销该 turn 的 settle
+   receipt（按楼层归属匹配），再恢复旧 plan。
 2. **记忆与变量工具**：`memory_write/update/forget` 与 `variable_set/patch/delete` 在业务
    写入前后写 `plugin:dsh-soulmojito/write` journal（`ignorable: true`）。新 turn 失败时
    按 `rollbackTurnWrites(agentId, turn)` 撤销新写入；旧 turn 的 plan 再恢复旧写入。
+   记忆回滚/重放后通过 `memoryVectors` 端口同步删除或重建 `MemoryVectorStore` 向量。
 3. **事务顺序**：`prepare` → 隐藏旧 anchor → followup；成功 `commit`；失败先撤销新 turn
-   写入、再 `restore(oldPlan)`、最后放回旧正文。start 在 prepare 后失败也要补偿 restore。
+   写入（journal + settle receipt）、再 `restore(oldPlan)`、最后放回旧正文。start 在 prepare
+   后失败也要补偿 restore。`oldPlan` 随 `op-start.rollbackPlan` 落盘，重启后由
+   `foldPendingOps` 严格校验并重建。
 4. **工具面**：重生成允许记忆/变量/settle 写工具；`tavern_script_advance` 与游戏落子仍
    禁用，因为它们没有同级 checkpoint。
 5. **门禁收窄**：`body-state-unsafe` 不再因“MVU 卡”一律拒绝；只在卡/聊天读不到、旧正文
@@ -28,21 +32,24 @@ flat 变量与记忆不能简单叠加到新 turn；新 turn 失败或取消时�
 
 ## 证据
 
-- `npm run check`：156 test files / 2365 passed + 1 skipped；`build:plugin` 成功；
+- `npm run check`：157 test files / 2385 passed + 1 skipped；`build:plugin` 成功；
   18 道 gate 全部 PASS（含 `source-file-budget`、`v4-session-admission`、`client-bundle`）。
-- `agent-tavern-body-*` + journal：10 个 spec / 166 tests。
+- `agent-tavern-body-*` + journal：11 个 spec / 186 tests。
 - 关键覆盖：memory create/update/forget、variable set/patch/delete、settle flat store、
-  MVU body receipt undo/redo、新 turn 撤销、旧 plan 恢复、prepare 失败零写入、CAS 冲突、
-  重复 prepare 幂等、MVU regenerate 放行与 edit/select 拒绝。
+  MVU body receipt undo/redo、新 turn journal + settle receipt 撤销、旧 plan 恢复、
+  `op-start.rollbackPlan` 重启重建、记忆向量同步、真实 store 集成链路、prepare 失败零写入、
+  CAS 冲突、重复 prepare 幂等、MVU regenerate 放行与 edit/select 拒绝。
 - 对话框：编辑正文 280px / 重生成 180px 固定高度、内部滚动、窄屏降高；12 条客户端断言。
 
 ## 风险与未完成
 
 | 风险 | 说明 |
 |---|---|
-| 崩溃恢复 plan 未持久化 | `rollbackPlan` 只在进程内 pending op；重启后失败恢复能撤销新 turn，但没有旧 plan 可重放旧写入。后续把 plan 落 op-start/checkpoint。 |
-| 向量恢复跳过 | 记忆回滚不重新嵌入向量，依赖检索侧 lazy re-embed；记录 `vector-restore-skipped` 诊断。 |
-| 无跨 store 2PC | chat / VariableStore / MemoryStore 三套存储不是真正两阶段提交；已做预读与反向补偿，极端 I/O 中断会抛 `body-rollback-partial`。 |
+| `prepare` 与 `op-start` 之间的崩溃窗口 | plan 已随 `op-start.rollbackPlan` 落盘，但若进程在 `prepare` 保存“回滚后的 chat”之后、`op-start` 写入之前崩溃，这份 plan 仍不可见；彻底闭合需 port 在 `prepare` 内做原子 checkpoint。 |
+| plan 体积 | plan 含 `bodyText` 与 MVU receipts，会与正文事件重复放大 JSONL；当前未压缩或去重。 |
+| 向量同步失败 | 注入 `memoryVectors` 后回滚/重放会同步删除或重建 `MemoryVectorStore`；失败记 `vector-sync-failed` 诊断，不阻断主回滚，检索侧仍依赖 lazy re-embed 兜底。同步每条记忆会等待一次 embedding 调用。 |
+| settle receipt 楼层判定 | 新 turn 的 settle receipt 只有楼层键；`floor === messages.length` 是“settle 先于楼层落库”的信号，极端并发下可能把同楼层 receipt 视作当前 turn。 |
+| 无跨 store 2PC | chat / VariableStore / MemoryStore / MemoryVectorStore 不是真正两阶段提交；已做预读与反向补偿，极端 I/O 中断会抛 `body-rollback-partial`。 |
 | 脚本/游戏写入仍禁用 | 没有同级 checkpoint，不在本决策放开。 |
 | edit/select 仍严格 | MVU 上的编辑与候选切换需要候选级状态切换，P0 不放开。 |
 | commit 为 no-op | journal/receipt 保留审计；当前不影响回滚正确性。 |

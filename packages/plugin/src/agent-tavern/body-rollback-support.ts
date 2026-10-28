@@ -122,6 +122,20 @@ export interface BodyRollbackMemoryStore {
   restore(record: MemoryRecord, expectedRevision: string | undefined): Promise<MemoryRecord>
 }
 
+/**
+ * Vector-cache reconciliation seam for one rolled-back or replayed memory
+ * (proposal 0022 §8).
+ *
+ * `sync` receives the record as the store now holds it: a record carrying
+ * `deletedAt` must drop its vector, every other record is re-embedded with the
+ * current embedding config and written back to `MemoryVectorStore`. A failed
+ * sync must throw; the rollback layer degrades it to a `vector-sync-failed`
+ * diagnostic so the business rollback still completes.
+ */
+export interface BodyRollbackMemoryVectors {
+  sync(record: MemoryRecord): Promise<void>
+}
+
 /** Variable store surface consumed by the rollback port. */
 export interface BodyRollbackVariableStore {
   get(scope: VariableScope, scopeId: string, name: string): Promise<VariableSnapshot | undefined>
@@ -158,6 +172,12 @@ export interface BodyWriteRollbackDeps {
   readonly store: BodyRollbackStore
   readonly memoryStore: BodyRollbackMemoryStore
   readonly variableStore: BodyRollbackVariableStore
+  /**
+   * Optional vector-cache seam. When omitted, memory journals keep the
+   * `vector-restore-skipped` diagnostic; when injected, each memory undo/replay
+   * syncs the affected record and failures surface as `vector-sync-failed`.
+   */
+  readonly memoryVectors?: BodyRollbackMemoryVectors
   readonly sessionEvents: BodyRollbackSessionEvents
   readonly logger?: BodyRollbackLogger
   /**
@@ -194,12 +214,17 @@ export interface BodyRollbackVariableWrite {
 export type BodyRollbackJournalWrite = BodyRollbackMemoryWrite | BodyRollbackVariableWrite
 
 /** Non-blocking observations recorded while preparing the rollback. */
-export type BodyRollbackDiagnosticCode = 'journal-uncommitted-skipped' | 'vector-restore-skipped'
+export type BodyRollbackDiagnosticCode =
+  | 'journal-uncommitted-skipped'
+  | 'vector-restore-skipped'
+  | 'vector-sync-failed'
 
 /** A diagnostic the caller can surface in logs or an ops panel. */
 export interface BodyRollbackDiagnostic {
   readonly code: BodyRollbackDiagnosticCode
   readonly message: string
+  /** Memory whose vector sync failed; set only for `vector-sync-failed`. */
+  readonly memoryId?: string
 }
 
 /**
@@ -227,11 +252,17 @@ export interface BodyRollbackPlan {
   readonly preparedAt: string
 }
 
-/** One new-turn journal entry whose undo failed. */
+/** Tool named by a new-turn rollback failure; settle receipts have no journal id. */
+export type BodyTurnRollbackTool =
+  | WriteJournalMemoryTool
+  | WriteJournalVariableTool
+  | 'tavern_variable_settle'
+
+/** One new-turn journal entry or settle receipt whose undo failed. */
 export interface BodyTurnRollbackFailure {
   readonly journalId: string
   readonly kind: 'memory' | 'variable'
-  readonly tool: WriteJournalMemoryTool | WriteJournalVariableTool
+  readonly tool: BodyTurnRollbackTool
   readonly code: BodyRollbackErrorCode | 'unknown'
   readonly message: string
 }
@@ -240,16 +271,21 @@ export interface BodyTurnRollbackFailure {
  * Result of rolling back one turn's committed writes.
  *
  * `undone` counts committed journal entries whose undo actually changed a
- * store; a repeated call reports `0` because the stores already hold the before
- * state. `skippedUncommitted` lists before-only journal ids. `failures` lists
- * entries that could not be undone; the remaining entries still run.
+ * store; `receiptsUndone` counts this turn's settle receipts that were applied
+ * back and persisted with `undoneAt`. A repeated call reports `0` for both
+ * because the stores already hold the before state and the receipts are marked.
+ * `skippedUncommitted` lists before-only journal ids. `failures` lists entries
+ * that could not be undone; the remaining entries still run. `diagnostics`
+ * carries non-blocking vector-sync failures.
  */
 export interface BodyNewTurnRollback {
   readonly sessionId: string
   readonly turn: number
   readonly undone: number
+  readonly receiptsUndone: number
   readonly skippedUncommitted: readonly string[]
   readonly failures: readonly BodyTurnRollbackFailure[]
+  readonly diagnostics: readonly BodyRollbackDiagnostic[]
 }
 
 /** The prepare / restore / commit / new-turn rollback seam consumed by body-runtime. */
@@ -258,14 +294,66 @@ export interface BodyWriteRollbackPort {
   restore(plan: BodyRollbackPlan): Promise<void>
   commit(plan: BodyRollbackPlan): Promise<void>
   /**
-   * Undo the committed memory/variable writes of one turn (proposal 0022 §10.3).
+   * Undo the committed writes of one turn (proposal 0022 §10.3).
    *
-   * This is the new-turn failure path: it reads only that session+turn's write
-   * journal, never the old plan or the MVU receipts. Before-only records are
-   * reported and skipped. Failures are collected per entry so the caller gets a
-   * complete diagnostic instead of only the first store error.
+   * This is the new-turn failure path: it folds that session+turn's write
+   * journal, then undoes the settle receipts whose floor belongs to the turn.
+   * Body receipts and the old plan are never touched. Before-only journal
+   * records are reported and skipped. Failures are collected per entry so the
+   * caller gets a complete diagnostic instead of only the first store error.
    */
   rollbackTurnWrites(agentId: string, turn: number): Promise<BodyNewTurnRollback>
+}
+
+/* ------------------------------ binding ----------------------------------- */
+
+/**
+ * Resolve the agent-tavern chat binding of one session from the store state.
+ *
+ * Shared by `prepare` and `rollbackTurnWrites` so both reject a session the
+ * same way: a non-tavern architecture, a group chat, or a binding without a
+ * character/chat id is `body-state-unsafe` with `binding-unavailable`.
+ */
+export async function readAgentTavernBinding(
+  store: BodyRollbackStore,
+  agentId: string,
+): Promise<BodyRollbackBinding> {
+  let state: Pick<TavernState, 'sessionBindings'>
+  try {
+    state = await store.getState()
+  } catch (error) {
+    throw new BodyRollbackError(
+      'body-state-unsafe',
+      `body rollback cannot read tavern state for session '${agentId}': ${errorMessage(error)}`,
+      { detail: 'binding-unavailable', stage: 'prepare', sessionId: agentId, cause: error },
+    )
+  }
+  const bindings = state.sessionBindings
+  const binding = isRecord(bindings) ? bindings[agentId] : undefined
+  if (!isRecord(binding) || binding['architecture'] !== 'agent-tavern') {
+    throw new BodyRollbackError(
+      'body-state-unsafe',
+      `body rollback requires an agent-tavern binding for session '${agentId}'`,
+      { detail: 'binding-unavailable', stage: 'prepare', sessionId: agentId },
+    )
+  }
+  if (binding['group'] === true) {
+    throw new BodyRollbackError(
+      'body-state-unsafe',
+      `body rollback does not apply to group session '${agentId}'`,
+      { detail: 'binding-unavailable', stage: 'prepare', sessionId: agentId },
+    )
+  }
+  const character = binding['character']
+  const chatId = binding['chatId']
+  if (typeof character !== 'string' || character === '' || typeof chatId !== 'string' || chatId === '') {
+    throw new BodyRollbackError(
+      'body-state-unsafe',
+      `body rollback binding for session '${agentId}' has no character/chatId`,
+      { detail: 'binding-unavailable', stage: 'prepare', sessionId: agentId },
+    )
+  }
+  return { character, chatId }
 }
 
 export function requireNonEmptyString(value: unknown, field: string): asserts value is string {

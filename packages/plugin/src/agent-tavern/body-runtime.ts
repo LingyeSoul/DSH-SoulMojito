@@ -19,6 +19,7 @@ import { BodyRollbackError, type BodyRollbackPlan } from './body-rollback.js'
 import {
   BODY_TEXT_MAX_LENGTH,
   appendBodyEvent,
+  appendBodyStartEvent,
   appendOpFinish,
   assertAgentIdle,
   assertCanAdvanceTurnBase,
@@ -43,6 +44,7 @@ import {
   type RegenerateBodyRequest,
   type SelectBodyRequest,
 } from './body-runtime-core.js'
+import { durableRollbackPlan } from './body-runtime-plan.js'
 import {
   eventSeqOf,
   eventsOf,
@@ -167,13 +169,17 @@ export async function startRegenerate(
 
     let opStarted = false
     try {
-      const startEvent = appendBodyEvent(deps, {
+      const startEvent = appendBodyStartEvent(deps, {
         op: 'op-start',
         opId,
         groupId: request.groupId,
         kind: 'regenerate',
         previousAnchorId: request.expectedAnchorId,
         previousIndex,
+        // Proposal 0022 §10.4: the prepared plan is durable, so a restart can
+        // replay it without this process's `pendingByAgent` entry. The write
+        // check refuses anything JSONL cannot keep before the record is written.
+        ...(rollbackPlan === undefined ? {} : { rollbackPlan: durableRollbackPlan(rollbackPlan) }),
       })
       opStarted = true
       active.startSeq = eventSeqOf(startEvent) ?? nextEventSeq(events)
@@ -341,6 +347,8 @@ async function prepareRegenerateRollback(
 /**
  * Fold `op-start` events that never received `op-finish`. Startup recovery
  * uses this list to decide between candidate settlement and a body restore.
+ * A durable `rollbackPlan` carried by the record is attached to the operation,
+ * so the restore path can replay the old writes after a restart.
  */
 export function foldPendingOps(events: readonly unknown[]): readonly PendingBodyOperation[] {
   const parsed = parseEventList(events, 'foldPendingOps')
@@ -359,6 +367,7 @@ export function foldPendingOps(events: readonly unknown[]): readonly PendingBody
         previousIndex: data.previousIndex,
         startSeq: event.seq,
         triggerMessageId: triggerMessageIdFor(data.opId),
+        ...(data.rollbackPlan === undefined ? {} : { rollbackPlan: data.rollbackPlan }),
       })
       continue
     }
