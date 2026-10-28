@@ -14,6 +14,12 @@ const hostState = vi.hoisted(() => ({
   module: undefined as Record<string, unknown> | undefined,
 }))
 
+const rollbackState = vi.hoisted(() => ({
+  store: undefined as unknown,
+  memories: undefined as unknown,
+  variables: undefined as unknown,
+}))
+
 vi.mock('../../bind/src/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../bind/src/index.js')>()
   return {
@@ -26,9 +32,21 @@ vi.mock('../../bind/src/index.js', async (importOriginal) => {
   }
 })
 
+vi.mock('../src/runtime.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/runtime.js')>()
+  return {
+    ...actual,
+    store: async (): Promise<unknown> => rollbackState.store,
+    memories: async (): Promise<unknown> => rollbackState.memories,
+    variables: async (): Promise<unknown> => rollbackState.variables,
+  }
+})
+
 const { BODY_EVENT_TYPE, bodyRuntimeError } = await import('../src/agent-tavern/body-runtime.js')
 const {
   bodyFailureOf,
+  bodyHistoricalMvuStateOf,
+  bodyMutationSafetyOf,
   bodyRejectStatus,
   bodyStateSafetyOf,
   bodyStateUnsafeMessage,
@@ -361,12 +379,16 @@ function makeResponse() {
 }
 
 function mutationDb(character: CharacterCardIR, chat: ChatLogIR): TavernStore {
+  return mutationDbFor('session-mvu', character, chat)
+}
+
+function mutationDbFor(sessionId: string, character: CharacterCardIR, chat: ChatLogIR): TavernStore {
   return {
     getState: async () => ({
       regexScripts: [],
       activePreset: undefined,
       sessionBindings: {
-        'session-mvu': { architecture: 'agent-tavern', character: 'Character', chatId: 'chat.jsonl' },
+        [sessionId]: { architecture: 'agent-tavern', character: 'Character', chatId: 'chat.jsonl' },
       },
     }),
     getCharacter: async () => ({ fileName: 'Character', kind: 'json', card: character }),
@@ -375,7 +397,192 @@ function mutationDb(character: CharacterCardIR, chat: ChatLogIR): TavernStore {
   } as unknown as TavernStore
 }
 
-async function callBodyMutation(character: CharacterCardIR, chat: ChatLogIR) {
+/* ------------------------- regeneration rollback harness ------------------- */
+
+interface RegenerateEvent {
+  readonly type: string
+  readonly seq: number
+  readonly data: Record<string, unknown>
+  readonly opts?: Record<string, unknown>
+}
+
+interface RegenerateHarness {
+  readonly session: BodySessionLike
+  readonly agent: BodyAgentLike
+  readonly events: RegenerateEvent[]
+  readonly followups: unknown[]
+  surface(): number[]
+}
+
+/**
+ * Minimal live session for one closed anchor turn. `toolCalls` seeds real
+ * tool-call blocks in the old turn so the rollback port can test journal
+ * coverage; `text` is the old body floor.
+ */
+function createRegenerateHarness(text: string, toolCalls: readonly string[], sessionId: string): RegenerateHarness {
+  const events: RegenerateEvent[] = []
+  const surfaceNodes: number[] = []
+  const followups: unknown[] = []
+  const phase = { kind: 'idle', lastTurn: 1 }
+
+  const applySurface = (seq: number, metadata: Record<string, unknown> | undefined): void => {
+    const surfaceOp = metadata?.['surfaceOp']
+    if (surfaceOp === 'append') {
+      surfaceNodes.push(seq)
+      return
+    }
+    const op = asTestRecord(surfaceOp)
+    if (op?.['op'] !== 'replace') return
+    const startSeq = testNumber(op['startSeq'])
+    const endSeq = testNumber(op['endSeq'])
+    if (startSeq === undefined || endSeq === undefined) throw new Error('fake regenerate session: bad replace range')
+    const startIndex = surfaceNodes.indexOf(startSeq)
+    const endIndex = surfaceNodes.indexOf(endSeq)
+    if (startIndex < 0 || endIndex < startIndex) throw new Error('fake regenerate session: replace range is not on the surface')
+    surfaceNodes.splice(startIndex, endIndex - startIndex + 1, seq)
+  }
+
+  const append = (type: string, data: unknown, opts?: unknown): number => {
+    const metadata = asTestRecord(opts)
+    const seq = events.length
+    events.push({ type, seq, data: asTestRecord(data) ?? {}, ...(metadata === undefined ? {} : { opts: metadata }) })
+    if (type === 'user/message' || type === 'assistant/message' || type === 'tool/result'
+      || type === 'system/message' || type === 'developer/message') {
+      applySurface(seq, metadata)
+    }
+    return seq
+  }
+
+  const appendRecord = (type: string, data: unknown): number => {
+    const seq = events.length
+    events.push({ type, seq, data: asTestRecord(data) ?? {} })
+    return seq
+  }
+
+  const session = {
+    id: sessionId,
+    header: { version: 4 },
+    events,
+    get surface() { return { nodes: [...surfaceNodes] } },
+    append,
+    appendPluginRecord: appendRecord,
+  } as unknown as BodySessionLike
+
+  const agent: BodyAgentLike = {
+    id: sessionId,
+    session,
+    status: 'idle',
+    phase,
+    followup: (message: unknown) => { followups.push(message) },
+  }
+
+  append('turn/start', { turn: 1 })
+  append('step/start', { turn: 1, step: 1 })
+  for (const [index, name] of toolCalls.entries()) {
+    append('assistant/message', {
+      turn: 1,
+      step: 1,
+      message: {
+        id: `process-${index}`,
+        role: 'assistant',
+        content: [{ type: 'tool-call', callId: `call-${index}`, name, arguments: '{}' }],
+      },
+    }, { surfaceOp: 'append' })
+    append('tool/result', {
+      turn: 1,
+      step: 1,
+      message: { id: `result-${index}`, role: 'tool', content: [{ type: 'text', text: 'ok' }] },
+    }, { surfaceOp: 'append' })
+  }
+  append('assistant/message', {
+    turn: 1,
+    step: 1,
+    message: {
+      id: 'message-1',
+      role: 'assistant',
+      content: [{ type: 'text', text }],
+      source: { kind: 'model', provider: 'test-provider', model: 'test-model' },
+    },
+  }, { surfaceOp: 'append' })
+  append('step/end', { turn: 1, step: 1 })
+  append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+
+  return {
+    session,
+    agent,
+    events,
+    followups,
+    surface: () => [...surfaceNodes],
+  }
+}
+
+function rollbackDb(character: CharacterCardIR, chat: ChatLogIR, sessionId: string): Record<string, unknown> {
+  return {
+    getState: async () => ({
+      sessionBindings: {
+        [sessionId]: { architecture: 'agent-tavern', character: 'Character', chatId: 'chat.jsonl' },
+      },
+    }),
+    getCharacter: async () => ({ fileName: 'Character', kind: 'json', card: character }),
+    getChatSnapshot: async () => ({ chat, revision: 'rev-1' }),
+    saveChat: async () => 'rev-2',
+  }
+}
+
+function installRollbackState(character: CharacterCardIR, chat: ChatLogIR, sessionId: string): void {
+  rollbackState.store = rollbackDb(character, chat, sessionId)
+  rollbackState.memories = {
+    read: async () => undefined,
+    forget: async () => { throw new Error('unexpected memory forget') },
+    restore: async () => { throw new Error('unexpected memory restore') },
+  }
+  rollbackState.variables = {
+    get: async () => undefined,
+    set: async () => { throw new Error('unexpected variable set') },
+    delete: async () => { throw new Error('unexpected variable delete') },
+  }
+}
+
+async function callBodyRegenerate(
+  character: CharacterCardIR,
+  chat: ChatLogIR,
+  harness: RegenerateHarness,
+  sessionId: string,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  hostState.module = hostRecordModule()
+  installRollbackState(character, chat, sessionId)
+  const res = makeResponse()
+  const ctx = {
+    agents: { get: (id: string) => id === sessionId ? harness.agent : undefined },
+  } as unknown as Parameters<typeof handleAgentTavernBodyApi>[0]
+  await handleAgentTavernBodyApi(
+    ctx,
+    mutationDbFor(sessionId, character, chat),
+    makeRequest({
+      sessionId,
+      messageId: 'message-1',
+      groupId: 'message-1',
+      expectedAnchorId: 'message-1',
+      expectedIndex: 0,
+    }, 'POST', '/api/dsh-soulmojito/body/regenerate'),
+    res,
+    new URL('/api/dsh-soulmojito/body/regenerate', 'http://localhost'),
+    'body/regenerate',
+    'POST',
+  )
+  return {
+    status: res.statusCode,
+    body: res.chunks.length > 0 ? JSON.parse(res.chunks.join('')) as Record<string, unknown> : {},
+  }
+}
+
+async function callBodyRoute(
+  character: CharacterCardIR,
+  chat: ChatLogIR,
+  route: string,
+  method: string,
+  payload: Record<string, unknown>,
+): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = makeResponse()
   await handleAgentTavernBodyApi(
     {} as unknown as Parameters<typeof handleAgentTavernBodyApi>[0],
@@ -384,17 +591,24 @@ async function callBodyMutation(character: CharacterCardIR, chat: ChatLogIR) {
       sessionId: 'session-mvu',
       messageId: 'message-1',
       groupId: 'message-1',
-      index: 0,
-      text: 'edited body',
       expectedAnchorId: 'message-1',
-    }, 'PUT', '/api/dsh-soulmojito/body'),
+      ...payload,
+    }, method, `/api/dsh-soulmojito/${route}`),
     res,
-    new URL('/api/dsh-soulmojito/body', 'http://localhost'),
-    'body',
-    'PUT',
+    new URL(`/api/dsh-soulmojito/${route}`, 'http://localhost'),
+    route,
+    method,
   )
-  const payload = res.chunks.length > 0 ? JSON.parse(res.chunks.join('')) as Record<string, unknown> : {}
-  return { status: res.statusCode, body: payload }
+  const payloadOut = res.chunks.length > 0 ? JSON.parse(res.chunks.join('')) as Record<string, unknown> : {}
+  return { status: res.statusCode, body: payloadOut }
+}
+
+async function callBodyMutation(character: CharacterCardIR, chat: ChatLogIR) {
+  return callBodyRoute(character, chat, 'body', 'PUT', { index: 0, text: 'edited body' })
+}
+
+async function callBodySelect(character: CharacterCardIR, chat: ChatLogIR) {
+  return callBodyRoute(character, chat, 'body/select', 'POST', { index: 0 })
 }
 
 describe('plugin-record seam', () => {
@@ -435,6 +649,7 @@ describe('plugin-record seam', () => {
     expect(deps!.session).toBe(session)
     expect(deps!.agent).toBe(agent)
     expect(deps!.appendRecord).toBeTypeOf('function')
+    expect(deps!.writeRollback).toBeDefined()
 
     const data = { op: 'op-finish', opId: 'body-op-test', result: 'failed' }
     expect(deps!.appendRecord!(session, BODY_EVENT_TYPE, data)).toBe(11)
@@ -576,33 +791,48 @@ describe('turn-stopping binding filter', () => {
   })
 })
 
-describe('body state safety (proposal 0021 §10)', () => {
-  it('refuses an MVU-declared character card', () => {
-    expect(bodyStateSafetyOf({ card: mvuCharacter() }, fakeChat({}))).toEqual({
+describe('body state safety (proposal 0022 §7)', () => {
+  it('no longer refuses an MVU-declared card for regeneration', () => {
+    const character = { card: mvuCharacter() }
+    const chat = fakeChat({})
+    expect(bodyStateSafetyOf(character, chat)).toEqual({ safe: true })
+    expect(bodyHistoricalMvuStateOf(character, chat)).toBe(true)
+    expect(bodyMutationSafetyOf('regenerate', character, chat)).toEqual({ safe: true })
+    expect(bodyMutationSafetyOf('edit', character, chat)).toMatchObject({
       safe: false,
       reason: 'body-state-unsafe',
-      detail: 'card-mvu',
+      detail: 'edit-rollback-unavailable',
+    })
+    expect(bodyMutationSafetyOf('select', character, chat)).toMatchObject({
+      safe: false,
+      reason: 'body-state-unsafe',
+      detail: 'select-rollback-unavailable',
     })
   })
 
-  it('refuses a chat that already carries variables.stat_data', () => {
-    expect(bodyStateSafetyOf({ card: plainCharacter() }, fakeChat({ variables: { stat_data: {} } }))).toMatchObject({
-      safe: false,
-      reason: 'body-state-unsafe',
-      detail: 'stat-data',
-    })
+  it('treats chat variables.stat_data as edit/select-only history', () => {
+    const character = { card: plainCharacter() }
+    const chat = fakeChat({ variables: { stat_data: {} } })
+    expect(bodyStateSafetyOf(character, chat)).toEqual({ safe: true })
+    expect(bodyHistoricalMvuStateOf(character, chat)).toBe(true)
+    expect(bodyMutationSafetyOf('edit', character, chat)).toMatchObject({ detail: 'edit-rollback-unavailable' })
+    expect(bodyMutationSafetyOf('regenerate', character, chat)).toEqual({ safe: true })
   })
 
-  it('refuses a chat that already carries mvu.receipts', () => {
-    expect(bodyStateSafetyOf({ card: plainCharacter() }, fakeChat({ mvu: { receipts: [{ at: 't', turnKey: 'k' }] } }))).toMatchObject({
-      safe: false,
-      reason: 'body-state-unsafe',
-      detail: 'mvu-receipts',
-    })
+  it('treats chat mvu.receipts as edit/select-only history', () => {
+    const character = { card: plainCharacter() }
+    const chat = fakeChat({ mvu: { receipts: [{ at: 't', turnKey: 'k' }] } })
+    expect(bodyStateSafetyOf(character, chat)).toEqual({ safe: true })
+    expect(bodyHistoricalMvuStateOf(character, chat)).toBe(true)
+    expect(bodyMutationSafetyOf('select', character, chat)).toMatchObject({ detail: 'select-rollback-unavailable' })
   })
 
   it('allows a plain card with no historical MVU state', () => {
-    expect(bodyStateSafetyOf({ card: plainCharacter() }, fakeChat({ variables: { other: 1 } }))).toEqual({ safe: true })
+    const character = { card: plainCharacter() }
+    const chat = fakeChat({ variables: { other: 1 } })
+    expect(bodyStateSafetyOf(character, chat)).toEqual({ safe: true })
+    expect(bodyHistoricalMvuStateOf(character, chat)).toBe(false)
+    expect(bodyMutationSafetyOf('edit', character, chat)).toEqual({ safe: true })
   })
 
   it('fails closed when the card cannot be read', () => {
@@ -610,26 +840,39 @@ describe('body state safety (proposal 0021 §10)', () => {
       safe: false,
       detail: 'card-unreadable',
     })
-    expect(bodyStateUnsafeMessage('card-mvu')).toContain('MVU')
+    expect(bodyStateUnsafeMessage('card-unreadable')).toContain('character card')
+    expect(bodyStateUnsafeMessage('write-journal-missing')).toContain('write journal')
+    expect(bodyStateUnsafeMessage('write-journal-unavailable')).toContain('appendPluginRecord')
+    expect(bodyStateUnsafeMessage('mvu-receipt-missing')).toContain('receipt')
   })
 
-  it('returns 409 body-state-unsafe from a mutation before touching the agent', async () => {
+  it('returns 409 edit-rollback-unavailable from a PUT before touching the agent', async () => {
     const mvu = await callBodyMutation(mvuCharacter(), fakeChat({}))
     expect(mvu.status).toBe(409)
     expect(mvu.body).toMatchObject({
       ok: false,
       code: 'body-state-unsafe',
-      detail: 'card-mvu',
+      detail: 'edit-rollback-unavailable',
     })
-    expect(String(mvu.body['message'])).toContain('MVU')
+    expect(String(mvu.body['message'])).toContain('rollback')
   })
 
-  it('returns 409 body-state-unsafe when the chat only carries stat_data or receipts', async () => {
+  it('returns 409 select-rollback-unavailable from a select', async () => {
+    const result = await callBodySelect(mvuCharacter(), fakeChat({}))
+    expect(result.status).toBe(409)
+    expect(result.body).toMatchObject({
+      ok: false,
+      code: 'body-state-unsafe',
+      detail: 'select-rollback-unavailable',
+    })
+  })
+
+  it('keeps edit refused when the chat only carries stat_data or receipts', async () => {
     const stat = await callBodyMutation(plainCharacter(), fakeChat({ variables: { stat_data: {} } }))
-    expect(stat).toMatchObject({ status: 409, body: { code: 'body-state-unsafe', detail: 'stat-data' } })
+    expect(stat).toMatchObject({ status: 409, body: { code: 'body-state-unsafe', detail: 'edit-rollback-unavailable' } })
 
     const receipts = await callBodyMutation(plainCharacter(), fakeChat({ mvu: { receipts: [{ at: 't' }] } }))
-    expect(receipts).toMatchObject({ status: 409, body: { code: 'body-state-unsafe', detail: 'mvu-receipts' } })
+    expect(receipts).toMatchObject({ status: 409, body: { code: 'body-state-unsafe', detail: 'edit-rollback-unavailable' } })
   })
 
   it('lets a plain card pass the safety gate (later fails on the missing live agent)', async () => {
@@ -638,7 +881,7 @@ describe('body state safety (proposal 0021 §10)', () => {
     expect(result.body['code']).toBe('session-busy')
   })
 
-  it('keeps body text readable while disabling actions for an unsafe GET view', async () => {
+  it('keeps body text readable while allowing regenerate and refusing edit/select for an MVU GET view', async () => {
     hostState.module = hostRecordModule()
     const session = sessionWithAssistant('message-1', 'session body')
     const agent = fakeAgent(session)
@@ -656,17 +899,97 @@ describe('body state safety (proposal 0021 §10)', () => {
       'body',
       'GET',
     )
-    const payload = JSON.parse(res.chunks.join('')) as Record<string, unknown>
+    const result = JSON.parse(res.chunks.join('')) as Record<string, unknown>
 
-    expect(payload).toMatchObject({
+    expect(result).toMatchObject({
       ok: true,
       text: 'stored body',
       hidden: false,
       canEdit: false,
+      canRegenerate: true,
+      canSelect: false,
+      reason: 'edit-rollback-unavailable',
+    })
+  })
+
+  it('disables regenerate when the rollback port is unavailable', () => {
+    const view = buildBodyView({
+      messageId: 'message-1',
+      binding: { architecture: 'agent-tavern' },
+      agent: fakeAgent(fakeSession('session-view')),
+      hostSupported: true,
+      stateSafety: { safe: true },
+      historicalMvuState: true,
+      writeRollbackAvailable: false,
+      ledger: undefined,
+      messageText: 'raw message text',
+      projected: { text: 'display text', count: 1, selectedIndex: 0 },
+      inspection: { onSurface: true, last: true },
+    })
+    expect(view).toMatchObject({
+      canEdit: false,
       canRegenerate: false,
       canSelect: false,
-      reason: 'body-state-unsafe',
+      reason: 'write-journal-unavailable',
     })
+  })
+
+  it('lets an MVU regenerate reach the runtime and start the trigger', async () => {
+    const character = mvuCharacter()
+    const chat = projectedChat('old body')
+    const harness = createRegenerateHarness('old body', [], 'session-mvu-regen-pass')
+
+    const result = await callBodyRegenerate(character, chat, harness, 'session-mvu-regen-pass')
+
+    expect(result.status).toBe(202)
+    expect(result.body).toMatchObject({ ok: true, status: 'pending' })
+    expect(harness.followups).toHaveLength(1)
+    const anchorSeq = harness.events.find((event) => asTestRecord(event.data['message'])?.['id'] === 'message-1')?.seq
+    expect(anchorSeq).toBeDefined()
+    expect(harness.surface()).not.toContain(anchorSeq)
+    expect(harness.events.some((event) => event.type === BODY_EVENT_TYPE
+      && event.data['op'] === 'op-start')).toBe(true)
+  })
+
+  it('refuses an MVU regenerate whose old turn wrote without a journal record', async () => {
+    const character = mvuCharacter()
+    const chat = projectedChat('old body')
+    const harness = createRegenerateHarness('old body', ['memory_write'], 'session-mvu-regen-journal')
+
+    const result = await callBodyRegenerate(character, chat, harness, 'session-mvu-regen-journal')
+
+    expect(result.status).toBe(409)
+    expect(result.body).toMatchObject({
+      ok: false,
+      code: 'body-state-unsafe',
+      detail: 'write-journal-missing',
+    })
+    expect(harness.events.some((event) => event.type === BODY_EVENT_TYPE)).toBe(false)
+    expect(harness.followups).toHaveLength(0)
+    const anchorSeq = harness.events.find((event) => asTestRecord(event.data['message'])?.['id'] === 'message-1')?.seq
+    expect(anchorSeq).toBeDefined()
+    expect(harness.surface()).toContain(anchorSeq)
+  })
+
+  it('refuses an MVU regenerate whose old body has no receipt', async () => {
+    const character = mvuCharacter()
+    const chat = projectedChat('<UpdateVariable>{"hp":1}</UpdateVariable>')
+    const harness = createRegenerateHarness(
+      '<UpdateVariable>{"hp":1}</UpdateVariable>',
+      [],
+      'session-mvu-regen-receipt',
+    )
+
+    const result = await callBodyRegenerate(character, chat, harness, 'session-mvu-regen-receipt')
+
+    expect(result.status).toBe(409)
+    expect(result.body).toMatchObject({
+      ok: false,
+      code: 'body-state-unsafe',
+      detail: 'mvu-receipt-missing',
+    })
+    expect(harness.events.some((event) => event.type === BODY_EVENT_TYPE)).toBe(false)
+    expect(harness.followups).toHaveLength(0)
   })
 })
 
@@ -679,6 +1002,8 @@ describe('body view policy', () => {
       agent,
       hostSupported: true,
       stateSafety: undefined,
+      historicalMvuState: false,
+      writeRollbackAvailable: true,
       ledger: undefined,
       messageText: 'raw message text',
       projected: { text: 'display text', count: 1, selectedIndex: 0 },
@@ -698,6 +1023,8 @@ describe('body view policy', () => {
       agent: undefined,
       hostSupported: false,
       stateSafety: undefined,
+      historicalMvuState: false,
+      writeRollbackAvailable: false,
       ledger: undefined,
       messageText: undefined,
       projected: undefined,
@@ -773,7 +1100,7 @@ describe('startup recovery', () => {
       bindingOf: () => ({ architecture: 'agent-tavern', character: 'Character', chatId: 'chat.jsonl' }),
       safetyOf: () => {
         safetyCalls += 1
-        return { safe: false, reason: 'body-state-unsafe', detail: 'card-mvu' }
+        return { safe: false, reason: 'body-state-unsafe', detail: 'card-unreadable' }
       },
     }
 

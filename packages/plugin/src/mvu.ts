@@ -187,6 +187,31 @@ export function overlayChatScopedVariables(
 
 /* ------------------------------ 回执读写 ------------------------------ */
 
+/** Tolerant parse of one receipt entry; invalid shapes return undefined (same semantics as readMvuReceipts). */
+function readMvuReceipt(record: Record<string, unknown>): MvuReceipt | undefined {
+  const { at, turnKey, status, changes, failures } = record
+  if (typeof at !== 'string' || typeof turnKey !== 'string') return undefined
+  if (status !== 'updated' && status !== 'unchanged' && status !== 'failed') return undefined
+  return {
+    at,
+    turnKey,
+    status,
+    changes: Array.isArray(changes)
+      ? changes.flatMap((item): MvuVariableChange[] => {
+          const change = plainObject(item)
+          if (change === undefined || typeof change.name !== 'string') return []
+          const out: MvuVariableChange = { name: change.name }
+          if ('before' in change) out.before = change.before
+          if ('after' in change) out.after = change.after
+          if (typeof change.reason === 'string') out.reason = change.reason
+          return [out]
+        })
+      : [],
+    failures: Array.isArray(failures) ? failures.filter((item): item is string => typeof item === 'string') : [],
+    ...(typeof record.undoneAt === 'string' ? { undoneAt: record.undoneAt } : {}),
+  }
+}
+
 /** 读 `chat_metadata.mvu.receipts`；形状不合法的条目跳过（手改 jsonl 的容错）。 */
 export function readMvuReceipts(chat: ChatLogIR): MvuReceipt[] {
   const raw = plainObject(chat?.header?.chat_metadata?.mvu)?.receipts
@@ -195,27 +220,8 @@ export function readMvuReceipts(chat: ChatLogIR): MvuReceipt[] {
   for (const entry of raw) {
     const record = plainObject(entry)
     if (record === undefined) continue
-    const { at, turnKey, status, changes, failures } = record
-    if (typeof at !== 'string' || typeof turnKey !== 'string') continue
-    if (status !== 'updated' && status !== 'unchanged' && status !== 'failed') continue
-    receipts.push({
-      at,
-      turnKey,
-      status,
-      changes: Array.isArray(changes)
-        ? changes.flatMap((item): MvuVariableChange[] => {
-            const change = plainObject(item)
-            if (change === undefined || typeof change.name !== 'string') return []
-            const out: MvuVariableChange = { name: change.name }
-            if ('before' in change) out.before = change.before
-            if ('after' in change) out.after = change.after
-            if (typeof change.reason === 'string') out.reason = change.reason
-            return [out]
-          })
-        : [],
-      failures: Array.isArray(failures) ? failures.filter((item): item is string => typeof item === 'string') : [],
-      ...(typeof record.undoneAt === 'string' ? { undoneAt: record.undoneAt } : {}),
-    })
+    const receipt = readMvuReceipt(record)
+    if (receipt !== undefined) receipts.push(receipt)
   }
   return receipts
 }
@@ -637,7 +643,7 @@ export interface MvuUndoRestore {
   value?: unknown
 }
 
-export type MvuUndoRefusalCode = 'NO_VALID_RECEIPT' | 'ALREADY_UNDONE' | 'INCOMPLETE_RECEIPT' | 'UNDO_REJECTED'
+export type MvuUndoRefusalCode = 'NO_VALID_RECEIPT' | 'ALREADY_UNDONE' | 'INCOMPLETE_RECEIPT' | 'UNDO_REJECTED' | 'INVALID_QUERY'
 
 /** 撤销的语义性拒绝（HTTP 400 分类；并发冲突仍走 ChatRevisionConflictError）。 */
 export class MvuUndoRefusalError extends Error {
@@ -851,4 +857,231 @@ export async function undoMvuAgentSettlement(
   const marked = markMvuReceiptUndone(chat, target.index, options.at)
   const revision = await db.saveChat(characterName, chatId, chat, snapshot.revision)
   return { receipt: marked, revision, restores }
+}
+
+/* ------- body receipt lookup / undo / redo (proposal 0022 section 4) ------- */
+
+/** Body receipt query: `messageId` matches `body:<messageId>`, `floorIndex` matches `String(floorIndex)`. */
+export interface MvuBodyReceiptQuery {
+  /** Native assistant message id; matches the projector's `body:<messageId>` receipt. */
+  messageId?: string
+  /** Floor index; matches settle receipts whose turnKey is the floor index. */
+  floorIndex?: number
+}
+
+/** Undo write-back options; `at` falls back to the current time. */
+export interface MvuReceiptsMutationOptions {
+  at?: string
+}
+
+/** Result of one receipt rollback/replay; the chat is mutated in place and never saved (the caller owns CAS). */
+export interface MvuReceiptsMutationResult {
+  /** Receipts actually processed, in stored order (for undo, only the ones not already undone). */
+  receipts: MvuReceipt[]
+  /** Restore plan in application order (undo reverses receipts, redo keeps them forward). */
+  restores: MvuUndoRestore[]
+}
+
+interface LocatedMvuReceipt {
+  index: number
+  receipt: MvuReceipt
+}
+
+function rawMvuReceipts(chat: ChatLogIR): unknown[] | undefined {
+  const receipts = plainObject(chat.header.chat_metadata.mvu)?.receipts
+  return Array.isArray(receipts) ? receipts : undefined
+}
+
+/**
+ * Collect the receipts that belong to one body floor. Body `<UpdateVariable>`
+ * writes use `body:<messageId>`; `tavern_variable_settle` uses the floor index.
+ * Rollback must process both in write order, so the query unions them and keeps
+ * the stored (append) order. Already-undone receipts stay in the result so the
+ * caller can distinguish a missing receipt from an already-rolled-back one.
+ */
+export function mvuReceiptsForBody(chat: ChatLogIR, query: MvuBodyReceiptQuery): MvuReceipt[] {
+  const { messageId, floorIndex } = query
+  if (messageId === undefined && floorIndex === undefined) {
+    throw new MvuUndoRefusalError('INVALID_QUERY', 'mvuReceiptsForBody requires messageId or floorIndex; neither was given')
+  }
+  if (messageId !== undefined && (typeof messageId !== 'string' || messageId.trim() === '')) {
+    throw new MvuUndoRefusalError('INVALID_QUERY', 'mvuReceiptsForBody requires messageId to be a non-empty string')
+  }
+  if (floorIndex !== undefined && (!Number.isSafeInteger(floorIndex) || floorIndex < 0)) {
+    throw new MvuUndoRefusalError(
+      'INVALID_QUERY',
+      `mvuReceiptsForBody requires floorIndex to be a non-negative safe integer, received ${String(floorIndex)}`,
+    )
+  }
+  const bodyKey = messageId === undefined ? undefined : `body:${messageId}`
+  const floorKey = floorIndex === undefined ? undefined : String(floorIndex)
+  return readMvuReceipts(chat).filter((receipt) => receipt.turnKey === bodyKey || receipt.turnKey === floorKey)
+}
+
+/**
+ * Locate the passed receipts in the stored array by `turnKey + at` (the caller
+ * may hold an older snapshot, so object identity is not usable). A miss is
+ * refused: continuing would roll variables back without marking the receipt,
+ * leaving a half-applied state.
+ */
+function locateStoredReceipts(
+  chat: ChatLogIR,
+  receipts: readonly MvuReceipt[],
+  operation: string,
+): LocatedMvuReceipt[] {
+  const raw = rawMvuReceipts(chat)
+  if (raw === undefined) {
+    throw new MvuUndoRefusalError(
+      'INCOMPLETE_RECEIPT',
+      `${operation} refused: the chat has no mvu.receipts to match ${receipts.length} receipt(s) against`,
+    )
+  }
+  const used = new Set<number>()
+  const located: LocatedMvuReceipt[] = []
+  for (const receipt of receipts) {
+    let match: LocatedMvuReceipt | undefined
+    for (let index = 0; index < raw.length; index += 1) {
+      if (used.has(index)) continue
+      const record = plainObject(raw[index])
+      if (record === undefined) continue
+      const stored = readMvuReceipt(record)
+      if (stored === undefined || stored.turnKey !== receipt.turnKey || stored.at !== receipt.at) continue
+      match = { index, receipt: stored }
+      break
+    }
+    if (match === undefined) {
+      throw new MvuUndoRefusalError(
+        'INCOMPLETE_RECEIPT',
+        `${operation} refused: receipt '${receipt.turnKey}' at ${receipt.at} is not stored in this chat; the receipt set and the chat are out of sync`,
+      )
+    }
+    used.add(match.index)
+    located.push(match)
+  }
+  return located
+}
+
+/**
+ * Mark or clear `undoneAt` on stored receipts in place. Raw array indexes keep
+ * unknown members; the normalized marked receipts are returned (variables stay
+ * untouched until the caller commits them).
+ */
+function setStoredReceiptsUndoneAt(
+  chat: ChatLogIR,
+  indexes: readonly number[],
+  undoneAt: string | undefined,
+): MvuReceipt[] {
+  const raw = rawMvuReceipts(chat)
+  if (raw === undefined) {
+    throw new MvuUndoRefusalError('INCOMPLETE_RECEIPT', 'cannot mark MVU receipts undone: the chat has no mvu.receipts array')
+  }
+  const next = raw.slice()
+  const marked: MvuReceipt[] = []
+  for (const index of indexes) {
+    const record = plainObject(next[index])
+    if (record === undefined) {
+      throw new MvuUndoRefusalError('INCOMPLETE_RECEIPT', `cannot mark MVU receipt at index ${index}: the entry is not an object`)
+    }
+    const updated: Record<string, unknown> = { ...record }
+    if (undoneAt === undefined) delete updated['undoneAt']
+    else updated['undoneAt'] = undoneAt
+    const receipt = readMvuReceipt(updated)
+    if (receipt === undefined) {
+      throw new MvuUndoRefusalError('INCOMPLETE_RECEIPT', `cannot mark MVU receipt at index ${index}: the entry is not a valid receipt`)
+    }
+    next[index] = updated
+    marked.push(receipt)
+  }
+  const mvu = plainObject(chat.header.chat_metadata.mvu) ?? {}
+  // Keep unknown mvu members; only receipts use the edited raw entries.
+  chat.header.chat_metadata.mvu = { ...mvu, receipts: next }
+  return marked
+}
+
+function cloneChatVariablesForReceipts(chat: ChatLogIR): Record<string, unknown> {
+  return deepClone(plainObject(chat.header.chat_metadata.variables) ?? {}) as Record<string, unknown>
+}
+
+/** Drop the key for an empty tree, matching the settlement convention of not writing an empty variables key. */
+function commitChatVariablesAfterReceipts(chat: ChatLogIR, variables: Record<string, unknown>): void {
+  const metadata = chat.header.chat_metadata
+  if (Object.keys(variables).length === 0) delete metadata.variables
+  else metadata.variables = variables
+}
+
+/**
+ * Redo restore plan (pure): restore the after value when present, otherwise
+ * delete the path (the receipt recorded a deletion). Completeness rules match
+ * planMvuUndoRestores; incomplete data is refused instead of guessed.
+ */
+function planMvuRedoRestores(receipt: MvuReceipt): MvuUndoRestore[] {
+  if (receipt.status === 'updated' && receipt.changes.length === 0) {
+    throw new MvuUndoRefusalError('INCOMPLETE_RECEIPT', `receipt ${receipt.turnKey} claims status 'updated' but records no change data; the receipt data is incomplete and cannot be replayed`)
+  }
+  const restores: MvuUndoRestore[] = []
+  for (const change of receipt.changes) {
+    if (!('before' in change) && !('after' in change)) {
+      throw new MvuUndoRefusalError('INCOMPLETE_RECEIPT', `receipt change '${change.name}' records neither a before nor an after value; the receipt data is incomplete and cannot be replayed`)
+    }
+    restores.push({ path: change.name, ...('after' in change ? { value: deepClone(change.after) } : {}) })
+  }
+  return restores
+}
+
+/**
+ * Roll back a set of receipts (proposal 0022 section 4 step 3): restore every
+ * change to its before value, newest receipt first, then mark `undoneAt`.
+ * Already-undone receipts are skipped, so repeated calls are idempotent. Any
+ * incomplete or foreign receipt refuses the whole call: neither variables nor
+ * receipts are touched, and nothing is saved.
+ */
+export function undoMvuReceipts(
+  chat: ChatLogIR,
+  receipts: readonly MvuReceipt[],
+  options?: MvuReceiptsMutationOptions,
+): MvuReceiptsMutationResult {
+  if (receipts.length === 0) return { receipts: [], restores: [] }
+  const located = locateStoredReceipts(chat, receipts, 'MVU receipt undo')
+  const targets = located
+    .filter((entry) => entry.receipt.undoneAt === undefined)
+    .sort((left, right) => left.index - right.index)
+  if (targets.length === 0) return { receipts: [], restores: [] }
+  const restores: MvuUndoRestore[] = []
+  // Newest first: a later write must roll back before an earlier one so
+  // overlapping paths land on the oldest value.
+  for (let index = targets.length - 1; index >= 0; index -= 1) {
+    restores.push(...planMvuUndoRestores(targets[index]!.receipt))
+  }
+  const variables = cloneChatVariablesForReceipts(chat)
+  applyMvuUndoRestores(variables, restores)
+  const at = options?.at ?? new Date().toISOString()
+  const marked = setStoredReceiptsUndoneAt(chat, targets.map((entry) => entry.index), at)
+  commitChatVariablesAfterReceipts(chat, variables)
+  return { receipts: marked, restores }
+}
+
+/**
+ * Replay a set of already-undone receipts (regeneration failure recovery):
+ * restore each change's after value in write order (no after = delete), then
+ * clear `undoneAt`. Whether a receipt is undone is decided from the stored
+ * receipt, so callers may pass the pre-undo snapshot; live receipts are skipped
+ * (idempotent). Incomplete data refuses the whole call; nothing is saved.
+ */
+export function redoMvuReceipts(
+  chat: ChatLogIR,
+  receipts: readonly MvuReceipt[],
+): MvuReceiptsMutationResult {
+  if (receipts.length === 0) return { receipts: [], restores: [] }
+  const located = locateStoredReceipts(chat, receipts, 'MVU receipt redo')
+  const targets = located
+    .filter((entry) => entry.receipt.undoneAt !== undefined)
+    .sort((left, right) => left.index - right.index)
+  if (targets.length === 0) return { receipts: [], restores: [] }
+  const restores: MvuUndoRestore[] = []
+  for (const entry of targets) restores.push(...planMvuRedoRestores(entry.receipt))
+  const variables = cloneChatVariablesForReceipts(chat)
+  applyMvuUndoRestores(variables, restores)
+  const marked = setStoredReceiptsUndoneAt(chat, targets.map((entry) => entry.index), undefined)
+  commitChatVariablesAfterReceipts(chat, variables)
+  return { receipts: marked, restores }
 }

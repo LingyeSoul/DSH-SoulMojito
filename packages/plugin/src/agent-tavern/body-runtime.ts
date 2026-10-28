@@ -15,6 +15,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { BODY_EVENT_TYPE, type BodyEventData } from './body.js'
+import { BodyRollbackError, type BodyRollbackPlan } from './body-rollback.js'
 import {
   BODY_TEXT_MAX_LENGTH,
   appendBodyEvent,
@@ -50,6 +51,7 @@ import {
   pendingEventOf,
   surfaceNodeList,
   triggerMessageIdFor,
+  turnOfEventSeq,
 } from './body-runtime-session.js'
 import {
   anchorTarget,
@@ -87,7 +89,10 @@ export type {
   BodyRuntimeDeps,
   BodyRuntimeErrorCode,
   BodyRuntimeFailure,
+  BodyRuntimeRollbackPort,
   BodyRuntimeState,
+  BodyRuntimeTurnRollback,
+  BodyRuntimeTurnRollbackFailure,
   BodySessionLike,
   EditBodyRequest,
   FinalizeTurnStoppingResult,
@@ -112,7 +117,9 @@ export interface StartRegenerateResult {
 /**
  * Start a regeneration operation.
  *
- * The previous anchor is moved out of the model surface before `followup` is
+ * The write rollback plan is prepared before any body record is written: a
+ * refused plan leaves the old anchor visible and produces no `op-start`. The
+ * previous anchor is then moved out of the model surface before `followup` is
  * called. A small bridge turn is used because DSH v4 only admits
  * `developer/message` inside an open turn and step; the bridge keeps the
  * replacement reload-valid without fabricating an assistant replacement.
@@ -138,6 +145,11 @@ export async function startRegenerate(
     const previousIndex = existingLedger?.selectedIndex ?? 0
     const deny = normalizeDenyTools(request.writeToolDeny)
 
+    // Proposal 0022 §5/§10: prepare the old turn's write rollback before the
+    // anchor is hidden or the trigger turn starts. A prepare failure is a
+    // fail-closed `body-state-unsafe` with zero body records written.
+    const rollbackPlan = await prepareRegenerateRollback(deps, agentId, events, target.seq, request.expectedAnchorId)
+
     const opId = `body-op-${randomUUID()}`
     const triggerMessageId = `body-trigger-${opId}`
     const active: ActiveBodyOperation = {
@@ -150,20 +162,23 @@ export async function startRegenerate(
       triggerMessageId,
       release: () => {},
       ...(request.feedback === undefined ? {} : { feedback: request.feedback }),
+      ...(rollbackPlan === undefined ? {} : { rollbackPlan }),
     }
 
-    const startEvent = appendBodyEvent(deps, {
-      op: 'op-start',
-      opId,
-      groupId: request.groupId,
-      kind: 'regenerate',
-      previousAnchorId: request.expectedAnchorId,
-      previousIndex,
-    })
-    active.startSeq = eventSeqOf(startEvent) ?? nextEventSeq(events)
-    pendingByAgent.set(agentId, active)
-
+    let opStarted = false
     try {
+      const startEvent = appendBodyEvent(deps, {
+        op: 'op-start',
+        opId,
+        groupId: request.groupId,
+        kind: 'regenerate',
+        previousAnchorId: request.expectedAnchorId,
+        previousIndex,
+      })
+      opStarted = true
+      active.startSeq = eventSeqOf(startEvent) ?? nextEventSeq(events)
+      pendingByAgent.set(agentId, active)
+
       if (existingLedger === undefined) {
         // First body operation on this floor: register the original reply as
         // candidate 0 so the body ledger and the JSONL swipes start at slot 0.
@@ -185,13 +200,38 @@ export async function startRegenerate(
       }
     } catch (error) {
       const reason = `body regenerate ${opId} failed to start: ${errorMessage(error)}`
-      try {
-        appendOpFinish(deps, opId, 'failed', undefined, reason)
-      } catch (finishError) {
-        warn(deps, `body runtime: failed to record op-finish for start failure ${opId}: ${errorMessage(finishError)}`)
+
+      // Proposal 0022 §10.3: prepare already rolled the old writes back. If
+      // any later start step fails, put those writes back before surfacing the
+      // error so the store never stays rolled back while the old body remains.
+      let compensationError: unknown
+      if (rollbackPlan !== undefined && deps.writeRollback !== undefined) {
+        try {
+          await deps.writeRollback.restore(rollbackPlan)
+        } catch (restoreError) {
+          compensationError = restoreError
+        }
+      }
+
+      if (opStarted) {
+        try {
+          appendOpFinish(deps, opId, 'failed', undefined, reason)
+        } catch (finishError) {
+          warn(deps, `body runtime: failed to record op-finish for start failure ${opId}: ${errorMessage(finishError)}`)
+        }
       }
       releaseOperation(deps, active)
-      pendingByAgent.delete(agentId)
+
+      if (compensationError !== undefined) {
+        const combined = new AggregateError(
+          [error, compensationError],
+          `${reason}; the prepared write rollback could not be restored: ${errorMessage(compensationError)}`,
+        )
+        const failure = bodyRuntimeError('operation-failed', combined.message)
+        failure.cause = combined
+        failure.op = operationView(active)
+        throw failure
+      }
       throw failureFor(error, reason, operationView(active))
     }
   })
@@ -258,6 +298,44 @@ export async function selectBodyCandidate(
     }
     return stateFromLedger(updated)
   })
+}
+
+/**
+ * Prepare the old turn's write rollback.
+ *
+ * The turn comes from the old anchor itself (its `data.turn`, or the turn that
+ * was open/closed at that sequence), never from the trigger turn that is about
+ * to start. Any prepare failure is reported as `body-state-unsafe` so the
+ * caller refuses before writing an `op-start` or hiding the anchor.
+ */
+async function prepareRegenerateRollback(
+  deps: BodyRuntimeDeps,
+  agentId: string,
+  events: ReturnType<typeof eventsOf>,
+  anchorSeq: number,
+  previousAnchorId: string,
+): Promise<BodyRollbackPlan | undefined> {
+  const port = deps.writeRollback
+  if (port === undefined) return undefined
+  const oldTurn = turnOfEventSeq(events, anchorSeq)
+  if (oldTurn === undefined) {
+    throw bodyRuntimeError(
+      'body-state-unsafe',
+      `body regenerate for session '${agentId}' refused: cannot derive the turn of anchor '${previousAnchorId}' from the session log`,
+    )
+  }
+  try {
+    return await port.prepare(agentId, oldTurn, previousAnchorId)
+  } catch (error) {
+    const detail = error instanceof BodyRollbackError ? error.detail : undefined
+    const failure = bodyRuntimeError(
+      'body-state-unsafe',
+      `body regenerate for session '${agentId}' refused: cannot prepare the write rollback of turn ${oldTurn} for anchor '${previousAnchorId}': ${errorMessage(error)}`,
+      detail,
+    )
+    failure.cause = error
+    throw failure
+  }
 }
 
 /**

@@ -8,6 +8,7 @@ import { hostPluginMessageSource, hostSessionFormatVersion, isHostPluginMessageS
 import { applyUpdateVariableToChat, ensureChatVariables, messageStatVariables, seedJsrMvuVariables } from './mvu-compat.js'
 import { isBodyLogEvent, isBodyMergedAssistant, projectBodyEvent, type BodyProjectionStore } from './body-projector.js'
 import { collectSessionRegexScripts } from '../regex-session.js'
+import { recordMvuTurnReceipt, snapshotChatVariables } from '../mvu.js'
 
 export interface NativeSessionEvent {
   type: string
@@ -126,11 +127,24 @@ export class AgentTavernProjector {
         // getChatMessages().data.stat_data 才能与聊天变量同源。
         seedJsrMvuVariables(card, ensureChatVariables(next))
         if (message.is_user !== true) {
+          // Proposal 0022 §4: the receipt baseline is taken after the seed and
+          // before the patch, so rolling the body back restores the seeded tree
+          // instead of undoing the seed itself.
+          const before = snapshotChatVariables(next)
           const applied = applyUpdateVariableToChat(card, next, message.mes)
           projected = {
             ...message,
             mes: applied.text,
             ...(applied.statData !== undefined ? { variables: { ...(plainObjectRecord(message.variables) ?? {}), stat_data: applied.statData } } : {}),
+          }
+          if (applied.found) {
+            const messageId = projectedMessageId(message)
+            if (messageId === undefined) {
+              throw new Error(
+                `AgentTavern projector cannot record the body MVU receipt: assistant message at event seq ${eventSeq} has no projection message id`,
+              )
+            }
+            recordMvuTurnReceipt(next, before, { turnKey: `body:${messageId}`, failures: applied.failures })
           }
         }
         projected = messageStatVariables(next, projected)
@@ -249,6 +263,13 @@ function projectionExtra(
 function projectionIdentity(message: ChatMessage, sessionId: string, eventSeq: number): boolean {
   const source = message.extra?.agentTavern as Record<string, unknown> | undefined
   return source?.sessionId === sessionId && source.eventSeq === eventSeq
+}
+
+/** Projection message id carried in `extra.agentTavern.messageId`; absent for events without one. */
+function projectedMessageId(message: ChatMessage): string | undefined {
+  const agentTavern = plainObjectRecord(message.extra?.['agentTavern'])
+  const messageId = agentTavern?.['messageId']
+  return typeof messageId === 'string' && messageId !== '' ? messageId : undefined
 }
 
 /**

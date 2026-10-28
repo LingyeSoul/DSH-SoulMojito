@@ -15567,6 +15567,7 @@ window.__ModuleLoader__.load({
           onClose: closeEditor,
           closeLabel: t('panel.close'),
           footer: editFooter,
+          className: 'dt-body-dialog dt-body-dialog-edit',
         },
         h('div', { className: 'dt-editor' },
           h(EditorField, {
@@ -15574,7 +15575,7 @@ window.__ModuleLoader__.load({
             value: draft,
             onChange: setDraft,
             multiline: true,
-            className: 'dt-editor-wide',
+            className: 'dt-editor-wide dt-body-textarea dt-body-textarea-edit',
           }),
           error !== '' ? h('p', { className: 'dt-error', role: 'alert' }, error) : null)) : null,
         feedbackOpen ? h(EditorDialog, {
@@ -15582,6 +15583,7 @@ window.__ModuleLoader__.load({
           onClose: closeRegenerate,
           closeLabel: t('panel.close'),
           footer: regenerateFooter,
+          className: 'dt-body-dialog dt-body-dialog-regenerate',
         },
         h('div', { className: 'dt-editor' },
           h(EditorField, {
@@ -15589,7 +15591,7 @@ window.__ModuleLoader__.load({
             value: feedback,
             onChange: setFeedback,
             multiline: true,
-            className: 'dt-editor-wide',
+            className: 'dt-editor-wide dt-body-textarea dt-body-textarea-feedback',
             hint: t('body.feedbackHint'),
           }),
           error !== '' ? h('p', { className: 'dt-error', role: 'alert' }, error) : null)) : null)
@@ -19432,6 +19434,13 @@ window.__ModuleLoader__.load({
         .dt-kv-row{grid-template-columns:minmax(140px,220px) minmax(0,1fr) 28px}
         .dt-kv-list+.dt-imports{margin-top:12px}
         .dt-kv-row input{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
+        /* Body edit/regenerate dialogs (2026-10-28): these two textareas keep a
+           fixed height and scroll internally. The variant classes hit only these
+           dialogs, so EditorField keeps its shared 108px resizable default. */
+        .dt-editor-field.dt-body-textarea textarea{resize:none;overflow-y:auto}
+        .dt-editor-field.dt-body-textarea-edit textarea{height:280px;min-height:280px;max-height:280px}
+        .dt-editor-field.dt-body-textarea-feedback textarea{height:180px;min-height:180px;max-height:180px}
+        @media(max-width:700px){.dt-editor-field.dt-body-textarea-edit textarea{height:220px;min-height:220px;max-height:220px}.dt-editor-field.dt-body-textarea-feedback textarea{height:150px;min-height:150px;max-height:150px}}
       `
       document.head.appendChild(tag)
     }

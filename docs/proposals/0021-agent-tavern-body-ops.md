@@ -391,10 +391,11 @@ body 记录是 `ignorable: true` 的 plugin record，因此**进程重启后**�
 ## 10. 副作用边界（P0 必读）
 
 1. **MVU 变量**：旧正文的 `<UpdateVariable>` 已经应用；直接再投影新正文会在旧变量上
-   再打一次 patch。必须按 receipt 的 before 值回滚到该正文之前，或拒绝操作并返回
-   `409 body-state-unsafe`。
-2. **记忆 / 写工具**：旧 turn 的 `memory_write` 不会被自动撤销；重生成期间禁用写工具
-   只能防止重复写入，不能回滚旧写入。发布说明必须披露。
+   再打一次 patch。重生成按 receipt 的 before 值回滚到该正文之前（提案 0022 §4），
+   `body:<messageId>` 缺失时拒绝并返回 `409 body-state-unsafe`。
+2. **记忆 / 写工具**：旧 turn 的 `memory_write/update/forget` 与变量写工具通过
+   `plugin:dsh-soulmojito/write` journal 记录 before/after；重生成允许这些工具运行，
+   失败时先撤销新 turn 写入、再恢复旧 turn 写入（提案 0022 §3、§10）。
 3. **前端脚本 / 美化前端**：旧正文触发过的卡脚本不会回滚；新正文会重新触发展示层，
    脚本副作用不在事务内。
 4. **导出**：JSONL 的 `swipes` / `swipe_id` 必须与 body ledger 同版本；导出只依赖 JSONL，
@@ -403,9 +404,10 @@ body 记录是 `ignorable: true` 的 plugin record，因此**进程重启后**�
 P0 限制：
 
 - 只支持最后一组正文。
-- MVU 卡无法回滚变量时显式拒绝，不静默写坏。
-- 重生成期间禁用写工具。
-- 历史楼层编辑/切换默认关闭。
+- 缺 receipt / journal / 宿主 seam 时显式拒绝，不静默写坏。
+- 重生成允许记忆与变量写工具；`tavern_script_advance` 与游戏落子仍禁用（没有同级 checkpoint）。
+- MVU 的编辑与候选切换仍拒绝（`edit-rollback-unavailable` / `select-rollback-unavailable`）；
+  历史楼层编辑/切换默认关闭。
 
 ## 11. 拒绝码
 

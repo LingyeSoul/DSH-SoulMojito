@@ -28,6 +28,7 @@ import {
   warn,
   withBodyLock,
   type BodyRuntimeDeps,
+  type BodyRuntimeTurnRollback,
   type FinalizeTurnStoppingResult,
   type PendingBodyOperation,
   type SettlementContext,
@@ -38,6 +39,7 @@ import {
   findEventByMessageId,
   findSurfaceSeqByMessageId,
   lastBodyCandidate,
+  lastClosedTurnNumber,
   messageOf,
   modelSourceOf,
   numberField,
@@ -46,6 +48,7 @@ import {
   surfaceNodeList,
   textOfMessage,
   triggerMessageIdOf,
+  turnOfEventSeq,
   turnOfUserMessage,
 } from './body-runtime-session.js'
 import {
@@ -127,11 +130,11 @@ export async function finalizeRecoveredOperation(
   })
 }
 
-function settleBodyOperation(
+async function settleBodyOperation(
   deps: BodyRuntimeDeps,
   context: SettlementContext,
   turn: number,
-): FinalizeTurnStoppingResult {
+): Promise<FinalizeTurnStoppingResult> {
   const events = eventsOf(deps.session)
   const candidate = lastBodyCandidate(events, turn)
   if (candidate === undefined) {
@@ -200,11 +203,35 @@ function settleBodyOperation(
 
     const hidden = hideTargets(events, surface, triggerMessageIdOf(context.op), turn, candidate.messageId)
     appendHideInOpenTurn(deps, turn, hidden)
+  } catch (error) {
+    const reason = `${context.label} ${context.op.opId} failed to settle turn ${turn}: ${errorMessage(error)}`
+    if (selectAppended) {
+      try {
+        appendBodyEvent(deps, { op: 'select', groupId: context.op.groupId, index: context.op.previousIndex })
+      } catch (selectError) {
+        warn(deps, `body runtime: failed to restore previous body selection for ${context.op.opId}: ${errorMessage(selectError)}`)
+      }
+    }
+    return failSettlement(deps, context, reason)
+  }
+
+  // Proposal 0022 §5/§10: the new turn succeeded, so the prepared (already
+  // rolled-back) old writes become the committed state. A commit failure is
+  // explicit: it is recorded as a failed settlement and rethrown.
+  try {
+    await commitBodyRollback(deps, context.op)
+  } catch (error) {
+    const reason = `${context.label} ${context.op.opId} failed to commit the write rollback in turn ${turn}: ${errorMessage(error)}`
+    failSettlement(deps, context, reason)
+    throw failureFor(error, reason, context.op)
+  }
+
+  try {
     appendOpFinish(deps, context.op.opId, 'ok', candidate.messageId, undefined)
     releaseSettlement(deps, context)
     return { status: 'ok', anchorMessageId: candidate.messageId }
   } catch (error) {
-    const reason = `${context.label} ${context.op.opId} failed to settle turn ${turn}: ${errorMessage(error)}`
+    const reason = `${context.label} ${context.op.opId} failed to record op-finish in turn ${turn}: ${errorMessage(error)}`
     if (selectAppended) {
       try {
         appendBodyEvent(deps, { op: 'select', groupId: context.op.groupId, index: context.op.previousIndex })
@@ -233,6 +260,111 @@ function failSettlement(
   }
   releaseSettlement(deps, context)
   return { status: 'failed', reason }
+}
+
+/**
+ * Commit the prepared rollback plan. A missing port for an existing plan is a
+ * programming/state error: failing loudly keeps the op pending instead of
+ * pretending the old writes were settled.
+ */
+async function commitBodyRollback(deps: BodyRuntimeDeps, op: PendingBodyOperation): Promise<void> {
+  const plan = op.rollbackPlan
+  if (plan === undefined) return
+  const port = deps.writeRollback
+  if (port === undefined) {
+    throw bodyRuntimeError(
+      'operation-failed',
+      `body runtime: operation '${op.opId}' carries a write rollback plan but deps.writeRollback is missing`,
+    )
+  }
+  await port.commit(plan)
+}
+
+/**
+ * Replay the prepared plan before the old body is restored. Any restore
+ * failure is surfaced with the operation context; the caller keeps the
+ * `op-start` pending for a retry instead of restoring the body over lost writes.
+ */
+async function restoreBodyRollbackPlan(deps: BodyRuntimeDeps, op: PendingBodyOperation): Promise<void> {
+  const plan = op.rollbackPlan
+  if (plan === undefined) return
+  const port = deps.writeRollback
+  if (port === undefined) {
+    throw failureFor(
+      bodyRuntimeError(
+        'operation-failed',
+        `body restore ${op.opId} carries a write rollback plan but deps.writeRollback is missing`,
+      ),
+      `body restore ${op.opId} cannot restore the write rollback plan`,
+      op,
+    )
+  }
+  try {
+    await port.restore(plan)
+  } catch (error) {
+    throw failureFor(error, `body restore ${op.opId} failed to restore the write rollback plan`, op)
+  }
+}
+
+function oldAnchorTurn(events: ReturnType<typeof eventsOf>, previousAnchorId: string): number | undefined {
+  const anchor = findEventByMessageId(events, previousAnchorId)
+  return anchor === undefined ? undefined : turnOfEventSeq(events, anchor.seq)
+}
+
+/**
+ * Undo the failed regeneration turn's own writes before the old plan is
+ * replayed (proposal 0022 §10.3).
+ *
+ * The new turn comes from the trigger user message, falling back to the last
+ * closed turn; the old plan's turn is deliberately never used here.
+ */
+async function rollbackNewTurnWrites(
+  deps: BodyRuntimeDeps,
+  op: PendingBodyOperation,
+  events: ReturnType<typeof eventsOf>,
+): Promise<void> {
+  const port = deps.writeRollback
+  const rollback = port?.rollbackTurnWrites
+  if (port === undefined || rollback === undefined) return
+
+  const newTurn = turnOfUserMessage(events, triggerMessageIdOf(op)) ?? lastClosedTurnNumber(events)
+  if (newTurn === undefined) {
+    throw failureFor(
+      bodyRuntimeError('restore-unavailable', `body restore ${op.opId} cannot determine the failed turn`),
+      `body restore ${op.opId} cannot determine the failed turn`,
+      op,
+    )
+  }
+  const oldTurn = op.rollbackPlan?.turn ?? oldAnchorTurn(events, op.previousAnchorId)
+  if (oldTurn !== undefined && newTurn === oldTurn) {
+    throw failureFor(
+      bodyRuntimeError('operation-failed', `body restore ${op.opId} derived old turn ${newTurn} as the failed turn`),
+      `body restore ${op.opId} refused to roll back the old turn as the new turn`,
+      op,
+    )
+  }
+
+  const agentId = recoveryAgentId(deps, op)
+  let result: BodyRuntimeTurnRollback
+  try {
+    result = await rollback.call(port, agentId, newTurn)
+  } catch (error) {
+    throw failureFor(error, `body restore ${op.opId} failed to roll back turn ${newTurn} writes`, op)
+  }
+  const failures = result?.failures ?? []
+  if (failures.length > 0) {
+    const details = failures
+      .map((failure) => `${failure.kind}/${failure.tool}/${failure.journalId}: ${failure.message}`)
+      .join('; ')
+    throw failureFor(
+      bodyRuntimeError(
+        'operation-failed',
+        `body restore ${op.opId} could not undo ${failures.length} new-turn write(s) in turn ${newTurn}: ${details}`,
+      ),
+      `body restore ${op.opId} failed to roll back turn ${newTurn} writes`,
+      op,
+    )
+  }
 }
 
 /**
@@ -303,6 +435,13 @@ export async function restoreBodyAfterFailure(
         if (numberField(event.data.turn) === failedTurn) targets.add(seq)
       }
     }
+
+    // Proposal 0022 §10.3: first undo the failed new turn's writes, then put
+    // the old turn's journaled writes and MVU receipts back, and only then
+    // restore the old body. Any failure leaves no restore turn and keeps the
+    // op-start pending for a retry.
+    await rollbackNewTurnWrites(deps, op, events)
+    await restoreBodyRollbackPlan(deps, op)
 
     const turn = (lastLoggedTurn(deps.agent) ?? 0) + 1
     const restoredMessageId = `body-restore-${randomUUID()}`

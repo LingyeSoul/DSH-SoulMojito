@@ -206,6 +206,36 @@ export class MemoryStore {
     })
   }
 
+  /**
+   * Write one record back exactly as recorded, revisions and tombstones included.
+   *
+   * Body rollback (`agent-tavern/body-rollback.ts`) uses this to restore a
+   * journaled `before` state or replay a journaled `after` state. The record is
+   * written verbatim: `deletedAt` survives a forget replay, and `revision` stays
+   * the journaled one instead of hashing a fresh timestamp into the record.
+   *
+   * `expectedRevision` guards the id exactly like `put`/`forget`: an existing
+   * record requires the current revision, a missing record requires it to stay
+   * missing. A conflict raises `MemoryRevisionConflictError` before any write.
+   */
+  async restore(record: MemoryRecord, expectedRevision?: string): Promise<MemoryRecord> {
+    validateRecord(record)
+    return this.mutate(async () => {
+      const previous = await this.readRecord(record.id, record.scope, record.scopeId)
+      if (previous !== undefined) {
+        if (expectedRevision === undefined || previous.revision !== expectedRevision) {
+          throw new MemoryRevisionConflictError(record.id, expectedRevision, previous.revision)
+        }
+      } else if (expectedRevision !== undefined) {
+        throw new MemoryRevisionConflictError(record.id, expectedRevision)
+      }
+      const restored = structuredClone(record)
+      await this.writeRecord(restored)
+      await this.audit('restore', restored)
+      return structuredClone(restored)
+    })
+  }
+
   private async listRecords(query: MemoryQuery): Promise<MemoryRecord[]> {
     const scopes = query.scope === undefined ? [...SCOPES] : [query.scope]
     const result: MemoryRecord[] = []

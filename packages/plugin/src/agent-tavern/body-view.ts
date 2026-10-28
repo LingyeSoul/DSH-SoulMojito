@@ -1,7 +1,7 @@
 /**
  * AgentTavern body presentation policy and HTTP error vocabulary.
  *
- * This shard owns pure read-side decisions: proposal §10 state safety, the
+ * This shard owns pure read-side decisions: proposal 0022 §7 state safety, the
  * `GET body` payload builder, and the mapping from body-runtime failures to
  * proposal §11 codes and HTTP statuses. It never reads or writes the session.
  */
@@ -28,58 +28,94 @@ export type BodyStateSafetyResolver = (
 
 /** Concrete signal behind a `body-state-unsafe` refusal. */
 export type BodyStateUnsafeDetail =
-  | 'card-mvu'
-  | 'stat-data'
-  | 'mvu-receipts'
   | 'card-unreadable'
   | 'chat-unreadable'
   | 'safety-unavailable'
+  | 'mvu-receipt-missing'
+  | 'write-journal-missing'
+  | 'write-journal-unavailable'
+  | 'edit-rollback-unavailable'
+  | 'select-rollback-unavailable'
+
+/** Body mutation whose rollback requirements differ (proposal 0022 §7). */
+export type BodyMutationAction = 'edit' | 'regenerate' | 'select'
 
 /**
  * Read-only safety verdict for body mutations.
  *
- * Proposal 0021 §10: replaying an old body over a chat whose MVU variables were
- * already patched would apply the patch a second time. Until variable rollback
- * exists, every MVU-declared card and every chat that already carries MVU state
- * is refused instead of silently writing a corrupted variable tree.
+ * Proposal 0022 §7: MVU state is no longer a blanket refusal. Regeneration is
+ * protected by the write rollback port; editing and candidate selection still
+ * have no candidate-level rollback and stay refused over historical MVU state.
  */
 export type BodyStateSafety =
   | { readonly safe: true }
   | { readonly safe: false; readonly reason: 'body-state-unsafe'; readonly detail: BodyStateUnsafeDetail }
 
 /**
- * Decide whether edit/regenerate/select may run for this character + chat.
+ * Decide whether body state can be read at all.
  *
- * Pure and read-only: it never mutates the card or chat. A missing/unreadable
- * card fails closed because the card's MVU declaration cannot be inspected.
+ * Only an unreadable character card (or an unreadable chat, reported by the
+ * caller) is unsafe here. MVU cards and chats with historical variables are
+ * handled per action by `bodyMutationSafetyOf`.
  */
 export function bodyStateSafetyOf(
   character: { readonly card: CharacterCardIR } | undefined,
-  chat: ChatLogIR,
+  chat: ChatLogIR | undefined,
 ): BodyStateSafety {
   if (character === undefined) return unsafeBodyState('card-unreadable')
+  if (chat === undefined) return unsafeBodyState('chat-unreadable')
 
-  let usesMvu: boolean
   try {
-    usesMvu = cardUsesJsrMvu(character.card)
+    // Reading the card is what proves it is usable; the MVU answer itself is no
+    // longer a refusal reason.
+    cardUsesJsrMvu(character.card)
   } catch {
     return unsafeBodyState('card-unreadable')
   }
-  if (usesMvu) return unsafeBodyState('card-mvu')
+  return { safe: true }
+}
+
+/**
+ * Whether this card/chat already carries MVU or variable state that an edit or
+ * select would replay without a candidate-level rollback.
+ */
+export function bodyHistoricalMvuStateOf(
+  character: { readonly card: CharacterCardIR } | undefined,
+  chat: ChatLogIR | undefined,
+): boolean {
+  if (character === undefined || chat === undefined) return true
+  try {
+    if (cardUsesJsrMvu(character.card)) return true
+  } catch {
+    return true
+  }
 
   const metadata = chat.header.chat_metadata
   const variables = isRecord(metadata['variables']) ? metadata['variables'] : undefined
   if (variables !== undefined && Object.prototype.hasOwnProperty.call(variables, 'stat_data')) {
-    return unsafeBodyState('stat-data')
+    return true
   }
 
   const mvu = isRecord(metadata['mvu']) ? metadata['mvu'] : undefined
-  if (mvu !== undefined) {
-    const receipts = mvu['receipts']
-    if (Array.isArray(receipts)) return unsafeBodyState('mvu-receipts')
-  }
+  return mvu !== undefined && Array.isArray(mvu['receipts'])
+}
 
-  return { safe: true }
+/**
+ * Action-specific gate.
+ *
+ * `regenerate` relies on the write rollback port (checked separately by the
+ * HTTP layer); `edit` and `select` keep the strict historical-state refusal.
+ */
+export function bodyMutationSafetyOf(
+  action: BodyMutationAction,
+  character: { readonly card: CharacterCardIR } | undefined,
+  chat: ChatLogIR | undefined,
+): BodyStateSafety {
+  const base = bodyStateSafetyOf(character, chat)
+  if (!base.safe) return base
+  if (action === 'regenerate') return base
+  if (!bodyHistoricalMvuStateOf(character, chat)) return base
+  return unsafeBodyState(action === 'edit' ? 'edit-rollback-unavailable' : 'select-rollback-unavailable')
 }
 
 /** Internal/public constructor for a typed unsafe verdict. */
@@ -90,18 +126,22 @@ export function unsafeBodyState(detail: BodyStateUnsafeDetail): BodyStateSafety 
 /** Actionable explanation for a `body-state-unsafe` refusal. */
 export function bodyStateUnsafeMessage(detail: BodyStateUnsafeDetail): string {
   switch (detail) {
-    case 'card-mvu':
-      return 'this character card declares MVU variables; body mutations would apply variable patches twice'
-    case 'stat-data':
-      return 'this chat already carries chat_metadata.variables.stat_data; body mutations are disabled until variable rollback exists'
-    case 'mvu-receipts':
-      return 'this chat already carries chat_metadata.mvu.receipts; body mutations are disabled until variable rollback exists'
     case 'card-unreadable':
-      return 'the character card could not be read, so MVU state cannot be ruled out; body mutations are disabled'
+      return 'the character card could not be read, so body state cannot be inspected; body mutations are disabled'
     case 'chat-unreadable':
-      return 'the bound chat could not be read, so MVU state cannot be ruled out; body mutations are disabled'
+      return 'the bound chat could not be read, so body state cannot be inspected; body mutations are disabled'
     case 'safety-unavailable':
       return 'the MVU state safety check could not be resolved; body mutations are disabled'
+    case 'mvu-receipt-missing':
+      return 'the old body applies MVU variables but has no matching receipt; regenerating it would apply the patches twice and cannot be rolled back'
+    case 'write-journal-missing':
+      return 'the old turn wrote memory or variables without a complete write journal; regeneration cannot roll those writes back'
+    case 'write-journal-unavailable':
+      return 'this host does not expose appendPluginRecord, so memory and variable writes cannot be journaled or rolled back'
+    case 'edit-rollback-unavailable':
+      return 'this chat already carries MVU or variable state; editing a body has no candidate-level rollback'
+    case 'select-rollback-unavailable':
+      return 'this chat already carries MVU or variable state; switching a body candidate has no candidate-level rollback'
   }
 }
 
@@ -123,6 +163,10 @@ export interface BodyViewInput {
   readonly agent: BodyAgentLike | undefined
   readonly hostSupported: boolean
   readonly stateSafety: BodyStateSafety | undefined
+  /** True when this card/chat carries MVU or historical variable state. */
+  readonly historicalMvuState: boolean
+  /** True when `deps.writeRollback` can prepare/restore a regeneration. */
+  readonly writeRollbackAvailable: boolean
   readonly ledger: BodyLedger | undefined
   readonly messageText: string | undefined
   readonly projected: BodyProjectedFloor | undefined
@@ -172,9 +216,21 @@ export function buildBodyView(input: BodyViewInput): BodyView {
     ? candidateText ?? input.messageText ?? ''
     : input.projected?.text ?? ledgerText ?? input.messageText ?? ''
 
-  const reason = bodyViewReason(input, hidden)
-  const canEdit = reason === undefined && !hidden && count > 0
-  const canRegenerate = canEdit && input.agent !== undefined && canAdvanceHostTurnBase(input.agent)
+  const baseReason = bodyViewReason(input, hidden)
+  // Proposal 0022 §7 P0: regeneration is allowed over historical MVU state only
+  // when the write rollback port can prepare/restore it. Edit and select stay
+  // strict until candidate-level state switching exists.
+  const rollbackReason = baseReason === undefined && !hidden && input.historicalMvuState
+    ? (input.writeRollbackAvailable ? 'edit-rollback-unavailable' : 'write-journal-unavailable')
+    : undefined
+  const reason = baseReason ?? rollbackReason
+  const canEdit = baseReason === undefined && !hidden && count > 0 && !input.historicalMvuState
+  const canRegenerate = baseReason === undefined
+    && !hidden
+    && count > 0
+    && input.agent !== undefined
+    && canAdvanceHostTurnBase(input.agent)
+    && (!input.historicalMvuState || input.writeRollbackAvailable)
   const canSelect = canEdit && count > 1
 
   return {
@@ -213,6 +269,8 @@ export interface BodyFailureView {
   readonly status: number
   readonly code: string
   readonly message: string
+  /** Concrete `body-state-unsafe` signal, when the failure carries one. */
+  readonly detail?: string
 }
 
 /**
@@ -223,10 +281,12 @@ export interface BodyFailureView {
 export function bodyFailureOf(error: unknown): BodyFailureView {
   const rawCode = failureCodeOf(error)
   const code = publicBodyCode(rawCode)
+  const detail = failureDetailOf(error)
   return {
     status: bodyRejectStatus(code),
     code,
     message: errorMessage(error),
+    ...(detail === undefined ? {} : { detail }),
   }
 }
 
@@ -283,6 +343,12 @@ function failureCodeOf(error: unknown): string | undefined {
   if (!isRecord(error)) return undefined
   const code = error['code']
   return typeof code === 'string' && code !== '' ? code : undefined
+}
+
+function failureDetailOf(error: unknown): string | undefined {
+  if (!isRecord(error)) return undefined
+  const detail = error['detail']
+  return typeof detail === 'string' && detail !== '' ? detail : undefined
 }
 
 function errorMessage(error: unknown): string {

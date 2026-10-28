@@ -13,8 +13,15 @@
  */
 
 import { importHostPackage } from '../../../bind/src/index.js'
+import { memories, store as tavernStore, variables } from '../runtime.js'
 import type { HostSessionsService, PluginContext } from '../host-contract.js'
 import { createBodyProjection } from './body.js'
+import {
+  createBodyWriteRollbackPort,
+  type BodyRollbackMemoryStore,
+  type BodyRollbackStore,
+  type BodyRollbackVariableStore,
+} from './body-rollback.js'
 import {
   finalizeTurnStopping,
   type BodyAgentLike,
@@ -32,6 +39,7 @@ import {
   resolveBodyBinding,
   resolveLiveAgent,
   warn,
+  wiringEvents,
   type BodyBindingResolver,
   type BodyBindingView,
 } from './body-session.js'
@@ -131,18 +139,74 @@ export async function resolveBodyRecordWriter(ctx: BodyWiringContext): Promise<B
   return writer
 }
 
-/** Build the deps bundle consumed by the body state machine. */
+/**
+ * Build the deps bundle consumed by the body state machine.
+ *
+ * The write rollback port is assembled here so every entry point (routes,
+ * turn-stopping, recovery) shares one seam. Stores stay lazy: `GET body` builds
+ * deps per rendered row and must not open the Tavern/Memory/Variable stores just
+ * to report `canRegenerate`.
+ */
 export async function createBodyDeps(
   ctx: BodyWiringContext,
   agent: BodyAgentLike,
 ): Promise<BodyRuntimeDeps | undefined> {
   const appendRecord = await resolveBodyRecordWriter(ctx)
   if (appendRecord === undefined) return undefined
+  const writeRollback = createBodyWriteRollbackPort({
+    store: lazyRollbackStore(),
+    memoryStore: lazyRollbackMemoryStore(),
+    variableStore: lazyRollbackVariableStore(),
+    sessionEvents: () => wiringEvents(agent.session),
+    ...(ctx.logger === undefined ? {} : { logger: ctx.logger }),
+  })
   return {
     session: agent.session,
     agent,
     ...(ctx.logger === undefined ? {} : { logger: ctx.logger }),
     appendRecord,
+    writeRollback,
+  }
+}
+
+/** Lazy `TavernStore` adapter (proposal 0022 §5). */
+function lazyRollbackStore(): BodyRollbackStore {
+  return {
+    getState: async () => (await tavernStore()).getState(),
+    getCharacter: async (name) => {
+      const found = await (await tavernStore()).getCharacter(name)
+      return found === undefined ? undefined : { card: found.card }
+    },
+    getChatSnapshot: async (character, chatId) => (await tavernStore()).getChatSnapshot(character, chatId),
+    saveChat: async (character, chatId, chat, expectedRevision) => (
+      (await tavernStore()).saveChat(character, chatId, chat, expectedRevision)
+    ),
+  }
+}
+
+/** Lazy `MemoryStore` adapter (proposal 0022 §8). */
+function lazyRollbackMemoryStore(): BodyRollbackMemoryStore {
+  return {
+    read: async (id, scope, scopeId, includeDeleted) => (
+      (await memories()).read(id, scope, scopeId, includeDeleted)
+    ),
+    forget: async (id, scope, scopeId, expectedRevision) => (
+      (await memories()).forget(id, scope, scopeId, expectedRevision)
+    ),
+    restore: async (record, expectedRevision) => (await memories()).restore(record, expectedRevision),
+  }
+}
+
+/** Lazy `VariableStore` adapter (proposal 0022 §9). */
+function lazyRollbackVariableStore(): BodyRollbackVariableStore {
+  return {
+    get: async (scope, scopeId, name) => (await variables()).get(scope, scopeId, name),
+    set: async (scope, scopeId, name, value, expectedRevision) => (
+      (await variables()).set(scope, scopeId, name, value, expectedRevision)
+    ),
+    delete: async (scope, scopeId, name, expectedRevision) => (
+      (await variables()).delete(scope, scopeId, name, expectedRevision)
+    ),
   }
 }
 
@@ -342,12 +406,15 @@ export {
 
 export {
   bodyFailureOf,
+  bodyHistoricalMvuStateOf,
+  bodyMutationSafetyOf,
   bodyRejectStatus,
   bodyStateSafetyOf,
   bodyStateUnsafeMessage,
   buildBodyView,
   publicBodyCode,
   type BodyFailureView,
+  type BodyMutationAction,
   type BodyProjectedFloor,
   type BodyStateSafety,
   type BodyStateSafetyResolver,

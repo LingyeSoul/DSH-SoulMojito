@@ -20,6 +20,8 @@ import { applyBodyEdit, bodyRuntimeError, selectBodyCandidate, startRegenerate }
 import {
   bodyBindingEligible,
   bodyFailureOf,
+  bodyHistoricalMvuStateOf,
+  bodyMutationSafetyOf,
   bodyStateSafetyOf,
   bodyStateUnsafeMessage,
   bodyWiringContext,
@@ -28,6 +30,7 @@ import {
   readBodySessionFacts,
   resolveBodyBinding,
   resolveLiveAgent,
+  type BodyMutationAction,
   type BodyProjectedFloor,
   type BodyStateSafety,
 } from '../agent-tavern/body-wiring.js'
@@ -1475,9 +1478,9 @@ export async function handleAgentTavernBodyApi(
     }
     const stateSafety: BodyStateSafety | undefined = binding === undefined || !bodyBindingEligible(binding)
       ? undefined
-      : chat === undefined
-        ? { safe: false, reason: 'body-state-unsafe', detail: 'chat-unreadable' }
-        : bodyStateSafetyOf(character, chat)
+      : bodyStateSafetyOf(character, chat)
+    const historicalMvuState = character !== undefined && chat !== undefined
+      && bodyHistoricalMvuStateOf(character, chat)
     const agent = resolveLiveAgent(wiring, sessionId)
     const deps = agent === undefined ? undefined : await createBodyDeps(wiring, agent)
     const projected = characterName !== undefined && chatId !== undefined && chat !== undefined
@@ -1508,6 +1511,8 @@ export async function handleAgentTavernBodyApi(
       agent,
       hostSupported: deps !== undefined,
       stateSafety,
+      historicalMvuState,
+      writeRollbackAvailable: deps?.writeRollback !== undefined,
       ledger,
       messageText,
       projected,
@@ -1538,14 +1543,18 @@ export async function handleAgentTavernBodyApi(
       detail: 'chat-unreadable',
     })
   }
-  // Proposal 0021 §10 P0: an MVU-declared card or a chat that already carries
-  // MVU state cannot be safely replayed. Refuse before resolving the agent or
-  // entering the runtime lock, so no event or tool restriction is written.
+  // Proposal 0022 §7: MVU state no longer blocks regeneration (the write
+  // rollback port protects it), but edit/select still refuse with their own
+  // detail. Refuse before resolving the agent or entering the runtime lock, so
+  // no event or tool restriction is written.
+  const action: BodyMutationAction = route === 'body'
+    ? 'edit'
+    : route === 'body/select'
+      ? 'select'
+      : 'regenerate'
   const character = await db.getCharacter(characterName)
   const snapshot = await db.getChatSnapshot(characterName, chatId)
-  const stateSafety: BodyStateSafety = snapshot === undefined
-    ? { safe: false, reason: 'body-state-unsafe', detail: 'chat-unreadable' }
-    : bodyStateSafetyOf(character, snapshot.chat)
+  const stateSafety: BodyStateSafety = bodyMutationSafetyOf(action, character, snapshot?.chat)
   if (!stateSafety.safe) {
     return sendBodyFailure(res, {
       status: 409,
@@ -1568,6 +1577,17 @@ export async function handleAgentTavernBodyApi(
       status: 501,
       code: 'host-unsupported',
       message: 'this host does not expose appendPluginRecord/pluginRecordOf (DSH 0.2.1-rc.2+)',
+    })
+  }
+  if (action === 'regenerate'
+    && deps.writeRollback === undefined
+    && snapshot !== undefined
+    && bodyHistoricalMvuStateOf(character, snapshot.chat)) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: 'body-state-unsafe',
+      message: bodyStateUnsafeMessage('write-journal-unavailable'),
+      detail: 'write-journal-unavailable',
     })
   }
 

@@ -2285,6 +2285,16 @@ function limitText(value, max2) {
 }
 
 // packages/bind/src/host-session.ts
+function readSessionEvents(session) {
+  if (!session) return void 0;
+  if (Array.isArray(session.events)) return session.events;
+  if (typeof session.snapshotEvents === "function") {
+    const snapshot2 = session.snapshotEvents();
+    if (Array.isArray(snapshot2)) return snapshot2;
+  }
+  if (Array.isArray(session.log)) return session.log;
+  return void 0;
+}
 var PLUGIN_NAME = "dsh-soulmojito";
 var LEGACY_PLUGIN_NAME = "dsh-tavern";
 var TAVERN_PLUGIN_SOURCE_KIND = `plugin:${PLUGIN_NAME}`;
@@ -5022,6 +5032,35 @@ ${record.tags.join(" ")}`.toLocaleLowerCase();
       });
       await this.writeRecord(next);
       await this.audit("forget", next);
+    });
+  }
+  /**
+   * Write one record back exactly as recorded, revisions and tombstones included.
+   *
+   * Body rollback (`agent-tavern/body-rollback.ts`) uses this to restore a
+   * journaled `before` state or replay a journaled `after` state. The record is
+   * written verbatim: `deletedAt` survives a forget replay, and `revision` stays
+   * the journaled one instead of hashing a fresh timestamp into the record.
+   *
+   * `expectedRevision` guards the id exactly like `put`/`forget`: an existing
+   * record requires the current revision, a missing record requires it to stay
+   * missing. A conflict raises `MemoryRevisionConflictError` before any write.
+   */
+  async restore(record, expectedRevision) {
+    validateRecord(record);
+    return this.mutate(async () => {
+      const previous = await this.readRecord(record.id, record.scope, record.scopeId);
+      if (previous !== void 0) {
+        if (expectedRevision === void 0 || previous.revision !== expectedRevision) {
+          throw new MemoryRevisionConflictError(record.id, expectedRevision, previous.revision);
+        }
+      } else if (expectedRevision !== void 0) {
+        throw new MemoryRevisionConflictError(record.id, expectedRevision);
+      }
+      const restored = structuredClone(record);
+      await this.writeRecord(restored);
+      await this.audit("restore", restored);
+      return structuredClone(restored);
     });
   }
   async listRecords(query) {
@@ -8805,6 +8844,27 @@ function overlayScopedVariables(base, entries) {
   }
   return tree;
 }
+function readMvuReceipt(record) {
+  const { at, turnKey, status, changes, failures } = record;
+  if (typeof at !== "string" || typeof turnKey !== "string") return void 0;
+  if (status !== "updated" && status !== "unchanged" && status !== "failed") return void 0;
+  return {
+    at,
+    turnKey,
+    status,
+    changes: Array.isArray(changes) ? changes.flatMap((item) => {
+      const change = plainObject(item);
+      if (change === void 0 || typeof change.name !== "string") return [];
+      const out = { name: change.name };
+      if ("before" in change) out.before = change.before;
+      if ("after" in change) out.after = change.after;
+      if (typeof change.reason === "string") out.reason = change.reason;
+      return [out];
+    }) : [],
+    failures: Array.isArray(failures) ? failures.filter((item) => typeof item === "string") : [],
+    ...typeof record.undoneAt === "string" ? { undoneAt: record.undoneAt } : {}
+  };
+}
 function readMvuReceipts(chat) {
   const raw = plainObject(chat?.header?.chat_metadata?.mvu)?.receipts;
   if (!Array.isArray(raw)) return [];
@@ -8812,25 +8872,8 @@ function readMvuReceipts(chat) {
   for (const entry of raw) {
     const record = plainObject(entry);
     if (record === void 0) continue;
-    const { at, turnKey, status, changes, failures } = record;
-    if (typeof at !== "string" || typeof turnKey !== "string") continue;
-    if (status !== "updated" && status !== "unchanged" && status !== "failed") continue;
-    receipts.push({
-      at,
-      turnKey,
-      status,
-      changes: Array.isArray(changes) ? changes.flatMap((item) => {
-        const change = plainObject(item);
-        if (change === void 0 || typeof change.name !== "string") return [];
-        const out = { name: change.name };
-        if ("before" in change) out.before = change.before;
-        if ("after" in change) out.after = change.after;
-        if (typeof change.reason === "string") out.reason = change.reason;
-        return [out];
-      }) : [],
-      failures: Array.isArray(failures) ? failures.filter((item) => typeof item === "string") : [],
-      ...typeof record.undoneAt === "string" ? { undoneAt: record.undoneAt } : {}
-    });
+    const receipt = readMvuReceipt(record);
+    if (receipt !== void 0) receipts.push(receipt);
   }
   return receipts;
 }
@@ -9917,6 +9960,115 @@ function refreshAllAgentGamesSummaries() {
 }
 
 // packages/plugin/src/agent-tavern/tools/memory.ts
+import { randomUUID as randomUUID3 } from "node:crypto";
+
+// packages/plugin/src/agent-tavern/write-journal.ts
+import { randomUUID as randomUUID2 } from "node:crypto";
+var WRITE_JOURNAL_EVENT_TYPE = "plugin:dsh-soulmojito/write";
+var WriteJournalError = class extends Error {
+  code;
+  constructor(code, message, options) {
+    super(message, options);
+    this.name = "WriteJournalError";
+    this.code = code;
+  }
+};
+function currentTurnOf(events) {
+  let open;
+  for (const [index, event] of events.entries()) {
+    if (!isRecord2(event)) continue;
+    const type = event["type"];
+    if (type === "turn/start") {
+      open = turnOfEvent(event, index);
+    } else if (type === "turn/end") {
+      open = void 0;
+    }
+  }
+  return open;
+}
+function newJournalId() {
+  return randomUUID2();
+}
+async function resolveWriteJournalWriter() {
+  let host;
+  try {
+    host = await importHostPackage("@deepseek-ai/dsh-session");
+  } catch {
+    return void 0;
+  }
+  const append = host.appendPluginRecord;
+  if (typeof append !== "function") return void 0;
+  const appendRecord = append;
+  return (session, type, data) => appendRecord(session, type, data);
+}
+function appendWriteJournalWith(writer, session, entry) {
+  try {
+    writer(session, WRITE_JOURNAL_EVENT_TYPE, entry);
+  } catch (cause) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    throw new WriteJournalError(
+      "write-journal-append-failed",
+      `cannot append the write journal ${entry.phase} record '${entry.journalId}' for ${entry.kind} ${entry.tool}: ${reason}`,
+      { cause }
+    );
+  }
+  return "recorded";
+}
+async function openWriteJournal(agent, sessionId) {
+  if (typeof sessionId !== "string" || sessionId.trim() === "") {
+    throw new WriteJournalError("write-journal-session-missing", "write journal requires the session id of the writing agent");
+  }
+  const writer = await resolveWriteJournalWriter();
+  if (writer === void 0) return void 0;
+  const session = requireSession(agent);
+  const turn = currentTurnOf(eventsOfSession(session, sessionId));
+  if (turn === void 0) {
+    throw new WriteJournalError(
+      "write-journal-turn-missing",
+      `write journal requires an open turn in session '${sessionId}'; the session log has no turn/start that is still open`
+    );
+  }
+  return { journalId: newJournalId(), sessionId, turn, session, writer };
+}
+function requireSession(agent) {
+  const session = agent?.session;
+  if (session === void 0) {
+    throw new WriteJournalError(
+      "write-journal-session-missing",
+      "write journal requires exec.agent.session; the tool execution carries no live session"
+    );
+  }
+  return session;
+}
+function eventsOfSession(session, sessionId) {
+  const events = readSessionEvents(session);
+  if (events === void 0) {
+    throw new WriteJournalError(
+      "write-journal-session-unreadable",
+      `write journal cannot read the event log of session '${sessionId}' (events/snapshotEvents/log are all unavailable)`
+    );
+  }
+  return events;
+}
+function turnOfEvent(event, index) {
+  const data = isRecord2(event["data"]) ? event["data"] : void 0;
+  const turn = data?.["turn"];
+  if (typeof turn !== "number" || !Number.isSafeInteger(turn) || turn < 0) {
+    throw invalid(
+      `session event at index ${index}`,
+      `a turn/start must carry a non-negative integer data.turn, received '${String(turn)}'`
+    );
+  }
+  return turn;
+}
+function isRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function invalid(where, detail) {
+  return new WriteJournalError("invalid-write-journal", `${where}: ${detail}`);
+}
+
+// packages/plugin/src/agent-tavern/tools/memory.ts
 function memoryTools() {
   return [
     tool("memory_search", "Search memories in the current chat, character, agent, or global scope with hybrid lexical and semantic retrieval (semantic requires an embedding endpoint; without one it is lexical only). Use it to recall established facts, promises, or relationship state before they matter on screen.", {
@@ -9992,7 +10144,13 @@ function memoryTools() {
       const importance = clampScore(args.importance);
       const confidence = clampScore(args.confidence);
       const expiresAt = optionalExpiry(args.expiresAt);
-      const record = await (await memoryStore()).put({
+      const id = randomUUID3();
+      const store3 = await memoryStore();
+      const journalTarget = { id, scope: target.scope, scopeId: target.scopeId };
+      const journal = await openWriteJournal(exec.agent, binding.agentId);
+      appendMemoryJournal(journal, { tool: "memory_write", phase: "before", target: journalTarget, before: null });
+      const record = await store3.put({
+        id,
         scope: target.scope,
         scopeId: target.scopeId,
         kind: args.kind === "episodic" ? "episodic" : "semantic",
@@ -10003,6 +10161,7 @@ function memoryTools() {
         ...expiresAt === void 0 ? {} : { expiresAt },
         source: { kind: "agent-tool", sessionId: binding.agentId, chatId: binding.chatId, character: binding.character }
       });
+      appendMemoryJournal(journal, { tool: "memory_write", phase: "after", target: journalTarget, after: record });
       await embedWrittenMemory(record);
       return { id: record.id, scope: record.scope, revision: record.revision, source: record.source };
     }),
@@ -10023,6 +10182,9 @@ function memoryTools() {
       const id = stringArg(args.id);
       const previous = await store3.read(id, target.scope, target.scopeId, true);
       if (previous === void 0) throw new Error(`memory '${id}' not found in scope '${target.scope}'`);
+      const journalTarget = { id, scope: previous.scope, scopeId: previous.scopeId };
+      const journal = await openWriteJournal(exec.agent, binding.agentId);
+      appendMemoryJournal(journal, { tool: "memory_update", phase: "before", target: journalTarget, before: previous });
       const importance = clampScore(args.importance) ?? previous.importance;
       const confidence = clampScore(args.confidence) ?? previous.confidence;
       const expiresAt = typeof args.expiresAt === "string" ? optionalExpiry(args.expiresAt) : previous.expiresAt;
@@ -10038,6 +10200,7 @@ function memoryTools() {
         ...expiresAt === void 0 ? {} : { expiresAt },
         source: { kind: "agent-tool", sessionId: binding.agentId, chatId: binding.chatId, character: binding.character }
       }, stringArg(args.expectedRevision));
+      appendMemoryJournal(journal, { tool: "memory_update", phase: "after", target: journalTarget, after: record });
       await embedWrittenMemory(record);
       return { id: record.id, scope: record.scope, revision: record.revision, source: record.source };
     }),
@@ -10053,7 +10216,12 @@ function memoryTools() {
       const id = stringArg(args.id);
       const previous = await store3.read(id, target.scope, target.scopeId, true);
       if (previous === void 0) return { id, scope: target.scope, found: false };
+      const journalTarget = { id, scope: previous.scope, scopeId: previous.scopeId };
+      const journal = await openWriteJournal(exec.agent, binding.agentId);
+      appendMemoryJournal(journal, { tool: "memory_forget", phase: "before", target: journalTarget, before: previous });
       await store3.forget(id, target.scope, target.scopeId, stringArg(args.expectedRevision));
+      const removed = await store3.read(id, target.scope, target.scopeId, true);
+      appendMemoryJournal(journal, { tool: "memory_forget", phase: "after", target: journalTarget, after: removed ?? null });
       try {
         await (await memoryVectorStore()).delete(id, target.scope, target.scopeId);
       } catch {
@@ -10061,6 +10229,21 @@ function memoryTools() {
       return { id, scope: target.scope, found: true };
     })
   ];
+}
+function appendMemoryJournal(journal, request) {
+  if (journal === void 0) return;
+  appendWriteJournalWith(journal.writer, journal.session, {
+    kind: "memory",
+    tool: request.tool,
+    journalId: journal.journalId,
+    sessionId: journal.sessionId,
+    turn: journal.turn,
+    phase: request.phase,
+    at: (/* @__PURE__ */ new Date()).toISOString(),
+    target: request.target,
+    ...request.before === void 0 ? {} : { before: request.before },
+    ...request.after === void 0 ? {} : { after: request.after }
+  });
 }
 var memorySearchOutput = objectOutput({ hits: { type: "array", items: { type: "object", additionalProperties: true } }, sourceCount: { type: "integer" }, truncated: { type: "boolean" } });
 var memoryReadOutput = objectOutput(
@@ -10260,13 +10443,26 @@ function variableTools() {
       const binding = await bindingFor(exec);
       const target = selectedVariableScope(args.scope, binding);
       await assertWriteScopeAllowed(target.scope);
-      const snapshot2 = await (await variableStore()).set(
+      const store3 = await variableStore();
+      const name2 = stringArg(args.name);
+      const value = jsonValueOf2(args.value);
+      const existing = await store3.get(target.scope, target.scopeId, name2);
+      const journalTarget = { scope: target.scope, scopeId: target.scopeId };
+      const journal = await openWriteJournal(exec.agent, binding.agentId);
+      appendVariableJournal(journal, {
+        tool: "variable_set",
+        phase: "before",
+        target: journalTarget,
+        before: existing === void 0 ? null : [existing]
+      });
+      const snapshot2 = await store3.set(
         target.scope,
         target.scopeId,
-        stringArg(args.name),
-        jsonValueOf2(args.value),
+        name2,
+        value,
         typeof args.expectedRevision === "string" ? args.expectedRevision : void 0
       );
+      appendVariableJournal(journal, { tool: "variable_set", phase: "after", target: journalTarget, after: [snapshot2] });
       return { found: true, scope: target.scope, name: snapshot2.name, value: snapshot2.value, revision: snapshot2.revision, updatedAt: snapshot2.updatedAt };
     }),
     tool("variable_patch", "Atomically write several variables in one scope; the whole patch fails when any expected revision conflicts.", {
@@ -10302,12 +10498,22 @@ function variableTools() {
           ...typeof entry.expectedRevision === "string" ? { expectedRevision: entry.expectedRevision } : {}
         };
       });
-      const snapshots = await (await variableStore()).patch(
+      const store3 = await variableStore();
+      const previous = [];
+      for (const change of changes) {
+        const existing = await store3.get(target.scope, target.scopeId, change.name);
+        if (existing !== void 0) previous.push(existing);
+      }
+      const journalTarget = { scope: target.scope, scopeId: target.scopeId };
+      const journal = await openWriteJournal(exec.agent, binding.agentId);
+      appendVariableJournal(journal, { tool: "variable_patch", phase: "before", target: journalTarget, before: previous });
+      const snapshots = await store3.patch(
         target.scope,
         target.scopeId,
         changes,
         typeof args.expectedRevision === "string" ? args.expectedRevision : void 0
       );
+      appendVariableJournal(journal, { tool: "variable_patch", phase: "after", target: journalTarget, after: snapshots });
       return { scope: target.scope, variables: snapshots.map(variableSummary), truncated: false };
     }),
     tool("variable_delete", "Delete one variable from the given scope; the audit-visible value history stays in the session log.", {
@@ -10322,7 +10528,11 @@ function variableTools() {
       const name2 = stringArg(args.name);
       const existing = await store3.get(target.scope, target.scopeId, name2);
       if (existing === void 0) return { found: false, scope: target.scope, name: name2 };
+      const journalTarget = { scope: target.scope, scopeId: target.scopeId };
+      const journal = await openWriteJournal(exec.agent, binding.agentId);
+      appendVariableJournal(journal, { tool: "variable_delete", phase: "before", target: journalTarget, before: [existing] });
       await store3.delete(target.scope, target.scopeId, name2, typeof args.expectedRevision === "string" ? args.expectedRevision : existing.revision);
+      appendVariableJournal(journal, { tool: "variable_delete", phase: "after", target: journalTarget, after: null });
       return { found: true, scope: target.scope, name: name2 };
     }),
     tool("variable_list", "List variable names and value summaries in the given scope, filtered by prefix.", {
@@ -10346,6 +10556,21 @@ function variableTools() {
       };
     })
   ];
+}
+function appendVariableJournal(journal, request) {
+  if (journal === void 0) return;
+  appendWriteJournalWith(journal.writer, journal.session, {
+    kind: "variable",
+    tool: request.tool,
+    journalId: journal.journalId,
+    sessionId: journal.sessionId,
+    turn: journal.turn,
+    phase: request.phase,
+    at: (/* @__PURE__ */ new Date()).toISOString(),
+    target: request.target,
+    ...request.before === void 0 ? {} : { before: request.before },
+    ...request.after === void 0 ? {} : { after: request.after }
+  });
 }
 var variableGetOutput = objectOutput(
   { found: { type: "boolean" }, scope: { type: "string" }, name: { type: "string" }, value: {}, revision: { type: "string" }, updatedAt: { type: "string" } },

@@ -16,7 +16,12 @@ import {
   type BodySessionEvent,
 } from '../src/agent-tavern/body.js'
 import {
+  BodyRollbackError,
+  type BodyRollbackPlan,
+} from '../src/agent-tavern/body-rollback.js'
+import {
   BODY_EVENT_TYPE,
+  BODY_WRITE_TOOL_DENY,
   applyBodyEdit,
   bodyRuntimeError,
   finalizeRecoveredOperation,
@@ -29,6 +34,8 @@ import {
   type BodyAgentLike,
   type BodyRuntimeDeps,
   type BodyRuntimeFailure,
+  type BodyRuntimeRollbackPort,
+  type BodyRuntimeTurnRollback,
   type BodySessionLike,
 } from '../src/agent-tavern/body-runtime.js'
 
@@ -47,6 +54,7 @@ interface HarnessOptions {
   followupError: unknown
   restrictError: unknown
   appendRecord: boolean
+  rollback: BodyWriteRollbackPort | undefined
 }
 
 interface Harness {
@@ -218,6 +226,7 @@ function createHarness(options: HarnessOptions): Harness {
       ...(options.appendRecord
         ? { appendRecord: (target: BodySessionLike, type: string, data: unknown) => target.append(type, data) }
         : {}),
+      ...(options.rollback === undefined ? {} : { writeRollback: options.rollback }),
     },
     session,
     agentId,
@@ -241,7 +250,70 @@ function healthyHarness(): Harness {
     followupError: undefined,
     restrictError: undefined,
     appendRecord: true,
+    rollback: undefined,
   })
+}
+
+/* --------------------------- rollback port doubles ------------------------- */
+
+interface TestTurnRollback extends BodyRuntimeTurnRollback {
+  readonly sessionId: string
+  readonly turn: number
+  readonly undone: number
+  readonly skippedUncommitted: readonly string[]
+}
+
+interface RollbackScript {
+  readonly prepare?: (agentId: string, turn: number, previousMessageId: string) => Promise<BodyRollbackPlan>
+  readonly commit?: (plan: BodyRollbackPlan) => Promise<void>
+  readonly restore?: (plan: BodyRollbackPlan) => Promise<void>
+  readonly rollbackTurnWrites?: (agentId: string, turn: number) => Promise<TestTurnRollback>
+}
+
+function rollbackPlan(agentId: string, turn: number, previousMessageId: string): BodyRollbackPlan {
+  return {
+    sessionId: agentId,
+    turn,
+    previousMessageId,
+    binding: { character: 'Character', chatId: 'chat.jsonl' },
+    floorIndex: 0,
+    bodyText: 'old body',
+    chatRevision: 'rev-1',
+    preparedRevision: 'rev-1',
+    journal: [],
+    mvuReceipts: [],
+    diagnostics: [],
+    preparedAt: '2026-10-28T00:00:00.000Z',
+  }
+}
+
+function newTurnRollback(agentId: string, turn: number): TestTurnRollback {
+  return { sessionId: agentId, turn, undone: 0, skippedUncommitted: [], failures: [] }
+}
+
+function createRollbackPort(script: RollbackScript, calls: string[]): BodyRuntimeRollbackPort {
+  return {
+    prepare: async (agentId: string, turn: number, previousMessageId: string) => {
+      calls.push(`prepare:${agentId}:${turn}:${previousMessageId}`)
+      return script.prepare === undefined
+        ? rollbackPlan(agentId, turn, previousMessageId)
+        : await script.prepare(agentId, turn, previousMessageId)
+    },
+    commit: async (plan: BodyRollbackPlan) => {
+      calls.push(`commit:${plan.turn}`)
+      if (script.commit !== undefined) await script.commit(plan)
+    },
+    restore: async (plan: BodyRollbackPlan) => {
+      calls.push(`restore:${plan.turn}`)
+      if (script.restore !== undefined) await script.restore(plan)
+    },
+    rollbackTurnWrites: async (agentId: string, turn: number) => {
+      calls.push(`rollback-turn:${turn}`)
+      return script.rollbackTurnWrites === undefined
+        ? newTurnRollback(agentId, turn)
+        : await script.rollbackTurnWrites(agentId, turn)
+    },
+  }
 }
 
 function seedClosedTurn(harness: Harness, turn: number, anchorId: string, text: string, withSystem: boolean): number {
@@ -727,6 +799,7 @@ describe('AgentTavern body runtime', () => {
       followupError: new Error('followup transport closed'),
       restrictError: undefined,
       appendRecord: true,
+      rollback: undefined,
     })
     const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
 
@@ -764,6 +837,7 @@ describe('AgentTavern body runtime', () => {
       followupError: undefined,
       restrictError: undefined,
       appendRecord: true,
+      rollback: undefined,
     })
     const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
 
@@ -978,6 +1052,7 @@ describe('AgentTavern body runtime', () => {
       followupError: undefined,
       restrictError: undefined,
       appendRecord: false,
+      rollback: undefined,
     })
     seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
     const beforeEvents = harness.events.length
@@ -1069,6 +1144,375 @@ describe('AgentTavern body runtime', () => {
       data: { op: 'op-finish', opId: 'op-b', result: 'failed', reason: 'cancelled' },
     }]
     expect(foldPendingOps(finished)).toEqual([])
+  })
+
+  it('prepares the old anchor turn rollback before hiding the anchor', async () => {
+    const calls: string[] = []
+    const observed = { bodyEvents: -1, developer: -1, surface: [] as number[] }
+    let harness = undefined as unknown as Harness
+    const port = createRollbackPort({
+      prepare: async (agentId, turn, previousMessageId) => {
+        observed.bodyEvents = bodyEventsOf(harness.events).length
+        observed.developer = harness.events.filter((event) => event.type === 'developer/message').length
+        observed.surface = harness.surface()
+        return rollbackPlan(agentId, turn, previousMessageId)
+      },
+    }, calls)
+    harness = createHarness({
+      status: 'idle',
+      phaseKind: 'idle',
+      lastTurn: 0,
+      followupError: undefined,
+      restrictError: undefined,
+      appendRecord: true,
+      rollback: port,
+    })
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+
+    const started = await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+
+    expect(calls).toEqual([`prepare:${harness.agentId}:1:anchor-1`])
+    expect(observed.bodyEvents).toBe(0)
+    expect(observed.developer).toBe(0)
+    expect(observed.surface).toContain(anchorSeq)
+    expect(bodyEventsOf(harness.events).filter((event) => event.data.op === 'op-start')).toHaveLength(1)
+    expect(harness.surface()).not.toContain(anchorSeq)
+    expect(started.op.rollbackPlan?.turn).toBe(1)
+  })
+
+  it('commits the prepared rollback plan after a successful settlement', async () => {
+    const calls: string[] = []
+    const harness = createHarness({
+      status: 'idle',
+      phaseKind: 'idle',
+      lastTurn: 0,
+      followupError: undefined,
+      restrictError: undefined,
+      appendRecord: true,
+      rollback: createRollbackPort({}, calls),
+    })
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+    const trigger = firstFollowup(harness)
+    appendTriggerTurn(harness, 3, trigger, 'new-body', false)
+
+    const finished = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 })
+    closeTurn(harness, 3)
+
+    expect(finished).toEqual({ status: 'ok', anchorMessageId: 'new-body' })
+    expect(calls).toEqual([`prepare:${harness.agentId}:1:anchor-1`, 'commit:1'])
+  })
+
+  it('rolls back the failed turn writes before restoring the old plan and body', async () => {
+    const calls: string[] = []
+    const observed = {
+      turnStartsAtRollback: -1,
+      restoreEventsAtRollback: -1,
+      turnStartsAtRestore: -1,
+      restoreEventsAtRestore: -1,
+    }
+    let harness = undefined as unknown as Harness
+    const port = createRollbackPort({
+      rollbackTurnWrites: async (agentId, turn) => {
+        observed.turnStartsAtRollback = harness.events.filter((event) => event.type === 'turn/start').length
+        observed.restoreEventsAtRollback = bodyEventsWithOp(harness.events, 'restore').length
+        return newTurnRollback(agentId, turn)
+      },
+      restore: async () => {
+        observed.turnStartsAtRestore = harness.events.filter((event) => event.type === 'turn/start').length
+        observed.restoreEventsAtRestore = bodyEventsWithOp(harness.events, 'restore').length
+      },
+    }, calls)
+    harness = createHarness({
+      status: 'idle',
+      phaseKind: 'idle',
+      lastTurn: 0,
+      followupError: undefined,
+      restrictError: undefined,
+      appendRecord: true,
+      rollback: port,
+    })
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const started = await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+    const trigger = firstFollowup(harness)
+    appendTriggerTurn(harness, 3, trigger, undefined, false)
+    const failed = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 })
+    closeTurn(harness, 3)
+    expect(failed.status).toBe('failed')
+
+    const restoredId = await restoreBodyAfterFailure(harness.deps, started.op)
+
+    expect(restoredId).toMatch(/^body-restore-/)
+    expect(calls).toEqual([
+      `prepare:${harness.agentId}:1:anchor-1`,
+      'rollback-turn:3',
+      'restore:1',
+    ])
+    expect(observed.turnStartsAtRollback).toBe(3)
+    expect(observed.restoreEventsAtRollback).toBe(0)
+    expect(observed.turnStartsAtRestore).toBe(3)
+    expect(observed.restoreEventsAtRestore).toBe(0)
+    expect(harness.phase.lastTurn).toBe(4)
+    expect(bodyEvent(harness.events, 'restore')?.data).toMatchObject({ messageId: restoredId })
+  })
+
+  it('refuses regeneration with zero body records when prepare fails', async () => {
+    const calls: string[] = []
+    const harness = createHarness({
+      status: 'idle',
+      phaseKind: 'idle',
+      lastTurn: 0,
+      followupError: undefined,
+      restrictError: undefined,
+      appendRecord: true,
+      rollback: createRollbackPort({
+        prepare: async () => {
+          throw new BodyRollbackError(
+            'body-state-unsafe',
+            'old turn has no write journal',
+            { detail: 'write-journal-missing', stage: 'prepare' },
+          )
+        },
+      }, calls),
+    })
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+
+    await expect(startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })).rejects.toMatchObject({ code: 'body-state-unsafe', detail: 'write-journal-missing' })
+
+    expect(bodyEventsOf(harness.events)).toHaveLength(0)
+    expect(harness.followups).toHaveLength(0)
+    expect(harness.denies).toHaveLength(0)
+    expect(harness.surface()).toContain(anchorSeq)
+  })
+
+  it('restores the prepared plan when start fails after prepare', async () => {
+    const calls: string[] = []
+    const harness = createHarness({
+      status: 'idle',
+      phaseKind: 'idle',
+      lastTurn: 0,
+      followupError: new Error('followup transport closed'),
+      restrictError: undefined,
+      appendRecord: true,
+      rollback: createRollbackPort({}, calls),
+    })
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+
+    await expect(startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })).rejects.toMatchObject({ code: 'operation-failed' })
+
+    expect(calls).toEqual([`prepare:${harness.agentId}:1:anchor-1`, 'restore:1'])
+    expect(bodyEvent(harness.events, 'op-finish')?.data).toMatchObject({ result: 'failed' })
+    expect(harness.activeRestrictions).toBe(0)
+    expect(harness.followups).toHaveLength(1)
+  })
+
+  it('restores the prepared plan when the op-start append fails', async () => {
+    const calls: string[] = []
+    const harness = createHarness({
+      status: 'idle',
+      phaseKind: 'idle',
+      lastTurn: 0,
+      followupError: undefined,
+      restrictError: undefined,
+      appendRecord: true,
+      rollback: createRollbackPort({}, calls),
+    })
+    const appendRecord = harness.deps.appendRecord
+    if (appendRecord === undefined) throw new Error('fake harness: appendRecord is missing')
+    harness.deps.appendRecord = (session, type, data) => {
+      if (isRecord(data) && data.op === 'op-start') throw new Error('op-start append failed')
+      return appendRecord(session, type, data)
+    }
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+
+    await expect(startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })).rejects.toMatchObject({ code: 'operation-failed' })
+
+    expect(calls).toEqual([`prepare:${harness.agentId}:1:anchor-1`, 'restore:1'])
+    expect(bodyEventsOf(harness.events)).toHaveLength(0)
+    expect(harness.followups).toHaveLength(0)
+    expect(harness.activeRestrictions).toBe(0)
+    expect(harness.surface()).toContain(anchorSeq)
+  })
+
+  it('throws when the new turn writes cannot be rolled back', async () => {
+    const calls: string[] = []
+    const harness = createHarness({
+      status: 'idle',
+      phaseKind: 'idle',
+      lastTurn: 0,
+      followupError: undefined,
+      restrictError: undefined,
+      appendRecord: true,
+      rollback: createRollbackPort({
+        rollbackTurnWrites: async () => { throw new Error('new turn undo down') },
+      }, calls),
+    })
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const started = await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+    const trigger = firstFollowup(harness)
+    appendTriggerTurn(harness, 3, trigger, undefined, false)
+    const failed = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 })
+    closeTurn(harness, 3)
+    expect(failed.status).toBe('failed')
+    const turnStartsBefore = harness.events.filter((event) => event.type === 'turn/start').length
+
+    await expect(restoreBodyAfterFailure(harness.deps, started.op)).rejects.toMatchObject({
+      code: 'operation-failed',
+      message: expect.stringContaining('failed to roll back turn 3 writes'),
+    })
+
+    expect(calls).toEqual([`prepare:${harness.agentId}:1:anchor-1`, 'rollback-turn:3'])
+    expect(harness.events.filter((event) => event.type === 'turn/start')).toHaveLength(turnStartsBefore)
+    expect(bodyEvent(harness.events, 'restore')).toBeUndefined()
+  })
+
+  it('throws when the new-turn rollback reports per-entry failures', async () => {
+    const harness = createHarness({
+      status: 'idle',
+      phaseKind: 'idle',
+      lastTurn: 0,
+      followupError: undefined,
+      restrictError: undefined,
+      appendRecord: true,
+      rollback: createRollbackPort({
+        rollbackTurnWrites: async (agentId, turn) => ({
+          sessionId: agentId,
+          turn,
+          undone: 0,
+          skippedUncommitted: [],
+          failures: [{
+            journalId: 'journal-new-1',
+            kind: 'memory',
+            tool: 'memory_write',
+            code: 'body-rollback-failed',
+            message: 'memory store down',
+          }],
+        }),
+      }, []),
+    })
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const started = await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+    const trigger = firstFollowup(harness)
+    appendTriggerTurn(harness, 3, trigger, undefined, false)
+    const failed = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 })
+    closeTurn(harness, 3)
+    expect(failed.status).toBe('failed')
+
+    await expect(restoreBodyAfterFailure(harness.deps, started.op)).rejects.toMatchObject({
+      code: 'operation-failed',
+      message: expect.stringContaining('could not undo 1 new-turn write'),
+    })
+
+    expect(bodyEvent(harness.events, 'restore')).toBeUndefined()
+  })
+
+  it('throws when the committed plan cannot be committed', async () => {
+    const harness = createHarness({
+      status: 'idle',
+      phaseKind: 'idle',
+      lastTurn: 0,
+      followupError: undefined,
+      restrictError: undefined,
+      appendRecord: true,
+      rollback: createRollbackPort({
+        commit: async () => { throw new Error('commit store down') },
+      }, []),
+    })
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+    const trigger = firstFollowup(harness)
+    appendTriggerTurn(harness, 3, trigger, 'new-body', false)
+
+    await expect(finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 }))
+      .rejects.toMatchObject({ code: 'operation-failed' })
+  })
+
+  it('throws without writing a restore turn when the plan cannot be restored', async () => {
+    const calls: string[] = []
+    const harness = createHarness({
+      status: 'idle',
+      phaseKind: 'idle',
+      lastTurn: 0,
+      followupError: undefined,
+      restrictError: undefined,
+      appendRecord: true,
+      rollback: createRollbackPort({
+        restore: async () => { throw new Error('restore store down') },
+      }, calls),
+    })
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const started = await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+    const trigger = firstFollowup(harness)
+    appendTriggerTurn(harness, 3, trigger, undefined, false)
+    const failed = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 })
+    closeTurn(harness, 3)
+    expect(failed.status).toBe('failed')
+    const turnStartsBefore = harness.events.filter((event) => event.type === 'turn/start').length
+
+    await expect(restoreBodyAfterFailure(harness.deps, started.op))
+      .rejects.toMatchObject({ code: 'operation-failed' })
+
+    expect(calls).toEqual([
+      `prepare:${harness.agentId}:1:anchor-1`,
+      'rollback-turn:3',
+      'restore:1',
+    ])
+    expect(harness.events.filter((event) => event.type === 'turn/start')).toHaveLength(turnStartsBefore)
+    expect(bodyEvent(harness.events, 'restore')).toBeUndefined()
+  })
+
+  it('keeps script and game tools denied while memory and variables run', async () => {
+    expect(BODY_WRITE_TOOL_DENY).toEqual(['tavern_script_advance', 'game_start', 'game_move'])
+    const harness = healthyHarness()
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+
+    await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+
+    expect(harness.denies).toEqual([['tavern_script_advance', 'game_start', 'game_move']])
   })
 
   it('serialises per-session operations and propagates failures from the tail', async () => {

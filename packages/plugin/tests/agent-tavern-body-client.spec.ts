@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest'
 const here = dirname(fileURLToPath(import.meta.url))
 const sourceDir = join(here, '../client-src')
 const bodySource = readFileSync(join(sourceDir, '89b-ui-body.js'), 'utf8')
+const stylesSource = readFileSync(join(sourceDir, '95-ui-styles.js'), 'utf8')
 const assistantSource = readFileSync(join(sourceDir, '89-ui-assistant.js'), 'utf8')
 const zh = readFileSync(join(sourceDir, '41-i18n-zh.js'), 'utf8')
 const en = readFileSync(join(sourceDir, '40-i18n-en.js'), 'utf8')
@@ -70,6 +71,24 @@ describe('AgentTavern body client source checks', () => {
     expect(bodySource).toContain('body.canRegenerate === true')
     expect(bodySource).toContain('body.canSelect === true')
     expect(bodySource).toContain('body.hidden === true')
+  })
+
+  it('pins both body dialog textareas to a fixed height with internal scrolling', () => {
+    // Only these two dialogs opt into the fixed-height classes; EditorDialog and
+    // EditorField keep their shared semantics and 108px resizable default.
+    expect(bodySource).toContain("className: 'dt-body-dialog dt-body-dialog-edit'")
+    expect(bodySource).toContain("className: 'dt-body-dialog dt-body-dialog-regenerate'")
+    expect(bodySource).toContain("className: 'dt-editor-wide dt-body-textarea dt-body-textarea-edit'")
+    expect(bodySource).toContain("className: 'dt-editor-wide dt-body-textarea dt-body-textarea-feedback'")
+
+    const baseRule = stylesSource.indexOf('.dt-editor-field textarea{min-height:108px;resize:vertical;white-space:pre-wrap}')
+    expect(baseRule).toBeGreaterThanOrEqual(0)
+    // The override must come after the shared default and outrank it by class
+    // count, otherwise the textarea stays half-fixed and still drag-resizable.
+    expect(stylesSource.indexOf('.dt-editor-field.dt-body-textarea textarea{resize:none;overflow-y:auto}')).toBeGreaterThan(baseRule)
+    expect(stylesSource).toContain('.dt-editor-field.dt-body-textarea-edit textarea{height:280px;min-height:280px;max-height:280px}')
+    expect(stylesSource).toContain('.dt-editor-field.dt-body-textarea-feedback textarea{height:180px;min-height:180px;max-height:180px}')
+    expect(stylesSource).toContain('@media(max-width:700px){.dt-editor-field.dt-body-textarea-edit textarea{height:220px;min-height:220px;max-height:220px}.dt-editor-field.dt-body-textarea-feedback textarea{height:150px;min-height:150px;max-height:150px}}')
   })
 
   it('parses the body response fields used by the action row', () => {

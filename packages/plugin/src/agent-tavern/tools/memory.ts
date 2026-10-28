@@ -1,9 +1,18 @@
 /** AgentTavern memory tool slice (registration order 5-9). */
 
-import type { MemoryHit } from '../../../../tavern-store/src/index.js'
+import { randomUUID } from 'node:crypto'
+import type { MemoryHit, MemoryRecord } from '../../../../tavern-store/src/index.js'
 import { tavernDataRoot } from '../../dsh-home.js'
 import { hybridMemorySearch } from '../../memory-hybrid.js'
 import { clampInt, limitText, stringArg } from '../../tool-args.js'
+import {
+  appendWriteJournalWith,
+  openWriteJournal,
+  type WriteJournalHandle,
+  type WriteJournalMemoryTarget,
+  type WriteJournalMemoryTool,
+  type WriteJournalPhase,
+} from '../write-journal.js'
 import {
   assertWriteScopeAllowed,
   bindingFor,
@@ -97,7 +106,15 @@ export function memoryTools(): ToolDefinition[] {
       const importance = clampScore(args.importance)
       const confidence = clampScore(args.confidence)
       const expiresAt = optionalExpiry(args.expiresAt)
-      const record = await (await memoryStore()).put({
+      const id = randomUUID()
+      const store = await memoryStore()
+      const journalTarget = { id, scope: target.scope, scopeId: target.scopeId }
+      // Register the undo record before the store changes: when the host
+      // rejects the `before` append, this write must not happen (fail-closed).
+      const journal = await openWriteJournal(exec.agent, binding.agentId)
+      appendMemoryJournal(journal, { tool: 'memory_write', phase: 'before', target: journalTarget, before: null })
+      const record = await store.put({
+        id,
         scope: target.scope,
         scopeId: target.scopeId,
         kind: args.kind === 'episodic' ? 'episodic' : 'semantic',
@@ -108,6 +125,7 @@ export function memoryTools(): ToolDefinition[] {
         ...(expiresAt === undefined ? {} : { expiresAt }),
         source: { kind: 'agent-tool', sessionId: binding.agentId, chatId: binding.chatId, character: binding.character },
       })
+      appendMemoryJournal(journal, { tool: 'memory_write', phase: 'after', target: journalTarget, after: record })
       // 写路径嵌入（提案 0016）：同步嵌入受 timeoutMs 约束；任何失败只进
       // lastError/熔断，不阻塞工具返回（向量 stale，检索时懒补）。
       await embedWrittenMemory(record)
@@ -130,6 +148,10 @@ export function memoryTools(): ToolDefinition[] {
       const id = stringArg(args.id)
       const previous = await store.read(id, target.scope, target.scopeId, true)
       if (previous === undefined) throw new Error(`memory '${id}' not found in scope '${target.scope}'`)
+      const journalTarget = { id, scope: previous.scope, scopeId: previous.scopeId }
+      // The undo record carries the record as it was before this update.
+      const journal = await openWriteJournal(exec.agent, binding.agentId)
+      appendMemoryJournal(journal, { tool: 'memory_update', phase: 'before', target: journalTarget, before: previous })
       const importance = clampScore(args.importance) ?? previous.importance
       const confidence = clampScore(args.confidence) ?? previous.confidence
       const expiresAt = typeof args.expiresAt === 'string' ? optionalExpiry(args.expiresAt) : previous.expiresAt
@@ -147,6 +169,7 @@ export function memoryTools(): ToolDefinition[] {
         ...(expiresAt === undefined ? {} : { expiresAt }),
         source: { kind: 'agent-tool', sessionId: binding.agentId, chatId: binding.chatId, character: binding.character },
       }, stringArg(args.expectedRevision))
+      appendMemoryJournal(journal, { tool: 'memory_update', phase: 'after', target: journalTarget, after: record })
       // 内容可能变更 ⇒ 旧向量按 digest 失效，重嵌（同 memory_write 的失败纪律）。
       await embedWrittenMemory(record)
       return { id: record.id, scope: record.scope, revision: record.revision, source: record.source }
@@ -163,7 +186,14 @@ export function memoryTools(): ToolDefinition[] {
       const id = stringArg(args.id)
       const previous = await store.read(id, target.scope, target.scopeId, true)
       if (previous === undefined) return { id, scope: target.scope, found: false }
+      const journalTarget = { id, scope: previous.scope, scopeId: previous.scopeId }
+      // Soft delete: the `after` record is the tombstoned record so a replay
+      // can tell "deleted by this turn" from "never existed".
+      const journal = await openWriteJournal(exec.agent, binding.agentId)
+      appendMemoryJournal(journal, { tool: 'memory_forget', phase: 'before', target: journalTarget, before: previous })
       await store.forget(id, target.scope, target.scopeId, stringArg(args.expectedRevision))
+      const removed = await store.read(id, target.scope, target.scopeId, true)
+      appendMemoryJournal(journal, { tool: 'memory_forget', phase: 'after', target: journalTarget, after: removed ?? null })
       // 向量缓存随记录一并清理（best-effort：记录已软删，残留向量只占空间）。
       try {
         await (await memoryVectorStore()).delete(id, target.scope, target.scopeId)
@@ -171,6 +201,39 @@ export function memoryTools(): ToolDefinition[] {
       return { id, scope: target.scope, found: true }
     }),
   ]
+}
+
+/** One phase of a journaled memory mutation. */
+interface MemoryJournalPhase {
+  readonly tool: WriteJournalMemoryTool
+  readonly phase: WriteJournalPhase
+  readonly target: WriteJournalMemoryTarget
+  readonly before?: MemoryRecord | null
+  readonly after?: MemoryRecord | null
+}
+
+/**
+ * Append one journal phase when the host exposes the seam.
+ *
+ * `journal === undefined` means the host has no `appendPluginRecord`; the tool
+ * then keeps its ordinary write and records nothing (proposal 0022 §3). Host
+ * append failures propagate: the engine already wraps them with the tool,
+ * phase and journal id, so an `after` failure is never silently swallowed.
+ */
+function appendMemoryJournal(journal: WriteJournalHandle | undefined, request: MemoryJournalPhase): void {
+  if (journal === undefined) return
+  appendWriteJournalWith(journal.writer, journal.session, {
+    kind: 'memory',
+    tool: request.tool,
+    journalId: journal.journalId,
+    sessionId: journal.sessionId,
+    turn: journal.turn,
+    phase: request.phase,
+    at: new Date().toISOString(),
+    target: request.target,
+    ...(request.before === undefined ? {} : { before: request.before }),
+    ...(request.after === undefined ? {} : { after: request.after }),
+  })
 }
 
 const memorySearchOutput = objectOutput({ hits: { type: 'array', items: { type: 'object', additionalProperties: true } }, sourceCount: { type: 'integer' }, truncated: { type: 'boolean' } })

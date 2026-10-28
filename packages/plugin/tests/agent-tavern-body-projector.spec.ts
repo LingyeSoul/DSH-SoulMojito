@@ -7,6 +7,7 @@ import { ChatRevisionConflictError, TavernStore } from '../../tavern-store/src/i
 import type { ChatLogIR, ChatMessage } from '../../tavern-format/src/index.js'
 import { BODY_EVENT_TYPE } from '../src/agent-tavern/body.js'
 import { AgentTavernProjector, type NativeSession, type NativeSessionEvent } from '../src/agent-tavern/projector.js'
+import { readMvuReceipts } from '../src/mvu.js'
 
 const CHARACTER = 'Body Projector Character'
 const roots: string[] = []
@@ -28,6 +29,32 @@ async function fixture(sessionId = 'body-projector-session') {
   await store.importCharacter({ spec: 'chara_card_v2', spec_version: '2.0', data: cardData() })
   const chatId = await store.createChat(CHARACTER, {
     user_name: 'Alice', character_name: CHARACTER, chat_metadata: {},
+  })
+  await store.updateState(() => ({
+    sessionBindings: {
+      [sessionId]: {
+        architecture: 'agent-tavern', contextMode: 'dsh-native',
+        character: CHARACTER, chatId,
+      },
+    },
+  }))
+  return { root, store, chatId, sessionId }
+}
+
+/** Fixture whose card is marked as JSR MVU and whose chat starts with variables. */
+async function mvuFixture(sessionId: string, variables: Record<string, unknown>) {
+  const root = mkdtempSync(join(tmpdir(), 'agent-tavern-body-projector-mvu-'))
+  roots.push(root)
+  const store = await TavernStore.open(root)
+  await store.importCharacter({
+    spec: 'chara_card_v2', spec_version: '2.0',
+    data: cardData({
+      // MagVarUpdate marker only; no card script is ever executed.
+      tavern_helper: { scripts: [{ type: 'script', content: "import 'https://example.invalid/MagVarUpdate/bundle.js'" }] },
+    }),
+  })
+  const chatId = await store.createChat(CHARACTER, {
+    user_name: 'Alice', character_name: CHARACTER, chat_metadata: { variables },
   })
   await store.updateState(() => ({
     sessionBindings: {
@@ -135,6 +162,27 @@ function seedCandidateZero(session: TestSession): void {
     }),
     bodyEvent(5, { op: 'candidate', groupId: 'group-1', messageId: 'group-1', index: 0 }),
   )
+}
+
+function updateCandidateText(patch: string): string {
+  return `Fresh narrative.\n<UpdateVariable>\n<JSONPatch>\n${patch}\n</JSONPatch>\n</UpdateVariable>`
+}
+
+/** Baseline turn, seeded candidate 0, then a regenerate turn and candidate 1. */
+function seedMvuCandidateSession(session: TestSession, candidateText: string): void {
+  seedBaseline(session)
+  seedCandidateZero(session)
+  seedRegenerateTurn(session, 2, 'candidate-1', candidateText, 2100, undefined)
+  session.events.push(
+    bodyEvent(12, { op: 'candidate', groupId: 'group-1', messageId: 'candidate-1', index: 1 }),
+    bodyEvent(13, { op: 'select', groupId: 'group-1', index: 1 }),
+  )
+}
+
+function statDataOf(message: ChatMessage): unknown {
+  const variables = message.variables
+  if (typeof variables !== 'object' || variables === null || Array.isArray(variables)) return undefined
+  return (variables as Record<string, unknown>)['stat_data']
 }
 
 async function snapshotOf(store: TavernStore, chatId: string): Promise<ChatLogIR> {
@@ -386,5 +434,98 @@ describe('AgentTavern body JSONL projector', () => {
       status: 'pending', lastCursor: 3, pendingCursor: 4,
     })
     expect(floorOf(await snapshotOf(store, chatId)).swipes).toBeUndefined()
+  })
+
+  it('applies a candidate <UpdateVariable> and records one body receipt', async () => {
+    const { root, store, chatId, sessionId } = await mvuFixture('body-projector-mvu-receipt', {
+      initialized_lorebooks: true,
+      stat_data: { mvu: { favor: 10 } },
+    })
+    const text = updateCandidateText('[{ "op": "delta", "path": "/mvu/favor", "value": 5 }]')
+    const session = makeSession(sessionId)
+    seedMvuCandidateSession(session, text)
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(session)
+
+    const chat = await snapshotOf(store, chatId)
+    expect(chat.header.chat_metadata.variables).toMatchObject({ stat_data: { mvu: { favor: 15 } } })
+    const receipts = readMvuReceipts(chat).filter((receipt) => receipt.turnKey === 'body:candidate-1')
+    expect(receipts).toHaveLength(1)
+    expect(receipts[0]).toMatchObject({ status: 'updated', failures: [] })
+    const floor = floorOf(chat)
+    expect(floor.mes).toBe(text)
+    expect(floor.swipes?.[1]).toBe(text)
+    expect(statDataOf(floor)).toEqual({ mvu: { favor: 15 } })
+  })
+
+  it('replays an MVU candidate without patching or recording a second receipt', async () => {
+    const { root, store, chatId, sessionId } = await mvuFixture('body-projector-mvu-replay', {
+      initialized_lorebooks: true,
+      stat_data: { mvu: { favor: 10 } },
+    })
+    const text = updateCandidateText('[{ "op": "delta", "path": "/mvu/favor", "value": 5 }]')
+    const session = makeSession(sessionId)
+    seedMvuCandidateSession(session, text)
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(session)
+
+    const replayRoot = mkdtempSync(join(tmpdir(), 'agent-tavern-body-projector-mvu-'))
+    roots.push(replayRoot)
+    const fresh = await AgentTavernProjector.open(replayRoot, store)
+    await fresh.replay(session)
+    await fresh.replay(session)
+
+    const chat = await snapshotOf(store, chatId)
+    // A second delta application would raise favor to 20.
+    expect(chat.header.chat_metadata.variables).toMatchObject({ stat_data: { mvu: { favor: 15 } } })
+    expect(readMvuReceipts(chat).filter((receipt) => receipt.turnKey === 'body:candidate-1')).toHaveLength(1)
+  })
+
+  it('does not record a body receipt for a candidate without <UpdateVariable>', async () => {
+    const { root, store, chatId, sessionId } = await mvuFixture('body-projector-mvu-plain', {
+      initialized_lorebooks: true,
+      stat_data: { mvu: { favor: 10 } },
+    })
+    const text = 'Plain body without a patch.'
+    const session = makeSession(sessionId)
+    seedMvuCandidateSession(session, text)
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(session)
+
+    const chat = await snapshotOf(store, chatId)
+    expect(chat.header.chat_metadata.variables).toMatchObject({ stat_data: { mvu: { favor: 10 } } })
+    expect(readMvuReceipts(chat).filter((receipt) => receipt.turnKey === 'body:candidate-1')).toHaveLength(0)
+    expect(floorOf(chat).mes).toBe(text)
+  })
+
+  it('keeps one body receipt across a candidate CAS retry', async () => {
+    const { root, store, chatId, sessionId } = await mvuFixture('body-projector-mvu-cas', {
+      initialized_lorebooks: true,
+      stat_data: { mvu: { favor: 10 } },
+    })
+    const text = updateCandidateText('[{ "op": "delta", "path": "/mvu/favor", "value": 5 }]')
+    const session = makeSession(sessionId)
+    seedMvuCandidateSession(session, text)
+    let conflicts = 0
+    const projector = await AgentTavernProjector.open(root, {
+      getState: () => store.getState(),
+      getCharacter: (name) => store.getCharacter(name),
+      getChatSnapshot: (character, id) => store.getChatSnapshot(character, id),
+      getChatJsrOverlay: (character, id) => store.getChatJsrOverlay(character, id),
+      saveChat: async (character, id, chat, revision) => {
+        const floor = chat.messages[1]
+        if (conflicts === 0 && Array.isArray(floor?.swipes) && floor.swipes.length >= 2) {
+          conflicts += 1
+          throw new ChatRevisionConflictError(revision ?? '', 'changed')
+        }
+        return store.saveChat(character, id, chat, revision)
+      },
+    })
+    await projector.replay(session)
+
+    expect(conflicts).toBe(1)
+    const chat = await snapshotOf(store, chatId)
+    expect(chat.header.chat_metadata.variables).toMatchObject({ stat_data: { mvu: { favor: 15 } } })
+    expect(readMvuReceipts(chat).filter((receipt) => receipt.turnKey === 'body:candidate-1')).toHaveLength(1)
   })
 })

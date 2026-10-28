@@ -1,7 +1,15 @@
 /** AgentTavern variable tool slice (registration order 10-14). */
 
 import { clampInt, stringArg } from '../../tool-args.js'
-import type { JsonValue } from '../../../../tavern-store/src/index.js'
+import type { JsonValue, VariableSnapshot } from '../../../../tavern-store/src/index.js'
+import {
+  appendWriteJournalWith,
+  openWriteJournal,
+  type WriteJournalHandle,
+  type WriteJournalVariableTarget,
+  type WriteJournalVariableTool,
+  type WriteJournalPhase,
+} from '../write-journal.js'
 import {
   assertWriteScopeAllowed,
   bindingFor,
@@ -36,13 +44,28 @@ export function variableTools(): ToolDefinition[] {
       const binding = await bindingFor(exec)
       const target = selectedVariableScope(args.scope, binding)
       await assertWriteScopeAllowed(target.scope)
-      const snapshot = await (await variableStore()).set(
+      const store = await variableStore()
+      const name = stringArg(args.name)
+      const value = jsonValueOf(args.value)
+      const existing = await store.get(target.scope, target.scopeId, name)
+      const journalTarget = { scope: target.scope, scopeId: target.scopeId }
+      // Undo record before the store write: a rejected `before` append aborts
+      // this set, so a turn never leaves an untracked mutation behind.
+      const journal = await openWriteJournal(exec.agent, binding.agentId)
+      appendVariableJournal(journal, {
+        tool: 'variable_set',
+        phase: 'before',
+        target: journalTarget,
+        before: existing === undefined ? null : [existing],
+      })
+      const snapshot = await store.set(
         target.scope,
         target.scopeId,
-        stringArg(args.name),
-        jsonValueOf(args.value),
+        name,
+        value,
         typeof args.expectedRevision === 'string' ? args.expectedRevision : undefined,
       )
+      appendVariableJournal(journal, { tool: 'variable_set', phase: 'after', target: journalTarget, after: [snapshot] })
       return { found: true, scope: target.scope, name: snapshot.name, value: snapshot.value, revision: snapshot.revision, updatedAt: snapshot.updatedAt }
     }),
     tool('variable_patch', 'Atomically write several variables in one scope; the whole patch fails when any expected revision conflicts.', {
@@ -76,12 +99,24 @@ export function variableTools(): ToolDefinition[] {
           ...(typeof entry.expectedRevision === 'string' ? { expectedRevision: entry.expectedRevision } : {}),
         }
       })
-      const snapshots = await (await variableStore()).patch(
+      const store = await variableStore()
+      // Before snapshots of the changed names only; names absent here did not
+      // exist before the patch and are rolled back by deleting them.
+      const previous: VariableSnapshot[] = []
+      for (const change of changes) {
+        const existing = await store.get(target.scope, target.scopeId, change.name)
+        if (existing !== undefined) previous.push(existing)
+      }
+      const journalTarget = { scope: target.scope, scopeId: target.scopeId }
+      const journal = await openWriteJournal(exec.agent, binding.agentId)
+      appendVariableJournal(journal, { tool: 'variable_patch', phase: 'before', target: journalTarget, before: previous })
+      const snapshots = await store.patch(
         target.scope,
         target.scopeId,
         changes,
         typeof args.expectedRevision === 'string' ? args.expectedRevision : undefined,
       )
+      appendVariableJournal(journal, { tool: 'variable_patch', phase: 'after', target: journalTarget, after: snapshots })
       return { scope: target.scope, variables: snapshots.map(variableSummary), truncated: false }
     }),
     tool('variable_delete', 'Delete one variable from the given scope; the audit-visible value history stays in the session log.', {
@@ -96,7 +131,13 @@ export function variableTools(): ToolDefinition[] {
       const name = stringArg(args.name)
       const existing = await store.get(target.scope, target.scopeId, name)
       if (existing === undefined) return { found: false, scope: target.scope, name }
+      const journalTarget = { scope: target.scope, scopeId: target.scopeId }
+      // Delete journals its `after` as `null`: a replay must know the variable
+      // stopped existing, which an empty array would not express.
+      const journal = await openWriteJournal(exec.agent, binding.agentId)
+      appendVariableJournal(journal, { tool: 'variable_delete', phase: 'before', target: journalTarget, before: [existing] })
       await store.delete(target.scope, target.scopeId, name, typeof args.expectedRevision === 'string' ? args.expectedRevision : existing.revision)
+      appendVariableJournal(journal, { tool: 'variable_delete', phase: 'after', target: journalTarget, after: null })
       return { found: true, scope: target.scope, name }
     }),
     tool('variable_list', 'List variable names and value summaries in the given scope, filtered by prefix.', {
@@ -120,6 +161,38 @@ export function variableTools(): ToolDefinition[] {
       }
     }),
   ]
+}
+
+/** One phase of a journaled variable mutation. */
+interface VariableJournalPhase {
+  readonly tool: WriteJournalVariableTool
+  readonly phase: WriteJournalPhase
+  readonly target: WriteJournalVariableTarget
+  readonly before?: readonly VariableSnapshot[] | null
+  readonly after?: readonly VariableSnapshot[] | null
+}
+
+/**
+ * Append one journal phase when the host exposes the seam.
+ *
+ * `journal === undefined` means the host has no `appendPluginRecord`; the tool
+ * then keeps its ordinary write and records nothing (proposal 0022 §3). Host
+ * append failures propagate with their tool/phase/journal id context.
+ */
+function appendVariableJournal(journal: WriteJournalHandle | undefined, request: VariableJournalPhase): void {
+  if (journal === undefined) return
+  appendWriteJournalWith(journal.writer, journal.session, {
+    kind: 'variable',
+    tool: request.tool,
+    journalId: journal.journalId,
+    sessionId: journal.sessionId,
+    turn: journal.turn,
+    phase: request.phase,
+    at: new Date().toISOString(),
+    target: request.target,
+    ...(request.before === undefined ? {} : { before: request.before }),
+    ...(request.after === undefined ? {} : { after: request.after }),
+  })
 }
 
 const variableGetOutput = objectOutput(

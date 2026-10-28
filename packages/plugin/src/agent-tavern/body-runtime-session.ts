@@ -159,6 +159,46 @@ export function openTurnNumber(events: readonly RuntimeEvent[]): number | undefi
   return open
 }
 
+/** Highest turn that has a matching `turn/end` in the log. */
+export function lastClosedTurnNumber(events: readonly RuntimeEvent[]): number | undefined {
+  let open: number | undefined
+  let lastClosed: number | undefined
+  for (const event of events) {
+    if (event.type === 'turn/start') {
+      open = numberField(event.data.turn)
+    } else if (event.type === 'turn/end') {
+      if (open !== undefined) lastClosed = open
+      open = undefined
+    }
+  }
+  return lastClosed
+}
+
+/**
+ * Turn that owns one event sequence.
+ *
+ * The message's own `data.turn` wins; otherwise the turn open at that sequence
+ * (or the last closed turn) is used. Regeneration must never take the new
+ * trigger turn here: the write rollback belongs to the old body's turn.
+ */
+export function turnOfEventSeq(events: readonly RuntimeEvent[], seq: number): number | undefined {
+  let open: number | undefined
+  let lastClosed: number | undefined
+  for (const event of events) {
+    if (event.type === 'turn/start') {
+      open = numberField(event.data.turn)
+    } else if (event.type === 'turn/end') {
+      if (open !== undefined) lastClosed = open
+      open = undefined
+    }
+    if (event.seq !== seq) continue
+    const direct = numberField(event.data.turn)
+    if (direct !== undefined) return direct
+    return open ?? lastClosed
+  }
+  return undefined
+}
+
 export function stepState(events: readonly RuntimeEvent[], turn: number): StepState {
   let openStep: number | undefined
   let nextStep = 1

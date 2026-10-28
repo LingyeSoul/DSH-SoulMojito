@@ -21,6 +21,14 @@ import { RegexPlacement, type CharacterCardIR, type ChatLogIR } from '../../../t
 import { applyRegexScripts } from '../../../tavern-script/src/index.js'
 import { sessionEvents, type HostSessionLog } from '../../../bind/src/index.js'
 import { collectSessionRegexScripts } from '../regex-session.js'
+import { mvuReceiptsForBody, recordMvuTurnReceipt, snapshotChatVariables } from '../mvu.js'
+import {
+  applyUpdateVariableToChat,
+  cardUsesJsrMvu,
+  ensureChatVariables,
+  messageStatVariables,
+  seedJsrMvuVariables,
+} from './mvu-compat.js'
 import {
   BODY_EVENT_TYPE,
   BodyLedgerError,
@@ -35,6 +43,8 @@ import {
   applyEditToChat,
   applyRestoreToChat,
   applySelectToChat,
+  findBodyFloorIndexByGroupId,
+  findBodyFloorIndexByMessageId,
   type BodyJsonlCandidateInput,
   type BodyJsonlUsage,
 } from './body-jsonl.js'
@@ -127,7 +137,7 @@ export async function projectBodyEvent(
       ...(resolved.usage === undefined ? {} : { usage: resolved.usage }),
       ...(data.feedback === undefined ? {} : { feedback: data.feedback }),
     }
-    await mutateBodyChat(store, binding, (chat) => applyCandidateToChat(chat, input))
+    await mutateBodyChat(store, binding, (chat) => projectCandidateToChat(chat, character?.card, input))
     return
   }
 
@@ -188,6 +198,91 @@ export function isBodyMergedAssistant(session: HostSessionLog, event: BodyProjec
   const messageId = message?.['id']
   if (typeof messageId === 'string' && messageId !== '' && isRestoredBodyMessage(session, messageId)) return true
   return isBodyTriggerTurn(session, data?.['turn'])
+}
+
+/* ---------------------- candidate merge + MVU patch ----------------------- */
+
+/**
+ * Merge one candidate into its body floor and apply its MVU patch exactly once.
+ *
+ * A regenerated candidate never reaches the generic assistant append path
+ * (its trigger turn is merged instead), so this function reproduces the same
+ * JSR MVU sequence on the cloned chat: seed, snapshot the post-seed baseline,
+ * apply `<UpdateVariable>`, record the `body:<messageId>` receipt, then merge
+ * the candidate with the patched text and attach the resulting stat_data.
+ *
+ * Replay and CAS retries re-enter with a fresh snapshot. An existing swipe slot
+ * or an existing receipt means the patch already ran, so the candidate merges
+ * with its stored text and the variable tree stays untouched.
+ */
+function projectCandidateToChat(
+  chat: ChatLogIR,
+  card: CharacterCardIR | undefined,
+  input: BodyJsonlCandidateInput,
+): ChatLogIR {
+  const existingText = existingCandidateText(chat, input.groupId, input.index)
+  const receiptExists = mvuReceiptsForBody(chat, { messageId: input.messageId }).length > 0
+  if (card === undefined
+    || !cardUsesJsrMvu(card)
+    || existingText !== undefined
+    || receiptExists
+    || !hasUpdateVariableBlock(input.text)) {
+    return applyCandidateToChat(chat, {
+      ...input,
+      ...(existingText === undefined ? {} : { text: existingText }),
+    })
+  }
+
+  seedJsrMvuVariables(card, ensureChatVariables(chat))
+  const before = snapshotChatVariables(chat)
+  const applied = applyUpdateVariableToChat(card, chat, input.text)
+  const next = applyCandidateToChat(chat, { ...input, text: applied.text })
+  if (!applied.found) return next
+  recordMvuTurnReceipt(next, before, {
+    turnKey: `body:${input.messageId}`,
+    failures: applied.failures,
+  })
+  return attachBodyStatData(next, input.groupId)
+}
+
+/**
+ * Text already stored in the candidate slot. A present slot means a previous
+ * projection (or a successful CAS attempt) already merged this candidate.
+ */
+function existingCandidateText(chat: ChatLogIR, groupId: string, index: number): string | undefined {
+  const byGroup = findBodyFloorIndexByGroupId(chat, groupId)
+  const floorIndex = byGroup === undefined ? findBodyFloorIndexByMessageId(chat, groupId) : byGroup
+  if (floorIndex === undefined) return undefined
+  const floor = chat.messages[floorIndex]
+  const swipes = floor === undefined ? undefined : floor.swipes
+  if (!Array.isArray(swipes)) return undefined
+  const text = swipes[index]
+  return typeof text === 'string' ? text : undefined
+}
+
+/** Mirror the floor's current stat_data into the message variables like appendMessage. */
+function attachBodyStatData(chat: ChatLogIR, groupId: string): ChatLogIR {
+  const floorIndex = findBodyFloorIndexByGroupId(chat, groupId)
+  if (floorIndex === undefined) {
+    throw new BodyJsonlProjectionError(
+      'body-floor-not-found',
+      `body floor '${groupId}' disappeared after candidate projection`,
+    )
+  }
+  const floor = chat.messages[floorIndex]
+  if (floor === undefined) {
+    throw new BodyJsonlProjectionError(
+      'body-floor-not-found',
+      `body floor '${groupId}' has no message at index ${floorIndex}`,
+    )
+  }
+  chat.messages[floorIndex] = messageStatVariables(chat, floor)
+  return chat
+}
+
+/** Same block shape as the MVU parser; only gates whether the patch may run. */
+function hasUpdateVariableBlock(text: string): boolean {
+  return /<UpdateVariable(?:Variable)?\b[^>]*>[\s\S]*?<\/UpdateVariable(?:Variable)?\s*>/i.test(text)
 }
 
 /* -------------------------------- CAS writer ------------------------------- */

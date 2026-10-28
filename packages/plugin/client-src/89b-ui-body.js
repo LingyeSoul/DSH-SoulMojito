@@ -309,6 +309,7 @@
           onClose: closeEditor,
           closeLabel: t('panel.close'),
           footer: editFooter,
+          className: 'dt-body-dialog dt-body-dialog-edit',
         },
         h('div', { className: 'dt-editor' },
           h(EditorField, {
@@ -316,7 +317,7 @@
             value: draft,
             onChange: setDraft,
             multiline: true,
-            className: 'dt-editor-wide',
+            className: 'dt-editor-wide dt-body-textarea dt-body-textarea-edit',
           }),
           error !== '' ? h('p', { className: 'dt-error', role: 'alert' }, error) : null)) : null,
         feedbackOpen ? h(EditorDialog, {
@@ -324,6 +325,7 @@
           onClose: closeRegenerate,
           closeLabel: t('panel.close'),
           footer: regenerateFooter,
+          className: 'dt-body-dialog dt-body-dialog-regenerate',
         },
         h('div', { className: 'dt-editor' },
           h(EditorField, {
@@ -331,7 +333,7 @@
             value: feedback,
             onChange: setFeedback,
             multiline: true,
-            className: 'dt-editor-wide',
+            className: 'dt-editor-wide dt-body-textarea dt-body-textarea-feedback',
             hint: t('body.feedbackHint'),
           }),
           error !== '' ? h('p', { className: 'dt-error', role: 'alert' }, error) : null)) : null)

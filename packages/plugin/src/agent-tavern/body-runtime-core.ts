@@ -8,6 +8,7 @@
 
 import { KeyedMutationTails } from '../../../tavern-store/src/index.js'
 import { BODY_EVENT_TYPE, type BodyEventData } from './body.js'
+import type { BodyRollbackPlan, BodyWriteRollbackPort } from './body-rollback.js'
 import { canAdvanceHostTurnBase } from '../session/trace.js'
 
 /** Maximum accepted user-visible body length. */
@@ -15,18 +16,16 @@ export const BODY_TEXT_MAX_LENGTH = 100_000
 
 /**
  * Write-capable tools disabled while a regeneration turn is running. Callers
- * may pass a narrower/more precise list in the request; this default covers the
- * tools that mutate memory, variables, scripts and games.
+ * may pass a narrower/more precise list in the request.
+ *
+ * Memory and variable writes are journaled by `write-journal.ts` and rolled
+ * back by `body-rollback.ts`, and `tavern_variable_settle` records an MVU
+ * receipt, so those tools stay available during regeneration (proposal 0022
+ * §6). Script cursors and game state have no sibling checkpoint in this
+ * proposal, so they remain denied until one is added.
  */
 export const BODY_WRITE_TOOL_DENY: readonly string[] = [
-  'memory_write',
-  'memory_update',
-  'memory_forget',
-  'variable_set',
-  'variable_patch',
-  'variable_delete',
   'tavern_script_advance',
-  'tavern_variable_settle',
   'game_start',
   'game_move',
 ]
@@ -36,6 +35,7 @@ export type BodyRuntimeErrorCode =
   | 'not-last-round'
   | 'stale-anchor'
   | 'body-compacted'
+  | 'body-state-unsafe'
   | 'invalid-body-text'
   | 'host-unsupported'
   | 'invalid-arguments'
@@ -48,14 +48,21 @@ export interface BodyRuntimeFailure extends Error {
   name: 'BodyRuntimeError'
   code: BodyRuntimeErrorCode
   cause?: unknown
+  /** Concrete `body-state-unsafe` signal forwarded from the rollback port. */
+  detail?: string
   /** Present when a start failed after the previous anchor was already hidden. */
   op?: PendingBodyOperation
 }
 
-export function bodyRuntimeError(code: BodyRuntimeErrorCode, message: string): BodyRuntimeFailure {
+export function bodyRuntimeError(
+  code: BodyRuntimeErrorCode,
+  message: string,
+  detail?: string,
+): BodyRuntimeFailure {
   const error = new Error(message) as BodyRuntimeFailure
   error.name = 'BodyRuntimeError'
   error.code = code
+  if (detail !== undefined) error.detail = detail
   return error
 }
 
@@ -91,6 +98,31 @@ export interface BodyAgentLike {
   followup(message: unknown): unknown
 }
 
+/** One new-turn write the rollback port could not undo. */
+export interface BodyRuntimeTurnRollbackFailure {
+  readonly journalId: string
+  readonly kind: string
+  readonly tool: string
+  readonly code: string
+  readonly message: string
+}
+
+/** Structural result of `rollbackTurnWrites`; the port owns the concrete type. */
+export interface BodyRuntimeTurnRollback {
+  readonly failures: readonly BodyRuntimeTurnRollbackFailure[]
+}
+
+/** Runtime-side structural view of the write rollback port. */
+export interface BodyRuntimeRollbackPort extends Omit<BodyWriteRollbackPort, 'rollbackTurnWrites'> {
+  /**
+   * Undo the writes produced by one turn (proposal 0022 §10.3).
+   *
+   * R3 owns the concrete port; this stays optional so a port from an older
+   * build still works and the runtime never imports a concrete class.
+   */
+  rollbackTurnWrites?(agentId: string, turn: number): Promise<BodyRuntimeTurnRollback>
+}
+
 export interface BodyRuntimeDeps {
   session: BodySessionLike
   agent: BodyAgentLike
@@ -104,6 +136,15 @@ export interface BodyRuntimeDeps {
    * point fails closed with `host-unsupported` before touching the session.
    */
   appendRecord?: (session: BodySessionLike, type: string, data: unknown) => unknown
+  /**
+   * Memory/variable/MVU write rollback used by regeneration (proposal 0022 §5).
+   *
+   * When present, `startRegenerate` prepares the plan before hiding the old
+   * anchor, settlement commits it, and failure restore replays it. When absent
+   * the runtime keeps the legacy no-rollback path; the HTTP gate only allows
+   * regeneration over historical MVU state when this port is available.
+   */
+  writeRollback?: BodyRuntimeRollbackPort
 }
 
 export interface RegenerateBodyRequest {
@@ -137,6 +178,12 @@ export interface PendingBodyOperation {
   triggerMessageId?: string
   turn?: number
   feedback?: string
+  /**
+   * In-memory rollback plan prepared by `startRegenerate`. It travels with the
+   * operation so a failed start can restore the rolled-back writes before the
+   * body itself is restored.
+   */
+  rollbackPlan?: BodyRollbackPlan
 }
 
 export type FinalizeTurnStoppingResult =
@@ -345,6 +392,7 @@ export function operationView(op: ActiveBodyOperation): PendingBodyOperation {
     triggerMessageId: op.triggerMessageId,
     ...(op.turn === undefined ? {} : { turn: op.turn }),
     ...(op.feedback === undefined ? {} : { feedback: op.feedback }),
+    ...(op.rollbackPlan === undefined ? {} : { rollbackPlan: op.rollbackPlan }),
   }
 }
 
@@ -421,6 +469,7 @@ export function failureFor(error: unknown, context: string, op: PendingBodyOpera
   const code = isBodyFailure(error) ? error.code : 'operation-failed'
   const failure = bodyRuntimeError(code, `${context}: ${errorMessage(error)}`)
   if (error instanceof Error) failure.cause = error
+  if (isBodyFailure(error) && error.detail !== undefined) failure.detail = error.detail
   if (op !== undefined) failure.op = op
   return failure
 }

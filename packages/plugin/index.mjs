@@ -3044,12 +3044,12 @@ var TavernStore = class _TavernStore {
       return id;
     });
   }
-  async saveChat(characterName, chatId, log, expectedRevision) {
+  async saveChat(characterName, chatId, log2, expectedRevision) {
     return this.mutateChat(async () => {
       const dir = path.join(this.root, "chats", safeFileName(characterName));
       const file = path.join(dir, safeChatFileName(chatId));
       await this.assertChatRevision(file, expectedRevision);
-      const bytes = chatBytes(log);
+      const bytes = chatBytes(log2);
       await this.writeAtomic(file, bytes);
       return chatRevision(bytes);
     });
@@ -3322,12 +3322,12 @@ var TavernStore = class _TavernStore {
       await this.assertChatRevision(source, expectedRevision);
       const bytes = await this.tryRead(source);
       if (bytes === void 0) throw new Error(`chat '${chatId}' not found`);
-      const log = parseChatLog(Buffer.from(bytes).toString("utf8"));
-      if (messageId < 0 || messageId >= log.messages.length) {
-        throw new Error(`branch messageId ${messageId} out of range (0..${log.messages.length - 1})`);
+      const log2 = parseChatLog(Buffer.from(bytes).toString("utf8"));
+      if (messageId < 0 || messageId >= log2.messages.length) {
+        throw new Error(`branch messageId ${messageId} out of range (0..${log2.messages.length - 1})`);
       }
-      const branchMessages = log.messages.slice(0, messageId + 1).map((m) => ({ ...m }));
-      const header = structuredClone(log.header);
+      const branchMessages = log2.messages.slice(0, messageId + 1).map((m) => ({ ...m }));
+      const header = structuredClone(log2.header);
       header.chat_metadata = {
         ...header.chat_metadata ?? {},
         bookmark_link: { character: characterName, chatId, messageId },
@@ -3366,9 +3366,9 @@ var TavernStore = class _TavernStore {
       const source = path.join(dir, safeChatFileName(parentChatId));
       const bytes = await this.tryRead(source);
       if (bytes === void 0) throw new Error(`chat '${parentChatId}' not found`);
-      const log = parseChatLog(Buffer.from(bytes).toString("utf8"));
-      const header = structuredClone(log.header);
-      const messageId = typeof fork.bookmarkMessageId === "number" && Number.isSafeInteger(fork.bookmarkMessageId) && fork.bookmarkMessageId >= 0 && fork.bookmarkMessageId < log.messages.length ? fork.bookmarkMessageId : Math.max(0, log.messages.length - 1);
+      const log2 = parseChatLog(Buffer.from(bytes).toString("utf8"));
+      const header = structuredClone(log2.header);
+      const messageId = typeof fork.bookmarkMessageId === "number" && Number.isSafeInteger(fork.bookmarkMessageId) && fork.bookmarkMessageId >= 0 && fork.bookmarkMessageId < log2.messages.length ? fork.bookmarkMessageId : Math.max(0, log2.messages.length - 1);
       header.chat_metadata = {
         ...header.chat_metadata ?? {},
         bookmark_link: { character: characterName, chatId: parentChatId, messageId },
@@ -4060,8 +4060,8 @@ function safeChatFileName(name2) {
   if (!/^[A-Za-z0-9@ _.-]+\.jsonl$/.test(name2) || name2.includes("..")) throw new Error("invalid chat id");
   return name2;
 }
-function chatBytes(log) {
-  return new Uint8Array(Buffer.from(serializeChatLog(log), "utf8"));
+function chatBytes(log2) {
+  return new Uint8Array(Buffer.from(serializeChatLog(log2), "utf8"));
 }
 function chatRevision(bytes) {
   return createHash("sha256").update(bytes).digest("base64url");
@@ -4257,6 +4257,35 @@ ${record.tags.join(" ")}`.toLocaleLowerCase();
       });
       await this.writeRecord(next);
       await this.audit("forget", next);
+    });
+  }
+  /**
+   * Write one record back exactly as recorded, revisions and tombstones included.
+   *
+   * Body rollback (`agent-tavern/body-rollback.ts`) uses this to restore a
+   * journaled `before` state or replay a journaled `after` state. The record is
+   * written verbatim: `deletedAt` survives a forget replay, and `revision` stays
+   * the journaled one instead of hashing a fresh timestamp into the record.
+   *
+   * `expectedRevision` guards the id exactly like `put`/`forget`: an existing
+   * record requires the current revision, a missing record requires it to stay
+   * missing. A conflict raises `MemoryRevisionConflictError` before any write.
+   */
+  async restore(record, expectedRevision) {
+    validateRecord(record);
+    return this.mutate(async () => {
+      const previous = await this.readRecord(record.id, record.scope, record.scopeId);
+      if (previous !== void 0) {
+        if (expectedRevision === void 0 || previous.revision !== expectedRevision) {
+          throw new MemoryRevisionConflictError(record.id, expectedRevision, previous.revision);
+        }
+      } else if (expectedRevision !== void 0) {
+        throw new MemoryRevisionConflictError(record.id, expectedRevision);
+      }
+      const restored = structuredClone(record);
+      await this.writeRecord(restored);
+      await this.audit("restore", restored);
+      return structuredClone(restored);
     });
   }
   async listRecords(query) {
@@ -13649,6 +13678,1137 @@ function toTavernRegexEntry(script) {
   };
 }
 
+// packages/plugin/src/mvu-guard.ts
+var DIRECTIVE_KEYS = ["$range", "$step", "$enum", "$ro", "$type"];
+var TYPE_LOCKS = ["number", "string", "boolean", "object", "array"];
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function parseRange(raw) {
+  if (!Array.isArray(raw) || raw.length < 2) return void 0;
+  const min = raw[0];
+  const max2 = raw[1];
+  if (typeof min !== "number" || !Number.isFinite(min) || typeof max2 !== "number" || !Number.isFinite(max2)) return void 0;
+  return { min: Math.min(min, max2), max: Math.max(min, max2) };
+}
+function resolveTemplateNode(raw) {
+  if (typeof raw === "number" && Number.isFinite(raw)) return { typeLock: "number" };
+  if (typeof raw === "string") return { typeLock: "string" };
+  if (typeof raw === "boolean") return { typeLock: "boolean" };
+  if (Array.isArray(raw)) {
+    return { typeLock: "array", ...raw.length > 0 ? { item: resolveTemplateNode(raw[0]) } : {} };
+  }
+  if (!isPlainObject(raw)) return void 0;
+  const range = parseRange(raw.$range);
+  const step = typeof raw.$step === "number" && Number.isFinite(raw.$step) && raw.$step > 0 ? raw.$step : void 0;
+  const enumValues = Array.isArray(raw.$enum) && raw.$enum.length > 0 ? raw.$enum : void 0;
+  const ro = raw.$ro === true ? true : void 0;
+  const typeLockDirect = typeof raw.$type === "string" && TYPE_LOCKS.includes(raw.$type) ? raw.$type : void 0;
+  const directives = {
+    ...range !== void 0 ? { min: range.min, max: range.max } : {},
+    ...step !== void 0 ? { step } : {},
+    ...enumValues !== void 0 ? { enumValues } : {},
+    ...ro !== void 0 ? { ro } : {}
+  };
+  const childKeys = Object.keys(raw).filter((key) => !DIRECTIVE_KEYS.includes(key));
+  if (childKeys.length === 0) {
+    const typeLock = typeLockDirect ?? (range !== void 0 || step !== void 0 ? "number" : enumValues !== void 0 ? "string" : void 0);
+    if (typeLock === void 0 && Object.keys(directives).length === 0) {
+      return { typeLock: "object", objectMode: "open" };
+    }
+    if (typeLock === "object") return { typeLock, objectMode: "open", ...directives };
+    if (typeLock === "array") return { typeLock, ...directives };
+    return { ...typeLock !== void 0 ? { typeLock } : {}, ...directives };
+  }
+  const wildcardRaw = childKeys.includes("*") ? raw["*"] : void 0;
+  const namedKeys = childKeys.filter((key) => key !== "*");
+  const children = /* @__PURE__ */ new Map();
+  for (const key of namedKeys) {
+    const child = resolveTemplateNode(raw[key]);
+    if (child !== void 0) children.set(key, child);
+  }
+  const objectMode = wildcardRaw !== void 0 ? "wildcard" : "locked";
+  const wildcard = wildcardRaw !== void 0 ? resolveTemplateNode(wildcardRaw) : void 0;
+  return {
+    typeLock: "object",
+    objectMode,
+    ...children.size > 0 ? { children } : {},
+    ...wildcard !== void 0 ? { wildcard } : {},
+    ...directives
+  };
+}
+var schemaCache = /* @__PURE__ */ new WeakMap();
+function resolveMvuSchema(raw) {
+  if (!isPlainObject(raw)) return void 0;
+  const cached = schemaCache.get(raw);
+  if (cached !== void 0 || schemaCache.has(raw)) return cached;
+  const resolved = resolveTemplateNode(raw);
+  const root = resolved !== void 0 && resolved.objectMode === "locked" ? { ...resolved, objectMode: "open" } : resolved;
+  schemaCache.set(raw, root);
+  return root;
+}
+function stripMvuControl(tree) {
+  if (!("$schema" in tree || "$rules" in tree)) return tree;
+  const out = {};
+  for (const [key, value] of Object.entries(tree)) {
+    if (key === "$schema" && isPlainObject(value)) continue;
+    if (key === "$rules" && Array.isArray(value)) continue;
+    out[key] = value;
+  }
+  return out;
+}
+var INITIAL_VARIABLES_KEY = "initial_variables";
+function cardSchema(card) {
+  const holder = card?.data?.extensions?.["agentTavern"];
+  if (!isPlainObject(holder)) return void 0;
+  const initial = holder.initialVariables;
+  return isPlainObject(initial) ? initial.$schema : void 0;
+}
+function treeSchema(tree) {
+  return isPlainObject(tree) ? tree.$schema : void 0;
+}
+function readMvuSchema(chat, card, variablesOverride) {
+  const candidates = [
+    treeSchema(variablesOverride ?? chat?.header?.chat_metadata?.variables),
+    cardSchema(card),
+    treeSchema(chat?.header?.chat_metadata?.[INITIAL_VARIABLES_KEY])
+  ];
+  for (const candidate of candidates) {
+    if (isPlainObject(candidate) && Object.keys(candidate).length > 0) return candidate;
+  }
+  return void 0;
+}
+function typeName(value) {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+function mvuValuesEqual(left, right) {
+  if (left === right) return true;
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return left.length === right.length && left.every((item, index) => mvuValuesEqual(item, right[index]));
+  }
+  if (isPlainObject(left) && isPlainObject(right)) {
+    const keys = /* @__PURE__ */ new Set([...Object.keys(left), ...Object.keys(right)]);
+    for (const key of keys) {
+      if (!mvuValuesEqual(left[key], right[key])) return false;
+    }
+    return true;
+  }
+  return false;
+}
+function clampNumber(value, min, max2) {
+  let out = value;
+  if (min !== void 0 && out < min) out = min;
+  if (max2 !== void 0 && out > max2) out = max2;
+  return out;
+}
+function validateValue2(node, value, current, path12, notes) {
+  if (node.ro === true && !mvuValuesEqual(value, current)) {
+    return { ok: false, kind: "readonly", reason: "read-only field" };
+  }
+  if (Array.isArray(value)) {
+    if (node.typeLock !== void 0 && node.typeLock !== "array") {
+      return { ok: false, kind: "type-mismatch", reason: `expected ${node.typeLock}, got array` };
+    }
+    if (node.item === void 0) return { ok: true, value, notes };
+    const currentItems = Array.isArray(current) ? current : [];
+    const out = [];
+    for (let i = 0; i < value.length; i++) {
+      const result = validateValue2(node.item, value[i], currentItems[i], `${path12}[${i}]`, notes);
+      if (!result.ok) return result;
+      out.push(result.value);
+    }
+    return { ok: true, value: out, notes };
+  }
+  if (isPlainObject(value)) {
+    if (node.typeLock !== void 0 && node.typeLock !== "object") {
+      return { ok: false, kind: "type-mismatch", reason: `expected ${node.typeLock}, got object` };
+    }
+    if (node.objectMode !== "locked" && node.objectMode !== "wildcard") return { ok: true, value, notes };
+    const currentObject = isPlainObject(current) ? current : {};
+    const next = {};
+    for (const key of Object.keys(value)) {
+      const child = node.children?.get(key) ?? node.wildcard;
+      if (child === void 0) {
+        return { ok: false, kind: "structure", reason: `key '${key}' is not in the schema template` };
+      }
+      const result = validateValue2(child, value[key], currentObject[key], path12 === "" ? key : `${path12}.${key}`, notes);
+      if (!result.ok) return result;
+      next[key] = result.value;
+    }
+    if (node.objectMode === "locked") {
+      for (const key of node.children?.keys() ?? []) {
+        if (!(key in value) && key in currentObject) {
+          return { ok: false, kind: "structure", reason: `template field '${key}' would be deleted by this write` };
+        }
+      }
+    }
+    return { ok: true, value: next, notes };
+  }
+  if (node.typeLock !== void 0 && typeName(value) !== node.typeLock) {
+    return { ok: false, kind: "type-mismatch", reason: `expected ${node.typeLock}, got ${typeName(value)}` };
+  }
+  if (node.enumValues !== void 0 && !node.enumValues.some((allowed) => mvuValuesEqual(allowed, value))) {
+    return { ok: false, kind: "enum-violation", reason: `value ${JSON.stringify(value)} is not one of [${node.enumValues.map((entry) => JSON.stringify(entry)).join(", ")}]` };
+  }
+  if (typeof value === "number" && Number.isFinite(value) && (node.min !== void 0 || node.max !== void 0 || node.step !== void 0)) {
+    let out = value;
+    if (node.step !== void 0 && typeof current === "number" && Number.isFinite(current)) {
+      const delta = out - current;
+      const capped = Math.max(-node.step, Math.min(node.step, delta));
+      if (capped !== delta) {
+        notes.push(`${path12}: guard step: delta ${delta > 0 ? "+" : ""}${delta} capped to ${capped > 0 ? "+" : ""}${capped}`);
+        out = current + capped;
+      }
+    }
+    const clamped = clampNumber(out, node.min, node.max);
+    if (clamped !== out) {
+      notes.push(`${path12}: guard clamp: ${out} -> ${clamped}`);
+      out = clamped;
+    }
+    return { ok: true, value: out, notes };
+  }
+  return { ok: true, value, notes };
+}
+function guardMvuWrite(schema, path12, value, current) {
+  const segments = path12.split(".").filter((segment) => segment !== "");
+  if (segments.length === 0) return { ok: true, value };
+  if (segments[0] === "$schema") {
+    return { ok: false, kind: "readonly", reason: "the $schema subtree is the declared guard contract and cannot be settled" };
+  }
+  const root = resolveMvuSchema(schema);
+  if (root === void 0) return { ok: true, value };
+  let cursor = root;
+  let parent;
+  let roChain = root.ro === true;
+  let violation;
+  for (let i = 0; i < segments.length && cursor !== void 0; i++) {
+    const segment = segments[i];
+    if (cursor.typeLock === "array") {
+      parent = cursor;
+      if (!/^\d+$/.test(segment)) {
+        violation ??= `'${segments.slice(0, i + 1).join(".")}' expects an array index, not '${segment}'`;
+        cursor = void 0;
+      } else {
+        cursor = cursor.item;
+      }
+    } else if (cursor.objectMode !== void 0) {
+      parent = cursor;
+      const named = cursor.children?.get(segment);
+      if (named !== void 0) cursor = named;
+      else if (cursor.objectMode === "wildcard" && cursor.wildcard !== void 0) cursor = cursor.wildcard;
+      else if (cursor.objectMode === "locked") {
+        violation ??= `'${segments.slice(0, i + 1).join(".")}' is not in the schema template`;
+        cursor = void 0;
+      } else cursor = void 0;
+    } else {
+      if (cursor.typeLock !== void 0 && cursor.objectMode === void 0) {
+        violation ??= `'${segments.slice(0, i + 1).join(".")}' expects ${cursor.typeLock}, not a nested path`;
+      }
+      parent = cursor;
+      cursor = void 0;
+    }
+    if (cursor !== void 0 && cursor.ro === true) roChain = true;
+  }
+  if (violation !== void 0) return { ok: false, kind: "structure", reason: violation };
+  const lastSegment = segments[segments.length - 1];
+  if (value === void 0) {
+    if (roChain) return { ok: false, kind: "readonly", reason: "read-only field" };
+    if (parent?.objectMode === "locked" && parent.children?.has(lastSegment)) {
+      return { ok: false, kind: "structure", reason: `template field '${lastSegment}' cannot be deleted` };
+    }
+    return { ok: true, value: void 0 };
+  }
+  if (roChain && !mvuValuesEqual(value, current)) {
+    return { ok: false, kind: "readonly", reason: "read-only field" };
+  }
+  if (cursor === void 0) return { ok: true, value };
+  const result = validateValue2(cursor, value, current, segments.join("."), []);
+  if (!result.ok) return result;
+  return { ok: true, value: result.value, ...result.notes.length > 0 ? { note: result.notes.join("; ") } : {} };
+}
+function getMvuTreePath(tree, path12) {
+  let cursor = tree;
+  for (const segment of path12.split(".")) {
+    if (!isPlainObject(cursor)) return void 0;
+    cursor = cursor[segment];
+  }
+  return cursor;
+}
+
+// packages/plugin/src/mvu-rules.ts
+var MVU_RULE_ROUNDS = 3;
+var MVU_RULES_LIMIT = 32;
+var MVU_RULE_THEN_LIMIT = 16;
+function isPlainObject2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+var INITIAL_VARIABLES_KEY2 = "initial_variables";
+function cardRules(card) {
+  const holder = card?.data?.extensions?.["agentTavern"];
+  if (!isPlainObject2(holder)) return void 0;
+  const initial = holder["initialVariables"];
+  return isPlainObject2(initial) ? initial["$rules"] : void 0;
+}
+function treeRules(tree) {
+  return isPlainObject2(tree) ? tree.$rules : void 0;
+}
+function validateMvuRules(raw) {
+  if (!Array.isArray(raw)) throw new Error("$rules must be an array of rule objects");
+  if (raw.length === 0) return [];
+  if (raw.length > MVU_RULES_LIMIT) {
+    throw new Error(`$rules declares ${raw.length} rules, over the cap of ${MVU_RULES_LIMIT}`);
+  }
+  return raw.map((entry, index) => {
+    if (!isPlainObject2(entry)) throw new Error(`rule #${index} is not an object`);
+    const { name: name2, when, then } = entry;
+    if (typeof name2 !== "string" || name2.trim() === "" || name2.length > 64) {
+      throw new Error(`rule #${index} requires a non-empty name of at most 64 characters`);
+    }
+    if (typeof when !== "string" || when.trim() === "") {
+      throw new Error(`rule '${name2}' requires a non-empty when expression`);
+    }
+    if (!isPlainObject2(then) || Object.keys(then).length === 0) {
+      throw new Error(`rule '${name2}' requires a non-empty then map`);
+    }
+    if (Object.keys(then).length > MVU_RULE_THEN_LIMIT) {
+      throw new Error(`rule '${name2}' declares ${Object.keys(then).length} then writes, over the cap of ${MVU_RULE_THEN_LIMIT}`);
+    }
+    for (const [path12, value] of Object.entries(then)) {
+      if (path12.trim() === "") throw new Error(`rule '${name2}' has an empty then path`);
+      if (typeof value === "string") {
+        if (value.trim() === "") throw new Error(`rule '${name2}' has an empty then expression for '${path12}'`);
+      } else if (value === void 0 || typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") {
+        throw new Error(`rule '${name2}' then value for '${path12}' is not a JSON literal`);
+      }
+    }
+    return { name: name2, when, then };
+  });
+}
+function readMvuRules(chat, card, variablesOverride) {
+  const candidates = [
+    treeRules(variablesOverride ?? chat?.header?.chat_metadata?.variables),
+    cardRules(card),
+    treeRules(chat?.header?.chat_metadata?.[INITIAL_VARIABLES_KEY2])
+  ];
+  for (const candidate of candidates) {
+    if (candidate === void 0) continue;
+    try {
+      const rules = validateMvuRules(candidate);
+      if (rules.length === 0) continue;
+      return { rules };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { invalid: `$rules: ${message}; all card rules are disabled for this settlement` };
+    }
+  }
+  return void 0;
+}
+var SAFE_MATH_KEYS = [
+  "E",
+  "LN2",
+  "LN10",
+  "LOG2E",
+  "LOG10E",
+  "PI",
+  "SQRT1_2",
+  "SQRT2",
+  "abs",
+  "acos",
+  "acosh",
+  "asin",
+  "asinh",
+  "atan",
+  "atan2",
+  "atanh",
+  "cbrt",
+  "ceil",
+  "cos",
+  "cosh",
+  "exp",
+  "expm1",
+  "floor",
+  "fround",
+  "hypot",
+  "imul",
+  "log",
+  "log1p",
+  "log2",
+  "log10",
+  "max",
+  "min",
+  "pow",
+  "round",
+  "sign",
+  "sin",
+  "sinh",
+  "sqrt",
+  "tan",
+  "tanh",
+  "trunc"
+];
+var SAFE_MATH = Object.freeze(
+  Object.fromEntries(SAFE_MATH_KEYS.map((key) => [key, Math[key]]))
+);
+var RULE_SANDBOX_SHADES = {
+  Math: SAFE_MATH,
+  Date: void 0,
+  setTimeout: void 0,
+  setInterval: void 0,
+  setImmediate: void 0,
+  queueMicrotask: void 0
+};
+function buildRuleEnv(tree) {
+  const vars = deepClone(stripMvuControl(tree));
+  return {
+    vars,
+    getvar: (path12) => typeof path12 === "string" ? getMvuTreePath(vars, path12) : void 0,
+    ...RULE_SANDBOX_SHADES
+  };
+}
+function errorText(error) {
+  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+}
+function setTreePath(tree, path12, value) {
+  const segments = path12.split(".");
+  const leaf = segments.pop();
+  let cursor = tree;
+  for (const segment of segments) {
+    const next = cursor[segment];
+    if (next === null || typeof next !== "object" || Array.isArray(next)) cursor[segment] = {};
+    cursor = cursor[segment];
+  }
+  cursor[leaf] = value;
+}
+async function runMvuRules(rules, options) {
+  const failures = /* @__PURE__ */ new Set();
+  const writes = [];
+  const noteParts = /* @__PURE__ */ new Map();
+  const tree = options.tree;
+  for (let round = 1; round <= MVU_RULE_ROUNDS; round++) {
+    let progressed = false;
+    for (const rule of rules) {
+      let active = false;
+      try {
+        active = Boolean(await evalExpressionSandboxed(rule.when, buildRuleEnv(tree)));
+      } catch (error) {
+        failures.add(`rule '${rule.name}': when evaluation failed: ${errorText(error)}`);
+        continue;
+      }
+      if (!active) continue;
+      const pending = [];
+      let failed = false;
+      for (const [path12, raw] of Object.entries(rule.then)) {
+        try {
+          const value = typeof raw === "string" ? await evalExpressionSandboxed(raw, buildRuleEnv(tree)) : deepClone(raw);
+          if (value === void 0) throw new Error("the expression evaluated to undefined");
+          pending.push({ path: path12, value });
+        } catch (error) {
+          failures.add(`rule '${rule.name}': then evaluation failed for '${path12}': ${errorText(error)}`);
+          failed = true;
+          break;
+        }
+      }
+      if (failed) continue;
+      for (const { path: path12, value } of pending) {
+        const head = path12.split(".")[0];
+        if (head === "$schema" || head === "$rules") {
+          failures.add(`${path12}: rule '${rule.name}': guard readonly: the ${head} subtree is card-declared and cannot be settled`);
+          continue;
+        }
+        const current = getMvuTreePath(tree, path12);
+        const guarded = options.schema === void 0 ? void 0 : guardMvuWrite(options.schema, path12, value, current);
+        if (guarded !== void 0 && !guarded.ok) {
+          failures.add(`${path12}: rule '${rule.name}': guard ${guarded.kind}: ${guarded.reason}`);
+          continue;
+        }
+        const finalValue = guarded === void 0 ? value : guarded.value;
+        if (mvuValuesEqual(finalValue, current)) continue;
+        setTreePath(tree, path12, deepClone(finalValue));
+        progressed = true;
+        const note = ["rule:" + rule.name, guarded?.note].filter((part) => part !== void 0).join("; ");
+        const parts = noteParts.get(path12) ?? [];
+        if (!parts.includes(note)) parts.push(note);
+        noteParts.set(path12, parts);
+        writes.push({ path: path12, value: deepClone(finalValue), rule: rule.name, ...guarded?.note !== void 0 ? { guardNote: guarded.note } : {} });
+      }
+    }
+    if (!progressed) break;
+    if (round === MVU_RULE_ROUNDS) {
+      failures.add(`$rules: fixed-point iteration hit the ${MVU_RULE_ROUNDS}-round cap; rules were still producing changes in the last round (narrow the when conditions or reorder the rules)`);
+    }
+  }
+  const notes = Object.fromEntries([...noteParts].map(([path12, parts]) => [path12, parts.join("; ")]));
+  return { failures: [...failures], writes, notes };
+}
+function plainObject2(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
+  return value;
+}
+async function applyMvuSettlementRules(chat, card, before) {
+  const metadata = chat.header.chat_metadata;
+  const live = plainObject2(metadata.variables);
+  const source = readMvuRules(chat, card, before);
+  if (source === void 0 && before.$rules === void 0 && live?.$rules === void 0) {
+    return { failures: [], notes: {} };
+  }
+  const variables2 = live ?? {};
+  const failures = [];
+  if (!mvuValuesEqual(variables2.$rules, before.$rules)) {
+    if (before.$rules !== void 0) variables2.$rules = deepClone(before.$rules);
+    else delete variables2.$rules;
+    failures.push("$rules: guard readonly: the rules subtree is card-declared and cannot be settled");
+  }
+  if (source === void 0) {
+    if (live === void 0 && Object.keys(variables2).length > 0) metadata.variables = variables2;
+    return { failures, notes: {} };
+  }
+  if ("invalid" in source) return { failures: [...failures, source.invalid], notes: {} };
+  const schema = readMvuSchema(chat, card, before);
+  const run = await runMvuRules(source.rules, { ...schema !== void 0 ? { schema } : {}, tree: variables2 });
+  if (live === void 0 && Object.keys(variables2).length > 0) metadata.variables = variables2;
+  return { failures: [...failures, ...run.failures], notes: run.notes };
+}
+function mergeMvuRuleNotes(guardNotes, ruleNotes) {
+  const merged = {};
+  for (const [path12, note] of Object.entries(guardNotes)) merged[path12] = note;
+  for (const [path12, note] of Object.entries(ruleNotes)) {
+    merged[path12] = merged[path12] !== void 0 ? `${merged[path12]}; ${note}` : note;
+  }
+  return merged;
+}
+
+// packages/plugin/src/mvu.ts
+var DEFAULT_USER = "User";
+var INITIAL_VARIABLES_KEY3 = "initial_variables";
+var MVU_RECEIPTS_LIMIT = 20;
+function plainObject3(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
+  return value;
+}
+function jsonObjectOf(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+function readChatVariables(chat) {
+  return plainObject3(chat?.header?.chat_metadata?.variables) ?? {};
+}
+function snapshotChatVariables(chat) {
+  return deepClone(readChatVariables(chat));
+}
+function valuesEqual(left, right) {
+  return mvuValuesEqual(left, right);
+}
+function diffVariables(before, after) {
+  const changes = [];
+  const walk = (path12, left, right) => {
+    const leftObject = plainObject3(left);
+    const rightObject = plainObject3(right);
+    const recursible = leftObject !== void 0 && rightObject !== void 0 || left === void 0 && rightObject !== void 0 || right === void 0 && leftObject !== void 0;
+    if (recursible) {
+      const leftNext = leftObject ?? {};
+      const rightNext = rightObject ?? {};
+      for (const key of /* @__PURE__ */ new Set([...Object.keys(leftNext), ...Object.keys(rightNext)])) {
+        walk(path12 === "" ? key : `${path12}.${key}`, leftNext[key], rightNext[key]);
+      }
+      return;
+    }
+    if (!valuesEqual(left, right)) {
+      const change = { name: path12, ...left !== void 0 ? { before: left } : {} };
+      if (right !== void 0) change.after = right;
+      changes.push(change);
+    }
+  };
+  walk("", stripMvuControl(before), stripMvuControl(after));
+  return changes.sort((left, right) => left.name.localeCompare(right.name));
+}
+function overlayScopedVariables(base, entries) {
+  const tree = deepClone(base);
+  for (const entry of entries) {
+    const segments = entry.name.split(".");
+    const leaf = segments.pop();
+    let cursor = tree;
+    for (const segment of segments) {
+      const next = cursor[segment];
+      if (next === null || typeof next !== "object" || Array.isArray(next)) cursor[segment] = {};
+      cursor = cursor[segment];
+    }
+    cursor[leaf] = entry.value;
+  }
+  return tree;
+}
+function overlayChatScopedVariables(base, entries) {
+  const authoritativeStat = plainObject3(base["stat_data"]) !== void 0;
+  const authoritativePrevious = plainObject3(base["previous_stat_data"]) !== void 0;
+  const usable = entries.filter((entry) => {
+    if (authoritativeStat && (entry.name === "stat_data" || entry.name.startsWith("stat_data."))) return false;
+    if (authoritativePrevious && (entry.name === "previous_stat_data" || entry.name.startsWith("previous_stat_data."))) return false;
+    return true;
+  });
+  return overlayScopedVariables(base, usable);
+}
+function readMvuReceipt(record) {
+  const { at, turnKey, status: status2, changes, failures } = record;
+  if (typeof at !== "string" || typeof turnKey !== "string") return void 0;
+  if (status2 !== "updated" && status2 !== "unchanged" && status2 !== "failed") return void 0;
+  return {
+    at,
+    turnKey,
+    status: status2,
+    changes: Array.isArray(changes) ? changes.flatMap((item) => {
+      const change = plainObject3(item);
+      if (change === void 0 || typeof change.name !== "string") return [];
+      const out = { name: change.name };
+      if ("before" in change) out.before = change.before;
+      if ("after" in change) out.after = change.after;
+      if (typeof change.reason === "string") out.reason = change.reason;
+      return [out];
+    }) : [],
+    failures: Array.isArray(failures) ? failures.filter((item) => typeof item === "string") : [],
+    ...typeof record.undoneAt === "string" ? { undoneAt: record.undoneAt } : {}
+  };
+}
+function readMvuReceipts(chat) {
+  const raw = plainObject3(chat?.header?.chat_metadata?.mvu)?.receipts;
+  if (!Array.isArray(raw)) return [];
+  const receipts = [];
+  for (const entry of raw) {
+    const record = plainObject3(entry);
+    if (record === void 0) continue;
+    const receipt = readMvuReceipt(record);
+    if (receipt !== void 0) receipts.push(receipt);
+  }
+  return receipts;
+}
+function appendMvuReceipt(chat, receipt) {
+  const metadata = chat.header.chat_metadata;
+  const receipts = [...readMvuReceipts(chat), receipt].slice(-MVU_RECEIPTS_LIMIT);
+  metadata.mvu = { receipts };
+}
+function recordMvuTurnReceipt(chat, before, options) {
+  const after = readChatVariables(chat);
+  const changes = diffVariables(before, after);
+  for (const change of changes) {
+    const note = options.changeNotes?.[change.name];
+    if (note !== void 0) change.reason = note;
+  }
+  const failures = options.failures ?? [];
+  if (changes.length === 0 && failures.length === 0 && Object.keys(before).length === 0 && Object.keys(after).length === 0) {
+    return void 0;
+  }
+  const status2 = failures.length > 0 ? "failed" : changes.length > 0 ? "updated" : "unchanged";
+  const receipt = {
+    at: options.at ?? (/* @__PURE__ */ new Date()).toISOString(),
+    turnKey: options.turnKey,
+    status: status2,
+    changes,
+    failures
+  };
+  appendMvuReceipt(chat, receipt);
+  return receipt;
+}
+function setMvuTreePath(tree, path12, value) {
+  const segments = path12.split(".");
+  const leaf = segments.pop();
+  let cursor = tree;
+  for (const segment of segments) {
+    const next = cursor[segment];
+    if (next === null || typeof next !== "object" || Array.isArray(next)) cursor[segment] = {};
+    cursor = cursor[segment];
+  }
+  cursor[leaf] = value;
+}
+function revertMvuTreePath(tree, path12, before) {
+  const beforeValue = getMvuTreePath(before, path12);
+  if (beforeValue !== void 0) {
+    setMvuTreePath(tree, path12, beforeValue);
+    return;
+  }
+  const segments = path12.split(".");
+  const leaf = segments.pop();
+  const parent = getMvuTreePath(tree, segments.join("."));
+  if (parent !== null && typeof parent === "object" && !Array.isArray(parent)) {
+    delete parent[leaf];
+  }
+  while (segments.length > 0) {
+    const pathSoFar = segments.join(".");
+    const node = getMvuTreePath(tree, pathSoFar);
+    if (node === null || typeof node !== "object" || Array.isArray(node)) break;
+    if (Object.keys(node).length > 0) break;
+    if (getMvuTreePath(before, pathSoFar) !== void 0) break;
+    const popped = segments.pop();
+    const upper = segments.length > 0 ? getMvuTreePath(tree, segments.join(".")) : tree;
+    if (upper === null || typeof upper !== "object" || Array.isArray(upper)) break;
+    delete upper[popped];
+  }
+}
+function applyMvuSettlementGuard(chat, card, before) {
+  const failures = [];
+  const notes = {};
+  const metadata = chat.header.chat_metadata;
+  const variables2 = plainObject3(metadata.variables);
+  const schema = readMvuSchema(chat, card, before);
+  if (schema === void 0 || variables2 === void 0) return { failures, notes };
+  const schemaBefore = plainObject3(before.$schema);
+  const schemaLive = plainObject3(variables2.$schema);
+  if (!valuesEqual(schemaBefore, schemaLive)) {
+    if (schemaBefore !== void 0) variables2.$schema = deepClone(schemaBefore);
+    else delete variables2.$schema;
+    failures.push(`$schema: guard readonly: the schema subtree is card-declared and cannot be settled`);
+  }
+  for (const change of diffVariables(before, variables2)) {
+    const current = getMvuTreePath(before, change.name);
+    const value = "after" in change ? change.after : void 0;
+    const result = guardMvuWrite(schema, change.name, value, current);
+    if (!result.ok) {
+      revertMvuTreePath(variables2, change.name, before);
+      failures.push(`${change.name}: guard ${result.kind}: ${result.reason}`);
+      continue;
+    }
+    if (result.note !== void 0) notes[change.name] = result.note;
+    if (value !== void 0 && !valuesEqual(result.value, value)) setMvuTreePath(variables2, change.name, result.value);
+  }
+  if (Object.keys(variables2).length === 0 && Object.keys(before).length === 0) delete metadata.variables;
+  return { failures, notes };
+}
+function createMvuRuntime(input, stores) {
+  const { characterName, character, chat, books } = input;
+  const card = character.card;
+  const cardName2 = card.data.nickname || card.data.name || characterName;
+  const lastUserMessageId = (() => {
+    for (let i = chat.messages.length - 1; i >= 0; i--) {
+      const message = chat.messages[i];
+      if (message !== void 0 && message.is_user) return i;
+    }
+    return -1;
+  })();
+  const lastCharMessageId = (() => {
+    for (let i = chat.messages.length - 1; i >= 0; i--) {
+      const message = chat.messages[i];
+      if (message !== void 0 && !message.is_user && !message.is_system) return i;
+    }
+    return -1;
+  })();
+  const host = {
+    runType: "render",
+    userName: input.state.activePersona ?? DEFAULT_USER,
+    charName: cardName2,
+    chatId: input.chatId ?? "",
+    characterId: characterName,
+    messages: chat.messages.map((message) => ({
+      name: message.name,
+      mes: message.mes,
+      is_user: message.is_user,
+      is_system: message.is_system
+    })),
+    lastUserMessageId,
+    lastCharMessageId,
+    findWorldEntries: (title, book) => {
+      const out = [];
+      for (const lorebook of books) {
+        if (book !== void 0 && lorebook.name !== book) continue;
+        for (const entry of lorebook.entries) {
+          const comment = entry.comment ?? "";
+          const matched = typeof title === "number" ? entry.uid === title : comment === title;
+          if (!matched) continue;
+          out.push({
+            uid: entry.uid,
+            book: lorebook.name ?? "",
+            comment,
+            content: entry.content ?? "",
+            ...typeof entry.order === "number" ? { order: entry.order } : {},
+            disable: entry.disable === true
+          });
+        }
+      }
+      return out;
+    },
+    getCard: (name2) => {
+      if (name2 !== void 0 && name2 !== characterName && name2 !== cardName2) return null;
+      return {
+        name: cardName2,
+        systemPrompt: card.data.systemPrompt,
+        personality: card.data.personality,
+        description: card.data.description,
+        scenario: card.data.scenario,
+        firstMes: card.data.firstMes,
+        mesExample: card.data.mesExample,
+        creatorNotes: card.data.creatorNotes,
+        depthPrompt: "",
+        data: jsonObjectOf(card.data)
+      };
+    },
+    findPresetPrompt: () => null,
+    renderNested: async () => ""
+  };
+  const runtime = createTemplateRuntime({ host, stores, ...input.onWarning !== void 0 ? { onWarning: input.onWarning } : {} });
+  host.renderNested = (source, extra) => runtime.renderText(source, extra);
+  return runtime;
+}
+function statusTemplateOf(card) {
+  const agentTavern = plainObject3(card?.data?.extensions?.["agentTavern"]);
+  const template = agentTavern?.statusTemplate;
+  return typeof template === "string" && template.trim() !== "" ? template : void 0;
+}
+async function renderMvuStatusTemplate(input) {
+  const chat = input.chat;
+  const books = await collectWorldInfoBooks(input.db, input.state, input.characterName, input.character, input.chatId);
+  const runtime = createMvuRuntime(
+    {
+      state: input.state,
+      characterName: input.characterName,
+      character: input.character,
+      chat,
+      chatId: input.chatId,
+      books
+    },
+    {
+      local: deepClone(stripMvuControl(plainObject3(input.localVariables ?? readChatVariables(chat)) ?? {})),
+      global: { ...input.state.scriptGlobals },
+      initial: deepClone(stripMvuControl(plainObject3(chat.header.chat_metadata[INITIAL_VARIABLES_KEY3]) ?? {}))
+    }
+  );
+  return await runtime.renderText(input.template, void 0, "mvu-status");
+}
+async function retryMvuSettlement(db, options) {
+  const { state, characterName, chatId, snapshot: snapshot2 } = options;
+  if (typeof options.sessionId === "string" && state.sessionBindings?.[options.sessionId]?.architecture === "agent-tavern") {
+    throw new Error("AgentTavern sessions use the DSH native AgentLoop; MVU settlement retry is unavailable.");
+  }
+  if (!options.templatesActive) {
+    throw new Error("MVU retry requires the prompt template runtime (templates are disabled)");
+  }
+  if (options.revision !== snapshot2.revision) {
+    throw new ChatRevisionConflictError(options.revision, snapshot2.revision);
+  }
+  const chat = snapshot2.chat;
+  const metadata = chat.header.chat_metadata;
+  const before = snapshotChatVariables(chat);
+  let floorIndex = -1;
+  for (let i = chat.messages.length - 1; i >= 0; i--) {
+    const message = chat.messages[i];
+    if (message !== void 0 && !message.is_user && !message.is_system) {
+      floorIndex = i;
+      break;
+    }
+  }
+  if (floorIndex === -1) throw new Error("no assistant floor to settle");
+  const floor = chat.messages[floorIndex];
+  if (floor === void 0) throw new Error("no assistant floor to settle");
+  const character = await db.getCharacter(characterName) ?? await db.getCharacter(floor.name);
+  if (!character) throw new Error(`character '${characterName}' not found`);
+  const failures = [];
+  const localVars = plainObject3(metadata.variables) ?? {};
+  metadata.variables = localVars;
+  const globalsBefore = JSON.stringify(state.scriptGlobals);
+  const books = await collectWorldInfoBooks(db, state, characterName, character, chatId);
+  const runtime = createMvuRuntime(
+    { state, characterName, character, chat, chatId, books, onWarning: (message) => {
+      failures.push(message);
+    } },
+    {
+      // initial 绑活引用（存在时）；无 initial 树时绑临时对象，initial 作用域写穿
+      // 不持久化——initial 本就由每次生成的 InitialVariables 重算，非用户状态
+      local: localVars,
+      global: state.scriptGlobals,
+      initial: plainObject3(metadata[INITIAL_VARIABLES_KEY3]) ?? {}
+    }
+  );
+  try {
+    await runtime.renderText(floor.mes, void 0, "mvu-retry");
+  } catch (err2) {
+    failures.push(`mvu retry render failed: ${err2 instanceof Error ? err2.message : String(err2)}`);
+  }
+  if (Object.keys(localVars).length === 0) delete metadata.variables;
+  if (JSON.stringify(state.scriptGlobals) !== globalsBefore) {
+    await db.updateState((current) => ({ scriptGlobals: { ...current.scriptGlobals, ...state.scriptGlobals } }));
+  }
+  const guard = applyMvuSettlementGuard(chat, character.card, before);
+  const rulesPass = await applyMvuSettlementRules(chat, character.card, before);
+  const after = readChatVariables(chat);
+  const changes = diffVariables(before, after);
+  const notes = mergeMvuRuleNotes(guard.notes, rulesPass.notes);
+  for (const change of changes) {
+    if (notes[change.name] !== void 0) change.reason = notes[change.name];
+  }
+  const allFailures = [...failures, ...guard.failures, ...rulesPass.failures];
+  const receipt = {
+    at: (/* @__PURE__ */ new Date()).toISOString(),
+    turnKey: String(floorIndex),
+    status: changes.length > 0 ? "updated" : "unchanged",
+    changes,
+    failures: allFailures
+  };
+  appendMvuReceipt(chat, receipt);
+  const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
+  return { receipt, revision, variables: stripMvuControl(after) };
+}
+var MvuUndoRefusalError = class extends Error {
+  undoCode;
+  constructor(undoCode, message) {
+    super(message);
+    this.name = "MvuUndoRefusalError";
+    this.undoCode = undoCode;
+  }
+};
+function latestValidMvuReceipt(receipts) {
+  for (let index = receipts.length - 1; index >= 0; index--) {
+    if (receipts[index].undoneAt === void 0) return { index, receipt: receipts[index] };
+  }
+  return void 0;
+}
+function refuseUndo(target, receipts) {
+  if (target !== void 0) return target;
+  if (receipts.length > 0) {
+    throw new MvuUndoRefusalError("ALREADY_UNDONE", `all ${receipts.length} settlement receipts in this chat have been undone; nothing valid is left to undo`);
+  }
+  throw new MvuUndoRefusalError("NO_VALID_RECEIPT", "no MVU settlement receipt in this chat to undo");
+}
+function planMvuUndoRestores(receipt) {
+  if (receipt.status === "updated" && receipt.changes.length === 0) {
+    throw new MvuUndoRefusalError("INCOMPLETE_RECEIPT", `receipt ${receipt.turnKey} claims status 'updated' but records no change data; the receipt data is incomplete and cannot be undone`);
+  }
+  const restores = [];
+  for (const change of receipt.changes) {
+    if (!("before" in change) && !("after" in change)) {
+      throw new MvuUndoRefusalError("INCOMPLETE_RECEIPT", `receipt change '${change.name}' records neither a before nor an after value; the receipt data is incomplete and cannot be undone`);
+    }
+    restores.push({ path: change.name, ..."before" in change ? { value: change.before } : {} });
+  }
+  return restores;
+}
+function formatRestoreValue(value) {
+  const text = (() => {
+    try {
+      return JSON.stringify(value) ?? String(value);
+    } catch {
+      return String(value);
+    }
+  })();
+  return text.length > 80 ? `${text.slice(0, 79)}\u2026` : text;
+}
+function screenMvuUndoRestores(schema, restores, currentOf) {
+  const failures = [];
+  for (const restore of restores) {
+    if (restore.path.split(".")[0] === "$schema") {
+      failures.push(`$schema: guard readonly: the schema subtree is the declared guard contract and cannot be undone into`);
+      continue;
+    }
+    if (schema === void 0) continue;
+    const value = "value" in restore ? restore.value : void 0;
+    const result = guardMvuWrite(schema, restore.path, value, currentOf(restore.path));
+    if (!result.ok) {
+      failures.push(`${restore.path}: guard ${result.kind}: ${result.reason}`);
+      continue;
+    }
+    if (!mvuValuesEqual(result.value, value)) {
+      failures.push(`${restore.path}: guard would adjust the restored value ${formatRestoreValue(value)} to ${formatRestoreValue(result.value)} ($schema changed since the settlement); refusing to undo with anything other than the recorded before value`);
+    }
+  }
+  if (failures.length > 0) throw new MvuUndoRefusalError("UNDO_REJECTED", failures.join("; "));
+}
+function applyMvuUndoRestores(tree, restores) {
+  const before = overlayScopedVariables({}, restores.flatMap((restore) => "value" in restore ? [{ name: restore.path, value: deepClone(restore.value) }] : []));
+  for (const restore of restores) revertMvuTreePath(tree, restore.path, before);
+}
+function markMvuReceiptUndone(chat, index, at) {
+  const receipts = readMvuReceipts(chat);
+  const marked = { ...receipts[index], undoneAt: at ?? (/* @__PURE__ */ new Date()).toISOString() };
+  const next = receipts.slice();
+  next[index] = marked;
+  chat.header.chat_metadata.mvu = { receipts: next };
+  return marked;
+}
+async function undoMvuStSettlement(db, options) {
+  const { characterName, chatId, snapshot: snapshot2 } = options;
+  const chat = snapshot2.chat;
+  const receipts = readMvuReceipts(chat);
+  const target = refuseUndo(latestValidMvuReceipt(receipts), receipts);
+  const restores = planMvuUndoRestores(target.receipt);
+  const metadata = chat.header.chat_metadata;
+  const variables2 = plainObject3(metadata.variables) ?? {};
+  screenMvuUndoRestores(readMvuSchema(chat, (await db.getCharacter(characterName))?.card, variables2), restores, (path12) => getMvuTreePath(variables2, path12));
+  applyMvuUndoRestores(variables2, restores);
+  if (Object.keys(variables2).length === 0) delete metadata.variables;
+  else metadata.variables = variables2;
+  const marked = markMvuReceiptUndone(chat, target.index, options.at);
+  const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
+  return { receipt: marked, revision, restores };
+}
+async function undoMvuAgentSettlement(variables2, db, options) {
+  const { characterName, chatId, snapshot: snapshot2 } = options;
+  const chat = snapshot2.chat;
+  const receipts = readMvuReceipts(chat);
+  const target = refuseUndo(latestValidMvuReceipt(receipts), receipts);
+  const restores = planMvuUndoRestores(target.receipt);
+  const seedTree = readChatVariables(chat);
+  const storeFailures = [];
+  const entries = /* @__PURE__ */ new Map();
+  for (const restore of restores) {
+    try {
+      entries.set(restore.path, await variables2.get("chat", chatId, restore.path));
+    } catch (error) {
+      storeFailures.push(`${restore.path}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  if (storeFailures.length > 0) throw new MvuUndoRefusalError("UNDO_REJECTED", storeFailures.join("; "));
+  screenMvuUndoRestores(
+    readMvuSchema(chat, (await db.getCharacter(characterName))?.card),
+    restores,
+    (path12) => {
+      const entry = entries.get(path12);
+      return entry !== void 0 ? entry.value : getMvuTreePath(seedTree, path12);
+    }
+  );
+  for (const restore of restores) {
+    if ("value" in restore) continue;
+    const entry = entries.get(restore.path);
+    if (entry !== void 0) await variables2.delete("chat", chatId, restore.path, entry.revision);
+  }
+  const updates = [];
+  for (const restore of restores) {
+    if (!("value" in restore)) continue;
+    const entry = entries.get(restore.path);
+    const current = entry !== void 0 ? entry.value : getMvuTreePath(seedTree, restore.path);
+    if (current !== void 0 && mvuValuesEqual(current, restore.value)) continue;
+    updates.push({ name: restore.path, value: deepClone(restore.value), ...entry !== void 0 ? { expectedRevision: entry.revision } : {} });
+  }
+  if (updates.length > 0) await variables2.patch("chat", chatId, updates);
+  const marked = markMvuReceiptUndone(chat, target.index, options.at);
+  const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
+  return { receipt: marked, revision, restores };
+}
+function rawMvuReceipts(chat) {
+  const receipts = plainObject3(chat.header.chat_metadata.mvu)?.receipts;
+  return Array.isArray(receipts) ? receipts : void 0;
+}
+function mvuReceiptsForBody(chat, query) {
+  const { messageId, floorIndex } = query;
+  if (messageId === void 0 && floorIndex === void 0) {
+    throw new MvuUndoRefusalError("INVALID_QUERY", "mvuReceiptsForBody requires messageId or floorIndex; neither was given");
+  }
+  if (messageId !== void 0 && (typeof messageId !== "string" || messageId.trim() === "")) {
+    throw new MvuUndoRefusalError("INVALID_QUERY", "mvuReceiptsForBody requires messageId to be a non-empty string");
+  }
+  if (floorIndex !== void 0 && (!Number.isSafeInteger(floorIndex) || floorIndex < 0)) {
+    throw new MvuUndoRefusalError(
+      "INVALID_QUERY",
+      `mvuReceiptsForBody requires floorIndex to be a non-negative safe integer, received ${String(floorIndex)}`
+    );
+  }
+  const bodyKey = messageId === void 0 ? void 0 : `body:${messageId}`;
+  const floorKey = floorIndex === void 0 ? void 0 : String(floorIndex);
+  return readMvuReceipts(chat).filter((receipt) => receipt.turnKey === bodyKey || receipt.turnKey === floorKey);
+}
+function locateStoredReceipts(chat, receipts, operation) {
+  const raw = rawMvuReceipts(chat);
+  if (raw === void 0) {
+    throw new MvuUndoRefusalError(
+      "INCOMPLETE_RECEIPT",
+      `${operation} refused: the chat has no mvu.receipts to match ${receipts.length} receipt(s) against`
+    );
+  }
+  const used = /* @__PURE__ */ new Set();
+  const located = [];
+  for (const receipt of receipts) {
+    let match;
+    for (let index = 0; index < raw.length; index += 1) {
+      if (used.has(index)) continue;
+      const record = plainObject3(raw[index]);
+      if (record === void 0) continue;
+      const stored = readMvuReceipt(record);
+      if (stored === void 0 || stored.turnKey !== receipt.turnKey || stored.at !== receipt.at) continue;
+      match = { index, receipt: stored };
+      break;
+    }
+    if (match === void 0) {
+      throw new MvuUndoRefusalError(
+        "INCOMPLETE_RECEIPT",
+        `${operation} refused: receipt '${receipt.turnKey}' at ${receipt.at} is not stored in this chat; the receipt set and the chat are out of sync`
+      );
+    }
+    used.add(match.index);
+    located.push(match);
+  }
+  return located;
+}
+function setStoredReceiptsUndoneAt(chat, indexes, undoneAt) {
+  const raw = rawMvuReceipts(chat);
+  if (raw === void 0) {
+    throw new MvuUndoRefusalError("INCOMPLETE_RECEIPT", "cannot mark MVU receipts undone: the chat has no mvu.receipts array");
+  }
+  const next = raw.slice();
+  const marked = [];
+  for (const index of indexes) {
+    const record = plainObject3(next[index]);
+    if (record === void 0) {
+      throw new MvuUndoRefusalError("INCOMPLETE_RECEIPT", `cannot mark MVU receipt at index ${index}: the entry is not an object`);
+    }
+    const updated = { ...record };
+    if (undoneAt === void 0) delete updated["undoneAt"];
+    else updated["undoneAt"] = undoneAt;
+    const receipt = readMvuReceipt(updated);
+    if (receipt === void 0) {
+      throw new MvuUndoRefusalError("INCOMPLETE_RECEIPT", `cannot mark MVU receipt at index ${index}: the entry is not a valid receipt`);
+    }
+    next[index] = updated;
+    marked.push(receipt);
+  }
+  const mvu = plainObject3(chat.header.chat_metadata.mvu) ?? {};
+  chat.header.chat_metadata.mvu = { ...mvu, receipts: next };
+  return marked;
+}
+function cloneChatVariablesForReceipts(chat) {
+  return deepClone(plainObject3(chat.header.chat_metadata.variables) ?? {});
+}
+function commitChatVariablesAfterReceipts(chat, variables2) {
+  const metadata = chat.header.chat_metadata;
+  if (Object.keys(variables2).length === 0) delete metadata.variables;
+  else metadata.variables = variables2;
+}
+function planMvuRedoRestores(receipt) {
+  if (receipt.status === "updated" && receipt.changes.length === 0) {
+    throw new MvuUndoRefusalError("INCOMPLETE_RECEIPT", `receipt ${receipt.turnKey} claims status 'updated' but records no change data; the receipt data is incomplete and cannot be replayed`);
+  }
+  const restores = [];
+  for (const change of receipt.changes) {
+    if (!("before" in change) && !("after" in change)) {
+      throw new MvuUndoRefusalError("INCOMPLETE_RECEIPT", `receipt change '${change.name}' records neither a before nor an after value; the receipt data is incomplete and cannot be replayed`);
+    }
+    restores.push({ path: change.name, ..."after" in change ? { value: deepClone(change.after) } : {} });
+  }
+  return restores;
+}
+function undoMvuReceipts(chat, receipts, options) {
+  if (receipts.length === 0) return { receipts: [], restores: [] };
+  const located = locateStoredReceipts(chat, receipts, "MVU receipt undo");
+  const targets = located.filter((entry) => entry.receipt.undoneAt === void 0).sort((left, right) => left.index - right.index);
+  if (targets.length === 0) return { receipts: [], restores: [] };
+  const restores = [];
+  for (let index = targets.length - 1; index >= 0; index -= 1) {
+    restores.push(...planMvuUndoRestores(targets[index].receipt));
+  }
+  const variables2 = cloneChatVariablesForReceipts(chat);
+  applyMvuUndoRestores(variables2, restores);
+  const at = options?.at ?? (/* @__PURE__ */ new Date()).toISOString();
+  const marked = setStoredReceiptsUndoneAt(chat, targets.map((entry) => entry.index), at);
+  commitChatVariablesAfterReceipts(chat, variables2);
+  return { receipts: marked, restores };
+}
+function redoMvuReceipts(chat, receipts) {
+  if (receipts.length === 0) return { receipts: [], restores: [] };
+  const located = locateStoredReceipts(chat, receipts, "MVU receipt redo");
+  const targets = located.filter((entry) => entry.receipt.undoneAt !== void 0).sort((left, right) => left.index - right.index);
+  if (targets.length === 0) return { receipts: [], restores: [] };
+  const restores = [];
+  for (const entry of targets) restores.push(...planMvuRedoRestores(entry.receipt));
+  const variables2 = cloneChatVariablesForReceipts(chat);
+  applyMvuUndoRestores(variables2, restores);
+  const marked = setStoredReceiptsUndoneAt(chat, targets.map((entry) => entry.index), void 0);
+  commitChatVariablesAfterReceipts(chat, variables2);
+  return { receipts: marked, restores };
+}
+
 // packages/plugin/src/agent-tavern/body.ts
 var BODY_EVENT_TYPE = "plugin:dsh-soulmojito/body";
 var BodyLedgerError = class extends Error {
@@ -14257,7 +15417,7 @@ async function projectBodyEvent(store5, session, state, binding, event) {
       ...resolved.usage === void 0 ? {} : { usage: resolved.usage },
       ...data.feedback === void 0 ? {} : { feedback: data.feedback }
     };
-    await mutateBodyChat(store5, binding, (chat) => applyCandidateToChat(chat, input));
+    await mutateBodyChat(store5, binding, (chat) => projectCandidateToChat(chat, character?.card, input));
     return;
   }
   if (data.op === "select") {
@@ -14309,6 +15469,57 @@ function isBodyMergedAssistant(session, event) {
   const messageId = message?.["id"];
   if (typeof messageId === "string" && messageId !== "" && isRestoredBodyMessage(session, messageId)) return true;
   return isBodyTriggerTurn(session, data?.["turn"]);
+}
+function projectCandidateToChat(chat, card, input) {
+  const existingText = existingCandidateText(chat, input.groupId, input.index);
+  const receiptExists = mvuReceiptsForBody(chat, { messageId: input.messageId }).length > 0;
+  if (card === void 0 || !cardUsesJsrMvu(card) || existingText !== void 0 || receiptExists || !hasUpdateVariableBlock(input.text)) {
+    return applyCandidateToChat(chat, {
+      ...input,
+      ...existingText === void 0 ? {} : { text: existingText }
+    });
+  }
+  seedJsrMvuVariables(card, ensureChatVariables(chat));
+  const before = snapshotChatVariables(chat);
+  const applied = applyUpdateVariableToChat(card, chat, input.text);
+  const next = applyCandidateToChat(chat, { ...input, text: applied.text });
+  if (!applied.found) return next;
+  recordMvuTurnReceipt(next, before, {
+    turnKey: `body:${input.messageId}`,
+    failures: applied.failures
+  });
+  return attachBodyStatData(next, input.groupId);
+}
+function existingCandidateText(chat, groupId, index) {
+  const byGroup = findBodyFloorIndexByGroupId(chat, groupId);
+  const floorIndex = byGroup === void 0 ? findBodyFloorIndexByMessageId(chat, groupId) : byGroup;
+  if (floorIndex === void 0) return void 0;
+  const floor = chat.messages[floorIndex];
+  const swipes = floor === void 0 ? void 0 : floor.swipes;
+  if (!Array.isArray(swipes)) return void 0;
+  const text = swipes[index];
+  return typeof text === "string" ? text : void 0;
+}
+function attachBodyStatData(chat, groupId) {
+  const floorIndex = findBodyFloorIndexByGroupId(chat, groupId);
+  if (floorIndex === void 0) {
+    throw new BodyJsonlProjectionError(
+      "body-floor-not-found",
+      `body floor '${groupId}' disappeared after candidate projection`
+    );
+  }
+  const floor = chat.messages[floorIndex];
+  if (floor === void 0) {
+    throw new BodyJsonlProjectionError(
+      "body-floor-not-found",
+      `body floor '${groupId}' has no message at index ${floorIndex}`
+    );
+  }
+  chat.messages[floorIndex] = messageStatVariables(chat, floor);
+  return chat;
+}
+function hasUpdateVariableBlock(text) {
+  return /<UpdateVariable(?:Variable)?\b[^>]*>[\s\S]*?<\/UpdateVariable(?:Variable)?\s*>/i.test(text);
 }
 async function mutateBodyChat(store5, binding, mutate) {
   for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -14535,12 +15746,22 @@ var AgentTavernProjector = class _AgentTavernProjector {
       if (card !== void 0) {
         seedJsrMvuVariables(card, ensureChatVariables(next));
         if (message.is_user !== true) {
+          const before = snapshotChatVariables(next);
           const applied = applyUpdateVariableToChat(card, next, message.mes);
           projected = {
             ...message,
             mes: applied.text,
             ...applied.statData !== void 0 ? { variables: { ...plainObjectRecord2(message.variables) ?? {}, stat_data: applied.statData } } : {}
           };
+          if (applied.found) {
+            const messageId = projectedMessageId(message);
+            if (messageId === void 0) {
+              throw new Error(
+                `AgentTavern projector cannot record the body MVU receipt: assistant message at event seq ${eventSeq} has no projection message id`
+              );
+            }
+            recordMvuTurnReceipt(next, before, { turnKey: `body:${messageId}`, failures: applied.failures });
+          }
         }
         projected = messageStatVariables(next, projected);
       }
@@ -14636,6 +15857,11 @@ function projectionExtra(session, event, contextMode, turn, step) {
 function projectionIdentity(message, sessionId, eventSeq) {
   const source = message.extra?.agentTavern;
   return source?.sessionId === sessionId && source.eventSeq === eventSeq;
+}
+function projectedMessageId(message) {
+  const agentTavern = plainObjectRecord2(message.extra?.["agentTavern"]);
+  const messageId = agentTavern?.["messageId"];
+  return typeof messageId === "string" && messageId !== "" ? messageId : void 0;
 }
 function isTavernSessionMarker(source) {
   if (typeof source !== "object" || source === null) return false;
@@ -14785,26 +16011,6 @@ function validateCheckpoint(value, sessionId) {
   }
 }
 var mvuAuditTail = new MutationTail();
-
-// packages/plugin/src/agent-tavern/body-runtime.ts
-import { randomUUID as randomUUID5 } from "node:crypto";
-
-// packages/plugin/src/message.ts
-function createMessage(input) {
-  return deepFreeze(structuredClone({ ...input, id: crypto.randomUUID() }));
-}
-function deepFreeze(value) {
-  const seen = /* @__PURE__ */ new WeakSet();
-  const pending = [value];
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (current === null || typeof current !== "object" || seen.has(current)) continue;
-    seen.add(current);
-    Object.freeze(current);
-    pending.push(...Object.values(current));
-  }
-  return value;
-}
 
 // packages/plugin/src/agent-tavern/deduce.ts
 var DEDUCE_PROVIDER = "spawn";
@@ -15074,7 +16280,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("d822065") : void 0;
+  const commit = true ? normalizeCommit("c1dc84d") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -16711,7 +17917,7 @@ function satisfiesVersionRange(version, range) {
     return { ok: false, reason: `host version '${version}' is not a parseable semver` };
   }
   const alternatives = range.split("||");
-  const invalid = [];
+  const invalid2 = [];
   let matched = false;
   for (const alternative of alternatives) {
     if (alternative.trim() === "") continue;
@@ -16724,7 +17930,7 @@ function satisfiesVersionRange(version, range) {
     for (const comparator of comparators) {
       const verdict = satisfiesComparator(parsedVersion, comparator);
       if (verdict === "invalid") {
-        invalid.push(comparator);
+        invalid2.push(comparator);
         satisfied = false;
         break;
       }
@@ -16733,10 +17939,10 @@ function satisfiesVersionRange(version, range) {
         break;
       }
     }
-    if (satisfied && invalid.length === 0) matched = true;
+    if (satisfied && invalid2.length === 0) matched = true;
   }
-  if (invalid.length > 0) {
-    return { ok: false, reason: `range '${range}' has an invalid comparator '${invalid[0]}'` };
+  if (invalid2.length > 0) {
+    return { ok: false, reason: `range '${range}' has an invalid comparator '${invalid2[0]}'` };
   }
   return matched ? { ok: true, reason: "" } : { ok: false, reason: `requires dsh-soulmojito ${range} (host ${version})` };
 }
@@ -19149,6 +20355,1416 @@ function setGamesServicePromise(value) {
   gamesServicePromise = value;
 }
 
+// packages/plugin/src/agent-tavern/body-rollback-support.ts
+var BodyRollbackError = class extends Error {
+  code;
+  detail;
+  stage;
+  sessionId;
+  turn;
+  journalId;
+  compensated;
+  constructor(code, message, options) {
+    super(message, options.cause === void 0 ? {} : { cause: options.cause });
+    this.name = "BodyRollbackError";
+    this.code = code;
+    this.detail = options.detail;
+    this.stage = options.stage;
+    this.sessionId = options.sessionId;
+    this.turn = options.turn;
+    this.journalId = options.journalId;
+    this.compensated = options.compensated === true;
+  }
+};
+function requireNonEmptyString(value, field) {
+  if (!isNonEmptyString(value)) {
+    throw new BodyRollbackError(
+      "invalid-arguments",
+      `body rollback rejected: ${field} must be a non-empty string`,
+      { stage: "prepare" }
+    );
+  }
+}
+function requireNonNegativeInteger(value, field) {
+  if (!isNonNegativeInteger2(value)) {
+    throw new BodyRollbackError(
+      "invalid-arguments",
+      `body rollback rejected: ${field} must be a non-negative safe integer`,
+      { stage: "prepare" }
+    );
+  }
+}
+function log(logger, level, message, fields) {
+  try {
+    if (level === "info") logger?.info?.(message, fields);
+    else if (level === "warn") logger?.warn?.(message, fields);
+    else logger?.error?.(message, fields);
+  } catch {
+  }
+}
+function errorMessage2(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.trim() !== "";
+}
+function isNonNegativeInteger2(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+function isRecord4(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// packages/plugin/src/agent-tavern/body-rollback-writes.ts
+async function applyJournalWrites(deps, writes, direction) {
+  const ordered = direction === "undo" ? [...writes].reverse() : [...writes];
+  let applied = 0;
+  for (const write of ordered) {
+    const operations = write.kind === "memory" ? await planMemoryOperations(deps, write, direction) : await planVariableOperations(deps, write, direction);
+    for (const operation of operations) {
+      await executeOperation(deps, operation, direction);
+      applied += 1;
+    }
+  }
+  return { applied };
+}
+async function planMemoryOperations(deps, write, direction) {
+  const current = await readMemory(deps, write, direction);
+  if (direction === "undo") {
+    if (write.tool === "memory_write") {
+      if (write.after === null) return [];
+      if (current === void 0 || current.deletedAt !== void 0) return [];
+      if (current.revision !== write.after.revision) {
+        throw new BodyRollbackError(
+          "body-rollback-conflict",
+          `body rollback cannot undo memory_write '${write.target.id}': the store holds revision ${current.revision}, the journaled after state is ${write.after.revision}`,
+          { stage: "journal-rollback", journalId: write.journalId }
+        );
+      }
+      return [{
+        kind: "memory-forget",
+        journalId: write.journalId,
+        id: write.target.id,
+        scope: write.target.scope,
+        scopeId: write.target.scopeId,
+        expectedRevision: current.revision
+      }];
+    }
+    if (write.before === null) return [];
+    if (current !== void 0 && current.revision === write.before.revision) return [];
+    return [{
+      kind: "memory-restore",
+      journalId: write.journalId,
+      record: write.before,
+      expectedRevision: current?.revision
+    }];
+  }
+  if (write.tool === "memory_forget") {
+    if (write.after !== null) {
+      if (current?.revision === write.after.revision) return [];
+      return [{
+        kind: "memory-restore",
+        journalId: write.journalId,
+        record: write.after,
+        expectedRevision: current?.revision
+      }];
+    }
+    if (current === void 0 || current.deletedAt !== void 0) return [];
+    return [{
+      kind: "memory-forget",
+      journalId: write.journalId,
+      id: write.target.id,
+      scope: write.target.scope,
+      scopeId: write.target.scopeId,
+      expectedRevision: current.revision
+    }];
+  }
+  if (write.after === null) return [];
+  if (current?.revision === write.after.revision) return [];
+  return [{
+    kind: "memory-restore",
+    journalId: write.journalId,
+    record: write.after,
+    expectedRevision: current?.revision
+  }];
+}
+async function planVariableOperations(deps, write, direction) {
+  const desired = new Map(
+    (direction === "undo" ? write.before ?? [] : write.after ?? []).map((snapshot2) => [snapshot2.name, snapshot2])
+  );
+  const names = (write.after ?? write.before ?? []).map((snapshot2) => snapshot2.name);
+  const deletes = [];
+  const sets = [];
+  for (const name2 of new Set(names)) {
+    const current = await readVariable(deps, write.target, name2, direction);
+    const target = desired.get(name2);
+    if (target === void 0) {
+      if (current === void 0) continue;
+      deletes.push({
+        kind: "variable-delete",
+        journalId: write.journalId,
+        scope: write.target.scope,
+        scopeId: write.target.scopeId,
+        name: name2,
+        expectedRevision: current.revision
+      });
+      continue;
+    }
+    if (current !== void 0 && current.revision === target.revision) continue;
+    sets.push({
+      kind: "variable-set",
+      journalId: write.journalId,
+      scope: write.target.scope,
+      scopeId: write.target.scopeId,
+      name: name2,
+      value: structuredClone(target.value),
+      expectedRevision: current?.revision
+    });
+  }
+  return [...deletes, ...sets];
+}
+async function readMemory(deps, write, direction) {
+  try {
+    return await deps.memoryStore.read(
+      write.target.id,
+      write.target.scope,
+      write.target.scopeId,
+      true
+    );
+  } catch (error) {
+    throw new BodyRollbackError(
+      "body-rollback-failed",
+      `body rollback cannot read memory '${write.target.id}': ${errorMessage2(error)}`,
+      { stage: stageOf(direction), journalId: write.journalId, cause: error }
+    );
+  }
+}
+async function readVariable(deps, target, name2, direction) {
+  try {
+    return await deps.variableStore.get(target.scope, target.scopeId, name2);
+  } catch (error) {
+    throw new BodyRollbackError(
+      "body-rollback-failed",
+      `body rollback cannot read variable '${name2}': ${errorMessage2(error)}`,
+      { stage: stageOf(direction), cause: error }
+    );
+  }
+}
+function stageOf(direction) {
+  return direction === "undo" ? "journal-rollback" : "journal-replay";
+}
+async function executeOperation(deps, operation, direction) {
+  const stage = stageOf(direction);
+  try {
+    switch (operation.kind) {
+      case "memory-forget":
+        await deps.memoryStore.forget(
+          operation.id,
+          operation.scope,
+          operation.scopeId,
+          operation.expectedRevision
+        );
+        return;
+      case "memory-restore":
+        await deps.memoryStore.restore(operation.record, operation.expectedRevision);
+        return;
+      case "variable-set":
+        await deps.variableStore.set(
+          operation.scope,
+          operation.scopeId,
+          operation.name,
+          operation.value,
+          operation.expectedRevision
+        );
+        return;
+      case "variable-delete":
+        await deps.variableStore.delete(
+          operation.scope,
+          operation.scopeId,
+          operation.name,
+          operation.expectedRevision
+        );
+        return;
+    }
+  } catch (error) {
+    const subject = operationSubject(operation);
+    if (error instanceof MemoryRevisionConflictError || error instanceof VariableRevisionConflictError) {
+      throw new BodyRollbackError(
+        "body-rollback-conflict",
+        `body rollback ${direction} hit a store revision conflict for ${subject} in journal '${operation.journalId}': ${error.message}`,
+        { stage, journalId: operation.journalId, cause: error }
+      );
+    }
+    throw new BodyRollbackError(
+      "body-rollback-failed",
+      `body rollback ${direction} failed for ${subject} in journal '${operation.journalId}': ${errorMessage2(error)}`,
+      { stage, journalId: operation.journalId, cause: error }
+    );
+  }
+}
+function operationSubject(operation) {
+  switch (operation.kind) {
+    case "memory-forget":
+      return `memory '${operation.id}'`;
+    case "memory-restore":
+      return `memory '${operation.record.id}'`;
+    case "variable-set":
+    case "variable-delete":
+      return `variable '${operation.name}'`;
+  }
+}
+async function compensateJournal(deps, writes, direction) {
+  if (writes.length === 0) return { ok: true, note: "" };
+  try {
+    await applyJournalWrites(deps, writes, direction);
+    return {
+      ok: true,
+      note: direction === "replay" ? "; the flat-store rollback was replayed so the stores match the unsaved chat" : "; the flat-store replay was rolled back so the stores match the rolled-back chat"
+    };
+  } catch (error) {
+    const failure = `body rollback compensation (${direction}) failed: ${errorMessage2(error)}`;
+    log(deps.logger, "error", "dsh-soulmojito body rollback: compensation failed", {
+      direction,
+      error: errorMessage2(error)
+    });
+    return { ok: false, note: `; ${failure}` };
+  }
+}
+
+// packages/plugin/src/agent-tavern/write-journal.ts
+var WRITE_JOURNAL_EVENT_TYPE = "plugin:dsh-soulmojito/write";
+var MEMORY_WRITE_JOURNAL_TOOLS = ["memory_write", "memory_update", "memory_forget"];
+var VARIABLE_WRITE_JOURNAL_TOOLS = ["variable_set", "variable_patch", "variable_delete"];
+var WriteJournalError = class extends Error {
+  code;
+  constructor(code, message, options) {
+    super(message, options);
+    this.name = "WriteJournalError";
+    this.code = code;
+  }
+};
+function readWriteJournal(events) {
+  const entries = [];
+  for (const [index, event] of events.entries()) {
+    if (!isRecord5(event)) continue;
+    if (event["type"] !== WRITE_JOURNAL_EVENT_TYPE) continue;
+    entries.push(parseEntry(event["data"], index));
+  }
+  return entries;
+}
+async function resolveWriteJournalWriter() {
+  let host;
+  try {
+    host = await importHostPackage("@deepseek-ai/dsh-session");
+  } catch {
+    return void 0;
+  }
+  const append = host.appendPluginRecord;
+  if (typeof append !== "function") return void 0;
+  const appendRecord = append;
+  return (session, type, data) => appendRecord(session, type, data);
+}
+var MEMORY_SCOPES = ["turn", "chat", "character", "agent", "global"];
+var VARIABLE_SCOPES = ["turn", "chat", "character", "agent", "global"];
+function parseEntry(data, index) {
+  const where = `write journal event at index ${index}`;
+  if (!isRecord5(data)) throw invalid(where, "data must be an object");
+  const kind = data["kind"];
+  if (kind === "memory") return parseMemoryEntry(data, where);
+  if (kind === "variable") return parseVariableEntry(data, where);
+  throw invalid(where, `unknown kind '${String(kind)}'`);
+}
+function parseMemoryEntry(record, where) {
+  const target = recordAt(record["target"], `${where} target`);
+  const before = optionalMemoryRecord(record["before"], `${where} before`);
+  const after = optionalMemoryRecord(record["after"], `${where} after`);
+  return {
+    kind: "memory",
+    tool: memoryToolAt(record["tool"], where),
+    journalId: textAt(record, "journalId", where),
+    sessionId: textAt(record, "sessionId", where),
+    turn: turnAt2(record, where),
+    phase: phaseAt(record, where),
+    at: timestampAt(record, "at", where),
+    target: {
+      id: textAt(target, "id", `${where} target`),
+      scope: memoryScopeAt(target["scope"], `${where} target`),
+      scopeId: textAt(target, "scopeId", `${where} target`)
+    },
+    ...before === void 0 ? {} : { before },
+    ...after === void 0 ? {} : { after }
+  };
+}
+function parseVariableEntry(record, where) {
+  const target = recordAt(record["target"], `${where} target`);
+  const before = optionalSnapshots(record["before"], `${where} before`);
+  const after = optionalSnapshots(record["after"], `${where} after`);
+  return {
+    kind: "variable",
+    tool: variableToolAt(record["tool"], where),
+    journalId: textAt(record, "journalId", where),
+    sessionId: textAt(record, "sessionId", where),
+    turn: turnAt2(record, where),
+    phase: phaseAt(record, where),
+    at: timestampAt(record, "at", where),
+    target: {
+      scope: variableScopeAt(target["scope"], `${where} target`),
+      scopeId: textAt(target, "scopeId", `${where} target`)
+    },
+    ...before === void 0 ? {} : { before },
+    ...after === void 0 ? {} : { after }
+  };
+}
+function optionalMemoryRecord(value, where) {
+  if (value === void 0) return void 0;
+  if (value === null) return null;
+  return memoryRecordAt(value, where);
+}
+function memoryRecordAt(value, where) {
+  const record = recordAt(value, where);
+  const kind = record["kind"];
+  if (kind !== "semantic" && kind !== "episodic") {
+    throw invalid(where, `field 'kind' must be 'semantic' or 'episodic', received '${String(kind)}'`);
+  }
+  return {
+    id: textAt(record, "id", where),
+    scope: memoryScopeAt(record["scope"], where),
+    scopeId: textAt(record, "scopeId", where),
+    kind,
+    content: textAt(record, "content", where),
+    tags: stringArrayAt(record["tags"], `${where} tags`),
+    importance: scoreAt(record, "importance", where),
+    confidence: scoreAt(record, "confidence", where),
+    source: memorySourceAt(record["source"], `${where} source`),
+    createdAt: timestampAt(record, "createdAt", where),
+    updatedAt: timestampAt(record, "updatedAt", where),
+    ...record["lastAccessedAt"] === void 0 ? {} : { lastAccessedAt: timestampAt(record, "lastAccessedAt", where) },
+    ...record["expiresAt"] === void 0 ? {} : { expiresAt: timestampAt(record, "expiresAt", where) },
+    ...record["deletedAt"] === void 0 ? {} : { deletedAt: timestampAt(record, "deletedAt", where) },
+    revision: textAt(record, "revision", where)
+  };
+}
+function memorySourceAt(value, where) {
+  const record = recordAt(value, where);
+  const source = { kind: textAt(record, "kind", where) };
+  for (const [key, item] of Object.entries(record)) {
+    if (key === "kind") continue;
+    source[key] = item;
+  }
+  return source;
+}
+function optionalSnapshots(value, where) {
+  if (value === void 0) return void 0;
+  if (value === null) return null;
+  if (!Array.isArray(value)) throw invalid(where, "must be an array of variable snapshots or null");
+  return value.map((item, index) => variableSnapshotAt(item, `${where}[${index}]`));
+}
+function variableSnapshotAt(value, where) {
+  const record = recordAt(value, where);
+  return {
+    scope: variableScopeAt(record["scope"], where),
+    scopeId: textAt(record, "scopeId", where),
+    name: textAt(record, "name", where),
+    value: jsonValueAt(record["value"], `${where} value`),
+    revision: textAt(record, "revision", where),
+    updatedAt: timestampAt(record, "updatedAt", where)
+  };
+}
+function jsonValueAt(value, where) {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw invalid(where, "numbers must be finite");
+    return value;
+  }
+  if (Array.isArray(value)) return value.map((item, index) => jsonValueAt(item, `${where}[${index}]`));
+  if (isRecord5(value)) {
+    const record = {};
+    for (const [key, item] of Object.entries(value)) record[key] = jsonValueAt(item, `${where}.${key}`);
+    return record;
+  }
+  throw invalid(where, "must be a JSON value");
+}
+function memoryToolAt(value, where) {
+  for (const tool4 of MEMORY_WRITE_JOURNAL_TOOLS) if (value === tool4) return tool4;
+  throw invalid(where, `field 'tool' must be one of ${MEMORY_WRITE_JOURNAL_TOOLS.join(", ")}, received '${String(value)}'`);
+}
+function variableToolAt(value, where) {
+  for (const tool4 of VARIABLE_WRITE_JOURNAL_TOOLS) if (value === tool4) return tool4;
+  throw invalid(where, `field 'tool' must be one of ${VARIABLE_WRITE_JOURNAL_TOOLS.join(", ")}, received '${String(value)}'`);
+}
+function memoryScopeAt(value, where) {
+  for (const scope of MEMORY_SCOPES) if (value === scope) return scope;
+  throw invalid(where, `memory scope must be one of ${MEMORY_SCOPES.join(", ")}, received '${String(value)}'`);
+}
+function variableScopeAt(value, where) {
+  for (const scope of VARIABLE_SCOPES) if (value === scope) return scope;
+  throw invalid(where, `variable scope must be one of ${VARIABLE_SCOPES.join(", ")}, received '${String(value)}'`);
+}
+function phaseAt(record, where) {
+  const value = record["phase"];
+  if (value !== "before" && value !== "after") {
+    throw invalid(where, `field 'phase' must be 'before' or 'after', received '${String(value)}'`);
+  }
+  return value;
+}
+function turnAt2(record, where) {
+  const value = record["turn"];
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw invalid(where, `field 'turn' must be a non-negative safe integer, received '${String(value)}'`);
+  }
+  return value;
+}
+function scoreAt(record, field, where) {
+  const value = record[field];
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) {
+    throw invalid(where, `field '${field}' must be a number between 0 and 1`);
+  }
+  return value;
+}
+function stringArrayAt(value, where) {
+  if (!Array.isArray(value)) throw invalid(where, "must be an array of strings");
+  const result = [];
+  for (const item of value) {
+    if (typeof item !== "string") throw invalid(where, "must be an array of strings");
+    result.push(item);
+  }
+  return result;
+}
+function textAt(record, field, where) {
+  const value = record[field];
+  if (typeof value !== "string" || value.trim() === "") {
+    throw invalid(where, `field '${field}' must be a non-empty string`);
+  }
+  return value;
+}
+function timestampAt(record, field, where) {
+  const value = record[field];
+  if (typeof value !== "string" || Number.isNaN(Date.parse(value))) {
+    throw invalid(where, `field '${field}' must be an ISO 8601 timestamp`);
+  }
+  return value;
+}
+function recordAt(value, where) {
+  if (!isRecord5(value)) throw invalid(where, "must be an object");
+  return value;
+}
+function isRecord5(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function invalid(where, detail) {
+  return new WriteJournalError("invalid-write-journal", `${where}: ${detail}`);
+}
+
+// packages/plugin/src/agent-tavern/body-rollback-journal.ts
+async function readEvents(deps, agentId, turn) {
+  let events;
+  try {
+    events = await deps.sessionEvents(agentId);
+  } catch (error) {
+    throw new BodyRollbackError(
+      "body-state-unsafe",
+      `body rollback cannot read the session log of '${agentId}': ${errorMessage2(error)}`,
+      { detail: "session-unreadable", stage: "prepare", sessionId: agentId, turn, cause: error }
+    );
+  }
+  if (events === void 0) {
+    throw new BodyRollbackError(
+      "body-state-unsafe",
+      `body rollback cannot read the session log of '${agentId}'`,
+      { detail: "session-unreadable", stage: "prepare", sessionId: agentId, turn }
+    );
+  }
+  return events;
+}
+function toolNamesInTurn(events, turn) {
+  const names = [];
+  let open2;
+  for (const event of events) {
+    if (!isRecord4(event)) continue;
+    const type = event["type"];
+    if (type === "turn/start") {
+      open2 = turnNumberOf(event["data"]);
+      continue;
+    }
+    if (type === "turn/end") {
+      open2 = void 0;
+      continue;
+    }
+    if (type !== "assistant/message") continue;
+    const data = isRecord4(event["data"]) ? event["data"] : void 0;
+    if (data === void 0) continue;
+    const eventTurn = typeof data["turn"] === "number" ? data["turn"] : open2;
+    if (eventTurn !== turn) continue;
+    const message = isRecord4(data["message"]) ? data["message"] : void 0;
+    const content = message?.["content"];
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      if (!isRecord4(block) || block["type"] !== "tool-call") continue;
+      const name2 = block["name"];
+      if (typeof name2 === "string" && name2 !== "") names.push(name2);
+    }
+  }
+  return names;
+}
+function turnNumberOf(data) {
+  if (!isRecord4(data)) return void 0;
+  const turn = data["turn"];
+  return typeof turn === "number" && Number.isSafeInteger(turn) && turn >= 0 ? turn : void 0;
+}
+function buildJournalWrites(events, agentId, turn) {
+  let entries;
+  try {
+    entries = readWriteJournal(events);
+  } catch (error) {
+    throw new BodyRollbackError(
+      "body-state-unsafe",
+      `body rollback cannot read the write journal of session '${agentId}' turn ${turn}: ${errorMessage2(error)}`,
+      { detail: "write-journal-missing", stage: "prepare", sessionId: agentId, turn, cause: error }
+    );
+  }
+  const groups = /* @__PURE__ */ new Map();
+  for (const entry of entries) {
+    if (entry.sessionId !== agentId || entry.turn !== turn) continue;
+    const group2 = groups.get(entry.journalId);
+    if (group2 === void 0) groups.set(entry.journalId, [entry]);
+    else group2.push(entry);
+  }
+  const writes = [];
+  const uncommitted = [];
+  const tools = /* @__PURE__ */ new Set();
+  for (const [journalId, group2] of groups) {
+    const kind = group2[0]?.kind;
+    if (kind === void 0) continue;
+    if (group2.some((entry) => entry.kind !== kind)) {
+      throw journalUnsafe(journalId, agentId, turn, "mixes memory and variable records");
+    }
+    for (const entry of group2) tools.add(entry.tool);
+    const before = group2.filter((entry) => entry.phase === "before");
+    const after = group2.filter((entry) => entry.phase === "after");
+    if (before.length > 1 || after.length > 1) {
+      throw journalUnsafe(journalId, agentId, turn, "has duplicate phase records");
+    }
+    if (after.length === 0) {
+      uncommitted.push(journalId);
+      continue;
+    }
+    const beforeEntry = before[0];
+    const afterEntry = after[0];
+    if (beforeEntry === void 0) {
+      throw journalUnsafe(journalId, agentId, turn, "has an after record without a before record");
+    }
+    if (beforeEntry.kind !== afterEntry.kind || beforeEntry.tool !== afterEntry.tool) {
+      throw journalUnsafe(journalId, agentId, turn, "has mismatched kind/tool phases");
+    }
+    writes.push(
+      beforeEntry.kind === "memory" ? memoryWriteOf(beforeEntry, afterEntry, journalId, agentId, turn) : variableWriteOf(beforeEntry, afterEntry, journalId, agentId, turn)
+    );
+  }
+  return { writes, uncommitted, tools };
+}
+function memoryWriteOf(beforeEntry, afterEntry, journalId, agentId, turn) {
+  if (!sameMemoryTarget(beforeEntry.target, afterEntry.target)) {
+    throw journalUnsafe(journalId, agentId, turn, "targets two different memories");
+  }
+  const before = requireMemoryBefore(beforeEntry, journalId, agentId, turn);
+  const after = requireMemoryAfter(afterEntry, journalId, agentId, turn);
+  assertMemoryRecordMatches(before, beforeEntry.target, journalId, agentId, turn);
+  assertMemoryRecordMatches(after, beforeEntry.target, journalId, agentId, turn);
+  if (beforeEntry.tool === "memory_write" && before !== null) {
+    throw journalUnsafe(journalId, agentId, turn, "memory_write must record a null before state");
+  }
+  if (beforeEntry.tool !== "memory_write" && before === null) {
+    throw journalUnsafe(journalId, agentId, turn, `memory_${beforeEntry.tool} requires a before record`);
+  }
+  if (beforeEntry.tool !== "memory_forget" && after === null) {
+    throw journalUnsafe(journalId, agentId, turn, `${beforeEntry.tool} requires an after record`);
+  }
+  return {
+    kind: "memory",
+    journalId,
+    tool: beforeEntry.tool,
+    target: beforeEntry.target,
+    before,
+    after
+  };
+}
+function variableWriteOf(beforeEntry, afterEntry, journalId, agentId, turn) {
+  if (beforeEntry.target.scope !== afterEntry.target.scope || beforeEntry.target.scopeId !== afterEntry.target.scopeId) {
+    throw journalUnsafe(journalId, agentId, turn, "targets two different variable scopes");
+  }
+  const before = requireSnapshotsBefore(beforeEntry, journalId, agentId, turn);
+  const after = requireSnapshotsAfter(afterEntry, journalId, agentId, turn);
+  assertSnapshotsMatch(before, beforeEntry.target, journalId, agentId, turn);
+  assertSnapshotsMatch(after, beforeEntry.target, journalId, agentId, turn);
+  if (beforeEntry.tool === "variable_delete" && after !== null) {
+    throw journalUnsafe(journalId, agentId, turn, "variable_delete must record a null after state");
+  }
+  if (beforeEntry.tool !== "variable_delete" && after === null) {
+    throw journalUnsafe(journalId, agentId, turn, `${beforeEntry.tool} requires an after snapshot list`);
+  }
+  return {
+    kind: "variable",
+    journalId,
+    tool: beforeEntry.tool,
+    target: beforeEntry.target,
+    before,
+    after
+  };
+}
+function sameMemoryTarget(left, right) {
+  return left.id === right.id && left.scope === right.scope && left.scopeId === right.scopeId;
+}
+function requireMemoryBefore(entry, journalId, agentId, turn) {
+  if (!("before" in entry) || entry.before === void 0) {
+    throw journalUnsafe(journalId, agentId, turn, "has a before record without a before state");
+  }
+  return entry.before;
+}
+function requireMemoryAfter(entry, journalId, agentId, turn) {
+  if (!("after" in entry) || entry.after === void 0) {
+    throw journalUnsafe(journalId, agentId, turn, "has an after record without an after state");
+  }
+  return entry.after;
+}
+function requireSnapshotsBefore(entry, journalId, agentId, turn) {
+  if (!("before" in entry) || entry.before === void 0) {
+    throw journalUnsafe(journalId, agentId, turn, "has a before record without a before state");
+  }
+  return entry.before;
+}
+function requireSnapshotsAfter(entry, journalId, agentId, turn) {
+  if (!("after" in entry) || entry.after === void 0) {
+    throw journalUnsafe(journalId, agentId, turn, "has an after record without an after state");
+  }
+  return entry.after;
+}
+function assertMemoryRecordMatches(record, target, journalId, agentId, turn) {
+  if (record === null) return;
+  if (record.id !== target.id || record.scope !== target.scope || record.scopeId !== target.scopeId) {
+    throw journalUnsafe(journalId, agentId, turn, `records memory '${record.id}' outside its target`);
+  }
+}
+function assertSnapshotsMatch(snapshots, target, journalId, agentId, turn) {
+  if (snapshots === null) return;
+  for (const snapshot2 of snapshots) {
+    if (snapshot2.scope !== target.scope || snapshot2.scopeId !== target.scopeId) {
+      throw journalUnsafe(journalId, agentId, turn, `records variable '${snapshot2.name}' outside its target scope`);
+    }
+  }
+}
+async function loadTurnJournal(deps, agentId, turn) {
+  const events = await readEvents(deps, agentId, turn);
+  return {
+    journal: buildJournalWrites(events, agentId, turn),
+    toolNames: toolNamesInTurn(events, turn)
+  };
+}
+async function assertJournalCoverage(deps, toolNames, journal, agentId, turn) {
+  const requested = [...new Set(toolNames)].filter(
+    (name2) => MEMORY_TOOL_SET.has(name2) || VARIABLE_TOOL_SET.has(name2)
+  );
+  const missing = requested.filter((name2) => !journal.tools.has(name2));
+  if (missing.length === 0) return;
+  const writer = await journalWriterAvailable(deps, agentId, turn);
+  if (!writer) {
+    throw new BodyRollbackError(
+      "body-state-unsafe",
+      `body rollback for session '${agentId}' turn ${turn} cannot roll back ${missing.join(", ")}: the host does not expose appendPluginRecord (write journal unavailable)`,
+      { detail: "write-journal-unavailable", stage: "prepare", sessionId: agentId, turn }
+    );
+  }
+  throw new BodyRollbackError(
+    "body-state-unsafe",
+    `body rollback for session '${agentId}' turn ${turn} cannot roll back ${missing.join(", ")}: the tool call has no write journal record`,
+    { detail: "write-journal-missing", stage: "prepare", sessionId: agentId, turn }
+  );
+}
+async function journalWriterAvailable(deps, agentId, turn) {
+  try {
+    const writer = deps.resolveJournalWriter === void 0 ? await resolveWriteJournalWriter() : await deps.resolveJournalWriter();
+    return writer !== void 0;
+  } catch (error) {
+    log(deps.logger, "warn", "dsh-soulmojito body rollback: write journal probe failed", {
+      sessionId: agentId,
+      turn,
+      error: errorMessage2(error)
+    });
+    return false;
+  }
+}
+function buildJournalDiagnostics(journal, logger, agentId, turn) {
+  const diagnostics = [];
+  if (journal.uncommitted.length > 0) {
+    diagnostics.push({
+      code: "journal-uncommitted-skipped",
+      message: `${journal.uncommitted.length} write journal group(s) have no after record and were treated as uncommitted: ${journal.uncommitted.join(", ")}`
+    });
+  }
+  if (journal.writes.some((write) => write.kind === "memory")) {
+    const message = "memory vectors are not restored by the rollback port (embedWrittenMemory is outside this seam); stale vectors are left for lazy re-embedding";
+    diagnostics.push({ code: "vector-restore-skipped", message });
+    log(logger, "warn", "dsh-soulmojito body rollback: memory vectors skipped", {
+      sessionId: agentId,
+      turn,
+      reason: "vector-restore-skipped"
+    });
+  }
+  return diagnostics;
+}
+async function rollbackTurnWritesImpl(deps, agentId, turn) {
+  requireNonEmptyString(agentId, "agentId");
+  requireNonNegativeInteger(turn, "turn");
+  const events = await readEvents(deps, agentId, turn);
+  const journal = buildJournalWrites(events, agentId, turn);
+  const failures = [];
+  let undone = 0;
+  const ordered = [...journal.writes].reverse();
+  for (const write of ordered) {
+    try {
+      const applied = await applyJournalWrites(deps, [write], "undo");
+      if (applied.applied > 0) undone += 1;
+    } catch (error) {
+      const failure = {
+        journalId: write.journalId,
+        kind: write.kind,
+        tool: write.tool,
+        code: error instanceof BodyRollbackError ? error.code : "unknown",
+        message: errorMessage2(error)
+      };
+      failures.push(failure);
+      log(deps.logger, "warn", "dsh-soulmojito body rollback: new-turn write undo failed", {
+        sessionId: agentId,
+        turn,
+        journalId: write.journalId,
+        kind: write.kind,
+        tool: write.tool,
+        error: failure.message
+      });
+    }
+  }
+  const result = {
+    sessionId: agentId,
+    turn,
+    undone,
+    skippedUncommitted: [...journal.uncommitted],
+    failures
+  };
+  log(deps.logger, "info", "dsh-soulmojito body rollback: rolled back new-turn writes", {
+    sessionId: agentId,
+    turn,
+    undone,
+    skippedUncommitted: result.skippedUncommitted.length,
+    failures: failures.length
+  });
+  return result;
+}
+function asJournalError(error, agentId, turn, compensation) {
+  const code = compensation.ok ? error instanceof BodyRollbackError ? error.code : "body-rollback-failed" : "body-rollback-partial";
+  return new BodyRollbackError(
+    code,
+    `body rollback for session '${agentId}' turn ${turn} failed to roll back the write journal: ${errorMessage2(error)}${compensation.note}`,
+    {
+      ...error instanceof BodyRollbackError && error.detail !== void 0 ? { detail: error.detail } : {},
+      stage: "journal-rollback",
+      sessionId: agentId,
+      turn,
+      ...error instanceof BodyRollbackError && error.journalId !== void 0 ? { journalId: error.journalId } : {},
+      compensated: compensation.ok,
+      cause: error
+    }
+  );
+}
+function journalUnsafe(journalId, agentId, turn, detail) {
+  return new BodyRollbackError(
+    "body-state-unsafe",
+    `body rollback for session '${agentId}' turn ${turn} refused: write journal '${journalId}' ${detail}`,
+    { detail: "write-journal-missing", stage: "prepare", sessionId: agentId, turn, journalId }
+  );
+}
+var MEMORY_TOOL_SET = new Set(MEMORY_WRITE_JOURNAL_TOOLS);
+var VARIABLE_TOOL_SET = new Set(VARIABLE_WRITE_JOURNAL_TOOLS);
+
+// packages/plugin/src/agent-tavern/body-rollback-receipts.ts
+function readBodyReceipts(chat, previousMessageId, floorIndex, agentId, turn) {
+  try {
+    return mvuReceiptsForBody(chat, { messageId: previousMessageId, floorIndex });
+  } catch (error) {
+    throw new BodyRollbackError(
+      "body-rollback-failed",
+      `body rollback for session '${agentId}' turn ${turn} cannot read MVU receipts: ${errorMessage2(error)}`,
+      { stage: "prepare", sessionId: agentId, turn, cause: error }
+    );
+  }
+}
+function assertReceiptCoverage(bodyText, toolNames, receipts, previousMessageId, floorIndex, agentId, turn) {
+  const bodyKey = `body:${previousMessageId}`;
+  const bodyHasUpdateVariable = /<UpdateVariable\b/i.test(bodyText);
+  if (bodyHasUpdateVariable && !receipts.some((receipt) => receipt.turnKey === bodyKey)) {
+    throw new BodyRollbackError(
+      "body-state-unsafe",
+      `body rollback for session '${agentId}' turn ${turn} refused: the old body contains <UpdateVariable> but has no '${bodyKey}' receipt`,
+      { detail: "mvu-receipt-missing", stage: "prepare", sessionId: agentId, turn }
+    );
+  }
+  const settleCall = toolNames.includes("tavern_variable_settle");
+  if (settleCall && !receipts.some((receipt) => receipt.turnKey === String(floorIndex))) {
+    throw new BodyRollbackError(
+      "body-state-unsafe",
+      `body rollback for session '${agentId}' turn ${turn} refused: tavern_variable_settle ran without a receipt for floor ${floorIndex}`,
+      { detail: "mvu-receipt-missing", stage: "prepare", sessionId: agentId, turn }
+    );
+  }
+}
+async function applyReceiptRollback(deps, chat, receipts, direction, binding) {
+  const unclassified = receipts.filter(
+    (receipt) => !receipt.turnKey.startsWith("body:") && !isFloorTurnKey(receipt.turnKey)
+  );
+  if (unclassified.length > 0) {
+    throw new BodyRollbackError(
+      "body-rollback-failed",
+      `body rollback cannot classify receipt(s) ${unclassified.map((receipt) => `'${receipt.turnKey}'`).join(", ")}: expected 'body:<messageId>' or a numeric floor key`,
+      { stage: direction === "undo" ? "mvu-undo" : "mvu-redo" }
+    );
+  }
+  const at = (/* @__PURE__ */ new Date()).toISOString();
+  const bodyReceipts = receipts.filter((receipt) => receipt.turnKey.startsWith("body:"));
+  const settleReceipts = receipts.filter((receipt) => isFloorTurnKey(receipt.turnKey));
+  let bodyCount = 0;
+  if (bodyReceipts.length > 0) {
+    const result = direction === "undo" ? undoMvuReceipts(chat, bodyReceipts, { at }) : redoMvuReceipts(chat, bodyReceipts);
+    bodyCount = result.receipts.length;
+  }
+  const settleCount = await mutateSettleReceiptVariables(deps, chat, settleReceipts, direction, at, binding);
+  return { bodyReceipts: bodyCount, settleReceipts: settleCount };
+}
+function isFloorTurnKey(turnKey) {
+  return /^\d+$/.test(turnKey);
+}
+async function mutateSettleReceiptVariables(deps, chat, receipts, direction, at, binding) {
+  if (receipts.length === 0) return 0;
+  const located = locateSettleReceipts(chat, receipts, direction);
+  const targets = located.filter((entry) => direction === "undo" ? entry.undoneAt === void 0 : entry.undoneAt !== void 0);
+  if (targets.length === 0) return 0;
+  const ordered = direction === "undo" ? [...targets].reverse() : targets;
+  for (const entry of ordered) {
+    const restores = settleRestoresOf(entry.receipt, direction);
+    await applySettleRestores(deps, entry.receipt, restores, direction, binding);
+    markStoredReceipts(chat, [entry.index], direction === "undo" ? at : void 0);
+  }
+  return targets.length;
+}
+function locateSettleReceipts(chat, receipts, direction) {
+  const raw = rawMvuReceipts2(chat);
+  if (raw === void 0) {
+    throw new BodyRollbackError(
+      "body-rollback-failed",
+      `body rollback cannot ${direction === "undo" ? "undo" : "replay"} settle receipts: the chat has no mvu.receipts array`,
+      { stage: stageOfReceipt(direction) }
+    );
+  }
+  const used = /* @__PURE__ */ new Set();
+  const located = [];
+  for (const receipt of receipts) {
+    let match;
+    for (let index = 0; index < raw.length; index += 1) {
+      if (used.has(index)) continue;
+      const record = raw[index];
+      if (!isRecord4(record)) continue;
+      if (record["turnKey"] !== receipt.turnKey || record["at"] !== receipt.at) continue;
+      match = {
+        index,
+        receipt,
+        undoneAt: typeof record["undoneAt"] === "string" ? record["undoneAt"] : void 0
+      };
+      break;
+    }
+    if (match === void 0) {
+      throw new BodyRollbackError(
+        "body-rollback-failed",
+        `body rollback cannot ${direction === "undo" ? "undo" : "replay"} settle receipt '${receipt.turnKey}' at ${receipt.at}: the receipt is not stored in this chat`,
+        { stage: stageOfReceipt(direction) }
+      );
+    }
+    used.add(match.index);
+    located.push(match);
+  }
+  return located;
+}
+function settleRestoresOf(receipt, direction) {
+  try {
+    if (direction === "redo") return planSettleRedoRestores(receipt);
+    const restores = planMvuUndoRestores(receipt);
+    restores.reverse();
+    return restores;
+  } catch (error) {
+    throw settleReceiptError(receipt, direction, errorMessage2(error), error);
+  }
+}
+function planSettleRedoRestores(receipt) {
+  if (receipt.status === "updated" && receipt.changes.length === 0) {
+    throw new Error(`receipt ${receipt.turnKey} claims status 'updated' but records no change data; the receipt data is incomplete and cannot be replayed`);
+  }
+  const restores = [];
+  for (const change of receipt.changes) {
+    if (!("before" in change) && !("after" in change)) {
+      throw new Error(`receipt change '${change.name}' records neither a before nor an after value; the receipt data is incomplete and cannot be replayed`);
+    }
+    restores.push({ path: change.name, ..."after" in change ? { value: change.after } : {} });
+  }
+  return restores;
+}
+async function applySettleRestores(deps, receipt, restores, direction, binding) {
+  const deletes = [];
+  const sets = [];
+  for (const restore of restores) {
+    if (!("value" in restore)) {
+      deletes.push(restore.path);
+      continue;
+    }
+    try {
+      sets.push({ name: restore.path, value: toJsonValue(restore.value, restore.path, receipt) });
+    } catch (error) {
+      throw settleReceiptError(receipt, direction, errorMessage2(error), error);
+    }
+  }
+  for (const name2 of deletes) {
+    const current = await readSettleVariable(deps, binding, name2, receipt, direction);
+    if (current === void 0) continue;
+    await deleteSettleVariable(deps, binding, name2, current.revision, receipt, direction);
+  }
+  for (const entry of sets) {
+    const current = await readSettleVariable(deps, binding, entry.name, receipt, direction);
+    if (current !== void 0 && jsonValuesEqual(current.value, entry.value)) continue;
+    await setSettleVariable(deps, binding, entry.name, entry.value, current?.revision, receipt, direction);
+  }
+}
+async function readSettleVariable(deps, binding, name2, receipt, direction) {
+  try {
+    return await deps.variableStore.get("chat", binding.chatId, name2);
+  } catch (error) {
+    throw settleReceiptError(receipt, direction, `cannot read variable '${name2}': ${errorMessage2(error)}`, error);
+  }
+}
+async function setSettleVariable(deps, binding, name2, value, expectedRevision, receipt, direction) {
+  try {
+    await deps.variableStore.set("chat", binding.chatId, name2, value, expectedRevision);
+  } catch (error) {
+    throw settleStoreError(error, name2, receipt, direction);
+  }
+}
+async function deleteSettleVariable(deps, binding, name2, expectedRevision, receipt, direction) {
+  try {
+    await deps.variableStore.delete("chat", binding.chatId, name2, expectedRevision);
+  } catch (error) {
+    throw settleStoreError(error, name2, receipt, direction);
+  }
+}
+function settleStoreError(error, name2, receipt, direction) {
+  const verb = direction === "undo" ? "undo" : "replay";
+  if (error instanceof VariableRevisionConflictError) {
+    return new BodyRollbackError(
+      "body-rollback-conflict",
+      `body rollback ${verb} hit a variable revision conflict for settle receipt '${receipt.turnKey}' at ${receipt.at}, variable '${name2}': ${error.message}`,
+      { stage: stageOfReceipt(direction), cause: error }
+    );
+  }
+  return settleReceiptError(receipt, direction, `cannot ${verb} variable '${name2}': ${errorMessage2(error)}`, error);
+}
+function settleReceiptError(receipt, direction, detail, cause) {
+  return new BodyRollbackError(
+    "body-rollback-failed",
+    `body rollback cannot ${direction === "undo" ? "undo" : "replay"} settle receipt '${receipt.turnKey}' at ${receipt.at}: ${detail}`,
+    { stage: stageOfReceipt(direction), cause }
+  );
+}
+function stageOfReceipt(direction) {
+  return direction === "undo" ? "mvu-undo" : "mvu-redo";
+}
+function rawMvuReceipts2(chat) {
+  const mvu = chat.header.chat_metadata.mvu;
+  const receipts = isRecord4(mvu) ? mvu["receipts"] : void 0;
+  return Array.isArray(receipts) ? receipts : void 0;
+}
+function markStoredReceipts(chat, indexes, undoneAt) {
+  const raw = rawMvuReceipts2(chat);
+  if (raw === void 0) {
+    throw new BodyRollbackError(
+      "body-rollback-failed",
+      "body rollback cannot mark settle receipts: the chat has no mvu.receipts array",
+      { stage: undoneAt === void 0 ? "mvu-redo" : "mvu-undo" }
+    );
+  }
+  const next = raw.slice();
+  for (const index of indexes) {
+    const record = next[index];
+    if (!isRecord4(record)) {
+      throw new BodyRollbackError(
+        "body-rollback-failed",
+        `body rollback cannot mark MVU receipt at index ${index}: the entry is not an object`,
+        { stage: undoneAt === void 0 ? "mvu-redo" : "mvu-undo" }
+      );
+    }
+    const updated = { ...record };
+    if (undoneAt === void 0) delete updated["undoneAt"];
+    else updated["undoneAt"] = undoneAt;
+    next[index] = updated;
+  }
+  const metadata = chat.header.chat_metadata;
+  const mvu = isRecord4(metadata.mvu) ? metadata.mvu : {};
+  metadata.mvu = { ...mvu, receipts: next };
+}
+function toJsonValue(value, path12, receipt) {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new Error(`settle receipt '${receipt.turnKey}' path '${path12}' carries a non-finite number`);
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item, index) => toJsonValue(item, `${path12}[${index}]`, receipt));
+  }
+  if (isRecord4(value)) {
+    const record = {};
+    for (const [key, item] of Object.entries(value)) record[key] = toJsonValue(item, `${path12}.${key}`, receipt);
+    return record;
+  }
+  throw new Error(`settle receipt '${receipt.turnKey}' path '${path12}' carries a non-JSON value`);
+}
+function jsonValuesEqual(left, right) {
+  if (left === right) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    return left.every((item, index) => jsonValuesEqual(item, right[index]));
+  }
+  if (isRecord4(left) || isRecord4(right)) {
+    if (!isRecord4(left) || !isRecord4(right)) return false;
+    const leftKeys = Object.keys(left);
+    if (leftKeys.length !== Object.keys(right).length) return false;
+    return leftKeys.every((key) => key in right && jsonValuesEqual(left[key], right[key]));
+  }
+  return false;
+}
+
+// packages/plugin/src/agent-tavern/body-rollback.ts
+function createBodyWriteRollbackPort(deps) {
+  return {
+    prepare: (agentId, turn, previousMessageId) => prepareBodyRollback(deps, agentId, turn, previousMessageId),
+    restore: (plan) => restoreBodyRollback(deps, plan),
+    commit: (plan) => {
+      void plan;
+      return Promise.resolve();
+    },
+    rollbackTurnWrites: (agentId, turn) => rollbackTurnWritesImpl(deps, agentId, turn)
+  };
+}
+async function prepareBodyRollback(deps, agentId, turn, previousMessageId) {
+  requireNonEmptyString(agentId, "agentId");
+  requireNonNegativeInteger(turn, "turn");
+  requireNonEmptyString(previousMessageId, "previousMessageId");
+  const binding = await readBinding(deps.store, agentId);
+  await readCard(deps.store, binding.character, agentId, turn);
+  const snapshot2 = await readChatSnapshot(deps.store, binding, agentId, turn);
+  const chat = snapshot2.chat;
+  const floorIndex = locateBodyFloor2(chat, previousMessageId);
+  if (floorIndex === void 0) {
+    throw new BodyRollbackError(
+      "body-rollback-target-missing",
+      `body rollback for session '${agentId}' turn ${turn} cannot find the JSONL floor of '${previousMessageId}'`,
+      { stage: "prepare", sessionId: agentId, turn }
+    );
+  }
+  const floor = chat.messages[floorIndex];
+  const bodyText = typeof floor.mes === "string" ? floor.mes : throwUnsafe("chat-unreadable", `body floor ${floorIndex} has a non-string mes`, agentId, turn);
+  const { journal, toolNames } = await loadTurnJournal(deps, agentId, turn);
+  const receipts = readBodyReceipts(chat, previousMessageId, floorIndex, agentId, turn);
+  assertReceiptCoverage(bodyText, toolNames, receipts, previousMessageId, floorIndex, agentId, turn);
+  await assertJournalCoverage(deps, toolNames, journal, agentId, turn);
+  const diagnostics = buildJournalDiagnostics(journal, deps.logger, agentId, turn);
+  try {
+    await applyJournalWrites(deps, journal.writes, "undo");
+  } catch (error) {
+    const compensation = await compensateJournal(deps, journal.writes, "replay");
+    throw asJournalError(error, agentId, turn, compensation);
+  }
+  let rolledBack;
+  try {
+    rolledBack = await applyReceiptRollback(deps, chat, receipts, "undo", binding);
+  } catch (error) {
+    const compensation = await compensateJournal(deps, journal.writes, "replay");
+    throw receiptUndoError(error, agentId, turn, compensation);
+  }
+  let preparedRevision = snapshot2.revision;
+  if (rolledBack.bodyReceipts + rolledBack.settleReceipts > 0) {
+    try {
+      preparedRevision = await deps.store.saveChat(binding.character, binding.chatId, chat, snapshot2.revision);
+    } catch (error) {
+      const compensation = await compensateJournal(deps, journal.writes, "replay");
+      const code = compensation.ok ? error instanceof ChatRevisionConflictError ? "body-rollback-conflict" : "body-rollback-save-failed" : "body-rollback-partial";
+      throw new BodyRollbackError(
+        code,
+        `body rollback for session '${agentId}' turn ${turn} could not save the rolled-back chat: ${errorMessage2(error)}${compensation.note}`,
+        { stage: "chat-save", sessionId: agentId, turn, compensated: compensation.ok, cause: error }
+      );
+    }
+  }
+  const plan = {
+    sessionId: agentId,
+    turn,
+    previousMessageId,
+    binding,
+    floorIndex,
+    bodyText,
+    chatRevision: snapshot2.revision,
+    preparedRevision,
+    journal: journal.writes,
+    mvuReceipts: structuredClone(receipts),
+    diagnostics,
+    preparedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  log(deps.logger, "info", "dsh-soulmojito body rollback: prepared", {
+    sessionId: agentId,
+    turn,
+    previousMessageId,
+    floorIndex,
+    journalWrites: plan.journal.length,
+    mvuReceipts: plan.mvuReceipts.length,
+    bodyReceipts: rolledBack.bodyReceipts,
+    settleReceipts: rolledBack.settleReceipts,
+    chatRevision: plan.chatRevision,
+    preparedRevision: plan.preparedRevision
+  });
+  return plan;
+}
+async function restoreBodyRollback(deps, plan) {
+  requirePlan(plan);
+  const snapshot2 = await readPlanChatSnapshot(deps.store, plan);
+  const chat = snapshot2.chat;
+  try {
+    await applyJournalWrites(deps, plan.journal, "replay");
+  } catch (error) {
+    const compensation = await compensateJournal(deps, plan.journal, "undo");
+    throw restoreError(error, "journal-replay", plan, compensation);
+  }
+  let redone;
+  try {
+    redone = await applyReceiptRollback(deps, chat, plan.mvuReceipts, "redo", plan.binding);
+  } catch (error) {
+    const compensation = await compensateJournal(deps, plan.journal, "undo");
+    throw restoreError(error, "mvu-redo", plan, compensation);
+  }
+  if (redone.bodyReceipts + redone.settleReceipts > 0) {
+    try {
+      await deps.store.saveChat(plan.binding.character, plan.binding.chatId, chat, snapshot2.revision);
+    } catch (error) {
+      const compensation = await compensateJournal(deps, plan.journal, "undo");
+      throw restoreError(error, "chat-save", plan, compensation);
+    }
+  }
+  log(deps.logger, "info", "dsh-soulmojito body rollback: restored", {
+    sessionId: plan.sessionId,
+    turn: plan.turn,
+    previousMessageId: plan.previousMessageId,
+    journalWrites: plan.journal.length,
+    bodyReceipts: redone.bodyReceipts,
+    settleReceipts: redone.settleReceipts
+  });
+}
+function restoreError(error, stage, plan, compensation) {
+  if (error instanceof BodyRollbackError) {
+    return new BodyRollbackError(
+      compensation.ok ? error.code : "body-rollback-partial",
+      `${error.message}${compensation.note}`,
+      {
+        ...error.detail === void 0 ? {} : { detail: error.detail },
+        stage: error.stage ?? stage,
+        sessionId: error.sessionId ?? plan.sessionId,
+        turn: error.turn ?? plan.turn,
+        ...error.journalId === void 0 ? {} : { journalId: error.journalId },
+        compensated: compensation.ok,
+        cause: error
+      }
+    );
+  }
+  const code = compensation.ok ? error instanceof ChatRevisionConflictError ? "body-rollback-conflict" : "body-rollback-failed" : "body-rollback-partial";
+  return new BodyRollbackError(
+    code,
+    `body rollback restore for session '${plan.sessionId}' turn ${plan.turn} failed at ${stage}: ${errorMessage2(error)}${compensation.note}`,
+    { stage, sessionId: plan.sessionId, turn: plan.turn, compensated: compensation.ok, cause: error }
+  );
+}
+function receiptUndoError(error, agentId, turn, compensation) {
+  const code = compensation.ok ? error instanceof BodyRollbackError ? error.code : "body-rollback-failed" : "body-rollback-partial";
+  return new BodyRollbackError(
+    code,
+    `body rollback for session '${agentId}' turn ${turn} could not undo the body/settle receipts: ${errorMessage2(error)}${compensation.note}`,
+    {
+      ...error instanceof BodyRollbackError && error.detail !== void 0 ? { detail: error.detail } : {},
+      stage: error instanceof BodyRollbackError && error.stage !== void 0 ? error.stage : "mvu-undo",
+      sessionId: agentId,
+      turn,
+      ...error instanceof BodyRollbackError && error.journalId !== void 0 ? { journalId: error.journalId } : {},
+      compensated: compensation.ok,
+      cause: error
+    }
+  );
+}
+async function readBinding(store5, agentId) {
+  let state;
+  try {
+    state = await store5.getState();
+  } catch (error) {
+    throw new BodyRollbackError(
+      "body-state-unsafe",
+      `body rollback cannot read tavern state for session '${agentId}': ${errorMessage2(error)}`,
+      { detail: "binding-unavailable", stage: "prepare", sessionId: agentId, cause: error }
+    );
+  }
+  const bindings2 = state.sessionBindings;
+  const binding = isRecord4(bindings2) ? bindings2[agentId] : void 0;
+  if (!isRecord4(binding) || binding["architecture"] !== "agent-tavern") {
+    throw new BodyRollbackError(
+      "body-state-unsafe",
+      `body rollback requires an agent-tavern binding for session '${agentId}'`,
+      { detail: "binding-unavailable", stage: "prepare", sessionId: agentId }
+    );
+  }
+  if (binding["group"] === true) {
+    throw new BodyRollbackError(
+      "body-state-unsafe",
+      `body rollback does not apply to group session '${agentId}'`,
+      { detail: "binding-unavailable", stage: "prepare", sessionId: agentId }
+    );
+  }
+  const character = binding["character"];
+  const chatId = binding["chatId"];
+  if (typeof character !== "string" || character === "" || typeof chatId !== "string" || chatId === "") {
+    throw new BodyRollbackError(
+      "body-state-unsafe",
+      `body rollback binding for session '${agentId}' has no character/chatId`,
+      { detail: "binding-unavailable", stage: "prepare", sessionId: agentId }
+    );
+  }
+  return { character, chatId };
+}
+async function readCard(store5, character, agentId, turn) {
+  let found;
+  try {
+    found = await store5.getCharacter(character);
+  } catch (error) {
+    throw new BodyRollbackError(
+      "body-state-unsafe",
+      `body rollback cannot read character card '${character}': ${errorMessage2(error)}`,
+      { detail: "card-unreadable", stage: "prepare", sessionId: agentId, turn, cause: error }
+    );
+  }
+  if (found === void 0) {
+    throw new BodyRollbackError(
+      "body-state-unsafe",
+      `body rollback requires the character card '${character}', but the store has none`,
+      { detail: "card-unreadable", stage: "prepare", sessionId: agentId, turn }
+    );
+  }
+  return found;
+}
+async function readChatSnapshot(store5, binding, agentId, turn) {
+  let snapshot2;
+  try {
+    snapshot2 = await store5.getChatSnapshot(binding.character, binding.chatId);
+  } catch (error) {
+    throw new BodyRollbackError(
+      "body-state-unsafe",
+      `body rollback cannot read chat '${binding.chatId}' of '${binding.character}': ${errorMessage2(error)}`,
+      { detail: "chat-unreadable", stage: "prepare", sessionId: agentId, turn, cause: error }
+    );
+  }
+  if (snapshot2 === void 0) {
+    throw new BodyRollbackError(
+      "body-state-unsafe",
+      `body rollback chat '${binding.chatId}' of '${binding.character}' does not exist`,
+      { detail: "chat-unreadable", stage: "prepare", sessionId: agentId, turn }
+    );
+  }
+  return snapshot2;
+}
+async function readPlanChatSnapshot(store5, plan) {
+  let snapshot2;
+  try {
+    snapshot2 = await store5.getChatSnapshot(plan.binding.character, plan.binding.chatId);
+  } catch (error) {
+    throw new BodyRollbackError(
+      "body-rollback-failed",
+      `body rollback restore cannot read chat '${plan.binding.chatId}' of '${plan.binding.character}': ${errorMessage2(error)}`,
+      { stage: "restore", sessionId: plan.sessionId, turn: plan.turn, cause: error }
+    );
+  }
+  if (snapshot2 === void 0) {
+    throw new BodyRollbackError(
+      "body-rollback-failed",
+      `body rollback restore chat '${plan.binding.chatId}' of '${plan.binding.character}' does not exist`,
+      { stage: "restore", sessionId: plan.sessionId, turn: plan.turn }
+    );
+  }
+  return snapshot2;
+}
+function locateBodyFloor2(chat, messageId) {
+  for (const [index, message] of chat.messages.entries()) {
+    const extra = message.extra;
+    const tavern = isRecord4(extra) ? extra["agentTavern"] : void 0;
+    if (!isRecord4(tavern)) continue;
+    if (tavern["messageId"] === messageId || tavern["anchorMessageId"] === messageId || tavern["bodyGroupId"] === messageId) {
+      return index;
+    }
+  }
+  return void 0;
+}
+function throwUnsafe(detail, message, agentId, turn) {
+  throw new BodyRollbackError("body-state-unsafe", message, {
+    detail,
+    stage: "prepare",
+    sessionId: agentId,
+    turn
+  });
+}
+function requirePlan(plan) {
+  const value = plan;
+  if (!isRecord4(value)) throw invalidPlan("plan must be an object");
+  if (!isNonEmptyString(value["sessionId"])) throw invalidPlan("plan.sessionId must be a non-empty string");
+  if (!isNonNegativeInteger2(value["turn"])) throw invalidPlan("plan.turn must be a non-negative safe integer");
+  if (!isNonEmptyString(value["previousMessageId"])) throw invalidPlan("plan.previousMessageId must be a non-empty string");
+  if (!Array.isArray(value["journal"])) throw invalidPlan("plan.journal must be an array");
+  if (!Array.isArray(value["mvuReceipts"])) throw invalidPlan("plan.mvuReceipts must be an array");
+  const binding = value["binding"];
+  if (!isRecord4(binding) || !isNonEmptyString(binding["character"]) || !isNonEmptyString(binding["chatId"])) {
+    throw invalidPlan("plan.binding must carry character and chatId");
+  }
+}
+function invalidPlan(detail) {
+  return new BodyRollbackError("invalid-arguments", `body rollback restore rejected: ${detail}`, {
+    stage: "restore"
+  });
+}
+
+// packages/plugin/src/agent-tavern/body-runtime.ts
+import { randomUUID as randomUUID5 } from "node:crypto";
+
+// packages/plugin/src/message.ts
+function createMessage(input) {
+  return deepFreeze(structuredClone({ ...input, id: crypto.randomUUID() }));
+}
+function deepFreeze(value) {
+  const seen = /* @__PURE__ */ new WeakSet();
+  const pending = [value];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === null || typeof current !== "object" || seen.has(current)) continue;
+    seen.add(current);
+    Object.freeze(current);
+    pending.push(...Object.values(current));
+  }
+  return value;
+}
+
 // packages/plugin/src/session/active-character.ts
 async function activeCharacterPatch(db, current, next) {
   const patch = { activeCharacter: next };
@@ -19466,21 +22082,15 @@ function parseTavernSessionCommand(rawInput) {
 // packages/plugin/src/agent-tavern/body-runtime-core.ts
 var BODY_TEXT_MAX_LENGTH = 1e5;
 var BODY_WRITE_TOOL_DENY = [
-  "memory_write",
-  "memory_update",
-  "memory_forget",
-  "variable_set",
-  "variable_patch",
-  "variable_delete",
   "tavern_script_advance",
-  "tavern_variable_settle",
   "game_start",
   "game_move"
 ];
-function bodyRuntimeError(code, message) {
+function bodyRuntimeError(code, message, detail) {
   const error = new Error(message);
   error.name = "BodyRuntimeError";
   error.code = code;
+  if (detail !== void 0) error.detail = detail;
   return error;
 }
 var pendingByAgent = /* @__PURE__ */ new Map();
@@ -19489,9 +22099,9 @@ function withBodyLock(deps, operation) {
   return bodyTails.enqueue(sessionIdOf(deps), operation);
 }
 function validateRegenerateRequest(request) {
-  requireNonEmptyString(request.groupId, "regenerate.groupId");
-  requireNonEmptyString(request.expectedAnchorId, "regenerate.expectedAnchorId");
-  requireNonNegativeInteger(request.expectedIndex, "regenerate.expectedIndex");
+  requireNonEmptyString2(request.groupId, "regenerate.groupId");
+  requireNonEmptyString2(request.expectedAnchorId, "regenerate.expectedAnchorId");
+  requireNonNegativeInteger2(request.expectedIndex, "regenerate.expectedIndex");
   if (request.feedback !== void 0 && typeof request.feedback !== "string") {
     throw bodyRuntimeError("invalid-arguments", "body regenerate rejected: feedback must be a string when present");
   }
@@ -19502,34 +22112,34 @@ function validateRegenerateRequest(request) {
   }
 }
 function validateFinalizePayload(payload) {
-  requireNonEmptyString(payload.agentId, "turn-stopping.agentId");
-  requireNonNegativeInteger(payload.turn, "turn-stopping.turn");
+  requireNonEmptyString2(payload.agentId, "turn-stopping.agentId");
+  requireNonNegativeInteger2(payload.turn, "turn-stopping.turn");
   if (payload.turn < 1) throw bodyRuntimeError("invalid-arguments", "body turn-stopping rejected: turn must be at least 1");
 }
 function validateEditRequest(request) {
-  requireNonEmptyString(request.groupId, "edit.groupId");
-  requireNonEmptyString(request.expectedAnchorId, "edit.expectedAnchorId");
-  requireNonNegativeInteger(request.index, "edit.index");
+  requireNonEmptyString2(request.groupId, "edit.groupId");
+  requireNonEmptyString2(request.expectedAnchorId, "edit.expectedAnchorId");
+  requireNonNegativeInteger2(request.index, "edit.index");
   if (typeof request.text !== "string") throw bodyRuntimeError("invalid-arguments", "body edit rejected: text must be a string");
 }
 function validateSelectRequest(request) {
-  requireNonEmptyString(request.groupId, "select.groupId");
-  requireNonEmptyString(request.expectedAnchorId, "select.expectedAnchorId");
-  requireNonNegativeInteger(request.index, "select.index");
+  requireNonEmptyString2(request.groupId, "select.groupId");
+  requireNonEmptyString2(request.expectedAnchorId, "select.expectedAnchorId");
+  requireNonNegativeInteger2(request.index, "select.index");
 }
 function validatePendingOperation(op) {
-  requireNonEmptyString(op.opId, "restore.opId");
-  requireNonEmptyString(op.groupId, "restore.groupId");
-  requireNonEmptyString(op.previousAnchorId, "restore.previousAnchorId");
-  requireNonNegativeInteger(op.previousIndex, "restore.previousIndex");
-  requireNonNegativeInteger(op.startSeq, "restore.startSeq");
+  requireNonEmptyString2(op.opId, "restore.opId");
+  requireNonEmptyString2(op.groupId, "restore.groupId");
+  requireNonEmptyString2(op.previousAnchorId, "restore.previousAnchorId");
+  requireNonNegativeInteger2(op.previousIndex, "restore.previousIndex");
+  requireNonNegativeInteger2(op.startSeq, "restore.startSeq");
 }
-function requireNonEmptyString(value, subject) {
+function requireNonEmptyString2(value, subject) {
   if (typeof value !== "string" || value.trim() === "") {
     throw bodyRuntimeError("invalid-arguments", `body runtime rejected ${subject}: expected a non-empty string`);
   }
 }
-function requireNonNegativeInteger(value, subject) {
+function requireNonNegativeInteger2(value, subject) {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
     throw bodyRuntimeError("invalid-arguments", `body runtime rejected ${subject}: expected a non-negative safe integer`);
   }
@@ -19580,7 +22190,7 @@ function releaseActiveOperation(deps, agentId, opId, release) {
   try {
     release();
   } catch (error) {
-    warn(deps, `body runtime: failed to release write-tool restriction for op ${opId}: ${errorMessage2(error)}`);
+    warn(deps, `body runtime: failed to release write-tool restriction for op ${opId}: ${errorMessage3(error)}`);
   }
 }
 function releasePendingOperation(deps, agentId, opId, subject) {
@@ -19589,7 +22199,7 @@ function releasePendingOperation(deps, agentId, opId, subject) {
   try {
     active.release();
   } catch (error) {
-    warn(deps, `body runtime: ${subject}: failed to release write-tool restriction: ${errorMessage2(error)}`);
+    warn(deps, `body runtime: ${subject}: failed to release write-tool restriction: ${errorMessage3(error)}`);
   }
   pendingByAgent.delete(agentId);
 }
@@ -19615,7 +22225,8 @@ function operationView(op) {
     agentId: op.agentId,
     triggerMessageId: op.triggerMessageId,
     ...op.turn === void 0 ? {} : { turn: op.turn },
-    ...op.feedback === void 0 ? {} : { feedback: op.feedback }
+    ...op.feedback === void 0 ? {} : { feedback: op.feedback },
+    ...op.rollbackPlan === void 0 ? {} : { rollbackPlan: op.rollbackPlan }
   };
 }
 function requireRecordWriter(deps) {
@@ -19657,7 +22268,7 @@ function warn(deps, message) {
   } catch {
   }
 }
-function errorMessage2(error) {
+function errorMessage3(error) {
   return error instanceof Error ? error.message : String(error);
 }
 function isBodyFailure(value) {
@@ -19665,8 +22276,9 @@ function isBodyFailure(value) {
 }
 function failureFor(error, context, op) {
   const code = isBodyFailure(error) ? error.code : "operation-failed";
-  const failure = bodyRuntimeError(code, `${context}: ${errorMessage2(error)}`);
+  const failure = bodyRuntimeError(code, `${context}: ${errorMessage3(error)}`);
   if (error instanceof Error) failure.cause = error;
+  if (isBodyFailure(error) && error.detail !== void 0) failure.detail = error.detail;
   if (op !== void 0) failure.op = op;
   return failure;
 }
@@ -19791,6 +22403,36 @@ function openTurnNumber(events) {
     else if (event.type === "turn/end") open2 = void 0;
   }
   return open2;
+}
+function lastClosedTurnNumber(events) {
+  let open2;
+  let lastClosed;
+  for (const event of events) {
+    if (event.type === "turn/start") {
+      open2 = numberField(event.data.turn);
+    } else if (event.type === "turn/end") {
+      if (open2 !== void 0) lastClosed = open2;
+      open2 = void 0;
+    }
+  }
+  return lastClosed;
+}
+function turnOfEventSeq(events, seq) {
+  let open2;
+  let lastClosed;
+  for (const event of events) {
+    if (event.type === "turn/start") {
+      open2 = numberField(event.data.turn);
+    } else if (event.type === "turn/end") {
+      if (open2 !== void 0) lastClosed = open2;
+      open2 = void 0;
+    }
+    if (event.seq !== seq) continue;
+    const direct = numberField(event.data.turn);
+    if (direct !== void 0) return direct;
+    return open2 ?? lastClosed;
+  }
+  return void 0;
 }
 function stepState(events, turn) {
   let openStep;
@@ -20118,7 +22760,7 @@ function alignHostStepBase(deps, step) {
   try {
     phase.step = step;
   } catch (error) {
-    warn(deps, `body runtime: could not advance the live loop step base to ${step}: ${errorMessage2(error)}`);
+    warn(deps, `body runtime: could not advance the live loop step base to ${step}: ${errorMessage3(error)}`);
     return;
   }
   if (phase.step !== step) {
@@ -20273,7 +22915,7 @@ function closeBracketBestEffort(deps, turn, step, turnOpen, stepOpen, subject) {
       deps.session.append("step/end", { turn, step });
       stepClosed = true;
     } catch (error) {
-      warn(deps, `body runtime: ${subject}: failed to close step of turn ${turn}: ${errorMessage2(error)}`);
+      warn(deps, `body runtime: ${subject}: failed to close step of turn ${turn}: ${errorMessage3(error)}`);
     }
   }
   if (turnOpen && stepClosed) {
@@ -20283,7 +22925,7 @@ function closeBracketBestEffort(deps, turn, step, turnOpen, stepOpen, subject) {
         reason: { kind: "error", error: { message: subject, code: "BODY_RUNTIME" } }
       });
     } catch (error) {
-      warn(deps, `body runtime: ${subject}: failed to close turn ${turn}: ${errorMessage2(error)}`);
+      warn(deps, `body runtime: ${subject}: failed to close turn ${turn}: ${errorMessage3(error)}`);
     }
   }
   if (turnOpen) {
@@ -20340,7 +22982,7 @@ async function finalizeRecoveredOperation(deps, op, turn) {
     return settleBodyOperation(deps, { agentId, op, label: "body recovery", release: void 0 }, turn);
   });
 }
-function settleBodyOperation(deps, context, turn) {
+async function settleBodyOperation(deps, context, turn) {
   const events = eventsOf(deps.session);
   const candidate = lastBodyCandidate(events, turn);
   if (candidate === void 0) {
@@ -20378,7 +23020,7 @@ function settleBodyOperation(deps, context, turn) {
       return failSettlement(
         deps,
         context,
-        `${context.label} ${context.op.opId} failed to seed candidate 0 for group '${context.op.groupId}': ${errorMessage2(error)}`
+        `${context.label} ${context.op.opId} failed to seed candidate 0 for group '${context.op.groupId}': ${errorMessage3(error)}`
       );
     }
     ledger = bodyLedger(eventsOf(deps.session), context.op.groupId);
@@ -20407,16 +23049,35 @@ function settleBodyOperation(deps, context, turn) {
     selectAppended = true;
     const hidden = hideTargets(events, surface, triggerMessageIdOf(context.op), turn, candidate.messageId);
     appendHideInOpenTurn(deps, turn, hidden);
-    appendOpFinish(deps, context.op.opId, "ok", candidate.messageId, void 0);
-    releaseSettlement(deps, context);
-    return { status: "ok", anchorMessageId: candidate.messageId };
   } catch (error) {
-    const reason = `${context.label} ${context.op.opId} failed to settle turn ${turn}: ${errorMessage2(error)}`;
+    const reason = `${context.label} ${context.op.opId} failed to settle turn ${turn}: ${errorMessage3(error)}`;
     if (selectAppended) {
       try {
         appendBodyEvent(deps, { op: "select", groupId: context.op.groupId, index: context.op.previousIndex });
       } catch (selectError) {
-        warn(deps, `body runtime: failed to restore previous body selection for ${context.op.opId}: ${errorMessage2(selectError)}`);
+        warn(deps, `body runtime: failed to restore previous body selection for ${context.op.opId}: ${errorMessage3(selectError)}`);
+      }
+    }
+    return failSettlement(deps, context, reason);
+  }
+  try {
+    await commitBodyRollback(deps, context.op);
+  } catch (error) {
+    const reason = `${context.label} ${context.op.opId} failed to commit the write rollback in turn ${turn}: ${errorMessage3(error)}`;
+    failSettlement(deps, context, reason);
+    throw failureFor(error, reason, context.op);
+  }
+  try {
+    appendOpFinish(deps, context.op.opId, "ok", candidate.messageId, void 0);
+    releaseSettlement(deps, context);
+    return { status: "ok", anchorMessageId: candidate.messageId };
+  } catch (error) {
+    const reason = `${context.label} ${context.op.opId} failed to record op-finish in turn ${turn}: ${errorMessage3(error)}`;
+    if (selectAppended) {
+      try {
+        appendBodyEvent(deps, { op: "select", groupId: context.op.groupId, index: context.op.previousIndex });
+      } catch (selectError) {
+        warn(deps, `body runtime: failed to restore previous body selection for ${context.op.opId}: ${errorMessage3(selectError)}`);
       }
     }
     return failSettlement(deps, context, reason);
@@ -20429,12 +23090,88 @@ function failSettlement(deps, context, reason) {
     releaseSettlement(deps, context);
     throw failureFor(
       finishError,
-      `body runtime: failed to record op-finish for ${context.op.opId}: ${errorMessage2(finishError)}`,
+      `body runtime: failed to record op-finish for ${context.op.opId}: ${errorMessage3(finishError)}`,
       context.op
     );
   }
   releaseSettlement(deps, context);
   return { status: "failed", reason };
+}
+async function commitBodyRollback(deps, op) {
+  const plan = op.rollbackPlan;
+  if (plan === void 0) return;
+  const port = deps.writeRollback;
+  if (port === void 0) {
+    throw bodyRuntimeError(
+      "operation-failed",
+      `body runtime: operation '${op.opId}' carries a write rollback plan but deps.writeRollback is missing`
+    );
+  }
+  await port.commit(plan);
+}
+async function restoreBodyRollbackPlan(deps, op) {
+  const plan = op.rollbackPlan;
+  if (plan === void 0) return;
+  const port = deps.writeRollback;
+  if (port === void 0) {
+    throw failureFor(
+      bodyRuntimeError(
+        "operation-failed",
+        `body restore ${op.opId} carries a write rollback plan but deps.writeRollback is missing`
+      ),
+      `body restore ${op.opId} cannot restore the write rollback plan`,
+      op
+    );
+  }
+  try {
+    await port.restore(plan);
+  } catch (error) {
+    throw failureFor(error, `body restore ${op.opId} failed to restore the write rollback plan`, op);
+  }
+}
+function oldAnchorTurn(events, previousAnchorId) {
+  const anchor = findEventByMessageId(events, previousAnchorId);
+  return anchor === void 0 ? void 0 : turnOfEventSeq(events, anchor.seq);
+}
+async function rollbackNewTurnWrites(deps, op, events) {
+  const port = deps.writeRollback;
+  const rollback = port?.rollbackTurnWrites;
+  if (port === void 0 || rollback === void 0) return;
+  const newTurn = turnOfUserMessage(events, triggerMessageIdOf(op)) ?? lastClosedTurnNumber(events);
+  if (newTurn === void 0) {
+    throw failureFor(
+      bodyRuntimeError("restore-unavailable", `body restore ${op.opId} cannot determine the failed turn`),
+      `body restore ${op.opId} cannot determine the failed turn`,
+      op
+    );
+  }
+  const oldTurn = op.rollbackPlan?.turn ?? oldAnchorTurn(events, op.previousAnchorId);
+  if (oldTurn !== void 0 && newTurn === oldTurn) {
+    throw failureFor(
+      bodyRuntimeError("operation-failed", `body restore ${op.opId} derived old turn ${newTurn} as the failed turn`),
+      `body restore ${op.opId} refused to roll back the old turn as the new turn`,
+      op
+    );
+  }
+  const agentId = recoveryAgentId(deps, op);
+  let result;
+  try {
+    result = await rollback.call(port, agentId, newTurn);
+  } catch (error) {
+    throw failureFor(error, `body restore ${op.opId} failed to roll back turn ${newTurn} writes`, op);
+  }
+  const failures = result?.failures ?? [];
+  if (failures.length > 0) {
+    const details = failures.map((failure) => `${failure.kind}/${failure.tool}/${failure.journalId}: ${failure.message}`).join("; ");
+    throw failureFor(
+      bodyRuntimeError(
+        "operation-failed",
+        `body restore ${op.opId} could not undo ${failures.length} new-turn write(s) in turn ${newTurn}: ${details}`
+      ),
+      `body restore ${op.opId} failed to roll back turn ${newTurn} writes`,
+      op
+    );
+  }
 }
 async function restoreBodyAfterFailure(deps, op) {
   validatePendingOperation(op);
@@ -20491,6 +23228,8 @@ async function restoreBodyAfterFailure(deps, op) {
         if (numberField(event.data.turn) === failedTurn) targets.add(seq);
       }
     }
+    await rollbackNewTurnWrites(deps, op, events);
+    await restoreBodyRollbackPlan(deps, op);
     const turn = (lastLoggedTurn(deps.agent) ?? 0) + 1;
     const restoredMessageId = `body-restore-${randomUUID4()}`;
     let turnOpen = false;
@@ -20555,6 +23294,7 @@ async function startRegenerate(deps, request) {
     const existingLedger = ledgerForRegenerate(events, request.groupId, request.expectedAnchorId, request.expectedIndex);
     const previousIndex = existingLedger?.selectedIndex ?? 0;
     const deny = normalizeDenyTools(request.writeToolDeny);
+    const rollbackPlan = await prepareRegenerateRollback(deps, agentId, events, target.seq, request.expectedAnchorId);
     const opId = `body-op-${randomUUID5()}`;
     const triggerMessageId = `body-trigger-${opId}`;
     const active = {
@@ -20567,19 +23307,22 @@ async function startRegenerate(deps, request) {
       triggerMessageId,
       release: () => {
       },
-      ...request.feedback === void 0 ? {} : { feedback: request.feedback }
+      ...request.feedback === void 0 ? {} : { feedback: request.feedback },
+      ...rollbackPlan === void 0 ? {} : { rollbackPlan }
     };
-    const startEvent = appendBodyEvent(deps, {
-      op: "op-start",
-      opId,
-      groupId: request.groupId,
-      kind: "regenerate",
-      previousAnchorId: request.expectedAnchorId,
-      previousIndex
-    });
-    active.startSeq = eventSeqOf(startEvent) ?? nextEventSeq(events);
-    pendingByAgent.set(agentId, active);
+    let opStarted = false;
     try {
+      const startEvent = appendBodyEvent(deps, {
+        op: "op-start",
+        opId,
+        groupId: request.groupId,
+        kind: "regenerate",
+        previousAnchorId: request.expectedAnchorId,
+        previousIndex
+      });
+      opStarted = true;
+      active.startSeq = eventSeqOf(startEvent) ?? nextEventSeq(events);
+      pendingByAgent.set(agentId, active);
       if (existingLedger === void 0) {
         appendBodyEvent(deps, {
           op: "candidate",
@@ -20598,14 +23341,33 @@ async function startRegenerate(deps, request) {
         op: operationView(active)
       };
     } catch (error) {
-      const reason = `body regenerate ${opId} failed to start: ${errorMessage2(error)}`;
-      try {
-        appendOpFinish(deps, opId, "failed", void 0, reason);
-      } catch (finishError) {
-        warn(deps, `body runtime: failed to record op-finish for start failure ${opId}: ${errorMessage2(finishError)}`);
+      const reason = `body regenerate ${opId} failed to start: ${errorMessage3(error)}`;
+      let compensationError;
+      if (rollbackPlan !== void 0 && deps.writeRollback !== void 0) {
+        try {
+          await deps.writeRollback.restore(rollbackPlan);
+        } catch (restoreError2) {
+          compensationError = restoreError2;
+        }
+      }
+      if (opStarted) {
+        try {
+          appendOpFinish(deps, opId, "failed", void 0, reason);
+        } catch (finishError) {
+          warn(deps, `body runtime: failed to record op-finish for start failure ${opId}: ${errorMessage3(finishError)}`);
+        }
       }
       releaseOperation(deps, active);
-      pendingByAgent.delete(agentId);
+      if (compensationError !== void 0) {
+        const combined = new AggregateError(
+          [error, compensationError],
+          `${reason}; the prepared write rollback could not be restored: ${errorMessage3(compensationError)}`
+        );
+        const failure = bodyRuntimeError("operation-failed", combined.message);
+        failure.cause = combined;
+        failure.op = operationView(active);
+        throw failure;
+      }
       throw failureFor(error, reason, operationView(active));
     }
   });
@@ -20663,6 +23425,29 @@ async function selectBodyCandidate(deps, request) {
     return stateFromLedger(updated);
   });
 }
+async function prepareRegenerateRollback(deps, agentId, events, anchorSeq, previousAnchorId) {
+  const port = deps.writeRollback;
+  if (port === void 0) return void 0;
+  const oldTurn = turnOfEventSeq(events, anchorSeq);
+  if (oldTurn === void 0) {
+    throw bodyRuntimeError(
+      "body-state-unsafe",
+      `body regenerate for session '${agentId}' refused: cannot derive the turn of anchor '${previousAnchorId}' from the session log`
+    );
+  }
+  try {
+    return await port.prepare(agentId, oldTurn, previousAnchorId);
+  } catch (error) {
+    const detail = error instanceof BodyRollbackError ? error.detail : void 0;
+    const failure = bodyRuntimeError(
+      "body-state-unsafe",
+      `body regenerate for session '${agentId}' refused: cannot prepare the write rollback of turn ${oldTurn} for anchor '${previousAnchorId}': ${errorMessage3(error)}`,
+      detail
+    );
+    failure.cause = error;
+    throw failure;
+  }
+}
 function foldPendingOps(events) {
   const parsed = parseEventList(events, "foldPendingOps");
   const pending = /* @__PURE__ */ new Map();
@@ -20708,11 +23493,11 @@ function errorLog(ctx, message, fields) {
   }
 }
 function failureCodeOf(error) {
-  if (!isRecord4(error)) return void 0;
+  if (!isRecord6(error)) return void 0;
   const code = error["code"];
   return typeof code === "string" && code !== "" ? code : void 0;
 }
-function errorMessage3(error) {
+function errorMessage4(error) {
   return error instanceof Error ? error.message : String(error);
 }
 function nonEmptyString(value) {
@@ -20721,7 +23506,7 @@ function nonEmptyString(value) {
 function agentIdOf(agent) {
   return nonEmptyString(agent.id) ?? nonEmptyString(agent.session.id);
 }
-function isRecord4(value) {
+function isRecord6(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isSeq(value) {
@@ -20735,11 +23520,11 @@ function wiringEvents(session) {
   if (values === void 0) return void 0;
   const events = [];
   for (const value of values) {
-    if (!isRecord4(value)) return void 0;
+    if (!isRecord6(value)) return void 0;
     const type = value["type"];
     const seq = value["seq"];
     const data = value["data"];
-    if (typeof type !== "string" || !isSeq(seq) || !isRecord4(data)) return void 0;
+    if (typeof type !== "string" || !isSeq(seq) || !isRecord6(data)) return void 0;
     events.push({ type, seq, data });
   }
   events.sort((left, right) => left.seq - right.seq);
@@ -20751,7 +23536,7 @@ function eventAt(events, seq) {
 function messageOf3(event) {
   if (event.type === "user/message") return event.data;
   const message = event.data["message"];
-  return isRecord4(message) ? message : void 0;
+  return isRecord6(message) ? message : void 0;
 }
 function messageIdOf2(event) {
   const message = messageOf3(event);
@@ -20766,7 +23551,7 @@ function hasToolCall2(message) {
 }
 function surfaceNodes(session) {
   const surface = session.surface;
-  if (!isRecord4(surface)) return void 0;
+  if (!isRecord6(surface)) return void 0;
   const nodes = surface["nodes"];
   if (!Array.isArray(nodes)) return void 0;
   const parsed = [];
@@ -20796,7 +23581,7 @@ function readBodySessionFacts(session, messageId, groupHint) {
     if (ledger === void 0) ledger = findBodyLedgerForMessage(events, messageId);
   } catch (error) {
     ledger = void 0;
-    ledgerError = errorMessage3(error);
+    ledgerError = errorMessage4(error);
   }
   const messageText4 = textOfSessionMessage(events, messageId);
   const surface = surfaceNodes(session);
@@ -20854,7 +23639,7 @@ function inspectAnchorInEvents(events, surface, anchorMessageId) {
   return { onSurface: true, last: true };
 }
 function bodyAgentOf(value) {
-  if (!isRecord4(value)) return void 0;
+  if (!isRecord6(value)) return void 0;
   const session = value["session"];
   if (!isBodySession(session)) return void 0;
   if (typeof value["followup"] !== "function") return void 0;
@@ -20867,7 +23652,7 @@ function resolveLiveAgent(ctx, sessionId) {
   try {
     return bodyAgentOf(get.call(agents, sessionId));
   } catch (error) {
-    warn2(ctx, "dsh-soulmojito body: agents.get failed", { sessionId, error: errorMessage3(error) });
+    warn2(ctx, "dsh-soulmojito body: agents.get failed", { sessionId, error: errorMessage4(error) });
     return void 0;
   }
 }
@@ -20879,7 +23664,7 @@ function listLiveAgents(ctx) {
   try {
     values = list.call(agents);
   } catch (error) {
-    warn2(ctx, "dsh-soulmojito body: agents.list failed", { error: errorMessage3(error) });
+    warn2(ctx, "dsh-soulmojito body: agents.list failed", { error: errorMessage4(error) });
     return [];
   }
   if (!Array.isArray(values)) return [];
@@ -20902,7 +23687,7 @@ async function resolveBodyBinding(ctx, sessionId) {
   try {
     return await bindingOf(sessionId);
   } catch (error) {
-    warn2(ctx, "dsh-soulmojito body: binding lookup failed", { sessionId, error: errorMessage3(error) });
+    warn2(ctx, "dsh-soulmojito body: binding lookup failed", { sessionId, error: errorMessage4(error) });
     return void 0;
   }
 }
@@ -20910,17 +23695,17 @@ function bodyBindingEligible(binding) {
   return binding !== void 0 && binding.architecture === "agent-tavern" && binding.group !== true;
 }
 function isBodySession(value) {
-  if (!isRecord4(value)) return false;
+  if (!isRecord6(value)) return false;
   return typeof value["append"] === "function";
 }
 function contentOf2(message) {
   const content = message["content"];
   if (!Array.isArray(content)) return [];
-  return content.filter((block) => isRecord4(block));
+  return content.filter((block) => isRecord6(block));
 }
 function sourceOf2(message) {
   const source = message["source"];
-  return isRecord4(source) ? source : void 0;
+  return isRecord6(source) ? source : void 0;
 }
 function foldBodyLedgerFromEvents(events, groupId) {
   const last = events[events.length - 1];
@@ -20938,42 +23723,57 @@ function foldBodyLedgerFromEvents(events, groupId) {
 // packages/plugin/src/agent-tavern/body-view.ts
 function bodyStateSafetyOf(character, chat) {
   if (character === void 0) return unsafeBodyState("card-unreadable");
-  let usesMvu;
+  if (chat === void 0) return unsafeBodyState("chat-unreadable");
   try {
-    usesMvu = cardUsesJsrMvu(character.card);
+    cardUsesJsrMvu(character.card);
   } catch {
     return unsafeBodyState("card-unreadable");
   }
-  if (usesMvu) return unsafeBodyState("card-mvu");
-  const metadata = chat.header.chat_metadata;
-  const variables2 = isRecord4(metadata["variables"]) ? metadata["variables"] : void 0;
-  if (variables2 !== void 0 && Object.prototype.hasOwnProperty.call(variables2, "stat_data")) {
-    return unsafeBodyState("stat-data");
-  }
-  const mvu = isRecord4(metadata["mvu"]) ? metadata["mvu"] : void 0;
-  if (mvu !== void 0) {
-    const receipts = mvu["receipts"];
-    if (Array.isArray(receipts)) return unsafeBodyState("mvu-receipts");
-  }
   return { safe: true };
+}
+function bodyHistoricalMvuStateOf(character, chat) {
+  if (character === void 0 || chat === void 0) return true;
+  try {
+    if (cardUsesJsrMvu(character.card)) return true;
+  } catch {
+    return true;
+  }
+  const metadata = chat.header.chat_metadata;
+  const variables2 = isRecord6(metadata["variables"]) ? metadata["variables"] : void 0;
+  if (variables2 !== void 0 && Object.prototype.hasOwnProperty.call(variables2, "stat_data")) {
+    return true;
+  }
+  const mvu = isRecord6(metadata["mvu"]) ? metadata["mvu"] : void 0;
+  return mvu !== void 0 && Array.isArray(mvu["receipts"]);
+}
+function bodyMutationSafetyOf(action, character, chat) {
+  const base = bodyStateSafetyOf(character, chat);
+  if (!base.safe) return base;
+  if (action === "regenerate") return base;
+  if (!bodyHistoricalMvuStateOf(character, chat)) return base;
+  return unsafeBodyState(action === "edit" ? "edit-rollback-unavailable" : "select-rollback-unavailable");
 }
 function unsafeBodyState(detail) {
   return { safe: false, reason: "body-state-unsafe", detail };
 }
 function bodyStateUnsafeMessage(detail) {
   switch (detail) {
-    case "card-mvu":
-      return "this character card declares MVU variables; body mutations would apply variable patches twice";
-    case "stat-data":
-      return "this chat already carries chat_metadata.variables.stat_data; body mutations are disabled until variable rollback exists";
-    case "mvu-receipts":
-      return "this chat already carries chat_metadata.mvu.receipts; body mutations are disabled until variable rollback exists";
     case "card-unreadable":
-      return "the character card could not be read, so MVU state cannot be ruled out; body mutations are disabled";
+      return "the character card could not be read, so body state cannot be inspected; body mutations are disabled";
     case "chat-unreadable":
-      return "the bound chat could not be read, so MVU state cannot be ruled out; body mutations are disabled";
+      return "the bound chat could not be read, so body state cannot be inspected; body mutations are disabled";
     case "safety-unavailable":
       return "the MVU state safety check could not be resolved; body mutations are disabled";
+    case "mvu-receipt-missing":
+      return "the old body applies MVU variables but has no matching receipt; regenerating it would apply the patches twice and cannot be rolled back";
+    case "write-journal-missing":
+      return "the old turn wrote memory or variables without a complete write journal; regeneration cannot roll those writes back";
+    case "write-journal-unavailable":
+      return "this host does not expose appendPluginRecord, so memory and variable writes cannot be journaled or rolled back";
+    case "edit-rollback-unavailable":
+      return "this chat already carries MVU or variable state; editing a body has no candidate-level rollback";
+    case "select-rollback-unavailable":
+      return "this chat already carries MVU or variable state; switching a body candidate has no candidate-level rollback";
   }
 }
 function buildBodyView(input) {
@@ -20990,9 +23790,11 @@ function buildBodyView(input) {
   }
   const ledgerText = ledger === void 0 ? void 0 : effectiveBodyText(ledger);
   const text = hidden ? candidateText2 ?? input.messageText ?? "" : input.projected?.text ?? ledgerText ?? input.messageText ?? "";
-  const reason = bodyViewReason(input, hidden);
-  const canEdit = reason === void 0 && !hidden && count > 0;
-  const canRegenerate = canEdit && input.agent !== void 0 && canAdvanceHostTurnBase(input.agent);
+  const baseReason = bodyViewReason(input, hidden);
+  const rollbackReason = baseReason === void 0 && !hidden && input.historicalMvuState ? input.writeRollbackAvailable ? "edit-rollback-unavailable" : "write-journal-unavailable" : void 0;
+  const reason = baseReason ?? rollbackReason;
+  const canEdit = baseReason === void 0 && !hidden && count > 0 && !input.historicalMvuState;
+  const canRegenerate = baseReason === void 0 && !hidden && count > 0 && input.agent !== void 0 && canAdvanceHostTurnBase(input.agent) && (!input.historicalMvuState || input.writeRollbackAvailable);
   const canSelect = canEdit && count > 1;
   return {
     ok: true,
@@ -21024,10 +23826,12 @@ function bodyViewReason(input, hidden) {
 function bodyFailureOf(error) {
   const rawCode = failureCodeOf2(error);
   const code = publicBodyCode(rawCode);
+  const detail = failureDetailOf(error);
   return {
     status: bodyRejectStatus(code),
     code,
-    message: errorMessage4(error)
+    message: errorMessage5(error),
+    ...detail === void 0 ? {} : { detail }
   };
 }
 function publicBodyCode(code) {
@@ -21074,11 +23878,16 @@ function bodyRejectStatus(code) {
   }
 }
 function failureCodeOf2(error) {
-  if (!isRecord4(error)) return void 0;
+  if (!isRecord6(error)) return void 0;
   const code = error["code"];
   return typeof code === "string" && code !== "" ? code : void 0;
 }
-function errorMessage4(error) {
+function failureDetailOf(error) {
+  if (!isRecord6(error)) return void 0;
+  const detail = error["detail"];
+  return typeof detail === "string" && detail !== "" ? detail : void 0;
+}
+function errorMessage5(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -21138,7 +23947,7 @@ async function recoverAgentBody(ctx, agent, agentId, createDeps) {
     errorLog(ctx, "dsh-soulmojito body: foldPendingOps failed during recovery", {
       agentId,
       code: failureCodeOf(error),
-      error: errorMessage3(error)
+      error: errorMessage4(error)
     });
     return { agentId, status: "failed", pending: 0, reason: "invalid-event" };
   }
@@ -21191,7 +24000,7 @@ async function recoverAgentBody(ctx, agent, agentId, createDeps) {
         agentId,
         opId: op.opId,
         code: failureCodeOf(error),
-        error: errorMessage3(error)
+        error: errorMessage4(error)
       });
       restoreOps.push(op);
     }
@@ -21220,7 +24029,7 @@ async function recoveryStateSafety(ctx, sessionId, binding) {
     } catch (error) {
       errorLog(ctx, "dsh-soulmojito body: recovery state safety resolver failed", {
         sessionId,
-        error: errorMessage3(error)
+        error: errorMessage4(error)
       });
       return unsafeBodyState("safety-unavailable");
     }
@@ -21239,7 +24048,7 @@ async function defaultRecoveryStateSafety(ctx, binding) {
     return bodyStateSafetyOf(character, snapshot2.chat);
   } catch (error) {
     errorLog(ctx, "dsh-soulmojito body: recovery state safety could not be read", {
-      error: errorMessage3(error)
+      error: errorMessage4(error)
     });
     return unsafeBodyState("safety-unavailable");
   }
@@ -21261,7 +24070,7 @@ async function restoreRecoveredOperation(ctx, deps, op) {
       agentId: deps.agent.id,
       opId: op.opId,
       code: failureCodeOf(error),
-      error: errorMessage3(error)
+      error: errorMessage4(error)
     });
     return false;
   }
@@ -21345,7 +24154,7 @@ async function resolveBodyRecordWriter(ctx) {
   } catch (error) {
     warnRecordSeamOnce(ctx, "dsh-soulmojito body: cannot resolve @deepseek-ai/dsh-session", {
       reason: "host-unsupported",
-      error: errorMessage3(error)
+      error: errorMessage4(error)
     });
     return void 0;
   }
@@ -21366,11 +24175,44 @@ async function resolveBodyRecordWriter(ctx) {
 async function createBodyDeps(ctx, agent) {
   const appendRecord = await resolveBodyRecordWriter(ctx);
   if (appendRecord === void 0) return void 0;
+  const writeRollback = createBodyWriteRollbackPort({
+    store: lazyRollbackStore(),
+    memoryStore: lazyRollbackMemoryStore(),
+    variableStore: lazyRollbackVariableStore(),
+    sessionEvents: () => wiringEvents(agent.session),
+    ...ctx.logger === void 0 ? {} : { logger: ctx.logger }
+  });
   return {
     session: agent.session,
     agent,
     ...ctx.logger === void 0 ? {} : { logger: ctx.logger },
-    appendRecord
+    appendRecord,
+    writeRollback
+  };
+}
+function lazyRollbackStore() {
+  return {
+    getState: async () => (await store3()).getState(),
+    getCharacter: async (name2) => {
+      const found = await (await store3()).getCharacter(name2);
+      return found === void 0 ? void 0 : { card: found.card };
+    },
+    getChatSnapshot: async (character, chatId) => (await store3()).getChatSnapshot(character, chatId),
+    saveChat: async (character, chatId, chat, expectedRevision) => (await store3()).saveChat(character, chatId, chat, expectedRevision)
+  };
+}
+function lazyRollbackMemoryStore() {
+  return {
+    read: async (id, scope, scopeId, includeDeleted) => (await memories()).read(id, scope, scopeId, includeDeleted),
+    forget: async (id, scope, scopeId, expectedRevision) => (await memories()).forget(id, scope, scopeId, expectedRevision),
+    restore: async (record, expectedRevision) => (await memories()).restore(record, expectedRevision)
+  };
+}
+function lazyRollbackVariableStore() {
+  return {
+    get: async (scope, scopeId, name2) => (await variables()).get(scope, scopeId, name2),
+    set: async (scope, scopeId, name2, value, expectedRevision) => (await variables()).set(scope, scopeId, name2, value, expectedRevision),
+    delete: async (scope, scopeId, name2, expectedRevision) => (await variables()).delete(scope, scopeId, name2, expectedRevision)
   };
 }
 function registerBodyProjection(ctx) {
@@ -21388,7 +24230,7 @@ function registerBodyProjection(ctx) {
   } catch (error) {
     errorLog(ctx, "dsh-soulmojito body: registerMessageProjection failed", {
       reason: "host-unsupported",
-      error: errorMessage3(error)
+      error: errorMessage4(error)
     });
     return void 0;
   }
@@ -21410,7 +24252,7 @@ function registerBodyProjection(ctx) {
       ctx.effect(() => disposeOnce, "dsh-soulmojito: body projection");
     } catch (error) {
       warn2(ctx, "dsh-soulmojito body: ctx.effect rejected the projection disposer; projection stays registered", {
-        error: errorMessage3(error)
+        error: errorMessage4(error)
       });
     }
   }
@@ -21428,7 +24270,7 @@ function registerBodyTurnStopping(ctx) {
     registered = ctx.on("agent/turn-stopping", (payload) => handleBodyTurnStopping(ctx, payload));
   } catch (error) {
     errorLog(ctx, "dsh-soulmojito body: agent/turn-stopping registration failed", {
-      error: errorMessage3(error)
+      error: errorMessage4(error)
     });
     return void 0;
   }
@@ -21436,7 +24278,7 @@ function registerBodyTurnStopping(ctx) {
   return dispose;
 }
 async function handleBodyTurnStopping(ctx, payload) {
-  const record = isRecord5(payload) ? payload : void 0;
+  const record = isRecord7(payload) ? payload : void 0;
   const payloadAgent = bodyAgentOf(record?.agent);
   const payloadAgentId = nonEmptyString2(record?.agentId);
   const agentId = payloadAgent === void 0 ? payloadAgentId : agentIdOf(payloadAgent);
@@ -21486,7 +24328,7 @@ async function handleBodyTurnStopping(ctx, payload) {
       agentId,
       turn,
       code: failureCodeOf(error),
-      error: errorMessage3(error)
+      error: errorMessage4(error)
     });
   }
 }
@@ -21501,7 +24343,7 @@ function warnRecordSeamOnce(ctx, message, fields) {
   recordSeamWarningEmitted = true;
   warn2(ctx, message, fields);
 }
-function isRecord5(value) {
+function isRecord7(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function nonEmptyString2(value) {
@@ -21651,1003 +24493,6 @@ function seededRandom(seed) {
 }
 function hostPromptSafe(text, expand = (value) => value) {
   return expand(text).replace(/\{+/g, (run) => run.split("").join(" "));
-}
-
-// packages/plugin/src/mvu-guard.ts
-var DIRECTIVE_KEYS = ["$range", "$step", "$enum", "$ro", "$type"];
-var TYPE_LOCKS = ["number", "string", "boolean", "object", "array"];
-function isPlainObject(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function parseRange(raw) {
-  if (!Array.isArray(raw) || raw.length < 2) return void 0;
-  const min = raw[0];
-  const max2 = raw[1];
-  if (typeof min !== "number" || !Number.isFinite(min) || typeof max2 !== "number" || !Number.isFinite(max2)) return void 0;
-  return { min: Math.min(min, max2), max: Math.max(min, max2) };
-}
-function resolveTemplateNode(raw) {
-  if (typeof raw === "number" && Number.isFinite(raw)) return { typeLock: "number" };
-  if (typeof raw === "string") return { typeLock: "string" };
-  if (typeof raw === "boolean") return { typeLock: "boolean" };
-  if (Array.isArray(raw)) {
-    return { typeLock: "array", ...raw.length > 0 ? { item: resolveTemplateNode(raw[0]) } : {} };
-  }
-  if (!isPlainObject(raw)) return void 0;
-  const range = parseRange(raw.$range);
-  const step = typeof raw.$step === "number" && Number.isFinite(raw.$step) && raw.$step > 0 ? raw.$step : void 0;
-  const enumValues = Array.isArray(raw.$enum) && raw.$enum.length > 0 ? raw.$enum : void 0;
-  const ro = raw.$ro === true ? true : void 0;
-  const typeLockDirect = typeof raw.$type === "string" && TYPE_LOCKS.includes(raw.$type) ? raw.$type : void 0;
-  const directives = {
-    ...range !== void 0 ? { min: range.min, max: range.max } : {},
-    ...step !== void 0 ? { step } : {},
-    ...enumValues !== void 0 ? { enumValues } : {},
-    ...ro !== void 0 ? { ro } : {}
-  };
-  const childKeys = Object.keys(raw).filter((key) => !DIRECTIVE_KEYS.includes(key));
-  if (childKeys.length === 0) {
-    const typeLock = typeLockDirect ?? (range !== void 0 || step !== void 0 ? "number" : enumValues !== void 0 ? "string" : void 0);
-    if (typeLock === void 0 && Object.keys(directives).length === 0) {
-      return { typeLock: "object", objectMode: "open" };
-    }
-    if (typeLock === "object") return { typeLock, objectMode: "open", ...directives };
-    if (typeLock === "array") return { typeLock, ...directives };
-    return { ...typeLock !== void 0 ? { typeLock } : {}, ...directives };
-  }
-  const wildcardRaw = childKeys.includes("*") ? raw["*"] : void 0;
-  const namedKeys = childKeys.filter((key) => key !== "*");
-  const children = /* @__PURE__ */ new Map();
-  for (const key of namedKeys) {
-    const child = resolveTemplateNode(raw[key]);
-    if (child !== void 0) children.set(key, child);
-  }
-  const objectMode = wildcardRaw !== void 0 ? "wildcard" : "locked";
-  const wildcard = wildcardRaw !== void 0 ? resolveTemplateNode(wildcardRaw) : void 0;
-  return {
-    typeLock: "object",
-    objectMode,
-    ...children.size > 0 ? { children } : {},
-    ...wildcard !== void 0 ? { wildcard } : {},
-    ...directives
-  };
-}
-var schemaCache = /* @__PURE__ */ new WeakMap();
-function resolveMvuSchema(raw) {
-  if (!isPlainObject(raw)) return void 0;
-  const cached = schemaCache.get(raw);
-  if (cached !== void 0 || schemaCache.has(raw)) return cached;
-  const resolved = resolveTemplateNode(raw);
-  const root = resolved !== void 0 && resolved.objectMode === "locked" ? { ...resolved, objectMode: "open" } : resolved;
-  schemaCache.set(raw, root);
-  return root;
-}
-function stripMvuControl(tree) {
-  if (!("$schema" in tree || "$rules" in tree)) return tree;
-  const out = {};
-  for (const [key, value] of Object.entries(tree)) {
-    if (key === "$schema" && isPlainObject(value)) continue;
-    if (key === "$rules" && Array.isArray(value)) continue;
-    out[key] = value;
-  }
-  return out;
-}
-var INITIAL_VARIABLES_KEY = "initial_variables";
-function cardSchema(card) {
-  const holder = card?.data?.extensions?.["agentTavern"];
-  if (!isPlainObject(holder)) return void 0;
-  const initial = holder.initialVariables;
-  return isPlainObject(initial) ? initial.$schema : void 0;
-}
-function treeSchema(tree) {
-  return isPlainObject(tree) ? tree.$schema : void 0;
-}
-function readMvuSchema(chat, card, variablesOverride) {
-  const candidates = [
-    treeSchema(variablesOverride ?? chat?.header?.chat_metadata?.variables),
-    cardSchema(card),
-    treeSchema(chat?.header?.chat_metadata?.[INITIAL_VARIABLES_KEY])
-  ];
-  for (const candidate of candidates) {
-    if (isPlainObject(candidate) && Object.keys(candidate).length > 0) return candidate;
-  }
-  return void 0;
-}
-function typeName(value) {
-  if (value === null) return "null";
-  if (Array.isArray(value)) return "array";
-  return typeof value;
-}
-function mvuValuesEqual(left, right) {
-  if (left === right) return true;
-  if (Array.isArray(left) && Array.isArray(right)) {
-    return left.length === right.length && left.every((item, index) => mvuValuesEqual(item, right[index]));
-  }
-  if (isPlainObject(left) && isPlainObject(right)) {
-    const keys = /* @__PURE__ */ new Set([...Object.keys(left), ...Object.keys(right)]);
-    for (const key of keys) {
-      if (!mvuValuesEqual(left[key], right[key])) return false;
-    }
-    return true;
-  }
-  return false;
-}
-function clampNumber(value, min, max2) {
-  let out = value;
-  if (min !== void 0 && out < min) out = min;
-  if (max2 !== void 0 && out > max2) out = max2;
-  return out;
-}
-function validateValue2(node, value, current, path12, notes) {
-  if (node.ro === true && !mvuValuesEqual(value, current)) {
-    return { ok: false, kind: "readonly", reason: "read-only field" };
-  }
-  if (Array.isArray(value)) {
-    if (node.typeLock !== void 0 && node.typeLock !== "array") {
-      return { ok: false, kind: "type-mismatch", reason: `expected ${node.typeLock}, got array` };
-    }
-    if (node.item === void 0) return { ok: true, value, notes };
-    const currentItems = Array.isArray(current) ? current : [];
-    const out = [];
-    for (let i = 0; i < value.length; i++) {
-      const result = validateValue2(node.item, value[i], currentItems[i], `${path12}[${i}]`, notes);
-      if (!result.ok) return result;
-      out.push(result.value);
-    }
-    return { ok: true, value: out, notes };
-  }
-  if (isPlainObject(value)) {
-    if (node.typeLock !== void 0 && node.typeLock !== "object") {
-      return { ok: false, kind: "type-mismatch", reason: `expected ${node.typeLock}, got object` };
-    }
-    if (node.objectMode !== "locked" && node.objectMode !== "wildcard") return { ok: true, value, notes };
-    const currentObject = isPlainObject(current) ? current : {};
-    const next = {};
-    for (const key of Object.keys(value)) {
-      const child = node.children?.get(key) ?? node.wildcard;
-      if (child === void 0) {
-        return { ok: false, kind: "structure", reason: `key '${key}' is not in the schema template` };
-      }
-      const result = validateValue2(child, value[key], currentObject[key], path12 === "" ? key : `${path12}.${key}`, notes);
-      if (!result.ok) return result;
-      next[key] = result.value;
-    }
-    if (node.objectMode === "locked") {
-      for (const key of node.children?.keys() ?? []) {
-        if (!(key in value) && key in currentObject) {
-          return { ok: false, kind: "structure", reason: `template field '${key}' would be deleted by this write` };
-        }
-      }
-    }
-    return { ok: true, value: next, notes };
-  }
-  if (node.typeLock !== void 0 && typeName(value) !== node.typeLock) {
-    return { ok: false, kind: "type-mismatch", reason: `expected ${node.typeLock}, got ${typeName(value)}` };
-  }
-  if (node.enumValues !== void 0 && !node.enumValues.some((allowed) => mvuValuesEqual(allowed, value))) {
-    return { ok: false, kind: "enum-violation", reason: `value ${JSON.stringify(value)} is not one of [${node.enumValues.map((entry) => JSON.stringify(entry)).join(", ")}]` };
-  }
-  if (typeof value === "number" && Number.isFinite(value) && (node.min !== void 0 || node.max !== void 0 || node.step !== void 0)) {
-    let out = value;
-    if (node.step !== void 0 && typeof current === "number" && Number.isFinite(current)) {
-      const delta = out - current;
-      const capped = Math.max(-node.step, Math.min(node.step, delta));
-      if (capped !== delta) {
-        notes.push(`${path12}: guard step: delta ${delta > 0 ? "+" : ""}${delta} capped to ${capped > 0 ? "+" : ""}${capped}`);
-        out = current + capped;
-      }
-    }
-    const clamped = clampNumber(out, node.min, node.max);
-    if (clamped !== out) {
-      notes.push(`${path12}: guard clamp: ${out} -> ${clamped}`);
-      out = clamped;
-    }
-    return { ok: true, value: out, notes };
-  }
-  return { ok: true, value, notes };
-}
-function guardMvuWrite(schema, path12, value, current) {
-  const segments = path12.split(".").filter((segment) => segment !== "");
-  if (segments.length === 0) return { ok: true, value };
-  if (segments[0] === "$schema") {
-    return { ok: false, kind: "readonly", reason: "the $schema subtree is the declared guard contract and cannot be settled" };
-  }
-  const root = resolveMvuSchema(schema);
-  if (root === void 0) return { ok: true, value };
-  let cursor = root;
-  let parent;
-  let roChain = root.ro === true;
-  let violation;
-  for (let i = 0; i < segments.length && cursor !== void 0; i++) {
-    const segment = segments[i];
-    if (cursor.typeLock === "array") {
-      parent = cursor;
-      if (!/^\d+$/.test(segment)) {
-        violation ??= `'${segments.slice(0, i + 1).join(".")}' expects an array index, not '${segment}'`;
-        cursor = void 0;
-      } else {
-        cursor = cursor.item;
-      }
-    } else if (cursor.objectMode !== void 0) {
-      parent = cursor;
-      const named = cursor.children?.get(segment);
-      if (named !== void 0) cursor = named;
-      else if (cursor.objectMode === "wildcard" && cursor.wildcard !== void 0) cursor = cursor.wildcard;
-      else if (cursor.objectMode === "locked") {
-        violation ??= `'${segments.slice(0, i + 1).join(".")}' is not in the schema template`;
-        cursor = void 0;
-      } else cursor = void 0;
-    } else {
-      if (cursor.typeLock !== void 0 && cursor.objectMode === void 0) {
-        violation ??= `'${segments.slice(0, i + 1).join(".")}' expects ${cursor.typeLock}, not a nested path`;
-      }
-      parent = cursor;
-      cursor = void 0;
-    }
-    if (cursor !== void 0 && cursor.ro === true) roChain = true;
-  }
-  if (violation !== void 0) return { ok: false, kind: "structure", reason: violation };
-  const lastSegment = segments[segments.length - 1];
-  if (value === void 0) {
-    if (roChain) return { ok: false, kind: "readonly", reason: "read-only field" };
-    if (parent?.objectMode === "locked" && parent.children?.has(lastSegment)) {
-      return { ok: false, kind: "structure", reason: `template field '${lastSegment}' cannot be deleted` };
-    }
-    return { ok: true, value: void 0 };
-  }
-  if (roChain && !mvuValuesEqual(value, current)) {
-    return { ok: false, kind: "readonly", reason: "read-only field" };
-  }
-  if (cursor === void 0) return { ok: true, value };
-  const result = validateValue2(cursor, value, current, segments.join("."), []);
-  if (!result.ok) return result;
-  return { ok: true, value: result.value, ...result.notes.length > 0 ? { note: result.notes.join("; ") } : {} };
-}
-function getMvuTreePath(tree, path12) {
-  let cursor = tree;
-  for (const segment of path12.split(".")) {
-    if (!isPlainObject(cursor)) return void 0;
-    cursor = cursor[segment];
-  }
-  return cursor;
-}
-
-// packages/plugin/src/mvu-rules.ts
-var MVU_RULE_ROUNDS = 3;
-var MVU_RULES_LIMIT = 32;
-var MVU_RULE_THEN_LIMIT = 16;
-function isPlainObject2(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-var INITIAL_VARIABLES_KEY2 = "initial_variables";
-function cardRules(card) {
-  const holder = card?.data?.extensions?.["agentTavern"];
-  if (!isPlainObject2(holder)) return void 0;
-  const initial = holder["initialVariables"];
-  return isPlainObject2(initial) ? initial["$rules"] : void 0;
-}
-function treeRules(tree) {
-  return isPlainObject2(tree) ? tree.$rules : void 0;
-}
-function validateMvuRules(raw) {
-  if (!Array.isArray(raw)) throw new Error("$rules must be an array of rule objects");
-  if (raw.length === 0) return [];
-  if (raw.length > MVU_RULES_LIMIT) {
-    throw new Error(`$rules declares ${raw.length} rules, over the cap of ${MVU_RULES_LIMIT}`);
-  }
-  return raw.map((entry, index) => {
-    if (!isPlainObject2(entry)) throw new Error(`rule #${index} is not an object`);
-    const { name: name2, when, then } = entry;
-    if (typeof name2 !== "string" || name2.trim() === "" || name2.length > 64) {
-      throw new Error(`rule #${index} requires a non-empty name of at most 64 characters`);
-    }
-    if (typeof when !== "string" || when.trim() === "") {
-      throw new Error(`rule '${name2}' requires a non-empty when expression`);
-    }
-    if (!isPlainObject2(then) || Object.keys(then).length === 0) {
-      throw new Error(`rule '${name2}' requires a non-empty then map`);
-    }
-    if (Object.keys(then).length > MVU_RULE_THEN_LIMIT) {
-      throw new Error(`rule '${name2}' declares ${Object.keys(then).length} then writes, over the cap of ${MVU_RULE_THEN_LIMIT}`);
-    }
-    for (const [path12, value] of Object.entries(then)) {
-      if (path12.trim() === "") throw new Error(`rule '${name2}' has an empty then path`);
-      if (typeof value === "string") {
-        if (value.trim() === "") throw new Error(`rule '${name2}' has an empty then expression for '${path12}'`);
-      } else if (value === void 0 || typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") {
-        throw new Error(`rule '${name2}' then value for '${path12}' is not a JSON literal`);
-      }
-    }
-    return { name: name2, when, then };
-  });
-}
-function readMvuRules(chat, card, variablesOverride) {
-  const candidates = [
-    treeRules(variablesOverride ?? chat?.header?.chat_metadata?.variables),
-    cardRules(card),
-    treeRules(chat?.header?.chat_metadata?.[INITIAL_VARIABLES_KEY2])
-  ];
-  for (const candidate of candidates) {
-    if (candidate === void 0) continue;
-    try {
-      const rules = validateMvuRules(candidate);
-      if (rules.length === 0) continue;
-      return { rules };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return { invalid: `$rules: ${message}; all card rules are disabled for this settlement` };
-    }
-  }
-  return void 0;
-}
-var SAFE_MATH_KEYS = [
-  "E",
-  "LN2",
-  "LN10",
-  "LOG2E",
-  "LOG10E",
-  "PI",
-  "SQRT1_2",
-  "SQRT2",
-  "abs",
-  "acos",
-  "acosh",
-  "asin",
-  "asinh",
-  "atan",
-  "atan2",
-  "atanh",
-  "cbrt",
-  "ceil",
-  "cos",
-  "cosh",
-  "exp",
-  "expm1",
-  "floor",
-  "fround",
-  "hypot",
-  "imul",
-  "log",
-  "log1p",
-  "log2",
-  "log10",
-  "max",
-  "min",
-  "pow",
-  "round",
-  "sign",
-  "sin",
-  "sinh",
-  "sqrt",
-  "tan",
-  "tanh",
-  "trunc"
-];
-var SAFE_MATH = Object.freeze(
-  Object.fromEntries(SAFE_MATH_KEYS.map((key) => [key, Math[key]]))
-);
-var RULE_SANDBOX_SHADES = {
-  Math: SAFE_MATH,
-  Date: void 0,
-  setTimeout: void 0,
-  setInterval: void 0,
-  setImmediate: void 0,
-  queueMicrotask: void 0
-};
-function buildRuleEnv(tree) {
-  const vars = deepClone(stripMvuControl(tree));
-  return {
-    vars,
-    getvar: (path12) => typeof path12 === "string" ? getMvuTreePath(vars, path12) : void 0,
-    ...RULE_SANDBOX_SHADES
-  };
-}
-function errorText(error) {
-  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-}
-function setTreePath(tree, path12, value) {
-  const segments = path12.split(".");
-  const leaf = segments.pop();
-  let cursor = tree;
-  for (const segment of segments) {
-    const next = cursor[segment];
-    if (next === null || typeof next !== "object" || Array.isArray(next)) cursor[segment] = {};
-    cursor = cursor[segment];
-  }
-  cursor[leaf] = value;
-}
-async function runMvuRules(rules, options) {
-  const failures = /* @__PURE__ */ new Set();
-  const writes = [];
-  const noteParts = /* @__PURE__ */ new Map();
-  const tree = options.tree;
-  for (let round = 1; round <= MVU_RULE_ROUNDS; round++) {
-    let progressed = false;
-    for (const rule of rules) {
-      let active = false;
-      try {
-        active = Boolean(await evalExpressionSandboxed(rule.when, buildRuleEnv(tree)));
-      } catch (error) {
-        failures.add(`rule '${rule.name}': when evaluation failed: ${errorText(error)}`);
-        continue;
-      }
-      if (!active) continue;
-      const pending = [];
-      let failed = false;
-      for (const [path12, raw] of Object.entries(rule.then)) {
-        try {
-          const value = typeof raw === "string" ? await evalExpressionSandboxed(raw, buildRuleEnv(tree)) : deepClone(raw);
-          if (value === void 0) throw new Error("the expression evaluated to undefined");
-          pending.push({ path: path12, value });
-        } catch (error) {
-          failures.add(`rule '${rule.name}': then evaluation failed for '${path12}': ${errorText(error)}`);
-          failed = true;
-          break;
-        }
-      }
-      if (failed) continue;
-      for (const { path: path12, value } of pending) {
-        const head = path12.split(".")[0];
-        if (head === "$schema" || head === "$rules") {
-          failures.add(`${path12}: rule '${rule.name}': guard readonly: the ${head} subtree is card-declared and cannot be settled`);
-          continue;
-        }
-        const current = getMvuTreePath(tree, path12);
-        const guarded = options.schema === void 0 ? void 0 : guardMvuWrite(options.schema, path12, value, current);
-        if (guarded !== void 0 && !guarded.ok) {
-          failures.add(`${path12}: rule '${rule.name}': guard ${guarded.kind}: ${guarded.reason}`);
-          continue;
-        }
-        const finalValue = guarded === void 0 ? value : guarded.value;
-        if (mvuValuesEqual(finalValue, current)) continue;
-        setTreePath(tree, path12, deepClone(finalValue));
-        progressed = true;
-        const note = ["rule:" + rule.name, guarded?.note].filter((part) => part !== void 0).join("; ");
-        const parts = noteParts.get(path12) ?? [];
-        if (!parts.includes(note)) parts.push(note);
-        noteParts.set(path12, parts);
-        writes.push({ path: path12, value: deepClone(finalValue), rule: rule.name, ...guarded?.note !== void 0 ? { guardNote: guarded.note } : {} });
-      }
-    }
-    if (!progressed) break;
-    if (round === MVU_RULE_ROUNDS) {
-      failures.add(`$rules: fixed-point iteration hit the ${MVU_RULE_ROUNDS}-round cap; rules were still producing changes in the last round (narrow the when conditions or reorder the rules)`);
-    }
-  }
-  const notes = Object.fromEntries([...noteParts].map(([path12, parts]) => [path12, parts.join("; ")]));
-  return { failures: [...failures], writes, notes };
-}
-function plainObject2(value) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
-  return value;
-}
-async function applyMvuSettlementRules(chat, card, before) {
-  const metadata = chat.header.chat_metadata;
-  const live = plainObject2(metadata.variables);
-  const source = readMvuRules(chat, card, before);
-  if (source === void 0 && before.$rules === void 0 && live?.$rules === void 0) {
-    return { failures: [], notes: {} };
-  }
-  const variables2 = live ?? {};
-  const failures = [];
-  if (!mvuValuesEqual(variables2.$rules, before.$rules)) {
-    if (before.$rules !== void 0) variables2.$rules = deepClone(before.$rules);
-    else delete variables2.$rules;
-    failures.push("$rules: guard readonly: the rules subtree is card-declared and cannot be settled");
-  }
-  if (source === void 0) {
-    if (live === void 0 && Object.keys(variables2).length > 0) metadata.variables = variables2;
-    return { failures, notes: {} };
-  }
-  if ("invalid" in source) return { failures: [...failures, source.invalid], notes: {} };
-  const schema = readMvuSchema(chat, card, before);
-  const run = await runMvuRules(source.rules, { ...schema !== void 0 ? { schema } : {}, tree: variables2 });
-  if (live === void 0 && Object.keys(variables2).length > 0) metadata.variables = variables2;
-  return { failures: [...failures, ...run.failures], notes: run.notes };
-}
-function mergeMvuRuleNotes(guardNotes, ruleNotes) {
-  const merged = {};
-  for (const [path12, note] of Object.entries(guardNotes)) merged[path12] = note;
-  for (const [path12, note] of Object.entries(ruleNotes)) {
-    merged[path12] = merged[path12] !== void 0 ? `${merged[path12]}; ${note}` : note;
-  }
-  return merged;
-}
-
-// packages/plugin/src/mvu.ts
-var DEFAULT_USER = "User";
-var INITIAL_VARIABLES_KEY3 = "initial_variables";
-var MVU_RECEIPTS_LIMIT = 20;
-function plainObject3(value) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
-  return value;
-}
-function jsonObjectOf(value) {
-  return JSON.parse(JSON.stringify(value));
-}
-function readChatVariables(chat) {
-  return plainObject3(chat?.header?.chat_metadata?.variables) ?? {};
-}
-function snapshotChatVariables(chat) {
-  return deepClone(readChatVariables(chat));
-}
-function valuesEqual(left, right) {
-  return mvuValuesEqual(left, right);
-}
-function diffVariables(before, after) {
-  const changes = [];
-  const walk = (path12, left, right) => {
-    const leftObject = plainObject3(left);
-    const rightObject = plainObject3(right);
-    const recursible = leftObject !== void 0 && rightObject !== void 0 || left === void 0 && rightObject !== void 0 || right === void 0 && leftObject !== void 0;
-    if (recursible) {
-      const leftNext = leftObject ?? {};
-      const rightNext = rightObject ?? {};
-      for (const key of /* @__PURE__ */ new Set([...Object.keys(leftNext), ...Object.keys(rightNext)])) {
-        walk(path12 === "" ? key : `${path12}.${key}`, leftNext[key], rightNext[key]);
-      }
-      return;
-    }
-    if (!valuesEqual(left, right)) {
-      const change = { name: path12, ...left !== void 0 ? { before: left } : {} };
-      if (right !== void 0) change.after = right;
-      changes.push(change);
-    }
-  };
-  walk("", stripMvuControl(before), stripMvuControl(after));
-  return changes.sort((left, right) => left.name.localeCompare(right.name));
-}
-function overlayScopedVariables(base, entries) {
-  const tree = deepClone(base);
-  for (const entry of entries) {
-    const segments = entry.name.split(".");
-    const leaf = segments.pop();
-    let cursor = tree;
-    for (const segment of segments) {
-      const next = cursor[segment];
-      if (next === null || typeof next !== "object" || Array.isArray(next)) cursor[segment] = {};
-      cursor = cursor[segment];
-    }
-    cursor[leaf] = entry.value;
-  }
-  return tree;
-}
-function overlayChatScopedVariables(base, entries) {
-  const authoritativeStat = plainObject3(base["stat_data"]) !== void 0;
-  const authoritativePrevious = plainObject3(base["previous_stat_data"]) !== void 0;
-  const usable = entries.filter((entry) => {
-    if (authoritativeStat && (entry.name === "stat_data" || entry.name.startsWith("stat_data."))) return false;
-    if (authoritativePrevious && (entry.name === "previous_stat_data" || entry.name.startsWith("previous_stat_data."))) return false;
-    return true;
-  });
-  return overlayScopedVariables(base, usable);
-}
-function readMvuReceipts(chat) {
-  const raw = plainObject3(chat?.header?.chat_metadata?.mvu)?.receipts;
-  if (!Array.isArray(raw)) return [];
-  const receipts = [];
-  for (const entry of raw) {
-    const record = plainObject3(entry);
-    if (record === void 0) continue;
-    const { at, turnKey, status: status2, changes, failures } = record;
-    if (typeof at !== "string" || typeof turnKey !== "string") continue;
-    if (status2 !== "updated" && status2 !== "unchanged" && status2 !== "failed") continue;
-    receipts.push({
-      at,
-      turnKey,
-      status: status2,
-      changes: Array.isArray(changes) ? changes.flatMap((item) => {
-        const change = plainObject3(item);
-        if (change === void 0 || typeof change.name !== "string") return [];
-        const out = { name: change.name };
-        if ("before" in change) out.before = change.before;
-        if ("after" in change) out.after = change.after;
-        if (typeof change.reason === "string") out.reason = change.reason;
-        return [out];
-      }) : [],
-      failures: Array.isArray(failures) ? failures.filter((item) => typeof item === "string") : [],
-      ...typeof record.undoneAt === "string" ? { undoneAt: record.undoneAt } : {}
-    });
-  }
-  return receipts;
-}
-function appendMvuReceipt(chat, receipt) {
-  const metadata = chat.header.chat_metadata;
-  const receipts = [...readMvuReceipts(chat), receipt].slice(-MVU_RECEIPTS_LIMIT);
-  metadata.mvu = { receipts };
-}
-function recordMvuTurnReceipt(chat, before, options) {
-  const after = readChatVariables(chat);
-  const changes = diffVariables(before, after);
-  for (const change of changes) {
-    const note = options.changeNotes?.[change.name];
-    if (note !== void 0) change.reason = note;
-  }
-  const failures = options.failures ?? [];
-  if (changes.length === 0 && failures.length === 0 && Object.keys(before).length === 0 && Object.keys(after).length === 0) {
-    return void 0;
-  }
-  const status2 = failures.length > 0 ? "failed" : changes.length > 0 ? "updated" : "unchanged";
-  const receipt = {
-    at: options.at ?? (/* @__PURE__ */ new Date()).toISOString(),
-    turnKey: options.turnKey,
-    status: status2,
-    changes,
-    failures
-  };
-  appendMvuReceipt(chat, receipt);
-  return receipt;
-}
-function setMvuTreePath(tree, path12, value) {
-  const segments = path12.split(".");
-  const leaf = segments.pop();
-  let cursor = tree;
-  for (const segment of segments) {
-    const next = cursor[segment];
-    if (next === null || typeof next !== "object" || Array.isArray(next)) cursor[segment] = {};
-    cursor = cursor[segment];
-  }
-  cursor[leaf] = value;
-}
-function revertMvuTreePath(tree, path12, before) {
-  const beforeValue = getMvuTreePath(before, path12);
-  if (beforeValue !== void 0) {
-    setMvuTreePath(tree, path12, beforeValue);
-    return;
-  }
-  const segments = path12.split(".");
-  const leaf = segments.pop();
-  const parent = getMvuTreePath(tree, segments.join("."));
-  if (parent !== null && typeof parent === "object" && !Array.isArray(parent)) {
-    delete parent[leaf];
-  }
-  while (segments.length > 0) {
-    const pathSoFar = segments.join(".");
-    const node = getMvuTreePath(tree, pathSoFar);
-    if (node === null || typeof node !== "object" || Array.isArray(node)) break;
-    if (Object.keys(node).length > 0) break;
-    if (getMvuTreePath(before, pathSoFar) !== void 0) break;
-    const popped = segments.pop();
-    const upper = segments.length > 0 ? getMvuTreePath(tree, segments.join(".")) : tree;
-    if (upper === null || typeof upper !== "object" || Array.isArray(upper)) break;
-    delete upper[popped];
-  }
-}
-function applyMvuSettlementGuard(chat, card, before) {
-  const failures = [];
-  const notes = {};
-  const metadata = chat.header.chat_metadata;
-  const variables2 = plainObject3(metadata.variables);
-  const schema = readMvuSchema(chat, card, before);
-  if (schema === void 0 || variables2 === void 0) return { failures, notes };
-  const schemaBefore = plainObject3(before.$schema);
-  const schemaLive = plainObject3(variables2.$schema);
-  if (!valuesEqual(schemaBefore, schemaLive)) {
-    if (schemaBefore !== void 0) variables2.$schema = deepClone(schemaBefore);
-    else delete variables2.$schema;
-    failures.push(`$schema: guard readonly: the schema subtree is card-declared and cannot be settled`);
-  }
-  for (const change of diffVariables(before, variables2)) {
-    const current = getMvuTreePath(before, change.name);
-    const value = "after" in change ? change.after : void 0;
-    const result = guardMvuWrite(schema, change.name, value, current);
-    if (!result.ok) {
-      revertMvuTreePath(variables2, change.name, before);
-      failures.push(`${change.name}: guard ${result.kind}: ${result.reason}`);
-      continue;
-    }
-    if (result.note !== void 0) notes[change.name] = result.note;
-    if (value !== void 0 && !valuesEqual(result.value, value)) setMvuTreePath(variables2, change.name, result.value);
-  }
-  if (Object.keys(variables2).length === 0 && Object.keys(before).length === 0) delete metadata.variables;
-  return { failures, notes };
-}
-function createMvuRuntime(input, stores) {
-  const { characterName, character, chat, books } = input;
-  const card = character.card;
-  const cardName2 = card.data.nickname || card.data.name || characterName;
-  const lastUserMessageId = (() => {
-    for (let i = chat.messages.length - 1; i >= 0; i--) {
-      const message = chat.messages[i];
-      if (message !== void 0 && message.is_user) return i;
-    }
-    return -1;
-  })();
-  const lastCharMessageId = (() => {
-    for (let i = chat.messages.length - 1; i >= 0; i--) {
-      const message = chat.messages[i];
-      if (message !== void 0 && !message.is_user && !message.is_system) return i;
-    }
-    return -1;
-  })();
-  const host = {
-    runType: "render",
-    userName: input.state.activePersona ?? DEFAULT_USER,
-    charName: cardName2,
-    chatId: input.chatId ?? "",
-    characterId: characterName,
-    messages: chat.messages.map((message) => ({
-      name: message.name,
-      mes: message.mes,
-      is_user: message.is_user,
-      is_system: message.is_system
-    })),
-    lastUserMessageId,
-    lastCharMessageId,
-    findWorldEntries: (title, book) => {
-      const out = [];
-      for (const lorebook of books) {
-        if (book !== void 0 && lorebook.name !== book) continue;
-        for (const entry of lorebook.entries) {
-          const comment = entry.comment ?? "";
-          const matched = typeof title === "number" ? entry.uid === title : comment === title;
-          if (!matched) continue;
-          out.push({
-            uid: entry.uid,
-            book: lorebook.name ?? "",
-            comment,
-            content: entry.content ?? "",
-            ...typeof entry.order === "number" ? { order: entry.order } : {},
-            disable: entry.disable === true
-          });
-        }
-      }
-      return out;
-    },
-    getCard: (name2) => {
-      if (name2 !== void 0 && name2 !== characterName && name2 !== cardName2) return null;
-      return {
-        name: cardName2,
-        systemPrompt: card.data.systemPrompt,
-        personality: card.data.personality,
-        description: card.data.description,
-        scenario: card.data.scenario,
-        firstMes: card.data.firstMes,
-        mesExample: card.data.mesExample,
-        creatorNotes: card.data.creatorNotes,
-        depthPrompt: "",
-        data: jsonObjectOf(card.data)
-      };
-    },
-    findPresetPrompt: () => null,
-    renderNested: async () => ""
-  };
-  const runtime = createTemplateRuntime({ host, stores, ...input.onWarning !== void 0 ? { onWarning: input.onWarning } : {} });
-  host.renderNested = (source, extra) => runtime.renderText(source, extra);
-  return runtime;
-}
-function statusTemplateOf(card) {
-  const agentTavern = plainObject3(card?.data?.extensions?.["agentTavern"]);
-  const template = agentTavern?.statusTemplate;
-  return typeof template === "string" && template.trim() !== "" ? template : void 0;
-}
-async function renderMvuStatusTemplate(input) {
-  const chat = input.chat;
-  const books = await collectWorldInfoBooks(input.db, input.state, input.characterName, input.character, input.chatId);
-  const runtime = createMvuRuntime(
-    {
-      state: input.state,
-      characterName: input.characterName,
-      character: input.character,
-      chat,
-      chatId: input.chatId,
-      books
-    },
-    {
-      local: deepClone(stripMvuControl(plainObject3(input.localVariables ?? readChatVariables(chat)) ?? {})),
-      global: { ...input.state.scriptGlobals },
-      initial: deepClone(stripMvuControl(plainObject3(chat.header.chat_metadata[INITIAL_VARIABLES_KEY3]) ?? {}))
-    }
-  );
-  return await runtime.renderText(input.template, void 0, "mvu-status");
-}
-async function retryMvuSettlement(db, options) {
-  const { state, characterName, chatId, snapshot: snapshot2 } = options;
-  if (typeof options.sessionId === "string" && state.sessionBindings?.[options.sessionId]?.architecture === "agent-tavern") {
-    throw new Error("AgentTavern sessions use the DSH native AgentLoop; MVU settlement retry is unavailable.");
-  }
-  if (!options.templatesActive) {
-    throw new Error("MVU retry requires the prompt template runtime (templates are disabled)");
-  }
-  if (options.revision !== snapshot2.revision) {
-    throw new ChatRevisionConflictError(options.revision, snapshot2.revision);
-  }
-  const chat = snapshot2.chat;
-  const metadata = chat.header.chat_metadata;
-  const before = snapshotChatVariables(chat);
-  let floorIndex = -1;
-  for (let i = chat.messages.length - 1; i >= 0; i--) {
-    const message = chat.messages[i];
-    if (message !== void 0 && !message.is_user && !message.is_system) {
-      floorIndex = i;
-      break;
-    }
-  }
-  if (floorIndex === -1) throw new Error("no assistant floor to settle");
-  const floor = chat.messages[floorIndex];
-  if (floor === void 0) throw new Error("no assistant floor to settle");
-  const character = await db.getCharacter(characterName) ?? await db.getCharacter(floor.name);
-  if (!character) throw new Error(`character '${characterName}' not found`);
-  const failures = [];
-  const localVars = plainObject3(metadata.variables) ?? {};
-  metadata.variables = localVars;
-  const globalsBefore = JSON.stringify(state.scriptGlobals);
-  const books = await collectWorldInfoBooks(db, state, characterName, character, chatId);
-  const runtime = createMvuRuntime(
-    { state, characterName, character, chat, chatId, books, onWarning: (message) => {
-      failures.push(message);
-    } },
-    {
-      // initial 绑活引用（存在时）；无 initial 树时绑临时对象，initial 作用域写穿
-      // 不持久化——initial 本就由每次生成的 InitialVariables 重算，非用户状态
-      local: localVars,
-      global: state.scriptGlobals,
-      initial: plainObject3(metadata[INITIAL_VARIABLES_KEY3]) ?? {}
-    }
-  );
-  try {
-    await runtime.renderText(floor.mes, void 0, "mvu-retry");
-  } catch (err2) {
-    failures.push(`mvu retry render failed: ${err2 instanceof Error ? err2.message : String(err2)}`);
-  }
-  if (Object.keys(localVars).length === 0) delete metadata.variables;
-  if (JSON.stringify(state.scriptGlobals) !== globalsBefore) {
-    await db.updateState((current) => ({ scriptGlobals: { ...current.scriptGlobals, ...state.scriptGlobals } }));
-  }
-  const guard = applyMvuSettlementGuard(chat, character.card, before);
-  const rulesPass = await applyMvuSettlementRules(chat, character.card, before);
-  const after = readChatVariables(chat);
-  const changes = diffVariables(before, after);
-  const notes = mergeMvuRuleNotes(guard.notes, rulesPass.notes);
-  for (const change of changes) {
-    if (notes[change.name] !== void 0) change.reason = notes[change.name];
-  }
-  const allFailures = [...failures, ...guard.failures, ...rulesPass.failures];
-  const receipt = {
-    at: (/* @__PURE__ */ new Date()).toISOString(),
-    turnKey: String(floorIndex),
-    status: changes.length > 0 ? "updated" : "unchanged",
-    changes,
-    failures: allFailures
-  };
-  appendMvuReceipt(chat, receipt);
-  const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
-  return { receipt, revision, variables: stripMvuControl(after) };
-}
-var MvuUndoRefusalError = class extends Error {
-  undoCode;
-  constructor(undoCode, message) {
-    super(message);
-    this.name = "MvuUndoRefusalError";
-    this.undoCode = undoCode;
-  }
-};
-function latestValidMvuReceipt(receipts) {
-  for (let index = receipts.length - 1; index >= 0; index--) {
-    if (receipts[index].undoneAt === void 0) return { index, receipt: receipts[index] };
-  }
-  return void 0;
-}
-function refuseUndo(target, receipts) {
-  if (target !== void 0) return target;
-  if (receipts.length > 0) {
-    throw new MvuUndoRefusalError("ALREADY_UNDONE", `all ${receipts.length} settlement receipts in this chat have been undone; nothing valid is left to undo`);
-  }
-  throw new MvuUndoRefusalError("NO_VALID_RECEIPT", "no MVU settlement receipt in this chat to undo");
-}
-function planMvuUndoRestores(receipt) {
-  if (receipt.status === "updated" && receipt.changes.length === 0) {
-    throw new MvuUndoRefusalError("INCOMPLETE_RECEIPT", `receipt ${receipt.turnKey} claims status 'updated' but records no change data; the receipt data is incomplete and cannot be undone`);
-  }
-  const restores = [];
-  for (const change of receipt.changes) {
-    if (!("before" in change) && !("after" in change)) {
-      throw new MvuUndoRefusalError("INCOMPLETE_RECEIPT", `receipt change '${change.name}' records neither a before nor an after value; the receipt data is incomplete and cannot be undone`);
-    }
-    restores.push({ path: change.name, ..."before" in change ? { value: change.before } : {} });
-  }
-  return restores;
-}
-function formatRestoreValue(value) {
-  const text = (() => {
-    try {
-      return JSON.stringify(value) ?? String(value);
-    } catch {
-      return String(value);
-    }
-  })();
-  return text.length > 80 ? `${text.slice(0, 79)}\u2026` : text;
-}
-function screenMvuUndoRestores(schema, restores, currentOf) {
-  const failures = [];
-  for (const restore of restores) {
-    if (restore.path.split(".")[0] === "$schema") {
-      failures.push(`$schema: guard readonly: the schema subtree is the declared guard contract and cannot be undone into`);
-      continue;
-    }
-    if (schema === void 0) continue;
-    const value = "value" in restore ? restore.value : void 0;
-    const result = guardMvuWrite(schema, restore.path, value, currentOf(restore.path));
-    if (!result.ok) {
-      failures.push(`${restore.path}: guard ${result.kind}: ${result.reason}`);
-      continue;
-    }
-    if (!mvuValuesEqual(result.value, value)) {
-      failures.push(`${restore.path}: guard would adjust the restored value ${formatRestoreValue(value)} to ${formatRestoreValue(result.value)} ($schema changed since the settlement); refusing to undo with anything other than the recorded before value`);
-    }
-  }
-  if (failures.length > 0) throw new MvuUndoRefusalError("UNDO_REJECTED", failures.join("; "));
-}
-function applyMvuUndoRestores(tree, restores) {
-  const before = overlayScopedVariables({}, restores.flatMap((restore) => "value" in restore ? [{ name: restore.path, value: deepClone(restore.value) }] : []));
-  for (const restore of restores) revertMvuTreePath(tree, restore.path, before);
-}
-function markMvuReceiptUndone(chat, index, at) {
-  const receipts = readMvuReceipts(chat);
-  const marked = { ...receipts[index], undoneAt: at ?? (/* @__PURE__ */ new Date()).toISOString() };
-  const next = receipts.slice();
-  next[index] = marked;
-  chat.header.chat_metadata.mvu = { receipts: next };
-  return marked;
-}
-async function undoMvuStSettlement(db, options) {
-  const { characterName, chatId, snapshot: snapshot2 } = options;
-  const chat = snapshot2.chat;
-  const receipts = readMvuReceipts(chat);
-  const target = refuseUndo(latestValidMvuReceipt(receipts), receipts);
-  const restores = planMvuUndoRestores(target.receipt);
-  const metadata = chat.header.chat_metadata;
-  const variables2 = plainObject3(metadata.variables) ?? {};
-  screenMvuUndoRestores(readMvuSchema(chat, (await db.getCharacter(characterName))?.card, variables2), restores, (path12) => getMvuTreePath(variables2, path12));
-  applyMvuUndoRestores(variables2, restores);
-  if (Object.keys(variables2).length === 0) delete metadata.variables;
-  else metadata.variables = variables2;
-  const marked = markMvuReceiptUndone(chat, target.index, options.at);
-  const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
-  return { receipt: marked, revision, restores };
-}
-async function undoMvuAgentSettlement(variables2, db, options) {
-  const { characterName, chatId, snapshot: snapshot2 } = options;
-  const chat = snapshot2.chat;
-  const receipts = readMvuReceipts(chat);
-  const target = refuseUndo(latestValidMvuReceipt(receipts), receipts);
-  const restores = planMvuUndoRestores(target.receipt);
-  const seedTree = readChatVariables(chat);
-  const storeFailures = [];
-  const entries = /* @__PURE__ */ new Map();
-  for (const restore of restores) {
-    try {
-      entries.set(restore.path, await variables2.get("chat", chatId, restore.path));
-    } catch (error) {
-      storeFailures.push(`${restore.path}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-  if (storeFailures.length > 0) throw new MvuUndoRefusalError("UNDO_REJECTED", storeFailures.join("; "));
-  screenMvuUndoRestores(
-    readMvuSchema(chat, (await db.getCharacter(characterName))?.card),
-    restores,
-    (path12) => {
-      const entry = entries.get(path12);
-      return entry !== void 0 ? entry.value : getMvuTreePath(seedTree, path12);
-    }
-  );
-  for (const restore of restores) {
-    if ("value" in restore) continue;
-    const entry = entries.get(restore.path);
-    if (entry !== void 0) await variables2.delete("chat", chatId, restore.path, entry.revision);
-  }
-  const updates = [];
-  for (const restore of restores) {
-    if (!("value" in restore)) continue;
-    const entry = entries.get(restore.path);
-    const current = entry !== void 0 ? entry.value : getMvuTreePath(seedTree, restore.path);
-    if (current !== void 0 && mvuValuesEqual(current, restore.value)) continue;
-    updates.push({ name: restore.path, value: deepClone(restore.value), ...entry !== void 0 ? { expectedRevision: entry.revision } : {} });
-  }
-  if (updates.length > 0) await variables2.patch("chat", chatId, updates);
-  const marked = markMvuReceiptUndone(chat, target.index, options.at);
-  const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
-  return { receipt: marked, revision, restores };
 }
 
 // packages/plugin/src/prompt-context.ts
@@ -24989,7 +26834,7 @@ function smokeTestGameEngine(engine10) {
   try {
     created = engine10.createGame({ seed: 1 });
   } catch (cause) {
-    return { ok: false, reasons: [`createGame \u629B\u9519: ${errorMessage5(cause)}`] };
+    return { ok: false, reasons: [`createGame \u629B\u9519: ${errorMessage6(cause)}`] };
   }
   if (created === null || typeof created !== "object" || !("state" in created)) {
     return { ok: false, reasons: ["createGame \u5FC5\u987B\u8FD4\u56DE { state } \u5F62\u6001"] };
@@ -25001,14 +26846,14 @@ function smokeTestGameEngine(engine10) {
   try {
     turn = currentRoleOf(state, roles);
   } catch (cause) {
-    reasons.push(errorMessage5(cause));
+    reasons.push(errorMessage6(cause));
     return { ok: false, reasons };
   }
   let suggestions;
   try {
     suggestions = engine10.legalActions(state);
   } catch (cause) {
-    reasons.push(`legalActions \u629B\u9519: ${errorMessage5(cause)}`);
+    reasons.push(`legalActions \u629B\u9519: ${errorMessage6(cause)}`);
     return { ok: false, reasons };
   }
   if (!Array.isArray(suggestions)) return { ok: false, reasons: ["legalActions \u5FC5\u987B\u8FD4\u56DE\u6570\u7EC4"] };
@@ -25033,7 +26878,7 @@ function smokeTestGameEngine(engine10) {
     firstResult = engine10.applyAction(state, first, turn);
     secondResult = engine10.applyAction(state, first, turn);
   } catch (cause) {
-    reasons.push(`applyAction \u5BF9\u5EFA\u8BAE\u96C6\u9996\u4E2A\u52A8\u4F5C\u629B\u9519: ${errorMessage5(cause)}`);
+    reasons.push(`applyAction \u5BF9\u5EFA\u8BAE\u96C6\u9996\u4E2A\u52A8\u4F5C\u629B\u9519: ${errorMessage6(cause)}`);
     return { ok: false, reasons };
   }
   if (!deepEqual(firstResult, secondResult)) reasons.push("applyAction \u540C\u8F93\u5165\u4E24\u6B21\u8C03\u7528\u7ED3\u679C\u4E0D\u4E00\u81F4\uFF08\u786E\u5B9A\u6027\u786C\u7EA6\u675F\u4E0D\u8FC7\uFF09");
@@ -25056,7 +26901,7 @@ function smokeTestGameEngine(engine10) {
   }
   return { ok: reasons.length === 0, reasons };
 }
-function errorMessage5(cause) {
+function errorMessage6(cause) {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
@@ -39280,18 +41125,18 @@ async function executeRun(ctx, deps, scope, active) {
       { role: "user", id: randomUUID10(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
     ];
     let outcome = "completed";
-    let errorMessage6;
+    let errorMessage7;
     let report;
     for (; ; ) {
       if (run.llmRequests >= run.budget) {
         outcome = "budget-exhausted";
-        errorMessage6 = `reached the run budget of ${run.budget} LLM requests; completed work is kept, unreported ranges stay pending`;
+        errorMessage7 = `reached the run budget of ${run.budget} LLM requests; completed work is kept, unreported ranges stay pending`;
         break;
       }
       const conversationChars = messages.reduce((total, message) => total + JSON.stringify(message.content).length, 0);
       if (conversationChars > MAINTENANCE_CONVERSATION_MAX_CHARS) {
         outcome = "budget-exhausted";
-        errorMessage6 = "maintenance conversation exceeded the run context guard; completed work is kept";
+        errorMessage7 = "maintenance conversation exceeded the run context guard; completed work is kept";
         break;
       }
       run.llmRequests += 1;
@@ -39317,17 +41162,17 @@ async function executeRun(ctx, deps, scope, active) {
         }
       } catch (error) {
         outcome = "error";
-        errorMessage6 = `LLM request failed: ${error instanceof Error ? error.message : String(error)}`;
+        errorMessage7 = `LLM request failed: ${error instanceof Error ? error.message : String(error)}`;
         break;
       }
       if (finishReason === void 0) {
         outcome = "error";
-        errorMessage6 = "LLM stream ended without a finish chunk";
+        errorMessage7 = "LLM stream ended without a finish chunk";
         break;
       }
       if (finishReason.kind === "error" || finishReason.kind === "aborted") {
         outcome = "error";
-        errorMessage6 = `LLM stream failed (${finishReason.kind}): ${finishReason.failure?.message ?? "unknown failure"}`;
+        errorMessage7 = `LLM stream failed (${finishReason.kind}): ${finishReason.failure?.message ?? "unknown failure"}`;
         break;
       }
       if (!blocks.some((block) => block.type === "text") && textBuffer !== "") {
@@ -39341,7 +41186,7 @@ async function executeRun(ctx, deps, scope, active) {
       }
       if (finishReason.kind === "max-tokens") {
         outcome = "error";
-        errorMessage6 = "maintenance response truncated at the token cap";
+        errorMessage7 = "maintenance response truncated at the token cap";
         break;
       }
       for (const call of toolCalls) {
@@ -39357,10 +41202,10 @@ async function executeRun(ctx, deps, scope, active) {
       }
     }
     if (outcome === "error") {
-      await finish("error", outcome, errorMessage6);
+      await finish("error", outcome, errorMessage7);
       return;
     }
-    const closing = report !== void 0 ? report.slice(0, 2e3) : errorMessage6;
+    const closing = report !== void 0 ? report.slice(0, 2e3) : errorMessage7;
     await finish("done", outcome, closing);
   } finally {
     activeRuns.delete(key);
@@ -43818,7 +45663,8 @@ async function handleAgentTavernBodyApi(ctx, db, req, res, url, route, method) {
       character2 = await db.getCharacter(binding2.character);
       chat = (await db.getChatSnapshot(binding2.character, binding2.chatId))?.chat;
     }
-    const stateSafety2 = binding2 === void 0 || !bodyBindingEligible(binding2) ? void 0 : chat === void 0 ? { safe: false, reason: "body-state-unsafe", detail: "chat-unreadable" } : bodyStateSafetyOf(character2, chat);
+    const stateSafety2 = binding2 === void 0 || !bodyBindingEligible(binding2) ? void 0 : bodyStateSafetyOf(character2, chat);
+    const historicalMvuState = character2 !== void 0 && chat !== void 0 && bodyHistoricalMvuStateOf(character2, chat);
     const agent2 = resolveLiveAgent(wiring, sessionId2);
     const deps2 = agent2 === void 0 ? void 0 : await createBodyDeps(wiring, agent2);
     const projected = characterName2 !== void 0 && chatId2 !== void 0 && chat !== void 0 ? await projectedBodyFloor(db, state, characterName2, chatId2, chat, character2, messageId) : void 0;
@@ -43845,6 +45691,8 @@ async function handleAgentTavernBodyApi(ctx, db, req, res, url, route, method) {
       agent: agent2,
       hostSupported: deps2 !== void 0,
       stateSafety: stateSafety2,
+      historicalMvuState,
+      writeRollbackAvailable: deps2?.writeRollback !== void 0,
       ledger,
       messageText: messageText4,
       projected,
@@ -43874,9 +45722,10 @@ async function handleAgentTavernBodyApi(ctx, db, req, res, url, route, method) {
       detail: "chat-unreadable"
     });
   }
+  const action = route === "body" ? "edit" : route === "body/select" ? "select" : "regenerate";
   const character = await db.getCharacter(characterName);
   const snapshot2 = await db.getChatSnapshot(characterName, chatId);
-  const stateSafety = snapshot2 === void 0 ? { safe: false, reason: "body-state-unsafe", detail: "chat-unreadable" } : bodyStateSafetyOf(character, snapshot2.chat);
+  const stateSafety = bodyMutationSafetyOf(action, character, snapshot2?.chat);
   if (!stateSafety.safe) {
     return sendBodyFailure(res, {
       status: 409,
@@ -43899,6 +45748,14 @@ async function handleAgentTavernBodyApi(ctx, db, req, res, url, route, method) {
       status: 501,
       code: "host-unsupported",
       message: "this host does not expose appendPluginRecord/pluginRecordOf (DSH 0.2.1-rc.2+)"
+    });
+  }
+  if (action === "regenerate" && deps.writeRollback === void 0 && snapshot2 !== void 0 && bodyHistoricalMvuStateOf(character, snapshot2.chat)) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: "body-state-unsafe",
+      message: bodyStateUnsafeMessage("write-journal-unavailable"),
+      detail: "write-journal-unavailable"
     });
   }
   try {
