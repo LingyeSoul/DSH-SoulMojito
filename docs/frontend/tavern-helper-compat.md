@@ -522,7 +522,7 @@ iframe 头里会注入（走 CSP 白名单的 jsdelivr）：
 | `retrieveDisplayedMessage` / `refreshOneMessage` | ❌ | 宿主消息 DOM 在沙箱外，显式抛错 |
 | `errorCatched(fn)` | ✅ | 同步/Promise 错误弹 error toast 后继续抛出 |
 | `playAudio(type, {url, title?})` / `pauseAudio(type)` / `audioEnable` / `audioImport` / `audioMode` / `audioPlay` / `audioSelect` | ✅ | iframe 内 `<audio>`，`bgm` / `ambient` 两通道 |
-| `getAudioList` / `replaceAudioList` / `appendAudioList` / `getAudioSettings` / `setAudioSettings` / `getCurrentAudio` | ⚠️ | 进程内音频状态，语义对齐 JSR 的可观察字段；不持久化、不跨 iframe |
+| `getAudioList` / `replaceAudioList` / `appendAudioList` / `getAudioSettings` / `setAudioSettings` / `getCurrentAudio` | ⚠️ | 语义对齐 JSR 的可观察字段；状态在沙箱 localStorage **按角色持久**（见 §2.5，上限 512KB/角色），刷新/重开聊天后仍在；不跨 iframe 实时同步，重载后不自动续播 |
 | `localStorage` | ✅ | 按角色持久，见 §2.5（上限 512KB/角色）；`sessionStorage` 仍为 iframe 内存 |
 | `indexedDB` | ✅ | 虚拟 IndexedDB，见 §2.5：单 store 的 open/create/transaction/get/put/delete/clear/getAll/getAllKeys/deleteDatabase、createIndex、index 查询与 cursor、`IDBKeyRange`；二进制与普通对象两种记录都支持；`unique`/`multiEntry`/`index.delete`/`cursor.update` 与多 store 原子事务仍不支持 |
 | `getCharNames()` / `getCharacterNames()` | ✅ | 角色名列表 |

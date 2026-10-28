@@ -678,6 +678,9 @@ function checkFrontendRuntimeText(text) {
     "sandbox: 'allow-scripts allow-modals allow-forms'",
     "form-action 'self' about: blob:",
     "connect-src blob:",
+    // 音频播放放宽（2026-10-22，兼容面 §5.3）：media-src 必须放行 data:/blob:/https:，
+    // 丢掉这条会让卡内 playAudio 的 blob / CDN 音源静默无声。
+    "media-src data: blob: https:",
     'event.source !== frameRef.current?.contentWindow',
     'message.streaming',
     // Mod UI 表面（提案 0015 §3.5 P2）：postMessage 数据桥 + 桥路径预校验 +
@@ -2635,6 +2638,8 @@ const gates = [
         "sandbox: 'allow-scripts allow-modals allow-forms'",
         "form-action 'self' about: blob:",
         "connect-src blob:",
+        // 音频播放放宽（2026-10-22）：丢 media-src 放行即翻红——与 checker 逐条对齐。
+        'media-src data: blob: https:',
         'event.source !== frameRef.current?.contentWindow',
         'message.streaming',
         'dsh-soulmojito:mod-request',
@@ -2752,6 +2757,9 @@ const gates = [
       const badFrameTheme = good.replace('dsh-soulmojito:theme', 'dsh-soulmojito:palette')
       const badBridge = good.replace('dsh-soulmojito:mod-request', 'dsh-soulmojito:mod-bridge-removed')
       const badEvent = good.replace('dsh-soulmojito:mod-event', 'dsh-soulmojito:mod-gone')
+      // 音频播放放宽（2026-10-22）：CSP media-src 放行被删必须翻红——替换文本
+      // 不含原 marker 的任何前缀/子串。
+      const badCspMedia = good.replace('media-src data: blob: https:', "media-src 'none'")
       // 负样本必须真移除 marker：替换文本不得以原 marker 为前缀/子串（含 includes
       // 匹配），否则负样本形同虚设（上一批的已知坑）。
       const badViewportVar = good.replace("'--dt-viewport-height'", "'--dt-vh-gone'")
@@ -2845,6 +2853,7 @@ const gates = [
         && checkFrontendRuntimeText(badFrameTheme).length > 0
         && checkFrontendRuntimeText(badBridge).length > 0
         && checkFrontendRuntimeText(badEvent).length > 0
+        && checkFrontendRuntimeText(badCspMedia).length > 0
         && checkFrontendRuntimeText(badViewportVar).length > 0
         && checkFrontendRuntimeText(badViewportMsg).length > 0
         && checkFrontendRuntimeText(badReasoningConsume).length > 0

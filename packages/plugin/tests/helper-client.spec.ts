@@ -150,6 +150,8 @@ describe('TavernHelper compatibility layer (main.js source check)', () => {
     expect(source).toContain("if (data.op === 'storage.set') frontendStorageCache.delete(current.character)")
     expect(source).toContain('storageSeed === null')
     expect(source).toContain('font-src data: blob: https:')
+    // 音频播放放宽（2026-10-22）：media-src 放行是 playAudio 的 blob/CDN 音源前提。
+    expect(source).toContain('media-src data: blob: https:')
   })
 
   it('ships the virtual IndexedDB bridge and binary routes', () => {
