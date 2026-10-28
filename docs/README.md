@@ -29,6 +29,7 @@
 | [`0017`](proposals/0017-local-onnx-embed.md) | 本地 ONNX embed（provider 判别联合、目录指纹向量身份、dtype FP16 优先链） |
 | [`0018`](proposals/0018-agent-game-bridge.md) | Agent 游戏桥——标准游戏引擎 + 侧边栏对局面 + Mod/导入扩展 |
 | [`0020`](proposals/0020-novel-import-continuation-and-revision.md) | AgentNovel 原作导入续写（章节切分、逐部分提取、bible 熔炼）与正文优化 |
+| [`0021`](proposals/0021-agent-tavern-body-ops.md) | AgentTavern 正文编辑、重生成与正文候选（DSH 原生 seam，不 fork） |
 
 ## 开发者文档（`mods/`、`games/`、`frontend/`）
 
@@ -80,6 +81,7 @@
 - [`2026-10-09-agent-preset-cache-stability.md`](../decisions/2026-10-09-agent-preset-cache-stability.md) — 预设投影的前缀缓存稳定性（冻结投影）
 - [`2026-10-09-agent-tavern-preset-projection.md`](../decisions/2026-10-09-agent-tavern-preset-projection.md) — AgentTavern 预设投影（提示词块 + `temperature`）
 - [`2026-10-11-agent-tavern-host-fork.md`](../decisions/2026-10-11-agent-tavern-host-fork.md) — AgentTavern 收养宿主原生会话分叉（fork adoption）
+- [`2026-10-28-agent-tavern-body-plugin-records.md`](../decisions/2026-10-28-agent-tavern-body-plugin-records.md) — 正文状态持久化采用实验 plugin record（版本门控 + 政策披露）
 
 ### AgentNovel
 

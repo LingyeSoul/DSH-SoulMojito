@@ -166,6 +166,9 @@
       useAssistantSlotVersion()
       const state = useTavernStore()
       const binding = state.bootstrap.state.sessionBindings?.[props.tavernSessionId]
+      const tavernBinding = binding && binding.architecture === 'agent-tavern' && binding.group !== true
+        ? binding
+        : undefined
       const blocks = props.node?.data?.blocks || []
       // The projector only stores message-less tool steps as nothing; asking
       // for them would burn retries on a lookup that can never resolve.
@@ -173,13 +176,18 @@
         || !blocks.some((block) => block?.kind === 'text')
         ? undefined
         : props.node?.data?.finalNode?.messageId
-      const displayText = useTavernDisplayText(
-        binding && binding.architecture === 'agent-tavern' && binding.group !== true ? binding : undefined,
-        messageId,
-      )
-      const node = withTavernDisplayText(props.node, displayText)
+      const displayText = useTavernDisplayText(tavernBinding, messageId)
+      // The body ledger knows which old candidates are shadowed and which text
+      // is the current anchor. Display lookup stays in parallel as the fallback
+      // while the body route is unavailable or the row is not projected yet.
+      const bodyState = useTavernBody(tavernBinding ? props.tavernSessionId : undefined, messageId)
       const hostEntry = findHostAssistantEntry(PanelHost.context)
       const usePresentation = useTavernPresentation(hostEntry)
+      if (bodyState.body?.hidden === true) return null
+      const bodyText = bodyState.body && typeof bodyState.body.text === 'string'
+        ? bodyState.body.text
+        : undefined
+      const node = withTavernDisplayText(props.node, bodyText !== undefined ? bodyText : displayText)
       if (!hostEntry) return h(TavernAssistantFallback, { node })
       return h(hostEntry.component, {
         ...props,
@@ -196,8 +204,48 @@
       return entries.find((entry) => entry?.options?.key === 'assistant-step' && entry.component !== TavernAssistantNode)
     }
 
+    function nodeSourceForm(node) {
+      const source = node?.data?.source
+      if (source && typeof source === 'object' && typeof source.form === 'string') return source.form
+      return typeof node?.data?.form === 'string' ? node.data.form : ''
+    }
+
+    const TavernTurnTriggerNode = React.memo(function TavernTurnTriggerNode(props) {
+      const form = nodeSourceForm(props.node)
+      if (form === 'body-regenerate' || form === 'body-restore') return null
+      const hostEntry = findHostTurnTriggerEntry(PanelHost.context)
+      if (!hostEntry) return null
+      return h(hostEntry.component, props)
+    })
+
+    function findHostTurnTriggerEntry(ctx) {
+      const entries = typeof ctx?.slots?.entries === 'function'
+        ? ctx.slots.entries('conversation.chat.node')
+        : []
+      return entries.find((entry) => entry?.options?.key === 'turn-trigger' && entry.component !== TavernTurnTriggerNode)
+    }
+
+    // Empty developer replacements written by the body runtime only exist to
+    // shadow old candidates; the host renders them as generic "context" rows.
+    // Hide exactly the body-hide form (and the two trigger forms when they
+    // surface as context) and delegate every other context row to the host.
+    const TavernContextNode = React.memo(function TavernContextNode(props) {
+      const form = nodeSourceForm(props.node)
+      if (form === 'body-hide' || form === 'body-regenerate' || form === 'body-restore') return null
+      const hostEntry = findHostContextEntry(PanelHost.context)
+      if (!hostEntry) return null
+      return h(hostEntry.component, props)
+    })
+
+    function findHostContextEntry(ctx) {
+      const entries = typeof ctx?.slots?.entries === 'function'
+        ? ctx.slots.entries('conversation.chat.node')
+        : []
+      return entries.find((entry) => entry?.options?.key === 'context' && entry.component !== TavernContextNode)
+    }
+
     function registerTavernAssistantNode(ctx) {
-      return ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
+      const disposeAssistant = ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
         name: 'conversation.chat.node',
         key: 'assistant-step',
         // Lower priority wins a keyed cell; the host default is priority 0.
@@ -205,4 +253,22 @@
         locale: 'chat',
         inject: (sessionId) => ({ tavernSessionId: sessionId }),
       }, TavernAssistantNode))
+      const disposeTrigger = ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
+        name: 'conversation.chat.node',
+        key: 'turn-trigger',
+        priority: -1,
+        locale: 'chat',
+      }, TavernTurnTriggerNode))
+      const disposeContext = ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
+        name: 'conversation.chat.node',
+        key: 'context',
+        priority: -1,
+        locale: 'chat',
+      }, TavernContextNode))
+      const disposeActions = registerTavernBodyActions(ctx)
+      return () => {
+        for (const dispose of [disposeActions, disposeContext, disposeTrigger, disposeAssistant]) {
+          if (typeof dispose === 'function') dispose()
+        }
+      }
     }

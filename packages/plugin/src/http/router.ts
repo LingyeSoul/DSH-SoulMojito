@@ -10,10 +10,27 @@ import {
   moveOriginalSnapshot,
   saveOriginalSnapshot,
   type TavernModelSelection,
+  type TavernState,
+  type TavernStore,
 } from '../../../tavern-store/src/index.js'
 import { readSessionEvents, type HostSessionLog } from '../../../bind/src/index.js'
 import { getIdbRecord, IDB_MAX_RECORD_BYTES, putIdbRecordFromFile } from '../../../tavern-frontend-storage/src/index.js'
 import { emitAgentPresetChanged } from '../agent-tavern/preset.js'
+import { applyBodyEdit, bodyRuntimeError, selectBodyCandidate, startRegenerate } from '../agent-tavern/body-runtime.js'
+import {
+  bodyBindingEligible,
+  bodyFailureOf,
+  bodyStateSafetyOf,
+  bodyStateUnsafeMessage,
+  bodyWiringContext,
+  buildBodyView,
+  createBodyDeps,
+  readBodySessionFacts,
+  resolveBodyBinding,
+  resolveLiveAgent,
+  type BodyProjectedFloor,
+  type BodyStateSafety,
+} from '../agent-tavern/body-wiring.js'
 import { seedJsrMvuVariables } from '../agent-tavern/mvu-compat.js'
 import { serveCharacterAvatar, sendAvatarFallback } from '../assets.js'
 import { BUILD_INFO, TAVERN_COMMIT } from '../build-info.js'
@@ -286,6 +303,18 @@ export async function handleApi(ctx: PluginContext, req: HttpRequest, res: HttpR
       memories: [...memoryGroups.flat().map((hit) => hit.record), ...globalMemories.map((hit) => hit.record)],
       variables: [...variableGroups.flat(), ...globalVariables],
     })
+  }
+
+  // ---- AgentTavern body operations (proposal 0021 §7.3) ----
+  // GET is a display lookup with a stable empty body (never 500 for a cold or
+  // unprojected session); mutations are serialized inside the runtime's
+  // per-session `withBodyLock`, so no outer lock is taken here.
+  if (
+    (method === 'GET' && route === 'body')
+    || (method === 'PUT' && route === 'body')
+    || (method === 'POST' && (route === 'body/regenerate' || route === 'body/select'))
+  ) {
+    return handleAgentTavernBodyApi(ctx, db, req, res, url, route, method)
   }
 
   if (route === 'novels' || route.startsWith('novels/')) {
@@ -1403,6 +1432,244 @@ export async function handleApi(ctx: PluginContext, req: HttpRequest, res: HttpR
   }
 
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+}
+
+/**
+ * AgentTavern body routes (proposal 0021 §7.3).
+ *
+ * GET never throws for missing projection: a cold or not-yet-projected session
+ * gets the stable empty body so the native row still renders. Mutations reject
+ * with the proposal §11 code and the HTTP status mapped by `bodyFailureOf`.
+ * The runtime functions own the per-session mutation lock; taking a second
+ * `withBodyLock` here would deadlock the same key.
+ */
+export async function handleAgentTavernBodyApi(
+  ctx: PluginContext,
+  db: TavernStore,
+  req: HttpRequest,
+  res: HttpResponse,
+  url: URL,
+  route: string,
+  method: string,
+): Promise<void> {
+  const wiring = bodyWiringContext(ctx, async (sessionId) => (await db.getState()).sessionBindings[sessionId])
+
+  if (method === 'GET') {
+    const sessionId = url.searchParams.get('sessionId')
+    const messageId = url.searchParams.get('messageId')
+    if (sessionId === null || sessionId === '' || messageId === null || messageId === '') {
+      throw new HttpError(400, 'sessionId and messageId are required')
+    }
+
+    const state = await db.getState()
+    const binding = state.sessionBindings[sessionId]
+    let characterName: string | undefined
+    let chatId: string | undefined
+    let character: Awaited<ReturnType<TavernStore['getCharacter']>> = undefined
+    let chat: ChatLogIR | undefined
+    if (binding !== undefined && bodyBindingEligible(binding)) {
+      characterName = binding.character
+      chatId = binding.chatId
+      character = await db.getCharacter(binding.character)
+      chat = (await db.getChatSnapshot(binding.character, binding.chatId))?.chat
+    }
+    const stateSafety: BodyStateSafety | undefined = binding === undefined || !bodyBindingEligible(binding)
+      ? undefined
+      : chat === undefined
+        ? { safe: false, reason: 'body-state-unsafe', detail: 'chat-unreadable' }
+        : bodyStateSafetyOf(character, chat)
+    const agent = resolveLiveAgent(wiring, sessionId)
+    const deps = agent === undefined ? undefined : await createBodyDeps(wiring, agent)
+    const projected = characterName !== undefined && chatId !== undefined && chat !== undefined
+      ? await projectedBodyFloor(db, state, characterName, chatId, chat, character, messageId)
+      : undefined
+
+    let ledger: ReturnType<typeof readBodySessionFacts>['ledger'] = undefined
+    let messageText: string | undefined = undefined
+    let inspection: ReturnType<typeof readBodySessionFacts>['inspection'] = undefined
+    const session = agent?.session
+    if (session !== undefined) {
+      const facts = readBodySessionFacts(session, messageId, projected?.groupId)
+      ledger = facts.ledger
+      messageText = facts.messageText
+      inspection = facts.inspection
+      if (facts.ledgerError !== undefined) {
+        ctx.logger?.warn?.('dsh-soulmojito body: ledger fold failed for GET body', {
+          sessionId,
+          messageId,
+          error: facts.ledgerError,
+        })
+      }
+    }
+
+    return sendJson(res, 200, buildBodyView({
+      messageId,
+      binding,
+      agent,
+      hostSupported: deps !== undefined,
+      stateSafety,
+      ledger,
+      messageText,
+      projected,
+      inspection,
+    }))
+  }
+
+  const body = await readJson(req)
+  const sessionId = typeof body.sessionId === 'string' ? body.sessionId : ''
+  if (sessionId === '') {
+    return sendBodyFailure(res, { status: 400, code: 'invalid-body-text', message: 'sessionId is required' })
+  }
+  const binding = await resolveBodyBinding(wiring, sessionId)
+  if (binding === undefined || !bodyBindingEligible(binding)) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: 'architecture-mismatch',
+      message: 'body operations require an AgentTavern single-character binding',
+    })
+  }
+  const characterName = binding.character
+  const chatId = binding.chatId
+  if (characterName === undefined || chatId === undefined) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: 'body-state-unsafe',
+      message: bodyStateUnsafeMessage('chat-unreadable'),
+      detail: 'chat-unreadable',
+    })
+  }
+  // Proposal 0021 §10 P0: an MVU-declared card or a chat that already carries
+  // MVU state cannot be safely replayed. Refuse before resolving the agent or
+  // entering the runtime lock, so no event or tool restriction is written.
+  const character = await db.getCharacter(characterName)
+  const snapshot = await db.getChatSnapshot(characterName, chatId)
+  const stateSafety: BodyStateSafety = snapshot === undefined
+    ? { safe: false, reason: 'body-state-unsafe', detail: 'chat-unreadable' }
+    : bodyStateSafetyOf(character, snapshot.chat)
+  if (!stateSafety.safe) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: stateSafety.reason,
+      message: bodyStateUnsafeMessage(stateSafety.detail),
+      detail: stateSafety.detail,
+    })
+  }
+  const agent = resolveLiveAgent(wiring, sessionId)
+  if (agent === undefined) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: 'session-busy',
+      message: `session '${sessionId}' has no live agent in this host process; open the chat and retry`,
+    })
+  }
+  const deps = await createBodyDeps(wiring, agent)
+  if (deps === undefined) {
+    return sendBodyFailure(res, {
+      status: 501,
+      code: 'host-unsupported',
+      message: 'this host does not expose appendPluginRecord/pluginRecordOf (DSH 0.2.1-rc.2+)',
+    })
+  }
+
+  try {
+    const groupId = bodyString(body, 'groupId') ?? bodyString(body, 'messageId')
+    if (groupId === undefined) throw bodyRuntimeError('invalid-arguments', 'groupId or messageId is required')
+    const expectedAnchorId = bodyString(body, 'expectedAnchorId') ?? groupId
+
+    if (route === 'body') {
+      const index = bodyIndex(body, 'index')
+      if (typeof body.text !== 'string') {
+        throw bodyRuntimeError('invalid-body-text', 'body edit requires a string text')
+      }
+      const state = await applyBodyEdit(deps, { groupId, index, text: body.text, expectedAnchorId })
+      return sendJson(res, 200, { ok: true, state })
+    }
+
+    if (route === 'body/regenerate') {
+      const expectedIndex = bodyIndex(body, 'expectedIndex')
+      const feedback = typeof body.feedback === 'string' ? body.feedback : undefined
+      const result = await startRegenerate(deps, {
+        groupId,
+        expectedAnchorId,
+        expectedIndex,
+        ...(feedback === undefined ? {} : { feedback }),
+      })
+      // The turn settles asynchronously from agent/turn-stopping; the client
+      // polls GET body and unlocks when count/selectedIndex change.
+      return sendJson(res, 202, { ok: true, opId: result.opId, status: 'pending' })
+    }
+
+    const index = bodyIndex(body, 'index')
+    const state = await selectBodyCandidate(deps, { groupId, index, expectedAnchorId })
+    return sendJson(res, 200, { ok: true, state })
+  } catch (error) {
+    return sendBodyFailure(res, bodyFailureOf(error))
+  }
+}
+
+function sendBodyFailure(
+  res: HttpResponse,
+  failure: { readonly status: number; readonly code: string; readonly message: string; readonly detail?: string },
+): void {
+  sendJson(res, failure.status, {
+    ok: false,
+    code: failure.code,
+    message: failure.message,
+    ...(failure.detail === undefined ? {} : { detail: failure.detail }),
+  })
+}
+
+function bodyString(body: Record<string, unknown>, field: string): string | undefined {
+  const value = body[field]
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined
+}
+
+function bodyIndex(body: Record<string, unknown>, field: string): number {
+  const value = body[field]
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw bodyRuntimeError('invalid-arguments', `${field} must be a non-negative safe integer`)
+  }
+  return value
+}
+
+/**
+ * Resolve the JSONL floor for one native message id and return its display
+ * layer facts. Text already carries markdownOnly regex scripts, matching the
+ * existing `/display` route; the body ledger stays the fallback when a floor
+ * has not been projected yet.
+ */
+async function projectedBodyFloor(
+  db: TavernStore,
+  state: TavernState,
+  characterName: string,
+  chatId: string,
+  chat: ChatLogIR,
+  card: Awaited<ReturnType<TavernStore['getCharacter']>>,
+  messageId: string,
+): Promise<BodyProjectedFloor | undefined> {
+  const index = chat.messages.findIndex((message) => {
+    const tavern = asRecord(asRecord(message.extra)?.['agentTavern'])
+    if (tavern === undefined) return false
+    return tavern['messageId'] === messageId
+      || tavern['anchorMessageId'] === messageId
+      || tavern['bodyGroupId'] === messageId
+  })
+  if (index < 0) return undefined
+
+  const floor = chat.messages[index]!
+  const tavern = asRecord(asRecord(floor.extra)?.['agentTavern'])
+  const scripts = await collectSessionRegexScripts(db, state, characterName, chatId, card)
+  const text = stripFrontendDocuments(displayTextForMessage(scripts, floor, chat.messages.length - 1 - index))
+  const selectedIndex = floor.swipe_id
+  const count = Array.isArray(floor.swipes) && floor.swipes.length > 0 ? floor.swipes.length : 1
+
+  return {
+    ...(typeof tavern?.['bodyGroupId'] === 'string' ? { groupId: tavern['bodyGroupId'] } : {}),
+    ...(typeof tavern?.['anchorMessageId'] === 'string' ? { anchorMessageId: tavern['anchorMessageId'] } : {}),
+    ...(typeof selectedIndex === 'number' && Number.isSafeInteger(selectedIndex) ? { selectedIndex } : {}),
+    count,
+    text,
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

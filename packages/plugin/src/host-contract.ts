@@ -100,6 +100,8 @@ export interface HostAgentLike {
 export interface HostAgentsService {
   get?(id: string): HostAgentLike | undefined | null
   create?(...args: unknown[]): unknown
+  /** All live agents, in registration order (0.2.x registry shape). */
+  list?(): readonly HostAgentLike[]
 }
 
 export interface HostSessionEventLike extends HostSessionEvent {
@@ -161,6 +163,28 @@ export interface HostSessionProjectionsService {
   stateOf?(session: unknown, key: string): unknown
 }
 
+/**
+ * In-memory `ctx.sessions` store (DSH 0.2.x). Message projections are
+ * long-lived contributions: the disposer belongs to the registering fiber and
+ * must be retained for unload, not feature toggling.
+ */
+export interface HostSessionsService {
+  registerMessageProjection?(projection: unknown): (() => void) | void
+  get?(id: string): unknown
+  list?(): readonly unknown[]
+}
+
+/**
+ * `agent/turn-stopping` payload. The host serial event carries the subject
+ * agent, the turn that is about to close and its cancellation signal.
+ */
+export interface HostTurnStoppingPayload {
+  turn?: unknown
+  signal?: unknown
+  agent?: HostAgentLike
+  agentId?: unknown
+}
+
 export interface HostWebRoute {
   kind: 'prefix'
   path: string
@@ -192,6 +216,7 @@ export interface PluginContext {
   effect(callback: () => (() => void) | void, label?: string): unknown
   logger?: HostLogger
   agents?: HostAgentsService
+  sessions?: HostSessionsService
   tools?: HostToolService
   agentPresets?: HostAgentPresetsService
   compaction?: HostCompactionService
@@ -205,6 +230,7 @@ export interface PluginContext {
   inject?(deps: readonly string[], callback: (serviceContext: PluginContext) => unknown): unknown
   on?(event: 'session/event', listener: (session: HostSessionLike, event: HostSessionEventLike) => unknown): unknown
   on?(event: 'agent/created', listener: (payload: { agent: HostAgentLike }) => unknown): unknown
+  on?(event: 'agent/turn-stopping', listener: (payload: HostTurnStoppingPayload) => unknown): unknown
   on?(event: 'agent/request', listener: (payload: unknown, next: () => Promise<unknown>) => unknown): unknown
   on?(event: 'agent/pre-step', listener: (payload: unknown, next: () => Promise<unknown>) => unknown): unknown
   on?(event: 'tools/change', listener: () => unknown): unknown

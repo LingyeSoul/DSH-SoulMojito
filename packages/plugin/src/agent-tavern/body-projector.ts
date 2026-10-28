@@ -1,0 +1,393 @@
+/**
+ * AgentTavern JSONL projection for body log records (proposal 0021).
+ *
+ * This module owns the body-only half of the projector: the
+ * `plugin:dsh-soulmojito/body` event branch, the checkpoint-scoped handling of
+ * candidate / select / edit / restore records, the ledger fold that resolves
+ * anchor and candidate slots, the trigger-turn skip that keeps a regeneration
+ * or restore turn from adding a second floor, and the candidate text +
+ * provider metadata extraction with the same save-layer regex rule as the
+ * generic message projection.
+ *
+ * All JSONL writes go through `getChatSnapshot` + `saveChat(expectedRevision)`
+ * with the same four-attempt `ChatRevisionConflictError` retry as the generic
+ * floor append. The module never owns a lock of its own: the caller runs it on
+ * the session's `KeyedMutationTails` queue, so the projector stays the single
+ * writer.
+ */
+
+import { ChatRevisionConflictError, type ChatScriptsFile, type TavernSessionBinding, type TavernState } from '../../../tavern-store/src/index.js'
+import { RegexPlacement, type CharacterCardIR, type ChatLogIR } from '../../../tavern-format/src/index.js'
+import { applyRegexScripts } from '../../../tavern-script/src/index.js'
+import { sessionEvents, type HostSessionLog } from '../../../bind/src/index.js'
+import { collectSessionRegexScripts } from '../regex-session.js'
+import {
+  BODY_EVENT_TYPE,
+  BodyLedgerError,
+  foldBodyLedger,
+  type BodyEventData,
+  type BodyLedger,
+  type BodySessionEvent,
+} from './body.js'
+import {
+  BodyJsonlProjectionError,
+  applyCandidateToChat,
+  applyEditToChat,
+  applyRestoreToChat,
+  applySelectToChat,
+  type BodyJsonlCandidateInput,
+  type BodyJsonlUsage,
+} from './body-jsonl.js'
+
+/** State slice the body projection needs from the tavern store. */
+export type BodyProjectionState = Pick<
+  TavernState,
+  'sessionBindings' | 'regexScripts' | 'regexScriptOwners' | 'regexScriptPresetOwners' | 'activePreset'
+>
+
+/** Store surface consumed by the body projection; `ProjectorStore` extends it. */
+export interface BodyProjectionStore {
+  getState(): Promise<BodyProjectionState>
+  getCharacter(name: string): Promise<{ card: CharacterCardIR } | undefined>
+  getChatSnapshot(character: string, chatId: string): Promise<{ chat: ChatLogIR; revision: string } | undefined>
+  saveChat(character: string, chatId: string, chat: ChatLogIR, expectedRevision?: string): Promise<string>
+  getChatJsrOverlay(characterName: string, chatId: string): Promise<ChatScriptsFile | undefined>
+}
+
+/**
+ * Structural view of one native session event. `NativeSessionEvent` from
+ * `projector.ts` and the host event log both satisfy it.
+ */
+export interface BodyProjectionEvent {
+  readonly type: string
+  readonly seq: number
+  readonly time: number
+  readonly data?: unknown
+}
+
+/* ------------------------------- entry points ------------------------------ */
+
+/** Whether a session event type is the body log record type. */
+export function isBodyLogEvent(eventType: string): boolean {
+  return eventType === BODY_EVENT_TYPE
+}
+
+/**
+ * Project one `plugin:dsh-soulmojito/body` record into the saved chat.
+ *
+ * `op-start` / `op-finish` are bookkeeping only. The four write ops fold the
+ * shared body ledger at `event.seq` first, then apply the matching pure JSONL
+ * transform; a missing ledger slot or a watermark mismatch throws a typed
+ * error instead of writing a wrong slot, and the caller records a pending
+ * checkpoint so the event can be replayed after repair.
+ */
+export async function projectBodyEvent(
+  store: BodyProjectionStore,
+  session: HostSessionLog,
+  state: BodyProjectionState,
+  binding: Extract<TavernSessionBinding, { architecture: 'agent-tavern' }>,
+  event: BodyProjectionEvent,
+): Promise<void> {
+  const record = plainObjectRecord(event.data)
+  if (record === undefined) {
+    throw new BodyLedgerError('invalid-body-event', `body event seq ${event.seq} must carry an object data payload`)
+  }
+  const op = record['op']
+  if (op === 'op-start' || op === 'op-finish') return
+  if (op !== 'candidate' && op !== 'select' && op !== 'edit' && op !== 'restore') {
+    throw new BodyLedgerError('invalid-body-op', `body event seq ${event.seq} has unknown op '${String(op)}'`)
+  }
+
+  // foldBodyLedger validates every field of this event at the watermark, so
+  // this cast is checked at runtime by the fold before any JSONL write.
+  const data = record as unknown as Extract<
+    BodyEventData,
+    { op: 'candidate' } | { op: 'select' } | { op: 'edit' } | { op: 'restore' }
+  >
+  const ledger = foldBodyLedger(bodySessionEvents(session), data.groupId, event.seq)
+
+  if (data.op === 'candidate') {
+    const slot = requireProjectedCandidate(ledger, data, event.seq)
+    const resolved = resolveBodyCandidateMessage(session, data.messageId, event.seq)
+    const character = await store.getCharacter(binding.character)
+    const scripts = await collectSessionRegexScripts(store, state, binding.character, binding.chatId, character)
+    // Same save-layer rule as the generic projection: non promptOnly, non markdownOnly.
+    const saveScripts = scripts.filter((script) => !script.promptOnly && !script.markdownOnly)
+    const text = saveScripts.length > 0
+      ? applyRegexScripts(resolved.text, saveScripts, RegexPlacement.AI_OUTPUT)
+      : resolved.text
+    const input: BodyJsonlCandidateInput = {
+      groupId: data.groupId,
+      messageId: data.messageId,
+      index: slot.index,
+      text,
+      sendDate: eventDate(resolved.time),
+      ...(resolved.provider === undefined ? {} : { provider: resolved.provider }),
+      ...(resolved.model === undefined ? {} : { model: resolved.model }),
+      ...(resolved.usage === undefined ? {} : { usage: resolved.usage }),
+      ...(data.feedback === undefined ? {} : { feedback: data.feedback }),
+    }
+    await mutateBodyChat(store, binding, (chat) => applyCandidateToChat(chat, input))
+    return
+  }
+
+  if (data.op === 'select') {
+    const projected = requireProjectedLedger(ledger, event.seq, data.groupId)
+    if (projected.selectedIndex !== data.index) {
+      throw new BodyLedgerError(
+        'invalid-body-event',
+        `body event seq ${event.seq} select index ${data.index} does not match ledger index ${projected.selectedIndex} for group '${data.groupId}'`,
+      )
+    }
+    await mutateBodyChat(store, binding, (chat) => applySelectToChat(chat, {
+      groupId: data.groupId,
+      index: data.index,
+      anchorMessageId: projected.anchorMessageId,
+    }))
+    return
+  }
+
+  if (data.op === 'edit') {
+    const projected = requireProjectedLedger(ledger, event.seq, data.groupId)
+    if (projected.edits.get(data.index) !== data.text) {
+      throw new BodyLedgerError(
+        'invalid-body-event',
+        `body event seq ${event.seq} edit text does not match the folded edit at index ${data.index} for group '${data.groupId}'`,
+      )
+    }
+    await mutateBodyChat(store, binding, (chat) => applyEditToChat(chat, {
+      groupId: data.groupId,
+      index: data.index,
+      text: data.text,
+    }))
+    return
+  }
+
+  const projected = requireProjectedLedger(ledger, event.seq, data.groupId)
+  if (projected.anchorMessageId !== data.messageId || projected.selectedIndex !== data.index) {
+    throw new BodyLedgerError(
+      'invalid-body-event',
+      `body event seq ${event.seq} restore target '${data.messageId}' at index ${data.index} does not match ledger anchor '${projected.anchorMessageId}' at index ${projected.selectedIndex}`,
+    )
+  }
+  await mutateBodyChat(store, binding, (chat) => applyRestoreToChat(chat, {
+    groupId: data.groupId,
+    index: data.index,
+    messageId: data.messageId,
+  }))
+}
+
+/**
+ * An assistant message is merged into an existing body floor, instead of being
+ * appended as a new floor, when its turn is a body-regeneration/restore trigger
+ * turn or when a restore event points at this message id.
+ */
+export function isBodyMergedAssistant(session: HostSessionLog, event: BodyProjectionEvent): boolean {
+  const data = plainObjectRecord(event.data)
+  const message = data === undefined ? undefined : plainObjectRecord(data['message'])
+  const messageId = message?.['id']
+  if (typeof messageId === 'string' && messageId !== '' && isRestoredBodyMessage(session, messageId)) return true
+  return isBodyTriggerTurn(session, data?.['turn'])
+}
+
+/* -------------------------------- CAS writer ------------------------------- */
+
+async function mutateBodyChat(
+  store: BodyProjectionStore,
+  binding: Extract<TavernSessionBinding, { architecture: 'agent-tavern' }>,
+  mutate: (chat: ChatLogIR) => ChatLogIR,
+): Promise<void> {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const snapshot = await store.getChatSnapshot(binding.character, binding.chatId)
+    if (!snapshot) throw new Error('AgentTavern body projection target chat not found')
+    const next = mutate(structuredClone(snapshot.chat))
+    try {
+      await store.saveChat(binding.character, binding.chatId, next, snapshot.revision)
+      return
+    } catch (error) {
+      if (!(error instanceof ChatRevisionConflictError) || attempt === 3) throw error
+    }
+  }
+}
+
+/* -------------------------------- ledger ---------------------------------- */
+
+function isRestoredBodyMessage(session: HostSessionLog, messageId: string): boolean {
+  for (const event of sessionEvents(session) as readonly BodyProjectionEvent[]) {
+    if (event.type !== BODY_EVENT_TYPE) continue
+    const data = plainObjectRecord(event.data)
+    if (data !== undefined && data['op'] === 'restore' && data['messageId'] === messageId) return true
+  }
+  return false
+}
+
+/** Whether the first user message of `turn` is a synthetic body trigger. */
+function isBodyTriggerTurn(session: HostSessionLog, turn: unknown): boolean {
+  if (typeof turn !== 'number' || !Number.isSafeInteger(turn)) return false
+  let current: number | undefined
+  for (const event of sessionEvents(session) as readonly BodyProjectionEvent[]) {
+    if (event.type === 'turn/start') {
+      current = safeTurnNumber(plainObjectRecord(event.data)?.['turn'])
+      continue
+    }
+    if (event.type === 'turn/end') {
+      if (current === turn) return false
+      current = undefined
+      continue
+    }
+    if (current !== turn || event.type !== 'user/message') continue
+    const source = plainObjectRecord(plainObjectRecord(event.data)?.['source'])
+    const form = source?.['form']
+    return form === 'body-regenerate' || form === 'body-restore'
+  }
+  return false
+}
+
+function safeTurnNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) ? value : undefined
+}
+
+function bodySessionEvents(session: HostSessionLog): readonly BodySessionEvent[] {
+  const events: BodySessionEvent[] = []
+  for (const event of sessionEvents(session) as readonly BodyProjectionEvent[]) {
+    if (!Number.isSafeInteger(event.seq) || event.seq < 0) {
+      throw new BodyLedgerError(
+        'invalid-body-seq',
+        `session event '${String(event.type)}' has invalid seq ${String(event.seq)} while folding body events`,
+      )
+    }
+    if (typeof event.type !== 'string' || event.type === '') {
+      throw new BodyLedgerError('invalid-body-event', `session event at seq ${event.seq} has no type while folding body events`)
+    }
+    events.push({ seq: event.seq, type: event.type, data: event.data as unknown as BodySessionEvent['data'] })
+  }
+  return events
+}
+
+function requireProjectedLedger(ledger: BodyLedger | undefined, seq: number, groupId: string): BodyLedger {
+  if (ledger === undefined) {
+    throw new BodyLedgerError(
+      'invalid-body-event',
+      `body event seq ${seq} for group '${groupId}' has no candidate, so its JSONL slot cannot be resolved`,
+    )
+  }
+  return ledger
+}
+
+function requireProjectedCandidate(
+  ledger: BodyLedger | undefined,
+  data: Extract<BodyEventData, { op: 'candidate' }>,
+  seq: number,
+): BodyLedger['candidates'][number] {
+  const projected = requireProjectedLedger(ledger, seq, data.groupId)
+  if (projected.anchorMessageId !== data.messageId) {
+    throw new BodyLedgerError(
+      'invalid-body-event',
+      `body event seq ${seq} candidate '${data.messageId}' does not match ledger anchor '${projected.anchorMessageId}' for group '${data.groupId}'`,
+    )
+  }
+  const slot = projected.candidates[data.index]
+  if (slot === undefined) {
+    throw new BodyLedgerError(
+      'invalid-body-index',
+      `body event seq ${seq} candidate index ${data.index} is out of range for group '${data.groupId}' with ${projected.candidates.length} candidates`,
+    )
+  }
+  if (slot.messageId !== data.messageId) {
+    throw new BodyLedgerError(
+      'invalid-body-event',
+      `body event seq ${seq} candidate index ${data.index} holds '${slot.messageId}', not '${data.messageId}'`,
+    )
+  }
+  return slot
+}
+
+/* ------------------------- candidate message lookup ------------------------ */
+
+interface ResolvedBodyCandidate {
+  readonly time: number
+  readonly text: string
+  readonly provider?: string
+  readonly model?: string
+  readonly usage?: BodyJsonlUsage
+}
+
+/** Resolve candidate text and provider metadata from the session log. */
+function resolveBodyCandidateMessage(
+  session: HostSessionLog,
+  messageId: string,
+  uptoSeq: number,
+): ResolvedBodyCandidate {
+  let found: BodyProjectionEvent | undefined
+  for (const event of sessionEvents(session) as readonly BodyProjectionEvent[]) {
+    if (event.type !== 'assistant/message') continue
+    if (!Number.isSafeInteger(event.seq) || event.seq < 0 || event.seq > uptoSeq) continue
+    const message = plainObjectRecord(event.data)?.['message']
+    if (plainObjectRecord(message)?.['id'] !== messageId) continue
+    if (found === undefined || event.seq >= found.seq) found = event
+  }
+  if (found === undefined) {
+    throw new BodyLedgerError(
+      'body-candidate-message-missing',
+      `body candidate '${messageId}' has no assistant/message at or before seq ${uptoSeq}`,
+    )
+  }
+
+  const message = plainObjectRecord(plainObjectRecord(found.data)?.['message'])
+  const source = message === undefined ? undefined : plainObjectRecord(message['source'])
+  const text = messageText(message?.['content'])
+  if (text === '') {
+    throw new BodyJsonlProjectionError(
+      'invalid-body-text',
+      `body candidate '${messageId}' assistant message at seq ${found.seq} has no text`,
+    )
+  }
+  const provider = nonEmptyStringOf(source?.['provider'])
+  const model = nonEmptyStringOf(source?.['model'])
+  const usage = bodyUsage(plainObjectRecord(found.data)?.['usage'], found.seq)
+  return {
+    time: found.time,
+    text,
+    ...(provider === undefined ? {} : { provider }),
+    ...(model === undefined ? {} : { model }),
+    ...(usage === undefined ? {} : { usage }),
+  }
+}
+
+/* --------------------------------- helpers --------------------------------- */
+
+/** Keep numeric usage totals only; host detail objects are not JSONL metadata. */
+function bodyUsage(value: unknown, seq: number): BodyJsonlUsage | undefined {
+  if (value === undefined) return undefined
+  const record = plainObjectRecord(value)
+  if (record === undefined) {
+    throw new BodyLedgerError('invalid-body-event', `assistant/message at seq ${seq} has non-object usage`)
+  }
+  const usage: Record<string, number> = {}
+  for (const [key, member] of Object.entries(record)) {
+    if (typeof member === 'number' && Number.isFinite(member)) usage[key] = member
+  }
+  return Object.keys(usage).length === 0 ? undefined : usage
+}
+
+function nonEmptyStringOf(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined
+}
+
+function plainObjectRecord(value: unknown): Record<string, unknown> | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  return value as Record<string, unknown>
+}
+
+function messageText(content: unknown): string {
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter((block) => block?.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text)
+    .join('')
+    .trim()
+}
+
+function eventDate(time: number): string {
+  return new Date(Number.isFinite(time) ? time : Date.now()).toISOString()
+}

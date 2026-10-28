@@ -3,6 +3,13 @@ import { createDshAgentTavernAdapter } from './agent-tavern/dsh-adapter.js'
 import { adoptAgentTavernFork, type ForkAdoptionOutcome } from './agent-tavern/fork.js'
 import { emitAgentPresetChanged } from './agent-tavern/preset.js'
 import { AgentTavernProjector } from './agent-tavern/projector.js'
+import {
+  bodyWiringContext,
+  recoverBodyOperation,
+  recoverBodyOperations,
+  registerBodyProjection,
+  registerBodyTurnStopping,
+} from './agent-tavern/body-wiring.js'
 import { registerAgentTavernAnchor } from './agent-tavern/anchor.js'
 import { registerAgentTavernCardState } from './agent-tavern/card-state.js'
 import { registerAgentTavernPromptCapture } from './agent-tavern/prompt-capture.js'
@@ -48,11 +55,20 @@ import type { PluginContext } from './host-contract.js'
 import { ensureAgentPresetDeclared, handleNovelSessionEvent, novelHttpFailure, recoverMountedNovels } from './http/novel.js'
 
 export const name = 'dsh-soulmojito'
-export const inject = ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands', 'agents', 'agentPresets', 'tools', 'compaction']
+export const inject = ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands', 'agents', 'agentPresets', 'tools', 'compaction', 'sessions']
 export function apply(ctx: PluginContext, config: { anchorEveryTurns?: unknown, checkForUpdates?: unknown, templateEnabled?: unknown, allowedHosts?: unknown } = {}): void {
   // Fail fast before mounting any surface: a malformed allowlist must not
   // silently fall back to loopback-only (or, worse, reflect Host values).
   const allowedHosts = normalizeAllowedHosts(config.allowedHosts)
+  // Body wiring is registered before any session/agent derivation so restored
+  // sessions are projected and recovered from their first reader. A host
+  // without the projection/plugin-record seam only disables body operations;
+  // the rest of the plugin keeps mounting (proposal 0021 §12.8).
+  const bodyWiring = bodyWiringContext(ctx, async (sessionId) => (await (await store()).getState()).sessionBindings[sessionId])
+  registerBodyProjection(bodyWiring)
+  registerBodyTurnStopping(bodyWiring)
+  void recoverBodyOperations(bodyWiring)
+    .catch((error: unknown) => ctx.logger?.warn?.(`dsh-soulmojito body: startup recovery failed: ${error instanceof Error ? error.message : String(error)}`))
   registerAgentTavernAnchor(ctx, { everyTurns: config.anchorEveryTurns })
   // 卡内 EJS 世界书注入：默认注册（inner），提示词查看器 prepend 在更外层，
   // 因此捕获面能看到锚定 + 卡内状态两条插件注入。
@@ -142,6 +158,14 @@ export function apply(ctx: PluginContext, config: { anchorEveryTurns?: unknown, 
     if (session !== undefined) {
       void getAgentTavernProjectorPromise()!.then((projector) => projector.replay(session))
         .catch((error) => ctx.logger?.warn?.(`AgentTavern projection replay failed: ${error instanceof Error ? error.message : String(error)}`))
+    }
+    // Body recovery runs after fork adoption (so a resumed session already has
+    // its binding) and before the loop advances. A malformed/unsupported host
+    // shape only skips body settlement; agent creation itself must not fail.
+    try {
+      await recoverBodyOperation(bodyWiring, agent)
+    } catch (error) {
+      ctx.logger?.warn?.(`dsh-soulmojito body: agent recovery failed: ${error instanceof Error ? error.message : String(error)}`)
     }
   })
   void refreshActivePrompt()

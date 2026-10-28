@@ -1,11 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
-import { ChatRevisionConflictError, KeyedMutationTails, MutationTail, type ChatScriptsFile, type TavernSessionBinding, type TavernState } from '../../../tavern-store/src/index.js'
+import { ChatRevisionConflictError, KeyedMutationTails, MutationTail, type TavernSessionBinding } from '../../../tavern-store/src/index.js'
 import { RegexPlacement, type CharacterCardIR, type ChatLogIR, type ChatMessage, type RegexScriptIR } from '../../../tavern-format/src/index.js'
 import { applyRegexScripts } from '../../../tavern-script/src/index.js'
 import { hostPluginMessageSource, hostSessionFormatVersion, isHostPluginMessageSource, sessionEvents, LEGACY_PLUGIN_NAME, PLUGIN_NAME, type HostSessionEventData, type HostSessionLog } from '../../../bind/src/index.js'
 import { applyUpdateVariableToChat, ensureChatVariables, messageStatVariables, seedJsrMvuVariables } from './mvu-compat.js'
+import { isBodyLogEvent, isBodyMergedAssistant, projectBodyEvent, type BodyProjectionStore } from './body-projector.js'
 import { collectSessionRegexScripts } from '../regex-session.js'
 
 export interface NativeSessionEvent {
@@ -26,13 +27,7 @@ export interface NativeSession extends HostSessionLog {
   id: string
 }
 
-export interface ProjectorStore {
-  getState(): Promise<Pick<TavernState, 'sessionBindings' | 'regexScripts' | 'regexScriptOwners' | 'regexScriptPresetOwners' | 'activePreset'>>
-  getCharacter(name: string): Promise<{ card: CharacterCardIR } | undefined>
-  getChatSnapshot(character: string, chatId: string): Promise<{ chat: ChatLogIR; revision: string } | undefined>
-  saveChat(character: string, chatId: string, chat: ChatLogIR, expectedRevision?: string): Promise<string>
-  getChatJsrOverlay(characterName: string, chatId: string): Promise<ChatScriptsFile | undefined>
-}
+export interface ProjectorStore extends BodyProjectionStore {}
 
 export interface ProjectionCheckpoint {
   version: 1
@@ -81,10 +76,14 @@ export class AgentTavernProjector {
       const state = await this.store.getState()
       const binding = state.sessionBindings[session.id]
       if (binding?.architecture === 'agent-tavern' && binding.group !== true) {
-        const character = await this.store.getCharacter(binding.character)
-        const scripts = await collectSessionRegexScripts(this.store, state, binding.character, binding.chatId, character)
-        const message = projectMessage(session, event, binding, scripts)
-        if (message !== undefined) await this.appendMessage(binding, session.id, event.seq, message, character?.card)
+        if (isBodyLogEvent(event.type)) {
+          await projectBodyEvent(this.store, session, state, binding, event)
+        } else {
+          const character = await this.store.getCharacter(binding.character)
+          const scripts = await collectSessionRegexScripts(this.store, state, binding.character, binding.chatId, character)
+          const message = projectMessage(session, event, binding, scripts)
+          if (message !== undefined) await this.appendMessage(binding, session.id, event.seq, message, character?.card)
+        }
       }
       await this.writeCheckpoint({
         version: 1,
@@ -207,6 +206,9 @@ function projectMessage(
   if (event.type !== 'assistant/message') return undefined
   // 从 Tavern 聊天导入的镜像消息（开场白/历史）不再投影回 JSONL，否则会重复。
   if (isTavernMirrorSource(event.data?.message?.source)) return undefined
+  // Body regeneration / restore turns merge through body candidate events; they
+  // must not add a second floor next to the body they replace.
+  if (isBodyMergedAssistant(session, event)) return undefined
   const content = event.data?.message?.content
   if (!Array.isArray(content) || content.some((block) => block?.type === 'tool-call')) return undefined
   const text = messageText(content)

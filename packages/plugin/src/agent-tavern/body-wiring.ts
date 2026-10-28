@@ -1,0 +1,379 @@
+/**
+ * AgentTavern body wiring facade (proposal 0021 §2.5, §2.6, §6).
+ *
+ * This shard owns the host-facing core: the structural context, the
+ * experimental plugin-record seam, deps assembly, the message projection and
+ * the `agent/turn-stopping` listener. Read-side view policy lives in
+ * `body-view.ts`, session reads in `body-session.ts`, crash recovery in
+ * `body-recovery.ts`.
+ *
+ * No durable fact is invented here: the session log stays authoritative, the
+ * body ledger in `body.ts` folds it, and the state machine in `body-runtime.ts`
+ * owns every mutation.
+ */
+
+import { importHostPackage } from '../../../bind/src/index.js'
+import type { HostSessionsService, PluginContext } from '../host-contract.js'
+import { createBodyProjection } from './body.js'
+import {
+  finalizeTurnStopping,
+  type BodyAgentLike,
+  type BodyRuntimeDeps,
+  type BodySessionLike,
+} from './body-runtime.js'
+import {
+  agentIdOf,
+  bodyAgentOf,
+  bodyBindingEligible,
+  errorLog,
+  errorMessage,
+  failureCodeOf,
+  info,
+  resolveBodyBinding,
+  resolveLiveAgent,
+  warn,
+  type BodyBindingResolver,
+  type BodyBindingView,
+} from './body-session.js'
+import {
+  recoverBodyOperationWith,
+  recoverBodyOperationsWith,
+  type BodyRecoveryHost,
+  type BodyRecoveryOutcome,
+} from './body-recovery.js'
+
+/* ------------------------------- host surface ------------------------------ */
+
+/**
+ * Structural context used by every wiring entry point. Host services stay
+ * optional so a missing seam disables one feature instead of throwing.
+ */
+export interface BodyWiringContext extends BodyRecoveryHost {
+  readonly sessions?: HostSessionsService
+  readonly effect?: PluginContext['effect']
+  readonly on?: PluginContext['on']
+}
+
+/** Host context slice accepted by `bodyWiringContext`. */
+export type BodyWiringHost = Pick<PluginContext, 'logger' | 'sessions' | 'agents' | 'effect' | 'on'>
+
+/** Assemble the structural context once, with an explicit binding resolver. */
+export function bodyWiringContext(host: BodyWiringHost, bindingOf: BodyBindingResolver): BodyWiringContext {
+  return {
+    ...(host.logger === undefined ? {} : { logger: host.logger }),
+    ...(host.sessions === undefined ? {} : { sessions: host.sessions }),
+    ...(host.agents === undefined ? {} : { agents: host.agents }),
+    effect: (callback, label) => host.effect(callback, label),
+    on: (event, listener) => host.on?.(event, listener),
+    bindingOf,
+  }
+}
+
+/* --------------------------- plugin-record writer -------------------------- */
+
+/**
+ * Writes one log-only plugin record. The host function snapshots `data` and
+ * marks the event `ignorable: true`; it never enters the model surface.
+ */
+export type BodyRecordWriter = (
+  session: BodySessionLike,
+  type: string,
+  data: unknown,
+) => unknown
+
+interface SessionHostModule {
+  readonly appendPluginRecord?: unknown
+  readonly pluginRecordOf?: unknown
+}
+
+let recordSeamWarningEmitted = false
+let resolvedRecordWriter: BodyRecordWriter | undefined
+
+/**
+ * Resolve the experimental plugin-record seam.
+ *
+ * Both `appendPluginRecord` and `pluginRecordOf` must exist: the decision
+ * record treats them as one version-gated API, and a host with only half of it
+ * cannot safely read its own records after reload. A missing package or missing
+ * export returns `undefined`; callers must answer `host-unsupported`.
+ *
+ * Successful resolutions are cached for the process: `GET body` asks per
+ * rendered assistant row, and a dynamic host import per row would be wasteful.
+ * A miss is not cached so a reloaded host module can be picked up.
+ */
+export async function resolveBodyRecordWriter(ctx: BodyWiringContext): Promise<BodyRecordWriter | undefined> {
+  if (resolvedRecordWriter !== undefined) return resolvedRecordWriter
+
+  let host: SessionHostModule
+  try {
+    host = await importHostPackage<SessionHostModule>('@deepseek-ai/dsh-session')
+  } catch (error) {
+    warnRecordSeamOnce(ctx, 'dsh-soulmojito body: cannot resolve @deepseek-ai/dsh-session', {
+      reason: 'host-unsupported',
+      error: errorMessage(error),
+    })
+    return undefined
+  }
+
+  const appendRecord = host.appendPluginRecord
+  const pluginRecordOf = host.pluginRecordOf
+  if (typeof appendRecord !== 'function' || typeof pluginRecordOf !== 'function') {
+    warnRecordSeamOnce(ctx, 'dsh-soulmojito body: host has no appendPluginRecord/pluginRecordOf seam', {
+      reason: 'host-unsupported',
+      appendPluginRecord: typeof appendRecord,
+      pluginRecordOf: typeof pluginRecordOf,
+    })
+    return undefined
+  }
+
+  const writer: BodyRecordWriter = (session, type, data) => appendRecord(session, type, data)
+  resolvedRecordWriter = writer
+  return writer
+}
+
+/** Build the deps bundle consumed by the body state machine. */
+export async function createBodyDeps(
+  ctx: BodyWiringContext,
+  agent: BodyAgentLike,
+): Promise<BodyRuntimeDeps | undefined> {
+  const appendRecord = await resolveBodyRecordWriter(ctx)
+  if (appendRecord === undefined) return undefined
+  return {
+    session: agent.session,
+    agent,
+    ...(ctx.logger === undefined ? {} : { logger: ctx.logger }),
+    appendRecord,
+  }
+}
+
+/* ------------------------------- projection -------------------------------- */
+
+/**
+ * Register the body message projection before any agent/session is created.
+ *
+ * The projection is a long-lived compatibility shim (proposal §9.4): turning
+ * the body feature off later stops new records but never unregisters it. The
+ * returned disposer is handed to `ctx.effect` for host unload only.
+ *
+ * @returns the host disposer, or `undefined` when the host has no projection
+ * seam (the caller keeps the rest of the plugin running)
+ */
+export function registerBodyProjection(ctx: BodyWiringContext): (() => void) | undefined {
+  const sessions = ctx.sessions
+  const register = sessions?.registerMessageProjection
+  if (sessions === undefined || typeof register !== 'function') {
+    warn(ctx, 'dsh-soulmojito body: sessions.registerMessageProjection is unavailable; body projection disabled', {
+      reason: 'host-unsupported',
+    })
+    return undefined
+  }
+
+  let registered: unknown
+  try {
+    registered = register.call(sessions, createBodyProjection())
+  } catch (error) {
+    errorLog(ctx, 'dsh-soulmojito body: registerMessageProjection failed', {
+      reason: 'host-unsupported',
+      error: errorMessage(error),
+    })
+    return undefined
+  }
+
+  if (typeof registered !== 'function') {
+    warn(ctx, 'dsh-soulmojito body: registerMessageProjection returned no disposer; projection stays registered', {
+      reason: 'host-shape',
+    })
+    return undefined
+  }
+
+  const dispose = registered as () => void
+  if (typeof ctx.effect === 'function') {
+    let disposed = false
+    const disposeOnce = (): void => {
+      if (disposed) return
+      disposed = true
+      dispose()
+    }
+    try {
+      ctx.effect(() => disposeOnce, 'dsh-soulmojito: body projection')
+    } catch (error) {
+      warn(ctx, 'dsh-soulmojito body: ctx.effect rejected the projection disposer; projection stays registered', {
+        error: errorMessage(error),
+      })
+    }
+  }
+  return dispose
+}
+
+/* ----------------------------- turn stopping ------------------------------- */
+
+/**
+ * Subscribe to the serial `agent/turn-stopping` event.
+ *
+ * The listener never waits for `agent.whenIdle()`: it already runs after the
+ * final assistant message settled, and waiting would deadlock the same loop.
+ * It appends only the events `finalizeTurnStopping` needs (candidate, select,
+ * hide replacement, op-finish); ordinary `session/event` bookkeeping stays out.
+ */
+export function registerBodyTurnStopping(ctx: BodyWiringContext): (() => void) | undefined {
+  if (typeof ctx.on !== 'function') {
+    warn(ctx, 'dsh-soulmojito body: host has no event bus; agent/turn-stopping disabled', {
+      reason: 'host-unsupported',
+    })
+    return undefined
+  }
+
+  let registered: unknown
+  try {
+    registered = ctx.on('agent/turn-stopping', (payload) => handleBodyTurnStopping(ctx, payload))
+  } catch (error) {
+    errorLog(ctx, 'dsh-soulmojito body: agent/turn-stopping registration failed', {
+      error: errorMessage(error),
+    })
+    return undefined
+  }
+
+  const dispose = typeof registered === 'function' ? registered as () => void : undefined
+  // `ctx.on` is fiber-scoped in Cordis: the host removes the listener on
+  // unload. The returned disposer is exposed for callers that unload earlier.
+  return dispose
+}
+
+/**
+ * One `agent/turn-stopping` delivery. Exported so the wiring test can drive the
+ * filter without a real host bus.
+ */
+export async function handleBodyTurnStopping(ctx: BodyWiringContext, payload: unknown): Promise<void> {
+  const record = isRecord(payload) ? payload : undefined
+  const payloadAgent = bodyAgentOf(record?.agent)
+  const payloadAgentId = nonEmptyString(record?.agentId)
+  const agentId = payloadAgent === undefined ? payloadAgentId : agentIdOf(payloadAgent)
+  const turn = numberField(record?.turn)
+
+  if (agentId === undefined || turn === undefined || turn < 1) {
+    warn(ctx, 'dsh-soulmojito body: ignored a malformed agent/turn-stopping payload', {
+      hasAgent: payloadAgent !== undefined,
+      hasAgentId: payloadAgentId !== undefined,
+      turn: record?.turn,
+    })
+    return
+  }
+
+  const agent = payloadAgent ?? resolveLiveAgent(ctx, agentId)
+  if (agent === undefined) return
+
+  const binding = await resolveBodyBinding(ctx, agentId)
+  if (!bodyBindingEligible(binding)) return
+
+  const deps = await createBodyDeps(ctx, agent)
+  if (deps === undefined) {
+    warn(ctx, 'dsh-soulmojito body: turn-stopping skipped because the plugin-record seam is unavailable', {
+      reason: 'host-unsupported',
+      agentId,
+      turn,
+    })
+    return
+  }
+
+  try {
+    const result = await finalizeTurnStopping(deps, { agentId, turn })
+    if (result.status === 'ok') {
+      info(ctx, 'dsh-soulmojito body: regenerate settled from turn-stopping', {
+        agentId,
+        turn,
+        anchorMessageId: result.anchorMessageId,
+      })
+      return
+    }
+    if (result.status === 'failed') {
+      errorLog(ctx, 'dsh-soulmojito body: regenerate settle failed', {
+        agentId,
+        turn,
+        reason: result.reason,
+      })
+      return
+    }
+    info(ctx, 'dsh-soulmojito body: turn-stopping had no active body op', { agentId, turn, reason: result.reason })
+  } catch (error) {
+    // A serial listener rejection would fail the model turn; the body feature
+    // degrades to the recorded op-start so startup recovery can settle it.
+    errorLog(ctx, 'dsh-soulmojito body: turn-stopping listener failed', {
+      agentId,
+      turn,
+      code: failureCodeOf(error),
+      error: errorMessage(error),
+    })
+  }
+}
+
+/* -------------------------------- recovery --------------------------------- */
+
+/** Startup recovery over every live agent the host exposes. */
+export function recoverBodyOperations(ctx: BodyWiringContext): Promise<readonly BodyRecoveryOutcome[]> {
+  return recoverBodyOperationsWith(ctx, createBodyDeps)
+}
+
+/** Recover one agent (`agent/created` path). */
+export function recoverBodyOperation(
+  ctx: BodyWiringContext,
+  agentValue: unknown,
+): Promise<BodyRecoveryOutcome> {
+  return recoverBodyOperationWith(ctx, agentValue, createBodyDeps)
+}
+
+/* ------------------------------- re-exports -------------------------------- */
+
+export {
+  bodyAgentOf,
+  bodyBindingEligible,
+  foldSessionBodyLedger,
+  foldSessionBodyLedgerForMessage,
+  inspectBodyAnchor,
+  listLiveAgents,
+  messageTextOfSession,
+  readBodySessionFacts,
+  resolveBodyBinding,
+  resolveLiveAgent,
+  type BodyAnchorInspection,
+  type BodyBindingResolver,
+  type BodyBindingView,
+  type BodySessionFacts,
+} from './body-session.js'
+
+export {
+  bodyFailureOf,
+  bodyRejectStatus,
+  bodyStateSafetyOf,
+  bodyStateUnsafeMessage,
+  buildBodyView,
+  publicBodyCode,
+  type BodyFailureView,
+  type BodyProjectedFloor,
+  type BodyStateSafety,
+  type BodyStateSafetyResolver,
+  type BodyStateUnsafeDetail,
+  type BodyView,
+  type BodyViewInput,
+} from './body-view.js'
+
+export type { BodyRecoveryOutcome } from './body-recovery.js'
+
+/* -------------------------------- helpers --------------------------------- */
+
+function warnRecordSeamOnce(ctx: BodyWiringContext, message: string, fields: Record<string, unknown>): void {
+  if (recordSeamWarningEmitted) return
+  recordSeamWarningEmitted = true
+  warn(ctx, message, fields)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined
+}
+
+function numberField(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) ? value : undefined
+}

@@ -220,13 +220,13 @@ function adoptAgentTavernFork(session, deps) {
   return current;
 }
 async function adoptOne(sessionId, session, deps) {
-  const info = hostSessionForkInfo(session);
-  if (info === void 0) return "skipped";
+  const info2 = hostSessionForkInfo(session);
+  if (info2 === void 0) return "skipped";
   const state = await deps.store.getState();
   if (state.sessionBindings[sessionId] !== void 0) return "bound";
-  const parent = state.sessionBindings[info.parentSession];
+  const parent = state.sessionBindings[info2.parentSession];
   if (parent === void 0 || parent.architecture !== "agent-tavern" || parent.group === true) {
-    deps.logger?.info?.(`dsh-soulmojito: host session fork '${sessionId}' skipped (parent '${info.parentSession}' is not an AgentTavern binding)`);
+    deps.logger?.info?.(`dsh-soulmojito: host session fork '${sessionId}' skipped (parent '${info2.parentSession}' is not an AgentTavern binding)`);
     return "skipped";
   }
   const character = parent.character;
@@ -237,17 +237,17 @@ async function adoptOne(sessionId, session, deps) {
   }
   let chatId = await findExistingForkChat(deps.store, character, sessionId);
   if (chatId === void 0) {
-    const boundarySeq = info.inheritedEventCount === void 0 ? void 0 : info.inheritedEventCount - 1;
+    const boundarySeq = info2.inheritedEventCount === void 0 ? void 0 : info2.inheritedEventCount - 1;
     chatId = (await deps.store.forkChat(character, parent.chatId, {
       sessionId,
-      parentSessionId: info.parentSession,
-      bookmarkMessageId: forkBookmarkMessageId(parentSnapshot.chat, info.parentSession, boundarySeq)
+      parentSessionId: info2.parentSession,
+      bookmarkMessageId: forkBookmarkMessageId(parentSnapshot.chat, info2.parentSession, boundarySeq)
     })).chatId;
   }
   await copyChatVariables(deps.variables, parent.chatId, chatId);
   await copyChatMemories(deps, parent.chatId, chatId);
   await deps.bind(sessionId, character, chatId, parent.contextMode);
-  deps.logger?.info?.(`dsh-soulmojito: adopted host session fork '${sessionId}' from '${info.parentSession}' into chat '${character}/${chatId}'`);
+  deps.logger?.info?.(`dsh-soulmojito: adopted host session fork '${sessionId}' from '${info2.parentSession}' into chat '${character}/${chatId}'`);
   return "adopted";
 }
 var FORK_CHAT_SUFFIX = / - fork \d+\.jsonl$/;
@@ -12340,7 +12340,7 @@ function classifySpecialEntry(entry) {
   if (classified.ifCondition !== void 0) result.ifCondition = classified.ifCondition;
   return result;
 }
-async function applyGenerateInjections(messages, entries, render, env, evaluateCondition, warn) {
+async function applyGenerateInjections(messages, entries, render, env, evaluateCondition, warn3) {
   const out = messages.map((m) => ({ ...m }));
   const beforeTexts = /* @__PURE__ */ new Map();
   const afterTexts = /* @__PURE__ */ new Map();
@@ -12353,12 +12353,12 @@ async function applyGenerateInjections(messages, entries, render, env, evaluateC
   for (const entry of ordered) {
     if (entry.useProbability && entry.probability !== void 0 && Math.random() * 100 >= entry.probability) continue;
     if (entry.kind === "generate-before") {
-      const text = await renderChecked(entry, render, env, evaluateCondition, warn);
+      const text = await renderChecked(entry, render, env, evaluateCondition, warn3);
       if (text !== null) pushText2(beforeTexts, 0, text);
       continue;
     }
     if (entry.kind === "generate-after") {
-      const text = await renderChecked(entry, render, env, evaluateCondition, warn);
+      const text = await renderChecked(entry, render, env, evaluateCondition, warn3);
       if (text !== null && out.length > 0) pushText2(afterTexts, out.length - 1, text);
       else if (text !== null) pushText2(beforeTexts, 0, text);
       continue;
@@ -12366,10 +12366,10 @@ async function applyGenerateInjections(messages, entries, render, env, evaluateC
     if (entry.kind === "generate-idx-before" || entry.kind === "generate-idx-after") {
       const idx = resolveIndex(Number(entry.arg ?? "0"), out.length);
       if (idx === null) {
-        warn(`[GENERATE:${entry.arg}] index out of range (${entry.book}#${entry.uid})`);
+        warn3(`[GENERATE:${entry.arg}] index out of range (${entry.book}#${entry.uid})`);
         continue;
       }
-      const text = await renderChecked(entry, render, env, evaluateCondition, warn);
+      const text = await renderChecked(entry, render, env, evaluateCondition, warn3);
       if (text === null) continue;
       pushText2(entry.kind === "generate-idx-before" ? beforeTexts : afterTexts, idx, text);
       continue;
@@ -12379,7 +12379,7 @@ async function applyGenerateInjections(messages, entries, render, env, evaluateC
       try {
         re = new RegExp(entry.arg ?? "", "i");
       } catch (err2) {
-        warn(`[GENERATE:REGEX] invalid pattern /${entry.arg}/: ${err2 instanceof Error ? err2.message : String(err2)}`);
+        warn3(`[GENERATE:REGEX] invalid pattern /${entry.arg}/: ${err2 instanceof Error ? err2.message : String(err2)}`);
         continue;
       }
       for (let i = 0; i < out.length; i++) {
@@ -12403,13 +12403,13 @@ async function applyGenerateInjections(messages, entries, render, env, evaluateC
   }
   return out;
 }
-async function renderChecked(entry, render, env, evaluateCondition, warn) {
+async function renderChecked(entry, render, env, evaluateCondition, warn3) {
   if (entry.ifCondition !== void 0 && !await evaluateCondition(entry.ifCondition)) return null;
   if (entry.renderedContent !== void 0) return entry.renderedContent;
   try {
     return await render(entry.content, { ...env, world_info: { uid: entry.uid, world: entry.book, comment: entry.comment, content: entry.content } });
   } catch (err2) {
-    warn(`template entry ${entry.book}#${entry.uid} ("${entry.comment}") render failed: ${err2 instanceof Error ? err2.message : String(err2)}`);
+    warn3(`template entry ${entry.book}#${entry.uid} ("${entry.comment}") render failed: ${err2 instanceof Error ? err2.message : String(err2)}`);
     return null;
   }
 }
@@ -12476,18 +12476,18 @@ function parseInjectParams(params, entry) {
   }
   return null;
 }
-async function applyInjectEntries(messages, entries, render, env, evaluateCondition, warn) {
+async function applyInjectEntries(messages, entries, render, env, evaluateCondition, warn3) {
   const out = messages.map((m) => ({ ...m }));
   const instructions = [];
   for (const entry of entries) {
     if (entry.useProbability && entry.probability !== void 0 && Math.random() * 100 >= entry.probability) continue;
     if (entry.arg === void 0 || entry.arg === "") {
-      warn(`@INJECT entry ${entry.book}#${entry.uid} ("${entry.comment}") has no parameters`);
+      warn3(`@INJECT entry ${entry.book}#${entry.uid} ("${entry.comment}") has no parameters`);
       continue;
     }
     const parsed = parseInjectParams(entry.arg, entry);
     if (!parsed) {
-      warn(`@INJECT entry ${entry.book}#${entry.uid} ("${entry.comment}") has invalid parameters: "${entry.arg}"`);
+      warn3(`@INJECT entry ${entry.book}#${entry.uid} ("${entry.comment}") has invalid parameters: "${entry.arg}"`);
       continue;
     }
     if (entry.ifCondition !== void 0 && !await evaluateCondition(entry.ifCondition)) continue;
@@ -12495,11 +12495,11 @@ async function applyInjectEntries(messages, entries, render, env, evaluateCondit
     try {
       content = await render(entry.content, { ...env, world_info: { uid: entry.uid, world: entry.book, comment: entry.comment, content: entry.content } });
     } catch (err2) {
-      warn(`@INJECT entry ${entry.book}#${entry.uid} render failed: ${err2 instanceof Error ? err2.message : String(err2)}`);
+      warn3(`@INJECT entry ${entry.book}#${entry.uid} render failed: ${err2 instanceof Error ? err2.message : String(err2)}`);
       continue;
     }
     if (content.trim() === "") continue;
-    if (parsed.warning) warn(parsed.warning);
+    if (parsed.warning) warn3(parsed.warning);
     instructions.push({ instruction: { ...parsed.instruction, entry }, content });
   }
   if (instructions.length === 0) return out;
@@ -12518,7 +12518,7 @@ async function applyInjectEntries(messages, entries, render, env, evaluateCondit
     } else if (instruction.type === "target") {
       const idx = roleIndex(instruction.target ?? "user", instruction.targetIndex ?? 1);
       if (idx === null) {
-        warn(`@INJECT target=${instruction.target}[${instruction.targetIndex}] not found (${instruction.entry.book}#${instruction.entry.uid})`);
+        warn3(`@INJECT target=${instruction.target}[${instruction.targetIndex}] not found (${instruction.entry.book}#${instruction.entry.uid})`);
         continue;
       }
       const insertAt = instruction.at === "after" ? idx + 1 : idx;
@@ -12536,12 +12536,12 @@ async function applyInjectEntries(messages, entries, render, env, evaluateCondit
     try {
       re = new RegExp(instruction.regex, "i");
     } catch (err2) {
-      warn(`@INJECT invalid regex /${instruction.regex}/: ${err2 instanceof Error ? err2.message : String(err2)}`);
+      warn3(`@INJECT invalid regex /${instruction.regex}/: ${err2 instanceof Error ? err2.message : String(err2)}`);
       continue;
     }
     const matchIdx = out.findIndex((m) => re.test(m.content));
     if (matchIdx === -1) {
-      warn(`@INJECT regex /${instruction.regex}/ matched no message (${instruction.entry.book}#${instruction.entry.uid})`);
+      warn3(`@INJECT regex /${instruction.regex}/ matched no message (${instruction.entry.book}#${instruction.entry.uid})`);
       continue;
     }
     regexQueue.push({
@@ -12557,7 +12557,7 @@ async function applyInjectEntries(messages, entries, render, env, evaluateCondit
   }
   return out;
 }
-async function applyRenderInjections(text, entries, render, env, evaluateCondition, warn) {
+async function applyRenderInjections(text, entries, render, env, evaluateCondition, warn3) {
   const ordered = [...entries].sort((a, b) => a.order - b.order || a.uid - b.uid);
   let prefix = "";
   let suffix = "";
@@ -12570,12 +12570,12 @@ async function applyRenderInjections(text, entries, render, env, evaluateConditi
       if (entry.kind === "render-before") prefix += rendered;
       else suffix += rendered;
     } catch (err2) {
-      warn(`[RENDER] entry ${entry.book}#${entry.uid} render failed: ${err2 instanceof Error ? err2.message : String(err2)}`);
+      warn3(`[RENDER] entry ${entry.book}#${entry.uid} render failed: ${err2 instanceof Error ? err2.message : String(err2)}`);
     }
   }
   return `${prefix}${text}${suffix}`;
 }
-function parseInitialVariables(content, warn) {
+function parseInitialVariables(content, warn3) {
   let data;
   try {
     data = JSON.parse(content);
@@ -12583,12 +12583,12 @@ function parseInitialVariables(content, warn) {
     try {
       data = parseYamlSubset(content);
     } catch {
-      warn("[InitialVariables] content is neither valid JSON nor supported YAML subset");
+      warn3("[InitialVariables] content is neither valid JSON nor supported YAML subset");
       return null;
     }
   }
   if (!isObjectLike(data)) {
-    warn("[InitialVariables] parsed content is not an object");
+    warn3("[InitialVariables] parsed content is not an object");
     return null;
   }
   return data;
@@ -12918,12 +12918,12 @@ function optionsAsRecord(input) {
 // packages/tavern-template/src/index.ts
 function createTemplateRuntime(options) {
   const { host, stores, onWarning } = options;
-  const warn = onWarning ?? (() => {
+  const warn3 = onWarning ?? (() => {
   });
   const variables2 = new TemplateVariableSystem(stores);
   const defines = {};
   const getwiDepth = { current: 0 };
-  host.onWarning = warn;
+  host.onWarning = warn3;
   const buildEnv = (extra) => {
     const env = createTemplateEnv({ vars: variables2, host, defines, getwiDepth });
     if (extra !== void 0) Object.assign(env, extra);
@@ -12937,7 +12937,7 @@ function createTemplateRuntime(options) {
     try {
       return Boolean(await evalExpressionSandboxed(condition, buildEnv()));
     } catch (err2) {
-      warn(`@@if condition evaluation failed ("${condition}"): ${err2 instanceof Error ? err2.message : String(err2)}`);
+      warn3(`@@if condition evaluation failed ("${condition}"): ${err2 instanceof Error ? err2.message : String(err2)}`);
       return false;
     }
   };
@@ -12949,10 +12949,10 @@ function createTemplateRuntime(options) {
     renderText,
     evaluateCondition,
     classify: classifySpecialEntry,
-    applyGenerateInjections: (messages, entries) => applyGenerateInjections(messages, entries, render, buildEnv(), evaluate, warn),
-    applyInjectEntries: (messages, entries) => applyInjectEntries(messages, entries, render, buildEnv(), evaluate, warn),
-    applyRenderInjections: (text, entries) => applyRenderInjections(text, entries, render, buildEnv(), evaluate, warn),
-    parseInitialVariables: (content) => parseInitialVariables(content, warn),
+    applyGenerateInjections: (messages, entries) => applyGenerateInjections(messages, entries, render, buildEnv(), evaluate, warn3),
+    applyInjectEntries: (messages, entries) => applyInjectEntries(messages, entries, render, buildEnv(), evaluate, warn3),
+    applyRenderInjections: (text, entries) => applyRenderInjections(text, entries, render, buildEnv(), evaluate, warn3),
+    parseInitialVariables: (content) => parseInitialVariables(content, warn3),
     setInitialVariables: (data) => {
       variables2.setInitialVariables(data);
     }
@@ -13649,6 +13649,821 @@ function toTavernRegexEntry(script) {
   };
 }
 
+// packages/plugin/src/agent-tavern/body.ts
+var BODY_EVENT_TYPE = "plugin:dsh-soulmojito/body";
+var BodyLedgerError = class extends Error {
+  code;
+  constructor(code, message) {
+    super(message);
+    this.name = "BodyLedgerError";
+    this.code = code;
+  }
+};
+function foldBodyLedger(events, groupId, uptoSeq) {
+  if (typeof groupId !== "string" || groupId.trim() === "") {
+    throw new BodyLedgerError("invalid-body-group-id", "body group id must be a non-empty string");
+  }
+  if (!Number.isSafeInteger(uptoSeq) || uptoSeq < 0) {
+    throw new BodyLedgerError("invalid-body-seq", `fold watermark must be a non-negative safe integer, received ${String(uptoSeq)}`);
+  }
+  const ordered = orderEvents(events);
+  const candidates = [];
+  const candidateText2 = /* @__PURE__ */ new Map();
+  const edits = /* @__PURE__ */ new Map();
+  let selectedIndex = -1;
+  let anchorMessageId = "";
+  for (const event of ordered) {
+    if (event.seq > uptoSeq) break;
+    if (event.type === "assistant/message") {
+      const message = readAssistantMessage(event.data);
+      if (message !== void 0 && !candidateText2.has(message.id)) {
+        candidateText2.set(message.id, messageText(message));
+      }
+      continue;
+    }
+    if (event.type !== BODY_EVENT_TYPE) continue;
+    const data = parseBodyEventData(event.data, event.seq);
+    if (data.op === "op-start" || data.op === "op-finish") continue;
+    if (data.groupId !== groupId) continue;
+    switch (data.op) {
+      case "candidate": {
+        if (data.index !== candidates.length) {
+          throw new BodyLedgerError(
+            "body-candidate-gap",
+            `body event seq ${event.seq} would place candidate index ${data.index} after ${candidates.length} candidates in group '${groupId}'`
+          );
+        }
+        const text = candidateText2.get(data.messageId);
+        if (text === void 0) {
+          throw new BodyLedgerError(
+            "body-candidate-message-missing",
+            `body event seq ${event.seq} candidate '${data.messageId}' has no assistant/message at or before its seq in group '${groupId}'`
+          );
+        }
+        candidates.push(Object.freeze({
+          messageId: data.messageId,
+          index: data.index,
+          text,
+          ...data.feedback === void 0 ? {} : { feedback: data.feedback }
+        }));
+        selectedIndex = data.index;
+        anchorMessageId = data.messageId;
+        break;
+      }
+      case "select": {
+        requireCandidate(candidates, data.index, "select", event.seq, groupId);
+        selectedIndex = data.index;
+        break;
+      }
+      case "edit": {
+        requireCandidate(candidates, data.index, "edit", event.seq, groupId);
+        edits.set(data.index, data.text);
+        break;
+      }
+      case "restore": {
+        requireCandidate(candidates, data.index, "restore", event.seq, groupId);
+        selectedIndex = data.index;
+        anchorMessageId = data.messageId;
+        break;
+      }
+    }
+  }
+  if (candidates.length === 0) return void 0;
+  return Object.freeze({
+    groupId,
+    candidates: Object.freeze(candidates),
+    selectedIndex,
+    anchorMessageId,
+    edits: new Map(edits)
+  });
+}
+function effectiveBodyText(ledger) {
+  const candidate = ledger.candidates[ledger.selectedIndex];
+  if (candidate === void 0) return void 0;
+  return ledger.edits.get(candidate.index) ?? candidate.text;
+}
+function replaceMessageText(message, text) {
+  if (typeof message.id !== "string" || message.id.trim() === "") {
+    throw new BodyLedgerError("invalid-body-message-id", "message id must be a non-empty string");
+  }
+  if (typeof message.role !== "string" || message.role.trim() === "") {
+    throw new BodyLedgerError("invalid-body-event", `message '${message.id}' role must be a non-empty string`);
+  }
+  if (!Array.isArray(message.content)) {
+    throw new BodyLedgerError("invalid-body-event", `message '${message.id}' content must be an array`);
+  }
+  if (typeof text !== "string") {
+    throw new BodyLedgerError("invalid-body-text", `replacement text for message '${message.id}' must be a string`);
+  }
+  const blocks = [];
+  let replaced = false;
+  for (const block of message.content) {
+    if (!isJsonObject(block)) {
+      throw new BodyLedgerError("invalid-body-event", `message '${message.id}' contains a non-object content block`);
+    }
+    const type = block["type"];
+    if (typeof type !== "string" || type === "") {
+      throw new BodyLedgerError("invalid-body-event", `message '${message.id}' contains a content block without a type`);
+    }
+    if (type === "text") {
+      if (!replaced) {
+        blocks.push({ type: "text", text });
+        replaced = true;
+      }
+      continue;
+    }
+    blocks.push({ ...block, type });
+  }
+  if (!replaced) blocks.push({ type: "text", text });
+  return { ...message, content: blocks };
+}
+function createBodyProjection() {
+  return {
+    type: BODY_EVENT_TYPE,
+    project(event, context) {
+      const data = event.data;
+      if (data.op !== "select" && data.op !== "edit") return /* @__PURE__ */ new Map();
+      const ledger = foldBodyLedger(context.events, data.groupId, event.seq);
+      if (ledger === void 0) return /* @__PURE__ */ new Map();
+      const anchor = findAnchorMessage(context.events, ledger.anchorMessageId, event.seq);
+      if (anchor === void 0) return /* @__PURE__ */ new Map();
+      const text = effectiveBodyText(ledger);
+      if (text === void 0) return /* @__PURE__ */ new Map();
+      return /* @__PURE__ */ new Map([[anchor.seq, replaceMessageText(anchor.message, text)]]);
+    }
+  };
+}
+function findAnchorMessage(events, messageId, uptoSeq) {
+  let anchor;
+  for (const event of events) {
+    if (!Number.isSafeInteger(event.seq) || event.seq < 0 || event.seq > uptoSeq) continue;
+    if (event.type !== "assistant/message") continue;
+    const message = readAssistantMessage(event.data);
+    if (message === void 0 || message.id !== messageId) continue;
+    if (anchor === void 0 || event.seq >= anchor.seq) anchor = { seq: event.seq, message };
+  }
+  return anchor;
+}
+function orderEvents(events) {
+  for (const [index, event] of events.entries()) {
+    if (!Number.isSafeInteger(event.seq) || event.seq < 0) {
+      throw new BodyLedgerError("invalid-body-seq", `event at index ${index} has invalid seq ${String(event.seq)}`);
+    }
+  }
+  const ordered = [...events].sort((left, right) => left.seq - right.seq);
+  for (let index = 1; index < ordered.length; index += 1) {
+    const previous = ordered[index - 1];
+    const current = ordered[index];
+    if (previous !== void 0 && current !== void 0 && previous.seq === current.seq) {
+      throw new BodyLedgerError("invalid-body-seq", `events share seq ${current.seq}; session sequences must be unique`);
+    }
+  }
+  return ordered;
+}
+function requireCandidate(candidates, index, op, seq, groupId) {
+  if (index >= candidates.length) {
+    throw new BodyLedgerError(
+      "invalid-body-index",
+      `body event seq ${seq} ${op} index ${index} is out of range for group '${groupId}' with ${candidates.length} candidates`
+    );
+  }
+}
+function parseBodyEventData(data, seq) {
+  if (!isJsonObject(data)) {
+    throw new BodyLedgerError("invalid-body-event", `body event seq ${seq} must carry an object data payload`);
+  }
+  const where = `body event seq ${seq}`;
+  const op = data["op"];
+  switch (op) {
+    case "op-start": {
+      const kind = data["kind"];
+      if (kind !== "regenerate") {
+        throw new BodyLedgerError("invalid-body-event", `${where} field 'kind' must be 'regenerate', received ${String(kind)}`);
+      }
+      return {
+        op,
+        opId: requireNonEmpty(data, "opId", where, "invalid-body-event"),
+        groupId: requireGroupId(data, where),
+        kind,
+        previousAnchorId: requireMessageId(data, "previousAnchorId", where),
+        previousIndex: requireIndex(data, "previousIndex", where)
+      };
+    }
+    case "op-finish": {
+      const result = data["result"];
+      if (result !== "ok" && result !== "failed") {
+        throw new BodyLedgerError("invalid-body-event", `${where} field 'result' must be 'ok' or 'failed', received ${String(result)}`);
+      }
+      const anchorId = optionalText2(data, "anchorId", where);
+      const reason = optionalText2(data, "reason", where);
+      return {
+        op,
+        opId: requireNonEmpty(data, "opId", where, "invalid-body-event"),
+        result,
+        ...anchorId === void 0 ? {} : { anchorId },
+        ...reason === void 0 ? {} : { reason }
+      };
+    }
+    case "candidate": {
+      const feedback = optionalText2(data, "feedback", where);
+      return {
+        op,
+        groupId: requireGroupId(data, where),
+        messageId: requireMessageId(data, "messageId", where),
+        index: requireIndex(data, "index", where),
+        ...feedback === void 0 ? {} : { feedback }
+      };
+    }
+    case "restore":
+      return {
+        op,
+        groupId: requireGroupId(data, where),
+        messageId: requireMessageId(data, "messageId", where),
+        index: requireIndex(data, "index", where)
+      };
+    case "select":
+      return {
+        op,
+        groupId: requireGroupId(data, where),
+        index: requireIndex(data, "index", where)
+      };
+    case "edit":
+      return {
+        op,
+        groupId: requireGroupId(data, where),
+        index: requireIndex(data, "index", where),
+        text: requireText(data, "text", where),
+        previousText: requireText(data, "previousText", where)
+      };
+    default:
+      throw new BodyLedgerError("invalid-body-op", `${where} has unknown op '${String(op)}'`);
+  }
+}
+function requireGroupId(record, where) {
+  return requireNonEmpty(record, "groupId", where, "invalid-body-group-id");
+}
+function requireMessageId(record, field, where) {
+  return requireNonEmpty(record, field, where, "invalid-body-message-id");
+}
+function requireNonEmpty(record, field, where, code) {
+  const value = record[field];
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new BodyLedgerError(code, `${where} field '${field}' must be a non-empty string`);
+  }
+  return value;
+}
+function requireText(record, field, where) {
+  const value = record[field];
+  if (typeof value !== "string") {
+    throw new BodyLedgerError("invalid-body-event", `${where} field '${field}' must be a string`);
+  }
+  return value;
+}
+function optionalText2(record, field, where) {
+  const value = record[field];
+  if (value === void 0) return void 0;
+  if (typeof value !== "string") {
+    throw new BodyLedgerError("invalid-body-event", `${where} field '${field}' must be a string when present`);
+  }
+  return value;
+}
+function requireIndex(record, field, where) {
+  const value = record[field];
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new BodyLedgerError(
+      "invalid-body-index",
+      `${where} field '${field}' must be a non-negative safe integer, received ${String(value)}`
+    );
+  }
+  return value;
+}
+function readAssistantMessage(data) {
+  if (!isJsonObject(data)) return void 0;
+  const envelope = data;
+  const message = envelope["message"];
+  if (!isJsonObject(message)) return void 0;
+  const id = message["id"];
+  const role = message["role"];
+  const content = message["content"];
+  if (typeof id !== "string" || id.trim() === "" || role !== "assistant" || !Array.isArray(content)) return void 0;
+  const blocks = [];
+  for (const block of content) {
+    if (!isJsonObject(block)) return void 0;
+    const type = block["type"];
+    if (typeof type !== "string" || type === "") return void 0;
+    if (type === "text" && typeof block["text"] !== "string") return void 0;
+    blocks.push({ ...block, type });
+  }
+  return { ...message, id, role, content: blocks };
+}
+function messageText(message) {
+  let text = "";
+  for (const block of message.content) {
+    if (block.type === "text" && typeof block.text === "string") text += block.text;
+  }
+  return text;
+}
+function isJsonObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// packages/plugin/src/agent-tavern/body-jsonl.ts
+var BodyJsonlProjectionError = class extends Error {
+  code;
+  constructor(code, message) {
+    super(message);
+    this.name = "BodyJsonlProjectionError";
+    this.code = code;
+  }
+};
+function locateBodyFloor(chat, groupId, messageId) {
+  requireNonEmpty2(groupId, "invalid-body-group-id", "body group id");
+  const byGroup = findBodyFloorIndexByGroupId(chat, groupId);
+  if (byGroup !== void 0) return byGroup;
+  if (messageId !== void 0) {
+    requireNonEmpty2(messageId, "invalid-body-message-id", "body message id");
+    const byMessage = findBodyFloorIndexByMessageId(chat, messageId);
+    if (byMessage !== void 0) return byMessage;
+  }
+  const suffix = messageId === void 0 ? "" : ` or message '${messageId}'`;
+  throw new BodyJsonlProjectionError(
+    "body-floor-not-found",
+    `body floor not found for group '${groupId}'${suffix}`
+  );
+}
+function findBodyFloorIndexByGroupId(chat, groupId) {
+  for (const [index, message] of chat.messages.entries()) {
+    if (readAgentTavern(message)?.bodyGroupId === groupId) return index;
+  }
+  return void 0;
+}
+function findBodyFloorIndexByMessageId(chat, messageId) {
+  for (const [index, message] of chat.messages.entries()) {
+    if (readAgentTavern(message)?.messageId === messageId) return index;
+  }
+  return void 0;
+}
+function applyCandidateToChat(chat, input) {
+  requireNonEmpty2(input.groupId, "invalid-body-group-id", "body group id");
+  requireNonEmpty2(input.messageId, "invalid-body-message-id", "candidate message id");
+  requireNonEmpty2(input.sendDate, "invalid-body-send-date", "candidate send date");
+  if (typeof input.text !== "string") {
+    throw new BodyJsonlProjectionError("invalid-body-text", `candidate text for '${input.messageId}' must be a string`);
+  }
+  requireIndex2(input.index, "invalid-body-index", "candidate index");
+  const floorIndex = locateBodyFloor(chat, input.groupId, input.messageId);
+  const floor = chat.messages[floorIndex];
+  assertFloorGroup(floor, input.groupId);
+  const swipes = readSwipes(floor, input.groupId);
+  if (input.index > swipes.length) {
+    throw new BodyJsonlProjectionError(
+      "body-candidate-gap",
+      `candidate index ${input.index} would skip slot ${swipes.length} on body floor '${input.groupId}'`
+    );
+  }
+  const next = structuredClone(chat);
+  const nextFloor = next.messages[floorIndex];
+  const nextSwipes = [...swipes];
+  const nextSwipeInfo = readSwipeInfo(nextFloor, input.groupId);
+  nextSwipes[input.index] = input.text;
+  while (nextSwipeInfo.length < input.index) nextSwipeInfo.push({});
+  nextSwipeInfo[input.index] = mergeSwipeInfo(nextSwipeInfo[input.index], input);
+  next.messages[floorIndex] = {
+    ...nextFloor,
+    swipes: nextSwipes,
+    swipe_info: nextSwipeInfo,
+    swipe_id: input.index,
+    mes: input.text,
+    extra: patchAgentTavern(nextFloor, input.groupId, input.messageId)
+  };
+  return next;
+}
+function applySelectToChat(chat, input) {
+  requireNonEmpty2(input.groupId, "invalid-body-group-id", "body group id");
+  requireNonEmpty2(input.anchorMessageId, "invalid-body-message-id", "anchor message id");
+  requireIndex2(input.index, "invalid-body-index", "select index");
+  const floorIndex = locateBodyFloor(chat, input.groupId, input.anchorMessageId);
+  const floor = chat.messages[floorIndex];
+  assertFloorGroup(floor, input.groupId);
+  const swipes = requireSwipes(floor, input.groupId);
+  const text = requireSwipeText(swipes, input.index, input.groupId);
+  const next = structuredClone(chat);
+  const nextFloor = next.messages[floorIndex];
+  next.messages[floorIndex] = {
+    ...nextFloor,
+    swipe_id: input.index,
+    mes: text,
+    extra: patchAgentTavern(nextFloor, input.groupId, input.anchorMessageId)
+  };
+  return next;
+}
+function applyEditToChat(chat, input) {
+  requireNonEmpty2(input.groupId, "invalid-body-group-id", "body group id");
+  if (typeof input.text !== "string") {
+    throw new BodyJsonlProjectionError("invalid-body-text", `edit text for body floor '${input.groupId}' must be a string`);
+  }
+  requireIndex2(input.index, "invalid-body-index", "edit index");
+  const floorIndex = locateBodyFloor(chat, input.groupId, void 0);
+  const floor = chat.messages[floorIndex];
+  assertFloorGroup(floor, input.groupId);
+  const swipes = requireSwipes(floor, input.groupId);
+  requireSwipeText(swipes, input.index, input.groupId);
+  const selected = floor.swipe_id;
+  if (selected === void 0 || !Number.isSafeInteger(selected) || selected < 0 || selected >= swipes.length) {
+    throw new BodyJsonlProjectionError(
+      "body-index-mismatch",
+      `body floor '${input.groupId}' has no valid selected swipe for edit`
+    );
+  }
+  if (selected !== input.index) {
+    throw new BodyJsonlProjectionError(
+      "body-index-mismatch",
+      `edit index ${input.index} does not match selected swipe ${selected} on body floor '${input.groupId}'`
+    );
+  }
+  const next = structuredClone(chat);
+  const nextFloor = next.messages[floorIndex];
+  const nextSwipes = [...swipes];
+  nextSwipes[selected] = input.text;
+  next.messages[floorIndex] = {
+    ...nextFloor,
+    swipes: nextSwipes,
+    mes: input.text
+  };
+  return next;
+}
+function applyRestoreToChat(chat, input) {
+  requireNonEmpty2(input.groupId, "invalid-body-group-id", "body group id");
+  requireNonEmpty2(input.messageId, "invalid-body-message-id", "restore message id");
+  requireIndex2(input.index, "invalid-body-index", "restore index");
+  const floorIndex = locateBodyFloor(chat, input.groupId, input.messageId);
+  const floor = chat.messages[floorIndex];
+  assertFloorGroup(floor, input.groupId);
+  const swipes = requireSwipes(floor, input.groupId);
+  requireSwipeText(swipes, input.index, input.groupId);
+  const next = structuredClone(chat);
+  const nextFloor = next.messages[floorIndex];
+  next.messages[floorIndex] = {
+    ...nextFloor,
+    extra: patchAgentTavern(nextFloor, input.groupId, input.messageId)
+  };
+  return next;
+}
+function requireNonEmpty2(value, code, label) {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new BodyJsonlProjectionError(code, `${label} must be a non-empty string`);
+  }
+}
+function requireIndex2(index, code, label) {
+  if (!Number.isSafeInteger(index) || index < 0) {
+    throw new BodyJsonlProjectionError(code, `${label} must be a non-negative safe integer, received ${String(index)}`);
+  }
+}
+function requireSwipes(message, groupId) {
+  const swipes = readSwipes(message, groupId);
+  if (swipes.length === 0) {
+    throw new BodyJsonlProjectionError("body-swipes-missing", `body floor '${groupId}' has no swipes`);
+  }
+  return swipes;
+}
+function readSwipes(message, groupId) {
+  const swipes = message.swipes;
+  if (swipes === void 0) return [];
+  if (!Array.isArray(swipes)) {
+    throw new BodyJsonlProjectionError("body-swipes-missing", `body floor '${groupId}' has a non-array swipes field`);
+  }
+  for (const [index, text] of swipes.entries()) {
+    if (typeof text !== "string") {
+      throw new BodyJsonlProjectionError(
+        "body-swipes-missing",
+        `body floor '${groupId}' has a non-string swipe at index ${index}`
+      );
+    }
+  }
+  return swipes;
+}
+function readSwipeInfo(message, groupId) {
+  const info2 = message.swipe_info;
+  if (info2 === void 0) return [];
+  if (!Array.isArray(info2)) {
+    throw new BodyJsonlProjectionError("body-swipe-info-invalid", `body floor '${groupId}' has a non-array swipe_info field`);
+  }
+  const cloned = [];
+  for (const [index, entry] of info2.entries()) {
+    if (!isRecord3(entry)) {
+      throw new BodyJsonlProjectionError(
+        "body-swipe-info-invalid",
+        `body floor '${groupId}' has a non-object swipe_info entry at index ${index}`
+      );
+    }
+    cloned.push(structuredClone(entry));
+  }
+  return cloned;
+}
+function requireSwipeText(swipes, index, groupId) {
+  if (index >= swipes.length) {
+    throw new BodyJsonlProjectionError(
+      "body-index-out-of-range",
+      `body index ${index} is out of range for floor '${groupId}' with ${swipes.length} swipes`
+    );
+  }
+  const text = swipes[index];
+  if (typeof text !== "string") {
+    throw new BodyJsonlProjectionError(
+      "body-index-out-of-range",
+      `body floor '${groupId}' has no text at index ${index}`
+    );
+  }
+  return text;
+}
+function mergeSwipeInfo(existing, candidate) {
+  const base = existing === void 0 ? {} : structuredClone(existing);
+  const currentExtra = isRecord3(base.extra) ? structuredClone(base.extra) : {};
+  const extra = { ...currentExtra };
+  if (extra.provider === void 0 && candidate.provider !== void 0) extra.provider = candidate.provider;
+  if (extra.model === void 0 && candidate.model !== void 0) extra.model = candidate.model;
+  if (extra.reasoning === void 0 && candidate.reasoning !== void 0) extra.reasoning = candidate.reasoning;
+  if (extra.usage === void 0 && candidate.usage !== void 0) extra.usage = structuredClone(candidate.usage);
+  if (extra.feedback === void 0 && candidate.feedback !== void 0) extra.feedback = candidate.feedback;
+  if (base.send_date === void 0 || base.send_date === "") base.send_date = candidate.sendDate;
+  base.extra = extra;
+  return base;
+}
+function patchAgentTavern(message, groupId, anchorMessageId) {
+  const extra = isRecord3(message.extra) ? structuredClone(message.extra) : {};
+  const current = isRecord3(extra.agentTavern) ? structuredClone(extra.agentTavern) : {};
+  const currentGroup = current.bodyGroupId;
+  if (currentGroup !== void 0 && currentGroup !== groupId) {
+    throw new BodyJsonlProjectionError(
+      "body-group-mismatch",
+      `body floor is already bound to group '${String(currentGroup)}', cannot project group '${groupId}'`
+    );
+  }
+  current.bodyGroupId = groupId;
+  current.anchorMessageId = anchorMessageId;
+  extra.agentTavern = current;
+  return extra;
+}
+function assertFloorGroup(message, groupId) {
+  const currentGroup = readAgentTavern(message)?.bodyGroupId;
+  if (currentGroup !== void 0 && currentGroup !== groupId) {
+    throw new BodyJsonlProjectionError(
+      "body-group-mismatch",
+      `body floor is already bound to group '${String(currentGroup)}', cannot project group '${groupId}'`
+    );
+  }
+}
+function readAgentTavern(message) {
+  const extra = message.extra;
+  if (!isRecord3(extra)) return void 0;
+  const agentTavern = extra.agentTavern;
+  return isRecord3(agentTavern) ? agentTavern : void 0;
+}
+function isRecord3(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// packages/plugin/src/agent-tavern/body-projector.ts
+function isBodyLogEvent(eventType) {
+  return eventType === BODY_EVENT_TYPE;
+}
+async function projectBodyEvent(store5, session, state, binding, event) {
+  const record = plainObjectRecord(event.data);
+  if (record === void 0) {
+    throw new BodyLedgerError("invalid-body-event", `body event seq ${event.seq} must carry an object data payload`);
+  }
+  const op = record["op"];
+  if (op === "op-start" || op === "op-finish") return;
+  if (op !== "candidate" && op !== "select" && op !== "edit" && op !== "restore") {
+    throw new BodyLedgerError("invalid-body-op", `body event seq ${event.seq} has unknown op '${String(op)}'`);
+  }
+  const data = record;
+  const ledger = foldBodyLedger(bodySessionEvents(session), data.groupId, event.seq);
+  if (data.op === "candidate") {
+    const slot = requireProjectedCandidate(ledger, data, event.seq);
+    const resolved = resolveBodyCandidateMessage(session, data.messageId, event.seq);
+    const character = await store5.getCharacter(binding.character);
+    const scripts = await collectSessionRegexScripts(store5, state, binding.character, binding.chatId, character);
+    const saveScripts = scripts.filter((script) => !script.promptOnly && !script.markdownOnly);
+    const text = saveScripts.length > 0 ? applyRegexScripts(resolved.text, saveScripts, RegexPlacement2.AI_OUTPUT) : resolved.text;
+    const input = {
+      groupId: data.groupId,
+      messageId: data.messageId,
+      index: slot.index,
+      text,
+      sendDate: eventDate(resolved.time),
+      ...resolved.provider === void 0 ? {} : { provider: resolved.provider },
+      ...resolved.model === void 0 ? {} : { model: resolved.model },
+      ...resolved.usage === void 0 ? {} : { usage: resolved.usage },
+      ...data.feedback === void 0 ? {} : { feedback: data.feedback }
+    };
+    await mutateBodyChat(store5, binding, (chat) => applyCandidateToChat(chat, input));
+    return;
+  }
+  if (data.op === "select") {
+    const projected2 = requireProjectedLedger(ledger, event.seq, data.groupId);
+    if (projected2.selectedIndex !== data.index) {
+      throw new BodyLedgerError(
+        "invalid-body-event",
+        `body event seq ${event.seq} select index ${data.index} does not match ledger index ${projected2.selectedIndex} for group '${data.groupId}'`
+      );
+    }
+    await mutateBodyChat(store5, binding, (chat) => applySelectToChat(chat, {
+      groupId: data.groupId,
+      index: data.index,
+      anchorMessageId: projected2.anchorMessageId
+    }));
+    return;
+  }
+  if (data.op === "edit") {
+    const projected2 = requireProjectedLedger(ledger, event.seq, data.groupId);
+    if (projected2.edits.get(data.index) !== data.text) {
+      throw new BodyLedgerError(
+        "invalid-body-event",
+        `body event seq ${event.seq} edit text does not match the folded edit at index ${data.index} for group '${data.groupId}'`
+      );
+    }
+    await mutateBodyChat(store5, binding, (chat) => applyEditToChat(chat, {
+      groupId: data.groupId,
+      index: data.index,
+      text: data.text
+    }));
+    return;
+  }
+  const projected = requireProjectedLedger(ledger, event.seq, data.groupId);
+  if (projected.anchorMessageId !== data.messageId || projected.selectedIndex !== data.index) {
+    throw new BodyLedgerError(
+      "invalid-body-event",
+      `body event seq ${event.seq} restore target '${data.messageId}' at index ${data.index} does not match ledger anchor '${projected.anchorMessageId}' at index ${projected.selectedIndex}`
+    );
+  }
+  await mutateBodyChat(store5, binding, (chat) => applyRestoreToChat(chat, {
+    groupId: data.groupId,
+    index: data.index,
+    messageId: data.messageId
+  }));
+}
+function isBodyMergedAssistant(session, event) {
+  const data = plainObjectRecord(event.data);
+  const message = data === void 0 ? void 0 : plainObjectRecord(data["message"]);
+  const messageId = message?.["id"];
+  if (typeof messageId === "string" && messageId !== "" && isRestoredBodyMessage(session, messageId)) return true;
+  return isBodyTriggerTurn(session, data?.["turn"]);
+}
+async function mutateBodyChat(store5, binding, mutate) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const snapshot2 = await store5.getChatSnapshot(binding.character, binding.chatId);
+    if (!snapshot2) throw new Error("AgentTavern body projection target chat not found");
+    const next = mutate(structuredClone(snapshot2.chat));
+    try {
+      await store5.saveChat(binding.character, binding.chatId, next, snapshot2.revision);
+      return;
+    } catch (error) {
+      if (!(error instanceof ChatRevisionConflictError) || attempt === 3) throw error;
+    }
+  }
+}
+function isRestoredBodyMessage(session, messageId) {
+  for (const event of sessionEvents(session)) {
+    if (event.type !== BODY_EVENT_TYPE) continue;
+    const data = plainObjectRecord(event.data);
+    if (data !== void 0 && data["op"] === "restore" && data["messageId"] === messageId) return true;
+  }
+  return false;
+}
+function isBodyTriggerTurn(session, turn) {
+  if (typeof turn !== "number" || !Number.isSafeInteger(turn)) return false;
+  let current;
+  for (const event of sessionEvents(session)) {
+    if (event.type === "turn/start") {
+      current = safeTurnNumber(plainObjectRecord(event.data)?.["turn"]);
+      continue;
+    }
+    if (event.type === "turn/end") {
+      if (current === turn) return false;
+      current = void 0;
+      continue;
+    }
+    if (current !== turn || event.type !== "user/message") continue;
+    const source = plainObjectRecord(plainObjectRecord(event.data)?.["source"]);
+    const form = source?.["form"];
+    return form === "body-regenerate" || form === "body-restore";
+  }
+  return false;
+}
+function safeTurnNumber(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) ? value : void 0;
+}
+function bodySessionEvents(session) {
+  const events = [];
+  for (const event of sessionEvents(session)) {
+    if (!Number.isSafeInteger(event.seq) || event.seq < 0) {
+      throw new BodyLedgerError(
+        "invalid-body-seq",
+        `session event '${String(event.type)}' has invalid seq ${String(event.seq)} while folding body events`
+      );
+    }
+    if (typeof event.type !== "string" || event.type === "") {
+      throw new BodyLedgerError("invalid-body-event", `session event at seq ${event.seq} has no type while folding body events`);
+    }
+    events.push({ seq: event.seq, type: event.type, data: event.data });
+  }
+  return events;
+}
+function requireProjectedLedger(ledger, seq, groupId) {
+  if (ledger === void 0) {
+    throw new BodyLedgerError(
+      "invalid-body-event",
+      `body event seq ${seq} for group '${groupId}' has no candidate, so its JSONL slot cannot be resolved`
+    );
+  }
+  return ledger;
+}
+function requireProjectedCandidate(ledger, data, seq) {
+  const projected = requireProjectedLedger(ledger, seq, data.groupId);
+  if (projected.anchorMessageId !== data.messageId) {
+    throw new BodyLedgerError(
+      "invalid-body-event",
+      `body event seq ${seq} candidate '${data.messageId}' does not match ledger anchor '${projected.anchorMessageId}' for group '${data.groupId}'`
+    );
+  }
+  const slot = projected.candidates[data.index];
+  if (slot === void 0) {
+    throw new BodyLedgerError(
+      "invalid-body-index",
+      `body event seq ${seq} candidate index ${data.index} is out of range for group '${data.groupId}' with ${projected.candidates.length} candidates`
+    );
+  }
+  if (slot.messageId !== data.messageId) {
+    throw new BodyLedgerError(
+      "invalid-body-event",
+      `body event seq ${seq} candidate index ${data.index} holds '${slot.messageId}', not '${data.messageId}'`
+    );
+  }
+  return slot;
+}
+function resolveBodyCandidateMessage(session, messageId, uptoSeq) {
+  let found;
+  for (const event of sessionEvents(session)) {
+    if (event.type !== "assistant/message") continue;
+    if (!Number.isSafeInteger(event.seq) || event.seq < 0 || event.seq > uptoSeq) continue;
+    const message2 = plainObjectRecord(event.data)?.["message"];
+    if (plainObjectRecord(message2)?.["id"] !== messageId) continue;
+    if (found === void 0 || event.seq >= found.seq) found = event;
+  }
+  if (found === void 0) {
+    throw new BodyLedgerError(
+      "body-candidate-message-missing",
+      `body candidate '${messageId}' has no assistant/message at or before seq ${uptoSeq}`
+    );
+  }
+  const message = plainObjectRecord(plainObjectRecord(found.data)?.["message"]);
+  const source = message === void 0 ? void 0 : plainObjectRecord(message["source"]);
+  const text = messageText2(message?.["content"]);
+  if (text === "") {
+    throw new BodyJsonlProjectionError(
+      "invalid-body-text",
+      `body candidate '${messageId}' assistant message at seq ${found.seq} has no text`
+    );
+  }
+  const provider = nonEmptyStringOf(source?.["provider"]);
+  const model = nonEmptyStringOf(source?.["model"]);
+  const usage = bodyUsage(plainObjectRecord(found.data)?.["usage"], found.seq);
+  return {
+    time: found.time,
+    text,
+    ...provider === void 0 ? {} : { provider },
+    ...model === void 0 ? {} : { model },
+    ...usage === void 0 ? {} : { usage }
+  };
+}
+function bodyUsage(value, seq) {
+  if (value === void 0) return void 0;
+  const record = plainObjectRecord(value);
+  if (record === void 0) {
+    throw new BodyLedgerError("invalid-body-event", `assistant/message at seq ${seq} has non-object usage`);
+  }
+  const usage = {};
+  for (const [key, member] of Object.entries(record)) {
+    if (typeof member === "number" && Number.isFinite(member)) usage[key] = member;
+  }
+  return Object.keys(usage).length === 0 ? void 0 : usage;
+}
+function nonEmptyStringOf(value) {
+  return typeof value === "string" && value !== "" ? value : void 0;
+}
+function plainObjectRecord(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
+  return value;
+}
+function messageText2(content) {
+  if (!Array.isArray(content)) return "";
+  return content.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => block.text).join("").trim();
+}
+function eventDate(time) {
+  return new Date(Number.isFinite(time) ? time : Date.now()).toISOString();
+}
+
 // packages/plugin/src/agent-tavern/projector.ts
 var AgentTavernProjector = class _AgentTavernProjector {
   constructor(root, store5) {
@@ -13680,10 +14495,14 @@ var AgentTavernProjector = class _AgentTavernProjector {
       const state = await this.store.getState();
       const binding = state.sessionBindings[session.id];
       if (binding?.architecture === "agent-tavern" && binding.group !== true) {
-        const character = await this.store.getCharacter(binding.character);
-        const scripts = await collectSessionRegexScripts(this.store, state, binding.character, binding.chatId, character);
-        const message = projectMessage(session, event, binding, scripts);
-        if (message !== void 0) await this.appendMessage(binding, session.id, event.seq, message, character?.card);
+        if (isBodyLogEvent(event.type)) {
+          await projectBodyEvent(this.store, session, state, binding, event);
+        } else {
+          const character = await this.store.getCharacter(binding.character);
+          const scripts = await collectSessionRegexScripts(this.store, state, binding.character, binding.chatId, character);
+          const message = projectMessage(session, event, binding, scripts);
+          if (message !== void 0) await this.appendMessage(binding, session.id, event.seq, message, character?.card);
+        }
       }
       await this.writeCheckpoint({
         version: 1,
@@ -13720,7 +14539,7 @@ var AgentTavernProjector = class _AgentTavernProjector {
           projected = {
             ...message,
             mes: applied.text,
-            ...applied.statData !== void 0 ? { variables: { ...plainObjectRecord(message.variables) ?? {}, stat_data: applied.statData } } : {}
+            ...applied.statData !== void 0 ? { variables: { ...plainObjectRecord2(message.variables) ?? {}, stat_data: applied.statData } } : {}
           };
         }
         projected = messageStatVariables(next, projected);
@@ -13772,13 +14591,13 @@ function projectMessage(session, event, binding, scripts) {
   if (event.type === "user/message") {
     const source = event.data?.source;
     if (typeof source !== "object" || source === null || Array.isArray(source) || source["kind"] !== "user") return void 0;
-    const text2 = messageText(event.data?.content);
+    const text2 = messageText3(event.data?.content);
     if (text2 === "") return void 0;
     return {
       name: "User",
       is_user: true,
       is_system: false,
-      send_date: eventDate(event.time),
+      send_date: eventDate2(event.time),
       // ST 语义：USER_INPUT 正则在消息落库前生效（ST 管线同样保存变换后文本）。
       mes: applyRegexScripts(text2, scripts, RegexPlacement2.USER_INPUT),
       extra: projectionExtra(session, event, binding.contextMode, turnAt(session, event.seq))
@@ -13786,16 +14605,17 @@ function projectMessage(session, event, binding, scripts) {
   }
   if (event.type !== "assistant/message") return void 0;
   if (isTavernMirrorSource(event.data?.message?.source)) return void 0;
+  if (isBodyMergedAssistant(session, event)) return void 0;
   const content = event.data?.message?.content;
   if (!Array.isArray(content) || content.some((block) => block?.type === "tool-call")) return void 0;
-  const text = messageText(content);
+  const text = messageText3(content);
   if (text === "") return void 0;
   const saveScripts = scripts.filter((script) => !script.promptOnly && !script.markdownOnly);
   return {
     name: binding.character,
     is_user: false,
     is_system: false,
-    send_date: eventDate(event.time),
+    send_date: eventDate2(event.time),
     mes: saveScripts.length > 0 ? applyRegexScripts(text, saveScripts, RegexPlacement2.AI_OUTPUT) : text,
     extra: projectionExtra(session, event, binding.contextMode, event.data?.turn, event.data?.step)
   };
@@ -13940,11 +14760,11 @@ function lastImportedTurn(appends) {
   }
   return last;
 }
-function plainObjectRecord(value) {
+function plainObjectRecord2(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
   return value;
 }
-function messageText(content) {
+function messageText3(content) {
   if (!Array.isArray(content)) return "";
   return content.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => block.text).join("").trim();
 }
@@ -13956,7 +14776,7 @@ function turnAt(session, cursor) {
   }
   return turn;
 }
-function eventDate(time) {
+function eventDate2(time) {
   return new Date(Number.isFinite(time) ? time : Date.now()).toISOString();
 }
 function validateCheckpoint(value, sessionId) {
@@ -13966,16 +14786,329 @@ function validateCheckpoint(value, sessionId) {
 }
 var mvuAuditTail = new MutationTail();
 
-// packages/plugin/src/agent-tavern/anchor.ts
-import { randomUUID as randomUUID3 } from "node:crypto";
+// packages/plugin/src/agent-tavern/body-runtime.ts
+import { randomUUID as randomUUID5 } from "node:crypto";
+
+// packages/plugin/src/message.ts
+function createMessage(input) {
+  return deepFreeze(structuredClone({ ...input, id: crypto.randomUUID() }));
+}
+function deepFreeze(value) {
+  const seen = /* @__PURE__ */ new WeakSet();
+  const pending = [value];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === null || typeof current !== "object" || seen.has(current)) continue;
+    seen.add(current);
+    Object.freeze(current);
+    pending.push(...Object.values(current));
+  }
+  return value;
+}
+
+// packages/plugin/src/agent-tavern/deduce.ts
+var DEDUCE_PROVIDER = "spawn";
+var REASONING_PRESET_ID = "agent-reasoning";
+function subagentRuntimeOf(parent) {
+  const ctx = parent?.ctx;
+  if (!ctx) return void 0;
+  try {
+    const looked = ctx.get?.("subagents");
+    if (isRuntime(looked)) return looked;
+  } catch {
+  }
+  try {
+    const direct = ctx.subagents;
+    if (isRuntime(direct)) return direct;
+  } catch {
+  }
+  return void 0;
+}
+function isRuntime(candidate) {
+  if (typeof candidate !== "object" || candidate === null) return false;
+  const runtime = candidate;
+  return typeof runtime.start === "function" || typeof runtime.startActivation === "function";
+}
+async function spawnSubagent(runtime, request) {
+  if (typeof runtime.startActivation === "function") {
+    const activation = await runtime.startActivation({
+      provider: DEDUCE_PROVIDER,
+      label: request.label,
+      request: {
+        prompt: request.prompt,
+        parent: request.parent,
+        ...request.agentPreset === void 0 ? {} : { agentPreset: request.agentPreset }
+      },
+      signal: request.signal,
+      delivery: "caller"
+    });
+    return {
+      id: activation.childId,
+      result: activation.result,
+      dispose: () => activation.dispose()
+    };
+  }
+  if (typeof runtime.start === "function") {
+    const { agentPreset: _ignored, ...legacy } = request;
+    return runtime.start(DEDUCE_PROVIDER, legacy);
+  }
+  throw new Error("subagent runtime exposes neither startActivation (DSH 0.2.1+) nor start (DSH 0.2.0)");
+}
+
+// packages/plugin/src/agent-novel/usage.ts
+var USAGE_SAMPLER_KEY = Symbol.for("dsh-soulmojito:novel-usage-sampler");
+var samplerTable = globalThis[USAGE_SAMPLER_KEY] ??= /* @__PURE__ */ new Map();
+function drainToolOutputBytes() {
+  const drained = {};
+  for (const [toolName, bytes] of samplerTable) {
+    drained[toolName] = bytes;
+  }
+  samplerTable.clear();
+  return drained;
+}
+var PROBE_AGENT_ID_KEY = Symbol.for("dsh-soulmojito:novel-writer-probe-agent-id");
+var probeAgentSlot = globalThis[PROBE_AGENT_ID_KEY] ??= {};
+function takeProbeAgentId() {
+  try {
+    const id = probeAgentSlot.id;
+    delete probeAgentSlot.id;
+    return typeof id === "string" && id !== "" ? id : null;
+  } catch {
+    return null;
+  }
+}
+var WRITER_RUN_USAGE_KEY = Symbol.for("dsh-soulmojito:novel-writer-run-usage");
+var writerRunUsageSlot = globalThis[WRITER_RUN_USAGE_KEY] ??= { outputChars: null, usage: null };
+function drainWriterRunUsage() {
+  try {
+    const drained = { outputChars: writerRunUsageSlot.outputChars, usage: writerRunUsageSlot.usage };
+    writerRunUsageSlot.outputChars = null;
+    writerRunUsageSlot.usage = null;
+    return drained;
+  } catch {
+    return { outputChars: null, usage: null };
+  }
+}
+
+// packages/plugin/src/agent-novel/capabilities.ts
+var AGENT_NOVEL_PRESET_ID = "agent-novel";
+function isObject(value) {
+  return typeof value === "object" && value !== null;
+}
+function isFunction(value) {
+  return typeof value === "function";
+}
+var REQUIRED_EVENT_TYPES = ["session/event", "agent/created", "agent/status"];
+function inspectAgentNovelCapabilities(ctx) {
+  const missing = [];
+  const reasons = [];
+  const need = (id, ok, reason) => {
+    if (ok) return;
+    missing.push(id);
+    reasons.push(reason);
+  };
+  const agents = isObject(ctx?.agents) ? ctx?.agents : void 0;
+  need("agents", agents !== void 0, "host context exposes no 'agents' service object (\xA716 followup scheduling)");
+  need("agents.withoutInitiator", isFunction(agents?.withoutInitiator), "agents.withoutInitiator is not callable; agent-initiated followups without a user initiator cannot be driven (\xA716)");
+  const presets = isObject(ctx?.agentPresets) ? ctx?.agentPresets : void 0;
+  need("agentPresets.mount", isFunction(presets?.mount), "agentPresets.mount is not callable; the novel preset cannot be mounted (\xA716)");
+  need("agentPresets.recompose", isFunction(presets?.recompose), "agentPresets.recompose is not callable; preset recomposition for the novel architecture is unavailable (\xA716)");
+  const systemPrompt = isObject(ctx?.systemPrompt) ? ctx?.systemPrompt : void 0;
+  need("systemPrompt.section", isFunction(systemPrompt?.section), "systemPrompt.section is not callable; the novel kernel cannot be registered (\xA711)");
+  need("tools.register", isFunction(isObject(ctx?.tools) ? (ctx?.tools).register : void 0), "tools.register is not callable; the novel tool surface cannot be registered (\xA711)");
+  for (const eventType of REQUIRED_EVENT_TYPES) {
+    need(
+      `on:${eventType}`,
+      isFunction(ctx?.on),
+      `event subscription for '${eventType}' is unavailable: the host exposes no 'on' hook, and actual emission of the event type cannot be probed statically (\xA716)`
+    );
+  }
+  return {
+    available: missing.length === 0,
+    missing,
+    reasons,
+    checkedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+}
+var PROBE_TOOL = "novel_status_read";
+function messageOf(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function outputExcerptOf(output) {
+  const text = output.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => block.text ?? "").join("\n").trim();
+  return text === "" ? "(no text output)" : `output '${text.slice(0, 120)}'`;
+}
+async function probeSpawn(deps, label, prompt, options) {
+  const runtime = deps.runtime;
+  if (runtime === void 0 || typeof runtime.start !== "function" && typeof runtime.startActivation !== "function") {
+    return { ok: false, error: 'subagent runtime is unavailable in this deployment (enable the dsh-subagent bundle with an in-process "spawn" provider, 0007 \xA75)' };
+  }
+  const signal = deps.signal ?? new AbortController().signal;
+  let run;
+  try {
+    run = await spawnSubagent(runtime, {
+      label,
+      prompt: [{ type: "text", text: prompt }],
+      parent: deps.parent,
+      signal,
+      ...options.allow === null ? {} : { toolFilter: { allow: options.allow } },
+      ...options.agentPreset === void 0 ? {} : { agentPreset: options.agentPreset }
+    });
+  } catch (error) {
+    return { ok: false, error: `spawn failed: ${messageOf(error)}` };
+  }
+  try {
+    const result = await run.result;
+    return { ok: true, runId: run.id, result: { output: [...result.output], stopReason: result.stopReason, ...result.diagnostic === void 0 ? {} : { diagnostic: result.diagnostic } } };
+  } catch (error) {
+    return { ok: false, error: `run result rejected: ${messageOf(error)}` };
+  } finally {
+    try {
+      await run.dispose();
+    } catch {
+    }
+  }
+}
+async function probeIdentityCorrelation(deps) {
+  takeProbeAgentId();
+  const spawn3 = await probeSpawn(
+    deps,
+    "dsh-soulmojito writer-probe \xB7 p1-identity",
+    `Host capability probe. Call the tool ${PROBE_TOOL} exactly once, then reply with exactly: ok. The tool may return an error about a missing novel binding \u2014 that is expected and fine; still reply ok after the single call.`,
+    { allow: [PROBE_TOOL] }
+  );
+  if (!spawn3.ok) return { item: { status: "fail", detail: `P1 spawn did not complete: ${spawn3.error}` }, spawnOk: false };
+  const recorded = takeProbeAgentId();
+  if (recorded === spawn3.runId) {
+    return {
+      item: { status: "pass", detail: `subagent tool execution carried exec.agent.id '${recorded}' equal to the spawn run id; the delegation registry key (0007 \xA76.2) is derivable` },
+      spawnOk: true
+    };
+  }
+  const detail = recorded === null ? `${PROBE_TOOL} never executed inside the probe subagent (stopReason ${spawn3.result.stopReason}; ${outputExcerptOf(spawn3.result.output)}) \u2014 the model may have skipped the call; re-run the probe before treating this as a host gap` : `exec.agent.id '${recorded}' does not match the spawn run id '${spawn3.runId}' (stopReason ${spawn3.result.stopReason}) \u2014 subagent tool executions are not attributable to their run`;
+  return { item: { status: "fail", detail }, spawnOk: true };
+}
+async function probeAllowList(deps, p1, spawnOk) {
+  if (!spawnOk) return { status: "fail", detail: `allow-reachable half not probed: the P1 spawn itself failed (${p1.detail})` };
+  if (p1.status !== "pass") {
+    return { status: "inconclusive", detail: `allow-reachable half unproven because P1 did not confirm a tool execution inside an allow-listed subagent (${p1.detail})` };
+  }
+  const presetHost = typeof deps.runtime?.startActivation === "function";
+  takeProbeAgentId();
+  const spawn3 = await probeSpawn(
+    deps,
+    "dsh-soulmojito writer-probe \xB7 p2-allowlist",
+    `Host capability probe. Try calling the tool ${PROBE_TOOL} once. If the tool is available to you, reply with exactly: tool-ran. If the tool is not available to you, reply with exactly: unavailable.`,
+    { allow: [], agentPreset: REASONING_PRESET_ID }
+  );
+  if (!spawn3.ok) return { status: "fail", detail: `P2 spawn did not complete: ${spawn3.error}` };
+  const recorded = takeProbeAgentId();
+  if (recorded !== null) {
+    return { status: "fail", detail: `${PROBE_TOOL} executed inside a subagent that should have no tools (exec.agent.id '${recorded}') \u2014 ${presetHost ? `the host did not enforce preset '${REASONING_PRESET_ID}'` : "the host toolFilter does not enforce allow lists"}` };
+  }
+  const text = spawn3.result.output.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => (block.text ?? "").trim().toLocaleLowerCase()).join("\n");
+  if (text.includes("unavailable")) {
+    return { status: "pass", detail: `allow-reachable proven by the P1 execution; the tool-free subagent reported the tool unavailable (${presetHost ? `host-enforced by preset '${REASONING_PRESET_ID}' plus model report` : "observational \u2014 model-reported, not a host-side denial proof"})` };
+  }
+  return {
+    status: "inconclusive",
+    detail: `allow-reachable proven by the P1 execution; the tool-free subagent neither executed the tool nor clearly reported it unavailable (stopReason ${spawn3.result.stopReason}; ${outputExcerptOf(spawn3.result.output)}) \u2014 model compliance limits the probe; re-run or verify on a real E2E delegation`
+  };
+}
+async function inspectWriterSubagentCapabilities(deps = {}) {
+  const { item: p1, spawnOk } = await probeIdentityCorrelation(deps);
+  const p2 = await probeAllowList(deps, p1, spawnOk);
+  return {
+    probedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    spawnOk,
+    p1,
+    p2,
+    p3: {
+      status: "deferred-to-e2e",
+      reason: "end-to-end delegation (research \u2192 commit \u2192 out-of-scope rejection timing) requires a real-model run; not automatable in-process (0007 \xA79 P3)"
+    }
+  };
+}
+
+// packages/plugin/src/build-info.ts
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { relative, resolve } from "node:path";
+
+// packages/plugin/src/env-compat.ts
+function envCompat(suffix) {
+  return process.env[`DSH_SOULMOJITO_${suffix}`] ?? process.env[`DSH_TAVERN_${suffix}`];
+}
+
+// packages/plugin/src/build-info.ts
+var BUILD_INFO = readBuildInfo();
+var TAVERN_COMMIT = resolveTavernCommit(BUILD_INFO.commit);
+function readBuildInfo() {
+  let version = "unknown";
+  let commit = "unknown";
+  const stamped = buildTimeStamp();
+  if (stamped.commit !== "") commit = stamped.commit;
+  for (const packagePath of [
+    resolve(import.meta.dirname, "package.json"),
+    resolve(import.meta.dirname, "..", "package.json")
+  ]) {
+    try {
+      const packageData = JSON.parse(readFileSync(packagePath, "utf8"));
+      if (typeof packageData?.version === "string" && packageData.version.trim() !== "") {
+        version = packageData.version.trim();
+        break;
+      }
+    } catch {
+    }
+  }
+  try {
+    const generated = JSON.parse(readFileSync(resolve(import.meta.dirname, "version.json"), "utf8"));
+    if (typeof generated?.version === "string" && generated.version.trim() !== "") {
+      version = generated.version.trim();
+    }
+    const sidecarCommit = typeof generated?.commit === "string" ? normalizeCommit(generated.commit) : void 0;
+    if (sidecarCommit !== void 0) commit = sidecarCommit;
+  } catch {
+  }
+  return { version, commit };
+}
+function buildTimeStamp() {
+  const version = true ? "0.7.0".trim() : "";
+  const commit = true ? normalizeCommit("d822065") : void 0;
+  return { version, commit: commit ?? "" };
+}
+function resolveTavernCommit(buildFallback) {
+  const fallback = normalizeCommit(envCompat("COMMIT") ?? buildFallback) ?? "unknown";
+  const repositoryRoot = resolve(import.meta.dirname, "..", "..");
+  const packagePath = relative(repositoryRoot, import.meta.dirname).replaceAll("\\", "/");
+  if (packagePath !== "packages/plugin") return fallback;
+  const git = (args) => execFileSync("git", args, {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 2e3,
+    windowsHide: true
+  }).trim();
+  try {
+    const gitRoot = resolve(git(["rev-parse", "--show-toplevel"]));
+    if (relative(repositoryRoot, gitRoot) !== "") return fallback;
+    return normalizeCommit(git(["rev-parse", "--short=7", "HEAD"])) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+function normalizeCommit(value) {
+  const commit = value.trim();
+  return /^[0-9a-f]{7,40}$/i.test(commit) ? commit.slice(0, 7).toLowerCase() : void 0;
+}
 
 // packages/plugin/src/dsh-home.ts
 import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join as join10, resolve } from "node:path";
+import { join as join10, resolve as resolve2 } from "node:path";
 function dshHomePath(...segments) {
   const configured = process.env.DSH_HOME?.trim();
-  return join10(resolve(configured || join10(homedir(), ".dsh")), ...segments);
+  return join10(resolve2(configured || join10(homedir(), ".dsh")), ...segments);
 }
 var TAVERN_DATA_DIR = "soulmojito";
 var LEGACY_TAVERN_DATA_DIR = "tavern";
@@ -13994,122 +15127,197 @@ function holdsTavernData(root) {
   }
 }
 
-// packages/plugin/src/agent-tavern/anchor.ts
-var ANCHOR_EVERY_TURNS_DEFAULT = 5;
-var ANCHOR_TEXT = [
-  "<tavern-anchor>",
-  "Periodic maintenance reminder (system message, not story content \u2014 do not narrate, quote, or reference it):",
-  "Before continuing, check your standing duties. If the upcoming beat hinges on a character, place, faction, item, or a past event, research it first \u2014 tavern_character_get for the card, tavern_lore_search for world canon, tavern_history_search or memory_search for continuity \u2014 instead of improvising. If recent turns introduced significant story facts (new characters, places, promises, injuries, items, relationship or status changes) that are not yet recorded, persist them with memory_write or memory_update in chat scope. When nothing applies, simply continue the scene without mentioning this reminder.",
-  "</tavern-anchor>"
-].join("\n");
-var OPENING_TEXT = [
-  "<tavern-opening>",
-  "Opening grounding brief (system message, not story content \u2014 do not narrate, quote, or reference it):",
-  "The story above was imported from the Tavern save: the greeting and any past messages are stage history, not your own memory. The character card details and world-info entries behind this scene are not in your context, and no memories have been loaded yet.",
-  "Before writing this reply, load the scene with the tools: tavern_character_get for the bound character card, tavern_lore_search for each proper noun this opening relies on (persons, places, factions, techniques, items), memory_search for established facts, and tavern_history_search when continuity is unclear. Then continue the scene naturally without mentioning this brief.",
-  "</tavern-opening>"
-].join("\n");
-function anchorDue(turn, step, everyTurns) {
-  if (everyTurns <= 0) return false;
-  return step === 1 && typeof turn === "number" && Number.isSafeInteger(turn) && turn > 0 && turn % everyTurns === 0;
-}
-function reminderDue(input, everyTurns, latest, hasUserTurn) {
-  if (input.step !== 1) return void 0;
-  if (!Array.isArray(input.messages) || input.messages.length === 0) return void 0;
-  const turn = input.turn;
-  if (typeof turn !== "number" || !Number.isSafeInteger(turn) || turn <= 0) return void 0;
-  if (latest >= turn) return void 0;
-  if (!hasUserTurn) return "opening";
-  return anchorDue(turn, input.step, everyTurns) ? "periodic" : void 0;
-}
-function createAnchorMessage(session) {
-  return {
-    id: randomUUID3(),
-    role: "user",
-    content: [{ type: "text", text: ANCHOR_TEXT }],
-    source: hostPluginMessageSource(session)
-  };
-}
-function createOpeningMessage(session) {
-  return {
-    id: randomUUID3(),
-    role: "user",
-    content: [{ type: "text", text: OPENING_TEXT }],
-    source: hostPluginMessageSource(session)
-  };
-}
-function hasRealUserTurn(events) {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
-    if (event?.type !== "user/message") continue;
-    if (event.data?.source?.kind === "user") return true;
+// packages/plugin/src/mods/host.ts
+import { promises as fs14 } from "node:fs";
+import { mkdir as mkdir3 } from "node:fs/promises";
+import { isAbsolute, join as join12, relative as relative2, resolve as resolve3 } from "node:path";
+import { pathToFileURL as pathToFileURL2 } from "node:url";
+
+// packages/plugin/src/guides.ts
+var GUIDES_MAX_COUNT = 8;
+var GUIDE_MAX_TEXT_LENGTH = 500;
+var GUIDES_BLOCK_HEADER = "Conversation guides (persistent user directives; apply to every reply):";
+function normalizeGuides(value) {
+  if (!Array.isArray(value)) return [];
+  const guides = [];
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+    const { id, text, createdAt } = entry;
+    if (typeof id !== "string" || id === "") continue;
+    if (typeof text !== "string" || text.trim() === "") continue;
+    if (typeof createdAt !== "string" || createdAt === "") continue;
+    guides.push({ id, text: text.trim(), createdAt });
   }
-  return false;
+  return guides;
 }
-function latestReminderTurn(events) {
-  let turn = 0;
-  let latest = 0;
-  for (const event of events) {
-    const record = event;
-    if (record?.type === "turn/start") {
-      const value = record.data?.turn;
-      if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) turn = value;
-      continue;
-    }
-    if (record?.type === "user/message" && isReminderMessage(record.data)) latest = turn;
+function addGuide(guides, text) {
+  if (typeof text !== "string" || text.trim() === "") {
+    return { ok: false, error: "guide text is required and must be a non-empty string" };
   }
-  return latest;
-}
-function isReminderMessage(data) {
-  if (typeof data !== "object" || data === null) return false;
-  const content = data.content;
-  if (!Array.isArray(content) || content.length === 0) return false;
-  const first = content[0];
-  return first?.type === "text" && (first.text === ANCHOR_TEXT || first.text === OPENING_TEXT);
-}
-function resolveAnchorEveryTurns(value) {
-  if (value === void 0) return ANCHOR_EVERY_TURNS_DEFAULT;
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return ANCHOR_EVERY_TURNS_DEFAULT;
-  return value;
-}
-var anchorTavernStorePromise;
-function anchorTavernStore() {
-  return anchorTavernStorePromise ??= TavernStore.open(tavernDataRoot());
-}
-async function isAgentTavernSession(sessionId) {
-  try {
-    const binding = (await (await anchorTavernStore()).getState()).sessionBindings[sessionId];
-    return binding !== void 0 && binding.architecture === "agent-tavern" && binding.group !== true;
-  } catch {
-    return false;
+  const trimmed = text.trim();
+  if (trimmed.length > GUIDE_MAX_TEXT_LENGTH) {
+    return { ok: false, error: `guide text must be at most ${GUIDE_MAX_TEXT_LENGTH} characters (got ${trimmed.length})` };
   }
+  if (guides.length >= GUIDES_MAX_COUNT) {
+    return { ok: false, error: `guide limit reached: at most ${GUIDES_MAX_COUNT} guides per chat` };
+  }
+  const guide = { id: crypto.randomUUID(), text: trimmed, createdAt: (/* @__PURE__ */ new Date()).toISOString() };
+  return { ok: true, guide, guides: [...guides, guide] };
 }
-function registerAgentTavernAnchor(ctx, options = {}) {
-  const everyTurns = resolveAnchorEveryTurns(options.everyTurns);
-  if (everyTurns <= 0) return;
-  const isTavernSession = options.isTavernSession ?? isAgentTavernSession;
-  ctx.on?.("agent/pre-step", async (payload, next) => {
-    const decision = await next();
-    if (decision?.kind !== "enter" || payload.signal?.aborted) return decision;
-    const events = sessionEvents(payload.agent?.session);
-    const kind = reminderDue(
-      { turn: payload.turn, step: payload.step, messages: decision.messages },
-      everyTurns,
-      latestReminderTurn(events),
-      hasRealUserTurn(events)
-    );
-    if (kind === void 0) return decision;
-    const sessionId = payload.agent?.session?.id;
-    if (typeof sessionId !== "string" || !await isTavernSession(sessionId)) return decision;
-    return {
-      kind: "enter",
-      messages: [...decision.messages ?? [], kind === "opening" ? createOpeningMessage(payload.agent?.session) : createAnchorMessage(payload.agent?.session)]
-    };
-  }, { prepend: true });
+function removeGuide(guides, id) {
+  const next = guides.filter((guide) => guide.id !== id);
+  return { removed: next.length !== guides.length, guides: next };
+}
+function formatGuidesBlock(guides) {
+  const normalized = normalizeGuides(guides);
+  if (normalized.length === 0) return void 0;
+  return [
+    GUIDES_BLOCK_HEADER,
+    ...[...normalized].sort((left, right) => left.createdAt.localeCompare(right.createdAt)).map((guide) => `- ${guide.text}`)
+  ].join("\n");
+}
+var guidesChanged = createGlobalListenerRegistry("dsh-soulmojito:guides-changed-listeners");
+function onGuidesChanged(listener) {
+  return guidesChanged.on(listener);
+}
+function emitGuidesChanged(character, chatId) {
+  return guidesChanged.emit(character, chatId);
 }
 
-// packages/plugin/src/agent-tavern/card-state.ts
-import { createHash as createHash8, randomUUID as randomUUID4 } from "node:crypto";
+// packages/plugin/src/games/handle.ts
+var GAMES_SERVICE_KEY = "dsh-soulmojito:games-service";
+var serviceSymbol = Symbol.for(GAMES_SERVICE_KEY);
+var nextToken = 1;
+function publishGamesService(service) {
+  const holder = globalThis;
+  const token = nextToken++;
+  holder[serviceSymbol] = { service, token };
+  return () => {
+    if (holder[serviceSymbol]?.token === token) delete holder[serviceSymbol];
+  };
+}
+function resolveGamesService() {
+  const holder = globalThis;
+  return holder[serviceSymbol]?.service;
+}
+var gamesChangedListeners = createGlobalListenerRegistry("dsh-soulmojito:games-changed-listeners");
+function onGamesChanged(listener) {
+  return gamesChangedListeners.on(listener);
+}
+function emitGamesChanged() {
+  void gamesChangedListeners.emit();
+}
+var GAMES_WAITERS_KEY = "dsh-soulmojito:games-waiters";
+function waiterRegistry() {
+  const holder = globalThis;
+  const key = Symbol.for(GAMES_WAITERS_KEY);
+  let registry = holder[key];
+  if (registry === void 0) {
+    registry = /* @__PURE__ */ new Map();
+    holder[key] = registry;
+  }
+  return registry;
+}
+function gameWaiters(sessionId) {
+  return waiterRegistry().get(sessionId)?.size ?? 0;
+}
+
+// packages/plugin/src/generation-hooks.ts
+var GENERATION_HOOK_TIMEOUT_MS = 1e4;
+function withTimeout(promise, ms) {
+  return new Promise((resolve6, reject) => {
+    const timer = setTimeout(() => {
+      const timeoutError = new Error(`generation hook timed out after ${ms}ms`);
+      timeoutError.hookTimeout = true;
+      reject(timeoutError);
+    }, ms);
+    Promise.resolve(promise).then(
+      (value) => {
+        clearTimeout(timer);
+        resolve6(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+function createGenerationHookBus(options = {}) {
+  const timeoutMs = options.timeoutMs ?? GENERATION_HOOK_TIMEOUT_MS;
+  const table = {
+    "user-input": [],
+    "pre-assemble": [],
+    "pre-llm": [],
+    "post-output": [],
+    "post-save": []
+  };
+  const degradationListeners = /* @__PURE__ */ new Set();
+  let nextId = 1;
+  let degradations = 0;
+  function register(phase, handler, order = 100, owner) {
+    const id = nextId++;
+    const list = table[phase];
+    list.push({ id, order, handler, ...owner !== void 0 ? { owner } : {} });
+    list.sort((a, b) => a.order - b.order || a.id - b.id);
+    return () => {
+      const index = list.findIndex((registration) => registration.id === id);
+      if (index >= 0) list.splice(index, 1);
+    };
+  }
+  async function dispatch(phase, payload, context) {
+    const list = table[phase];
+    if (list.length === 0) return payload;
+    const fullContext = { ...context, phase };
+    let current = payload;
+    for (const registration of [...list]) {
+      const degrade = (reason, detail) => {
+        degradations += 1;
+        const degradation = {
+          phase,
+          order: registration.order,
+          reason,
+          ...detail !== void 0 ? { detail } : {},
+          ...registration.owner !== void 0 ? { owner: registration.owner } : {}
+        };
+        options.onDegradation?.(degradation);
+        for (const listener of [...degradationListeners]) {
+          try {
+            listener(degradation);
+          } catch {
+          }
+        }
+      };
+      try {
+        const outcome = await withTimeout(
+          Promise.resolve(registration.handler(current, fullContext)),
+          timeoutMs
+        );
+        if (outcome === void 0) {
+          degrade("no-return");
+        } else {
+          current = outcome;
+        }
+      } catch (error) {
+        const timedOut = error instanceof Error && error.hookTimeout === true;
+        degrade(timedOut ? "timeout" : "error", error instanceof Error ? error.message : String(error));
+      }
+    }
+    return current;
+  }
+  return {
+    register,
+    dispatch,
+    degradationCount: () => degradations,
+    onDegradation(listener) {
+      degradationListeners.add(listener);
+      return () => {
+        degradationListeners.delete(listener);
+      };
+    }
+  };
+}
+var generationHooks = createGenerationHookBus();
 
 // packages/tavern-macros/src/host-registry.ts
 var HOST_MACRO_REGISTRY_KEY = "dsh-soulmojito:host-macros";
@@ -14686,1566 +15894,6 @@ function createMacroEngine(init) {
   return api;
 }
 
-// packages/plugin/src/prompt-safety.ts
-function createHostPromptExpander(char, user, frozen) {
-  const macros = createMacroEngine({
-    char,
-    user,
-    ...frozen?.now === void 0 ? {} : { now: frozen.now },
-    ...frozen?.rng === void 0 ? {} : { rng: frozen.rng }
-  });
-  return (text) => macros.expand(text);
-}
-function seededRandom(seed) {
-  let state = seed >>> 0;
-  return () => {
-    state = state + 1831565813 >>> 0;
-    let t = state;
-    t = Math.imul(t ^ t >>> 15, t | 1);
-    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
-    return ((t ^ t >>> 14) >>> 0) / 4294967296;
-  };
-}
-function hostPromptSafe(text, expand = (value) => value) {
-  return expand(text).replace(/\{+/g, (run) => run.split("").join(" "));
-}
-
-// packages/plugin/src/mvu-guard.ts
-var DIRECTIVE_KEYS = ["$range", "$step", "$enum", "$ro", "$type"];
-var TYPE_LOCKS = ["number", "string", "boolean", "object", "array"];
-function isPlainObject(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function parseRange(raw) {
-  if (!Array.isArray(raw) || raw.length < 2) return void 0;
-  const min = raw[0];
-  const max2 = raw[1];
-  if (typeof min !== "number" || !Number.isFinite(min) || typeof max2 !== "number" || !Number.isFinite(max2)) return void 0;
-  return { min: Math.min(min, max2), max: Math.max(min, max2) };
-}
-function resolveTemplateNode(raw) {
-  if (typeof raw === "number" && Number.isFinite(raw)) return { typeLock: "number" };
-  if (typeof raw === "string") return { typeLock: "string" };
-  if (typeof raw === "boolean") return { typeLock: "boolean" };
-  if (Array.isArray(raw)) {
-    return { typeLock: "array", ...raw.length > 0 ? { item: resolveTemplateNode(raw[0]) } : {} };
-  }
-  if (!isPlainObject(raw)) return void 0;
-  const range = parseRange(raw.$range);
-  const step = typeof raw.$step === "number" && Number.isFinite(raw.$step) && raw.$step > 0 ? raw.$step : void 0;
-  const enumValues = Array.isArray(raw.$enum) && raw.$enum.length > 0 ? raw.$enum : void 0;
-  const ro = raw.$ro === true ? true : void 0;
-  const typeLockDirect = typeof raw.$type === "string" && TYPE_LOCKS.includes(raw.$type) ? raw.$type : void 0;
-  const directives = {
-    ...range !== void 0 ? { min: range.min, max: range.max } : {},
-    ...step !== void 0 ? { step } : {},
-    ...enumValues !== void 0 ? { enumValues } : {},
-    ...ro !== void 0 ? { ro } : {}
-  };
-  const childKeys = Object.keys(raw).filter((key) => !DIRECTIVE_KEYS.includes(key));
-  if (childKeys.length === 0) {
-    const typeLock = typeLockDirect ?? (range !== void 0 || step !== void 0 ? "number" : enumValues !== void 0 ? "string" : void 0);
-    if (typeLock === void 0 && Object.keys(directives).length === 0) {
-      return { typeLock: "object", objectMode: "open" };
-    }
-    if (typeLock === "object") return { typeLock, objectMode: "open", ...directives };
-    if (typeLock === "array") return { typeLock, ...directives };
-    return { ...typeLock !== void 0 ? { typeLock } : {}, ...directives };
-  }
-  const wildcardRaw = childKeys.includes("*") ? raw["*"] : void 0;
-  const namedKeys = childKeys.filter((key) => key !== "*");
-  const children = /* @__PURE__ */ new Map();
-  for (const key of namedKeys) {
-    const child = resolveTemplateNode(raw[key]);
-    if (child !== void 0) children.set(key, child);
-  }
-  const objectMode = wildcardRaw !== void 0 ? "wildcard" : "locked";
-  const wildcard = wildcardRaw !== void 0 ? resolveTemplateNode(wildcardRaw) : void 0;
-  return {
-    typeLock: "object",
-    objectMode,
-    ...children.size > 0 ? { children } : {},
-    ...wildcard !== void 0 ? { wildcard } : {},
-    ...directives
-  };
-}
-var schemaCache = /* @__PURE__ */ new WeakMap();
-function resolveMvuSchema(raw) {
-  if (!isPlainObject(raw)) return void 0;
-  const cached = schemaCache.get(raw);
-  if (cached !== void 0 || schemaCache.has(raw)) return cached;
-  const resolved = resolveTemplateNode(raw);
-  const root = resolved !== void 0 && resolved.objectMode === "locked" ? { ...resolved, objectMode: "open" } : resolved;
-  schemaCache.set(raw, root);
-  return root;
-}
-function stripMvuControl(tree) {
-  if (!("$schema" in tree || "$rules" in tree)) return tree;
-  const out = {};
-  for (const [key, value] of Object.entries(tree)) {
-    if (key === "$schema" && isPlainObject(value)) continue;
-    if (key === "$rules" && Array.isArray(value)) continue;
-    out[key] = value;
-  }
-  return out;
-}
-var INITIAL_VARIABLES_KEY = "initial_variables";
-function cardSchema(card) {
-  const holder = card?.data?.extensions?.["agentTavern"];
-  if (!isPlainObject(holder)) return void 0;
-  const initial = holder.initialVariables;
-  return isPlainObject(initial) ? initial.$schema : void 0;
-}
-function treeSchema(tree) {
-  return isPlainObject(tree) ? tree.$schema : void 0;
-}
-function readMvuSchema(chat, card, variablesOverride) {
-  const candidates = [
-    treeSchema(variablesOverride ?? chat?.header?.chat_metadata?.variables),
-    cardSchema(card),
-    treeSchema(chat?.header?.chat_metadata?.[INITIAL_VARIABLES_KEY])
-  ];
-  for (const candidate of candidates) {
-    if (isPlainObject(candidate) && Object.keys(candidate).length > 0) return candidate;
-  }
-  return void 0;
-}
-function typeName(value) {
-  if (value === null) return "null";
-  if (Array.isArray(value)) return "array";
-  return typeof value;
-}
-function mvuValuesEqual(left, right) {
-  if (left === right) return true;
-  if (Array.isArray(left) && Array.isArray(right)) {
-    return left.length === right.length && left.every((item, index) => mvuValuesEqual(item, right[index]));
-  }
-  if (isPlainObject(left) && isPlainObject(right)) {
-    const keys = /* @__PURE__ */ new Set([...Object.keys(left), ...Object.keys(right)]);
-    for (const key of keys) {
-      if (!mvuValuesEqual(left[key], right[key])) return false;
-    }
-    return true;
-  }
-  return false;
-}
-function clampNumber(value, min, max2) {
-  let out = value;
-  if (min !== void 0 && out < min) out = min;
-  if (max2 !== void 0 && out > max2) out = max2;
-  return out;
-}
-function validateValue2(node, value, current, path12, notes) {
-  if (node.ro === true && !mvuValuesEqual(value, current)) {
-    return { ok: false, kind: "readonly", reason: "read-only field" };
-  }
-  if (Array.isArray(value)) {
-    if (node.typeLock !== void 0 && node.typeLock !== "array") {
-      return { ok: false, kind: "type-mismatch", reason: `expected ${node.typeLock}, got array` };
-    }
-    if (node.item === void 0) return { ok: true, value, notes };
-    const currentItems = Array.isArray(current) ? current : [];
-    const out = [];
-    for (let i = 0; i < value.length; i++) {
-      const result = validateValue2(node.item, value[i], currentItems[i], `${path12}[${i}]`, notes);
-      if (!result.ok) return result;
-      out.push(result.value);
-    }
-    return { ok: true, value: out, notes };
-  }
-  if (isPlainObject(value)) {
-    if (node.typeLock !== void 0 && node.typeLock !== "object") {
-      return { ok: false, kind: "type-mismatch", reason: `expected ${node.typeLock}, got object` };
-    }
-    if (node.objectMode !== "locked" && node.objectMode !== "wildcard") return { ok: true, value, notes };
-    const currentObject = isPlainObject(current) ? current : {};
-    const next = {};
-    for (const key of Object.keys(value)) {
-      const child = node.children?.get(key) ?? node.wildcard;
-      if (child === void 0) {
-        return { ok: false, kind: "structure", reason: `key '${key}' is not in the schema template` };
-      }
-      const result = validateValue2(child, value[key], currentObject[key], path12 === "" ? key : `${path12}.${key}`, notes);
-      if (!result.ok) return result;
-      next[key] = result.value;
-    }
-    if (node.objectMode === "locked") {
-      for (const key of node.children?.keys() ?? []) {
-        if (!(key in value) && key in currentObject) {
-          return { ok: false, kind: "structure", reason: `template field '${key}' would be deleted by this write` };
-        }
-      }
-    }
-    return { ok: true, value: next, notes };
-  }
-  if (node.typeLock !== void 0 && typeName(value) !== node.typeLock) {
-    return { ok: false, kind: "type-mismatch", reason: `expected ${node.typeLock}, got ${typeName(value)}` };
-  }
-  if (node.enumValues !== void 0 && !node.enumValues.some((allowed) => mvuValuesEqual(allowed, value))) {
-    return { ok: false, kind: "enum-violation", reason: `value ${JSON.stringify(value)} is not one of [${node.enumValues.map((entry) => JSON.stringify(entry)).join(", ")}]` };
-  }
-  if (typeof value === "number" && Number.isFinite(value) && (node.min !== void 0 || node.max !== void 0 || node.step !== void 0)) {
-    let out = value;
-    if (node.step !== void 0 && typeof current === "number" && Number.isFinite(current)) {
-      const delta = out - current;
-      const capped = Math.max(-node.step, Math.min(node.step, delta));
-      if (capped !== delta) {
-        notes.push(`${path12}: guard step: delta ${delta > 0 ? "+" : ""}${delta} capped to ${capped > 0 ? "+" : ""}${capped}`);
-        out = current + capped;
-      }
-    }
-    const clamped = clampNumber(out, node.min, node.max);
-    if (clamped !== out) {
-      notes.push(`${path12}: guard clamp: ${out} -> ${clamped}`);
-      out = clamped;
-    }
-    return { ok: true, value: out, notes };
-  }
-  return { ok: true, value, notes };
-}
-function guardMvuWrite(schema, path12, value, current) {
-  const segments = path12.split(".").filter((segment) => segment !== "");
-  if (segments.length === 0) return { ok: true, value };
-  if (segments[0] === "$schema") {
-    return { ok: false, kind: "readonly", reason: "the $schema subtree is the declared guard contract and cannot be settled" };
-  }
-  const root = resolveMvuSchema(schema);
-  if (root === void 0) return { ok: true, value };
-  let cursor = root;
-  let parent;
-  let roChain = root.ro === true;
-  let violation;
-  for (let i = 0; i < segments.length && cursor !== void 0; i++) {
-    const segment = segments[i];
-    if (cursor.typeLock === "array") {
-      parent = cursor;
-      if (!/^\d+$/.test(segment)) {
-        violation ??= `'${segments.slice(0, i + 1).join(".")}' expects an array index, not '${segment}'`;
-        cursor = void 0;
-      } else {
-        cursor = cursor.item;
-      }
-    } else if (cursor.objectMode !== void 0) {
-      parent = cursor;
-      const named = cursor.children?.get(segment);
-      if (named !== void 0) cursor = named;
-      else if (cursor.objectMode === "wildcard" && cursor.wildcard !== void 0) cursor = cursor.wildcard;
-      else if (cursor.objectMode === "locked") {
-        violation ??= `'${segments.slice(0, i + 1).join(".")}' is not in the schema template`;
-        cursor = void 0;
-      } else cursor = void 0;
-    } else {
-      if (cursor.typeLock !== void 0 && cursor.objectMode === void 0) {
-        violation ??= `'${segments.slice(0, i + 1).join(".")}' expects ${cursor.typeLock}, not a nested path`;
-      }
-      parent = cursor;
-      cursor = void 0;
-    }
-    if (cursor !== void 0 && cursor.ro === true) roChain = true;
-  }
-  if (violation !== void 0) return { ok: false, kind: "structure", reason: violation };
-  const lastSegment = segments[segments.length - 1];
-  if (value === void 0) {
-    if (roChain) return { ok: false, kind: "readonly", reason: "read-only field" };
-    if (parent?.objectMode === "locked" && parent.children?.has(lastSegment)) {
-      return { ok: false, kind: "structure", reason: `template field '${lastSegment}' cannot be deleted` };
-    }
-    return { ok: true, value: void 0 };
-  }
-  if (roChain && !mvuValuesEqual(value, current)) {
-    return { ok: false, kind: "readonly", reason: "read-only field" };
-  }
-  if (cursor === void 0) return { ok: true, value };
-  const result = validateValue2(cursor, value, current, segments.join("."), []);
-  if (!result.ok) return result;
-  return { ok: true, value: result.value, ...result.notes.length > 0 ? { note: result.notes.join("; ") } : {} };
-}
-function getMvuTreePath(tree, path12) {
-  let cursor = tree;
-  for (const segment of path12.split(".")) {
-    if (!isPlainObject(cursor)) return void 0;
-    cursor = cursor[segment];
-  }
-  return cursor;
-}
-
-// packages/plugin/src/mvu-rules.ts
-var MVU_RULE_ROUNDS = 3;
-var MVU_RULES_LIMIT = 32;
-var MVU_RULE_THEN_LIMIT = 16;
-function isPlainObject2(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-var INITIAL_VARIABLES_KEY2 = "initial_variables";
-function cardRules(card) {
-  const holder = card?.data?.extensions?.["agentTavern"];
-  if (!isPlainObject2(holder)) return void 0;
-  const initial = holder["initialVariables"];
-  return isPlainObject2(initial) ? initial["$rules"] : void 0;
-}
-function treeRules(tree) {
-  return isPlainObject2(tree) ? tree.$rules : void 0;
-}
-function validateMvuRules(raw) {
-  if (!Array.isArray(raw)) throw new Error("$rules must be an array of rule objects");
-  if (raw.length === 0) return [];
-  if (raw.length > MVU_RULES_LIMIT) {
-    throw new Error(`$rules declares ${raw.length} rules, over the cap of ${MVU_RULES_LIMIT}`);
-  }
-  return raw.map((entry, index) => {
-    if (!isPlainObject2(entry)) throw new Error(`rule #${index} is not an object`);
-    const { name: name2, when, then } = entry;
-    if (typeof name2 !== "string" || name2.trim() === "" || name2.length > 64) {
-      throw new Error(`rule #${index} requires a non-empty name of at most 64 characters`);
-    }
-    if (typeof when !== "string" || when.trim() === "") {
-      throw new Error(`rule '${name2}' requires a non-empty when expression`);
-    }
-    if (!isPlainObject2(then) || Object.keys(then).length === 0) {
-      throw new Error(`rule '${name2}' requires a non-empty then map`);
-    }
-    if (Object.keys(then).length > MVU_RULE_THEN_LIMIT) {
-      throw new Error(`rule '${name2}' declares ${Object.keys(then).length} then writes, over the cap of ${MVU_RULE_THEN_LIMIT}`);
-    }
-    for (const [path12, value] of Object.entries(then)) {
-      if (path12.trim() === "") throw new Error(`rule '${name2}' has an empty then path`);
-      if (typeof value === "string") {
-        if (value.trim() === "") throw new Error(`rule '${name2}' has an empty then expression for '${path12}'`);
-      } else if (value === void 0 || typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") {
-        throw new Error(`rule '${name2}' then value for '${path12}' is not a JSON literal`);
-      }
-    }
-    return { name: name2, when, then };
-  });
-}
-function readMvuRules(chat, card, variablesOverride) {
-  const candidates = [
-    treeRules(variablesOverride ?? chat?.header?.chat_metadata?.variables),
-    cardRules(card),
-    treeRules(chat?.header?.chat_metadata?.[INITIAL_VARIABLES_KEY2])
-  ];
-  for (const candidate of candidates) {
-    if (candidate === void 0) continue;
-    try {
-      const rules = validateMvuRules(candidate);
-      if (rules.length === 0) continue;
-      return { rules };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return { invalid: `$rules: ${message}; all card rules are disabled for this settlement` };
-    }
-  }
-  return void 0;
-}
-var SAFE_MATH_KEYS = [
-  "E",
-  "LN2",
-  "LN10",
-  "LOG2E",
-  "LOG10E",
-  "PI",
-  "SQRT1_2",
-  "SQRT2",
-  "abs",
-  "acos",
-  "acosh",
-  "asin",
-  "asinh",
-  "atan",
-  "atan2",
-  "atanh",
-  "cbrt",
-  "ceil",
-  "cos",
-  "cosh",
-  "exp",
-  "expm1",
-  "floor",
-  "fround",
-  "hypot",
-  "imul",
-  "log",
-  "log1p",
-  "log2",
-  "log10",
-  "max",
-  "min",
-  "pow",
-  "round",
-  "sign",
-  "sin",
-  "sinh",
-  "sqrt",
-  "tan",
-  "tanh",
-  "trunc"
-];
-var SAFE_MATH = Object.freeze(
-  Object.fromEntries(SAFE_MATH_KEYS.map((key) => [key, Math[key]]))
-);
-var RULE_SANDBOX_SHADES = {
-  Math: SAFE_MATH,
-  Date: void 0,
-  setTimeout: void 0,
-  setInterval: void 0,
-  setImmediate: void 0,
-  queueMicrotask: void 0
-};
-function buildRuleEnv(tree) {
-  const vars = deepClone(stripMvuControl(tree));
-  return {
-    vars,
-    getvar: (path12) => typeof path12 === "string" ? getMvuTreePath(vars, path12) : void 0,
-    ...RULE_SANDBOX_SHADES
-  };
-}
-function errorText(error) {
-  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-}
-function setTreePath(tree, path12, value) {
-  const segments = path12.split(".");
-  const leaf = segments.pop();
-  let cursor = tree;
-  for (const segment of segments) {
-    const next = cursor[segment];
-    if (next === null || typeof next !== "object" || Array.isArray(next)) cursor[segment] = {};
-    cursor = cursor[segment];
-  }
-  cursor[leaf] = value;
-}
-async function runMvuRules(rules, options) {
-  const failures = /* @__PURE__ */ new Set();
-  const writes = [];
-  const noteParts = /* @__PURE__ */ new Map();
-  const tree = options.tree;
-  for (let round = 1; round <= MVU_RULE_ROUNDS; round++) {
-    let progressed = false;
-    for (const rule of rules) {
-      let active = false;
-      try {
-        active = Boolean(await evalExpressionSandboxed(rule.when, buildRuleEnv(tree)));
-      } catch (error) {
-        failures.add(`rule '${rule.name}': when evaluation failed: ${errorText(error)}`);
-        continue;
-      }
-      if (!active) continue;
-      const pending = [];
-      let failed = false;
-      for (const [path12, raw] of Object.entries(rule.then)) {
-        try {
-          const value = typeof raw === "string" ? await evalExpressionSandboxed(raw, buildRuleEnv(tree)) : deepClone(raw);
-          if (value === void 0) throw new Error("the expression evaluated to undefined");
-          pending.push({ path: path12, value });
-        } catch (error) {
-          failures.add(`rule '${rule.name}': then evaluation failed for '${path12}': ${errorText(error)}`);
-          failed = true;
-          break;
-        }
-      }
-      if (failed) continue;
-      for (const { path: path12, value } of pending) {
-        const head = path12.split(".")[0];
-        if (head === "$schema" || head === "$rules") {
-          failures.add(`${path12}: rule '${rule.name}': guard readonly: the ${head} subtree is card-declared and cannot be settled`);
-          continue;
-        }
-        const current = getMvuTreePath(tree, path12);
-        const guarded = options.schema === void 0 ? void 0 : guardMvuWrite(options.schema, path12, value, current);
-        if (guarded !== void 0 && !guarded.ok) {
-          failures.add(`${path12}: rule '${rule.name}': guard ${guarded.kind}: ${guarded.reason}`);
-          continue;
-        }
-        const finalValue = guarded === void 0 ? value : guarded.value;
-        if (mvuValuesEqual(finalValue, current)) continue;
-        setTreePath(tree, path12, deepClone(finalValue));
-        progressed = true;
-        const note = ["rule:" + rule.name, guarded?.note].filter((part) => part !== void 0).join("; ");
-        const parts = noteParts.get(path12) ?? [];
-        if (!parts.includes(note)) parts.push(note);
-        noteParts.set(path12, parts);
-        writes.push({ path: path12, value: deepClone(finalValue), rule: rule.name, ...guarded?.note !== void 0 ? { guardNote: guarded.note } : {} });
-      }
-    }
-    if (!progressed) break;
-    if (round === MVU_RULE_ROUNDS) {
-      failures.add(`$rules: fixed-point iteration hit the ${MVU_RULE_ROUNDS}-round cap; rules were still producing changes in the last round (narrow the when conditions or reorder the rules)`);
-    }
-  }
-  const notes = Object.fromEntries([...noteParts].map(([path12, parts]) => [path12, parts.join("; ")]));
-  return { failures: [...failures], writes, notes };
-}
-function plainObject2(value) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
-  return value;
-}
-async function applyMvuSettlementRules(chat, card, before) {
-  const metadata = chat.header.chat_metadata;
-  const live = plainObject2(metadata.variables);
-  const source = readMvuRules(chat, card, before);
-  if (source === void 0 && before.$rules === void 0 && live?.$rules === void 0) {
-    return { failures: [], notes: {} };
-  }
-  const variables2 = live ?? {};
-  const failures = [];
-  if (!mvuValuesEqual(variables2.$rules, before.$rules)) {
-    if (before.$rules !== void 0) variables2.$rules = deepClone(before.$rules);
-    else delete variables2.$rules;
-    failures.push("$rules: guard readonly: the rules subtree is card-declared and cannot be settled");
-  }
-  if (source === void 0) {
-    if (live === void 0 && Object.keys(variables2).length > 0) metadata.variables = variables2;
-    return { failures, notes: {} };
-  }
-  if ("invalid" in source) return { failures: [...failures, source.invalid], notes: {} };
-  const schema = readMvuSchema(chat, card, before);
-  const run = await runMvuRules(source.rules, { ...schema !== void 0 ? { schema } : {}, tree: variables2 });
-  if (live === void 0 && Object.keys(variables2).length > 0) metadata.variables = variables2;
-  return { failures: [...failures, ...run.failures], notes: run.notes };
-}
-function mergeMvuRuleNotes(guardNotes, ruleNotes) {
-  const merged = {};
-  for (const [path12, note] of Object.entries(guardNotes)) merged[path12] = note;
-  for (const [path12, note] of Object.entries(ruleNotes)) {
-    merged[path12] = merged[path12] !== void 0 ? `${merged[path12]}; ${note}` : note;
-  }
-  return merged;
-}
-
-// packages/plugin/src/mvu.ts
-var DEFAULT_USER = "User";
-var INITIAL_VARIABLES_KEY3 = "initial_variables";
-var MVU_RECEIPTS_LIMIT = 20;
-function plainObject3(value) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
-  return value;
-}
-function jsonObjectOf(value) {
-  return JSON.parse(JSON.stringify(value));
-}
-function readChatVariables(chat) {
-  return plainObject3(chat?.header?.chat_metadata?.variables) ?? {};
-}
-function snapshotChatVariables(chat) {
-  return deepClone(readChatVariables(chat));
-}
-function valuesEqual(left, right) {
-  return mvuValuesEqual(left, right);
-}
-function diffVariables(before, after) {
-  const changes = [];
-  const walk = (path12, left, right) => {
-    const leftObject = plainObject3(left);
-    const rightObject = plainObject3(right);
-    const recursible = leftObject !== void 0 && rightObject !== void 0 || left === void 0 && rightObject !== void 0 || right === void 0 && leftObject !== void 0;
-    if (recursible) {
-      const leftNext = leftObject ?? {};
-      const rightNext = rightObject ?? {};
-      for (const key of /* @__PURE__ */ new Set([...Object.keys(leftNext), ...Object.keys(rightNext)])) {
-        walk(path12 === "" ? key : `${path12}.${key}`, leftNext[key], rightNext[key]);
-      }
-      return;
-    }
-    if (!valuesEqual(left, right)) {
-      const change = { name: path12, ...left !== void 0 ? { before: left } : {} };
-      if (right !== void 0) change.after = right;
-      changes.push(change);
-    }
-  };
-  walk("", stripMvuControl(before), stripMvuControl(after));
-  return changes.sort((left, right) => left.name.localeCompare(right.name));
-}
-function overlayScopedVariables(base, entries) {
-  const tree = deepClone(base);
-  for (const entry of entries) {
-    const segments = entry.name.split(".");
-    const leaf = segments.pop();
-    let cursor = tree;
-    for (const segment of segments) {
-      const next = cursor[segment];
-      if (next === null || typeof next !== "object" || Array.isArray(next)) cursor[segment] = {};
-      cursor = cursor[segment];
-    }
-    cursor[leaf] = entry.value;
-  }
-  return tree;
-}
-function overlayChatScopedVariables(base, entries) {
-  const authoritativeStat = plainObject3(base["stat_data"]) !== void 0;
-  const authoritativePrevious = plainObject3(base["previous_stat_data"]) !== void 0;
-  const usable = entries.filter((entry) => {
-    if (authoritativeStat && (entry.name === "stat_data" || entry.name.startsWith("stat_data."))) return false;
-    if (authoritativePrevious && (entry.name === "previous_stat_data" || entry.name.startsWith("previous_stat_data."))) return false;
-    return true;
-  });
-  return overlayScopedVariables(base, usable);
-}
-function readMvuReceipts(chat) {
-  const raw = plainObject3(chat?.header?.chat_metadata?.mvu)?.receipts;
-  if (!Array.isArray(raw)) return [];
-  const receipts = [];
-  for (const entry of raw) {
-    const record = plainObject3(entry);
-    if (record === void 0) continue;
-    const { at, turnKey, status: status2, changes, failures } = record;
-    if (typeof at !== "string" || typeof turnKey !== "string") continue;
-    if (status2 !== "updated" && status2 !== "unchanged" && status2 !== "failed") continue;
-    receipts.push({
-      at,
-      turnKey,
-      status: status2,
-      changes: Array.isArray(changes) ? changes.flatMap((item) => {
-        const change = plainObject3(item);
-        if (change === void 0 || typeof change.name !== "string") return [];
-        const out = { name: change.name };
-        if ("before" in change) out.before = change.before;
-        if ("after" in change) out.after = change.after;
-        if (typeof change.reason === "string") out.reason = change.reason;
-        return [out];
-      }) : [],
-      failures: Array.isArray(failures) ? failures.filter((item) => typeof item === "string") : [],
-      ...typeof record.undoneAt === "string" ? { undoneAt: record.undoneAt } : {}
-    });
-  }
-  return receipts;
-}
-function appendMvuReceipt(chat, receipt) {
-  const metadata = chat.header.chat_metadata;
-  const receipts = [...readMvuReceipts(chat), receipt].slice(-MVU_RECEIPTS_LIMIT);
-  metadata.mvu = { receipts };
-}
-function recordMvuTurnReceipt(chat, before, options) {
-  const after = readChatVariables(chat);
-  const changes = diffVariables(before, after);
-  for (const change of changes) {
-    const note = options.changeNotes?.[change.name];
-    if (note !== void 0) change.reason = note;
-  }
-  const failures = options.failures ?? [];
-  if (changes.length === 0 && failures.length === 0 && Object.keys(before).length === 0 && Object.keys(after).length === 0) {
-    return void 0;
-  }
-  const status2 = failures.length > 0 ? "failed" : changes.length > 0 ? "updated" : "unchanged";
-  const receipt = {
-    at: options.at ?? (/* @__PURE__ */ new Date()).toISOString(),
-    turnKey: options.turnKey,
-    status: status2,
-    changes,
-    failures
-  };
-  appendMvuReceipt(chat, receipt);
-  return receipt;
-}
-function setMvuTreePath(tree, path12, value) {
-  const segments = path12.split(".");
-  const leaf = segments.pop();
-  let cursor = tree;
-  for (const segment of segments) {
-    const next = cursor[segment];
-    if (next === null || typeof next !== "object" || Array.isArray(next)) cursor[segment] = {};
-    cursor = cursor[segment];
-  }
-  cursor[leaf] = value;
-}
-function revertMvuTreePath(tree, path12, before) {
-  const beforeValue = getMvuTreePath(before, path12);
-  if (beforeValue !== void 0) {
-    setMvuTreePath(tree, path12, beforeValue);
-    return;
-  }
-  const segments = path12.split(".");
-  const leaf = segments.pop();
-  const parent = getMvuTreePath(tree, segments.join("."));
-  if (parent !== null && typeof parent === "object" && !Array.isArray(parent)) {
-    delete parent[leaf];
-  }
-  while (segments.length > 0) {
-    const pathSoFar = segments.join(".");
-    const node = getMvuTreePath(tree, pathSoFar);
-    if (node === null || typeof node !== "object" || Array.isArray(node)) break;
-    if (Object.keys(node).length > 0) break;
-    if (getMvuTreePath(before, pathSoFar) !== void 0) break;
-    const popped = segments.pop();
-    const upper = segments.length > 0 ? getMvuTreePath(tree, segments.join(".")) : tree;
-    if (upper === null || typeof upper !== "object" || Array.isArray(upper)) break;
-    delete upper[popped];
-  }
-}
-function applyMvuSettlementGuard(chat, card, before) {
-  const failures = [];
-  const notes = {};
-  const metadata = chat.header.chat_metadata;
-  const variables2 = plainObject3(metadata.variables);
-  const schema = readMvuSchema(chat, card, before);
-  if (schema === void 0 || variables2 === void 0) return { failures, notes };
-  const schemaBefore = plainObject3(before.$schema);
-  const schemaLive = plainObject3(variables2.$schema);
-  if (!valuesEqual(schemaBefore, schemaLive)) {
-    if (schemaBefore !== void 0) variables2.$schema = deepClone(schemaBefore);
-    else delete variables2.$schema;
-    failures.push(`$schema: guard readonly: the schema subtree is card-declared and cannot be settled`);
-  }
-  for (const change of diffVariables(before, variables2)) {
-    const current = getMvuTreePath(before, change.name);
-    const value = "after" in change ? change.after : void 0;
-    const result = guardMvuWrite(schema, change.name, value, current);
-    if (!result.ok) {
-      revertMvuTreePath(variables2, change.name, before);
-      failures.push(`${change.name}: guard ${result.kind}: ${result.reason}`);
-      continue;
-    }
-    if (result.note !== void 0) notes[change.name] = result.note;
-    if (value !== void 0 && !valuesEqual(result.value, value)) setMvuTreePath(variables2, change.name, result.value);
-  }
-  if (Object.keys(variables2).length === 0 && Object.keys(before).length === 0) delete metadata.variables;
-  return { failures, notes };
-}
-function createMvuRuntime(input, stores) {
-  const { characterName, character, chat, books } = input;
-  const card = character.card;
-  const cardName2 = card.data.nickname || card.data.name || characterName;
-  const lastUserMessageId = (() => {
-    for (let i = chat.messages.length - 1; i >= 0; i--) {
-      const message = chat.messages[i];
-      if (message !== void 0 && message.is_user) return i;
-    }
-    return -1;
-  })();
-  const lastCharMessageId = (() => {
-    for (let i = chat.messages.length - 1; i >= 0; i--) {
-      const message = chat.messages[i];
-      if (message !== void 0 && !message.is_user && !message.is_system) return i;
-    }
-    return -1;
-  })();
-  const host = {
-    runType: "render",
-    userName: input.state.activePersona ?? DEFAULT_USER,
-    charName: cardName2,
-    chatId: input.chatId ?? "",
-    characterId: characterName,
-    messages: chat.messages.map((message) => ({
-      name: message.name,
-      mes: message.mes,
-      is_user: message.is_user,
-      is_system: message.is_system
-    })),
-    lastUserMessageId,
-    lastCharMessageId,
-    findWorldEntries: (title, book) => {
-      const out = [];
-      for (const lorebook of books) {
-        if (book !== void 0 && lorebook.name !== book) continue;
-        for (const entry of lorebook.entries) {
-          const comment = entry.comment ?? "";
-          const matched = typeof title === "number" ? entry.uid === title : comment === title;
-          if (!matched) continue;
-          out.push({
-            uid: entry.uid,
-            book: lorebook.name ?? "",
-            comment,
-            content: entry.content ?? "",
-            ...typeof entry.order === "number" ? { order: entry.order } : {},
-            disable: entry.disable === true
-          });
-        }
-      }
-      return out;
-    },
-    getCard: (name2) => {
-      if (name2 !== void 0 && name2 !== characterName && name2 !== cardName2) return null;
-      return {
-        name: cardName2,
-        systemPrompt: card.data.systemPrompt,
-        personality: card.data.personality,
-        description: card.data.description,
-        scenario: card.data.scenario,
-        firstMes: card.data.firstMes,
-        mesExample: card.data.mesExample,
-        creatorNotes: card.data.creatorNotes,
-        depthPrompt: "",
-        data: jsonObjectOf(card.data)
-      };
-    },
-    findPresetPrompt: () => null,
-    renderNested: async () => ""
-  };
-  const runtime = createTemplateRuntime({ host, stores, ...input.onWarning !== void 0 ? { onWarning: input.onWarning } : {} });
-  host.renderNested = (source, extra) => runtime.renderText(source, extra);
-  return runtime;
-}
-function statusTemplateOf(card) {
-  const agentTavern = plainObject3(card?.data?.extensions?.["agentTavern"]);
-  const template = agentTavern?.statusTemplate;
-  return typeof template === "string" && template.trim() !== "" ? template : void 0;
-}
-async function renderMvuStatusTemplate(input) {
-  const chat = input.chat;
-  const books = await collectWorldInfoBooks(input.db, input.state, input.characterName, input.character, input.chatId);
-  const runtime = createMvuRuntime(
-    {
-      state: input.state,
-      characterName: input.characterName,
-      character: input.character,
-      chat,
-      chatId: input.chatId,
-      books
-    },
-    {
-      local: deepClone(stripMvuControl(plainObject3(input.localVariables ?? readChatVariables(chat)) ?? {})),
-      global: { ...input.state.scriptGlobals },
-      initial: deepClone(stripMvuControl(plainObject3(chat.header.chat_metadata[INITIAL_VARIABLES_KEY3]) ?? {}))
-    }
-  );
-  return await runtime.renderText(input.template, void 0, "mvu-status");
-}
-async function retryMvuSettlement(db, options) {
-  const { state, characterName, chatId, snapshot: snapshot2 } = options;
-  if (typeof options.sessionId === "string" && state.sessionBindings?.[options.sessionId]?.architecture === "agent-tavern") {
-    throw new Error("AgentTavern sessions use the DSH native AgentLoop; MVU settlement retry is unavailable.");
-  }
-  if (!options.templatesActive) {
-    throw new Error("MVU retry requires the prompt template runtime (templates are disabled)");
-  }
-  if (options.revision !== snapshot2.revision) {
-    throw new ChatRevisionConflictError(options.revision, snapshot2.revision);
-  }
-  const chat = snapshot2.chat;
-  const metadata = chat.header.chat_metadata;
-  const before = snapshotChatVariables(chat);
-  let floorIndex = -1;
-  for (let i = chat.messages.length - 1; i >= 0; i--) {
-    const message = chat.messages[i];
-    if (message !== void 0 && !message.is_user && !message.is_system) {
-      floorIndex = i;
-      break;
-    }
-  }
-  if (floorIndex === -1) throw new Error("no assistant floor to settle");
-  const floor = chat.messages[floorIndex];
-  if (floor === void 0) throw new Error("no assistant floor to settle");
-  const character = await db.getCharacter(characterName) ?? await db.getCharacter(floor.name);
-  if (!character) throw new Error(`character '${characterName}' not found`);
-  const failures = [];
-  const localVars = plainObject3(metadata.variables) ?? {};
-  metadata.variables = localVars;
-  const globalsBefore = JSON.stringify(state.scriptGlobals);
-  const books = await collectWorldInfoBooks(db, state, characterName, character, chatId);
-  const runtime = createMvuRuntime(
-    { state, characterName, character, chat, chatId, books, onWarning: (message) => {
-      failures.push(message);
-    } },
-    {
-      // initial 绑活引用（存在时）；无 initial 树时绑临时对象，initial 作用域写穿
-      // 不持久化——initial 本就由每次生成的 InitialVariables 重算，非用户状态
-      local: localVars,
-      global: state.scriptGlobals,
-      initial: plainObject3(metadata[INITIAL_VARIABLES_KEY3]) ?? {}
-    }
-  );
-  try {
-    await runtime.renderText(floor.mes, void 0, "mvu-retry");
-  } catch (err2) {
-    failures.push(`mvu retry render failed: ${err2 instanceof Error ? err2.message : String(err2)}`);
-  }
-  if (Object.keys(localVars).length === 0) delete metadata.variables;
-  if (JSON.stringify(state.scriptGlobals) !== globalsBefore) {
-    await db.updateState((current) => ({ scriptGlobals: { ...current.scriptGlobals, ...state.scriptGlobals } }));
-  }
-  const guard = applyMvuSettlementGuard(chat, character.card, before);
-  const rulesPass = await applyMvuSettlementRules(chat, character.card, before);
-  const after = readChatVariables(chat);
-  const changes = diffVariables(before, after);
-  const notes = mergeMvuRuleNotes(guard.notes, rulesPass.notes);
-  for (const change of changes) {
-    if (notes[change.name] !== void 0) change.reason = notes[change.name];
-  }
-  const allFailures = [...failures, ...guard.failures, ...rulesPass.failures];
-  const receipt = {
-    at: (/* @__PURE__ */ new Date()).toISOString(),
-    turnKey: String(floorIndex),
-    status: changes.length > 0 ? "updated" : "unchanged",
-    changes,
-    failures: allFailures
-  };
-  appendMvuReceipt(chat, receipt);
-  const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
-  return { receipt, revision, variables: stripMvuControl(after) };
-}
-var MvuUndoRefusalError = class extends Error {
-  undoCode;
-  constructor(undoCode, message) {
-    super(message);
-    this.name = "MvuUndoRefusalError";
-    this.undoCode = undoCode;
-  }
-};
-function latestValidMvuReceipt(receipts) {
-  for (let index = receipts.length - 1; index >= 0; index--) {
-    if (receipts[index].undoneAt === void 0) return { index, receipt: receipts[index] };
-  }
-  return void 0;
-}
-function refuseUndo(target, receipts) {
-  if (target !== void 0) return target;
-  if (receipts.length > 0) {
-    throw new MvuUndoRefusalError("ALREADY_UNDONE", `all ${receipts.length} settlement receipts in this chat have been undone; nothing valid is left to undo`);
-  }
-  throw new MvuUndoRefusalError("NO_VALID_RECEIPT", "no MVU settlement receipt in this chat to undo");
-}
-function planMvuUndoRestores(receipt) {
-  if (receipt.status === "updated" && receipt.changes.length === 0) {
-    throw new MvuUndoRefusalError("INCOMPLETE_RECEIPT", `receipt ${receipt.turnKey} claims status 'updated' but records no change data; the receipt data is incomplete and cannot be undone`);
-  }
-  const restores = [];
-  for (const change of receipt.changes) {
-    if (!("before" in change) && !("after" in change)) {
-      throw new MvuUndoRefusalError("INCOMPLETE_RECEIPT", `receipt change '${change.name}' records neither a before nor an after value; the receipt data is incomplete and cannot be undone`);
-    }
-    restores.push({ path: change.name, ..."before" in change ? { value: change.before } : {} });
-  }
-  return restores;
-}
-function formatRestoreValue(value) {
-  const text = (() => {
-    try {
-      return JSON.stringify(value) ?? String(value);
-    } catch {
-      return String(value);
-    }
-  })();
-  return text.length > 80 ? `${text.slice(0, 79)}\u2026` : text;
-}
-function screenMvuUndoRestores(schema, restores, currentOf) {
-  const failures = [];
-  for (const restore of restores) {
-    if (restore.path.split(".")[0] === "$schema") {
-      failures.push(`$schema: guard readonly: the schema subtree is the declared guard contract and cannot be undone into`);
-      continue;
-    }
-    if (schema === void 0) continue;
-    const value = "value" in restore ? restore.value : void 0;
-    const result = guardMvuWrite(schema, restore.path, value, currentOf(restore.path));
-    if (!result.ok) {
-      failures.push(`${restore.path}: guard ${result.kind}: ${result.reason}`);
-      continue;
-    }
-    if (!mvuValuesEqual(result.value, value)) {
-      failures.push(`${restore.path}: guard would adjust the restored value ${formatRestoreValue(value)} to ${formatRestoreValue(result.value)} ($schema changed since the settlement); refusing to undo with anything other than the recorded before value`);
-    }
-  }
-  if (failures.length > 0) throw new MvuUndoRefusalError("UNDO_REJECTED", failures.join("; "));
-}
-function applyMvuUndoRestores(tree, restores) {
-  const before = overlayScopedVariables({}, restores.flatMap((restore) => "value" in restore ? [{ name: restore.path, value: deepClone(restore.value) }] : []));
-  for (const restore of restores) revertMvuTreePath(tree, restore.path, before);
-}
-function markMvuReceiptUndone(chat, index, at) {
-  const receipts = readMvuReceipts(chat);
-  const marked = { ...receipts[index], undoneAt: at ?? (/* @__PURE__ */ new Date()).toISOString() };
-  const next = receipts.slice();
-  next[index] = marked;
-  chat.header.chat_metadata.mvu = { receipts: next };
-  return marked;
-}
-async function undoMvuStSettlement(db, options) {
-  const { characterName, chatId, snapshot: snapshot2 } = options;
-  const chat = snapshot2.chat;
-  const receipts = readMvuReceipts(chat);
-  const target = refuseUndo(latestValidMvuReceipt(receipts), receipts);
-  const restores = planMvuUndoRestores(target.receipt);
-  const metadata = chat.header.chat_metadata;
-  const variables2 = plainObject3(metadata.variables) ?? {};
-  screenMvuUndoRestores(readMvuSchema(chat, (await db.getCharacter(characterName))?.card, variables2), restores, (path12) => getMvuTreePath(variables2, path12));
-  applyMvuUndoRestores(variables2, restores);
-  if (Object.keys(variables2).length === 0) delete metadata.variables;
-  else metadata.variables = variables2;
-  const marked = markMvuReceiptUndone(chat, target.index, options.at);
-  const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
-  return { receipt: marked, revision, restores };
-}
-async function undoMvuAgentSettlement(variables2, db, options) {
-  const { characterName, chatId, snapshot: snapshot2 } = options;
-  const chat = snapshot2.chat;
-  const receipts = readMvuReceipts(chat);
-  const target = refuseUndo(latestValidMvuReceipt(receipts), receipts);
-  const restores = planMvuUndoRestores(target.receipt);
-  const seedTree = readChatVariables(chat);
-  const storeFailures = [];
-  const entries = /* @__PURE__ */ new Map();
-  for (const restore of restores) {
-    try {
-      entries.set(restore.path, await variables2.get("chat", chatId, restore.path));
-    } catch (error) {
-      storeFailures.push(`${restore.path}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-  if (storeFailures.length > 0) throw new MvuUndoRefusalError("UNDO_REJECTED", storeFailures.join("; "));
-  screenMvuUndoRestores(
-    readMvuSchema(chat, (await db.getCharacter(characterName))?.card),
-    restores,
-    (path12) => {
-      const entry = entries.get(path12);
-      return entry !== void 0 ? entry.value : getMvuTreePath(seedTree, path12);
-    }
-  );
-  for (const restore of restores) {
-    if ("value" in restore) continue;
-    const entry = entries.get(restore.path);
-    if (entry !== void 0) await variables2.delete("chat", chatId, restore.path, entry.revision);
-  }
-  const updates = [];
-  for (const restore of restores) {
-    if (!("value" in restore)) continue;
-    const entry = entries.get(restore.path);
-    const current = entry !== void 0 ? entry.value : getMvuTreePath(seedTree, restore.path);
-    if (current !== void 0 && mvuValuesEqual(current, restore.value)) continue;
-    updates.push({ name: restore.path, value: deepClone(restore.value), ...entry !== void 0 ? { expectedRevision: entry.revision } : {} });
-  }
-  if (updates.length > 0) await variables2.patch("chat", chatId, updates);
-  const marked = markMvuReceiptUndone(chat, target.index, options.at);
-  const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
-  return { receipt: marked, revision, restores };
-}
-
-// packages/plugin/src/prompt-context.ts
-var DEFAULT_USER2 = "User";
-function tavernMacroExpand(state, characterName, character) {
-  const macros = createMacroEngine({
-    char: character?.card.data.nickname || character?.card.data.name || characterName,
-    user: state.activePersona ?? DEFAULT_USER2
-  });
-  return (text) => macros.expand(text);
-}
-function displayTextForMessage(scripts, message, depth) {
-  const displayScripts = scripts.filter((script) => script.markdownOnly && !script.disabled);
-  const text = message.mes ?? "";
-  return displayScripts.length === 0 ? text : applyRegexScripts(text, displayScripts, RegexPlacement2.AI_OUTPUT, { expand: (value) => value }, { depth });
-}
-async function displayTexts(db, state, characterName, chatId, chat) {
-  const character = await db.getCharacter(characterName);
-  const scripts = await collectSessionRegexScripts(db, state, characterName, chatId, character);
-  if (scripts.every((script) => !script.markdownOnly || script.disabled)) return void 0;
-  return chat.messages.map((message, index) => displayTextForMessage(scripts, message, chat.messages.length - 1 - index));
-}
-async function presetSamplerValue(db, state, key) {
-  const presetName = state.activePreset;
-  if (!presetName) return void 0;
-  const preset = await db.getPreset(presetName);
-  return preset?.[key];
-}
-function parsePresetOrThrow(data) {
-  const kind = detectPresetKind(data);
-  if (kind === "chat-completion") {
-    parsePreset(data);
-    return;
-  }
-  if (kind === "context") {
-    parseContextTemplate(data);
-    return;
-  }
-  if (kind === "instruct") {
-    parseInstructTemplate(data);
-    return;
-  }
-  if (kind === "textgen-sampler") return;
-  throw new Error("preset format not recognized (expected chat completion prompts, context, instruct, or textgen sampler)");
-}
-function compactionOverrideOf(value) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
-  const record = value;
-  const provider = typeof record["curatorProvider"] === "string" ? record["curatorProvider"].trim() : "";
-  const model = typeof record["curatorModel"] === "string" ? record["curatorModel"].trim() : "";
-  return provider !== "" && model !== "" ? { curatorProvider: provider, curatorModel: model } : void 0;
-}
-
-// packages/plugin/src/agent-tavern/deduce.ts
-var DEDUCE_PROVIDER = "spawn";
-var REASONING_PRESET_ID = "agent-reasoning";
-function subagentRuntimeOf(parent) {
-  const ctx = parent?.ctx;
-  if (!ctx) return void 0;
-  try {
-    const looked = ctx.get?.("subagents");
-    if (isRuntime(looked)) return looked;
-  } catch {
-  }
-  try {
-    const direct = ctx.subagents;
-    if (isRuntime(direct)) return direct;
-  } catch {
-  }
-  return void 0;
-}
-function isRuntime(candidate) {
-  if (typeof candidate !== "object" || candidate === null) return false;
-  const runtime = candidate;
-  return typeof runtime.start === "function" || typeof runtime.startActivation === "function";
-}
-async function spawnSubagent(runtime, request) {
-  if (typeof runtime.startActivation === "function") {
-    const activation = await runtime.startActivation({
-      provider: DEDUCE_PROVIDER,
-      label: request.label,
-      request: {
-        prompt: request.prompt,
-        parent: request.parent,
-        ...request.agentPreset === void 0 ? {} : { agentPreset: request.agentPreset }
-      },
-      signal: request.signal,
-      delivery: "caller"
-    });
-    return {
-      id: activation.childId,
-      result: activation.result,
-      dispose: () => activation.dispose()
-    };
-  }
-  if (typeof runtime.start === "function") {
-    const { agentPreset: _ignored, ...legacy } = request;
-    return runtime.start(DEDUCE_PROVIDER, legacy);
-  }
-  throw new Error("subagent runtime exposes neither startActivation (DSH 0.2.1+) nor start (DSH 0.2.0)");
-}
-
-// packages/plugin/src/agent-novel/usage.ts
-var USAGE_SAMPLER_KEY = Symbol.for("dsh-soulmojito:novel-usage-sampler");
-var samplerTable = globalThis[USAGE_SAMPLER_KEY] ??= /* @__PURE__ */ new Map();
-function drainToolOutputBytes() {
-  const drained = {};
-  for (const [toolName, bytes] of samplerTable) {
-    drained[toolName] = bytes;
-  }
-  samplerTable.clear();
-  return drained;
-}
-var PROBE_AGENT_ID_KEY = Symbol.for("dsh-soulmojito:novel-writer-probe-agent-id");
-var probeAgentSlot = globalThis[PROBE_AGENT_ID_KEY] ??= {};
-function takeProbeAgentId() {
-  try {
-    const id = probeAgentSlot.id;
-    delete probeAgentSlot.id;
-    return typeof id === "string" && id !== "" ? id : null;
-  } catch {
-    return null;
-  }
-}
-var WRITER_RUN_USAGE_KEY = Symbol.for("dsh-soulmojito:novel-writer-run-usage");
-var writerRunUsageSlot = globalThis[WRITER_RUN_USAGE_KEY] ??= { outputChars: null, usage: null };
-function drainWriterRunUsage() {
-  try {
-    const drained = { outputChars: writerRunUsageSlot.outputChars, usage: writerRunUsageSlot.usage };
-    writerRunUsageSlot.outputChars = null;
-    writerRunUsageSlot.usage = null;
-    return drained;
-  } catch {
-    return { outputChars: null, usage: null };
-  }
-}
-
-// packages/plugin/src/agent-novel/capabilities.ts
-var AGENT_NOVEL_PRESET_ID = "agent-novel";
-function isObject(value) {
-  return typeof value === "object" && value !== null;
-}
-function isFunction(value) {
-  return typeof value === "function";
-}
-var REQUIRED_EVENT_TYPES = ["session/event", "agent/created", "agent/status"];
-function inspectAgentNovelCapabilities(ctx) {
-  const missing = [];
-  const reasons = [];
-  const need = (id, ok, reason) => {
-    if (ok) return;
-    missing.push(id);
-    reasons.push(reason);
-  };
-  const agents = isObject(ctx?.agents) ? ctx?.agents : void 0;
-  need("agents", agents !== void 0, "host context exposes no 'agents' service object (\xA716 followup scheduling)");
-  need("agents.withoutInitiator", isFunction(agents?.withoutInitiator), "agents.withoutInitiator is not callable; agent-initiated followups without a user initiator cannot be driven (\xA716)");
-  const presets = isObject(ctx?.agentPresets) ? ctx?.agentPresets : void 0;
-  need("agentPresets.mount", isFunction(presets?.mount), "agentPresets.mount is not callable; the novel preset cannot be mounted (\xA716)");
-  need("agentPresets.recompose", isFunction(presets?.recompose), "agentPresets.recompose is not callable; preset recomposition for the novel architecture is unavailable (\xA716)");
-  const systemPrompt = isObject(ctx?.systemPrompt) ? ctx?.systemPrompt : void 0;
-  need("systemPrompt.section", isFunction(systemPrompt?.section), "systemPrompt.section is not callable; the novel kernel cannot be registered (\xA711)");
-  need("tools.register", isFunction(isObject(ctx?.tools) ? (ctx?.tools).register : void 0), "tools.register is not callable; the novel tool surface cannot be registered (\xA711)");
-  for (const eventType of REQUIRED_EVENT_TYPES) {
-    need(
-      `on:${eventType}`,
-      isFunction(ctx?.on),
-      `event subscription for '${eventType}' is unavailable: the host exposes no 'on' hook, and actual emission of the event type cannot be probed statically (\xA716)`
-    );
-  }
-  return {
-    available: missing.length === 0,
-    missing,
-    reasons,
-    checkedAt: (/* @__PURE__ */ new Date()).toISOString()
-  };
-}
-var PROBE_TOOL = "novel_status_read";
-function messageOf(error) {
-  return error instanceof Error ? error.message : String(error);
-}
-function outputExcerptOf(output) {
-  const text = output.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => block.text ?? "").join("\n").trim();
-  return text === "" ? "(no text output)" : `output '${text.slice(0, 120)}'`;
-}
-async function probeSpawn(deps, label, prompt, options) {
-  const runtime = deps.runtime;
-  if (runtime === void 0 || typeof runtime.start !== "function" && typeof runtime.startActivation !== "function") {
-    return { ok: false, error: 'subagent runtime is unavailable in this deployment (enable the dsh-subagent bundle with an in-process "spawn" provider, 0007 \xA75)' };
-  }
-  const signal = deps.signal ?? new AbortController().signal;
-  let run;
-  try {
-    run = await spawnSubagent(runtime, {
-      label,
-      prompt: [{ type: "text", text: prompt }],
-      parent: deps.parent,
-      signal,
-      ...options.allow === null ? {} : { toolFilter: { allow: options.allow } },
-      ...options.agentPreset === void 0 ? {} : { agentPreset: options.agentPreset }
-    });
-  } catch (error) {
-    return { ok: false, error: `spawn failed: ${messageOf(error)}` };
-  }
-  try {
-    const result = await run.result;
-    return { ok: true, runId: run.id, result: { output: [...result.output], stopReason: result.stopReason, ...result.diagnostic === void 0 ? {} : { diagnostic: result.diagnostic } } };
-  } catch (error) {
-    return { ok: false, error: `run result rejected: ${messageOf(error)}` };
-  } finally {
-    try {
-      await run.dispose();
-    } catch {
-    }
-  }
-}
-async function probeIdentityCorrelation(deps) {
-  takeProbeAgentId();
-  const spawn3 = await probeSpawn(
-    deps,
-    "dsh-soulmojito writer-probe \xB7 p1-identity",
-    `Host capability probe. Call the tool ${PROBE_TOOL} exactly once, then reply with exactly: ok. The tool may return an error about a missing novel binding \u2014 that is expected and fine; still reply ok after the single call.`,
-    { allow: [PROBE_TOOL] }
-  );
-  if (!spawn3.ok) return { item: { status: "fail", detail: `P1 spawn did not complete: ${spawn3.error}` }, spawnOk: false };
-  const recorded = takeProbeAgentId();
-  if (recorded === spawn3.runId) {
-    return {
-      item: { status: "pass", detail: `subagent tool execution carried exec.agent.id '${recorded}' equal to the spawn run id; the delegation registry key (0007 \xA76.2) is derivable` },
-      spawnOk: true
-    };
-  }
-  const detail = recorded === null ? `${PROBE_TOOL} never executed inside the probe subagent (stopReason ${spawn3.result.stopReason}; ${outputExcerptOf(spawn3.result.output)}) \u2014 the model may have skipped the call; re-run the probe before treating this as a host gap` : `exec.agent.id '${recorded}' does not match the spawn run id '${spawn3.runId}' (stopReason ${spawn3.result.stopReason}) \u2014 subagent tool executions are not attributable to their run`;
-  return { item: { status: "fail", detail }, spawnOk: true };
-}
-async function probeAllowList(deps, p1, spawnOk) {
-  if (!spawnOk) return { status: "fail", detail: `allow-reachable half not probed: the P1 spawn itself failed (${p1.detail})` };
-  if (p1.status !== "pass") {
-    return { status: "inconclusive", detail: `allow-reachable half unproven because P1 did not confirm a tool execution inside an allow-listed subagent (${p1.detail})` };
-  }
-  const presetHost = typeof deps.runtime?.startActivation === "function";
-  takeProbeAgentId();
-  const spawn3 = await probeSpawn(
-    deps,
-    "dsh-soulmojito writer-probe \xB7 p2-allowlist",
-    `Host capability probe. Try calling the tool ${PROBE_TOOL} once. If the tool is available to you, reply with exactly: tool-ran. If the tool is not available to you, reply with exactly: unavailable.`,
-    { allow: [], agentPreset: REASONING_PRESET_ID }
-  );
-  if (!spawn3.ok) return { status: "fail", detail: `P2 spawn did not complete: ${spawn3.error}` };
-  const recorded = takeProbeAgentId();
-  if (recorded !== null) {
-    return { status: "fail", detail: `${PROBE_TOOL} executed inside a subagent that should have no tools (exec.agent.id '${recorded}') \u2014 ${presetHost ? `the host did not enforce preset '${REASONING_PRESET_ID}'` : "the host toolFilter does not enforce allow lists"}` };
-  }
-  const text = spawn3.result.output.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => (block.text ?? "").trim().toLocaleLowerCase()).join("\n");
-  if (text.includes("unavailable")) {
-    return { status: "pass", detail: `allow-reachable proven by the P1 execution; the tool-free subagent reported the tool unavailable (${presetHost ? `host-enforced by preset '${REASONING_PRESET_ID}' plus model report` : "observational \u2014 model-reported, not a host-side denial proof"})` };
-  }
-  return {
-    status: "inconclusive",
-    detail: `allow-reachable proven by the P1 execution; the tool-free subagent neither executed the tool nor clearly reported it unavailable (stopReason ${spawn3.result.stopReason}; ${outputExcerptOf(spawn3.result.output)}) \u2014 model compliance limits the probe; re-run or verify on a real E2E delegation`
-  };
-}
-async function inspectWriterSubagentCapabilities(deps = {}) {
-  const { item: p1, spawnOk } = await probeIdentityCorrelation(deps);
-  const p2 = await probeAllowList(deps, p1, spawnOk);
-  return {
-    probedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    spawnOk,
-    p1,
-    p2,
-    p3: {
-      status: "deferred-to-e2e",
-      reason: "end-to-end delegation (research \u2192 commit \u2192 out-of-scope rejection timing) requires a real-model run; not automatable in-process (0007 \xA79 P3)"
-    }
-  };
-}
-
-// packages/plugin/src/build-info.ts
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { relative, resolve as resolve2 } from "node:path";
-
-// packages/plugin/src/env-compat.ts
-function envCompat(suffix) {
-  return process.env[`DSH_SOULMOJITO_${suffix}`] ?? process.env[`DSH_TAVERN_${suffix}`];
-}
-
-// packages/plugin/src/build-info.ts
-var BUILD_INFO = readBuildInfo();
-var TAVERN_COMMIT = resolveTavernCommit(BUILD_INFO.commit);
-function readBuildInfo() {
-  let version = "unknown";
-  let commit = "unknown";
-  const stamped = buildTimeStamp();
-  if (stamped.commit !== "") commit = stamped.commit;
-  for (const packagePath of [
-    resolve2(import.meta.dirname, "package.json"),
-    resolve2(import.meta.dirname, "..", "package.json")
-  ]) {
-    try {
-      const packageData = JSON.parse(readFileSync(packagePath, "utf8"));
-      if (typeof packageData?.version === "string" && packageData.version.trim() !== "") {
-        version = packageData.version.trim();
-        break;
-      }
-    } catch {
-    }
-  }
-  try {
-    const generated = JSON.parse(readFileSync(resolve2(import.meta.dirname, "version.json"), "utf8"));
-    if (typeof generated?.version === "string" && generated.version.trim() !== "") {
-      version = generated.version.trim();
-    }
-    const sidecarCommit = typeof generated?.commit === "string" ? normalizeCommit(generated.commit) : void 0;
-    if (sidecarCommit !== void 0) commit = sidecarCommit;
-  } catch {
-  }
-  return { version, commit };
-}
-function buildTimeStamp() {
-  const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("eb1b451") : void 0;
-  return { version, commit: commit ?? "" };
-}
-function resolveTavernCommit(buildFallback) {
-  const fallback = normalizeCommit(envCompat("COMMIT") ?? buildFallback) ?? "unknown";
-  const repositoryRoot = resolve2(import.meta.dirname, "..", "..");
-  const packagePath = relative(repositoryRoot, import.meta.dirname).replaceAll("\\", "/");
-  if (packagePath !== "packages/plugin") return fallback;
-  const git = (args) => execFileSync("git", args, {
-    cwd: repositoryRoot,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: 2e3,
-    windowsHide: true
-  }).trim();
-  try {
-    const gitRoot = resolve2(git(["rev-parse", "--show-toplevel"]));
-    if (relative(repositoryRoot, gitRoot) !== "") return fallback;
-    return normalizeCommit(git(["rev-parse", "--short=7", "HEAD"])) ?? fallback;
-  } catch {
-    return fallback;
-  }
-}
-function normalizeCommit(value) {
-  const commit = value.trim();
-  return /^[0-9a-f]{7,40}$/i.test(commit) ? commit.slice(0, 7).toLowerCase() : void 0;
-}
-
-// packages/plugin/src/mods/host.ts
-import { promises as fs14 } from "node:fs";
-import { mkdir as mkdir3 } from "node:fs/promises";
-import { isAbsolute, join as join12, relative as relative2, resolve as resolve3 } from "node:path";
-import { pathToFileURL as pathToFileURL2 } from "node:url";
-
-// packages/plugin/src/guides.ts
-var GUIDES_MAX_COUNT = 8;
-var GUIDE_MAX_TEXT_LENGTH = 500;
-var GUIDES_BLOCK_HEADER = "Conversation guides (persistent user directives; apply to every reply):";
-function normalizeGuides(value) {
-  if (!Array.isArray(value)) return [];
-  const guides = [];
-  for (const entry of value) {
-    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
-    const { id, text, createdAt } = entry;
-    if (typeof id !== "string" || id === "") continue;
-    if (typeof text !== "string" || text.trim() === "") continue;
-    if (typeof createdAt !== "string" || createdAt === "") continue;
-    guides.push({ id, text: text.trim(), createdAt });
-  }
-  return guides;
-}
-function addGuide(guides, text) {
-  if (typeof text !== "string" || text.trim() === "") {
-    return { ok: false, error: "guide text is required and must be a non-empty string" };
-  }
-  const trimmed = text.trim();
-  if (trimmed.length > GUIDE_MAX_TEXT_LENGTH) {
-    return { ok: false, error: `guide text must be at most ${GUIDE_MAX_TEXT_LENGTH} characters (got ${trimmed.length})` };
-  }
-  if (guides.length >= GUIDES_MAX_COUNT) {
-    return { ok: false, error: `guide limit reached: at most ${GUIDES_MAX_COUNT} guides per chat` };
-  }
-  const guide = { id: crypto.randomUUID(), text: trimmed, createdAt: (/* @__PURE__ */ new Date()).toISOString() };
-  return { ok: true, guide, guides: [...guides, guide] };
-}
-function removeGuide(guides, id) {
-  const next = guides.filter((guide) => guide.id !== id);
-  return { removed: next.length !== guides.length, guides: next };
-}
-function formatGuidesBlock(guides) {
-  const normalized = normalizeGuides(guides);
-  if (normalized.length === 0) return void 0;
-  return [
-    GUIDES_BLOCK_HEADER,
-    ...[...normalized].sort((left, right) => left.createdAt.localeCompare(right.createdAt)).map((guide) => `- ${guide.text}`)
-  ].join("\n");
-}
-var guidesChanged = createGlobalListenerRegistry("dsh-soulmojito:guides-changed-listeners");
-function onGuidesChanged(listener) {
-  return guidesChanged.on(listener);
-}
-function emitGuidesChanged(character, chatId) {
-  return guidesChanged.emit(character, chatId);
-}
-
-// packages/plugin/src/games/handle.ts
-var GAMES_SERVICE_KEY = "dsh-soulmojito:games-service";
-var serviceSymbol = Symbol.for(GAMES_SERVICE_KEY);
-var nextToken = 1;
-function publishGamesService(service) {
-  const holder = globalThis;
-  const token = nextToken++;
-  holder[serviceSymbol] = { service, token };
-  return () => {
-    if (holder[serviceSymbol]?.token === token) delete holder[serviceSymbol];
-  };
-}
-function resolveGamesService() {
-  const holder = globalThis;
-  return holder[serviceSymbol]?.service;
-}
-var gamesChangedListeners = createGlobalListenerRegistry("dsh-soulmojito:games-changed-listeners");
-function onGamesChanged(listener) {
-  return gamesChangedListeners.on(listener);
-}
-function emitGamesChanged() {
-  void gamesChangedListeners.emit();
-}
-var GAMES_WAITERS_KEY = "dsh-soulmojito:games-waiters";
-function waiterRegistry() {
-  const holder = globalThis;
-  const key = Symbol.for(GAMES_WAITERS_KEY);
-  let registry = holder[key];
-  if (registry === void 0) {
-    registry = /* @__PURE__ */ new Map();
-    holder[key] = registry;
-  }
-  return registry;
-}
-function gameWaiters(sessionId) {
-  return waiterRegistry().get(sessionId)?.size ?? 0;
-}
-
-// packages/plugin/src/generation-hooks.ts
-var GENERATION_HOOK_TIMEOUT_MS = 1e4;
-function withTimeout(promise, ms) {
-  return new Promise((resolve6, reject) => {
-    const timer = setTimeout(() => {
-      const timeoutError = new Error(`generation hook timed out after ${ms}ms`);
-      timeoutError.hookTimeout = true;
-      reject(timeoutError);
-    }, ms);
-    Promise.resolve(promise).then(
-      (value) => {
-        clearTimeout(timer);
-        resolve6(value);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      }
-    );
-  });
-}
-function createGenerationHookBus(options = {}) {
-  const timeoutMs = options.timeoutMs ?? GENERATION_HOOK_TIMEOUT_MS;
-  const table = {
-    "user-input": [],
-    "pre-assemble": [],
-    "pre-llm": [],
-    "post-output": [],
-    "post-save": []
-  };
-  const degradationListeners = /* @__PURE__ */ new Set();
-  let nextId = 1;
-  let degradations = 0;
-  function register(phase, handler, order = 100, owner) {
-    const id = nextId++;
-    const list = table[phase];
-    list.push({ id, order, handler, ...owner !== void 0 ? { owner } : {} });
-    list.sort((a, b) => a.order - b.order || a.id - b.id);
-    return () => {
-      const index = list.findIndex((registration) => registration.id === id);
-      if (index >= 0) list.splice(index, 1);
-    };
-  }
-  async function dispatch(phase, payload, context) {
-    const list = table[phase];
-    if (list.length === 0) return payload;
-    const fullContext = { ...context, phase };
-    let current = payload;
-    for (const registration of [...list]) {
-      const degrade = (reason, detail) => {
-        degradations += 1;
-        const degradation = {
-          phase,
-          order: registration.order,
-          reason,
-          ...detail !== void 0 ? { detail } : {},
-          ...registration.owner !== void 0 ? { owner: registration.owner } : {}
-        };
-        options.onDegradation?.(degradation);
-        for (const listener of [...degradationListeners]) {
-          try {
-            listener(degradation);
-          } catch {
-          }
-        }
-      };
-      try {
-        const outcome = await withTimeout(
-          Promise.resolve(registration.handler(current, fullContext)),
-          timeoutMs
-        );
-        if (outcome === void 0) {
-          degrade("no-return");
-        } else {
-          current = outcome;
-        }
-      } catch (error) {
-        const timedOut = error instanceof Error && error.hookTimeout === true;
-        degrade(timedOut ? "timeout" : "error", error instanceof Error ? error.message : String(error));
-      }
-    }
-    return current;
-  }
-  return {
-    register,
-    dispatch,
-    degradationCount: () => degradations,
-    onDegradation(listener) {
-      degradationListeners.add(listener);
-      return () => {
-        degradationListeners.delete(listener);
-      };
-    }
-  };
-}
-var generationHooks = createGenerationHookBus();
-
 // packages/plugin/src/mods/audit.ts
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname as dirname6 } from "node:path";
@@ -16257,8 +15905,8 @@ var ModAuditLog = class {
   warn;
   tail = Promise.resolve();
   /** 宿主 logger 可选注入；没有 logger 时审计写入失败完全静默。 */
-  setLogger(warn) {
-    this.warn = warn;
+  setLogger(warn3) {
+    this.warn = warn3;
   }
   /** 追加一条审计记录（best-effort）；无论落盘与否都推进内存计数。 */
   record(mod, event, detail = "") {
@@ -16611,10 +16259,10 @@ function hasInternalErrorShape(error) {
   return typeof record["path"] === "string" || typeof record["dest"] === "string" || typeof record["syscall"] === "string";
 }
 function logFailure(error, failure, options) {
-  const warn = options.logger?.warn;
-  if (typeof warn !== "function") return;
+  const warn3 = options.logger?.warn;
+  if (typeof warn3 !== "function") return;
   const record = typeof error === "object" && error !== null ? error : void 0;
-  warn("dsh-soulmojito: API request failed", {
+  warn3("dsh-soulmojito: API request failed", {
     operation: options.operation,
     status: failure.status,
     code: failure.code ?? "none",
@@ -17867,18 +17515,18 @@ var ModHost = class _ModHost {
   snapshot() {
     const available = !modsDisabledByEnv();
     const mods = [];
-    for (const [id, info] of this.broken) {
+    for (const [id, info2] of this.broken) {
       mods.push({
         id,
-        name: info.name ?? id,
-        version: info.version ?? "",
-        author: info.author ?? "",
-        description: info.description ?? "",
-        capabilities: info.capabilities ?? [],
+        name: info2.name ?? id,
+        version: info2.version ?? "",
+        author: info2.author ?? "",
+        description: info2.description ?? "",
+        capabilities: info2.capabilities ?? [],
         loadingOrder: 100,
         panel: null,
         status: "error",
-        error: info.message,
+        error: info2.message,
         auditCount: this.audit.count(id),
         surfaces: { hooks: [], tools: [], http: [] },
         buttons: []
@@ -19501,6 +19149,3558 @@ function setGamesServicePromise(value) {
   gamesServicePromise = value;
 }
 
+// packages/plugin/src/session/active-character.ts
+async function activeCharacterPatch(db, current, next) {
+  const patch = { activeCharacter: next };
+  const previous = current.activeCharacter;
+  if (previous === void 0 || previous === next || current.worldFollowsCharacter === false) return patch;
+  const file = await db.getCharacter(previous);
+  const raw = file?.card.data.extensions["world"];
+  const linked = typeof raw === "string" ? raw.trim() : "";
+  if (linked === "" || !current.activeWorlds.includes(linked)) return patch;
+  patch.activeWorlds = current.activeWorlds.filter((name2) => name2 !== linked);
+  return patch;
+}
+
+// packages/plugin/src/session/binding.ts
+var TavernArchitectureConflictError = class extends Error {
+  code = "TAVERN_ARCHITECTURE_CONFLICT";
+  constructor(message) {
+    super(message);
+    this.name = "TavernArchitectureConflictError";
+  }
+};
+async function bindSession(db, sessionId, character, chatId, group2 = false, architecture = "st", contextMode = "dsh-native", initializationPending = false) {
+  await db.ensureRegexScriptOwners();
+  const current = group2 ? void 0 : await db.getState();
+  const switched = current === void 0 ? void 0 : await activeCharacterPatch(db, current, character);
+  return db.updateState((state) => {
+    const existing = state.sessionBindings[sessionId];
+    const sameAgentBinding = existing?.architecture === "agent-tavern" && existing.character === character && existing.chatId === chatId;
+    const pending = initializationPending && (existing?.architecture === "agent-tavern" && existing.initializationPending === true || !sameAgentBinding);
+    const binding = architecture === "agent-tavern" && !group2 ? {
+      architecture: "agent-tavern",
+      contextMode,
+      character,
+      chatId,
+      ...pending ? { initializationPending: true } : {}
+    } : { architecture: "st", character, chatId, ...group2 ? { group: true } : {} };
+    return {
+      activeCharacter: group2 ? state.activeCharacter : character,
+      ...switched?.activeWorlds !== void 0 ? { activeWorlds: switched.activeWorlds } : {},
+      sessionBindings: {
+        ...state.sessionBindings,
+        [sessionId]: binding
+      }
+    };
+  });
+}
+async function assertAgentTavernAvailable(architecture, contextMode) {
+  if (architecture !== "agent-tavern") return;
+  const capabilities = await getAgentTavernCapabilitiesPromise() ?? getAgentTavernCapabilities();
+  const status2 = contextMode === "agent-managed" ? capabilities.managed : capabilities.native;
+  if (!status2.available) {
+    throw new TavernArchitectureConflictError(`AgentTavern ${contextMode} is unavailable: ${status2.reasons.join(" ")}`);
+  }
+}
+function requestedArchitecture(value) {
+  if (value === void 0 || value === "st") return "st";
+  if (value === "agent-tavern") return value;
+  throw new Error(`unsupported Tavern architecture '${String(value)}'`);
+}
+function requestedContextMode(value) {
+  if (value === void 0 || value === "dsh-native") return "dsh-native";
+  if (value === "agent-managed") return value;
+  throw new Error(`unsupported AgentTavern context mode '${String(value)}'`);
+}
+function assertStGenerationBinding(state, sessionId) {
+  if (typeof sessionId !== "string") return;
+  const binding = state.sessionBindings[sessionId];
+  if (binding?.architecture === "agent-tavern") {
+    throw new TavernArchitectureConflictError("AgentTavern sessions use the DSH native AgentLoop; the ST generation endpoint is unavailable.");
+  }
+}
+
+// packages/plugin/src/session/trace.ts
+function isAppendableSession(session) {
+  return session !== void 0 && typeof session.append === "function";
+}
+function occupyHostSession(agent, ctx) {
+  const session = agent.session;
+  if (!isAppendableSession(session)) return;
+  try {
+    if (sessionEvents(session).some((event) => event.type === "turn/start")) return;
+    if (!canAdvanceHostTurnBase(agent)) return;
+    const started = confirmSessionAppend({
+      session: agent.session,
+      logger: ctx?.logger,
+      label: `session occupation turn/start (${agent.id ?? "unknown"})`,
+      append: () => session.append("turn/start", { turn: 1 }),
+      present: (events) => events.some((event) => event.type === "turn/start" && event.data?.turn === 1)
+    });
+    if (!started) return;
+    const ended = confirmSessionAppend({
+      session: agent.session,
+      logger: ctx?.logger,
+      label: `session occupation turn/end (${agent.id ?? "unknown"})`,
+      append: () => session.append("turn/end", { turn: 1, reason: { kind: "completed" } }),
+      present: (events) => events.some((event) => event.type === "turn/end" && event.data?.turn === 1)
+    });
+    if (!ended) return;
+    advanceHostTurnBase(agent, 1);
+  } catch {
+  }
+}
+function loopPhase(agent) {
+  const phase = agent?.phase;
+  return typeof phase === "object" && phase !== null ? phase : void 0;
+}
+function canAdvanceHostTurnBase(agent) {
+  const phase = loopPhase(agent);
+  if (phase === void 0 || phase.kind !== "idle") return false;
+  if (typeof phase.lastTurn !== "number" || !Number.isSafeInteger(phase.lastTurn)) return false;
+  const before = phase.lastTurn;
+  try {
+    phase.lastTurn = before;
+  } catch {
+    return false;
+  }
+  return phase.lastTurn === before;
+}
+function advanceHostTurnBase(agent, turn) {
+  if (!Number.isSafeInteger(turn) || turn < 1) return false;
+  const phase = loopPhase(agent);
+  if (phase === void 0 || phase.kind !== "idle") return false;
+  if (typeof phase.lastTurn === "number" && Number.isSafeInteger(phase.lastTurn) && phase.lastTurn >= turn) return true;
+  try {
+    phase.lastTurn = turn;
+  } catch {
+    return false;
+  }
+  return phase.lastTurn === turn;
+}
+function lastLoggedTurn(agent) {
+  let last;
+  for (const event of sessionEvents(agent.session)) {
+    if (event.type !== "turn/start") continue;
+    const value = event.data?.turn;
+    if (typeof value === "number" && Number.isSafeInteger(value) && (last === void 0 || value > last)) last = value;
+  }
+  return last;
+}
+function closeImportBracket(agent, reason) {
+  const session = agent.session;
+  if (!isAppendableSession(session)) return void 0;
+  let openTurn;
+  let openStep;
+  for (const event of sessionEvents(session)) {
+    const turn = event.data?.turn;
+    const step = event.data?.step;
+    if (event.type === "turn/start" && typeof turn === "number" && Number.isSafeInteger(turn)) {
+      openTurn = turn;
+      openStep = void 0;
+      continue;
+    }
+    if (event.type === "turn/end") {
+      openTurn = void 0;
+      openStep = void 0;
+      continue;
+    }
+    if (event.type === "step/start" && typeof turn === "number" && typeof step === "number" && Number.isSafeInteger(step)) {
+      openStep = { turn, step };
+      continue;
+    }
+    if (event.type === "step/end") openStep = void 0;
+  }
+  if (openStep !== void 0) {
+    try {
+      session.append("step/end", { turn: openStep.turn, step: openStep.step });
+    } catch {
+    }
+  }
+  if (openTurn !== void 0) {
+    try {
+      session.append("turn/end", { turn: openTurn, reason });
+    } catch {
+    }
+  }
+  return lastLoggedTurn(agent);
+}
+function beginTavernSessionTurn(agent, userText) {
+  const session = agent?.session;
+  if (!isAppendableSession(session) || readSessionEvents(session) === void 0) return null;
+  const logEvents = sessionEvents(session);
+  let openTurn = false;
+  for (const event of logEvents) {
+    if (event.type === "turn/start") openTurn = true;
+    else if (event.type === "turn/end") openTurn = false;
+  }
+  if (openTurn) return null;
+  const turn = Math.max(0, ...logEvents.filter((event) => event.type === "turn/start" && typeof event.data?.turn === "number" && Number.isSafeInteger(event.data.turn)).map((event) => event.data?.turn)) + 1;
+  let started = false;
+  try {
+    session.append("turn/start", { turn });
+    started = true;
+    if (userText.trim() !== "") {
+      session.append("user/message", createMessage({
+        role: "user",
+        content: [{ type: "text", text: userText }],
+        source: { kind: "user" }
+      }), { surfaceOp: "append" });
+    }
+    return { session, turn, step: 1, stepOpen: false, turnOpen: true, logging: true, completed: false, ...agent !== null && agent !== void 0 ? { agent } : {} };
+  } catch {
+    if (started) {
+      try {
+        session.append("turn/end", {
+          turn,
+          reason: { kind: "error", error: { message: "Tavern session trace failed", code: "TAVERN_TRACE" } }
+        });
+        advanceHostTurnBase(agent, turn);
+      } catch {
+      }
+    }
+    return null;
+  }
+}
+function startTavernSessionStep(trace) {
+  if (!trace?.logging) return trace;
+  try {
+    trace.session.append("step/start", { turn: trace.turn, step: trace.step });
+    trace.stepOpen = true;
+  } catch {
+    trace.logging = false;
+  }
+  return trace;
+}
+function recordTavernSessionAssistant(trace, text, reasoning, provider, model, usage) {
+  if (!trace?.logging || !trace.stepOpen) return trace;
+  try {
+    const content = [{ type: "text", text }];
+    if (reasoning) content.push({ type: "reasoning", text: reasoning });
+    const version = hostSessionFormatVersion(trace.session);
+    trace.session.append("assistant/message", {
+      turn: trace.turn,
+      step: trace.step,
+      message: createMessage({
+        role: "assistant",
+        content,
+        source: { kind: "model", provider, model }
+      }),
+      ...usage ? { usage } : {},
+      // v4 加载边界强制 settlement 形状（seed 校验无条件要求 data.stream 为数组，
+      // 有 usage 也不豁免），缺失时 append 照常成功但会话重启即拒载；token-meter
+      // 的 usageOf() 同样要求 usage/stream 至少一个，空流可保投影物化。v0-v3
+      // 格式无此成员，多写反而毒化老宿主工件，故按版本分支。
+      ...version !== void 0 && version >= 4 ? { stream: [] } : {}
+    }, { surfaceOp: "append" });
+    trace.completed = true;
+  } catch {
+    trace.logging = false;
+  }
+  return trace;
+}
+function finishTavernSessionTrace(trace) {
+  if (!trace?.turnOpen) return;
+  if (trace.stepOpen) {
+    try {
+      trace.session.append("step/end", { turn: trace.turn, step: trace.step });
+    } catch {
+      trace.stepOpen = false;
+      trace.turnOpen = false;
+      return;
+    }
+    trace.stepOpen = false;
+  }
+  try {
+    trace.session.append("turn/end", {
+      turn: trace.turn,
+      reason: trace.completed ? { kind: "completed" } : { kind: "error", error: { message: "Tavern generation failed", code: "TAVERN_GENERATION" } }
+    });
+    if (trace.agent !== void 0) advanceHostTurnBase(trace.agent, trace.turn);
+  } catch {
+  }
+  trace.turnOpen = false;
+}
+function normalizeChatId(name2) {
+  const stem = name2.replace(/\.jsonl$/i, "").trim();
+  if (stem === "") throw new Error("chat name is required");
+  return `${stem}.jsonl`;
+}
+function parseTavernSessionCommand(rawInput) {
+  const payload = rawInput.trim();
+  if (payload === "") return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const record = parsed;
+    if (record["action"] === "close") return { action: "close" };
+    if (record["action"] === "novel-open") {
+      const novelId = record["novelId"];
+      return typeof novelId === "string" && novelId.trim() !== "" ? { action: "novel-open", novelId } : null;
+    }
+    if (record["action"] === "workbench-open") {
+      const sourceCharacter = typeof record["sourceCharacter"] === "string" ? record["sourceCharacter"] : "";
+      const sourceChatId = typeof record["sourceChatId"] === "string" ? record["sourceChatId"] : "";
+      if (sourceCharacter !== "" !== (sourceChatId !== "")) return null;
+      return { action: "workbench-open", sourceCharacter, sourceChatId };
+    }
+    const character = record["character"];
+    const chatId = record["chatId"];
+    if (typeof character !== "string" || typeof chatId !== "string") return null;
+    const group2 = record["group"] === true;
+    const architecture = group2 ? "st" : requestedArchitecture(record["architecture"]);
+    return {
+      action: "open",
+      character,
+      chatId,
+      group: group2,
+      architecture,
+      contextMode: requestedContextMode(record["contextMode"])
+    };
+  } catch {
+    return null;
+  }
+}
+
+// packages/plugin/src/agent-tavern/body-runtime-core.ts
+var BODY_TEXT_MAX_LENGTH = 1e5;
+var BODY_WRITE_TOOL_DENY = [
+  "memory_write",
+  "memory_update",
+  "memory_forget",
+  "variable_set",
+  "variable_patch",
+  "variable_delete",
+  "tavern_script_advance",
+  "tavern_variable_settle",
+  "game_start",
+  "game_move"
+];
+function bodyRuntimeError(code, message) {
+  const error = new Error(message);
+  error.name = "BodyRuntimeError";
+  error.code = code;
+  return error;
+}
+var pendingByAgent = /* @__PURE__ */ new Map();
+var bodyTails = new KeyedMutationTails(true);
+function withBodyLock(deps, operation) {
+  return bodyTails.enqueue(sessionIdOf(deps), operation);
+}
+function validateRegenerateRequest(request) {
+  requireNonEmptyString(request.groupId, "regenerate.groupId");
+  requireNonEmptyString(request.expectedAnchorId, "regenerate.expectedAnchorId");
+  requireNonNegativeInteger(request.expectedIndex, "regenerate.expectedIndex");
+  if (request.feedback !== void 0 && typeof request.feedback !== "string") {
+    throw bodyRuntimeError("invalid-arguments", "body regenerate rejected: feedback must be a string when present");
+  }
+  if (request.writeToolDeny !== void 0) {
+    if (!Array.isArray(request.writeToolDeny) || request.writeToolDeny.some((name2) => typeof name2 !== "string")) {
+      throw bodyRuntimeError("invalid-arguments", "body regenerate rejected: writeToolDeny must be an array of tool names");
+    }
+  }
+}
+function validateFinalizePayload(payload) {
+  requireNonEmptyString(payload.agentId, "turn-stopping.agentId");
+  requireNonNegativeInteger(payload.turn, "turn-stopping.turn");
+  if (payload.turn < 1) throw bodyRuntimeError("invalid-arguments", "body turn-stopping rejected: turn must be at least 1");
+}
+function validateEditRequest(request) {
+  requireNonEmptyString(request.groupId, "edit.groupId");
+  requireNonEmptyString(request.expectedAnchorId, "edit.expectedAnchorId");
+  requireNonNegativeInteger(request.index, "edit.index");
+  if (typeof request.text !== "string") throw bodyRuntimeError("invalid-arguments", "body edit rejected: text must be a string");
+}
+function validateSelectRequest(request) {
+  requireNonEmptyString(request.groupId, "select.groupId");
+  requireNonEmptyString(request.expectedAnchorId, "select.expectedAnchorId");
+  requireNonNegativeInteger(request.index, "select.index");
+}
+function validatePendingOperation(op) {
+  requireNonEmptyString(op.opId, "restore.opId");
+  requireNonEmptyString(op.groupId, "restore.groupId");
+  requireNonEmptyString(op.previousAnchorId, "restore.previousAnchorId");
+  requireNonNegativeInteger(op.previousIndex, "restore.previousIndex");
+  requireNonNegativeInteger(op.startSeq, "restore.startSeq");
+}
+function requireNonEmptyString(value, subject) {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw bodyRuntimeError("invalid-arguments", `body runtime rejected ${subject}: expected a non-empty string`);
+  }
+}
+function requireNonNegativeInteger(value, subject) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw bodyRuntimeError("invalid-arguments", `body runtime rejected ${subject}: expected a non-negative safe integer`);
+  }
+}
+function requirePositiveTurn(value, subject) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
+    throw bodyRuntimeError("invalid-arguments", `body runtime rejected ${subject}: expected a positive safe integer`);
+  }
+}
+function sessionIdOf(deps) {
+  if (typeof deps.session.id === "string" && deps.session.id !== "") return deps.session.id;
+  if (typeof deps.agent.id === "string" && deps.agent.id !== "") return deps.agent.id;
+  throw bodyRuntimeError("invalid-arguments", "body runtime rejected session: neither session.id nor agent.id is a non-empty string");
+}
+function requireAgentId(deps) {
+  if (typeof deps.agent.id !== "string" || deps.agent.id === "") {
+    throw bodyRuntimeError("invalid-arguments", "body runtime rejected agent: agent.id must be a non-empty string");
+  }
+  return deps.agent.id;
+}
+function recoveryAgentId(deps, op) {
+  if (typeof op.agentId === "string" && op.agentId !== "") return op.agentId;
+  if (typeof deps.agent.id === "string" && deps.agent.id !== "") return deps.agent.id;
+  if (typeof deps.session.id === "string" && deps.session.id !== "") return deps.session.id;
+  throw bodyRuntimeError("invalid-arguments", "body recovery rejected: neither the operation nor the live deps carry an agent/session id");
+}
+function assertAgentIdle(deps) {
+  if (deps.agent.status !== "idle") {
+    throw bodyRuntimeError(
+      "session-busy",
+      `body operation rejected: agent '${String(deps.agent.id)}' is ${String(deps.agent.status ?? "unknown")}, expected idle`
+    );
+  }
+}
+function assertCanAdvanceTurnBase(deps) {
+  if (!canAdvanceHostTurnBase(deps.agent)) {
+    throw bodyRuntimeError(
+      "host-unsupported",
+      `body operation rejected: agent '${String(deps.agent.id)}' cannot advance its host turn base (phase must be idle with a writable integer lastTurn)`
+    );
+  }
+}
+function releaseOperation(deps, op) {
+  releaseActiveOperation(deps, op.agentId, op.opId, op.release);
+}
+function releaseActiveOperation(deps, agentId, opId, release) {
+  pendingByAgent.delete(agentId);
+  try {
+    release();
+  } catch (error) {
+    warn(deps, `body runtime: failed to release write-tool restriction for op ${opId}: ${errorMessage2(error)}`);
+  }
+}
+function releasePendingOperation(deps, agentId, opId, subject) {
+  const active = pendingByAgent.get(agentId);
+  if (active === void 0 || active.opId !== opId) return;
+  try {
+    active.release();
+  } catch (error) {
+    warn(deps, `body runtime: ${subject}: failed to release write-tool restriction: ${errorMessage2(error)}`);
+  }
+  pendingByAgent.delete(agentId);
+}
+function releaseOperationByOp(deps, op, subject) {
+  const agentId = typeof deps.agent.id === "string" ? deps.agent.id : void 0;
+  if (agentId === void 0) return;
+  releasePendingOperation(deps, agentId, op.opId, subject);
+}
+function releaseSettlement(deps, context) {
+  if (context.release !== void 0) {
+    releaseActiveOperation(deps, context.agentId, context.op.opId, context.release);
+    return;
+  }
+  releasePendingOperation(deps, context.agentId, context.op.opId, `${context.label} ${context.op.opId}`);
+}
+function operationView(op) {
+  return {
+    opId: op.opId,
+    groupId: op.groupId,
+    previousAnchorId: op.previousAnchorId,
+    previousIndex: op.previousIndex,
+    startSeq: op.startSeq,
+    agentId: op.agentId,
+    triggerMessageId: op.triggerMessageId,
+    ...op.turn === void 0 ? {} : { turn: op.turn },
+    ...op.feedback === void 0 ? {} : { feedback: op.feedback }
+  };
+}
+function requireRecordWriter(deps) {
+  const appendRecord = deps.appendRecord;
+  if (typeof appendRecord !== "function") {
+    throw bodyRuntimeError(
+      "host-unsupported",
+      "body operation rejected: the host does not expose appendPluginRecord; inject deps.appendRecord from dsh-session appendPluginRecord (DSH 0.2.1-rc.2+)"
+    );
+  }
+  return appendRecord;
+}
+function assertRecordWriter(deps) {
+  requireRecordWriter(deps);
+}
+function appendBodyEvent(deps, data) {
+  return requireRecordWriter(deps)(deps.session, BODY_EVENT_TYPE, data);
+}
+function appendOpFinish(deps, opId, result, anchorId, reason) {
+  appendBodyEvent(deps, {
+    op: "op-finish",
+    opId,
+    result,
+    ...anchorId === void 0 ? {} : { anchorId },
+    ...reason === void 0 ? {} : { reason }
+  });
+}
+function once(operation) {
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    operation();
+  };
+}
+function warn(deps, message) {
+  try {
+    deps.logger?.warn?.(message);
+  } catch {
+  }
+}
+function errorMessage2(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function isBodyFailure(value) {
+  return value instanceof Error && value.name === "BodyRuntimeError" && typeof value.code === "string";
+}
+function failureFor(error, context, op) {
+  const code = isBodyFailure(error) ? error.code : "operation-failed";
+  const failure = bodyRuntimeError(code, `${context}: ${errorMessage2(error)}`);
+  if (error instanceof Error) failure.cause = error;
+  if (op !== void 0) failure.op = op;
+  return failure;
+}
+
+// packages/plugin/src/agent-tavern/body-runtime-session.ts
+function eventValues(session) {
+  if (Array.isArray(session.events)) return session.events;
+  if (typeof session.snapshotEvents === "function") {
+    const snapshot2 = session.snapshotEvents();
+    if (Array.isArray(snapshot2)) return snapshot2;
+    throw bodyRuntimeError("host-unsupported", `body runtime: session '${String(session.id)}' snapshotEvents() did not return an array`);
+  }
+  if (Array.isArray(session.log)) return session.log;
+  throw bodyRuntimeError("host-unsupported", `body runtime: session '${String(session.id)}' exposes no event log (events, snapshotEvents or log)`);
+}
+function eventsOf(session) {
+  return parseEventList(eventValues(session), `session '${String(session.id)}'`);
+}
+function parseEventList(values, subject) {
+  const events = [];
+  for (const [index, value] of values.entries()) {
+    if (!isPlainRecord2(value)) {
+      throw bodyRuntimeError("invalid-event", `${subject}: event at index ${index} is not an object`);
+    }
+    const type = value.type;
+    const seq = value.seq;
+    const data = value.data;
+    if (typeof type !== "string" || !isEventSeq(seq) || !isPlainRecord2(data)) {
+      throw bodyRuntimeError("invalid-event", `${subject}: event at index ${index} needs a string type, safe-integer seq and object data`);
+    }
+    events.push({ type, seq, data });
+  }
+  events.sort((left, right) => left.seq - right.seq);
+  for (let index = 1; index < events.length; index += 1) {
+    if (events[index].seq === events[index - 1].seq) {
+      throw bodyRuntimeError("invalid-event", `${subject}: duplicate event seq ${events[index].seq}`);
+    }
+  }
+  return events;
+}
+function surfaceNodeList(session) {
+  const surface = session.surface;
+  if (!isPlainRecord2(surface) || !Array.isArray(surface.nodes)) {
+    throw bodyRuntimeError(
+      "host-unsupported",
+      `body runtime: session '${String(session.id)}' does not expose session.surface.nodes`
+    );
+  }
+  const nodes = [];
+  for (const value of surface.nodes) {
+    if (!isEventSeq(value)) {
+      throw bodyRuntimeError("host-unsupported", `body runtime: session '${String(session.id)}' surface contains a non-sequence node`);
+    }
+    nodes.push(value);
+  }
+  return nodes;
+}
+function messageOf2(event) {
+  if (event.type === "user/message") return event.data;
+  const message = event.data.message;
+  return isPlainRecord2(message) ? message : void 0;
+}
+function messageIdOf(event) {
+  const message = messageOf2(event);
+  const id = message?.id;
+  return typeof id === "string" && id !== "" ? id : void 0;
+}
+function contentOf(message) {
+  const content = message.content;
+  if (!Array.isArray(content)) return [];
+  return content.filter((block) => isPlainRecord2(block));
+}
+function textOfMessage(message) {
+  return contentOf(message).filter((block) => block.type === "text" && typeof block.text === "string").map((block) => block.text).join("");
+}
+function hasToolCall(message) {
+  return contentOf(message).some((block) => block.type === "tool-call");
+}
+function sourceOf(message) {
+  return isPlainRecord2(message.source) ? message.source : void 0;
+}
+function modelSourceOf(message) {
+  const source = sourceOf(message);
+  if (source === void 0 || source.kind !== "model") return void 0;
+  const provider = source.provider;
+  const model = source.model;
+  if (typeof provider !== "string" || provider === "" || typeof model !== "string" || model === "") return void 0;
+  return { provider, model };
+}
+function findEventByMessageId(events, messageId) {
+  return events.find((event) => messageIdOf(event) === messageId);
+}
+function eventAtSeq(events, seq) {
+  const event = events.find((candidate) => candidate.seq === seq);
+  if (event === void 0) {
+    throw bodyRuntimeError("invalid-event", `body runtime: surface references missing event seq ${seq}`);
+  }
+  return event;
+}
+function findSurfaceSeqByMessageId(events, surface, messageId) {
+  return surface.find((seq) => messageIdOf(eventAtSeq(events, seq)) === messageId);
+}
+function turnOfUserMessage(events, messageId) {
+  let openTurn;
+  for (const event of events) {
+    if (event.type === "turn/start") {
+      openTurn = numberField(event.data.turn);
+      continue;
+    }
+    if (event.type === "turn/end") {
+      openTurn = void 0;
+      continue;
+    }
+    if (event.type === "user/message" && messageIdOf(event) === messageId) return openTurn;
+  }
+  return void 0;
+}
+function openTurnNumber(events) {
+  let open2;
+  for (const event of events) {
+    if (event.type === "turn/start") open2 = numberField(event.data.turn);
+    else if (event.type === "turn/end") open2 = void 0;
+  }
+  return open2;
+}
+function stepState(events, turn) {
+  let openStep;
+  let nextStep = 1;
+  for (const event of events) {
+    if (event.type === "step/start" && numberField(event.data.turn) === turn) {
+      openStep = numberField(event.data.step);
+      if (openStep !== void 0) nextStep = Math.max(nextStep, openStep + 1);
+      continue;
+    }
+    if (event.type === "step/end" && numberField(event.data.turn) === turn) {
+      const step = numberField(event.data.step);
+      if (openStep !== void 0 && step === openStep) openStep = void 0;
+    }
+  }
+  return { openStep, nextStep };
+}
+function lastBodyCandidate(events, turn) {
+  let found;
+  for (const event of events) {
+    if (event.type !== "assistant/message" || numberField(event.data.turn) !== turn) continue;
+    const message = messageOf2(event);
+    const messageId = messageIdOf(event);
+    if (message === void 0 || messageId === void 0) continue;
+    if (textOfMessage(message).trim() === "" || hasToolCall(message)) continue;
+    found = { event, message, seq: event.seq, messageId };
+  }
+  return found;
+}
+function operationFinished(events, opId) {
+  for (const event of events) {
+    if (event.type !== BODY_EVENT_TYPE) continue;
+    if (event.data.op === "op-finish" && event.data.opId === opId) return true;
+  }
+  return false;
+}
+function pendingEventOf(event) {
+  if (event.type !== BODY_EVENT_TYPE) return void 0;
+  const op = event.data.op;
+  if (op === "op-start") {
+    if (event.data.kind !== "regenerate") {
+      throw bodyRuntimeError("invalid-event", `body op-start at seq ${event.seq} has unsupported kind '${String(event.data.kind)}'`);
+    }
+    return {
+      kind: "start",
+      opId: pendingNonEmptyString(event.data.opId, event.seq, "opId"),
+      groupId: pendingNonEmptyString(event.data.groupId, event.seq, "groupId"),
+      previousAnchorId: pendingNonEmptyString(event.data.previousAnchorId, event.seq, "previousAnchorId"),
+      previousIndex: pendingInteger(event.data.previousIndex, event.seq, "previousIndex")
+    };
+  }
+  if (op === "op-finish") {
+    return { kind: "finish", opId: pendingNonEmptyString(event.data.opId, event.seq, "opId") };
+  }
+  return void 0;
+}
+function pendingNonEmptyString(value, seq, field) {
+  if (typeof value !== "string" || value === "") {
+    throw bodyRuntimeError("invalid-event", `body event at seq ${seq} requires ${field} to be a non-empty string`);
+  }
+  return value;
+}
+function pendingInteger(value, seq, field) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw bodyRuntimeError("invalid-event", `body event at seq ${seq} requires ${field} to be a non-negative safe integer`);
+  }
+  return value;
+}
+function triggerMessageIdOf(op) {
+  return typeof op.triggerMessageId === "string" && op.triggerMessageId !== "" ? op.triggerMessageId : triggerMessageIdFor(op.opId);
+}
+function triggerMessageIdFor(opId) {
+  return `body-trigger-${opId}`;
+}
+function eventSeqOf(value) {
+  if (!isPlainRecord2(value)) return void 0;
+  const seq = value.seq;
+  return isEventSeq(seq) ? seq : void 0;
+}
+function nextEventSeq(events) {
+  if (events.length === 0) return 0;
+  return events[events.length - 1].seq + 1;
+}
+function numberField(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) ? value : void 0;
+}
+function isEventSeq(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && !Object.is(value, -0);
+}
+function isPlainRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// packages/plugin/src/agent-tavern/body-runtime-state.ts
+import { randomUUID as randomUUID3 } from "node:crypto";
+function anchorTarget(events, surface, anchorMessageId) {
+  const event = findEventByMessageId(events, anchorMessageId);
+  if (event === void 0) {
+    throw bodyRuntimeError("stale-anchor", `body operation rejected: anchor message '${anchorMessageId}' is not in the session log`);
+  }
+  if (event.type !== "assistant/message") {
+    throw bodyRuntimeError("stale-anchor", `body operation rejected: anchor '${anchorMessageId}' is '${event.type}', expected assistant/message`);
+  }
+  const message = messageOf2(event);
+  if (message === void 0) {
+    throw bodyRuntimeError("stale-anchor", `body operation rejected: anchor '${anchorMessageId}' has no message payload`);
+  }
+  if (textOfMessage(message).trim() === "") {
+    throw bodyRuntimeError("stale-anchor", `body operation rejected: anchor '${anchorMessageId}' has no body text`);
+  }
+  if (hasToolCall(message)) {
+    throw bodyRuntimeError("stale-anchor", `body operation rejected: anchor '${anchorMessageId}' is a tool-call message, not a body`);
+  }
+  const seq = surface.find((node) => messageIdOf(eventAtSeq(events, node)) === anchorMessageId);
+  if (seq === void 0) {
+    throw bodyRuntimeError("body-compacted", `body operation rejected: anchor '${anchorMessageId}' is no longer on the current surface`);
+  }
+  return { event, message, seq };
+}
+function assertLastBodyTarget(events, surface, anchorSeq, anchorMessage) {
+  const anchorIndex = surface.indexOf(anchorSeq);
+  if (anchorIndex < 0) {
+    throw bodyRuntimeError("body-compacted", `body operation rejected: anchor at seq ${anchorSeq} is no longer on the current surface`);
+  }
+  if (textOfMessage(anchorMessage).trim() === "") {
+    throw bodyRuntimeError("stale-anchor", `body operation rejected: anchor at seq ${anchorSeq} has no body text`);
+  }
+  for (const seq of surface.slice(anchorIndex + 1)) {
+    const event = eventAtSeq(events, seq);
+    if (event.type === "system/message" || event.type === "developer/message" || event.type === "tool/result") continue;
+    const message = messageOf2(event);
+    if (message === void 0) continue;
+    if (event.type === "user/message") {
+      if (sourceOf(message)?.kind === "user") {
+        throw bodyRuntimeError("not-last-round", `body operation rejected: a real user message at seq ${seq} follows anchor at seq ${anchorSeq}`);
+      }
+      continue;
+    }
+    if (event.type === "assistant/message" && textOfMessage(message).trim() !== "" && !hasToolCall(message)) {
+      throw bodyRuntimeError("not-last-round", `body operation rejected: assistant body at seq ${seq} follows anchor at seq ${anchorSeq}`);
+    }
+  }
+}
+function bodyLedger(events, groupId) {
+  if (events.length === 0) return void 0;
+  const lastSeq = events[events.length - 1].seq;
+  const bodyEvents = events.map((event) => ({
+    seq: event.seq,
+    type: event.type,
+    // The compiler cannot know session data is JSON; the ledger validates
+    // every body payload it reads and ignores unrelated events.
+    data: event.data
+  }));
+  return foldBodyLedger(bodyEvents, groupId, lastSeq);
+}
+function ledgerForRegenerate(events, groupId, expectedAnchorId, expectedIndex) {
+  const ledger = bodyLedger(events, groupId);
+  if (ledger === void 0) {
+    if (expectedIndex !== 0) {
+      throw bodyRuntimeError("stale-anchor", `body regenerate rejected: unscoped group '${groupId}' starts at index 0, expected ${expectedIndex}`);
+    }
+    assertFreshGroup(events, groupId, expectedAnchorId);
+    return void 0;
+  }
+  if (ledger.anchorMessageId !== expectedAnchorId) {
+    throw bodyRuntimeError(
+      "stale-anchor",
+      `body regenerate rejected: group '${groupId}' anchor is '${ledger.anchorMessageId}', expected '${expectedAnchorId}'`
+    );
+  }
+  if (ledger.selectedIndex !== expectedIndex) {
+    throw bodyRuntimeError(
+      "stale-anchor",
+      `body regenerate rejected: group '${groupId}' selected index is ${ledger.selectedIndex}, expected ${expectedIndex}`
+    );
+  }
+  return ledger;
+}
+function ensureBodyLedger(deps, groupId, expectedAnchorId) {
+  const events = eventsOf(deps.session);
+  const existing = bodyLedger(events, groupId);
+  if (existing !== void 0) {
+    if (existing.anchorMessageId !== expectedAnchorId) {
+      throw bodyRuntimeError(
+        "stale-anchor",
+        `body operation rejected: group '${groupId}' anchor is '${existing.anchorMessageId}', expected '${expectedAnchorId}'`
+      );
+    }
+    return { ledger: existing, events };
+  }
+  assertFreshGroup(events, groupId, expectedAnchorId);
+  appendBodyEvent(deps, { op: "candidate", groupId, messageId: expectedAnchorId, index: 0 });
+  const after = eventsOf(deps.session);
+  const seeded = bodyLedger(after, groupId);
+  if (seeded === void 0) {
+    throw bodyRuntimeError("host-unsupported", `body runtime: seeded candidate 0 for group '${groupId}' but the body ledger stayed empty`);
+  }
+  return { ledger: seeded, events: after };
+}
+function assertFreshGroup(events, groupId, anchorMessageId) {
+  if (groupId === anchorMessageId) return;
+  const anchor = findEventByMessageId(events, anchorMessageId);
+  if (anchor === void 0) return;
+  const turn = numberField(anchor.data.turn);
+  if (turn === void 0) {
+    throw bodyRuntimeError(
+      "stale-anchor",
+      `body operation rejected: group '${groupId}' does not match anchor '${anchorMessageId}' and the anchor has no turn`
+    );
+  }
+  const first = events.find((event) => event.type === "assistant/message" && numberField(event.data.turn) === turn);
+  if (first === void 0 || messageIdOf(first) !== groupId) {
+    throw bodyRuntimeError(
+      "stale-anchor",
+      `body operation rejected: group '${groupId}' is not the first assistant message of anchor turn ${turn}`
+    );
+  }
+}
+function requireCandidate2(ledger, index) {
+  const candidate = ledger.candidates[index];
+  if (candidate === void 0) {
+    throw bodyRuntimeError(
+      "stale-anchor",
+      `body operation rejected: group '${ledger.groupId}' has no candidate index ${index}; count ${ledger.candidates.length}`
+    );
+  }
+  return candidate;
+}
+function candidateText(ledger, index) {
+  const edited = ledger.edits.get(index);
+  if (edited !== void 0) return edited;
+  return requireCandidate2(ledger, index).text;
+}
+function stateFromLedger(ledger) {
+  const text = effectiveBodyText(ledger);
+  if (text === void 0) {
+    throw bodyRuntimeError("stale-anchor", `body operation rejected: group '${ledger.groupId}' has no selected candidate text`);
+  }
+  return {
+    groupId: ledger.groupId,
+    anchorMessageId: ledger.anchorMessageId,
+    selectedIndex: ledger.selectedIndex,
+    count: ledger.candidates.length,
+    text,
+    candidates: ledger.candidates.map((candidate) => ({
+      messageId: candidate.messageId,
+      index: candidate.index,
+      ...candidate.feedback === void 0 ? {} : { feedback: candidate.feedback }
+    }))
+  };
+}
+function appendHideInBridgeTurn(deps, targets) {
+  const ranges = surfaceRanges(surfaceNodeList(deps.session), targets);
+  if (ranges.length === 0) return;
+  const events = eventsOf(deps.session);
+  const openTurn = openTurnNumber(events);
+  if (openTurn !== void 0) {
+    throw bodyRuntimeError(
+      "host-unsupported",
+      `body runtime: cannot hide body nodes while turn ${openTurn} is open; expected an idle closed-turn state`
+    );
+  }
+  const turn = (lastLoggedTurn(deps.agent) ?? 0) + 1;
+  let turnOpen = false;
+  let stepOpen = false;
+  try {
+    deps.session.append("turn/start", { turn });
+    turnOpen = true;
+    deps.session.append("step/start", { turn, step: 1 });
+    stepOpen = true;
+    for (const range of [...ranges].reverse()) appendDeveloperHide(deps, turn, 1, range);
+    deps.session.append("step/end", { turn, step: 1 });
+    stepOpen = false;
+    deps.session.append("turn/end", { turn, reason: { kind: "completed" } });
+    turnOpen = false;
+  } catch (error) {
+    closeBracketBestEffort(deps, turn, 1, turnOpen, stepOpen, `body hide bridge turn ${turn} failed`);
+    throw error;
+  }
+  if (!advanceHostTurnBase(deps.agent, turn)) {
+    throw bodyRuntimeError(
+      "host-unsupported",
+      `body runtime: bridge turn ${turn} is logged but the live loop turn base could not advance`
+    );
+  }
+}
+function appendHideInOpenTurn(deps, turn, targets) {
+  const ranges = surfaceRanges(surfaceNodeList(deps.session), targets);
+  if (ranges.length === 0) return;
+  const events = eventsOf(deps.session);
+  const openTurn = openTurnNumber(events);
+  if (openTurn !== turn) {
+    throw bodyRuntimeError(
+      "host-unsupported",
+      `body runtime: cannot hide settle nodes for turn ${turn} while open turn is ${String(openTurn)}`
+    );
+  }
+  const state = stepState(events, turn);
+  const ownsStep = state.openStep === void 0;
+  const step = state.openStep ?? state.nextStep;
+  if (ownsStep) deps.session.append("step/start", { turn, step });
+  let failure;
+  try {
+    for (const range of [...ranges].reverse()) appendDeveloperHide(deps, turn, step, range);
+  } catch (error) {
+    failure = error;
+  }
+  if (ownsStep) {
+    try {
+      deps.session.append("step/end", { turn, step });
+      alignHostStepBase(deps, step);
+    } catch (closeError) {
+      if (failure === void 0) failure = closeError;
+      else failure = new AggregateError([failure, closeError], `body runtime: failed to hide nodes and close step ${step} of turn ${turn}`);
+    }
+  }
+  if (failure !== void 0) throw failure;
+}
+function alignHostStepBase(deps, step) {
+  const phase = deps.agent.phase;
+  if (!isPlainRecord2(phase)) return;
+  const current = phase.step;
+  if (typeof current !== "number" || !Number.isSafeInteger(current) || current < 0) return;
+  if (current >= step) return;
+  try {
+    phase.step = step;
+  } catch (error) {
+    warn(deps, `body runtime: could not advance the live loop step base to ${step}: ${errorMessage2(error)}`);
+    return;
+  }
+  if (phase.step !== step) {
+    warn(deps, `body runtime: the live loop step base did not accept ${step}`);
+  }
+}
+function surfaceRanges(surface, targets) {
+  const wanted = targets instanceof Set ? targets : new Set(targets);
+  const ranges = [];
+  let start = -1;
+  for (let index = 0; index <= surface.length; index += 1) {
+    const seq = surface[index];
+    const hit = seq !== void 0 && wanted.has(seq);
+    if (hit && start < 0) start = index;
+    if (!hit && start >= 0) {
+      const sources = surface.slice(start, index);
+      const startSeq = sources[0];
+      const endSeq = sources[sources.length - 1];
+      if (startSeq === void 0 || endSeq === void 0) {
+        throw bodyRuntimeError("invalid-event", "body runtime: empty surface replacement range");
+      }
+      ranges.push({ startSeq, endSeq, sourceEventSeqs: sources });
+      start = -1;
+    }
+  }
+  return ranges;
+}
+function appendDeveloperHide(deps, turn, step, range) {
+  deps.session.append("developer/message", {
+    turn,
+    step,
+    message: {
+      id: `body-hide-${randomUUID3()}`,
+      role: "developer",
+      content: [],
+      source: hostPluginMessageSource(deps.session, {
+        form: "body-hide",
+        summary: `body hide ${range.startSeq}-${range.endSeq}`
+      })
+    }
+  }, {
+    surfaceOp: { op: "replace", startSeq: range.startSeq, endSeq: range.endSeq },
+    sourceEventSeqs: range.sourceEventSeqs
+  });
+}
+function oldBodyTargets(events, surface, target) {
+  const targets = /* @__PURE__ */ new Set([target.seq]);
+  const turn = numberField(target.event.data.turn);
+  if (turn === void 0) return targets;
+  for (const seq of surface) {
+    if (seq === target.seq) continue;
+    const event = eventAtSeq(events, seq);
+    if (event.type === "system/message") continue;
+    const message = messageOf2(event);
+    if (event.type === "user/message") {
+      const form = message === void 0 ? void 0 : sourceOf(message)?.form;
+      if (form === "body-regenerate" || form === "body-restore") targets.add(seq);
+      continue;
+    }
+    if (numberField(event.data.turn) === turn) targets.add(seq);
+  }
+  return targets;
+}
+function hideTargets(events, surface, triggerMessageId, turn, candidateMessageId) {
+  const targets = /* @__PURE__ */ new Set();
+  for (const seq of surface) {
+    const event = eventAtSeq(events, seq);
+    if (event.type === "system/message") continue;
+    const message = messageOf2(event);
+    if (message !== void 0 && messageIdOf(event) === candidateMessageId) continue;
+    if (event.type === "user/message") {
+      if (messageIdOf(event) === triggerMessageId) {
+        targets.add(seq);
+        continue;
+      }
+      if (message !== void 0 && sourceOf(message)?.kind === "user") continue;
+      continue;
+    }
+    if (numberField(event.data.turn) === turn) targets.add(seq);
+  }
+  return targets;
+}
+function restoreAssistantData(deps, turn, messageId, previousMessage, model) {
+  const blocks = contentOf(previousMessage).filter((block) => block.type !== "tool-call").map((block) => structuredClone(block));
+  if (blocks.length === 0 || textOfMessage(previousMessage).trim() === "") {
+    throw bodyRuntimeError("restore-unavailable", `body restore turn ${turn} previous anchor has no copyable content`);
+  }
+  const version = hostSessionFormatVersion(deps.session);
+  return {
+    turn,
+    step: 1,
+    message: {
+      id: messageId,
+      role: "assistant",
+      content: blocks,
+      source: { kind: "model", provider: model.provider, model: model.model }
+    },
+    ...version !== void 0 && version >= 4 ? { stream: [] } : {}
+  };
+}
+function applyWriteRestriction(deps, deny) {
+  const tools = deps.agent.ctx?.tools;
+  const restrict = tools?.restrict;
+  if (typeof restrict !== "function" || tools === void 0) return () => {
+  };
+  let disposer;
+  try {
+    disposer = restrict.call(tools, { deny });
+  } catch (error) {
+    throw failureFor(error, `body runtime: tools.restrict({ deny }) failed for ${deny.join(", ")}`, void 0);
+  }
+  if (typeof disposer !== "function") {
+    throw bodyRuntimeError("host-unsupported", "body runtime: tools.restrict({ deny }) did not return a disposer function");
+  }
+  const release = disposer;
+  return once(() => {
+    release();
+  });
+}
+function normalizeDenyTools(values) {
+  const source = values ?? BODY_WRITE_TOOL_DENY;
+  const names = [...new Set(source.map((name2) => name2.trim()).filter((name2) => name2 !== ""))];
+  if (names.length === 0) {
+    throw bodyRuntimeError("invalid-arguments", "body regenerate rejected: writeToolDeny must contain at least one tool name");
+  }
+  return names;
+}
+function buildRegenerateTrigger(deps, op, feedback) {
+  return {
+    id: op.triggerMessageId,
+    role: "user",
+    content: [{ type: "text", text: regenerationInstruction(feedback) }],
+    source: hostPluginMessageSource(deps.session, {
+      form: "body-regenerate",
+      summary: `body regenerate ${op.opId}`,
+      groupId: op.groupId,
+      opId: op.opId
+    })
+  };
+}
+function regenerationInstruction(feedback) {
+  const base = "Regenerate the final assistant reply for this scene. Continue from the prior visible context, write only the assistant body, and do not mention this instruction.";
+  const note = feedback?.trim() ?? "";
+  return note === "" ? base : `${base}
+
+Revision note from the user: ${note}`;
+}
+function closeBracketBestEffort(deps, turn, step, turnOpen, stepOpen, subject) {
+  let stepClosed = !stepOpen;
+  if (stepOpen) {
+    try {
+      deps.session.append("step/end", { turn, step });
+      stepClosed = true;
+    } catch (error) {
+      warn(deps, `body runtime: ${subject}: failed to close step of turn ${turn}: ${errorMessage2(error)}`);
+    }
+  }
+  if (turnOpen && stepClosed) {
+    try {
+      deps.session.append("turn/end", {
+        turn,
+        reason: { kind: "error", error: { message: subject, code: "BODY_RUNTIME" } }
+      });
+    } catch (error) {
+      warn(deps, `body runtime: ${subject}: failed to close turn ${turn}: ${errorMessage2(error)}`);
+    }
+  }
+  if (turnOpen) {
+    const advanced = advanceHostTurnBase(deps.agent, turn);
+    if (!advanced) warn(deps, `body runtime: ${subject}: could not advance the live loop turn base to ${turn}`);
+  }
+}
+
+// packages/plugin/src/agent-tavern/body-runtime-settlement.ts
+import { randomUUID as randomUUID4 } from "node:crypto";
+async function finalizeTurnStopping(deps, payload) {
+  validateFinalizePayload(payload);
+  assertRecordWriter(deps);
+  return withBodyLock(deps, async () => {
+    const events = eventsOf(deps.session);
+    const active = pendingByAgent.get(payload.agentId);
+    if (active === void 0) {
+      return { status: "skipped", reason: `no pending body operation for agent '${payload.agentId}'` };
+    }
+    const triggerTurn = turnOfUserMessage(events, active.triggerMessageId);
+    if (triggerTurn !== payload.turn) {
+      return {
+        status: "skipped",
+        reason: `pending body operation ${active.opId} belongs to trigger turn ${String(triggerTurn)}, not turn ${payload.turn}`
+      };
+    }
+    active.turn = payload.turn;
+    return settleBodyOperation(deps, {
+      agentId: active.agentId,
+      op: operationView(active),
+      label: "body regenerate",
+      release: active.release
+    }, payload.turn);
+  });
+}
+async function finalizeRecoveredOperation(deps, op, turn) {
+  validatePendingOperation(op);
+  requirePositiveTurn(turn, "recovered.turn");
+  assertRecordWriter(deps);
+  return withBodyLock(deps, async () => {
+    const agentId = recoveryAgentId(deps, op);
+    const events = eventsOf(deps.session);
+    if (operationFinished(events, op.opId)) {
+      releaseSettlement(deps, { agentId, op, label: "body recovery", release: void 0 });
+      return { status: "skipped", reason: `body recovery '${op.opId}' already has op-finish` };
+    }
+    const triggerTurn = turnOfUserMessage(events, triggerMessageIdOf(op));
+    if (triggerTurn !== void 0 && triggerTurn !== turn) {
+      return {
+        status: "skipped",
+        reason: `body recovery '${op.opId}' trigger belongs to turn ${triggerTurn}, not turn ${turn}`
+      };
+    }
+    return settleBodyOperation(deps, { agentId, op, label: "body recovery", release: void 0 }, turn);
+  });
+}
+function settleBodyOperation(deps, context, turn) {
+  const events = eventsOf(deps.session);
+  const candidate = lastBodyCandidate(events, turn);
+  if (candidate === void 0) {
+    return failSettlement(
+      deps,
+      context,
+      `${context.label} ${context.op.opId} produced no assistant message with text and no tool-call in turn ${turn}`
+    );
+  }
+  const surface = surfaceNodeList(deps.session);
+  if (!surface.includes(candidate.seq)) {
+    return failSettlement(
+      deps,
+      context,
+      `${context.label} ${context.op.opId} candidate '${candidate.messageId}' is not on the current surface in turn ${turn}`
+    );
+  }
+  let ledger = bodyLedger(events, context.op.groupId);
+  if (ledger === void 0) {
+    if (context.op.previousIndex !== 0) {
+      return failSettlement(
+        deps,
+        context,
+        `${context.label} ${context.op.opId} has no candidate 0 for group '${context.op.groupId}' at previous index ${context.op.previousIndex}`
+      );
+    }
+    try {
+      appendBodyEvent(deps, {
+        op: "candidate",
+        groupId: context.op.groupId,
+        messageId: context.op.previousAnchorId,
+        index: 0
+      });
+    } catch (error) {
+      return failSettlement(
+        deps,
+        context,
+        `${context.label} ${context.op.opId} failed to seed candidate 0 for group '${context.op.groupId}': ${errorMessage2(error)}`
+      );
+    }
+    ledger = bodyLedger(eventsOf(deps.session), context.op.groupId);
+    if (ledger === void 0) {
+      return failSettlement(
+        deps,
+        context,
+        `${context.label} ${context.op.opId} seeded candidate 0 for group '${context.op.groupId}' but the ledger stayed empty`
+      );
+    }
+  }
+  const existingIndex = ledger.candidates.find((item) => item.messageId === candidate.messageId)?.index;
+  const candidateIndex = existingIndex ?? ledger.candidates.length;
+  let selectAppended = false;
+  try {
+    if (existingIndex === void 0) {
+      appendBodyEvent(deps, {
+        op: "candidate",
+        groupId: context.op.groupId,
+        messageId: candidate.messageId,
+        index: candidateIndex,
+        ...context.op.feedback === void 0 ? {} : { feedback: context.op.feedback }
+      });
+    }
+    appendBodyEvent(deps, { op: "select", groupId: context.op.groupId, index: candidateIndex });
+    selectAppended = true;
+    const hidden = hideTargets(events, surface, triggerMessageIdOf(context.op), turn, candidate.messageId);
+    appendHideInOpenTurn(deps, turn, hidden);
+    appendOpFinish(deps, context.op.opId, "ok", candidate.messageId, void 0);
+    releaseSettlement(deps, context);
+    return { status: "ok", anchorMessageId: candidate.messageId };
+  } catch (error) {
+    const reason = `${context.label} ${context.op.opId} failed to settle turn ${turn}: ${errorMessage2(error)}`;
+    if (selectAppended) {
+      try {
+        appendBodyEvent(deps, { op: "select", groupId: context.op.groupId, index: context.op.previousIndex });
+      } catch (selectError) {
+        warn(deps, `body runtime: failed to restore previous body selection for ${context.op.opId}: ${errorMessage2(selectError)}`);
+      }
+    }
+    return failSettlement(deps, context, reason);
+  }
+}
+function failSettlement(deps, context, reason) {
+  try {
+    appendOpFinish(deps, context.op.opId, "failed", void 0, reason);
+  } catch (finishError) {
+    releaseSettlement(deps, context);
+    throw failureFor(
+      finishError,
+      `body runtime: failed to record op-finish for ${context.op.opId}: ${errorMessage2(finishError)}`,
+      context.op
+    );
+  }
+  releaseSettlement(deps, context);
+  return { status: "failed", reason };
+}
+async function restoreBodyAfterFailure(deps, op) {
+  validatePendingOperation(op);
+  assertRecordWriter(deps);
+  return withBodyLock(deps, async () => {
+    const events = eventsOf(deps.session);
+    const openTurn = openTurnNumber(events);
+    if (openTurn !== void 0) {
+      throw bodyRuntimeError(
+        "session-busy",
+        `body restore ${op.opId} rejected: turn ${openTurn} is still open; close its step/turn before restoring`
+      );
+    }
+    assertCanAdvanceTurnBase(deps);
+    const previous = findEventByMessageId(events, op.previousAnchorId);
+    if (previous === void 0) {
+      throw bodyRuntimeError("restore-unavailable", `body restore ${op.opId} cannot find previous anchor '${op.previousAnchorId}' in the session log`);
+    }
+    const previousMessage = messageOf2(previous);
+    if (previousMessage === void 0 || previous.type !== "assistant/message") {
+      throw bodyRuntimeError("restore-unavailable", `body restore ${op.opId} previous anchor '${op.previousAnchorId}' is not an assistant message`);
+    }
+    const previousText = textOfMessage(previousMessage);
+    if (previousText.trim() === "") {
+      throw bodyRuntimeError("restore-unavailable", `body restore ${op.opId} previous anchor '${op.previousAnchorId}' has no body text`);
+    }
+    const model = modelSourceOf(previousMessage);
+    if (model === void 0) {
+      throw bodyRuntimeError("restore-unavailable", `body restore ${op.opId} previous anchor '${op.previousAnchorId}' has no model provider/model source`);
+    }
+    const ledgerBeforeRestore = bodyLedger(events, op.groupId);
+    if (ledgerBeforeRestore === void 0 && op.previousIndex !== 0) {
+      throw bodyRuntimeError(
+        "restore-unavailable",
+        `body restore ${op.opId} cannot reconstruct group '${op.groupId}' at index ${op.previousIndex}: no candidate 0 is recorded`
+      );
+    }
+    if (ledgerBeforeRestore !== void 0 && ledgerBeforeRestore.candidates[op.previousIndex] === void 0) {
+      throw bodyRuntimeError(
+        "restore-unavailable",
+        `body restore ${op.opId} cannot restore group '${op.groupId}' index ${op.previousIndex}: the ledger has ${ledgerBeforeRestore.candidates.length} candidates`
+      );
+    }
+    const triggerId = triggerMessageIdOf(op);
+    const failedTurn = turnOfUserMessage(events, triggerId);
+    const targets = /* @__PURE__ */ new Set();
+    const initialSurface = surfaceNodeList(deps.session);
+    const triggerSeq = findSurfaceSeqByMessageId(events, initialSurface, triggerId);
+    if (triggerSeq !== void 0) targets.add(triggerSeq);
+    if (failedTurn !== void 0) {
+      for (const seq of initialSurface) {
+        const event = eventAtSeq(events, seq);
+        if (event.type === "system/message") continue;
+        if (numberField(event.data.turn) === failedTurn) targets.add(seq);
+      }
+    }
+    const turn = (lastLoggedTurn(deps.agent) ?? 0) + 1;
+    const restoredMessageId = `body-restore-${randomUUID4()}`;
+    let turnOpen = false;
+    let stepOpen = false;
+    try {
+      deps.session.append("turn/start", { turn });
+      turnOpen = true;
+      deps.session.append("step/start", { turn, step: 1 });
+      stepOpen = true;
+      const currentSurface = surfaceNodeList(deps.session);
+      const ranges = surfaceRanges(currentSurface, targets);
+      for (const range of [...ranges].reverse()) appendDeveloperHide(deps, turn, 1, range);
+      deps.session.append("assistant/message", restoreAssistantData(deps, turn, restoredMessageId, previousMessage, model), {
+        surfaceOp: "append"
+      });
+      if (ledgerBeforeRestore === void 0) {
+        appendBodyEvent(deps, { op: "candidate", groupId: op.groupId, messageId: op.previousAnchorId, index: 0 });
+      }
+      appendBodyEvent(deps, {
+        op: "restore",
+        groupId: op.groupId,
+        messageId: restoredMessageId,
+        index: op.previousIndex
+      });
+      deps.session.append("step/end", { turn, step: 1 });
+      stepOpen = false;
+      deps.session.append("turn/end", { turn, reason: { kind: "completed" } });
+      turnOpen = false;
+    } catch (error) {
+      closeBracketBestEffort(deps, turn, 1, turnOpen, stepOpen, `body restore ${op.opId} failed`);
+      releaseOperationByOp(deps, op, `body restore ${op.opId}`);
+      throw failureFor(error, `body restore ${op.opId} failed`, op);
+    }
+    const advanced = advanceHostTurnBase(deps.agent, turn);
+    releaseOperationByOp(deps, op, `body restore ${op.opId}`);
+    if (!advanced) {
+      throw failureFor(
+        bodyRuntimeError("host-unsupported", `body restore ${op.opId} logged turn ${turn} but the live loop turn base could not advance`),
+        `body restore ${op.opId} completed without a writable turn base`,
+        op
+      );
+    }
+    return restoredMessageId;
+  });
+}
+
+// packages/plugin/src/agent-tavern/body-runtime.ts
+async function startRegenerate(deps, request) {
+  validateRegenerateRequest(request);
+  assertRecordWriter(deps);
+  return withBodyLock(deps, async () => {
+    const agentId = requireAgentId(deps);
+    assertAgentIdle(deps);
+    assertCanAdvanceTurnBase(deps);
+    if (pendingByAgent.has(agentId)) {
+      throw bodyRuntimeError("session-busy", `body regenerate rejected: agent '${agentId}' already has a pending body operation`);
+    }
+    const events = eventsOf(deps.session);
+    const surface = surfaceNodeList(deps.session);
+    const target = anchorTarget(events, surface, request.expectedAnchorId);
+    assertLastBodyTarget(events, surface, target.seq, target.message);
+    const existingLedger = ledgerForRegenerate(events, request.groupId, request.expectedAnchorId, request.expectedIndex);
+    const previousIndex = existingLedger?.selectedIndex ?? 0;
+    const deny = normalizeDenyTools(request.writeToolDeny);
+    const opId = `body-op-${randomUUID5()}`;
+    const triggerMessageId = `body-trigger-${opId}`;
+    const active = {
+      opId,
+      agentId,
+      groupId: request.groupId,
+      previousAnchorId: request.expectedAnchorId,
+      previousIndex,
+      startSeq: -1,
+      triggerMessageId,
+      release: () => {
+      },
+      ...request.feedback === void 0 ? {} : { feedback: request.feedback }
+    };
+    const startEvent = appendBodyEvent(deps, {
+      op: "op-start",
+      opId,
+      groupId: request.groupId,
+      kind: "regenerate",
+      previousAnchorId: request.expectedAnchorId,
+      previousIndex
+    });
+    active.startSeq = eventSeqOf(startEvent) ?? nextEventSeq(events);
+    pendingByAgent.set(agentId, active);
+    try {
+      if (existingLedger === void 0) {
+        appendBodyEvent(deps, {
+          op: "candidate",
+          groupId: request.groupId,
+          messageId: request.expectedAnchorId,
+          index: 0
+        });
+      }
+      appendHideInBridgeTurn(deps, oldBodyTargets(events, surface, target));
+      active.release = applyWriteRestriction(deps, deny);
+      await deps.agent.followup(buildRegenerateTrigger(deps, active, request.feedback));
+      return {
+        opId,
+        release: active.release,
+        triggerMessageId,
+        op: operationView(active)
+      };
+    } catch (error) {
+      const reason = `body regenerate ${opId} failed to start: ${errorMessage2(error)}`;
+      try {
+        appendOpFinish(deps, opId, "failed", void 0, reason);
+      } catch (finishError) {
+        warn(deps, `body runtime: failed to record op-finish for start failure ${opId}: ${errorMessage2(finishError)}`);
+      }
+      releaseOperation(deps, active);
+      pendingByAgent.delete(agentId);
+      throw failureFor(error, reason, operationView(active));
+    }
+  });
+}
+async function applyBodyEdit(deps, request) {
+  validateEditRequest(request);
+  assertRecordWriter(deps);
+  return withBodyLock(deps, async () => {
+    const events = eventsOf(deps.session);
+    const surface = surfaceNodeList(deps.session);
+    const target = anchorTarget(events, surface, request.expectedAnchorId);
+    assertLastBodyTarget(events, surface, target.seq, target.message);
+    const ledger = ensureBodyLedger(deps, request.groupId, request.expectedAnchorId).ledger;
+    requireCandidate2(ledger, request.index);
+    const previousText = candidateText(ledger, request.index);
+    const text = request.text;
+    if (text.trim() === "") {
+      throw bodyRuntimeError("invalid-body-text", `body edit rejected: text for group '${request.groupId}' index ${request.index} is empty`);
+    }
+    if (text.length > BODY_TEXT_MAX_LENGTH) {
+      throw bodyRuntimeError(
+        "invalid-body-text",
+        `body edit rejected: text for group '${request.groupId}' index ${request.index} has ${text.length} characters (max ${BODY_TEXT_MAX_LENGTH})`
+      );
+    }
+    appendBodyEvent(deps, {
+      op: "edit",
+      groupId: request.groupId,
+      index: request.index,
+      text,
+      previousText
+    });
+    const updated = bodyLedger(eventsOf(deps.session), request.groupId);
+    if (updated === void 0) {
+      throw bodyRuntimeError("host-unsupported", `body edit for group '${request.groupId}' did not leave a readable body ledger`);
+    }
+    return stateFromLedger(updated);
+  });
+}
+async function selectBodyCandidate(deps, request) {
+  validateSelectRequest(request);
+  assertRecordWriter(deps);
+  return withBodyLock(deps, async () => {
+    const events = eventsOf(deps.session);
+    const surface = surfaceNodeList(deps.session);
+    const target = anchorTarget(events, surface, request.expectedAnchorId);
+    assertLastBodyTarget(events, surface, target.seq, target.message);
+    const ledger = ensureBodyLedger(deps, request.groupId, request.expectedAnchorId).ledger;
+    requireCandidate2(ledger, request.index);
+    appendBodyEvent(deps, { op: "select", groupId: request.groupId, index: request.index });
+    const updated = bodyLedger(eventsOf(deps.session), request.groupId);
+    if (updated === void 0) {
+      throw bodyRuntimeError("host-unsupported", `body select for group '${request.groupId}' did not leave a readable body ledger`);
+    }
+    return stateFromLedger(updated);
+  });
+}
+function foldPendingOps(events) {
+  const parsed = parseEventList(events, "foldPendingOps");
+  const pending = /* @__PURE__ */ new Map();
+  for (const event of parsed) {
+    const data = pendingEventOf(event);
+    if (data === void 0) continue;
+    if (data.kind === "start") {
+      if (pending.has(data.opId)) {
+        throw bodyRuntimeError("invalid-event", `foldPendingOps: duplicate open body operation '${data.opId}' at seq ${event.seq}`);
+      }
+      pending.set(data.opId, {
+        opId: data.opId,
+        groupId: data.groupId,
+        previousAnchorId: data.previousAnchorId,
+        previousIndex: data.previousIndex,
+        startSeq: event.seq,
+        triggerMessageId: triggerMessageIdFor(data.opId)
+      });
+      continue;
+    }
+    pending.delete(data.opId);
+  }
+  return [...pending.values()].sort((left, right) => left.startSeq - right.startSeq);
+}
+
+// packages/plugin/src/agent-tavern/body-session.ts
+function warn2(ctx, message, fields) {
+  try {
+    ctx.logger?.warn?.(message, fields);
+  } catch {
+  }
+}
+function info(ctx, message, fields) {
+  try {
+    ctx.logger?.info?.(message, fields);
+  } catch {
+  }
+}
+function errorLog(ctx, message, fields) {
+  try {
+    ctx.logger?.error?.(message, fields);
+  } catch {
+  }
+}
+function failureCodeOf(error) {
+  if (!isRecord4(error)) return void 0;
+  const code = error["code"];
+  return typeof code === "string" && code !== "" ? code : void 0;
+}
+function errorMessage3(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function nonEmptyString(value) {
+  return typeof value === "string" && value !== "" ? value : void 0;
+}
+function agentIdOf(agent) {
+  return nonEmptyString(agent.id) ?? nonEmptyString(agent.session.id);
+}
+function isRecord4(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isSeq(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && !Object.is(value, -0);
+}
+function numberField2(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) ? value : void 0;
+}
+function wiringEvents(session) {
+  const values = readSessionEvents(session);
+  if (values === void 0) return void 0;
+  const events = [];
+  for (const value of values) {
+    if (!isRecord4(value)) return void 0;
+    const type = value["type"];
+    const seq = value["seq"];
+    const data = value["data"];
+    if (typeof type !== "string" || !isSeq(seq) || !isRecord4(data)) return void 0;
+    events.push({ type, seq, data });
+  }
+  events.sort((left, right) => left.seq - right.seq);
+  return events;
+}
+function eventAt(events, seq) {
+  return events.find((event) => event.seq === seq);
+}
+function messageOf3(event) {
+  if (event.type === "user/message") return event.data;
+  const message = event.data["message"];
+  return isRecord4(message) ? message : void 0;
+}
+function messageIdOf2(event) {
+  const message = messageOf3(event);
+  const id = message?.["id"];
+  return typeof id === "string" && id !== "" ? id : void 0;
+}
+function textOfMessage2(message) {
+  return contentOf2(message).filter((block) => block["type"] === "text" && typeof block["text"] === "string").map((block) => block["text"]).join("");
+}
+function hasToolCall2(message) {
+  return contentOf2(message).some((block) => block["type"] === "tool-call");
+}
+function surfaceNodes(session) {
+  const surface = session.surface;
+  if (!isRecord4(surface)) return void 0;
+  const nodes = surface["nodes"];
+  if (!Array.isArray(nodes)) return void 0;
+  const parsed = [];
+  for (const node of nodes) {
+    if (!isSeq(node)) return void 0;
+    parsed.push(node);
+  }
+  return parsed;
+}
+function openTurnNumber2(events) {
+  let open2;
+  for (const event of events) {
+    if (event.type === "turn/start") open2 = numberField2(event.data["turn"]);
+    else if (event.type === "turn/end") open2 = void 0;
+  }
+  return open2;
+}
+function readBodySessionFacts(session, messageId, groupHint) {
+  const events = wiringEvents(session);
+  if (events === void 0) {
+    return { ledger: void 0, messageText: void 0, inspection: void 0 };
+  }
+  let ledger;
+  let ledgerError;
+  try {
+    ledger = groupHint === void 0 ? void 0 : foldBodyLedgerFromEvents(events, groupHint);
+    if (ledger === void 0) ledger = findBodyLedgerForMessage(events, messageId);
+  } catch (error) {
+    ledger = void 0;
+    ledgerError = errorMessage3(error);
+  }
+  const messageText4 = textOfSessionMessage(events, messageId);
+  const surface = surfaceNodes(session);
+  const anchorMessageId = ledger?.anchorMessageId ?? messageId;
+  const inspection = surface === void 0 ? void 0 : inspectAnchorInEvents(events, surface, anchorMessageId);
+  return {
+    ledger,
+    messageText: messageText4,
+    inspection,
+    ...ledgerError === void 0 ? {} : { ledgerError }
+  };
+}
+function findBodyLedgerForMessage(events, messageId) {
+  const groupIds = /* @__PURE__ */ new Set([messageId]);
+  for (const event of events) {
+    if (event.type !== BODY_EVENT_TYPE) continue;
+    const groupId = nonEmptyString(event.data["groupId"]);
+    if (groupId !== void 0) groupIds.add(groupId);
+  }
+  for (const groupId of groupIds) {
+    const ledger = foldBodyLedgerFromEvents(events, groupId);
+    if (ledger === void 0) continue;
+    if (ledger.anchorMessageId === messageId || ledger.candidates.some((entry) => entry.messageId === messageId)) {
+      return ledger;
+    }
+  }
+  return void 0;
+}
+function textOfSessionMessage(events, messageId) {
+  const event = events.find((entry) => messageIdOf2(entry) === messageId);
+  if (event === void 0) return void 0;
+  const message = messageOf3(event);
+  return message === void 0 ? void 0 : textOfMessage2(message);
+}
+function inspectAnchorInEvents(events, surface, anchorMessageId) {
+  const anchorIndex = surface.findIndex((seq) => {
+    const event = eventAt(events, seq);
+    return event !== void 0 && messageIdOf2(event) === anchorMessageId;
+  });
+  if (anchorIndex < 0) return { onSurface: false, last: false };
+  for (const seq of surface.slice(anchorIndex + 1)) {
+    const event = eventAt(events, seq);
+    if (event === void 0) return { onSurface: true, last: false };
+    if (event.type === "system/message" || event.type === "developer/message" || event.type === "tool/result") continue;
+    const message = messageOf3(event);
+    if (message === void 0) continue;
+    if (event.type === "user/message") {
+      if (sourceOf2(message)?.kind === "user") return { onSurface: true, last: false };
+      continue;
+    }
+    if (event.type === "assistant/message" && textOfMessage2(message).trim() !== "" && !hasToolCall2(message)) {
+      return { onSurface: true, last: false };
+    }
+  }
+  return { onSurface: true, last: true };
+}
+function bodyAgentOf(value) {
+  if (!isRecord4(value)) return void 0;
+  const session = value["session"];
+  if (!isBodySession(session)) return void 0;
+  if (typeof value["followup"] !== "function") return void 0;
+  return value;
+}
+function resolveLiveAgent(ctx, sessionId) {
+  const agents = ctx.agents;
+  const get = agents?.get;
+  if (agents === void 0 || typeof get !== "function") return void 0;
+  try {
+    return bodyAgentOf(get.call(agents, sessionId));
+  } catch (error) {
+    warn2(ctx, "dsh-soulmojito body: agents.get failed", { sessionId, error: errorMessage3(error) });
+    return void 0;
+  }
+}
+function listLiveAgents(ctx) {
+  const agents = ctx.agents;
+  const list = agents?.list;
+  if (agents === void 0 || typeof list !== "function") return [];
+  let values;
+  try {
+    values = list.call(agents);
+  } catch (error) {
+    warn2(ctx, "dsh-soulmojito body: agents.list failed", { error: errorMessage3(error) });
+    return [];
+  }
+  if (!Array.isArray(values)) return [];
+  const agentsOut = [];
+  for (const value of values) {
+    const agent = bodyAgentOf(value);
+    if (agent !== void 0) agentsOut.push(agent);
+  }
+  return agentsOut;
+}
+async function resolveBodyBinding(ctx, sessionId) {
+  const bindingOf = ctx.bindingOf;
+  if (typeof bindingOf !== "function") {
+    warn2(ctx, "dsh-soulmojito body: no binding resolver is wired; body operations disabled", {
+      reason: "architecture-mismatch",
+      sessionId
+    });
+    return void 0;
+  }
+  try {
+    return await bindingOf(sessionId);
+  } catch (error) {
+    warn2(ctx, "dsh-soulmojito body: binding lookup failed", { sessionId, error: errorMessage3(error) });
+    return void 0;
+  }
+}
+function bodyBindingEligible(binding) {
+  return binding !== void 0 && binding.architecture === "agent-tavern" && binding.group !== true;
+}
+function isBodySession(value) {
+  if (!isRecord4(value)) return false;
+  return typeof value["append"] === "function";
+}
+function contentOf2(message) {
+  const content = message["content"];
+  if (!Array.isArray(content)) return [];
+  return content.filter((block) => isRecord4(block));
+}
+function sourceOf2(message) {
+  const source = message["source"];
+  return isRecord4(source) ? source : void 0;
+}
+function foldBodyLedgerFromEvents(events, groupId) {
+  const last = events[events.length - 1];
+  if (last === void 0) return void 0;
+  const bodyEvents = events.map((event) => ({
+    seq: event.seq,
+    type: event.type,
+    // The ledger validates every body payload it reads and ignores unrelated
+    // events; the session log itself is JSON by host contract.
+    data: event.data
+  }));
+  return foldBodyLedger(bodyEvents, groupId, last.seq);
+}
+
+// packages/plugin/src/agent-tavern/body-view.ts
+function bodyStateSafetyOf(character, chat) {
+  if (character === void 0) return unsafeBodyState("card-unreadable");
+  let usesMvu;
+  try {
+    usesMvu = cardUsesJsrMvu(character.card);
+  } catch {
+    return unsafeBodyState("card-unreadable");
+  }
+  if (usesMvu) return unsafeBodyState("card-mvu");
+  const metadata = chat.header.chat_metadata;
+  const variables2 = isRecord4(metadata["variables"]) ? metadata["variables"] : void 0;
+  if (variables2 !== void 0 && Object.prototype.hasOwnProperty.call(variables2, "stat_data")) {
+    return unsafeBodyState("stat-data");
+  }
+  const mvu = isRecord4(metadata["mvu"]) ? metadata["mvu"] : void 0;
+  if (mvu !== void 0) {
+    const receipts = mvu["receipts"];
+    if (Array.isArray(receipts)) return unsafeBodyState("mvu-receipts");
+  }
+  return { safe: true };
+}
+function unsafeBodyState(detail) {
+  return { safe: false, reason: "body-state-unsafe", detail };
+}
+function bodyStateUnsafeMessage(detail) {
+  switch (detail) {
+    case "card-mvu":
+      return "this character card declares MVU variables; body mutations would apply variable patches twice";
+    case "stat-data":
+      return "this chat already carries chat_metadata.variables.stat_data; body mutations are disabled until variable rollback exists";
+    case "mvu-receipts":
+      return "this chat already carries chat_metadata.mvu.receipts; body mutations are disabled until variable rollback exists";
+    case "card-unreadable":
+      return "the character card could not be read, so MVU state cannot be ruled out; body mutations are disabled";
+    case "chat-unreadable":
+      return "the bound chat could not be read, so MVU state cannot be ruled out; body mutations are disabled";
+    case "safety-unavailable":
+      return "the MVU state safety check could not be resolved; body mutations are disabled";
+  }
+}
+function buildBodyView(input) {
+  const ledger = input.ledger;
+  const candidate = ledger?.candidates.find((entry) => entry.messageId === input.messageId);
+  const hidden = ledger !== void 0 && ledger.anchorMessageId !== input.messageId && candidate !== void 0;
+  const groupId = ledger?.groupId ?? input.projected?.groupId ?? input.messageId;
+  const anchorMessageId = ledger?.anchorMessageId ?? input.projected?.anchorMessageId ?? input.messageId;
+  const selectedIndex = ledger?.selectedIndex ?? input.projected?.selectedIndex ?? 0;
+  const count = ledger?.candidates.length ?? input.projected?.count ?? (input.messageText === void 0 ? 0 : 1);
+  let candidateText2;
+  if (ledger !== void 0 && candidate !== void 0) {
+    candidateText2 = ledger.edits.get(candidate.index) ?? candidate.text;
+  }
+  const ledgerText = ledger === void 0 ? void 0 : effectiveBodyText(ledger);
+  const text = hidden ? candidateText2 ?? input.messageText ?? "" : input.projected?.text ?? ledgerText ?? input.messageText ?? "";
+  const reason = bodyViewReason(input, hidden);
+  const canEdit = reason === void 0 && !hidden && count > 0;
+  const canRegenerate = canEdit && input.agent !== void 0 && canAdvanceHostTurnBase(input.agent);
+  const canSelect = canEdit && count > 1;
+  return {
+    ok: true,
+    groupId,
+    anchorMessageId,
+    selectedIndex,
+    count,
+    text,
+    hidden,
+    canEdit,
+    canRegenerate,
+    canSelect,
+    ...reason === void 0 ? {} : { reason }
+  };
+}
+function bodyViewReason(input, hidden) {
+  if (!bodyBindingEligible(input.binding)) return "architecture-mismatch";
+  if (input.stateSafety !== void 0 && !input.stateSafety.safe) return "body-state-unsafe";
+  if (input.agent === void 0) return "session-busy";
+  if (input.agent.status !== "idle") return "session-busy";
+  if (!input.hostSupported) return "host-unsupported";
+  if (hidden) return void 0;
+  if (input.messageText === void 0 && input.ledger === void 0 && input.projected === void 0) return void 0;
+  if (input.inspection === void 0) return "session-busy";
+  if (!input.inspection.onSurface) return "body-compacted";
+  if (!input.inspection.last) return "not-last-round";
+  return void 0;
+}
+function bodyFailureOf(error) {
+  const rawCode = failureCodeOf2(error);
+  const code = publicBodyCode(rawCode);
+  return {
+    status: bodyRejectStatus(code),
+    code,
+    message: errorMessage4(error)
+  };
+}
+function publicBodyCode(code) {
+  switch (code) {
+    case "architecture-mismatch":
+    case "session-busy":
+    case "not-last-round":
+    case "stale-anchor":
+    case "body-compacted":
+    case "body-state-unsafe":
+    case "invalid-body-text":
+    case "host-unsupported":
+    case "projection-pending":
+      return code;
+    case "invalid-arguments":
+      return "invalid-body-text";
+    case "restore-unavailable":
+      return "body-state-unsafe";
+    case "invalid-event":
+    case "operation-failed":
+      return "operation-failed";
+    default:
+      return "operation-failed";
+  }
+}
+function bodyRejectStatus(code) {
+  switch (code) {
+    case "invalid-body-text":
+    case "invalid-arguments":
+      return 400;
+    case "host-unsupported":
+      return 501;
+    case "projection-pending":
+      return 503;
+    case "architecture-mismatch":
+    case "session-busy":
+    case "not-last-round":
+    case "stale-anchor":
+    case "body-compacted":
+    case "body-state-unsafe":
+      return 409;
+    default:
+      return 500;
+  }
+}
+function failureCodeOf2(error) {
+  if (!isRecord4(error)) return void 0;
+  const code = error["code"];
+  return typeof code === "string" && code !== "" ? code : void 0;
+}
+function errorMessage4(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+// packages/plugin/src/agent-tavern/body-recovery.ts
+var recoveryInFlight = /* @__PURE__ */ new Set();
+async function recoverBodyOperationsWith(ctx, createDeps) {
+  const outcomes = [];
+  for (const agent of listLiveAgents(ctx)) {
+    outcomes.push(await recoverBodyOperationWith(ctx, agent, createDeps));
+  }
+  return outcomes;
+}
+async function recoverBodyOperationWith(ctx, agentValue, createDeps) {
+  const agent = bodyAgentOf(agentValue);
+  const agentId = agent === void 0 ? void 0 : agentIdOf(agent);
+  if (agent === void 0 || agentId === void 0) {
+    return { agentId: "", status: "skipped", pending: 0, reason: "agent-shape" };
+  }
+  if (agent.status === "running") {
+    return { agentId, status: "skipped", pending: 0, reason: "agent-running" };
+  }
+  if (recoveryInFlight.has(agentId)) {
+    return { agentId, status: "skipped", pending: 0, reason: "recovery-in-flight" };
+  }
+  recoveryInFlight.add(agentId);
+  try {
+    return await recoverAgentBody(ctx, agent, agentId, createDeps);
+  } finally {
+    recoveryInFlight.delete(agentId);
+  }
+}
+async function recoverAgentBody(ctx, agent, agentId, createDeps) {
+  const binding = await resolveBodyBinding(ctx, agentId);
+  if (binding === void 0 || !bodyBindingEligible(binding)) {
+    return { agentId, status: "skipped", pending: 0, reason: "architecture-mismatch" };
+  }
+  const deps = await createDeps(ctx, agent);
+  if (deps === void 0) {
+    warn2(ctx, "dsh-soulmojito body: recovery skipped because the plugin-record seam is unavailable", {
+      reason: "host-unsupported",
+      agentId
+    });
+    return { agentId, status: "skipped", pending: 0, reason: "host-unsupported" };
+  }
+  const initial = wiringEvents(deps.session);
+  if (initial === void 0) {
+    errorLog(ctx, "dsh-soulmojito body: recovery cannot read the session log", {
+      agentId,
+      reason: "host-unsupported"
+    });
+    return { agentId, status: "failed", pending: 0, reason: "session-log" };
+  }
+  let pending;
+  try {
+    pending = foldPendingOps(initial);
+  } catch (error) {
+    errorLog(ctx, "dsh-soulmojito body: foldPendingOps failed during recovery", {
+      agentId,
+      code: failureCodeOf(error),
+      error: errorMessage3(error)
+    });
+    return { agentId, status: "failed", pending: 0, reason: "invalid-event" };
+  }
+  if (pending.length === 0) {
+    const openTurn2 = openTurnNumber2(initial);
+    if (openTurn2 !== void 0) closeRecoveredBracket(ctx, agent, openTurn2, agentId);
+    return { agentId, status: "clean", pending: 0, ...openTurn2 === void 0 ? {} : { reason: `closed-turn-${openTurn2}` } };
+  }
+  const safety = await recoveryStateSafety(ctx, agentId, binding);
+  if (!safety.safe) {
+    warn2(ctx, "dsh-soulmojito body: recovery skipped because MVU state cannot be rolled back safely", {
+      agentId,
+      pending: pending.length,
+      detail: safety.detail
+    });
+    return { agentId, status: "skipped", pending: pending.length, reason: "body-state-unsafe" };
+  }
+  const events = wiringEvents(deps.session) ?? initial;
+  const restoreOps = [];
+  let settled = 0;
+  for (const op of pending) {
+    const turn = recoveredTurnOf(events, op);
+    const candidate = turn === void 0 ? void 0 : recoveredCandidateInTurn(events, op, turn);
+    if (turn === void 0 || candidate === void 0) {
+      restoreOps.push(op);
+      continue;
+    }
+    try {
+      const result = await finalizeRecoveredOperation(deps, op, turn);
+      if (result.status === "ok") {
+        settled += 1;
+        continue;
+      }
+      if (result.status === "failed" || recoveryTurnMismatch(result.reason)) {
+        errorLog(ctx, "dsh-soulmojito body: recovery could not settle the candidate", {
+          agentId,
+          opId: op.opId,
+          reason: result.reason
+        });
+        restoreOps.push(op);
+        continue;
+      }
+      info(ctx, "dsh-soulmojito body: recovery found the operation already settled", {
+        agentId,
+        opId: op.opId,
+        reason: result.reason
+      });
+    } catch (error) {
+      errorLog(ctx, "dsh-soulmojito body: finalizeRecoveredOperation failed during recovery", {
+        agentId,
+        opId: op.opId,
+        code: failureCodeOf(error),
+        error: errorMessage3(error)
+      });
+      restoreOps.push(op);
+    }
+  }
+  const openTurn = openTurnNumber2(wiringEvents(deps.session) ?? initial);
+  if (openTurn !== void 0) closeRecoveredBracket(ctx, agent, openTurn, agentId);
+  let restored = 0;
+  let failed = 0;
+  for (const op of restoreOps) {
+    if (await restoreRecoveredOperation(ctx, deps, op)) restored += 1;
+    else failed += 1;
+  }
+  const status2 = failed > 0 ? "failed" : settled > 0 ? "settled" : restored > 0 ? "restored" : "clean";
+  return {
+    agentId,
+    status: status2,
+    pending: pending.length,
+    ...openTurn === void 0 ? {} : { reason: `closed-turn-${openTurn}` }
+  };
+}
+async function recoveryStateSafety(ctx, sessionId, binding) {
+  const resolve6 = ctx.safetyOf;
+  if (typeof resolve6 === "function") {
+    try {
+      return await resolve6(sessionId, binding) ?? unsafeBodyState("safety-unavailable");
+    } catch (error) {
+      errorLog(ctx, "dsh-soulmojito body: recovery state safety resolver failed", {
+        sessionId,
+        error: errorMessage3(error)
+      });
+      return unsafeBodyState("safety-unavailable");
+    }
+  }
+  return defaultRecoveryStateSafety(ctx, binding);
+}
+async function defaultRecoveryStateSafety(ctx, binding) {
+  const characterName = binding.character;
+  const chatId = binding.chatId;
+  if (characterName === void 0 || chatId === void 0) return unsafeBodyState("chat-unreadable");
+  try {
+    const db = await store3();
+    const character = await db.getCharacter(characterName);
+    const snapshot2 = await db.getChatSnapshot(characterName, chatId);
+    if (snapshot2 === void 0) return unsafeBodyState("chat-unreadable");
+    return bodyStateSafetyOf(character, snapshot2.chat);
+  } catch (error) {
+    errorLog(ctx, "dsh-soulmojito body: recovery state safety could not be read", {
+      error: errorMessage3(error)
+    });
+    return unsafeBodyState("safety-unavailable");
+  }
+}
+function recoveryTurnMismatch(reason) {
+  return /trigger belongs to turn \d+, not turn/.test(reason);
+}
+async function restoreRecoveredOperation(ctx, deps, op) {
+  try {
+    const restoredMessageId = await restoreBodyAfterFailure(deps, op);
+    info(ctx, "dsh-soulmojito body: recovery restored the previous anchor", {
+      agentId: deps.agent.id,
+      opId: op.opId,
+      restoredMessageId
+    });
+    return true;
+  } catch (error) {
+    errorLog(ctx, "dsh-soulmojito body: recovery restore failed", {
+      agentId: deps.agent.id,
+      opId: op.opId,
+      code: failureCodeOf(error),
+      error: errorMessage3(error)
+    });
+    return false;
+  }
+}
+function closeRecoveredBracket(ctx, agent, openTurn, agentId) {
+  if (!canAdvanceHostTurnBase(agent)) {
+    warn2(ctx, "dsh-soulmojito body: recovery found a half-open turn but the agent cannot advance its turn base", {
+      agentId,
+      openTurn,
+      reason: "host-unsupported"
+    });
+    return;
+  }
+  const logged = closeImportBracket(agent, {
+    kind: "error",
+    error: {
+      message: `dsh-soulmojito body recovery closed half-open turn ${openTurn}`,
+      code: "BODY_RECOVERY"
+    }
+  });
+  if (logged !== void 0) advanceHostTurnBase(agent, logged);
+  info(ctx, "dsh-soulmojito body: recovery closed a half-open turn", {
+    agentId,
+    openTurn,
+    lastLoggedTurn: logged ?? lastLoggedTurn(agent)
+  });
+}
+function recoveredTurnOf(events, op) {
+  return turnOfUserMessage2(events, triggerIdOf(op));
+}
+function recoveredCandidateInTurn(events, op, turn) {
+  let found;
+  for (const event of events) {
+    if (event.type !== "assistant/message" || event.seq <= op.startSeq) continue;
+    if (numberField2(event.data["turn"]) !== turn) continue;
+    const message = messageOf3(event);
+    const messageId = messageIdOf2(event);
+    if (message === void 0 || messageId === void 0) continue;
+    if (textOfMessage2(message).trim() === "" || hasToolCall2(message)) continue;
+    found = messageId;
+  }
+  return found;
+}
+function triggerIdOf(op) {
+  return typeof op.triggerMessageId === "string" && op.triggerMessageId !== "" ? op.triggerMessageId : `body-trigger-${op.opId}`;
+}
+function turnOfUserMessage2(events, messageId) {
+  let openTurn;
+  for (const event of events) {
+    if (event.type === "turn/start") {
+      openTurn = numberField2(event.data["turn"]);
+      continue;
+    }
+    if (event.type === "turn/end") {
+      openTurn = void 0;
+      continue;
+    }
+    if (event.type === "user/message" && messageIdOf2(event) === messageId) return openTurn;
+  }
+  return void 0;
+}
+
+// packages/plugin/src/agent-tavern/body-wiring.ts
+function bodyWiringContext(host, bindingOf) {
+  return {
+    ...host.logger === void 0 ? {} : { logger: host.logger },
+    ...host.sessions === void 0 ? {} : { sessions: host.sessions },
+    ...host.agents === void 0 ? {} : { agents: host.agents },
+    effect: (callback, label) => host.effect(callback, label),
+    on: (event, listener) => host.on?.(event, listener),
+    bindingOf
+  };
+}
+var recordSeamWarningEmitted = false;
+var resolvedRecordWriter;
+async function resolveBodyRecordWriter(ctx) {
+  if (resolvedRecordWriter !== void 0) return resolvedRecordWriter;
+  let host;
+  try {
+    host = await importHostPackage("@deepseek-ai/dsh-session");
+  } catch (error) {
+    warnRecordSeamOnce(ctx, "dsh-soulmojito body: cannot resolve @deepseek-ai/dsh-session", {
+      reason: "host-unsupported",
+      error: errorMessage3(error)
+    });
+    return void 0;
+  }
+  const appendRecord = host.appendPluginRecord;
+  const pluginRecordOf = host.pluginRecordOf;
+  if (typeof appendRecord !== "function" || typeof pluginRecordOf !== "function") {
+    warnRecordSeamOnce(ctx, "dsh-soulmojito body: host has no appendPluginRecord/pluginRecordOf seam", {
+      reason: "host-unsupported",
+      appendPluginRecord: typeof appendRecord,
+      pluginRecordOf: typeof pluginRecordOf
+    });
+    return void 0;
+  }
+  const writer = (session, type, data) => appendRecord(session, type, data);
+  resolvedRecordWriter = writer;
+  return writer;
+}
+async function createBodyDeps(ctx, agent) {
+  const appendRecord = await resolveBodyRecordWriter(ctx);
+  if (appendRecord === void 0) return void 0;
+  return {
+    session: agent.session,
+    agent,
+    ...ctx.logger === void 0 ? {} : { logger: ctx.logger },
+    appendRecord
+  };
+}
+function registerBodyProjection(ctx) {
+  const sessions = ctx.sessions;
+  const register = sessions?.registerMessageProjection;
+  if (sessions === void 0 || typeof register !== "function") {
+    warn2(ctx, "dsh-soulmojito body: sessions.registerMessageProjection is unavailable; body projection disabled", {
+      reason: "host-unsupported"
+    });
+    return void 0;
+  }
+  let registered;
+  try {
+    registered = register.call(sessions, createBodyProjection());
+  } catch (error) {
+    errorLog(ctx, "dsh-soulmojito body: registerMessageProjection failed", {
+      reason: "host-unsupported",
+      error: errorMessage3(error)
+    });
+    return void 0;
+  }
+  if (typeof registered !== "function") {
+    warn2(ctx, "dsh-soulmojito body: registerMessageProjection returned no disposer; projection stays registered", {
+      reason: "host-shape"
+    });
+    return void 0;
+  }
+  const dispose = registered;
+  if (typeof ctx.effect === "function") {
+    let disposed = false;
+    const disposeOnce = () => {
+      if (disposed) return;
+      disposed = true;
+      dispose();
+    };
+    try {
+      ctx.effect(() => disposeOnce, "dsh-soulmojito: body projection");
+    } catch (error) {
+      warn2(ctx, "dsh-soulmojito body: ctx.effect rejected the projection disposer; projection stays registered", {
+        error: errorMessage3(error)
+      });
+    }
+  }
+  return dispose;
+}
+function registerBodyTurnStopping(ctx) {
+  if (typeof ctx.on !== "function") {
+    warn2(ctx, "dsh-soulmojito body: host has no event bus; agent/turn-stopping disabled", {
+      reason: "host-unsupported"
+    });
+    return void 0;
+  }
+  let registered;
+  try {
+    registered = ctx.on("agent/turn-stopping", (payload) => handleBodyTurnStopping(ctx, payload));
+  } catch (error) {
+    errorLog(ctx, "dsh-soulmojito body: agent/turn-stopping registration failed", {
+      error: errorMessage3(error)
+    });
+    return void 0;
+  }
+  const dispose = typeof registered === "function" ? registered : void 0;
+  return dispose;
+}
+async function handleBodyTurnStopping(ctx, payload) {
+  const record = isRecord5(payload) ? payload : void 0;
+  const payloadAgent = bodyAgentOf(record?.agent);
+  const payloadAgentId = nonEmptyString2(record?.agentId);
+  const agentId = payloadAgent === void 0 ? payloadAgentId : agentIdOf(payloadAgent);
+  const turn = numberField3(record?.turn);
+  if (agentId === void 0 || turn === void 0 || turn < 1) {
+    warn2(ctx, "dsh-soulmojito body: ignored a malformed agent/turn-stopping payload", {
+      hasAgent: payloadAgent !== void 0,
+      hasAgentId: payloadAgentId !== void 0,
+      turn: record?.turn
+    });
+    return;
+  }
+  const agent = payloadAgent ?? resolveLiveAgent(ctx, agentId);
+  if (agent === void 0) return;
+  const binding = await resolveBodyBinding(ctx, agentId);
+  if (!bodyBindingEligible(binding)) return;
+  const deps = await createBodyDeps(ctx, agent);
+  if (deps === void 0) {
+    warn2(ctx, "dsh-soulmojito body: turn-stopping skipped because the plugin-record seam is unavailable", {
+      reason: "host-unsupported",
+      agentId,
+      turn
+    });
+    return;
+  }
+  try {
+    const result = await finalizeTurnStopping(deps, { agentId, turn });
+    if (result.status === "ok") {
+      info(ctx, "dsh-soulmojito body: regenerate settled from turn-stopping", {
+        agentId,
+        turn,
+        anchorMessageId: result.anchorMessageId
+      });
+      return;
+    }
+    if (result.status === "failed") {
+      errorLog(ctx, "dsh-soulmojito body: regenerate settle failed", {
+        agentId,
+        turn,
+        reason: result.reason
+      });
+      return;
+    }
+    info(ctx, "dsh-soulmojito body: turn-stopping had no active body op", { agentId, turn, reason: result.reason });
+  } catch (error) {
+    errorLog(ctx, "dsh-soulmojito body: turn-stopping listener failed", {
+      agentId,
+      turn,
+      code: failureCodeOf(error),
+      error: errorMessage3(error)
+    });
+  }
+}
+function recoverBodyOperations(ctx) {
+  return recoverBodyOperationsWith(ctx, createBodyDeps);
+}
+function recoverBodyOperation(ctx, agentValue) {
+  return recoverBodyOperationWith(ctx, agentValue, createBodyDeps);
+}
+function warnRecordSeamOnce(ctx, message, fields) {
+  if (recordSeamWarningEmitted) return;
+  recordSeamWarningEmitted = true;
+  warn2(ctx, message, fields);
+}
+function isRecord5(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function nonEmptyString2(value) {
+  return typeof value === "string" && value !== "" ? value : void 0;
+}
+function numberField3(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) ? value : void 0;
+}
+
+// packages/plugin/src/agent-tavern/anchor.ts
+import { randomUUID as randomUUID6 } from "node:crypto";
+var ANCHOR_EVERY_TURNS_DEFAULT = 5;
+var ANCHOR_TEXT = [
+  "<tavern-anchor>",
+  "Periodic maintenance reminder (system message, not story content \u2014 do not narrate, quote, or reference it):",
+  "Before continuing, check your standing duties. If the upcoming beat hinges on a character, place, faction, item, or a past event, research it first \u2014 tavern_character_get for the card, tavern_lore_search for world canon, tavern_history_search or memory_search for continuity \u2014 instead of improvising. If recent turns introduced significant story facts (new characters, places, promises, injuries, items, relationship or status changes) that are not yet recorded, persist them with memory_write or memory_update in chat scope. When nothing applies, simply continue the scene without mentioning this reminder.",
+  "</tavern-anchor>"
+].join("\n");
+var OPENING_TEXT = [
+  "<tavern-opening>",
+  "Opening grounding brief (system message, not story content \u2014 do not narrate, quote, or reference it):",
+  "The story above was imported from the Tavern save: the greeting and any past messages are stage history, not your own memory. The character card details and world-info entries behind this scene are not in your context, and no memories have been loaded yet.",
+  "Before writing this reply, load the scene with the tools: tavern_character_get for the bound character card, tavern_lore_search for each proper noun this opening relies on (persons, places, factions, techniques, items), memory_search for established facts, and tavern_history_search when continuity is unclear. Then continue the scene naturally without mentioning this brief.",
+  "</tavern-opening>"
+].join("\n");
+function anchorDue(turn, step, everyTurns) {
+  if (everyTurns <= 0) return false;
+  return step === 1 && typeof turn === "number" && Number.isSafeInteger(turn) && turn > 0 && turn % everyTurns === 0;
+}
+function reminderDue(input, everyTurns, latest, hasUserTurn) {
+  if (input.step !== 1) return void 0;
+  if (!Array.isArray(input.messages) || input.messages.length === 0) return void 0;
+  const turn = input.turn;
+  if (typeof turn !== "number" || !Number.isSafeInteger(turn) || turn <= 0) return void 0;
+  if (latest >= turn) return void 0;
+  if (!hasUserTurn) return "opening";
+  return anchorDue(turn, input.step, everyTurns) ? "periodic" : void 0;
+}
+function createAnchorMessage(session) {
+  return {
+    id: randomUUID6(),
+    role: "user",
+    content: [{ type: "text", text: ANCHOR_TEXT }],
+    source: hostPluginMessageSource(session)
+  };
+}
+function createOpeningMessage(session) {
+  return {
+    id: randomUUID6(),
+    role: "user",
+    content: [{ type: "text", text: OPENING_TEXT }],
+    source: hostPluginMessageSource(session)
+  };
+}
+function hasRealUserTurn(events) {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event?.type !== "user/message") continue;
+    if (event.data?.source?.kind === "user") return true;
+  }
+  return false;
+}
+function latestReminderTurn(events) {
+  let turn = 0;
+  let latest = 0;
+  for (const event of events) {
+    const record = event;
+    if (record?.type === "turn/start") {
+      const value = record.data?.turn;
+      if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) turn = value;
+      continue;
+    }
+    if (record?.type === "user/message" && isReminderMessage(record.data)) latest = turn;
+  }
+  return latest;
+}
+function isReminderMessage(data) {
+  if (typeof data !== "object" || data === null) return false;
+  const content = data.content;
+  if (!Array.isArray(content) || content.length === 0) return false;
+  const first = content[0];
+  return first?.type === "text" && (first.text === ANCHOR_TEXT || first.text === OPENING_TEXT);
+}
+function resolveAnchorEveryTurns(value) {
+  if (value === void 0) return ANCHOR_EVERY_TURNS_DEFAULT;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return ANCHOR_EVERY_TURNS_DEFAULT;
+  return value;
+}
+var anchorTavernStorePromise;
+function anchorTavernStore() {
+  return anchorTavernStorePromise ??= TavernStore.open(tavernDataRoot());
+}
+async function isAgentTavernSession(sessionId) {
+  try {
+    const binding = (await (await anchorTavernStore()).getState()).sessionBindings[sessionId];
+    return binding !== void 0 && binding.architecture === "agent-tavern" && binding.group !== true;
+  } catch {
+    return false;
+  }
+}
+function registerAgentTavernAnchor(ctx, options = {}) {
+  const everyTurns = resolveAnchorEveryTurns(options.everyTurns);
+  if (everyTurns <= 0) return;
+  const isTavernSession = options.isTavernSession ?? isAgentTavernSession;
+  ctx.on?.("agent/pre-step", async (payload, next) => {
+    const decision = await next();
+    if (decision?.kind !== "enter" || payload.signal?.aborted) return decision;
+    const events = sessionEvents(payload.agent?.session);
+    const kind = reminderDue(
+      { turn: payload.turn, step: payload.step, messages: decision.messages },
+      everyTurns,
+      latestReminderTurn(events),
+      hasRealUserTurn(events)
+    );
+    if (kind === void 0) return decision;
+    const sessionId = payload.agent?.session?.id;
+    if (typeof sessionId !== "string" || !await isTavernSession(sessionId)) return decision;
+    return {
+      kind: "enter",
+      messages: [...decision.messages ?? [], kind === "opening" ? createOpeningMessage(payload.agent?.session) : createAnchorMessage(payload.agent?.session)]
+    };
+  }, { prepend: true });
+}
+
+// packages/plugin/src/agent-tavern/card-state.ts
+import { createHash as createHash8, randomUUID as randomUUID7 } from "node:crypto";
+
+// packages/plugin/src/prompt-safety.ts
+function createHostPromptExpander(char, user, frozen) {
+  const macros = createMacroEngine({
+    char,
+    user,
+    ...frozen?.now === void 0 ? {} : { now: frozen.now },
+    ...frozen?.rng === void 0 ? {} : { rng: frozen.rng }
+  });
+  return (text) => macros.expand(text);
+}
+function seededRandom(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = state + 1831565813 >>> 0;
+    let t = state;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function hostPromptSafe(text, expand = (value) => value) {
+  return expand(text).replace(/\{+/g, (run) => run.split("").join(" "));
+}
+
+// packages/plugin/src/mvu-guard.ts
+var DIRECTIVE_KEYS = ["$range", "$step", "$enum", "$ro", "$type"];
+var TYPE_LOCKS = ["number", "string", "boolean", "object", "array"];
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function parseRange(raw) {
+  if (!Array.isArray(raw) || raw.length < 2) return void 0;
+  const min = raw[0];
+  const max2 = raw[1];
+  if (typeof min !== "number" || !Number.isFinite(min) || typeof max2 !== "number" || !Number.isFinite(max2)) return void 0;
+  return { min: Math.min(min, max2), max: Math.max(min, max2) };
+}
+function resolveTemplateNode(raw) {
+  if (typeof raw === "number" && Number.isFinite(raw)) return { typeLock: "number" };
+  if (typeof raw === "string") return { typeLock: "string" };
+  if (typeof raw === "boolean") return { typeLock: "boolean" };
+  if (Array.isArray(raw)) {
+    return { typeLock: "array", ...raw.length > 0 ? { item: resolveTemplateNode(raw[0]) } : {} };
+  }
+  if (!isPlainObject(raw)) return void 0;
+  const range = parseRange(raw.$range);
+  const step = typeof raw.$step === "number" && Number.isFinite(raw.$step) && raw.$step > 0 ? raw.$step : void 0;
+  const enumValues = Array.isArray(raw.$enum) && raw.$enum.length > 0 ? raw.$enum : void 0;
+  const ro = raw.$ro === true ? true : void 0;
+  const typeLockDirect = typeof raw.$type === "string" && TYPE_LOCKS.includes(raw.$type) ? raw.$type : void 0;
+  const directives = {
+    ...range !== void 0 ? { min: range.min, max: range.max } : {},
+    ...step !== void 0 ? { step } : {},
+    ...enumValues !== void 0 ? { enumValues } : {},
+    ...ro !== void 0 ? { ro } : {}
+  };
+  const childKeys = Object.keys(raw).filter((key) => !DIRECTIVE_KEYS.includes(key));
+  if (childKeys.length === 0) {
+    const typeLock = typeLockDirect ?? (range !== void 0 || step !== void 0 ? "number" : enumValues !== void 0 ? "string" : void 0);
+    if (typeLock === void 0 && Object.keys(directives).length === 0) {
+      return { typeLock: "object", objectMode: "open" };
+    }
+    if (typeLock === "object") return { typeLock, objectMode: "open", ...directives };
+    if (typeLock === "array") return { typeLock, ...directives };
+    return { ...typeLock !== void 0 ? { typeLock } : {}, ...directives };
+  }
+  const wildcardRaw = childKeys.includes("*") ? raw["*"] : void 0;
+  const namedKeys = childKeys.filter((key) => key !== "*");
+  const children = /* @__PURE__ */ new Map();
+  for (const key of namedKeys) {
+    const child = resolveTemplateNode(raw[key]);
+    if (child !== void 0) children.set(key, child);
+  }
+  const objectMode = wildcardRaw !== void 0 ? "wildcard" : "locked";
+  const wildcard = wildcardRaw !== void 0 ? resolveTemplateNode(wildcardRaw) : void 0;
+  return {
+    typeLock: "object",
+    objectMode,
+    ...children.size > 0 ? { children } : {},
+    ...wildcard !== void 0 ? { wildcard } : {},
+    ...directives
+  };
+}
+var schemaCache = /* @__PURE__ */ new WeakMap();
+function resolveMvuSchema(raw) {
+  if (!isPlainObject(raw)) return void 0;
+  const cached = schemaCache.get(raw);
+  if (cached !== void 0 || schemaCache.has(raw)) return cached;
+  const resolved = resolveTemplateNode(raw);
+  const root = resolved !== void 0 && resolved.objectMode === "locked" ? { ...resolved, objectMode: "open" } : resolved;
+  schemaCache.set(raw, root);
+  return root;
+}
+function stripMvuControl(tree) {
+  if (!("$schema" in tree || "$rules" in tree)) return tree;
+  const out = {};
+  for (const [key, value] of Object.entries(tree)) {
+    if (key === "$schema" && isPlainObject(value)) continue;
+    if (key === "$rules" && Array.isArray(value)) continue;
+    out[key] = value;
+  }
+  return out;
+}
+var INITIAL_VARIABLES_KEY = "initial_variables";
+function cardSchema(card) {
+  const holder = card?.data?.extensions?.["agentTavern"];
+  if (!isPlainObject(holder)) return void 0;
+  const initial = holder.initialVariables;
+  return isPlainObject(initial) ? initial.$schema : void 0;
+}
+function treeSchema(tree) {
+  return isPlainObject(tree) ? tree.$schema : void 0;
+}
+function readMvuSchema(chat, card, variablesOverride) {
+  const candidates = [
+    treeSchema(variablesOverride ?? chat?.header?.chat_metadata?.variables),
+    cardSchema(card),
+    treeSchema(chat?.header?.chat_metadata?.[INITIAL_VARIABLES_KEY])
+  ];
+  for (const candidate of candidates) {
+    if (isPlainObject(candidate) && Object.keys(candidate).length > 0) return candidate;
+  }
+  return void 0;
+}
+function typeName(value) {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+function mvuValuesEqual(left, right) {
+  if (left === right) return true;
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return left.length === right.length && left.every((item, index) => mvuValuesEqual(item, right[index]));
+  }
+  if (isPlainObject(left) && isPlainObject(right)) {
+    const keys = /* @__PURE__ */ new Set([...Object.keys(left), ...Object.keys(right)]);
+    for (const key of keys) {
+      if (!mvuValuesEqual(left[key], right[key])) return false;
+    }
+    return true;
+  }
+  return false;
+}
+function clampNumber(value, min, max2) {
+  let out = value;
+  if (min !== void 0 && out < min) out = min;
+  if (max2 !== void 0 && out > max2) out = max2;
+  return out;
+}
+function validateValue2(node, value, current, path12, notes) {
+  if (node.ro === true && !mvuValuesEqual(value, current)) {
+    return { ok: false, kind: "readonly", reason: "read-only field" };
+  }
+  if (Array.isArray(value)) {
+    if (node.typeLock !== void 0 && node.typeLock !== "array") {
+      return { ok: false, kind: "type-mismatch", reason: `expected ${node.typeLock}, got array` };
+    }
+    if (node.item === void 0) return { ok: true, value, notes };
+    const currentItems = Array.isArray(current) ? current : [];
+    const out = [];
+    for (let i = 0; i < value.length; i++) {
+      const result = validateValue2(node.item, value[i], currentItems[i], `${path12}[${i}]`, notes);
+      if (!result.ok) return result;
+      out.push(result.value);
+    }
+    return { ok: true, value: out, notes };
+  }
+  if (isPlainObject(value)) {
+    if (node.typeLock !== void 0 && node.typeLock !== "object") {
+      return { ok: false, kind: "type-mismatch", reason: `expected ${node.typeLock}, got object` };
+    }
+    if (node.objectMode !== "locked" && node.objectMode !== "wildcard") return { ok: true, value, notes };
+    const currentObject = isPlainObject(current) ? current : {};
+    const next = {};
+    for (const key of Object.keys(value)) {
+      const child = node.children?.get(key) ?? node.wildcard;
+      if (child === void 0) {
+        return { ok: false, kind: "structure", reason: `key '${key}' is not in the schema template` };
+      }
+      const result = validateValue2(child, value[key], currentObject[key], path12 === "" ? key : `${path12}.${key}`, notes);
+      if (!result.ok) return result;
+      next[key] = result.value;
+    }
+    if (node.objectMode === "locked") {
+      for (const key of node.children?.keys() ?? []) {
+        if (!(key in value) && key in currentObject) {
+          return { ok: false, kind: "structure", reason: `template field '${key}' would be deleted by this write` };
+        }
+      }
+    }
+    return { ok: true, value: next, notes };
+  }
+  if (node.typeLock !== void 0 && typeName(value) !== node.typeLock) {
+    return { ok: false, kind: "type-mismatch", reason: `expected ${node.typeLock}, got ${typeName(value)}` };
+  }
+  if (node.enumValues !== void 0 && !node.enumValues.some((allowed) => mvuValuesEqual(allowed, value))) {
+    return { ok: false, kind: "enum-violation", reason: `value ${JSON.stringify(value)} is not one of [${node.enumValues.map((entry) => JSON.stringify(entry)).join(", ")}]` };
+  }
+  if (typeof value === "number" && Number.isFinite(value) && (node.min !== void 0 || node.max !== void 0 || node.step !== void 0)) {
+    let out = value;
+    if (node.step !== void 0 && typeof current === "number" && Number.isFinite(current)) {
+      const delta = out - current;
+      const capped = Math.max(-node.step, Math.min(node.step, delta));
+      if (capped !== delta) {
+        notes.push(`${path12}: guard step: delta ${delta > 0 ? "+" : ""}${delta} capped to ${capped > 0 ? "+" : ""}${capped}`);
+        out = current + capped;
+      }
+    }
+    const clamped = clampNumber(out, node.min, node.max);
+    if (clamped !== out) {
+      notes.push(`${path12}: guard clamp: ${out} -> ${clamped}`);
+      out = clamped;
+    }
+    return { ok: true, value: out, notes };
+  }
+  return { ok: true, value, notes };
+}
+function guardMvuWrite(schema, path12, value, current) {
+  const segments = path12.split(".").filter((segment) => segment !== "");
+  if (segments.length === 0) return { ok: true, value };
+  if (segments[0] === "$schema") {
+    return { ok: false, kind: "readonly", reason: "the $schema subtree is the declared guard contract and cannot be settled" };
+  }
+  const root = resolveMvuSchema(schema);
+  if (root === void 0) return { ok: true, value };
+  let cursor = root;
+  let parent;
+  let roChain = root.ro === true;
+  let violation;
+  for (let i = 0; i < segments.length && cursor !== void 0; i++) {
+    const segment = segments[i];
+    if (cursor.typeLock === "array") {
+      parent = cursor;
+      if (!/^\d+$/.test(segment)) {
+        violation ??= `'${segments.slice(0, i + 1).join(".")}' expects an array index, not '${segment}'`;
+        cursor = void 0;
+      } else {
+        cursor = cursor.item;
+      }
+    } else if (cursor.objectMode !== void 0) {
+      parent = cursor;
+      const named = cursor.children?.get(segment);
+      if (named !== void 0) cursor = named;
+      else if (cursor.objectMode === "wildcard" && cursor.wildcard !== void 0) cursor = cursor.wildcard;
+      else if (cursor.objectMode === "locked") {
+        violation ??= `'${segments.slice(0, i + 1).join(".")}' is not in the schema template`;
+        cursor = void 0;
+      } else cursor = void 0;
+    } else {
+      if (cursor.typeLock !== void 0 && cursor.objectMode === void 0) {
+        violation ??= `'${segments.slice(0, i + 1).join(".")}' expects ${cursor.typeLock}, not a nested path`;
+      }
+      parent = cursor;
+      cursor = void 0;
+    }
+    if (cursor !== void 0 && cursor.ro === true) roChain = true;
+  }
+  if (violation !== void 0) return { ok: false, kind: "structure", reason: violation };
+  const lastSegment = segments[segments.length - 1];
+  if (value === void 0) {
+    if (roChain) return { ok: false, kind: "readonly", reason: "read-only field" };
+    if (parent?.objectMode === "locked" && parent.children?.has(lastSegment)) {
+      return { ok: false, kind: "structure", reason: `template field '${lastSegment}' cannot be deleted` };
+    }
+    return { ok: true, value: void 0 };
+  }
+  if (roChain && !mvuValuesEqual(value, current)) {
+    return { ok: false, kind: "readonly", reason: "read-only field" };
+  }
+  if (cursor === void 0) return { ok: true, value };
+  const result = validateValue2(cursor, value, current, segments.join("."), []);
+  if (!result.ok) return result;
+  return { ok: true, value: result.value, ...result.notes.length > 0 ? { note: result.notes.join("; ") } : {} };
+}
+function getMvuTreePath(tree, path12) {
+  let cursor = tree;
+  for (const segment of path12.split(".")) {
+    if (!isPlainObject(cursor)) return void 0;
+    cursor = cursor[segment];
+  }
+  return cursor;
+}
+
+// packages/plugin/src/mvu-rules.ts
+var MVU_RULE_ROUNDS = 3;
+var MVU_RULES_LIMIT = 32;
+var MVU_RULE_THEN_LIMIT = 16;
+function isPlainObject2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+var INITIAL_VARIABLES_KEY2 = "initial_variables";
+function cardRules(card) {
+  const holder = card?.data?.extensions?.["agentTavern"];
+  if (!isPlainObject2(holder)) return void 0;
+  const initial = holder["initialVariables"];
+  return isPlainObject2(initial) ? initial["$rules"] : void 0;
+}
+function treeRules(tree) {
+  return isPlainObject2(tree) ? tree.$rules : void 0;
+}
+function validateMvuRules(raw) {
+  if (!Array.isArray(raw)) throw new Error("$rules must be an array of rule objects");
+  if (raw.length === 0) return [];
+  if (raw.length > MVU_RULES_LIMIT) {
+    throw new Error(`$rules declares ${raw.length} rules, over the cap of ${MVU_RULES_LIMIT}`);
+  }
+  return raw.map((entry, index) => {
+    if (!isPlainObject2(entry)) throw new Error(`rule #${index} is not an object`);
+    const { name: name2, when, then } = entry;
+    if (typeof name2 !== "string" || name2.trim() === "" || name2.length > 64) {
+      throw new Error(`rule #${index} requires a non-empty name of at most 64 characters`);
+    }
+    if (typeof when !== "string" || when.trim() === "") {
+      throw new Error(`rule '${name2}' requires a non-empty when expression`);
+    }
+    if (!isPlainObject2(then) || Object.keys(then).length === 0) {
+      throw new Error(`rule '${name2}' requires a non-empty then map`);
+    }
+    if (Object.keys(then).length > MVU_RULE_THEN_LIMIT) {
+      throw new Error(`rule '${name2}' declares ${Object.keys(then).length} then writes, over the cap of ${MVU_RULE_THEN_LIMIT}`);
+    }
+    for (const [path12, value] of Object.entries(then)) {
+      if (path12.trim() === "") throw new Error(`rule '${name2}' has an empty then path`);
+      if (typeof value === "string") {
+        if (value.trim() === "") throw new Error(`rule '${name2}' has an empty then expression for '${path12}'`);
+      } else if (value === void 0 || typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") {
+        throw new Error(`rule '${name2}' then value for '${path12}' is not a JSON literal`);
+      }
+    }
+    return { name: name2, when, then };
+  });
+}
+function readMvuRules(chat, card, variablesOverride) {
+  const candidates = [
+    treeRules(variablesOverride ?? chat?.header?.chat_metadata?.variables),
+    cardRules(card),
+    treeRules(chat?.header?.chat_metadata?.[INITIAL_VARIABLES_KEY2])
+  ];
+  for (const candidate of candidates) {
+    if (candidate === void 0) continue;
+    try {
+      const rules = validateMvuRules(candidate);
+      if (rules.length === 0) continue;
+      return { rules };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { invalid: `$rules: ${message}; all card rules are disabled for this settlement` };
+    }
+  }
+  return void 0;
+}
+var SAFE_MATH_KEYS = [
+  "E",
+  "LN2",
+  "LN10",
+  "LOG2E",
+  "LOG10E",
+  "PI",
+  "SQRT1_2",
+  "SQRT2",
+  "abs",
+  "acos",
+  "acosh",
+  "asin",
+  "asinh",
+  "atan",
+  "atan2",
+  "atanh",
+  "cbrt",
+  "ceil",
+  "cos",
+  "cosh",
+  "exp",
+  "expm1",
+  "floor",
+  "fround",
+  "hypot",
+  "imul",
+  "log",
+  "log1p",
+  "log2",
+  "log10",
+  "max",
+  "min",
+  "pow",
+  "round",
+  "sign",
+  "sin",
+  "sinh",
+  "sqrt",
+  "tan",
+  "tanh",
+  "trunc"
+];
+var SAFE_MATH = Object.freeze(
+  Object.fromEntries(SAFE_MATH_KEYS.map((key) => [key, Math[key]]))
+);
+var RULE_SANDBOX_SHADES = {
+  Math: SAFE_MATH,
+  Date: void 0,
+  setTimeout: void 0,
+  setInterval: void 0,
+  setImmediate: void 0,
+  queueMicrotask: void 0
+};
+function buildRuleEnv(tree) {
+  const vars = deepClone(stripMvuControl(tree));
+  return {
+    vars,
+    getvar: (path12) => typeof path12 === "string" ? getMvuTreePath(vars, path12) : void 0,
+    ...RULE_SANDBOX_SHADES
+  };
+}
+function errorText(error) {
+  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+}
+function setTreePath(tree, path12, value) {
+  const segments = path12.split(".");
+  const leaf = segments.pop();
+  let cursor = tree;
+  for (const segment of segments) {
+    const next = cursor[segment];
+    if (next === null || typeof next !== "object" || Array.isArray(next)) cursor[segment] = {};
+    cursor = cursor[segment];
+  }
+  cursor[leaf] = value;
+}
+async function runMvuRules(rules, options) {
+  const failures = /* @__PURE__ */ new Set();
+  const writes = [];
+  const noteParts = /* @__PURE__ */ new Map();
+  const tree = options.tree;
+  for (let round = 1; round <= MVU_RULE_ROUNDS; round++) {
+    let progressed = false;
+    for (const rule of rules) {
+      let active = false;
+      try {
+        active = Boolean(await evalExpressionSandboxed(rule.when, buildRuleEnv(tree)));
+      } catch (error) {
+        failures.add(`rule '${rule.name}': when evaluation failed: ${errorText(error)}`);
+        continue;
+      }
+      if (!active) continue;
+      const pending = [];
+      let failed = false;
+      for (const [path12, raw] of Object.entries(rule.then)) {
+        try {
+          const value = typeof raw === "string" ? await evalExpressionSandboxed(raw, buildRuleEnv(tree)) : deepClone(raw);
+          if (value === void 0) throw new Error("the expression evaluated to undefined");
+          pending.push({ path: path12, value });
+        } catch (error) {
+          failures.add(`rule '${rule.name}': then evaluation failed for '${path12}': ${errorText(error)}`);
+          failed = true;
+          break;
+        }
+      }
+      if (failed) continue;
+      for (const { path: path12, value } of pending) {
+        const head = path12.split(".")[0];
+        if (head === "$schema" || head === "$rules") {
+          failures.add(`${path12}: rule '${rule.name}': guard readonly: the ${head} subtree is card-declared and cannot be settled`);
+          continue;
+        }
+        const current = getMvuTreePath(tree, path12);
+        const guarded = options.schema === void 0 ? void 0 : guardMvuWrite(options.schema, path12, value, current);
+        if (guarded !== void 0 && !guarded.ok) {
+          failures.add(`${path12}: rule '${rule.name}': guard ${guarded.kind}: ${guarded.reason}`);
+          continue;
+        }
+        const finalValue = guarded === void 0 ? value : guarded.value;
+        if (mvuValuesEqual(finalValue, current)) continue;
+        setTreePath(tree, path12, deepClone(finalValue));
+        progressed = true;
+        const note = ["rule:" + rule.name, guarded?.note].filter((part) => part !== void 0).join("; ");
+        const parts = noteParts.get(path12) ?? [];
+        if (!parts.includes(note)) parts.push(note);
+        noteParts.set(path12, parts);
+        writes.push({ path: path12, value: deepClone(finalValue), rule: rule.name, ...guarded?.note !== void 0 ? { guardNote: guarded.note } : {} });
+      }
+    }
+    if (!progressed) break;
+    if (round === MVU_RULE_ROUNDS) {
+      failures.add(`$rules: fixed-point iteration hit the ${MVU_RULE_ROUNDS}-round cap; rules were still producing changes in the last round (narrow the when conditions or reorder the rules)`);
+    }
+  }
+  const notes = Object.fromEntries([...noteParts].map(([path12, parts]) => [path12, parts.join("; ")]));
+  return { failures: [...failures], writes, notes };
+}
+function plainObject2(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
+  return value;
+}
+async function applyMvuSettlementRules(chat, card, before) {
+  const metadata = chat.header.chat_metadata;
+  const live = plainObject2(metadata.variables);
+  const source = readMvuRules(chat, card, before);
+  if (source === void 0 && before.$rules === void 0 && live?.$rules === void 0) {
+    return { failures: [], notes: {} };
+  }
+  const variables2 = live ?? {};
+  const failures = [];
+  if (!mvuValuesEqual(variables2.$rules, before.$rules)) {
+    if (before.$rules !== void 0) variables2.$rules = deepClone(before.$rules);
+    else delete variables2.$rules;
+    failures.push("$rules: guard readonly: the rules subtree is card-declared and cannot be settled");
+  }
+  if (source === void 0) {
+    if (live === void 0 && Object.keys(variables2).length > 0) metadata.variables = variables2;
+    return { failures, notes: {} };
+  }
+  if ("invalid" in source) return { failures: [...failures, source.invalid], notes: {} };
+  const schema = readMvuSchema(chat, card, before);
+  const run = await runMvuRules(source.rules, { ...schema !== void 0 ? { schema } : {}, tree: variables2 });
+  if (live === void 0 && Object.keys(variables2).length > 0) metadata.variables = variables2;
+  return { failures: [...failures, ...run.failures], notes: run.notes };
+}
+function mergeMvuRuleNotes(guardNotes, ruleNotes) {
+  const merged = {};
+  for (const [path12, note] of Object.entries(guardNotes)) merged[path12] = note;
+  for (const [path12, note] of Object.entries(ruleNotes)) {
+    merged[path12] = merged[path12] !== void 0 ? `${merged[path12]}; ${note}` : note;
+  }
+  return merged;
+}
+
+// packages/plugin/src/mvu.ts
+var DEFAULT_USER = "User";
+var INITIAL_VARIABLES_KEY3 = "initial_variables";
+var MVU_RECEIPTS_LIMIT = 20;
+function plainObject3(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
+  return value;
+}
+function jsonObjectOf(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+function readChatVariables(chat) {
+  return plainObject3(chat?.header?.chat_metadata?.variables) ?? {};
+}
+function snapshotChatVariables(chat) {
+  return deepClone(readChatVariables(chat));
+}
+function valuesEqual(left, right) {
+  return mvuValuesEqual(left, right);
+}
+function diffVariables(before, after) {
+  const changes = [];
+  const walk = (path12, left, right) => {
+    const leftObject = plainObject3(left);
+    const rightObject = plainObject3(right);
+    const recursible = leftObject !== void 0 && rightObject !== void 0 || left === void 0 && rightObject !== void 0 || right === void 0 && leftObject !== void 0;
+    if (recursible) {
+      const leftNext = leftObject ?? {};
+      const rightNext = rightObject ?? {};
+      for (const key of /* @__PURE__ */ new Set([...Object.keys(leftNext), ...Object.keys(rightNext)])) {
+        walk(path12 === "" ? key : `${path12}.${key}`, leftNext[key], rightNext[key]);
+      }
+      return;
+    }
+    if (!valuesEqual(left, right)) {
+      const change = { name: path12, ...left !== void 0 ? { before: left } : {} };
+      if (right !== void 0) change.after = right;
+      changes.push(change);
+    }
+  };
+  walk("", stripMvuControl(before), stripMvuControl(after));
+  return changes.sort((left, right) => left.name.localeCompare(right.name));
+}
+function overlayScopedVariables(base, entries) {
+  const tree = deepClone(base);
+  for (const entry of entries) {
+    const segments = entry.name.split(".");
+    const leaf = segments.pop();
+    let cursor = tree;
+    for (const segment of segments) {
+      const next = cursor[segment];
+      if (next === null || typeof next !== "object" || Array.isArray(next)) cursor[segment] = {};
+      cursor = cursor[segment];
+    }
+    cursor[leaf] = entry.value;
+  }
+  return tree;
+}
+function overlayChatScopedVariables(base, entries) {
+  const authoritativeStat = plainObject3(base["stat_data"]) !== void 0;
+  const authoritativePrevious = plainObject3(base["previous_stat_data"]) !== void 0;
+  const usable = entries.filter((entry) => {
+    if (authoritativeStat && (entry.name === "stat_data" || entry.name.startsWith("stat_data."))) return false;
+    if (authoritativePrevious && (entry.name === "previous_stat_data" || entry.name.startsWith("previous_stat_data."))) return false;
+    return true;
+  });
+  return overlayScopedVariables(base, usable);
+}
+function readMvuReceipts(chat) {
+  const raw = plainObject3(chat?.header?.chat_metadata?.mvu)?.receipts;
+  if (!Array.isArray(raw)) return [];
+  const receipts = [];
+  for (const entry of raw) {
+    const record = plainObject3(entry);
+    if (record === void 0) continue;
+    const { at, turnKey, status: status2, changes, failures } = record;
+    if (typeof at !== "string" || typeof turnKey !== "string") continue;
+    if (status2 !== "updated" && status2 !== "unchanged" && status2 !== "failed") continue;
+    receipts.push({
+      at,
+      turnKey,
+      status: status2,
+      changes: Array.isArray(changes) ? changes.flatMap((item) => {
+        const change = plainObject3(item);
+        if (change === void 0 || typeof change.name !== "string") return [];
+        const out = { name: change.name };
+        if ("before" in change) out.before = change.before;
+        if ("after" in change) out.after = change.after;
+        if (typeof change.reason === "string") out.reason = change.reason;
+        return [out];
+      }) : [],
+      failures: Array.isArray(failures) ? failures.filter((item) => typeof item === "string") : [],
+      ...typeof record.undoneAt === "string" ? { undoneAt: record.undoneAt } : {}
+    });
+  }
+  return receipts;
+}
+function appendMvuReceipt(chat, receipt) {
+  const metadata = chat.header.chat_metadata;
+  const receipts = [...readMvuReceipts(chat), receipt].slice(-MVU_RECEIPTS_LIMIT);
+  metadata.mvu = { receipts };
+}
+function recordMvuTurnReceipt(chat, before, options) {
+  const after = readChatVariables(chat);
+  const changes = diffVariables(before, after);
+  for (const change of changes) {
+    const note = options.changeNotes?.[change.name];
+    if (note !== void 0) change.reason = note;
+  }
+  const failures = options.failures ?? [];
+  if (changes.length === 0 && failures.length === 0 && Object.keys(before).length === 0 && Object.keys(after).length === 0) {
+    return void 0;
+  }
+  const status2 = failures.length > 0 ? "failed" : changes.length > 0 ? "updated" : "unchanged";
+  const receipt = {
+    at: options.at ?? (/* @__PURE__ */ new Date()).toISOString(),
+    turnKey: options.turnKey,
+    status: status2,
+    changes,
+    failures
+  };
+  appendMvuReceipt(chat, receipt);
+  return receipt;
+}
+function setMvuTreePath(tree, path12, value) {
+  const segments = path12.split(".");
+  const leaf = segments.pop();
+  let cursor = tree;
+  for (const segment of segments) {
+    const next = cursor[segment];
+    if (next === null || typeof next !== "object" || Array.isArray(next)) cursor[segment] = {};
+    cursor = cursor[segment];
+  }
+  cursor[leaf] = value;
+}
+function revertMvuTreePath(tree, path12, before) {
+  const beforeValue = getMvuTreePath(before, path12);
+  if (beforeValue !== void 0) {
+    setMvuTreePath(tree, path12, beforeValue);
+    return;
+  }
+  const segments = path12.split(".");
+  const leaf = segments.pop();
+  const parent = getMvuTreePath(tree, segments.join("."));
+  if (parent !== null && typeof parent === "object" && !Array.isArray(parent)) {
+    delete parent[leaf];
+  }
+  while (segments.length > 0) {
+    const pathSoFar = segments.join(".");
+    const node = getMvuTreePath(tree, pathSoFar);
+    if (node === null || typeof node !== "object" || Array.isArray(node)) break;
+    if (Object.keys(node).length > 0) break;
+    if (getMvuTreePath(before, pathSoFar) !== void 0) break;
+    const popped = segments.pop();
+    const upper = segments.length > 0 ? getMvuTreePath(tree, segments.join(".")) : tree;
+    if (upper === null || typeof upper !== "object" || Array.isArray(upper)) break;
+    delete upper[popped];
+  }
+}
+function applyMvuSettlementGuard(chat, card, before) {
+  const failures = [];
+  const notes = {};
+  const metadata = chat.header.chat_metadata;
+  const variables2 = plainObject3(metadata.variables);
+  const schema = readMvuSchema(chat, card, before);
+  if (schema === void 0 || variables2 === void 0) return { failures, notes };
+  const schemaBefore = plainObject3(before.$schema);
+  const schemaLive = plainObject3(variables2.$schema);
+  if (!valuesEqual(schemaBefore, schemaLive)) {
+    if (schemaBefore !== void 0) variables2.$schema = deepClone(schemaBefore);
+    else delete variables2.$schema;
+    failures.push(`$schema: guard readonly: the schema subtree is card-declared and cannot be settled`);
+  }
+  for (const change of diffVariables(before, variables2)) {
+    const current = getMvuTreePath(before, change.name);
+    const value = "after" in change ? change.after : void 0;
+    const result = guardMvuWrite(schema, change.name, value, current);
+    if (!result.ok) {
+      revertMvuTreePath(variables2, change.name, before);
+      failures.push(`${change.name}: guard ${result.kind}: ${result.reason}`);
+      continue;
+    }
+    if (result.note !== void 0) notes[change.name] = result.note;
+    if (value !== void 0 && !valuesEqual(result.value, value)) setMvuTreePath(variables2, change.name, result.value);
+  }
+  if (Object.keys(variables2).length === 0 && Object.keys(before).length === 0) delete metadata.variables;
+  return { failures, notes };
+}
+function createMvuRuntime(input, stores) {
+  const { characterName, character, chat, books } = input;
+  const card = character.card;
+  const cardName2 = card.data.nickname || card.data.name || characterName;
+  const lastUserMessageId = (() => {
+    for (let i = chat.messages.length - 1; i >= 0; i--) {
+      const message = chat.messages[i];
+      if (message !== void 0 && message.is_user) return i;
+    }
+    return -1;
+  })();
+  const lastCharMessageId = (() => {
+    for (let i = chat.messages.length - 1; i >= 0; i--) {
+      const message = chat.messages[i];
+      if (message !== void 0 && !message.is_user && !message.is_system) return i;
+    }
+    return -1;
+  })();
+  const host = {
+    runType: "render",
+    userName: input.state.activePersona ?? DEFAULT_USER,
+    charName: cardName2,
+    chatId: input.chatId ?? "",
+    characterId: characterName,
+    messages: chat.messages.map((message) => ({
+      name: message.name,
+      mes: message.mes,
+      is_user: message.is_user,
+      is_system: message.is_system
+    })),
+    lastUserMessageId,
+    lastCharMessageId,
+    findWorldEntries: (title, book) => {
+      const out = [];
+      for (const lorebook of books) {
+        if (book !== void 0 && lorebook.name !== book) continue;
+        for (const entry of lorebook.entries) {
+          const comment = entry.comment ?? "";
+          const matched = typeof title === "number" ? entry.uid === title : comment === title;
+          if (!matched) continue;
+          out.push({
+            uid: entry.uid,
+            book: lorebook.name ?? "",
+            comment,
+            content: entry.content ?? "",
+            ...typeof entry.order === "number" ? { order: entry.order } : {},
+            disable: entry.disable === true
+          });
+        }
+      }
+      return out;
+    },
+    getCard: (name2) => {
+      if (name2 !== void 0 && name2 !== characterName && name2 !== cardName2) return null;
+      return {
+        name: cardName2,
+        systemPrompt: card.data.systemPrompt,
+        personality: card.data.personality,
+        description: card.data.description,
+        scenario: card.data.scenario,
+        firstMes: card.data.firstMes,
+        mesExample: card.data.mesExample,
+        creatorNotes: card.data.creatorNotes,
+        depthPrompt: "",
+        data: jsonObjectOf(card.data)
+      };
+    },
+    findPresetPrompt: () => null,
+    renderNested: async () => ""
+  };
+  const runtime = createTemplateRuntime({ host, stores, ...input.onWarning !== void 0 ? { onWarning: input.onWarning } : {} });
+  host.renderNested = (source, extra) => runtime.renderText(source, extra);
+  return runtime;
+}
+function statusTemplateOf(card) {
+  const agentTavern = plainObject3(card?.data?.extensions?.["agentTavern"]);
+  const template = agentTavern?.statusTemplate;
+  return typeof template === "string" && template.trim() !== "" ? template : void 0;
+}
+async function renderMvuStatusTemplate(input) {
+  const chat = input.chat;
+  const books = await collectWorldInfoBooks(input.db, input.state, input.characterName, input.character, input.chatId);
+  const runtime = createMvuRuntime(
+    {
+      state: input.state,
+      characterName: input.characterName,
+      character: input.character,
+      chat,
+      chatId: input.chatId,
+      books
+    },
+    {
+      local: deepClone(stripMvuControl(plainObject3(input.localVariables ?? readChatVariables(chat)) ?? {})),
+      global: { ...input.state.scriptGlobals },
+      initial: deepClone(stripMvuControl(plainObject3(chat.header.chat_metadata[INITIAL_VARIABLES_KEY3]) ?? {}))
+    }
+  );
+  return await runtime.renderText(input.template, void 0, "mvu-status");
+}
+async function retryMvuSettlement(db, options) {
+  const { state, characterName, chatId, snapshot: snapshot2 } = options;
+  if (typeof options.sessionId === "string" && state.sessionBindings?.[options.sessionId]?.architecture === "agent-tavern") {
+    throw new Error("AgentTavern sessions use the DSH native AgentLoop; MVU settlement retry is unavailable.");
+  }
+  if (!options.templatesActive) {
+    throw new Error("MVU retry requires the prompt template runtime (templates are disabled)");
+  }
+  if (options.revision !== snapshot2.revision) {
+    throw new ChatRevisionConflictError(options.revision, snapshot2.revision);
+  }
+  const chat = snapshot2.chat;
+  const metadata = chat.header.chat_metadata;
+  const before = snapshotChatVariables(chat);
+  let floorIndex = -1;
+  for (let i = chat.messages.length - 1; i >= 0; i--) {
+    const message = chat.messages[i];
+    if (message !== void 0 && !message.is_user && !message.is_system) {
+      floorIndex = i;
+      break;
+    }
+  }
+  if (floorIndex === -1) throw new Error("no assistant floor to settle");
+  const floor = chat.messages[floorIndex];
+  if (floor === void 0) throw new Error("no assistant floor to settle");
+  const character = await db.getCharacter(characterName) ?? await db.getCharacter(floor.name);
+  if (!character) throw new Error(`character '${characterName}' not found`);
+  const failures = [];
+  const localVars = plainObject3(metadata.variables) ?? {};
+  metadata.variables = localVars;
+  const globalsBefore = JSON.stringify(state.scriptGlobals);
+  const books = await collectWorldInfoBooks(db, state, characterName, character, chatId);
+  const runtime = createMvuRuntime(
+    { state, characterName, character, chat, chatId, books, onWarning: (message) => {
+      failures.push(message);
+    } },
+    {
+      // initial 绑活引用（存在时）；无 initial 树时绑临时对象，initial 作用域写穿
+      // 不持久化——initial 本就由每次生成的 InitialVariables 重算，非用户状态
+      local: localVars,
+      global: state.scriptGlobals,
+      initial: plainObject3(metadata[INITIAL_VARIABLES_KEY3]) ?? {}
+    }
+  );
+  try {
+    await runtime.renderText(floor.mes, void 0, "mvu-retry");
+  } catch (err2) {
+    failures.push(`mvu retry render failed: ${err2 instanceof Error ? err2.message : String(err2)}`);
+  }
+  if (Object.keys(localVars).length === 0) delete metadata.variables;
+  if (JSON.stringify(state.scriptGlobals) !== globalsBefore) {
+    await db.updateState((current) => ({ scriptGlobals: { ...current.scriptGlobals, ...state.scriptGlobals } }));
+  }
+  const guard = applyMvuSettlementGuard(chat, character.card, before);
+  const rulesPass = await applyMvuSettlementRules(chat, character.card, before);
+  const after = readChatVariables(chat);
+  const changes = diffVariables(before, after);
+  const notes = mergeMvuRuleNotes(guard.notes, rulesPass.notes);
+  for (const change of changes) {
+    if (notes[change.name] !== void 0) change.reason = notes[change.name];
+  }
+  const allFailures = [...failures, ...guard.failures, ...rulesPass.failures];
+  const receipt = {
+    at: (/* @__PURE__ */ new Date()).toISOString(),
+    turnKey: String(floorIndex),
+    status: changes.length > 0 ? "updated" : "unchanged",
+    changes,
+    failures: allFailures
+  };
+  appendMvuReceipt(chat, receipt);
+  const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
+  return { receipt, revision, variables: stripMvuControl(after) };
+}
+var MvuUndoRefusalError = class extends Error {
+  undoCode;
+  constructor(undoCode, message) {
+    super(message);
+    this.name = "MvuUndoRefusalError";
+    this.undoCode = undoCode;
+  }
+};
+function latestValidMvuReceipt(receipts) {
+  for (let index = receipts.length - 1; index >= 0; index--) {
+    if (receipts[index].undoneAt === void 0) return { index, receipt: receipts[index] };
+  }
+  return void 0;
+}
+function refuseUndo(target, receipts) {
+  if (target !== void 0) return target;
+  if (receipts.length > 0) {
+    throw new MvuUndoRefusalError("ALREADY_UNDONE", `all ${receipts.length} settlement receipts in this chat have been undone; nothing valid is left to undo`);
+  }
+  throw new MvuUndoRefusalError("NO_VALID_RECEIPT", "no MVU settlement receipt in this chat to undo");
+}
+function planMvuUndoRestores(receipt) {
+  if (receipt.status === "updated" && receipt.changes.length === 0) {
+    throw new MvuUndoRefusalError("INCOMPLETE_RECEIPT", `receipt ${receipt.turnKey} claims status 'updated' but records no change data; the receipt data is incomplete and cannot be undone`);
+  }
+  const restores = [];
+  for (const change of receipt.changes) {
+    if (!("before" in change) && !("after" in change)) {
+      throw new MvuUndoRefusalError("INCOMPLETE_RECEIPT", `receipt change '${change.name}' records neither a before nor an after value; the receipt data is incomplete and cannot be undone`);
+    }
+    restores.push({ path: change.name, ..."before" in change ? { value: change.before } : {} });
+  }
+  return restores;
+}
+function formatRestoreValue(value) {
+  const text = (() => {
+    try {
+      return JSON.stringify(value) ?? String(value);
+    } catch {
+      return String(value);
+    }
+  })();
+  return text.length > 80 ? `${text.slice(0, 79)}\u2026` : text;
+}
+function screenMvuUndoRestores(schema, restores, currentOf) {
+  const failures = [];
+  for (const restore of restores) {
+    if (restore.path.split(".")[0] === "$schema") {
+      failures.push(`$schema: guard readonly: the schema subtree is the declared guard contract and cannot be undone into`);
+      continue;
+    }
+    if (schema === void 0) continue;
+    const value = "value" in restore ? restore.value : void 0;
+    const result = guardMvuWrite(schema, restore.path, value, currentOf(restore.path));
+    if (!result.ok) {
+      failures.push(`${restore.path}: guard ${result.kind}: ${result.reason}`);
+      continue;
+    }
+    if (!mvuValuesEqual(result.value, value)) {
+      failures.push(`${restore.path}: guard would adjust the restored value ${formatRestoreValue(value)} to ${formatRestoreValue(result.value)} ($schema changed since the settlement); refusing to undo with anything other than the recorded before value`);
+    }
+  }
+  if (failures.length > 0) throw new MvuUndoRefusalError("UNDO_REJECTED", failures.join("; "));
+}
+function applyMvuUndoRestores(tree, restores) {
+  const before = overlayScopedVariables({}, restores.flatMap((restore) => "value" in restore ? [{ name: restore.path, value: deepClone(restore.value) }] : []));
+  for (const restore of restores) revertMvuTreePath(tree, restore.path, before);
+}
+function markMvuReceiptUndone(chat, index, at) {
+  const receipts = readMvuReceipts(chat);
+  const marked = { ...receipts[index], undoneAt: at ?? (/* @__PURE__ */ new Date()).toISOString() };
+  const next = receipts.slice();
+  next[index] = marked;
+  chat.header.chat_metadata.mvu = { receipts: next };
+  return marked;
+}
+async function undoMvuStSettlement(db, options) {
+  const { characterName, chatId, snapshot: snapshot2 } = options;
+  const chat = snapshot2.chat;
+  const receipts = readMvuReceipts(chat);
+  const target = refuseUndo(latestValidMvuReceipt(receipts), receipts);
+  const restores = planMvuUndoRestores(target.receipt);
+  const metadata = chat.header.chat_metadata;
+  const variables2 = plainObject3(metadata.variables) ?? {};
+  screenMvuUndoRestores(readMvuSchema(chat, (await db.getCharacter(characterName))?.card, variables2), restores, (path12) => getMvuTreePath(variables2, path12));
+  applyMvuUndoRestores(variables2, restores);
+  if (Object.keys(variables2).length === 0) delete metadata.variables;
+  else metadata.variables = variables2;
+  const marked = markMvuReceiptUndone(chat, target.index, options.at);
+  const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
+  return { receipt: marked, revision, restores };
+}
+async function undoMvuAgentSettlement(variables2, db, options) {
+  const { characterName, chatId, snapshot: snapshot2 } = options;
+  const chat = snapshot2.chat;
+  const receipts = readMvuReceipts(chat);
+  const target = refuseUndo(latestValidMvuReceipt(receipts), receipts);
+  const restores = planMvuUndoRestores(target.receipt);
+  const seedTree = readChatVariables(chat);
+  const storeFailures = [];
+  const entries = /* @__PURE__ */ new Map();
+  for (const restore of restores) {
+    try {
+      entries.set(restore.path, await variables2.get("chat", chatId, restore.path));
+    } catch (error) {
+      storeFailures.push(`${restore.path}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  if (storeFailures.length > 0) throw new MvuUndoRefusalError("UNDO_REJECTED", storeFailures.join("; "));
+  screenMvuUndoRestores(
+    readMvuSchema(chat, (await db.getCharacter(characterName))?.card),
+    restores,
+    (path12) => {
+      const entry = entries.get(path12);
+      return entry !== void 0 ? entry.value : getMvuTreePath(seedTree, path12);
+    }
+  );
+  for (const restore of restores) {
+    if ("value" in restore) continue;
+    const entry = entries.get(restore.path);
+    if (entry !== void 0) await variables2.delete("chat", chatId, restore.path, entry.revision);
+  }
+  const updates = [];
+  for (const restore of restores) {
+    if (!("value" in restore)) continue;
+    const entry = entries.get(restore.path);
+    const current = entry !== void 0 ? entry.value : getMvuTreePath(seedTree, restore.path);
+    if (current !== void 0 && mvuValuesEqual(current, restore.value)) continue;
+    updates.push({ name: restore.path, value: deepClone(restore.value), ...entry !== void 0 ? { expectedRevision: entry.revision } : {} });
+  }
+  if (updates.length > 0) await variables2.patch("chat", chatId, updates);
+  const marked = markMvuReceiptUndone(chat, target.index, options.at);
+  const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
+  return { receipt: marked, revision, restores };
+}
+
+// packages/plugin/src/prompt-context.ts
+var DEFAULT_USER2 = "User";
+function tavernMacroExpand(state, characterName, character) {
+  const macros = createMacroEngine({
+    char: character?.card.data.nickname || character?.card.data.name || characterName,
+    user: state.activePersona ?? DEFAULT_USER2
+  });
+  return (text) => macros.expand(text);
+}
+function displayTextForMessage(scripts, message, depth) {
+  const displayScripts = scripts.filter((script) => script.markdownOnly && !script.disabled);
+  const text = message.mes ?? "";
+  return displayScripts.length === 0 ? text : applyRegexScripts(text, displayScripts, RegexPlacement2.AI_OUTPUT, { expand: (value) => value }, { depth });
+}
+async function displayTexts(db, state, characterName, chatId, chat) {
+  const character = await db.getCharacter(characterName);
+  const scripts = await collectSessionRegexScripts(db, state, characterName, chatId, character);
+  if (scripts.every((script) => !script.markdownOnly || script.disabled)) return void 0;
+  return chat.messages.map((message, index) => displayTextForMessage(scripts, message, chat.messages.length - 1 - index));
+}
+async function presetSamplerValue(db, state, key) {
+  const presetName = state.activePreset;
+  if (!presetName) return void 0;
+  const preset = await db.getPreset(presetName);
+  return preset?.[key];
+}
+function parsePresetOrThrow(data) {
+  const kind = detectPresetKind(data);
+  if (kind === "chat-completion") {
+    parsePreset(data);
+    return;
+  }
+  if (kind === "context") {
+    parseContextTemplate(data);
+    return;
+  }
+  if (kind === "instruct") {
+    parseInstructTemplate(data);
+    return;
+  }
+  if (kind === "textgen-sampler") return;
+  throw new Error("preset format not recognized (expected chat completion prompts, context, instruct, or textgen sampler)");
+}
+function compactionOverrideOf(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
+  const record = value;
+  const provider = typeof record["curatorProvider"] === "string" ? record["curatorProvider"].trim() : "";
+  const model = typeof record["curatorModel"] === "string" ? record["curatorModel"].trim() : "";
+  return provider !== "" && model !== "" ? { curatorProvider: provider, curatorModel: model } : void 0;
+}
+
 // packages/plugin/src/agent-tavern/card-state.ts
 var CARD_STATE_MAX_CHARS = 12e4;
 var CARD_STATE_FULL_REFRESH_TURNS = 8;
@@ -19646,7 +22846,7 @@ function registerAgentTavernCardState(ctx, options = {}) {
       const sections = full ? rendered.sections : changed;
       const note = full ? rendered.truncated ? `Card world-info truncated at ${CARD_STATE_MAX_CHARS} characters.` : void 0 : "Only sections that changed since the previous card-state block are repeated; earlier unchanged rules remain in effect.";
       const message = {
-        id: randomUUID4(),
+        id: randomUUID7(),
         role: "user",
         content: [{ type: "text", text: formatCardStateMessage(sections, note) }],
         source: hostPluginMessageSource(payload.agent?.session)
@@ -20159,7 +23359,7 @@ var NovelDriver = class _NovelDriver {
           this.logWarn("projection-repair-failed", { novelId, operation: "projection-repair", errorCode: errorCodeOf(error) });
           await this.store.pause(novelId, {
             reason: "projection-pending",
-            detail: `projection repair failed: ${messageOf2(error)}`,
+            detail: `projection repair failed: ${messageOf4(error)}`,
             resumeHint: "repair the reading projections, then resume explicitly (\xA713)"
           });
           return;
@@ -20217,11 +23417,11 @@ var NovelDriver = class _NovelDriver {
         await this.store.resolveWorkIntent(novelId, {
           intentId: intent.intentId,
           outcome: "failed",
-          error: `followup delivery failed: ${messageOf2(error)}`
+          error: `followup delivery failed: ${messageOf4(error)}`
         });
         await this.store.pause(novelId, {
           reason: "stalled",
-          detail: `followup delivery failed after ${briefSnapshot.config.budgets.externalRetry.maxAttempts} attempts: ${messageOf2(error)}`,
+          detail: `followup delivery failed after ${briefSnapshot.config.budgets.externalRetry.maxAttempts} attempts: ${messageOf4(error)}`,
           resumeHint: "resume explicitly after reviewing the delivery failure (\xA713)"
         });
       } catch (handled) {
@@ -20311,7 +23511,7 @@ var NovelDriver = class _NovelDriver {
           try {
             await this.store.pause(summary.novelId, {
               reason: "recovery-required",
-              detail: `projection repair failed during recovery: ${messageOf2(error)}`
+              detail: `projection repair failed during recovery: ${messageOf4(error)}`
             });
           } catch {
           }
@@ -20449,8 +23649,8 @@ var NovelDriver = class _NovelDriver {
   logWarn(operation, fields) {
     const record = { ...fields, operation };
     try {
-      const warn = this.host.logger?.warn;
-      if (typeof warn === "function") warn(`novel-driver: ${operation}`, record);
+      const warn3 = this.host.logger?.warn;
+      if (typeof warn3 === "function") warn3(`novel-driver: ${operation}`, record);
       else console.warn(`novel-driver: ${operation}`, JSON.stringify(record));
     } catch {
     }
@@ -20582,7 +23782,7 @@ function buildNoticeMessage(novelId, intentId, snapshot2, work, unitId, session)
     source: hostPluginMessageSource(session, { form: "notice", summary: `AgentNovel work notice (novel ${novelId}, intent ${intentId})` })
   };
 }
-function messageOf2(error) {
+function messageOf4(error) {
   return error instanceof Error ? error.message : String(error);
 }
 function errorCodeOf(error) {
@@ -21789,7 +24989,7 @@ function smokeTestGameEngine(engine10) {
   try {
     created = engine10.createGame({ seed: 1 });
   } catch (cause) {
-    return { ok: false, reasons: [`createGame \u629B\u9519: ${errorMessage2(cause)}`] };
+    return { ok: false, reasons: [`createGame \u629B\u9519: ${errorMessage5(cause)}`] };
   }
   if (created === null || typeof created !== "object" || !("state" in created)) {
     return { ok: false, reasons: ["createGame \u5FC5\u987B\u8FD4\u56DE { state } \u5F62\u6001"] };
@@ -21801,14 +25001,14 @@ function smokeTestGameEngine(engine10) {
   try {
     turn = currentRoleOf(state, roles);
   } catch (cause) {
-    reasons.push(errorMessage2(cause));
+    reasons.push(errorMessage5(cause));
     return { ok: false, reasons };
   }
   let suggestions;
   try {
     suggestions = engine10.legalActions(state);
   } catch (cause) {
-    reasons.push(`legalActions \u629B\u9519: ${errorMessage2(cause)}`);
+    reasons.push(`legalActions \u629B\u9519: ${errorMessage5(cause)}`);
     return { ok: false, reasons };
   }
   if (!Array.isArray(suggestions)) return { ok: false, reasons: ["legalActions \u5FC5\u987B\u8FD4\u56DE\u6570\u7EC4"] };
@@ -21833,7 +25033,7 @@ function smokeTestGameEngine(engine10) {
     firstResult = engine10.applyAction(state, first, turn);
     secondResult = engine10.applyAction(state, first, turn);
   } catch (cause) {
-    reasons.push(`applyAction \u5BF9\u5EFA\u8BAE\u96C6\u9996\u4E2A\u52A8\u4F5C\u629B\u9519: ${errorMessage2(cause)}`);
+    reasons.push(`applyAction \u5BF9\u5EFA\u8BAE\u96C6\u9996\u4E2A\u52A8\u4F5C\u629B\u9519: ${errorMessage5(cause)}`);
     return { ok: false, reasons };
   }
   if (!deepEqual(firstResult, secondResult)) reasons.push("applyAction \u540C\u8F93\u5165\u4E24\u6B21\u8C03\u7528\u7ED3\u679C\u4E0D\u4E00\u81F4\uFF08\u786E\u5B9A\u6027\u786C\u7EA6\u675F\u4E0D\u8FC7\uFF09");
@@ -21856,7 +25056,7 @@ function smokeTestGameEngine(engine10) {
   }
   return { ok: reasons.length === 0, reasons };
 }
-function errorMessage2(cause) {
+function errorMessage5(cause) {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
@@ -28306,7 +31506,7 @@ function agentOf2(agents, id) {
 function noticeText(session) {
   return session.finished ? `\u81EA\u52A8\u6E38\u620F\u901A\u77E5\uFF08\u975E\u7528\u6237\u6D88\u606F\uFF09\uFF1A\u5BF9\u5C40\u300C${session.gameName}\u300D\u5DF2\u7ED3\u675F\u2014\u2014${session.summary}\u3002\u8BF7\u6536\u5C3E\u53D9\u8FF0\u3002sessionId: ${session.id}` : `\u81EA\u52A8\u6E38\u620F\u901A\u77E5\uFF08\u975E\u7528\u6237\u6D88\u606F\uFF09\uFF1A\u5BF9\u624B\u5DF2\u5728\u300C${session.gameName}\u300D\u68CB\u76D8\u843D\u5B50\uFF0C\u7EE7\u7EED\u5BF9\u5C40\u3002sessionId: ${session.id}`;
 }
-function messageOf3(error) {
+function messageOf5(error) {
   return error instanceof Error ? error.message : String(error);
 }
 function turnReachedAgent(session) {
@@ -28318,7 +31518,7 @@ function agentTurnRunning(agent) {
   return agent.status === "running";
 }
 async function wakeAgentOnHumanMove(host, session) {
-  const warn = (message2) => {
+  const warn3 = (message2) => {
     try {
       host.logger?.warn?.(message2);
     } catch {
@@ -28330,7 +31530,7 @@ async function wakeAgentOnHumanMove(host, session) {
   try {
     agentId = await host.bindingOf?.(session.chat.character, session.chat.chatId);
   } catch (error) {
-    warn(`dsh-soulmojito: game wake binding lookup failed (${messageOf3(error)})`);
+    warn3(`dsh-soulmojito: game wake binding lookup failed (${messageOf5(error)})`);
     return false;
   }
   if (agentId === void 0) return false;
@@ -28350,7 +31550,7 @@ async function wakeAgentOnHumanMove(host, session) {
     await agent.followup(message);
     return true;
   } catch (error) {
-    warn(`dsh-soulmojito: game wake followup failed (${messageOf3(error)})`);
+    warn3(`dsh-soulmojito: game wake followup failed (${messageOf5(error)})`);
     return false;
   }
 }
@@ -28443,337 +31643,6 @@ function clampIdentitySummary(card) {
   }
   if (typeof summary !== "string") throw new Error("identitySummary must be a string");
   fields["identitySummary"] = summary.slice(0, 2e3);
-}
-
-// packages/plugin/src/session/active-character.ts
-async function activeCharacterPatch(db, current, next) {
-  const patch = { activeCharacter: next };
-  const previous = current.activeCharacter;
-  if (previous === void 0 || previous === next || current.worldFollowsCharacter === false) return patch;
-  const file = await db.getCharacter(previous);
-  const raw = file?.card.data.extensions["world"];
-  const linked = typeof raw === "string" ? raw.trim() : "";
-  if (linked === "" || !current.activeWorlds.includes(linked)) return patch;
-  patch.activeWorlds = current.activeWorlds.filter((name2) => name2 !== linked);
-  return patch;
-}
-
-// packages/plugin/src/session/binding.ts
-var TavernArchitectureConflictError = class extends Error {
-  code = "TAVERN_ARCHITECTURE_CONFLICT";
-  constructor(message) {
-    super(message);
-    this.name = "TavernArchitectureConflictError";
-  }
-};
-async function bindSession(db, sessionId, character, chatId, group2 = false, architecture = "st", contextMode = "dsh-native", initializationPending = false) {
-  await db.ensureRegexScriptOwners();
-  const current = group2 ? void 0 : await db.getState();
-  const switched = current === void 0 ? void 0 : await activeCharacterPatch(db, current, character);
-  return db.updateState((state) => {
-    const existing = state.sessionBindings[sessionId];
-    const sameAgentBinding = existing?.architecture === "agent-tavern" && existing.character === character && existing.chatId === chatId;
-    const pending = initializationPending && (existing?.architecture === "agent-tavern" && existing.initializationPending === true || !sameAgentBinding);
-    const binding = architecture === "agent-tavern" && !group2 ? {
-      architecture: "agent-tavern",
-      contextMode,
-      character,
-      chatId,
-      ...pending ? { initializationPending: true } : {}
-    } : { architecture: "st", character, chatId, ...group2 ? { group: true } : {} };
-    return {
-      activeCharacter: group2 ? state.activeCharacter : character,
-      ...switched?.activeWorlds !== void 0 ? { activeWorlds: switched.activeWorlds } : {},
-      sessionBindings: {
-        ...state.sessionBindings,
-        [sessionId]: binding
-      }
-    };
-  });
-}
-async function assertAgentTavernAvailable(architecture, contextMode) {
-  if (architecture !== "agent-tavern") return;
-  const capabilities = await getAgentTavernCapabilitiesPromise() ?? getAgentTavernCapabilities();
-  const status2 = contextMode === "agent-managed" ? capabilities.managed : capabilities.native;
-  if (!status2.available) {
-    throw new TavernArchitectureConflictError(`AgentTavern ${contextMode} is unavailable: ${status2.reasons.join(" ")}`);
-  }
-}
-function requestedArchitecture(value) {
-  if (value === void 0 || value === "st") return "st";
-  if (value === "agent-tavern") return value;
-  throw new Error(`unsupported Tavern architecture '${String(value)}'`);
-}
-function requestedContextMode(value) {
-  if (value === void 0 || value === "dsh-native") return "dsh-native";
-  if (value === "agent-managed") return value;
-  throw new Error(`unsupported AgentTavern context mode '${String(value)}'`);
-}
-function assertStGenerationBinding(state, sessionId) {
-  if (typeof sessionId !== "string") return;
-  const binding = state.sessionBindings[sessionId];
-  if (binding?.architecture === "agent-tavern") {
-    throw new TavernArchitectureConflictError("AgentTavern sessions use the DSH native AgentLoop; the ST generation endpoint is unavailable.");
-  }
-}
-
-// packages/plugin/src/message.ts
-function createMessage(input) {
-  return deepFreeze(structuredClone({ ...input, id: crypto.randomUUID() }));
-}
-function deepFreeze(value) {
-  const seen = /* @__PURE__ */ new WeakSet();
-  const pending = [value];
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (current === null || typeof current !== "object" || seen.has(current)) continue;
-    seen.add(current);
-    Object.freeze(current);
-    pending.push(...Object.values(current));
-  }
-  return value;
-}
-
-// packages/plugin/src/session/trace.ts
-function isAppendableSession(session) {
-  return session !== void 0 && typeof session.append === "function";
-}
-function occupyHostSession(agent, ctx) {
-  const session = agent.session;
-  if (!isAppendableSession(session)) return;
-  try {
-    if (sessionEvents(session).some((event) => event.type === "turn/start")) return;
-    if (!canAdvanceHostTurnBase(agent)) return;
-    const started = confirmSessionAppend({
-      session: agent.session,
-      logger: ctx?.logger,
-      label: `session occupation turn/start (${agent.id ?? "unknown"})`,
-      append: () => session.append("turn/start", { turn: 1 }),
-      present: (events) => events.some((event) => event.type === "turn/start" && event.data?.turn === 1)
-    });
-    if (!started) return;
-    const ended = confirmSessionAppend({
-      session: agent.session,
-      logger: ctx?.logger,
-      label: `session occupation turn/end (${agent.id ?? "unknown"})`,
-      append: () => session.append("turn/end", { turn: 1, reason: { kind: "completed" } }),
-      present: (events) => events.some((event) => event.type === "turn/end" && event.data?.turn === 1)
-    });
-    if (!ended) return;
-    advanceHostTurnBase(agent, 1);
-  } catch {
-  }
-}
-function loopPhase(agent) {
-  const phase = agent?.phase;
-  return typeof phase === "object" && phase !== null ? phase : void 0;
-}
-function canAdvanceHostTurnBase(agent) {
-  const phase = loopPhase(agent);
-  if (phase === void 0 || phase.kind !== "idle") return false;
-  if (typeof phase.lastTurn !== "number" || !Number.isSafeInteger(phase.lastTurn)) return false;
-  const before = phase.lastTurn;
-  try {
-    phase.lastTurn = before;
-  } catch {
-    return false;
-  }
-  return phase.lastTurn === before;
-}
-function advanceHostTurnBase(agent, turn) {
-  if (!Number.isSafeInteger(turn) || turn < 1) return false;
-  const phase = loopPhase(agent);
-  if (phase === void 0 || phase.kind !== "idle") return false;
-  if (typeof phase.lastTurn === "number" && Number.isSafeInteger(phase.lastTurn) && phase.lastTurn >= turn) return true;
-  try {
-    phase.lastTurn = turn;
-  } catch {
-    return false;
-  }
-  return phase.lastTurn === turn;
-}
-function lastLoggedTurn(agent) {
-  let last;
-  for (const event of sessionEvents(agent.session)) {
-    if (event.type !== "turn/start") continue;
-    const value = event.data?.turn;
-    if (typeof value === "number" && Number.isSafeInteger(value) && (last === void 0 || value > last)) last = value;
-  }
-  return last;
-}
-function closeImportBracket(agent, reason) {
-  const session = agent.session;
-  if (!isAppendableSession(session)) return void 0;
-  let openTurn;
-  let openStep;
-  for (const event of sessionEvents(session)) {
-    const turn = event.data?.turn;
-    const step = event.data?.step;
-    if (event.type === "turn/start" && typeof turn === "number" && Number.isSafeInteger(turn)) {
-      openTurn = turn;
-      openStep = void 0;
-      continue;
-    }
-    if (event.type === "turn/end") {
-      openTurn = void 0;
-      openStep = void 0;
-      continue;
-    }
-    if (event.type === "step/start" && typeof turn === "number" && typeof step === "number" && Number.isSafeInteger(step)) {
-      openStep = { turn, step };
-      continue;
-    }
-    if (event.type === "step/end") openStep = void 0;
-  }
-  if (openStep !== void 0) {
-    try {
-      session.append("step/end", { turn: openStep.turn, step: openStep.step });
-    } catch {
-    }
-  }
-  if (openTurn !== void 0) {
-    try {
-      session.append("turn/end", { turn: openTurn, reason });
-    } catch {
-    }
-  }
-  return lastLoggedTurn(agent);
-}
-function beginTavernSessionTurn(agent, userText) {
-  const session = agent?.session;
-  if (!isAppendableSession(session) || readSessionEvents(session) === void 0) return null;
-  const logEvents = sessionEvents(session);
-  let openTurn = false;
-  for (const event of logEvents) {
-    if (event.type === "turn/start") openTurn = true;
-    else if (event.type === "turn/end") openTurn = false;
-  }
-  if (openTurn) return null;
-  const turn = Math.max(0, ...logEvents.filter((event) => event.type === "turn/start" && typeof event.data?.turn === "number" && Number.isSafeInteger(event.data.turn)).map((event) => event.data?.turn)) + 1;
-  let started = false;
-  try {
-    session.append("turn/start", { turn });
-    started = true;
-    if (userText.trim() !== "") {
-      session.append("user/message", createMessage({
-        role: "user",
-        content: [{ type: "text", text: userText }],
-        source: { kind: "user" }
-      }), { surfaceOp: "append" });
-    }
-    return { session, turn, step: 1, stepOpen: false, turnOpen: true, logging: true, completed: false, ...agent !== null && agent !== void 0 ? { agent } : {} };
-  } catch {
-    if (started) {
-      try {
-        session.append("turn/end", {
-          turn,
-          reason: { kind: "error", error: { message: "Tavern session trace failed", code: "TAVERN_TRACE" } }
-        });
-        advanceHostTurnBase(agent, turn);
-      } catch {
-      }
-    }
-    return null;
-  }
-}
-function startTavernSessionStep(trace) {
-  if (!trace?.logging) return trace;
-  try {
-    trace.session.append("step/start", { turn: trace.turn, step: trace.step });
-    trace.stepOpen = true;
-  } catch {
-    trace.logging = false;
-  }
-  return trace;
-}
-function recordTavernSessionAssistant(trace, text, reasoning, provider, model, usage) {
-  if (!trace?.logging || !trace.stepOpen) return trace;
-  try {
-    const content = [{ type: "text", text }];
-    if (reasoning) content.push({ type: "reasoning", text: reasoning });
-    const version = hostSessionFormatVersion(trace.session);
-    trace.session.append("assistant/message", {
-      turn: trace.turn,
-      step: trace.step,
-      message: createMessage({
-        role: "assistant",
-        content,
-        source: { kind: "model", provider, model }
-      }),
-      ...usage ? { usage } : {},
-      // v4 加载边界强制 settlement 形状（seed 校验无条件要求 data.stream 为数组，
-      // 有 usage 也不豁免），缺失时 append 照常成功但会话重启即拒载；token-meter
-      // 的 usageOf() 同样要求 usage/stream 至少一个，空流可保投影物化。v0-v3
-      // 格式无此成员，多写反而毒化老宿主工件，故按版本分支。
-      ...version !== void 0 && version >= 4 ? { stream: [] } : {}
-    }, { surfaceOp: "append" });
-    trace.completed = true;
-  } catch {
-    trace.logging = false;
-  }
-  return trace;
-}
-function finishTavernSessionTrace(trace) {
-  if (!trace?.turnOpen) return;
-  if (trace.stepOpen) {
-    try {
-      trace.session.append("step/end", { turn: trace.turn, step: trace.step });
-    } catch {
-      trace.stepOpen = false;
-      trace.turnOpen = false;
-      return;
-    }
-    trace.stepOpen = false;
-  }
-  try {
-    trace.session.append("turn/end", {
-      turn: trace.turn,
-      reason: trace.completed ? { kind: "completed" } : { kind: "error", error: { message: "Tavern generation failed", code: "TAVERN_GENERATION" } }
-    });
-    if (trace.agent !== void 0) advanceHostTurnBase(trace.agent, trace.turn);
-  } catch {
-  }
-  trace.turnOpen = false;
-}
-function normalizeChatId(name2) {
-  const stem = name2.replace(/\.jsonl$/i, "").trim();
-  if (stem === "") throw new Error("chat name is required");
-  return `${stem}.jsonl`;
-}
-function parseTavernSessionCommand(rawInput) {
-  const payload = rawInput.trim();
-  if (payload === "") return null;
-  try {
-    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-    const record = parsed;
-    if (record["action"] === "close") return { action: "close" };
-    if (record["action"] === "novel-open") {
-      const novelId = record["novelId"];
-      return typeof novelId === "string" && novelId.trim() !== "" ? { action: "novel-open", novelId } : null;
-    }
-    if (record["action"] === "workbench-open") {
-      const sourceCharacter = typeof record["sourceCharacter"] === "string" ? record["sourceCharacter"] : "";
-      const sourceChatId = typeof record["sourceChatId"] === "string" ? record["sourceChatId"] : "";
-      if (sourceCharacter !== "" !== (sourceChatId !== "")) return null;
-      return { action: "workbench-open", sourceCharacter, sourceChatId };
-    }
-    const character = record["character"];
-    const chatId = record["chatId"];
-    if (typeof character !== "string" || typeof chatId !== "string") return null;
-    const group2 = record["group"] === true;
-    const architecture = group2 ? "st" : requestedArchitecture(record["architecture"]);
-    return {
-      action: "open",
-      character,
-      chatId,
-      group: group2,
-      architecture,
-      contextMode: requestedContextMode(record["contextMode"])
-    };
-  } catch {
-    return null;
-  }
 }
 
 // packages/plugin/src/session/preset-marker.ts
@@ -29882,10 +32751,10 @@ function localModelFingerprint(modelDir) {
     const parts = [];
     for (const entry of readdirSync3(modelDir).sort()) {
       const full = join18(modelDir, entry);
-      const info = statSync2(full);
-      if (info.isFile()) {
-        parts.push(`${entry}:${info.size}:${Math.round(info.mtimeMs)}`);
-      } else if (info.isDirectory()) {
+      const info2 = statSync2(full);
+      if (info2.isFile()) {
+        parts.push(`${entry}:${info2.size}:${Math.round(info2.mtimeMs)}`);
+      } else if (info2.isDirectory()) {
         for (const child of readdirSync3(full).sort()) {
           const childInfo = statSync2(join18(full, child));
           if (childInfo.isFile()) parts.push(`${entry}/${child}:${childInfo.size}:${Math.round(childInfo.mtimeMs)}`);
@@ -29926,8 +32795,8 @@ function detectLocalQuantizations(modelDir) {
   for (const [dtype, suffix] of DTYPE_FILE_SUFFIXES) {
     const file = `onnx/model${suffix}.onnx`;
     try {
-      const info = statSync2(join18(modelDir, file));
-      if (info.isFile()) found.push({ precision: dtype, file, sizeBytes: info.size });
+      const info2 = statSync2(join18(modelDir, file));
+      if (info2.isFile()) found.push({ precision: dtype, file, sizeBytes: info2.size });
     } catch {
     }
   }
@@ -29988,13 +32857,13 @@ function inferLocalModelSettings(modelDir) {
   return result;
 }
 function validateLocalModelDir(modelDir) {
-  let info;
+  let info2;
   try {
-    info = statSync2(modelDir);
+    info2 = statSync2(modelDir);
   } catch {
     return `modelDir '${modelDir}' does not exist`;
   }
-  if (!info.isDirectory()) return `modelDir '${modelDir}' is not a directory`;
+  if (!info2.isDirectory()) return `modelDir '${modelDir}' is not a directory`;
   const names = readdirSync3(modelDir);
   if (!names.includes("tokenizer.json")) {
     return `modelDir '${modelDir}' has no tokenizer.json (expected a Hugging Face ONNX layout: tokenizer.json + config.json + onnx/model.onnx)`;
@@ -30244,12 +33113,12 @@ async function recordEmbedFailure(root, message) {
     breakerUntil: Date.now() + EMBED_BREAKER_MS
   });
 }
-async function recordEmbedSuccess(root, info) {
+async function recordEmbedSuccess(root, info2) {
   const status2 = await readEmbedStatus(root);
   await writeEmbedStatus(root, {
     ...status2,
-    model: info.model,
-    dims: info.dims,
+    model: info2.model,
+    dims: info2.dims,
     lastSuccessAt: (/* @__PURE__ */ new Date()).toISOString(),
     breakerUntil: 0
   });
@@ -32256,9 +35125,9 @@ async function getIdbRecord(root, character, nameValue, storeValue, keyValue) {
   if (record === void 0 || record.store !== store5) return void 0;
   const path12 = recordPath(root, character, name2, store5, key);
   try {
-    const info = await stat(path12);
-    if (!info.isFile()) return void 0;
-    return { path: path12, size: info.size, meta: record.meta };
+    const info2 = await stat(path12);
+    if (!info2.isFile()) return void 0;
+    return { path: path12, size: info2.size, meta: record.meta };
   } catch (error) {
     if (error.code === "ENOENT") return void 0;
     throw error;
@@ -32418,9 +35287,9 @@ function walkScriptNodes(nodes, scripts, includeDisabled) {
     const content = node["content"];
     if (typeof content !== "string" || content.trim() === "") continue;
     const fallback = `script-${scripts.length}`;
-    const id = nonEmptyString(node["id"]) ?? fallback;
-    const name2 = nonEmptyString(node["name"]) ?? fallback;
-    scripts.push({ id, name: name2, content, info: nonEmptyString(node["info"]) ?? "", enabled });
+    const id = nonEmptyString3(node["id"]) ?? fallback;
+    const name2 = nonEmptyString3(node["name"]) ?? fallback;
+    scripts.push({ id, name: name2, content, info: nonEmptyString3(node["info"]) ?? "", enabled });
   }
 }
 function cardScriptNodes(card) {
@@ -32428,11 +35297,11 @@ function cardScriptNodes(card) {
   return Array.isArray(helper?.["scripts"]) ? helper["scripts"] : [];
 }
 function cardWorldName(card) {
-  const linked = nonEmptyString(card.data.extensions["world"]);
+  const linked = nonEmptyString3(card.data.extensions["world"]);
   if (linked !== void 0) return linked;
-  return nonEmptyString(card.data.characterBook?.name) ?? null;
+  return nonEmptyString3(card.data.characterBook?.name) ?? null;
 }
-function nonEmptyString(value) {
+function nonEmptyString3(value) {
   return typeof value === "string" && value.trim() !== "" ? value.trim() : void 0;
 }
 function isPlainObject3(value) {
@@ -32870,7 +35739,7 @@ async function handleGamesApi(options) {
 }
 
 // packages/plugin/src/helper.ts
-import { randomUUID as randomUUID6 } from "node:crypto";
+import { randomUUID as randomUUID9 } from "node:crypto";
 
 // packages/plugin/src/frontend-target-policy.ts
 import { isIP } from "node:net";
@@ -33155,7 +36024,7 @@ var FrontendTargetBlockedError = class extends FrontendGenerationError {
 function asRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
 }
-function requireText(value, field, maxChars) {
+function requireText2(value, field, maxChars) {
   if (typeof value !== "string") throw new FrontendGenerationError(`${field} must be a string`);
   const text = value.trim();
   if (text === "") throw new FrontendGenerationError(`${field} must not be empty`);
@@ -33175,7 +36044,7 @@ function normalizeBaseUrl(url) {
 function parseApiTarget(value, requireModel) {
   const record = asRecord3(value);
   if (record === void 0) throw new FrontendGenerationError("custom_api must be an object");
-  const rawUrl = requireText(record.apiurl, "custom_api.apiurl", 2048);
+  const rawUrl = requireText2(record.apiurl, "custom_api.apiurl", 2048);
   let url;
   try {
     url = new URL(rawUrl);
@@ -33202,7 +36071,7 @@ function parseApiTarget(value, requireModel) {
   if (/[\r\n\u0000]/.test(key)) {
     throw new FrontendGenerationError("custom_api.key must not contain line breaks or NUL characters");
   }
-  const model = requireModel ? requireText(record.model, "custom_api.model", 256) : typeof record.model === "string" ? record.model.trim() : "";
+  const model = requireModel ? requireText2(record.model, "custom_api.model", 256) : typeof record.model === "string" ? record.model.trim() : "";
   return { baseUrl: normalizeBaseUrl(url), key, model };
 }
 function authHeaders(target) {
@@ -33699,7 +36568,7 @@ function ensureMetadataObject(metadata, key) {
 async function createGenerationTemplates(options) {
   const { chat, state, books, lore, card, preset, turnMessages, userName, characterName, chatId, model } = options;
   const warnings = [];
-  const warn = (message) => {
+  const warn3 = (message) => {
     warnings.push(message);
     options.onWarning?.(message);
   };
@@ -33781,14 +36650,14 @@ async function createGenerationTemplates(options) {
       global: state.scriptGlobals,
       initial: initialVars
     },
-    onWarning: warn
+    onWarning: warn3
   });
   host.renderNested = (source, extra) => runtime.renderText(source, extra);
   const renderText = async (text, where) => {
     try {
       return await runtime.renderText(text, void 0, where);
     } catch (err2) {
-      warn(`template render failed${where ? ` (${where})` : ""}: ${err2 instanceof Error ? err2.message : String(err2)} \u2014 keeping original text`);
+      warn3(`template render failed${where ? ` (${where})` : ""}: ${err2 instanceof Error ? err2.message : String(err2)} \u2014 keeping original text`);
       return text;
     }
   };
@@ -34597,7 +37466,7 @@ function asTimedEffectsState(value) {
 }
 
 // packages/plugin/src/helper-bindings.ts
-import { randomUUID as randomUUID5 } from "node:crypto";
+import { randomUUID as randomUUID8 } from "node:crypto";
 var HELPER_TOKEN_HEADER = "x-dsh-helper-token";
 var HELPER_BINDING_TTL_MS = 30 * 60 * 1e3;
 var bindings = /* @__PURE__ */ new Map();
@@ -34609,7 +37478,7 @@ function pruneExpired(now) {
 function createHelperBinding(character, chatId) {
   const now = Date.now();
   pruneExpired(now);
-  const token = randomUUID5();
+  const token = randomUUID8();
   bindings.set(token, { character, chatId, createdAt: now });
   return token;
 }
@@ -35596,9 +38465,9 @@ async function rotateMessages(db, character, chatId, body) {
     const snapshot2 = await requireChat(db, character, chatId);
     const chat = snapshot2.chat;
     const total = chat.messages.length;
-    const begin = requireIndex(body?.begin, "begin", total);
-    const middle = requireIndex(body?.middle, "middle", total);
-    const end = requireIndex(body?.end, "end", total);
+    const begin = requireIndex3(body?.begin, "begin", total);
+    const middle = requireIndex3(body?.middle, "middle", total);
+    const end = requireIndex3(body?.end, "end", total);
     if (!(begin <= middle && middle <= end)) {
       throw new Error(`rotateChatMessages requires begin <= middle <= end (got ${begin}, ${middle}, ${end})`);
     }
@@ -35611,7 +38480,7 @@ async function rotateMessages(db, character, chatId, body) {
     return { revision, messageCount: chat.messages.length, lastMessageId: chat.messages.length - 1 };
   }));
 }
-function requireIndex(value, label, total) {
+function requireIndex3(value, label, total) {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > total) {
     throw new Error(`${label} must be an integer in [0, ${total}] (got ${String(value)})`);
   }
@@ -35662,7 +38531,7 @@ async function resetSessionRegexScripts(db, character, chatId, type) {
 function generationIdOf(config) {
   const record = isPlainObject4(config) ? config : {};
   const value = record["generation_id"];
-  return typeof value === "string" && value.trim() !== "" ? value.trim() : randomUUID6();
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : randomUUID9();
 }
 function requireScriptTrees(value) {
   if (!Array.isArray(value)) throw new Error("scriptTrees must be an array of card script nodes");
@@ -35723,13 +38592,13 @@ async function putChatScripts(db, state, character, chatId, body) {
 async function patchScriptNode(db, character, chatId, body) {
   requireSessionChatId(chatId, "scripts.patch");
   const scriptId = requireString2(body?.scriptId, "scriptId");
-  const info = body?.info === void 0 ? void 0 : String(body.info);
+  const info2 = body?.info === void 0 ? void 0 : String(body.info);
   const buttons = body?.buttons === void 0 ? void 0 : requireScriptButtons(body.buttons);
   return serializeSessionWrite(`scripts:${character}\0${chatId}`, async () => {
     const overlay = await db.getChatJsrOverlay(character, chatId);
     const current = overlay?.trees !== void 0 ? overlay.trees.character ?? [] : overlay?.scriptTrees ?? [];
     const patched = patchNodeById(requireScriptTreeArray(current, "trees.character"), scriptId, (node) => {
-      if (info !== void 0) node["info"] = info;
+      if (info2 !== void 0) node["info"] = info2;
       if (buttons !== void 0) {
         node["button"] = { ...plainObject5(node["button"]) ?? {}, enabled: true, buttons };
       }
@@ -35910,8 +38779,8 @@ function toJsrSwiped(message, index) {
     swipe_id: typeof message.swipe_id === "number" ? message.swipe_id : 0,
     swipes,
     swipes_data: swipes.map((_, swipeIndex) => {
-      const info = plainObject5(swipeInfo[swipeIndex]);
-      return cloneJson(plainObject5(info?.["extra"]) ?? {});
+      const info2 = plainObject5(swipeInfo[swipeIndex]);
+      return cloneJson(plainObject5(info2?.["extra"]) ?? {});
     }),
     swipes_info: cloneJson(swipeInfo)
   };
@@ -36179,7 +39048,7 @@ async function prepareWorkbenchWorkspace() {
 import { resolve as resolve5 } from "node:path";
 
 // packages/plugin/src/memory-maintenance.ts
-import { randomUUID as randomUUID7 } from "node:crypto";
+import { randomUUID as randomUUID10 } from "node:crypto";
 var MAINTENANCE_MAX_LLM_REQUESTS = 24;
 var MAINTENANCE_OPENING_MAX_CHARS = 1e5;
 var MAINTENANCE_PAGE_RECORDS = 32;
@@ -36207,7 +39076,7 @@ async function startMemoryMaintenance(ctx, deps, scope) {
   const existing = activeRuns.get(key);
   if (existing !== void 0) throw new MaintenanceRunConflictError(scope.character, scope.chatId, existing.runId);
   const active = {
-    runId: randomUUID7(),
+    runId: randomUUID10(),
     character: scope.character,
     chatId: scope.chatId,
     startedAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -36408,21 +39277,21 @@ async function executeRun(ctx, deps, scope, active) {
       opening = buildOpeningMessage(run, listing);
     }
     const messages = [
-      { role: "user", id: randomUUID7(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
+      { role: "user", id: randomUUID10(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
     ];
     let outcome = "completed";
-    let errorMessage3;
+    let errorMessage6;
     let report;
     for (; ; ) {
       if (run.llmRequests >= run.budget) {
         outcome = "budget-exhausted";
-        errorMessage3 = `reached the run budget of ${run.budget} LLM requests; completed work is kept, unreported ranges stay pending`;
+        errorMessage6 = `reached the run budget of ${run.budget} LLM requests; completed work is kept, unreported ranges stay pending`;
         break;
       }
       const conversationChars = messages.reduce((total, message) => total + JSON.stringify(message.content).length, 0);
       if (conversationChars > MAINTENANCE_CONVERSATION_MAX_CHARS) {
         outcome = "budget-exhausted";
-        errorMessage3 = "maintenance conversation exceeded the run context guard; completed work is kept";
+        errorMessage6 = "maintenance conversation exceeded the run context guard; completed work is kept";
         break;
       }
       run.llmRequests += 1;
@@ -36448,38 +39317,38 @@ async function executeRun(ctx, deps, scope, active) {
         }
       } catch (error) {
         outcome = "error";
-        errorMessage3 = `LLM request failed: ${error instanceof Error ? error.message : String(error)}`;
+        errorMessage6 = `LLM request failed: ${error instanceof Error ? error.message : String(error)}`;
         break;
       }
       if (finishReason === void 0) {
         outcome = "error";
-        errorMessage3 = "LLM stream ended without a finish chunk";
+        errorMessage6 = "LLM stream ended without a finish chunk";
         break;
       }
       if (finishReason.kind === "error" || finishReason.kind === "aborted") {
         outcome = "error";
-        errorMessage3 = `LLM stream failed (${finishReason.kind}): ${finishReason.failure?.message ?? "unknown failure"}`;
+        errorMessage6 = `LLM stream failed (${finishReason.kind}): ${finishReason.failure?.message ?? "unknown failure"}`;
         break;
       }
       if (!blocks.some((block) => block.type === "text") && textBuffer !== "") {
         blocks.push({ type: "text", text: textBuffer });
       }
       const toolCalls = blocks.filter((block) => block.type === "tool-call");
-      messages.push({ role: "assistant", id: randomUUID7(), content: blocks, source: { kind: "model", provider: run.provider, model: run.model } });
+      messages.push({ role: "assistant", id: randomUUID10(), content: blocks, source: { kind: "model", provider: run.provider, model: run.model } });
       if (toolCalls.length === 0) {
         report = textBuffer !== "" ? textBuffer : blocks.filter((block) => block.type === "text").map((block) => String(block.text ?? "")).join("");
         break;
       }
       if (finishReason.kind === "max-tokens") {
         outcome = "error";
-        errorMessage3 = "maintenance response truncated at the token cap";
+        errorMessage6 = "maintenance response truncated at the token cap";
         break;
       }
       for (const call of toolCalls) {
         const result = await executeToolCall(run, call);
         messages.push({
           role: "tool",
-          id: randomUUID7(),
+          id: randomUUID10(),
           content: [{ type: "text", text: safeJson(result.payload) }],
           source: { kind: "tool", callId: call.id },
           toolCallId: call.id,
@@ -36488,10 +39357,10 @@ async function executeRun(ctx, deps, scope, active) {
       }
     }
     if (outcome === "error") {
-      await finish("error", outcome, errorMessage3);
+      await finish("error", outcome, errorMessage6);
       return;
     }
-    const closing = report !== void 0 ? report.slice(0, 2e3) : errorMessage3;
+    const closing = report !== void 0 ? report.slice(0, 2e3) : errorMessage6;
     await finish("done", outcome, closing);
   } finally {
     activeRuns.delete(key);
@@ -36782,8 +39651,8 @@ function parseEdits(value) {
         expectedRevision: record.expectedRevision,
         ...record.content === void 0 ? {} : { content: record.content },
         ...record.tags === void 0 ? {} : { tags: record.tags },
-        ...record.importance === void 0 ? {} : { importance: Math.max(0, Math.min(1, numberField(record.importance, "importance"))) },
-        ...record.confidence === void 0 ? {} : { confidence: Math.max(0, Math.min(1, numberField(record.confidence, "confidence"))) },
+        ...record.importance === void 0 ? {} : { importance: Math.max(0, Math.min(1, numberField4(record.importance, "importance"))) },
+        ...record.confidence === void 0 ? {} : { confidence: Math.max(0, Math.min(1, numberField4(record.confidence, "confidence"))) },
         ...record.reason === "merge" ? { reason: "merge" } : {}
       });
       return;
@@ -36803,8 +39672,8 @@ function parseEdits(value) {
         content: record.content,
         kind: record.kind,
         ...record.tags === void 0 ? {} : { tags: record.tags },
-        ...record.importance === void 0 ? {} : { importance: Math.max(0, Math.min(1, numberField(record.importance, "importance"))) },
-        ...record.confidence === void 0 ? {} : { confidence: Math.max(0, Math.min(1, numberField(record.confidence, "confidence"))) }
+        ...record.importance === void 0 ? {} : { importance: Math.max(0, Math.min(1, numberField4(record.importance, "importance"))) },
+        ...record.confidence === void 0 ? {} : { confidence: Math.max(0, Math.min(1, numberField4(record.confidence, "confidence"))) }
       });
       return;
     }
@@ -37011,7 +39880,7 @@ async function toolCompleteMaintenance(run, args) {
   run.summary.completion = { baseFloor: base, headFloor: head };
   return { payload: { ok: true, baseFloor: base, headFloor: head, coveredRecords: records.length }, isError: false };
 }
-function numberField(value, label) {
+function numberField4(value, label) {
   if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${label} must be a finite number`);
   return value;
 }
@@ -40026,6 +42895,9 @@ async function handleApi(ctx, req, res) {
       variables: [...variableGroups.flat(), ...globalVariables]
     });
   }
+  if (method === "GET" && route === "body" || method === "PUT" && route === "body" || method === "POST" && (route === "body/regenerate" || route === "body/select")) {
+    return handleAgentTavernBodyApi(ctx, db, req, res, url, route, method);
+  }
   if (route === "novels" || route.startsWith("novels/")) {
     return handleNovelsApi(ctx, req, res, url, route, method);
   }
@@ -40926,6 +43798,179 @@ async function handleApi(ctx, req, res) {
   }
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
 }
+async function handleAgentTavernBodyApi(ctx, db, req, res, url, route, method) {
+  const wiring = bodyWiringContext(ctx, async (sessionId2) => (await db.getState()).sessionBindings[sessionId2]);
+  if (method === "GET") {
+    const sessionId2 = url.searchParams.get("sessionId");
+    const messageId = url.searchParams.get("messageId");
+    if (sessionId2 === null || sessionId2 === "" || messageId === null || messageId === "") {
+      throw new HttpError(400, "sessionId and messageId are required");
+    }
+    const state = await db.getState();
+    const binding2 = state.sessionBindings[sessionId2];
+    let characterName2;
+    let chatId2;
+    let character2 = void 0;
+    let chat;
+    if (binding2 !== void 0 && bodyBindingEligible(binding2)) {
+      characterName2 = binding2.character;
+      chatId2 = binding2.chatId;
+      character2 = await db.getCharacter(binding2.character);
+      chat = (await db.getChatSnapshot(binding2.character, binding2.chatId))?.chat;
+    }
+    const stateSafety2 = binding2 === void 0 || !bodyBindingEligible(binding2) ? void 0 : chat === void 0 ? { safe: false, reason: "body-state-unsafe", detail: "chat-unreadable" } : bodyStateSafetyOf(character2, chat);
+    const agent2 = resolveLiveAgent(wiring, sessionId2);
+    const deps2 = agent2 === void 0 ? void 0 : await createBodyDeps(wiring, agent2);
+    const projected = characterName2 !== void 0 && chatId2 !== void 0 && chat !== void 0 ? await projectedBodyFloor(db, state, characterName2, chatId2, chat, character2, messageId) : void 0;
+    let ledger = void 0;
+    let messageText4 = void 0;
+    let inspection = void 0;
+    const session = agent2?.session;
+    if (session !== void 0) {
+      const facts = readBodySessionFacts(session, messageId, projected?.groupId);
+      ledger = facts.ledger;
+      messageText4 = facts.messageText;
+      inspection = facts.inspection;
+      if (facts.ledgerError !== void 0) {
+        ctx.logger?.warn?.("dsh-soulmojito body: ledger fold failed for GET body", {
+          sessionId: sessionId2,
+          messageId,
+          error: facts.ledgerError
+        });
+      }
+    }
+    return sendJson(res, 200, buildBodyView({
+      messageId,
+      binding: binding2,
+      agent: agent2,
+      hostSupported: deps2 !== void 0,
+      stateSafety: stateSafety2,
+      ledger,
+      messageText: messageText4,
+      projected,
+      inspection
+    }));
+  }
+  const body = await readJson(req);
+  const sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
+  if (sessionId === "") {
+    return sendBodyFailure(res, { status: 400, code: "invalid-body-text", message: "sessionId is required" });
+  }
+  const binding = await resolveBodyBinding(wiring, sessionId);
+  if (binding === void 0 || !bodyBindingEligible(binding)) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: "architecture-mismatch",
+      message: "body operations require an AgentTavern single-character binding"
+    });
+  }
+  const characterName = binding.character;
+  const chatId = binding.chatId;
+  if (characterName === void 0 || chatId === void 0) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: "body-state-unsafe",
+      message: bodyStateUnsafeMessage("chat-unreadable"),
+      detail: "chat-unreadable"
+    });
+  }
+  const character = await db.getCharacter(characterName);
+  const snapshot2 = await db.getChatSnapshot(characterName, chatId);
+  const stateSafety = snapshot2 === void 0 ? { safe: false, reason: "body-state-unsafe", detail: "chat-unreadable" } : bodyStateSafetyOf(character, snapshot2.chat);
+  if (!stateSafety.safe) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: stateSafety.reason,
+      message: bodyStateUnsafeMessage(stateSafety.detail),
+      detail: stateSafety.detail
+    });
+  }
+  const agent = resolveLiveAgent(wiring, sessionId);
+  if (agent === void 0) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: "session-busy",
+      message: `session '${sessionId}' has no live agent in this host process; open the chat and retry`
+    });
+  }
+  const deps = await createBodyDeps(wiring, agent);
+  if (deps === void 0) {
+    return sendBodyFailure(res, {
+      status: 501,
+      code: "host-unsupported",
+      message: "this host does not expose appendPluginRecord/pluginRecordOf (DSH 0.2.1-rc.2+)"
+    });
+  }
+  try {
+    const groupId = bodyString(body, "groupId") ?? bodyString(body, "messageId");
+    if (groupId === void 0) throw bodyRuntimeError("invalid-arguments", "groupId or messageId is required");
+    const expectedAnchorId = bodyString(body, "expectedAnchorId") ?? groupId;
+    if (route === "body") {
+      const index2 = bodyIndex(body, "index");
+      if (typeof body.text !== "string") {
+        throw bodyRuntimeError("invalid-body-text", "body edit requires a string text");
+      }
+      const state2 = await applyBodyEdit(deps, { groupId, index: index2, text: body.text, expectedAnchorId });
+      return sendJson(res, 200, { ok: true, state: state2 });
+    }
+    if (route === "body/regenerate") {
+      const expectedIndex = bodyIndex(body, "expectedIndex");
+      const feedback = typeof body.feedback === "string" ? body.feedback : void 0;
+      const result = await startRegenerate(deps, {
+        groupId,
+        expectedAnchorId,
+        expectedIndex,
+        ...feedback === void 0 ? {} : { feedback }
+      });
+      return sendJson(res, 202, { ok: true, opId: result.opId, status: "pending" });
+    }
+    const index = bodyIndex(body, "index");
+    const state = await selectBodyCandidate(deps, { groupId, index, expectedAnchorId });
+    return sendJson(res, 200, { ok: true, state });
+  } catch (error) {
+    return sendBodyFailure(res, bodyFailureOf(error));
+  }
+}
+function sendBodyFailure(res, failure) {
+  sendJson(res, failure.status, {
+    ok: false,
+    code: failure.code,
+    message: failure.message,
+    ...failure.detail === void 0 ? {} : { detail: failure.detail }
+  });
+}
+function bodyString(body, field) {
+  const value = body[field];
+  return typeof value === "string" && value.trim() !== "" ? value : void 0;
+}
+function bodyIndex(body, field) {
+  const value = body[field];
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw bodyRuntimeError("invalid-arguments", `${field} must be a non-negative safe integer`);
+  }
+  return value;
+}
+async function projectedBodyFloor(db, state, characterName, chatId, chat, card, messageId) {
+  const index = chat.messages.findIndex((message) => {
+    const tavern2 = asRecord5(asRecord5(message.extra)?.["agentTavern"]);
+    if (tavern2 === void 0) return false;
+    return tavern2["messageId"] === messageId || tavern2["anchorMessageId"] === messageId || tavern2["bodyGroupId"] === messageId;
+  });
+  if (index < 0) return void 0;
+  const floor = chat.messages[index];
+  const tavern = asRecord5(asRecord5(floor.extra)?.["agentTavern"]);
+  const scripts = await collectSessionRegexScripts(db, state, characterName, chatId, card);
+  const text = stripFrontendDocuments(displayTextForMessage(scripts, floor, chat.messages.length - 1 - index));
+  const selectedIndex = floor.swipe_id;
+  const count = Array.isArray(floor.swipes) && floor.swipes.length > 0 ? floor.swipes.length : 1;
+  return {
+    ...typeof tavern?.["bodyGroupId"] === "string" ? { groupId: tavern["bodyGroupId"] } : {},
+    ...typeof tavern?.["anchorMessageId"] === "string" ? { anchorMessageId: tavern["anchorMessageId"] } : {},
+    ...typeof selectedIndex === "number" && Number.isSafeInteger(selectedIndex) ? { selectedIndex } : {},
+    count,
+    text
+  };
+}
 function asRecord5(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
 }
@@ -41101,9 +44146,13 @@ function isJsonContentType(value) {
 
 // packages/plugin/src/index.ts
 var name = "dsh-soulmojito";
-var inject = ["llm", "agentDefaultModel", "webServer", "systemPrompt", "commands", "agents", "agentPresets", "tools", "compaction"];
+var inject = ["llm", "agentDefaultModel", "webServer", "systemPrompt", "commands", "agents", "agentPresets", "tools", "compaction", "sessions"];
 function apply(ctx, config = {}) {
   const allowedHosts = normalizeAllowedHosts(config.allowedHosts);
+  const bodyWiring = bodyWiringContext(ctx, async (sessionId) => (await (await store3()).getState()).sessionBindings[sessionId]);
+  registerBodyProjection(bodyWiring);
+  registerBodyTurnStopping(bodyWiring);
+  void recoverBodyOperations(bodyWiring).catch((error) => ctx.logger?.warn?.(`dsh-soulmojito body: startup recovery failed: ${error instanceof Error ? error.message : String(error)}`));
   registerAgentTavernAnchor(ctx, { everyTurns: config.anchorEveryTurns });
   registerAgentTavernCardState(ctx);
   registerAgentTavernPromptCapture(ctx);
@@ -41168,6 +44217,11 @@ function apply(ctx, config = {}) {
     const session = agent.session;
     if (session !== void 0) {
       void getAgentTavernProjectorPromise().then((projector) => projector.replay(session)).catch((error) => ctx.logger?.warn?.(`AgentTavern projection replay failed: ${error instanceof Error ? error.message : String(error)}`));
+    }
+    try {
+      await recoverBodyOperation(bodyWiring, agent);
+    } catch (error) {
+      ctx.logger?.warn?.(`dsh-soulmojito body: agent recovery failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   });
   void refreshActivePrompt();

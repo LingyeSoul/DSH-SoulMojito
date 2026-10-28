@@ -3360,6 +3360,21 @@ window.__ModuleLoader__.load({
       'novel.optimize.revisions': 'Body revisions',
       'novel.optimize.applied': 'Applied: {chapter} ({characters} characters)',
       'novel.optimize.missingInstruction': 'Enter a revision instruction.',
+      // AgentTavern body operations (proposal 0021 §7).
+      'body.edit': 'Edit reply',
+      'body.editTitle': 'Edit reply text',
+      'body.regenerate': 'Regenerate',
+      'body.feedback': 'Regeneration note (optional)',
+      'body.feedbackHint': 'Optional guidance for the new reply.',
+      'body.swipe': 'Candidate {index} of {count}',
+      'body.saving': 'Saving…',
+      'body.generating': 'Regenerating…',
+      'body.failed': 'Body operation failed: {message}',
+      'body.busy': 'The session is busy; wait for the current turn to finish.',
+      'body.compacted': 'This reply was compacted out of the surface and can no longer be changed.',
+      'body.notLast': 'Only the latest reply can be edited.',
+      'body.empty': 'Reply text cannot be empty.',
+      'body.invalid': 'Reply text is empty or too long.',
     }
     const MESSAGES_ZH = {
       'settings.subtitle': '角色卡、世界书与预设管理',
@@ -4266,6 +4281,21 @@ window.__ModuleLoader__.load({
       'novel.optimize.revisions': '正文优化版本',
       'novel.optimize.applied': '已应用：{chapter}（{characters} 字）',
       'novel.optimize.missingInstruction': '请填写优化要求。',
+      // AgentTavern body operations (proposal 0021 §7).
+      'body.edit': '编辑正文',
+      'body.editTitle': '编辑正文',
+      'body.regenerate': '重新生成',
+      'body.feedback': '重生成意见（可选）',
+      'body.feedbackHint': '可选：告诉模型这次想要什么变化。',
+      'body.swipe': '候选 {index}/{count}',
+      'body.saving': '保存中…',
+      'body.generating': '重新生成中…',
+      'body.failed': '正文操作失败：{message}',
+      'body.busy': '会话正忙，请等当前回合结束。',
+      'body.compacted': '该正文已被压缩移出上下文，不能再修改。',
+      'body.notLast': '只能修改最后一组正文。',
+      'body.empty': '正文不能为空。',
+      'body.invalid': '正文为空或超过长度上限。',
     }
     // translate follows the host locale service once apply() binds it; the
     // identity fallback mirrors LocaleRuntime.translate (missing key -> key,
@@ -10732,6 +10762,9 @@ window.__ModuleLoader__.load({
       useAssistantSlotVersion()
       const state = useTavernStore()
       const binding = state.bootstrap.state.sessionBindings?.[props.tavernSessionId]
+      const tavernBinding = binding && binding.architecture === 'agent-tavern' && binding.group !== true
+        ? binding
+        : undefined
       const blocks = props.node?.data?.blocks || []
       // The projector only stores message-less tool steps as nothing; asking
       // for them would burn retries on a lookup that can never resolve.
@@ -10739,13 +10772,18 @@ window.__ModuleLoader__.load({
         || !blocks.some((block) => block?.kind === 'text')
         ? undefined
         : props.node?.data?.finalNode?.messageId
-      const displayText = useTavernDisplayText(
-        binding && binding.architecture === 'agent-tavern' && binding.group !== true ? binding : undefined,
-        messageId,
-      )
-      const node = withTavernDisplayText(props.node, displayText)
+      const displayText = useTavernDisplayText(tavernBinding, messageId)
+      // The body ledger knows which old candidates are shadowed and which text
+      // is the current anchor. Display lookup stays in parallel as the fallback
+      // while the body route is unavailable or the row is not projected yet.
+      const bodyState = useTavernBody(tavernBinding ? props.tavernSessionId : undefined, messageId)
       const hostEntry = findHostAssistantEntry(PanelHost.context)
       const usePresentation = useTavernPresentation(hostEntry)
+      if (bodyState.body?.hidden === true) return null
+      const bodyText = bodyState.body && typeof bodyState.body.text === 'string'
+        ? bodyState.body.text
+        : undefined
+      const node = withTavernDisplayText(props.node, bodyText !== undefined ? bodyText : displayText)
       if (!hostEntry) return h(TavernAssistantFallback, { node })
       return h(hostEntry.component, {
         ...props,
@@ -10762,8 +10800,48 @@ window.__ModuleLoader__.load({
       return entries.find((entry) => entry?.options?.key === 'assistant-step' && entry.component !== TavernAssistantNode)
     }
 
+    function nodeSourceForm(node) {
+      const source = node?.data?.source
+      if (source && typeof source === 'object' && typeof source.form === 'string') return source.form
+      return typeof node?.data?.form === 'string' ? node.data.form : ''
+    }
+
+    const TavernTurnTriggerNode = React.memo(function TavernTurnTriggerNode(props) {
+      const form = nodeSourceForm(props.node)
+      if (form === 'body-regenerate' || form === 'body-restore') return null
+      const hostEntry = findHostTurnTriggerEntry(PanelHost.context)
+      if (!hostEntry) return null
+      return h(hostEntry.component, props)
+    })
+
+    function findHostTurnTriggerEntry(ctx) {
+      const entries = typeof ctx?.slots?.entries === 'function'
+        ? ctx.slots.entries('conversation.chat.node')
+        : []
+      return entries.find((entry) => entry?.options?.key === 'turn-trigger' && entry.component !== TavernTurnTriggerNode)
+    }
+
+    // Empty developer replacements written by the body runtime only exist to
+    // shadow old candidates; the host renders them as generic "context" rows.
+    // Hide exactly the body-hide form (and the two trigger forms when they
+    // surface as context) and delegate every other context row to the host.
+    const TavernContextNode = React.memo(function TavernContextNode(props) {
+      const form = nodeSourceForm(props.node)
+      if (form === 'body-hide' || form === 'body-regenerate' || form === 'body-restore') return null
+      const hostEntry = findHostContextEntry(PanelHost.context)
+      if (!hostEntry) return null
+      return h(hostEntry.component, props)
+    })
+
+    function findHostContextEntry(ctx) {
+      const entries = typeof ctx?.slots?.entries === 'function'
+        ? ctx.slots.entries('conversation.chat.node')
+        : []
+      return entries.find((entry) => entry?.options?.key === 'context' && entry.component !== TavernContextNode)
+    }
+
     function registerTavernAssistantNode(ctx) {
-      return ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
+      const disposeAssistant = ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
         name: 'conversation.chat.node',
         key: 'assistant-step',
         // Lower priority wins a keyed cell; the host default is priority 0.
@@ -10771,6 +10849,372 @@ window.__ModuleLoader__.load({
         locale: 'chat',
         inject: (sessionId) => ({ tavernSessionId: sessionId }),
       }, TavernAssistantNode))
+      const disposeTrigger = ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
+        name: 'conversation.chat.node',
+        key: 'turn-trigger',
+        priority: -1,
+        locale: 'chat',
+      }, TavernTurnTriggerNode))
+      const disposeContext = ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
+        name: 'conversation.chat.node',
+        key: 'context',
+        priority: -1,
+        locale: 'chat',
+      }, TavernContextNode))
+      const disposeActions = registerTavernBodyActions(ctx)
+      return () => {
+        for (const dispose of [disposeActions, disposeContext, disposeTrigger, disposeAssistant]) {
+          if (typeof dispose === 'function') dispose()
+        }
+      }
+    }
+
+    // AgentTavern body operations (proposal 0021 §7): cached GET lookups and
+    // the assistant-actions entry for edit / regenerate / candidate switching.
+    // The server owns the ledger; this layer only asks per message and drops
+    // its cache after a successful mutation so the anchor row refetches.
+    const BODY_CACHE_LIMIT = 400
+    const bodyCache = new Map()
+    const bodyInflight = new Map()
+    const bodyLocalRevisions = new Map()
+    const bodyCacheListeners = new Set()
+    let bodyCacheVersion = 0
+
+    function tavernBodyLocalKey(sessionId, messageId) {
+      return `${sessionId}\u0000${messageId}`
+    }
+
+    function tavernBodyLocalRevision(sessionId, messageId) {
+      return bodyLocalRevisions.get(tavernBodyLocalKey(sessionId, messageId)) || 0
+    }
+
+    function tavernBodyCacheKey(sessionId, messageId, revision) {
+      return `${revision}\u0000${tavernBodyLocalRevision(sessionId, messageId)}\u0000${sessionId}\u0000${messageId}`
+    }
+
+    function tavernBodyCacheSnapshot() {
+      return bodyCacheVersion
+    }
+
+    function subscribeTavernBodyCache(listener) {
+      bodyCacheListeners.add(listener)
+      return () => { bodyCacheListeners.delete(listener) }
+    }
+
+    function cacheTavernBody(key, body) {
+      if (!bodyCache.has(key) && bodyCache.size >= BODY_CACHE_LIMIT) {
+        const first = bodyCache.keys().next().value
+        if (first !== undefined) bodyCache.delete(first)
+      }
+      bodyCache.set(key, body)
+    }
+
+    // A successful mutation must not be masked by a response that left the
+    // server before it. Bump a per-message local revision, drop every cached
+    // entry for that message and notify every mounted body hook.
+    function bumpTavernBodyRevision(sessionId, messageId) {
+      if (typeof sessionId !== 'string' || typeof messageId !== 'string') return
+      const localKey = tavernBodyLocalKey(sessionId, messageId)
+      bodyLocalRevisions.set(localKey, (bodyLocalRevisions.get(localKey) || 0) + 1)
+      const suffix = `\u0000${sessionId}\u0000${messageId}`
+      for (const key of [...bodyCache.keys()]) {
+        if (key.endsWith(suffix)) bodyCache.delete(key)
+      }
+      bodyCacheVersion += 1
+      for (const listener of bodyCacheListeners) listener()
+    }
+
+    function loadTavernBody(sessionId, messageId, revision) {
+      const localRevision = tavernBodyLocalRevision(sessionId, messageId)
+      const key = tavernBodyCacheKey(sessionId, messageId, revision)
+      if (bodyCache.has(key)) return Promise.resolve(bodyCache.get(key))
+      if (bodyInflight.has(key)) return bodyInflight.get(key)
+      const pending = api(`body?sessionId=${encodeURIComponent(sessionId)}&messageId=${encodeURIComponent(messageId)}`)
+        .then((result) => {
+          if (tavernBodyLocalRevision(sessionId, messageId) === localRevision) cacheTavernBody(key, result)
+          return result
+        })
+        .finally(() => bodyInflight.delete(key))
+      bodyInflight.set(key, pending)
+      return pending
+    }
+
+    function useTavernBody(sessionId, messageId) {
+      const state = useTavernStore()
+      const revision = state.bootstrap.storeRevision || ''
+      const cacheVersion = useSyncExternalStore(subscribeTavernBodyCache, tavernBodyCacheSnapshot, tavernBodyCacheSnapshot)
+      const [result, setResult] = useState({ body: undefined, error: '', loading: false })
+      useEffect(() => {
+        if (typeof sessionId !== 'string' || sessionId === '' || typeof messageId !== 'string' || messageId === '') {
+          setResult({ body: undefined, error: '', loading: false })
+          return undefined
+        }
+        let cancelled = false
+        setResult((current) => ({ body: current.body, error: '', loading: true }))
+        void loadTavernBody(sessionId, messageId, revision)
+          .then((body) => {
+            if (!cancelled) setResult({ body, error: '', loading: false })
+          })
+          .catch((cause) => {
+            if (cancelled) return
+            setResult((current) => ({
+              body: current.body,
+              error: cause instanceof Error ? cause.message : String(cause),
+              loading: false,
+            }))
+          })
+        return () => { cancelled = true }
+      }, [sessionId, messageId, revision, cacheVersion])
+      return result
+    }
+
+    function tavernBodyReasonText(t, reason) {
+      if (reason === 'session-busy') return t('body.busy')
+      if (reason === 'body-compacted') return t('body.compacted')
+      if (reason === 'not-last-round') return t('body.notLast')
+      return typeof reason === 'string' ? reason : ''
+    }
+
+    function tavernBodyErrorText(t, cause) {
+      const code = cause && typeof cause === 'object' && typeof cause.code === 'string' ? cause.code : ''
+      if (code === 'session-busy') return t('body.busy')
+      if (code === 'body-compacted') return t('body.compacted')
+      if (code === 'not-last-round') return t('body.notLast')
+      if (code === 'invalid-body-text') return t('body.invalid')
+      const message = cause instanceof Error ? cause.message : String(cause)
+      return t('body.failed', { message })
+    }
+
+    function TavernBodyActions(props) {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const sessionId = typeof props.tavernSessionId === 'string' ? props.tavernSessionId : props.sessionId
+      const messageId = typeof props.messageId === 'string' ? props.messageId : undefined
+      const binding = typeof sessionId === 'string' ? state.bootstrap.state.sessionBindings?.[sessionId] : undefined
+      const bodyResult = useTavernBody(sessionId, messageId)
+      const [editorOpen, setEditorOpen] = useState(false)
+      const [draft, setDraft] = useState('')
+      const [feedbackOpen, setFeedbackOpen] = useState(false)
+      const [feedback, setFeedback] = useState('')
+      const [pending, setPending] = useState('')
+      const [watching, setWatching] = useState(null)
+      const [error, setError] = useState('')
+      const body = bodyResult.body
+
+      // Regeneration returns 202 before the turn settles. Keep polling the
+      // per-message body until a candidate is added or the wait expires, so
+      // the action row does not unlock while the model is still writing.
+      useEffect(() => {
+        if (watching === null) return undefined
+        const timer = setInterval(() => {
+          if (Date.now() >= watching.deadline) {
+            setWatching(null)
+            return
+          }
+          bumpTavernBodyRevision(sessionId, messageId)
+        }, 1500)
+        return () => clearInterval(timer)
+      }, [watching, sessionId, messageId])
+
+      useEffect(() => {
+        if (watching === null || body === undefined) return
+        if (body.count !== watching.count || body.selectedIndex !== watching.selectedIndex) setWatching(null)
+      }, [watching, body?.count, body?.selectedIndex])
+
+      const agentTavern = binding !== undefined && binding.architecture === 'agent-tavern' && binding.group !== true
+      if (!agentTavern || typeof sessionId !== 'string' || typeof messageId !== 'string' || body === undefined || body.hidden === true) return null
+
+      const count = typeof body.count === 'number' && Number.isInteger(body.count) && body.count > 0 ? body.count : 0
+      const selectedIndex = typeof body.selectedIndex === 'number' && Number.isInteger(body.selectedIndex) ? body.selectedIndex : 0
+      const canEdit = body.canEdit === true
+      const canRegenerate = body.canRegenerate === true
+      const canSelect = body.canSelect === true
+      const busy = pending !== '' || watching !== null || bodyResult.loading
+      const expectedIndex = selectedIndex
+      const expectedAnchorId = typeof body.anchorMessageId === 'string' ? body.anchorMessageId : messageId
+      const selectedLabel = count > 0 ? `${Math.min(selectedIndex + 1, count)}/${count}` : '0/0'
+      const swipeLabel = t('body.swipe', { index: selectedIndex + 1, count })
+      const reasonText = tavernBodyReasonText(t, body.reason)
+
+      const runBodyAction = (kind, request, onDone) => {
+        if (busy) return
+        setPending(kind)
+        setError('')
+        void request()
+          .then((result) => {
+            if (result && typeof result.revision === 'string') {
+              syncChatRevision(binding.character, binding.chatId, result.revision)
+            }
+            bumpTavernBodyRevision(sessionId, messageId)
+            if (onDone) onDone(result)
+          })
+          .catch((cause) => setError(tavernBodyErrorText(t, cause)))
+          .finally(() => setPending(''))
+      }
+
+      const closeEditor = () => { if (pending !== 'edit') setEditorOpen(false) }
+      const openEditor = () => {
+        setDraft(typeof body.text === 'string' ? body.text : '')
+        setError('')
+        setEditorOpen(true)
+      }
+      const saveEdit = () => {
+        if (draft.trim() === '') { setError(t('body.empty')); return }
+        if (busy) return
+        runBodyAction('edit', () => api('body', {
+          method: 'PUT',
+          headers: jsonHeaders(),
+          body: JSON.stringify({
+            sessionId,
+            messageId,
+            groupId: body.groupId,
+            index: expectedIndex,
+            text: draft,
+            expectedAnchorId,
+            expectedIndex,
+          }),
+        }), () => setEditorOpen(false))
+      }
+
+      const closeRegenerate = () => { if (pending !== 'regenerate') setFeedbackOpen(false) }
+      const openRegenerate = () => {
+        setFeedback('')
+        setError('')
+        setFeedbackOpen(true)
+      }
+      const submitRegenerate = () => {
+        if (busy) return
+        const trimmed = feedback.trim()
+        runBodyAction('regenerate', () => api('body/regenerate', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({
+            sessionId,
+            messageId,
+            groupId: body.groupId,
+            ...(trimmed === '' ? {} : { feedback: trimmed }),
+            expectedAnchorId,
+            expectedIndex,
+          }),
+        }), () => {
+          setFeedbackOpen(false)
+          setWatching({ count, selectedIndex, deadline: Date.now() + 90000 })
+        })
+      }
+
+      const selectCandidate = (index) => {
+        if (!canSelect || busy || index < 0 || index >= count || index === selectedIndex) return
+        runBodyAction('select', () => api('body/select', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({
+            sessionId,
+            messageId,
+            groupId: body.groupId,
+            index,
+            expectedAnchorId,
+            expectedIndex,
+          }),
+        }))
+      }
+
+      const editFooter = h('div', { className: 'dt-editor-actions' },
+        h(Button, { size: 'sm', variant: 'ghost', type: 'button', disabled: pending === 'edit', onClick: closeEditor }, t('panel.cancel')),
+        h(Button, { size: 'sm', variant: 'primary', type: 'button', disabled: busy, onClick: saveEdit },
+          pending === 'edit' ? t('body.saving') : t('panel.save')))
+      const regenerateFooter = h('div', { className: 'dt-editor-actions' },
+        h(Button, { size: 'sm', variant: 'ghost', type: 'button', disabled: pending === 'regenerate', onClick: closeRegenerate }, t('panel.cancel')),
+        h(Button, { size: 'sm', variant: 'primary', type: 'button', disabled: busy, onClick: submitRegenerate },
+          pending === 'regenerate' ? t('body.generating') : t('body.regenerate')))
+
+      return h(React.Fragment, null,
+        h('span', { className: 'dt-body-actions', 'data-testid': 'tavern-body-actions' },
+          canEdit ? h(Button, {
+            size: 'sm',
+            variant: 'ghost',
+            type: 'button',
+            icon: h(IconEditOutline16),
+            disabled: busy,
+            'data-testid': 'tavern-body-edit',
+            onClick: openEditor,
+          }, t('body.edit')) : null,
+          canRegenerate ? h(Button, {
+            size: 'sm',
+            variant: 'ghost',
+            type: 'button',
+            icon: h(IconRefreshOutline16),
+            disabled: busy,
+            'data-testid': 'tavern-body-regenerate',
+            onClick: openRegenerate,
+          }, t('body.regenerate')) : null,
+          canSelect ? h('span', { className: 'dt-body-swipe' },
+            h(Button, {
+              size: 'sm',
+              variant: 'ghost',
+              type: 'button',
+              'aria-label': t('body.swipe', { index: Math.max(selectedIndex, 0), count }),
+              disabled: busy || selectedIndex <= 0,
+              'data-testid': 'tavern-body-swipe-prev',
+              onClick: () => selectCandidate(selectedIndex - 1),
+            }, h(IconChevronLeftOutline14)),
+            h('span', {
+              className: 'dt-body-swipe-count',
+              title: swipeLabel,
+              'aria-label': swipeLabel,
+              'data-testid': 'tavern-body-swipe-count',
+            }, selectedLabel),
+            h(Button, {
+              size: 'sm',
+              variant: 'ghost',
+              type: 'button',
+              'aria-label': t('body.swipe', { index: Math.min(selectedIndex + 2, count + 1), count }),
+              disabled: busy || count === 0 || selectedIndex >= count - 1,
+              'data-testid': 'tavern-body-swipe-next',
+              onClick: () => selectCandidate(selectedIndex + 1),
+            }, h(IconChevronRightOutline14))) : null,
+          watching !== null ? h('span', { className: 'dt-muted' }, t('body.generating')) : null,
+          reasonText !== '' ? h('span', { className: 'dt-muted' }, reasonText) : null,
+          error !== '' && !editorOpen && !feedbackOpen ? h('span', { className: 'dt-error', role: 'alert' }, error) : null),
+        editorOpen ? h(EditorDialog, {
+          title: t('body.editTitle'),
+          onClose: closeEditor,
+          closeLabel: t('panel.close'),
+          footer: editFooter,
+        },
+        h('div', { className: 'dt-editor' },
+          h(EditorField, {
+            label: t('body.edit'),
+            value: draft,
+            onChange: setDraft,
+            multiline: true,
+            className: 'dt-editor-wide',
+          }),
+          error !== '' ? h('p', { className: 'dt-error', role: 'alert' }, error) : null)) : null,
+        feedbackOpen ? h(EditorDialog, {
+          title: t('body.regenerate'),
+          onClose: closeRegenerate,
+          closeLabel: t('panel.close'),
+          footer: regenerateFooter,
+        },
+        h('div', { className: 'dt-editor' },
+          h(EditorField, {
+            label: t('body.feedback'),
+            value: feedback,
+            onChange: setFeedback,
+            multiline: true,
+            className: 'dt-editor-wide',
+            hint: t('body.feedbackHint'),
+          }),
+          error !== '' ? h('p', { className: 'dt-error', role: 'alert' }, error) : null)) : null)
+    }
+
+    function registerTavernBodyActions(ctx) {
+      return ctx.slots.inject('conversation.chat.assistant-actions', () => ctx.slots.register({
+        name: 'conversation.chat.assistant-actions',
+        id: 'tavern-body-actions',
+        order: 10,
+        inject: (sessionId) => ({ tavernSessionId: sessionId }),
+      }, TavernBodyActions))
     }
 
     // 面板分区注册表（提案 0015 §3.5 P0）：{id, icon, label, component}。
