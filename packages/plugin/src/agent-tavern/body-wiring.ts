@@ -30,9 +30,11 @@ import {
   type BodyRollbackStore,
   type BodyRollbackVariableStore,
 } from './body-rollback.js'
+import { operationView, pendingByAgent } from './body-runtime-core.js'
 import {
   bodyRuntimeError,
   finalizeTurnStopping,
+  restoreBodyAfterFailure,
   type BodyAgentLike,
   type BodyEditInspection,
   type BodyRuntimeDeps,
@@ -447,12 +449,13 @@ export function registerBodyProjection(ctx: BodyWiringContext): (() => void) | u
 /* ----------------------------- turn stopping ------------------------------- */
 
 /**
- * Subscribe to the serial `agent/turn-stopping` event.
+ * Subscribe to the live turn edges the body machine needs.
  *
- * The listener never waits for `agent.whenIdle()`: it already runs after the
- * final assistant message settled, and waiting would deadlock the same loop.
- * It appends only the events `finalizeTurnStopping` needs (candidate, select,
- * hide replacement, op-finish); ordinary `session/event` bookkeeping stays out.
+ * `agent/turn-stopping` is the serial success path; it never waits for
+ * `agent.whenIdle()` and only appends what `finalizeTurnStopping` needs.
+ * `session/event` observes the failure path (error/cancelled/aborted), which
+ * never emits turn-stopping; that listener only queues a microtask so the
+ * append work stays outside the host's dispatch stack (proposal 0021 §9.1).
  */
 export function registerBodyTurnStopping(ctx: BodyWiringContext): (() => void) | undefined {
   if (typeof ctx.on !== 'function') {
@@ -472,10 +475,25 @@ export function registerBodyTurnStopping(ctx: BodyWiringContext): (() => void) |
     return undefined
   }
 
-  const dispose = typeof registered === 'function' ? registered as () => void : undefined
-  // `ctx.on` is fiber-scoped in Cordis: the host removes the listener on
+  const disposers: Array<() => void> = []
+  if (typeof registered === 'function') disposers.push(registered as () => void)
+  // Without a live-agent registry the queued restore could not resolve an agent.
+  if (typeof ctx.agents?.get === 'function') {
+    try {
+      const turnEndRegistered = ctx.on('session/event', (session, event) => {
+        handleBodySessionEvent(ctx, session, event)
+        return undefined
+      })
+      if (typeof turnEndRegistered === 'function') disposers.push(turnEndRegistered as () => void)
+    } catch (error) {
+      errorLog(ctx, 'dsh-soulmojito body: session/event registration failed', {
+        error: errorMessage(error),
+      })
+    }
+  }
+  // `ctx.on` is fiber-scoped in Cordis: the host removes the listeners on
   // unload. The returned disposer is exposed for callers that unload earlier.
-  return dispose
+  return combineDisposers(ctx, disposers)
 }
 
 /**
@@ -545,6 +563,140 @@ export async function handleBodyTurnStopping(ctx: BodyWiringContext, payload: un
   }
 }
 
+/* ---------------------------- turn/end failure ----------------------------- */
+
+/** `turn/end` reasons that bypass `agent/turn-stopping` (proposal 0021 §2.6). */
+const TURN_END_FAILURE_REASONS: ReadonlySet<string> = new Set(['error', 'cancelled', 'aborted'])
+
+/** Per-session in-flight guard: duplicate turn edges settle one operation. */
+const failureRestoresInFlight = new Set<string>()
+
+interface FailedTurnRestore {
+  readonly sessionId: string
+  readonly agentId: string
+  readonly turn: number | undefined
+  readonly reason: string
+}
+
+/**
+ * Observe one `session/event` delivery. It only validates the edge, checks for
+ * a pending body operation and queues a microtask; it never appends, so it
+ * cannot re-enter the host's dispatch (proposal 0021 §9.1).
+ */
+export function handleBodySessionEvent(
+  ctx: BodyWiringContext,
+  session: unknown,
+  event: unknown,
+): void {
+  try {
+    const eventRecord = isRecord(event) ? event : undefined
+    if (eventRecord?.['type'] !== 'turn/end') return
+    const data = isRecord(eventRecord['data']) ? eventRecord['data'] : undefined
+    const reason = data === undefined ? undefined : isRecord(data['reason']) ? data['reason'] : undefined
+    const reasonKind = nonEmptyString(reason?.['kind'])
+    if (reasonKind === undefined || !TURN_END_FAILURE_REASONS.has(reasonKind)) return
+
+    const sessionId = nonEmptyString(isRecord(session) ? session['id'] : undefined)
+    if (sessionId === undefined) return
+
+    const liveAgent = resolveLiveAgent(ctx, sessionId)
+    const agentId = liveAgent === undefined ? sessionId : agentIdOf(liveAgent) ?? sessionId
+    if (!pendingByAgent.has(agentId) && !pendingByAgent.has(sessionId)) return
+
+    scheduleTurnEndRestore(ctx, {
+      sessionId,
+      agentId,
+      turn: data === undefined ? undefined : numberField(data['turn']),
+      reason: reasonKind,
+    })
+  } catch (error) {
+    // A host event bus must never fail because body observation failed.
+    errorLog(ctx, 'dsh-soulmojito body: session/event turn/end observation failed', {
+      reason: 'listener-failed',
+      error: errorMessage(error),
+    })
+  }
+}
+
+function scheduleTurnEndRestore(ctx: BodyWiringContext, task: FailedTurnRestore): void {
+  if (failureRestoresInFlight.has(task.sessionId)) return
+  failureRestoresInFlight.add(task.sessionId)
+  queueMicrotask(() => {
+    void runTurnEndRestore(ctx, task).catch((error: unknown) => {
+      // Safety net for a failure raised outside the restore try block; the
+      // task must stay detached from the host event dispatch.
+      failureRestoresInFlight.delete(task.sessionId)
+      errorLog(ctx, 'dsh-soulmojito body: turn/end restore task crashed', {
+        sessionId: task.sessionId,
+        agentId: task.agentId,
+        turn: task.turn,
+        reason: task.reason,
+        error: errorMessage(error),
+      })
+    })
+  })
+}
+
+async function runTurnEndRestore(ctx: BodyWiringContext, task: FailedTurnRestore): Promise<void> {
+  try {
+    const agent = resolveLiveAgent(ctx, task.agentId)
+      ?? (task.agentId === task.sessionId ? undefined : resolveLiveAgent(ctx, task.sessionId))
+    if (agent === undefined) {
+      warn(ctx, 'dsh-soulmojito body: turn/end restore skipped because the live agent is gone', {
+        sessionId: task.sessionId,
+        agentId: task.agentId,
+        turn: task.turn,
+        reason: task.reason,
+      })
+      return
+    }
+
+    const agentId = agentIdOf(agent) ?? task.agentId
+    const op = pendingByAgent.get(agentId) ?? pendingByAgent.get(task.sessionId)
+    if (op === undefined) return
+
+    const deps = await createBodyDeps(ctx, agent)
+    if (deps === undefined) {
+      warn(ctx, 'dsh-soulmojito body: turn/end restore skipped because the plugin-record seam is unavailable', {
+        agentId,
+        opId: op.opId,
+        reason: 'host-unsupported',
+      })
+      return
+    }
+
+    // Turn-stopping may have released the same operation while deps loaded.
+    const current = pendingByAgent.get(agentId) ?? pendingByAgent.get(task.sessionId)
+    if (current === undefined || current.opId !== op.opId) return
+
+    try {
+      const restoredAnchorId = await restoreBodyAfterFailure(deps, operationView(op))
+      info(ctx, 'dsh-soulmojito body: turn/end restored the previous body after a failed turn', {
+        sessionId: task.sessionId,
+        agentId,
+        opId: op.opId,
+        turn: task.turn,
+        reason: task.reason,
+        restoredAnchorId,
+      })
+    } catch (error) {
+      // The operation stays in `pendingByAgent` and its `op-start` stays in the
+      // log; startup recovery is the documented retry path (proposal §9.2).
+      errorLog(ctx, 'dsh-soulmojito body: turn/end restore failed; op-start stays pending for startup recovery', {
+        sessionId: task.sessionId,
+        agentId,
+        opId: op.opId,
+        turn: task.turn,
+        reason: task.reason,
+        code: failureCodeOf(error),
+        error: errorMessage(error),
+      })
+    }
+  } finally {
+    failureRestoresInFlight.delete(task.sessionId)
+  }
+}
+
 /* -------------------------------- recovery --------------------------------- */
 
 /** Startup recovery over every live agent the host exposes. */
@@ -601,6 +753,28 @@ export {
 export type { BodyRecoveryOutcome } from './body-recovery.js'
 
 /* -------------------------------- helpers --------------------------------- */
+
+function combineDisposers(
+  ctx: BodyWiringContext,
+  disposers: readonly (() => void)[],
+): (() => void) | undefined {
+  if (disposers.length === 0) return undefined
+  let disposed = false
+  return () => {
+    if (disposed) return
+    disposed = true
+    for (const dispose of disposers) {
+      try {
+        dispose()
+      } catch (error) {
+        // Unload must keep disposing the remaining listener and stay observable.
+        errorLog(ctx, 'dsh-soulmojito body: event listener disposer failed', {
+          error: errorMessage(error),
+        })
+      }
+    }
+  }
+}
 
 function warnRecordSeamOnce(ctx: BodyWiringContext, message: string, fields: Record<string, unknown>): void {
   if (recordSeamWarningEmitted) return

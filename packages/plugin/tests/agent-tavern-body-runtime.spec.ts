@@ -9,6 +9,7 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  BODY_SETTLED_EVENT_TYPE,
   createBodyProjection,
   effectiveBodyText,
   foldBodyLedger,
@@ -487,6 +488,10 @@ function bodyEventsWithOp(events: readonly FakeEvent[], op: string): FakeEvent[]
   return events.filter((event) => event.type === BODY_EVENT_TYPE && event.data.op === op)
 }
 
+function settledEventsOf(events: readonly FakeEvent[]): FakeEvent[] {
+  return events.filter((event) => event.type === BODY_SETTLED_EVENT_TYPE)
+}
+
 function messageOf(event: FakeEvent): Record<string, unknown> | undefined {
   if (event.type === 'user/message') return event.data
   return isRecord(event.data.message) ? event.data.message : undefined
@@ -573,6 +578,19 @@ describe('AgentTavern body runtime', () => {
     expect(select?.data).toMatchObject({ groupId: 'anchor-1', index: 1 })
     const finish = bodyEvent(harness.events, 'op-finish')
     expect(finish?.data).toMatchObject({ result: 'ok', anchorId: 'new-body' })
+    // Proposal 0021 §9.2: the durable settlement marker lands after the hide
+    // and before op-finish, so recovery can finish without touching the body.
+    const settled = settledEventsOf(harness.events)
+    expect(settled).toHaveLength(1)
+    expect(settled[0]?.data).toMatchObject({
+      op: 'op-settled',
+      opId: started.opId,
+      groupId: 'anchor-1',
+      anchorId: 'new-body',
+      index: 1,
+    })
+    if (finish === undefined || settled[0] === undefined) throw new Error('settlement records are missing')
+    expect(harness.events.indexOf(settled[0])).toBeLessThan(harness.events.indexOf(finish))
 
     const surface = harness.surface()
     expect(surface).not.toContain(triggerTurn.triggerSeq)
@@ -1147,9 +1165,12 @@ describe('AgentTavern body runtime', () => {
     closeTurn(harness, 2)
 
     expect(finished).toEqual({ status: 'ok', anchorMessageId: 'new-body' })
-    expect(recorded.length).toBeGreaterThanOrEqual(5)
-    expect(recorded.every((type) => type === BODY_EVENT_TYPE)).toBe(true)
-    expect(bodyEventsOf(harness.events)).toHaveLength(recorded.length)
+    expect(recorded.length).toBeGreaterThanOrEqual(6)
+    // The settlement marker is a plugin record too, but it must never be a
+    // ledger event: the projector only reads BODY_EVENT_TYPE.
+    expect(recorded.every((type) => type === BODY_EVENT_TYPE || type === BODY_SETTLED_EVENT_TYPE)).toBe(true)
+    expect(recorded).toContain(BODY_SETTLED_EVENT_TYPE)
+    expect(bodyEventsOf(harness.events)).toHaveLength(recorded.filter((type) => type === BODY_EVENT_TYPE).length)
   })
 
   it('fails closed before touching the session when appendRecord is missing', async () => {
@@ -1252,6 +1273,53 @@ describe('AgentTavern body runtime', () => {
       data: { op: 'op-finish', opId: 'op-b', result: 'failed', reason: 'cancelled' },
     }]
     expect(foldPendingOps(finished)).toEqual([])
+  })
+
+  it('folds the durable settled marker into the pending operation', () => {
+    const events = [
+      {
+        type: BODY_EVENT_TYPE,
+        seq: 0,
+        time: 0,
+        data: { op: 'op-start', opId: 'op-a', groupId: 'g-1', kind: 'regenerate', previousAnchorId: 'm-0', previousIndex: 0 },
+      },
+      {
+        type: BODY_SETTLED_EVENT_TYPE,
+        seq: 1,
+        time: 1,
+        data: { op: 'op-settled', opId: 'op-a', groupId: 'g-1', anchorId: 'm-1', index: 1 },
+      },
+    ]
+
+    expect(foldPendingOps(events)).toEqual([
+      {
+        opId: 'op-a',
+        groupId: 'g-1',
+        previousAnchorId: 'm-0',
+        previousIndex: 0,
+        startSeq: 0,
+        triggerMessageId: 'body-trigger-op-a',
+        settled: { anchorId: 'm-1', index: 1 },
+      },
+    ])
+
+    const finished = [...events, {
+      type: BODY_EVENT_TYPE,
+      seq: 2,
+      time: 2,
+      data: { op: 'op-finish', opId: 'op-a', result: 'ok', anchorId: 'm-1' },
+    }]
+    expect(foldPendingOps(finished)).toEqual([])
+
+    // A repeated marker after op-finish is harmless evidence of the completed
+    // operation and must not fail the whole fold.
+    const repeated = [...finished, {
+      type: BODY_SETTLED_EVENT_TYPE,
+      seq: 3,
+      time: 3,
+      data: { op: 'op-settled', opId: 'op-a', groupId: 'g-1', anchorId: 'm-1', index: 1 },
+    }]
+    expect(foldPendingOps(repeated)).toEqual([])
   })
 
   it('prepares the old anchor turn rollback before the trigger starts', async () => {
@@ -1576,6 +1644,148 @@ describe('AgentTavern body runtime', () => {
 
     await expect(finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 2 }))
       .rejects.toMatchObject({ code: 'operation-failed' })
+  })
+
+  it('commits the rollback plan before hiding the old anchor', async () => {
+    const calls: string[] = []
+    const harness = createHarness({
+      status: 'idle',
+      phaseKind: 'idle',
+      lastTurn: 0,
+      followupError: undefined,
+      restrictError: undefined,
+      appendRecord: true,
+      rollback: createRollbackPort({
+        commit: async () => { throw new Error('commit store down') },
+      }, calls),
+    })
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const started = await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+    const trigger = firstFollowup(harness)
+    const failedTurn = appendTriggerTurn(harness, 2, trigger, 'new-body', false)
+
+    await expect(finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 2 }))
+      .rejects.toMatchObject({ code: 'operation-failed', message: expect.stringContaining('failed to commit the write rollback') })
+
+    // Proposal 0022 §10: commit runs while the old anchor is still visible, so
+    // a commit failure leaves a restore path that needs no assistant copy.
+    expect(harness.surface()).toContain(anchorSeq)
+    expect(harness.surface()).toContain(failedTurn.finalSeq)
+    expect(harness.events.some((event) => event.type === 'developer/message')).toBe(false)
+    expect(settledEventsOf(harness.events)).toHaveLength(0)
+    expect(bodyEvent(harness.events, 'op-finish')?.data).toMatchObject({ result: 'failed' })
+
+    closeTurn(harness, 2)
+    const assistantsBefore = harness.events.filter((event) => event.type === 'assistant/message').length
+    const restoredId = await restoreBodyAfterFailure(harness.deps, started.op)
+
+    expect(restoredId).toBe('anchor-1')
+    expect(calls).toEqual([`prepare:${harness.agentId}:1:anchor-1`, 'commit:1', 'rollback-turn:2', 'restore:1'])
+    expect(harness.surface()).toContain(anchorSeq)
+    expect(harness.surface()).not.toContain(failedTurn.finalSeq)
+    expect(harness.events.filter((event) => event.type === 'assistant/message')).toHaveLength(assistantsBefore)
+    expect(harness.events.some((event) => String(messageOf(event)?.id).startsWith('body-restore-'))).toBe(false)
+    expect(bodyEvent(harness.events, 'restore')).toBeUndefined()
+    expect(harness.phase.lastTurn).toBe(3)
+  })
+
+  it('keeps the settled body when op-finish fails after the hide and retries only op-finish', async () => {
+    const calls: string[] = []
+    let commitFails = false
+    const harness = createHarness({
+      status: 'idle',
+      phaseKind: 'idle',
+      lastTurn: 0,
+      followupError: undefined,
+      restrictError: undefined,
+      appendRecord: true,
+      rollback: createRollbackPort({
+        commit: async () => {
+          if (commitFails) throw new Error('commit store down')
+        },
+        restore: async () => { throw new Error('restore must not run for a settled body') },
+        rollbackTurnWrites: async () => { throw new Error('new-turn rollback must not run for a settled body') },
+      }, calls),
+    })
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const started = await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+    const trigger = firstFollowup(harness)
+    const triggerTurn = appendTriggerTurn(harness, 2, trigger, 'new-body', false)
+    const appendRecord = harness.deps.appendRecord
+    if (appendRecord === undefined) throw new Error('fake harness: appendRecord is missing')
+    let failFinish = true
+    harness.deps.appendRecord = (session, type, data) => {
+      if (failFinish && type === BODY_EVENT_TYPE && isRecord(data) && data.op === 'op-finish') {
+        throw new Error('finish writer down')
+      }
+      return appendRecord(session, type, data)
+    }
+    const assistantsBefore = harness.events.filter((event) => event.type === 'assistant/message').length
+
+    let thrown: unknown
+    try {
+      await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 2 })
+    } catch (error) {
+      thrown = error
+    }
+    const failure = bodyFailureOf(thrown)
+    expect(failure.code).toBe('settled-finish-pending')
+    expect(failure.op?.opId).toBe(started.opId)
+
+    // The new body stays selected and visible; only op-finish is missing.
+    let surface = harness.surface()
+    expect(surface).toContain(triggerTurn.finalSeq)
+    expect(surface).not.toContain(anchorSeq)
+    expect(bodyEvent(harness.events, 'op-finish')).toBeUndefined()
+    const settled = settledEventsOf(harness.events)
+    expect(settled).toHaveLength(1)
+    expect(settled[0]?.data).toMatchObject({ opId: started.opId, anchorId: 'new-body', index: 1 })
+    expect(harness.events.filter((event) => event.type === 'assistant/message')).toHaveLength(assistantsBefore)
+
+    // Failure restore sees the marker and returns before the open-turn guard:
+    // the still-open settle turn must not block it, and it must write nothing.
+    const eventsBeforeRestore = harness.events.length
+    expect(await restoreBodyAfterFailure(harness.deps, started.op)).toBe('new-body')
+    expect(harness.events).toHaveLength(eventsBeforeRestore)
+    surface = harness.surface()
+    expect(surface).toContain(triggerTurn.finalSeq)
+    expect(surface).not.toContain(anchorSeq)
+    expect(bodyEvent(harness.events, 'restore')).toBeUndefined()
+
+    // Restart recovery simulates a crash during turn stopping: the trigger turn
+    // is still open, so recovery must only fill op-finish and then close the
+    // bracket. A commit/restore failure raised here would prove the settled
+    // operation still touched the body, so the port is armed to fail and the
+    // call log must stay unchanged.
+    failFinish = false
+    commitFails = true
+    pendingByAgent.clear()
+    const callsBeforeRecovery = [...calls]
+    const outcome = await recoverBodyOperationWith(
+      recoveryHost(),
+      harness.deps.agent,
+      async () => harness.deps,
+    )
+
+    expect(outcome).toMatchObject({ agentId: harness.agentId, status: 'settled', pending: 1 })
+    expect(outcome.reason).toBe('closed-turn-2')
+    expect(calls).toEqual(callsBeforeRecovery)
+    const finishes = bodyEventsWithOp(harness.events, 'op-finish')
+    expect(finishes).toHaveLength(1)
+    expect(finishes[0]?.data).toMatchObject({ result: 'ok', anchorId: 'new-body' })
+    expect(bodyEventsWithOp(harness.events, 'candidate')).toHaveLength(2)
+    expect(bodyEventsWithOp(harness.events, 'select')).toHaveLength(1)
+    expect(harness.events.filter((event) => event.type === 'developer/message')).toHaveLength(1)
+    expect(harness.events.filter((event) => event.type === 'assistant/message')).toHaveLength(assistantsBefore)
+    expect(harness.events.filter((event) => event.type === 'turn/end' && event.data.turn === 2)).toHaveLength(1)
   })
 
   it('throws without writing a restore turn when the plan cannot be restored', async () => {
@@ -1931,6 +2141,10 @@ describe('AgentTavern durable body rollback plan', () => {
     const folded = foldPendingOps(harness.events)
     expect(folded).toHaveLength(1)
     expect(folded[0]?.rollbackPlan).toBeUndefined()
+    // A session written before the settled marker has no settlement evidence,
+    // so the compatibility restore below must stay reachable.
+    expect(folded[0]?.settled).toBeUndefined()
+    expect(settledEventsOf(harness.events)).toHaveLength(0)
 
     const outcome = await recoverBodyOperationWith(
       recoveryHost(),

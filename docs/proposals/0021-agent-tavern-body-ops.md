@@ -242,13 +242,20 @@ const trigger = {
 6. `agent/turn-stopping` 中：
    - 找本 turn 最后一个带文本且无 tool-call 的 `assistant/message`；
    - 追加 `candidate` 与 `select`；
+   - 先提交（commit）write rollback，再 commit 失败时旧 anchor 仍可见；
    - 用空 `developer/message` replacement 把 trigger、该 turn 的 process 节点，以及旧正文
      anchor 与其旧 turn 的 process 节点移出模型面；真实用户消息不隐藏；
-   - 追加 `op-finish { result: 'ok', anchorId }`。
+   - 追加 durable `op-settled` 标记（独立 plugin record），再追加
+     `op-finish { result: 'ok', anchorId }`。hide 之后 commit/op-finish 晚失败时保留新正文，
+     只把 op-finish 留给恢复重试，不再回滚正文。
 7. 失败 / 取消 / 超时（`turn-stopping` 在错误、取消、blocked 路径不会触发，必须由
-   `turn/end` 观察或启动扫描触发）：
+   live `session/event` 的 `turn/end`（reason `error` / `cancelled` / `aborted`）或启动扫描触发）：
+   - live `turn/end` 监听器只登记，异步 microtask 调 `restoreBodyAfterFailure`，不在事件栈
+     append；同一 session 去重，正常 `completed` 不触发；
    - 追加 `op-finish { result: 'failed', reason }`；
-   - 旧正文仍在 surface：只用一个 bridge turn 隐藏失败 turn 的 trigger/process 节点，
+   - 有 `op-settled` 标记：body 已结算，保留新正文，不 hide/不 restore/不追加 assistant，
+     仅重试 `op-finish`；
+   - 无标记且旧正文仍在 surface：只用一个 bridge turn 隐藏失败 turn 的 trigger/process 节点，
      **不追加 assistant 消息、不追加 `restore` 事件、不改 JSONL 正文**；
    - 旧版本已把 anchor 隐藏的会话：保留 fallback，打开不调用模型的恢复 turn，追加
      `assistant/message` 副本（`stream: []`，沿用旧 provider/model）与 `body/restore`，
@@ -366,6 +373,10 @@ projector 新增 body 分支：
 - 恢复结算必须复用 runtime 的 `finalizeRecoveredOperation`（内部与 `finalizeTurnStopping`
   共用同一结算 helper）；wiring 不得自己拼 `candidate/select/op-finish`，否则会漏掉
   trigger/process 的 hide replacement。
+- `op-settled` marker 是“body 已结算”的 durable 边界：恢复读到标记时只补 `op-finish`，
+  不重复 candidate/select/hide，也不走旧正文恢复。
+- live `session/event` 的 `turn/end` 失败边（`error` / `cancelled` / `aborted`）必须异步触发
+  `restoreBodyAfterFailure`；监听器只登记，不在事件栈 append，同一 session 去重。
 - 半开 turn 用现有 `closeImportBracket` 兜底关闭。
 
 ### 9.3 compaction

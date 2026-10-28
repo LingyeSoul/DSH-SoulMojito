@@ -45,8 +45,8 @@ DSH admission 又明确禁止 `assistant/message` 带 `sourceEventSeqs` 做 rang
 | 风险 | 说明 |
 |---|---|
 | 重生成上下文变化 | 旧正文在新 turn 运行期间可见，模型会带着旧正文生成新版本；这是预期语义变化。 |
-| 晚失败 fallback | 若成功结算已 hide 旧 anchor 后 commit/op-finish 才失败，surface 已变，恢复会走 `body-restore-*` fallback，仍可能追加一条 assistant。 |
-| 线上 `turn/end` 恢复缺口 | 当前 live `turn/end` 错误路径没有自动调用 `restoreBodyAfterFailure`，失败 turn 的 trigger/process 可能等启动恢复才隐藏；旧正文本身保持可见。 |
+| 晚失败 fallback | 已由 `op-settled` durable 标记处理：hide 后 commit/op-finish 失败保留新正文，只重试 op-finish；仅 hide→marker 崩溃窗口与双写失败仍可能落回 legacy fallback。 |
+| 线上 `turn/end` 恢复缺口 | 已补 live `session/event` 失败边：`error` / `cancelled` / `aborted` 异步触发 `restoreBodyAfterFailure`；宿主延迟到非 idle 时仍留给启动恢复。 |
 | 旧会话副本 | fallback 只服务旧版本已隐藏 anchor 的会话，新会话不再产生 `body-restore-*`。 |
 | 无真机 E2E | 尚未跑 `dsh web` 浏览器闭环，需要指定 profile 并允许写 `$DSH_HOME`。 |
 

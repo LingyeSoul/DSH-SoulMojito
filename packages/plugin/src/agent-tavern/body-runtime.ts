@@ -28,6 +28,7 @@ import {
   errorMessage,
   failureFor,
   operationView,
+  parseSettledEvent,
   pendingByAgent,
   releaseOperation,
   requireAgentId,
@@ -364,12 +365,30 @@ async function prepareRegenerateRollback(
  * Fold `op-start` events that never received `op-finish`. Startup recovery
  * uses this list to decide between candidate settlement and a body restore.
  * A durable `rollbackPlan` carried by the record is attached to the operation,
- * so the restore path can replay the old writes after a restart.
+ * so the restore path can replay the old writes after a restart. A durable
+ * `op-settled` marker is attached as `settled`: that operation already replaced
+ * the body, so recovery must only retry `op-finish`.
  */
 export function foldPendingOps(events: readonly unknown[]): readonly PendingBodyOperation[] {
   const parsed = parseEventList(events, 'foldPendingOps')
   const pending = new Map<string, PendingBodyOperation>()
+  const finished = new Set<string>()
   for (const event of parsed) {
+    const settled = parseSettledEvent(event)
+    if (settled !== undefined) {
+      const op = pending.get(settled.opId)
+      if (op !== undefined) {
+        op.settled = { anchorId: settled.anchorId, index: settled.index }
+        continue
+      }
+      // A marker repeated after op-finish is harmless evidence of the same
+      // completed operation; one without any open op-start is a broken log.
+      if (finished.has(settled.opId)) continue
+      throw bodyRuntimeError(
+        'invalid-event',
+        `foldPendingOps: body settled record at seq ${event.seq} references operation '${settled.opId}' with no open op-start`,
+      )
+    }
     const data = pendingEventOf(event)
     if (data === undefined) continue
     if (data.kind === 'start') {
@@ -388,6 +407,7 @@ export function foldPendingOps(events: readonly unknown[]): readonly PendingBody
       continue
     }
     pending.delete(data.opId)
+    finished.add(data.opId)
   }
   return [...pending.values()].sort((left, right) => left.startSeq - right.startSeq)
 }

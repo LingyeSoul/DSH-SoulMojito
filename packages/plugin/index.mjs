@@ -14820,6 +14820,7 @@ function redoMvuReceipts(chat, receipts) {
 
 // packages/plugin/src/agent-tavern/body.ts
 var BODY_EVENT_TYPE = "plugin:dsh-soulmojito/body";
+var BODY_SETTLED_EVENT_TYPE = "plugin:dsh-soulmojito/body-settled";
 var BodyLedgerError = class extends Error {
   code;
   constructor(code, message) {
@@ -16777,7 +16778,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("1aa73c8") : void 0;
+  const commit = true ? normalizeCommit("705613a") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -23048,9 +23049,6 @@ function invalidPlan(detail) {
   });
 }
 
-// packages/plugin/src/agent-tavern/body-runtime.ts
-import { randomUUID as randomUUID5 } from "node:crypto";
-
 // packages/plugin/src/message.ts
 function createMessage(input) {
   return deepFreeze(structuredClone({ ...input, id: crypto.randomUUID() }));
@@ -23560,6 +23558,48 @@ function appendOpFinish(deps, opId, result, anchorId, reason) {
     ...reason === void 0 ? {} : { reason }
   });
 }
+function appendSettledMarker(deps, opId, groupId, anchorId, index) {
+  const data = { op: "op-settled", opId, groupId, anchorId, index };
+  requireRecordWriter(deps)(deps.session, BODY_SETTLED_EVENT_TYPE, data);
+}
+function parseSettledEvent(event) {
+  if (event.type !== BODY_SETTLED_EVENT_TYPE) return void 0;
+  if (event.data.op !== "op-settled") {
+    throw bodyRuntimeError(
+      "invalid-event",
+      `body settled record at seq ${event.seq} has op '${String(event.data.op)}', expected 'op-settled'`
+    );
+  }
+  return {
+    opId: settledString(event.data.opId, event.seq, "opId"),
+    anchorId: settledString(event.data.anchorId, event.seq, "anchorId"),
+    index: settledIndex(event.data.index, event.seq)
+  };
+}
+function settledMarkerOf(events, opId) {
+  let marker;
+  for (const event of events) {
+    const settled = parseSettledEvent(event);
+    if (settled === void 0 || settled.opId !== opId) continue;
+    marker = { anchorId: settled.anchorId, index: settled.index };
+  }
+  return marker;
+}
+function settledString(value, seq, field) {
+  if (typeof value !== "string" || value === "") {
+    throw bodyRuntimeError("invalid-event", `body settled record at seq ${seq} requires ${field} to be a non-empty string`);
+  }
+  return value;
+}
+function settledIndex(value, seq) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw bodyRuntimeError(
+      "invalid-event",
+      `body settled record at seq ${seq} requires index to be a non-negative safe integer`
+    );
+  }
+  return value;
+}
 function once(operation) {
   let done = false;
   return () => {
@@ -23588,6 +23628,9 @@ function failureFor(error, context, op) {
   if (op !== void 0) failure.op = op;
   return failure;
 }
+
+// packages/plugin/src/agent-tavern/body-runtime.ts
+import { randomUUID as randomUUID5 } from "node:crypto";
 
 // packages/plugin/src/agent-tavern/body-runtime-plan.ts
 var PLAN_FIELD = "rollbackPlan";
@@ -24438,6 +24481,10 @@ async function finalizeRecoveredOperation(deps, op, turn) {
 }
 async function settleBodyOperation(deps, context, turn) {
   const events = eventsOf(deps.session);
+  const settled = settledMarkerOf(events, context.op.opId);
+  if (settled !== void 0) {
+    return finishSettledOperation(deps, context, settled);
+  }
   const candidate = lastBodyCandidate(events, turn);
   if (candidate === void 0) {
     return failSettlement(
@@ -24501,41 +24548,80 @@ async function settleBodyOperation(deps, context, turn) {
     }
     appendBodyEvent(deps, { op: "select", groupId: context.op.groupId, index: candidateIndex });
     selectAppended = true;
-    const hidden = hideTargets(events, surface, triggerMessageIdOf(context.op), turn, candidate.messageId);
-    for (const seq of oldAnchorSurfaceTargets(events, surface, context.op.previousAnchorId)) hidden.add(seq);
-    appendHideInOpenTurn(deps, turn, hidden);
   } catch (error) {
-    const reason = `${context.label} ${context.op.opId} failed to settle turn ${turn}: ${errorMessage3(error)}`;
-    if (selectAppended) {
-      try {
-        appendBodyEvent(deps, { op: "select", groupId: context.op.groupId, index: context.op.previousIndex });
-      } catch (selectError) {
-        warn(deps, `body runtime: failed to restore previous body selection for ${context.op.opId}: ${errorMessage3(selectError)}`);
-      }
-    }
-    return failSettlement(deps, context, reason);
+    if (selectAppended) restorePreviousSelection(deps, context);
+    return failSettlement(
+      deps,
+      context,
+      `${context.label} ${context.op.opId} failed to settle turn ${turn}: ${errorMessage3(error)}`
+    );
   }
   try {
     await commitBodyRollback(deps, context.op);
   } catch (error) {
     const reason = `${context.label} ${context.op.opId} failed to commit the write rollback in turn ${turn}: ${errorMessage3(error)}`;
+    restorePreviousSelection(deps, context);
     failSettlement(deps, context, reason);
     throw failureFor(error, reason, context.op);
+  }
+  try {
+    const hidden = hideTargets(events, surface, triggerMessageIdOf(context.op), turn, candidate.messageId);
+    for (const seq of oldAnchorSurfaceTargets(events, surface, context.op.previousAnchorId)) hidden.add(seq);
+    appendHideInOpenTurn(deps, turn, hidden);
+  } catch (error) {
+    const reason = `${context.label} ${context.op.opId} failed to settle turn ${turn}: ${errorMessage3(error)}`;
+    restorePreviousSelection(deps, context);
+    return failSettlement(deps, context, reason);
+  }
+  let markerWritten = true;
+  try {
+    appendSettledMarker(deps, context.op.opId, context.op.groupId, candidate.messageId, candidateIndex);
+  } catch (error) {
+    markerWritten = false;
+    warn(deps, `body runtime: ${context.label} ${context.op.opId} settled '${candidate.messageId}' but could not record the settled marker: ${errorMessage3(error)}`);
   }
   try {
     appendOpFinish(deps, context.op.opId, "ok", candidate.messageId, void 0);
     releaseSettlement(deps, context);
     return { status: "ok", anchorMessageId: candidate.messageId };
   } catch (error) {
-    const reason = `${context.label} ${context.op.opId} failed to record op-finish in turn ${turn}: ${errorMessage3(error)}`;
-    if (selectAppended) {
+    if (!markerWritten) {
       try {
-        appendBodyEvent(deps, { op: "select", groupId: context.op.groupId, index: context.op.previousIndex });
-      } catch (selectError) {
-        warn(deps, `body runtime: failed to restore previous body selection for ${context.op.opId}: ${errorMessage3(selectError)}`);
+        appendSettledMarker(deps, context.op.opId, context.op.groupId, candidate.messageId, candidateIndex);
+        markerWritten = true;
+      } catch (markerError) {
+        warn(deps, `body runtime: ${context.label} ${context.op.opId} could not retry the settled marker: ${errorMessage3(markerError)}`);
       }
     }
-    return failSettlement(deps, context, reason);
+    releaseSettlement(deps, context);
+    const reason = `${context.label} ${context.op.opId} settled '${candidate.messageId}' in turn ${turn} but failed to record op-finish: ${errorMessage3(error)}`;
+    warn(deps, reason);
+    throw settledFinishPending(reason, context.op, error);
+  }
+}
+function finishSettledOperation(deps, context, settled) {
+  try {
+    appendOpFinish(deps, context.op.opId, "ok", settled.anchorId, void 0);
+  } catch (error) {
+    releaseSettlement(deps, context);
+    const reason = `${context.label} ${context.op.opId} already settled '${settled.anchorId}' but failed to record op-finish: ${errorMessage3(error)}`;
+    warn(deps, reason);
+    throw settledFinishPending(reason, context.op, error);
+  }
+  releaseSettlement(deps, context);
+  return { status: "ok", anchorMessageId: settled.anchorId };
+}
+function settledFinishPending(reason, op, cause) {
+  const failure = bodyRuntimeError("settled-finish-pending", reason);
+  if (cause instanceof Error) failure.cause = cause;
+  failure.op = op;
+  return failure;
+}
+function restorePreviousSelection(deps, context) {
+  try {
+    appendBodyEvent(deps, { op: "select", groupId: context.op.groupId, index: context.op.previousIndex });
+  } catch (selectError) {
+    warn(deps, `body runtime: failed to restore previous body selection for ${context.op.opId}: ${errorMessage3(selectError)}`);
   }
 }
 function failSettlement(deps, context, reason) {
@@ -24625,6 +24711,11 @@ async function restoreBodyAfterFailure(deps, op) {
   assertRecordWriter(deps);
   return withBodyLock(deps, async () => {
     const events = eventsOf(deps.session);
+    const settled = settledMarkerOf(events, op.opId);
+    if (settled !== void 0) {
+      releaseOperationByOp(deps, op, `body restore ${op.opId}`);
+      return settled.anchorId;
+    }
     const openTurn = openTurnNumber(events);
     if (openTurn !== void 0) {
       throw bodyRuntimeError(
@@ -24929,7 +25020,21 @@ async function prepareRegenerateRollback(deps, agentId, events, anchorSeq, previ
 function foldPendingOps(events) {
   const parsed = parseEventList(events, "foldPendingOps");
   const pending = /* @__PURE__ */ new Map();
+  const finished = /* @__PURE__ */ new Set();
   for (const event of parsed) {
+    const settled = parseSettledEvent(event);
+    if (settled !== void 0) {
+      const op = pending.get(settled.opId);
+      if (op !== void 0) {
+        op.settled = { anchorId: settled.anchorId, index: settled.index };
+        continue;
+      }
+      if (finished.has(settled.opId)) continue;
+      throw bodyRuntimeError(
+        "invalid-event",
+        `foldPendingOps: body settled record at seq ${event.seq} references operation '${settled.opId}' with no open op-start`
+      );
+    }
     const data = pendingEventOf(event);
     if (data === void 0) continue;
     if (data.kind === "start") {
@@ -24948,6 +25053,7 @@ function foldPendingOps(events) {
       continue;
     }
     pending.delete(data.opId);
+    finished.add(data.opId);
   }
   return [...pending.values()].sort((left, right) => left.startSeq - right.startSeq);
 }
@@ -25568,6 +25674,14 @@ function recoveryTurnMismatch(reason) {
 async function restoreRecoveredOperation(ctx, deps, op) {
   try {
     const restoredAnchorId = await restoreBodyAfterFailure(deps, op);
+    if (op.settled !== void 0) {
+      info(ctx, "dsh-soulmojito body: recovery kept the settled body with op-finish pending", {
+        agentId: deps.agent.id,
+        opId: op.opId,
+        anchorId: restoredAnchorId
+      });
+      return true;
+    }
     info(ctx, "dsh-soulmojito body: recovery restored the previous anchor", {
       agentId: deps.agent.id,
       opId: op.opId,
@@ -25916,8 +26030,22 @@ function registerBodyTurnStopping(ctx) {
     });
     return void 0;
   }
-  const dispose = typeof registered === "function" ? registered : void 0;
-  return dispose;
+  const disposers = [];
+  if (typeof registered === "function") disposers.push(registered);
+  if (typeof ctx.agents?.get === "function") {
+    try {
+      const turnEndRegistered = ctx.on("session/event", (session, event) => {
+        handleBodySessionEvent(ctx, session, event);
+        return void 0;
+      });
+      if (typeof turnEndRegistered === "function") disposers.push(turnEndRegistered);
+    } catch (error) {
+      errorLog(ctx, "dsh-soulmojito body: session/event registration failed", {
+        error: errorMessage4(error)
+      });
+    }
+  }
+  return combineDisposers(ctx, disposers);
 }
 async function handleBodyTurnStopping(ctx, payload) {
   const record = isRecord9(payload) ? payload : void 0;
@@ -25974,11 +26102,123 @@ async function handleBodyTurnStopping(ctx, payload) {
     });
   }
 }
+var TURN_END_FAILURE_REASONS = /* @__PURE__ */ new Set(["error", "cancelled", "aborted"]);
+var failureRestoresInFlight = /* @__PURE__ */ new Set();
+function handleBodySessionEvent(ctx, session, event) {
+  try {
+    const eventRecord = isRecord9(event) ? event : void 0;
+    if (eventRecord?.["type"] !== "turn/end") return;
+    const data = isRecord9(eventRecord["data"]) ? eventRecord["data"] : void 0;
+    const reason = data === void 0 ? void 0 : isRecord9(data["reason"]) ? data["reason"] : void 0;
+    const reasonKind = nonEmptyString2(reason?.["kind"]);
+    if (reasonKind === void 0 || !TURN_END_FAILURE_REASONS.has(reasonKind)) return;
+    const sessionId = nonEmptyString2(isRecord9(session) ? session["id"] : void 0);
+    if (sessionId === void 0) return;
+    const liveAgent = resolveLiveAgent(ctx, sessionId);
+    const agentId = liveAgent === void 0 ? sessionId : agentIdOf(liveAgent) ?? sessionId;
+    if (!pendingByAgent.has(agentId) && !pendingByAgent.has(sessionId)) return;
+    scheduleTurnEndRestore(ctx, {
+      sessionId,
+      agentId,
+      turn: data === void 0 ? void 0 : numberField3(data["turn"]),
+      reason: reasonKind
+    });
+  } catch (error) {
+    errorLog(ctx, "dsh-soulmojito body: session/event turn/end observation failed", {
+      reason: "listener-failed",
+      error: errorMessage4(error)
+    });
+  }
+}
+function scheduleTurnEndRestore(ctx, task) {
+  if (failureRestoresInFlight.has(task.sessionId)) return;
+  failureRestoresInFlight.add(task.sessionId);
+  queueMicrotask(() => {
+    void runTurnEndRestore(ctx, task).catch((error) => {
+      failureRestoresInFlight.delete(task.sessionId);
+      errorLog(ctx, "dsh-soulmojito body: turn/end restore task crashed", {
+        sessionId: task.sessionId,
+        agentId: task.agentId,
+        turn: task.turn,
+        reason: task.reason,
+        error: errorMessage4(error)
+      });
+    });
+  });
+}
+async function runTurnEndRestore(ctx, task) {
+  try {
+    const agent = resolveLiveAgent(ctx, task.agentId) ?? (task.agentId === task.sessionId ? void 0 : resolveLiveAgent(ctx, task.sessionId));
+    if (agent === void 0) {
+      warn2(ctx, "dsh-soulmojito body: turn/end restore skipped because the live agent is gone", {
+        sessionId: task.sessionId,
+        agentId: task.agentId,
+        turn: task.turn,
+        reason: task.reason
+      });
+      return;
+    }
+    const agentId = agentIdOf(agent) ?? task.agentId;
+    const op = pendingByAgent.get(agentId) ?? pendingByAgent.get(task.sessionId);
+    if (op === void 0) return;
+    const deps = await createBodyDeps(ctx, agent);
+    if (deps === void 0) {
+      warn2(ctx, "dsh-soulmojito body: turn/end restore skipped because the plugin-record seam is unavailable", {
+        agentId,
+        opId: op.opId,
+        reason: "host-unsupported"
+      });
+      return;
+    }
+    const current = pendingByAgent.get(agentId) ?? pendingByAgent.get(task.sessionId);
+    if (current === void 0 || current.opId !== op.opId) return;
+    try {
+      const restoredAnchorId = await restoreBodyAfterFailure(deps, operationView(op));
+      info(ctx, "dsh-soulmojito body: turn/end restored the previous body after a failed turn", {
+        sessionId: task.sessionId,
+        agentId,
+        opId: op.opId,
+        turn: task.turn,
+        reason: task.reason,
+        restoredAnchorId
+      });
+    } catch (error) {
+      errorLog(ctx, "dsh-soulmojito body: turn/end restore failed; op-start stays pending for startup recovery", {
+        sessionId: task.sessionId,
+        agentId,
+        opId: op.opId,
+        turn: task.turn,
+        reason: task.reason,
+        code: failureCodeOf(error),
+        error: errorMessage4(error)
+      });
+    }
+  } finally {
+    failureRestoresInFlight.delete(task.sessionId);
+  }
+}
 function recoverBodyOperations(ctx) {
   return recoverBodyOperationsWith(ctx, createBodyDeps);
 }
 function recoverBodyOperation(ctx, agentValue) {
   return recoverBodyOperationWith(ctx, agentValue, createBodyDeps);
+}
+function combineDisposers(ctx, disposers) {
+  if (disposers.length === 0) return void 0;
+  let disposed = false;
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    for (const dispose of disposers) {
+      try {
+        dispose();
+      } catch (error) {
+        errorLog(ctx, "dsh-soulmojito body: event listener disposer failed", {
+          error: errorMessage4(error)
+        });
+      }
+    }
+  };
 }
 function warnRecordSeamOnce(ctx, message, fields) {
   if (recordSeamWarningEmitted) return;

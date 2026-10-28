@@ -2,13 +2,33 @@
  * Pure AgentTavern body ledger and host message projection for proposal 0021.
  *
  * This module owns the `plugin:dsh-soulmojito/body` plugin-record vocabulary, the
- * fold that reconstructs candidate order, selection, anchor and edits, the
+ * durable `body-settled` marker, the fold that reconstructs candidate order,
+ * selection, anchor and edits, the
  * effective body text, and the message-projection definition that rewrites the
  * surface anchor. It never reads the clock, filesystem, network or host
  * runtime state.
  */
 
 export const BODY_EVENT_TYPE = 'plugin:dsh-soulmojito/body' as const
+
+/**
+ * Durable settlement marker record type (proposal 0021 §9.2).
+ *
+ * Settlement appends one marker after the candidate/select and the old-anchor
+ * hide are durable, and before `op-finish`. It is deliberately a separate
+ * plugin record: the marker is recovery-only evidence, so the message
+ * projection and the JSONL projector must never turn it into surface content.
+ */
+export const BODY_SETTLED_EVENT_TYPE = 'plugin:dsh-soulmojito/body-settled' as const
+
+/** Payload of the durable settlement marker. */
+export interface BodySettledEventData {
+  readonly op: 'op-settled'
+  readonly opId: string
+  readonly groupId: string
+  readonly anchorId: string
+  readonly index: number
+}
 
 /* ------------------------------- event shape ------------------------------- */
 

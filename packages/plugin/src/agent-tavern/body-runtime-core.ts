@@ -7,7 +7,13 @@
  */
 
 import { KeyedMutationTails } from '../../../tavern-store/src/index.js'
-import { BODY_EVENT_TYPE, type BodyEventData, type BodyLedger } from './body.js'
+import {
+  BODY_EVENT_TYPE,
+  BODY_SETTLED_EVENT_TYPE,
+  type BodyEventData,
+  type BodyLedger,
+  type BodySettledEventData,
+} from './body.js'
 import type { BodyRollbackPlan, BodyWriteRollbackPort } from './body-rollback.js'
 import { canAdvanceHostTurnBase } from '../session/trace.js'
 
@@ -43,6 +49,7 @@ export type BodyRuntimeErrorCode =
   | 'restore-unavailable'
   | 'operation-failed'
   | 'projection-pending'
+  | 'settled-finish-pending'
 
 /** Specific, actionable body runtime failure. */
 export interface BodyRuntimeFailure extends Error {
@@ -207,6 +214,30 @@ export interface PendingBodyOperation {
    * body itself is restored.
    */
   rollbackPlan?: BodyRollbackPlan
+  /**
+   * Durable settlement evidence folded from `op-settled` records. When present
+   * the new candidate is selected and the previous anchor is already off the
+   * surface, so recovery may only retry `op-finish`.
+   */
+  settled?: BodySettledMarker
+}
+
+/** Durable evidence that one body operation already replaced the old body. */
+export interface BodySettledMarker {
+  readonly anchorId: string
+  readonly index: number
+}
+
+/** One parsed `op-settled` record: the marker plus the operation it belongs to. */
+export interface BodySettledEvent extends BodySettledMarker {
+  readonly opId: string
+}
+
+/** Minimal event shape read by the settlement marker helpers. */
+export interface BodySettledEventLike {
+  readonly type: string
+  readonly seq: number
+  readonly data: Record<string, unknown>
 }
 
 export type FinalizeTurnStoppingResult =
@@ -475,6 +506,83 @@ export function appendOpFinish(
     ...(anchorId === undefined ? {} : { anchorId }),
     ...(reason === undefined ? {} : { reason }),
   })
+}
+
+/**
+ * Append the durable settlement marker.
+ *
+ * Callers write it only after the candidate/select and the previous-anchor hide
+ * are durable, and before `op-finish`. Recovery uses it to finish a settled
+ * operation instead of restoring a body that is already replaced.
+ */
+export function appendSettledMarker(
+  deps: BodyRuntimeDeps,
+  opId: string,
+  groupId: string,
+  anchorId: string,
+  index: number,
+): void {
+  const data: BodySettledEventData = { op: 'op-settled', opId, groupId, anchorId, index }
+  requireRecordWriter(deps)(deps.session, BODY_SETTLED_EVENT_TYPE, data)
+}
+
+/**
+ * Strictly read one settlement marker record.
+ *
+ * `undefined` means the event is not a `body-settled` record; a malformed
+ * payload throws `invalid-event` so callers never mistake a damaged marker for
+ * a legacy unsettled operation.
+ */
+export function parseSettledEvent(event: BodySettledEventLike): BodySettledEvent | undefined {
+  if (event.type !== BODY_SETTLED_EVENT_TYPE) return undefined
+  if (event.data.op !== 'op-settled') {
+    throw bodyRuntimeError(
+      'invalid-event',
+      `body settled record at seq ${event.seq} has op '${String(event.data.op)}', expected 'op-settled'`,
+    )
+  }
+  return {
+    opId: settledString(event.data.opId, event.seq, 'opId'),
+    anchorId: settledString(event.data.anchorId, event.seq, 'anchorId'),
+    index: settledIndex(event.data.index, event.seq),
+  }
+}
+
+/**
+ * Last durable settlement marker of one operation.
+ *
+ * Missing evidence means the operation never settled (legacy sessions and any
+ * failure before the hide); present evidence means failure recovery must keep
+ * the new body and retry only `op-finish`.
+ */
+export function settledMarkerOf(
+  events: readonly BodySettledEventLike[],
+  opId: string,
+): BodySettledMarker | undefined {
+  let marker: BodySettledMarker | undefined
+  for (const event of events) {
+    const settled = parseSettledEvent(event)
+    if (settled === undefined || settled.opId !== opId) continue
+    marker = { anchorId: settled.anchorId, index: settled.index }
+  }
+  return marker
+}
+
+function settledString(value: unknown, seq: number, field: string): string {
+  if (typeof value !== 'string' || value === '') {
+    throw bodyRuntimeError('invalid-event', `body settled record at seq ${seq} requires ${field} to be a non-empty string`)
+  }
+  return value
+}
+
+function settledIndex(value: unknown, seq: number): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw bodyRuntimeError(
+      'invalid-event',
+      `body settled record at seq ${seq} requires index to be a non-negative safe integer`,
+    )
+  }
+  return value
 }
 
 export function once(operation: () => void): () => void {

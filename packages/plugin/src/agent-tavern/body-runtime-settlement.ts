@@ -4,9 +4,12 @@
  * `finalizeTurnStopping` (live turn stop) and `finalizeRecoveredOperation`
  * (durable op reconstructed at startup) share `settleBodyOperation`, so both
  * paths hide the trigger/process and the previous anchor before `op-finish`.
- * Failure recovery is model-free when the previous anchor is still visible and
- * keeps the legacy `body-restore-*` copy only for sessions whose anchor was
- * hidden by an older build.
+ * The write rollback is committed while the previous anchor is still visible;
+ * after the hide a durable `op-settled` marker is written before `op-finish`,
+ * so a late failure keeps the new body and only retries `op-finish`. Failure
+ * recovery is model-free when the previous anchor is still visible and keeps
+ * the legacy `body-restore-*` copy only for sessions whose anchor was hidden by
+ * an older build (no settled marker).
  */
 
 import { randomUUID } from 'node:crypto'
@@ -14,6 +17,7 @@ import { advanceHostTurnBase, lastLoggedTurn } from '../session/trace.js'
 import {
   appendBodyEvent,
   appendOpFinish,
+  appendSettledMarker,
   assertCanAdvanceTurnBase,
   assertRecordWriter,
   bodyRuntimeError,
@@ -25,12 +29,15 @@ import {
   releaseOperationByOp,
   releaseSettlement,
   requirePositiveTurn,
+  settledMarkerOf,
   validateFinalizePayload,
   validatePendingOperation,
   warn,
   withBodyLock,
   type BodyRuntimeDeps,
+  type BodyRuntimeFailure,
   type BodyRuntimeTurnRollback,
+  type BodySettledMarker,
   type FinalizeTurnStoppingResult,
   type PendingBodyOperation,
   type SettlementContext,
@@ -107,7 +114,8 @@ export async function finalizeTurnStopping(
  *
  * Unlike `finalizeTurnStopping`, this path has no in-process operation map or
  * tool restriction to release. It reuses the same settlement helper, so the
- * recovered turn also hides its trigger/process nodes before `op-finish`.
+ * recovered turn also hides its trigger/process nodes before `op-finish`. An
+ * operation that already carries a settled marker only records `op-finish`.
  */
 export async function finalizeRecoveredOperation(
   deps: BodyRuntimeDeps,
@@ -141,6 +149,13 @@ async function settleBodyOperation(
   turn: number,
 ): Promise<FinalizeTurnStoppingResult> {
   const events = eventsOf(deps.session)
+  const settled = settledMarkerOf(events, context.op.opId)
+  if (settled !== undefined) {
+    // A previous attempt already hid the old anchor and selected the new body;
+    // only `op-finish` is missing. Re-doing candidate/select/hide would append
+    // a second settlement and could resurrect the previous body.
+    return finishSettledOperation(deps, context, settled)
+  }
   const candidate = lastBodyCandidate(events, turn)
   if (candidate === undefined) {
     return failSettlement(
@@ -205,7 +220,28 @@ async function settleBodyOperation(
     }
     appendBodyEvent(deps, { op: 'select', groupId: context.op.groupId, index: candidateIndex })
     selectAppended = true
+  } catch (error) {
+    if (selectAppended) restorePreviousSelection(deps, context)
+    return failSettlement(
+      deps,
+      context,
+      `${context.label} ${context.op.opId} failed to settle turn ${turn}: ${errorMessage(error)}`,
+    )
+  }
 
+  // Proposal 0022 §5/§10: commit before the previous anchor is hidden, so a
+  // commit failure still leaves the old body on the surface and the existing
+  // invisible restore can replay the plan without appending an assistant copy.
+  try {
+    await commitBodyRollback(deps, context.op)
+  } catch (error) {
+    const reason = `${context.label} ${context.op.opId} failed to commit the write rollback in turn ${turn}: ${errorMessage(error)}`
+    restorePreviousSelection(deps, context)
+    failSettlement(deps, context, reason)
+    throw failureFor(error, reason, context.op)
+  }
+
+  try {
     const hidden = hideTargets(events, surface, triggerMessageIdOf(context.op), turn, candidate.messageId)
     // Proposal 0021 §9.5: the old anchor stayed visible while the new turn ran,
     // so successful settlement is the only place that removes it. The old
@@ -214,25 +250,19 @@ async function settleBodyOperation(
     appendHideInOpenTurn(deps, turn, hidden)
   } catch (error) {
     const reason = `${context.label} ${context.op.opId} failed to settle turn ${turn}: ${errorMessage(error)}`
-    if (selectAppended) {
-      try {
-        appendBodyEvent(deps, { op: 'select', groupId: context.op.groupId, index: context.op.previousIndex })
-      } catch (selectError) {
-        warn(deps, `body runtime: failed to restore previous body selection for ${context.op.opId}: ${errorMessage(selectError)}`)
-      }
-    }
+    restorePreviousSelection(deps, context)
     return failSettlement(deps, context, reason)
   }
 
-  // Proposal 0022 §5/§10: the new turn succeeded, so the prepared (already
-  // rolled-back) old writes become the committed state. A commit failure is
-  // explicit: it is recorded as a failed settlement and rethrown.
+  // The previous anchor is off the surface from here on. This marker is the
+  // durable boundary between "body not settled" (restore is safe) and "body
+  // settled" (any late failure must keep the new body and retry op-finish).
+  let markerWritten = true
   try {
-    await commitBodyRollback(deps, context.op)
+    appendSettledMarker(deps, context.op.opId, context.op.groupId, candidate.messageId, candidateIndex)
   } catch (error) {
-    const reason = `${context.label} ${context.op.opId} failed to commit the write rollback in turn ${turn}: ${errorMessage(error)}`
-    failSettlement(deps, context, reason)
-    throw failureFor(error, reason, context.op)
+    markerWritten = false
+    warn(deps, `body runtime: ${context.label} ${context.op.opId} settled '${candidate.messageId}' but could not record the settled marker: ${errorMessage(error)}`)
   }
 
   try {
@@ -240,15 +270,66 @@ async function settleBodyOperation(
     releaseSettlement(deps, context)
     return { status: 'ok', anchorMessageId: candidate.messageId }
   } catch (error) {
-    const reason = `${context.label} ${context.op.opId} failed to record op-finish in turn ${turn}: ${errorMessage(error)}`
-    if (selectAppended) {
+    if (!markerWritten) {
       try {
-        appendBodyEvent(deps, { op: 'select', groupId: context.op.groupId, index: context.op.previousIndex })
-      } catch (selectError) {
-        warn(deps, `body runtime: failed to restore previous body selection for ${context.op.opId}: ${errorMessage(selectError)}`)
+        appendSettledMarker(deps, context.op.opId, context.op.groupId, candidate.messageId, candidateIndex)
+        markerWritten = true
+      } catch (markerError) {
+        warn(deps, `body runtime: ${context.label} ${context.op.opId} could not retry the settled marker: ${errorMessage(markerError)}`)
       }
     }
-    return failSettlement(deps, context, reason)
+    releaseSettlement(deps, context)
+    const reason = `${context.label} ${context.op.opId} settled '${candidate.messageId}' in turn ${turn} but failed to record op-finish: ${errorMessage(error)}`
+    warn(deps, reason)
+    throw settledFinishPending(reason, context.op, error)
+  }
+}
+
+/**
+ * Complete an operation whose body settlement is already durable.
+ *
+ * Only `op-finish` is written: candidate/select/hide already happened, and any
+ * body restore here would either resurrect the old anchor or duplicate the new
+ * one. A failed finish keeps the durable `op-start` pending for the next
+ * recovery pass and surfaces a recognizable `settled-finish-pending` error.
+ */
+function finishSettledOperation(
+  deps: BodyRuntimeDeps,
+  context: SettlementContext,
+  settled: BodySettledMarker,
+): FinalizeTurnStoppingResult {
+  try {
+    appendOpFinish(deps, context.op.opId, 'ok', settled.anchorId, undefined)
+  } catch (error) {
+    releaseSettlement(deps, context)
+    const reason = `${context.label} ${context.op.opId} already settled '${settled.anchorId}' but failed to record op-finish: ${errorMessage(error)}`
+    warn(deps, reason)
+    throw settledFinishPending(reason, context.op, error)
+  }
+  releaseSettlement(deps, context)
+  return { status: 'ok', anchorMessageId: settled.anchorId }
+}
+
+function settledFinishPending(
+  reason: string,
+  op: PendingBodyOperation,
+  cause: unknown,
+): BodyRuntimeFailure {
+  const failure = bodyRuntimeError('settled-finish-pending', reason)
+  if (cause instanceof Error) failure.cause = cause
+  failure.op = op
+  return failure
+}
+
+/**
+ * Point the body ledger back at the previous candidate after a settlement step
+ * failed while the previous anchor was still visible.
+ */
+function restorePreviousSelection(deps: BodyRuntimeDeps, context: SettlementContext): void {
+  try {
+    appendBodyEvent(deps, { op: 'select', groupId: context.op.groupId, index: context.op.previousIndex })
+  } catch (selectError) {
+    warn(deps, `body runtime: failed to restore previous body selection for ${context.op.opId}: ${errorMessage(selectError)}`)
   }
 }
 
@@ -383,6 +464,12 @@ async function rollbackNewTurnWrites(
  * Sessions written by an older build hid the anchor when the operation
  * started. Its anchor is off the surface, so this function keeps the existing
  * model-free `body-restore-*` copy as a compatibility fallback.
+ *
+ * An operation with a durable settlement marker is never restored: its new
+ * body already replaced the old anchor, so any late failure (a failed
+ * `op-finish`, for example) only leaves bookkeeping to retry. This branch runs
+ * before the open-turn check because settlement happens during turn stopping,
+ * while the new turn is still open.
  */
 export async function restoreBodyAfterFailure(
   deps: BodyRuntimeDeps,
@@ -392,6 +479,11 @@ export async function restoreBodyAfterFailure(
   assertRecordWriter(deps)
   return withBodyLock(deps, async () => {
     const events = eventsOf(deps.session)
+    const settled = settledMarkerOf(events, op.opId)
+    if (settled !== undefined) {
+      releaseOperationByOp(deps, op, `body restore ${op.opId}`)
+      return settled.anchorId
+    }
     const openTurn = openTurnNumber(events)
     if (openTurn !== undefined) {
       throw bodyRuntimeError(

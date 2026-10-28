@@ -6,7 +6,7 @@
  * real @deepseek-ai/dsh-session or Tavern store is opened.
  */
 
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CharacterCardIR, ChatLogIR } from '../../tavern-format/src/index.js'
 import type { TavernStore } from '../../tavern-store/src/index.js'
 import { CandidateReceiptError } from '../src/agent-tavern/body-candidate-receipts.js'
@@ -59,6 +59,7 @@ const {
   bodyStateUnsafeMessage,
   buildBodyView,
   createBodyDeps,
+  handleBodySessionEvent,
   handleBodyTurnStopping,
   recoverBodyOperation,
   recoverBodyOperations,
@@ -66,6 +67,7 @@ const {
   registerBodyTurnStopping,
   resolveBodyRecordWriter,
 } = await import('../src/agent-tavern/body-wiring.js')
+const { pendingByAgent } = await import('../src/agent-tavern/body-runtime-core.js')
 const { handleAgentTavernBodyApi } = await import('../src/http/router.js')
 type BodyRuntimeModule = typeof import('../src/agent-tavern/body-runtime.js')
 type BodyWiringModule = typeof import('../src/agent-tavern/body-wiring.js')
@@ -1350,5 +1352,215 @@ describe('startup recovery', () => {
     expect(surface).toContain(seqs.anchorSeq)
     expect(surface).not.toContain(seqs.triggerSeq)
     expect(surface).not.toContain(seqs.processSeq)
+  })
+})
+
+/* ---------------------- live turn/end failure restore ---------------------- */
+
+describe('live turn/end failure restore', () => {
+  afterEach(() => {
+    for (const [agentId, op] of [...pendingByAgent.entries()]) {
+      pendingByAgent.delete(agentId)
+      op.release()
+    }
+  })
+
+  async function startPendingBodyOp(harness: RegenerateHarness, sessionId: string): Promise<string> {
+    const result = await callBodyRegenerate(plainCharacter(), projectedChat('old body'), harness, sessionId)
+    expect(result.status).toBe(202)
+    const trigger = asTestRecord(harness.followups[0])
+    const triggerId = typeof trigger?.['id'] === 'string' ? trigger['id'] : undefined
+    if (triggerId === undefined) throw new Error('body regenerate did not expose a trigger message id')
+    return triggerId
+  }
+
+  function turnEndReason(kind: string): Record<string, unknown> {
+    return kind === 'error'
+      ? { kind, error: { message: 'model failed', code: 'TEST' } }
+      : { kind }
+  }
+
+  function turnEndEvent(turn: number, kind: string): Record<string, unknown> {
+    return { type: 'turn/end', data: { turn, reason: turnEndReason(kind) } }
+  }
+
+  function appendFailedBodyTurn(
+    harness: RegenerateHarness,
+    turn: number,
+    triggerId: string,
+    kind: string,
+  ): { triggerSeq: number; processSeq: number } {
+    harness.session.append('turn/start', { turn })
+    harness.session.append('step/start', { turn, step: 1 })
+    const triggerSeq = harness.events.length
+    harness.session.append('user/message', {
+      id: triggerId,
+      role: 'user',
+      content: [{ type: 'text', text: 'regenerate' }],
+    }, { surfaceOp: 'append' })
+    const processSeq = harness.events.length
+    harness.session.append('tool/result', {
+      turn,
+      step: 1,
+      message: { id: `process-${turn}`, role: 'tool', content: [{ type: 'text', text: 'ok' }] },
+    }, { surfaceOp: 'append' })
+    harness.session.append('step/end', { turn, step: 1 })
+    harness.session.append('turn/end', { turn, reason: turnEndReason(kind) })
+    return { triggerSeq, processSeq }
+  }
+
+  function failureRestoreContext(
+    harness: RegenerateHarness,
+    sessionId: string,
+    logger: CapturedLogger['logger'],
+  ): BodyWiringContext {
+    return {
+      logger,
+      agents: { get: (id: string) => id === sessionId ? harness.agent : undefined },
+    } as unknown as BodyWiringContext
+  }
+
+  function flushTurnEndRestore(): Promise<void> {
+    return new Promise((resolve) => { setTimeout(resolve, 0) })
+  }
+
+  it.each(['error', 'cancelled', 'aborted'])(
+    'restores the previous body once after a %s turn/end',
+    async (kind) => {
+      hostState.module = hostRecordModule()
+      const capture = captureLogger()
+      const sessionId = `session-turn-end-${kind}`
+      const harness = createRegenerateHarness('old body', [], sessionId)
+      const triggerId = await startPendingBodyOp(harness, sessionId)
+      const turn = 2
+      const seqs = appendFailedBodyTurn(harness, turn, triggerId, kind)
+      const anchorSeq = harness.events.find((event) =>
+        asTestRecord(event.data['message'])?.['id'] === 'message-1')?.seq
+      expect(anchorSeq).toBeDefined()
+
+      const ctx = failureRestoreContext(harness, sessionId, capture.logger)
+      const before = harness.events.length
+      handleBodySessionEvent(ctx, harness.session, turnEndEvent(turn, kind))
+
+      // The listener only registers the edge: nothing is appended synchronously.
+      expect(harness.events).toHaveLength(before)
+
+      await vi.waitFor(() => {
+        expect(pendingByAgent.has(sessionId)).toBe(false)
+      })
+
+      const hide = harness.events.find((event) =>
+        event.type === 'developer/message' && testNumber(event.data['turn']) === 3)
+      expect(hide).toBeDefined()
+      expect(asTestRecord(hide?.opts?.['surfaceOp'])).toMatchObject({
+        op: 'replace',
+        startSeq: seqs.triggerSeq,
+        endSeq: seqs.processSeq,
+      })
+      expect(harness.surface()).not.toContain(seqs.triggerSeq)
+      expect(harness.surface()).not.toContain(seqs.processSeq)
+      expect(harness.surface()).toContain(anchorSeq)
+    },
+  )
+
+  it('does not restore a completed turn/end', async () => {
+    hostState.module = hostRecordModule()
+    const capture = captureLogger()
+    const sessionId = 'session-turn-end-completed'
+    const harness = createRegenerateHarness('old body', [], sessionId)
+    await startPendingBodyOp(harness, sessionId)
+    const ctx = failureRestoreContext(harness, sessionId, capture.logger)
+    const before = harness.events.length
+
+    handleBodySessionEvent(ctx, harness.session, turnEndEvent(2, 'completed'))
+    await flushTurnEndRestore()
+
+    expect(harness.events).toHaveLength(before)
+    expect(pendingByAgent.has(sessionId)).toBe(true)
+    expect(capture.errors).toHaveLength(0)
+  })
+
+  it('collapses duplicate turn/end edges into one restore', async () => {
+    hostState.module = hostRecordModule()
+    const capture = captureLogger()
+    const sessionId = 'session-turn-end-duplicate'
+    const harness = createRegenerateHarness('old body', [], sessionId)
+    const triggerId = await startPendingBodyOp(harness, sessionId)
+    const seqs = appendFailedBodyTurn(harness, 2, triggerId, 'error')
+    const ctx = failureRestoreContext(harness, sessionId, capture.logger)
+
+    handleBodySessionEvent(ctx, harness.session, turnEndEvent(2, 'error'))
+    handleBodySessionEvent(ctx, harness.session, turnEndEvent(2, 'error'))
+
+    await vi.waitFor(() => {
+      expect(pendingByAgent.has(sessionId)).toBe(false)
+    })
+
+    const bridgeTurns = harness.events.filter((event) =>
+      event.type === 'turn/start' && testNumber(event.data['turn']) === 3)
+    expect(bridgeTurns).toHaveLength(1)
+    const hides = harness.events.filter((event) =>
+      event.type === 'developer/message' && testNumber(event.data['turn']) === 3)
+    expect(hides).toHaveLength(1)
+    expect(harness.surface()).not.toContain(seqs.triggerSeq)
+    expect(harness.surface()).not.toContain(seqs.processSeq)
+
+    // A later duplicate after the operation ended is a no-op too.
+    handleBodySessionEvent(ctx, harness.session, turnEndEvent(2, 'error'))
+    await flushTurnEndRestore()
+    expect(harness.events.filter((event) =>
+      event.type === 'turn/start' && testNumber(event.data['turn']) === 3)).toHaveLength(1)
+  })
+
+  it('keeps op-start pending and logs when the restore is refused', async () => {
+    hostState.module = hostRecordModule()
+    const capture = captureLogger()
+    const sessionId = 'session-turn-end-restore-failure'
+    const harness = createRegenerateHarness('old body', [], sessionId)
+    await startPendingBodyOp(harness, sessionId)
+
+    // Leave turn 2 open in the log so restoreBodyAfterFailure refuses with
+    // session-busy before touching the surface.
+    harness.session.append('turn/start', { turn: 2 })
+    harness.session.append('step/start', { turn: 2, step: 1 })
+    const ctx = failureRestoreContext(harness, sessionId, capture.logger)
+
+    expect(() => {
+      handleBodySessionEvent(ctx, harness.session, turnEndEvent(2, 'error'))
+    }).not.toThrow()
+
+    await vi.waitFor(() => {
+      expect(capture.errors.some((args) =>
+        String(args[0]).includes('turn/end restore failed; op-start stays pending'))).toBe(true)
+    })
+    expect(pendingByAgent.has(sessionId)).toBe(true)
+    expect(harness.events.some((event) =>
+      event.type === BODY_EVENT_TYPE && event.data['op'] === 'op-start')).toBe(true)
+    expect(harness.events.some((event) =>
+      event.type === BODY_EVENT_TYPE && event.data['op'] === 'op-finish')).toBe(false)
+    expect(harness.events.some((event) =>
+      event.type === 'developer/message' && testNumber(event.data['turn']) === 3)).toBe(false)
+  })
+
+  it('subscribes the session/event failure edge alongside turn-stopping', () => {
+    const capture = captureLogger()
+    const registered: string[] = []
+    const disposed: string[] = []
+    const ctx = {
+      logger: capture.logger,
+      agents: { get: () => undefined },
+      on: (event: string) => {
+        registered.push(event)
+        return () => { disposed.push(event) }
+      },
+    } as unknown as BodyWiringContext
+
+    const dispose = registerBodyTurnStopping(ctx)
+
+    expect(registered).toEqual(['agent/turn-stopping', 'session/event'])
+    expect(dispose).toBeTypeOf('function')
+    dispose!()
+    dispose!()
+    expect(disposed).toEqual(['agent/turn-stopping', 'session/event'])
   })
 })

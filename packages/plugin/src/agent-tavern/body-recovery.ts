@@ -333,6 +333,16 @@ async function restoreRecoveredOperation(
 ): Promise<boolean> {
   try {
     const restoredAnchorId = await restoreBodyAfterFailure(deps, op)
+    if (op.settled !== undefined) {
+      // The settled marker kept the new body; only `op-finish` is still
+      // missing, so the next recovery pass must retry the bookkeeping.
+      info(ctx, 'dsh-soulmojito body: recovery kept the settled body with op-finish pending', {
+        agentId: deps.agent.id,
+        opId: op.opId,
+        anchorId: restoredAnchorId,
+      })
+      return true
+    }
     info(ctx, 'dsh-soulmojito body: recovery restored the previous anchor', {
       agentId: deps.agent.id,
       opId: op.opId,

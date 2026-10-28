@@ -87,6 +87,7 @@
 - [`2026-10-28-agent-tavern-body-write-rollback.md`](../decisions/2026-10-28-agent-tavern-body-write-rollback.md) — 正文重生成的写入回滚：MVU receipt、记忆/变量 journal 与失败恢复时序
 - [`2026-10-28-agent-tavern-mvu-body-edit.md`](../decisions/2026-10-28-agent-tavern-mvu-body-edit.md) — MVU 正文编辑 P0：候选级 receipt、惰性迁移与插件侧预检
 - [`2026-10-28-agent-tavern-invisible-body-restore.md`](../decisions/2026-10-28-agent-tavern-invisible-body-restore.md) — 正文恢复 surface 方案：失败不再追加 assistant 副本
+- [`2026-10-29-body-late-failure-and-turn-end.md`](../decisions/2026-10-29-body-late-failure-and-turn-end.md) — 正文回滚晚失败保留新正文 + live turn/end 自动恢复
 
 ### AgentNovel
 
