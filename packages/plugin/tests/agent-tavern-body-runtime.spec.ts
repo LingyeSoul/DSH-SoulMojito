@@ -365,6 +365,30 @@ function seedLedgerCandidate(harness: Harness, groupId: string, messageId: strin
   harness.session.append(BODY_EVENT_TYPE, { op: 'candidate', groupId, messageId, index: 0 })
 }
 
+/**
+ * Reproduce the empty developer replacement a pre-9.5 `startRegenerate`
+ * appended in a bridge turn: after it, the old anchor is off the surface.
+ */
+function hideAnchorLikeLegacyStart(harness: Harness, turn: number, anchorSeq: number): void {
+  harness.session.append('turn/start', { turn })
+  harness.session.append('step/start', { turn, step: 1 })
+  harness.session.append('developer/message', {
+    turn,
+    step: 1,
+    message: {
+      id: `body-hide-legacy-${turn}`,
+      role: 'developer',
+      content: [],
+      source: { kind: 'plugin:dsh-soulmojito', form: 'body-hide', summary: 'legacy body hide' },
+    },
+  }, {
+    surfaceOp: { op: 'replace', startSeq: anchorSeq, endSeq: anchorSeq },
+    sourceEventSeqs: [anchorSeq],
+  })
+  harness.session.append('step/end', { turn, step: 1 })
+  harness.session.append('turn/end', { turn, reason: { kind: 'completed' } })
+}
+
 function firstFollowup(harness: Harness): Record<string, unknown> {
   const trigger = harness.followups[0]
   if (!isRecord(trigger)) throw new Error('fake harness: no followup trigger was delivered')
@@ -499,7 +523,7 @@ function projectedText(message: { content: readonly { type: string; text?: unkno
 }
 
 describe('AgentTavern body runtime', () => {
-  it('hides the old anchor, delivers the trigger and settles the new body', async () => {
+  it('keeps the old anchor visible, delivers the trigger and settles the new body', async () => {
     const harness = healthyHarness()
     const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
     const started = await startRegenerate(harness.deps, {
@@ -514,8 +538,10 @@ describe('AgentTavern body runtime', () => {
     expect(harness.followups).toHaveLength(1)
     expect(harness.denies).toEqual([['memory_write', 'variable_set']])
     expect(harness.activeRestrictions).toBe(1)
-    expect(harness.phase.lastTurn).toBe(2)
-    expect(harness.surface()).not.toContain(anchorSeq)
+    // Proposal 0021 §9.5: start opens no bridge turn and hides nothing.
+    expect(harness.phase.lastTurn).toBe(0)
+    expect(harness.surface()).toContain(anchorSeq)
+    expect(harness.events.some((event) => event.type === 'developer/message')).toBe(false)
 
     const opStart = bodyEvent(harness.events, 'op-start')
     expect(opStart?.data).toMatchObject({
@@ -525,13 +551,6 @@ describe('AgentTavern body runtime', () => {
       previousAnchorId: 'anchor-1',
       previousIndex: 0,
     })
-    const hide = harness.events.find((event) => event.type === 'developer/message')
-    expect(hide?.data.turn).toBe(2)
-    expect(hide?.data.step).toBe(1)
-    expect(hide?.opts).toMatchObject({
-      surfaceOp: { op: 'replace', startSeq: anchorSeq, endSeq: anchorSeq },
-      sourceEventSeqs: [anchorSeq],
-    })
 
     const trigger = firstFollowup(harness)
     expect(trigger).toMatchObject({
@@ -540,9 +559,9 @@ describe('AgentTavern body runtime', () => {
       source: { form: 'body-regenerate', opId: started.opId, groupId: 'anchor-1' },
     })
 
-    const triggerTurn = appendTriggerTurn(harness, 3, trigger, 'new-body', false)
-    const finished = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 })
-    closeTurn(harness, 3)
+    const triggerTurn = appendTriggerTurn(harness, 2, trigger, 'new-body', false)
+    const finished = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 2 })
+    closeTurn(harness, 2)
     expect(finished).toEqual({ status: 'ok', anchorMessageId: 'new-body' })
     expect(harness.activeRestrictions).toBe(0)
 
@@ -559,13 +578,25 @@ describe('AgentTavern body runtime', () => {
     expect(surface).not.toContain(triggerTurn.triggerSeq)
     expect(surface).not.toContain(triggerTurn.processSeq)
     expect(surface).not.toContain(triggerTurn.toolResultSeq)
+    expect(surface).not.toContain(anchorSeq)
     expect(surface).toContain(triggerTurn.finalSeq)
+
+    // The successful settlement is the only place the old body leaves the
+    // surface: one empty developer replacement covers the old anchor and the
+    // new turn's trigger/process nodes, while the candidate stays visible.
+    const settleHide = harness.events.find((event) => event.type === 'developer/message' && event.data.turn === 2)
+    expect(settleHide?.data.step).toBe(3)
+    expect(settleHide === undefined ? undefined : messageOf(settleHide)).toMatchObject({ role: 'developer', content: [] })
+    expect(settleHide?.opts).toMatchObject({
+      surfaceOp: { op: 'replace', startSeq: anchorSeq, endSeq: triggerTurn.toolResultSeq },
+      sourceEventSeqs: [anchorSeq, triggerTurn.triggerSeq, triggerTurn.processSeq, triggerTurn.toolResultSeq],
+    })
 
     started.release()
     expect(harness.activeRestrictions).toBe(0)
   })
 
-  it('settles a recovered operation and hides its trigger and process nodes', async () => {
+  it('replaces the previous candidate on a second regeneration', async () => {
     const harness = healthyHarness()
     seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
     await startRegenerate(harness.deps, {
@@ -573,15 +604,54 @@ describe('AgentTavern body runtime', () => {
       expectedAnchorId: 'anchor-1',
       expectedIndex: 0,
     })
+    const firstTrigger = firstFollowup(harness)
+    appendTriggerTurn(harness, 2, firstTrigger, 'new-body', false)
+    expect(await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 2 }))
+      .toEqual({ status: 'ok', anchorMessageId: 'new-body' })
+    closeTurn(harness, 2)
+
+    const previousSeq = seqOfMessage(harness.events, 'new-body')
+    expect(previousSeq).toBeDefined()
+    expect(harness.surface()).toContain(previousSeq)
+
+    await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'new-body',
+      expectedIndex: 1,
+    })
+    expect(harness.surface()).toContain(previousSeq)
+
+    const secondTrigger = harness.followups[1]
+    if (!isRecord(secondTrigger)) throw new Error('fake harness: no second followup trigger was delivered')
+    const secondTurn = appendTriggerTurn(harness, 3, secondTrigger, 'third-body', false)
+    expect(await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 }))
+      .toEqual({ status: 'ok', anchorMessageId: 'third-body' })
+    closeTurn(harness, 3)
+
+    const surface = harness.surface()
+    expect(surface).not.toContain(previousSeq)
+    expect(surface).toContain(secondTurn.finalSeq)
+    expect(bodyEventsWithOp(harness.events, 'candidate').map((event) => event.data.index)).toEqual([0, 1, 2])
+    expect(bodyEventsWithOp(harness.events, 'select').map((event) => event.data.index)).toEqual([1, 2])
+  })
+
+  it('settles a recovered operation and hides its trigger, process and old anchor', async () => {
+    const harness = healthyHarness()
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
     const trigger = firstFollowup(harness)
-    const triggerTurn = appendTriggerTurn(harness, 3, trigger, 'recovered-body', false)
+    const triggerTurn = appendTriggerTurn(harness, 2, trigger, 'recovered-body', false)
     const pending = foldPendingOps(harness.events)
     expect(pending).toHaveLength(1)
     const recovered = pending[0]
     if (recovered === undefined) throw new Error('foldPendingOps did not rebuild the operation')
 
-    const result = await finalizeRecoveredOperation(harness.deps, recovered, 3)
-    closeTurn(harness, 3)
+    const result = await finalizeRecoveredOperation(harness.deps, recovered, 2)
+    closeTurn(harness, 2)
 
     expect(result).toEqual({ status: 'ok', anchorMessageId: 'recovered-body' })
     const candidates = bodyEventsWithOp(harness.events, 'candidate')
@@ -594,14 +664,15 @@ describe('AgentTavern body runtime', () => {
     expect(surface).not.toContain(triggerTurn.triggerSeq)
     expect(surface).not.toContain(triggerTurn.processSeq)
     expect(surface).not.toContain(triggerTurn.toolResultSeq)
+    expect(surface).not.toContain(anchorSeq)
     expect(surface).toContain(triggerTurn.finalSeq)
 
     const settleHide = harness.events.find((event) => event.type === 'developer/message'
-      && event.data.turn === 3
+      && event.data.turn === 2
       && event.data.step === 3)
     expect(settleHide?.opts).toMatchObject({
-      surfaceOp: { op: 'replace', startSeq: triggerTurn.triggerSeq, endSeq: triggerTurn.toolResultSeq },
-      sourceEventSeqs: [triggerTurn.triggerSeq, triggerTurn.processSeq, triggerTurn.toolResultSeq],
+      surfaceOp: { op: 'replace', startSeq: anchorSeq, endSeq: triggerTurn.toolResultSeq },
+      sourceEventSeqs: [anchorSeq, triggerTurn.triggerSeq, triggerTurn.processSeq, triggerTurn.toolResultSeq],
     })
     expect(harness.activeRestrictions).toBe(0)
   })
@@ -615,15 +686,15 @@ describe('AgentTavern body runtime', () => {
       expectedIndex: 0,
     })
     const trigger = firstFollowup(harness)
-    appendTriggerTurn(harness, 3, trigger, undefined, false)
+    appendTriggerTurn(harness, 2, trigger, undefined, false)
     const pending = foldPendingOps(harness.events)
     expect(pending).toHaveLength(1)
     const recovered = pending[0]
     if (recovered === undefined) throw new Error('foldPendingOps did not rebuild the operation')
     const bodyEventsBefore = bodyEventsOf(harness.events).length
 
-    const result = await finalizeRecoveredOperation(harness.deps, recovered, 3)
-    closeTurn(harness, 3)
+    const result = await finalizeRecoveredOperation(harness.deps, recovered, 2)
+    closeTurn(harness, 2)
 
     expect(result.status).toBe('failed')
     const bodyEventsAfter = bodyEventsOf(harness.events)
@@ -700,6 +771,21 @@ describe('AgentTavern body runtime', () => {
       expectedIndex: 0,
     })
 
+    // Start leaves the whole old turn on the surface, including tool nodes.
+    const startedSurface = harness.surface()
+    expect(startedSurface).toContain(eventSeq(userEvent, 'user'))
+    expect(startedSurface).toContain(eventSeq(toolEvent, 'tool'))
+    expect(startedSurface).toContain(eventSeq(toolResultEvent, 'tool result'))
+    expect(startedSurface).toContain(eventSeq(anchorEvent, 'anchor'))
+    expect(harness.events.some((event) => event.type === 'developer/message')).toBe(false)
+
+    const trigger = firstFollowup(harness)
+    const triggerTurn = appendTriggerTurn(harness, 2, trigger, 'new-body', false)
+    const finished = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 2 })
+    closeTurn(harness, 2)
+    expect(finished).toEqual({ status: 'ok', anchorMessageId: 'new-body' })
+    expect(started.opId).toMatch(/^body-op-/)
+
     const surface = harness.surface()
     expect(surface).toContain(eventSeq(userEvent, 'user'))
     expect(surface).not.toContain(eventSeq(toolEvent, 'tool'))
@@ -710,22 +796,22 @@ describe('AgentTavern body runtime', () => {
       surfaceOp: {
         op: 'replace',
         startSeq: eventSeq(toolEvent, 'tool'),
-        endSeq: eventSeq(anchorEvent, 'anchor'),
+        endSeq: triggerTurn.toolResultSeq,
       },
-      sourceEventSeqs: [eventSeq(toolEvent, 'tool'), eventSeq(toolResultEvent, 'tool result'), eventSeq(anchorEvent, 'anchor')],
+      sourceEventSeqs: [
+        eventSeq(toolEvent, 'tool'),
+        eventSeq(toolResultEvent, 'tool result'),
+        eventSeq(anchorEvent, 'anchor'),
+        triggerTurn.triggerSeq,
+        triggerTurn.processSeq,
+        triggerTurn.toolResultSeq,
+      ],
     })
-
-    const trigger = firstFollowup(harness)
-    appendTriggerTurn(harness, 3, trigger, 'new-body', false)
-    const finished = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 })
-    closeTurn(harness, 3)
-    expect(finished).toEqual({ status: 'ok', anchorMessageId: 'new-body' })
-    expect(started.opId).toMatch(/^body-op-/)
   })
 
-  it('rejects restore while the failed turn is open and restores the previous body afterwards', async () => {
+  it('rejects restore while the failed turn is open and restores the previous body without a new message', async () => {
     const harness = healthyHarness()
-    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
     const started = await startRegenerate(harness.deps, {
       groupId: 'anchor-1',
       expectedAnchorId: 'anchor-1',
@@ -733,12 +819,12 @@ describe('AgentTavern body runtime', () => {
     })
 
     const trigger = firstFollowup(harness)
-    const triggerTurn = appendTriggerTurn(harness, 3, trigger, undefined, false)
+    const triggerTurn = appendTriggerTurn(harness, 2, trigger, undefined, false)
 
     await expect(restoreBodyAfterFailure(harness.deps, started.op)).rejects.toMatchObject({ code: 'session-busy' })
 
-    const failed = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 })
-    closeTurn(harness, 3)
+    const failed = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 2 })
+    closeTurn(harness, 2)
     expect(failed.status).toBe('failed')
     expect(failed.status === 'failed' ? failed.reason : '').toContain('no assistant message with text')
     expect(harness.activeRestrictions).toBe(0)
@@ -748,57 +834,56 @@ describe('AgentTavern body runtime', () => {
     expect(bodyEvent(harness.events, 'select')).toBeUndefined()
     expect(bodyEvent(harness.events, 'op-finish')?.data).toMatchObject({ result: 'failed' })
 
+    const assistantsBefore = harness.events.filter((event) => event.type === 'assistant/message').length
     const restoredId = await restoreBodyAfterFailure(harness.deps, started.op)
-    expect(harness.phase.lastTurn).toBe(4)
+    expect(restoredId).toBe('anchor-1')
+    expect(harness.phase.lastTurn).toBe(3)
 
-    const restoredSeq = seqOfMessage(harness.events, restoredId)
-    expect(restoredSeq).toBeDefined()
-    const restoredEvent = harness.events.find((event) => event.seq === restoredSeq)
-    expect(restoredEvent?.type).toBe('assistant/message')
-    expect(restoredEvent?.data.stream).toEqual([])
-    const restoredMessage = restoredEvent === undefined ? undefined : messageOf(restoredEvent)
-    expect(restoredMessage).toMatchObject({ id: restoredId, role: 'assistant' })
-    expect(restoredMessage?.source).toEqual({ kind: 'model', provider: 'test-provider', model: 'test-model' })
-    expect((restoredMessage?.content as Array<Record<string, unknown>>)[0]).toEqual({ type: 'text', text: 'old body' })
-
-    expect(bodyEvent(harness.events, 'restore')?.data).toMatchObject({
-      groupId: 'anchor-1',
-      messageId: restoredId,
-      index: 0,
-    })
+    // The old anchor never left the surface, so recovery appends no assistant
+    // copy and no `restore` body event: the JSONL floor stays untouched.
+    expect(harness.events.filter((event) => event.type === 'assistant/message')).toHaveLength(assistantsBefore)
+    expect(bodyEvent(harness.events, 'restore')).toBeUndefined()
     const surface = harness.surface()
-    expect(surface).toContain(restoredSeq)
+    expect(surface).toContain(anchorSeq)
     expect(surface).not.toContain(triggerTurn.triggerSeq)
     expect(surface).not.toContain(triggerTurn.processSeq)
     expect(surface).not.toContain(triggerTurn.toolResultSeq)
+
+    const hide = harness.events.find((event) => event.type === 'developer/message' && event.data.turn === 3)
+    expect(hide?.opts).toMatchObject({
+      surfaceOp: { op: 'replace', startSeq: triggerTurn.triggerSeq, endSeq: triggerTurn.toolResultSeq },
+      sourceEventSeqs: [triggerTurn.triggerSeq, triggerTurn.processSeq, triggerTurn.toolResultSeq],
+    })
   })
 
-  it('hides an errored candidate turn and restores the previous body over it', async () => {
+  it('hides an errored candidate turn and keeps the previous body visible', async () => {
     const harness = healthyHarness()
-    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
     const started = await startRegenerate(harness.deps, {
       groupId: 'anchor-1',
       expectedAnchorId: 'anchor-1',
       expectedIndex: 0,
     })
     const trigger = firstFollowup(harness)
-    const failedTurn = appendTriggerTurn(harness, 3, trigger, 'failed-body', false)
+    const failedTurn = appendTriggerTurn(harness, 2, trigger, 'failed-body', false)
     harness.session.append('turn/end', {
-      turn: 3,
+      turn: 2,
       reason: { kind: 'error', error: { message: 'model failed', code: 'TEST' } },
     })
 
+    const assistantsBefore = harness.events.filter((event) => event.type === 'assistant/message').length
     const restoredId = await restoreBodyAfterFailure(harness.deps, started.op)
-    const restoredSeq = seqOfMessage(harness.events, restoredId)
-    expect(restoredSeq).toBeDefined()
+    expect(restoredId).toBe('anchor-1')
     const surface = harness.surface()
-    expect(surface).toContain(restoredSeq)
+    expect(surface).toContain(anchorSeq)
     expect(surface).not.toContain(failedTurn.triggerSeq)
     expect(surface).not.toContain(failedTurn.processSeq)
     expect(surface).not.toContain(failedTurn.toolResultSeq)
     expect(surface).not.toContain(failedTurn.finalSeq)
+    expect(harness.events.filter((event) => event.type === 'assistant/message')).toHaveLength(assistantsBefore)
+    expect(bodyEvent(harness.events, 'restore')).toBeUndefined()
     expect(harness.activeRestrictions).toBe(0)
-    expect(harness.phase.lastTurn).toBe(4)
+    expect(harness.phase.lastTurn).toBe(3)
   })
 
   it('releases the write-tool restriction when start fails after followup', async () => {
@@ -830,13 +915,17 @@ describe('AgentTavern body runtime', () => {
     expect(failure.op).toBeDefined()
     expect(harness.activeRestrictions).toBe(0)
     expect(harness.denies).toHaveLength(1)
-    expect(harness.surface()).not.toContain(anchorSeq)
+    expect(harness.surface()).toContain(anchorSeq)
     expect(bodyEvent(harness.events, 'op-finish')?.data).toMatchObject({ result: 'failed' })
     if (failure.op === undefined) throw new Error('start failure did not expose its operation')
 
+    const assistantsBefore = harness.events.filter((event) => event.type === 'assistant/message').length
     const restoredId = await restoreBodyAfterFailure(harness.deps, failure.op)
-    expect(harness.surface()).toContain(seqOfMessage(harness.events, restoredId))
-    expect(harness.phase.lastTurn).toBe(3)
+    expect(restoredId).toBe('anchor-1')
+    expect(harness.surface()).toContain(anchorSeq)
+    expect(harness.events.filter((event) => event.type === 'assistant/message')).toHaveLength(assistantsBefore)
+    expect(bodyEvent(harness.events, 'restore')).toBeUndefined()
+    expect(harness.phase.lastTurn).toBe(0)
   })
 
   it('refuses regeneration when the host turn base cannot advance', async () => {
@@ -880,9 +969,9 @@ describe('AgentTavern body runtime', () => {
 
     expect(bodyEventsWithOp(harness.events, 'op-start')).toHaveLength(1)
     const trigger = firstFollowup(harness)
-    appendTriggerTurn(harness, 3, trigger, 'new-body', false)
-    const finished = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 })
-    closeTurn(harness, 3)
+    appendTriggerTurn(harness, 2, trigger, 'new-body', false)
+    const finished = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 2 })
+    closeTurn(harness, 2)
     expect(finished).toEqual({ status: 'ok', anchorMessageId: 'new-body' })
     expect(harness.activeRestrictions).toBe(0)
   })
@@ -896,9 +985,9 @@ describe('AgentTavern body runtime', () => {
       expectedIndex: 0,
     })
     const trigger = firstFollowup(harness)
-    appendTriggerTurn(harness, 3, trigger, 'new-body', false)
-    const settled = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 })
-    closeTurn(harness, 3)
+    appendTriggerTurn(harness, 2, trigger, 'new-body', false)
+    const settled = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 2 })
+    closeTurn(harness, 2)
     expect(settled).toEqual({ status: 'ok', anchorMessageId: 'new-body' })
 
     await expect(applyBodyEdit(harness.deps, {
@@ -1007,9 +1096,9 @@ describe('AgentTavern body runtime', () => {
       expectedIndex: 0,
     })
     const trigger = firstFollowup(harness)
-    appendTriggerTurn(harness, 3, trigger, 'new-body', false)
-    const finished = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 })
-    closeTurn(harness, 3)
+    appendTriggerTurn(harness, 2, trigger, 'new-body', false)
+    const finished = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 2 })
+    closeTurn(harness, 2)
     expect(finished).toEqual({ status: 'ok', anchorMessageId: 'new-body' })
 
     const ledger = foldBodyLedger(toBodySessionEvents(harness.events), 'anchor-1', harness.events.length - 1)
@@ -1053,9 +1142,9 @@ describe('AgentTavern body runtime', () => {
       expectedIndex: 0,
     })
     const trigger = firstFollowup(harness)
-    appendTriggerTurn(harness, 3, trigger, 'new-body', false)
-    const finished = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 })
-    closeTurn(harness, 3)
+    appendTriggerTurn(harness, 2, trigger, 'new-body', false)
+    const finished = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 2 })
+    closeTurn(harness, 2)
 
     expect(finished).toEqual({ status: 'ok', anchorMessageId: 'new-body' })
     expect(recorded.length).toBeGreaterThanOrEqual(5)
@@ -1165,7 +1254,7 @@ describe('AgentTavern body runtime', () => {
     expect(foldPendingOps(finished)).toEqual([])
   })
 
-  it('prepares the old anchor turn rollback before hiding the anchor', async () => {
+  it('prepares the old anchor turn rollback before the trigger starts', async () => {
     const calls: string[] = []
     const observed = { bodyEvents: -1, developer: -1, surface: [] as number[] }
     let harness = undefined as unknown as Harness
@@ -1199,7 +1288,11 @@ describe('AgentTavern body runtime', () => {
     expect(observed.developer).toBe(0)
     expect(observed.surface).toContain(anchorSeq)
     expect(bodyEventsOf(harness.events).filter((event) => event.data.op === 'op-start')).toHaveLength(1)
-    expect(harness.surface()).not.toContain(anchorSeq)
+    // The anchor stays visible until successful settlement; start only keeps
+    // candidate 0 (a log record) alongside it.
+    expect(harness.surface()).toContain(anchorSeq)
+    expect(harness.events.some((event) => event.type === 'developer/message')).toBe(false)
+    expect(harness.phase.lastTurn).toBe(0)
     expect(started.op.rollbackPlan?.turn).toBe(1)
   })
 
@@ -1221,10 +1314,10 @@ describe('AgentTavern body runtime', () => {
       expectedIndex: 0,
     })
     const trigger = firstFollowup(harness)
-    appendTriggerTurn(harness, 3, trigger, 'new-body', false)
+    appendTriggerTurn(harness, 2, trigger, 'new-body', false)
 
-    const finished = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 })
-    closeTurn(harness, 3)
+    const finished = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 2 })
+    closeTurn(harness, 2)
 
     expect(finished).toEqual({ status: 'ok', anchorMessageId: 'new-body' })
     expect(calls).toEqual([`prepare:${harness.agentId}:1:anchor-1`, 'commit:1'])
@@ -1259,32 +1352,35 @@ describe('AgentTavern body runtime', () => {
       appendRecord: true,
       rollback: port,
     })
-    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
     const started = await startRegenerate(harness.deps, {
       groupId: 'anchor-1',
       expectedAnchorId: 'anchor-1',
       expectedIndex: 0,
     })
     const trigger = firstFollowup(harness)
-    appendTriggerTurn(harness, 3, trigger, undefined, false)
-    const failed = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 })
-    closeTurn(harness, 3)
+    appendTriggerTurn(harness, 2, trigger, undefined, false)
+    const failed = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 2 })
+    closeTurn(harness, 2)
     expect(failed.status).toBe('failed')
 
+    const assistantsBefore = harness.events.filter((event) => event.type === 'assistant/message').length
     const restoredId = await restoreBodyAfterFailure(harness.deps, started.op)
 
-    expect(restoredId).toMatch(/^body-restore-/)
+    expect(restoredId).toBe('anchor-1')
     expect(calls).toEqual([
       `prepare:${harness.agentId}:1:anchor-1`,
-      'rollback-turn:3',
+      'rollback-turn:2',
       'restore:1',
     ])
-    expect(observed.turnStartsAtRollback).toBe(3)
+    expect(observed.turnStartsAtRollback).toBe(2)
     expect(observed.restoreEventsAtRollback).toBe(0)
-    expect(observed.turnStartsAtRestore).toBe(3)
+    expect(observed.turnStartsAtRestore).toBe(2)
     expect(observed.restoreEventsAtRestore).toBe(0)
-    expect(harness.phase.lastTurn).toBe(4)
-    expect(bodyEvent(harness.events, 'restore')?.data).toMatchObject({ messageId: restoredId })
+    expect(harness.phase.lastTurn).toBe(3)
+    expect(harness.surface()).toContain(anchorSeq)
+    expect(harness.events.filter((event) => event.type === 'assistant/message')).toHaveLength(assistantsBefore)
+    expect(bodyEvent(harness.events, 'restore')).toBeUndefined()
   })
 
   it('refuses regeneration with zero body records when prepare fails', async () => {
@@ -1397,18 +1493,18 @@ describe('AgentTavern body runtime', () => {
       expectedIndex: 0,
     })
     const trigger = firstFollowup(harness)
-    appendTriggerTurn(harness, 3, trigger, undefined, false)
-    const failed = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 })
-    closeTurn(harness, 3)
+    appendTriggerTurn(harness, 2, trigger, undefined, false)
+    const failed = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 2 })
+    closeTurn(harness, 2)
     expect(failed.status).toBe('failed')
     const turnStartsBefore = harness.events.filter((event) => event.type === 'turn/start').length
 
     await expect(restoreBodyAfterFailure(harness.deps, started.op)).rejects.toMatchObject({
       code: 'operation-failed',
-      message: expect.stringContaining('failed to roll back turn 3 writes'),
+      message: expect.stringContaining('failed to roll back turn 2 writes'),
     })
 
-    expect(calls).toEqual([`prepare:${harness.agentId}:1:anchor-1`, 'rollback-turn:3'])
+    expect(calls).toEqual([`prepare:${harness.agentId}:1:anchor-1`, 'rollback-turn:2'])
     expect(harness.events.filter((event) => event.type === 'turn/start')).toHaveLength(turnStartsBefore)
     expect(bodyEvent(harness.events, 'restore')).toBeUndefined()
   })
@@ -1444,9 +1540,9 @@ describe('AgentTavern body runtime', () => {
       expectedIndex: 0,
     })
     const trigger = firstFollowup(harness)
-    appendTriggerTurn(harness, 3, trigger, undefined, false)
-    const failed = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 })
-    closeTurn(harness, 3)
+    appendTriggerTurn(harness, 2, trigger, undefined, false)
+    const failed = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 2 })
+    closeTurn(harness, 2)
     expect(failed.status).toBe('failed')
 
     await expect(restoreBodyAfterFailure(harness.deps, started.op)).rejects.toMatchObject({
@@ -1476,9 +1572,9 @@ describe('AgentTavern body runtime', () => {
       expectedIndex: 0,
     })
     const trigger = firstFollowup(harness)
-    appendTriggerTurn(harness, 3, trigger, 'new-body', false)
+    appendTriggerTurn(harness, 2, trigger, 'new-body', false)
 
-    await expect(finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 }))
+    await expect(finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 2 }))
       .rejects.toMatchObject({ code: 'operation-failed' })
   })
 
@@ -1502,9 +1598,9 @@ describe('AgentTavern body runtime', () => {
       expectedIndex: 0,
     })
     const trigger = firstFollowup(harness)
-    appendTriggerTurn(harness, 3, trigger, undefined, false)
-    const failed = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 })
-    closeTurn(harness, 3)
+    appendTriggerTurn(harness, 2, trigger, undefined, false)
+    const failed = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 2 })
+    closeTurn(harness, 2)
     expect(failed.status).toBe('failed')
     const turnStartsBefore = harness.events.filter((event) => event.type === 'turn/start').length
 
@@ -1513,7 +1609,7 @@ describe('AgentTavern body runtime', () => {
 
     expect(calls).toEqual([
       `prepare:${harness.agentId}:1:anchor-1`,
-      'rollback-turn:3',
+      'rollback-turn:2',
       'restore:1',
     ])
     expect(harness.events.filter((event) => event.type === 'turn/start')).toHaveLength(turnStartsBefore)
@@ -1752,7 +1848,7 @@ describe('AgentTavern durable body rollback plan', () => {
     expect(plan.diagnostics[0]).toEqual({ code: 'journal-uncommitted-skipped', message: 'before-only journal id skipped' })
   })
 
-  it('restores the durable plan after a restart cleared the in-process map', async () => {
+  it('restores the durable plan after a restart without adding a body message', async () => {
     const calls: string[] = []
     const restoredPlans: BodyRollbackPlan[] = []
     const harness = createHarness({
@@ -1766,18 +1862,19 @@ describe('AgentTavern durable body rollback plan', () => {
         restore: async (plan) => { restoredPlans.push(plan) },
       }, calls),
     })
-    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
     await startRegenerate(harness.deps, {
       groupId: 'anchor-1',
       expectedAnchorId: 'anchor-1',
       expectedIndex: 0,
     })
     const trigger = firstFollowup(harness)
-    appendTriggerTurn(harness, 3, trigger, undefined, false)
-    closeTurn(harness, 3)
+    const failedTurn = appendTriggerTurn(harness, 2, trigger, undefined, false)
+    closeTurn(harness, 2)
 
     // Simulated process restart: the durable log is all recovery may use.
     pendingByAgent.clear()
+    const assistantsBefore = harness.events.filter((event) => event.type === 'assistant/message').length
 
     const outcome = await recoverBodyOperationWith(
       recoveryHost(),
@@ -1788,24 +1885,24 @@ describe('AgentTavern durable body rollback plan', () => {
     expect(outcome).toMatchObject({ agentId: harness.agentId, status: 'restored', pending: 1 })
     expect(calls).toEqual([
       `prepare:${harness.agentId}:1:anchor-1`,
-      'rollback-turn:3',
+      'rollback-turn:2',
       'restore:1',
     ])
     expect(restoredPlans).toHaveLength(1)
     expect(restoredPlans[0]).toEqual(rollbackPlan(harness.agentId, 1, 'anchor-1'))
 
-    const restoreEvent = bodyEvent(harness.events, 'restore')
-    const restoredId = restoreEvent?.data.messageId
-    if (typeof restoredId !== 'string') throw new Error('recovery did not record a restore message')
-    const restoredSeq = seqOfMessage(harness.events, restoredId)
-    expect(restoredSeq).toBeDefined()
-    const restoredEvent = harness.events.find((event) => event.seq === restoredSeq)
-    const restoredMessage = restoredEvent === undefined ? undefined : messageOf(restoredEvent)
-    expect((restoredMessage?.content as Array<Record<string, unknown>>)[0]).toEqual({ type: 'text', text: 'old body' })
-    expect(harness.surface()).toContain(restoredSeq)
+    // The anchor stayed on the surface, so recovery hides only the failed turn.
+    expect(harness.events.filter((event) => event.type === 'assistant/message')).toHaveLength(assistantsBefore)
+    expect(bodyEvent(harness.events, 'restore')).toBeUndefined()
+    const surface = harness.surface()
+    expect(surface).toContain(anchorSeq)
+    expect(surface).not.toContain(failedTurn.triggerSeq)
+    expect(surface).not.toContain(failedTurn.processSeq)
+    expect(surface).not.toContain(failedTurn.toolResultSeq)
+    expect(harness.phase.lastTurn).toBe(3)
   })
 
-  it('restores a legacy op without a plan and never calls plan restore', async () => {
+  it('restores a legacy op whose anchor was already hidden through the body-restore fallback', async () => {
     const calls: string[] = []
     const harness = createHarness({
       status: 'idle',
@@ -1816,18 +1913,20 @@ describe('AgentTavern durable body rollback plan', () => {
       appendRecord: true,
       rollback: createRollbackPort({}, calls),
     })
-    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
     appendLegacyOpStart(harness, 'body-op-legacy')
-    harness.session.append('turn/start', { turn: 2 })
-    harness.session.append('step/start', { turn: 2, step: 1 })
+    hideAnchorLikeLegacyStart(harness, 2, anchorSeq)
+    harness.session.append('turn/start', { turn: 3 })
+    harness.session.append('step/start', { turn: 3, step: 1 })
     harness.session.append('user/message', {
       id: 'body-trigger-body-op-legacy',
       role: 'user',
       content: [{ type: 'text', text: 'regenerate' }],
       source: { form: 'body-regenerate', opId: 'body-op-legacy', groupId: 'anchor-1' },
     }, { surfaceOp: 'append' })
-    harness.session.append('step/end', { turn: 2, step: 1 })
-    closeTurn(harness, 2)
+    harness.session.append('step/end', { turn: 3, step: 1 })
+    closeTurn(harness, 3)
+    expect(harness.surface()).not.toContain(anchorSeq)
 
     const folded = foldPendingOps(harness.events)
     expect(folded).toHaveLength(1)
@@ -1840,10 +1939,17 @@ describe('AgentTavern durable body rollback plan', () => {
     )
 
     expect(outcome).toMatchObject({ agentId: harness.agentId, status: 'restored', pending: 1 })
-    expect(calls).toEqual(['rollback-turn:2'])
+    expect(calls).toEqual(['rollback-turn:3'])
     expect(calls.some((call) => call.startsWith('restore:'))).toBe(false)
     const restoreEvent = bodyEvent(harness.events, 'restore')
     expect(restoreEvent?.data).toMatchObject({ groupId: 'anchor-1', index: 0 })
+    const restoredId = restoreEvent?.data.messageId
+    if (typeof restoredId !== 'string') throw new Error('legacy recovery did not record a restore message')
+    expect(restoredId).toMatch(/^body-restore-/)
+    const restoredSeq = seqOfMessage(harness.events, restoredId)
+    expect(restoredSeq).toBeDefined()
+    expect(harness.surface()).toContain(restoredSeq)
+    expect(harness.phase.lastTurn).toBe(4)
   })
 
   it('rejects a malformed durable plan with invalid-event instead of a partial accept', async () => {

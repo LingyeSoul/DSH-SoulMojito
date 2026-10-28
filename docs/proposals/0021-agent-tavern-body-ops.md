@@ -221,10 +221,8 @@ const bodyProjection = {
 3. 用 agent-scoped 工具限制禁用写工具（记忆、变量、剧本推进、游戏落子等）；读工具保留。
    deny 列表必须先与当前可见工具核对，未知工具名不要传给 `restrict`（宿主会抛错并终止
    本次操作）。
-4. 对旧 anchor 的当前 surface 节点追加空 `developer/message` replacement，把它移出模型面。
-   如果旧 turn 含 tool/process 节点，一次 replacement 覆盖从 trigger 到最终 assistant 之前
-   的连续区间，避免旧工具结果留在模型上下文。replacement 必须落在**已打开的 turn + step**：
-   idle 时用 bridge turn 打开，turn-stopping 内则先 `step/start`、替换后再 `step/end`。
+4. **开始时不隐藏旧 anchor**：旧正文在新 turn 运行期间保持可见，模型看到的是“用户要求
+   重写这段正文”的正常上下文；这样失败时无需再追加 assistant 副本。不打开 bridge turn。
 5. `agent.followup()` 投递 plugin source 的合成 trigger：
 
 ```ts
@@ -244,15 +242,17 @@ const trigger = {
 6. `agent/turn-stopping` 中：
    - 找本 turn 最后一个带文本且无 tool-call 的 `assistant/message`；
    - 追加 `candidate` 与 `select`；
-   - 用空 `developer/message` replacement 把 trigger 与该 turn 的 process 节点移出模型面；
+   - 用空 `developer/message` replacement 把 trigger、该 turn 的 process 节点，以及旧正文
+     anchor 与其旧 turn 的 process 节点移出模型面；真实用户消息不隐藏；
    - 追加 `op-finish { result: 'ok', anchorId }`。
 7. 失败 / 取消 / 超时（`turn-stopping` 在错误、取消、blocked 路径不会触发，必须由
    `turn/end` 观察或启动扫描触发）：
    - 追加 `op-finish { result: 'failed', reason }`；
-   - 用不调用模型的恢复 turn 重新放回旧正文：
-     `turn/start` → `step/start` → 隐藏 trigger → `assistant/message` 拷贝
-     （`stream: []`，沿用旧 provider/model）→ `body/restore` → 关闭 step/turn →
-     `advanceHostTurnBase`；
+   - 旧正文仍在 surface：只用一个 bridge turn 隐藏失败 turn 的 trigger/process 节点，
+     **不追加 assistant 消息、不追加 `restore` 事件、不改 JSONL 正文**；
+   - 旧版本已把 anchor 隐藏的会话：保留 fallback，打开不调用模型的恢复 turn，追加
+     `assistant/message` 副本（`stream: []`，沿用旧 provider/model）与 `body/restore`，
+     关闭 step/turn 后 `advanceHostTurnBase`；
    - 恢复 turn 的 trigger 同样用空 developer 隐藏。
 8. HTTP 建议返回 `202 { opId }`，客户端轮询 `GET body` 或订阅 `op-finish`，避免长连接
    等待整个 turn。

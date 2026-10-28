@@ -46,7 +46,7 @@ receipt 分叉。候选切换还要求区分 A/B 各自的补丁，风险更高�
 | 预检非原子 | 预检读 chat 快照，与 projector CAS 不在同一事务；并发冲突由 projector 重试/CAS 兜底。 |
 | receipt 环形上限 | `MVU_RECEIPTS_LIMIT = 20` 与 settle receipt 共用；候选 receipt 被挤出后显式 `body-receipt-missing`，P1 再定保留策略。 |
 | select 仍关闭 | 必须与候选感知 regenerate 同批；单独放开会产生双写。 |
-| 正文恢复消息 | 重生成失败恢复仍追加 `body-restore-*` assistant 消息；无回滚元数据，但属于模型可见 surface，后续单独改投影方案。 |
+| 正文恢复消息 | 已由 surface 决策处理：旧 anchor 可见时失败恢复只隐藏失败 turn 节点，不追加 assistant；仅旧版本已隐藏 anchor 的会话保留 `body-restore-*` fallback。 |
 | 无真机 E2E | 尚未跑 `dsh web` 浏览器闭环，需要指定 profile 并允许写 `$DSH_HOME`。 |
 
 ## 删除路径

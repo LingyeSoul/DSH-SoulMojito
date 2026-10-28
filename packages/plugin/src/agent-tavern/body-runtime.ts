@@ -57,7 +57,6 @@ import {
 } from './body-runtime-session.js'
 import {
   anchorTarget,
-  appendHideInBridgeTurn,
   applyWriteRestriction,
   assertLastBodyTarget,
   bodyLedger,
@@ -66,7 +65,6 @@ import {
   ensureBodyLedger,
   ledgerForRegenerate,
   normalizeDenyTools,
-  oldBodyTargets,
   requireCandidate,
   stateFromLedger,
 } from './body-runtime-state.js'
@@ -122,10 +120,10 @@ export interface StartRegenerateResult {
  *
  * The write rollback plan is prepared before any body record is written: a
  * refused plan leaves the old anchor visible and produces no `op-start`. The
- * previous anchor is then moved out of the model surface before `followup` is
- * called. A small bridge turn is used because DSH v4 only admits
- * `developer/message` inside an open turn and step; the bridge keeps the
- * replacement reload-valid without fabricating an assistant replacement.
+ * previous anchor deliberately stays on the model surface while the new turn
+ * runs, so a failed regeneration has nothing to add back: the old body never
+ * left. Successful settlement hides it together with the new turn's
+ * trigger/process nodes (see `finalizeTurnStopping`).
  */
 export async function startRegenerate(
   deps: BodyRuntimeDeps,
@@ -196,7 +194,6 @@ export async function startRegenerate(
           index: 0,
         })
       }
-      appendHideInBridgeTurn(deps, oldBodyTargets(events, surface, target))
       active.release = applyWriteRestriction(deps, deny)
       await deps.agent.followup(buildRegenerateTrigger(deps, active, request.feedback))
       return {

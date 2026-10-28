@@ -323,7 +323,8 @@ function recoveryTurnMismatch(reason: string): boolean {
 
 /**
  * Put the previous anchor back after a recovered operation produced no usable
- * candidate. The runtime owns the model-free restore turn and its bracket.
+ * candidate. `restoreBodyAfterFailure` owns the model-free hide when the old
+ * anchor is still on the surface, and the legacy restore turn otherwise.
  */
 async function restoreRecoveredOperation(
   ctx: BodyRecoveryHost,
@@ -331,11 +332,11 @@ async function restoreRecoveredOperation(
   op: PendingBodyOperation,
 ): Promise<boolean> {
   try {
-    const restoredMessageId = await restoreBodyAfterFailure(deps, op)
+    const restoredAnchorId = await restoreBodyAfterFailure(deps, op)
     info(ctx, 'dsh-soulmojito body: recovery restored the previous anchor', {
       agentId: deps.agent.id,
       opId: op.opId,
-      restoredMessageId,
+      restoredAnchorId,
     })
     return true
   } catch (error) {

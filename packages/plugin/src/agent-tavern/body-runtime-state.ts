@@ -32,6 +32,7 @@ import {
   eventAtSeq,
   eventsOf,
   findEventByMessageId,
+  findSurfaceSeqByMessageId,
   hasToolCall,
   isPlainRecord,
   messageIdOf,
@@ -383,9 +384,11 @@ export function appendDeveloperHide(deps: BodyRuntimeDeps, turn: number, step: n
 }
 
 /**
- * Surface nodes removed before a regeneration starts: the old anchor plus every
- * process node of its turn (tool calls, tool results, prior body hide nodes and
- * synthetic body triggers). Real user messages and system prompts stay.
+ * Surface nodes belonging to one body anchor and its turn: the anchor itself
+ * plus every process node of that turn (tool calls, tool results, prior body
+ * hide nodes and synthetic body triggers). Real user messages and system
+ * prompts stay visible. The runtime uses this at successful settlement to
+ * remove the previous body together with its turn's process nodes.
  */
 export function oldBodyTargets(
   events: readonly RuntimeEvent[],
@@ -408,6 +411,29 @@ export function oldBodyTargets(
     if (numberField(event.data.turn) === turn) targets.add(seq)
   }
   return targets
+}
+
+/**
+ * Surface targets of the previous anchor, resolved by its message id at the
+ * moment they are hidden.
+ *
+ * An empty set means the anchor already left the surface (a session written by
+ * an older build that hid it when the operation started). Settlement then
+ * leaves it hidden, and failure recovery takes the compatibility path instead
+ * of the model-free one.
+ */
+export function oldAnchorSurfaceTargets(
+  events: readonly RuntimeEvent[],
+  surface: readonly number[],
+  previousAnchorId: string,
+): Set<number> {
+  const seq = findSurfaceSeqByMessageId(events, surface, previousAnchorId)
+  if (seq === undefined) return new Set<number>()
+  const event = findEventByMessageId(events, previousAnchorId)
+  if (event === undefined) return new Set<number>()
+  const message = messageOf(event)
+  if (message === undefined) return new Set<number>()
+  return oldBodyTargets(events, surface, { event, message, seq })
 }
 
 export function hideTargets(

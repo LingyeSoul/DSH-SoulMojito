@@ -16777,7 +16777,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("5c42305") : void 0;
+  const commit = true ? normalizeCommit("1aa73c8") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -23858,19 +23858,6 @@ function openTurnNumber(events) {
   }
   return open2;
 }
-function lastClosedTurnNumber(events) {
-  let open2;
-  let lastClosed;
-  for (const event of events) {
-    if (event.type === "turn/start") {
-      open2 = numberField(event.data.turn);
-    } else if (event.type === "turn/end") {
-      if (open2 !== void 0) lastClosed = open2;
-      open2 = void 0;
-    }
-  }
-  return lastClosed;
-}
 function turnOfEventSeq(events, seq) {
   let open2;
   let lastClosed;
@@ -24282,6 +24269,15 @@ function oldBodyTargets(events, surface, target) {
   }
   return targets;
 }
+function oldAnchorSurfaceTargets(events, surface, previousAnchorId) {
+  const seq = findSurfaceSeqByMessageId(events, surface, previousAnchorId);
+  if (seq === void 0) return /* @__PURE__ */ new Set();
+  const event = findEventByMessageId(events, previousAnchorId);
+  if (event === void 0) return /* @__PURE__ */ new Set();
+  const message = messageOf2(event);
+  if (message === void 0) return /* @__PURE__ */ new Set();
+  return oldBodyTargets(events, surface, { event, message, seq });
+}
 function hideTargets(events, surface, triggerMessageId, turn, candidateMessageId) {
   const targets = /* @__PURE__ */ new Set();
   for (const seq of surface) {
@@ -24506,6 +24502,7 @@ async function settleBodyOperation(deps, context, turn) {
     appendBodyEvent(deps, { op: "select", groupId: context.op.groupId, index: candidateIndex });
     selectAppended = true;
     const hidden = hideTargets(events, surface, triggerMessageIdOf(context.op), turn, candidate.messageId);
+    for (const seq of oldAnchorSurfaceTargets(events, surface, context.op.previousAnchorId)) hidden.add(seq);
     appendHideInOpenTurn(deps, turn, hidden);
   } catch (error) {
     const reason = `${context.label} ${context.op.opId} failed to settle turn ${turn}: ${errorMessage3(error)}`;
@@ -24591,18 +24588,10 @@ function oldAnchorTurn(events, previousAnchorId) {
   const anchor = findEventByMessageId(events, previousAnchorId);
   return anchor === void 0 ? void 0 : turnOfEventSeq(events, anchor.seq);
 }
-async function rollbackNewTurnWrites(deps, op, events) {
+async function rollbackNewTurnWrites(deps, op, events, newTurn) {
   const port = deps.writeRollback;
   const rollback = port?.rollbackTurnWrites;
-  if (port === void 0 || rollback === void 0) return;
-  const newTurn = turnOfUserMessage(events, triggerMessageIdOf(op)) ?? lastClosedTurnNumber(events);
-  if (newTurn === void 0) {
-    throw failureFor(
-      bodyRuntimeError("restore-unavailable", `body restore ${op.opId} cannot determine the failed turn`),
-      `body restore ${op.opId} cannot determine the failed turn`,
-      op
-    );
-  }
+  if (port === void 0 || rollback === void 0 || newTurn === void 0) return;
   const oldTurn = op.rollbackPlan?.turn ?? oldAnchorTurn(events, op.previousAnchorId);
   if (oldTurn !== void 0 && newTurn === oldTurn) {
     throw failureFor(
@@ -24652,9 +24641,25 @@ async function restoreBodyAfterFailure(deps, op) {
     if (previousMessage === void 0 || previous.type !== "assistant/message") {
       throw bodyRuntimeError("restore-unavailable", `body restore ${op.opId} previous anchor '${op.previousAnchorId}' is not an assistant message`);
     }
-    const previousText = textOfMessage(previousMessage);
-    if (previousText.trim() === "") {
+    if (textOfMessage(previousMessage).trim() === "") {
       throw bodyRuntimeError("restore-unavailable", `body restore ${op.opId} previous anchor '${op.previousAnchorId}' has no body text`);
+    }
+    const triggerId = triggerMessageIdOf(op);
+    const failedTurn = turnOfUserMessage(events, triggerId);
+    const initialSurface = surfaceNodeList(deps.session);
+    const previousSeq = findSurfaceSeqByMessageId(events, initialSurface, op.previousAnchorId);
+    const targets = failedTurnTargets(events, initialSurface, triggerId, failedTurn);
+    await rollbackNewTurnWrites(deps, op, events, failedTurn);
+    await restoreBodyRollbackPlan(deps, op);
+    if (previousSeq !== void 0) {
+      try {
+        appendHideInBridgeTurn(deps, targets);
+      } catch (error) {
+        releaseOperationByOp(deps, op, `body restore ${op.opId}`);
+        throw failureFor(error, `body restore ${op.opId} failed`, op);
+      }
+      releaseOperationByOp(deps, op, `body restore ${op.opId}`);
+      return op.previousAnchorId;
     }
     const model = modelSourceOf(previousMessage);
     if (model === void 0) {
@@ -24673,21 +24678,6 @@ async function restoreBodyAfterFailure(deps, op) {
         `body restore ${op.opId} cannot restore group '${op.groupId}' index ${op.previousIndex}: the ledger has ${ledgerBeforeRestore.candidates.length} candidates`
       );
     }
-    const triggerId = triggerMessageIdOf(op);
-    const failedTurn = turnOfUserMessage(events, triggerId);
-    const targets = /* @__PURE__ */ new Set();
-    const initialSurface = surfaceNodeList(deps.session);
-    const triggerSeq = findSurfaceSeqByMessageId(events, initialSurface, triggerId);
-    if (triggerSeq !== void 0) targets.add(triggerSeq);
-    if (failedTurn !== void 0) {
-      for (const seq of initialSurface) {
-        const event = eventAtSeq(events, seq);
-        if (event.type === "system/message") continue;
-        if (numberField(event.data.turn) === failedTurn) targets.add(seq);
-      }
-    }
-    await rollbackNewTurnWrites(deps, op, events);
-    await restoreBodyRollbackPlan(deps, op);
     const turn = (lastLoggedTurn(deps.agent) ?? 0) + 1;
     const restoredMessageId = `body-restore-${randomUUID4()}`;
     let turnOpen = false;
@@ -24732,6 +24722,18 @@ async function restoreBodyAfterFailure(deps, op) {
     }
     return restoredMessageId;
   });
+}
+function failedTurnTargets(events, surface, triggerId, failedTurn) {
+  const targets = /* @__PURE__ */ new Set();
+  const triggerSeq = findSurfaceSeqByMessageId(events, surface, triggerId);
+  if (triggerSeq !== void 0) targets.add(triggerSeq);
+  if (failedTurn === void 0) return targets;
+  for (const seq of surface) {
+    const event = eventAtSeq(events, seq);
+    if (event.type === "system/message") continue;
+    if (numberField(event.data.turn) === failedTurn) targets.add(seq);
+  }
+  return targets;
 }
 
 // packages/plugin/src/agent-tavern/body-runtime.ts
@@ -24793,7 +24795,6 @@ async function startRegenerate(deps, request) {
           index: 0
         });
       }
-      appendHideInBridgeTurn(deps, oldBodyTargets(events, surface, target));
       active.release = applyWriteRestriction(deps, deny);
       await deps.agent.followup(buildRegenerateTrigger(deps, active, request.feedback));
       return {
@@ -25566,11 +25567,11 @@ function recoveryTurnMismatch(reason) {
 }
 async function restoreRecoveredOperation(ctx, deps, op) {
   try {
-    const restoredMessageId = await restoreBodyAfterFailure(deps, op);
+    const restoredAnchorId = await restoreBodyAfterFailure(deps, op);
     info(ctx, "dsh-soulmojito body: recovery restored the previous anchor", {
       agentId: deps.agent.id,
       opId: op.opId,
-      restoredMessageId
+      restoredAnchorId
     });
     return true;
   } catch (error) {

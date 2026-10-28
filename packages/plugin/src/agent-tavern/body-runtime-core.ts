@@ -51,7 +51,7 @@ export interface BodyRuntimeFailure extends Error {
   cause?: unknown
   /** Concrete `body-state-unsafe` signal forwarded from the rollback port. */
   detail?: string
-  /** Present when a start failed after the previous anchor was already hidden. */
+  /** Present when a start failed after the operation was recorded. */
   op?: PendingBodyOperation
 }
 
@@ -155,8 +155,8 @@ export interface BodyRuntimeDeps {
   /**
    * Memory/variable/MVU write rollback used by regeneration (proposal 0022 §5).
    *
-   * When present, `startRegenerate` prepares the plan before hiding the old
-   * anchor, settlement commits it, and failure restore replays it. When absent
+   * When present, `startRegenerate` prepares the plan before the trigger turn
+   * starts, settlement commits it, and failure restore replays it. When absent
    * the runtime keeps the legacy no-rollback path; the HTTP gate only allows
    * regeneration over historical MVU state when this port is available.
    */

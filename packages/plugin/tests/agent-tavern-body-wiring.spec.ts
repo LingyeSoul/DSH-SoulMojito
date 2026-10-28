@@ -260,6 +260,43 @@ function seedPendingRecovery(harness: RecoveryHarness): {
   return { triggerSeq, processSeq, candidateSeq }
 }
 
+/** One interrupted regenerate whose turn produced no candidate: the restore path. */
+function seedPendingRecoveryWithoutCandidate(harness: RecoveryHarness): {
+  anchorSeq: number
+  triggerSeq: number
+  processSeq: number
+} {
+  harness.append('turn/start', { turn: 1 })
+  harness.append('step/start', { turn: 1, step: 1 })
+  const anchorSeq = harness.append('assistant/message', {
+    turn: 1,
+    step: 1,
+    message: { id: 'anchor-1', role: 'assistant', content: [{ type: 'text', text: 'old body' }] },
+  }, { surfaceOp: 'append' })
+  harness.append('step/end', { turn: 1, step: 1 })
+  harness.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+
+  harness.appendRecord(BODY_EVENT_TYPE, {
+    op: 'op-start',
+    opId: 'op-rec-restore',
+    groupId: 'anchor-1',
+    kind: 'regenerate',
+    previousAnchorId: 'anchor-1',
+    previousIndex: 0,
+  })
+
+  harness.append('turn/start', { turn: 2 })
+  harness.append('step/start', { turn: 2, step: 1 })
+  const triggerSeq = harness.append('user/message', {
+    id: 'body-trigger-op-rec-restore',
+    role: 'user',
+    content: [{ type: 'text', text: 'regenerate' }],
+  }, { surfaceOp: 'append' })
+  const processSeq = harness.append('tool/result', { turn: 2, step: 1, result: { ok: true } }, { surfaceOp: 'append' })
+  harness.append('step/end', { turn: 2, step: 1 })
+  return { anchorSeq, triggerSeq, processSeq }
+}
+
 function fakeSession(id: string, events: readonly unknown[] = []): BodySessionLike {
   return { id, header: { version: 4 }, events, append: () => 0 }
 }
@@ -1096,7 +1133,8 @@ describe('body state safety (proposal 0022 §7)', () => {
     expect(harness.followups).toHaveLength(1)
     const anchorSeq = harness.events.find((event) => asTestRecord(event.data['message'])?.['id'] === 'message-1')?.seq
     expect(anchorSeq).toBeDefined()
-    expect(harness.surface()).not.toContain(anchorSeq)
+    // Proposal 0021 §9.5: regeneration no longer hides the old anchor at start.
+    expect(harness.surface()).toContain(anchorSeq)
     expect(harness.events.some((event) => event.type === BODY_EVENT_TYPE
       && event.data['op'] === 'op-start')).toBe(true)
   })
@@ -1280,5 +1318,37 @@ describe('startup recovery', () => {
     expect(harness.events.some((event) => event.type === BODY_EVENT_TYPE && event.data['op'] === 'op-finish')).toBe(false)
     expect(harness.phase.lastTurn).toBe(0)
     expect(capture.warnings.some((args) => String(args[0]).includes('MVU state cannot be rolled back safely'))).toBe(true)
+  })
+
+  it('restores a failed op without adding an assistant message or touching the JSONL floor', async () => {
+    hostState.module = hostRecordModule()
+    const capture = captureLogger()
+    const harness = createRecoveryHarness()
+    const seqs = seedPendingRecoveryWithoutCandidate(harness)
+    const chat = projectedChat('old body')
+    const chatBefore = JSON.stringify(chat)
+    rollbackState.store = rollbackDb(plainCharacter(), chat, 'session-recovery')
+    rollbackState.memories = { read: async () => undefined }
+    rollbackState.variables = { get: async () => undefined }
+    const ctx: BodyWiringContext = {
+      logger: capture.logger,
+      bindingOf: () => ({ architecture: 'agent-tavern', character: 'Character', chatId: 'chat.jsonl' }),
+      safetyOf: () => ({ safe: true }),
+    }
+
+    const outcome = await recoverBodyOperation(ctx, harness.agent)
+
+    expect(outcome).toMatchObject({ status: 'restored', pending: 1 })
+    // The old anchor stays visible; recovery adds no model-visible message and
+    // records no restore event, so the JSONL floor and swipes stay identical.
+    expect(harness.events.some((event) => event.type === BODY_EVENT_TYPE && event.data['op'] === 'restore')).toBe(false)
+    expect(harness.events.filter((event) => event.type === 'assistant/message')).toHaveLength(1)
+    expect(JSON.stringify(chat)).toBe(chatBefore)
+    expect(chat.messages).toHaveLength(1)
+    expect(chat.messages[0]).toMatchObject({ mes: 'old body', swipe_id: 0, swipes: ['old body'] })
+    const surface = harness.surface()
+    expect(surface).toContain(seqs.anchorSeq)
+    expect(surface).not.toContain(seqs.triggerSeq)
+    expect(surface).not.toContain(seqs.processSeq)
   })
 })

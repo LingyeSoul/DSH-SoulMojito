@@ -3,8 +3,10 @@
  *
  * `finalizeTurnStopping` (live turn stop) and `finalizeRecoveredOperation`
  * (durable op reconstructed at startup) share `settleBodyOperation`, so both
- * paths hide the trigger/process nodes before `op-finish`. The restore turn is
- * the model-free failure path.
+ * paths hide the trigger/process and the previous anchor before `op-finish`.
+ * Failure recovery is model-free when the previous anchor is still visible and
+ * keeps the legacy `body-restore-*` copy only for sessions whose anchor was
+ * hidden by an older build.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -39,7 +41,6 @@ import {
   findEventByMessageId,
   findSurfaceSeqByMessageId,
   lastBodyCandidate,
-  lastClosedTurnNumber,
   messageOf,
   modelSourceOf,
   numberField,
@@ -53,10 +54,12 @@ import {
 } from './body-runtime-session.js'
 import {
   appendDeveloperHide,
+  appendHideInBridgeTurn,
   appendHideInOpenTurn,
   bodyLedger,
   closeBracketBestEffort,
   hideTargets,
+  oldAnchorSurfaceTargets,
   restoreAssistantData,
   surfaceRanges,
 } from './body-runtime-state.js'
@@ -65,8 +68,10 @@ import {
  * Settle the pending regeneration at `agent/turn-stopping`.
  *
  * The last assistant message in the turn that carries text and no tool call
- * becomes the new selected candidate. The synthetic trigger and every process
- * node of the turn are then replaced with empty developer messages.
+ * becomes the new selected candidate. The synthetic trigger, every process
+ * node of the turn and the previous body anchor (with its old turn process
+ * nodes) are then replaced with empty developer messages. The new candidate
+ * itself stays on the surface.
  */
 export async function finalizeTurnStopping(
   deps: BodyRuntimeDeps,
@@ -202,6 +207,10 @@ async function settleBodyOperation(
     selectAppended = true
 
     const hidden = hideTargets(events, surface, triggerMessageIdOf(context.op), turn, candidate.messageId)
+    // Proposal 0021 §9.5: the old anchor stayed visible while the new turn ran,
+    // so successful settlement is the only place that removes it. The old
+    // turn's process nodes go with it; real user messages stay.
+    for (const seq of oldAnchorSurfaceTargets(events, surface, context.op.previousAnchorId)) hidden.add(seq)
     appendHideInOpenTurn(deps, turn, hidden)
   } catch (error) {
     const reason = `${context.label} ${context.op.opId} failed to settle turn ${turn}: ${errorMessage(error)}`
@@ -315,26 +324,21 @@ function oldAnchorTurn(events: ReturnType<typeof eventsOf>, previousAnchorId: st
  * Undo the failed regeneration turn's own writes before the old plan is
  * replayed (proposal 0022 §10.3).
  *
- * The new turn comes from the trigger user message, falling back to the last
- * closed turn; the old plan's turn is deliberately never used here.
+ * The new turn comes from the trigger user message. When the trigger never
+ * reached the session (start failed before `followup`), there is no new turn
+ * and therefore nothing to undo; the old anchor turn is never used as a
+ * fallback because undoing it would erase the writes the plan is restoring.
  */
 async function rollbackNewTurnWrites(
   deps: BodyRuntimeDeps,
   op: PendingBodyOperation,
   events: ReturnType<typeof eventsOf>,
+  newTurn: number | undefined,
 ): Promise<void> {
   const port = deps.writeRollback
   const rollback = port?.rollbackTurnWrites
-  if (port === undefined || rollback === undefined) return
+  if (port === undefined || rollback === undefined || newTurn === undefined) return
 
-  const newTurn = turnOfUserMessage(events, triggerMessageIdOf(op)) ?? lastClosedTurnNumber(events)
-  if (newTurn === undefined) {
-    throw failureFor(
-      bodyRuntimeError('restore-unavailable', `body restore ${op.opId} cannot determine the failed turn`),
-      `body restore ${op.opId} cannot determine the failed turn`,
-      op,
-    )
-  }
   const oldTurn = op.rollbackPlan?.turn ?? oldAnchorTurn(events, op.previousAnchorId)
   if (oldTurn !== undefined && newTurn === oldTurn) {
     throw failureFor(
@@ -370,10 +374,15 @@ async function rollbackNewTurnWrites(
 /**
  * Put the previous body back after a failed or cancelled regeneration.
  *
- * The restore is a model-free turn: hide the failed trigger/process nodes,
- * append a copy of the previous assistant message, then record `body/restore`.
- * The live loop turn base is advanced after the turn closes. Preconditions are
- * checked before any event is appended and fail with specific errors.
+ * The old anchor stays on the surface while a regeneration runs (proposal 0021
+ * §9.5). Failure recovery therefore only rolls the stores back and hides the
+ * failed turn's trigger/process nodes in a bridge turn: no `assistant/message`,
+ * no `restore` body event and no JSONL floor change. The agent sees the same
+ * old body it saw before the operation started.
+ *
+ * Sessions written by an older build hid the anchor when the operation
+ * started. Its anchor is off the surface, so this function keeps the existing
+ * model-free `body-restore-*` copy as a compatibility fallback.
  */
 export async function restoreBodyAfterFailure(
   deps: BodyRuntimeDeps,
@@ -400,10 +409,33 @@ export async function restoreBodyAfterFailure(
     if (previousMessage === undefined || previous.type !== 'assistant/message') {
       throw bodyRuntimeError('restore-unavailable', `body restore ${op.opId} previous anchor '${op.previousAnchorId}' is not an assistant message`)
     }
-    const previousText = textOfMessage(previousMessage)
-    if (previousText.trim() === '') {
+    if (textOfMessage(previousMessage).trim() === '') {
       throw bodyRuntimeError('restore-unavailable', `body restore ${op.opId} previous anchor '${op.previousAnchorId}' has no body text`)
     }
+
+    const triggerId = triggerMessageIdOf(op)
+    const failedTurn = turnOfUserMessage(events, triggerId)
+    const initialSurface = surfaceNodeList(deps.session)
+    const previousSeq = findSurfaceSeqByMessageId(events, initialSurface, op.previousAnchorId)
+    const targets = failedTurnTargets(events, initialSurface, triggerId, failedTurn)
+
+    // Proposal 0022 §10.3: first undo the failed new turn's writes, then put
+    // the old turn's journaled writes and MVU receipts back. Any failure keeps
+    // the op-start pending for a retry and leaves the surface untouched.
+    await rollbackNewTurnWrites(deps, op, events, failedTurn)
+    await restoreBodyRollbackPlan(deps, op)
+
+    if (previousSeq !== undefined) {
+      try {
+        appendHideInBridgeTurn(deps, targets)
+      } catch (error) {
+        releaseOperationByOp(deps, op, `body restore ${op.opId}`)
+        throw failureFor(error, `body restore ${op.opId} failed`, op)
+      }
+      releaseOperationByOp(deps, op, `body restore ${op.opId}`)
+      return op.previousAnchorId
+    }
+
     const model = modelSourceOf(previousMessage)
     if (model === undefined) {
       throw bodyRuntimeError('restore-unavailable', `body restore ${op.opId} previous anchor '${op.previousAnchorId}' has no model provider/model source`)
@@ -422,26 +454,6 @@ export async function restoreBodyAfterFailure(
         `body restore ${op.opId} cannot restore group '${op.groupId}' index ${op.previousIndex}: the ledger has ${ledgerBeforeRestore.candidates.length} candidates`,
       )
     }
-    const triggerId = triggerMessageIdOf(op)
-    const failedTurn = turnOfUserMessage(events, triggerId)
-    const targets = new Set<number>()
-    const initialSurface = surfaceNodeList(deps.session)
-    const triggerSeq = findSurfaceSeqByMessageId(events, initialSurface, triggerId)
-    if (triggerSeq !== undefined) targets.add(triggerSeq)
-    if (failedTurn !== undefined) {
-      for (const seq of initialSurface) {
-        const event = eventAtSeq(events, seq)
-        if (event.type === 'system/message') continue
-        if (numberField(event.data.turn) === failedTurn) targets.add(seq)
-      }
-    }
-
-    // Proposal 0022 §10.3: first undo the failed new turn's writes, then put
-    // the old turn's journaled writes and MVU receipts back, and only then
-    // restore the old body. Any failure leaves no restore turn and keeps the
-    // op-start pending for a retry.
-    await rollbackNewTurnWrites(deps, op, events)
-    await restoreBodyRollbackPlan(deps, op)
 
     const turn = (lastLoggedTurn(deps.agent) ?? 0) + 1
     const restoredMessageId = `body-restore-${randomUUID()}`
@@ -492,4 +504,27 @@ export async function restoreBodyAfterFailure(
     }
     return restoredMessageId
   })
+}
+
+/**
+ * Surface nodes of the failed regeneration turn. The trigger is matched by id
+ * because a user message carries no turn field; everything else is matched by
+ * the turn that owns it. System prompts are never hidden.
+ */
+function failedTurnTargets(
+  events: ReturnType<typeof eventsOf>,
+  surface: readonly number[],
+  triggerId: string,
+  failedTurn: number | undefined,
+): Set<number> {
+  const targets = new Set<number>()
+  const triggerSeq = findSurfaceSeqByMessageId(events, surface, triggerId)
+  if (triggerSeq !== undefined) targets.add(triggerSeq)
+  if (failedTurn === undefined) return targets
+  for (const seq of surface) {
+    const event = eventAtSeq(events, seq)
+    if (event.type === 'system/message') continue
+    if (numberField(event.data.turn) === failedTurn) targets.add(seq)
+  }
+  return targets
 }

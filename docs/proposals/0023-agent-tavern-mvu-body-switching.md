@@ -765,6 +765,8 @@ plugin record 内完成，不追加 `user/message`、`assistant/message` 或 `de
 “回滚发生了”；不向提示词、tool result、followup feedback 注入回滚状态；不新增 `body_*` /
 `rollback_*` Agent 工具。模型只看到最终生效的正文与其正常工具结果，失败信息只回到 HTTP 客户端
 与结构化日志。plugin record 必须是 `ignorable: true`，不进入消息投影。
+重生成失败且旧 anchor 仍在 surface 时，恢复只隐藏失败 turn 的 trigger/process 节点，不追加
+assistant 副本；只有旧版本已隐藏 anchor 的会话才走 `body-restore-*` 兼容 fallback。
 
 ### 7.2 与 0022 的关系
 
