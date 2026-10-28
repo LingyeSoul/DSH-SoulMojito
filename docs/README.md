@@ -31,6 +31,7 @@
 | [`0020`](proposals/0020-novel-import-continuation-and-revision.md) | AgentNovel 原作导入续写（章节切分、逐部分提取、bible 熔炼）与正文优化 |
 | [`0021`](proposals/0021-agent-tavern-body-ops.md) | AgentTavern 正文编辑、重生成与正文候选（DSH 原生 seam，不 fork） |
 | [`0022`](proposals/0022-agent-tavern-write-rollback.md) | AgentTavern 正文重生成的写入回滚（MVU 变量、记忆/变量工具 journal） |
+| [`0023`](proposals/0023-agent-tavern-mvu-body-switching.md) | AgentTavern MVU 正文编辑与候选切换（候选级 receipt） |
 
 ## 开发者文档（`mods/`、`games/`、`frontend/`）
 
