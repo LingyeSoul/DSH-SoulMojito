@@ -168,6 +168,10 @@ function updateCandidateText(patch: string): string {
   return `Fresh narrative.\n<UpdateVariable>\n<JSONPatch>\n${patch}\n</JSONPatch>\n</UpdateVariable>`
 }
 
+function editedCandidateText(patch: string): string {
+  return `Edited narrative.\n<UpdateVariable>\n<JSONPatch>\n${patch}\n</JSONPatch>\n</UpdateVariable>`
+}
+
 /** Baseline turn, seeded candidate 0, then a regenerate turn and candidate 1. */
 function seedMvuCandidateSession(session: TestSession, candidateText: string): void {
   seedBaseline(session)
@@ -527,5 +531,125 @@ describe('AgentTavern body JSONL projector', () => {
     const chat = await snapshotOf(store, chatId)
     expect(chat.header.chat_metadata.variables).toMatchObject({ stat_data: { mvu: { favor: 15 } } })
     expect(readMvuReceipts(chat).filter((receipt) => receipt.turnKey === 'body:candidate-1')).toHaveLength(1)
+  })
+
+  it('migrates a legacy body receipt and applies an MVU edit exactly once', async () => {
+    const { root, store, chatId, sessionId } = await mvuFixture('body-projector-mvu-edit', {
+      initialized_lorebooks: true,
+      stat_data: { mvu: { favor: 10 } },
+    })
+    const oldText = updateCandidateText('[{ "op": "delta", "path": "/mvu/favor", "value": 5 }]')
+    const newText = editedCandidateText('[{ "op": "delta", "path": "/mvu/favor", "value": 3 }]')
+    const session = makeSession(sessionId)
+    seedMvuCandidateSession(session, oldText)
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(session)
+
+    expect(readMvuReceipts(await snapshotOf(store, chatId)).map((receipt) => receipt.turnKey))
+      .toEqual(['body:candidate-1'])
+
+    session.events.push(bodyEvent(14, {
+      op: 'edit', groupId: 'group-1', index: 1, text: newText, previousText: oldText,
+    }))
+    await projector.replay(session)
+
+    const chat = await snapshotOf(store, chatId)
+    expect(chat.messages).toHaveLength(2)
+    // The old receipt was undone: 10 + 5 + 3 would be 18, the new patch lands on 10.
+    expect(chat.header.chat_metadata.variables).toMatchObject({ stat_data: { mvu: { favor: 13 } } })
+    const receipts = readMvuReceipts(chat)
+    expect(receipts).toHaveLength(1)
+    expect(receipts[0]).toMatchObject({ turnKey: 'body:candidate-1#1', status: 'updated', failures: [] })
+    expect(receipts[0]?.undoneAt).toBeUndefined()
+    expect(receipts[0]?.changes).toContainEqual({ name: 'stat_data.mvu.favor', before: 10, after: 13 })
+
+    const floor = floorOf(chat)
+    expect(floor.swipe_id).toBe(1)
+    expect(floor.mes).toBe(newText)
+    expect(floor.swipes).toEqual(['Original body.', newText])
+    expect(statDataOf(floor)).toEqual({ mvu: { favor: 13 } })
+    expect(floor.swipe_info?.[1]).toMatchObject({ extra: { provider: 'test-provider', model: 'test-model' } })
+    expect(agentTavernOf(floor)).toMatchObject({
+      bodyGroupId: 'group-1', anchorMessageId: 'candidate-1', lastBodyEventSeq: 14, lastBodyMutation: 'edit',
+    })
+    expect(await projector.status(sessionId)).toMatchObject({ status: 'ok', lastCursor: 14 })
+  })
+
+  it('replays one MVU edit event without a second undo or patch application', async () => {
+    const { root, store, chatId, sessionId } = await mvuFixture('body-projector-mvu-edit-replay', {
+      initialized_lorebooks: true,
+      stat_data: { mvu: { favor: 10 } },
+    })
+    const oldText = updateCandidateText('[{ "op": "delta", "path": "/mvu/favor", "value": 5 }]')
+    const newText = editedCandidateText('[{ "op": "delta", "path": "/mvu/favor", "value": 3 }]')
+    const session = makeSession(sessionId)
+    seedMvuCandidateSession(session, oldText)
+    session.events.push(bodyEvent(14, {
+      op: 'edit', groupId: 'group-1', index: 1, text: newText, previousText: oldText,
+    }))
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(session)
+    const afterEdit = await snapshotOf(store, chatId)
+
+    const replayRoot = mkdtempSync(join(tmpdir(), 'agent-tavern-body-projector-mvu-'))
+    roots.push(replayRoot)
+    const fresh = await AgentTavernProjector.open(replayRoot, store)
+    await fresh.replay(session)
+    await fresh.replay(session)
+
+    const chat = await snapshotOf(store, chatId)
+    expect(chat.header.chat_metadata.variables).toMatchObject({ stat_data: { mvu: { favor: 13 } } })
+    expect(readMvuReceipts(chat)).toEqual(readMvuReceipts(afterEdit))
+    expect(readMvuReceipts(chat)).toHaveLength(1)
+    expect(floorOf(chat).swipes).toEqual(['Original body.', newText])
+    expect(floorOf(chat).mes).toBe(newText)
+  })
+
+  it('removes the candidate receipt when an MVU edit drops the patch block', async () => {
+    const { root, store, chatId, sessionId } = await mvuFixture('body-projector-mvu-edit-plain', {
+      initialized_lorebooks: true,
+      stat_data: { mvu: { favor: 10 } },
+    })
+    const oldText = updateCandidateText('[{ "op": "delta", "path": "/mvu/favor", "value": 5 }]')
+    const plainText = 'Plain replacement without a patch.'
+    const session = makeSession(sessionId)
+    seedMvuCandidateSession(session, oldText)
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(session)
+
+    session.events.push(bodyEvent(14, {
+      op: 'edit', groupId: 'group-1', index: 1, text: plainText, previousText: oldText,
+    }))
+    await projector.replay(session)
+
+    const chat = await snapshotOf(store, chatId)
+    expect(chat.header.chat_metadata.variables).toMatchObject({ stat_data: { mvu: { favor: 10 } } })
+    expect(readMvuReceipts(chat)).toHaveLength(0)
+    const floor = floorOf(chat)
+    expect(floor.mes).toBe(plainText)
+    expect(floor.swipes).toEqual(['Original body.', plainText])
+    expect(statDataOf(floor)).toEqual({ mvu: { favor: 10 } })
+    expect(agentTavernOf(floor)).toMatchObject({ lastBodyEventSeq: 14, lastBodyMutation: 'edit' })
+  })
+
+  it('projects a non-MVU edit without receipts or variable writes', async () => {
+    const { root, store, chatId, sessionId } = await fixture('body-projector-plain-edit')
+    const session = makeSession(sessionId)
+    seedBaseline(session)
+    seedCandidateZero(session)
+    session.events.push(bodyEvent(6, {
+      op: 'edit', groupId: 'group-1', index: 0, text: 'Edited body.', previousText: 'Original body.',
+    }))
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(session)
+
+    const chat = await snapshotOf(store, chatId)
+    expect(chat.messages).toHaveLength(2)
+    expect(chat.header.chat_metadata.variables).toBeUndefined()
+    expect(readMvuReceipts(chat)).toHaveLength(0)
+    const floor = floorOf(chat)
+    expect(floor.swipes).toEqual(['Edited body.'])
+    expect(floor.mes).toBe('Edited body.')
+    expect(agentTavernOf(floor)).toMatchObject({ lastBodyEventSeq: 6, lastBodyMutation: 'edit' })
   })
 })

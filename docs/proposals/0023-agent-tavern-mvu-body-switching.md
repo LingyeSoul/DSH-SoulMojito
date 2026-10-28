@@ -1,10 +1,11 @@
 # 提案 0023：AgentTavern MVU 正文编辑与候选切换（候选级 receipt）
 
-> 状态：设计。日期：2026-10-28。
+> 状态：P0 edit 已实现（工程验证通过）；MVU select 仍为设计。日期：2026-10-28。
 > 依赖：提案 0021（body ledger / 投影 / 编辑 / 候选）与 0022（MVU receipt / write journal / rollback）。
-> 本提案只设计 `PUT body` 与 `POST body/select` 在 MVU / 变量历史上的候选级状态切换。
+> 本提案设计 `PUT body` 与 `POST body/select` 在 MVU / 变量历史上的候选级状态切换。
 > 它不改变 0021 的候选事件词汇、不改变 0022 的 turn 级回滚契约，也不改变 ST 架构。
-> 落地前现有行为保持不变：MVU 聊天上的 edit / select 仍返回 `409 body-state-unsafe`。
+> 当前行为：MVU 聊天上的 edit 已放开；select 仍返回 `409 body-state-unsafe`，
+> detail `candidate-switch-disabled`，等候选感知 regenerate 同批实现。
 
 ## 1. 结论先行
 
@@ -759,6 +760,12 @@ runtime 仍按 ledger 当前 selectedIndex 执行，但会失去多客户端竞�
 | memory / write journal | MemoryStore + plugin record | 工具 / 0022 | **否** |
 | projector checkpoint | `projections/*.json` | `AgentTavernProjector` | 是（游标） |
 
+**Agent 不可感知（硬约束）**：rollback 与 edit/select 的状态交换全部由插件在 JSONL 克隆与
+plugin record 内完成，不追加 `user/message`、`assistant/message` 或 `developer/message` 来表达
+“回滚发生了”；不向提示词、tool result、followup feedback 注入回滚状态；不新增 `body_*` /
+`rollback_*` Agent 工具。模型只看到最终生效的正文与其正常工具结果，失败信息只回到 HTTP 客户端
+与结构化日志。plugin record 必须是 `ignorable: true`，不进入消息投影。
+
 ### 7.2 与 0022 的关系
 
 | 路径 | `prepare/restore/commit` | write journal | `rollbackTurnWrites` | 候选 receipt |
@@ -945,3 +952,39 @@ MVU 聊天上把 `canRegenerate` 在 `selectedIndex !== anchorIndex` 时置 fals
 - **为每个候选 fork Session**：违背 0021 前提，破坏缓存与会话连续性。
 - **把候选 receipt 放进独立 store**：本阶段保持 `chat_metadata.mvu.receipts` 单存储；sidecar 留到有体积证据后再评估。
 - **在 P0 先放 select、后补 regenerate**：会直接产生 §2.5 的双写；这是本提案的硬门禁。
+
+## 13. P0 实现验证（2026-10-28）
+
+P0 只实现 `PUT body` 的 MVU 编辑；`POST body/select` 在 MVU / 变量历史上仍返回
+`409 body-state-unsafe`，detail `candidate-switch-disabled`。
+
+| 项 | 结果 |
+|---|---|
+| `npm run check` | 158 test files / 2421 passed + 1 skipped；`build:plugin` 成功；18/18 gate PASS |
+| body 聚焦 | 12 个 spec / 222 tests |
+| 候选 receipt 核心 | `agent-tavern-body-candidate-receipts.spec.ts` 23 tests |
+| 投影 | `agent-tavern-body-projector.spec.ts` 16 tests |
+| runtime 预检 | `agent-tavern-body-runtime.spec.ts` 36 tests |
+| wiring / gate | `agent-tavern-body-wiring.spec.ts` 34 tests |
+| 0022 回归 | rollback 27 + mvu-rollback 7 + integration 2 tests |
+
+落地要点：
+
+- `body-candidate-receipts.ts`：候选 key、legacy 惰性迁移、live receipt 撤销、候选 receipt
+  upsert/删除、`swipes/mes/stat_data` 同步；全部在 caller-owned chat clone 内完成。
+- `body-projector.ts`：edit 分支改走候选事务，校验 `previousText` 水位，写
+  `lastBodyEventSeq` / `lastBodyMutation`，同一事件重放不会二次撤销/应用。
+- `body-runtime.ts` + `body-wiring.ts`：`inspectEdit` 只读预检在追加 edit 事件之前执行；
+  失败零事件、零 chat 写入。
+- `body-view.ts` + `http/router.ts`：MVU edit 放行；`select` 收口为
+  `candidate-switch-disabled`；receipt detail 透传 409，`projection-pending` 503。
+- Agent 工具面零新增：edit 只走 `PUT /api/dsh-soulmojito/body`，没有
+  `body_*` / `rollback_*` / `edit_body` 工具；receipt 与 rollback 状态不进提示词与消息投影。
+
+残余风险：
+
+- `GET body.canEdit` 对 MVU 卡乐观返回 true；缺 receipt 到 `PUT` 预检才 409。
+- 预检读 chat 快照与 projector CAS 不在同一事务；并发冲突由 projector 重试/CAS 兜底。
+- `MVU_RECEIPTS_LIMIT = 20` 与 settle receipt 共用；候选 receipt 被挤出后显式
+  `body-receipt-missing`，P1 再定保留策略。
+- select 与候选感知 regenerate 必须同批，P1 前不放开。

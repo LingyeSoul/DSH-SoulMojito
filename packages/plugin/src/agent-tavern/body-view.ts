@@ -34,8 +34,15 @@ export type BodyStateUnsafeDetail =
   | 'mvu-receipt-missing'
   | 'write-journal-missing'
   | 'write-journal-unavailable'
+  /** Legacy alias kept for old clients (proposal 0023 §6.4). */
   | 'edit-rollback-unavailable'
+  /** Legacy alias kept for old clients (proposal 0023 §6.4). */
   | 'select-rollback-unavailable'
+  | 'candidate-switch-disabled'
+  | 'body-receipt-missing'
+  | 'body-receipt-duplicate'
+  | 'body-receipt-legacy'
+  | 'body-receipt-key-mismatch'
 
 /** Body mutation whose rollback requirements differ (proposal 0022 §7). */
 export type BodyMutationAction = 'edit' | 'regenerate' | 'select'
@@ -104,7 +111,10 @@ export function bodyHistoricalMvuStateOf(
  * Action-specific gate.
  *
  * `regenerate` relies on the write rollback port (checked separately by the
- * HTTP layer); `edit` and `select` keep the strict historical-state refusal.
+ * HTTP layer). Proposal 0023 narrows the historical-MVU refusal to candidate
+ * switching only: editing is protected by the runtime candidate-receipt
+ * preflight, while select stays closed until the candidate-aware regenerate
+ * lands (P1).
  */
 export function bodyMutationSafetyOf(
   action: BodyMutationAction,
@@ -113,9 +123,9 @@ export function bodyMutationSafetyOf(
 ): BodyStateSafety {
   const base = bodyStateSafetyOf(character, chat)
   if (!base.safe) return base
-  if (action === 'regenerate') return base
+  if (action !== 'select') return base
   if (!bodyHistoricalMvuStateOf(character, chat)) return base
-  return unsafeBodyState(action === 'edit' ? 'edit-rollback-unavailable' : 'select-rollback-unavailable')
+  return unsafeBodyState('candidate-switch-disabled')
 }
 
 /** Internal/public constructor for a typed unsafe verdict. */
@@ -142,6 +152,16 @@ export function bodyStateUnsafeMessage(detail: BodyStateUnsafeDetail): string {
       return 'this chat already carries MVU or variable state; editing a body has no candidate-level rollback'
     case 'select-rollback-unavailable':
       return 'this chat already carries MVU or variable state; switching a body candidate has no candidate-level rollback'
+    case 'candidate-switch-disabled':
+      return 'switching body candidates over MVU or variable history is disabled in this build until candidate-aware regeneration lands; edit the selected body or regenerate instead'
+    case 'body-receipt-missing':
+      return 'the body candidate carries an <UpdateVariable> patch but has no candidate receipt to undo; restore or migrate its receipt before editing, do not retry blindly'
+    case 'body-receipt-duplicate':
+      return 'the body candidate has more than one live candidate receipt carrying variable changes; repair the receipt set before editing'
+    case 'body-receipt-legacy':
+      return 'the body candidate has a legacy body:<messageId> receipt that the ledger cannot map to a unique slot; migrate or repair the receipt key before editing'
+    case 'body-receipt-key-mismatch':
+      return 'the body candidate receipt key does not match the ledger slot or message id; repair the receipt keys before editing'
   }
 }
 
@@ -186,6 +206,8 @@ export interface BodyView {
   readonly canRegenerate: boolean
   readonly canSelect: boolean
   readonly reason?: string
+  /** Concrete gate detail when one action is blocked but the body is readable. */
+  readonly detail?: BodyStateUnsafeDetail
 }
 
 /**
@@ -217,21 +239,27 @@ export function buildBodyView(input: BodyViewInput): BodyView {
     : input.projected?.text ?? ledgerText ?? input.messageText ?? ''
 
   const baseReason = bodyViewReason(input, hidden)
-  // Proposal 0022 §7 P0: regeneration is allowed over historical MVU state only
-  // when the write rollback port can prepare/restore it. Edit and select stay
-  // strict until candidate-level state switching exists.
-  const rollbackReason = baseReason === undefined && !hidden && input.historicalMvuState
-    ? (input.writeRollbackAvailable ? 'edit-rollback-unavailable' : 'write-journal-unavailable')
+  // Proposal 0023 §6.3: edit is gated by the runtime candidate-receipt
+  // preflight, so historical MVU state no longer hides it. Regeneration still
+  // needs the write rollback port, and candidate switching stays closed in P0.
+  const rollbackReason = baseReason === undefined
+    && !hidden
+    && input.historicalMvuState
+    && !input.writeRollbackAvailable
+    ? 'write-journal-unavailable'
     : undefined
   const reason = baseReason ?? rollbackReason
-  const canEdit = baseReason === undefined && !hidden && count > 0 && !input.historicalMvuState
+  const canEdit = baseReason === undefined && !hidden && count > 0
   const canRegenerate = baseReason === undefined
     && !hidden
     && count > 0
     && input.agent !== undefined
     && canAdvanceHostTurnBase(input.agent)
     && (!input.historicalMvuState || input.writeRollbackAvailable)
-  const canSelect = canEdit && count > 1
+  const canSelect = canEdit && count > 1 && !input.historicalMvuState
+  const detail = baseReason === undefined && !hidden && count > 0 && input.historicalMvuState
+    ? 'candidate-switch-disabled'
+    : undefined
 
   return {
     ok: true,
@@ -245,6 +273,7 @@ export function buildBodyView(input: BodyViewInput): BodyView {
     canRegenerate,
     canSelect,
     ...(reason === undefined ? {} : { reason }),
+    ...(detail === undefined ? {} : { detail }),
   }
 }
 
@@ -281,7 +310,7 @@ export interface BodyFailureView {
 export function bodyFailureOf(error: unknown): BodyFailureView {
   const rawCode = failureCodeOf(error)
   const code = publicBodyCode(rawCode)
-  const detail = failureDetailOf(error)
+  const detail = failureDetailOf(error) ?? candidateReceiptDetailOf(rawCode)
   return {
     status: bodyRejectStatus(code),
     code,
@@ -307,6 +336,13 @@ export function publicBodyCode(code: string | undefined): string {
       return 'invalid-body-text'
     case 'restore-unavailable':
       return 'body-state-unsafe'
+    case 'body-receipt-missing':
+    case 'body-receipt-duplicate':
+    case 'body-receipt-legacy':
+    case 'body-receipt-key-mismatch':
+      return 'body-state-unsafe'
+    case 'body-floor-not-found':
+      return 'projection-pending'
     case 'invalid-event':
     case 'operation-failed':
       return 'operation-failed'
@@ -349,6 +385,23 @@ function failureDetailOf(error: unknown): string | undefined {
   if (!isRecord(error)) return undefined
   const detail = error['detail']
   return typeof detail === 'string' && detail !== '' ? detail : undefined
+}
+
+/**
+ * `CandidateReceiptError` carries the concrete receipt refusal in `code` and
+ * has no separate `detail` member (proposal 0023 §3.3). Surface that code as
+ * the public detail so a 409 keeps `body-receipt-missing` and friends.
+ */
+function candidateReceiptDetailOf(code: string | undefined): string | undefined {
+  switch (code) {
+    case 'body-receipt-missing':
+    case 'body-receipt-duplicate':
+    case 'body-receipt-legacy':
+    case 'body-receipt-key-mismatch':
+      return code
+    default:
+      return undefined
+  }
 }
 
 function errorMessage(error: unknown): string {

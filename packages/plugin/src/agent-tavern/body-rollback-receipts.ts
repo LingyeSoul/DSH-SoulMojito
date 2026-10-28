@@ -29,6 +29,7 @@ import {
   type BodyRollbackStage,
   type BodyWriteRollbackDeps,
 } from './body-rollback-support.js'
+import { classifyBodyReceiptKey } from './body-candidate-receipts.js'
 
 /* --------------------------------- receipts -------------------------------- */
 
@@ -61,10 +62,10 @@ export function assertReceiptCoverage(
 ): void {
   const bodyKey = `body:${previousMessageId}`
   const bodyHasUpdateVariable = /<UpdateVariable\b/i.test(bodyText)
-  if (bodyHasUpdateVariable && !receipts.some((receipt) => receipt.turnKey === bodyKey)) {
+  if (bodyHasUpdateVariable && !receipts.some((receipt) => isBodyReceiptOf(receipt.turnKey, previousMessageId))) {
     throw new BodyRollbackError(
       'body-state-unsafe',
-      `body rollback for session '${agentId}' turn ${turn} refused: the old body contains <UpdateVariable> but has no '${bodyKey}' receipt`,
+      `body rollback for session '${agentId}' turn ${turn} refused: the old body contains <UpdateVariable> but has neither a '${bodyKey}' nor a '${bodyKey}#<index>' receipt`,
       { detail: 'mvu-receipt-missing', stage: 'prepare', sessionId: agentId, turn },
     )
   }
@@ -76,6 +77,16 @@ export function assertReceiptCoverage(
       { detail: 'mvu-receipt-missing', stage: 'prepare', sessionId: agentId, turn },
     )
   }
+}
+
+/**
+ * Whether `turnKey` is a body receipt for `messageId`: the legacy
+ * `body:<messageId>` key or a candidate `body:<messageId>#<index>` key.
+ */
+function isBodyReceiptOf(turnKey: string, messageId: string): boolean {
+  const key = classifyBodyReceiptKey(turnKey)
+  if (key.kind === 'candidate') return key.messageId === messageId
+  return key.kind === 'legacy' && key.messageId === messageId
 }
 
 /* ------------------------- receipt split / settle -------------------------- */

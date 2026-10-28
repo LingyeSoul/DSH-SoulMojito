@@ -36,6 +36,7 @@ import {
   startRegenerate,
   withBodyLock,
   type BodyAgentLike,
+  type BodyEditInspection,
   type BodyRuntimeDeps,
   type BodyRuntimeFailure,
   type BodyRuntimeRollbackPort,
@@ -358,6 +359,10 @@ function seedClosedTurn(harness: Harness, turn: number, anchorId: string, text: 
   const seq = isRecord(anchorEvent) ? anchorEvent.seq : undefined
   if (!isSeq(seq)) throw new Error('fake session: append did not return the anchor event')
   return seq
+}
+
+function seedLedgerCandidate(harness: Harness, groupId: string, messageId: string): void {
+  harness.session.append(BODY_EVENT_TYPE, { op: 'candidate', groupId, messageId, index: 0 })
 }
 
 function firstFollowup(harness: Harness): Record<string, unknown> {
@@ -969,6 +974,15 @@ describe('AgentTavern body runtime', () => {
       text: 'old body',
     })
 
+    // Proposal 0023 §4.1.3: only the selected candidate can be edited.
+    await expect(applyBodyEdit(harness.deps, {
+      groupId: 'anchor-1',
+      index: 1,
+      text: 'not the selected body',
+      expectedAnchorId: 'new-body',
+    })).rejects.toMatchObject({ code: 'stale-anchor' })
+    expect(bodyEventsWithOp(harness.events, 'edit')).toHaveLength(1)
+
     const editedOld = await applyBodyEdit(harness.deps, {
       groupId: 'anchor-1',
       index: 0,
@@ -1542,6 +1556,72 @@ describe('AgentTavern body runtime', () => {
       throw expected
     })).rejects.toBe(expected)
     expect(await withBodyLock(harness.deps, async () => 'after-failure')).toBe('after-failure')
+  })
+
+  it('runs the candidate preflight before appending the edit event', async () => {
+    const harness = healthyHarness()
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    seedLedgerCandidate(harness, 'anchor-1', 'anchor-1')
+    const observed: Array<{ readonly editEvents: number; readonly input: BodyEditInspection }> = []
+    harness.deps.inspectEdit = async (input) => {
+      observed.push({ editEvents: bodyEventsWithOp(harness.events, 'edit').length, input })
+    }
+
+    const state = await applyBodyEdit(harness.deps, {
+      groupId: 'anchor-1',
+      index: 0,
+      text: 'edited body',
+      expectedAnchorId: 'anchor-1',
+    })
+
+    expect(observed).toHaveLength(1)
+    expect(observed[0]?.editEvents).toBe(0)
+    expect(observed[0]?.input).toMatchObject({
+      groupId: 'anchor-1',
+      index: 0,
+      messageId: 'anchor-1',
+      previousText: 'old body',
+    })
+    expect(observed[0]?.input.ledger.selectedIndex).toBe(0)
+    expect(bodyEventsWithOp(harness.events, 'edit')).toHaveLength(1)
+    expect(state).toMatchObject({ selectedIndex: 0, text: 'edited body' })
+  })
+
+  it('writes no edit event when the candidate preflight refuses', async () => {
+    const harness = healthyHarness()
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    seedLedgerCandidate(harness, 'anchor-1', 'anchor-1')
+    const eventsBefore = harness.events.length
+    harness.deps.inspectEdit = async () => {
+      throw bodyRuntimeError('body-state-unsafe', 'candidate receipt is missing', 'body-receipt-missing')
+    }
+
+    await expect(applyBodyEdit(harness.deps, {
+      groupId: 'anchor-1',
+      index: 0,
+      text: 'edited body',
+      expectedAnchorId: 'anchor-1',
+    })).rejects.toMatchObject({ code: 'body-state-unsafe', detail: 'body-receipt-missing' })
+
+    expect(harness.events).toHaveLength(eventsBefore)
+    expect(bodyEventsWithOp(harness.events, 'edit')).toHaveLength(0)
+  })
+
+  it('keeps the legacy edit path when no preflight hook is injected', async () => {
+    const harness = healthyHarness()
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    seedLedgerCandidate(harness, 'anchor-1', 'anchor-1')
+    expect(harness.deps.inspectEdit).toBeUndefined()
+
+    const state = await applyBodyEdit(harness.deps, {
+      groupId: 'anchor-1',
+      index: 0,
+      text: 'edited body',
+      expectedAnchorId: 'anchor-1',
+    })
+
+    expect(state.text).toBe('edited body')
+    expect(bodyEventsWithOp(harness.events, 'edit')).toHaveLength(1)
   })
 })
 

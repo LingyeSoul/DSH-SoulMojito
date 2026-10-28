@@ -87,6 +87,7 @@ export {
 export type {
   BodyAgentLike,
   BodyCandidateState,
+  BodyEditInspection,
   BodyLogger,
   BodyRuntimeDeps,
   BodyRuntimeErrorCode,
@@ -256,7 +257,13 @@ export async function applyBodyEdit(
     const target = anchorTarget(events, surface, request.expectedAnchorId)
     assertLastBodyTarget(events, surface, target.seq, target.message)
     const ledger = ensureBodyLedger(deps, request.groupId, request.expectedAnchorId).ledger
-    requireCandidate(ledger, request.index)
+    const candidate = requireCandidate(ledger, request.index)
+    if (request.index !== ledger.selectedIndex) {
+      throw bodyRuntimeError(
+        'stale-anchor',
+        `body edit rejected: group '${request.groupId}' has candidate ${ledger.selectedIndex} selected, but index ${request.index} was requested; only the selected body can be edited`,
+      )
+    }
     const previousText = candidateText(ledger, request.index)
     const text = request.text
     if (text.trim() === '') {
@@ -267,6 +274,18 @@ export async function applyBodyEdit(
         'invalid-body-text',
         `body edit rejected: text for group '${request.groupId}' index ${request.index} has ${text.length} characters (max ${BODY_TEXT_MAX_LENGTH})`,
       )
+    }
+    // Proposal 0023 §4.1/§4.2: the candidate-receipt preflight is read-only and
+    // must finish before the edit event becomes durable. A refusal leaves the
+    // ledger, the JSONL chat and the session log untouched.
+    if (deps.inspectEdit !== undefined) {
+      await deps.inspectEdit({
+        groupId: request.groupId,
+        index: request.index,
+        messageId: candidate.messageId,
+        previousText,
+        ledger,
+      })
     }
     appendBodyEvent(deps, {
       op: 'edit',

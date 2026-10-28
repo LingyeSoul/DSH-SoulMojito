@@ -861,9 +861,13 @@ export async function undoMvuAgentSettlement(
 
 /* ------- body receipt lookup / undo / redo (proposal 0022 section 4) ------- */
 
-/** Body receipt query: `messageId` matches `body:<messageId>`, `floorIndex` matches `String(floorIndex)`. */
+/**
+ * Body receipt query: `messageId` matches `body:<messageId>` and every
+ * `body:<messageId>#<index>` candidate receipt, `floorIndex` matches
+ * `String(floorIndex)`.
+ */
 export interface MvuBodyReceiptQuery {
-  /** Native assistant message id; matches the projector's `body:<messageId>` receipt. */
+  /** Native assistant message id; matches legacy and candidate body receipts. */
   messageId?: string
   /** Floor index; matches settle receipts whose turnKey is the floor index. */
   floorIndex?: number
@@ -892,9 +896,23 @@ function rawMvuReceipts(chat: ChatLogIR): unknown[] | undefined {
   return Array.isArray(receipts) ? receipts : undefined
 }
 
+const CANDIDATE_BODY_INDEX = /^(0|[1-9][0-9]*)$/
+
+/**
+ * Whether `turnKey` is the candidate receipt key `body:<messageId>#<index>`.
+ * Canonical digits only: a key that would not classify as a candidate must not
+ * be collected as one.
+ */
+function isCandidateBodyKey(turnKey: string, messageId: string): boolean {
+  const prefix = `body:${messageId}#`
+  if (!turnKey.startsWith(prefix)) return false
+  return CANDIDATE_BODY_INDEX.test(turnKey.slice(prefix.length))
+}
+
 /**
  * Collect the receipts that belong to one body floor. Body `<UpdateVariable>`
- * writes use `body:<messageId>`; `tavern_variable_settle` uses the floor index.
+ * writes use `body:<messageId>` (legacy) or `body:<messageId>#<index>`
+ * (candidate, proposal 0023); `tavern_variable_settle` uses the floor index.
  * Rollback must process both in write order, so the query unions them and keeps
  * the stored (append) order. Already-undone receipts stay in the result so the
  * caller can distinguish a missing receipt from an already-rolled-back one.
@@ -915,7 +933,10 @@ export function mvuReceiptsForBody(chat: ChatLogIR, query: MvuBodyReceiptQuery):
   }
   const bodyKey = messageId === undefined ? undefined : `body:${messageId}`
   const floorKey = floorIndex === undefined ? undefined : String(floorIndex)
-  return readMvuReceipts(chat).filter((receipt) => receipt.turnKey === bodyKey || receipt.turnKey === floorKey)
+  return readMvuReceipts(chat).filter((receipt) => {
+    if (receipt.turnKey === bodyKey || receipt.turnKey === floorKey) return true
+    return messageId !== undefined && isCandidateBodyKey(receipt.turnKey, messageId)
+  })
 }
 
 /**

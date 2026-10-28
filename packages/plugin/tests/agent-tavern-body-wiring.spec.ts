@@ -9,6 +9,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { CharacterCardIR, ChatLogIR } from '../../tavern-format/src/index.js'
 import type { TavernStore } from '../../tavern-store/src/index.js'
+import { CandidateReceiptError } from '../src/agent-tavern/body-candidate-receipts.js'
+import { characterTools } from '../src/agent-tavern/tools/character.js'
+import { deductionTools } from '../src/agent-tavern/tools/deduction.js'
+import { gameTools } from '../src/agent-tavern/tools/games.js'
+import { memoryTools } from '../src/agent-tavern/tools/memory.js'
+import { scriptTools } from '../src/agent-tavern/tools/script.js'
+import { variableTools } from '../src/agent-tavern/tools/variable.js'
 
 const hostState = vi.hoisted(() => ({
   module: undefined as Record<string, unknown> | undefined,
@@ -328,6 +335,26 @@ function projectedChat(text: string): ChatLogIR {
   return chat
 }
 
+/** Candidate 0 floor plus the candidate-level MVU receipts a 0023 edit inspects. */
+function projectedMvuChat(text: string, receipts: readonly Record<string, unknown>[]): ChatLogIR {
+  const chat = projectedChat(text)
+  chat.header.chat_metadata.mvu = { receipts: [...receipts] }
+  return chat
+}
+
+/** Seed one closed anchor turn on the recovery harness used by route tests. */
+function seedEditAnchor(harness: RecoveryHarness, messageId: string, text: string): void {
+  harness.append('turn/start', { turn: 1 })
+  harness.append('step/start', { turn: 1, step: 1 })
+  harness.append('assistant/message', {
+    turn: 1,
+    step: 1,
+    message: { id: messageId, role: 'assistant', content: [{ type: 'text', text }] },
+  }, { surfaceOp: 'append' })
+  harness.append('step/end', { turn: 1, step: 1 })
+  harness.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+}
+
 function sessionWithAssistant(messageId: string, text: string): BodySessionLike {
   return {
     id: 'session-mvu',
@@ -611,6 +638,44 @@ async function callBodySelect(character: CharacterCardIR, chat: ChatLogIR) {
   return callBodyRoute(character, chat, 'body/select', 'POST', { index: 0 })
 }
 
+/**
+ * Drive one `PUT body` with a live agent so the runtime preflight executes.
+ * The mocked Tavern store is shared by the route and the wiring inspection hook.
+ */
+async function callBodyEditWithHarness(
+  character: CharacterCardIR,
+  chat: ChatLogIR,
+  harness: RecoveryHarness,
+  sessionId: string,
+  text: string,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  hostState.module = hostRecordModule()
+  rollbackState.store = mutationDbFor(sessionId, character, chat)
+  const res = makeResponse()
+  const ctx = {
+    agents: { get: (id: string) => id === sessionId ? harness.agent : undefined },
+  } as unknown as Parameters<typeof handleAgentTavernBodyApi>[0]
+  await handleAgentTavernBodyApi(
+    ctx,
+    mutationDbFor(sessionId, character, chat),
+    makeRequest({
+      sessionId,
+      groupId: 'message-1',
+      expectedAnchorId: 'message-1',
+      index: 0,
+      text,
+    }, 'PUT', '/api/dsh-soulmojito/body'),
+    res,
+    new URL('/api/dsh-soulmojito/body', 'http://localhost'),
+    'body',
+    'PUT',
+  )
+  return {
+    status: res.statusCode,
+    body: res.chunks.length > 0 ? JSON.parse(res.chunks.join('')) as Record<string, unknown> : {},
+  }
+}
+
 describe('plugin-record seam', () => {
   it('returns no deps when the host has no appendPluginRecord', async () => {
     hostState.module = { pluginRecordOf: () => undefined }
@@ -684,6 +749,20 @@ describe('HTTP rejection mapping', () => {
     expect(bodyRejectStatus('host-unsupported')).toBe(501)
     expect(bodyRejectStatus('projection-pending')).toBe(503)
     expect(bodyRejectStatus('body-compacted')).toBe(409)
+  })
+
+  it('preserves candidate receipt details on 409 and maps projection lag to 503', () => {
+    for (const detail of ['body-receipt-missing', 'body-receipt-duplicate', 'body-receipt-legacy', 'body-receipt-key-mismatch'] as const) {
+      expect(bodyFailureOf(new CandidateReceiptError(detail, `${detail} from projection`))).toMatchObject({
+        status: 409,
+        code: 'body-state-unsafe',
+        detail,
+      })
+    }
+    expect(bodyFailureOf(bodyRuntimeError('projection-pending', 'projection is still catching up'))).toMatchObject({
+      status: 503,
+      code: 'projection-pending',
+    })
   })
 })
 
@@ -798,15 +877,11 @@ describe('body state safety (proposal 0022 §7)', () => {
     expect(bodyStateSafetyOf(character, chat)).toEqual({ safe: true })
     expect(bodyHistoricalMvuStateOf(character, chat)).toBe(true)
     expect(bodyMutationSafetyOf('regenerate', character, chat)).toEqual({ safe: true })
-    expect(bodyMutationSafetyOf('edit', character, chat)).toMatchObject({
-      safe: false,
-      reason: 'body-state-unsafe',
-      detail: 'edit-rollback-unavailable',
-    })
+    expect(bodyMutationSafetyOf('edit', character, chat)).toEqual({ safe: true })
     expect(bodyMutationSafetyOf('select', character, chat)).toMatchObject({
       safe: false,
       reason: 'body-state-unsafe',
-      detail: 'select-rollback-unavailable',
+      detail: 'candidate-switch-disabled',
     })
   })
 
@@ -815,7 +890,8 @@ describe('body state safety (proposal 0022 §7)', () => {
     const chat = fakeChat({ variables: { stat_data: {} } })
     expect(bodyStateSafetyOf(character, chat)).toEqual({ safe: true })
     expect(bodyHistoricalMvuStateOf(character, chat)).toBe(true)
-    expect(bodyMutationSafetyOf('edit', character, chat)).toMatchObject({ detail: 'edit-rollback-unavailable' })
+    expect(bodyMutationSafetyOf('edit', character, chat)).toEqual({ safe: true })
+    expect(bodyMutationSafetyOf('select', character, chat)).toMatchObject({ detail: 'candidate-switch-disabled' })
     expect(bodyMutationSafetyOf('regenerate', character, chat)).toEqual({ safe: true })
   })
 
@@ -824,7 +900,8 @@ describe('body state safety (proposal 0022 §7)', () => {
     const chat = fakeChat({ mvu: { receipts: [{ at: 't', turnKey: 'k' }] } })
     expect(bodyStateSafetyOf(character, chat)).toEqual({ safe: true })
     expect(bodyHistoricalMvuStateOf(character, chat)).toBe(true)
-    expect(bodyMutationSafetyOf('select', character, chat)).toMatchObject({ detail: 'select-rollback-unavailable' })
+    expect(bodyMutationSafetyOf('edit', character, chat)).toEqual({ safe: true })
+    expect(bodyMutationSafetyOf('select', character, chat)).toMatchObject({ detail: 'candidate-switch-disabled' })
   })
 
   it('allows a plain card with no historical MVU state', () => {
@@ -846,33 +923,32 @@ describe('body state safety (proposal 0022 §7)', () => {
     expect(bodyStateUnsafeMessage('mvu-receipt-missing')).toContain('receipt')
   })
 
-  it('returns 409 edit-rollback-unavailable from a PUT before touching the agent', async () => {
+  it('lets an MVU edit pass the safety gate and reach the missing live agent', async () => {
     const mvu = await callBodyMutation(mvuCharacter(), fakeChat({}))
     expect(mvu.status).toBe(409)
     expect(mvu.body).toMatchObject({
       ok: false,
-      code: 'body-state-unsafe',
-      detail: 'edit-rollback-unavailable',
+      code: 'session-busy',
     })
-    expect(String(mvu.body['message'])).toContain('rollback')
+    expect(String(mvu.body['message'])).toContain('no live agent')
   })
 
-  it('returns 409 select-rollback-unavailable from a select', async () => {
+  it('returns 409 candidate-switch-disabled from a select on MVU history', async () => {
     const result = await callBodySelect(mvuCharacter(), fakeChat({}))
     expect(result.status).toBe(409)
     expect(result.body).toMatchObject({
       ok: false,
       code: 'body-state-unsafe',
-      detail: 'select-rollback-unavailable',
+      detail: 'candidate-switch-disabled',
     })
   })
 
-  it('keeps edit refused when the chat only carries stat_data or receipts', async () => {
+  it('lets an edit pass the safety gate when the chat only carries stat_data or receipts', async () => {
     const stat = await callBodyMutation(plainCharacter(), fakeChat({ variables: { stat_data: {} } }))
-    expect(stat).toMatchObject({ status: 409, body: { code: 'body-state-unsafe', detail: 'edit-rollback-unavailable' } })
+    expect(stat).toMatchObject({ status: 409, body: { code: 'session-busy' } })
 
     const receipts = await callBodyMutation(plainCharacter(), fakeChat({ mvu: { receipts: [{ at: 't' }] } }))
-    expect(receipts).toMatchObject({ status: 409, body: { code: 'body-state-unsafe', detail: 'edit-rollback-unavailable' } })
+    expect(receipts).toMatchObject({ status: 409, body: { code: 'session-busy' } })
   })
 
   it('lets a plain card pass the safety gate (later fails on the missing live agent)', async () => {
@@ -881,7 +957,58 @@ describe('body state safety (proposal 0022 §7)', () => {
     expect(result.body['code']).toBe('session-busy')
   })
 
-  it('keeps body text readable while allowing regenerate and refusing edit/select for an MVU GET view', async () => {
+  it('accepts an MVU edit once the candidate receipt exists', async () => {
+    const character = mvuCharacter()
+    const text = '<UpdateVariable><JSONPatch>[{"op":"replace","path":"/hp","value":2}]</JSONPatch></UpdateVariable>'
+    const chat = projectedMvuChat(text, [{
+      at: '2026-10-28T00:00:00.000Z',
+      turnKey: 'body:message-1#0',
+      status: 'updated',
+      changes: [{ name: 'stat_data.hp', before: 1, after: 2 }],
+      failures: [],
+    }])
+    const harness = createRecoveryHarness()
+    seedEditAnchor(harness, 'message-1', text)
+
+    const result = await callBodyEditWithHarness(character, chat, harness, 'session-recovery', 'edited body')
+
+    expect(result.status).toBe(200)
+    expect(result.body).toMatchObject({ ok: true, state: { groupId: 'message-1', selectedIndex: 0, text: 'edited body' } })
+    expect(harness.events.some((event) => event.type === BODY_EVENT_TYPE && event.data['op'] === 'edit')).toBe(true)
+  })
+
+  it('refuses an MVU edit whose body has no candidate receipt', async () => {
+    const character = mvuCharacter()
+    const text = '<UpdateVariable><JSONPatch>[{"op":"replace","path":"/hp","value":2}]</JSONPatch></UpdateVariable>'
+    const chat = projectedChat(text)
+    const harness = createRecoveryHarness()
+    seedEditAnchor(harness, 'message-1', text)
+
+    const result = await callBodyEditWithHarness(character, chat, harness, 'session-recovery', 'edited body')
+
+    expect(result.status).toBe(409)
+    expect(result.body).toMatchObject({
+      ok: false,
+      code: 'body-state-unsafe',
+      detail: 'body-receipt-missing',
+    })
+    expect(harness.events.some((event) => event.type === BODY_EVENT_TYPE && event.data['op'] === 'edit')).toBe(false)
+  })
+
+  it('answers projection-pending when the JSONL floor is not projected yet', async () => {
+    const character = mvuCharacter()
+    const chat = fakeChat({})
+    const harness = createRecoveryHarness()
+    seedEditAnchor(harness, 'message-1', 'old body')
+
+    const result = await callBodyEditWithHarness(character, chat, harness, 'session-recovery', 'edited body')
+
+    expect(result.status).toBe(503)
+    expect(result.body).toMatchObject({ ok: false, code: 'projection-pending' })
+    expect(harness.events.some((event) => event.type === BODY_EVENT_TYPE && event.data['op'] === 'edit')).toBe(false)
+  })
+
+  it('enables edit while keeping selection closed for an MVU GET view', async () => {
     hostState.module = hostRecordModule()
     const session = sessionWithAssistant('message-1', 'session body')
     const agent = fakeAgent(session)
@@ -905,11 +1032,12 @@ describe('body state safety (proposal 0022 §7)', () => {
       ok: true,
       text: 'stored body',
       hidden: false,
-      canEdit: false,
+      canEdit: true,
       canRegenerate: true,
       canSelect: false,
-      reason: 'edit-rollback-unavailable',
+      detail: 'candidate-switch-disabled',
     })
+    expect(result['reason']).toBeUndefined()
   })
 
   it('disables regenerate when the rollback port is unavailable', () => {
@@ -927,10 +1055,32 @@ describe('body state safety (proposal 0022 §7)', () => {
       inspection: { onSurface: true, last: true },
     })
     expect(view).toMatchObject({
-      canEdit: false,
+      canEdit: true,
       canRegenerate: false,
       canSelect: false,
       reason: 'write-journal-unavailable',
+    })
+  })
+
+  it('keeps MVU selection closed while allowing edit for a multi-candidate body', () => {
+    const view = buildBodyView({
+      messageId: 'message-1',
+      binding: { architecture: 'agent-tavern' },
+      agent: fakeAgent(fakeSession('session-view-mvu')),
+      hostSupported: true,
+      stateSafety: { safe: true },
+      historicalMvuState: true,
+      writeRollbackAvailable: true,
+      ledger: undefined,
+      messageText: 'old body',
+      projected: { text: 'old body', count: 2, selectedIndex: 0 },
+      inspection: { onSurface: true, last: true },
+    })
+    expect(view).toMatchObject({
+      canEdit: true,
+      canRegenerate: true,
+      canSelect: false,
+      detail: 'candidate-switch-disabled',
     })
   })
 
@@ -1040,6 +1190,23 @@ describe('body view policy', () => {
       canSelect: false,
       reason: 'architecture-mismatch',
     })
+  })
+})
+
+describe('agent tool surface', () => {
+  it('exposes no body edit or rollback tool; edits stay on the HTTP route', () => {
+    const names = [
+      ...characterTools(),
+      ...memoryTools(),
+      ...variableTools(),
+      ...scriptTools(),
+      ...deductionTools(),
+      ...gameTools(),
+    ].map((definition) => definition.name)
+    expect(names.length).toBeGreaterThan(0)
+    expect(names.filter((name) => name.startsWith('body_') || name.startsWith('rollback_') || name === 'edit_body')).toEqual([])
+    expect(names).not.toContain('body_edit')
+    expect(names).not.toContain('body_select')
   })
 })
 

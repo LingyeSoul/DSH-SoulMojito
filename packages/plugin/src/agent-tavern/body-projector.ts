@@ -40,7 +40,6 @@ import {
 import {
   BodyJsonlProjectionError,
   applyCandidateToChat,
-  applyEditToChat,
   applyRestoreToChat,
   applySelectToChat,
   findBodyFloorIndexByGroupId,
@@ -48,6 +47,7 @@ import {
   type BodyJsonlCandidateInput,
   type BodyJsonlUsage,
 } from './body-jsonl.js'
+import { applyCandidateEditToChat } from './body-candidate-receipts.js'
 
 /** State slice the body projection needs from the tavern store. */
 export type BodyProjectionState = Pick<
@@ -165,10 +165,31 @@ export async function projectBodyEvent(
         `body event seq ${event.seq} edit text does not match the folded edit at index ${data.index} for group '${data.groupId}'`,
       )
     }
-    await mutateBodyChat(store, binding, (chat) => applyEditToChat(chat, {
+    const candidate = projected.candidates[data.index]
+    if (candidate === undefined) {
+      throw new BodyLedgerError(
+        'invalid-body-index',
+        `body event seq ${event.seq} edit index ${data.index} is out of range for group '${data.groupId}' with ${projected.candidates.length} candidates`,
+      )
+    }
+    assertEditPreviousText(session, data, event.seq)
+    const character = await store.getCharacter(binding.character)
+    if (character === undefined) {
+      throw new BodyLedgerError(
+        'invalid-body-event',
+        `body event seq ${event.seq} edit for group '${data.groupId}' cannot resolve character '${binding.character}' to apply candidate receipts`,
+      )
+    }
+    const at = eventDate(event.time)
+    await mutateBodyChat(store, binding, (chat) => applyCandidateEditToChat(chat, character.card, {
+      ledger: projected,
       groupId: data.groupId,
       index: data.index,
+      messageId: candidate.messageId,
+      previousText: data.previousText,
       text: data.text,
+      at,
+      eventSeq: event.seq,
     }))
     return
   }
@@ -395,6 +416,47 @@ function requireProjectedCandidate(
     )
   }
   return slot
+}
+
+/**
+ * Validate `edit.previousText` against the ledger folded before the event.
+ *
+ * The post-edit ledger already carries the new text, so the previous body must
+ * be read at `seq - 1`; a mismatch would make the receipt undo a baseline the
+ * projector never saw, so it refuses before any JSONL write.
+ */
+function assertEditPreviousText(
+  session: HostSessionLog,
+  data: Extract<BodyEventData, { op: 'edit' }>,
+  eventSeq: number,
+): void {
+  if (eventSeq === 0) {
+    throw new BodyLedgerError(
+      'invalid-body-event',
+      'body event seq 0 cannot be an edit because no candidate exists before it',
+    )
+  }
+  const before = foldBodyLedger(bodySessionEvents(session), data.groupId, eventSeq - 1)
+  if (before === undefined) {
+    throw new BodyLedgerError(
+      'invalid-body-event',
+      `body event seq ${eventSeq} edit for group '${data.groupId}' has no candidate before its watermark`,
+    )
+  }
+  const candidate = before.candidates[data.index]
+  if (candidate === undefined) {
+    throw new BodyLedgerError(
+      'invalid-body-index',
+      `body event seq ${eventSeq} edit index ${data.index} is out of range for group '${data.groupId}' with ${before.candidates.length} candidates`,
+    )
+  }
+  const effective = before.edits.get(data.index) ?? candidate.text
+  if (effective !== data.previousText) {
+    throw new BodyLedgerError(
+      'invalid-body-event',
+      `body event seq ${eventSeq} edit previousText does not match the effective body at index ${data.index} for group '${data.groupId}'`,
+    )
+  }
 }
 
 /* ------------------------- candidate message lookup ------------------------ */

@@ -13,13 +13,16 @@
  */
 
 import { importHostPackage } from '../../../bind/src/index.js'
+import type { ChatLogIR } from '../../../tavern-format/src/index.js'
 import { memories, store as tavernStore, variables } from '../runtime.js'
 import { tavernDataRoot } from '../dsh-home.js'
 import { embedMemoryRecord } from '../memory-hybrid.js'
 import { embedBreakerOpen, readEmbedStatus } from '../memory-embed.js'
 import type { HostSessionsService, PluginContext } from '../host-contract.js'
 import { memoryEmbeddingConfig, memoryVectorStore } from './tools/stores.js'
+import { inspectCandidateReceipts } from './body-candidate-receipts.js'
 import { createBodyProjection } from './body.js'
+import { locateBodyFloor } from './body-jsonl.js'
 import {
   createBodyWriteRollbackPort,
   type BodyRollbackMemoryStore,
@@ -28,11 +31,14 @@ import {
   type BodyRollbackVariableStore,
 } from './body-rollback.js'
 import {
+  bodyRuntimeError,
   finalizeTurnStopping,
   type BodyAgentLike,
+  type BodyEditInspection,
   type BodyRuntimeDeps,
   type BodySessionLike,
 } from './body-runtime.js'
+import { bodyStateUnsafeMessage } from './body-view.js'
 import {
   agentIdOf,
   bodyAgentOf,
@@ -158,8 +164,9 @@ export async function createBodyDeps(
 ): Promise<BodyRuntimeDeps | undefined> {
   const appendRecord = await resolveBodyRecordWriter(ctx)
   if (appendRecord === undefined) return undefined
+  const rollbackStore = lazyRollbackStore()
   const writeRollback = createBodyWriteRollbackPort({
-    store: lazyRollbackStore(),
+    store: rollbackStore,
     memoryStore: lazyRollbackMemoryStore(),
     variableStore: lazyRollbackVariableStore(),
     memoryVectors: lazyRollbackMemoryVectors(),
@@ -172,6 +179,132 @@ export async function createBodyDeps(
     ...(ctx.logger === undefined ? {} : { logger: ctx.logger }),
     appendRecord,
     writeRollback,
+    // Proposal 0023 §4.1/§7.3: the runtime owns the pre-append ordering, while
+    // this shard owns the read-only Tavern inspection. The hook never migrates,
+    // saves chat, or writes the session; a refusal propagates before the edit
+    // event exists.
+    inspectEdit: (input) => inspectBodyEdit(ctx, agent, rollbackStore, input),
+  }
+}
+
+/**
+ * Read-only candidate-receipt preflight for one edit.
+ *
+ * Binding, card and chat are resolved through the same lazy store as the
+ * rollback port. Every refusal is a typed `body-state-unsafe`/`projection-
+ * pending` failure and happens before the edit event is appended.
+ */
+async function inspectBodyEdit(
+  ctx: BodyWiringContext,
+  agent: BodyAgentLike,
+  store: BodyRollbackStore,
+  input: BodyEditInspection,
+): Promise<void> {
+  const sessionId = agentIdOf(agent)
+  if (sessionId === undefined) {
+    throw bodyRuntimeError(
+      'body-state-unsafe',
+      'body edit refused: the live agent has no session id, so the Tavern binding and candidate receipts cannot be inspected',
+      'chat-unreadable',
+    )
+  }
+  const binding = await resolveBodyBinding(ctx, sessionId)
+  if (binding === undefined || !bodyBindingEligible(binding) || binding.character === undefined || binding.chatId === undefined) {
+    throw bodyRuntimeError(
+      'body-state-unsafe',
+      `body edit refused for session '${sessionId}': the AgentTavern single-character binding is unavailable`,
+      'chat-unreadable',
+    )
+  }
+  let character: Awaited<ReturnType<BodyRollbackStore['getCharacter']>>
+  try {
+    character = await store.getCharacter(binding.character)
+  } catch (error) {
+    const failure = bodyRuntimeError(
+      'body-state-unsafe',
+      `body edit refused for session '${sessionId}': character card '${binding.character}' cannot be read: ${errorMessage(error)}`,
+      'card-unreadable',
+    )
+    failure.cause = error
+    throw failure
+  }
+  if (character === undefined) {
+    throw bodyRuntimeError(
+      'body-state-unsafe',
+      `body edit refused for session '${sessionId}': character card '${binding.character}' cannot be read`,
+      'card-unreadable',
+    )
+  }
+  let snapshot: Awaited<ReturnType<BodyRollbackStore['getChatSnapshot']>>
+  try {
+    snapshot = await store.getChatSnapshot(binding.character, binding.chatId)
+  } catch (error) {
+    const failure = bodyRuntimeError(
+      'body-state-unsafe',
+      `body edit refused for session '${sessionId}': chat '${binding.character}/${binding.chatId}' cannot be read: ${errorMessage(error)}`,
+      'chat-unreadable',
+    )
+    failure.cause = error
+    throw failure
+  }
+  if (snapshot === undefined) {
+    throw bodyRuntimeError(
+      'body-state-unsafe',
+      `body edit refused for session '${sessionId}': chat '${binding.character}/${binding.chatId}' cannot be read`,
+      'chat-unreadable',
+    )
+  }
+  requireProjectedCandidate(snapshot.chat, input)
+
+  const inspection = inspectCandidateReceipts(
+    snapshot.chat,
+    { messageId: input.messageId, index: input.index },
+    input.ledger,
+    input.previousText,
+    character.card,
+  )
+  if (inspection.detail !== undefined) {
+    throw bodyRuntimeError(
+      'body-state-unsafe',
+      `body edit refused for candidate ${input.index} ('${input.messageId}'): ${bodyStateUnsafeMessage(inspection.detail)}`,
+      inspection.detail,
+    )
+  }
+}
+
+/**
+ * A candidate edit can only project onto a floor whose swipes already contain
+ * the slot. Missing floor/swipe is a projection lag, not a receipt defect.
+ */
+function requireProjectedCandidate(chat: ChatLogIR, input: BodyEditInspection): void {
+  let floorIndex: number
+  try {
+    floorIndex = locateBodyFloor(chat, input.groupId, input.messageId)
+  } catch (error) {
+    throw bodyRuntimeError(
+      'projection-pending',
+      `body edit deferred for group '${input.groupId}' (message '${input.messageId}'): ${errorMessage(error)}; retry after the body projection catches up`,
+    )
+  }
+  const floor = chat.messages[floorIndex]
+  if (floor === undefined) {
+    throw bodyRuntimeError(
+      'projection-pending',
+      `body edit deferred for group '${input.groupId}': the projected floor at message index ${floorIndex} is missing; retry after the body projection catches up`,
+    )
+  }
+  if (floor.swipe_id !== input.index) {
+    throw bodyRuntimeError(
+      'projection-pending',
+      `body edit deferred for group '${input.groupId}': the projected floor selects swipe ${String(floor.swipe_id)}, expected ${input.index}; retry after the body projection catches up`,
+    )
+  }
+  const swipes = floor.swipes
+  if (!Array.isArray(swipes) || typeof swipes[input.index] !== 'string') {
+    throw bodyRuntimeError(
+      'projection-pending',
+      `body edit deferred for group '${input.groupId}': swipe ${input.index} has not been projected yet; retry after the body projection catches up`,
+    )
   }
 }
 

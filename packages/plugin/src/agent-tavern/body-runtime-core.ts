@@ -7,7 +7,7 @@
  */
 
 import { KeyedMutationTails } from '../../../tavern-store/src/index.js'
-import { BODY_EVENT_TYPE, type BodyEventData } from './body.js'
+import { BODY_EVENT_TYPE, type BodyEventData, type BodyLedger } from './body.js'
 import type { BodyRollbackPlan, BodyWriteRollbackPort } from './body-rollback.js'
 import { canAdvanceHostTurnBase } from '../session/trace.js'
 
@@ -42,6 +42,7 @@ export type BodyRuntimeErrorCode =
   | 'invalid-event'
   | 'restore-unavailable'
   | 'operation-failed'
+  | 'projection-pending'
 
 /** Specific, actionable body runtime failure. */
 export interface BodyRuntimeFailure extends Error {
@@ -123,6 +124,21 @@ export interface BodyRuntimeRollbackPort extends Omit<BodyWriteRollbackPort, 'ro
   rollbackTurnWrites?(agentId: string, turn: number): Promise<BodyRuntimeTurnRollback>
 }
 
+/**
+ * Read-only preflight for one candidate edit (proposal 0023 §4.1, §7.3).
+ *
+ * The runtime owns the ordering (preflight before the `edit` event); wiring
+ * owns the Tavern reads. `ledger` is the folded view the edit is about to
+ * extend and `previousText` is the effective text the new patch replaces.
+ */
+export interface BodyEditInspection {
+  readonly groupId: string
+  readonly index: number
+  readonly messageId: string
+  readonly previousText: string
+  readonly ledger: BodyLedger
+}
+
 export interface BodyRuntimeDeps {
   session: BodySessionLike
   agent: BodyAgentLike
@@ -145,6 +161,13 @@ export interface BodyRuntimeDeps {
    * regeneration over historical MVU state when this port is available.
    */
   writeRollback?: BodyRuntimeRollbackPort
+  /**
+   * Read-only candidate-state preflight, called before the `edit` event is
+   * appended (proposal 0023 §4.1). Wiring injects it over the Tavern store;
+   * when absent the legacy text-only edit path is preserved for non-MVU hosts
+   * and existing callers.
+   */
+  inspectEdit?: (input: BodyEditInspection) => Promise<void>
 }
 
 export interface RegenerateBodyRequest {

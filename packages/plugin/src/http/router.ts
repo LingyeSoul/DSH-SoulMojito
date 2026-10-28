@@ -1543,10 +1543,11 @@ export async function handleAgentTavernBodyApi(
       detail: 'chat-unreadable',
     })
   }
-  // Proposal 0022 §7: MVU state no longer blocks regeneration (the write
-  // rollback port protects it), but edit/select still refuse with their own
-  // detail. Refuse before resolving the agent or entering the runtime lock, so
-  // no event or tool restriction is written.
+  // Proposal 0023 §6: readability still rejects early, and P0 keeps candidate
+  // switching closed with `candidate-switch-disabled`. Editing no longer has a
+  // blanket historical-MVU refusal: the runtime's candidate-receipt preflight
+  // decides after the live agent and ledger are known, and its detail reaches
+  // this response through `bodyFailureOf`.
   const action: BodyMutationAction = route === 'body'
     ? 'edit'
     : route === 'body/select'

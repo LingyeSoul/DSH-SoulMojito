@@ -14682,6 +14682,12 @@ function rawMvuReceipts(chat) {
   const receipts = plainObject3(chat.header.chat_metadata.mvu)?.receipts;
   return Array.isArray(receipts) ? receipts : void 0;
 }
+var CANDIDATE_BODY_INDEX = /^(0|[1-9][0-9]*)$/;
+function isCandidateBodyKey(turnKey, messageId) {
+  const prefix = `body:${messageId}#`;
+  if (!turnKey.startsWith(prefix)) return false;
+  return CANDIDATE_BODY_INDEX.test(turnKey.slice(prefix.length));
+}
 function mvuReceiptsForBody(chat, query) {
   const { messageId, floorIndex } = query;
   if (messageId === void 0 && floorIndex === void 0) {
@@ -14698,7 +14704,10 @@ function mvuReceiptsForBody(chat, query) {
   }
   const bodyKey = messageId === void 0 ? void 0 : `body:${messageId}`;
   const floorKey = floorIndex === void 0 ? void 0 : String(floorIndex);
-  return readMvuReceipts(chat).filter((receipt) => receipt.turnKey === bodyKey || receipt.turnKey === floorKey);
+  return readMvuReceipts(chat).filter((receipt) => {
+    if (receipt.turnKey === bodyKey || receipt.turnKey === floorKey) return true;
+    return messageId !== void 0 && isCandidateBodyKey(receipt.turnKey, messageId);
+  });
 }
 function locateStoredReceipts(chat, receipts, operation) {
   const raw = rawMvuReceipts(chat);
@@ -15383,6 +15392,444 @@ function isRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// packages/plugin/src/agent-tavern/body-candidate-receipts.ts
+var CandidateReceiptError = class extends Error {
+  code;
+  constructor(code, message) {
+    super(message);
+    this.name = "CandidateReceiptError";
+    this.code = code;
+  }
+};
+var BODY_PREFIX = "body:";
+var CANONICAL_INDEX = /^(0|[1-9][0-9]*)$/;
+function isCanonicalMessageId(value) {
+  return value.trim() !== "" && value.trim() === value && !value.includes("#");
+}
+function candidateReceiptKey(messageId, index) {
+  if (typeof messageId !== "string" || !isCanonicalMessageId(messageId)) {
+    throw new CandidateReceiptError(
+      "body-receipt-key-mismatch",
+      `candidate receipt key requires a non-empty message id without '#' or surrounding whitespace, received '${String(messageId)}'`
+    );
+  }
+  if (!Number.isSafeInteger(index) || index < 0) {
+    throw new CandidateReceiptError(
+      "body-receipt-key-mismatch",
+      `candidate receipt key for message '${messageId}' requires a non-negative safe integer index, received ${String(index)}`
+    );
+  }
+  return `${BODY_PREFIX}${messageId}#${index}`;
+}
+function classifyBodyReceiptKey(turnKey) {
+  if (typeof turnKey !== "string" || turnKey === "") return { kind: "unknown" };
+  if (!turnKey.startsWith(BODY_PREFIX)) {
+    return CANONICAL_INDEX.test(turnKey) && Number.isSafeInteger(Number(turnKey)) ? { kind: "settle", floorIndex: Number(turnKey) } : { kind: "unknown" };
+  }
+  const rest = turnKey.slice(BODY_PREFIX.length);
+  const separator = rest.indexOf("#");
+  if (separator === -1) {
+    return isCanonicalMessageId(rest) ? { kind: "legacy", messageId: rest } : { kind: "unknown" };
+  }
+  const messageId = rest.slice(0, separator);
+  const suffix = rest.slice(separator + 1);
+  if (!isCanonicalMessageId(messageId) || !CANONICAL_INDEX.test(suffix)) return { kind: "unknown" };
+  const index = Number(suffix);
+  if (!Number.isSafeInteger(index)) return { kind: "unknown" };
+  return { kind: "candidate", messageId, index };
+}
+function refMismatch(ref) {
+  if (typeof ref.messageId !== "string" || !isCanonicalMessageId(ref.messageId)) {
+    return `candidate ref message id must be non-empty without '#' or surrounding whitespace, received '${String(ref.messageId)}'`;
+  }
+  if (!Number.isSafeInteger(ref.index) || ref.index < 0) {
+    return `candidate ref for '${ref.messageId}' has a non-negative safe integer index requirement, received ${String(ref.index)}`;
+  }
+  return void 0;
+}
+function readLedgerIndex(ledger) {
+  const byMessageId = /* @__PURE__ */ new Map();
+  for (const [position, candidate] of ledger.candidates.entries()) {
+    const messageId = candidate.messageId;
+    if (typeof messageId !== "string" || !isCanonicalMessageId(messageId)) {
+      return {
+        byMessageId,
+        error: `ledger candidate at position ${position} has message id '${String(messageId)}', which cannot be encoded as a candidate receipt key`
+      };
+    }
+    if (!Number.isSafeInteger(candidate.index) || candidate.index < 0 || candidate.index !== position) {
+      return {
+        byMessageId,
+        error: `ledger candidate '${messageId}' carries index ${String(candidate.index)} at position ${position}; the slot witness must equal its position`
+      };
+    }
+    const existing = byMessageId.get(messageId);
+    if (existing !== void 0) {
+      return {
+        byMessageId,
+        error: `ledger maps message id '${messageId}' to candidate ${existing} and candidate ${candidate.index}; refusing to guess which slot owns its receipt`
+      };
+    }
+    byMessageId.set(messageId, candidate.index);
+  }
+  return { byMessageId };
+}
+function requireLedgerIndex(ledger) {
+  const index = readLedgerIndex(ledger);
+  if (index.error !== void 0) throw new CandidateReceiptError("body-receipt-key-mismatch", index.error);
+  return index.byMessageId;
+}
+function migrateLegacyCandidateReceipts(chat, ledger) {
+  const byMessageId = requireLedgerIndex(ledger);
+  const mvu = plainObject4(chat.header.chat_metadata.mvu);
+  const raw = mvu?.receipts;
+  if (!Array.isArray(raw) || raw.length === 0) return { migrated: 0, unmappable: [] };
+  const existingKeys = /* @__PURE__ */ new Set();
+  for (const entry of raw) {
+    if (isRecord4(entry) && typeof entry["turnKey"] === "string") existingKeys.add(entry["turnKey"]);
+  }
+  const next = [];
+  const unmappable = [];
+  let migrated = 0;
+  for (const entry of raw) {
+    if (!isRecord4(entry) || typeof entry["turnKey"] !== "string") {
+      next.push(entry);
+      continue;
+    }
+    const turnKey = entry["turnKey"];
+    const key = classifyBodyReceiptKey(turnKey);
+    if (key.kind !== "legacy") {
+      next.push(entry);
+      continue;
+    }
+    const slot = byMessageId.get(key.messageId);
+    if (slot === void 0) {
+      unmappable.push(turnKey);
+      next.push(entry);
+      continue;
+    }
+    const nextKey = candidateReceiptKey(key.messageId, slot);
+    if (existingKeys.has(nextKey)) {
+      unmappable.push(turnKey);
+      next.push(entry);
+      continue;
+    }
+    next.push({ ...entry, turnKey: nextKey });
+    existingKeys.add(nextKey);
+    migrated += 1;
+  }
+  if (migrated > 0) {
+    chat.header.chat_metadata.mvu = { ...mvu ?? {}, receipts: next };
+  }
+  return { migrated, unmappable };
+}
+function hasUpdateVariableBlock(text) {
+  return /<UpdateVariable(?:Variable)?\b[^>]*>[\s\S]*?<\/UpdateVariable(?:Variable)?\s*>/i.test(text);
+}
+function inspectCandidateReceipts(chat, ref, ledger, previousText, card) {
+  const needsReceipt = cardUsesJsrMvu(card) && hasUpdateVariableBlock(previousText);
+  const mismatch = refMismatch(ref);
+  if (mismatch !== void 0) {
+    return { live: [], undone: [], needsReceipt, detail: "body-receipt-key-mismatch" };
+  }
+  const ledgerIndex = readLedgerIndex(ledger);
+  if (ledgerIndex.error !== void 0) {
+    return { live: [], undone: [], needsReceipt, detail: "body-receipt-key-mismatch" };
+  }
+  const slot = ledger.candidates[ref.index];
+  if (slot !== void 0 && slot.messageId !== ref.messageId) {
+    return { live: [], undone: [], needsReceipt, detail: "body-receipt-key-mismatch" };
+  }
+  const mapped = ledgerIndex.byMessageId.get(ref.messageId);
+  if (mapped !== void 0 && mapped !== ref.index) {
+    return { live: [], undone: [], needsReceipt, detail: "body-receipt-key-mismatch" };
+  }
+  const live = [];
+  const undone = [];
+  const legacyKeys = [];
+  let keyMismatch;
+  const pushMatch = (receipt) => {
+    if (receipt.undoneAt === void 0) live.push(receipt);
+    else undone.push(receipt);
+  };
+  for (const receipt of readMvuReceipts(chat)) {
+    const key = classifyBodyReceiptKey(receipt.turnKey);
+    if (key.kind === "candidate") {
+      if (key.messageId !== ref.messageId) continue;
+      if (key.index !== ref.index) {
+        keyMismatch ??= `receipt '${receipt.turnKey}' claims message '${ref.messageId}' at slot ${key.index}, but the candidate slot is ${ref.index}`;
+        continue;
+      }
+      pushMatch(receipt);
+      continue;
+    }
+    if (key.kind === "legacy") {
+      if (key.messageId !== ref.messageId) continue;
+      const legacySlot = ledgerIndex.byMessageId.get(key.messageId);
+      if (legacySlot === void 0) {
+        legacyKeys.push(receipt.turnKey);
+        continue;
+      }
+      if (legacySlot !== ref.index) {
+        keyMismatch ??= `legacy receipt '${receipt.turnKey}' maps to slot ${legacySlot}, but the candidate slot is ${ref.index}`;
+        continue;
+      }
+      pushMatch(receipt);
+      continue;
+    }
+    if (key.kind === "unknown" && receipt.turnKey.startsWith(`${BODY_PREFIX}${ref.messageId}#`)) {
+      keyMismatch ??= `receipt '${receipt.turnKey}' looks like a candidate key for message '${ref.messageId}' but cannot be parsed`;
+    }
+  }
+  const liveEffects = live.filter((receipt) => receipt.changes.length > 0).length;
+  const detail = keyMismatch !== void 0 ? "body-receipt-key-mismatch" : liveEffects > 1 ? "body-receipt-duplicate" : legacyKeys.length > 0 ? "body-receipt-legacy" : needsReceipt && live.length === 0 && undone.length === 0 ? "body-receipt-missing" : void 0;
+  return {
+    live,
+    undone,
+    needsReceipt,
+    ...detail === void 0 ? {} : { detail }
+  };
+}
+function detailError(detail, ref, inspection) {
+  const key = candidateReceiptKey(ref.messageId, ref.index);
+  if (detail === "body-receipt-missing") {
+    return new CandidateReceiptError(
+      detail,
+      `candidate ${ref.index} ('${ref.messageId}') has an <UpdateVariable> body but no live or undone receipt at '${key}'; restore the receipt before editing, do not retry blindly`
+    );
+  }
+  if (detail === "body-receipt-duplicate") {
+    const conflicts = inspection.live.filter((receipt) => receipt.changes.length > 0).map((receipt) => `'${receipt.turnKey}' at ${receipt.at}`);
+    return new CandidateReceiptError(
+      detail,
+      `candidate ${ref.index} ('${ref.messageId}') has ${conflicts.length} live receipts with variable changes (${conflicts.join(", ")}); refusing to choose one, repair the receipt set first`
+    );
+  }
+  if (detail === "body-receipt-legacy") {
+    return new CandidateReceiptError(
+      detail,
+      `candidate ${ref.index} ('${ref.messageId}') has a legacy 'body:<messageId>' receipt that the body ledger cannot map to a unique slot; migrate or repair the receipt key before editing`
+    );
+  }
+  return new CandidateReceiptError(
+    detail,
+    `candidate ${ref.index} ('${ref.messageId}') has a receipt key that does not match the ledger slot; repair the receipt keys before editing`
+  );
+}
+function applyCandidateEditToChat(chat, card, input) {
+  const floorIndex = locateCandidateFloor(chat, input);
+  const floor = chat.messages[floorIndex];
+  if (floor === void 0) {
+    throw new CandidateReceiptError(
+      "body-floor-not-found",
+      `body floor '${input.groupId}' disappeared at message index ${floorIndex}`
+    );
+  }
+  if (isReplayOfAppliedEvent(floor, input.eventSeq)) return chat;
+  const byMessageId = requireLedgerIndex(input.ledger);
+  migrateLegacyCandidateReceipts(chat, input.ledger);
+  const ref = { messageId: input.messageId, index: input.index };
+  const inspection = inspectCandidateReceipts(chat, ref, input.ledger, input.previousText, card);
+  if (inspection.detail !== void 0) throw detailError(inspection.detail, ref, inspection);
+  if (inspection.live.length > 0) undoMvuReceipts(chat, inspection.live, { at: input.at });
+  const before = snapshotChatVariables(chat);
+  const applied = applyUpdateVariableToChat(card, chat, input.text);
+  if (applied.found) {
+    removeCandidateReceipts(chat, ref, byMessageId);
+    recordCandidateReceipt(chat, before, candidateReceiptKey(input.messageId, input.index), input.at, applied.failures);
+  } else {
+    removeCandidateReceipts(chat, ref, byMessageId);
+    restoreChatVariables(chat, before);
+  }
+  bindFloorGroup(chat, floorIndex, input.groupId);
+  const next = applyEditToChat(chat, {
+    groupId: input.groupId,
+    index: input.index,
+    text: applied.text
+  });
+  const nextFloor = next.messages[floorIndex];
+  if (nextFloor === void 0) {
+    throw new CandidateReceiptError(
+      "body-floor-not-found",
+      `body floor '${input.groupId}' disappeared after editing candidate ${input.index} ('${input.messageId}')`
+    );
+  }
+  syncFloorStatData(next, floorIndex);
+  markBodyMutation(next, floorIndex, input.eventSeq, "edit");
+  chat.header = next.header;
+  chat.messages = next.messages;
+  return chat;
+}
+function markBodyMutation(chat, floorIndex, eventSeq, mutation) {
+  const floor = chat.messages[floorIndex];
+  if (floor === void 0) {
+    throw new CandidateReceiptError(
+      "body-floor-not-found",
+      `body floor has no message at index ${floorIndex} while marking ${mutation} at seq ${eventSeq}`
+    );
+  }
+  const extra = isRecord4(floor.extra) ? floor.extra : {};
+  const agentTavern = isRecord4(extra["agentTavern"]) ? extra["agentTavern"] : {};
+  chat.messages[floorIndex] = {
+    ...floor,
+    extra: {
+      ...extra,
+      agentTavern: { ...agentTavern, lastBodyEventSeq: eventSeq, lastBodyMutation: mutation }
+    }
+  };
+}
+function syncFloorStatData(chat, floorIndex) {
+  const floor = chat.messages[floorIndex];
+  if (floor === void 0) {
+    throw new CandidateReceiptError(
+      "body-floor-not-found",
+      `body floor has no message at index ${floorIndex} while syncing stat_data`
+    );
+  }
+  const updated = messageStatVariables(chat, floor);
+  if (plainObject4(readChatVariables(chat)["stat_data"]) !== void 0) {
+    chat.messages[floorIndex] = updated;
+    return;
+  }
+  const variables2 = isRecord4(updated.variables) ? updated.variables : void 0;
+  if (variables2 === void 0 || !Object.prototype.hasOwnProperty.call(variables2, "stat_data")) {
+    chat.messages[floorIndex] = updated;
+    return;
+  }
+  const nextVariables = { ...variables2 };
+  delete nextVariables["stat_data"];
+  if (Object.keys(nextVariables).length === 0) {
+    const nextMessage = { ...updated };
+    delete nextMessage.variables;
+    chat.messages[floorIndex] = nextMessage;
+    return;
+  }
+  chat.messages[floorIndex] = { ...updated, variables: nextVariables };
+}
+function locateCandidateFloor(chat, input) {
+  if (!Number.isSafeInteger(input.index) || input.index < 0) {
+    throw new CandidateReceiptError(
+      "stale-anchor",
+      `edit candidate index must be a non-negative safe integer, received ${String(input.index)}`
+    );
+  }
+  let floorIndex;
+  try {
+    floorIndex = locateBodyFloor(chat, input.groupId, input.messageId);
+  } catch (error) {
+    if (error instanceof BodyJsonlProjectionError) {
+      throw new CandidateReceiptError(
+        "body-floor-not-found",
+        `cannot locate body floor for group '${input.groupId}' / message '${input.messageId}': ${error.message}`
+      );
+    }
+    throw error;
+  }
+  const floor = chat.messages[floorIndex];
+  if (floor === void 0) {
+    throw new CandidateReceiptError(
+      "body-floor-not-found",
+      `body floor '${input.groupId}' has no message at index ${floorIndex}`
+    );
+  }
+  if (floor.swipe_id !== input.index) {
+    throw new CandidateReceiptError(
+      "stale-anchor",
+      `edit index ${input.index} does not match selected swipe ${String(floor.swipe_id)} on body floor '${input.groupId}'`
+    );
+  }
+  const swipes = floor.swipes;
+  if (!Array.isArray(swipes) || typeof swipes[input.index] !== "string") {
+    throw new CandidateReceiptError(
+      "projection-pending",
+      `body floor '${input.groupId}' has no projected swipe at index ${input.index}; retry after the body projection catches up`
+    );
+  }
+  return floorIndex;
+}
+function bindFloorGroup(chat, floorIndex, groupId) {
+  const floor = chat.messages[floorIndex];
+  if (floor === void 0) {
+    throw new CandidateReceiptError(
+      "body-floor-not-found",
+      `body floor '${groupId}' has no message at index ${floorIndex}`
+    );
+  }
+  const extra = isRecord4(floor.extra) ? floor.extra : {};
+  const agentTavern = isRecord4(extra["agentTavern"]) ? extra["agentTavern"] : {};
+  const current = agentTavern["bodyGroupId"];
+  if (current !== void 0 && current !== groupId) {
+    throw new CandidateReceiptError(
+      "stale-anchor",
+      `body floor at index ${floorIndex} is already bound to group '${String(current)}', cannot edit group '${groupId}'`
+    );
+  }
+  if (current === groupId) return;
+  chat.messages[floorIndex] = {
+    ...floor,
+    extra: { ...extra, agentTavern: { ...agentTavern, bodyGroupId: groupId } }
+  };
+}
+function isReplayOfAppliedEvent(message, eventSeq) {
+  const sequence = readLastBodyEventSeq(message);
+  return sequence !== void 0 && Number.isSafeInteger(eventSeq) && eventSeq >= 0 && sequence >= eventSeq;
+}
+function readLastBodyEventSeq(message) {
+  const extra = isRecord4(message.extra) ? message.extra : void 0;
+  const agentTavern = extra === void 0 ? void 0 : extra["agentTavern"];
+  if (!isRecord4(agentTavern)) return void 0;
+  const value = agentTavern["lastBodyEventSeq"];
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : void 0;
+}
+function removeCandidateReceipts(chat, ref, byMessageId) {
+  const mvu = plainObject4(chat.header.chat_metadata.mvu);
+  const raw = mvu?.receipts;
+  if (!Array.isArray(raw)) return;
+  const next = raw.filter((entry) => {
+    if (!isRecord4(entry) || typeof entry["turnKey"] !== "string") return true;
+    return !receiptBelongsToCandidate(entry["turnKey"], ref, byMessageId);
+  });
+  if (next.length === raw.length) return;
+  chat.header.chat_metadata.mvu = { ...mvu ?? {}, receipts: next };
+}
+function receiptBelongsToCandidate(turnKey, ref, byMessageId) {
+  const key = classifyBodyReceiptKey(turnKey);
+  if (key.kind === "candidate") return key.messageId === ref.messageId && key.index === ref.index;
+  if (key.kind === "legacy") {
+    return key.messageId === ref.messageId && byMessageId.get(key.messageId) === ref.index;
+  }
+  return false;
+}
+function recordCandidateReceipt(chat, before, turnKey, at, failures) {
+  const recorded = recordMvuTurnReceipt(chat, before, { turnKey, at, failures: [...failures] });
+  if (recorded !== void 0) return recorded;
+  const changes = diffVariables(before, readChatVariables(chat));
+  const receipt = {
+    at,
+    turnKey,
+    status: changes.length > 0 ? "updated" : "unchanged",
+    changes,
+    failures: [...failures]
+  };
+  appendMvuReceipt(chat, receipt);
+  return receipt;
+}
+function restoreChatVariables(chat, before) {
+  const metadata = chat.header.chat_metadata;
+  if (Object.keys(before).length === 0) {
+    delete metadata.variables;
+    return;
+  }
+  metadata.variables = structuredClone(before);
+}
+function plainObject4(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
+  return value;
+}
+function isRecord4(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 // packages/plugin/src/agent-tavern/body-projector.ts
 function isBodyLogEvent(eventType) {
   return eventType === BODY_EVENT_TYPE;
@@ -15443,10 +15890,31 @@ async function projectBodyEvent(store5, session, state, binding, event) {
         `body event seq ${event.seq} edit text does not match the folded edit at index ${data.index} for group '${data.groupId}'`
       );
     }
-    await mutateBodyChat(store5, binding, (chat) => applyEditToChat(chat, {
+    const candidate = projected2.candidates[data.index];
+    if (candidate === void 0) {
+      throw new BodyLedgerError(
+        "invalid-body-index",
+        `body event seq ${event.seq} edit index ${data.index} is out of range for group '${data.groupId}' with ${projected2.candidates.length} candidates`
+      );
+    }
+    assertEditPreviousText(session, data, event.seq);
+    const character = await store5.getCharacter(binding.character);
+    if (character === void 0) {
+      throw new BodyLedgerError(
+        "invalid-body-event",
+        `body event seq ${event.seq} edit for group '${data.groupId}' cannot resolve character '${binding.character}' to apply candidate receipts`
+      );
+    }
+    const at = eventDate(event.time);
+    await mutateBodyChat(store5, binding, (chat) => applyCandidateEditToChat(chat, character.card, {
+      ledger: projected2,
       groupId: data.groupId,
       index: data.index,
-      text: data.text
+      messageId: candidate.messageId,
+      previousText: data.previousText,
+      text: data.text,
+      at,
+      eventSeq: event.seq
     }));
     return;
   }
@@ -15473,7 +15941,7 @@ function isBodyMergedAssistant(session, event) {
 function projectCandidateToChat(chat, card, input) {
   const existingText = existingCandidateText(chat, input.groupId, input.index);
   const receiptExists = mvuReceiptsForBody(chat, { messageId: input.messageId }).length > 0;
-  if (card === void 0 || !cardUsesJsrMvu(card) || existingText !== void 0 || receiptExists || !hasUpdateVariableBlock(input.text)) {
+  if (card === void 0 || !cardUsesJsrMvu(card) || existingText !== void 0 || receiptExists || !hasUpdateVariableBlock2(input.text)) {
     return applyCandidateToChat(chat, {
       ...input,
       ...existingText === void 0 ? {} : { text: existingText }
@@ -15518,7 +15986,7 @@ function attachBodyStatData(chat, groupId) {
   chat.messages[floorIndex] = messageStatVariables(chat, floor);
   return chat;
 }
-function hasUpdateVariableBlock(text) {
+function hasUpdateVariableBlock2(text) {
   return /<UpdateVariable(?:Variable)?\b[^>]*>[\s\S]*?<\/UpdateVariable(?:Variable)?\s*>/i.test(text);
 }
 async function mutateBodyChat(store5, binding, mutate) {
@@ -15612,6 +16080,35 @@ function requireProjectedCandidate(ledger, data, seq) {
     );
   }
   return slot;
+}
+function assertEditPreviousText(session, data, eventSeq) {
+  if (eventSeq === 0) {
+    throw new BodyLedgerError(
+      "invalid-body-event",
+      "body event seq 0 cannot be an edit because no candidate exists before it"
+    );
+  }
+  const before = foldBodyLedger(bodySessionEvents(session), data.groupId, eventSeq - 1);
+  if (before === void 0) {
+    throw new BodyLedgerError(
+      "invalid-body-event",
+      `body event seq ${eventSeq} edit for group '${data.groupId}' has no candidate before its watermark`
+    );
+  }
+  const candidate = before.candidates[data.index];
+  if (candidate === void 0) {
+    throw new BodyLedgerError(
+      "invalid-body-index",
+      `body event seq ${eventSeq} edit index ${data.index} is out of range for group '${data.groupId}' with ${before.candidates.length} candidates`
+    );
+  }
+  const effective = before.edits.get(data.index) ?? candidate.text;
+  if (effective !== data.previousText) {
+    throw new BodyLedgerError(
+      "invalid-body-event",
+      `body event seq ${eventSeq} edit previousText does not match the effective body at index ${data.index} for group '${data.groupId}'`
+    );
+  }
 }
 function resolveBodyCandidateMessage(session, messageId, uptoSeq) {
   let found;
@@ -16280,7 +16777,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("d1ca102") : void 0;
+  const commit = true ? normalizeCommit("5c42305") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -21022,8 +21519,8 @@ async function readAgentTavernBinding(store5, agentId) {
     );
   }
   const bindings2 = state.sessionBindings;
-  const binding = isRecord4(bindings2) ? bindings2[agentId] : void 0;
-  if (!isRecord4(binding) || binding["architecture"] !== "agent-tavern") {
+  const binding = isRecord5(bindings2) ? bindings2[agentId] : void 0;
+  if (!isRecord5(binding) || binding["architecture"] !== "agent-tavern") {
     throw new BodyRollbackError(
       "body-state-unsafe",
       `body rollback requires an agent-tavern binding for session '${agentId}'`,
@@ -21083,7 +21580,7 @@ function isNonEmptyString(value) {
 function isNonNegativeInteger2(value) {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
-function isRecord4(value) {
+function isRecord5(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -21349,7 +21846,7 @@ var WriteJournalError = class extends Error {
 function readWriteJournal(events) {
   const entries = [];
   for (const [index, event] of events.entries()) {
-    if (!isRecord5(event)) continue;
+    if (!isRecord6(event)) continue;
     if (event["type"] !== WRITE_JOURNAL_EVENT_TYPE) continue;
     entries.push(parseEntry(event["data"], index));
   }
@@ -21371,7 +21868,7 @@ var MEMORY_SCOPES = ["turn", "chat", "character", "agent", "global"];
 var VARIABLE_SCOPES = ["turn", "chat", "character", "agent", "global"];
 function parseEntry(data, index) {
   const where = `write journal event at index ${index}`;
-  if (!isRecord5(data)) throw invalid(where, "data must be an object");
+  if (!isRecord6(data)) throw invalid(where, "data must be an object");
   const kind = data["kind"];
   if (kind === "memory") return parseMemoryEntry(data, where);
   if (kind === "variable") return parseVariableEntry(data, where);
@@ -21480,7 +21977,7 @@ function jsonValueAt(value, where) {
     return value;
   }
   if (Array.isArray(value)) return value.map((item, index) => jsonValueAt(item, `${where}[${index}]`));
-  if (isRecord5(value)) {
+  if (isRecord6(value)) {
     const record = {};
     for (const [key, item] of Object.entries(value)) record[key] = jsonValueAt(item, `${where}.${key}`);
     return record;
@@ -21548,10 +22045,10 @@ function timestampAt(record, field, where) {
   return value;
 }
 function recordAt(value, where) {
-  if (!isRecord5(value)) throw invalid(where, "must be an object");
+  if (!isRecord6(value)) throw invalid(where, "must be an object");
   return value;
 }
-function isRecord5(value) {
+function isRecord6(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function invalid(where, detail) {
@@ -21573,10 +22070,10 @@ function readBodyReceipts(chat, previousMessageId, floorIndex, agentId, turn) {
 function assertReceiptCoverage(bodyText, toolNames, receipts, previousMessageId, floorIndex, agentId, turn) {
   const bodyKey = `body:${previousMessageId}`;
   const bodyHasUpdateVariable = /<UpdateVariable\b/i.test(bodyText);
-  if (bodyHasUpdateVariable && !receipts.some((receipt) => receipt.turnKey === bodyKey)) {
+  if (bodyHasUpdateVariable && !receipts.some((receipt) => isBodyReceiptOf(receipt.turnKey, previousMessageId))) {
     throw new BodyRollbackError(
       "body-state-unsafe",
-      `body rollback for session '${agentId}' turn ${turn} refused: the old body contains <UpdateVariable> but has no '${bodyKey}' receipt`,
+      `body rollback for session '${agentId}' turn ${turn} refused: the old body contains <UpdateVariable> but has neither a '${bodyKey}' nor a '${bodyKey}#<index>' receipt`,
       { detail: "mvu-receipt-missing", stage: "prepare", sessionId: agentId, turn }
     );
   }
@@ -21588,6 +22085,11 @@ function assertReceiptCoverage(bodyText, toolNames, receipts, previousMessageId,
       { detail: "mvu-receipt-missing", stage: "prepare", sessionId: agentId, turn }
     );
   }
+}
+function isBodyReceiptOf(turnKey, messageId) {
+  const key = classifyBodyReceiptKey(turnKey);
+  if (key.kind === "candidate") return key.messageId === messageId;
+  return key.kind === "legacy" && key.messageId === messageId;
 }
 async function applyReceiptRollback(deps, chat, receipts, direction, binding) {
   const unclassified = receipts.filter(
@@ -21643,7 +22145,7 @@ function locateSettleReceipts(chat, receipts, direction) {
     for (let index = 0; index < raw.length; index += 1) {
       if (used.has(index)) continue;
       const record = raw[index];
-      if (!isRecord4(record)) continue;
+      if (!isRecord5(record)) continue;
       if (record["turnKey"] !== receipt.turnKey || record["at"] !== receipt.at) continue;
       match = {
         index,
@@ -21756,7 +22258,7 @@ function stageOfReceipt(direction) {
 }
 function rawMvuReceipts2(chat) {
   const mvu = chat.header.chat_metadata.mvu;
-  const receipts = isRecord4(mvu) ? mvu["receipts"] : void 0;
+  const receipts = isRecord5(mvu) ? mvu["receipts"] : void 0;
   return Array.isArray(receipts) ? receipts : void 0;
 }
 function markStoredReceipts(chat, indexes, undoneAt) {
@@ -21771,7 +22273,7 @@ function markStoredReceipts(chat, indexes, undoneAt) {
   const next = raw.slice();
   for (const index of indexes) {
     const record = next[index];
-    if (!isRecord4(record)) {
+    if (!isRecord5(record)) {
       throw new BodyRollbackError(
         "body-rollback-failed",
         `body rollback cannot mark MVU receipt at index ${index}: the entry is not an object`,
@@ -21784,7 +22286,7 @@ function markStoredReceipts(chat, indexes, undoneAt) {
     next[index] = updated;
   }
   const metadata = chat.header.chat_metadata;
-  const mvu = isRecord4(metadata.mvu) ? metadata.mvu : {};
+  const mvu = isRecord5(metadata.mvu) ? metadata.mvu : {};
   metadata.mvu = { ...mvu, receipts: next };
 }
 function toJsonValue(value, path12, receipt) {
@@ -21798,7 +22300,7 @@ function toJsonValue(value, path12, receipt) {
   if (Array.isArray(value)) {
     return value.map((item, index) => toJsonValue(item, `${path12}[${index}]`, receipt));
   }
-  if (isRecord4(value)) {
+  if (isRecord5(value)) {
     const record = {};
     for (const [key, item] of Object.entries(value)) record[key] = toJsonValue(item, `${path12}.${key}`, receipt);
     return record;
@@ -21811,8 +22313,8 @@ function jsonValuesEqual(left, right) {
     if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
     return left.every((item, index) => jsonValuesEqual(item, right[index]));
   }
-  if (isRecord4(left) || isRecord4(right)) {
-    if (!isRecord4(left) || !isRecord4(right)) return false;
+  if (isRecord5(left) || isRecord5(right)) {
+    if (!isRecord5(left) || !isRecord5(right)) return false;
     const leftKeys = Object.keys(left);
     if (leftKeys.length !== Object.keys(right).length) return false;
     return leftKeys.every((key) => key in right && jsonValuesEqual(left[key], right[key]));
@@ -21845,7 +22347,7 @@ function toolNamesInTurn(events, turn) {
   const names = [];
   let open2;
   for (const event of events) {
-    if (!isRecord4(event)) continue;
+    if (!isRecord5(event)) continue;
     const type = event["type"];
     if (type === "turn/start") {
       open2 = turnNumberOf(event["data"]);
@@ -21856,15 +22358,15 @@ function toolNamesInTurn(events, turn) {
       continue;
     }
     if (type !== "assistant/message") continue;
-    const data = isRecord4(event["data"]) ? event["data"] : void 0;
+    const data = isRecord5(event["data"]) ? event["data"] : void 0;
     if (data === void 0) continue;
     const eventTurn = typeof data["turn"] === "number" ? data["turn"] : open2;
     if (eventTurn !== turn) continue;
-    const message = isRecord4(data["message"]) ? data["message"] : void 0;
+    const message = isRecord5(data["message"]) ? data["message"] : void 0;
     const content = message?.["content"];
     if (!Array.isArray(content)) continue;
     for (const block of content) {
-      if (!isRecord4(block) || block["type"] !== "tool-call") continue;
+      if (!isRecord5(block) || block["type"] !== "tool-call") continue;
       const name2 = block["name"];
       if (typeof name2 === "string" && name2 !== "") names.push(name2);
     }
@@ -21872,7 +22374,7 @@ function toolNamesInTurn(events, turn) {
   return names;
 }
 function turnNumberOf(data) {
-  if (!isRecord4(data)) return void 0;
+  if (!isRecord5(data)) return void 0;
   const turn = data["turn"];
   return typeof turn === "number" && Number.isSafeInteger(turn) && turn >= 0 ? turn : void 0;
 }
@@ -22218,8 +22720,8 @@ function settleReceiptsForTurn(chat, turn) {
 }
 function messageTurnNumber(message) {
   const extra = message?.extra;
-  const tavern = isRecord4(extra) ? extra["agentTavern"] : void 0;
-  if (!isRecord4(tavern)) return void 0;
+  const tavern = isRecord5(extra) ? extra["agentTavern"] : void 0;
+  if (!isRecord5(tavern)) return void 0;
   const turn = tavern["turn"];
   return typeof turn === "number" && Number.isSafeInteger(turn) ? turn : void 0;
 }
@@ -22511,8 +23013,8 @@ async function readPlanChatSnapshot(store5, plan) {
 function locateBodyFloor2(chat, messageId) {
   for (const [index, message] of chat.messages.entries()) {
     const extra = message.extra;
-    const tavern = isRecord4(extra) ? extra["agentTavern"] : void 0;
-    if (!isRecord4(tavern)) continue;
+    const tavern = isRecord5(extra) ? extra["agentTavern"] : void 0;
+    if (!isRecord5(tavern)) continue;
     if (tavern["messageId"] === messageId || tavern["anchorMessageId"] === messageId || tavern["bodyGroupId"] === messageId) {
       return index;
     }
@@ -22529,14 +23031,14 @@ function throwUnsafe(detail, message, agentId, turn) {
 }
 function requirePlan(plan) {
   const value = plan;
-  if (!isRecord4(value)) throw invalidPlan("plan must be an object");
+  if (!isRecord5(value)) throw invalidPlan("plan must be an object");
   if (!isNonEmptyString(value["sessionId"])) throw invalidPlan("plan.sessionId must be a non-empty string");
   if (!isNonNegativeInteger2(value["turn"])) throw invalidPlan("plan.turn must be a non-negative safe integer");
   if (!isNonEmptyString(value["previousMessageId"])) throw invalidPlan("plan.previousMessageId must be a non-empty string");
   if (!Array.isArray(value["journal"])) throw invalidPlan("plan.journal must be an array");
   if (!Array.isArray(value["mvuReceipts"])) throw invalidPlan("plan.mvuReceipts must be an array");
   const binding = value["binding"];
-  if (!isRecord4(binding) || !isNonEmptyString(binding["character"]) || !isNonEmptyString(binding["chatId"])) {
+  if (!isRecord5(binding) || !isNonEmptyString(binding["character"]) || !isNonEmptyString(binding["chatId"])) {
     throw invalidPlan("plan.binding must carry character and chatId");
   }
 }
@@ -23090,7 +23592,7 @@ function failureFor(error, context, op) {
 // packages/plugin/src/agent-tavern/body-runtime-plan.ts
 var PLAN_FIELD = "rollbackPlan";
 function rollbackPlanOfEvent(value, seq) {
-  if (!isRecord6(value)) throw planError(seq, "", "an object");
+  if (!isRecord7(value)) throw planError(seq, "", "an object");
   return {
     sessionId: requirePlanString(value["sessionId"], seq, "sessionId"),
     turn: requirePlanInteger(value["turn"], seq, "turn"),
@@ -23119,14 +23621,14 @@ function journalOf(value, seq) {
   return writes;
 }
 function journalWriteOf(value, seq, path12) {
-  if (!isRecord6(value)) throw planError(seq, path12, "a journal write object");
+  if (!isRecord7(value)) throw planError(seq, path12, "a journal write object");
   const kind = value["kind"];
   if (kind !== "memory" && kind !== "variable") {
     throw planError(seq, `${path12}.kind`, "'memory' or 'variable'");
   }
   requirePlanString(value["journalId"], seq, `${path12}.journalId`);
   requirePlanString(value["tool"], seq, `${path12}.tool`);
-  if (!isRecord6(value["target"])) throw planError(seq, `${path12}.target`, "an object");
+  if (!isRecord7(value["target"])) throw planError(seq, `${path12}.target`, "an object");
   if (!("before" in value) || !("after" in value)) {
     throw planError(seq, path12, "a before/after journal pair");
   }
@@ -23141,7 +23643,7 @@ function receiptsOf(value, seq) {
   return receipts;
 }
 function receiptOf(value, seq, path12) {
-  if (!isRecord6(value)) throw planError(seq, path12, "an MVU receipt object");
+  if (!isRecord7(value)) throw planError(seq, path12, "an MVU receipt object");
   requirePlanString(value["at"], seq, `${path12}.at`);
   requirePlanString(value["turnKey"], seq, `${path12}.turnKey`);
   const status2 = value["status"];
@@ -23164,7 +23666,7 @@ function diagnosticsOf(value, seq) {
   const diagnostics = [];
   for (const [index, entry] of value.entries()) {
     const path12 = `diagnostics[${index}]`;
-    if (!isRecord6(entry)) throw planError(seq, path12, "a diagnostic object");
+    if (!isRecord7(entry)) throw planError(seq, path12, "a diagnostic object");
     requirePlanString(entry["code"], seq, `${path12}.code`);
     requirePlanText(entry["message"], seq, `${path12}.message`);
     const memoryId = entry["memoryId"];
@@ -23176,7 +23678,7 @@ function diagnosticsOf(value, seq) {
   return diagnostics;
 }
 function bindingOf(value, seq) {
-  if (!isRecord6(value)) throw planError(seq, "binding", "an object with character and chatId");
+  if (!isRecord7(value)) throw planError(seq, "binding", "an object with character and chatId");
   return {
     character: requirePlanString(value["character"], seq, "binding.character"),
     chatId: requirePlanString(value["chatId"], seq, "binding.chatId")
@@ -23231,7 +23733,7 @@ function notSerializable(path12, detail) {
     `body regenerate refused: the prepared write rollback plan is not JSON-serializable at ${path12}: ${detail}`
   );
 }
-function isRecord6(value) {
+function isRecord7(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -24341,7 +24843,13 @@ async function applyBodyEdit(deps, request) {
     const target = anchorTarget(events, surface, request.expectedAnchorId);
     assertLastBodyTarget(events, surface, target.seq, target.message);
     const ledger = ensureBodyLedger(deps, request.groupId, request.expectedAnchorId).ledger;
-    requireCandidate2(ledger, request.index);
+    const candidate = requireCandidate2(ledger, request.index);
+    if (request.index !== ledger.selectedIndex) {
+      throw bodyRuntimeError(
+        "stale-anchor",
+        `body edit rejected: group '${request.groupId}' has candidate ${ledger.selectedIndex} selected, but index ${request.index} was requested; only the selected body can be edited`
+      );
+    }
     const previousText = candidateText(ledger, request.index);
     const text = request.text;
     if (text.trim() === "") {
@@ -24352,6 +24860,15 @@ async function applyBodyEdit(deps, request) {
         "invalid-body-text",
         `body edit rejected: text for group '${request.groupId}' index ${request.index} has ${text.length} characters (max ${BODY_TEXT_MAX_LENGTH})`
       );
+    }
+    if (deps.inspectEdit !== void 0) {
+      await deps.inspectEdit({
+        groupId: request.groupId,
+        index: request.index,
+        messageId: candidate.messageId,
+        previousText,
+        ledger
+      });
     }
     appendBodyEvent(deps, {
       op: "edit",
@@ -24454,7 +24971,7 @@ function errorLog(ctx, message, fields) {
   }
 }
 function failureCodeOf(error) {
-  if (!isRecord7(error)) return void 0;
+  if (!isRecord8(error)) return void 0;
   const code = error["code"];
   return typeof code === "string" && code !== "" ? code : void 0;
 }
@@ -24467,7 +24984,7 @@ function nonEmptyString(value) {
 function agentIdOf(agent) {
   return nonEmptyString(agent.id) ?? nonEmptyString(agent.session.id);
 }
-function isRecord7(value) {
+function isRecord8(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isSeq(value) {
@@ -24481,11 +24998,11 @@ function wiringEvents(session) {
   if (values === void 0) return void 0;
   const events = [];
   for (const value of values) {
-    if (!isRecord7(value)) return void 0;
+    if (!isRecord8(value)) return void 0;
     const type = value["type"];
     const seq = value["seq"];
     const data = value["data"];
-    if (typeof type !== "string" || !isSeq(seq) || !isRecord7(data)) return void 0;
+    if (typeof type !== "string" || !isSeq(seq) || !isRecord8(data)) return void 0;
     events.push({ type, seq, data });
   }
   events.sort((left, right) => left.seq - right.seq);
@@ -24497,7 +25014,7 @@ function eventAt(events, seq) {
 function messageOf3(event) {
   if (event.type === "user/message") return event.data;
   const message = event.data["message"];
-  return isRecord7(message) ? message : void 0;
+  return isRecord8(message) ? message : void 0;
 }
 function messageIdOf2(event) {
   const message = messageOf3(event);
@@ -24512,7 +25029,7 @@ function hasToolCall2(message) {
 }
 function surfaceNodes(session) {
   const surface = session.surface;
-  if (!isRecord7(surface)) return void 0;
+  if (!isRecord8(surface)) return void 0;
   const nodes = surface["nodes"];
   if (!Array.isArray(nodes)) return void 0;
   const parsed = [];
@@ -24600,7 +25117,7 @@ function inspectAnchorInEvents(events, surface, anchorMessageId) {
   return { onSurface: true, last: true };
 }
 function bodyAgentOf(value) {
-  if (!isRecord7(value)) return void 0;
+  if (!isRecord8(value)) return void 0;
   const session = value["session"];
   if (!isBodySession(session)) return void 0;
   if (typeof value["followup"] !== "function") return void 0;
@@ -24656,17 +25173,17 @@ function bodyBindingEligible(binding) {
   return binding !== void 0 && binding.architecture === "agent-tavern" && binding.group !== true;
 }
 function isBodySession(value) {
-  if (!isRecord7(value)) return false;
+  if (!isRecord8(value)) return false;
   return typeof value["append"] === "function";
 }
 function contentOf2(message) {
   const content = message["content"];
   if (!Array.isArray(content)) return [];
-  return content.filter((block) => isRecord7(block));
+  return content.filter((block) => isRecord8(block));
 }
 function sourceOf2(message) {
   const source = message["source"];
-  return isRecord7(source) ? source : void 0;
+  return isRecord8(source) ? source : void 0;
 }
 function foldBodyLedgerFromEvents(events, groupId) {
   const last = events[events.length - 1];
@@ -24700,19 +25217,19 @@ function bodyHistoricalMvuStateOf(character, chat) {
     return true;
   }
   const metadata = chat.header.chat_metadata;
-  const variables2 = isRecord7(metadata["variables"]) ? metadata["variables"] : void 0;
+  const variables2 = isRecord8(metadata["variables"]) ? metadata["variables"] : void 0;
   if (variables2 !== void 0 && Object.prototype.hasOwnProperty.call(variables2, "stat_data")) {
     return true;
   }
-  const mvu = isRecord7(metadata["mvu"]) ? metadata["mvu"] : void 0;
+  const mvu = isRecord8(metadata["mvu"]) ? metadata["mvu"] : void 0;
   return mvu !== void 0 && Array.isArray(mvu["receipts"]);
 }
 function bodyMutationSafetyOf(action, character, chat) {
   const base = bodyStateSafetyOf(character, chat);
   if (!base.safe) return base;
-  if (action === "regenerate") return base;
+  if (action !== "select") return base;
   if (!bodyHistoricalMvuStateOf(character, chat)) return base;
-  return unsafeBodyState(action === "edit" ? "edit-rollback-unavailable" : "select-rollback-unavailable");
+  return unsafeBodyState("candidate-switch-disabled");
 }
 function unsafeBodyState(detail) {
   return { safe: false, reason: "body-state-unsafe", detail };
@@ -24735,6 +25252,16 @@ function bodyStateUnsafeMessage(detail) {
       return "this chat already carries MVU or variable state; editing a body has no candidate-level rollback";
     case "select-rollback-unavailable":
       return "this chat already carries MVU or variable state; switching a body candidate has no candidate-level rollback";
+    case "candidate-switch-disabled":
+      return "switching body candidates over MVU or variable history is disabled in this build until candidate-aware regeneration lands; edit the selected body or regenerate instead";
+    case "body-receipt-missing":
+      return "the body candidate carries an <UpdateVariable> patch but has no candidate receipt to undo; restore or migrate its receipt before editing, do not retry blindly";
+    case "body-receipt-duplicate":
+      return "the body candidate has more than one live candidate receipt carrying variable changes; repair the receipt set before editing";
+    case "body-receipt-legacy":
+      return "the body candidate has a legacy body:<messageId> receipt that the ledger cannot map to a unique slot; migrate or repair the receipt key before editing";
+    case "body-receipt-key-mismatch":
+      return "the body candidate receipt key does not match the ledger slot or message id; repair the receipt keys before editing";
   }
 }
 function buildBodyView(input) {
@@ -24752,11 +25279,12 @@ function buildBodyView(input) {
   const ledgerText = ledger === void 0 ? void 0 : effectiveBodyText(ledger);
   const text = hidden ? candidateText2 ?? input.messageText ?? "" : input.projected?.text ?? ledgerText ?? input.messageText ?? "";
   const baseReason = bodyViewReason(input, hidden);
-  const rollbackReason = baseReason === void 0 && !hidden && input.historicalMvuState ? input.writeRollbackAvailable ? "edit-rollback-unavailable" : "write-journal-unavailable" : void 0;
+  const rollbackReason = baseReason === void 0 && !hidden && input.historicalMvuState && !input.writeRollbackAvailable ? "write-journal-unavailable" : void 0;
   const reason = baseReason ?? rollbackReason;
-  const canEdit = baseReason === void 0 && !hidden && count > 0 && !input.historicalMvuState;
+  const canEdit = baseReason === void 0 && !hidden && count > 0;
   const canRegenerate = baseReason === void 0 && !hidden && count > 0 && input.agent !== void 0 && canAdvanceHostTurnBase(input.agent) && (!input.historicalMvuState || input.writeRollbackAvailable);
-  const canSelect = canEdit && count > 1;
+  const canSelect = canEdit && count > 1 && !input.historicalMvuState;
+  const detail = baseReason === void 0 && !hidden && count > 0 && input.historicalMvuState ? "candidate-switch-disabled" : void 0;
   return {
     ok: true,
     groupId,
@@ -24768,7 +25296,8 @@ function buildBodyView(input) {
     canEdit,
     canRegenerate,
     canSelect,
-    ...reason === void 0 ? {} : { reason }
+    ...reason === void 0 ? {} : { reason },
+    ...detail === void 0 ? {} : { detail }
   };
 }
 function bodyViewReason(input, hidden) {
@@ -24787,7 +25316,7 @@ function bodyViewReason(input, hidden) {
 function bodyFailureOf(error) {
   const rawCode = failureCodeOf2(error);
   const code = publicBodyCode(rawCode);
-  const detail = failureDetailOf(error);
+  const detail = failureDetailOf(error) ?? candidateReceiptDetailOf(rawCode);
   return {
     status: bodyRejectStatus(code),
     code,
@@ -24811,6 +25340,13 @@ function publicBodyCode(code) {
       return "invalid-body-text";
     case "restore-unavailable":
       return "body-state-unsafe";
+    case "body-receipt-missing":
+    case "body-receipt-duplicate":
+    case "body-receipt-legacy":
+    case "body-receipt-key-mismatch":
+      return "body-state-unsafe";
+    case "body-floor-not-found":
+      return "projection-pending";
     case "invalid-event":
     case "operation-failed":
       return "operation-failed";
@@ -24839,14 +25375,25 @@ function bodyRejectStatus(code) {
   }
 }
 function failureCodeOf2(error) {
-  if (!isRecord7(error)) return void 0;
+  if (!isRecord8(error)) return void 0;
   const code = error["code"];
   return typeof code === "string" && code !== "" ? code : void 0;
 }
 function failureDetailOf(error) {
-  if (!isRecord7(error)) return void 0;
+  if (!isRecord8(error)) return void 0;
   const detail = error["detail"];
   return typeof detail === "string" && detail !== "" ? detail : void 0;
+}
+function candidateReceiptDetailOf(code) {
+  switch (code) {
+    case "body-receipt-missing":
+    case "body-receipt-duplicate":
+    case "body-receipt-legacy":
+    case "body-receipt-key-mismatch":
+      return code;
+    default:
+      return void 0;
+  }
 }
 function errorMessage5(error) {
   return error instanceof Error ? error.message : String(error);
@@ -25136,8 +25683,9 @@ async function resolveBodyRecordWriter(ctx) {
 async function createBodyDeps(ctx, agent) {
   const appendRecord = await resolveBodyRecordWriter(ctx);
   if (appendRecord === void 0) return void 0;
+  const rollbackStore = lazyRollbackStore();
   const writeRollback = createBodyWriteRollbackPort({
-    store: lazyRollbackStore(),
+    store: rollbackStore,
     memoryStore: lazyRollbackMemoryStore(),
     variableStore: lazyRollbackVariableStore(),
     memoryVectors: lazyRollbackMemoryVectors(),
@@ -25149,8 +25697,115 @@ async function createBodyDeps(ctx, agent) {
     agent,
     ...ctx.logger === void 0 ? {} : { logger: ctx.logger },
     appendRecord,
-    writeRollback
+    writeRollback,
+    // Proposal 0023 §4.1/§7.3: the runtime owns the pre-append ordering, while
+    // this shard owns the read-only Tavern inspection. The hook never migrates,
+    // saves chat, or writes the session; a refusal propagates before the edit
+    // event exists.
+    inspectEdit: (input) => inspectBodyEdit(ctx, agent, rollbackStore, input)
   };
+}
+async function inspectBodyEdit(ctx, agent, store5, input) {
+  const sessionId = agentIdOf(agent);
+  if (sessionId === void 0) {
+    throw bodyRuntimeError(
+      "body-state-unsafe",
+      "body edit refused: the live agent has no session id, so the Tavern binding and candidate receipts cannot be inspected",
+      "chat-unreadable"
+    );
+  }
+  const binding = await resolveBodyBinding(ctx, sessionId);
+  if (binding === void 0 || !bodyBindingEligible(binding) || binding.character === void 0 || binding.chatId === void 0) {
+    throw bodyRuntimeError(
+      "body-state-unsafe",
+      `body edit refused for session '${sessionId}': the AgentTavern single-character binding is unavailable`,
+      "chat-unreadable"
+    );
+  }
+  let character;
+  try {
+    character = await store5.getCharacter(binding.character);
+  } catch (error) {
+    const failure = bodyRuntimeError(
+      "body-state-unsafe",
+      `body edit refused for session '${sessionId}': character card '${binding.character}' cannot be read: ${errorMessage4(error)}`,
+      "card-unreadable"
+    );
+    failure.cause = error;
+    throw failure;
+  }
+  if (character === void 0) {
+    throw bodyRuntimeError(
+      "body-state-unsafe",
+      `body edit refused for session '${sessionId}': character card '${binding.character}' cannot be read`,
+      "card-unreadable"
+    );
+  }
+  let snapshot2;
+  try {
+    snapshot2 = await store5.getChatSnapshot(binding.character, binding.chatId);
+  } catch (error) {
+    const failure = bodyRuntimeError(
+      "body-state-unsafe",
+      `body edit refused for session '${sessionId}': chat '${binding.character}/${binding.chatId}' cannot be read: ${errorMessage4(error)}`,
+      "chat-unreadable"
+    );
+    failure.cause = error;
+    throw failure;
+  }
+  if (snapshot2 === void 0) {
+    throw bodyRuntimeError(
+      "body-state-unsafe",
+      `body edit refused for session '${sessionId}': chat '${binding.character}/${binding.chatId}' cannot be read`,
+      "chat-unreadable"
+    );
+  }
+  requireProjectedCandidate2(snapshot2.chat, input);
+  const inspection = inspectCandidateReceipts(
+    snapshot2.chat,
+    { messageId: input.messageId, index: input.index },
+    input.ledger,
+    input.previousText,
+    character.card
+  );
+  if (inspection.detail !== void 0) {
+    throw bodyRuntimeError(
+      "body-state-unsafe",
+      `body edit refused for candidate ${input.index} ('${input.messageId}'): ${bodyStateUnsafeMessage(inspection.detail)}`,
+      inspection.detail
+    );
+  }
+}
+function requireProjectedCandidate2(chat, input) {
+  let floorIndex;
+  try {
+    floorIndex = locateBodyFloor(chat, input.groupId, input.messageId);
+  } catch (error) {
+    throw bodyRuntimeError(
+      "projection-pending",
+      `body edit deferred for group '${input.groupId}' (message '${input.messageId}'): ${errorMessage4(error)}; retry after the body projection catches up`
+    );
+  }
+  const floor = chat.messages[floorIndex];
+  if (floor === void 0) {
+    throw bodyRuntimeError(
+      "projection-pending",
+      `body edit deferred for group '${input.groupId}': the projected floor at message index ${floorIndex} is missing; retry after the body projection catches up`
+    );
+  }
+  if (floor.swipe_id !== input.index) {
+    throw bodyRuntimeError(
+      "projection-pending",
+      `body edit deferred for group '${input.groupId}': the projected floor selects swipe ${String(floor.swipe_id)}, expected ${input.index}; retry after the body projection catches up`
+    );
+  }
+  const swipes = floor.swipes;
+  if (!Array.isArray(swipes) || typeof swipes[input.index] !== "string") {
+    throw bodyRuntimeError(
+      "projection-pending",
+      `body edit deferred for group '${input.groupId}': swipe ${input.index} has not been projected yet; retry after the body projection catches up`
+    );
+  }
 }
 function lazyRollbackStore() {
   return {
@@ -25264,7 +25919,7 @@ function registerBodyTurnStopping(ctx) {
   return dispose;
 }
 async function handleBodyTurnStopping(ctx, payload) {
-  const record = isRecord8(payload) ? payload : void 0;
+  const record = isRecord9(payload) ? payload : void 0;
   const payloadAgent = bodyAgentOf(record?.agent);
   const payloadAgentId = nonEmptyString2(record?.agentId);
   const agentId = payloadAgent === void 0 ? payloadAgentId : agentIdOf(payloadAgent);
@@ -25329,7 +25984,7 @@ function warnRecordSeamOnce(ctx, message, fields) {
   recordSeamWarningEmitted = true;
   warn2(ctx, message, fields);
 }
-function isRecord8(value) {
+function isRecord9(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function nonEmptyString2(value) {
@@ -37498,7 +38153,7 @@ function walkScriptNodes(nodes, scripts, includeDisabled) {
   }
 }
 function cardScriptNodes(card) {
-  const helper = plainObject4(card.data.extensions["tavern_helper"]);
+  const helper = plainObject5(card.data.extensions["tavern_helper"]);
   return Array.isArray(helper?.["scripts"]) ? helper["scripts"] : [];
 }
 function cardWorldName(card) {
@@ -37512,7 +38167,7 @@ function nonEmptyString3(value) {
 function isPlainObject3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function plainObject4(value) {
+function plainObject5(value) {
   return isPlainObject3(value) ? value : void 0;
 }
 
@@ -40116,7 +40771,7 @@ async function buildSnapshot(db, state, character, chatId) {
       messageCount: 0,
       lastMessageId: -1,
       variables: {
-        global: cloneJson(plainObject5(state.scriptGlobals) ?? {}),
+        global: cloneJson(plainObject6(state.scriptGlobals) ?? {}),
         chat: {},
         message: {},
         character: characterVariablesFor(state, character, file?.card.data.extensions?.["variables"])
@@ -40162,7 +40817,7 @@ async function buildSnapshot(db, state, character, chatId) {
     messageCount: chat.messages.length,
     lastMessageId: lastIndex,
     variables: {
-      global: cloneJson(plainObject5(state.scriptGlobals) ?? {}),
+      global: cloneJson(plainObject6(state.scriptGlobals) ?? {}),
       chat: cloneJson(chatVariables2),
       message: lastMessage === void 0 ? {} : cloneJson(readMessageVariables(lastMessage)),
       character: characterVariablesFor(state, character, file?.card.data.extensions?.["variables"])
@@ -40195,13 +40850,13 @@ function characterWorldLinks(file) {
   };
 }
 function chatWorldName(chat) {
-  const world = plainObject5(chat.header.chat_metadata)?.["world"];
+  const world = plainObject6(chat.header.chat_metadata)?.["world"];
   return typeof world === "string" && world.trim() !== "" ? world.trim() : null;
 }
 async function activePresetScriptTrees(db, presetName) {
   const preset = await db.getPreset(presetName);
-  const extensions = plainObject5(preset?.["extensions"]);
-  const helper = plainObject5(extensions?.["tavern_helper"]);
+  const extensions = plainObject6(preset?.["extensions"]);
+  const helper = plainObject6(extensions?.["tavern_helper"]);
   const scripts = helper?.["scripts"];
   return Array.isArray(scripts) ? requireScriptTreeArray(scripts, `preset '${presetName}' tavern_helper.scripts`) : null;
 }
@@ -40224,9 +40879,9 @@ function splitRegexScripts(state, file) {
   return { global, character, preset };
 }
 function characterVariablesFor(state, character, cardVariables) {
-  const overlay = plainObject5(state.characterVariables?.[character]);
+  const overlay = plainObject6(state.characterVariables?.[character]);
   if (overlay !== void 0) return cloneJson(overlay);
-  return cloneJson(plainObject5(cardVariables) ?? {});
+  return cloneJson(plainObject6(cardVariables) ?? {});
 }
 function avatarPath(character) {
   return `/api/dsh-soulmojito/avatar/${encodeURIComponent(character)}`;
@@ -40293,7 +40948,7 @@ async function replaceMvuData(db, character, chatId, body) {
       const message = chat.messages[messageId];
       if (message === void 0) throw new Error(`message_id ${messageId} is out of range`);
       message.variables = {
-        ...plainObject5(message.variables) ?? {},
+        ...plainObject6(message.variables) ?? {},
         stat_data: cloneJson(stat2)
       };
     }
@@ -40564,7 +41219,7 @@ async function renderFrontendTemplate(db, state, character, chatId, body) {
   const chat = chatId === "" ? void 0 : (await requireChat(db, character, chatId)).chat;
   const messages = chat?.messages ?? [];
   const chatVariables2 = chat === void 0 ? {} : readChatVariables(chat);
-  const globalVariables = plainObject5(state.scriptGlobals) ?? {};
+  const globalVariables = plainObject6(state.scriptGlobals) ?? {};
   let variablesDirty = false;
   const readVar = (scope, path12) => {
     const tree = scope === "chat" ? chatVariables2 : globalVariables;
@@ -40805,7 +41460,7 @@ async function patchScriptNode(db, character, chatId, body) {
     const patched = patchNodeById(requireScriptTreeArray(current, "trees.character"), scriptId, (node) => {
       if (info2 !== void 0) node["info"] = info2;
       if (buttons !== void 0) {
-        node["button"] = { ...plainObject5(node["button"]) ?? {}, enabled: true, buttons };
+        node["button"] = { ...plainObject6(node["button"]) ?? {}, enabled: true, buttons };
       }
     });
     if (patched.node === null) throw new Error(`script node '${scriptId}' not found in this chat's script tree`);
@@ -40959,10 +41614,10 @@ function messageRole(message) {
   return message.is_user === true ? "user" : "assistant";
 }
 function isHidden(message) {
-  return message.is_hidden === true || plainObject5(message.extra)?.["is_hidden"] === true;
+  return message.is_hidden === true || plainObject6(message.extra)?.["is_hidden"] === true;
 }
 function toJsrMessage(message, index) {
-  const extra = plainObject5(message.extra) ?? {};
+  const extra = plainObject6(message.extra) ?? {};
   const swipes = Array.isArray(message.swipes) && message.swipes.length > 0 ? message.swipes.map((swipe) => String(swipe)) : [typeof message.mes === "string" ? message.mes : ""];
   return {
     message_id: index,
@@ -40970,7 +41625,7 @@ function toJsrMessage(message, index) {
     role: messageRole(message),
     is_hidden: isHidden(message),
     message: typeof message.mes === "string" ? message.mes : "",
-    data: cloneJson(plainObject5(message.variables) ?? extra),
+    data: cloneJson(plainObject6(message.variables) ?? extra),
     extra: cloneJson(extra),
     swipe_id: typeof message.swipe_id === "number" ? message.swipe_id : 0,
     swipes
@@ -40984,14 +41639,14 @@ function toJsrSwiped(message, index) {
     swipe_id: typeof message.swipe_id === "number" ? message.swipe_id : 0,
     swipes,
     swipes_data: swipes.map((_, swipeIndex) => {
-      const info2 = plainObject5(swipeInfo[swipeIndex]);
-      return cloneJson(plainObject5(info2?.["extra"]) ?? {});
+      const info2 = plainObject6(swipeInfo[swipeIndex]);
+      return cloneJson(plainObject6(info2?.["extra"]) ?? {});
     }),
     swipes_info: cloneJson(swipeInfo)
   };
 }
 function readMessageVariables(message) {
-  return plainObject5(message.variables) ?? plainObject5(plainObject5(message.extra)?.["variables"]) ?? {};
+  return plainObject6(message.variables) ?? plainObject6(plainObject6(message.extra)?.["variables"]) ?? {};
 }
 function resolveMessageId(messages, value) {
   if (typeof value !== "number" || !Number.isFinite(value)) throw new Error("message_id must be a finite number");
@@ -41035,10 +41690,10 @@ function applyMessageUpdate(message, update) {
     message.is_user = update.role === "user";
   }
   if (typeof update.is_hidden === "boolean") message.is_hidden = update.is_hidden;
-  const data = plainObject5(update.data);
-  const extra = plainObject5(update.extra);
+  const data = plainObject6(update.data);
+  const extra = plainObject6(update.extra);
   if (data !== void 0) message.variables = cloneJson(data);
-  if (extra !== void 0) message.extra = { ...plainObject5(message.extra) ?? {}, ...cloneJson(extra) };
+  if (extra !== void 0) message.extra = { ...plainObject6(message.extra) ?? {}, ...cloneJson(extra) };
   if (Array.isArray(update.swipes)) {
     const swipes = update.swipes.map((swipe) => String(swipe));
     message.swipes = swipes;
@@ -41062,7 +41717,7 @@ function applyMessageUpdate(message, update) {
 function toCreatedMessage(entry, userName, characterName) {
   const role = entry.role === "system" || entry.role === "user" ? entry.role : "assistant";
   const name2 = typeof entry.name === "string" && entry.name !== "" ? entry.name : role === "user" ? userName : role === "system" ? "System" : characterName;
-  const extra = { ...plainObject5(entry.data) ?? {}, ...plainObject5(entry.extra) ?? {} };
+  const extra = { ...plainObject6(entry.data) ?? {}, ...plainObject6(entry.extra) ?? {} };
   return {
     name: name2,
     is_user: role === "user",
@@ -41089,7 +41744,7 @@ async function runHelperSlash(db, state, character, chatId, command) {
     lastMessageId: chat.messages.length - 1,
     chatId,
     local: scalarVariables(readChatVariables(chat)),
-    global: scalarVariables(plainObject5(state.scriptGlobals) ?? {})
+    global: scalarVariables(plainObject6(state.scriptGlobals) ?? {})
   });
   let chatChanged = false;
   let triggerRequested = false;
@@ -41206,7 +41861,7 @@ function requireObject2(value, label) {
 function isPlainObject4(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function plainObject5(value) {
+function plainObject6(value) {
   return isPlainObject4(value) ? value : void 0;
 }
 function cloneJson(value) {
