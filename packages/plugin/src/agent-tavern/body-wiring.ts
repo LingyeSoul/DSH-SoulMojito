@@ -28,6 +28,7 @@ import {
 import { operationView, pendingByAgent } from './body-runtime-core.js'
 import {
   bodyRuntimeError,
+  finalizeRecoveredOperation,
   finalizeTurnStopping,
   restoreBodyAfterFailure,
   type BodyAgentLike,
@@ -529,7 +530,13 @@ interface FailedTurnRestore {
   readonly sessionId: string
   readonly agentId: string
   readonly turn: number | undefined
-  readonly reason: string
+  /** Failure reason for a restore task; absent for a deferred settlement. */
+  readonly reason: string | undefined
+  /**
+   * `restore` handles an error/cancelled/aborted turn/end; `settle` finishes a
+   * settlement whose trigger/process hide was deferred past the answer turn.
+   */
+  readonly mode: 'restore' | 'settle'
 }
 
 interface TurnEndRestoreChain {
@@ -565,20 +572,42 @@ export function handleBodySessionEvent(
     const data = isRecord(eventRecord['data']) ? eventRecord['data'] : undefined
     const reason = data === undefined ? undefined : isRecord(data['reason']) ? data['reason'] : undefined
     const reasonKind = nonEmptyString(reason?.['kind'])
-    if (reasonKind === undefined || !TURN_END_FAILURE_REASONS.has(reasonKind)) return
+    if (reasonKind === undefined) return
 
     const sessionId = nonEmptyString(isRecord(session) ? session['id'] : undefined)
     if (sessionId === undefined) return
 
     const liveAgent = resolveLiveAgent(ctx, sessionId)
     const agentId = liveAgent === undefined ? sessionId : agentIdOf(liveAgent) ?? sessionId
-    if (!pendingByAgent.has(agentId) && !pendingByAgent.has(sessionId)) return
+    const pending = pendingByAgent.get(agentId) ?? pendingByAgent.get(sessionId)
+    const turn = data === undefined ? undefined : numberField(data['turn'])
 
+    if (TURN_END_FAILURE_REASONS.has(reasonKind)) {
+      if (pending === undefined) return
+      // Never restore an operation from an older turn on an unrelated failure.
+      if (pending.turn !== undefined && turn !== undefined && pending.turn !== turn) return
+      scheduleTurnEndRestore(ctx, {
+        sessionId,
+        agentId,
+        turn,
+        reason: reasonKind,
+        mode: 'restore',
+      })
+      return
+    }
+
+    // A completed turn finishes a deferred settlement. The task always carries
+    // the operation's trigger turn so recovery validates the same edge; a later
+    // turn may also flush an operation whose first completion window was
+    // missed (the turn/end microtask lost the race with a new user turn).
+    if (turn === undefined || turn < 1) return
+    if (pending === undefined || pending.turn === undefined || turn < pending.turn) return
     scheduleTurnEndRestore(ctx, {
       sessionId,
       agentId,
-      turn: data === undefined ? undefined : numberField(data['turn']),
-      reason: reasonKind,
+      turn: pending.turn,
+      reason: undefined,
+      mode: 'settle',
     })
   } catch (error) {
     // A host event bus must never fail because body observation failed.
@@ -612,12 +641,13 @@ async function runTurnEndRestoreAttempt(ctx: BodyWiringContext, chain: TurnEndRe
   }
   const delay = TURN_END_RESTORE_RETRY_DELAYS_MS[chain.attempts]
   const retryable = outcome.code !== undefined && TURN_END_RESTORE_RETRY_CODES.has(outcome.code)
+  const subject = chain.task.mode === 'settle' ? 'deferred settlement' : 'turn/end restore'
   if (retryable && delay !== undefined) {
-    warn(ctx, 'dsh-soulmojito body: turn/end restore failed; retrying', {
+    warn(ctx, `dsh-soulmojito body: ${subject} failed; retrying`, {
       sessionId: chain.task.sessionId,
       agentId: chain.task.agentId,
       turn: chain.task.turn,
-      reason: chain.task.reason,
+      ...(chain.task.reason === undefined ? {} : { reason: chain.task.reason }),
       code: outcome.code,
       attempt: chain.attempts,
       delayMs: delay,
@@ -631,11 +661,11 @@ async function runTurnEndRestoreAttempt(ctx: BodyWiringContext, chain: TurnEndRe
   forgetTurnEndRestoreChain(chain)
   // The operation stays in `pendingByAgent` and its `op-start` stays in the
   // log; startup recovery is the documented retry path (proposal §9.2).
-  errorLog(ctx, 'dsh-soulmojito body: turn/end restore failed; op-start stays pending for startup recovery', {
+  errorLog(ctx, `dsh-soulmojito body: ${subject} failed; op-start stays pending for startup recovery`, {
     sessionId: chain.task.sessionId,
     agentId: chain.task.agentId,
     turn: chain.task.turn,
-    reason: chain.task.reason,
+    ...(chain.task.reason === undefined ? {} : { reason: chain.task.reason }),
     attempts: chain.attempts,
     ...(outcome.opId === undefined ? {} : { opId: outcome.opId }),
     code: outcome.code,
@@ -653,11 +683,11 @@ async function attemptTurnEndRestore(
     const agent = resolveLiveAgent(ctx, task.agentId)
       ?? (task.agentId === task.sessionId ? undefined : resolveLiveAgent(ctx, task.sessionId))
     if (agent === undefined) {
-      warn(ctx, 'dsh-soulmojito body: turn/end restore skipped because the live agent is gone', {
+      warn(ctx, `dsh-soulmojito body: ${task.mode === 'settle' ? 'deferred settlement' : 'turn/end restore'} skipped because the live agent is gone`, {
         sessionId: task.sessionId,
         agentId: task.agentId,
         turn: task.turn,
-        reason: task.reason,
+        ...(task.reason === undefined ? {} : { reason: task.reason }),
       })
       return { status: 'done' }
     }
@@ -675,6 +705,22 @@ async function attemptTurnEndRestore(
     const current = pendingByAgent.get(agentId) ?? pendingByAgent.get(task.sessionId)
     if (current === undefined || current.opId !== op.opId) return { status: 'done' }
     if (chain.cancelled) return { status: 'done' }
+
+    if (task.mode === 'settle') {
+      if (task.turn === undefined) return { status: 'done' }
+      // The durable `settling` marker carries the hidden candidates and the
+      // surviving surface targets, so the shared recovery path finishes the
+      // hide in a post-turn bridge and then writes `settled` + `op-finish`.
+      const result = await finalizeRecoveredOperation(deps, operationView(op), task.turn)
+      info(ctx, 'dsh-soulmojito body: deferred settlement finished after turn/end', {
+        sessionId: task.sessionId,
+        agentId,
+        opId: op.opId,
+        turn: task.turn,
+        status: result.status,
+      })
+      return { status: 'done' }
+    }
 
     const restoredAnchorId = await restoreBodyAfterFailure(deps, operationView(op))
     info(ctx, 'dsh-soulmojito body: turn/end restored the previous body after a failed turn', {

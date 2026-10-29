@@ -94,6 +94,7 @@
 - [`2026-10-29-imported-body-floor-adoption.md`](../decisions/2026-10-29-imported-body-floor-adoption.md) — 导入楼层接管：history mirror 首楼绑定 bodyGroupId + 客户端 projection-pending 重试
 - [`2026-10-29-agent-tavern-regenerate-hides-draft.md`](../decisions/2026-10-29-agent-tavern-regenerate-hides-draft.md) — 重生成开始即隐藏旧正文：重掷不再看到草稿，失败恢复改为追加副本
 - [`2026-10-29-body-read-freshness-and-group-cache.md`](../decisions/2026-10-29-body-read-freshness-and-group-cache.md) — 正文读侧：候选切换按组失效缓存 + 楼层落后时 ledger 文本优先
+- [`2026-10-29-deferred-settle-hide.md`](../decisions/2026-10-29-deferred-settle-hide.md) — 结算 hide 延后到 post-turn bridge：恢复本轮用量与正文默认展开
 
 ### AgentNovel
 

@@ -310,6 +310,12 @@ export interface SettlementContext {
   label: string
   /** In-memory restriction disposer; recovered operations have none. */
   release: (() => void) | undefined
+  /**
+   * Live turn-stopping may defer a new operation's hide past the answer turn so
+   * the host keeps its per-turn usage and answer boundary. Recovery never
+   * defers: it owns the hide outright.
+   */
+  deferHide?: boolean
 }
 
 /** Process-local operation registry shared by start and settlement. */
@@ -469,6 +475,24 @@ export function releaseSettlement(deps: BodyRuntimeDeps, context: SettlementCont
     return
   }
   releasePendingOperation(deps, context.agentId, context.op.opId, `${context.label} ${context.op.opId}`)
+}
+
+/**
+ * Release only the write-tool restriction of a settlement whose surface hide is
+ * deferred to the post-turn bridge.
+ *
+ * The operation deliberately stays in `pendingByAgent`: the live turn/end
+ * completion needs it to finish the hide and write `op-finish`. The disposer is
+ * idempotent, so that later finish can release it again harmlessly.
+ */
+export function releaseSettlementRestriction(deps: BodyRuntimeDeps, context: SettlementContext): void {
+  const release = context.release ?? pendingByAgent.get(context.agentId)?.release
+  if (release === undefined) return
+  try {
+    release()
+  } catch (error) {
+    warn(deps, `body runtime: failed to release write-tool restriction for op ${context.op.opId}: ${errorMessage(error)}`)
+  }
 }
 
 export function operationView(op: ActiveBodyOperation): PendingBodyOperation {

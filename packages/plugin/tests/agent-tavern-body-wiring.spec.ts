@@ -1877,6 +1877,61 @@ describe('live turn/end failure restore', () => {
     expect(capture.errors).toHaveLength(0)
   })
 
+  it('finishes a deferred settlement after the answer turn ends', async () => {
+    vi.useFakeTimers()
+    hostState.module = hostRecordModule()
+    const capture = captureLogger()
+    const sessionId = 'session-settle-after-turn'
+    const harness = createRegenerateHarness('old body', [], sessionId)
+    const triggerId = await startPendingBodyOp(harness, sessionId)
+    const ctx = {
+      logger: capture.logger,
+      bindingOf: () => ({ architecture: 'agent-tavern' }),
+      agents: { get: (id: string) => id === sessionId ? harness.agent : undefined },
+    } as unknown as BodyWiringContext
+
+    harness.session.append('turn/start', { turn: 3 })
+    harness.session.append('step/start', { turn: 3, step: 1 })
+    const triggerSeq = harness.session.append('user/message', {
+      id: triggerId,
+      role: 'user',
+      content: [{ type: 'text', text: 'regenerate' }],
+    }, { surfaceOp: 'append' })
+    const bodySeq = harness.session.append('assistant/message', {
+      turn: 3,
+      step: 1,
+      message: {
+        id: 'new-body',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'new body' }],
+        source: { kind: 'model', provider: 'test-provider', model: 'test-model' },
+      },
+    }, { surfaceOp: 'append' })
+    harness.session.append('step/end', { turn: 3, step: 1 })
+
+    // Turn-stopping selects the new body but leaves the trigger/process hide to
+    // the post-turn completion; the answer step must stay the turn's last step.
+    await handleBodyTurnStopping(ctx, { agentId: sessionId, turn: 3 })
+    expect(harness.surface()).toContain(triggerSeq)
+    expect(harness.events.some((event) => event.type === 'developer/message'
+      && testNumber(event.data['turn']) === 3)).toBe(false)
+    expect(harness.events.some((event) => event.type === BODY_EVENT_TYPE
+      && event.data['op'] === 'op-finish')).toBe(false)
+
+    harness.session.append('turn/end', { turn: 3, reason: { kind: 'completed' } })
+    handleBodySessionEvent(ctx, harness.session, turnEndEvent(3, 'completed'))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(pendingByAgent.has(sessionId)).toBe(false)
+    expect(harness.surface()).not.toContain(triggerSeq)
+    expect(harness.surface()).toContain(bodySeq)
+    const finish = harness.events.find((event) => event.type === BODY_EVENT_TYPE && event.data['op'] === 'op-finish')
+    expect(finish?.data).toMatchObject({ result: 'ok', anchorId: 'new-body' })
+    const hides = harness.events.filter((event) => event.type === 'developer/message'
+      && testNumber(event.data['turn']) === 4)
+    expect(hides).toHaveLength(1)
+  })
+
   it('collapses duplicate turn/end edges into one restore', async () => {
     hostState.module = hostRecordModule()
     const capture = captureLogger()

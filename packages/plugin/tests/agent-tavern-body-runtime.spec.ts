@@ -858,7 +858,6 @@ describe('AgentTavern body runtime', () => {
 
     const triggerTurn = appendTriggerTurn(harness, 3, trigger, 'new-body', false)
     const finished = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 })
-    closeTurn(harness, 3)
     expect(finished).toEqual({ status: 'ok', anchorMessageId: 'new-body' })
     expect(harness.activeRestrictions).toBe(0)
 
@@ -868,10 +867,38 @@ describe('AgentTavern body runtime', () => {
     expect(candidates[1]?.data).toMatchObject({ groupId: 'anchor-1', messageId: 'new-body', index: 1 })
     const select = bodyEvent(harness.events, 'select')
     expect(select?.data).toMatchObject({ groupId: 'anchor-1', index: 1 })
+    // Host answer-boundary contract: the body must be the last step's assistant
+    // data. Opening a hide step here made DSH fold the turn and drop its usage.
+    const lastStepStart = harness.events.filter((event) => event.type === 'step/start' && event.data.turn === 3).at(-1)
+    expect(lastStepStart?.data.step).toBe(2)
+    const bodyIndex = harness.events.findIndex((event) => event.type === 'assistant/message' && messageOf(event)?.id === 'new-body')
+    if (lastStepStart === undefined || bodyIndex < 0) throw new Error('answer step records are missing')
+    expect(harness.events.indexOf(lastStepStart)).toBeLessThan(bodyIndex)
+    // The trigger/process hide is deferred past the answer turn, so the answer
+    // step stays the turn's last step (host usage and expansion need that).
+    expect(settledEventsOf(harness.events).map((event) => event.data.phase)).toEqual(['settling'])
+    expect(bodyEvent(harness.events, 'op-finish')).toBeUndefined()
+    expect(harness.events.some((event) => event.type === 'developer/message' && event.data.turn === 3)).toBe(false)
+    const deferredSurface = harness.surface()
+    expect(deferredSurface).not.toContain(anchorSeq)
+    expect(deferredSurface).toContain(triggerTurn.triggerSeq)
+    expect(deferredSurface).toContain(triggerTurn.processSeq)
+    expect(deferredSurface).toContain(triggerTurn.finalSeq)
+
+    // The live turn/end completion hides the scaffolding in its own bridge turn
+    // and only then writes the settled marker and op-finish.
+    closeTurn(harness, 3)
+    const pending = foldPendingOps(harness.events)
+    expect(pending).toHaveLength(1)
+    const deferred = pending[0]
+    if (deferred === undefined) throw new Error('foldPendingOps did not rebuild the deferred operation')
+    expect(await finalizeRecoveredOperation(harness.deps, deferred, 3))
+      .toEqual({ status: 'ok', anchorMessageId: 'new-body' })
+
     const finish = bodyEvent(harness.events, 'op-finish')
     expect(finish?.data).toMatchObject({ result: 'ok', anchorId: 'new-body' })
-    // Proposal 0021 §9.2: the durable settlement boundary is two-phase — the
-    // pre-hide `settling` marker, the hide, then the post-hide `settled`
+    // Proposal 0021 §9.2: the durable settlement boundary stays two-phase —
+    // the pre-hide `settling` marker, the hide, then the post-hide `settled`
     // marker, all before op-finish, so recovery can finish without touching
     // the body.
     const settled = settledEventsOf(harness.events)
@@ -894,11 +921,10 @@ describe('AgentTavern body runtime', () => {
     expect(surface).not.toContain(anchorSeq)
     expect(surface).toContain(triggerTurn.finalSeq)
 
-    // The anchor left the surface at start; settlement only hides the new
-    // turn's trigger/process range. One empty developer replacement covers it
-    // while the candidate stays visible.
-    const settleHide = harness.events.find((event) => event.type === 'developer/message' && event.data.turn === 3)
-    expect(settleHide?.data.step).toBe(3)
+    // The deferred hide lands in the post-turn bridge, not in the answer turn.
+    const settleHide = harness.events.find((event) => event.type === 'developer/message'
+      && event.data.turn === 4
+      && event.data.step === 1)
     const settlingMarker = settled[0]
     if (settleHide === undefined || settlingMarker === undefined) throw new Error('settlement ordering records are missing')
     expect(harness.events.indexOf(settlingMarker)).toBeLessThan(harness.events.indexOf(settleHide))
@@ -925,6 +951,9 @@ describe('AgentTavern body runtime', () => {
     expect(await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 }))
       .toEqual({ status: 'ok', anchorMessageId: 'new-body' })
     closeTurn(harness, 3)
+    const firstPending = foldPendingOps(harness.events)[0]
+    if (firstPending === undefined) throw new Error('foldPendingOps did not rebuild the first operation')
+    await finalizeRecoveredOperation(harness.deps, firstPending, 3)
 
     const previousSeq = seqOfMessage(harness.events, 'new-body')
     expect(previousSeq).toBeDefined()
@@ -940,10 +969,13 @@ describe('AgentTavern body runtime', () => {
 
     const secondTrigger = harness.followups[1]
     if (!isRecord(secondTrigger)) throw new Error('fake harness: no second followup trigger was delivered')
-    const secondTurn = appendTriggerTurn(harness, 5, secondTrigger, 'third-body', false)
-    expect(await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 5 }))
+    const secondTurn = appendTriggerTurn(harness, 6, secondTrigger, 'third-body', false)
+    expect(await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 6 }))
       .toEqual({ status: 'ok', anchorMessageId: 'third-body' })
-    closeTurn(harness, 5)
+    closeTurn(harness, 6)
+    const secondPending = foldPendingOps(harness.events)[0]
+    if (secondPending === undefined) throw new Error('foldPendingOps did not rebuild the second operation')
+    await finalizeRecoveredOperation(harness.deps, secondPending, 6)
 
     const surface = harness.surface()
     expect(surface).not.toContain(previousSeq)
@@ -1114,6 +1146,9 @@ describe('AgentTavern body runtime', () => {
     const finished = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 })
     closeTurn(harness, 3)
     expect(finished).toEqual({ status: 'ok', anchorMessageId: 'new-body' })
+    const pendingHide = foldPendingOps(harness.events)[0]
+    if (pendingHide === undefined) throw new Error('foldPendingOps did not rebuild the deferred operation')
+    await finalizeRecoveredOperation(harness.deps, pendingHide, 3)
     expect(started.opId).toMatch(/^body-op-/)
 
     const surface = harness.surface()
@@ -1121,7 +1156,7 @@ describe('AgentTavern body runtime', () => {
     expect(surface).not.toContain(eventSeq(toolEvent, 'tool'))
     expect(surface).not.toContain(eventSeq(toolResultEvent, 'tool result'))
     expect(surface).not.toContain(eventSeq(anchorEvent, 'anchor'))
-    const settleHide = harness.events.filter((event) => event.type === 'developer/message' && event.data.turn === 3).at(-1)
+    const settleHide = harness.events.filter((event) => event.type === 'developer/message' && event.data.turn === 4).at(-1)
     expect(settleHide?.opts).toMatchObject({
       surfaceOp: {
         op: 'replace',
@@ -1479,6 +1514,9 @@ describe('AgentTavern body runtime', () => {
     appendTriggerTurn(harness, 3, trigger, 'new-body', false)
     const finished = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 })
     closeTurn(harness, 3)
+    const pending = foldPendingOps(harness.events)[0]
+    if (pending === undefined) throw new Error('foldPendingOps did not rebuild the deferred operation')
+    await finalizeRecoveredOperation(harness.deps, pending, 3)
 
     expect(finished).toEqual({ status: 'ok', anchorMessageId: 'new-body' })
     expect(recorded.length).toBeGreaterThanOrEqual(6)
@@ -2049,9 +2087,16 @@ describe('AgentTavern body runtime', () => {
     }
     const assistantsBefore = harness.events.filter((event) => event.type === 'assistant/message').length
 
+    // Turn-stopping defers the surface hide; the answer turn keeps the body as
+    // its last step. The post-turn completion owns op-finish.
+    expect(await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 }))
+      .toEqual({ status: 'ok', anchorMessageId: 'new-body' })
+    closeTurn(harness, 3)
+    const pendingOp = foldPendingOps(harness.events)[0]
+    if (pendingOp === undefined) throw new Error('foldPendingOps did not rebuild the deferred operation')
     let thrown: unknown
     try {
-      await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 })
+      await finalizeRecoveredOperation(harness.deps, pendingOp, 3)
     } catch (error) {
       thrown = error
     }
@@ -2059,7 +2104,8 @@ describe('AgentTavern body runtime', () => {
     expect(failure.code).toBe('settled-finish-pending')
     expect(failure.op?.opId).toBe(started.opId)
 
-    // The new body stays selected and visible; only op-finish is missing.
+    // The new body stays selected and visible; the hide completed and only
+    // op-finish is missing.
     let surface = harness.surface()
     expect(surface).toContain(triggerTurn.finalSeq)
     expect(surface).not.toContain(anchorSeq)
@@ -2070,7 +2116,7 @@ describe('AgentTavern body runtime', () => {
     expect(harness.events.filter((event) => event.type === 'assistant/message')).toHaveLength(assistantsBefore)
 
     // Failure restore sees the marker and returns before the open-turn guard:
-    // the still-open settle turn must not block it, and it must write nothing.
+    // it must write nothing.
     const eventsBeforeRestore = harness.events.length
     expect(await restoreBodyAfterFailure(harness.deps, started.op)).toBe('new-body')
     expect(harness.events).toHaveLength(eventsBeforeRestore)
@@ -2095,7 +2141,6 @@ describe('AgentTavern body runtime', () => {
     )
 
     expect(outcome).toMatchObject({ agentId: harness.agentId, status: 'settled', pending: 1 })
-    expect(outcome.reason).toBe('closed-turn-3')
     expect(calls).toEqual(callsBeforeRecovery)
     const finishes = bodyEventsWithOp(harness.events, 'op-finish')
     expect(finishes).toHaveLength(1)
@@ -2131,9 +2176,17 @@ describe('AgentTavern body runtime', () => {
     }
     const assistantsBefore = harness.events.filter((event) => event.type === 'assistant/message').length
 
+    // The answer turn settles without its hide; the hide belongs to the
+    // post-turn completion.
+    expect(await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 }))
+      .toEqual({ status: 'ok', anchorMessageId: 'new-body' })
+    closeTurn(harness, 3)
+    const pendingOp = foldPendingOps(harness.events)[0]
+    if (pendingOp === undefined) throw new Error('foldPendingOps did not rebuild the deferred operation')
+
     let thrown: unknown
     try {
-      await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 })
+      await finalizeRecoveredOperation(harness.deps, pendingOp, 3)
     } catch (error) {
       thrown = error
     }
@@ -2144,6 +2197,8 @@ describe('AgentTavern body runtime', () => {
     expect(bodyEvent(harness.events, 'op-finish')).toBeUndefined()
     expect(harness.surface()).not.toContain(anchorSeq)
     expect(harness.surface()).toContain(triggerTurn.finalSeq)
+    expect(harness.surface()).not.toContain(triggerTurn.triggerSeq)
+    expect(harness.surface()).not.toContain(triggerTurn.processSeq)
 
     // Restart: recovery has to prove the hide from the surface and ledger, then
     // upgrade the marker and finish. It must not hide or select again.
@@ -2803,9 +2858,14 @@ describe('AgentTavern body runtime', () => {
     }
     const assistantsBefore = harness.events.filter((event) => event.type === 'assistant/message').length
 
+    expect(await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 }))
+      .toEqual({ status: 'ok', anchorMessageId: 'new-body' })
+    closeTurn(harness, 3)
+    const pendingOp = foldPendingOps(harness.events)[0]
+    if (pendingOp === undefined) throw new Error('foldPendingOps did not rebuild the deferred operation')
     let thrown: unknown
     try {
-      await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 })
+      await finalizeRecoveredOperation(harness.deps, pendingOp, 3)
     } catch (error) {
       thrown = error
     }

@@ -245,8 +245,11 @@ const trigger = {
    - 找本 turn 最后一个带文本且无 tool-call 的 `assistant/message`；
    - 追加 `candidate` 与 `select`；
    - 先提交（commit）write rollback，再 commit 失败时旧 anchor 仍可见；
-   - 先写 durable `op-settling`，再用空 `developer/message` replacement 把 trigger 与该 turn
-     的 process 节点移出模型面；旧 anchor 已由第 4 条隐藏，这里是空集；真实用户消息不隐藏；
+   - 先写 durable `op-settling`。**新版操作**（第 4 条已隐藏 anchor）不在本 turn 内 hide：
+     trigger turn 的 `turn/end` 之后由 live 收尾链在 post-turn bridge 用空
+     `developer/message` replacement 把 trigger 与该 turn 的 process 节点移出模型面；
+     答案 step 因此保持为 turn 的最后一步，宿主才能显示本轮用量并默认展开正文。
+     **旧版操作**（anchor 仍在 surface）仍在当前 open turn 内同步 hide；
    - hide 成功后写 `op-settled`，再追加 `op-finish { result: 'ok', anchorId }`。hide 之后
      commit/op-finish 晚失败时保留新正文，只把 op-finish 留给恢复重试；hide 失败时：旧版
      操作（anchor 仍可见）写 `op-settle-cancelled` 并回退 select，新版操作保留已提交候选、
@@ -254,7 +257,7 @@ const trigger = {
 7. 失败 / 取消 / 超时（`turn-stopping` 在错误、取消、blocked 路径不会触发，必须由
    live `session/event` 的 `turn/end`（reason `error` / `cancelled` / `aborted`）或启动扫描触发）：
    - live `turn/end` 监听器只登记，异步 microtask 调 `restoreBodyAfterFailure`，不在事件栈
-     append；同一 session 去重，正常 `completed` 不触发；
+     append；同一 session 去重；正常 `completed` 走结算收尾（完成延后的 hide），不触发 restore；
    - 追加 `op-finish { result: 'failed', reason }`；
    - 有 `op-settled` 标记：body 已结算，保留新正文，不 hide/不 restore/不追加 assistant，
      仅重试 `op-finish`；

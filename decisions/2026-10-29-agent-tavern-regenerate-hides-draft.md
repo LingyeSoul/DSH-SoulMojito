@@ -24,8 +24,12 @@ body 结算写入的空 `developer/message` replacement 只对**模型面**生�
 1. **开始即隐藏**：`startRegenerate` 在 `op-start` 之后、`followup` 之前，用一个 bridge turn
    把旧 anchor 与其旧 turn 的 process 节点移出模型面；真实用户消息与 system prompt 保留。
    bridge turn 关闭后推进 live loop 的轮次基线，trigger turn 从下一号开始。
-2. **成功只收尾巴**：`finalizeTurnStopping` 仍先提交候选/select 与 write rollback，再隐藏新
-   turn 的 trigger/process；旧 anchor 已不在 surface，`oldAnchorSurfaceTargets` 为空。
+2. **成功只收尾巴（2026-10-29 修订 2：延后到 post-turn bridge）**：`finalizeTurnStopping`
+   先提交候选/select 与 write rollback，并写 durable `settling`；trigger/process 的 hide 不
+   再在答案 turn 内开新 step，而是在 trigger turn 结束后由 live turn/end 收尾链在 bridge
+   turn 完成（`settling → finish-hide → settled → op-finish`）。答案 step 保持为 turn 的
+   最后一步，宿主才能给出本轮用量并默认展开正文（决策
+   `2026-10-29-deferred-settle-hide.md`）。旧版操作仍在 open turn 内同步 hide。
 3. **失败恢复旧正文**：新版操作（开始已隐藏 anchor）在失败/取消时走
    `body-restore-*` assistant 副本 + `body/restore`，副本成为新 anchor，JSONL 随事件换锚。
    旧版操作（anchor 仍在 surface）仍走不追加副本的兼容路径——按 anchor 是否在 surface 判定。
@@ -51,6 +55,7 @@ body 结算写入的空 `developer/message` replacement 只对**模型面**生�
 |---|---|
 | 失败恢复重新引入 assistant 副本（2026-10-28 的收益回退） | 只在新版操作的失败路径出现；成功重试不产生副本；旧版会话行为不变 |
 | 每次重试多一个 bridge turn，轮次导航多一个无预览 turn | bridge turn 无 prompt/response，导航按轮次号展示；属于已接受的视觉成本 |
+| 结算 success 再多一个 post-turn bridge turn | hide 落在 turn/end 收尾链；聊天区不渲染，仅轮次导航多一空 turn（决策 2026-10-29-deferred-settle-hide） |
 | start 失败且 anchor 已隐藏 | 不写 `op-finish`，op-start 留在日志里，启动恢复走 restore 副本；日志一行 warning 可观测 |
 | 旧稿不再进入重试上下文，连续性依赖历史 | 场景历史仍在上下文中；这是 ST `regenerate` 的既有语义 |
 

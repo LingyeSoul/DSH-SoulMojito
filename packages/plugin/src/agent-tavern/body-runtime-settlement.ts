@@ -29,6 +29,7 @@ import {
   recoveryAgentId,
   releaseOperationByOp,
   releaseSettlement,
+  releaseSettlementRestriction,
   requirePositiveTurn,
   settlementEvidenceOf,
   validateFinalizePayload,
@@ -117,6 +118,7 @@ export async function finalizeTurnStopping(
       op: operationView(active),
       label: 'body regenerate',
       release: active.release,
+      deferHide: true,
     }, payload.turn)
   })
 }
@@ -177,6 +179,11 @@ async function settleBodyOperation(
         context,
         `${context.label} ${context.op.opId} was cancelled before its previous anchor left the surface: ${evidence.reason ?? 'no reason recorded'}`,
       )
+    }
+    if (context.deferHide === true) {
+      // A repeated live turn-stopping edge must keep the deferred contract: the
+      // answer turn never opens a hide step, and the turn/end chain finishes.
+      return { status: 'ok', anchorMessageId: evidence.anchorId }
     }
     return settleFromSettlingEvidence(deps, context, evidence)
   }
@@ -280,29 +287,42 @@ async function settleBodyOperation(
     return failSettlement(deps, context, reason)
   }
 
+  // Proposal 0021 §6.2 revision 2026-10-29: an operation started after the
+  // start-hide already removed the previous anchor from the model surface. Its
+  // remaining hide (trigger/process) is deferred to the post-turn bridge so the
+  // answer step stays the turn's last step. Opening an extra hide step here
+  // made DSH treat the whole turn as a process page (default folded) and
+  // dropped its per-turn token usage.
+  const openTurn = openTurnNumber(events)
+  const previousVisible = findSurfaceSeqByMessageId(events, surface, context.op.previousAnchorId) !== undefined
+  if (!previousVisible && context.deferHide === true) {
+    releaseSettlementRestriction(deps, context)
+    return { status: 'ok', anchorMessageId: candidate.messageId }
+  }
+
   try {
     const hidden = hideTargets(events, surface, triggerMessageIdOf(context.op), turn, candidate.messageId)
-    // Proposal 0021 §6.2 step 4 (revision 2026-10-29): start already hid the
-    // previous anchor together with its turn's process nodes, so this set is
-    // empty for every operation started after the revision. It stays for
-    // operations started before it: their anchor is still visible and must
-    // leave the surface here. Real user messages stay in either case.
+    // Legacy operations (started before the revision) still carry their
+    // previous anchor on the surface, so settlement removes it here. Real user
+    // messages stay. Recovery may run after the trigger turn closed; it opens
+    // its own bridge turn instead of relying on the live turn.
     for (const seq of oldAnchorSurfaceTargets(events, surface, context.op.previousAnchorId)) hidden.add(seq)
-    appendHideInOpenTurn(deps, turn, hidden)
+    if (openTurn === turn) appendHideInOpenTurn(deps, turn, hidden)
+    else appendHideInBridgeTurn(deps, hidden)
   } catch (error) {
     const reason = `${context.label} ${context.op.opId} failed to settle turn ${turn}: ${errorMessage(error)}`
     // A legacy operation still has its previous anchor on the surface, so the
-    // failed hide cancels the settlement: recovery restores the old body. An
-    // operation whose start already hid the anchor keeps the committed
+    // failed hide cancels the settlement: recovery restores the old body. A
+    // new operation whose start already hid the anchor keeps the committed
     // candidate instead — cancelling would leave the model no body at all. Its
     // durable `settling` record stays and recovery finishes the remaining
     // trigger/process hide.
-    const previousVisible = findSurfaceSeqByMessageId(
+    const previousVisibleNow = findSurfaceSeqByMessageId(
       eventsOf(deps.session),
       surfaceNodeList(deps.session),
       context.op.previousAnchorId,
     ) !== undefined
-    if (!previousVisible) {
+    if (!previousVisibleNow) {
       releaseSettlement(deps, context)
       throw failureFor(error, reason, context.op)
     }

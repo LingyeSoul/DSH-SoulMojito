@@ -17199,7 +17199,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("ad27e13") : void 0;
+  const commit = true ? normalizeCommit("d5b6e6b") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -24307,6 +24307,15 @@ function releaseSettlement(deps, context) {
   }
   releasePendingOperation(deps, context.agentId, context.op.opId, `${context.label} ${context.op.opId}`);
 }
+function releaseSettlementRestriction(deps, context) {
+  const release = context.release ?? pendingByAgent.get(context.agentId)?.release;
+  if (release === void 0) return;
+  try {
+    release();
+  } catch (error) {
+    warn2(deps, `body runtime: failed to release write-tool restriction for op ${context.op.opId}: ${errorMessage4(error)}`);
+  }
+}
 function operationView(op) {
   return {
     opId: op.opId,
@@ -25519,7 +25528,8 @@ async function finalizeTurnStopping(deps, payload) {
       agentId: active.agentId,
       op: operationView(active),
       label: "body regenerate",
-      release: active.release
+      release: active.release,
+      deferHide: true
     }, payload.turn);
   });
 }
@@ -25557,6 +25567,9 @@ async function settleBodyOperation(deps, context, turn) {
         context,
         `${context.label} ${context.op.opId} was cancelled before its previous anchor left the surface: ${evidence.reason ?? "no reason recorded"}`
       );
+    }
+    if (context.deferHide === true) {
+      return { status: "ok", anchorMessageId: evidence.anchorId };
     }
     return settleFromSettlingEvidence(deps, context, evidence);
   }
@@ -25649,18 +25662,25 @@ async function settleBodyOperation(deps, context, turn) {
     restorePreviousSelection(deps, context);
     return failSettlement(deps, context, reason);
   }
+  const openTurn = openTurnNumber2(events);
+  const previousVisible = findSurfaceSeqByMessageId(events, surface, context.op.previousAnchorId) !== void 0;
+  if (!previousVisible && context.deferHide === true) {
+    releaseSettlementRestriction(deps, context);
+    return { status: "ok", anchorMessageId: candidate.messageId };
+  }
   try {
     const hidden = hideTargets(events, surface, triggerMessageIdOf(context.op), turn, candidate.messageId);
     for (const seq of oldAnchorSurfaceTargets(events, surface, context.op.previousAnchorId)) hidden.add(seq);
-    appendHideInOpenTurn(deps, turn, hidden);
+    if (openTurn === turn) appendHideInOpenTurn(deps, turn, hidden);
+    else appendHideInBridgeTurn(deps, hidden);
   } catch (error) {
     const reason = `${context.label} ${context.op.opId} failed to settle turn ${turn}: ${errorMessage4(error)}`;
-    const previousVisible = findSurfaceSeqByMessageId(
+    const previousVisibleNow = findSurfaceSeqByMessageId(
       eventsOf(deps.session),
       surfaceNodeList(deps.session),
       context.op.previousAnchorId
     ) !== void 0;
-    if (!previousVisible) {
+    if (!previousVisibleNow) {
       releaseSettlement(deps, context);
       throw failureFor(error, reason, context.op);
     }
@@ -27362,17 +27382,33 @@ function handleBodySessionEvent(ctx, session, event) {
     const data = isRecord9(eventRecord["data"]) ? eventRecord["data"] : void 0;
     const reason = data === void 0 ? void 0 : isRecord9(data["reason"]) ? data["reason"] : void 0;
     const reasonKind = nonEmptyString2(reason?.["kind"]);
-    if (reasonKind === void 0 || !TURN_END_FAILURE_REASONS.has(reasonKind)) return;
+    if (reasonKind === void 0) return;
     const sessionId = nonEmptyString2(isRecord9(session) ? session["id"] : void 0);
     if (sessionId === void 0) return;
     const liveAgent = resolveLiveAgent(ctx, sessionId);
     const agentId = liveAgent === void 0 ? sessionId : agentIdOf(liveAgent) ?? sessionId;
-    if (!pendingByAgent.has(agentId) && !pendingByAgent.has(sessionId)) return;
+    const pending = pendingByAgent.get(agentId) ?? pendingByAgent.get(sessionId);
+    const turn = data === void 0 ? void 0 : numberField3(data["turn"]);
+    if (TURN_END_FAILURE_REASONS.has(reasonKind)) {
+      if (pending === void 0) return;
+      if (pending.turn !== void 0 && turn !== void 0 && pending.turn !== turn) return;
+      scheduleTurnEndRestore(ctx, {
+        sessionId,
+        agentId,
+        turn,
+        reason: reasonKind,
+        mode: "restore"
+      });
+      return;
+    }
+    if (turn === void 0 || turn < 1) return;
+    if (pending === void 0 || pending.turn === void 0 || turn < pending.turn) return;
     scheduleTurnEndRestore(ctx, {
       sessionId,
       agentId,
-      turn: data === void 0 ? void 0 : numberField3(data["turn"]),
-      reason: reasonKind
+      turn: pending.turn,
+      reason: void 0,
+      mode: "settle"
     });
   } catch (error) {
     errorLog(ctx, "dsh-soulmojito body: session/event turn/end observation failed", {
@@ -27400,12 +27436,13 @@ async function runTurnEndRestoreAttempt(ctx, chain) {
   }
   const delay3 = TURN_END_RESTORE_RETRY_DELAYS_MS[chain.attempts];
   const retryable = outcome.code !== void 0 && TURN_END_RESTORE_RETRY_CODES.has(outcome.code);
+  const subject = chain.task.mode === "settle" ? "deferred settlement" : "turn/end restore";
   if (retryable && delay3 !== void 0) {
-    warn(ctx, "dsh-soulmojito body: turn/end restore failed; retrying", {
+    warn(ctx, `dsh-soulmojito body: ${subject} failed; retrying`, {
       sessionId: chain.task.sessionId,
       agentId: chain.task.agentId,
       turn: chain.task.turn,
-      reason: chain.task.reason,
+      ...chain.task.reason === void 0 ? {} : { reason: chain.task.reason },
       code: outcome.code,
       attempt: chain.attempts,
       delayMs: delay3
@@ -27417,11 +27454,11 @@ async function runTurnEndRestoreAttempt(ctx, chain) {
     return;
   }
   forgetTurnEndRestoreChain(chain);
-  errorLog(ctx, "dsh-soulmojito body: turn/end restore failed; op-start stays pending for startup recovery", {
+  errorLog(ctx, `dsh-soulmojito body: ${subject} failed; op-start stays pending for startup recovery`, {
     sessionId: chain.task.sessionId,
     agentId: chain.task.agentId,
     turn: chain.task.turn,
-    reason: chain.task.reason,
+    ...chain.task.reason === void 0 ? {} : { reason: chain.task.reason },
     attempts: chain.attempts,
     ...outcome.opId === void 0 ? {} : { opId: outcome.opId },
     code: outcome.code,
@@ -27434,11 +27471,11 @@ async function attemptTurnEndRestore(ctx, chain) {
   try {
     const agent = resolveLiveAgent(ctx, task.agentId) ?? (task.agentId === task.sessionId ? void 0 : resolveLiveAgent(ctx, task.sessionId));
     if (agent === void 0) {
-      warn(ctx, "dsh-soulmojito body: turn/end restore skipped because the live agent is gone", {
+      warn(ctx, `dsh-soulmojito body: ${task.mode === "settle" ? "deferred settlement" : "turn/end restore"} skipped because the live agent is gone`, {
         sessionId: task.sessionId,
         agentId: task.agentId,
         turn: task.turn,
-        reason: task.reason
+        ...task.reason === void 0 ? {} : { reason: task.reason }
       });
       return { status: "done" };
     }
@@ -27453,6 +27490,18 @@ async function attemptTurnEndRestore(ctx, chain) {
     const current = pendingByAgent.get(agentId) ?? pendingByAgent.get(task.sessionId);
     if (current === void 0 || current.opId !== op.opId) return { status: "done" };
     if (chain.cancelled) return { status: "done" };
+    if (task.mode === "settle") {
+      if (task.turn === void 0) return { status: "done" };
+      const result = await finalizeRecoveredOperation(deps, operationView(op), task.turn);
+      info(ctx, "dsh-soulmojito body: deferred settlement finished after turn/end", {
+        sessionId: task.sessionId,
+        agentId,
+        opId: op.opId,
+        turn: task.turn,
+        status: result.status
+      });
+      return { status: "done" };
+    }
     const restoredAnchorId = await restoreBodyAfterFailure(deps, operationView(op));
     info(ctx, "dsh-soulmojito body: turn/end restored the previous body after a failed turn", {
       sessionId: task.sessionId,
