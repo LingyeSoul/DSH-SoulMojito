@@ -92,6 +92,8 @@
 - [`2026-10-29-settle-crash-consistency.md`](../decisions/2026-10-29-settle-crash-consistency.md) — settle 跨 store 崩溃一致性：durable settle intent + 启动恢复
 - [`2026-10-29-body-partial-hide-recovery.md`](../decisions/2026-10-29-body-partial-hide-recovery.md) — 正文结算部分 hide 收口：hide targets + finish-hide
 - [`2026-10-29-imported-body-floor-adoption.md`](../decisions/2026-10-29-imported-body-floor-adoption.md) — 导入楼层接管：history mirror 首楼绑定 bodyGroupId + 客户端 projection-pending 重试
+- [`2026-10-29-agent-tavern-regenerate-hides-draft.md`](../decisions/2026-10-29-agent-tavern-regenerate-hides-draft.md) — 重生成开始即隐藏旧正文：重掷不再看到草稿，失败恢复改为追加副本
+- [`2026-10-29-body-read-freshness-and-group-cache.md`](../decisions/2026-10-29-body-read-freshness-and-group-cache.md) — 正文读侧：候选切换按组失效缓存 + 楼层落后时 ledger 文本优先
 
 ### AgentNovel
 

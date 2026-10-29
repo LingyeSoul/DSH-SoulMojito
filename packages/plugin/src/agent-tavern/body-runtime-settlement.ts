@@ -282,15 +282,30 @@ async function settleBodyOperation(
 
   try {
     const hidden = hideTargets(events, surface, triggerMessageIdOf(context.op), turn, candidate.messageId)
-    // Proposal 0021 §9.5: the old anchor stayed visible while the new turn ran,
-    // so successful settlement is the only place that removes it. The old
-    // turn's process nodes go with it; real user messages stay.
+    // Proposal 0021 §6.2 step 4 (revision 2026-10-29): start already hid the
+    // previous anchor together with its turn's process nodes, so this set is
+    // empty for every operation started after the revision. It stays for
+    // operations started before it: their anchor is still visible and must
+    // leave the surface here. Real user messages stay in either case.
     for (const seq of oldAnchorSurfaceTargets(events, surface, context.op.previousAnchorId)) hidden.add(seq)
     appendHideInOpenTurn(deps, turn, hidden)
   } catch (error) {
     const reason = `${context.label} ${context.op.opId} failed to settle turn ${turn}: ${errorMessage(error)}`
-    // The hide failed, so the body did not settle. Record the cancellation
-    // before rolling the selection back: recovery must restore, not finish.
+    // A legacy operation still has its previous anchor on the surface, so the
+    // failed hide cancels the settlement: recovery restores the old body. An
+    // operation whose start already hid the anchor keeps the committed
+    // candidate instead — cancelling would leave the model no body at all. Its
+    // durable `settling` record stays and recovery finishes the remaining
+    // trigger/process hide.
+    const previousVisible = findSurfaceSeqByMessageId(
+      eventsOf(deps.session),
+      surfaceNodeList(deps.session),
+      context.op.previousAnchorId,
+    ) !== undefined
+    if (!previousVisible) {
+      releaseSettlement(deps, context)
+      throw failureFor(error, reason, context.op)
+    }
     recordSettlementCancelled(deps, context.op, context.label, {
       anchorId: candidate.messageId,
       index: candidateIndex,
@@ -543,15 +558,12 @@ async function rollbackNewTurnWrites(
 /**
  * Put the previous body back after a failed or cancelled regeneration.
  *
- * The old anchor stays on the surface while a regeneration runs (proposal 0021
- * §9.5). Failure recovery therefore only rolls the stores back and hides the
- * failed turn's trigger/process nodes in a bridge turn: no `assistant/message`,
- * no `restore` body event and no JSONL floor change. The agent sees the same
- * old body it saw before the operation started.
- *
- * Sessions written by an older build hid the anchor when the operation
- * started. Its anchor is off the surface, so this function keeps the existing
- * model-free `body-restore-*` copy as a compatibility fallback.
+ * Operations started after the 2026-10-29 revision hid the previous anchor
+ * before the trigger turn opened (proposal 0021 §6.2 step 4), so a failure
+ * restores it by appending an assistant copy together with a `body/restore`
+ * event in a model-free bridge turn. Operations started before the revision
+ * still have the anchor on the surface; those only roll the stores back and
+ * hide the failed turn's trigger/process nodes, without an assistant copy.
  *
  * `settled` evidence (or `settling` evidence whose surface/ledger state proves
  * the hide completed) is never restored: the new body already replaced the old
@@ -668,6 +680,8 @@ export async function restoreBodyAfterFailure(
     await restoreBodyRollbackPlan(deps, op)
 
     if (previousSeq !== undefined) {
+      // Legacy operation: its start kept the anchor visible, so a model-free
+      // hide of the failed turn's nodes already restores the visible body.
       try {
         appendHideInBridgeTurn(deps, targets)
       } catch (error) {

@@ -408,6 +408,10 @@ export function oldBodyTargets(
       if (form === 'body-regenerate' || form === 'body-restore') targets.add(seq)
       continue
     }
+    // An empty `body-hide` replacement is bookkeeping from an earlier hide;
+    // targeting it again would append noise and can invert a surface range
+    // (its seq is newer than the nodes that follow its insertion point).
+    if (event.type === 'developer/message' && message !== undefined && sourceOf(message)?.form === 'body-hide') continue
     if (numberField(event.data.turn) === turn) targets.add(seq)
   }
   return targets
@@ -434,6 +438,29 @@ export function oldAnchorSurfaceTargets(
   const message = messageOf(event)
   if (message === undefined) return new Set<number>()
   return oldBodyTargets(events, surface, { event, message, seq })
+}
+
+/**
+ * Remove the previous body anchor from the model surface before a regeneration
+ * turn starts (proposal 0021 §6.2 step 4, revision 2026-10-29).
+ *
+ * A regeneration must not see the draft it replaces: keeping the anchor visible
+ * made the model rewrite its own text and settle a near-copy. The old anchor
+ * and its turn's process nodes therefore leave the surface here, while the
+ * agent is idle. Surface replacements only append inside an open turn and step,
+ * so this opens a bridge turn and advances the live loop turn base.
+ *
+ * Returns true when a replacement was written. A false result means the anchor
+ * already left the surface (a legacy session or a resumed operation); callers
+ * then keep their existing compatibility behaviour.
+ */
+export function hidePreviousAnchorBeforeRegenerate(deps: BodyRuntimeDeps, previousAnchorId: string): boolean {
+  const events = eventsOf(deps.session)
+  const surface = surfaceNodeList(deps.session)
+  const targets = oldAnchorSurfaceTargets(events, surface, previousAnchorId)
+  if (targets.size === 0) return false
+  appendHideInBridgeTurn(deps, targets)
+  return true
 }
 
 export function hideTargets(

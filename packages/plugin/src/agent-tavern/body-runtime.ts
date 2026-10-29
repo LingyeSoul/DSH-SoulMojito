@@ -52,6 +52,7 @@ import { durableRollbackPlan } from './body-runtime-plan.js'
 import {
   eventSeqOf,
   eventsOf,
+  findSurfaceSeqByMessageId,
   nextEventSeq,
   parseEventList,
   pendingEventOf,
@@ -67,6 +68,7 @@ import {
   buildRegenerateTrigger,
   candidateText,
   ensureBodyLedger,
+  hidePreviousAnchorBeforeRegenerate,
   ledgerForRegenerate,
   normalizeDenyTools,
   requireCandidate,
@@ -134,10 +136,11 @@ export interface StartRegenerateResult {
  * A crash between 2 and 3 is recoverable from the log alone. Ports without
  * `plan`/`apply` keep the legacy single-call `prepare`.
  *
- * The previous anchor deliberately stays on the model surface while the new
- * turn runs, so a failed regeneration has nothing to add back: the old body
- * never left. Successful settlement hides it together with the new turn's
- * trigger/process nodes (see `finalizeTurnStopping`).
+ * The previous anchor leaves the model surface before the trigger turn opens
+ * (proposal 0021 §6.2 step 4, revision 2026-10-29): a retry must not see the
+ * draft it replaces, or it settles a near-copy of its own text. A failed start
+ * or turn therefore restores the old body by appending an assistant copy in a
+ * model-free bridge turn (the compatibility path of `restoreBodyAfterFailure`).
  */
 export async function startRegenerate(
   deps: BodyRuntimeDeps,
@@ -177,6 +180,7 @@ export async function startRegenerate(
     const port = deps.writeRollback
     let prepareRecordWritten = false
     let opStarted = false
+    let hideAttempted = false
     let drafted: BodyRollbackPlan | undefined
     try {
       if (port !== undefined && typeof port.plan === 'function' && typeof port.apply === 'function') {
@@ -217,6 +221,12 @@ export async function startRegenerate(
         })
       }
       active.release = applyWriteRestriction(deps, deny)
+      // Proposal 0021 §6.2 step 4 (revision 2026-10-29): the retry must not see
+      // the draft it replaces. The old anchor and its turn's process nodes leave
+      // the model surface in a bridge turn before the trigger turn opens, so a
+      // fresh take cannot degenerate into a rewrite of the visible draft.
+      hideAttempted = true
+      hidePreviousAnchorBeforeRegenerate(deps, request.expectedAnchorId)
       await deps.agent.followup(buildRegenerateTrigger(deps, active, request.feedback))
       return {
         opId,
@@ -253,10 +263,22 @@ export async function startRegenerate(
       }
 
       if (opStarted) {
-        try {
-          appendOpFinish(deps, opId, 'failed', undefined, reason)
-        } catch (finishError) {
-          warn(deps, `body runtime: failed to record op-finish for start failure ${opId}: ${errorMessage(finishError)}`)
+        // A start failure recorded before the anchor hide can be finished as
+        // failed. Once a replacement may have landed, the previous body is off
+        // the model surface and only recovery can put it back (it appends the
+        // restore copy in a model-free bridge turn); writing op-finish here
+        // would strand a hidden body, so the operation stays pending instead.
+        const anchorVisible = hideAttempted
+          ? previousAnchorOnSurface(deps, request.expectedAnchorId)
+          : true
+        if (anchorVisible) {
+          try {
+            appendOpFinish(deps, opId, 'failed', undefined, reason)
+          } catch (finishError) {
+            warn(deps, `body runtime: failed to record op-finish for start failure ${opId}: ${errorMessage(finishError)}`)
+          }
+        } else {
+          warn(deps, `body runtime: ${reason}; the previous anchor is already off the model surface, leaving the operation pending for recovery to restore it`)
         }
       }
       releaseOperation(deps, active)
@@ -274,6 +296,16 @@ export async function startRegenerate(
       throw failureFor(error, reason, operationView(active))
     }
   })
+}
+
+/** Whether the previous anchor is still on the model surface; unreadable logs count as visible. */
+function previousAnchorOnSurface(deps: BodyRuntimeDeps, anchorMessageId: string): boolean {
+  try {
+    return findSurfaceSeqByMessageId(eventsOf(deps.session), surfaceNodeList(deps.session), anchorMessageId) !== undefined
+  } catch (error) {
+    warn(deps, `body runtime: could not verify anchor '${anchorMessageId}' on the surface after a failed start: ${errorMessage(error)}`)
+    return true
+  }
 }
 
 /** Append an edit event and return the resulting body state. */

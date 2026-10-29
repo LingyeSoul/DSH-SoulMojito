@@ -1484,27 +1484,37 @@ export async function handleAgentTavernBodyApi(
       && bodyHistoricalMvuStateOf(character, chat)
     const agent = resolveLiveAgent(wiring, sessionId)
     const deps = agent === undefined ? undefined : await createBodyDeps(wiring, agent)
-    const projected = characterName !== undefined && chatId !== undefined && chat !== undefined
-      ? await projectedBodyFloor(db, state, characterName, chatId, chat, character, messageId)
-      : undefined
-
-    let ledger: ReturnType<typeof readBodySessionFacts>['ledger'] = undefined
-    let messageText: string | undefined = undefined
-    let inspection: ReturnType<typeof readBodySessionFacts>['inspection'] = undefined
     const session = agent?.session
-    if (session !== undefined) {
-      const facts = readBodySessionFacts(session, messageId, projected?.groupId)
-      ledger = facts.ledger
-      messageText = facts.messageText
-      inspection = facts.inspection
-      if (facts.ledgerError !== undefined) {
-        ctx.logger?.warn?.('dsh-soulmojito body: ledger fold failed for GET body', {
-          sessionId,
-          messageId,
-          error: facts.ledgerError,
-        })
-      }
+    // Fast path: the floor names the group, so the ledger folds one group only.
+    const floorByMessage = characterName !== undefined && chatId !== undefined && chat !== undefined
+      ? await projectedBodyFloor(db, state, characterName, chatId, chat, character, messageId, undefined, undefined)
+      : undefined
+    const facts = session === undefined ? undefined : readBodySessionFacts(session, messageId, floorByMessage?.groupId)
+    const ledger = facts?.ledger
+    // A candidate switch leaves the floor on the previous anchor; re-resolve it
+    // by the ledger's group so `swipes[selectedIndex]` still carries the text.
+    const selectionMoved = ledger !== undefined
+      && (floorByMessage === undefined
+        || floorByMessage.anchorMessageId !== ledger.anchorMessageId
+        || floorByMessage.selectedIndex !== ledger.selectedIndex)
+    const projected = selectionMoved && characterName !== undefined && chatId !== undefined && chat !== undefined
+      ? await projectedBodyFloor(
+        db, state, characterName, chatId, chat, character, messageId,
+        ledger.groupId, ledger.selectedIndex,
+      )
+      : floorByMessage
+    const messageText = facts?.messageText
+    const inspection = facts?.inspection
+    const latestEditSeq = facts?.latestEditSeq
+    if (facts?.ledgerError !== undefined) {
+      ctx.logger?.warn?.('dsh-soulmojito body: ledger fold failed for GET body', {
+        sessionId,
+        messageId,
+        error: facts.ledgerError,
+      })
     }
+
+    const projection = bodyProjectionState(projected, ledger, latestEditSeq)
 
     // Proposal 0023 §6.3: publish the receipt verdict the `PUT` preflight will
     // enforce, so edit is not offered for a candidate the runtime would refuse.
@@ -1524,6 +1534,8 @@ export async function handleAgentTavernBodyApi(
       ledger,
       messageText,
       projected,
+      projectionCurrent: projection.current,
+      projectionTextCurrent: projection.textCurrent,
       inspection,
       editDetail,
     }))
@@ -1676,20 +1688,41 @@ async function projectedBodyFloor(
   chat: ChatLogIR,
   card: Awaited<ReturnType<TavernStore['getCharacter']>>,
   messageId: string,
+  groupIdHint: string | undefined,
+  selectedIndexHint: number | undefined,
 ): Promise<BodyProjectedFloor | undefined> {
-  const index = chat.messages.findIndex((message) => {
+  const matches = (message: ChatLogIR['messages'][number]): boolean => {
     const tavern = asRecord(asRecord(message.extra)?.['agentTavern'])
     if (tavern === undefined) return false
     return tavern['messageId'] === messageId
       || tavern['anchorMessageId'] === messageId
       || tavern['bodyGroupId'] === messageId
-  })
+  }
+  // The ledger's group is the only stable handle while a candidate switch is
+  // waiting for projection: the floor still carries the previous anchor.
+  let index = groupIdHint === undefined
+    ? -1
+    : chat.messages.findIndex((message) => asRecord(asRecord(message.extra)?.['agentTavern'])?.['bodyGroupId'] === groupIdHint)
+  if (index < 0) index = chat.messages.findIndex(matches)
   if (index < 0) return undefined
 
   const floor = chat.messages[index]!
   const tavern = asRecord(asRecord(floor.extra)?.['agentTavern'])
   const scripts = await collectSessionRegexScripts(db, state, characterName, chatId, card)
-  const text = stripFrontendDocuments(displayTextForMessage(scripts, floor, chat.messages.length - 1 - index))
+  // The floor's `mes` follows its own `swipe_id`; the ledger may already select
+  // another slot. Reading `swipes[selectedIndex]` keeps the save-layer regex
+  // applied to the selected candidate even before the projector catches up.
+  // A missing slot means the candidate itself is not projected yet: returning
+  // the floor's `mes` would show the previous anchor's text, so omit `text` and
+  // let the view fall back to the ledger.
+  const selectedSwipe = selectedIndexHint === undefined
+    ? floor
+    : Array.isArray(floor.swipes) && typeof floor.swipes[selectedIndexHint] === 'string'
+      ? { ...floor, mes: floor.swipes[selectedIndexHint] }
+      : undefined
+  const text = selectedSwipe === undefined
+    ? undefined
+    : stripFrontendDocuments(displayTextForMessage(scripts, selectedSwipe, chat.messages.length - 1 - index))
   const selectedIndex = floor.swipe_id
   const count = Array.isArray(floor.swipes) && floor.swipes.length > 0 ? floor.swipes.length : 1
 
@@ -1697,9 +1730,35 @@ async function projectedBodyFloor(
     ...(typeof tavern?.['bodyGroupId'] === 'string' ? { groupId: tavern['bodyGroupId'] } : {}),
     ...(typeof tavern?.['anchorMessageId'] === 'string' ? { anchorMessageId: tavern['anchorMessageId'] } : {}),
     ...(typeof selectedIndex === 'number' && Number.isSafeInteger(selectedIndex) ? { selectedIndex } : {}),
+    ...(typeof tavern?.['lastBodyEventSeq'] === 'number'
+      && Number.isSafeInteger(tavern['lastBodyEventSeq'])
+      && tavern['lastBodyEventSeq'] >= 0
+      ? { lastBodyEventSeq: tavern['lastBodyEventSeq'] as number }
+      : {}),
     count,
-    text,
+    ...(text === undefined ? {} : { text }),
   }
+}
+
+/**
+ * Freshness of the JSONL floor against the ledger.
+ *
+ * `textCurrent` is false only when the floor's edit watermark is behind, since
+ * a stale selection is already served from `swipes[selectedIndex]` (save-layer
+ * text). `current` covers both and drives the client's bounded refetch.
+ */
+function bodyProjectionState(
+  projected: BodyProjectedFloor | undefined,
+  ledger: { readonly anchorMessageId: string; readonly selectedIndex: number } | undefined,
+  latestEditSeq: number | undefined,
+): { current: boolean; textCurrent: boolean } {
+  if (projected === undefined || ledger === undefined) return { current: true, textCurrent: true }
+  const textCurrent = latestEditSeq === undefined
+    || (projected.lastBodyEventSeq !== undefined && projected.lastBodyEventSeq >= latestEditSeq)
+  const selectionCurrent =
+    (projected.anchorMessageId === undefined || projected.anchorMessageId === ledger.anchorMessageId)
+    && (projected.selectedIndex === undefined || projected.selectedIndex === ledger.selectedIndex)
+  return { current: textCurrent && selectionCurrent, textCurrent }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

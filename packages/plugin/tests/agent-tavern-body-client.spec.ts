@@ -59,6 +59,18 @@ describe('AgentTavern body client source checks', () => {
     expect(bodySource).toContain('void withBodyProjectionRetry(request)')
   })
 
+  it('invalidates the whole body group and refreshes a pending JSONL projection', () => {
+    // Candidate switching flips hidden on two messages: a per-message drop left
+    // the previous anchor visible and the new anchor stale.
+    expect(bodySource).toContain('function bumpTavernBodyGroup(sessionId, groupId)')
+    expect(bodySource).toContain('function invalidateTavernBodyGroupCache(sessionId, groupId)')
+    expect(bodySource).toContain('body.groupId === groupId')
+    expect(bodySource).toContain('bodyMutationEpoch')
+    expect(bodySource).toContain('function scheduleTavernBodyProjectionRefresh(sessionId, groupId)')
+    expect(bodySource).toContain('body.projectionPending === true && body.anchorMessageId === messageId')
+    expect(bodySource).toContain('BODY_PROJECTION_REFRESH_DELAYS_MS')
+  })
+
   it('ships the five stable action test ids', () => {
     for (const testId of [
       'tavern-body-edit',
@@ -110,6 +122,7 @@ describe('AgentTavern body client source checks', () => {
       'body.canSelect',
       'body.hidden',
       'body.text',
+      'body.projectionPending',
     ]) {
       expect(bodySource).toContain(field)
     }

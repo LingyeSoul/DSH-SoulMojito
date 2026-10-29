@@ -466,6 +466,37 @@ function bodySession(
   }
 }
 
+/**
+ * One candidate plus one edit record; the chat floor carries whatever body-event
+ * watermark the caller sets, so the read-side freshness check can be exercised.
+ */
+function editedBodySession(
+  messageId: string,
+  groupId: string,
+  previousText: string,
+  text: string,
+): BodySessionLike {
+  const session = bodySession(messageId, previousText, groupId, [0])
+  const events = session.events as RecoveryEvent[]
+  events.push({
+    type: BODY_EVENT_TYPE,
+    seq: events.length,
+    data: { op: 'edit', groupId, index: 0, text, previousText },
+  })
+  return session
+}
+
+/** Mark (or withhold) the edit watermark on the single floor of {@link projectedChat}. */
+function withEditWatermark(chat: ChatLogIR, seq: number | undefined): ChatLogIR {
+  const floor = chat.messages[0]
+  if (floor === undefined) throw new Error('test chat has no floor')
+  const extra = floor.extra ?? {}
+  const agentTavern = { ...(extra.agentTavern as Record<string, unknown> | undefined) }
+  if (seq !== undefined) agentTavern.lastBodyEventSeq = seq
+  floor.extra = { ...extra, agentTavern }
+  return chat
+}
+
 async function callBodyGet(
   character: CharacterCardIR,
   chat: ChatLogIR,
@@ -1137,6 +1168,105 @@ describe('body state safety (proposal 0022 §7)', () => {
     expect(harness.events.some((event) => event.type === BODY_EVENT_TYPE && event.data['op'] === 'edit')).toBe(false)
   })
 
+  it('reads the ledger edit when the JSONL floor still carries the previous text', async () => {
+    const session = editedBodySession('message-1', 'message-1', 'old body', 'edited body')
+    const chat = withEditWatermark(projectedChat('old body'), 1)
+
+    const result = await callBodyGet(plainCharacter(), chat, fakeAgent(session), 'session-mvu', 'message-1')
+
+    expect(result.status).toBe(200)
+    expect(result.body).toMatchObject({
+      ok: true,
+      text: 'edited body',
+      projectionPending: true,
+    })
+  })
+
+  it('keeps the projected display text once the floor applied the edit', async () => {
+    const session = editedBodySession('message-1', 'message-1', 'old body', 'edited body')
+    const chat = withEditWatermark(projectedChat('projected display body'), 2)
+
+    const result = await callBodyGet(plainCharacter(), chat, fakeAgent(session), 'session-mvu', 'message-1')
+
+    expect(result.status).toBe(200)
+    expect(result.body).toMatchObject({ ok: true, text: 'projected display body' })
+    expect(result.body['projectionPending']).toBeUndefined()
+  })
+
+  it('reads the selected swipe while the floor anchor still points at the previous candidate', async () => {
+    const events: RecoveryEvent[] = [
+      {
+        type: 'assistant/message',
+        seq: 0,
+        data: { message: { id: 'message-1', role: 'assistant', content: [{ type: 'text', text: 'old body' }] } },
+      },
+      {
+        type: 'assistant/message',
+        seq: 1,
+        data: { message: { id: 'message-2', role: 'assistant', content: [{ type: 'text', text: 'new body' }] } },
+      },
+      { type: BODY_EVENT_TYPE, seq: 2, data: { op: 'candidate', groupId: 'message-1', messageId: 'message-1', index: 0 } },
+      { type: BODY_EVENT_TYPE, seq: 3, data: { op: 'candidate', groupId: 'message-1', messageId: 'message-2', index: 1 } },
+      { type: BODY_EVENT_TYPE, seq: 4, data: { op: 'select', groupId: 'message-1', index: 1 } },
+    ]
+    const session = {
+      id: 'session-mvu',
+      header: { version: 4 },
+      events,
+      surface: { nodes: [0, 1] },
+      append: () => 0,
+    } as unknown as BodySessionLike
+    const chat = projectedChat('old body')
+    chat.messages[0]!.swipes = ['old body', 'new body']
+
+    const result = await callBodyGet(plainCharacter(), chat, fakeAgent(session), 'session-mvu', 'message-2')
+
+    expect(result.status).toBe(200)
+    expect(result.body).toMatchObject({
+      ok: true,
+      selectedIndex: 1,
+      anchorMessageId: 'message-2',
+      text: 'new body',
+      projectionPending: true,
+    })
+  })
+
+  it('never serves the previous anchor text when the candidate slot is not projected', async () => {
+    const events: RecoveryEvent[] = [
+      {
+        type: 'assistant/message',
+        seq: 0,
+        data: { message: { id: 'message-1', role: 'assistant', content: [{ type: 'text', text: 'old body' }] } },
+      },
+      {
+        type: 'assistant/message',
+        seq: 1,
+        data: { message: { id: 'message-2', role: 'assistant', content: [{ type: 'text', text: 'new body' }] } },
+      },
+      { type: BODY_EVENT_TYPE, seq: 2, data: { op: 'candidate', groupId: 'message-1', messageId: 'message-1', index: 0 } },
+      { type: BODY_EVENT_TYPE, seq: 3, data: { op: 'candidate', groupId: 'message-1', messageId: 'message-2', index: 1 } },
+      { type: BODY_EVENT_TYPE, seq: 4, data: { op: 'select', groupId: 'message-1', index: 1 } },
+    ]
+    const session = {
+      id: 'session-mvu',
+      header: { version: 4 },
+      events,
+      surface: { nodes: [0, 1] },
+      append: () => 0,
+    } as unknown as BodySessionLike
+    const chat = projectedChat('old body')
+
+    const result = await callBodyGet(plainCharacter(), chat, fakeAgent(session), 'session-mvu', 'message-2')
+
+    expect(result.status).toBe(200)
+    expect(result.body).toMatchObject({
+      ok: true,
+      anchorMessageId: 'message-2',
+      text: 'new body',
+      projectionPending: true,
+    })
+  })
+
   it('accepts an edit on an imported floor once the projection adopted it', async () => {
     const character = plainCharacter()
     const chat = adoptedChat('import-anchor', 'Chosen greeting.')
@@ -1327,8 +1457,10 @@ describe('body state safety (proposal 0022 §7)', () => {
     expect(harness.followups).toHaveLength(1)
     const anchorSeq = harness.events.find((event) => asTestRecord(event.data['message'])?.['id'] === 'message-1')?.seq
     expect(anchorSeq).toBeDefined()
-    // Proposal 0021 §9.5: regeneration no longer hides the old anchor at start.
-    expect(harness.surface()).toContain(anchorSeq)
+    // Proposal 0021 §6.2 step 4 (revision 2026-10-29): the start hides the old
+    // anchor before the trigger turn opens.
+    expect(harness.surface()).not.toContain(anchorSeq)
+    expect(harness.events.some((event) => event.type === 'developer/message')).toBe(true)
     expect(harness.events.some((event) => event.type === BODY_EVENT_TYPE
       && event.data['op'] === 'op-start')).toBe(true)
   })
@@ -1720,7 +1852,11 @@ describe('live turn/end failure restore', () => {
       })
       expect(harness.surface()).not.toContain(seqs.triggerSeq)
       expect(harness.surface()).not.toContain(seqs.processSeq)
-      expect(harness.surface()).toContain(anchorSeq)
+      const restoredSeq = harness.events.find((event) =>
+        String(asTestRecord(event.data['message'])?.['id']).startsWith('body-restore-'))?.seq
+      expect(restoredSeq).toBeDefined()
+      expect(harness.surface()).toContain(restoredSeq)
+      expect(harness.surface()).not.toContain(anchorSeq)
     },
   )
 
@@ -1840,7 +1976,11 @@ describe('live turn/end failure restore', () => {
     expect(hides).toHaveLength(1)
     expect(harness.surface()).not.toContain(seqs.triggerSeq)
     expect(harness.surface()).not.toContain(seqs.processSeq)
-    expect(harness.surface()).toContain(anchorSeq)
+    const restoredSeq = harness.events.find((event) =>
+      String(asTestRecord(event.data['message'])?.['id']).startsWith('body-restore-'))?.seq
+    expect(restoredSeq).toBeDefined()
+    expect(harness.surface()).toContain(restoredSeq)
+    expect(harness.surface()).not.toContain(anchorSeq)
     expect(vi.getTimerCount()).toBe(0)
   })
 

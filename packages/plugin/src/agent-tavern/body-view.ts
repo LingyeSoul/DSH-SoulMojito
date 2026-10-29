@@ -218,6 +218,8 @@ export interface BodyProjectedFloor {
   readonly selectedIndex?: number
   readonly count?: number
   readonly text?: string
+  /** Sequence of the last body event this floor applied (edits only). */
+  readonly lastBodyEventSeq?: number
 }
 
 /** Inputs for the pure `GET body` response builder. */
@@ -234,6 +236,17 @@ export interface BodyViewInput {
   readonly ledger: BodyLedger | undefined
   readonly messageText: string | undefined
   readonly projected: BodyProjectedFloor | undefined
+  /**
+   * Whether the JSONL floor already reflects the ledger's latest edit and
+   * selection. A false value marks `projectionPending` and may make the ledger
+   * text win, so a just-edited body never shows old text.
+   */
+  readonly projectionCurrent?: boolean
+  /**
+   * Whether the projected text itself may be used. A stale selection is safe
+   * (the caller resolved the selected swipe text); a stale floor is not.
+   */
+  readonly projectionTextCurrent?: boolean
   readonly inspection: BodyAnchorInspection | undefined
   /**
    * Read-only candidate-receipt verdict from {@link bodyEditDetailOf}. When
@@ -260,6 +273,12 @@ export interface BodyView {
   readonly canEdit: boolean
   readonly canRegenerate: boolean
   readonly canSelect: boolean
+  /**
+   * The JSONL floor has not applied the ledger's latest edit/selection yet;
+   * `text` comes from the ledger or the selected swipe rather than the floor's
+   * current `mes`.
+   */
+  readonly projectionPending?: boolean
   readonly reason?: string
   /** Concrete gate detail when one action is blocked but the body is readable. */
   readonly detail?: BodyStateUnsafeDetail
@@ -293,9 +312,15 @@ export function buildBodyView(input: BodyViewInput): BodyView {
     candidateText = ledger.edits.get(candidate.index) ?? candidate.text
   }
   const ledgerText = ledger === undefined ? undefined : effectiveBodyText(ledger)
+  // A floor that has not applied the latest edit must not win the read: the
+  // ledger is authoritative and already carries the text the user just saved.
+  // A stale *selection* is different: the caller resolved the selected swipe's
+  // save-layer text, so that projected text stays valid.
+  const textCurrent = input.projectionTextCurrent !== false
+  const projectedText = textCurrent ? input.projected?.text : undefined
   const text = hidden
     ? candidateText ?? input.messageText ?? ''
-    : input.projected?.text ?? ledgerText ?? input.messageText ?? ''
+    : projectedText ?? ledgerText ?? input.messageText ?? ''
 
   const baseReason = bodyViewReason(input, hidden)
   // Proposal 0023 §6.3: edit is gated by the runtime candidate-receipt
@@ -336,6 +361,7 @@ export function buildBodyView(input: BodyViewInput): BodyView {
     canEdit,
     canRegenerate,
     canSelect,
+    ...(input.projectionCurrent === false ? { projectionPending: true } : {}),
     ...(reason === undefined ? {} : { reason }),
     ...(detail === undefined ? {} : { detail }),
   }

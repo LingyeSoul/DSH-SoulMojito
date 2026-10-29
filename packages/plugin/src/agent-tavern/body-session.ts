@@ -221,6 +221,12 @@ export interface BodySessionFacts {
   readonly ledger: BodyLedger | undefined
   readonly messageText: string | undefined
   readonly inspection: BodyAnchorInspection | undefined
+  /**
+   * Highest `edit` record sequence for the folded group. The JSONL floor marks
+   * the last edit it applied in `agentTavern.lastBodyEventSeq`; the display
+   * route compares the two so a stale floor never masks a fresh edit.
+   */
+  readonly latestEditSeq?: number
   /** Present when folding failed; the display route logs it and stays stable. */
   readonly ledgerError?: string
 }
@@ -264,12 +270,26 @@ export function readBodySessionFacts(
   const inspection = surface === undefined
     ? undefined
     : inspectAnchorInEvents(events, surface, anchorMessageId)
+  const latestEditSeq = ledger === undefined ? undefined : latestGroupEditSeq(events, ledger.groupId)
   return {
     ledger,
     messageText,
     inspection,
+    ...(latestEditSeq === undefined ? {} : { latestEditSeq }),
     ...(ledgerError === undefined ? {} : { ledgerError }),
   }
+}
+
+/** Highest durable `edit` sequence for one body group. */
+function latestGroupEditSeq(events: readonly WiringEvent[], groupId: string): number | undefined {
+  let latest: number | undefined
+  for (const event of events) {
+    if (event.type !== BODY_EVENT_TYPE) continue
+    if (event.data['op'] !== 'edit') continue
+    if (event.data['groupId'] !== groupId) continue
+    if (latest === undefined || event.seq > latest) latest = event.seq
+  }
+  return latest
 }
 
 /**
@@ -290,7 +310,30 @@ export function foldSessionBodyLedgerForMessage(
 }
 
 function findBodyLedgerForMessage(events: readonly WiringEvent[], messageId: string): BodyLedger | undefined {
-  const groupIds = new Set<string>([messageId])
+  // The group id of a fresh body is its first anchor message id.
+  const direct = foldBodyLedgerFromEvents(events, messageId)
+  if (direct !== undefined && ownsMessage(direct, messageId)) return direct
+
+  // Candidate events carry their group id, so one pass avoids folding every
+  // group in a long session (the GET fast path is the floor hint; this covers
+  // the window where a candidate switch has not reached the floor yet).
+  let owner: string | undefined
+  for (const event of events) {
+    if (event.type !== BODY_EVENT_TYPE) continue
+    if (event.data['messageId'] !== messageId) continue
+    const groupId = nonEmptyString(event.data['groupId'])
+    if (groupId !== undefined) {
+      owner = groupId
+      break
+    }
+  }
+  if (owner !== undefined && owner !== messageId) {
+    const ledger = foldBodyLedgerFromEvents(events, owner)
+    if (ledger !== undefined && ownsMessage(ledger, messageId)) return ledger
+  }
+
+  // Legacy or hand-written logs without candidate message ids: try every group.
+  const groupIds = new Set<string>()
   for (const event of events) {
     if (event.type !== BODY_EVENT_TYPE) continue
     const groupId = nonEmptyString(event.data['groupId'])
@@ -298,12 +341,14 @@ function findBodyLedgerForMessage(events: readonly WiringEvent[], messageId: str
   }
   for (const groupId of groupIds) {
     const ledger = foldBodyLedgerFromEvents(events, groupId)
-    if (ledger === undefined) continue
-    if (ledger.anchorMessageId === messageId || ledger.candidates.some((entry) => entry.messageId === messageId)) {
-      return ledger
-    }
+    if (ledger !== undefined && ownsMessage(ledger, messageId)) return ledger
   }
   return undefined
+}
+
+function ownsMessage(ledger: BodyLedger, messageId: string): boolean {
+  return ledger.anchorMessageId === messageId
+    || ledger.candidates.some((entry) => entry.messageId === messageId)
 }
 
 /** Text of one session message (`user/message` or `data.message` shapes). */

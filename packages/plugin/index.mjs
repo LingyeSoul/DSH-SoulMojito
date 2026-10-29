@@ -16047,15 +16047,43 @@ function readBodySessionFacts(session, messageId, groupHint) {
   const surface = surfaceNodes(session);
   const anchorMessageId = ledger?.anchorMessageId ?? messageId;
   const inspection = surface === void 0 ? void 0 : inspectAnchorInEvents(events, surface, anchorMessageId);
+  const latestEditSeq = ledger === void 0 ? void 0 : latestGroupEditSeq(events, ledger.groupId);
   return {
     ledger,
     messageText: messageText4,
     inspection,
+    ...latestEditSeq === void 0 ? {} : { latestEditSeq },
     ...ledgerError === void 0 ? {} : { ledgerError }
   };
 }
+function latestGroupEditSeq(events, groupId) {
+  let latest;
+  for (const event of events) {
+    if (event.type !== BODY_EVENT_TYPE) continue;
+    if (event.data["op"] !== "edit") continue;
+    if (event.data["groupId"] !== groupId) continue;
+    if (latest === void 0 || event.seq > latest) latest = event.seq;
+  }
+  return latest;
+}
 function findBodyLedgerForMessage(events, messageId) {
-  const groupIds = /* @__PURE__ */ new Set([messageId]);
+  const direct = foldBodyLedgerFromEvents(events, messageId);
+  if (direct !== void 0 && ownsMessage(direct, messageId)) return direct;
+  let owner;
+  for (const event of events) {
+    if (event.type !== BODY_EVENT_TYPE) continue;
+    if (event.data["messageId"] !== messageId) continue;
+    const groupId = nonEmptyString(event.data["groupId"]);
+    if (groupId !== void 0) {
+      owner = groupId;
+      break;
+    }
+  }
+  if (owner !== void 0 && owner !== messageId) {
+    const ledger = foldBodyLedgerFromEvents(events, owner);
+    if (ledger !== void 0 && ownsMessage(ledger, messageId)) return ledger;
+  }
+  const groupIds = /* @__PURE__ */ new Set();
   for (const event of events) {
     if (event.type !== BODY_EVENT_TYPE) continue;
     const groupId = nonEmptyString(event.data["groupId"]);
@@ -16063,12 +16091,12 @@ function findBodyLedgerForMessage(events, messageId) {
   }
   for (const groupId of groupIds) {
     const ledger = foldBodyLedgerFromEvents(events, groupId);
-    if (ledger === void 0) continue;
-    if (ledger.anchorMessageId === messageId || ledger.candidates.some((entry) => entry.messageId === messageId)) {
-      return ledger;
-    }
+    if (ledger !== void 0 && ownsMessage(ledger, messageId)) return ledger;
   }
   return void 0;
+}
+function ownsMessage(ledger, messageId) {
+  return ledger.anchorMessageId === messageId || ledger.candidates.some((entry) => entry.messageId === messageId);
 }
 function textOfSessionMessage(events, messageId) {
   const event = events.find((entry) => messageIdOf(entry) === messageId);
@@ -17171,7 +17199,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("7c1d131") : void 0;
+  const commit = true ? normalizeCommit("ad27e13") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -25211,6 +25239,7 @@ function oldBodyTargets(events, surface, target) {
       if (form === "body-regenerate" || form === "body-restore") targets.add(seq);
       continue;
     }
+    if (event.type === "developer/message" && message !== void 0 && sourceOf2(message)?.form === "body-hide") continue;
     if (numberField2(event.data.turn) === turn) targets.add(seq);
   }
   return targets;
@@ -25223,6 +25252,14 @@ function oldAnchorSurfaceTargets(events, surface, previousAnchorId) {
   const message = messageOf3(event);
   if (message === void 0) return /* @__PURE__ */ new Set();
   return oldBodyTargets(events, surface, { event, message, seq });
+}
+function hidePreviousAnchorBeforeRegenerate(deps, previousAnchorId) {
+  const events = eventsOf(deps.session);
+  const surface = surfaceNodeList(deps.session);
+  const targets = oldAnchorSurfaceTargets(events, surface, previousAnchorId);
+  if (targets.size === 0) return false;
+  appendHideInBridgeTurn(deps, targets);
+  return true;
 }
 function hideTargets(events, surface, triggerMessageId, turn, candidateMessageId) {
   const targets = /* @__PURE__ */ new Set();
@@ -25618,6 +25655,15 @@ async function settleBodyOperation(deps, context, turn) {
     appendHideInOpenTurn(deps, turn, hidden);
   } catch (error) {
     const reason = `${context.label} ${context.op.opId} failed to settle turn ${turn}: ${errorMessage4(error)}`;
+    const previousVisible = findSurfaceSeqByMessageId(
+      eventsOf(deps.session),
+      surfaceNodeList(deps.session),
+      context.op.previousAnchorId
+    ) !== void 0;
+    if (!previousVisible) {
+      releaseSettlement(deps, context);
+      throw failureFor(error, reason, context.op);
+    }
     recordSettlementCancelled(deps, context.op, context.label, {
       anchorId: candidate.messageId,
       index: candidateIndex
@@ -26005,6 +26051,7 @@ async function startRegenerate(deps, request) {
     const port = deps.writeRollback;
     let prepareRecordWritten = false;
     let opStarted = false;
+    let hideAttempted = false;
     let drafted;
     try {
       if (port !== void 0 && typeof port.plan === "function" && typeof port.apply === "function") {
@@ -26039,6 +26086,8 @@ async function startRegenerate(deps, request) {
         });
       }
       active.release = applyWriteRestriction(deps, deny);
+      hideAttempted = true;
+      hidePreviousAnchorBeforeRegenerate(deps, request.expectedAnchorId);
       await deps.agent.followup(buildRegenerateTrigger(deps, active, request.feedback));
       return {
         opId,
@@ -26065,10 +26114,15 @@ async function startRegenerate(deps, request) {
         }
       }
       if (opStarted) {
-        try {
-          appendOpFinish(deps, opId, "failed", void 0, reason);
-        } catch (finishError) {
-          warn2(deps, `body runtime: failed to record op-finish for start failure ${opId}: ${errorMessage4(finishError)}`);
+        const anchorVisible = hideAttempted ? previousAnchorOnSurface(deps, request.expectedAnchorId) : true;
+        if (anchorVisible) {
+          try {
+            appendOpFinish(deps, opId, "failed", void 0, reason);
+          } catch (finishError) {
+            warn2(deps, `body runtime: failed to record op-finish for start failure ${opId}: ${errorMessage4(finishError)}`);
+          }
+        } else {
+          warn2(deps, `body runtime: ${reason}; the previous anchor is already off the model surface, leaving the operation pending for recovery to restore it`);
         }
       }
       releaseOperation(deps, active);
@@ -26085,6 +26139,14 @@ async function startRegenerate(deps, request) {
       throw failureFor(error, reason, operationView(active));
     }
   });
+}
+function previousAnchorOnSurface(deps, anchorMessageId) {
+  try {
+    return findSurfaceSeqByMessageId(eventsOf(deps.session), surfaceNodeList(deps.session), anchorMessageId) !== void 0;
+  } catch (error) {
+    warn2(deps, `body runtime: could not verify anchor '${anchorMessageId}' on the surface after a failed start: ${errorMessage4(error)}`);
+    return true;
+  }
 }
 async function applyBodyEdit(deps, request) {
   validateEditRequest(request);
@@ -26385,7 +26447,9 @@ function buildBodyView(input) {
     candidateText2 = ledger.edits.get(candidate.index) ?? candidate.text;
   }
   const ledgerText = ledger === void 0 ? void 0 : effectiveBodyText(ledger);
-  const text = hidden ? candidateText2 ?? input.messageText ?? "" : input.projected?.text ?? ledgerText ?? input.messageText ?? "";
+  const textCurrent = input.projectionTextCurrent !== false;
+  const projectedText = textCurrent ? input.projected?.text : void 0;
+  const text = hidden ? candidateText2 ?? input.messageText ?? "" : projectedText ?? ledgerText ?? input.messageText ?? "";
   const baseReason = bodyViewReason(input, hidden);
   const rollbackReason = baseReason === void 0 && !hidden && input.historicalMvuState && !input.writeRollbackAvailable ? "write-journal-unavailable" : void 0;
   const reason = baseReason ?? rollbackReason;
@@ -26406,6 +26470,7 @@ function buildBodyView(input) {
     canEdit,
     canRegenerate,
     canSelect,
+    ...input.projectionCurrent === false ? { projectionPending: true } : {},
     ...reason === void 0 ? {} : { reason },
     ...detail === void 0 ? {} : { detail }
   };
@@ -48154,24 +48219,33 @@ async function handleAgentTavernBodyApi(ctx, db, req, res, url, route, method) {
     const historicalMvuState = character2 !== void 0 && chat !== void 0 && bodyHistoricalMvuStateOf(character2, chat);
     const agent2 = resolveLiveAgent(wiring, sessionId2);
     const deps2 = agent2 === void 0 ? void 0 : await createBodyDeps(wiring, agent2);
-    const projected = characterName2 !== void 0 && chatId2 !== void 0 && chat !== void 0 ? await projectedBodyFloor(db, state, characterName2, chatId2, chat, character2, messageId) : void 0;
-    let ledger = void 0;
-    let messageText4 = void 0;
-    let inspection = void 0;
     const session = agent2?.session;
-    if (session !== void 0) {
-      const facts = readBodySessionFacts(session, messageId, projected?.groupId);
-      ledger = facts.ledger;
-      messageText4 = facts.messageText;
-      inspection = facts.inspection;
-      if (facts.ledgerError !== void 0) {
-        ctx.logger?.warn?.("dsh-soulmojito body: ledger fold failed for GET body", {
-          sessionId: sessionId2,
-          messageId,
-          error: facts.ledgerError
-        });
-      }
+    const floorByMessage = characterName2 !== void 0 && chatId2 !== void 0 && chat !== void 0 ? await projectedBodyFloor(db, state, characterName2, chatId2, chat, character2, messageId, void 0, void 0) : void 0;
+    const facts = session === void 0 ? void 0 : readBodySessionFacts(session, messageId, floorByMessage?.groupId);
+    const ledger = facts?.ledger;
+    const selectionMoved = ledger !== void 0 && (floorByMessage === void 0 || floorByMessage.anchorMessageId !== ledger.anchorMessageId || floorByMessage.selectedIndex !== ledger.selectedIndex);
+    const projected = selectionMoved && characterName2 !== void 0 && chatId2 !== void 0 && chat !== void 0 ? await projectedBodyFloor(
+      db,
+      state,
+      characterName2,
+      chatId2,
+      chat,
+      character2,
+      messageId,
+      ledger.groupId,
+      ledger.selectedIndex
+    ) : floorByMessage;
+    const messageText4 = facts?.messageText;
+    const inspection = facts?.inspection;
+    const latestEditSeq = facts?.latestEditSeq;
+    if (facts?.ledgerError !== void 0) {
+      ctx.logger?.warn?.("dsh-soulmojito body: ledger fold failed for GET body", {
+        sessionId: sessionId2,
+        messageId,
+        error: facts.ledgerError
+      });
     }
+    const projection = bodyProjectionState(projected, ledger, latestEditSeq);
     const editDetail = character2 === void 0 || chat === void 0 || ledger === void 0 ? void 0 : bodyEditDetailOf(character2.card, chat, ledger);
     return sendJson(res, 200, buildBodyView({
       messageId,
@@ -48184,6 +48258,8 @@ async function handleAgentTavernBodyApi(ctx, db, req, res, url, route, method) {
       ledger,
       messageText: messageText4,
       projected,
+      projectionCurrent: projection.current,
+      projectionTextCurrent: projection.textCurrent,
       inspection,
       editDetail
     }));
@@ -48296,26 +48372,36 @@ function bodyIndex(body, field) {
   }
   return value;
 }
-async function projectedBodyFloor(db, state, characterName, chatId, chat, card, messageId) {
-  const index = chat.messages.findIndex((message) => {
+async function projectedBodyFloor(db, state, characterName, chatId, chat, card, messageId, groupIdHint, selectedIndexHint) {
+  const matches = (message) => {
     const tavern2 = asRecord5(asRecord5(message.extra)?.["agentTavern"]);
     if (tavern2 === void 0) return false;
     return tavern2["messageId"] === messageId || tavern2["anchorMessageId"] === messageId || tavern2["bodyGroupId"] === messageId;
-  });
+  };
+  let index = groupIdHint === void 0 ? -1 : chat.messages.findIndex((message) => asRecord5(asRecord5(message.extra)?.["agentTavern"])?.["bodyGroupId"] === groupIdHint);
+  if (index < 0) index = chat.messages.findIndex(matches);
   if (index < 0) return void 0;
   const floor = chat.messages[index];
   const tavern = asRecord5(asRecord5(floor.extra)?.["agentTavern"]);
   const scripts = await collectSessionRegexScripts(db, state, characterName, chatId, card);
-  const text = stripFrontendDocuments(displayTextForMessage(scripts, floor, chat.messages.length - 1 - index));
+  const selectedSwipe = selectedIndexHint === void 0 ? floor : Array.isArray(floor.swipes) && typeof floor.swipes[selectedIndexHint] === "string" ? { ...floor, mes: floor.swipes[selectedIndexHint] } : void 0;
+  const text = selectedSwipe === void 0 ? void 0 : stripFrontendDocuments(displayTextForMessage(scripts, selectedSwipe, chat.messages.length - 1 - index));
   const selectedIndex = floor.swipe_id;
   const count = Array.isArray(floor.swipes) && floor.swipes.length > 0 ? floor.swipes.length : 1;
   return {
     ...typeof tavern?.["bodyGroupId"] === "string" ? { groupId: tavern["bodyGroupId"] } : {},
     ...typeof tavern?.["anchorMessageId"] === "string" ? { anchorMessageId: tavern["anchorMessageId"] } : {},
     ...typeof selectedIndex === "number" && Number.isSafeInteger(selectedIndex) ? { selectedIndex } : {},
+    ...typeof tavern?.["lastBodyEventSeq"] === "number" && Number.isSafeInteger(tavern["lastBodyEventSeq"]) && tavern["lastBodyEventSeq"] >= 0 ? { lastBodyEventSeq: tavern["lastBodyEventSeq"] } : {},
     count,
-    text
+    ...text === void 0 ? {} : { text }
   };
+}
+function bodyProjectionState(projected, ledger, latestEditSeq) {
+  if (projected === void 0 || ledger === void 0) return { current: true, textCurrent: true };
+  const textCurrent = latestEditSeq === void 0 || projected.lastBodyEventSeq !== void 0 && projected.lastBodyEventSeq >= latestEditSeq;
+  const selectionCurrent = (projected.anchorMessageId === void 0 || projected.anchorMessageId === ledger.anchorMessageId) && (projected.selectedIndex === void 0 || projected.selectedIndex === ledger.selectedIndex);
+  return { current: textCurrent && selectionCurrent, textCurrent };
 }
 function asRecord5(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;

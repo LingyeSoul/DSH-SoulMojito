@@ -221,8 +221,10 @@ const bodyProjection = {
 3. 用 agent-scoped 工具限制禁用写工具（记忆、变量、剧本推进、游戏落子等）；读工具保留。
    deny 列表必须先与当前可见工具核对，未知工具名不要传给 `restrict`（宿主会抛错并终止
    本次操作）。
-4. **开始时不隐藏旧 anchor**：旧正文在新 turn 运行期间保持可见，模型看到的是“用户要求
-   重写这段正文”的正常上下文；这样失败时无需再追加 assistant 副本。不打开 bridge turn。
+4. **开始时先隐藏旧 anchor**（2026-10-29 修订）：`op-start` 之后、trigger turn 之前，用一个
+   bridge turn 把旧正文 anchor 与其旧 turn 的 process 节点移出模型面（真实用户消息与系统节点
+   不隐藏）。重试请求因此看不到被替换的草稿，模型不会把自己的可见正文改写成近似副本；代价是
+   失败恢复必须把旧正文作为 assistant 副本重新追加（见第 7 条）。
 5. `agent.followup()` 投递 plugin source 的合成 trigger：
 
 ```ts
@@ -243,12 +245,12 @@ const trigger = {
    - 找本 turn 最后一个带文本且无 tool-call 的 `assistant/message`；
    - 追加 `candidate` 与 `select`；
    - 先提交（commit）write rollback，再 commit 失败时旧 anchor 仍可见；
-   - 先写 durable `op-settling`，再用空 `developer/message` replacement 把 trigger、该 turn
-     的 process 节点，以及旧正文 anchor 与其旧 turn 的 process 节点移出模型面；真实用户消息
-     不隐藏；
+   - 先写 durable `op-settling`，再用空 `developer/message` replacement 把 trigger 与该 turn
+     的 process 节点移出模型面；旧 anchor 已由第 4 条隐藏，这里是空集；真实用户消息不隐藏；
    - hide 成功后写 `op-settled`，再追加 `op-finish { result: 'ok', anchorId }`。hide 之后
-     commit/op-finish 晚失败时保留新正文，只把 op-finish 留给恢复重试；hide 失败写
-     `op-settle-cancelled` 并回退 select，不把失败操作误判为已结算。
+     commit/op-finish 晚失败时保留新正文，只把 op-finish 留给恢复重试；hide 失败时：旧版
+     操作（anchor 仍可见）写 `op-settle-cancelled` 并回退 select，新版操作保留已提交候选、
+     只留 `settling` 记录交给恢复完成剩余 hide（anchor 已不可见，取消会让模型失去正文）。
 7. 失败 / 取消 / 超时（`turn-stopping` 在错误、取消、blocked 路径不会触发，必须由
    live `session/event` 的 `turn/end`（reason `error` / `cancelled` / `aborted`）或启动扫描触发）：
    - live `turn/end` 监听器只登记，异步 microtask 调 `restoreBodyAfterFailure`，不在事件栈
@@ -256,11 +258,11 @@ const trigger = {
    - 追加 `op-finish { result: 'failed', reason }`；
    - 有 `op-settled` 标记：body 已结算，保留新正文，不 hide/不 restore/不追加 assistant，
      仅重试 `op-finish`；
-   - 无标记且旧正文仍在 surface：只用一个 bridge turn 隐藏失败 turn 的 trigger/process 节点，
-     **不追加 assistant 消息、不追加 `restore` 事件、不改 JSONL 正文**；
-   - 旧版本已把 anchor 隐藏的会话：保留 fallback，打开不调用模型的恢复 turn，追加
-     `assistant/message` 副本（`stream: []`，沿用旧 provider/model）与 `body/restore`，
-     关闭 step/turn 后 `advanceHostTurnBase`；
+   - 新版操作（开始已隐藏 anchor）：打开不调用模型的恢复 turn，追加 `assistant/message`
+     副本（`stream: []`，沿用旧 provider/model）与 `body/restore`，关闭 step/turn 后
+     `advanceHostTurnBase`；副本是新的 anchor，JSONL 随 `restore` 事件换锚；
+   - 旧版操作（anchor 仍在 surface）：只用一个 bridge turn 隐藏失败 turn 的 trigger/process
+     节点，**不追加 assistant 消息、不追加 `restore` 事件、不改 JSONL 正文**（兼容 fallback）；
    - 恢复 turn 的 trigger 同样用空 developer 隐藏。
 8. HTTP 建议返回 `202 { opId }`，客户端轮询 `GET body` 或订阅 `op-finish`，避免长连接
    等待整个 turn。
@@ -329,9 +331,16 @@ POST /api/dsh-soulmojito/body/select
   canEdit: boolean,
   canRegenerate: boolean,
   canSelect: boolean,
+  projectionPending?: boolean,
   reason?: string,
 }
 ```
+
+JSONL 楼层落后于 ledger 时返回 `projectionPending: true`。判定：`agentTavern.lastBodyEventSeq`
+未覆盖最新 `edit`，或 anchor/index 与 ledger 不一致。edit 水位落后时 `text` 改用 ledger
+文本；仅 selection 落后时改用楼层 `swipes[ledger.selectedIndex]` 的保存层文本（楼层可能
+仍指向旧 anchor）。客户端再按 150/400/900ms 有界重取一次展示层文本；投影正常时以 JSONL
+`mes` 为准（保存层 + markdownOnly 正则）。
 
 ## 8. JSONL / ST / JSR 投影
 

@@ -8,6 +8,10 @@
     const bodyLocalRevisions = new Map()
     const bodyCacheListeners = new Set()
     let bodyCacheVersion = 0
+    // One body group spans several native messages (one per candidate). A
+    // selection change flips `hidden` on at least two of them, so cache
+    // invalidation is group-scoped, never single-message scoped.
+    let bodyMutationEpoch = 0
 
     function tavernBodyLocalKey(sessionId, messageId) {
       return `${sessionId}\u0000${messageId}`
@@ -53,17 +57,86 @@
       for (const listener of bodyCacheListeners) listener()
     }
 
+    // Invalidate every cached row of one body group. Switching candidates makes
+    // the old anchor hidden and the new anchor visible; invalidating only the
+    // clicked message left the other row's stale `hidden`/`text` in place, so
+    // the chat could show no body at all until an unrelated refetch.
+    function invalidateTavernBodyGroupCache(sessionId, groupId) {
+      if (typeof sessionId !== 'string' || typeof groupId !== 'string' || groupId === '') return
+      bodyMutationEpoch += 1
+      const suffix = `\u0000${sessionId}\u0000`
+      for (const [key, body] of [...bodyCache]) {
+        if (!key.includes(suffix)) continue
+        if (body && typeof body === 'object' && body.groupId === groupId) bodyCache.delete(key)
+      }
+      // An in-flight lookup that started before the mutation must not be reused
+      // by the new effect run: its promise still describes the old group shape.
+      for (const key of [...bodyInflight.keys()]) {
+        if (key.includes(suffix)) bodyInflight.delete(key)
+      }
+      bodyCacheVersion += 1
+      for (const listener of bodyCacheListeners) listener()
+    }
+
+    function bumpTavernBodyGroup(sessionId, groupId) {
+      resetTavernBodyProjectionRefresh(sessionId, groupId)
+      invalidateTavernBodyGroupCache(sessionId, groupId)
+    }
+
+    // A mutation's JSONL projection runs after the HTTP response. When the floor
+    // is still behind, the response carries `projectionPending` and the ledger
+    // text; refetch on a short bounded backoff so the display-layer text lands
+    // without waiting for an unrelated reload. Retry state is per body group and
+    // resets on the next user mutation; a non-pending row must not cancel the
+    // pending anchor row's chain.
+    const BODY_PROJECTION_REFRESH_DELAYS_MS = [150, 400, 900]
+    const bodyProjectionRefreshes = new Map()
+
+    function tavernBodyProjectionKey(sessionId, groupId) {
+      return `${sessionId}\u0000${groupId}`
+    }
+
+    function resetTavernBodyProjectionRefresh(sessionId, groupId) {
+      if (typeof sessionId !== 'string' || typeof groupId !== 'string' || groupId === '') return
+      const key = tavernBodyProjectionKey(sessionId, groupId)
+      const current = bodyProjectionRefreshes.get(key)
+      if (current !== undefined && current.timer !== undefined) clearTimeout(current.timer)
+      bodyProjectionRefreshes.delete(key)
+    }
+
+    function scheduleTavernBodyProjectionRefresh(sessionId, groupId) {
+      if (typeof sessionId !== 'string' || typeof groupId !== 'string' || groupId === '') return
+      const key = tavernBodyProjectionKey(sessionId, groupId)
+      const current = bodyProjectionRefreshes.get(key)
+      if (current !== undefined && current.timer !== undefined) return
+      const attempt = current === undefined ? 0 : current.attempt
+      if (attempt >= BODY_PROJECTION_REFRESH_DELAYS_MS.length) return
+      const timer = setTimeout(() => {
+        bodyProjectionRefreshes.set(key, { attempt: attempt + 1, timer: undefined })
+        // The next attempt only runs if the refetch still reports pending.
+        invalidateTavernBodyGroupCache(sessionId, groupId)
+      }, BODY_PROJECTION_REFRESH_DELAYS_MS[attempt])
+      bodyProjectionRefreshes.set(key, { attempt, timer })
+    }
+
     function loadTavernBody(sessionId, messageId, revision) {
       const localRevision = tavernBodyLocalRevision(sessionId, messageId)
+      const mutationEpoch = bodyMutationEpoch
       const key = tavernBodyCacheKey(sessionId, messageId, revision)
       if (bodyCache.has(key)) return Promise.resolve(bodyCache.get(key))
       if (bodyInflight.has(key)) return bodyInflight.get(key)
       const pending = api(`body?sessionId=${encodeURIComponent(sessionId)}&messageId=${encodeURIComponent(messageId)}`)
         .then((result) => {
-          if (tavernBodyLocalRevision(sessionId, messageId) === localRevision) cacheTavernBody(key, result)
+          // A response that started before a body mutation may describe the old
+          // group shape; never let it repopulate the cache after invalidation.
+          if (mutationEpoch === bodyMutationEpoch
+            && tavernBodyLocalRevision(sessionId, messageId) === localRevision) cacheTavernBody(key, result)
           return result
         })
-        .finally(() => bodyInflight.delete(key))
+        .finally(() => {
+          // An invalidation may have replaced this entry with a newer request.
+          if (bodyInflight.get(key) === pending) bodyInflight.delete(key)
+        })
       bodyInflight.set(key, pending)
       return pending
     }
@@ -82,7 +155,14 @@
         setResult((current) => ({ body: current.body, error: '', loading: true }))
         void loadTavernBody(sessionId, messageId, revision)
           .then((body) => {
-            if (!cancelled) setResult({ body, error: '', loading: false })
+            if (cancelled) return
+            setResult({ body, error: '', loading: false })
+            // Only the current anchor may drive the retry chain: hidden rows can
+            // legitimately see a stale floor while the anchor already moved.
+            if (body && body.projectionPending === true && body.anchorMessageId === messageId
+              && typeof body.groupId === 'string') {
+              scheduleTavernBodyProjectionRefresh(sessionId, body.groupId)
+            }
           })
           .catch((cause) => {
             if (cancelled) return
@@ -161,6 +241,7 @@
             return
           }
           bumpTavernBodyRevision(sessionId, messageId)
+          if (typeof watching.watchGroupId === 'string') bumpTavernBodyGroup(sessionId, watching.watchGroupId)
         }, 1500)
         return () => clearInterval(timer)
       }, [watching, sessionId, messageId])
@@ -195,6 +276,7 @@
               syncChatRevision(binding.character, binding.chatId, result.revision)
             }
             bumpTavernBodyRevision(sessionId, messageId)
+            if (typeof body.groupId === 'string') bumpTavernBodyGroup(sessionId, body.groupId)
             if (onDone) onDone(result)
           })
           .catch((cause) => setError(tavernBodyErrorText(t, cause)))
@@ -247,7 +329,7 @@
           }),
         }), () => {
           setFeedbackOpen(false)
-          setWatching({ count, selectedIndex, deadline: Date.now() + 90000 })
+          setWatching({ count, selectedIndex, watchGroupId: body.groupId, deadline: Date.now() + 90000 })
         })
       }
 
