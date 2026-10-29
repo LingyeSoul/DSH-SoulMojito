@@ -16853,7 +16853,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("8f43ae9") : void 0;
+  const commit = true ? normalizeCommit("b7a7757") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -27156,6 +27156,8 @@ function registerBodyTurnStopping(ctx) {
       });
     }
   }
+  registerTurnEndRestoreCleanup(ctx);
+  disposers.push(cancelTurnEndRestoreChains);
   return combineDisposers(ctx, disposers);
 }
 async function handleBodyTurnStopping(ctx, payload) {
@@ -27214,7 +27216,9 @@ async function handleBodyTurnStopping(ctx, payload) {
   }
 }
 var TURN_END_FAILURE_REASONS = /* @__PURE__ */ new Set(["error", "cancelled", "aborted"]);
-var failureRestoresInFlight = /* @__PURE__ */ new Set();
+var TURN_END_RESTORE_RETRY_DELAYS_MS = [0, 50, 250];
+var TURN_END_RESTORE_RETRY_CODES = /* @__PURE__ */ new Set(["session-busy", "host-unsupported"]);
+var turnEndRestoreChains = /* @__PURE__ */ new Map();
 function handleBodySessionEvent(ctx, session, event) {
   try {
     const eventRecord = isRecord9(event) ? event : void 0;
@@ -27242,22 +27246,55 @@ function handleBodySessionEvent(ctx, session, event) {
   }
 }
 function scheduleTurnEndRestore(ctx, task) {
-  if (failureRestoresInFlight.has(task.sessionId)) return;
-  failureRestoresInFlight.add(task.sessionId);
+  if (turnEndRestoreChains.has(task.sessionId)) return;
+  const chain = { task, attempts: 0, timer: void 0, cancelled: false };
+  turnEndRestoreChains.set(task.sessionId, chain);
   queueMicrotask(() => {
-    void runTurnEndRestore(ctx, task).catch((error) => {
-      failureRestoresInFlight.delete(task.sessionId);
-      errorLog(ctx, "dsh-soulmojito body: turn/end restore task crashed", {
-        sessionId: task.sessionId,
-        agentId: task.agentId,
-        turn: task.turn,
-        reason: task.reason,
-        error: errorMessage4(error)
-      });
-    });
+    void runTurnEndRestoreAttempt(ctx, chain);
   });
 }
-async function runTurnEndRestore(ctx, task) {
+async function runTurnEndRestoreAttempt(ctx, chain) {
+  if (chain.cancelled) return;
+  const outcome = await attemptTurnEndRestore(ctx, chain);
+  if (chain.cancelled) return;
+  chain.attempts += 1;
+  if (outcome.status === "done") {
+    forgetTurnEndRestoreChain(chain);
+    return;
+  }
+  const delay3 = TURN_END_RESTORE_RETRY_DELAYS_MS[chain.attempts];
+  const retryable = outcome.code !== void 0 && TURN_END_RESTORE_RETRY_CODES.has(outcome.code);
+  if (retryable && delay3 !== void 0) {
+    warn2(ctx, "dsh-soulmojito body: turn/end restore failed; retrying", {
+      sessionId: chain.task.sessionId,
+      agentId: chain.task.agentId,
+      turn: chain.task.turn,
+      reason: chain.task.reason,
+      code: outcome.code,
+      attempt: chain.attempts,
+      delayMs: delay3
+    });
+    chain.timer = setTimeout(() => {
+      chain.timer = void 0;
+      void runTurnEndRestoreAttempt(ctx, chain);
+    }, delay3);
+    return;
+  }
+  forgetTurnEndRestoreChain(chain);
+  errorLog(ctx, "dsh-soulmojito body: turn/end restore failed; op-start stays pending for startup recovery", {
+    sessionId: chain.task.sessionId,
+    agentId: chain.task.agentId,
+    turn: chain.task.turn,
+    reason: chain.task.reason,
+    attempts: chain.attempts,
+    ...outcome.opId === void 0 ? {} : { opId: outcome.opId },
+    code: outcome.code,
+    error: outcome.error
+  });
+}
+async function attemptTurnEndRestore(ctx, chain) {
+  const task = chain.task;
+  let opId;
   try {
     const agent = resolveLiveAgent(ctx, task.agentId) ?? (task.agentId === task.sessionId ? void 0 : resolveLiveAgent(ctx, task.sessionId));
     if (agent === void 0) {
@@ -27267,45 +27304,57 @@ async function runTurnEndRestore(ctx, task) {
         turn: task.turn,
         reason: task.reason
       });
-      return;
+      return { status: "done" };
     }
     const agentId = agentIdOf(agent) ?? task.agentId;
     const op = pendingByAgent.get(agentId) ?? pendingByAgent.get(task.sessionId);
-    if (op === void 0) return;
+    if (op === void 0) return { status: "done" };
+    opId = op.opId;
     const deps = await createBodyDeps(ctx, agent);
     if (deps === void 0) {
-      warn2(ctx, "dsh-soulmojito body: turn/end restore skipped because the plugin-record seam is unavailable", {
-        agentId,
-        opId: op.opId,
-        reason: "host-unsupported"
-      });
-      return;
+      return { status: "failed", code: "host-unsupported", error: "the plugin-record seam is unavailable", opId };
     }
     const current = pendingByAgent.get(agentId) ?? pendingByAgent.get(task.sessionId);
-    if (current === void 0 || current.opId !== op.opId) return;
-    try {
-      const restoredAnchorId = await restoreBodyAfterFailure(deps, operationView(op));
-      info(ctx, "dsh-soulmojito body: turn/end restored the previous body after a failed turn", {
-        sessionId: task.sessionId,
-        agentId,
-        opId: op.opId,
-        turn: task.turn,
-        reason: task.reason,
-        restoredAnchorId
-      });
-    } catch (error) {
-      errorLog(ctx, "dsh-soulmojito body: turn/end restore failed; op-start stays pending for startup recovery", {
-        sessionId: task.sessionId,
-        agentId,
-        opId: op.opId,
-        turn: task.turn,
-        reason: task.reason,
-        code: failureCodeOf(error),
-        error: errorMessage4(error)
-      });
-    }
-  } finally {
-    failureRestoresInFlight.delete(task.sessionId);
+    if (current === void 0 || current.opId !== op.opId) return { status: "done" };
+    if (chain.cancelled) return { status: "done" };
+    const restoredAnchorId = await restoreBodyAfterFailure(deps, operationView(op));
+    info(ctx, "dsh-soulmojito body: turn/end restored the previous body after a failed turn", {
+      sessionId: task.sessionId,
+      agentId,
+      opId: op.opId,
+      turn: task.turn,
+      reason: task.reason,
+      restoredAnchorId
+    });
+    return { status: "done" };
+  } catch (error) {
+    return {
+      status: "failed",
+      code: failureCodeOf(error),
+      error: errorMessage4(error),
+      ...opId === void 0 ? {} : { opId }
+    };
+  }
+}
+function forgetTurnEndRestoreChain(chain) {
+  if (turnEndRestoreChains.get(chain.task.sessionId) === chain) turnEndRestoreChains.delete(chain.task.sessionId);
+}
+function cancelTurnEndRestoreChains() {
+  for (const chain of turnEndRestoreChains.values()) {
+    chain.cancelled = true;
+    if (chain.timer !== void 0) clearTimeout(chain.timer);
+    chain.timer = void 0;
+  }
+  turnEndRestoreChains.clear();
+}
+function registerTurnEndRestoreCleanup(ctx) {
+  if (typeof ctx.effect !== "function") return;
+  try {
+    ctx.effect(() => () => {
+      cancelTurnEndRestoreChains();
+    }, "dsh-soulmojito: body turn/end retries");
+  } catch (error) {
+    warn2(ctx, "dsh-soulmojito body: ctx.effect rejected the turn/end retry cleanup", { error: errorMessage4(error) });
   }
 }
 function recoverBodyOperations(ctx) {

@@ -1,15 +1,10 @@
 /**
  * AgentTavern body wiring facade (proposal 0021 §2.5, §2.6, §6).
  *
- * This shard owns the host-facing core: the structural context, the
- * experimental plugin-record seam, deps assembly, the message projection and
- * the `agent/turn-stopping` listener. Read-side view policy lives in
- * `body-view.ts`, session reads in `body-session.ts`, crash recovery in
- * `body-recovery.ts`.
- *
- * No durable fact is invented here: the session log stays authoritative, the
- * body ledger in `body.ts` folds it, and the state machine in `body-runtime.ts`
- * owns every mutation.
+ * Owns the host-facing core: structural context, plugin-record seam, deps,
+ * projection and the live turn listeners. Read policy lives in `body-view.ts`,
+ * session reads in `body-session.ts`, crash recovery in `body-recovery.ts`.
+ * The session log stays authoritative; `body-runtime.ts` owns every mutation.
  */
 
 import { importHostPackage } from '../../../bind/src/index.js'
@@ -65,10 +60,7 @@ import {
 
 /* ------------------------------- host surface ------------------------------ */
 
-/**
- * Structural context used by every wiring entry point. Host services stay
- * optional so a missing seam disables one feature instead of throwing.
- */
+/** Structural host slice; missing services disable one feature instead of throwing. */
 export interface BodyWiringContext extends BodyRecoveryHost {
   readonly sessions?: HostSessionsService
   readonly effect?: PluginContext['effect']
@@ -92,10 +84,7 @@ export function bodyWiringContext(host: BodyWiringHost, bindingOf: BodyBindingRe
 
 /* --------------------------- plugin-record writer -------------------------- */
 
-/**
- * Writes one log-only plugin record. The host function snapshots `data` and
- * marks the event `ignorable: true`; it never enters the model surface.
- */
+/** Writes one log-only plugin record; the host marks it `ignorable: true`. */
 export type BodyRecordWriter = (
   session: BodySessionLike,
   type: string,
@@ -111,16 +100,9 @@ let recordSeamWarningEmitted = false
 let resolvedRecordWriter: BodyRecordWriter | undefined
 
 /**
- * Resolve the experimental plugin-record seam.
- *
- * Both `appendPluginRecord` and `pluginRecordOf` must exist: the decision
- * record treats them as one version-gated API, and a host with only half of it
- * cannot safely read its own records after reload. A missing package or missing
- * export returns `undefined`; callers must answer `host-unsupported`.
- *
- * Successful resolutions are cached for the process: `GET body` asks per
- * rendered assistant row, and a dynamic host import per row would be wasteful.
- * A miss is not cached so a reloaded host module can be picked up.
+ * Resolve the experimental plugin-record seam. Both exports are required for
+ * one version-gated API; a miss returns `undefined` and callers answer
+ * `host-unsupported`. Successful resolutions are cached, misses are not.
  */
 export async function resolveBodyRecordWriter(ctx: BodyWiringContext): Promise<BodyRecordWriter | undefined> {
   if (resolvedRecordWriter !== undefined) return resolvedRecordWriter
@@ -152,14 +134,7 @@ export async function resolveBodyRecordWriter(ctx: BodyWiringContext): Promise<B
   return writer
 }
 
-/**
- * Build the deps bundle consumed by the body state machine.
- *
- * The write rollback port is assembled here so every entry point (routes,
- * turn-stopping, recovery) shares one seam. Stores stay lazy: `GET body` builds
- * deps per rendered row and must not open the Tavern/Memory/Variable stores just
- * to report `canRegenerate`.
- */
+/** Build deps via one shared rollback seam; stores stay lazy for `GET body`. */
 export async function createBodyDeps(
   ctx: BodyWiringContext,
   agent: BodyAgentLike,
@@ -189,13 +164,7 @@ export async function createBodyDeps(
   }
 }
 
-/**
- * Read-only candidate-receipt preflight for one edit.
- *
- * Binding, card and chat are resolved through the same lazy store as the
- * rollback port. Every refusal is a typed `body-state-unsafe`/`projection-
- * pending` failure and happens before the edit event is appended.
- */
+/** Read-only candidate-receipt preflight; refuses before the edit event exists. */
 async function inspectBodyEdit(
   ctx: BodyWiringContext,
   agent: BodyAgentLike,
@@ -274,10 +243,7 @@ async function inspectBodyEdit(
   }
 }
 
-/**
- * A candidate edit can only project onto a floor whose swipes already contain
- * the slot. Missing floor/swipe is a projection lag, not a receipt defect.
- */
+/** Missing floor/swipe means projection lag, not a receipt defect. */
 function requireProjectedCandidate(chat: ChatLogIR, input: BodyEditInspection): void {
   let floorIndex: number
   try {
@@ -352,13 +318,8 @@ function lazyRollbackVariableStore(): BodyRollbackVariableStore {
 }
 
 /**
- * Lazy `MemoryVectorStore` adapter (proposal 0022 §8).
- *
- * No embedding config means the vector cache is disabled, so the sync is a
- * no-op. Otherwise a tombstoned record drops its vector and a live record is
- * re-embedded and persisted. `embedMemoryRecord` reports failure as `false`
- * (breaker open, empty vector or request error); that is turned into an error
- * carrying the memory id so the rollback layer can record `vector-sync-failed`.
+ * Lazy `MemoryVectorStore` adapter (proposal 0022 §8): tombstoned records drop
+ * their vector, live records re-embed, and a `false` result fails with the id.
  */
 function lazyRollbackMemoryVectors(): BodyRollbackMemoryVectors {
   return {
@@ -390,14 +351,9 @@ function lazyRollbackMemoryVectors(): BodyRollbackMemoryVectors {
 /* ------------------------------- projection -------------------------------- */
 
 /**
- * Register the body message projection before any agent/session is created.
- *
- * The projection is a long-lived compatibility shim (proposal §9.4): turning
- * the body feature off later stops new records but never unregisters it. The
- * returned disposer is handed to `ctx.effect` for host unload only.
- *
- * @returns the host disposer, or `undefined` when the host has no projection
- * seam (the caller keeps the rest of the plugin running)
+ * Register the long-lived body projection shim (proposal §9.4); its disposer is
+ * only for host unload, never for turning the feature off. Returns the host
+ * disposer or `undefined` when the seam is missing.
  */
 export function registerBodyProjection(ctx: BodyWiringContext): (() => void) | undefined {
   const sessions = ctx.sessions
@@ -449,13 +405,9 @@ export function registerBodyProjection(ctx: BodyWiringContext): (() => void) | u
 /* ----------------------------- turn stopping ------------------------------- */
 
 /**
- * Subscribe to the live turn edges the body machine needs.
- *
- * `agent/turn-stopping` is the serial success path; it never waits for
- * `agent.whenIdle()` and only appends what `finalizeTurnStopping` needs.
- * `session/event` observes the failure path (error/cancelled/aborted), which
- * never emits turn-stopping; that listener only queues a microtask so the
- * append work stays outside the host's dispatch stack (proposal 0021 §9.1).
+ * Subscribe to the live turn edges: `agent/turn-stopping` for success and
+ * `session/event` for the error/cancelled/aborted edge that never emits
+ * turn-stopping. The failure listener only queues work outside host dispatch.
  */
 export function registerBodyTurnStopping(ctx: BodyWiringContext): (() => void) | undefined {
   if (typeof ctx.on !== 'function') {
@@ -491,15 +443,14 @@ export function registerBodyTurnStopping(ctx: BodyWiringContext): (() => void) |
       })
     }
   }
+  registerTurnEndRestoreCleanup(ctx)
+  disposers.push(cancelTurnEndRestoreChains)
   // `ctx.on` is fiber-scoped in Cordis: the host removes the listeners on
   // unload. The returned disposer is exposed for callers that unload earlier.
   return combineDisposers(ctx, disposers)
 }
 
-/**
- * One `agent/turn-stopping` delivery. Exported so the wiring test can drive the
- * filter without a real host bus.
- */
+/** Exported so the wiring test can drive the filter without a real host bus. */
 export async function handleBodyTurnStopping(ctx: BodyWiringContext, payload: unknown): Promise<void> {
   const record = isRecord(payload) ? payload : undefined
   const payloadAgent = bodyAgentOf(record?.agent)
@@ -568,8 +519,11 @@ export async function handleBodyTurnStopping(ctx: BodyWiringContext, payload: un
 /** `turn/end` reasons that bypass `agent/turn-stopping` (proposal 0021 §2.6). */
 const TURN_END_FAILURE_REASONS: ReadonlySet<string> = new Set(['error', 'cancelled', 'aborted'])
 
-/** Per-session in-flight guard: duplicate turn edges settle one operation. */
-const failureRestoresInFlight = new Set<string>()
+/** Bounded live restore schedule: microtask first, then 50 ms, then 250 ms. */
+const TURN_END_RESTORE_RETRY_DELAYS_MS: readonly number[] = [0, 50, 250]
+
+/** Host timing refusals are retried; every other failure is logged once. */
+const TURN_END_RESTORE_RETRY_CODES: ReadonlySet<string> = new Set(['session-busy', 'host-unsupported'])
 
 interface FailedTurnRestore {
   readonly sessionId: string
@@ -577,6 +531,23 @@ interface FailedTurnRestore {
   readonly turn: number | undefined
   readonly reason: string
 }
+
+interface TurnEndRestoreChain {
+  readonly task: FailedTurnRestore
+  attempts: number
+  timer: ReturnType<typeof setTimeout> | undefined
+  cancelled: boolean
+}
+
+interface TurnEndRestoreAttempt {
+  readonly status: 'done' | 'failed'
+  readonly code?: string
+  readonly error?: string
+  readonly opId?: string
+}
+
+/** One retry chain per session: duplicate turn edges never start a second one. */
+const turnEndRestoreChains = new Map<string, TurnEndRestoreChain>()
 
 /**
  * Observe one `session/event` delivery. It only validates the edge, checks for
@@ -619,25 +590,65 @@ export function handleBodySessionEvent(
 }
 
 function scheduleTurnEndRestore(ctx: BodyWiringContext, task: FailedTurnRestore): void {
-  if (failureRestoresInFlight.has(task.sessionId)) return
-  failureRestoresInFlight.add(task.sessionId)
-  queueMicrotask(() => {
-    void runTurnEndRestore(ctx, task).catch((error: unknown) => {
-      // Safety net for a failure raised outside the restore try block; the
-      // task must stay detached from the host event dispatch.
-      failureRestoresInFlight.delete(task.sessionId)
-      errorLog(ctx, 'dsh-soulmojito body: turn/end restore task crashed', {
-        sessionId: task.sessionId,
-        agentId: task.agentId,
-        turn: task.turn,
-        reason: task.reason,
-        error: errorMessage(error),
-      })
+  if (turnEndRestoreChains.has(task.sessionId)) return
+  const chain: TurnEndRestoreChain = { task, attempts: 0, timer: undefined, cancelled: false }
+  turnEndRestoreChains.set(task.sessionId, chain)
+  queueMicrotask(() => { void runTurnEndRestoreAttempt(ctx, chain) })
+}
+
+/**
+ * One attempt plus the bounded retry decision. A host-loop timing refusal is
+ * retried on the fixed schedule; the last failure stays in the session log for
+ * startup recovery and is never reported as a success.
+ */
+async function runTurnEndRestoreAttempt(ctx: BodyWiringContext, chain: TurnEndRestoreChain): Promise<void> {
+  if (chain.cancelled) return
+  const outcome = await attemptTurnEndRestore(ctx, chain)
+  if (chain.cancelled) return
+  chain.attempts += 1
+  if (outcome.status === 'done') {
+    forgetTurnEndRestoreChain(chain)
+    return
+  }
+  const delay = TURN_END_RESTORE_RETRY_DELAYS_MS[chain.attempts]
+  const retryable = outcome.code !== undefined && TURN_END_RESTORE_RETRY_CODES.has(outcome.code)
+  if (retryable && delay !== undefined) {
+    warn(ctx, 'dsh-soulmojito body: turn/end restore failed; retrying', {
+      sessionId: chain.task.sessionId,
+      agentId: chain.task.agentId,
+      turn: chain.task.turn,
+      reason: chain.task.reason,
+      code: outcome.code,
+      attempt: chain.attempts,
+      delayMs: delay,
     })
+    chain.timer = setTimeout(() => {
+      chain.timer = undefined
+      void runTurnEndRestoreAttempt(ctx, chain)
+    }, delay)
+    return
+  }
+  forgetTurnEndRestoreChain(chain)
+  // The operation stays in `pendingByAgent` and its `op-start` stays in the
+  // log; startup recovery is the documented retry path (proposal §9.2).
+  errorLog(ctx, 'dsh-soulmojito body: turn/end restore failed; op-start stays pending for startup recovery', {
+    sessionId: chain.task.sessionId,
+    agentId: chain.task.agentId,
+    turn: chain.task.turn,
+    reason: chain.task.reason,
+    attempts: chain.attempts,
+    ...(outcome.opId === undefined ? {} : { opId: outcome.opId }),
+    code: outcome.code,
+    error: outcome.error,
   })
 }
 
-async function runTurnEndRestore(ctx: BodyWiringContext, task: FailedTurnRestore): Promise<void> {
+async function attemptTurnEndRestore(
+  ctx: BodyWiringContext,
+  chain: TurnEndRestoreChain,
+): Promise<TurnEndRestoreAttempt> {
+  const task = chain.task
+  let opId: string | undefined
   try {
     const agent = resolveLiveAgent(ctx, task.agentId)
       ?? (task.agentId === task.sessionId ? undefined : resolveLiveAgent(ctx, task.sessionId))
@@ -648,52 +659,63 @@ async function runTurnEndRestore(ctx: BodyWiringContext, task: FailedTurnRestore
         turn: task.turn,
         reason: task.reason,
       })
-      return
+      return { status: 'done' }
     }
 
     const agentId = agentIdOf(agent) ?? task.agentId
     const op = pendingByAgent.get(agentId) ?? pendingByAgent.get(task.sessionId)
-    if (op === undefined) return
+    if (op === undefined) return { status: 'done' }
+    opId = op.opId
 
     const deps = await createBodyDeps(ctx, agent)
     if (deps === undefined) {
-      warn(ctx, 'dsh-soulmojito body: turn/end restore skipped because the plugin-record seam is unavailable', {
-        agentId,
-        opId: op.opId,
-        reason: 'host-unsupported',
-      })
-      return
+      return { status: 'failed', code: 'host-unsupported', error: 'the plugin-record seam is unavailable', opId }
     }
-
     // Turn-stopping may have released the same operation while deps loaded.
     const current = pendingByAgent.get(agentId) ?? pendingByAgent.get(task.sessionId)
-    if (current === undefined || current.opId !== op.opId) return
+    if (current === undefined || current.opId !== op.opId) return { status: 'done' }
+    if (chain.cancelled) return { status: 'done' }
 
-    try {
-      const restoredAnchorId = await restoreBodyAfterFailure(deps, operationView(op))
-      info(ctx, 'dsh-soulmojito body: turn/end restored the previous body after a failed turn', {
-        sessionId: task.sessionId,
-        agentId,
-        opId: op.opId,
-        turn: task.turn,
-        reason: task.reason,
-        restoredAnchorId,
-      })
-    } catch (error) {
-      // The operation stays in `pendingByAgent` and its `op-start` stays in the
-      // log; startup recovery is the documented retry path (proposal §9.2).
-      errorLog(ctx, 'dsh-soulmojito body: turn/end restore failed; op-start stays pending for startup recovery', {
-        sessionId: task.sessionId,
-        agentId,
-        opId: op.opId,
-        turn: task.turn,
-        reason: task.reason,
-        code: failureCodeOf(error),
-        error: errorMessage(error),
-      })
+    const restoredAnchorId = await restoreBodyAfterFailure(deps, operationView(op))
+    info(ctx, 'dsh-soulmojito body: turn/end restored the previous body after a failed turn', {
+      sessionId: task.sessionId,
+      agentId,
+      opId: op.opId,
+      turn: task.turn,
+      reason: task.reason,
+      restoredAnchorId,
+    })
+    return { status: 'done' }
+  } catch (error) {
+    return {
+      status: 'failed',
+      code: failureCodeOf(error),
+      error: errorMessage(error),
+      ...(opId === undefined ? {} : { opId }),
     }
-  } finally {
-    failureRestoresInFlight.delete(task.sessionId)
+  }
+}
+
+function forgetTurnEndRestoreChain(chain: TurnEndRestoreChain): void {
+  if (turnEndRestoreChains.get(chain.task.sessionId) === chain) turnEndRestoreChains.delete(chain.task.sessionId)
+}
+
+/** Drop every queued retry on plugin unload; a cancelled chain never calls the runtime again. */
+function cancelTurnEndRestoreChains(): void {
+  for (const chain of turnEndRestoreChains.values()) {
+    chain.cancelled = true
+    if (chain.timer !== undefined) clearTimeout(chain.timer)
+    chain.timer = undefined
+  }
+  turnEndRestoreChains.clear()
+}
+
+function registerTurnEndRestoreCleanup(ctx: BodyWiringContext): void {
+  if (typeof ctx.effect !== 'function') return
+  try {
+    ctx.effect(() => () => { cancelTurnEndRestoreChains() }, 'dsh-soulmojito: body turn/end retries')
+  } catch (error) {
+    warn(ctx, 'dsh-soulmojito body: ctx.effect rejected the turn/end retry cleanup', { error: errorMessage(error) })
   }
 }
 
@@ -705,49 +727,25 @@ export function recoverBodyOperations(ctx: BodyWiringContext): Promise<readonly 
 }
 
 /** Recover one agent (`agent/created` path). */
-export function recoverBodyOperation(
-  ctx: BodyWiringContext,
-  agentValue: unknown,
-): Promise<BodyRecoveryOutcome> {
+export function recoverBodyOperation(ctx: BodyWiringContext, agentValue: unknown): Promise<BodyRecoveryOutcome> {
   return recoverBodyOperationWith(ctx, agentValue, createBodyDeps)
 }
 
 /* ------------------------------- re-exports -------------------------------- */
 
 export {
-  bodyAgentOf,
-  bodyBindingEligible,
-  foldSessionBodyLedger,
-  foldSessionBodyLedgerForMessage,
-  inspectBodyAnchor,
-  listLiveAgents,
-  messageTextOfSession,
-  readBodySessionFacts,
-  resolveBodyBinding,
-  resolveLiveAgent,
-  type BodyAnchorInspection,
-  type BodyBindingResolver,
-  type BodyBindingView,
-  type BodySessionFacts,
+  bodyAgentOf, bodyBindingEligible, foldSessionBodyLedger,
+  foldSessionBodyLedgerForMessage, inspectBodyAnchor, listLiveAgents,
+  messageTextOfSession, readBodySessionFacts, resolveBodyBinding, resolveLiveAgent,
+  type BodyAnchorInspection, type BodyBindingResolver, type BodyBindingView, type BodySessionFacts,
 } from './body-session.js'
 
 export {
-  bodyFailureOf,
-  bodyHistoricalMvuStateOf,
-  bodyMutationSafetyOf,
-  bodyRejectStatus,
-  bodyStateSafetyOf,
-  bodyStateUnsafeMessage,
-  buildBodyView,
-  publicBodyCode,
-  type BodyFailureView,
-  type BodyMutationAction,
-  type BodyProjectedFloor,
-  type BodyStateSafety,
-  type BodyStateSafetyResolver,
-  type BodyStateUnsafeDetail,
-  type BodyView,
-  type BodyViewInput,
+  bodyFailureOf, bodyHistoricalMvuStateOf, bodyMutationSafetyOf, bodyRejectStatus,
+  bodyStateSafetyOf, bodyStateUnsafeMessage, buildBodyView, publicBodyCode,
+  type BodyFailureView, type BodyMutationAction, type BodyProjectedFloor,
+  type BodyStateSafety, type BodyStateSafetyResolver, type BodyStateUnsafeDetail,
+  type BodyView, type BodyViewInput,
 } from './body-view.js'
 
 export type { BodyRecoveryOutcome } from './body-recovery.js'

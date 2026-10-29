@@ -166,7 +166,8 @@ interface BodyWriteRollbackPort {
    不再回滚正文或追加 assistant 副本。
 3. 新 turn 失败/取消：
    - live `session/event` 的 `turn/end`（`error` / `cancelled` / `aborted`）异步触发恢复，
-     监听器只登记、不在事件栈 append喵；
+     监听器只登记、不在事件栈 append；`session-busy` / `host-unsupported` 按
+     0/50/250ms 有界重试，unload 清理 timer，最终失败交启动恢复；
    - 先 `rollbackTurnWrites(newTurn)` 撤销新 turn 自己的 memory/variable journal 与 settle receipt；
    - `op-settled` 且对账通过：body 已结算，只补 `op-finish`；若对账时当前选中已漂移，
      只有“标记之后的 select”记录存在才放行，否则 `invalid-event` 保留 op-start；

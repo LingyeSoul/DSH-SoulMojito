@@ -37,13 +37,13 @@
 
 ## 证据
 
-- `npm run check`：158 test files / 2519 passed + 1 skipped；`build:plugin` 成功；
+- `npm run check`：158 test files / 2523 passed + 1 skipped；`build:plugin` 成功；
   18 道 gate 全部 PASS。
-- body 聚焦：14 个 spec / 352 tests；runtime 69、wiring 49、candidate-receipts 27、
+- body 聚焦：14 个 spec / 356 tests；runtime 69、wiring 53、candidate-receipts 27、
   tavern-mvu 32、mvu-settle 30、write-journal 30、rollback 30。
 - 关键覆盖：两阶段 settling/settled/cancelled、settling 后崩溃三分支、部分 hide 的
   `finish-hide` 幂等收口、settled 标记之后的 select 漂移、标记与 ledger 对账、commit 前移、
-  hide 后 op-finish 失败保留新正文、finish-pending、live `turn/end` error/cancelled/aborted、
+  hide 后 op-finish 失败保留新正文、finish-pending、live `turn/end` 有界重试与 unload 清理、
   completed 不触发、重复 turn 边去重、恢复失败保留 op-start、监听器内不同步 append。
 
 ## 风险与未完成
@@ -54,7 +54,7 @@
 | 双写失败 | `op-settling` / `op-settled` / `op-finish` 连续写失败时仍可能落入 legacy fallback；writer 连续故障下的残余风险。 |
 | 标记选中漂移 | 已修：settlement evidence 带日志 `seq`，标记之后发生 select 时允许补 `op-finish`；标记之前未选中仍 `invalid-event` fail-closed。 |
 | 取消部分 hide | `op-settle-cancelled` 且 anchor 已被部分隐藏时，仍走 `body-restore-*` assistant 副本兜底，这是旧会话兼容路径。 |
-| live 时序 | 恢复要求微任务执行时 loop 已回到 idle；宿主延迟更久会记 `host-unsupported` 并留给启动恢复。 |
+| live 时序 | 已修：`turn/end` 恢复按 0/50/250ms 有界重试，只对 `session-busy` / `host-unsupported` 重试；unload 清理 timer，最终失败仍交启动恢复。 |
 | 真机 E2E | web profile 已跑通 bootstrap / 真实正文读取 / 写前 409；live-agent 完整写闭环仍需在 UI 打开会话后验证。 |
 
 ## 删除路径

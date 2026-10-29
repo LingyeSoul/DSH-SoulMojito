@@ -385,7 +385,9 @@ projector 新增 body 分支：
   “标记之后的 select”记录才允许补 `op-finish`（用户后续切换），标记之前就未选中仍
   `invalid-event`。
 - live `session/event` 的 `turn/end` 失败边（`error` / `cancelled` / `aborted`）必须异步触发
-  `restoreBodyAfterFailure`；监听器只登记，不在事件栈 append，同一 session 去重。
+  `restoreBodyAfterFailure`；监听器只登记，不在事件栈 append，同一 session 去重。恢复按
+  0/50/250ms 有界重试，只重试 `session-busy` / `host-unsupported`，unload 清理 timer，
+  最终失败交启动恢复。
 - 半开 turn 用现有 `closeImportBracket` 兜底关闭。
 
 ### 9.3 compaction

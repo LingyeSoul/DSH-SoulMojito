@@ -1555,6 +1555,7 @@ describe('startup recovery', () => {
 
 describe('live turn/end failure restore', () => {
   afterEach(() => {
+    vi.useRealTimers()
     for (const [agentId, op] of [...pendingByAgent.entries()]) {
       pendingByAgent.delete(agentId)
       op.release()
@@ -1618,6 +1619,25 @@ describe('live turn/end failure restore', () => {
 
   function flushTurnEndRestore(): Promise<void> {
     return new Promise((resolve) => { setTimeout(resolve, 0) })
+  }
+
+  function retryLogs(capture: CapturedLogger): unknown[][] {
+    return capture.warnings.filter((args) => String(args[0]).includes('turn/end restore failed; retrying'))
+  }
+
+  function finalFailureLogs(capture: CapturedLogger): unknown[][] {
+    return capture.errors.filter((args) =>
+      String(args[0]).includes('turn/end restore failed; op-start stays pending'))
+  }
+
+  function openBlockingTurn(harness: RegenerateHarness, turn: number): void {
+    harness.session.append('turn/start', { turn })
+    harness.session.append('step/start', { turn, step: 1 })
+  }
+
+  function closeBlockingTurn(harness: RegenerateHarness, turn: number): void {
+    harness.session.append('step/end', { turn, step: 1 })
+    harness.session.append('turn/end', { turn, reason: { kind: 'completed' } })
   }
 
   it.each(['error', 'cancelled', 'aborted'])(
@@ -1708,27 +1728,31 @@ describe('live turn/end failure restore', () => {
       event.type === 'turn/start' && testNumber(event.data['turn']) === 3)).toHaveLength(1)
   })
 
-  it('keeps op-start pending and logs when the restore is refused', async () => {
+  it('keeps op-start pending after the bounded retries are exhausted', async () => {
+    vi.useFakeTimers()
     hostState.module = hostRecordModule()
     const capture = captureLogger()
     const sessionId = 'session-turn-end-restore-failure'
     const harness = createRegenerateHarness('old body', [], sessionId)
     await startPendingBodyOp(harness, sessionId)
 
-    // Leave turn 2 open in the log so restoreBodyAfterFailure refuses with
+    // Leave a turn open in the log so restoreBodyAfterFailure refuses with
     // session-busy before touching the surface.
-    harness.session.append('turn/start', { turn: 2 })
-    harness.session.append('step/start', { turn: 2, step: 1 })
+    openBlockingTurn(harness, 2)
     const ctx = failureRestoreContext(harness, sessionId, capture.logger)
 
     expect(() => {
       handleBodySessionEvent(ctx, harness.session, turnEndEvent(2, 'error'))
     }).not.toThrow()
 
-    await vi.waitFor(() => {
-      expect(capture.errors.some((args) =>
-        String(args[0]).includes('turn/end restore failed; op-start stays pending'))).toBe(true)
-    })
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(50)
+    await vi.advanceTimersByTimeAsync(250)
+
+    expect(retryLogs(capture)).toHaveLength(2)
+    expect(finalFailureLogs(capture)).toHaveLength(1)
+    expect(finalFailureLogs(capture)[0]?.[1]).toMatchObject({ attempts: 3, code: 'session-busy' })
+    expect(vi.getTimerCount()).toBe(0)
     expect(pendingByAgent.has(sessionId)).toBe(true)
     expect(harness.events.some((event) =>
       event.type === BODY_EVENT_TYPE && event.data['op'] === 'op-start')).toBe(true)
@@ -1736,6 +1760,147 @@ describe('live turn/end failure restore', () => {
       event.type === BODY_EVENT_TYPE && event.data['op'] === 'op-finish')).toBe(false)
     expect(harness.events.some((event) =>
       event.type === 'developer/message' && testNumber(event.data['turn']) === 3)).toBe(false)
+  })
+
+  it('retries after session-busy and clears the chain on success', async () => {
+    vi.useFakeTimers()
+    hostState.module = hostRecordModule()
+    const capture = captureLogger()
+    const sessionId = 'session-turn-end-retry-success'
+    const harness = createRegenerateHarness('old body', [], sessionId)
+    const triggerId = await startPendingBodyOp(harness, sessionId)
+    const seqs = appendFailedBodyTurn(harness, 2, triggerId, 'error')
+    openBlockingTurn(harness, 3)
+    const ctx = failureRestoreContext(harness, sessionId, capture.logger)
+    const anchorSeq = harness.events.find((event) =>
+      asTestRecord(event.data['message'])?.['id'] === 'message-1')?.seq
+    expect(anchorSeq).toBeDefined()
+
+    handleBodySessionEvent(ctx, harness.session, turnEndEvent(2, 'error'))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(retryLogs(capture)).toHaveLength(1)
+
+    // The host loop reached idle before the 50 ms retry: the second attempt
+    // must restore the old body without a final host-unsupported failure.
+    closeBlockingTurn(harness, 3)
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(pendingByAgent.has(sessionId)).toBe(false)
+    expect(retryLogs(capture)).toHaveLength(1)
+    expect(finalFailureLogs(capture)).toHaveLength(0)
+    expect(capture.infos.filter((args) =>
+      String(args[0]).includes('turn/end restored the previous body'))).toHaveLength(1)
+    const hides = harness.events.filter((event) =>
+      event.type === 'developer/message' && testNumber(event.data['turn']) === 4)
+    expect(hides).toHaveLength(1)
+    expect(harness.surface()).not.toContain(seqs.triggerSeq)
+    expect(harness.surface()).not.toContain(seqs.processSeq)
+    expect(harness.surface()).toContain(anchorSeq)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('retries host-unsupported once the host turn base is writable again', async () => {
+    vi.useFakeTimers()
+    hostState.module = hostRecordModule()
+    const capture = captureLogger()
+    const sessionId = 'session-turn-end-retry-host'
+    const harness = createRegenerateHarness('old body', [], sessionId)
+    const triggerId = await startPendingBodyOp(harness, sessionId)
+    appendFailedBodyTurn(harness, 2, triggerId, 'error')
+    const ctx = failureRestoreContext(harness, sessionId, capture.logger)
+
+    // A running loop cannot advance its turn base; the restore refuses with
+    // host-unsupported until the loop is back at idle.
+    harness.agent.phase.kind = 'running'
+    handleBodySessionEvent(ctx, harness.session, turnEndEvent(2, 'error'))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(retryLogs(capture)).toHaveLength(1)
+    expect(retryLogs(capture)[0]?.[1]).toMatchObject({ code: 'host-unsupported' })
+
+    harness.agent.phase.kind = 'idle'
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(pendingByAgent.has(sessionId)).toBe(false)
+    expect(finalFailureLogs(capture)).toHaveLength(0)
+    expect(capture.infos.filter((args) =>
+      String(args[0]).includes('turn/end restored the previous body'))).toHaveLength(1)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('keeps a single chain when duplicate turn/end edges arrive during a retry', async () => {
+    vi.useFakeTimers()
+    hostState.module = hostRecordModule()
+    const capture = captureLogger()
+    const sessionId = 'session-turn-end-retry-duplicate'
+    const harness = createRegenerateHarness('old body', [], sessionId)
+    const triggerId = await startPendingBodyOp(harness, sessionId)
+    appendFailedBodyTurn(harness, 2, triggerId, 'error')
+    openBlockingTurn(harness, 3)
+    const ctx = failureRestoreContext(harness, sessionId, capture.logger)
+
+    handleBodySessionEvent(ctx, harness.session, turnEndEvent(2, 'error'))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(retryLogs(capture)).toHaveLength(1)
+
+    handleBodySessionEvent(ctx, harness.session, turnEndEvent(2, 'error'))
+    handleBodySessionEvent(ctx, harness.session, turnEndEvent(2, 'error'))
+    closeBlockingTurn(harness, 3)
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(retryLogs(capture)).toHaveLength(1)
+    expect(capture.infos.filter((args) =>
+      String(args[0]).includes('turn/end restored the previous body'))).toHaveLength(1)
+    expect(harness.events.filter((event) =>
+      event.type === 'turn/start' && testNumber(event.data['turn']) === 4)).toHaveLength(1)
+    expect(harness.events.filter((event) =>
+      event.type === 'developer/message' && testNumber(event.data['turn']) === 4)).toHaveLength(1)
+    expect(finalFailureLogs(capture)).toHaveLength(0)
+  })
+
+  it('cancels queued retries when the plugin fiber unloads', async () => {
+    vi.useFakeTimers()
+    hostState.module = hostRecordModule()
+    const capture = captureLogger()
+    const sessionId = 'session-turn-end-unload'
+    const harness = createRegenerateHarness('old body', [], sessionId)
+    const triggerId = await startPendingBodyOp(harness, sessionId)
+    appendFailedBodyTurn(harness, 2, triggerId, 'error')
+    openBlockingTurn(harness, 3)
+
+    const listeners = new Map<string, (session?: unknown, event?: unknown) => unknown>()
+    const effects: Array<() => (() => void) | void> = []
+    const ctx = {
+      logger: capture.logger,
+      agents: { get: (id: string) => id === sessionId ? harness.agent : undefined },
+      on: (event: string, listener: (session?: unknown, event?: unknown) => unknown) => {
+        listeners.set(event, listener)
+        return () => undefined
+      },
+      effect: (callback: () => (() => void) | void) => {
+        effects.push(callback)
+        return undefined
+      },
+    } as unknown as BodyWiringContext
+    const dispose = registerBodyTurnStopping(ctx)
+    expect(dispose).toBeTypeOf('function')
+    const listener = listeners.get('session/event')
+    expect(listener).toBeDefined()
+
+    listener!(harness.session, turnEndEvent(2, 'error'))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(retryLogs(capture)).toHaveLength(1)
+    const eventsBeforeUnload = harness.events.length
+
+    expect(effects).toHaveLength(1)
+    const cleanup = effects[0]!()
+    expect(cleanup).toBeTypeOf('function')
+    cleanup!()
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(harness.events).toHaveLength(eventsBeforeUnload)
+    expect(pendingByAgent.has(sessionId)).toBe(true)
+    expect(finalFailureLogs(capture)).toHaveLength(0)
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   it('subscribes the session/event failure edge alongside turn-stopping', () => {
