@@ -15,6 +15,7 @@ import {
   type BodySettleCancelledEventData,
   type BodySettledEventData,
   type BodySettlementPhase,
+  type BodySettlementTargets,
 } from './body.js'
 import type { BodyRollbackPlan, BodyWriteRollbackPort } from './body-rollback.js'
 import { canAdvanceHostTurnBase } from '../session/trace.js'
@@ -251,6 +252,8 @@ export interface BodySettlementEvidence extends BodySettledMarker {
   readonly phase: BodySettlementPhase | 'cancelled'
   readonly groupId: string
   readonly reason?: string
+  /** Hide target ids written with the `settling` marker; absent on legacy records. */
+  readonly targets?: BodySettlementTargets
 }
 
 /** One parsed `body-settled` record: the evidence plus the operation it belongs to. */
@@ -546,8 +549,9 @@ export function appendSettlingMarker(
   groupId: string,
   anchorId: string,
   index: number,
+  targets: BodySettlementTargets,
 ): void {
-  const data: BodySettledEventData = { op: 'op-settled', phase: 'settling', opId, groupId, anchorId, index }
+  const data: BodySettledEventData = { op: 'op-settled', phase: 'settling', opId, groupId, anchorId, index, targets }
   requireRecordWriter(deps)(deps.session, BODY_SETTLED_EVENT_TYPE, data)
 }
 
@@ -621,12 +625,14 @@ export function parseSettledEvent(event: BodySettledEventLike): BodySettledEvent
       `body settled record at seq ${event.seq} has phase '${String(phase)}', expected 'settling' or 'settled'`,
     )
   }
+  const targets = settledTargets(event.data.targets, event.seq)
   return {
     opId: settledString(event.data.opId, event.seq, 'opId'),
     groupId: settledString(event.data.groupId, event.seq, 'groupId'),
     anchorId: settledString(event.data.anchorId, event.seq, 'anchorId'),
     index: settledIndex(event.data.index, event.seq),
     phase: phase ?? 'settled',
+    ...(targets === undefined ? {} : { targets }),
   }
 }
 
@@ -652,6 +658,7 @@ export function settlementEvidenceOf(
       anchorId: settlement.anchorId,
       index: settlement.index,
       ...(settlement.reason === undefined ? {} : { reason: settlement.reason }),
+      ...(settlement.targets === undefined ? {} : { targets: settlement.targets }),
     }
   }
   return evidence
@@ -662,6 +669,24 @@ function settledString(value: unknown, seq: number, field: string): string {
     throw bodyRuntimeError('invalid-event', `body settled record at seq ${seq} requires ${field} to be a non-empty string`)
   }
   return value
+}
+
+/**
+ * Read the optional hide targets. Presence is two-phase-metadata only: an
+ * absent value is a legacy marker that recovery resolves from its operation,
+ * while a present value must be complete so recovery never hides half a target
+ * set.
+ */
+function settledTargets(value: unknown, seq: number): BodySettlementTargets | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw bodyRuntimeError('invalid-event', `body settled record at seq ${seq} requires targets to be an object when present`)
+  }
+  const record = value as Record<string, unknown>
+  return {
+    triggerMessageId: settledString(record.triggerMessageId, seq, 'targets.triggerMessageId'),
+    previousAnchorId: settledString(record.previousAnchorId, seq, 'targets.previousAnchorId'),
+  }
 }
 
 function settledIndex(value: unknown, seq: number): number {

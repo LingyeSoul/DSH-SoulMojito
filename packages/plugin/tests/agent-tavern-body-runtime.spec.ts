@@ -46,7 +46,8 @@ import {
   type BodyRuntimeTurnRollback,
   type BodySessionLike,
 } from '../src/agent-tavern/body-runtime.js'
-import { pendingByAgent } from '../src/agent-tavern/body-runtime-core.js'
+import { pendingByAgent, settlementEvidenceOf } from '../src/agent-tavern/body-runtime-core.js'
+import { settlingDecision, type SettlingDecision } from '../src/agent-tavern/body-settlement-decision.js'
 
 interface FakeEvent {
   type: string
@@ -473,6 +474,152 @@ function closeTurn(harness: Harness, turn: number): void {
   harness.session.append('turn/end', { turn, reason: { kind: 'completed' } })
 }
 
+interface ContextTriggerTurn extends TriggerTurn {
+  readonly contextSeq: number
+  readonly finalSeq: number
+}
+
+/**
+ * Trigger turn with a system context node between the old anchor and the
+ * synthetic trigger. The node is not a settlement target, so the previous
+ * anchor range and the trigger/process range stay separate on the surface.
+ * Step 2 is intentionally left open: this reproduces a crash while a
+ * multi-range hide is still running.
+ */
+function appendTriggerTurnWithContext(
+  harness: Harness,
+  turn: number,
+  trigger: Record<string, unknown>,
+  finalId: string,
+): ContextTriggerTurn {
+  harness.session.append('turn/start', { turn })
+  harness.session.append('step/start', { turn, step: 1 })
+  const contextEvent = harness.session.append('system/message', {
+    turn,
+    step: 1,
+    message: {
+      id: `context-${turn}`,
+      role: 'system',
+      content: [{ type: 'text', text: 'context injection' }],
+      source: { kind: 'system-prompt' },
+    },
+  }, { surfaceOp: 'append' })
+  const triggerEvent = harness.session.append('user/message', trigger, { surfaceOp: 'append' })
+  const processEvent = harness.session.append('assistant/message', {
+    turn,
+    step: 1,
+    stream: [],
+    message: {
+      id: 'tool-step',
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'planning' },
+        { type: 'tool-call', callId: 'call-1', name: 'tavern_scene_get', arguments: '{}' },
+      ],
+      source: { kind: 'model', provider: 'test-provider', model: 'test-model' },
+    },
+  }, { surfaceOp: 'append' })
+  const toolResultEvent = harness.session.append('tool/result', {
+    turn,
+    step: 1,
+    message: {
+      id: 'tool-result-1',
+      role: 'tool',
+      content: [{ type: 'text', text: 'tool output' }],
+      source: { kind: 'tool', callId: 'call-1' },
+      toolCallId: 'call-1',
+    },
+  }, { surfaceOp: 'append' })
+  harness.session.append('step/end', { turn, step: 1 })
+  harness.session.append('step/start', { turn, step: 2 })
+  const finalEvent = harness.session.append('assistant/message', {
+    turn,
+    step: 2,
+    stream: [],
+    message: {
+      id: finalId,
+      role: 'assistant',
+      content: [{ type: 'text', text: 'new body' }],
+      source: { kind: 'model', provider: 'test-provider', model: 'test-model' },
+    },
+  }, { surfaceOp: 'append' })
+
+  return {
+    contextSeq: eventSeq(contextEvent, 'context'),
+    triggerSeq: eventSeq(triggerEvent, 'trigger'),
+    processSeq: eventSeq(processEvent, 'process'),
+    toolResultSeq: eventSeq(toolResultEvent, 'tool result'),
+    finalSeq: eventSeq(finalEvent, 'final'),
+  }
+}
+
+interface PartialSettlement {
+  readonly triggerTurn: ContextTriggerTurn
+}
+
+/**
+ * Durable crash state after the settling marker and after only the previous
+ * anchor's range was replaced. The trigger/process range is still visible.
+ */
+function appendPartialSettlementState(
+  harness: Harness,
+  started: { readonly opId: string; readonly triggerMessageId: string },
+  anchorSeq: number,
+  withTargets: boolean,
+): PartialSettlement {
+  const trigger = firstFollowup(harness)
+  const triggerTurn = appendTriggerTurnWithContext(harness, 2, trigger, 'new-body')
+  harness.session.append(BODY_EVENT_TYPE, {
+    op: 'candidate',
+    groupId: 'anchor-1',
+    messageId: 'new-body',
+    index: 1,
+  })
+  harness.session.append(BODY_EVENT_TYPE, { op: 'select', groupId: 'anchor-1', index: 1 })
+  harness.session.append(BODY_SETTLED_EVENT_TYPE, {
+    op: 'op-settled',
+    phase: 'settling',
+    opId: started.opId,
+    groupId: 'anchor-1',
+    anchorId: 'new-body',
+    index: 1,
+    ...(withTargets
+      ? { targets: { triggerMessageId: started.triggerMessageId, previousAnchorId: 'anchor-1' } }
+      : {}),
+  })
+  harness.session.append('developer/message', {
+    turn: 2,
+    step: 2,
+    message: {
+      id: 'body-hide-partial',
+      role: 'developer',
+      content: [],
+      source: { kind: 'plugin:dsh-soulmojito', form: 'body-hide', summary: 'partial body hide' },
+    },
+  }, {
+    surfaceOp: { op: 'replace', startSeq: anchorSeq, endSeq: anchorSeq },
+    sourceEventSeqs: [anchorSeq],
+  })
+  return { triggerTurn }
+}
+
+/** Hide the trigger/process range too, leaving no visible settlement target. */
+function hideContextTriggerRange(harness: Harness, triggerTurn: ContextTriggerTurn): void {
+  harness.session.append('developer/message', {
+    turn: 2,
+    step: 2,
+    message: {
+      id: 'body-hide-trigger',
+      role: 'developer',
+      content: [],
+      source: { kind: 'plugin:dsh-soulmojito', form: 'body-hide', summary: 'full body hide' },
+    },
+  }, {
+    surfaceOp: { op: 'replace', startSeq: triggerTurn.triggerSeq, endSeq: triggerTurn.toolResultSeq },
+    sourceEventSeqs: [triggerTurn.triggerSeq, triggerTurn.processSeq, triggerTurn.toolResultSeq],
+  })
+}
+
 function eventSeq(value: unknown, subject: string): number {
   if (!isRecord(value) || !isSeq(value.seq)) throw new Error(`fake session: ${subject} append did not return an event`)
   return value.seq
@@ -506,6 +653,15 @@ function seqOfMessage(events: readonly FakeEvent[], messageId: string): number |
 function bodyFailureOf(error: unknown): BodyRuntimeFailure {
   if (!(error instanceof Error) || error.name !== 'BodyRuntimeError') throw new Error('expected a BodyRuntimeError')
   return error as BodyRuntimeFailure
+}
+
+/** Resolve the durable settling decision without writing anything. */
+function settlingDecisionOf(harness: Harness): SettlingDecision {
+  const recovered = foldPendingOps(harness.events)[0]
+  if (recovered === undefined) throw new Error('foldPendingOps did not rebuild the operation')
+  const evidence = settlementEvidenceOf(harness.events, recovered.opId)
+  if (evidence === undefined) throw new Error('settling evidence is missing')
+  return settlingDecision(harness.deps, recovered, evidence)
 }
 
 function toBodySessionEvents(events: readonly FakeEvent[]): BodySessionEvent[] {
@@ -1856,6 +2012,237 @@ describe('AgentTavern body runtime', () => {
     expect(harness.events.filter((event) => event.type === 'developer/message')).toHaveLength(1)
     expect(harness.events.filter((event) => event.type === 'assistant/message')).toHaveLength(assistantsBefore)
     expect(harness.events.some((event) => String(messageOf(event)?.id).startsWith('body-restore-'))).toBe(false)
+    expect(bodyEvent(harness.events, 'restore')).toBeUndefined()
+  })
+
+  it('records the trigger and previous anchor in the settling marker', async () => {
+    const harness = healthyHarness()
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const started = await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+    const trigger = firstFollowup(harness)
+    appendTriggerTurn(harness, 2, trigger, 'new-body', false)
+
+    expect(await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 2 }))
+      .toEqual({ status: 'ok', anchorMessageId: 'new-body' })
+    closeTurn(harness, 2)
+
+    const settling = settledEventsOf(harness.events).find((event) => event.data.phase === 'settling')
+    expect(settling?.data.targets).toEqual({
+      triggerMessageId: started.triggerMessageId,
+      previousAnchorId: 'anchor-1',
+    })
+  })
+
+  it('finishes a partial settlement hide instead of leaving the synthetic trigger behind', async () => {
+    const harness = healthyHarness()
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const started = await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+    const partial = appendPartialSettlementState(harness, started, anchorSeq, true)
+    const assistantsBefore = harness.events.filter((event) => event.type === 'assistant/message').length
+
+    // Durable crash state: the previous anchor range is gone, the trigger and
+    // process range is still visible. This must never be accepted as settled.
+    expect(harness.surface()).not.toContain(anchorSeq)
+    expect(harness.surface()).toContain(partial.triggerTurn.triggerSeq)
+    expect(settlingDecisionOf(harness)).toBe('finish-hide')
+
+    pendingByAgent.clear()
+    const stages: string[] = []
+    const outcome = await recoverBodyOperationWith(
+      recoveryStageHost(stages),
+      harness.deps.agent,
+      async () => harness.deps,
+    )
+
+    expect(outcome).toMatchObject({ agentId: harness.agentId, status: 'settled', pending: 1 })
+    expect(stages).toContain('settling-recovered')
+    expect(settledEventsOf(harness.events).map((event) => event.data.phase)).toEqual(['settling', 'settled'])
+    expect(bodyEvent(harness.events, 'op-finish')?.data).toMatchObject({ result: 'ok', anchorId: 'new-body' })
+    const surface = harness.surface()
+    expect(surface).not.toContain(partial.triggerTurn.triggerSeq)
+    expect(surface).not.toContain(partial.triggerTurn.processSeq)
+    expect(surface).not.toContain(partial.triggerTurn.toolResultSeq)
+    expect(surface).not.toContain(anchorSeq)
+    expect(surface).toContain(partial.triggerTurn.finalSeq)
+    expect(surface).toContain(partial.triggerTurn.contextSeq)
+    expect(bodyEventsWithOp(harness.events, 'candidate')).toHaveLength(2)
+    expect(bodyEventsWithOp(harness.events, 'select')).toHaveLength(1)
+    // One replacement for the old anchor range and one for the surviving
+    // trigger/process range; the already hidden range is not replaced again.
+    expect(harness.events.filter((event) => event.type === 'developer/message')).toHaveLength(2)
+    expect(harness.events.filter((event) => event.type === 'assistant/message')).toHaveLength(assistantsBefore)
+    expect(bodyEvent(harness.events, 'restore')).toBeUndefined()
+  })
+
+  it('keeps a settling operation settled when every hide range is already gone', async () => {
+    const harness = healthyHarness()
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const started = await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+    const partial = appendPartialSettlementState(harness, started, anchorSeq, true)
+    hideContextTriggerRange(harness, partial.triggerTurn)
+    const developerBefore = harness.events.filter((event) => event.type === 'developer/message').length
+    expect(harness.surface()).not.toContain(partial.triggerTurn.triggerSeq)
+    expect(harness.surface()).not.toContain(anchorSeq)
+    expect(settlingDecisionOf(harness)).toBe('settled')
+
+    pendingByAgent.clear()
+    const outcome = await recoverBodyOperationWith(
+      recoveryHost(),
+      harness.deps.agent,
+      async () => harness.deps,
+    )
+
+    expect(outcome).toMatchObject({ agentId: harness.agentId, status: 'settled', pending: 1 })
+    expect(settledEventsOf(harness.events).map((event) => event.data.phase)).toEqual(['settling', 'settled'])
+    expect(bodyEvent(harness.events, 'op-finish')?.data).toMatchObject({ result: 'ok', anchorId: 'new-body' })
+    // No second hide: the fully hidden settlement is finished in place.
+    expect(harness.events.filter((event) => event.type === 'developer/message')).toHaveLength(developerBefore)
+    expect(harness.surface()).toContain(partial.triggerTurn.finalSeq)
+    expect(bodyEvent(harness.events, 'restore')).toBeUndefined()
+  })
+
+  it('finishes a partial settlement hide through the restore path after the turn closed', async () => {
+    const harness = healthyHarness()
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const started = await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+    const partial = appendPartialSettlementState(harness, started, anchorSeq, true)
+    harness.session.append('step/end', { turn: 2, step: 2 })
+    harness.session.append('turn/end', { turn: 2, reason: { kind: 'cancelled' } })
+    const recovered = foldPendingOps(harness.events)[0]
+    if (recovered === undefined) throw new Error('foldPendingOps did not rebuild the operation')
+    const assistantsBefore = harness.events.filter((event) => event.type === 'assistant/message').length
+
+    pendingByAgent.clear()
+    expect(await restoreBodyAfterFailure(harness.deps, recovered)).toBe('new-body')
+
+    expect(settledEventsOf(harness.events).map((event) => event.data.phase)).toEqual(['settling', 'settled'])
+    expect(bodyEvent(harness.events, 'op-finish')?.data).toMatchObject({ result: 'ok', anchorId: 'new-body' })
+    const surface = harness.surface()
+    expect(surface).not.toContain(partial.triggerTurn.triggerSeq)
+    expect(surface).not.toContain(partial.triggerTurn.processSeq)
+    expect(surface).not.toContain(anchorSeq)
+    expect(surface).toContain(partial.triggerTurn.finalSeq)
+    expect(bodyEventsWithOp(harness.events, 'select')).toHaveLength(1)
+    expect(harness.events.filter((event) => event.type === 'developer/message')).toHaveLength(2)
+    expect(harness.events.filter((event) => event.type === 'assistant/message')).toHaveLength(assistantsBefore)
+    expect(harness.phase.lastTurn).toBe(3)
+  })
+
+  it('keeps the body settled when op-finish fails after the restore-path hide', async () => {
+    const harness = healthyHarness()
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const started = await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+    const partial = appendPartialSettlementState(harness, started, anchorSeq, true)
+    harness.session.append('step/end', { turn: 2, step: 2 })
+    harness.session.append('turn/end', { turn: 2, reason: { kind: 'cancelled' } })
+    const recovered = foldPendingOps(harness.events)[0]
+    if (recovered === undefined) throw new Error('foldPendingOps did not rebuild the operation')
+    const appendRecord = harness.deps.appendRecord
+    if (appendRecord === undefined) throw new Error('fake harness: appendRecord is missing')
+    let failFinish = true
+    harness.deps.appendRecord = (session, type, data) => {
+      if (failFinish && type === BODY_EVENT_TYPE && isRecord(data) && data.op === 'op-finish') {
+        throw new Error('finish writer down')
+      }
+      return appendRecord(session, type, data)
+    }
+
+    pendingByAgent.clear()
+    let thrown: unknown
+    try {
+      await restoreBodyAfterFailure(harness.deps, recovered)
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(bodyFailureOf(thrown).code).toBe('settled-finish-pending')
+    expect(settledEventsOf(harness.events).map((event) => event.data.phase)).toEqual(['settling', 'settled'])
+    expect(bodyEvent(harness.events, 'op-finish')).toBeUndefined()
+    const surface = harness.surface()
+    expect(surface).not.toContain(partial.triggerTurn.triggerSeq)
+    expect(surface).not.toContain(anchorSeq)
+    expect(surface).toContain(partial.triggerTurn.finalSeq)
+    failFinish = false
+  })
+
+  it('keeps a partial settlement pending when finishing the hide fails', async () => {
+    const harness = healthyHarness()
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const started = await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+    const partial = appendPartialSettlementState(harness, started, anchorSeq, true)
+    const assistantsBefore = harness.events.filter((event) => event.type === 'assistant/message').length
+    const sessionAppend = harness.session.append
+    let failHide = true
+    harness.session.append = (type, data, opts) => {
+      if (failHide && type === 'developer/message') throw new Error('partial hide writer down')
+      return sessionAppend(type, data, opts)
+    }
+
+    pendingByAgent.clear()
+    const outcome = await recoverBodyOperationWith(
+      recoveryHost(),
+      harness.deps.agent,
+      async () => harness.deps,
+    )
+
+    expect(outcome).toMatchObject({ agentId: harness.agentId, status: 'failed', pending: 1 })
+    expect(bodyEvent(harness.events, 'op-start')).toBeDefined()
+    expect(bodyEvent(harness.events, 'op-finish')).toBeUndefined()
+    expect(settledEventsOf(harness.events).filter((event) => event.data.phase === 'settled')).toHaveLength(0)
+    expect(harness.surface()).toContain(partial.triggerTurn.triggerSeq)
+    expect(harness.events.filter((event) => event.type === 'assistant/message')).toHaveLength(assistantsBefore)
+    expect(bodyEvent(harness.events, 'restore')).toBeUndefined()
+    failHide = false
+  })
+
+  it('finishes a legacy settling record that carries no hide targets', async () => {
+    const harness = healthyHarness()
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const started = await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+    const partial = appendPartialSettlementState(harness, started, anchorSeq, false)
+    expect(harness.surface()).toContain(partial.triggerTurn.triggerSeq)
+    expect(settlingDecisionOf(harness)).toBe('finish-hide')
+
+    pendingByAgent.clear()
+    const outcome = await recoverBodyOperationWith(
+      recoveryHost(),
+      harness.deps.agent,
+      async () => harness.deps,
+    )
+
+    expect(outcome).toMatchObject({ agentId: harness.agentId, status: 'settled', pending: 1 })
+    expect(settledEventsOf(harness.events).map((event) => event.data.phase)).toEqual(['settling', 'settled'])
+    expect(bodyEvent(harness.events, 'op-finish')?.data).toMatchObject({ result: 'ok', anchorId: 'new-body' })
+    expect(harness.surface()).not.toContain(partial.triggerTurn.triggerSeq)
+    expect(harness.surface()).toContain(partial.triggerTurn.finalSeq)
     expect(bodyEvent(harness.events, 'restore')).toBeUndefined()
   })
 

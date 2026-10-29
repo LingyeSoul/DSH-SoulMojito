@@ -37,20 +37,20 @@
 
 ## 证据
 
-- `npm run check`：158 test files / 2446 passed + 1 skipped；`build:plugin` 成功；
+- `npm run check`：158 test files / 2498 passed + 1 skipped；`build:plugin` 成功；
   18 道 gate 全部 PASS。
-- body 聚焦：13 个 spec / 272 tests；runtime 46、wiring 42、candidate-receipts 27、
-  tavern-mvu 28。
-- 关键覆盖：两阶段 settling/settled/cancelled、settling 后崩溃三分支、标记与 ledger 对账、
-  commit 前移、hide 后 op-finish 失败保留新正文、finish-pending、live
-  `turn/end` error/cancelled/aborted、completed 不触发、重复 turn 边去重、
-  恢复失败保留 op-start、监听器内不同步 append。
+- body 聚焦：14 个 spec / 331 tests；runtime 64、wiring 49、candidate-receipts 27、
+  tavern-mvu 32、mvu-settle 20、write-journal 24、rollback 30。
+- 关键覆盖：两阶段 settling/settled/cancelled、settling 后崩溃三分支、部分 hide 的
+  `finish-hide` 幂等收口、标记与 ledger 对账、commit 前移、hide 后 op-finish 失败保留新正文、
+  finish-pending、live `turn/end` error/cancelled/aborted、completed 不触发、
+  重复 turn 边去重、恢复失败保留 op-start、监听器内不同步 append。
 
 ## 风险与未完成
 
 | 风险 | 说明 |
 |---|---|
-| 多 range 部分 hide 窗口 | 旧 anchor 所在 range 已替换、trigger/process 所在 range 尚未替换时崩溃，settling 判定可能按“anchor 已隐藏 + 新候选已选中”收口，留下合成 trigger；窗口只在两次同步 append 之间。 |
+| 部分 hide 收口 | 已修：`op-settling` 记录 hide 目标，trigger 仍可见时不判 settled；`finish-hide` 幂等补 hide 后 settled。反向部分态（trigger 已隐藏、旧 anchor 仍可见）仍按 `ambiguous` fail-closed。 |
 | 双写失败 | `op-settling` / `op-settled` / `op-finish` 连续写失败时仍可能落入 legacy fallback；writer 连续故障下的残余风险。 |
 | 标记选中漂移 | `op-settled` 落盘后、`op-finish` 重试前用户又切候选，恢复对账会 `invalid-event` 并保留 op-start；fail-closed，但需下次恢复或人工收尾。 |
 | 取消部分 hide | `op-settle-cancelled` 且 anchor 已被部分隐藏时，仍走 `body-restore-*` assistant 副本兜底，这是旧会话兼容路径。 |

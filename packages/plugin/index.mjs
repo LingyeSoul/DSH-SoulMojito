@@ -16833,7 +16833,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("9090291") : void 0;
+  const commit = true ? normalizeCommit("356c2e2") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -21887,11 +21887,7 @@ async function compensateJournal(deps, writes, direction) {
   }
 }
 
-// packages/plugin/src/agent-tavern/write-journal.ts
-var WRITE_JOURNAL_EVENT_TYPE = "plugin:dsh-soulmojito/write";
-var SETTLE_INTENT_EVENT_TYPE = "plugin:dsh-soulmojito/settle-intent";
-var MEMORY_WRITE_JOURNAL_TOOLS = ["memory_write", "memory_update", "memory_forget"];
-var VARIABLE_WRITE_JOURNAL_TOOLS = ["variable_set", "variable_patch", "variable_delete"];
+// packages/plugin/src/agent-tavern/settle-intent-record.ts
 var WriteJournalError = class extends Error {
   code;
   constructor(code, message, options) {
@@ -21900,15 +21896,7 @@ var WriteJournalError = class extends Error {
     this.code = code;
   }
 };
-function readWriteJournal(events) {
-  const entries = [];
-  for (const [index, event] of events.entries()) {
-    if (!isRecord6(event)) continue;
-    if (event["type"] !== WRITE_JOURNAL_EVENT_TYPE) continue;
-    entries.push(parseEntry(event["data"], index));
-  }
-  return entries;
-}
+var SETTLE_INTENT_EVENT_TYPE = "plugin:dsh-soulmojito/settle-intent";
 function readSettleIntents(events) {
   const entries = [];
   for (const [index, event] of events.entries()) {
@@ -21947,18 +21935,6 @@ function foldSettleIntents(events) {
   }
   return [...open2.values()];
 }
-async function resolveWriteJournalWriter() {
-  let host;
-  try {
-    host = await importHostPackage("@deepseek-ai/dsh-session");
-  } catch {
-    return void 0;
-  }
-  const append = host.appendPluginRecord;
-  if (typeof append !== "function") return void 0;
-  const appendRecord = append;
-  return (session, type, data) => appendRecord(session, type, data);
-}
 function appendSettleIntentWith(writer, session, entry) {
   try {
     writer(session, SETTLE_INTENT_EVENT_TYPE, entry);
@@ -21972,8 +21948,47 @@ function appendSettleIntentWith(writer, session, entry) {
   }
   return "recorded";
 }
-var MEMORY_SCOPES = ["turn", "chat", "character", "agent", "global"];
-var VARIABLE_SCOPES = ["turn", "chat", "character", "agent", "global"];
+function isRecord6(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function recordAt(value, where) {
+  if (!isRecord6(value)) throw invalid(where, "must be an object");
+  return value;
+}
+function textAt(record, field, where) {
+  const value = record[field];
+  if (typeof value !== "string" || value.trim() === "") {
+    throw invalid(where, `field '${field}' must be a non-empty string`);
+  }
+  return value;
+}
+function timestampAt(record, field, where) {
+  const value = record[field];
+  if (typeof value !== "string" || Number.isNaN(Date.parse(value))) {
+    throw invalid(where, `field '${field}' must be an ISO 8601 timestamp`);
+  }
+  return value;
+}
+function jsonValueAt(value, where) {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw invalid(where, "numbers must be finite");
+    return value;
+  }
+  if (Array.isArray(value)) return value.map((item, index) => jsonValueAt(item, `${where}[${index}]`));
+  if (isRecord6(value)) {
+    const record = {};
+    for (const [key, item] of Object.entries(value)) record[key] = jsonValueAt(item, `${where}.${key}`);
+    return record;
+  }
+  throw invalid(where, "must be a JSON value");
+}
+function invalid(where, detail) {
+  return new WriteJournalError("invalid-write-journal", `${where}: ${detail}`);
+}
+function invalidSettle(where, detail) {
+  return new WriteJournalError("invalid-settle-intent", `${where}: ${detail}`);
+}
 function parseSettleIntent(data, index) {
   const where = `settle intent event at index ${index}`;
   if (!isRecord6(data)) throw invalidSettle(where, "data must be an object");
@@ -22035,6 +22050,34 @@ function parseSettleIntentItem(value, where) {
     ...record["after"] === void 0 ? {} : { after: jsonValueAt(record["after"], `${where} after`) }
   };
 }
+
+// packages/plugin/src/agent-tavern/write-journal.ts
+var WRITE_JOURNAL_EVENT_TYPE = "plugin:dsh-soulmojito/write";
+var MEMORY_WRITE_JOURNAL_TOOLS = ["memory_write", "memory_update", "memory_forget"];
+var VARIABLE_WRITE_JOURNAL_TOOLS = ["variable_set", "variable_patch", "variable_delete"];
+function readWriteJournal(events) {
+  const entries = [];
+  for (const [index, event] of events.entries()) {
+    if (!isRecord6(event)) continue;
+    if (event["type"] !== WRITE_JOURNAL_EVENT_TYPE) continue;
+    entries.push(parseEntry(event["data"], index));
+  }
+  return entries;
+}
+async function resolveWriteJournalWriter() {
+  let host;
+  try {
+    host = await importHostPackage("@deepseek-ai/dsh-session");
+  } catch {
+    return void 0;
+  }
+  const append = host.appendPluginRecord;
+  if (typeof append !== "function") return void 0;
+  const appendRecord = append;
+  return (session, type, data) => appendRecord(session, type, data);
+}
+var MEMORY_SCOPES = ["turn", "chat", "character", "agent", "global"];
+var VARIABLE_SCOPES = ["turn", "chat", "character", "agent", "global"];
 function parseEntry(data, index) {
   const where = `write journal event at index ${index}`;
   if (!isRecord6(data)) throw invalid(where, "data must be an object");
@@ -22139,20 +22182,6 @@ function variableSnapshotAt(value, where) {
     updatedAt: timestampAt(record, "updatedAt", where)
   };
 }
-function jsonValueAt(value, where) {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw invalid(where, "numbers must be finite");
-    return value;
-  }
-  if (Array.isArray(value)) return value.map((item, index) => jsonValueAt(item, `${where}[${index}]`));
-  if (isRecord6(value)) {
-    const record = {};
-    for (const [key, item] of Object.entries(value)) record[key] = jsonValueAt(item, `${where}.${key}`);
-    return record;
-  }
-  throw invalid(where, "must be a JSON value");
-}
 function memoryToolAt(value, where) {
   for (const tool4 of MEMORY_WRITE_JOURNAL_TOOLS) if (value === tool4) return tool4;
   throw invalid(where, `field 'tool' must be one of ${MEMORY_WRITE_JOURNAL_TOOLS.join(", ")}, received '${String(value)}'`);
@@ -22198,33 +22227,6 @@ function stringArrayAt(value, where) {
     result.push(item);
   }
   return result;
-}
-function textAt(record, field, where) {
-  const value = record[field];
-  if (typeof value !== "string" || value.trim() === "") {
-    throw invalid(where, `field '${field}' must be a non-empty string`);
-  }
-  return value;
-}
-function timestampAt(record, field, where) {
-  const value = record[field];
-  if (typeof value !== "string" || Number.isNaN(Date.parse(value))) {
-    throw invalid(where, `field '${field}' must be an ISO 8601 timestamp`);
-  }
-  return value;
-}
-function recordAt(value, where) {
-  if (!isRecord6(value)) throw invalid(where, "must be an object");
-  return value;
-}
-function isRecord6(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function invalid(where, detail) {
-  return new WriteJournalError("invalid-write-journal", `${where}: ${detail}`);
-}
-function invalidSettle(where, detail) {
-  return new WriteJournalError("invalid-settle-intent", `${where}: ${detail}`);
 }
 
 // packages/plugin/src/agent-tavern/body-settle-intent.ts
@@ -23841,8 +23843,8 @@ function appendOpFinish(deps, opId, result, anchorId, reason) {
     ...reason === void 0 ? {} : { reason }
   });
 }
-function appendSettlingMarker(deps, opId, groupId, anchorId, index) {
-  const data = { op: "op-settled", phase: "settling", opId, groupId, anchorId, index };
+function appendSettlingMarker(deps, opId, groupId, anchorId, index, targets) {
+  const data = { op: "op-settled", phase: "settling", opId, groupId, anchorId, index, targets };
   requireRecordWriter(deps)(deps.session, BODY_SETTLED_EVENT_TYPE, data);
 }
 function appendSettledMarker(deps, opId, groupId, anchorId, index) {
@@ -23879,12 +23881,14 @@ function parseSettledEvent(event) {
       `body settled record at seq ${event.seq} has phase '${String(phase)}', expected 'settling' or 'settled'`
     );
   }
+  const targets = settledTargets(event.data.targets, event.seq);
   return {
     opId: settledString(event.data.opId, event.seq, "opId"),
     groupId: settledString(event.data.groupId, event.seq, "groupId"),
     anchorId: settledString(event.data.anchorId, event.seq, "anchorId"),
     index: settledIndex(event.data.index, event.seq),
-    phase: phase ?? "settled"
+    phase: phase ?? "settled",
+    ...targets === void 0 ? {} : { targets }
   };
 }
 function settlementEvidenceOf(events, opId) {
@@ -23897,7 +23901,8 @@ function settlementEvidenceOf(events, opId) {
       groupId: settlement.groupId,
       anchorId: settlement.anchorId,
       index: settlement.index,
-      ...settlement.reason === void 0 ? {} : { reason: settlement.reason }
+      ...settlement.reason === void 0 ? {} : { reason: settlement.reason },
+      ...settlement.targets === void 0 ? {} : { targets: settlement.targets }
     };
   }
   return evidence;
@@ -23907,6 +23912,17 @@ function settledString(value, seq, field) {
     throw bodyRuntimeError("invalid-event", `body settled record at seq ${seq} requires ${field} to be a non-empty string`);
   }
   return value;
+}
+function settledTargets(value, seq) {
+  if (value === void 0) return void 0;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw bodyRuntimeError("invalid-event", `body settled record at seq ${seq} requires targets to be an object when present`);
+  }
+  const record = value;
+  return {
+    triggerMessageId: settledString(record.triggerMessageId, seq, "targets.triggerMessageId"),
+    previousAnchorId: settledString(record.previousAnchorId, seq, "targets.previousAnchorId")
+  };
 }
 function settledIndex(value, seq) {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
@@ -24839,6 +24855,122 @@ function closeBracketBestEffort(deps, turn, step, turnOpen, stepOpen, subject) {
 
 // packages/plugin/src/agent-tavern/body-runtime-settlement.ts
 import { randomUUID as randomUUID4 } from "node:crypto";
+
+// packages/plugin/src/agent-tavern/body-settlement-decision.ts
+function settlingDecision(deps, op, evidence) {
+  const ledger = settlementLedger(deps, op.groupId, evidence);
+  const events = eventsOf(deps.session);
+  const surface = surfaceNodeList(deps.session);
+  const previousVisible = findSurfaceSeqByMessageId(events, surface, op.previousAnchorId) !== void 0;
+  const candidateVisible = findSurfaceSeqByMessageId(events, surface, evidence.anchorId) !== void 0;
+  const committed = ledger.selectedIndex === evidence.index && ledger.anchorMessageId === evidence.anchorId;
+  if (!previousVisible && candidateVisible && committed) {
+    return settlementRemainingTargets(events, surface, op, evidence).length === 0 ? "settled" : "finish-hide";
+  }
+  if (previousVisible && ledger.selectedIndex === op.previousIndex) return "cancelled";
+  return "ambiguous";
+}
+function settlementTargetsOf(op, evidence) {
+  const expectedTriggerId = triggerMessageIdOf(op);
+  const targets = evidence.targets;
+  if (targets === void 0) {
+    return { triggerMessageId: expectedTriggerId, previousAnchorId: op.previousAnchorId };
+  }
+  if (targets.triggerMessageId !== expectedTriggerId || targets.previousAnchorId !== op.previousAnchorId) {
+    throw bodyRuntimeError(
+      "invalid-event",
+      `body settlement record for '${evidence.anchorId}' carries hide targets trigger '${targets.triggerMessageId}' / anchor '${targets.previousAnchorId}', but operation '${op.opId}' expects trigger '${expectedTriggerId}' / anchor '${op.previousAnchorId}'; refusing to trust it`
+    );
+  }
+  return targets;
+}
+function settlementTurnOf(events, op, evidence) {
+  return turnOfUserMessage(events, settlementTargetsOf(op, evidence).triggerMessageId) ?? op.turn;
+}
+function settlementRemainingTargets(events, surface, op, evidence) {
+  const targets = settlementTargetsOf(op, evidence);
+  const turn = settlementTurnOf(events, op, evidence);
+  const remaining = /* @__PURE__ */ new Set();
+  if (turn === void 0) {
+    const triggerSeq = findSurfaceSeqByMessageId(events, surface, targets.triggerMessageId);
+    if (triggerSeq !== void 0) remaining.add(triggerSeq);
+  } else {
+    for (const seq of hideTargets(events, surface, targets.triggerMessageId, turn, evidence.anchorId)) {
+      remaining.add(seq);
+    }
+  }
+  for (const seq of oldAnchorSurfaceTargets(events, surface, targets.previousAnchorId)) remaining.add(seq);
+  return [...remaining].filter((seq) => !isSettlementHideMarker(eventAtSeq(events, seq))).sort((left, right) => left - right);
+}
+function isSettlementHideMarker(event) {
+  if (event.type !== "developer/message") return false;
+  const message = messageOf2(event);
+  return message !== void 0 && sourceOf(message)?.form === "body-hide";
+}
+function finishSettledOperation(deps, context, settled) {
+  assertCommittedSettlement(deps, context.op.groupId, settled, `${context.label} ${context.op.opId}`);
+  try {
+    appendOpFinish(deps, context.op.opId, "ok", settled.anchorId, void 0);
+  } catch (error) {
+    releaseSettlement(deps, context);
+    const reason = `${context.label} ${context.op.opId} already settled '${settled.anchorId}' but failed to record op-finish: ${errorMessage3(error)}`;
+    warn(deps, reason);
+    throw settledFinishPending(reason, context.op, error);
+  }
+  releaseSettlement(deps, context);
+  return { status: "ok", anchorMessageId: settled.anchorId };
+}
+function settledFinishPending(reason, op, cause) {
+  const failure = bodyRuntimeError("settled-finish-pending", reason);
+  if (cause instanceof Error) failure.cause = cause;
+  failure.op = op;
+  return failure;
+}
+function settlementLedger(deps, groupId, evidence) {
+  if (evidence.groupId !== groupId) {
+    throw bodyRuntimeError(
+      "invalid-event",
+      `body settlement record for '${evidence.anchorId}' belongs to group '${evidence.groupId}', not '${groupId}'`
+    );
+  }
+  const ledger = bodyLedger(eventsOf(deps.session), groupId);
+  if (ledger === void 0) {
+    throw bodyRuntimeError("invalid-event", `body settlement record references group '${groupId}' with no body ledger`);
+  }
+  const candidate = ledger.candidates[evidence.index];
+  if (candidate === void 0 || candidate.messageId !== evidence.anchorId) {
+    throw bodyRuntimeError(
+      "invalid-event",
+      `body settlement record points at anchor '${evidence.anchorId}' index ${evidence.index}, but group '${groupId}' has ${candidate === void 0 ? "no candidate at that index" : `candidate '${candidate.messageId}'`}; refusing to trust it`
+    );
+  }
+  return ledger;
+}
+function assertCommittedSettlement(deps, groupId, evidence, subject) {
+  const ledger = settlementLedger(deps, groupId, evidence);
+  if (ledger.selectedIndex !== evidence.index || ledger.anchorMessageId !== evidence.anchorId) {
+    throw bodyRuntimeError(
+      "invalid-event",
+      `${subject}: settlement record '${evidence.anchorId}' index ${evidence.index} is not the committed selection (selected ${ledger.selectedIndex}, anchor '${ledger.anchorMessageId}'); refusing to trust it`
+    );
+  }
+}
+function recordSettlementCancelled(deps, op, label, evidence, reason) {
+  try {
+    appendSettleCancelledMarker(deps, op.opId, op.groupId, evidence.anchorId, evidence.index, reason);
+  } catch (error) {
+    warn(deps, `body runtime: ${label} ${op.opId} could not record the cancelled settlement: ${errorMessage3(error)}`);
+  }
+}
+function restorePreviousSelection(deps, context) {
+  try {
+    appendBodyEvent(deps, { op: "select", groupId: context.op.groupId, index: context.op.previousIndex });
+  } catch (selectError) {
+    warn(deps, `body runtime: failed to restore previous body selection for ${context.op.opId}: ${errorMessage3(selectError)}`);
+  }
+}
+
+// packages/plugin/src/agent-tavern/body-runtime-settlement.ts
 async function finalizeTurnStopping(deps, payload) {
   validateFinalizePayload(payload);
   assertRecordWriter(deps);
@@ -24981,7 +25113,10 @@ async function settleBodyOperation(deps, context, turn) {
     throw failureFor(error, reason, context.op);
   }
   try {
-    appendSettlingMarker(deps, context.op.opId, context.op.groupId, candidate.messageId, candidateIndex);
+    appendSettlingMarker(deps, context.op.opId, context.op.groupId, candidate.messageId, candidateIndex, {
+      triggerMessageId: triggerMessageIdOf(context.op),
+      previousAnchorId: context.op.previousAnchorId
+    });
   } catch (error) {
     const reason = `${context.label} ${context.op.opId} failed to record the settling marker before hiding turn ${turn}: ${errorMessage3(error)}`;
     restorePreviousSelection(deps, context);
@@ -25026,22 +25161,12 @@ async function settleBodyOperation(deps, context, turn) {
     throw settledFinishPending(reason, context.op, error);
   }
 }
-function finishSettledOperation(deps, context, settled) {
-  assertCommittedSettlement(deps, context.op.groupId, settled, `${context.label} ${context.op.opId}`);
-  try {
-    appendOpFinish(deps, context.op.opId, "ok", settled.anchorId, void 0);
-  } catch (error) {
-    releaseSettlement(deps, context);
-    const reason = `${context.label} ${context.op.opId} already settled '${settled.anchorId}' but failed to record op-finish: ${errorMessage3(error)}`;
-    warn(deps, reason);
-    throw settledFinishPending(reason, context.op, error);
-  }
-  releaseSettlement(deps, context);
-  return { status: "ok", anchorMessageId: settled.anchorId };
-}
 function settleFromSettlingEvidence(deps, context, evidence) {
   const decision = settlingDecision(deps, context.op, evidence);
-  if (decision === "settled") {
+  if (decision === "settled" || decision === "finish-hide") {
+    if (decision === "finish-hide") {
+      finishSettlementHide(deps, context.op, evidence, `${context.label} ${context.op.opId}`);
+    }
     try {
       appendSettledMarker(deps, context.op.opId, context.op.groupId, evidence.anchorId, evidence.index);
     } catch (error) {
@@ -25068,65 +25193,35 @@ function settleFromSettlingEvidence(deps, context, evidence) {
     `${context.label} ${context.op.opId} has an ambiguous settling record for '${evidence.anchorId}' index ${evidence.index}: the surface and ledger disagree about whether the previous anchor was replaced; refusing to guess`
   );
 }
-function settlingDecision(deps, op, evidence) {
-  const ledger = settlementLedger(deps, op.groupId, evidence);
+function finishSettlementHide(deps, op, evidence, subject) {
   const events = eventsOf(deps.session);
-  const surface = surfaceNodeList(deps.session);
-  const previousVisible = findSurfaceSeqByMessageId(events, surface, op.previousAnchorId) !== void 0;
-  const candidateVisible = findSurfaceSeqByMessageId(events, surface, evidence.anchorId) !== void 0;
-  if (!previousVisible && candidateVisible && ledger.selectedIndex === evidence.index && ledger.anchorMessageId === evidence.anchorId) {
-    return "settled";
-  }
-  if (previousVisible && ledger.selectedIndex === op.previousIndex) return "cancelled";
-  return "ambiguous";
-}
-function settlementLedger(deps, groupId, evidence) {
-  if (evidence.groupId !== groupId) {
-    throw bodyRuntimeError(
-      "invalid-event",
-      `body settlement record for '${evidence.anchorId}' belongs to group '${evidence.groupId}', not '${groupId}'`
-    );
-  }
-  const ledger = bodyLedger(eventsOf(deps.session), groupId);
-  if (ledger === void 0) {
-    throw bodyRuntimeError("invalid-event", `body settlement record references group '${groupId}' with no body ledger`);
-  }
-  const candidate = ledger.candidates[evidence.index];
-  if (candidate === void 0 || candidate.messageId !== evidence.anchorId) {
-    throw bodyRuntimeError(
-      "invalid-event",
-      `body settlement record points at anchor '${evidence.anchorId}' index ${evidence.index}, but group '${groupId}' has ${candidate === void 0 ? "no candidate at that index" : `candidate '${candidate.messageId}'`}; refusing to trust it`
-    );
-  }
-  return ledger;
-}
-function assertCommittedSettlement(deps, groupId, evidence, subject) {
-  const ledger = settlementLedger(deps, groupId, evidence);
-  if (ledger.selectedIndex !== evidence.index || ledger.anchorMessageId !== evidence.anchorId) {
-    throw bodyRuntimeError(
-      "invalid-event",
-      `${subject}: settlement record '${evidence.anchorId}' index ${evidence.index} is not the committed selection (selected ${ledger.selectedIndex}, anchor '${ledger.anchorMessageId}'); refusing to trust it`
-    );
-  }
-}
-function recordSettlementCancelled(deps, op, label, evidence, reason) {
+  const remaining = settlementRemainingTargets(events, surfaceNodeList(deps.session), op, evidence);
+  if (remaining.length === 0) return;
+  const openTurn = openTurnNumber(events);
+  const hideTurn = settlementTurnOf(events, op, evidence) ?? openTurn;
   try {
-    appendSettleCancelledMarker(deps, op.opId, op.groupId, evidence.anchorId, evidence.index, reason);
+    if (hideTurn === void 0) {
+      appendHideInBridgeTurn(deps, new Set(remaining));
+    } else if (openTurn === void 0) {
+      appendHideInBridgeTurn(deps, new Set(remaining));
+    } else if (openTurn === hideTurn) {
+      appendHideInOpenTurn(deps, hideTurn, new Set(remaining));
+    } else {
+      throw bodyRuntimeError(
+        "session-busy",
+        `${subject}: cannot finish the partial settlement hide while turn ${openTurn} is open, expected turn ${hideTurn}`
+      );
+    }
   } catch (error) {
-    warn(deps, `body runtime: ${label} ${op.opId} could not record the cancelled settlement: ${errorMessage3(error)}`);
+    warn(deps, `${subject}: failed to finish the partial settlement hide of seq ${remaining.join(", ")}: ${errorMessage3(error)}`);
+    throw failureFor(error, `${subject}: failed to finish the partial settlement hide`, op);
   }
-}
-function settledFinishPending(reason, op, cause) {
-  const failure = bodyRuntimeError("settled-finish-pending", reason);
-  if (cause instanceof Error) failure.cause = cause;
-  failure.op = op;
-  return failure;
-}
-function restorePreviousSelection(deps, context) {
-  try {
-    appendBodyEvent(deps, { op: "select", groupId: context.op.groupId, index: context.op.previousIndex });
-  } catch (selectError) {
-    warn(deps, `body runtime: failed to restore previous body selection for ${context.op.opId}: ${errorMessage3(selectError)}`);
+  const leftover = settlementRemainingTargets(eventsOf(deps.session), surfaceNodeList(deps.session), op, evidence);
+  if (leftover.length > 0) {
+    throw bodyRuntimeError(
+      "operation-failed",
+      `${subject}: the partial settlement hide left seq ${leftover.join(", ")} on the surface; keeping op-start pending`
+    );
   }
 }
 function failSettlement(deps, context, reason) {
@@ -25233,6 +25328,26 @@ async function restoreBodyAfterFailure(deps, op) {
               error,
               `body restore ${op.opId} proved the body settled but could not upgrade the settled marker`,
               op
+            );
+          }
+          releaseOperationByOp(deps, op, `body restore ${op.opId}`);
+          return evidence.anchorId;
+        }
+        if (decision === "finish-hide") {
+          finishSettlementHide(deps, op, evidence, `body restore ${op.opId}`);
+          assertCommittedSettlement(deps, op.groupId, evidence, `body restore ${op.opId}`);
+          try {
+            appendSettledMarker(deps, op.opId, op.groupId, evidence.anchorId, evidence.index);
+          } catch (error) {
+            warn(deps, `body runtime: body restore ${op.opId} finished the partial hide but could not record the settled marker: ${errorMessage3(error)}`);
+          }
+          try {
+            appendOpFinish(deps, op.opId, "ok", evidence.anchorId, void 0);
+          } catch (error) {
+            throw settledFinishPending(
+              `body restore ${op.opId} finished the partial hide but failed to record op-finish: ${errorMessage3(error)}`,
+              op,
+              error
             );
           }
           releaseOperationByOp(deps, op, `body restore ${op.opId}`);
@@ -26302,6 +26417,7 @@ async function recoverAgentBody(ctx, agent, agentId, createDeps) {
   for (const op of restoreOps) {
     const outcome = await restoreRecoveredOperation(ctx, deps, op);
     if (outcome === "restored") restored += 1;
+    else if (outcome === "settled") settled += 1;
     else if (outcome === "finish-pending") finishPending += 1;
     else failed += 1;
   }
@@ -26452,10 +26568,23 @@ async function defaultRecoveryStateSafety(ctx, binding) {
 function recoveryTurnMismatch(reason) {
   return /trigger belongs to turn \d+, not turn/.test(reason);
 }
+function operationSettledOk(events, opId) {
+  return events.some((event) => event.type === BODY_EVENT_TYPE && event.data["op"] === "op-finish" && event.data["opId"] === opId && event.data["result"] === "ok");
+}
 async function restoreRecoveredOperation(ctx, deps, op) {
   try {
     const restoredAnchorId = await restoreBodyAfterFailure(deps, op);
-    const evidence = settlementEvidenceOf(wiringEvents(deps.session) ?? [], op.opId);
+    const events = wiringEvents(deps.session) ?? [];
+    if (operationSettledOk(events, op.opId)) {
+      info(ctx, "dsh-soulmojito body: recovery completed a partially hidden settlement", {
+        agentId: deps.agent.id,
+        opId: op.opId,
+        stage: "settling-finished",
+        anchorId: restoredAnchorId
+      });
+      return "settled";
+    }
+    const evidence = settlementEvidenceOf(events, op.opId);
     if (evidence?.phase === "settled") {
       info(ctx, "dsh-soulmojito body: recovery kept the settled body with op-finish pending", {
         agentId: deps.agent.id,
@@ -26473,6 +26602,16 @@ async function restoreRecoveredOperation(ctx, deps, op) {
     });
     return "restored";
   } catch (error) {
+    if (failureCodeOf(error) === "settled-finish-pending") {
+      info(ctx, "dsh-soulmojito body: recovery kept the settled body with op-finish pending", {
+        agentId: deps.agent.id,
+        opId: op.opId,
+        stage: "settled-finish-pending",
+        anchorId: op.settled?.anchorId ?? op.settling?.anchorId,
+        error: errorMessage4(error)
+      });
+      return "finish-pending";
+    }
     errorLog(ctx, "dsh-soulmojito body: recovery restore failed", {
       agentId: deps.agent.id,
       opId: op.opId,

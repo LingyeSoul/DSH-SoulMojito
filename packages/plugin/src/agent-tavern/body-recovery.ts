@@ -16,6 +16,7 @@
 import type { HostLogger, HostAgentsService } from '../host-contract.js'
 import { advanceHostTurnBase, canAdvanceHostTurnBase, closeImportBracket, lastLoggedTurn } from '../session/trace.js'
 import { store as tavernStore, variables as tavernVariables } from '../runtime.js'
+import { BODY_EVENT_TYPE } from './body.js'
 import { appendPrepareRecovered } from './body-rollback-prepare.js'
 import {
   foldSettleIntents,
@@ -310,6 +311,7 @@ async function recoverAgentBody(
   for (const op of restoreOps) {
     const outcome = await restoreRecoveredOperation(ctx, deps, op)
     if (outcome === 'restored') restored += 1
+    else if (outcome === 'settled') settled += 1
     else if (outcome === 'finish-pending') finishPending += 1
     else failed += 1
   }
@@ -526,7 +528,19 @@ function recoveryTurnMismatch(reason: string): boolean {
   return /trigger belongs to turn \d+, not turn/.test(reason)
 }
 
-type RecoveryRestoreOutcome = 'restored' | 'finish-pending' | 'failed'
+/**
+ * True only for a successful `op-finish`; a failed finish written by the
+ * cancellation path still means the previous body was restored, not settled.
+ */
+function operationSettledOk(events: readonly WiringEvent[], opId: string): boolean {
+  return events.some((event) =>
+    event.type === BODY_EVENT_TYPE
+    && event.data['op'] === 'op-finish'
+    && event.data['opId'] === opId
+    && event.data['result'] === 'ok')
+}
+
+type RecoveryRestoreOutcome = 'restored' | 'settled' | 'finish-pending' | 'failed'
 
 /**
  * Put the previous anchor back after a recovered operation produced no usable
@@ -536,7 +550,9 @@ type RecoveryRestoreOutcome = 'restored' | 'finish-pending' | 'failed'
  *
  * A return that leaves durable `settled` evidence means the body is already
  * replaced and only `op-finish` is missing: that is `finish-pending`, never a
- * restore, even though the same runtime call performed the check.
+ * restore, even though the same runtime call performed the check. A restored
+ * operation whose partial hide was completed also writes `op-finish`, so it is
+ * `settled` rather than finish-pending.
  */
 async function restoreRecoveredOperation(
   ctx: BodyRecoveryHost,
@@ -545,7 +561,17 @@ async function restoreRecoveredOperation(
 ): Promise<RecoveryRestoreOutcome> {
   try {
     const restoredAnchorId = await restoreBodyAfterFailure(deps, op)
-    const evidence = settlementEvidenceOf(wiringEvents(deps.session) ?? [], op.opId)
+    const events = wiringEvents(deps.session) ?? []
+    if (operationSettledOk(events, op.opId)) {
+      info(ctx, 'dsh-soulmojito body: recovery completed a partially hidden settlement', {
+        agentId: deps.agent.id,
+        opId: op.opId,
+        stage: 'settling-finished',
+        anchorId: restoredAnchorId,
+      })
+      return 'settled'
+    }
+    const evidence = settlementEvidenceOf(events, op.opId)
     if (evidence?.phase === 'settled') {
       // The settled marker kept the new body; only `op-finish` is still
       // missing, so the next recovery pass must retry the bookkeeping.
@@ -565,6 +591,19 @@ async function restoreRecoveredOperation(
     })
     return 'restored'
   } catch (error) {
+    if (failureCodeOf(error) === 'settled-finish-pending') {
+      // The partial hide completed and the settled marker is durable; only the
+      // final bookkeeping write failed. Keep the new body and retry on the next
+      // recovery pass instead of reporting a restore failure.
+      info(ctx, 'dsh-soulmojito body: recovery kept the settled body with op-finish pending', {
+        agentId: deps.agent.id,
+        opId: op.opId,
+        stage: 'settled-finish-pending',
+        anchorId: op.settled?.anchorId ?? op.settling?.anchorId,
+        error: errorMessage(error),
+      })
+      return 'finish-pending'
+    }
     errorLog(ctx, 'dsh-soulmojito body: recovery restore failed', {
       agentId: deps.agent.id,
       opId: op.opId,

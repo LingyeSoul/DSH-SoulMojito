@@ -40,7 +40,8 @@
 - 关键覆盖：flat 写后 saveChat 前崩溃还原 before、intent 写入失败零 flat 写、正常 settle
   不重复撤销、commit 失败按 receipt 闭合、失败重试旧 intent superseded、旧 receipt 覆盖、
   空 intent 幂等。
-- `body-rollback-journal.ts` 736 行 + `body-settle-intent.ts` 149 行，均 ≤800。
+- `body-rollback-journal.ts` 736 行 + `body-settle-intent.ts` 149 行，均 ≤800；
+  `write-journal.ts` 拆分后 543 行，settle intent 词表在 `settle-intent-record.ts`（313 行）。
 
 ## 风险与未完成
 

@@ -169,7 +169,8 @@ interface BodyWriteRollbackPort {
      监听器只登记、不在事件栈 append喵；
    - 先 `rollbackTurnWrites(newTurn)` 撤销新 turn 自己的 memory/variable journal 与 settle receipt；
    - `op-settled` 且对账通过：body 已结算，只补 `op-finish`；
-   - `op-settling`：按 surface/ledger 三分支判定（补 settled、取消恢复、fail-closed）；
+   - `op-settling`：按 surface/ledger 四分支判定（补 settled、幂等补 hide 后 settled、取消恢复、
+     fail-closed）；`op-settling` 记录 hide 目标，trigger 仍可见时不得判 settled；
    - `op-settle-cancelled` 或无结算证据：`restore(plan)` 恢复旧 turn 的写入与
      variables/receipts，再由 `restoreBodyAfterFailure` 放回/保留旧正文；
    - 若恢复失败，保留 op-start 待启动恢复，不假装成功。

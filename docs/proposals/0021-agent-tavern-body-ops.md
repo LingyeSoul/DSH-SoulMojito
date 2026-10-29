@@ -375,8 +375,11 @@ projector 新增 body 分支：
   共用同一结算 helper）；wiring 不得自己拼 `candidate/select/op-finish`，否则会漏掉
   trigger/process 的 hide replacement。
 - `op-settling` / `op-settled` / `op-settle-cancelled` 是两阶段 durable 结算证据：恢复读到
-  `settled` 只补 `op-finish`；读到 `settling` 时按 surface/ledger 三分支判定（补 settled、
-  取消恢复、fail-closed）；读到取消记录则恢复旧正文。
+  `settled` 只补 `op-finish`；读到 `settling` 时按 surface/ledger 四分支判定（补 settled、
+  幂等补 hide 后 settled、取消恢复、fail-closed）；读到取消记录则恢复旧正文。
+- `op-settling` 记录本次 hide 目标（`triggerMessageId` 与 `previousAnchorId`）。判 settled 前
+  必须确认 trigger/process 与旧 anchor 都已离开 surface；只剩一部分 range 已替换时走
+  `finish-hide`，只隐藏剩余目标，不重复 hide、不改 ledger/select。
 - live `session/event` 的 `turn/end` 失败边（`error` / `cancelled` / `aborted`）必须异步触发
   `restoreBodyAfterFailure`；监听器只登记，不在事件栈 append，同一 session 去重。
 - 半开 turn 用现有 `closeImportBracket` 兜底关闭。

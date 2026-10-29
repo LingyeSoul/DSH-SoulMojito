@@ -26,6 +26,20 @@ export const BODY_SETTLED_EVENT_TYPE = 'plugin:dsh-soulmojito/body-settled' as c
 /** Phase of a durable settlement marker. */
 export type BodySettlementPhase = 'settling' | 'settled'
 
+/**
+ * Hide targets of one settlement attempt.
+ *
+ * Settlement can replace more than one surface range: the previous anchor's
+ * turn and the settling turn's trigger/process nodes are separated by nodes
+ * that must stay visible. Recording both ids with the pre-hide marker lets
+ * recovery finish a partially applied hide without guessing from the current
+ * operation shape.
+ */
+export interface BodySettlementTargets {
+  readonly triggerMessageId: string
+  readonly previousAnchorId: string
+}
+
 /** Payload of the durable settlement marker. */
 export interface BodySettledEventData {
   readonly op: 'op-settled'
@@ -38,6 +52,11 @@ export interface BodySettledEventData {
   readonly groupId: string
   readonly anchorId: string
   readonly index: number
+  /**
+   * Complete hide target ids recorded with `settling` (proposal 0021 §9.2).
+   * Missing on legacy records, which recovery resolves from the operation.
+   */
+  readonly targets?: BodySettlementTargets
 }
 
 /** Payload of the durable cancellation record written when the hide failed. */

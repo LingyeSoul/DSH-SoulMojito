@@ -7,8 +7,9 @@
  * and a commit marker after `saveChat`; this shard owns the startup pass that
  * closes or reverts those intents.
  *
- * Intent parsing stays with the journal vocabulary in `write-journal.ts`;
- * `foldSettleIntents` is re-exported here for recovery callers.
+ * Intent parsing and folding live with the record vocabulary in
+ * `settle-intent-record.ts`; `foldSettleIntents` is re-exported here for
+ * recovery callers.
  */
 
 import type { ChatLogIR } from '../../../tavern-format/src/index.js'
@@ -24,12 +25,15 @@ import {
 import {
   appendSettleIntentWith,
   type SettleIntentOpenEntry,
-  type WriteJournalRecordWriter,
-  type WriteJournalSession,
+} from './settle-intent-record.js'
+import type {
+  WriteJournalRecordWriter,
+  WriteJournalSession,
 } from './write-journal.js'
 
-export { foldSettleIntents } from './write-journal.js'
-export type { SettleIntentOpenEntry, WriteJournalSession } from './write-journal.js'
+export { foldSettleIntents } from './settle-intent-record.js'
+export type { SettleIntentOpenEntry } from './settle-intent-record.js'
+export type { WriteJournalSession } from './write-journal.js'
 
 /* --------------------------- settle intent recovery ------------------------ */
 
