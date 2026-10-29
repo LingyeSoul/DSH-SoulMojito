@@ -27,6 +27,7 @@ import {
   readSettleIntents,
   readWriteJournal,
   type SettleIntentEntry,
+  type SettleIntentExtendEntry,
   type SettleIntentOpenEntry,
   type WriteJournalEntry,
   type WriteJournalMemoryEntry,
@@ -577,6 +578,61 @@ describe('settle intents', () => {
     expect(readSettleIntents(events)).toEqual([first, second, commit])
     expect(foldSettleIntents(events)).toEqual([second])
     expect(readWriteJournal(events)).toEqual([])
+  })
+
+  it('merges extend items into their open intent in append order', () => {
+    const open = settleIntentFixture('settle-extend', [
+      { name: 'mood', before: 'calm', after: 'alert' },
+    ])
+    const extend: SettleIntentExtendEntry = {
+      kind: 'settle-intent',
+      phase: 'extend',
+      opId: open.opId,
+      sessionId: AGENT_ID,
+      at: CREATED_AT,
+      items: [
+        { name: 'mood', before: 'alert', after: 'furious' },
+        { name: 'trust', before: 1, after: 2 },
+      ],
+    }
+    const secondExtend: SettleIntentExtendEntry = {
+      kind: 'settle-intent', phase: 'extend', opId: open.opId, sessionId: AGENT_ID, at: CREATED_AT,
+      items: [{ name: 'debt', before: 5, after: 4 }],
+    }
+    const events = [
+      { seq: 0, type: SETTLE_INTENT_EVENT_TYPE, data: open },
+      { seq: 1, type: SETTLE_INTENT_EVENT_TYPE, data: extend },
+      { seq: 2, type: SETTLE_INTENT_EVENT_TYPE, data: secondExtend },
+    ]
+
+    expect(readSettleIntents(events)).toEqual([open, extend, secondExtend])
+    expect(foldSettleIntents(events)).toEqual([{
+      ...open,
+      items: [...open.items, ...extend.items, ...secondExtend.items],
+    }])
+
+    const commit: SettleIntentEntry = {
+      kind: 'settle-intent', phase: 'commit', opId: open.opId, sessionId: AGENT_ID, at: CREATED_AT,
+    }
+    expect(foldSettleIntents([...events, { seq: 3, type: SETTLE_INTENT_EVENT_TYPE, data: commit }])).toEqual([])
+  })
+
+  it('rejects an extend record without an open intent or after it closed', () => {
+    const open = settleIntentFixture('settle-extend-orphan', [{ name: 'mood', after: 'alert' }])
+    const extend: SettleIntentExtendEntry = {
+      kind: 'settle-intent', phase: 'extend', opId: open.opId, sessionId: AGENT_ID, at: CREATED_AT,
+      items: [{ name: 'trust', after: 1 }],
+    }
+    const commit: SettleIntentEntry = {
+      kind: 'settle-intent', phase: 'commit', opId: open.opId, sessionId: AGENT_ID, at: CREATED_AT,
+    }
+    const eventsOf = (...entries: SettleIntentEntry[]) =>
+      entries.map((entry, seq) => ({ seq, type: SETTLE_INTENT_EVENT_TYPE, data: entry }))
+
+    expect(() => foldSettleIntents(eventsOf(extend))).toThrow(/extends without an open record/)
+    expect(() => foldSettleIntents(eventsOf(open, commit, extend))).toThrow(/extends after it closed/)
+    expect(() => foldSettleIntents([{ seq: 0, type: SETTLE_INTENT_EVENT_TYPE, data: { ...extend, items: [] } }]))
+      .toThrow(/non-empty array/)
   })
 
   it('rejects duplicate, reopened and orphan closure records', () => {

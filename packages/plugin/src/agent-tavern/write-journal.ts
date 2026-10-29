@@ -110,7 +110,7 @@ export interface SettleIntentItem {
   readonly after?: JsonValue
 }
 
-/** `open` carries the undo data; `commit` and `recovered` close the intent. */
+/** `open` and `extend` carry undo data; `commit` and `recovered` close the intent. */
 export interface SettleIntentOpenEntry {
   readonly kind: 'settle-intent'
   readonly phase: 'open'
@@ -126,6 +126,16 @@ export interface SettleIntentOpenEntry {
   readonly items: readonly SettleIntentItem[]
 }
 
+/** One `extend` record: undo items a later settle phase appends to the same op. */
+export interface SettleIntentExtendEntry {
+  readonly kind: 'settle-intent'
+  readonly phase: 'extend'
+  readonly opId: string
+  readonly sessionId: string
+  readonly at: string
+  readonly items: readonly SettleIntentItem[]
+}
+
 /** One closure marker: a committed settle or a startup recovery. */
 export interface SettleIntentCloseEntry {
   readonly kind: 'settle-intent'
@@ -137,7 +147,7 @@ export interface SettleIntentCloseEntry {
 }
 
 /** Payload of one `plugin:dsh-soulmojito/settle-intent` session event. */
-export type SettleIntentEntry = SettleIntentOpenEntry | SettleIntentCloseEntry
+export type SettleIntentEntry = SettleIntentOpenEntry | SettleIntentExtendEntry | SettleIntentCloseEntry
 
 /** Durable seam of one settle batch; the commit marker reuses the same handle. */
 export interface SettleIntentHandle {
@@ -265,9 +275,9 @@ export function readSettleIntents(events: readonly unknown[]): readonly SettleIn
 /**
  * Fold the open settle intents a restart still has to restore.
  *
- * Closed operations are dropped from the result. Opening one operation twice,
- * reopening it after it closed, or closing it twice/without an open record
- * throws: a damaged undo record must not be skipped silently.
+ * `extend` items merge into their op in log order; closed operations are
+ * dropped. Opening twice, extending after closure, or closing twice/without
+ * an open record throws: a damaged undo record must not be skipped silently.
  */
 export function foldSettleIntents(events: readonly unknown[]): readonly SettleIntentOpenEntry[] {
   const open = new Map<string, SettleIntentOpenEntry>()
@@ -278,6 +288,13 @@ export function foldSettleIntents(events: readonly unknown[]): readonly SettleIn
         throw new WriteJournalError('invalid-settle-intent', `settle intent '${entry.opId}' opens more than once`)
       }
       open.set(entry.opId, entry)
+      continue
+    }
+    if (entry.phase === 'extend') {
+      if (closed.has(entry.opId)) throw new WriteJournalError('invalid-settle-intent', `settle intent '${entry.opId}' extends after it closed`)
+      const current = open.get(entry.opId)
+      if (current === undefined) throw new WriteJournalError('invalid-settle-intent', `settle intent '${entry.opId}' extends without an open record`)
+      open.set(entry.opId, { ...current, items: [...current.items, ...entry.items] })
       continue
     }
     if (closed.has(entry.opId)) {
@@ -500,6 +517,10 @@ function parseSettleIntent(data: unknown, index: number): SettleIntentEntry {
   if (data['kind'] !== 'settle-intent') throw invalidSettle(where, `unknown kind '${String(data['kind'])}'`)
   const phase = data['phase']
   if (phase === 'open') return parseSettleIntentOpen(data, where)
+  if (phase === 'extend') {
+    return { kind: 'settle-intent', phase, opId: textAt(data, 'opId', where), sessionId: textAt(data, 'sessionId', where),
+      at: timestampAt(data, 'at', where), items: settleIntentItems(data['items'], where) }
+  }
   if (phase === 'commit' || phase === 'recovered') {
     return {
       kind: 'settle-intent',
@@ -510,14 +531,12 @@ function parseSettleIntent(data: unknown, index: number): SettleIntentEntry {
       ...(data['reason'] === undefined ? {} : { reason: textAt(data, 'reason', where) }),
     }
   }
-  throw invalidSettle(where, `field 'phase' must be 'open', 'commit' or 'recovered', received '${String(phase)}'`)
+  throw invalidSettle(where, `field 'phase' must be 'open', 'extend', 'commit' or 'recovered', received '${String(phase)}'`)
 }
 
 function parseSettleIntentOpen(record: Record<string, unknown>, where: string): SettleIntentOpenEntry {
   const scope = record['scope']
   if (scope !== 'chat') throw invalidSettle(where, `field 'scope' must be 'chat', received '${String(scope)}'`)
-  const items = record['items']
-  if (!Array.isArray(items) || items.length === 0) throw invalidSettle(where, `field 'items' must be a non-empty array`)
   const turnKey = textAt(record, 'turnKey', where)
   if (!/^(0|[1-9][0-9]*)$/.test(turnKey)) {
     throw invalidSettle(where, `field 'turnKey' must be a floor index, received '${turnKey}'`)
@@ -533,8 +552,13 @@ function parseSettleIntentOpen(record: Record<string, unknown>, where: string): 
     turnKey,
     receiptAt: timestampAt(record, 'receiptAt', where),
     at: timestampAt(record, 'at', where),
-    items: items.map((item, itemIndex) => parseSettleIntentItem(item, `${where} items[${itemIndex}]`)),
+    items: settleIntentItems(record['items'], where),
   }
+}
+
+function settleIntentItems(value: unknown, where: string): SettleIntentItem[] {
+  if (!Array.isArray(value) || value.length === 0) throw invalidSettle(where, `field 'items' must be a non-empty array`)
+  return value.map((item, index) => parseSettleIntentItem(item, `${where} items[${index}]`))
 }
 
 function parseSettleIntentItem(value: unknown, where: string): SettleIntentItem {

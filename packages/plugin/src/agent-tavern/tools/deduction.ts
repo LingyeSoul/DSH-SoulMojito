@@ -8,9 +8,9 @@ import {
   type MvuReceipt,
   type MvuVariableChange,
 } from '../../mvu.js'
-import type { JsonValue } from '../../../../tavern-store/src/index.js'
+import type { JsonValue, VariableSnapshot } from '../../../../tavern-store/src/index.js'
 import { getMvuTreePath, guardMvuWrite, readMvuSchema } from '../../mvu-guard.js'
-import { readMvuRules, runMvuRules } from '../../mvu-rules.js'
+import { readMvuRules, runMvuRules, type MvuRuleWrite } from '../../mvu-rules.js'
 import {
   DEDUCE_MAX_ROLES,
   DEDUCE_MAX_ROUNDS,
@@ -253,10 +253,51 @@ export function deductionTools(): ToolDefinition[] {
           ruleFailures.push(...run.failures)
           // 同路径多轮触发只持久化终值（Map 末值胜出）；回执 reason 用 notes 的
           // 累计归因（rule:A; rule:B 如实呈现链路）。
-          for (const write of [...new Map(run.writes.map((write) => [write.path, write])).values()]) {
+          const terminalWrites = [...new Map(run.writes.map((write) => [write.path, write])).values()]
+          // Resolve the exact payload and flat before value before recording the
+          // intent: a malformed payload still fails alone, and the extend record
+          // must describe what the write loop will actually store.
+          const pendingWrites: PendingRuleWrite[] = []
+          for (const write of terminalWrites) {
+            let value: JsonValue
+            let existing: VariableSnapshot | undefined
             try {
-              const existing = await store.get('chat', binding.chatId, write.path)
-              const written = await store.set('chat', binding.chatId, write.path, jsonValueOf(write.value), existing?.revision)
+              value = jsonValueOf(write.value)
+              existing = await store.get('chat', binding.chatId, write.path)
+            } catch (error) {
+              ruleFailures.push(`${write.path}: rule '${write.rule}': ${error instanceof Error ? error.message : String(error)}`)
+              continue
+            }
+            pendingWrites.push({ write, value, existing })
+          }
+          // The open intent only lists request items. Append one extend record
+          // covering every rule write before the first flat write; if the host
+          // rejects it, no rule flat write runs and the failure closes the
+          // receipt as failed. The intent stays recovery evidence only: the
+          // receipt below still carries the rule changes exactly once.
+          if (settleIntent !== undefined && pendingWrites.length > 0) {
+            try {
+              appendSettleIntentWith(settleIntent.writer, settleIntent.session, {
+                kind: 'settle-intent',
+                phase: 'extend',
+                opId: settleIntent.opId,
+                sessionId: settleIntent.sessionId,
+                at: new Date().toISOString(),
+                items: pendingWrites.map((pending) => ({
+                  name: pending.write.path,
+                  ...(pending.existing === undefined ? {} : { before: pending.existing.value }),
+                  after: pending.value,
+                })),
+              })
+            } catch (error) {
+              ruleFailures.push(`rule settle intent: ${error instanceof Error ? error.message : String(error)}`)
+              pendingWrites.length = 0
+            }
+          }
+          for (const pending of pendingWrites) {
+            const write = pending.write
+            try {
+              const written = await store.set('chat', binding.chatId, write.path, pending.value, pending.existing?.revision)
               const before = getMvuTreePath(preTree, write.path)
               const reason = run.notes[write.path] ?? `rule:${write.rule}`
               const change = receiptChanges.find((entry) => entry.name === write.path)
@@ -344,6 +385,13 @@ const settleOutput = objectOutput({
   failed: { type: 'array', items: { type: 'object', additionalProperties: true } },
   receipt: { type: 'object', additionalProperties: true },
 })
+
+/** One resolved `$rules` write waiting for the intent append and flat write. */
+interface PendingRuleWrite {
+  readonly write: MvuRuleWrite
+  readonly value: JsonValue
+  readonly existing: VariableSnapshot | undefined
+}
 
 /** Narrow a tool argument to the JSON value the variable store accepts. */
 function jsonValueOf(value: unknown): JsonValue {

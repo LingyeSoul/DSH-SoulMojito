@@ -53,8 +53,10 @@ export interface SettleIntentRecovery {
  * save, or after the save but before the commit marker. A persisted receipt at
  * or after the intent's `receiptAt` for the same `turnKey` closes it as
  * committed (a later settle supersedes an earlier failed attempt); otherwise
- * every item is restored to its `before` value (deleted when absent) with the
- * current revision as CAS, newest first; nothing else is written on failure.
+ * every merged open/extend item is restored to its `before` value (deleted
+ * when absent) with the current revision as CAS, newest first, so a name
+ * written by several phases returns to its earliest `before`; nothing else is
+ * written on failure.
  */
 export async function recoverOpenSettleIntents(
   deps: SettleIntentRecoveryDeps,

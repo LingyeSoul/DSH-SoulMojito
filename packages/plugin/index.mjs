@@ -16832,7 +16832,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("ca8b959") : void 0;
+  const commit = true ? normalizeCommit("8b1d74c") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -21928,6 +21928,13 @@ function foldSettleIntents(events) {
       open2.set(entry.opId, entry);
       continue;
     }
+    if (entry.phase === "extend") {
+      if (closed.has(entry.opId)) throw new WriteJournalError("invalid-settle-intent", `settle intent '${entry.opId}' extends after it closed`);
+      const current = open2.get(entry.opId);
+      if (current === void 0) throw new WriteJournalError("invalid-settle-intent", `settle intent '${entry.opId}' extends without an open record`);
+      open2.set(entry.opId, { ...current, items: [...current.items, ...entry.items] });
+      continue;
+    }
     if (closed.has(entry.opId)) {
       throw new WriteJournalError("invalid-settle-intent", `settle intent '${entry.opId}' closes more than once`);
     }
@@ -21972,6 +21979,16 @@ function parseSettleIntent(data, index) {
   if (data["kind"] !== "settle-intent") throw invalidSettle(where, `unknown kind '${String(data["kind"])}'`);
   const phase = data["phase"];
   if (phase === "open") return parseSettleIntentOpen(data, where);
+  if (phase === "extend") {
+    return {
+      kind: "settle-intent",
+      phase,
+      opId: textAt(data, "opId", where),
+      sessionId: textAt(data, "sessionId", where),
+      at: timestampAt(data, "at", where),
+      items: settleIntentItems(data["items"], where)
+    };
+  }
   if (phase === "commit" || phase === "recovered") {
     return {
       kind: "settle-intent",
@@ -21982,13 +21999,11 @@ function parseSettleIntent(data, index) {
       ...data["reason"] === void 0 ? {} : { reason: textAt(data, "reason", where) }
     };
   }
-  throw invalidSettle(where, `field 'phase' must be 'open', 'commit' or 'recovered', received '${String(phase)}'`);
+  throw invalidSettle(where, `field 'phase' must be 'open', 'extend', 'commit' or 'recovered', received '${String(phase)}'`);
 }
 function parseSettleIntentOpen(record, where) {
   const scope = record["scope"];
   if (scope !== "chat") throw invalidSettle(where, `field 'scope' must be 'chat', received '${String(scope)}'`);
-  const items = record["items"];
-  if (!Array.isArray(items) || items.length === 0) throw invalidSettle(where, `field 'items' must be a non-empty array`);
   const turnKey = textAt(record, "turnKey", where);
   if (!/^(0|[1-9][0-9]*)$/.test(turnKey)) {
     throw invalidSettle(where, `field 'turnKey' must be a floor index, received '${turnKey}'`);
@@ -22004,8 +22019,12 @@ function parseSettleIntentOpen(record, where) {
     turnKey,
     receiptAt: timestampAt(record, "receiptAt", where),
     at: timestampAt(record, "at", where),
-    items: items.map((item, itemIndex) => parseSettleIntentItem(item, `${where} items[${itemIndex}]`))
+    items: settleIntentItems(record["items"], where)
   };
+}
+function settleIntentItems(value, where) {
+  if (!Array.isArray(value) || value.length === 0) throw invalidSettle(where, `field 'items' must be a non-empty array`);
+  return value.map((item, index) => parseSettleIntentItem(item, `${where} items[${index}]`));
 }
 function parseSettleIntentItem(value, where) {
   const record = recordAt(value, where);

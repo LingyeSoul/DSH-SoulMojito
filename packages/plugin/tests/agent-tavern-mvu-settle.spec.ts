@@ -45,7 +45,7 @@ interface SettleSession {
 
 interface SettleHarness {
   readonly session: SettleSession
-  failIntentPhase: 'open' | 'commit' | 'recovered' | undefined
+  failIntentPhase: 'open' | 'extend' | 'commit' | 'recovered' | undefined
 }
 
 let sessionSeq = 0
@@ -96,6 +96,16 @@ interface RegisteredTool {
   name: string
   parameters: { properties: Record<string, unknown> }
   execute(args: Record<string, unknown>, exec: { agent?: { id?: string; session?: unknown } }): Promise<any>
+}
+
+interface SettleToolResult {
+  readonly applied: readonly string[]
+  readonly failed: ReadonlyArray<{ readonly name: string; readonly error: string }>
+  readonly receipt: {
+    readonly status: string
+    readonly failures: readonly string[]
+    readonly changes: ReadonlyArray<Record<string, unknown>>
+  }
 }
 
 describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
@@ -196,6 +206,54 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
       }),
     )
   }
+  // Isolated chats keep rule receipts from cross-contaminating crash windows:
+  // `settleReceiptPersisted` matches by turnKey, and every rules chat starts at 0.
+  let ruleChatSeq = 0
+  const createRuleChat = async (): Promise<{ agentId: string; chatId: string }> => {
+    ruleChatSeq += 1
+    const agentId = `rules-${ruleChatSeq}`
+    const store = await TavernStore.open(join(home, 'soulmojito'))
+    const ruleChatId = await store.createChat(CHARACTER, {
+      user_name: 'User',
+      character_name: CHARACTER,
+      chat_metadata: {
+        createdAt: new Date().toISOString(),
+        variables: {
+          $rules: [{
+            name: 'double-favor',
+            when: "getvar('mvu.favor') >= 5",
+            then: { 'mvu.derived': "getvar('mvu.favor') * 2" },
+          }],
+          mvu: { favor: 0, derived: 1 },
+        },
+      },
+    })
+    await store.updateState((state) => ({
+      sessionBindings: {
+        ...state.sessionBindings,
+        [agentId]: { architecture: 'agent-tavern', contextMode: 'dsh-native', character: CHARACTER, chatId: ruleChatId },
+      },
+    }))
+    return { agentId, chatId: ruleChatId }
+  }
+  const settleRules = async (
+    harness: SettleHarness,
+    agentId: string,
+    changes: unknown[],
+  ): Promise<SettleToolResult> => {
+    const result = await tools.get('tavern_variable_settle')!.execute(
+      { changes },
+      { agent: { id: agentId, session: harness.session } },
+    )
+    return result as SettleToolResult
+  }
+  const seedRuleVariable = async (targetChatId: string, name: string, value: string | number): Promise<void> => {
+    const store = await VariableStore.open(join(home, 'soulmojito'))
+    const existing = await store.get('chat', targetChatId, name)
+    await store.set('chat', targetChatId, name, value, existing?.revision)
+  }
+  const readRuleVariable = async (targetChatId: string, name: string) =>
+    (await VariableStore.open(join(home, 'soulmojito'))).get('chat', targetChatId, name)
 
   it('registers the settlement tool and teaches it in the kernel standing duties', () => {
     expect(tools.has('tavern_variable_settle')).toBe(true)
@@ -476,6 +534,123 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     expect(again).toMatchObject({ status: 'clean', pending: 0 })
     expect(readSettleIntents(harness.session.events).map((intent) => intent.phase)).toEqual(['open', 'recovered'])
     expect(await readVariable('settle.crash')).toMatchObject({ value: 'before' })
+  })
+
+  it('restores rule-written flat variables after a crash before saveChat', async () => {
+    installSettleHost()
+    const harness = createSettleSession()
+    const target = await createRuleChat()
+    await seedRuleVariable(target.chatId, 'mvu.favor', 0)
+    await seedRuleVariable(target.chatId, 'mvu.derived', 1)
+    const original = TavernStore.prototype.saveChat
+    TavernStore.prototype.saveChat = async function (): Promise<string> {
+      throw new Error('synthetic rule crash before saveChat')
+    }
+    try {
+      await expect(settleRules(harness, target.agentId, [{ name: 'mvu.favor', value: 10 }]))
+        .rejects.toThrow('synthetic rule crash before saveChat')
+    } finally {
+      TavernStore.prototype.saveChat = original
+    }
+
+    expect(await readRuleVariable(target.chatId, 'mvu.favor')).toMatchObject({ value: 10 })
+    expect(await readRuleVariable(target.chatId, 'mvu.derived')).toMatchObject({ value: 20 })
+    const intents = readSettleIntents(harness.session.events)
+    expect(intents.map((intent) => intent.phase)).toEqual(['open', 'extend'])
+    const open = intents[0]
+    const extend = intents[1]
+    if (open?.phase !== 'open' || extend?.phase !== 'extend') {
+      throw new Error('expected an open and an extend settle intent')
+    }
+    expect(extend.opId).toBe(open.opId)
+    expect(extend.items).toEqual([{ name: 'mvu.derived', before: 1, after: 20 }])
+
+    const outcome = await recoverSettle(harness)
+    expect(outcome).toMatchObject({ status: 'restored', pending: 0 })
+    expect(await readRuleVariable(target.chatId, 'mvu.favor')).toMatchObject({ value: 0 })
+    expect(await readRuleVariable(target.chatId, 'mvu.derived')).toMatchObject({ value: 1 })
+    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase))
+      .toEqual(['open', 'extend', 'recovered'])
+  })
+
+  it('skips every rule flat write when the extend intent append fails', async () => {
+    installSettleHost()
+    const harness = createSettleSession()
+    harness.failIntentPhase = 'extend'
+    const target = await createRuleChat()
+    await seedRuleVariable(target.chatId, 'mvu.favor', 0)
+    await seedRuleVariable(target.chatId, 'mvu.derived', 1)
+
+    const result = await settleRules(harness, target.agentId, [{ name: 'mvu.favor', value: 10 }])
+
+    expect(result.applied).toEqual(['mvu.favor'])
+    expect(result.failed).toEqual([])
+    expect(result.receipt.status).toBe('failed')
+    expect(result.receipt.failures).toEqual([expect.stringContaining('settle intent extend record')])
+    expect(result.receipt.changes).toEqual([{ name: 'mvu.favor', before: 0, after: 10 }])
+    expect(await readRuleVariable(target.chatId, 'mvu.favor')).toMatchObject({ value: 10 })
+    expect(await readRuleVariable(target.chatId, 'mvu.derived')).toMatchObject({ value: 1 })
+    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase)).toEqual(['open', 'commit'])
+  })
+
+  it('restores the earliest before when a request and a rule write the same name', async () => {
+    installSettleHost()
+    const harness = createSettleSession()
+    const target = await createRuleChat()
+    await seedRuleVariable(target.chatId, 'mvu.favor', 0)
+    await seedRuleVariable(target.chatId, 'mvu.derived', 1)
+    const original = TavernStore.prototype.saveChat
+    TavernStore.prototype.saveChat = async function (): Promise<string> {
+      throw new Error('synthetic same-name crash before saveChat')
+    }
+    try {
+      await expect(settleRules(harness, target.agentId, [
+        { name: 'mvu.favor', value: 10 },
+        { name: 'mvu.derived', value: 7 },
+      ])).rejects.toThrow('synthetic same-name crash before saveChat')
+    } finally {
+      TavernStore.prototype.saveChat = original
+    }
+
+    expect(await readRuleVariable(target.chatId, 'mvu.derived')).toMatchObject({ value: 20 })
+    const intents = readSettleIntents(harness.session.events)
+    const open = intents[0]
+    const extend = intents[1]
+    if (open?.phase !== 'open' || extend?.phase !== 'extend') {
+      throw new Error('expected an open and an extend settle intent')
+    }
+    expect(open.items).toEqual([
+      { name: 'mvu.favor', before: 0, after: 10 },
+      { name: 'mvu.derived', before: 1, after: 7 },
+    ])
+    expect(extend.items).toEqual([{ name: 'mvu.derived', before: 7, after: 20 }])
+
+    const outcome = await recoverSettle(harness)
+    expect(outcome).toMatchObject({ status: 'restored', pending: 0 })
+    expect(await readRuleVariable(target.chatId, 'mvu.favor')).toMatchObject({ value: 0 })
+    expect(await readRuleVariable(target.chatId, 'mvu.derived')).toMatchObject({ value: 1 })
+  })
+
+  it('does not undo a committed rule settle on the next startup', async () => {
+    installSettleHost()
+    const harness = createSettleSession()
+    const target = await createRuleChat()
+    await seedRuleVariable(target.chatId, 'mvu.favor', 0)
+    await seedRuleVariable(target.chatId, 'mvu.derived', 1)
+
+    const result = await settleRules(harness, target.agentId, [{ name: 'mvu.favor', value: 10 }])
+
+    expect(result.receipt.status).toBe('updated')
+    expect(result.receipt.changes).toEqual([
+      { name: 'mvu.favor', before: 0, after: 10 },
+      { name: 'mvu.derived', before: 1, after: 20, reason: 'rule:double-favor' },
+    ])
+    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase))
+      .toEqual(['open', 'extend', 'commit'])
+    const outcome = await recoverSettle(harness)
+    expect(outcome).toMatchObject({ status: 'clean', pending: 0 })
+    expect(await readRuleVariable(target.chatId, 'mvu.favor')).toMatchObject({ value: 10 })
+    expect(await readRuleVariable(target.chatId, 'mvu.derived')).toMatchObject({ value: 20 })
   })
 
   it('closes an earlier failed intent when a retry commits', async () => {

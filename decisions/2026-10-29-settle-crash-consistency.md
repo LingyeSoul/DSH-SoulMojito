@@ -16,6 +16,7 @@
 1. **先落 intent 再写 flat**：新增独立 plugin record
    `plugin:dsh-soulmojito/settle-intent`，第一次 flat 写之前写 `phase: open`，包含
    `opId/sessionId/character/scopeId/turnKey/receiptAt` 与每项 `{name,before?,after?}`。
+   `$rules` 派生写在任何 flat 写之前追加同 opId 的 `phase: extend`，覆盖规则目标项。
    追加失败时一个 flat 写都不发生，fail-closed。
 2. **正常完成 commit**：flat 写 + receipt + `saveChat` 成功后写 `phase: commit`；commit
    追加失败显式抛出，不静默吞。commit 同时闭合同一 chat 仍 open 的旧 intent，避免失败重试
@@ -31,9 +32,9 @@
 
 ## 证据
 
-- `npm run check`：158 test files / 2483 passed + 1 skipped；`build:plugin` 成功；
+- `npm run check`：158 test files / 2489 passed + 1 skipped；`build:plugin` 成功；
   18 道 gate 全部 PASS。
-- 聚焦：mvu-settle 15 + write-journal 22 + body-rollback 30 = 67 tests。
+- 聚焦：mvu-settle 19 + write-journal 24 + body-rollback 30 = 73 tests。
 - 关键覆盖：flat 写后 saveChat 前崩溃还原 before、intent 写入失败零 flat 写、正常 settle
   不重复撤销、commit 失败按 receipt 闭合、失败重试旧 intent superseded、旧 receipt 覆盖、
   空 intent 幂等。
@@ -44,7 +45,7 @@
 | 风险 | 说明 |
 |---|---|
 | 无 appendPluginRecord | 宿主没有 seam 时 `openSettleIntent` 返回 undefined，settle 走旧路径，跨 store 窗口仍无 intent 保护。 |
-| `$rules` 派生写 | 不在 open intent 的 items 中，只覆盖本次批量请求项；规则路径 before 需后续扩展为作用域快照。 |
+| `$rules` 派生写 | 已由同 opId 的 `extend` intent 覆盖；extend 追加失败时零规则 flat 写。恢复仍逐项逆序，不是跨 store 原子事务。 |
 | after 语义 | after 是请求 JSON 值，不是 guard clamp/step 后的最终值；恢复只消费 before，最终值以 receipt 为准。 |
 | receipt 匹配 | MvuReceipt 没有 opId，恢复用 `at + turnKey` 匹配；同毫秒同楼层理论上可能误匹配，`>=` 策略优先避免误撤销后续成功提交。 |
 | commit 窗口 | commit 在 saveChat 之后，仍存在 saveChat 成功但进程在 commit 前死亡的窗口，由 receipt 匹配兜底。 |

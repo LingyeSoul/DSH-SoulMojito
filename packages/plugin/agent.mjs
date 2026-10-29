@@ -9132,6 +9132,13 @@ function foldSettleIntents(events) {
       open.set(entry.opId, entry);
       continue;
     }
+    if (entry.phase === "extend") {
+      if (closed.has(entry.opId)) throw new WriteJournalError("invalid-settle-intent", `settle intent '${entry.opId}' extends after it closed`);
+      const current = open.get(entry.opId);
+      if (current === void 0) throw new WriteJournalError("invalid-settle-intent", `settle intent '${entry.opId}' extends without an open record`);
+      open.set(entry.opId, { ...current, items: [...current.items, ...entry.items] });
+      continue;
+    }
     if (closed.has(entry.opId)) {
       throw new WriteJournalError("invalid-settle-intent", `settle intent '${entry.opId}' closes more than once`);
     }
@@ -9241,6 +9248,16 @@ function parseSettleIntent(data, index) {
   if (data["kind"] !== "settle-intent") throw invalidSettle(where, `unknown kind '${String(data["kind"])}'`);
   const phase = data["phase"];
   if (phase === "open") return parseSettleIntentOpen(data, where);
+  if (phase === "extend") {
+    return {
+      kind: "settle-intent",
+      phase,
+      opId: textAt(data, "opId", where),
+      sessionId: textAt(data, "sessionId", where),
+      at: timestampAt(data, "at", where),
+      items: settleIntentItems(data["items"], where)
+    };
+  }
   if (phase === "commit" || phase === "recovered") {
     return {
       kind: "settle-intent",
@@ -9251,13 +9268,11 @@ function parseSettleIntent(data, index) {
       ...data["reason"] === void 0 ? {} : { reason: textAt(data, "reason", where) }
     };
   }
-  throw invalidSettle(where, `field 'phase' must be 'open', 'commit' or 'recovered', received '${String(phase)}'`);
+  throw invalidSettle(where, `field 'phase' must be 'open', 'extend', 'commit' or 'recovered', received '${String(phase)}'`);
 }
 function parseSettleIntentOpen(record, where) {
   const scope = record["scope"];
   if (scope !== "chat") throw invalidSettle(where, `field 'scope' must be 'chat', received '${String(scope)}'`);
-  const items = record["items"];
-  if (!Array.isArray(items) || items.length === 0) throw invalidSettle(where, `field 'items' must be a non-empty array`);
   const turnKey = textAt(record, "turnKey", where);
   if (!/^(0|[1-9][0-9]*)$/.test(turnKey)) {
     throw invalidSettle(where, `field 'turnKey' must be a floor index, received '${turnKey}'`);
@@ -9273,8 +9288,12 @@ function parseSettleIntentOpen(record, where) {
     turnKey,
     receiptAt: timestampAt(record, "receiptAt", where),
     at: timestampAt(record, "at", where),
-    items: items.map((item, itemIndex) => parseSettleIntentItem(item, `${where} items[${itemIndex}]`))
+    items: settleIntentItems(record["items"], where)
   };
+}
+function settleIntentItems(value, where) {
+  if (!Array.isArray(value) || value.length === 0) throw invalidSettle(where, `field 'items' must be a non-empty array`);
+  return value.map((item, index) => parseSettleIntentItem(item, `${where} items[${index}]`));
 }
 function parseSettleIntentItem(value, where) {
   const record = recordAt(value, where);
@@ -9817,10 +9836,43 @@ function deductionTools() {
           const workTree = overlayScopedVariables(preTree, writtenEntries);
           const run = await runMvuRules(ruleSource.rules, { ...guardSchema !== void 0 ? { schema: guardSchema } : {}, tree: workTree });
           ruleFailures.push(...run.failures);
-          for (const write of [...new Map(run.writes.map((write2) => [write2.path, write2])).values()]) {
+          const terminalWrites = [...new Map(run.writes.map((write) => [write.path, write])).values()];
+          const pendingWrites = [];
+          for (const write of terminalWrites) {
+            let value;
+            let existing;
             try {
-              const existing = await store3.get("chat", binding.chatId, write.path);
-              const written = await store3.set("chat", binding.chatId, write.path, jsonValueOf(write.value), existing?.revision);
+              value = jsonValueOf(write.value);
+              existing = await store3.get("chat", binding.chatId, write.path);
+            } catch (error) {
+              ruleFailures.push(`${write.path}: rule '${write.rule}': ${error instanceof Error ? error.message : String(error)}`);
+              continue;
+            }
+            pendingWrites.push({ write, value, existing });
+          }
+          if (settleIntent !== void 0 && pendingWrites.length > 0) {
+            try {
+              appendSettleIntentWith(settleIntent.writer, settleIntent.session, {
+                kind: "settle-intent",
+                phase: "extend",
+                opId: settleIntent.opId,
+                sessionId: settleIntent.sessionId,
+                at: (/* @__PURE__ */ new Date()).toISOString(),
+                items: pendingWrites.map((pending) => ({
+                  name: pending.write.path,
+                  ...pending.existing === void 0 ? {} : { before: pending.existing.value },
+                  after: pending.value
+                }))
+              });
+            } catch (error) {
+              ruleFailures.push(`rule settle intent: ${error instanceof Error ? error.message : String(error)}`);
+              pendingWrites.length = 0;
+            }
+          }
+          for (const pending of pendingWrites) {
+            const write = pending.write;
+            try {
+              const written = await store3.set("chat", binding.chatId, write.path, pending.value, pending.existing?.revision);
               const before = getMvuTreePath(preTree, write.path);
               const reason = run.notes[write.path] ?? `rule:${write.rule}`;
               const change = receiptChanges.find((entry) => entry.name === write.path);

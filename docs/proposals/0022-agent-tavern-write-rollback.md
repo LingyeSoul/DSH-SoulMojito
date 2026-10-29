@@ -180,6 +180,8 @@ interface BodyWriteRollbackPort {
    `restore` 并写 `op-prepare-recovered`，不追加 assistant、不改 surface。
    若存在未闭合的 `settle-intent`，启动时若 chat 已有对应 receipt 则只补 commit；否则按
    intent 的 before 还原 flat `VariableStore` 并写 recovered，避免 flat 与 receipt 分裂。
+   `$rules` 派生写在执行前追加同 opId 的 `extend`，恢复按 open + extend 合并后的 items
+   逆序回到最早 before。
 
 ## 11. 开工前检查表
 
