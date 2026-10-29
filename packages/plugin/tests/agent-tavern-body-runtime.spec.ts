@@ -8,6 +8,11 @@
  */
 
 import { describe, expect, it } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { store as tavernStore } from '../src/runtime.js'
+import { mvuReceiptsForBody, readMvuReceipts } from '../src/mvu.js'
 import {
   BODY_SETTLED_EVENT_TYPE,
   createBodyProjection,
@@ -25,6 +30,7 @@ import {
   type BodyRollbackPlan,
 } from '../src/agent-tavern/body-rollback.js'
 import {
+  BODY_ABORT_EVENT_TYPE,
   BODY_EVENT_TYPE,
   BODY_PREPARE_EVENT_TYPE,
   BODY_WRITE_TOOL_DENY,
@@ -758,6 +764,7 @@ function bodyEventsOf(events: readonly FakeEvent[]): FakeEvent[] {
 }
 
 function bodyEvent(events: readonly FakeEvent[], op: string): FakeEvent | undefined {
+  if (op === 'op-abort') return events.find((event) => event.type === BODY_ABORT_EVENT_TYPE && event.data.op === 'op-abort')
   return events.find((event) => event.type === BODY_EVENT_TYPE && event.data.op === op)
 }
 
@@ -1026,35 +1033,48 @@ describe('AgentTavern body runtime', () => {
     expect(harness.activeRestrictions).toBe(0)
   })
 
-  it('fails a recovered operation without body text and writes no candidate or select', async () => {
+  it('cancels a recovered operation without body text instead of closing it as failed', async () => {
     const harness = healthyHarness()
     seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
-    await startRegenerate(harness.deps, {
+    const started = await startRegenerate(harness.deps, {
       groupId: 'anchor-1',
       expectedAnchorId: 'anchor-1',
       expectedIndex: 0,
     })
     const trigger = firstFollowup(harness)
-    appendTriggerTurn(harness, 3, trigger, undefined, false)
+    const failedTurn = appendTriggerTurn(harness, 3, trigger, undefined, false)
     const pending = foldPendingOps(harness.events)
     expect(pending).toHaveLength(1)
     const recovered = pending[0]
     if (recovered === undefined) throw new Error('foldPendingOps did not rebuild the operation')
-    const bodyEventsBefore = bodyEventsOf(harness.events).length
 
     const result = await finalizeRecoveredOperation(harness.deps, recovered, 3)
-    closeTurn(harness, 3)
 
     expect(result.status).toBe('failed')
-    const bodyEventsAfter = bodyEventsOf(harness.events)
-    expect(bodyEventsAfter.length).toBe(bodyEventsBefore + 1)
-    expect(bodyEventsAfter.at(-1)?.data).toMatchObject({ op: 'op-finish', result: 'failed' })
+    if (result.status === 'failed') expect(result.reason).toContain('no assistant message with text')
+    // A settlement that never produced a candidate has already rolled the old
+    // writes back and hidden the old anchor, so it must stay pending: a
+    // terminal `op-finish failed` would drop the only restore handle.
+    expect(bodyEvent(harness.events, 'op-finish')).toBeUndefined()
+    expect(settledEventsOf(harness.events).map((event) => event.data.op)).toEqual(['op-settle-cancelled'])
+    expect(foldPendingOps(harness.events).map((op) => op.opId)).toEqual([started.opId])
+    expect(pendingByAgent.get(harness.agentId)?.opId).toBe(started.opId)
     const candidates = bodyEventsWithOp(harness.events, 'candidate')
     expect(candidates.map((event) => event.data.index)).toEqual([0])
     expect(bodyEvent(harness.events, 'select')).toBeUndefined()
-    expect(bodyEvent(harness.events, 'op-finish')?.data).toMatchObject({ result: 'failed' })
-    if (result.status === 'failed') expect(result.reason).toContain('no assistant message with text')
     expect(harness.activeRestrictions).toBe(0)
+
+    closeTurn(harness, 3)
+    const restoredId = await restoreBodyAfterFailure(harness.deps, started.op)
+    expect(restoredId).toMatch(/^body-restore-/)
+    expect(bodyEvent(harness.events, 'op-abort')?.data).toMatchObject({ anchorId: restoredId })
+    expect(harness.surface()).toContain(seqOfMessage(harness.events, restoredId))
+    expect(harness.surface()).not.toContain(failedTurn.triggerSeq)
+    expect(harness.surface()).not.toContain(failedTurn.processSeq)
+    // No select was ever committed, so the restore copy is the first selected
+    // slot change and the ledger cannot fork into a visible new candidate.
+    assertRestoredLedger(harness, restoredId)
+    expect(foldPendingOps(harness.events)).toEqual([])
   })
 
   it('removes the old turn process nodes but keeps the real user message', async () => {
@@ -1194,7 +1214,11 @@ describe('AgentTavern body runtime', () => {
     expect(failedCandidates.map((event) => event.data.index)).toEqual([0])
     expect(failedCandidates[0]?.data).toMatchObject({ messageId: 'anchor-1', index: 0 })
     expect(bodyEvent(harness.events, 'select')).toBeUndefined()
-    expect(bodyEvent(harness.events, 'op-finish')?.data).toMatchObject({ result: 'failed' })
+    // The failure is a pending restore, not a terminal settlement failure: the
+    // old writes are already rolled back and the old anchor already hidden.
+    expect(bodyEvent(harness.events, 'op-finish')).toBeUndefined()
+    expect(settledEventsOf(harness.events).map((event) => event.data.op)).toEqual(['op-settle-cancelled'])
+    expect(foldPendingOps(harness.events).map((op) => op.opId)).toEqual([started.opId])
 
     const assistantsBefore = harness.events.filter((event) => event.type === 'assistant/message').length
     const restoredId = await restoreBodyAfterFailure(harness.deps, started.op)
@@ -1629,6 +1653,45 @@ describe('AgentTavern body runtime', () => {
     expect(foldPendingOps(finished)).toEqual([])
   })
 
+  it('closes an operation only on op-abort and rejects malformed abort records', () => {
+    const open = [{
+      type: BODY_EVENT_TYPE,
+      seq: 0,
+      time: 0,
+      data: { op: 'op-start', opId: 'op-a', groupId: 'g-1', kind: 'regenerate', previousAnchorId: 'm-0', previousIndex: 0 },
+    }]
+    expect(foldPendingOps(open)).toHaveLength(1)
+
+    const aborted = [...open, {
+      type: BODY_ABORT_EVENT_TYPE,
+      seq: 1,
+      time: 1,
+      data: { op: 'op-abort', opId: 'op-a', reason: 'settlement cancelled; previous body restored', anchorId: 'm-0' },
+    }]
+    expect(foldPendingOps(aborted)).toEqual([])
+
+    // A repeated terminal record is harmless; a malformed one or one without
+    // an open op-start must fail the whole fold.
+    expect(foldPendingOps([...aborted, {
+      type: BODY_ABORT_EVENT_TYPE,
+      seq: 2,
+      time: 2,
+      data: { op: 'op-abort', opId: 'op-a', reason: 'repeat', anchorId: 'm-0' },
+    }])).toEqual([])
+    expect(() => foldPendingOps([{ ...open[0]!, seq: 0 }, {
+      type: BODY_ABORT_EVENT_TYPE,
+      seq: 1,
+      time: 1,
+      data: { op: 'op-abort', opId: 'op-a', reason: '' },
+    }])).toThrowError(/reason/)
+    expect(() => foldPendingOps([{
+      type: BODY_ABORT_EVENT_TYPE,
+      seq: 0,
+      time: 0,
+      data: { op: 'op-abort', opId: 'op-orphan', reason: 'orphan' },
+    }])).toThrowError(/no open op-start/)
+  })
+
   it('folds the durable settled marker into the pending operation', () => {
     const events = [
       {
@@ -2003,7 +2066,7 @@ describe('AgentTavern body runtime', () => {
       .rejects.toMatchObject({ code: 'operation-failed' })
   })
 
-  it('commits the rollback plan before restoring the previous body', async () => {
+  it('keeps a commit failure pending and restores the previous body on restart', async () => {
     const calls: string[] = []
     const harness = createHarness({
       status: 'idle',
@@ -2028,27 +2091,247 @@ describe('AgentTavern body runtime', () => {
     await expect(finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 }))
       .rejects.toMatchObject({ code: 'operation-failed', message: expect.stringContaining('failed to commit the write rollback') })
 
-    // Proposal 0022 §10: commit runs while the start already hid the anchor, so
-    // a commit failure leaves the committed candidate in place and recovery
-    // restores the previous body as a copy.
+    // Proposal 0022 §10 revision 2026-10-29: the commit failed before any
+    // compensation ran, so no terminal record may exist. The cancellation is
+    // durable proof that recovery must restore instead of retrying settlement.
     expect(harness.surface()).not.toContain(anchorSeq)
     expect(harness.surface()).toContain(failedTurn.finalSeq)
     expect(harness.events.filter((event) => event.type === 'developer/message')).toHaveLength(1)
-    expect(settledEventsOf(harness.events)).toHaveLength(0)
-    expect(bodyEvent(harness.events, 'op-finish')?.data).toMatchObject({ result: 'failed' })
+    expect(settledEventsOf(harness.events).map((event) => event.data.op)).toEqual(['op-settle-cancelled'])
+    expect(bodyEvent(harness.events, 'op-finish')).toBeUndefined()
+    expect(foldPendingOps(harness.events).map((op) => op.opId)).toEqual([started.opId])
+    expect(pendingByAgent.get(harness.agentId)?.opId).toBe(started.opId)
 
     closeTurn(harness, 3)
+    pendingByAgent.clear()
     const assistantsBefore = harness.events.filter((event) => event.type === 'assistant/message').length
-    const restoredId = await restoreBodyAfterFailure(harness.deps, started.op)
+    const outcome = await recoverBodyOperationWith(
+      recoveryHost(),
+      harness.deps.agent,
+      async () => harness.deps,
+    )
 
-    expect(restoredId).toMatch(/^body-restore-/)
+    expect(outcome).toMatchObject({ agentId: harness.agentId, status: 'restored', pending: 1 })
     expect(calls).toEqual([`prepare:${harness.agentId}:1:anchor-1`, 'commit:1', 'rollback-turn:3', 'restore:1'])
-    expect(harness.surface()).toContain(seqOfMessage(harness.events, restoredId))
     expect(harness.surface()).not.toContain(failedTurn.finalSeq)
+    const restored = bodyEventsWithOp(harness.events, 'restore').at(-1)
+    const restoredId = restored?.data.messageId
+    if (typeof restoredId !== 'string') throw new Error('restart recovery did not record a restore message')
+    expect(restoredId).toMatch(/^body-restore-/)
+    expect(harness.surface()).toContain(seqOfMessage(harness.events, restoredId))
     expect(harness.events.filter((event) => event.type === 'assistant/message')).toHaveLength(assistantsBefore + 1)
-    expect(bodyEvent(harness.events, 'restore')?.data).toMatchObject({ messageId: restoredId, index: 0 })
+    expect(bodyEvent(harness.events, 'op-abort')?.data).toMatchObject({ anchorId: restoredId })
+    expect(foldPendingOps(harness.events)).toEqual([])
     expect(harness.phase.lastTurn).toBe(4)
   })
+
+  it('keeps a settling-marker failure pending and restores the old writes and body on restart', async () => {
+    const calls: string[] = []
+    const harness = createHarness({
+      status: 'idle',
+      phaseKind: 'idle',
+      lastTurn: 0,
+      followupError: undefined,
+      restrictError: undefined,
+      appendRecord: true,
+      rollback: createRollbackPort({}, calls),
+    })
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const started = await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+    const trigger = firstFollowup(harness)
+    appendTriggerTurn(harness, 3, trigger, 'new-body', false)
+    const appendRecord = harness.deps.appendRecord
+    if (appendRecord === undefined) throw new Error('fake harness: appendRecord is missing')
+    let failMarker = true
+    harness.deps.appendRecord = (session, type, data) => {
+      if (failMarker
+        && type === BODY_SETTLED_EVENT_TYPE
+        && isRecord(data)
+        && data.op === 'op-settled'
+        && data.phase === 'settling') {
+        failMarker = false
+        throw new Error('settling writer down')
+      }
+      return appendRecord(session, type, data)
+    }
+
+    const settled = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 })
+    expect(settled.status).toBe('failed')
+    expect(bodyEvent(harness.events, 'op-finish')).toBeUndefined()
+    expect(foldPendingOps(harness.events).map((op) => op.opId)).toEqual([started.opId])
+    expect(pendingByAgent.get(harness.agentId)?.opId).toBe(started.opId)
+    expect(harness.surface()).not.toContain(anchorSeq)
+    closeTurn(harness, 3)
+
+    pendingByAgent.clear()
+    const assistantsBefore = harness.events.filter((event) => event.type === 'assistant/message').length
+    const outcome = await recoverBodyOperationWith(
+      recoveryHost(),
+      harness.deps.agent,
+      async () => harness.deps,
+    )
+
+    expect(outcome).toMatchObject({ agentId: harness.agentId, status: 'restored', pending: 1 })
+    // Old turn writes are replayed before the body copy is appended.
+    expect(calls).toEqual([`prepare:${harness.agentId}:1:anchor-1`, 'commit:1', 'rollback-turn:3', 'restore:1'])
+    const restored = bodyEventsWithOp(harness.events, 'restore').at(-1)
+    const restoredId = restored?.data.messageId
+    if (typeof restoredId !== 'string') throw new Error('restart recovery did not record a restore message')
+    expect(harness.surface()).toContain(seqOfMessage(harness.events, restoredId))
+    expect(harness.events.filter((event) => event.type === 'assistant/message')).toHaveLength(assistantsBefore + 1)
+    expect(bodyEvent(harness.events, 'op-abort')?.data).toMatchObject({ anchorId: restoredId })
+    expect(foldPendingOps(harness.events)).toEqual([])
+  })
+
+  it('restores the same failed operation only once on repeated recovery', async () => {
+    const harness = healthyHarness()
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const started = await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+    const trigger = firstFollowup(harness)
+    appendTriggerTurn(harness, 3, trigger, 'new-body', false)
+    closeTurn(harness, 3)
+
+    const restoredId = await restoreBodyAfterFailure(harness.deps, started.op)
+    expect(restoredId).toMatch(/^body-restore-/)
+    const assistantsAfterFirst = harness.events.filter((event) => event.type === 'assistant/message').length
+    const restoresAfterFirst = bodyEventsWithOp(harness.events, 'restore').length
+    expect(foldPendingOps(harness.events)).toEqual([])
+
+    const again = await restoreBodyAfterFailure(harness.deps, started.op)
+    expect(again).toBe(restoredId)
+    expect(harness.events.filter((event) => event.type === 'assistant/message')).toHaveLength(assistantsAfterFirst)
+    expect(bodyEventsWithOp(harness.events, 'restore')).toHaveLength(restoresAfterFirst)
+    expect(bodyEventsWithOp(harness.events, 'candidate')).toHaveLength(1)
+    expect(bodyEventsWithOp(harness.events, 'restore')).toHaveLength(1)
+  })
+
+  it('reuses the restored copy when only the terminal abort record failed', async () => {
+    const harness = healthyHarness()
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const started = await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+    const trigger = firstFollowup(harness)
+    appendTriggerTurn(harness, 3, trigger, 'new-body', false)
+    closeTurn(harness, 3)
+    const appendRecord = harness.deps.appendRecord
+    if (appendRecord === undefined) throw new Error('fake harness: appendRecord is missing')
+    let failAbort = true
+    harness.deps.appendRecord = (session, type, data) => {
+      if (failAbort && type === BODY_ABORT_EVENT_TYPE) {
+        failAbort = false
+        throw new Error('abort writer down')
+      }
+      return appendRecord(session, type, data)
+    }
+
+    await expect(restoreBodyAfterFailure(harness.deps, started.op))
+      .rejects.toMatchObject({ code: 'operation-failed' })
+    const restored = bodyEventsWithOp(harness.events, 'restore')
+    expect(restored).toHaveLength(1)
+    const restoredId = restored[0]?.data.messageId
+    if (typeof restoredId !== 'string') throw new Error('restore did not record its message id')
+    const assistantsAfterFailure = harness.events.filter((event) => event.type === 'assistant/message').length
+
+    expect(await restoreBodyAfterFailure(harness.deps, started.op)).toBe(restoredId)
+    expect(harness.events.filter((event) => event.type === 'assistant/message')).toHaveLength(assistantsAfterFailure)
+    expect(bodyEventsWithOp(harness.events, 'restore')).toHaveLength(1)
+    expect(bodyEvent(harness.events, 'op-abort')?.data).toMatchObject({ anchorId: restoredId })
+    expect(foldPendingOps(harness.events)).toEqual([])
+  })
+
+  it('keeps the op-start pending when a failed start cannot compensate its rollback', async () => {
+    const calls: string[] = []
+    const harness = createHarness({
+      status: 'idle',
+      phaseKind: 'idle',
+      lastTurn: 0,
+      followupError: undefined,
+      restrictError: new Error('tool restriction down'),
+      appendRecord: true,
+      rollback: createRollbackPort({
+        restore: async () => { throw new Error('compensation restore down') },
+      }, calls),
+    })
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+
+    await expect(startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })).rejects.toMatchObject({
+      code: 'operation-failed',
+      message: expect.stringContaining('could not be restored'),
+    })
+
+    // Proposal 0022 §10 revision 2026-10-29: only a successful compensation may
+    // close a failed start. A failed compensation keeps the durable handle.
+    expect(calls).toEqual([`prepare:${harness.agentId}:1:anchor-1`, 'restore:1'])
+    expect(bodyEvent(harness.events, 'op-finish')).toBeUndefined()
+    expect(bodyEvent(harness.events, 'op-abort')).toBeUndefined()
+    expect(foldPendingOps(harness.events)).toHaveLength(1)
+    expect(pendingByAgent.get(harness.agentId)).toBeDefined()
+    expect(harness.surface()).toContain(anchorSeq)
+  })
+
+  it('plans the next regenerate against the candidate after a restore copy becomes the anchor', async () => {
+    const prepared: string[] = []
+    const harness = createHarness({
+      status: 'idle',
+      phaseKind: 'idle',
+      lastTurn: 0,
+      followupError: undefined,
+      restrictError: undefined,
+      appendRecord: true,
+      rollback: createRollbackPort({
+        prepare: async (agentId, turn, previousMessageId) => {
+          prepared.push(`${turn}:${previousMessageId}`)
+          if (previousMessageId.startsWith('body-restore-')) {
+            throw new BodyRollbackError(
+              'body-state-unsafe',
+              `old body has no receipt for restored anchor '${previousMessageId}'`,
+              { detail: 'mvu-receipt-missing', stage: 'prepare' },
+            )
+          }
+          return rollbackPlan(agentId, turn, previousMessageId)
+        },
+      }, []),
+    })
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const started = await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+    const trigger = firstFollowup(harness)
+    appendTriggerTurn(harness, 3, trigger, 'new-body', false)
+    closeTurn(harness, 3)
+    const restoredId = await restoreBodyAfterFailure(harness.deps, started.op)
+    expect(restoredId).toMatch(/^body-restore-/)
+
+    const second = await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: restoredId,
+      expectedIndex: 0,
+    })
+
+    // The anchor identity stays the restore copy, but the rollback identity is
+    // the original candidate message and the old turn (proposal 0023 §4.3).
+    expect(prepared).toEqual(['1:anchor-1', '1:anchor-1'])
+    expect(second.op.previousAnchorId).toBe(restoredId)
+    expect(second.op.rollbackPlan?.turn).toBe(1)
+  })
+
 
   it('keeps the settled body when op-finish fails after the hide and retries only op-finish', async () => {
     const calls: string[] = []
@@ -2575,13 +2858,23 @@ describe('AgentTavern body runtime', () => {
     })
     expect(String(cancelled?.data.reason)).toContain('previous anchor')
     expect(settledEventsOf(harness.events).filter((event) => event.data.phase === 'settled')).toHaveLength(0)
-    expect(bodyEvent(harness.events, 'op-finish')?.data).toMatchObject({ result: 'failed' })
+    expect(bodyEvent(harness.events, 'op-finish')).toBeUndefined()
+    expect(bodyEvent(harness.events, 'op-abort')?.data).toMatchObject({ anchorId: 'anchor-1' })
     expect(harness.surface()).toContain(anchorSeq)
     expect(harness.surface()).not.toContain(triggerTurn.triggerSeq)
     expect(harness.surface()).not.toContain(triggerTurn.processSeq)
     expect(harness.surface()).not.toContain(triggerTurn.finalSeq)
     expect(harness.events.filter((event) => event.type === 'assistant/message')).toHaveLength(assistantsBefore)
     expect(bodyEvent(harness.events, 'restore')).toBeUndefined()
+
+    const second = await recoverBodyOperationWith(
+      recoveryStageHost(stages),
+      harness.deps.agent,
+      async () => harness.deps,
+    )
+    expect(second).toMatchObject({ agentId: harness.agentId, status: 'clean', pending: 0 })
+    expect(harness.events.filter((event) => event.type === 'assistant/message')).toHaveLength(assistantsBefore)
+    expect(bodyEventsWithOp(harness.events, 'restore')).toHaveLength(0)
   })
 
   it('cancels a reverse partial settlement when the ledger still selects the previous index', async () => {
@@ -2614,7 +2907,8 @@ describe('AgentTavern body runtime', () => {
       index: 1,
     })
     expect(settledEventsOf(harness.events).filter((event) => event.data.phase === 'settled')).toHaveLength(0)
-    expect(bodyEvent(harness.events, 'op-finish')?.data).toMatchObject({ result: 'failed' })
+    expect(bodyEvent(harness.events, 'op-finish')).toBeUndefined()
+    expect(bodyEvent(harness.events, 'op-abort')?.data).toMatchObject({ anchorId: 'anchor-1' })
     const surface = harness.surface()
     expect(surface).toContain(anchorSeq)
     expect(surface).not.toContain(partial.triggerTurn.triggerSeq)
@@ -2683,15 +2977,12 @@ describe('AgentTavern body runtime', () => {
     }
     const assistantsBefore = harness.events.filter((event) => event.type === 'assistant/message').length
 
-    let thrown: unknown
     const recovered = foldPendingOps(harness.events)[0]
     if (recovered === undefined) throw new Error('foldPendingOps did not rebuild the operation')
-    try {
-      await finalizeRecoveredOperation(harness.deps, recovered, 2)
-    } catch (error) {
-      thrown = error
-    }
-    expect(bodyFailureOf(thrown).code).toBe('operation-failed')
+    const settled = await finalizeRecoveredOperation(harness.deps, recovered, 2)
+    expect(settled.status).toBe('failed')
+    expect(bodyEvent(harness.events, 'op-finish')).toBeUndefined()
+    expect(foldPendingOps(harness.events).map((op) => op.opId)).toEqual([started.opId])
     const cancelled = harness.events.find((event) => event.type === BODY_SETTLED_EVENT_TYPE
       && event.data.op === 'op-settle-cancelled')
     expect(cancelled?.data).toMatchObject({
@@ -2720,7 +3011,8 @@ describe('AgentTavern body runtime', () => {
 
     expect(outcome).toMatchObject({ agentId: harness.agentId, status: 'restored', pending: 1 })
     expect(settledEventsOf(harness.events).filter((event) => event.data.phase === 'settled')).toHaveLength(0)
-    expect(bodyEvent(harness.events, 'op-finish')?.data).toMatchObject({ result: 'failed' })
+    expect(bodyEvent(harness.events, 'op-finish')).toBeUndefined()
+    expect(bodyEvent(harness.events, 'op-abort')?.data).toMatchObject({ anchorId: 'anchor-1' })
     expect(harness.surface()).toContain(anchorSeq)
     expect(harness.surface()).not.toContain(triggerTurn.triggerSeq)
     expect(harness.surface()).not.toContain(triggerTurn.finalSeq)
@@ -3388,6 +3680,298 @@ describe('AgentTavern durable body rollback plan', () => {
   })
 })
 
+/* -------- failed settlement branches stay restorable (review S1) --------- */
+
+interface AbortBranchCase {
+  readonly harness: Harness
+  readonly split: SplitRollbackHarness
+}
+
+function abortBranchCase(): AbortBranchCase {
+  const split = createSplitRollbackPort({})
+  return { harness: splitHarness(split), split }
+}
+
+/**
+ * Write a durable op-start with an attached plan and no ledger event.
+ * Used for the settlement branches that can only be reached when the body
+ * ledger is missing entirely (crash before candidate 0 was seeded).
+ */
+function startLegacyOpWithPlan(
+  harness: Harness,
+  plan: BodyRollbackPlan,
+  previousIndex: number,
+): { opId: string; triggerMessageId: string } {
+  const opId = `body-op-legacy-plan-${harness.events.length}`
+  harness.session.append(BODY_EVENT_TYPE, {
+    op: 'op-start',
+    opId,
+    groupId: 'anchor-1',
+    kind: 'regenerate',
+    previousAnchorId: 'anchor-1',
+    previousIndex,
+    rollbackPlan: plan,
+  })
+  return { opId, triggerMessageId: `body-trigger-${opId}` }
+}
+
+function assertRestoredLedger(harness: Harness, restoredId: string): void {
+  const ledger = foldBodyLedger(toBodySessionEvents(harness.events), 'anchor-1', harness.events.length - 1)
+  if (ledger === undefined) throw new Error('restored operation lost its body ledger')
+  expect(ledger.selectedIndex).toBe(0)
+  expect(ledger.anchorMessageId).toBe(restoredId)
+  expect(effectiveBodyText(ledger)).toBe('old body')
+}
+
+describe('AgentTavern failed settlement recovery', () => {
+  it('keeps an operation with no text candidate pending and restores its plan on restart', async () => {
+    const { harness, split } = abortBranchCase()
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const started = await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+    const trigger = firstFollowup(harness)
+    const failedTurn = appendTriggerTurn(harness, 3, trigger, undefined, false)
+    expect(split.state.current).toEqual(ROLLED_BACK_WRITES)
+
+    const result = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 })
+
+    expect(result.status).toBe('failed')
+    expect(bodyEvent(harness.events, 'op-finish')).toBeUndefined()
+    expect(settledEventsOf(harness.events).map((event) => event.data.op)).toEqual(['op-settle-cancelled'])
+    expect(foldPendingOps(harness.events).map((op) => op.opId)).toEqual([started.opId])
+    expect(split.state.current).toEqual(ROLLED_BACK_WRITES)
+
+    closeTurn(harness, 3)
+    pendingByAgent.clear()
+    const outcome = await recoverBodyOperationWith(recoveryHost(), harness.deps.agent, async () => harness.deps)
+
+    expect(outcome).toMatchObject({ agentId: harness.agentId, status: 'restored', pending: 1 })
+    expect(split.state.current).toEqual(OLD_TURN_WRITES)
+    const restored = bodyEventsWithOp(harness.events, 'restore').at(-1)
+    const restoredId = restored?.data.messageId
+    if (typeof restoredId !== 'string') throw new Error('recovery did not record a restore message')
+    expect(bodyEvent(harness.events, 'op-abort')?.data).toMatchObject({ anchorId: restoredId })
+    expect(harness.surface()).toContain(seqOfMessage(harness.events, restoredId))
+    expect(harness.surface()).not.toContain(failedTurn.triggerSeq)
+    expect(harness.surface()).not.toContain(failedTurn.processSeq)
+    assertRestoredLedger(harness, restoredId)
+  })
+
+  it('keeps an operation whose candidate left the surface pending and restores it on restart', async () => {
+    const { harness, split } = abortBranchCase()
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+    const trigger = firstFollowup(harness)
+    const triggerTurn = appendTriggerTurn(harness, 3, trigger, 'new-body', false)
+    if (triggerTurn.finalSeq === undefined) throw new Error('fake harness: final candidate is missing')
+    // Replace the candidate range so it keeps existing in the log but not on
+    // the model surface; settlement must not select a hidden candidate.
+    harness.session.append('step/start', { turn: 3, step: 3 })
+    harness.session.append('developer/message', {
+      turn: 3,
+      step: 3,
+      message: {
+        id: 'body-hide-candidate',
+        role: 'developer',
+        content: [],
+        source: { kind: 'plugin:dsh-soulmojito', form: 'body-hide', summary: 'hidden candidate' },
+      },
+    }, {
+      surfaceOp: { op: 'replace', startSeq: triggerTurn.finalSeq, endSeq: triggerTurn.finalSeq },
+      sourceEventSeqs: [triggerTurn.finalSeq],
+    })
+    harness.session.append('step/end', { turn: 3, step: 3 })
+    expect(harness.surface()).not.toContain(triggerTurn.finalSeq)
+
+    const result = await finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 })
+
+    expect(result.status).toBe('failed')
+    if (result.status === 'failed') expect(result.reason).toContain('not on the current surface')
+    expect(bodyEvent(harness.events, 'op-finish')).toBeUndefined()
+    expect(settledEventsOf(harness.events).map((event) => event.data.op)).toEqual(['op-settle-cancelled'])
+    expect(foldPendingOps(harness.events)).toHaveLength(1)
+    // The candidate never entered the ledger.
+    expect(bodyEventsWithOp(harness.events, 'candidate').map((event) => event.data.index)).toEqual([0])
+
+    closeTurn(harness, 3)
+    pendingByAgent.clear()
+    const outcome = await recoverBodyOperationWith(recoveryHost(), harness.deps.agent, async () => harness.deps)
+
+    expect(outcome).toMatchObject({ agentId: harness.agentId, status: 'restored', pending: 1 })
+    expect(split.state.current).toEqual(OLD_TURN_WRITES)
+    const restored = bodyEventsWithOp(harness.events, 'restore').at(-1)
+    const restoredId = restored?.data.messageId
+    if (typeof restoredId !== 'string') throw new Error('recovery did not record a restore message')
+    expect(harness.surface()).toContain(seqOfMessage(harness.events, restoredId))
+    expect(harness.surface()).not.toContain(triggerTurn.finalSeq)
+    expect(harness.surface()).not.toContain(triggerTurn.triggerSeq)
+    assertRestoredLedger(harness, restoredId)
+  })
+
+  it('keeps an operation without a ledger at a non-zero previous index pending and restores its plan', async () => {
+    const { harness, split } = abortBranchCase()
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const started = startLegacyOpWithPlan(harness, rollbackPlan(harness.agentId, 1, 'anchor-1'), 1)
+    split.state.current = ROLLED_BACK_WRITES
+    const trigger = legacyTrigger(started)
+    const triggerTurn = appendTriggerTurn(harness, 2, trigger, 'new-body', false)
+    const recovered = foldPendingOps(harness.events)[0]
+    if (recovered === undefined) throw new Error('foldPendingOps did not rebuild the operation')
+
+    const result = await finalizeRecoveredOperation(harness.deps, recovered, 2)
+
+    expect(result.status).toBe('failed')
+    if (result.status === 'failed') expect(result.reason).toContain('has no candidate 0')
+    expect(bodyEvent(harness.events, 'op-finish')).toBeUndefined()
+    expect(settledEventsOf(harness.events).map((event) => event.data.op)).toEqual(['op-settle-cancelled'])
+    // No ledger means no select: appending one would make the ledger unfoldable.
+    expect(bodyEventsWithOp(harness.events, 'select')).toHaveLength(0)
+    expect(foldPendingOps(harness.events)).toHaveLength(1)
+
+    closeTurn(harness, 2)
+    pendingByAgent.clear()
+    const outcome = await recoverBodyOperationWith(recoveryHost(), harness.deps.agent, async () => harness.deps)
+
+    expect(outcome).toMatchObject({ agentId: harness.agentId, status: 'restored', pending: 1 })
+    expect(split.state.current).toEqual(OLD_TURN_WRITES)
+    expect(bodyEvent(harness.events, 'op-abort')?.data).toMatchObject({ anchorId: 'anchor-1' })
+    expect(harness.surface()).toContain(anchorSeq)
+    expect(harness.surface()).not.toContain(triggerTurn.finalSeq)
+    expect(harness.surface()).not.toContain(triggerTurn.triggerSeq)
+  })
+
+  it('keeps an operation pending when seeding candidate 0 fails and restores the plan on restart', async () => {
+    const { harness, split } = abortBranchCase()
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const started = startLegacyOpWithPlan(harness, rollbackPlan(harness.agentId, 1, 'anchor-1'), 0)
+    split.state.current = ROLLED_BACK_WRITES
+    const trigger = legacyTrigger(started)
+    const triggerTurn = appendTriggerTurn(harness, 2, trigger, 'new-body', false)
+    const appendRecord = harness.deps.appendRecord
+    if (appendRecord === undefined) throw new Error('fake harness: appendRecord is missing')
+    let failSeed = true
+    harness.deps.appendRecord = (session, type, data) => {
+      if (failSeed && type === BODY_EVENT_TYPE && isRecord(data) && data.op === 'candidate') {
+        failSeed = false
+        throw new Error('candidate seed writer down')
+      }
+      return appendRecord(session, type, data)
+    }
+    const recovered = foldPendingOps(harness.events)[0]
+    if (recovered === undefined) throw new Error('foldPendingOps did not rebuild the operation')
+
+    await expect(finalizeRecoveredOperation(harness.deps, recovered, 2))
+      .rejects.toMatchObject({ code: 'operation-failed', message: expect.stringContaining('candidate seed writer down') })
+
+    expect(bodyEvent(harness.events, 'op-finish')).toBeUndefined()
+    expect(settledEventsOf(harness.events).map((event) => event.data.op)).toEqual(['op-settle-cancelled'])
+    expect(foldPendingOps(harness.events)).toHaveLength(1)
+    expect(bodyEventsWithOp(harness.events, 'candidate')).toHaveLength(0)
+
+    closeTurn(harness, 2)
+    pendingByAgent.clear()
+    const outcome = await recoverBodyOperationWith(recoveryHost(), harness.deps.agent, async () => harness.deps)
+
+    expect(outcome).toMatchObject({ agentId: harness.agentId, status: 'restored', pending: 1 })
+    expect(split.state.current).toEqual(OLD_TURN_WRITES)
+    expect(bodyEvent(harness.events, 'op-abort')?.data).toMatchObject({ anchorId: 'anchor-1' })
+    expect(harness.surface()).not.toContain(triggerTurn.finalSeq)
+  })
+
+  it('keeps an operation pending when the seeded candidate never reaches the ledger', async () => {
+    const { harness, split } = abortBranchCase()
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const started = startLegacyOpWithPlan(harness, rollbackPlan(harness.agentId, 1, 'anchor-1'), 0)
+    split.state.current = ROLLED_BACK_WRITES
+    const trigger = legacyTrigger(started)
+    const triggerTurn = appendTriggerTurn(harness, 2, trigger, 'new-body', false)
+    const appendRecord = harness.deps.appendRecord
+    if (appendRecord === undefined) throw new Error('fake harness: appendRecord is missing')
+    let dropCandidate = true
+    harness.deps.appendRecord = (session, type, data) => {
+      // A silently dropped candidate record leaves the ledger empty without an
+      // exception, exercising the "seeded but still empty" branch. Recovery
+      // needs the writer healthy again, so the drop stops after the branch ran.
+      if (dropCandidate && type === BODY_EVENT_TYPE && isRecord(data) && data.op === 'candidate') return undefined
+      return appendRecord(session, type, data)
+    }
+    const recovered = foldPendingOps(harness.events)[0]
+    if (recovered === undefined) throw new Error('foldPendingOps did not rebuild the operation')
+
+    const result = await finalizeRecoveredOperation(harness.deps, recovered, 2)
+
+    expect(result.status).toBe('failed')
+    if (result.status === 'failed') expect(result.reason).toContain('ledger stayed empty')
+    expect(bodyEvent(harness.events, 'op-finish')).toBeUndefined()
+    expect(settledEventsOf(harness.events).map((event) => event.data.op)).toEqual(['op-settle-cancelled'])
+    expect(foldPendingOps(harness.events)).toHaveLength(1)
+
+    dropCandidate = false
+    closeTurn(harness, 2)
+    pendingByAgent.clear()
+    const outcome = await recoverBodyOperationWith(recoveryHost(), harness.deps.agent, async () => harness.deps)
+
+    expect(outcome).toMatchObject({ agentId: harness.agentId, status: 'restored', pending: 1 })
+    expect(split.state.current).toEqual(OLD_TURN_WRITES)
+    expect(harness.surface()).not.toContain(triggerTurn.finalSeq)
+    expect(harness.surface()).not.toContain(triggerTurn.triggerSeq)
+  })
+
+  it('rolls the selection back when the select append fails and restores the previous body', async () => {
+    const { harness, split } = abortBranchCase()
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const started = await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+    const trigger = firstFollowup(harness)
+    const triggerTurn = appendTriggerTurn(harness, 3, trigger, 'new-body', false)
+    const appendRecord = harness.deps.appendRecord
+    if (appendRecord === undefined) throw new Error('fake harness: appendRecord is missing')
+    let failSelect = true
+    harness.deps.appendRecord = (session, type, data) => {
+      if (failSelect && type === BODY_EVENT_TYPE && isRecord(data) && data.op === 'select') {
+        failSelect = false
+        throw new Error('select writer down')
+      }
+      return appendRecord(session, type, data)
+    }
+
+    await expect(finalizeTurnStopping(harness.deps, { agentId: harness.agentId, turn: 3 }))
+      .rejects.toMatchObject({ code: 'operation-failed', message: expect.stringContaining('select writer down') })
+
+    expect(bodyEvent(harness.events, 'op-finish')).toBeUndefined()
+    expect(settledEventsOf(harness.events).map((event) => event.data.op)).toEqual(['op-settle-cancelled'])
+    expect(foldPendingOps(harness.events).map((op) => op.opId)).toEqual([started.opId])
+    // The candidate append auto-selects index 1; the failure must restore 0 so
+    // the ledger never keeps a new candidate selected while the old body returns.
+    const ledger = foldBodyLedger(toBodySessionEvents(harness.events), 'anchor-1', harness.events.length - 1)
+    expect(ledger?.selectedIndex).toBe(0)
+    expect(bodyEventsWithOp(harness.events, 'select').map((event) => event.data.index)).toEqual([0])
+
+    closeTurn(harness, 3)
+    pendingByAgent.clear()
+    const outcome = await recoverBodyOperationWith(recoveryHost(), harness.deps.agent, async () => harness.deps)
+
+    expect(outcome).toMatchObject({ agentId: harness.agentId, status: 'restored', pending: 1 })
+    expect(split.state.current).toEqual(OLD_TURN_WRITES)
+    const restored = bodyEventsWithOp(harness.events, 'restore').at(-1)
+    const restoredId = restored?.data.messageId
+    if (typeof restoredId !== 'string') throw new Error('recovery did not record a restore message')
+    expect(harness.surface()).toContain(seqOfMessage(harness.events, restoredId))
+    expect(harness.surface()).not.toContain(triggerTurn.finalSeq)
+    assertRestoredLedger(harness, restoredId)
+  })
+})
+
 /* ------------- durable op-prepare boundary (proposal 0022 §10) ------------ */
 
 /** Store state the split port double rolls back and restores. */
@@ -3868,5 +4452,122 @@ describe('AgentTavern durable op-prepare', () => {
     expect(split.state.current).toEqual(OLD_TURN_WRITES)
     expect(prepareReportEventsOf(harness.events)).toHaveLength(1)
     expect(foldPendingPrepares(harness.events)).toEqual([])
+  })
+})
+
+/* ------------------ failed-candidate receipt undo (proposal 0022 §4) ------ */
+
+describe('AgentTavern body failed-candidate receipt recovery', () => {
+  const CHARACTER = 'ReceiptRecoveryCharacter'
+
+  function receiptTurnKey(messageId: string): string {
+    return `body:${messageId}`
+  }
+
+  it('undoes the failed candidate receipt and drops its unique variable path before restoring the old plan', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agent-tavern-body-runtime-receipt-'))
+    const previousHome = process.env.DSH_HOME
+    process.env.DSH_HOME = home
+    try {
+      const tavern = await tavernStore()
+      await tavern.importCharacter({
+        spec: 'chara_card_v2',
+        spec_version: '2.0',
+        data: {
+          name: CHARACTER,
+          description: '',
+          personality: '',
+          scenario: '',
+          first_mes: '',
+          mes_example: '',
+          creator_notes: '',
+          system_prompt: '',
+          post_history_instructions: '',
+          alternate_greetings: [],
+          tags: [],
+          creator: '',
+          character_version: '',
+          extensions: {
+            tavern_helper: { scripts: [{ type: 'script', content: "import 'https://example.invalid/MagVarUpdate/bundle.js'" }] },
+          },
+        },
+      })
+      const chatId = await tavern.createChat(CHARACTER, {
+        user_name: 'User',
+        character_name: CHARACTER,
+        chat_metadata: {
+          variables: { stat_data: { newOnly: 'new-candidate' } },
+          mvu: {
+            receipts: [{
+              at: '2026-10-29T00:00:00.000Z',
+              turnKey: receiptTurnKey('new-body'),
+              status: 'updated',
+              changes: [{ name: 'stat_data.newOnly', after: 'new-candidate' }],
+              failures: [],
+            }],
+          },
+        },
+      })
+
+      const calls: string[] = []
+      const harness = createHarness({
+        status: 'idle',
+        phaseKind: 'idle',
+        lastTurn: 0,
+        followupError: undefined,
+        restrictError: undefined,
+        appendRecord: true,
+        rollback: createRollbackPort({
+          prepare: async (agentId, turn, previousMessageId) => ({
+            ...rollbackPlan(agentId, turn, previousMessageId),
+            binding: { character: CHARACTER, chatId },
+          }),
+        }, calls),
+      })
+      seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+      const started = await startRegenerate(harness.deps, {
+        groupId: 'anchor-1',
+        expectedAnchorId: 'anchor-1',
+        expectedIndex: 0,
+      })
+      const trigger = firstFollowup(harness)
+      harness.session.append('turn/start', { turn: 3 })
+      harness.session.append('step/start', { turn: 3, step: 1 })
+      harness.session.append('user/message', trigger, { surfaceOp: 'append' })
+      harness.session.append('assistant/message', {
+        turn: 3,
+        step: 1,
+        stream: [],
+        message: {
+          id: 'new-body',
+          role: 'assistant',
+          content: [{
+            type: 'text',
+            text: 'New take.\n<UpdateVariable>\n<JSONPatch>\n[{ "op": "replace", "path": "/stat_data/newOnly", "value": "new-candidate" }]\n</JSONPatch>\n</UpdateVariable>',
+          }],
+          source: { kind: 'model', provider: 'test-provider', model: 'test-model' },
+        },
+      }, { surfaceOp: 'append' })
+      harness.session.append('step/end', { turn: 3, step: 1 })
+      harness.session.append('turn/end', { turn: 3, reason: { kind: 'completed' } })
+
+      const restoredId = await restoreBodyAfterFailure(harness.deps, started.op)
+      expect(restoredId).toMatch(/^body-restore-/)
+
+      const snapshot = await tavern.getChatSnapshot(CHARACTER, chatId)
+      if (snapshot === undefined) throw new Error('fixture chat is missing')
+      const live = mvuReceiptsForBody(snapshot.chat, { messageId: 'new-body' })
+        .filter((receipt) => receipt.undoneAt === undefined)
+      expect(live).toEqual([])
+      expect(readMvuReceipts(snapshot.chat).some((receipt) => receipt.turnKey === receiptTurnKey('new-body')
+        && receipt.undoneAt !== undefined)).toBe(true)
+      const variables = snapshot.chat.header.chat_metadata.variables
+      const statData = isRecord(variables) && isRecord(variables.stat_data) ? variables.stat_data : {}
+      expect(statData).not.toHaveProperty('newOnly')
+    } finally {
+      if (previousHome === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = previousHome
+      rmSync(home, { recursive: true, force: true })
+    }
   })
 })

@@ -42,43 +42,34 @@ import {
 
 /* --------------------------------- shapes --------------------------------- */
 
-/** Stable identity of one body candidate (proposal 0021 §3.1). */
-export interface CandidateReceiptRef {
-  readonly messageId: string
-  readonly index: number
-}
-
-/** Parsed shape of one `mvu.receipts[].turnKey`. */
-export type BodyReceiptKey =
-  | { readonly kind: 'candidate'; readonly messageId: string; readonly index: number }
-  | { readonly kind: 'legacy'; readonly messageId: string }
-  | { readonly kind: 'settle'; readonly floorIndex: number }
-  | { readonly kind: 'unknown' }
-
-/** Unsafe candidate-receipt states surfaced by inspection and edit. */
-export type CandidateReceiptDetail =
-  | 'body-receipt-missing'
-  | 'body-receipt-duplicate'
-  | 'body-receipt-legacy'
-  | 'body-receipt-key-mismatch'
-
-/** Every recoverable refusal code for the candidate edit transaction. */
-export type CandidateReceiptErrorCode =
-  | CandidateReceiptDetail
-  | 'stale-anchor'
-  | 'body-floor-not-found'
-  | 'projection-pending'
-
-/** Typed refusal with a stable code for the projector / HTTP error mapping. */
-export class CandidateReceiptError extends Error {
-  readonly code: CandidateReceiptErrorCode
-
-  constructor(code: CandidateReceiptErrorCode, message: string) {
-    super(message)
-    this.name = 'CandidateReceiptError'
-    this.code = code
-  }
-}
+// The key grammar, typed refusal and ledger slot witness live in
+// `body-candidate-keys.ts`. They are re-exported here so existing importers
+// keep this module as the single entry point.
+export {
+  CandidateReceiptError,
+  candidatePreserveKeys,
+  candidateReceiptKey,
+  classifyBodyReceiptKey,
+  isCanonicalMessageId,
+} from './body-candidate-keys.js'
+export type {
+  BodyReceiptKey,
+  CandidateReceiptDetail,
+  CandidateReceiptErrorCode,
+  CandidateReceiptRef,
+  LedgerIndex,
+} from './body-candidate-keys.js'
+import {
+  BODY_PREFIX,
+  CandidateReceiptError,
+  candidatePreserveKeys,
+  candidateReceiptKey,
+  classifyBodyReceiptKey,
+  readLedgerIndex,
+  refMismatch,
+  requireLedgerIndex,
+} from './body-candidate-keys.js'
+import type { CandidateReceiptDetail, CandidateReceiptRef } from './body-candidate-keys.js'
 
 /** Result of rewriting legacy candidate keys. */
 export interface LegacyCandidateMigration {
@@ -110,148 +101,9 @@ export interface CandidateEditInput {
   readonly eventSeq: number
 }
 
-/* ---------------------------------- keys ---------------------------------- */
+/* ------------------------- keys and ledger index -------------------------- */
 
-const BODY_PREFIX = 'body:'
-const CANONICAL_INDEX = /^(0|[1-9][0-9]*)$/
-
-/** Native message ids never carry the separator or surrounding whitespace. */
-function isCanonicalMessageId(value: string): boolean {
-  return value.trim() !== '' && value.trim() === value && !value.includes('#')
-}
-
-/**
- * Stable candidate receipt key: `body:<messageId>#<index>`.
- *
- * `index` is the ledger slot witness and must be a non-negative safe integer.
- * Message ids containing `#` or surrounding whitespace are rejected because the
- * separator would make the key ambiguous and the parser would have to guess.
- */
-export function candidateReceiptKey(messageId: string, index: number): string {
-  if (typeof messageId !== 'string' || !isCanonicalMessageId(messageId)) {
-    throw new CandidateReceiptError(
-      'body-receipt-key-mismatch',
-      `candidate receipt key requires a non-empty message id without '#' or surrounding whitespace, received '${String(messageId)}'`,
-    )
-  }
-  if (!Number.isSafeInteger(index) || index < 0) {
-    throw new CandidateReceiptError(
-      'body-receipt-key-mismatch',
-      `candidate receipt key for message '${messageId}' requires a non-negative safe integer index, received ${String(index)}`,
-    )
-  }
-  return `${BODY_PREFIX}${messageId}#${index}`
-}
-
-/**
- * Every receipt key owned by one body group's candidates: the canonical
- * `body:<messageId>#<index>` key plus the legacy `body:<messageId>` alias.
- *
- * The alias stays listed because a still-unmigrated legacy receipt belongs to
- * the same candidate; migrating it later must not find it evicted. Callers pass
- * this set to the receipt append so ring retention cannot drop the active
- * group's candidates (proposal 0023 §3.6). A malformed ledger entry throws
- * instead of producing a partial set: an unprotected candidate is a silent
- * data-loss path.
- */
-export function candidatePreserveKeys(ledger: BodyLedger): ReadonlySet<string> {
-  const keys = new Set<string>()
-  for (const candidate of ledger.candidates) {
-    keys.add(candidateReceiptKey(candidate.messageId, candidate.index))
-    keys.add(`${BODY_PREFIX}${candidate.messageId}`)
-  }
-  return keys
-}
-
-/**
- * Parse one stored `turnKey` without guessing:
- *
- * - `body:<messageId>#<digits>` is a candidate key (canonical digits only);
- * - `body:<messageId>` is the legacy candidate key;
- * - canonical digits are a settle receipt;
- * - every other shape is unknown.
- */
-export function classifyBodyReceiptKey(turnKey: string): BodyReceiptKey {
-  if (typeof turnKey !== 'string' || turnKey === '') return { kind: 'unknown' }
-
-  if (!turnKey.startsWith(BODY_PREFIX)) {
-    return CANONICAL_INDEX.test(turnKey) && Number.isSafeInteger(Number(turnKey))
-      ? { kind: 'settle', floorIndex: Number(turnKey) }
-      : { kind: 'unknown' }
-  }
-
-  const rest = turnKey.slice(BODY_PREFIX.length)
-  const separator = rest.indexOf('#')
-  if (separator === -1) {
-    return isCanonicalMessageId(rest) ? { kind: 'legacy', messageId: rest } : { kind: 'unknown' }
-  }
-
-  const messageId = rest.slice(0, separator)
-  const suffix = rest.slice(separator + 1)
-  if (!isCanonicalMessageId(messageId) || !CANONICAL_INDEX.test(suffix)) return { kind: 'unknown' }
-  const index = Number(suffix)
-  if (!Number.isSafeInteger(index)) return { kind: 'unknown' }
-  return { kind: 'candidate', messageId, index }
-}
-
-/** Reject a ref that cannot be represented as a candidate key. */
-function refMismatch(ref: CandidateReceiptRef): string | undefined {
-  if (typeof ref.messageId !== 'string' || !isCanonicalMessageId(ref.messageId)) {
-    return `candidate ref message id must be non-empty without '#' or surrounding whitespace, received '${String(ref.messageId)}'`
-  }
-  if (!Number.isSafeInteger(ref.index) || ref.index < 0) {
-    return `candidate ref for '${ref.messageId}' has a non-negative safe integer index requirement, received ${String(ref.index)}`
-  }
-  return undefined
-}
-
-/* ------------------------------ ledger index ------------------------------ */
-
-interface LedgerIndex {
-  readonly byMessageId: ReadonlyMap<string, number>
-  readonly error?: string
-}
-
-/**
- * Build the `messageId -> slot` witness from the ledger.
- *
- * A message id appearing twice, or a candidate whose `index` differs from its
- * array position, makes the receipt key non-unique; the caller must refuse
- * instead of picking one slot.
- */
-function readLedgerIndex(ledger: BodyLedger): LedgerIndex {
-  const byMessageId = new Map<string, number>()
-  for (const [position, candidate] of ledger.candidates.entries()) {
-    const messageId = candidate.messageId
-    if (typeof messageId !== 'string' || !isCanonicalMessageId(messageId)) {
-      return {
-        byMessageId,
-        error: `ledger candidate at position ${position} has message id '${String(messageId)}', which cannot be encoded as a candidate receipt key`,
-      }
-    }
-    if (!Number.isSafeInteger(candidate.index) || candidate.index < 0 || candidate.index !== position) {
-      return {
-        byMessageId,
-        error: `ledger candidate '${messageId}' carries index ${String(candidate.index)} at position ${position}; the slot witness must equal its position`,
-      }
-    }
-    const existing = byMessageId.get(messageId)
-    if (existing !== undefined) {
-      return {
-        byMessageId,
-        error: `ledger maps message id '${messageId}' to candidate ${existing} and candidate ${candidate.index}; refusing to guess which slot owns its receipt`,
-      }
-    }
-    byMessageId.set(messageId, candidate.index)
-  }
-  return { byMessageId }
-}
-
-function requireLedgerIndex(ledger: BodyLedger): ReadonlyMap<string, number> {
-  const index = readLedgerIndex(ledger)
-  if (index.error !== undefined) throw new CandidateReceiptError('body-receipt-key-mismatch', index.error)
-  return index.byMessageId
-}
+// Implemented in `body-candidate-keys.ts` and re-exported above.
 
 /* -------------------------------- migration ------------------------------- */
 
@@ -325,12 +177,31 @@ function hasUpdateVariableBlock(text: string): boolean {
 }
 
 /**
+ * Whether the chat carries any receipt key that names this message id.
+ *
+ * Matching is literal so keys the canonical grammar cannot encode (ids carrying
+ * `#`) are still found and inspected. Such a key must be refused when a receipt
+ * is involved, never ignored as if the candidate owned no receipt.
+ */
+function carriesCandidateReceipt(chat: ChatLogIR, messageId: string): boolean {
+  const legacy = `${BODY_PREFIX}${messageId}`
+  const candidatePrefix = `${legacy}#`
+  return readMvuReceipts(chat).some(
+    (receipt) => receipt.turnKey === legacy || receipt.turnKey.startsWith(candidatePrefix),
+  )
+}
+
+/**
  * Inspect one candidate's receipts.
  *
  * `needsReceipt` is true when the card declares JSR MVU and the previous body
  * contains a complete `<UpdateVariable>` block. Only multiple live receipts
  * that actually carry changes are a duplicate: proposal 0023 §3.2 lets
  * `status: 'unchanged'` receipts coexist because they do not touch variables.
+ *
+ * The key grammar is only validated when a receipt is actually involved: a
+ * plain card, or a body without a patch block and no candidate key in the
+ * chat, returns the empty verdict without parsing the message id.
  */
 export function inspectCandidateReceipts(
   chat: ChatLogIR,
@@ -340,6 +211,9 @@ export function inspectCandidateReceipts(
   card: CharacterCardIR,
 ): CandidateReceiptInspection {
   const needsReceipt = cardUsesJsrMvu(card) && hasUpdateVariableBlock(previousText)
+  if (!needsReceipt && !carriesCandidateReceipt(chat, ref.messageId)) {
+    return { live: [], undone: [], needsReceipt }
+  }
   const mismatch = refMismatch(ref)
   if (mismatch !== undefined) {
     return { live: [], undone: [], needsReceipt, detail: 'body-receipt-key-mismatch' }
@@ -454,9 +328,16 @@ function detailError(
 /**
  * Apply one candidate edit inside a caller-owned chat clone.
  *
- * Order (must not be reordered): locate + validate floor, migrate legacy keys,
- * undo the live receipt, snapshot the baseline, apply the new patch, replace the
- * candidate receipt, rewrite `swipes` / `mes`, then attach `stat_data`.
+ * Order (must not be reordered): locate + validate floor, decide whether a
+ * receipt is involved, validate the ledger key grammar, migrate legacy keys,
+ * inspect receipts, undo the live receipt, snapshot the baseline, apply the new
+ * patch, replace the candidate receipt, rewrite `swipes` / `mes`, then attach
+ * `stat_data`.
+ *
+ * The ledger key grammar is validated only on the receipt path. An edit that
+ * neither reads nor writes a receipt (plain card, or a body without a patch and
+ * no candidate receipt) must not fail because its native message id contains
+ * `#` or whitespace: that id never becomes a receipt key.
  *
  * The argument is mutated in place and returned. On a thrown
  * {@link CandidateReceiptError} the clone may already contain migration edits;
@@ -477,14 +358,18 @@ export function applyCandidateEditToChat(
   }
   if (isReplayOfAppliedEvent(floor, input.eventSeq)) return chat
 
-  const byMessageId = requireLedgerIndex(input.ledger)
-  migrateLegacyCandidateReceipts(chat, input.ledger)
-  // The ledger is the only witness of which receipts belong to the active
-  // group. The set is identical before and after the upsert: the edit removes
-  // the target's old receipt and re-appends it under the same key.
-  const preserveTurnKeys = candidatePreserveKeys(input.ledger)
-
   const ref: CandidateReceiptRef = { messageId: input.messageId, index: input.index }
+  // Receipt keys are validated, migrated and inspected only when this edit
+  // actually touches a receipt: a plain card, or a body without a patch, must
+  // not be blocked by a native message id the `body:<id>#<index>` grammar
+  // cannot encode.
+  const byMessageId = editNeedsReceiptWork(card, chat, input)
+    ? requireLedgerIndex(input.ledger)
+    : undefined
+  // Migration must land before inspection: inspection captures the stored
+  // receipt keys it will later undo.
+  if (byMessageId !== undefined) migrateLegacyCandidateReceipts(chat, input.ledger)
+
   const inspection = inspectCandidateReceipts(chat, ref, input.ledger, input.previousText, card)
   if (inspection.detail !== undefined) throw detailError(inspection.detail, ref, inspection)
 
@@ -493,8 +378,16 @@ export function applyCandidateEditToChat(
   const before = snapshotChatVariables(chat)
   const applied = applyUpdateVariableToChat(card, chat, input.text)
   if (applied.found) {
+    // `applied.found` implies an MVU card with a patch block, so the receipt
+    // path above must have validated the key before any write happened.
+    if (byMessageId === undefined) {
+      throw new CandidateReceiptError(
+        'body-receipt-key-mismatch',
+        `candidate ${input.index} ('${input.messageId}') applies an <UpdateVariable> patch without a prepared receipt key; refusing to write an untracked patch`,
+      )
+    }
     removeCandidateReceipts(chat, ref, byMessageId)
-    recordCandidateReceipt(chat, before, candidateReceiptKey(input.messageId, input.index), input.at, applied.failures, preserveTurnKeys)
+    recordCandidateReceipt(chat, before, candidateReceiptKey(input.messageId, input.index), input.at, applied.failures, input.ledger)
   } else {
     removeCandidateReceipts(chat, ref, byMessageId)
     restoreChatVariables(chat, before)
@@ -523,6 +416,19 @@ export function applyCandidateEditToChat(
 }
 
 /* -------------------------------- helpers --------------------------------- */
+
+/**
+ * Whether this edit reads or writes a candidate receipt.
+ *
+ * Only a JSR MVU card can own receipts. An existing candidate key, a previous
+ * body with a patch block, or a new patch block all touch the receipt set; any
+ * other edit must not be gated by the key grammar.
+ */
+function editNeedsReceiptWork(card: CharacterCardIR, chat: ChatLogIR, input: CandidateEditInput): boolean {
+  if (carriesCandidateReceipt(chat, input.messageId)) return true
+  if (!cardUsesJsrMvu(card)) return false
+  return hasUpdateVariableBlock(input.previousText) || hasUpdateVariableBlock(input.text)
+}
 
 /**
  * Record the applied body event on the floor. The watermark makes a projector
@@ -600,7 +506,10 @@ function locateCandidateFloor(chat: ChatLogIR, input: CandidateEditInput): numbe
   try {
     floorIndex = locateBodyFloor(chat, input.groupId, input.messageId)
   } catch (error) {
-    if (error instanceof BodyJsonlProjectionError) {
+    // Only a missing floor is a projection lag. Ambiguous group bindings are
+    // damaged data (`body-group-mismatch`): keep the code so the HTTP layer can
+    // answer 409 instead of the retryable projection-pending.
+    if (error instanceof BodyJsonlProjectionError && error.code === 'body-floor-not-found') {
       throw new CandidateReceiptError(
         'body-floor-not-found',
         `cannot locate body floor for group '${input.groupId}' / message '${input.messageId}': ${error.message}`,
@@ -675,11 +584,14 @@ function readLastBodyEventSeq(message: ChatMessage): number | undefined {
  * Remove every receipt that belongs to this candidate (new key, migrated key,
  * or a still-legacy key mapped by the ledger). Other receipts and unknown
  * `mvu` members stay untouched.
+ *
+ * `byMessageId` is absent on receipt-free edits: no candidate key exists then,
+ * and a legacy key without a ledger witness is never guessed.
  */
 function removeCandidateReceipts(
   chat: ChatLogIR,
   ref: CandidateReceiptRef,
-  byMessageId: ReadonlyMap<string, number>,
+  byMessageId: ReadonlyMap<string, number> | undefined,
 ): void {
   const mvu = plainObject(chat.header.chat_metadata.mvu)
   const raw = mvu?.receipts
@@ -695,12 +607,12 @@ function removeCandidateReceipts(
 function receiptBelongsToCandidate(
   turnKey: string,
   ref: CandidateReceiptRef,
-  byMessageId: ReadonlyMap<string, number>,
+  byMessageId: ReadonlyMap<string, number> | undefined,
 ): boolean {
   const key = classifyBodyReceiptKey(turnKey)
   if (key.kind === 'candidate') return key.messageId === ref.messageId && key.index === ref.index
   if (key.kind === 'legacy') {
-    return key.messageId === ref.messageId && byMessageId.get(key.messageId) === ref.index
+    return key.messageId === ref.messageId && byMessageId?.get(key.messageId) === ref.index
   }
   return false
 }
@@ -711,8 +623,9 @@ function receiptBelongsToCandidate(
  * proof that a patch was applied (even a no-op one), so fall back to an
  * explicit `unchanged` receipt.
  *
- * `preserveTurnKeys` carries the active group's candidate keys so the ring
- * cannot evict a sibling candidate's only receipt (proposal 0023 §3.6).
+ * `ledger` is read lazily for the active group's candidate keys: this function
+ * is only reached when a receipt is actually written, so a candidate id that
+ * the key grammar cannot encode never blocks a receipt-free path.
  */
 function recordCandidateReceipt(
   chat: ChatLogIR,
@@ -720,8 +633,12 @@ function recordCandidateReceipt(
   turnKey: string,
   at: string,
   failures: readonly string[],
-  preserveTurnKeys: ReadonlySet<string>,
+  ledger: BodyLedger,
 ): MvuReceipt {
+  // The ledger is the only witness of which receipts belong to the active
+  // group. The set is identical before and after the upsert: the edit removes
+  // the target's old receipt and re-appends it under the same key.
+  const preserveTurnKeys = candidatePreserveKeys(ledger)
   const recorded = recordMvuTurnReceipt(chat, before, { turnKey, at, failures: [...failures], preserveTurnKeys })
   if (recorded !== undefined) return recorded
   const changes = diffVariables(before, readChatVariables(chat))

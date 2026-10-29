@@ -2013,6 +2013,8 @@ var LOCAL_EMBED_PRECISIONS = [
   "q1",
   "q1f16"
 ];
+var MAX_CHAT_SNAPSHOT_CACHE_ENTRIES = 64;
+var CHAT_SNAPSHOT_READ_ATTEMPTS = 3;
 var ChatRevisionConflictError = class extends Error {
   constructor(expectedRevision, actualRevision) {
     super("Chat changed in another tab. Reloaded the latest version; review it before retrying.");
@@ -2131,6 +2133,10 @@ var TavernStore = class _TavernStore {
   }
   chatMutationTail = new MutationTail();
   stateMutationTail = new MutationTail();
+  /** Parsed chat logs keyed by chat file absolute path; see getChatSnapshot. */
+  chatSnapshotCache = /* @__PURE__ */ new Map();
+  chatSnapshotCacheHits = 0;
+  chatSnapshotCacheMisses = 0;
   static async open(root) {
     for (const dir of ["characters", "worlds", "presets", "chats", "personas", "groups", "personas/avatars"]) {
       await fs2.mkdir(path.join(root, dir), { recursive: true });
@@ -2346,6 +2352,8 @@ var TavernStore = class _TavernStore {
           if (renameCause.code !== "ENOENT") throw renameCause;
         }
       }
+      this.invalidateChatSnapshotDir(path.join(this.root, "chats", currentStem));
+      this.invalidateChatSnapshotDir(path.join(this.root, "chats", nextStem));
     }
     for (const other of ["png", "json", "charx"].filter((other2) => other2 !== kind)) {
       await fs2.rm(path.join(this.root, "characters", `${nextStem}.${other}`), { force: true });
@@ -2391,7 +2399,9 @@ var TavernStore = class _TavernStore {
       }
     }
     if (deleted) {
-      await fs2.rm(path.join(this.root, "chats", safeFileName(name2)), { recursive: true, force: true });
+      const chatDir = path.join(this.root, "chats", safeFileName(name2));
+      await fs2.rm(chatDir, { recursive: true, force: true });
+      this.invalidateChatSnapshotDir(chatDir);
       await this.updateState((current) => {
         const owned = new Set(Object.entries(current.regexScriptOwners ?? {}).filter(([, owner]) => owner === name2).map(([id]) => id));
         return owned.size === 0 ? {} : dropRegexScriptsById(current, owned);
@@ -2450,7 +2460,9 @@ var TavernStore = class _TavernStore {
       const dir = path.join(this.root, "chats", safeFileName(characterName));
       await fs2.mkdir(dir, { recursive: true });
       const id = `${timestamp()}.jsonl`;
-      await this.writeAtomic(path.join(dir, id), chatBytes({ header, messages }));
+      const file = path.join(dir, id);
+      await this.writeAtomic(file, chatBytes({ header, messages }));
+      this.invalidateChatSnapshot(file);
       return id;
     });
   }
@@ -2461,18 +2473,57 @@ var TavernStore = class _TavernStore {
       await this.assertChatRevision(file, expectedRevision);
       const bytes = chatBytes(log);
       await this.writeAtomic(file, bytes);
+      this.invalidateChatSnapshot(file);
       return chatRevision(bytes);
     });
   }
   async getChat(characterName, chatId) {
     return (await this.getChatSnapshot(characterName, chatId))?.chat;
   }
+  /**
+   * Reads one chat with its CAS revision.
+   *
+   * `GET body` asks for the same chat once per assistant row and the panel
+   * re-requests it on every poll: re-reading the JSONL and re-parsing every
+   * line makes one panel render O(n^2) over the chat. The parse is cached per
+   * chat file and validated by a size+mtimeMs+ino fingerprint; any mismatch
+   * (external rewrite, or a write path that skipped invalidation) falls back to
+   * a fresh parse and replaces the entry.
+   *
+   * The returned snapshot is caller-owned: the cached parse is never handed
+   * out, so a caller that mutates `chat` before saveChat cannot corrupt it.
+   * Return type, revision value and error behaviour (unreadable/corrupt files
+   * still throw, a missing file still yields undefined) are unchanged.
+   */
   async getChatSnapshot(characterName, chatId) {
-    const bytes = await this.tryRead(path.join(this.root, "chats", safeFileName(characterName), safeChatFileName(chatId)));
-    if (bytes === void 0) return void 0;
+    const file = path.join(this.root, "chats", safeFileName(characterName), safeChatFileName(chatId));
+    const cached = this.chatSnapshotCache.get(file);
+    if (cached !== void 0) {
+      const current = await statChatFile(file);
+      if (current !== void 0 && sameChatFingerprint(cached, current)) {
+        this.chatSnapshotCacheHits += 1;
+        this.chatSnapshotCache.delete(file);
+        this.chatSnapshotCache.set(file, cached);
+        return cloneChatSnapshot(cached.snapshot);
+      }
+      this.chatSnapshotCache.delete(file);
+    }
+    this.chatSnapshotCacheMisses += 1;
+    const read = await readChatFile(file);
+    if (read === void 0) return void 0;
+    const snapshot = {
+      chat: parseChatLog(Buffer.from(read.bytes).toString("utf8")),
+      revision: chatRevision(read.bytes)
+    };
+    if (read.fingerprint !== void 0) this.cacheChatSnapshot(file, read.fingerprint, cloneChatSnapshot(snapshot));
+    return snapshot;
+  }
+  /** Process-local chat snapshot cache counters (tests, diagnostics). */
+  chatSnapshotCacheStats() {
     return {
-      chat: parseChatLog(Buffer.from(bytes).toString("utf8")),
-      revision: chatRevision(bytes)
+      hits: this.chatSnapshotCacheHits,
+      misses: this.chatSnapshotCacheMisses,
+      size: this.chatSnapshotCache.size
     };
   }
   async listChats(characterName) {
@@ -2494,6 +2545,8 @@ var TavernStore = class _TavernStore {
       if (source === target) return;
       if (await this.tryRead(target)) throw new Error(`chat '${nextChatId}' already exists`);
       await fs2.rename(source, target);
+      this.invalidateChatSnapshot(source);
+      this.invalidateChatSnapshot(target);
       await this.moveChatOverlay(this.chatWorldsFile(characterName, chatId), this.chatWorldsFile(characterName, nextChatId));
       await this.moveChatOverlay(this.chatScriptsFile(characterName, chatId), this.chatScriptsFile(characterName, nextChatId));
     });
@@ -2507,6 +2560,8 @@ var TavernStore = class _TavernStore {
       } catch (cause) {
         if (cause.code === "ENOENT") return false;
         throw cause;
+      } finally {
+        this.invalidateChatSnapshot(file);
       }
       await fs2.rm(this.chatWorldsFile(characterName, chatId), { force: true });
       await fs2.rm(this.chatScriptsFile(characterName, chatId), { force: true });
@@ -2752,7 +2807,9 @@ var TavernStore = class _TavernStore {
         nextId = `${safeStem} - branch ${counter}.jsonl`;
       }
       const branchLog = { header, messages: branchMessages };
-      await this.writeAtomic(path.join(dir, nextId), chatBytes(branchLog));
+      const branchFile = path.join(dir, nextId);
+      await this.writeAtomic(branchFile, chatBytes(branchLog));
+      this.invalidateChatSnapshot(branchFile);
       await this.copyChatOverlay(this.chatWorldsFile(characterName, chatId), this.chatWorldsFile(characterName, nextId));
       await this.copyChatOverlay(this.chatScriptsFile(characterName, chatId), this.chatScriptsFile(characterName, nextId));
       return { chatId: nextId, chat: branchLog };
@@ -2793,7 +2850,9 @@ var TavernStore = class _TavernStore {
         nextId = `${safeStem} - fork ${counter}.jsonl`;
       }
       const forkLog = { header, messages: [] };
-      await this.writeAtomic(path.join(dir, nextId), chatBytes(forkLog));
+      const forkFile = path.join(dir, nextId);
+      await this.writeAtomic(forkFile, chatBytes(forkLog));
+      this.invalidateChatSnapshot(forkFile);
       await this.copyChatOverlay(this.chatWorldsFile(characterName, parentChatId), this.chatWorldsFile(characterName, nextId));
       await this.copyChatOverlay(this.chatScriptsFile(characterName, parentChatId), this.chatScriptsFile(characterName, nextId));
       return { chatId: nextId, chat: forkLog };
@@ -3074,6 +3133,33 @@ var TavernStore = class _TavernStore {
   }
   mutateChat(operation) {
     return this.chatMutationTail.enqueue(operation);
+  }
+  /**
+   * Stores one parse under its fingerprint and evicts least-recently-used
+   * entries beyond the cap. Only complete snapshots reaching this point are
+   * cached: a parse that throws never lands here, and concurrent misses on the
+   * same chat each cache a complete snapshot (last writer wins; the fingerprint
+   * keeps a stale loser from ever matching the file again).
+   */
+  cacheChatSnapshot(file, fingerprint, snapshot) {
+    this.chatSnapshotCache.delete(file);
+    this.chatSnapshotCache.set(file, { ...fingerprint, snapshot });
+    while (this.chatSnapshotCache.size > MAX_CHAT_SNAPSHOT_CACHE_ENTRIES) {
+      const oldest = this.chatSnapshotCache.keys().next().value;
+      if (oldest === void 0) break;
+      this.chatSnapshotCache.delete(oldest);
+    }
+  }
+  /** Drops one chat's cached parse; every chat write path calls this. */
+  invalidateChatSnapshot(file) {
+    this.chatSnapshotCache.delete(file);
+  }
+  /** Drops every cached parse below one chat directory (character rename/delete). */
+  invalidateChatSnapshotDir(dir) {
+    const prefix = `${dir}${path.sep}`;
+    for (const key of this.chatSnapshotCache.keys()) {
+      if (key.startsWith(prefix)) this.chatSnapshotCache.delete(key);
+    }
   }
   chatWorldsFile(characterName, chatId) {
     return path.join(this.root, "chats", safeFileName(characterName), `${safeChatFileName(chatId)}.worlds.json`);
@@ -3475,6 +3561,58 @@ function chatBytes(log) {
 }
 function chatRevision(bytes) {
   return createHash("sha256").update(bytes).digest("base64url");
+}
+function cloneChatSnapshot(snapshot) {
+  return {
+    chat: {
+      header: cloneChatRecord(snapshot.chat.header),
+      messages: snapshot.chat.messages.map(cloneChatRecord)
+    },
+    revision: snapshot.revision
+  };
+}
+function cloneChatRecord(value) {
+  const copy = {};
+  for (const key of Object.keys(value)) {
+    const clone = cloneChatValue(value[key]);
+    if (key === "__proto__") {
+      Object.defineProperty(copy, key, { value: clone, enumerable: true, writable: true, configurable: true });
+    } else {
+      copy[key] = clone;
+    }
+  }
+  return copy;
+}
+function cloneChatValue(value) {
+  if (Array.isArray(value)) return value.map(cloneChatValue);
+  if (typeof value === "object" && value !== null) return cloneChatRecord(value);
+  return value;
+}
+async function statChatFile(file) {
+  try {
+    const stat = await fs2.stat(file);
+    return { size: stat.size, mtimeMs: stat.mtimeMs, ino: stat.ino };
+  } catch (cause) {
+    if (cause.code === "ENOENT") return void 0;
+    throw cause;
+  }
+}
+function sameChatFingerprint(left, right) {
+  return left.size === right.size && left.mtimeMs === right.mtimeMs && left.ino === right.ino;
+}
+async function readChatFile(file) {
+  let last;
+  for (let attempt = 0; attempt < CHAT_SNAPSHOT_READ_ATTEMPTS; attempt += 1) {
+    const before = await statChatFile(file);
+    if (before === void 0) return last === void 0 ? void 0 : { bytes: last };
+    const bytes = new Uint8Array(await fs2.readFile(file));
+    const after = await statChatFile(file);
+    if (after !== void 0 && after.size === bytes.byteLength && sameChatFingerprint(before, after)) {
+      return { bytes, fingerprint: after };
+    }
+    last = bytes;
+  }
+  return last === void 0 ? void 0 : { bytes: last };
 }
 function jsonBytes(obj) {
   return new Uint8Array(Buffer.from(JSON.stringify(obj, null, 2), "utf8"));

@@ -128,6 +128,7 @@ export type BodyJsonlErrorCode =
   | 'invalid-body-send-date'
   | 'body-floor-not-found'
   | 'body-group-mismatch'
+  | 'body-adoption-mismatch'
   | 'body-swipes-missing'
   | 'body-index-out-of-range'
   | 'body-index-mismatch'
@@ -164,12 +165,29 @@ export function locateBodyFloor(chat: ChatLogIR, groupId: string, messageId: str
   )
 }
 
-/** Find a body floor by `extra.agentTavern.bodyGroupId`. */
+/**
+ * Find a body floor by `extra.agentTavern.bodyGroupId`.
+ *
+ * A group owns exactly one chat floor. More than one match is ambiguous: the
+ * read path would show an arbitrary floor and the write path would edit one of
+ * them depending on chat order, so both refuse with `body-group-mismatch` and
+ * list every matched index.
+ */
 export function findBodyFloorIndexByGroupId(chat: ChatLogIR, groupId: string): number | undefined {
+  let found: number | undefined
+  const matches: number[] = []
   for (const [index, message] of chat.messages.entries()) {
-    if (readAgentTavern(message)?.bodyGroupId === groupId) return index
+    if (readAgentTavern(message)?.bodyGroupId !== groupId) continue
+    matches.push(index)
+    found ??= index
   }
-  return undefined
+  if (matches.length > 1) {
+    throw new BodyJsonlProjectionError(
+      'body-group-mismatch',
+      `body group '${groupId}' matches ${matches.length} chat floors (${matches.join(', ')}); a body group must own exactly one floor`,
+    )
+  }
+  return found
 }
 
 /** Find a body floor by `extra.agentTavern.messageId`. */
@@ -178,6 +196,62 @@ export function findBodyFloorIndexByMessageId(chat: ChatLogIR, messageId: string
     if (readAgentTavern(message)?.messageId === messageId) return index
   }
   return undefined
+}
+
+/** Hints for {@link locateBodyFloorForRead}. */
+export interface BodyJsonlReadHints {
+  readonly messageId: string
+  /**
+   * Ledger group id. It outranks the message scan because a candidate switch
+   * leaves the floor on the previous anchor until the projection catches up.
+   */
+  readonly groupId?: string
+}
+
+/**
+ * Locate the single chat floor a `GET body` read may use.
+ *
+ * The read path applies the same uniqueness rule as the write path: a group
+ * that matches more than one floor throws `body-group-mismatch` with every
+ * matched index instead of silently serving the first one. `undefined` means
+ * nothing is projected yet (cold or lagging session), which is not an error.
+ *
+ * @throws BodyJsonlProjectionError `body-group-mismatch` when the group or the
+ * message id resolves to more than one floor.
+ */
+export function locateBodyFloorForRead(chat: ChatLogIR, hints: BodyJsonlReadHints): number | undefined {
+  requireNonEmpty(hints.messageId, 'invalid-body-message-id', 'body message id')
+  if (hints.groupId !== undefined) {
+    requireNonEmpty(hints.groupId, 'invalid-body-group-id', 'body group id')
+    // `findBodyFloorIndexByGroupId` refuses an ambiguous group; a read must
+    // never pick one of two floors the ledger expects to be unique.
+    const byGroup = findBodyFloorIndexByGroupId(chat, hints.groupId)
+    if (byGroup !== undefined) return byGroup
+  }
+
+  const matches: number[] = []
+  for (const [index, message] of chat.messages.entries()) {
+    const tavern = readAgentTavern(message)
+    if (tavern === undefined) continue
+    if (tavern.bodyGroupId !== hints.messageId
+      && tavern.messageId !== hints.messageId
+      && tavern.anchorMessageId !== hints.messageId) continue
+    matches.push(index)
+  }
+  if (matches.length === 0) return undefined
+  if (matches.length > 1) {
+    throw new BodyJsonlProjectionError(
+      'body-group-mismatch',
+      `body message '${hints.messageId}' matches ${matches.length} chat floors (${matches.join(', ')}); a read must resolve exactly one floor`,
+    )
+  }
+
+  const index = matches[0]!
+  // Even when the message id found the floor, its group still owns exactly one
+  // chat floor, so re-check the binding with the write-side locator.
+  const groupId = readAgentTavern(chat.messages[index]!)?.bodyGroupId
+  if (typeof groupId === 'string' && groupId !== '') findBodyFloorIndexByGroupId(chat, groupId)
+  return index
 }
 
 /* ------------------------------- projection -------------------------------- */
@@ -216,7 +290,11 @@ export function applyCandidateToChat(chat: ChatLogIR, input: BodyJsonlCandidateI
   const nextSwipeInfo = readSwipeInfo(nextFloor, input.groupId)
 
   nextSwipes[input.index] = input.text
-  while (nextSwipeInfo.length < input.index) nextSwipeInfo.push({})
+  // Keep the ST swipe_info shape for every filled slot: an empty object would
+  // drop the required send_date and break ST-compatible readers.
+  while (nextSwipeInfo.length < input.index) {
+    nextSwipeInfo.push({ send_date: input.sendDate, extra: {} })
+  }
   nextSwipeInfo[input.index] = mergeSwipeInfo(nextSwipeInfo[input.index], input)
 
   next.messages[floorIndex] = {
@@ -297,8 +375,16 @@ export function applyEditToChat(chat: ChatLogIR, input: BodyJsonlEditInput): Cha
 }
 
 /**
- * Restore an anchor after a failed regeneration. The candidate list, selected
- * slot, effective text and `swipe_info` remain untouched.
+ * Restore an anchor after a failed regeneration.
+ *
+ * The candidate list and `swipe_info` remain untouched, but the ST selection
+ * surface must agree with the ledger again: the failed attempt may leave the
+ * floor on its candidate slot, and a `swipe_id` that no longer equals `index`
+ * makes every later candidate receipt look `stale-anchor`. Restoring therefore
+ * rewrites `swipe_id` and `mes` from `swipes[index]`; a missing slot is a typed
+ * refusal instead of a silent keep. `lastBodyEventSeq` / `lastBodyMutation` are
+ * preserved like `applySelectToChat` does, because a restore record carries no
+ * edit watermark of its own.
  */
 export function applyRestoreToChat(chat: ChatLogIR, input: BodyJsonlRestoreInput): ChatLogIR {
   requireNonEmpty(input.groupId, 'invalid-body-group-id', 'body group id')
@@ -309,12 +395,14 @@ export function applyRestoreToChat(chat: ChatLogIR, input: BodyJsonlRestoreInput
   const floor = chat.messages[floorIndex]!
   assertFloorGroup(floor, input.groupId)
   const swipes = requireSwipes(floor, input.groupId)
-  requireSwipeText(swipes, input.index, input.groupId)
+  const text = requireSwipeText(swipes, input.index, input.groupId)
 
   const next = structuredClone(chat)
   const nextFloor = next.messages[floorIndex]!
   next.messages[floorIndex] = {
     ...nextFloor,
+    swipe_id: input.index,
+    mes: text,
     extra: patchAgentTavern(nextFloor, input.groupId, input.messageId),
   }
   return next
@@ -327,6 +415,8 @@ export interface BodyJsonlAdoptionInput {
   readonly groupId: string
   readonly sessionId: string
   readonly anchorMessageId: string
+  /** Text of the imported anchor message the adopted floor must mirror. */
+  readonly anchorText: string
 }
 
 /**
@@ -342,16 +432,27 @@ export interface BodyJsonlAdoptionInput {
  * receipts included. `mes` stays untouched until that projection lands, and
  * the group binding makes the floor locatable for every later operation.
  *
+ * Adoption is only allowed when the chosen floor is really the anchor's chat
+ * mirror: a plugin-unaware assistant floor whose `mes` equals the anchor text.
+ * Any other floor is refused with `body-adoption-mismatch` instead of binding
+ * the group to a floor the anchor never produced.
+ *
+ * The dropped swipe fields are snapshotted into
+ * `extra.agentTavern.adoptedSwipes` so the original ST surface can be
+ * restored manually; the read paths ignore that field.
+ *
  * The display route keeps matching `extra.agentTavern.messageId` only, so
  * adopted floors stay outside the display override (decision 2026-10-20).
  *
  * @throws BodyJsonlProjectionError `body-group-mismatch` when this group is
- * already projected; `body-floor-not-found` when no adoptable floor exists.
+ * already projected; `body-floor-not-found` when no adoptable floor exists;
+ * `body-adoption-mismatch` when the floor is not the anchor mirror.
  */
 export function applyFloorAdoptionToChat(chat: ChatLogIR, input: BodyJsonlAdoptionInput): ChatLogIR {
   requireNonEmpty(input.groupId, 'invalid-body-group-id', 'body group id')
   requireNonEmpty(input.sessionId, 'invalid-body-message-id', 'adoption session id')
   requireNonEmpty(input.anchorMessageId, 'invalid-body-message-id', 'adoption anchor message id')
+  requireNonEmpty(input.anchorText, 'invalid-body-text', 'adoption anchor text')
 
   if (findBodyFloorIndexByGroupId(chat, input.groupId) !== undefined) {
     throw new BodyJsonlProjectionError(
@@ -366,18 +467,73 @@ export function applyFloorAdoptionToChat(chat: ChatLogIR, input: BodyJsonlAdopti
       `no unprojected assistant floor can be adopted for group '${input.groupId}'`,
     )
   }
+  const floor = chat.messages[floorIndex]!
+  assertAdoptionMirror(floor, input, floorIndex)
 
   const next = structuredClone(chat)
   const nextFloor = next.messages[floorIndex]!
   const extra = patchAgentTavern(nextFloor, input.groupId, input.anchorMessageId)
   const current = isRecord(extra.agentTavern) ? extra.agentTavern : {}
-  extra.agentTavern = { ...current, sessionId: input.sessionId }
+  extra.agentTavern = {
+    ...current,
+    sessionId: input.sessionId,
+    adoptedSwipes: snapshotSwipeSurface(nextFloor),
+  }
   const adopted = { ...nextFloor, extra }
   delete adopted.swipes
   delete adopted.swipe_id
   delete adopted.swipe_info
   next.messages[floorIndex] = adopted
   return next
+}
+
+/**
+ * Refuse a floor that is not the chat mirror of the imported anchor. The text
+ * comparison is exact (after trimming) because the import writes the same
+ * text into the host session.
+ */
+function assertAdoptionMirror(floor: ChatMessage, input: BodyJsonlAdoptionInput, floorIndex: number): void {
+  if (floor.is_user === true || floor.is_system === true || typeof floor.mes !== 'string') {
+    throw adoptionMismatch(input, floorIndex, 'the floor is not an assistant message')
+  }
+  const tavern = readAgentTavern(floor)
+  if (tavern !== undefined && Object.keys(tavern).length > 0) {
+    throw adoptionMismatch(input, floorIndex, 'the floor already carries AgentTavern metadata')
+  }
+  const anchorText = input.anchorText.trim()
+  if (floor.mes.trim() !== anchorText) {
+    throw adoptionMismatch(
+      input,
+      floorIndex,
+      `floor text starts with '${textPrefix(floor.mes)}' but the anchor text starts with '${textPrefix(anchorText)}'`,
+    )
+  }
+}
+
+function adoptionMismatch(
+  input: BodyJsonlAdoptionInput,
+  floorIndex: number,
+  detail: string,
+): BodyJsonlProjectionError {
+  return new BodyJsonlProjectionError(
+    'body-adoption-mismatch',
+    `imported floor adoption refused for group '${input.groupId}': chat floor ${floorIndex} is not the mirror of anchor '${input.anchorMessageId}' (${detail})`,
+  )
+}
+
+/** Short single-line prefix used by mismatch messages. */
+function textPrefix(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  return flat.length <= 40 ? flat : `${flat.slice(0, 40)}...`
+}
+
+/** Original ST swipe surface of an adopted floor, kept for manual restoration. */
+function snapshotSwipeSurface(floor: ChatMessage): Record<string, unknown> {
+  return {
+    ...(floor.swipes === undefined ? {} : { swipes: structuredClone(floor.swipes) }),
+    ...(floor.swipe_id === undefined ? {} : { swipe_id: floor.swipe_id }),
+    ...(floor.swipe_info === undefined ? {} : { swipe_info: structuredClone(floor.swipe_info) }),
+  }
 }
 
 /** Last assistant floor the plugin never projected; the adoption target. */

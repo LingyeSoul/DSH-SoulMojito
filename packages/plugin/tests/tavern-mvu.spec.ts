@@ -8,6 +8,7 @@ import {
   appendMvuReceipt,
   diffVariables,
   MVU_RECEIPTS_LIMIT,
+  MVU_SETTLE_RECEIPTS_RESERVED,
   overlayScopedVariables,
   readMvuReceipts,
   recordMvuTurnReceipt,
@@ -226,7 +227,7 @@ describe('receipt recording (pure)', () => {
     ])
   })
 
-  it('reserves one settle slot when candidates alone fill the ring', () => {
+  it('reserves the settle slots when candidates alone fill the ring', () => {
     const candidates = Array.from({ length: MVU_RECEIPTS_LIMIT }, (_, i) => `body:g${i}#${i}`)
     const chat = makeChat(undefined, {
       receipts: [
@@ -237,9 +238,13 @@ describe('receipt recording (pure)', () => {
     appendMvuReceipt(chat, { at: 's5', turnKey: '5', status: 'updated', changes: [], failures: [] })
 
     const keys = readMvuReceipts(chat).map((receipt) => receipt.turnKey)
-    // One slot is reserved for the newest settle receipt, so the oldest candidate yields.
+    // `MVU_SETTLE_RECEIPTS_RESERVED` slots stay reserved for the newest settle
+    // receipts, so the oldest candidates yield.
     expect(keys).toHaveLength(MVU_RECEIPTS_LIMIT)
-    expect(keys).toEqual([...candidates.slice(1), '5'])
+    expect(keys).toEqual([
+      ...candidates.slice(MVU_SETTLE_RECEIPTS_RESERVED),
+      ...Array.from({ length: MVU_SETTLE_RECEIPTS_RESERVED }, (_, offset) => String(3 + offset)),
+    ])
   })
 
   it('still undoes and redoes the retained candidate receipt after settle pressure', () => {

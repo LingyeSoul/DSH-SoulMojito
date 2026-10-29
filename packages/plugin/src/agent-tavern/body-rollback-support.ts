@@ -47,6 +47,8 @@ export type BodyRollbackUnsafeDetail =
   | 'mvu-receipt-missing'
   | 'write-journal-missing'
   | 'write-journal-unavailable'
+  /** A before-only journal group whose store state cannot be verified. */
+  | 'write-journal-unknown'
 
 /** Stage that failed; the caller can decide whether to keep the op pending. */
 export type BodyRollbackStage =
@@ -240,7 +242,13 @@ export interface BodyRollbackPlan {
   readonly previousMessageId: string
   readonly binding: BodyRollbackBinding
   readonly floorIndex: number
-  readonly bodyText: string
+  /**
+   * Legacy field: older plans copied the pre-rollback body text here. New plans
+   * omit it so the append-only session log does not carry a second copy of the
+   * body; the parser still accepts it for recovery of plans written before this
+   * change.
+   */
+  readonly bodyText?: string
   /** Revision observed before `prepare` began (the CAS base). */
   readonly chatRevision: string
   /** Revision after the rolled-back chat was saved; equals `chatRevision` for a no-op. */
@@ -319,8 +327,12 @@ export interface BodyWriteRollbackPort {
    * This is the new-turn failure path: it folds that session+turn's write
    * journal, then undoes the settle receipts whose floor belongs to the turn.
    * Body receipts and the old plan are never touched. Before-only journal
-   * records are reported and skipped. Failures are collected per entry so the
-   * caller gets a complete diagnostic instead of only the first store error.
+   * records are verified against the store: a group whose write landed is
+   * undone like a complete pair, a group still holding the before state is
+   * reported in `skippedUncommitted`, and a group the store cannot verify
+   * fails closed with `write-journal-unknown`. Failures are collected per entry
+   * so the caller gets a complete diagnostic instead of only the first store
+   * error.
    */
   rollbackTurnWrites(agentId: string, turn: number): Promise<BodyNewTurnRollback>
 }

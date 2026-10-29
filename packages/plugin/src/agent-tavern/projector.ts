@@ -34,8 +34,14 @@ export interface ProjectorStore extends BodyProjectionStore {}
 export interface ProjectionCheckpoint {
   version: 1
   sessionId: string
+  /** Contiguous watermark: every seq at or below it is projected (or absent). */
   lastCursor: number
   status: 'ok' | 'pending'
+  /**
+   * Lowest seq that failed and still needs replay. Present while a hole exists;
+   * historical checkpoints may carry it below `lastCursor` (old scalar overwrite
+   * bug) or with `status: 'ok'`, and both remain repairable.
+   */
   pendingCursor?: number
   error?: string
   updatedAt: string
@@ -61,6 +67,10 @@ export class AgentTavernProjector {
   }
 
   async replay(session: NativeSession): Promise<void> {
+    // The on-disk checkpoint is authoritative: another instance (or a repair
+    // run) may have advanced it past this instance's cache, so a stale cache
+    // must never hide a pending hole during replay.
+    this.checkpoints.delete(session.id)
     const events = [...sessionEvents(session) as readonly NativeSessionEvent[]].sort((left, right) => left.seq - right.seq)
     for (const event of events) await this.project(session, event)
   }
@@ -72,7 +82,7 @@ export class AgentTavernProjector {
   private async projectOne(session: NativeSession, event: NativeSessionEvent): Promise<void> {
     if (!Number.isSafeInteger(event.seq) || event.seq < 0) throw new Error('invalid DSH event cursor')
     const checkpoint = await this.readCheckpoint(session.id)
-    if (event.seq <= checkpoint.lastCursor) return
+    if (isProjectedCursor(checkpoint, event.seq)) return
 
     try {
       const state = await this.store.getState()
@@ -87,24 +97,9 @@ export class AgentTavernProjector {
           if (message !== undefined) await this.appendMessage(binding, session.id, event.seq, message, character?.card)
         }
       }
-      await this.writeCheckpoint({
-        version: 1,
-        sessionId: session.id,
-        lastCursor: event.seq,
-        status: 'ok',
-        updatedAt: new Date().toISOString(),
-      })
+      await this.writeCheckpoint(advanceCheckpoint(checkpoint, event.seq))
     } catch (error) {
-      const pending: ProjectionCheckpoint = {
-        version: 1,
-        sessionId: session.id,
-        lastCursor: checkpoint.lastCursor,
-        status: 'pending',
-        pendingCursor: event.seq,
-        error: error instanceof Error ? error.message : String(error),
-        updatedAt: new Date().toISOString(),
-      }
-      await this.writeCheckpoint(pending)
+      await this.writeCheckpoint(pendingCheckpoint(checkpoint, event.seq, error))
       throw error
     }
   }
@@ -118,7 +113,11 @@ export class AgentTavernProjector {
   ): Promise<void> {
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const snapshot = await this.store.getChatSnapshot(binding.character, binding.chatId)
-      if (!snapshot) throw new Error('AgentTavern projection target chat not found')
+      if (!snapshot) {
+        throw new Error(
+          `AgentTavern projection target chat not found: chat '${binding.chatId}' of '${binding.character}' while appending the message of session '${sessionId}' event seq ${eventSeq}`,
+        )
+      }
       if (snapshot.chat.messages.some((candidate) => projectionIdentity(candidate, sessionId, eventSeq))) return
       const next = structuredClone(snapshot.chat)
       let projected = message
@@ -166,8 +165,9 @@ export class AgentTavernProjector {
     try {
       const parsed = JSON.parse(await fs.readFile(this.checkpointPath(sessionId), 'utf8')) as ProjectionCheckpoint
       validateCheckpoint(parsed, sessionId)
-      this.checkpoints.set(sessionId, parsed)
-      return parsed
+      const checkpoint = normalizeCheckpoint(parsed)
+      this.checkpoints.set(sessionId, checkpoint)
+      return checkpoint
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       const empty: ProjectionCheckpoint = {
@@ -211,7 +211,7 @@ function projectMessage(
       name: 'User',
       is_user: true,
       is_system: false,
-      send_date: eventDate(event.time),
+      send_date: eventDate(event.time, event.seq, event.type),
       // ST 语义：USER_INPUT 正则在消息落库前生效（ST 管线同样保存变换后文本）。
       mes: applyRegexScripts(text, scripts, RegexPlacement.USER_INPUT),
       extra: projectionExtra(session, event, binding.contextMode, turnAt(session, event.seq)),
@@ -235,7 +235,7 @@ function projectMessage(
     name: binding.character,
     is_user: false,
     is_system: false,
-    send_date: eventDate(event.time),
+    send_date: eventDate(event.time, event.seq, event.type),
     mes: saveScripts.length > 0 ? applyRegexScripts(text, saveScripts, RegexPlacement.AI_OUTPUT) : text,
     extra: projectionExtra(session, event, binding.contextMode, event.data?.turn, event.data?.step),
   }
@@ -511,14 +511,107 @@ function turnAt(session: NativeSession, cursor: number): number | undefined {
   return turn
 }
 
-function eventDate(time: number): string {
-  return new Date(Number.isFinite(time) ? time : Date.now()).toISOString()
+/** Largest millisecond value a `Date` can represent (±100,000,000 days). */
+const MAX_DATE_MILLISECONDS = 8.64e15
+
+/**
+ * ISO timestamp of a session event.
+ *
+ * A wall-clock fallback would make replay non-reproducible, so an unusable
+ * event time is a hard error instead. `time` is required by the host event
+ * contract; a historical or damaged event without it reaches this check as
+ * `undefined` and is rejected rather than silently dated at read time.
+ */
+function eventDate(time: number, seq: number, type: string): string {
+  if (!Number.isSafeInteger(time) || time < 0 || time > MAX_DATE_MILLISECONDS) {
+    throw new Error(
+      `session event '${type}' at seq ${seq} has unusable time ${String(time)}; expected a non-negative safe integer within the Date range`,
+    )
+  }
+  return new Date(time).toISOString()
 }
 
 function validateCheckpoint(value: ProjectionCheckpoint, sessionId: string): void {
   if (value.version !== 1 || value.sessionId !== sessionId || !Number.isSafeInteger(value.lastCursor)
     || !['ok', 'pending'].includes(value.status)) {
     throw new Error(`invalid AgentTavern projection checkpoint for '${sessionId}'`)
+  }
+  // Historical checkpoints may carry `pendingCursor` below `lastCursor`
+  // (the old scalar overwrite bug), so only the shape is validated here.
+  if (value.pendingCursor !== undefined
+    && (!Number.isSafeInteger(value.pendingCursor) || value.pendingCursor < 0)) {
+    throw new Error(`invalid AgentTavern projection checkpoint for '${sessionId}'`)
+  }
+}
+
+/**
+ * Keep a pending checkpoint repairable even when it lost its `pendingCursor`
+ * (hand-edited file or a producer that only knew the scalar watermark): the
+ * first unproven cursor is the next one after `lastCursor`.
+ */
+function normalizeCheckpoint(checkpoint: ProjectionCheckpoint): ProjectionCheckpoint {
+  if (checkpoint.status !== 'pending' || checkpoint.pendingCursor !== undefined) return checkpoint
+  if (checkpoint.lastCursor >= Number.MAX_SAFE_INTEGER) return checkpoint
+  return { ...checkpoint, pendingCursor: checkpoint.lastCursor + 1 }
+}
+
+/**
+ * Whether `seq` already has a durable projection.
+ *
+ * `lastCursor` is the contiguous completed watermark; `pendingCursor` is the
+ * lowest seq that still failed, so nothing at or above the hole is skipped.
+ */
+function isProjectedCursor(checkpoint: ProjectionCheckpoint, seq: number): boolean {
+  if (seq > checkpoint.lastCursor) return false
+  return checkpoint.pendingCursor === undefined || seq < checkpoint.pendingCursor
+}
+
+/**
+ * Advance the checkpoint after `seq` projected successfully.
+ *
+ * The pending hole closes only when `seq` is exactly `pendingCursor`. Any other
+ * success behind a hole must not move the watermark past it: the seq is replayed
+ * idempotently once the hole is repaired, so a second failed cursor cannot be
+ * skipped by a later success.
+ */
+function advanceCheckpoint(checkpoint: ProjectionCheckpoint, seq: number): ProjectionCheckpoint {
+  const updatedAt = new Date().toISOString()
+  const pendingCursor = checkpoint.pendingCursor
+  if (pendingCursor === undefined) {
+    return {
+      version: 1,
+      sessionId: checkpoint.sessionId,
+      lastCursor: Math.max(checkpoint.lastCursor, seq),
+      status: 'ok',
+      updatedAt,
+    }
+  }
+  if (pendingCursor !== seq) {
+    return {
+      version: 1,
+      sessionId: checkpoint.sessionId,
+      lastCursor: checkpoint.lastCursor,
+      status: 'pending',
+      pendingCursor,
+      ...(checkpoint.error === undefined ? {} : { error: checkpoint.error }),
+      updatedAt,
+    }
+  }
+  return { version: 1, sessionId: checkpoint.sessionId, lastCursor: seq, status: 'ok', updatedAt }
+}
+
+/** Record a failed `seq` while keeping the lowest unfinished cursor. */
+function pendingCheckpoint(checkpoint: ProjectionCheckpoint, seq: number, error: unknown): ProjectionCheckpoint {
+  return {
+    version: 1,
+    sessionId: checkpoint.sessionId,
+    lastCursor: checkpoint.lastCursor,
+    status: 'pending',
+    pendingCursor: checkpoint.pendingCursor === undefined
+      ? seq
+      : Math.min(checkpoint.pendingCursor, seq),
+    error: error instanceof Error ? error.message : String(error),
+    updatedAt: new Date().toISOString(),
   }
 }
 

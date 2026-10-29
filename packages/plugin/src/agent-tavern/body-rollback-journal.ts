@@ -11,19 +11,20 @@
  */
 
 import type { ChatLogIR } from '../../../tavern-format/src/index.js'
-import { ChatRevisionConflictError, type MemoryRecord, type VariableSnapshot } from '../../../tavern-store/src/index.js'
+import { ChatRevisionConflictError } from '../../../tavern-store/src/index.js'
 import { readMvuReceipts, type MvuReceipt } from '../mvu.js'
 import {
   MEMORY_WRITE_JOURNAL_TOOLS,
   VARIABLE_WRITE_JOURNAL_TOOLS,
+  journalUnsafe,
+  memoryWriteOf,
   readWriteJournal,
   resolveWriteJournalWriter,
+  variableWriteOf,
   type WriteJournalEntry,
   type WriteJournalMemoryEntry,
-  type WriteJournalMemoryTarget,
   type WriteJournalMemoryTool,
   type WriteJournalVariableEntry,
-  type WriteJournalVariableTarget,
   type WriteJournalVariableTool,
 } from './write-journal.js'
 import {
@@ -40,15 +41,13 @@ import {
   type BodyRollbackErrorCode,
   type BodyRollbackJournalWrite,
   type BodyRollbackLogger,
-  type BodyRollbackMemoryWrite,
-  type BodyRollbackVariableWrite,
   type BodyTurnRollbackFailure,
   type BodyWriteRollbackDeps,
 } from './body-rollback-support.js'
 
 export { recoverOpenSettleIntents } from './body-settle-intent.js'
 export type { SettleIntentRecovery, SettleIntentRecoveryDeps } from './body-settle-intent.js'
-import { applyJournalWrites, type CompensationResult } from './body-rollback-writes.js'
+import { applyJournalWrites, resolveBeforeOnlyWrite, type CompensationResult } from './body-rollback-writes.js'
 import { applyReceiptRollback } from './body-rollback-receipts.js'
 
 /* ------------------------------- session log ------------------------------- */
@@ -130,7 +129,22 @@ export interface TurnJournalLoad {
   readonly toolNames: readonly string[]
 }
 
-function buildJournalWrites(events: readonly unknown[], agentId: string, turn: number): JournalBuild {
+/** A before-only group whose store effect must be verified before skipping it. */
+interface PendingJournalGroup {
+  readonly journalId: string
+  readonly entry: WriteJournalMemoryEntry | WriteJournalVariableEntry
+}
+
+type DraftJournalGroup =
+  | { readonly state: 'write'; readonly write: BodyRollbackJournalWrite }
+  | { readonly state: 'pending'; readonly pending: PendingJournalGroup }
+
+interface DraftJournalBuild {
+  readonly groups: readonly DraftJournalGroup[]
+  readonly tools: ReadonlySet<string>
+}
+
+function buildJournalGroups(events: readonly unknown[], agentId: string, turn: number): DraftJournalBuild {
   let entries: readonly WriteJournalEntry[]
   try {
     entries = readWriteJournal(events)
@@ -150,8 +164,7 @@ function buildJournalWrites(events: readonly unknown[], agentId: string, turn: n
     else group.push(entry)
   }
 
-  const writes: BodyRollbackJournalWrite[] = []
-  const uncommitted: string[] = []
+  const draft: DraftJournalGroup[] = []
   const tools = new Set<string>()
   for (const [journalId, group] of groups) {
     const kind = group[0]?.kind
@@ -160,15 +173,26 @@ function buildJournalWrites(events: readonly unknown[], agentId: string, turn: n
       throw journalUnsafe(journalId, agentId, turn, 'mixes memory and variable records')
     }
     for (const entry of group) tools.add(entry.tool)
+    const noops = group.filter((entry) => entry.phase === 'noop')
     const before = group.filter((entry) => entry.phase === 'before')
     const after = group.filter((entry) => entry.phase === 'after')
+    if (noops.length > 0) {
+      if (noops.length > 1 || before.length > 0 || after.length > 0) {
+        throw journalUnsafe(journalId, agentId, turn, 'mixes a noop record with phase records')
+      }
+      continue
+    }
     if (before.length > 1 || after.length > 1) {
       throw journalUnsafe(journalId, agentId, turn, 'has duplicate phase records')
     }
     if (after.length === 0) {
-      // A before-only record never reached the store write (the tool appends the
-      // after record only after the store accepted it), so it stays untouched.
-      uncommitted.push(journalId)
+      // The `after` append can fail (or the process can die) after the store
+      // accepted the write. The group is resolved against the store instead of
+      // being assumed untouched: see `resolveJournalGroups`.
+      if (before.length === 0) {
+        throw journalUnsafe(journalId, agentId, turn, 'has neither a before, after nor noop record')
+      }
+      draft.push({ state: 'pending', pending: { journalId, entry: before[0]! } })
       continue
     }
     const beforeEntry = before[0]
@@ -179,156 +203,47 @@ function buildJournalWrites(events: readonly unknown[], agentId: string, turn: n
     if (beforeEntry.kind !== afterEntry.kind || beforeEntry.tool !== afterEntry.tool) {
       throw journalUnsafe(journalId, agentId, turn, 'has mismatched kind/tool phases')
     }
-    writes.push(
-      beforeEntry.kind === 'memory'
+    draft.push({
+      state: 'write',
+      write: beforeEntry.kind === 'memory'
         ? memoryWriteOf(beforeEntry, afterEntry as WriteJournalMemoryEntry, journalId, agentId, turn)
         : variableWriteOf(beforeEntry, afterEntry as WriteJournalVariableEntry, journalId, agentId, turn),
-    )
+    })
   }
-  return { writes, uncommitted, tools }
+  return { groups: draft, tools }
 }
 
-function memoryWriteOf(
-  beforeEntry: WriteJournalMemoryEntry,
-  afterEntry: WriteJournalMemoryEntry,
-  journalId: string,
+/**
+ * Verify before-only groups against the store (proposal 0022 §3).
+ *
+ * A before-only group is committed when its target no longer holds the before
+ * state: the `after` record was lost after the store accepted the write. The
+ * actual store state becomes the journaled `after`, so the group is rolled back
+ * and can be replayed like a complete pair. A group whose store still holds the
+ * before state never committed and is reported as uncommitted. When the store
+ * state cannot be verified (an old journal without names, or a vanished
+ * target), this refuses with `write-journal-unknown` instead of silently
+ * skipping.
+ */
+async function resolveJournalGroups(
+  deps: BodyWriteRollbackDeps,
+  draft: DraftJournalBuild,
   agentId: string,
   turn: number,
-): BodyRollbackMemoryWrite {
-  if (!sameMemoryTarget(beforeEntry.target, afterEntry.target)) {
-    throw journalUnsafe(journalId, agentId, turn, 'targets two different memories')
-  }
-  const before = requireMemoryBefore(beforeEntry, journalId, agentId, turn)
-  const after = requireMemoryAfter(afterEntry, journalId, agentId, turn)
-  assertMemoryRecordMatches(before, beforeEntry.target, journalId, agentId, turn)
-  assertMemoryRecordMatches(after, beforeEntry.target, journalId, agentId, turn)
-  if (beforeEntry.tool === 'memory_write' && before !== null) {
-    throw journalUnsafe(journalId, agentId, turn, 'memory_write must record a null before state')
-  }
-  if (beforeEntry.tool !== 'memory_write' && before === null) {
-    throw journalUnsafe(journalId, agentId, turn, `memory_${beforeEntry.tool} requires a before record`)
-  }
-  if (beforeEntry.tool !== 'memory_forget' && after === null) {
-    throw journalUnsafe(journalId, agentId, turn, `${beforeEntry.tool} requires an after record`)
-  }
-  return {
-    kind: 'memory',
-    journalId,
-    tool: beforeEntry.tool,
-    target: beforeEntry.target,
-    before,
-    after,
-  }
-}
-
-function variableWriteOf(
-  beforeEntry: WriteJournalVariableEntry,
-  afterEntry: WriteJournalVariableEntry,
-  journalId: string,
-  agentId: string,
-  turn: number,
-): BodyRollbackVariableWrite {
-  if (beforeEntry.target.scope !== afterEntry.target.scope || beforeEntry.target.scopeId !== afterEntry.target.scopeId) {
-    throw journalUnsafe(journalId, agentId, turn, 'targets two different variable scopes')
-  }
-  const before = requireSnapshotsBefore(beforeEntry, journalId, agentId, turn)
-  const after = requireSnapshotsAfter(afterEntry, journalId, agentId, turn)
-  assertSnapshotsMatch(before, beforeEntry.target, journalId, agentId, turn)
-  assertSnapshotsMatch(after, beforeEntry.target, journalId, agentId, turn)
-  if (beforeEntry.tool === 'variable_delete' && after !== null) {
-    throw journalUnsafe(journalId, agentId, turn, 'variable_delete must record a null after state')
-  }
-  if (beforeEntry.tool !== 'variable_delete' && after === null) {
-    throw journalUnsafe(journalId, agentId, turn, `${beforeEntry.tool} requires an after snapshot list`)
-  }
-  return {
-    kind: 'variable',
-    journalId,
-    tool: beforeEntry.tool,
-    target: beforeEntry.target,
-    before,
-    after,
-  }
-}
-
-function sameMemoryTarget(left: WriteJournalMemoryTarget, right: WriteJournalMemoryTarget): boolean {
-  return left.id === right.id && left.scope === right.scope && left.scopeId === right.scopeId
-}
-
-function requireMemoryBefore(
-  entry: WriteJournalMemoryEntry,
-  journalId: string,
-  agentId: string,
-  turn: number,
-): MemoryRecord | null {
-  if (!('before' in entry) || entry.before === undefined) {
-    throw journalUnsafe(journalId, agentId, turn, 'has a before record without a before state')
-  }
-  return entry.before
-}
-
-function requireMemoryAfter(
-  entry: WriteJournalMemoryEntry,
-  journalId: string,
-  agentId: string,
-  turn: number,
-): MemoryRecord | null {
-  if (!('after' in entry) || entry.after === undefined) {
-    throw journalUnsafe(journalId, agentId, turn, 'has an after record without an after state')
-  }
-  return entry.after
-}
-
-function requireSnapshotsBefore(
-  entry: WriteJournalVariableEntry,
-  journalId: string,
-  agentId: string,
-  turn: number,
-): readonly VariableSnapshot[] | null {
-  if (!('before' in entry) || entry.before === undefined) {
-    throw journalUnsafe(journalId, agentId, turn, 'has a before record without a before state')
-  }
-  return entry.before
-}
-
-function requireSnapshotsAfter(
-  entry: WriteJournalVariableEntry,
-  journalId: string,
-  agentId: string,
-  turn: number,
-): readonly VariableSnapshot[] | null {
-  if (!('after' in entry) || entry.after === undefined) {
-    throw journalUnsafe(journalId, agentId, turn, 'has an after record without an after state')
-  }
-  return entry.after
-}
-
-function assertMemoryRecordMatches(
-  record: MemoryRecord | null,
-  target: WriteJournalMemoryTarget,
-  journalId: string,
-  agentId: string,
-  turn: number,
-): void {
-  if (record === null) return
-  if (record.id !== target.id || record.scope !== target.scope || record.scopeId !== target.scopeId) {
-    throw journalUnsafe(journalId, agentId, turn, `records memory '${record.id}' outside its target`)
-  }
-}
-
-function assertSnapshotsMatch(
-  snapshots: readonly VariableSnapshot[] | null,
-  target: WriteJournalVariableTarget,
-  journalId: string,
-  agentId: string,
-  turn: number,
-): void {
-  if (snapshots === null) return
-  for (const snapshot of snapshots) {
-    if (snapshot.scope !== target.scope || snapshot.scopeId !== target.scopeId) {
-      throw journalUnsafe(journalId, agentId, turn, `records variable '${snapshot.name}' outside its target scope`)
+): Promise<JournalBuild> {
+  const writes: BodyRollbackJournalWrite[] = []
+  const uncommitted: string[] = []
+  for (const group of draft.groups) {
+    if (group.state === 'write') {
+      writes.push(group.write)
+      continue
     }
+    const { journalId, entry } = group.pending
+    const resolved = await resolveBeforeOnlyWrite(deps, journalId, entry, agentId, turn)
+    if (resolved === undefined) uncommitted.push(journalId)
+    else writes.push(resolved)
   }
+  return { writes, uncommitted, tools: draft.tools }
 }
 
 /**
@@ -344,8 +259,9 @@ export async function loadTurnJournal(
   turn: number,
 ): Promise<TurnJournalLoad> {
   const events = await readEvents(deps, agentId, turn)
+  const draft = buildJournalGroups(events, agentId, turn)
   return {
-    journal: buildJournalWrites(events, agentId, turn),
+    journal: await resolveJournalGroups(deps, draft, agentId, turn),
     toolNames: toolNamesInTurn(events, turn),
   }
 }
@@ -410,7 +326,7 @@ export function buildJournalDiagnostics(
   if (journal.uncommitted.length > 0) {
     diagnostics.push({
       code: 'journal-uncommitted-skipped',
-      message: `${journal.uncommitted.length} write journal group(s) have no after record and were treated as uncommitted: ${journal.uncommitted.join(', ')}`,
+      message: `${journal.uncommitted.length} write journal group(s) have no after record and their stores still hold the before state, so they were treated as uncommitted: ${journal.uncommitted.join(', ')}`,
     })
   }
   if (!memoryVectorsInjected && journal.writes.some((write) => write.kind === 'memory')) {
@@ -438,6 +354,10 @@ export function buildJournalDiagnostics(
  * their floor (`extra.agentTavern.turn === turn`, or the next floor index) and
  * persisted with `undoneAt`. Body receipts and the old plan stay untouched.
  *
+ * A before-only journal group is verified against the store: when the store
+ * still holds the before state it is reported in `skippedUncommitted`; when the
+ * store already holds a committed write it is undone like a complete pair.
+ *
  * Idempotency is state-based: journal planners skip a target whose current
  * revision already matches the before state, and already-undone receipts are
  * never selected again, so a repeated call reports `undone: 0` and
@@ -452,7 +372,7 @@ export async function rollbackTurnWritesImpl(
   requireNonNegativeInteger(turn, 'turn')
 
   const events = await readEvents(deps, agentId, turn)
-  const journal = buildJournalWrites(events, agentId, turn)
+  const journal = await resolveJournalGroups(deps, buildJournalGroups(events, agentId, turn), agentId, turn)
   const failures: BodyTurnRollbackFailure[] = []
   const diagnostics: BodyRollbackDiagnostic[] = []
   let undone = 0
@@ -715,19 +635,6 @@ export function asJournalError(
       compensated: compensation.ok,
       cause: error,
     },
-  )
-}
-
-function journalUnsafe(
-  journalId: string,
-  agentId: string,
-  turn: number,
-  detail: string,
-): BodyRollbackError {
-  return new BodyRollbackError(
-    'body-state-unsafe',
-    `body rollback for session '${agentId}' turn ${turn} refused: write journal '${journalId}' ${detail}`,
-    { detail: 'write-journal-missing', stage: 'prepare', sessionId: agentId, turn, journalId },
   )
 }
 

@@ -46,7 +46,10 @@ import {
 import {
   applyReceiptRollback,
   assertReceiptCoverage,
+  compensateReceiptRollback,
   readBodyReceipts,
+  rollbackErrorWithSettleEvidence,
+  type ReceiptCompensation,
   type ReceiptRollbackResult,
 } from './body-rollback-receipts.js'
 
@@ -167,7 +170,6 @@ async function planBodyRollback(
     previousMessageId,
     binding,
     floorIndex,
-    bodyText,
     chatRevision: snapshot.revision,
     // The draft has not rolled anything back yet.
     preparedRevision: snapshot.revision,
@@ -219,7 +221,13 @@ async function applyBodyRollback(deps: BodyWriteRollbackDeps, plan: BodyRollback
   try {
     rolledBack = await applyReceiptRollback(deps, chat, plan.mvuReceipts, 'undo', plan.binding)
   } catch (error) {
-    const compensation = await compensateJournal(deps, plan.journal, 'replay')
+    // The receipt undo can fail after an earlier receipt already landed in the
+    // flat store. Replay the whole plan and the receipts the undo marked, so a
+    // receipt failure never leaves a half-applied rollback behind.
+    const compensation = mergeCompensations(
+      await compensateJournal(deps, plan.journal, 'replay'),
+      await compensateReceiptRollback(deps, chat, plan.mvuReceipts, 'redo', plan.binding, undefined),
+    )
     throw receiptUndoError(error, plan.sessionId, plan.turn, compensation)
   }
 
@@ -228,7 +236,15 @@ async function applyBodyRollback(deps: BodyWriteRollbackDeps, plan: BodyRollback
     try {
       preparedRevision = await deps.store.saveChat(plan.binding.character, plan.binding.chatId, chat, snapshot.revision)
     } catch (error) {
-      const compensation = await compensateJournal(deps, plan.journal, 'replay')
+      // The chat save is the commit point of the rollback. A CAS/IO failure
+      // leaves the flat stores already rolled back and the receipt marks only
+      // in the unsaved clone, so both directions run back to the after state
+      // before the error is reported. Only a clean journal replay AND a clean
+      // receipt replay may report a completed compensation.
+      const compensation = mergeCompensations(
+        await compensateJournal(deps, plan.journal, 'replay'),
+        await compensateReceiptRollback(deps, chat, plan.mvuReceipts, 'redo', plan.binding, rolledBack),
+      )
       const code: BodyRollbackErrorCode = compensation.ok
         ? error instanceof ChatRevisionConflictError
           ? 'body-rollback-conflict'
@@ -287,7 +303,10 @@ async function restoreBodyRollback(deps: BodyWriteRollbackDeps, plan: BodyRollba
   try {
     redone = await applyReceiptRollback(deps, chat, plan.mvuReceipts, 'redo', plan.binding)
   } catch (error) {
-    const compensation = await compensateJournal(deps, plan.journal, 'undo')
+    const compensation = mergeCompensations(
+      await compensateJournal(deps, plan.journal, 'undo'),
+      await compensateReceiptRollback(deps, chat, plan.mvuReceipts, 'undo', plan.binding, undefined),
+    )
     throw restoreError(error, 'mvu-redo', plan, compensation)
   }
 
@@ -295,7 +314,13 @@ async function restoreBodyRollback(deps: BodyWriteRollbackDeps, plan: BodyRollba
     try {
       await deps.store.saveChat(plan.binding.character, plan.binding.chatId, chat, snapshot.revision)
     } catch (error) {
-      const compensation = await compensateJournal(deps, plan.journal, 'undo')
+      // Mirror of the apply path: the replay already touched the flat store and
+      // the clone, but the chat was not saved. Undo both before surfacing the
+      // failure so the persisted chat and the flat store stay one state.
+      const compensation = mergeCompensations(
+        await compensateJournal(deps, plan.journal, 'undo'),
+        await compensateReceiptRollback(deps, chat, plan.mvuReceipts, 'undo', plan.binding, redone),
+      )
       throw restoreError(error, 'chat-save', plan, compensation)
     }
   }
@@ -311,6 +336,14 @@ async function restoreBodyRollback(deps: BodyWriteRollbackDeps, plan: BodyRollba
   })
 }
 
+/** A compensation is complete only when the journal and receipt replays both ran cleanly. */
+function mergeCompensations(
+  journal: CompensationResult,
+  receipts: ReceiptCompensation,
+): CompensationResult {
+  return { ok: journal.ok && receipts.ok, note: `${journal.note}${receipts.note}` }
+}
+
 function restoreError(
   error: unknown,
   stage: BodyRollbackStage,
@@ -318,7 +351,8 @@ function restoreError(
   compensation: CompensationResult,
 ): BodyRollbackError {
   if (error instanceof BodyRollbackError) {
-    return new BodyRollbackError(
+    return rollbackErrorWithSettleEvidence(
+      error,
       compensation.ok ? error.code : 'body-rollback-partial',
       `${error.message}${compensation.note}`,
       {
@@ -355,7 +389,8 @@ function receiptUndoError(
       ? error.code
       : 'body-rollback-failed'
     : 'body-rollback-partial'
-  return new BodyRollbackError(
+  return rollbackErrorWithSettleEvidence(
+    error,
     code,
     `body rollback for session '${agentId}' turn ${turn} could not undo the body/settle receipts: ${errorMessage(error)}${compensation.note}`,
     {
@@ -429,6 +464,7 @@ async function readPlanChatSnapshot(
   plan: BodyRollbackPlan,
   operation: 'apply' | 'restore',
 ): Promise<{ chat: ChatLogIR; revision: string }> {
+  await assertPlanBindingCurrent(store, plan, operation)
   let snapshot: { chat: ChatLogIR; revision: string } | undefined
   try {
     snapshot = await store.getChatSnapshot(plan.binding.character, plan.binding.chatId)
@@ -447,6 +483,41 @@ async function readPlanChatSnapshot(
     )
   }
   return snapshot
+}
+
+/**
+ * Prove the plan still targets the session's live chat before any store write.
+ *
+ * A pending operation survives a chat rename or a session branch, both of which
+ * move the live binding. Reading and writing the stale `plan.binding` would then
+ * either resurrect a deleted chat or, if the plan was tampered with, redirect
+ * the rollback into an unrelated chat. A missing binding is a refusal too:
+ * silently skipping would leave the flat stores rolled back without a chat to
+ * match them.
+ */
+async function assertPlanBindingCurrent(
+  store: BodyRollbackStore,
+  plan: BodyRollbackPlan,
+  operation: 'apply' | 'restore',
+): Promise<void> {
+  const stage: BodyRollbackStage = operation === 'restore' ? 'restore' : 'prepare'
+  let live: BodyRollbackBinding
+  try {
+    live = await readAgentTavernBinding(store, plan.sessionId)
+  } catch (error) {
+    throw new BodyRollbackError(
+      'body-rollback-target-missing',
+      `body rollback ${operation} refused for session '${plan.sessionId}' turn ${plan.turn}: the live binding cannot be read, so the plan target chat '${plan.binding.chatId}' of '${plan.binding.character}' cannot be verified: ${errorMessage(error)}`,
+      { stage, sessionId: plan.sessionId, turn: plan.turn, cause: error },
+    )
+  }
+  if (live.character !== plan.binding.character || live.chatId !== plan.binding.chatId) {
+    throw new BodyRollbackError(
+      'body-rollback-target-missing',
+      `body rollback ${operation} refused for session '${plan.sessionId}' turn ${plan.turn}: the session is now bound to chat '${live.chatId}' of '${live.character}', but the plan targets chat '${plan.binding.chatId}' of '${plan.binding.character}'`,
+      { stage, sessionId: plan.sessionId, turn: plan.turn },
+    )
+  }
 }
 
 function locateBodyFloor(chat: ChatLogIR, messageId: string): number | undefined {

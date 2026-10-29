@@ -5,10 +5,12 @@ import {
   appendMvuReceipt,
   overlayScopedVariables,
   readChatVariables,
+  readMvuReceipts,
   type MvuReceipt,
   type MvuVariableChange,
 } from '../../mvu.js'
 import type { JsonValue, VariableSnapshot, VariableStore } from '../../../../tavern-store/src/index.js'
+import type { ChatLogIR } from '../../../../tavern-format/src/index.js'
 import { getMvuTreePath, guardMvuWrite, readMvuSchema } from '../../mvu-guard.js'
 import { readMvuRules, runMvuRules, type MvuRuleWrite } from '../../mvu-rules.js'
 import {
@@ -19,8 +21,9 @@ import {
   runDeduction,
   subagentRuntimeOf,
 } from '../deduce.js'
-import { restoreSettleIntentItems, settleAuditChanges } from '../body-settle-intent.js'
+import { persistedSettleReceipt, restoreSettleIntentItems, settleAuditChanges } from '../body-settle-intent.js'
 import { errorMessage } from '../body-rollback-support.js'
+import { SETTLE_INTENT_AFTER_VERSION, type SettleIntentOpenEntry } from '../settle-intent-record.js'
 import {
   WriteJournalError,
   appendSettleIntentWith,
@@ -113,12 +116,6 @@ export function deductionTools(): ToolDefinition[] {
       // 逐项写 chat 作用域变量（variable_set 同款 store 语义）：单项失败（非法
       // 名、超限值等 store 层校验，或 guard 拒绝）只记入 failures，不影响其他项。
       const store = await variableStore()
-      // C-2 规则相的树基线：写前 flat 全量快照（listAll 不设 MAX_LIST 封顶——
-      // 静默截断会让规则在缺项的基线上求值）——「flat 写后的树快照」由此叠加
-      // 本轮成功写入构成；无 $rules 时零额外读。
-      const preEntries = ruleSource !== undefined
-        ? await store.listAll('chat', binding.chatId)
-        : []
       // Durable intent before the first flat write: a crash between the flat
       // write and the chat save leaves an open record that startup recovery
       // restores from `before`. The append is fail-closed; no flat write starts
@@ -129,6 +126,52 @@ export function deductionTools(): ToolDefinition[] {
       // then each rule extend. An abort walks this list in reverse to put all of
       // them back, exactly like startup recovery.
       const batchItems: SettleIntentItem[] = []
+      // One entry per name the store accepted, carrying the post-guard value.
+      // This list is the only source an abort replay may write back; the raw
+      // request values stay in `batchItems` for audit only.
+      const effectiveItems: SettleIntentItem[] = []
+      // Decided intents carried until this batch's receipts are saved.
+      const carriedIntents: SettleIntentOpenEntry[] = []
+      if (settleIntent !== undefined) {
+        // An earlier batch that died before its decision left flat values no
+        // receipt covers. Undo them before this batch reads any `before`;
+        // otherwise the dirty values leak into this batch and a later rollback
+        // cannot tell the two apart. A failed undo leaves the intent open for
+        // startup recovery and aborts this call before any new write.
+        for (const open of openSettleIntentsOf(settleIntent.session, settleIntent.sessionId)) {
+          if (open.character !== binding.character || open.scopeId !== binding.chatId) continue
+          if (open.decision !== undefined) {
+            carriedIntents.push(open)
+            continue
+          }
+          if (persistedSettleReceipt(chat, open) !== undefined) {
+            appendSettleIntentWith(settleIntent.writer, settleIntent.session, {
+              kind: 'settle-intent',
+              phase: 'commit',
+              opId: open.opId,
+              sessionId: open.sessionId,
+              at: new Date().toISOString(),
+              reason: `receipt persisted before supersede by ${settleIntent.opId}`,
+            })
+            continue
+          }
+          await restoreSettleIntentItems(store, binding.chatId, open.items)
+          appendSettleIntentWith(settleIntent.writer, settleIntent.session, {
+            kind: 'settle-intent',
+            phase: 'recovered',
+            opId: open.opId,
+            sessionId: open.sessionId,
+            at: new Date().toISOString(),
+            reason: `restored before values before supersede by ${settleIntent.opId}`,
+          })
+        }
+      }
+      // C-2 规则相的树基线：写前 flat 全量快照（listAll 不设 MAX_LIST 封顶——
+      // 静默截断会让规则在缺项的基线上求值）——「flat 写后的树快照」由此叠加
+      // 本轮成功写入构成；无 $rules 时零额外读。
+      const preEntries = ruleSource !== undefined
+        ? await store.listAll('chat', binding.chatId)
+        : []
       if (settleIntent !== undefined) {
         const openItems: SettleIntentItem[] = []
         for (const request of requests) {
@@ -167,6 +210,9 @@ export function deductionTools(): ToolDefinition[] {
           // This batch's receipt always carries its opId, so recovery must match
           // by identity and never fall back to the legacy at + turnKey guess.
           receiptOpId: true,
+          // The batch tracks each written name's post-guard value in an extend
+          // record, so an abort replay never resurrects a raw request value.
+          afterVersion: SETTLE_INTENT_AFTER_VERSION,
           // Empty when no request can be written: the intent still owns the
           // receipt decision, it just has nothing to undo.
           items: openItems,
@@ -228,6 +274,7 @@ export function deductionTools(): ToolDefinition[] {
           )
           applied.push(request.name)
           writtenEntries.push({ name: request.name, value: written.value })
+          effectiveItems.push({ name: request.name, effectiveAfter: written.value })
           const guardNote = guarded !== undefined && guarded.ok ? guarded.note : undefined
           const auditReason = [request.reason, guardNote].filter((part): part is string => part !== undefined).join('; ')
           const change: MvuVariableChange = {
@@ -318,6 +365,7 @@ export function deductionTools(): ToolDefinition[] {
             const write = pending.write
             try {
               const written = await store.set('chat', binding.chatId, write.path, pending.value, pending.existing?.revision)
+              effectiveItems.push({ name: write.path, effectiveAfter: written.value })
               const before = getMvuTreePath(preTree, write.path)
               const reason = run.notes[write.path] ?? `rule:${write.rule}`
               const change = receiptChanges.find((entry) => entry.name === write.path)
@@ -342,6 +390,25 @@ export function deductionTools(): ToolDefinition[] {
               ruleFailures.push(`${write.path}: rule '${write.rule}': ${error instanceof Error ? error.message : String(error)}`)
             }
           }
+        }
+      }
+
+      // Record the values the store actually accepted before the commit
+      // decision. The raw request values stay audit-only: an abort replay of a
+      // guard-clamped request must write the clamped value, and a guard-rejected
+      // request must not be written at all.
+      if (settleIntent !== undefined && effectiveItems.length > 0) {
+        try {
+          appendSettleIntentWith(settleIntent.writer, settleIntent.session, {
+            kind: 'settle-intent',
+            phase: 'extend',
+            opId: settleIntent.opId,
+            sessionId: settleIntent.sessionId,
+            at: new Date().toISOString(),
+            items: effectiveItems,
+          })
+        } catch (error) {
+          await abandonSettleBatchWithoutDecision(store, binding.chatId, settleIntent, batchItems, error, 'effective after values')
         }
       }
 
@@ -375,10 +442,27 @@ export function deductionTools(): ToolDefinition[] {
             receipt: jsonSafeSettleReceipt(settleIntent.opId, receipt),
           })
         } catch (error) {
-          await abandonSettleBatchWithoutDecision(store, binding.chatId, settleIntent, batchItems, error)
+          await abandonSettleBatchWithoutDecision(store, binding.chatId, settleIntent, batchItems, error, 'commit decision')
         }
       }
-      appendMvuReceipt(chat, receipt)
+      // A superseded decided intent still owns its receipt: persist it with this
+      // save so its committed flat writes keep a rollback proof. The opId check
+      // makes the append idempotent when the receipt was already saved. Every
+      // carried turnKey is preserved so the ring cannot evict that evidence.
+      const carriedReceipts: MvuReceipt[] = []
+      for (const open of carriedIntents) {
+        if (open.decision !== undefined) carriedReceipts.push(open.decision.receipt)
+      }
+      if (carriedReceipts.length === 0) {
+        appendMvuReceipt(chat, receipt)
+      } else {
+        const preserved = new Set([
+          receipt.turnKey,
+          ...carriedReceipts.map((carried) => carried.turnKey),
+        ])
+        for (const carried of carriedReceipts) appendMvuReceiptOnce(chat, carried, preserved)
+        appendMvuReceipt(chat, receipt, preserved)
+      }
       // CAS 冲突抛 ChatRevisionConflictError：由 agent 重调工具重试（回执未落，
       // 重试幂等）。A failed save with a durable decision rolls the flat writes
       // back and closes the intent as aborted; a failed rollback keeps the
@@ -387,29 +471,41 @@ export function deductionTools(): ToolDefinition[] {
         await db.saveChat(binding.character, binding.chatId, chat, snapshot.revision)
       } catch (error) {
         if (settleIntent === undefined) throw error
-        await abortDecidedSettleBatch(store, binding.chatId, settleIntent, batchItems, error)
+        await abortDecidedSettleBatch(store, binding.chatId, settleIntent, batchItems, effectiveItems, error)
       }
-      // Close the intent only after the chat save persisted the receipt. A
-      // failed append throws explicitly: an unclosed intent is never silent.
-      // Every still-open intent of this chat closes too: an earlier failed
-      // attempt must not undo this committed batch on the next startup.
+      // The commit is durable now. Closure and audit failures must not turn a
+      // successful settle into a retry: a retry would append a second receipt
+      // for the same floor. They only downgrade to warnings, and startup
+      // recovery closes any intent left open from the persisted receipt.
+      const warnings: string[] = []
       if (settleIntent !== undefined) {
         const closedAt = new Date().toISOString()
         // Superseded intents are closed without replaying their decision: the
-        // successful settle owns the chat state now. A decided intent still
+        // successful settle owns the flat values now. A decided intent still
         // leaves its audit line so the abandoned settlement stays traceable.
         const supersededAudits: MvuAuditRecord[] = []
-        for (const open of openSettleIntentsOf(settleIntent.session, settleIntent.sessionId)) {
+        let openIntents: readonly SettleIntentOpenEntry[] = []
+        try {
+          openIntents = openSettleIntentsOf(settleIntent.session, settleIntent.sessionId)
+        } catch (error) {
+          recordSettleWarning(warnings, 'close', `settle commit is durable, but its open intents could not be read: ${errorMessage(error)}; startup recovery closes them from the persisted receipts`)
+        }
+        for (const open of openIntents) {
           if (open.character !== binding.character || open.scopeId !== binding.chatId) continue
           const superseded = open.opId !== settleIntent.opId
-          appendSettleIntentWith(settleIntent.writer, settleIntent.session, {
-            kind: 'settle-intent',
-            phase: 'commit',
-            opId: open.opId,
-            sessionId: open.sessionId,
-            at: closedAt,
-            ...(superseded ? { reason: `superseded by ${settleIntent.opId}` } : {}),
-          })
+          try {
+            appendSettleIntentWith(settleIntent.writer, settleIntent.session, {
+              kind: 'settle-intent',
+              phase: 'commit',
+              opId: open.opId,
+              sessionId: open.sessionId,
+              at: closedAt,
+              ...(superseded ? { reason: `superseded by ${settleIntent.opId}` } : {}),
+            })
+          } catch (error) {
+            recordSettleWarning(warnings, 'close', `settle commit is durable, but intent '${open.opId}' stayed open: ${errorMessage(error)}; startup recovery closes it from its persisted receipt without replaying the flat writes`)
+            continue
+          }
           const decision = open.decision
           if (!superseded || decision === undefined) continue
           supersededAudits.push({
@@ -427,24 +523,34 @@ export function deductionTools(): ToolDefinition[] {
         }
         // Written after every closure marker so a metadata append can never
         // change the journal order the undo path folds.
-        for (const audit of supersededAudits) await appendMvuAudit(tavernDataRoot(), audit)
+        for (const audit of supersededAudits) {
+          try {
+            await appendMvuAudit(tavernDataRoot(), audit)
+          } catch (error) {
+            recordSettleWarning(warnings, 'audit', `settle commit is durable, but the superseded audit line for '${audit.opId ?? audit.turnKey}' was not written: ${errorMessage(error)}`)
+          }
+        }
       }
       // 回执的持久投影（提案 0012 P2）：会话事件词汇表对插件封闭（v4 宿主拒载
       // 未知事件类型），审计线落独立文件 <tavern>/mvu/audit.jsonl，见 projector.ts。
-      await appendMvuAudit(tavernDataRoot(), {
-        at: receipt.at,
-        sessionId: binding.agentId,
-        character: binding.character,
-        chatId: binding.chatId,
-        turnKey: receipt.turnKey,
-        status: receipt.status,
-        changes: auditChanges,
-        failures: receipt.failures,
-        // Legacy hosts without the intent seam keep the pre-opId line shape;
-        // with an intent the line is idempotent with recovery's backfill.
-        ...(settleIntent !== undefined ? { opId: settleIntent.opId } : {}),
-      })
-      return { applied, failed, receipt }
+      try {
+        await appendMvuAudit(tavernDataRoot(), {
+          at: receipt.at,
+          sessionId: binding.agentId,
+          character: binding.character,
+          chatId: binding.chatId,
+          turnKey: receipt.turnKey,
+          status: receipt.status,
+          changes: auditChanges,
+          failures: receipt.failures,
+          // Legacy hosts without the intent seam keep the pre-opId line shape;
+          // with an intent the line is idempotent with recovery's backfill.
+          ...(settleIntent !== undefined ? { opId: settleIntent.opId } : {}),
+        })
+      } catch (error) {
+        recordSettleWarning(warnings, 'audit', `settle commit is durable, but the audit line for '${settleIntent?.opId ?? receipt.turnKey}' was not written: ${errorMessage(error)}`)
+      }
+      return { applied, failed, receipt, ...(warnings.length > 0 ? { warnings } : {}) }
     }),
   ]
 }
@@ -459,7 +565,8 @@ const settleOutput = objectOutput({
   applied: { type: 'array', items: { type: 'string' } },
   failed: { type: 'array', items: { type: 'object', additionalProperties: true } },
   receipt: { type: 'object', additionalProperties: true },
-})
+  warnings: { type: 'array', items: { type: 'string' } },
+}, ['value', 'revision', 'updatedAt', 'warnings'])
 
 /** One resolved `$rules` write waiting for the intent append and flat write. */
 interface PendingRuleWrite {
@@ -469,7 +576,7 @@ interface PendingRuleWrite {
 }
 
 /**
- * Close a batch whose commit decision could not be recorded.
+ * Close a batch whose durable evidence could not be recorded.
  *
  * `saveChat` must never start without the decision, so the flat writes go back
  * to their `before` values and the intent closes as `abort`. When that rollback
@@ -483,6 +590,7 @@ async function abandonSettleBatchWithoutDecision(
   handle: SettleIntentHandle,
   items: readonly SettleIntentItem[],
   cause: unknown,
+  stage: 'commit decision' | 'effective after values',
 ): Promise<never> {
   let restoreFailure: string | undefined
   try {
@@ -493,16 +601,16 @@ async function abandonSettleBatchWithoutDecision(
   if (restoreFailure !== undefined) {
     throw new WriteJournalError(
       'settle-intent-abort-failed',
-      `settle batch '${handle.opId}' could not record its commit decision (${errorMessage(cause)}) and could not restore its flat writes (${restoreFailure}); the open intent has no decision, so startup recovery restores its before values`,
+      `settle batch '${handle.opId}' could not record its ${stage} (${errorMessage(cause)}) and could not restore its flat writes (${restoreFailure}); the open intent has no decision, so startup recovery restores its before values`,
       { cause },
     )
   }
   try {
-    appendSettleAbort(handle, 'commit decision was not recorded')
+    appendSettleAbort(handle, `${stage} was not recorded`)
   } catch (error) {
     throw new WriteJournalError(
       'settle-intent-abort-failed',
-      `settle batch '${handle.opId}' could not record its commit decision (${errorMessage(cause)}) nor its abort marker (${errorMessage(error)}); startup recovery restores the before values and closes it as recovered`,
+      `settle batch '${handle.opId}' could not record its ${stage} (${errorMessage(cause)}) nor its abort marker (${errorMessage(error)}); startup recovery restores the before values and closes it as recovered`,
       { cause },
     )
   }
@@ -524,6 +632,7 @@ async function abortDecidedSettleBatch(
   chatId: string,
   handle: SettleIntentHandle,
   items: readonly SettleIntentItem[],
+  effectiveItems: readonly SettleIntentItem[],
   cause: unknown,
 ): Promise<never> {
   let restoreFailure: string | undefined
@@ -542,7 +651,7 @@ async function abortDecidedSettleBatch(
   try {
     appendSettleAbort(handle, 'chat save failed after the commit decision')
   } catch (error) {
-    const forwardFailure = await reapplySettleItems(store, chatId, items)
+    const forwardFailure = await reapplySettleItems(store, chatId, effectiveItems)
     if (forwardFailure !== undefined) {
       throw new WriteJournalError(
         'settle-intent-abort-failed',
@@ -571,7 +680,15 @@ function appendSettleAbort(handle: SettleIntentHandle, reason: string): void {
   })
 }
 
-/** Re-apply a batch's `after` values in write order; returns the failure text. */
+/**
+ * Re-apply a batch's post-guard values in write order; returns the failure text.
+ *
+ * Only `effectiveAfter` is replayed. The raw request value may have been
+ * clamped by the MVU guard or rejected outright, so writing it back would
+ * bypass the card schema and disagree with the receipt recovery is about to
+ * commit. A missing effective value means the batch predates the tracking (or
+ * the item was never written), so replay refuses instead of guessing.
+ */
 async function reapplySettleItems(
   store: VariableStore,
   chatId: string,
@@ -579,14 +696,40 @@ async function reapplySettleItems(
 ): Promise<string | undefined> {
   try {
     for (const item of items) {
-      if (item.after === undefined) continue
+      if (item.effectiveAfter === undefined) {
+        throw new Error(`settle item '${item.name}' has no effective after value; the intent cannot be replayed safely`)
+      }
       const current = await store.get('chat', chatId, item.name)
-      await store.set('chat', chatId, item.name, item.after, current?.revision)
+      await store.set('chat', chatId, item.name, item.effectiveAfter, current?.revision)
     }
     return undefined
   } catch (error) {
     return errorMessage(error)
   }
+}
+
+/**
+ * Append one MVU receipt unless the chat already stores that op's receipt.
+ *
+ * A superseded decision can already be on the chat (the earlier save before its
+ * commit marker failed), so the append is idempotent by `opId`: the receipt is
+ * evidence, and appending a duplicate would make the same settlement look like
+ * two batches. The explicit preserve set keeps every carried receipt in the
+ * ring while the remaining receipts follow the default policy.
+ */
+function appendMvuReceiptOnce(
+  chat: ChatLogIR,
+  receipt: MvuReceipt,
+  preserveTurnKeys: ReadonlySet<string>,
+): void {
+  if (receipt.opId !== undefined && readMvuReceipts(chat).some((stored) => stored.opId === receipt.opId)) return
+  appendMvuReceipt(chat, receipt, preserveTurnKeys)
+}
+
+/** Record one post-commit failure as a tool warning plus a structured log line. */
+function recordSettleWarning(warnings: string[], stage: 'close' | 'audit', message: string): void {
+  warnings.push(message)
+  console.warn('dsh-soulmojito: settle commit post-processing failed', { stage, detail: message })
 }
 
 /** Narrow a tool argument to the JSON value the variable store accepts. */

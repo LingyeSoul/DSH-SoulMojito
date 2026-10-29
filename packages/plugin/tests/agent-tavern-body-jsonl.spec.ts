@@ -3,11 +3,13 @@ import {
   BodyJsonlProjectionError,
   applyCandidateToChat,
   applyEditToChat,
+  applyFloorAdoptionToChat,
   applyRestoreToChat,
   applySelectToChat,
   findBodyFloorIndexByGroupId,
   findBodyFloorIndexByMessageId,
   locateBodyFloor,
+  locateBodyFloorForRead,
   type BodyJsonlCandidateInput,
   type BodyJsonlErrorCode,
 } from '../src/agent-tavern/body-jsonl.js'
@@ -56,6 +58,33 @@ function makeCandidate(
   sendDate: string,
 ): BodyJsonlCandidateInput {
   return { groupId, messageId, index, text, sendDate }
+}
+
+/** ST greeting floor as `POST /chats` writes it: no AgentTavern identity. */
+function makeImportedChat(mes: string, swipes: readonly string[], selectedIndex: number): ChatLogIR {
+  const swipeInfo = swipes.map(() => ({ send_date: SEND_DATE, extra: {} }))
+  return {
+    header: { user_name: 'User', character_name: 'ExampleCard', chat_metadata: {} },
+    messages: [
+      {
+        name: 'User',
+        is_user: true,
+        is_system: false,
+        send_date: SEND_DATE,
+        mes: 'Hello',
+      },
+      {
+        name: 'ExampleCard',
+        is_user: false,
+        is_system: false,
+        send_date: SEND_DATE,
+        mes,
+        swipe_id: selectedIndex,
+        swipes: [...swipes],
+        swipe_info: swipeInfo,
+      },
+    ],
+  }
 }
 
 function withMetadata(input: BodyJsonlCandidateInput): BodyJsonlCandidateInput {
@@ -225,6 +254,35 @@ describe('applyCandidateToChat', () => {
       'body-floor-not-found',
     )
   })
+
+  it('fills missing swipe_info slots with a dated ST entry', () => {
+    const chat = bindBodyGroup(makeAssistantChat('message-1', 'original body'), 'group-1')
+    const floor = floorOf(chat)
+    floor.swipes = ['first body', 'second body', 'third body']
+    floor.swipe_id = 0
+    floor.swipe_info = []
+
+    const next = applyCandidateToChat(
+      chat,
+      makeCandidate('group-1', 'message-4', 2, 'third body', SECOND_CANDIDATE_DATE),
+    )
+
+    expect(floorOf(next).swipe_info).toEqual([
+      { send_date: SECOND_CANDIDATE_DATE, extra: {} },
+      { send_date: SECOND_CANDIDATE_DATE, extra: {} },
+      { send_date: SECOND_CANDIDATE_DATE, extra: {} },
+    ])
+  })
+
+  it('rejects a candidate without a send date instead of writing an empty swipe_info entry', () => {
+    expectErrorCode(
+      () => applyCandidateToChat(
+        makeAssistantChat('message-1', 'original body'),
+        makeCandidate('group-1', 'message-1', 0, 'first body', undefined as unknown as string),
+      ),
+      'invalid-body-send-date',
+    )
+  })
 })
 
 describe('applySelectToChat', () => {
@@ -311,7 +369,7 @@ describe('applyEditToChat', () => {
 })
 
 describe('applyRestoreToChat', () => {
-  it('only moves the anchor and does not add or select a candidate', () => {
+  it('restores the selected slot and rewrites swipe_id/mes to match the anchor', () => {
     const chat = seedTwoCandidates()
     const snapshot = structuredClone(chat)
     const next = applyRestoreToChat(chat, {
@@ -322,22 +380,64 @@ describe('applyRestoreToChat', () => {
     const floor = floorOf(next)
 
     expect(floor.swipes).toEqual(['first body', 'second body'])
-    expect(floor.swipe_info).toHaveLength(2)
-    expect(floor.swipe_id).toBe(1)
-    expect(floor.mes).toBe('second body')
+    expect(floor.swipe_info).toEqual(floorOf(chat).swipe_info)
+    expect(floor.swipe_id).toBe(0)
+    expect(floor.mes).toBe('first body')
     expect(agentTavernOf(floor).anchorMessageId).toBe('message-1')
     expect(chat).toEqual(snapshot)
   })
 
-  it('rejects an out-of-range index', () => {
+  it('keeps the edit watermark while restoring the selection surface', () => {
+    const chat = seedTwoCandidates()
+    const floor = floorOf(chat)
+    const extra = floor.extra ?? {}
+    floor.extra = {
+      ...extra,
+      agentTavern: { ...agentTavernOf(floor), lastBodyEventSeq: 7, lastBodyMutation: 'edit' },
+    }
+
+    const next = applyRestoreToChat(chat, {
+      groupId: 'group-1',
+      index: 0,
+      messageId: 'message-1',
+    })
+
+    expect(agentTavernOf(floorOf(next))).toMatchObject({
+      anchorMessageId: 'message-1',
+      lastBodyEventSeq: 7,
+      lastBodyMutation: 'edit',
+    })
+    expect(floorOf(next).mes).toBe('first body')
+  })
+
+  it('rejects an out-of-range index without touching the chat', () => {
+    const chat = seedTwoCandidates()
+    const snapshot = structuredClone(chat)
+
     expectErrorCode(
-      () => applyRestoreToChat(seedTwoCandidates(), {
+      () => applyRestoreToChat(chat, {
         groupId: 'group-1',
         index: 4,
         messageId: 'message-1',
       }),
       'body-index-out-of-range',
     )
+    expect(chat).toEqual(snapshot)
+  })
+
+  it('refuses a floor without swipes instead of keeping the failed text', () => {
+    const chat = bindBodyGroup(makeAssistantChat('message-1', 'original body'), 'group-1')
+    const snapshot = structuredClone(chat)
+
+    expectErrorCode(
+      () => applyRestoreToChat(chat, {
+        groupId: 'group-1',
+        index: 0,
+        messageId: 'message-1',
+      }),
+      'body-swipes-missing',
+    )
+    expect(chat).toEqual(snapshot)
   })
 
   it('rejects an unknown body group', () => {
@@ -375,6 +475,46 @@ describe('body floor locators', () => {
     expect(floorOf(next).swipes).toEqual(['first body', 'second body'])
   })
 
+  it('refuses a group that matches more than one floor and lists every index', () => {
+    const chat = bindBodyGroup(makeAssistantChat('message-1', 'original body'), 'group-1')
+    chat.messages.push({
+      name: 'ExampleCard',
+      is_user: false,
+      is_system: false,
+      send_date: SEND_DATE,
+      mes: 'duplicated body',
+      extra: { agentTavern: { bodyGroupId: 'group-1' } },
+    })
+    const snapshot = structuredClone(chat)
+
+    const error = captureError(() => findBodyFloorIndexByGroupId(chat, 'group-1'))
+    expect(error.code).toBe('body-group-mismatch')
+    expect(error.message).toContain("body group 'group-1'")
+    expect(error.message).toContain('(1, 2)')
+
+    expectErrorCode(() => locateBodyFloor(chat, 'group-1', undefined), 'body-group-mismatch')
+    expectErrorCode(
+      () => applySelectToChat(chat, { groupId: 'group-1', index: 0, anchorMessageId: 'message-1' }),
+      'body-group-mismatch',
+    )
+    expectErrorCode(
+      () => applyCandidateToChat(
+        chat,
+        makeCandidate('group-1', 'message-2', 1, 'second body', SECOND_CANDIDATE_DATE),
+      ),
+      'body-group-mismatch',
+    )
+    expectErrorCode(
+      () => applyEditToChat(chat, { groupId: 'group-1', index: 0, text: 'edited body' }),
+      'body-group-mismatch',
+    )
+    expectErrorCode(
+      () => applyRestoreToChat(chat, { groupId: 'group-1', index: 0, messageId: 'message-1' }),
+      'body-group-mismatch',
+    )
+    expect(chat).toEqual(snapshot)
+  })
+
   it('throws when a group cannot be located by id', () => {
     expectErrorCode(
       () => locateBodyFloor(makeAssistantChat('message-1', 'original body'), 'group-1', undefined),
@@ -391,6 +531,119 @@ describe('body floor locators', () => {
       ),
       'body-group-mismatch',
     )
+  })
+})
+
+describe('locateBodyFloorForRead', () => {
+  it('returns the group-bound floor and nothing for a cold chat', () => {
+    const chat = seedTwoCandidates()
+
+    expect(locateBodyFloorForRead(chat, { messageId: 'message-1', groupId: 'group-1' })).toBe(1)
+    expect(locateBodyFloorForRead(chat, { messageId: 'unprojected-body' })).toBeUndefined()
+  })
+
+  it('finds the floor of a selected candidate by its message id', () => {
+    const chat = seedTwoCandidates()
+
+    expect(locateBodyFloorForRead(chat, { messageId: 'message-2' })).toBe(1)
+  })
+
+  it('refuses a duplicated group binding instead of serving one floor', () => {
+    const chat = seedTwoCandidates()
+    chat.messages.push({
+      name: 'ExampleCard',
+      is_user: false,
+      is_system: false,
+      send_date: SEND_DATE,
+      mes: 'duplicated body',
+      swipe_id: 0,
+      swipes: ['duplicated body'],
+      extra: { agentTavern: { bodyGroupId: 'group-1', anchorMessageId: 'message-2' } },
+    })
+    const snapshot = structuredClone(chat)
+
+    const error = captureError(() => locateBodyFloorForRead(chat, { messageId: 'message-1', groupId: 'group-1' }))
+    expect(error.code).toBe('body-group-mismatch')
+    expect(error.message).toContain('(1, 2)')
+
+    expectErrorCode(() => locateBodyFloorForRead(chat, { messageId: 'message-2' }), 'body-group-mismatch')
+    expect(chat).toEqual(snapshot)
+  })
+
+  it('refuses a message id that resolves to two floors of different groups', () => {
+    const chat = bindBodyGroup(makeAssistantChat('message-1', 'first floor'), 'group-1')
+    const duplicate = structuredClone(chat.messages[1]!)
+    duplicate.extra = { agentTavern: { bodyGroupId: 'group-2', anchorMessageId: 'message-1' } }
+    chat.messages.push(duplicate)
+
+    expectErrorCode(() => locateBodyFloorForRead(chat, { messageId: 'message-1' }), 'body-group-mismatch')
+  })
+})
+
+describe('applyFloorAdoptionToChat', () => {
+  it('binds the mirror floor, snapshots its swipe surface and drops it', () => {
+    const chat = makeImportedChat('Chosen greeting.', ['First greeting.', 'Chosen greeting.'], 1)
+    const snapshot = structuredClone(chat)
+    const next = applyFloorAdoptionToChat(chat, {
+      groupId: 'group-1',
+      sessionId: 'session-1',
+      anchorMessageId: 'message-1',
+      anchorText: 'Chosen greeting.',
+    })
+    const floor = floorOf(next)
+
+    expect(floor.mes).toBe('Chosen greeting.')
+    expect(floor.swipes).toBeUndefined()
+    expect(floor.swipe_id).toBeUndefined()
+    expect(floor.swipe_info).toBeUndefined()
+    expect(agentTavernOf(floor)).toMatchObject({
+      bodyGroupId: 'group-1',
+      anchorMessageId: 'message-1',
+      sessionId: 'session-1',
+    })
+    // The dropped ST surface stays recoverable.
+    expect(agentTavernOf(floor).adoptedSwipes).toEqual({
+      swipes: ['First greeting.', 'Chosen greeting.'],
+      swipe_id: 1,
+      swipe_info: [
+        { send_date: SEND_DATE, extra: {} },
+        { send_date: SEND_DATE, extra: {} },
+      ],
+    })
+    expect(chat).toEqual(snapshot)
+  })
+
+  it('refuses a floor whose text is not the anchor mirror and keeps the chat untouched', () => {
+    const chat = makeImportedChat('Another greeting.', ['Another greeting.'], 0)
+    const snapshot = structuredClone(chat)
+    const error = captureError(() => applyFloorAdoptionToChat(chat, {
+      groupId: 'group-1',
+      sessionId: 'session-1',
+      anchorMessageId: 'message-1',
+      anchorText: 'Chosen greeting.',
+    }))
+
+    expect(error.code).toBe('body-adoption-mismatch')
+    expect(error.message).toContain("group 'group-1'")
+    expect(error.message).toContain('chat floor 1')
+    expect(error.message).toContain('Another greeting.')
+    expect(error.message).toContain('Chosen greeting.')
+    expect(chat).toEqual(snapshot)
+  })
+
+  it('refuses a floor that already carries AgentTavern metadata', () => {
+    const chat = makeImportedChat('Chosen greeting.', ['Chosen greeting.'], 0)
+    floorOf(chat).extra = { agentTavern: { sessionId: 'other-session' } }
+
+    const error = captureError(() => applyFloorAdoptionToChat(chat, {
+      groupId: 'group-1',
+      sessionId: 'session-1',
+      anchorMessageId: 'message-1',
+      anchorText: 'Chosen greeting.',
+    }))
+
+    expect(error.code).toBe('body-adoption-mismatch')
+    expect(error.message).toContain('AgentTavern metadata')
   })
 })
 

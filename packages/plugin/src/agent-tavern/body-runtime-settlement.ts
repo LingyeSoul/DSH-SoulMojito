@@ -4,16 +4,20 @@
  * `finalizeTurnStopping` and `finalizeRecoveredOperation` share
  * `settleBodyOperation`. Settlement is two-phase: `settling` lands before the
  * hide, `settled` after it, and a failed hide writes a cancellation record.
- * Recovery trusts `settled` (or a `settling` record whose surface/ledger state
- * proves the hide completed) only for `op-finish`; a `settling` record whose
- * hide stopped after some ranges has exactly its remaining targets hidden
- * before it is finished. A cancellation restores the previous body. The legacy
+ * Any settlement that cannot commit a candidate records the same cancellation
+ * and keeps `op-start` pending: every branch runs after the old writes were
+ * rolled back, so a terminal `op-finish failed` would strand them. Recovery
+ * trusts `settled` (or a `settling` record whose surface/ledger state proves
+ * the hide completed) only for `op-finish`; a `settling` record whose hide
+ * stopped after some ranges has exactly its remaining targets hidden before it
+ * is finished. A cancellation restores the previous body. The legacy
  * `body-restore-*` copy stays reachable only for sessions with no settlement
  * evidence at all.
  */
 
 import { randomUUID } from 'node:crypto'
 import { advanceHostTurnBase, lastLoggedTurn } from '../session/trace.js'
+import { mvuReceiptsForBody, undoMvuReceipts } from '../mvu.js'
 import {
   appendBodyEvent,
   appendOpFinish,
@@ -31,6 +35,7 @@ import {
   releaseSettlement,
   releaseSettlementRestriction,
   requirePositiveTurn,
+  requireRecordWriter,
   settlementEvidenceOf,
   validateFinalizePayload,
   validatePendingOperation,
@@ -39,6 +44,7 @@ import {
   type BodyRuntimeDeps,
   type BodyRuntimeTurnRollback,
   type BodySettlementEvidence,
+  type BodySettledEventLike,
   type FinalizeTurnStoppingResult,
   type PendingBodyOperation,
   type SettlementContext,
@@ -83,6 +89,101 @@ import {
   restoreAssistantData,
   surfaceRanges,
 } from './body-runtime-state.js'
+
+/**
+ * Durable close record for an operation that ended by restoring the previous
+ * body (proposal 0021 §9.2, revision 2026-10-29).
+ *
+ * `op-finish` stays the terminal record of a completed body replacement (or a
+ * fully compensated failure). `op-abort` is the terminal record of an
+ * operation whose new body was rolled back and whose previous body is back on
+ * the surface. `foldPendingOps` closes an operation only on one of these two
+ * records; a bare cancellation marker still means "restore pending".
+ */
+export const BODY_ABORT_EVENT_TYPE = 'plugin:dsh-soulmojito/body-abort' as const
+
+/** Payload of the durable abort (restored) terminal record. */
+export interface BodyAbortEventData {
+  readonly op: 'op-abort'
+  readonly opId: string
+  /** Actionable cause of the restore; kept for the read side and diagnostics. */
+  readonly reason: string
+  /** Body that is back on the surface after the restore. */
+  readonly anchorId?: string
+}
+
+/**
+ * Append the terminal record of an operation that was aborted and restored.
+ *
+ * Callers write it only after the new-turn writes, the old plan and the
+ * previous body are back. A failed append keeps the operation pending, so the
+ * next recovery pass can retry the restore idempotently.
+ */
+export function appendOpAbort(
+  deps: BodyRuntimeDeps,
+  opId: string,
+  reason: string,
+  anchorId: string | undefined,
+): void {
+  const data: BodyAbortEventData = {
+    op: 'op-abort',
+    opId,
+    reason,
+    ...(anchorId === undefined ? {} : { anchorId }),
+  }
+  requireRecordWriter(deps)(deps.session, BODY_ABORT_EVENT_TYPE, data)
+}
+
+/**
+ * Strictly read one abort record.
+ *
+ * `undefined` means the event is not an abort record; a malformed abort payload
+ * throws `invalid-event` so recovery never silently drops the only terminal
+ * record of an operation.
+ */
+export function parseAbortEvent(event: BodySettledEventLike): BodyAbortEventData | undefined {
+  if (event.type !== BODY_ABORT_EVENT_TYPE) return undefined
+  const op = event.data.op
+  if (op !== 'op-abort') {
+    throw bodyRuntimeError(
+      'invalid-event',
+      `body abort record at seq ${event.seq} has op '${String(op)}', expected 'op-abort'`,
+    )
+  }
+  const anchorId = event.data.anchorId
+  if (anchorId !== undefined && (typeof anchorId !== 'string' || anchorId === '')) {
+    throw bodyRuntimeError(
+      'invalid-event',
+      `body abort record at seq ${event.seq} requires anchorId to be a non-empty string when present`,
+    )
+  }
+  return {
+    op,
+    opId: abortString(event.data.opId, event.seq, 'opId'),
+    reason: abortString(event.data.reason, event.seq, 'reason'),
+    ...(anchorId === undefined ? {} : { anchorId }),
+  }
+}
+
+/** Last abort record of one operation, if any. */
+export function abortedOperation(
+  events: readonly BodySettledEventLike[],
+  opId: string,
+): BodyAbortEventData | undefined {
+  let found: BodyAbortEventData | undefined
+  for (const event of events) {
+    const abort = parseAbortEvent(event)
+    if (abort !== undefined && abort.opId === opId) found = abort
+  }
+  return found
+}
+
+function abortString(value: unknown, seq: number, field: string): string {
+  if (typeof value !== 'string' || value === '') {
+    throw bodyRuntimeError('invalid-event', `body abort record at seq ${seq} requires ${field} to be a non-empty string`)
+  }
+  return value
+}
 
 /**
  * Settle the pending regeneration at `agent/turn-stopping`.
@@ -173,11 +274,13 @@ async function settleBodyOperation(
     }
     if (evidence.phase === 'cancelled') {
       // The hide failed and the cancellation is already durable; the previous
-      // body must be restored, never treated as settled.
-      return failSettlement(
+      // body must be restored, never treated as settled. The terminal record is
+      // written only after the restore (or a later recovery pass) succeeds.
+      return restoreCancelledSettlement(
         deps,
         context,
         `${context.label} ${context.op.opId} was cancelled before its previous anchor left the surface: ${evidence.reason ?? 'no reason recorded'}`,
+        evidence,
       )
     }
     if (context.deferHide === true) {
@@ -192,7 +295,8 @@ async function settleBodyOperation(
     return failSettlement(
       deps,
       context,
-      `${context.label} ${context.op.opId} produced no assistant message with text and no tool-call in turn ${turn}`,
+      settlementFailureReason(context, turn, 'produced no assistant message with text and no tool-call'),
+      {},
     )
   }
   const surface = surfaceNodeList(deps.session)
@@ -200,7 +304,8 @@ async function settleBodyOperation(
     return failSettlement(
       deps,
       context,
-      `${context.label} ${context.op.opId} candidate '${candidate.messageId}' is not on the current surface in turn ${turn}`,
+      settlementFailureReason(context, turn, `candidate '${candidate.messageId}' is not on the current surface`),
+      {},
     )
   }
   let ledger = bodyLedger(events, context.op.groupId)
@@ -209,7 +314,12 @@ async function settleBodyOperation(
       return failSettlement(
         deps,
         context,
-        `${context.label} ${context.op.opId} has no candidate 0 for group '${context.op.groupId}' at previous index ${context.op.previousIndex}`,
+        settlementFailureReason(
+          context,
+          turn,
+          `has no candidate 0 recorded at previous index ${context.op.previousIndex}, so the previous selection cannot be reconstructed`,
+        ),
+        {},
       )
     }
     try {
@@ -223,7 +333,8 @@ async function settleBodyOperation(
       return failSettlement(
         deps,
         context,
-        `${context.label} ${context.op.opId} failed to seed candidate 0 for group '${context.op.groupId}': ${errorMessage(error)}`,
+        settlementFailureReason(context, turn, `failed to seed candidate 0: ${errorMessage(error)}`),
+        { cause: error },
       )
     }
     ledger = bodyLedger(eventsOf(deps.session), context.op.groupId)
@@ -231,7 +342,8 @@ async function settleBodyOperation(
       return failSettlement(
         deps,
         context,
-        `${context.label} ${context.op.opId} seeded candidate 0 for group '${context.op.groupId}' but the ledger stayed empty`,
+        settlementFailureReason(context, turn, 'seeded candidate 0 but the ledger stayed empty'),
+        {},
       )
     }
   }
@@ -252,23 +364,31 @@ async function settleBodyOperation(
     appendBodyEvent(deps, { op: 'select', groupId: context.op.groupId, index: candidateIndex })
     selectAppended = true
   } catch (error) {
+    // The candidate append may have landed even when the select failed. The
+    // ledger is checked by the shared failure path before it restores the
+    // previous selection, so a half-appended candidate never becomes visible
+    // through a select for a slot the ledger never selected.
     if (selectAppended) restorePreviousSelection(deps, context)
     return failSettlement(
       deps,
       context,
-      `${context.label} ${context.op.opId} failed to settle turn ${turn}: ${errorMessage(error)}`,
+      settlementFailureReason(context, turn, `failed to record candidate/select: ${errorMessage(error)}`),
+      { cause: error },
     )
   }
 
-  // Proposal 0022 §5/§10: commit before the previous anchor is hidden, so a
-  // commit failure still leaves the old body on the surface and the existing
-  // invisible restore can replay the plan without appending an assistant copy.
+  // Proposal 0022 §5/§10: commit runs before the hide boundary. A commit
+  // failure is not a completed compensation, so it is routed to the shared
+  // restore path instead of writing a terminal record here.
   try {
     await commitBodyRollback(deps, context.op)
   } catch (error) {
     const reason = `${context.label} ${context.op.opId} failed to commit the write rollback in turn ${turn}: ${errorMessage(error)}`
-    restorePreviousSelection(deps, context)
-    failSettlement(deps, context, reason)
+    // Proposal 0022 §10.3 revision 2026-10-29: a commit failure is a failure
+    // that has not been compensated. Keep the op-start + plan durable, record
+    // the cancellation and let turn/end or startup recovery undo the new turn
+    // writes and restore the old plan before any terminal record is written.
+    cancelSettlementForRestore(deps, context, { anchorId: candidate.messageId, index: candidateIndex }, reason)
     throw failureFor(error, reason, context.op)
   }
 
@@ -283,8 +403,8 @@ async function settleBodyOperation(
     })
   } catch (error) {
     const reason = `${context.label} ${context.op.opId} failed to record the settling marker before hiding turn ${turn}: ${errorMessage(error)}`
-    restorePreviousSelection(deps, context)
-    return failSettlement(deps, context, reason)
+    cancelSettlementForRestore(deps, context, { anchorId: candidate.messageId, index: candidateIndex }, reason)
+    return { status: 'failed', reason }
   }
 
   // Proposal 0021 §6.2 revision 2026-10-29: an operation started after the
@@ -326,12 +446,11 @@ async function settleBodyOperation(
       releaseSettlement(deps, context)
       throw failureFor(error, reason, context.op)
     }
-    recordSettlementCancelled(deps, context.op, context.label, {
+    cancelSettlementForRestore(deps, context, {
       anchorId: candidate.messageId,
       index: candidateIndex,
     }, `failed to hide the previous anchor: ${errorMessage(error)}`)
-    restorePreviousSelection(deps, context)
-    return failSettlement(deps, context, reason)
+    return { status: 'failed', reason }
   }
 
   // The previous anchor is off the surface from here on. This marker is the
@@ -375,7 +494,11 @@ async function settleBodyOperation(
  * with the previous index selected means cancelled; anything else fails closed
  * and keeps the op-start pending instead of guessing.
  */
-function settleFromSettlingEvidence(deps: BodyRuntimeDeps, context: SettlementContext, evidence: BodySettlementEvidence): FinalizeTurnStoppingResult {
+async function settleFromSettlingEvidence(
+  deps: BodyRuntimeDeps,
+  context: SettlementContext,
+  evidence: BodySettlementEvidence,
+): Promise<FinalizeTurnStoppingResult> {
   const decision = settlingDecision(deps, context.op, evidence)
   if (decision === 'settled' || decision === 'finish-hide') {
     if (decision === 'finish-hide') {
@@ -396,11 +519,17 @@ function settleFromSettlingEvidence(deps: BodyRuntimeDeps, context: SettlementCo
       evidence,
       'the previous anchor is still on the surface and the previous selection was restored',
     )
-    return failSettlement(
-      deps,
-      context,
-      `${context.label} ${context.op.opId} did not complete its hide; the previous body stays selected`,
-    )
+    restorePreviousSelection(deps, context)
+    releaseSettlementRestriction(deps, context)
+    if (openTurnNumber(eventsOf(deps.session)) === undefined) {
+      // The turn already closed: complete the restore now instead of holding a
+      // dangling cancellation until the next startup.
+      await restoreBodyAfterFailureLocked(deps, context.op)
+    }
+    return {
+      status: 'failed',
+      reason: `${context.label} ${context.op.opId} did not complete its hide; the previous body stays selected`,
+    }
   }
   throw bodyRuntimeError(
     'operation-failed',
@@ -456,22 +585,103 @@ function finishSettlementHide(
   }
 }
 
+/**
+ * Keep an unfinished settlement recoverable.
+ *
+ * A failure before the previous body is restored must not write a terminal
+ * record: the new-turn writes are still live and only recovery can undo them.
+ * The cancellation record tells both live turn/end and startup recovery to
+ * take the restore path; the op-start and its plan stay durable until then.
+ */
+function cancelSettlementForRestore(
+  deps: BodyRuntimeDeps,
+  context: SettlementContext,
+  evidence: { readonly anchorId: string; readonly index: number },
+  reason: string,
+): void {
+  recordSettlementCancelled(deps, context.op, context.label, evidence, reason)
+  restorePreviousSelection(deps, context)
+  releaseSettlementRestriction(deps, context)
+}
+
+/**
+ * Resolve a durable cancellation. The turn/end path restores immediately once
+ * the turn is closed; recovery with an open turn returns a failure and retries
+ * after `closeImportBracket`. A restore failure propagates and keeps the op
+ * pending instead of recording a terminal state.
+ */
+async function restoreCancelledSettlement(
+  deps: BodyRuntimeDeps,
+  context: SettlementContext,
+  reason: string,
+  evidence: BodySettlementEvidence,
+): Promise<FinalizeTurnStoppingResult> {
+  recordSettlementCancelled(deps, context.op, context.label, evidence, evidence.reason ?? reason)
+  // A cancellation written before candidate 0 was seeded has no ledger to
+  // select in: appending a `select` would make the whole ledger unfoldable.
+  const ledger = bodyLedger(eventsOf(deps.session), context.op.groupId)
+  if (ledger !== undefined && ledger.selectedIndex !== context.op.previousIndex) {
+    restorePreviousSelection(deps, context)
+  }
+  releaseSettlementRestriction(deps, context)
+  if (openTurnNumber(eventsOf(deps.session)) === undefined) {
+    await restoreBodyAfterFailureLocked(deps, context.op)
+  }
+  return { status: 'failed', reason }
+}
+
+/** Failure reason that keeps the operation identity actionable in logs. */
+function settlementFailureReason(context: SettlementContext, turn: number, detail: string): string {
+  return `${context.label} ${context.op.opId} (group '${context.op.groupId}', turn ${turn}, start seq ${context.op.startSeq}) ${detail}`
+}
+
+/** Optional cause carried by a settlement failure that caught an exception. */
+interface SettlementFailureOptions {
+  /** Underlying exception; when present the failure is rethrown instead of returned. */
+  readonly cause?: unknown
+}
+
+/**
+ * End a settlement attempt that could not produce a committed candidate.
+ *
+ * Every call site runs after `startRegenerate` applied the write rollback and
+ * may already have hidden the previous anchor. `op-finish failed` would close
+ * the operation and drop the only durable handle while the old turn's writes
+ * stay rolled back and the old body may be off the surface. There is no branch
+ * here that is proven to have changed nothing, so all of them take the same
+ * "failed, restore pending" path: record the cancellation, restore the
+ * previous selection when the ledger can express it, release the write-tool
+ * restriction, and keep `op-start` pending. Turn/end or startup recovery then
+ * runs `rollbackTurnWrites` + `restore(plan)` + the previous body.
+ *
+ * A caught append failure is rethrown so its message is not swallowed; the
+ * cancellation record is already durable before the throw.
+ */
 function failSettlement(
   deps: BodyRuntimeDeps,
   context: SettlementContext,
   reason: string,
+  options: SettlementFailureOptions,
 ): FinalizeTurnStoppingResult {
-  try {
-    appendOpFinish(deps, context.op.opId, 'failed', undefined, reason)
-  } catch (finishError) {
-    releaseSettlement(deps, context)
-    throw failureFor(
-      finishError,
-      `body runtime: failed to record op-finish for ${context.op.opId}: ${errorMessage(finishError)}`,
-      context.op,
-    )
+  // The previous anchor/index identify what the restore path will put back.
+  // Using the failed candidate would claim a ledger slot that may never have
+  // been committed.
+  recordSettlementCancelled(deps, context.op, context.label, {
+    anchorId: context.op.previousAnchorId,
+    index: context.op.previousIndex,
+  }, reason)
+  // A crash before candidate 0 was seeded leaves no ledger at all; appending a
+  // `select` would then make the ledger unfoldable (`body-candidate-gap`), so
+  // the selection is restored only when the ledger can accept it and actually
+  // points somewhere else. A candidate append auto-selects its slot, so a
+  // failed select still has to be rolled back here.
+  const ledger = bodyLedger(eventsOf(deps.session), context.op.groupId)
+  if (ledger !== undefined && ledger.selectedIndex !== context.op.previousIndex) {
+    restorePreviousSelection(deps, context)
   }
-  releaseSettlement(deps, context)
+  releaseSettlementRestriction(deps, context)
+  warn(deps, reason)
+  if (options.cause !== undefined) throw failureFor(options.cause, reason, context.op)
   return { status: 'failed', reason }
 }
 
@@ -600,186 +810,298 @@ export async function restoreBodyAfterFailure(
 ): Promise<string> {
   validatePendingOperation(op)
   assertRecordWriter(deps)
-  return withBodyLock(deps, async () => {
-    const events = eventsOf(deps.session)
-    const evidence = settlementEvidenceOf(events, op.opId)
-    if (evidence !== undefined) {
-      if (evidence.phase === 'settled') {
-        assertCommittedSettlement(deps, op.groupId, evidence, `body restore ${op.opId}`)
+  return withBodyLock(deps, async () => restoreBodyAfterFailureLocked(deps, op))
+}
+
+async function restoreBodyAfterFailureLocked(
+  deps: BodyRuntimeDeps,
+  op: PendingBodyOperation,
+): Promise<string> {
+  const events = eventsOf(deps.session)
+  // A crash after the restore but before the caller observed the return can
+  // replay the same operation. The abort record is the durable proof that the
+  // body, the old writes and the selection are already back.
+  const abort = abortedOperation(events, op.opId)
+  if (abort !== undefined) {
+    releaseOperationByOp(deps, op, `body restore ${op.opId}`)
+    return abort.anchorId ?? op.previousAnchorId
+  }
+
+  const evidence = settlementEvidenceOf(events, op.opId)
+  if (evidence !== undefined) {
+    if (evidence.phase === 'settled') {
+      assertCommittedSettlement(deps, op.groupId, evidence, `body restore ${op.opId}`)
+      releaseOperationByOp(deps, op, `body restore ${op.opId}`)
+      return evidence.anchorId
+    }
+    if (evidence.phase === 'settling') {
+      const decision = settlingDecision(deps, op, evidence)
+      if (decision === 'settled') {
+        // The hide completed but the post-hide marker never landed. Upgrade
+        // the durable boundary so recovery can classify the missing
+        // `op-finish` as finish-pending instead of reporting a restore.
+        try {
+          appendSettledMarker(deps, op.opId, op.groupId, evidence.anchorId, evidence.index)
+        } catch (error) {
+          throw failureFor(
+            error,
+            `body restore ${op.opId} proved the body settled but could not upgrade the settled marker`,
+            op,
+          )
+        }
         releaseOperationByOp(deps, op, `body restore ${op.opId}`)
         return evidence.anchorId
       }
-      if (evidence.phase === 'settling') {
-        const decision = settlingDecision(deps, op, evidence)
-        if (decision === 'settled') {
-          // The hide completed but the post-hide marker never landed. Upgrade
-          // the durable boundary so recovery can classify the missing
-          // `op-finish` as finish-pending instead of reporting a restore.
-          try {
-            appendSettledMarker(deps, op.opId, op.groupId, evidence.anchorId, evidence.index)
-          } catch (error) {
-            throw failureFor(
-              error,
-              `body restore ${op.opId} proved the body settled but could not upgrade the settled marker`,
-              op,
-            )
-          }
-          releaseOperationByOp(deps, op, `body restore ${op.opId}`)
-          return evidence.anchorId
+      if (decision === 'finish-hide') {
+        // The previous anchor and the new selection are durable, but a
+        // multi-range hide stopped after some ranges. Complete exactly the
+        // surviving targets, then finish the operation; no ledger, select or
+        // assistant write is allowed here.
+        finishSettlementHide(deps, op, evidence, `body restore ${op.opId}`)
+        assertCommittedSettlement(deps, op.groupId, evidence, `body restore ${op.opId}`)
+        try {
+          appendSettledMarker(deps, op.opId, op.groupId, evidence.anchorId, evidence.index)
+        } catch (error) {
+          warn(deps, `body runtime: body restore ${op.opId} finished the partial hide but could not record the settled marker: ${errorMessage(error)}`)
         }
-        if (decision === 'finish-hide') {
-          // The previous anchor and the new selection are durable, but a
-          // multi-range hide stopped after some ranges. Complete exactly the
-          // surviving targets, then finish the operation; no ledger, select or
-          // assistant write is allowed here.
-          finishSettlementHide(deps, op, evidence, `body restore ${op.opId}`)
-          assertCommittedSettlement(deps, op.groupId, evidence, `body restore ${op.opId}`)
-          try {
-            appendSettledMarker(deps, op.opId, op.groupId, evidence.anchorId, evidence.index)
-          } catch (error) {
-            warn(deps, `body runtime: body restore ${op.opId} finished the partial hide but could not record the settled marker: ${errorMessage(error)}`)
-          }
-          try {
-            appendOpFinish(deps, op.opId, 'ok', evidence.anchorId, undefined)
-          } catch (error) {
-            throw settledFinishPending(
-              `body restore ${op.opId} finished the partial hide but failed to record op-finish: ${errorMessage(error)}`,
-              op,
-              error,
-            )
-          }
-          releaseOperationByOp(deps, op, `body restore ${op.opId}`)
-          return evidence.anchorId
-        }
-        if (decision === 'ambiguous') {
-          throw bodyRuntimeError(
-            'operation-failed',
-            `body restore ${op.opId} has an ambiguous settling record for '${evidence.anchorId}' index ${evidence.index}: the surface and ledger disagree; refusing to guess`,
+        try {
+          appendOpFinish(deps, op.opId, 'ok', evidence.anchorId, undefined)
+        } catch (error) {
+          throw settledFinishPending(
+            `body restore ${op.opId} finished the partial hide but failed to record op-finish: ${errorMessage(error)}`,
+            op,
+            error,
           )
         }
-        recordSettlementCancelled(
-          deps,
-          op,
-          `body restore ${op.opId}`,
-          evidence,
-          'the previous anchor is still on the surface and the previous selection was restored',
+        releaseOperationByOp(deps, op, `body restore ${op.opId}`)
+        return evidence.anchorId
+      }
+      if (decision === 'ambiguous') {
+        throw bodyRuntimeError(
+          'operation-failed',
+          `body restore ${op.opId} has an ambiguous settling record for '${evidence.anchorId}' index ${evidence.index}: the surface and ledger disagree; refusing to guess`,
         )
       }
-    }
-    const openTurn = openTurnNumber(events)
-    if (openTurn !== undefined) {
-      throw bodyRuntimeError(
-        'session-busy',
-        `body restore ${op.opId} rejected: turn ${openTurn} is still open; close its step/turn before restoring`,
+      recordSettlementCancelled(
+        deps,
+        op,
+        `body restore ${op.opId}`,
+        evidence,
+        'the previous anchor is still on the surface and the previous selection was restored',
       )
     }
-    assertCanAdvanceTurnBase(deps)
+  }
+  const surface = surfaceNodeList(deps.session)
+  // Recovery after `op-settle-cancelled` may have already appended the restore
+  // copy and only lost the terminal record. Reuse that copy instead of
+  // appending a second assistant message for the same operation. This check
+  // runs before the turn-base guard because the abort record is log-only.
+  const existingRestore = restoredAnchorOf(events, surface, op)
+  if (existingRestore !== undefined) {
+    appendOpAbort(deps, op.opId, restoreAbortReason(events, op), existingRestore)
+    releaseOperationByOp(deps, op, `body restore ${op.opId}`)
+    return existingRestore
+  }
 
-    const previous = findEventByMessageId(events, op.previousAnchorId)
-    if (previous === undefined) {
-      throw bodyRuntimeError('restore-unavailable', `body restore ${op.opId} cannot find previous anchor '${op.previousAnchorId}' in the session log`)
-    }
-    const previousMessage = messageOf(previous)
-    if (previousMessage === undefined || previous.type !== 'assistant/message') {
-      throw bodyRuntimeError('restore-unavailable', `body restore ${op.opId} previous anchor '${op.previousAnchorId}' is not an assistant message`)
-    }
-    if (textOfMessage(previousMessage).trim() === '') {
-      throw bodyRuntimeError('restore-unavailable', `body restore ${op.opId} previous anchor '${op.previousAnchorId}' has no body text`)
-    }
+  const openTurn = openTurnNumber(events)
+  if (openTurn !== undefined) {
+    throw bodyRuntimeError(
+      'session-busy',
+      `body restore ${op.opId} rejected: turn ${openTurn} is still open; close its step/turn before restoring`,
+    )
+  }
+  assertCanAdvanceTurnBase(deps)
 
-    const triggerId = triggerMessageIdOf(op)
-    const failedTurn = turnOfUserMessage(events, triggerId)
-    const initialSurface = surfaceNodeList(deps.session)
-    const previousSeq = findSurfaceSeqByMessageId(events, initialSurface, op.previousAnchorId)
-    const targets = failedTurnTargets(events, initialSurface, triggerId, failedTurn)
+  const previous = findEventByMessageId(events, op.previousAnchorId)
+  if (previous === undefined) {
+    throw bodyRuntimeError('restore-unavailable', `body restore ${op.opId} cannot find previous anchor '${op.previousAnchorId}' in the session log`)
+  }
+  const previousMessage = messageOf(previous)
+  if (previousMessage === undefined || previous.type !== 'assistant/message') {
+    throw bodyRuntimeError('restore-unavailable', `body restore ${op.opId} previous anchor '${op.previousAnchorId}' is not an assistant message`)
+  }
+  if (textOfMessage(previousMessage).trim() === '') {
+    throw bodyRuntimeError('restore-unavailable', `body restore ${op.opId} previous anchor '${op.previousAnchorId}' has no body text`)
+  }
 
-    // Proposal 0022 §10.3: first undo the failed new turn's writes, then put
-    // the old turn's journaled writes and MVU receipts back. Any failure keeps
-    // the op-start pending for a retry and leaves the surface untouched.
-    await rollbackNewTurnWrites(deps, op, events, failedTurn)
-    await restoreBodyRollbackPlan(deps, op)
+  const triggerId = triggerMessageIdOf(op)
+  const failedTurn = turnOfUserMessage(events, triggerId)
+  const previousSeq = findSurfaceSeqByMessageId(events, surface, op.previousAnchorId)
+  const targets = failedTurnTargets(events, surface, triggerId, failedTurn)
 
-    if (previousSeq !== undefined) {
-      // Legacy operation: its start kept the anchor visible, so a model-free
-      // hide of the failed turn's nodes already restores the visible body.
-      try {
-        appendHideInBridgeTurn(deps, targets)
-      } catch (error) {
-        releaseOperationByOp(deps, op, `body restore ${op.opId}`)
-        throw failureFor(error, `body restore ${op.opId} failed`, op)
-      }
-      releaseOperationByOp(deps, op, `body restore ${op.opId}`)
-      return op.previousAnchorId
-    }
+  // Proposal 0022 §10.3: first undo the failed new turn's writes, then put
+  // the old turn's journaled writes and MVU receipts back. The new candidate's
+  // own body receipt is undone in between: it is keyed by the new message id,
+  // so replaying the old plan alone would leave its unique variable paths live.
+  await rollbackNewTurnWrites(deps, op, events, failedTurn)
+  await undoNewCandidateBodyReceipt(deps, op, events, failedTurn)
+  await restoreBodyRollbackPlan(deps, op)
 
-    const model = modelSourceOf(previousMessage)
-    if (model === undefined) {
-      throw bodyRuntimeError('restore-unavailable', `body restore ${op.opId} previous anchor '${op.previousAnchorId}' has no model provider/model source`)
-    }
-
-    const ledgerBeforeRestore = bodyLedger(events, op.groupId)
-    if (ledgerBeforeRestore === undefined && op.previousIndex !== 0) {
-      throw bodyRuntimeError(
-        'restore-unavailable',
-        `body restore ${op.opId} cannot reconstruct group '${op.groupId}' at index ${op.previousIndex}: no candidate 0 is recorded`,
-      )
-    }
-    if (ledgerBeforeRestore !== undefined && ledgerBeforeRestore.candidates[op.previousIndex] === undefined) {
-      throw bodyRuntimeError(
-        'restore-unavailable',
-        `body restore ${op.opId} cannot restore group '${op.groupId}' index ${op.previousIndex}: the ledger has ${ledgerBeforeRestore.candidates.length} candidates`,
-      )
-    }
-
-    const turn = (lastLoggedTurn(deps.agent) ?? 0) + 1
-    const restoredMessageId = `body-restore-${randomUUID()}`
-    let turnOpen = false
-    let stepOpen = false
+  const abortReason = restoreAbortReason(events, op)
+  if (previousSeq !== undefined) {
+    // Legacy operation: its start kept the anchor visible, so a model-free
+    // hide of the failed turn's nodes already restores the visible body.
     try {
-      deps.session.append('turn/start', { turn })
-      turnOpen = true
-      deps.session.append('step/start', { turn, step: 1 })
-      stepOpen = true
-
-      const currentSurface = surfaceNodeList(deps.session)
-      const ranges = surfaceRanges(currentSurface, targets)
-      for (const range of [...ranges].reverse()) appendDeveloperHide(deps, turn, 1, range)
-
-      deps.session.append('assistant/message', restoreAssistantData(deps, turn, restoredMessageId, previousMessage, model), {
-        surfaceOp: 'append',
-      })
-      if (ledgerBeforeRestore === undefined) {
-        // Crash recovery may meet an op-start whose start never seeded the
-        // original reply; seed it now so the restore event keeps the ledger dense.
-        appendBodyEvent(deps, { op: 'candidate', groupId: op.groupId, messageId: op.previousAnchorId, index: 0 })
-      }
-      appendBodyEvent(deps, {
-        op: 'restore',
-        groupId: op.groupId,
-        messageId: restoredMessageId,
-        index: op.previousIndex,
-      })
-      deps.session.append('step/end', { turn, step: 1 })
-      stepOpen = false
-      deps.session.append('turn/end', { turn, reason: { kind: 'completed' } })
-      turnOpen = false
+      appendHideInBridgeTurn(deps, targets)
     } catch (error) {
-      closeBracketBestEffort(deps, turn, 1, turnOpen, stepOpen, `body restore ${op.opId} failed`)
       releaseOperationByOp(deps, op, `body restore ${op.opId}`)
       throw failureFor(error, `body restore ${op.opId} failed`, op)
     }
-
-    const advanced = advanceHostTurnBase(deps.agent, turn)
+    try {
+      appendOpAbort(deps, op.opId, abortReason, op.previousAnchorId)
+    } catch (error) {
+      throw failureFor(error, `body restore ${op.opId} restored the previous body but could not record op-abort`, op)
+    }
     releaseOperationByOp(deps, op, `body restore ${op.opId}`)
-    if (!advanced) {
-      throw failureFor(
-        bodyRuntimeError('host-unsupported', `body restore ${op.opId} logged turn ${turn} but the live loop turn base could not advance`),
-        `body restore ${op.opId} completed without a writable turn base`,
-        op,
+    return op.previousAnchorId
+  }
+
+  const model = modelSourceOf(previousMessage)
+  if (model === undefined) {
+    throw bodyRuntimeError('restore-unavailable', `body restore ${op.opId} previous anchor '${op.previousAnchorId}' has no model provider/model source`)
+  }
+
+  const ledgerBeforeRestore = bodyLedger(events, op.groupId)
+  if (ledgerBeforeRestore === undefined && op.previousIndex !== 0) {
+    throw bodyRuntimeError(
+      'restore-unavailable',
+      `body restore ${op.opId} cannot reconstruct group '${op.groupId}' at index ${op.previousIndex}: no candidate 0 is recorded`,
+    )
+  }
+  if (ledgerBeforeRestore !== undefined && ledgerBeforeRestore.candidates[op.previousIndex] === undefined) {
+    throw bodyRuntimeError(
+      'restore-unavailable',
+      `body restore ${op.opId} cannot restore group '${op.groupId}' index ${op.previousIndex}: the ledger has ${ledgerBeforeRestore.candidates.length} candidates`,
+    )
+  }
+
+  const turn = (lastLoggedTurn(deps.agent) ?? 0) + 1
+  const restoredMessageId = `body-restore-${randomUUID()}`
+  let turnOpen = false
+  let stepOpen = false
+  try {
+    deps.session.append('turn/start', { turn })
+    turnOpen = true
+    deps.session.append('step/start', { turn, step: 1 })
+    stepOpen = true
+
+    const currentSurface = surfaceNodeList(deps.session)
+    const ranges = surfaceRanges(currentSurface, targets)
+    for (const range of [...ranges].reverse()) appendDeveloperHide(deps, turn, 1, range)
+
+    deps.session.append('assistant/message', restoreAssistantData(deps, turn, restoredMessageId, previousMessage, model), {
+      surfaceOp: 'append',
+    })
+    if (ledgerBeforeRestore === undefined) {
+      // Crash recovery may meet an op-start whose start never seeded the
+      // original reply; seed it now so the restore event keeps the ledger dense.
+      appendBodyEvent(deps, { op: 'candidate', groupId: op.groupId, messageId: op.previousAnchorId, index: 0 })
+    }
+    appendBodyEvent(deps, {
+      op: 'restore',
+      groupId: op.groupId,
+      messageId: restoredMessageId,
+      index: op.previousIndex,
+    })
+    deps.session.append('step/end', { turn, step: 1 })
+    stepOpen = false
+    deps.session.append('turn/end', { turn, reason: { kind: 'completed' } })
+    turnOpen = false
+  } catch (error) {
+    closeBracketBestEffort(deps, turn, 1, turnOpen, stepOpen, `body restore ${op.opId} failed`)
+    releaseOperationByOp(deps, op, `body restore ${op.opId}`)
+    throw failureFor(error, `body restore ${op.opId} failed`, op)
+  }
+
+  const advanced = advanceHostTurnBase(deps.agent, turn)
+  if (!advanced) {
+    releaseOperationByOp(deps, op, `body restore ${op.opId}`)
+    throw failureFor(
+      bodyRuntimeError('host-unsupported', `body restore ${op.opId} logged turn ${turn} but the live loop turn base could not advance`),
+      `body restore ${op.opId} completed without a writable turn base`,
+      op,
+    )
+  }
+  try {
+    appendOpAbort(deps, op.opId, abortReason, restoredMessageId)
+  } catch (error) {
+    throw failureFor(error, `body restore ${op.opId} restored the previous body but could not record op-abort`, op)
+  }
+  releaseOperationByOp(deps, op, `body restore ${op.opId}`)
+  return restoredMessageId
+}
+
+/**
+ * A copy appended by an earlier restore attempt of this operation, proven by
+ * the ledger slot and its presence on the current surface. A copy belonging to
+ * an older operation cannot match because the current operation's
+ * `previousAnchorId` would then be that same copy.
+ */
+function restoredAnchorOf(
+  events: ReturnType<typeof eventsOf>,
+  surface: readonly number[],
+  op: PendingBodyOperation,
+): string | undefined {
+  const ledger = bodyLedger(events, op.groupId)
+  if (ledger === undefined || ledger.selectedIndex !== op.previousIndex) return undefined
+  const anchor = ledger.anchorMessageId
+  if (!anchor.startsWith('body-restore-') || anchor === op.previousAnchorId) return undefined
+  return findSurfaceSeqByMessageId(events, surface, anchor) === undefined ? undefined : anchor
+}
+
+/** Terminal reason that survives in the abort record for the read side. */
+function restoreAbortReason(events: ReturnType<typeof eventsOf>, op: PendingBodyOperation): string {
+  const evidence = settlementEvidenceOf(events, op.opId)
+  if (evidence?.phase === 'cancelled' && evidence.reason !== undefined) return evidence.reason
+  return `body restore ${op.opId} put back the previous anchor '${op.previousAnchorId}'`
+}
+
+/**
+ * Undo the failed candidate's own body receipt before the old plan is replayed
+ * (proposal 0022 §4, proposal 0023 §3.2).
+ *
+ * The projector keys a candidate patch as `body:<newMessageId>` (or
+ * `body:<newMessageId>#<index>`). `rollbackTurnWrites` only owns journal and
+ * settle receipts, so without this step a failed regeneration leaves the new
+ * patch live in `chat_metadata.variables` and the old plan redos on top of it.
+ * The chat is read and saved with CAS; a missing receipt (candidate not
+ * projected yet) is a no-op.
+ */
+async function undoNewCandidateBodyReceipt(
+  deps: BodyRuntimeDeps,
+  op: PendingBodyOperation,
+  events: ReturnType<typeof eventsOf>,
+  failedTurn: number | undefined,
+): Promise<void> {
+  const plan = op.rollbackPlan
+  if (plan === undefined || failedTurn === undefined) return
+  const candidate = lastBodyCandidate(events, failedTurn)
+  if (candidate === undefined) return
+  const text = textOfMessage(candidate.message)
+  if (!/<UpdateVariable(?:Variable)?\b/i.test(text)) return
+
+  try {
+    const { store } = await import('../runtime.js')
+    const tavern = await store()
+    const snapshot = await tavern.getChatSnapshot(plan.binding.character, plan.binding.chatId)
+    if (snapshot === undefined) {
+      throw bodyRuntimeError(
+        'operation-failed',
+        `body restore ${op.opId} cannot read chat '${plan.binding.chatId}' of '${plan.binding.character}' to undo candidate '${candidate.messageId}'`,
       )
     }
-    return restoredMessageId
-  })
+    const receipts = mvuReceiptsForBody(snapshot.chat, { messageId: candidate.messageId })
+    const live = receipts.filter((receipt) => receipt.undoneAt === undefined)
+    if (live.length === 0) return
+    undoMvuReceipts(snapshot.chat, live, { at: new Date().toISOString() })
+    await tavern.saveChat(plan.binding.character, plan.binding.chatId, snapshot.chat, snapshot.revision)
+  } catch (error) {
+    throw failureFor(
+      error,
+      `body restore ${op.opId} failed to undo the new candidate receipt '${candidate.messageId}'`,
+      op,
+    )
+  }
 }
 
 /**

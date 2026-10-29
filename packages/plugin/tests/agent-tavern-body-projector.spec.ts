@@ -286,6 +286,15 @@ async function snapshotOf(store: TavernStore, chatId: string): Promise<ChatLogIR
   return snapshot.chat
 }
 
+async function captureRejection(run: Promise<unknown>): Promise<unknown> {
+  try {
+    await run
+  } catch (error) {
+    return error
+  }
+  throw new Error('expected the projection to reject')
+}
+
 function floorOf(chat: ChatLogIR): ChatMessage {
   const floor = chat.messages[1]
   if (floor === undefined) throw new Error('fixture chat has no body floor')
@@ -568,6 +577,56 @@ describe('AgentTavern body JSONL projector', () => {
     expect(await projector.status(sessionId)).toMatchObject({ status: 'ok', lastCursor: 16 })
   })
 
+  it('refuses a restore whose body copy is not an assistant message', async () => {
+    const { root, store, chatId, sessionId } = await fixture('body-projector-restore-pre-state')
+    const session = makeSession(sessionId)
+    seedBaseline(session)
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(session)
+
+    seedCandidateZero(session)
+    const forged = bodyEvent(6, { op: 'restore', groupId: 'group-1', messageId: 'ghost-restore', index: 0 })
+    session.events.push(forged)
+    const before = await snapshotOf(store, chatId)
+
+    const error = await captureRejection(projector.project(session, forged))
+
+    // The fold applies the restore to its own anchor without ever resolving the
+    // message, so only the pre-event log can refuse a phantom restored copy.
+    expect(error).toMatchObject({ name: 'BodyLedgerError', code: 'invalid-body-event' })
+    expect((error as Error).message).toContain("restore for group 'group-1'")
+    expect((error as Error).message).toContain("names 'ghost-restore' at index 0")
+    expect((error as Error).message).toContain('seq 6')
+    expect(await snapshotOf(store, chatId)).toEqual(before)
+    expect(await projector.status(sessionId)).toMatchObject({ status: 'pending', lastCursor: 3, pendingCursor: 6 })
+  })
+
+  it('refuses a select whose pre-event anchor has no assistant message', async () => {
+    const { root, store, chatId, sessionId } = await fixture('body-projector-select-pre-state')
+    const session = makeSession(sessionId)
+    seedBaseline(session)
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(session)
+
+    seedCandidateZero(session)
+    // A restore record can rebind the anchor to an id the log never carried; a
+    // select that starts from that anchor no longer describes a real floor.
+    session.events.push(
+      bodyEvent(6, { op: 'restore', groupId: 'group-1', messageId: 'ghost-restore', index: 0 }),
+      bodyEvent(7, { op: 'select', groupId: 'group-1', index: 0 }),
+    )
+    const before = await snapshotOf(store, chatId)
+
+    const error = await captureRejection(projector.project(session, session.events[7]!))
+
+    expect(error).toMatchObject({ name: 'BodyLedgerError', code: 'invalid-body-event' })
+    expect((error as Error).message).toContain("select for group 'group-1' cannot be explained")
+    expect((error as Error).message).toContain("anchor 'ghost-restore'")
+    expect((error as Error).message).toContain('seq 7')
+    expect(await snapshotOf(store, chatId)).toEqual(before)
+    expect(await projector.status(sessionId)).toMatchObject({ status: 'pending', lastCursor: 3, pendingCursor: 7 })
+  })
+
   it('retries a CAS conflict and replays body projections idempotently', async () => {
     const { root, store, chatId, sessionId } = await fixture()
     const session = makeSession(sessionId)
@@ -705,6 +764,101 @@ describe('AgentTavern body JSONL projector', () => {
     expect(chat.header.chat_metadata.variables).toMatchObject({ stat_data: { mvu: { favor: 10 } } })
     expect(readMvuReceipts(chat).filter((receipt) => receipt.turnKey === 'body:candidate-1')).toHaveLength(0)
     expect(floorOf(chat).mes).toBe(text)
+  })
+
+  /** Seed one projected assistant floor so a candidate can be located by message id. */
+  async function seedProjectedFloor(
+    store: TavernStore,
+    chatId: string,
+    sessionId: string,
+    messageId: string,
+  ): Promise<void> {
+    const sendDate = new Date(1200).toISOString()
+    const snapshot = await store.getChatSnapshot(CHARACTER, chatId)
+    if (snapshot === undefined) throw new Error('fixture chat is missing')
+    snapshot.chat.messages.push(
+      { name: 'Alice', is_user: true, is_system: false, send_date: sendDate, mes: 'Open the door.' },
+      {
+        name: CHARACTER,
+        is_user: false,
+        is_system: false,
+        send_date: sendDate,
+        mes: 'Previous body.',
+        extra: { agentTavern: { sessionId, eventSeq: 0, messageId } },
+      },
+    )
+    await store.saveChat(CHARACTER, chatId, snapshot.chat, snapshot.revision)
+  }
+
+  it('projects a non-MVU candidate whose message id carries a receipt separator', async () => {
+    const { root, store, chatId, sessionId } = await fixture('body-projector-separator-plain')
+    await seedProjectedFloor(store, chatId, sessionId, 'candidate#1')
+    const session = makeSession(sessionId)
+    session.events.push(
+      assistantEvent(0, 'candidate#1', 'Plain body.', 1, 1200, undefined),
+      bodyEvent(1, { op: 'candidate', groupId: 'candidate#1', messageId: 'candidate#1', index: 0 }),
+    )
+    const projector = await AgentTavernProjector.open(root, store)
+
+    await projector.project(session, session.events[1]!)
+
+    const chat = await snapshotOf(store, chatId)
+    const floor = floorOf(chat)
+    expect(floor.mes).toBe('Plain body.')
+    expect(floor.swipes).toEqual(['Plain body.'])
+    expect(agentTavernOf(floor)).toMatchObject({
+      bodyGroupId: 'candidate#1',
+      anchorMessageId: 'candidate#1',
+    })
+  })
+
+  it('projects an edit for a non-MVU candidate whose message id carries a receipt separator', async () => {
+    const { root, store, chatId, sessionId } = await fixture('body-projector-separator-edit')
+    await seedProjectedFloor(store, chatId, sessionId, 'candidate#1')
+    const session = makeSession(sessionId)
+    session.events.push(
+      assistantEvent(0, 'candidate#1', 'Plain body.', 1, 1200, undefined),
+      bodyEvent(1, { op: 'candidate', groupId: 'candidate#1', messageId: 'candidate#1', index: 0 }),
+      bodyEvent(2, {
+        op: 'edit', groupId: 'candidate#1', index: 0, text: 'Edited plain body.', previousText: 'Plain body.',
+      }),
+    )
+    const projector = await AgentTavernProjector.open(root, store)
+
+    await projector.project(session, session.events[1]!)
+    await projector.project(session, session.events[2]!)
+
+    const chat = await snapshotOf(store, chatId)
+    const floor = floorOf(chat)
+    expect(floor.mes).toBe('Edited plain body.')
+    expect(floor.swipes).toEqual(['Edited plain body.'])
+    expect(readMvuReceipts(chat)).toHaveLength(0)
+  })
+
+  it('refuses an MVU candidate whose message id cannot form a receipt key', async () => {
+    const { root, store, chatId, sessionId } = await mvuFixture('body-projector-separator-mvu', {
+      initialized_lorebooks: true,
+      stat_data: { mvu: { favor: 10 } },
+    })
+    await seedProjectedFloor(store, chatId, sessionId, 'candidate#1')
+    const text = updateCandidateText('[{ "op": "delta", "path": "/mvu/favor", "value": 5 }]')
+    const session = makeSession(sessionId)
+    session.events.push(
+      assistantEvent(0, 'candidate#1', text, 1, 1200, undefined),
+      bodyEvent(1, { op: 'candidate', groupId: 'candidate#1', messageId: 'candidate#1', index: 0 }),
+    )
+    const projector = await AgentTavernProjector.open(root, store)
+    const before = await snapshotOf(store, chatId)
+
+    const error = await captureRejection(projector.project(session, session.events[1]!))
+
+    expect(error).toMatchObject({ name: 'CandidateReceiptError', code: 'body-receipt-key-mismatch' })
+    expect((error as Error).message).toContain('candidate#1')
+    expect((error as Error).message).toContain("without '#'")
+    expect(await projector.status(sessionId)).toMatchObject({ status: 'pending', pendingCursor: 1 })
+    // The refused projection saved nothing: the seeded floor keeps no swipes.
+    expect(await snapshotOf(store, chatId)).toEqual(before)
+    expect(floorOf(await snapshotOf(store, chatId)).swipes).toBeUndefined()
   })
 
   it('keeps one body receipt across a candidate CAS retry', async () => {
@@ -857,4 +1011,293 @@ describe('AgentTavern body JSONL projector', () => {
     expect(floor.mes).toBe('Edited body.')
     expect(agentTavernOf(floor)).toMatchObject({ lastBodyEventSeq: 6, lastBodyMutation: 'edit' })
   })
+
+  it('reprojects a failed event on replay after a later success advanced the cursor', async () => {
+    const { root, store, chatId, sessionId } = await fixture('body-projector-pending-hole')
+    const session = makeSession(sessionId)
+    seedBaseline(session)
+    let failBodyWrite = false
+    const projector = await AgentTavernProjector.open(root, {
+      getState: () => store.getState(),
+      getCharacter: (name) => store.getCharacter(name),
+      getChatSnapshot: (character, id) => store.getChatSnapshot(character, id),
+      getChatJsrOverlay: (character, id) => store.getChatJsrOverlay(character, id),
+      saveChat: async (character, id, chat, revision) => {
+        if (failBodyWrite) {
+          failBodyWrite = false
+          throw new Error('transient body write failure')
+        }
+        return store.saveChat(character, id, chat, revision)
+      },
+    })
+    await projector.replay(session)
+
+    seedCandidateZero(session)
+    session.events.push(bodyEvent(6, { op: 'op-finish', opId: 'op-1', result: 'ok', anchorId: 'group-1' }))
+
+    failBodyWrite = true
+    await expect(projector.project(session, session.events[5]!)).rejects.toThrow('transient body write failure')
+    expect(await projector.status(sessionId)).toMatchObject({ status: 'pending', lastCursor: 3, pendingCursor: 5 })
+    expect(floorOf(await snapshotOf(store, chatId)).swipes).toBeUndefined()
+
+    // A later success must not advance the watermark past the failed cursor.
+    await projector.project(session, session.events[6]!)
+    expect(await projector.status(sessionId)).toMatchObject({ status: 'pending', lastCursor: 3, pendingCursor: 5 })
+    expect(floorOf(await snapshotOf(store, chatId)).swipes).toBeUndefined()
+
+    await projector.replay(session)
+    const chat = await snapshotOf(store, chatId)
+    expect(floorOf(chat).swipes).toEqual(['Original body.'])
+    expect(floorOf(chat).mes).toBe('Original body.')
+    expect(await projector.status(sessionId)).toMatchObject({ status: 'ok', lastCursor: 6 })
+  })
+
+  it('keeps the lowest unfinished cursor across consecutive failures', async () => {
+    const { root, store, chatId, sessionId } = await fixture('body-projector-pending-min')
+    const session = makeSession(sessionId)
+    seedBaseline(session)
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(session)
+
+    session.events.push(
+      nativeEvent('assistant/message', 4, 1400, {
+        turn: 1,
+        step: 1,
+        message: {
+          id: 'ghost-anchor',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Ghost body.' }],
+          source: { kind: 'model', provider: 'test-provider', model: 'test-model' },
+        },
+      }),
+      bodyEvent(5, { op: 'candidate', groupId: 'group-a', messageId: 'ghost-anchor', index: 0 }),
+      bodyEvent(6, { op: 'candidate', groupId: 'group-b', messageId: 'ghost-anchor', index: 0 }),
+      bodyEvent(7, { op: 'op-finish', opId: 'op-1', result: 'failed' }),
+    )
+
+    await expect(projector.project(session, session.events[5]!)).rejects.toMatchObject({
+      code: 'body-floor-not-found',
+    })
+    expect(await projector.status(sessionId)).toMatchObject({ status: 'pending', lastCursor: 3, pendingCursor: 5 })
+
+    await expect(projector.project(session, session.events[6]!)).rejects.toMatchObject({
+      code: 'body-floor-not-found',
+    })
+    expect(await projector.status(sessionId)).toMatchObject({ status: 'pending', lastCursor: 3, pendingCursor: 5 })
+
+    await projector.project(session, session.events[7]!)
+    expect(await projector.status(sessionId)).toMatchObject({ status: 'pending', lastCursor: 3, pendingCursor: 5 })
+    expect((await snapshotOf(store, chatId)).messages).toHaveLength(2)
+  })
+
+  it('does not skip a second failed cursor when replay closes the first hole', async () => {
+    const { root, store, chatId, sessionId } = await fixture('body-projector-pending-two-holes')
+    const session = makeSession(sessionId)
+    seedBaseline(session)
+    let failBodyWrite = false
+    const projector = await AgentTavernProjector.open(root, {
+      getState: () => store.getState(),
+      getCharacter: (name) => store.getCharacter(name),
+      getChatSnapshot: (character, id) => store.getChatSnapshot(character, id),
+      getChatJsrOverlay: (character, id) => store.getChatJsrOverlay(character, id),
+      saveChat: async (character, id, chat, revision) => {
+        if (failBodyWrite) {
+          failBodyWrite = false
+          throw new Error('transient body write failure')
+        }
+        return store.saveChat(character, id, chat, revision)
+      },
+    })
+    await projector.replay(session)
+
+    session.events.push(
+      bodyEvent(4, { op: 'candidate', groupId: 'group-1', messageId: 'group-1', index: 0 }),
+      bodyEvent(5, {
+        op: 'edit', groupId: 'group-1', index: 0, text: 'Edited body.', previousText: 'Original body.',
+      }),
+      bodyEvent(6, { op: 'op-finish', opId: 'op-1', result: 'ok', anchorId: 'group-1' }),
+    )
+
+    failBodyWrite = true
+    await expect(projector.project(session, session.events[4]!)).rejects.toThrow('transient body write failure')
+    // The edit targets a floor that has no selected swipe yet, so it fails as well.
+    await expect(projector.project(session, session.events[5]!)).rejects.toMatchObject({
+      name: 'CandidateReceiptError',
+      code: 'stale-anchor',
+    })
+    await projector.project(session, session.events[6]!)
+    expect(await projector.status(sessionId)).toMatchObject({ status: 'pending', lastCursor: 3, pendingCursor: 4 })
+
+    // Replay closes seq 4 and must still re-project the second failed event (5).
+    await projector.replay(session)
+    const chat = await snapshotOf(store, chatId)
+    expect(floorOf(chat).mes).toBe('Edited body.')
+    expect(floorOf(chat).swipes).toEqual(['Edited body.'])
+    expect(await projector.status(sessionId)).toMatchObject({ status: 'ok', lastCursor: 6 })
+  })
+
+  it('persists imported-floor adoption and its candidate in one chat save', async () => {
+    const { root, store, chatId, sessionId } = await importedFixture(
+      'body-projector-adoption-one-save',
+      ['Chosen greeting.'],
+      0,
+    )
+    const session = makeSession(sessionId)
+    seedImportedTurn(session, 'import-anchor', 'Chosen greeting.')
+    session.events.push(bodyEvent(5, {
+      op: 'candidate', groupId: 'import-anchor', messageId: 'import-anchor', index: 0,
+    }))
+    let saves = 0
+    const projector = await AgentTavernProjector.open(root, {
+      getState: () => store.getState(),
+      getCharacter: (name) => store.getCharacter(name),
+      getChatSnapshot: (character, id) => store.getChatSnapshot(character, id),
+      getChatJsrOverlay: (character, id) => store.getChatJsrOverlay(character, id),
+      saveChat: async (character, id, chat, revision) => {
+        saves += 1
+        return store.saveChat(character, id, chat, revision)
+      },
+    })
+
+    await projector.project(session, session.events[5]!)
+
+    expect(saves).toBe(1)
+    const chat = await snapshotOf(store, chatId)
+    expect(chat.messages[0]?.swipes).toEqual(['Chosen greeting.'])
+    expect(agentTavernOf(chat.messages[0]!).bodyGroupId).toBe('import-anchor')
+  })
+
+  it('does not persist imported-floor adoption when the candidate write fails', async () => {
+    const { root, store, chatId, sessionId } = await importedFixture(
+      'body-projector-adoption-atomic',
+      ['Chosen greeting.'],
+      0,
+    )
+    const session = makeSession(sessionId)
+    seedImportedTurn(session, 'import-anchor', 'Chosen greeting.')
+    session.events.push(bodyEvent(5, {
+      op: 'candidate', groupId: 'import-anchor', messageId: 'import-anchor', index: 0,
+    }))
+    let candidateWrites = 0
+    let otherWrites = 0
+    const projector = await AgentTavernProjector.open(root, {
+      getState: () => store.getState(),
+      getCharacter: (name) => store.getCharacter(name),
+      getChatSnapshot: (character, id) => store.getChatSnapshot(character, id),
+      getChatJsrOverlay: (character, id) => store.getChatJsrOverlay(character, id),
+      saveChat: async (character, id, chat, revision) => {
+        // Fail the write that carries the projected candidate: a two-step
+        // adoption would already have persisted the dropped swipe surface.
+        const floor = chat.messages[0]
+        if (floor !== undefined && Array.isArray(floor.swipes) && floor.swipes.includes('Chosen greeting.')) {
+          candidateWrites += 1
+          throw new Error('candidate write failed')
+        }
+        otherWrites += 1
+        return store.saveChat(character, id, chat, revision)
+      },
+    })
+    const before = await snapshotOf(store, chatId)
+
+    await expect(projector.project(session, session.events[5]!)).rejects.toThrow('candidate write failed')
+
+    expect(candidateWrites).toBe(1)
+    expect(otherWrites).toBe(0)
+    expect(await snapshotOf(store, chatId)).toEqual(before)
+    expect(await projector.status(sessionId)).toMatchObject({ status: 'pending', lastCursor: -1, pendingCursor: 5 })
+  })
+
+  it('refuses imported-floor adoption when the chosen floor is not the anchor mirror', async () => {
+    const { root, store, chatId, sessionId } = await importedFixture(
+      'body-projector-adoption-mismatch',
+      ['Another greeting.'],
+      0,
+    )
+    const session = makeSession(sessionId)
+    seedImportedTurn(session, 'import-anchor', 'Chosen greeting.')
+    session.events.push(bodyEvent(5, {
+      op: 'candidate', groupId: 'import-anchor', messageId: 'import-anchor', index: 0,
+    }))
+    const projector = await AgentTavernProjector.open(root, store)
+    const before = await snapshotOf(store, chatId)
+
+    const error = await captureRejection(projector.project(session, session.events[5]!))
+
+    expect(error).toMatchObject({ name: 'BodyJsonlProjectionError', code: 'body-adoption-mismatch' })
+    expect((error as Error).message).toContain("group 'import-anchor'")
+    expect((error as Error).message).toContain('chat floor 0')
+    expect((error as Error).message).toContain('Another greeting.')
+    expect((error as Error).message).toContain('Chosen greeting.')
+    expect(await snapshotOf(store, chatId)).toEqual(before)
+    expect(await projector.status(sessionId)).toMatchObject({ status: 'pending', lastCursor: -1, pendingCursor: 5 })
+  })
+
+  it('does not read another floor text when a body group id equals its message id', async () => {
+    const { root, store, chatId, sessionId } = await fixture('body-projector-locator')
+    const sendDate = new Date(1200).toISOString()
+    const chat = await snapshotOf(store, chatId)
+    chat.messages.push(
+      { name: 'Alice', is_user: true, is_system: false, send_date: sendDate, mes: 'Open the door.' },
+      {
+        name: CHARACTER,
+        is_user: false,
+        is_system: false,
+        send_date: sendDate,
+        mes: 'Crossed floor.',
+        swipe_id: 0,
+        swipes: ['Crossed floor.'],
+        swipe_info: [{ send_date: sendDate, extra: {} }],
+        extra: { agentTavern: { sessionId, eventSeq: 2, messageId: 'group-1' } },
+      },
+      {
+        name: CHARACTER,
+        is_user: false,
+        is_system: false,
+        send_date: sendDate,
+        mes: 'Anchor body.',
+        extra: { agentTavern: { sessionId, eventSeq: 3, messageId: 'anchor-1' } },
+      },
+    )
+    const snapshot = await store.getChatSnapshot(CHARACTER, chatId)
+    if (snapshot === undefined) throw new Error('fixture chat is missing')
+    await store.saveChat(CHARACTER, chatId, chat, snapshot.revision)
+
+    const session = makeSession(sessionId)
+    session.events.push(
+      assistantEvent(0, 'anchor-1', 'Fresh body.', 1, 1200, undefined),
+      bodyEvent(1, { op: 'candidate', groupId: 'group-1', messageId: 'anchor-1', index: 0 }),
+    )
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.project(session, session.events[1]!)
+
+    const projected = await snapshotOf(store, chatId)
+    const target = projected.messages[2]!
+    expect(target.mes).toBe('Fresh body.')
+    expect(target.swipes).toEqual(['Fresh body.'])
+    // The floor whose message id equals the group id keeps its own text.
+    expect(projected.messages[1]!.mes).toBe('Crossed floor.')
+    expect(projected.messages[1]!.swipes).toEqual(['Crossed floor.'])
+  })
+
+  it.each([-1, 1.5, Number.POSITIVE_INFINITY, 8.64e15 + 1])(
+    'rejects a body candidate whose assistant time is %s',
+    async (time) => {
+      const { root, store, chatId, sessionId } = await fixture()
+      const session = makeSession(sessionId)
+      seedBaseline(session)
+      session.events[2] = nativeEvent('assistant/message', 2, time, session.events[2]!.data!)
+      session.events.push(bodyEvent(4, {
+        op: 'candidate', groupId: 'group-1', messageId: 'group-1', index: 0,
+      }))
+      const projector = await AgentTavernProjector.open(root, store)
+
+      const error = await captureRejection(projector.project(session, session.events[4]!))
+
+      expect(error).toMatchObject({ name: 'BodyLedgerError', code: 'invalid-body-event' })
+      expect((error as Error).message).toContain('assistant/message')
+      expect((error as Error).message).toContain('seq 2')
+      expect(await projector.status(sessionId)).toMatchObject({ status: 'pending', lastCursor: -1, pendingCursor: 4 })
+      expect((await snapshotOf(store, chatId)).messages).toEqual([])
+    },
+  )
 })

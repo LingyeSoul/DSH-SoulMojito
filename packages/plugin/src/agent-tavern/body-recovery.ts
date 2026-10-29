@@ -83,8 +83,9 @@ export type BodyDepsFactory = (
 ) => Promise<BodyRuntimeDeps | undefined>
 
 /**
- * One agent's recovery result. `pending` counts `op-start` records without
- * `op-finish`, so tests and logs can distinguish a clean session from a repair.
+ * One agent's recovery result. `pending` counts `op-start` records without a
+ * terminal record (`op-finish` or `op-abort`), so tests and logs can
+ * distinguish a clean session from a repair.
  * `finish-pending` means the body is durably settled but its `op-finish` still
  * could not be written; it is deliberately not counted as a restore.
  */

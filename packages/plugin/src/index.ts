@@ -61,11 +61,18 @@ export function apply(ctx: PluginContext, config: { anchorEveryTurns?: unknown, 
   // silently fall back to loopback-only (or, worse, reflect Host values).
   const allowedHosts = normalizeAllowedHosts(config.allowedHosts)
   // Body wiring is registered before any session/agent derivation so restored
-  // sessions are projected and recovered from their first reader. A host
-  // without the projection/plugin-record seam only disables body operations;
-  // the rest of the plugin keeps mounting (proposal 0021 §12.8).
+  // sessions are projected and recovered from their first reader. `sessions` is
+  // a hard dependency of every supported host (DSH 0.2.0-rc.2 exposes
+  // `ctx.sessions`), so inject names it; the optional part is that service's
+  // `registerMessageProjection` seam. A host shape without that seam only
+  // disables body operations, and the rest of the plugin keeps mounting
+  // (proposal 0021 §12.8).
   const bodyWiring = bodyWiringContext(ctx, async (sessionId) => (await (await store()).getState()).sessionBindings[sessionId])
   registerBodyProjection(bodyWiring)
+  const bodyProjectionSeam = typeof bodyWiring.sessions?.registerMessageProjection === 'function'
+  ctx.logger?.info?.(
+    `dsh-soulmojito body: projection seam ${bodyProjectionSeam ? 'available' : 'missing; body operations disabled'}`,
+  )
   registerBodyTurnStopping(bodyWiring)
   void recoverBodyOperations(bodyWiring)
     .catch((error: unknown) => ctx.logger?.warn?.(`dsh-soulmojito body: startup recovery failed: ${error instanceof Error ? error.message : String(error)}`))

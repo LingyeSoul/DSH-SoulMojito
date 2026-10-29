@@ -174,7 +174,7 @@ describe('AgentTavern body rollback integration (real stores + live write journa
     expect(old.plan.chatRevision).toBe(old.chatRevision)
     expect(old.plan.preparedRevision).not.toBe(old.chatRevision)
     expect(old.plan.floorIndex).toBe(old.floorIndex)
-    expect(old.plan.bodyText).toBe(OLD_BODY)
+    expect(old.plan.bodyText).toBeUndefined()
     expect(old.plan.diagnostics.map((entry) => entry.code)).toEqual(['vector-restore-skipped'])
 
     // prepare: the live journal undo reaches the real flat stores.

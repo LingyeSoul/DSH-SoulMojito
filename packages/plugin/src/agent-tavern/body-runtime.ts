@@ -14,7 +14,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { BODY_EVENT_TYPE, type BodyEventData } from './body.js'
+import { BODY_EVENT_TYPE, type BodyEventData, type BodyLedger } from './body.js'
 import { BodyRollbackError, type BodyRollbackPlan } from './body-rollback.js'
 import { appendPrepareRecovered, appendPreparedRollback, foldPreparedOperations, type PendingBodyPrepare } from './body-rollback-prepare.js'
 import {
@@ -52,6 +52,7 @@ import { durableRollbackPlan } from './body-runtime-plan.js'
 import {
   eventSeqOf,
   eventsOf,
+  findEventByMessageId,
   findSurfaceSeqByMessageId,
   nextEventSeq,
   parseEventList,
@@ -75,13 +76,17 @@ import {
   stateFromLedger,
 } from './body-runtime-state.js'
 import {
+  BODY_ABORT_EVENT_TYPE,
   finalizeRecoveredOperation,
   finalizeTurnStopping,
+  parseAbortEvent,
   restoreBodyAfterFailure,
 } from './body-runtime-settlement.js'
 
 export { BODY_EVENT_TYPE }
 export type { BodyEventData }
+export { BODY_ABORT_EVENT_TYPE } from './body-runtime-settlement.js'
+export type { BodyAbortEventData } from './body-runtime-settlement.js'
 export { BODY_PREPARE_EVENT_TYPE } from './body-rollback-prepare.js'
 export type { BodyPrepareEventData, PendingBodyPrepare } from './body-rollback-prepare.js'
 export {
@@ -161,6 +166,11 @@ export async function startRegenerate(
     assertLastBodyTarget(events, surface, target.seq, target.message)
     const existingLedger = ledgerForRegenerate(events, request.groupId, request.expectedAnchorId, request.expectedIndex)
     const previousIndex = existingLedger?.selectedIndex ?? 0
+    // The rollback identity is the selected candidate message, not necessarily
+    // the surface anchor: after a failed regeneration the anchor is a
+    // `body-restore-*` copy while the receipts and the old turn still belong to
+    // the candidate message (proposal 0022 §4, proposal 0023 §4.3).
+    const rollbackTarget = rollbackTargetOf(events, existingLedger, previousIndex, request.expectedAnchorId, target.seq)
     const deny = normalizeDenyTools(request.writeToolDeny)
 
     const opId = `body-op-${randomUUID()}`
@@ -184,14 +194,14 @@ export async function startRegenerate(
     let drafted: BodyRollbackPlan | undefined
     try {
       if (port !== undefined && typeof port.plan === 'function' && typeof port.apply === 'function') {
-        drafted = await planRegenerateRollback(deps, agentId, events, target.seq, request.expectedAnchorId)
+        drafted = await planRegenerateRollback(deps, agentId, events, rollbackTarget.seq, rollbackTarget.messageId)
         // The draft is durable before `apply` mutates a store, so a restart can
         // replay it without any process-local state.
         appendPreparedRollback(deps, opId, request.groupId, drafted)
         prepareRecordWritten = true
         active.rollbackPlan = await applyRegenerateRollback(deps, drafted)
       } else {
-        active.rollbackPlan = await prepareRegenerateRollback(deps, agentId, events, target.seq, request.expectedAnchorId)
+        active.rollbackPlan = await prepareRegenerateRollback(deps, agentId, events, rollbackTarget.seq, rollbackTarget.messageId)
       }
 
       const startEvent = appendBodyStartEvent(deps, {
@@ -262,7 +272,11 @@ export async function startRegenerate(
         }
       }
 
-      if (opStarted) {
+      // Proposal 0022 §10.3: a failed compensation means the old writes are not
+      // back yet. Any terminal record would drop the only recovery handle, so
+      // the op-start and its plan stay pending for startup recovery; only a
+      // successful compensation may close the start failure.
+      if (opStarted && compensationError === undefined) {
         // A start failure recorded before the anchor hide can be finished as
         // failed. Once a replacement may have landed, the previous body is off
         // the model surface and only recovery can put it back (it appends the
@@ -280,8 +294,12 @@ export async function startRegenerate(
         } else {
           warn(deps, `body runtime: ${reason}; the previous anchor is already off the model surface, leaving the operation pending for recovery to restore it`)
         }
+      } else if (opStarted) {
+        warn(deps, `body runtime: ${reason}; the prepared write rollback could not be restored, leaving the operation pending for recovery to retry the compensation`)
       }
-      releaseOperation(deps, active)
+      // A failed compensation keeps the operation in `pendingByAgent` too: a
+      // new regenerate over half-restored writes would fork the state again.
+      if (compensationError === undefined) releaseOperation(deps, active)
 
       if (compensationError !== undefined) {
         const combined = new AggregateError(
@@ -296,6 +314,36 @@ export async function startRegenerate(
       throw failureFor(error, reason, operationView(active))
     }
   })
+}
+
+/**
+ * Resolve the candidate message that owns the rollback journal and receipts.
+ *
+ * A normal operation uses the surface anchor. After a failed regeneration the
+ * anchor is a `body-restore-*` copy while the ledger candidate, the old turn
+ * and the `body:<messageId>` receipts still belong to the original message.
+ * Planning against the copy would derive the restore bridge turn and miss the
+ * receipt; the candidate identity keeps both aligned.
+ */
+function rollbackTargetOf(
+  events: ReturnType<typeof eventsOf>,
+  ledger: BodyLedger | undefined,
+  previousIndex: number,
+  anchorMessageId: string,
+  anchorSeq: number,
+): { messageId: string; seq: number } {
+  const candidate = ledger?.candidates[previousIndex]
+  if (candidate === undefined || candidate.messageId === anchorMessageId) {
+    return { messageId: anchorMessageId, seq: anchorSeq }
+  }
+  const event = findEventByMessageId(events, candidate.messageId)
+  if (event === undefined) {
+    throw bodyRuntimeError(
+      'body-state-unsafe',
+      `body regenerate refused: candidate '${candidate.messageId}' at index ${previousIndex} has no assistant message in the session log, so its write rollback cannot be planned`,
+    )
+  }
+  return { messageId: candidate.messageId, seq: event.seq }
 }
 
 /** Whether the previous anchor is still on the model surface; unreadable logs count as visible. */
@@ -514,8 +562,10 @@ export function foldPendingPrepares(events: readonly unknown[]): readonly Pendin
 }
 
 /**
- * Fold `op-start` events that never received `op-finish`. Startup recovery
- * uses this list to decide between candidate settlement and a body restore.
+ * Fold `op-start` events that never received a terminal record. `op-finish`
+ * closes a completed (or fully compensated) operation; `op-abort` closes one
+ * whose previous body was restored. Startup recovery uses this list to decide
+ * between candidate settlement and a body restore.
  * A durable `rollbackPlan` carried by the record is attached to the operation,
  * so the restore path can replay the old writes after a restart. Two-phase
  * `body-settled` records are attached as `settled`, `settling` or
@@ -531,6 +581,22 @@ export function foldPendingOps(events: readonly unknown[]): readonly PendingBody
   const pending = new Map<string, PendingBodyOperation>()
   const finished = new Set<string>()
   for (const event of parsed) {
+    const abort = parseAbortEvent(event)
+    if (abort !== undefined) {
+      const op = pending.get(abort.opId)
+      if (op !== undefined) {
+        pending.delete(abort.opId)
+        finished.add(abort.opId)
+        continue
+      }
+      // A repeated abort after the terminal record is harmless; one without an
+      // open op-start is a broken log and must fail closed.
+      if (finished.has(abort.opId)) continue
+      throw bodyRuntimeError(
+        'invalid-event',
+        `foldPendingOps: body abort record at seq ${event.seq} references operation '${abort.opId}' with no open op-start`,
+      )
+    }
     const settlement = parseSettledEvent(event)
     if (settlement !== undefined) {
       const op = pending.get(settlement.opId)

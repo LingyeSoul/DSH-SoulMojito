@@ -6,10 +6,13 @@
  *   2. a plugin-owned message projection that rewrites the anchor text;
  *   3. an empty `developer/message` replacement that removes a current surface node.
  *
- * This file pins those seams against the real DSH runtime. It deliberately does
- * not import product code: the contract under test belongs to the host, and the
- * body ledger itself is covered by the sibling body specs. Everything here is
- * synthetic Example data.
+ * This file pins those seams against the real DSH runtime. The record-seam
+ * checks below deliberately do not import product code: the contract under test
+ * belongs to the host, and the body ledger itself is covered by the sibling body
+ * specs. The final two blocks add the plugin-level regressions that belong to
+ * this slice: mounting without a `sessions` service (body disabled, other
+ * surfaces intact), the missing-sessionId rejection code, and the turn/end
+ * retry queue. Everything here is synthetic Example data.
  *
  * Host facts asserted below come from the installed sources:
  *   - `deriveEventMessage()` returns a projected message before the empty-content
@@ -46,10 +49,14 @@
  * host-side confirmation before release.
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { apply } from '../src/index.js'
+import { handleBodySessionEvent, turnEndRestoreKey } from '../src/agent-tavern/body-wiring.js'
+import { pendingByAgent } from '../src/agent-tavern/body-runtime-core.js'
 
 /** Dependency root (a node_modules directory) of the vendored repo runtime. */
 const REPO_RUNTIME_ROOT = fileURLToPath(new URL('../../../.npm-cache/dsh-runtime/node_modules', import.meta.url))
@@ -821,6 +828,263 @@ describe.skipIf(!pluginRecordAvailable)('plugin records through the real appendP
 
     const projected = current.createSession('session-body-restore-projected', committed, headerFor('session-body-restore-projected'), 0, [bodyTextEditProjection()])
     expect(projected.deriveMessages().map(textOf)).toEqual([SYSTEM_TEXT, USER_TEXT, EDITED_TEXT])
+  })
+})
+
+/**
+ * Plugin mount with no `sessions` service. `apply` must not throw: the body
+ * projection degrades on the missing seam while the web route, prompt section
+ * and command surface still mount.
+ */
+describe('plugin mount without a sessions service', () => {
+  interface JsonResponseLike {
+    readonly statusCode: number
+    readonly chunks: string[]
+    setHeader(name: string, value: string): void
+    write(chunk: string): boolean
+    end(chunk?: string): void
+    on(event: string, listener: () => void): void
+  }
+
+  const infos: unknown[][] = []
+  const warnings: unknown[][] = []
+  const errors: unknown[][] = []
+  const sections: string[] = []
+  const cleanups: Array<() => void> = []
+  let webRoutes = 0
+  let commands = 0
+  let apiHandler: ((req: unknown, res: unknown) => Promise<void>) | undefined
+  let home = ''
+
+  function makeRequest(body: unknown) {
+    const listeners = new Map<string, (value?: unknown) => void>()
+    return {
+      method: 'PUT',
+      url: '/api/dsh-soulmojito/body',
+      headers: { 'content-type': 'application/json' },
+      on: (event: string, listener: (value?: unknown) => void) => {
+        listeners.set(event, listener)
+        if (event === 'end') {
+          if (body !== undefined) listeners.get('data')?.(Buffer.from(JSON.stringify(body)))
+          listener()
+        }
+        return undefined
+      },
+      destroy: () => {},
+    }
+  }
+
+  function makeResponse(): JsonResponseLike {
+    const chunks: string[] = []
+    return {
+      chunks,
+      statusCode: 0,
+      setHeader: () => {},
+      write: (chunk: string) => { chunks.push(chunk); return true },
+      end: (chunk?: string) => { if (chunk) chunks.push(chunk) },
+      on: () => {},
+    }
+  }
+
+  beforeAll(() => {
+    home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-mount-'))
+    process.env.DSH_HOME = home
+    apply({
+      systemPrompt: {
+        section: (definition: { name?: unknown }) => {
+          sections.push(String(definition.name))
+        },
+        context: () => {},
+      },
+      commands: { register: () => { commands += 1 } },
+      webServer: {
+        register: (definition: { handler: (req: unknown, res: unknown) => Promise<void> }) => {
+          apiHandler = definition.handler
+          webRoutes += 1
+          return () => {}
+        },
+      },
+      agentPresets: {
+        mount: async () => ({ id: 'agent-tavern' }),
+        recompose: async (_agent: unknown, presetId: string) => ({ id: presetId }),
+        compositionInventory: async () => [{ id: 'standard' }, { id: 'agent-tavern' }],
+      },
+      tools: { register: () => {} },
+      llm: { stream: async function* () {} },
+      agentDefaultModel: { currentSelection: () => ({ provider: 'example-provider', model: 'example-model' }) },
+      agents: { get: () => undefined },
+      effect: (callback: () => unknown) => {
+        const cleanup = callback()
+        if (typeof cleanup === 'function') cleanups.push(cleanup as () => void)
+        return () => {}
+      },
+      logger: {
+        info: (...args: unknown[]) => { infos.push(args) },
+        warn: (...args: unknown[]) => { warnings.push(args) },
+        error: (...args: unknown[]) => { errors.push(args) },
+      },
+    } as never)
+  })
+
+  afterAll(() => {
+    for (const cleanup of cleanups.reverse()) {
+      try { cleanup() } catch { /* example host cleanup must not mask the test result */ }
+    }
+    delete process.env.DSH_HOME
+    rmSync(home, { recursive: true, force: true })
+  })
+
+  it('mounts the non-body surfaces and disables only the body projection', () => {
+    expect(apiHandler).toBeDefined()
+    expect(webRoutes).toBe(1)
+    expect(sections).toContain('dsh-soulmojito:active-character')
+    expect(commands).toBeGreaterThan(0)
+    expect(warnings.some((args) => String(args[0]).includes('registerMessageProjection is unavailable'))).toBe(true)
+    expect(infos.some((args) => String(args[0]).includes('projection seam missing; body operations disabled'))).toBe(true)
+  })
+
+  it('rejects a body PUT without sessionId with the invalid-arguments code', async () => {
+    if (apiHandler === undefined) throw new Error('example host did not mount the API route')
+    const response = makeResponse()
+    await apiHandler(makeRequest({}), response)
+    expect(response.statusCode).toBe(400)
+    const payload = JSON.parse(response.chunks.join('')) as { code?: unknown }
+    expect(payload.code).toBe('invalid-arguments')
+  })
+})
+
+/**
+ * The retry chain is keyed by task identity, not by session alone. A deferred
+ * settlement arriving while a failed-turn restore is still retrying must run
+ * instead of being silently dropped.
+ */
+describe('turn/end retry queue', () => {
+  it('keys a restore and a settlement as different tasks of one session', () => {
+    const restore = { sessionId: 'example-session-1', agentId: 'example-session-1', turn: 2, reason: 'error', mode: 'restore' }
+    const settle = { sessionId: 'example-session-1', agentId: 'example-session-1', turn: 2, reason: undefined, mode: 'settle' }
+    expect(turnEndRestoreKey(restore as never)).not.toBe(turnEndRestoreKey(settle as never))
+    expect(turnEndRestoreKey({ ...restore } as never)).toBe(turnEndRestoreKey(restore as never))
+  })
+
+  it('reruns an identical edge once after its retry chain ends', async () => {
+    const warnings: unknown[][] = []
+    const errors: unknown[][] = []
+    const logger = {
+      info: () => {},
+      warn: (...args: unknown[]) => { warnings.push(args) },
+      error: (...args: unknown[]) => { errors.push(args) },
+    }
+    const sessionId = 'example-session-2'
+    const session = {
+      id: sessionId,
+      events: [{ type: 'turn/start', seq: 0, time: 0, data: { turn: 2 } }],
+      append: () => 0,
+    }
+    const agent = { id: sessionId, status: 'idle', session, followup: async () => {} }
+    const ctx = {
+      logger,
+      agents: { get: (id: string) => (id === sessionId ? agent : undefined) },
+    } as never
+    pendingByAgent.set(sessionId, {
+      opId: 'example-op-2',
+      groupId: 'example-group-2',
+      previousAnchorId: 'example-anchor-2',
+      previousIndex: 0,
+      startSeq: 0,
+      agentId: sessionId,
+      triggerMessageId: 'example-anchor-2',
+      turn: 2,
+      release: () => {},
+    } as never)
+
+    try {
+      const event = { type: 'turn/end', data: { turn: 2, reason: { kind: 'error' } } }
+      handleBodySessionEvent(ctx, session, event)
+      await vi.waitFor(() => {
+        expect(warnings.some((args) => String(args[0]).includes('turn/end restore failed; retrying'))).toBe(true)
+      })
+      // Same task identity while the chain is still retrying: coalesced, then
+      // rerun once after the chain ends, so the final-failure log appears twice.
+      handleBodySessionEvent(ctx, session, event)
+      await vi.waitFor(() => {
+        const failures = errors.filter((args) => String(args[0]).includes('turn/end restore failed; op-start stays pending'))
+        expect(failures).toHaveLength(2)
+      }, { timeout: 3000 })
+    } finally {
+      pendingByAgent.delete(sessionId)
+    }
+  })
+
+  it('keeps a deferred settlement that arrives during a restore retry', async () => {
+    const infos: unknown[][] = []
+    const warnings: unknown[][] = []
+    const errors: unknown[][] = []
+    const logger = {
+      info: (...args: unknown[]) => { infos.push(args) },
+      warn: (...args: unknown[]) => { warnings.push(args) },
+      error: (...args: unknown[]) => { errors.push(args) },
+    }
+    const sessionId = 'example-session-1'
+    const agentId = sessionId
+    // An open turn makes the restore fail with the retryable `session-busy`
+    // code even when the plugin-record seam resolves.
+    const session = {
+      id: sessionId,
+      events: [{ type: 'turn/start', seq: 0, time: 0, data: { turn: 2 } }],
+      append: () => 0,
+    }
+    const agent = {
+      id: agentId,
+      status: 'idle',
+      session,
+      followup: async () => {},
+    }
+    const ctx = {
+      logger,
+      agents: { get: (id: string) => (id === agentId ? agent : undefined) },
+    } as never
+    pendingByAgent.set(agentId, {
+      opId: 'example-op-1',
+      groupId: 'example-group-1',
+      previousAnchorId: 'example-anchor-1',
+      previousIndex: 0,
+      startSeq: 0,
+      agentId,
+      triggerMessageId: 'example-anchor-1',
+      turn: 2,
+      release: () => {},
+    } as never)
+
+    try {
+      handleBodySessionEvent(ctx, session, {
+        type: 'turn/end',
+        data: { turn: 2, reason: { kind: 'error' } },
+      })
+      await vi.waitFor(() => {
+        expect(warnings.some((args) => String(args[0]).includes('turn/end restore failed; retrying'))).toBe(true)
+      })
+
+      handleBodySessionEvent(ctx, session, {
+        type: 'turn/end',
+        data: { turn: 2, reason: { kind: 'completed' } },
+      })
+      await vi.waitFor(() => {
+        // The attempt ran: either it retried, it failed for good, or it
+        // finished. The "skipped because the live agent is gone" line is not
+        // an attempt and must not satisfy this assertion.
+        const ran = [...infos, ...warnings, ...errors].some((args) => {
+          const message = String(args[0])
+          return message.includes('deferred settlement failed; retrying')
+            || message.includes('deferred settlement failed; op-start stays pending')
+            || message.includes('deferred settlement finished after turn/end')
+        })
+        expect(ran).toBe(true)
+      })
+      // Let the 0/50/250 ms restore ladder drain before the test ends.
+      await new Promise((resolve) => { setTimeout(resolve, 400) })
+    } finally {
+      pendingByAgent.delete(agentId)
+    }
   })
 })
 

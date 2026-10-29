@@ -18,6 +18,7 @@ import {
   tool,
   variableScopeParameter,
   type ToolDefinition,
+  type ToolExecution,
 } from './shared.js'
 import { variableStore } from './stores.js'
 
@@ -43,12 +44,12 @@ export function variableTools(): ToolDefinition[] {
     }, variableSetOutput, async (args, exec) => {
       const binding = await bindingFor(exec)
       const target = selectedVariableScope(args.scope, binding)
-      await assertWriteScopeAllowed(target.scope)
       const store = await variableStore()
       const name = stringArg(args.name)
       const value = jsonValueOf(args.value)
-      const existing = await store.get(target.scope, target.scopeId, name)
       const journalTarget = { scope: target.scope, scopeId: target.scopeId }
+      await assertVariableScopeAllowed(exec, binding.agentId, journalTarget, 'variable_set', [name])
+      const existing = await store.get(target.scope, target.scopeId, name)
       // Undo record before the store write: a rejected `before` append aborts
       // this set, so a turn never leaves an untracked mutation behind.
       const journal = await openWriteJournal(exec.agent, binding.agentId)
@@ -56,6 +57,7 @@ export function variableTools(): ToolDefinition[] {
         tool: 'variable_set',
         phase: 'before',
         target: journalTarget,
+        names: [name],
         before: existing === undefined ? null : [existing],
       })
       const snapshot = await store.set(
@@ -87,7 +89,6 @@ export function variableTools(): ToolDefinition[] {
     }, variableListOutput, async (args, exec) => {
       const binding = await bindingFor(exec)
       const target = selectedVariableScope(args.scope, binding)
-      await assertWriteScopeAllowed(target.scope)
       if (!Array.isArray(args.changes) || args.changes.length === 0 || args.changes.length > 32) {
         throw new Error('changes must be a non-empty array of at most 32 entries')
       }
@@ -99,6 +100,9 @@ export function variableTools(): ToolDefinition[] {
           ...(typeof entry.expectedRevision === 'string' ? { expectedRevision: entry.expectedRevision } : {}),
         }
       })
+      const journalTarget = { scope: target.scope, scopeId: target.scopeId }
+      const names = changes.map((change) => change.name)
+      await assertVariableScopeAllowed(exec, binding.agentId, journalTarget, 'variable_patch', names)
       const store = await variableStore()
       // Before snapshots of the changed names only; names absent here did not
       // exist before the patch and are rolled back by deleting them.
@@ -107,9 +111,14 @@ export function variableTools(): ToolDefinition[] {
         const existing = await store.get(target.scope, target.scopeId, change.name)
         if (existing !== undefined) previous.push(existing)
       }
-      const journalTarget = { scope: target.scope, scopeId: target.scopeId }
       const journal = await openWriteJournal(exec.agent, binding.agentId)
-      appendVariableJournal(journal, { tool: 'variable_patch', phase: 'before', target: journalTarget, before: previous })
+      appendVariableJournal(journal, {
+        tool: 'variable_patch',
+        phase: 'before',
+        target: journalTarget,
+        names,
+        before: previous,
+      })
       const snapshots = await store.patch(
         target.scope,
         target.scopeId,
@@ -126,16 +135,32 @@ export function variableTools(): ToolDefinition[] {
     }, variableDeleteOutput, async (args, exec) => {
       const binding = await bindingFor(exec)
       const target = selectedVariableScope(args.scope, binding)
-      await assertWriteScopeAllowed(target.scope)
       const store = await variableStore()
       const name = stringArg(args.name)
-      const existing = await store.get(target.scope, target.scopeId, name)
-      if (existing === undefined) return { found: false, scope: target.scope, name }
       const journalTarget = { scope: target.scope, scopeId: target.scopeId }
+      await assertVariableScopeAllowed(exec, binding.agentId, journalTarget, 'variable_delete', [name])
+      const existing = await store.get(target.scope, target.scopeId, name)
+      if (existing === undefined) {
+        // A miss writes nothing; the noop proves this to the coverage check.
+        const journal = await openWriteJournal(exec.agent, binding.agentId)
+        appendVariableJournal(journal, {
+          tool: 'variable_delete',
+          phase: 'noop',
+          target: journalTarget,
+          names: [name],
+        })
+        return { found: false, scope: target.scope, name }
+      }
       // Delete journals its `after` as `null`: a replay must know the variable
       // stopped existing, which an empty array would not express.
       const journal = await openWriteJournal(exec.agent, binding.agentId)
-      appendVariableJournal(journal, { tool: 'variable_delete', phase: 'before', target: journalTarget, before: [existing] })
+      appendVariableJournal(journal, {
+        tool: 'variable_delete',
+        phase: 'before',
+        target: journalTarget,
+        names: [name],
+        before: [existing],
+      })
       await store.delete(target.scope, target.scopeId, name, typeof args.expectedRevision === 'string' ? args.expectedRevision : existing.revision)
       appendVariableJournal(journal, { tool: 'variable_delete', phase: 'after', target: journalTarget, after: null })
       return { found: true, scope: target.scope, name }
@@ -168,6 +193,7 @@ interface VariableJournalPhase {
   readonly tool: WriteJournalVariableTool
   readonly phase: WriteJournalPhase
   readonly target: WriteJournalVariableTarget
+  readonly names?: readonly string[]
   readonly before?: readonly VariableSnapshot[] | null
   readonly after?: readonly VariableSnapshot[] | null
 }
@@ -190,9 +216,49 @@ function appendVariableJournal(journal: WriteJournalHandle | undefined, request:
     phase: request.phase,
     at: new Date().toISOString(),
     target: request.target,
+    ...(request.names === undefined ? {} : { names: request.names }),
     ...(request.before === undefined ? {} : { before: request.before }),
     ...(request.after === undefined ? {} : { after: request.after }),
   })
+}
+
+/**
+ * Journal one write tool call that provably changed nothing.
+ *
+ * A missing target or a policy refusal leaves no business write behind, but the
+ * tool call is still in the session log. The `noop` record proves "nothing was
+ * written" so journal coverage does not report a lost journal.
+ */
+async function journalVariableNoop(
+  exec: ToolExecution,
+  agentId: string,
+  tool: WriteJournalVariableTool,
+  target: WriteJournalVariableTarget,
+  names: readonly string[],
+): Promise<void> {
+  const journal = await openWriteJournal(exec.agent, agentId)
+  appendVariableJournal(journal, {
+    tool,
+    phase: 'noop',
+    target,
+    ...(names.length === 0 ? {} : { names }),
+  })
+}
+
+/** `assertWriteScopeAllowed` plus its noop record when the scope is refused. */
+async function assertVariableScopeAllowed(
+  exec: ToolExecution,
+  agentId: string,
+  target: WriteJournalVariableTarget,
+  tool: WriteJournalVariableTool,
+  names: readonly string[],
+): Promise<void> {
+  try {
+    await assertWriteScopeAllowed(target.scope)
+  } catch (error) {
+    await journalVariableNoop(exec, agentId, tool, target, names)
+    throw error
+  }
 }
 
 const variableGetOutput = objectOutput(

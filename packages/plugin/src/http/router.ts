@@ -1,5 +1,5 @@
 import { detectPresetKind, parseRegexScripts } from '../../../tavern-format/src/index.js'
-import type { ChatLogIR } from '../../../tavern-format/src/index.js'
+import type { ChatLogIR, RegexScriptIR } from '../../../tavern-format/src/index.js'
 import { createReadStream, createWriteStream } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -27,14 +27,20 @@ import {
   bodyWiringContext,
   buildBodyView,
   createBodyDeps,
-  readBodySessionFacts,
   resolveBodyBinding,
   resolveLiveAgent,
   type BodyMutationAction,
   type BodyProjectedFloor,
   type BodyStateSafety,
+  type BodyStateUnsafeDetail,
+  type BodyView,
 } from '../agent-tavern/body-wiring.js'
+import { createBodySessionFactsSource, errorMessage } from '../agent-tavern/body-session.js'
 import { bodyEditDetailOf } from '../agent-tavern/body-view.js'
+import {
+  BodyJsonlProjectionError,
+  locateBodyFloorForRead,
+} from '../agent-tavern/body-jsonl.js'
 import { seedJsrMvuVariables } from '../agent-tavern/mvu-compat.js'
 import { serveCharacterAvatar, sendAvatarFallback } from '../assets.js'
 import { BUILD_INFO, TAVERN_COMMIT } from '../build-info.js'
@@ -1460,10 +1466,10 @@ export async function handleAgentTavernBodyApi(
 
   if (method === 'GET') {
     const sessionId = url.searchParams.get('sessionId')
-    const messageId = url.searchParams.get('messageId')
-    if (sessionId === null || sessionId === '' || messageId === null || messageId === '') {
-      throw new HttpError(400, 'sessionId and messageId are required')
+    if (sessionId === null || sessionId === '') {
+      throw new HttpError(400, 'sessionId and messageId (or messageIds) are required')
     }
+    const selector = parseBodyGetSelector(url.searchParams)
 
     const state = await db.getState()
     const binding = state.sessionBindings[sessionId]
@@ -1485,45 +1491,29 @@ export async function handleAgentTavernBodyApi(
     const agent = resolveLiveAgent(wiring, sessionId)
     const deps = agent === undefined ? undefined : await createBodyDeps(wiring, agent)
     const session = agent?.session
-    // Fast path: the floor names the group, so the ledger folds one group only.
-    const floorByMessage = characterName !== undefined && chatId !== undefined && chat !== undefined
-      ? await projectedBodyFloor(db, state, characterName, chatId, chat, character, messageId, undefined, undefined)
-      : undefined
-    const facts = session === undefined ? undefined : readBodySessionFacts(session, messageId, floorByMessage?.groupId)
-    const ledger = facts?.ledger
-    // A candidate switch leaves the floor on the previous anchor; re-resolve it
-    // by the ledger's group so `swipes[selectedIndex]` still carries the text.
-    const selectionMoved = ledger !== undefined
-      && (floorByMessage === undefined
-        || floorByMessage.anchorMessageId !== ledger.anchorMessageId
-        || floorByMessage.selectedIndex !== ledger.selectedIndex)
-    const projected = selectionMoved && characterName !== undefined && chatId !== undefined && chat !== undefined
-      ? await projectedBodyFloor(
-        db, state, characterName, chatId, chat, character, messageId,
-        ledger.groupId, ledger.selectedIndex,
-      )
-      : floorByMessage
-    const messageText = facts?.messageText
-    const inspection = facts?.inspection
-    const latestEditSeq = facts?.latestEditSeq
-    if (facts?.ledgerError !== undefined) {
-      ctx.logger?.warn?.('dsh-soulmojito body: ledger fold failed for GET body', {
-        sessionId,
-        messageId,
-        error: facts.ledgerError,
-      })
+    // One parsed session log and one memoized ledger fold per group serve every
+    // message id of the request: a batch never re-reads the chat and never folds
+    // the same group twice, no matter how many rows it carries.
+    const factsSource = session === undefined ? undefined : createBodySessionFactsSource(session)
+    // Display scripts need one JSR overlay read. Resolve them lazily so a cold
+    // session without a projected floor still skips that read.
+    let scriptsRead: Promise<RegexScriptIR[]> | undefined
+    const readScripts = (): Promise<RegexScriptIR[]> => {
+      if (characterName === undefined || chatId === undefined) {
+        throw new Error('body floor display scripts require a character and chat id')
+      }
+      scriptsRead ??= collectSessionRegexScripts(db, state, characterName, chatId, character)
+      return scriptsRead
     }
-
-    const projection = bodyProjectionState(projected, ledger, latestEditSeq)
-
-    // Proposal 0023 §6.3: publish the receipt verdict the `PUT` preflight will
-    // enforce, so edit is not offered for a candidate the runtime would refuse.
-    // A missing ledger, card or chat snapshot keeps the 0021 optimistic answer.
-    const editDetail = character === undefined || chat === undefined || ledger === undefined
+    const readFloorOf = async (
+      messageId: string,
+      groupIdHint: string | undefined,
+      selectedIndexHint: number | undefined,
+    ): Promise<ProjectedBodyFloorRead | undefined> => characterName === undefined || chatId === undefined || chat === undefined
       ? undefined
-      : bodyEditDetailOf(character.card, chat, ledger)
-
-    return sendJson(res, 200, buildBodyView({
+      : projectedBodyFloor(chat, messageId, groupIdHint, selectedIndexHint, readScripts)
+    /** Stable empty body for an item that cannot be assembled at all. */
+    const stableViewOf = (messageId: string): BodyView => buildBodyView({
       messageId,
       binding,
       agent,
@@ -1531,20 +1521,132 @@ export async function handleAgentTavernBodyApi(
       stateSafety,
       historicalMvuState,
       writeRollbackAvailable: deps?.writeRollback !== undefined,
-      ledger,
-      messageText,
-      projected,
-      projectionCurrent: projection.current,
-      projectionTextCurrent: projection.textCurrent,
-      inspection,
-      editDetail,
-    }))
+      ledger: undefined,
+      messageText: undefined,
+      projected: undefined,
+      projectionCurrent: false,
+      projectionTextCurrent: false,
+      inspection: undefined,
+    })
+
+    /**
+     * Assemble one `GET body` item.
+     *
+     * A damaged floor binding degrades the row (ledger body + detail) instead of
+     * failing the request. An unexpected failure is returned to the caller so
+     * the single-id route keeps its original error while a batch degrades only
+     * that item and keeps serving the rest.
+     */
+    const readBodyItem = async (messageId: string): Promise<BodyGetItemRead> => {
+      try {
+        // Fast path: the floor names the group, so the ledger folds one group only.
+        const floorRead = await readFloorOf(messageId, undefined, undefined)
+        const floorByMessage = floorRead?.ok === true ? floorRead.floor : undefined
+        const facts = factsSource?.factsOf(messageId, floorByMessage?.groupId)
+        const ledger = facts?.ledger
+        // A candidate switch leaves the floor on the previous anchor; re-resolve it
+        // by the ledger's group so `swipes[selectedIndex]` still carries the text.
+        const selectionMoved = ledger !== undefined
+          && (floorByMessage === undefined
+            || floorByMessage.anchorMessageId !== ledger.anchorMessageId
+            || floorByMessage.selectedIndex !== ledger.selectedIndex)
+        const reread = selectionMoved
+          ? await readFloorOf(messageId, ledger.groupId, ledger.selectedIndex)
+          : undefined
+        const projected = reread === undefined
+          ? floorByMessage
+          : reread.ok
+            ? reread.floor
+            : undefined
+        // An ambiguous floor binding is damaged data, not an exception: keep the
+        // stable ledger body and publish the code instead of turning the row into
+        // a 500. A later group-hinted reread that succeeds clears the degradation.
+        const floorDegradation = reread !== undefined && !reread.ok
+          ? reread.degradation
+          : floorRead !== undefined && !floorRead.ok
+            ? floorRead.degradation
+            : undefined
+        const messageText = facts?.messageText
+        const inspection = facts?.inspection
+        const latestEditSeq = facts?.latestEditSeq
+        if (facts?.ledgerError !== undefined) {
+          ctx.logger?.warn?.('dsh-soulmojito body: ledger fold failed for GET body', {
+            sessionId,
+            messageId,
+            error: facts.ledgerError,
+          })
+        }
+        if (floorDegradation !== undefined) {
+          ctx.logger?.warn?.('dsh-soulmojito body: body floor binding is ambiguous for GET body', {
+            sessionId,
+            messageId,
+            code: floorDegradation.detail,
+            error: floorDegradation.message,
+          })
+        }
+
+        const projection = floorDegradation === undefined
+          ? bodyProjectionState(projected, ledger, latestEditSeq)
+          : { current: false, textCurrent: false }
+
+        // Proposal 0023 §6.3: publish the receipt verdict the `PUT` preflight will
+        // enforce, so edit is not offered for a candidate the runtime would refuse.
+        // A missing ledger, card or chat snapshot keeps the 0021 optimistic answer.
+        const editDetail = character === undefined || chat === undefined || ledger === undefined
+          ? undefined
+          : bodyEditDetailOf(character.card, chat, ledger)
+
+        const view = buildBodyView({
+          messageId,
+          binding,
+          agent,
+          hostSupported: deps !== undefined,
+          stateSafety,
+          historicalMvuState,
+          writeRollbackAvailable: deps?.writeRollback !== undefined,
+          ledger,
+          messageText,
+          projected,
+          projectionCurrent: projection.current,
+          projectionTextCurrent: projection.textCurrent,
+          inspection,
+          editDetail,
+          // A damaged floor binding closes edit with its own detail and keeps
+          // publishing it even when a reason already gates the row.
+          ...(floorDegradation === undefined ? {} : { readDetail: floorDegradation.detail }),
+          ...(facts?.lastOperation === undefined ? {} : { lastOperation: facts.lastOperation }),
+        })
+        return { ok: true, view }
+      } catch (error) {
+        // GET must not turn one damaged row into a 500. The single-id route
+        // rethrows the original error; a batch keeps a stable body for it.
+        ctx.logger?.warn?.('dsh-soulmojito body: GET body item failed', {
+          sessionId,
+          messageId,
+          error: errorMessage(error),
+        })
+        return { ok: false, view: stableViewOf(messageId), error }
+      }
+    }
+
+    if (selector.kind === 'batch') {
+      const items = new Map<string, BodyView>()
+      for (const messageId of selector.messageIds) {
+        items.set(messageId, (await readBodyItem(messageId)).view)
+      }
+      // `fromEntries` defines own properties, so an id like `__proto__` cannot
+      // rewrite the response prototype.
+      return sendJson(res, 200, { ok: true, items: Object.fromEntries(items) })
+    }
+    const item = await readBodyItem(selector.messageId)
+    if (!item.ok) throw item.error
+    return sendJson(res, 200, item.view)
   }
 
   const body = await readJson(req)
   const sessionId = typeof body.sessionId === 'string' ? body.sessionId : ''
   if (sessionId === '') {
-    return sendBodyFailure(res, { status: 400, code: 'invalid-body-text', message: 'sessionId is required' })
+    return sendBodyFailure(res, { status: 400, code: 'invalid-arguments', message: 'sessionId is required' })
   }
   const binding = await resolveBodyBinding(wiring, sessionId)
   if (binding === undefined || !bodyBindingEligible(binding)) {
@@ -1679,36 +1781,35 @@ function bodyIndex(body: Record<string, unknown>, field: string): number {
  * layer facts. Text already carries markdownOnly regex scripts, matching the
  * existing `/display` route; the body ledger stays the fallback when a floor
  * has not been projected yet.
+ *
+ * The floor is resolved through `locateBodyFloorForRead`, so a group bound to
+ * more than one chat floor degrades to a typed read failure instead of serving
+ * the first floor. The caller keeps the response stable and logs the detail.
+ * `readScripts` is memoized by the caller, so a batch pays one overlay read.
  */
 async function projectedBodyFloor(
-  db: TavernStore,
-  state: TavernState,
-  characterName: string,
-  chatId: string,
   chat: ChatLogIR,
-  card: Awaited<ReturnType<TavernStore['getCharacter']>>,
   messageId: string,
   groupIdHint: string | undefined,
   selectedIndexHint: number | undefined,
-): Promise<BodyProjectedFloor | undefined> {
-  const matches = (message: ChatLogIR['messages'][number]): boolean => {
-    const tavern = asRecord(asRecord(message.extra)?.['agentTavern'])
-    if (tavern === undefined) return false
-    return tavern['messageId'] === messageId
-      || tavern['anchorMessageId'] === messageId
-      || tavern['bodyGroupId'] === messageId
+  readScripts: () => Promise<RegexScriptIR[]>,
+): Promise<ProjectedBodyFloorRead> {
+  let index: number | undefined
+  try {
+    index = locateBodyFloorForRead(chat, {
+      messageId,
+      ...(groupIdHint === undefined ? {} : { groupId: groupIdHint }),
+    })
+  } catch (error) {
+    // A duplicated group binding is damaged data, not an exception: degrade the
+    // row and let a batch keep serving its other items.
+    return { ok: false, degradation: bodyFloorDegradationOf(error) }
   }
-  // The ledger's group is the only stable handle while a candidate switch is
-  // waiting for projection: the floor still carries the previous anchor.
-  let index = groupIdHint === undefined
-    ? -1
-    : chat.messages.findIndex((message) => asRecord(asRecord(message.extra)?.['agentTavern'])?.['bodyGroupId'] === groupIdHint)
-  if (index < 0) index = chat.messages.findIndex(matches)
-  if (index < 0) return undefined
+  if (index === undefined) return { ok: true, floor: undefined }
 
   const floor = chat.messages[index]!
   const tavern = asRecord(asRecord(floor.extra)?.['agentTavern'])
-  const scripts = await collectSessionRegexScripts(db, state, characterName, chatId, card)
+  const scripts = await readScripts()
   // The floor's `mes` follows its own `swipe_id`; the ledger may already select
   // another slot. Reading `swipes[selectedIndex]` keeps the save-layer regex
   // applied to the selected candidate even before the projector catches up.
@@ -1726,7 +1827,7 @@ async function projectedBodyFloor(
   const selectedIndex = floor.swipe_id
   const count = Array.isArray(floor.swipes) && floor.swipes.length > 0 ? floor.swipes.length : 1
 
-  return {
+  const resolved: BodyProjectedFloor = {
     ...(typeof tavern?.['bodyGroupId'] === 'string' ? { groupId: tavern['bodyGroupId'] } : {}),
     ...(typeof tavern?.['anchorMessageId'] === 'string' ? { anchorMessageId: tavern['anchorMessageId'] } : {}),
     ...(typeof selectedIndex === 'number' && Number.isSafeInteger(selectedIndex) ? { selectedIndex } : {}),
@@ -1738,6 +1839,78 @@ async function projectedBodyFloor(
     count,
     ...(text === undefined ? {} : { text }),
   }
+  return { ok: true, floor: resolved }
+}
+
+/** Read-side degradation of a floor lookup; the row keeps the ledger body. */
+interface BodyFloorDegradation {
+  readonly detail: BodyStateUnsafeDetail
+  readonly message: string
+}
+
+/** Map a floor-lookup failure onto the read-side detail vocabulary. */
+function bodyFloorDegradationOf(error: unknown): BodyFloorDegradation {
+  if (error instanceof BodyJsonlProjectionError && error.code === 'body-group-mismatch') {
+    return { detail: error.code, message: error.message }
+  }
+  return {
+    detail: 'body-floor-unreadable',
+    message: `body floor lookup failed: ${errorMessage(error)}`,
+  }
+}
+
+/** `GET body` floor lookup: a degraded read never throws. */
+type ProjectedBodyFloorRead =
+  | { readonly ok: true; readonly floor: BodyProjectedFloor | undefined }
+  | { readonly ok: false; readonly degradation: BodyFloorDegradation }
+
+/** One `GET body` item: the view, plus the original error a batch degrades. */
+type BodyGetItemRead =
+  | { readonly ok: true; readonly view: BodyView }
+  | { readonly ok: false; readonly view: BodyView; readonly error: unknown }
+
+/** Upper bound for one batched `GET body` request. */
+const BODY_GET_BATCH_LIMIT = 50
+
+/**
+ * `GET body` message selector.
+ *
+ * `messageId` keeps the 0021 single-body response shape; `messageIds` is the
+ * batch form the conversation surface uses to read every visible row in one
+ * request. The two are never combined: `messageIds` items are de-duplicated in
+ * request order before they reach the read path.
+ */
+type BodyGetSelector =
+  | { readonly kind: 'single'; readonly messageId: string }
+  | { readonly kind: 'batch'; readonly messageIds: readonly string[] }
+
+function parseBodyGetSelector(params: URLSearchParams): BodyGetSelector {
+  const single = params.get('messageId')
+  const batch = params.get('messageIds')
+  const hasSingle = single !== null && single !== ''
+  const hasBatch = batch !== null && batch !== ''
+
+  if (hasSingle && hasBatch) {
+    throw new HttpError(400, 'pass either messageId or messageIds, not both')
+  }
+  if (hasSingle) return { kind: 'single', messageId: single }
+
+  if (!hasBatch) {
+    throw new HttpError(400, 'sessionId and messageId (or messageIds) are required')
+  }
+  const messageIds: string[] = []
+  const seen = new Set<string>()
+  for (const raw of batch.split(',')) {
+    const messageId = raw.trim()
+    if (messageId === '') throw new HttpError(400, 'messageIds must not contain empty entries')
+    if (seen.has(messageId)) continue
+    seen.add(messageId)
+    messageIds.push(messageId)
+  }
+  if (messageIds.length > BODY_GET_BATCH_LIMIT) {
+    throw new HttpError(400, `messageIds accepts at most ${BODY_GET_BATCH_LIMIT} ids (got ${messageIds.length})`)
+  }
+  return { kind: 'batch', messageIds }
 }
 
 /**

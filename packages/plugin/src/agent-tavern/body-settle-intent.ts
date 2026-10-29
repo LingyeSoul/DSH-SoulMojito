@@ -248,6 +248,18 @@ function legacySettleReceipt(chat: ChatLogIR, intent: SettleIntentOpenEntry): Mv
 }
 
 /**
+ * Receipt already stored in `chat` that proves this open intent's batch saved.
+ *
+ * Shared with the live tool when it supersedes an intent left open by an
+ * earlier attempt: an undecided intent is only rolled back when no receipt of
+ * its own proves the save. Exact `opId` identity wins; a legacy intent may
+ * still match the pre-`opId` `at + turnKey` shape.
+ */
+export function persistedSettleReceipt(chat: ChatLogIR, intent: SettleIntentOpenEntry): MvuReceipt | undefined {
+  return storedSettleReceipt(chat, intent) ?? legacySettleReceipt(chat, intent)
+}
+
+/**
  * Persist the decided receipt into the live chat snapshot.
  *
  * The decision was written before the original `saveChat`, so its receipt is

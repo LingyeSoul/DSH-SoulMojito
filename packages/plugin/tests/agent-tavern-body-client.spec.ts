@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest'
 const here = dirname(fileURLToPath(import.meta.url))
 const sourceDir = join(here, '../client-src')
 const bodySource = readFileSync(join(sourceDir, '89b-ui-body.js'), 'utf8')
+const storeSource = readFileSync(join(sourceDir, '50-store-core.js'), 'utf8')
 const stylesSource = readFileSync(join(sourceDir, '95-ui-styles.js'), 'utf8')
 const assistantSource = readFileSync(join(sourceDir, '89-ui-assistant.js'), 'utf8')
 const zh = readFileSync(join(sourceDir, '41-i18n-zh.js'), 'utf8')
@@ -67,8 +68,55 @@ describe('AgentTavern body client source checks', () => {
     expect(bodySource).toContain('body.groupId === groupId')
     expect(bodySource).toContain('bodyMutationEpoch')
     expect(bodySource).toContain('function scheduleTavernBodyProjectionRefresh(sessionId, groupId)')
-    expect(bodySource).toContain('body.projectionPending === true && body.anchorMessageId === messageId')
+    // Only the anchor row drives the chain.
+    expect(bodySource).toContain('body.anchorMessageId !== messageId')
+    expect(bodySource).toContain('scheduleTavernBodyProjectionRefresh(sessionId, body.groupId)')
     expect(bodySource).toContain('BODY_PROJECTION_REFRESH_DELAYS_MS')
+    // A mutation also drops in-flight batch promises of the group.
+    expect(bodySource).toContain('bodyBatchInflight.delete(key)')
+  })
+
+  it('drops the projection refresh entry once the retry budget is spent', () => {
+    // The exhausted entry used to linger as { attempt: N, timer: undefined }
+    // until the next mutation. The budget now deletes it and latches the group
+    // so a still-stale floor cannot restart the chain on every render.
+    expect(bodySource).toContain('const bodyProjectionExhausted = new Set()')
+    expect(bodySource).toContain('bodyProjectionExhausted.has(key)')
+    expect(bodySource).toContain('bodyProjectionExhausted.add(key)')
+    expect(bodySource).toContain('bodyProjectionExhausted.delete(key)')
+    expect(bodySource).toContain('bodyProjectionRefreshes.delete(key)')
+    expect(bodySource).toContain('if (current !== undefined && current.timer !== undefined) clearTimeout(current.timer)')
+
+    const scheduleStart = bodySource.indexOf('function scheduleTavernBodyProjectionRefresh(sessionId, groupId)')
+    const scheduleEnd = bodySource.indexOf('function loadTavernBody(sessionId, messageId, revision)')
+    expect(scheduleStart).toBeGreaterThanOrEqual(0)
+    expect(scheduleEnd).toBeGreaterThan(scheduleStart)
+    const scheduleBody = bodySource.slice(scheduleStart, scheduleEnd)
+    const exhaustedBranch = scheduleBody.indexOf('if (attempt >= BODY_PROJECTION_REFRESH_DELAYS_MS.length)')
+    expect(exhaustedBranch).toBeGreaterThanOrEqual(0)
+    expect(scheduleBody.slice(exhaustedBranch)).toContain('bodyProjectionRefreshes.delete(key)')
+    // The last attempt owns no timer: it drops the entry instead of leaving a
+    // spent record behind.
+    expect(scheduleBody).toContain('if (used >= BODY_PROJECTION_REFRESH_DELAYS_MS.length)')
+  })
+
+  it('batches the visible body reads into one request with a per-message fallback', () => {
+    // Every assistant row used to call `GET body` on its own, and the server
+    // re-read the chat and re-folded the ledger per row. The batch window sends
+    // one `messageIds` request and keeps the single-id route for one row and
+    // for batch failures.
+    expect(bodySource).toContain('function requestTavernBody(sessionId, messageId, revision)')
+    expect(bodySource).toContain('function flushTavernBodyBatch(batch)')
+    expect(bodySource).toContain('function loadTavernBodyBatch(sessionId, messageIds, revision)')
+    expect(bodySource).toContain('&messageIds=${query}')
+    expect(bodySource).toContain('const BODY_BATCH_LIMIT = 50')
+    expect(bodySource).toContain('const BODY_BATCH_MIN = 2')
+    expect(bodySource).toContain('function settleTavernBodySingles(sessionId, revision, waiters)')
+    expect(bodySource).toContain('await settleTavernBodySingles(batch.sessionId, batch.revision, chunk)')
+    expect(bodySource).toContain('void requestTavernBody(sessionId, messageId, revision)')
+    // The single lookup and its cache/inflight guard stay the fallback path.
+    expect(bodySource).toContain("api(`body?sessionId=${encodeURIComponent(sessionId)}&messageId=${encodeURIComponent(messageId)}`)")
+    expect(bodySource).toContain("body batch response is missing items")
   })
 
   it('ships the five stable action test ids', () => {
@@ -123,9 +171,33 @@ describe('AgentTavern body client source checks', () => {
       'body.hidden',
       'body.text',
       'body.projectionPending',
+      'body.detail',
     ]) {
       expect(bodySource).toContain(field)
     }
+  })
+
+  it('maps body detail codes to local copy and drops the unused revision sync', () => {
+    expect(bodySource).toContain('function tavernBodyDetailText(t, detail)')
+    for (const detail of [
+      'body-receipt-missing',
+      'body-receipt-duplicate',
+      'candidate-switch-disabled',
+      'body-group-mismatch',
+      'body-floor-unreadable',
+      'stale-anchor',
+    ]) {
+      expect(bodySource).toContain(`detail === '${detail}'`)
+    }
+    expect(bodySource).toContain("t('body.detailGroupMismatch')")
+    expect(bodySource).toContain("t('body.detailFloorUnreadable')")
+    expect(bodySource).toContain("t('body.detailUnknown')")
+    expect(bodySource).toContain("'data-testid': 'tavern-body-detail'")
+    // The server puts no `revision` on body mutation responses; the local
+    // revision bump below already invalidates the cache.
+    expect(bodySource).not.toContain('syncChatRevision')
+    expect(bodySource).not.toContain('result.revision')
+    expect(bodySource).toContain("code === 'invalid-arguments'")
   })
 
   it('keeps the display lookup as the fallback and hides body-hidden nodes', () => {
@@ -148,10 +220,30 @@ describe('AgentTavern body client source checks', () => {
     expect(assistantSource).toContain('registerTavernBodyActions(ctx)')
   })
 
+  it('carries the server detail onto the api error and maps it to local copy', () => {
+    // api() keeps status/code unchanged and adds the stable detail field.
+    expect(storeSource).toContain('error.detail = body.detail')
+    expect(storeSource).toContain('error.status = response.status')
+    expect(storeSource).toContain('error.code = body.code')
+
+    // Mutation failures prefer code + detail over the server's English
+    // sentence; a missing detail still gets the generic line.
+    expect(bodySource).toContain('function tavernBodyErrorText(t, cause)')
+    expect(bodySource).toContain("typeof cause.detail === 'string'")
+    expect(bodySource).toContain("if (code === 'body-state-unsafe')")
+    expect(bodySource).toContain('const detailText = tavernBodyDetailText(t, detail)')
+    expect(bodySource).toContain("return detailText === '' ? t('body.detailUnknown') : detailText")
+    expect(bodySource).toContain("if (code === 'host-unsupported') return t('body.hostUnsupported')")
+  })
+
   it('ships the body copy in both dictionaries with matching placeholders', () => {
     const keys = [
       'body.edit', 'body.regenerate', 'body.swipe', 'body.saving', 'body.generating',
       'body.failed', 'body.busy', 'body.compacted', 'body.notLast', 'body.projectionPending',
+      'body.hostUnsupported',
+      'body.invalidRequest', 'body.detailReceiptMissing', 'body.detailReceiptDuplicate',
+      'body.detailCandidateSwitchDisabled', 'body.detailStaleAnchor',
+      'body.detailGroupMismatch', 'body.detailFloorUnreadable', 'body.detailUnknown',
     ]
     for (const key of keys) {
       expect(zh).toContain(`'${key}'`)

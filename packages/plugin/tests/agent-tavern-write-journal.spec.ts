@@ -361,6 +361,35 @@ describe('readWriteJournal', () => {
     ])).toThrow(/unknown kind/)
   })
 
+  it('reads a noop record and rejects one carrying a state or an unknown phase', () => {
+    const noop = {
+      kind: 'variable', tool: 'variable_delete', journalId: 'journal-noop', sessionId: AGENT_ID, turn: 4,
+      phase: 'noop', at: CREATED_AT,
+      target: { scope: 'chat', scopeId: 'fixture-chat' },
+      names: ['ghost.flag'],
+    }
+    const eventsOf = (data: unknown): unknown[] => [{ seq: 0, type: WRITE_JOURNAL_EVENT_TYPE, data }]
+
+    expect(readWriteJournal(eventsOf(noop))).toEqual([noop])
+    expect(() => readWriteJournal(eventsOf({ ...noop, phase: 'skip' }))).toThrow(/phase/)
+    expect(() => readWriteJournal(eventsOf({ ...noop, before: null }))).toThrow(/noop record must not carry/)
+  })
+
+  it('round-trips journaled variable names and rejects a malformed names list', () => {
+    const entry = {
+      kind: 'variable', tool: 'variable_set', journalId: 'journal-names', sessionId: AGENT_ID, turn: 4,
+      phase: 'before', at: CREATED_AT,
+      target: { scope: 'chat', scopeId: 'fixture-chat' },
+      names: ['journal.mood', 'journal.tide'],
+      before: null,
+    }
+    const eventsOf = (data: unknown): unknown[] => [{ seq: 0, type: WRITE_JOURNAL_EVENT_TYPE, data }]
+
+    expect(readWriteJournal(eventsOf(entry))).toEqual([entry])
+    expect(() => readWriteJournal(eventsOf({ ...entry, names: [] }))).toThrow(/names/)
+    expect(() => readWriteJournal(eventsOf({ ...entry, names: ['journal.mood', 7] }))).toThrow(/names/)
+  })
+
   it('appendWriteJournalWith writes the journal event type through the injected writer', () => {
     const harness = createJournalSession(1)
     const entry: WriteJournalEntry = {
@@ -490,7 +519,7 @@ describe('memory tools journal their writes', () => {
     expect(await searchedContents('never stored')).not.toContain(content)
   })
 
-  it('surfaces an after journal failure after the record was stored', async () => {
+  it('surfaces an after journal failure after the record was stored and leaves a before-only group', async () => {
     const content = 'The stored record survives a failed after append.'
     const harness = createJournalSession(8)
     harness.failPhase = 'after'
@@ -500,6 +529,8 @@ describe('memory tools journal their writes', () => {
 
     const entries = memoryEntries(harness, 'memory_write')
     expect(entries.map((entry) => entry.phase)).toEqual(['before'])
+    // The store accepted the write, so the before-only group must be resolved
+    // against the store by the rollback port, not assumed uncommitted.
     expect(await searchedContents('failed after append')).toContain(content)
   })
 
@@ -530,9 +561,11 @@ describe('variable tools journal their writes', () => {
       throw new Error('expected four variable_set entries')
     }
     expect(createBefore).toMatchObject({ sessionId: AGENT_ID, turn: 10, target: { scope: 'chat', scopeId: chatId } })
+    expect(createBefore.names).toEqual(['journal.mood'])
     expect(createBefore.before).toBeNull()
     expect(createAfter.after?.[0]?.value).toBe('calm')
     expect(updateBefore.before?.[0]?.value).toBe('calm')
+    expect(updateBefore.names).toEqual(['journal.mood'])
     expect(updateAfter.after?.[0]?.value).toBe('alert')
     expect(updateAfter.journalId).toBe(updateBefore.journalId)
     expect(updateBefore.journalId).not.toBe(createBefore.journalId)
@@ -554,6 +587,7 @@ describe('variable tools journal their writes', () => {
     const [before, after] = entries
     if (before === undefined || after === undefined) throw new Error('expected two variable_patch entries')
     expect(before.before?.map((snapshot) => snapshot.name)).toEqual(['journal.weather'])
+    expect(before.names?.slice().sort()).toEqual(['journal.tide', 'journal.weather'])
     expect(after.after?.map((snapshot) => snapshot.name).sort()).toEqual(['journal.tide', 'journal.weather'])
     expect(after.after?.find((snapshot) => snapshot.name === 'journal.weather')?.value).toBe('storm')
     expect(after.journalId).toBe(before.journalId)
@@ -582,6 +616,86 @@ describe('variable tools journal their writes', () => {
       .rejects.toThrow(/synthetic journal append failure for phase 'before'/)
 
     const read = await runTool('variable_get', { scope: 'chat', name: 'journal.abort' }, createJournalSession(undefined))
+    expect(read['found']).toBe(false)
+  })
+})
+
+describe('write tools journal their no-ops', () => {
+  it('memory_forget records a noop when the target does not exist', async () => {
+    const harness = createJournalSession(20)
+    const result = await runTool('memory_forget', {
+      id: 'memory-that-does-not-exist', scope: 'chat', expectedRevision: 'rev-1',
+    }, harness)
+
+    expect(result['found']).toBe(false)
+    const entries = memoryEntries(harness, 'memory_forget')
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      phase: 'noop',
+      sessionId: AGENT_ID,
+      turn: 20,
+      target: { id: 'memory-that-does-not-exist', scope: 'chat', scopeId: chatId },
+    })
+    expect(entries[0]?.before).toBeUndefined()
+    expect(entries[0]?.after).toBeUndefined()
+  })
+
+  it('memory_update records a noop when the target does not exist', async () => {
+    const harness = createJournalSession(24)
+
+    await expect(runTool('memory_update', {
+      id: 'memory-that-does-not-exist', scope: 'chat', expectedRevision: 'rev-1', content: 'never written',
+    }, harness)).rejects.toThrow(/not found/)
+
+    const entries = memoryEntries(harness, 'memory_update')
+    expect(entries.map((entry) => entry.phase)).toEqual(['noop'])
+    expect(entries[0]?.target).toMatchObject({ id: 'memory-that-does-not-exist', scope: 'chat', scopeId: chatId })
+    expect(await searchedContents('never written')).not.toContain('never written')
+  })
+
+  it('variable_delete records a noop when the target does not exist', async () => {
+    const harness = createJournalSession(21)
+    const result = await runTool('variable_delete', { scope: 'chat', name: 'journal.missing' }, harness)
+
+    expect(result['found']).toBe(false)
+    const entries = variableEntries(harness, 'variable_delete')
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      phase: 'noop',
+      turn: 21,
+      target: { scope: 'chat', scopeId: chatId },
+      names: ['journal.missing'],
+    })
+    expect(entries[0]?.before).toBeUndefined()
+    expect(entries[0]?.after).toBeUndefined()
+  })
+
+  it('records a memory noop when the global scope write is refused', async () => {
+    const harness = createJournalSession(22)
+    const content = 'A global memory that policy must refuse.'
+
+    await expect(runTool('memory_write', { scope: 'global', kind: 'semantic', content }, harness))
+      .rejects.toThrow(/global scope writes are disabled/)
+
+    const entries = memoryEntries(harness, 'memory_write')
+    expect(entries.map((entry) => entry.phase)).toEqual(['noop'])
+    expect(entries[0]?.target).toMatchObject({ scope: 'global', scopeId: 'global' })
+    expect(await searchedContents('policy must refuse')).not.toContain(content)
+  })
+
+  it('records a variable noop when the global scope write is refused', async () => {
+    const harness = createJournalSession(23)
+
+    await expect(runTool('variable_set', { scope: 'global', name: 'journal.denied', value: true }, harness))
+      .rejects.toThrow(/global scope writes are disabled/)
+
+    const entries = variableEntries(harness, 'variable_set')
+    expect(entries.map((entry) => entry.phase)).toEqual(['noop'])
+    expect(entries[0]).toMatchObject({
+      target: { scope: 'global', scopeId: 'global' },
+      names: ['journal.denied'],
+    })
+    const read = await runTool('variable_get', { scope: 'global', name: 'journal.denied' }, createJournalSession(undefined))
     expect(read['found']).toBe(false)
   })
 })

@@ -43,7 +43,7 @@ export function rollbackPlanOfEvent(value: unknown, seq: number): BodyRollbackPl
     previousMessageId: requirePlanString(value['previousMessageId'], seq, 'previousMessageId'),
     binding: bindingOf(value['binding'], seq),
     floorIndex: requirePlanInteger(value['floorIndex'], seq, 'floorIndex'),
-    bodyText: requirePlanText(value['bodyText'], seq, 'bodyText'),
+    bodyText: value['bodyText'] === undefined ? undefined : requirePlanText(value['bodyText'], seq, 'bodyText'),
     chatRevision: requirePlanString(value['chatRevision'], seq, 'chatRevision'),
     preparedRevision: requirePlanString(value['preparedRevision'], seq, 'preparedRevision'),
     journal: journalOf(value['journal'], seq),

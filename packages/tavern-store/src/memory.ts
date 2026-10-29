@@ -231,7 +231,7 @@ export class MemoryStore {
       }
       const restored = structuredClone(record)
       await this.writeRecord(restored)
-      await this.audit('restore', restored)
+      await this.audit('restore', restored, { recordUpdatedAt: restored.updatedAt })
       return structuredClone(restored)
     })
   }
@@ -285,8 +285,20 @@ export class MemoryStore {
     return path.join(this.root, 'memories', scope, safeSegment(scopeId), `${safeSegment(id)}.json`)
   }
 
-  private async audit(action: string, record: MemoryRecord): Promise<void> {
-    const line = JSON.stringify({ action, id: record.id, scope: record.scope, scopeId: record.scopeId, revision: record.revision, at: record.updatedAt })
+  private async audit(action: string, record: MemoryRecord, extra?: Record<string, unknown>): Promise<void> {
+    // `at` is always the moment the audit line was written: `restore` writes the
+    // record back verbatim, so its `updatedAt` may predate the restore by any
+    // amount of time and would move the audit line backwards in the log. The
+    // restored record's own timestamp travels in `recordUpdatedAt` instead.
+    const line = JSON.stringify({
+      action,
+      id: record.id,
+      scope: record.scope,
+      scopeId: record.scopeId,
+      revision: record.revision,
+      at: new Date().toISOString(),
+      ...extra,
+    })
     await fs.appendFile(path.join(this.root, 'memory-audit', `${record.scope}.jsonl`), `${line}\n`, 'utf8')
   }
 

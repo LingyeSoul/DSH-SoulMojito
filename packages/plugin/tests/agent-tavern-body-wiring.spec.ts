@@ -10,6 +10,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CharacterCardIR, ChatLogIR } from '../../tavern-format/src/index.js'
 import type { TavernStore } from '../../tavern-store/src/index.js'
 import { CandidateReceiptError } from '../src/agent-tavern/body-candidate-receipts.js'
+import { BodyJsonlProjectionError } from '../src/agent-tavern/body-jsonl.js'
+import { BodyLedgerError } from '../src/agent-tavern/body.js'
 import { characterTools } from '../src/agent-tavern/tools/character.js'
 import { deductionTools } from '../src/agent-tavern/tools/deduction.js'
 import { gameTools } from '../src/agent-tavern/tools/games.js'
@@ -49,7 +51,7 @@ vi.mock('../src/runtime.js', async (importOriginal) => {
   }
 })
 
-const { BODY_EVENT_TYPE, bodyRuntimeError } = await import('../src/agent-tavern/body-runtime.js')
+const { BODY_ABORT_EVENT_TYPE, BODY_EVENT_TYPE, bodyRuntimeError } = await import('../src/agent-tavern/body-runtime.js')
 const {
   bodyFailureOf,
   bodyHistoricalMvuStateOf,
@@ -68,6 +70,7 @@ const {
   resolveBodyRecordWriter,
 } = await import('../src/agent-tavern/body-wiring.js')
 const { pendingByAgent } = await import('../src/agent-tavern/body-runtime-core.js')
+const { createBodySessionFactsSource } = await import('../src/agent-tavern/body-session.js')
 const { handleAgentTavernBodyApi } = await import('../src/http/router.js')
 type BodyRuntimeModule = typeof import('../src/agent-tavern/body-runtime.js')
 type BodyWiringModule = typeof import('../src/agent-tavern/body-wiring.js')
@@ -503,19 +506,41 @@ async function callBodyGet(
   agent: BodyAgentLike,
   sessionId: string,
   messageId: string,
+  logger?: CapturedLogger['logger'],
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  return callBodyGetQuery(
+    agent,
+    sessionId,
+    `messageId=${encodeURIComponent(messageId)}`,
+    mutationDbFor(sessionId, character, chat),
+    logger,
+  )
+}
+
+/**
+ * Call the body GET route with an explicit query tail, so a test can send the
+ * batched `messageIds` form and the malformed combinations around it.
+ */
+async function callBodyGetQuery(
+  agent: BodyAgentLike,
+  sessionId: string,
+  query: string,
+  db: TavernStore,
+  logger: CapturedLogger['logger'] | undefined,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   hostState.module = hostRecordModule()
   const res = makeResponse()
   const ctx = {
     agents: { get: (id: string) => id === sessionId ? agent : undefined },
+    ...(logger === undefined ? {} : { logger }),
   } as unknown as Parameters<typeof handleAgentTavernBodyApi>[0]
   const url = new URL(
-    `/api/dsh-soulmojito/body?sessionId=${encodeURIComponent(sessionId)}&messageId=${encodeURIComponent(messageId)}`,
+    `/api/dsh-soulmojito/body?sessionId=${encodeURIComponent(sessionId)}&${query}`,
     'http://localhost',
   )
   await handleAgentTavernBodyApi(
     ctx,
-    mutationDbFor(sessionId, character, chat),
+    db,
     makeRequest(undefined, 'GET', `${url.pathname}${url.search}`),
     res,
     url,
@@ -526,6 +551,88 @@ async function callBodyGet(
     status: res.statusCode,
     body: res.chunks.length > 0 ? JSON.parse(res.chunks.join('')) as Record<string, unknown> : {},
   }
+}
+
+/**
+ * Live session carrying several projected body groups: every candidate gets one
+ * assistant message and one candidate record, so one batch can read rows that
+ * belong to different groups.
+ */
+function groupedBodySession(
+  groups: readonly {
+    readonly groupId: string
+    readonly candidates: readonly { readonly messageId: string; readonly text: string }[]
+  }[],
+): BodySessionLike {
+  const events: RecoveryEvent[] = []
+  const surface: number[] = []
+  for (const group of groups) {
+    for (const [index, candidate] of group.candidates.entries()) {
+      events.push({
+        type: 'assistant/message',
+        seq: events.length,
+        data: {
+          message: {
+            id: candidate.messageId,
+            role: 'assistant',
+            content: [{ type: 'text', text: candidate.text }],
+          },
+        },
+      })
+      surface.push(events.length - 1)
+      events.push({
+        type: BODY_EVENT_TYPE,
+        seq: events.length,
+        data: { op: 'candidate', groupId: group.groupId, messageId: candidate.messageId, index },
+      })
+    }
+  }
+  return {
+    id: 'session-mvu',
+    header: { version: 4 },
+    events,
+    surface: { nodes: surface },
+    append: () => 0,
+  }
+}
+
+/** Store wrapper counting reads, so a batch can prove it read the shared state once. */
+function countingDbFor(
+  sessionId: string,
+  character: CharacterCardIR,
+  chat: ChatLogIR,
+): { readonly db: TavernStore; readonly counts: { snapshots: number; states: number } } {
+  const base = mutationDbFor(sessionId, character, chat) as unknown as Record<string, unknown>
+  const counts = { snapshots: 0, states: 0 }
+  const db = {
+    ...base,
+    getState: async () => {
+      counts.states += 1
+      return (base.getState as () => Promise<unknown>)()
+    },
+    getChatSnapshot: async (characterName: string, chatId: string) => {
+      counts.snapshots += 1
+      return (base.getChatSnapshot as (name: string, id: string) => Promise<unknown>)(characterName, chatId)
+    },
+  } as unknown as TavernStore
+  return { db, counts }
+}
+
+/** Session wrapper counting log parses; a batch must parse the session once. */
+function countingSession(session: BodySessionLike): {
+  readonly session: BodySessionLike
+  readonly reads: { log: number }
+} {
+  const reads = { log: 0 }
+  const counted = {
+    ...session,
+    events: undefined,
+    snapshotEvents: () => {
+      reads.log += 1
+      return session.events
+    },
+  } as unknown as BodySessionLike
+  return { session: counted, reads }
 }
 
 function makeRequest(body: unknown, method: string, url: string) {
@@ -923,6 +1030,56 @@ describe('HTTP rejection mapping', () => {
       status: 503,
       code: 'projection-pending',
     })
+  })
+
+  it('maps internal body data failures to 409 with the original code as detail', () => {
+    const cases = [
+      new BodyJsonlProjectionError('body-swipes-missing', 'body floor has no swipes'),
+      new BodyJsonlProjectionError('body-index-mismatch', 'edit index does not match the selected swipe'),
+      new BodyJsonlProjectionError('body-candidate-gap', 'candidate index would skip a slot'),
+      new BodyJsonlProjectionError('body-group-mismatch', 'body group matches two floors'),
+      new BodyJsonlProjectionError('body-swipe-info-invalid', 'swipe_info is not an array'),
+      new BodyJsonlProjectionError('body-adoption-mismatch', 'floor is not the anchor mirror'),
+      new BodyLedgerError('invalid-body-seq', 'event has an invalid seq'),
+      new BodyLedgerError('invalid-body-event', 'body event data must be an object'),
+      new BodyLedgerError('body-candidate-message-missing', 'candidate has no assistant message'),
+      bodyRuntimeError('invalid-event', 'body event is malformed'),
+    ] as const
+    for (const error of cases) {
+      const failure = bodyFailureOf(error)
+      expect(failure).toMatchObject({
+        status: 409,
+        code: 'body-state-unsafe',
+        detail: error.code,
+      })
+      expect(bodyRejectStatus(error.code)).toBe(409)
+    }
+
+    // Retryable waits keep their own code and status; only unknown exceptions
+    // stay a 500.
+    expect(bodyFailureOf(bodyRuntimeError('projection-pending', 'catching up'))).toMatchObject({
+      status: 503,
+      code: 'projection-pending',
+    })
+    expect(bodyFailureOf(new Error('unexpected boom'))).toMatchObject({
+      status: 500,
+      code: 'operation-failed',
+    })
+  })
+
+  it('keeps the before-only write-journal-unknown detail on a 409', () => {
+    const failure = bodyFailureOf({
+      code: 'body-state-unsafe',
+      detail: 'write-journal-unknown',
+      message: 'body rollback cannot read memory to verify the before-only write journal',
+    })
+
+    expect(failure).toMatchObject({
+      status: 409,
+      code: 'body-state-unsafe',
+      detail: 'write-journal-unknown',
+    })
+    expect(bodyStateUnsafeMessage('write-journal-unknown')).toContain('cannot prove')
   })
 })
 
@@ -1507,6 +1664,448 @@ describe('body state safety (proposal 0022 §7)', () => {
   })
 })
 
+describe('GET body floor resolution', () => {
+  it('serves the ledger body instead of the first of two floors bound to one group', async () => {
+    const session = bodySession('message-1', 'ledger body', 'message-1', [0])
+    const chat = projectedChat('first floor body')
+    chat.messages.push({
+      name: 'character',
+      is_user: false,
+      is_system: false,
+      send_date: '',
+      mes: 'second floor body',
+      swipe_id: 0,
+      swipes: ['second floor body'],
+      extra: { agentTavern: { messageId: 'message-2', anchorMessageId: 'message-2', bodyGroupId: 'message-1' } },
+    })
+    const capture = captureLogger()
+
+    const result = await callBodyGet(
+      plainCharacter(),
+      chat,
+      fakeAgent(session),
+      'session-mvu',
+      'message-1',
+      capture.logger,
+    )
+
+    expect(result.status).toBe(200)
+    expect(result.body).toMatchObject({
+      ok: true,
+      groupId: 'message-1',
+      text: 'ledger body',
+      // Ambiguity is a state gate on the read side: edit must be closed before
+      // the user opens the editor and hits a 409.
+      canEdit: false,
+      detail: 'body-group-mismatch',
+      projectionPending: true,
+    })
+    expect(JSON.stringify(result.body)).not.toContain('first floor body')
+    const warning = capture.warnings.find((args) => String(args[0]).includes('body floor binding is ambiguous'))
+    expect(warning).toBeDefined()
+    expect(JSON.stringify(warning?.[1])).toContain('(0, 1)')
+  })
+})
+
+describe('GET body batch read', () => {
+  it('answers every requested id with the single-id item shape', async () => {
+    const session = groupedBodySession([{
+      groupId: 'message-1',
+      candidates: [
+        { messageId: 'message-1', text: 'first body' },
+        { messageId: 'message-2', text: 'second body' },
+      ],
+    }])
+    const chat = projectedChat('first body')
+    const agent = fakeAgent(session)
+
+    const single = await callBodyGet(plainCharacter(), chat, agent, 'session-mvu', 'message-1')
+    const batch = await callBodyGetQuery(
+      agent,
+      'session-mvu',
+      'messageIds=message-1,message-2',
+      mutationDbFor('session-mvu', plainCharacter(), chat),
+      undefined,
+    )
+
+    expect(single.status).toBe(200)
+    expect(batch.status).toBe(200)
+    expect(batch.body['ok']).toBe(true)
+    const items = batch.body['items'] as Record<string, Record<string, unknown>>
+    expect(Object.keys(items)).toEqual(['message-1', 'message-2'])
+    // The item is the exact single-id payload, not a reduced variant.
+    expect(items['message-1']).toEqual(single.body)
+    expect(items['message-2']).toMatchObject({
+      ok: true,
+      groupId: 'message-1',
+      anchorMessageId: 'message-2',
+      hidden: false,
+      count: 2,
+      text: 'second body',
+      canEdit: true,
+    })
+  })
+
+  it('reads the chat snapshot, the state and the session log once per batch', async () => {
+    const session = groupedBodySession([
+      { groupId: 'message-1', candidates: [{ messageId: 'message-1', text: 'one body' }] },
+      { groupId: 'message-3', candidates: [{ messageId: 'message-3', text: 'three body' }] },
+      { groupId: 'message-5', candidates: [{ messageId: 'message-5', text: 'five body' }] },
+    ])
+    const counted = countingSession(session)
+    const chat = projectedChat('one body')
+    chat.messages.push(
+      {
+        name: 'character',
+        is_user: false,
+        is_system: false,
+        send_date: '',
+        mes: 'three body',
+        swipe_id: 0,
+        swipes: ['three body'],
+        extra: { agentTavern: { messageId: 'message-3', anchorMessageId: 'message-3', bodyGroupId: 'message-3' } },
+      },
+      {
+        name: 'character',
+        is_user: false,
+        is_system: false,
+        send_date: '',
+        mes: 'five body',
+        swipe_id: 0,
+        swipes: ['five body'],
+        extra: { agentTavern: { messageId: 'message-5', anchorMessageId: 'message-5', bodyGroupId: 'message-5' } },
+      },
+    )
+    const countedDb = countingDbFor('session-mvu', plainCharacter(), chat)
+
+    const batch = await callBodyGetQuery(
+      fakeAgent(counted.session),
+      'session-mvu',
+      'messageIds=message-1,message-3,message-5',
+      countedDb.db,
+      undefined,
+    )
+
+    expect(batch.status).toBe(200)
+    expect(Object.keys(batch.body['items'] as Record<string, unknown>)).toHaveLength(3)
+    expect(countedDb.counts.snapshots).toBe(1)
+    expect(countedDb.counts.states).toBe(1)
+    expect(counted.reads.log).toBe(1)
+  })
+
+  it('reuses one ledger fold and one facts record per group', () => {
+    const session = groupedBodySession([{
+      groupId: 'message-1',
+      candidates: [
+        { messageId: 'message-1', text: 'first body' },
+        { messageId: 'message-2', text: 'second body' },
+      ],
+    }])
+    const source = createBodySessionFactsSource(session)
+    const first = source.factsOf('message-1', 'message-1')
+    const second = source.factsOf('message-2', 'message-1')
+
+    expect(first.ledger).toBeDefined()
+    // A re-fold would build a new frozen ledger object; the shared source keeps
+    // one instance for every row that resolves the same group.
+    expect(second.ledger).toBe(first.ledger)
+    expect(source.factsOf('message-1', 'message-1')).toBe(first)
+  })
+
+  it('de-duplicates repeated ids in request order', async () => {
+    const session = groupedBodySession([{
+      groupId: 'message-1',
+      candidates: [{ messageId: 'message-1', text: 'first body' }],
+    }])
+
+    const batch = await callBodyGetQuery(
+      fakeAgent(session),
+      'session-mvu',
+      'messageIds=message-1,message-1',
+      mutationDbFor('session-mvu', plainCharacter(), projectedChat('first body')),
+      undefined,
+    )
+
+    expect(batch.status).toBe(200)
+    expect(Object.keys(batch.body['items'] as Record<string, unknown>)).toEqual(['message-1'])
+  })
+
+  it('rejects a mixed single/batch selector instead of guessing', async () => {
+    const db = mutationDbFor('session-mvu', plainCharacter(), projectedChat('body'))
+    await expect(callBodyGetQuery(
+      fakeAgent(bodySession('message-1', 'body', 'message-1', [0])),
+      'session-mvu',
+      'messageId=message-1&messageIds=message-2',
+      db,
+      undefined,
+    )).rejects.toMatchObject({ status: 400 })
+  })
+
+  it('rejects an empty entry and a batch over the 50-id limit', async () => {
+    const db = mutationDbFor('session-mvu', plainCharacter(), projectedChat('body'))
+    const agent = fakeAgent(bodySession('message-1', 'body', 'message-1', [0]))
+    await expect(callBodyGetQuery(
+      agent,
+      'session-mvu',
+      'messageIds=message-1,,message-2',
+      db,
+      undefined,
+    )).rejects.toMatchObject({ status: 400 })
+
+    const tooMany = Array.from({ length: 51 }, (_, index) => `message-${index}`).join(',')
+    await expect(callBodyGetQuery(
+      agent,
+      'session-mvu',
+      `messageIds=${tooMany}`,
+      db,
+      undefined,
+    )).rejects.toMatchObject({ status: 400, message: expect.stringContaining('51') })
+  })
+
+  it('degrades only the ambiguous item and keeps the rest of the batch', async () => {
+    const session = groupedBodySession([
+      { groupId: 'message-1', candidates: [{ messageId: 'message-1', text: 'first body' }] },
+      { groupId: 'message-3', candidates: [{ messageId: 'message-3', text: 'third body' }] },
+    ])
+    const chat = fakeChat({})
+    chat.messages.push(
+      {
+        name: 'character',
+        is_user: false,
+        is_system: false,
+        send_date: '',
+        mes: 'first body',
+        swipe_id: 0,
+        swipes: ['first body'],
+        extra: { agentTavern: { messageId: 'message-1', anchorMessageId: 'message-1', bodyGroupId: 'message-1' } },
+      },
+      {
+        name: 'character',
+        is_user: false,
+        is_system: false,
+        send_date: '',
+        mes: 'third body',
+        swipe_id: 0,
+        swipes: ['third body'],
+        extra: { agentTavern: { messageId: 'message-3', anchorMessageId: 'message-3', bodyGroupId: 'message-3' } },
+      },
+      {
+        name: 'character',
+        is_user: false,
+        is_system: false,
+        send_date: '',
+        mes: 'duplicate third body',
+        swipe_id: 0,
+        swipes: ['duplicate third body'],
+        extra: { agentTavern: { messageId: 'message-3', anchorMessageId: 'message-3', bodyGroupId: 'message-3' } },
+      },
+    )
+    const capture = captureLogger()
+
+    const batch = await callBodyGetQuery(
+      fakeAgent(session),
+      'session-mvu',
+      'messageIds=message-1,message-3',
+      mutationDbFor('session-mvu', plainCharacter(), chat),
+      capture.logger,
+    )
+
+    expect(batch.status).toBe(200)
+    const items = batch.body['items'] as Record<string, Record<string, unknown>>
+    // The healthy row keeps the ordinary surface gate (a later assistant body
+    // exists) and is not touched by the other row's degradation.
+    expect(items['message-1']).toMatchObject({ ok: true, canEdit: false, reason: 'not-last-round', text: 'first body' })
+    expect(items['message-1']?.['detail']).toBeUndefined()
+    expect(items['message-1']?.['projectionPending']).toBeUndefined()
+    // The duplicated group degrades to the ledger body with its gate detail;
+    // the request itself stays a 200.
+    expect(items['message-3']).toMatchObject({
+      ok: true,
+      groupId: 'message-3',
+      text: 'third body',
+      canEdit: false,
+      detail: 'body-group-mismatch',
+      projectionPending: true,
+    })
+    const warning = capture.warnings.find((args) => String(args[0]).includes('body floor binding is ambiguous'))
+    expect(JSON.stringify(warning?.[1])).toContain('message-3')
+  })
+})
+
+describe('GET body last operation', () => {
+  interface OperationEvent {
+    readonly type: string
+    readonly seq: number
+    readonly time: number
+    readonly data: Record<string, unknown>
+  }
+
+  /** Body session carrying the anchor, its candidate and explicit terminal records. */
+  function operationSession(records: readonly OperationEvent[]): BodySessionLike {
+    return {
+      id: 'session-mvu',
+      header: { version: 4 },
+      events: [
+        {
+          type: 'assistant/message',
+          seq: 0,
+          time: 1000,
+          data: { message: { id: 'message-1', role: 'assistant', content: [{ type: 'text', text: 'old body' }] } },
+        },
+        {
+          type: BODY_EVENT_TYPE,
+          seq: 1,
+          time: 1100,
+          data: { op: 'candidate', groupId: 'message-1', messageId: 'message-1', index: 0 },
+        },
+        ...records,
+      ],
+      surface: { nodes: [0] },
+      append: () => 0,
+    }
+  }
+
+  it('reports the latest aborted operation on GET body', async () => {
+    const session = operationSession([
+      {
+        type: 'plugin:dsh-soulmojito/body-settled',
+        seq: 2,
+        time: 1200,
+        data: {
+          op: 'op-settle-cancelled',
+          opId: 'op-1',
+          groupId: 'message-1',
+          anchorId: 'message-1',
+          index: 0,
+          reason: 'settlement hide failed',
+        },
+      },
+      {
+        type: BODY_EVENT_TYPE,
+        seq: 3,
+        time: 1300,
+        data: { op: 'op-finish', opId: 'op-1', result: 'failed', reason: 'settlement failed' },
+      },
+      {
+        type: BODY_ABORT_EVENT_TYPE,
+        seq: 4,
+        time: 1400,
+        data: { op: 'op-abort', opId: 'op-1', reason: 'previous body restored' },
+      },
+    ])
+
+    const result = await callBodyGet(plainCharacter(), projectedChat('old body'), fakeAgent(session), 'session-mvu', 'message-1')
+
+    expect(result.status).toBe(200)
+    expect(result.body['lastOperation']).toEqual({
+      opId: 'op-1',
+      status: 'aborted',
+      reason: 'previous body restored',
+      at: 1400,
+    })
+  })
+
+  it('omits lastOperation when no terminal failure is recorded', async () => {
+    const session = bodySession('message-1', 'old body', 'message-1', [0])
+
+    const result = await callBodyGet(plainCharacter(), projectedChat('old body'), fakeAgent(session), 'session-mvu', 'message-1')
+
+    expect(result.status).toBe(200)
+    expect(result.body).toMatchObject({ ok: true, text: 'old body' })
+    expect(result.body['lastOperation']).toBeUndefined()
+  })
+
+  it('degrades a malformed abort record to a logged warning instead of a 500', async () => {
+    hostState.module = hostRecordModule()
+    const session = operationSession([
+      {
+        type: BODY_ABORT_EVENT_TYPE,
+        seq: 2,
+        time: 1200,
+        data: { op: 'op-abort', opId: '', reason: 'previous body restored' },
+      },
+    ])
+    const capture = captureLogger()
+    const agent = fakeAgent(session)
+    const ctx = {
+      agents: { get: (id: string) => id === 'session-mvu' ? agent : undefined },
+      logger: capture.logger,
+    } as unknown as Parameters<typeof handleAgentTavernBodyApi>[0]
+    const res = makeResponse()
+    const url = new URL('/api/dsh-soulmojito/body?sessionId=session-mvu&messageId=message-1', 'http://localhost')
+    await handleAgentTavernBodyApi(
+      ctx,
+      mutationDb(plainCharacter(), projectedChat('old body')),
+      makeRequest(undefined, 'GET', `${url.pathname}${url.search}`),
+      res,
+      url,
+      'body',
+      'GET',
+    )
+    const body = JSON.parse(res.chunks.join('')) as Record<string, unknown>
+
+    expect(res.statusCode).toBe(200)
+    expect(body['ok']).toBe(true)
+    expect(body['lastOperation']).toBeUndefined()
+    expect(capture.warnings.some((args) => String(args[0]).includes('ledger fold failed'))).toBe(true)
+  })
+})
+
+describe('GET body log degradation', () => {
+  function sessionWithRawEvent(raw: unknown): BodySessionLike {
+    const base = bodySession('message-1', 'old body', 'message-1', [0])
+    return {
+      ...base,
+      events: [...(base.events as readonly unknown[]), raw],
+    } as unknown as BodySessionLike
+  }
+
+  it('keeps the body read usable when an unrelated event has non-object data', async () => {
+    const session = sessionWithRawEvent({ type: 'tool/result', seq: 2, data: 'not-an-object' })
+    const capture = captureLogger()
+
+    const result = await callBodyGet(
+      plainCharacter(),
+      projectedChat('old body'),
+      fakeAgent(session),
+      'session-mvu',
+      'message-1',
+      capture.logger,
+    )
+
+    expect(result.status).toBe(200)
+    expect(result.body).toMatchObject({ ok: true, text: 'old body', canEdit: true })
+    expect(result.body['reason']).toBeUndefined()
+    const warning = capture.warnings.find((args) => String(args[0]).includes('ledger fold failed'))
+    expect(warning).toBeDefined()
+    expect(JSON.stringify(warning?.[1])).toContain('invalid-session-event')
+  })
+
+  it('reports a malformed body event by code instead of borrowing session-busy', async () => {
+    const session = sessionWithRawEvent({ type: BODY_EVENT_TYPE, seq: 2, data: 'not-an-object' })
+    const capture = captureLogger()
+
+    const result = await callBodyGet(
+      plainCharacter(),
+      projectedChat('old body'),
+      fakeAgent(session),
+      'session-mvu',
+      'message-1',
+      capture.logger,
+    )
+
+    // The stable row still renders; the ledger fold is skipped because a body
+    // record is missing, and the warning names the code.
+    expect(result.status).toBe(200)
+    expect(result.body).toMatchObject({ ok: true, text: 'old body' })
+    expect(result.body['reason']).not.toBe('session-busy')
+    const warning = capture.warnings.find((args) => String(args[0]).includes('ledger fold failed'))
+    expect(warning).toBeDefined()
+    expect(JSON.stringify(warning?.[1])).toContain('invalid-body-event')
+    expect(JSON.stringify(warning?.[1])).toContain('object data payload')
+  })
+})
+
 describe('body view policy', () => {
   it('prefers JSONL display text and enables actions for an idle eligible anchor', () => {
     const agent = fakeAgent(fakeSession('session-view'))
@@ -1577,6 +2176,69 @@ describe('body view policy', () => {
       canEditDetail: 'body-receipt-legacy',
     })
     expect(view).toMatchObject({ canEdit: false, detail: 'body-receipt-legacy' })
+  })
+
+  it('closes edit and publishes the floor-binding detail of a degraded read', () => {
+    const view = buildBodyView({
+      messageId: 'message-1',
+      binding: { architecture: 'agent-tavern' },
+      agent: fakeAgent(fakeSession('session-view-floor')),
+      hostSupported: true,
+      stateSafety: { safe: true },
+      historicalMvuState: false,
+      writeRollbackAvailable: true,
+      ledger: undefined,
+      messageText: 'body',
+      projected: { text: 'body', count: 1, selectedIndex: 0 },
+      projectionCurrent: false,
+      projectionTextCurrent: false,
+      inspection: { onSurface: true, last: true },
+      readDetail: 'body-group-mismatch',
+    })
+    expect(view).toMatchObject({
+      canEdit: false,
+      projectionPending: true,
+      detail: 'body-group-mismatch',
+    })
+  })
+
+  it('keeps the degraded-read detail when another reason already gates the row', () => {
+    const view = buildBodyView({
+      messageId: 'message-1',
+      binding: { architecture: 'agent-tavern' },
+      agent: undefined,
+      hostSupported: true,
+      stateSafety: { safe: true },
+      historicalMvuState: false,
+      writeRollbackAvailable: true,
+      ledger: undefined,
+      messageText: 'body',
+      projected: undefined,
+      inspection: undefined,
+      readDetail: 'body-floor-unreadable',
+    })
+    expect(view).toMatchObject({
+      canEdit: false,
+      reason: 'session-busy',
+      detail: 'body-floor-unreadable',
+    })
+  })
+
+  it('does not borrow session-busy when the session surface is unreadable', () => {
+    const view = buildBodyView({
+      messageId: 'message-1',
+      binding: { architecture: 'agent-tavern' },
+      agent: fakeAgent(fakeSession('session-view-no-surface')),
+      hostSupported: true,
+      stateSafety: { safe: true },
+      historicalMvuState: false,
+      writeRollbackAvailable: true,
+      ledger: undefined,
+      messageText: 'raw message text',
+      projected: undefined,
+      inspection: undefined,
+    })
+    expect(view.reason).toBe('host-unsupported')
   })
 
   it('returns a stable empty body without a Tavern binding', () => {
@@ -1725,6 +2387,17 @@ describe('startup recovery', () => {
     expect(surface).toContain(seqs.anchorSeq)
     expect(surface).not.toContain(seqs.triggerSeq)
     expect(surface).not.toContain(seqs.processSeq)
+    expect(harness.events.some((event) => event.type === BODY_ABORT_EVENT_TYPE
+      && event.data['reason'] !== undefined)).toBe(true)
+
+    // C2: the next recovery pass must be a no-op. Without the terminal abort
+    // record the op would stay pending and a restart would append a duplicate.
+    const assistantsAfterFirst = harness.events.filter((event) => event.type === 'assistant/message').length
+    const second = await recoverBodyOperation(ctx, harness.agent)
+    expect(second).toMatchObject({ status: 'clean', pending: 0 })
+    expect(harness.events.filter((event) => event.type === 'assistant/message')).toHaveLength(assistantsAfterFirst)
+    expect(harness.events.filter((event) => event.type === BODY_EVENT_TYPE
+      && event.data['op'] === 'restore')).toHaveLength(0)
   })
 })
 

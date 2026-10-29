@@ -17,6 +17,7 @@ import {
   isRecord,
   type BodyAnchorInspection,
   type BodyBindingView,
+  type BodyLastOperation,
 } from './body-session.js'
 
 /** Resolves one session's body state safety (character card + chat). */
@@ -35,6 +36,8 @@ export type BodyStateUnsafeDetail =
   | 'mvu-receipt-missing'
   | 'write-journal-missing'
   | 'write-journal-unavailable'
+  /** A journal holds only a `before` record and the store cannot prove whether the write landed. */
+  | 'write-journal-unknown'
   /** Legacy alias kept for old clients (proposal 0023 §6.4). */
   | 'edit-rollback-unavailable'
   /** Legacy alias kept for old clients (proposal 0023 §6.4). */
@@ -44,6 +47,10 @@ export type BodyStateUnsafeDetail =
   | 'body-receipt-duplicate'
   | 'body-receipt-legacy'
   | 'body-receipt-key-mismatch'
+  /** One body group is bound to more than one chat floor, so read and edit disagree. */
+  | 'body-group-mismatch'
+  /** The JSONL floor lookup failed for this message; only the ledger body is shown. */
+  | 'body-floor-unreadable'
 
 /** Body mutation whose rollback requirements differ (proposal 0022 §7). */
 export type BodyMutationAction = 'edit' | 'regenerate' | 'select'
@@ -149,6 +156,8 @@ export function bodyStateUnsafeMessage(detail: BodyStateUnsafeDetail): string {
       return 'the old turn wrote memory or variables without a complete write journal; regeneration cannot roll those writes back'
     case 'write-journal-unavailable':
       return 'this host does not expose appendPluginRecord, so memory and variable writes cannot be journaled or rolled back'
+    case 'write-journal-unknown':
+      return 'a write journal holds only a before record and the store cannot prove whether that write landed; regeneration cannot safely roll it back'
     case 'edit-rollback-unavailable':
       return 'this chat already carries MVU or variable state; editing a body has no candidate-level rollback'
     case 'select-rollback-unavailable':
@@ -163,6 +172,10 @@ export function bodyStateUnsafeMessage(detail: BodyStateUnsafeDetail): string {
       return 'the body candidate has a legacy body:<messageId> receipt that the ledger cannot map to a unique slot; migrate or repair the receipt key before editing'
     case 'body-receipt-key-mismatch':
       return 'the body candidate receipt key does not match the ledger slot or message id; repair the receipt keys before editing'
+    case 'body-group-mismatch':
+      return 'one body group is bound to more than one chat floor, so the displayed body and the edit target disagree; repair the duplicated floor binding before editing'
+    case 'body-floor-unreadable':
+      return 'the chat floor for this body could not be resolved, so only the ledger body is shown; retry after the projection catches up'
   }
 }
 
@@ -255,10 +268,22 @@ export interface BodyViewInput {
    */
   readonly editDetail?: BodyStateUnsafeDetail
   /**
-   * Caller-derived edit gate that already folded the receipt verdict. It wins
-   * over `editDetail` so an outer check can keep its more specific reason.
+   * Caller-derived edit gate that already folded the receipt verdict or a
+   * degraded floor read. It wins over `editDetail` so the outer check keeps its
+   * more specific reason.
    */
   readonly canEditDetail?: BodyStateUnsafeDetail
+  /**
+   * Gate detail of a degraded read (a duplicated floor binding or an unreadable
+   * floor). Unlike `canEditDetail` it is published as `detail` even when another
+   * reason already closes the actions, so the damaged-data signal is never lost.
+   */
+  readonly readDetail?: BodyStateUnsafeDetail
+  /**
+   * Latest aborted, failed or cancelled operation folded from the session log.
+   * Display-only: it never changes a gate or the stable empty-body default.
+   */
+  readonly lastOperation?: BodyLastOperation
 }
 
 /** Proposal §7.3 response plus the stable rejection code when gated. */
@@ -282,6 +307,8 @@ export interface BodyView {
   readonly reason?: string
   /** Concrete gate detail when one action is blocked but the body is readable. */
   readonly detail?: BodyStateUnsafeDetail
+  /** Latest aborted, failed or cancelled operation; absent when none is recorded. */
+  readonly lastOperation?: BodyLastOperation
 }
 
 /**
@@ -335,8 +362,10 @@ export function buildBodyView(input: BodyViewInput): BodyView {
   const reason = baseReason ?? rollbackReason
   // Proposal 0023 §6.3: the read side publishes the same receipt verdict the
   // `PUT` preflight enforces, so a missing/duplicate/legacy/mismatched receipt
-  // closes edit here instead of failing after the user opens the editor.
-  const editGate = input.canEditDetail ?? input.editDetail
+  // closes edit here instead of failing after the user opens the editor. A
+  // degraded read outranks it and is published even when another reason gates
+  // the body.
+  const editGate = input.readDetail ?? input.canEditDetail ?? input.editDetail
   const baseEditable = baseReason === undefined && !hidden && count > 0
   const canEdit = baseEditable && editGate === undefined
   const canRegenerate = baseReason === undefined
@@ -348,7 +377,7 @@ export function buildBodyView(input: BodyViewInput): BodyView {
   const canSelect = canEdit && count > 1 && !input.historicalMvuState
   const detail = baseEditable
     ? editGate ?? (input.historicalMvuState ? 'candidate-switch-disabled' : undefined)
-    : undefined
+    : input.readDetail
 
   return {
     ok: true,
@@ -364,6 +393,7 @@ export function buildBodyView(input: BodyViewInput): BodyView {
     ...(input.projectionCurrent === false ? { projectionPending: true } : {}),
     ...(reason === undefined ? {} : { reason }),
     ...(detail === undefined ? {} : { detail }),
+    ...(input.lastOperation === undefined ? {} : { lastOperation: input.lastOperation }),
   }
 }
 
@@ -375,7 +405,9 @@ function bodyViewReason(input: BodyViewInput, hidden: boolean): string | undefin
   if (!input.hostSupported) return 'host-unsupported'
   if (hidden) return undefined
   if (input.messageText === undefined && input.ledger === undefined && input.projected === undefined) return undefined
-  if (input.inspection === undefined) return 'session-busy'
+  // A missing surface read is a host/log shape problem, never evidence that an
+  // agent is running: `session-busy` stays reserved for a live non-idle agent.
+  if (input.inspection === undefined) return 'host-unsupported'
   if (!input.inspection.onSurface) return 'body-compacted'
   if (!input.inspection.last) return 'not-last-round'
   return undefined
@@ -396,22 +428,40 @@ export interface BodyFailureView {
  * Map one body runtime failure onto proposal §11 rejection codes and an HTTP
  * status. Runtime-only codes are folded into the closest public code so clients
  * never need to know internal state-machine names.
+ *
+ * Internal data/state failures (missing swipes, slot gaps, ledger seq damage)
+ * publish `body-state-unsafe` (409) and keep the original code as `detail`: a
+ * client can tell "wait for the projection" (503 `projection-pending`) from
+ * "this body data is inconsistent" (409) without parsing the message. Only an
+ * unknown exception stays a 500 `operation-failed`.
  */
 export function bodyFailureOf(error: unknown): BodyFailureView {
   const rawCode = failureCodeOf(error)
-  const code = publicBodyCode(rawCode)
-  const detail = failureDetailOf(error) ?? candidateReceiptDetailOf(rawCode)
+  const failure = publicBodyFailure(rawCode)
+  const detail = failureDetailOf(error) ?? failure.detail
   return {
-    status: bodyRejectStatus(code),
-    code,
+    status: bodyRejectStatus(failure.code),
+    code: failure.code,
     message: errorMessage(error),
     ...(detail === undefined ? {} : { detail }),
   }
 }
 
+/** Public code plus the internal code kept as its client-facing detail. */
+interface BodyPublicFailure {
+  readonly code: string
+  readonly detail?: string
+}
+
 /** Proposal §11 code for an arbitrary failure. */
 export function publicBodyCode(code: string | undefined): string {
+  return publicBodyFailure(code).code
+}
+
+function publicBodyFailure(code: string | undefined): BodyPublicFailure {
   switch (code) {
+    case undefined:
+      return { code: 'operation-failed' }
     case 'architecture-mismatch':
     case 'session-busy':
     case 'not-last-round':
@@ -421,23 +471,57 @@ export function publicBodyCode(code: string | undefined): string {
     case 'invalid-body-text':
     case 'host-unsupported':
     case 'projection-pending':
-      return code
+      return { code }
     case 'invalid-arguments':
-      return 'invalid-body-text'
+      return { code: 'invalid-body-text' }
     case 'restore-unavailable':
-      return 'body-state-unsafe'
+      return { code: 'body-state-unsafe' }
     case 'body-receipt-missing':
     case 'body-receipt-duplicate':
     case 'body-receipt-legacy':
     case 'body-receipt-key-mismatch':
-      return 'body-state-unsafe'
+      // CandidateReceiptError carries the concrete refusal in `code` and has
+      // no separate `detail` member (proposal 0023 §3.3).
+      return { code: 'body-state-unsafe', detail: code }
     case 'body-floor-not-found':
-      return 'projection-pending'
-    case 'invalid-event':
+      // The floor is written asynchronously; retry after the projection lands.
+      return { code: 'projection-pending' }
     case 'operation-failed':
-      return 'operation-failed'
+      return { code }
     default:
-      return 'operation-failed'
+      return isBodyDataStateCode(code)
+        ? { code: 'body-state-unsafe', detail: code }
+        : { code: 'operation-failed' }
+  }
+}
+
+/**
+ * Internal codes that describe damaged or unreplayable body data.
+ *
+ * These are known state failures, not unknown exceptions: retrying the same
+ * request cannot succeed until the data or projection is repaired.
+ */
+function isBodyDataStateCode(code: string): boolean {
+  switch (code) {
+    case 'invalid-event':
+    case 'invalid-body-event':
+    case 'invalid-body-op':
+    case 'invalid-body-seq':
+    case 'invalid-body-group-id':
+    case 'invalid-body-message-id':
+    case 'invalid-body-index':
+    case 'invalid-body-send-date':
+    case 'body-candidate-gap':
+    case 'body-candidate-message-missing':
+    case 'body-swipes-missing':
+    case 'body-index-mismatch':
+    case 'body-index-out-of-range':
+    case 'body-swipe-info-invalid':
+    case 'body-adoption-mismatch':
+    case 'body-group-mismatch':
+      return true
+    default:
+      return false
   }
 }
 
@@ -459,7 +543,7 @@ export function bodyRejectStatus(code: string): number {
     case 'body-state-unsafe':
       return 409
     default:
-      return 500
+      return isBodyDataStateCode(code) ? 409 : 500
   }
 }
 
@@ -475,23 +559,6 @@ function failureDetailOf(error: unknown): string | undefined {
   if (!isRecord(error)) return undefined
   const detail = error['detail']
   return typeof detail === 'string' && detail !== '' ? detail : undefined
-}
-
-/**
- * `CandidateReceiptError` carries the concrete receipt refusal in `code` and
- * has no separate `detail` member (proposal 0023 §3.3). Surface that code as
- * the public detail so a 409 keeps `body-receipt-missing` and friends.
- */
-function candidateReceiptDetailOf(code: string | undefined): string | undefined {
-  switch (code) {
-    case 'body-receipt-missing':
-    case 'body-receipt-duplicate':
-    case 'body-receipt-legacy':
-    case 'body-receipt-key-mismatch':
-      return code
-    default:
-      return undefined
-  }
 }
 
 function errorMessage(error: unknown): string {

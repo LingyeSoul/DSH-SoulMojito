@@ -21,6 +21,7 @@ import {
   selectedMemoryScopes,
   tool,
   type ToolDefinition,
+  type ToolExecution,
 } from './shared.js'
 import { embedWrittenMemory, memoryEmbeddingConfig, memoryStore, memoryVectorStore } from './stores.js'
 
@@ -102,13 +103,13 @@ export function memoryTools(): ToolDefinition[] {
     }, memoryWriteOutput, async (args, exec) => {
       const binding = await bindingFor(exec)
       const target = selectedMemoryScopes(args.scope, binding)[0]!
-      await assertWriteScopeAllowed(target.scope)
+      const id = randomUUID()
+      const journalTarget = { id, scope: target.scope, scopeId: target.scopeId }
+      await assertMemoryScopeAllowed(exec, binding.agentId, journalTarget, 'memory_write')
       const importance = clampScore(args.importance)
       const confidence = clampScore(args.confidence)
       const expiresAt = optionalExpiry(args.expiresAt)
-      const id = randomUUID()
       const store = await memoryStore()
-      const journalTarget = { id, scope: target.scope, scopeId: target.scopeId }
       // Register the undo record before the store changes: when the host
       // rejects the `before` append, this write must not happen (fail-closed).
       const journal = await openWriteJournal(exec.agent, binding.agentId)
@@ -143,11 +144,16 @@ export function memoryTools(): ToolDefinition[] {
     }, memoryWriteOutput, async (args, exec) => {
       const binding = await bindingFor(exec)
       const target = selectedMemoryScopes(args.scope, binding)[0]!
-      await assertWriteScopeAllowed(target.scope)
-      const store = await memoryStore()
       const id = stringArg(args.id)
+      await assertMemoryScopeAllowed(exec, binding.agentId, { id, scope: target.scope, scopeId: target.scopeId }, 'memory_update')
+      const store = await memoryStore()
       const previous = await store.read(id, target.scope, target.scopeId, true)
-      if (previous === undefined) throw new Error(`memory '${id}' not found in scope '${target.scope}'`)
+      if (previous === undefined) {
+        // A miss writes nothing; the noop proves this to the coverage check.
+        const journal = await openWriteJournal(exec.agent, binding.agentId)
+        appendMemoryJournal(journal, { tool: 'memory_update', phase: 'noop', target: { id, scope: target.scope, scopeId: target.scopeId } })
+        throw new Error(`memory '${id}' not found in scope '${target.scope}'`)
+      }
       const journalTarget = { id, scope: previous.scope, scopeId: previous.scopeId }
       // The undo record carries the record as it was before this update.
       const journal = await openWriteJournal(exec.agent, binding.agentId)
@@ -181,11 +187,17 @@ export function memoryTools(): ToolDefinition[] {
     }, memoryForgetOutput, async (args, exec) => {
       const binding = await bindingFor(exec)
       const target = selectedMemoryScopes(args.scope, binding)[0]!
-      await assertWriteScopeAllowed(target.scope)
-      const store = await memoryStore()
       const id = stringArg(args.id)
+      const requestedTarget = { id, scope: target.scope, scopeId: target.scopeId }
+      await assertMemoryScopeAllowed(exec, binding.agentId, requestedTarget, 'memory_forget')
+      const store = await memoryStore()
       const previous = await store.read(id, target.scope, target.scopeId, true)
-      if (previous === undefined) return { id, scope: target.scope, found: false }
+      if (previous === undefined) {
+        // A miss writes nothing; the noop proves this to the coverage check.
+        const journal = await openWriteJournal(exec.agent, binding.agentId)
+        appendMemoryJournal(journal, { tool: 'memory_forget', phase: 'noop', target: requestedTarget })
+        return { id, scope: target.scope, found: false }
+      }
       const journalTarget = { id, scope: previous.scope, scopeId: previous.scopeId }
       // Soft delete: the `after` record is the tombstoned record so a replay
       // can tell "deleted by this turn" from "never existed".
@@ -234,6 +246,38 @@ function appendMemoryJournal(journal: WriteJournalHandle | undefined, request: M
     ...(request.before === undefined ? {} : { before: request.before }),
     ...(request.after === undefined ? {} : { after: request.after }),
   })
+}
+
+/**
+ * Journal one write tool call that provably changed nothing.
+ *
+ * A missing target or a policy refusal leaves no business write behind, but the
+ * tool call is still in the session log. The `noop` record proves "nothing was
+ * written" so journal coverage does not report a lost journal.
+ */
+async function journalMemoryNoop(
+  exec: ToolExecution,
+  agentId: string,
+  tool: WriteJournalMemoryTool,
+  target: WriteJournalMemoryTarget,
+): Promise<void> {
+  const journal = await openWriteJournal(exec.agent, agentId)
+  appendMemoryJournal(journal, { tool, phase: 'noop', target })
+}
+
+/** `assertWriteScopeAllowed` plus its noop record when the scope is refused. */
+async function assertMemoryScopeAllowed(
+  exec: ToolExecution,
+  agentId: string,
+  target: WriteJournalMemoryTarget & { readonly scope: 'chat' | 'character' | 'agent' | 'global' },
+  tool: WriteJournalMemoryTool,
+): Promise<void> {
+  try {
+    await assertWriteScopeAllowed(target.scope)
+  } catch (error) {
+    await journalMemoryNoop(exec, agentId, tool, target)
+    throw error
+  }
 }
 
 const memorySearchOutput = objectOutput({ hits: { type: 'array', items: { type: 'object', additionalProperties: true } }, sourceCount: { type: 'integer' }, truncated: { type: 'boolean' } })

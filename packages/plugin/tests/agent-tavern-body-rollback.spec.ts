@@ -283,6 +283,44 @@ function pushJournal(fixture: Fixture, entry: WriteJournalEntry): void {
   nextEvent(fixture.events, WRITE_JOURNAL_EVENT_TYPE, entry)
 }
 
+function memoryNoopJournal(
+  journalId: string,
+  tool: WriteJournalMemoryTool,
+  id: string,
+  scope: 'chat' | 'global',
+  scopeId: string,
+): WriteJournalMemoryEntry {
+  return {
+    kind: 'memory',
+    tool,
+    journalId,
+    sessionId: SESSION_ID,
+    turn: TURN,
+    phase: 'noop',
+    at: JOURNAL_AT,
+    target: { id, scope, scopeId },
+  }
+}
+
+function variableNoopJournal(
+  journalId: string,
+  tool: WriteJournalVariableTool,
+  scopeId: string,
+  names: readonly string[],
+): WriteJournalVariableEntry {
+  return {
+    kind: 'variable',
+    tool,
+    journalId,
+    sessionId: SESSION_ID,
+    turn: TURN,
+    phase: 'noop',
+    at: JOURNAL_AT,
+    target: { scope: 'chat', scopeId },
+    names,
+  }
+}
+
 function createPort(fixture: Fixture, options: PortOptions): BodyWriteRollbackPort {
   const writer: WriteJournalRecordWriter = () => undefined
   return createBodyWriteRollbackPort({
@@ -374,6 +412,19 @@ function settleFloorReceipt(at: string, floor: number, before: number, after: nu
     turnKey: String(floor),
     status: 'updated',
     changes: [{ name: 'mvu.favor', before, after }],
+    failures: [],
+  }
+}
+
+function settleReceiptForNames(
+  at: string,
+  changes: readonly { readonly name: string; readonly before: number; readonly after: number }[],
+): MvuReceipt {
+  return {
+    at,
+    turnKey: '1',
+    status: 'updated',
+    changes: changes.map((change) => ({ ...change })),
     failures: [],
   }
 }
@@ -643,6 +694,124 @@ describe('AgentTavern body write rollback (proposal 0022 §5)', () => {
     const restored = await chatOf(fixture)
     expect(restored.header.chat_metadata.variables).toEqual(chatVariables)
     expect(readMvuReceipts(restored).map((receipt) => receipt.undoneAt !== undefined)).toEqual([false, false])
+  })
+
+  it('compensates the names a settle receipt already wrote when a later write fails', async () => {
+    const at = '2026-10-28T01:00:05.000Z'
+    const alpha = 'settle.alpha'
+    const beta = 'settle.beta'
+    // Undo reverses a receipt's changes: beta is written first, alpha second.
+    const fixture = await createFixture({
+      bodyText: 'Old body.',
+      variables: {},
+      receipts: [settleReceiptForNames(at, [
+        { name: alpha, before: 1, after: 2 },
+        { name: beta, before: 1, after: 2 },
+      ])],
+    })
+    await fixture.variables.set('chat', fixture.chatId, alpha, 2)
+    await fixture.variables.set('chat', fixture.chatId, beta, 2)
+    const before = await fixture.store.getChatSnapshot(CHARACTER, fixture.chatId)
+    if (before === undefined) throw new Error('fixture chat is missing')
+
+    let rejectAlphaUndo = true
+    const writes: Array<{ readonly name: string; readonly value: unknown }> = []
+    const variables: BodyRollbackVariableStore = {
+      get: (scope, scopeId, name) => fixture.variables.get(scope, scopeId, name),
+      set: async (scope, scopeId, name, value, expectedRevision) => {
+        writes.push({ name, value })
+        if (rejectAlphaUndo && name === alpha && value === 1) {
+          throw new Error('variable store rejected the undo')
+        }
+        return fixture.variables.set(scope, scopeId, name, value, expectedRevision)
+      },
+      delete: (scope, scopeId, name, expectedRevision) => fixture.variables.delete(scope, scopeId, name, expectedRevision),
+    }
+    const port = createPort(fixture, { variableStore: variables })
+    const error = await captureError(port.prepare(SESSION_ID, TURN, PREVIOUS_MESSAGE_ID))
+
+    expect(error).toMatchObject({
+      code: 'body-rollback-failed',
+      stage: 'mvu-undo',
+      sessionId: SESSION_ID,
+      turn: TURN,
+      // The failing receipt's own names were compensated successfully.
+      compensated: true,
+    })
+    expect(error.message).toContain('variable store rejected the undo')
+    expect(writes).toEqual([
+      { name: beta, value: 1 },
+      { name: alpha, value: 1 },
+      { name: beta, value: 2 },
+    ])
+    expect(await fixture.variables.get('chat', fixture.chatId, beta)).toMatchObject({ value: 2 })
+    expect(await fixture.variables.get('chat', fixture.chatId, alpha)).toMatchObject({ value: 2 })
+    const afterFailure = await fixture.store.getChatSnapshot(CHARACTER, fixture.chatId)
+    expect(afterFailure?.revision).toBe(before.revision)
+    expect(readMvuReceipts(await chatOf(fixture))[0]?.undoneAt).toBeUndefined()
+
+    // The receipt stays unmarked; the same prepare can retry the undo.
+    rejectAlphaUndo = false
+    await port.prepare(SESSION_ID, TURN, PREVIOUS_MESSAGE_ID)
+    expect(await fixture.variables.get('chat', fixture.chatId, alpha)).toMatchObject({ value: 1 })
+    expect(await fixture.variables.get('chat', fixture.chatId, beta)).toMatchObject({ value: 1 })
+    expect(readMvuReceipts(await chatOf(fixture))[0]?.undoneAt).toBeDefined()
+  })
+
+  it('reports body-rollback-partial with recoverable evidence when the settle compensation fails', async () => {
+    const at = '2026-10-28T01:00:06.000Z'
+    const alpha = 'settle.alpha'
+    const beta = 'settle.beta'
+    const fixture = await createFixture({
+      bodyText: 'Old body.',
+      variables: {},
+      receipts: [settleReceiptForNames(at, [
+        { name: alpha, before: 1, after: 2 },
+        { name: beta, before: 1, after: 2 },
+      ])],
+    })
+    await fixture.variables.set('chat', fixture.chatId, alpha, 2)
+    await fixture.variables.set('chat', fixture.chatId, beta, 2)
+
+    const variables: BodyRollbackVariableStore = {
+      get: (scope, scopeId, name) => fixture.variables.get(scope, scopeId, name),
+      set: async (scope, scopeId, name, value, expectedRevision) => {
+        if (name === alpha && value === 1) throw new Error('variable store rejected the undo')
+        if (name === beta && value === 2) throw new Error('variable store rejected the compensation')
+        return fixture.variables.set(scope, scopeId, name, value, expectedRevision)
+      },
+      delete: (scope, scopeId, name, expectedRevision) => fixture.variables.delete(scope, scopeId, name, expectedRevision),
+    }
+    const port = createPort(fixture, { variableStore: variables })
+    const error = await captureError(port.prepare(SESSION_ID, TURN, PREVIOUS_MESSAGE_ID))
+
+    expect(error).toMatchObject({
+      code: 'body-rollback-partial',
+      stage: 'mvu-undo',
+      sessionId: SESSION_ID,
+      turn: TURN,
+      compensated: false,
+    })
+    expect(error.message).toContain('could not be restored')
+    const evidence: unknown = (error as BodyRollbackError & { readonly evidence?: unknown }).evidence
+    expect(evidence).toMatchObject({
+      character: CHARACTER,
+      chatId: fixture.chatId,
+      receiptKey: '1',
+      receiptAt: at,
+      direction: 'undo',
+      failedName: alpha,
+      writtenNames: [{ name: beta, before: { name: beta, value: 2 } }],
+      restoredNames: [],
+      compensationFailedName: beta,
+      failure: expect.stringContaining('variable store rejected the undo'),
+      compensationFailure: expect.stringContaining('variable store rejected the compensation'),
+    })
+    // The first write could not be undone, so beta stays at its before value;
+    // alpha never landed. The receipt remains unmarked for a later retry.
+    expect(await fixture.variables.get('chat', fixture.chatId, beta)).toMatchObject({ value: 1 })
+    expect(await fixture.variables.get('chat', fixture.chatId, alpha)).toMatchObject({ value: 2 })
+    expect(readMvuReceipts(await chatOf(fixture))[0]?.undoneAt).toBeUndefined()
   })
 
   it('rolls back a failed new turn memory/variable writes without touching the old turn', async () => {
@@ -1395,5 +1564,520 @@ describe('AgentTavern body write rollback (proposal 0022 §5)', () => {
     expect(error.message).toContain('was built at')
     expect((await fixture.memory.read(created.id, 'chat', fixture.chatId, true))?.deletedAt).toBeUndefined()
     expect(readMvuReceipts(await chatOf(fixture))[0]?.undoneAt).toBeUndefined()
+  })
+
+  /* ------------------------ no-op coverage and journal recovery ------------------------ */
+
+  it('accepts noop journal records as proof that a tool call wrote nothing', async () => {
+    const fixture = await createFixture(plainSeed())
+    pushToolCall(fixture, 'memory_forget')
+    pushToolCall(fixture, 'variable_delete')
+    pushToolCall(fixture, 'memory_write')
+    pushJournal(fixture, memoryNoopJournal('noop-forget', 'memory_forget', 'missing-memory', 'chat', fixture.chatId))
+    pushJournal(fixture, variableNoopJournal('noop-delete', 'variable_delete', fixture.chatId, ['missing.variable']))
+    // A policy refusal writes nothing either; its noop keeps coverage intact.
+    pushJournal(fixture, memoryNoopJournal('noop-denied', 'memory_write', 'denied-memory', 'global', 'global'))
+
+    const port = createPort(fixture, {})
+    const plan = await port.prepare(SESSION_ID, TURN, PREVIOUS_MESSAGE_ID)
+
+    expect(plan.journal).toEqual([])
+    expect(plan.diagnostics).toEqual([])
+  })
+
+  it('rolls back a before-only memory_write whose store write committed', async () => {
+    const fixture = await createFixture(plainSeed())
+    const created = await putMemory(fixture, 'created before the after append failed')
+    pushToolCall(fixture, 'memory_write')
+    // The `after` append failed (or the process died) after the store accepted
+    // the write, so the journal holds only the before record.
+    pushJournal(fixture, memoryJournal('journal-write', 'memory_write', 'before', created, null))
+
+    const port = createPort(fixture, {})
+    const plan = await port.prepare(SESSION_ID, TURN, PREVIOUS_MESSAGE_ID)
+
+    expect(plan.journal.map((write) => write.journalId)).toEqual(['journal-write'])
+    expect(plan.journal[0]).toMatchObject({
+      kind: 'memory',
+      tool: 'memory_write',
+      before: null,
+      after: { id: created.id, revision: created.revision },
+    })
+    expect(plan.diagnostics.map((entry) => entry.code)).toEqual(['vector-restore-skipped'])
+    expect((await fixture.memory.read(created.id, 'chat', fixture.chatId, true))?.deletedAt).toBeDefined()
+
+    await port.restore(plan)
+
+    const restored = await fixture.memory.read(created.id, 'chat', fixture.chatId, true)
+    expect(restored).toMatchObject({ content: 'created before the after append failed', revision: created.revision })
+    expect(restored?.deletedAt).toBeUndefined()
+  })
+
+  it('refuses an ambiguous before-only create that a later forget already tombstoned', async () => {
+    const fixture = await createFixture(plainSeed())
+    const created = await putMemory(fixture, 'created then forgotten')
+    await fixture.memory.forget(created.id, 'chat', fixture.chatId, created.revision)
+    const tombstone = await fixture.memory.read(created.id, 'chat', fixture.chatId, true)
+    if (tombstone === undefined || tombstone.deletedAt === undefined) throw new Error('forgotten fixture record is missing')
+
+    pushToolCall(fixture, 'memory_write')
+    pushToolCall(fixture, 'memory_forget')
+    pushJournal(fixture, memoryJournal('journal-write', 'memory_write', 'before', created, null))
+    pushJournal(fixture, memoryJournal('journal-forget', 'memory_forget', 'before', created, created))
+    pushJournal(fixture, memoryJournal('journal-forget', 'memory_forget', 'after', created, tombstone))
+
+    const port = createPort(fixture, {})
+    const error = await captureError(port.prepare(SESSION_ID, TURN, PREVIOUS_MESSAGE_ID))
+
+    // The lost create record only proves the memory existed; the later forget
+    // means its committed after state cannot be reconstructed, so the rollback
+    // refuses instead of leaving the create half-applied.
+    expect(error).toMatchObject({
+      code: 'body-rollback-conflict',
+      stage: 'journal-rollback',
+      journalId: 'journal-write',
+    })
+    expect(await fixture.memory.read(created.id, 'chat', fixture.chatId, true)).toMatchObject({
+      deletedAt: tombstone.deletedAt,
+      revision: tombstone.revision,
+    })
+  })
+
+  it('rolls back a before-only variable_set whose store write committed', async () => {
+    const fixture = await createFixture(plainSeed())
+    const written = await fixture.variables.set('chat', fixture.chatId, 'journal.ghost', 'written')
+    pushToolCall(fixture, 'variable_set')
+    pushJournal(fixture, {
+      ...variableJournal('journal-set', 'variable_set', 'before', fixture.chatId, null),
+      names: ['journal.ghost'],
+    })
+
+    const port = createPort(fixture, {})
+    const plan = await port.prepare(SESSION_ID, TURN, PREVIOUS_MESSAGE_ID)
+
+    expect(plan.journal[0]).toMatchObject({
+      kind: 'variable',
+      tool: 'variable_set',
+      before: null,
+      after: [{ name: 'journal.ghost', value: 'written', revision: written.revision }],
+    })
+    expect(await fixture.variables.get('chat', fixture.chatId, 'journal.ghost')).toBeUndefined()
+
+    await port.restore(plan)
+
+    expect(await fixture.variables.get('chat', fixture.chatId, 'journal.ghost')).toMatchObject({
+      value: 'written',
+      revision: written.revision,
+    })
+  })
+
+  it('refuses a before-only variable_patch without journaled names instead of skipping it', async () => {
+    const fixture = await createFixture(plainSeed())
+    pushToolCall(fixture, 'variable_patch')
+    pushJournal(fixture, variableJournal('journal-patch', 'variable_patch', 'before', fixture.chatId, []))
+
+    const port = createPort(fixture, {})
+    const error = await captureError(port.prepare(SESSION_ID, TURN, PREVIOUS_MESSAGE_ID))
+
+    expect(error).toMatchObject({ code: 'body-state-unsafe', detail: 'write-journal-missing' })
+    expect(error.message).toContain('without names')
+  })
+
+  it('undoes a committed before-only group in rollbackTurnWrites', async () => {
+    const newTurn = TURN + 1
+    const fixture = await createFixture(plainSeed())
+    const created = await putMemory(fixture, 'new turn create before the after append failed')
+
+    nextEvent(fixture.events, 'turn/start', { turn: newTurn })
+    pushToolCallInTurn(fixture, 'memory_write', newTurn)
+    pushJournal(fixture, memoryJournalInTurn('new-create', 'memory_write', 'before', created, null, newTurn))
+
+    const port = createPort(fixture, {})
+    const result = await port.rollbackTurnWrites(SESSION_ID, newTurn)
+
+    expect(result).toMatchObject({ undone: 1, skippedUncommitted: [], failures: [] })
+    expect((await fixture.memory.read(created.id, 'chat', fixture.chatId, true))?.deletedAt).toBeDefined()
+  })
+
+  /* ------------------------- undo conflict / partial compensation ------------------------- */
+
+  it('refuses to undo over a manual memory edit and leaves every store untouched', async () => {
+    const fixture = await createFixture(plainSeed())
+    const created = await putMemory(fixture, 'created by the old turn')
+    const updateBefore = await putMemory(fixture, 'update before')
+    const updateAfter = await updateMemory(fixture, updateBefore, 'update after')
+    const manual = await updateMemory(fixture, updateAfter, 'manual edit after the turn')
+
+    pushToolCall(fixture, 'memory_write')
+    pushToolCall(fixture, 'memory_update')
+    pushJournal(fixture, memoryJournal('journal-write', 'memory_write', 'before', created, null))
+    pushJournal(fixture, memoryJournal('journal-write', 'memory_write', 'after', created, created))
+    pushJournal(fixture, memoryJournal('journal-update', 'memory_update', 'before', updateBefore, updateBefore))
+    pushJournal(fixture, memoryJournal('journal-update', 'memory_update', 'after', updateBefore, updateAfter))
+
+    const port = createPort(fixture, {})
+    const error = await captureError(port.prepare(SESSION_ID, TURN, PREVIOUS_MESSAGE_ID))
+
+    expect(error).toMatchObject({
+      code: 'body-rollback-conflict',
+      stage: 'journal-rollback',
+      journalId: 'journal-update',
+    })
+    expect(error.message).toContain(manual.revision)
+    // Undo is newest-first: the conflicting update refuses before the create is
+    // undone, and the compensating replay must not overwrite the manual edit.
+    expect((await fixture.memory.read(created.id, 'chat', fixture.chatId, true))?.deletedAt).toBeUndefined()
+    expect(await fixture.memory.read(updateBefore.id, 'chat', fixture.chatId, true)).toMatchObject({
+      content: 'manual edit after the turn',
+      revision: manual.revision,
+    })
+  })
+
+  it('compensates a newer group when an older group refuses its undo', async () => {
+    const fixture = await createFixture(plainSeed())
+    const target = await putMemory(fixture, 'updated before')
+    const updated = await updateMemory(fixture, target, 'updated after')
+    const manual = await updateMemory(fixture, updated, 'manual edit')
+    const created = await putMemory(fixture, 'created by the newer write')
+
+    pushToolCall(fixture, 'memory_update')
+    pushToolCall(fixture, 'memory_write')
+    pushJournal(fixture, memoryJournal('journal-update', 'memory_update', 'before', target, target))
+    pushJournal(fixture, memoryJournal('journal-update', 'memory_update', 'after', target, updated))
+    pushJournal(fixture, memoryJournal('journal-write', 'memory_write', 'before', created, null))
+    pushJournal(fixture, memoryJournal('journal-write', 'memory_write', 'after', created, created))
+
+    const port = createPort(fixture, {})
+    const error = await captureError(port.prepare(SESSION_ID, TURN, PREVIOUS_MESSAGE_ID))
+
+    expect(error).toMatchObject({
+      code: 'body-rollback-conflict',
+      stage: 'journal-rollback',
+      journalId: 'journal-update',
+    })
+    // Undo ran newest-first: the create was undone before the older update
+    // refused, so the compensating replay must put the create back.
+    const restored = await fixture.memory.read(created.id, 'chat', fixture.chatId, true)
+    expect(restored).toMatchObject({ content: 'created by the newer write', revision: created.revision })
+    expect(restored?.deletedAt).toBeUndefined()
+    expect(await fixture.memory.read(target.id, 'chat', fixture.chatId, true)).toMatchObject({
+      content: 'manual edit',
+      revision: manual.revision,
+    })
+  })
+
+  it('refuses to undo over a manual variable edit before mutating the group', async () => {
+    const fixture = await createFixture(plainSeed())
+    const created = await fixture.variables.set('chat', fixture.chatId, 'journal.created', 1)
+    const patchBefore = await fixture.variables.set('chat', fixture.chatId, 'journal.manual', 'before')
+    const patchAfter = await fixture.variables.patch('chat', fixture.chatId, [{ name: 'journal.manual', value: 'after' }])
+    const manual = await fixture.variables.set('chat', fixture.chatId, 'journal.manual', 'manual', patchAfter[0]!.revision)
+
+    pushToolCall(fixture, 'variable_set')
+    pushToolCall(fixture, 'variable_patch')
+    pushJournal(fixture, variableJournal('journal-set', 'variable_set', 'before', fixture.chatId, null))
+    pushJournal(fixture, variableJournal('journal-set', 'variable_set', 'after', fixture.chatId, [created]))
+    pushJournal(fixture, variableJournal('journal-patch', 'variable_patch', 'before', fixture.chatId, [patchBefore]))
+    pushJournal(fixture, variableJournal('journal-patch', 'variable_patch', 'after', fixture.chatId, patchAfter))
+
+    const port = createPort(fixture, {})
+    const error = await captureError(port.prepare(SESSION_ID, TURN, PREVIOUS_MESSAGE_ID))
+
+    expect(error).toMatchObject({
+      code: 'body-rollback-conflict',
+      stage: 'journal-rollback',
+      journalId: 'journal-patch',
+    })
+    expect(await fixture.variables.get('chat', fixture.chatId, 'journal.created')).toMatchObject({
+      value: 1,
+      revision: created.revision,
+    })
+    expect(await fixture.variables.get('chat', fixture.chatId, 'journal.manual')).toMatchObject({
+      value: 'manual',
+      revision: manual.revision,
+    })
+  })
+
+  /* ---------------- live binding revalidation (review S2) ---------------- */
+
+  it('refuses to restore a plan after a chat rename moved the live binding', async () => {
+    const fixture = await createFixture(updateSeed([
+      bodyReceipt('2026-10-28T06:00:00.000Z'),
+      settleReceipt('2026-10-28T06:00:01.000Z'),
+    ]))
+    await fixture.variables.set('chat', fixture.chatId, 'mvu.favor', 2)
+    pushToolCall(fixture, 'tavern_variable_settle')
+    const port = createPort(fixture, {})
+    const plan = await port.prepare(SESSION_ID, TURN, PREVIOUS_MESSAGE_ID)
+    expect(await fixture.variables.get('chat', fixture.chatId, 'mvu.favor')).toMatchObject({ value: 1 })
+
+    const snapshot = await fixture.store.getChatSnapshot(CHARACTER, fixture.chatId)
+    if (snapshot === undefined) throw new Error('fixture chat is missing')
+    const nextChatId = 'renamed-body-chat.jsonl'
+    await fixture.store.renameChat(CHARACTER, fixture.chatId, nextChatId, snapshot.revision)
+    await fixture.store.updateState((state) => {
+      const binding = state.sessionBindings[SESSION_ID]
+      if (binding === undefined) throw new Error('fixture binding is missing')
+      return {
+        sessionBindings: {
+          ...state.sessionBindings,
+          [SESSION_ID]: { ...binding, chatId: nextChatId },
+        },
+      }
+    })
+    const renamed = await fixture.store.getChatSnapshot(CHARACTER, nextChatId)
+    if (renamed === undefined) throw new Error('renamed chat is missing')
+
+    const error = await captureError(port.restore(plan))
+
+    expect(error).toMatchObject({
+      code: 'body-rollback-target-missing',
+      stage: 'restore',
+      sessionId: SESSION_ID,
+      turn: TURN,
+    })
+    expect(error.message).toContain(fixture.chatId)
+    expect(error.message).toContain(nextChatId)
+    // The refusal happens before any chat write: the renamed chat still holds
+    // the prepared rollback and the flat store stays at its before state.
+    const after = await fixture.store.getChatSnapshot(CHARACTER, nextChatId)
+    expect(after?.revision).toBe(renamed.revision)
+    expect(readMvuReceipts(after?.chat ?? renamed.chat)[0]?.undoneAt).toBeDefined()
+    // Flat variables are scoped by the plan's chat id; the refused restore must
+    // not write either scope.
+    expect(await fixture.variables.get('chat', fixture.chatId, 'mvu.favor')).toMatchObject({ value: 1 })
+    expect(await fixture.variables.get('chat', nextChatId, 'mvu.favor')).toBeUndefined()
+  })
+
+  it('refuses a tampered plan that points the restore at another chat', async () => {
+    const fixture = await createFixture(updateSeed([
+      bodyReceipt('2026-10-28T06:10:00.000Z'),
+      settleReceipt('2026-10-28T06:10:01.000Z'),
+    ]))
+    await fixture.variables.set('chat', fixture.chatId, 'mvu.favor', 2)
+    pushToolCall(fixture, 'tavern_variable_settle')
+    const port = createPort(fixture, {})
+    const plan = await port.prepare(SESSION_ID, TURN, PREVIOUS_MESSAGE_ID)
+
+    const otherChatId = await fixture.store.createChat(CHARACTER, {
+      user_name: 'User',
+      character_name: CHARACTER,
+      chat_metadata: { marker: 'other chat' },
+    })
+    const otherBefore = await fixture.store.getChatSnapshot(CHARACTER, otherChatId)
+    if (otherBefore === undefined) throw new Error('other chat is missing')
+    const tampered: BodyRollbackPlan = {
+      ...plan,
+      binding: { character: CHARACTER, chatId: otherChatId },
+    }
+
+    const error = await captureError(port.restore(tampered))
+
+    expect(error).toMatchObject({ code: 'body-rollback-target-missing', stage: 'restore' })
+    expect(error.message).toContain(fixture.chatId)
+    expect(error.message).toContain(otherChatId)
+    const otherAfter = await fixture.store.getChatSnapshot(CHARACTER, otherChatId)
+    expect(otherAfter?.revision).toBe(otherBefore.revision)
+    expect(otherAfter?.chat.messages).toEqual(otherBefore.chat.messages)
+  })
+
+  it('refuses to restore a plan whose session was unbound', async () => {
+    const fixture = await createFixture(updateSeed([
+      bodyReceipt('2026-10-28T06:20:00.000Z'),
+      settleReceipt('2026-10-28T06:20:01.000Z'),
+    ]))
+    await fixture.variables.set('chat', fixture.chatId, 'mvu.favor', 2)
+    pushToolCall(fixture, 'tavern_variable_settle')
+    const port = createPort(fixture, {})
+    const plan = await port.prepare(SESSION_ID, TURN, PREVIOUS_MESSAGE_ID)
+    const before = await fixture.store.getChatSnapshot(CHARACTER, fixture.chatId)
+    if (before === undefined) throw new Error('fixture chat is missing')
+
+    await fixture.store.updateState((state) => ({
+      sessionBindings: Object.fromEntries(
+        Object.entries(state.sessionBindings).filter(([sessionId]) => sessionId !== SESSION_ID),
+      ),
+    }))
+
+    const error = await captureError(port.restore(plan))
+
+    expect(error).toMatchObject({ code: 'body-rollback-target-missing', stage: 'restore' })
+    expect(error.message).toContain('live binding cannot be read')
+    const after = await fixture.store.getChatSnapshot(CHARACTER, fixture.chatId)
+    expect(after?.revision).toBe(before.revision)
+    expect(await fixture.variables.get('chat', fixture.chatId, 'mvu.favor')).toMatchObject({ value: 1 })
+  })
+
+  /* ----------------- chat-save receipt compensation (review S3) ------------ */
+
+  it('replays the settle receipts when the rolled-back chat cannot be saved', async () => {
+    const fixture = await createFixture(updateSeed([
+      bodyReceipt('2026-10-28T06:30:00.000Z'),
+      settleReceipt('2026-10-28T06:30:01.000Z'),
+    ]))
+    await fixture.variables.set('chat', fixture.chatId, 'mvu.favor', 2)
+    const created = await putMemory(fixture, 'created before the conflict')
+    pushToolCall(fixture, 'memory_write')
+    pushToolCall(fixture, 'tavern_variable_settle')
+    pushJournal(fixture, memoryJournal('journal-write', 'memory_write', 'before', created, null))
+    pushJournal(fixture, memoryJournal('journal-write', 'memory_write', 'after', created, created))
+
+    const port = createPort(fixture, {
+      store: failingStore(fixture, new ChatRevisionConflictError('stale-revision', 'current-revision')),
+    })
+    const error = await captureError(port.prepare(SESSION_ID, TURN, PREVIOUS_MESSAGE_ID))
+
+    expect(error).toMatchObject({
+      code: 'body-rollback-conflict',
+      stage: 'chat-save',
+      compensated: true,
+    })
+    expect(error.message).toContain('changed in another tab')
+    expect(error.message).toContain('receipt rollback was replayed')
+    // Both directions ran back to the unsaved chat: the flat journal write and
+    // the settle receipt are at their after state, not a half-applied mix.
+    const restoredMemory = await fixture.memory.read(created.id, 'chat', fixture.chatId, true)
+    expect(restoredMemory).toMatchObject({ revision: created.revision })
+    expect(restoredMemory?.deletedAt).toBeUndefined()
+    expect(await fixture.variables.get('chat', fixture.chatId, 'mvu.favor')).toMatchObject({ value: 2 })
+    const chat = await chatOf(fixture)
+    expect(chat.header.chat_metadata.variables).toEqual({ stat_data: { hp: 20 } })
+    expect(readMvuReceipts(chat).map((receipt) => receipt.undoneAt !== undefined)).toEqual([false, false])
+  })
+
+  it('undoes the settle receipt replay when the restored chat cannot be saved', async () => {
+    const fixture = await createFixture(updateSeed([
+      bodyReceipt('2026-10-28T06:35:00.000Z'),
+      settleReceipt('2026-10-28T06:35:01.000Z'),
+    ]))
+    await fixture.variables.set('chat', fixture.chatId, 'mvu.favor', 2)
+    pushToolCall(fixture, 'tavern_variable_settle')
+    let failSave = false
+    const store: BodyRollbackStore = {
+      getState: () => fixture.store.getState(),
+      getCharacter: (name: string) => fixture.store.getCharacter(name),
+      getChatSnapshot: (character: string, chatId: string) => fixture.store.getChatSnapshot(character, chatId),
+      saveChat: async (character: string, chatId: string, chat: ChatLogIR, expectedRevision: string) => {
+        if (failSave) throw new ChatRevisionConflictError('stale-revision', 'current-revision')
+        return fixture.store.saveChat(character, chatId, chat, expectedRevision)
+      },
+    }
+    const port = createPort(fixture, { store })
+    const plan = await port.prepare(SESSION_ID, TURN, PREVIOUS_MESSAGE_ID)
+    expect(await fixture.variables.get('chat', fixture.chatId, 'mvu.favor')).toMatchObject({ value: 1 })
+
+    failSave = true
+    const error = await captureError(port.restore(plan))
+
+    expect(error).toMatchObject({
+      code: 'body-rollback-conflict',
+      stage: 'chat-save',
+      compensated: true,
+    })
+    expect(error.message).toContain('receipt replay was undone')
+    // The persisted chat never saw the redo, so both stores go back to the
+    // prepared rollback instead of keeping the replay half-applied.
+    expect(await fixture.variables.get('chat', fixture.chatId, 'mvu.favor')).toMatchObject({ value: 1 })
+    const rolledBack = await chatOf(fixture)
+    expect(rolledBack.header.chat_metadata.variables).toEqual({ stat_data: { hp: 10 } })
+    expect(readMvuReceipts(rolledBack).map((receipt) => receipt.undoneAt !== undefined)).toEqual([true, true])
+
+    failSave = false
+    await port.restore(plan)
+    expect(await fixture.variables.get('chat', fixture.chatId, 'mvu.favor')).toMatchObject({ value: 2 })
+    const restored = await chatOf(fixture)
+    expect(restored.header.chat_metadata.variables).toEqual({ stat_data: { hp: 20 } })
+    expect(readMvuReceipts(restored).map((receipt) => receipt.undoneAt !== undefined)).toEqual([false, false])
+  })
+
+  it('reports a partial compensation and keeps the draft replayable when the receipt replay fails', async () => {
+    const fixture = await createFixture(updateSeed([
+      bodyReceipt('2026-10-28T06:40:00.000Z'),
+      settleReceipt('2026-10-28T06:40:01.000Z'),
+    ]))
+    await fixture.variables.set('chat', fixture.chatId, 'mvu.favor', 2)
+    pushToolCall(fixture, 'tavern_variable_settle')
+    const variables: BodyRollbackVariableStore = {
+      get: (scope, scopeId, name) => fixture.variables.get(scope, scopeId, name),
+      set: async (scope, scopeId, name, value, expectedRevision) => {
+        if (name === 'mvu.favor' && value === 2) throw new Error('variable store down during compensation')
+        return fixture.variables.set(scope, scopeId, name, value, expectedRevision)
+      },
+      delete: (scope, scopeId, name, expectedRevision) => fixture.variables.delete(scope, scopeId, name, expectedRevision),
+    }
+    const failing = createPort(fixture, {
+      store: failingStore(fixture, new ChatRevisionConflictError('stale-revision', 'current-revision')),
+      variableStore: variables,
+    })
+    const split = splitPort(failing)
+    const draft = await split.plan(SESSION_ID, TURN, PREVIOUS_MESSAGE_ID)
+
+    const error = await captureError(split.apply(draft))
+
+    expect(error).toMatchObject({
+      code: 'body-rollback-partial',
+      stage: 'chat-save',
+      compensated: false,
+    })
+    expect(error.message).toContain('variable store down during compensation')
+    expect(await fixture.variables.get('chat', fixture.chatId, 'mvu.favor')).toMatchObject({ value: 1 })
+
+    // The draft is the durable evidence: retrying apply with a healthy store
+    // reaches the same before state, and restore then replays the after state.
+    const healthy = createPort(fixture, {})
+    const healthySplit = splitPort(healthy)
+    const applied = await healthySplit.apply(draft)
+    expect(await fixture.variables.get('chat', fixture.chatId, 'mvu.favor')).toMatchObject({ value: 1 })
+    await healthy.restore(applied)
+    expect(await fixture.variables.get('chat', fixture.chatId, 'mvu.favor')).toMatchObject({ value: 2 })
+    const restored = await chatOf(fixture)
+    expect(readMvuReceipts(restored)[0]?.undoneAt).toBeUndefined()
+  })
+
+  it('compensates the applied names when one variable_patch undo fails', async () => {
+    const newTurn = TURN + 1
+    const fixture = await createFixture(plainSeed())
+    const nameA = 'journal.patch.a'
+    const nameB = 'journal.patch.b'
+    const beforeA = await fixture.variables.set('chat', fixture.chatId, nameA, 1)
+    const beforeB = await fixture.variables.set('chat', fixture.chatId, nameB, 1)
+    const after = await fixture.variables.patch('chat', fixture.chatId, [
+      { name: nameA, value: 2, expectedRevision: beforeA.revision },
+      { name: nameB, value: 2, expectedRevision: beforeB.revision },
+    ])
+
+    nextEvent(fixture.events, 'turn/start', { turn: newTurn })
+    pushToolCallInTurn(fixture, 'variable_patch', newTurn)
+    pushJournal(fixture, variableJournalInTurn('new-patch', 'variable_patch', 'before', fixture.chatId, [beforeA, beforeB], newTurn))
+    pushJournal(fixture, variableJournalInTurn('new-patch', 'variable_patch', 'after', fixture.chatId, after, newTurn))
+
+    let failed = false
+    const failingStore: BodyRollbackVariableStore = {
+      get: (scope, scopeId, name) => fixture.variables.get(scope, scopeId, name),
+      set: async (scope, scopeId, name, value, expectedRevision) => {
+        if (name === nameB && !failed) {
+          failed = true
+          throw new Error('variable store rejected the undo')
+        }
+        return fixture.variables.set(scope, scopeId, name, value, expectedRevision)
+      },
+      delete: (scope, scopeId, name, expectedRevision) => fixture.variables.delete(scope, scopeId, name, expectedRevision),
+    }
+    const port = createPort(fixture, { variableStore: failingStore })
+    const result = await port.rollbackTurnWrites(SESSION_ID, newTurn)
+
+    expect(failed).toBe(true)
+    expect(result.failures).toHaveLength(1)
+    expect(result.failures[0]).toMatchObject({ journalId: 'new-patch', kind: 'variable', code: 'body-rollback-failed' })
+    expect(result.failures[0]?.message).toContain('was compensated')
+    // No half-undone group: the name applied before the failure was replayed.
+    expect(await fixture.variables.get('chat', fixture.chatId, nameA)).toMatchObject({
+      value: 2,
+      revision: after[0]!.revision,
+    })
+    expect(await fixture.variables.get('chat', fixture.chatId, nameB)).toMatchObject({
+      value: 2,
+      revision: after[1]!.revision,
+    })
   })
 })

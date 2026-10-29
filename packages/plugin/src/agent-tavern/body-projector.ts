@@ -121,7 +121,6 @@ export async function projectBodyEvent(
   if (data.op === 'candidate') {
     const projected = requireProjectedLedger(ledger, event.seq, data.groupId)
     const slot = requireProjectedCandidate(projected, data, event.seq)
-    const preserveTurnKeys = candidatePreserveKeys(projected)
     const resolved = resolveBodyCandidateMessage(session, data.messageId, event.seq)
     const character = await store.getCharacter(binding.character)
     const scripts = await collectSessionRegexScripts(store, state, binding.character, binding.chatId, character)
@@ -135,42 +134,38 @@ export async function projectBodyEvent(
       messageId: data.messageId,
       index: slot.index,
       text,
-      sendDate: eventDate(resolved.time),
+      sendDate: resolved.at,
       ...(resolved.provider === undefined ? {} : { provider: resolved.provider }),
       ...(resolved.model === undefined ? {} : { model: resolved.model }),
       ...(resolved.usage === undefined ? {} : { usage: resolved.usage }),
       ...(data.feedback === undefined ? {} : { feedback: data.feedback }),
     }
-    await adoptImportedAnchorFloor(store, session, binding, data.groupId, projected.anchorMessageId)
-    await mutateBodyChat(store, binding, (chat) => projectCandidateToChat(chat, character?.card, input, preserveTurnKeys))
+    await mutateBodyChat(store, binding, { seq: event.seq, groupId: data.groupId }, (chat) => {
+      const adopted = adoptImportedAnchorFloor(chat, session, data.groupId, projected.anchorMessageId)
+      return projectCandidateToChat(adopted, character?.card, input, projected)
+    })
     return
   }
 
   if (data.op === 'select') {
+    assertSelectPreState(session, data, event.seq)
     const projected = requireProjectedLedger(ledger, event.seq, data.groupId)
-    if (projected.selectedIndex !== data.index) {
-      throw new BodyLedgerError(
-        'invalid-body-event',
-        `body event seq ${event.seq} select index ${data.index} does not match ledger index ${projected.selectedIndex} for group '${data.groupId}'`,
-      )
-    }
-    await adoptImportedAnchorFloor(store, session, binding, data.groupId, projected.anchorMessageId)
-    await mutateBodyChat(store, binding, (chat) => applySelectToChat(chat, {
-      groupId: data.groupId,
-      index: data.index,
-      anchorMessageId: projected.anchorMessageId,
-    }))
+    await mutateBodyChat(store, binding, { seq: event.seq, groupId: data.groupId }, (chat) => applySelectToChat(
+      adoptImportedAnchorFloor(chat, session, data.groupId, projected.anchorMessageId),
+      {
+        groupId: data.groupId,
+        index: data.index,
+        anchorMessageId: projected.anchorMessageId,
+      },
+    ))
     return
   }
 
   if (data.op === 'edit') {
     const projected = requireProjectedLedger(ledger, event.seq, data.groupId)
-    if (projected.edits.get(data.index) !== data.text) {
-      throw new BodyLedgerError(
-        'invalid-body-event',
-        `body event seq ${event.seq} edit text does not match the folded edit at index ${data.index} for group '${data.groupId}'`,
-      )
-    }
+    // No post-fold comparison here: the fold applies this edit at `eventSeq`, so
+    // `edits.get(index) === data.text` is true by construction. The pre-event
+    // witness (`previousText`) is checked by `assertEditPreviousText` instead.
     const candidate = projected.candidates[data.index]
     if (candidate === undefined) {
       throw new BodyLedgerError(
@@ -186,34 +181,34 @@ export async function projectBodyEvent(
         `body event seq ${event.seq} edit for group '${data.groupId}' cannot resolve character '${binding.character}' to apply candidate receipts`,
       )
     }
-    const at = eventDate(event.time)
-    await adoptImportedAnchorFloor(store, session, binding, data.groupId, projected.anchorMessageId)
-    await mutateBodyChat(store, binding, (chat) => applyCandidateEditToChat(chat, character.card, {
-      ledger: projected,
-      groupId: data.groupId,
-      index: data.index,
-      messageId: candidate.messageId,
-      previousText: data.previousText,
-      text: data.text,
-      at,
-      eventSeq: event.seq,
-    }))
+    const at = eventDate(event.time, event.seq, event.type)
+    await mutateBodyChat(store, binding, { seq: event.seq, groupId: data.groupId }, (chat) => applyCandidateEditToChat(
+      adoptImportedAnchorFloor(chat, session, data.groupId, projected.anchorMessageId),
+      character.card,
+      {
+        ledger: projected,
+        groupId: data.groupId,
+        index: data.index,
+        messageId: candidate.messageId,
+        previousText: data.previousText,
+        text: data.text,
+        at,
+        eventSeq: event.seq,
+      },
+    ))
     return
   }
 
+  assertRestorePreState(session, data, event.seq)
   const projected = requireProjectedLedger(ledger, event.seq, data.groupId)
-  if (projected.anchorMessageId !== data.messageId || projected.selectedIndex !== data.index) {
-    throw new BodyLedgerError(
-      'invalid-body-event',
-      `body event seq ${event.seq} restore target '${data.messageId}' at index ${data.index} does not match ledger anchor '${projected.anchorMessageId}' at index ${projected.selectedIndex}`,
-    )
-  }
-  await adoptImportedAnchorFloor(store, session, binding, data.groupId, projected.anchorMessageId)
-  await mutateBodyChat(store, binding, (chat) => applyRestoreToChat(chat, {
-    groupId: data.groupId,
-    index: data.index,
-    messageId: data.messageId,
-  }))
+  await mutateBodyChat(store, binding, { seq: event.seq, groupId: data.groupId }, (chat) => applyRestoreToChat(
+    adoptImportedAnchorFloor(chat, session, data.groupId, projected.anchorMessageId),
+    {
+      groupId: data.groupId,
+      index: data.index,
+      messageId: data.messageId,
+    },
+  ))
 }
 
 /**
@@ -239,42 +234,49 @@ export function isBodyMergedAssistant(session: HostSessionLog, event: BodyProjec
  * without the body-group identity and any body event targeting them fails with
  * `body-floor-not-found`. The first such event adopts the chat's trailing
  * plugin-unaware assistant floor: the group binding is written and its ST
- * swipe surface is dropped, so this event's candidate projection behaves
- * exactly like the first operation on a live floor.
+ * swipe surface is snapshotted and dropped, so this event's candidate
+ * projection behaves exactly like the first operation on a live floor.
+ *
+ * Adoption runs on the caller's chat clone, inside the same CAS write as the
+ * operation that triggered it: any later failure in that operation discards
+ * the clone, so a dropped swipe surface can never be persisted on its own.
  *
  * Already-bound groups, non-mirror anchors and chats without an adoptable
  * floor are no-ops; the caller's projection then keeps its normal verdict
  * (including the pending checkpoint for genuinely lagging live floors).
  */
-async function adoptImportedAnchorFloor(
-  store: BodyProjectionStore,
+function adoptImportedAnchorFloor(
+  chat: ChatLogIR,
   session: HostSessionLog,
-  binding: Extract<TavernSessionBinding, { architecture: 'agent-tavern' }>,
   groupId: string,
   anchorMessageId: string | undefined,
-): Promise<void> {
-  if (anchorMessageId === undefined) return
+): ChatLogIR {
+  if (anchorMessageId === undefined) return chat
   const sessionId = typeof session.id === 'string' && session.id !== '' ? session.id : undefined
-  if (sessionId === undefined) return
-  if (!isImportedMirrorAnchor(session, anchorMessageId)) return
+  if (sessionId === undefined) return chat
+  const anchorText = importedMirrorAnchorText(session, anchorMessageId)
+  if (anchorText === undefined) return chat
 
-  await mutateBodyChat(store, binding, (chat) => {
-    if (findBodyFloorIndexByGroupId(chat, groupId) !== undefined) return undefined
-    if (findBodyFloorIndexByMessageId(chat, anchorMessageId) !== undefined) return undefined
-    try {
-      return applyFloorAdoptionToChat(chat, { groupId, sessionId, anchorMessageId })
-    } catch (error) {
-      // No plugin-unaware floor to adopt: keep the ordinary projection verdict.
-      if (error instanceof BodyJsonlProjectionError && (error.code === 'body-floor-not-found' || error.code === 'body-group-mismatch')) {
-        return undefined
-      }
-      throw error
+  try {
+    return applyFloorAdoptionToChat(chat, { groupId, sessionId, anchorMessageId, anchorText })
+  } catch (error) {
+    // No plugin-unaware floor to adopt: keep the ordinary projection verdict.
+    if (error instanceof BodyJsonlProjectionError
+      && (error.code === 'body-floor-not-found' || error.code === 'body-group-mismatch')) {
+      return chat
     }
-  })
+    throw error
+  }
 }
 
-/** Whether the anchor assistant message is an AgentTavern history-import mirror. */
-function isImportedMirrorAnchor(session: HostSessionLog, anchorMessageId: string): boolean {
+/**
+ * Text of the AgentTavern history-import mirror with this assistant message id.
+ *
+ * The text is the adoption witness: the chosen chat floor must carry the same
+ * text, otherwise it is not the mirror of this anchor and adopting it would
+ * bind the body group to the wrong floor.
+ */
+function importedMirrorAnchorText(session: HostSessionLog, anchorMessageId: string): string | undefined {
   let found: BodyProjectionEvent | undefined
   for (const event of sessionEvents(session) as readonly BodyProjectionEvent[]) {
     if (event.type !== 'assistant/message') continue
@@ -282,8 +284,11 @@ function isImportedMirrorAnchor(session: HostSessionLog, anchorMessageId: string
     if (message?.['id'] !== anchorMessageId) continue
     if (found === undefined || event.seq >= found.seq) found = event
   }
-  if (found === undefined) return false
-  return isTavernSessionMarker(plainObjectRecord(plainObjectRecord(found.data)?.['message'])?.['source'])
+  if (found === undefined) return undefined
+  const message = plainObjectRecord(plainObjectRecord(found.data)?.['message'])
+  if (!isTavernSessionMarker(message?.['source'])) return undefined
+  const text = messageText(message?.['content'])
+  return text === '' ? undefined : text
 }
 
 /* ---------------------- candidate merge + MVU patch ----------------------- */
@@ -301,16 +306,17 @@ function isImportedMirrorAnchor(session: HostSessionLog, anchorMessageId: string
  * or an existing receipt means the patch already ran, so the candidate merges
  * with its stored text and the variable tree stays untouched.
  *
- * `preserveTurnKeys` is the active group's candidate key set; the receipt append
- * uses it so sibling candidates survive ring pressure (proposal 0023 §3.6).
+ * `ledger` supplies the active group's candidate keys when (and only when) a
+ * receipt is actually written, so a candidate id the receipt-key grammar cannot
+ * encode never blocks a projection that needs no receipt.
  */
 function projectCandidateToChat(
   chat: ChatLogIR,
   card: CharacterCardIR | undefined,
   input: BodyJsonlCandidateInput,
-  preserveTurnKeys: ReadonlySet<string>,
+  ledger: BodyLedger,
 ): ChatLogIR {
-  const existingText = existingCandidateText(chat, input.groupId, input.index)
+  const existingText = existingCandidateText(chat, input.groupId, input.messageId, input.index)
   const receiptExists = mvuReceiptsForBody(chat, { messageId: input.messageId }).length > 0
   if (card === undefined
     || !cardUsesJsrMvu(card)
@@ -328,6 +334,10 @@ function projectCandidateToChat(
   const applied = applyUpdateVariableToChat(card, chat, input.text)
   const next = applyCandidateToChat(chat, { ...input, text: applied.text })
   if (!applied.found) return next
+  // Lazy on purpose: this is the first point where a receipt is certain. An
+  // unencodable message id fails closed here instead of rejecting every
+  // candidate projection on the floor.
+  const preserveTurnKeys = candidatePreserveKeys(ledger)
   recordMvuTurnReceipt(next, before, {
     turnKey: `body:${input.messageId}`,
     failures: applied.failures,
@@ -339,10 +349,19 @@ function projectCandidateToChat(
 /**
  * Text already stored in the candidate slot. A present slot means a previous
  * projection (or a successful CAS attempt) already merged this candidate.
+ *
+ * The fallback locator uses the candidate's native message id, never the group
+ * id: a body group id may equal another floor's projected message id, and
+ * reading that floor's swipes would project the wrong text.
  */
-function existingCandidateText(chat: ChatLogIR, groupId: string, index: number): string | undefined {
+function existingCandidateText(
+  chat: ChatLogIR,
+  groupId: string,
+  messageId: string,
+  index: number,
+): string | undefined {
   const byGroup = findBodyFloorIndexByGroupId(chat, groupId)
-  const floorIndex = byGroup === undefined ? findBodyFloorIndexByMessageId(chat, groupId) : byGroup
+  const floorIndex = byGroup === undefined ? findBodyFloorIndexByMessageId(chat, messageId) : byGroup
   if (floorIndex === undefined) return undefined
   const floor = chat.messages[floorIndex]
   const swipes = floor === undefined ? undefined : floor.swipes
@@ -378,20 +397,32 @@ function hasUpdateVariableBlock(text: string): boolean {
 
 /* -------------------------------- CAS writer ------------------------------- */
 
+/** Location of one body event, carried into store-level failures. */
+interface BodyProjectionSite {
+  readonly seq: number
+  readonly groupId: string
+}
+
 /**
  * CAS writer shared by the body projections.
  *
- * `mutate` returns the next chat, or `undefined` when the caller decided no
- * write is needed (adoption fast path); an unchanged decision never saves.
+ * `mutate` receives a fresh clone of the snapshot and returns the chat to save;
+ * a thrown error discards that clone, so multi-step transforms (imported-floor
+ * adoption plus candidate projection) land in one write or not at all.
  */
 async function mutateBodyChat(
   store: BodyProjectionStore,
   binding: Extract<TavernSessionBinding, { architecture: 'agent-tavern' }>,
+  site: BodyProjectionSite,
   mutate: (chat: ChatLogIR) => ChatLogIR | undefined,
 ): Promise<void> {
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const snapshot = await store.getChatSnapshot(binding.character, binding.chatId)
-    if (!snapshot) throw new Error('AgentTavern body projection target chat not found')
+    if (!snapshot) {
+      throw new Error(
+        `AgentTavern body projection target chat not found: chat '${binding.chatId}' of '${binding.character}' at body event seq ${site.seq} for group '${site.groupId}'`,
+      )
+    }
     const next = mutate(structuredClone(snapshot.chat))
     if (next === undefined) return
     try {
@@ -536,10 +567,95 @@ function assertEditPreviousText(
   }
 }
 
+/**
+ * Fold one group's ledger strictly before `eventSeq`.
+ *
+ * `foldBodyLedger` takes an inclusive watermark, so the state a record was
+ * written against is the fold at `eventSeq - 1`. Seq 0 has no earlier state.
+ */
+function foldBefore(session: HostSessionLog, groupId: string, eventSeq: number): BodyLedger | undefined {
+  if (eventSeq === 0) return undefined
+  return foldBodyLedger(bodySessionEvents(session), groupId, eventSeq - 1)
+}
+
+/** Whether an `assistant/message` at or before `uptoSeq` carries this message id. */
+function hasAssistantMessage(session: HostSessionLog, messageId: string, uptoSeq: number): boolean {
+  if (messageId === '' || uptoSeq < 0) return false
+  for (const event of sessionEvents(session) as readonly BodyProjectionEvent[]) {
+    if (event.type !== 'assistant/message') continue
+    if (!Number.isSafeInteger(event.seq) || event.seq < 0 || event.seq > uptoSeq) continue
+    if (plainObjectRecord(plainObjectRecord(event.data)?.['message'])?.['id'] === messageId) return true
+  }
+  return false
+}
+
+/**
+ * Pre-state guard for a `select` record.
+ *
+ * Comparing the folded selection with the record cannot fail: the fold applies
+ * this select at the event's own watermark and rejects an out-of-range slot as
+ * `invalid-body-index`, and a select never changes the candidate list. So the
+ * only checkable pre-state fact is the floor the selection starts from: the
+ * ledger folded at `seq - 1` must name an anchor that the session really
+ * carried as an assistant message. That is not fold-guaranteed — a `restore`
+ * record may rebind the anchor to any message id — and a selection that starts
+ * from a phantom anchor would move the surface to a floor that never existed.
+ *
+ * The target index itself is guaranteed by the fold and is not re-checked.
+ */
+function assertSelectPreState(
+  session: HostSessionLog,
+  data: Extract<BodyEventData, { op: 'select' }>,
+  eventSeq: number,
+): void {
+  const before = foldBefore(session, data.groupId, eventSeq)
+  if (before === undefined) {
+    throw new BodyLedgerError(
+      'invalid-body-event',
+      `body event seq ${eventSeq} select for group '${data.groupId}' has no candidate before its watermark`,
+    )
+  }
+  if (!hasAssistantMessage(session, before.anchorMessageId, eventSeq - 1)) {
+    throw new BodyLedgerError(
+      'invalid-body-event',
+      `body event seq ${eventSeq} select for group '${data.groupId}' cannot be explained: the pre-event anchor '${before.anchorMessageId}' has no assistant message at or before seq ${eventSeq - 1}`,
+    )
+  }
+}
+
+/**
+ * Pre-state guard for a `restore` record.
+ *
+ * The fold rewrites the anchor to `data.messageId` and the selection to
+ * `data.index` itself, so comparing the folded ledger with the record is a
+ * tautology, and the index it accepted is already proven to be an existing
+ * candidate (`invalid-body-index` otherwise). What the fold never resolves is
+ * the restore *copy*: body restore appends a fresh `body-restore-<uuid>`
+ * assistant message before writing the record, and only the pre-event log can
+ * prove that message exists. A record naming a message the session never
+ * carried would rebind the floor anchor to a phantom body and leave the
+ * projection without the merged copy it expects.
+ *
+ * `candidates` / `edits` are append/edit-only in the fold switch, so a restore
+ * cannot tamper with another candidate; that half is fold-guaranteed.
+ */
+function assertRestorePreState(
+  session: HostSessionLog,
+  data: Extract<BodyEventData, { op: 'restore' }>,
+  eventSeq: number,
+): void {
+  if (!hasAssistantMessage(session, data.messageId, eventSeq - 1)) {
+    throw new BodyLedgerError(
+      'invalid-body-event',
+      `body event seq ${eventSeq} restore for group '${data.groupId}' names '${data.messageId}' at index ${data.index}, but no assistant message before seq ${eventSeq - 1} carries that id`,
+    )
+  }
+}
+
 /* ------------------------- candidate message lookup ------------------------ */
 
 interface ResolvedBodyCandidate {
-  readonly time: number
+  readonly at: string
   readonly text: string
   readonly provider?: string
   readonly model?: string
@@ -580,7 +696,7 @@ function resolveBodyCandidateMessage(
   const model = nonEmptyStringOf(source?.['model'])
   const usage = bodyUsage(plainObjectRecord(found.data)?.['usage'], found.seq)
   return {
-    time: found.time,
+    at: eventDate(found.time, found.seq, found.type),
     text,
     ...(provider === undefined ? {} : { provider }),
     ...(model === undefined ? {} : { model }),
@@ -622,6 +738,21 @@ function messageText(content: unknown): string {
     .trim()
 }
 
-function eventDate(time: number): string {
-  return new Date(Number.isFinite(time) ? time : Date.now()).toISOString()
+/** Largest millisecond value a `Date` can represent (±100,000,000 days). */
+const MAX_DATE_MILLISECONDS = 8.64e15
+
+/**
+ * ISO timestamp of a session event.
+ *
+ * A wall-clock fallback would make replay non-reproducible, so an unusable
+ * event time is a hard error instead.
+ */
+function eventDate(time: number, seq: number, type: string): string {
+  if (!Number.isSafeInteger(time) || time < 0 || time > MAX_DATE_MILLISECONDS) {
+    throw new BodyLedgerError(
+      'invalid-body-event',
+      `session event '${type}' at seq ${seq} has unusable time ${String(time)}; expected a non-negative safe integer within the Date range`,
+    )
+  }
+  return new Date(time).toISOString()
 }

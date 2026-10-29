@@ -16,7 +16,7 @@ import {
   type SettleIntentOpenEntry,
   type WriteJournalSession,
 } from '../src/agent-tavern/body-settle-intent.js'
-import { appendMvuReceipt, readMvuReceipts } from '../src/mvu.js'
+import { appendMvuReceipt, MVU_RECEIPTS_LIMIT, MVU_SETTLE_RECEIPTS_RESERVED, readMvuReceipts, type MvuReceipt } from '../src/mvu.js'
 import { TavernStore, VariableStore } from '../../tavern-store/src/index.js'
 
 const CHARACTER = 'Settle Character'
@@ -48,6 +48,7 @@ interface SettleSession {
 interface SettleHarness {
   readonly session: SettleSession
   failIntentPhase: 'open' | 'extend' | 'decide' | 'abort' | 'commit' | 'recovered' | undefined
+  failIntentOnce: boolean
 }
 
 let sessionSeq = 0
@@ -62,12 +63,14 @@ function createSettleSession(): SettleHarness {
   sessionSeq += 1
   const harness: SettleHarness = {
     failIntentPhase: undefined,
+    failIntentOnce: false,
     session: {
       id: `settle-session-${sessionSeq}`,
       events,
       appendPluginRecord: (type: string, data: unknown): number => {
         const phase = asRecord(data)['phase']
         if (type === SETTLE_INTENT_EVENT_TYPE && phase === harness.failIntentPhase) {
+          if (harness.failIntentOnce) harness.failIntentPhase = undefined
           throw new Error(`synthetic settle intent append failure for phase '${String(phase)}'`)
         }
         const seq = events.length
@@ -108,6 +111,7 @@ interface SettleToolResult {
     readonly failures: readonly string[]
     readonly changes: ReadonlyArray<Record<string, unknown>>
   }
+  readonly warnings?: readonly string[]
 }
 
 describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
@@ -191,6 +195,10 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     const binding = state.sessionBindings.native!
     return { store, chat: (await store.getChat(binding.character, binding.chatId))! }
   }
+  const readChat = async (id: string) => {
+    const store = await TavernStore.open(join(home, 'soulmojito'))
+    return (await store.getChat(CHARACTER, id))!
+  }
   const seedVariable = async (name: string, value: string | number): Promise<void> => {
     await (await VariableStore.open(join(home, 'soulmojito'))).set('chat', chatId, name, value)
   }
@@ -266,7 +274,58 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     }))
     return { agentId, chatId: ruleChatId }
   }
-  const settleRules = async (
+  // A schema-guarded chat for clamp/reject replay tests: favor clamps to
+  // [0, 10] and mood only accepts the declared enum.
+  let schemaChatSeq = 0
+  const createSchemaChat = async (): Promise<{ agentId: string; chatId: string }> => {
+    schemaChatSeq += 1
+    const agentId = `schema-${schemaChatSeq}`
+    const store = await TavernStore.open(join(home, 'soulmojito'))
+    const schemaChatId = await store.createChat(CHARACTER, {
+      user_name: 'User',
+      character_name: CHARACTER,
+      chat_metadata: {
+        createdAt: new Date().toISOString(),
+        variables: {
+          $schema: {
+            mvu: {
+              favor: { $range: [0, 10] },
+              mood: { $enum: ['calm', 'tense'] },
+            },
+          },
+          mvu: { favor: 0, mood: 'calm' },
+        },
+      },
+    })
+    await store.updateState((state) => ({
+      sessionBindings: {
+        ...state.sessionBindings,
+        [agentId]: { architecture: 'agent-tavern', contextMode: 'dsh-native', character: CHARACTER, chatId: schemaChatId },
+      },
+    }))
+    return { agentId, chatId: schemaChatId }
+  }
+  // A plain chat isolates settle-intent tests from the shared receipt ring so
+  // their receipt deltas stay exact.
+  let plainChatSeq = 0
+  const createPlainChat = async (): Promise<{ agentId: string; chatId: string }> => {
+    plainChatSeq += 1
+    const agentId = `plain-${plainChatSeq}`
+    const store = await TavernStore.open(join(home, 'soulmojito'))
+    const plainChatId = await store.createChat(CHARACTER, {
+      user_name: 'User',
+      character_name: CHARACTER,
+      chat_metadata: { createdAt: new Date().toISOString() },
+    })
+    await store.updateState((state) => ({
+      sessionBindings: {
+        ...state.sessionBindings,
+        [agentId]: { architecture: 'agent-tavern', contextMode: 'dsh-native', character: CHARACTER, chatId: plainChatId },
+      },
+    }))
+    return { agentId, chatId: plainChatId }
+  }
+  const settleInChat = async (
     harness: SettleHarness,
     agentId: string,
     changes: unknown[],
@@ -496,7 +555,7 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
 
     expect(result.applied).toEqual(['settle.normal', 'settle.created'])
     const intents = readSettleIntents(harness.session.events)
-    expect(intents.map((intent) => intent.phase)).toEqual(['open', 'decide', 'commit'])
+    expect(intents.map((intent) => intent.phase)).toEqual(['open', 'extend', 'decide', 'commit'])
     const open = intents[0]
     if (open?.phase !== 'open') throw new Error('expected an open settle intent')
     expect(open).toMatchObject({
@@ -509,12 +568,20 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
       // The batch promises an opId-carrying receipt, so recovery may not fall
       // back to the legacy at + turnKey match for it.
       receiptOpId: true,
+      // The batch also promises post-guard values for every name it writes.
+      afterVersion: 2,
       items: [
         { name: 'settle.normal', before: 'before', after: 'after' },
         { name: 'settle.created', after: 1 },
       ],
     })
-    const decide = intents[1]
+    const extend = intents[1]
+    if (extend?.phase !== 'extend') throw new Error('expected an extend settle intent')
+    expect(extend.items).toEqual([
+      { name: 'settle.normal', effectiveAfter: 'after' },
+      { name: 'settle.created', effectiveAfter: 1 },
+    ])
+    const decide = intents[2]
     if (decide?.phase !== 'decide') throw new Error('expected a decide settle intent')
     // The decision carries the exact receipt the save persisted: recovery can
     // replay it without reading the receipt ring at all.
@@ -530,7 +597,7 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     const outcome = await recoverSettle(harness)
     expect(outcome).toMatchObject({ status: 'clean', pending: 0 })
     expect(foldSettleIntents(harness.session.events)).toEqual([])
-    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase)).toEqual(['open', 'decide', 'commit'])
+    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase)).toEqual(['open', 'extend', 'decide', 'commit'])
     expect(await readVariable('settle.normal')).toMatchObject({ value: 'after' })
     expect(await readVariable('settle.created')).toMatchObject({ value: 1 })
   })
@@ -558,12 +625,12 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     // the batch closes as aborted and the flat store keeps no written value.
     expect(await readVariable('settle.crash')).toMatchObject({ value: 'before' })
     expect(await readVariable('settle.crash.new')).toBeUndefined()
-    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase)).toEqual(['open', 'decide', 'abort'])
+    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase)).toEqual(['open', 'extend', 'decide', 'abort'])
     expect(readMvuReceipts((await boundChat()).chat)).toHaveLength(receiptsBefore)
 
     const outcome = await recoverSettle(harness)
     expect(outcome).toMatchObject({ status: 'clean', pending: 0 })
-    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase)).toEqual(['open', 'decide', 'abort'])
+    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase)).toEqual(['open', 'extend', 'decide', 'abort'])
     expect(readMvuReceipts((await boundChat()).chat)).toHaveLength(receiptsBefore)
     expect((await boundChat()).chat.messages).toHaveLength(messagesBefore)
     expect(harness.session.events.filter((event) => asRecord(event)['type'] === 'assistant/message')).toEqual([])
@@ -571,7 +638,7 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     // An aborted intent is closed: a later startup pass writes nothing.
     const again = await recoverSettle(harness)
     expect(again).toMatchObject({ status: 'clean', pending: 0 })
-    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase)).toEqual(['open', 'decide', 'abort'])
+    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase)).toEqual(['open', 'extend', 'decide', 'abort'])
     expect(await readVariable('settle.crash')).toMatchObject({ value: 'before' })
   })
 
@@ -635,7 +702,7 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     // The decision is final: the flat write stands and no receipt was saved.
     expect(await readVariable('settle.replay')).toMatchObject({ value: 'after' })
     expect(readMvuReceipts((await boundChat()).chat)).toHaveLength(receiptsBefore)
-    expect(readSettleIntents(harness.session.events).map((entry) => entry.phase)).toEqual(['open', 'decide'])
+    expect(readSettleIntents(harness.session.events).map((entry) => entry.phase)).toEqual(['open', 'extend', 'decide'])
     const decide = readSettleIntents(harness.session.events).find((entry) => entry.phase === 'decide')
     if (decide?.phase !== 'decide') throw new Error('expected a decide settle intent')
 
@@ -646,7 +713,7 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     expect(stored).toHaveLength(receiptsBefore + 1)
     expect(stored.at(-1)).toEqual(decide.receipt)
     expect(await readVariable('settle.replay')).toMatchObject({ value: 'after' })
-    expect(readSettleIntents(harness.session.events).map((entry) => entry.phase)).toEqual(['open', 'decide', 'commit'])
+    expect(readSettleIntents(harness.session.events).map((entry) => entry.phase)).toEqual(['open', 'extend', 'decide', 'commit'])
 
     // The decision was consumed: a second startup pass writes nothing.
     const again = await recoverDecisions(harness)
@@ -717,7 +784,7 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     expect(lines).toHaveLength(1)
     expect(lines[0]).toEqual(sentinel)
     expect(readMvuReceipts((await boundChat()).chat).at(-1)).toEqual(decide.receipt)
-    expect(readSettleIntents(harness.session.events).map((entry) => entry.phase)).toEqual(['open', 'decide', 'commit'])
+    expect(readSettleIntents(harness.session.events).map((entry) => entry.phase)).toEqual(['open', 'extend', 'decide', 'commit'])
   })
 
   it('keeps the commit marker when the recovery audit append fails', async () => {
@@ -746,7 +813,7 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
 
     // The receipt, save and commit all stand; only the audit line is missing.
     expect(outcome).toMatchObject({ restored: 0, committed: 1, replayed: 1, failed: 0 })
-    expect(readSettleIntents(harness.session.events).map((entry) => entry.phase)).toEqual(['open', 'decide', 'commit'])
+    expect(readSettleIntents(harness.session.events).map((entry) => entry.phase)).toEqual(['open', 'extend', 'decide', 'commit'])
     expect(readMvuReceipts((await boundChat()).chat).at(-1)).toEqual(decide.receipt)
     expect(await readVariable('settle.audit.down')).toMatchObject({ value: 'after' })
     expect(warnings).toHaveLength(1)
@@ -788,12 +855,12 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     // The decision still owns the batch: no flat rollback, intent still open.
     expect(await readVariable('settle.replay-conflict')).toMatchObject({ value: 'after' })
     expect(foldSettleIntents(harness.session.events)).toHaveLength(1)
-    expect(readSettleIntents(harness.session.events).map((entry) => entry.phase)).toEqual(['open', 'decide'])
+    expect(readSettleIntents(harness.session.events).map((entry) => entry.phase)).toEqual(['open', 'extend', 'decide'])
 
     const retried = await recoverDecisions(harness)
     expect(retried).toMatchObject({ restored: 0, committed: 1, replayed: 1, failed: 0 })
     expect(await readVariable('settle.replay-conflict')).toMatchObject({ value: 'after' })
-    expect(readSettleIntents(harness.session.events).map((entry) => entry.phase)).toEqual(['open', 'decide', 'commit'])
+    expect(readSettleIntents(harness.session.events).map((entry) => entry.phase)).toEqual(['open', 'extend', 'decide', 'commit'])
   })
 
   it('does not match a receipt without an opId to an exact-only decision', async () => {
@@ -856,8 +923,8 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     expect(readMvuReceipts((await boundChat()).chat)).toHaveLength(receiptsBefore)
     expect(await readMvuAudit(join(home, 'soulmojito'))).toHaveLength(auditBefore)
     const intents = readSettleIntents(harness.session.events)
-    expect(intents.map((entry) => entry.phase)).toEqual(['open', 'abort'])
-    expect(intents[1]).toMatchObject({ phase: 'abort', reason: 'commit decision was not recorded' })
+    expect(intents.map((entry) => entry.phase)).toEqual(['open', 'extend', 'abort'])
+    expect(intents[2]).toMatchObject({ phase: 'abort', reason: 'commit decision was not recorded' })
 
     const outcome = await recoverSettle(harness)
     expect(outcome).toMatchObject({ status: 'clean', pending: 0 })
@@ -896,7 +963,7 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
       throw new Error('synthetic rule crash before saveChat')
     }
     try {
-      await expect(settleRules(harness, target.agentId, [{ name: 'mvu.favor', value: 10 }]))
+      await expect(settleInChat(harness, target.agentId, [{ name: 'mvu.favor', value: 10 }]))
         .rejects.toThrow('synthetic rule crash before saveChat')
     } finally {
       TavernStore.prototype.saveChat = original
@@ -906,7 +973,7 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     expect(await readRuleVariable(target.chatId, 'mvu.favor')).toMatchObject({ value: 0 })
     expect(await readRuleVariable(target.chatId, 'mvu.derived')).toMatchObject({ value: 1 })
     const intents = readSettleIntents(harness.session.events)
-    expect(intents.map((intent) => intent.phase)).toEqual(['open', 'extend', 'decide', 'abort'])
+    expect(intents.map((intent) => intent.phase)).toEqual(['open', 'extend', 'extend', 'decide', 'abort'])
     const open = intents[0]
     const extend = intents[1]
     if (open?.phase !== 'open' || extend?.phase !== 'extend') {
@@ -914,24 +981,34 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     }
     expect(extend.opId).toBe(open.opId)
     expect(extend.items).toEqual([{ name: 'mvu.derived', before: 1, after: 20 }])
+    // The second extend records the post-guard values the store accepted.
+    expect(intents[2]).toMatchObject({
+      phase: 'extend',
+      items: [
+        { name: 'mvu.favor', effectiveAfter: 10 },
+        { name: 'mvu.derived', effectiveAfter: 20 },
+      ],
+    })
 
     const outcome = await recoverSettle(harness)
     expect(outcome).toMatchObject({ status: 'clean', pending: 0 })
     expect(await readRuleVariable(target.chatId, 'mvu.favor')).toMatchObject({ value: 0 })
     expect(await readRuleVariable(target.chatId, 'mvu.derived')).toMatchObject({ value: 1 })
     expect(readSettleIntents(harness.session.events).map((intent) => intent.phase))
-      .toEqual(['open', 'extend', 'decide', 'abort'])
+      .toEqual(['open', 'extend', 'extend', 'decide', 'abort'])
   })
 
   it('skips every rule flat write when the extend intent append fails', async () => {
     installSettleHost()
     const harness = createSettleSession()
+    // Fail only the rule extend, not the later effective-value extend.
     harness.failIntentPhase = 'extend'
+    harness.failIntentOnce = true
     const target = await createRuleChat()
     await seedRuleVariable(target.chatId, 'mvu.favor', 0)
     await seedRuleVariable(target.chatId, 'mvu.derived', 1)
 
-    const result = await settleRules(harness, target.agentId, [{ name: 'mvu.favor', value: 10 }])
+    const result = await settleInChat(harness, target.agentId, [{ name: 'mvu.favor', value: 10 }])
 
     expect(result.applied).toEqual(['mvu.favor'])
     expect(result.failed).toEqual([])
@@ -940,7 +1017,7 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     expect(result.receipt.changes).toEqual([{ name: 'mvu.favor', before: 0, after: 10 }])
     expect(await readRuleVariable(target.chatId, 'mvu.favor')).toMatchObject({ value: 10 })
     expect(await readRuleVariable(target.chatId, 'mvu.derived')).toMatchObject({ value: 1 })
-    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase)).toEqual(['open', 'decide', 'commit'])
+    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase)).toEqual(['open', 'extend', 'decide', 'commit'])
   })
 
   it('restores the earliest before when a request and a rule write the same name', async () => {
@@ -954,7 +1031,7 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
       throw new Error('synthetic same-name crash before saveChat')
     }
     try {
-      await expect(settleRules(harness, target.agentId, [
+      await expect(settleInChat(harness, target.agentId, [
         { name: 'mvu.favor', value: 10 },
         { name: 'mvu.derived', value: 7 },
       ])).rejects.toThrow('synthetic same-name crash before saveChat')
@@ -976,7 +1053,7 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
       { name: 'mvu.derived', before: 1, after: 7 },
     ])
     expect(extend.items).toEqual([{ name: 'mvu.derived', before: 7, after: 20 }])
-    expect(intents.map((intent) => intent.phase)).toEqual(['open', 'extend', 'decide', 'abort'])
+    expect(intents.map((intent) => intent.phase)).toEqual(['open', 'extend', 'extend', 'decide', 'abort'])
 
     const outcome = await recoverSettle(harness)
     expect(outcome).toMatchObject({ status: 'clean', pending: 0 })
@@ -991,7 +1068,7 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     await seedRuleVariable(target.chatId, 'mvu.favor', 0)
     await seedRuleVariable(target.chatId, 'mvu.derived', 1)
 
-    const result = await settleRules(harness, target.agentId, [{ name: 'mvu.favor', value: 10 }])
+    const result = await settleInChat(harness, target.agentId, [{ name: 'mvu.favor', value: 10 }])
 
     expect(result.receipt.status).toBe('updated')
     expect(result.receipt.changes).toEqual([
@@ -999,11 +1076,94 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
       { name: 'mvu.derived', before: 1, after: 20, reason: 'rule:double-favor' },
     ])
     expect(readSettleIntents(harness.session.events).map((intent) => intent.phase))
-      .toEqual(['open', 'extend', 'decide', 'commit'])
+      .toEqual(['open', 'extend', 'extend', 'decide', 'commit'])
     const outcome = await recoverSettle(harness)
     expect(outcome).toMatchObject({ status: 'clean', pending: 0 })
     expect(await readRuleVariable(target.chatId, 'mvu.favor')).toMatchObject({ value: 10 })
     expect(await readRuleVariable(target.chatId, 'mvu.derived')).toMatchObject({ value: 20 })
+  })
+
+  it('replays the post-guard value when the abort marker fails', async () => {
+    installSettleHost()
+    const harness = createSettleSession()
+    const target = await createSchemaChat()
+    await seedRuleVariable(target.chatId, 'mvu.favor', 0)
+    await seedRuleVariable(target.chatId, 'mvu.mood', 'calm')
+    const original = TavernStore.prototype.saveChat
+    TavernStore.prototype.saveChat = async function (): Promise<string> {
+      throw new Error('synthetic schema crash before saveChat')
+    }
+    harness.failIntentPhase = 'abort'
+    try {
+      await expect(settleInChat(harness, target.agentId, [
+        { name: 'mvu.favor', value: 999 },
+        { name: 'mvu.mood', value: 'angry' },
+      ])).rejects.toThrow(/could not append its abort marker/)
+    } finally {
+      TavernStore.prototype.saveChat = original
+      harness.failIntentPhase = undefined
+    }
+
+    // The replay wrote the clamped value, never the raw 999; the guard-rejected
+    // mood item produced no write at all.
+    expect(await readRuleVariable(target.chatId, 'mvu.favor')).toMatchObject({ value: 10 })
+    expect(await readRuleVariable(target.chatId, 'mvu.mood')).toMatchObject({ value: 'calm' })
+    const intents = readSettleIntents(harness.session.events)
+    expect(intents.map((entry) => entry.phase)).toEqual(['open', 'extend', 'decide'])
+    const open = intents[0]
+    const extend = intents[1]
+    if (open?.phase !== 'open' || extend?.phase !== 'extend') {
+      throw new Error('expected an open and an extend settle intent')
+    }
+    // The open record keeps the raw request values; the extend carries only the
+    // post-guard value the store accepted.
+    expect(open.items).toEqual([
+      { name: 'mvu.favor', before: 0, after: 999 },
+      { name: 'mvu.mood', before: 'calm', after: 'angry' },
+    ])
+    expect(extend.items).toEqual([{ name: 'mvu.favor', effectiveAfter: 10 }])
+
+    const outcome = await recoverDecisions(harness)
+    expect(outcome).toMatchObject({ restored: 0, committed: 1, replayed: 1, failed: 0 })
+    expect(await readRuleVariable(target.chatId, 'mvu.favor')).toMatchObject({ value: 10 })
+    expect(await readRuleVariable(target.chatId, 'mvu.mood')).toMatchObject({ value: 'calm' })
+  })
+
+  it('rejects malformed effective-after tracking instead of guessing', () => {
+    const at = new Date().toISOString()
+    const open = {
+      kind: 'settle-intent',
+      phase: 'open',
+      opId: 'settle-after-version',
+      sessionId: 'native',
+      character: CHARACTER,
+      scope: 'chat',
+      scopeId: chatId,
+      turnKey: '2',
+      receiptAt: at,
+      at,
+      receiptOpId: true,
+      afterVersion: 2,
+      items: [{ name: 'mvu.favor', effectiveAfter: 1 }],
+    }
+    const event = (data: unknown) => [{ seq: 0, type: SETTLE_INTENT_EVENT_TYPE, data }]
+
+    expect(() => readSettleIntents(event({ ...open, afterVersion: 3 }))).toThrow(/afterVersion/)
+    expect(() => readSettleIntents(event({ ...open, items: [{ name: 'mvu.favor', effectiveAfter: (): number => 1 }] })))
+      .toThrow(/effectiveAfter/)
+    // An open record carrying effective values must declare their version.
+    expect(() => readSettleIntents(event({ ...open, afterVersion: undefined }))).toThrow(/afterVersion/)
+    // A legacy open record has no afterVersion, so an effective extend cannot
+    // be folded into it: replay would have to guess.
+    const legacy = { ...open, afterVersion: undefined, items: [{ name: 'mvu.favor', after: 1 }] }
+    const extend = {
+      kind: 'settle-intent', phase: 'extend', opId: open.opId, sessionId: 'native', at,
+      items: [{ name: 'mvu.favor', effectiveAfter: 2 }],
+    }
+    expect(() => foldSettleIntents([
+      { seq: 0, type: SETTLE_INTENT_EVENT_TYPE, data: legacy },
+      { seq: 1, type: SETTLE_INTENT_EVENT_TYPE, data: extend },
+    ])).toThrow(/afterVersion 2/)
   })
 
   it('closes an earlier failed intent when a retry commits', async () => {
@@ -1020,62 +1180,66 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     } finally {
       TavernStore.prototype.saveChat = original
     }
-    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase)).toEqual(['open', 'decide', 'abort'])
+    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase)).toEqual(['open', 'extend', 'decide', 'abort'])
 
     const retried = await settleWith(harness, [{ name: 'settle.retry', value: 'third' }])
 
     expect(retried.applied).toEqual(['settle.retry'])
     expect(readSettleIntents(harness.session.events).map((intent) => intent.phase))
-      .toEqual(['open', 'decide', 'abort', 'open', 'decide', 'commit'])
+      .toEqual(['open', 'extend', 'decide', 'abort', 'open', 'extend', 'decide', 'commit'])
     const outcome = await recoverSettle(harness)
     expect(outcome).toMatchObject({ status: 'clean', pending: 0 })
     expect(foldSettleIntents(harness.session.events)).toEqual([])
     expect(await readVariable('settle.retry')).toMatchObject({ value: 'third' })
   })
 
-  it('audits a superseded decided intent without replaying its receipt', async () => {
+  it('persists a superseded decided receipt and audits it without replaying', async () => {
     installSettleHost()
     const harness = createSettleSession()
     await seedVariable('settle.supersede', 'first')
     const receiptsBefore = readMvuReceipts((await boundChat()).chat).length
-    // A commit append failure leaves the first intent open with a stored receipt.
+    // A commit append failure now only warns: the first batch committed, and
+    // its intent stays open until a later settle or startup recovery closes it.
     harness.failIntentPhase = 'commit'
+    let first: SettleToolResult
     try {
-      await expect(settleWith(harness, [{ name: 'settle.supersede', value: 'second' }]))
-        .rejects.toThrow(/settle intent commit record/)
+      first = await settleWith(harness, [{ name: 'settle.supersede', value: 'second' }])
     } finally {
       harness.failIntentPhase = undefined
     }
+    expect(first.warnings?.[0]).toContain('stayed open')
     const oldIntents = readSettleIntents(harness.session.events)
     const oldOpen = oldIntents[0]
-    const oldDecide = oldIntents[1]
+    const oldDecide = oldIntents[2]
     if (oldOpen?.phase !== 'open' || oldDecide?.phase !== 'decide') {
       throw new Error('expected an open and a decide settle intent')
     }
     const firstStored = readMvuReceipts((await boundChat()).chat)
     expect(firstStored).toHaveLength(receiptsBefore + 1)
     expect(firstStored.at(-1)).toEqual(oldDecide.receipt)
-    expect((await readMvuAudit(join(home, 'soulmojito'))).some((entry) => entry.opId === oldOpen.opId)).toBe(false)
 
     const retried = await settleWith(harness, [{ name: 'settle.supersede', value: 'third' }])
     expect(retried.receipt.changes).toEqual([{ name: 'settle.supersede', before: 'second', after: 'third' }])
     const intents = readSettleIntents(harness.session.events)
-    expect(intents.map((entry) => entry.phase)).toEqual(['open', 'decide', 'open', 'decide', 'commit', 'commit'])
-    const newOpen = intents[2]
+    expect(intents.map((entry) => entry.phase)).toEqual([
+      'open', 'extend', 'decide', 'open', 'extend', 'decide', 'commit', 'commit',
+    ])
+    const newOpen = intents[3]
     if (newOpen?.phase !== 'open') throw new Error('expected the retry open settle intent')
-    expect(intents[4]).toMatchObject({
+    expect(intents[6]).toMatchObject({
       phase: 'commit',
       opId: oldOpen.opId,
       reason: `superseded by ${newOpen.opId}`,
     })
-    // The superseded intent adds no second receipt, and the new settle owns
-    // the flat value.
+    // The superseded receipt is already stored exactly once and the new settle
+    // owns the flat value.
     const stored = readMvuReceipts((await boundChat()).chat)
     expect(stored).toHaveLength(receiptsBefore + 2)
+    expect(stored.filter((receipt) => receipt.opId === oldOpen.opId)).toHaveLength(1)
     expect(await readVariable('settle.supersede')).toMatchObject({ value: 'third' })
 
     const audit = await readMvuAudit(join(home, 'soulmojito'))
-    const superseded = audit.filter((entry) => entry.opId === oldOpen.opId)
+    const superseded = audit.filter((entry) => entry.supersededBy === newOpen.opId)
     expect(superseded).toHaveLength(1)
     expect(superseded[0]).toMatchObject({
       opId: oldOpen.opId,
@@ -1090,20 +1254,130 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     expect(current[0]!.supersededBy).toBeUndefined()
   })
 
+  it('persists the receipt of a superseded decided intent that never saved', async () => {
+    installSettleHost()
+    const harness = createSettleSession()
+    const target = await createPlainChat()
+    await seedRuleVariable(target.chatId, 'settle.carry', 'first')
+    const receiptsBefore = readMvuReceipts(await readChat(target.chatId)).length
+    const original = TavernStore.prototype.saveChat
+    TavernStore.prototype.saveChat = async function (): Promise<string> {
+      throw new Error('synthetic crash between decide and saveChat')
+    }
+    harness.failIntentPhase = 'abort'
+    try {
+      await expect(settleInChat(harness, target.agentId, [{ name: 'settle.carry', value: 'second' }]))
+        .rejects.toThrow(/could not append its abort marker/)
+    } finally {
+      TavernStore.prototype.saveChat = original
+      harness.failIntentPhase = undefined
+    }
+    const oldDecide = readSettleIntents(harness.session.events).find((entry) => entry.phase === 'decide')
+    if (oldDecide?.phase !== 'decide') throw new Error('expected a decide settle intent')
+    // The decision is durable but its receipt never reached the chat.
+    expect(readMvuReceipts(await readChat(target.chatId))).toHaveLength(receiptsBefore)
+    expect(foldSettleIntents(harness.session.events)).toHaveLength(1)
+
+    const retried = await settleInChat(harness, target.agentId, [{ name: 'settle.carry', value: 'third' }])
+
+    // The superseded decision is evidence: its receipt lands with the retry's
+    // save, so the old batch's flat writes stay rollback-able.
+    const stored = readMvuReceipts(await readChat(target.chatId))
+    expect(stored).toHaveLength(receiptsBefore + 2)
+    expect(stored.some((receipt) => receipt.opId === oldDecide.opId)).toBe(true)
+    expect(stored.at(-1)).toEqual(retried.receipt)
+    expect(retried.receipt.changes).toEqual([{ name: 'settle.carry', before: 'second', after: 'third' }])
+    expect(foldSettleIntents(harness.session.events)).toEqual([])
+  })
+
+  it('restores an undecided superseded intent before the retry snapshots before', async () => {
+    installSettleHost()
+    const harness = createSettleSession()
+    const target = await createPlainChat()
+    await seedRuleVariable(target.chatId, 'settle.undecided', 'clean')
+    const at = new Date().toISOString()
+    const opId = 'settle-undecided-open'
+    harness.session.appendPluginRecord(SETTLE_INTENT_EVENT_TYPE, {
+      kind: 'settle-intent',
+      phase: 'open',
+      opId,
+      sessionId: 'native',
+      character: CHARACTER,
+      scope: 'chat',
+      scopeId: target.chatId,
+      turnKey: '0',
+      receiptAt: at,
+      at,
+      receiptOpId: true,
+      afterVersion: 2,
+      items: [{ name: 'settle.undecided', before: 'clean', after: 'dirty' }],
+    })
+    // The crashed batch wrote its value but died before the decision.
+    const seedStore = await VariableStore.open(join(home, 'soulmojito'))
+    const seeded = await seedStore.get('chat', target.chatId, 'settle.undecided')
+    await seedStore.set('chat', target.chatId, 'settle.undecided', 'dirty', seeded?.revision)
+
+    const result = await settleInChat(harness, target.agentId, [{ name: 'settle.undecided', value: 'new' }])
+
+    // The retry read `before` after the undo, so its receipt starts from the
+    // clean value instead of the uncommitted dirty one.
+    expect(result.receipt.changes).toEqual([{ name: 'settle.undecided', before: 'clean', after: 'new' }])
+    expect(readSettleIntents(harness.session.events).map((entry) => entry.phase)).toEqual([
+      'open', 'recovered', 'open', 'extend', 'decide', 'commit',
+    ])
+    expect(await readRuleVariable(target.chatId, 'settle.undecided')).toMatchObject({ value: 'new' })
+    expect(foldSettleIntents(harness.session.events)).toEqual([])
+  })
+
+  it('leaves an undecided superseded intent open when its rollback fails', async () => {
+    installSettleHost()
+    const harness = createSettleSession()
+    const target = await createPlainChat()
+    const at = new Date().toISOString()
+    const opId = 'settle-undecided-broken'
+    harness.session.appendPluginRecord(SETTLE_INTENT_EVENT_TYPE, {
+      kind: 'settle-intent',
+      phase: 'open',
+      opId,
+      sessionId: 'native',
+      character: CHARACTER,
+      scope: 'chat',
+      scopeId: target.chatId,
+      turnKey: '0',
+      receiptAt: at,
+      at,
+      receiptOpId: true,
+      afterVersion: 2,
+      // The store rejects this name, so the restore throws before any undo.
+      items: [{ name: 'bad name!', before: 'clean', after: 'dirty' }],
+    })
+
+    await expect(settleInChat(harness, target.agentId, [{ name: 'settle.after-failure', value: 1 }]))
+      .rejects.toThrow(/invalid variable name/)
+
+    // The failure aborts this call before any new intent or flat write: startup
+    // recovery still owns the open intent.
+    expect(foldSettleIntents(harness.session.events)).toHaveLength(1)
+    expect(readSettleIntents(harness.session.events).map((entry) => entry.phase)).toEqual(['open'])
+    expect(await readRuleVariable(target.chatId, 'settle.after-failure')).toBeUndefined()
+  })
+
   it('matches a recovered intent by opId, not by another settle at the same at and turnKey', async () => {
     installSettleHost()
     const harness = createSettleSession()
     await seedVariable('settle.opid.keep', 'old')
     await seedVariable('settle.opid.other', 'dirty')
     const receiptsBefore = readMvuReceipts((await boundChat()).chat).length
-    // A commit append failure leaves the intent open after its receipt persisted.
+    // A commit append failure now only warns: the intent stays open after its
+    // receipt persisted.
     harness.failIntentPhase = 'commit'
+    let first: SettleToolResult
     try {
-      await expect(settleWith(harness, [{ name: 'settle.opid.keep', value: 'committed' }]))
-        .rejects.toThrow(/settle intent commit record/)
+      first = await settleWith(harness, [{ name: 'settle.opid.keep', value: 'committed' }])
     } finally {
       harness.failIntentPhase = undefined
     }
+    expect(first.warnings?.[0]).toContain('stayed open')
     const own = readSettleIntents(harness.session.events).find((intent) => intent.phase === 'open')
     if (own?.phase !== 'open') throw new Error('expected an open settle intent')
     const stored = readMvuReceipts((await boundChat()).chat)
@@ -1124,7 +1398,7 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     expect(await readVariable('settle.opid.keep')).toMatchObject({ value: 'committed' })
     expect(await readVariable('settle.opid.other')).toMatchObject({ value: 'before' })
     expect(readSettleIntents(harness.session.events).map((intent) => intent.phase))
-      .toEqual(['open', 'decide', 'open', 'commit', 'recovered'])
+      .toEqual(['open', 'extend', 'decide', 'open', 'commit', 'recovered'])
   })
 
   it('keeps the legacy at + turnKey match for a receipt written without an opId', async () => {
@@ -1177,49 +1451,47 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     expect(await readVariable('settle.no-session')).toBeUndefined()
   })
 
-  it('surfaces a commit append failure and closes the saved decision from its receipt', async () => {
+  it('returns ok with warnings when the commit marker append fails after the save', async () => {
     installSettleHost()
     const harness = createSettleSession()
     harness.failIntentPhase = 'commit'
     await seedVariable('settle.commit', 'old')
     const receiptsBefore = readMvuReceipts((await boundChat()).chat).length
 
-    await expect(settleWith(harness, [{ name: 'settle.commit', value: 'new' }]))
-      .rejects.toThrow(/settle intent commit record/)
+    const result = await settleWith(harness, [{ name: 'settle.commit', value: 'new' }])
 
+    // The save already committed the batch: the closure failure is downgraded
+    // to a warning instead of asking the model to retry (a retry would append a
+    // second receipt for the same floor).
+    expect(result.applied).toEqual(['settle.commit'])
+    expect(result.warnings).toHaveLength(1)
+    expect(result.warnings?.[0]).toContain('settle commit is durable')
+    expect(result.warnings?.[0]).toContain('stayed open')
     expect(await readVariable('settle.commit')).toMatchObject({ value: 'new' })
     const saved = readMvuReceipts((await boundChat()).chat)
     expect(saved).toHaveLength(receiptsBefore + 1)
     const intents = readSettleIntents(harness.session.events)
-    expect(intents.map((intent) => intent.phase)).toEqual(['open', 'decide'])
+    expect(intents.map((intent) => intent.phase)).toEqual(['open', 'extend', 'decide'])
     const open = intents[0]
     if (open?.phase !== 'open') throw new Error('expected an open settle intent')
-    // The commit append failed before the tool reached its audit line.
-    expect((await readMvuAudit(join(home, 'soulmojito'))).some((entry) => entry.opId === open.opId)).toBe(false)
+    // The tool still wrote its own audit line after the failed closure.
+    const ownAudit = (await readMvuAudit(join(home, 'soulmojito'))).filter((entry) => entry.opId === open.opId)
+    expect(ownAudit).toHaveLength(1)
+    expect(ownAudit[0]!.recovered).toBeUndefined()
 
     harness.failIntentPhase = undefined
     const outcome = await recoverSettle(harness)
     expect(outcome).toMatchObject({ status: 'clean', pending: 0 })
-    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase)).toEqual(['open', 'decide', 'commit'])
+    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase)).toEqual(['open', 'extend', 'decide', 'commit'])
     expect(await readVariable('settle.commit')).toMatchObject({ value: 'new' })
     // The stored receipt already proves the save: recovery appends the commit
     // marker only and never replays the decision a second time.
     const afterRecovery = readMvuReceipts((await boundChat()).chat)
     expect(afterRecovery).toHaveLength(receiptsBefore + 1)
     expect(afterRecovery.at(-1)).toEqual(saved.at(-1))
-    // Only the commit was missing, so recovery also fills the audit hole left
-    // by the crashed tool call.
-    const backfilled = (await readMvuAudit(join(home, 'soulmojito'))).filter((entry) => entry.opId === open.opId)
-    expect(backfilled).toHaveLength(1)
-    expect(backfilled[0]).toMatchObject({
-      opId: open.opId,
-      recovered: true,
-      sessionId: 'native',
-      character: CHARACTER,
-      chatId,
-      turnKey: saved.at(-1)!.turnKey,
-      status: saved.at(-1)!.status,
-    })
+    // Recovery's audit sink deduplicates by opId, so the tool's line stays single.
+    const afterAudit = (await readMvuAudit(join(home, 'soulmojito'))).filter((entry) => entry.opId === open.opId)
+    expect(afterAudit).toHaveLength(1)
   })
 
   it('leaves a session without settle intents untouched', async () => {
@@ -1227,5 +1499,64 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     const outcome = await recoverSettle(harness)
     expect(outcome).toMatchObject({ status: 'clean', pending: 0 })
     expect(harness.session.events).toEqual([])
+  })
+})
+
+/* ---------------------- receipt ring: reserved settle slots ---------------------- */
+
+function emptyRingChat() {
+  return {
+    header: { user_name: 'User', character_name: CHARACTER, chat_metadata: {} },
+    messages: [],
+  } as never
+}
+
+function ringSettle(turnKey: string): MvuReceipt {
+  return { at: `settle-${turnKey}`, turnKey, status: 'updated', changes: [], failures: [] }
+}
+
+function ringBody(index: number): MvuReceipt {
+  return { at: `body-${index}`, turnKey: `body:g${index}#${index}`, status: 'updated', changes: [], failures: [] }
+}
+
+describe('MVU receipt ring: reserved settle receipts', () => {
+  it('keeps the newest three settle receipts while body candidates claim the rest', () => {
+    const chat = emptyRingChat()
+    for (let floor = 0; floor < 25; floor += 1) appendMvuReceipt(chat, ringSettle(String(floor)))
+    for (let index = 0; index < MVU_RECEIPTS_LIMIT; index += 1) appendMvuReceipt(chat, ringBody(index))
+
+    const keys = readMvuReceipts(chat).map((receipt) => receipt.turnKey)
+    expect(keys).toHaveLength(MVU_RECEIPTS_LIMIT)
+    // A body burst still leaves the newest three floors their rollback evidence;
+    // with a single reserved slot only floor 24 would have survived.
+    expect(keys.filter((key) => !key.startsWith('body:')))
+      .toEqual(['22', '23', '24'])
+    // Body candidates keep their priority: only the oldest ones yield, in stored
+    // (append) order.
+    expect(keys).toEqual([
+      ...Array.from({ length: MVU_SETTLE_RECEIPTS_RESERVED }, (_, offset) => String(22 + offset)),
+      ...Array.from(
+        { length: MVU_RECEIPTS_LIMIT - MVU_SETTLE_RECEIPTS_RESERVED },
+        (_, offset) => `body:g${3 + offset}#${3 + offset}`,
+      ),
+    ])
+  })
+
+  it('honours an explicit settle reservation override and keeps the total bounded', () => {
+    const chat = emptyRingChat()
+    for (let index = 0; index < MVU_RECEIPTS_LIMIT; index += 1) appendMvuReceipt(chat, ringBody(index))
+    appendMvuReceipt(chat, ringSettle('0'), undefined, 1)
+
+    const keys = readMvuReceipts(chat).map((receipt) => receipt.turnKey)
+    expect(keys).toHaveLength(MVU_RECEIPTS_LIMIT)
+    expect(keys.filter((key) => !key.startsWith('body:'))).toEqual(['0'])
+    expect(keys).not.toContain('body:g0#0')
+  })
+
+  it('refuses an unusable settle reservation instead of clamping it', () => {
+    const chat = emptyRingChat()
+    expect(() => appendMvuReceipt(chat, ringSettle('0'), undefined, -1)).toThrow(/settle reservation/)
+    expect(() => appendMvuReceipt(chat, ringSettle('0'), undefined, MVU_RECEIPTS_LIMIT + 1)).toThrow(/settle reservation/)
+    expect(readMvuReceipts(chat)).toHaveLength(0)
   })
 })

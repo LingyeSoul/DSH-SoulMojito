@@ -553,8 +553,18 @@ interface TurnEndRestoreAttempt {
   readonly opId?: string
 }
 
-/** One retry chain per session: duplicate turn edges never start a second one. */
+/**
+ * One retry chain per task identity: session + mode + turn + reason. A failed
+ * turn restore and a deferred settlement share the session but are different
+ * tasks, so a restore retry window must not silence the settlement edge.
+ */
 const turnEndRestoreChains = new Map<string, TurnEndRestoreChain>()
+
+/**
+ * Same-identity edges that arrived while their chain was still retrying. They
+ * are coalesced into one rerun after the chain ends instead of being dropped.
+ */
+const queuedTurnEndRestores = new Map<string, FailedTurnRestore>()
 
 /**
  * Observe one `session/event` delivery. It only validates the edge, checks for
@@ -618,10 +628,19 @@ export function handleBodySessionEvent(
   }
 }
 
+/** Task identity used by the retry map; exported for the wiring regression. */
+export function turnEndRestoreKey(task: FailedTurnRestore): string {
+  return `${task.sessionId}\u0000${task.mode}\u0000${task.turn ?? ''}\u0000${task.reason ?? ''}`
+}
+
 function scheduleTurnEndRestore(ctx: BodyWiringContext, task: FailedTurnRestore): void {
-  if (turnEndRestoreChains.has(task.sessionId)) return
+  const key = turnEndRestoreKey(task)
+  if (turnEndRestoreChains.has(key)) {
+    queuedTurnEndRestores.set(key, task)
+    return
+  }
   const chain: TurnEndRestoreChain = { task, attempts: 0, timer: undefined, cancelled: false }
-  turnEndRestoreChains.set(task.sessionId, chain)
+  turnEndRestoreChains.set(key, chain)
   queueMicrotask(() => { void runTurnEndRestoreAttempt(ctx, chain) })
 }
 
@@ -636,7 +655,7 @@ async function runTurnEndRestoreAttempt(ctx: BodyWiringContext, chain: TurnEndRe
   if (chain.cancelled) return
   chain.attempts += 1
   if (outcome.status === 'done') {
-    forgetTurnEndRestoreChain(chain)
+    forgetTurnEndRestoreChain(ctx, chain)
     return
   }
   const delay = TURN_END_RESTORE_RETRY_DELAYS_MS[chain.attempts]
@@ -658,7 +677,7 @@ async function runTurnEndRestoreAttempt(ctx: BodyWiringContext, chain: TurnEndRe
     }, delay)
     return
   }
-  forgetTurnEndRestoreChain(chain)
+  forgetTurnEndRestoreChain(ctx, chain)
   // The operation stays in `pendingByAgent` and its `op-start` stays in the
   // log; startup recovery is the documented retry path (proposal §9.2).
   errorLog(ctx, `dsh-soulmojito body: ${subject} failed; op-start stays pending for startup recovery`, {
@@ -742,8 +761,16 @@ async function attemptTurnEndRestore(
   }
 }
 
-function forgetTurnEndRestoreChain(chain: TurnEndRestoreChain): void {
-  if (turnEndRestoreChains.get(chain.task.sessionId) === chain) turnEndRestoreChains.delete(chain.task.sessionId)
+function forgetTurnEndRestoreChain(ctx: BodyWiringContext, chain: TurnEndRestoreChain): void {
+  const key = turnEndRestoreKey(chain.task)
+  if (turnEndRestoreChains.get(key) === chain) turnEndRestoreChains.delete(key)
+  if (chain.cancelled) return
+  const queued = queuedTurnEndRestores.get(key)
+  if (queued === undefined) return
+  // Rerun the coalesced edge exactly once; a duplicate that arrives during the
+  // rerun queues itself again through scheduleTurnEndRestore.
+  queuedTurnEndRestores.delete(key)
+  scheduleTurnEndRestore(ctx, queued)
 }
 
 /** Drop every queued retry on plugin unload; a cancelled chain never calls the runtime again. */
@@ -754,6 +781,7 @@ function cancelTurnEndRestoreChains(): void {
     chain.timer = undefined
   }
   turnEndRestoreChains.clear()
+  queuedTurnEndRestores.clear()
 }
 
 function registerTurnEndRestoreCleanup(ctx: BodyWiringContext): void {

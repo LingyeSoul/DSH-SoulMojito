@@ -185,13 +185,13 @@ function agentTavernOf(chat: ChatLogIR): Record<string, unknown> {
   return extra['agentTavern']
 }
 
-function expectCandidateError(run: () => unknown, code: CandidateReceiptErrorCode): void {
+function expectCandidateError(run: () => unknown, code: CandidateReceiptErrorCode): CandidateReceiptError {
   try {
     run()
   } catch (error) {
     expect(error).toBeInstanceOf(CandidateReceiptError)
     expect((error as CandidateReceiptError).code).toBe(code)
-    return
+    return error as CandidateReceiptError
   }
   throw new Error(`expected CandidateReceiptError '${code}', but no error was thrown`)
 }
@@ -653,8 +653,77 @@ describe('candidate edit transaction', () => {
     expect(readMvuReceipts(next)).toHaveLength(0)
   })
 
-  it('does not add messages or mutate the user floor', () => {
+  it('edits a plain-card candidate whose message id carries a receipt separator', () => {
+    const oldText = 'Plain body.'
+    const newText = 'Plain body, edited.'
+    const chat = mvuChat(oldText, baseVariables(10))
+    const dividerId = 'candidate#1'
+    const floor = chat.messages[1]!
+    chat.messages[1] = {
+      ...floor,
+      extra: { agentTavern: { bodyGroupId: dividerId, anchorMessageId: dividerId } },
+    }
+    const ledger: BodyLedger = {
+      groupId: dividerId,
+      candidates: [{ messageId: dividerId, index: 0, text: oldText }],
+      selectedIndex: 0,
+      anchorMessageId: dividerId,
+      edits: new Map(),
+    }
+
+    const next = applyCandidateEditToChat(chat, plainCard, {
+      ledger,
+      groupId: dividerId,
+      index: 0,
+      messageId: dividerId,
+      previousText: oldText,
+      text: newText,
+      at: AT_TWO,
+      eventSeq: 23,
+    })
+
+    expect(next.messages).toHaveLength(2)
+    expect(floorOf(next).mes).toBe(newText)
+    expect(floorOf(next).swipes).toEqual([newText])
+    expect(readMvuReceipts(next)).toHaveLength(0)
+    expect(agentTavernOf(next)).toMatchObject({ lastBodyEventSeq: 23, lastBodyMutation: 'edit' })
+  })
+
+  it('refuses an MVU candidate whose message id cannot form a receipt key', () => {
     const oldText = updateText('Old body', 5)
+    const chat = mvuChat(oldText, baseVariables(10))
+    const dividerId = 'candidate#1'
+    const floor = chat.messages[1]!
+    chat.messages[1] = {
+      ...floor,
+      extra: { agentTavern: { bodyGroupId: dividerId, anchorMessageId: dividerId } },
+    }
+    const ledger: BodyLedger = {
+      groupId: dividerId,
+      candidates: [{ messageId: dividerId, index: 0, text: oldText }],
+      selectedIndex: 0,
+      anchorMessageId: dividerId,
+      edits: new Map(),
+    }
+    const before = structuredClone(chat)
+
+    const error = expectCandidateError(() => applyCandidateEditToChat(chat, mvuCard, {
+      ledger,
+      groupId: dividerId,
+      index: 0,
+      messageId: dividerId,
+      previousText: oldText,
+      text: updateText('New body', 3),
+      at: AT_TWO,
+      eventSeq: 24,
+    }), 'body-receipt-key-mismatch')
+
+    expect(error.message).toContain(dividerId)
+    expect(error.message).toContain('cannot be encoded as a candidate receipt key')
+    expect(chat).toEqual(before)
+  })
+
+  it('does not add messages or mutate the user floor', () => {    const oldText = updateText('Old body', 5)
     const chat = mvuChat(oldText, baseVariables(15))
     attachReceipts(chat, [receiptOf(`body:${MESSAGE_ID}`, AT_ONE, [favorChange(10, 15)])])
     const userBefore = structuredClone(chat.messages[0])

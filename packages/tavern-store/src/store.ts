@@ -323,6 +323,57 @@ export interface ChatSnapshot {
   revision: string
 }
 
+/**
+ * File fingerprint that validates a cached chat snapshot.
+ *
+ * `size` + `mtimeMs` is the same pair `collectWorldEntryCounts` relies on; a
+ * content hash was rejected because hashing needs the full read this cache
+ * exists to avoid. `ino` is added for free: a tmp+rename replacement (the
+ * store's own atomic write, and most external editors) lands on a new file
+ * index, so a same-size write inside the same millisecond is still detected on
+ * filesystems that report one. It is 0 where inode numbers are unavailable
+ * (some network/FAT mounts), where the check degrades to size+mtimeMs.
+ */
+interface ChatFileFingerprint {
+  size: number
+  mtimeMs: number
+  ino: number
+}
+
+/** One cached chat parse plus the fingerprint it was parsed from. */
+interface ChatSnapshotCacheEntry extends ChatFileFingerprint {
+  snapshot: ChatSnapshot
+}
+
+/** Process-local chat snapshot cache counters (tests and diagnostics). */
+export interface ChatSnapshotCacheStats {
+  /** Reads served from memory without stat-ing or parsing the file. */
+  hits: number
+  /** Reads that had to fall back to the file. */
+  misses: number
+  /** Entries currently held; never above MAX_CHAT_SNAPSHOT_CACHE_ENTRIES. */
+  size: number
+}
+
+/**
+ * Upper bound on cached chat snapshots (least recently used entries go first).
+ *
+ * `GET body` reads one chat per assistant row and a panel tab keeps one chat
+ * open, so the live working set is a handful of chats; 64 covers many open
+ * tabs and characters before the cache starts re-parsing. A parsed long
+ * roleplay chat is megabytes in memory (the IR holds every message and swipe),
+ * so an unbounded map would grow with every chat the user ever opened; 64 caps
+ * the ceiling at "dozens of long chats" instead of the whole library.
+ */
+export const MAX_CHAT_SNAPSHOT_CACHE_ENTRIES = 64
+
+/**
+ * Reads per miss before giving up on a stable fingerprint. A writer replacing
+ * the file between the two stats makes the read unverifiable; three attempts
+ * absorb one rename race without turning a busy chat file into a retry loop.
+ */
+const CHAT_SNAPSHOT_READ_ATTEMPTS = 3
+
 export class ChatRevisionConflictError extends Error {
   readonly code = 'CHAT_REVISION_CONFLICT'
 
@@ -468,6 +519,10 @@ function clampOptionalInt(value: unknown, min: number, max: number): number | un
 export class TavernStore {
   private readonly chatMutationTail = new MutationTail()
   private readonly stateMutationTail = new MutationTail()
+  /** Parsed chat logs keyed by chat file absolute path; see getChatSnapshot. */
+  private readonly chatSnapshotCache = new Map<string, ChatSnapshotCacheEntry>()
+  private chatSnapshotCacheHits = 0
+  private chatSnapshotCacheMisses = 0
 
   private constructor(private readonly root: string) {}
 
@@ -714,6 +769,10 @@ export class TavernStore {
           if ((renameCause as NodeJS.ErrnoException).code !== 'ENOENT') throw renameCause
         }
       }
+      // Chat files moved to a new directory: cached keys are paths, so drop
+      // entries on both sides (the target may alias a previous character).
+      this.invalidateChatSnapshotDir(path.join(this.root, 'chats', currentStem))
+      this.invalidateChatSnapshotDir(path.join(this.root, 'chats', nextStem))
     }
     for (const other of (['png', 'json', 'charx'] as const).filter((other) => other !== kind)) {
       await fs.rm(path.join(this.root, 'characters', `${nextStem}.${other}`), { force: true })
@@ -772,7 +831,9 @@ export class TavernStore {
     }
     // 对齐 ST 语义：删角色连同其聊天记录（chats/<name>/ 一并移除）。
     if (deleted) {
-      await fs.rm(path.join(this.root, 'chats', safeFileName(name)), { recursive: true, force: true })
+      const chatDir = path.join(this.root, 'chats', safeFileName(name))
+      await fs.rm(chatDir, { recursive: true, force: true })
+      this.invalidateChatSnapshotDir(chatDir)
       // 卡级 regex 由卡文件派生：卡删除后物化副本必须一起走，否则同名新卡导入
       // 时会接管这些旧脚本（旧版本只删卡文件，脚本在 state 里留着复活）。
       await this.updateState((current) => {
@@ -845,7 +906,11 @@ export class TavernStore {
       const dir = path.join(this.root, 'chats', safeFileName(characterName))
       await fs.mkdir(dir, { recursive: true })
       const id = `${timestamp()}.jsonl`
-      await this.writeAtomic(path.join(dir, id), chatBytes({ header, messages }))
+      const file = path.join(dir, id)
+      await this.writeAtomic(file, chatBytes({ header, messages }))
+      // A fresh id normally has no entry, but ids are timestamp strings: reuse
+      // after an external delete must not resurrect the old parse.
+      this.invalidateChatSnapshot(file)
       return id
     })
   }
@@ -857,6 +922,10 @@ export class TavernStore {
       await this.assertChatRevision(file, expectedRevision)
       const bytes = chatBytes(log)
       await this.writeAtomic(file, bytes)
+      // Explicit invalidation, not fingerprint detection: a same-length write in
+      // the same millisecond can leave size+mtime identical (ino only helps on
+      // filesystems that report one).
+      this.invalidateChatSnapshot(file)
       return chatRevision(bytes)
     })
   }
@@ -865,12 +934,53 @@ export class TavernStore {
     return (await this.getChatSnapshot(characterName, chatId))?.chat
   }
 
+  /**
+   * Reads one chat with its CAS revision.
+   *
+   * `GET body` asks for the same chat once per assistant row and the panel
+   * re-requests it on every poll: re-reading the JSONL and re-parsing every
+   * line makes one panel render O(n^2) over the chat. The parse is cached per
+   * chat file and validated by a size+mtimeMs+ino fingerprint; any mismatch
+   * (external rewrite, or a write path that skipped invalidation) falls back to
+   * a fresh parse and replaces the entry.
+   *
+   * The returned snapshot is caller-owned: the cached parse is never handed
+   * out, so a caller that mutates `chat` before saveChat cannot corrupt it.
+   * Return type, revision value and error behaviour (unreadable/corrupt files
+   * still throw, a missing file still yields undefined) are unchanged.
+   */
   async getChatSnapshot(characterName: string, chatId: string): Promise<ChatSnapshot | undefined> {
-    const bytes = await this.tryRead(path.join(this.root, 'chats', safeFileName(characterName), safeChatFileName(chatId)))
-    if (bytes === undefined) return undefined
+    const file = path.join(this.root, 'chats', safeFileName(characterName), safeChatFileName(chatId))
+    const cached = this.chatSnapshotCache.get(file)
+    if (cached !== undefined) {
+      const current = await statChatFile(file)
+      if (current !== undefined && sameChatFingerprint(cached, current)) {
+        this.chatSnapshotCacheHits += 1
+        // Re-insert to move the entry to the Map's most-recently-used end.
+        this.chatSnapshotCache.delete(file)
+        this.chatSnapshotCache.set(file, cached)
+        return cloneChatSnapshot(cached.snapshot)
+      }
+      this.chatSnapshotCache.delete(file)
+    }
+    this.chatSnapshotCacheMisses += 1
+    const read = await readChatFile(file)
+    if (read === undefined) return undefined
+    const snapshot: ChatSnapshot = {
+      chat: parseChatLog(Buffer.from(read.bytes).toString('utf8')),
+      revision: chatRevision(read.bytes),
+    }
+    // Store a copy so the object returned below stays caller-owned.
+    if (read.fingerprint !== undefined) this.cacheChatSnapshot(file, read.fingerprint, cloneChatSnapshot(snapshot))
+    return snapshot
+  }
+
+  /** Process-local chat snapshot cache counters (tests, diagnostics). */
+  chatSnapshotCacheStats(): ChatSnapshotCacheStats {
     return {
-      chat: parseChatLog(Buffer.from(bytes).toString('utf8')),
-      revision: chatRevision(bytes),
+      hits: this.chatSnapshotCacheHits,
+      misses: this.chatSnapshotCacheMisses,
+      size: this.chatSnapshotCache.size,
     }
   }
 
@@ -894,6 +1004,9 @@ export class TavernStore {
       if (source === target) return
       if (await this.tryRead(target)) throw new Error(`chat '${nextChatId}' already exists`)
       await fs.rename(source, target)
+      // The parse moved with the file; keys are paths, so both sides change.
+      this.invalidateChatSnapshot(source)
+      this.invalidateChatSnapshot(target)
       // Session overlays follow the chat file; drop any stale target first because
       // Windows rename refuses an existing destination.
       await this.moveChatOverlay(this.chatWorldsFile(characterName, chatId), this.chatWorldsFile(characterName, nextChatId))
@@ -910,6 +1023,10 @@ export class TavernStore {
       } catch (cause) {
         if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return false
         throw cause
+      } finally {
+        // Runs on success, on a missing file and on a rejected revision: any of
+        // these may have left a cached parse for a file that is no longer there.
+        this.invalidateChatSnapshot(file)
       }
       // Inside the mutation queue so a concurrent put cannot recreate an orphan
       // overlay after the chat file is gone.
@@ -1204,7 +1321,9 @@ export class TavernStore {
         nextId = `${safeStem} - branch ${counter}.jsonl`
       }
       const branchLog: ChatLogIR = { header, messages: branchMessages }
-      await this.writeAtomic(path.join(dir, nextId), chatBytes(branchLog))
+      const branchFile = path.join(dir, nextId)
+      await this.writeAtomic(branchFile, chatBytes(branchLog))
+      this.invalidateChatSnapshot(branchFile)
       await this.copyChatOverlay(this.chatWorldsFile(characterName, chatId), this.chatWorldsFile(characterName, nextId))
       await this.copyChatOverlay(this.chatScriptsFile(characterName, chatId), this.chatScriptsFile(characterName, nextId))
       return { chatId: nextId, chat: branchLog }
@@ -1254,7 +1373,9 @@ export class TavernStore {
         nextId = `${safeStem} - fork ${counter}.jsonl`
       }
       const forkLog: ChatLogIR = { header, messages: [] }
-      await this.writeAtomic(path.join(dir, nextId), chatBytes(forkLog))
+      const forkFile = path.join(dir, nextId)
+      await this.writeAtomic(forkFile, chatBytes(forkLog))
+      this.invalidateChatSnapshot(forkFile)
       await this.copyChatOverlay(this.chatWorldsFile(characterName, parentChatId), this.chatWorldsFile(characterName, nextId))
       await this.copyChatOverlay(this.chatScriptsFile(characterName, parentChatId), this.chatScriptsFile(characterName, nextId))
       return { chatId: nextId, chat: forkLog }
@@ -1575,6 +1696,36 @@ export class TavernStore {
 
   private mutateChat<T>(operation: () => Promise<T>): Promise<T> {
     return this.chatMutationTail.enqueue(operation)
+  }
+
+  /**
+   * Stores one parse under its fingerprint and evicts least-recently-used
+   * entries beyond the cap. Only complete snapshots reaching this point are
+   * cached: a parse that throws never lands here, and concurrent misses on the
+   * same chat each cache a complete snapshot (last writer wins; the fingerprint
+   * keeps a stale loser from ever matching the file again).
+   */
+  private cacheChatSnapshot(file: string, fingerprint: ChatFileFingerprint, snapshot: ChatSnapshot): void {
+    this.chatSnapshotCache.delete(file)
+    this.chatSnapshotCache.set(file, { ...fingerprint, snapshot })
+    while (this.chatSnapshotCache.size > MAX_CHAT_SNAPSHOT_CACHE_ENTRIES) {
+      const oldest = this.chatSnapshotCache.keys().next().value
+      if (oldest === undefined) break
+      this.chatSnapshotCache.delete(oldest)
+    }
+  }
+
+  /** Drops one chat's cached parse; every chat write path calls this. */
+  private invalidateChatSnapshot(file: string): void {
+    this.chatSnapshotCache.delete(file)
+  }
+
+  /** Drops every cached parse below one chat directory (character rename/delete). */
+  private invalidateChatSnapshotDir(dir: string): void {
+    const prefix = `${dir}${path.sep}`
+    for (const key of this.chatSnapshotCache.keys()) {
+      if (key.startsWith(prefix)) this.chatSnapshotCache.delete(key)
+    }
   }
 
   private chatWorldsFile(characterName: string, chatId: string): string {
@@ -2204,6 +2355,92 @@ function chatBytes(log: ChatLogIR): Uint8Array {
 
 function chatRevision(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('base64url')
+}
+
+/**
+ * Deep copy of one chat snapshot.
+ *
+ * `structuredClone` is the obvious choice, but it runs the full V8 serializer
+ * path: on a 4,000-message / 3.2 MB chat it costs ~5.8 ms, as much as the
+ * read+parse+sha256 it replaces (~7.0 ms, measured 2026-10-29 on this repo),
+ * which would erase the cache's win. Chat data is always `JSON.parse` output,
+ * so this narrower walk (arrays, plain objects, primitives) is equivalent for
+ * it and costs ~0.9 ms. A `__proto__` key is written as an own data property
+ * so a crafted chat line cannot turn the copy into a prototype assignment.
+ */
+function cloneChatSnapshot(snapshot: ChatSnapshot): ChatSnapshot {
+  return {
+    chat: {
+      header: cloneChatRecord(snapshot.chat.header),
+      messages: snapshot.chat.messages.map(cloneChatRecord),
+    },
+    revision: snapshot.revision,
+  }
+}
+
+function cloneChatRecord<T extends object>(value: T): T {
+  const copy: Record<string, unknown> = {}
+  for (const key of Object.keys(value)) {
+    const clone = cloneChatValue((value as Record<string, unknown>)[key])
+    if (key === '__proto__') {
+      Object.defineProperty(copy, key, { value: clone, enumerable: true, writable: true, configurable: true })
+    } else {
+      copy[key] = clone
+    }
+  }
+  return copy as T
+}
+
+function cloneChatValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(cloneChatValue)
+  if (typeof value === 'object' && value !== null) return cloneChatRecord(value)
+  return value
+}
+
+/** One chat read plus the fingerprint that describes exactly those bytes. */
+interface ReadChatFile {
+  bytes: Uint8Array
+  /** Absent when the file kept moving; such a read is served but not cached. */
+  fingerprint?: ChatFileFingerprint
+}
+
+/** `fs.stat` for one chat file; only a missing file is `undefined`. */
+async function statChatFile(file: string): Promise<ChatFileFingerprint | undefined> {
+  try {
+    const stat = await fs.stat(file)
+    return { size: stat.size, mtimeMs: stat.mtimeMs, ino: stat.ino }
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw cause
+  }
+}
+
+function sameChatFingerprint(left: ChatFileFingerprint, right: ChatFileFingerprint): boolean {
+  return left.size === right.size && left.mtimeMs === right.mtimeMs && left.ino === right.ino
+}
+
+/**
+ * Reads a chat file together with a fingerprint that is guaranteed to describe
+ * the bytes that were read: `stat` runs on both sides of `readFile` and the
+ * pair is accepted only when it did not move. Without the second stat, a write
+ * landing between read and stat would cache the old parse under the new mtime,
+ * and every later read would serve stale content as fresh.
+ */
+async function readChatFile(file: string): Promise<ReadChatFile | undefined> {
+  let last: Uint8Array | undefined
+  for (let attempt = 0; attempt < CHAT_SNAPSHOT_READ_ATTEMPTS; attempt += 1) {
+    const before = await statChatFile(file)
+    if (before === undefined) return last === undefined ? undefined : { bytes: last }
+    const bytes = new Uint8Array(await fs.readFile(file))
+    const after = await statChatFile(file)
+    if (after !== undefined && after.size === bytes.byteLength && sameChatFingerprint(before, after)) {
+      return { bytes, fingerprint: after }
+    }
+    last = bytes
+  }
+  // An external writer kept replacing the file: serve a fresh parse without
+  // caching. The next read retries instead of trusting an unverifiable pair.
+  return last === undefined ? undefined : { bytes: last }
 }
 
 function jsonBytes(obj: unknown): Uint8Array {

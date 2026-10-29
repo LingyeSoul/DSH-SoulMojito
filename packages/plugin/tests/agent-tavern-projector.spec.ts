@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { AgentTavernProjector, historyImportAppends, isTavernSessionMarker, lastImportedTurn, type NativeSession } from '../src/agent-tavern/projector.js'
+import { AgentTavernProjector, historyImportAppends, isTavernSessionMarker, lastImportedTurn, type NativeSession, type NativeSessionEvent } from '../src/agent-tavern/projector.js'
 import { ChatRevisionConflictError, TavernStore } from '../../tavern-store/src/index.js'
 import type { ChatLogIR, RegexScriptIR } from '../../tavern-format/src/index.js'
 
@@ -104,6 +104,50 @@ describe('AgentTavern native event projector', () => {
     expect(snapshot!.chat.messages.map((message) => message.mes)).toEqual(['Open the door.', 'The door opens.', 'Step inside.'])
   })
 
+  it('writes a deterministic send_date from the event time', async () => {
+    const { root, store, chatId, sessionId } = await fixture('time-projection')
+    const native = session(sessionId)
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(native)
+
+    const snapshot = await store.getChatSnapshot('Projector Character', chatId)
+    expect(snapshot!.chat.messages.map((message) => message.send_date)).toEqual([
+      new Date(1100).toISOString(),
+      new Date(1400).toISOString(),
+    ])
+  })
+
+  it.each([-1, 1.5, Number.NaN, 8.64e15 + 1])(
+    'rejects an unusable event time %s instead of dating it at read time',
+    async (time) => {
+      const { root, store, sessionId } = await fixture(`time-invalid-${String(time)}`)
+      const native = session(sessionId)
+      const projector = await AgentTavernProjector.open(root, store)
+      const event = {
+        type: 'user/message',
+        seq: 1,
+        time,
+        data: { id: 'user-1', role: 'user', content: [{ type: 'text', text: 'Open the door.' }], source: { kind: 'user' } },
+      } as unknown as NativeSessionEvent
+
+      await expect(projector.project(native, event))
+        .rejects.toThrow("session event 'user/message' at seq 1 has unusable time")
+    },
+  )
+
+  it('rejects a time-less historical event instead of inventing a send date', async () => {
+    const { root, store, sessionId } = await fixture('time-missing')
+    const native = session(sessionId)
+    const projector = await AgentTavernProjector.open(root, store)
+    const event = {
+      type: 'user/message',
+      seq: 1,
+      data: { id: 'user-1', role: 'user', content: [{ type: 'text', text: 'Open the door.' }], source: { kind: 'user' } },
+    } as unknown as NativeSessionEvent
+
+    await expect(projector.project(native, event)).rejects.toThrow('has unusable time undefined')
+  })
+
   it('replays a DSH 0.1.2 host session whose log rides snapshotEvents()', async () => {
     const { root, store, chatId, sessionId } = await fixture('snapshot-session')
     const native = session(sessionId)
@@ -186,7 +230,18 @@ describe('AgentTavern native event projector', () => {
     }))
     const projector = await AgentTavernProjector.open(root, store)
     const native = session(sessionId)
-    await expect(projector.project(native, native.events[1]!)).rejects.toThrow('target chat not found')
+    const error = await projector.project(native, native.events[1]!).then(
+      () => undefined,
+      (cause: unknown) => cause,
+    )
+    if (!(error instanceof Error)) throw new Error('expected the projection to reject')
+    // The failure carries the binding and the cursor so the log is actionable
+    // without guessing which chat of which session broke.
+    expect(error.message).toContain('target chat not found')
+    expect(error.message).toContain("chat 'missing.jsonl'")
+    expect(error.message).toContain("of 'Projector Character'")
+    expect(error.message).toContain("session 'repair-session'")
+    expect(error.message).toContain('event seq 1')
     expect(await projector.status(sessionId)).toMatchObject({ status: 'pending', lastCursor: -1, pendingCursor: 1 })
 
     await store.updateState((state) => ({

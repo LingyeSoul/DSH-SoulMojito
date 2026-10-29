@@ -38,6 +38,11 @@ import {
   type WriteJournalRecordWriter,
   type WriteJournalSession,
 } from './settle-intent-record.js'
+import { BodyRollbackError } from './body-rollback-support.js'
+import type {
+  BodyRollbackMemoryWrite,
+  BodyRollbackVariableWrite,
+} from './body-rollback-support.js'
 
 // Settle intent records keep their own shard; this module re-exports the whole
 // previous surface so callers keep importing from `write-journal.js`.
@@ -65,8 +70,14 @@ export type {
 /** Plugin record type carrying every journaled mutation. */
 export const WRITE_JOURNAL_EVENT_TYPE = 'plugin:dsh-soulmojito/write' as const
 
-/** Phase of one mutation journaled in two steps. */
-export type WriteJournalPhase = 'before' | 'after'
+/**
+ * Phase of one mutation journal.
+ *
+ * `noop` is a single record proving that a write tool ran without changing a
+ * store (target missing, or a policy refusal); it keeps journal coverage from
+ * confusing a verified no-op with a lost journal.
+ */
+export type WriteJournalPhase = 'before' | 'after' | 'noop'
 
 /** Memory tool calls that journal their writes. */
 export const MEMORY_WRITE_JOURNAL_TOOLS = ['memory_write', 'memory_update', 'memory_forget'] as const
@@ -115,6 +126,12 @@ export interface WriteJournalVariableEntry {
   readonly phase: WriteJournalPhase
   readonly at: string
   readonly target: WriteJournalVariableTarget
+  /**
+   * Names this call targeted, so a before-only record can still be verified
+   * against the store after a crash between the store write and the `after`
+   * append. Required on new `before` records; older journals may omit it.
+   */
+  readonly names?: readonly string[]
   readonly before?: readonly VariableSnapshot[] | null
   readonly after?: readonly VariableSnapshot[] | null
 }
@@ -379,6 +396,8 @@ function parseEntry(data: unknown, index: number): WriteJournalEntry {
 
 function parseMemoryEntry(record: Record<string, unknown>, where: string): WriteJournalMemoryEntry {
   const target = recordAt(record['target'], `${where} target`)
+  const phase = phaseAt(record, where)
+  assertNoopShape(phase, record, where)
   const before = optionalMemoryRecord(record['before'], `${where} before`)
   const after = optionalMemoryRecord(record['after'], `${where} after`)
   return {
@@ -387,7 +406,7 @@ function parseMemoryEntry(record: Record<string, unknown>, where: string): Write
     journalId: textAt(record, 'journalId', where),
     sessionId: textAt(record, 'sessionId', where),
     turn: turnAt(record, where),
-    phase: phaseAt(record, where),
+    phase,
     at: timestampAt(record, 'at', where),
     target: {
       id: textAt(target, 'id', `${where} target`),
@@ -401,6 +420,9 @@ function parseMemoryEntry(record: Record<string, unknown>, where: string): Write
 
 function parseVariableEntry(record: Record<string, unknown>, where: string): WriteJournalVariableEntry {
   const target = recordAt(record['target'], `${where} target`)
+  const phase = phaseAt(record, where)
+  assertNoopShape(phase, record, where)
+  const names = optionalNames(record['names'], `${where} names`)
   const before = optionalSnapshots(record['before'], `${where} before`)
   const after = optionalSnapshots(record['after'], `${where} after`)
   return {
@@ -409,14 +431,23 @@ function parseVariableEntry(record: Record<string, unknown>, where: string): Wri
     journalId: textAt(record, 'journalId', where),
     sessionId: textAt(record, 'sessionId', where),
     turn: turnAt(record, where),
-    phase: phaseAt(record, where),
+    phase,
     at: timestampAt(record, 'at', where),
     target: {
       scope: variableScopeAt(target['scope'], `${where} target`),
       scopeId: textAt(target, 'scopeId', `${where} target`),
     },
+    ...(names === undefined ? {} : { names }),
     ...(before === undefined ? {} : { before }),
     ...(after === undefined ? {} : { after }),
+  }
+}
+
+/** A no-op record proves "nothing was written" and must not carry states. */
+function assertNoopShape(phase: WriteJournalPhase, record: Record<string, unknown>, where: string): void {
+  if (phase !== 'noop') return
+  if (record['before'] !== undefined || record['after'] !== undefined) {
+    throw invalid(where, 'a noop record must not carry before/after state')
   }
 }
 
@@ -474,6 +505,21 @@ function memorySourceAt(value: unknown, where: string): MemorySource {
   return source
 }
 
+function optionalNames(value: unknown, where: string): readonly string[] | undefined {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value) || value.length === 0) {
+    throw invalid(where, 'must be a non-empty array of variable names')
+  }
+  const names: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string' || item === '') {
+      throw invalid(where, 'must be a non-empty array of variable names')
+    }
+    names.push(item)
+  }
+  return names
+}
+
 function optionalSnapshots(value: unknown, where: string): readonly VariableSnapshot[] | null | undefined {
   if (value === undefined) return undefined
   if (value === null) return null
@@ -515,8 +561,8 @@ function variableScopeAt(value: unknown, where: string): VariableScope {
 
 function phaseAt(record: Record<string, unknown>, where: string): WriteJournalPhase {
   const value = record['phase']
-  if (value !== 'before' && value !== 'after') {
-    throw invalid(where, `field 'phase' must be 'before' or 'after', received '${String(value)}'`)
+  if (value !== 'before' && value !== 'after' && value !== 'noop') {
+    throw invalid(where, `field 'phase' must be 'before', 'after' or 'noop', received '${String(value)}'`)
   }
   return value
 }
@@ -545,4 +591,168 @@ function stringArrayAt(value: unknown, where: string): string[] {
     result.push(item)
   }
   return result
+}
+
+/* ------------------------------ journal folding ---------------------------- */
+
+export function memoryWriteOf(
+  beforeEntry: WriteJournalMemoryEntry,
+  afterEntry: WriteJournalMemoryEntry,
+  journalId: string,
+  agentId: string,
+  turn: number,
+): BodyRollbackMemoryWrite {
+  if (!sameMemoryTarget(beforeEntry.target, afterEntry.target)) {
+    throw journalUnsafe(journalId, agentId, turn, 'targets two different memories')
+  }
+  const before = requireMemoryBefore(beforeEntry, journalId, agentId, turn)
+  const after = requireMemoryAfter(afterEntry, journalId, agentId, turn)
+  assertMemoryRecordMatches(before, beforeEntry.target, journalId, agentId, turn)
+  assertMemoryRecordMatches(after, beforeEntry.target, journalId, agentId, turn)
+  if (beforeEntry.tool === 'memory_write' && before !== null) {
+    throw journalUnsafe(journalId, agentId, turn, 'memory_write must record a null before state')
+  }
+  if (beforeEntry.tool !== 'memory_write' && before === null) {
+    throw journalUnsafe(journalId, agentId, turn, `memory_${beforeEntry.tool} requires a before record`)
+  }
+  if (beforeEntry.tool !== 'memory_forget' && after === null) {
+    throw journalUnsafe(journalId, agentId, turn, `${beforeEntry.tool} requires an after record`)
+  }
+  return {
+    kind: 'memory',
+    journalId,
+    tool: beforeEntry.tool,
+    target: beforeEntry.target,
+    before,
+    after,
+  }
+}
+
+export function variableWriteOf(
+  beforeEntry: WriteJournalVariableEntry,
+  afterEntry: WriteJournalVariableEntry,
+  journalId: string,
+  agentId: string,
+  turn: number,
+): BodyRollbackVariableWrite {
+  if (beforeEntry.target.scope !== afterEntry.target.scope || beforeEntry.target.scopeId !== afterEntry.target.scopeId) {
+    throw journalUnsafe(journalId, agentId, turn, 'targets two different variable scopes')
+  }
+  const before = requireSnapshotsBefore(beforeEntry, journalId, agentId, turn)
+  const after = requireSnapshotsAfter(afterEntry, journalId, agentId, turn)
+  assertSnapshotsMatch(before, beforeEntry.target, journalId, agentId, turn)
+  assertSnapshotsMatch(after, beforeEntry.target, journalId, agentId, turn)
+  if (beforeEntry.tool === 'variable_delete' && after !== null) {
+    throw journalUnsafe(journalId, agentId, turn, 'variable_delete must record a null after state')
+  }
+  if (beforeEntry.tool !== 'variable_delete' && after === null) {
+    throw journalUnsafe(journalId, agentId, turn, `${beforeEntry.tool} requires an after snapshot list`)
+  }
+  return {
+    kind: 'variable',
+    journalId,
+    tool: beforeEntry.tool,
+    target: beforeEntry.target,
+    before,
+    after,
+  }
+}
+
+function sameMemoryTarget(left: WriteJournalMemoryTarget, right: WriteJournalMemoryTarget): boolean {
+  return left.id === right.id && left.scope === right.scope && left.scopeId === right.scopeId
+}
+
+export function requireMemoryBefore(
+  entry: WriteJournalMemoryEntry,
+  journalId: string,
+  agentId: string,
+  turn: number,
+): MemoryRecord | null {
+  if (!('before' in entry) || entry.before === undefined) {
+    throw journalUnsafe(journalId, agentId, turn, 'has a before record without a before state')
+  }
+  return entry.before
+}
+
+function requireMemoryAfter(
+  entry: WriteJournalMemoryEntry,
+  journalId: string,
+  agentId: string,
+  turn: number,
+): MemoryRecord | null {
+  if (!('after' in entry) || entry.after === undefined) {
+    throw journalUnsafe(journalId, agentId, turn, 'has an after record without an after state')
+  }
+  return entry.after
+}
+
+export function requireSnapshotsBefore(
+  entry: WriteJournalVariableEntry,
+  journalId: string,
+  agentId: string,
+  turn: number,
+): readonly VariableSnapshot[] | null {
+  if (!('before' in entry) || entry.before === undefined) {
+    throw journalUnsafe(journalId, agentId, turn, 'has a before record without a before state')
+  }
+  return entry.before
+}
+
+function requireSnapshotsAfter(
+  entry: WriteJournalVariableEntry,
+  journalId: string,
+  agentId: string,
+  turn: number,
+): readonly VariableSnapshot[] | null {
+  if (!('after' in entry) || entry.after === undefined) {
+    throw journalUnsafe(journalId, agentId, turn, 'has an after record without an after state')
+  }
+  return entry.after
+}
+
+export function assertMemoryRecordMatches(
+  record: MemoryRecord | null,
+  target: WriteJournalMemoryTarget,
+  journalId: string,
+  agentId: string,
+  turn: number,
+): void {
+  if (record === null) return
+  if (record.id !== target.id || record.scope !== target.scope || record.scopeId !== target.scopeId) {
+    throw journalUnsafe(journalId, agentId, turn, `records memory '${record.id}' outside its target`)
+  }
+}
+
+export function assertSnapshotsMatch(
+  snapshots: readonly VariableSnapshot[] | null,
+  target: WriteJournalVariableTarget,
+  journalId: string,
+  agentId: string,
+  turn: number,
+): void {
+  if (snapshots === null) return
+  for (const snapshot of snapshots) {
+    if (snapshot.scope !== target.scope || snapshot.scopeId !== target.scopeId) {
+      throw journalUnsafe(journalId, agentId, turn, `records variable '${snapshot.name}' outside its target scope`)
+    }
+  }
+}
+
+/**
+ * Refuse one journal group whose records cannot drive a rollback.
+ *
+ * Journal shape errors are `body-state-unsafe` with `write-journal-missing`:
+ * the undo record exists but is unusable, so the rollback must not proceed.
+ */
+export function journalUnsafe(
+  journalId: string,
+  agentId: string,
+  turn: number,
+  detail: string,
+): BodyRollbackError {
+  return new BodyRollbackError(
+    'body-state-unsafe',
+    `body rollback for session '${agentId}' turn ${turn} refused: write journal '${journalId}' ${detail}`,
+    { detail: 'write-journal-missing', stage: 'prepare', sessionId: agentId, turn, journalId },
+  )
 }

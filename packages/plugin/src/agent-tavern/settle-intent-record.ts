@@ -73,13 +73,28 @@ export class WriteJournalError extends Error {
  */
 export const SETTLE_INTENT_EVENT_TYPE = 'plugin:dsh-soulmojito/settle-intent' as const
 
+/**
+ * Version of the per-item `effectiveAfter` field on an `open` record.
+ *
+ * Version 2 means every name the batch actually wrote also carries the
+ * post-guard value the flat store accepted, so an abort replay never resurrects
+ * a raw request value the MVU guard clamped or rejected. Records without this
+ * version predate the tracking and must not be replayed from item values.
+ */
+export const SETTLE_INTENT_AFTER_VERSION = 2 as const
+
 /** Per-variable state captured before one settle batch touches the flat store. */
 export interface SettleIntentItem {
   readonly name: string
   /** Flat chat-scope value before the batch; absent when the name had no value. */
   readonly before?: JsonValue
-  /** JSON value the batch intended to write; absent when the request was not JSON-safe. */
+  /** JSON value the batch requested; informational only, never replayed. */
   readonly after?: JsonValue
+  /**
+   * Value the guard let into the flat store. Only names carrying this field
+   * were written, and an abort replay uses only this field.
+   */
+  readonly effectiveAfter?: JsonValue
 }
 
 /** `open` and `extend` carry undo data; every other phase closes or decides. */
@@ -101,6 +116,12 @@ export interface SettleIntentOpenEntry {
    * receipt without an `opId` cannot prove that this batch saved.
    */
   readonly receiptOpId?: true
+  /**
+   * `2` when the batch records each written name's post-guard value in
+   * `SettleIntentItem.effectiveAfter`. Absent on legacy intents, which must not
+   * be replayed from item values.
+   */
+  readonly afterVersion?: typeof SETTLE_INTENT_AFTER_VERSION
   /**
    * The batch's durable commit decision, attached by `foldSettleIntents` from a
    * later `decide` record. Never present in an `open` payload.
@@ -177,12 +198,15 @@ export function readSettleIntents(events: readonly unknown[]): readonly SettleIn
 /**
  * Fold the open settle intents a restart still has to resolve.
  *
- * `extend` items merge into their op in log order; a `decide` record attaches
- * to its open entry; `commit`/`recovered`/`abort` close the op and drop it, so
- * an aborted batch is never restored or replayed again. Opening twice,
- * extending or deciding after closure, deciding twice, deciding without an
- * open record, extending after the decision, or closing twice/without an open
- * record throws: a damaged record must not be skipped silently.
+ * `extend` items merge into their op in log order; an item carrying
+ * `effectiveAfter` updates the recorded post-guard value of a name instead of
+ * appending a second undo entry (an undo entry without `before` would delete the
+ * name). A `decide` record attaches to its open entry; `commit`/`recovered`/
+ * `abort` close the op and drop it, so an aborted batch is never restored or
+ * replayed again. Opening twice, extending or deciding after closure, deciding
+ * twice, deciding without an open record, extending after the decision, or
+ * closing twice/without an open record throws: a damaged record must not be
+ * skipped silently.
  */
 export function foldSettleIntents(events: readonly unknown[]): readonly SettleIntentOpenEntry[] {
   const open = new Map<string, SettleIntentOpenEntry>()
@@ -200,7 +224,11 @@ export function foldSettleIntents(events: readonly unknown[]): readonly SettleIn
       const current = open.get(entry.opId)
       if (current === undefined) throw new WriteJournalError('invalid-settle-intent', `settle intent '${entry.opId}' extends without an open record`)
       if (current.decision !== undefined) throw new WriteJournalError('invalid-settle-intent', `settle intent '${entry.opId}' extends after it was decided`)
-      open.set(entry.opId, { ...current, items: [...current.items, ...entry.items] })
+      if (current.afterVersion !== SETTLE_INTENT_AFTER_VERSION
+        && entry.items.some((item) => item.effectiveAfter !== undefined)) {
+        throw new WriteJournalError('invalid-settle-intent', `settle intent '${entry.opId}' extends with effective after values but its open record predates afterVersion ${SETTLE_INTENT_AFTER_VERSION}`)
+      }
+      open.set(entry.opId, { ...current, items: mergeSettleIntentItems(current.items, entry.items) })
       continue
     }
     if (entry.phase === 'decide') {
@@ -221,6 +249,39 @@ export function foldSettleIntents(events: readonly unknown[]): readonly SettleIn
     open.delete(entry.opId)
   }
   return [...open.values()]
+}
+
+/**
+ * Merge one extend record into the folded undo list.
+ *
+ * Legacy items keep append order. An item that carries `effectiveAfter` is a
+ * value update for a name the batch already lists: it replaces the recorded
+ * effective value in place so undo never sees an entry without `before`.
+ */
+function mergeSettleIntentItems(
+  current: readonly SettleIntentItem[],
+  extension: readonly SettleIntentItem[],
+): SettleIntentItem[] {
+  const merged = [...current]
+  for (const item of extension) {
+    if (item.effectiveAfter === undefined) {
+      merged.push(item)
+      continue
+    }
+    let index = -1
+    for (let i = merged.length - 1; i >= 0; i -= 1) {
+      if (merged[i]!.name === item.name) {
+        index = i
+        break
+      }
+    }
+    if (index === -1) {
+      merged.push(item)
+      continue
+    }
+    merged[index] = { ...merged[index]!, effectiveAfter: item.effectiveAfter }
+  }
+  return merged
 }
 
 /* ---------------------------------- write ---------------------------------- */
@@ -357,6 +418,11 @@ function parseSettleIntent(data: unknown, index: number): SettleIntentEntry {
 function parseSettleIntentOpen(record: Record<string, unknown>, where: string): SettleIntentOpenEntry {
   const scope = record['scope']
   if (scope !== 'chat') throw invalidSettle(where, `field 'scope' must be 'chat', received '${String(scope)}'`)
+  const afterVersion = record['afterVersion'] === undefined ? undefined : afterVersionAt(record, where)
+  const items = settleIntentItems(record['items'], where)
+  if (afterVersion !== SETTLE_INTENT_AFTER_VERSION && items.some((item) => item.effectiveAfter !== undefined)) {
+    throw invalidSettle(where, `items carry 'effectiveAfter' but field 'afterVersion' is not ${SETTLE_INTENT_AFTER_VERSION}`)
+  }
   return {
     kind: 'settle-intent',
     phase: 'open',
@@ -369,7 +435,8 @@ function parseSettleIntentOpen(record: Record<string, unknown>, where: string): 
     receiptAt: timestampAt(record, 'receiptAt', where),
     at: timestampAt(record, 'at', where),
     ...(record['receiptOpId'] === undefined ? {} : { receiptOpId: receiptOpIdFlagAt(record, where) }),
-    items: settleIntentItems(record['items'], where),
+    ...(afterVersion === undefined ? {} : { afterVersion }),
+    items,
   }
 }
 
@@ -449,6 +516,14 @@ function receiptOpIdFlagAt(record: Record<string, unknown>, where: string): true
   return true
 }
 
+function afterVersionAt(record: Record<string, unknown>, where: string): typeof SETTLE_INTENT_AFTER_VERSION {
+  const value = record['afterVersion']
+  if (value !== SETTLE_INTENT_AFTER_VERSION) {
+    throw invalidSettle(where, `field 'afterVersion' must be ${SETTLE_INTENT_AFTER_VERSION} when present, received '${String(value)}'`)
+  }
+  return SETTLE_INTENT_AFTER_VERSION
+}
+
 function settleIntentItems(value: unknown, where: string): SettleIntentItem[] {
   // An empty list is valid: a batch whose every request the flat store rejected
   // has nothing to undo, but still owns a receipt decision.
@@ -462,5 +537,8 @@ function parseSettleIntentItem(value: unknown, where: string): SettleIntentItem 
     name: textAt(record, 'name', where),
     ...(record['before'] === undefined ? {} : { before: jsonValueAt(record['before'], `${where} before`) }),
     ...(record['after'] === undefined ? {} : { after: jsonValueAt(record['after'], `${where} after`) }),
+    ...(record['effectiveAfter'] === undefined
+      ? {}
+      : { effectiveAfter: jsonValueAt(record['effectiveAfter'], `${where} effectiveAfter`) }),
   }
 }

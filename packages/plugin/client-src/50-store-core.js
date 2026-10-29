@@ -106,6 +106,10 @@
         const error = new Error(body.message || `HTTP ${response.status}`)
         error.status = response.status
         error.code = body.code
+        // Body mutations publish a stable `detail` (for example
+        // `body-receipt-missing`); the UI maps it to local copy instead of
+        // showing the server's English sentence.
+        error.detail = body.detail
         throw error
       }
       return body

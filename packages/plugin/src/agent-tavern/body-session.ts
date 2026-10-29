@@ -2,9 +2,10 @@
  * Shared AgentTavern body session reads and host-shape helpers.
  *
  * This shard owns the read-only side used by both the `GET body` view and
- * startup recovery: structural event parsing, body-ledger folds, message text,
- * anchor-surface inspection, binding/agent resolution and safe logging. It
- * never writes to the session and never owns projection or mutation logic.
+ * startup recovery: structural event parsing, body-ledger folds, operation
+ * terminal records, message text, anchor-surface inspection, binding/agent
+ * resolution and safe logging. It never writes to the session and never owns
+ * projection or mutation logic.
  */
 
 import {
@@ -17,79 +18,50 @@ import {
 import type { HostAgentsService, HostLogger } from '../host-contract.js'
 import {
   BODY_EVENT_TYPE,
+  BODY_SETTLED_EVENT_TYPE,
   foldBodyLedger,
   type BodyLedger,
   type BodySessionEvent,
 } from './body.js'
+import { BODY_ABORT_EVENT_TYPE } from './body-runtime-settlement.js'
 import type { BodyAgentLike, BodySessionLike } from './body-runtime.js'
 
-/* ------------------------------- binding ---------------------------------- */
+/* ------------------------- contract and logging ---------------------------- */
 
-/** Persistent binding slice needed to decide whether body operations apply. */
-export interface BodyBindingView {
-  readonly architecture: string
-  readonly character?: string
-  readonly chatId?: string
-  readonly group?: boolean
-}
-
-/** Resolves one session id to its Tavern binding (state is owned by the store). */
-export type BodyBindingResolver = (
-  sessionId: string,
-) => BodyBindingView | undefined | Promise<BodyBindingView | undefined>
-
-/** Structural host slices accepted by the session helpers. */
-export interface BodyLogHost {
-  readonly logger?: HostLogger
-}
-
-export interface BodyBindingHost extends BodyLogHost {
-  readonly bindingOf?: BodyBindingResolver
-}
-
-export interface BodyAgentsHost extends BodyLogHost {
-  readonly agents?: HostAgentsService
-}
-
-/* ------------------------------ logging ----------------------------------- */
-
-export function warn(ctx: BodyLogHost, message: string, fields: Record<string, unknown>): void {
-  try {
-    ctx.logger?.warn?.(message, fields)
-  } catch {
-    // Logging must never mask the body failure it reports.
-  }
-}
-
-export function info(ctx: BodyLogHost, message: string, fields: Record<string, unknown>): void {
-  try {
-    ctx.logger?.info?.(message, fields)
-  } catch {
-    // Same as warn.
-  }
-}
-
-export function errorLog(ctx: BodyLogHost, message: string, fields: Record<string, unknown>): void {
-  try {
-    ctx.logger?.error?.(message, fields)
-  } catch {
-    // Same as warn.
-  }
-}
-
-export function failureCodeOf(error: unknown): string | undefined {
-  if (!isRecord(error)) return undefined
-  const code = error['code']
-  return typeof code === 'string' && code !== '' ? code : undefined
-}
-
-export function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-export function nonEmptyString(value: unknown): string | undefined {
-  return typeof value === 'string' && value !== '' ? value : undefined
-}
+// Host slices, logging and primitive guards live in `body-session-contract.ts`;
+// they are re-exported here so existing importers keep this module as the entry
+// point.
+export {
+  errorLog,
+  errorMessage,
+  failureCodeOf,
+  info,
+  isRecord,
+  nonEmptyString,
+  warn,
+} from './body-session-contract.js'
+export type {
+  BodyAgentsHost,
+  BodyBindingHost,
+  BodyBindingResolver,
+  BodyBindingView,
+  BodyLogHost,
+} from './body-session-contract.js'
+import {
+  errorLog,
+  errorMessage,
+  failureCodeOf,
+  info,
+  isRecord,
+  nonEmptyString,
+  warn,
+} from './body-session-contract.js'
+import type {
+  BodyAgentsHost,
+  BodyBindingHost,
+  BodyBindingView,
+  BodyLogHost,
+} from './body-session-contract.js'
 
 /* ------------------------------ session marker ----------------------------- */
 
@@ -124,10 +96,8 @@ export interface WiringEvent {
   readonly type: string
   readonly seq: number
   readonly data: Record<string, unknown>
-}
-
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
+  /** Host event time in epoch milliseconds; absent when the event has none. */
+  readonly time?: number
 }
 
 export function isSeq(value: unknown): value is number {
@@ -138,20 +108,141 @@ export function numberField(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isSafeInteger(value) ? value : undefined
 }
 
-export function wiringEvents(session: BodySessionLike): WiringEvent[] | undefined {
+/** Stable diagnostic code for a session event that could not be read at all. */
+type WiringLogIssueCode =
+  | 'invalid-session-event'
+  | 'invalid-body-event'
+  | 'invalid-body-seq'
+
+/** One skipped or malformed session event, kept for logging instead of dropping the whole log. */
+interface WiringLogIssue {
+  readonly code: WiringLogIssueCode
+  readonly message: string
+  readonly index: number
+  readonly type?: string
+  readonly seq?: number
+}
+
+/**
+ * Session log read with per-event degradation.
+ *
+ * Unrelated events that cannot be parsed are skipped one by one. A body event
+ * that cannot be read at all is reported as `strictFailure`: callers must not
+ * fold a body ledger from a log that is missing a body record, because the
+ * resulting slots would silently describe something the log never said.
+ */
+interface WiringLogRead {
+  readonly events: readonly WiringEvent[]
+  readonly issues: readonly WiringLogIssue[]
+  readonly strictFailure?: WiringLogIssue
+}
+
+/** Event types whose payload the body read side relies on. */
+function isBodyReadEventType(type: string): boolean {
+  return type === BODY_EVENT_TYPE || type === BODY_SETTLED_EVENT_TYPE || type === BODY_ABORT_EVENT_TYPE
+}
+
+/**
+ * Read one host session log, tolerating unrelated malformed events.
+ *
+ * Before 2026-10-29 a single unrelated event without an object `data` made the
+ * whole body read return `undefined`, so `GET body` looked like `session-busy`
+ * and no log line explained why. Unrelated events are now skipped with an
+ * issue, and only a damaged body record blocks the ledger fold.
+ */
+function readWiringLog(session: BodySessionLike): WiringLogRead | undefined {
   const values = readSessionEvents(session as HostSessionLog)
   if (values === undefined) return undefined
   const events: WiringEvent[] = []
-  for (const value of values) {
-    if (!isRecord(value)) return undefined
+  const issues: WiringLogIssue[] = []
+  let strictFailure: WiringLogIssue | undefined
+  for (const [index, value] of values.entries()) {
+    if (!isRecord(value)) {
+      issues.push({
+        code: 'invalid-session-event',
+        message: `session event at index ${index} is not an object`,
+        index,
+      })
+      continue
+    }
     const type = value['type']
+    if (typeof type !== 'string' || type === '') {
+      issues.push({
+        code: 'invalid-session-event',
+        message: `session event at index ${index} has no type`,
+        index,
+      })
+      continue
+    }
     const seq = value['seq']
     const data = value['data']
-    if (typeof type !== 'string' || !isSeq(seq) || !isRecord(data)) return undefined
-    events.push({ type, seq, data })
+    const seqUsable = isSeq(seq)
+    const dataUsable = isRecord(data)
+    if (isBodyReadEventType(type) && (!seqUsable || !dataUsable)) {
+      const issue: WiringLogIssue = seqUsable
+        ? {
+          code: 'invalid-body-event',
+          message: `body event '${type}' at session index ${index} (seq ${seq}) must carry an object data payload`,
+          index,
+          type,
+          seq,
+        }
+        : {
+          code: 'invalid-body-seq',
+          message: `body event '${type}' at session index ${index} has invalid seq ${String(seq)}`,
+          index,
+          type,
+        }
+      issues.push(issue)
+      strictFailure ??= issue
+      continue
+    }
+    if (!seqUsable) {
+      issues.push({
+        code: 'invalid-session-event',
+        message: `session event '${type}' at index ${index} has invalid seq ${String(seq)}`,
+        index,
+        type,
+      })
+      continue
+    }
+    if (!dataUsable && data !== undefined) {
+      issues.push({
+        code: 'invalid-session-event',
+        message: `session event '${type}' at index ${index} (seq ${seq}) has non-object data; read as an empty payload`,
+        index,
+        type,
+        seq,
+      })
+    }
+    const time = value['time']
+    events.push({
+      type,
+      seq,
+      data: dataUsable ? data : {},
+      ...(isSeq(time) ? { time } : {}),
+    })
   }
   events.sort((left, right) => left.seq - right.seq)
-  return events
+  return {
+    events,
+    issues,
+    ...(strictFailure === undefined ? {} : { strictFailure }),
+  }
+}
+
+/** Session events for callers that do not consume degradation diagnostics. */
+export function wiringEvents(session: BodySessionLike): WiringEvent[] | undefined {
+  const log = readWiringLog(session)
+  return log === undefined ? undefined : [...log.events]
+}
+
+/** One-line diagnostic used as the `GET body` ledger warning. */
+function wiringLogIssueText(issues: readonly WiringLogIssue[], strictFailure: WiringLogIssue | undefined): string | undefined {
+  const first = strictFailure ?? issues[0]
+  if (first === undefined) return undefined
+  const extra = issues.filter((issue) => issue !== first).length
+  return `${first.code}: ${first.message}${extra > 0 ? ` (+${extra} more unreadable session event(s))` : ''}`
 }
 
 export function eventAt(events: readonly WiringEvent[], seq: number): WiringEvent | undefined {
@@ -227,14 +318,180 @@ export interface BodySessionFacts {
    * route compares the two so a stale floor never masks a fresh edit.
    */
   readonly latestEditSeq?: number
-  /** Present when folding failed; the display route logs it and stays stable. */
+  /**
+   * Latest aborted, failed or cancelled operation in the log. Present only when
+   * a non-successful terminal record exists, so a cold session keeps the stable
+   * empty body shape.
+   */
+  readonly lastOperation?: BodyLastOperation
+  /**
+   * Present when folding failed or a session event had to be skipped. The
+   * display route logs it and keeps the stable body.
+   */
   readonly ledgerError?: string
+}
+
+/** Most recent non-successful terminal record of one body operation. */
+export interface BodyLastOperation {
+  readonly opId: string
+  readonly status: 'aborted' | 'failed' | 'cancelled'
+  /** Actionable cause recorded with the terminal record. */
+  readonly reason: string
+  /**
+   * Host event time in epoch milliseconds. Absent when the record carries no
+   * usable time (hand-written or legacy log); the read side never invents one.
+   */
+  readonly at?: number
 }
 
 /** Whether the anchor is still the last body on the current surface. */
 export interface BodyAnchorInspection {
   readonly onSurface: boolean
   readonly last: boolean
+}
+
+/**
+ * One parsed session log shared by every message id of a request.
+ *
+ * The batch form of `GET body` resolves the event log, the body ledgers, the
+ * message texts and the anchor checks once; `factsOf` then only assembles the
+ * per-message facts. A fold failure stays bound to its group, so damaged data
+ * degrades the same way for every row that owns it.
+ */
+export interface BodySessionFactsSource {
+  factsOf(messageId: string, groupHint: string | undefined): BodySessionFacts
+}
+
+/** One cached ledger fold; a failure is cached too, so it degrades consistently. */
+interface FoldedBodyLedger {
+  readonly ledger: BodyLedger | undefined
+  readonly error?: unknown
+}
+
+/** Cached terminal-operation fold for the shared log. */
+interface BodyOperationRead {
+  readonly value?: BodyLastOperation
+  readonly error?: string
+}
+
+/**
+ * Build a read source over one session log.
+ *
+ * The returned `factsOf` is memoized per `messageId` + `groupHint`, so repeated
+ * rows of the same body group never re-fold the ledger. `readBodySessionFacts`
+ * is the single-id wrapper: it keeps the exact per-request behavior.
+ */
+export function createBodySessionFactsSource(session: BodySessionLike): BodySessionFactsSource {
+  const log = readWiringLog(session)
+  if (log === undefined) {
+    const empty: BodySessionFacts = { ledger: undefined, messageText: undefined, inspection: undefined }
+    return { factsOf: () => empty }
+  }
+  const events = log.events
+  const surface = surfaceNodes(session)
+  // Skipped log records stay diagnosable through the existing GET warning path.
+  const logIssue = wiringLogIssueText(log.issues, log.strictFailure)
+  const folds = new Map<string, FoldedBodyLedger>()
+  const editSeqs = new Map<string, number | undefined>()
+  const inspections = new Map<string, BodyAnchorInspection | undefined>()
+  const facts = new Map<string, BodySessionFacts>()
+  let messageTexts: Map<string, string | undefined> | undefined
+  let operation: BodyOperationRead | undefined
+
+  const fold = (groupId: string): BodyLedger | undefined => {
+    const cached = folds.get(groupId)
+    if (cached !== undefined) {
+      if (cached.error !== undefined) throw cached.error
+      return cached.ledger
+    }
+    try {
+      const ledger = foldBodyLedgerFromEvents(events, groupId)
+      folds.set(groupId, { ledger })
+      return ledger
+    } catch (error) {
+      folds.set(groupId, { ledger: undefined, error })
+      throw error
+    }
+  }
+
+  const messageTextOf = (messageId: string): string | undefined => {
+    if (messageTexts === undefined) {
+      // One pass builds every message text; the first event wins, matching the
+      // previous `events.find` lookup.
+      const built = new Map<string, string | undefined>()
+      for (const event of events) {
+        const id = messageIdOf(event)
+        if (id === undefined || built.has(id)) continue
+        const message = messageOf(event)
+        built.set(id, message === undefined ? undefined : textOfMessage(message))
+      }
+      messageTexts = built
+    }
+    return messageTexts.get(messageId)
+  }
+
+  const inspectionOf = (anchorMessageId: string): BodyAnchorInspection | undefined => {
+    if (surface === undefined) return undefined
+    if (!inspections.has(anchorMessageId)) {
+      inspections.set(anchorMessageId, inspectAnchorInEvents(events, surface, anchorMessageId))
+    }
+    return inspections.get(anchorMessageId)
+  }
+
+  const latestEditSeqOf = (groupId: string): number | undefined => {
+    if (!editSeqs.has(groupId)) editSeqs.set(groupId, latestGroupEditSeq(events, groupId))
+    return editSeqs.get(groupId)
+  }
+
+  const operationOf = (): BodyOperationRead => {
+    if (operation !== undefined) return operation
+    try {
+      const value = latestBodyOperation(events)
+      operation = value === undefined ? {} : { value }
+    } catch (error) {
+      // A damaged terminal record must not turn the read route into a 500: the
+      // display keeps the stable body and the route logs the fold failure.
+      operation = { error: errorMessage(error) }
+    }
+    return operation
+  }
+
+  const factsOf = (messageId: string, groupHint: string | undefined): BodySessionFacts => {
+    const key = `${messageId}\u0000${groupHint ?? ''}`
+    const cached = facts.get(key)
+    if (cached !== undefined) return cached
+
+    let ledger: BodyLedger | undefined
+    let ledgerError = logIssue
+    try {
+      // A missing body record makes any folded slot list a guess; keep the read
+      // side on the stable body and let the logged code explain the damage.
+      if (log.strictFailure === undefined) {
+        ledger = groupHint === undefined ? undefined : fold(groupHint)
+        if (ledger === undefined) ledger = findBodyLedgerForMessage(events, messageId, fold)
+      }
+    } catch (error) {
+      ledger = undefined
+      ledgerError = ledgerError ?? errorMessage(error)
+    }
+
+    const terminal = operationOf()
+    if (terminal.error !== undefined) ledgerError = ledgerError ?? terminal.error
+    const anchorMessageId = ledger?.anchorMessageId ?? messageId
+    const latestEditSeq = ledger === undefined ? undefined : latestEditSeqOf(ledger.groupId)
+    const resolved: BodySessionFacts = {
+      ledger,
+      messageText: messageTextOf(messageId),
+      inspection: inspectionOf(anchorMessageId),
+      ...(latestEditSeq === undefined ? {} : { latestEditSeq }),
+      ...(terminal.value === undefined ? {} : { lastOperation: terminal.value }),
+      ...(ledgerError === undefined ? {} : { ledgerError }),
+    }
+    facts.set(key, resolved)
+    return resolved
+  }
+
+  return { factsOf }
 }
 
 /**
@@ -249,35 +506,7 @@ export function readBodySessionFacts(
   messageId: string,
   groupHint: string | undefined,
 ): BodySessionFacts {
-  const events = wiringEvents(session)
-  if (events === undefined) {
-    return { ledger: undefined, messageText: undefined, inspection: undefined }
-  }
-
-  let ledger: BodyLedger | undefined
-  let ledgerError: string | undefined
-  try {
-    ledger = groupHint === undefined ? undefined : foldBodyLedgerFromEvents(events, groupHint)
-    if (ledger === undefined) ledger = findBodyLedgerForMessage(events, messageId)
-  } catch (error) {
-    ledger = undefined
-    ledgerError = errorMessage(error)
-  }
-
-  const messageText = textOfSessionMessage(events, messageId)
-  const surface = surfaceNodes(session)
-  const anchorMessageId = ledger?.anchorMessageId ?? messageId
-  const inspection = surface === undefined
-    ? undefined
-    : inspectAnchorInEvents(events, surface, anchorMessageId)
-  const latestEditSeq = ledger === undefined ? undefined : latestGroupEditSeq(events, ledger.groupId)
-  return {
-    ledger,
-    messageText,
-    inspection,
-    ...(latestEditSeq === undefined ? {} : { latestEditSeq }),
-    ...(ledgerError === undefined ? {} : { ledgerError }),
-  }
+  return createBodySessionFactsSource(session).factsOf(messageId, groupHint)
 }
 
 /** Highest durable `edit` sequence for one body group. */
@@ -290,6 +519,77 @@ function latestGroupEditSeq(events: readonly WiringEvent[], groupId: string): nu
     if (latest === undefined || event.seq > latest) latest = event.seq
   }
   return latest
+}
+
+/* --------------------------- operation read side --------------------------- */
+
+/**
+ * Fold the latest non-successful terminal record of a body operation.
+ *
+ * Only records that describe an operation which did not end in a settled body
+ * are folded: `op-abort` (the previous body was restored), `op-settle-cancelled`
+ * (the hide failed before the restore) and `op-finish` with `result: 'failed'`.
+ * Events are seq-ordered, so the last match wins. Records are validated
+ * strictly; a damaged record throws instead of presenting the operation as
+ * successful, and the caller degrades to the stable body.
+ */
+function latestBodyOperation(events: readonly WiringEvent[]): BodyLastOperation | undefined {
+  let latest: BodyLastOperation | undefined
+  for (const event of events) {
+    const record = bodyOperationRecord(event)
+    if (record !== undefined) latest = record
+  }
+  return latest
+}
+
+function bodyOperationRecord(event: WiringEvent): BodyLastOperation | undefined {
+  if (event.type === BODY_ABORT_EVENT_TYPE) return abortedOperationRecord(event)
+  if (event.type === BODY_SETTLED_EVENT_TYPE && event.data['op'] === 'op-settle-cancelled') {
+    return {
+      opId: requiredOperationString(event, 'opId'),
+      status: 'cancelled',
+      reason: requiredOperationString(event, 'reason'),
+      ...operationTimeOf(event),
+    }
+  }
+  if (event.type === BODY_EVENT_TYPE && event.data['op'] === 'op-finish' && event.data['result'] === 'failed') {
+    return {
+      opId: requiredOperationString(event, 'opId'),
+      status: 'failed',
+      reason: requiredOperationString(event, 'reason'),
+      ...operationTimeOf(event),
+    }
+  }
+  return undefined
+}
+
+function abortedOperationRecord(event: WiringEvent): BodyLastOperation {
+  const op = event.data['op']
+  if (op !== 'op-abort') {
+    throw new Error(`body abort record at seq ${event.seq} has op '${String(op)}', expected 'op-abort'`)
+  }
+  const anchorId = event.data['anchorId']
+  if (anchorId !== undefined && nonEmptyString(anchorId) === undefined) {
+    throw new Error(`body abort record at seq ${event.seq} requires anchorId to be a non-empty string when present`)
+  }
+  return {
+    opId: requiredOperationString(event, 'opId'),
+    status: 'aborted',
+    reason: requiredOperationString(event, 'reason'),
+    ...operationTimeOf(event),
+  }
+}
+
+function requiredOperationString(event: WiringEvent, field: string): string {
+  const value = nonEmptyString(event.data[field])
+  if (value === undefined) {
+    throw new Error(`body operation record at seq ${event.seq} requires ${field} to be a non-empty string`)
+  }
+  return value
+}
+
+function operationTimeOf(event: WiringEvent): { readonly at?: number } {
+  return event.time === undefined ? {} : { at: event.time }
 }
 
 /**
@@ -306,12 +606,16 @@ export function foldSessionBodyLedgerForMessage(
 ): BodyLedger | undefined {
   const events = wiringEvents(session)
   if (events === undefined) return undefined
-  return findBodyLedgerForMessage(events, messageId)
+  return findBodyLedgerForMessage(events, messageId, (groupId) => foldBodyLedgerFromEvents(events, groupId))
 }
 
-function findBodyLedgerForMessage(events: readonly WiringEvent[], messageId: string): BodyLedger | undefined {
+function findBodyLedgerForMessage(
+  events: readonly WiringEvent[],
+  messageId: string,
+  fold: (groupId: string) => BodyLedger | undefined,
+): BodyLedger | undefined {
   // The group id of a fresh body is its first anchor message id.
-  const direct = foldBodyLedgerFromEvents(events, messageId)
+  const direct = fold(messageId)
   if (direct !== undefined && ownsMessage(direct, messageId)) return direct
 
   // Candidate events carry their group id, so one pass avoids folding every
@@ -328,7 +632,7 @@ function findBodyLedgerForMessage(events: readonly WiringEvent[], messageId: str
     }
   }
   if (owner !== undefined && owner !== messageId) {
-    const ledger = foldBodyLedgerFromEvents(events, owner)
+    const ledger = fold(owner)
     if (ledger !== undefined && ownsMessage(ledger, messageId)) return ledger
   }
 
@@ -340,7 +644,7 @@ function findBodyLedgerForMessage(events: readonly WiringEvent[], messageId: str
     if (groupId !== undefined) groupIds.add(groupId)
   }
   for (const groupId of groupIds) {
-    const ledger = foldBodyLedgerFromEvents(events, groupId)
+    const ledger = fold(groupId)
     if (ledger !== undefined && ownsMessage(ledger, messageId)) return ledger
   }
   return undefined
@@ -406,81 +710,17 @@ function inspectAnchorInEvents(
 
 /* -------------------------------- agents ---------------------------------- */
 
-/** Narrow one host value to the live-agent surface the body runtime needs. */
-export function bodyAgentOf(value: unknown): BodyAgentLike | undefined {
-  if (!isRecord(value)) return undefined
-  const session = value['session']
-  if (!isBodySession(session)) return undefined
-  if (typeof value['followup'] !== 'function') return undefined
-  return value as unknown as BodyAgentLike
-}
-
-/** Resolve a live agent from `ctx.agents.get`. */
-export function resolveLiveAgent(ctx: BodyAgentsHost, sessionId: string): BodyAgentLike | undefined {
-  const agents = ctx.agents
-  const get = agents?.get
-  if (agents === undefined || typeof get !== 'function') return undefined
-  try {
-    return bodyAgentOf(get.call(agents, sessionId))
-  } catch (error) {
-    warn(ctx, 'dsh-soulmojito body: agents.get failed', { sessionId, error: errorMessage(error) })
-    return undefined
-  }
-}
-
-/** All live agents the host exposes; empty on hosts without `agents.list`. */
-export function listLiveAgents(ctx: BodyAgentsHost): readonly BodyAgentLike[] {
-  const agents = ctx.agents
-  const list = agents?.list
-  if (agents === undefined || typeof list !== 'function') return []
-  let values: unknown
-  try {
-    values = list.call(agents)
-  } catch (error) {
-    warn(ctx, 'dsh-soulmojito body: agents.list failed', { error: errorMessage(error) })
-    return []
-  }
-  if (!Array.isArray(values)) return []
-  const agentsOut: BodyAgentLike[] = []
-  for (const value of values) {
-    const agent = bodyAgentOf(value)
-    if (agent !== undefined) agentsOut.push(agent)
-  }
-  return agentsOut
-}
-
-/** Resolve one session's Tavern binding through the injected resolver. */
-export async function resolveBodyBinding(
-  ctx: BodyBindingHost,
-  sessionId: string,
-): Promise<BodyBindingView | undefined> {
-  const bindingOf = ctx.bindingOf
-  if (typeof bindingOf !== 'function') {
-    warn(ctx, 'dsh-soulmojito body: no binding resolver is wired; body operations disabled', {
-      reason: 'architecture-mismatch',
-      sessionId,
-    })
-    return undefined
-  }
-  try {
-    return await bindingOf(sessionId)
-  } catch (error) {
-    warn(ctx, 'dsh-soulmojito body: binding lookup failed', { sessionId, error: errorMessage(error) })
-    return undefined
-  }
-}
-
-/** Only AgentTavern single-character sessions own body operations. */
-export function bodyBindingEligible(binding: BodyBindingView | undefined): boolean {
-  return binding !== undefined && binding.architecture === 'agent-tavern' && binding.group !== true
-}
+// Live-agent and binding resolution lives in `body-session-agents.ts`; it is
+// re-exported here so existing importers keep this module as the entry point.
+export {
+  bodyAgentOf,
+  bodyBindingEligible,
+  listLiveAgents,
+  resolveBodyBinding,
+  resolveLiveAgent,
+} from './body-session-agents.js'
 
 /* -------------------------------- helpers --------------------------------- */
-
-function isBodySession(value: unknown): value is BodySessionLike {
-  if (!isRecord(value)) return false
-  return typeof value['append'] === 'function'
-}
 
 function contentOf(message: Record<string, unknown>): Record<string, unknown>[] {
   const content = message['content']

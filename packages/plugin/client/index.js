@@ -7762,7 +7762,16 @@ window.__ModuleLoader__.load({
       'body.notLast': 'Only the latest reply can be edited.',
       'body.empty': 'Reply text cannot be empty.',
       'body.invalid': 'Reply text is empty or too long.',
+      'body.invalidRequest': 'The request is missing a required field; reload the page and try again.',
       'body.projectionPending': 'The reply is still syncing to the chat log; it was retried automatically — try again in a moment.',
+      'body.hostUnsupported': 'This host does not support body operations.',
+      'body.detailReceiptMissing': 'The candidate receipt is missing, so this reply cannot be edited right now.',
+      'body.detailReceiptDuplicate': 'The candidate receipt is duplicated, so this reply cannot be edited right now.',
+      'body.detailCandidateSwitchDisabled': 'Historical variable state protects this reply; candidate switching is disabled.',
+      'body.detailStaleAnchor': 'The reply anchor is stale; reload the page and try again.',
+      'body.detailGroupMismatch': 'This reply is bound to more than one chat floor, so the shown reply and the edit target disagree; editing is disabled.',
+      'body.detailFloorUnreadable': 'The chat floor for this reply cannot be read right now, so only the ledger reply is shown; it retries automatically.',
+      'body.detailUnknown': 'The current state does not allow this body operation.',
     }
     const MESSAGES_ZH = {
       'settings.subtitle': '角色卡、世界书与预设管理',
@@ -8684,7 +8693,16 @@ window.__ModuleLoader__.load({
       'body.notLast': '只能修改最后一组正文。',
       'body.empty': '正文不能为空。',
       'body.invalid': '正文为空或超过长度上限。',
+      'body.invalidRequest': '请求缺少必要参数，请刷新页面后重试。',
       'body.projectionPending': '正文还在同步到聊天文件，已自动重试；稍后再试一次。',
+      'body.hostUnsupported': '当前宿主不支持这项正文操作。',
+      'body.detailReceiptMissing': '候选回执缺失，暂时不能编辑这条正文。',
+      'body.detailReceiptDuplicate': '候选回执重复，暂时不能编辑这条正文。',
+      'body.detailCandidateSwitchDisabled': '历史变量状态保护了这条正文，候选切换已停用。',
+      'body.detailStaleAnchor': '正文锚点已失效，请刷新页面后重试。',
+      'body.detailGroupMismatch': '这组正文同时绑定了多个聊天楼层，显示与编辑目标不一致，已禁止编辑。',
+      'body.detailFloorUnreadable': '这条正文的聊天楼层暂时读不到，当前只显示台账正文；稍后会自动重试。',
+      'body.detailUnknown': '当前状态不允许这项正文操作。',
     }
     // translate follows the host locale service once apply() binds it; the
     // identity fallback mirrors LocaleRuntime.translate (missing key -> key,
@@ -8808,6 +8826,10 @@ window.__ModuleLoader__.load({
         const error = new Error(body.message || `HTTP ${response.status}`)
         error.status = response.status
         error.code = body.code
+        // Body mutations publish a stable `detail` (for example
+        // `body-receipt-missing`); the UI maps it to local copy instead of
+        // showing the server's English sentence.
+        error.detail = body.detail
         throw error
       }
       return body
@@ -15260,11 +15282,17 @@ window.__ModuleLoader__.load({
 
     // AgentTavern body operations (proposal 0021 §7): cached GET lookups and
     // the assistant-actions entry for edit / regenerate / candidate switching.
-    // The server owns the ledger; this layer only asks per message and drops
-    // its cache after a successful mutation so the anchor row refetches.
+    // The server owns the ledger; this layer reads the visible rows in one
+    // batched request (per-message lookups stay as the fallback) and drops its
+    // cache after a successful mutation so the anchor row refetches.
     const BODY_CACHE_LIMIT = 400
     const bodyCache = new Map()
     const bodyInflight = new Map()
+    // Batch window state lives here because group cache invalidation drops
+    // in-flight batch promises alongside single lookups.
+    const bodyBatchQueue = new Map()
+    const bodyBatchInflight = new Map()
+    let bodyBatchTimer
     const bodyLocalRevisions = new Map()
     const bodyCacheListeners = new Set()
     let bodyCacheVersion = 0
@@ -15334,6 +15362,9 @@ window.__ModuleLoader__.load({
       for (const key of [...bodyInflight.keys()]) {
         if (key.includes(suffix)) bodyInflight.delete(key)
       }
+      for (const key of [...bodyBatchInflight.keys()]) {
+        if (key.includes(suffix)) bodyBatchInflight.delete(key)
+      }
       bodyCacheVersion += 1
       for (const listener of bodyCacheListeners) listener()
     }
@@ -15351,6 +15382,10 @@ window.__ModuleLoader__.load({
     // pending anchor row's chain.
     const BODY_PROJECTION_REFRESH_DELAYS_MS = [150, 400, 900]
     const bodyProjectionRefreshes = new Map()
+    // A group whose bounded refresh exhausted its attempts. The latch keeps a
+    // floor that is still stale from restarting the chain on every render (that
+    // would be a polling storm); the next user mutation re-arms it.
+    const bodyProjectionExhausted = new Set()
 
     function tavernBodyProjectionKey(sessionId, groupId) {
       return `${sessionId}\u0000${groupId}`
@@ -15362,17 +15397,33 @@ window.__ModuleLoader__.load({
       const current = bodyProjectionRefreshes.get(key)
       if (current !== undefined && current.timer !== undefined) clearTimeout(current.timer)
       bodyProjectionRefreshes.delete(key)
+      bodyProjectionExhausted.delete(key)
     }
 
     function scheduleTavernBodyProjectionRefresh(sessionId, groupId) {
       if (typeof sessionId !== 'string' || typeof groupId !== 'string' || groupId === '') return
       const key = tavernBodyProjectionKey(sessionId, groupId)
+      if (bodyProjectionExhausted.has(key)) return
       const current = bodyProjectionRefreshes.get(key)
       if (current !== undefined && current.timer !== undefined) return
       const attempt = current === undefined ? 0 : current.attempt
-      if (attempt >= BODY_PROJECTION_REFRESH_DELAYS_MS.length) return
+      if (attempt >= BODY_PROJECTION_REFRESH_DELAYS_MS.length) {
+        // Budget spent: drop the dead { attempt, timer: undefined } entry instead
+        // of keeping it until the next mutation.
+        bodyProjectionRefreshes.delete(key)
+        bodyProjectionExhausted.add(key)
+        return
+      }
       const timer = setTimeout(() => {
-        bodyProjectionRefreshes.set(key, { attempt: attempt + 1, timer: undefined })
+        const used = attempt + 1
+        if (used >= BODY_PROJECTION_REFRESH_DELAYS_MS.length) {
+          // The last attempt owns no further timer; drop the entry now. The
+          // latch keeps a still-pending refetch from starting a new chain.
+          bodyProjectionRefreshes.delete(key)
+          bodyProjectionExhausted.add(key)
+        } else {
+          bodyProjectionRefreshes.set(key, { attempt: used, timer: undefined })
+        }
         // The next attempt only runs if the refetch still reports pending.
         invalidateTavernBodyGroupCache(sessionId, groupId)
       }, BODY_PROJECTION_REFRESH_DELAYS_MS[attempt])
@@ -15401,6 +15452,112 @@ window.__ModuleLoader__.load({
       return pending
     }
 
+    // The conversation surface renders several assistant rows at once. Each row
+    // registers its id in one flush window and the window asks for every visible
+    // body in a single request; a lone row (cold start) keeps the per-message
+    // route. A failed batch falls back to the per-message path, cache and retry
+    // behavior included, so the batch is an optimization only.
+    const BODY_BATCH_MIN = 2
+    const BODY_BATCH_LIMIT = 50
+
+    function tavernBodyBatchKey(sessionId, revision) {
+      return `${revision}\u0000${sessionId}`
+    }
+
+    function scheduleTavernBodyBatchFlush() {
+      if (bodyBatchTimer !== undefined) return
+      bodyBatchTimer = setTimeout(() => {
+        bodyBatchTimer = undefined
+        flushTavernBodyBatches()
+      }, 0)
+    }
+
+    function flushTavernBodyBatches() {
+      const batches = [...bodyBatchQueue.values()]
+      bodyBatchQueue.clear()
+      for (const batch of batches) void flushTavernBodyBatch(batch)
+    }
+
+    async function flushTavernBodyBatch(batch) {
+      const waiters = [...batch.waiters.values()]
+      for (let offset = 0; offset < waiters.length; offset += BODY_BATCH_LIMIT) {
+        const chunk = waiters.slice(offset, offset + BODY_BATCH_LIMIT)
+        if (chunk.length < BODY_BATCH_MIN) {
+          await settleTavernBodySingles(batch.sessionId, batch.revision, chunk)
+          continue
+        }
+        let items
+        try {
+          items = await loadTavernBodyBatch(batch.sessionId, chunk.map((waiter) => waiter.messageId), batch.revision)
+        } catch {
+          await settleTavernBodySingles(batch.sessionId, batch.revision, chunk)
+          continue
+        }
+        const missing = []
+        for (const waiter of chunk) {
+          const body = items.get(waiter.messageId)
+          if (body === undefined) missing.push(waiter)
+          else waiter.resolve(body)
+        }
+        if (missing.length > 0) await settleTavernBodySingles(batch.sessionId, batch.revision, missing)
+      }
+    }
+
+    function settleTavernBodySingles(sessionId, revision, waiters) {
+      return Promise.all(waiters.map((waiter) => loadTavernBody(sessionId, waiter.messageId, revision)
+        .then((body) => { waiter.resolve(body) }, (cause) => { waiter.reject(cause) })))
+    }
+
+    function loadTavernBodyBatch(sessionId, messageIds, revision) {
+      const localRevisions = new Map()
+      const mutationEpoch = bodyMutationEpoch
+      for (const messageId of messageIds) localRevisions.set(messageId, tavernBodyLocalRevision(sessionId, messageId))
+      const query = messageIds.map((messageId) => encodeURIComponent(messageId)).join(',')
+      return api(`body?sessionId=${encodeURIComponent(sessionId)}&messageIds=${query}`)
+        .then((result) => {
+          const items = result && typeof result === 'object' && result.items && typeof result.items === 'object'
+            ? result.items
+            : undefined
+          if (items === undefined) throw new Error('body batch response is missing items')
+          const bodies = new Map()
+          for (const messageId of messageIds) {
+            const body = Object.prototype.hasOwnProperty.call(items, messageId) ? items[messageId] : undefined
+            if (body === undefined || typeof body !== 'object') continue
+            // Same stale-response guard as the single lookup, applied per row.
+            if (mutationEpoch === bodyMutationEpoch
+              && tavernBodyLocalRevision(sessionId, messageId) === localRevisions.get(messageId)) {
+              cacheTavernBody(tavernBodyCacheKey(sessionId, messageId, revision), body)
+            }
+            bodies.set(messageId, body)
+          }
+          return bodies
+        })
+    }
+
+    function requestTavernBody(sessionId, messageId, revision) {
+      const key = tavernBodyCacheKey(sessionId, messageId, revision)
+      if (bodyCache.has(key)) return Promise.resolve(bodyCache.get(key))
+      const batched = bodyBatchInflight.get(key)
+      if (batched !== undefined) return batched
+      if (bodyInflight.has(key)) return bodyInflight.get(key)
+      const pending = new Promise((resolve, reject) => {
+        const batchKey = tavernBodyBatchKey(sessionId, revision)
+        let batch = bodyBatchQueue.get(batchKey)
+        if (batch === undefined) {
+          batch = { sessionId, revision, waiters: new Map() }
+          bodyBatchQueue.set(batchKey, batch)
+        }
+        batch.waiters.set(messageId, { messageId, resolve, reject })
+        scheduleTavernBodyBatchFlush()
+      })
+      bodyBatchInflight.set(key, pending)
+      const release = () => {
+        if (bodyBatchInflight.get(key) === pending) bodyBatchInflight.delete(key)
+      }
+      pending.then(release, release)
+      return pending
+    }
+
     function useTavernBody(sessionId, messageId) {
       const state = useTavernStore()
       const revision = state.bootstrap.storeRevision || ''
@@ -15413,16 +15570,14 @@ window.__ModuleLoader__.load({
         }
         let cancelled = false
         setResult((current) => ({ body: current.body, error: '', loading: true }))
-        void loadTavernBody(sessionId, messageId, revision)
+        void requestTavernBody(sessionId, messageId, revision)
           .then((body) => {
             if (cancelled) return
             setResult({ body, error: '', loading: false })
+            if (body === undefined || body.anchorMessageId !== messageId || typeof body.groupId !== 'string') return
             // Only the current anchor may drive the retry chain: hidden rows can
             // legitimately see a stale floor while the anchor already moved.
-            if (body && body.projectionPending === true && body.anchorMessageId === messageId
-              && typeof body.groupId === 'string') {
-              scheduleTavernBodyProjectionRefresh(sessionId, body.groupId)
-            }
+            if (body.projectionPending === true) scheduleTavernBodyProjectionRefresh(sessionId, body.groupId)
           })
           .catch((cause) => {
             if (cancelled) return
@@ -15441,18 +15596,42 @@ window.__ModuleLoader__.load({
       if (reason === 'session-busy') return t('body.busy')
       if (reason === 'body-compacted') return t('body.compacted')
       if (reason === 'not-last-round') return t('body.notLast')
+      if (reason === 'host-unsupported') return t('body.hostUnsupported')
       return typeof reason === 'string' ? reason : ''
     }
 
     function tavernBodyErrorText(t, cause) {
       const code = cause && typeof cause === 'object' && typeof cause.code === 'string' ? cause.code : ''
+      const detail = cause && typeof cause === 'object' && typeof cause.detail === 'string' ? cause.detail : ''
       if (code === 'session-busy') return t('body.busy')
       if (code === 'body-compacted') return t('body.compacted')
       if (code === 'not-last-round') return t('body.notLast')
       if (code === 'invalid-body-text') return t('body.invalid')
+      if (code === 'invalid-arguments') return t('body.invalidRequest')
       if (code === 'projection-pending') return t('body.projectionPending')
+      if (code === 'host-unsupported') return t('body.hostUnsupported')
+      // State refusals carry a stable detail (receipt damage, ledger damage).
+      // Map it to local copy; never surface the server's English sentence.
+      if (code === 'body-state-unsafe') {
+        const detailText = tavernBodyDetailText(t, detail)
+        return detailText === '' ? t('body.detailUnknown') : detailText
+      }
       const message = cause instanceof Error ? cause.message : String(cause)
       return t('body.failed', { message })
+    }
+
+    // GET body publishes the concrete reason an action is gated (`editDetail`
+    // or a historical-MVU refusal). Map the stable codes to local copy; an
+    // unknown detail gets a generic line instead of the server's English text.
+    function tavernBodyDetailText(t, detail) {
+      if (detail === 'body-receipt-missing') return t('body.detailReceiptMissing')
+      if (detail === 'body-receipt-duplicate') return t('body.detailReceiptDuplicate')
+      if (detail === 'candidate-switch-disabled') return t('body.detailCandidateSwitchDisabled')
+      if (detail === 'body-group-mismatch') return t('body.detailGroupMismatch')
+      if (detail === 'body-floor-unreadable') return t('body.detailFloorUnreadable')
+      if (detail === 'stale-anchor') return t('body.detailStaleAnchor')
+      if (typeof detail === 'string' && detail !== '') return t('body.detailUnknown')
+      return ''
     }
 
     // A body mutation's preflight refuses with projection-pending until the
@@ -15525,6 +15704,7 @@ window.__ModuleLoader__.load({
       const selectedLabel = count > 0 ? `${Math.min(selectedIndex + 1, count)}/${count}` : '0/0'
       const swipeLabel = t('body.swipe', { index: selectedIndex + 1, count })
       const reasonText = tavernBodyReasonText(t, body.reason)
+      const detailText = tavernBodyDetailText(t, body.detail)
 
       const runBodyAction = (kind, request, onDone) => {
         if (busy) return
@@ -15532,9 +15712,6 @@ window.__ModuleLoader__.load({
         setError('')
         void withBodyProjectionRetry(request)
           .then((result) => {
-            if (result && typeof result.revision === 'string') {
-              syncChatRevision(binding.character, binding.chatId, result.revision)
-            }
             bumpTavernBodyRevision(sessionId, messageId)
             if (typeof body.groupId === 'string') bumpTavernBodyGroup(sessionId, body.groupId)
             if (onDone) onDone(result)
@@ -15665,6 +15842,11 @@ window.__ModuleLoader__.load({
             }, h(IconChevronRightOutline14))) : null,
           watching !== null ? h('span', { className: 'dt-muted' }, t('body.generating')) : null,
           reasonText !== '' ? h('span', { className: 'dt-muted' }, reasonText) : null,
+          detailText !== '' ? h('span', {
+            className: 'dt-muted',
+            title: detailText,
+            'data-testid': 'tavern-body-detail',
+          }, detailText) : null,
           error !== '' && !editorOpen && !feedbackOpen ? h('span', { className: 'dt-error', role: 'alert' }, error) : null),
         editorOpen ? h(EditorDialog, {
           title: t('body.editTitle'),
