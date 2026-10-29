@@ -331,6 +331,9 @@ export function deductionTools(): ToolDefinition[] {
       const receipt: MvuReceipt = {
         at: settlementAt,
         turnKey: String(chat.messages.length),
+        // The durable intent's op id travels with the receipt: startup recovery
+        // matches this settle by identity instead of guessing by at + turnKey.
+        ...(settleIntent !== undefined ? { opId: settleIntent.opId } : {}),
         status: failed.length > 0 || ruleFailures.length > 0 ? 'failed' : receiptChanges.length > 0 ? 'updated' : 'unchanged',
         changes: receiptChanges,
         failures: [...failed.map((failure) => `${failure.name}: ${failure.error}`), ...ruleFailures],

@@ -483,7 +483,7 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     })
     const { chat } = await boundChat()
     expect(readMvuReceipts(chat)).toHaveLength(receiptsBefore + 1)
-    expect(readMvuReceipts(chat).at(-1)).toMatchObject({ at: open.receiptAt, turnKey: '2' })
+    expect(readMvuReceipts(chat).at(-1)).toMatchObject({ at: open.receiptAt, turnKey: '2', opId: open.opId })
     expect(await readVariable('settle.normal')).toMatchObject({ value: 'after' })
     expect(await readVariable('settle.created')).toMatchObject({ value: 1 })
 
@@ -680,35 +680,64 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     expect(await readVariable('settle.retry')).toMatchObject({ value: 'third' })
   })
 
-  it('treats an older open intent as superseded by a later persisted receipt', async () => {
+  it('matches a recovered intent by opId, not by another settle at the same at and turnKey', async () => {
     installSettleHost()
     const harness = createSettleSession()
-    await seedVariable('settle.superseded', 'committed')
-    await settleWith(harness, [{ name: 'settle.superseded', value: 'committed' }])
-    const committed = readSettleIntents(harness.session.events).find((intent) => intent.phase === 'open')
-    if (committed?.phase !== 'open') throw new Error('expected an open settle intent')
-    const staleAt = new Date(Date.parse(committed.receiptAt) - 1000).toISOString()
-    const stale: SettleIntentOpenEntry = {
-      kind: 'settle-intent',
-      phase: 'open',
-      opId: 'settle-stale',
-      sessionId: 'native',
-      character: CHARACTER,
-      scope: 'chat',
-      scopeId: chatId,
-      turnKey: '2',
-      receiptAt: staleAt,
-      at: staleAt,
-      items: [{ name: 'settle.superseded', before: 'old', after: 'dirty' }],
+    await seedVariable('settle.opid.keep', 'old')
+    await seedVariable('settle.opid.other', 'dirty')
+    const receiptsBefore = readMvuReceipts((await boundChat()).chat).length
+    // A commit append failure leaves the intent open after its receipt persisted.
+    harness.failIntentPhase = 'commit'
+    try {
+      await expect(settleWith(harness, [{ name: 'settle.opid.keep', value: 'committed' }]))
+        .rejects.toThrow(/settle intent commit record/)
+    } finally {
+      harness.failIntentPhase = undefined
     }
-    harness.session.appendPluginRecord(SETTLE_INTENT_EVENT_TYPE, stale)
+    const own = readSettleIntents(harness.session.events).find((intent) => intent.phase === 'open')
+    if (own?.phase !== 'open') throw new Error('expected an open settle intent')
+    const stored = readMvuReceipts((await boundChat()).chat)
+    expect(stored).toHaveLength(receiptsBefore + 1)
+    expect(stored.at(-1)).toMatchObject({ opId: own.opId, at: own.receiptAt, turnKey: own.turnKey })
 
+    const foreign: SettleIntentOpenEntry = {
+      kind: 'settle-intent', phase: 'open', opId: 'settle-opid-foreign', sessionId: 'native',
+      character: CHARACTER, scope: 'chat', scopeId: chatId,
+      turnKey: own.turnKey, receiptAt: own.receiptAt, at: own.receiptAt,
+      items: [{ name: 'settle.opid.other', before: 'before', after: 'dirty' }],
+    }
+    harness.session.appendPluginRecord(SETTLE_INTENT_EVENT_TYPE, foreign)
+    const outcome = await recoverSettle(harness)
+
+    // Only the opId match commits; the foreign op at the same at + turnKey restores.
+    expect(outcome).toMatchObject({ status: 'restored', pending: 0 })
+    expect(await readVariable('settle.opid.keep')).toMatchObject({ value: 'committed' })
+    expect(await readVariable('settle.opid.other')).toMatchObject({ value: 'before' })
+    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase))
+      .toEqual(['open', 'open', 'commit', 'recovered'])
+  })
+
+  it('keeps the legacy at + turnKey match for a receipt written without an opId', async () => {
+    // No journal seam on this settle: the receipt keeps the pre-opId shape.
+    await settle([{ name: 'settle.legacy', value: 'committed' }])
+    const legacy = readMvuReceipts((await boundChat()).chat).at(-1)!
+    expect(legacy).toMatchObject({ turnKey: '2' })
+    expect(legacy.opId).toBeUndefined()
+
+    installSettleHost()
+    const harness = createSettleSession()
+    const intent: SettleIntentOpenEntry = {
+      kind: 'settle-intent', phase: 'open', opId: 'settle-legacy-intent', sessionId: 'native',
+      character: CHARACTER, scope: 'chat', scopeId: chatId,
+      turnKey: legacy.turnKey, receiptAt: legacy.at, at: legacy.at,
+      items: [{ name: 'settle.legacy', before: 'before', after: 'dirty' }],
+    }
+    harness.session.appendPluginRecord(SETTLE_INTENT_EVENT_TYPE, intent)
     const outcome = await recoverSettle(harness)
 
     expect(outcome).toMatchObject({ status: 'clean', pending: 0 })
-    expect(await readVariable('settle.superseded')).toMatchObject({ value: 'committed' })
-    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase))
-      .toEqual(['open', 'commit', 'open', 'commit'])
+    expect(await readVariable('settle.legacy')).toMatchObject({ value: 'committed' })
+    expect(readSettleIntents(harness.session.events).map((entry) => entry.phase)).toEqual(['open', 'commit'])
   })
 
   it('fails closed before any flat write when the intent append fails', async () => {

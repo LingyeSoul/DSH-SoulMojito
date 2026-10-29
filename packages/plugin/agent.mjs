@@ -8845,7 +8845,7 @@ function overlayScopedVariables(base, entries) {
   return tree;
 }
 function readMvuReceipt(record) {
-  const { at, turnKey, status, changes, failures } = record;
+  const { at, turnKey, status, changes, failures, opId } = record;
   if (typeof at !== "string" || typeof turnKey !== "string") return void 0;
   if (status !== "updated" && status !== "unchanged" && status !== "failed") return void 0;
   return {
@@ -8862,6 +8862,7 @@ function readMvuReceipt(record) {
       return [out];
     }) : [],
     failures: Array.isArray(failures) ? failures.filter((item) => typeof item === "string") : [],
+    ...typeof opId === "string" && opId.trim() !== "" ? { opId } : {},
     ...typeof record.undoneAt === "string" ? { undoneAt: record.undoneAt } : {}
   };
 }
@@ -9902,6 +9903,9 @@ function deductionTools() {
       const receipt = {
         at: settlementAt,
         turnKey: String(chat.messages.length),
+        // The durable intent's op id travels with the receipt: startup recovery
+        // matches this settle by identity instead of guessing by at + turnKey.
+        ...settleIntent !== void 0 ? { opId: settleIntent.opId } : {},
         status: failed.length > 0 || ruleFailures.length > 0 ? "failed" : receiptChanges.length > 0 ? "updated" : "unchanged",
         changes: receiptChanges,
         failures: [...failed.map((failure) => `${failure.name}: ${failure.error}`), ...ruleFailures]

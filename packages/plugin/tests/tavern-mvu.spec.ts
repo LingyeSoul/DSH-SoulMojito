@@ -130,6 +130,27 @@ describe('receipt recording (pure)', () => {
     ])
   })
 
+  it('keeps opId through reads, appends, undo and redo; generation receipts stay opId-free', () => {
+    const chat = makeChat({ a: 2 }, {
+      receipts: [{ at: 't0', turnKey: '0', opId: 'settle-op-1', status: 'updated', changes: [{ name: 'a', before: 1, after: 2 }], failures: [] }],
+    })
+    appendMvuReceipt(chat, { at: 't1', turnKey: '1', status: 'unchanged', changes: [], failures: [] })
+    const receipts = readMvuReceipts(chat)
+    expect(receipts[0]).toMatchObject({ turnKey: '0', opId: 'settle-op-1' })
+    expect(receipts[1]!.opId).toBeUndefined()
+
+    undoMvuReceipts(chat, [receipts[0]!], { at: 'undo-at' })
+    expect(readMvuReceipts(chat)[0]).toMatchObject({ opId: 'settle-op-1', undoneAt: 'undo-at' })
+    redoMvuReceipts(chat, [receipts[0]!])
+    expect(readMvuReceipts(chat)[0]).toMatchObject({ opId: 'settle-op-1' })
+    expect(readMvuReceipts(chat)[0]!.undoneAt).toBeUndefined()
+    expect(chat.header.chat_metadata.variables).toEqual({ a: 2 })
+
+    const generated = makeChat({ favor: 1 })
+    const receipt = recordMvuTurnReceipt(generated, { favor: 1 }, { turnKey: '2' })
+    expect(receipt?.opId).toBeUndefined()
+  })
+
   it('keeps preserved candidate keys while the ring evicts the oldest settle receipts', () => {
     const chat = makeChat(undefined, {
       receipts: [

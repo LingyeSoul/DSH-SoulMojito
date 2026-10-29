@@ -76,6 +76,13 @@ export interface MvuReceipt {
   status: MvuReceiptStatus
   changes: MvuVariableChange[]
   failures: string[]
+  /**
+   * Settlement operation id (`tavern_variable_settle` only): the same `opId`
+   * the durable settle intent carries, so startup recovery can match the
+   * receipt exactly instead of guessing by `at` + `turnKey`. Absent on receipts
+   * written before this field existed and on generation / retry receipts.
+   */
+  opId?: string
   /** B-6a 回执撤销：撤销时刻（ISO）；存在即该回执已撤销，不再是「最新有效」。 */
   undoneAt?: string
 }
@@ -191,7 +198,7 @@ export function overlayChatScopedVariables(
 
 /** Tolerant parse of one receipt entry; invalid shapes return undefined (same semantics as readMvuReceipts). */
 function readMvuReceipt(record: Record<string, unknown>): MvuReceipt | undefined {
-  const { at, turnKey, status, changes, failures } = record
+  const { at, turnKey, status, changes, failures, opId } = record
   if (typeof at !== 'string' || typeof turnKey !== 'string') return undefined
   if (status !== 'updated' && status !== 'unchanged' && status !== 'failed') return undefined
   return {
@@ -210,6 +217,7 @@ function readMvuReceipt(record: Record<string, unknown>): MvuReceipt | undefined
         })
       : [],
     failures: Array.isArray(failures) ? failures.filter((item): item is string => typeof item === 'string') : [],
+    ...(typeof opId === 'string' && opId.trim() !== '' ? { opId } : {}),
     ...(typeof record.undoneAt === 'string' ? { undoneAt: record.undoneAt } : {}),
   }
 }

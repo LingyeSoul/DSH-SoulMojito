@@ -14248,7 +14248,7 @@ function overlayChatScopedVariables(base, entries) {
   return overlayScopedVariables(base, usable);
 }
 function readMvuReceipt(record) {
-  const { at, turnKey, status: status2, changes, failures } = record;
+  const { at, turnKey, status: status2, changes, failures, opId } = record;
   if (typeof at !== "string" || typeof turnKey !== "string") return void 0;
   if (status2 !== "updated" && status2 !== "unchanged" && status2 !== "failed") return void 0;
   return {
@@ -14265,6 +14265,7 @@ function readMvuReceipt(record) {
       return [out];
     }) : [],
     failures: Array.isArray(failures) ? failures.filter((item) => typeof item === "string") : [],
+    ...typeof opId === "string" && opId.trim() !== "" ? { opId } : {},
     ...typeof record.undoneAt === "string" ? { undoneAt: record.undoneAt } : {}
   };
 }
@@ -16832,7 +16833,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("8b1d74c") : void 0;
+  const commit = true ? normalizeCommit("9090291") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -22266,7 +22267,9 @@ async function settleReceiptPersisted(deps, intent) {
     throw settleChatError(intent, cause);
   }
   if (snapshot2 === void 0) throw settleChatError(intent, void 0);
-  return readMvuReceipts(snapshot2.chat).some((receipt) => receipt.undoneAt === void 0 && receipt.turnKey === intent.turnKey && receipt.at >= intent.receiptAt);
+  const live = readMvuReceipts(snapshot2.chat).filter((receipt) => receipt.undoneAt === void 0);
+  if (live.some((receipt) => receipt.opId === intent.opId)) return true;
+  return live.some((receipt) => receipt.opId === void 0 && receipt.turnKey === intent.turnKey && receipt.at >= intent.receiptAt);
 }
 function settleChatError(intent, cause) {
   const suffix = cause === void 0 ? "" : `: ${errorMessage2(cause)}`;

@@ -50,13 +50,16 @@ export interface SettleIntentRecovery {
 
 /**
  * Close settle intents a crash left open between the flat write and the chat
- * save, or after the save but before the commit marker. A persisted receipt at
- * or after the intent's `receiptAt` for the same `turnKey` closes it as
- * committed (a later settle supersedes an earlier failed attempt); otherwise
- * every merged open/extend item is restored to its `before` value (deleted
- * when absent) with the current revision as CAS, newest first, so a name
- * written by several phases returns to its earliest `before`; nothing else is
- * written on failure.
+ * save, or after the save but before the commit marker.
+ *
+ * A persisted live receipt carrying the intent's `opId` closes it as committed:
+ * the receipt is that batch's own durable proof, so another settle that shares
+ * `at` and `turnKey` can never vouch for it. Receipts written before `opId`
+ * existed keep the legacy `turnKey` + `receiptAt` match, so old journals still
+ * recover. Otherwise every merged open/extend item is restored to its `before`
+ * value (deleted when absent) with the current revision as CAS, newest first,
+ * so a name written by several phases returns to its earliest `before`;
+ * nothing else is written on failure.
  */
 export async function recoverOpenSettleIntents(
   deps: SettleIntentRecoveryDeps,
@@ -105,7 +108,13 @@ async function settleReceiptPersisted(
     snapshot = await deps.store.getChatSnapshot(intent.character, intent.scopeId)
   } catch (cause) { throw settleChatError(intent, cause) }
   if (snapshot === undefined) throw settleChatError(intent, undefined)
-  return readMvuReceipts(snapshot.chat).some((receipt) => receipt.undoneAt === undefined
+  const live = readMvuReceipts(snapshot.chat).filter((receipt) => receipt.undoneAt === undefined)
+  // Exact identity first: only this batch's own receipt proves its save.
+  if (live.some((receipt) => receipt.opId === intent.opId)) return true
+  // Legacy receipts (written before opId existed) keep the old match; a receipt
+  // belonging to another op must never close this intent, even at the same
+  // millisecond on the same floor.
+  return live.some((receipt) => receipt.opId === undefined
     && receipt.turnKey === intent.turnKey
     && receipt.at >= intent.receiptAt)
 }
