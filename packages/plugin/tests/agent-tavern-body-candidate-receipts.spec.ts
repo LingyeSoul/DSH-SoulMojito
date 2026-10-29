@@ -4,6 +4,7 @@ import type { BodyLedger } from '../src/agent-tavern/body.js'
 import {
   CandidateReceiptError,
   applyCandidateEditToChat,
+  candidatePreserveKeys,
   candidateReceiptKey,
   classifyBodyReceiptKey,
   inspectCandidateReceipts,
@@ -11,7 +12,14 @@ import {
   type CandidateReceiptErrorCode,
   type CandidateReceiptRef,
 } from '../src/agent-tavern/body-candidate-receipts.js'
-import { readMvuReceipts, mvuReceiptsForBody, type MvuReceipt } from '../src/mvu.js'
+import {
+  MVU_RECEIPTS_LIMIT,
+  mvuReceiptsForBody,
+  readMvuReceipts,
+  redoMvuReceipts,
+  undoMvuReceipts,
+  type MvuReceipt,
+} from '../src/mvu.js'
 import { assertReceiptCoverage } from '../src/agent-tavern/body-rollback-receipts.js'
 
 const CARD = 'Candidate Receipt Character'
@@ -86,6 +94,34 @@ function ledgerOf(text: string): BodyLedger {
     anchorMessageId: MESSAGE_ID,
     edits: new Map(),
   }
+}
+
+/** Ledger with one candidate per text; candidate N uses `<groupId>-N` after slot 0. */
+function candidateLedgerOf(texts: readonly string[]): BodyLedger {
+  return {
+    groupId: GROUP_ID,
+    candidates: texts.map((text, index) => ({
+      messageId: index === 0 ? MESSAGE_ID : `${MESSAGE_ID}-${index}`,
+      index,
+      text,
+    })),
+    selectedIndex: 0,
+    anchorMessageId: MESSAGE_ID,
+    edits: new Map(),
+  }
+}
+
+/** One body floor carrying every text as a projected swipe. */
+function swipeChat(texts: readonly string[], variables: Record<string, unknown>): ChatLogIR {
+  const chat = mvuChat(texts[0] ?? '', variables)
+  const floor = chat.messages[1]!
+  chat.messages[1] = {
+    ...floor,
+    swipes: [...texts],
+    swipe_id: 0,
+    swipe_info: texts.map(() => ({ send_date: SEND_DATE, extra: { provider: 'test-provider', model: 'test-model' } })),
+  }
+  return chat
 }
 
 function updateText(narrative: string, delta: number): string {
@@ -205,6 +241,16 @@ describe('candidate receipt keys', () => {
     for (const turnKey of unknown) {
       expect(classifyBodyReceiptKey(turnKey), turnKey).toEqual({ kind: 'unknown' })
     }
+  })
+
+  it('lists every candidate key plus its legacy alias for ring retention', () => {
+    const ledger = candidateLedgerOf(['first body', 'second body'])
+    expect([...candidatePreserveKeys(ledger)].sort()).toEqual([
+      'body:group-1',
+      'body:group-1#0',
+      'body:group-1-1',
+      'body:group-1-1#1',
+    ])
   })
 })
 
@@ -710,5 +756,112 @@ describe('candidate edit transaction', () => {
     expect(() => assertReceiptCoverage(oldText, [], byMessage, MESSAGE_ID, 1, 'agent-1', 1)).not.toThrow()
     expect(() => assertReceiptCoverage(oldText, [], byMessage, 'other-message', 1, 'agent-1', 1))
       .toThrowError(/neither a 'body:other-message' nor a 'body:other-message#<index>' receipt/)
+  })
+})
+
+/* ---------------------- ring retention (proposal 0023 §3.6) ---------------------- */
+
+function settleReceiptOf(floorIndex: number, at: string): MvuReceipt {
+  return receiptOf(String(floorIndex), at, [])
+}
+
+describe('candidate receipt retention under ring pressure', () => {
+  it('keeps the active group receipts when 25 settle receipts overflow the ring', () => {
+    const textA = updateText('Body A', 5)
+    const textB = updateText('Body B', 2)
+    const ledger = candidateLedgerOf([textA, textB])
+    const secondMessageId = ledger.candidates[1]!.messageId
+    const chat = swipeChat([textA, textB], baseVariables(15))
+    // The group's receipts sit below a long settle history, which is exactly the
+    // state where a plain ring has already evicted them.
+    attachReceipts(chat, [
+      receiptOf('body:old-group#0', AT_ONE, [favorChange(1, 2)]),
+      receiptOf(`body:${MESSAGE_ID}#0`, AT_ONE, [favorChange(10, 15)]),
+      receiptOf(`body:${secondMessageId}#1`, AT_ONE, [favorChange(10, 12)], AT_ONE),
+      ...Array.from({ length: 25 }, (_, floor) => settleReceiptOf(100 + floor, `2026-10-28T01:00:00.${String(floor).padStart(3, '0')}Z`)),
+    ])
+
+    applyCandidateEditToChat(chat, mvuCard, {
+      ledger,
+      groupId: GROUP_ID,
+      index: 0,
+      messageId: MESSAGE_ID,
+      previousText: textA,
+      text: updateText('Body A edited', 3),
+      at: AT_TWO,
+      eventSeq: 40,
+    })
+
+    const keys = readMvuReceipts(chat).map((receipt) => receipt.turnKey)
+    // Both active-group candidates survive; the foreign group and the oldest
+    // settle receipts stay ordinary ring victims.
+    expect(keys).toHaveLength(MVU_RECEIPTS_LIMIT)
+    expect(keys).toContain(`body:${MESSAGE_ID}#0`)
+    expect(keys).toContain(`body:${secondMessageId}#1`)
+    expect(keys).not.toContain('body:old-group#0')
+    expect(keys).toContain('124')
+    expect(keys).not.toContain('106')
+    // The edit still addressed the candidate by key and applied the patch once.
+    expect(mvuReceiptsForBody(chat, { messageId: MESSAGE_ID }).map((receipt) => receipt.turnKey))
+      .toEqual([`body:${MESSAGE_ID}#0`])
+    expect(statFavor(chat)).toBe(13)
+  })
+
+  it('keeps every candidate receipt when the group alone exceeds the ring', () => {
+    const texts = Array.from({ length: 21 }, (_, index) => updateText(`Body ${index}`, 1))
+    const ledger = candidateLedgerOf(texts)
+    const chat = swipeChat(texts, baseVariables(15))
+    attachReceipts(chat, ledger.candidates.map((candidate, index) => receiptOf(
+      candidateReceiptKey(candidate.messageId, candidate.index),
+      AT_ONE,
+      [favorChange(10, index === 0 ? 15 : 11)],
+      index === 0 ? undefined : AT_ONE,
+    )))
+
+    applyCandidateEditToChat(chat, mvuCard, {
+      ledger,
+      groupId: GROUP_ID,
+      index: 0,
+      messageId: MESSAGE_ID,
+      previousText: texts[0]!,
+      text: updateText('Body 0 edited', 3),
+      at: AT_TWO,
+      eventSeq: 41,
+    })
+
+    const keys = readMvuReceipts(chat).map((receipt) => receipt.turnKey)
+    // 21 receipts is over MVU_RECEIPTS_LIMIT on purpose: an active candidate's
+    // only replayable proof outranks the ring size.
+    expect(keys).toHaveLength(21)
+    expect([...keys].sort()).toEqual(
+      ledger.candidates.map((candidate) => candidateReceiptKey(candidate.messageId, candidate.index)).sort(),
+    )
+    expect(statFavor(chat)).toBe(13)
+  })
+
+  it('undoes and redoes a candidate receipt stored in an over-limit array', () => {
+    const text = updateText('Body', 5)
+    const chat = mvuChat(text, baseVariables(15))
+    attachReceipts(chat, [
+      receiptOf(`body:${MESSAGE_ID}#0`, AT_ONE, [favorChange(10, 15)]),
+      ...Array.from({ length: 24 }, (_, floor) => settleReceiptOf(floor, AT_ONE)),
+    ])
+    expect(readMvuReceipts(chat)).toHaveLength(25)
+
+    const [candidate] = mvuReceiptsForBody(chat, { messageId: MESSAGE_ID })
+    expect(candidate?.turnKey).toBe(`body:${MESSAGE_ID}#0`)
+
+    const undone = undoMvuReceipts(chat, [candidate!], { at: AT_TWO })
+    expect(undone.receipts).toHaveLength(1)
+    expect(undone.restores).toContainEqual({ path: 'stat_data.mvu.favor', value: 10 })
+    expect(statFavor(chat)).toBe(10)
+    expect(readMvuReceipts(chat)).toHaveLength(25)
+    expect(readMvuReceipts(chat)[0]?.undoneAt).toBe(AT_TWO)
+
+    const redone = redoMvuReceipts(chat, [candidate!])
+    expect(redone.receipts).toHaveLength(1)
+    expect(statFavor(chat)).toBe(15)
+    expect(readMvuReceipts(chat)).toHaveLength(25)
+    expect(readMvuReceipts(chat)[0]?.undoneAt).toBeUndefined()
   })
 })

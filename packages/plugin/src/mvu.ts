@@ -226,11 +226,51 @@ export function readMvuReceipts(chat: ChatLogIR): MvuReceipt[] {
   return receipts
 }
 
-/** 追加回执（环形保留最近 20 条），写 `chat_metadata.mvu`（调用方负责 saveChat）。 */
-export function appendMvuReceipt(chat: ChatLogIR, receipt: MvuReceipt): void {
-  const metadata = chat.header.chat_metadata
-  const receipts = [...readMvuReceipts(chat), receipt].slice(-MVU_RECEIPTS_LIMIT)
-  metadata.mvu = { receipts }
+/**
+ * Ring retention with a preserve set (proposal 0023 §3.6).
+ *
+ * After the append, every receipt whose `turnKey` is in `preserveTurnKeys`
+ * survives in stored order; the remaining slots take the newest of the other
+ * receipts. A preserve set larger than the limit is kept in full: an oversized
+ * array is better than silently dropping the only replayable proof of an active
+ * body candidate (which would later fail with `body-receipt-missing`). Stored
+ * order is preserved, so undo/redo keep their append-order semantics.
+ */
+function retainMvuReceipts(
+  receipts: readonly MvuReceipt[],
+  preserveTurnKeys: ReadonlySet<string>,
+): MvuReceipt[] {
+  const preserved = new Set<number>()
+  const others: number[] = []
+  for (let index = 0; index < receipts.length; index += 1) {
+    if (preserveTurnKeys.has(receipts[index]!.turnKey)) preserved.add(index)
+    else others.push(index)
+  }
+  const budget = Math.max(0, MVU_RECEIPTS_LIMIT - preserved.size)
+  const kept = new Set<number>(preserved)
+  const newest = others.slice(others.length - Math.min(budget, others.length))
+  for (const index of newest) kept.add(index)
+  return receipts.filter((_, index) => kept.has(index))
+}
+
+/**
+ * Append one receipt to `chat_metadata.mvu` (the caller owns `saveChat`).
+ *
+ * Body-candidate callers pass `preserveTurnKeys` explicitly (the candidate key
+ * plus its legacy `body:<messageId>` alias); settle callers pass nothing and
+ * keep the plain ring. Omitting the argument is identical to the old behavior:
+ * only the newest `MVU_RECEIPTS_LIMIT` receipts are kept.
+ */
+export function appendMvuReceipt(
+  chat: ChatLogIR,
+  receipt: MvuReceipt,
+  preserveTurnKeys?: ReadonlySet<string>,
+): void {
+  const appended = [...readMvuReceipts(chat), receipt]
+  const receipts = preserveTurnKeys === undefined
+    ? appended.slice(-MVU_RECEIPTS_LIMIT)
+    : retainMvuReceipts(appended, preserveTurnKeys)
+  chat.header.chat_metadata.mvu = { receipts }
 }
 
 /**
@@ -244,7 +284,14 @@ export function appendMvuReceipt(chat: ChatLogIR, receipt: MvuReceipt): void {
 export function recordMvuTurnReceipt(
   chat: ChatLogIR,
   before: Record<string, unknown>,
-  options: { turnKey: string; at?: string; failures?: string[]; changeNotes?: Record<string, string> },
+  options: {
+    turnKey: string
+    at?: string
+    failures?: string[]
+    changeNotes?: Record<string, string>
+    /** Body-candidate keys that must survive the ring; settle callers omit it. */
+    preserveTurnKeys?: ReadonlySet<string>
+  },
 ): MvuReceipt | undefined {
   const after = readChatVariables(chat)
   const changes = diffVariables(before, after)
@@ -265,7 +312,7 @@ export function recordMvuTurnReceipt(
     changes,
     failures,
   }
-  appendMvuReceipt(chat, receipt)
+  appendMvuReceipt(chat, receipt, options.preserveTurnKeys)
   return receipt
 }
 

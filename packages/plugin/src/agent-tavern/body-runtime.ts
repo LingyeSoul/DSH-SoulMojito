@@ -40,6 +40,7 @@ import {
   type ActiveBodyOperation,
   type BodyRuntimeDeps,
   type BodyRuntimeState,
+  type BodySettledEvent,
   type EditBodyRequest,
   type PendingBodyOperation,
   type RegenerateBodyRequest,
@@ -365,28 +366,29 @@ async function prepareRegenerateRollback(
  * Fold `op-start` events that never received `op-finish`. Startup recovery
  * uses this list to decide between candidate settlement and a body restore.
  * A durable `rollbackPlan` carried by the record is attached to the operation,
- * so the restore path can replay the old writes after a restart. A durable
- * `op-settled` marker is attached as `settled`: that operation already replaced
- * the body, so recovery must only retry `op-finish`.
+ * so the restore path can replay the old writes after a restart. Two-phase
+ * `body-settled` records are attached as `settled`, `settling` or
+ * `settleCancelled`: recovery must resolve `settling` against the surface and
+ * ledger, and must never treat `settleCancelled` as settled.
  */
 export function foldPendingOps(events: readonly unknown[]): readonly PendingBodyOperation[] {
   const parsed = parseEventList(events, 'foldPendingOps')
   const pending = new Map<string, PendingBodyOperation>()
   const finished = new Set<string>()
   for (const event of parsed) {
-    const settled = parseSettledEvent(event)
-    if (settled !== undefined) {
-      const op = pending.get(settled.opId)
+    const settlement = parseSettledEvent(event)
+    if (settlement !== undefined) {
+      const op = pending.get(settlement.opId)
       if (op !== undefined) {
-        op.settled = { anchorId: settled.anchorId, index: settled.index }
+        applySettlementEvidence(op, settlement, event.seq)
         continue
       }
       // A marker repeated after op-finish is harmless evidence of the same
       // completed operation; one without any open op-start is a broken log.
-      if (finished.has(settled.opId)) continue
+      if (finished.has(settlement.opId)) continue
       throw bodyRuntimeError(
         'invalid-event',
-        `foldPendingOps: body settled record at seq ${event.seq} references operation '${settled.opId}' with no open op-start`,
+        `foldPendingOps: body settled record at seq ${event.seq} references operation '${settlement.opId}' with no open op-start`,
       )
     }
     const data = pendingEventOf(event)
@@ -410,4 +412,41 @@ export function foldPendingOps(events: readonly unknown[]): readonly PendingBody
     finished.add(data.opId)
   }
   return [...pending.values()].sort((left, right) => left.startSeq - right.startSeq)
+}
+
+/**
+ * Attach one settlement record to its open operation. The latest record wins:
+ * a cancelled attempt clears earlier settlement proof, and a later settled
+ * record clears an earlier cancellation.
+ */
+function applySettlementEvidence(
+  op: PendingBodyOperation,
+  settlement: BodySettledEvent,
+  seq: number,
+): void {
+  if (settlement.groupId !== op.groupId) {
+    throw bodyRuntimeError(
+      'invalid-event',
+      `foldPendingOps: settlement record at seq ${seq} references group '${settlement.groupId}', not '${op.groupId}' of operation '${settlement.opId}'`,
+    )
+  }
+  const marker = { anchorId: settlement.anchorId, index: settlement.index }
+  if (settlement.phase === 'settled') {
+    op.settled = marker
+    delete op.settling
+    delete op.settleCancelled
+    return
+  }
+  delete op.settled
+  if (settlement.phase === 'settling') {
+    op.settling = marker
+    delete op.settleCancelled
+    return
+  }
+  op.settleCancelled = {
+    anchorId: settlement.anchorId,
+    index: settlement.index,
+    reason: settlement.reason ?? 'settlement-cancelled',
+  }
+  delete op.settling
 }

@@ -22,6 +22,7 @@ import {
   type BodyRuntimeDeps,
   type PendingBodyOperation,
 } from './body-runtime.js'
+import { settlementEvidenceOf } from './body-runtime-core.js'
 import {
   agentIdOf,
   bodyAgentOf,
@@ -68,10 +69,12 @@ export type BodyDepsFactory = (
 /**
  * One agent's recovery result. `pending` counts `op-start` records without
  * `op-finish`, so tests and logs can distinguish a clean session from a repair.
+ * `finish-pending` means the body is durably settled but its `op-finish` still
+ * could not be written; it is deliberately not counted as a restore.
  */
 export interface BodyRecoveryOutcome {
   readonly agentId: string
-  readonly status: 'clean' | 'settled' | 'restored' | 'skipped' | 'failed'
+  readonly status: 'clean' | 'settled' | 'restored' | 'finish-pending' | 'skipped' | 'failed'
   readonly pending: number
   readonly reason?: string
 }
@@ -201,6 +204,14 @@ async function recoverAgentBody(
   let settled = 0
 
   for (const op of pending) {
+    if (op.settleCancelled !== undefined) {
+      info(ctx, 'dsh-soulmojito body: recovery found a cancelled settlement and will restore the previous body', {
+        agentId,
+        opId: op.opId,
+        stage: 'cancelled',
+        reason: op.settleCancelled.reason,
+      })
+    }
     // Order matters (proposal §9.2): the recovered turn may still be open, and
     // the runtime settles it in place before `closeImportBracket` closes it.
     const turn = recoveredTurnOf(events, op)
@@ -214,6 +225,14 @@ async function recoverAgentBody(
       const result = await finalizeRecoveredOperation(deps, op, turn)
       if (result.status === 'ok') {
         settled += 1
+        if (op.settling !== undefined) {
+          info(ctx, 'dsh-soulmojito body: recovery completed a settling operation', {
+            agentId,
+            opId: op.opId,
+            stage: 'settling-recovered',
+            anchorMessageId: result.anchorMessageId,
+          })
+        }
         continue
       }
       if (result.status === 'failed' || recoveryTurnMismatch(result.reason)) {
@@ -248,19 +267,24 @@ async function recoverAgentBody(
   if (openTurn !== undefined) closeRecoveredBracket(ctx, agent, openTurn, agentId)
 
   let restored = 0
+  let finishPending = 0
   let failed = 0
   for (const op of restoreOps) {
-    if (await restoreRecoveredOperation(ctx, deps, op)) restored += 1
+    const outcome = await restoreRecoveredOperation(ctx, deps, op)
+    if (outcome === 'restored') restored += 1
+    else if (outcome === 'finish-pending') finishPending += 1
     else failed += 1
   }
 
   const status: BodyRecoveryOutcome['status'] = failed > 0
     ? 'failed'
-    : settled > 0
-      ? 'settled'
-      : restored > 0
-        ? 'restored'
-        : 'clean'
+    : finishPending > 0
+      ? 'finish-pending'
+      : settled > 0
+        ? 'settled'
+        : restored > 0
+          ? 'restored'
+          : 'clean'
   return {
     agentId,
     status,
@@ -321,42 +345,53 @@ function recoveryTurnMismatch(reason: string): boolean {
   return /trigger belongs to turn \d+, not turn/.test(reason)
 }
 
+type RecoveryRestoreOutcome = 'restored' | 'finish-pending' | 'failed'
+
 /**
  * Put the previous anchor back after a recovered operation produced no usable
  * candidate. `restoreBodyAfterFailure` owns the model-free hide when the old
- * anchor is still on the surface, and the legacy restore turn otherwise.
+ * anchor is still on the surface, the legacy restore turn otherwise, and the
+ * settled-body short circuit.
+ *
+ * A return that leaves durable `settled` evidence means the body is already
+ * replaced and only `op-finish` is missing: that is `finish-pending`, never a
+ * restore, even though the same runtime call performed the check.
  */
 async function restoreRecoveredOperation(
   ctx: BodyRecoveryHost,
   deps: BodyRuntimeDeps,
   op: PendingBodyOperation,
-): Promise<boolean> {
+): Promise<RecoveryRestoreOutcome> {
   try {
     const restoredAnchorId = await restoreBodyAfterFailure(deps, op)
-    if (op.settled !== undefined) {
+    const evidence = settlementEvidenceOf(wiringEvents(deps.session) ?? [], op.opId)
+    if (evidence?.phase === 'settled') {
       // The settled marker kept the new body; only `op-finish` is still
       // missing, so the next recovery pass must retry the bookkeeping.
       info(ctx, 'dsh-soulmojito body: recovery kept the settled body with op-finish pending', {
         agentId: deps.agent.id,
         opId: op.opId,
+        stage: 'settled-finish-pending',
         anchorId: restoredAnchorId,
       })
-      return true
+      return 'finish-pending'
     }
     info(ctx, 'dsh-soulmojito body: recovery restored the previous anchor', {
       agentId: deps.agent.id,
       opId: op.opId,
+      stage: evidence?.phase === 'cancelled' ? 'cancelled' : 'restored',
       restoredAnchorId,
     })
-    return true
+    return 'restored'
   } catch (error) {
     errorLog(ctx, 'dsh-soulmojito body: recovery restore failed', {
       agentId: deps.agent.id,
       opId: op.opId,
+      stage: op.settling === undefined ? 'restore-failed' : 'settling-restore-failed',
       code: failureCodeOf(error),
       error: errorMessage(error),
     })
-    return false
+    return 'failed'
   }
 }
 

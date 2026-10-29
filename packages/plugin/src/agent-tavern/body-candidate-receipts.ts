@@ -144,6 +144,26 @@ export function candidateReceiptKey(messageId: string, index: number): string {
 }
 
 /**
+ * Every receipt key owned by one body group's candidates: the canonical
+ * `body:<messageId>#<index>` key plus the legacy `body:<messageId>` alias.
+ *
+ * The alias stays listed because a still-unmigrated legacy receipt belongs to
+ * the same candidate; migrating it later must not find it evicted. Callers pass
+ * this set to the receipt append so ring retention cannot drop the active
+ * group's candidates (proposal 0023 §3.6). A malformed ledger entry throws
+ * instead of producing a partial set: an unprotected candidate is a silent
+ * data-loss path.
+ */
+export function candidatePreserveKeys(ledger: BodyLedger): ReadonlySet<string> {
+  const keys = new Set<string>()
+  for (const candidate of ledger.candidates) {
+    keys.add(candidateReceiptKey(candidate.messageId, candidate.index))
+    keys.add(`${BODY_PREFIX}${candidate.messageId}`)
+  }
+  return keys
+}
+
+/**
  * Parse one stored `turnKey` without guessing:
  *
  * - `body:<messageId>#<digits>` is a candidate key (canonical digits only);
@@ -459,6 +479,10 @@ export function applyCandidateEditToChat(
 
   const byMessageId = requireLedgerIndex(input.ledger)
   migrateLegacyCandidateReceipts(chat, input.ledger)
+  // The ledger is the only witness of which receipts belong to the active
+  // group. The set is identical before and after the upsert: the edit removes
+  // the target's old receipt and re-appends it under the same key.
+  const preserveTurnKeys = candidatePreserveKeys(input.ledger)
 
   const ref: CandidateReceiptRef = { messageId: input.messageId, index: input.index }
   const inspection = inspectCandidateReceipts(chat, ref, input.ledger, input.previousText, card)
@@ -470,7 +494,7 @@ export function applyCandidateEditToChat(
   const applied = applyUpdateVariableToChat(card, chat, input.text)
   if (applied.found) {
     removeCandidateReceipts(chat, ref, byMessageId)
-    recordCandidateReceipt(chat, before, candidateReceiptKey(input.messageId, input.index), input.at, applied.failures)
+    recordCandidateReceipt(chat, before, candidateReceiptKey(input.messageId, input.index), input.at, applied.failures, preserveTurnKeys)
   } else {
     removeCandidateReceipts(chat, ref, byMessageId)
     restoreChatVariables(chat, before)
@@ -686,6 +710,9 @@ function receiptBelongsToCandidate(
  * both trees and the failure list are empty, but a candidate receipt is the
  * proof that a patch was applied (even a no-op one), so fall back to an
  * explicit `unchanged` receipt.
+ *
+ * `preserveTurnKeys` carries the active group's candidate keys so the ring
+ * cannot evict a sibling candidate's only receipt (proposal 0023 §3.6).
  */
 function recordCandidateReceipt(
   chat: ChatLogIR,
@@ -693,8 +720,9 @@ function recordCandidateReceipt(
   turnKey: string,
   at: string,
   failures: readonly string[],
+  preserveTurnKeys: ReadonlySet<string>,
 ): MvuReceipt {
-  const recorded = recordMvuTurnReceipt(chat, before, { turnKey, at, failures: [...failures] })
+  const recorded = recordMvuTurnReceipt(chat, before, { turnKey, at, failures: [...failures], preserveTurnKeys })
   if (recorded !== undefined) return recorded
   const changes = diffVariables(before, readChatVariables(chat))
   const receipt: MvuReceipt = {
@@ -704,7 +732,7 @@ function recordCandidateReceipt(
     changes,
     failures: [...failures],
   }
-  appendMvuReceipt(chat, receipt)
+  appendMvuReceipt(chat, receipt, preserveTurnKeys)
   return receipt
 }
 

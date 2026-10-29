@@ -2,7 +2,7 @@
  * Pure AgentTavern body ledger and host message projection for proposal 0021.
  *
  * This module owns the `plugin:dsh-soulmojito/body` plugin-record vocabulary, the
- * durable `body-settled` marker, the fold that reconstructs candidate order,
+ * two-phase `body-settled` records, the fold that reconstructs candidate order,
  * selection, anchor and edits, the
  * effective body text, and the message-projection definition that rewrites the
  * surface anchor. It never reads the clock, filesystem, network or host
@@ -12,23 +12,46 @@
 export const BODY_EVENT_TYPE = 'plugin:dsh-soulmojito/body' as const
 
 /**
- * Durable settlement marker record type (proposal 0021 §9.2).
+ * Durable settlement record type (proposal 0021 §9.2).
  *
- * Settlement appends one marker after the candidate/select and the old-anchor
- * hide are durable, and before `op-finish`. It is deliberately a separate
- * plugin record: the marker is recovery-only evidence, so the message
- * projection and the JSONL projector must never turn it into surface content.
+ * Settlement is two-phase so a crash between the hide and the settlement proof
+ * is recoverable: `settling` is written before the previous anchor leaves the
+ * surface, `settled` after the hide succeeded, and `op-settle-cancelled` when
+ * the hide failed. The record is deliberately separate from the body ledger:
+ * it is recovery-only evidence, so the message projection and the JSONL
+ * projector must never turn it into surface content.
  */
 export const BODY_SETTLED_EVENT_TYPE = 'plugin:dsh-soulmojito/body-settled' as const
+
+/** Phase of a durable settlement marker. */
+export type BodySettlementPhase = 'settling' | 'settled'
 
 /** Payload of the durable settlement marker. */
 export interface BodySettledEventData {
   readonly op: 'op-settled'
+  /**
+   * Missing on records written before the two-phase settlement; readers treat
+   * a missing phase as `settled`.
+   */
+  readonly phase?: BodySettlementPhase
   readonly opId: string
   readonly groupId: string
   readonly anchorId: string
   readonly index: number
 }
+
+/** Payload of the durable cancellation record written when the hide failed. */
+export interface BodySettleCancelledEventData {
+  readonly op: 'op-settle-cancelled'
+  readonly opId: string
+  readonly groupId: string
+  readonly anchorId: string
+  readonly index: number
+  readonly reason: string
+}
+
+/** Any record stored under `BODY_SETTLED_EVENT_TYPE`. */
+export type BodySettlementRecordData = BodySettledEventData | BodySettleCancelledEventData
 
 /* ------------------------------- event shape ------------------------------- */
 

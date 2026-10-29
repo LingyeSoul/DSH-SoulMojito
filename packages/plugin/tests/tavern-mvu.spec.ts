@@ -127,6 +127,59 @@ describe('receipt recording (pure)', () => {
       { at: 't', turnKey: '1', status: 'updated', changes: [{ name: 'a', after: 1 }], failures: ['x'] },
     ])
   })
+
+  it('keeps preserved candidate keys while the ring evicts the oldest settle receipts', () => {
+    const chat = makeChat(undefined, {
+      receipts: [
+        { at: 't0', turnKey: 'body:m0#0', status: 'updated', changes: [{ name: 'a', before: 1, after: 2 }], failures: [] },
+        ...Array.from({ length: 25 }, (_, i) => ({ at: `s${i}`, turnKey: String(i), status: 'updated', changes: [], failures: [] })),
+      ],
+    })
+    const preserveTurnKeys = new Set(['body:m0#0', 'body:m0', 'body:m1#1'])
+    appendMvuReceipt(chat, { at: 't1', turnKey: 'body:m1#1', status: 'updated', changes: [], failures: [] }, preserveTurnKeys)
+
+    const receipts = readMvuReceipts(chat)
+    // Two preserved receipts plus the newest 18 settle receipts, in stored order.
+    expect(receipts).toHaveLength(MVU_RECEIPTS_LIMIT)
+    expect(receipts.map((receipt) => receipt.turnKey)).toEqual([
+      'body:m0#0',
+      ...Array.from({ length: 18 }, (_, i) => String(i + 7)),
+      'body:m1#1',
+    ])
+  })
+
+  it('keeps every preserved receipt even when the preserved set exceeds the ring limit', () => {
+    const preservedKeys = Array.from({ length: 25 }, (_, i) => `body:c${i}#${i}`)
+    const chat = makeChat(undefined, {
+      receipts: [
+        ...preservedKeys.map((turnKey, i) => ({ at: `p${i}`, turnKey, status: 'updated', changes: [], failures: [] })),
+        { at: 's0', turnKey: '0', status: 'updated', changes: [], failures: [] },
+        { at: 's1', turnKey: '1', status: 'updated', changes: [], failures: [] },
+      ],
+    })
+    appendMvuReceipt(
+      chat,
+      { at: 't', turnKey: 'body:c25#25', status: 'updated', changes: [], failures: [] },
+      new Set([...preservedKeys, 'body:c25#25']),
+    )
+
+    const receipts = readMvuReceipts(chat)
+    // Deliberately above MVU_RECEIPTS_LIMIT: dropping an active candidate is worse.
+    expect(receipts).toHaveLength(26)
+    expect(receipts.map((receipt) => receipt.turnKey)).toEqual([...preservedKeys, 'body:c25#25'])
+  })
+
+  it('keeps the plain ring for callers that pass no preserved keys', () => {
+    const chat = makeChat(undefined, {
+      receipts: [{ at: 't0', turnKey: 'body:m0#0', status: 'updated', changes: [], failures: [] }],
+    })
+    for (let i = 0; i < MVU_RECEIPTS_LIMIT; i++) {
+      appendMvuReceipt(chat, { at: `s${i}`, turnKey: String(i), status: 'updated', changes: [], failures: [] })
+    }
+    const receipts = readMvuReceipts(chat)
+    expect(receipts).toHaveLength(MVU_RECEIPTS_LIMIT)
+    expect(receipts.map((receipt) => receipt.turnKey)).not.toContain('body:m0#0')
+  })
 })
 
 /* ------------------------- 端到端：生成回执 / 路由 ------------------------- */

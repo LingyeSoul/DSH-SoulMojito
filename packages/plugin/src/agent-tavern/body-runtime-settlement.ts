@@ -1,15 +1,13 @@
 /**
  * Body operation settlement and restore.
  *
- * `finalizeTurnStopping` (live turn stop) and `finalizeRecoveredOperation`
- * (durable op reconstructed at startup) share `settleBodyOperation`, so both
- * paths hide the trigger/process and the previous anchor before `op-finish`.
- * The write rollback is committed while the previous anchor is still visible;
- * after the hide a durable `op-settled` marker is written before `op-finish`,
- * so a late failure keeps the new body and only retries `op-finish`. Failure
- * recovery is model-free when the previous anchor is still visible and keeps
- * the legacy `body-restore-*` copy only for sessions whose anchor was hidden by
- * an older build (no settled marker).
+ * `finalizeTurnStopping` and `finalizeRecoveredOperation` share
+ * `settleBodyOperation`. Settlement is two-phase: `settling` lands before the
+ * hide, `settled` after it, and a failed hide writes a cancellation record.
+ * Recovery trusts `settled` (or a `settling` record whose surface/ledger state
+ * proves the hide completed) only for `op-finish`; a cancellation restores the
+ * previous body. The legacy `body-restore-*` copy stays reachable only for
+ * sessions with no settlement evidence at all.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -17,7 +15,9 @@ import { advanceHostTurnBase, lastLoggedTurn } from '../session/trace.js'
 import {
   appendBodyEvent,
   appendOpFinish,
+  appendSettleCancelledMarker,
   appendSettledMarker,
+  appendSettlingMarker,
   assertCanAdvanceTurnBase,
   assertRecordWriter,
   bodyRuntimeError,
@@ -29,7 +29,7 @@ import {
   releaseOperationByOp,
   releaseSettlement,
   requirePositiveTurn,
-  settledMarkerOf,
+  settlementEvidenceOf,
   validateFinalizePayload,
   validatePendingOperation,
   warn,
@@ -38,10 +38,12 @@ import {
   type BodyRuntimeFailure,
   type BodyRuntimeTurnRollback,
   type BodySettledMarker,
+  type BodySettlementEvidence,
   type FinalizeTurnStoppingResult,
   type PendingBodyOperation,
   type SettlementContext,
 } from './body-runtime-core.js'
+import type { BodyLedger } from './body.js'
 import {
   eventAtSeq,
   eventsOf,
@@ -149,12 +151,24 @@ async function settleBodyOperation(
   turn: number,
 ): Promise<FinalizeTurnStoppingResult> {
   const events = eventsOf(deps.session)
-  const settled = settledMarkerOf(events, context.op.opId)
-  if (settled !== undefined) {
-    // A previous attempt already hid the old anchor and selected the new body;
-    // only `op-finish` is missing. Re-doing candidate/select/hide would append
-    // a second settlement and could resurrect the previous body.
-    return finishSettledOperation(deps, context, settled)
+  const evidence = settlementEvidenceOf(events, context.op.opId)
+  if (evidence !== undefined) {
+    if (evidence.phase === 'settled') {
+      // A previous attempt already hid the old anchor and selected the new
+      // body; only `op-finish` is missing. Re-doing candidate/select/hide
+      // would append a second settlement and could resurrect the previous body.
+      return finishSettledOperation(deps, context, evidence)
+    }
+    if (evidence.phase === 'cancelled') {
+      // The hide failed and the cancellation is already durable; the previous
+      // body must be restored, never treated as settled.
+      return failSettlement(
+        deps,
+        context,
+        `${context.label} ${context.op.opId} was cancelled before its previous anchor left the surface: ${evidence.reason ?? 'no reason recorded'}`,
+      )
+    }
+    return settleFromSettlingEvidence(deps, context, evidence)
   }
   const candidate = lastBodyCandidate(events, turn)
   if (candidate === undefined) {
@@ -241,6 +255,18 @@ async function settleBodyOperation(
     throw failureFor(error, reason, context.op)
   }
 
+  // Two-phase durable boundary: `settling` lands before the previous anchor
+  // leaves the surface. If the process dies after the hide but before the
+  // `settled` record, recovery resolves the surface/ledger state instead of
+  // falling back to the legacy restore path.
+  try {
+    appendSettlingMarker(deps, context.op.opId, context.op.groupId, candidate.messageId, candidateIndex)
+  } catch (error) {
+    const reason = `${context.label} ${context.op.opId} failed to record the settling marker before hiding turn ${turn}: ${errorMessage(error)}`
+    restorePreviousSelection(deps, context)
+    return failSettlement(deps, context, reason)
+  }
+
   try {
     const hidden = hideTargets(events, surface, triggerMessageIdOf(context.op), turn, candidate.messageId)
     // Proposal 0021 §9.5: the old anchor stayed visible while the new turn ran,
@@ -250,6 +276,12 @@ async function settleBodyOperation(
     appendHideInOpenTurn(deps, turn, hidden)
   } catch (error) {
     const reason = `${context.label} ${context.op.opId} failed to settle turn ${turn}: ${errorMessage(error)}`
+    // The hide failed, so the body did not settle. Record the cancellation
+    // before rolling the selection back: recovery must restore, not finish.
+    recordSettlementCancelled(deps, context.op, context.label, {
+      anchorId: candidate.messageId,
+      index: candidateIndex,
+    }, `failed to hide the previous anchor: ${errorMessage(error)}`)
     restorePreviousSelection(deps, context)
     return failSettlement(deps, context, reason)
   }
@@ -293,11 +325,11 @@ async function settleBodyOperation(
  * one. A failed finish keeps the durable `op-start` pending for the next
  * recovery pass and surfaces a recognizable `settled-finish-pending` error.
  */
-function finishSettledOperation(
-  deps: BodyRuntimeDeps,
-  context: SettlementContext,
-  settled: BodySettledMarker,
-): FinalizeTurnStoppingResult {
+function finishSettledOperation(deps: BodyRuntimeDeps, context: SettlementContext, settled: BodySettlementEvidence): FinalizeTurnStoppingResult {
+  // The marker is recovery evidence, not authority: it must still describe the
+  // group's committed candidate slot. A damaged marker fails closed instead of
+  // keeping a body the ledger never selected.
+  assertCommittedSettlement(deps, context.op.groupId, settled, `${context.label} ${context.op.opId}`)
   try {
     appendOpFinish(deps, context.op.opId, 'ok', settled.anchorId, undefined)
   } catch (error) {
@@ -310,11 +342,119 @@ function finishSettledOperation(
   return { status: 'ok', anchorMessageId: settled.anchorId }
 }
 
-function settledFinishPending(
-  reason: string,
+type SettlingDecision = 'settled' | 'cancelled' | 'ambiguous'
+
+/**
+ * Resolve a `settling` record left by a crash between the pre-hide marker and
+ * the post-hide marker. The surface and ledger are the authority: old anchor
+ * gone, new candidate visible and committed means settled; old anchor visible
+ * with the previous index selected means cancelled. Anything else fails closed
+ * and keeps the op-start pending instead of guessing.
+ */
+function settleFromSettlingEvidence(deps: BodyRuntimeDeps, context: SettlementContext, evidence: BodySettlementEvidence): FinalizeTurnStoppingResult {
+  const decision = settlingDecision(deps, context.op, evidence)
+  if (decision === 'settled') {
+    try {
+      appendSettledMarker(deps, context.op.opId, context.op.groupId, evidence.anchorId, evidence.index)
+    } catch (error) {
+      warn(deps, `body runtime: ${context.label} ${context.op.opId} completed its hide but could not upgrade the settled marker: ${errorMessage(error)}`)
+    }
+    return finishSettledOperation(deps, context, evidence)
+  }
+  if (decision === 'cancelled') {
+    recordSettlementCancelled(
+      deps,
+      context.op,
+      context.label,
+      evidence,
+      'the previous anchor is still on the surface and the previous selection was restored',
+    )
+    return failSettlement(
+      deps,
+      context,
+      `${context.label} ${context.op.opId} did not complete its hide; the previous body stays selected`,
+    )
+  }
+  throw bodyRuntimeError(
+    'operation-failed',
+    `${context.label} ${context.op.opId} has an ambiguous settling record for '${evidence.anchorId}' index ${evidence.index}: the surface and ledger disagree about whether the previous anchor was replaced; refusing to guess`,
+  )
+}
+
+function settlingDecision(
+  deps: BodyRuntimeDeps,
   op: PendingBodyOperation,
-  cause: unknown,
-): BodyRuntimeFailure {
+  evidence: BodySettlementEvidence,
+): SettlingDecision {
+  const ledger = settlementLedger(deps, op.groupId, evidence)
+  const events = eventsOf(deps.session)
+  const surface = surfaceNodeList(deps.session)
+  const previousVisible = findSurfaceSeqByMessageId(events, surface, op.previousAnchorId) !== undefined
+  const candidateVisible = findSurfaceSeqByMessageId(events, surface, evidence.anchorId) !== undefined
+  if (
+    !previousVisible
+    && candidateVisible
+    && ledger.selectedIndex === evidence.index
+    && ledger.anchorMessageId === evidence.anchorId
+  ) {
+    return 'settled'
+  }
+  if (previousVisible && ledger.selectedIndex === op.previousIndex) return 'cancelled'
+  return 'ambiguous'
+}
+
+/** Fold the ledger and prove the evidence points at one real candidate slot. */
+function settlementLedger(
+  deps: BodyRuntimeDeps,
+  groupId: string,
+  evidence: BodySettlementEvidence,
+): BodyLedger {
+  if (evidence.groupId !== groupId) {
+    throw bodyRuntimeError(
+      'invalid-event',
+      `body settlement record for '${evidence.anchorId}' belongs to group '${evidence.groupId}', not '${groupId}'`,
+    )
+  }
+  const ledger = bodyLedger(eventsOf(deps.session), groupId)
+  if (ledger === undefined) {
+    throw bodyRuntimeError('invalid-event', `body settlement record references group '${groupId}' with no body ledger`)
+  }
+  const candidate = ledger.candidates[evidence.index]
+  if (candidate === undefined || candidate.messageId !== evidence.anchorId) {
+    throw bodyRuntimeError(
+      'invalid-event',
+      `body settlement record points at anchor '${evidence.anchorId}' index ${evidence.index}, but group '${groupId}' has ${candidate === undefined ? 'no candidate at that index' : `candidate '${candidate.messageId}'`}; refusing to trust it`,
+    )
+  }
+  return ledger
+}
+
+/** Require the evidence to be the group's currently selected candidate. */
+function assertCommittedSettlement(
+  deps: BodyRuntimeDeps,
+  groupId: string,
+  evidence: BodySettlementEvidence,
+  subject: string,
+): void {
+  const ledger = settlementLedger(deps, groupId, evidence)
+  if (ledger.selectedIndex !== evidence.index || ledger.anchorMessageId !== evidence.anchorId) {
+    throw bodyRuntimeError(
+      'invalid-event',
+      `${subject}: settlement record '${evidence.anchorId}' index ${evidence.index} is not the committed selection (selected ${ledger.selectedIndex}, anchor '${ledger.anchorMessageId}'); refusing to trust it`,
+    )
+  }
+}
+
+/** Best-effort durable cancellation; a failed record is logged, not masked. */
+function recordSettlementCancelled(deps: BodyRuntimeDeps, op: PendingBodyOperation, label: string, evidence: BodySettledMarker, reason: string): void {
+  try {
+    appendSettleCancelledMarker(deps, op.opId, op.groupId, evidence.anchorId, evidence.index, reason)
+  } catch (error) {
+    warn(deps, `body runtime: ${label} ${op.opId} could not record the cancelled settlement: ${errorMessage(error)}`)
+  }
+}
+
+function settledFinishPending(reason: string, op: PendingBodyOperation, cause: unknown): BodyRuntimeFailure {
   const failure = bodyRuntimeError('settled-finish-pending', reason)
   if (cause instanceof Error) failure.cause = cause
   failure.op = op
@@ -465,11 +605,12 @@ async function rollbackNewTurnWrites(
  * started. Its anchor is off the surface, so this function keeps the existing
  * model-free `body-restore-*` copy as a compatibility fallback.
  *
- * An operation with a durable settlement marker is never restored: its new
- * body already replaced the old anchor, so any late failure (a failed
- * `op-finish`, for example) only leaves bookkeeping to retry. This branch runs
- * before the open-turn check because settlement happens during turn stopping,
- * while the new turn is still open.
+ * `settled` evidence (or `settling` evidence whose surface/ledger state proves
+ * the hide completed) is never restored: the new body already replaced the old
+ * anchor, so a late failure only leaves `op-finish` to retry. `settleCancelled`
+ * evidence always takes the restore path. These branches run before the
+ * open-turn check because settlement happens during turn stopping, while the
+ * new turn is still open.
  */
 export async function restoreBodyAfterFailure(
   deps: BodyRuntimeDeps,
@@ -479,10 +620,45 @@ export async function restoreBodyAfterFailure(
   assertRecordWriter(deps)
   return withBodyLock(deps, async () => {
     const events = eventsOf(deps.session)
-    const settled = settledMarkerOf(events, op.opId)
-    if (settled !== undefined) {
-      releaseOperationByOp(deps, op, `body restore ${op.opId}`)
-      return settled.anchorId
+    const evidence = settlementEvidenceOf(events, op.opId)
+    if (evidence !== undefined) {
+      if (evidence.phase === 'settled') {
+        assertCommittedSettlement(deps, op.groupId, evidence, `body restore ${op.opId}`)
+        releaseOperationByOp(deps, op, `body restore ${op.opId}`)
+        return evidence.anchorId
+      }
+      if (evidence.phase === 'settling') {
+        const decision = settlingDecision(deps, op, evidence)
+        if (decision === 'settled') {
+          // The hide completed but the post-hide marker never landed. Upgrade
+          // the durable boundary so recovery can classify the missing
+          // `op-finish` as finish-pending instead of reporting a restore.
+          try {
+            appendSettledMarker(deps, op.opId, op.groupId, evidence.anchorId, evidence.index)
+          } catch (error) {
+            throw failureFor(
+              error,
+              `body restore ${op.opId} proved the body settled but could not upgrade the settled marker`,
+              op,
+            )
+          }
+          releaseOperationByOp(deps, op, `body restore ${op.opId}`)
+          return evidence.anchorId
+        }
+        if (decision === 'ambiguous') {
+          throw bodyRuntimeError(
+            'operation-failed',
+            `body restore ${op.opId} has an ambiguous settling record for '${evidence.anchorId}' index ${evidence.index}: the surface and ledger disagree; refusing to guess`,
+          )
+        }
+        recordSettlementCancelled(
+          deps,
+          op,
+          `body restore ${op.opId}`,
+          evidence,
+          'the previous anchor is still on the surface and the previous selection was restored',
+        )
+      }
     }
     const openTurn = openTurnNumber(events)
     if (openTurn !== undefined) {

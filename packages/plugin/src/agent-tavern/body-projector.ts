@@ -47,7 +47,7 @@ import {
   type BodyJsonlCandidateInput,
   type BodyJsonlUsage,
 } from './body-jsonl.js'
-import { applyCandidateEditToChat } from './body-candidate-receipts.js'
+import { applyCandidateEditToChat, candidatePreserveKeys } from './body-candidate-receipts.js'
 
 /** State slice the body projection needs from the tavern store. */
 export type BodyProjectionState = Pick<
@@ -117,7 +117,9 @@ export async function projectBodyEvent(
   const ledger = foldBodyLedger(bodySessionEvents(session), data.groupId, event.seq)
 
   if (data.op === 'candidate') {
-    const slot = requireProjectedCandidate(ledger, data, event.seq)
+    const projected = requireProjectedLedger(ledger, event.seq, data.groupId)
+    const slot = requireProjectedCandidate(projected, data, event.seq)
+    const preserveTurnKeys = candidatePreserveKeys(projected)
     const resolved = resolveBodyCandidateMessage(session, data.messageId, event.seq)
     const character = await store.getCharacter(binding.character)
     const scripts = await collectSessionRegexScripts(store, state, binding.character, binding.chatId, character)
@@ -137,7 +139,7 @@ export async function projectBodyEvent(
       ...(resolved.usage === undefined ? {} : { usage: resolved.usage }),
       ...(data.feedback === undefined ? {} : { feedback: data.feedback }),
     }
-    await mutateBodyChat(store, binding, (chat) => projectCandidateToChat(chat, character?.card, input))
+    await mutateBodyChat(store, binding, (chat) => projectCandidateToChat(chat, character?.card, input, preserveTurnKeys))
     return
   }
 
@@ -235,11 +237,15 @@ export function isBodyMergedAssistant(session: HostSessionLog, event: BodyProjec
  * Replay and CAS retries re-enter with a fresh snapshot. An existing swipe slot
  * or an existing receipt means the patch already ran, so the candidate merges
  * with its stored text and the variable tree stays untouched.
+ *
+ * `preserveTurnKeys` is the active group's candidate key set; the receipt append
+ * uses it so sibling candidates survive ring pressure (proposal 0023 §3.6).
  */
 function projectCandidateToChat(
   chat: ChatLogIR,
   card: CharacterCardIR | undefined,
   input: BodyJsonlCandidateInput,
+  preserveTurnKeys: ReadonlySet<string>,
 ): ChatLogIR {
   const existingText = existingCandidateText(chat, input.groupId, input.index)
   const receiptExists = mvuReceiptsForBody(chat, { messageId: input.messageId }).length > 0
@@ -262,6 +268,7 @@ function projectCandidateToChat(
   recordMvuTurnReceipt(next, before, {
     turnKey: `body:${input.messageId}`,
     failures: applied.failures,
+    preserveTurnKeys,
   })
   return attachBodyStatData(next, input.groupId)
 }

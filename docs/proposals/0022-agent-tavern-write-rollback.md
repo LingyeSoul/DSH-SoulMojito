@@ -158,20 +158,21 @@ interface BodyWriteRollbackPort {
 ## 10. 失败与取消
 
 1. `prepare` 成功后才触发新 turn；旧 anchor 在新 turn 期间保持可见（0021 §6.2）。
-2. 新 turn 成功：先 `commit`，再 hide 旧 anchor，写 durable `op-settled` 标记，最后
+2. 新 turn 成功：先 `commit`，写 `op-settling`，再 hide 旧 anchor，写 `op-settled`，最后
    `op-finish`。hide 之后 `op-finish` 晚失败时保留新正文，只把 `op-finish` 留给恢复重试，
    不再回滚正文或追加 assistant 副本。
 3. 新 turn 失败/取消：
    - live `session/event` 的 `turn/end`（`error` / `cancelled` / `aborted`）异步触发恢复，
      监听器只登记、不在事件栈 append喵；
    - 先 `rollbackTurnWrites(newTurn)` 撤销新 turn 自己的 memory/variable journal 与 settle receipt；
-   - 若已有 `op-settled` 标记，body 已结算，只补 `op-finish`；
-   - 否则 `restore(plan)` 恢复旧 turn 的写入与 variables/receipts，再由
-     `restoreBodyAfterFailure` 放回/保留旧正文；
+   - `op-settled` 且对账通过：body 已结算，只补 `op-finish`；
+   - `op-settling`：按 surface/ledger 三分支判定（补 settled、取消恢复、fail-closed）；
+   - `op-settle-cancelled` 或无结算证据：`restore(plan)` 恢复旧 turn 的写入与
+     variables/receipts，再由 `restoreBodyAfterFailure` 放回/保留旧正文；
    - 若恢复失败，保留 op-start 待启动恢复，不假装成功。
 4. 崩溃恢复：`op-start` 无 `op-finish` 时，`rollbackPlan` 直接随 `op-start.rollbackPlan`
-   落盘；重启后 `foldPendingOps` 严格校验并重建。有 `op-settled` 标记时只补 `op-finish`，
-   不再执行 `restore`；无标记才按计划恢复，不依赖进程内状态。
+   落盘；重启后 `foldPendingOps` 严格校验并重建。有 `op-settled` 时只补 `op-finish`；
+   有 `op-settling` 时按 surface/ledger 判定；无证据才按计划恢复，不依赖进程内状态。
 
 ## 11. 开工前检查表
 

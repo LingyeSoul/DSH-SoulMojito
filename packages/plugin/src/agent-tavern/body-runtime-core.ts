@@ -12,7 +12,9 @@ import {
   BODY_SETTLED_EVENT_TYPE,
   type BodyEventData,
   type BodyLedger,
+  type BodySettleCancelledEventData,
   type BodySettledEventData,
+  type BodySettlementPhase,
 } from './body.js'
 import type { BodyRollbackPlan, BodyWriteRollbackPort } from './body-rollback.js'
 import { canAdvanceHostTurnBase } from '../session/trace.js'
@@ -215,11 +217,22 @@ export interface PendingBodyOperation {
    */
   rollbackPlan?: BodyRollbackPlan
   /**
-   * Durable settlement evidence folded from `op-settled` records. When present
-   * the new candidate is selected and the previous anchor is already off the
-   * surface, so recovery may only retry `op-finish`.
+   * Durable settlement evidence folded from `body-settled` records. When
+   * present the new candidate is selected and the previous anchor is already
+   * off the surface, so recovery may only retry `op-finish`.
    */
   settled?: BodySettledMarker
+  /**
+   * Durable evidence written before the hide. Recovery must resolve it against
+   * the surface and the ledger: the hide may or may not have completed when the
+   * process died.
+   */
+  settling?: BodySettledMarker
+  /**
+   * Durable evidence that a settlement attempt was cancelled because its hide
+   * failed. Recovery must restore the previous body instead of trusting it.
+   */
+  settleCancelled?: CancelledBodySettlementMarker
 }
 
 /** Durable evidence that one body operation already replaced the old body. */
@@ -228,8 +241,20 @@ export interface BodySettledMarker {
   readonly index: number
 }
 
-/** One parsed `op-settled` record: the marker plus the operation it belongs to. */
-export interface BodySettledEvent extends BodySettledMarker {
+/** Durable cancellation evidence for one settlement attempt. */
+export interface CancelledBodySettlementMarker extends BodySettledMarker {
+  readonly reason: string
+}
+
+/** Last durable settlement evidence of one operation. */
+export interface BodySettlementEvidence extends BodySettledMarker {
+  readonly phase: BodySettlementPhase | 'cancelled'
+  readonly groupId: string
+  readonly reason?: string
+}
+
+/** One parsed `body-settled` record: the evidence plus the operation it belongs to. */
+export interface BodySettledEvent extends BodySettlementEvidence {
   readonly opId: string
 }
 
@@ -509,6 +534,24 @@ export function appendOpFinish(
 }
 
 /**
+ * Append the pre-hide settlement marker.
+ *
+ * Written after the candidate/select are durable and before the previous anchor
+ * is hidden. A crash after this record is recoverable: the surface and ledger
+ * tell recovery whether the hide completed.
+ */
+export function appendSettlingMarker(
+  deps: BodyRuntimeDeps,
+  opId: string,
+  groupId: string,
+  anchorId: string,
+  index: number,
+): void {
+  const data: BodySettledEventData = { op: 'op-settled', phase: 'settling', opId, groupId, anchorId, index }
+  requireRecordWriter(deps)(deps.session, BODY_SETTLED_EVENT_TYPE, data)
+}
+
+/**
  * Append the durable settlement marker.
  *
  * Callers write it only after the candidate/select and the previous-anchor hide
@@ -522,50 +565,96 @@ export function appendSettledMarker(
   anchorId: string,
   index: number,
 ): void {
-  const data: BodySettledEventData = { op: 'op-settled', opId, groupId, anchorId, index }
+  const data: BodySettledEventData = { op: 'op-settled', phase: 'settled', opId, groupId, anchorId, index }
   requireRecordWriter(deps)(deps.session, BODY_SETTLED_EVENT_TYPE, data)
 }
 
 /**
- * Strictly read one settlement marker record.
+ * Append the durable cancellation record after a failed hide.
+ *
+ * The record keeps recovery from mistaking the attempt for a settlement: it
+ * must restore the previous body even when the settling marker is present.
+ */
+export function appendSettleCancelledMarker(
+  deps: BodyRuntimeDeps,
+  opId: string,
+  groupId: string,
+  anchorId: string,
+  index: number,
+  reason: string,
+): void {
+  const data: BodySettleCancelledEventData = { op: 'op-settle-cancelled', opId, groupId, anchorId, index, reason }
+  requireRecordWriter(deps)(deps.session, BODY_SETTLED_EVENT_TYPE, data)
+}
+
+/**
+ * Strictly read one settlement record.
  *
  * `undefined` means the event is not a `body-settled` record; a malformed
- * payload throws `invalid-event` so callers never mistake a damaged marker for
- * a legacy unsettled operation.
+ * payload throws `invalid-event` so callers never mistake a damaged record for
+ * a legacy unsettled operation. A marker without `phase` predates the
+ * two-phase settlement and reads as `settled`.
  */
 export function parseSettledEvent(event: BodySettledEventLike): BodySettledEvent | undefined {
   if (event.type !== BODY_SETTLED_EVENT_TYPE) return undefined
-  if (event.data.op !== 'op-settled') {
+  const op = event.data.op
+  if (op === 'op-settle-cancelled') {
+    return {
+      opId: settledString(event.data.opId, event.seq, 'opId'),
+      groupId: settledString(event.data.groupId, event.seq, 'groupId'),
+      anchorId: settledString(event.data.anchorId, event.seq, 'anchorId'),
+      index: settledIndex(event.data.index, event.seq),
+      phase: 'cancelled',
+      reason: settledString(event.data.reason, event.seq, 'reason'),
+    }
+  }
+  if (op !== 'op-settled') {
     throw bodyRuntimeError(
       'invalid-event',
-      `body settled record at seq ${event.seq} has op '${String(event.data.op)}', expected 'op-settled'`,
+      `body settled record at seq ${event.seq} has op '${String(op)}', expected 'op-settled' or 'op-settle-cancelled'`,
+    )
+  }
+  const phase = event.data.phase
+  if (phase !== undefined && phase !== 'settling' && phase !== 'settled') {
+    throw bodyRuntimeError(
+      'invalid-event',
+      `body settled record at seq ${event.seq} has phase '${String(phase)}', expected 'settling' or 'settled'`,
     )
   }
   return {
     opId: settledString(event.data.opId, event.seq, 'opId'),
+    groupId: settledString(event.data.groupId, event.seq, 'groupId'),
     anchorId: settledString(event.data.anchorId, event.seq, 'anchorId'),
     index: settledIndex(event.data.index, event.seq),
+    phase: phase ?? 'settled',
   }
 }
 
 /**
- * Last durable settlement marker of one operation.
+ * Last durable settlement evidence of one operation.
  *
- * Missing evidence means the operation never settled (legacy sessions and any
- * failure before the hide); present evidence means failure recovery must keep
- * the new body and retry only `op-finish`.
+ * `settled` means the previous anchor is gone and only `op-finish` may still be
+ * missing. `settling` means the hide outcome is unresolved and must be checked
+ * against the surface and ledger. `cancelled` means the hide failed and the
+ * previous body must be restored.
  */
-export function settledMarkerOf(
+export function settlementEvidenceOf(
   events: readonly BodySettledEventLike[],
   opId: string,
-): BodySettledMarker | undefined {
-  let marker: BodySettledMarker | undefined
+): BodySettlementEvidence | undefined {
+  let evidence: BodySettlementEvidence | undefined
   for (const event of events) {
-    const settled = parseSettledEvent(event)
-    if (settled === undefined || settled.opId !== opId) continue
-    marker = { anchorId: settled.anchorId, index: settled.index }
+    const settlement = parseSettledEvent(event)
+    if (settlement === undefined || settlement.opId !== opId) continue
+    evidence = {
+      phase: settlement.phase,
+      groupId: settlement.groupId,
+      anchorId: settlement.anchorId,
+      index: settlement.index,
+      ...(settlement.reason === undefined ? {} : { reason: settlement.reason }),
+    }
   }
-  return marker
+  return evidence
 }
 
 function settledString(value: unknown, seq: number, field: string): string {

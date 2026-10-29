@@ -15,42 +15,51 @@
 
 ## 决策
 
-1. **durable settled 标记**：新增独立 plugin record
-   `plugin:dsh-soulmojito/body-settled`（payload `op-settled`），在 `commit` 与旧 anchor
-   hide 之后、`op-finish` 之前写入。它只被 body runtime/recovery 读取，不进入消息投影、
-   JSONL 或模型面。
-2. **晚失败保留新正文**：`commit` 前移到 hide 之前；hide 成功并写 settled 标记后，
+1. **两阶段 durable 结算**：新增独立 plugin record
+   `plugin:dsh-soulmojito/body-settled`，payload 支持 `op-settling`（hide 前）、
+   `op-settled`（hide 后）与 `op-settle-cancelled`（hide 失败）。记录只被 body
+   runtime/recovery 读取，不进入消息投影、JSONL 或模型面。
+2. **晚失败保留新正文**：`commit` 前移到 hide 之前；hide 成功并写 `op-settled` 后，
    `commit` / `op-finish` 失败不再回滚正文、不追加 assistant，只保留 op-start 并让恢复
-   重试 `op-finish`。恢复读到 settled 标记时只补 `op-finish`，不重复 candidate/select/hide。
-3. **legacy fallback 收窄**：没有 settled 标记的旧会话才允许 `body-restore-*` 兼容恢复；
+   重试 `op-finish`。恢复读到 `op-settled` 时只补 `op-finish`，不重复 candidate/select/hide。
+3. **settling 恢复判定**：崩溃在 hide 与 `op-settled` 之间时，恢复根据 surface 与 ledger
+   三态判断：旧 anchor 已隐藏且新候选已选中 → 补 `op-settled` + `op-finish`；
+   旧 anchor 仍可见且 select 已回退 → 写取消并恢复旧正文；其它状态 fail-closed。
+4. **标记对账**：`op-settled` 的 `groupId/anchorId/index` 必须与 ledger 槽位、当前选中与
+   `anchorMessageId` 一致，否则抛 `invalid-event`，不写 `op-finish`。
+5. **legacy fallback 收窄**：没有 settlement 证据的旧会话才允许 `body-restore-*` 兼容恢复；
    新会话失败且旧 anchor 可见时只隐藏失败 turn 节点。
-4. **live turn/end 恢复**：`session/event` 监听 `turn/end` 的 `error` / `cancelled` /
+6. **live turn/end 恢复**：`session/event` 监听 `turn/end` 的 `error` / `cancelled` /
    `aborted`；监听器只登记，`queueMicrotask` 异步调用 `restoreBodyAfterFailure`，同一
    session 去重。恢复失败只记结构化错误并保留 op-start，交给启动恢复。
+7. **恢复指标**：`BodyRecoveryOutcome.status` 增加 `finish-pending`，settled body 的
+   `op-finish` 重试失败不再计入 `restored`。
 
 ## 证据
 
-- `npm run check`：158 test files / 2433 passed + 1 skipped；`build:plugin` 成功；
+- `npm run check`：158 test files / 2446 passed + 1 skipped；`build:plugin` 成功；
   18 道 gate 全部 PASS。
-- body 聚焦：12 个 spec / 234 tests；runtime 40、wiring 42。
-- 关键覆盖：commit 前移、hide 后 op-finish 失败保留新正文并由恢复只补 op-finish、
-  `op-settled` 折叠与重复标记、live `turn/end` error/cancelled/aborted、completed 不触发、
-  重复 turn 边去重、恢复失败保留 op-start、监听器内不同步 append。
+- body 聚焦：13 个 spec / 272 tests；runtime 46、wiring 42、candidate-receipts 27、
+  tavern-mvu 28。
+- 关键覆盖：两阶段 settling/settled/cancelled、settling 后崩溃三分支、标记与 ledger 对账、
+  commit 前移、hide 后 op-finish 失败保留新正文、finish-pending、live
+  `turn/end` error/cancelled/aborted、completed 不触发、重复 turn 边去重、
+  恢复失败保留 op-start、监听器内不同步 append。
 
 ## 风险与未完成
 
 | 风险 | 说明 |
 |---|---|
-| hide→marker 崩溃窗口 | hide 已落盘、settled 标记尚未落盘时进程崩溃，重启仍会走 legacy fallback；窗口只有一次 plugin-record append。 |
-| 双写失败 | settled 标记与 `op-finish` 同时失败时仍可能落入 legacy fallback；writer 连续故障下的残余风险。 |
-| 标记可信度 | 格式正确但内容错误的 `op-settled` 会被当作权威证据；格式错误会 fail-closed 抛 `invalid-event`。 |
-| 恢复指标 | settled op 若 `op-finish` 重试仍失败，会以“保留新正文”返回并计入 `restored`，`BodyRecoveryOutcome.status` 没有独立 finish-pending 值。 |
+| 多 range 部分 hide 窗口 | 旧 anchor 所在 range 已替换、trigger/process 所在 range 尚未替换时崩溃，settling 判定可能按“anchor 已隐藏 + 新候选已选中”收口，留下合成 trigger；窗口只在两次同步 append 之间。 |
+| 双写失败 | `op-settling` / `op-settled` / `op-finish` 连续写失败时仍可能落入 legacy fallback；writer 连续故障下的残余风险。 |
+| 标记选中漂移 | `op-settled` 落盘后、`op-finish` 重试前用户又切候选，恢复对账会 `invalid-event` 并保留 op-start；fail-closed，但需下次恢复或人工收尾。 |
+| 取消部分 hide | `op-settle-cancelled` 且 anchor 已被部分隐藏时，仍走 `body-restore-*` assistant 副本兜底，这是旧会话兼容路径。 |
 | live 时序 | 恢复要求微任务执行时 loop 已回到 idle；宿主延迟更久会记 `host-unsupported` 并留给启动恢复。 |
 | 无真机 E2E | 尚未跑 `dsh web` 浏览器闭环，需要指定 profile 并允许写 `$DSH_HOME`。 |
 
 ## 删除路径
 
-- 停止写 `op-settled` 只影响后续结算；已写标记保留，恢复仍只补 `op-finish`。
-- 不得删除已落盘的 settled 标记或 `op-finish`；DSH 日志是 append-only。
+- 停止写两阶段结算记录只影响后续结算；已写 settling/settled/cancelled 记录保留，恢复按证据处理喵。
+- 不得删除已落盘的 settlement 记录或 `op-finish`；DSH 日志是 append-only喵。
 - live `session/event` 监听随插件 unload 由 Cordis fiber 清理；没有 live-agent 注册表时
   不注册失败边，仍由启动恢复兜底。

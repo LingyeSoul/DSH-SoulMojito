@@ -14280,10 +14280,23 @@ function readMvuReceipts(chat) {
   }
   return receipts;
 }
-function appendMvuReceipt(chat, receipt) {
-  const metadata = chat.header.chat_metadata;
-  const receipts = [...readMvuReceipts(chat), receipt].slice(-MVU_RECEIPTS_LIMIT);
-  metadata.mvu = { receipts };
+function retainMvuReceipts(receipts, preserveTurnKeys) {
+  const preserved = /* @__PURE__ */ new Set();
+  const others = [];
+  for (let index = 0; index < receipts.length; index += 1) {
+    if (preserveTurnKeys.has(receipts[index].turnKey)) preserved.add(index);
+    else others.push(index);
+  }
+  const budget = Math.max(0, MVU_RECEIPTS_LIMIT - preserved.size);
+  const kept = new Set(preserved);
+  const newest = others.slice(others.length - Math.min(budget, others.length));
+  for (const index of newest) kept.add(index);
+  return receipts.filter((_, index) => kept.has(index));
+}
+function appendMvuReceipt(chat, receipt, preserveTurnKeys) {
+  const appended = [...readMvuReceipts(chat), receipt];
+  const receipts = preserveTurnKeys === void 0 ? appended.slice(-MVU_RECEIPTS_LIMIT) : retainMvuReceipts(appended, preserveTurnKeys);
+  chat.header.chat_metadata.mvu = { receipts };
 }
 function recordMvuTurnReceipt(chat, before, options) {
   const after = readChatVariables(chat);
@@ -14304,7 +14317,7 @@ function recordMvuTurnReceipt(chat, before, options) {
     changes,
     failures
   };
-  appendMvuReceipt(chat, receipt);
+  appendMvuReceipt(chat, receipt, options.preserveTurnKeys);
   return receipt;
 }
 function setMvuTreePath(tree, path12, value) {
@@ -15422,6 +15435,14 @@ function candidateReceiptKey(messageId, index) {
   }
   return `${BODY_PREFIX}${messageId}#${index}`;
 }
+function candidatePreserveKeys(ledger) {
+  const keys = /* @__PURE__ */ new Set();
+  for (const candidate of ledger.candidates) {
+    keys.add(candidateReceiptKey(candidate.messageId, candidate.index));
+    keys.add(`${BODY_PREFIX}${candidate.messageId}`);
+  }
+  return keys;
+}
 function classifyBodyReceiptKey(turnKey) {
   if (typeof turnKey !== "string" || turnKey === "") return { kind: "unknown" };
   if (!turnKey.startsWith(BODY_PREFIX)) {
@@ -15629,6 +15650,7 @@ function applyCandidateEditToChat(chat, card, input) {
   if (isReplayOfAppliedEvent(floor, input.eventSeq)) return chat;
   const byMessageId = requireLedgerIndex(input.ledger);
   migrateLegacyCandidateReceipts(chat, input.ledger);
+  const preserveTurnKeys = candidatePreserveKeys(input.ledger);
   const ref = { messageId: input.messageId, index: input.index };
   const inspection = inspectCandidateReceipts(chat, ref, input.ledger, input.previousText, card);
   if (inspection.detail !== void 0) throw detailError(inspection.detail, ref, inspection);
@@ -15637,7 +15659,7 @@ function applyCandidateEditToChat(chat, card, input) {
   const applied = applyUpdateVariableToChat(card, chat, input.text);
   if (applied.found) {
     removeCandidateReceipts(chat, ref, byMessageId);
-    recordCandidateReceipt(chat, before, candidateReceiptKey(input.messageId, input.index), input.at, applied.failures);
+    recordCandidateReceipt(chat, before, candidateReceiptKey(input.messageId, input.index), input.at, applied.failures, preserveTurnKeys);
   } else {
     removeCandidateReceipts(chat, ref, byMessageId);
     restoreChatVariables(chat, before);
@@ -15801,8 +15823,8 @@ function receiptBelongsToCandidate(turnKey, ref, byMessageId) {
   }
   return false;
 }
-function recordCandidateReceipt(chat, before, turnKey, at, failures) {
-  const recorded = recordMvuTurnReceipt(chat, before, { turnKey, at, failures: [...failures] });
+function recordCandidateReceipt(chat, before, turnKey, at, failures, preserveTurnKeys) {
+  const recorded = recordMvuTurnReceipt(chat, before, { turnKey, at, failures: [...failures], preserveTurnKeys });
   if (recorded !== void 0) return recorded;
   const changes = diffVariables(before, readChatVariables(chat));
   const receipt = {
@@ -15812,7 +15834,7 @@ function recordCandidateReceipt(chat, before, turnKey, at, failures) {
     changes,
     failures: [...failures]
   };
-  appendMvuReceipt(chat, receipt);
+  appendMvuReceipt(chat, receipt, preserveTurnKeys);
   return receipt;
 }
 function restoreChatVariables(chat, before) {
@@ -15848,7 +15870,9 @@ async function projectBodyEvent(store5, session, state, binding, event) {
   const data = record;
   const ledger = foldBodyLedger(bodySessionEvents(session), data.groupId, event.seq);
   if (data.op === "candidate") {
-    const slot = requireProjectedCandidate(ledger, data, event.seq);
+    const projected2 = requireProjectedLedger(ledger, event.seq, data.groupId);
+    const slot = requireProjectedCandidate(projected2, data, event.seq);
+    const preserveTurnKeys = candidatePreserveKeys(projected2);
     const resolved = resolveBodyCandidateMessage(session, data.messageId, event.seq);
     const character = await store5.getCharacter(binding.character);
     const scripts = await collectSessionRegexScripts(store5, state, binding.character, binding.chatId, character);
@@ -15865,7 +15889,7 @@ async function projectBodyEvent(store5, session, state, binding, event) {
       ...resolved.usage === void 0 ? {} : { usage: resolved.usage },
       ...data.feedback === void 0 ? {} : { feedback: data.feedback }
     };
-    await mutateBodyChat(store5, binding, (chat) => projectCandidateToChat(chat, character?.card, input));
+    await mutateBodyChat(store5, binding, (chat) => projectCandidateToChat(chat, character?.card, input, preserveTurnKeys));
     return;
   }
   if (data.op === "select") {
@@ -15939,7 +15963,7 @@ function isBodyMergedAssistant(session, event) {
   if (typeof messageId === "string" && messageId !== "" && isRestoredBodyMessage(session, messageId)) return true;
   return isBodyTriggerTurn(session, data?.["turn"]);
 }
-function projectCandidateToChat(chat, card, input) {
+function projectCandidateToChat(chat, card, input, preserveTurnKeys) {
   const existingText = existingCandidateText(chat, input.groupId, input.index);
   const receiptExists = mvuReceiptsForBody(chat, { messageId: input.messageId }).length > 0;
   if (card === void 0 || !cardUsesJsrMvu(card) || existingText !== void 0 || receiptExists || !hasUpdateVariableBlock2(input.text)) {
@@ -15955,7 +15979,8 @@ function projectCandidateToChat(chat, card, input) {
   if (!applied.found) return next;
   recordMvuTurnReceipt(next, before, {
     turnKey: `body:${input.messageId}`,
-    failures: applied.failures
+    failures: applied.failures,
+    preserveTurnKeys
   });
   return attachBodyStatData(next, input.groupId);
 }
@@ -16778,7 +16803,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("705613a") : void 0;
+  const commit = true ? normalizeCommit("f041b06") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -23558,32 +23583,66 @@ function appendOpFinish(deps, opId, result, anchorId, reason) {
     ...reason === void 0 ? {} : { reason }
   });
 }
+function appendSettlingMarker(deps, opId, groupId, anchorId, index) {
+  const data = { op: "op-settled", phase: "settling", opId, groupId, anchorId, index };
+  requireRecordWriter(deps)(deps.session, BODY_SETTLED_EVENT_TYPE, data);
+}
 function appendSettledMarker(deps, opId, groupId, anchorId, index) {
-  const data = { op: "op-settled", opId, groupId, anchorId, index };
+  const data = { op: "op-settled", phase: "settled", opId, groupId, anchorId, index };
+  requireRecordWriter(deps)(deps.session, BODY_SETTLED_EVENT_TYPE, data);
+}
+function appendSettleCancelledMarker(deps, opId, groupId, anchorId, index, reason) {
+  const data = { op: "op-settle-cancelled", opId, groupId, anchorId, index, reason };
   requireRecordWriter(deps)(deps.session, BODY_SETTLED_EVENT_TYPE, data);
 }
 function parseSettledEvent(event) {
   if (event.type !== BODY_SETTLED_EVENT_TYPE) return void 0;
-  if (event.data.op !== "op-settled") {
+  const op = event.data.op;
+  if (op === "op-settle-cancelled") {
+    return {
+      opId: settledString(event.data.opId, event.seq, "opId"),
+      groupId: settledString(event.data.groupId, event.seq, "groupId"),
+      anchorId: settledString(event.data.anchorId, event.seq, "anchorId"),
+      index: settledIndex(event.data.index, event.seq),
+      phase: "cancelled",
+      reason: settledString(event.data.reason, event.seq, "reason")
+    };
+  }
+  if (op !== "op-settled") {
     throw bodyRuntimeError(
       "invalid-event",
-      `body settled record at seq ${event.seq} has op '${String(event.data.op)}', expected 'op-settled'`
+      `body settled record at seq ${event.seq} has op '${String(op)}', expected 'op-settled' or 'op-settle-cancelled'`
+    );
+  }
+  const phase = event.data.phase;
+  if (phase !== void 0 && phase !== "settling" && phase !== "settled") {
+    throw bodyRuntimeError(
+      "invalid-event",
+      `body settled record at seq ${event.seq} has phase '${String(phase)}', expected 'settling' or 'settled'`
     );
   }
   return {
     opId: settledString(event.data.opId, event.seq, "opId"),
+    groupId: settledString(event.data.groupId, event.seq, "groupId"),
     anchorId: settledString(event.data.anchorId, event.seq, "anchorId"),
-    index: settledIndex(event.data.index, event.seq)
+    index: settledIndex(event.data.index, event.seq),
+    phase: phase ?? "settled"
   };
 }
-function settledMarkerOf(events, opId) {
-  let marker;
+function settlementEvidenceOf(events, opId) {
+  let evidence;
   for (const event of events) {
-    const settled = parseSettledEvent(event);
-    if (settled === void 0 || settled.opId !== opId) continue;
-    marker = { anchorId: settled.anchorId, index: settled.index };
+    const settlement = parseSettledEvent(event);
+    if (settlement === void 0 || settlement.opId !== opId) continue;
+    evidence = {
+      phase: settlement.phase,
+      groupId: settlement.groupId,
+      anchorId: settlement.anchorId,
+      index: settlement.index,
+      ...settlement.reason === void 0 ? {} : { reason: settlement.reason }
+    };
   }
-  return marker;
+  return evidence;
 }
 function settledString(value, seq, field) {
   if (typeof value !== "string" || value === "") {
@@ -24481,9 +24540,19 @@ async function finalizeRecoveredOperation(deps, op, turn) {
 }
 async function settleBodyOperation(deps, context, turn) {
   const events = eventsOf(deps.session);
-  const settled = settledMarkerOf(events, context.op.opId);
-  if (settled !== void 0) {
-    return finishSettledOperation(deps, context, settled);
+  const evidence = settlementEvidenceOf(events, context.op.opId);
+  if (evidence !== void 0) {
+    if (evidence.phase === "settled") {
+      return finishSettledOperation(deps, context, evidence);
+    }
+    if (evidence.phase === "cancelled") {
+      return failSettlement(
+        deps,
+        context,
+        `${context.label} ${context.op.opId} was cancelled before its previous anchor left the surface: ${evidence.reason ?? "no reason recorded"}`
+      );
+    }
+    return settleFromSettlingEvidence(deps, context, evidence);
   }
   const candidate = lastBodyCandidate(events, turn);
   if (candidate === void 0) {
@@ -24565,11 +24634,22 @@ async function settleBodyOperation(deps, context, turn) {
     throw failureFor(error, reason, context.op);
   }
   try {
+    appendSettlingMarker(deps, context.op.opId, context.op.groupId, candidate.messageId, candidateIndex);
+  } catch (error) {
+    const reason = `${context.label} ${context.op.opId} failed to record the settling marker before hiding turn ${turn}: ${errorMessage3(error)}`;
+    restorePreviousSelection(deps, context);
+    return failSettlement(deps, context, reason);
+  }
+  try {
     const hidden = hideTargets(events, surface, triggerMessageIdOf(context.op), turn, candidate.messageId);
     for (const seq of oldAnchorSurfaceTargets(events, surface, context.op.previousAnchorId)) hidden.add(seq);
     appendHideInOpenTurn(deps, turn, hidden);
   } catch (error) {
     const reason = `${context.label} ${context.op.opId} failed to settle turn ${turn}: ${errorMessage3(error)}`;
+    recordSettlementCancelled(deps, context.op, context.label, {
+      anchorId: candidate.messageId,
+      index: candidateIndex
+    }, `failed to hide the previous anchor: ${errorMessage3(error)}`);
     restorePreviousSelection(deps, context);
     return failSettlement(deps, context, reason);
   }
@@ -24600,6 +24680,7 @@ async function settleBodyOperation(deps, context, turn) {
   }
 }
 function finishSettledOperation(deps, context, settled) {
+  assertCommittedSettlement(deps, context.op.groupId, settled, `${context.label} ${context.op.opId}`);
   try {
     appendOpFinish(deps, context.op.opId, "ok", settled.anchorId, void 0);
   } catch (error) {
@@ -24610,6 +24691,83 @@ function finishSettledOperation(deps, context, settled) {
   }
   releaseSettlement(deps, context);
   return { status: "ok", anchorMessageId: settled.anchorId };
+}
+function settleFromSettlingEvidence(deps, context, evidence) {
+  const decision = settlingDecision(deps, context.op, evidence);
+  if (decision === "settled") {
+    try {
+      appendSettledMarker(deps, context.op.opId, context.op.groupId, evidence.anchorId, evidence.index);
+    } catch (error) {
+      warn(deps, `body runtime: ${context.label} ${context.op.opId} completed its hide but could not upgrade the settled marker: ${errorMessage3(error)}`);
+    }
+    return finishSettledOperation(deps, context, evidence);
+  }
+  if (decision === "cancelled") {
+    recordSettlementCancelled(
+      deps,
+      context.op,
+      context.label,
+      evidence,
+      "the previous anchor is still on the surface and the previous selection was restored"
+    );
+    return failSettlement(
+      deps,
+      context,
+      `${context.label} ${context.op.opId} did not complete its hide; the previous body stays selected`
+    );
+  }
+  throw bodyRuntimeError(
+    "operation-failed",
+    `${context.label} ${context.op.opId} has an ambiguous settling record for '${evidence.anchorId}' index ${evidence.index}: the surface and ledger disagree about whether the previous anchor was replaced; refusing to guess`
+  );
+}
+function settlingDecision(deps, op, evidence) {
+  const ledger = settlementLedger(deps, op.groupId, evidence);
+  const events = eventsOf(deps.session);
+  const surface = surfaceNodeList(deps.session);
+  const previousVisible = findSurfaceSeqByMessageId(events, surface, op.previousAnchorId) !== void 0;
+  const candidateVisible = findSurfaceSeqByMessageId(events, surface, evidence.anchorId) !== void 0;
+  if (!previousVisible && candidateVisible && ledger.selectedIndex === evidence.index && ledger.anchorMessageId === evidence.anchorId) {
+    return "settled";
+  }
+  if (previousVisible && ledger.selectedIndex === op.previousIndex) return "cancelled";
+  return "ambiguous";
+}
+function settlementLedger(deps, groupId, evidence) {
+  if (evidence.groupId !== groupId) {
+    throw bodyRuntimeError(
+      "invalid-event",
+      `body settlement record for '${evidence.anchorId}' belongs to group '${evidence.groupId}', not '${groupId}'`
+    );
+  }
+  const ledger = bodyLedger(eventsOf(deps.session), groupId);
+  if (ledger === void 0) {
+    throw bodyRuntimeError("invalid-event", `body settlement record references group '${groupId}' with no body ledger`);
+  }
+  const candidate = ledger.candidates[evidence.index];
+  if (candidate === void 0 || candidate.messageId !== evidence.anchorId) {
+    throw bodyRuntimeError(
+      "invalid-event",
+      `body settlement record points at anchor '${evidence.anchorId}' index ${evidence.index}, but group '${groupId}' has ${candidate === void 0 ? "no candidate at that index" : `candidate '${candidate.messageId}'`}; refusing to trust it`
+    );
+  }
+  return ledger;
+}
+function assertCommittedSettlement(deps, groupId, evidence, subject) {
+  const ledger = settlementLedger(deps, groupId, evidence);
+  if (ledger.selectedIndex !== evidence.index || ledger.anchorMessageId !== evidence.anchorId) {
+    throw bodyRuntimeError(
+      "invalid-event",
+      `${subject}: settlement record '${evidence.anchorId}' index ${evidence.index} is not the committed selection (selected ${ledger.selectedIndex}, anchor '${ledger.anchorMessageId}'); refusing to trust it`
+    );
+  }
+}
+function recordSettlementCancelled(deps, op, label, evidence, reason) {
+  try {
+    appendSettleCancelledMarker(deps, op.opId, op.groupId, evidence.anchorId, evidence.index, reason);
+  } catch (error) {
+    warn(deps, `body runtime: ${label} ${op.opId} could not record the cancelled settlement: ${errorMessage3(error)}`);
+  }
 }
 function settledFinishPending(reason, op, cause) {
   const failure = bodyRuntimeError("settled-finish-pending", reason);
@@ -24711,10 +24869,42 @@ async function restoreBodyAfterFailure(deps, op) {
   assertRecordWriter(deps);
   return withBodyLock(deps, async () => {
     const events = eventsOf(deps.session);
-    const settled = settledMarkerOf(events, op.opId);
-    if (settled !== void 0) {
-      releaseOperationByOp(deps, op, `body restore ${op.opId}`);
-      return settled.anchorId;
+    const evidence = settlementEvidenceOf(events, op.opId);
+    if (evidence !== void 0) {
+      if (evidence.phase === "settled") {
+        assertCommittedSettlement(deps, op.groupId, evidence, `body restore ${op.opId}`);
+        releaseOperationByOp(deps, op, `body restore ${op.opId}`);
+        return evidence.anchorId;
+      }
+      if (evidence.phase === "settling") {
+        const decision = settlingDecision(deps, op, evidence);
+        if (decision === "settled") {
+          try {
+            appendSettledMarker(deps, op.opId, op.groupId, evidence.anchorId, evidence.index);
+          } catch (error) {
+            throw failureFor(
+              error,
+              `body restore ${op.opId} proved the body settled but could not upgrade the settled marker`,
+              op
+            );
+          }
+          releaseOperationByOp(deps, op, `body restore ${op.opId}`);
+          return evidence.anchorId;
+        }
+        if (decision === "ambiguous") {
+          throw bodyRuntimeError(
+            "operation-failed",
+            `body restore ${op.opId} has an ambiguous settling record for '${evidence.anchorId}' index ${evidence.index}: the surface and ledger disagree; refusing to guess`
+          );
+        }
+        recordSettlementCancelled(
+          deps,
+          op,
+          `body restore ${op.opId}`,
+          evidence,
+          "the previous anchor is still on the surface and the previous selection was restored"
+        );
+      }
     }
     const openTurn = openTurnNumber(events);
     if (openTurn !== void 0) {
@@ -25022,17 +25212,17 @@ function foldPendingOps(events) {
   const pending = /* @__PURE__ */ new Map();
   const finished = /* @__PURE__ */ new Set();
   for (const event of parsed) {
-    const settled = parseSettledEvent(event);
-    if (settled !== void 0) {
-      const op = pending.get(settled.opId);
+    const settlement = parseSettledEvent(event);
+    if (settlement !== void 0) {
+      const op = pending.get(settlement.opId);
       if (op !== void 0) {
-        op.settled = { anchorId: settled.anchorId, index: settled.index };
+        applySettlementEvidence(op, settlement, event.seq);
         continue;
       }
-      if (finished.has(settled.opId)) continue;
+      if (finished.has(settlement.opId)) continue;
       throw bodyRuntimeError(
         "invalid-event",
-        `foldPendingOps: body settled record at seq ${event.seq} references operation '${settled.opId}' with no open op-start`
+        `foldPendingOps: body settled record at seq ${event.seq} references operation '${settlement.opId}' with no open op-start`
       );
     }
     const data = pendingEventOf(event);
@@ -25056,6 +25246,33 @@ function foldPendingOps(events) {
     finished.add(data.opId);
   }
   return [...pending.values()].sort((left, right) => left.startSeq - right.startSeq);
+}
+function applySettlementEvidence(op, settlement, seq) {
+  if (settlement.groupId !== op.groupId) {
+    throw bodyRuntimeError(
+      "invalid-event",
+      `foldPendingOps: settlement record at seq ${seq} references group '${settlement.groupId}', not '${op.groupId}' of operation '${settlement.opId}'`
+    );
+  }
+  const marker = { anchorId: settlement.anchorId, index: settlement.index };
+  if (settlement.phase === "settled") {
+    op.settled = marker;
+    delete op.settling;
+    delete op.settleCancelled;
+    return;
+  }
+  delete op.settled;
+  if (settlement.phase === "settling") {
+    op.settling = marker;
+    delete op.settleCancelled;
+    return;
+  }
+  op.settleCancelled = {
+    anchorId: settlement.anchorId,
+    index: settlement.index,
+    reason: settlement.reason ?? "settlement-cancelled"
+  };
+  delete op.settling;
 }
 
 // packages/plugin/src/agent-tavern/body-session.ts
@@ -25584,6 +25801,14 @@ async function recoverAgentBody(ctx, agent, agentId, createDeps) {
   const restoreOps = [];
   let settled = 0;
   for (const op of pending) {
+    if (op.settleCancelled !== void 0) {
+      info(ctx, "dsh-soulmojito body: recovery found a cancelled settlement and will restore the previous body", {
+        agentId,
+        opId: op.opId,
+        stage: "cancelled",
+        reason: op.settleCancelled.reason
+      });
+    }
     const turn = recoveredTurnOf(events, op);
     const candidate = turn === void 0 ? void 0 : recoveredCandidateInTurn(events, op, turn);
     if (turn === void 0 || candidate === void 0) {
@@ -25594,6 +25819,14 @@ async function recoverAgentBody(ctx, agent, agentId, createDeps) {
       const result = await finalizeRecoveredOperation(deps, op, turn);
       if (result.status === "ok") {
         settled += 1;
+        if (op.settling !== void 0) {
+          info(ctx, "dsh-soulmojito body: recovery completed a settling operation", {
+            agentId,
+            opId: op.opId,
+            stage: "settling-recovered",
+            anchorMessageId: result.anchorMessageId
+          });
+        }
         continue;
       }
       if (result.status === "failed" || recoveryTurnMismatch(result.reason)) {
@@ -25623,12 +25856,15 @@ async function recoverAgentBody(ctx, agent, agentId, createDeps) {
   const openTurn = openTurnNumber2(wiringEvents(deps.session) ?? initial);
   if (openTurn !== void 0) closeRecoveredBracket(ctx, agent, openTurn, agentId);
   let restored = 0;
+  let finishPending = 0;
   let failed = 0;
   for (const op of restoreOps) {
-    if (await restoreRecoveredOperation(ctx, deps, op)) restored += 1;
+    const outcome = await restoreRecoveredOperation(ctx, deps, op);
+    if (outcome === "restored") restored += 1;
+    else if (outcome === "finish-pending") finishPending += 1;
     else failed += 1;
   }
-  const status2 = failed > 0 ? "failed" : settled > 0 ? "settled" : restored > 0 ? "restored" : "clean";
+  const status2 = failed > 0 ? "failed" : finishPending > 0 ? "finish-pending" : settled > 0 ? "settled" : restored > 0 ? "restored" : "clean";
   return {
     agentId,
     status: status2,
@@ -25674,28 +25910,32 @@ function recoveryTurnMismatch(reason) {
 async function restoreRecoveredOperation(ctx, deps, op) {
   try {
     const restoredAnchorId = await restoreBodyAfterFailure(deps, op);
-    if (op.settled !== void 0) {
+    const evidence = settlementEvidenceOf(wiringEvents(deps.session) ?? [], op.opId);
+    if (evidence?.phase === "settled") {
       info(ctx, "dsh-soulmojito body: recovery kept the settled body with op-finish pending", {
         agentId: deps.agent.id,
         opId: op.opId,
+        stage: "settled-finish-pending",
         anchorId: restoredAnchorId
       });
-      return true;
+      return "finish-pending";
     }
     info(ctx, "dsh-soulmojito body: recovery restored the previous anchor", {
       agentId: deps.agent.id,
       opId: op.opId,
+      stage: evidence?.phase === "cancelled" ? "cancelled" : "restored",
       restoredAnchorId
     });
-    return true;
+    return "restored";
   } catch (error) {
     errorLog(ctx, "dsh-soulmojito body: recovery restore failed", {
       agentId: deps.agent.id,
       opId: op.opId,
+      stage: op.settling === void 0 ? "restore-failed" : "settling-restore-failed",
       code: failureCodeOf(error),
       error: errorMessage4(error)
     });
-    return false;
+    return "failed";
   }
 }
 function closeRecoveredBracket(ctx, agent, openTurn, agentId) {

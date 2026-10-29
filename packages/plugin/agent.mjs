@@ -8877,10 +8877,23 @@ function readMvuReceipts(chat) {
   }
   return receipts;
 }
-function appendMvuReceipt(chat, receipt) {
-  const metadata = chat.header.chat_metadata;
-  const receipts = [...readMvuReceipts(chat), receipt].slice(-MVU_RECEIPTS_LIMIT);
-  metadata.mvu = { receipts };
+function retainMvuReceipts(receipts, preserveTurnKeys) {
+  const preserved = /* @__PURE__ */ new Set();
+  const others = [];
+  for (let index = 0; index < receipts.length; index += 1) {
+    if (preserveTurnKeys.has(receipts[index].turnKey)) preserved.add(index);
+    else others.push(index);
+  }
+  const budget = Math.max(0, MVU_RECEIPTS_LIMIT - preserved.size);
+  const kept = new Set(preserved);
+  const newest = others.slice(others.length - Math.min(budget, others.length));
+  for (const index of newest) kept.add(index);
+  return receipts.filter((_, index) => kept.has(index));
+}
+function appendMvuReceipt(chat, receipt, preserveTurnKeys) {
+  const appended = [...readMvuReceipts(chat), receipt];
+  const receipts = preserveTurnKeys === void 0 ? appended.slice(-MVU_RECEIPTS_LIMIT) : retainMvuReceipts(appended, preserveTurnKeys);
+  chat.header.chat_metadata.mvu = { receipts };
 }
 
 // packages/plugin/src/agent-tavern/deduce.ts
