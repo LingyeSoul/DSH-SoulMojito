@@ -931,4 +931,5 @@
       'body.notLast': 'Only the latest reply can be edited.',
       'body.empty': 'Reply text cannot be empty.',
       'body.invalid': 'Reply text is empty or too long.',
+      'body.projectionPending': 'The reply is still syncing to the chat log; it was retried automatically — try again in a moment.',
     }

@@ -918,4 +918,5 @@
       'body.notLast': '只能修改最后一组正文。',
       'body.empty': '正文不能为空。',
       'body.invalid': '正文为空或超过长度上限。',
+      'body.projectionPending': '正文还在同步到聊天文件，已自动重试；稍后再试一次。',
     }

@@ -110,8 +110,28 @@
       if (code === 'body-compacted') return t('body.compacted')
       if (code === 'not-last-round') return t('body.notLast')
       if (code === 'invalid-body-text') return t('body.invalid')
+      if (code === 'projection-pending') return t('body.projectionPending')
       const message = cause instanceof Error ? cause.message : String(cause)
       return t('body.failed', { message })
+    }
+
+    // A body mutation's preflight refuses with projection-pending until the
+    // JSONL projection has merged the candidate the request itself just
+    // appended (proposal 0023 §4.1). Every mutation is idempotent, so the same
+    // request is retried on a short backoff instead of surfacing a transient
+    // "retry after the body projection catches up" as a failure.
+    const BODY_PROJECTION_RETRY_DELAYS_MS = [200, 500, 1000]
+
+    function withBodyProjectionRetry(request) {
+      let attempt = 0
+      const run = () => request().catch((cause) => {
+        const code = cause && typeof cause === 'object' && typeof cause.code === 'string' ? cause.code : ''
+        const delay = code === 'projection-pending' ? BODY_PROJECTION_RETRY_DELAYS_MS[attempt] : undefined
+        if (delay === undefined) throw cause
+        attempt += 1
+        return new Promise((resolve) => setTimeout(resolve, delay)).then(run)
+      })
+      return run()
     }
 
     function TavernBodyActions(props) {
@@ -169,7 +189,7 @@
         if (busy) return
         setPending(kind)
         setError('')
-        void request()
+        void withBodyProjectionRetry(request)
           .then((result) => {
             if (result && typeof result.revision === 'string') {
               syncChatRevision(binding.character, binding.chatId, result.revision)

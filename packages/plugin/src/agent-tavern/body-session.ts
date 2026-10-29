@@ -7,7 +7,13 @@
  * never writes to the session and never owns projection or mutation logic.
  */
 
-import { readSessionEvents, type HostSessionLog } from '../../../bind/src/index.js'
+import {
+  isHostPluginMessageSource,
+  readSessionEvents,
+  LEGACY_PLUGIN_NAME,
+  PLUGIN_NAME,
+  type HostSessionLog,
+} from '../../../bind/src/index.js'
 import type { HostAgentsService, HostLogger } from '../host-contract.js'
 import {
   BODY_EVENT_TYPE,
@@ -83,6 +89,29 @@ export function errorMessage(error: unknown): string {
 
 export function nonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined
+}
+
+/* ------------------------------ session marker ----------------------------- */
+
+/**
+ * Whether a session message source carries the dsh-soulmojito marker (import
+ * mirror, anchored notice, plugin notification). Preload notices (a summary
+ * starting with "AgentTavern preload: ") are excluded: they must not lock the
+ * session as started. Model mirrors are recognised by the synthetic
+ * provider/model pair because released v0 dispositions admit no extra members
+ * on model sources (TAVERN_MIRROR_MODEL_SOURCE).
+ */
+export function isTavernSessionMarker(source: unknown): boolean {
+  if (typeof source !== 'object' || source === null) return false
+  const record = source as Record<string, unknown>
+  if (record.kind === 'model') {
+    // Rename compatibility (2026-10-16): stored mirrors may carry the legacy
+    // provider name; new writes always use the new one.
+    const provider = record.provider
+    return (provider === PLUGIN_NAME || provider === LEGACY_PLUGIN_NAME) && record.model === 'agent-tavern-import'
+  }
+  if (!isHostPluginMessageSource(record)) return false
+  return !(typeof record.summary === 'string' && record.summary.startsWith('AgentTavern preload: '))
 }
 
 export function agentIdOf(agent: BodyAgentLike): string | undefined {

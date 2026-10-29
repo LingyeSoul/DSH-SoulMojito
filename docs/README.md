@@ -91,6 +91,7 @@
 - [`2026-10-29-body-prepare-crash-window.md`](../decisions/2026-10-29-body-prepare-crash-window.md) — 正文重生成 prepare → op-start 崩溃窗口：先落 plan 再动账
 - [`2026-10-29-settle-crash-consistency.md`](../decisions/2026-10-29-settle-crash-consistency.md) — settle 跨 store 崩溃一致性：durable settle intent + 启动恢复
 - [`2026-10-29-body-partial-hide-recovery.md`](../decisions/2026-10-29-body-partial-hide-recovery.md) — 正文结算部分 hide 收口：hide targets + finish-hide
+- [`2026-10-29-imported-body-floor-adoption.md`](../decisions/2026-10-29-imported-body-floor-adoption.md) — 导入楼层接管：history mirror 首楼绑定 bodyGroupId + 客户端 projection-pending 重试
 
 ### AgentNovel
 

@@ -40,6 +40,7 @@ import {
 import {
   BodyJsonlProjectionError,
   applyCandidateToChat,
+  applyFloorAdoptionToChat,
   applyRestoreToChat,
   applySelectToChat,
   findBodyFloorIndexByGroupId,
@@ -48,6 +49,7 @@ import {
   type BodyJsonlUsage,
 } from './body-jsonl.js'
 import { applyCandidateEditToChat, candidatePreserveKeys } from './body-candidate-receipts.js'
+import { isTavernSessionMarker } from './body-session.js'
 
 /** State slice the body projection needs from the tavern store. */
 export type BodyProjectionState = Pick<
@@ -139,6 +141,7 @@ export async function projectBodyEvent(
       ...(resolved.usage === undefined ? {} : { usage: resolved.usage }),
       ...(data.feedback === undefined ? {} : { feedback: data.feedback }),
     }
+    await adoptImportedAnchorFloor(store, session, binding, data.groupId, projected.anchorMessageId)
     await mutateBodyChat(store, binding, (chat) => projectCandidateToChat(chat, character?.card, input, preserveTurnKeys))
     return
   }
@@ -151,6 +154,7 @@ export async function projectBodyEvent(
         `body event seq ${event.seq} select index ${data.index} does not match ledger index ${projected.selectedIndex} for group '${data.groupId}'`,
       )
     }
+    await adoptImportedAnchorFloor(store, session, binding, data.groupId, projected.anchorMessageId)
     await mutateBodyChat(store, binding, (chat) => applySelectToChat(chat, {
       groupId: data.groupId,
       index: data.index,
@@ -183,6 +187,7 @@ export async function projectBodyEvent(
       )
     }
     const at = eventDate(event.time)
+    await adoptImportedAnchorFloor(store, session, binding, data.groupId, projected.anchorMessageId)
     await mutateBodyChat(store, binding, (chat) => applyCandidateEditToChat(chat, character.card, {
       ledger: projected,
       groupId: data.groupId,
@@ -203,6 +208,7 @@ export async function projectBodyEvent(
       `body event seq ${event.seq} restore target '${data.messageId}' at index ${data.index} does not match ledger anchor '${projected.anchorMessageId}' at index ${projected.selectedIndex}`,
     )
   }
+  await adoptImportedAnchorFloor(store, session, binding, data.groupId, projected.anchorMessageId)
   await mutateBodyChat(store, binding, (chat) => applyRestoreToChat(chat, {
     groupId: data.groupId,
     index: data.index,
@@ -221,6 +227,63 @@ export function isBodyMergedAssistant(session: HostSessionLog, event: BodyProjec
   const messageId = message?.['id']
   if (typeof messageId === 'string' && messageId !== '' && isRestoredBodyMessage(session, messageId)) return true
   return isBodyTriggerTurn(session, data?.['turn'])
+}
+
+/* --------------------------- imported-floor adoption ----------------------- */
+
+/**
+ * Bind one imported anchor to a chat floor the body projection can write into.
+ *
+ * The history import deliberately does not project its mirror messages back
+ * into the JSONL (decision 2026-10-20), so the opening/history floors start
+ * without the body-group identity and any body event targeting them fails with
+ * `body-floor-not-found`. The first such event adopts the chat's trailing
+ * plugin-unaware assistant floor: the group binding is written and its ST
+ * swipe surface is dropped, so this event's candidate projection behaves
+ * exactly like the first operation on a live floor.
+ *
+ * Already-bound groups, non-mirror anchors and chats without an adoptable
+ * floor are no-ops; the caller's projection then keeps its normal verdict
+ * (including the pending checkpoint for genuinely lagging live floors).
+ */
+async function adoptImportedAnchorFloor(
+  store: BodyProjectionStore,
+  session: HostSessionLog,
+  binding: Extract<TavernSessionBinding, { architecture: 'agent-tavern' }>,
+  groupId: string,
+  anchorMessageId: string | undefined,
+): Promise<void> {
+  if (anchorMessageId === undefined) return
+  const sessionId = typeof session.id === 'string' && session.id !== '' ? session.id : undefined
+  if (sessionId === undefined) return
+  if (!isImportedMirrorAnchor(session, anchorMessageId)) return
+
+  await mutateBodyChat(store, binding, (chat) => {
+    if (findBodyFloorIndexByGroupId(chat, groupId) !== undefined) return undefined
+    if (findBodyFloorIndexByMessageId(chat, anchorMessageId) !== undefined) return undefined
+    try {
+      return applyFloorAdoptionToChat(chat, { groupId, sessionId, anchorMessageId })
+    } catch (error) {
+      // No plugin-unaware floor to adopt: keep the ordinary projection verdict.
+      if (error instanceof BodyJsonlProjectionError && (error.code === 'body-floor-not-found' || error.code === 'body-group-mismatch')) {
+        return undefined
+      }
+      throw error
+    }
+  })
+}
+
+/** Whether the anchor assistant message is an AgentTavern history-import mirror. */
+function isImportedMirrorAnchor(session: HostSessionLog, anchorMessageId: string): boolean {
+  let found: BodyProjectionEvent | undefined
+  for (const event of sessionEvents(session) as readonly BodyProjectionEvent[]) {
+    if (event.type !== 'assistant/message') continue
+    const message = plainObjectRecord(plainObjectRecord(event.data)?.['message'])
+    if (message?.['id'] !== anchorMessageId) continue
+    if (found === undefined || event.seq >= found.seq) found = event
+  }
+  if (found === undefined) return false
+  return isTavernSessionMarker(plainObjectRecord(plainObjectRecord(found.data)?.['message'])?.['source'])
 }
 
 /* ---------------------- candidate merge + MVU patch ----------------------- */
@@ -315,15 +378,22 @@ function hasUpdateVariableBlock(text: string): boolean {
 
 /* -------------------------------- CAS writer ------------------------------- */
 
+/**
+ * CAS writer shared by the body projections.
+ *
+ * `mutate` returns the next chat, or `undefined` when the caller decided no
+ * write is needed (adoption fast path); an unchanged decision never saves.
+ */
 async function mutateBodyChat(
   store: BodyProjectionStore,
   binding: Extract<TavernSessionBinding, { architecture: 'agent-tavern' }>,
-  mutate: (chat: ChatLogIR) => ChatLogIR,
+  mutate: (chat: ChatLogIR) => ChatLogIR | undefined,
 ): Promise<void> {
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const snapshot = await store.getChatSnapshot(binding.character, binding.chatId)
     if (!snapshot) throw new Error('AgentTavern body projection target chat not found')
     const next = mutate(structuredClone(snapshot.chat))
+    if (next === undefined) return
     try {
       await store.saveChat(binding.character, binding.chatId, next, snapshot.revision)
       return

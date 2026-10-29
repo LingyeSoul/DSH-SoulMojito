@@ -52,6 +52,13 @@ describe('AgentTavern body client source checks', () => {
     expect(bodySource).toContain('...(trimmed === \'\' ? {} : { feedback: trimmed })')
   })
 
+  it('retries a projection-pending body mutation on a bounded backoff', () => {
+    expect(bodySource).toContain('function withBodyProjectionRetry(request)')
+    expect(bodySource).toContain("code === 'projection-pending'")
+    expect(bodySource).toContain('BODY_PROJECTION_RETRY_DELAYS_MS')
+    expect(bodySource).toContain('void withBodyProjectionRetry(request)')
+  })
+
   it('ships the five stable action test ids', () => {
     for (const testId of [
       'tavern-body-edit',
@@ -131,7 +138,7 @@ describe('AgentTavern body client source checks', () => {
   it('ships the body copy in both dictionaries with matching placeholders', () => {
     const keys = [
       'body.edit', 'body.regenerate', 'body.swipe', 'body.saving', 'body.generating',
-      'body.failed', 'body.busy', 'body.compacted', 'body.notLast',
+      'body.failed', 'body.busy', 'body.compacted', 'body.notLast', 'body.projectionPending',
     ]
     for (const key of keys) {
       expect(zh).toContain(`'${key}'`)

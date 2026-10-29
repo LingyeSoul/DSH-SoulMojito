@@ -337,6 +337,13 @@ export function migrateLegacyCandidateKeys(
   **重要**：副本的 assistant 内容来自原消息，可能不含用户编辑；`createBodyProjection` 必须把
   `restore` 也纳入触发（与 `select` / `edit` 同级），用 `effectiveBodyText(ledger)` 覆盖副本文本。
   否则“编辑过正文 → 重生成失败 → restore”会把显示与模型面回退到未编辑的原文。
+- **导入楼层接管**（2026-10-29 落地）：历史导入的镜像消息不会被反向投影，其首楼没有
+  `extra.agentTavern` 身份。第一体事件（candidate 种子）在按 group 定位失败、且锚点 source
+  是导入镜像时，认领聊天里最后一条插件未知的 assistant 楼层：写 `bodyGroupId`/`sessionId`/
+  `anchorMessageId` 并删除其 ST swipe 面，随后 candidate 投影按「首个 body 操作」创建槽 0
+  （保存层正则 / MVU receipt / 占位符与 live 楼层同一路径）。接管不写 `messageId`，显示层
+  继续回退原文（decision 2026-10-20）；非镜像锚点的缺失仍是 `projection-pending` 的滞后语义。
+  客户端对该 503 做有界重试（200/500/1000ms），穷尽后回报 `body.projectionPending` 文案。
 
 ### 4.4 失败与回滚
 

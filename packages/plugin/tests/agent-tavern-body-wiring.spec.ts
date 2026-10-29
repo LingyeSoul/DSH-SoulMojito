@@ -374,6 +374,31 @@ function projectedChat(text: string): ChatLogIR {
   return chat
 }
 
+/**
+ * Floor shape after the importer adoption: group-bound but without the
+ * projected message id, so the display lookup keeps the stored text.
+ */
+function adoptedChat(groupId: string, text: string): ChatLogIR {
+  const chat = fakeChat({})
+  chat.messages.push({
+    name: 'character',
+    is_user: false,
+    is_system: false,
+    send_date: '',
+    mes: text,
+    swipe_id: 0,
+    swipes: [text],
+    extra: {
+      agentTavern: {
+        bodyGroupId: groupId,
+        anchorMessageId: groupId,
+        sessionId: 'session-recovery',
+      },
+    },
+  })
+  return chat
+}
+
 /** Candidate 0 floor plus the candidate-level MVU receipts a 0023 edit inspects. */
 function projectedMvuChat(text: string, receipts: readonly Record<string, unknown>[]): ChatLogIR {
   const chat = projectedChat(text)
@@ -751,6 +776,7 @@ async function callBodyEditWithHarness(
   harness: RecoveryHarness,
   sessionId: string,
   text: string,
+  ids?: { groupId: string; expectedAnchorId: string },
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   hostState.module = hostRecordModule()
   rollbackState.store = mutationDbFor(sessionId, character, chat)
@@ -763,8 +789,8 @@ async function callBodyEditWithHarness(
     mutationDbFor(sessionId, character, chat),
     makeRequest({
       sessionId,
-      groupId: 'message-1',
-      expectedAnchorId: 'message-1',
+      groupId: ids === undefined ? 'message-1' : ids.groupId,
+      expectedAnchorId: ids === undefined ? 'message-1' : ids.expectedAnchorId,
       index: 0,
       text,
     }, 'PUT', '/api/dsh-soulmojito/body'),
@@ -1109,6 +1135,25 @@ describe('body state safety (proposal 0022 §7)', () => {
     expect(result.status).toBe(503)
     expect(result.body).toMatchObject({ ok: false, code: 'projection-pending' })
     expect(harness.events.some((event) => event.type === BODY_EVENT_TYPE && event.data['op'] === 'edit')).toBe(false)
+  })
+
+  it('accepts an edit on an imported floor once the projection adopted it', async () => {
+    const character = plainCharacter()
+    const chat = adoptedChat('import-anchor', 'Chosen greeting.')
+    const harness = createRecoveryHarness()
+    seedEditAnchor(harness, 'import-anchor', 'Chosen greeting.')
+
+    const result = await callBodyEditWithHarness(character, chat, harness, 'session-recovery', 'edited body', {
+      groupId: 'import-anchor',
+      expectedAnchorId: 'import-anchor',
+    })
+
+    expect(result.status).toBe(200)
+    expect(result.body).toMatchObject({
+      ok: true,
+      state: { groupId: 'import-anchor', selectedIndex: 0, text: 'edited body' },
+    })
+    expect(harness.events.some((event) => event.type === BODY_EVENT_TYPE && event.data['op'] === 'edit')).toBe(true)
   })
 
   it('enables edit while keeping selection closed for an MVU GET view', async () => {

@@ -320,6 +320,79 @@ export function applyRestoreToChat(chat: ChatLogIR, input: BodyJsonlRestoreInput
   return next
 }
 
+/* -------------------------------- adoption --------------------------------- */
+
+/** Input for {@link applyFloorAdoptionToChat}. */
+export interface BodyJsonlAdoptionInput {
+  readonly groupId: string
+  readonly sessionId: string
+  readonly anchorMessageId: string
+}
+
+/**
+ * Adopt the chat's trailing plugin-unaware assistant floor for one imported
+ * anchor (the AgentTavern history import never projects its mirror messages
+ * back into the JSONL — decision 2026-10-20 — so their floors carry no
+ * `extra.agentTavern` identity and every body event targeting them fails).
+ *
+ * The body ledger owns the floor's swipe slot list (`swipes[index]` is ledger
+ * candidate `index`), so the adopted floor's ST swipe surface is dropped: the
+ * following candidate projection then creates slot 0 from the ledger text
+ * exactly like the first body operation on a live floor, placeholders and MVU
+ * receipts included. `mes` stays untouched until that projection lands, and
+ * the group binding makes the floor locatable for every later operation.
+ *
+ * The display route keeps matching `extra.agentTavern.messageId` only, so
+ * adopted floors stay outside the display override (decision 2026-10-20).
+ *
+ * @throws BodyJsonlProjectionError `body-group-mismatch` when this group is
+ * already projected; `body-floor-not-found` when no adoptable floor exists.
+ */
+export function applyFloorAdoptionToChat(chat: ChatLogIR, input: BodyJsonlAdoptionInput): ChatLogIR {
+  requireNonEmpty(input.groupId, 'invalid-body-group-id', 'body group id')
+  requireNonEmpty(input.sessionId, 'invalid-body-message-id', 'adoption session id')
+  requireNonEmpty(input.anchorMessageId, 'invalid-body-message-id', 'adoption anchor message id')
+
+  if (findBodyFloorIndexByGroupId(chat, input.groupId) !== undefined) {
+    throw new BodyJsonlProjectionError(
+      'body-group-mismatch',
+      `body floor for group '${input.groupId}' is already projected; nothing to adopt`,
+    )
+  }
+  const floorIndex = findAdoptableFloorIndex(chat)
+  if (floorIndex === undefined) {
+    throw new BodyJsonlProjectionError(
+      'body-floor-not-found',
+      `no unprojected assistant floor can be adopted for group '${input.groupId}'`,
+    )
+  }
+
+  const next = structuredClone(chat)
+  const nextFloor = next.messages[floorIndex]!
+  const extra = patchAgentTavern(nextFloor, input.groupId, input.anchorMessageId)
+  const current = isRecord(extra.agentTavern) ? extra.agentTavern : {}
+  extra.agentTavern = { ...current, sessionId: input.sessionId }
+  const adopted = { ...nextFloor, extra }
+  delete adopted.swipes
+  delete adopted.swipe_id
+  delete adopted.swipe_info
+  next.messages[floorIndex] = adopted
+  return next
+}
+
+/** Last assistant floor the plugin never projected; the adoption target. */
+function findAdoptableFloorIndex(chat: ChatLogIR): number | undefined {
+  for (let index = chat.messages.length - 1; index >= 0; index -= 1) {
+    const message = chat.messages[index]
+    if (message === undefined || message.is_user === true || message.is_system === true) continue
+    if (typeof message.mes !== 'string' || message.mes.trim() === '') continue
+    const tavern = readAgentTavern(message)
+    if (tavern?.bodyGroupId !== undefined || tavern?.messageId !== undefined) continue
+    return index
+  }
+  return undefined
+}
+
 /* --------------------------------- helpers --------------------------------- */
 
 function requireNonEmpty(value: string, code: BodyJsonlErrorCode, label: string): void {

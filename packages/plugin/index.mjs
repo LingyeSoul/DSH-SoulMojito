@@ -15322,6 +15322,46 @@ function applyRestoreToChat(chat, input) {
   };
   return next;
 }
+function applyFloorAdoptionToChat(chat, input) {
+  requireNonEmpty2(input.groupId, "invalid-body-group-id", "body group id");
+  requireNonEmpty2(input.sessionId, "invalid-body-message-id", "adoption session id");
+  requireNonEmpty2(input.anchorMessageId, "invalid-body-message-id", "adoption anchor message id");
+  if (findBodyFloorIndexByGroupId(chat, input.groupId) !== void 0) {
+    throw new BodyJsonlProjectionError(
+      "body-group-mismatch",
+      `body floor for group '${input.groupId}' is already projected; nothing to adopt`
+    );
+  }
+  const floorIndex = findAdoptableFloorIndex(chat);
+  if (floorIndex === void 0) {
+    throw new BodyJsonlProjectionError(
+      "body-floor-not-found",
+      `no unprojected assistant floor can be adopted for group '${input.groupId}'`
+    );
+  }
+  const next = structuredClone(chat);
+  const nextFloor = next.messages[floorIndex];
+  const extra = patchAgentTavern(nextFloor, input.groupId, input.anchorMessageId);
+  const current = isRecord3(extra.agentTavern) ? extra.agentTavern : {};
+  extra.agentTavern = { ...current, sessionId: input.sessionId };
+  const adopted = { ...nextFloor, extra };
+  delete adopted.swipes;
+  delete adopted.swipe_id;
+  delete adopted.swipe_info;
+  next.messages[floorIndex] = adopted;
+  return next;
+}
+function findAdoptableFloorIndex(chat) {
+  for (let index = chat.messages.length - 1; index >= 0; index -= 1) {
+    const message = chat.messages[index];
+    if (message === void 0 || message.is_user === true || message.is_system === true) continue;
+    if (typeof message.mes !== "string" || message.mes.trim() === "") continue;
+    const tavern = readAgentTavern(message);
+    if (tavern?.bodyGroupId !== void 0 || tavern?.messageId !== void 0) continue;
+    return index;
+  }
+  return void 0;
+}
 function requireNonEmpty2(value, code, label) {
   if (typeof value !== "string" || value.trim() === "") {
     throw new BodyJsonlProjectionError(code, `${label} must be a non-empty string`);
@@ -15883,6 +15923,263 @@ function isRecord4(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+// packages/plugin/src/agent-tavern/body-session.ts
+function warn(ctx, message, fields) {
+  try {
+    ctx.logger?.warn?.(message, fields);
+  } catch {
+  }
+}
+function info(ctx, message, fields) {
+  try {
+    ctx.logger?.info?.(message, fields);
+  } catch {
+  }
+}
+function errorLog(ctx, message, fields) {
+  try {
+    ctx.logger?.error?.(message, fields);
+  } catch {
+  }
+}
+function failureCodeOf(error) {
+  if (!isRecord5(error)) return void 0;
+  const code = error["code"];
+  return typeof code === "string" && code !== "" ? code : void 0;
+}
+function errorMessage2(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function nonEmptyString(value) {
+  return typeof value === "string" && value !== "" ? value : void 0;
+}
+function isTavernSessionMarker(source) {
+  if (typeof source !== "object" || source === null) return false;
+  const record = source;
+  if (record.kind === "model") {
+    const provider = record.provider;
+    return (provider === PLUGIN_NAME || provider === LEGACY_PLUGIN_NAME) && record.model === "agent-tavern-import";
+  }
+  if (!isHostPluginMessageSource(record)) return false;
+  return !(typeof record.summary === "string" && record.summary.startsWith("AgentTavern preload: "));
+}
+function agentIdOf(agent) {
+  return nonEmptyString(agent.id) ?? nonEmptyString(agent.session.id);
+}
+function isRecord5(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isSeq(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && !Object.is(value, -0);
+}
+function numberField(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) ? value : void 0;
+}
+function wiringEvents(session) {
+  const values = readSessionEvents(session);
+  if (values === void 0) return void 0;
+  const events = [];
+  for (const value of values) {
+    if (!isRecord5(value)) return void 0;
+    const type = value["type"];
+    const seq = value["seq"];
+    const data = value["data"];
+    if (typeof type !== "string" || !isSeq(seq) || !isRecord5(data)) return void 0;
+    events.push({ type, seq, data });
+  }
+  events.sort((left, right) => left.seq - right.seq);
+  return events;
+}
+function eventAt(events, seq) {
+  return events.find((event) => event.seq === seq);
+}
+function messageOf(event) {
+  if (event.type === "user/message") return event.data;
+  const message = event.data["message"];
+  return isRecord5(message) ? message : void 0;
+}
+function messageIdOf(event) {
+  const message = messageOf(event);
+  const id = message?.["id"];
+  return typeof id === "string" && id !== "" ? id : void 0;
+}
+function textOfMessage(message) {
+  return contentOf(message).filter((block) => block["type"] === "text" && typeof block["text"] === "string").map((block) => block["text"]).join("");
+}
+function hasToolCall(message) {
+  return contentOf(message).some((block) => block["type"] === "tool-call");
+}
+function surfaceNodes(session) {
+  const surface = session.surface;
+  if (!isRecord5(surface)) return void 0;
+  const nodes = surface["nodes"];
+  if (!Array.isArray(nodes)) return void 0;
+  const parsed = [];
+  for (const node of nodes) {
+    if (!isSeq(node)) return void 0;
+    parsed.push(node);
+  }
+  return parsed;
+}
+function openTurnNumber(events) {
+  let open2;
+  for (const event of events) {
+    if (event.type === "turn/start") open2 = numberField(event.data["turn"]);
+    else if (event.type === "turn/end") open2 = void 0;
+  }
+  return open2;
+}
+function readBodySessionFacts(session, messageId, groupHint) {
+  const events = wiringEvents(session);
+  if (events === void 0) {
+    return { ledger: void 0, messageText: void 0, inspection: void 0 };
+  }
+  let ledger;
+  let ledgerError;
+  try {
+    ledger = groupHint === void 0 ? void 0 : foldBodyLedgerFromEvents(events, groupHint);
+    if (ledger === void 0) ledger = findBodyLedgerForMessage(events, messageId);
+  } catch (error) {
+    ledger = void 0;
+    ledgerError = errorMessage2(error);
+  }
+  const messageText4 = textOfSessionMessage(events, messageId);
+  const surface = surfaceNodes(session);
+  const anchorMessageId = ledger?.anchorMessageId ?? messageId;
+  const inspection = surface === void 0 ? void 0 : inspectAnchorInEvents(events, surface, anchorMessageId);
+  return {
+    ledger,
+    messageText: messageText4,
+    inspection,
+    ...ledgerError === void 0 ? {} : { ledgerError }
+  };
+}
+function findBodyLedgerForMessage(events, messageId) {
+  const groupIds = /* @__PURE__ */ new Set([messageId]);
+  for (const event of events) {
+    if (event.type !== BODY_EVENT_TYPE) continue;
+    const groupId = nonEmptyString(event.data["groupId"]);
+    if (groupId !== void 0) groupIds.add(groupId);
+  }
+  for (const groupId of groupIds) {
+    const ledger = foldBodyLedgerFromEvents(events, groupId);
+    if (ledger === void 0) continue;
+    if (ledger.anchorMessageId === messageId || ledger.candidates.some((entry) => entry.messageId === messageId)) {
+      return ledger;
+    }
+  }
+  return void 0;
+}
+function textOfSessionMessage(events, messageId) {
+  const event = events.find((entry) => messageIdOf(entry) === messageId);
+  if (event === void 0) return void 0;
+  const message = messageOf(event);
+  return message === void 0 ? void 0 : textOfMessage(message);
+}
+function inspectAnchorInEvents(events, surface, anchorMessageId) {
+  const anchorIndex = surface.findIndex((seq) => {
+    const event = eventAt(events, seq);
+    return event !== void 0 && messageIdOf(event) === anchorMessageId;
+  });
+  if (anchorIndex < 0) return { onSurface: false, last: false };
+  for (const seq of surface.slice(anchorIndex + 1)) {
+    const event = eventAt(events, seq);
+    if (event === void 0) return { onSurface: true, last: false };
+    if (event.type === "system/message" || event.type === "developer/message" || event.type === "tool/result") continue;
+    const message = messageOf(event);
+    if (message === void 0) continue;
+    if (event.type === "user/message") {
+      if (sourceOf(message)?.kind === "user") return { onSurface: true, last: false };
+      continue;
+    }
+    if (event.type === "assistant/message" && textOfMessage(message).trim() !== "" && !hasToolCall(message)) {
+      return { onSurface: true, last: false };
+    }
+  }
+  return { onSurface: true, last: true };
+}
+function bodyAgentOf(value) {
+  if (!isRecord5(value)) return void 0;
+  const session = value["session"];
+  if (!isBodySession(session)) return void 0;
+  if (typeof value["followup"] !== "function") return void 0;
+  return value;
+}
+function resolveLiveAgent(ctx, sessionId) {
+  const agents = ctx.agents;
+  const get = agents?.get;
+  if (agents === void 0 || typeof get !== "function") return void 0;
+  try {
+    return bodyAgentOf(get.call(agents, sessionId));
+  } catch (error) {
+    warn(ctx, "dsh-soulmojito body: agents.get failed", { sessionId, error: errorMessage2(error) });
+    return void 0;
+  }
+}
+function listLiveAgents(ctx) {
+  const agents = ctx.agents;
+  const list = agents?.list;
+  if (agents === void 0 || typeof list !== "function") return [];
+  let values;
+  try {
+    values = list.call(agents);
+  } catch (error) {
+    warn(ctx, "dsh-soulmojito body: agents.list failed", { error: errorMessage2(error) });
+    return [];
+  }
+  if (!Array.isArray(values)) return [];
+  const agentsOut = [];
+  for (const value of values) {
+    const agent = bodyAgentOf(value);
+    if (agent !== void 0) agentsOut.push(agent);
+  }
+  return agentsOut;
+}
+async function resolveBodyBinding(ctx, sessionId) {
+  const bindingOf2 = ctx.bindingOf;
+  if (typeof bindingOf2 !== "function") {
+    warn(ctx, "dsh-soulmojito body: no binding resolver is wired; body operations disabled", {
+      reason: "architecture-mismatch",
+      sessionId
+    });
+    return void 0;
+  }
+  try {
+    return await bindingOf2(sessionId);
+  } catch (error) {
+    warn(ctx, "dsh-soulmojito body: binding lookup failed", { sessionId, error: errorMessage2(error) });
+    return void 0;
+  }
+}
+function bodyBindingEligible(binding) {
+  return binding !== void 0 && binding.architecture === "agent-tavern" && binding.group !== true;
+}
+function isBodySession(value) {
+  if (!isRecord5(value)) return false;
+  return typeof value["append"] === "function";
+}
+function contentOf(message) {
+  const content = message["content"];
+  if (!Array.isArray(content)) return [];
+  return content.filter((block) => isRecord5(block));
+}
+function sourceOf(message) {
+  const source = message["source"];
+  return isRecord5(source) ? source : void 0;
+}
+function foldBodyLedgerFromEvents(events, groupId) {
+  const last = events[events.length - 1];
+  if (last === void 0) return void 0;
+  const bodyEvents = events.map((event) => ({
+    seq: event.seq,
+    type: event.type,
+    // The ledger validates every body payload it reads and ignores unrelated
+    // events; the session log itself is JSON by host contract.
+    data: event.data
+  }));
+  return foldBodyLedger(bodyEvents, groupId, last.seq);
+}
+
 // packages/plugin/src/agent-tavern/body-projector.ts
 function isBodyLogEvent(eventType) {
   return eventType === BODY_EVENT_TYPE;
@@ -15919,6 +16216,7 @@ async function projectBodyEvent(store5, session, state, binding, event) {
       ...resolved.usage === void 0 ? {} : { usage: resolved.usage },
       ...data.feedback === void 0 ? {} : { feedback: data.feedback }
     };
+    await adoptImportedAnchorFloor(store5, session, binding, data.groupId, projected2.anchorMessageId);
     await mutateBodyChat(store5, binding, (chat) => projectCandidateToChat(chat, character?.card, input, preserveTurnKeys));
     return;
   }
@@ -15930,6 +16228,7 @@ async function projectBodyEvent(store5, session, state, binding, event) {
         `body event seq ${event.seq} select index ${data.index} does not match ledger index ${projected2.selectedIndex} for group '${data.groupId}'`
       );
     }
+    await adoptImportedAnchorFloor(store5, session, binding, data.groupId, projected2.anchorMessageId);
     await mutateBodyChat(store5, binding, (chat) => applySelectToChat(chat, {
       groupId: data.groupId,
       index: data.index,
@@ -15961,6 +16260,7 @@ async function projectBodyEvent(store5, session, state, binding, event) {
       );
     }
     const at = eventDate(event.time);
+    await adoptImportedAnchorFloor(store5, session, binding, data.groupId, projected2.anchorMessageId);
     await mutateBodyChat(store5, binding, (chat) => applyCandidateEditToChat(chat, character.card, {
       ledger: projected2,
       groupId: data.groupId,
@@ -15980,6 +16280,7 @@ async function projectBodyEvent(store5, session, state, binding, event) {
       `body event seq ${event.seq} restore target '${data.messageId}' at index ${data.index} does not match ledger anchor '${projected.anchorMessageId}' at index ${projected.selectedIndex}`
     );
   }
+  await adoptImportedAnchorFloor(store5, session, binding, data.groupId, projected.anchorMessageId);
   await mutateBodyChat(store5, binding, (chat) => applyRestoreToChat(chat, {
     groupId: data.groupId,
     index: data.index,
@@ -15992,6 +16293,35 @@ function isBodyMergedAssistant(session, event) {
   const messageId = message?.["id"];
   if (typeof messageId === "string" && messageId !== "" && isRestoredBodyMessage(session, messageId)) return true;
   return isBodyTriggerTurn(session, data?.["turn"]);
+}
+async function adoptImportedAnchorFloor(store5, session, binding, groupId, anchorMessageId) {
+  if (anchorMessageId === void 0) return;
+  const sessionId = typeof session.id === "string" && session.id !== "" ? session.id : void 0;
+  if (sessionId === void 0) return;
+  if (!isImportedMirrorAnchor(session, anchorMessageId)) return;
+  await mutateBodyChat(store5, binding, (chat) => {
+    if (findBodyFloorIndexByGroupId(chat, groupId) !== void 0) return void 0;
+    if (findBodyFloorIndexByMessageId(chat, anchorMessageId) !== void 0) return void 0;
+    try {
+      return applyFloorAdoptionToChat(chat, { groupId, sessionId, anchorMessageId });
+    } catch (error) {
+      if (error instanceof BodyJsonlProjectionError && (error.code === "body-floor-not-found" || error.code === "body-group-mismatch")) {
+        return void 0;
+      }
+      throw error;
+    }
+  });
+}
+function isImportedMirrorAnchor(session, anchorMessageId) {
+  let found;
+  for (const event of sessionEvents(session)) {
+    if (event.type !== "assistant/message") continue;
+    const message = plainObjectRecord(plainObjectRecord(event.data)?.["message"]);
+    if (message?.["id"] !== anchorMessageId) continue;
+    if (found === void 0 || event.seq >= found.seq) found = event;
+  }
+  if (found === void 0) return false;
+  return isTavernSessionMarker(plainObjectRecord(plainObjectRecord(found.data)?.["message"])?.["source"]);
 }
 function projectCandidateToChat(chat, card, input, preserveTurnKeys) {
   const existingText = existingCandidateText(chat, input.groupId, input.index);
@@ -16050,6 +16380,7 @@ async function mutateBodyChat(store5, binding, mutate) {
     const snapshot2 = await store5.getChatSnapshot(binding.character, binding.chatId);
     if (!snapshot2) throw new Error("AgentTavern body projection target chat not found");
     const next = mutate(structuredClone(snapshot2.chat));
+    if (next === void 0) return;
     try {
       await store5.saveChat(binding.character, binding.chatId, next, snapshot2.revision);
       return;
@@ -16378,7 +16709,7 @@ function projectMessage(session, event, binding, scripts) {
     };
   }
   if (event.type !== "assistant/message") return void 0;
-  if (isTavernMirrorSource(event.data?.message?.source)) return void 0;
+  if (isTavernSessionMarker(event.data?.message?.source)) return void 0;
   if (isBodyMergedAssistant(session, event)) return void 0;
   const content = event.data?.message?.content;
   if (!Array.isArray(content) || content.some((block) => block?.type === "tool-call")) return void 0;
@@ -16415,19 +16746,6 @@ function projectedMessageId(message) {
   const agentTavern = plainObjectRecord2(message.extra?.["agentTavern"]);
   const messageId = agentTavern?.["messageId"];
   return typeof messageId === "string" && messageId !== "" ? messageId : void 0;
-}
-function isTavernSessionMarker(source) {
-  if (typeof source !== "object" || source === null) return false;
-  const record = source;
-  if (record.kind === "model") {
-    const provider = record.provider;
-    return (provider === PLUGIN_NAME || provider === LEGACY_PLUGIN_NAME) && record.model === "agent-tavern-import";
-  }
-  if (!isHostPluginMessageSource(record)) return false;
-  return !(typeof record.summary === "string" && record.summary.startsWith("AgentTavern preload: "));
-}
-function isTavernMirrorSource(source) {
-  return isTavernSessionMarker(source);
 }
 var TAVERN_MIRROR_MODEL_SOURCE = { provider: PLUGIN_NAME, model: "agent-tavern-import" };
 function historyImportAppends(chat, sessionId, scripts, expand, session) {
@@ -16710,7 +17028,7 @@ function inspectAgentNovelCapabilities(ctx) {
   };
 }
 var PROBE_TOOL = "novel_status_read";
-function messageOf(error) {
+function messageOf2(error) {
   return error instanceof Error ? error.message : String(error);
 }
 function outputExcerptOf(output) {
@@ -16734,13 +17052,13 @@ async function probeSpawn(deps, label, prompt, options) {
       ...options.agentPreset === void 0 ? {} : { agentPreset: options.agentPreset }
     });
   } catch (error) {
-    return { ok: false, error: `spawn failed: ${messageOf(error)}` };
+    return { ok: false, error: `spawn failed: ${messageOf2(error)}` };
   }
   try {
     const result = await run.result;
     return { ok: true, runId: run.id, result: { output: [...result.output], stopReason: result.stopReason, ...result.diagnostic === void 0 ? {} : { diagnostic: result.diagnostic } } };
   } catch (error) {
-    return { ok: false, error: `run result rejected: ${messageOf(error)}` };
+    return { ok: false, error: `run result rejected: ${messageOf2(error)}` };
   } finally {
     try {
       await run.dispose();
@@ -16853,7 +17171,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("9bb5426") : void 0;
+  const commit = true ? normalizeCommit("7c1d131") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -21590,13 +21908,13 @@ async function readAgentTavernBinding(store5, agentId) {
   } catch (error) {
     throw new BodyRollbackError(
       "body-state-unsafe",
-      `body rollback cannot read tavern state for session '${agentId}': ${errorMessage2(error)}`,
+      `body rollback cannot read tavern state for session '${agentId}': ${errorMessage3(error)}`,
       { detail: "binding-unavailable", stage: "prepare", sessionId: agentId, cause: error }
     );
   }
   const bindings2 = state.sessionBindings;
-  const binding = isRecord5(bindings2) ? bindings2[agentId] : void 0;
-  if (!isRecord5(binding) || binding["architecture"] !== "agent-tavern") {
+  const binding = isRecord6(bindings2) ? bindings2[agentId] : void 0;
+  if (!isRecord6(binding) || binding["architecture"] !== "agent-tavern") {
     throw new BodyRollbackError(
       "body-state-unsafe",
       `body rollback requires an agent-tavern binding for session '${agentId}'`,
@@ -21647,7 +21965,7 @@ function log(logger, level, message, fields) {
   } catch {
   }
 }
-function errorMessage2(error) {
+function errorMessage3(error) {
   return error instanceof Error ? error.message : String(error);
 }
 function isNonEmptyString(value) {
@@ -21656,7 +21974,7 @@ function isNonEmptyString(value) {
 function isNonNegativeInteger2(value) {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
-function isRecord5(value) {
+function isRecord6(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -21782,7 +22100,7 @@ async function readMemory(deps, write, direction) {
   } catch (error) {
     throw new BodyRollbackError(
       "body-rollback-failed",
-      `body rollback cannot read memory '${write.target.id}': ${errorMessage2(error)}`,
+      `body rollback cannot read memory '${write.target.id}': ${errorMessage3(error)}`,
       { stage: stageOf(direction), journalId: write.journalId, cause: error }
     );
   }
@@ -21793,7 +22111,7 @@ async function readVariable(deps, target, name2, direction) {
   } catch (error) {
     throw new BodyRollbackError(
       "body-rollback-failed",
-      `body rollback cannot read variable '${name2}': ${errorMessage2(error)}`,
+      `body rollback cannot read variable '${name2}': ${errorMessage3(error)}`,
       { stage: stageOf(direction), cause: error }
     );
   }
@@ -21852,7 +22170,7 @@ async function executeOperation(deps, operation, direction) {
     }
     throw new BodyRollbackError(
       "body-rollback-failed",
-      `body rollback ${direction} failed for ${subject} in journal '${operation.journalId}': ${errorMessage2(error)}`,
+      `body rollback ${direction} failed for ${subject} in journal '${operation.journalId}': ${errorMessage3(error)}`,
       { stage, journalId: operation.journalId, cause: error }
     );
   }
@@ -21868,12 +22186,12 @@ async function syncMemoryVector(deps, outcome, journalId, direction) {
     await deps.memoryVectors.sync(record);
     return void 0;
   } catch (error) {
-    const message = `memory vector sync failed for memory '${memoryId}' after journal '${journalId}' (${direction}): ${errorMessage2(error)}`;
+    const message = `memory vector sync failed for memory '${memoryId}' after journal '${journalId}' (${direction}): ${errorMessage3(error)}`;
     log(deps.logger, "warn", "dsh-soulmojito body rollback: memory vector sync failed", {
       journalId,
       memoryId,
       direction,
-      error: errorMessage2(error)
+      error: errorMessage3(error)
     });
     return { code: "vector-sync-failed", message, memoryId };
   }
@@ -21898,10 +22216,10 @@ async function compensateJournal(deps, writes, direction) {
       note: direction === "replay" ? "; the flat-store rollback was replayed so the stores match the unsaved chat" : "; the flat-store replay was rolled back so the stores match the rolled-back chat"
     };
   } catch (error) {
-    const failure = `body rollback compensation (${direction}) failed: ${errorMessage2(error)}`;
+    const failure = `body rollback compensation (${direction}) failed: ${errorMessage3(error)}`;
     log(deps.logger, "error", "dsh-soulmojito body rollback: compensation failed", {
       direction,
-      error: errorMessage2(error)
+      error: errorMessage3(error)
     });
     return { ok: false, note: `; ${failure}` };
   }
@@ -21920,7 +22238,7 @@ var SETTLE_INTENT_EVENT_TYPE = "plugin:dsh-soulmojito/settle-intent";
 function readSettleIntents(events) {
   const entries = [];
   for (const [index, event] of events.entries()) {
-    if (!isRecord6(event)) continue;
+    if (!isRecord7(event)) continue;
     if (event["type"] !== SETTLE_INTENT_EVENT_TYPE) continue;
     entries.push(parseSettleIntent(event["data"], index));
   }
@@ -21977,11 +22295,11 @@ function appendSettleIntentWith(writer, session, entry) {
   }
   return "recorded";
 }
-function isRecord6(value) {
+function isRecord7(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function recordAt(value, where) {
-  if (!isRecord6(value)) throw invalid(where, "must be an object");
+  if (!isRecord7(value)) throw invalid(where, "must be an object");
   return value;
 }
 function textAt(record, field, where) {
@@ -22005,7 +22323,7 @@ function jsonValueAt(value, where) {
     return value;
   }
   if (Array.isArray(value)) return value.map((item, index) => jsonValueAt(item, `${where}[${index}]`));
-  if (isRecord6(value)) {
+  if (isRecord7(value)) {
     const record = {};
     for (const [key, item] of Object.entries(value)) record[key] = jsonValueAt(item, `${where}.${key}`);
     return record;
@@ -22020,7 +22338,7 @@ function invalidSettle(where, detail) {
 }
 function parseSettleIntent(data, index) {
   const where = `settle intent event at index ${index}`;
-  if (!isRecord6(data)) throw invalidSettle(where, "data must be an object");
+  if (!isRecord7(data)) throw invalidSettle(where, "data must be an object");
   if (data["kind"] !== "settle-intent") throw invalidSettle(where, `unknown kind '${String(data["kind"])}'`);
   const phase = data["phase"];
   if (phase === "open") return parseSettleIntentOpen(data, where);
@@ -22149,7 +22467,7 @@ var VARIABLE_WRITE_JOURNAL_TOOLS = ["variable_set", "variable_patch", "variable_
 function readWriteJournal(events) {
   const entries = [];
   for (const [index, event] of events.entries()) {
-    if (!isRecord6(event)) continue;
+    if (!isRecord7(event)) continue;
     if (event["type"] !== WRITE_JOURNAL_EVENT_TYPE) continue;
     entries.push(parseEntry(event["data"], index));
   }
@@ -22171,7 +22489,7 @@ var MEMORY_SCOPES = ["turn", "chat", "character", "agent", "global"];
 var VARIABLE_SCOPES = ["turn", "chat", "character", "agent", "global"];
 function parseEntry(data, index) {
   const where = `write journal event at index ${index}`;
-  if (!isRecord6(data)) throw invalid(where, "data must be an object");
+  if (!isRecord7(data)) throw invalid(where, "data must be an object");
   const kind = data["kind"];
   if (kind === "memory") return parseMemoryEntry(data, where);
   if (kind === "variable") return parseVariableEntry(data, where);
@@ -22365,7 +22683,7 @@ async function recoverOpenSettleIntents(deps, agentId, session, appendRecord, in
       closeSettleIntent(appendRecord, session, intent, "recovered", "restored before values");
       restored += 1;
     } catch (error) {
-      const message = errorMessage2(error);
+      const message = errorMessage3(error);
       failures.push(`${intent.opId}: ${message}`);
       log(deps.logger, "warn", "dsh-soulmojito body recovery: settle intent recovery failed", {
         agentId,
@@ -22389,7 +22707,7 @@ async function readSettleSnapshot(deps, intent) {
   return snapshot2;
 }
 function settleChatError(intent, cause) {
-  const suffix = cause === void 0 ? "" : `: ${errorMessage2(cause)}`;
+  const suffix = cause === void 0 ? "" : `: ${errorMessage3(cause)}`;
   return new BodyRollbackError(
     "body-state-unsafe",
     `settle intent '${intent.opId}' cannot read chat '${intent.scopeId}'${suffix}`,
@@ -22410,7 +22728,7 @@ async function replaySettleDecision(deps, intent, decision, snapshot2) {
   } catch (cause) {
     throw new BodyRollbackError(
       "body-rollback-save-failed",
-      `settle decision '${intent.opId}' cannot save its receipt into chat '${intent.scopeId}': ${errorMessage2(cause)}`,
+      `settle decision '${intent.opId}' cannot save its receipt into chat '${intent.scopeId}': ${errorMessage3(cause)}`,
       { stage: "chat-save", sessionId: intent.sessionId, cause }
     );
   }
@@ -22434,7 +22752,7 @@ async function auditSettleReceipt(deps, intent, receipt) {
     log(deps.logger, "warn", "dsh-soulmojito body recovery: settle audit append failed", {
       stage: "audit",
       opId: intent.opId,
-      error: errorMessage2(error)
+      error: errorMessage3(error)
     });
   }
 }
@@ -22469,7 +22787,7 @@ function readBodyReceipts(chat, previousMessageId, floorIndex, agentId, turn) {
   } catch (error) {
     throw new BodyRollbackError(
       "body-rollback-failed",
-      `body rollback for session '${agentId}' turn ${turn} cannot read MVU receipts: ${errorMessage2(error)}`,
+      `body rollback for session '${agentId}' turn ${turn} cannot read MVU receipts: ${errorMessage3(error)}`,
       { stage: "prepare", sessionId: agentId, turn, cause: error }
     );
   }
@@ -22552,7 +22870,7 @@ function locateSettleReceipts(chat, receipts, direction) {
     for (let index = 0; index < raw.length; index += 1) {
       if (used.has(index)) continue;
       const record = raw[index];
-      if (!isRecord5(record)) continue;
+      if (!isRecord6(record)) continue;
       if (record["turnKey"] !== receipt.turnKey || record["at"] !== receipt.at) continue;
       match = {
         index,
@@ -22580,7 +22898,7 @@ function settleRestoresOf(receipt, direction) {
     restores.reverse();
     return restores;
   } catch (error) {
-    throw settleReceiptError(receipt, direction, errorMessage2(error), error);
+    throw settleReceiptError(receipt, direction, errorMessage3(error), error);
   }
 }
 function planSettleRedoRestores(receipt) {
@@ -22607,7 +22925,7 @@ async function applySettleRestores(deps, receipt, restores, direction, binding) 
     try {
       sets.push({ name: restore.path, value: toJsonValue(restore.value, restore.path, receipt) });
     } catch (error) {
-      throw settleReceiptError(receipt, direction, errorMessage2(error), error);
+      throw settleReceiptError(receipt, direction, errorMessage3(error), error);
     }
   }
   for (const name2 of deletes) {
@@ -22625,7 +22943,7 @@ async function readSettleVariable(deps, binding, name2, receipt, direction) {
   try {
     return await deps.variableStore.get("chat", binding.chatId, name2);
   } catch (error) {
-    throw settleReceiptError(receipt, direction, `cannot read variable '${name2}': ${errorMessage2(error)}`, error);
+    throw settleReceiptError(receipt, direction, `cannot read variable '${name2}': ${errorMessage3(error)}`, error);
   }
 }
 async function setSettleVariable(deps, binding, name2, value, expectedRevision, receipt, direction) {
@@ -22651,7 +22969,7 @@ function settleStoreError(error, name2, receipt, direction) {
       { stage: stageOfReceipt(direction), cause: error }
     );
   }
-  return settleReceiptError(receipt, direction, `cannot ${verb} variable '${name2}': ${errorMessage2(error)}`, error);
+  return settleReceiptError(receipt, direction, `cannot ${verb} variable '${name2}': ${errorMessage3(error)}`, error);
 }
 function settleReceiptError(receipt, direction, detail, cause) {
   return new BodyRollbackError(
@@ -22665,7 +22983,7 @@ function stageOfReceipt(direction) {
 }
 function rawMvuReceipts2(chat) {
   const mvu = chat.header.chat_metadata.mvu;
-  const receipts = isRecord5(mvu) ? mvu["receipts"] : void 0;
+  const receipts = isRecord6(mvu) ? mvu["receipts"] : void 0;
   return Array.isArray(receipts) ? receipts : void 0;
 }
 function markStoredReceipts(chat, indexes, undoneAt) {
@@ -22680,7 +22998,7 @@ function markStoredReceipts(chat, indexes, undoneAt) {
   const next = raw.slice();
   for (const index of indexes) {
     const record = next[index];
-    if (!isRecord5(record)) {
+    if (!isRecord6(record)) {
       throw new BodyRollbackError(
         "body-rollback-failed",
         `body rollback cannot mark MVU receipt at index ${index}: the entry is not an object`,
@@ -22693,7 +23011,7 @@ function markStoredReceipts(chat, indexes, undoneAt) {
     next[index] = updated;
   }
   const metadata = chat.header.chat_metadata;
-  const mvu = isRecord5(metadata.mvu) ? metadata.mvu : {};
+  const mvu = isRecord6(metadata.mvu) ? metadata.mvu : {};
   metadata.mvu = { ...mvu, receipts: next };
 }
 function toJsonValue(value, path12, receipt) {
@@ -22707,7 +23025,7 @@ function toJsonValue(value, path12, receipt) {
   if (Array.isArray(value)) {
     return value.map((item, index) => toJsonValue(item, `${path12}[${index}]`, receipt));
   }
-  if (isRecord5(value)) {
+  if (isRecord6(value)) {
     const record = {};
     for (const [key, item] of Object.entries(value)) record[key] = toJsonValue(item, `${path12}.${key}`, receipt);
     return record;
@@ -22720,8 +23038,8 @@ function jsonValuesEqual(left, right) {
     if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
     return left.every((item, index) => jsonValuesEqual(item, right[index]));
   }
-  if (isRecord5(left) || isRecord5(right)) {
-    if (!isRecord5(left) || !isRecord5(right)) return false;
+  if (isRecord6(left) || isRecord6(right)) {
+    if (!isRecord6(left) || !isRecord6(right)) return false;
     const leftKeys = Object.keys(left);
     if (leftKeys.length !== Object.keys(right).length) return false;
     return leftKeys.every((key) => key in right && jsonValuesEqual(left[key], right[key]));
@@ -22737,7 +23055,7 @@ async function readEvents(deps, agentId, turn) {
   } catch (error) {
     throw new BodyRollbackError(
       "body-state-unsafe",
-      `body rollback cannot read the session log of '${agentId}': ${errorMessage2(error)}`,
+      `body rollback cannot read the session log of '${agentId}': ${errorMessage3(error)}`,
       { detail: "session-unreadable", stage: "prepare", sessionId: agentId, turn, cause: error }
     );
   }
@@ -22754,7 +23072,7 @@ function toolNamesInTurn(events, turn) {
   const names = [];
   let open2;
   for (const event of events) {
-    if (!isRecord5(event)) continue;
+    if (!isRecord6(event)) continue;
     const type = event["type"];
     if (type === "turn/start") {
       open2 = turnNumberOf(event["data"]);
@@ -22765,15 +23083,15 @@ function toolNamesInTurn(events, turn) {
       continue;
     }
     if (type !== "assistant/message") continue;
-    const data = isRecord5(event["data"]) ? event["data"] : void 0;
+    const data = isRecord6(event["data"]) ? event["data"] : void 0;
     if (data === void 0) continue;
     const eventTurn = typeof data["turn"] === "number" ? data["turn"] : open2;
     if (eventTurn !== turn) continue;
-    const message = isRecord5(data["message"]) ? data["message"] : void 0;
+    const message = isRecord6(data["message"]) ? data["message"] : void 0;
     const content = message?.["content"];
     if (!Array.isArray(content)) continue;
     for (const block of content) {
-      if (!isRecord5(block) || block["type"] !== "tool-call") continue;
+      if (!isRecord6(block) || block["type"] !== "tool-call") continue;
       const name2 = block["name"];
       if (typeof name2 === "string" && name2 !== "") names.push(name2);
     }
@@ -22781,7 +23099,7 @@ function toolNamesInTurn(events, turn) {
   return names;
 }
 function turnNumberOf(data) {
-  if (!isRecord5(data)) return void 0;
+  if (!isRecord6(data)) return void 0;
   const turn = data["turn"];
   return typeof turn === "number" && Number.isSafeInteger(turn) && turn >= 0 ? turn : void 0;
 }
@@ -22792,7 +23110,7 @@ function buildJournalWrites(events, agentId, turn) {
   } catch (error) {
     throw new BodyRollbackError(
       "body-state-unsafe",
-      `body rollback cannot read the write journal of session '${agentId}' turn ${turn}: ${errorMessage2(error)}`,
+      `body rollback cannot read the write journal of session '${agentId}' turn ${turn}: ${errorMessage3(error)}`,
       { detail: "write-journal-missing", stage: "prepare", sessionId: agentId, turn, cause: error }
     );
   }
@@ -22961,7 +23279,7 @@ async function journalWriterAvailable(deps, agentId, turn) {
     log(deps.logger, "warn", "dsh-soulmojito body rollback: write journal probe failed", {
       sessionId: agentId,
       turn,
-      error: errorMessage2(error)
+      error: errorMessage3(error)
     });
     return false;
   }
@@ -23005,7 +23323,7 @@ async function rollbackTurnWritesImpl(deps, agentId, turn) {
         kind: write.kind,
         tool: write.tool,
         code: error instanceof BodyRollbackError ? error.code : "unknown",
-        message: errorMessage2(error)
+        message: errorMessage3(error)
       };
       failures.push(failure);
       log(deps.logger, "warn", "dsh-soulmojito body rollback: new-turn write undo failed", {
@@ -23053,7 +23371,7 @@ async function rollbackTurnSettleReceipts(deps, agentId, turn, failures) {
   } catch (error) {
     recordSettleFailure(deps, failures, agentId, turn, [], error instanceof BodyRollbackError ? error : new BodyRollbackError(
       "body-state-unsafe",
-      `body rollback for session '${agentId}' turn ${turn} cannot read chat '${binding.chatId}': ${errorMessage2(error)}`,
+      `body rollback for session '${agentId}' turn ${turn} cannot read chat '${binding.chatId}': ${errorMessage3(error)}`,
       { detail: "chat-unreadable", stage: "mvu-undo", sessionId: agentId, turn, cause: error }
     ));
     return 0;
@@ -23084,7 +23402,7 @@ async function rollbackTurnSettleReceipts(deps, agentId, turn, failures) {
     const code = !compensation.ok ? "body-rollback-partial" : error instanceof ChatRevisionConflictError ? "body-rollback-conflict" : "body-rollback-save-failed";
     recordSettleFailure(deps, failures, agentId, turn, receipts, new BodyRollbackError(
       code,
-      `body rollback for session '${agentId}' turn ${turn} could not save the chat after undoing its settle receipts: ${errorMessage2(error)}${compensation.note}`,
+      `body rollback for session '${agentId}' turn ${turn} could not save the chat after undoing its settle receipts: ${errorMessage3(error)}${compensation.note}`,
       { stage: "chat-save", sessionId: agentId, turn, cause: error }
     ));
     return 0;
@@ -23110,9 +23428,9 @@ async function compensateSettleReceipts(deps, chat, receipts, undone, binding) {
   } catch (error) {
     log(deps.logger, "error", "dsh-soulmojito body rollback: settle compensation failed", {
       sessionId: binding.chatId,
-      error: errorMessage2(error)
+      error: errorMessage3(error)
     });
-    return { ok: false, note: `; the flat-store undo could not be replayed: ${errorMessage2(error)}` };
+    return { ok: false, note: `; the flat-store undo could not be replayed: ${errorMessage3(error)}` };
   }
 }
 function settleReceiptsForTurn(chat, turn) {
@@ -23127,8 +23445,8 @@ function settleReceiptsForTurn(chat, turn) {
 }
 function messageTurnNumber(message) {
   const extra = message?.extra;
-  const tavern = isRecord5(extra) ? extra["agentTavern"] : void 0;
-  if (!isRecord5(tavern)) return void 0;
+  const tavern = isRecord6(extra) ? extra["agentTavern"] : void 0;
+  if (!isRecord6(tavern)) return void 0;
   const turn = tavern["turn"];
   return typeof turn === "number" && Number.isSafeInteger(turn) ? turn : void 0;
 }
@@ -23136,7 +23454,7 @@ function settleRollbackError(error, agentId, turn) {
   if (error instanceof BodyRollbackError) return error;
   return new BodyRollbackError(
     error instanceof ChatRevisionConflictError ? "body-rollback-conflict" : "body-rollback-failed",
-    `body rollback for session '${agentId}' turn ${turn} cannot undo its settle receipts: ${errorMessage2(error)}`,
+    `body rollback for session '${agentId}' turn ${turn} cannot undo its settle receipts: ${errorMessage3(error)}`,
     { stage: "mvu-undo", sessionId: agentId, turn, cause: error }
   );
 }
@@ -23162,7 +23480,7 @@ function asJournalError(error, agentId, turn, compensation) {
   const code = compensation.ok ? error instanceof BodyRollbackError ? error.code : "body-rollback-failed" : "body-rollback-partial";
   return new BodyRollbackError(
     code,
-    `body rollback for session '${agentId}' turn ${turn} failed to roll back the write journal: ${errorMessage2(error)}${compensation.note}`,
+    `body rollback for session '${agentId}' turn ${turn} failed to roll back the write journal: ${errorMessage3(error)}${compensation.note}`,
     {
       ...error instanceof BodyRollbackError && error.detail !== void 0 ? { detail: error.detail } : {},
       stage: "journal-rollback",
@@ -23291,7 +23609,7 @@ async function applyBodyRollback(deps, plan) {
       const code = compensation.ok ? error instanceof ChatRevisionConflictError ? "body-rollback-conflict" : "body-rollback-save-failed" : "body-rollback-partial";
       throw new BodyRollbackError(
         code,
-        `body rollback for session '${plan.sessionId}' turn ${plan.turn} could not save the rolled-back chat: ${errorMessage2(error)}${compensation.note}`,
+        `body rollback for session '${plan.sessionId}' turn ${plan.turn} could not save the rolled-back chat: ${errorMessage3(error)}${compensation.note}`,
         {
           stage: "chat-save",
           sessionId: plan.sessionId,
@@ -23376,7 +23694,7 @@ function restoreError(error, stage, plan, compensation) {
   const code = compensation.ok ? error instanceof ChatRevisionConflictError ? "body-rollback-conflict" : "body-rollback-failed" : "body-rollback-partial";
   return new BodyRollbackError(
     code,
-    `body rollback restore for session '${plan.sessionId}' turn ${plan.turn} failed at ${stage}: ${errorMessage2(error)}${compensation.note}`,
+    `body rollback restore for session '${plan.sessionId}' turn ${plan.turn} failed at ${stage}: ${errorMessage3(error)}${compensation.note}`,
     { stage, sessionId: plan.sessionId, turn: plan.turn, compensated: compensation.ok, cause: error }
   );
 }
@@ -23384,7 +23702,7 @@ function receiptUndoError(error, agentId, turn, compensation) {
   const code = compensation.ok ? error instanceof BodyRollbackError ? error.code : "body-rollback-failed" : "body-rollback-partial";
   return new BodyRollbackError(
     code,
-    `body rollback for session '${agentId}' turn ${turn} could not undo the body/settle receipts: ${errorMessage2(error)}${compensation.note}`,
+    `body rollback for session '${agentId}' turn ${turn} could not undo the body/settle receipts: ${errorMessage3(error)}${compensation.note}`,
     {
       ...error instanceof BodyRollbackError && error.detail !== void 0 ? { detail: error.detail } : {},
       stage: error instanceof BodyRollbackError && error.stage !== void 0 ? error.stage : "mvu-undo",
@@ -23403,7 +23721,7 @@ async function readCard(store5, character, agentId, turn) {
   } catch (error) {
     throw new BodyRollbackError(
       "body-state-unsafe",
-      `body rollback cannot read character card '${character}': ${errorMessage2(error)}`,
+      `body rollback cannot read character card '${character}': ${errorMessage3(error)}`,
       { detail: "card-unreadable", stage: "prepare", sessionId: agentId, turn, cause: error }
     );
   }
@@ -23423,7 +23741,7 @@ async function readChatSnapshot(store5, binding, agentId, turn) {
   } catch (error) {
     throw new BodyRollbackError(
       "body-state-unsafe",
-      `body rollback cannot read chat '${binding.chatId}' of '${binding.character}': ${errorMessage2(error)}`,
+      `body rollback cannot read chat '${binding.chatId}' of '${binding.character}': ${errorMessage3(error)}`,
       { detail: "chat-unreadable", stage: "prepare", sessionId: agentId, turn, cause: error }
     );
   }
@@ -23443,7 +23761,7 @@ async function readPlanChatSnapshot(store5, plan, operation) {
   } catch (error) {
     throw new BodyRollbackError(
       "body-rollback-failed",
-      `body rollback ${operation} cannot read chat '${plan.binding.chatId}' of '${plan.binding.character}': ${errorMessage2(error)}`,
+      `body rollback ${operation} cannot read chat '${plan.binding.chatId}' of '${plan.binding.character}': ${errorMessage3(error)}`,
       { stage: operation === "restore" ? "restore" : "prepare", sessionId: plan.sessionId, turn: plan.turn, cause: error }
     );
   }
@@ -23459,8 +23777,8 @@ async function readPlanChatSnapshot(store5, plan, operation) {
 function locateBodyFloor2(chat, messageId) {
   for (const [index, message] of chat.messages.entries()) {
     const extra = message.extra;
-    const tavern = isRecord5(extra) ? extra["agentTavern"] : void 0;
-    if (!isRecord5(tavern)) continue;
+    const tavern = isRecord6(extra) ? extra["agentTavern"] : void 0;
+    if (!isRecord6(tavern)) continue;
     if (tavern["messageId"] === messageId || tavern["anchorMessageId"] === messageId || tavern["bodyGroupId"] === messageId) {
       return index;
     }
@@ -23477,14 +23795,14 @@ function throwUnsafe(detail, message, agentId, turn) {
 }
 function requirePlan(plan, operation) {
   const value = plan;
-  if (!isRecord5(value)) throw invalidPlan(operation, "plan must be an object");
+  if (!isRecord6(value)) throw invalidPlan(operation, "plan must be an object");
   if (!isNonEmptyString(value["sessionId"])) throw invalidPlan(operation, "plan.sessionId must be a non-empty string");
   if (!isNonNegativeInteger2(value["turn"])) throw invalidPlan(operation, "plan.turn must be a non-negative safe integer");
   if (!isNonEmptyString(value["previousMessageId"])) throw invalidPlan(operation, "plan.previousMessageId must be a non-empty string");
   if (!Array.isArray(value["journal"])) throw invalidPlan(operation, "plan.journal must be an array");
   if (!Array.isArray(value["mvuReceipts"])) throw invalidPlan(operation, "plan.mvuReceipts must be an array");
   const binding = value["binding"];
-  if (!isRecord5(binding) || !isNonEmptyString(binding["character"]) || !isNonEmptyString(binding["chatId"])) {
+  if (!isRecord6(binding) || !isNonEmptyString(binding["character"]) || !isNonEmptyString(binding["chatId"])) {
     throw invalidPlan(operation, "plan.binding must carry character and chatId");
   }
 }
@@ -23936,7 +24254,7 @@ function releaseActiveOperation(deps, agentId, opId, release) {
   try {
     release();
   } catch (error) {
-    warn(deps, `body runtime: failed to release write-tool restriction for op ${opId}: ${errorMessage3(error)}`);
+    warn2(deps, `body runtime: failed to release write-tool restriction for op ${opId}: ${errorMessage4(error)}`);
   }
 }
 function releasePendingOperation(deps, agentId, opId, subject) {
@@ -23945,7 +24263,7 @@ function releasePendingOperation(deps, agentId, opId, subject) {
   try {
     active.release();
   } catch (error) {
-    warn(deps, `body runtime: ${subject}: failed to release write-tool restriction: ${errorMessage3(error)}`);
+    warn2(deps, `body runtime: ${subject}: failed to release write-tool restriction: ${errorMessage4(error)}`);
   }
   pendingByAgent.delete(agentId);
 }
@@ -24104,13 +24422,13 @@ function once(operation) {
     operation();
   };
 }
-function warn(deps, message) {
+function warn2(deps, message) {
   try {
     deps.logger?.warn?.(message);
   } catch {
   }
 }
-function errorMessage3(error) {
+function errorMessage4(error) {
   return error instanceof Error ? error.message : String(error);
 }
 function isBodyFailure(value) {
@@ -24118,7 +24436,7 @@ function isBodyFailure(value) {
 }
 function failureFor(error, context, op) {
   const code = isBodyFailure(error) ? error.code : "operation-failed";
-  const failure = bodyRuntimeError(code, `${context}: ${errorMessage3(error)}`);
+  const failure = bodyRuntimeError(code, `${context}: ${errorMessage4(error)}`);
   if (error instanceof Error) failure.cause = error;
   if (isBodyFailure(error) && error.detail !== void 0) failure.detail = error.detail;
   if (op !== void 0) failure.op = op;
@@ -24131,7 +24449,7 @@ import { randomUUID as randomUUID5 } from "node:crypto";
 // packages/plugin/src/agent-tavern/body-runtime-plan.ts
 var PLAN_FIELD = "rollbackPlan";
 function rollbackPlanOfEvent(value, seq) {
-  if (!isRecord7(value)) throw planError(seq, "", "an object");
+  if (!isRecord8(value)) throw planError(seq, "", "an object");
   return {
     sessionId: requirePlanString(value["sessionId"], seq, "sessionId"),
     turn: requirePlanInteger(value["turn"], seq, "turn"),
@@ -24160,14 +24478,14 @@ function journalOf(value, seq) {
   return writes;
 }
 function journalWriteOf(value, seq, path12) {
-  if (!isRecord7(value)) throw planError(seq, path12, "a journal write object");
+  if (!isRecord8(value)) throw planError(seq, path12, "a journal write object");
   const kind = value["kind"];
   if (kind !== "memory" && kind !== "variable") {
     throw planError(seq, `${path12}.kind`, "'memory' or 'variable'");
   }
   requirePlanString(value["journalId"], seq, `${path12}.journalId`);
   requirePlanString(value["tool"], seq, `${path12}.tool`);
-  if (!isRecord7(value["target"])) throw planError(seq, `${path12}.target`, "an object");
+  if (!isRecord8(value["target"])) throw planError(seq, `${path12}.target`, "an object");
   if (!("before" in value) || !("after" in value)) {
     throw planError(seq, path12, "a before/after journal pair");
   }
@@ -24182,7 +24500,7 @@ function receiptsOf(value, seq) {
   return receipts;
 }
 function receiptOf(value, seq, path12) {
-  if (!isRecord7(value)) throw planError(seq, path12, "an MVU receipt object");
+  if (!isRecord8(value)) throw planError(seq, path12, "an MVU receipt object");
   requirePlanString(value["at"], seq, `${path12}.at`);
   requirePlanString(value["turnKey"], seq, `${path12}.turnKey`);
   const status2 = value["status"];
@@ -24205,7 +24523,7 @@ function diagnosticsOf(value, seq) {
   const diagnostics = [];
   for (const [index, entry] of value.entries()) {
     const path12 = `diagnostics[${index}]`;
-    if (!isRecord7(entry)) throw planError(seq, path12, "a diagnostic object");
+    if (!isRecord8(entry)) throw planError(seq, path12, "a diagnostic object");
     requirePlanString(entry["code"], seq, `${path12}.code`);
     requirePlanText(entry["message"], seq, `${path12}.message`);
     const memoryId = entry["memoryId"];
@@ -24217,7 +24535,7 @@ function diagnosticsOf(value, seq) {
   return diagnostics;
 }
 function bindingOf(value, seq) {
-  if (!isRecord7(value)) throw planError(seq, "binding", "an object with character and chatId");
+  if (!isRecord8(value)) throw planError(seq, "binding", "an object with character and chatId");
   return {
     character: requirePlanString(value["character"], seq, "binding.character"),
     chatId: requirePlanString(value["chatId"], seq, "binding.chatId")
@@ -24272,7 +24590,7 @@ function notSerializable(path12, detail) {
     `body regenerate refused: the prepared write rollback plan is not JSON-serializable at ${path12}: ${detail}`
   );
 }
-function isRecord7(value) {
+function isRecord8(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -24329,32 +24647,32 @@ function surfaceNodeList(session) {
   }
   return nodes;
 }
-function messageOf2(event) {
+function messageOf3(event) {
   if (event.type === "user/message") return event.data;
   const message = event.data.message;
   return isPlainRecord2(message) ? message : void 0;
 }
-function messageIdOf(event) {
-  const message = messageOf2(event);
+function messageIdOf2(event) {
+  const message = messageOf3(event);
   const id = message?.id;
   return typeof id === "string" && id !== "" ? id : void 0;
 }
-function contentOf(message) {
+function contentOf2(message) {
   const content = message.content;
   if (!Array.isArray(content)) return [];
   return content.filter((block) => isPlainRecord2(block));
 }
-function textOfMessage(message) {
-  return contentOf(message).filter((block) => block.type === "text" && typeof block.text === "string").map((block) => block.text).join("");
+function textOfMessage2(message) {
+  return contentOf2(message).filter((block) => block.type === "text" && typeof block.text === "string").map((block) => block.text).join("");
 }
-function hasToolCall(message) {
-  return contentOf(message).some((block) => block.type === "tool-call");
+function hasToolCall2(message) {
+  return contentOf2(message).some((block) => block.type === "tool-call");
 }
-function sourceOf(message) {
+function sourceOf2(message) {
   return isPlainRecord2(message.source) ? message.source : void 0;
 }
 function modelSourceOf(message) {
-  const source = sourceOf(message);
+  const source = sourceOf2(message);
   if (source === void 0 || source.kind !== "model") return void 0;
   const provider = source.provider;
   const model = source.model;
@@ -24362,7 +24680,7 @@ function modelSourceOf(message) {
   return { provider, model };
 }
 function findEventByMessageId(events, messageId) {
-  return events.find((event) => messageIdOf(event) === messageId);
+  return events.find((event) => messageIdOf2(event) === messageId);
 }
 function eventAtSeq(events, seq) {
   const event = events.find((candidate) => candidate.seq === seq);
@@ -24372,27 +24690,27 @@ function eventAtSeq(events, seq) {
   return event;
 }
 function findSurfaceSeqByMessageId(events, surface, messageId) {
-  return surface.find((seq) => messageIdOf(eventAtSeq(events, seq)) === messageId);
+  return surface.find((seq) => messageIdOf2(eventAtSeq(events, seq)) === messageId);
 }
 function turnOfUserMessage(events, messageId) {
   let openTurn;
   for (const event of events) {
     if (event.type === "turn/start") {
-      openTurn = numberField(event.data.turn);
+      openTurn = numberField2(event.data.turn);
       continue;
     }
     if (event.type === "turn/end") {
       openTurn = void 0;
       continue;
     }
-    if (event.type === "user/message" && messageIdOf(event) === messageId) return openTurn;
+    if (event.type === "user/message" && messageIdOf2(event) === messageId) return openTurn;
   }
   return void 0;
 }
-function openTurnNumber(events) {
+function openTurnNumber2(events) {
   let open2;
   for (const event of events) {
-    if (event.type === "turn/start") open2 = numberField(event.data.turn);
+    if (event.type === "turn/start") open2 = numberField2(event.data.turn);
     else if (event.type === "turn/end") open2 = void 0;
   }
   return open2;
@@ -24402,13 +24720,13 @@ function turnOfEventSeq(events, seq) {
   let lastClosed;
   for (const event of events) {
     if (event.type === "turn/start") {
-      open2 = numberField(event.data.turn);
+      open2 = numberField2(event.data.turn);
     } else if (event.type === "turn/end") {
       if (open2 !== void 0) lastClosed = open2;
       open2 = void 0;
     }
     if (event.seq !== seq) continue;
-    const direct = numberField(event.data.turn);
+    const direct = numberField2(event.data.turn);
     if (direct !== void 0) return direct;
     return open2 ?? lastClosed;
   }
@@ -24418,13 +24736,13 @@ function stepState(events, turn) {
   let openStep;
   let nextStep = 1;
   for (const event of events) {
-    if (event.type === "step/start" && numberField(event.data.turn) === turn) {
-      openStep = numberField(event.data.step);
+    if (event.type === "step/start" && numberField2(event.data.turn) === turn) {
+      openStep = numberField2(event.data.step);
       if (openStep !== void 0) nextStep = Math.max(nextStep, openStep + 1);
       continue;
     }
-    if (event.type === "step/end" && numberField(event.data.turn) === turn) {
-      const step = numberField(event.data.step);
+    if (event.type === "step/end" && numberField2(event.data.turn) === turn) {
+      const step = numberField2(event.data.step);
       if (openStep !== void 0 && step === openStep) openStep = void 0;
     }
   }
@@ -24433,11 +24751,11 @@ function stepState(events, turn) {
 function lastBodyCandidate(events, turn) {
   let found;
   for (const event of events) {
-    if (event.type !== "assistant/message" || numberField(event.data.turn) !== turn) continue;
-    const message = messageOf2(event);
-    const messageId = messageIdOf(event);
+    if (event.type !== "assistant/message" || numberField2(event.data.turn) !== turn) continue;
+    const message = messageOf3(event);
+    const messageId = messageIdOf2(event);
     if (message === void 0 || messageId === void 0) continue;
-    if (textOfMessage(message).trim() === "" || hasToolCall(message)) continue;
+    if (textOfMessage2(message).trim() === "" || hasToolCall2(message)) continue;
     found = { event, message, seq: event.seq, messageId };
   }
   return found;
@@ -24500,7 +24818,7 @@ function nextEventSeq(events) {
   if (events.length === 0) return 0;
   return events[events.length - 1].seq + 1;
 }
-function numberField(value) {
+function numberField2(value) {
   return typeof value === "number" && Number.isSafeInteger(value) ? value : void 0;
 }
 function isEventSeq(value) {
@@ -24609,17 +24927,17 @@ function anchorTarget(events, surface, anchorMessageId) {
   if (event.type !== "assistant/message") {
     throw bodyRuntimeError("stale-anchor", `body operation rejected: anchor '${anchorMessageId}' is '${event.type}', expected assistant/message`);
   }
-  const message = messageOf2(event);
+  const message = messageOf3(event);
   if (message === void 0) {
     throw bodyRuntimeError("stale-anchor", `body operation rejected: anchor '${anchorMessageId}' has no message payload`);
   }
-  if (textOfMessage(message).trim() === "") {
+  if (textOfMessage2(message).trim() === "") {
     throw bodyRuntimeError("stale-anchor", `body operation rejected: anchor '${anchorMessageId}' has no body text`);
   }
-  if (hasToolCall(message)) {
+  if (hasToolCall2(message)) {
     throw bodyRuntimeError("stale-anchor", `body operation rejected: anchor '${anchorMessageId}' is a tool-call message, not a body`);
   }
-  const seq = surface.find((node) => messageIdOf(eventAtSeq(events, node)) === anchorMessageId);
+  const seq = surface.find((node) => messageIdOf2(eventAtSeq(events, node)) === anchorMessageId);
   if (seq === void 0) {
     throw bodyRuntimeError("body-compacted", `body operation rejected: anchor '${anchorMessageId}' is no longer on the current surface`);
   }
@@ -24630,21 +24948,21 @@ function assertLastBodyTarget(events, surface, anchorSeq, anchorMessage) {
   if (anchorIndex < 0) {
     throw bodyRuntimeError("body-compacted", `body operation rejected: anchor at seq ${anchorSeq} is no longer on the current surface`);
   }
-  if (textOfMessage(anchorMessage).trim() === "") {
+  if (textOfMessage2(anchorMessage).trim() === "") {
     throw bodyRuntimeError("stale-anchor", `body operation rejected: anchor at seq ${anchorSeq} has no body text`);
   }
   for (const seq of surface.slice(anchorIndex + 1)) {
     const event = eventAtSeq(events, seq);
     if (event.type === "system/message" || event.type === "developer/message" || event.type === "tool/result") continue;
-    const message = messageOf2(event);
+    const message = messageOf3(event);
     if (message === void 0) continue;
     if (event.type === "user/message") {
-      if (sourceOf(message)?.kind === "user") {
+      if (sourceOf2(message)?.kind === "user") {
         throw bodyRuntimeError("not-last-round", `body operation rejected: a real user message at seq ${seq} follows anchor at seq ${anchorSeq}`);
       }
       continue;
     }
-    if (event.type === "assistant/message" && textOfMessage(message).trim() !== "" && !hasToolCall(message)) {
+    if (event.type === "assistant/message" && textOfMessage2(message).trim() !== "" && !hasToolCall2(message)) {
       throw bodyRuntimeError("not-last-round", `body operation rejected: assistant body at seq ${seq} follows anchor at seq ${anchorSeq}`);
     }
   }
@@ -24709,15 +25027,15 @@ function assertFreshGroup(events, groupId, anchorMessageId) {
   if (groupId === anchorMessageId) return;
   const anchor = findEventByMessageId(events, anchorMessageId);
   if (anchor === void 0) return;
-  const turn = numberField(anchor.data.turn);
+  const turn = numberField2(anchor.data.turn);
   if (turn === void 0) {
     throw bodyRuntimeError(
       "stale-anchor",
       `body operation rejected: group '${groupId}' does not match anchor '${anchorMessageId}' and the anchor has no turn`
     );
   }
-  const first = events.find((event) => event.type === "assistant/message" && numberField(event.data.turn) === turn);
-  if (first === void 0 || messageIdOf(first) !== groupId) {
+  const first = events.find((event) => event.type === "assistant/message" && numberField2(event.data.turn) === turn);
+  if (first === void 0 || messageIdOf2(first) !== groupId) {
     throw bodyRuntimeError(
       "stale-anchor",
       `body operation rejected: group '${groupId}' is not the first assistant message of anchor turn ${turn}`
@@ -24761,7 +25079,7 @@ function appendHideInBridgeTurn(deps, targets) {
   const ranges = surfaceRanges(surfaceNodeList(deps.session), targets);
   if (ranges.length === 0) return;
   const events = eventsOf(deps.session);
-  const openTurn = openTurnNumber(events);
+  const openTurn = openTurnNumber2(events);
   if (openTurn !== void 0) {
     throw bodyRuntimeError(
       "host-unsupported",
@@ -24796,7 +25114,7 @@ function appendHideInOpenTurn(deps, turn, targets) {
   const ranges = surfaceRanges(surfaceNodeList(deps.session), targets);
   if (ranges.length === 0) return;
   const events = eventsOf(deps.session);
-  const openTurn = openTurnNumber(events);
+  const openTurn = openTurnNumber2(events);
   if (openTurn !== turn) {
     throw bodyRuntimeError(
       "host-unsupported",
@@ -24833,11 +25151,11 @@ function alignHostStepBase(deps, step) {
   try {
     phase.step = step;
   } catch (error) {
-    warn(deps, `body runtime: could not advance the live loop step base to ${step}: ${errorMessage3(error)}`);
+    warn2(deps, `body runtime: could not advance the live loop step base to ${step}: ${errorMessage4(error)}`);
     return;
   }
   if (phase.step !== step) {
-    warn(deps, `body runtime: the live loop step base did not accept ${step}`);
+    warn2(deps, `body runtime: the live loop step base did not accept ${step}`);
   }
 }
 function surfaceRanges(surface, targets) {
@@ -24881,19 +25199,19 @@ function appendDeveloperHide(deps, turn, step, range) {
 }
 function oldBodyTargets(events, surface, target) {
   const targets = /* @__PURE__ */ new Set([target.seq]);
-  const turn = numberField(target.event.data.turn);
+  const turn = numberField2(target.event.data.turn);
   if (turn === void 0) return targets;
   for (const seq of surface) {
     if (seq === target.seq) continue;
     const event = eventAtSeq(events, seq);
     if (event.type === "system/message") continue;
-    const message = messageOf2(event);
+    const message = messageOf3(event);
     if (event.type === "user/message") {
-      const form = message === void 0 ? void 0 : sourceOf(message)?.form;
+      const form = message === void 0 ? void 0 : sourceOf2(message)?.form;
       if (form === "body-regenerate" || form === "body-restore") targets.add(seq);
       continue;
     }
-    if (numberField(event.data.turn) === turn) targets.add(seq);
+    if (numberField2(event.data.turn) === turn) targets.add(seq);
   }
   return targets;
 }
@@ -24902,7 +25220,7 @@ function oldAnchorSurfaceTargets(events, surface, previousAnchorId) {
   if (seq === void 0) return /* @__PURE__ */ new Set();
   const event = findEventByMessageId(events, previousAnchorId);
   if (event === void 0) return /* @__PURE__ */ new Set();
-  const message = messageOf2(event);
+  const message = messageOf3(event);
   if (message === void 0) return /* @__PURE__ */ new Set();
   return oldBodyTargets(events, surface, { event, message, seq });
 }
@@ -24911,23 +25229,23 @@ function hideTargets(events, surface, triggerMessageId, turn, candidateMessageId
   for (const seq of surface) {
     const event = eventAtSeq(events, seq);
     if (event.type === "system/message") continue;
-    const message = messageOf2(event);
-    if (message !== void 0 && messageIdOf(event) === candidateMessageId) continue;
+    const message = messageOf3(event);
+    if (message !== void 0 && messageIdOf2(event) === candidateMessageId) continue;
     if (event.type === "user/message") {
-      if (messageIdOf(event) === triggerMessageId) {
+      if (messageIdOf2(event) === triggerMessageId) {
         targets.add(seq);
         continue;
       }
-      if (message !== void 0 && sourceOf(message)?.kind === "user") continue;
+      if (message !== void 0 && sourceOf2(message)?.kind === "user") continue;
       continue;
     }
-    if (numberField(event.data.turn) === turn) targets.add(seq);
+    if (numberField2(event.data.turn) === turn) targets.add(seq);
   }
   return targets;
 }
 function restoreAssistantData(deps, turn, messageId, previousMessage, model) {
-  const blocks = contentOf(previousMessage).filter((block) => block.type !== "tool-call").map((block) => structuredClone(block));
-  if (blocks.length === 0 || textOfMessage(previousMessage).trim() === "") {
+  const blocks = contentOf2(previousMessage).filter((block) => block.type !== "tool-call").map((block) => structuredClone(block));
+  if (blocks.length === 0 || textOfMessage2(previousMessage).trim() === "") {
     throw bodyRuntimeError("restore-unavailable", `body restore turn ${turn} previous anchor has no copyable content`);
   }
   const version = hostSessionFormatVersion(deps.session);
@@ -24997,7 +25315,7 @@ function closeBracketBestEffort(deps, turn, step, turnOpen, stepOpen, subject) {
       deps.session.append("step/end", { turn, step });
       stepClosed = true;
     } catch (error) {
-      warn(deps, `body runtime: ${subject}: failed to close step of turn ${turn}: ${errorMessage3(error)}`);
+      warn2(deps, `body runtime: ${subject}: failed to close step of turn ${turn}: ${errorMessage4(error)}`);
     }
   }
   if (turnOpen && stepClosed) {
@@ -25007,12 +25325,12 @@ function closeBracketBestEffort(deps, turn, step, turnOpen, stepOpen, subject) {
         reason: { kind: "error", error: { message: subject, code: "BODY_RUNTIME" } }
       });
     } catch (error) {
-      warn(deps, `body runtime: ${subject}: failed to close turn ${turn}: ${errorMessage3(error)}`);
+      warn2(deps, `body runtime: ${subject}: failed to close turn ${turn}: ${errorMessage4(error)}`);
     }
   }
   if (turnOpen) {
     const advanced = advanceHostTurnBase(deps.agent, turn);
-    if (!advanced) warn(deps, `body runtime: ${subject}: could not advance the live loop turn base to ${turn}`);
+    if (!advanced) warn2(deps, `body runtime: ${subject}: could not advance the live loop turn base to ${turn}`);
   }
 }
 
@@ -25071,8 +25389,8 @@ function settlementRemainingTargets(events, surface, op, evidence) {
 }
 function isBodyHideMarker(event) {
   if (event.type !== "developer/message") return false;
-  const message = messageOf2(event);
-  return message !== void 0 && sourceOf(message)?.form === "body-hide";
+  const message = messageOf3(event);
+  return message !== void 0 && sourceOf2(message)?.form === "body-hide";
 }
 function finishSettledOperation(deps, context, settled) {
   assertCommittedSettlement(deps, context.op.groupId, settled, `${context.label} ${context.op.opId}`);
@@ -25080,8 +25398,8 @@ function finishSettledOperation(deps, context, settled) {
     appendOpFinish(deps, context.op.opId, "ok", settled.anchorId, void 0);
   } catch (error) {
     releaseSettlement(deps, context);
-    const reason = `${context.label} ${context.op.opId} already settled '${settled.anchorId}' but failed to record op-finish: ${errorMessage3(error)}`;
-    warn(deps, reason);
+    const reason = `${context.label} ${context.op.opId} already settled '${settled.anchorId}' but failed to record op-finish: ${errorMessage4(error)}`;
+    warn2(deps, reason);
     throw settledFinishPending(reason, context.op, error);
   }
   releaseSettlement(deps, context);
@@ -25131,14 +25449,14 @@ function recordSettlementCancelled(deps, op, label, evidence, reason) {
   try {
     appendSettleCancelledMarker(deps, op.opId, op.groupId, evidence.anchorId, evidence.index, reason);
   } catch (error) {
-    warn(deps, `body runtime: ${label} ${op.opId} could not record the cancelled settlement: ${errorMessage3(error)}`);
+    warn2(deps, `body runtime: ${label} ${op.opId} could not record the cancelled settlement: ${errorMessage4(error)}`);
   }
 }
 function restorePreviousSelection(deps, context) {
   try {
     appendBodyEvent(deps, { op: "select", groupId: context.op.groupId, index: context.op.previousIndex });
   } catch (selectError) {
-    warn(deps, `body runtime: failed to restore previous body selection for ${context.op.opId}: ${errorMessage3(selectError)}`);
+    warn2(deps, `body runtime: failed to restore previous body selection for ${context.op.opId}: ${errorMessage4(selectError)}`);
   }
 }
 
@@ -25241,7 +25559,7 @@ async function settleBodyOperation(deps, context, turn) {
       return failSettlement(
         deps,
         context,
-        `${context.label} ${context.op.opId} failed to seed candidate 0 for group '${context.op.groupId}': ${errorMessage3(error)}`
+        `${context.label} ${context.op.opId} failed to seed candidate 0 for group '${context.op.groupId}': ${errorMessage4(error)}`
       );
     }
     ledger = bodyLedger(eventsOf(deps.session), context.op.groupId);
@@ -25273,13 +25591,13 @@ async function settleBodyOperation(deps, context, turn) {
     return failSettlement(
       deps,
       context,
-      `${context.label} ${context.op.opId} failed to settle turn ${turn}: ${errorMessage3(error)}`
+      `${context.label} ${context.op.opId} failed to settle turn ${turn}: ${errorMessage4(error)}`
     );
   }
   try {
     await commitBodyRollback(deps, context.op);
   } catch (error) {
-    const reason = `${context.label} ${context.op.opId} failed to commit the write rollback in turn ${turn}: ${errorMessage3(error)}`;
+    const reason = `${context.label} ${context.op.opId} failed to commit the write rollback in turn ${turn}: ${errorMessage4(error)}`;
     restorePreviousSelection(deps, context);
     failSettlement(deps, context, reason);
     throw failureFor(error, reason, context.op);
@@ -25290,7 +25608,7 @@ async function settleBodyOperation(deps, context, turn) {
       previousAnchorId: context.op.previousAnchorId
     });
   } catch (error) {
-    const reason = `${context.label} ${context.op.opId} failed to record the settling marker before hiding turn ${turn}: ${errorMessage3(error)}`;
+    const reason = `${context.label} ${context.op.opId} failed to record the settling marker before hiding turn ${turn}: ${errorMessage4(error)}`;
     restorePreviousSelection(deps, context);
     return failSettlement(deps, context, reason);
   }
@@ -25299,11 +25617,11 @@ async function settleBodyOperation(deps, context, turn) {
     for (const seq of oldAnchorSurfaceTargets(events, surface, context.op.previousAnchorId)) hidden.add(seq);
     appendHideInOpenTurn(deps, turn, hidden);
   } catch (error) {
-    const reason = `${context.label} ${context.op.opId} failed to settle turn ${turn}: ${errorMessage3(error)}`;
+    const reason = `${context.label} ${context.op.opId} failed to settle turn ${turn}: ${errorMessage4(error)}`;
     recordSettlementCancelled(deps, context.op, context.label, {
       anchorId: candidate.messageId,
       index: candidateIndex
-    }, `failed to hide the previous anchor: ${errorMessage3(error)}`);
+    }, `failed to hide the previous anchor: ${errorMessage4(error)}`);
     restorePreviousSelection(deps, context);
     return failSettlement(deps, context, reason);
   }
@@ -25312,7 +25630,7 @@ async function settleBodyOperation(deps, context, turn) {
     appendSettledMarker(deps, context.op.opId, context.op.groupId, candidate.messageId, candidateIndex);
   } catch (error) {
     markerWritten = false;
-    warn(deps, `body runtime: ${context.label} ${context.op.opId} settled '${candidate.messageId}' but could not record the settled marker: ${errorMessage3(error)}`);
+    warn2(deps, `body runtime: ${context.label} ${context.op.opId} settled '${candidate.messageId}' but could not record the settled marker: ${errorMessage4(error)}`);
   }
   try {
     appendOpFinish(deps, context.op.opId, "ok", candidate.messageId, void 0);
@@ -25324,12 +25642,12 @@ async function settleBodyOperation(deps, context, turn) {
         appendSettledMarker(deps, context.op.opId, context.op.groupId, candidate.messageId, candidateIndex);
         markerWritten = true;
       } catch (markerError) {
-        warn(deps, `body runtime: ${context.label} ${context.op.opId} could not retry the settled marker: ${errorMessage3(markerError)}`);
+        warn2(deps, `body runtime: ${context.label} ${context.op.opId} could not retry the settled marker: ${errorMessage4(markerError)}`);
       }
     }
     releaseSettlement(deps, context);
-    const reason = `${context.label} ${context.op.opId} settled '${candidate.messageId}' in turn ${turn} but failed to record op-finish: ${errorMessage3(error)}`;
-    warn(deps, reason);
+    const reason = `${context.label} ${context.op.opId} settled '${candidate.messageId}' in turn ${turn} but failed to record op-finish: ${errorMessage4(error)}`;
+    warn2(deps, reason);
     throw settledFinishPending(reason, context.op, error);
   }
 }
@@ -25342,7 +25660,7 @@ function settleFromSettlingEvidence(deps, context, evidence) {
     try {
       appendSettledMarker(deps, context.op.opId, context.op.groupId, evidence.anchorId, evidence.index);
     } catch (error) {
-      warn(deps, `body runtime: ${context.label} ${context.op.opId} completed its hide but could not upgrade the settled marker: ${errorMessage3(error)}`);
+      warn2(deps, `body runtime: ${context.label} ${context.op.opId} completed its hide but could not upgrade the settled marker: ${errorMessage4(error)}`);
     }
     return finishSettledOperation(deps, context, evidence);
   }
@@ -25369,7 +25687,7 @@ function finishSettlementHide(deps, op, evidence, subject) {
   const events = eventsOf(deps.session);
   const remaining = settlementRemainingTargets(events, surfaceNodeList(deps.session), op, evidence);
   if (remaining.length === 0) return;
-  const openTurn = openTurnNumber(events);
+  const openTurn = openTurnNumber2(events);
   const hideTurn = settlementTurnOf(events, op, evidence) ?? openTurn;
   try {
     if (hideTurn === void 0) {
@@ -25385,7 +25703,7 @@ function finishSettlementHide(deps, op, evidence, subject) {
       );
     }
   } catch (error) {
-    warn(deps, `${subject}: failed to finish the partial settlement hide of seq ${remaining.join(", ")}: ${errorMessage3(error)}`);
+    warn2(deps, `${subject}: failed to finish the partial settlement hide of seq ${remaining.join(", ")}: ${errorMessage4(error)}`);
     throw failureFor(error, `${subject}: failed to finish the partial settlement hide`, op);
   }
   const leftover = settlementRemainingTargets(eventsOf(deps.session), surfaceNodeList(deps.session), op, evidence);
@@ -25403,7 +25721,7 @@ function failSettlement(deps, context, reason) {
     releaseSettlement(deps, context);
     throw failureFor(
       finishError,
-      `body runtime: failed to record op-finish for ${context.op.opId}: ${errorMessage3(finishError)}`,
+      `body runtime: failed to record op-finish for ${context.op.opId}: ${errorMessage4(finishError)}`,
       context.op
     );
   }
@@ -25511,13 +25829,13 @@ async function restoreBodyAfterFailure(deps, op) {
           try {
             appendSettledMarker(deps, op.opId, op.groupId, evidence.anchorId, evidence.index);
           } catch (error) {
-            warn(deps, `body runtime: body restore ${op.opId} finished the partial hide but could not record the settled marker: ${errorMessage3(error)}`);
+            warn2(deps, `body runtime: body restore ${op.opId} finished the partial hide but could not record the settled marker: ${errorMessage4(error)}`);
           }
           try {
             appendOpFinish(deps, op.opId, "ok", evidence.anchorId, void 0);
           } catch (error) {
             throw settledFinishPending(
-              `body restore ${op.opId} finished the partial hide but failed to record op-finish: ${errorMessage3(error)}`,
+              `body restore ${op.opId} finished the partial hide but failed to record op-finish: ${errorMessage4(error)}`,
               op,
               error
             );
@@ -25540,7 +25858,7 @@ async function restoreBodyAfterFailure(deps, op) {
         );
       }
     }
-    const openTurn = openTurnNumber(events);
+    const openTurn = openTurnNumber2(events);
     if (openTurn !== void 0) {
       throw bodyRuntimeError(
         "session-busy",
@@ -25552,11 +25870,11 @@ async function restoreBodyAfterFailure(deps, op) {
     if (previous === void 0) {
       throw bodyRuntimeError("restore-unavailable", `body restore ${op.opId} cannot find previous anchor '${op.previousAnchorId}' in the session log`);
     }
-    const previousMessage = messageOf2(previous);
+    const previousMessage = messageOf3(previous);
     if (previousMessage === void 0 || previous.type !== "assistant/message") {
       throw bodyRuntimeError("restore-unavailable", `body restore ${op.opId} previous anchor '${op.previousAnchorId}' is not an assistant message`);
     }
-    if (textOfMessage(previousMessage).trim() === "") {
+    if (textOfMessage2(previousMessage).trim() === "") {
       throw bodyRuntimeError("restore-unavailable", `body restore ${op.opId} previous anchor '${op.previousAnchorId}' has no body text`);
     }
     const triggerId = triggerMessageIdOf(op);
@@ -25647,7 +25965,7 @@ function failedTurnTargets(events, surface, triggerId, failedTurn) {
     const event = eventAtSeq(events, seq);
     if (event.type === "system/message") continue;
     if (isBodyHideMarker(event)) continue;
-    if (numberField(event.data.turn) === failedTurn) targets.add(seq);
+    if (numberField2(event.data.turn) === failedTurn) targets.add(seq);
   }
   return targets;
 }
@@ -25729,7 +26047,7 @@ async function startRegenerate(deps, request) {
         op: operationView(active)
       };
     } catch (error) {
-      const reason = `body regenerate ${opId} failed to start: ${errorMessage3(error)}`;
+      const reason = `body regenerate ${opId} failed to start: ${errorMessage4(error)}`;
       let compensationError;
       const planToRestore = prepareRecordWritten ? active.rollbackPlan ?? drafted : active.rollbackPlan;
       if (planToRestore !== void 0 && port !== void 0) {
@@ -25743,21 +26061,21 @@ async function startRegenerate(deps, request) {
         try {
           appendPrepareRecovered(deps, opId, "body regenerate start failed after op-prepare");
         } catch (markerError) {
-          warn(deps, `body runtime: failed to record the op-prepare-recovered marker for ${opId}: ${errorMessage3(markerError)}`);
+          warn2(deps, `body runtime: failed to record the op-prepare-recovered marker for ${opId}: ${errorMessage4(markerError)}`);
         }
       }
       if (opStarted) {
         try {
           appendOpFinish(deps, opId, "failed", void 0, reason);
         } catch (finishError) {
-          warn(deps, `body runtime: failed to record op-finish for start failure ${opId}: ${errorMessage3(finishError)}`);
+          warn2(deps, `body runtime: failed to record op-finish for start failure ${opId}: ${errorMessage4(finishError)}`);
         }
       }
       releaseOperation(deps, active);
       if (compensationError !== void 0) {
         const combined = new AggregateError(
           [error, compensationError],
-          `${reason}; the prepared write rollback could not be restored: ${errorMessage3(compensationError)}`
+          `${reason}; the prepared write rollback could not be restored: ${errorMessage4(compensationError)}`
         );
         const failure = bodyRuntimeError("operation-failed", combined.message);
         failure.cause = combined;
@@ -25891,7 +26209,7 @@ function regenerationRollbackFailure(error, agentId, turn, previousAnchorId, ste
   const detail = error instanceof BodyRollbackError ? error.detail : void 0;
   const failure = bodyRuntimeError(
     "body-state-unsafe",
-    `body regenerate for session '${agentId}' refused: cannot ${step} the write rollback of turn ${turn} for anchor '${previousAnchorId}': ${errorMessage3(error)}`,
+    `body regenerate for session '${agentId}' refused: cannot ${step} the write rollback of turn ${turn} for anchor '${previousAnchorId}': ${errorMessage4(error)}`,
     detail
   );
   failure.cause = error;
@@ -25969,253 +26287,6 @@ function applySettlementEvidence(op, settlement, seq) {
   delete op.settling;
 }
 
-// packages/plugin/src/agent-tavern/body-session.ts
-function warn2(ctx, message, fields) {
-  try {
-    ctx.logger?.warn?.(message, fields);
-  } catch {
-  }
-}
-function info(ctx, message, fields) {
-  try {
-    ctx.logger?.info?.(message, fields);
-  } catch {
-  }
-}
-function errorLog(ctx, message, fields) {
-  try {
-    ctx.logger?.error?.(message, fields);
-  } catch {
-  }
-}
-function failureCodeOf(error) {
-  if (!isRecord8(error)) return void 0;
-  const code = error["code"];
-  return typeof code === "string" && code !== "" ? code : void 0;
-}
-function errorMessage4(error) {
-  return error instanceof Error ? error.message : String(error);
-}
-function nonEmptyString(value) {
-  return typeof value === "string" && value !== "" ? value : void 0;
-}
-function agentIdOf(agent) {
-  return nonEmptyString(agent.id) ?? nonEmptyString(agent.session.id);
-}
-function isRecord8(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function isSeq(value) {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && !Object.is(value, -0);
-}
-function numberField2(value) {
-  return typeof value === "number" && Number.isSafeInteger(value) ? value : void 0;
-}
-function wiringEvents(session) {
-  const values = readSessionEvents(session);
-  if (values === void 0) return void 0;
-  const events = [];
-  for (const value of values) {
-    if (!isRecord8(value)) return void 0;
-    const type = value["type"];
-    const seq = value["seq"];
-    const data = value["data"];
-    if (typeof type !== "string" || !isSeq(seq) || !isRecord8(data)) return void 0;
-    events.push({ type, seq, data });
-  }
-  events.sort((left, right) => left.seq - right.seq);
-  return events;
-}
-function eventAt(events, seq) {
-  return events.find((event) => event.seq === seq);
-}
-function messageOf3(event) {
-  if (event.type === "user/message") return event.data;
-  const message = event.data["message"];
-  return isRecord8(message) ? message : void 0;
-}
-function messageIdOf2(event) {
-  const message = messageOf3(event);
-  const id = message?.["id"];
-  return typeof id === "string" && id !== "" ? id : void 0;
-}
-function textOfMessage2(message) {
-  return contentOf2(message).filter((block) => block["type"] === "text" && typeof block["text"] === "string").map((block) => block["text"]).join("");
-}
-function hasToolCall2(message) {
-  return contentOf2(message).some((block) => block["type"] === "tool-call");
-}
-function surfaceNodes(session) {
-  const surface = session.surface;
-  if (!isRecord8(surface)) return void 0;
-  const nodes = surface["nodes"];
-  if (!Array.isArray(nodes)) return void 0;
-  const parsed = [];
-  for (const node of nodes) {
-    if (!isSeq(node)) return void 0;
-    parsed.push(node);
-  }
-  return parsed;
-}
-function openTurnNumber2(events) {
-  let open2;
-  for (const event of events) {
-    if (event.type === "turn/start") open2 = numberField2(event.data["turn"]);
-    else if (event.type === "turn/end") open2 = void 0;
-  }
-  return open2;
-}
-function readBodySessionFacts(session, messageId, groupHint) {
-  const events = wiringEvents(session);
-  if (events === void 0) {
-    return { ledger: void 0, messageText: void 0, inspection: void 0 };
-  }
-  let ledger;
-  let ledgerError;
-  try {
-    ledger = groupHint === void 0 ? void 0 : foldBodyLedgerFromEvents(events, groupHint);
-    if (ledger === void 0) ledger = findBodyLedgerForMessage(events, messageId);
-  } catch (error) {
-    ledger = void 0;
-    ledgerError = errorMessage4(error);
-  }
-  const messageText4 = textOfSessionMessage(events, messageId);
-  const surface = surfaceNodes(session);
-  const anchorMessageId = ledger?.anchorMessageId ?? messageId;
-  const inspection = surface === void 0 ? void 0 : inspectAnchorInEvents(events, surface, anchorMessageId);
-  return {
-    ledger,
-    messageText: messageText4,
-    inspection,
-    ...ledgerError === void 0 ? {} : { ledgerError }
-  };
-}
-function findBodyLedgerForMessage(events, messageId) {
-  const groupIds = /* @__PURE__ */ new Set([messageId]);
-  for (const event of events) {
-    if (event.type !== BODY_EVENT_TYPE) continue;
-    const groupId = nonEmptyString(event.data["groupId"]);
-    if (groupId !== void 0) groupIds.add(groupId);
-  }
-  for (const groupId of groupIds) {
-    const ledger = foldBodyLedgerFromEvents(events, groupId);
-    if (ledger === void 0) continue;
-    if (ledger.anchorMessageId === messageId || ledger.candidates.some((entry) => entry.messageId === messageId)) {
-      return ledger;
-    }
-  }
-  return void 0;
-}
-function textOfSessionMessage(events, messageId) {
-  const event = events.find((entry) => messageIdOf2(entry) === messageId);
-  if (event === void 0) return void 0;
-  const message = messageOf3(event);
-  return message === void 0 ? void 0 : textOfMessage2(message);
-}
-function inspectAnchorInEvents(events, surface, anchorMessageId) {
-  const anchorIndex = surface.findIndex((seq) => {
-    const event = eventAt(events, seq);
-    return event !== void 0 && messageIdOf2(event) === anchorMessageId;
-  });
-  if (anchorIndex < 0) return { onSurface: false, last: false };
-  for (const seq of surface.slice(anchorIndex + 1)) {
-    const event = eventAt(events, seq);
-    if (event === void 0) return { onSurface: true, last: false };
-    if (event.type === "system/message" || event.type === "developer/message" || event.type === "tool/result") continue;
-    const message = messageOf3(event);
-    if (message === void 0) continue;
-    if (event.type === "user/message") {
-      if (sourceOf2(message)?.kind === "user") return { onSurface: true, last: false };
-      continue;
-    }
-    if (event.type === "assistant/message" && textOfMessage2(message).trim() !== "" && !hasToolCall2(message)) {
-      return { onSurface: true, last: false };
-    }
-  }
-  return { onSurface: true, last: true };
-}
-function bodyAgentOf(value) {
-  if (!isRecord8(value)) return void 0;
-  const session = value["session"];
-  if (!isBodySession(session)) return void 0;
-  if (typeof value["followup"] !== "function") return void 0;
-  return value;
-}
-function resolveLiveAgent(ctx, sessionId) {
-  const agents = ctx.agents;
-  const get = agents?.get;
-  if (agents === void 0 || typeof get !== "function") return void 0;
-  try {
-    return bodyAgentOf(get.call(agents, sessionId));
-  } catch (error) {
-    warn2(ctx, "dsh-soulmojito body: agents.get failed", { sessionId, error: errorMessage4(error) });
-    return void 0;
-  }
-}
-function listLiveAgents(ctx) {
-  const agents = ctx.agents;
-  const list = agents?.list;
-  if (agents === void 0 || typeof list !== "function") return [];
-  let values;
-  try {
-    values = list.call(agents);
-  } catch (error) {
-    warn2(ctx, "dsh-soulmojito body: agents.list failed", { error: errorMessage4(error) });
-    return [];
-  }
-  if (!Array.isArray(values)) return [];
-  const agentsOut = [];
-  for (const value of values) {
-    const agent = bodyAgentOf(value);
-    if (agent !== void 0) agentsOut.push(agent);
-  }
-  return agentsOut;
-}
-async function resolveBodyBinding(ctx, sessionId) {
-  const bindingOf2 = ctx.bindingOf;
-  if (typeof bindingOf2 !== "function") {
-    warn2(ctx, "dsh-soulmojito body: no binding resolver is wired; body operations disabled", {
-      reason: "architecture-mismatch",
-      sessionId
-    });
-    return void 0;
-  }
-  try {
-    return await bindingOf2(sessionId);
-  } catch (error) {
-    warn2(ctx, "dsh-soulmojito body: binding lookup failed", { sessionId, error: errorMessage4(error) });
-    return void 0;
-  }
-}
-function bodyBindingEligible(binding) {
-  return binding !== void 0 && binding.architecture === "agent-tavern" && binding.group !== true;
-}
-function isBodySession(value) {
-  if (!isRecord8(value)) return false;
-  return typeof value["append"] === "function";
-}
-function contentOf2(message) {
-  const content = message["content"];
-  if (!Array.isArray(content)) return [];
-  return content.filter((block) => isRecord8(block));
-}
-function sourceOf2(message) {
-  const source = message["source"];
-  return isRecord8(source) ? source : void 0;
-}
-function foldBodyLedgerFromEvents(events, groupId) {
-  const last = events[events.length - 1];
-  if (last === void 0) return void 0;
-  const bodyEvents = events.map((event) => ({
-    seq: event.seq,
-    type: event.type,
-    // The ledger validates every body payload it reads and ignores unrelated
-    // events; the session log itself is JSON by host contract.
-    data: event.data
-  }));
-  return foldBodyLedger(bodyEvents, groupId, last.seq);
-}
-
 // packages/plugin/src/agent-tavern/body-view.ts
 function bodyStateSafetyOf(character, chat) {
   if (character === void 0) return unsafeBodyState("card-unreadable");
@@ -26235,11 +26306,11 @@ function bodyHistoricalMvuStateOf(character, chat) {
     return true;
   }
   const metadata = chat.header.chat_metadata;
-  const variables2 = isRecord8(metadata["variables"]) ? metadata["variables"] : void 0;
+  const variables2 = isRecord5(metadata["variables"]) ? metadata["variables"] : void 0;
   if (variables2 !== void 0 && Object.prototype.hasOwnProperty.call(variables2, "stat_data")) {
     return true;
   }
-  const mvu = isRecord8(metadata["mvu"]) ? metadata["mvu"] : void 0;
+  const mvu = isRecord5(metadata["mvu"]) ? metadata["mvu"] : void 0;
   return mvu !== void 0 && Array.isArray(mvu["receipts"]);
 }
 function bodyMutationSafetyOf(action, character, chat) {
@@ -26414,12 +26485,12 @@ function bodyRejectStatus(code) {
   }
 }
 function failureCodeOf2(error) {
-  if (!isRecord8(error)) return void 0;
+  if (!isRecord5(error)) return void 0;
   const code = error["code"];
   return typeof code === "string" && code !== "" ? code : void 0;
 }
 function failureDetailOf(error) {
-  if (!isRecord8(error)) return void 0;
+  if (!isRecord5(error)) return void 0;
   const detail = error["detail"];
   return typeof detail === "string" && detail !== "" ? detail : void 0;
 }
@@ -26473,7 +26544,7 @@ async function recoverAgentBody(ctx, agent, agentId, createDeps) {
   }
   const deps = await createDeps(ctx, agent);
   if (deps === void 0) {
-    warn2(ctx, "dsh-soulmojito body: recovery skipped because the plugin-record seam is unavailable", {
+    warn(ctx, "dsh-soulmojito body: recovery skipped because the plugin-record seam is unavailable", {
       reason: "host-unsupported",
       agentId
     });
@@ -26494,7 +26565,7 @@ async function recoverAgentBody(ctx, agent, agentId, createDeps) {
     errorLog(ctx, "dsh-soulmojito body: foldPendingOps failed during recovery", {
       agentId,
       code: failureCodeOf(error),
-      error: errorMessage4(error)
+      error: errorMessage2(error)
     });
     return { agentId, status: "failed", pending: 0, reason: "invalid-event" };
   }
@@ -26505,21 +26576,21 @@ async function recoverAgentBody(ctx, agent, agentId, createDeps) {
     errorLog(ctx, "dsh-soulmojito body: foldPendingPrepares failed during recovery", {
       agentId,
       code: failureCodeOf(error),
-      error: errorMessage4(error)
+      error: errorMessage2(error)
     });
     return { agentId, status: "failed", pending: 0, reason: "invalid-event" };
   }
   const settleRecovery = await recoverSettleIntents(ctx, deps, agentId, initial);
   const prepareOutcome = await restoreInterruptedPrepares(ctx, deps, prepares);
   if (pending.length === 0) {
-    const openTurn2 = openTurnNumber2(initial);
+    const openTurn2 = openTurnNumber(initial);
     if (openTurn2 !== void 0) closeRecoveredBracket(ctx, agent, openTurn2, agentId);
     const status3 = prepareOutcome.failed > 0 || settleRecovery.failed > 0 ? "failed" : prepareOutcome.restored > 0 || settleRecovery.restored > 0 ? "restored" : "clean";
     return { agentId, status: status3, pending: 0, ...openTurn2 === void 0 ? {} : { reason: `closed-turn-${openTurn2}` } };
   }
   const safety = await recoveryStateSafety(ctx, agentId, binding);
   if (!safety.safe) {
-    warn2(ctx, "dsh-soulmojito body: recovery skipped because MVU state cannot be rolled back safely", {
+    warn(ctx, "dsh-soulmojito body: recovery skipped because MVU state cannot be rolled back safely", {
       agentId,
       pending: pending.length,
       detail: safety.detail
@@ -26577,12 +26648,12 @@ async function recoverAgentBody(ctx, agent, agentId, createDeps) {
         agentId,
         opId: op.opId,
         code: failureCodeOf(error),
-        error: errorMessage4(error)
+        error: errorMessage2(error)
       });
       restoreOps.push(op);
     }
   }
-  const openTurn = openTurnNumber2(wiringEvents(deps.session) ?? initial);
+  const openTurn = openTurnNumber(wiringEvents(deps.session) ?? initial);
   if (openTurn !== void 0) closeRecoveredBracket(ctx, agent, openTurn, agentId);
   let restored = 0;
   let finishPending = 0;
@@ -26610,9 +26681,9 @@ async function recoverSettleIntents(ctx, deps, agentId, events) {
     errorLog(ctx, "dsh-soulmojito body: foldSettleIntents failed during recovery", {
       agentId,
       code: failureCodeOf(error),
-      error: errorMessage4(error)
+      error: errorMessage2(error)
     });
-    return { restored: 0, committed: 0, replayed: 0, failed: 1, failures: [errorMessage4(error)] };
+    return { restored: 0, committed: 0, replayed: 0, failed: 1, failures: [errorMessage2(error)] };
   }
   if (intents.length === 0) return { restored: 0, committed: 0, replayed: 0, failed: 0, failures: [] };
   try {
@@ -26644,7 +26715,7 @@ async function recoverSettleIntents(ctx, deps, agentId, events) {
       });
     }
     if (outcome.failed > 0) {
-      warn2(ctx, "dsh-soulmojito body: recovery left settle intents open for the next startup", {
+      warn(ctx, "dsh-soulmojito body: recovery left settle intents open for the next startup", {
         agentId,
         intents: intents.length,
         failed: outcome.failed,
@@ -26657,9 +26728,9 @@ async function recoverSettleIntents(ctx, deps, agentId, events) {
       agentId,
       intents: intents.length,
       code: failureCodeOf(error),
-      error: errorMessage4(error)
+      error: errorMessage2(error)
     });
-    return { restored: 0, committed: 0, failed: intents.length, failures: [errorMessage4(error)] };
+    return { restored: 0, committed: 0, failed: intents.length, failures: [errorMessage2(error)] };
   }
 }
 async function auditRecoveredSettle(record) {
@@ -26691,7 +26762,7 @@ async function restoreInterruptedPrepares(ctx, deps, prepares) {
         turn: prepare.plan.turn,
         stage: "prepare-interrupted-restore-failed",
         code: failureCodeOf(error),
-        error: errorMessage4(error)
+        error: errorMessage2(error)
       });
       failed += 1;
       continue;
@@ -26704,7 +26775,7 @@ async function restoreInterruptedPrepares(ctx, deps, prepares) {
         opId: prepare.opId,
         stage: "prepare-interrupted-marker-failed",
         code: failureCodeOf(error),
-        error: errorMessage4(error)
+        error: errorMessage2(error)
       });
       failed += 1;
       continue;
@@ -26728,7 +26799,7 @@ async function recoveryStateSafety(ctx, sessionId, binding) {
     } catch (error) {
       errorLog(ctx, "dsh-soulmojito body: recovery state safety resolver failed", {
         sessionId,
-        error: errorMessage4(error)
+        error: errorMessage2(error)
       });
       return unsafeBodyState("safety-unavailable");
     }
@@ -26747,7 +26818,7 @@ async function defaultRecoveryStateSafety(ctx, binding) {
     return bodyStateSafetyOf(character, snapshot2.chat);
   } catch (error) {
     errorLog(ctx, "dsh-soulmojito body: recovery state safety could not be read", {
-      error: errorMessage4(error)
+      error: errorMessage2(error)
     });
     return unsafeBodyState("safety-unavailable");
   }
@@ -26795,7 +26866,7 @@ async function restoreRecoveredOperation(ctx, deps, op) {
         opId: op.opId,
         stage: "settled-finish-pending",
         anchorId: op.settled?.anchorId ?? op.settling?.anchorId,
-        error: errorMessage4(error)
+        error: errorMessage2(error)
       });
       return "finish-pending";
     }
@@ -26804,14 +26875,14 @@ async function restoreRecoveredOperation(ctx, deps, op) {
       opId: op.opId,
       stage: op.settling === void 0 ? "restore-failed" : "settling-restore-failed",
       code: failureCodeOf(error),
-      error: errorMessage4(error)
+      error: errorMessage2(error)
     });
     return "failed";
   }
 }
 function closeRecoveredBracket(ctx, agent, openTurn, agentId) {
   if (!canAdvanceHostTurnBase(agent)) {
-    warn2(ctx, "dsh-soulmojito body: recovery found a half-open turn but the agent cannot advance its turn base", {
+    warn(ctx, "dsh-soulmojito body: recovery found a half-open turn but the agent cannot advance its turn base", {
       agentId,
       openTurn,
       reason: "host-unsupported"
@@ -26839,11 +26910,11 @@ function recoveredCandidateInTurn(events, op, turn) {
   let found;
   for (const event of events) {
     if (event.type !== "assistant/message" || event.seq <= op.startSeq) continue;
-    if (numberField2(event.data["turn"]) !== turn) continue;
-    const message = messageOf3(event);
-    const messageId = messageIdOf2(event);
+    if (numberField(event.data["turn"]) !== turn) continue;
+    const message = messageOf(event);
+    const messageId = messageIdOf(event);
     if (message === void 0 || messageId === void 0) continue;
-    if (textOfMessage2(message).trim() === "" || hasToolCall2(message)) continue;
+    if (textOfMessage(message).trim() === "" || hasToolCall(message)) continue;
     found = messageId;
   }
   return found;
@@ -26855,14 +26926,14 @@ function turnOfUserMessage2(events, messageId) {
   let openTurn;
   for (const event of events) {
     if (event.type === "turn/start") {
-      openTurn = numberField2(event.data["turn"]);
+      openTurn = numberField(event.data["turn"]);
       continue;
     }
     if (event.type === "turn/end") {
       openTurn = void 0;
       continue;
     }
-    if (event.type === "user/message" && messageIdOf2(event) === messageId) return openTurn;
+    if (event.type === "user/message" && messageIdOf(event) === messageId) return openTurn;
   }
   return void 0;
 }
@@ -26888,7 +26959,7 @@ async function resolveBodyRecordWriter(ctx) {
   } catch (error) {
     warnRecordSeamOnce(ctx, "dsh-soulmojito body: cannot resolve @deepseek-ai/dsh-session", {
       reason: "host-unsupported",
-      error: errorMessage4(error)
+      error: errorMessage2(error)
     });
     return void 0;
   }
@@ -26954,7 +27025,7 @@ async function inspectBodyEdit(ctx, agent, store5, input) {
   } catch (error) {
     const failure = bodyRuntimeError(
       "body-state-unsafe",
-      `body edit refused for session '${sessionId}': character card '${binding.character}' cannot be read: ${errorMessage4(error)}`,
+      `body edit refused for session '${sessionId}': character card '${binding.character}' cannot be read: ${errorMessage2(error)}`,
       "card-unreadable"
     );
     failure.cause = error;
@@ -26973,7 +27044,7 @@ async function inspectBodyEdit(ctx, agent, store5, input) {
   } catch (error) {
     const failure = bodyRuntimeError(
       "body-state-unsafe",
-      `body edit refused for session '${sessionId}': chat '${binding.character}/${binding.chatId}' cannot be read: ${errorMessage4(error)}`,
+      `body edit refused for session '${sessionId}': chat '${binding.character}/${binding.chatId}' cannot be read: ${errorMessage2(error)}`,
       "chat-unreadable"
     );
     failure.cause = error;
@@ -27009,7 +27080,7 @@ function requireProjectedCandidate2(chat, input) {
   } catch (error) {
     throw bodyRuntimeError(
       "projection-pending",
-      `body edit deferred for group '${input.groupId}' (message '${input.messageId}'): ${errorMessage4(error)}; retry after the body projection catches up`
+      `body edit deferred for group '${input.groupId}' (message '${input.messageId}'): ${errorMessage2(error)}; retry after the body projection catches up`
     );
   }
   const floor = chat.messages[floorIndex];
@@ -27086,7 +27157,7 @@ function registerBodyProjection(ctx) {
   const sessions = ctx.sessions;
   const register = sessions?.registerMessageProjection;
   if (sessions === void 0 || typeof register !== "function") {
-    warn2(ctx, "dsh-soulmojito body: sessions.registerMessageProjection is unavailable; body projection disabled", {
+    warn(ctx, "dsh-soulmojito body: sessions.registerMessageProjection is unavailable; body projection disabled", {
       reason: "host-unsupported"
     });
     return void 0;
@@ -27097,12 +27168,12 @@ function registerBodyProjection(ctx) {
   } catch (error) {
     errorLog(ctx, "dsh-soulmojito body: registerMessageProjection failed", {
       reason: "host-unsupported",
-      error: errorMessage4(error)
+      error: errorMessage2(error)
     });
     return void 0;
   }
   if (typeof registered !== "function") {
-    warn2(ctx, "dsh-soulmojito body: registerMessageProjection returned no disposer; projection stays registered", {
+    warn(ctx, "dsh-soulmojito body: registerMessageProjection returned no disposer; projection stays registered", {
       reason: "host-shape"
     });
     return void 0;
@@ -27118,8 +27189,8 @@ function registerBodyProjection(ctx) {
     try {
       ctx.effect(() => disposeOnce, "dsh-soulmojito: body projection");
     } catch (error) {
-      warn2(ctx, "dsh-soulmojito body: ctx.effect rejected the projection disposer; projection stays registered", {
-        error: errorMessage4(error)
+      warn(ctx, "dsh-soulmojito body: ctx.effect rejected the projection disposer; projection stays registered", {
+        error: errorMessage2(error)
       });
     }
   }
@@ -27127,7 +27198,7 @@ function registerBodyProjection(ctx) {
 }
 function registerBodyTurnStopping(ctx) {
   if (typeof ctx.on !== "function") {
-    warn2(ctx, "dsh-soulmojito body: host has no event bus; agent/turn-stopping disabled", {
+    warn(ctx, "dsh-soulmojito body: host has no event bus; agent/turn-stopping disabled", {
       reason: "host-unsupported"
     });
     return void 0;
@@ -27137,7 +27208,7 @@ function registerBodyTurnStopping(ctx) {
     registered = ctx.on("agent/turn-stopping", (payload) => handleBodyTurnStopping(ctx, payload));
   } catch (error) {
     errorLog(ctx, "dsh-soulmojito body: agent/turn-stopping registration failed", {
-      error: errorMessage4(error)
+      error: errorMessage2(error)
     });
     return void 0;
   }
@@ -27152,7 +27223,7 @@ function registerBodyTurnStopping(ctx) {
       if (typeof turnEndRegistered === "function") disposers.push(turnEndRegistered);
     } catch (error) {
       errorLog(ctx, "dsh-soulmojito body: session/event registration failed", {
-        error: errorMessage4(error)
+        error: errorMessage2(error)
       });
     }
   }
@@ -27167,7 +27238,7 @@ async function handleBodyTurnStopping(ctx, payload) {
   const agentId = payloadAgent === void 0 ? payloadAgentId : agentIdOf(payloadAgent);
   const turn = numberField3(record?.turn);
   if (agentId === void 0 || turn === void 0 || turn < 1) {
-    warn2(ctx, "dsh-soulmojito body: ignored a malformed agent/turn-stopping payload", {
+    warn(ctx, "dsh-soulmojito body: ignored a malformed agent/turn-stopping payload", {
       hasAgent: payloadAgent !== void 0,
       hasAgentId: payloadAgentId !== void 0,
       turn: record?.turn
@@ -27180,7 +27251,7 @@ async function handleBodyTurnStopping(ctx, payload) {
   if (!bodyBindingEligible(binding)) return;
   const deps = await createBodyDeps(ctx, agent);
   if (deps === void 0) {
-    warn2(ctx, "dsh-soulmojito body: turn-stopping skipped because the plugin-record seam is unavailable", {
+    warn(ctx, "dsh-soulmojito body: turn-stopping skipped because the plugin-record seam is unavailable", {
       reason: "host-unsupported",
       agentId,
       turn
@@ -27211,7 +27282,7 @@ async function handleBodyTurnStopping(ctx, payload) {
       agentId,
       turn,
       code: failureCodeOf(error),
-      error: errorMessage4(error)
+      error: errorMessage2(error)
     });
   }
 }
@@ -27241,7 +27312,7 @@ function handleBodySessionEvent(ctx, session, event) {
   } catch (error) {
     errorLog(ctx, "dsh-soulmojito body: session/event turn/end observation failed", {
       reason: "listener-failed",
-      error: errorMessage4(error)
+      error: errorMessage2(error)
     });
   }
 }
@@ -27265,7 +27336,7 @@ async function runTurnEndRestoreAttempt(ctx, chain) {
   const delay3 = TURN_END_RESTORE_RETRY_DELAYS_MS[chain.attempts];
   const retryable = outcome.code !== void 0 && TURN_END_RESTORE_RETRY_CODES.has(outcome.code);
   if (retryable && delay3 !== void 0) {
-    warn2(ctx, "dsh-soulmojito body: turn/end restore failed; retrying", {
+    warn(ctx, "dsh-soulmojito body: turn/end restore failed; retrying", {
       sessionId: chain.task.sessionId,
       agentId: chain.task.agentId,
       turn: chain.task.turn,
@@ -27298,7 +27369,7 @@ async function attemptTurnEndRestore(ctx, chain) {
   try {
     const agent = resolveLiveAgent(ctx, task.agentId) ?? (task.agentId === task.sessionId ? void 0 : resolveLiveAgent(ctx, task.sessionId));
     if (agent === void 0) {
-      warn2(ctx, "dsh-soulmojito body: turn/end restore skipped because the live agent is gone", {
+      warn(ctx, "dsh-soulmojito body: turn/end restore skipped because the live agent is gone", {
         sessionId: task.sessionId,
         agentId: task.agentId,
         turn: task.turn,
@@ -27331,7 +27402,7 @@ async function attemptTurnEndRestore(ctx, chain) {
     return {
       status: "failed",
       code: failureCodeOf(error),
-      error: errorMessage4(error),
+      error: errorMessage2(error),
       ...opId === void 0 ? {} : { opId }
     };
   }
@@ -27354,7 +27425,7 @@ function registerTurnEndRestoreCleanup(ctx) {
       cancelTurnEndRestoreChains();
     }, "dsh-soulmojito: body turn/end retries");
   } catch (error) {
-    warn2(ctx, "dsh-soulmojito body: ctx.effect rejected the turn/end retry cleanup", { error: errorMessage4(error) });
+    warn(ctx, "dsh-soulmojito body: ctx.effect rejected the turn/end retry cleanup", { error: errorMessage2(error) });
   }
 }
 function recoverBodyOperations(ctx) {
@@ -27374,7 +27445,7 @@ function combineDisposers(ctx, disposers) {
         dispose();
       } catch (error) {
         errorLog(ctx, "dsh-soulmojito body: event listener disposer failed", {
-          error: errorMessage4(error)
+          error: errorMessage2(error)
         });
       }
     }
@@ -27383,7 +27454,7 @@ function combineDisposers(ctx, disposers) {
 function warnRecordSeamOnce(ctx, message, fields) {
   if (recordSeamWarningEmitted) return;
   recordSeamWarningEmitted = true;
-  warn2(ctx, message, fields);
+  warn(ctx, message, fields);
 }
 function isRecord9(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);

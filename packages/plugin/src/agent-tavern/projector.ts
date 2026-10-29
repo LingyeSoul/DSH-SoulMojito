@@ -4,9 +4,10 @@ import { join } from 'node:path'
 import { ChatRevisionConflictError, KeyedMutationTails, MutationTail, type TavernSessionBinding } from '../../../tavern-store/src/index.js'
 import { RegexPlacement, type CharacterCardIR, type ChatLogIR, type ChatMessage, type RegexScriptIR } from '../../../tavern-format/src/index.js'
 import { applyRegexScripts } from '../../../tavern-script/src/index.js'
-import { hostPluginMessageSource, hostSessionFormatVersion, isHostPluginMessageSource, sessionEvents, LEGACY_PLUGIN_NAME, PLUGIN_NAME, type HostSessionEventData, type HostSessionLog } from '../../../bind/src/index.js'
+import { hostPluginMessageSource, hostSessionFormatVersion, sessionEvents, PLUGIN_NAME, type HostSessionEventData, type HostSessionLog } from '../../../bind/src/index.js'
 import { applyUpdateVariableToChat, ensureChatVariables, messageStatVariables, seedJsrMvuVariables } from './mvu-compat.js'
 import { isBodyLogEvent, isBodyMergedAssistant, projectBodyEvent, type BodyProjectionStore } from './body-projector.js'
+import { isTavernSessionMarker } from './body-session.js'
 import { collectSessionRegexScripts } from '../regex-session.js'
 import { recordMvuTurnReceipt, snapshotChatVariables } from '../mvu.js'
 
@@ -219,7 +220,7 @@ function projectMessage(
 
   if (event.type !== 'assistant/message') return undefined
   // 从 Tavern 聊天导入的镜像消息（开场白/历史）不再投影回 JSONL，否则会重复。
-  if (isTavernMirrorSource(event.data?.message?.source)) return undefined
+  if (isTavernSessionMarker(event.data?.message?.source)) return undefined
   // Body regeneration / restore turns merge through body candidate events; they
   // must not add a second floor next to the body they replace.
   if (isBodyMergedAssistant(session, event)) return undefined
@@ -273,28 +274,11 @@ function projectedMessageId(message: ChatMessage): string | undefined {
 }
 
 /**
- * 会话事件是否带 dsh-soulmojito 写入标记（导入镜像、锚定提醒、插件通知）。
- * 预加载通知（summary 以 "AgentTavern preload: " 开头）除外：它不构成
- * "会话已启动"，客户端修复路径的重复激活不能被它锁死。model 镜像靠合成
- * provider/model 对识别——released v0 Session disposition 禁止 model
- * source 携带 plugin/form 等额外成员。
+ * `isTavernSessionMarker` 的实现已下沉到 `body-session.ts`（body 投影的导入
+ * 楼层接管共用同一判定）；这里 re-export 保持既有导入面不变：预加载通知
+ * （summary 以 "AgentTavern preload: " 开头）不算会话标记。
  */
-export function isTavernSessionMarker(source: unknown): boolean {
-  if (typeof source !== 'object' || source === null) return false
-  const record = source as Record<string, unknown>
-  if (record.kind === 'model') {
-    // 改名兼容（2026-10-16）：存量镜像记录的合成 provider 是旧名 dsh-tavern，
-    // 双认；新写入恒为新名（TAVERN_MIRROR_MODEL_SOURCE）。
-    const provider = record.provider
-    return (provider === PLUGIN_NAME || provider === LEGACY_PLUGIN_NAME) && record.model === 'agent-tavern-import'
-  }
-  if (!isHostPluginMessageSource(record)) return false
-  return !(typeof record.summary === 'string' && record.summary.startsWith('AgentTavern preload: '))
-}
-
-function isTavernMirrorSource(source: unknown): boolean {
-  return isTavernSessionMarker(source)
-}
+export { isTavernSessionMarker }
 
 /** 宿主会话要求 assistant 消息的 source 必须是 model 来源且带 provider/model； */
 /** 导入的镜像消息用合成 provider/model 补足校验，合成 provider/model 对即镜像标记。 */

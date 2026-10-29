@@ -67,6 +67,66 @@ async function mvuFixture(sessionId: string, variables: Record<string, unknown>)
   return { root, store, chatId, sessionId }
 }
 
+/** ST greeting floor exactly as `POST /chats` writes it (no agentTavern identity). */
+function stGreetingFloor(greetings: readonly string[], selectedIndex: number): ChatMessage {
+  const sendDate = new Date(1700000000000).toISOString()
+  return {
+    name: CHARACTER,
+    is_user: false,
+    is_system: false,
+    send_date: sendDate,
+    mes: greetings[selectedIndex]!,
+    swipe_id: selectedIndex,
+    swipes: [...greetings],
+    swipe_info: greetings.map(() => ({ send_date: sendDate })),
+  }
+}
+
+/** Fixture whose chat opens with the ST greeting floor `POST /chats` writes. */
+async function importedFixture(sessionId: string, greetings: readonly string[], selectedIndex: number) {
+  const root = mkdtempSync(join(tmpdir(), 'agent-tavern-body-projector-imported-'))
+  roots.push(root)
+  const store = await TavernStore.open(root)
+  await store.importCharacter({ spec: 'chara_card_v2', spec_version: '2.0', data: cardData() })
+  const chatId = await store.createChat(CHARACTER, {
+    user_name: 'Alice', character_name: CHARACTER, chat_metadata: {},
+  }, [stGreetingFloor(greetings, selectedIndex)])
+  await store.updateState(() => ({
+    sessionBindings: {
+      [sessionId]: {
+        architecture: 'agent-tavern', contextMode: 'dsh-native',
+        character: CHARACTER, chatId,
+      },
+    },
+  }))
+  return { root, store, chatId, sessionId }
+}
+
+/** MVU fixture whose chat opens with the ST greeting floor `POST /chats` writes. */
+async function importedMvuFixture(sessionId: string, variables: Record<string, unknown>, greeting: string) {
+  const root = mkdtempSync(join(tmpdir(), 'agent-tavern-body-projector-mvu-imported-'))
+  roots.push(root)
+  const store = await TavernStore.open(root)
+  await store.importCharacter({
+    spec: 'chara_card_v2', spec_version: '2.0',
+    data: cardData({
+      tavern_helper: { scripts: [{ type: 'script', content: "import 'https://example.invalid/MagVarUpdate/bundle.js'" }] },
+    }),
+  })
+  const chatId = await store.createChat(CHARACTER, {
+    user_name: 'Alice', character_name: CHARACTER, chat_metadata: { variables },
+  }, [stGreetingFloor([greeting], 0)])
+  await store.updateState(() => ({
+    sessionBindings: {
+      [sessionId]: {
+        architecture: 'agent-tavern', contextMode: 'dsh-native',
+        character: CHARACTER, chatId,
+      },
+    },
+  }))
+  return { root, store, chatId, sessionId }
+}
+
 type TestSession = NativeSession & { events: NativeSessionEvent[] }
 
 function makeSession(id: string): TestSession {
@@ -164,6 +224,37 @@ function seedCandidateZero(session: TestSession): void {
   )
 }
 
+/** Assistant message with the synthetic mirror source the history import writes. */
+function importedAssistantEvent(
+  seq: number,
+  id: string,
+  text: string,
+  turn: number,
+  time: number,
+): NativeSessionEvent {
+  return nativeEvent('assistant/message', seq, time, {
+    turn,
+    step: 1,
+    message: {
+      id,
+      role: 'assistant',
+      content: [{ type: 'text', text }],
+      source: { kind: 'model', provider: 'dsh-soulmojito', model: 'agent-tavern-import' },
+    },
+  })
+}
+
+/** One closed import turn carrying the mirror opening message. */
+function seedImportedTurn(session: TestSession, anchorId: string, text: string): void {
+  session.events.push(
+    turnStart(0, 1),
+    stepStart(1, 1, 1),
+    importedAssistantEvent(2, anchorId, text, 1, 1200),
+    stepEnd(3, 1, 1),
+    turnEnd(4, 1),
+  )
+}
+
 function updateCandidateText(patch: string): string {
   return `Fresh narrative.\n<UpdateVariable>\n<JSONPatch>\n${patch}\n</JSONPatch>\n</UpdateVariable>`
 }
@@ -230,6 +321,120 @@ describe('AgentTavern body JSONL projector', () => {
 
     expect(await snapshotOf(store, chatId)).toEqual(before)
     expect(await projector.status(sessionId)).toMatchObject({ status: 'ok', lastCursor: 5 })
+  })
+
+  it('adopts an imported anchor floor and projects candidate 0 into it', async () => {
+    const { root, store, chatId, sessionId } = await importedFixture(
+      'body-projector-imported',
+      ['First greeting.', 'Second greeting.', 'Chosen greeting.'],
+      2,
+    )
+    const session = makeSession(sessionId)
+    seedImportedTurn(session, 'import-anchor', 'Chosen greeting.')
+    session.events.push(bodyEvent(5, {
+      op: 'candidate', groupId: 'import-anchor', messageId: 'import-anchor', index: 0,
+    }))
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(session)
+
+    const chat = await snapshotOf(store, chatId)
+    expect(chat.messages).toHaveLength(1)
+    const floor = chat.messages[0]!
+    expect(floor.mes).toBe('Chosen greeting.')
+    expect(floor.swipes).toEqual(['Chosen greeting.'])
+    expect(floor.swipe_id).toBe(0)
+    expect(floor.swipe_info).toHaveLength(1)
+    // Adopted floors stay outside the display override (decision 2026-10-20):
+    // the group binding is written, the projected message id is not.
+    expect(agentTavernOf(floor)).toMatchObject({
+      bodyGroupId: 'import-anchor',
+      anchorMessageId: 'import-anchor',
+      sessionId,
+    })
+    expect(agentTavernOf(floor).messageId).toBeUndefined()
+    expect(await projector.status(sessionId)).toMatchObject({ status: 'ok', lastCursor: 5 })
+
+    const replayRoot = mkdtempSync(join(tmpdir(), 'agent-tavern-body-projector-'))
+    roots.push(replayRoot)
+    const fresh = await AgentTavernProjector.open(replayRoot, store)
+    await fresh.replay(session)
+    expect(await snapshotOf(store, chatId)).toEqual(chat)
+  })
+
+  it('edits an adopted imported floor once the candidate is projected', async () => {
+    const { root, store, chatId, sessionId } = await importedFixture(
+      'body-projector-imported-edit',
+      ['Only greeting.', 'Chosen greeting.'],
+      1,
+    )
+    const session = makeSession(sessionId)
+    seedImportedTurn(session, 'import-anchor', 'Chosen greeting.')
+    session.events.push(
+      bodyEvent(5, { op: 'candidate', groupId: 'import-anchor', messageId: 'import-anchor', index: 0 }),
+      bodyEvent(6, {
+        op: 'edit', groupId: 'import-anchor', index: 0, text: 'Edited greeting.', previousText: 'Chosen greeting.',
+      }),
+    )
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(session)
+
+    const chat = await snapshotOf(store, chatId)
+    const floor = chat.messages[0]!
+    expect(floor.mes).toBe('Edited greeting.')
+    expect(floor.swipes).toEqual(['Edited greeting.'])
+    expect(floor.swipe_id).toBe(0)
+    expect(agentTavernOf(floor)).toMatchObject({ lastBodyEventSeq: 6, lastBodyMutation: 'edit' })
+    expect(await projector.status(sessionId)).toMatchObject({ status: 'ok', lastCursor: 6 })
+  })
+
+  it('applies an adopted imported MVU greeting and records one body receipt', async () => {
+    const text = updateCandidateText('[{ "op": "delta", "path": "/mvu/favor", "value": 5 }]')
+    const { root, store, chatId, sessionId } = await importedMvuFixture(
+      'body-projector-mvu-imported',
+      { initialized_lorebooks: true, stat_data: { mvu: { favor: 10 } } },
+      text,
+    )
+    const session = makeSession(sessionId)
+    seedImportedTurn(session, 'import-anchor', text)
+    session.events.push(bodyEvent(5, {
+      op: 'candidate', groupId: 'import-anchor', messageId: 'import-anchor', index: 0,
+    }))
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(session)
+
+    const chat = await snapshotOf(store, chatId)
+    expect(chat.header.chat_metadata.variables).toMatchObject({ stat_data: { mvu: { favor: 15 } } })
+    expect(readMvuReceipts(chat).filter((receipt) => receipt.turnKey === 'body:import-anchor')).toHaveLength(1)
+    const floor = chat.messages[0]!
+    expect(floor.mes).toBe(text)
+    expect(floor.swipes).toEqual([text])
+    expect(statDataOf(floor)).toEqual({ mvu: { favor: 15 } })
+  })
+
+  it('keeps imported floors read-only to adoption for a non-mirror anchor', async () => {
+    const { root, store, chatId, sessionId } = await importedFixture(
+      'body-projector-not-mirror',
+      ['Greeting.'],
+      0,
+    )
+    const session = makeSession(sessionId)
+    session.events.push(
+      turnStart(0, 1),
+      stepStart(1, 1, 1),
+      assistantEvent(2, 'live-anchor', 'Live body.', 1, 1200, undefined),
+      stepEnd(3, 1, 1),
+      turnEnd(4, 1),
+      bodyEvent(5, { op: 'candidate', groupId: 'live-anchor', messageId: 'live-anchor', index: 0 }),
+    )
+    const projector = await AgentTavernProjector.open(root, store)
+    const before = await snapshotOf(store, chatId)
+
+    await expect(projector.project(session, session.events[5]!)).rejects.toMatchObject({
+      name: 'BodyJsonlProjectionError',
+      code: 'body-floor-not-found',
+    })
+    expect(await snapshotOf(store, chatId)).toEqual(before)
+    expect(await projector.status(sessionId)).toMatchObject({ status: 'pending', lastCursor: -1, pendingCursor: 5 })
   })
 
   it('merges a regenerated candidate into the same floor and skips its trigger turn', async () => {
