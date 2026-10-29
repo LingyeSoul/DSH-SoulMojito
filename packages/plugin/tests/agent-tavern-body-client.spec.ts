@@ -73,8 +73,8 @@ describe('AgentTavern body client source checks', () => {
     expect(bodySource).toContain('body.hidden === true')
   })
 
-  it('pins both body dialog textareas to a fixed height with internal scrolling', () => {
-    // Only these two dialogs opt into the fixed-height classes; EditorDialog and
+  it('stretches both body dialog textareas to the modal body height', () => {
+    // Only these two dialogs opt into the body variant; EditorDialog and
     // EditorField keep their shared semantics and 108px resizable default.
     expect(bodySource).toContain("className: 'dt-body-dialog dt-body-dialog-edit'")
     expect(bodySource).toContain("className: 'dt-body-dialog dt-body-dialog-regenerate'")
@@ -83,12 +83,13 @@ describe('AgentTavern body client source checks', () => {
 
     const baseRule = stylesSource.indexOf('.dt-editor-field textarea{min-height:108px;resize:vertical;white-space:pre-wrap}')
     expect(baseRule).toBeGreaterThanOrEqual(0)
-    // The override must come after the shared default and outrank it by class
-    // count, otherwise the textarea stays half-fixed and still drag-resizable.
-    expect(stylesSource.indexOf('.dt-editor-field.dt-body-textarea textarea{resize:none;overflow-y:auto}')).toBeGreaterThan(baseRule)
-    expect(stylesSource).toContain('.dt-editor-field.dt-body-textarea-edit textarea{height:280px;min-height:280px;max-height:280px}')
-    expect(stylesSource).toContain('.dt-editor-field.dt-body-textarea-feedback textarea{height:180px;min-height:180px;max-height:180px}')
-    expect(stylesSource).toContain('@media(max-width:700px){.dt-editor-field.dt-body-textarea-edit textarea{height:220px;min-height:220px;max-height:220px}.dt-editor-field.dt-body-textarea-feedback textarea{height:150px;min-height:150px;max-height:150px}}')
+    // The override must come after the shared default and make the field grow
+    // with the modal body instead of pinning a fixed textarea height.
+    expect(stylesSource.indexOf('.dt-editor-field.dt-body-textarea textarea{flex:1;height:auto;min-height:120px;max-height:none;resize:none;overflow-y:auto}')).toBeGreaterThan(baseRule)
+    expect(stylesSource).toContain('.dt-body-dialog .dt-editor-modal-body>.dt-editor{flex:1;min-height:0}')
+    expect(stylesSource).toContain('.dt-editor-field.dt-body-textarea{flex:1;min-height:0}')
+    expect(stylesSource).not.toContain('.dt-editor-field.dt-body-textarea-edit textarea{height:280px')
+    expect(stylesSource).not.toContain('.dt-editor-field.dt-body-textarea-feedback textarea{height:180px')
   })
 
   it('parses the body response fields used by the action row', () => {

@@ -39,7 +39,8 @@ flat 变量与记忆不能简单叠加到新 turn；新 turn 失败或取消时�
   MVU body receipt undo/redo、新 turn journal + settle receipt 撤销、旧 plan 恢复、
   `op-start.rollbackPlan` 重启重建、记忆向量同步、真实 store 集成链路、prepare 失败零写入、
   CAS 冲突、重复 prepare 幂等、MVU regenerate 放行与 edit/select 拒绝。
-- 对话框：编辑正文 280px / 重生成 180px 固定高度、内部滚动、窄屏降高；12 条客户端断言。
+- 对话框（2026-10-29 用户反馈）：编辑正文 / 重生成 textarea 填满 modal body 高度，
+  内部滚动、最小 120px，窄屏同样自适应；12 条客户端断言。
 
 ## 风险与未完成
 
