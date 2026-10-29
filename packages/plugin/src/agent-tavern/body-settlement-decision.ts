@@ -17,7 +17,7 @@
  * - `ambiguous`: the surface and ledger disagree; recovery must not guess.
  */
 
-import type { BodyLedger, BodySettlementTargets } from './body.js'
+import { BODY_EVENT_TYPE, type BodyLedger, type BodySettlementTargets } from './body.js'
 import {
   appendBodyEvent,
   appendOpFinish,
@@ -28,6 +28,7 @@ import {
   warn,
   type BodyRuntimeDeps,
   type BodyRuntimeFailure,
+  type BodySettledEventLike,
   type BodySettledMarker,
   type BodySettlementEvidence,
   type FinalizeTurnStoppingResult,
@@ -221,7 +222,37 @@ export function settlementLedger(
   return ledger
 }
 
-/** Require the evidence to be the group's currently selected candidate. */
+/**
+ * True when the group has a `select` record after `seq`.
+ *
+ * A settlement marker is dated by its own log sequence. A later select means
+ * the user moved the body to another candidate after the settlement was
+ * already durable, so the folded ledger no longer points at the settled slot
+ * even though the settlement itself is still valid.
+ */
+export function hasSelectAfter(
+  events: readonly BodySettledEventLike[],
+  groupId: string,
+  seq: number,
+): boolean {
+  return events.some((event) =>
+    event.type === BODY_EVENT_TYPE
+    && event.seq > seq
+    && event.data.op === 'select'
+    && event.data.groupId === groupId,
+  )
+}
+
+/**
+ * Require the evidence to describe the group's committed settlement.
+ *
+ * The slot check always runs: the group must have a ledger, the index must
+ * exist and its candidate must be the evidence anchor. The marker is then
+ * accepted when it is the current selection, or when a `select` record after
+ * the marker's own sequence proves the user switched candidates after the
+ * settlement landed. A marker without a parsed sequence cannot be dated and
+ * therefore keeps the strict fail-closed behaviour.
+ */
 export function assertCommittedSettlement(
   deps: BodyRuntimeDeps,
   groupId: string,
@@ -229,12 +260,12 @@ export function assertCommittedSettlement(
   subject: string,
 ): void {
   const ledger = settlementLedger(deps, groupId, evidence)
-  if (ledger.selectedIndex !== evidence.index || ledger.anchorMessageId !== evidence.anchorId) {
-    throw bodyRuntimeError(
-      'invalid-event',
-      `${subject}: settlement record '${evidence.anchorId}' index ${evidence.index} is not the committed selection (selected ${ledger.selectedIndex}, anchor '${ledger.anchorMessageId}'); refusing to trust it`,
-    )
-  }
+  if (ledger.selectedIndex === evidence.index && ledger.anchorMessageId === evidence.anchorId) return
+  if (evidence.seq !== undefined && hasSelectAfter(eventsOf(deps.session), groupId, evidence.seq)) return
+  throw bodyRuntimeError(
+    'invalid-event',
+    `${subject}: settlement record '${evidence.anchorId}' index ${evidence.index} is not the committed selection (selected ${ledger.selectedIndex}, anchor '${ledger.anchorMessageId}'); refusing to trust it`,
+  )
 }
 
 /** Best-effort durable cancellation; a failed record is logged, not masked. */

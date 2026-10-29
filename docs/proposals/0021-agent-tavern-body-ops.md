@@ -381,6 +381,9 @@ projector 新增 body 分支：
   必须确认 trigger/process 与旧 anchor 都已离开 surface；只要 ledger 已提交到新候选，
   剩余任意 range（trigger 先隐藏或 anchor 先隐藏、甚至两段都还可见）都走 `finish-hide`，
   只隐藏剩余目标，不重复 hide、不改 ledger/select。
+- `op-settled` 的 evidence 带日志 `seq`；恢复对账时若当前选中已不是结算候选，只有存在
+  “标记之后的 select”记录才允许补 `op-finish`（用户后续切换），标记之前就未选中仍
+  `invalid-event`。
 - live `session/event` 的 `turn/end` 失败边（`error` / `cancelled` / `aborted`）必须异步触发
   `restoreBodyAfterFailure`；监听器只登记，不在事件栈 append，同一 session 去重。
 - 半开 turn 用现有 `closeImportBracket` 兜底关闭。

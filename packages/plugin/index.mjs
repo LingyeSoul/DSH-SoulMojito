@@ -16853,7 +16853,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("8da7233") : void 0;
+  const commit = true ? normalizeCommit("8f43ae9") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -24025,7 +24025,8 @@ function parseSettledEvent(event) {
       anchorId: settledString(event.data.anchorId, event.seq, "anchorId"),
       index: settledIndex(event.data.index, event.seq),
       phase: "cancelled",
-      reason: settledString(event.data.reason, event.seq, "reason")
+      reason: settledString(event.data.reason, event.seq, "reason"),
+      seq: event.seq
     };
   }
   if (op !== "op-settled") {
@@ -24048,6 +24049,7 @@ function parseSettledEvent(event) {
     anchorId: settledString(event.data.anchorId, event.seq, "anchorId"),
     index: settledIndex(event.data.index, event.seq),
     phase: phase ?? "settled",
+    seq: event.seq,
     ...targets === void 0 ? {} : { targets }
   };
 }
@@ -24061,6 +24063,7 @@ function settlementEvidenceOf(events, opId) {
       groupId: settlement.groupId,
       anchorId: settlement.anchorId,
       index: settlement.index,
+      seq: settlement.seq,
       ...settlement.reason === void 0 ? {} : { reason: settlement.reason },
       ...settlement.targets === void 0 ? {} : { targets: settlement.targets }
     };
@@ -25110,14 +25113,19 @@ function settlementLedger(deps, groupId, evidence) {
   }
   return ledger;
 }
+function hasSelectAfter(events, groupId, seq) {
+  return events.some(
+    (event) => event.type === BODY_EVENT_TYPE && event.seq > seq && event.data.op === "select" && event.data.groupId === groupId
+  );
+}
 function assertCommittedSettlement(deps, groupId, evidence, subject) {
   const ledger = settlementLedger(deps, groupId, evidence);
-  if (ledger.selectedIndex !== evidence.index || ledger.anchorMessageId !== evidence.anchorId) {
-    throw bodyRuntimeError(
-      "invalid-event",
-      `${subject}: settlement record '${evidence.anchorId}' index ${evidence.index} is not the committed selection (selected ${ledger.selectedIndex}, anchor '${ledger.anchorMessageId}'); refusing to trust it`
-    );
-  }
+  if (ledger.selectedIndex === evidence.index && ledger.anchorMessageId === evidence.anchorId) return;
+  if (evidence.seq !== void 0 && hasSelectAfter(eventsOf(deps.session), groupId, evidence.seq)) return;
+  throw bodyRuntimeError(
+    "invalid-event",
+    `${subject}: settlement record '${evidence.anchorId}' index ${evidence.index} is not the committed selection (selected ${ledger.selectedIndex}, anchor '${ledger.anchorMessageId}'); refusing to trust it`
+  );
 }
 function recordSettlementCancelled(deps, op, label, evidence, reason) {
   try {

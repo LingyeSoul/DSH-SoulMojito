@@ -254,11 +254,19 @@ export interface BodySettlementEvidence extends BodySettledMarker {
   readonly reason?: string
   /** Hide target ids written with the `settling` marker; absent on legacy records. */
   readonly targets?: BodySettlementTargets
+  /**
+   * Log sequence of the parsed record. Evidence without a sequence cannot be
+   * dated against later `select` records, so callers must fail closed instead
+   * of assuming a post-settlement drift.
+   */
+  readonly seq?: number
 }
 
 /** One parsed `body-settled` record: the evidence plus the operation it belongs to. */
 export interface BodySettledEvent extends BodySettlementEvidence {
   readonly opId: string
+  /** Sequence of the record itself; always the parsed event's `seq`. */
+  readonly seq: number
 }
 
 /** Minimal event shape read by the settlement marker helpers. */
@@ -610,6 +618,7 @@ export function parseSettledEvent(event: BodySettledEventLike): BodySettledEvent
       index: settledIndex(event.data.index, event.seq),
       phase: 'cancelled',
       reason: settledString(event.data.reason, event.seq, 'reason'),
+      seq: event.seq,
     }
   }
   if (op !== 'op-settled') {
@@ -632,6 +641,7 @@ export function parseSettledEvent(event: BodySettledEventLike): BodySettledEvent
     anchorId: settledString(event.data.anchorId, event.seq, 'anchorId'),
     index: settledIndex(event.data.index, event.seq),
     phase: phase ?? 'settled',
+    seq: event.seq,
     ...(targets === undefined ? {} : { targets }),
   }
 }
@@ -657,6 +667,7 @@ export function settlementEvidenceOf(
       groupId: settlement.groupId,
       anchorId: settlement.anchorId,
       index: settlement.index,
+      seq: settlement.seq,
       ...(settlement.reason === undefined ? {} : { reason: settlement.reason }),
       ...(settlement.targets === undefined ? {} : { targets: settlement.targets }),
     }

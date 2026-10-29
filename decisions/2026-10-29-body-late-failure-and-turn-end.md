@@ -37,25 +37,25 @@
 
 ## 证据
 
-- `npm run check`：158 test files / 2498 passed + 1 skipped；`build:plugin` 成功；
+- `npm run check`：158 test files / 2519 passed + 1 skipped；`build:plugin` 成功；
   18 道 gate 全部 PASS。
-- body 聚焦：14 个 spec / 331 tests；runtime 64、wiring 49、candidate-receipts 27、
-  tavern-mvu 32、mvu-settle 20、write-journal 24、rollback 30。
+- body 聚焦：14 个 spec / 352 tests；runtime 69、wiring 49、candidate-receipts 27、
+  tavern-mvu 32、mvu-settle 30、write-journal 30、rollback 30。
 - 关键覆盖：两阶段 settling/settled/cancelled、settling 后崩溃三分支、部分 hide 的
-  `finish-hide` 幂等收口、标记与 ledger 对账、commit 前移、hide 后 op-finish 失败保留新正文、
-  finish-pending、live `turn/end` error/cancelled/aborted、completed 不触发、
-  重复 turn 边去重、恢复失败保留 op-start、监听器内不同步 append。
+  `finish-hide` 幂等收口、settled 标记之后的 select 漂移、标记与 ledger 对账、commit 前移、
+  hide 后 op-finish 失败保留新正文、finish-pending、live `turn/end` error/cancelled/aborted、
+  completed 不触发、重复 turn 边去重、恢复失败保留 op-start、监听器内不同步 append。
 
 ## 风险与未完成
 
 | 风险 | 说明 |
 |---|---|
-| 部分 hide 收口 | 已修：`op-settling` 记录 hide 目标，trigger 仍可见时不判 settled；`finish-hide` 幂等补 hide 后 settled。反向部分态（trigger 已隐藏、旧 anchor 仍可见）仍按 `ambiguous` fail-closed。 |
+| 部分 hide 收口 | 已修：`op-settling` 记录 hide 目标，ledger 已提交时任意剩余 range 走 `finish-hide` 幂等补 hide；ledger 未提交时按 cancelled/ambiguous 收口。 |
 | 双写失败 | `op-settling` / `op-settled` / `op-finish` 连续写失败时仍可能落入 legacy fallback；writer 连续故障下的残余风险。 |
-| 标记选中漂移 | `op-settled` 落盘后、`op-finish` 重试前用户又切候选，恢复对账会 `invalid-event` 并保留 op-start；fail-closed，但需下次恢复或人工收尾。 |
+| 标记选中漂移 | 已修：settlement evidence 带日志 `seq`，标记之后发生 select 时允许补 `op-finish`；标记之前未选中仍 `invalid-event` fail-closed。 |
 | 取消部分 hide | `op-settle-cancelled` 且 anchor 已被部分隐藏时，仍走 `body-restore-*` assistant 副本兜底，这是旧会话兼容路径。 |
 | live 时序 | 恢复要求微任务执行时 loop 已回到 idle；宿主延迟更久会记 `host-unsupported` 并留给启动恢复。 |
-| 无真机 E2E | 尚未跑 `dsh web` 浏览器闭环，需要指定 profile 并允许写 `$DSH_HOME`。 |
+| 真机 E2E | web profile 已跑通 bootstrap / 真实正文读取 / 写前 409；live-agent 完整写闭环仍需在 UI 打开会话后验证。 |
 
 ## 删除路径
 

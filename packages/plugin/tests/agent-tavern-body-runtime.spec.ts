@@ -650,6 +650,60 @@ function appendReversePartialSettlementState(
   return { triggerTurn }
 }
 
+/**
+ * Durable crash state after a settlement completed and before its `op-finish`:
+ * the `settled` marker is written, the old anchor and the trigger/process range
+ * are hidden, and a later turn selects a newer candidate of the same group.
+ */
+function appendSettledDriftState(
+  harness: Harness,
+  started: { readonly opId: string },
+  anchorSeq: number,
+): { triggerTurn: TriggerTurn; thirdBodySeq: number; selectSeq: number } {
+  const trigger = firstFollowup(harness)
+  const triggerTurn = appendTriggerTurn(harness, 2, trigger, 'new-body', false)
+  harness.session.append(BODY_EVENT_TYPE, {
+    op: 'candidate',
+    groupId: 'anchor-1',
+    messageId: 'new-body',
+    index: 1,
+  })
+  harness.session.append(BODY_EVENT_TYPE, { op: 'select', groupId: 'anchor-1', index: 1 })
+  harness.session.append(BODY_SETTLED_EVENT_TYPE, {
+    op: 'op-settled',
+    phase: 'settled',
+    opId: started.opId,
+    groupId: 'anchor-1',
+    anchorId: 'new-body',
+    index: 1,
+  })
+  harness.session.append('step/start', { turn: 2, step: 3 })
+  harness.session.append('developer/message', {
+    turn: 2,
+    step: 3,
+    message: {
+      id: 'body-hide-settled',
+      role: 'developer',
+      content: [],
+      source: { kind: 'plugin:dsh-soulmojito', form: 'body-hide', summary: 'settled body hide' },
+    },
+  }, {
+    surfaceOp: { op: 'replace', startSeq: anchorSeq, endSeq: triggerTurn.toolResultSeq },
+    sourceEventSeqs: [anchorSeq, triggerTurn.triggerSeq, triggerTurn.processSeq, triggerTurn.toolResultSeq],
+  })
+  harness.session.append('step/end', { turn: 2, step: 3 })
+  closeTurn(harness, 2)
+  const thirdBodySeq = seedClosedTurn(harness, 3, 'third-body', 'third body', false)
+  harness.session.append(BODY_EVENT_TYPE, {
+    op: 'candidate',
+    groupId: 'anchor-1',
+    messageId: 'third-body',
+    index: 2,
+  })
+  const selectEvent = harness.session.append(BODY_EVENT_TYPE, { op: 'select', groupId: 'anchor-1', index: 2 })
+  return { triggerTurn, thirdBodySeq, selectSeq: eventSeq(selectEvent, 'post-settlement select') }
+}
+
 function eventSeq(value: unknown, subject: string): number {
   if (!isRecord(value) || !isSeq(value.seq)) throw new Error(`fake session: ${subject} append did not return an event`)
   return value.seq
@@ -2641,8 +2695,72 @@ describe('AgentTavern body runtime', () => {
 
     // The candidate slot at index 1 is 'new-body', not the previous anchor.
     await mismatch('anchor-1', 1, 1)
-    // The slot is right, but the ledger never selected it.
+    // The slot is right, but the select happened before the marker, so it
+    // cannot explain a later drift.
     await mismatch('new-body', 1, 0)
+  })
+
+  it('finishes a settled operation after the user switched candidates post-marker', async () => {
+    const harness = healthyHarness()
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const started = await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+    const drifted = appendSettledDriftState(harness, started, anchorSeq)
+    const markerSeq = settledEventsOf(harness.events)[0]?.seq
+    if (markerSeq === undefined) throw new Error('fake harness: settled marker is missing')
+    expect(drifted.selectSeq).toBeGreaterThan(markerSeq)
+    const recovered = foldPendingOps(harness.events)[0]
+    if (recovered === undefined) throw new Error('foldPendingOps did not rebuild the operation')
+    const bodyEventsBefore = bodyEventsOf(harness.events).length
+    const assistantsBefore = harness.events.filter((event) => event.type === 'assistant/message').length
+    const eventsBefore = harness.events.length
+    const surfaceBefore = harness.surface()
+
+    pendingByAgent.clear()
+    const result = await finalizeRecoveredOperation(harness.deps, recovered, 2)
+
+    // The settled body stays; only its missing bookkeeping is written.
+    expect(result).toEqual({ status: 'ok', anchorMessageId: 'new-body' })
+    expect(bodyEventsOf(harness.events)).toHaveLength(bodyEventsBefore + 1)
+    expect(bodyEvent(harness.events, 'op-finish')?.data).toMatchObject({ result: 'ok', anchorId: 'new-body' })
+    expect(harness.events).toHaveLength(eventsBefore + 1)
+    expect(harness.events.filter((event) => event.type === 'assistant/message')).toHaveLength(assistantsBefore)
+    expect(harness.surface()).toEqual(surfaceBefore)
+    expect(bodyEvent(harness.events, 'restore')).toBeUndefined()
+    expect(bodyEventsWithOp(harness.events, 'select').map((event) => event.data.index)).toEqual([1, 2])
+    expect(bodyEventsWithOp(harness.events, 'candidate').map((event) => event.data.index)).toEqual([0, 1, 2])
+  })
+
+  it('returns the settled anchor and releases the op when the user switched post-marker', async () => {
+    const harness = healthyHarness()
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const started = await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+    expect(harness.activeRestrictions).toBe(1)
+    const drifted = appendSettledDriftState(harness, started, anchorSeq)
+    const assistantsBefore = harness.events.filter((event) => event.type === 'assistant/message').length
+    const eventsBefore = harness.events.length
+
+    expect(await restoreBodyAfterFailure(harness.deps, started.op)).toBe('new-body')
+
+    // The settled body is not restored, nothing is appended and the live op is
+    // released so a later operation is not blocked by a phantom restriction.
+    expect(harness.events).toHaveLength(eventsBefore)
+    expect(harness.activeRestrictions).toBe(0)
+    expect(pendingByAgent.get(harness.agentId)).toBeUndefined()
+    expect(bodyEvent(harness.events, 'op-finish')).toBeUndefined()
+    expect(bodyEvent(harness.events, 'restore')).toBeUndefined()
+    expect(harness.events.filter((event) => event.type === 'assistant/message')).toHaveLength(assistantsBefore)
+    const surface = harness.surface()
+    expect(surface).not.toContain(anchorSeq)
+    expect(surface).toContain(drifted.triggerTurn.finalSeq)
+    expect(surface).toContain(drifted.thirdBodySeq)
   })
 
   it('reports finish-pending when a settled body still cannot record op-finish', async () => {
