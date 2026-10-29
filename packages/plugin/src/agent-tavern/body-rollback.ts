@@ -81,6 +81,9 @@ export type {
 /** Build the rollback port around injected stores, session events and logging. */
 export function createBodyWriteRollbackPort(deps: BodyWriteRollbackDeps): BodyWriteRollbackPort {
   return {
+    plan: (agentId: string, turn: number, previousMessageId: string) =>
+      planBodyRollback(deps, agentId, turn, previousMessageId),
+    apply: (plan: BodyRollbackPlan) => applyBodyRollback(deps, plan),
     prepare: (agentId: string, turn: number, previousMessageId: string) =>
       prepareBodyRollback(deps, agentId, turn, previousMessageId),
     restore: (plan: BodyRollbackPlan) => restoreBodyRollback(deps, plan),
@@ -95,7 +98,29 @@ export function createBodyWriteRollbackPort(deps: BodyWriteRollbackDeps): BodyWr
 
 /* -------------------------------- prepare ---------------------------------- */
 
+/**
+ * `prepare` = `plan` + `apply`, kept for callers that do not need the durable
+ * `op-prepare` boundary between the two steps (proposal 0022 §10).
+ */
 async function prepareBodyRollback(
+  deps: BodyWriteRollbackDeps,
+  agentId: string,
+  turn: number,
+  previousMessageId: string,
+): Promise<BodyRollbackPlan> {
+  const draft = await planBodyRollback(deps, agentId, turn, previousMessageId)
+  return applyBodyRollback(deps, draft)
+}
+
+/**
+ * Read-only half of `prepare`.
+ *
+ * Everything that can refuse the rollback happens here: binding, card, chat,
+ * floor, journal and receipt reads plus the coverage checks. The returned plan
+ * is a draft: `preparedRevision` still equals `chatRevision` and no store has
+ * been touched, so the caller can persist it before `apply` mutates anything.
+ */
+async function planBodyRollback(
   deps: BodyWriteRollbackDeps,
   agentId: string,
   turn: number,
@@ -136,42 +161,6 @@ async function prepareBodyRollback(
     deps.memoryVectors !== undefined,
   )
 
-  let appliedJournal: JournalApplyResult
-  try {
-    appliedJournal = await applyJournalWrites(deps, journal.writes, 'undo')
-  } catch (error) {
-    const compensation = await compensateJournal(deps, journal.writes, 'replay')
-    throw asJournalError(error, agentId, turn, compensation)
-  }
-  diagnostics.push(...appliedJournal.diagnostics)
-
-  let rolledBack: ReceiptRollbackResult
-  try {
-    rolledBack = await applyReceiptRollback(deps, chat, receipts, 'undo', binding)
-  } catch (error) {
-    const compensation = await compensateJournal(deps, journal.writes, 'replay')
-    throw receiptUndoError(error, agentId, turn, compensation)
-  }
-
-  let preparedRevision = snapshot.revision
-  if (rolledBack.bodyReceipts + rolledBack.settleReceipts > 0) {
-    try {
-      preparedRevision = await deps.store.saveChat(binding.character, binding.chatId, chat, snapshot.revision)
-    } catch (error) {
-      const compensation = await compensateJournal(deps, journal.writes, 'replay')
-      const code: BodyRollbackErrorCode = compensation.ok
-        ? error instanceof ChatRevisionConflictError
-          ? 'body-rollback-conflict'
-          : 'body-rollback-save-failed'
-        : 'body-rollback-partial'
-      throw new BodyRollbackError(
-        code,
-        `body rollback for session '${agentId}' turn ${turn} could not save the rolled-back chat: ${errorMessage(error)}${compensation.note}`,
-        { stage: 'chat-save', sessionId: agentId, turn, compensated: compensation.ok, cause: error },
-      )
-    }
-  }
-
   const plan: BodyRollbackPlan = {
     sessionId: agentId,
     turn,
@@ -180,32 +169,110 @@ async function prepareBodyRollback(
     floorIndex,
     bodyText,
     chatRevision: snapshot.revision,
-    preparedRevision,
+    // The draft has not rolled anything back yet.
+    preparedRevision: snapshot.revision,
     journal: journal.writes,
     mvuReceipts: structuredClone(receipts),
     diagnostics,
     preparedAt: new Date().toISOString(),
   }
-  log(deps.logger, 'info', 'dsh-soulmojito body rollback: prepared', {
+  log(deps.logger, 'info', 'dsh-soulmojito body rollback: planned', {
     sessionId: agentId,
     turn,
     previousMessageId,
     floorIndex,
     journalWrites: plan.journal.length,
     mvuReceipts: plan.mvuReceipts.length,
-    bodyReceipts: rolledBack.bodyReceipts,
-    settleReceipts: rolledBack.settleReceipts,
     chatRevision: plan.chatRevision,
-    preparedRevision: plan.preparedRevision,
   })
   return plan
+}
+
+/**
+ * Mutating half of `prepare`.
+ *
+ * The plan must be applied to the chat revision it was built from: a foreign
+ * save between `plan` and `apply` means the journal, receipts and chat can no
+ * longer be rolled back as one unit, so this refuses before touching a store.
+ */
+async function applyBodyRollback(deps: BodyWriteRollbackDeps, plan: BodyRollbackPlan): Promise<BodyRollbackPlan> {
+  requirePlan(plan, 'apply')
+  const snapshot = await readPlanChatSnapshot(deps.store, plan, 'apply')
+  if (snapshot.revision !== plan.chatRevision) {
+    throw new BodyRollbackError(
+      'body-rollback-conflict',
+      `body rollback apply for session '${plan.sessionId}' turn ${plan.turn} refused: chat '${plan.binding.chatId}' of '${plan.binding.character}' is at revision '${snapshot.revision}', but the plan was built at '${plan.chatRevision}'`,
+      { stage: 'chat-save', sessionId: plan.sessionId, turn: plan.turn },
+    )
+  }
+  const chat = snapshot.chat
+
+  let appliedJournal: JournalApplyResult
+  try {
+    appliedJournal = await applyJournalWrites(deps, plan.journal, 'undo')
+  } catch (error) {
+    const compensation = await compensateJournal(deps, plan.journal, 'replay')
+    throw asJournalError(error, plan.sessionId, plan.turn, compensation)
+  }
+
+  let rolledBack: ReceiptRollbackResult
+  try {
+    rolledBack = await applyReceiptRollback(deps, chat, plan.mvuReceipts, 'undo', plan.binding)
+  } catch (error) {
+    const compensation = await compensateJournal(deps, plan.journal, 'replay')
+    throw receiptUndoError(error, plan.sessionId, plan.turn, compensation)
+  }
+
+  let preparedRevision = snapshot.revision
+  if (rolledBack.bodyReceipts + rolledBack.settleReceipts > 0) {
+    try {
+      preparedRevision = await deps.store.saveChat(plan.binding.character, plan.binding.chatId, chat, snapshot.revision)
+    } catch (error) {
+      const compensation = await compensateJournal(deps, plan.journal, 'replay')
+      const code: BodyRollbackErrorCode = compensation.ok
+        ? error instanceof ChatRevisionConflictError
+          ? 'body-rollback-conflict'
+          : 'body-rollback-save-failed'
+        : 'body-rollback-partial'
+      throw new BodyRollbackError(
+        code,
+        `body rollback for session '${plan.sessionId}' turn ${plan.turn} could not save the rolled-back chat: ${errorMessage(error)}${compensation.note}`,
+        {
+          stage: 'chat-save',
+          sessionId: plan.sessionId,
+          turn: plan.turn,
+          compensated: compensation.ok,
+          cause: error,
+        },
+      )
+    }
+  }
+
+  const applied: BodyRollbackPlan = {
+    ...plan,
+    preparedRevision,
+    diagnostics: [...plan.diagnostics, ...appliedJournal.diagnostics],
+  }
+  log(deps.logger, 'info', 'dsh-soulmojito body rollback: prepared', {
+    sessionId: plan.sessionId,
+    turn: plan.turn,
+    previousMessageId: plan.previousMessageId,
+    floorIndex: plan.floorIndex,
+    journalWrites: applied.journal.length,
+    mvuReceipts: applied.mvuReceipts.length,
+    bodyReceipts: rolledBack.bodyReceipts,
+    settleReceipts: rolledBack.settleReceipts,
+    chatRevision: applied.chatRevision,
+    preparedRevision: applied.preparedRevision,
+  })
+  return applied
 }
 
 /* --------------------------------- restore --------------------------------- */
 
 async function restoreBodyRollback(deps: BodyWriteRollbackDeps, plan: BodyRollbackPlan): Promise<void> {
-  requirePlan(plan)
-  const snapshot = await readPlanChatSnapshot(deps.store, plan)
+  requirePlan(plan, 'restore')
+  const snapshot = await readPlanChatSnapshot(deps.store, plan, 'restore')
   const chat = snapshot.chat
 
   let appliedJournal: JournalApplyResult
@@ -360,6 +427,7 @@ async function readChatSnapshot(
 async function readPlanChatSnapshot(
   store: BodyRollbackStore,
   plan: BodyRollbackPlan,
+  operation: 'apply' | 'restore',
 ): Promise<{ chat: ChatLogIR; revision: string }> {
   let snapshot: { chat: ChatLogIR; revision: string } | undefined
   try {
@@ -367,15 +435,15 @@ async function readPlanChatSnapshot(
   } catch (error) {
     throw new BodyRollbackError(
       'body-rollback-failed',
-      `body rollback restore cannot read chat '${plan.binding.chatId}' of '${plan.binding.character}': ${errorMessage(error)}`,
-      { stage: 'restore', sessionId: plan.sessionId, turn: plan.turn, cause: error },
+      `body rollback ${operation} cannot read chat '${plan.binding.chatId}' of '${plan.binding.character}': ${errorMessage(error)}`,
+      { stage: operation === 'restore' ? 'restore' : 'prepare', sessionId: plan.sessionId, turn: plan.turn, cause: error },
     )
   }
   if (snapshot === undefined) {
     throw new BodyRollbackError(
       'body-rollback-failed',
-      `body rollback restore chat '${plan.binding.chatId}' of '${plan.binding.character}' does not exist`,
-      { stage: 'restore', sessionId: plan.sessionId, turn: plan.turn },
+      `body rollback ${operation} chat '${plan.binding.chatId}' of '${plan.binding.character}' does not exist`,
+      { stage: operation === 'restore' ? 'restore' : 'prepare', sessionId: plan.sessionId, turn: plan.turn },
     )
   }
   return snapshot
@@ -412,24 +480,24 @@ function throwUnsafe(
 
 /* ------------------------------- validation -------------------------------- */
 
-function requirePlan(plan: BodyRollbackPlan): void {
+function requirePlan(plan: BodyRollbackPlan, operation: 'apply' | 'restore'): void {
   const value: unknown = plan
-  if (!isRecord(value)) throw invalidPlan('plan must be an object')
-  if (!isNonEmptyString(value['sessionId'])) throw invalidPlan('plan.sessionId must be a non-empty string')
-  if (!isNonNegativeInteger(value['turn'])) throw invalidPlan('plan.turn must be a non-negative safe integer')
-  if (!isNonEmptyString(value['previousMessageId'])) throw invalidPlan('plan.previousMessageId must be a non-empty string')
-  if (!Array.isArray(value['journal'])) throw invalidPlan('plan.journal must be an array')
-  if (!Array.isArray(value['mvuReceipts'])) throw invalidPlan('plan.mvuReceipts must be an array')
+  if (!isRecord(value)) throw invalidPlan(operation, 'plan must be an object')
+  if (!isNonEmptyString(value['sessionId'])) throw invalidPlan(operation, 'plan.sessionId must be a non-empty string')
+  if (!isNonNegativeInteger(value['turn'])) throw invalidPlan(operation, 'plan.turn must be a non-negative safe integer')
+  if (!isNonEmptyString(value['previousMessageId'])) throw invalidPlan(operation, 'plan.previousMessageId must be a non-empty string')
+  if (!Array.isArray(value['journal'])) throw invalidPlan(operation, 'plan.journal must be an array')
+  if (!Array.isArray(value['mvuReceipts'])) throw invalidPlan(operation, 'plan.mvuReceipts must be an array')
   const binding = value['binding']
   if (!isRecord(binding)
     || !isNonEmptyString(binding['character'])
     || !isNonEmptyString(binding['chatId'])) {
-    throw invalidPlan('plan.binding must carry character and chatId')
+    throw invalidPlan(operation, 'plan.binding must carry character and chatId')
   }
 }
 
-function invalidPlan(detail: string): BodyRollbackError {
-  return new BodyRollbackError('invalid-arguments', `body rollback restore rejected: ${detail}`, {
-    stage: 'restore',
+function invalidPlan(operation: 'apply' | 'restore', detail: string): BodyRollbackError {
+  return new BodyRollbackError('invalid-arguments', `body rollback ${operation} rejected: ${detail}`, {
+    stage: operation === 'restore' ? 'restore' : 'prepare',
   })
 }

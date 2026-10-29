@@ -16,6 +16,7 @@
 import { randomUUID } from 'node:crypto'
 import { BODY_EVENT_TYPE, type BodyEventData } from './body.js'
 import { BodyRollbackError, type BodyRollbackPlan } from './body-rollback.js'
+import { appendPrepareRecovered, appendPreparedRollback, foldPreparedOperations, type PendingBodyPrepare } from './body-rollback-prepare.js'
 import {
   BODY_TEXT_MAX_LENGTH,
   appendBodyEvent,
@@ -39,6 +40,7 @@ import {
   withBodyLock,
   type ActiveBodyOperation,
   type BodyRuntimeDeps,
+  type BodyRuntimeFailure,
   type BodyRuntimeState,
   type BodySettledEvent,
   type EditBodyRequest,
@@ -78,6 +80,8 @@ import {
 
 export { BODY_EVENT_TYPE }
 export type { BodyEventData }
+export { BODY_PREPARE_EVENT_TYPE } from './body-rollback-prepare.js'
+export type { BodyPrepareEventData, PendingBodyPrepare } from './body-rollback-prepare.js'
 export {
   BODY_TEXT_MAX_LENGTH,
   BODY_WRITE_TOOL_DENY,
@@ -120,11 +124,19 @@ export interface StartRegenerateResult {
 /**
  * Start a regeneration operation.
  *
- * The write rollback plan is prepared before any body record is written: a
- * refused plan leaves the old anchor visible and produces no `op-start`. The
- * previous anchor deliberately stays on the model surface while the new turn
- * runs, so a failed regeneration has nothing to add back: the old body never
- * left. Successful settlement hides it together with the new turn's
+ * The write rollback goes through three durable steps before the trigger turn
+ * exists (proposal 0022 §10):
+ *
+ * 1. `plan` reads the old turn and returns a draft without touching a store.
+ * 2. `op-prepare` persists that draft as a log-only plugin record.
+ * 3. `apply` rolls the old writes back, then `op-start` carries the final plan.
+ *
+ * A crash between 2 and 3 is recoverable from the log alone. Ports without
+ * `plan`/`apply` keep the legacy single-call `prepare`.
+ *
+ * The previous anchor deliberately stays on the model surface while the new
+ * turn runs, so a failed regeneration has nothing to add back: the old body
+ * never left. Successful settlement hides it together with the new turn's
  * trigger/process nodes (see `finalizeTurnStopping`).
  */
 export async function startRegenerate(
@@ -148,11 +160,6 @@ export async function startRegenerate(
     const previousIndex = existingLedger?.selectedIndex ?? 0
     const deny = normalizeDenyTools(request.writeToolDeny)
 
-    // Proposal 0022 §5/§10: prepare the old turn's write rollback before the
-    // anchor is hidden or the trigger turn starts. A prepare failure is a
-    // fail-closed `body-state-unsafe` with zero body records written.
-    const rollbackPlan = await prepareRegenerateRollback(deps, agentId, events, target.seq, request.expectedAnchorId)
-
     const opId = `body-op-${randomUUID()}`
     const triggerMessageId = `body-trigger-${opId}`
     const active: ActiveBodyOperation = {
@@ -165,11 +172,24 @@ export async function startRegenerate(
       triggerMessageId,
       release: () => {},
       ...(request.feedback === undefined ? {} : { feedback: request.feedback }),
-      ...(rollbackPlan === undefined ? {} : { rollbackPlan }),
     }
 
+    const port = deps.writeRollback
+    let prepareRecordWritten = false
     let opStarted = false
+    let drafted: BodyRollbackPlan | undefined
     try {
+      if (port !== undefined && typeof port.plan === 'function' && typeof port.apply === 'function') {
+        drafted = await planRegenerateRollback(deps, agentId, events, target.seq, request.expectedAnchorId)
+        // The draft is durable before `apply` mutates a store, so a restart can
+        // replay it without any process-local state.
+        appendPreparedRollback(deps, opId, request.groupId, drafted)
+        prepareRecordWritten = true
+        active.rollbackPlan = await applyRegenerateRollback(deps, drafted)
+      } else {
+        active.rollbackPlan = await prepareRegenerateRollback(deps, agentId, events, target.seq, request.expectedAnchorId)
+      }
+
       const startEvent = appendBodyStartEvent(deps, {
         op: 'op-start',
         opId,
@@ -177,10 +197,10 @@ export async function startRegenerate(
         kind: 'regenerate',
         previousAnchorId: request.expectedAnchorId,
         previousIndex,
-        // Proposal 0022 §10.4: the prepared plan is durable, so a restart can
+        // Proposal 0022 §10.4: the applied plan is durable, so a restart can
         // replay it without this process's `pendingByAgent` entry. The write
         // check refuses anything JSONL cannot keep before the record is written.
-        ...(rollbackPlan === undefined ? {} : { rollbackPlan: durableRollbackPlan(rollbackPlan) }),
+        ...(active.rollbackPlan === undefined ? {} : { rollbackPlan: durableRollbackPlan(active.rollbackPlan) }),
       })
       opStarted = true
       active.startSeq = eventSeqOf(startEvent) ?? nextEventSeq(events)
@@ -207,15 +227,28 @@ export async function startRegenerate(
     } catch (error) {
       const reason = `body regenerate ${opId} failed to start: ${errorMessage(error)}`
 
-      // Proposal 0022 §10.3: prepare already rolled the old writes back. If
-      // any later start step fails, put those writes back before surfacing the
-      // error so the store never stays rolled back while the old body remains.
+      // Proposal 0022 §10.3: the plan is already rolled back once `apply` ran.
+      // Any later start failure puts those writes back before surfacing the
+      // error. A draft plan that never reached `apply` is restored too: replay
+      // is a no-op over the still-current journal, but heals a partial apply.
       let compensationError: unknown
-      if (rollbackPlan !== undefined && deps.writeRollback !== undefined) {
+      const planToRestore = prepareRecordWritten ? active.rollbackPlan ?? drafted : active.rollbackPlan
+      if (planToRestore !== undefined && port !== undefined) {
         try {
-          await deps.writeRollback.restore(rollbackPlan)
+          await port.restore(planToRestore)
         } catch (restoreError) {
           compensationError = restoreError
+        }
+      }
+
+      // `op-start` consumes the prepare record. When the start stopped before
+      // that record exists and the writes were put back, a recovery marker
+      // keeps the next startup from replaying an already-restored plan.
+      if (prepareRecordWritten && !opStarted && compensationError === undefined) {
+        try {
+          appendPrepareRecovered(deps, opId, 'body regenerate start failed after op-prepare')
+        } catch (markerError) {
+          warn(deps, `body runtime: failed to record the op-prepare-recovered marker for ${opId}: ${errorMessage(markerError)}`)
         }
       }
 
@@ -325,12 +358,65 @@ export async function selectBodyCandidate(
 }
 
 /**
- * Prepare the old turn's write rollback.
+ * Read-only plan step of a regeneration (proposal 0022 §10).
  *
  * The turn comes from the old anchor itself (its `data.turn`, or the turn that
  * was open/closed at that sequence), never from the trigger turn that is about
- * to start. Any prepare failure is reported as `body-state-unsafe` so the
- * caller refuses before writing an `op-start` or hiding the anchor.
+ * to start. Any failure is reported as `body-state-unsafe`, so the caller
+ * refuses before `op-prepare` or `op-start` exists.
+ */
+async function planRegenerateRollback(
+  deps: BodyRuntimeDeps,
+  agentId: string,
+  events: ReturnType<typeof eventsOf>,
+  anchorSeq: number,
+  previousAnchorId: string,
+): Promise<BodyRollbackPlan> {
+  const port = deps.writeRollback
+  const plan = port?.plan
+  if (port === undefined || plan === undefined) {
+    throw bodyRuntimeError(
+      'host-unsupported',
+      `body regenerate for session '${agentId}' cannot plan the write rollback: deps.writeRollback exposes no plan()`,
+    )
+  }
+  const oldTurn = requireAnchorTurn(events, agentId, anchorSeq, previousAnchorId)
+  try {
+    return await plan.call(port, agentId, oldTurn, previousAnchorId)
+  } catch (error) {
+    throw regenerationRollbackFailure(error, agentId, oldTurn, previousAnchorId, 'plan')
+  }
+}
+
+/**
+ * Mutating apply step of a regeneration.
+ *
+ * `apply` owns the journal undo, the receipt undo and the chat CAS save, so a
+ * failure here still runs inside the port's own compensation. The caller
+ * restores the draft plan afterwards: replay is a no-op when the compensation
+ * completed and heals a partial rollback when it did not.
+ */
+async function applyRegenerateRollback(deps: BodyRuntimeDeps, plan: BodyRollbackPlan): Promise<BodyRollbackPlan> {
+  const port = deps.writeRollback
+  const apply = port?.apply
+  if (port === undefined || apply === undefined) {
+    throw bodyRuntimeError(
+      'host-unsupported',
+      `body regenerate for session '${plan.sessionId}' cannot apply the write rollback: deps.writeRollback exposes no apply()`,
+    )
+  }
+  try {
+    return await apply.call(port, plan)
+  } catch (error) {
+    throw regenerationRollbackFailure(error, plan.sessionId, plan.turn, plan.previousMessageId, 'apply')
+  }
+}
+
+/**
+ * Prepare the old turn's write rollback.
+ *
+ * Compatibility path for a port that exposes only `prepare` (plan + apply in
+ * one call). The plan is applied immediately, exactly like the pre-split build.
  */
 async function prepareRegenerateRollback(
   deps: BodyRuntimeDeps,
@@ -341,6 +427,20 @@ async function prepareRegenerateRollback(
 ): Promise<BodyRollbackPlan | undefined> {
   const port = deps.writeRollback
   if (port === undefined) return undefined
+  const oldTurn = requireAnchorTurn(events, agentId, anchorSeq, previousAnchorId)
+  try {
+    return await port.prepare(agentId, oldTurn, previousAnchorId)
+  } catch (error) {
+    throw regenerationRollbackFailure(error, agentId, oldTurn, previousAnchorId, 'prepare')
+  }
+}
+
+function requireAnchorTurn(
+  events: ReturnType<typeof eventsOf>,
+  agentId: string,
+  anchorSeq: number,
+  previousAnchorId: string,
+): number {
   const oldTurn = turnOfEventSeq(events, anchorSeq)
   if (oldTurn === undefined) {
     throw bodyRuntimeError(
@@ -348,18 +448,37 @@ async function prepareRegenerateRollback(
       `body regenerate for session '${agentId}' refused: cannot derive the turn of anchor '${previousAnchorId}' from the session log`,
     )
   }
-  try {
-    return await port.prepare(agentId, oldTurn, previousAnchorId)
-  } catch (error) {
-    const detail = error instanceof BodyRollbackError ? error.detail : undefined
-    const failure = bodyRuntimeError(
-      'body-state-unsafe',
-      `body regenerate for session '${agentId}' refused: cannot prepare the write rollback of turn ${oldTurn} for anchor '${previousAnchorId}': ${errorMessage(error)}`,
-      detail,
-    )
-    failure.cause = error
-    throw failure
-  }
+  return oldTurn
+}
+
+function regenerationRollbackFailure(
+  error: unknown,
+  agentId: string,
+  turn: number,
+  previousAnchorId: string,
+  step: 'plan' | 'apply' | 'prepare',
+): BodyRuntimeFailure {
+  const detail = error instanceof BodyRollbackError ? error.detail : undefined
+  const failure = bodyRuntimeError(
+    'body-state-unsafe',
+    `body regenerate for session '${agentId}' refused: cannot ${step} the write rollback of turn ${turn} for anchor '${previousAnchorId}': ${errorMessage(error)}`,
+    detail,
+  )
+  failure.cause = error
+  return failure
+}
+
+/**
+ * Fold the durable `op-prepare` records a restart still has to restore
+ * (proposal 0022 §10).
+ *
+ * A prepare with a matching `op-start` or `op-finish` is ignored: the runtime
+ * applied it and the plan already travels with the operation. Only an
+ * unconsumed prepare means "the old writes may be rolled back without a durable
+ * op", which startup recovery resolves with `restore(plan)`.
+ */
+export function foldPendingPrepares(events: readonly unknown[]): readonly PendingBodyPrepare[] {
+  return foldPreparedOperations(parseEventList(events, 'foldPendingPrepares'))
 }
 
 /**
@@ -373,6 +492,10 @@ async function prepareRegenerateRollback(
  */
 export function foldPendingOps(events: readonly unknown[]): readonly PendingBodyOperation[] {
   const parsed = parseEventList(events, 'foldPendingOps')
+  // `op-prepare` records are not operations, but a malformed durable plan must
+  // fail the whole fold instead of being silently skipped by recovery.
+  foldPreparedOperations(parsed)
+
   const pending = new Map<string, PendingBodyOperation>()
   const finished = new Set<string>()
   for (const event of parsed) {

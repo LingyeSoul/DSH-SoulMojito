@@ -26,12 +26,14 @@ import {
 } from '../src/agent-tavern/body-rollback.js'
 import {
   BODY_EVENT_TYPE,
+  BODY_PREPARE_EVENT_TYPE,
   BODY_WRITE_TOOL_DENY,
   applyBodyEdit,
   bodyRuntimeError,
   finalizeRecoveredOperation,
   finalizeTurnStopping,
   foldPendingOps,
+  foldPendingPrepares,
   restoreBodyAfterFailure,
   selectBodyCandidate,
   startRegenerate,
@@ -2622,5 +2624,480 @@ describe('AgentTavern durable body rollback plan', () => {
     expect(bodyEventsOf(harness.events)).toHaveLength(0)
     expect(harness.followups).toHaveLength(0)
     expect(harness.surface()).toContain(anchorSeq)
+  })
+})
+
+/* ------------- durable op-prepare boundary (proposal 0022 §10) ------------ */
+
+/** Store state the split port double rolls back and restores. */
+interface SplitStoreState {
+  readonly memory: readonly string[]
+  readonly variables: Readonly<Record<string, number>>
+  readonly chatVariables: Readonly<Record<string, number>>
+}
+
+/** State after the old turn wrote; `plan` leaves it untouched. */
+const OLD_TURN_WRITES: SplitStoreState = {
+  memory: ['old turn memory'],
+  variables: { favor: 2 },
+  chatVariables: { hp: 20 },
+}
+
+/** State after `apply` rolled the old turn back. */
+const ROLLED_BACK_WRITES: SplitStoreState = {
+  memory: [],
+  variables: { favor: 1 },
+  chatVariables: { hp: 10 },
+}
+
+interface SplitRollbackScript {
+  readonly plan?: (agentId: string, turn: number, previousMessageId: string) => Promise<BodyRollbackPlan> | BodyRollbackPlan
+  readonly apply?: (plan: BodyRollbackPlan) => Promise<BodyRollbackPlan> | BodyRollbackPlan
+  readonly restore?: (plan: BodyRollbackPlan) => Promise<void>
+}
+
+interface SplitRollbackHarness {
+  readonly port: BodyRuntimeRollbackPort
+  readonly calls: string[]
+  readonly restored: BodyRollbackPlan[]
+  readonly state: { current: SplitStoreState }
+}
+
+/**
+ * Capability-detected port double: `plan` is read-only, `apply` rolls the
+ * simulated stores back, `restore` puts them back. `prepare` throws, so a test
+ * that accidentally takes the legacy path fails loudly.
+ */
+function createSplitRollbackPort(script: SplitRollbackScript): SplitRollbackHarness {
+  const calls: string[] = []
+  const restored: BodyRollbackPlan[] = []
+  const state = { current: OLD_TURN_WRITES }
+  const port: BodyRuntimeRollbackPort = {
+    plan: async (agentId: string, turn: number, previousMessageId: string) => {
+      calls.push(`plan:${agentId}:${turn}:${previousMessageId}`)
+      return script.plan === undefined
+        ? rollbackPlan(agentId, turn, previousMessageId)
+        : await script.plan(agentId, turn, previousMessageId)
+    },
+    apply: async (plan: BodyRollbackPlan) => {
+      calls.push(`apply:${plan.turn}`)
+      if (script.apply !== undefined) {
+        const applied = await script.apply(plan)
+        state.current = ROLLED_BACK_WRITES
+        return applied
+      }
+      state.current = ROLLED_BACK_WRITES
+      return { ...plan, preparedRevision: `${plan.chatRevision}-applied` }
+    },
+    prepare: async (agentId: string, turn: number, previousMessageId: string) => {
+      calls.push(`prepare:${agentId}:${turn}:${previousMessageId}`)
+      throw new Error('split rollback port: prepare must not run when plan/apply are available')
+    },
+    restore: async (plan: BodyRollbackPlan) => {
+      calls.push(`restore:${plan.turn}`)
+      if (script.restore !== undefined) await script.restore(plan)
+      restored.push(plan)
+      state.current = OLD_TURN_WRITES
+    },
+    commit: async (plan: BodyRollbackPlan) => {
+      calls.push(`commit:${plan.turn}`)
+    },
+    rollbackTurnWrites: async (agentId: string, turn: number) => {
+      calls.push(`rollback-turn:${turn}`)
+      return newTurnRollback(agentId, turn)
+    },
+  }
+  return { port, calls, restored, state }
+}
+
+function splitHarness(split: SplitRollbackHarness): Harness {
+  return createHarness({
+    status: 'idle',
+    phaseKind: 'idle',
+    lastTurn: 0,
+    followupError: undefined,
+    restrictError: undefined,
+    appendRecord: true,
+    rollback: split.port,
+  })
+}
+
+function prepareEventsOf(events: readonly FakeEvent[]): FakeEvent[] {
+  return events.filter((event) => event.type === BODY_PREPARE_EVENT_TYPE)
+}
+
+function prepareReportEventsOf(events: readonly FakeEvent[]): FakeEvent[] {
+  return prepareEventsOf(events).filter((event) => event.data.op === 'op-prepare-recovered')
+}
+
+function manualPrepare(harness: Harness, opId: string, plan: BodyRollbackPlan): void {
+  harness.session.append(BODY_PREPARE_EVENT_TYPE, {
+    op: 'op-prepare',
+    opId,
+    groupId: 'anchor-1',
+    plan,
+  })
+}
+
+describe('AgentTavern durable op-prepare', () => {
+  it('persists the draft plan before apply and carries the applied plan in op-start', async () => {
+    const split = createSplitRollbackPort({})
+    const harness = splitHarness(split)
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+
+    const started = await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+
+    // Plan (read-only) → op-prepare → apply → op-start.
+    expect(split.calls).toEqual([`plan:${harness.agentId}:1:anchor-1`, 'apply:1'])
+    expect(split.state.current).toEqual(ROLLED_BACK_WRITES)
+    const prepares = prepareEventsOf(harness.events)
+    expect(prepares).toHaveLength(1)
+    expect(prepares[0]?.data).toMatchObject({
+      op: 'op-prepare',
+      opId: started.opId,
+      groupId: 'anchor-1',
+    })
+    expect(prepares[0]?.data.plan).toEqual(rollbackPlan(harness.agentId, 1, 'anchor-1'))
+    const opStart = bodyEvent(harness.events, 'op-start')
+    expect(opStart?.data.rollbackPlan).toEqual({
+      ...rollbackPlan(harness.agentId, 1, 'anchor-1'),
+      preparedRevision: 'rev-1-applied',
+    })
+    if (prepares[0] === undefined || opStart === undefined) throw new Error('prepare/op-start records are missing')
+    expect(harness.events.indexOf(prepares[0])).toBeLessThan(harness.events.indexOf(opStart))
+    // The prepare record never enters the body ledger vocabulary.
+    expect(bodyEventsOf(harness.events).some((event) => event.data.op === 'op-prepare')).toBe(false)
+    // op-start consumes the prepare: recovery must not restore it again.
+    expect(foldPendingPrepares(harness.events)).toEqual([])
+    expect(harness.surface()).toContain(anchorSeq)
+  })
+
+  it('restores a plan whose apply never ran and records the consumption marker', async () => {
+    const split = createSplitRollbackPort({})
+    const harness = splitHarness(split)
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const draft = rollbackPlan(harness.agentId, 1, 'anchor-1')
+    manualPrepare(harness, 'body-op-crash-plan', draft)
+    const assistantsBefore = harness.events.filter((event) => event.type === 'assistant/message').length
+    const surfaceBefore = harness.surface()
+
+    const outcome = await recoverBodyOperationWith(
+      recoveryHost(),
+      harness.deps.agent,
+      async () => harness.deps,
+    )
+
+    expect(outcome).toMatchObject({ agentId: harness.agentId, status: 'restored', pending: 0 })
+    expect(split.calls).toEqual(['restore:1'])
+    expect(split.restored).toEqual([draft])
+    // Replaying a plan that was never applied leaves the old writes untouched.
+    expect(split.state.current).toEqual(OLD_TURN_WRITES)
+    expect(harness.surface()).toEqual(surfaceBefore)
+    expect(harness.surface()).toContain(anchorSeq)
+    expect(harness.events.filter((event) => event.type === 'assistant/message')).toHaveLength(assistantsBefore)
+    expect(bodyEventsOf(harness.events)).toHaveLength(0)
+    const markers = prepareReportEventsOf(harness.events)
+    expect(markers).toHaveLength(1)
+    expect(markers[0]?.data).toMatchObject({ op: 'op-prepare-recovered', opId: 'body-op-crash-plan', reason: 'prepare-interrupted' })
+    expect(foldPendingPrepares(harness.events)).toEqual([])
+  })
+
+  it('puts the old memory, variables and chat variables back when apply ran before the crash', async () => {
+    const split = createSplitRollbackPort({})
+    const harness = splitHarness(split)
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const draft = rollbackPlan(harness.agentId, 1, 'anchor-1')
+    manualPrepare(harness, 'body-op-crash-apply', draft)
+    // `apply` committed the rollback, then the process died before op-start.
+    split.state.current = ROLLED_BACK_WRITES
+    const assistantsBefore = harness.events.filter((event) => event.type === 'assistant/message').length
+    const surfaceBefore = harness.surface()
+
+    const outcome = await recoverBodyOperationWith(
+      recoveryHost(),
+      harness.deps.agent,
+      async () => harness.deps,
+    )
+
+    expect(outcome).toMatchObject({ agentId: harness.agentId, status: 'restored', pending: 0 })
+    expect(split.calls).toEqual(['restore:1'])
+    expect(split.restored).toEqual([draft])
+    expect(split.state.current.memory).toEqual(['old turn memory'])
+    expect(split.state.current.variables).toEqual({ favor: 2 })
+    expect(split.state.current.chatVariables).toEqual({ hp: 20 })
+    expect(harness.surface()).toEqual(surfaceBefore)
+    expect(harness.surface()).toContain(anchorSeq)
+    expect(harness.events.filter((event) => event.type === 'assistant/message')).toHaveLength(assistantsBefore)
+    expect(bodyEventsOf(harness.events)).toHaveLength(0)
+    expect(prepareReportEventsOf(harness.events)).toHaveLength(1)
+    expect(foldPendingPrepares(harness.events)).toEqual([])
+  })
+
+  it('ignores a prepare consumed by op-start and op-finish', async () => {
+    const split = createSplitRollbackPort({})
+    const harness = splitHarness(split)
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    manualPrepare(harness, 'body-op-consumed', rollbackPlan(harness.agentId, 1, 'anchor-1'))
+    harness.session.append(BODY_EVENT_TYPE, {
+      op: 'op-start',
+      opId: 'body-op-consumed',
+      groupId: 'anchor-1',
+      kind: 'regenerate',
+      previousAnchorId: 'anchor-1',
+      previousIndex: 0,
+    })
+    harness.session.append(BODY_EVENT_TYPE, {
+      op: 'op-finish',
+      opId: 'body-op-consumed',
+      result: 'ok',
+      anchorId: 'anchor-1',
+    })
+    const bodyEventsBefore = bodyEventsOf(harness.events).length
+
+    expect(foldPendingPrepares(harness.events)).toEqual([])
+    const outcome = await recoverBodyOperationWith(
+      recoveryHost(),
+      harness.deps.agent,
+      async () => harness.deps,
+    )
+
+    expect(outcome).toMatchObject({ agentId: harness.agentId, status: 'clean', pending: 0 })
+    expect(split.calls).toEqual([])
+    expect(split.restored).toEqual([])
+    expect(bodyEventsOf(harness.events)).toHaveLength(bodyEventsBefore)
+    expect(prepareEventsOf(harness.events)).toHaveLength(1)
+  })
+
+  it('restores a pending operation once when its prepare was consumed by op-start', async () => {
+    const split = createSplitRollbackPort({})
+    const harness = splitHarness(split)
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+    const trigger = firstFollowup(harness)
+    const failedTurn = appendTriggerTurn(harness, 2, trigger, undefined, false)
+    closeTurn(harness, 2)
+    const assistantsBefore = harness.events.filter((event) => event.type === 'assistant/message').length
+
+    // Simulated process restart: only the durable log survives.
+    pendingByAgent.clear()
+    const outcome = await recoverBodyOperationWith(
+      recoveryHost(),
+      harness.deps.agent,
+      async () => harness.deps,
+    )
+
+    expect(outcome).toMatchObject({ agentId: harness.agentId, status: 'restored', pending: 1 })
+    // The body operation restores its plan once; the prepare record consumed by
+    // op-start must not trigger a second restore or a recovery marker.
+    expect(split.calls).toEqual([
+      `plan:${harness.agentId}:1:anchor-1`,
+      'apply:1',
+      'rollback-turn:2',
+      'restore:1',
+    ])
+    expect(prepareReportEventsOf(harness.events)).toHaveLength(0)
+    expect(foldPendingPrepares(harness.events)).toEqual([])
+    expect(split.state.current).toEqual(OLD_TURN_WRITES)
+    expect(harness.events.filter((event) => event.type === 'assistant/message')).toHaveLength(assistantsBefore)
+    expect(bodyEvent(harness.events, 'restore')).toBeUndefined()
+    const surface = harness.surface()
+    expect(surface).toContain(anchorSeq)
+    expect(surface).not.toContain(failedTurn.triggerSeq)
+    expect(surface).not.toContain(failedTurn.processSeq)
+    expect(surface).not.toContain(failedTurn.toolResultSeq)
+  })
+
+  it('keeps the legacy prepare path and writes no op-prepare for an older port', async () => {
+    const calls: string[] = []
+    const harness = createHarness({
+      status: 'idle',
+      phaseKind: 'idle',
+      lastTurn: 0,
+      followupError: undefined,
+      restrictError: undefined,
+      appendRecord: true,
+      rollback: createRollbackPort({}, calls),
+    })
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+
+    await startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })
+
+    expect(calls).toEqual([`prepare:${harness.agentId}:1:anchor-1`])
+    expect(prepareEventsOf(harness.events)).toHaveLength(0)
+    expect(foldPendingPrepares(harness.events)).toEqual([])
+    expect(bodyEvent(harness.events, 'op-start')?.data.rollbackPlan)
+      .toEqual(rollbackPlan(harness.agentId, 1, 'anchor-1'))
+  })
+
+  it('rejects a malformed op-prepare record as invalid-event', async () => {
+    const malformed = {
+      op: 'op-prepare',
+      opId: 'op-bad',
+      groupId: 'g-1',
+      plan: { sessionId: 'agent-legacy', turn: 1 },
+    }
+    const standalone = [{ type: BODY_PREPARE_EVENT_TYPE, seq: 9, data: malformed }]
+    let thrown: unknown
+    try {
+      foldPendingOps(standalone)
+    } catch (error) {
+      thrown = error
+    }
+    const failure = bodyFailureOf(thrown)
+    expect(failure.code).toBe('invalid-event')
+    expect(failure.message).toContain('seq 9')
+    expect(failure.message).toContain('rollbackPlan.previousMessageId')
+
+    const unknownOp = [{ type: BODY_PREPARE_EVENT_TYPE, seq: 4, data: { op: 'op-prepared', opId: 'op-bad' } }]
+    expect(() => foldPendingPrepares(unknownOp)).toThrowError(/seq 4/)
+
+    const harness = splitHarness(createSplitRollbackPort({}))
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const badSeq = harness.events.length
+    harness.session.append(BODY_PREPARE_EVENT_TYPE, malformed)
+    const reported: Record<string, unknown>[] = []
+    const host: BodyRecoveryHost = {
+      ...recoveryHost(),
+      logger: {
+        error: (...args: unknown[]) => {
+          const fields = args[1]
+          if (isRecord(fields)) reported.push(fields)
+        },
+      },
+    }
+
+    const outcome = await recoverBodyOperationWith(host, harness.deps.agent, async () => harness.deps)
+
+    expect(outcome).toMatchObject({ agentId: harness.agentId, status: 'failed', pending: 0, reason: 'invalid-event' })
+    expect(prepareReportEventsOf(harness.events)).toHaveLength(0)
+    const foldReport = reported.find((fields) => fields.code === 'invalid-event')
+    if (foldReport === undefined) throw new Error('recovery did not report the invalid prepare')
+    expect(String(foldReport.error)).toContain(`seq ${badSeq}`)
+    expect(String(foldReport.error)).toContain('rollbackPlan.previousMessageId')
+  })
+
+  it('restores and consumes the prepare when op-start cannot be appended', async () => {
+    const split = createSplitRollbackPort({})
+    const harness = splitHarness(split)
+    const appendRecord = harness.deps.appendRecord
+    if (appendRecord === undefined) throw new Error('fake harness: appendRecord is missing')
+    harness.deps.appendRecord = (session, type, data) => {
+      if (type === BODY_EVENT_TYPE && isRecord(data) && data.op === 'op-start') throw new Error('op-start append failed')
+      return appendRecord(session, type, data)
+    }
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+
+    await expect(startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })).rejects.toMatchObject({ code: 'operation-failed' })
+
+    expect(split.calls).toEqual([`plan:${harness.agentId}:1:anchor-1`, 'apply:1', 'restore:1'])
+    expect(split.state.current).toEqual(OLD_TURN_WRITES)
+    expect(bodyEventsOf(harness.events)).toHaveLength(0)
+    expect(prepareReportEventsOf(harness.events)).toHaveLength(1)
+    expect(foldPendingPrepares(harness.events)).toEqual([])
+    expect(harness.followups).toHaveLength(0)
+    expect(harness.surface()).toContain(anchorSeq)
+  })
+
+  it('restores the draft and consumes the prepare when apply fails', async () => {
+    const split = createSplitRollbackPort({
+      apply: async () => { throw new Error('apply store down') },
+    })
+    const harness = splitHarness(split)
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+
+    await expect(startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })).rejects.toMatchObject({
+      code: 'body-state-unsafe',
+      message: expect.stringContaining('apply store down'),
+    })
+
+    expect(split.calls).toEqual([`plan:${harness.agentId}:1:anchor-1`, 'apply:1', 'restore:1'])
+    expect(split.restored).toEqual([rollbackPlan(harness.agentId, 1, 'anchor-1')])
+    expect(bodyEventsOf(harness.events)).toHaveLength(0)
+    expect(prepareReportEventsOf(harness.events)).toHaveLength(1)
+    expect(foldPendingPrepares(harness.events)).toEqual([])
+    expect(harness.surface()).toContain(anchorSeq)
+  })
+
+  it('refuses a non-serializable draft before op-prepare and apply', async () => {
+    const split = createSplitRollbackPort({
+      plan: (agentId, turn, previousMessageId) => ({
+        ...rollbackPlan(agentId, turn, previousMessageId),
+        bodyText: (() => 'old body') as unknown as string,
+      }),
+    })
+    const harness = splitHarness(split)
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+
+    await expect(startRegenerate(harness.deps, {
+      groupId: 'anchor-1',
+      expectedAnchorId: 'anchor-1',
+      expectedIndex: 0,
+    })).rejects.toMatchObject({
+      code: 'body-state-unsafe',
+      message: expect.stringContaining('rollbackPlan.bodyText'),
+    })
+
+    expect(split.calls).toEqual([`plan:${harness.agentId}:1:anchor-1`])
+    expect(split.state.current).toEqual(OLD_TURN_WRITES)
+    expect(prepareEventsOf(harness.events)).toHaveLength(0)
+    expect(bodyEventsOf(harness.events)).toHaveLength(0)
+    expect(harness.surface()).toContain(anchorSeq)
+  })
+
+  it('keeps a failed prepare restore pending and retries it on the next pass', async () => {
+    let failRestore = true
+    const split = createSplitRollbackPort({
+      restore: async () => {
+        if (failRestore) throw new Error('restore store down')
+      },
+    })
+    const harness = splitHarness(split)
+    seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    manualPrepare(harness, 'body-op-retry', rollbackPlan(harness.agentId, 1, 'anchor-1'))
+    split.state.current = ROLLED_BACK_WRITES
+
+    const first = await recoverBodyOperationWith(
+      recoveryHost(),
+      harness.deps.agent,
+      async () => harness.deps,
+    )
+
+    expect(first).toMatchObject({ agentId: harness.agentId, status: 'failed', pending: 0 })
+    expect(prepareReportEventsOf(harness.events)).toHaveLength(0)
+    expect(foldPendingPrepares(harness.events)).toHaveLength(1)
+    expect(split.state.current).toEqual(ROLLED_BACK_WRITES)
+
+    failRestore = false
+    const second = await recoverBodyOperationWith(
+      recoveryHost(),
+      harness.deps.agent,
+      async () => harness.deps,
+    )
+
+    expect(second).toMatchObject({ agentId: harness.agentId, status: 'restored', pending: 0 })
+    expect(split.calls).toEqual(['restore:1', 'restore:1'])
+    expect(split.state.current).toEqual(OLD_TURN_WRITES)
+    expect(prepareReportEventsOf(harness.events)).toHaveLength(1)
+    expect(foldPendingPrepares(harness.events)).toEqual([])
   })
 })

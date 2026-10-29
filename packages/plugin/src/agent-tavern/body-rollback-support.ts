@@ -290,6 +290,26 @@ export interface BodyNewTurnRollback {
 
 /** The prepare / restore / commit / new-turn rollback seam consumed by body-runtime. */
 export interface BodyWriteRollbackPort {
+  /**
+   * Read-only plan step (proposal 0022 §10).
+   *
+   * Reads the binding, card, chat, floor, journal and receipts, validates the
+   * coverage and returns a draft plan whose `preparedRevision` equals
+   * `chatRevision`. It must not mutate a store, so the caller can persist the
+   * draft before anything is rolled back.
+   *
+   * Optional: a port from an older build keeps working through `prepare`, and
+   * the runtime detects the capability instead of assuming it.
+   */
+  plan?(agentId: string, turn: number, previousMessageId: string): Promise<BodyRollbackPlan>
+  /**
+   * Mutating apply step: journal undo, receipt undo and the chat CAS save.
+   *
+   * Returns the final plan carrying `preparedRevision` and every diagnostic
+   * collected while applying. Optional on older ports; `prepare` stays the
+   * plan+apply composition for callers that do not need the durable boundary.
+   */
+  apply?(plan: BodyRollbackPlan): Promise<BodyRollbackPlan>
   prepare(agentId: string, turn: number, previousMessageId: string): Promise<BodyRollbackPlan>
   restore(plan: BodyRollbackPlan): Promise<void>
   commit(plan: BodyRollbackPlan): Promise<void>

@@ -157,7 +157,10 @@ interface BodyWriteRollbackPort {
 
 ## 10. 失败与取消
 
-1. `prepare` 成功后才触发新 turn；旧 anchor 在新 turn 期间保持可见（0021 §6.2）。
+1. `prepare` 拆成只读 `plan` 与 mutating `apply`；runtime 先 `plan`，把 draft 写入 durable
+   `op-prepare`（独立 plugin record），再 `apply`，最后写 `op-start.rollbackPlan`。
+   旧端口没有 `plan/apply` 时仍走 `prepare` 兼容路径。`prepare` 成功后才触发新 turn；
+   旧 anchor 在新 turn 期间保持可见（0021 §6.2）。
 2. 新 turn 成功：先 `commit`，写 `op-settling`，再 hide 旧 anchor，写 `op-settled`，最后
    `op-finish`。hide 之后 `op-finish` 晚失败时保留新正文，只把 `op-finish` 留给恢复重试，
    不再回滚正文或追加 assistant 副本。
@@ -172,7 +175,9 @@ interface BodyWriteRollbackPort {
    - 若恢复失败，保留 op-start 待启动恢复，不假装成功。
 4. 崩溃恢复：`op-start` 无 `op-finish` 时，`rollbackPlan` 直接随 `op-start.rollbackPlan`
    落盘；重启后 `foldPendingOps` 严格校验并重建。有 `op-settled` 时只补 `op-finish`；
-   有 `op-settling` 时按 surface/ledger 判定；无证据才按计划恢复，不依赖进程内状态。
+   有 `op-settling` 时按 surface/ledger 判定；无证据才按计划恢复。
+   若存在未消费的 `op-prepare`（apply 可能已回滚但 op-start 未落盘），启动先按 draft plan
+   `restore` 并写 `op-prepare-recovered`，不追加 assistant、不改 surface。
 
 ## 11. 开工前检查表
 

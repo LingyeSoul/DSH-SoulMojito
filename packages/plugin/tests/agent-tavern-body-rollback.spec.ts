@@ -296,6 +296,20 @@ function createPort(fixture: Fixture, options: PortOptions): BodyWriteRollbackPo
   })
 }
 
+/** Bind the optional plan/apply methods of a port for the split-path specs. */
+function splitPort(port: BodyWriteRollbackPort): {
+  readonly plan: (agentId: string, turn: number, previousMessageId: string) => Promise<BodyRollbackPlan>
+  readonly apply: (plan: BodyRollbackPlan) => Promise<BodyRollbackPlan>
+} {
+  const plan = port.plan
+  const apply = port.apply
+  if (plan === undefined || apply === undefined) throw new Error('rollback port exposes no plan/apply')
+  return {
+    plan: (agentId, turn, previousMessageId) => plan.call(port, agentId, turn, previousMessageId),
+    apply: (value) => apply.call(port, value),
+  }
+}
+
 interface VectorSyncCall {
   readonly id: string
   readonly content: string
@@ -1256,5 +1270,130 @@ describe('AgentTavern body write rollback (proposal 0022 §5)', () => {
     const plan = await port.prepare(SESSION_ID, TURN, PREVIOUS_MESSAGE_ID)
 
     expect(plan.diagnostics).toEqual([expect.objectContaining({ code: 'vector-restore-skipped' })])
+  })
+
+  /* --------------------- plan / apply durability split --------------------- */
+
+  it('plans without touching a store and applies the planned rollback afterwards', async () => {
+    const receipts = [bodyReceipt('2026-10-28T04:00:01.000Z'), settleReceipt('2026-10-28T04:00:02.000Z')]
+    const fixture = await createFixture(updateSeed(receipts))
+    await fixture.variables.set('chat', fixture.chatId, 'mvu.favor', 2)
+    const created = await putMemory(fixture, 'created by the old turn')
+    pushToolCall(fixture, 'memory_write')
+    pushToolCall(fixture, 'tavern_variable_settle')
+    pushJournal(fixture, memoryJournal('journal-write', 'memory_write', 'before', created, null))
+    pushJournal(fixture, memoryJournal('journal-write', 'memory_write', 'after', created, created))
+
+    const before = await fixture.store.getChatSnapshot(CHARACTER, fixture.chatId)
+    if (before === undefined) throw new Error('fixture chat is missing')
+    const port = createPort(fixture, {})
+    const split = splitPort(port)
+
+    const draft = await split.plan(SESSION_ID, TURN, PREVIOUS_MESSAGE_ID)
+    expect(draft).toMatchObject({
+      sessionId: SESSION_ID,
+      turn: TURN,
+      previousMessageId: PREVIOUS_MESSAGE_ID,
+      floorIndex: fixture.floorIndex,
+      chatRevision: before.revision,
+      // A draft has not rolled anything back yet.
+      preparedRevision: before.revision,
+    })
+    expect(draft.journal.map((write) => write.journalId)).toEqual(['journal-write'])
+    expect(draft.mvuReceipts).toHaveLength(2)
+    expect(draft.diagnostics.map((entry) => entry.code)).toContain('vector-restore-skipped')
+
+    // `plan` is read-only: journal, flat store, chat variables and receipts all
+    // still hold the old turn's after state.
+    expect((await fixture.memory.read(created.id, 'chat', fixture.chatId, true))?.deletedAt).toBeUndefined()
+    expect(await fixture.variables.get('chat', fixture.chatId, 'mvu.favor')).toMatchObject({ value: 2 })
+    const afterPlan = await fixture.store.getChatSnapshot(CHARACTER, fixture.chatId)
+    if (afterPlan === undefined) throw new Error('fixture chat is missing')
+    expect(afterPlan.revision).toBe(before.revision)
+    expect(afterPlan.chat.header.chat_metadata.variables).toEqual({ stat_data: { hp: 20 } })
+    expect(readMvuReceipts(afterPlan.chat).map((receipt) => receipt.undoneAt !== undefined)).toEqual([false, false])
+
+    const applied = await split.apply(draft)
+    expect(applied.chatRevision).toBe(before.revision)
+    expect(applied.preparedRevision).not.toBe(applied.chatRevision)
+    expect(applied.journal).toEqual(draft.journal)
+    expect(applied.mvuReceipts).toEqual(draft.mvuReceipts)
+    expect((await fixture.memory.read(created.id, 'chat', fixture.chatId, true))?.deletedAt).toBeDefined()
+    expect(await fixture.variables.get('chat', fixture.chatId, 'mvu.favor')).toMatchObject({ value: 1 })
+    const rolledBack = await chatOf(fixture)
+    expect(rolledBack.header.chat_metadata.variables).toEqual({ stat_data: { hp: 10 } })
+    expect(readMvuReceipts(rolledBack).map((receipt) => receipt.undoneAt !== undefined)).toEqual([true, true])
+
+    await port.restore(applied)
+
+    expect((await fixture.memory.read(created.id, 'chat', fixture.chatId, true))?.deletedAt).toBeUndefined()
+    expect(await fixture.variables.get('chat', fixture.chatId, 'mvu.favor')).toMatchObject({ value: 2 })
+    const restored = await chatOf(fixture)
+    expect(restored.header.chat_metadata.variables).toEqual({ stat_data: { hp: 20 } })
+    expect(readMvuReceipts(restored).map((receipt) => receipt.undoneAt !== undefined)).toEqual([false, false])
+  })
+
+  it('restores a planned-but-never-applied plan without changing a store', async () => {
+    const fixture = await createFixture(updateSeed([bodyReceipt('2026-10-28T04:01:01.000Z')]))
+    const created = await putMemory(fixture, 'created by the old turn')
+    const favor = await fixture.variables.set('chat', fixture.chatId, 'mvu.favor', 2)
+    pushToolCall(fixture, 'memory_write')
+    pushJournal(fixture, memoryJournal('journal-write', 'memory_write', 'before', created, null))
+    pushJournal(fixture, memoryJournal('journal-write', 'memory_write', 'after', created, created))
+    const before = await fixture.store.getChatSnapshot(CHARACTER, fixture.chatId)
+    if (before === undefined) throw new Error('fixture chat is missing')
+    const port = createPort(fixture, {})
+    const split = splitPort(port)
+
+    // Crash window: the draft reached the durable `op-prepare` record, `apply`
+    // never ran. Restore must replay the journal (a no-op here) and redo no
+    // receipt, so the after-state and the chat revision stay untouched.
+    const draft = await split.plan(SESSION_ID, TURN, PREVIOUS_MESSAGE_ID)
+    await port.restore(draft)
+
+    expect((await fixture.memory.read(created.id, 'chat', fixture.chatId, true))?.deletedAt).toBeUndefined()
+    expect(await fixture.memory.read(created.id, 'chat', fixture.chatId, true)).toMatchObject({ revision: created.revision })
+    expect(await fixture.variables.get('chat', fixture.chatId, 'mvu.favor')).toMatchObject({
+      value: 2,
+      revision: favor.revision,
+    })
+    const after = await fixture.store.getChatSnapshot(CHARACTER, fixture.chatId)
+    if (after === undefined) throw new Error('fixture chat is missing')
+    expect(after.revision).toBe(before.revision)
+    expect(after.chat.header.chat_metadata.variables).toEqual({ stat_data: { hp: 20 } })
+    expect(readMvuReceipts(after.chat)[0]?.undoneAt).toBeUndefined()
+  })
+
+  it('refuses to apply a plan built against an older chat revision', async () => {
+    const fixture = await createFixture(updateSeed([bodyReceipt('2026-10-28T04:02:01.000Z')]))
+    const created = await putMemory(fixture, 'created by the old turn')
+    pushToolCall(fixture, 'memory_write')
+    pushJournal(fixture, memoryJournal('journal-write', 'memory_write', 'before', created, null))
+    pushJournal(fixture, memoryJournal('journal-write', 'memory_write', 'after', created, created))
+    const port = createPort(fixture, {})
+    const split = splitPort(port)
+    const draft = await split.plan(SESSION_ID, TURN, PREVIOUS_MESSAGE_ID)
+
+    // A foreign save lands between plan and apply.
+    await saveMutatedChat(fixture, (chat) => {
+      chat.messages.push({
+        name: 'User',
+        is_user: true,
+        is_system: false,
+        send_date: JOURNAL_AT,
+        mes: 'foreign write',
+      })
+    })
+
+    const error = await captureError(split.apply(draft))
+    expect(error).toMatchObject({
+      code: 'body-rollback-conflict',
+      stage: 'chat-save',
+      sessionId: SESSION_ID,
+      turn: TURN,
+    })
+    expect(error.message).toContain('was built at')
+    expect((await fixture.memory.read(created.id, 'chat', fixture.chatId, true))?.deletedAt).toBeUndefined()
+    expect(readMvuReceipts(await chatOf(fixture))[0]?.undoneAt).toBeUndefined()
   })
 })

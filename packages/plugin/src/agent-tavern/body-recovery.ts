@@ -1,7 +1,9 @@
 /**
  * AgentTavern body crash recovery.
  *
- * Startup and `agent/created` both enter here. Recovery folds `op-start`
+ * Startup and `agent/created` both enter here. Recovery first consumes
+ * `op-prepare` records that never reached `op-start` (the plan is durable but
+ * the operation is not, so the old writes are put back), then folds `op-start`
  * records that never received `op-finish`, settles the ones the runtime can
  * settle through `finalizeRecoveredOperation` (the same helper turn-stopping
  * uses), restores the rest with `restoreBodyAfterFailure`, and closes a
@@ -14,13 +16,16 @@
 import type { HostLogger, HostAgentsService } from '../host-contract.js'
 import { advanceHostTurnBase, canAdvanceHostTurnBase, closeImportBracket, lastLoggedTurn } from '../session/trace.js'
 import { store as tavernStore } from '../runtime.js'
+import { appendPrepareRecovered } from './body-rollback-prepare.js'
 import {
   finalizeRecoveredOperation,
   foldPendingOps,
+  foldPendingPrepares,
   restoreBodyAfterFailure,
   type BodyAgentLike,
   type BodyRuntimeDeps,
   type PendingBodyOperation,
+  type PendingBodyPrepare,
 } from './body-runtime.js'
 import { settlementEvidenceOf } from './body-runtime-core.js'
 import {
@@ -181,10 +186,32 @@ async function recoverAgentBody(
     return { agentId, status: 'failed', pending: 0, reason: 'invalid-event' }
   }
 
+  let prepares: readonly PendingBodyPrepare[]
+  try {
+    prepares = foldPendingPrepares(initial)
+  } catch (error) {
+    errorLog(ctx, 'dsh-soulmojito body: foldPendingPrepares failed during recovery', {
+      agentId,
+      code: failureCodeOf(error),
+      error: errorMessage(error),
+    })
+    return { agentId, status: 'failed', pending: 0, reason: 'invalid-event' }
+  }
+
+  // Proposal 0022 §10: a durable `op-prepare` without `op-start`/`op-finish`
+  // may have rolled the old writes back. Restore first: it only touches stores
+  // and the chat, never the surface, so it is safe before any body settlement.
+  const prepareOutcome = await restoreInterruptedPrepares(ctx, deps, prepares)
+
   if (pending.length === 0) {
     const openTurn = openTurnNumber(initial)
     if (openTurn !== undefined) closeRecoveredBracket(ctx, agent, openTurn, agentId)
-    return { agentId, status: 'clean', pending: 0, ...(openTurn === undefined ? {} : { reason: `closed-turn-${openTurn}` }) }
+    const status: BodyRecoveryOutcome['status'] = prepareOutcome.failed > 0
+      ? 'failed'
+      : prepareOutcome.restored > 0
+        ? 'restored'
+        : 'clean'
+    return { agentId, status, pending: 0, ...(openTurn === undefined ? {} : { reason: `closed-turn-${openTurn}` }) }
   }
 
   // Proposal §10: an MVU-managed chat cannot settle or restore body state
@@ -276,13 +303,13 @@ async function recoverAgentBody(
     else failed += 1
   }
 
-  const status: BodyRecoveryOutcome['status'] = failed > 0
+  const status: BodyRecoveryOutcome['status'] = failed > 0 || prepareOutcome.failed > 0
     ? 'failed'
     : finishPending > 0
       ? 'finish-pending'
       : settled > 0
         ? 'settled'
-        : restored > 0
+        : restored > 0 || prepareOutcome.restored > 0
           ? 'restored'
           : 'clean'
   return {
@@ -291,6 +318,80 @@ async function recoverAgentBody(
     pending: pending.length,
     ...(openTurn === undefined ? {} : { reason: `closed-turn-${openTurn}` }),
   }
+}
+
+/** Counts of prepare records a recovery pass restored or left for retry. */
+interface PrepareRecoveryOutcome {
+  readonly restored: number
+  readonly failed: number
+}
+
+/**
+ * Restore the old writes of prepares that never reached `op-start`.
+ *
+ * `restore(plan)` replays the journal and redoes the plan's MVU receipts, so a
+ * prepare whose `apply` never ran is a no-op and one whose `apply` ran puts the
+ * old turn back. Nothing here appends an assistant message or touches the
+ * surface. A successful restore is consumed with an `op-prepare-recovered`
+ * record; a failed restore or marker keeps the prepare pending for the next
+ * startup instead of pretending the writes are back.
+ */
+async function restoreInterruptedPrepares(
+  ctx: BodyRecoveryHost,
+  deps: BodyRuntimeDeps,
+  prepares: readonly PendingBodyPrepare[],
+): Promise<PrepareRecoveryOutcome> {
+  if (prepares.length === 0) return { restored: 0, failed: 0 }
+  const port = deps.writeRollback
+  if (port === undefined) {
+    errorLog(ctx, 'dsh-soulmojito body: recovery cannot restore an interrupted prepare without a write rollback port', {
+      agentId: deps.agent.id,
+      prepares: prepares.length,
+      reason: 'host-unsupported',
+    })
+    return { restored: 0, failed: prepares.length }
+  }
+
+  let restored = 0
+  let failed = 0
+  for (const prepare of prepares) {
+    try {
+      await port.restore(prepare.plan)
+    } catch (error) {
+      errorLog(ctx, 'dsh-soulmojito body: recovery could not restore an interrupted prepare', {
+        agentId: deps.agent.id,
+        opId: prepare.opId,
+        turn: prepare.plan.turn,
+        stage: 'prepare-interrupted-restore-failed',
+        code: failureCodeOf(error),
+        error: errorMessage(error),
+      })
+      failed += 1
+      continue
+    }
+    try {
+      appendPrepareRecovered(deps, prepare.opId, 'prepare-interrupted')
+    } catch (error) {
+      errorLog(ctx, 'dsh-soulmojito body: recovery restored an interrupted prepare but could not consume it', {
+        agentId: deps.agent.id,
+        opId: prepare.opId,
+        stage: 'prepare-interrupted-marker-failed',
+        code: failureCodeOf(error),
+        error: errorMessage(error),
+      })
+      failed += 1
+      continue
+    }
+    restored += 1
+    info(ctx, 'dsh-soulmojito body: recovery restored the writes of an interrupted prepare', {
+      agentId: deps.agent.id,
+      opId: prepare.opId,
+      turn: prepare.plan.turn,
+      previousMessageId: prepare.plan.previousMessageId,
+      stage: 'prepare-interrupted',
+    })
+  }
+  return { restored, failed }
 }
 
 /**

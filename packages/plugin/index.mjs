@@ -16803,7 +16803,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("f041b06") : void 0;
+  const commit = true ? normalizeCommit("49d4a5c") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -22806,6 +22806,8 @@ var VARIABLE_TOOL_SET = new Set(VARIABLE_WRITE_JOURNAL_TOOLS);
 // packages/plugin/src/agent-tavern/body-rollback.ts
 function createBodyWriteRollbackPort(deps) {
   return {
+    plan: (agentId, turn, previousMessageId) => planBodyRollback(deps, agentId, turn, previousMessageId),
+    apply: (plan) => applyBodyRollback(deps, plan),
     prepare: (agentId, turn, previousMessageId) => prepareBodyRollback(deps, agentId, turn, previousMessageId),
     restore: (plan) => restoreBodyRollback(deps, plan),
     commit: (plan) => {
@@ -22816,6 +22818,10 @@ function createBodyWriteRollbackPort(deps) {
   };
 }
 async function prepareBodyRollback(deps, agentId, turn, previousMessageId) {
+  const draft = await planBodyRollback(deps, agentId, turn, previousMessageId);
+  return applyBodyRollback(deps, draft);
+}
+async function planBodyRollback(deps, agentId, turn, previousMessageId) {
   requireNonEmptyString(agentId, "agentId");
   requireNonNegativeInteger(turn, "turn");
   requireNonEmptyString(previousMessageId, "previousMessageId");
@@ -22844,35 +22850,6 @@ async function prepareBodyRollback(deps, agentId, turn, previousMessageId) {
     turn,
     deps.memoryVectors !== void 0
   );
-  let appliedJournal;
-  try {
-    appliedJournal = await applyJournalWrites(deps, journal.writes, "undo");
-  } catch (error) {
-    const compensation = await compensateJournal(deps, journal.writes, "replay");
-    throw asJournalError(error, agentId, turn, compensation);
-  }
-  diagnostics.push(...appliedJournal.diagnostics);
-  let rolledBack;
-  try {
-    rolledBack = await applyReceiptRollback(deps, chat, receipts, "undo", binding);
-  } catch (error) {
-    const compensation = await compensateJournal(deps, journal.writes, "replay");
-    throw receiptUndoError(error, agentId, turn, compensation);
-  }
-  let preparedRevision = snapshot2.revision;
-  if (rolledBack.bodyReceipts + rolledBack.settleReceipts > 0) {
-    try {
-      preparedRevision = await deps.store.saveChat(binding.character, binding.chatId, chat, snapshot2.revision);
-    } catch (error) {
-      const compensation = await compensateJournal(deps, journal.writes, "replay");
-      const code = compensation.ok ? error instanceof ChatRevisionConflictError ? "body-rollback-conflict" : "body-rollback-save-failed" : "body-rollback-partial";
-      throw new BodyRollbackError(
-        code,
-        `body rollback for session '${agentId}' turn ${turn} could not save the rolled-back chat: ${errorMessage2(error)}${compensation.note}`,
-        { stage: "chat-save", sessionId: agentId, turn, compensated: compensation.ok, cause: error }
-      );
-    }
-  }
   const plan = {
     sessionId: agentId,
     turn,
@@ -22881,29 +22858,91 @@ async function prepareBodyRollback(deps, agentId, turn, previousMessageId) {
     floorIndex,
     bodyText,
     chatRevision: snapshot2.revision,
-    preparedRevision,
+    // The draft has not rolled anything back yet.
+    preparedRevision: snapshot2.revision,
     journal: journal.writes,
     mvuReceipts: structuredClone(receipts),
     diagnostics,
     preparedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
-  log(deps.logger, "info", "dsh-soulmojito body rollback: prepared", {
+  log(deps.logger, "info", "dsh-soulmojito body rollback: planned", {
     sessionId: agentId,
     turn,
     previousMessageId,
     floorIndex,
     journalWrites: plan.journal.length,
     mvuReceipts: plan.mvuReceipts.length,
-    bodyReceipts: rolledBack.bodyReceipts,
-    settleReceipts: rolledBack.settleReceipts,
-    chatRevision: plan.chatRevision,
-    preparedRevision: plan.preparedRevision
+    chatRevision: plan.chatRevision
   });
   return plan;
 }
+async function applyBodyRollback(deps, plan) {
+  requirePlan(plan, "apply");
+  const snapshot2 = await readPlanChatSnapshot(deps.store, plan, "apply");
+  if (snapshot2.revision !== plan.chatRevision) {
+    throw new BodyRollbackError(
+      "body-rollback-conflict",
+      `body rollback apply for session '${plan.sessionId}' turn ${plan.turn} refused: chat '${plan.binding.chatId}' of '${plan.binding.character}' is at revision '${snapshot2.revision}', but the plan was built at '${plan.chatRevision}'`,
+      { stage: "chat-save", sessionId: plan.sessionId, turn: plan.turn }
+    );
+  }
+  const chat = snapshot2.chat;
+  let appliedJournal;
+  try {
+    appliedJournal = await applyJournalWrites(deps, plan.journal, "undo");
+  } catch (error) {
+    const compensation = await compensateJournal(deps, plan.journal, "replay");
+    throw asJournalError(error, plan.sessionId, plan.turn, compensation);
+  }
+  let rolledBack;
+  try {
+    rolledBack = await applyReceiptRollback(deps, chat, plan.mvuReceipts, "undo", plan.binding);
+  } catch (error) {
+    const compensation = await compensateJournal(deps, plan.journal, "replay");
+    throw receiptUndoError(error, plan.sessionId, plan.turn, compensation);
+  }
+  let preparedRevision = snapshot2.revision;
+  if (rolledBack.bodyReceipts + rolledBack.settleReceipts > 0) {
+    try {
+      preparedRevision = await deps.store.saveChat(plan.binding.character, plan.binding.chatId, chat, snapshot2.revision);
+    } catch (error) {
+      const compensation = await compensateJournal(deps, plan.journal, "replay");
+      const code = compensation.ok ? error instanceof ChatRevisionConflictError ? "body-rollback-conflict" : "body-rollback-save-failed" : "body-rollback-partial";
+      throw new BodyRollbackError(
+        code,
+        `body rollback for session '${plan.sessionId}' turn ${plan.turn} could not save the rolled-back chat: ${errorMessage2(error)}${compensation.note}`,
+        {
+          stage: "chat-save",
+          sessionId: plan.sessionId,
+          turn: plan.turn,
+          compensated: compensation.ok,
+          cause: error
+        }
+      );
+    }
+  }
+  const applied = {
+    ...plan,
+    preparedRevision,
+    diagnostics: [...plan.diagnostics, ...appliedJournal.diagnostics]
+  };
+  log(deps.logger, "info", "dsh-soulmojito body rollback: prepared", {
+    sessionId: plan.sessionId,
+    turn: plan.turn,
+    previousMessageId: plan.previousMessageId,
+    floorIndex: plan.floorIndex,
+    journalWrites: applied.journal.length,
+    mvuReceipts: applied.mvuReceipts.length,
+    bodyReceipts: rolledBack.bodyReceipts,
+    settleReceipts: rolledBack.settleReceipts,
+    chatRevision: applied.chatRevision,
+    preparedRevision: applied.preparedRevision
+  });
+  return applied;
+}
 async function restoreBodyRollback(deps, plan) {
-  requirePlan(plan);
-  const snapshot2 = await readPlanChatSnapshot(deps.store, plan);
+  requirePlan(plan, "restore");
+  const snapshot2 = await readPlanChatSnapshot(deps.store, plan, "restore");
   const chat = snapshot2.chat;
   let appliedJournal;
   try {
@@ -23016,22 +23055,22 @@ async function readChatSnapshot(store5, binding, agentId, turn) {
   }
   return snapshot2;
 }
-async function readPlanChatSnapshot(store5, plan) {
+async function readPlanChatSnapshot(store5, plan, operation) {
   let snapshot2;
   try {
     snapshot2 = await store5.getChatSnapshot(plan.binding.character, plan.binding.chatId);
   } catch (error) {
     throw new BodyRollbackError(
       "body-rollback-failed",
-      `body rollback restore cannot read chat '${plan.binding.chatId}' of '${plan.binding.character}': ${errorMessage2(error)}`,
-      { stage: "restore", sessionId: plan.sessionId, turn: plan.turn, cause: error }
+      `body rollback ${operation} cannot read chat '${plan.binding.chatId}' of '${plan.binding.character}': ${errorMessage2(error)}`,
+      { stage: operation === "restore" ? "restore" : "prepare", sessionId: plan.sessionId, turn: plan.turn, cause: error }
     );
   }
   if (snapshot2 === void 0) {
     throw new BodyRollbackError(
       "body-rollback-failed",
-      `body rollback restore chat '${plan.binding.chatId}' of '${plan.binding.character}' does not exist`,
-      { stage: "restore", sessionId: plan.sessionId, turn: plan.turn }
+      `body rollback ${operation} chat '${plan.binding.chatId}' of '${plan.binding.character}' does not exist`,
+      { stage: operation === "restore" ? "restore" : "prepare", sessionId: plan.sessionId, turn: plan.turn }
     );
   }
   return snapshot2;
@@ -23055,22 +23094,22 @@ function throwUnsafe(detail, message, agentId, turn) {
     turn
   });
 }
-function requirePlan(plan) {
+function requirePlan(plan, operation) {
   const value = plan;
-  if (!isRecord5(value)) throw invalidPlan("plan must be an object");
-  if (!isNonEmptyString(value["sessionId"])) throw invalidPlan("plan.sessionId must be a non-empty string");
-  if (!isNonNegativeInteger2(value["turn"])) throw invalidPlan("plan.turn must be a non-negative safe integer");
-  if (!isNonEmptyString(value["previousMessageId"])) throw invalidPlan("plan.previousMessageId must be a non-empty string");
-  if (!Array.isArray(value["journal"])) throw invalidPlan("plan.journal must be an array");
-  if (!Array.isArray(value["mvuReceipts"])) throw invalidPlan("plan.mvuReceipts must be an array");
+  if (!isRecord5(value)) throw invalidPlan(operation, "plan must be an object");
+  if (!isNonEmptyString(value["sessionId"])) throw invalidPlan(operation, "plan.sessionId must be a non-empty string");
+  if (!isNonNegativeInteger2(value["turn"])) throw invalidPlan(operation, "plan.turn must be a non-negative safe integer");
+  if (!isNonEmptyString(value["previousMessageId"])) throw invalidPlan(operation, "plan.previousMessageId must be a non-empty string");
+  if (!Array.isArray(value["journal"])) throw invalidPlan(operation, "plan.journal must be an array");
+  if (!Array.isArray(value["mvuReceipts"])) throw invalidPlan(operation, "plan.mvuReceipts must be an array");
   const binding = value["binding"];
   if (!isRecord5(binding) || !isNonEmptyString(binding["character"]) || !isNonEmptyString(binding["chatId"])) {
-    throw invalidPlan("plan.binding must carry character and chatId");
+    throw invalidPlan(operation, "plan.binding must carry character and chatId");
   }
 }
-function invalidPlan(detail) {
-  return new BodyRollbackError("invalid-arguments", `body rollback restore rejected: ${detail}`, {
-    stage: "restore"
+function invalidPlan(operation, detail) {
+  return new BodyRollbackError("invalid-arguments", `body rollback ${operation} rejected: ${detail}`, {
+    stage: operation === "restore" ? "restore" : "prepare"
   });
 }
 
@@ -24073,6 +24112,95 @@ function isPlainRecord2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// packages/plugin/src/agent-tavern/body-rollback-prepare.ts
+var BODY_PREPARE_EVENT_TYPE = "plugin:dsh-soulmojito/body-prepare";
+function appendPreparedRollback(deps, opId, groupId, plan) {
+  if (typeof opId !== "string" || opId === "") {
+    throw bodyRuntimeError("invalid-arguments", "body op-prepare rejected: opId must be a non-empty string");
+  }
+  if (typeof groupId !== "string" || groupId === "") {
+    throw bodyRuntimeError("invalid-arguments", "body op-prepare rejected: groupId must be a non-empty string");
+  }
+  const data = { op: "op-prepare", opId, groupId, plan: durableRollbackPlan(plan) };
+  requireRecordWriter(deps)(deps.session, BODY_PREPARE_EVENT_TYPE, data);
+}
+function appendPrepareRecovered(deps, opId, reason) {
+  if (typeof opId !== "string" || opId === "") {
+    throw bodyRuntimeError("invalid-arguments", "body op-prepare-recovered rejected: opId must be a non-empty string");
+  }
+  const data = { op: "op-prepare-recovered", opId, reason };
+  requireRecordWriter(deps)(deps.session, BODY_PREPARE_EVENT_TYPE, data);
+}
+function foldPreparedOperations(events) {
+  const consumed = consumedOperations(events);
+  const recovered = /* @__PURE__ */ new Set();
+  const pending = /* @__PURE__ */ new Map();
+  for (const event of events) {
+    if (event.type !== BODY_PREPARE_EVENT_TYPE) continue;
+    const record = parsePrepareRecord(event);
+    if (record.op === "op-prepare-recovered") {
+      if (recovered.has(record.opId)) continue;
+      recovered.add(record.opId);
+      pending.delete(record.opId);
+      continue;
+    }
+    if (consumed.has(record.opId)) continue;
+    if (recovered.has(record.opId)) {
+      throw bodyRuntimeError(
+        "invalid-event",
+        `body op-prepare at seq ${event.seq} re-plans operation '${record.opId}' after it was already recovered`
+      );
+    }
+    if (pending.has(record.opId)) {
+      throw bodyRuntimeError(
+        "invalid-event",
+        `body op-prepare at seq ${event.seq} duplicates the open prepare of operation '${record.opId}'`
+      );
+    }
+    pending.set(record.opId, { opId: record.opId, groupId: record.groupId, plan: record.plan });
+  }
+  return [...pending.values()];
+}
+function consumedOperations(events) {
+  const consumed = /* @__PURE__ */ new Set();
+  for (const event of events) {
+    const operation = pendingEventOf(event);
+    if (operation !== void 0) consumed.add(operation.opId);
+  }
+  return consumed;
+}
+function parsePrepareRecord(event) {
+  const op = event.data.op;
+  if (op === "op-prepare-recovered") {
+    return {
+      op: "op-prepare-recovered",
+      opId: prepareString(event.data.opId, event.seq, "opId")
+    };
+  }
+  if (op !== "op-prepare") {
+    throw bodyRuntimeError(
+      "invalid-event",
+      `body prepare record at seq ${event.seq} has op '${String(op)}', expected 'op-prepare' or 'op-prepare-recovered'`
+    );
+  }
+  return {
+    op: "op-prepare",
+    opId: prepareString(event.data.opId, event.seq, "opId"),
+    groupId: prepareString(event.data.groupId, event.seq, "groupId"),
+    // A malformed plan throws `invalid-event` naming the seq and field.
+    plan: rollbackPlanOfEvent(event.data.plan, event.seq)
+  };
+}
+function prepareString(value, seq, field) {
+  if (typeof value !== "string" || value === "") {
+    throw bodyRuntimeError(
+      "invalid-event",
+      `body prepare record at seq ${seq} requires ${field} to be a non-empty string`
+    );
+  }
+  return value;
+}
+
 // packages/plugin/src/agent-tavern/body-runtime-state.ts
 import { randomUUID as randomUUID3 } from "node:crypto";
 function anchorTarget(events, surface, anchorMessageId) {
@@ -25035,7 +25163,6 @@ async function startRegenerate(deps, request) {
     const existingLedger = ledgerForRegenerate(events, request.groupId, request.expectedAnchorId, request.expectedIndex);
     const previousIndex = existingLedger?.selectedIndex ?? 0;
     const deny = normalizeDenyTools(request.writeToolDeny);
-    const rollbackPlan = await prepareRegenerateRollback(deps, agentId, events, target.seq, request.expectedAnchorId);
     const opId = `body-op-${randomUUID5()}`;
     const triggerMessageId = `body-trigger-${opId}`;
     const active = {
@@ -25048,11 +25175,21 @@ async function startRegenerate(deps, request) {
       triggerMessageId,
       release: () => {
       },
-      ...request.feedback === void 0 ? {} : { feedback: request.feedback },
-      ...rollbackPlan === void 0 ? {} : { rollbackPlan }
+      ...request.feedback === void 0 ? {} : { feedback: request.feedback }
     };
+    const port = deps.writeRollback;
+    let prepareRecordWritten = false;
     let opStarted = false;
+    let drafted;
     try {
+      if (port !== void 0 && typeof port.plan === "function" && typeof port.apply === "function") {
+        drafted = await planRegenerateRollback(deps, agentId, events, target.seq, request.expectedAnchorId);
+        appendPreparedRollback(deps, opId, request.groupId, drafted);
+        prepareRecordWritten = true;
+        active.rollbackPlan = await applyRegenerateRollback(deps, drafted);
+      } else {
+        active.rollbackPlan = await prepareRegenerateRollback(deps, agentId, events, target.seq, request.expectedAnchorId);
+      }
       const startEvent = appendBodyStartEvent(deps, {
         op: "op-start",
         opId,
@@ -25060,10 +25197,10 @@ async function startRegenerate(deps, request) {
         kind: "regenerate",
         previousAnchorId: request.expectedAnchorId,
         previousIndex,
-        // Proposal 0022 §10.4: the prepared plan is durable, so a restart can
+        // Proposal 0022 §10.4: the applied plan is durable, so a restart can
         // replay it without this process's `pendingByAgent` entry. The write
         // check refuses anything JSONL cannot keep before the record is written.
-        ...rollbackPlan === void 0 ? {} : { rollbackPlan: durableRollbackPlan(rollbackPlan) }
+        ...active.rollbackPlan === void 0 ? {} : { rollbackPlan: durableRollbackPlan(active.rollbackPlan) }
       });
       opStarted = true;
       active.startSeq = eventSeqOf(startEvent) ?? nextEventSeq(events);
@@ -25087,11 +25224,19 @@ async function startRegenerate(deps, request) {
     } catch (error) {
       const reason = `body regenerate ${opId} failed to start: ${errorMessage3(error)}`;
       let compensationError;
-      if (rollbackPlan !== void 0 && deps.writeRollback !== void 0) {
+      const planToRestore = prepareRecordWritten ? active.rollbackPlan ?? drafted : active.rollbackPlan;
+      if (planToRestore !== void 0 && port !== void 0) {
         try {
-          await deps.writeRollback.restore(rollbackPlan);
+          await port.restore(planToRestore);
         } catch (restoreError2) {
           compensationError = restoreError2;
+        }
+      }
+      if (prepareRecordWritten && !opStarted && compensationError === void 0) {
+        try {
+          appendPrepareRecovered(deps, opId, "body regenerate start failed after op-prepare");
+        } catch (markerError) {
+          warn(deps, `body runtime: failed to record the op-prepare-recovered marker for ${opId}: ${errorMessage3(markerError)}`);
         }
       }
       if (opStarted) {
@@ -25184,9 +25329,48 @@ async function selectBodyCandidate(deps, request) {
     return stateFromLedger(updated);
   });
 }
+async function planRegenerateRollback(deps, agentId, events, anchorSeq, previousAnchorId) {
+  const port = deps.writeRollback;
+  const plan = port?.plan;
+  if (port === void 0 || plan === void 0) {
+    throw bodyRuntimeError(
+      "host-unsupported",
+      `body regenerate for session '${agentId}' cannot plan the write rollback: deps.writeRollback exposes no plan()`
+    );
+  }
+  const oldTurn = requireAnchorTurn(events, agentId, anchorSeq, previousAnchorId);
+  try {
+    return await plan.call(port, agentId, oldTurn, previousAnchorId);
+  } catch (error) {
+    throw regenerationRollbackFailure(error, agentId, oldTurn, previousAnchorId, "plan");
+  }
+}
+async function applyRegenerateRollback(deps, plan) {
+  const port = deps.writeRollback;
+  const apply2 = port?.apply;
+  if (port === void 0 || apply2 === void 0) {
+    throw bodyRuntimeError(
+      "host-unsupported",
+      `body regenerate for session '${plan.sessionId}' cannot apply the write rollback: deps.writeRollback exposes no apply()`
+    );
+  }
+  try {
+    return await apply2.call(port, plan);
+  } catch (error) {
+    throw regenerationRollbackFailure(error, plan.sessionId, plan.turn, plan.previousMessageId, "apply");
+  }
+}
 async function prepareRegenerateRollback(deps, agentId, events, anchorSeq, previousAnchorId) {
   const port = deps.writeRollback;
   if (port === void 0) return void 0;
+  const oldTurn = requireAnchorTurn(events, agentId, anchorSeq, previousAnchorId);
+  try {
+    return await port.prepare(agentId, oldTurn, previousAnchorId);
+  } catch (error) {
+    throw regenerationRollbackFailure(error, agentId, oldTurn, previousAnchorId, "prepare");
+  }
+}
+function requireAnchorTurn(events, agentId, anchorSeq, previousAnchorId) {
   const oldTurn = turnOfEventSeq(events, anchorSeq);
   if (oldTurn === void 0) {
     throw bodyRuntimeError(
@@ -25194,21 +25378,24 @@ async function prepareRegenerateRollback(deps, agentId, events, anchorSeq, previ
       `body regenerate for session '${agentId}' refused: cannot derive the turn of anchor '${previousAnchorId}' from the session log`
     );
   }
-  try {
-    return await port.prepare(agentId, oldTurn, previousAnchorId);
-  } catch (error) {
-    const detail = error instanceof BodyRollbackError ? error.detail : void 0;
-    const failure = bodyRuntimeError(
-      "body-state-unsafe",
-      `body regenerate for session '${agentId}' refused: cannot prepare the write rollback of turn ${oldTurn} for anchor '${previousAnchorId}': ${errorMessage3(error)}`,
-      detail
-    );
-    failure.cause = error;
-    throw failure;
-  }
+  return oldTurn;
+}
+function regenerationRollbackFailure(error, agentId, turn, previousAnchorId, step) {
+  const detail = error instanceof BodyRollbackError ? error.detail : void 0;
+  const failure = bodyRuntimeError(
+    "body-state-unsafe",
+    `body regenerate for session '${agentId}' refused: cannot ${step} the write rollback of turn ${turn} for anchor '${previousAnchorId}': ${errorMessage3(error)}`,
+    detail
+  );
+  failure.cause = error;
+  return failure;
+}
+function foldPendingPrepares(events) {
+  return foldPreparedOperations(parseEventList(events, "foldPendingPrepares"));
 }
 function foldPendingOps(events) {
   const parsed = parseEventList(events, "foldPendingOps");
+  foldPreparedOperations(parsed);
   const pending = /* @__PURE__ */ new Map();
   const finished = /* @__PURE__ */ new Set();
   for (const event of parsed) {
@@ -25783,10 +25970,23 @@ async function recoverAgentBody(ctx, agent, agentId, createDeps) {
     });
     return { agentId, status: "failed", pending: 0, reason: "invalid-event" };
   }
+  let prepares;
+  try {
+    prepares = foldPendingPrepares(initial);
+  } catch (error) {
+    errorLog(ctx, "dsh-soulmojito body: foldPendingPrepares failed during recovery", {
+      agentId,
+      code: failureCodeOf(error),
+      error: errorMessage4(error)
+    });
+    return { agentId, status: "failed", pending: 0, reason: "invalid-event" };
+  }
+  const prepareOutcome = await restoreInterruptedPrepares(ctx, deps, prepares);
   if (pending.length === 0) {
     const openTurn2 = openTurnNumber2(initial);
     if (openTurn2 !== void 0) closeRecoveredBracket(ctx, agent, openTurn2, agentId);
-    return { agentId, status: "clean", pending: 0, ...openTurn2 === void 0 ? {} : { reason: `closed-turn-${openTurn2}` } };
+    const status3 = prepareOutcome.failed > 0 ? "failed" : prepareOutcome.restored > 0 ? "restored" : "clean";
+    return { agentId, status: status3, pending: 0, ...openTurn2 === void 0 ? {} : { reason: `closed-turn-${openTurn2}` } };
   }
   const safety = await recoveryStateSafety(ctx, agentId, binding);
   if (!safety.safe) {
@@ -25864,13 +26064,65 @@ async function recoverAgentBody(ctx, agent, agentId, createDeps) {
     else if (outcome === "finish-pending") finishPending += 1;
     else failed += 1;
   }
-  const status2 = failed > 0 ? "failed" : finishPending > 0 ? "finish-pending" : settled > 0 ? "settled" : restored > 0 ? "restored" : "clean";
+  const status2 = failed > 0 || prepareOutcome.failed > 0 ? "failed" : finishPending > 0 ? "finish-pending" : settled > 0 ? "settled" : restored > 0 || prepareOutcome.restored > 0 ? "restored" : "clean";
   return {
     agentId,
     status: status2,
     pending: pending.length,
     ...openTurn === void 0 ? {} : { reason: `closed-turn-${openTurn}` }
   };
+}
+async function restoreInterruptedPrepares(ctx, deps, prepares) {
+  if (prepares.length === 0) return { restored: 0, failed: 0 };
+  const port = deps.writeRollback;
+  if (port === void 0) {
+    errorLog(ctx, "dsh-soulmojito body: recovery cannot restore an interrupted prepare without a write rollback port", {
+      agentId: deps.agent.id,
+      prepares: prepares.length,
+      reason: "host-unsupported"
+    });
+    return { restored: 0, failed: prepares.length };
+  }
+  let restored = 0;
+  let failed = 0;
+  for (const prepare of prepares) {
+    try {
+      await port.restore(prepare.plan);
+    } catch (error) {
+      errorLog(ctx, "dsh-soulmojito body: recovery could not restore an interrupted prepare", {
+        agentId: deps.agent.id,
+        opId: prepare.opId,
+        turn: prepare.plan.turn,
+        stage: "prepare-interrupted-restore-failed",
+        code: failureCodeOf(error),
+        error: errorMessage4(error)
+      });
+      failed += 1;
+      continue;
+    }
+    try {
+      appendPrepareRecovered(deps, prepare.opId, "prepare-interrupted");
+    } catch (error) {
+      errorLog(ctx, "dsh-soulmojito body: recovery restored an interrupted prepare but could not consume it", {
+        agentId: deps.agent.id,
+        opId: prepare.opId,
+        stage: "prepare-interrupted-marker-failed",
+        code: failureCodeOf(error),
+        error: errorMessage4(error)
+      });
+      failed += 1;
+      continue;
+    }
+    restored += 1;
+    info(ctx, "dsh-soulmojito body: recovery restored the writes of an interrupted prepare", {
+      agentId: deps.agent.id,
+      opId: prepare.opId,
+      turn: prepare.plan.turn,
+      previousMessageId: prepare.plan.previousMessageId,
+      stage: "prepare-interrupted"
+    });
+  }
+  return { restored, failed };
 }
 async function recoveryStateSafety(ctx, sessionId, binding) {
   const resolve6 = ctx.safetyOf;
