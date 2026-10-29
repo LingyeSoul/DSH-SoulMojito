@@ -45,6 +45,7 @@ import {
 import {
   assertCommittedSettlement,
   finishSettledOperation,
+  isBodyHideMarker,
   recordSettlementCancelled,
   restorePreviousSelection,
   settledFinishPending,
@@ -331,11 +332,11 @@ async function settleBodyOperation(
 
 /**
  * Resolve a `settling` record left by a crash between the pre-hide marker and
- * the post-hide marker. The surface and ledger are the authority: old anchor
- * gone, new candidate visible and committed, and every hide target off the
- * surface means settled. A partially applied multi-range hide is completed
- * before the settled marker, so neither the synthetic trigger nor the previous
- * process nodes can survive as surface-only leftovers. Old anchor still visible
+ * the post-hide marker. The surface and ledger are the authority: new candidate
+ * visible and committed, and every hide target off the surface means settled.
+ * A settlement hide that stopped after any subset of its ranges (trigger/process
+ * survivors or only the previous anchor) is completed before the settled marker,
+ * so no target can survive as a surface-only leftover. Old anchor still visible
  * with the previous index selected means cancelled; anything else fails closed
  * and keeps the op-start pending instead of guessing.
  */
@@ -555,11 +556,11 @@ async function rollbackNewTurnWrites(
  * `settled` evidence (or `settling` evidence whose surface/ledger state proves
  * the hide completed) is never restored: the new body already replaced the old
  * anchor, so a late failure only leaves `op-finish` to retry. A `settling`
- * record whose anchor is gone but whose trigger/process targets survived a
- * multi-range crash is completed by hiding exactly those targets. `settleCancelled`
- * evidence always takes the restore path. These branches run before the
- * open-turn check because settlement happens during turn stopping, while the
- * new turn is still open.
+ * record whose ledger committed the new candidate but whose hide survived on
+ * any range (trigger/process or the previous anchor) is completed by hiding
+ * exactly those targets. `settleCancelled` evidence always takes the restore
+ * path. These branches run before the open-turn check because settlement
+ * happens during turn stopping, while the new turn is still open.
  */
 export async function restoreBodyAfterFailure(
   deps: BodyRuntimeDeps,
@@ -750,7 +751,8 @@ export async function restoreBodyAfterFailure(
 /**
  * Surface nodes of the failed regeneration turn. The trigger is matched by id
  * because a user message carries no turn field; everything else is matched by
- * the turn that owns it. System prompts are never hidden.
+ * the turn that owns it. System prompts and empty `body-hide` replacements are
+ * never hidden again.
  */
 function failedTurnTargets(
   events: ReturnType<typeof eventsOf>,
@@ -765,6 +767,7 @@ function failedTurnTargets(
   for (const seq of surface) {
     const event = eventAtSeq(events, seq)
     if (event.type === 'system/message') continue
+    if (isBodyHideMarker(event)) continue
     if (numberField(event.data.turn) === failedTurn) targets.add(seq)
   }
   return targets

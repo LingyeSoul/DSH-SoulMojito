@@ -9,9 +9,9 @@
  *
  * - `settled`: every hide target is gone, the new candidate is visible and
  *   committed; only the bookkeeping finish is missing.
- * - `finish-hide`: the previous anchor is gone and the new candidate is
- *   committed, but trigger/process targets are still visible; recovery may
- *   remove exactly those remaining targets and then finish.
+ * - `finish-hide`: the new candidate is committed and visible, but any hide
+ *   target (trigger/process range or the previous anchor range) is still on the
+ *   surface; recovery removes exactly those remaining targets and then finishes.
  * - `cancelled`: the previous anchor never left the surface and the previous
  *   selection is durable; recovery must restore.
  * - `ambiguous`: the surface and ledger disagree; recovery must not guess.
@@ -58,10 +58,14 @@ export type SettlingDecision = 'settled' | 'finish-hide' | 'cancelled' | 'ambigu
  * Resolve a `settling` record left by a crash between the pre-hide marker and
  * the post-hide marker.
  *
- * `settled` additionally requires every hide target to be off the surface, so
- * a partially applied multi-range hide can never be mistaken for a completed
- * body replacement. Legacy records without targets fall back to the operation's
- * trigger id and previous anchor id instead of failing closed.
+ * `settled` requires every hide target to be off the surface, so a partially
+ * applied multi-range hide can never be mistaken for a completed body
+ * replacement. `finish-hide` requires the ledger to have committed the new
+ * candidate and that candidate to be visible, but tolerates any surviving hide
+ * range: the hide may have stopped after the trigger/process range, leaving only
+ * the previous anchor, and vice versa. Legacy records without targets fall back
+ * to the operation's trigger id and previous anchor id instead of failing
+ * closed.
  */
 export function settlingDecision(
   deps: BodyRuntimeDeps,
@@ -75,9 +79,13 @@ export function settlingDecision(
   const candidateVisible = findSurfaceSeqByMessageId(events, surface, evidence.anchorId) !== undefined
   const committed = ledger.selectedIndex === evidence.index && ledger.anchorMessageId === evidence.anchorId
   if (!previousVisible && candidateVisible && committed) {
-    return settlementRemainingTargets(events, surface, op, evidence).length === 0 ? 'settled' : 'finish-hide'
+    const remaining = settlementRemainingTargets(events, surface, op, evidence)
+    return remaining.length === 0 ? 'settled' : 'finish-hide'
   }
   if (previousVisible && ledger.selectedIndex === op.previousIndex) return 'cancelled'
+  if (candidateVisible && committed && settlementRemainingTargets(events, surface, op, evidence).length > 0) {
+    return 'finish-hide'
+  }
   return 'ambiguous'
 }
 
@@ -139,11 +147,12 @@ export function settlementRemainingTargets(
   }
   for (const seq of oldAnchorSurfaceTargets(events, surface, targets.previousAnchorId)) remaining.add(seq)
   return [...remaining]
-    .filter((seq) => !isSettlementHideMarker(eventAtSeq(events, seq)))
+    .filter((seq) => !isBodyHideMarker(eventAtSeq(events, seq)))
     .sort((left, right) => left - right)
 }
 
-function isSettlementHideMarker(event: RuntimeEvent): boolean {
+/** True for the empty developer replacement a body hide leaves on the surface. */
+export function isBodyHideMarker(event: RuntimeEvent): boolean {
   if (event.type !== 'developer/message') return false
   const message = messageOf(event)
   return message !== undefined && sourceOf(message)?.form === 'body-hide'

@@ -3,9 +3,10 @@
  *
  * A settle batch writes the flat `VariableStore` before its chat receipt is
  * saved, so it brackets those writes with durable records on a dedicated plugin
- * event type: `open` and `extend` carry undo data, `commit` and `recovered`
- * close the batch. This shard owns that vocabulary, its parser, reader, fold
- * and append wrapper.
+ * event type: `open` and `extend` carry undo data, `decide` carries the commit
+ * decision and the exact receipt to replay, `abort` states that the flat writes
+ * were rolled back, and `commit`/`recovered` close the batch. This shard owns
+ * that vocabulary, its parser, reader, fold and append wrapper.
  *
  * The shared journal error, the record writer seam types and the primitive
  * record validators live here as well: `write-journal.ts` imports them from
@@ -14,6 +15,7 @@
  */
 
 import type { JsonValue } from '../../../tavern-store/src/index.js'
+import type { MvuReceipt, MvuVariableChange } from '../mvu.js'
 
 /* ---------------------------------- host ----------------------------------- */
 
@@ -45,6 +47,8 @@ export type WriteJournalErrorCode =
   | 'write-journal-turn-missing'
   | 'write-journal-append-failed'
   | 'settle-intent-append-failed'
+  /** The batch could not be closed after its flat writes: recovery owns it now. */
+  | 'settle-intent-abort-failed'
 
 /** Typed failure with a stable code for callers and tests. */
 export class WriteJournalError extends Error {
@@ -78,7 +82,7 @@ export interface SettleIntentItem {
   readonly after?: JsonValue
 }
 
-/** `open` and `extend` carry undo data; `commit` and `recovered` close the intent. */
+/** `open` and `extend` carry undo data; every other phase closes or decides. */
 export interface SettleIntentOpenEntry {
   readonly kind: 'settle-intent'
   readonly phase: 'open'
@@ -91,6 +95,17 @@ export interface SettleIntentOpenEntry {
   /** Timestamp the matching MVU receipt will carry; lets recovery prove a save. */
   readonly receiptAt: string
   readonly at: string
+  /**
+   * `true` when the batch promised that its receipt carries `opId`. Such an
+   * intent must never be closed by the legacy `at + turnKey` heuristic: a
+   * receipt without an `opId` cannot prove that this batch saved.
+   */
+  readonly receiptOpId?: true
+  /**
+   * The batch's durable commit decision, attached by `foldSettleIntents` from a
+   * later `decide` record. Never present in an `open` payload.
+   */
+  readonly decision?: SettleIntentDecideEntry
   readonly items: readonly SettleIntentItem[]
 }
 
@@ -104,10 +119,30 @@ export interface SettleIntentExtendEntry {
   readonly items: readonly SettleIntentItem[]
 }
 
-/** One closure marker: a committed settle or a startup recovery. */
+/**
+ * The batch's durable commit decision, written after every flat write and
+ * before `saveChat`.
+ *
+ * It carries the exact receipt the batch was about to persist, so a crash
+ * before the save replays that receipt instead of guessing whether some other
+ * settlement closed the batch. `receipt.opId` must equal this record's `opId`.
+ */
+export interface SettleIntentDecideEntry {
+  readonly kind: 'settle-intent'
+  readonly phase: 'decide'
+  readonly opId: string
+  readonly sessionId: string
+  readonly at: string
+  /** Chat the decision belongs to; informational, the open record is authoritative. */
+  readonly chatCharacter?: string
+  readonly chatId?: string
+  readonly receipt: MvuReceipt
+}
+
+/** One closure marker: a committed settle, a rolled-back batch or a recovery. */
 export interface SettleIntentCloseEntry {
   readonly kind: 'settle-intent'
-  readonly phase: 'commit' | 'recovered'
+  readonly phase: 'commit' | 'recovered' | 'abort'
   readonly opId: string
   readonly sessionId: string
   readonly at: string
@@ -115,7 +150,11 @@ export interface SettleIntentCloseEntry {
 }
 
 /** Payload of one `plugin:dsh-soulmojito/settle-intent` session event. */
-export type SettleIntentEntry = SettleIntentOpenEntry | SettleIntentExtendEntry | SettleIntentCloseEntry
+export type SettleIntentEntry =
+  | SettleIntentOpenEntry
+  | SettleIntentExtendEntry
+  | SettleIntentDecideEntry
+  | SettleIntentCloseEntry
 
 /* ---------------------------------- read ----------------------------------- */
 
@@ -136,11 +175,14 @@ export function readSettleIntents(events: readonly unknown[]): readonly SettleIn
 }
 
 /**
- * Fold the open settle intents a restart still has to restore.
+ * Fold the open settle intents a restart still has to resolve.
  *
- * `extend` items merge into their op in log order; closed operations are
- * dropped. Opening twice, extending after closure, or closing twice/without
- * an open record throws: a damaged undo record must not be skipped silently.
+ * `extend` items merge into their op in log order; a `decide` record attaches
+ * to its open entry; `commit`/`recovered`/`abort` close the op and drop it, so
+ * an aborted batch is never restored or replayed again. Opening twice,
+ * extending or deciding after closure, deciding twice, deciding without an
+ * open record, extending after the decision, or closing twice/without an open
+ * record throws: a damaged record must not be skipped silently.
  */
 export function foldSettleIntents(events: readonly unknown[]): readonly SettleIntentOpenEntry[] {
   const open = new Map<string, SettleIntentOpenEntry>()
@@ -157,7 +199,16 @@ export function foldSettleIntents(events: readonly unknown[]): readonly SettleIn
       if (closed.has(entry.opId)) throw new WriteJournalError('invalid-settle-intent', `settle intent '${entry.opId}' extends after it closed`)
       const current = open.get(entry.opId)
       if (current === undefined) throw new WriteJournalError('invalid-settle-intent', `settle intent '${entry.opId}' extends without an open record`)
+      if (current.decision !== undefined) throw new WriteJournalError('invalid-settle-intent', `settle intent '${entry.opId}' extends after it was decided`)
       open.set(entry.opId, { ...current, items: [...current.items, ...entry.items] })
+      continue
+    }
+    if (entry.phase === 'decide') {
+      if (closed.has(entry.opId)) throw new WriteJournalError('invalid-settle-intent', `settle intent '${entry.opId}' decides after it closed`)
+      const current = open.get(entry.opId)
+      if (current === undefined) throw new WriteJournalError('invalid-settle-intent', `settle intent '${entry.opId}' decides without an open record`)
+      if (current.decision !== undefined) throw new WriteJournalError('invalid-settle-intent', `settle intent '${entry.opId}' decides more than once`)
+      open.set(entry.opId, { ...current, decision: entry })
       continue
     }
     if (closed.has(entry.opId)) {
@@ -197,6 +248,33 @@ export function appendSettleIntentWith(
     )
   }
   return 'recorded'
+}
+
+/**
+ * Rebuild one settle receipt as the JSON-safe payload a `decide` record stores.
+ *
+ * `MvuVariableChange.before/after` are `unknown` on the receipt type; the
+ * decision must round-trip through the session log, so every value is validated
+ * against the JSON value grammar here instead of failing later at recovery.
+ * The decision's own `opId` is authoritative and stamped onto the receipt.
+ *
+ * @throws WriteJournalError when a change value cannot be stored as JSON
+ */
+export function jsonSafeSettleReceipt(opId: string, receipt: MvuReceipt): MvuReceipt {
+  const where = `settle decision receipt '${opId}'`
+  return {
+    at: receipt.at,
+    turnKey: receipt.turnKey,
+    status: receipt.status,
+    changes: receipt.changes.map((change, index) => ({
+      name: change.name,
+      ...(change.before === undefined ? {} : { before: jsonValueAt(change.before, `${where} changes[${index}].before`) }),
+      ...(change.after === undefined ? {} : { after: jsonValueAt(change.after, `${where} changes[${index}].after`) }),
+      ...(change.reason === undefined ? {} : { reason: change.reason }),
+    })),
+    failures: [...receipt.failures],
+    opId,
+  }
 }
 
 /* ------------------------------- validation -------------------------------- */
@@ -262,7 +340,8 @@ function parseSettleIntent(data: unknown, index: number): SettleIntentEntry {
     return { kind: 'settle-intent', phase, opId: textAt(data, 'opId', where), sessionId: textAt(data, 'sessionId', where),
       at: timestampAt(data, 'at', where), items: settleIntentItems(data['items'], where) }
   }
-  if (phase === 'commit' || phase === 'recovered') {
+  if (phase === 'decide') return parseSettleIntentDecide(data, where)
+  if (phase === 'commit' || phase === 'recovered' || phase === 'abort') {
     return {
       kind: 'settle-intent',
       phase,
@@ -272,16 +351,12 @@ function parseSettleIntent(data: unknown, index: number): SettleIntentEntry {
       ...(data['reason'] === undefined ? {} : { reason: textAt(data, 'reason', where) }),
     }
   }
-  throw invalidSettle(where, `field 'phase' must be 'open', 'extend', 'commit' or 'recovered', received '${String(phase)}'`)
+  throw invalidSettle(where, `field 'phase' must be 'open', 'extend', 'decide', 'abort', 'commit' or 'recovered', received '${String(phase)}'`)
 }
 
 function parseSettleIntentOpen(record: Record<string, unknown>, where: string): SettleIntentOpenEntry {
   const scope = record['scope']
   if (scope !== 'chat') throw invalidSettle(where, `field 'scope' must be 'chat', received '${String(scope)}'`)
-  const turnKey = textAt(record, 'turnKey', where)
-  if (!/^(0|[1-9][0-9]*)$/.test(turnKey)) {
-    throw invalidSettle(where, `field 'turnKey' must be a floor index, received '${turnKey}'`)
-  }
   return {
     kind: 'settle-intent',
     phase: 'open',
@@ -290,15 +365,94 @@ function parseSettleIntentOpen(record: Record<string, unknown>, where: string): 
     character: textAt(record, 'character', where),
     scope: 'chat',
     scopeId: textAt(record, 'scopeId', where),
-    turnKey,
+    turnKey: floorKeyAt(record, where),
     receiptAt: timestampAt(record, 'receiptAt', where),
     at: timestampAt(record, 'at', where),
+    ...(record['receiptOpId'] === undefined ? {} : { receiptOpId: receiptOpIdFlagAt(record, where) }),
     items: settleIntentItems(record['items'], where),
   }
 }
 
+function parseSettleIntentDecide(record: Record<string, unknown>, where: string): SettleIntentDecideEntry {
+  const opId = textAt(record, 'opId', where)
+  return {
+    kind: 'settle-intent',
+    phase: 'decide',
+    opId,
+    sessionId: textAt(record, 'sessionId', where),
+    at: timestampAt(record, 'at', where),
+    ...(record['chatCharacter'] === undefined ? {} : { chatCharacter: textAt(record, 'chatCharacter', where) }),
+    ...(record['chatId'] === undefined ? {} : { chatId: textAt(record, 'chatId', where) }),
+    receipt: parseSettleIntentReceipt(record['receipt'], opId, `${where} receipt`),
+  }
+}
+
+/**
+ * The decision receipt must be the settle receipt of this very op: an `opId`
+ * that differs (or is missing) would leave the replayed receipt unable to close
+ * the intent, so the record is rejected instead of replayed.
+ */
+function parseSettleIntentReceipt(value: unknown, opId: string, where: string): MvuReceipt {
+  const record = recordAt(value, where)
+  const receiptOpId = textAt(record, 'opId', where)
+  if (receiptOpId !== opId) {
+    throw invalidSettle(where, `field 'opId' must equal the decide record's opId '${opId}', received '${receiptOpId}'`)
+  }
+  const status = record['status']
+  if (status !== 'updated' && status !== 'unchanged' && status !== 'failed') {
+    throw invalidSettle(where, `field 'status' must be 'updated', 'unchanged' or 'failed', received '${String(status)}'`)
+  }
+  return {
+    at: timestampAt(record, 'at', where),
+    turnKey: floorKeyAt(record, where),
+    status,
+    changes: settleIntentReceiptChanges(record['changes'], where),
+    failures: stringArrayAt(record['failures'], `${where} failures`),
+    opId: receiptOpId,
+  }
+}
+
+function settleIntentReceiptChanges(value: unknown, where: string): MvuVariableChange[] {
+  if (!Array.isArray(value)) throw invalidSettle(where, `field 'changes' must be an array`)
+  return value.map((item, index) => {
+    const changeWhere = `${where} changes[${index}]`
+    const record = recordAt(item, changeWhere)
+    return {
+      name: textAt(record, 'name', changeWhere),
+      ...(record['before'] === undefined ? {} : { before: jsonValueAt(record['before'], `${changeWhere} before`) }),
+      ...(record['after'] === undefined ? {} : { after: jsonValueAt(record['after'], `${changeWhere} after`) }),
+      ...(record['reason'] === undefined ? {} : { reason: textAt(record, 'reason', changeWhere) }),
+    }
+  })
+}
+
+function stringArrayAt(value: unknown, where: string): string[] {
+  if (!Array.isArray(value)) throw invalidSettle(where, 'must be an array of strings')
+  return value.map((item, index) => {
+    if (typeof item !== 'string') throw invalidSettle(`${where}[${index}]`, 'must be a string')
+    return item
+  })
+}
+
+/** Floor index of a settle receipt (`String(messages.length)` at settle time). */
+function floorKeyAt(record: Record<string, unknown>, where: string): string {
+  const turnKey = textAt(record, 'turnKey', where)
+  if (!/^(0|[1-9][0-9]*)$/.test(turnKey)) {
+    throw invalidSettle(where, `field 'turnKey' must be a floor index, received '${turnKey}'`)
+  }
+  return turnKey
+}
+
+function receiptOpIdFlagAt(record: Record<string, unknown>, where: string): true {
+  const value = record['receiptOpId']
+  if (value !== true) throw invalidSettle(where, `field 'receiptOpId' must be true when present, received '${String(value)}'`)
+  return true
+}
+
 function settleIntentItems(value: unknown, where: string): SettleIntentItem[] {
-  if (!Array.isArray(value) || value.length === 0) throw invalidSettle(where, `field 'items' must be a non-empty array`)
+  // An empty list is valid: a batch whose every request the flat store rejected
+  // has nothing to undo, but still owns a receipt decision.
+  if (!Array.isArray(value)) throw invalidSettle(where, `field 'items' must be an array of undo items`)
   return value.map((item, index) => parseSettleIntentItem(item, `${where} items[${index}]`))
 }
 

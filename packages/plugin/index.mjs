@@ -16833,7 +16833,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("356c2e2") : void 0;
+  const commit = true ? normalizeCommit("f4acf3d") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -21921,7 +21921,16 @@ function foldSettleIntents(events) {
       if (closed.has(entry.opId)) throw new WriteJournalError("invalid-settle-intent", `settle intent '${entry.opId}' extends after it closed`);
       const current = open2.get(entry.opId);
       if (current === void 0) throw new WriteJournalError("invalid-settle-intent", `settle intent '${entry.opId}' extends without an open record`);
+      if (current.decision !== void 0) throw new WriteJournalError("invalid-settle-intent", `settle intent '${entry.opId}' extends after it was decided`);
       open2.set(entry.opId, { ...current, items: [...current.items, ...entry.items] });
+      continue;
+    }
+    if (entry.phase === "decide") {
+      if (closed.has(entry.opId)) throw new WriteJournalError("invalid-settle-intent", `settle intent '${entry.opId}' decides after it closed`);
+      const current = open2.get(entry.opId);
+      if (current === void 0) throw new WriteJournalError("invalid-settle-intent", `settle intent '${entry.opId}' decides without an open record`);
+      if (current.decision !== void 0) throw new WriteJournalError("invalid-settle-intent", `settle intent '${entry.opId}' decides more than once`);
+      open2.set(entry.opId, { ...current, decision: entry });
       continue;
     }
     if (closed.has(entry.opId)) {
@@ -22005,7 +22014,8 @@ function parseSettleIntent(data, index) {
       items: settleIntentItems(data["items"], where)
     };
   }
-  if (phase === "commit" || phase === "recovered") {
+  if (phase === "decide") return parseSettleIntentDecide(data, where);
+  if (phase === "commit" || phase === "recovered" || phase === "abort") {
     return {
       kind: "settle-intent",
       phase,
@@ -22015,15 +22025,11 @@ function parseSettleIntent(data, index) {
       ...data["reason"] === void 0 ? {} : { reason: textAt(data, "reason", where) }
     };
   }
-  throw invalidSettle(where, `field 'phase' must be 'open', 'extend', 'commit' or 'recovered', received '${String(phase)}'`);
+  throw invalidSettle(where, `field 'phase' must be 'open', 'extend', 'decide', 'abort', 'commit' or 'recovered', received '${String(phase)}'`);
 }
 function parseSettleIntentOpen(record, where) {
   const scope = record["scope"];
   if (scope !== "chat") throw invalidSettle(where, `field 'scope' must be 'chat', received '${String(scope)}'`);
-  const turnKey = textAt(record, "turnKey", where);
-  if (!/^(0|[1-9][0-9]*)$/.test(turnKey)) {
-    throw invalidSettle(where, `field 'turnKey' must be a floor index, received '${turnKey}'`);
-  }
   return {
     kind: "settle-intent",
     phase: "open",
@@ -22032,14 +22038,79 @@ function parseSettleIntentOpen(record, where) {
     character: textAt(record, "character", where),
     scope: "chat",
     scopeId: textAt(record, "scopeId", where),
-    turnKey,
+    turnKey: floorKeyAt(record, where),
     receiptAt: timestampAt(record, "receiptAt", where),
     at: timestampAt(record, "at", where),
+    ...record["receiptOpId"] === void 0 ? {} : { receiptOpId: receiptOpIdFlagAt(record, where) },
     items: settleIntentItems(record["items"], where)
   };
 }
+function parseSettleIntentDecide(record, where) {
+  const opId = textAt(record, "opId", where);
+  return {
+    kind: "settle-intent",
+    phase: "decide",
+    opId,
+    sessionId: textAt(record, "sessionId", where),
+    at: timestampAt(record, "at", where),
+    ...record["chatCharacter"] === void 0 ? {} : { chatCharacter: textAt(record, "chatCharacter", where) },
+    ...record["chatId"] === void 0 ? {} : { chatId: textAt(record, "chatId", where) },
+    receipt: parseSettleIntentReceipt(record["receipt"], opId, `${where} receipt`)
+  };
+}
+function parseSettleIntentReceipt(value, opId, where) {
+  const record = recordAt(value, where);
+  const receiptOpId = textAt(record, "opId", where);
+  if (receiptOpId !== opId) {
+    throw invalidSettle(where, `field 'opId' must equal the decide record's opId '${opId}', received '${receiptOpId}'`);
+  }
+  const status2 = record["status"];
+  if (status2 !== "updated" && status2 !== "unchanged" && status2 !== "failed") {
+    throw invalidSettle(where, `field 'status' must be 'updated', 'unchanged' or 'failed', received '${String(status2)}'`);
+  }
+  return {
+    at: timestampAt(record, "at", where),
+    turnKey: floorKeyAt(record, where),
+    status: status2,
+    changes: settleIntentReceiptChanges(record["changes"], where),
+    failures: stringArrayAt(record["failures"], `${where} failures`),
+    opId: receiptOpId
+  };
+}
+function settleIntentReceiptChanges(value, where) {
+  if (!Array.isArray(value)) throw invalidSettle(where, `field 'changes' must be an array`);
+  return value.map((item, index) => {
+    const changeWhere = `${where} changes[${index}]`;
+    const record = recordAt(item, changeWhere);
+    return {
+      name: textAt(record, "name", changeWhere),
+      ...record["before"] === void 0 ? {} : { before: jsonValueAt(record["before"], `${changeWhere} before`) },
+      ...record["after"] === void 0 ? {} : { after: jsonValueAt(record["after"], `${changeWhere} after`) },
+      ...record["reason"] === void 0 ? {} : { reason: textAt(record, "reason", changeWhere) }
+    };
+  });
+}
+function stringArrayAt(value, where) {
+  if (!Array.isArray(value)) throw invalidSettle(where, "must be an array of strings");
+  return value.map((item, index) => {
+    if (typeof item !== "string") throw invalidSettle(`${where}[${index}]`, "must be a string");
+    return item;
+  });
+}
+function floorKeyAt(record, where) {
+  const turnKey = textAt(record, "turnKey", where);
+  if (!/^(0|[1-9][0-9]*)$/.test(turnKey)) {
+    throw invalidSettle(where, `field 'turnKey' must be a floor index, received '${turnKey}'`);
+  }
+  return turnKey;
+}
+function receiptOpIdFlagAt(record, where) {
+  const value = record["receiptOpId"];
+  if (value !== true) throw invalidSettle(where, `field 'receiptOpId' must be true when present, received '${String(value)}'`);
+  return true;
+}
 function settleIntentItems(value, where) {
-  if (!Array.isArray(value) || value.length === 0) throw invalidSettle(where, `field 'items' must be a non-empty array`);
+  if (!Array.isArray(value)) throw invalidSettle(where, `field 'items' must be an array of undo items`);
   return value.map((item, index) => parseSettleIntentItem(item, `${where} items[${index}]`));
 }
 function parseSettleIntentItem(value, where) {
@@ -22144,7 +22215,7 @@ function memoryRecordAt(value, where) {
     scopeId: textAt(record, "scopeId", where),
     kind,
     content: textAt(record, "content", where),
-    tags: stringArrayAt(record["tags"], `${where} tags`),
+    tags: stringArrayAt2(record["tags"], `${where} tags`),
     importance: scoreAt(record, "importance", where),
     confidence: scoreAt(record, "confidence", where),
     source: memorySourceAt(record["source"], `${where} source`),
@@ -22219,7 +22290,7 @@ function scoreAt(record, field, where) {
   }
   return value;
 }
-function stringArrayAt(value, where) {
+function stringArrayAt2(value, where) {
   if (!Array.isArray(value)) throw invalid(where, "must be an array of strings");
   const result = [];
   for (const item of value) {
@@ -22231,17 +22302,31 @@ function stringArrayAt(value, where) {
 
 // packages/plugin/src/agent-tavern/body-settle-intent.ts
 async function recoverOpenSettleIntents(deps, agentId, session, appendRecord, intents) {
-  if (intents.length === 0) return { restored: 0, committed: 0, failed: 0, failures: [] };
+  if (intents.length === 0) return { restored: 0, committed: 0, replayed: 0, failed: 0, failures: [] };
   if (appendRecord === void 0) {
-    return { restored: 0, committed: 0, failed: intents.length, failures: intents.map((intent) => `${intent.opId}: no plugin-record writer`) };
+    return { restored: 0, committed: 0, replayed: 0, failed: intents.length, failures: intents.map((intent) => `${intent.opId}: no plugin-record writer`) };
   }
   let restored = 0;
   let committed = 0;
+  let replayed = 0;
   const failures = [];
   for (const intent of intents) {
     try {
-      if (await settleReceiptPersisted(deps, intent)) {
+      const snapshot2 = await readSettleSnapshot(deps, intent);
+      if (settleReceiptStored(snapshot2.chat, intent)) {
         closeSettleIntent(appendRecord, session, intent, "commit", "receipt persisted before the intent closed");
+        committed += 1;
+        continue;
+      }
+      if (intent.decision !== void 0) {
+        await replaySettleDecision(deps, intent, intent.decision, snapshot2);
+        closeSettleIntent(appendRecord, session, intent, "commit", "commit decision replayed before the intent closed");
+        committed += 1;
+        replayed += 1;
+        continue;
+      }
+      if (legacySettleReceipt(snapshot2.chat, intent) !== void 0) {
+        closeSettleIntent(appendRecord, session, intent, "commit", "legacy receipt matched before the intent closed");
         committed += 1;
         continue;
       }
@@ -22254,14 +22339,15 @@ async function recoverOpenSettleIntents(deps, agentId, session, appendRecord, in
       log(deps.logger, "warn", "dsh-soulmojito body recovery: settle intent recovery failed", {
         agentId,
         opId: intent.opId,
+        phase: intent.decision === void 0 ? "restore" : "commit-replay",
         scopeId: intent.scopeId,
         error: message
       });
     }
   }
-  return { restored, committed, failed: failures.length, failures };
+  return { restored, committed, replayed, failed: failures.length, failures };
 }
-async function settleReceiptPersisted(deps, intent) {
+async function readSettleSnapshot(deps, intent) {
   let snapshot2;
   try {
     snapshot2 = await deps.store.getChatSnapshot(intent.character, intent.scopeId);
@@ -22269,9 +22355,7 @@ async function settleReceiptPersisted(deps, intent) {
     throw settleChatError(intent, cause);
   }
   if (snapshot2 === void 0) throw settleChatError(intent, void 0);
-  const live = readMvuReceipts(snapshot2.chat).filter((receipt) => receipt.undoneAt === void 0);
-  if (live.some((receipt) => receipt.opId === intent.opId)) return true;
-  return live.some((receipt) => receipt.opId === void 0 && receipt.turnKey === intent.turnKey && receipt.at >= intent.receiptAt);
+  return snapshot2;
 }
 function settleChatError(intent, cause) {
   const suffix = cause === void 0 ? "" : `: ${errorMessage2(cause)}`;
@@ -22281,15 +22365,37 @@ function settleChatError(intent, cause) {
     { detail: "chat-unreadable", stage: "restore", ...cause === void 0 ? {} : { cause } }
   );
 }
-async function restoreSettleIntentBefore(deps, intent) {
-  for (const item of [...intent.items].reverse()) {
-    const current = await deps.variableStore.get(intent.scope, intent.scopeId, item.name);
+function settleReceiptStored(chat, intent) {
+  return readMvuReceipts(chat).some((receipt) => receipt.opId === intent.opId);
+}
+function legacySettleReceipt(chat, intent) {
+  if (intent.receiptOpId === true) return void 0;
+  return readMvuReceipts(chat).find((receipt) => receipt.undoneAt === void 0 && receipt.opId === void 0 && receipt.turnKey === intent.turnKey && receipt.at >= intent.receiptAt);
+}
+async function replaySettleDecision(deps, intent, decision, snapshot2) {
+  appendMvuReceipt(snapshot2.chat, decision.receipt);
+  try {
+    await deps.store.saveChat(intent.character, intent.scopeId, snapshot2.chat, snapshot2.revision);
+  } catch (cause) {
+    throw new BodyRollbackError(
+      "body-rollback-save-failed",
+      `settle decision '${intent.opId}' cannot save its receipt into chat '${intent.scopeId}': ${errorMessage2(cause)}`,
+      { stage: "chat-save", sessionId: intent.sessionId, cause }
+    );
+  }
+}
+async function restoreSettleIntentItems(variableStore2, scopeId, items) {
+  for (const item of [...items].reverse()) {
+    const current = await variableStore2.get("chat", scopeId, item.name);
     if (item.before !== void 0) {
-      await deps.variableStore.set(intent.scope, intent.scopeId, item.name, item.before, current?.revision);
+      await variableStore2.set("chat", scopeId, item.name, item.before, current?.revision);
     } else if (current !== void 0) {
-      await deps.variableStore.delete(intent.scope, intent.scopeId, item.name, current.revision);
+      await variableStore2.delete("chat", scopeId, item.name, current.revision);
     }
   }
+}
+async function restoreSettleIntentBefore(deps, intent) {
+  await restoreSettleIntentItems(deps.variableStore, intent.scopeId, intent.items);
 }
 function closeSettleIntent(writer, session, intent, phase, reason) {
   appendSettleIntentWith(writer, session, {
@@ -24865,9 +24971,13 @@ function settlingDecision(deps, op, evidence) {
   const candidateVisible = findSurfaceSeqByMessageId(events, surface, evidence.anchorId) !== void 0;
   const committed = ledger.selectedIndex === evidence.index && ledger.anchorMessageId === evidence.anchorId;
   if (!previousVisible && candidateVisible && committed) {
-    return settlementRemainingTargets(events, surface, op, evidence).length === 0 ? "settled" : "finish-hide";
+    const remaining = settlementRemainingTargets(events, surface, op, evidence);
+    return remaining.length === 0 ? "settled" : "finish-hide";
   }
   if (previousVisible && ledger.selectedIndex === op.previousIndex) return "cancelled";
+  if (candidateVisible && committed && settlementRemainingTargets(events, surface, op, evidence).length > 0) {
+    return "finish-hide";
+  }
   return "ambiguous";
 }
 function settlementTargetsOf(op, evidence) {
@@ -24900,9 +25010,9 @@ function settlementRemainingTargets(events, surface, op, evidence) {
     }
   }
   for (const seq of oldAnchorSurfaceTargets(events, surface, targets.previousAnchorId)) remaining.add(seq);
-  return [...remaining].filter((seq) => !isSettlementHideMarker(eventAtSeq(events, seq))).sort((left, right) => left - right);
+  return [...remaining].filter((seq) => !isBodyHideMarker(eventAtSeq(events, seq))).sort((left, right) => left - right);
 }
-function isSettlementHideMarker(event) {
+function isBodyHideMarker(event) {
   if (event.type !== "developer/message") return false;
   const message = messageOf2(event);
   return message !== void 0 && sourceOf(message)?.form === "body-hide";
@@ -25474,6 +25584,7 @@ function failedTurnTargets(events, surface, triggerId, failedTurn) {
   for (const seq of surface) {
     const event = eventAtSeq(events, seq);
     if (event.type === "system/message") continue;
+    if (isBodyHideMarker(event)) continue;
     if (numberField(event.data.turn) === failedTurn) targets.add(seq);
   }
   return targets;
@@ -26439,9 +26550,9 @@ async function recoverSettleIntents(ctx, deps, agentId, events) {
       code: failureCodeOf(error),
       error: errorMessage4(error)
     });
-    return { restored: 0, committed: 0, failed: 1, failures: [errorMessage4(error)] };
+    return { restored: 0, committed: 0, replayed: 0, failed: 1, failures: [errorMessage4(error)] };
   }
-  if (intents.length === 0) return { restored: 0, committed: 0, failed: 0, failures: [] };
+  if (intents.length === 0) return { restored: 0, committed: 0, replayed: 0, failed: 0, failures: [] };
   try {
     const appendRecord = deps.appendRecord;
     const outcome = await recoverOpenSettleIntents(
@@ -26459,6 +26570,13 @@ async function recoverSettleIntents(ctx, deps, agentId, events) {
       info(ctx, "dsh-soulmojito body: recovery restored flat variables from settle intents", {
         agentId,
         restored: outcome.restored,
+        committed: outcome.committed
+      });
+    }
+    if (outcome.replayed !== void 0 && outcome.replayed > 0) {
+      info(ctx, "dsh-soulmojito body: recovery replayed settle commit decisions into chat", {
+        agentId,
+        replayed: outcome.replayed,
         committed: outcome.committed
       });
     }

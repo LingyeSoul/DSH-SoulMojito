@@ -8,7 +8,7 @@ import {
   type MvuReceipt,
   type MvuVariableChange,
 } from '../../mvu.js'
-import type { JsonValue, VariableSnapshot } from '../../../../tavern-store/src/index.js'
+import type { JsonValue, VariableSnapshot, VariableStore } from '../../../../tavern-store/src/index.js'
 import { getMvuTreePath, guardMvuWrite, readMvuSchema } from '../../mvu-guard.js'
 import { readMvuRules, runMvuRules, type MvuRuleWrite } from '../../mvu-rules.js'
 import {
@@ -19,10 +19,15 @@ import {
   runDeduction,
   subagentRuntimeOf,
 } from '../deduce.js'
+import { restoreSettleIntentItems } from '../body-settle-intent.js'
+import { errorMessage } from '../body-rollback-support.js'
 import {
+  WriteJournalError,
   appendSettleIntentWith,
+  jsonSafeSettleReceipt,
   openSettleIntent,
   openSettleIntentsOf,
+  type SettleIntentHandle,
   type SettleIntentItem,
 } from '../write-journal.js'
 import { appendMvuAudit } from '../projector.js'
@@ -120,14 +125,21 @@ export function deductionTools(): ToolDefinition[] {
       // when the host rejects it.
       const settleIntent = await openSettleIntent(exec.agent, binding.agentId)
       const settlementAt = new Date().toISOString()
+      // Every flat write of this batch in write order: the request items first,
+      // then each rule extend. An abort walks this list in reverse to put all of
+      // them back, exactly like startup recovery.
+      const batchItems: SettleIntentItem[] = []
       if (settleIntent !== undefined) {
-        const items: SettleIntentItem[] = []
+        const openItems: SettleIntentItem[] = []
         for (const request of requests) {
           let before: JsonValue | undefined
           try {
             before = (await store.get('chat', binding.chatId, request.name))?.value
           } catch {
-            // An invalid name has no flat value; the batch records its failure.
+            // The store rejects this name, so the write loop cannot store it
+            // either: there is nothing to undo and the batch records the
+            // failure below. Recording it would make every later undo throw.
+            continue
           }
           let after: JsonValue | undefined
           try {
@@ -135,7 +147,7 @@ export function deductionTools(): ToolDefinition[] {
           } catch {
             // A non-JSON value can never be written; the batch records its failure.
           }
-          items.push({
+          openItems.push({
             name: request.name,
             ...(before === undefined ? {} : { before }),
             ...(after === undefined ? {} : { after }),
@@ -152,8 +164,14 @@ export function deductionTools(): ToolDefinition[] {
           turnKey: String(chat.messages.length),
           receiptAt: settlementAt,
           at: settlementAt,
-          items,
+          // This batch's receipt always carries its opId, so recovery must match
+          // by identity and never fall back to the legacy at + turnKey guess.
+          receiptOpId: true,
+          // Empty when no request can be written: the intent still owns the
+          // receipt decision, it just has nothing to undo.
+          items: openItems,
         })
+        batchItems.push(...openItems)
       }
       const applied: string[] = []
       const failed: Array<{ name: string; error: string }> = []
@@ -276,6 +294,11 @@ export function deductionTools(): ToolDefinition[] {
           // receipt as failed. The intent stays recovery evidence only: the
           // receipt below still carries the rule changes exactly once.
           if (settleIntent !== undefined && pendingWrites.length > 0) {
+            const extendItems: SettleIntentItem[] = pendingWrites.map((pending) => ({
+              name: pending.write.path,
+              ...(pending.existing === undefined ? {} : { before: pending.existing.value }),
+              after: pending.value,
+            }))
             try {
               appendSettleIntentWith(settleIntent.writer, settleIntent.session, {
                 kind: 'settle-intent',
@@ -283,12 +306,9 @@ export function deductionTools(): ToolDefinition[] {
                 opId: settleIntent.opId,
                 sessionId: settleIntent.sessionId,
                 at: new Date().toISOString(),
-                items: pendingWrites.map((pending) => ({
-                  name: pending.write.path,
-                  ...(pending.existing === undefined ? {} : { before: pending.existing.value }),
-                  after: pending.value,
-                })),
+                items: extendItems,
               })
+              batchItems.push(...extendItems)
             } catch (error) {
               ruleFailures.push(`rule settle intent: ${error instanceof Error ? error.message : String(error)}`)
               pendingWrites.length = 0
@@ -338,10 +358,37 @@ export function deductionTools(): ToolDefinition[] {
         changes: receiptChanges,
         failures: [...failed.map((failure) => `${failure.name}: ${failure.error}`), ...ruleFailures],
       }
+      if (settleIntent !== undefined) {
+        // Durable commit decision: it lands after every flat write and before
+        // the chat save, so a crash between the two replays this exact receipt
+        // instead of inspecting a 20-entry ring that may already have evicted
+        // it. No save may start without the decision.
+        try {
+          appendSettleIntentWith(settleIntent.writer, settleIntent.session, {
+            kind: 'settle-intent',
+            phase: 'decide',
+            opId: settleIntent.opId,
+            sessionId: settleIntent.sessionId,
+            at: new Date().toISOString(),
+            chatCharacter: binding.character,
+            chatId: binding.chatId,
+            receipt: jsonSafeSettleReceipt(settleIntent.opId, receipt),
+          })
+        } catch (error) {
+          await abandonSettleBatchWithoutDecision(store, binding.chatId, settleIntent, batchItems, error)
+        }
+      }
       appendMvuReceipt(chat, receipt)
-      // CAS 冲突抛 ChatRevisionConflictError：由 agent 重调工具重试（变量已写、
-      // 回执未落，重试幂等）。
-      await db.saveChat(binding.character, binding.chatId, chat, snapshot.revision)
+      // CAS 冲突抛 ChatRevisionConflictError：由 agent 重调工具重试（回执未落，
+      // 重试幂等）。A failed save with a durable decision rolls the flat writes
+      // back and closes the intent as aborted; a failed rollback keeps the
+      // decision for startup recovery to commit.
+      try {
+        await db.saveChat(binding.character, binding.chatId, chat, snapshot.revision)
+      } catch (error) {
+        if (settleIntent === undefined) throw error
+        await abortDecidedSettleBatch(store, binding.chatId, settleIntent, batchItems, error)
+      }
       // Close the intent only after the chat save persisted the receipt. A
       // failed append throws explicitly: an unclosed intent is never silent.
       // Every still-open intent of this chat closes too: an earlier failed
@@ -394,6 +441,127 @@ interface PendingRuleWrite {
   readonly write: MvuRuleWrite
   readonly value: JsonValue
   readonly existing: VariableSnapshot | undefined
+}
+
+/**
+ * Close a batch whose commit decision could not be recorded.
+ *
+ * `saveChat` must never start without the decision, so the flat writes go back
+ * to their `before` values and the intent closes as `abort`. When that rollback
+ * itself fails the intent stays open without a decision: startup recovery
+ * restores the same values and closes it as `recovered`, so either path ends in
+ * a state the next startup can finish.
+ */
+async function abandonSettleBatchWithoutDecision(
+  store: VariableStore,
+  chatId: string,
+  handle: SettleIntentHandle,
+  items: readonly SettleIntentItem[],
+  cause: unknown,
+): Promise<never> {
+  let restoreFailure: string | undefined
+  try {
+    await restoreSettleIntentItems(store, chatId, items)
+  } catch (error) {
+    restoreFailure = errorMessage(error)
+  }
+  if (restoreFailure !== undefined) {
+    throw new WriteJournalError(
+      'settle-intent-abort-failed',
+      `settle batch '${handle.opId}' could not record its commit decision (${errorMessage(cause)}) and could not restore its flat writes (${restoreFailure}); the open intent has no decision, so startup recovery restores its before values`,
+      { cause },
+    )
+  }
+  try {
+    appendSettleAbort(handle, 'commit decision was not recorded')
+  } catch (error) {
+    throw new WriteJournalError(
+      'settle-intent-abort-failed',
+      `settle batch '${handle.opId}' could not record its commit decision (${errorMessage(cause)}) nor its abort marker (${errorMessage(error)}); startup recovery restores the before values and closes it as recovered`,
+      { cause },
+    )
+  }
+  throw cause
+}
+
+/**
+ * Close a batch whose chat save failed after its decision was recorded.
+ *
+ * The decision already means "commit", so the flat writes go back to `before`
+ * and the intent closes as `abort` when that rollback completes. A failed
+ * rollback keeps the decision and startup recovery commits the receipt, which
+ * then covers the values the store still holds. When only the abort marker
+ * fails, the batch values are re-applied so that same recovery commit stays
+ * truthful.
+ */
+async function abortDecidedSettleBatch(
+  store: VariableStore,
+  chatId: string,
+  handle: SettleIntentHandle,
+  items: readonly SettleIntentItem[],
+  cause: unknown,
+): Promise<never> {
+  let restoreFailure: string | undefined
+  try {
+    await restoreSettleIntentItems(store, chatId, items)
+  } catch (error) {
+    restoreFailure = errorMessage(error)
+  }
+  if (restoreFailure !== undefined) {
+    throw new WriteJournalError(
+      'settle-intent-abort-failed',
+      `settle batch '${handle.opId}' could not restore its flat writes after the chat save failed (${errorMessage(cause)}): ${restoreFailure}; the decide record stays open and startup recovery commits it`,
+      { cause },
+    )
+  }
+  try {
+    appendSettleAbort(handle, 'chat save failed after the commit decision')
+  } catch (error) {
+    const forwardFailure = await reapplySettleItems(store, chatId, items)
+    if (forwardFailure !== undefined) {
+      throw new WriteJournalError(
+        'settle-intent-abort-failed',
+        `settle batch '${handle.opId}' restored its flat writes but could not append the abort marker (${errorMessage(error)}), and re-applying the batch values failed (${forwardFailure}); the decide record stays open and startup recovery commits its receipt, so the flat store can differ from that receipt until then`,
+        { cause },
+      )
+    }
+    throw new WriteJournalError(
+      'settle-intent-abort-failed',
+      `settle batch '${handle.opId}' could not append its abort marker (${errorMessage(error)}); the batch values were re-applied and startup recovery will commit the receipt`,
+      { cause },
+    )
+  }
+  throw cause
+}
+
+/** Append the closure that states a batch's flat writes were rolled back. */
+function appendSettleAbort(handle: SettleIntentHandle, reason: string): void {
+  appendSettleIntentWith(handle.writer, handle.session, {
+    kind: 'settle-intent',
+    phase: 'abort',
+    opId: handle.opId,
+    sessionId: handle.sessionId,
+    at: new Date().toISOString(),
+    reason,
+  })
+}
+
+/** Re-apply a batch's `after` values in write order; returns the failure text. */
+async function reapplySettleItems(
+  store: VariableStore,
+  chatId: string,
+  items: readonly SettleIntentItem[],
+): Promise<string | undefined> {
+  try {
+    for (const item of items) {
+      if (item.after === undefined) continue
+      const current = await store.get('chat', chatId, item.name)
+      await store.set('chat', chatId, item.name, item.after, current?.revision)
+    }
+    return undefined
+  } catch (error) {
+    return errorMessage(error)
+  }
 }
 
 /** Narrow a tool argument to the JSON value the variable store accepts. */

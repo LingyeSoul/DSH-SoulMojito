@@ -23,9 +23,11 @@ import {
   appendWriteJournalWith,
   currentTurnOf,
   foldSettleIntents,
+  jsonSafeSettleReceipt,
   newJournalId,
   readSettleIntents,
   readWriteJournal,
+  type SettleIntentDecideEntry,
   type SettleIntentEntry,
   type SettleIntentExtendEntry,
   type SettleIntentOpenEntry,
@@ -193,6 +195,32 @@ function settleIntentFixture(opId: string, items: SettleIntentOpenEntry['items']
     at: CREATED_AT,
     items,
   }
+}
+
+/** Decision fixture: the exact receipt the batch was about to persist. */
+function settleDecisionFixture(opId: string): SettleIntentDecideEntry {
+  return {
+    kind: 'settle-intent',
+    phase: 'decide',
+    opId,
+    sessionId: AGENT_ID,
+    at: CREATED_AT,
+    chatCharacter: CHARACTER,
+    chatId: 'fixture-chat',
+    receipt: {
+      at: CREATED_AT,
+      turnKey: '4',
+      status: 'updated',
+      changes: [{ name: 'mood', before: 'calm', after: 'alert' }],
+      failures: [],
+      opId,
+    },
+  }
+}
+
+/** Raw event wrapper: invalid payloads must reach the parser untyped. */
+function settleEventsOf(...data: unknown[]): unknown[] {
+  return data.map((entry, seq) => ({ seq, type: SETTLE_INTENT_EVENT_TYPE, data: entry }))
 }
 
 let home: string
@@ -617,6 +645,87 @@ describe('settle intents', () => {
     expect(foldSettleIntents([...events, { seq: 3, type: SETTLE_INTENT_EVENT_TYPE, data: commit }])).toEqual([])
   })
 
+  it('attaches a decide record to its open intent without reordering the items', () => {
+    const open = settleIntentFixture('settle-decide', [
+      { name: 'mood', before: 'calm', after: 'alert' },
+      { name: 'trust', before: 1, after: 2 },
+    ])
+    const decision = settleDecisionFixture(open.opId)
+    const commit: SettleIntentEntry = {
+      kind: 'settle-intent', phase: 'commit', opId: open.opId, sessionId: AGENT_ID, at: CREATED_AT,
+    }
+    const events = settleEventsOf(open, decision)
+
+    expect(readSettleIntents(events)).toEqual([open, decision])
+    // The decision rides on the folded entry; items keep their write order.
+    expect(foldSettleIntents(events)).toEqual([{ ...open, decision }])
+    expect((foldSettleIntents(events)[0] as SettleIntentOpenEntry).items).toEqual(open.items)
+    expect(foldSettleIntents(settleEventsOf(open, decision, commit))).toEqual([])
+  })
+
+  it('closes an aborted intent without restoring or replaying it', () => {
+    const open = settleIntentFixture('settle-abort', [{ name: 'mood', before: 'calm', after: 'alert' }])
+    const decision = settleDecisionFixture(open.opId)
+    const abort: SettleIntentEntry = {
+      kind: 'settle-intent', phase: 'abort', opId: open.opId, sessionId: AGENT_ID, at: CREATED_AT, reason: 'flat writes restored',
+    }
+
+    // An abort is a closure: nothing stays open, so recovery neither restores
+    // nor replays the batch.
+    expect(foldSettleIntents(settleEventsOf(open, decision, abort))).toEqual([])
+    expect(readSettleIntents(settleEventsOf(open, decision, abort))).toEqual([open, decision, abort])
+  })
+
+  it('rejects decide ordering violations and damaged decisions', () => {
+    const open = settleIntentFixture('settle-decide-order', [{ name: 'mood', after: 'alert' }])
+    const decision = settleDecisionFixture(open.opId)
+    const extend: SettleIntentExtendEntry = {
+      kind: 'settle-intent', phase: 'extend', opId: open.opId, sessionId: AGENT_ID, at: CREATED_AT,
+      items: [{ name: 'trust', after: 1 }],
+    }
+    const commit: SettleIntentEntry = {
+      kind: 'settle-intent', phase: 'commit', opId: open.opId, sessionId: AGENT_ID, at: CREATED_AT,
+    }
+    const abort: SettleIntentEntry = {
+      kind: 'settle-intent', phase: 'abort', opId: open.opId, sessionId: AGENT_ID, at: CREATED_AT,
+    }
+
+    expect(() => foldSettleIntents(settleEventsOf(decision))).toThrow(/decides without an open record/)
+    expect(() => foldSettleIntents(settleEventsOf(open, commit, decision))).toThrow(/decides after it closed/)
+    expect(() => foldSettleIntents(settleEventsOf(open, abort, decision))).toThrow(/decides after it closed/)
+    expect(() => foldSettleIntents(settleEventsOf(open, decision, decision))).toThrow(/decides more than once/)
+    expect(() => foldSettleIntents(settleEventsOf(open, decision, extend))).toThrow(/extends after it was decided/)
+    expect(() => readSettleIntents(settleEventsOf(open, {
+      ...decision,
+      receipt: { ...decision.receipt, opId: 'another-op' },
+    }))).toThrow(/must equal the decide record/)
+    expect(() => readSettleIntents(settleEventsOf(open, {
+      ...decision,
+      receipt: { ...decision.receipt, status: 'bogus' },
+    }))).toThrow(/status/)
+    expect(() => readSettleIntents(settleEventsOf(open, {
+      ...decision,
+      receipt: { ...decision.receipt, changes: [{ name: 'mood', after: () => 1 }] },
+    }))).toThrow(/changes\[0\] after/)
+  })
+
+  it('parses the receiptOpId marker and rejects a non-true flag', () => {
+    const open = settleIntentFixture('settle-exact-only', [{ name: 'mood', after: 'alert' }])
+
+    expect(readSettleIntents(settleEventsOf({ ...open, receiptOpId: true }))).toEqual([{ ...open, receiptOpId: true }])
+    expect(() => readSettleIntents(settleEventsOf({ ...open, receiptOpId: false }))).toThrow(/receiptOpId/)
+    expect(() => readSettleIntents(settleEventsOf({ ...open, receiptOpId: 'yes' }))).toThrow(/receiptOpId/)
+  })
+
+  it('rebuilds the decision receipt as JSON values only', () => {
+    const receipt = settleDecisionFixture('settle-json').receipt
+    expect(jsonSafeSettleReceipt('settle-json', receipt)).toEqual(receipt)
+    expect(() => jsonSafeSettleReceipt('settle-json', {
+      ...receipt,
+      changes: [{ name: 'mood', after: (): number => 1 }],
+    })).toThrow(/changes\[0\]\.after/)
+  })
+
   it('rejects an extend record without an open intent or after it closed', () => {
     const open = settleIntentFixture('settle-extend-orphan', [{ name: 'mood', after: 'alert' }])
     const extend: SettleIntentExtendEntry = {
@@ -631,8 +740,8 @@ describe('settle intents', () => {
 
     expect(() => foldSettleIntents(eventsOf(extend))).toThrow(/extends without an open record/)
     expect(() => foldSettleIntents(eventsOf(open, commit, extend))).toThrow(/extends after it closed/)
-    expect(() => foldSettleIntents([{ seq: 0, type: SETTLE_INTENT_EVENT_TYPE, data: { ...extend, items: [] } }]))
-      .toThrow(/non-empty array/)
+    expect(() => foldSettleIntents([{ seq: 0, type: SETTLE_INTENT_EVENT_TYPE, data: { ...extend, items: [{ value: 1 }] } }]))
+      .toThrow(/field 'name'/)
   })
 
   it('rejects duplicate, reopened and orphan closure records', () => {
@@ -651,12 +760,21 @@ describe('settle intents', () => {
   it('rejects a malformed open record instead of skipping it', () => {
     const open = settleIntentFixture('settle-malformed', [{ name: 'mood', after: 'alert' }])
 
-    expect(() => foldSettleIntents([{ seq: 0, type: SETTLE_INTENT_EVENT_TYPE, data: { ...open, items: [] } }]))
-      .toThrow(/non-empty array/)
+    expect(() => foldSettleIntents(settleEventsOf({ ...open, items: 'mood' })))
+      .toThrow(/must be an array/)
     expect(() => foldSettleIntents([{ seq: 0, type: SETTLE_INTENT_EVENT_TYPE, data: { ...open, turnKey: 'body:1' } }]))
       .toThrow(/floor index/)
     expect(() => readSettleIntents([{ seq: 0, type: SETTLE_INTENT_EVENT_TYPE, data: { kind: 'settle-intent', phase: 'other' } }]))
       .toThrow(/phase/)
+  })
+
+  it('accepts an intent with an empty undo list', () => {
+    // Every request was rejected by the flat store: the batch has nothing to
+    // undo, but its receipt decision must still recover.
+    const open = settleIntentFixture('settle-empty-undo', [])
+
+    expect(foldSettleIntents(settleEventsOf(open))).toEqual([open])
+    expect(readSettleIntents(settleEventsOf(open))).toEqual([open])
   })
 
   it('appends settle intent records through the injected writer', () => {

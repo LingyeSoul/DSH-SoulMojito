@@ -179,10 +179,14 @@ interface BodyWriteRollbackPort {
    有 `op-settling` 时按 surface/ledger 判定；无证据才按计划恢复。
    若存在未消费的 `op-prepare`（apply 可能已回滚但 op-start 未落盘），启动先按 draft plan
    `restore` 并写 `op-prepare-recovered`，不追加 assistant、不改 surface。
-   若存在未闭合的 `settle-intent`，启动时若 chat 已有对应 receipt 则只补 commit；否则按
-   intent 的 before 还原 flat `VariableStore` 并写 recovered，避免 flat 与 receipt 分裂。
-   settle receipt 携带本次 `opId`，恢复优先精确匹配；旧 receipt 无 opId 才回退
-   `at + turnKey`。
+   若存在未闭合的 `settle-intent`：
+   - 有 `abort` → 只闭合，不还原、不写 receipt；
+   - 有 `decide` 且 chat 已有同 `opId` receipt → 只补 commit；
+   - 有 `decide` 但 chat 没有 receipt → 用 decide.receipt 重放到当前 chat 快照并
+     `saveChat`（当前 revision CAS），成功补 commit；失败保留 intent，不回滚 flat；
+   - 无 decide / 无 receipt → 按 intent 的 before 还原 flat `VariableStore` 并写 recovered。
+   settle receipt 携带本次 `opId`；新 intent 带 `receiptOpId: true`，恢复只认精确匹配，
+   旧 intent 才回退 `at + turnKey`。
    `$rules` 派生写在执行前追加同 opId 的 `extend`，恢复按 open + extend 合并后的 items
    逆序回到最早 before。
 
@@ -229,4 +233,4 @@ interface BodyWriteRollbackPort {
 `body-runtime-plan.ts`（`rollbackPlan` 的写侧 JSON 校验与读侧严格解析）。
 
 残余风险见 §10 与落地决策的“风险与未完成”表（prepare→op-start 崩溃窗口、plan 体积、
-settle 楼层判定、无跨 store 2PC、edit/select 仍严格）。
+decide 重放 CAS 冲突、恢复重放不写 audit、edit/select 仍严格）。

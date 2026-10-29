@@ -42,9 +42,15 @@ import {
 // Settle intent records keep their own shard; this module re-exports the whole
 // previous surface so callers keep importing from `write-journal.js`.
 export { WriteJournalError, foldSettleIntents }
-export { SETTLE_INTENT_EVENT_TYPE, appendSettleIntentWith, readSettleIntents } from './settle-intent-record.js'
+export {
+  SETTLE_INTENT_EVENT_TYPE,
+  appendSettleIntentWith,
+  jsonSafeSettleReceipt,
+  readSettleIntents,
+} from './settle-intent-record.js'
 export type {
   SettleIntentCloseEntry,
+  SettleIntentDecideEntry,
   SettleIntentEntry,
   SettleIntentExtendEntry,
   SettleIntentItem,

@@ -3819,12 +3819,12 @@ var TavernStore = class _TavernStore {
       return id;
     });
   }
-  async saveChat(characterName, chatId, log, expectedRevision) {
+  async saveChat(characterName, chatId, log2, expectedRevision) {
     return this.mutateChat(async () => {
       const dir = path.join(this.root, "chats", safeFileName(characterName));
       const file = path.join(dir, safeChatFileName(chatId));
       await this.assertChatRevision(file, expectedRevision);
-      const bytes = chatBytes(log);
+      const bytes = chatBytes(log2);
       await this.writeAtomic(file, bytes);
       return chatRevision(bytes);
     });
@@ -4097,12 +4097,12 @@ var TavernStore = class _TavernStore {
       await this.assertChatRevision(source, expectedRevision);
       const bytes = await this.tryRead(source);
       if (bytes === void 0) throw new Error(`chat '${chatId}' not found`);
-      const log = parseChatLog(Buffer.from(bytes).toString("utf8"));
-      if (messageId < 0 || messageId >= log.messages.length) {
-        throw new Error(`branch messageId ${messageId} out of range (0..${log.messages.length - 1})`);
+      const log2 = parseChatLog(Buffer.from(bytes).toString("utf8"));
+      if (messageId < 0 || messageId >= log2.messages.length) {
+        throw new Error(`branch messageId ${messageId} out of range (0..${log2.messages.length - 1})`);
       }
-      const branchMessages = log.messages.slice(0, messageId + 1).map((m) => ({ ...m }));
-      const header = structuredClone(log.header);
+      const branchMessages = log2.messages.slice(0, messageId + 1).map((m) => ({ ...m }));
+      const header = structuredClone(log2.header);
       header.chat_metadata = {
         ...header.chat_metadata ?? {},
         bookmark_link: { character: characterName, chatId, messageId },
@@ -4141,9 +4141,9 @@ var TavernStore = class _TavernStore {
       const source = path.join(dir, safeChatFileName(parentChatId));
       const bytes = await this.tryRead(source);
       if (bytes === void 0) throw new Error(`chat '${parentChatId}' not found`);
-      const log = parseChatLog(Buffer.from(bytes).toString("utf8"));
-      const header = structuredClone(log.header);
-      const messageId = typeof fork.bookmarkMessageId === "number" && Number.isSafeInteger(fork.bookmarkMessageId) && fork.bookmarkMessageId >= 0 && fork.bookmarkMessageId < log.messages.length ? fork.bookmarkMessageId : Math.max(0, log.messages.length - 1);
+      const log2 = parseChatLog(Buffer.from(bytes).toString("utf8"));
+      const header = structuredClone(log2.header);
+      const messageId = typeof fork.bookmarkMessageId === "number" && Number.isSafeInteger(fork.bookmarkMessageId) && fork.bookmarkMessageId >= 0 && fork.bookmarkMessageId < log2.messages.length ? fork.bookmarkMessageId : Math.max(0, log2.messages.length - 1);
       header.chat_metadata = {
         ...header.chat_metadata ?? {},
         bookmark_link: { character: characterName, chatId: parentChatId, messageId },
@@ -4835,8 +4835,8 @@ function safeChatFileName(name2) {
   if (!/^[A-Za-z0-9@ _.-]+\.jsonl$/.test(name2) || name2.includes("..")) throw new Error("invalid chat id");
   return name2;
 }
-function chatBytes(log) {
-  return new Uint8Array(Buffer.from(serializeChatLog(log), "utf8"));
+function chatBytes(log2) {
+  return new Uint8Array(Buffer.from(serializeChatLog(log2), "utf8"));
 }
 function chatRevision(bytes) {
   return createHash("sha256").update(bytes).digest("base64url");
@@ -9088,8 +9088,10 @@ function boundedText(value, max2, label) {
   return value.trim().slice(0, max2);
 }
 
-// packages/plugin/src/agent-tavern/write-journal.ts
-import { randomUUID as randomUUID2 } from "node:crypto";
+// packages/plugin/src/agent-tavern/body-rollback-support.ts
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
 
 // packages/plugin/src/agent-tavern/settle-intent-record.ts
 var WriteJournalError = class extends Error {
@@ -9125,7 +9127,16 @@ function foldSettleIntents(events) {
       if (closed.has(entry.opId)) throw new WriteJournalError("invalid-settle-intent", `settle intent '${entry.opId}' extends after it closed`);
       const current = open.get(entry.opId);
       if (current === void 0) throw new WriteJournalError("invalid-settle-intent", `settle intent '${entry.opId}' extends without an open record`);
+      if (current.decision !== void 0) throw new WriteJournalError("invalid-settle-intent", `settle intent '${entry.opId}' extends after it was decided`);
       open.set(entry.opId, { ...current, items: [...current.items, ...entry.items] });
+      continue;
+    }
+    if (entry.phase === "decide") {
+      if (closed.has(entry.opId)) throw new WriteJournalError("invalid-settle-intent", `settle intent '${entry.opId}' decides after it closed`);
+      const current = open.get(entry.opId);
+      if (current === void 0) throw new WriteJournalError("invalid-settle-intent", `settle intent '${entry.opId}' decides without an open record`);
+      if (current.decision !== void 0) throw new WriteJournalError("invalid-settle-intent", `settle intent '${entry.opId}' decides more than once`);
+      open.set(entry.opId, { ...current, decision: entry });
       continue;
     }
     if (closed.has(entry.opId)) {
@@ -9151,6 +9162,22 @@ function appendSettleIntentWith(writer, session, entry) {
     );
   }
   return "recorded";
+}
+function jsonSafeSettleReceipt(opId, receipt) {
+  const where = `settle decision receipt '${opId}'`;
+  return {
+    at: receipt.at,
+    turnKey: receipt.turnKey,
+    status: receipt.status,
+    changes: receipt.changes.map((change, index) => ({
+      name: change.name,
+      ...change.before === void 0 ? {} : { before: jsonValueAt(change.before, `${where} changes[${index}].before`) },
+      ...change.after === void 0 ? {} : { after: jsonValueAt(change.after, `${where} changes[${index}].after`) },
+      ...change.reason === void 0 ? {} : { reason: change.reason }
+    })),
+    failures: [...receipt.failures],
+    opId
+  };
 }
 function isRecord2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -9209,7 +9236,8 @@ function parseSettleIntent(data, index) {
       items: settleIntentItems(data["items"], where)
     };
   }
-  if (phase === "commit" || phase === "recovered") {
+  if (phase === "decide") return parseSettleIntentDecide(data, where);
+  if (phase === "commit" || phase === "recovered" || phase === "abort") {
     return {
       kind: "settle-intent",
       phase,
@@ -9219,15 +9247,11 @@ function parseSettleIntent(data, index) {
       ...data["reason"] === void 0 ? {} : { reason: textAt(data, "reason", where) }
     };
   }
-  throw invalidSettle(where, `field 'phase' must be 'open', 'extend', 'commit' or 'recovered', received '${String(phase)}'`);
+  throw invalidSettle(where, `field 'phase' must be 'open', 'extend', 'decide', 'abort', 'commit' or 'recovered', received '${String(phase)}'`);
 }
 function parseSettleIntentOpen(record, where) {
   const scope = record["scope"];
   if (scope !== "chat") throw invalidSettle(where, `field 'scope' must be 'chat', received '${String(scope)}'`);
-  const turnKey = textAt(record, "turnKey", where);
-  if (!/^(0|[1-9][0-9]*)$/.test(turnKey)) {
-    throw invalidSettle(where, `field 'turnKey' must be a floor index, received '${turnKey}'`);
-  }
   return {
     kind: "settle-intent",
     phase: "open",
@@ -9236,14 +9260,79 @@ function parseSettleIntentOpen(record, where) {
     character: textAt(record, "character", where),
     scope: "chat",
     scopeId: textAt(record, "scopeId", where),
-    turnKey,
+    turnKey: floorKeyAt(record, where),
     receiptAt: timestampAt(record, "receiptAt", where),
     at: timestampAt(record, "at", where),
+    ...record["receiptOpId"] === void 0 ? {} : { receiptOpId: receiptOpIdFlagAt(record, where) },
     items: settleIntentItems(record["items"], where)
   };
 }
+function parseSettleIntentDecide(record, where) {
+  const opId = textAt(record, "opId", where);
+  return {
+    kind: "settle-intent",
+    phase: "decide",
+    opId,
+    sessionId: textAt(record, "sessionId", where),
+    at: timestampAt(record, "at", where),
+    ...record["chatCharacter"] === void 0 ? {} : { chatCharacter: textAt(record, "chatCharacter", where) },
+    ...record["chatId"] === void 0 ? {} : { chatId: textAt(record, "chatId", where) },
+    receipt: parseSettleIntentReceipt(record["receipt"], opId, `${where} receipt`)
+  };
+}
+function parseSettleIntentReceipt(value, opId, where) {
+  const record = recordAt(value, where);
+  const receiptOpId = textAt(record, "opId", where);
+  if (receiptOpId !== opId) {
+    throw invalidSettle(where, `field 'opId' must equal the decide record's opId '${opId}', received '${receiptOpId}'`);
+  }
+  const status = record["status"];
+  if (status !== "updated" && status !== "unchanged" && status !== "failed") {
+    throw invalidSettle(where, `field 'status' must be 'updated', 'unchanged' or 'failed', received '${String(status)}'`);
+  }
+  return {
+    at: timestampAt(record, "at", where),
+    turnKey: floorKeyAt(record, where),
+    status,
+    changes: settleIntentReceiptChanges(record["changes"], where),
+    failures: stringArrayAt(record["failures"], `${where} failures`),
+    opId: receiptOpId
+  };
+}
+function settleIntentReceiptChanges(value, where) {
+  if (!Array.isArray(value)) throw invalidSettle(where, `field 'changes' must be an array`);
+  return value.map((item, index) => {
+    const changeWhere = `${where} changes[${index}]`;
+    const record = recordAt(item, changeWhere);
+    return {
+      name: textAt(record, "name", changeWhere),
+      ...record["before"] === void 0 ? {} : { before: jsonValueAt(record["before"], `${changeWhere} before`) },
+      ...record["after"] === void 0 ? {} : { after: jsonValueAt(record["after"], `${changeWhere} after`) },
+      ...record["reason"] === void 0 ? {} : { reason: textAt(record, "reason", changeWhere) }
+    };
+  });
+}
+function stringArrayAt(value, where) {
+  if (!Array.isArray(value)) throw invalidSettle(where, "must be an array of strings");
+  return value.map((item, index) => {
+    if (typeof item !== "string") throw invalidSettle(`${where}[${index}]`, "must be a string");
+    return item;
+  });
+}
+function floorKeyAt(record, where) {
+  const turnKey = textAt(record, "turnKey", where);
+  if (!/^(0|[1-9][0-9]*)$/.test(turnKey)) {
+    throw invalidSettle(where, `field 'turnKey' must be a floor index, received '${turnKey}'`);
+  }
+  return turnKey;
+}
+function receiptOpIdFlagAt(record, where) {
+  const value = record["receiptOpId"];
+  if (value !== true) throw invalidSettle(where, `field 'receiptOpId' must be true when present, received '${String(value)}'`);
+  return true;
+}
 function settleIntentItems(value, where) {
-  if (!Array.isArray(value) || value.length === 0) throw invalidSettle(where, `field 'items' must be a non-empty array`);
+  if (!Array.isArray(value)) throw invalidSettle(where, `field 'items' must be an array of undo items`);
   return value.map((item, index) => parseSettleIntentItem(item, `${where} items[${index}]`));
 }
 function parseSettleIntentItem(value, where) {
@@ -9255,7 +9344,20 @@ function parseSettleIntentItem(value, where) {
   };
 }
 
+// packages/plugin/src/agent-tavern/body-settle-intent.ts
+async function restoreSettleIntentItems(variableStore2, scopeId, items) {
+  for (const item of [...items].reverse()) {
+    const current = await variableStore2.get("chat", scopeId, item.name);
+    if (item.before !== void 0) {
+      await variableStore2.set("chat", scopeId, item.name, item.before, current?.revision);
+    } else if (current !== void 0) {
+      await variableStore2.delete("chat", scopeId, item.name, current.revision);
+    }
+  }
+}
+
 // packages/plugin/src/agent-tavern/write-journal.ts
+import { randomUUID as randomUUID2 } from "node:crypto";
 var WRITE_JOURNAL_EVENT_TYPE = "plugin:dsh-soulmojito/write";
 function currentTurnOf(events) {
   let open;
@@ -9731,20 +9833,22 @@ function deductionTools() {
       const preEntries = ruleSource !== void 0 ? await store3.listAll("chat", binding.chatId) : [];
       const settleIntent = await openSettleIntent(exec.agent, binding.agentId);
       const settlementAt = (/* @__PURE__ */ new Date()).toISOString();
+      const batchItems = [];
       if (settleIntent !== void 0) {
-        const items = [];
+        const openItems = [];
         for (const request of requests) {
           let before;
           try {
             before = (await store3.get("chat", binding.chatId, request.name))?.value;
           } catch {
+            continue;
           }
           let after;
           try {
             after = jsonValueOf(request.value);
           } catch {
           }
-          items.push({
+          openItems.push({
             name: request.name,
             ...before === void 0 ? {} : { before },
             ...after === void 0 ? {} : { after }
@@ -9761,8 +9865,14 @@ function deductionTools() {
           turnKey: String(chat.messages.length),
           receiptAt: settlementAt,
           at: settlementAt,
-          items
+          // This batch's receipt always carries its opId, so recovery must match
+          // by identity and never fall back to the legacy at + turnKey guess.
+          receiptOpId: true,
+          // Empty when no request can be written: the intent still owns the
+          // receipt decision, it just has nothing to undo.
+          items: openItems
         });
+        batchItems.push(...openItems);
       }
       const applied = [];
       const failed = [];
@@ -9856,6 +9966,11 @@ function deductionTools() {
             pendingWrites.push({ write, value, existing });
           }
           if (settleIntent !== void 0 && pendingWrites.length > 0) {
+            const extendItems = pendingWrites.map((pending) => ({
+              name: pending.write.path,
+              ...pending.existing === void 0 ? {} : { before: pending.existing.value },
+              after: pending.value
+            }));
             try {
               appendSettleIntentWith(settleIntent.writer, settleIntent.session, {
                 kind: "settle-intent",
@@ -9863,12 +9978,9 @@ function deductionTools() {
                 opId: settleIntent.opId,
                 sessionId: settleIntent.sessionId,
                 at: (/* @__PURE__ */ new Date()).toISOString(),
-                items: pendingWrites.map((pending) => ({
-                  name: pending.write.path,
-                  ...pending.existing === void 0 ? {} : { before: pending.existing.value },
-                  after: pending.value
-                }))
+                items: extendItems
               });
+              batchItems.push(...extendItems);
             } catch (error) {
               ruleFailures.push(`rule settle intent: ${error instanceof Error ? error.message : String(error)}`);
               pendingWrites.length = 0;
@@ -9914,8 +10026,29 @@ function deductionTools() {
         changes: receiptChanges,
         failures: [...failed.map((failure) => `${failure.name}: ${failure.error}`), ...ruleFailures]
       };
+      if (settleIntent !== void 0) {
+        try {
+          appendSettleIntentWith(settleIntent.writer, settleIntent.session, {
+            kind: "settle-intent",
+            phase: "decide",
+            opId: settleIntent.opId,
+            sessionId: settleIntent.sessionId,
+            at: (/* @__PURE__ */ new Date()).toISOString(),
+            chatCharacter: binding.character,
+            chatId: binding.chatId,
+            receipt: jsonSafeSettleReceipt(settleIntent.opId, receipt)
+          });
+        } catch (error) {
+          await abandonSettleBatchWithoutDecision(store3, binding.chatId, settleIntent, batchItems, error);
+        }
+      }
       appendMvuReceipt(chat, receipt);
-      await db.saveChat(binding.character, binding.chatId, chat, snapshot2.revision);
+      try {
+        await db.saveChat(binding.character, binding.chatId, chat, snapshot2.revision);
+      } catch (error) {
+        if (settleIntent === void 0) throw error;
+        await abortDecidedSettleBatch(store3, binding.chatId, settleIntent, batchItems, error);
+      }
       if (settleIntent !== void 0) {
         const closedAt = (/* @__PURE__ */ new Date()).toISOString();
         for (const open of openSettleIntentsOf(settleIntent.session, settleIntent.sessionId)) {
@@ -9957,6 +10090,86 @@ var settleOutput = objectOutput({
   failed: { type: "array", items: { type: "object", additionalProperties: true } },
   receipt: { type: "object", additionalProperties: true }
 });
+async function abandonSettleBatchWithoutDecision(store3, chatId, handle, items, cause) {
+  let restoreFailure;
+  try {
+    await restoreSettleIntentItems(store3, chatId, items);
+  } catch (error) {
+    restoreFailure = errorMessage(error);
+  }
+  if (restoreFailure !== void 0) {
+    throw new WriteJournalError(
+      "settle-intent-abort-failed",
+      `settle batch '${handle.opId}' could not record its commit decision (${errorMessage(cause)}) and could not restore its flat writes (${restoreFailure}); the open intent has no decision, so startup recovery restores its before values`,
+      { cause }
+    );
+  }
+  try {
+    appendSettleAbort(handle, "commit decision was not recorded");
+  } catch (error) {
+    throw new WriteJournalError(
+      "settle-intent-abort-failed",
+      `settle batch '${handle.opId}' could not record its commit decision (${errorMessage(cause)}) nor its abort marker (${errorMessage(error)}); startup recovery restores the before values and closes it as recovered`,
+      { cause }
+    );
+  }
+  throw cause;
+}
+async function abortDecidedSettleBatch(store3, chatId, handle, items, cause) {
+  let restoreFailure;
+  try {
+    await restoreSettleIntentItems(store3, chatId, items);
+  } catch (error) {
+    restoreFailure = errorMessage(error);
+  }
+  if (restoreFailure !== void 0) {
+    throw new WriteJournalError(
+      "settle-intent-abort-failed",
+      `settle batch '${handle.opId}' could not restore its flat writes after the chat save failed (${errorMessage(cause)}): ${restoreFailure}; the decide record stays open and startup recovery commits it`,
+      { cause }
+    );
+  }
+  try {
+    appendSettleAbort(handle, "chat save failed after the commit decision");
+  } catch (error) {
+    const forwardFailure = await reapplySettleItems(store3, chatId, items);
+    if (forwardFailure !== void 0) {
+      throw new WriteJournalError(
+        "settle-intent-abort-failed",
+        `settle batch '${handle.opId}' restored its flat writes but could not append the abort marker (${errorMessage(error)}), and re-applying the batch values failed (${forwardFailure}); the decide record stays open and startup recovery commits its receipt, so the flat store can differ from that receipt until then`,
+        { cause }
+      );
+    }
+    throw new WriteJournalError(
+      "settle-intent-abort-failed",
+      `settle batch '${handle.opId}' could not append its abort marker (${errorMessage(error)}); the batch values were re-applied and startup recovery will commit the receipt`,
+      { cause }
+    );
+  }
+  throw cause;
+}
+function appendSettleAbort(handle, reason) {
+  appendSettleIntentWith(handle.writer, handle.session, {
+    kind: "settle-intent",
+    phase: "abort",
+    opId: handle.opId,
+    sessionId: handle.sessionId,
+    at: (/* @__PURE__ */ new Date()).toISOString(),
+    reason
+  });
+}
+async function reapplySettleItems(store3, chatId, items) {
+  try {
+    for (const item of items) {
+      if (item.after === void 0) continue;
+      const current = await store3.get("chat", chatId, item.name);
+      await store3.set("chat", chatId, item.name, item.after, current?.revision);
+    }
+    return void 0;
+  } catch (error) {
+    return errorMessage(error);
+  }
+}
 function jsonValueOf(value) {
   if (value === void 0 || typeof value === "function" || typeof value === "symbol") {
     throw new Error("invalid variable value");

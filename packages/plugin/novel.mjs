@@ -3360,12 +3360,12 @@ var TavernStore = class _TavernStore {
       return id;
     });
   }
-  async saveChat(characterName, chatId, log, expectedRevision) {
+  async saveChat(characterName, chatId, log2, expectedRevision) {
     return this.mutateChat(async () => {
       const dir = path.join(this.root, "chats", safeFileName(characterName));
       const file = path.join(dir, safeChatFileName(chatId));
       await this.assertChatRevision(file, expectedRevision);
-      const bytes = chatBytes(log);
+      const bytes = chatBytes(log2);
       await this.writeAtomic(file, bytes);
       return chatRevision(bytes);
     });
@@ -3638,12 +3638,12 @@ var TavernStore = class _TavernStore {
       await this.assertChatRevision(source, expectedRevision);
       const bytes = await this.tryRead(source);
       if (bytes === void 0) throw new Error(`chat '${chatId}' not found`);
-      const log = parseChatLog(Buffer.from(bytes).toString("utf8"));
-      if (messageId < 0 || messageId >= log.messages.length) {
-        throw new Error(`branch messageId ${messageId} out of range (0..${log.messages.length - 1})`);
+      const log2 = parseChatLog(Buffer.from(bytes).toString("utf8"));
+      if (messageId < 0 || messageId >= log2.messages.length) {
+        throw new Error(`branch messageId ${messageId} out of range (0..${log2.messages.length - 1})`);
       }
-      const branchMessages = log.messages.slice(0, messageId + 1).map((m) => ({ ...m }));
-      const header = structuredClone(log.header);
+      const branchMessages = log2.messages.slice(0, messageId + 1).map((m) => ({ ...m }));
+      const header = structuredClone(log2.header);
       header.chat_metadata = {
         ...header.chat_metadata ?? {},
         bookmark_link: { character: characterName, chatId, messageId },
@@ -3682,9 +3682,9 @@ var TavernStore = class _TavernStore {
       const source = path.join(dir, safeChatFileName(parentChatId));
       const bytes = await this.tryRead(source);
       if (bytes === void 0) throw new Error(`chat '${parentChatId}' not found`);
-      const log = parseChatLog(Buffer.from(bytes).toString("utf8"));
-      const header = structuredClone(log.header);
-      const messageId = typeof fork.bookmarkMessageId === "number" && Number.isSafeInteger(fork.bookmarkMessageId) && fork.bookmarkMessageId >= 0 && fork.bookmarkMessageId < log.messages.length ? fork.bookmarkMessageId : Math.max(0, log.messages.length - 1);
+      const log2 = parseChatLog(Buffer.from(bytes).toString("utf8"));
+      const header = structuredClone(log2.header);
+      const messageId = typeof fork.bookmarkMessageId === "number" && Number.isSafeInteger(fork.bookmarkMessageId) && fork.bookmarkMessageId >= 0 && fork.bookmarkMessageId < log2.messages.length ? fork.bookmarkMessageId : Math.max(0, log2.messages.length - 1);
       header.chat_metadata = {
         ...header.chat_metadata ?? {},
         bookmark_link: { character: characterName, chatId: parentChatId, messageId },
@@ -4376,8 +4376,8 @@ function safeChatFileName(name2) {
   if (!/^[A-Za-z0-9@ _.-]+\.jsonl$/.test(name2) || name2.includes("..")) throw new Error("invalid chat id");
   return name2;
 }
-function chatBytes(log) {
-  return new Uint8Array(Buffer.from(serializeChatLog(log), "utf8"));
+function chatBytes(log2) {
+  return new Uint8Array(Buffer.from(serializeChatLog(log2), "utf8"));
 }
 function chatRevision(bytes) {
   return createHash("sha256").update(bytes).digest("base64url");

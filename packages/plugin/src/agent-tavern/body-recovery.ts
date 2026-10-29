@@ -362,9 +362,9 @@ async function recoverSettleIntents(
       code: failureCodeOf(error),
       error: errorMessage(error),
     })
-    return { restored: 0, committed: 0, failed: 1, failures: [errorMessage(error)] }
+    return { restored: 0, committed: 0, replayed: 0, failed: 1, failures: [errorMessage(error)] }
   }
-  if (intents.length === 0) return { restored: 0, committed: 0, failed: 0, failures: [] }
+  if (intents.length === 0) return { restored: 0, committed: 0, replayed: 0, failed: 0, failures: [] }
 
   try {
     const appendRecord = deps.appendRecord
@@ -385,6 +385,13 @@ async function recoverSettleIntents(
       info(ctx, 'dsh-soulmojito body: recovery restored flat variables from settle intents', {
         agentId,
         restored: outcome.restored,
+        committed: outcome.committed,
+      })
+    }
+    if (outcome.replayed !== undefined && outcome.replayed > 0) {
+      info(ctx, 'dsh-soulmojito body: recovery replayed settle commit decisions into chat', {
+        agentId,
+        replayed: outcome.replayed,
         committed: outcome.committed,
       })
     }
