@@ -32,22 +32,25 @@
      delete），成功后写 `recovered`。恢复失败保留 intent，下次重试。
 4. **exact-only 标记**：新 open intent 带 `receiptOpId: true`，恢复只认
    `receipt.opId === intent.opId`；仅旧 intent（无标记）才允许 `at + turnKey` 兼容。
-5. **与 write journal 隔离**：settle intent 使用独立 event type，`readWriteJournal` 忽略它；
+5. **审计溯源**：审计记录带 `opId`；恢复重放或补 commit 时按 `opId` 幂等补一条
+   `recovered: true` 的审计；superseded 的旧 decided intent 写 `supersededBy` 审计，
+   不追加旧 receipt、不动 undo 顺序。审计失败只记结构化 warn，不影响已完成的 commit。
+6. **与 write journal 隔离**：settle intent 使用独立 event type，`readWriteJournal` 忽略它；
    `rollbackTurnWrites` 不会把未闭合 settle intent 当普通 variable 写。
-6. **不改 surface**：恢复只读 chat、只写 flat store 与 plugin record，不追加 assistant、
-   不改 chat 变量树。
+7. **不改 surface**：恢复只读 chat、只写 flat store、audit 与 plugin record，不追加
+   assistant、不改 chat 变量树。
 
 ## 证据
 
-- `npm run check`：158 test files / 2513 passed + 1 skipped；`build:plugin` 成功；
+- `npm run check`：158 test files / 2517 passed + 1 skipped；`build:plugin` 成功；
   18 道 gate 全部 PASS。
-- body 聚焦：14 个 spec / 346 tests；mvu-settle 26、tavern-mvu 32、write-journal 30、
+- body 聚焦：14 个 spec / 350 tests；mvu-settle 30、tavern-mvu 32、write-journal 30、
   body-rollback 30、runtime 67、wiring 49。
 - 关键覆盖：decide 前崩溃还原 before、decide 后 saveChat 前重放、saveChat 成功只补 commit、
   重放遇冲突保留 intent 并二次成功、新 intent 拒收无 opId receipt、旧 intent 兼容、
-  decide 写失败不 saveChat、abort 收口、空 undo 列表可恢复。
-- `settle-intent-record.ts` 467 行、`body-settle-intent.ts` 275 行、
-  `tools/deduction.ts` 584 行、`write-journal.ts` 549 行，均 ≤800。
+  decide 写失败不 saveChat、abort 收口、恢复审计按 opId 去重、superseded 审计。
+- `settle-intent-record.ts` 467 行、`body-settle-intent.ts` 362 行、
+  `tools/deduction.ts` 609 行、`body-recovery.ts` 719 行、`projector.ts` 609 行，均 ≤800。
 
 ## 风险与未完成
 
@@ -58,12 +61,14 @@
 | after 语义 | after 是请求 JSON 值，不是 guard clamp/step 后的最终值；恢复只消费 before，最终值以 receipt 为准。 |
 | receipt 匹配 | 新 intent 带 `receiptOpId: true`，恢复只认 opId 精确匹配；旧 intent 才允许 `at + turnKey` 兼容。 |
 | decide 重放冲突 | 重放时 `saveChat` CAS 失败会保留 intent 与 flat 值，下次启动重试；不会自动回滚。 |
-| 审计缺口 | 恢复重放的批次只写 chat receipt，不写 `mvu/audit.jsonl`；审计只由工具成功路径落。 |
-| superseded 缺口 | 后续成功 settle 会用 `commit + superseded` 关闭旧 intent，不重放旧 receipt；双重失败场景下旧批次值仍在、回执不补。 |
+| 审计去重 | 恢复审计按 `opId` 读后追加；单进程由 `MutationTail` 串行，跨进程并发恢复理论上仍可能双写。 |
+| superseded 审计 | 旧 decided intent 关闭时写 `supersededBy` 审计，不追加旧 receipt、不动 undo 顺序；仍不复原旧批次的值。 |
+| 工具审计失败 | 工具成功路径的审计追加失败仍让工具调用报错，沿用原有主审计行为；重试会生成新 settle。 |
 | 无真机 E2E | 构造日志模拟，没有进程 kill / 浏览器 E2E。 |
 
 ## 删除路径
 
 - 停止写 settle intent 只影响后续 settle；已写 open intent 仍会被启动恢复消费。
-- 不得删除已落盘的 intent/decide/abort/commit/recovered 记录；DSH 日志是 append-only。
+- 不得删除已落盘的 intent/decide/abort/commit/recovered 记录与 `mvu/audit.jsonl`；
+  DSH 日志与审计文件都是 append-only。
 - 没有 appendPluginRecord 的宿主继续旧路径，无需迁移历史会话。

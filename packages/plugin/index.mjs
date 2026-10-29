@@ -16564,6 +16564,26 @@ function validateCheckpoint(value, sessionId) {
   }
 }
 var mvuAuditTail = new MutationTail();
+function mvuAuditPath(tavernRoot) {
+  return join9(tavernRoot, "mvu", "audit.jsonl");
+}
+async function appendMvuAudit(tavernRoot, record) {
+  await mvuAuditTail.enqueue(async () => {
+    await fs12.mkdir(join9(tavernRoot, "mvu"), { recursive: true });
+    await fs12.appendFile(mvuAuditPath(tavernRoot), `${JSON.stringify(record)}
+`, "utf8");
+  });
+}
+async function readMvuAudit(tavernRoot) {
+  let text;
+  try {
+    text = await fs12.readFile(mvuAuditPath(tavernRoot), "utf8");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    return [];
+  }
+  return text.split("\n").filter((line) => line.trim() !== "").map((line) => JSON.parse(line));
+}
 
 // packages/plugin/src/agent-tavern/deduce.ts
 var DEDUCE_PROVIDER = "spawn";
@@ -16833,7 +16853,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("f4acf3d") : void 0;
+  const commit = true ? normalizeCommit("8da7233") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -22301,6 +22321,14 @@ function stringArrayAt2(value, where) {
 }
 
 // packages/plugin/src/agent-tavern/body-settle-intent.ts
+function settleAuditChanges(receipt) {
+  return receipt.changes.map((change) => ({
+    name: change.name,
+    ...change.reason === void 0 ? {} : { reason: change.reason },
+    ..."before" in change ? { before: change.before } : {},
+    ..."after" in change ? { after: change.after } : {}
+  }));
+}
 async function recoverOpenSettleIntents(deps, agentId, session, appendRecord, intents) {
   if (intents.length === 0) return { restored: 0, committed: 0, replayed: 0, failed: 0, failures: [] };
   if (appendRecord === void 0) {
@@ -22313,9 +22341,11 @@ async function recoverOpenSettleIntents(deps, agentId, session, appendRecord, in
   for (const intent of intents) {
     try {
       const snapshot2 = await readSettleSnapshot(deps, intent);
-      if (settleReceiptStored(snapshot2.chat, intent)) {
+      const stored = storedSettleReceipt(snapshot2.chat, intent);
+      if (stored !== void 0) {
         closeSettleIntent(appendRecord, session, intent, "commit", "receipt persisted before the intent closed");
         committed += 1;
+        await auditSettleReceipt(deps, intent, stored);
         continue;
       }
       if (intent.decision !== void 0) {
@@ -22323,6 +22353,7 @@ async function recoverOpenSettleIntents(deps, agentId, session, appendRecord, in
         closeSettleIntent(appendRecord, session, intent, "commit", "commit decision replayed before the intent closed");
         committed += 1;
         replayed += 1;
+        await auditSettleReceipt(deps, intent, intent.decision.receipt);
         continue;
       }
       if (legacySettleReceipt(snapshot2.chat, intent) !== void 0) {
@@ -22365,8 +22396,8 @@ function settleChatError(intent, cause) {
     { detail: "chat-unreadable", stage: "restore", ...cause === void 0 ? {} : { cause } }
   );
 }
-function settleReceiptStored(chat, intent) {
-  return readMvuReceipts(chat).some((receipt) => receipt.opId === intent.opId);
+function storedSettleReceipt(chat, intent) {
+  return readMvuReceipts(chat).find((receipt) => receipt.opId === intent.opId);
 }
 function legacySettleReceipt(chat, intent) {
   if (intent.receiptOpId === true) return void 0;
@@ -22382,6 +22413,29 @@ async function replaySettleDecision(deps, intent, decision, snapshot2) {
       `settle decision '${intent.opId}' cannot save its receipt into chat '${intent.scopeId}': ${errorMessage2(cause)}`,
       { stage: "chat-save", sessionId: intent.sessionId, cause }
     );
+  }
+}
+async function auditSettleReceipt(deps, intent, receipt) {
+  if (deps.auditReceipt === void 0) return;
+  try {
+    await deps.auditReceipt({
+      at: receipt.at,
+      sessionId: intent.sessionId,
+      character: intent.character,
+      chatId: intent.scopeId,
+      turnKey: receipt.turnKey,
+      status: receipt.status,
+      changes: settleAuditChanges(receipt),
+      failures: [...receipt.failures],
+      opId: intent.opId,
+      recovered: true
+    });
+  } catch (error) {
+    log(deps.logger, "warn", "dsh-soulmojito body recovery: settle audit append failed", {
+      stage: "audit",
+      opId: intent.opId,
+      error: errorMessage2(error)
+    });
   }
 }
 async function restoreSettleIntentItems(variableStore2, scopeId, items) {
@@ -26559,7 +26613,8 @@ async function recoverSettleIntents(ctx, deps, agentId, events) {
       {
         store: await store3(),
         variableStore: await variables(),
-        ...ctx.logger === void 0 ? {} : { logger: ctx.logger }
+        ...ctx.logger === void 0 ? {} : { logger: ctx.logger },
+        auditReceipt: auditRecoveredSettle
       },
       agentId,
       deps.session,
@@ -26598,6 +26653,12 @@ async function recoverSettleIntents(ctx, deps, agentId, events) {
     });
     return { restored: 0, committed: 0, failed: intents.length, failures: [errorMessage4(error)] };
   }
+}
+async function auditRecoveredSettle(record) {
+  const root = tavernDataRoot();
+  const existing = await readMvuAudit(root);
+  if (existing.some((entry) => entry.opId === record.opId)) return;
+  await appendMvuAudit(root, record);
 }
 async function restoreInterruptedPrepares(ctx, deps, prepares) {
   if (prepares.length === 0) return { restored: 0, failed: 0 };

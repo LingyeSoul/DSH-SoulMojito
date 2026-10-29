@@ -19,7 +19,7 @@ import {
   runDeduction,
   subagentRuntimeOf,
 } from '../deduce.js'
-import { restoreSettleIntentItems } from '../body-settle-intent.js'
+import { restoreSettleIntentItems, settleAuditChanges } from '../body-settle-intent.js'
 import { errorMessage } from '../body-rollback-support.js'
 import {
   WriteJournalError,
@@ -30,7 +30,7 @@ import {
   type SettleIntentHandle,
   type SettleIntentItem,
 } from '../write-journal.js'
-import { appendMvuAudit } from '../projector.js'
+import { appendMvuAudit, type MvuAuditRecord } from '../projector.js'
 import { bindingFor, objectOutput, tool, type ToolDefinition } from './shared.js'
 import { tavernStore, variableStore } from './stores.js'
 
@@ -395,17 +395,39 @@ export function deductionTools(): ToolDefinition[] {
       // attempt must not undo this committed batch on the next startup.
       if (settleIntent !== undefined) {
         const closedAt = new Date().toISOString()
+        // Superseded intents are closed without replaying their decision: the
+        // successful settle owns the chat state now. A decided intent still
+        // leaves its audit line so the abandoned settlement stays traceable.
+        const supersededAudits: MvuAuditRecord[] = []
         for (const open of openSettleIntentsOf(settleIntent.session, settleIntent.sessionId)) {
           if (open.character !== binding.character || open.scopeId !== binding.chatId) continue
+          const superseded = open.opId !== settleIntent.opId
           appendSettleIntentWith(settleIntent.writer, settleIntent.session, {
             kind: 'settle-intent',
             phase: 'commit',
             opId: open.opId,
             sessionId: open.sessionId,
             at: closedAt,
-            ...(open.opId === settleIntent.opId ? {} : { reason: `superseded by ${settleIntent.opId}` }),
+            ...(superseded ? { reason: `superseded by ${settleIntent.opId}` } : {}),
+          })
+          const decision = open.decision
+          if (!superseded || decision === undefined) continue
+          supersededAudits.push({
+            at: decision.receipt.at,
+            sessionId: open.sessionId,
+            character: open.character,
+            chatId: open.scopeId,
+            turnKey: decision.receipt.turnKey,
+            status: decision.receipt.status,
+            changes: settleAuditChanges(decision.receipt),
+            failures: [...decision.receipt.failures],
+            opId: open.opId,
+            supersededBy: settleIntent.opId,
           })
         }
+        // Written after every closure marker so a metadata append can never
+        // change the journal order the undo path folds.
+        for (const audit of supersededAudits) await appendMvuAudit(tavernDataRoot(), audit)
       }
       // 回执的持久投影（提案 0012 P2）：会话事件词汇表对插件封闭（v4 宿主拒载
       // 未知事件类型），审计线落独立文件 <tavern>/mvu/audit.jsonl，见 projector.ts。
@@ -418,6 +440,9 @@ export function deductionTools(): ToolDefinition[] {
         status: receipt.status,
         changes: auditChanges,
         failures: receipt.failures,
+        // Legacy hosts without the intent seam keep the pre-opId line shape;
+        // with an intent the line is idempotent with recovery's backfill.
+        ...(settleIntent !== undefined ? { opId: settleIntent.opId } : {}),
       })
       return { applied, failed, receipt }
     }),

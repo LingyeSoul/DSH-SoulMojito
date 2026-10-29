@@ -14,6 +14,9 @@
  * receipt to the current chat snapshot and saves it with the current revision
  * instead of asking whether the 20-entry receipt ring still holds the original.
  * Only an intent without a decision falls back to restoring its `before` values.
+ * Every decided intent recovery commits also emits its `<tavern>/mvu/audit.jsonl`
+ * line through an injected audit sink, so a crash before the tool's own audit
+ * append leaves no silent hole; the sink deduplicates by `opId`.
  *
  * Intent parsing and folding live with the record vocabulary in
  * `settle-intent-record.ts`; `foldSettleIntents` is re-exported here for
@@ -47,11 +50,55 @@ export type { WriteJournalSession } from './write-journal.js'
 
 /* --------------------------- settle intent recovery ------------------------ */
 
+/** One audit change in the shape `<tavern>/mvu/audit.jsonl` stores. */
+export interface SettleAuditChange {
+  readonly name: string
+  readonly reason?: string
+  readonly before?: unknown
+  readonly after?: unknown
+}
+
+/**
+ * Audit line startup recovery writes for a decided settle intent.
+ *
+ * It mirrors `MvuAuditRecord` without importing the projector runtime: the
+ * filesystem-backed deduplicating sink stays in `body-recovery.ts`, so this
+ * shard keeps its "stores and records only" boundary.
+ */
+export interface SettleRecoveryAuditRecord {
+  readonly at: string
+  readonly sessionId: string
+  readonly character: string
+  readonly chatId: string
+  readonly turnKey: string
+  readonly status: string
+  readonly changes: SettleAuditChange[]
+  readonly failures: string[]
+  readonly opId: string
+  readonly recovered: true
+}
+
+/** Map a settle receipt's changes to the audit file's record shape. */
+export function settleAuditChanges(receipt: MvuReceipt): SettleAuditChange[] {
+  return receipt.changes.map((change) => ({
+    name: change.name,
+    ...(change.reason === undefined ? {} : { reason: change.reason }),
+    ...('before' in change ? { before: change.before } : {}),
+    ...('after' in change ? { after: change.after } : {}),
+  }))
+}
+
 /** Stores one startup settle-intent pass reads and restores. */
 export interface SettleIntentRecoveryDeps {
   readonly store: BodyRollbackStore
   readonly variableStore: BodyRollbackVariableStore
   readonly logger?: BodyRollbackLogger
+  /**
+   * Deduplicating audit sink for a decided intent's recovered line. Omitted by
+   * callers that run without the Tavern audit file; `body-recovery.ts` wires
+   * the append that skips an `opId` already present.
+   */
+  readonly auditReceipt?: (record: SettleRecoveryAuditRecord) => Promise<void>
 }
 
 /** Result of one startup pass over unclosed settle intents. */
@@ -71,11 +118,11 @@ export interface SettleIntentRecovery {
  *
  * - a stored receipt carrying the same `opId` proves the save; only `commit` is
  *   appended (an undone receipt still proves the save happened, so replay never
- *   resurrects an undone settlement);
+ *   resurrects an undone settlement), then the recovered audit line is emitted;
  * - otherwise a `decide` record wins: its receipt is appended to the current
- *   chat snapshot and saved with the current revision, then `commit` is
- *   appended. A failed save keeps the intent and never touches the flat writes
- *   (the decision is already a commit);
+ *   chat snapshot and saved with the current revision, then `commit` and the
+ *   recovered audit line are appended. A failed save keeps the intent and never
+ *   touches the flat writes (the decision is already a commit);
  * - otherwise an intent written before `receiptOpId` existed may still match a
  *   legacy receipt (no `opId`) by `turnKey` + `receiptAt`;
  * - otherwise every merged open/extend item is restored to its `before` value
@@ -84,7 +131,9 @@ export interface SettleIntentRecovery {
  *   intent closes as `recovered`.
  *
  * A failure is collected per intent so the caller gets a complete diagnostic
- * instead of only the first store error.
+ * instead of only the first store error. An audit sink failure is logged as a
+ * non-fatal `stage: 'audit'` warning: the receipt, save and commit are already
+ * durable and the intent stays closed.
  */
 export async function recoverOpenSettleIntents(
   deps: SettleIntentRecoveryDeps,
@@ -104,9 +153,11 @@ export async function recoverOpenSettleIntents(
   for (const intent of intents) {
     try {
       const snapshot = await readSettleSnapshot(deps, intent)
-      if (settleReceiptStored(snapshot.chat, intent)) {
+      const stored = storedSettleReceipt(snapshot.chat, intent)
+      if (stored !== undefined) {
         closeSettleIntent(appendRecord, session, intent, 'commit', 'receipt persisted before the intent closed')
         committed += 1
+        await auditSettleReceipt(deps, intent, stored)
         continue
       }
       if (intent.decision !== undefined) {
@@ -114,6 +165,7 @@ export async function recoverOpenSettleIntents(
         closeSettleIntent(appendRecord, session, intent, 'commit', 'commit decision replayed before the intent closed')
         committed += 1
         replayed += 1
+        await auditSettleReceipt(deps, intent, intent.decision.receipt)
         continue
       }
       if (legacySettleReceipt(snapshot.chat, intent) !== undefined) {
@@ -169,15 +221,15 @@ function settleChatError(intent: SettleIntentOpenEntry, cause: unknown): BodyRol
 }
 
 /**
- * Whether the chat already holds this batch's own receipt.
+ * The chat's own receipt of this batch, when present.
  *
  * Identity only: `receipt.opId` must equal the intent's `opId`, so another
  * settle that shares the millisecond and floor can never vouch for this batch.
  * An undone receipt still proves the save happened (the undo is a later user
  * action), so the check does not filter `undoneAt`.
  */
-function settleReceiptStored(chat: ChatLogIR, intent: SettleIntentOpenEntry): boolean {
-  return readMvuReceipts(chat).some((receipt) => receipt.opId === intent.opId)
+function storedSettleReceipt(chat: ChatLogIR, intent: SettleIntentOpenEntry): MvuReceipt | undefined {
+  return readMvuReceipts(chat).find((receipt) => receipt.opId === intent.opId)
 }
 
 /**
@@ -219,6 +271,41 @@ async function replaySettleDecision(
       `settle decision '${intent.opId}' cannot save its receipt into chat '${intent.scopeId}': ${errorMessage(cause)}`,
       { stage: 'chat-save', sessionId: intent.sessionId, cause },
     )
+  }
+}
+
+/**
+ * Append the recovered audit line for a decided intent.
+ *
+ * Called after the commit marker lands, so an audit failure can never reopen
+ * the intent or undo the receipt/save: it only logs the missing line with the
+ * stage and op id. The injected sink owns `opId` deduplication across startups.
+ */
+async function auditSettleReceipt(
+  deps: SettleIntentRecoveryDeps,
+  intent: SettleIntentOpenEntry,
+  receipt: MvuReceipt,
+): Promise<void> {
+  if (deps.auditReceipt === undefined) return
+  try {
+    await deps.auditReceipt({
+      at: receipt.at,
+      sessionId: intent.sessionId,
+      character: intent.character,
+      chatId: intent.scopeId,
+      turnKey: receipt.turnKey,
+      status: receipt.status,
+      changes: settleAuditChanges(receipt),
+      failures: [...receipt.failures],
+      opId: intent.opId,
+      recovered: true,
+    })
+  } catch (error) {
+    log(deps.logger, 'warn', 'dsh-soulmojito body recovery: settle audit append failed', {
+      stage: 'audit',
+      opId: intent.opId,
+      error: errorMessage(error),
+    })
   }
 }
 

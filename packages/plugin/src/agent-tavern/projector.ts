@@ -572,6 +572,12 @@ export interface MvuAuditRecord {
   status: string
   changes: Array<{ name: string; reason?: string; before?: unknown; after?: unknown }>
   failures: string[]
+  /** Settle intent that produced the line; legacy and non-settle lines omit it. */
+  opId?: string
+  /** True when startup recovery wrote the line for a decided intent. */
+  recovered?: true
+  /** Newer settle that closed this intent without committing its receipt. */
+  supersededBy?: string
 }
 
 /** 结算审计的串行尾巴（MutationTail）：保证追加顺序。 */

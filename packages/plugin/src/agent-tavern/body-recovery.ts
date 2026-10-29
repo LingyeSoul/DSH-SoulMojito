@@ -14,6 +14,7 @@
  */
 
 import type { HostLogger, HostAgentsService } from '../host-contract.js'
+import { tavernDataRoot } from '../dsh-home.js'
 import { advanceHostTurnBase, canAdvanceHostTurnBase, closeImportBracket, lastLoggedTurn } from '../session/trace.js'
 import { store as tavernStore, variables as tavernVariables } from '../runtime.js'
 import { BODY_EVENT_TYPE } from './body.js'
@@ -23,8 +24,10 @@ import {
   recoverOpenSettleIntents,
   type SettleIntentOpenEntry,
   type SettleIntentRecovery,
+  type SettleRecoveryAuditRecord,
   type WriteJournalSession,
 } from './body-settle-intent.js'
+import { appendMvuAudit, readMvuAudit } from './projector.js'
 import {
   finalizeRecoveredOperation,
   foldPendingOps,
@@ -373,6 +376,7 @@ async function recoverSettleIntents(
         store: await tavernStore(),
         variableStore: await tavernVariables(),
         ...(ctx.logger === undefined ? {} : { logger: ctx.logger }),
+        auditReceipt: auditRecoveredSettle,
       },
       agentId,
       deps.session,
@@ -413,6 +417,24 @@ async function recoverSettleIntents(
     })
     return { restored: 0, committed: 0, failed: intents.length, failures: [errorMessage(error)] }
   }
+}
+
+/**
+ * Append one recovery audit line unless `<tavern>/mvu/audit.jsonl` already
+ * carries its `opId`.
+ *
+ * The tool writes the same line after its own commit loop, so a crash between
+ * the chat save and that append leaves an intent whose receipt is stored but
+ * whose audit line is not; a retried recovery fills the hole. Reading first
+ * keeps at most one line per `opId` across repeated startups. The read error
+ * propagates so `recoverOpenSettleIntents` logs it as a non-fatal audit
+ * warning instead of touching the committed state.
+ */
+async function auditRecoveredSettle(record: SettleRecoveryAuditRecord): Promise<void> {
+  const root = tavernDataRoot()
+  const existing = await readMvuAudit(root)
+  if (existing.some((entry) => entry.opId === record.opId)) return
+  await appendMvuAudit(root, record)
 }
 
 /**

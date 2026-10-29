@@ -187,6 +187,9 @@ interface BodyWriteRollbackPort {
    - 无 decide / 无 receipt → 按 intent 的 before 还原 flat `VariableStore` 并写 recovered。
    settle receipt 携带本次 `opId`；新 intent 带 `receiptOpId: true`，恢复只认精确匹配，
    旧 intent 才回退 `at + turnKey`。
+   恢复重放或补 commit 时按 `opId` 幂等补一条 `recovered: true` 的
+   `<tavern>/mvu/audit.jsonl` 审计；superseded 的旧 decided intent 写 `supersededBy`
+   审计，不追加旧 receipt。
    `$rules` 派生写在执行前追加同 opId 的 `extend`，恢复按 open + extend 合并后的 items
    逆序回到最早 before。
 
@@ -233,4 +236,4 @@ interface BodyWriteRollbackPort {
 `body-runtime-plan.ts`（`rollbackPlan` 的写侧 JSON 校验与读侧严格解析）。
 
 残余风险见 §10 与落地决策的“风险与未完成”表（prepare→op-start 崩溃窗口、plan 体积、
-decide 重放 CAS 冲突、恢复重放不写 audit、edit/select 仍严格）。
+decide 重放 CAS 冲突、恢复审计跨进程去重、edit/select 仍严格）。

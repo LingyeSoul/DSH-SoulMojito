@@ -9345,6 +9345,14 @@ function parseSettleIntentItem(value, where) {
 }
 
 // packages/plugin/src/agent-tavern/body-settle-intent.ts
+function settleAuditChanges(receipt) {
+  return receipt.changes.map((change) => ({
+    name: change.name,
+    ...change.reason === void 0 ? {} : { reason: change.reason },
+    ..."before" in change ? { before: change.before } : {},
+    ..."after" in change ? { after: change.after } : {}
+  }));
+}
 async function restoreSettleIntentItems(variableStore2, scopeId, items) {
   for (const item of [...items].reverse()) {
     const current = await variableStore2.get("chat", scopeId, item.name);
@@ -10051,17 +10059,34 @@ function deductionTools() {
       }
       if (settleIntent !== void 0) {
         const closedAt = (/* @__PURE__ */ new Date()).toISOString();
+        const supersededAudits = [];
         for (const open of openSettleIntentsOf(settleIntent.session, settleIntent.sessionId)) {
           if (open.character !== binding.character || open.scopeId !== binding.chatId) continue;
+          const superseded = open.opId !== settleIntent.opId;
           appendSettleIntentWith(settleIntent.writer, settleIntent.session, {
             kind: "settle-intent",
             phase: "commit",
             opId: open.opId,
             sessionId: open.sessionId,
             at: closedAt,
-            ...open.opId === settleIntent.opId ? {} : { reason: `superseded by ${settleIntent.opId}` }
+            ...superseded ? { reason: `superseded by ${settleIntent.opId}` } : {}
+          });
+          const decision = open.decision;
+          if (!superseded || decision === void 0) continue;
+          supersededAudits.push({
+            at: decision.receipt.at,
+            sessionId: open.sessionId,
+            character: open.character,
+            chatId: open.scopeId,
+            turnKey: decision.receipt.turnKey,
+            status: decision.receipt.status,
+            changes: settleAuditChanges(decision.receipt),
+            failures: [...decision.receipt.failures],
+            opId: open.opId,
+            supersededBy: settleIntent.opId
           });
         }
+        for (const audit of supersededAudits) await appendMvuAudit(tavernDataRoot(), audit);
       }
       await appendMvuAudit(tavernDataRoot(), {
         at: receipt.at,
@@ -10071,7 +10096,10 @@ function deductionTools() {
         turnKey: receipt.turnKey,
         status: receipt.status,
         changes: auditChanges,
-        failures: receipt.failures
+        failures: receipt.failures,
+        // Legacy hosts without the intent seam keep the pre-opId line shape;
+        // with an intent the line is idempotent with recovery's backfill.
+        ...settleIntent !== void 0 ? { opId: settleIntent.opId } : {}
       });
       return { applied, failed, receipt };
     })
