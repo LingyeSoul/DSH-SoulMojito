@@ -32,6 +32,16 @@ import type {
 /** Plugin record type carrying every journaled mutation. */
 export const WRITE_JOURNAL_EVENT_TYPE = 'plugin:dsh-soulmojito/write' as const
 
+/**
+ * Plugin record type carrying one settle batch's durable intent and closure.
+ *
+ * It is deliberately separate from `WRITE_JOURNAL_EVENT_TYPE`: a settle batch
+ * writes the flat `VariableStore` and then the chat receipts, so its undo data
+ * cannot ride the ordinary variable journal without `rollbackTurnWrites`
+ * mistaking an unclosed intent for a committed variable write.
+ */
+export const SETTLE_INTENT_EVENT_TYPE = 'plugin:dsh-soulmojito/settle-intent' as const
+
 /** Phase of one mutation journaled in two steps. */
 export type WriteJournalPhase = 'before' | 'after'
 
@@ -89,6 +99,54 @@ export interface WriteJournalVariableEntry {
 /** Payload of one `plugin:dsh-soulmojito/write` session event. */
 export type WriteJournalEntry = WriteJournalMemoryEntry | WriteJournalVariableEntry
 
+/* ----------------------------- settle intents ------------------------------ */
+
+/** Per-variable state captured before one settle batch touches the flat store. */
+export interface SettleIntentItem {
+  readonly name: string
+  /** Flat chat-scope value before the batch; absent when the name had no value. */
+  readonly before?: JsonValue
+  /** JSON value the batch intended to write; absent when the request was not JSON-safe. */
+  readonly after?: JsonValue
+}
+
+/** `open` carries the undo data; `commit` and `recovered` close the intent. */
+export interface SettleIntentOpenEntry {
+  readonly kind: 'settle-intent'
+  readonly phase: 'open'
+  readonly opId: string
+  readonly sessionId: string
+  readonly character: string
+  readonly scope: 'chat'
+  readonly scopeId: string
+  readonly turnKey: string
+  /** Timestamp the matching MVU receipt will carry; lets recovery prove a save. */
+  readonly receiptAt: string
+  readonly at: string
+  readonly items: readonly SettleIntentItem[]
+}
+
+/** One closure marker: a committed settle or a startup recovery. */
+export interface SettleIntentCloseEntry {
+  readonly kind: 'settle-intent'
+  readonly phase: 'commit' | 'recovered'
+  readonly opId: string
+  readonly sessionId: string
+  readonly at: string
+  readonly reason?: string
+}
+
+/** Payload of one `plugin:dsh-soulmojito/settle-intent` session event. */
+export type SettleIntentEntry = SettleIntentOpenEntry | SettleIntentCloseEntry
+
+/** Durable seam of one settle batch; the commit marker reuses the same handle. */
+export interface SettleIntentHandle {
+  readonly opId: string
+  readonly sessionId: string
+  readonly session: WriteJournalSession
+  readonly writer: WriteJournalRecordWriter
+}
+
 /* ---------------------------------- host ----------------------------------- */
 
 /** Minimal structural view of the host session the journal reads and appends to. */
@@ -128,10 +186,12 @@ export interface WriteJournalHandle {
 
 export type WriteJournalErrorCode =
   | 'invalid-write-journal'
+  | 'invalid-settle-intent'
   | 'write-journal-session-missing'
   | 'write-journal-session-unreadable'
   | 'write-journal-turn-missing'
   | 'write-journal-append-failed'
+  | 'settle-intent-append-failed'
 
 /** Typed failure with a stable code for callers and tests. */
 export class WriteJournalError extends Error {
@@ -184,6 +244,66 @@ export function readWriteJournal(events: readonly unknown[]): readonly WriteJour
     entries.push(parseEntry(event['data'], index))
   }
   return entries
+}
+
+/**
+ * Read every settle intent record from a session log, in log order.
+ *
+ * The records use their own event type, so `readWriteJournal` and the
+ * `rollbackTurnWrites` fold never see them as ordinary variable writes.
+ */
+export function readSettleIntents(events: readonly unknown[]): readonly SettleIntentEntry[] {
+  const entries: SettleIntentEntry[] = []
+  for (const [index, event] of events.entries()) {
+    if (!isRecord(event)) continue
+    if (event['type'] !== SETTLE_INTENT_EVENT_TYPE) continue
+    entries.push(parseSettleIntent(event['data'], index))
+  }
+  return entries
+}
+
+/**
+ * Fold the open settle intents a restart still has to restore.
+ *
+ * Closed operations are dropped from the result. Opening one operation twice,
+ * reopening it after it closed, or closing it twice/without an open record
+ * throws: a damaged undo record must not be skipped silently.
+ */
+export function foldSettleIntents(events: readonly unknown[]): readonly SettleIntentOpenEntry[] {
+  const open = new Map<string, SettleIntentOpenEntry>()
+  const closed = new Set<string>()
+  for (const entry of readSettleIntents(events)) {
+    if (entry.phase === 'open') {
+      if (open.has(entry.opId) || closed.has(entry.opId)) {
+        throw new WriteJournalError('invalid-settle-intent', `settle intent '${entry.opId}' opens more than once`)
+      }
+      open.set(entry.opId, entry)
+      continue
+    }
+    if (closed.has(entry.opId)) {
+      throw new WriteJournalError('invalid-settle-intent', `settle intent '${entry.opId}' closes more than once`)
+    }
+    if (!open.has(entry.opId)) {
+      throw new WriteJournalError('invalid-settle-intent', `settle intent '${entry.opId}' closes without an open record`)
+    }
+    closed.add(entry.opId)
+    open.delete(entry.opId)
+  }
+  return [...open.values()]
+}
+
+/**
+ * Fold the settle intents still open in a live session log.
+ *
+ * A successful settle closes every open intent of its chat scope, so an intent
+ * left by an earlier failed attempt cannot undo a later committed batch on the
+ * next startup. An unreadable session log throws instead of reporting "none".
+ */
+export function openSettleIntentsOf(
+  session: WriteJournalSession,
+  sessionId: string,
+): readonly SettleIntentOpenEntry[] {
+  return foldSettleIntents(eventsOfSession(session, sessionId))
 }
 
 /* ---------------------------------- write ---------------------------------- */
@@ -289,6 +409,60 @@ export async function openWriteJournal(
   return { journalId: newJournalId(), sessionId, turn, session, writer }
 }
 
+/* -------------------------------- settle write ----------------------------- */
+
+/** Fresh operation id shared by one settle batch's open and close records. */
+export function newSettleIntentOpId(): string {
+  return randomUUID()
+}
+
+/**
+ * Open the durable intent seam of one settle batch.
+ *
+ * @returns `undefined` when the host exposes no `appendPluginRecord`: the tool
+ * keeps its legacy settle path and the cross-store window stays unguarded
+ *
+ * @throws WriteJournalError when the seam exists but the live session cannot be
+ * read; without it no intent can be recorded, so the caller must not write
+ */
+export async function openSettleIntent(
+  agent: WriteJournalAgent | undefined,
+  sessionId: string,
+): Promise<SettleIntentHandle | undefined> {
+  if (typeof sessionId !== 'string' || sessionId.trim() === '') {
+    throw new WriteJournalError('write-journal-session-missing', 'settle intent requires the session id of the writing agent')
+  }
+  const writer = await resolveWriteJournalWriter()
+  if (writer === undefined) return undefined
+  const session = requireSession(agent)
+  return { opId: newSettleIntentOpId(), sessionId, session, writer }
+}
+
+/**
+ * Append one settle intent record through an explicit writer.
+ *
+ * A failed `open` append must abort the tool before its first flat write; a
+ * failed `commit` append must surface, because only the record proves the batch
+ * closed. Host failures are wrapped with the operation id and phase.
+ */
+export function appendSettleIntentWith(
+  writer: WriteJournalRecordWriter,
+  session: WriteJournalSession,
+  entry: SettleIntentEntry,
+): 'recorded' {
+  try {
+    writer(session, SETTLE_INTENT_EVENT_TYPE, entry)
+  } catch (cause) {
+    const reason = cause instanceof Error ? cause.message : String(cause)
+    throw new WriteJournalError(
+      'settle-intent-append-failed',
+      `cannot append the settle intent ${entry.phase} record '${entry.opId}': ${reason}`,
+      { cause },
+    )
+  }
+  return 'recorded'
+}
+
 /* ------------------------------- validation -------------------------------- */
 
 interface SessionHostModule {
@@ -318,6 +492,58 @@ function eventsOfSession(session: WriteJournalSession, sessionId: string): reado
     )
   }
   return events
+}
+
+function parseSettleIntent(data: unknown, index: number): SettleIntentEntry {
+  const where = `settle intent event at index ${index}`
+  if (!isRecord(data)) throw invalidSettle(where, 'data must be an object')
+  if (data['kind'] !== 'settle-intent') throw invalidSettle(where, `unknown kind '${String(data['kind'])}'`)
+  const phase = data['phase']
+  if (phase === 'open') return parseSettleIntentOpen(data, where)
+  if (phase === 'commit' || phase === 'recovered') {
+    return {
+      kind: 'settle-intent',
+      phase,
+      opId: textAt(data, 'opId', where),
+      sessionId: textAt(data, 'sessionId', where),
+      at: timestampAt(data, 'at', where),
+      ...(data['reason'] === undefined ? {} : { reason: textAt(data, 'reason', where) }),
+    }
+  }
+  throw invalidSettle(where, `field 'phase' must be 'open', 'commit' or 'recovered', received '${String(phase)}'`)
+}
+
+function parseSettleIntentOpen(record: Record<string, unknown>, where: string): SettleIntentOpenEntry {
+  const scope = record['scope']
+  if (scope !== 'chat') throw invalidSettle(where, `field 'scope' must be 'chat', received '${String(scope)}'`)
+  const items = record['items']
+  if (!Array.isArray(items) || items.length === 0) throw invalidSettle(where, `field 'items' must be a non-empty array`)
+  const turnKey = textAt(record, 'turnKey', where)
+  if (!/^(0|[1-9][0-9]*)$/.test(turnKey)) {
+    throw invalidSettle(where, `field 'turnKey' must be a floor index, received '${turnKey}'`)
+  }
+  return {
+    kind: 'settle-intent',
+    phase: 'open',
+    opId: textAt(record, 'opId', where),
+    sessionId: textAt(record, 'sessionId', where),
+    character: textAt(record, 'character', where),
+    scope: 'chat',
+    scopeId: textAt(record, 'scopeId', where),
+    turnKey,
+    receiptAt: timestampAt(record, 'receiptAt', where),
+    at: timestampAt(record, 'at', where),
+    items: items.map((item, itemIndex) => parseSettleIntentItem(item, `${where} items[${itemIndex}]`)),
+  }
+}
+
+function parseSettleIntentItem(value: unknown, where: string): SettleIntentItem {
+  const record = recordAt(value, where)
+  return {
+    name: textAt(record, 'name', where),
+    ...(record['before'] === undefined ? {} : { before: jsonValueAt(record['before'], `${where} before`) }),
+    ...(record['after'] === undefined ? {} : { after: jsonValueAt(record['after'], `${where} after`) }),
+  }
 }
 
 function parseEntry(data: unknown, index: number): WriteJournalEntry {
@@ -541,4 +767,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function invalid(where: string, detail: string): WriteJournalError {
   return new WriteJournalError('invalid-write-journal', `${where}: ${detail}`)
+}
+
+function invalidSettle(where: string, detail: string): WriteJournalError {
+  return new WriteJournalError('invalid-settle-intent', `${where}: ${detail}`)
 }

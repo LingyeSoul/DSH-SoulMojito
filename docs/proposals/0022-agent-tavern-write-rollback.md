@@ -178,6 +178,8 @@ interface BodyWriteRollbackPort {
    有 `op-settling` 时按 surface/ledger 判定；无证据才按计划恢复。
    若存在未消费的 `op-prepare`（apply 可能已回滚但 op-start 未落盘），启动先按 draft plan
    `restore` 并写 `op-prepare-recovered`，不追加 assistant、不改 surface。
+   若存在未闭合的 `settle-intent`，启动时若 chat 已有对应 receipt 则只补 commit；否则按
+   intent 的 before 还原 flat `VariableStore` 并写 recovered，避免 flat 与 receipt 分裂。
 
 ## 11. 开工前检查表
 

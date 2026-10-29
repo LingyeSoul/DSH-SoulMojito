@@ -9087,6 +9087,256 @@ function boundedText(value, max2, label) {
   return value.trim().slice(0, max2);
 }
 
+// packages/plugin/src/agent-tavern/write-journal.ts
+import { randomUUID as randomUUID2 } from "node:crypto";
+var WRITE_JOURNAL_EVENT_TYPE = "plugin:dsh-soulmojito/write";
+var SETTLE_INTENT_EVENT_TYPE = "plugin:dsh-soulmojito/settle-intent";
+var WriteJournalError = class extends Error {
+  code;
+  constructor(code, message, options) {
+    super(message, options);
+    this.name = "WriteJournalError";
+    this.code = code;
+  }
+};
+function currentTurnOf(events) {
+  let open;
+  for (const [index, event] of events.entries()) {
+    if (!isRecord2(event)) continue;
+    const type = event["type"];
+    if (type === "turn/start") {
+      open = turnOfEvent(event, index);
+    } else if (type === "turn/end") {
+      open = void 0;
+    }
+  }
+  return open;
+}
+function readSettleIntents(events) {
+  const entries = [];
+  for (const [index, event] of events.entries()) {
+    if (!isRecord2(event)) continue;
+    if (event["type"] !== SETTLE_INTENT_EVENT_TYPE) continue;
+    entries.push(parseSettleIntent(event["data"], index));
+  }
+  return entries;
+}
+function foldSettleIntents(events) {
+  const open = /* @__PURE__ */ new Map();
+  const closed = /* @__PURE__ */ new Set();
+  for (const entry of readSettleIntents(events)) {
+    if (entry.phase === "open") {
+      if (open.has(entry.opId) || closed.has(entry.opId)) {
+        throw new WriteJournalError("invalid-settle-intent", `settle intent '${entry.opId}' opens more than once`);
+      }
+      open.set(entry.opId, entry);
+      continue;
+    }
+    if (closed.has(entry.opId)) {
+      throw new WriteJournalError("invalid-settle-intent", `settle intent '${entry.opId}' closes more than once`);
+    }
+    if (!open.has(entry.opId)) {
+      throw new WriteJournalError("invalid-settle-intent", `settle intent '${entry.opId}' closes without an open record`);
+    }
+    closed.add(entry.opId);
+    open.delete(entry.opId);
+  }
+  return [...open.values()];
+}
+function openSettleIntentsOf(session, sessionId) {
+  return foldSettleIntents(eventsOfSession(session, sessionId));
+}
+function newJournalId() {
+  return randomUUID2();
+}
+async function resolveWriteJournalWriter() {
+  let host;
+  try {
+    host = await importHostPackage("@deepseek-ai/dsh-session");
+  } catch {
+    return void 0;
+  }
+  const append = host.appendPluginRecord;
+  if (typeof append !== "function") return void 0;
+  const appendRecord = append;
+  return (session, type, data) => appendRecord(session, type, data);
+}
+function appendWriteJournalWith(writer, session, entry) {
+  try {
+    writer(session, WRITE_JOURNAL_EVENT_TYPE, entry);
+  } catch (cause) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    throw new WriteJournalError(
+      "write-journal-append-failed",
+      `cannot append the write journal ${entry.phase} record '${entry.journalId}' for ${entry.kind} ${entry.tool}: ${reason}`,
+      { cause }
+    );
+  }
+  return "recorded";
+}
+async function openWriteJournal(agent, sessionId) {
+  if (typeof sessionId !== "string" || sessionId.trim() === "") {
+    throw new WriteJournalError("write-journal-session-missing", "write journal requires the session id of the writing agent");
+  }
+  const writer = await resolveWriteJournalWriter();
+  if (writer === void 0) return void 0;
+  const session = requireSession(agent);
+  const turn = currentTurnOf(eventsOfSession(session, sessionId));
+  if (turn === void 0) {
+    throw new WriteJournalError(
+      "write-journal-turn-missing",
+      `write journal requires an open turn in session '${sessionId}'; the session log has no turn/start that is still open`
+    );
+  }
+  return { journalId: newJournalId(), sessionId, turn, session, writer };
+}
+function newSettleIntentOpId() {
+  return randomUUID2();
+}
+async function openSettleIntent(agent, sessionId) {
+  if (typeof sessionId !== "string" || sessionId.trim() === "") {
+    throw new WriteJournalError("write-journal-session-missing", "settle intent requires the session id of the writing agent");
+  }
+  const writer = await resolveWriteJournalWriter();
+  if (writer === void 0) return void 0;
+  const session = requireSession(agent);
+  return { opId: newSettleIntentOpId(), sessionId, session, writer };
+}
+function appendSettleIntentWith(writer, session, entry) {
+  try {
+    writer(session, SETTLE_INTENT_EVENT_TYPE, entry);
+  } catch (cause) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    throw new WriteJournalError(
+      "settle-intent-append-failed",
+      `cannot append the settle intent ${entry.phase} record '${entry.opId}': ${reason}`,
+      { cause }
+    );
+  }
+  return "recorded";
+}
+function requireSession(agent) {
+  const session = agent?.session;
+  if (session === void 0) {
+    throw new WriteJournalError(
+      "write-journal-session-missing",
+      "write journal requires exec.agent.session; the tool execution carries no live session"
+    );
+  }
+  return session;
+}
+function eventsOfSession(session, sessionId) {
+  const events = readSessionEvents(session);
+  if (events === void 0) {
+    throw new WriteJournalError(
+      "write-journal-session-unreadable",
+      `write journal cannot read the event log of session '${sessionId}' (events/snapshotEvents/log are all unavailable)`
+    );
+  }
+  return events;
+}
+function parseSettleIntent(data, index) {
+  const where = `settle intent event at index ${index}`;
+  if (!isRecord2(data)) throw invalidSettle(where, "data must be an object");
+  if (data["kind"] !== "settle-intent") throw invalidSettle(where, `unknown kind '${String(data["kind"])}'`);
+  const phase = data["phase"];
+  if (phase === "open") return parseSettleIntentOpen(data, where);
+  if (phase === "commit" || phase === "recovered") {
+    return {
+      kind: "settle-intent",
+      phase,
+      opId: textAt(data, "opId", where),
+      sessionId: textAt(data, "sessionId", where),
+      at: timestampAt(data, "at", where),
+      ...data["reason"] === void 0 ? {} : { reason: textAt(data, "reason", where) }
+    };
+  }
+  throw invalidSettle(where, `field 'phase' must be 'open', 'commit' or 'recovered', received '${String(phase)}'`);
+}
+function parseSettleIntentOpen(record, where) {
+  const scope = record["scope"];
+  if (scope !== "chat") throw invalidSettle(where, `field 'scope' must be 'chat', received '${String(scope)}'`);
+  const items = record["items"];
+  if (!Array.isArray(items) || items.length === 0) throw invalidSettle(where, `field 'items' must be a non-empty array`);
+  const turnKey = textAt(record, "turnKey", where);
+  if (!/^(0|[1-9][0-9]*)$/.test(turnKey)) {
+    throw invalidSettle(where, `field 'turnKey' must be a floor index, received '${turnKey}'`);
+  }
+  return {
+    kind: "settle-intent",
+    phase: "open",
+    opId: textAt(record, "opId", where),
+    sessionId: textAt(record, "sessionId", where),
+    character: textAt(record, "character", where),
+    scope: "chat",
+    scopeId: textAt(record, "scopeId", where),
+    turnKey,
+    receiptAt: timestampAt(record, "receiptAt", where),
+    at: timestampAt(record, "at", where),
+    items: items.map((item, itemIndex) => parseSettleIntentItem(item, `${where} items[${itemIndex}]`))
+  };
+}
+function parseSettleIntentItem(value, where) {
+  const record = recordAt(value, where);
+  return {
+    name: textAt(record, "name", where),
+    ...record["before"] === void 0 ? {} : { before: jsonValueAt(record["before"], `${where} before`) },
+    ...record["after"] === void 0 ? {} : { after: jsonValueAt(record["after"], `${where} after`) }
+  };
+}
+function turnOfEvent(event, index) {
+  const data = isRecord2(event["data"]) ? event["data"] : void 0;
+  const turn = data?.["turn"];
+  if (typeof turn !== "number" || !Number.isSafeInteger(turn) || turn < 0) {
+    throw invalid(
+      `session event at index ${index}`,
+      `a turn/start must carry a non-negative integer data.turn, received '${String(turn)}'`
+    );
+  }
+  return turn;
+}
+function jsonValueAt(value, where) {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw invalid(where, "numbers must be finite");
+    return value;
+  }
+  if (Array.isArray(value)) return value.map((item, index) => jsonValueAt(item, `${where}[${index}]`));
+  if (isRecord2(value)) {
+    const record = {};
+    for (const [key, item] of Object.entries(value)) record[key] = jsonValueAt(item, `${where}.${key}`);
+    return record;
+  }
+  throw invalid(where, "must be a JSON value");
+}
+function textAt(record, field, where) {
+  const value = record[field];
+  if (typeof value !== "string" || value.trim() === "") {
+    throw invalid(where, `field '${field}' must be a non-empty string`);
+  }
+  return value;
+}
+function timestampAt(record, field, where) {
+  const value = record[field];
+  if (typeof value !== "string" || Number.isNaN(Date.parse(value))) {
+    throw invalid(where, `field '${field}' must be an ISO 8601 timestamp`);
+  }
+  return value;
+}
+function recordAt(value, where) {
+  if (!isRecord2(value)) throw invalid(where, "must be an object");
+  return value;
+}
+function isRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function invalid(where, detail) {
+  return new WriteJournalError("invalid-write-journal", `${where}: ${detail}`);
+}
+function invalidSettle(where, detail) {
+  return new WriteJournalError("invalid-settle-intent", `${where}: ${detail}`);
+}
+
 // packages/plugin/src/agent-tavern/projector.ts
 import { promises as fs8 } from "node:fs";
 import { join as join9 } from "node:path";
@@ -9455,6 +9705,41 @@ function deductionTools() {
       const seedTree = readChatVariables(chat);
       const store3 = await variableStore();
       const preEntries = ruleSource !== void 0 ? await store3.listAll("chat", binding.chatId) : [];
+      const settleIntent = await openSettleIntent(exec.agent, binding.agentId);
+      const settlementAt = (/* @__PURE__ */ new Date()).toISOString();
+      if (settleIntent !== void 0) {
+        const items = [];
+        for (const request of requests) {
+          let before;
+          try {
+            before = (await store3.get("chat", binding.chatId, request.name))?.value;
+          } catch {
+          }
+          let after;
+          try {
+            after = jsonValueOf(request.value);
+          } catch {
+          }
+          items.push({
+            name: request.name,
+            ...before === void 0 ? {} : { before },
+            ...after === void 0 ? {} : { after }
+          });
+        }
+        appendSettleIntentWith(settleIntent.writer, settleIntent.session, {
+          kind: "settle-intent",
+          phase: "open",
+          opId: settleIntent.opId,
+          sessionId: settleIntent.sessionId,
+          character: binding.character,
+          scope: "chat",
+          scopeId: binding.chatId,
+          turnKey: String(chat.messages.length),
+          receiptAt: settlementAt,
+          at: settlementAt,
+          items
+        });
+      }
       const applied = [];
       const failed = [];
       const receiptChanges = [];
@@ -9563,7 +9848,7 @@ function deductionTools() {
         }
       }
       const receipt = {
-        at: (/* @__PURE__ */ new Date()).toISOString(),
+        at: settlementAt,
         turnKey: String(chat.messages.length),
         status: failed.length > 0 || ruleFailures.length > 0 ? "failed" : receiptChanges.length > 0 ? "updated" : "unchanged",
         changes: receiptChanges,
@@ -9571,6 +9856,20 @@ function deductionTools() {
       };
       appendMvuReceipt(chat, receipt);
       await db.saveChat(binding.character, binding.chatId, chat, snapshot2.revision);
+      if (settleIntent !== void 0) {
+        const closedAt = (/* @__PURE__ */ new Date()).toISOString();
+        for (const open of openSettleIntentsOf(settleIntent.session, settleIntent.sessionId)) {
+          if (open.character !== binding.character || open.scopeId !== binding.chatId) continue;
+          appendSettleIntentWith(settleIntent.writer, settleIntent.session, {
+            kind: "settle-intent",
+            phase: "commit",
+            opId: open.opId,
+            sessionId: open.sessionId,
+            at: closedAt,
+            ...open.opId === settleIntent.opId ? {} : { reason: `superseded by ${settleIntent.opId}` }
+          });
+        }
+      }
       await appendMvuAudit(tavernDataRoot(), {
         at: receipt.at,
         sessionId: binding.agentId,
@@ -10003,114 +10302,6 @@ function refreshAllAgentGamesSummaries() {
 
 // packages/plugin/src/agent-tavern/tools/memory.ts
 import { randomUUID as randomUUID3 } from "node:crypto";
-
-// packages/plugin/src/agent-tavern/write-journal.ts
-import { randomUUID as randomUUID2 } from "node:crypto";
-var WRITE_JOURNAL_EVENT_TYPE = "plugin:dsh-soulmojito/write";
-var WriteJournalError = class extends Error {
-  code;
-  constructor(code, message, options) {
-    super(message, options);
-    this.name = "WriteJournalError";
-    this.code = code;
-  }
-};
-function currentTurnOf(events) {
-  let open;
-  for (const [index, event] of events.entries()) {
-    if (!isRecord2(event)) continue;
-    const type = event["type"];
-    if (type === "turn/start") {
-      open = turnOfEvent(event, index);
-    } else if (type === "turn/end") {
-      open = void 0;
-    }
-  }
-  return open;
-}
-function newJournalId() {
-  return randomUUID2();
-}
-async function resolveWriteJournalWriter() {
-  let host;
-  try {
-    host = await importHostPackage("@deepseek-ai/dsh-session");
-  } catch {
-    return void 0;
-  }
-  const append = host.appendPluginRecord;
-  if (typeof append !== "function") return void 0;
-  const appendRecord = append;
-  return (session, type, data) => appendRecord(session, type, data);
-}
-function appendWriteJournalWith(writer, session, entry) {
-  try {
-    writer(session, WRITE_JOURNAL_EVENT_TYPE, entry);
-  } catch (cause) {
-    const reason = cause instanceof Error ? cause.message : String(cause);
-    throw new WriteJournalError(
-      "write-journal-append-failed",
-      `cannot append the write journal ${entry.phase} record '${entry.journalId}' for ${entry.kind} ${entry.tool}: ${reason}`,
-      { cause }
-    );
-  }
-  return "recorded";
-}
-async function openWriteJournal(agent, sessionId) {
-  if (typeof sessionId !== "string" || sessionId.trim() === "") {
-    throw new WriteJournalError("write-journal-session-missing", "write journal requires the session id of the writing agent");
-  }
-  const writer = await resolveWriteJournalWriter();
-  if (writer === void 0) return void 0;
-  const session = requireSession(agent);
-  const turn = currentTurnOf(eventsOfSession(session, sessionId));
-  if (turn === void 0) {
-    throw new WriteJournalError(
-      "write-journal-turn-missing",
-      `write journal requires an open turn in session '${sessionId}'; the session log has no turn/start that is still open`
-    );
-  }
-  return { journalId: newJournalId(), sessionId, turn, session, writer };
-}
-function requireSession(agent) {
-  const session = agent?.session;
-  if (session === void 0) {
-    throw new WriteJournalError(
-      "write-journal-session-missing",
-      "write journal requires exec.agent.session; the tool execution carries no live session"
-    );
-  }
-  return session;
-}
-function eventsOfSession(session, sessionId) {
-  const events = readSessionEvents(session);
-  if (events === void 0) {
-    throw new WriteJournalError(
-      "write-journal-session-unreadable",
-      `write journal cannot read the event log of session '${sessionId}' (events/snapshotEvents/log are all unavailable)`
-    );
-  }
-  return events;
-}
-function turnOfEvent(event, index) {
-  const data = isRecord2(event["data"]) ? event["data"] : void 0;
-  const turn = data?.["turn"];
-  if (typeof turn !== "number" || !Number.isSafeInteger(turn) || turn < 0) {
-    throw invalid(
-      `session event at index ${index}`,
-      `a turn/start must carry a non-negative integer data.turn, received '${String(turn)}'`
-    );
-  }
-  return turn;
-}
-function isRecord2(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function invalid(where, detail) {
-  return new WriteJournalError("invalid-write-journal", `${where}: ${detail}`);
-}
-
-// packages/plugin/src/agent-tavern/tools/memory.ts
 function memoryTools() {
   return [
     tool("memory_search", "Search memories in the current chat, character, agent, or global scope with hybrid lexical and semantic retrieval (semantic requires an embedding endpoint; without one it is lexical only). Use it to recall established facts, promises, or relationship state before they matter on screen.", {

@@ -15,8 +15,15 @@
 
 import type { HostLogger, HostAgentsService } from '../host-contract.js'
 import { advanceHostTurnBase, canAdvanceHostTurnBase, closeImportBracket, lastLoggedTurn } from '../session/trace.js'
-import { store as tavernStore } from '../runtime.js'
+import { store as tavernStore, variables as tavernVariables } from '../runtime.js'
 import { appendPrepareRecovered } from './body-rollback-prepare.js'
+import {
+  foldSettleIntents,
+  recoverOpenSettleIntents,
+  type SettleIntentOpenEntry,
+  type SettleIntentRecovery,
+  type WriteJournalSession,
+} from './body-settle-intent.js'
 import {
   finalizeRecoveredOperation,
   foldPendingOps,
@@ -201,14 +208,18 @@ async function recoverAgentBody(
   // Proposal 0022 §10: a durable `op-prepare` without `op-start`/`op-finish`
   // may have rolled the old writes back. Restore first: it only touches stores
   // and the chat, never the surface, so it is safe before any body settlement.
+  //
+  // Settle intents ride their own records and never enter the body journal.
+  // Restoring them before a plan replay makes the flat store match the chat.
+  const settleRecovery = await recoverSettleIntents(ctx, deps, agentId, initial)
   const prepareOutcome = await restoreInterruptedPrepares(ctx, deps, prepares)
 
   if (pending.length === 0) {
     const openTurn = openTurnNumber(initial)
     if (openTurn !== undefined) closeRecoveredBracket(ctx, agent, openTurn, agentId)
-    const status: BodyRecoveryOutcome['status'] = prepareOutcome.failed > 0
+    const status: BodyRecoveryOutcome['status'] = prepareOutcome.failed > 0 || settleRecovery.failed > 0
       ? 'failed'
-      : prepareOutcome.restored > 0
+      : prepareOutcome.restored > 0 || settleRecovery.restored > 0
         ? 'restored'
         : 'clean'
     return { agentId, status, pending: 0, ...(openTurn === undefined ? {} : { reason: `closed-turn-${openTurn}` }) }
@@ -303,13 +314,13 @@ async function recoverAgentBody(
     else failed += 1
   }
 
-  const status: BodyRecoveryOutcome['status'] = failed > 0 || prepareOutcome.failed > 0
+  const status: BodyRecoveryOutcome['status'] = failed > 0 || prepareOutcome.failed > 0 || settleRecovery.failed > 0
     ? 'failed'
     : finishPending > 0
       ? 'finish-pending'
       : settled > 0
         ? 'settled'
-        : restored > 0 || prepareOutcome.restored > 0
+        : restored > 0 || prepareOutcome.restored > 0 || settleRecovery.restored > 0
           ? 'restored'
           : 'clean'
   return {
@@ -324,6 +335,75 @@ async function recoverAgentBody(
 interface PrepareRecoveryOutcome {
   readonly restored: number
   readonly failed: number
+}
+
+/**
+ * Consume unclosed settle intents before any body state is settled or restored.
+ *
+ * Folding is pure, so the Tavern and variable stores open only when an intent
+ * exists. A malformed record or an unreadable store reports a failure and keeps
+ * the body outcome honest; it never appends an assistant message or touches the
+ * surface.
+ */
+async function recoverSettleIntents(
+  ctx: BodyRecoveryHost,
+  deps: BodyRuntimeDeps,
+  agentId: string,
+  events: readonly unknown[],
+): Promise<SettleIntentRecovery> {
+  let intents: readonly SettleIntentOpenEntry[]
+  try {
+    intents = foldSettleIntents(events)
+  } catch (error) {
+    errorLog(ctx, 'dsh-soulmojito body: foldSettleIntents failed during recovery', {
+      agentId,
+      code: failureCodeOf(error),
+      error: errorMessage(error),
+    })
+    return { restored: 0, committed: 0, failed: 1, failures: [errorMessage(error)] }
+  }
+  if (intents.length === 0) return { restored: 0, committed: 0, failed: 0, failures: [] }
+
+  try {
+    const appendRecord = deps.appendRecord
+    const outcome = await recoverOpenSettleIntents(
+      {
+        store: await tavernStore(),
+        variableStore: await tavernVariables(),
+        ...(ctx.logger === undefined ? {} : { logger: ctx.logger }),
+      },
+      agentId,
+      deps.session,
+      appendRecord === undefined
+        ? undefined
+        : (_session: WriteJournalSession, type: string, data: unknown) => appendRecord(deps.session, type, data),
+      intents,
+    )
+    if (outcome.restored > 0) {
+      info(ctx, 'dsh-soulmojito body: recovery restored flat variables from settle intents', {
+        agentId,
+        restored: outcome.restored,
+        committed: outcome.committed,
+      })
+    }
+    if (outcome.failed > 0) {
+      warn(ctx, 'dsh-soulmojito body: recovery left settle intents open for the next startup', {
+        agentId,
+        intents: intents.length,
+        failed: outcome.failed,
+        failures: outcome.failures.join('; '),
+      })
+    }
+    return outcome
+  } catch (error) {
+    errorLog(ctx, 'dsh-soulmojito body: settle intent recovery failed', {
+      agentId,
+      intents: intents.length,
+      code: failureCodeOf(error),
+      error: errorMessage(error),
+    })
+    return { restored: 0, committed: 0, failed: intents.length, failures: [errorMessage(error)] }
+  }
 }
 
 /**

@@ -16,12 +16,18 @@ import type { JsonValue, MemoryRecord, VariableSnapshot } from '../../tavern-sto
 import { memoryTools } from '../src/agent-tavern/tools/memory.js'
 import { variableTools } from '../src/agent-tavern/tools/variable.js'
 import {
+  SETTLE_INTENT_EVENT_TYPE,
   WRITE_JOURNAL_EVENT_TYPE,
+  appendSettleIntentWith,
   appendWriteJournal,
   appendWriteJournalWith,
   currentTurnOf,
+  foldSettleIntents,
   newJournalId,
+  readSettleIntents,
   readWriteJournal,
+  type SettleIntentEntry,
+  type SettleIntentOpenEntry,
   type WriteJournalEntry,
   type WriteJournalMemoryEntry,
   type WriteJournalMemoryTool,
@@ -170,6 +176,22 @@ function memoryRecordFixture(id: string, content: string, revision: string): Mem
 
 function variableSnapshotFixture(name: string, value: JsonValue): VariableSnapshot {
   return { scope: 'chat', scopeId: 'fixture-chat', name, value, revision: 'rev-1', updatedAt: CREATED_AT }
+}
+
+function settleIntentFixture(opId: string, items: SettleIntentOpenEntry['items']): SettleIntentOpenEntry {
+  return {
+    kind: 'settle-intent',
+    phase: 'open',
+    opId,
+    sessionId: AGENT_ID,
+    character: CHARACTER,
+    scope: 'chat',
+    scopeId: 'fixture-chat',
+    turnKey: '4',
+    receiptAt: CREATED_AT,
+    at: CREATED_AT,
+    items,
+  }
 }
 
 let home: string
@@ -532,5 +554,75 @@ describe('variable tools journal their writes', () => {
 
     const read = await runTool('variable_get', { scope: 'chat', name: 'journal.abort' }, createJournalSession(undefined))
     expect(read['found']).toBe(false)
+  })
+})
+
+describe('settle intents', () => {
+  it('folds only unclosed intents and never into the ordinary write journal', () => {
+    const first = settleIntentFixture('settle-open-1', [
+      { name: 'mood', before: 'calm', after: 'alert' },
+      { name: 'fresh', after: 1 },
+    ])
+    const second = settleIntentFixture('settle-open-2', [{ name: 'flag', before: true, after: false }])
+    const commit: SettleIntentEntry = {
+      kind: 'settle-intent', phase: 'commit', opId: first.opId, sessionId: AGENT_ID, at: CREATED_AT,
+    }
+    const events = [
+      { seq: 0, type: 'turn/start', data: { turn: 4 } },
+      { seq: 1, type: SETTLE_INTENT_EVENT_TYPE, data: first },
+      { seq: 2, type: SETTLE_INTENT_EVENT_TYPE, data: second },
+      { seq: 3, type: SETTLE_INTENT_EVENT_TYPE, data: commit },
+    ]
+
+    expect(readSettleIntents(events)).toEqual([first, second, commit])
+    expect(foldSettleIntents(events)).toEqual([second])
+    expect(readWriteJournal(events)).toEqual([])
+  })
+
+  it('rejects duplicate, reopened and orphan closure records', () => {
+    const open = settleIntentFixture('settle-duplicate', [{ name: 'mood', after: 'alert' }])
+    const commit: SettleIntentEntry = {
+      kind: 'settle-intent', phase: 'commit', opId: open.opId, sessionId: AGENT_ID, at: CREATED_AT,
+    }
+    const eventsOf = (...entries: SettleIntentEntry[]) =>
+      entries.map((entry, seq) => ({ seq, type: SETTLE_INTENT_EVENT_TYPE, data: entry }))
+
+    expect(() => foldSettleIntents(eventsOf(open, open))).toThrow(/opens more than once/)
+    expect(() => foldSettleIntents(eventsOf(open, commit, commit))).toThrow(/closes more than once/)
+    expect(() => foldSettleIntents(eventsOf(commit))).toThrow(/without an open record/)
+  })
+
+  it('rejects a malformed open record instead of skipping it', () => {
+    const open = settleIntentFixture('settle-malformed', [{ name: 'mood', after: 'alert' }])
+
+    expect(() => foldSettleIntents([{ seq: 0, type: SETTLE_INTENT_EVENT_TYPE, data: { ...open, items: [] } }]))
+      .toThrow(/non-empty array/)
+    expect(() => foldSettleIntents([{ seq: 0, type: SETTLE_INTENT_EVENT_TYPE, data: { ...open, turnKey: 'body:1' } }]))
+      .toThrow(/floor index/)
+    expect(() => readSettleIntents([{ seq: 0, type: SETTLE_INTENT_EVENT_TYPE, data: { kind: 'settle-intent', phase: 'other' } }]))
+      .toThrow(/phase/)
+  })
+
+  it('appends settle intent records through the injected writer', () => {
+    const harness = createJournalSession(1)
+    const open = settleIntentFixture('settle-append', [{ name: 'mood', before: 'calm', after: 'alert' }])
+    const writer = (session: unknown, type: string, data: unknown): unknown => {
+      const method = asRecord(session)['appendPluginRecord']
+      if (typeof method !== 'function') throw new Error('test session has no appendPluginRecord')
+      return method.call(session, type, data)
+    }
+
+    expect(appendSettleIntentWith(writer, harness.session, open)).toBe('recorded')
+    expect(readSettleIntents(harness.session.events)).toEqual([open])
+    expect(readWriteJournal(harness.session.events)).toEqual([])
+  })
+
+  it('surfaces a rejected settle intent append with its phase and opId', () => {
+    const harness = createJournalSession(1)
+    const open = settleIntentFixture('settle-rejected', [{ name: 'mood', after: 'alert' }])
+
+    expect(() => appendSettleIntentWith(() => { throw new Error('intent writer down') }, harness.session, open))
+      .toThrow(/settle intent open record 'settle-rejected': intent writer down/)
+    expect(readSettleIntents(harness.session.events)).toEqual([])
   })
 })

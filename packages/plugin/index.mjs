@@ -16832,7 +16832,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("c9e143e") : void 0;
+  const commit = true ? normalizeCommit("ca8b959") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -21888,6 +21888,7 @@ async function compensateJournal(deps, writes, direction) {
 
 // packages/plugin/src/agent-tavern/write-journal.ts
 var WRITE_JOURNAL_EVENT_TYPE = "plugin:dsh-soulmojito/write";
+var SETTLE_INTENT_EVENT_TYPE = "plugin:dsh-soulmojito/settle-intent";
 var MEMORY_WRITE_JOURNAL_TOOLS = ["memory_write", "memory_update", "memory_forget"];
 var VARIABLE_WRITE_JOURNAL_TOOLS = ["variable_set", "variable_patch", "variable_delete"];
 var WriteJournalError = class extends Error {
@@ -21907,6 +21908,37 @@ function readWriteJournal(events) {
   }
   return entries;
 }
+function readSettleIntents(events) {
+  const entries = [];
+  for (const [index, event] of events.entries()) {
+    if (!isRecord6(event)) continue;
+    if (event["type"] !== SETTLE_INTENT_EVENT_TYPE) continue;
+    entries.push(parseSettleIntent(event["data"], index));
+  }
+  return entries;
+}
+function foldSettleIntents(events) {
+  const open2 = /* @__PURE__ */ new Map();
+  const closed = /* @__PURE__ */ new Set();
+  for (const entry of readSettleIntents(events)) {
+    if (entry.phase === "open") {
+      if (open2.has(entry.opId) || closed.has(entry.opId)) {
+        throw new WriteJournalError("invalid-settle-intent", `settle intent '${entry.opId}' opens more than once`);
+      }
+      open2.set(entry.opId, entry);
+      continue;
+    }
+    if (closed.has(entry.opId)) {
+      throw new WriteJournalError("invalid-settle-intent", `settle intent '${entry.opId}' closes more than once`);
+    }
+    if (!open2.has(entry.opId)) {
+      throw new WriteJournalError("invalid-settle-intent", `settle intent '${entry.opId}' closes without an open record`);
+    }
+    closed.add(entry.opId);
+    open2.delete(entry.opId);
+  }
+  return [...open2.values()];
+}
 async function resolveWriteJournalWriter() {
   let host;
   try {
@@ -21919,8 +21951,70 @@ async function resolveWriteJournalWriter() {
   const appendRecord = append;
   return (session, type, data) => appendRecord(session, type, data);
 }
+function appendSettleIntentWith(writer, session, entry) {
+  try {
+    writer(session, SETTLE_INTENT_EVENT_TYPE, entry);
+  } catch (cause) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    throw new WriteJournalError(
+      "settle-intent-append-failed",
+      `cannot append the settle intent ${entry.phase} record '${entry.opId}': ${reason}`,
+      { cause }
+    );
+  }
+  return "recorded";
+}
 var MEMORY_SCOPES = ["turn", "chat", "character", "agent", "global"];
 var VARIABLE_SCOPES = ["turn", "chat", "character", "agent", "global"];
+function parseSettleIntent(data, index) {
+  const where = `settle intent event at index ${index}`;
+  if (!isRecord6(data)) throw invalidSettle(where, "data must be an object");
+  if (data["kind"] !== "settle-intent") throw invalidSettle(where, `unknown kind '${String(data["kind"])}'`);
+  const phase = data["phase"];
+  if (phase === "open") return parseSettleIntentOpen(data, where);
+  if (phase === "commit" || phase === "recovered") {
+    return {
+      kind: "settle-intent",
+      phase,
+      opId: textAt(data, "opId", where),
+      sessionId: textAt(data, "sessionId", where),
+      at: timestampAt(data, "at", where),
+      ...data["reason"] === void 0 ? {} : { reason: textAt(data, "reason", where) }
+    };
+  }
+  throw invalidSettle(where, `field 'phase' must be 'open', 'commit' or 'recovered', received '${String(phase)}'`);
+}
+function parseSettleIntentOpen(record, where) {
+  const scope = record["scope"];
+  if (scope !== "chat") throw invalidSettle(where, `field 'scope' must be 'chat', received '${String(scope)}'`);
+  const items = record["items"];
+  if (!Array.isArray(items) || items.length === 0) throw invalidSettle(where, `field 'items' must be a non-empty array`);
+  const turnKey = textAt(record, "turnKey", where);
+  if (!/^(0|[1-9][0-9]*)$/.test(turnKey)) {
+    throw invalidSettle(where, `field 'turnKey' must be a floor index, received '${turnKey}'`);
+  }
+  return {
+    kind: "settle-intent",
+    phase: "open",
+    opId: textAt(record, "opId", where),
+    sessionId: textAt(record, "sessionId", where),
+    character: textAt(record, "character", where),
+    scope: "chat",
+    scopeId: textAt(record, "scopeId", where),
+    turnKey,
+    receiptAt: timestampAt(record, "receiptAt", where),
+    at: timestampAt(record, "at", where),
+    items: items.map((item, itemIndex) => parseSettleIntentItem(item, `${where} items[${itemIndex}]`))
+  };
+}
+function parseSettleIntentItem(value, where) {
+  const record = recordAt(value, where);
+  return {
+    name: textAt(record, "name", where),
+    ...record["before"] === void 0 ? {} : { before: jsonValueAt(record["before"], `${where} before`) },
+    ...record["after"] === void 0 ? {} : { after: jsonValueAt(record["after"], `${where} after`) }
+  };
+}
 function parseEntry(data, index) {
   const where = `write journal event at index ${index}`;
   if (!isRecord6(data)) throw invalid(where, "data must be an object");
@@ -22108,6 +22202,80 @@ function isRecord6(value) {
 }
 function invalid(where, detail) {
   return new WriteJournalError("invalid-write-journal", `${where}: ${detail}`);
+}
+function invalidSettle(where, detail) {
+  return new WriteJournalError("invalid-settle-intent", `${where}: ${detail}`);
+}
+
+// packages/plugin/src/agent-tavern/body-settle-intent.ts
+async function recoverOpenSettleIntents(deps, agentId, session, appendRecord, intents) {
+  if (intents.length === 0) return { restored: 0, committed: 0, failed: 0, failures: [] };
+  if (appendRecord === void 0) {
+    return { restored: 0, committed: 0, failed: intents.length, failures: intents.map((intent) => `${intent.opId}: no plugin-record writer`) };
+  }
+  let restored = 0;
+  let committed = 0;
+  const failures = [];
+  for (const intent of intents) {
+    try {
+      if (await settleReceiptPersisted(deps, intent)) {
+        closeSettleIntent(appendRecord, session, intent, "commit", "receipt persisted before the intent closed");
+        committed += 1;
+        continue;
+      }
+      await restoreSettleIntentBefore(deps, intent);
+      closeSettleIntent(appendRecord, session, intent, "recovered", "restored before values");
+      restored += 1;
+    } catch (error) {
+      const message = errorMessage2(error);
+      failures.push(`${intent.opId}: ${message}`);
+      log(deps.logger, "warn", "dsh-soulmojito body recovery: settle intent recovery failed", {
+        agentId,
+        opId: intent.opId,
+        scopeId: intent.scopeId,
+        error: message
+      });
+    }
+  }
+  return { restored, committed, failed: failures.length, failures };
+}
+async function settleReceiptPersisted(deps, intent) {
+  let snapshot2;
+  try {
+    snapshot2 = await deps.store.getChatSnapshot(intent.character, intent.scopeId);
+  } catch (cause) {
+    throw settleChatError(intent, cause);
+  }
+  if (snapshot2 === void 0) throw settleChatError(intent, void 0);
+  return readMvuReceipts(snapshot2.chat).some((receipt) => receipt.undoneAt === void 0 && receipt.turnKey === intent.turnKey && receipt.at >= intent.receiptAt);
+}
+function settleChatError(intent, cause) {
+  const suffix = cause === void 0 ? "" : `: ${errorMessage2(cause)}`;
+  return new BodyRollbackError(
+    "body-state-unsafe",
+    `settle intent '${intent.opId}' cannot read chat '${intent.scopeId}'${suffix}`,
+    { detail: "chat-unreadable", stage: "restore", ...cause === void 0 ? {} : { cause } }
+  );
+}
+async function restoreSettleIntentBefore(deps, intent) {
+  for (const item of [...intent.items].reverse()) {
+    const current = await deps.variableStore.get(intent.scope, intent.scopeId, item.name);
+    if (item.before !== void 0) {
+      await deps.variableStore.set(intent.scope, intent.scopeId, item.name, item.before, current?.revision);
+    } else if (current !== void 0) {
+      await deps.variableStore.delete(intent.scope, intent.scopeId, item.name, current.revision);
+    }
+  }
+}
+function closeSettleIntent(writer, session, intent, phase, reason) {
+  appendSettleIntentWith(writer, session, {
+    kind: "settle-intent",
+    phase,
+    opId: intent.opId,
+    sessionId: intent.sessionId,
+    at: (/* @__PURE__ */ new Date()).toISOString(),
+    reason
+  });
 }
 
 // packages/plugin/src/agent-tavern/body-rollback-receipts.ts
@@ -26031,11 +26199,12 @@ async function recoverAgentBody(ctx, agent, agentId, createDeps) {
     });
     return { agentId, status: "failed", pending: 0, reason: "invalid-event" };
   }
+  const settleRecovery = await recoverSettleIntents(ctx, deps, agentId, initial);
   const prepareOutcome = await restoreInterruptedPrepares(ctx, deps, prepares);
   if (pending.length === 0) {
     const openTurn2 = openTurnNumber2(initial);
     if (openTurn2 !== void 0) closeRecoveredBracket(ctx, agent, openTurn2, agentId);
-    const status3 = prepareOutcome.failed > 0 ? "failed" : prepareOutcome.restored > 0 ? "restored" : "clean";
+    const status3 = prepareOutcome.failed > 0 || settleRecovery.failed > 0 ? "failed" : prepareOutcome.restored > 0 || settleRecovery.restored > 0 ? "restored" : "clean";
     return { agentId, status: status3, pending: 0, ...openTurn2 === void 0 ? {} : { reason: `closed-turn-${openTurn2}` } };
   }
   const safety = await recoveryStateSafety(ctx, agentId, binding);
@@ -26114,13 +26283,65 @@ async function recoverAgentBody(ctx, agent, agentId, createDeps) {
     else if (outcome === "finish-pending") finishPending += 1;
     else failed += 1;
   }
-  const status2 = failed > 0 || prepareOutcome.failed > 0 ? "failed" : finishPending > 0 ? "finish-pending" : settled > 0 ? "settled" : restored > 0 || prepareOutcome.restored > 0 ? "restored" : "clean";
+  const status2 = failed > 0 || prepareOutcome.failed > 0 || settleRecovery.failed > 0 ? "failed" : finishPending > 0 ? "finish-pending" : settled > 0 ? "settled" : restored > 0 || prepareOutcome.restored > 0 || settleRecovery.restored > 0 ? "restored" : "clean";
   return {
     agentId,
     status: status2,
     pending: pending.length,
     ...openTurn === void 0 ? {} : { reason: `closed-turn-${openTurn}` }
   };
+}
+async function recoverSettleIntents(ctx, deps, agentId, events) {
+  let intents;
+  try {
+    intents = foldSettleIntents(events);
+  } catch (error) {
+    errorLog(ctx, "dsh-soulmojito body: foldSettleIntents failed during recovery", {
+      agentId,
+      code: failureCodeOf(error),
+      error: errorMessage4(error)
+    });
+    return { restored: 0, committed: 0, failed: 1, failures: [errorMessage4(error)] };
+  }
+  if (intents.length === 0) return { restored: 0, committed: 0, failed: 0, failures: [] };
+  try {
+    const appendRecord = deps.appendRecord;
+    const outcome = await recoverOpenSettleIntents(
+      {
+        store: await store3(),
+        variableStore: await variables(),
+        ...ctx.logger === void 0 ? {} : { logger: ctx.logger }
+      },
+      agentId,
+      deps.session,
+      appendRecord === void 0 ? void 0 : (_session, type, data) => appendRecord(deps.session, type, data),
+      intents
+    );
+    if (outcome.restored > 0) {
+      info(ctx, "dsh-soulmojito body: recovery restored flat variables from settle intents", {
+        agentId,
+        restored: outcome.restored,
+        committed: outcome.committed
+      });
+    }
+    if (outcome.failed > 0) {
+      warn2(ctx, "dsh-soulmojito body: recovery left settle intents open for the next startup", {
+        agentId,
+        intents: intents.length,
+        failed: outcome.failed,
+        failures: outcome.failures.join("; ")
+      });
+    }
+    return outcome;
+  } catch (error) {
+    errorLog(ctx, "dsh-soulmojito body: settle intent recovery failed", {
+      agentId,
+      intents: intents.length,
+      code: failureCodeOf(error),
+      error: errorMessage4(error)
+    });
+    return { restored: 0, committed: 0, failed: intents.length, failures: [errorMessage4(error)] };
+  }
 }
 async function restoreInterruptedPrepares(ctx, deps, prepares) {
   if (prepares.length === 0) return { restored: 0, failed: 0 };

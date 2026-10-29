@@ -19,6 +19,12 @@ import {
   runDeduction,
   subagentRuntimeOf,
 } from '../deduce.js'
+import {
+  appendSettleIntentWith,
+  openSettleIntent,
+  openSettleIntentsOf,
+  type SettleIntentItem,
+} from '../write-journal.js'
 import { appendMvuAudit } from '../projector.js'
 import { bindingFor, objectOutput, tool, type ToolDefinition } from './shared.js'
 import { tavernStore, variableStore } from './stores.js'
@@ -108,6 +114,47 @@ export function deductionTools(): ToolDefinition[] {
       const preEntries = ruleSource !== undefined
         ? await store.listAll('chat', binding.chatId)
         : []
+      // Durable intent before the first flat write: a crash between the flat
+      // write and the chat save leaves an open record that startup recovery
+      // restores from `before`. The append is fail-closed; no flat write starts
+      // when the host rejects it.
+      const settleIntent = await openSettleIntent(exec.agent, binding.agentId)
+      const settlementAt = new Date().toISOString()
+      if (settleIntent !== undefined) {
+        const items: SettleIntentItem[] = []
+        for (const request of requests) {
+          let before: JsonValue | undefined
+          try {
+            before = (await store.get('chat', binding.chatId, request.name))?.value
+          } catch {
+            // An invalid name has no flat value; the batch records its failure.
+          }
+          let after: JsonValue | undefined
+          try {
+            after = jsonValueOf(request.value)
+          } catch {
+            // A non-JSON value can never be written; the batch records its failure.
+          }
+          items.push({
+            name: request.name,
+            ...(before === undefined ? {} : { before }),
+            ...(after === undefined ? {} : { after }),
+          })
+        }
+        appendSettleIntentWith(settleIntent.writer, settleIntent.session, {
+          kind: 'settle-intent',
+          phase: 'open',
+          opId: settleIntent.opId,
+          sessionId: settleIntent.sessionId,
+          character: binding.character,
+          scope: 'chat',
+          scopeId: binding.chatId,
+          turnKey: String(chat.messages.length),
+          receiptAt: settlementAt,
+          at: settlementAt,
+          items,
+        })
+      }
       const applied: string[] = []
       const failed: Array<{ name: string; error: string }> = []
       const receiptChanges: MvuVariableChange[] = []
@@ -241,7 +288,7 @@ export function deductionTools(): ToolDefinition[] {
       // turnKey 是「正在生成的楼层将占据的 messages 下标」：结算发生在楼层投影
       // 落库之前，同一楼层的多次结算共享同一 turnKey（P1 重试同楼层同理）。
       const receipt: MvuReceipt = {
-        at: new Date().toISOString(),
+        at: settlementAt,
         turnKey: String(chat.messages.length),
         status: failed.length > 0 || ruleFailures.length > 0 ? 'failed' : receiptChanges.length > 0 ? 'updated' : 'unchanged',
         changes: receiptChanges,
@@ -251,6 +298,24 @@ export function deductionTools(): ToolDefinition[] {
       // CAS 冲突抛 ChatRevisionConflictError：由 agent 重调工具重试（变量已写、
       // 回执未落，重试幂等）。
       await db.saveChat(binding.character, binding.chatId, chat, snapshot.revision)
+      // Close the intent only after the chat save persisted the receipt. A
+      // failed append throws explicitly: an unclosed intent is never silent.
+      // Every still-open intent of this chat closes too: an earlier failed
+      // attempt must not undo this committed batch on the next startup.
+      if (settleIntent !== undefined) {
+        const closedAt = new Date().toISOString()
+        for (const open of openSettleIntentsOf(settleIntent.session, settleIntent.sessionId)) {
+          if (open.character !== binding.character || open.scopeId !== binding.chatId) continue
+          appendSettleIntentWith(settleIntent.writer, settleIntent.session, {
+            kind: 'settle-intent',
+            phase: 'commit',
+            opId: open.opId,
+            sessionId: open.sessionId,
+            at: closedAt,
+            ...(open.opId === settleIntent.opId ? {} : { reason: `superseded by ${settleIntent.opId}` }),
+          })
+        }
+      }
       // 回执的持久投影（提案 0012 P2）：会话事件词汇表对插件封闭（v4 宿主拒载
       // 未知事件类型），审计线落独立文件 <tavern>/mvu/audit.jsonl，见 projector.ts。
       await appendMvuAudit(tavernDataRoot(), {

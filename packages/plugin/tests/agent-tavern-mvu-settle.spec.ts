@@ -1,18 +1,101 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { apply, type AgentContextLike } from '../src/agent-tavern/agent.js'
+import { recoverBodyOperationWith, type BodyRecoveryOutcome } from '../src/agent-tavern/body-recovery.js'
+import type { BodyRuntimeDeps } from '../src/agent-tavern/body-runtime.js'
 import { appendMvuAudit, mvuAuditPath, readMvuAudit } from '../src/agent-tavern/projector.js'
+import {
+  SETTLE_INTENT_EVENT_TYPE,
+  readSettleIntents,
+} from '../src/agent-tavern/write-journal.js'
+import {
+  foldSettleIntents,
+  type SettleIntentOpenEntry,
+} from '../src/agent-tavern/body-settle-intent.js'
 import { readMvuReceipts } from '../src/mvu.js'
 import { TavernStore, VariableStore } from '../../tavern-store/src/index.js'
 
 const CHARACTER = 'Settle Character'
+let chatId = ''
+
+const hostState = vi.hoisted(() => ({
+  module: undefined as Record<string, unknown> | undefined,
+}))
+
+vi.mock('../../bind/src/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../bind/src/index.js')>()
+  return {
+    ...actual,
+    importHostPackage: async (name: string): Promise<unknown> => {
+      if (name !== '@deepseek-ai/dsh-session') throw new Error(`unexpected host package import: ${name}`)
+      if (hostState.module === undefined) throw new Error('@deepseek-ai/dsh-session is not installed')
+      return hostState.module
+    },
+  }
+})
+
+interface SettleSession {
+  readonly id: string
+  readonly events: unknown[]
+  appendPluginRecord(type: string, data: unknown): number
+  append(type: string, data: unknown): number
+}
+
+interface SettleHarness {
+  readonly session: SettleSession
+  failIntentPhase: 'open' | 'commit' | 'recovered' | undefined
+}
+
+let sessionSeq = 0
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('expected an object value')
+  return value as Record<string, unknown>
+}
+
+function createSettleSession(): SettleHarness {
+  const events: unknown[] = []
+  sessionSeq += 1
+  const harness: SettleHarness = {
+    failIntentPhase: undefined,
+    session: {
+      id: `settle-session-${sessionSeq}`,
+      events,
+      appendPluginRecord: (type: string, data: unknown): number => {
+        const phase = asRecord(data)['phase']
+        if (type === SETTLE_INTENT_EVENT_TYPE && phase === harness.failIntentPhase) {
+          throw new Error(`synthetic settle intent append failure for phase '${String(phase)}'`)
+        }
+        const seq = events.length
+        events.push({ seq, type, data, ignorable: true })
+        return seq
+      },
+      append: (type: string, data: unknown): number => {
+        const seq = events.length
+        events.push({ seq, type, data })
+        return seq
+      },
+    },
+  }
+  return harness
+}
+
+function installSettleHost(): void {
+  hostState.module = {
+    appendPluginRecord: (session: unknown, type: string, data: unknown): unknown => {
+      const method = asRecord(session)['appendPluginRecord']
+      if (typeof method !== 'function') throw new Error('fake host: session has no appendPluginRecord')
+      return method.call(session, type, data)
+    },
+  }
+}
 
 interface RegisteredTool {
   name: string
   parameters: { properties: Record<string, unknown> }
-  execute(args: Record<string, unknown>, exec: { agent?: { id?: string } }): Promise<any>
+  execute(args: Record<string, unknown>, exec: { agent?: { id?: string; session?: unknown } }): Promise<any>
 }
 
 describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
@@ -37,7 +120,7 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
         alternate_greetings: [], tags: [], creator: '', character_version: '', extensions: {},
       },
     })
-    const chatId = await store.createChat(CHARACTER, {
+    chatId = await store.createChat(CHARACTER, {
       user_name: 'User',
       character_name: CHARACTER,
       chat_metadata: { createdAt: new Date().toISOString() },
@@ -79,13 +162,39 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     rmSync(home, { recursive: true, force: true })
   })
 
+  beforeEach(() => {
+    hostState.module = undefined
+  })
+
   const settle = (changes: unknown[]) =>
     tools.get('tavern_variable_settle')!.execute({ changes }, { agent: { id: 'native' } })
+  const settleWith = (harness: SettleHarness, changes: unknown[]) =>
+    tools.get('tavern_variable_settle')!.execute(
+      { changes },
+      { agent: { id: 'native', session: harness.session } },
+    )
   const boundChat = async () => {
     const store = await TavernStore.open(join(home, 'soulmojito'))
     const state = await store.getState()
     const binding = state.sessionBindings.native!
     return { store, chat: (await store.getChat(binding.character, binding.chatId))! }
+  }
+  const seedVariable = async (name: string, value: string | number): Promise<void> => {
+    await (await VariableStore.open(join(home, 'soulmojito'))).set('chat', chatId, name, value)
+  }
+  const readVariable = async (name: string) =>
+    (await VariableStore.open(join(home, 'soulmojito'))).get('chat', chatId, name)
+  const recoverSettle = async (harness: SettleHarness): Promise<BodyRecoveryOutcome> => {
+    const agent = { id: 'native', session: harness.session, followup: (): void => {} }
+    return recoverBodyOperationWith(
+      { bindingOf: async () => ({ architecture: 'agent-tavern', character: CHARACTER, chatId }) },
+      agent,
+      async (): Promise<BodyRuntimeDeps> => ({
+        session: harness.session,
+        agent,
+        appendRecord: (_session, type, data) => harness.session.appendPluginRecord(type, data),
+      }),
+    )
   }
 
   it('registers the settlement tool and teaches it in the kernel standing duties', () => {
@@ -284,5 +393,202 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
+  })
+
+  it('records a durable settle intent and closes it after the chat save', async () => {
+    installSettleHost()
+    const harness = createSettleSession()
+    await seedVariable('settle.normal', 'before')
+    const receiptsBefore = readMvuReceipts((await boundChat()).chat).length
+
+    const result = await settleWith(harness, [
+      { name: 'settle.normal', value: 'after' },
+      { name: 'settle.created', value: 1 },
+    ])
+
+    expect(result.applied).toEqual(['settle.normal', 'settle.created'])
+    const intents = readSettleIntents(harness.session.events)
+    expect(intents.map((intent) => intent.phase)).toEqual(['open', 'commit'])
+    const open = intents[0]
+    if (open?.phase !== 'open') throw new Error('expected an open settle intent')
+    expect(open).toMatchObject({
+      sessionId: 'native',
+      character: CHARACTER,
+      scope: 'chat',
+      scopeId: chatId,
+      turnKey: '2',
+      receiptAt: expect.any(String),
+      items: [
+        { name: 'settle.normal', before: 'before', after: 'after' },
+        { name: 'settle.created', after: 1 },
+      ],
+    })
+    const { chat } = await boundChat()
+    expect(readMvuReceipts(chat)).toHaveLength(receiptsBefore + 1)
+    expect(readMvuReceipts(chat).at(-1)).toMatchObject({ at: open.receiptAt, turnKey: '2' })
+    expect(await readVariable('settle.normal')).toMatchObject({ value: 'after' })
+    expect(await readVariable('settle.created')).toMatchObject({ value: 1 })
+
+    // The commit marker closes the intent: a restart must not undo anything.
+    const outcome = await recoverSettle(harness)
+    expect(outcome).toMatchObject({ status: 'clean', pending: 0 })
+    expect(foldSettleIntents(harness.session.events)).toEqual([])
+    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase)).toEqual(['open', 'commit'])
+    expect(await readVariable('settle.normal')).toMatchObject({ value: 'after' })
+    expect(await readVariable('settle.created')).toMatchObject({ value: 1 })
+  })
+
+  it('restores flat variables after a crash between the flat write and saveChat', async () => {
+    installSettleHost()
+    const harness = createSettleSession()
+    await seedVariable('settle.crash', 'before')
+    const receiptsBefore = readMvuReceipts((await boundChat()).chat).length
+    const messagesBefore = (await boundChat()).chat.messages.length
+    const original = TavernStore.prototype.saveChat
+    TavernStore.prototype.saveChat = async function (): Promise<string> {
+      throw new Error('synthetic crash before saveChat')
+    }
+    try {
+      await expect(settleWith(harness, [
+        { name: 'settle.crash', value: 'after' },
+        { name: 'settle.crash.new', value: 7 },
+      ])).rejects.toThrow('synthetic crash before saveChat')
+    } finally {
+      TavernStore.prototype.saveChat = original
+    }
+
+    expect(await readVariable('settle.crash')).toMatchObject({ value: 'after' })
+    expect(await readVariable('settle.crash.new')).toMatchObject({ value: 7 })
+    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase)).toEqual(['open'])
+    expect(readMvuReceipts((await boundChat()).chat)).toHaveLength(receiptsBefore)
+
+    const outcome = await recoverSettle(harness)
+    expect(outcome).toMatchObject({ status: 'restored', pending: 0 })
+    expect(await readVariable('settle.crash')).toMatchObject({ value: 'before' })
+    expect(await readVariable('settle.crash.new')).toBeUndefined()
+    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase)).toEqual(['open', 'recovered'])
+    expect(readMvuReceipts((await boundChat()).chat)).toHaveLength(receiptsBefore)
+    expect((await boundChat()).chat.messages).toHaveLength(messagesBefore)
+    expect(harness.session.events.filter((event) => asRecord(event)['type'] === 'assistant/message')).toEqual([])
+
+    // Repeated startup passes see the recovered marker and write nothing.
+    const again = await recoverSettle(harness)
+    expect(again).toMatchObject({ status: 'clean', pending: 0 })
+    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase)).toEqual(['open', 'recovered'])
+    expect(await readVariable('settle.crash')).toMatchObject({ value: 'before' })
+  })
+
+  it('closes an earlier failed intent when a retry commits', async () => {
+    installSettleHost()
+    const harness = createSettleSession()
+    await seedVariable('settle.retry', 'first')
+    const original = TavernStore.prototype.saveChat
+    TavernStore.prototype.saveChat = async function (): Promise<string> {
+      throw new Error('synthetic settle save failure')
+    }
+    try {
+      await expect(settleWith(harness, [{ name: 'settle.retry', value: 'second' }]))
+        .rejects.toThrow('synthetic settle save failure')
+    } finally {
+      TavernStore.prototype.saveChat = original
+    }
+    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase)).toEqual(['open'])
+
+    const retried = await settleWith(harness, [{ name: 'settle.retry', value: 'third' }])
+
+    expect(retried.applied).toEqual(['settle.retry'])
+    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase))
+      .toEqual(['open', 'open', 'commit', 'commit'])
+    const outcome = await recoverSettle(harness)
+    expect(outcome).toMatchObject({ status: 'clean', pending: 0 })
+    expect(foldSettleIntents(harness.session.events)).toEqual([])
+    expect(await readVariable('settle.retry')).toMatchObject({ value: 'third' })
+  })
+
+  it('treats an older open intent as superseded by a later persisted receipt', async () => {
+    installSettleHost()
+    const harness = createSettleSession()
+    await seedVariable('settle.superseded', 'committed')
+    await settleWith(harness, [{ name: 'settle.superseded', value: 'committed' }])
+    const committed = readSettleIntents(harness.session.events).find((intent) => intent.phase === 'open')
+    if (committed?.phase !== 'open') throw new Error('expected an open settle intent')
+    const staleAt = new Date(Date.parse(committed.receiptAt) - 1000).toISOString()
+    const stale: SettleIntentOpenEntry = {
+      kind: 'settle-intent',
+      phase: 'open',
+      opId: 'settle-stale',
+      sessionId: 'native',
+      character: CHARACTER,
+      scope: 'chat',
+      scopeId: chatId,
+      turnKey: '2',
+      receiptAt: staleAt,
+      at: staleAt,
+      items: [{ name: 'settle.superseded', before: 'old', after: 'dirty' }],
+    }
+    harness.session.appendPluginRecord(SETTLE_INTENT_EVENT_TYPE, stale)
+
+    const outcome = await recoverSettle(harness)
+
+    expect(outcome).toMatchObject({ status: 'clean', pending: 0 })
+    expect(await readVariable('settle.superseded')).toMatchObject({ value: 'committed' })
+    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase))
+      .toEqual(['open', 'commit', 'open', 'commit'])
+  })
+
+  it('fails closed before any flat write when the intent append fails', async () => {
+    installSettleHost()
+    const harness = createSettleSession()
+    harness.failIntentPhase = 'open'
+    const receiptsBefore = readMvuReceipts((await boundChat()).chat).length
+    const auditBefore = (await readMvuAudit(join(home, 'soulmojito'))).length
+
+    await expect(settleWith(harness, [{ name: 'settle.blocked', value: 1 }]))
+      .rejects.toThrow(/settle intent open record/)
+
+    expect(await readVariable('settle.blocked')).toBeUndefined()
+    expect(readSettleIntents(harness.session.events)).toEqual([])
+    expect(readMvuReceipts((await boundChat()).chat)).toHaveLength(receiptsBefore)
+    expect(await readMvuAudit(join(home, 'soulmojito'))).toHaveLength(auditBefore)
+
+    const outcome = await recoverSettle(harness)
+    expect(outcome).toMatchObject({ status: 'clean', pending: 0 })
+  })
+
+  it('fails closed when the host exposes the intent seam but the tool has no session', async () => {
+    installSettleHost()
+
+    await expect(settle([{ name: 'settle.no-session', value: 1 }]))
+      .rejects.toThrow(/requires exec\.agent\.session/)
+    expect(await readVariable('settle.no-session')).toBeUndefined()
+  })
+
+  it('surfaces a commit append failure and closes the saved intent from its receipt', async () => {
+    installSettleHost()
+    const harness = createSettleSession()
+    harness.failIntentPhase = 'commit'
+    await seedVariable('settle.commit', 'old')
+    const receiptsBefore = readMvuReceipts((await boundChat()).chat).length
+
+    await expect(settleWith(harness, [{ name: 'settle.commit', value: 'new' }]))
+      .rejects.toThrow(/settle intent commit record/)
+
+    expect(await readVariable('settle.commit')).toMatchObject({ value: 'new' })
+    expect(readMvuReceipts((await boundChat()).chat)).toHaveLength(receiptsBefore + 1)
+    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase)).toEqual(['open'])
+
+    harness.failIntentPhase = undefined
+    const outcome = await recoverSettle(harness)
+    expect(outcome).toMatchObject({ status: 'clean', pending: 0 })
+    expect(readSettleIntents(harness.session.events).map((intent) => intent.phase)).toEqual(['open', 'commit'])
+    expect(await readVariable('settle.commit')).toMatchObject({ value: 'new' })
+    expect(readMvuReceipts((await boundChat()).chat)).toHaveLength(receiptsBefore + 1)
+  })
+
+  it('leaves a session without settle intents untouched', async () => {
+    const harness = createSettleSession()
+    const outcome = await recoverSettle(harness)
+    expect(outcome).toMatchObject({ status: 'clean', pending: 0 })
+    expect(harness.session.events).toEqual([])
   })
 })

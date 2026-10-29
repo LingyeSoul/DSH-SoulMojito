@@ -89,6 +89,7 @@
 - [`2026-10-28-agent-tavern-invisible-body-restore.md`](../decisions/2026-10-28-agent-tavern-invisible-body-restore.md) — 正文恢复 surface 方案：失败不再追加 assistant 副本
 - [`2026-10-29-body-late-failure-and-turn-end.md`](../decisions/2026-10-29-body-late-failure-and-turn-end.md) — 正文回滚晚失败保留新正文 + live turn/end 自动恢复
 - [`2026-10-29-body-prepare-crash-window.md`](../decisions/2026-10-29-body-prepare-crash-window.md) — 正文重生成 prepare → op-start 崩溃窗口：先落 plan 再动账
+- [`2026-10-29-settle-crash-consistency.md`](../decisions/2026-10-29-settle-crash-consistency.md) — settle 跨 store 崩溃一致性：durable settle intent + 启动恢复
 
 ### AgentNovel
 

@@ -6,7 +6,8 @@
  * the `rollbackTurnWrites` implementation. It delegates journal mutations to
  * `body-rollback-writes.ts` and settle receipts to
  * `body-rollback-receipts.ts`, so the flat `VariableStore` and
- * `mvu.receipts` move in one direction.
+ * `mvu.receipts` move in one direction. Settle-intent startup recovery lives in
+ * `body-settle-intent.ts` and is re-exported here for existing callers.
  */
 
 import type { ChatLogIR } from '../../../tavern-format/src/index.js'
@@ -44,6 +45,9 @@ import {
   type BodyTurnRollbackFailure,
   type BodyWriteRollbackDeps,
 } from './body-rollback-support.js'
+
+export { recoverOpenSettleIntents } from './body-settle-intent.js'
+export type { SettleIntentRecovery, SettleIntentRecoveryDeps } from './body-settle-intent.js'
 import { applyJournalWrites, type CompensationResult } from './body-rollback-writes.js'
 import { applyReceiptRollback } from './body-rollback-receipts.js'
 
