@@ -42,9 +42,9 @@ receipt 分叉。候选切换还要求区分 A/B 各自的补丁，风险更高�
 
 | 风险 | 说明 |
 |---|---|
-| `canEdit` 乐观 | `GET body` 对 MVU 卡返回 true；缺 receipt 到 `PUT` 预检才 409，按钮可能先亮后失败。 |
+| `canEdit` 乐观 | 已修：`GET body` 用只读 `inspectCandidateReceipts` 提前返回 `canEdit: false` + receipt detail；PUT 预检仍是最终裁决，GET/PUT 并发窗口仍在。 |
 | 预检非原子 | 预检读 chat 快照，与 projector CAS 不在同一事务；并发冲突由 projector 重试/CAS 兜底。 |
-| receipt 环形上限 | `MVU_RECEIPTS_LIMIT = 20` 与 settle receipt 共用；候选 receipt 被挤出后显式 `body-receipt-missing`，P1 再定保留策略。 |
+| receipt 环形上限 | 默认保留策略优先保留 `body:` receipt，并为最新 settle 预留 1 槽；20 个候选满环时最旧候选仍会出局，切换时明确 `body-receipt-missing`，不静默错算。 |
 | select 仍关闭 | 必须与候选感知 regenerate 同批；单独放开会产生双写。 |
 | 正文恢复消息 | 已由 surface 决策处理：旧 anchor 可见时失败恢复只隐藏失败 turn 节点，不追加 assistant；仅旧版本已隐藏 anchor 的会话保留 `body-restore-*` fallback。 |
 | 无真机 E2E | 尚未跑 `dsh web` 浏览器闭环，需要指定 profile 并允许写 `$DSH_HOME`。 |

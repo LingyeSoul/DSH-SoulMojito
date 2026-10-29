@@ -11,6 +11,8 @@ import {
   overlayScopedVariables,
   readMvuReceipts,
   recordMvuTurnReceipt,
+  redoMvuReceipts,
+  undoMvuReceipts,
   type MvuReceipt,
 } from '../src/mvu.js'
 
@@ -169,7 +171,7 @@ describe('receipt recording (pure)', () => {
     expect(receipts.map((receipt) => receipt.turnKey)).toEqual([...preservedKeys, 'body:c25#25'])
   })
 
-  it('keeps the plain ring for callers that pass no preserved keys', () => {
+  it('keeps body receipts and the newest settle receipt for callers that pass no preserved keys', () => {
     const chat = makeChat(undefined, {
       receipts: [{ at: 't0', turnKey: 'body:m0#0', status: 'updated', changes: [], failures: [] }],
     })
@@ -178,7 +180,70 @@ describe('receipt recording (pure)', () => {
     }
     const receipts = readMvuReceipts(chat)
     expect(receipts).toHaveLength(MVU_RECEIPTS_LIMIT)
-    expect(receipts.map((receipt) => receipt.turnKey)).not.toContain('body:m0#0')
+    // The candidate is not evicted by settle traffic; the oldest settle receipt is.
+    expect(receipts[0]!.turnKey).toBe('body:m0#0')
+    expect(receipts.at(-1)!.turnKey).toBe(String(MVU_RECEIPTS_LIMIT - 1))
+    expect(receipts.map((receipt) => receipt.turnKey)).not.toContain('0')
+  })
+
+  it('keeps the active candidate and the newest settle receipt under a long settle history', () => {
+    const chat = makeChat(undefined, {
+      receipts: [
+        { at: 't0', turnKey: 'body:m9#1', status: 'updated', changes: [{ name: 'a', before: 1, after: 2 }], failures: [] },
+        ...Array.from({ length: 25 }, (_, i) => ({ at: `s${i}`, turnKey: String(i), status: 'updated', changes: [], failures: [] })),
+      ],
+    })
+    appendMvuReceipt(chat, { at: 's25', turnKey: '25', status: 'updated', changes: [], failures: [] })
+
+    const receipts = readMvuReceipts(chat)
+    expect(receipts).toHaveLength(MVU_RECEIPTS_LIMIT)
+    // Candidate + the newest 19 settle receipts: the six oldest settles yield.
+    expect(receipts.map((receipt) => receipt.turnKey)).toEqual([
+      'body:m9#1',
+      ...Array.from({ length: 18 }, (_, i) => String(i + 7)),
+      '25',
+    ])
+  })
+
+  it('reserves one settle slot when candidates alone fill the ring', () => {
+    const candidates = Array.from({ length: MVU_RECEIPTS_LIMIT }, (_, i) => `body:g${i}#${i}`)
+    const chat = makeChat(undefined, {
+      receipts: [
+        ...candidates.map((turnKey, i) => ({ at: `c${i}`, turnKey, status: 'updated', changes: [], failures: [] })),
+        ...Array.from({ length: 5 }, (_, i) => ({ at: `s${i}`, turnKey: String(i), status: 'updated', changes: [], failures: [] })),
+      ],
+    })
+    appendMvuReceipt(chat, { at: 's5', turnKey: '5', status: 'updated', changes: [], failures: [] })
+
+    const keys = readMvuReceipts(chat).map((receipt) => receipt.turnKey)
+    // One slot is reserved for the newest settle receipt, so the oldest candidate yields.
+    expect(keys).toHaveLength(MVU_RECEIPTS_LIMIT)
+    expect(keys).toEqual([...candidates.slice(1), '5'])
+  })
+
+  it('still undoes and redoes the retained candidate receipt after settle pressure', () => {
+    const candidate: MvuReceipt = {
+      at: 't0', turnKey: 'body:m9#1', status: 'updated', changes: [{ name: 'a', before: 1, after: 2 }], failures: [],
+    }
+    const chat = makeChat({ a: 2 }, {
+      receipts: [
+        candidate,
+        ...Array.from({ length: 25 }, (_, i) => ({ at: `s${i}`, turnKey: String(i), status: 'updated', changes: [], failures: [] })),
+      ],
+    })
+    appendMvuReceipt(chat, { at: 's25', turnKey: '25', status: 'updated', changes: [], failures: [] })
+    const stored = readMvuReceipts(chat).find((receipt) => receipt.turnKey === 'body:m9#1')!
+
+    const undone = undoMvuReceipts(chat, [stored], { at: 'undo-at' })
+    expect(undone.receipts).toHaveLength(1)
+    expect(undone.restores).toEqual([{ path: 'a', value: 1 }])
+    expect(chat.header.chat_metadata.variables).toEqual({ a: 1 })
+    expect(readMvuReceipts(chat)).toHaveLength(MVU_RECEIPTS_LIMIT)
+
+    const redone = redoMvuReceipts(chat, [stored])
+    expect(redone.receipts).toHaveLength(1)
+    expect(chat.header.chat_metadata.variables).toEqual({ a: 2 })
+    expect(readMvuReceipts(chat)).toHaveLength(MVU_RECEIPTS_LIMIT)
   })
 })
 

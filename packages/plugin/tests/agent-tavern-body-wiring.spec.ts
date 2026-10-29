@@ -408,6 +408,70 @@ function sessionWithAssistant(messageId: string, text: string): BodySessionLike 
   }
 }
 
+/**
+ * Live session carrying one projected body group.
+ *
+ * `indexes` seeds the candidate events in ledger order; a repeated message id
+ * reproduces the duplicate-slot collision that the receipt key gate rejects.
+ */
+function bodySession(
+  messageId: string,
+  text: string,
+  groupId: string,
+  indexes: readonly number[],
+): BodySessionLike {
+  const events: RecoveryEvent[] = [{
+    type: 'assistant/message',
+    seq: 0,
+    data: { message: { id: messageId, role: 'assistant', content: [{ type: 'text', text }] } },
+  }]
+  for (const [position, index] of indexes.entries()) {
+    events.push({
+      type: BODY_EVENT_TYPE,
+      seq: position + 1,
+      data: { op: 'candidate', groupId, messageId, index },
+    })
+  }
+  return {
+    id: 'session-mvu',
+    header: { version: 4 },
+    events,
+    surface: { nodes: [0] },
+    append: () => 0,
+  }
+}
+
+async function callBodyGet(
+  character: CharacterCardIR,
+  chat: ChatLogIR,
+  agent: BodyAgentLike,
+  sessionId: string,
+  messageId: string,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  hostState.module = hostRecordModule()
+  const res = makeResponse()
+  const ctx = {
+    agents: { get: (id: string) => id === sessionId ? agent : undefined },
+  } as unknown as Parameters<typeof handleAgentTavernBodyApi>[0]
+  const url = new URL(
+    `/api/dsh-soulmojito/body?sessionId=${encodeURIComponent(sessionId)}&messageId=${encodeURIComponent(messageId)}`,
+    'http://localhost',
+  )
+  await handleAgentTavernBodyApi(
+    ctx,
+    mutationDbFor(sessionId, character, chat),
+    makeRequest(undefined, 'GET', `${url.pathname}${url.search}`),
+    res,
+    url,
+    'body',
+    'GET',
+  )
+  return {
+    status: res.statusCode,
+    body: res.chunks.length > 0 ? JSON.parse(res.chunks.join('')) as Record<string, unknown> : {},
+  }
+}
+
 function makeRequest(body: unknown, method: string, url: string) {
   const listeners = new Map<string, (value?: unknown) => void>()
   return {
@@ -1079,6 +1143,89 @@ describe('body state safety (proposal 0022 §7)', () => {
     expect(result['reason']).toBeUndefined()
   })
 
+  it('closes MVU edit on GET when the selected candidate has no receipt', async () => {
+    const text = '<UpdateVariable><JSONPatch>[{"op":"replace","path":"/hp","value":2}]</JSONPatch></UpdateVariable>'
+    const session = bodySession('message-1', text, 'message-1', [0])
+
+    const result = await callBodyGet(mvuCharacter(), projectedChat(text), fakeAgent(session), 'session-mvu', 'message-1')
+
+    expect(result.status).toBe(200)
+    expect(result.body).toMatchObject({
+      ok: true,
+      canEdit: false,
+      canSelect: false,
+      detail: 'body-receipt-missing',
+    })
+  })
+
+  it('closes MVU edit on GET when the selected candidate has duplicate live receipts', async () => {
+    const text = '<UpdateVariable><JSONPatch>[{"op":"replace","path":"/hp","value":2}]</JSONPatch></UpdateVariable>'
+    const chat = projectedMvuChat(text, [
+      {
+        at: '2026-10-28T00:00:00.000Z',
+        turnKey: 'body:message-1#0',
+        status: 'updated',
+        changes: [{ name: 'stat_data.hp', before: 1, after: 2 }],
+        failures: [],
+      },
+      {
+        at: '2026-10-28T00:00:01.000Z',
+        turnKey: 'body:message-1#0',
+        status: 'updated',
+        changes: [{ name: 'stat_data.hp', before: 2, after: 3 }],
+        failures: [],
+      },
+    ])
+    const session = bodySession('message-1', text, 'message-1', [0])
+
+    const result = await callBodyGet(mvuCharacter(), chat, fakeAgent(session), 'session-mvu', 'message-1')
+
+    expect(result.status).toBe(200)
+    expect(result.body).toMatchObject({ canEdit: false, detail: 'body-receipt-duplicate' })
+  })
+
+  it('closes MVU edit on GET when the ledger maps one message id to two slots', async () => {
+    const text = '<UpdateVariable><JSONPatch>[{"op":"replace","path":"/hp","value":2}]</JSONPatch></UpdateVariable>'
+    const session = bodySession('message-1', text, 'message-1', [0, 1])
+
+    const result = await callBodyGet(mvuCharacter(), projectedChat(text), fakeAgent(session), 'session-mvu', 'message-1')
+
+    expect(result.status).toBe(200)
+    expect(result.body).toMatchObject({ canEdit: false, detail: 'body-receipt-key-mismatch' })
+  })
+
+  it('keeps MVU edit open on GET when the selected candidate receipt is live', async () => {
+    const text = '<UpdateVariable><JSONPatch>[{"op":"replace","path":"/hp","value":2}]</JSONPatch></UpdateVariable>'
+    const chat = projectedMvuChat(text, [{
+      at: '2026-10-28T00:00:00.000Z',
+      turnKey: 'body:message-1#0',
+      status: 'updated',
+      changes: [{ name: 'stat_data.hp', before: 1, after: 2 }],
+      failures: [],
+    }])
+    const session = bodySession('message-1', text, 'message-1', [0])
+
+    const result = await callBodyGet(mvuCharacter(), chat, fakeAgent(session), 'session-mvu', 'message-1')
+
+    expect(result.status).toBe(200)
+    expect(result.body).toMatchObject({
+      canEdit: true,
+      canSelect: false,
+      detail: 'candidate-switch-disabled',
+    })
+  })
+
+  it('keeps the optimistic edit gate for a plain card with a variable block', async () => {
+    const text = '<UpdateVariable><JSONPatch>[{"op":"replace","path":"/hp","value":2}]</JSONPatch></UpdateVariable>'
+    const session = bodySession('message-1', text, 'message-1', [0])
+
+    const result = await callBodyGet(plainCharacter(), projectedChat(text), fakeAgent(session), 'session-mvu', 'message-1')
+
+    expect(result.status).toBe(200)
+    expect(result.body).toMatchObject({ canEdit: true })
+    expect(result.body['detail']).toBeUndefined()
+  })
+
   it('disables regenerate when the rollback port is unavailable', () => {
     const view = buildBodyView({
       messageId: 'message-1',
@@ -1204,6 +1351,55 @@ describe('body view policy', () => {
     expect(view.canEdit).toBe(true)
     expect(view.canRegenerate).toBe(true)
     expect(view.canSelect).toBe(false)
+  })
+
+  it('closes edit and publishes every candidate receipt detail', () => {
+    for (const detail of [
+      'body-receipt-missing',
+      'body-receipt-duplicate',
+      'body-receipt-legacy',
+      'body-receipt-key-mismatch',
+    ] as const) {
+      const view = buildBodyView({
+        messageId: 'message-1',
+        binding: { architecture: 'agent-tavern' },
+        agent: fakeAgent(fakeSession('session-view-receipt')),
+        hostSupported: true,
+        stateSafety: { safe: true },
+        historicalMvuState: true,
+        writeRollbackAvailable: true,
+        ledger: undefined,
+        messageText: 'body',
+        projected: { text: 'body', count: 1, selectedIndex: 0 },
+        inspection: { onSurface: true, last: true },
+        editDetail: detail,
+      })
+      expect(view).toMatchObject({
+        canEdit: false,
+        canRegenerate: true,
+        canSelect: false,
+        detail,
+      })
+    }
+  })
+
+  it('lets a caller-derived edit gate outrank the receipt detail', () => {
+    const view = buildBodyView({
+      messageId: 'message-1',
+      binding: { architecture: 'agent-tavern' },
+      agent: fakeAgent(fakeSession('session-view-receipt-gate')),
+      hostSupported: true,
+      stateSafety: { safe: true },
+      historicalMvuState: true,
+      writeRollbackAvailable: true,
+      ledger: undefined,
+      messageText: 'body',
+      projected: { text: 'body', count: 1, selectedIndex: 0 },
+      inspection: { onSurface: true, last: true },
+      editDetail: 'body-receipt-missing',
+      canEditDetail: 'body-receipt-legacy',
+    })
+    expect(view).toMatchObject({ canEdit: false, detail: 'body-receipt-legacy' })
   })
 
   it('returns a stable empty body without a Tavern binding', () => {

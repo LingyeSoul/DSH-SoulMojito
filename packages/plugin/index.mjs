@@ -14280,22 +14280,51 @@ function readMvuReceipts(chat) {
   }
   return receipts;
 }
-function retainMvuReceipts(receipts, preserveTurnKeys) {
-  const preserved = /* @__PURE__ */ new Set();
+var BODY_RECEIPT_PREFIX = "body:";
+var CANONICAL_FLOOR_KEY = /^(0|[1-9][0-9]*)$/;
+var DEFAULT_SETTLE_RESERVED = 1;
+function isSettleReceiptKey(turnKey) {
+  return CANONICAL_FLOOR_KEY.test(turnKey) && Number.isSafeInteger(Number(turnKey));
+}
+function defaultRetainedReceiptIndexes(receipts) {
+  const bodyIndexes = [];
+  const settleIndexes = [];
+  for (let index = 0; index < receipts.length; index += 1) {
+    const turnKey = receipts[index].turnKey;
+    if (turnKey.startsWith(BODY_RECEIPT_PREFIX)) bodyIndexes.push(index);
+    else if (isSettleReceiptKey(turnKey)) settleIndexes.push(index);
+  }
+  const reservedSettle = settleIndexes.length > 0 ? DEFAULT_SETTLE_RESERVED : 0;
+  const bodyBudget = Math.min(bodyIndexes.length, MVU_RECEIPTS_LIMIT - reservedSettle);
+  const kept = new Set(bodyIndexes.slice(bodyIndexes.length - bodyBudget));
+  const newestSettle = settleIndexes.at(-1);
+  if (newestSettle !== void 0) kept.add(newestSettle);
+  let remaining = MVU_RECEIPTS_LIMIT - kept.size;
+  for (let index = receipts.length - 1; index >= 0 && remaining > 0; index -= 1) {
+    if (kept.has(index)) continue;
+    kept.add(index);
+    remaining -= 1;
+  }
+  return kept;
+}
+function explicitRetainedReceiptIndexes(receipts, preserveTurnKeys) {
+  const kept = /* @__PURE__ */ new Set();
   const others = [];
   for (let index = 0; index < receipts.length; index += 1) {
-    if (preserveTurnKeys.has(receipts[index].turnKey)) preserved.add(index);
+    if (preserveTurnKeys.has(receipts[index].turnKey)) kept.add(index);
     else others.push(index);
   }
-  const budget = Math.max(0, MVU_RECEIPTS_LIMIT - preserved.size);
-  const kept = new Set(preserved);
-  const newest = others.slice(others.length - Math.min(budget, others.length));
-  for (const index of newest) kept.add(index);
+  const budget = Math.max(0, MVU_RECEIPTS_LIMIT - kept.size);
+  for (const index of others.slice(others.length - Math.min(budget, others.length))) kept.add(index);
+  return kept;
+}
+function retainMvuReceipts(receipts, preserveTurnKeys) {
+  const kept = preserveTurnKeys.size === 0 ? defaultRetainedReceiptIndexes(receipts) : explicitRetainedReceiptIndexes(receipts, preserveTurnKeys);
   return receipts.filter((_, index) => kept.has(index));
 }
 function appendMvuReceipt(chat, receipt, preserveTurnKeys) {
   const appended = [...readMvuReceipts(chat), receipt];
-  const receipts = preserveTurnKeys === void 0 ? appended.slice(-MVU_RECEIPTS_LIMIT) : retainMvuReceipts(appended, preserveTurnKeys);
+  const receipts = retainMvuReceipts(appended, preserveTurnKeys ?? /* @__PURE__ */ new Set());
   chat.header.chat_metadata.mvu = { receipts };
 }
 function recordMvuTurnReceipt(chat, before, options) {
@@ -16803,7 +16832,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("49d4a5c") : void 0;
+  const commit = true ? normalizeCommit("c9e143e") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -25775,6 +25804,25 @@ function bodyStateUnsafeMessage(detail) {
       return "the body candidate receipt key does not match the ledger slot or message id; repair the receipt keys before editing";
   }
 }
+function bodyEditDetailOf(card, chat, ledger) {
+  const candidate = ledger.candidates[ledger.selectedIndex];
+  if (candidate === void 0) return void 0;
+  let mvu;
+  try {
+    mvu = cardUsesJsrMvu(card);
+  } catch {
+    return void 0;
+  }
+  if (!mvu) return void 0;
+  const inspection = inspectCandidateReceipts(
+    chat,
+    { messageId: candidate.messageId, index: candidate.index },
+    ledger,
+    ledger.edits.get(candidate.index) ?? candidate.text,
+    card
+  );
+  return inspection.detail;
+}
 function buildBodyView(input) {
   const ledger = input.ledger;
   const candidate = ledger?.candidates.find((entry) => entry.messageId === input.messageId);
@@ -25792,10 +25840,12 @@ function buildBodyView(input) {
   const baseReason = bodyViewReason(input, hidden);
   const rollbackReason = baseReason === void 0 && !hidden && input.historicalMvuState && !input.writeRollbackAvailable ? "write-journal-unavailable" : void 0;
   const reason = baseReason ?? rollbackReason;
-  const canEdit = baseReason === void 0 && !hidden && count > 0;
+  const editGate = input.canEditDetail ?? input.editDetail;
+  const baseEditable = baseReason === void 0 && !hidden && count > 0;
+  const canEdit = baseEditable && editGate === void 0;
   const canRegenerate = baseReason === void 0 && !hidden && count > 0 && input.agent !== void 0 && canAdvanceHostTurnBase(input.agent) && (!input.historicalMvuState || input.writeRollbackAvailable);
   const canSelect = canEdit && count > 1 && !input.historicalMvuState;
-  const detail = baseReason === void 0 && !hidden && count > 0 && input.historicalMvuState ? "candidate-switch-disabled" : void 0;
+  const detail = baseEditable ? editGate ?? (input.historicalMvuState ? "candidate-switch-disabled" : void 0) : void 0;
   return {
     ok: true,
     groupId,
@@ -47433,6 +47483,7 @@ async function handleAgentTavernBodyApi(ctx, db, req, res, url, route, method) {
         });
       }
     }
+    const editDetail = character2 === void 0 || chat === void 0 || ledger === void 0 ? void 0 : bodyEditDetailOf(character2.card, chat, ledger);
     return sendJson(res, 200, buildBodyView({
       messageId,
       binding: binding2,
@@ -47444,7 +47495,8 @@ async function handleAgentTavernBodyApi(ctx, db, req, res, url, route, method) {
       ledger,
       messageText: messageText4,
       projected,
-      inspection
+      inspection,
+      editDetail
     }));
   }
   const body = await readJson(req);

@@ -985,8 +985,9 @@ P0 只实现 `PUT body` 的 MVU 编辑；`POST body/select` 在 MVU / 变量历�
 
 残余风险：
 
-- `GET body.canEdit` 对 MVU 卡乐观返回 true；缺 receipt 到 `PUT` 预检才 409。
+- `GET body.canEdit` 已改为只读 inspection：缺 receipt / duplicate / key-mismatch 会提前
+  `canEdit: false` + detail；GET/PUT 之间仍可能被并发改动甩开，PUT 预检是最终裁决。
 - 预检读 chat 快照与 projector CAS 不在同一事务；并发冲突由 projector 重试/CAS 兜底。
-- `MVU_RECEIPTS_LIMIT = 20` 与 settle receipt 共用；候选 receipt 被挤出后显式
-  `body-receipt-missing`，P1 再定保留策略。
+- `MVU_RECEIPTS_LIMIT = 20` 的默认保留策略已优先保留 `body:` receipt 并为最新 settle 预留
+  1 槽；20 个候选满环时最旧候选仍会出局，切换时明确 `body-receipt-missing`。
 - select 与候选感知 regenerate 必须同批，P1 前不放开。

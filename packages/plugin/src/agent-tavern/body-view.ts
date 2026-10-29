@@ -9,6 +9,7 @@
 import type { CharacterCardIR, ChatLogIR } from '../../../tavern-format/src/index.js'
 import { canAdvanceHostTurnBase } from '../session/trace.js'
 import { effectiveBodyText, type BodyLedger } from './body.js'
+import { inspectCandidateReceipts } from './body-candidate-receipts.js'
 import type { BodyAgentLike } from './body-runtime.js'
 import { cardUsesJsrMvu } from './mvu-compat.js'
 import {
@@ -165,6 +166,49 @@ export function bodyStateUnsafeMessage(detail: BodyStateUnsafeDetail): string {
   }
 }
 
+/* ------------------------------ edit detail ------------------------------ */
+
+/**
+ * Read-only candidate-receipt verdict for the body that `GET body` will edit.
+ *
+ * Editing always targets the ledger's selected candidate, never the requested
+ * message id, so an anchor row whose id belongs to candidate 0 is judged by the
+ * candidate the `PUT` preflight would actually inspect. The previous text comes
+ * from the ledger exactly like the runtime preflight does
+ * (`edits.get(index) ?? candidates[index].text`).
+ *
+ * Returns `undefined` when the card is not JSR MVU, the ledger has no selected
+ * candidate, or the card cannot be read: non-MVU and cold sessions keep the
+ * 0021 optimistic gate instead of inventing a refusal.
+ */
+export function bodyEditDetailOf(
+  card: CharacterCardIR,
+  chat: ChatLogIR,
+  ledger: BodyLedger,
+): BodyStateUnsafeDetail | undefined {
+  const candidate = ledger.candidates[ledger.selectedIndex]
+  if (candidate === undefined) return undefined
+
+  let mvu: boolean
+  try {
+    mvu = cardUsesJsrMvu(card)
+  } catch {
+    // An unreadable card already reaches the client as `card-unreadable`
+    // through state safety; the receipt gate must not publish a second reason.
+    return undefined
+  }
+  if (!mvu) return undefined
+
+  const inspection = inspectCandidateReceipts(
+    chat,
+    { messageId: candidate.messageId, index: candidate.index },
+    ledger,
+    ledger.edits.get(candidate.index) ?? candidate.text,
+    card,
+  )
+  return inspection.detail
+}
+
 /* ------------------------------- body view --------------------------------- */
 
 /** JSONL-side projection facts resolved by the HTTP layer (display text included). */
@@ -191,6 +235,17 @@ export interface BodyViewInput {
   readonly messageText: string | undefined
   readonly projected: BodyProjectedFloor | undefined
   readonly inspection: BodyAnchorInspection | undefined
+  /**
+   * Read-only candidate-receipt verdict from {@link bodyEditDetailOf}. When
+   * present, `canEdit` is false and this detail replaces the generic
+   * `candidate-switch-disabled` signal.
+   */
+  readonly editDetail?: BodyStateUnsafeDetail
+  /**
+   * Caller-derived edit gate that already folded the receipt verdict. It wins
+   * over `editDetail` so an outer check can keep its more specific reason.
+   */
+  readonly canEditDetail?: BodyStateUnsafeDetail
 }
 
 /** Proposal §7.3 response plus the stable rejection code when gated. */
@@ -217,6 +272,10 @@ export interface BodyView {
  * ledger supplies selection, candidate count and the text fallback. A message
  * the plugin has never projected yields a stable empty body instead of an
  * error, so cold sessions and freshly written turns still render normally.
+ *
+ * `canEdit` requires both the base gate and an open `editDetail` /
+ * `canEditDetail`; `canSelect` still derives from `canEdit` and the historical
+ * MVU refusal, and `canRegenerate` keeps its rollback-port rule.
  */
 export function buildBodyView(input: BodyViewInput): BodyView {
   const ledger = input.ledger
@@ -249,7 +308,12 @@ export function buildBodyView(input: BodyViewInput): BodyView {
     ? 'write-journal-unavailable'
     : undefined
   const reason = baseReason ?? rollbackReason
-  const canEdit = baseReason === undefined && !hidden && count > 0
+  // Proposal 0023 §6.3: the read side publishes the same receipt verdict the
+  // `PUT` preflight enforces, so a missing/duplicate/legacy/mismatched receipt
+  // closes edit here instead of failing after the user opens the editor.
+  const editGate = input.canEditDetail ?? input.editDetail
+  const baseEditable = baseReason === undefined && !hidden && count > 0
+  const canEdit = baseEditable && editGate === undefined
   const canRegenerate = baseReason === undefined
     && !hidden
     && count > 0
@@ -257,8 +321,8 @@ export function buildBodyView(input: BodyViewInput): BodyView {
     && canAdvanceHostTurnBase(input.agent)
     && (!input.historicalMvuState || input.writeRollbackAvailable)
   const canSelect = canEdit && count > 1 && !input.historicalMvuState
-  const detail = baseReason === undefined && !hidden && count > 0 && input.historicalMvuState
-    ? 'candidate-switch-disabled'
+  const detail = baseEditable
+    ? editGate ?? (input.historicalMvuState ? 'candidate-switch-disabled' : undefined)
     : undefined
 
   return {

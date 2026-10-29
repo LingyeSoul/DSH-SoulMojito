@@ -7,7 +7,9 @@
  *
  * - 回执：生成开始时深拷贝 `chat_metadata.variables` 作为基线（before），保存
  *   前 diff 出变更集（after），以 `{ at, turnKey, status, changes, failures }`
- *   落入 `chat.header.chat_metadata.mvu.receipts`，环形保留最近 20 条。
+ *   落入 `chat.header.chat_metadata.mvu.receipts`，环形保留最近 20 条（默认策略
+ *   让 `body:` 候选 receipt 优先于 settle receipt，并恒保留最新一条 settle；
+ *   显式 preserveTurnKeys 可超上限，见 retainMvuReceipts）。
  *   failures 收集本轮 templateWarnings（楼层 extra.templateWarnings 同源）。
  *   无变量也无变更的局不写 mvu 键（与 guides 空置摘键约定一致）。
  * - POST mvu/retry：对最后一条助手楼层重跑模板输出渲染的**变量写穿部分**
@@ -226,30 +228,86 @@ export function readMvuReceipts(chat: ChatLogIR): MvuReceipt[] {
   return receipts
 }
 
+/** `body:` receipts (candidate or legacy alias) outrank settle receipts by default. */
+const BODY_RECEIPT_PREFIX = 'body:'
+/** Canonical settle receipt key: the floor index the settlement belongs to. */
+const CANONICAL_FLOOR_KEY = /^(0|[1-9][0-9]*)$/
+/** Default slots reserved for the newest settle receipt: current-turn rollback evidence. */
+const DEFAULT_SETTLE_RESERVED = 1
+
+function isSettleReceiptKey(turnKey: string): boolean {
+  return CANONICAL_FLOOR_KEY.test(turnKey) && Number.isSafeInteger(Number(turnKey))
+}
+
 /**
- * Ring retention with a preserve set (proposal 0023 §3.6).
+ * Default retention (no explicit preserve keys): `body:` receipts first, one
+ * slot reserved for the newest settle receipt, then the newest of whatever is
+ * left. The kept count never exceeds `MVU_RECEIPTS_LIMIT`, ties break
+ * newest-first, and the caller renders the set back in stored order.
+ */
+function defaultRetainedReceiptIndexes(receipts: readonly MvuReceipt[]): Set<number> {
+  const bodyIndexes: number[] = []
+  const settleIndexes: number[] = []
+  for (let index = 0; index < receipts.length; index += 1) {
+    const turnKey = receipts[index]!.turnKey
+    if (turnKey.startsWith(BODY_RECEIPT_PREFIX)) bodyIndexes.push(index)
+    else if (isSettleReceiptKey(turnKey)) settleIndexes.push(index)
+  }
+  const reservedSettle = settleIndexes.length > 0 ? DEFAULT_SETTLE_RESERVED : 0
+  const bodyBudget = Math.min(bodyIndexes.length, MVU_RECEIPTS_LIMIT - reservedSettle)
+  const kept = new Set<number>(bodyIndexes.slice(bodyIndexes.length - bodyBudget))
+  const newestSettle = settleIndexes.at(-1)
+  if (newestSettle !== undefined) kept.add(newestSettle)
+  let remaining = MVU_RECEIPTS_LIMIT - kept.size
+  for (let index = receipts.length - 1; index >= 0 && remaining > 0; index -= 1) {
+    if (kept.has(index)) continue
+    kept.add(index)
+    remaining -= 1
+  }
+  return kept
+}
+
+/**
+ * Explicit retention: every preserved receipt survives (even past the limit),
+ * the remaining slots take the newest of the other receipts.
+ */
+function explicitRetainedReceiptIndexes(
+  receipts: readonly MvuReceipt[],
+  preserveTurnKeys: ReadonlySet<string>,
+): Set<number> {
+  const kept = new Set<number>()
+  const others: number[] = []
+  for (let index = 0; index < receipts.length; index += 1) {
+    if (preserveTurnKeys.has(receipts[index]!.turnKey)) kept.add(index)
+    else others.push(index)
+  }
+  const budget = Math.max(0, MVU_RECEIPTS_LIMIT - kept.size)
+  for (const index of others.slice(others.length - Math.min(budget, others.length))) kept.add(index)
+  return kept
+}
+
+/**
+ * Ring retention (proposal 0023 §3.6).
  *
- * After the append, every receipt whose `turnKey` is in `preserveTurnKeys`
- * survives in stored order; the remaining slots take the newest of the other
- * receipts. A preserve set larger than the limit is kept in full: an oversized
- * array is better than silently dropping the only replayable proof of an active
- * body candidate (which would later fail with `body-receipt-missing`). Stored
- * order is preserved, so undo/redo keep their append-order semantics.
+ * Explicit `preserveTurnKeys` is the highest priority: every receipt whose
+ * `turnKey` is in the set survives in stored order and may push the array past
+ * `MVU_RECEIPTS_LIMIT` — an oversized array is better than silently dropping the
+ * only replayable proof of an active body candidate (which would later fail with
+ * `body-receipt-missing`).
+ *
+ * Without preserved keys the default policy is still bounded but body-aware:
+ * `body:` receipts outrank settle receipts, the newest settle receipt is always
+ * kept so the current turn keeps its rollback evidence, and the result never
+ * exceeds `MVU_RECEIPTS_LIMIT`. Stored order is preserved, so undo/redo keep
+ * their append-order semantics.
  */
 function retainMvuReceipts(
   receipts: readonly MvuReceipt[],
   preserveTurnKeys: ReadonlySet<string>,
 ): MvuReceipt[] {
-  const preserved = new Set<number>()
-  const others: number[] = []
-  for (let index = 0; index < receipts.length; index += 1) {
-    if (preserveTurnKeys.has(receipts[index]!.turnKey)) preserved.add(index)
-    else others.push(index)
-  }
-  const budget = Math.max(0, MVU_RECEIPTS_LIMIT - preserved.size)
-  const kept = new Set<number>(preserved)
-  const newest = others.slice(others.length - Math.min(budget, others.length))
-  for (const index of newest) kept.add(index)
+  const kept = preserveTurnKeys.size === 0
+    ? defaultRetainedReceiptIndexes(receipts)
+    : explicitRetainedReceiptIndexes(receipts, preserveTurnKeys)
   return receipts.filter((_, index) => kept.has(index))
 }
 
@@ -257,9 +315,10 @@ function retainMvuReceipts(
  * Append one receipt to `chat_metadata.mvu` (the caller owns `saveChat`).
  *
  * Body-candidate callers pass `preserveTurnKeys` explicitly (the candidate key
- * plus its legacy `body:<messageId>` alias); settle callers pass nothing and
- * keep the plain ring. Omitting the argument is identical to the old behavior:
- * only the newest `MVU_RECEIPTS_LIMIT` receipts are kept.
+ * plus its legacy `body:<messageId>` alias) and may exceed the ring limit.
+ * Settle callers pass nothing; the default ring still prefers `body:` receipts
+ * over settle receipts and always keeps the newest settle receipt, so a settle
+ * burst cannot silently evict an active candidate.
  */
 export function appendMvuReceipt(
   chat: ChatLogIR,
@@ -267,9 +326,7 @@ export function appendMvuReceipt(
   preserveTurnKeys?: ReadonlySet<string>,
 ): void {
   const appended = [...readMvuReceipts(chat), receipt]
-  const receipts = preserveTurnKeys === undefined
-    ? appended.slice(-MVU_RECEIPTS_LIMIT)
-    : retainMvuReceipts(appended, preserveTurnKeys)
+  const receipts = retainMvuReceipts(appended, preserveTurnKeys ?? new Set<string>())
   chat.header.chat_metadata.mvu = { receipts }
 }
 
@@ -289,7 +346,10 @@ export function recordMvuTurnReceipt(
     at?: string
     failures?: string[]
     changeNotes?: Record<string, string>
-    /** Body-candidate keys that must survive the ring; settle callers omit it. */
+    /**
+     * Body-candidate keys that must survive the ring. When omitted the default
+     * policy still protects `body:` receipts and reserves the newest settle slot.
+     */
     preserveTurnKeys?: ReadonlySet<string>
   },
 ): MvuReceipt | undefined {

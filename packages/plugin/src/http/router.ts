@@ -34,6 +34,7 @@ import {
   type BodyProjectedFloor,
   type BodyStateSafety,
 } from '../agent-tavern/body-wiring.js'
+import { bodyEditDetailOf } from '../agent-tavern/body-view.js'
 import { seedJsrMvuVariables } from '../agent-tavern/mvu-compat.js'
 import { serveCharacterAvatar, sendAvatarFallback } from '../assets.js'
 import { BUILD_INFO, TAVERN_COMMIT } from '../build-info.js'
@@ -1505,6 +1506,13 @@ export async function handleAgentTavernBodyApi(
       }
     }
 
+    // Proposal 0023 §6.3: publish the receipt verdict the `PUT` preflight will
+    // enforce, so edit is not offered for a candidate the runtime would refuse.
+    // A missing ledger, card or chat snapshot keeps the 0021 optimistic answer.
+    const editDetail = character === undefined || chat === undefined || ledger === undefined
+      ? undefined
+      : bodyEditDetailOf(character.card, chat, ledger)
+
     return sendJson(res, 200, buildBodyView({
       messageId,
       binding,
@@ -1517,6 +1525,7 @@ export async function handleAgentTavernBodyApi(
       messageText,
       projected,
       inspection,
+      editDetail,
     }))
   }
 

@@ -8877,22 +8877,51 @@ function readMvuReceipts(chat) {
   }
   return receipts;
 }
-function retainMvuReceipts(receipts, preserveTurnKeys) {
-  const preserved = /* @__PURE__ */ new Set();
+var BODY_RECEIPT_PREFIX = "body:";
+var CANONICAL_FLOOR_KEY = /^(0|[1-9][0-9]*)$/;
+var DEFAULT_SETTLE_RESERVED = 1;
+function isSettleReceiptKey(turnKey) {
+  return CANONICAL_FLOOR_KEY.test(turnKey) && Number.isSafeInteger(Number(turnKey));
+}
+function defaultRetainedReceiptIndexes(receipts) {
+  const bodyIndexes = [];
+  const settleIndexes = [];
+  for (let index = 0; index < receipts.length; index += 1) {
+    const turnKey = receipts[index].turnKey;
+    if (turnKey.startsWith(BODY_RECEIPT_PREFIX)) bodyIndexes.push(index);
+    else if (isSettleReceiptKey(turnKey)) settleIndexes.push(index);
+  }
+  const reservedSettle = settleIndexes.length > 0 ? DEFAULT_SETTLE_RESERVED : 0;
+  const bodyBudget = Math.min(bodyIndexes.length, MVU_RECEIPTS_LIMIT - reservedSettle);
+  const kept = new Set(bodyIndexes.slice(bodyIndexes.length - bodyBudget));
+  const newestSettle = settleIndexes.at(-1);
+  if (newestSettle !== void 0) kept.add(newestSettle);
+  let remaining = MVU_RECEIPTS_LIMIT - kept.size;
+  for (let index = receipts.length - 1; index >= 0 && remaining > 0; index -= 1) {
+    if (kept.has(index)) continue;
+    kept.add(index);
+    remaining -= 1;
+  }
+  return kept;
+}
+function explicitRetainedReceiptIndexes(receipts, preserveTurnKeys) {
+  const kept = /* @__PURE__ */ new Set();
   const others = [];
   for (let index = 0; index < receipts.length; index += 1) {
-    if (preserveTurnKeys.has(receipts[index].turnKey)) preserved.add(index);
+    if (preserveTurnKeys.has(receipts[index].turnKey)) kept.add(index);
     else others.push(index);
   }
-  const budget = Math.max(0, MVU_RECEIPTS_LIMIT - preserved.size);
-  const kept = new Set(preserved);
-  const newest = others.slice(others.length - Math.min(budget, others.length));
-  for (const index of newest) kept.add(index);
+  const budget = Math.max(0, MVU_RECEIPTS_LIMIT - kept.size);
+  for (const index of others.slice(others.length - Math.min(budget, others.length))) kept.add(index);
+  return kept;
+}
+function retainMvuReceipts(receipts, preserveTurnKeys) {
+  const kept = preserveTurnKeys.size === 0 ? defaultRetainedReceiptIndexes(receipts) : explicitRetainedReceiptIndexes(receipts, preserveTurnKeys);
   return receipts.filter((_, index) => kept.has(index));
 }
 function appendMvuReceipt(chat, receipt, preserveTurnKeys) {
   const appended = [...readMvuReceipts(chat), receipt];
-  const receipts = preserveTurnKeys === void 0 ? appended.slice(-MVU_RECEIPTS_LIMIT) : retainMvuReceipts(appended, preserveTurnKeys);
+  const receipts = retainMvuReceipts(appended, preserveTurnKeys ?? /* @__PURE__ */ new Set());
   chat.header.chat_metadata.mvu = { receipts };
 }
 
