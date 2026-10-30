@@ -370,6 +370,30 @@ describe('AgentTavern body JSONL projector', () => {
     expect(await snapshotOf(store, chatId)).toEqual(chat)
   })
 
+  it('bounds the adoption witness at the projecting event, ignoring later duplicate mirrors', async () => {
+    const { root, store, chatId, sessionId } = await importedFixture(
+      'body-projector-imported-bound',
+      ['First greeting.', 'Second greeting.', 'Chosen greeting.'],
+      2,
+    )
+    const session = makeSession(sessionId)
+    seedImportedTurn(session, 'import-anchor', 'Chosen greeting.')
+    session.events.push(
+      bodyEvent(5, { op: 'candidate', groupId: 'import-anchor', messageId: 'import-anchor', index: 0 }),
+      // A duplicate mirror with the same id logged after the body event must
+      // not replace the witness the projection at seq 5 compares against.
+      importedAssistantEvent(6, 'import-anchor', 'A tampered later mirror.', 2, 1300),
+    )
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(session)
+
+    const chat = await snapshotOf(store, chatId)
+    const floor = chat.messages[0]!
+    expect(floor.mes).toBe('Chosen greeting.')
+    expect(agentTavernOf(floor)).toMatchObject({ bodyGroupId: 'import-anchor', anchorMessageId: 'import-anchor' })
+    expect(await projector.status(sessionId)).toMatchObject({ status: 'ok', lastCursor: 6 })
+  })
+
   it('edits an adopted imported floor once the candidate is projected', async () => {
     const { root, store, chatId, sessionId } = await importedFixture(
       'body-projector-imported-edit',

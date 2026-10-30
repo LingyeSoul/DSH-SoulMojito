@@ -3249,7 +3249,11 @@ function cloneChatSnapshot(snapshot) {
   return {
     chat: {
       header: cloneChatRecord(snapshot.chat.header),
-      messages: snapshot.chat.messages.map(cloneChatRecord)
+      // Rows go through the value cloner, not the record cloner: a legacy or
+      // damaged line can parse as an array, and `Object.keys` on it would turn
+      // the cached copy into a plain object — a cache hit would then return a
+      // different shape than a miss.
+      messages: snapshot.chat.messages.map((message) => cloneChatValue(message))
     },
     revision: snapshot.revision
   };
@@ -3274,21 +3278,29 @@ function cloneChatValue(value) {
 async function statChatFile(file) {
   try {
     const stat = await fs2.stat(file);
-    return { size: stat.size, mtimeMs: stat.mtimeMs, ino: stat.ino };
+    return { size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, ino: stat.ino };
   } catch (cause) {
     if (cause.code === "ENOENT") return void 0;
     throw cause;
   }
 }
 function sameChatFingerprint(left, right) {
-  return left.size === right.size && left.mtimeMs === right.mtimeMs && left.ino === right.ino;
+  return left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs && left.ino === right.ino;
 }
 async function readChatFile(file) {
   let last;
   for (let attempt = 0; attempt < CHAT_SNAPSHOT_READ_ATTEMPTS; attempt += 1) {
     const before = await statChatFile(file);
     if (before === void 0) return last === void 0 ? void 0 : { bytes: last };
-    const bytes = new Uint8Array(await fs2.readFile(file));
+    let bytes;
+    try {
+      bytes = new Uint8Array(await fs2.readFile(file));
+    } catch (cause) {
+      if (cause.code === "ENOENT") {
+        return last === void 0 ? void 0 : { bytes: last };
+      }
+      throw cause;
+    }
     const after = await statChatFile(file);
     if (after !== void 0 && after.size === bytes.byteLength && sameChatFingerprint(before, after)) {
       return { bytes, fingerprint: after };
@@ -9216,7 +9228,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("6207c6c") : void 0;
+  const commit = true ? normalizeCommit("052e3f3") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

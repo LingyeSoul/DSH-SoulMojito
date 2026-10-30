@@ -2104,6 +2104,67 @@ describe('GET body log degradation', () => {
     expect(JSON.stringify(warning?.[1])).toContain('invalid-body-event')
     expect(JSON.stringify(warning?.[1])).toContain('object data payload')
   })
+
+  /** Two floors sharing one `agentTavern.messageId`, in distinct groups. */
+  function duplicateMessageIdChat(): ChatLogIR {
+    const chat = projectedChat('old body')
+    chat.messages.push({
+      name: 'character',
+      is_user: false,
+      is_system: false,
+      send_date: '',
+      mes: 'stray copy',
+      swipe_id: 0,
+      swipes: ['stray copy'],
+      extra: {
+        agentTavern: { messageId: 'message-1', anchorMessageId: 'group-b', bodyGroupId: 'group-b' },
+      },
+    })
+    return chat
+  }
+
+  it('clears the floor degradation for a row whose group-hinted reread resolves one floor', async () => {
+    // The by-message lookup is ambiguous, but the ledger's group id still owns
+    // exactly one floor: the successful reread must clear the degradation
+    // instead of pinning the row on projectionPending forever.
+    const session = groupedBodySession([
+      { groupId: 'message-1', candidates: [{ messageId: 'message-1', text: 'old body' }] },
+    ])
+    const capture = captureLogger()
+
+    const result = await callBodyGet(
+      plainCharacter(),
+      duplicateMessageIdChat(),
+      fakeAgent(session),
+      'session-mvu',
+      'message-1',
+      capture.logger,
+    )
+
+    expect(result.status).toBe(200)
+    expect(result.body).toMatchObject({ ok: true, text: 'old body' })
+    expect(result.body['detail']).toBeUndefined()
+    expect(result.body['projectionPending']).toBeUndefined()
+    expect(capture.warnings.filter((args) => String(args[0]).includes('ambiguous'))).toEqual([])
+  })
+
+  it('still publishes the degradation when no ledger exists to re-resolve the floor', async () => {
+    const capture = captureLogger()
+
+    const result = await callBodyGet(
+      plainCharacter(),
+      duplicateMessageIdChat(),
+      fakeAgent(fakeSession('session-mvu', [])),
+      'session-mvu',
+      'message-1',
+      capture.logger,
+    )
+
+    expect(result.status).toBe(200)
+    expect(result.body['detail']).toBe('body-group-mismatch')
+    expect(result.body['projectionPending']).toBe(true)
+    expect(capture.warnings.some((args) => String(args[0]).includes('ambiguous'))).toBe(true)
+  })
 })
 
 describe('body view policy', () => {
@@ -2157,6 +2218,26 @@ describe('body view policy', () => {
         detail,
       })
     }
+  })
+
+  it('closes regeneration for a degraded read because the floor binding is a guess', () => {
+    const view = buildBodyView({
+      messageId: 'message-1',
+      binding: { architecture: 'agent-tavern' },
+      agent: fakeAgent(fakeSession('session-view-degraded')),
+      hostSupported: true,
+      stateSafety: { safe: true },
+      historicalMvuState: false,
+      writeRollbackAvailable: true,
+      ledger: undefined,
+      messageText: 'body',
+      projected: { text: 'body', count: 1, selectedIndex: 0 },
+      inspection: { onSurface: true, last: true },
+      readDetail: 'body-group-mismatch',
+    })
+    expect(view.canEdit).toBe(false)
+    expect(view.canRegenerate).toBe(false)
+    expect(view.detail).toBe('body-group-mismatch')
   })
 
   it('lets a caller-derived edit gate outrank the receipt detail', () => {

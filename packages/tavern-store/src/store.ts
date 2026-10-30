@@ -331,12 +331,17 @@ export interface ChatSnapshot {
  * exists to avoid. `ino` is added for free: a tmp+rename replacement (the
  * store's own atomic write, and most external editors) lands on a new file
  * index, so a same-size write inside the same millisecond is still detected on
- * filesystems that report one. It is 0 where inode numbers are unavailable
- * (some network/FAT mounts), where the check degrades to size+mtimeMs.
+ * filesystems that report one. `ctimeMs` extends the same defense to
+ * replacement writes whose mtime was pinned back: a fresh file has a fresh
+ * creation/change time even when size, mtime and (on mounts without inode
+ * numbers) `ino` all match. The remaining hole is an in-place rewrite that
+ * keeps every timestamp — only the explicit write-path invalidation covers
+ * that.
  */
 interface ChatFileFingerprint {
   size: number
   mtimeMs: number
+  ctimeMs: number
   ino: number
 }
 
@@ -2372,7 +2377,11 @@ function cloneChatSnapshot(snapshot: ChatSnapshot): ChatSnapshot {
   return {
     chat: {
       header: cloneChatRecord(snapshot.chat.header),
-      messages: snapshot.chat.messages.map(cloneChatRecord),
+      // Rows go through the value cloner, not the record cloner: a legacy or
+      // damaged line can parse as an array, and `Object.keys` on it would turn
+      // the cached copy into a plain object — a cache hit would then return a
+      // different shape than a miss.
+      messages: snapshot.chat.messages.map((message) => cloneChatValue(message) as typeof message),
     },
     revision: snapshot.revision,
   }
@@ -2408,7 +2417,7 @@ interface ReadChatFile {
 async function statChatFile(file: string): Promise<ChatFileFingerprint | undefined> {
   try {
     const stat = await fs.stat(file)
-    return { size: stat.size, mtimeMs: stat.mtimeMs, ino: stat.ino }
+    return { size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, ino: stat.ino }
   } catch (cause) {
     if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return undefined
     throw cause
@@ -2416,7 +2425,10 @@ async function statChatFile(file: string): Promise<ChatFileFingerprint | undefin
 }
 
 function sameChatFingerprint(left: ChatFileFingerprint, right: ChatFileFingerprint): boolean {
-  return left.size === right.size && left.mtimeMs === right.mtimeMs && left.ino === right.ino
+  return left.size === right.size
+    && left.mtimeMs === right.mtimeMs
+    && left.ctimeMs === right.ctimeMs
+    && left.ino === right.ino
 }
 
 /**
@@ -2431,7 +2443,18 @@ async function readChatFile(file: string): Promise<ReadChatFile | undefined> {
   for (let attempt = 0; attempt < CHAT_SNAPSHOT_READ_ATTEMPTS; attempt += 1) {
     const before = await statChatFile(file)
     if (before === undefined) return last === undefined ? undefined : { bytes: last }
-    const bytes = new Uint8Array(await fs.readFile(file))
+    let bytes: Uint8Array
+    try {
+      bytes = new Uint8Array(await fs.readFile(file))
+    } catch (cause) {
+      // The file vanished between `stat` and `readFile`: that is a missing
+      // file, not a corrupt one, so the read path keeps its `undefined`
+      // contract instead of surfacing a raw ENOENT.
+      if ((cause as NodeJS.ErrnoException).code === 'ENOENT') {
+        return last === undefined ? undefined : { bytes: last }
+      }
+      throw cause
+    }
     const after = await statChatFile(file)
     if (after !== undefined && after.size === bytes.byteLength && sameChatFingerprint(before, after)) {
       return { bytes, fingerprint: after }

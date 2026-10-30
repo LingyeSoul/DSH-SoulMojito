@@ -122,7 +122,7 @@
 | v1 迁移未持久化在读取路径 | replay 前每次重启都会重新迁移一次（幂等无害）；迁移后、replay 前 `GET /projection` 如实显示 `pending/-1/0` 未验证态。 |
 | v1 pending 会话成本 | 修复从「按 pendingCursor 重放」变为「一次性全量重放」，长会话多付一次幂等重放。 |
 | 词表固有边界 | reason/message 中不含词表特征的内部信息（内部用户名等）会被 `publicErrorMessage` 放行——分类器既有设计边界。 |
-| 未修项 | 剩余 Low/Nit（router 降级不可达分支、canRegenerate 不看 editGate、store.ts ENOENT 契约、cloneChatRecord 形状、快照缓存测试钉 claim、settle-intent fail-open、importedMirrorAnchorText 上界、歧义错误放大、\0 缓存 key）留待下一轮；M1-M4 已在本文件末节收口。 |
+| 未修项 | M1-M4 与全部 Low/Nit 已分别在本文件末两节收口；L8b（factsOf 缓存 key）为长度前缀的构造级修复，未设独立用例。 |
 | 无真机 E2E | 构造日志验证，没有进程 kill / 浏览器 E2E。 |
 
 ## 删除路径
@@ -201,4 +201,56 @@
 | M3 旧记录盲区 | 修复前已落盘的无 opId restore 记录，切过候选再重试仍走旧启发式（append-only 约束）；仅新写入免疫。opId 认领不比 groupId（跨组同 opId 属篡改/损坏日志场景）。 |
 | M4 重试边界 | 只做一次进程内重试，不释放写工具限制（防未回滚的写被继续污染）；持续失败的会话仍锁定到启动恢复，但用户现在拿到 opId 句柄与结构化日志。多进程同会话不在此列（单写者模型既有边界）。 |
 | M1 扫描期间实时延迟 | 长积压全量扫描期间实时事件排队等待（原先可插队）——顺序换正确性。 |
+| 无真机 E2E | 同前。 |
+
+## 第三批修复（同日：审查 Low/Nit 九条）
+
+1. **降级三元不可达分支**（`http/router.ts`）：注释承诺"group 提示重读成功即清除降级"，但
+   三元只在 reread 失败时取 reread 的降级、成功时回落 floorRead 的降级——行被永久钉在
+   `projectionPending`。修法：reread 成功即清除（`reread.ok ? undefined : reread.degradation`）。
+2. **canRegenerate 不看降级读**（`body-view.ts`）：`body-group-mismatch` 行仍能点"重新生
+   成"，失败后 restore 卡 pending。修法：canRegenerate 压 `readDetail === undefined`；receipt
+   verdict（editDetail）不动——wiring 既有用例 pin 了"receipt detail 下可重生成"，且运行时
+   自有 preflight 409。
+3. **stat 与 readFile 之间的 ENOENT**（`tavern-store/src/store.ts`）：readChatFile 捕获
+   mid-read 消失，保持"缺文件返回 undefined"契约。
+4. **克隆数组行变形 + 指纹缺 ctimeMs**（`store.ts`）：messages 走 cloneChatValue（数组行在
+   命中/未命中时形状一致）；指纹增加 `ctimeMs`——mtime 被钉回的替换写靠创建时间分辨。
+5. **缓存失效测试钉 claim**（`tavern-store/tests/chat-snapshot-cache.spec.ts`）：saveChat 用
+   例补 `invalidateChatSnapshot` spy 断言——删掉失效调用时测试必红，不再被 tmp+rename 的
+   指纹差异兜绿。
+6. **写路径重复 messageId fail-closed**（`body-jsonl.ts`）：`findBodyFloorIndexByMessageId`
+   收集全部匹配、>1 抛 `body-group-mismatch`（读路径同口径），不再静默取第一条。
+7. **歧义错误索引封顶**（`body-jsonl.ts`）：组/消息两条 mismatch 消息只列前 3 个索引 +
+   计数（`1, 2, 3 and 2 more`），损坏 chat 不再线性放大进 checkpoint/HTTP/日志。
+8. **settle-intent effectiveAfter fail-open**（`settle-intent-record.ts`）：未列名的
+   effectiveAfter 项从 push 改为抛 `invalid-settle-intent`（带 opId）——push 会让 undo 看到
+   无 before 的项，abort 时删掉批次从未拥有的键。
+9. **采纳见证无上界**（`body-projector.ts`）：`importedMirrorAnchorText` 增加 `uptoSeq`，
+   只取 ≤ 当前投影事件的镜像文本；更晚的同 id 镜像不再替换见证。另 `body-session.ts`
+   factsOf 缓存 key 加长度前缀（`a\0b`+空提示 与 `a`+`b` 不再同 key）。
+
+### 第三批证据
+
+- 全量 `pnpm run check`：160 test files / 2689 passed + 1 skipped；18 道 gate 全 PASS。
+- 新用例：`clears the floor degradation for a row whose group-hinted reread resolves one
+  floor`（RED 抽查：摘除 router 修复后 `expected 'body-group-mismatch' to be undefined`）、
+  `still publishes the degradation when no ledger exists to re-resolve the floor`（对照，
+  修复前后均绿）、`closes regeneration for a degraded read because the floor binding is a
+  guess`、`still yields undefined when the file vanishes between stat and read`、
+  `keeps an array-shaped legacy line an array across a cache hit`、`re-parses when a
+  replacement keeps size and mtime but not creation time`、`refuses a duplicated body
+  message id on the write path and bounds the listed indices`、`merges an effective after
+  value into its listed item and rejects one for an unlisted name`、`bounds the adoption
+  witness at the projecting event, ignoring later duplicate mirrors`。
+- 既有断言兼容：`(1, 2)` 双匹配消息、receipt detail 下 `canRegenerate: true`、
+  单匹配定位器行为均保持。
+
+### 第三批风险与未完成
+
+| 风险 | 说明 |
+|---|---|
+| ctimeMs 平台边界 | in-place 重写且所有时间戳不变的窗口仍只有显式失效能兜（注释已写明）；ctime 测试在 ino 可用的平台由 ino 兜底，红绿依赖平台。 |
+| canRegenerate 口径 | 只压降级读；receipt verdict 依赖运行时 regenerate preflight 的 409，与既有 pin 一致。 |
+| L8b 无独立用例 | 长度前缀是构造级修复（拆 key 可注入性差），按检验推理收口，未设测试。 |
 | 无真机 E2E | 同前。 |

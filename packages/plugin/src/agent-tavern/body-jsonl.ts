@@ -184,18 +184,37 @@ export function findBodyFloorIndexByGroupId(chat: ChatLogIR, groupId: string): n
   if (matches.length > 1) {
     throw new BodyJsonlProjectionError(
       'body-group-mismatch',
-      `body group '${groupId}' matches ${matches.length} chat floors (${matches.join(', ')}); a body group must own exactly one floor`,
+      `body group '${groupId}' matches ${matches.length} chat floors (${formatFloorIndices(matches)}); a body group must own exactly one floor`,
     )
   }
   return found
 }
 
+/**
+ * Bounded index list for mismatch errors. A damaged chat can bind one id to
+ * hundreds of floors; the full list would flow into checkpoints, HTTP bodies
+ * and logs linearly with the damage, so only the first indices and a count
+ * remain.
+ */
+function formatFloorIndices(matches: readonly number[]): string {
+  const head = matches.slice(0, 3).join(', ')
+  return matches.length > 3 ? `${head} and ${matches.length - 3} more` : head
+}
+
 /** Find a body floor by `extra.agentTavern.messageId`. */
 export function findBodyFloorIndexByMessageId(chat: ChatLogIR, messageId: string): number | undefined {
+  const matches: number[] = []
   for (const [index, message] of chat.messages.entries()) {
-    if (readAgentTavern(message)?.messageId === messageId) return index
+    if (readAgentTavern(message)?.messageId !== messageId) continue
+    matches.push(index)
   }
-  return undefined
+  if (matches.length > 1) {
+    throw new BodyJsonlProjectionError(
+      'body-group-mismatch',
+      `body message '${messageId}' matches ${matches.length} chat floors (${formatFloorIndices(matches)}); a body message id must own exactly one floor`,
+    )
+  }
+  return matches[0]
 }
 
 /** Hints for {@link locateBodyFloorForRead}. */
@@ -242,7 +261,7 @@ export function locateBodyFloorForRead(chat: ChatLogIR, hints: BodyJsonlReadHint
   if (matches.length > 1) {
     throw new BodyJsonlProjectionError(
       'body-group-mismatch',
-      `body message '${hints.messageId}' matches ${matches.length} chat floors (${matches.join(', ')}); a read must resolve exactly one floor`,
+      `body message '${hints.messageId}' matches ${matches.length} chat floors (${formatFloorIndices(matches)}); a read must resolve exactly one floor`,
     )
   }
 

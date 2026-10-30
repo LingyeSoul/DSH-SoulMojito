@@ -1562,9 +1562,11 @@ export async function handleAgentTavernBodyApi(
             : undefined
         // An ambiguous floor binding is damaged data, not an exception: keep the
         // stable ledger body and publish the code instead of turning the row into
-        // a 500. A later group-hinted reread that succeeds clears the degradation.
-        const floorDegradation = reread !== undefined && !reread.ok
-          ? reread.degradation
+        // a 500. A later group-hinted reread that succeeds clears the degradation
+        // for this row — the ledger's group resolved exactly one floor, so the
+        // row is servable and must not stay pinned on `projectionPending`.
+        const floorDegradation = reread !== undefined
+          ? reread.ok ? undefined : reread.degradation
           : floorRead !== undefined && !floorRead.ok
             ? floorRead.degradation
             : undefined

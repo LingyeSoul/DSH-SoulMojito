@@ -2595,7 +2595,11 @@ function cloneChatSnapshot(snapshot2) {
   return {
     chat: {
       header: cloneChatRecord(snapshot2.chat.header),
-      messages: snapshot2.chat.messages.map(cloneChatRecord)
+      // Rows go through the value cloner, not the record cloner: a legacy or
+      // damaged line can parse as an array, and `Object.keys` on it would turn
+      // the cached copy into a plain object — a cache hit would then return a
+      // different shape than a miss.
+      messages: snapshot2.chat.messages.map((message) => cloneChatValue(message))
     },
     revision: snapshot2.revision
   };
@@ -2620,21 +2624,29 @@ function cloneChatValue(value) {
 async function statChatFile(file) {
   try {
     const stat2 = await fs2.stat(file);
-    return { size: stat2.size, mtimeMs: stat2.mtimeMs, ino: stat2.ino };
+    return { size: stat2.size, mtimeMs: stat2.mtimeMs, ctimeMs: stat2.ctimeMs, ino: stat2.ino };
   } catch (cause) {
     if (cause.code === "ENOENT") return void 0;
     throw cause;
   }
 }
 function sameChatFingerprint(left, right) {
-  return left.size === right.size && left.mtimeMs === right.mtimeMs && left.ino === right.ino;
+  return left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs && left.ino === right.ino;
 }
 async function readChatFile(file) {
   let last;
   for (let attempt = 0; attempt < CHAT_SNAPSHOT_READ_ATTEMPTS; attempt += 1) {
     const before = await statChatFile(file);
     if (before === void 0) return last === void 0 ? void 0 : { bytes: last };
-    const bytes = new Uint8Array(await fs2.readFile(file));
+    let bytes;
+    try {
+      bytes = new Uint8Array(await fs2.readFile(file));
+    } catch (cause) {
+      if (cause.code === "ENOENT") {
+        return last === void 0 ? void 0 : { bytes: last };
+      }
+      throw cause;
+    }
     const after = await statChatFile(file);
     if (after !== void 0 && after.size === bytes.byteLength && sameChatFingerprint(before, after)) {
       return { bytes, fingerprint: after };
@@ -10084,7 +10096,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("6207c6c") : void 0;
+  const commit = true ? normalizeCommit("052e3f3") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -20355,16 +20367,28 @@ function findBodyFloorIndexByGroupId(chat, groupId) {
   if (matches.length > 1) {
     throw new BodyJsonlProjectionError(
       "body-group-mismatch",
-      `body group '${groupId}' matches ${matches.length} chat floors (${matches.join(", ")}); a body group must own exactly one floor`
+      `body group '${groupId}' matches ${matches.length} chat floors (${formatFloorIndices(matches)}); a body group must own exactly one floor`
     );
   }
   return found;
 }
+function formatFloorIndices(matches) {
+  const head = matches.slice(0, 3).join(", ");
+  return matches.length > 3 ? `${head} and ${matches.length - 3} more` : head;
+}
 function findBodyFloorIndexByMessageId(chat, messageId) {
+  const matches = [];
   for (const [index, message] of chat.messages.entries()) {
-    if (readAgentTavern(message)?.messageId === messageId) return index;
+    if (readAgentTavern(message)?.messageId !== messageId) continue;
+    matches.push(index);
   }
-  return void 0;
+  if (matches.length > 1) {
+    throw new BodyJsonlProjectionError(
+      "body-group-mismatch",
+      `body message '${messageId}' matches ${matches.length} chat floors (${formatFloorIndices(matches)}); a body message id must own exactly one floor`
+    );
+  }
+  return matches[0];
 }
 function locateBodyFloorForRead(chat, hints) {
   requireNonEmpty2(hints.messageId, "invalid-body-message-id", "body message id");
@@ -20384,7 +20408,7 @@ function locateBodyFloorForRead(chat, hints) {
   if (matches.length > 1) {
     throw new BodyJsonlProjectionError(
       "body-group-mismatch",
-      `body message '${hints.messageId}' matches ${matches.length} chat floors (${matches.join(", ")}); a read must resolve exactly one floor`
+      `body message '${hints.messageId}' matches ${matches.length} chat floors (${formatFloorIndices(matches)}); a read must resolve exactly one floor`
     );
   }
   const index = matches[0];
@@ -23772,7 +23796,7 @@ function createBodySessionFactsSource(session) {
     return operation;
   };
   const factsOf = (messageId, groupHint) => {
-    const key = `${messageId}\0${groupHint ?? ""}`;
+    const key = `${messageId.length}\0${messageId}\0${groupHint ?? ""}`;
     const cached = facts.get(key);
     if (cached !== void 0) return cached;
     let ledger;
@@ -23979,7 +24003,7 @@ async function projectBodyEvent(store5, session, state, binding, event) {
       ...data.feedback === void 0 ? {} : { feedback: data.feedback }
     };
     await mutateBodyChat(store5, binding, { seq: event.seq, groupId: data.groupId }, (chat) => {
-      const adopted = adoptImportedAnchorFloor(chat, session, data.groupId, projected2.anchorMessageId);
+      const adopted = adoptImportedAnchorFloor(chat, session, data.groupId, projected2.anchorMessageId, event.seq);
       return projectCandidateToChat(adopted, character?.card, input, projected2);
     });
     return;
@@ -23988,7 +24012,7 @@ async function projectBodyEvent(store5, session, state, binding, event) {
     assertSelectPreState(session, data, event.seq);
     const projected2 = requireProjectedLedger(ledger, event.seq, data.groupId);
     await mutateBodyChat(store5, binding, { seq: event.seq, groupId: data.groupId }, (chat) => applySelectToChat(
-      adoptImportedAnchorFloor(chat, session, data.groupId, projected2.anchorMessageId),
+      adoptImportedAnchorFloor(chat, session, data.groupId, projected2.anchorMessageId, event.seq),
       {
         groupId: data.groupId,
         index: data.index,
@@ -24016,7 +24040,7 @@ async function projectBodyEvent(store5, session, state, binding, event) {
     }
     const at = eventDate(event.time, event.seq, event.type);
     await mutateBodyChat(store5, binding, { seq: event.seq, groupId: data.groupId }, (chat) => applyCandidateEditToChat(
-      adoptImportedAnchorFloor(chat, session, data.groupId, projected2.anchorMessageId),
+      adoptImportedAnchorFloor(chat, session, data.groupId, projected2.anchorMessageId, event.seq),
       character.card,
       {
         ledger: projected2,
@@ -24034,7 +24058,7 @@ async function projectBodyEvent(store5, session, state, binding, event) {
   assertRestorePreState(session, data, event.seq);
   const projected = requireProjectedLedger(ledger, event.seq, data.groupId);
   await mutateBodyChat(store5, binding, { seq: event.seq, groupId: data.groupId }, (chat) => applyRestoreToChat(
-    adoptImportedAnchorFloor(chat, session, data.groupId, projected.anchorMessageId),
+    adoptImportedAnchorFloor(chat, session, data.groupId, projected.anchorMessageId, event.seq),
     {
       groupId: data.groupId,
       index: data.index,
@@ -24049,11 +24073,11 @@ function isBodyMergedAssistant(session, event) {
   if (typeof messageId === "string" && messageId !== "" && isRestoredBodyMessage(session, messageId)) return true;
   return isBodyTriggerTurn(session, data?.["turn"]);
 }
-function adoptImportedAnchorFloor(chat, session, groupId, anchorMessageId) {
+function adoptImportedAnchorFloor(chat, session, groupId, anchorMessageId, uptoSeq) {
   if (anchorMessageId === void 0) return chat;
   const sessionId = typeof session.id === "string" && session.id !== "" ? session.id : void 0;
   if (sessionId === void 0) return chat;
-  const anchorText = importedMirrorAnchorText(session, anchorMessageId);
+  const anchorText = importedMirrorAnchorText(session, anchorMessageId, uptoSeq);
   if (anchorText === void 0) return chat;
   try {
     return applyFloorAdoptionToChat(chat, { groupId, sessionId, anchorMessageId, anchorText });
@@ -24064,10 +24088,11 @@ function adoptImportedAnchorFloor(chat, session, groupId, anchorMessageId) {
     throw error;
   }
 }
-function importedMirrorAnchorText(session, anchorMessageId) {
+function importedMirrorAnchorText(session, anchorMessageId, uptoSeq) {
   let found;
   for (const event of sessionEvents(session)) {
     if (event.type !== "assistant/message") continue;
+    if (event.seq > uptoSeq) continue;
     const message2 = plainObjectRecord(plainObjectRecord(event.data)?.["message"]);
     if (message2?.["id"] !== anchorMessageId) continue;
     if (found === void 0 || event.seq >= found.seq) found = event;
@@ -25571,7 +25596,7 @@ function foldSettleIntents(events) {
       if (current.afterVersion !== SETTLE_INTENT_AFTER_VERSION && entry.items.some((item) => item.effectiveAfter !== void 0)) {
         throw new WriteJournalError("invalid-settle-intent", `settle intent '${entry.opId}' extends with effective after values but its open record predates afterVersion ${SETTLE_INTENT_AFTER_VERSION}`);
       }
-      open2.set(entry.opId, { ...current, items: mergeSettleIntentItems(current.items, entry.items) });
+      open2.set(entry.opId, { ...current, items: mergeSettleIntentItems(entry.opId, current.items, entry.items) });
       continue;
     }
     if (entry.phase === "decide") {
@@ -25593,7 +25618,7 @@ function foldSettleIntents(events) {
   }
   return [...open2.values()];
 }
-function mergeSettleIntentItems(current, extension) {
+function mergeSettleIntentItems(opId, current, extension) {
   const merged = [...current];
   for (const item of extension) {
     if (item.effectiveAfter === void 0) {
@@ -25608,8 +25633,10 @@ function mergeSettleIntentItems(current, extension) {
       }
     }
     if (index === -1) {
-      merged.push(item);
-      continue;
+      throw new WriteJournalError(
+        "invalid-settle-intent",
+        `settle intent '${opId}' extends with an effective after value for unlisted name '${item.name}'`
+      );
     }
     merged[index] = { ...merged[index], effectiveAfter: item.effectiveAfter };
   }
@@ -28551,7 +28578,7 @@ function buildBodyView(input) {
   const editGate = input.readDetail ?? input.canEditDetail ?? input.editDetail;
   const baseEditable = baseReason === void 0 && !hidden && count > 0;
   const canEdit = baseEditable && editGate === void 0;
-  const canRegenerate = baseReason === void 0 && !hidden && count > 0 && input.agent !== void 0 && canAdvanceHostTurnBase(input.agent) && (!input.historicalMvuState || input.writeRollbackAvailable);
+  const canRegenerate = baseReason === void 0 && !hidden && count > 0 && input.readDetail === void 0 && input.agent !== void 0 && canAdvanceHostTurnBase(input.agent) && (!input.historicalMvuState || input.writeRollbackAvailable);
   const canSelect = canEdit && count > 1 && !input.historicalMvuState;
   const detail = baseEditable ? editGate ?? (input.historicalMvuState ? "candidate-switch-disabled" : void 0) : input.readDetail;
   return {
@@ -50627,7 +50654,7 @@ async function handleAgentTavernBodyApi(ctx, db, req, res, url, route, method) {
         const selectionMoved = ledger !== void 0 && (floorByMessage === void 0 || floorByMessage.anchorMessageId !== ledger.anchorMessageId || floorByMessage.selectedIndex !== ledger.selectedIndex);
         const reread = selectionMoved ? await readFloorOf(messageId, ledger.groupId, ledger.selectedIndex) : void 0;
         const projected = reread === void 0 ? floorByMessage : reread.ok ? reread.floor : void 0;
-        const floorDegradation = reread !== void 0 && !reread.ok ? reread.degradation : floorRead !== void 0 && !floorRead.ok ? floorRead.degradation : void 0;
+        const floorDegradation = reread !== void 0 ? reread.ok ? void 0 : reread.degradation : floorRead !== void 0 && !floorRead.ok ? floorRead.degradation : void 0;
         const messageText4 = facts?.messageText;
         const inspection = facts?.inspection;
         const latestEditSeq = facts?.latestEditSeq;

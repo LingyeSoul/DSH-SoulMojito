@@ -228,7 +228,7 @@ export function foldSettleIntents(events: readonly unknown[]): readonly SettleIn
         && entry.items.some((item) => item.effectiveAfter !== undefined)) {
         throw new WriteJournalError('invalid-settle-intent', `settle intent '${entry.opId}' extends with effective after values but its open record predates afterVersion ${SETTLE_INTENT_AFTER_VERSION}`)
       }
-      open.set(entry.opId, { ...current, items: mergeSettleIntentItems(current.items, entry.items) })
+      open.set(entry.opId, { ...current, items: mergeSettleIntentItems(entry.opId, current.items, entry.items) })
       continue
     }
     if (entry.phase === 'decide') {
@@ -256,9 +256,13 @@ export function foldSettleIntents(events: readonly unknown[]): readonly SettleIn
  *
  * Legacy items keep append order. An item that carries `effectiveAfter` is a
  * value update for a name the batch already lists: it replaces the recorded
- * effective value in place so undo never sees an entry without `before`.
+ * effective value in place so undo never sees an entry without `before`. A
+ * value update for a name the batch never listed is damaged data, not a new
+ * item: pushing it would leave `before` absent, and an abort would then delete
+ * a key the batch never owned, so the fold refuses the record instead.
  */
 function mergeSettleIntentItems(
+  opId: string,
   current: readonly SettleIntentItem[],
   extension: readonly SettleIntentItem[],
 ): SettleIntentItem[] {
@@ -276,8 +280,10 @@ function mergeSettleIntentItems(
       }
     }
     if (index === -1) {
-      merged.push(item)
-      continue
+      throw new WriteJournalError(
+        'invalid-settle-intent',
+        `settle intent '${opId}' extends with an effective after value for unlisted name '${item.name}'`,
+      )
     }
     merged[index] = { ...merged[index]!, effectiveAfter: item.effectiveAfter }
   }

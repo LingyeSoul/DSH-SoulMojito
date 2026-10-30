@@ -515,6 +515,45 @@ describe('body floor locators', () => {
     expect(chat).toEqual(snapshot)
   })
 
+  it('refuses a duplicated body message id on the write path and bounds the listed indices', () => {
+    const chat = bindBodyGroup(makeAssistantChat('message-1', 'original body'), 'group-1')
+    for (let stray = 0; stray < 3; stray += 1) {
+      chat.messages.push({
+        name: 'ExampleCard',
+        is_user: false,
+        is_system: false,
+        send_date: SEND_DATE,
+        mes: `stray body ${stray}`,
+        extra: { agentTavern: { messageId: 'message-1', bodyGroupId: `stray-${stray}` } },
+      })
+    }
+    const snapshot = structuredClone(chat)
+
+    // The write path refuses a duplicated message id just like the read path;
+    // the index list stays bounded so a damaged chat cannot amplify into
+    // checkpoints, HTTP bodies and logs.
+    const message = captureError(() => findBodyFloorIndexByMessageId(chat, 'message-1'))
+    expect(message.code).toBe('body-group-mismatch')
+    expect(message.message).toContain("body message 'message-1' matches 4 chat floors (1, 2, 3 and 1 more)")
+    expect(message.message).not.toContain('(1, 2, 3, 4')
+    expectErrorCode(() => locateBodyFloor(chat, 'missing-group', 'message-1'), 'body-group-mismatch')
+
+    const grouped = bindBodyGroup(makeAssistantChat('message-1', 'original body'), 'group-1')
+    for (let stray = 0; stray < 4; stray += 1) {
+      grouped.messages.push({
+        name: 'ExampleCard',
+        is_user: false,
+        is_system: false,
+        send_date: SEND_DATE,
+        mes: `stray body ${stray}`,
+        extra: { agentTavern: { bodyGroupId: 'group-1' } },
+      })
+    }
+    const group = captureError(() => findBodyFloorIndexByGroupId(grouped, 'group-1'))
+    expect(group.message).toContain("body group 'group-1' matches 5 chat floors (1, 2, 3 and 2 more)")
+    expect(chat).toEqual(snapshot)
+  })
+
   it('throws when a group cannot be located by id', () => {
     expectErrorCode(
       () => locateBodyFloor(makeAssistantChat('message-1', 'original body'), 'group-1', undefined),

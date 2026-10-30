@@ -1084,6 +1084,41 @@ describe('settle intents', () => {
     expect(foldSettleIntents([...events, { seq: 3, type: SETTLE_INTENT_EVENT_TYPE, data: commit }])).toEqual([])
   })
 
+  it('merges an effective after value into its listed item and rejects one for an unlisted name', () => {
+    const listed = {
+      ...settleIntentFixture('settle-extend-effective', [{ name: 'mood', before: 'calm', after: 'alert' }]),
+      afterVersion: 2,
+    }
+    const update: SettleIntentExtendEntry = {
+      kind: 'settle-intent',
+      phase: 'extend',
+      opId: listed.opId,
+      sessionId: AGENT_ID,
+      at: CREATED_AT,
+      items: [{ name: 'mood', before: 'alert', after: 'watched', effectiveAfter: 'watched' }],
+    }
+    expect(foldSettleIntents(settleEventsOf(listed, update))).toEqual([
+      { ...listed, items: [{ name: 'mood', before: 'calm', after: 'alert', effectiveAfter: 'watched' }] },
+    ])
+
+    // A value update for a name the batch never listed is damaged data, not a
+    // new item: pushing it would leave `before` absent and an abort would then
+    // delete a key the batch never owned.
+    const unlisted = {
+      ...settleIntentFixture('settle-extend-unknown', [{ name: 'mood', before: 'calm', after: 'alert' }]),
+      afterVersion: 2,
+    }
+    const stray: SettleIntentExtendEntry = {
+      kind: 'settle-intent',
+      phase: 'extend',
+      opId: unlisted.opId,
+      sessionId: AGENT_ID,
+      at: CREATED_AT,
+      items: [{ name: 'ghost', after: 1, effectiveAfter: 2 }],
+    }
+    expect(() => foldSettleIntents(settleEventsOf(unlisted, stray))).toThrow(/unlisted name 'ghost'/)
+  })
+
   it('attaches a decide record to its open intent without reordering the items', () => {
     const open = settleIntentFixture('settle-decide', [
       { name: 'mood', before: 'calm', after: 'alert' },

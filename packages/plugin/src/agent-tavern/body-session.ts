@@ -457,7 +457,9 @@ export function createBodySessionFactsSource(session: BodySessionLike): BodySess
   }
 
   const factsOf = (messageId: string, groupHint: string | undefined): BodySessionFacts => {
-    const key = `${messageId}\u0000${groupHint ?? ''}`
+    // The length prefix keeps the `\u0000` pair injective: without it the ids
+    // ('a\u0000b', undefined) and ('a', 'b') would share one memo key.
+    const key = `${messageId.length}\u0000${messageId}\u0000${groupHint ?? ''}`
     const cached = facts.get(key)
     if (cached !== undefined) return cached
 

@@ -141,7 +141,7 @@ export async function projectBodyEvent(
       ...(data.feedback === undefined ? {} : { feedback: data.feedback }),
     }
     await mutateBodyChat(store, binding, { seq: event.seq, groupId: data.groupId }, (chat) => {
-      const adopted = adoptImportedAnchorFloor(chat, session, data.groupId, projected.anchorMessageId)
+      const adopted = adoptImportedAnchorFloor(chat, session, data.groupId, projected.anchorMessageId, event.seq)
       return projectCandidateToChat(adopted, character?.card, input, projected)
     })
     return
@@ -151,7 +151,7 @@ export async function projectBodyEvent(
     assertSelectPreState(session, data, event.seq)
     const projected = requireProjectedLedger(ledger, event.seq, data.groupId)
     await mutateBodyChat(store, binding, { seq: event.seq, groupId: data.groupId }, (chat) => applySelectToChat(
-      adoptImportedAnchorFloor(chat, session, data.groupId, projected.anchorMessageId),
+      adoptImportedAnchorFloor(chat, session, data.groupId, projected.anchorMessageId, event.seq),
       {
         groupId: data.groupId,
         index: data.index,
@@ -183,7 +183,7 @@ export async function projectBodyEvent(
     }
     const at = eventDate(event.time, event.seq, event.type)
     await mutateBodyChat(store, binding, { seq: event.seq, groupId: data.groupId }, (chat) => applyCandidateEditToChat(
-      adoptImportedAnchorFloor(chat, session, data.groupId, projected.anchorMessageId),
+      adoptImportedAnchorFloor(chat, session, data.groupId, projected.anchorMessageId, event.seq),
       character.card,
       {
         ledger: projected,
@@ -202,7 +202,7 @@ export async function projectBodyEvent(
   assertRestorePreState(session, data, event.seq)
   const projected = requireProjectedLedger(ledger, event.seq, data.groupId)
   await mutateBodyChat(store, binding, { seq: event.seq, groupId: data.groupId }, (chat) => applyRestoreToChat(
-    adoptImportedAnchorFloor(chat, session, data.groupId, projected.anchorMessageId),
+    adoptImportedAnchorFloor(chat, session, data.groupId, projected.anchorMessageId, event.seq),
     {
       groupId: data.groupId,
       index: data.index,
@@ -250,11 +250,12 @@ function adoptImportedAnchorFloor(
   session: HostSessionLog,
   groupId: string,
   anchorMessageId: string | undefined,
+  uptoSeq: number,
 ): ChatLogIR {
   if (anchorMessageId === undefined) return chat
   const sessionId = typeof session.id === 'string' && session.id !== '' ? session.id : undefined
   if (sessionId === undefined) return chat
-  const anchorText = importedMirrorAnchorText(session, anchorMessageId)
+  const anchorText = importedMirrorAnchorText(session, anchorMessageId, uptoSeq)
   if (anchorText === undefined) return chat
 
   try {
@@ -274,12 +275,19 @@ function adoptImportedAnchorFloor(
  *
  * The text is the adoption witness: the chosen chat floor must carry the same
  * text, otherwise it is not the mirror of this anchor and adopting it would
- * bind the body group to the wrong floor.
+ * bind the body group to the wrong floor. The witness is bounded at the body
+ * event being projected (`uptoSeq`): a duplicate mirror event logged later
+ * must not silently replace the text the projection should compare against.
  */
-function importedMirrorAnchorText(session: HostSessionLog, anchorMessageId: string): string | undefined {
+function importedMirrorAnchorText(
+  session: HostSessionLog,
+  anchorMessageId: string,
+  uptoSeq: number,
+): string | undefined {
   let found: BodyProjectionEvent | undefined
   for (const event of sessionEvents(session) as readonly BodyProjectionEvent[]) {
     if (event.type !== 'assistant/message') continue
+    if (event.seq > uptoSeq) continue
     const message = plainObjectRecord(plainObjectRecord(event.data)?.['message'])
     if (message?.['id'] !== anchorMessageId) continue
     if (found === undefined || event.seq >= found.seq) found = event

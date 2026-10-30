@@ -369,9 +369,15 @@ export function buildBodyView(input: BodyViewInput): BodyView {
   const editGate = input.readDetail ?? input.canEditDetail ?? input.editDetail
   const baseEditable = baseReason === undefined && !hidden && count > 0
   const canEdit = baseEditable && editGate === undefined
+  // A degraded read (ambiguous or unreadable floor binding) closes
+  // regeneration too: the target the runtime would regenerate against is a
+  // guess, and a failure mid-flight would leave its restore pending. Receipt
+  // verdicts (`editDetail`) stay regenerate-compatible — the runtime's own
+  // regenerate preflight enforces them and reports its own 409.
   const canRegenerate = baseReason === undefined
     && !hidden
     && count > 0
+    && input.readDetail === undefined
     && input.agent !== undefined
     && canAdvanceHostTurnBase(input.agent)
     && (!input.historicalMvuState || input.writeRollbackAvailable)

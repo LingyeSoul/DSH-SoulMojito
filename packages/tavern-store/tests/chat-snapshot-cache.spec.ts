@@ -10,7 +10,7 @@
  * cached.
  */
 import { promises as fsPromises } from 'node:fs'
-import { mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
+import { mkdtemp, rename, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -182,15 +182,91 @@ describe('getChatSnapshot cache', () => {
       await store.getChatSnapshot(CHARACTER, chatId)
       await store.getChatSnapshot(CHARACTER, chatId)
       expect(store.chatSnapshotCacheStats()).toEqual({ hits: 1, misses: 1, size: 1 })
+      const file = path.join(dir, 'chats', CHARACTER, chatId)
 
-      // Same serialized byte length: an explicit invalidation, not the size
-      // change, has to make the next read return the new body.
-      await store.saveChat(CHARACTER, chatId, chatLog('bbbb'), revision)
+      // Pin the explicit invalidation itself: on filesystems where the atomic
+      // tmp+rename replacement already changes every fingerprint term, the
+      // behavioral assertion below would stay green even without the call.
+      const invalidate = vi.spyOn(
+        store as unknown as { invalidateChatSnapshot: (file: string) => void },
+        'invalidateChatSnapshot',
+      )
+      try {
+        // Same serialized byte length: an explicit invalidation, not the size
+        // change, has to make the next read return the new body.
+        await store.saveChat(CHARACTER, chatId, chatLog('bbbb'), revision)
+        expect(invalidate).toHaveBeenCalledWith(file)
+      } finally {
+        invalidate.mockRestore()
+      }
 
       const after = await store.getChatSnapshot(CHARACTER, chatId)
       expect(after?.chat.messages[0]?.mes).toBe('bbbb')
       expect(after?.revision).not.toBe(revision)
       expect(store.chatSnapshotCacheStats()).toEqual({ hits: 1, misses: 2, size: 1 })
+    })
+  })
+
+  it('still yields undefined when the file vanishes between stat and read', async () => {
+    await withStore(async (store, dir) => {
+      const chatId = 'vanishing.jsonl'
+      await seedChat(store, dir, chatId, chatLog('kept'))
+
+      // First read on a cold cache: `stat` succeeds, the read then sees the
+      // file gone. The read path's contract is `undefined` for a missing
+      // file, not a raw ENOENT.
+      const vanished = Object.assign(new Error("ENOENT: no such file or directory, open 'gone'"), {
+        code: 'ENOENT',
+      })
+      const readFile = vi.spyOn(fsPromises, 'readFile').mockRejectedValueOnce(vanished)
+      try {
+        expect(await store.getChatSnapshot(CHARACTER, chatId)).toBeUndefined()
+      } finally {
+        readFile.mockRestore()
+      }
+    })
+  })
+
+  it('keeps an array-shaped legacy line an array across a cache hit', async () => {
+    await withStore(async (store, dir) => {
+      const chatId = 'array-line.jsonl'
+      const file = path.join(dir, 'chats', CHARACTER, chatId)
+      await fsPromises.mkdir(path.dirname(file), { recursive: true })
+      await writeFile(
+        file,
+        `${JSON.stringify({ user_name: 'u', character_name: 'c', chat_metadata: {} })}\n${JSON.stringify(['legacy', 'row'])}\n`,
+      )
+
+      const cold = await store.getChatSnapshot(CHARACTER, chatId)
+      expect(Array.isArray(cold?.chat.messages[0])).toBe(true)
+
+      // The cached copy must not reshape the row: `Object.keys` on an array
+      // would turn the cache hit into a plain object with index keys.
+      const warm = await store.getChatSnapshot(CHARACTER, chatId)
+      expect(Array.isArray(warm?.chat.messages[0])).toBe(true)
+      expect(warm?.chat.messages[0]).toEqual(['legacy', 'row'])
+      expect(store.chatSnapshotCacheStats()).toMatchObject({ hits: 1, misses: 1, size: 1 })
+    })
+  })
+
+  it('re-parses when a replacement keeps size and mtime but not creation time', async () => {
+    await withStore(async (store, dir) => {
+      const chatId = 'ctime-replace.jsonl'
+      await seedChat(store, dir, chatId, chatLog('aaaa'))
+      const file = path.join(dir, 'chats', CHARACTER, chatId)
+      expect((await store.getChatSnapshot(CHARACTER, chatId))?.chat.messages[0]?.mes).toBe('aaaa')
+
+      // A fresh file renames over the original (new inode / creation time),
+      // then size and mtime are pinned back: only the creation-time
+      // fingerprint term can still separate the two versions.
+      const before = await fsPromises.stat(file)
+      const bytes = await fsPromises.readFile(file, 'utf8')
+      const replacement = path.join(path.dirname(file), `${chatId}.replace.tmp`)
+      await writeFile(replacement, bytes.replace('aaaa', 'bbbb'))
+      await rename(replacement, file)
+      await utimes(file, before.atime, new Date(before.mtimeMs))
+
+      expect((await store.getChatSnapshot(CHARACTER, chatId))?.chat.messages[0]?.mes).toBe('bbbb')
     })
   })
 })
