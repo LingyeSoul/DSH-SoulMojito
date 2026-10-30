@@ -85,6 +85,17 @@ export type ImChannelStatus =
   | { state: 'paused'; reason: string; until?: number }
   | { state: 'error'; message: string }
 
+/** 扫码绑定的相位（提案 0024 §4.1）：面板只读投影，协议跑在插件侧。 */
+export type ImBindPhase = 'idle' | 'waiting' | 'saving' | 'failed'
+
+export interface ImBindStatus {
+  phase: ImBindPhase
+  /** `waiting` 相位里二维码链接就绪后出现；刷新二维码时会被清掉。 */
+  url?: string
+  /** `failed` 相位的可读原因。 */
+  reason?: string
+}
+
 /** A protocol adapter. Lifecycle is owned by `im/runtime.ts`. */
 export interface ImChannel {
   readonly channel: ImChannelId

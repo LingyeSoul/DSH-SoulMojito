@@ -2705,8 +2705,8 @@ function cloneChatValue(value) {
 }
 async function statChatFile(file) {
   try {
-    const stat2 = await fs2.stat(file);
-    return { size: stat2.size, mtimeMs: stat2.mtimeMs, ctimeMs: stat2.ctimeMs, ino: stat2.ino };
+    const stat3 = await fs2.stat(file);
+    return { size: stat3.size, mtimeMs: stat3.mtimeMs, ctimeMs: stat3.ctimeMs, ino: stat3.ino };
   } catch (cause) {
     if (cause.code === "ENOENT") return void 0;
     throw cause;
@@ -2834,8 +2834,8 @@ var init_store = __esm({
           hash.update(`${dir}
 `);
           for (const name2 of (await this.listDir(dir)).sort()) {
-            const stat2 = await fs2.stat(path.join(this.root, dir, name2)).catch(() => void 0);
-            hash.update(`${name2}\0${stat2 === void 0 ? "missing" : `${stat2.size}\0${stat2.mtimeMs}`}
+            const stat3 = await fs2.stat(path.join(this.root, dir, name2)).catch(() => void 0);
+            hash.update(`${name2}\0${stat3 === void 0 ? "missing" : `${stat3.size}\0${stat3.mtimeMs}`}
 `);
           }
         }
@@ -3108,9 +3108,9 @@ var init_store = __esm({
         const fingerprints = [];
         for (const file of await this.listDir("worlds")) {
           if (!file.endsWith(".json")) continue;
-          const stat2 = await fs2.stat(path.join(this.root, "worlds", file)).catch(() => void 0);
-          if (stat2 === void 0) continue;
-          fingerprints.push({ name: file.replace(/\.json$/, ""), size: stat2.size, mtimeMs: stat2.mtimeMs });
+          const stat3 = await fs2.stat(path.join(this.root, "worlds", file)).catch(() => void 0);
+          if (stat3 === void 0) continue;
+          fingerprints.push({ name: file.replace(/\.json$/, ""), size: stat3.size, mtimeMs: stat3.mtimeMs });
         }
         return fingerprints.sort((left, right) => left.name.localeCompare(right.name));
       }
@@ -10184,7 +10184,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("2c1cfa4") : void 0;
+  const commit = true ? normalizeCommit("f5a9b6f") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -13872,9 +13872,9 @@ function copyShippedFiles(sourceDir, targetDir) {
   for (const entry of shippedEntries(sourceDir)) {
     const from = join12(sourceDir, entry);
     if (!existsSync2(from)) continue;
-    const stat2 = statSyncSafe(from);
-    if (stat2 === null) continue;
-    if (!stat2.isDirectory()) {
+    const stat3 = statSyncSafe(from);
+    if (stat3 === null) continue;
+    if (!stat3.isDirectory()) {
       replaceFileAtomic(from, join12(targetDir, entry));
       copied.push(entry);
       continue;
@@ -13906,9 +13906,9 @@ function listFiles(root) {
     const current = pending.pop();
     for (const entry of readdirSyncSafe(current)) {
       const full = join12(current, entry);
-      const stat2 = statSyncSafe(full);
-      if (stat2 === null) continue;
-      if (stat2.isDirectory()) pending.push(full);
+      const stat3 = statSyncSafe(full);
+      if (stat3 === null) continue;
+      if (stat3.isDirectory()) pending.push(full);
       else found.push(full);
     }
   }
@@ -18306,13 +18306,13 @@ function seedJsrMvuVariables(card, variables2) {
     variables2["initialized_lorebooks"] = true;
     changed = true;
   }
-  const stat2 = plainObject(variables2["stat_data"]);
-  if (stat2 === void 0) {
+  const stat3 = plainObject(variables2["stat_data"]);
+  if (stat3 === void 0) {
     variables2["stat_data"] = { \u7CFB\u7EDF\u72B6\u6001: { \u4E3B\u89D2\u521B\u5EFA\u5B8C\u6BD5: false } };
     changed = true;
-  } else if (Object.keys(stat2).length === 0) {
-    stat2["\u7CFB\u7EDF\u72B6\u6001"] = { \u4E3B\u89D2\u521B\u5EFA\u5B8C\u6BD5: false };
-    variables2["stat_data"] = stat2;
+  } else if (Object.keys(stat3).length === 0) {
+    stat3["\u7CFB\u7EDF\u72B6\u6001"] = { \u4E3B\u89D2\u521B\u5EFA\u5B8C\u6BD5: false };
+    variables2["stat_data"] = stat3;
     changed = true;
   }
   return changed;
@@ -18327,20 +18327,20 @@ function applyUpdateVariableToChat(card, chat, text) {
   const block = parseUpdateBlock(text);
   const failures = [];
   let applied = 0;
-  let stat2 = plainObject(variables2["stat_data"]) ?? {};
-  const previousStat = structuredClone(stat2);
+  let stat3 = plainObject(variables2["stat_data"]) ?? {};
+  const previousStat = structuredClone(stat3);
   if (block !== void 0) {
     variables2["previous_stat_data"] = previousStat;
     if (block.error !== void 0) {
       failures.push(block.error);
     } else if (block.ops !== void 0) {
-      const result = applyLenientPatch(stat2, block.ops);
-      stat2 = result.value;
+      const result = applyLenientPatch(stat3, block.ops);
+      stat3 = result.value;
       applied = result.applied;
       failures.push(...result.failures);
     }
   }
-  variables2["stat_data"] = stat2;
+  variables2["stat_data"] = stat3;
   variables2["initialized_lorebooks"] = true;
   let nextText = text;
   if (cardUsesStatusPlaceholder(card) && !nextText.includes(STATUS_PLACEHOLDER)) {
@@ -18352,17 +18352,17 @@ ${STATUS_PLACEHOLDER}`;
     found: block !== void 0,
     applied,
     failures,
-    statData: stat2
+    statData: stat3
   };
 }
 function messageStatVariables(chat, message) {
-  const stat2 = readStatData(chat);
-  if (stat2 === void 0) return message;
+  const stat3 = readStatData(chat);
+  if (stat3 === void 0) return message;
   return {
     ...message,
     variables: {
       ...plainObject(message.variables) ?? {},
-      stat_data: structuredClone(stat2)
+      stat_data: structuredClone(stat3)
     }
   };
 }
@@ -38208,11 +38208,11 @@ var GameRegistry = class _GameRegistry {
     const viewProblem = staticViewCheck(viewHtml10);
     if (viewProblem !== void 0) return broken(check.manifest, `view.html ${viewProblem}`);
     const enginePath = join18(directory, "engine.mjs");
-    const stat2 = await fs17.stat(enginePath).catch(() => void 0);
-    if (stat2?.isFile() !== true) return broken(check.manifest, "engine.mjs \u7F3A\u5931\uFF08\u6807\u51C6\u6E38\u620F\u5305\u5FC5\u987B\u4E09\u4EF6\u5957\u9F50\u5168\uFF09");
+    const stat3 = await fs17.stat(enginePath).catch(() => void 0);
+    if (stat3?.isFile() !== true) return broken(check.manifest, "engine.mjs \u7F3A\u5931\uFF08\u6807\u51C6\u6E38\u620F\u5305\u5FC5\u987B\u4E09\u4EF6\u5957\u9F50\u5168\uFF09");
     let imported;
     try {
-      imported = await import(`${pathToFileURL4(enginePath).href}?v=${stat2.mtimeMs}`);
+      imported = await import(`${pathToFileURL4(enginePath).href}?v=${stat3.mtimeMs}`);
     } catch (cause) {
       return broken(check.manifest, `engine.mjs \u5BFC\u5165\u5931\u8D25: ${cause instanceof Error ? cause.message : String(cause)}`);
     }
@@ -38235,8 +38235,8 @@ var GameRegistry = class _GameRegistry {
   async installFromPath(sourcePath, force = false) {
     const source = resolve4(sourcePath);
     if (!existsSync3(source)) throw new Error(`\u6E38\u620F\u5305\u76EE\u5F55\u4E0D\u5B58\u5728: ${sourcePath}`);
-    const stat2 = await fs17.stat(source);
-    if (!stat2.isDirectory()) throw new Error(`\u6E38\u620F\u5305\u8DEF\u5F84\u5FC5\u987B\u662F\u76EE\u5F55: ${sourcePath}`);
+    const stat3 = await fs17.stat(source);
+    if (!stat3.isDirectory()) throw new Error(`\u6E38\u620F\u5305\u8DEF\u5F84\u5FC5\u987B\u662F\u76EE\u5F55: ${sourcePath}`);
     let raw;
     try {
       raw = JSON.parse(await fs17.readFile(join18(source, "game.json"), "utf8"));
@@ -38482,8 +38482,8 @@ var GameSessionStore = class _GameSessionStore {
     const hash = createHash10("sha256");
     const names = (await fs18.readdir(this.sessionsRoot).catch(() => [])).filter((name2) => name2.endsWith(".json")).sort();
     for (const name2 of names) {
-      const stat2 = await fs18.stat(join19(this.sessionsRoot, name2)).catch(() => void 0);
-      hash.update(`${name2}\0${stat2 === void 0 ? "missing" : `${stat2.size}\0${stat2.mtimeMs}`}
+      const stat3 = await fs18.stat(join19(this.sessionsRoot, name2)).catch(() => void 0);
+      hash.update(`${name2}\0${stat3 === void 0 ? "missing" : `${stat3.size}\0${stat3.mtimeMs}`}
 `);
     }
     return hash.digest("base64url");
@@ -41763,7 +41763,7 @@ init_src();
 import { createReadStream, createWriteStream } from "node:fs";
 import { mkdtemp, rm as rm2 } from "node:fs/promises";
 import { tmpdir as tmpdir4 } from "node:os";
-import { join as join23 } from "node:path";
+import { join as join24 } from "node:path";
 import { pipeline } from "node:stream/promises";
 
 // packages/tavern-frontend-storage/src/idb-store.ts
@@ -45041,9 +45041,9 @@ async function replaceMvuData(db, character, chatId, body) {
   return serializeSessionWrite(chatWriteKey(character, chatId), () => retryChatWrite(async () => {
     const snapshot2 = await requireChat(db, character, chatId);
     const chat = snapshot2.chat;
-    const stat2 = requireObject2(body?.statData, "statData");
+    const stat3 = requireObject2(body?.statData, "statData");
     const chatVariables2 = ensureChatVariables(chat);
-    chatVariables2["stat_data"] = stat2;
+    chatVariables2["stat_data"] = stat3;
     chatVariables2["initialized_lorebooks"] = true;
     let messageId = -1;
     if (chat.messages.length > 0) {
@@ -45052,18 +45052,18 @@ async function replaceMvuData(db, character, chatId, body) {
       if (message === void 0) throw new Error(`message_id ${messageId} is out of range`);
       message.variables = {
         ...plainObject6(message.variables) ?? {},
-        stat_data: cloneJson(stat2)
+        stat_data: cloneJson(stat3)
       };
     }
     const revision = await persistChat(db, character, chatId, chat, snapshot2.revision);
     try {
       const store5 = await variables();
       const existing = await store5.get("chat", chatId, "stat_data");
-      await store5.set("chat", chatId, "stat_data", jsonValueOf2(stat2), existing?.revision);
+      await store5.set("chat", chatId, "stat_data", jsonValueOf2(stat3), existing?.revision);
     } catch (error) {
       console.warn(`dsh-soulmojito: MVU chat-scope mirror skipped: ${error instanceof Error ? error.message : String(error)}`);
     }
-    return { stat_data: cloneJson(stat2), messageId, revision };
+    return { stat_data: cloneJson(stat3), messageId, revision };
   }));
 }
 async function mirrorChatScope(chatId, tree) {
@@ -47120,6 +47120,595 @@ function messageOf6(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+// packages/plugin/src/im/qq/bind.ts
+var QQBindError = class extends Error {
+  code;
+  constructor(code, message) {
+    super(message);
+    this.name = "QQBindError";
+    this.code = code;
+  }
+};
+function createQQBinding(options) {
+  let phase = { phase: "idle" };
+  let session;
+  function status2() {
+    return { ...phase };
+  }
+  async function startQrConnectSession(callbacks, start) {
+    if (session !== void 0) {
+      throw new QQBindError("QQ_BIND_BUSY", "a QQ QR binding session is already running; cancel it before starting another one");
+    }
+    if (start.signal.aborted) {
+      throw new QQBindError("QQ_BIND_ABORTED", "the QQ QR binding cannot start: the runtime is already shutting down");
+    }
+    const controller = new AbortController();
+    const current = { controller, stop: () => {
+    } };
+    session = current;
+    phase = { phase: "waiting" };
+    let connector;
+    try {
+      connector = await options.connect();
+    } catch (error) {
+      if (session !== current) return status2();
+      session = void 0;
+      phase = { phase: "failed", reason: messageOf7(error) };
+      throw error;
+    }
+    if (session !== current) return status2();
+    if (start.signal.aborted) {
+      session = void 0;
+      phase = { phase: "idle" };
+      throw new QQBindError("QQ_BIND_ABORTED", "the QQ QR binding cannot start: the runtime is already shutting down");
+    }
+    let stop;
+    try {
+      stop = connector({
+        onQrDisplayed: (url) => {
+          if (session !== current) return;
+          phase = { phase: "waiting", url };
+          callbacks.onQrDisplayed?.(url);
+        },
+        onQrExpired: () => {
+          if (session !== current) return;
+          phase = { phase: "waiting" };
+        },
+        onSuccess: (credentials) => {
+          if (session !== current) return;
+          phase = { phase: "saving" };
+          void Promise.resolve(callbacks.onSuccess(credentials)).then(
+            () => {
+              if (session !== current) return;
+              session = void 0;
+              phase = { phase: "idle" };
+            },
+            (error) => {
+              if (session !== current) return;
+              session = void 0;
+              const reason = messageOf7(error);
+              phase = { phase: "failed", reason };
+              callbacks.onFailure?.(error instanceof Error ? error : new Error(reason));
+            }
+          );
+        },
+        onFailure: (error) => {
+          if (session !== current) return;
+          session = void 0;
+          phase = { phase: "failed", reason: error.message };
+          callbacks.onFailure?.(error);
+        }
+      }, {
+        signal: controller.signal,
+        source: start.source,
+        // 官方 SDK 默认把二维码 URL 打到宿主控制台；二维码只经 onQrDisplayed 交给面板。
+        displayQrCodeToConsole: false
+      });
+    } catch (error) {
+      session = void 0;
+      phase = { phase: "failed", reason: messageOf7(error) };
+      throw error;
+    }
+    current.stop = stop;
+    return status2();
+  }
+  function cancel() {
+    const current = session;
+    if (current === void 0) return status2();
+    session = void 0;
+    phase = { phase: "idle" };
+    current.controller.abort();
+    current.stop();
+    return status2();
+  }
+  return {
+    startQrConnect: startQrConnectSession,
+    cancel,
+    status: status2,
+    dispose: () => {
+      cancel();
+    }
+  };
+}
+function messageOf7(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+// packages/plugin/src/im/qq/channel.ts
+import { randomUUID as randomUUID12 } from "node:crypto";
+var START_TIMEOUT_MS = 3e4;
+var OPENID_LABEL_LENGTH = 8;
+var PASSIVE_REPLY_LIMIT = 4;
+var PASSIVE_USAGE_ENTRIES = 200;
+var QQChannelError = class extends Error {
+  code;
+  constructor(code, message, options) {
+    super(message, options);
+    this.name = "QQChannelError";
+    this.code = code;
+  }
+};
+function createStartupGate() {
+  let resolveGate;
+  let rejectGate;
+  let settled = false;
+  const promise = new Promise((resolve7, reject) => {
+    resolveGate = resolve7;
+    rejectGate = reject;
+  });
+  return {
+    promise,
+    get settled() {
+      return settled;
+    },
+    settle(error) {
+      if (settled) return;
+      settled = true;
+      if (error === void 0) resolveGate?.();
+      else rejectGate?.(error);
+    }
+  };
+}
+var QQChannel = class {
+  channel = "qq";
+  accountId;
+  appId;
+  appSecret;
+  router;
+  groupRequireMention;
+  createBot;
+  markdownSupport;
+  now;
+  logger;
+  bot;
+  ready;
+  starting = false;
+  onlineSince;
+  lastError;
+  signal;
+  abortListener;
+  /** 同一账号的入站按到达顺序串行：群聊并发事件不得乱序，去重才可靠。 */
+  inboundChain = Promise.resolve();
+  /** 同一账号的出站按整轮串行：两轮回复并发时不得出现 A1,B1,A2,B2 的交错碎片。 */
+  sendChain = Promise.resolve();
+  /** 每个被动回复 msg_id 已用掉的条数：额度跨 send 累计，不是每次 send 归零。 */
+  passiveUsed = /* @__PURE__ */ new Map();
+  constructor(options) {
+    this.appId = requireSecret(options.secret, "appId", options.accountId);
+    this.appSecret = requireSecret(options.secret, "appSecret", options.accountId);
+    this.accountId = options.accountId;
+    this.router = options.router;
+    this.groupRequireMention = options.groupRequireMention;
+    this.createBot = options.createBot;
+    this.markdownSupport = options.markdownSupport;
+    this.now = options.now;
+    this.logger = options.logger;
+  }
+  async start(signal) {
+    if (this.bot !== void 0) return;
+    if (signal.aborted) {
+      throw new QQChannelError("QQ_CLOSED", `qq account '${this.accountId}' cannot start: signal is already aborted`);
+    }
+    const bot = this.createBot({
+      appId: this.appId,
+      appSecret: this.appSecret,
+      accountId: this.accountId,
+      transport: "websocket",
+      logger: qqLoggerOf(this.logger)
+    });
+    this.starting = true;
+    this.lastError = void 0;
+    this.signal = signal;
+    this.abortListener = () => {
+      void this.stop();
+    };
+    signal.addEventListener("abort", this.abortListener, { once: true });
+    this.bot = bot;
+    const gate = createStartupGate();
+    this.ready = gate;
+    this.attach(bot, gate);
+    try {
+      void bot.start().then(
+        () => {
+          this.failStartup(bot, gate, "the QQ gateway closed before the bot became ready");
+        },
+        (error) => {
+          this.failStartup(bot, gate, `the QQ gateway refused to start: ${messageOf8(error)}`);
+          this.noteFailure(bot, `QQ gateway start failed: ${messageOf8(error)}`);
+        }
+      );
+      await withTimeout2(gate.promise, START_TIMEOUT_MS, `qq account '${this.accountId}' was not ready within ${START_TIMEOUT_MS}ms`);
+    } catch (error) {
+      const failure = error instanceof QQChannelError ? error : new QQChannelError("QQ_START_FAILED", `qq account '${this.accountId}' failed to start: ${messageOf8(error)}`, { cause: error });
+      this.dropStartup(bot, failure.message);
+      throw failure;
+    }
+  }
+  async stop() {
+    const bot = this.bot;
+    const gate = this.ready;
+    this.bot = void 0;
+    this.ready = void 0;
+    this.starting = false;
+    this.onlineSince = void 0;
+    this.lastError = void 0;
+    this.detachAbort();
+    gate?.settle(new QQChannelError("QQ_CLOSED", `qq account '${this.accountId}' stopped before it became ready`));
+    bot?.stop();
+  }
+  status() {
+    if (this.lastError !== void 0) return { state: "error", message: this.lastError };
+    if (this.starting) return { state: "starting" };
+    if (this.onlineSince !== void 0) return { state: "online", since: this.onlineSince };
+    return { state: "idle" };
+  }
+  async send(target, parts) {
+    if (target.channel !== "qq") {
+      throw new QQChannelError("QQ_BAD_TARGET", `qq channel cannot send to channel '${target.channel}'`);
+    }
+    if (target.accountId !== this.accountId) {
+      throw new QQChannelError(
+        "QQ_BAD_TARGET",
+        `qq account '${target.accountId}' cannot send through account '${this.accountId}'`
+      );
+    }
+    if (parts.length === 0) return { parts: 0, at: this.now() };
+    const queued = this.sendChain.then(() => this.sendParts(target, parts));
+    this.sendChain = queued.then(() => void 0, () => void 0);
+    return queued;
+  }
+  async sendParts(target, parts) {
+    const bot = this.bot;
+    if (bot === void 0) {
+      throw new QQChannelError("QQ_CLOSED", `qq account '${this.accountId}' is not connected; the gateway must be ready before replies can be delivered`);
+    }
+    const reply = replyTargetOf(target);
+    let messageId;
+    let passiveUsed = reply.msgId === void 0 ? PASSIVE_REPLY_LIMIT : this.passiveUsed.get(reply.msgId) ?? 0;
+    for (const part of parts) {
+      const passive = reply.msgId !== void 0 && passiveUsed < PASSIVE_REPLY_LIMIT;
+      if (passive) passiveUsed += 1;
+      const partTarget = passive ? reply : { scope: reply.scope, targetId: reply.targetId };
+      const id = await this.sendPart(bot, partTarget, target, part);
+      if (id !== void 0) messageId = id;
+    }
+    if (reply.msgId !== void 0) this.rememberPassiveUsage(reply.msgId, passiveUsed);
+    return { parts: parts.length, at: this.now(), ...messageId === void 0 ? {} : { messageId } };
+  }
+  /** 记账并限制表大小：msg_id 是用完即弃的，长跑进程不能无限增长。 */
+  rememberPassiveUsage(msgId, used) {
+    this.passiveUsed.delete(msgId);
+    this.passiveUsed.set(msgId, used);
+    while (this.passiveUsed.size > PASSIVE_USAGE_ENTRIES) {
+      const oldest = this.passiveUsed.keys().next();
+      if (oldest.done === true) return;
+      this.passiveUsed.delete(oldest.value);
+    }
+  }
+  /**
+   * 单条发送失败必须上抛：静默吞掉会让「模型答了但用户没收到」变成不可见的故障。
+   * markdown 能力是账号级配置：没有该能力的机器人发 msg_type=2 会被平台拒绝，
+   * 因此降级到 `sendText` 而不是让整轮回复失败（审查 P1-4）。
+   */
+  async sendPart(bot, reply, target, part) {
+    try {
+      const sent = this.markdownSupport ? await bot.sendMarkdown(reply, part.text) : await bot.sendText(reply, part.text);
+      return nonEmpty(sent.id);
+    } catch (error) {
+      throw new QQChannelError(
+        "QQ_SEND_FAILED",
+        `qq send part ${part.index + 1}/${part.total} to ${target.scope}/${target.peerId} failed: ${messageOf8(error)}`,
+        { cause: error }
+      );
+    }
+  }
+  attach(bot, gate) {
+    bot.on("ready", () => {
+      this.markOnline(bot, gate);
+    });
+    bot.on("resumed", () => {
+      this.markOnline(bot, gate);
+    });
+    bot.on("disconnected", (event) => {
+      this.onlineSince = void 0;
+      this.noteFailure(bot, `QQ gateway disconnected: ${describeDisconnect(event)}`);
+    });
+    bot.on("error", (error) => {
+      this.noteFailure(bot, `QQ channel error: ${messageOf8(error)}`);
+    });
+    bot.on("message", (_ctx, msg) => this.enqueue(msg));
+  }
+  markOnline(bot, gate) {
+    if (this.bot !== bot) return;
+    this.starting = false;
+    this.lastError = void 0;
+    this.onlineSince = this.now();
+    gate.settle(void 0);
+    this.logger?.info?.(`dsh-soulmojito im qq/${this.accountId}: gateway ready`);
+  }
+  noteFailure(bot, reason) {
+    if (this.bot !== bot) return;
+    this.lastError = reason;
+    this.logger?.warn?.(`dsh-soulmojito im qq/${this.accountId}: ${reason}`);
+  }
+  failStartup(bot, gate, reason) {
+    if (this.bot !== bot || gate.settled) return;
+    gate.settle(new QQChannelError("QQ_START_FAILED", `qq account '${this.accountId}' failed to start: ${reason}`));
+  }
+  dropStartup(bot, reason) {
+    if (this.bot === bot) {
+      this.bot = void 0;
+      this.ready = void 0;
+      this.starting = false;
+      this.onlineSince = void 0;
+      this.lastError = reason;
+      this.detachAbort();
+    }
+    bot.stop();
+  }
+  detachAbort() {
+    if (this.signal !== void 0 && this.abortListener !== void 0) {
+      this.signal.removeEventListener("abort", this.abortListener);
+    }
+    this.signal = void 0;
+    this.abortListener = void 0;
+  }
+  enqueue(msg) {
+    const next = this.inboundChain.then(() => this.deliver(msg));
+    this.inboundChain = next.catch((error) => {
+      this.logger?.warn?.(`dsh-soulmojito im qq/${this.accountId}: inbound message failed: ${messageOf8(error)}`);
+    });
+    return this.inboundChain;
+  }
+  async deliver(msg) {
+    if (msg.kind !== "c2c" && msg.kind !== "group") {
+      this.logger?.debug?.(`dsh-soulmojito im qq/${this.accountId}: ignored a ${msg.kind} message`);
+      return;
+    }
+    const inbound = this.inboundOf(msg);
+    if (inbound.scope === "group" && await this.groupRequireMention() && !qqWasMentioned(msg)) return;
+    await this.router.handle(inbound);
+  }
+  inboundOf(msg) {
+    const replyTarget = msg.replyTarget;
+    if (replyTarget === void 0 || replyTarget.scope !== "c2c" && replyTarget.scope !== "group") {
+      throw new QQChannelError("QQ_BAD_MESSAGE", `qq account '${this.accountId}' got a message without a usable replyTarget`);
+    }
+    const peerId = replyTarget.targetId.trim();
+    if (peerId === "") {
+      throw new QQChannelError("QQ_BAD_MESSAGE", `qq account '${this.accountId}' got a message with an empty replyTarget.targetId`);
+    }
+    const scope = replyTarget.scope === "group" ? "group" : "private";
+    const senderId = nonEmpty(msg.senderId) ?? peerId;
+    const senderName = nonEmpty(msg.senderName) ?? openidLabel(senderId);
+    const messageId = nonEmpty(msg.messageId);
+    const receivedAt = this.now();
+    const dedupeId = messageId ?? randomUUID12();
+    return {
+      channel: "qq",
+      accountId: this.accountId,
+      scope,
+      peerId,
+      senderId,
+      senderName,
+      text: typeof msg.content === "string" ? msg.content : "",
+      // 媒体（图片/语音/文件）留到 M5：本轮不下载、不上传，附件消息只按文本投递。
+      media: [],
+      // 被动回复锚点是本轮触发消息本身，不是它引用的消息。
+      ...messageId === void 0 ? {} : { replyTo: messageId },
+      dedupeKey: imDedupeKey("qq", this.accountId, scope, peerId, dedupeId),
+      receivedAt
+    };
+  }
+};
+function qqWasMentioned(msg) {
+  if (msg.rawEventType === "GROUP_AT_MESSAGE_CREATE") return true;
+  return Array.isArray(msg.mentions) && msg.mentions.some((entry) => entry?.is_you === true);
+}
+function replyTargetOf(target) {
+  return {
+    scope: target.scope === "group" ? "group" : "c2c",
+    targetId: target.peerId,
+    ...target.replyTo === void 0 ? {} : { msgId: target.replyTo }
+  };
+}
+function requireSecret(secret, key, accountId) {
+  const value = secret[key];
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new QQChannelError(
+      "QQ_BAD_SECRET",
+      `qq account '${accountId}' has no ${key}; secret.${key} must be a non-empty string`
+    );
+  }
+  return value.trim();
+}
+function openidLabel(openid) {
+  return openid.slice(0, OPENID_LABEL_LENGTH);
+}
+function nonEmpty(value) {
+  if (typeof value !== "string") return void 0;
+  const trimmed = value.trim();
+  return trimmed === "" ? void 0 : trimmed;
+}
+function describeDisconnect(event) {
+  return `code=${event.code} reason='${event.reason}' willReconnect=${event.willReconnect}`;
+}
+function qqLoggerOf(logger) {
+  return {
+    info: (message, meta) => {
+      logger?.info?.(message, meta);
+    },
+    warn: (message, meta) => {
+      logger?.warn?.(message, meta);
+    },
+    error: (message, meta) => {
+      logger?.error?.(message, meta);
+    },
+    debug: (message, meta) => {
+      logger?.debug?.(message, meta);
+    }
+  };
+}
+function withTimeout2(promise, timeoutMs, message) {
+  return new Promise((resolve7, reject) => {
+    const timer = setTimeout(() => {
+      reject(new QQChannelError("QQ_START_TIMEOUT", message));
+    }, timeoutMs);
+    timer.unref?.();
+    promise.then(
+      () => {
+        clearTimeout(timer);
+        resolve7();
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+function messageOf8(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+// packages/plugin/src/im/qq/sdk.ts
+init_dsh_home();
+import { stat as stat2 } from "node:fs/promises";
+import { join as join21 } from "node:path";
+import { pathToFileURL as pathToFileURL5 } from "node:url";
+var QQ_SDK_PACKAGE = "@tencent-connect/qqbot-nodejs";
+var QQ_CONNECTOR_PACKAGE = "@tencent-connect/qqbot-connector";
+var QQ_SDK_VERSION = "1.0.5";
+var QQ_CONNECTOR_VERSION = "1.2.0";
+var QQ_SDK_ENTRY = "dist/index.js";
+var QQ_CONNECTOR_ENTRY = "dist/esm/index.js";
+var QqRuntimeError = class extends Error {
+  code;
+  path;
+  constructor(code, message, path12, options) {
+    super(message, options);
+    this.name = "QqRuntimeError";
+    this.code = code;
+    this.path = path12;
+  }
+};
+function qqRuntimeRoot() {
+  return tavernDataRoot("im", "runtime");
+}
+function qqInstallCommand(root) {
+  return `cd "${root}" && pnpm add ${QQ_SDK_PACKAGE}@${QQ_SDK_VERSION} ${QQ_CONNECTOR_PACKAGE}@${QQ_CONNECTOR_VERSION}`;
+}
+async function qqRuntimeStatus() {
+  const root = qqRuntimeRoot();
+  const missing = [];
+  for (const dependency of [
+    { name: QQ_SDK_PACKAGE, entry: QQ_SDK_ENTRY, version: QQ_SDK_VERSION },
+    { name: QQ_CONNECTOR_PACKAGE, entry: QQ_CONNECTOR_ENTRY, version: QQ_CONNECTOR_VERSION }
+  ]) {
+    if (!await qqFileExists(join21(root, "node_modules", dependency.name, dependency.entry), root)) {
+      missing.push(`${dependency.name}@${dependency.version}`);
+    }
+  }
+  if (missing.length === 0) return { installed: true };
+  return {
+    installed: false,
+    reason: `QQ runtime packages are missing from ${root}: ${missing.join(", ")}. Install them with: ${qqInstallCommand(root)}`
+  };
+}
+async function loadQqSdk() {
+  const root = qqRuntimeRoot();
+  const entry = join21(root, "node_modules", QQ_SDK_PACKAGE, QQ_SDK_ENTRY);
+  const module = await qqImportRuntime(entry, QQ_SDK_PACKAGE, root);
+  const bot = module["QQBot"];
+  if (typeof bot !== "function") {
+    throw new QqRuntimeError(
+      "QQ_RUNTIME_INVALID",
+      `${QQ_SDK_PACKAGE} has no QQBot constructor at ${entry}; reinstall with: ${qqInstallCommand(root)}`,
+      entry
+    );
+  }
+  const msgType = module["MsgType"];
+  if (!qqIsRecord(msgType)) {
+    throw new QqRuntimeError(
+      "QQ_RUNTIME_INVALID",
+      `${QQ_SDK_PACKAGE} has no MsgType table at ${entry}; reinstall with: ${qqInstallCommand(root)}`,
+      entry
+    );
+  }
+  return { QQBot: bot, MsgType: msgType };
+}
+async function loadQqConnector() {
+  const root = qqRuntimeRoot();
+  const entry = join21(root, "node_modules", QQ_CONNECTOR_PACKAGE, QQ_CONNECTOR_ENTRY);
+  const module = await qqImportRuntime(entry, QQ_CONNECTOR_PACKAGE, root);
+  const startQrConnect = module["startQrConnect"];
+  if (typeof startQrConnect !== "function") {
+    throw new QqRuntimeError(
+      "QQ_RUNTIME_INVALID",
+      `${QQ_CONNECTOR_PACKAGE} has no startQrConnect() at ${entry}; reinstall with: ${qqInstallCommand(root)}`,
+      entry
+    );
+  }
+  return startQrConnect;
+}
+async function qqImportRuntime(entry, packageName, root) {
+  try {
+    return await import(pathToFileURL5(entry).href);
+  } catch (cause) {
+    throw new QqRuntimeError(
+      "QQ_RUNTIME_MISSING",
+      `${packageName} could not be loaded from ${entry}: ${qqReasonOf(cause)}. If it is not installed, run: ${qqInstallCommand(root)}`,
+      entry,
+      { cause }
+    );
+  }
+}
+async function qqFileExists(path12, root) {
+  try {
+    return (await stat2(path12)).isFile();
+  } catch (cause) {
+    const errno = qqErrnoOf(cause);
+    if (errno === "ENOENT" || errno === "ENOTDIR") return false;
+    throw new QqRuntimeError(
+      "QQ_RUNTIME_MISSING",
+      `cannot inspect ${path12}: ${qqReasonOf(cause)}. Fix the directory permissions, then retry; the packages install with: ${qqInstallCommand(root)}`,
+      path12,
+      { cause }
+    );
+  }
+}
+function qqErrnoOf(cause) {
+  if (typeof cause !== "object" || cause === null) return void 0;
+  const code = cause.code;
+  return typeof code === "string" ? code : void 0;
+}
+function qqIsRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function qqReasonOf(cause) {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
 // packages/plugin/src/im/settings.ts
 var IM_CHUNK_DEFAULTS = {
   qq: 4500,
@@ -47232,9 +47821,9 @@ function assertImSettingsUsable(settings) {
 }
 
 // packages/plugin/src/im/store.ts
-import { randomUUID as randomUUID12 } from "node:crypto";
+import { randomUUID as randomUUID13 } from "node:crypto";
 import { promises as fs19 } from "node:fs";
-import { dirname as dirname14, join as join21, resolve as resolve5 } from "node:path";
+import { dirname as dirname14, join as join22, resolve as resolve5 } from "node:path";
 var ImStoreError = class extends Error {
   code;
   /** 出问题的文件或目录；纯校验错误还没有落盘路径时为 undefined。 */
@@ -47366,16 +47955,16 @@ var ImStore = class _ImStore {
   }
   // ---- 内部：路径 ----
   accountsPath() {
-    return join21(this.root, "accounts.json");
+    return join22(this.root, "accounts.json");
   }
   secretPath(channel, accountId) {
-    return join21(this.root, "secrets", `${channel}-${accountId}.json`);
+    return join22(this.root, "secrets", `${channel}-${accountId}.json`);
   }
   dedupePath() {
-    return join21(this.root, "dedupe.log");
+    return join22(this.root, "dedupe.log");
   }
   cursorPath(accountId) {
-    return join21(this.root, "cursors", `${accountId}.json`);
+    return join22(this.root, "cursors", `${accountId}.json`);
   }
   // ---- 内部：串行化 ----
   serialAccounts(task) {
@@ -47587,7 +48176,7 @@ async function imStoreRemoveFile(file) {
 }
 async function imStoreWriteFile(file, text, mode) {
   await imStoreEnsureDir(dirname14(file));
-  const tmp = `${file}.tmp-${randomUUID12()}`;
+  const tmp = `${file}.tmp-${randomUUID13()}`;
   try {
     await fs19.writeFile(tmp, text, mode === void 0 ? { encoding: "utf8" } : { encoding: "utf8", mode });
     await fs19.rename(tmp, file);
@@ -47642,7 +48231,9 @@ async function handleImApi(req, res, url, route, method, db, runtime) {
       peers: peerRows(state.imPeers),
       // 账号清单是 store 的事实、状态是运行时的投影：只列内存通道会让重启前的
       // 账号在面板上凭空消失，也会让「已配置但未连上」显示成不存在。
-      channels: await channelViews(runtime, state.imPeers)
+      channels: await channelViews(runtime, state.imPeers),
+      // 两个腾讯包外挂安装：面板据此显示安装指引，而不是把「没装 SDK」显示成通道故障。
+      qqRuntime: await qqRuntimeStatus()
     });
   }
   if (method === "POST" && route === "im/accounts") {
@@ -47667,6 +48258,8 @@ async function handleImApi(req, res, url, route, method, db, runtime) {
       if (error instanceof ImStoreError) throw new HttpError(400, error.message);
       if (error instanceof ImChannelUnsupportedError) throw new HttpError(501, error.message);
       if (error instanceof OneBotError) throw new HttpError(400, error.message);
+      if (error instanceof QQChannelError) throw new HttpError(400, error.message);
+      if (error instanceof QqRuntimeError) throw new HttpError(503, error.message);
       throw error;
     }
     return sendJson(res, 200, { ok: true, account });
@@ -47680,6 +48273,33 @@ async function handleImApi(req, res, url, route, method, db, runtime) {
       return sendJson(res, 404, { ok: false, message: `no IM account ${channel}/${accountId}` });
     }
     return sendJson(res, 200, { ok: true });
+  }
+  if (method === "POST" && route === "im/bind/start") {
+    if (runtime === void 0) throw new HttpError(503, "IM runtime is not available in this host process");
+    const body = await readJson(req);
+    const channel = parseChannel(body.channel);
+    if (channel !== "qq") {
+      throw new HttpError(501, `QR binding for '${channel}' is not available in this build; only 'qq' can be bound by QR code`);
+    }
+    if (runtime.startQrBind === void 0) throw new HttpError(501, "this IM runtime exposes no QR binding");
+    try {
+      return sendJson(res, 200, { ok: true, ...await runtime.startQrBind("qq") });
+    } catch (error) {
+      if (error instanceof QQBindError) throw new HttpError(error.code === "QQ_BIND_BUSY" ? 409 : 503, error.message);
+      if (error instanceof ImChannelUnsupportedError) throw new HttpError(501, error.message);
+      if (error instanceof QqRuntimeError) throw new HttpError(503, error.message);
+      throw error;
+    }
+  }
+  if (method === "GET" && route === "im/bind/status") {
+    if (runtime === void 0) throw new HttpError(503, "IM runtime is not available in this host process");
+    const status2 = runtime.qrBindStatus?.() ?? { phase: "idle" };
+    return sendJson(res, 200, { ok: true, ...status2 });
+  }
+  if (method === "POST" && route === "im/bind/cancel") {
+    if (runtime === void 0) throw new HttpError(503, "IM runtime is not available in this host process");
+    const status2 = runtime.cancelQrBind?.() ?? { phase: "idle" };
+    return sendJson(res, 200, { ok: true, ...status2 });
   }
   if (method === "POST" && route === "im/onebot/webhook") {
     if (runtime === void 0) throw new HttpError(503, "IM runtime is not available in this host process");
@@ -47815,7 +48435,7 @@ import { resolve as resolve6 } from "node:path";
 
 // packages/plugin/src/memory-maintenance.ts
 init_src();
-import { randomUUID as randomUUID13 } from "node:crypto";
+import { randomUUID as randomUUID14 } from "node:crypto";
 var MAINTENANCE_MAX_LLM_REQUESTS = 24;
 var MAINTENANCE_OPENING_MAX_CHARS = 1e5;
 var MAINTENANCE_PAGE_RECORDS = 32;
@@ -47843,7 +48463,7 @@ async function startMemoryMaintenance(ctx, deps, scope) {
   const existing = activeRuns.get(key);
   if (existing !== void 0) throw new MaintenanceRunConflictError(scope.character, scope.chatId, existing.runId);
   const active = {
-    runId: randomUUID13(),
+    runId: randomUUID14(),
     character: scope.character,
     chatId: scope.chatId,
     startedAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -48044,7 +48664,7 @@ async function executeRun(ctx, deps, scope, active) {
       opening = buildOpeningMessage(run, listing);
     }
     const messages = [
-      { role: "user", id: randomUUID13(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
+      { role: "user", id: randomUUID14(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
     ];
     let outcome = "completed";
     let errorMessage7;
@@ -48101,7 +48721,7 @@ async function executeRun(ctx, deps, scope, active) {
         blocks.push({ type: "text", text: textBuffer });
       }
       const toolCalls = blocks.filter((block) => block.type === "tool-call");
-      messages.push({ role: "assistant", id: randomUUID13(), content: blocks, source: { kind: "model", provider: run.provider, model: run.model } });
+      messages.push({ role: "assistant", id: randomUUID14(), content: blocks, source: { kind: "model", provider: run.provider, model: run.model } });
       if (toolCalls.length === 0) {
         report = textBuffer !== "" ? textBuffer : blocks.filter((block) => block.type === "text").map((block) => String(block.text ?? "")).join("");
         break;
@@ -48115,7 +48735,7 @@ async function executeRun(ctx, deps, scope, active) {
         const result = await executeToolCall(run, call);
         messages.push({
           role: "tool",
-          id: randomUUID13(),
+          id: randomUUID14(),
           content: [{ type: "text", text: safeJson(result.payload) }],
           source: { kind: "tool", callId: call.id },
           toolCallId: call.id,
@@ -52469,8 +53089,8 @@ async function handleApi(ctx, req, res) {
       req.destroy?.();
       throw new Error(`idb record is too large (${declared} > ${IDB_MAX_RECORD_BYTES} bytes)`);
     }
-    const temporaryDir = await mkdtemp(join23(tmpdir4(), "dsh-soulmojito-idb-"));
-    const temporaryPath = join23(temporaryDir, "record.bin");
+    const temporaryDir = await mkdtemp(join24(tmpdir4(), "dsh-soulmojito-idb-"));
+    const temporaryPath = join24(temporaryDir, "record.bin");
     try {
       await pipeline(req, createWriteStream(temporaryPath));
       const metaHeader = typeof req.headers?.["x-dsh-idb-meta"] === "string" ? req.headers["x-dsh-idb-meta"] : "";
@@ -52976,7 +53596,7 @@ ${reason}`);
 }
 
 // packages/plugin/src/im/router.ts
-import { randomUUID as randomUUID15 } from "node:crypto";
+import { randomUUID as randomUUID16 } from "node:crypto";
 
 // packages/plugin/src/im/project.ts
 var IM_EMPTY_REPLY = "\uFF08\u65E0\u6587\u672C\u56DE\u590D\uFF09";
@@ -53211,7 +53831,7 @@ function asRecord7(value) {
 }
 
 // packages/plugin/src/im/session-host.ts
-import { randomUUID as randomUUID14 } from "node:crypto";
+import { randomUUID as randomUUID15 } from "node:crypto";
 var ImSessionError = class extends Error {
   code;
   constructor(code, message) {
@@ -53233,7 +53853,7 @@ function inspectImSessionCapabilities(agents, presets) {
   return { available: reasons.length === 0, reasons };
 }
 function mintImSessionId() {
-  return `session-${randomUUID14()}`;
+  return `session-${randomUUID15()}`;
 }
 async function ensureImSession(deps, request) {
   const capability = inspectImSessionCapabilities(deps.agents, deps.presets);
@@ -53356,7 +53976,7 @@ async function ensureImAgent(deps, sessionId) {
       const resumed = await deps.agents.resume({ resumeSessionId: sessionId, setup });
       return resumed.agent;
     } catch (error) {
-      deps.logger?.warn?.(`dsh-soulmojito im: resume ${sessionId} failed, creating a new session: ${messageOf7(error)}`);
+      deps.logger?.warn?.(`dsh-soulmojito im: resume ${sessionId} failed, creating a new session: ${messageOf9(error)}`);
     }
   }
   if (typeof deps.agents?.create !== "function") {
@@ -53369,7 +53989,7 @@ async function ensureImAgent(deps, sessionId) {
   });
   return created.agent;
 }
-function messageOf7(error) {
+function messageOf9(error) {
   return error instanceof Error ? error.message : String(error);
 }
 function imUnboundMessage(peerKey) {
@@ -53417,13 +54037,13 @@ function createImRouter(deps) {
       await notifyUnbound(target, peerKey, now);
       return;
     }
-    const messageId = `im-${randomUUID15()}`;
+    const messageId = `im-${randomUUID16()}`;
     origins.remember(binding.sessionId, messageId, peerKey, target, now);
     try {
       await deps.followup(binding.sessionId, { id: messageId, text });
     } catch (error) {
       origins.forgetSession(binding.sessionId);
-      deps.logger?.warn?.(`dsh-soulmojito im: followup to ${binding.sessionId} failed: ${messageOf8(error)}`);
+      deps.logger?.warn?.(`dsh-soulmojito im: followup to ${binding.sessionId} failed: ${messageOf10(error)}`);
       await sendNotice(target, IM_TURN_FAILED);
     }
   }
@@ -53510,7 +54130,7 @@ function createImRouter(deps) {
         total: chunks.length
       })));
     } catch (error) {
-      throw new ImSendError("IM_SEND_FAILED", `IM send to ${peerKey} failed: ${messageOf8(error)}`, { cause: error });
+      throw new ImSendError("IM_SEND_FAILED", `IM send to ${peerKey} failed: ${messageOf10(error)}`, { cause: error });
     }
     return { parts: chunks.length, at: deps.now() };
   }
@@ -53524,7 +54144,7 @@ function createImRouter(deps) {
     try {
       await deps.send(target, [{ kind: "text", text, index: 0, total: 1 }]);
     } catch (error) {
-      deps.logger?.warn?.(`dsh-soulmojito im: notice to ${target.channel}/${target.peerId} failed: ${messageOf8(error)}`);
+      deps.logger?.warn?.(`dsh-soulmojito im: notice to ${target.channel}/${target.peerId} failed: ${messageOf10(error)}`);
     }
   }
   return {
@@ -53558,7 +54178,7 @@ function sharedSessionOf(peers, settings) {
   }
   return {};
 }
-function messageOf8(error) {
+function messageOf10(error) {
   return error instanceof Error ? error.message : String(error);
 }
 function channelOf(value) {
@@ -53566,11 +54186,12 @@ function channelOf(value) {
 }
 
 // packages/plugin/src/im/runtime.ts
+var QQ_BOUND_ACCOUNT_LABEL = "QQ \u673A\u5668\u4EBA";
 var ImChannelUnsupportedError = class extends Error {
   code = "IM_CHANNEL_UNSUPPORTED";
   channel;
   constructor(channel) {
-    super(`IM channel '${channel}' has no adapter in this build; only 'onebot' can be started`);
+    super(`IM channel '${channel}' has no adapter in this build; only 'onebot' and 'qq' can be started`);
     this.name = "ImChannelUnsupportedError";
     this.channel = channel;
   }
@@ -53582,6 +54203,7 @@ function createImRuntime(ctx, options) {
   const capabilities = inspectImSessionCapabilities(agents, presets);
   const channels = /* @__PURE__ */ new Map();
   const oneBotChannels = /* @__PURE__ */ new Map();
+  const injectedBot = options.qqBot;
   const store5 = ImStore.open(tavernDataRoot("im"));
   const lifetime = new AbortController();
   const sessionDeps = {
@@ -53637,7 +54259,7 @@ function createImRuntime(ctx, options) {
       if (!bound) return;
       return router.finishTurn(sessionId, turn, sessionEvents(session));
     }).catch((error) => {
-      options.logger?.warn?.(`dsh-soulmojito im: turn ${turn} of ${sessionId} reply failed: ${messageOf9(error)}`);
+      options.logger?.warn?.(`dsh-soulmojito im: turn ${turn} of ${sessionId} reply failed: ${messageOf11(error)}`);
     });
   }
   function openOneBot(account, secret) {
@@ -53668,6 +54290,82 @@ function createImRuntime(ctx, options) {
       throw error;
     }
   }
+  function openQQ(account, secret, createBot) {
+    return new QQChannel({
+      accountId: account.accountId,
+      secret,
+      router: { handle: async (inbound) => router.inbound(inbound) },
+      groupRequireMention: async () => ((await db.getState()).imSettings ?? DEFAULT_IM_SETTINGS).groupRequireMention,
+      createBot,
+      // 账号级能力：官方机器人只有申请到 markdown 权限才能发 msg_type=2。
+      markdownSupport: secret["markdownSupport"] === "true",
+      now: () => Date.now(),
+      ...options.logger === void 0 ? {} : { logger: options.logger }
+    });
+  }
+  async function installQQ(account, channel) {
+    const key = channelKey(account.channel, account.accountId);
+    const previous = channels.get(key);
+    if (previous !== void 0) {
+      await previous.stop();
+      channels.delete(key);
+    }
+    channels.set(key, channel);
+    try {
+      await channel.start(lifetime.signal);
+    } catch (error) {
+      channels.delete(key);
+      throw error;
+    }
+  }
+  const injectedConnector = options.qqConnector;
+  const qqBinding = createQQBinding({
+    connect: injectedConnector === void 0 ? () => loadQqConnector() : () => Promise.resolve(injectedConnector)
+  });
+  async function adoptQQCredential(credentials) {
+    const credential = credentials[0];
+    if (credential === void 0) {
+      throw new Error("the QQ connector reported a successful scan without any credential; nothing was saved");
+    }
+    const appId = credential.appId.trim();
+    const appSecret = credential.appSecret.trim();
+    if (appId === "" || appSecret === "") {
+      throw new Error("the QQ connector returned an empty appId or appSecret; nothing was saved");
+    }
+    const accounts = await store5.accounts();
+    const existing = accounts.find((entry) => entry.channel === "qq" && entry.accountId === appId);
+    await upsertAccount({
+      channel: "qq",
+      accountId: appId,
+      label: QQ_BOUND_ACCOUNT_LABEL,
+      createdAt: existing?.createdAt ?? (/* @__PURE__ */ new Date()).toISOString()
+    }, { appId, appSecret });
+    const openid = typeof credential.userOpenid === "string" ? credential.userOpenid.trim() : "";
+    if (openid !== "") await addImPrivateAllow(openid);
+  }
+  async function addImPrivateAllow(openid) {
+    const state = await db.getState();
+    if ((state.imSettings ?? DEFAULT_IM_SETTINGS).privateAllow.includes(openid)) return;
+    await db.updateState((current) => {
+      const settings = current.imSettings ?? DEFAULT_IM_SETTINGS;
+      if (settings.privateAllow.includes(openid)) return {};
+      return { imSettings: { ...settings, privateAllow: [...settings.privateAllow, openid] } };
+    });
+  }
+  async function startQrBind(channelId) {
+    if (channelId !== "qq") throw new ImChannelUnsupportedError(channelId);
+    return qqBinding.startQrConnect({
+      onQrDisplayed: (url) => {
+        options.logger?.info?.(`dsh-soulmojito im qq bind: QR code ready${qrHostSuffix(url)}`);
+      },
+      onSuccess: async (credentials) => {
+        await adoptQQCredential(credentials);
+      },
+      onFailure: (error) => {
+        options.logger?.warn?.(`dsh-soulmojito im qq bind failed: ${error.message}`);
+      }
+    }, { signal: lifetime.signal, source: "dsh-soulmojito" });
+  }
   let accountTail = Promise.resolve();
   function serialAccounts(task) {
     const run = accountTail.then(task, task);
@@ -53676,10 +54374,34 @@ function createImRuntime(ctx, options) {
   }
   async function upsertAccount(account, secret) {
     return serialAccounts(async () => {
-      if (account.channel !== "onebot") throw new ImChannelUnsupportedError(account.channel);
-      const channel = openOneBot(account, secret);
-      await store5.putAccount(account, { ...secret });
-      await installOneBot(account, channel);
+      if (account.channel === "onebot") {
+        const channel = openOneBot(account, secret);
+        await store5.putAccount(account, { ...secret });
+        await installOneBot(account, channel);
+        return;
+      }
+      if (account.channel === "qq") {
+        const createBot = injectedBot ?? createQqBotFactory(await loadQqSdk());
+        const channel = openQQ(account, secret, createBot);
+        const previous = await store5.readSecret("qq", account.accountId);
+        await store5.putAccount(account, { ...secret });
+        try {
+          await installQQ(account, channel);
+        } catch (error) {
+          try {
+            if (previous === void 0) await store5.deleteAccount("qq", account.accountId);
+            else await store5.putAccount(account, previous);
+          } catch (rollbackError) {
+            throw new Error(
+              `qq account '${account.accountId}' failed to install and its credential rollback also failed: ${messageOf11(rollbackError)}`,
+              { cause: error }
+            );
+          }
+          throw error;
+        }
+        return;
+      }
+      throw new ImChannelUnsupportedError(account.channel);
     });
   }
   async function removeAccount(channelId, accountId) {
@@ -53718,21 +54440,21 @@ function createImRuntime(ctx, options) {
   async function restoreAccounts() {
     const accounts = await store5.accounts();
     for (const account of accounts) {
-      if (account.channel !== "onebot") continue;
+      if (account.channel !== "onebot" && account.channel !== "qq") continue;
       try {
-        const secret = await store5.readSecret("onebot", account.accountId);
+        const secret = await store5.readSecret(account.channel, account.accountId);
         if (secret === void 0) {
-          options.logger?.warn?.(`dsh-soulmojito im: onebot/${account.accountId} has no stored secret; skipped`);
+          options.logger?.warn?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} has no stored secret; skipped`);
           continue;
         }
         await upsertAccount(account, secret);
       } catch (error) {
-        options.logger?.warn?.(`dsh-soulmojito im: onebot/${account.accountId} failed to start: ${messageOf9(error)}`);
+        options.logger?.warn?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} failed to start: ${messageOf11(error)}`);
       }
     }
   }
   void restoreAccounts().catch((error) => {
-    options.logger?.warn?.(`dsh-soulmojito im: restoring onebot accounts failed: ${messageOf9(error)}`);
+    options.logger?.warn?.(`dsh-soulmojito im: restoring stored accounts failed: ${messageOf11(error)}`);
   });
   return {
     router,
@@ -53749,11 +54471,15 @@ function createImRuntime(ctx, options) {
     bindChat: async (chat, existingSessionId) => bindImChat(sessionDeps, chat, existingSessionId),
     handleSessionEvent,
     handleOneBotUpgrade,
+    startQrBind,
+    qrBindStatus: () => qqBinding.status(),
+    cancelQrBind: () => qqBinding.cancel(),
     dispose: async () => {
+      qqBinding.cancel();
       lifetime.abort();
       for (const channel of channels.values()) {
         await channel.stop().catch((error) => {
-          options.logger?.warn?.(`dsh-soulmojito im: stopping ${channel.channel}/${channel.accountId} failed: ${messageOf9(error)}`);
+          options.logger?.warn?.(`dsh-soulmojito im: stopping ${channel.channel}/${channel.accountId} failed: ${messageOf11(error)}`);
         });
       }
       channels.clear();
@@ -53792,9 +54518,20 @@ async function renderForTarget(db, target, text) {
 function channelKey(channel, accountId) {
   return `${channel}:${accountId}`;
 }
+function createQqBotFactory(sdk) {
+  return (botOptions) => new sdk.QQBot(botOptions);
+}
+function qrHostSuffix(url) {
+  try {
+    const host = new URL(url).host;
+    return host === "" ? "" : ` (${host})`;
+  } catch {
+    return "";
+  }
+}
 function noop() {
 }
-function messageOf9(error) {
+function messageOf11(error) {
   return error instanceof Error ? error.message : String(error);
 }
 

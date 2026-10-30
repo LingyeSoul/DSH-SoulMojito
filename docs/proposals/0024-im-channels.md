@@ -1,11 +1,13 @@
 # 提案 0024：IM 通道（QQ / 微信 / OneBot 11）
 
-> 状态：设计（未实现）。日期：2026-10-30。
+> 状态：设计；M0–M3 已实现（OneBot 11 / QQ），M4/M5 未开始。日期：2026-10-30。
 > 目标宿主：DSH `0.2.1-rc.2`（兼容 `0.2.0-rc.2`）；验证基线 `pnpm run check`。
 > 参考物（只读研究，不复制其源码进本仓库）：
 > - QQ 官方机器人平台：`tencent-connect/dsh-qqbot`（MIT）与其依赖
 >   `@tencent-connect/qqbot-nodejs@1.0.5`（MIT，唯一依赖 `ws@^8`）、
->   `@tencent-connect/qqbot-connector@1.2.0`（MIT，扫码绑定）。
+>   `@tencent-connect/qqbot-connector@1.2.0`（**UNLICENSED**，扫码绑定）。
+>   两个包都**外挂安装**，不进分发产物（见 §5 与
+>   [`decisions/2026-10-30-qq-channel.md`](../../decisions/2026-10-30-qq-channel.md)）。
 > - 微信官方后端协议：`Tencent/openclaw-weixin` 的 `docs/protocol.md`（MIT）。
 > - OneBot 11 标准：`botuniverse/onebot-11`。
 > - 仓库内投递链路：`src/games/wake.ts`、`src/agent-tavern/body-runtime.ts`、
@@ -62,6 +64,12 @@
 **不可借的**：`sessionKey = qqbot:${appId}:${scope}:${peerId}` → 一个裸 DSH Agent
 （`session/session-manager.ts`），入站直接 `followup` 后把 assistant 文本原样发出。
 本项目的会话身份是 Tavern 会话绑定，不是一个无资产的原生会话。
+
+**群 @ 开关的实际可达性**（2026-10-30 修正）：官方群机器人只在用户真的 @ 了机器人时
+投递 `GROUP_AT_MESSAGE_CREATE`，非 @ 消息根本不会到达进程。因此
+`imSettings.groupRequireMention = false` 在官方 QQ 通道上**实际不可达**——没有可放行的
+非 @ 群消息。开关仍然保留：OneBot 11 的协议端能投递全量群消息，那里它生效；官方平台
+若将来放开全量投递，也不必改配置形状。
 
 ### 2.2 微信官方后端协议
 
@@ -419,9 +427,9 @@ API 破一次隔离纪律，代价大于收益。
 | `webServer.registerUpgrade({path, handler})` | 宿主 `dsh-host-webserver` 已提供（`lib/types/index.d.ts:41-46`），本插件未声明 | `host-contract.ts` 加可选 `registerUpgrade?`；缺失时 OneBot 只开 HTTP POST |
 | `agents.create/resume` + `agent.followup` + `whenIdle` | `HostAgentsService` 只声明了 `get/list/create?`，`HostAgentLike` 未声明 `followup` | 扩展为可选成员并集中探测；缺失即 IM 不可用（面板说明原因） |
 | `agentPresets.mount` | `dsh-adapter.ts` 已用 | 复用，不新增 seam |
-| `ws` | 插件当前零运行时依赖 | 构建期内联；一份同时服务 QQ 客户端与 OneBot 服务端 |
-| `@tencent-connect/qqbot-nodejs` | 官方 SDK，纯 ESM，无 `require` | 内联；`bufferutil`/`utf-8-validate`/`silk-wasm`/`mpg123-decoder` 标 external |
-| `@tencent-connect/qqbot-connector` | 扫码状态机，纯 ESM | 内联 |
+| `ws` | 插件当前零运行时依赖 | 不再内联：OneBot 用自研最小服务端（`im/onebot/ws.ts`），QQ 客户端由外挂的官方 SDK 自带 |
+| `@tencent-connect/qqbot-nodejs` | 官方 SDK，纯 ESM；带 `ws` 与可选原生依赖 | **外挂安装**（MIT）：装在 `$DSH_HOME/<tavern>/im/runtime/`，运行期 `import()`；不进产物、不进 dependencies |
+| `@tencent-connect/qqbot-connector` | 扫码状态机，纯 ESM；包声明 **UNLICENSED** | **外挂安装**：UNLICENSED 不能随本仓库的 GPL 产物再分发，由用户在自己的数据目录安装 |
 | 微信协议 | 官方文档 + 参考实现 | 自研 HTTP 客户端（4 个端点），不引入 OpenClaw peer 依赖 |
 | OneBot 11 | 文本标准 | 自研事件/动作映射，无依赖 |
 
@@ -429,8 +437,16 @@ API 破一次隔离纪律，代价大于收益。
 新增 gate `im-channels` 断言：产物无裸模块 import、`state.json` 无密钥字段、IM 路由
 全挂在 `API` 前缀下、upgrade 路由注册与 dispose 对称、manifest 含 `97-ui-im` 分片。
 
-**体积**：SDK 约 1.2MB 源码，内联后 `index.mjs` 预计 +300~500KB；gate 记录基线，
-超过 1.5× 失败。
+**QQ 运行时的安装与投影**：`im/qq/sdk.ts` 从数据目录动态导入两个包，缺包时
+`loadQqSdk`/`loadQqConnector` 抛带安装命令的 `QqRuntimeError`；`GET im` 投影
+`qqRuntime: { installed, reason? }`，安装命令为：
+
+```text
+cd "<im runtime dir>" && pnpm add @tencent-connect/qqbot-nodejs@1.0.5 @tencent-connect/qqbot-connector@1.2.0
+```
+
+**体积**：M3 落地前（内联 SDK）`index.mjs` 2,646,941B；改为外挂后 2,371,535B
+（−275,406B），产物内不再有 SDK 代码。gate 记录基线，超过 1.5× 失败。
 
 ## 6. 面板与路由
 
@@ -443,7 +459,8 @@ API 破一次隔离纪律，代价大于收益。
   「用当前聊天新建绑定」。
 - 自动绑定：`绑定模式` 三选一（手动 / 独立会话 / 共享会话，默认独立）+ 对应配置项
   （来源聊天 `imSourceChatId`、共享聊天 `imSharedChatId`）。
-- 群聊：`imGroupRequireMention` 开关，默认开启（必须 @）；关闭后群内每条消息都触发。
+- 群聊：`imGroupRequireMention` 开关，默认开启（必须 @）。官方 QQ 群机器人只投递 @
+  消息，关掉开关在 QQ 通道上不可达（§2.1）；OneBot 11 上它才真的放行全部群消息。
 - 安全面：私聊/群聊白名单（从最近入站勾选或粘贴 id）。
 
 ### 6.2 路由
@@ -522,8 +539,10 @@ gate 同步更新。
 1. **会话托管是新能力**：本插件从没创建过宿主 agent。`agents.create` 的 meta/setup
    形状、preset 落 header、重启后 resume 的 preset 身份都要实测；建议 M0 先写一个最小
    spike 验证再铺开。
-2. **打包风险**：`ws` 的可选原生依赖在 esbuild 里可能解析失败 → external 列表 + 产物
-   冒烟 gate。
+2. **第三方协议代码不进产物**：QQ 的两个腾讯包（其一 UNLICENSED）改为外挂安装在
+   `$DSH_HOME/<tavern>/im/runtime/`，运行期动态导入；宿主没装时账号写入与扫码都
+   fail-closed 并给安装命令。代价是部署多一步，收益是 GPL 产物里没有不可再分发的
+   代码，也不需要 esbuild 的 external/垫片。
 3. **被动回复窗口**：QQ `msg_id` 有时效与条数限制，长回复第 5 条起必须降级主动推送。
 4. **微信文档自述不完整**：只做「文档写了的」，灰度 + 可观测，不猜字段。
 5. **宿主 seam 漂移**：`registerUpgrade`、`agents.followup` 都是可选 seam，探测 + 失败

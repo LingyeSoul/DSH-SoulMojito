@@ -14,7 +14,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { HostSessionEventLike, HostSessionLike } from '../host-contract.js'
 import { envCompat } from '../env-compat.js'
 import type { ImSessionCapabilities } from './session-host.js'
-import type { ImAccountRef, ImChannelId, ImChannelView, ImSendReceipt } from './types.js'
+import type { ImAccountRef, ImBindStatus, ImChannelId, ImChannelView, ImSendReceipt } from './types.js'
 
 /** bundle 间互见契约 key（不得变更）。 */
 export const IM_RUNTIME_KEY = 'dsh-soulmojito:im-runtime'
@@ -51,6 +51,15 @@ export interface ImRuntimeHandle {
    * （测试假件、将来的空装）不必实现它。
    */
   handleOneBotUpgrade?(req: unknown, socket: unknown, head: Buffer): Promise<void>
+  /**
+   * 扫码绑定（提案 0024 §4.1）：本轮只有 QQ。三个成员都可选，缺省表示这个
+   * 运行时没有绑定能力（面板照实显示 501，不假装扫码可用）。
+   */
+  startQrBind?(channel: ImChannelId): Promise<ImBindStatus>
+  /** 当前绑定相位；`waiting` 相位里的 `url` 供面板渲染二维码。 */
+  qrBindStatus?(): ImBindStatus
+  /** 取消进行中的扫码；没有活动会话时是空操作。 */
+  cancelQrBind?(): ImBindStatus
   dispose(): Promise<void>
   readonly router: ImRouterHandle
 }

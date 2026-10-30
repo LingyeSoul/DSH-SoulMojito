@@ -1,14 +1,17 @@
 /**
  * IM 管理面（提案 0024 §6.2）。
  *
- * 只做投影与配置：账号登记/解绑、绑定、访问控制、模式切换。OneBot 的协议连接
- * 在 `im/onebot/`（反向 WS + webhook），这里只负责把账号交给运行时并把状态
- * 投影成面板可读的形状。密钥只经 POST 请求体进入 store，不经过任何读路由。
+ * 只做投影与配置：账号登记/解绑、扫码绑定相位、绑定、访问控制、模式切换。协议
+ * 连接在 `im/onebot/` 与 `im/qq/`，这里只负责把账号交给运行时并把状态投影成面板
+ * 可读的形状。密钥只经 POST 请求体进入 store，不经过任何读路由。
  */
 
 import type { TavernStore } from '../../../tavern-store/src/index.js'
 import { tavernDataRoot } from '../dsh-home.js'
 import { OneBotError } from '../im/onebot/server.js'
+import { QQBindError } from '../im/qq/bind.js'
+import { QQChannelError } from '../im/qq/channel.js'
+import { qqRuntimeStatus, QqRuntimeError } from '../im/qq/sdk.js'
 import { applyImSettingsPatch, ImSettingsError } from '../im/settings.js'
 import { ImStore, ImStoreError } from '../im/store.js'
 import type { ImRuntime } from '../im/runtime.js'
@@ -46,6 +49,8 @@ export async function handleImApi(
       // 账号清单是 store 的事实、状态是运行时的投影：只列内存通道会让重启前的
       // 账号在面板上凭空消失，也会让「已配置但未连上」显示成不存在。
       channels: await channelViews(runtime, state.imPeers),
+      // 两个腾讯包外挂安装：面板据此显示安装指引，而不是把「没装 SDK」显示成通道故障。
+      qqRuntime: await qqRuntimeStatus(),
     })
   }
 
@@ -73,6 +78,9 @@ export async function handleImApi(
       if (error instanceof ImStoreError) throw new HttpError(400, error.message)
       if (error instanceof ImChannelUnsupportedError) throw new HttpError(501, error.message)
       if (error instanceof OneBotError) throw new HttpError(400, error.message)
+      if (error instanceof QQChannelError) throw new HttpError(400, error.message)
+      // 腾讯包没装是部署事实，不是用户输入错误：503 + 原文里的安装命令。
+      if (error instanceof QqRuntimeError) throw new HttpError(503, error.message)
       throw error
     }
     return sendJson(res, 200, { ok: true, account })
@@ -87,6 +95,40 @@ export async function handleImApi(
       return sendJson(res, 404, { ok: false, message: `no IM account ${channel}/${accountId}` })
     }
     return sendJson(res, 200, { ok: true })
+  }
+
+  // 扫码绑定（提案 0024 §4.1 / §6.2）：本轮只服务 QQ；微信的 verify 相位不在本轮，
+  // 请求其它通道时如实 501，不假装扫描可用。
+  if (method === 'POST' && route === 'im/bind/start') {
+    if (runtime === undefined) throw new HttpError(503, 'IM runtime is not available in this host process')
+    const body = await readJson(req)
+    const channel = parseChannel(body.channel)
+    if (channel !== 'qq') {
+      throw new HttpError(501, `QR binding for '${channel}' is not available in this build; only 'qq' can be bound by QR code`)
+    }
+    if (runtime.startQrBind === undefined) throw new HttpError(501, 'this IM runtime exposes no QR binding')
+    try {
+      return sendJson(res, 200, { ok: true, ...(await runtime.startQrBind('qq')) })
+    } catch (error) {
+      // 已有会话在跑不是服务器错误：面板据此提示「先取消上一次扫码」。
+      if (error instanceof QQBindError) throw new HttpError(error.code === 'QQ_BIND_BUSY' ? 409 : 503, error.message)
+      if (error instanceof ImChannelUnsupportedError) throw new HttpError(501, error.message)
+      // 连接器是运行期加载的：没装腾讯包时如实 503，并带上安装命令。
+      if (error instanceof QqRuntimeError) throw new HttpError(503, error.message)
+      throw error
+    }
+  }
+
+  if (method === 'GET' && route === 'im/bind/status') {
+    if (runtime === undefined) throw new HttpError(503, 'IM runtime is not available in this host process')
+    const status = runtime.qrBindStatus?.() ?? { phase: 'idle' as const }
+    return sendJson(res, 200, { ok: true, ...status })
+  }
+
+  if (method === 'POST' && route === 'im/bind/cancel') {
+    if (runtime === undefined) throw new HttpError(503, 'IM runtime is not available in this host process')
+    const status = runtime.cancelQrBind?.() ?? { phase: 'idle' as const }
+    return sendJson(res, 200, { ok: true, ...status })
   }
 
   // OneBot HTTP POST 入站（提案 §6.2）：鉴权与事件解析都在通道内，这里只按

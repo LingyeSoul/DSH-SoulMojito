@@ -120,6 +120,11 @@ describe('im account routes', () => {
     expect(listed.body['channels']).toMatchObject([
       { channel: 'onebot', accountId: '10001', label: 'primary bot', status: { state: 'idle' }, peers: 0 },
     ])
+    // 腾讯包外挂安装：投影里必须带安装状态，面板据此显示指引（不是通道故障）。
+    expect(listed.body['qqRuntime']).toMatchObject({ installed: false })
+    expect(String((listed.body['qqRuntime'] as { reason?: string }).reason)).toContain(
+      'pnpm add @tencent-connect/qqbot-nodejs@1.0.5',
+    )
 
     const removed = await call(undefined, `${path}?channel=onebot&accountId=10001`, 'im/accounts', 'DELETE', runtime)
     expect(removed.statusCode).toBe(200)
@@ -131,5 +136,36 @@ describe('im account routes', () => {
     const path = '/api/dsh-soulmojito/im/onebot/webhook'
     const result = await call({ post_type: 'message' }, path, 'im/onebot/webhook', 'POST', runtimeOf())
     expect(result.statusCode).toBe(401)
+  })
+
+  it('serves qr binding start/status/cancel for qq and refuses channels without a binder', async () => {
+    let phase: 'idle' | 'waiting' = 'idle'
+    const runtime: ImRuntime = {
+      ...runtimeOf(),
+      startQrBind: async () => {
+        phase = 'waiting'
+        return { phase: 'waiting', url: 'https://example.invalid/qq-qr' }
+      },
+      qrBindStatus: () => (phase === 'waiting'
+        ? { phase: 'waiting', url: 'https://example.invalid/qq-qr' }
+        : { phase: 'idle' }),
+      cancelQrBind: () => {
+        phase = 'idle'
+        return { phase: 'idle' }
+      },
+    }
+    const started = await call({ channel: 'qq' }, '/api/dsh-soulmojito/im/bind/start', 'im/bind/start', 'POST', runtime)
+    expect(started.statusCode).toBe(200)
+    expect(started.body).toMatchObject({ ok: true, phase: 'waiting', url: 'https://example.invalid/qq-qr' })
+
+    const status = await call(undefined, '/api/dsh-soulmojito/im/bind/status', 'im/bind/status', 'GET', runtime)
+    expect(status.body).toMatchObject({ ok: true, phase: 'waiting' })
+
+    const cancelled = await call(undefined, '/api/dsh-soulmojito/im/bind/cancel', 'im/bind/cancel', 'POST', runtime)
+    expect(cancelled.body).toMatchObject({ ok: true, phase: 'idle' })
+
+    // 微信扫码不在本轮：路由如实 501，不假装二维码可用。
+    await expect(call({ channel: 'weixin' }, '/api/dsh-soulmojito/im/bind/start', 'im/bind/start', 'POST', runtime))
+      .rejects.toMatchObject({ status: 501 })
   })
 })

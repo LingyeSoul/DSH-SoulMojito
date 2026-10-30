@@ -1,6 +1,6 @@
 # 施工计划：IM 通道（提案 0024）
 
-> 日期：2026-10-30。状态：M0/M1 实施中。
+> 日期：2026-10-30。状态：M0–M3 已落地（M4/M5 未开始）。
 > 设计契约：[`docs/proposals/0024-im-channels.md`](../proposals/0024-im-channels.md)。
 > 验证口径：`pnpm run check`（tsc + vitest + build + gates）。
 
@@ -58,11 +58,11 @@ $DSH_HOME/soulmojito/im/dedupe.log
 | M0（已完成） | 假通道 + 假 Agent 跑通「入站 → 绑定 → followup → turn/end → 回复」；`im-*.spec.ts` 全绿 |
 | M1（已完成） | `ensureImSession` 独立/共享两种模式都能建绑定；缺 `agents.create` 时 fail-closed；IM 工具族与历史导入落地 |
 | M2（已完成） | OneBot 11 反向 WS + HTTP POST 打通（codec + 连接层 + 账号路由） |
-| M3 | QQ 扫码 + 网关 |
+| M3（已完成） | QQ 扫码绑定 + 官方网关；两个腾讯包外挂安装、运行期动态导入 |
 | M4 | 微信扫码 + 长轮询 |
 | M5 | 客户端面板 + 媒体 + 收口 |
 
-### 4.1 已落地（2026-10-30，两批）
+### 4.1 已落地（2026-10-30，三批）
 
 第一批（`098db83`）：`im/types.ts`、`im/settings.ts`、`im/store.ts`、`im/project.ts`、
 `im/session-host.ts`、`im/reply.ts`、`im/router.ts`、`im/runtime.ts`、
@@ -76,10 +76,19 @@ $DSH_HOME/soulmojito/im/dedupe.log
 `session/command.ts` 改为调用抽出的导入函数、`im/session-host.ts` 在手绑/共享
 模式下也导入历史。
 
+第三批：`im/qq/sdk.ts`（两个腾讯包外挂安装 + 运行期动态导入 + 安装状态投影）、
+`im/qq/channel.ts`（WebSocket 网关相位、入站归一、被动回复上限、markdown 两档、
+出站串行）、`im/qq/bind.ts`（扫码状态机，连接器惰性加载）、`im/runtime.ts` 的 QQ
+账号安装/回滚与扫码接线、`http/im.ts` 的 `qqRuntime` 投影。终态：根 `package.json`
+不含任何腾讯依赖，`scripts/build-plugin.mjs` 的六个入口都不需要 `external` 列表或
+`createRequire` 垫片——第三方 QQ 代码根本不进产物。决策记录：
+[`decisions/2026-10-30-qq-channel.md`](../../decisions/2026-10-30-qq-channel.md)。
+
 **明确未做（下一轮）**：
-1. 客户端「聊天渠道」面板。
-2. QQ / 微信通道。
+1. 客户端「聊天渠道」面板（含 `qqRuntime` 安装指引的展示）。
+2. 微信通道（M4）。
 3. `im-channels` gate。
+4. QQ 群聊流式输出、媒体上下行、真人扫码的端到端验证。
 
 ## 5. 测试面
 
@@ -95,11 +104,14 @@ $DSH_HOME/soulmojito/im/dedupe.log
 | `tests/session-activate.spec.ts` | 导入计划落地、读回失败降级关 turn、基线不可推进只 warn |
 | `tests/onebot-codec.spec.ts` | 事件归一、CQ 转义、出站参数 |
 | `tests/onebot-server.spec.ts` | 握手/401、入站、群 @、分片、未掩码 1002、并发发送不交错、webhook |
+| `tests/qq-channel.spec.ts` | 入站归一、无 id 用 UUID 去重、群 @ 门控、被动回复上限 4 条、markdown 两档、并发出站不交错、相位与重连清错、缺包不落盘、安装失败回滚、扫码四相位 |
 | `tests/im-runtime-accounts.spec.ts` | 账号 upsert/remove、重启恢复、缺 seam 原因 |
-| `tests/im-http-accounts.spec.ts` | 账号路由校验、webhook 401 |
+| `tests/im-http-accounts.spec.ts` | 账号路由校验、webhook 401、`GET im` 的 `qqRuntime` 投影 |
 
 ## 6. 下一轮入口
 
 - `ws` 只作为构建期内联依赖引入（`packages/plugin/package.json` 仍无 `dependencies`）。
+- QQ 的两个腾讯包**不进产物**：装在 `$DSH_HOME/<tavern>/im/runtime/`，由面板按
+  `GET im` 的 `qqRuntime` 指引安装（见决策 §1）。
 - OneBot 反向 WS 需要 `webServer.registerUpgrade`；缺失时只开 HTTP POST 并在面板标注。
 - QQ/微信凭据一律只在 `im/secrets/`，面板只读前缀。

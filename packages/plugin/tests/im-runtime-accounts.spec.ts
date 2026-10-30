@@ -107,7 +107,7 @@ describe('im runtime account lifecycle', () => {
   it('refuses a channel without an adapter instead of persisting a dead account', async () => {
     const runtime = createImRuntime(fakeContext(), { db })
     try {
-      await expect(runtime.upsertAccount({ ...ACCOUNT, channel: 'qq' }, { token: 'secret-token' }))
+      await expect(runtime.upsertAccount({ ...ACCOUNT, channel: 'weixin' }, { token: 'secret-token' }))
         .rejects.toMatchObject({ code: 'IM_CHANNEL_UNSUPPORTED' })
       expect(await store().accounts()).toEqual([])
     } finally {
