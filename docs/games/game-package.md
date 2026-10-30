@@ -33,7 +33,7 @@ com.example.my-game/
   "id": "com.example.gomoku",
   "name": "五子棋",
   "version": "1.0.0",
-  "engines": { "dsh-soulmojito": "^0.7.0" },
+  "engines": { "dsh-soulmojito": "^0.7.1" },
   "players": { "min": 2, "max": 2, "roles": ["black", "white"] },
   "turnBased": true,
   "actionVocabulary": "落子 {type:'place', x, y}；认输 {type:'resign'} 由运行时统一处理"
@@ -45,7 +45,7 @@ com.example.my-game/
 | `id` | 非空；`[a-z0-9-]` 段落以 `.` 连接；安装后目录名等于 `id`（手工放入时即包目录名，不符即 broken） |
 | `name` | 非空字符串（面板与 Agent 工具面显示名） |
 | `version` | 非空字符串（建议语义化版本） |
-| `engines` | 可选；`{ "dsh-soulmojito": "^0.7.0" }` 复用宿主版本门控，不满足则 broken「版本不满足」。旧键 `dsh-tavern` 双读兼容 |
+| `engines` | 可选；`{ "dsh-soulmojito": "^0.7.1" }` 复用宿主版本门控，不满足则 broken「版本不满足」。旧键 `dsh-tavern` 双读兼容 |
 | `players.min` / `max` | 整数且 `1 <= min <= max`；`players.roles.length` 必须等于 `max` 且无重复 |
 | `players.roles` | 非空字符串数组。面板开局时人类缺省执 `roles[0]`，Agent 执另一方 |
 | `turnBased` | v1 明确裁剪实时游戏：必须是 `true` |

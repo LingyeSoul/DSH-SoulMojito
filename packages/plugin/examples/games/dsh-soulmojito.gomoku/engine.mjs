@@ -41,7 +41,7 @@ const META = {
   id: 'dsh-soulmojito.gomoku',
   name: '五子棋',
   version: '1.0.0',
-  engines: { 'dsh-soulmojito': '^0.7.0' },
+  engines: { 'dsh-soulmojito': '^0.7.1' },
   players: { min: 2, max: 2, roles: ['black', 'white'] },
   turnBased: true,
   actionVocabulary:

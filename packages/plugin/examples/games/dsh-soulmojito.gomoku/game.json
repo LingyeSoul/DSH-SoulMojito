@@ -2,7 +2,7 @@
   "id": "dsh-soulmojito.gomoku",
   "name": "五子棋",
   "version": "1.0.0",
-  "engines": { "dsh-soulmojito": "^0.7.0" },
+  "engines": { "dsh-soulmojito": "^0.7.1" },
   "players": { "min": 2, "max": 2, "roles": ["black", "white"] },
   "turnBased": true,
   "actionVocabulary": "落子 {type:'place', x, y}，x/y 为 0-14 整数坐标（列 A-O、行 1-15）；认输 {type:'resign'} 由运行时统一处理"
