@@ -2838,3 +2838,177 @@ describe('live turn/end failure restore', () => {
     expect(disposed).toEqual(['agent/turn-stopping', 'session/event'])
   })
 })
+
+/* ------------- regenerate start-failure recovery retry (review M4) --------- */
+
+describe('regenerate start-failure recovery retry', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    for (const [agentId, op] of [...pendingByAgent.entries()]) {
+      pendingByAgent.delete(agentId)
+      op.release()
+    }
+  })
+
+  /**
+   * Rollback store whose chat reads fail while the flag is active, so the
+   * compensation inside `startRegenerate`'s catch fails after `followup`
+   * rejects. `readsRemaining` bounds the failure for the transient case.
+   */
+  function flakyRollbackStore(
+    character: CharacterCardIR,
+    chat: ChatLogIR,
+    sessionId: string,
+    failing: { active: boolean; readsRemaining: number },
+  ): Record<string, unknown> {
+    const base = rollbackDb(character, chat, sessionId)
+    return {
+      ...base,
+      getChatSnapshot: async () => {
+        if (failing.active && failing.readsRemaining > 0) {
+          failing.readsRemaining -= 1
+          throw new Error("EACCES: permission denied, open 'C:\\secrets\\chat.jsonl'")
+        }
+        return (base.getChatSnapshot as () => Promise<unknown>)()
+      },
+    }
+  }
+
+  /** Make the trigger `followup` fail after the operation started, tripping the store failure window. */
+  function failFollowupAfterStart(harness: RegenerateHarness, trip: () => void): void {
+    harness.agent.followup = () => {
+      trip()
+      return Promise.reject(new Error('host refused the trigger turn'))
+    }
+  }
+
+  async function callStartFailureRegenerate(
+    harness: RegenerateHarness,
+    sessionId: string,
+    logger: CapturedLogger['logger'],
+  ): Promise<{ status: number; body: Record<string, unknown> }> {
+    hostState.module = hostRecordModule()
+    const res = makeResponse()
+    const ctx = {
+      agents: { get: (id: string) => id === sessionId ? harness.agent : undefined },
+      logger,
+    } as unknown as Parameters<typeof handleAgentTavernBodyApi>[0]
+    await handleAgentTavernBodyApi(
+      ctx,
+      mutationDbFor(sessionId, plainCharacter(), projectedChat('old body')),
+      makeRequest({
+        sessionId,
+        messageId: 'message-1',
+        groupId: 'message-1',
+        expectedAnchorId: 'message-1',
+        expectedIndex: 0,
+      }, 'POST', '/api/dsh-soulmojito/body/regenerate'),
+      res,
+      new URL('/api/dsh-soulmojito/body/regenerate', 'http://localhost'),
+      'body/regenerate',
+      'POST',
+    )
+    return {
+      status: res.statusCode,
+      body: res.chunks.length > 0 ? JSON.parse(res.chunks.join('')) as Record<string, unknown> : {},
+    }
+  }
+
+  function retryingLogs(capture: CapturedLogger): unknown[][] {
+    return capture.warnings.filter((args) => String(args[0]).includes('retrying recovery'))
+  }
+
+  it('retries the recovery once and surfaces the pending op handle when the restore keeps failing', async () => {
+    hostState.module = hostRecordModule()
+    const capture = captureLogger()
+    const sessionId = 'session-start-fail-locked'
+    const harness = createRegenerateHarness('old body', [], sessionId)
+    const failing = { active: false, readsRemaining: 0 }
+    rollbackState.store = flakyRollbackStore(plainCharacter(), projectedChat('old body'), sessionId, failing)
+    rollbackState.memories = { read: async () => undefined }
+    rollbackState.variables = { get: async () => undefined }
+    failFollowupAfterStart(harness, () => {
+      failing.active = true
+      failing.readsRemaining = Number.POSITIVE_INFINITY
+    })
+
+    const result = await callStartFailureRegenerate(harness, sessionId, capture.logger)
+
+    // The start failed and the compensation failed with it; the message embeds
+    // a filesystem path, so the outbound copy must collapse at the boundary.
+    expect(result.status).toBe(500)
+    expect(result.body).toMatchObject({ ok: false, code: 'operation-failed' })
+    expect(result.body['message']).toBe('internal storage error')
+    expect(JSON.stringify(result.body)).not.toContain('secrets')
+    expect(JSON.stringify(result.body)).not.toContain('chat.jsonl')
+
+    // M4: one bounded in-process retry handed the operation to the shared
+    // recovery; the store is still broken, so the op stays pending and the
+    // response carries its durable handle instead of hiding the lock.
+    expect(retryingLogs(capture)).toHaveLength(1)
+    const opId = harness.events.find((event) =>
+      event.type === BODY_EVENT_TYPE && event.data['op'] === 'op-start')?.data['opId']
+    expect(opId).toBeDefined()
+    expect(result.body['pendingOperation']).toEqual({ opId, status: 'pending' })
+    expect(capture.errors.filter((args) =>
+      String(args[0]).includes('left op') && String(args[0]).includes(String(opId)))).toHaveLength(1)
+
+    // Fail-closed lock: the writes are not restored yet, so the operation must
+    // stay in pendingByAgent with no terminal record; startup recovery still
+    // owns the durable op-start + plan.
+    expect(pendingByAgent.has(sessionId)).toBe(true)
+    expect(harness.events.some((event) => event.type === BODY_EVENT_TYPE
+      && event.data['op'] === 'op-finish')).toBe(false)
+    expect(harness.events.some((event) => event.type === BODY_ABORT_EVENT_TYPE)).toBe(false)
+
+    // A client that retries the regenerate sees the lock, not a silent 500.
+    const retry = await callStartFailureRegenerate(harness, sessionId, capture.logger)
+    expect(retry.status).toBe(409)
+    expect(retry.body).toMatchObject({ ok: false, code: 'session-busy' })
+  })
+
+  it('unlocks the session when the retry recovery completes the restore', async () => {
+    hostState.module = hostRecordModule()
+    const capture = captureLogger()
+    const sessionId = 'session-start-fail-recovered'
+    const harness = createRegenerateHarness('old body', [], sessionId)
+    const failing = { active: false, readsRemaining: 0 }
+    rollbackState.store = flakyRollbackStore(plainCharacter(), projectedChat('old body'), sessionId, failing)
+    rollbackState.memories = { read: async () => undefined }
+    rollbackState.variables = { get: async () => undefined }
+    // The compensation fails exactly once; the delayed recovery retry then
+    // reads a healthy store and finishes the restore.
+    failFollowupAfterStart(harness, () => {
+      failing.active = true
+      failing.readsRemaining = 1
+    })
+
+    const result = await callStartFailureRegenerate(harness, sessionId, capture.logger)
+
+    expect(result.status).toBe(500)
+    expect(result.body).toMatchObject({ ok: false, code: 'operation-failed', message: 'internal storage error' })
+    expect(result.body['pendingOperation']).toBeUndefined()
+    expect(retryingLogs(capture)).toHaveLength(1)
+    expect(capture.infos.filter((args) => String(args[0]).includes('closed op'))).toHaveLength(1)
+
+    // The shared recovery did the full restore: bridge-turn copy of the old
+    // body, terminal op-abort, and the pendingByAgent lock released.
+    expect(pendingByAgent.has(sessionId)).toBe(false)
+    const restoredSeq = harness.events.find((event) =>
+      String(asTestRecord(event.data['message'])?.['id']).startsWith('body-restore-'))?.seq
+    expect(restoredSeq).toBeDefined()
+    expect(harness.surface()).toContain(restoredSeq)
+    expect(harness.events.some((event) => event.type === BODY_ABORT_EVENT_TYPE)).toBe(true)
+    expect(harness.events.some((event) => event.type === BODY_EVENT_TYPE
+      && event.data['op'] === 'op-finish')).toBe(false)
+
+    // Pre-fix this second request was rejected as session-busy with no handle;
+    // after the retry the lock is gone and a new regenerate is judged on its
+    // own merits (here: the restored copy replaced the hidden anchor).
+    harness.agent.followup = (message: unknown) => { harness.followups.push(message) }
+    failing.active = false
+    failing.readsRemaining = 0
+    const retry = await callStartFailureRegenerate(harness, sessionId, capture.logger)
+    expect(retry.body['code']).not.toBe('session-busy')
+  })
+})

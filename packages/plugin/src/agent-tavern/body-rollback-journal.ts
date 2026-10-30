@@ -23,8 +23,10 @@ import {
   variableWriteOf,
   type WriteJournalEntry,
   type WriteJournalMemoryEntry,
+  type WriteJournalMemoryTarget,
   type WriteJournalMemoryTool,
   type WriteJournalVariableEntry,
+  type WriteJournalVariableTarget,
   type WriteJournalVariableTool,
 } from './write-journal.js'
 import {
@@ -244,8 +246,9 @@ function buildJournalGroups(events: readonly unknown[], agentId: string, turn: n
  * is rolled back and can be replayed like a complete pair. A group whose store
  * still holds the before state never committed and is reported as uncommitted.
  * When the store state cannot be verified (an old journal without names, a
- * vanished target, a store read failure, or a current state the journaled
- * payload cannot explain), this refuses with `write-journal-unknown` instead of
+ * vanished target, a store read failure, a current state the journaled payload
+ * cannot explain, or an "uncommitted" verdict a later group of the same turn
+ * can invalidate), this refuses with `write-journal-unknown` instead of
  * silently skipping.
  */
 async function resolveJournalGroups(
@@ -256,7 +259,7 @@ async function resolveJournalGroups(
 ): Promise<JournalBuild> {
   const writes: BodyRollbackJournalWrite[] = []
   const uncommitted: string[] = []
-  for (const group of draft.groups) {
+  for (const [index, group] of draft.groups.entries()) {
     if (group.state === 'write') {
       writes.push(group.write)
       continue
@@ -267,10 +270,91 @@ async function resolveJournalGroups(
     }
     const { journalId, entry } = group.pending
     const resolved = await resolveBeforeOnlyWrite(deps, journalId, entry, agentId, turn)
-    if (resolved === undefined) uncommitted.push(journalId)
-    else writes.push(resolved)
+    if (resolved === undefined) {
+      assertNoLaterGroupTargets(draft.groups, index, group.pending, agentId, turn)
+      uncommitted.push(journalId)
+    } else writes.push(resolved)
   }
   return { writes, uncommitted, tools: draft.tools }
+}
+
+/* ---------------------- same-turn probe-order defense ---------------------- */
+
+const EMPTY_TARGETS: ReadonlyMap<string, string> = new Map()
+
+function variableKeyOf(target: WriteJournalVariableTarget, name: string): string {
+  return `variable:${target.scope}/${target.scopeId}:${name}`
+}
+
+function memoryKeyOf(target: WriteJournalMemoryTarget): string {
+  return `memory:${target.scope}/${target.scopeId}:${target.id}`
+}
+
+/** Store targets one committed journal pair can touch, keyed for intersection. */
+function writeTargetsOf(write: BodyRollbackJournalWrite): ReadonlyMap<string, string> {
+  if (write.kind === 'memory') {
+    return new Map([[memoryKeyOf(write.target), `memory '${write.target.id}'`]])
+  }
+  const targets = new Map<string, string>()
+  for (const snapshot of [...(write.before ?? []), ...(write.after ?? [])]) {
+    targets.set(variableKeyOf(write.target, snapshot.name), `variable '${snapshot.name}'`)
+  }
+  return targets
+}
+
+/**
+ * Store targets one before-only record can touch, keyed for intersection.
+ *
+ * Tolerant by design: a legacy record without names yields no keys, and the
+ * probe itself keeps refusing such records, so this never preempts its errors.
+ */
+function entryTargetsOf(entry: WriteJournalMemoryEntry | WriteJournalVariableEntry): ReadonlyMap<string, string> {
+  if (entry.kind === 'memory') {
+    return new Map([[memoryKeyOf(entry.target), `memory '${entry.target.id}'`]])
+  }
+  const targets = new Map<string, string>()
+  for (const name of [...(entry.names ?? []), ...(entry.before ?? []).map((snapshot) => snapshot.name)]) {
+    targets.set(variableKeyOf(entry.target, name), `variable '${name}'`)
+  }
+  return targets
+}
+
+/**
+ * Refuse an "uncommitted" probe verdict a later same-turn group invalidates.
+ *
+ * Pending groups are probed oldest-first, but the probe reads the store after
+ * the whole turn landed and undo runs newest-first. When a later journal group
+ * of the same turn writes the same target, the missing store state behind an
+ * "uncommitted" verdict may be that later group's delete, and undoing the later
+ * group first would restore a state this turn created. The verdict cannot be
+ * attributed to this journal alone, so the rollback refuses with
+ * `write-journal-unknown` instead of silently skipping the group. A later
+ * `uncommitted` group provably wrote nothing, so it cannot invalidate anything.
+ */
+function assertNoLaterGroupTargets(
+  groups: readonly DraftJournalGroup[],
+  index: number,
+  pending: PendingJournalGroup,
+  agentId: string,
+  turn: number,
+): void {
+  const probed = entryTargetsOf(pending.entry)
+  if (probed.size === 0) return
+  for (let later = index + 1; later < groups.length; later += 1) {
+    const group = groups[later]!
+    if (group.state === 'uncommitted') continue
+    const targets = group.state === 'write'
+      ? writeTargetsOf(group.write)
+      : entryTargetsOf(group.pending.entry)
+    for (const [key, label] of probed) {
+      if (!targets.has(key)) continue
+      throw new BodyRollbackError(
+        'body-state-unsafe',
+        `body rollback for session '${agentId}' turn ${turn} cannot treat the before-only write journal '${pending.journalId}' as uncommitted: a later journal group of the same turn also writes ${label}, so the missing store state may be that group's doing and its newest-first undo could restore a state this turn created`,
+        { detail: 'write-journal-unknown', stage: 'prepare', sessionId: agentId, turn, journalId: pending.journalId },
+      )
+    }
+  }
 }
 
 /**

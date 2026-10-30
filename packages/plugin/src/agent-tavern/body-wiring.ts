@@ -34,7 +34,9 @@ import {
   type BodyAgentLike,
   type BodyEditInspection,
   type BodyRuntimeDeps,
+  type BodyRuntimeFailure,
   type BodySessionLike,
+  type PendingBodyOperation,
 } from './body-runtime.js'
 import { bodyStateUnsafeMessage } from './body-view.js'
 import {
@@ -803,6 +805,77 @@ export function recoverBodyOperations(ctx: BodyWiringContext): Promise<readonly 
 /** Recover one agent (`agent/created` path). */
 export function recoverBodyOperation(ctx: BodyWiringContext, agentValue: unknown): Promise<BodyRecoveryOutcome> {
   return recoverBodyOperationWith(ctx, agentValue, createBodyDeps)
+}
+
+/**
+ * Extract the pending operation a runtime failure carried out of its catch
+ * path. Only failures that could not put their writes back attach one; a plain
+ * `session-busy` rejection never does, so a retry storm cannot build up.
+ */
+export function pendingOperationOf(error: unknown): PendingBodyOperation | undefined {
+  if (!(error instanceof Error)) return undefined
+  const op = (error as BodyRuntimeFailure).op
+  return typeof op?.opId === 'string' ? op : undefined
+}
+
+/**
+ * One bounded in-process retry for a body failure whose compensation could not
+ * restore the writes (review M4). Without it the operation stays locked in
+ * `pendingByAgent` with no turn/end edge scheduled, so every later regenerate
+ * answers `session-busy` until the process restarts. The retry hands the locked
+ * operation to the same shared recovery startup uses; the durable `op-start` +
+ * plan stay untouched, so a failure still leaves startup recovery in charge.
+ *
+ * Returns `true` when the operation is no longer locked in this process (the
+ * caller then omits the pending handle from the failure response).
+ */
+export async function retryPendingBodyRecovery(
+  ctx: BodyWiringContext,
+  agentValue: unknown,
+  op: PendingBodyOperation,
+): Promise<boolean> {
+  const agent = bodyAgentOf(agentValue)
+  const agentId = agent === undefined ? undefined : agentIdOf(agent)
+  if (agentId === undefined || pendingByAgent.get(agentId)?.opId !== op.opId) return true
+  warn(ctx, `dsh-soulmojito body: start failure left op ${op.opId} locked; retrying recovery once in process`, {
+    agentId,
+    opId: op.opId,
+  })
+  let outcome: BodyRecoveryOutcome | undefined
+  try {
+    outcome = await recoverBodyOperationWith(ctx, agentValue, createBodyDeps)
+  } catch (error) {
+    if (pendingByAgent.get(agentId)?.opId !== op.opId) {
+      info(ctx, `dsh-soulmojito body: recovery retry closed op ${op.opId}`, {
+        agentId,
+        opId: op.opId,
+        note: 'after a logged recovery error',
+        error: errorMessage(error),
+      })
+      return true
+    }
+    errorLog(ctx, `dsh-soulmojito body: recovery retry left op ${op.opId} pending for startup recovery`, {
+      agentId,
+      opId: op.opId,
+      error: errorMessage(error),
+    })
+    return false
+  }
+  if (pendingByAgent.get(agentId)?.opId !== op.opId) {
+    info(ctx, `dsh-soulmojito body: recovery retry closed op ${op.opId}`, {
+      agentId,
+      opId: op.opId,
+      status: outcome.status,
+    })
+    return true
+  }
+  errorLog(ctx, `dsh-soulmojito body: recovery retry left op ${op.opId} pending for startup recovery`, {
+    agentId,
+    opId: op.opId,
+    status: outcome.status,
+    ...(outcome.reason === undefined ? {} : { reason: outcome.reason }),
+  })
+  return false
 }
 
 /* ------------------------------- re-exports -------------------------------- */

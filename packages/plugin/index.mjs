@@ -10084,7 +10084,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("8922a19") : void 0;
+  const commit = true ? normalizeCommit("6207c6c") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -23347,11 +23347,17 @@ async function restoreBodyAfterFailureLocked(deps, op) {
     if (ledgerBeforeRestore === void 0) {
       appendBodyEvent(deps, { op: "candidate", groupId: op.groupId, messageId: op.previousAnchorId, index: 0 });
     }
-    appendBodyEvent(deps, {
+    requireRecordWriter(deps)(deps.session, BODY_EVENT_TYPE, {
       op: "restore",
       groupId: op.groupId,
       messageId: restoredMessageId,
-      index: op.previousIndex
+      index: op.previousIndex,
+      // Review M3 revision 2026-10-30: retries claim this copy by opId, so a
+      // candidate switch between the restore and its retry (select moves only
+      // the ledger selection) cannot append a second copy of the old body. The
+      // extra field rides the record writer's unknown payload and stays out of
+      // the ledger's strict parser, like `op-start`'s `rollbackPlan`.
+      opId: op.opId
     });
     deps.session.append("step/end", { turn, step: 1 });
     stepOpen = false;
@@ -23380,11 +23386,31 @@ async function restoreBodyAfterFailureLocked(deps, op) {
   return restoredMessageId;
 }
 function restoredAnchorOf(events, surface, op) {
+  const claimed = restoreCopyOfOperation(events, op.opId);
+  if (claimed !== void 0) {
+    return findSurfaceSeqByMessageId(events, surface, claimed) === void 0 ? void 0 : claimed;
+  }
   const ledger = bodyLedger(events, op.groupId);
   if (ledger === void 0 || ledger.selectedIndex !== op.previousIndex) return void 0;
   const anchor = ledger.anchorMessageId;
   if (!anchor.startsWith("body-restore-") || anchor === op.previousAnchorId) return void 0;
   return findSurfaceSeqByMessageId(events, surface, anchor) === void 0 ? void 0 : anchor;
+}
+function restoreCopyOfOperation(events, opId) {
+  let found;
+  for (const event of events) {
+    if (event.type !== BODY_EVENT_TYPE) continue;
+    if (event.data["op"] !== "restore" || event.data["opId"] !== opId) continue;
+    const messageId = event.data["messageId"];
+    if (typeof messageId !== "string" || messageId === "") {
+      throw bodyRuntimeError(
+        "invalid-event",
+        `body restore record at seq ${event.seq} of operation '${opId}' requires messageId to be a non-empty string`
+      );
+    }
+    found = messageId;
+  }
+  return found;
 }
 function restoreAbortReason(events, op) {
   const evidence = settlementEvidenceOf(events, op.opId);
@@ -24353,10 +24379,12 @@ var AgentTavernProjector = class _AgentTavernProjector {
     return this.tails.enqueue(session.id, () => this.projectOne(session, event));
   }
   async replay(session) {
-    this.checkpoints.delete(session.id);
-    const events = [...sessionEvents(session)].sort((left, right) => left.seq - right.seq);
-    await this.clampPendingCursor(session.id, events);
-    for (const event of events) await this.project(session, event);
+    await this.tails.enqueue(session.id, async () => {
+      this.checkpoints.delete(session.id);
+      const events = [...sessionEvents(session)].sort((left, right) => left.seq - right.seq);
+      await this.clampPendingCursor(session.id, events);
+      for (const event of events) await this.projectOne(session, event);
+    });
   }
   async status(sessionId) {
     return structuredClone(await this.readCheckpoint(sessionId));
@@ -27292,7 +27320,7 @@ function buildJournalGroups(events, agentId, turn) {
 async function resolveJournalGroups(deps, draft, agentId, turn) {
   const writes = [];
   const uncommitted = [];
-  for (const group2 of draft.groups) {
+  for (const [index, group2] of draft.groups.entries()) {
     if (group2.state === "write") {
       writes.push(group2.write);
       continue;
@@ -27303,10 +27331,55 @@ async function resolveJournalGroups(deps, draft, agentId, turn) {
     }
     const { journalId, entry } = group2.pending;
     const resolved = await resolveBeforeOnlyWrite(deps, journalId, entry, agentId, turn);
-    if (resolved === void 0) uncommitted.push(journalId);
-    else writes.push(resolved);
+    if (resolved === void 0) {
+      assertNoLaterGroupTargets(draft.groups, index, group2.pending, agentId, turn);
+      uncommitted.push(journalId);
+    } else writes.push(resolved);
   }
   return { writes, uncommitted, tools: draft.tools };
+}
+function variableKeyOf(target, name2) {
+  return `variable:${target.scope}/${target.scopeId}:${name2}`;
+}
+function memoryKeyOf(target) {
+  return `memory:${target.scope}/${target.scopeId}:${target.id}`;
+}
+function writeTargetsOf(write) {
+  if (write.kind === "memory") {
+    return /* @__PURE__ */ new Map([[memoryKeyOf(write.target), `memory '${write.target.id}'`]]);
+  }
+  const targets = /* @__PURE__ */ new Map();
+  for (const snapshot2 of [...write.before ?? [], ...write.after ?? []]) {
+    targets.set(variableKeyOf(write.target, snapshot2.name), `variable '${snapshot2.name}'`);
+  }
+  return targets;
+}
+function entryTargetsOf(entry) {
+  if (entry.kind === "memory") {
+    return /* @__PURE__ */ new Map([[memoryKeyOf(entry.target), `memory '${entry.target.id}'`]]);
+  }
+  const targets = /* @__PURE__ */ new Map();
+  for (const name2 of [...entry.names ?? [], ...(entry.before ?? []).map((snapshot2) => snapshot2.name)]) {
+    targets.set(variableKeyOf(entry.target, name2), `variable '${name2}'`);
+  }
+  return targets;
+}
+function assertNoLaterGroupTargets(groups, index, pending, agentId, turn) {
+  const probed = entryTargetsOf(pending.entry);
+  if (probed.size === 0) return;
+  for (let later = index + 1; later < groups.length; later += 1) {
+    const group2 = groups[later];
+    if (group2.state === "uncommitted") continue;
+    const targets = group2.state === "write" ? writeTargetsOf(group2.write) : entryTargetsOf(group2.pending.entry);
+    for (const [key, label] of probed) {
+      if (!targets.has(key)) continue;
+      throw new BodyRollbackError(
+        "body-state-unsafe",
+        `body rollback for session '${agentId}' turn ${turn} cannot treat the before-only write journal '${pending.journalId}' as uncommitted: a later journal group of the same turn also writes ${label}, so the missing store state may be that group's doing and its newest-first undo could restore a state this turn created`,
+        { detail: "write-journal-unknown", stage: "prepare", sessionId: agentId, turn, journalId: pending.journalId }
+      );
+    }
+  }
 }
 async function loadTurnJournal(deps, agentId, turn) {
   const events = await readEvents(deps, agentId, turn);
@@ -29583,6 +29656,55 @@ function recoverBodyOperations(ctx) {
 }
 function recoverBodyOperation(ctx, agentValue) {
   return recoverBodyOperationWith(ctx, agentValue, createBodyDeps);
+}
+function pendingOperationOf(error) {
+  if (!(error instanceof Error)) return void 0;
+  const op = error.op;
+  return typeof op?.opId === "string" ? op : void 0;
+}
+async function retryPendingBodyRecovery(ctx, agentValue, op) {
+  const agent = bodyAgentOf(agentValue);
+  const agentId = agent === void 0 ? void 0 : agentIdOf(agent);
+  if (agentId === void 0 || pendingByAgent.get(agentId)?.opId !== op.opId) return true;
+  warn2(ctx, `dsh-soulmojito body: start failure left op ${op.opId} locked; retrying recovery once in process`, {
+    agentId,
+    opId: op.opId
+  });
+  let outcome;
+  try {
+    outcome = await recoverBodyOperationWith(ctx, agentValue, createBodyDeps);
+  } catch (error) {
+    if (pendingByAgent.get(agentId)?.opId !== op.opId) {
+      info(ctx, `dsh-soulmojito body: recovery retry closed op ${op.opId}`, {
+        agentId,
+        opId: op.opId,
+        note: "after a logged recovery error",
+        error: errorMessage3(error)
+      });
+      return true;
+    }
+    errorLog(ctx, `dsh-soulmojito body: recovery retry left op ${op.opId} pending for startup recovery`, {
+      agentId,
+      opId: op.opId,
+      error: errorMessage3(error)
+    });
+    return false;
+  }
+  if (pendingByAgent.get(agentId)?.opId !== op.opId) {
+    info(ctx, `dsh-soulmojito body: recovery retry closed op ${op.opId}`, {
+      agentId,
+      opId: op.opId,
+      status: outcome.status
+    });
+    return true;
+  }
+  errorLog(ctx, `dsh-soulmojito body: recovery retry left op ${op.opId} pending for startup recovery`, {
+    agentId,
+    opId: op.opId,
+    status: outcome.status,
+    ...outcome.reason === void 0 ? {} : { reason: outcome.reason }
+  });
+  return false;
 }
 function combineDisposers(ctx, disposers) {
   if (disposers.length === 0) return void 0;
@@ -50653,15 +50775,22 @@ async function handleAgentTavernBodyApi(ctx, db, req, res, url, route, method) {
     const state = await selectBodyCandidate(deps, { groupId, index, expectedAnchorId });
     return sendJson(res, 200, { ok: true, state });
   } catch (error) {
-    return sendBodyFailure(res, bodyFailureOf(error));
+    const pending = pendingOperationOf(error);
+    const recovered = pending === void 0 || await retryPendingBodyRecovery(wiring, agent, pending);
+    return sendBodyFailure(
+      res,
+      bodyFailureOf(error),
+      recovered || pending === void 0 ? void 0 : { opId: pending.opId, status: "pending" }
+    );
   }
 }
-function sendBodyFailure(res, failure) {
+function sendBodyFailure(res, failure, pendingOperation) {
   sendJson(res, failure.status, {
     ok: false,
     code: failure.code,
     message: failure.message,
-    ...failure.detail === void 0 ? {} : { detail: failure.detail }
+    ...failure.detail === void 0 ? {} : { detail: failure.detail },
+    ...pendingOperation === void 0 ? {} : { pendingOperation }
   });
 }
 function bodyString(body, field) {

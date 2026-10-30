@@ -927,6 +927,102 @@ describe('rollback of before-only groups after store failures', () => {
     expect(error).toMatchObject({ code: 'body-state-unsafe', detail: 'write-journal-missing' })
     expect((error as Error).message).toContain('failed record without a before record')
   })
+
+  it('refuses a same-turn create whose later delete would resurrect it on undo', async () => {
+    const harness = createJournalSession(50)
+    const variables = await VariableStore.open(join(home, 'soulmojito'))
+    // The create's store write committed, then the process died before the
+    // after append; the same turn deleted the variable again.
+    await variables.set('chat', chatId, 'journal.turn-create-delete', 'created')
+    pushRawJournal(harness, {
+      kind: 'variable', tool: 'variable_set', journalId: 'journal-turn-create', sessionId: AGENT_ID, turn: 50,
+      phase: 'before', at: CREATED_AT,
+      target: { scope: 'chat', scopeId: chatId },
+      names: ['journal.turn-create-delete'],
+      payload: [{ name: 'journal.turn-create-delete', value: 'created' }],
+      before: null,
+    })
+    await runTool('variable_delete', { scope: 'chat', name: 'journal.turn-create-delete' }, harness)
+
+    const error = await captureErrorOf(() => rollbackOf(harness, 50))
+
+    expect(error).toMatchObject({ code: 'body-state-unsafe', detail: 'write-journal-unknown' })
+    expect((error as Error).message).toContain("variable 'journal.turn-create-delete'")
+    // The refusal must not resurrect the variable this turn created: the
+    // variable did not exist before the turn, so the store stays without it.
+    expect(await variables.get('chat', chatId, 'journal.turn-create-delete')).toBeUndefined()
+  })
+
+  it('refuses same-turn create and delete groups that both lost their after record', async () => {
+    const harness = createJournalSession(51)
+    const variables = await VariableStore.open(join(home, 'soulmojito'))
+    const created = await variables.set('chat', chatId, 'journal.turn-both-lost', 'created')
+    await variables.delete('chat', chatId, 'journal.turn-both-lost', created.revision)
+    pushRawJournal(harness, {
+      kind: 'variable', tool: 'variable_set', journalId: 'journal-turn-both-create', sessionId: AGENT_ID, turn: 51,
+      phase: 'before', at: CREATED_AT,
+      target: { scope: 'chat', scopeId: chatId },
+      names: ['journal.turn-both-lost'],
+      before: null,
+    })
+    pushRawJournal(harness, {
+      kind: 'variable', tool: 'variable_delete', journalId: 'journal-turn-both-delete', sessionId: AGENT_ID, turn: 51,
+      phase: 'before', at: CREATED_AT,
+      target: { scope: 'chat', scopeId: chatId },
+      names: ['journal.turn-both-lost'],
+      before: [created],
+    })
+
+    const error = await captureErrorOf(() => rollbackOf(harness, 51))
+
+    expect(error).toMatchObject({ code: 'body-state-unsafe', detail: 'write-journal-unknown' })
+    expect(await variables.get('chat', chatId, 'journal.turn-both-lost')).toBeUndefined()
+  })
+
+  it('rolls back a same-turn delete-then-create back to the pre-turn value', async () => {
+    const harness = createJournalSession(52)
+    const variables = await VariableStore.open(join(home, 'soulmojito'))
+    await variables.set('chat', chatId, 'journal.turn-delete-create', 'old')
+    await runTool('variable_delete', { scope: 'chat', name: 'journal.turn-delete-create' }, harness)
+    // The re-create committed, then the process died before the after append.
+    await variables.set('chat', chatId, 'journal.turn-delete-create', 'new')
+    pushRawJournal(harness, {
+      kind: 'variable', tool: 'variable_set', journalId: 'journal-turn-recreate', sessionId: AGENT_ID, turn: 52,
+      phase: 'before', at: CREATED_AT,
+      target: { scope: 'chat', scopeId: chatId },
+      names: ['journal.turn-delete-create'],
+      payload: [{ name: 'journal.turn-delete-create', value: 'new' }],
+      before: null,
+    })
+
+    const result = await rollbackOf(harness, 52)
+
+    expect(result).toMatchObject({ undone: 2, skippedUncommitted: [], failures: [] })
+    expect(await variables.get('chat', chatId, 'journal.turn-delete-create')).toMatchObject({ value: 'old' })
+  })
+
+  it('rolls back a before-only create when the later delete of the same name failed', async () => {
+    const harness = createJournalSession(53)
+    const variables = await VariableStore.open(join(home, 'soulmojito'))
+    await variables.set('chat', chatId, 'journal.turn-failed-delete', 'created-v')
+    pushRawJournal(harness, {
+      kind: 'variable', tool: 'variable_set', journalId: 'journal-turn-failed-create', sessionId: AGENT_ID, turn: 53,
+      phase: 'before', at: CREATED_AT,
+      target: { scope: 'chat', scopeId: chatId },
+      names: ['journal.turn-failed-delete'],
+      payload: [{ name: 'journal.turn-failed-delete', value: 'created-v' }],
+      before: null,
+    })
+    await expect(runTool('variable_delete', {
+      scope: 'chat', name: 'journal.turn-failed-delete', expectedRevision: 'stale-revision',
+    }, harness)).rejects.toThrow(/changed in another operation/i)
+
+    const result = await rollbackOf(harness, 53)
+
+    // A failed delete never wrote, so it cannot invalidate the create's probe.
+    expect(result).toMatchObject({ undone: 1, skippedUncommitted: [expect.any(String)], failures: [] })
+    expect(await variables.get('chat', chatId, 'journal.turn-failed-delete')).toBeUndefined()
+  })
 })
 
 describe('settle intents', () => {

@@ -30,6 +30,8 @@ import {
   type BodyWriteRollbackPort,
 } from '../src/agent-tavern/body-rollback.js'
 import {
+  BODY_ABORT_EVENT_TYPE,
+  BODY_EVENT_TYPE,
   restoreBodyAfterFailure,
   type BodyAgentLike,
   type BodyRuntimeDeps,
@@ -489,6 +491,75 @@ describe('AgentTavern body rollback integration (real stores + live write journa
     expect(branchAfter.revision).toBe(branchBefore.revision)
     expect(receiptOf(branchAfter.chat, CANDIDATE_MESSAGE_ID)?.undoneAt).toBeUndefined()
   })
+
+  it('claims an earlier restore copy by opId after a candidate switch instead of appending a second old-body copy', async () => {
+    const fixture = await createFixture('restore-claim')
+    const base = createPort(fixture, {})
+    const calls: string[] = []
+    const port: BodyWriteRollbackPort = {
+      ...base,
+      rollbackTurnWrites: async (agentId: string, turn: number) => {
+        calls.push(`rollback-turn:${turn}`)
+        return base.rollbackTurnWrites(agentId, turn)
+      },
+      restore: async (plan: BodyRollbackPlan) => {
+        calls.push('restore')
+        return base.restore(plan)
+      },
+    }
+    const harness = createSurfaceRuntimeHarness(fixture, port)
+    const op: PendingBodyOperation = pendingClaimOperation(fixture, 'body-op-restore-claim', 'body-group-restore-claim')
+    seedClaimSession(harness, op)
+
+    // First restore attempt: the copy and its opId-tagged ledger record land,
+    // then the terminal op-abort write dies. The operation stays pending
+    // exactly like a crash between the restore turn and the abort record.
+    harness.failNextAbortRecord()
+    const firstFailure = await restoreBodyAfterFailure(harness.deps, op).then(
+      () => { throw new Error('expected the first restore to lose its abort record') },
+      (error: unknown) => error as BodyRuntimeFailure,
+    )
+    expect(firstFailure.message).toContain('could not record op-abort')
+    expect(firstFailure.code).toBe('operation-failed')
+    const copies = restoreCopiesOf(harness)
+    expect(copies).toHaveLength(1)
+    const firstCopy = copies[0]
+    if (firstCopy === undefined) throw new Error('the first restore appended no copy')
+    expect(calls).toEqual([`rollback-turn:${FAILED_TURN}`])
+
+    // The user switches candidates while the operation is still pending:
+    // select only moves the ledger selection and checks no pending operation,
+    // so the moved selection is exactly what a retry observes.
+    harness.push(BODY_EVENT_TYPE, { op: 'select', groupId: op.groupId, index: 1 })
+
+    // Retry: the copy is claimed by the record's opId, not by the selection.
+    const retried = await restoreBodyAfterFailure(harness.deps, op)
+    expect(retried).toBe(firstCopy)
+    expect(restoreCopiesOf(harness)).toEqual([firstCopy])
+    expect(lastAbortOf(harness)).toMatchObject({ op: 'op-abort', opId: op.opId, anchorId: firstCopy })
+    expect(restoreRecordOf(harness, op.opId)).toMatchObject({ messageId: firstCopy, index: op.previousIndex })
+    // The claim short-circuits the whole restore sequence: no second port pass.
+    expect(calls).toEqual([`rollback-turn:${FAILED_TURN}`])
+  })
+
+  it('claims a legacy restore record without opId through the restored selection proof', async () => {
+    const fixture = await createFixture('restore-claim-legacy')
+    const port = createPort(fixture, {})
+    const harness = createSurfaceRuntimeHarness(fixture, port)
+    const op = pendingClaimOperation(fixture, 'body-op-restore-claim-legacy', 'body-group-restore-claim-legacy')
+    seedClaimSession(harness, op)
+
+    // An old-format restore turn (written before the opId revision): copy plus
+    // restore record with no opId, and no terminal abort record yet.
+    appendLegacyRestoreTurn(harness, op)
+    const legacyCopy = restoreCopiesOf(harness)[0]
+    if (legacyCopy === undefined) throw new Error('the seeded legacy restore turn appended no copy')
+
+    const restored = await restoreBodyAfterFailure(harness.deps, op)
+    expect(restored).toBe(legacyCopy)
+    expect(restoreCopiesOf(harness)).toEqual([legacyCopy])
+    expect(lastAbortOf(harness)).toMatchObject({ op: 'op-abort', opId: op.opId, anchorId: legacyCopy })
+  })
 })
 
 async function createFixture(label: string): Promise<Fixture> {
@@ -858,4 +929,271 @@ function asRecord(value: unknown): Record<string, unknown> {
     throw new Error('expected an object value')
   }
   return value as Record<string, unknown>
+}
+
+/* ------------------- runtime restore harness (copy claim) ------------------- */
+
+/** Surface mutation an appended event requests from the host session. */
+interface SurfaceAppendOptions {
+  readonly surfaceOp?: { readonly op: 'replace'; readonly startSeq: number; readonly endSeq: number } | 'append'
+}
+
+/**
+ * `BodyRuntimeDeps` around a surface-tracking fake session: user and assistant
+ * messages join the surface, a developer replace swaps its range for the hide
+ * node, and plugin records never touch it. The claim tests ride the restore
+ * path whose only host dependency is this surface bookkeeping.
+ */
+interface SurfaceRuntimeHarness {
+  readonly deps: BodyRuntimeDeps
+  readonly events: unknown[]
+  push(type: string, data: unknown, options?: SurfaceAppendOptions): void
+  failNextAbortRecord(): void
+}
+
+function createSurfaceRuntimeHarness(fixture: Fixture, port: BodyWriteRollbackPort): SurfaceRuntimeHarness {
+  const events: unknown[] = []
+  const surface: number[] = []
+  let abortFailures = 0
+  const session: BodySessionLike = {
+    id: fixture.sessionId,
+    header: { version: 4 },
+    events,
+    get surface() {
+      return { nodes: [...surface] }
+    },
+    append: (type: string, data: unknown, options?: unknown) => {
+      if (abortFailures > 0 && type === BODY_ABORT_EVENT_TYPE) {
+        abortFailures -= 1
+        throw new Error('injected body-abort append failure')
+      }
+      const event = { type, seq: events.length, time: Date.now(), data }
+      events.push(event)
+      applyToSurface(surface, type, event.seq, options)
+      return event
+    },
+  }
+  const agent: BodyAgentLike = {
+    id: fixture.sessionId,
+    session,
+    status: 'idle',
+    phase: { kind: 'idle', lastTurn: FAILED_TURN },
+    followup: () => undefined,
+  }
+  return {
+    deps: {
+      session,
+      agent,
+      appendRecord: (target: BodySessionLike, type: string, data: unknown) => target.append(type, data),
+      writeRollback: port,
+    },
+    events,
+    push: (type: string, data: unknown, options?: SurfaceAppendOptions) => {
+      session.append(type, data, options)
+    },
+    failNextAbortRecord: () => {
+      abortFailures += 1
+    },
+  }
+}
+
+function applyToSurface(surface: number[], type: string, seq: number, options: unknown): void {
+  const surfaceOp = recordOf(options)?.['surfaceOp']
+  if (surfaceOp === 'append') {
+    surface.push(seq)
+    return
+  }
+  const replace = recordOf(surfaceOp)
+  if (replace !== undefined && replace['op'] === 'replace') {
+    const startSeq = replace['startSeq']
+    const endSeq = replace['endSeq']
+    if (typeof startSeq === 'number' && typeof endSeq === 'number') {
+      for (let index = surface.length - 1; index >= 0; index -= 1) {
+        const node = surface[index]
+        if (node !== undefined && node >= startSeq && node <= endSeq) surface.splice(index, 1)
+      }
+      surface.push(seq)
+    }
+    return
+  }
+  if (type === 'user/message' || type === 'assistant/message') surface.push(seq)
+}
+
+function recordOf(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  return value as Record<string, unknown>
+}
+
+function pendingClaimOperation(
+  fixture: Fixture,
+  opId: string,
+  groupId: string,
+): PendingBodyOperation {
+  return {
+    opId,
+    groupId,
+    previousAnchorId: OLD_MESSAGE_ID,
+    previousIndex: 0,
+    startSeq: 0,
+    agentId: fixture.sessionId,
+    triggerMessageId: TRIGGER_MESSAGE_ID,
+    turn: FAILED_TURN,
+  }
+}
+
+/**
+ * Closed old turn whose anchor was hidden at operation start (proposal 0021
+ * §6.2), the op-start and both ledger candidates, then the closed failed turn
+ * with its trigger and candidate. The surface never shows the old anchor, so a
+ * restore must append a `body-restore-*` copy.
+ */
+function seedClaimSession(harness: SurfaceRuntimeHarness, op: PendingBodyOperation): void {
+  const push = harness.push
+  push('turn/start', { turn: 1 })
+  push('user/message', {
+    id: 'user-old',
+    role: 'user',
+    content: [{ type: 'text', text: 'Go on.' }],
+    source: { kind: 'user' },
+  })
+  const anchorSeq = harness.events.length
+  push('assistant/message', {
+    turn: 1,
+    step: 1,
+    stream: [],
+    message: {
+      id: OLD_MESSAGE_ID,
+      role: 'assistant',
+      content: [{ type: 'text', text: OLD_BODY }],
+      source: { kind: 'model', provider: 'test-provider', model: 'test-model' },
+    },
+  })
+  push('turn/end', { turn: 1, reason: { kind: 'completed' } })
+  push('developer/message', {
+    turn: 1,
+    step: 1,
+    message: { id: 'body-hide-start', role: 'developer', content: [] },
+  }, { surfaceOp: { op: 'replace', startSeq: anchorSeq, endSeq: anchorSeq } })
+  push(BODY_EVENT_TYPE, {
+    op: 'op-start',
+    opId: op.opId,
+    groupId: op.groupId,
+    kind: 'regenerate',
+    previousAnchorId: OLD_MESSAGE_ID,
+    previousIndex: 0,
+  })
+  push(BODY_EVENT_TYPE, { op: 'candidate', groupId: op.groupId, messageId: OLD_MESSAGE_ID, index: 0 })
+  push('turn/start', { turn: FAILED_TURN })
+  push('user/message', {
+    id: TRIGGER_MESSAGE_ID,
+    role: 'user',
+    content: [{ type: 'text', text: 'Regenerate the last reply.' }],
+    source: { kind: 'plugin:dsh-soulmojito', form: 'body-regenerate' },
+  })
+  push('assistant/message', {
+    turn: FAILED_TURN,
+    step: 1,
+    stream: [],
+    message: {
+      id: CANDIDATE_MESSAGE_ID,
+      role: 'assistant',
+      content: [{ type: 'text', text: CANDIDATE_BODY }],
+      source: { kind: 'model', provider: 'test-provider', model: 'test-model' },
+    },
+  })
+  push(BODY_EVENT_TYPE, { op: 'candidate', groupId: op.groupId, messageId: CANDIDATE_MESSAGE_ID, index: 1 })
+  push('turn/end', { turn: FAILED_TURN, reason: { kind: 'error', error: { message: 'model failed', code: 'TEST' } } })
+}
+
+/**
+ * Hand-built restore turn in the pre-revision shape: bridge turn, hide of the
+ * failed turn's nodes, the old-body copy, and a `restore` record with no opId.
+ */
+function appendLegacyRestoreTurn(harness: SurfaceRuntimeHarness, op: PendingBodyOperation): void {
+  const triggerSeq = messageIdSeqOf(harness, TRIGGER_MESSAGE_ID)
+  const candidateSeq = messageIdSeqOf(harness, CANDIDATE_MESSAGE_ID)
+  if (triggerSeq === undefined || candidateSeq === undefined) {
+    throw new Error('claim session is missing its trigger or candidate message')
+  }
+  const push = harness.push
+  const turn = 3
+  push('turn/start', { turn })
+  push('step/start', { turn, step: 1 })
+  push('developer/message', {
+    turn,
+    step: 1,
+    message: { id: 'body-hide-legacy', role: 'developer', content: [] },
+  }, { surfaceOp: { op: 'replace', startSeq: triggerSeq, endSeq: candidateSeq } })
+  push('assistant/message', {
+    turn,
+    step: 1,
+    stream: [],
+    message: {
+      id: 'body-restore-legacy-copy',
+      role: 'assistant',
+      content: [{ type: 'text', text: OLD_BODY }],
+      source: { kind: 'model', provider: 'test-provider', model: 'test-model' },
+    },
+  }, { surfaceOp: 'append' })
+  push(BODY_EVENT_TYPE, {
+    op: 'restore',
+    groupId: op.groupId,
+    messageId: 'body-restore-legacy-copy',
+    index: op.previousIndex,
+  })
+  push('step/end', { turn, step: 1 })
+  push('turn/end', { turn, reason: { kind: 'completed' } })
+}
+
+/** Every `body-restore-*` assistant message id currently in the log, in order. */
+function restoreCopiesOf(harness: SurfaceRuntimeHarness): string[] {
+  const ids: string[] = []
+  for (const value of harness.events) {
+    const event = recordOf(value)
+    if (event === undefined || event['type'] !== 'assistant/message') continue
+    const message = recordOf(recordOf(event['data'])['message'])
+    const id = message?.['id']
+    if (typeof id === 'string' && id.startsWith('body-restore-')) ids.push(id)
+  }
+  return ids
+}
+
+/** Data of the last abort record, if any. */
+function lastAbortOf(harness: SurfaceRuntimeHarness): Record<string, unknown> | undefined {
+  let found: Record<string, unknown> | undefined
+  for (const value of harness.events) {
+    const event = recordOf(value)
+    if (event === undefined || event['type'] !== BODY_ABORT_EVENT_TYPE) continue
+    found = recordOf(event['data'])
+  }
+  return found
+}
+
+/** Data of the restore record this operation tagged, if any. */
+function restoreRecordOf(harness: SurfaceRuntimeHarness, opId: string): Record<string, unknown> | undefined {
+  for (const value of harness.events) {
+    const event = recordOf(value)
+    if (event === undefined || event['type'] !== BODY_EVENT_TYPE) continue
+    const data = recordOf(event['data'])
+    if (data?.['op'] === 'restore' && data['opId'] === opId) return data
+  }
+  return undefined
+}
+
+function messageIdSeqOf(harness: SurfaceRuntimeHarness, messageId: string): number | undefined {
+  for (const value of harness.events) {
+    const event = recordOf(value)
+    if (event === undefined) continue
+    const data = recordOf(event['data'])
+    const message = data === undefined ? undefined : recordOf(data['message'])
+    if (event['type'] === 'assistant/message' && message?.['id'] === messageId) {
+      const seq = event['seq']
+      return typeof seq === 'number' ? seq : undefined
+    }
+    if (event['type'] === 'user/message' && data?.['id'] === messageId) {
+      const seq = event['seq']
+      return typeof seq === 'number' ? seq : undefined
+    }
+  }
+  return undefined
 }

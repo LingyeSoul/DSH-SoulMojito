@@ -122,7 +122,7 @@
 | v1 迁移未持久化在读取路径 | replay 前每次重启都会重新迁移一次（幂等无害）；迁移后、replay 前 `GET /projection` 如实显示 `pending/-1/0` 未验证态。 |
 | v1 pending 会话成本 | 修复从「按 pendingCursor 重放」变为「一次性全量重放」，长会话多付一次幂等重放。 |
 | 词表固有边界 | reason/message 中不含词表特征的内部信息（内部用户名等）会被 `publicErrorMessage` 放行——分类器既有设计边界。 |
-| 未修项 | M1（replay 与实时交错）、M2（同 turn create+delete 探测顺序）、M3（restore 认领按 selectedIndex）、M4（补偿失败锁死到重启）与全部 Low/Nit 留待下一轮。 |
+| 未修项 | 剩余 Low/Nit（router 降级不可达分支、canRegenerate 不看 editGate、store.ts ENOENT 契约、cloneChatRecord 形状、快照缓存测试钉 claim、settle-intent fail-open、importedMirrorAnchorText 上界、歧义错误放大、\0 缓存 key）留待下一轮；M1-M4 已在本文件末节收口。 |
 | 无真机 E2E | 构造日志验证，没有进程 kill / 浏览器 E2E。 |
 
 ## 删除路径
@@ -135,3 +135,70 @@
   replay 成功前不被改写；读端接受 1|2 两版本。
 - `publicLastOperation`/`publicErrorMessage` 包裹只影响 HTTP 出网文本；去掉即回退
   原样透传，无持久化数据依赖。
+
+## 第二批修复（同日：审查 M1-M4）
+
+四条 Medium 逐条「先验证、再修复」后全部成立并收口：
+
+1. **M1 replay 与实时事件交错**（`projector.ts`）：replay 逐事件入队，seq 4 投影的
+   store I/O 期间实时 seq 6 插队先把 `lastCursor` 推到 6，随后 seq 5 被
+   `isProjectedCursor` 判已投影、永久跳过。RED 实测复现（seq 5 楼层缺失）。
+   **修法**：整个 replay 扫描作为单个 tail 任务入队，内部直调 `projectOne`；实时事件
+   只能排到整个扫描之后。v1 重置、`clampPendingCursor` 逻辑不变（执行位置移入任务内，
+   顺带消除「cache 删除→clamp 读盘」间的插入竞态）。对已持久化 `pendingCursor` 的
+   失败 seq，上一批的 `advanceCheckpoint` 本就冻结水位——本条残余窗口是无
+   `pendingCursor` 的积压事件。
+2. **M2 同 turn create+delete 探测顺序**（`body-rollback-journal.ts`）：探测正序、
+   undo 逆序；before-only 的 create 因「名字已消失」判未提交跳过，同 turn 更晚的
+   delete 组 undo 又把变量复活，终态多出 turn 前不存在的变量（H1 的 payload 归因
+   在 `committed === false` 时不参与，挡不住）。**修法**：before-only 判「未提交」时
+   新增 `assertNoLaterGroupTargets`——同 turn 更晚的 write/pending 组命中同一 target
+   （变量按 scope/scopeId/name、memory 按 id）即 `body-state-unsafe` +
+   `write-journal-unknown` fail-closed（词表零新增）；更晚的 `failed`（uncommitted）
+   组可证明零写入，不触发。committed 判定路径不动。
+3. **M3 restore 副本认领依赖 selectedIndex**（`body-runtime-settlement.ts`）：首次
+   restore 写副本后 `appendOpAbort` 失败/进程死亡 → 用户 select 切走 → 重试时
+   `restoredAnchorOf` 因 `selectedIndex !== previousIndex` 认不出已有副本，追加第二份
+   旧正文。**修法**：restore 事件携带 `opId`（沿 `rollbackPlan` 的 extra-field 先例，
+   共享词表不动），认领按 opId 优先、以「副本仍在 surface」为证明；无 opId 的旧记录
+   回退原 selectedIndex 启发式（append-only，不改历史）。select 不加 pending 检查
+   （opId 认领后 select 移动选中已不破坏幂等，加检查只会改变 409 行为面）。
+4. **M4 补偿失败锁死到重启**（`body-wiring.ts`、`http/router.ts`）：start 失败且
+   补偿失败时 op 留在 `pendingByAgent`（设计如此，防二次污染），但 start 失败路径
+   不设 pending.turn，turn/end 重试链与启动/agent-created 恢复都接不到，用户只见
+   无句柄的 500 + 后续全部 `session-busy`。**修法**：HTTP 变更 catch 里对携带
+   pending op 且仍在进程内加锁的失败做**一次**进程内恢复重试（交给启动同款共享恢复
+   `recoverBodyOperationWith`）；锁解除则正常返回失败（不带句柄），仍锁则失败响应
+   附 `pendingOperation: {opId, status:'pending'}` 并打结构化 `left op` 日志。
+   durable `op-start` + plan 不动，恢复句柄不丢；`session-busy` 拒绝不带 op，不会
+   形成重试风暴。
+
+### 第二批证据
+
+- 全量 `pnpm run check`：160 test files / 2680 passed + 1 skipped；18 道 gate 全 PASS。
+- 新用例（四条均有修复前红证据）：
+  - `does not let a live event interleaving with replay permanently skip a backlog seq`
+    （RED：`['Step inside.', 5]` 缺失）
+  - `refuses a same-turn create whose later delete would resurrect it on undo` /
+    `refuses same-turn create and delete groups that both lost their after record`
+    （RED：`expected the rollback to refuse`）；对照 `later delete of the same name failed`
+    修复前即绿
+  - `claims an earlier restore copy by opId after a candidate switch instead of
+    appending a second old-body copy`（RED：重试返回了第二个 `body-restore-*` id）/
+    `claims a legacy restore record without opId through the restored selection proof`
+  - `retries the recovery once and surfaces the pending op handle when the restore
+    keeps failing` / `unlocks the session when the retry recovery completes the restore`
+    （RED：零条 `retrying recovery` 日志；响应无 `pendingOperation`）
+- 定向回归：projector/body-projector 59、write-journal/mvu-rollback/rollback 107、
+  rollback-integration/rollback 53、wiring 79（含全部 H1-H3/M5/M6 既有用例）。
+
+### 第二批风险与未完成
+
+| 风险 | 说明 |
+|---|---|
+| M2 fail-closed 运维成本 | 同 turn create+delete 且 create 丢 after 时回滚整体拒绝（409）需人工介入；「从新到旧维护工作状态」可正确解析为终态，留待后续。更晚 pending 组即使随后判 uncommitted 也计入（保守取舍）。 |
+| M2 memory committed 路径 | memory_write before-only + 同 turn forget 的 committed 路径仍以 `body-rollback-conflict` 失败收场（有报告、非静默，既有用例已 pin）。 |
+| M3 旧记录盲区 | 修复前已落盘的无 opId restore 记录，切过候选再重试仍走旧启发式（append-only 约束）；仅新写入免疫。opId 认领不比 groupId（跨组同 opId 属篡改/损坏日志场景）。 |
+| M4 重试边界 | 只做一次进程内重试，不释放写工具限制（防未回滚的写被继续污染）；持续失败的会话仍锁定到启动恢复，但用户现在拿到 opId 句柄与结构化日志。多进程同会话不在此列（单写者模型既有边界）。 |
+| M1 扫描期间实时延迟 | 长积压全量扫描期间实时事件排队等待（原先可插队）——顺序换正确性。 |
+| 无真机 E2E | 同前。 |

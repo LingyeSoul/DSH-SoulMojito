@@ -69,13 +69,21 @@ export class AgentTavernProjector {
   }
 
   async replay(session: NativeSession): Promise<void> {
-    // The on-disk checkpoint is authoritative: another instance (or a repair
-    // run) may have advanced it past this instance's cache, so a stale cache
-    // must never hide a pending hole during replay.
-    this.checkpoints.delete(session.id)
-    const events = [...sessionEvents(session) as readonly NativeSessionEvent[]].sort((left, right) => left.seq - right.seq)
-    await this.clampPendingCursor(session.id, events)
-    for (const event of events) await this.project(session, event)
+    // The whole scan is ONE tail task. Per-event enqueueing left gaps where a
+    // live higher-seq event observed mid-scan ran before the next backlog
+    // event's task: the no-hole advance branch stamps `lastCursor` past the
+    // still-unprojected seq (Math.max trusts the watermark's contiguity), and
+    // that seq is then judged already projected — permanently. One task lets
+    // live events only queue behind the scan and see the full watermark.
+    await this.tails.enqueue(session.id, async () => {
+      // The on-disk checkpoint is authoritative: another instance (or a repair
+      // run) may have advanced it past this instance's cache, so a stale cache
+      // must never hide a pending hole during replay.
+      this.checkpoints.delete(session.id)
+      const events = [...sessionEvents(session) as readonly NativeSessionEvent[]].sort((left, right) => left.seq - right.seq)
+      await this.clampPendingCursor(session.id, events)
+      for (const event of events) await this.projectOne(session, event)
+    })
   }
 
   async status(sessionId: string): Promise<ProjectionCheckpoint> {

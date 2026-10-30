@@ -60,7 +60,7 @@ import {
   settlementTurnOf,
   settlingDecision,
 } from './body-settlement-decision.js'
-import type { BodyLedger } from './body.js'
+import { BODY_EVENT_TYPE, type BodyEventData, type BodyLedger } from './body.js'
 import {
   eventAtSeq,
   eventsOf,
@@ -183,6 +183,22 @@ function abortString(value: unknown, seq: number, field: string): string {
     throw bodyRuntimeError('invalid-event', `body abort record at seq ${seq} requires ${field} to be a non-empty string`)
   }
   return value
+}
+
+/**
+ * Payload of the ledger restore record with the owning operation id
+ * (revision 2026-10-30, review M3).
+ *
+ * The shared `BodyEventData` vocabulary in `body.ts` is ledger-owned and has no
+ * opId field, so this extends its `restore` member instead of duplicating it —
+ * the same extra-field pattern as `BodyStartEventData.rollbackPlan`. The record
+ * writer accepts `unknown`, which keeps the extra field out of the ledger's
+ * strict parser and the projection readers, while `restoredAnchorOf` reads it
+ * back from the raw records after a reload. Restore records written before the
+ * revision simply lack the field and fall back to the legacy claim proof.
+ */
+type BodyRestoreEventData = Extract<BodyEventData, { readonly op: 'restore' }> & {
+  readonly opId: string
 }
 
 /**
@@ -1038,12 +1054,18 @@ async function restoreBodyAfterFailureLocked(
       // original reply; seed it now so the restore event keeps the ledger dense.
       appendBodyEvent(deps, { op: 'candidate', groupId: op.groupId, messageId: op.previousAnchorId, index: 0 })
     }
-    appendBodyEvent(deps, {
+    requireRecordWriter(deps)(deps.session, BODY_EVENT_TYPE, {
       op: 'restore',
       groupId: op.groupId,
       messageId: restoredMessageId,
       index: op.previousIndex,
-    })
+      // Review M3 revision 2026-10-30: retries claim this copy by opId, so a
+      // candidate switch between the restore and its retry (select moves only
+      // the ledger selection) cannot append a second copy of the old body. The
+      // extra field rides the record writer's unknown payload and stays out of
+      // the ledger's strict parser, like `op-start`'s `rollbackPlan`.
+      opId: op.opId,
+    } satisfies BodyRestoreEventData)
     deps.session.append('step/end', { turn, step: 1 })
     stepOpen = false
     deps.session.append('turn/end', { turn, reason: { kind: 'completed' } })
@@ -1073,21 +1095,57 @@ async function restoreBodyAfterFailureLocked(
 }
 
 /**
- * A copy appended by an earlier restore attempt of this operation, proven by
- * the ledger slot and its presence on the current surface. A copy belonging to
- * an older operation cannot match because the current operation's
- * `previousAnchorId` would then be that same copy.
+ * A copy appended by an earlier restore attempt of this operation.
+ *
+ * New restore records carry the owning `opId` (revision 2026-10-30), so the
+ * copy is claimed by identity and only proven by its presence on the current
+ * surface. Records written before the revision carry no opId; those keep the
+ * legacy proof — the ledger selection points at the restored index and a
+ * `body-restore-*` copy is anchored — because a select between the restore and
+ * its retry moves only the selection, which the legacy proof cannot see past.
+ * A copy belonging to an older operation cannot match the legacy path because
+ * the current operation's `previousAnchorId` would then be that same copy.
  */
 function restoredAnchorOf(
   events: ReturnType<typeof eventsOf>,
   surface: readonly number[],
   op: PendingBodyOperation,
 ): string | undefined {
+  const claimed = restoreCopyOfOperation(events, op.opId)
+  if (claimed !== undefined) {
+    return findSurfaceSeqByMessageId(events, surface, claimed) === undefined ? undefined : claimed
+  }
   const ledger = bodyLedger(events, op.groupId)
   if (ledger === undefined || ledger.selectedIndex !== op.previousIndex) return undefined
   const anchor = ledger.anchorMessageId
   if (!anchor.startsWith('body-restore-') || anchor === op.previousAnchorId) return undefined
   return findSurfaceSeqByMessageId(events, surface, anchor) === undefined ? undefined : anchor
+}
+
+/**
+ * Last restore copy this operation recorded, claimed from the raw `opId`-tagged
+ * restore records. A matching record whose messageId is not a non-empty string
+ * is an `invalid-event`: the ledger fold rejects the same record, so recovery
+ * must not silently drop the only copy handle of the operation.
+ */
+function restoreCopyOfOperation(
+  events: ReturnType<typeof eventsOf>,
+  opId: string,
+): string | undefined {
+  let found: string | undefined
+  for (const event of events) {
+    if (event.type !== BODY_EVENT_TYPE) continue
+    if (event.data['op'] !== 'restore' || event.data['opId'] !== opId) continue
+    const messageId = event.data['messageId']
+    if (typeof messageId !== 'string' || messageId === '') {
+      throw bodyRuntimeError(
+        'invalid-event',
+        `body restore record at seq ${event.seq} of operation '${opId}' requires messageId to be a non-empty string`,
+      )
+    }
+    found = messageId
+  }
+  return found
 }
 
 /** Terminal reason that survives in the abort record for the read side. */

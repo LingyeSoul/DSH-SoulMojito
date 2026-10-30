@@ -27,8 +27,10 @@ import {
   bodyWiringContext,
   buildBodyView,
   createBodyDeps,
+  pendingOperationOf,
   resolveBodyBinding,
   resolveLiveAgent,
+  retryPendingBodyRecovery,
   type BodyMutationAction,
   type BodyProjectedFloor,
   type BodyStateSafety,
@@ -1747,19 +1749,32 @@ export async function handleAgentTavernBodyApi(
     const state = await selectBodyCandidate(deps, { groupId, index, expectedAnchorId })
     return sendJson(res, 200, { ok: true, state })
   } catch (error) {
-    return sendBodyFailure(res, bodyFailureOf(error))
+    // Review M4: a start failure whose compensation could not restore the
+    // writes leaves the session locked until restart. Hand the locked op to the
+    // shared recovery once here; a still-locked failure surfaces its durable
+    // handle instead of hiding the lock behind a bare 500.
+    const pending = pendingOperationOf(error)
+    const recovered = pending === undefined
+      || await retryPendingBodyRecovery(wiring, agent, pending)
+    return sendBodyFailure(
+      res,
+      bodyFailureOf(error),
+      recovered || pending === undefined ? undefined : { opId: pending.opId, status: 'pending' },
+    )
   }
 }
 
 function sendBodyFailure(
   res: HttpResponse,
   failure: { readonly status: number; readonly code: string; readonly message: string; readonly detail?: string },
+  pendingOperation?: { readonly opId: string; readonly status: string },
 ): void {
   sendJson(res, failure.status, {
     ok: false,
     code: failure.code,
     message: failure.message,
     ...(failure.detail === undefined ? {} : { detail: failure.detail }),
+    ...(pendingOperation === undefined ? {} : { pendingOperation }),
   })
 }
 

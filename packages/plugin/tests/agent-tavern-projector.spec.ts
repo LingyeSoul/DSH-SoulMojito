@@ -326,6 +326,73 @@ describe('AgentTavern native event projector', () => {
     expect(await reopened.status(sessionId)).toMatchObject({ status: 'ok', lastCursor: 6 })
   })
 
+  it('does not let a live event interleaving with replay permanently skip a backlog seq', async () => {
+    const { root, store, chatId, sessionId } = await fixture('interleave-session')
+    const native: NativeSession = {
+      id: sessionId,
+      events: [...session(sessionId).events,
+        {
+          type: 'user/message', seq: 5, time: 1500,
+          data: { id: 'user-2', role: 'user', content: [{ type: 'text', text: 'Step inside.' }], source: { kind: 'user' } },
+        },
+        {
+          type: 'assistant/message', seq: 6, time: 1600,
+          data: {
+            turn: 1, step: 3,
+            message: {
+              id: 'assistant-live', role: 'assistant', content: [{ type: 'text', text: 'Live reply.' }],
+              source: { kind: 'model', provider: 'test', model: 'test' },
+            },
+          },
+        },
+      ],
+    }
+    // Live-observer seam: a live event observed while replay's task for the
+    // seq-4 backlog event is mid-flight enqueues on the same session tail.
+    // MutationTail chains it after the running task only, so with per-event
+    // enqueueing it runs BEFORE replay's not-yet-enqueued seq-5 task, stamps
+    // `lastCursor: 6` through the no-hole Math.max branch, and seq 5 is then
+    // judged already projected — permanently.
+    let replaying = false
+    let live: Promise<void> | undefined
+    // The seam closes over the projector it must enqueue on; the closure only
+    // runs during replay, well after the const below is initialized.
+    const projector = await AgentTavernProjector.open(root, {
+      getState: () => store.getState(),
+      getCharacter: (name) => store.getCharacter(name),
+      getChatJsrOverlay: (character, id) => store.getChatJsrOverlay(character, id),
+      getChatSnapshot: (character, id) => {
+        if (replaying && live === undefined) live = projector.project(native, native.events[6]!)
+        return store.getChatSnapshot(character, id)
+      },
+      saveChat: (character, id, chat, revision) => store.saveChat(character, id, chat, revision),
+    })
+    // Backlog state: seqs 0-3 were live-projected while the projector was
+    // observing (seq 1 is the only one of them with a floor); seqs 4 and 5
+    // arrived with nothing observing — exactly what the startup replay
+    // recovers. No pendingCursor exists, so the watermark's contiguity claim
+    // is the only signal.
+    await projector.project(native, native.events[1]!)
+    await projector.project(native, native.events[3]!)
+    expect(await projector.status(sessionId)).toMatchObject({ status: 'ok', lastCursor: 3 })
+
+    replaying = true
+    await projector.replay(native)
+    await live
+    // A second replay proves the outcome is not self-healing: whatever the
+    // first pass skipped stays skipped (idempotent otherwise).
+    await projector.replay(native)
+
+    const snapshot = await store.getChatSnapshot('Projector Character', chatId)
+    expect(snapshot!.chat.messages.map((message) => [message.mes, (message.extra!.agentTavern as any).eventSeq])).toEqual([
+      ['Open the door.', 1],
+      ['The door opens.', 4],
+      ['Step inside.', 5],
+      ['Live reply.', 6],
+    ])
+    expect(await projector.status(sessionId)).toMatchObject({ status: 'ok', lastCursor: 6 })
+  })
+
   it('applies USER_INPUT and non-layered AI_OUTPUT regex when projecting live messages', async () => {
     const { root, store, chatId, sessionId } = await fixture('regex-session')
     // 卡内嵌脚本经导入物化为全局脚本；collectRegexScripts 按名去重后只应用一次。
