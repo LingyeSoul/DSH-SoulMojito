@@ -11,10 +11,11 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { TavernStore } from '../../tavern-store/src/index.js'
+import { MemoryStore, TavernStore, VariableStore } from '../../tavern-store/src/index.js'
 import type { JsonValue, MemoryRecord, VariableSnapshot } from '../../tavern-store/src/index.js'
 import { memoryTools } from '../src/agent-tavern/tools/memory.js'
 import { variableTools } from '../src/agent-tavern/tools/variable.js'
+import { rollbackTurnWritesImpl, type BodyNewTurnRollback } from '../src/agent-tavern/body-rollback-journal.js'
 import {
   SETTLE_INTENT_EVENT_TYPE,
   WRITE_JOURNAL_EVENT_TYPE,
@@ -390,6 +391,32 @@ describe('readWriteJournal', () => {
     expect(() => readWriteJournal(eventsOf({ ...entry, names: ['journal.mood', 7] }))).toThrow(/names/)
   })
 
+  it('reads a failed record, rejects one carrying state, and round-trips a variable payload', () => {
+    const failed = {
+      kind: 'variable', tool: 'variable_set', journalId: 'journal-failed', sessionId: AGENT_ID, turn: 4,
+      phase: 'failed', at: CREATED_AT,
+      target: { scope: 'chat', scopeId: 'fixture-chat' },
+    }
+    const eventsOf = (data: unknown): unknown[] => [{ seq: 0, type: WRITE_JOURNAL_EVENT_TYPE, data }]
+
+    expect(readWriteJournal(eventsOf(failed))).toEqual([failed])
+    expect(() => readWriteJournal(eventsOf({ ...failed, before: null }))).toThrow(/failed record must not carry/)
+    expect(() => readWriteJournal(eventsOf({ ...failed, phase: 'skip' }))).toThrow(/phase/)
+
+    const before = {
+      ...failed,
+      journalId: 'journal-payload',
+      phase: 'before',
+      names: ['journal.payload'],
+      payload: [{ name: 'journal.payload', value: { deep: ['v', 1, true, null] } }],
+      before: null,
+    }
+    expect(readWriteJournal(eventsOf(before))).toEqual([before])
+    expect(() => readWriteJournal(eventsOf({ ...before, payload: [] }))).toThrow(/payload/)
+    expect(() => readWriteJournal(eventsOf({ ...before, payload: [{ name: 'journal.payload' }] }))).toThrow(/value/)
+    expect(() => readWriteJournal(eventsOf({ ...before, payload: [{ value: 1 }] }))).toThrow(/name/)
+  })
+
   it('appendWriteJournalWith writes the journal event type through the injected writer', () => {
     const harness = createJournalSession(1)
     const entry: WriteJournalEntry = {
@@ -697,6 +724,208 @@ describe('write tools journal their no-ops', () => {
     })
     const read = await runTool('variable_get', { scope: 'global', name: 'journal.denied' }, createJournalSession(undefined))
     expect(read['found']).toBe(false)
+  })
+})
+
+describe('write tools journal their store failures', () => {
+  it('variable_set terminates its journal with a failed record when the store rejects the write', async () => {
+    const harness = createJournalSession(30)
+    await runTool('variable_set', { scope: 'chat', name: 'journal.race', value: 'v1' }, harness)
+    harness.openTurn(31)
+
+    await expect(runTool('variable_set', {
+      scope: 'chat', name: 'journal.race', value: 'mine', expectedRevision: 'stale-revision',
+    }, harness)).rejects.toThrow(/changed in another operation/i)
+
+    const entries = variableEntries(harness, 'variable_set').filter((entry) => entry.turn === 31)
+    expect(entries.map((entry) => entry.phase)).toEqual(['before', 'failed'])
+    expect(entries[1]?.journalId).toBe(entries[0]?.journalId)
+    expect(entries[0]?.before?.[0]?.value).toBe('v1')
+    expect(entries[0]?.payload).toEqual([{ name: 'journal.race', value: 'mine' }])
+    expect(entries[1]?.before).toBeUndefined()
+    // The rejected set leaves the stored value untouched.
+    const read = await runTool('variable_get', { scope: 'chat', name: 'journal.race' }, createJournalSession(undefined))
+    expect(read['value']).toBe('v1')
+  })
+
+  it('records a null before plus failed when a guarded create cannot land', async () => {
+    const harness = createJournalSession(32)
+
+    await expect(runTool('variable_set', {
+      scope: 'chat', name: 'journal.create-race', value: 'mine', expectedRevision: 'wishful',
+    }, harness)).rejects.toThrow(/changed in another operation/i)
+
+    const entries = variableEntries(harness, 'variable_set')
+    expect(entries.map((entry) => entry.phase)).toEqual(['before', 'failed'])
+    expect(entries[0]?.before).toBeNull()
+    expect(entries[0]?.payload).toEqual([{ name: 'journal.create-race', value: 'mine' }])
+    const read = await runTool('variable_get', { scope: 'chat', name: 'journal.create-race' }, createJournalSession(undefined))
+    expect(read['found']).toBe(false)
+  })
+
+  it('variable_patch terminates its journal with a failed record on a whole-scope conflict', async () => {
+    const harness = createJournalSession(33)
+    await expect(runTool('variable_patch', {
+      scope: 'chat',
+      changes: [{ name: 'journal.patch-race', value: 'mine' }],
+      expectedRevision: 'stale-revision',
+    }, harness)).rejects.toThrow(/changed in another operation/i)
+
+    const entries = variableEntries(harness, 'variable_patch')
+    expect(entries.map((entry) => entry.phase)).toEqual(['before', 'failed'])
+    expect(entries[0]?.payload).toEqual([{ name: 'journal.patch-race', value: 'mine' }])
+  })
+
+  it('memory_update terminates its journal with a failed record on a revision conflict', async () => {
+    const harness = createJournalSession(34)
+    const created = await runTool('memory_write', {
+      scope: 'chat', kind: 'semantic', content: 'Conflict source record.',
+    }, harness)
+
+    await expect(runTool('memory_update', {
+      id: created['id'], scope: 'chat', expectedRevision: 'stale-revision', content: 'Never lands.',
+    }, harness)).rejects.toThrow(/changed in another operation/i)
+
+    const entries = memoryEntries(harness, 'memory_update')
+    expect(entries.map((entry) => entry.phase)).toEqual(['before', 'failed'])
+    expect(entries[1]?.journalId).toBe(entries[0]?.journalId)
+    expect(entries[0]?.before?.revision).toBe(created['revision'])
+    expect(await searchedContents('Never lands.')).not.toContain('Never lands.')
+  })
+})
+
+describe('rollback of before-only groups after store failures', () => {
+  /** The rollback port deps over the same throwaway home the tools wrote to. */
+  async function rollbackOf(harness: JournalSessionHarness, turn: number): Promise<BodyNewTurnRollback> {
+    const store = await TavernStore.open(join(home, 'soulmojito'))
+    return rollbackTurnWritesImpl({
+      store,
+      memoryStore: await MemoryStore.open(join(home, 'soulmojito')),
+      variableStore: await VariableStore.open(join(home, 'soulmojito')),
+      sessionEvents: () => harness.session.events,
+    }, AGENT_ID, turn)
+  }
+
+  /** Raw journal event wrapper, mirroring what the host seam persists. */
+  function pushRawJournal(harness: JournalSessionHarness, data: unknown): void {
+    harness.session.events.push({ seq: harness.session.events.length, type: WRITE_JOURNAL_EVENT_TYPE, data })
+  }
+
+  async function captureErrorOf(run: () => Promise<unknown>): Promise<unknown> {
+    try {
+      await run()
+    } catch (error) {
+      return error
+    }
+    throw new Error('expected the rollback to refuse')
+  }
+
+  it('reports a before+failed group uncommitted when the store still holds the before state', async () => {
+    const harness = createJournalSession(40)
+    await runTool('variable_set', { scope: 'chat', name: 'journal.rollback-quiet', value: 'v1' }, harness)
+    harness.openTurn(41)
+    await expect(runTool('variable_set', {
+      scope: 'chat', name: 'journal.rollback-quiet', value: 'mine', expectedRevision: 'stale-revision',
+    }, harness)).rejects.toThrow(/changed in another operation/i)
+
+    const result = await rollbackOf(harness, 41)
+
+    expect(result).toMatchObject({ undone: 0, skippedUncommitted: [expect.any(String)], failures: [] })
+    const read = await runTool('variable_get', { scope: 'chat', name: 'journal.rollback-quiet' }, createJournalSession(undefined))
+    expect(read['value']).toBe('v1')
+  })
+
+  it('never probes a before+failed group and keeps a concurrent write', async () => {
+    const harness = createJournalSession(42)
+    await runTool('variable_set', { scope: 'chat', name: 'journal.rollback-race', value: 'v1' }, harness)
+    harness.openTurn(43)
+    await expect(runTool('variable_set', {
+      scope: 'chat', name: 'journal.rollback-race', value: 'mine', expectedRevision: 'stale-revision',
+    }, harness)).rejects.toThrow(/changed in another operation/i)
+    // A concurrent writer moves the variable after the failed set landed
+    // nothing; the revision difference is its evidence, not this journal's.
+    const foreign = await VariableStore.open(join(home, 'soulmojito'))
+    const raced = await foreign.get('chat', chatId, 'journal.rollback-race')
+    if (raced === undefined) throw new Error('fixture variable is missing')
+    await foreign.set('chat', chatId, 'journal.rollback-race', 'foreign-v2', raced.revision)
+
+    const result = await rollbackOf(harness, 43)
+
+    expect(result).toMatchObject({ undone: 0, skippedUncommitted: [expect.any(String)], failures: [] })
+    expect(await foreign.get('chat', chatId, 'journal.rollback-race')).toMatchObject({ value: 'foreign-v2' })
+  })
+
+  it('keeps a variable a concurrent writer created when the guarded create never landed', async () => {
+    const harness = createJournalSession(44)
+    await expect(runTool('variable_set', {
+      scope: 'chat', name: 'journal.rollback-create', value: 'mine', expectedRevision: 'wishful',
+    }, harness)).rejects.toThrow(/changed in another operation/i)
+    const foreign = await VariableStore.open(join(home, 'soulmojito'))
+    await foreign.set('chat', chatId, 'journal.rollback-create', 'foreign-create')
+
+    const result = await rollbackOf(harness, 44)
+
+    expect(result).toMatchObject({ undone: 0, skippedUncommitted: [expect.any(String)], failures: [] })
+    expect(await foreign.get('chat', chatId, 'journal.rollback-create')).toMatchObject({ value: 'foreign-create' })
+  })
+
+  it('rolls back a before-only variable_set whose payload matches the store', async () => {
+    const harness = createJournalSession(45)
+    const variables = await VariableStore.open(join(home, 'soulmojito'))
+    // The store write committed, then the process died before the after append.
+    await variables.set('chat', chatId, 'journal.payload-landed', 'landed-value')
+    pushRawJournal(harness, {
+      kind: 'variable', tool: 'variable_set', journalId: 'journal-payload-landed', sessionId: AGENT_ID, turn: 45,
+      phase: 'before', at: CREATED_AT,
+      target: { scope: 'chat', scopeId: chatId },
+      names: ['journal.payload-landed'],
+      payload: [{ name: 'journal.payload-landed', value: 'landed-value' }],
+      before: null,
+    })
+
+    const result = await rollbackOf(harness, 45)
+
+    expect(result).toMatchObject({ undone: 1, skippedUncommitted: [], failures: [] })
+    expect(await variables.get('chat', chatId, 'journal.payload-landed')).toBeUndefined()
+  })
+
+  it('refuses a before-only variable_set whose store holds a state the payload cannot explain', async () => {
+    const harness = createJournalSession(46)
+    const variables = await VariableStore.open(join(home, 'soulmojito'))
+    const baseline = await variables.set('chat', chatId, 'journal.payload-foreign', 'v1')
+    // The guarded set never landed; a concurrent writer holds a foreign value.
+    await variables.set('chat', chatId, 'journal.payload-foreign', 'foreign-v2', baseline.revision)
+    pushRawJournal(harness, {
+      kind: 'variable', tool: 'variable_set', journalId: 'journal-payload-foreign', sessionId: AGENT_ID, turn: 46,
+      phase: 'before', at: CREATED_AT,
+      target: { scope: 'chat', scopeId: chatId },
+      names: ['journal.payload-foreign'],
+      payload: [{ name: 'journal.payload-foreign', value: 'mine' }],
+      before: [{
+        scope: 'chat', scopeId: chatId, name: 'journal.payload-foreign',
+        value: 'v1', revision: baseline.revision, updatedAt: CREATED_AT,
+      }],
+    })
+
+    const error = await captureErrorOf(() => rollbackOf(harness, 46))
+
+    expect(error).toMatchObject({ code: 'body-state-unsafe', detail: 'write-journal-unknown' })
+    expect((error as Error).message).toContain('cannot attribute')
+    expect(await variables.get('chat', chatId, 'journal.payload-foreign')).toMatchObject({ value: 'foreign-v2' })
+  })
+
+  it('refuses a failed record without a before record', async () => {
+    const harness = createJournalSession(47)
+    pushRawJournal(harness, {
+      kind: 'variable', tool: 'variable_set', journalId: 'journal-orphan-failed', sessionId: AGENT_ID, turn: 47,
+      phase: 'failed', at: CREATED_AT,
+      target: { scope: 'chat', scopeId: chatId },
+    })
+
+    const error = await captureErrorOf(() => rollbackOf(harness, 47))
+
+    expect(error).toMatchObject({ code: 'body-state-unsafe', detail: 'write-journal-missing' })
+    expect((error as Error).message).toContain('failed record without a before record')
   })
 })
 

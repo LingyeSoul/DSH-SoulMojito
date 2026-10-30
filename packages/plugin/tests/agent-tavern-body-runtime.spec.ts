@@ -53,6 +53,7 @@ import {
   type BodySessionLike,
 } from '../src/agent-tavern/body-runtime.js'
 import { pendingByAgent, settlementEvidenceOf } from '../src/agent-tavern/body-runtime-core.js'
+import { bodyFailureOf as viewBodyFailureOf, buildBodyView } from '../src/agent-tavern/body-view.js'
 import { settlingDecision, type SettlingDecision } from '../src/agent-tavern/body-settlement-decision.js'
 
 interface FakeEvent {
@@ -4569,5 +4570,87 @@ describe('AgentTavern body failed-candidate receipt recovery', () => {
       else process.env.DSH_HOME = previousHome
       rmSync(home, { recursive: true, force: true })
     }
+  })
+})
+
+describe('AgentTavern body view last-operation reason boundary', () => {
+  type LastOperation = NonNullable<Parameters<typeof buildBodyView>[0]['lastOperation']>
+
+  const viewOf = (lastOperation: LastOperation) => buildBodyView({
+    messageId: 'anchor-1',
+    binding: { architecture: 'agent-tavern' },
+    agent: undefined,
+    hostSupported: true,
+    stateSafety: { safe: true },
+    historicalMvuState: false,
+    writeRollbackAvailable: false,
+    ledger: undefined,
+    messageText: 'old body',
+    projected: undefined,
+    inspection: { onSurface: true, last: true },
+    lastOperation,
+  })
+
+  it('collapses a stored regenerate failure reason that embeds an absolute path and an internal file name', () => {
+    // The runtime stores `errorMessage(error)` verbatim (body-runtime start
+    // failures), so a filesystem failure carries the store path and the .jsonl
+    // name into the durable record. The view is the HTTP boundary and must not
+    // echo either (http/public-error.ts contract).
+    const view = viewOf({
+      opId: 'body-op-1',
+      status: 'failed',
+      reason: "body regenerate body-op-1 failed to start: EACCES: permission denied, open 'C:\\Users\\user\\.dsh\\chats\\session-x.jsonl'",
+      at: 1700000000000,
+    })
+
+    const reason = view.lastOperation?.reason ?? ''
+    expect(reason).not.toBe('')
+    expect(reason).not.toContain('C:\\Users')
+    expect(reason).not.toContain('session-x')
+    expect(reason).not.toContain('.jsonl')
+    expect(reason).not.toContain('EACCES')
+  })
+
+  it('collapses a POSIX path with an internal tmp file name to the stable internal message', () => {
+    const view = viewOf({
+      opId: 'body-op-2',
+      status: 'failed',
+      reason: "body regenerate body-op-2 failed to start: ENOENT: no such file or directory, open '/home/user/.dsh/chats/session-x.tmp'",
+    })
+
+    expect(view.lastOperation?.reason).toBe('internal storage error')
+  })
+
+  it('keeps a clean reason and the identity fields unchanged', () => {
+    const view = viewOf({
+      opId: 'body-op-3',
+      status: 'cancelled',
+      reason: 'settlement hide failed',
+      at: 1700000000000,
+    })
+
+    expect(view.lastOperation).toEqual({
+      opId: 'body-op-3',
+      status: 'cancelled',
+      reason: 'settlement hide failed',
+      at: 1700000000000,
+    })
+  })
+})
+
+describe('AgentTavern body failure view message boundary', () => {
+  it('collapses an unknown exception message that embeds a store path', () => {
+    const failure = viewBodyFailureOf(
+      new Error("ENOENT: no such file or directory, open '/home/user/.dsh/.chats/session-x.jsonl'"),
+    )
+
+    expect(failure.code).toBe('operation-failed')
+    expect(failure.message).toBe('internal storage error')
+  })
+
+  it('keeps a clean failure message unchanged', () => {
+    const failure = viewBodyFailureOf(new Error('body projection pending'))
+
+    expect(failure.message).toBe('body projection pending')
   })
 })

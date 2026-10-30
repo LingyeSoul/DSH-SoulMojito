@@ -114,18 +114,24 @@ export function memoryTools(): ToolDefinition[] {
       // rejects the `before` append, this write must not happen (fail-closed).
       const journal = await openWriteJournal(exec.agent, binding.agentId)
       appendMemoryJournal(journal, { tool: 'memory_write', phase: 'before', target: journalTarget, before: null })
-      const record = await store.put({
-        id,
-        scope: target.scope,
-        scopeId: target.scopeId,
-        kind: args.kind === 'episodic' ? 'episodic' : 'semantic',
-        content: limitText(stringArg(args.content), 64 * 1024),
-        ...(Array.isArray(args.tags) ? { tags: args.tags.filter((tag): tag is string => typeof tag === 'string').slice(0, 32) } : {}),
-        ...(importance === undefined ? {} : { importance }),
-        ...(confidence === undefined ? {} : { confidence }),
-        ...(expiresAt === undefined ? {} : { expiresAt }),
-        source: { kind: 'agent-tool', sessionId: binding.agentId, chatId: binding.chatId, character: binding.character },
-      })
+      let record: MemoryRecord
+      try {
+        record = await store.put({
+          id,
+          scope: target.scope,
+          scopeId: target.scopeId,
+          kind: args.kind === 'episodic' ? 'episodic' : 'semantic',
+          content: limitText(stringArg(args.content), 64 * 1024),
+          ...(Array.isArray(args.tags) ? { tags: args.tags.filter((tag): tag is string => typeof tag === 'string').slice(0, 32) } : {}),
+          ...(importance === undefined ? {} : { importance }),
+          ...(confidence === undefined ? {} : { confidence }),
+          ...(expiresAt === undefined ? {} : { expiresAt }),
+          source: { kind: 'agent-tool', sessionId: binding.agentId, chatId: binding.chatId, character: binding.character },
+        })
+      } catch (error) {
+        recordMemoryFailure(journal, 'memory_write', journalTarget)
+        throw error
+      }
       appendMemoryJournal(journal, { tool: 'memory_write', phase: 'after', target: journalTarget, after: record })
       // 写路径嵌入（提案 0016）：同步嵌入受 timeoutMs 约束；任何失败只进
       // lastError/熔断，不阻塞工具返回（向量 stale，检索时懒补）。
@@ -161,20 +167,26 @@ export function memoryTools(): ToolDefinition[] {
       const importance = clampScore(args.importance) ?? previous.importance
       const confidence = clampScore(args.confidence) ?? previous.confidence
       const expiresAt = typeof args.expiresAt === 'string' ? optionalExpiry(args.expiresAt) : previous.expiresAt
-      const record = await store.put({
-        id,
-        scope: previous.scope,
-        scopeId: previous.scopeId,
-        kind: previous.kind,
-        content: args.content === undefined ? previous.content : limitText(stringArg(args.content), 64 * 1024),
-        ...(Array.isArray(args.tags)
-          ? { tags: args.tags.filter((tag): tag is string => typeof tag === 'string').slice(0, 32) }
-          : { tags: previous.tags }),
-        importance,
-        confidence,
-        ...(expiresAt === undefined ? {} : { expiresAt }),
-        source: { kind: 'agent-tool', sessionId: binding.agentId, chatId: binding.chatId, character: binding.character },
-      }, stringArg(args.expectedRevision))
+      let record: MemoryRecord
+      try {
+        record = await store.put({
+          id,
+          scope: previous.scope,
+          scopeId: previous.scopeId,
+          kind: previous.kind,
+          content: args.content === undefined ? previous.content : limitText(stringArg(args.content), 64 * 1024),
+          ...(Array.isArray(args.tags)
+            ? { tags: args.tags.filter((tag): tag is string => typeof tag === 'string').slice(0, 32) }
+            : { tags: previous.tags }),
+          importance,
+          confidence,
+          ...(expiresAt === undefined ? {} : { expiresAt }),
+          source: { kind: 'agent-tool', sessionId: binding.agentId, chatId: binding.chatId, character: binding.character },
+        }, stringArg(args.expectedRevision))
+      } catch (error) {
+        recordMemoryFailure(journal, 'memory_update', journalTarget)
+        throw error
+      }
       appendMemoryJournal(journal, { tool: 'memory_update', phase: 'after', target: journalTarget, after: record })
       // 内容可能变更 ⇒ 旧向量按 digest 失效，重嵌（同 memory_write 的失败纪律）。
       await embedWrittenMemory(record)
@@ -203,7 +215,12 @@ export function memoryTools(): ToolDefinition[] {
       // can tell "deleted by this turn" from "never existed".
       const journal = await openWriteJournal(exec.agent, binding.agentId)
       appendMemoryJournal(journal, { tool: 'memory_forget', phase: 'before', target: journalTarget, before: previous })
-      await store.forget(id, target.scope, target.scopeId, stringArg(args.expectedRevision))
+      try {
+        await store.forget(id, target.scope, target.scopeId, stringArg(args.expectedRevision))
+      } catch (error) {
+        recordMemoryFailure(journal, 'memory_forget', journalTarget)
+        throw error
+      }
       const removed = await store.read(id, target.scope, target.scopeId, true)
       appendMemoryJournal(journal, { tool: 'memory_forget', phase: 'after', target: journalTarget, after: removed ?? null })
       // 向量缓存随记录一并清理（best-effort：记录已软删，残留向量只占空间）。
@@ -246,6 +263,24 @@ function appendMemoryJournal(journal: WriteJournalHandle | undefined, request: M
     ...(request.before === undefined ? {} : { before: request.before }),
     ...(request.after === undefined ? {} : { after: request.after }),
   })
+}
+
+/**
+ * Terminate a journal group whose store call threw.
+ *
+ * Same contract as the variable tools: without the terminal `failed` record a
+ * revision conflict would leave a before-only group whose probe could mistake
+ * a concurrent writer's revision for this write's committed after state. The
+ * append is best effort — the business failure must still reach the caller.
+ */
+function recordMemoryFailure(
+  journal: WriteJournalHandle | undefined,
+  tool: WriteJournalMemoryTool,
+  target: WriteJournalMemoryTarget,
+): void {
+  try {
+    appendMemoryJournal(journal, { tool, phase: 'failed', target })
+  } catch { /* the original store failure outranks the journal append failure */ }
 }
 
 /**

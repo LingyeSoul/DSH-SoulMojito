@@ -704,6 +704,44 @@ async function commitBodyRollback(deps: BodyRuntimeDeps, op: PendingBodyOperatio
 }
 
 /**
+ * Refuse the restore when the plan's chat is no longer the live binding,
+ * before the restore sequence writes anything (proposal 0022 §10.3).
+ *
+ * `undoNewCandidateBodyReceipt` and `restoreBodyRollbackPlan` both write the
+ * chat recorded in `plan.binding`, but the port's own binding assert only runs
+ * inside `restore` — the last of the three steps. After a session branch or
+ * rename the old chat still exists, so the receipt undo would mark and save it
+ * first, and the retry would then skip the already-undone receipt while the
+ * replay keeps refusing: a half-rolled-back old chat with no reconciliation.
+ *
+ * The check rides the port's optional `assertTarget` capability (the factory
+ * behind `createBodyWriteRollbackPort` provides it), so it reads the same store
+ * `restore` reads. A port without the capability keeps the legacy ordering,
+ * like the optional `plan`/`apply` split.
+ */
+async function assertRestoreTargetCurrent(
+  deps: BodyRuntimeDeps,
+  op: PendingBodyOperation,
+): Promise<void> {
+  const plan = op.rollbackPlan
+  if (plan === undefined) return
+  const port = deps.writeRollback as
+    | { assertTarget?: (plan: NonNullable<PendingBodyOperation['rollbackPlan']>) => Promise<void> }
+    | undefined
+  const assertTarget = port?.assertTarget
+  if (typeof assertTarget !== 'function') return
+  try {
+    await assertTarget.call(port, plan)
+  } catch (error) {
+    throw failureFor(
+      error,
+      `body restore ${op.opId} refused to restore the write rollback plan`,
+      op,
+    )
+  }
+}
+
+/**
  * Replay the prepared plan before the old body is restored. Any restore
  * failure is surfaced with the operation context; the caller keeps the
  * `op-start` pending for a retry instead of restoring the body over lost writes.
@@ -933,6 +971,9 @@ async function restoreBodyAfterFailureLocked(
   // the old turn's journaled writes and MVU receipts back. The new candidate's
   // own body receipt is undone in between: it is keyed by the new message id,
   // so replaying the old plan alone would leave its unique variable paths live.
+  // The binding recheck runs first: a branch or rename that moved the live
+  // binding must refuse before any of the three steps writes the stale chat.
+  await assertRestoreTargetCurrent(deps, op)
   await rollbackNewTurnWrites(deps, op, events, failedTurn)
   await undoNewCandidateBodyReceipt(deps, op, events, failedTurn)
   await restoreBodyRollbackPlan(deps, op)

@@ -29,6 +29,14 @@ import {
   type BodyRollbackPlan,
   type BodyWriteRollbackPort,
 } from '../src/agent-tavern/body-rollback.js'
+import {
+  restoreBodyAfterFailure,
+  type BodyAgentLike,
+  type BodyRuntimeDeps,
+  type BodyRuntimeFailure,
+  type BodySessionLike,
+  type PendingBodyOperation,
+} from '../src/agent-tavern/body-runtime.js'
 import { memoryTools } from '../src/agent-tavern/tools/memory.js'
 import { memoryStore, tavernStore, variableStore } from '../src/agent-tavern/tools/stores.js'
 import { variableTools } from '../src/agent-tavern/tools/variable.js'
@@ -57,6 +65,17 @@ const OLD_CHAT_VARIABLES_UNDONE = { stat_data: { hp: 10, mood: 'calm' } }
 const OLD_VARIABLE_NAME = 'old.turn.flag'
 const NEW_VARIABLE_NAME = 'new.turn.flag'
 const SETTLE_VARIABLE_NAME = 'mvu.favor'
+const FAILED_TURN = OLD_TURN + 1
+const CANDIDATE_MESSAGE_ID = 'assistant-new-restore-drift'
+const TRIGGER_MESSAGE_ID = 'body-trigger-restore-drift'
+const CANDIDATE_BODY = [
+  'The failed regeneration.',
+  '<UpdateVariable>',
+  '<JSONPatch>',
+  '[{ "op": "replace", "path": "/stat_data/hp", "value": 20 }]',
+  '</JSONPatch>',
+  '</UpdateVariable>',
+].join('\n')
 
 const hostState = vi.hoisted(() => ({
   module: undefined as Record<string, unknown> | undefined,
@@ -375,6 +394,101 @@ describe('AgentTavern body rollback integration (real stores + live write journa
       message: 'dsh-soulmojito body rollback: rolled back new-turn writes',
     }))
   })
+
+  it('refuses a runtime restore on a drifted binding before writing the old chat', async () => {
+    const fixture = await createFixture('restore-drift')
+    const port = createPort(fixture, {})
+    const old = await prepareOldTurn({
+      fixture,
+      port,
+      turn: OLD_TURN,
+      previousMessageId: OLD_MESSAGE_ID,
+      groupId: OLD_GROUP_ID,
+    })
+
+    // The failed new turn projected its candidate receipt into the plan's chat
+    // before the process died; that receipt is what a premature restore undo
+    // would mark and save.
+    const withCandidate = await snapshotOf(fixture, fixture.chatId)
+    appendMvuReceipt(withCandidate.chat, candidateReceipt(CANDIDATE_MESSAGE_ID))
+    await fixture.store.saveChat(
+      fixture.character,
+      fixture.chatId,
+      withCandidate.chat,
+      withCandidate.revision,
+    )
+
+    // Branch the chat and move the session to the branch: the plan's chat stays
+    // on disk with live receipts, exactly like a user branch after a crash.
+    const branchChatId = await fixture.store.createChat(
+      fixture.character,
+      structuredClone(withCandidate.chat.header),
+      structuredClone(withCandidate.chat.messages),
+    )
+    await fixture.store.updateState((state) => {
+      const binding = state.sessionBindings[fixture.sessionId]
+      if (binding === undefined) throw new Error('fixture binding is missing')
+      return {
+        sessionBindings: {
+          ...state.sessionBindings,
+          [fixture.sessionId]: { ...binding, chatId: branchChatId },
+        },
+      }
+    })
+
+    const oldChatBefore = await snapshotOf(fixture, fixture.chatId)
+    const branchBefore = await snapshotOf(fixture, branchChatId)
+
+    const calls: string[] = []
+    const recordingPort: BodyWriteRollbackPort = {
+      ...port,
+      rollbackTurnWrites: async (agentId: string, turn: number) => {
+        calls.push(`rollback-turn:${turn}`)
+        return port.rollbackTurnWrites(agentId, turn)
+      },
+      restore: async (plan: BodyRollbackPlan) => {
+        calls.push('restore')
+        return port.restore(plan)
+      },
+    }
+    const harness = createRuntimeHarness(fixture, recordingPort)
+    seedRestoreSession(harness)
+    const eventsBefore = harness.events.length
+    const op: PendingBodyOperation = {
+      opId: 'body-op-restore-drift',
+      groupId: OLD_GROUP_ID,
+      previousAnchorId: OLD_MESSAGE_ID,
+      previousIndex: 0,
+      startSeq: 0,
+      agentId: fixture.sessionId,
+      triggerMessageId: TRIGGER_MESSAGE_ID,
+      turn: FAILED_TURN,
+      rollbackPlan: old.plan,
+    }
+
+    const failure = await restoreBodyAfterFailure(harness.deps, op).then(
+      () => { throw new Error('expected the drifted restore to refuse') },
+      (error: unknown) => error as BodyRuntimeFailure,
+    )
+
+    expect(failure.code).toBe('operation-failed')
+    expect(failure.message).toContain(fixture.chatId)
+    expect(failure.message).toContain(branchChatId)
+    expect(failure.cause).toMatchObject({ code: 'body-rollback-target-missing' })
+
+    // The refusal is the first restore step: no port call and no session write.
+    expect(calls).toEqual([])
+    expect(harness.events).toHaveLength(eventsBefore)
+
+    // The old chat is neither saved nor half-rolled-back, and the branch keeps
+    // its live copy of the candidate receipt.
+    const oldChatAfter = await snapshotOf(fixture, fixture.chatId)
+    expect(oldChatAfter.revision).toBe(oldChatBefore.revision)
+    expect(receiptOf(oldChatAfter.chat, CANDIDATE_MESSAGE_ID)?.undoneAt).toBeUndefined()
+    const branchAfter = await snapshotOf(fixture, branchChatId)
+    expect(branchAfter.revision).toBe(branchBefore.revision)
+    expect(receiptOf(branchAfter.chat, CANDIDATE_MESSAGE_ID)?.undoneAt).toBeUndefined()
+  })
 })
 
 async function createFixture(label: string): Promise<Fixture> {
@@ -612,6 +726,123 @@ function recordingLogger(): RecordingLogger {
       error: (message, fields) => { entries.push({ level: 'error', message, fields }) },
     },
   }
+}
+
+/* ------------------- runtime restore harness (binding drift) ---------------- */
+
+interface RuntimeHarness {
+  readonly deps: BodyRuntimeDeps
+  readonly events: unknown[]
+}
+
+/**
+ * Minimal `BodyRuntimeDeps` around the real fixture session binding. The fake
+ * session only records appends — the drift test refuses before any write, so
+ * the surface is derived from the seeded events and the append seam stays a
+ * recorder.
+ */
+function createRuntimeHarness(fixture: Fixture, port: BodyWriteRollbackPort): RuntimeHarness {
+  const events: unknown[] = []
+  const session: BodySessionLike = {
+    id: fixture.sessionId,
+    header: { version: 4 },
+    events,
+    get surface() {
+      const nodes: number[] = []
+      for (const [index, event] of events.entries()) {
+        const type = (event as { type?: unknown }).type
+        if (type === 'user/message' || type === 'assistant/message') nodes.push(index)
+      }
+      return { nodes }
+    },
+    append: (type: string, data: unknown) => {
+      const event = { type, seq: events.length, time: Date.now(), data }
+      events.push(event)
+      return event
+    },
+  }
+  const agent: BodyAgentLike = {
+    id: fixture.sessionId,
+    session,
+    status: 'idle',
+    phase: { kind: 'idle', lastTurn: FAILED_TURN },
+    followup: () => undefined,
+  }
+  return {
+    deps: {
+      session,
+      agent,
+      appendRecord: (target: BodySessionLike, type: string, data: unknown) => target.append(type, data),
+      writeRollback: port,
+    },
+    events,
+  }
+}
+
+/** Closed old turn plus the closed failed turn whose candidate carries an MVU patch. */
+function seedRestoreSession(harness: RuntimeHarness): void {
+  const events = harness.events
+  const push = (type: string, data: Record<string, unknown>): void => {
+    events.push({ type, seq: events.length, time: Date.now(), data })
+  }
+  push('turn/start', { turn: 1 })
+  push('user/message', {
+    id: 'user-old',
+    role: 'user',
+    content: [{ type: 'text', text: 'Go on.' }],
+    source: { kind: 'user' },
+  })
+  push('assistant/message', {
+    turn: 1,
+    step: 1,
+    stream: [],
+    message: {
+      id: OLD_MESSAGE_ID,
+      role: 'assistant',
+      content: [{ type: 'text', text: OLD_BODY }],
+      source: { kind: 'model', provider: 'test-provider', model: 'test-model' },
+    },
+  })
+  push('turn/end', { turn: 1, reason: { kind: 'completed' } })
+  push('turn/start', { turn: FAILED_TURN })
+  push('user/message', {
+    id: TRIGGER_MESSAGE_ID,
+    role: 'user',
+    content: [{ type: 'text', text: 'Regenerate the last reply.' }],
+    source: { kind: 'plugin:dsh-soulmojito', form: 'body-regenerate' },
+  })
+  push('assistant/message', {
+    turn: FAILED_TURN,
+    step: 1,
+    stream: [],
+    message: {
+      id: CANDIDATE_MESSAGE_ID,
+      role: 'assistant',
+      content: [{ type: 'text', text: CANDIDATE_BODY }],
+      source: { kind: 'model', provider: 'test-provider', model: 'test-model' },
+    },
+  })
+  push('turn/end', { turn: FAILED_TURN, reason: { kind: 'error', error: { message: 'model failed', code: 'TEST' } } })
+}
+
+function candidateReceipt(messageId: string): MvuReceipt {
+  return {
+    at: SETTLE_RECEIPT_AT,
+    turnKey: `body:${messageId}`,
+    status: 'updated',
+    changes: [{ name: 'stat_data.hp', before: 10, after: 20 }],
+    failures: [],
+  }
+}
+
+function receiptOf(chat: ChatLogIR, messageId: string): MvuReceipt | undefined {
+  return readMvuReceipts(chat).find((receipt) => receipt.turnKey === `body:${messageId}`)
+}
+
+async function snapshotOf(fixture: Fixture, chatId: string): Promise<{ chat: ChatLogIR; revision: string }> {
+  const snapshot = await fixture.store.getChatSnapshot(fixture.character, chatId)
+  if (snapshot === undefined) throw new Error(`chat '${chatId}' is missing`)
+  return snapshot
 }
 
 function requireString(record: Record<string, unknown>, field: string): string {

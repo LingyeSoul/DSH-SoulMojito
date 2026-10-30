@@ -138,6 +138,7 @@ interface PendingJournalGroup {
 type DraftJournalGroup =
   | { readonly state: 'write'; readonly write: BodyRollbackJournalWrite }
   | { readonly state: 'pending'; readonly pending: PendingJournalGroup }
+  | { readonly state: 'uncommitted'; readonly journalId: string }
 
 interface DraftJournalBuild {
   readonly groups: readonly DraftJournalGroup[]
@@ -174,12 +175,31 @@ function buildJournalGroups(events: readonly unknown[], agentId: string, turn: n
     }
     for (const entry of group) tools.add(entry.tool)
     const noops = group.filter((entry) => entry.phase === 'noop')
+    const failed = group.filter((entry) => entry.phase === 'failed')
     const before = group.filter((entry) => entry.phase === 'before')
     const after = group.filter((entry) => entry.phase === 'after')
     if (noops.length > 0) {
-      if (noops.length > 1 || before.length > 0 || after.length > 0) {
+      if (noops.length > 1 || before.length > 0 || after.length > 0 || failed.length > 0) {
         throw journalUnsafe(journalId, agentId, turn, 'mixes a noop record with phase records')
       }
+      continue
+    }
+    if (failed.length > 0) {
+      // A terminal `failed` record proves the store call itself rejected the
+      // write, so the group can never have committed. It is reported
+      // uncommitted without probing: the store may hold a concurrent writer's
+      // revision, and a probe would attribute that foreign state to this
+      // journal and roll it back.
+      if (failed.length > 1 || after.length > 0) {
+        throw journalUnsafe(journalId, agentId, turn, 'mixes a failed record with other phase records')
+      }
+      if (before.length > 1) {
+        throw journalUnsafe(journalId, agentId, turn, 'has duplicate phase records')
+      }
+      if (before.length === 0) {
+        throw journalUnsafe(journalId, agentId, turn, 'has a failed record without a before record')
+      }
+      draft.push({ state: 'uncommitted', journalId })
       continue
     }
     if (before.length > 1 || after.length > 1) {
@@ -216,14 +236,17 @@ function buildJournalGroups(events: readonly unknown[], agentId: string, turn: n
 /**
  * Verify before-only groups against the store (proposal 0022 §3).
  *
- * A before-only group is committed when its target no longer holds the before
- * state: the `after` record was lost after the store accepted the write. The
- * actual store state becomes the journaled `after`, so the group is rolled back
- * and can be replayed like a complete pair. A group whose store still holds the
- * before state never committed and is reported as uncommitted. When the store
- * state cannot be verified (an old journal without names, or a vanished
- * target), this refuses with `write-journal-unknown` instead of silently
- * skipping.
+ * A group terminated by a `failed` record never reaches the store probe: the
+ * store call itself rejected the write, so it is reported uncommitted however
+ * the store looks. A before-only group is committed when its target no longer
+ * holds the before state: the `after` record was lost after the store accepted
+ * the write. The actual store state becomes the journaled `after`, so the group
+ * is rolled back and can be replayed like a complete pair. A group whose store
+ * still holds the before state never committed and is reported as uncommitted.
+ * When the store state cannot be verified (an old journal without names, a
+ * vanished target, a store read failure, or a current state the journaled
+ * payload cannot explain), this refuses with `write-journal-unknown` instead of
+ * silently skipping.
  */
 async function resolveJournalGroups(
   deps: BodyWriteRollbackDeps,
@@ -236,6 +259,10 @@ async function resolveJournalGroups(
   for (const group of draft.groups) {
     if (group.state === 'write') {
       writes.push(group.write)
+      continue
+    }
+    if (group.state === 'uncommitted') {
+      uncommitted.push(group.journalId)
       continue
     }
     const { journalId, entry } = group.pending
@@ -326,7 +353,7 @@ export function buildJournalDiagnostics(
   if (journal.uncommitted.length > 0) {
     diagnostics.push({
       code: 'journal-uncommitted-skipped',
-      message: `${journal.uncommitted.length} write journal group(s) have no after record and their stores still hold the before state, so they were treated as uncommitted: ${journal.uncommitted.join(', ')}`,
+      message: `${journal.uncommitted.length} write journal group(s) have no after record and never committed (their store call failed or the store still holds the before state), so they were treated as uncommitted: ${journal.uncommitted.join(', ')}`,
     })
   }
   if (!memoryVectorsInjected && journal.writes.some((write) => write.kind === 'memory')) {

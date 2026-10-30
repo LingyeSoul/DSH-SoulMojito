@@ -19,6 +19,7 @@ import {
   type HostSessionLog,
 } from '../../../bind/src/index.js'
 import type {
+  JsonValue,
   MemoryRecord,
   MemoryScope,
   MemorySource,
@@ -75,9 +76,12 @@ export const WRITE_JOURNAL_EVENT_TYPE = 'plugin:dsh-soulmojito/write' as const
  *
  * `noop` is a single record proving that a write tool ran without changing a
  * store (target missing, or a policy refusal); it keeps journal coverage from
- * confusing a verified no-op with a lost journal.
+ * confusing a verified no-op with a lost journal. `failed` terminates a group
+ * whose store call threw: the write provably never committed, so folding
+ * reports the group uncommitted instead of probing the store (a probe would
+ * attribute a concurrent writer's revision to this journal and roll it back).
  */
-export type WriteJournalPhase = 'before' | 'after' | 'noop'
+export type WriteJournalPhase = 'before' | 'after' | 'noop' | 'failed'
 
 /** Memory tool calls that journal their writes. */
 export const MEMORY_WRITE_JOURNAL_TOOLS = ['memory_write', 'memory_update', 'memory_forget'] as const
@@ -100,6 +104,12 @@ export interface WriteJournalMemoryTarget {
 export interface WriteJournalVariableTarget {
   readonly scope: VariableScope
   readonly scopeId: string
+}
+
+/** End state one variable name was meant to hold after the journaled write. */
+export interface WriteJournalVariablePayload {
+  readonly name: string
+  readonly value: JsonValue
 }
 
 /** One memory mutation record; `null` means "no record existed". */
@@ -132,6 +142,14 @@ export interface WriteJournalVariableEntry {
    * append. Required on new `before` records; older journals may omit it.
    */
   readonly names?: readonly string[]
+  /**
+   * End state each targeted name was meant to hold. Only `variable_set` /
+   * `variable_patch` journal it on their `before` records: a revision-conflict
+   * failure leaves the store at a concurrent writer's revision, and the
+   * before-only probe uses the payload to tell that foreign state from the
+   * state this write could have produced. Older journals may omit it.
+   */
+  readonly payload?: readonly WriteJournalVariablePayload[]
   readonly before?: readonly VariableSnapshot[] | null
   readonly after?: readonly VariableSnapshot[] | null
 }
@@ -397,7 +415,7 @@ function parseEntry(data: unknown, index: number): WriteJournalEntry {
 function parseMemoryEntry(record: Record<string, unknown>, where: string): WriteJournalMemoryEntry {
   const target = recordAt(record['target'], `${where} target`)
   const phase = phaseAt(record, where)
-  assertNoopShape(phase, record, where)
+  assertStatelessShape(phase, record, where)
   const before = optionalMemoryRecord(record['before'], `${where} before`)
   const after = optionalMemoryRecord(record['after'], `${where} after`)
   return {
@@ -421,8 +439,9 @@ function parseMemoryEntry(record: Record<string, unknown>, where: string): Write
 function parseVariableEntry(record: Record<string, unknown>, where: string): WriteJournalVariableEntry {
   const target = recordAt(record['target'], `${where} target`)
   const phase = phaseAt(record, where)
-  assertNoopShape(phase, record, where)
+  assertStatelessShape(phase, record, where)
   const names = optionalNames(record['names'], `${where} names`)
+  const payload = optionalPayload(record['payload'], `${where} payload`)
   const before = optionalSnapshots(record['before'], `${where} before`)
   const after = optionalSnapshots(record['after'], `${where} after`)
   return {
@@ -438,16 +457,17 @@ function parseVariableEntry(record: Record<string, unknown>, where: string): Wri
       scopeId: textAt(target, 'scopeId', `${where} target`),
     },
     ...(names === undefined ? {} : { names }),
+    ...(payload === undefined ? {} : { payload }),
     ...(before === undefined ? {} : { before }),
     ...(after === undefined ? {} : { after }),
   }
 }
 
-/** A no-op record proves "nothing was written" and must not carry states. */
-function assertNoopShape(phase: WriteJournalPhase, record: Record<string, unknown>, where: string): void {
-  if (phase !== 'noop') return
+/** A `noop`/`failed` record proves "nothing was written" and must not carry states. */
+function assertStatelessShape(phase: WriteJournalPhase, record: Record<string, unknown>, where: string): void {
+  if (phase !== 'noop' && phase !== 'failed') return
   if (record['before'] !== undefined || record['after'] !== undefined) {
-    throw invalid(where, 'a noop record must not carry before/after state')
+    throw invalid(where, `a ${phase} record must not carry before/after state`)
   }
 }
 
@@ -520,6 +540,20 @@ function optionalNames(value: unknown, where: string): readonly string[] | undef
   return names
 }
 
+function optionalPayload(value: unknown, where: string): readonly WriteJournalVariablePayload[] | undefined {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value) || value.length === 0) {
+    throw invalid(where, 'must be a non-empty array of variable payloads')
+  }
+  return value.map((item, index) => {
+    const record = recordAt(item, `${where}[${index}]`)
+    return {
+      name: textAt(record, 'name', `${where}[${index}]`),
+      value: jsonValueAt(record['value'], `${where}[${index}] value`),
+    }
+  })
+}
+
 function optionalSnapshots(value: unknown, where: string): readonly VariableSnapshot[] | null | undefined {
   if (value === undefined) return undefined
   if (value === null) return null
@@ -561,8 +595,8 @@ function variableScopeAt(value: unknown, where: string): VariableScope {
 
 function phaseAt(record: Record<string, unknown>, where: string): WriteJournalPhase {
   const value = record['phase']
-  if (value !== 'before' && value !== 'after' && value !== 'noop') {
-    throw invalid(where, `field 'phase' must be 'before', 'after' or 'noop', received '${String(value)}'`)
+  if (value !== 'before' && value !== 'after' && value !== 'noop' && value !== 'failed') {
+    throw invalid(where, `field 'phase' must be 'before', 'after', 'noop' or 'failed', received '${String(value)}'`)
   }
   return value
 }

@@ -82,7 +82,18 @@ export type {
 /* -------------------------------- factory ---------------------------------- */
 
 /** Build the rollback port around injected stores, session events and logging. */
-export function createBodyWriteRollbackPort(deps: BodyWriteRollbackDeps): BodyWriteRollbackPort {
+export function createBodyWriteRollbackPort(deps: BodyWriteRollbackDeps): BodyWriteRollbackPort & {
+  /**
+   * Binding precheck behind `restore` (proposal 0022 §10.3 ordering).
+   *
+   * The runtime restore entry calls this before it rolls the failed turn's
+   * writes back, because its candidate receipt undo writes `plan.binding`'s
+   * chat directly and `restore` itself only revalidates the binding once it
+   * runs. Ports from callers other than this factory may omit the method; the
+   * runtime probes it instead of assuming it, like the optional `plan`/`apply`.
+   */
+  assertTarget(plan: BodyRollbackPlan): Promise<void>
+} {
   return {
     plan: (agentId: string, turn: number, previousMessageId: string) =>
       planBodyRollback(deps, agentId, turn, previousMessageId),
@@ -90,6 +101,7 @@ export function createBodyWriteRollbackPort(deps: BodyWriteRollbackDeps): BodyWr
     prepare: (agentId: string, turn: number, previousMessageId: string) =>
       prepareBodyRollback(deps, agentId, turn, previousMessageId),
     restore: (plan: BodyRollbackPlan) => restoreBodyRollback(deps, plan),
+    assertTarget: (plan: BodyRollbackPlan) => assertPlanBindingCurrent(deps.store, plan, 'restore'),
     commit: (plan: BodyRollbackPlan): Promise<void> => {
       // Proposal 0022 §5: commit is a no-op for now; journal and receipts stay.
       void plan
@@ -494,6 +506,10 @@ async function readPlanChatSnapshot(
  * the rollback into an unrelated chat. A missing binding is a refusal too:
  * silently skipping would leave the flat stores rolled back without a chat to
  * match them.
+ *
+ * Exposed as the port's `assertTarget` so the runtime restore entry can run the
+ * same check as its first step, before its receipt undo writes `plan.binding`'s
+ * chat.
  */
 async function assertPlanBindingCurrent(
   store: BodyRollbackStore,

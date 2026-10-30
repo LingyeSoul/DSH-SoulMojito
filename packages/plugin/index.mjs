@@ -10084,7 +10084,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.0".trim() : "";
-  const commit = true ? normalizeCommit("d68998f") : void 0;
+  const commit = true ? normalizeCommit("8922a19") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -20551,7 +20551,7 @@ function assertAdoptionMirror(floor, input, floorIndex) {
     throw adoptionMismatch(
       input,
       floorIndex,
-      `floor text starts with '${textPrefix(floor.mes)}' but the anchor text starts with '${textPrefix(anchorText)}'`
+      `the floor text does not equal the anchor text (floor length ${floor.mes.trim().length}, anchor length ${anchorText.length})`
     );
   }
 }
@@ -20560,10 +20560,6 @@ function adoptionMismatch(input, floorIndex, detail) {
     "body-adoption-mismatch",
     `imported floor adoption refused for group '${input.groupId}': chat floor ${floorIndex} is not the mirror of anchor '${input.anchorMessageId}' (${detail})`
   );
-}
-function textPrefix(text) {
-  const flat = text.replace(/\s+/g, " ").trim();
-  return flat.length <= 40 ? flat : `${flat.slice(0, 40)}...`;
 }
 function snapshotSwipeSurface(floor) {
   return {
@@ -23125,6 +23121,22 @@ async function commitBodyRollback(deps, op) {
   }
   await port.commit(plan);
 }
+async function assertRestoreTargetCurrent(deps, op) {
+  const plan = op.rollbackPlan;
+  if (plan === void 0) return;
+  const port = deps.writeRollback;
+  const assertTarget = port?.assertTarget;
+  if (typeof assertTarget !== "function") return;
+  try {
+    await assertTarget.call(port, plan);
+  } catch (error) {
+    throw failureFor(
+      error,
+      `body restore ${op.opId} refused to restore the write rollback plan`,
+      op
+    );
+  }
+}
 async function restoreBodyRollbackPlan(deps, op) {
   const plan = op.rollbackPlan;
   if (plan === void 0) return;
@@ -23280,6 +23292,7 @@ async function restoreBodyAfterFailureLocked(deps, op) {
   const failedTurn = turnOfUserMessage(events, triggerId);
   const previousSeq = findSurfaceSeqByMessageId(events, surface, op.previousAnchorId);
   const targets = failedTurnTargets(events, surface, triggerId, failedTurn);
+  await assertRestoreTargetCurrent(deps, op);
   await rollbackNewTurnWrites(deps, op, events, failedTurn);
   await undoNewCandidateBodyReceipt(deps, op, events, failedTurn);
   await restoreBodyRollbackPlan(deps, op);
@@ -24342,6 +24355,7 @@ var AgentTavernProjector = class _AgentTavernProjector {
   async replay(session) {
     this.checkpoints.delete(session.id);
     const events = [...sessionEvents(session)].sort((left, right) => left.seq - right.seq);
+    await this.clampPendingCursor(session.id, events);
     for (const event of events) await this.project(session, event);
   }
   async status(sessionId) {
@@ -24424,7 +24438,7 @@ var AgentTavernProjector = class _AgentTavernProjector {
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
       const empty = {
-        version: 1,
+        version: 2,
         sessionId,
         lastCursor: -1,
         status: "ok",
@@ -24441,6 +24455,26 @@ var AgentTavernProjector = class _AgentTavernProjector {
 `, "utf8");
     await fs14.rename(temporary, target);
     this.checkpoints.set(checkpoint.sessionId, checkpoint);
+  }
+  /**
+   * Clamp a `pendingCursor` the session log does not carry.
+   *
+   * A `lastCursor + 1` normalization can guess a seq that never exists (event
+   * seqs are not guaranteed to be dense), and a v1 reset starts at seq 0 which
+   * a session may not have either. Such a cursor can never be closed by
+   * projecting an event, so it would pin the checkpoint pending forever. The
+   * repair clamps it to the next existing event — or drops the pending state
+   * when the log has nothing at or above it — so the watermark can advance
+   * again. The clamped shape lives in the cache only; the replay loop that
+   * follows persists it with its first successful write.
+   */
+  async clampPendingCursor(sessionId, events) {
+    const checkpoint = await this.readCheckpoint(sessionId);
+    const pendingCursor = checkpoint.pendingCursor;
+    if (pendingCursor === void 0) return;
+    if (events.some((event) => event.seq === pendingCursor)) return;
+    const next = events.find((event) => event.seq >= pendingCursor);
+    this.checkpoints.set(sessionId, next === void 0 ? { version: 2, sessionId, lastCursor: checkpoint.lastCursor, status: "ok", updatedAt: (/* @__PURE__ */ new Date()).toISOString() } : { ...checkpoint, pendingCursor: next.seq });
   }
   checkpointPath(sessionId) {
     const name2 = createHash7("sha256").update(sessionId).digest("hex");
@@ -24638,7 +24672,7 @@ function eventDate2(time, seq, type) {
   return new Date(time).toISOString();
 }
 function validateCheckpoint(value, sessionId) {
-  if (value.version !== 1 || value.sessionId !== sessionId || !Number.isSafeInteger(value.lastCursor) || !["ok", "pending"].includes(value.status)) {
+  if (value.version !== 1 && value.version !== 2 || value.sessionId !== sessionId || !Number.isSafeInteger(value.lastCursor) || !["ok", "pending"].includes(value.status)) {
     throw new Error(`invalid AgentTavern projection checkpoint for '${sessionId}'`);
   }
   if (value.pendingCursor !== void 0 && (!Number.isSafeInteger(value.pendingCursor) || value.pendingCursor < 0)) {
@@ -24646,6 +24680,16 @@ function validateCheckpoint(value, sessionId) {
   }
 }
 function normalizeCheckpoint(checkpoint) {
+  if (checkpoint.version === 1) {
+    return {
+      version: 2,
+      sessionId: checkpoint.sessionId,
+      lastCursor: -1,
+      status: "pending",
+      pendingCursor: 0,
+      updatedAt: checkpoint.updatedAt
+    };
+  }
   if (checkpoint.status !== "pending" || checkpoint.pendingCursor !== void 0) return checkpoint;
   if (checkpoint.lastCursor >= Number.MAX_SAFE_INTEGER) return checkpoint;
   return { ...checkpoint, pendingCursor: checkpoint.lastCursor + 1 };
@@ -24659,7 +24703,7 @@ function advanceCheckpoint(checkpoint, seq) {
   const pendingCursor = checkpoint.pendingCursor;
   if (pendingCursor === void 0) {
     return {
-      version: 1,
+      version: 2,
       sessionId: checkpoint.sessionId,
       lastCursor: Math.max(checkpoint.lastCursor, seq),
       status: "ok",
@@ -24668,7 +24712,7 @@ function advanceCheckpoint(checkpoint, seq) {
   }
   if (pendingCursor !== seq) {
     return {
-      version: 1,
+      version: 2,
       sessionId: checkpoint.sessionId,
       lastCursor: checkpoint.lastCursor,
       status: "pending",
@@ -24677,11 +24721,11 @@ function advanceCheckpoint(checkpoint, seq) {
       updatedAt
     };
   }
-  return { version: 1, sessionId: checkpoint.sessionId, lastCursor: seq, status: "ok", updatedAt };
+  return { version: 2, sessionId: checkpoint.sessionId, lastCursor: seq, status: "ok", updatedAt };
 }
 function pendingCheckpoint(checkpoint, seq, error) {
   return {
-    version: 1,
+    version: 2,
     sessionId: checkpoint.sessionId,
     lastCursor: checkpoint.lastCursor,
     status: "pending",
@@ -25773,7 +25817,7 @@ function parseEntry(data, index) {
 function parseMemoryEntry(record, where) {
   const target = recordAt(record["target"], `${where} target`);
   const phase = phaseAt(record, where);
-  assertNoopShape(phase, record, where);
+  assertStatelessShape(phase, record, where);
   const before = optionalMemoryRecord(record["before"], `${where} before`);
   const after = optionalMemoryRecord(record["after"], `${where} after`);
   return {
@@ -25796,8 +25840,9 @@ function parseMemoryEntry(record, where) {
 function parseVariableEntry(record, where) {
   const target = recordAt(record["target"], `${where} target`);
   const phase = phaseAt(record, where);
-  assertNoopShape(phase, record, where);
+  assertStatelessShape(phase, record, where);
   const names = optionalNames(record["names"], `${where} names`);
+  const payload = optionalPayload(record["payload"], `${where} payload`);
   const before = optionalSnapshots(record["before"], `${where} before`);
   const after = optionalSnapshots(record["after"], `${where} after`);
   return {
@@ -25813,14 +25858,15 @@ function parseVariableEntry(record, where) {
       scopeId: textAt(target, "scopeId", `${where} target`)
     },
     ...names === void 0 ? {} : { names },
+    ...payload === void 0 ? {} : { payload },
     ...before === void 0 ? {} : { before },
     ...after === void 0 ? {} : { after }
   };
 }
-function assertNoopShape(phase, record, where) {
-  if (phase !== "noop") return;
+function assertStatelessShape(phase, record, where) {
+  if (phase !== "noop" && phase !== "failed") return;
   if (record["before"] !== void 0 || record["after"] !== void 0) {
-    throw invalid(where, "a noop record must not carry before/after state");
+    throw invalid(where, `a ${phase} record must not carry before/after state`);
   }
 }
 function optionalMemoryRecord(value, where) {
@@ -25875,6 +25921,19 @@ function optionalNames(value, where) {
   }
   return names;
 }
+function optionalPayload(value, where) {
+  if (value === void 0) return void 0;
+  if (!Array.isArray(value) || value.length === 0) {
+    throw invalid(where, "must be a non-empty array of variable payloads");
+  }
+  return value.map((item, index) => {
+    const record = recordAt(item, `${where}[${index}]`);
+    return {
+      name: textAt(record, "name", `${where}[${index}]`),
+      value: jsonValueAt(record["value"], `${where}[${index}] value`)
+    };
+  });
+}
 function optionalSnapshots(value, where) {
   if (value === void 0) return void 0;
   if (value === null) return null;
@@ -25910,8 +25969,8 @@ function variableScopeAt(value, where) {
 }
 function phaseAt(record, where) {
   const value = record["phase"];
-  if (value !== "before" && value !== "after" && value !== "noop") {
-    throw invalid(where, `field 'phase' must be 'before', 'after' or 'noop', received '${String(value)}'`);
+  if (value !== "before" && value !== "after" && value !== "noop" && value !== "failed") {
+    throw invalid(where, `field 'phase' must be 'before', 'after', 'noop' or 'failed', received '${String(value)}'`);
   }
   return value;
 }
@@ -26145,6 +26204,7 @@ async function probeVariableGroup(deps, journalId, entry, agentId, turn) {
   }
   const committed = names.some((name2) => current.get(name2)?.revision !== beforeByName.get(name2)?.revision);
   if (!committed) return void 0;
+  assertVariablePayloadLanded(entry, names, current, journalId, agentId, turn);
   if (entry.tool === "variable_delete") {
     return { kind: "variable", journalId, tool: entry.tool, target: entry.target, before, after: null };
   }
@@ -26156,6 +26216,39 @@ async function probeVariableGroup(deps, journalId, entry, agentId, turn) {
     before,
     after: [...current.values()]
   };
+}
+function assertVariablePayloadLanded(entry, names, current, journalId, agentId, turn) {
+  if (entry.tool === "variable_delete" || entry.payload === void 0) return;
+  const nameSet = new Set(names);
+  for (const item of entry.payload) {
+    if (!nameSet.has(item.name)) {
+      throw journalUnsafe(journalId, agentId, turn, `records a payload for variable '${item.name}' outside its journaled names`);
+    }
+    const snapshot2 = current.get(item.name);
+    if (snapshot2 === void 0 || !jsonValueEquals(snapshot2.value, item.value)) {
+      throw new BodyRollbackError(
+        "body-state-unsafe",
+        `body rollback for session '${agentId}' turn ${turn} cannot attribute variable '${item.name}' to the before-only write journal '${journalId}': the store holds ${snapshot2 === void 0 ? "no value" : `a revision ('${snapshot2.revision}') this write cannot have produced`}`,
+        { detail: "write-journal-unknown", stage: "prepare", sessionId: agentId, turn, journalId }
+      );
+    }
+  }
+}
+function jsonValueEquals(left, right) {
+  if (left === right) return true;
+  if (typeof left !== typeof right || left === null || right === null) return false;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    return left.every((item, index) => jsonValueEquals(item, right[index]));
+  }
+  if (typeof left === "object") {
+    const rightRecord = right;
+    const leftRecord = left;
+    const keys = Object.keys(leftRecord);
+    if (keys.length !== Object.keys(rightRecord).length) return false;
+    return keys.every((key) => key in rightRecord && jsonValueEquals(leftRecord[key], rightRecord[key]));
+  }
+  return false;
 }
 function probeVariableNames(entry, before, journalId, agentId, turn) {
   if (entry.tool === "variable_patch" && entry.names === void 0) {
@@ -27149,12 +27242,26 @@ function buildJournalGroups(events, agentId, turn) {
     }
     for (const entry of group2) tools.add(entry.tool);
     const noops = group2.filter((entry) => entry.phase === "noop");
+    const failed = group2.filter((entry) => entry.phase === "failed");
     const before = group2.filter((entry) => entry.phase === "before");
     const after = group2.filter((entry) => entry.phase === "after");
     if (noops.length > 0) {
-      if (noops.length > 1 || before.length > 0 || after.length > 0) {
+      if (noops.length > 1 || before.length > 0 || after.length > 0 || failed.length > 0) {
         throw journalUnsafe(journalId, agentId, turn, "mixes a noop record with phase records");
       }
+      continue;
+    }
+    if (failed.length > 0) {
+      if (failed.length > 1 || after.length > 0) {
+        throw journalUnsafe(journalId, agentId, turn, "mixes a failed record with other phase records");
+      }
+      if (before.length > 1) {
+        throw journalUnsafe(journalId, agentId, turn, "has duplicate phase records");
+      }
+      if (before.length === 0) {
+        throw journalUnsafe(journalId, agentId, turn, "has a failed record without a before record");
+      }
+      draft.push({ state: "uncommitted", journalId });
       continue;
     }
     if (before.length > 1 || after.length > 1) {
@@ -27188,6 +27295,10 @@ async function resolveJournalGroups(deps, draft, agentId, turn) {
   for (const group2 of draft.groups) {
     if (group2.state === "write") {
       writes.push(group2.write);
+      continue;
+    }
+    if (group2.state === "uncommitted") {
+      uncommitted.push(group2.journalId);
       continue;
     }
     const { journalId, entry } = group2.pending;
@@ -27243,7 +27354,7 @@ function buildJournalDiagnostics(journal, logger, agentId, turn, memoryVectorsIn
   if (journal.uncommitted.length > 0) {
     diagnostics.push({
       code: "journal-uncommitted-skipped",
-      message: `${journal.uncommitted.length} write journal group(s) have no after record and their stores still hold the before state, so they were treated as uncommitted: ${journal.uncommitted.join(", ")}`
+      message: `${journal.uncommitted.length} write journal group(s) have no after record and never committed (their store call failed or the store still holds the before state), so they were treated as uncommitted: ${journal.uncommitted.join(", ")}`
     });
   }
   if (!memoryVectorsInjected && journal.writes.some((write) => write.kind === "memory")) {
@@ -27456,6 +27567,7 @@ function createBodyWriteRollbackPort(deps) {
     apply: (plan) => applyBodyRollback(deps, plan),
     prepare: (agentId, turn, previousMessageId) => prepareBodyRollback(deps, agentId, turn, previousMessageId),
     restore: (plan) => restoreBodyRollback(deps, plan),
+    assertTarget: (plan) => assertPlanBindingCurrent(deps.store, plan, "restore"),
     commit: (plan) => {
       void plan;
       return Promise.resolve();
@@ -28253,6 +28365,7 @@ function applySettlementEvidence(op, settlement, seq) {
 }
 
 // packages/plugin/src/agent-tavern/body-view.ts
+init_public_error();
 function bodyStateSafetyOf(character, chat) {
   if (character === void 0) return unsafeBodyState("card-unreadable");
   if (chat === void 0) return unsafeBodyState("chat-unreadable");
@@ -28382,8 +28495,11 @@ function buildBodyView(input) {
     ...input.projectionCurrent === false ? { projectionPending: true } : {},
     ...reason === void 0 ? {} : { reason },
     ...detail === void 0 ? {} : { detail },
-    ...input.lastOperation === void 0 ? {} : { lastOperation: input.lastOperation }
+    ...input.lastOperation === void 0 ? {} : { lastOperation: publicLastOperation(input.lastOperation) }
   };
+}
+function publicLastOperation(operation) {
+  return { ...operation, reason: publicErrorMessage(operation.reason) };
 }
 function bodyViewReason(input, hidden) {
   if (!bodyBindingEligible(input.binding)) return "architecture-mismatch";
@@ -28405,7 +28521,7 @@ function bodyFailureOf(error) {
   return {
     status: bodyRejectStatus(failure.code),
     code: failure.code,
-    message: errorMessage5(error),
+    message: publicErrorMessage(errorMessage5(error)),
     ...detail === void 0 ? {} : { detail }
   };
 }

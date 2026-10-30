@@ -32,15 +32,17 @@ export interface NativeSession extends HostSessionLog {
 export interface ProjectorStore extends BodyProjectionStore {}
 
 export interface ProjectionCheckpoint {
-  version: 1
+  /** On-disk format. v1 watermarks are untrusted and migrate to v2 on read. */
+  version: 1 | 2
   sessionId: string
   /** Contiguous watermark: every seq at or below it is projected (or absent). */
   lastCursor: number
   status: 'ok' | 'pending'
   /**
    * Lowest seq that failed and still needs replay. Present while a hole exists;
-   * historical checkpoints may carry it below `lastCursor` (old scalar overwrite
-   * bug) or with `status: 'ok'`, and both remain repairable.
+   * v2 writers keep it strictly above `lastCursor`, so a v2 checkpoint cannot
+   * hide an unprojected seq below its watermark. v1 files never carry a
+   * trustworthy one (see {@link normalizeCheckpoint}) and are reset wholesale.
    */
   pendingCursor?: number
   error?: string
@@ -72,6 +74,7 @@ export class AgentTavernProjector {
     // must never hide a pending hole during replay.
     this.checkpoints.delete(session.id)
     const events = [...sessionEvents(session) as readonly NativeSessionEvent[]].sort((left, right) => left.seq - right.seq)
+    await this.clampPendingCursor(session.id, events)
     for (const event of events) await this.project(session, event)
   }
 
@@ -171,7 +174,7 @@ export class AgentTavernProjector {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       const empty: ProjectionCheckpoint = {
-        version: 1,
+        version: 2,
         sessionId,
         lastCursor: -1,
         status: 'ok',
@@ -188,6 +191,29 @@ export class AgentTavernProjector {
     await fs.writeFile(temporary, `${JSON.stringify(checkpoint)}\n`, 'utf8')
     await fs.rename(temporary, target)
     this.checkpoints.set(checkpoint.sessionId, checkpoint)
+  }
+
+  /**
+   * Clamp a `pendingCursor` the session log does not carry.
+   *
+   * A `lastCursor + 1` normalization can guess a seq that never exists (event
+   * seqs are not guaranteed to be dense), and a v1 reset starts at seq 0 which
+   * a session may not have either. Such a cursor can never be closed by
+   * projecting an event, so it would pin the checkpoint pending forever. The
+   * repair clamps it to the next existing event — or drops the pending state
+   * when the log has nothing at or above it — so the watermark can advance
+   * again. The clamped shape lives in the cache only; the replay loop that
+   * follows persists it with its first successful write.
+   */
+  private async clampPendingCursor(sessionId: string, events: readonly NativeSessionEvent[]): Promise<void> {
+    const checkpoint = await this.readCheckpoint(sessionId)
+    const pendingCursor = checkpoint.pendingCursor
+    if (pendingCursor === undefined) return
+    if (events.some((event) => event.seq === pendingCursor)) return
+    const next = events.find((event) => event.seq >= pendingCursor)
+    this.checkpoints.set(sessionId, next === undefined
+      ? { version: 2, sessionId, lastCursor: checkpoint.lastCursor, status: 'ok', updatedAt: new Date().toISOString() }
+      : { ...checkpoint, pendingCursor: next.seq })
   }
 
   private checkpointPath(sessionId: string): string {
@@ -532,12 +558,13 @@ function eventDate(time: number, seq: number, type: string): string {
 }
 
 function validateCheckpoint(value: ProjectionCheckpoint, sessionId: string): void {
-  if (value.version !== 1 || value.sessionId !== sessionId || !Number.isSafeInteger(value.lastCursor)
+  if ((value.version !== 1 && value.version !== 2) || value.sessionId !== sessionId || !Number.isSafeInteger(value.lastCursor)
     || !['ok', 'pending'].includes(value.status)) {
     throw new Error(`invalid AgentTavern projection checkpoint for '${sessionId}'`)
   }
-  // Historical checkpoints may carry `pendingCursor` below `lastCursor`
-  // (the old scalar overwrite bug), so only the shape is validated here.
+  // v1 files are migrated wholesale by `normalizeCheckpoint`, and a hand-edited
+  // v2 file may still carry `pendingCursor` below `lastCursor`; either way only
+  // the shape is validated here.
   if (value.pendingCursor !== undefined
     && (!Number.isSafeInteger(value.pendingCursor) || value.pendingCursor < 0)) {
     throw new Error(`invalid AgentTavern projection checkpoint for '${sessionId}'`)
@@ -545,11 +572,35 @@ function validateCheckpoint(value: ProjectionCheckpoint, sessionId: string): voi
 }
 
 /**
- * Keep a pending checkpoint repairable even when it lost its `pendingCursor`
- * (hand-edited file or a producer that only knew the scalar watermark): the
- * first unproven cursor is the next one after `lastCursor`.
+ * Keep a checkpoint repairable when its watermark cannot be trusted.
+ *
+ * v1 watermarks are untrusted wholesale: the pre-v2 success branch overwrote
+ * the whole checkpoint with `{ lastCursor: seq, status: 'ok' }`, so a v1 `ok`
+ * file can hide a failed seq anywhere below its watermark (and a v1 `pending`
+ * file can hide one below its `pendingCursor`). Guessing `lastCursor + 1`
+ * cannot repair a hole below the watermark, so a v1 checkpoint resets to an
+ * unverified pending state whose first unproven cursor is 0: the next replay
+ * re-projects every event idempotently (identity-checked floor appends,
+ * slot-overwriting body writes) and rewrites a trustworthy v2 watermark, and a
+ * live event before that replay can no longer stamp a false `ok` watermark.
+ * The reset lives in the cache only, so an unreplayed file is re-migrated —
+ * harmlessly — after every restart.
+ *
+ * v2 pending checkpoints that lost `pendingCursor` (hand-edited file or a
+ * producer that only knew the scalar watermark) keep the decision-2026-10-29
+ * normalization: the first unproven cursor is the next one after `lastCursor`.
  */
 function normalizeCheckpoint(checkpoint: ProjectionCheckpoint): ProjectionCheckpoint {
+  if (checkpoint.version === 1) {
+    return {
+      version: 2,
+      sessionId: checkpoint.sessionId,
+      lastCursor: -1,
+      status: 'pending',
+      pendingCursor: 0,
+      updatedAt: checkpoint.updatedAt,
+    }
+  }
   if (checkpoint.status !== 'pending' || checkpoint.pendingCursor !== undefined) return checkpoint
   if (checkpoint.lastCursor >= Number.MAX_SAFE_INTEGER) return checkpoint
   return { ...checkpoint, pendingCursor: checkpoint.lastCursor + 1 }
@@ -579,7 +630,7 @@ function advanceCheckpoint(checkpoint: ProjectionCheckpoint, seq: number): Proje
   const pendingCursor = checkpoint.pendingCursor
   if (pendingCursor === undefined) {
     return {
-      version: 1,
+      version: 2,
       sessionId: checkpoint.sessionId,
       lastCursor: Math.max(checkpoint.lastCursor, seq),
       status: 'ok',
@@ -588,7 +639,7 @@ function advanceCheckpoint(checkpoint: ProjectionCheckpoint, seq: number): Proje
   }
   if (pendingCursor !== seq) {
     return {
-      version: 1,
+      version: 2,
       sessionId: checkpoint.sessionId,
       lastCursor: checkpoint.lastCursor,
       status: 'pending',
@@ -597,13 +648,13 @@ function advanceCheckpoint(checkpoint: ProjectionCheckpoint, seq: number): Proje
       updatedAt,
     }
   }
-  return { version: 1, sessionId: checkpoint.sessionId, lastCursor: seq, status: 'ok', updatedAt }
+  return { version: 2, sessionId: checkpoint.sessionId, lastCursor: seq, status: 'ok', updatedAt }
 }
 
 /** Record a failed `seq` while keeping the lowest unfinished cursor. */
 function pendingCheckpoint(checkpoint: ProjectionCheckpoint, seq: number, error: unknown): ProjectionCheckpoint {
   return {
-    version: 1,
+    version: 2,
     sessionId: checkpoint.sessionId,
     lastCursor: checkpoint.lastCursor,
     status: 'pending',

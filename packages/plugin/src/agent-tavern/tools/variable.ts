@@ -58,15 +58,22 @@ export function variableTools(): ToolDefinition[] {
         phase: 'before',
         target: journalTarget,
         names: [name],
+        payload: [{ name, value }],
         before: existing === undefined ? null : [existing],
       })
-      const snapshot = await store.set(
-        target.scope,
-        target.scopeId,
-        name,
-        value,
-        typeof args.expectedRevision === 'string' ? args.expectedRevision : undefined,
-      )
+      let snapshot: VariableSnapshot
+      try {
+        snapshot = await store.set(
+          target.scope,
+          target.scopeId,
+          name,
+          value,
+          typeof args.expectedRevision === 'string' ? args.expectedRevision : undefined,
+        )
+      } catch (error) {
+        recordVariableFailure(journal, 'variable_set', journalTarget)
+        throw error
+      }
       appendVariableJournal(journal, { tool: 'variable_set', phase: 'after', target: journalTarget, after: [snapshot] })
       return { found: true, scope: target.scope, name: snapshot.name, value: snapshot.value, revision: snapshot.revision, updatedAt: snapshot.updatedAt }
     }),
@@ -117,14 +124,21 @@ export function variableTools(): ToolDefinition[] {
         phase: 'before',
         target: journalTarget,
         names,
+        payload: changes.map((change) => ({ name: change.name, value: change.value })),
         before: previous,
       })
-      const snapshots = await store.patch(
-        target.scope,
-        target.scopeId,
-        changes,
-        typeof args.expectedRevision === 'string' ? args.expectedRevision : undefined,
-      )
+      let snapshots: VariableSnapshot[]
+      try {
+        snapshots = await store.patch(
+          target.scope,
+          target.scopeId,
+          changes,
+          typeof args.expectedRevision === 'string' ? args.expectedRevision : undefined,
+        )
+      } catch (error) {
+        recordVariableFailure(journal, 'variable_patch', journalTarget)
+        throw error
+      }
       appendVariableJournal(journal, { tool: 'variable_patch', phase: 'after', target: journalTarget, after: snapshots })
       return { scope: target.scope, variables: snapshots.map(variableSummary), truncated: false }
     }),
@@ -161,7 +175,12 @@ export function variableTools(): ToolDefinition[] {
         names: [name],
         before: [existing],
       })
-      await store.delete(target.scope, target.scopeId, name, typeof args.expectedRevision === 'string' ? args.expectedRevision : existing.revision)
+      try {
+        await store.delete(target.scope, target.scopeId, name, typeof args.expectedRevision === 'string' ? args.expectedRevision : existing.revision)
+      } catch (error) {
+        recordVariableFailure(journal, 'variable_delete', journalTarget)
+        throw error
+      }
       appendVariableJournal(journal, { tool: 'variable_delete', phase: 'after', target: journalTarget, after: null })
       return { found: true, scope: target.scope, name }
     }),
@@ -194,6 +213,7 @@ interface VariableJournalPhase {
   readonly phase: WriteJournalPhase
   readonly target: WriteJournalVariableTarget
   readonly names?: readonly string[]
+  readonly payload?: readonly { name: string; value: JsonValue }[]
   readonly before?: readonly VariableSnapshot[] | null
   readonly after?: readonly VariableSnapshot[] | null
 }
@@ -217,9 +237,30 @@ function appendVariableJournal(journal: WriteJournalHandle | undefined, request:
     at: new Date().toISOString(),
     target: request.target,
     ...(request.names === undefined ? {} : { names: request.names }),
+    ...(request.payload === undefined ? {} : { payload: request.payload }),
     ...(request.before === undefined ? {} : { before: request.before }),
     ...(request.after === undefined ? {} : { after: request.after }),
   })
+}
+
+/**
+ * Terminate a journal group whose store call threw.
+ *
+ * A revision conflict is itself evidence that a concurrent writer moved the
+ * target: without this terminal record the group would stay before-only and
+ * the rollback probe could mistake the foreign revision for this write's
+ * committed after state. The append is best effort — the business failure must
+ * still reach the caller, and a failed append leaves the before-only group to
+ * store verification.
+ */
+function recordVariableFailure(
+  journal: WriteJournalHandle | undefined,
+  tool: WriteJournalVariableTool,
+  target: WriteJournalVariableTarget,
+): void {
+  try {
+    appendVariableJournal(journal, { tool, phase: 'failed', target })
+  } catch { /* the original store failure outranks the journal append failure */ }
 }
 
 /**

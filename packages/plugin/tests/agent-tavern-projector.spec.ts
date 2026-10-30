@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -11,6 +12,14 @@ const roots: string[] = []
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
 })
+
+/** Hand-write a checkpoint file in the projector's on-disk location. */
+function writeCheckpointFile(root: string, sessionId: string, checkpoint: Record<string, unknown>): void {
+  const dir = join(root, 'projections')
+  mkdirSync(dir, { recursive: true })
+  const name = createHash('sha256').update(sessionId).digest('hex')
+  writeFileSync(join(dir, `${name}.json`), `${JSON.stringify(checkpoint)}\n`, 'utf8')
+}
 
 const cardData = (extensions: Record<string, unknown> = {}) => ({
   name: 'Projector Character', description: '', personality: '', scenario: '', first_mes: '', mes_example: '',
@@ -252,6 +261,69 @@ describe('AgentTavern native event projector', () => {
     }))
     await projector.project(native, native.events[1]!)
     expect(await projector.status(sessionId)).toMatchObject({ status: 'ok', lastCursor: 1 })
+  })
+
+  it('reprojects events skipped by a legacy v1 checkpoint that a later success overwrote', async () => {
+    const { root, store, chatId, sessionId } = await fixture('legacy-ok-session')
+    // The pre-pendingCursor projector stamped `{ lastCursor: seq, status: 'ok' }`
+    // on every success, so a failed seq below the watermark was overwritten and
+    // lost: the file claims every seq at or below 4 is projected while the chat
+    // never received them. Trusting that watermark skips the hole forever.
+    writeCheckpointFile(root, sessionId, {
+      version: 1, sessionId, lastCursor: 4, status: 'ok', updatedAt: new Date(0).toISOString(),
+    })
+    const projector = await AgentTavernProjector.open(root, store)
+    // The untrusted v1 watermark migrates to an unverified pending state that a
+    // live event can no longer stamp over with a false `ok` watermark.
+    expect(await projector.status(sessionId)).toMatchObject({
+      version: 2, status: 'pending', lastCursor: -1, pendingCursor: 0,
+    })
+
+    await projector.replay(session(sessionId))
+
+    const snapshot = await store.getChatSnapshot('Projector Character', chatId)
+    expect(snapshot!.chat.messages.map((message) => message.mes)).toEqual(['Open the door.', 'The door opens.'])
+    expect(await projector.status(sessionId)).toMatchObject({ version: 2, status: 'ok', lastCursor: 4 })
+  })
+
+  it('does not pin a pending cursor at a seq the session log does not carry', async () => {
+    const { root, store, chatId, sessionId } = await fixture('sparse-seq-session')
+    const truncated: NativeSession = { id: sessionId, events: session(sessionId).events.slice(0, 4) }
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(truncated)
+    expect(await projector.status(sessionId)).toMatchObject({ status: 'ok', lastCursor: 3 })
+
+    // A v2 pending checkpoint that lost its pendingCursor (hand-edited file)
+    // normalizes to `lastCursor + 1` = 4, but the session's next events arrive
+    // at seqs 5 and 6: cursor 4 can never be closed by projecting an event.
+    writeCheckpointFile(root, sessionId, {
+      version: 2, sessionId, lastCursor: 3, status: 'pending', updatedAt: new Date(0).toISOString(),
+    })
+    const sparse: NativeSession = {
+      id: sessionId,
+      events: [...truncated.events,
+        {
+          type: 'assistant/message', seq: 5, time: 1400,
+          data: {
+            turn: 1, step: 2,
+            message: {
+              id: 'assistant-final', role: 'assistant', content: [{ type: 'text', text: 'The door opens.' }],
+              source: { kind: 'model', provider: 'test', model: 'test' },
+            },
+          },
+        },
+        {
+          type: 'user/message', seq: 6, time: 1500,
+          data: { id: 'user-2', role: 'user', content: [{ type: 'text', text: 'Step inside.' }], source: { kind: 'user' } },
+        },
+      ],
+    }
+    const reopened = await AgentTavernProjector.open(root, store)
+    await reopened.replay(sparse)
+
+    const snapshot = await store.getChatSnapshot('Projector Character', chatId)
+    expect(snapshot!.chat.messages.map((message) => message.mes)).toEqual(['Open the door.', 'The door opens.', 'Step inside.'])
+    expect(await reopened.status(sessionId)).toMatchObject({ status: 'ok', lastCursor: 6 })
   })
 
   it('applies USER_INPUT and non-layered AI_OUTPUT regex when projecting live messages', async () => {

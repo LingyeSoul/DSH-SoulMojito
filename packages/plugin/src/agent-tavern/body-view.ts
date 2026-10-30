@@ -12,6 +12,7 @@ import { effectiveBodyText, type BodyLedger } from './body.js'
 import { inspectCandidateReceipts } from './body-candidate-receipts.js'
 import type { BodyAgentLike } from './body-runtime.js'
 import { cardUsesJsrMvu } from './mvu-compat.js'
+import { publicErrorMessage } from '../http/public-error.js'
 import {
   bodyBindingEligible,
   isRecord,
@@ -393,8 +394,23 @@ export function buildBodyView(input: BodyViewInput): BodyView {
     ...(input.projectionCurrent === false ? { projectionPending: true } : {}),
     ...(reason === undefined ? {} : { reason }),
     ...(detail === undefined ? {} : { detail }),
-    ...(input.lastOperation === undefined ? {} : { lastOperation: input.lastOperation }),
+    ...(input.lastOperation === undefined ? {} : { lastOperation: publicLastOperation(input.lastOperation) }),
   }
+}
+
+/**
+ * The view is the HTTP boundary for the recorded operation reason.
+ *
+ * The runtime stores the full failure text (`errorMessage` of the original
+ * error, which for filesystem failures embeds absolute paths and internal file
+ * names) because that detail is what log-side diagnostics need. Only the
+ * outbound copy collapses through the shared error classifier
+ * (`publicErrorMessage`), so a stored reason can never leak what
+ * http/public-error.ts keeps out of every other response body. A clean,
+ * human-readable reason passes through unchanged.
+ */
+function publicLastOperation(operation: BodyLastOperation): BodyLastOperation {
+  return { ...operation, reason: publicErrorMessage(operation.reason) }
 }
 
 function bodyViewReason(input: BodyViewInput, hidden: boolean): string | undefined {
@@ -433,7 +449,10 @@ export interface BodyFailureView {
  * publish `body-state-unsafe` (409) and keep the original code as `detail`: a
  * client can tell "wait for the projection" (503 `projection-pending`) from
  * "this body data is inconsistent" (409) without parsing the message. Only an
- * unknown exception stays a 500 `operation-failed`.
+ * unknown exception stays a 500 `operation-failed`. The message crosses the
+ * HTTP boundary, so it goes through `publicErrorMessage`: infrastructure text
+ * (paths, internal file names, filesystem codes) collapses to the stable
+ * internal message, matching the `lastOperation.reason` boundary above.
  */
 export function bodyFailureOf(error: unknown): BodyFailureView {
   const rawCode = failureCodeOf(error)
@@ -442,7 +461,7 @@ export function bodyFailureOf(error: unknown): BodyFailureView {
   return {
     status: bodyRejectStatus(failure.code),
     code: failure.code,
-    message: errorMessage(error),
+    message: publicErrorMessage(errorMessage(error)),
     ...(detail === undefined ? {} : { detail }),
   }
 }

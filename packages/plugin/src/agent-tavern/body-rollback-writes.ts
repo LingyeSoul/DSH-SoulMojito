@@ -195,7 +195,8 @@ function groupFailure(
  * state becomes the journaled `after`, so the group is rolled back and can be
  * replayed like a complete pair. A group whose store still holds the before
  * state never committed (`undefined`). When the store state cannot be verified
- * (an old journal without names, or a vanished target), this refuses with
+ * (an old journal without names, a vanished target, a store read failure, or a
+ * current state the journaled payload cannot explain), this refuses with
  * `write-journal-unknown` instead of silently skipping.
  */
 export async function resolveBeforeOnlyWrite(
@@ -275,6 +276,7 @@ async function probeVariableGroup(
   }
   const committed = names.some((name) => current.get(name)?.revision !== beforeByName.get(name)?.revision)
   if (!committed) return undefined
+  assertVariablePayloadLanded(entry, names, current, journalId, agentId, turn)
   if (entry.tool === 'variable_delete') {
     return { kind: 'variable', journalId, tool: entry.tool, target: entry.target, before, after: null }
   }
@@ -286,6 +288,63 @@ async function probeVariableGroup(
     before,
     after: [...current.values()],
   }
+}
+
+/**
+ * Attribute a committed before-only group to its journaled payload.
+ *
+ * A revision difference only proves that *someone* wrote after the `before`
+ * record; a revision conflict can equally leave a concurrent writer's revision
+ * behind. New `variable_set` / `variable_patch` groups journal the end state
+ * they intended, so the probe accepts the store state only when every targeted
+ * name holds exactly that value — anything else is a state this write cannot
+ * have produced, and undoing over it would reverse the concurrent write (a
+ * create would even delete it). Refuse with `write-journal-unknown`, matching
+ * the complete-pair rule that an undo never crosses a foreign revision.
+ * Records without a payload (written before the field existed) keep the
+ * revision-diff heuristic: their intended state is unrecoverable.
+ */
+function assertVariablePayloadLanded(
+  entry: WriteJournalVariableEntry,
+  names: readonly string[],
+  current: Map<string, VariableSnapshot>,
+  journalId: string,
+  agentId: string,
+  turn: number,
+): void {
+  if (entry.tool === 'variable_delete' || entry.payload === undefined) return
+  const nameSet = new Set(names)
+  for (const item of entry.payload) {
+    if (!nameSet.has(item.name)) {
+      throw journalUnsafe(journalId, agentId, turn, `records a payload for variable '${item.name}' outside its journaled names`)
+    }
+    const snapshot = current.get(item.name)
+    if (snapshot === undefined || !jsonValueEquals(snapshot.value, item.value)) {
+      throw new BodyRollbackError(
+        'body-state-unsafe',
+        `body rollback for session '${agentId}' turn ${turn} cannot attribute variable '${item.name}' to the before-only write journal '${journalId}': the store holds ${snapshot === undefined ? 'no value' : `a revision ('${snapshot.revision}') this write cannot have produced`}`,
+        { detail: 'write-journal-unknown', stage: 'prepare', sessionId: agentId, turn, journalId },
+      )
+    }
+  }
+}
+
+/** Structural equality of two JSON values; key order never matters. */
+function jsonValueEquals(left: JsonValue, right: JsonValue): boolean {
+  if (left === right) return true
+  if (typeof left !== typeof right || left === null || right === null) return false
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false
+    return left.every((item, index) => jsonValueEquals(item, right[index]!))
+  }
+  if (typeof left === 'object') {
+    const rightRecord = right as { [key: string]: JsonValue }
+    const leftRecord = left as { [key: string]: JsonValue }
+    const keys = Object.keys(leftRecord)
+    if (keys.length !== Object.keys(rightRecord).length) return false
+    return keys.every((key) => key in rightRecord && jsonValueEquals(leftRecord[key]!, rightRecord[key]!))
+  }
+  return false
 }
 
 function probeVariableNames(

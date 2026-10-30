@@ -502,10 +502,14 @@ function assertAdoptionMirror(floor: ChatMessage, input: BodyJsonlAdoptionInput,
   }
   const anchorText = input.anchorText.trim()
   if (floor.mes.trim() !== anchorText) {
+    // Lengths only: this message flows into the projection checkpoint, the
+    // GET /projection response and logs, and the body must not leave a second
+    // copy of its text there (decision 2026-10-29, the same round that dropped
+    // `plan.bodyText` for exactly that reason).
     throw adoptionMismatch(
       input,
       floorIndex,
-      `floor text starts with '${textPrefix(floor.mes)}' but the anchor text starts with '${textPrefix(anchorText)}'`,
+      `the floor text does not equal the anchor text (floor length ${floor.mes.trim().length}, anchor length ${anchorText.length})`,
     )
   }
 }
@@ -519,12 +523,6 @@ function adoptionMismatch(
     'body-adoption-mismatch',
     `imported floor adoption refused for group '${input.groupId}': chat floor ${floorIndex} is not the mirror of anchor '${input.anchorMessageId}' (${detail})`,
   )
-}
-
-/** Short single-line prefix used by mismatch messages. */
-function textPrefix(text: string): string {
-  const flat = text.replace(/\s+/g, ' ').trim()
-  return flat.length <= 40 ? flat : `${flat.slice(0, 40)}...`
 }
 
 /** Original ST swipe surface of an adopted floor, kept for manual restoration. */

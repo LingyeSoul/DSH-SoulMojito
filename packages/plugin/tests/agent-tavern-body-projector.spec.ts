@@ -1226,10 +1226,17 @@ describe('AgentTavern body JSONL projector', () => {
     expect(error).toMatchObject({ name: 'BodyJsonlProjectionError', code: 'body-adoption-mismatch' })
     expect((error as Error).message).toContain("group 'import-anchor'")
     expect((error as Error).message).toContain('chat floor 0')
-    expect((error as Error).message).toContain('Another greeting.')
-    expect((error as Error).message).toContain('Chosen greeting.')
+    // Neither the mismatch detail nor the persisted checkpoint error may carry a
+    // second copy of the body text out through GET /projection or logs.
+    expect((error as Error).message).toContain('floor length 17')
+    expect((error as Error).message).toContain('anchor length 16')
+    expect((error as Error).message).not.toContain('Another greeting.')
+    expect((error as Error).message).not.toContain('Chosen greeting.')
     expect(await snapshotOf(store, chatId)).toEqual(before)
-    expect(await projector.status(sessionId)).toMatchObject({ status: 'pending', lastCursor: -1, pendingCursor: 5 })
+    const status = await projector.status(sessionId)
+    expect(status).toMatchObject({ status: 'pending', lastCursor: -1, pendingCursor: 5 })
+    expect(status.error).not.toContain('Another greeting.')
+    expect(status.error).not.toContain('Chosen greeting.')
   })
 
   it('does not read another floor text when a body group id equals its message id', async () => {

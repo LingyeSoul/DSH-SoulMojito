@@ -626,8 +626,13 @@ describe('applyFloorAdoptionToChat', () => {
     expect(error.code).toBe('body-adoption-mismatch')
     expect(error.message).toContain("group 'group-1'")
     expect(error.message).toContain('chat floor 1')
-    expect(error.message).toContain('Another greeting.')
-    expect(error.message).toContain('Chosen greeting.')
+    // The refusal stays metadata-only: the message reaches the projection
+    // checkpoint, GET /projection and logs, which must not carry body text
+    // (decision 2026-10-29, same round that dropped plan.bodyText).
+    expect(error.message).toContain('floor length 17')
+    expect(error.message).toContain('anchor length 16')
+    expect(error.message).not.toContain('Another greeting.')
+    expect(error.message).not.toContain('Chosen greeting.')
     expect(chat).toEqual(snapshot)
   })
 
