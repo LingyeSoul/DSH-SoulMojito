@@ -12,6 +12,7 @@
  * 3. 相位只朝前走：waiting → saving → idle/failed，取消是 waiting/saving → idle。
  */
 
+import { qrSvgForBind } from '../qr.js'
 import type { ImBindStatus } from '../types.js'
 import type { QqConnector, QqConnectorCallbacks, QqConnectorCredential, QqConnectorOptions } from './sdk.js'
 
@@ -117,7 +118,7 @@ export function createQQBinding(options: QQBindingOptions): QQBinding {
       stop = connector({
         onQrDisplayed: (url) => {
           if (session !== current) return
-          phase = { phase: 'waiting', url }
+          phase = { phase: 'waiting', url, ...(qrSvgForBind(url) === undefined ? {} : { qrSvg: qrSvgForBind(url) }) }
           callbacks.onQrDisplayed?.(url)
         },
         onQrExpired: () => {

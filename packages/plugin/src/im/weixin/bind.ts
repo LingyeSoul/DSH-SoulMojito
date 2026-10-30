@@ -19,6 +19,7 @@
 
 import type { HostLogger } from '../../host-contract.js'
 import type { ImBindStatus } from '../types.js'
+import { qrSvgForBind } from '../qr.js'
 import {
   getBotQrcode,
   getQrcodeStatus,
@@ -168,7 +169,7 @@ export function createWeixinBinding(options: WeixinBindingOptions): WeixinBindin
     current.qrcode = qr.qrcode
     current.url = qr.url
     current.issuedAt = options.clock.now()
-    phase = { phase: 'waiting', url: qr.url }
+    phase = waitingOf(current)
     callbacks.onQrDisplayed?.(qr.url)
     void poll(current)
     return status()
@@ -373,7 +374,8 @@ export function createWeixinBinding(options: WeixinBindingOptions): WeixinBindin
   }
 
   function waitingOf(current: BindSession): ImBindStatus {
-    return { phase: 'waiting', url: current.url }
+    const qrSvg = qrSvgForBind(current.url)
+    return { phase: 'waiting', url: current.url, ...(qrSvg === undefined ? {} : { qrSvg }) }
   }
 
   return {

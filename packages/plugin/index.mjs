@@ -2689,11 +2689,11 @@ function cloneChatSnapshot(snapshot2) {
 function cloneChatRecord(value) {
   const copy = {};
   for (const key of Object.keys(value)) {
-    const clone = cloneChatValue(value[key]);
+    const clone2 = cloneChatValue(value[key]);
     if (key === "__proto__") {
-      Object.defineProperty(copy, key, { value: clone, enumerable: true, writable: true, configurable: true });
+      Object.defineProperty(copy, key, { value: clone2, enumerable: true, writable: true, configurable: true });
     } else {
-      copy[key] = clone;
+      copy[key] = clone2;
     }
   }
   return copy;
@@ -10184,7 +10184,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("3fe48d8") : void 0;
+  const commit = true ? normalizeCommit("706490f") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -47120,6 +47120,405 @@ function messageOf6(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+// packages/plugin/src/im/qr.ts
+var MIN_VERSION = 1;
+var MAX_VERSION = 10;
+var ECL_BITS = { L: 1, M: 0, Q: 3, H: 2 };
+var ECL_INDEX = { L: 0, M: 1, Q: 2, H: 3 };
+var ECC_CODEWORDS_PER_BLOCK = [
+  [-1, 7, 10, 15, 20, 26, 18, 20, 24, 30, 18],
+  [-1, 10, 16, 26, 18, 24, 16, 18, 22, 22, 26],
+  [-1, 13, 22, 18, 26, 18, 24, 18, 22, 20, 24],
+  [-1, 17, 28, 22, 16, 22, 28, 26, 26, 24, 28]
+];
+var NUM_EC_BLOCKS = [
+  [-1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 4],
+  [-1, 1, 1, 1, 2, 2, 4, 4, 4, 5, 5],
+  [-1, 1, 1, 2, 2, 4, 4, 6, 6, 8, 8],
+  [-1, 1, 1, 2, 4, 4, 4, 5, 6, 8, 8]
+];
+var ALIGNMENT_POSITIONS = [
+  [],
+  [],
+  [6, 18],
+  [6, 22],
+  [6, 26],
+  [6, 30],
+  [6, 34],
+  [6, 22, 38],
+  [6, 24, 42],
+  [6, 26, 46],
+  [6, 28, 50]
+];
+var VERSION_INFO = [0, 0, 0, 0, 0, 0, 0, 31892, 34236, 39577, 42195];
+var FORMAT_MASK = 21522;
+var QrEncodeError = class extends Error {
+  code;
+  constructor(code, message) {
+    super(message);
+    this.name = "QrEncodeError";
+    this.code = code;
+  }
+};
+function numRawDataModules(version) {
+  let result = (16 * version + 128) * version + 64;
+  if (version >= 2) {
+    const numAlign = Math.floor(version / 7) + 2;
+    result -= (25 * numAlign - 10) * numAlign - 55;
+    if (version >= 7) result -= 36;
+  }
+  return result;
+}
+function numDataCodewords(version, ecl) {
+  const index = ECL_INDEX[ecl];
+  return Math.floor(numRawDataModules(version) / 8) - ECC_CODEWORDS_PER_BLOCK[index][version] * NUM_EC_BLOCKS[index][version];
+}
+function qrByteCapacity(version, ecl) {
+  const countBits = version <= 9 ? 8 : 16;
+  return Math.floor((numDataCodewords(version, ecl) * 8 - 4 - countBits) / 8);
+}
+function pickVersion(byteLength, options) {
+  if (!Number.isSafeInteger(options.maxVersion) || options.maxVersion < MIN_VERSION || options.maxVersion > MAX_VERSION) {
+    throw new QrEncodeError("QR_BAD_OPTIONS", `maxVersion must be an integer in ${MIN_VERSION}..${MAX_VERSION}`);
+  }
+  for (let version = MIN_VERSION; version <= options.maxVersion; version += 1) {
+    if (qrByteCapacity(version, options.ecl) >= byteLength) return version;
+  }
+  throw new QrEncodeError(
+    "QR_TOO_LONG",
+    `the payload is ${byteLength} bytes, which exceeds QR version ${options.maxVersion} at EC level ${options.ecl} (max ${qrByteCapacity(options.maxVersion, options.ecl)} bytes)`
+  );
+}
+function gfMultiply(left, right) {
+  let product = 0;
+  for (let bit = 7; bit >= 0; bit -= 1) {
+    product = product << 1 ^ (product >>> 7) * 285;
+    product ^= (right >>> bit & 1) * left;
+  }
+  return product & 255;
+}
+function rsDivisor(degree) {
+  const result = new Uint8Array(degree);
+  result[degree - 1] = 1;
+  let root = 1;
+  for (let step = 0; step < degree; step += 1) {
+    for (let index = 0; index < degree; index += 1) {
+      result[index] = gfMultiply(result[index], root);
+      if (index + 1 < degree) result[index] = result[index] ^ result[index + 1];
+    }
+    root = gfMultiply(root, 2);
+  }
+  return result;
+}
+function rsRemainder(data, divisor) {
+  const result = new Uint8Array(divisor.length);
+  for (const byte of data) {
+    const factor = byte ^ result[0];
+    result.copyWithin(0, 1);
+    result[result.length - 1] = 0;
+    for (let index = 0; index < divisor.length; index += 1) {
+      result[index] = result[index] ^ gfMultiply(divisor[index], factor);
+    }
+  }
+  return result;
+}
+function buildCodewords(bytes, version, ecl) {
+  const capacityBits = numDataCodewords(version, ecl) * 8;
+  const bits2 = [];
+  const push = (value, length) => {
+    for (let index = length - 1; index >= 0; index -= 1) bits2.push(value >>> index & 1);
+  };
+  push(4, 4);
+  push(bytes.length, version <= 9 ? 8 : 16);
+  for (const byte of bytes) push(byte, 8);
+  const terminator = Math.min(4, capacityBits - bits2.length);
+  push(0, terminator);
+  while (bits2.length % 8 !== 0) bits2.push(0);
+  const padBytes = [236, 17];
+  let padIndex = 0;
+  while (bits2.length < capacityBits) {
+    push(padBytes[padIndex % 2], 8);
+    padIndex += 1;
+  }
+  const data = new Uint8Array(bits2.length / 8);
+  for (let index = 0; index < data.length; index += 1) {
+    let value = 0;
+    for (let bit = 0; bit < 8; bit += 1) value = value << 1 | bits2[index * 8 + bit];
+    data[index] = value;
+  }
+  return addEccAndInterleave(data, version, ecl);
+}
+function addEccAndInterleave(data, version, ecl) {
+  const index = ECL_INDEX[ecl];
+  const numBlocks = NUM_EC_BLOCKS[index][version];
+  const blockEccLen = ECC_CODEWORDS_PER_BLOCK[index][version];
+  const rawCodewords = Math.floor(numRawDataModules(version) / 8);
+  const numShortBlocks = numBlocks - rawCodewords % numBlocks;
+  const shortBlockLen = Math.floor(rawCodewords / numBlocks);
+  const divisor = rsDivisor(blockEccLen);
+  const blocks = [];
+  let offset = 0;
+  for (let block = 0; block < numBlocks; block += 1) {
+    const dataLen = shortBlockLen - blockEccLen + (block < numShortBlocks ? 0 : 1);
+    const chunk = data.subarray(offset, offset + dataLen);
+    offset += dataLen;
+    const ecc = rsRemainder(chunk, divisor);
+    const blockBytes = new Uint8Array(dataLen + blockEccLen);
+    blockBytes.set(chunk, 0);
+    blockBytes.set(ecc, dataLen);
+    blocks.push(blockBytes);
+  }
+  const result = new Uint8Array(rawCodewords);
+  let cursor = 0;
+  const maxDataLen = shortBlockLen - blockEccLen + 1;
+  for (let position = 0; position < maxDataLen; position += 1) {
+    for (const block of blocks) {
+      if (position < block.length - blockEccLen) {
+        result[cursor] = block[position];
+        cursor += 1;
+      }
+    }
+  }
+  for (let position = 0; position < blockEccLen; position += 1) {
+    for (const block of blocks) {
+      result[cursor] = block[block.length - blockEccLen + position];
+      cursor += 1;
+    }
+  }
+  return result;
+}
+var MatrixBuilder = class {
+  size;
+  modules;
+  isFunction;
+  constructor(version) {
+    this.size = version * 4 + 17;
+    this.modules = Array.from({ length: this.size }, () => new Array(this.size).fill(false));
+    this.isFunction = Array.from({ length: this.size }, () => new Array(this.size).fill(false));
+  }
+  setFunction(x, y, dark) {
+    if (x < 0 || y < 0 || x >= this.size || y >= this.size) return;
+    this.modules[y][x] = dark;
+    this.isFunction[y][x] = true;
+  }
+};
+function drawFinder(builder, centerX, centerY) {
+  for (let dy = -4; dy <= 4; dy += 1) {
+    for (let dx = -4; dx <= 4; dx += 1) {
+      const distance = Math.max(Math.abs(dx), Math.abs(dy));
+      builder.setFunction(centerX + dx, centerY + dy, distance !== 2 && distance !== 4);
+    }
+  }
+}
+function drawAlignment(builder, centerX, centerY) {
+  for (let dy = -2; dy <= 2; dy += 1) {
+    for (let dx = -2; dx <= 2; dx += 1) {
+      builder.setFunction(centerX + dx, centerY + dy, Math.max(Math.abs(dx), Math.abs(dy)) !== 1);
+    }
+  }
+}
+function drawFormatBits(builder, ecl, mask) {
+  const data = ECL_BITS[ecl] << 3 | mask;
+  let remainder = data;
+  for (let step = 0; step < 10; step += 1) remainder = remainder << 1 ^ (remainder >>> 9) * 1335;
+  const bits2 = (data << 10 | remainder) ^ FORMAT_MASK;
+  const size = builder.size;
+  const bit = (index) => (bits2 >>> index & 1) !== 0;
+  for (let index = 0; index <= 5; index += 1) builder.setFunction(8, index, bit(index));
+  builder.setFunction(8, 7, bit(6));
+  builder.setFunction(8, 8, bit(7));
+  builder.setFunction(7, 8, bit(8));
+  for (let index = 9; index < 15; index += 1) builder.setFunction(14 - index, 8, bit(index));
+  for (let index = 0; index < 8; index += 1) builder.setFunction(size - 1 - index, 8, bit(index));
+  for (let index = 8; index < 15; index += 1) builder.setFunction(8, size - 15 + index, bit(index));
+  builder.setFunction(8, size - 8, true);
+}
+function drawVersionBits(builder, version) {
+  if (version < 7) return;
+  const bits2 = VERSION_INFO[version];
+  for (let index = 0; index < 18; index += 1) {
+    const dark = (bits2 >>> index & 1) !== 0;
+    const a = builder.size - 11 + index % 3;
+    const b = Math.floor(index / 3);
+    builder.setFunction(a, b, dark);
+    builder.setFunction(b, a, dark);
+  }
+}
+function drawFunctionPatterns(builder, version, ecl, mask) {
+  const size = builder.size;
+  for (let index = 0; index < size; index += 1) {
+    builder.setFunction(6, index, index % 2 === 0);
+    builder.setFunction(index, 6, index % 2 === 0);
+  }
+  drawFinder(builder, 3, 3);
+  drawFinder(builder, size - 4, 3);
+  drawFinder(builder, 3, size - 4);
+  const positions = ALIGNMENT_POSITIONS[version];
+  const count = positions.length;
+  for (let row = 0; row < count; row += 1) {
+    for (let column = 0; column < count; column += 1) {
+      const isCorner = row === 0 && column === 0 || row === 0 && column === count - 1 || row === count - 1 && column === 0;
+      if (isCorner) continue;
+      drawAlignment(builder, positions[column], positions[row]);
+    }
+  }
+  drawFormatBits(builder, ecl, mask);
+  drawVersionBits(builder, version);
+}
+function drawCodewords(builder, codewords) {
+  const size = builder.size;
+  let index = 0;
+  for (let right = size - 1; right >= 1; right -= 2) {
+    if (right === 6) right = 5;
+    for (let vertical = 0; vertical < size; vertical += 1) {
+      for (let column = 0; column < 2; column += 1) {
+        const x = right - column;
+        const upward = (right + 1 & 2) === 0;
+        const y = upward ? size - 1 - vertical : vertical;
+        if (builder.isFunction[y][x]) continue;
+        if (index < codewords.length * 8) {
+          builder.modules[y][x] = (codewords[index >>> 3] >>> 7 - (index & 7) & 1) !== 0;
+          index += 1;
+        }
+      }
+    }
+  }
+}
+function maskBit(mask, x, y) {
+  switch (mask) {
+    case 0:
+      return (x + y) % 2 === 0;
+    case 1:
+      return y % 2 === 0;
+    case 2:
+      return x % 3 === 0;
+    case 3:
+      return (x + y) % 3 === 0;
+    case 4:
+      return (Math.floor(x / 3) + Math.floor(y / 2)) % 2 === 0;
+    case 5:
+      return x * y % 2 + x * y % 3 === 0;
+    case 6:
+      return (x * y % 2 + x * y % 3) % 2 === 0;
+    case 7:
+      return ((x + y) % 2 + x * y % 3) % 2 === 0;
+    default:
+      throw new QrEncodeError("QR_BAD_OPTIONS", `unknown mask ${mask}`);
+  }
+}
+function applyMask(builder, mask) {
+  for (let y = 0; y < builder.size; y += 1) {
+    for (let x = 0; x < builder.size; x += 1) {
+      if (builder.isFunction[y][x]) continue;
+      if (maskBit(mask, x, y)) builder.modules[y][x] = !builder.modules[y][x];
+    }
+  }
+}
+function penaltyScore(modules) {
+  const size = modules.length;
+  let penalty = 0;
+  for (let y = 0; y < size; y += 1) {
+    let runColor = modules[y][0];
+    let runLength = 1;
+    for (let x = 1; x < size; x += 1) {
+      if (modules[y][x] === runColor) {
+        runLength += 1;
+      } else {
+        if (runLength >= 5) penalty += 3 + (runLength - 5);
+        runColor = modules[y][x];
+        runLength = 1;
+      }
+    }
+    if (runLength >= 5) penalty += 3 + (runLength - 5);
+  }
+  for (let x = 0; x < size; x += 1) {
+    let runColor = modules[0][x];
+    let runLength = 1;
+    for (let y = 1; y < size; y += 1) {
+      if (modules[y][x] === runColor) {
+        runLength += 1;
+      } else {
+        if (runLength >= 5) penalty += 3 + (runLength - 5);
+        runColor = modules[y][x];
+        runLength = 1;
+      }
+    }
+    if (runLength >= 5) penalty += 3 + (runLength - 5);
+  }
+  for (let y = 0; y < size - 1; y += 1) {
+    for (let x = 0; x < size - 1; x += 1) {
+      const color = modules[y][x];
+      if (modules[y][x + 1] === color && modules[y + 1][x] === color && modules[y + 1][x + 1] === color) penalty += 3;
+    }
+  }
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size - 6; x += 1) {
+      if (modules[y][x] && !modules[y][x + 1] && modules[y][x + 2] && modules[y][x + 3] && modules[y][x + 4] && !modules[y][x + 5] && modules[y][x + 6]) {
+        penalty += 40;
+      }
+    }
+  }
+  for (let x = 0; x < size; x += 1) {
+    for (let y = 0; y < size - 6; y += 1) {
+      if (modules[y][x] && !modules[y + 1][x] && modules[y + 2][x] && modules[y + 3][x] && modules[y + 4][x] && !modules[y + 5][x] && modules[y + 6][x]) {
+        penalty += 40;
+      }
+    }
+  }
+  let dark = 0;
+  for (const row of modules) for (const cell of row) if (cell) dark += 1;
+  const total = size * size;
+  const ratio = Math.abs(dark * 20 - total * 10) / total;
+  penalty += Math.floor(ratio) * 10;
+  return penalty;
+}
+function clone(builder) {
+  return builder.modules.map((row) => [...row]);
+}
+function encodeQr(text, options) {
+  const bytes = new TextEncoder().encode(text);
+  if (bytes.length === 0) throw new QrEncodeError("QR_BAD_OPTIONS", "the QR payload must not be empty");
+  const version = pickVersion(bytes.length, options);
+  const codewords = buildCodewords(bytes, version, options.ecl);
+  let best;
+  for (let mask = 0; mask < 8; mask += 1) {
+    const builder = new MatrixBuilder(version);
+    drawFunctionPatterns(builder, version, options.ecl, mask);
+    drawCodewords(builder, codewords);
+    applyMask(builder, mask);
+    drawFormatBits(builder, options.ecl, mask);
+    const modules = clone(builder);
+    const penalty = penaltyScore(modules);
+    if (best === void 0 || penalty < best.penalty) best = { mask, modules, penalty };
+  }
+  if (best === void 0) throw new QrEncodeError("QR_BAD_OPTIONS", "no mask candidate was produced");
+  return { size: best.modules.length, version, ecl: options.ecl, mask: best.mask, modules: best.modules };
+}
+function qrSvg(text, options, scale) {
+  if (!Number.isSafeInteger(scale) || scale < 1) throw new QrEncodeError("QR_BAD_OPTIONS", `scale must be a positive integer, received ${String(scale)}`);
+  const matrix = encodeQr(text, options);
+  const margin = 4;
+  const dimension = (matrix.size + margin * 2) * scale;
+  let path12 = "";
+  for (let y = 0; y < matrix.size; y += 1) {
+    for (let x = 0; x < matrix.size; x += 1) {
+      if (!matrix.modules[y][x]) continue;
+      path12 += `M${(x + margin) * scale},${(y + margin) * scale}h${scale}v${scale}h-${scale}z`;
+    }
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${dimension}" height="${dimension}" viewBox="0 0 ${dimension} ${dimension}" shape-rendering="crispEdges"><rect width="${dimension}" height="${dimension}" fill="#ffffff"/><path d="${path12}" fill="#000000"/></svg>`;
+}
+function qrSvgDataUrl(text, options, scale) {
+  return `data:image/svg+xml;base64,${Buffer.from(qrSvg(text, options, scale), "utf8").toString("base64")}`;
+}
+function qrSvgForBind(url) {
+  try {
+    return qrSvgDataUrl(url, { ecl: "L", maxVersion: 10 }, 4);
+  } catch {
+    return void 0;
+  }
+}
+
 // packages/plugin/src/im/qq/bind.ts
 var QQBindError = class extends Error {
   code;
@@ -47167,7 +47566,7 @@ function createQQBinding(options) {
       stop = connector({
         onQrDisplayed: (url) => {
           if (session !== current) return;
-          phase = { phase: "waiting", url };
+          phase = { phase: "waiting", url, ...qrSvgForBind(url) === void 0 ? {} : { qrSvg: qrSvgForBind(url) } };
           callbacks.onQrDisplayed?.(url);
         },
         onQrExpired: () => {
@@ -48698,7 +49097,7 @@ function createWeixinBinding(options) {
     current.qrcode = qr.qrcode;
     current.url = qr.url;
     current.issuedAt = options.clock.now();
-    phase = { phase: "waiting", url: qr.url };
+    phase = waitingOf(current);
     callbacks.onQrDisplayed?.(qr.url);
     void poll(current);
     return status2();
@@ -48882,7 +49281,8 @@ function createWeixinBinding(options) {
     current.callbacks.onFailure?.(new Error(reason));
   }
   function waitingOf(current) {
-    return { phase: "waiting", url: current.url };
+    const qrSvg2 = qrSvgForBind(current.url);
+    return { phase: "waiting", url: current.url, ...qrSvg2 === void 0 ? {} : { qrSvg: qrSvg2 } };
   }
   return {
     start,
@@ -55560,6 +55960,20 @@ function channelOf(value) {
   return value === "qq" || value === "weixin" || value === "onebot" ? value : void 0;
 }
 
+// packages/plugin/src/im/account-id.ts
+import { createHash as createHash14 } from "node:crypto";
+var SAFE_ACCOUNT_ID = /^[A-Za-z0-9._-]+$/;
+function imAccountIdOf(channel, raw) {
+  const trimmed = raw.trim();
+  if (trimmed === "") throw new Error(`cannot derive an IM account id: the ${channel} platform returned an empty id`);
+  if (trimmed === "." || trimmed === "..") {
+    throw new Error(`cannot derive an IM account id: '${trimmed}' is a path traversal name`);
+  }
+  if (SAFE_ACCOUNT_ID.test(trimmed)) return trimmed;
+  const digest = createHash14("sha256").update(trimmed, "utf8").digest("hex").slice(0, 12);
+  return `${channel}-${digest}`;
+}
+
 // packages/plugin/src/im/runtime.ts
 var QQ_BOUND_ACCOUNT_LABEL = "QQ \u673A\u5668\u4EBA";
 var WEIXIN_BOUND_ACCOUNT_LABEL = "\u5FAE\u4FE1\u673A\u5668\u4EBA";
@@ -55755,11 +56169,12 @@ function createImRuntime(ctx, options) {
       throw new Error("the WeChat backend confirmed the scan without bot_token/baseurl/ilink_bot_id; nothing was saved");
     }
     const ilinkUserId = credential.ilinkUserId?.trim() ?? "";
+    const accountId = imAccountIdOf("weixin", ilinkBotId);
     const accounts = await store5.accounts();
-    const existing = accounts.find((entry) => entry.channel === "weixin" && entry.accountId === ilinkBotId);
+    const existing = accounts.find((entry) => entry.channel === "weixin" && entry.accountId === accountId);
     await upsertAccount({
       channel: "weixin",
-      accountId: ilinkBotId,
+      accountId,
       label: WEIXIN_BOUND_ACCOUNT_LABEL,
       createdAt: existing?.createdAt ?? (/* @__PURE__ */ new Date()).toISOString()
     }, {

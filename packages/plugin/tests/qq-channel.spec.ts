@@ -608,7 +608,10 @@ describe('qq qr binding', () => {
       expect(harness.lastOptions().displayQrCodeToConsole).toBe(false)
 
       harness.last().onQrDisplayed?.('https://example.invalid/qq-qr')
-      expect(bindStatus(runtime)).toEqual({ phase: 'waiting', url: 'https://example.invalid/qq-qr' })
+      const qqStatus = bindStatus(runtime)
+      expect(qqStatus).toMatchObject({ phase: 'waiting', url: 'https://example.invalid/qq-qr' })
+      // 服务端必须顺手给出可显示的二维码图片：面板把内容串塞进 <img src> 只会破图。
+      expect(qqStatus.qrSvg?.startsWith('data:image/svg+xml;base64,')).toBe(true)
 
       const credential: QQBindCredential = {
         appId: '7000001',

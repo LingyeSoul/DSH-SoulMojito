@@ -90,8 +90,15 @@ export type ImBindPhase = 'idle' | 'waiting' | 'verify' | 'saving' | 'failed'
 
 export interface ImBindStatus {
   phase: ImBindPhase
-  /** `waiting` 相位里二维码链接就绪后出现；刷新二维码时会被清掉。 */
+  /** `waiting` 相位里二维码内容就绪后出现；刷新二维码时会被清掉。 */
   url?: string
+  /**
+   * `waiting` 相位里服务端渲染好的二维码图片（`data:image/svg+xml;base64,...`）。
+   *
+   * 为什么必须由服务端给：平台返回的 `url` 是**扫码器要编码的内容**，不是图片
+   * 地址——面板直接把它塞进 `<img src>` 只会得到一张破图（2026-10-30 实机）。
+   */
+  qrSvg?: string
   /** `verify` 相位给用户的提示（微信 `need_verifycode`）。 */
   prompt?: string
   /** `failed` 相位的可读原因。 */

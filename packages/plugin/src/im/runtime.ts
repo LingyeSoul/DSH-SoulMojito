@@ -38,6 +38,7 @@ import { WeixinChannel, WEIXIN_LONG_POLL_TIMEOUT_MS } from './weixin/channel.js'
 import { WEIXIN_REAL_CLOCK } from './weixin/clock.js'
 import { openWeixinContextTokens } from './weixin/context-tokens.js'
 import { createImRouter, type ImRouter } from './router.js'
+import { imAccountIdOf } from './account-id.js'
 import {
   bindImChat,
   ensureImAgent,
@@ -290,7 +291,7 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
     if (openid !== '') await addImPrivateAllow(openid)
   }
 
-  /** 微信扫码确认：账号 id 就是 `ilink_bot_id`，baseUrl 后续所有请求都用它。 */
+  /** 微信扫码确认：账号 id 由 `ilink_bot_id` 派生（可能含 `@`，不能直接当文件名）。 */
   async function adoptWeixinCredential(credential: WeixinCredential): Promise<void> {
     const botToken = credential.botToken.trim()
     const baseUrl = credential.baseUrl.trim()
@@ -299,11 +300,13 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       throw new Error('the WeChat backend confirmed the scan without bot_token/baseurl/ilink_bot_id; nothing was saved')
     }
     const ilinkUserId = credential.ilinkUserId?.trim() ?? ''
+    // 平台 id 保留在密钥袋里；accountId 只用于文件路径与 peerKey，必须文件系统安全。
+    const accountId = imAccountIdOf('weixin', ilinkBotId)
     const accounts = await store.accounts()
-    const existing = accounts.find((entry) => entry.channel === 'weixin' && entry.accountId === ilinkBotId)
+    const existing = accounts.find((entry) => entry.channel === 'weixin' && entry.accountId === accountId)
     await upsertAccount({
       channel: 'weixin',
-      accountId: ilinkBotId,
+      accountId,
       label: WEIXIN_BOUND_ACCOUNT_LABEL,
       createdAt: existing?.createdAt ?? new Date().toISOString(),
     }, {

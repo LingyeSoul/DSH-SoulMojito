@@ -353,7 +353,9 @@ describe('weixin qr binding', () => {
       const started = await binding.start({
         onSuccess: (next) => { credential = next },
       }, { signal: controller.signal })
-      expect(started).toEqual({ phase: 'waiting', url: 'https://example.invalid/weixin-qr' })
+      // 新增 qrSvg：面板要的是真正能显示的二维码图片，不是待编码的内容串。
+      expect(started).toMatchObject({ phase: 'waiting', url: 'https://example.invalid/weixin-qr' })
+      expect(started.qrSvg?.startsWith('data:image/svg+xml;base64,')).toBe(true)
       // 服务端还没要验证码：此刻提交必须被拒绝，不能把任意输入写进会话。
       expect(() => binding.submitVerifyCode('1')).toThrowError(/not 'verify'|not verify/)
       const qrRequest = primary.requests.find((request) => request.path === '/ilink/bot/get_bot_qrcode')

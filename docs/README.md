@@ -60,6 +60,7 @@
 - [`2026-10-25-template-default-off.md`](../decisions/2026-10-25-template-default-off.md) — Prompt Template（EJS）默认关闭，profile 显式 opt-in
 - [`2026-10-30-im-tools-and-activation.md`](../decisions/2026-10-30-im-tools-and-activation.md) — IM 工具族与历史导入抽取（提案 0024 第二批：alias 身份、env 门控、跨 bundle 句柄守卫）
 - [`2026-10-30-onebot-transport.md`](../decisions/2026-10-30-onebot-transport.md) — OneBot 11 连接层（提案 0024 第三批：自研最小 WS 服务端、常驻升级席位、出站串行、header-only 凭据）
+- [`2026-10-30-im-qr-and-account-id.md`](../decisions/2026-10-30-im-qr-and-account-id.md) — IM 扫码实机缺陷修复：服务端自渲染二维码、微信账号 id 派生（含 `@` 的 ilink_bot_id）
 - [`2026-10-30-qq-channel.md`](../decisions/2026-10-30-qq-channel.md) — QQ 官方机器人通道（提案 0024 M3：两个腾讯包外挂安装、`start()` 的 resolve 语义、被动回复上限、markdown 能力、启动回滚）
 - [`2026-10-30-weixin-channel.md`](../decisions/2026-10-30-weixin-channel.md) — 微信官方 iLink 通道（提案 0024 M4：六端点与鉴权头、游标先投递后落盘、`context_token` 按对端、`-14` 暂停一小时且暂停期不出站、扫码八状态与 `verify` 相位、`binded_redirect` 语义、`verify_code_blocked` 判死）
 
