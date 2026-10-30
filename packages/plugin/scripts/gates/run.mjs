@@ -32,6 +32,7 @@ const AGENT_PATH = join(PLUGIN_ROOT, 'agent.mjs')
 const NOVEL_PATH = join(PLUGIN_ROOT, 'novel.mjs')
 const REASONING_PATH = join(PLUGIN_ROOT, 'reasoning.mjs')
 const CLIENT_PATH = join(PLUGIN_ROOT, 'client', 'index.js')
+const CLIENT_SRC_MANIFEST_PATH = join(PLUGIN_ROOT, 'client-src', 'manifest.json')
 const PLUGIN_NAME = 'dsh-soulmojito'
 const API_PREFIX = '/api/dsh-soulmojito'
 
@@ -2390,9 +2391,10 @@ function imChannelSources() {
 }
 
 /**
- * 四条不变量（提案 0024 §5）：腾讯包只外挂、构建脚本不需要 external/垫片、
- * 包清单没有 dependencies、产物里两条 OneBot 路径在场。任何一条回退都说明
- * 「自包含产物」这条性质被打破。
+ * 五条不变量（提案 0024 §5）：腾讯包只外挂、构建脚本不需要 external/垫片、
+ * 包清单没有 dependencies、产物里两条 OneBot 路径在场、客户端分片清单带着
+ * 「聊天渠道」面板（`97-ui-im.js`——丢了它面板会从产物里静默消失，而服务端
+ * 路由仍然齐全，只在浏览器里表现为「分区不见了」）。
  */
 function checkImChannelInvariants(sample) {
   const problems = []
@@ -2410,6 +2412,10 @@ function checkImChannelInvariants(sample) {
   }
   if (Object.prototype.hasOwnProperty.call(sample.pkg, 'dependencies')) {
     problems.push("packages/plugin/package.json must not declare 'dependencies'; the bundle is self-contained")
+  }
+  const fragments = sample.manifest?.fragments
+  if (!Array.isArray(fragments) || !fragments.includes('97-ui-im.js')) {
+    problems.push("client-src/manifest.json must ship the '97-ui-im.js' fragment (the chat-channels panel)")
   }
   // 只认代码行：esbuild 会给每个入口留 `// path/to/file.ts` 注释，注释不算路由。
   const bundleCode = sample.bundle
@@ -3532,6 +3538,7 @@ const gates = [
         ],
         buildScript: 'const output = await esbuildBuild({ entryPoints, bundle: true, format: \'esm\' })',
         pkg: { name: PLUGIN_NAME },
+        manifest: { fragments: ['96-panels-presets.js', '97-ui-im.js', '98-apply.js'] },
         bundle: 'var webhookRoute = "im/onebot/webhook";\nvar seat = `${API}/im/onebot/ws`;',
       }
       // 负样本一：源码里塞一句真的静态 import（注释里的示例必须仍然放行）。
@@ -3553,9 +3560,12 @@ const gates = [
       const badDependencies = { ...good, pkg: { name: PLUGIN_NAME, dependencies: { ws: '^8.0.0' } } }
       // 负样本五：产物里丢了两条 OneBot 路径。
       const badBundle = { ...good, bundle: 'var webhookRoute = "im/gone/webhook";' }
-      const rejected = [badSource, badExternal, badShim, badDependencies, badBundle]
+      // 负样本六：客户端分片清单漏掉「聊天渠道」面板（服务端路由全在，浏览器里
+      // 只是分区消失——不锁住就会被当成「功能没做」而不是「打包掉了」）。
+      const badManifest = { ...good, manifest: { fragments: ['96-panels-presets.js', '98-apply.js'] } }
+      const rejected = [badSource, badExternal, badShim, badDependencies, badBundle, badManifest]
         .filter((sample) => checkImChannelInvariants(sample).length > 0).length
-      return checkImChannelInvariants(good).length === 0 && rejected === 5
+      return checkImChannelInvariants(good).length === 0 && rejected === 6
         ? []
         : ['im channel packaging bad samples were not rejected']
     },
@@ -3564,6 +3574,7 @@ const gates = [
         sources: imChannelSources(),
         buildScript: readFileSync(IM_BUILD_SCRIPT_PATH, 'utf8'),
         pkg: readJson(PACKAGE_PATH),
+        manifest: readJson(CLIENT_SRC_MANIFEST_PATH),
         bundle: existsSync(SERVER_PATH) ? readFileSync(SERVER_PATH, 'utf8') : '',
       })
       if (!existsSync(SERVER_PATH)) problems.push('generated packages/plugin/index.mjs does not exist')

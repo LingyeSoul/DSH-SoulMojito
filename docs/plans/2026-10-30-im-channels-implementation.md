@@ -1,6 +1,6 @@
 # 施工计划：IM 通道（提案 0024）
 
-> 日期：2026-10-30。状态：M0–M4 已落地（M5 未开始）。
+> 日期：2026-10-30。状态：M0–M4 与 M5 客户端面板已落地（媒体与收口未做）。
 > 设计契约：[`docs/proposals/0024-im-channels.md`](../proposals/0024-im-channels.md)。
 > 验证口径：`pnpm run check`（tsc + vitest + build + gates）。
 
@@ -60,9 +60,9 @@ $DSH_HOME/soulmojito/im/dedupe.log
 | M2（已完成） | OneBot 11 反向 WS + HTTP POST 打通（codec + 连接层 + 账号路由） |
 | M3（已完成） | QQ 扫码绑定 + 官方网关；两个腾讯包外挂安装、运行期动态导入 |
 | M4（已完成） | 微信扫码（含验证码）、长轮询与游标、context token、`-14` 暂停、出站文本投影 |
-| M5 | 客户端面板 + 媒体 + 收口 |
+| M5 | 客户端「聊天渠道」面板（已完成）；媒体 + 收口（未做） |
 
-### 4.1 已落地（2026-10-30，四批）
+### 4.1 已落地（2026-10-30，五批）
 
 第一批（`098db83`）：`im/types.ts`、`im/settings.ts`、`im/store.ts`、`im/project.ts`、
 `im/session-host.ts`、`im/reply.ts`、`im/router.ts`、`im/runtime.ts`、
@@ -93,11 +93,20 @@ $DSH_HOME/soulmojito/im/dedupe.log
 「腾讯包不进产物」四条不变量。决策记录：
 [`decisions/2026-10-30-weixin-channel.md`](../../decisions/2026-10-30-weixin-channel.md)。
 
+第五批（M5 客户端面板）：`client-src/97-ui-im.js`（三张通道卡 + 状态灯、扫码
+相位轮询（1.5s）与微信验证码、OneBot 端点地址/安装指引、绑定表与「共享会话」
+徽标、自动绑定与白名单）、`90-panels-core.js` 注册 `im` 分区、
+`40-i18n-en.js`/`41-i18n-zh.js` 各 86 条键、`95-ui-styles.js` 的 `dt-im-*`
+样式（只用既有 `dsw-alias-*` token）、`tests/im-panel.spec.ts`（22 条：结构、
+vm 纯函数、渲染冒烟）。改绑下拉直接取 bootstrap 的 `characters` 与
+`chatLists`，**未新增任何服务端路由**。`im-channels` gate 补第六条不变量：
+分片清单必须含 `97-ui-im.js`（服务端路由齐全但分片缺失时，浏览器里只会表现为
+「分区不见了」）。
+
 **明确未做（下一轮）**：
-1. 客户端「聊天渠道」面板（含 `qqRuntime` 安装指引与微信验证码输入框的展示）。
-2. 媒体双向：微信 CDN 上传/下载与 QQ 附件；当前入站只记 `ImMediaRef`，出站只发文本。
-3. 真人扫码的端到端验证（微信八状态与 QQ 四相位都只有本地桩）。
-4. QQ 群聊流式输出；微信 typing 的 `typing_ticket` 缓存（当前每条都重新 `getconfig`）。
+1. 媒体双向：微信 CDN 上传/下载与 QQ 附件；当前入站只记 `ImMediaRef`，出站只发文本。
+2. 真人扫码的端到端验证（微信八状态与 QQ 四相位都只有本地桩），以及面板的桌面/390×844 手测。
+3. QQ 群聊流式输出；微信 typing 的 `typing_ticket` 缓存（当前每条都重新 `getconfig`）。
 
 ## 5. 测试面
 
@@ -117,6 +126,7 @@ $DSH_HOME/soulmojito/im/dedupe.log
 | `tests/weixin-channel.spec.ts` | 扫码八状态与 `verify` 相位、IDC 重定向、过期刷新、`binded_redirect` 成功语义、游标续读与「投递先于落盘」、`-14` 暂停与暂停期不出站、`message_type` 缺省按用户消息、出站载荷/认证头、typing 失败不阻断 |
 | `tests/im-runtime-accounts.spec.ts` | 账号 upsert/remove、重启恢复、缺 seam 原因 |
 | `tests/im-http-accounts.spec.ts` | 账号路由校验、webhook 401、`GET im` 的 `qqRuntime` 投影 |
+| `tests/im-panel.spec.ts` | 分片清单顺序、`im` 分区注册、86 条 zh/en 键、8 条管理路由、扫码 1.5s 轮询与四相位、`qqRuntime` 缺包禁用、共享徽标/白名单/安装命令纯函数、渲染冒烟 |
 
 ## 6. 下一轮入口
 

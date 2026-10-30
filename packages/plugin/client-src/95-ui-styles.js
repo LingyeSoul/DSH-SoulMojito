@@ -548,6 +548,64 @@
         .dt-body-dialog .dt-editor-modal-body>.dt-editor{flex:1;min-height:0}
         .dt-editor-field.dt-body-textarea{flex:1;min-height:0}
         .dt-editor-field.dt-body-textarea textarea{flex:1;height:auto;min-height:120px;max-height:none;resize:none;overflow-y:auto}
+        /* 聊天渠道（提案 0024 §6.1）：三张通道卡 + 扫码带 + 绑定表 + 设置。
+           状态灯走既有 state token（成功/警示/错误/业务主色），不引入新色板。 */
+        .dt-im-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}
+        .dt-im-card{display:flex;flex-direction:column;gap:9px;min-width:0;padding:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px}
+        .dt-im-card-head{display:flex;align-items:center;gap:9px;min-width:0}
+        .dt-im-light{flex:none;width:9px;height:9px;border-radius:50%;background:var(--dsw-alias-label-tertiary);opacity:.55}
+        .dt-im-light-online{background:var(--dsw-alias-state-success-primary,var(--dsw-alias-state-business-primary));opacity:1}
+        .dt-im-light-scanning{background:var(--dsw-alias-state-business-primary);opacity:1;animation:dt-im-pulse 1.2s ease-in-out infinite}
+        .dt-im-light-starting{background:var(--dsw-alias-state-business-primary);opacity:.7}
+        .dt-im-light-paused{background:var(--dsw-alias-state-warning-primary,var(--dsw-alias-state-business-primary));opacity:1}
+        .dt-im-light-error{background:var(--dsw-alias-state-error-primary);opacity:1}
+        @keyframes dt-im-pulse{50%{opacity:.35}}
+        .dt-im-card-title{display:flex;flex-direction:column;min-width:0;flex:1}
+        .dt-im-card-title strong{font-size:13px;line-height:19px}
+        .dt-im-card-title span{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
+        .dt-im-card-reason{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:17px;overflow-wrap:anywhere}
+        .dt-im-accounts{display:flex;flex-direction:column;gap:6px}
+        .dt-im-account{display:flex;align-items:center;gap:8px;min-width:0;padding:6px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
+        .dt-im-account-copy{display:flex;flex-direction:column;min-width:0;flex:1;gap:1px}
+        .dt-im-account-copy strong{font-size:12.5px;line-height:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .dt-im-account-copy span{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;overflow-wrap:anywhere}
+        .dt-im-account-actions{display:flex;gap:2px;flex:none}
+        .dt-im-card-actions{display:flex;gap:8px;flex-wrap:wrap}
+        .dt-im-install{display:flex;flex-direction:column;gap:6px;padding-top:8px;border-top:1px solid var(--dsw-alias-border-l2)}
+        .dt-im-monospace{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px;line-height:17px;overflow-wrap:anywhere;user-select:text}
+        .dt-im-url{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent)}
+        .dt-im-url>code{flex:1;min-width:120px}
+        .dt-im-bind{display:flex;flex-direction:column;gap:10px}
+        .dt-im-bind-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+        .dt-im-qr{display:flex;flex-direction:column;align-items:center;gap:8px;padding:10px}
+        .dt-im-qr>img{width:220px;height:220px;max-width:100%;object-fit:contain;border-radius:8px;background:var(--dsw-alias-bg-base);box-shadow:inset 0 0 0 1px var(--dsw-alias-border-l2)}
+        .dt-im-qr-link{color:var(--dsw-alias-state-business-primary);font-size:12px;line-height:18px;overflow-wrap:anywhere;text-align:center}
+        .dt-im-qr-link:hover,.dt-im-qr-link:focus-visible{text-decoration:underline}
+        .dt-im-verify{display:flex;align-items:flex-end;gap:8px;flex-wrap:wrap}
+        .dt-im-verify>.dt-hint{flex-basis:100%;margin:0}
+        .dt-im-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));align-items:end;gap:10px;max-width:620px}
+        .dt-im-form>button{justify-self:start}
+        .dt-im-endpoint{display:flex;flex-direction:column;gap:6px;margin-top:12px}
+        .dt-im-endpoint>.dt-label{margin:0}
+        .dt-im-endpoint>.dt-hint{margin:0}
+        .dt-im-ws{user-select:text}
+        .dt-im-peers{display:flex;flex-direction:column;gap:8px}
+        .dt-im-peer{display:flex;flex-direction:column;gap:5px;min-width:0;padding:9px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
+        .dt-im-peer-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+        .dt-im-peer-key{flex:1;min-width:140px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px;line-height:17px;overflow-wrap:anywhere}
+        .dt-im-peer-chat{margin:0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;overflow-wrap:anywhere}
+        .dt-im-peer>.dt-hint{margin:0}
+        .dt-im-peer-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+        .dt-im-peer-actions select{box-sizing:border-box;height:30px;max-width:min(320px,100%);border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:0 8px;font:inherit;font-size:12px}
+        .dt-im-settings{display:flex;flex-direction:column;gap:8px;max-width:560px}
+        .dt-im-settings>.dt-hint{margin:0}
+        .dt-im-settings>.dt-toggle{min-height:0}
+        .dt-im-allow{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+        .dt-im-allow>label>.dt-hint{margin:0}
+        .dt-im-allow textarea{box-sizing:border-box;width:100%;min-height:72px;resize:vertical;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:7px 9px;font:inherit;font-size:12px;line-height:18px}
+        .dt-im-notice{margin:0;color:var(--dsw-alias-state-success-primary,var(--dsw-alias-label-secondary));font-size:12px;line-height:18px}
+        @media(max-width:700px){.dt-im-allow{grid-template-columns:1fr}.dt-im-qr>img{width:180px;height:180px}}
+        @media(prefers-reduced-motion:reduce){.dt-im-light-scanning{animation:none}}
       `
       document.head.appendChild(tag)
     }

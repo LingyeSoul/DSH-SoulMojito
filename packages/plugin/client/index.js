@@ -7002,6 +7002,11 @@ window.__ModuleLoader__.load({
       // every behavior toggle that used to be scattered across other surfaces.
       'panel.section.behavior': 'Behavior',
       'panel.section.presets': 'Presets',
+      // IM channels (proposal 0024 §6.1, M5): QQ / WeChat / OneBot accounts, QR
+      // binding, the peer binding table and auto-binding settings. zh/en keys
+      // stay mirrored (identical {param} placeholders) — the client-vm-mount
+      // gate enforces it.
+      'panel.section.im': 'Chat channels',
       'panel.section.scripts': 'Scripts',
       'panel.section.regex': 'Regex scripts',
       'panel.section.variables': 'Variables',
@@ -7772,6 +7777,92 @@ window.__ModuleLoader__.load({
       'body.detailGroupMismatch': 'This reply is bound to more than one chat floor, so the shown reply and the edit target disagree; editing is disabled.',
       'body.detailFloorUnreadable': 'The chat floor for this reply cannot be read right now, so only the ledger reply is shown; it retries automatically.',
       'body.detailUnknown': 'The current state does not allow this body operation.',
+      // IM channels (proposal 0024 §6.1, M5). Keys mirror 41-i18n-zh.js exactly.
+      'im.hint.title': 'Instant messaging',
+      'im.hint': 'Messages from QQ, WeChat and OneBot 11 land in an AgentTavern chat, and the reply goes straight back to the phone. Bind one chat per sender: independent sessions keep every sender apart, shared sessions put several senders into one context.',
+      'im.disabled': 'IM is disabled on this host (DSH_SOULMOJITO_DISABLE_IM). No channel or route is registered; unset it and restart to use this panel.',
+      'im.unavailable': 'IM cannot run on this host: {reasons}',
+      'im.channels': 'Channels',
+      'im.channel.qq': 'QQ',
+      'im.channel.weixin': 'WeChat',
+      'im.channel.onebot': 'OneBot 11',
+      'im.state.unconfigured': 'Not configured',
+      'im.state.scanning': 'Scanning',
+      'im.state.starting': 'Connecting',
+      'im.state.online': 'Online',
+      'im.state.paused': 'Paused',
+      'im.state.error': 'Error',
+      'im.state.idle': 'Not connected',
+      'im.accountsEmpty': 'No account yet.',
+      'im.accountPeers': '{count} peers',
+      'im.accountRemove': 'Remove account {id}',
+      'im.accountRemoveConfirm': 'Remove account {id}? Its peer bindings become orphaned; chats and sessions are kept.',
+      'im.onebotCardHint': 'OneBot endpoints are created below with an account id and a token.',
+      'im.bindStartQq': 'Scan to bind QQ',
+      'im.bindStartWeixin': 'Scan to bind WeChat',
+      'im.qqRuntimeMissing': 'The QQ runtime packages are not installed, so QR binding and the gateway are unavailable. Install them in the data directory, then reload this panel:',
+      'im.copy': 'Copy',
+      'im.copied': 'Copied',
+      'im.bindTitle': 'Scan to bind · {channel}',
+      'im.bindWaiting': 'Waiting for the scan to be confirmed…',
+      'im.bindSaving': 'Credential received; saving the account…',
+      'im.bindQrAlt': 'Binding QR code',
+      'im.bindQrLink': 'Open the QR code link',
+      'im.bindQrPending': 'The QR code is not ready yet; the panel keeps polling.',
+      'im.bindVerify': 'Verification code',
+      'im.bindVerifyHint': 'Type the digits shown in the mobile WeChat app.',
+      'im.bindVerifySubmit': 'Submit code',
+      'im.bindSubmitting': 'Submitting…',
+      'im.bindFailed': 'Binding failed: {reason}',
+      'im.bindRetry': 'Try again',
+      'im.bindCancel': 'Cancel binding',
+      'im.bindDone': 'Binding finished; the account list is refreshed.',
+      'im.onebot.title': 'New OneBot 11 endpoint',
+      'im.onebot.hint': 'Register one account with its own token; your OneBot implementation then connects to the reverse WebSocket address below and authenticates with that token.',
+      'im.onebot.accountId': 'Account id',
+      'im.onebot.token': 'Access token',
+      'im.onebot.create': 'Create endpoint',
+      'im.onebot.creating': 'Creating…',
+      'im.onebot.created': 'Endpoint created; fill the address and token into your OneBot implementation.',
+      'im.onebot.ws': 'Reverse WebSocket URL',
+      'im.onebot.wsHint': 'Account {account} uses it; send Authorization: Bearer <token> or X-OneBot-Token: <token> on the handshake.',
+      'im.onebot.upstream': 'The upstream OneBot implementation is yours to provide and to keep compliant; this plugin neither ships nor endorses one.',
+      'im.peers.title': 'Bindings',
+      'im.peers.hint': 'One binding is one IM conversation → one Tavern chat. Shared sessions put several senders into the same context.',
+      'im.peers.empty': 'No sender is bound yet.',
+      'im.peers.emptyHint': 'With independent mode the first message from a new sender creates its chat; manual mode only answers "not bound yet".',
+      'im.peers.chat': 'Chat: {character} / {chat}',
+      'im.peers.boundAt': 'Bound {at}',
+      'im.peers.shared': 'Shared session',
+      'im.peers.sharedHint': 'senders on this session see the turns of others.',
+      'im.peers.rebind': 'Rebind',
+      'im.peers.select': 'Choose a chat…',
+      'im.peers.unbind': 'Unbind',
+      'im.peers.unbindConfirm': 'Unbind {peer}? The chat and session are kept.',
+      'im.scope.private': 'Private',
+      'im.scope.group': 'Group',
+      'im.settings.title': 'Auto-binding & access',
+      'im.settings.hint': 'How an unknown sender is handled, and who may talk to the Agent at all.',
+      'im.settings.bindingMode': 'Binding mode',
+      'im.settings.mode.manual': 'Manual',
+      'im.settings.mode.independent': 'Independent session',
+      'im.settings.mode.shared': 'Shared session',
+      'im.settings.mode.manualHint': 'Unknown senders get "not bound yet" and never trigger generation.',
+      'im.settings.mode.independentHint': 'Each new sender gets a fresh chat cloned from the source chat (same role, empty history).',
+      'im.settings.mode.sharedHint': 'New senders reuse the shared chat and its session: cheaper, but everyone shares one context.',
+      'im.settings.sourceChat': 'Source chat',
+      'im.settings.sourceChatNone': 'Not set',
+      'im.settings.sourceChatHint': 'The template for independent sessions: role and opening greeting come from it.',
+      'im.settings.sharedChat': 'Shared chat',
+      'im.settings.sharedChatNone': 'Not set',
+      'im.settings.sharedChatHint': 'The chat every new sender joins when the mode is shared.',
+      'im.settings.incomplete': 'Saving is rejected until the chat this mode needs is selected (independent needs a source chat, shared needs a shared chat).',
+      'im.settings.groupRequireMention': 'Require @ in group chats',
+      'im.settings.groupRequireMentionHint': 'Only meaningful where the platform delivers non-mention group messages (OneBot 11); the official QQ bot only delivers @ messages.',
+      'im.settings.privateAllow': 'Private allowlist',
+      'im.settings.groupAllow': 'Group allowlist',
+      'im.settings.allowHint': 'Comma or line separated ids; saved when the field loses focus. An empty list denies everyone.',
+      'im.settings.saved': 'Settings saved.',
     }
     const MESSAGES_ZH = {
       'settings.subtitle': '角色卡、世界书与预设管理',
@@ -7943,6 +8034,8 @@ window.__ModuleLoader__.load({
       // 行为设置分区（2026-10-21 开关收编）：散养行为开关的系统级归置点。
       'panel.section.behavior': '行为设置',
       'panel.section.presets': '预设',
+      // IM 通道（提案 0024 §6.1，M5）：键集与 40-i18n-en.js 严格镜像。
+      'panel.section.im': '聊天渠道',
       'panel.section.scripts': '剧本',
       'panel.section.regex': '正则脚本',
       'panel.section.variables': '变量',
@@ -8703,6 +8796,92 @@ window.__ModuleLoader__.load({
       'body.detailGroupMismatch': '这组正文同时绑定了多个聊天楼层，显示与编辑目标不一致，已禁止编辑。',
       'body.detailFloorUnreadable': '这条正文的聊天楼层暂时读不到，当前只显示台账正文；稍后会自动重试。',
       'body.detailUnknown': '当前状态不允许这项正文操作。',
+      // IM 通道（提案 0024 §6.1，M5）：键集与 40-i18n-en.js 严格镜像。
+      'im.hint.title': '即时通讯',
+      'im.hint': 'QQ、微信与 OneBot 11 的消息进入一个 AgentTavern 聊天，回合结束后正文原路回到手机。每个对端绑一个聊天：独立会话把每个对端分开，共享会话让多个对端落进同一段上下文。',
+      'im.disabled': '本宿主已关闭 IM（DSH_SOULMOJITO_DISABLE_IM）。通道与路由都没有注册；取消该环境变量并重启后才能使用本面板。',
+      'im.unavailable': '本宿主无法运行 IM：{reasons}',
+      'im.channels': '通道',
+      'im.channel.qq': 'QQ',
+      'im.channel.weixin': '微信',
+      'im.channel.onebot': 'OneBot 11',
+      'im.state.unconfigured': '未配置',
+      'im.state.scanning': '扫码中',
+      'im.state.starting': '连接中',
+      'im.state.online': '在线',
+      'im.state.paused': '已暂停',
+      'im.state.error': '错误',
+      'im.state.idle': '未连接',
+      'im.accountsEmpty': '还没有账号。',
+      'im.accountPeers': '{count} 个对端',
+      'im.accountRemove': '解绑账号 {id}',
+      'im.accountRemoveConfirm': '解绑账号 {id}？该账号下的绑定会标记为孤立；聊天与会话保留。',
+      'im.onebotCardHint': 'OneBot 端点在下方面板用账号 id 与 token 创建。',
+      'im.bindStartQq': '扫码绑定 QQ',
+      'im.bindStartWeixin': '扫码绑定微信',
+      'im.qqRuntimeMissing': 'QQ 运行时包未安装，扫码绑定与网关都不可用。请先在数据目录安装，然后重新加载本面板：',
+      'im.copy': '复制',
+      'im.copied': '已复制',
+      'im.bindTitle': '扫码绑定 · {channel}',
+      'im.bindWaiting': '等待扫码确认…',
+      'im.bindSaving': '已拿到凭据，正在保存账号…',
+      'im.bindQrAlt': '绑定二维码',
+      'im.bindQrLink': '打开二维码链接',
+      'im.bindQrPending': '二维码还没就绪，面板会继续轮询。',
+      'im.bindVerify': '验证码',
+      'im.bindVerifyHint': '输入手机微信上显示的数字。',
+      'im.bindVerifySubmit': '提交验证码',
+      'im.bindSubmitting': '提交中…',
+      'im.bindFailed': '绑定失败：{reason}',
+      'im.bindRetry': '重新扫码',
+      'im.bindCancel': '取消绑定',
+      'im.bindDone': '绑定结束，账号清单已刷新。',
+      'im.onebot.title': '新建 OneBot 11 端点',
+      'im.onebot.hint': '登记一个带独立 token 的账号；你的 OneBot 实现随后连到下面的反向 WebSocket 地址，并用该 token 鉴权。',
+      'im.onebot.accountId': '账号 id',
+      'im.onebot.token': '访问 token',
+      'im.onebot.create': '创建端点',
+      'im.onebot.creating': '创建中…',
+      'im.onebot.created': '端点已创建，把地址与 token 填进你的 OneBot 实现。',
+      'im.onebot.ws': '反向 WebSocket 地址',
+      'im.onebot.wsHint': '账号 {account} 使用它；握手时带 Authorization: Bearer <token> 或 X-OneBot-Token: <token>。',
+      'im.onebot.upstream': '上游 OneBot 实现由你自备并自负合规责任；本插件不提供、不背书。',
+      'im.peers.title': '绑定表',
+      'im.peers.hint': '一条绑定就是一个 IM 对话 → 一个 Tavern 聊天。共享会话会把多个对端放进同一段上下文。',
+      'im.peers.empty': '还没有绑定任何对端。',
+      'im.peers.emptyHint': '独立模式下新对端的第一条消息会建立聊天；手动模式只回「尚未绑定」。',
+      'im.peers.chat': '聊天：{character} / {chat}',
+      'im.peers.boundAt': '绑定于 {at}',
+      'im.peers.shared': '共享会话',
+      'im.peers.sharedHint': '这条会话上的对端互相看得到对方的回合。',
+      'im.peers.rebind': '改绑',
+      'im.peers.select': '选择聊天…',
+      'im.peers.unbind': '解绑',
+      'im.peers.unbindConfirm': '解绑 {peer}？聊天与会话保留。',
+      'im.scope.private': '私聊',
+      'im.scope.group': '群聊',
+      'im.settings.title': '自动绑定与访问',
+      'im.settings.hint': '未知对端怎么处理，以及谁可以和 Agent 说话。',
+      'im.settings.bindingMode': '绑定模式',
+      'im.settings.mode.manual': '手动',
+      'im.settings.mode.independent': '独立会话',
+      'im.settings.mode.shared': '共享会话',
+      'im.settings.mode.manualHint': '未知对端只收到「尚未绑定」，不触发生成。',
+      'im.settings.mode.independentHint': '每个新对端按来源聊天克隆一个新聊天（同角色、空历史）。',
+      'im.settings.mode.sharedHint': '新对端复用共享聊天与它的会话：更省，但所有人共享一段上下文。',
+      'im.settings.sourceChat': '来源聊天',
+      'im.settings.sourceChatNone': '未设置',
+      'im.settings.sourceChatHint': '独立会话的模板：角色与开场白取自它。',
+      'im.settings.sharedChat': '共享聊天',
+      'im.settings.sharedChatNone': '未设置',
+      'im.settings.sharedChatHint': '共享模式下每个新对端都进入这个聊天。',
+      'im.settings.incomplete': '选好该模式需要的聊天之前保存会被拒绝（独立会话要来源聊天，共享会话要共享聊天）。',
+      'im.settings.groupRequireMention': '群聊必须 @',
+      'im.settings.groupRequireMentionHint': '只在平台会投递非 @ 群消息时有意义（OneBot 11）；官方 QQ 群机器人只投递 @ 消息。',
+      'im.settings.privateAllow': '私聊白名单',
+      'im.settings.groupAllow': '群聊白名单',
+      'im.settings.allowHint': '逗号或换行分隔的 id；失焦即保存。空名单等于拒绝所有人。',
+      'im.settings.saved': '设置已保存。',
     }
     // translate follows the host locale service once apply() binds it; the
     // identity fallback mirrors LocaleRuntime.translate (missing key -> key,
@@ -15932,6 +16111,11 @@ window.__ModuleLoader__.load({
       // system 组置顶——它决定插件怎么行为，是系统级配置而非资产管理。
       { id: 'behavior', group: 'system', icon: IconSlidersOutline16, label: (t) => t('panel.section.behavior'), component: () => h(BehaviorSettingsBand) },
       { id: 'presets', group: 'system', icon: IconAgentPresetOutline16, label: (t) => t('panel.section.presets'), component: () => h(PanelPresets) },
+      // 第 20 个分区「聊天渠道」（提案 0024 §6.1，M5）：QQ / 微信 / OneBot 三条
+      // 通道的账号、扫码绑定、peer 绑定表与自动绑定设置。system 组——它决定
+      // 消息从哪进来，属于系统级配置而非资产。纸飞机图标与「发消息」语义最贴近，
+      // 且不与既有分区图标复用。
+      { id: 'im', group: 'system', icon: IconSendOutline16, label: (t) => t('panel.section.im'), component: () => h(PanelIm) },
       { id: 'scripts', group: 'content', icon: IconBookOutline16, label: (t) => t('panel.section.scripts'), component: () => h(PanelScripts) },
       { id: 'regex', group: 'system', icon: IconSearchOutline16, label: (t) => t('panel.section.regex'), component: (host) => h(RegexBand, { useSessions: host.useSessions }) },
       { id: 'variables', group: 'session', icon: IconDataOutline16, label: (t) => t('panel.section.variables'), component: (host) => h(PanelVariables, { useSessions: host.useSessions }) },
@@ -19726,6 +19910,64 @@ window.__ModuleLoader__.load({
         .dt-body-dialog .dt-editor-modal-body>.dt-editor{flex:1;min-height:0}
         .dt-editor-field.dt-body-textarea{flex:1;min-height:0}
         .dt-editor-field.dt-body-textarea textarea{flex:1;height:auto;min-height:120px;max-height:none;resize:none;overflow-y:auto}
+        /* 聊天渠道（提案 0024 §6.1）：三张通道卡 + 扫码带 + 绑定表 + 设置。
+           状态灯走既有 state token（成功/警示/错误/业务主色），不引入新色板。 */
+        .dt-im-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}
+        .dt-im-card{display:flex;flex-direction:column;gap:9px;min-width:0;padding:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px}
+        .dt-im-card-head{display:flex;align-items:center;gap:9px;min-width:0}
+        .dt-im-light{flex:none;width:9px;height:9px;border-radius:50%;background:var(--dsw-alias-label-tertiary);opacity:.55}
+        .dt-im-light-online{background:var(--dsw-alias-state-success-primary,var(--dsw-alias-state-business-primary));opacity:1}
+        .dt-im-light-scanning{background:var(--dsw-alias-state-business-primary);opacity:1;animation:dt-im-pulse 1.2s ease-in-out infinite}
+        .dt-im-light-starting{background:var(--dsw-alias-state-business-primary);opacity:.7}
+        .dt-im-light-paused{background:var(--dsw-alias-state-warning-primary,var(--dsw-alias-state-business-primary));opacity:1}
+        .dt-im-light-error{background:var(--dsw-alias-state-error-primary);opacity:1}
+        @keyframes dt-im-pulse{50%{opacity:.35}}
+        .dt-im-card-title{display:flex;flex-direction:column;min-width:0;flex:1}
+        .dt-im-card-title strong{font-size:13px;line-height:19px}
+        .dt-im-card-title span{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
+        .dt-im-card-reason{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:17px;overflow-wrap:anywhere}
+        .dt-im-accounts{display:flex;flex-direction:column;gap:6px}
+        .dt-im-account{display:flex;align-items:center;gap:8px;min-width:0;padding:6px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
+        .dt-im-account-copy{display:flex;flex-direction:column;min-width:0;flex:1;gap:1px}
+        .dt-im-account-copy strong{font-size:12.5px;line-height:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .dt-im-account-copy span{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;overflow-wrap:anywhere}
+        .dt-im-account-actions{display:flex;gap:2px;flex:none}
+        .dt-im-card-actions{display:flex;gap:8px;flex-wrap:wrap}
+        .dt-im-install{display:flex;flex-direction:column;gap:6px;padding-top:8px;border-top:1px solid var(--dsw-alias-border-l2)}
+        .dt-im-monospace{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px;line-height:17px;overflow-wrap:anywhere;user-select:text}
+        .dt-im-url{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent)}
+        .dt-im-url>code{flex:1;min-width:120px}
+        .dt-im-bind{display:flex;flex-direction:column;gap:10px}
+        .dt-im-bind-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+        .dt-im-qr{display:flex;flex-direction:column;align-items:center;gap:8px;padding:10px}
+        .dt-im-qr>img{width:220px;height:220px;max-width:100%;object-fit:contain;border-radius:8px;background:var(--dsw-alias-bg-base);box-shadow:inset 0 0 0 1px var(--dsw-alias-border-l2)}
+        .dt-im-qr-link{color:var(--dsw-alias-state-business-primary);font-size:12px;line-height:18px;overflow-wrap:anywhere;text-align:center}
+        .dt-im-qr-link:hover,.dt-im-qr-link:focus-visible{text-decoration:underline}
+        .dt-im-verify{display:flex;align-items:flex-end;gap:8px;flex-wrap:wrap}
+        .dt-im-verify>.dt-hint{flex-basis:100%;margin:0}
+        .dt-im-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));align-items:end;gap:10px;max-width:620px}
+        .dt-im-form>button{justify-self:start}
+        .dt-im-endpoint{display:flex;flex-direction:column;gap:6px;margin-top:12px}
+        .dt-im-endpoint>.dt-label{margin:0}
+        .dt-im-endpoint>.dt-hint{margin:0}
+        .dt-im-ws{user-select:text}
+        .dt-im-peers{display:flex;flex-direction:column;gap:8px}
+        .dt-im-peer{display:flex;flex-direction:column;gap:5px;min-width:0;padding:9px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
+        .dt-im-peer-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+        .dt-im-peer-key{flex:1;min-width:140px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px;line-height:17px;overflow-wrap:anywhere}
+        .dt-im-peer-chat{margin:0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;overflow-wrap:anywhere}
+        .dt-im-peer>.dt-hint{margin:0}
+        .dt-im-peer-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+        .dt-im-peer-actions select{box-sizing:border-box;height:30px;max-width:min(320px,100%);border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:0 8px;font:inherit;font-size:12px}
+        .dt-im-settings{display:flex;flex-direction:column;gap:8px;max-width:560px}
+        .dt-im-settings>.dt-hint{margin:0}
+        .dt-im-settings>.dt-toggle{min-height:0}
+        .dt-im-allow{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+        .dt-im-allow>label>.dt-hint{margin:0}
+        .dt-im-allow textarea{box-sizing:border-box;width:100%;min-height:72px;resize:vertical;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:7px 9px;font:inherit;font-size:12px;line-height:18px}
+        .dt-im-notice{margin:0;color:var(--dsw-alias-state-success-primary,var(--dsw-alias-label-secondary));font-size:12px;line-height:18px}
+        @media(max-width:700px){.dt-im-allow{grid-template-columns:1fr}.dt-im-qr>img{width:180px;height:180px}}
+        @media(prefers-reduced-motion:reduce){.dt-im-light-scanning{animation:none}}
       `
       document.head.appendChild(tag)
     }
@@ -19939,6 +20181,762 @@ window.__ModuleLoader__.load({
           ? h(PresetEditor, { name: '', kind: 'chat-completion', data: BLANK_PRESET, onSave: createPreset, onCancel: () => setCreating(false) })
           : null,
         error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
+    }
+
+    // 面板「聊天渠道」分区（提案 0024 §6.1 / §6.3，M5）：IM 三条通道的账号清单、
+    // 扫码绑定、peer 绑定表与自动绑定设置。
+    //
+    // 只读投影全部来自 `GET im`（settings/peers/channels/qqRuntime/available/reasons），
+    // 写操作全部走管理路由；任何失败都把服务端 message 原样抛到面上——静默吞掉
+    // 写失败等于让面板显示一个不存在的状态。
+    //
+    // 扫码是单会话的：服务端 `qrBindStatus` 只保留一条活动扫描（activeQrBind），
+    // 所以二维码区在卡片下方独立成带，而不是每张卡各挂一个弹窗。
+
+    /** 扫码相位轮询间隔（提案 0024 §6.3「每 1.5s 轮询 im/bind/status」）。 */
+    const IM_BIND_POLL_MS = 1500
+    const IM_CHANNELS = ['qq', 'weixin', 'onebot']
+    const IM_BINDING_MODES = ['manual', 'independent', 'shared']
+
+    /** 错误一律取 Error.message：api() 已经把服务端 message 塞进去了。 */
+    function imErrorMessage(cause) {
+      return cause instanceof Error ? cause.message : String(cause)
+    }
+
+    /**
+     * 状态灯语义（§6.1）：扫码中优先于账号状态——用户正对着二维码时把卡片显示
+     * 成「在线」是谎报。error/paused 优先于 online：同一通道多个账号时，坏掉
+     * 的那个必须先被看见。没有账号是 unconfigured，有账号但通道没连上是 idle
+     * （宿主重启后账号还在、连接还没接回来的常态）。
+     */
+    function imChannelTone(accounts, scanning) {
+      if (scanning === true) return 'scanning'
+      if (accounts.length === 0) return 'unconfigured'
+      if (accounts.some((row) => row.status?.state === 'error')) return 'error'
+      if (accounts.some((row) => row.status?.state === 'paused')) return 'paused'
+      if (accounts.some((row) => row.status?.state === 'online')) return 'online'
+      if (accounts.some((row) => row.status?.state === 'starting')) return 'starting'
+      return 'idle'
+    }
+
+    /** 状态灯旁边的一行原因：error 取 message，paused 取 reason，其余留空。 */
+    function imChannelReason(accounts) {
+      // 与 imChannelTone 的优先级保持一致：灯是 error 时不能配一条 paused 的文案。
+      for (const row of accounts) {
+        if (row.status?.state === 'error' && typeof row.status.message === 'string') return row.status.message
+      }
+      for (const row of accounts) {
+        if (row.status?.state === 'paused' && typeof row.status.reason === 'string') return row.status.reason
+      }
+      return ''
+    }
+
+    /** peerKey → 分段（服务端 `imPeerKeyParts` 的客户端镜像，仅供展示）。 */
+    function imPeerParts(key) {
+      const parts = String(key ?? '').split(':')
+      if (parts.length < 4) return null
+      const [channel, accountId, scope, ...rest] = parts
+      if (channel === '' || accountId === '' || scope === '') return null
+      return { channel, accountId, scope, peerId: rest.join(':') }
+    }
+
+    /**
+     * 「共享会话」判定：同一个 sessionId 出现在多条绑定里，就是多个 peer 共用
+     * 一段上下文（§3.3.1 的代价）。返回 Set，按 sessionId 判定。
+     */
+    function imSharedSessionIds(peers) {
+      const counts = new Map()
+      for (const peer of peers) {
+        const sessionId = String(peer?.sessionId ?? '')
+        if (sessionId === '') continue
+        counts.set(sessionId, (counts.get(sessionId) ?? 0) + 1)
+      }
+      const shared = new Set()
+      for (const [sessionId, count] of counts) {
+        if (count > 1) shared.add(sessionId)
+      }
+      return shared
+    }
+
+    /** 白名单文本域 → id 列表：逗号/换行分隔、去空、去重，保持输入顺序。 */
+    function imIdList(text) {
+      const seen = new Set()
+      const ids = []
+      for (const piece of String(text ?? '').split(/[,\n]/)) {
+        const value = piece.trim()
+        if (value === '' || seen.has(value)) continue
+        seen.add(value)
+        ids.push(value)
+      }
+      return ids
+    }
+
+    /**
+     * 从 `qqRuntime.reason` 里抠出安装命令：服务端把同一条命令拼在句子末尾
+     * （「Install them with: cd "…" && pnpm add …」），面板要能单独复制它。
+     */
+    function imQqInstallCommand(reason) {
+      const text = String(reason ?? '')
+      const at = text.indexOf('cd "')
+      return at < 0 ? '' : text.slice(at).trim()
+    }
+
+    /** 聊天引用 → 下拉值；character 可能含分隔符，用 \u0000 拼键最稳。 */
+    function imChatKey(character, chatId) {
+      return `${character}\u0000${chatId}`
+    }
+
+    function imChatRefFromKey(key) {
+      const text = String(key ?? '')
+      const at = text.indexOf('\u0000')
+      if (at <= 0 || at === text.length - 1) return null
+      return { character: text.slice(0, at), chatId: text.slice(at + 1) }
+    }
+
+    /** 已有聊天清单（bootstrap.characters × 已加载的 chatLists）→ 下拉选项。 */
+    function imChatOptions(characters, chatLists) {
+      const options = []
+      const seen = new Set()
+      for (const character of characters) {
+        for (const chatId of chatLists?.[character] ?? []) {
+          const key = imChatKey(character, chatId)
+          if (seen.has(key)) continue
+          seen.add(key)
+          options.push({ key, character, chatId, label: `${character} / ${chatId.replace(/\.jsonl$/i, '')}` })
+        }
+      }
+      return options
+    }
+
+    /**
+     * 把一条聊天引用补进选项：绑定表里的聊天可能还没被 chatLists 加载（或已从
+     * 磁盘消失），下拉里必须仍能显示当前值，否则用户看到的是「未选择」。
+     */
+    function imWithChatOption(options, ref) {
+      if (ref === null || typeof ref.character !== 'string' || typeof ref.chatId !== 'string') return options
+      const key = imChatKey(ref.character, ref.chatId)
+      if (options.some((option) => option.key === key)) return options
+      return [{ key, character: ref.character, chatId: ref.chatId, label: `${ref.character} / ${ref.chatId.replace(/\.jsonl$/i, '')}` }, ...options]
+    }
+
+    /** 复制到剪贴板：没有 Clipboard API 时明确报错，不静默假装成功。 */
+    function imCopyText(text) {
+      const clipboard = navigator.clipboard
+      if (clipboard === undefined || typeof clipboard.writeText !== 'function') {
+        return Promise.reject(new Error('the Clipboard API is unavailable in this context; select the text and copy it manually'))
+      }
+      return clipboard.writeText(text)
+    }
+
+    function PanelIm() {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const [view, setView] = useState(null)
+      const [error, setError] = useState('')
+      const [notice, setNotice] = useState('')
+      const [busy, setBusy] = useState('')
+      const [bind, setBind] = useState(null)
+      const [verifyCode, setVerifyCode] = useState('')
+      const [qrFailedFor, setQrFailedFor] = useState('')
+      const [endpoint, setEndpoint] = useState('')
+      const [allowDraft, setAllowDraft] = useState({ private: null, group: null })
+
+      const characters = state.bootstrap.characters
+      const characterKey = characters.join('\u0000')
+      const channels = view?.channels ?? []
+      const peers = view?.peers ?? []
+      const settings = view?.settings ?? null
+      const qqRuntime = view?.qqRuntime ?? null
+      const available = view?.available === true
+      const sharedSessions = imSharedSessionIds(peers)
+      const chatOptions = imChatOptions(characters, state.chatLists)
+      const qqInstall = qqRuntime !== null && qqRuntime.installed === false
+        ? imQqInstallCommand(qqRuntime.reason)
+        : ''
+
+      // 改绑/来源聊天下拉要用已有聊天清单：与总览同款一次性拉取（按角色缓存）。
+      // 读不出来如实报错——下拉里少了聊天等于让用户以为「没有可绑的聊天」。
+      useEffect(() => {
+        for (const character of characters) {
+          void loadChatList(character).catch((cause) => setError(imErrorMessage(cause)))
+        }
+      }, [characterKey])
+
+      const reloadView = () => api('im')
+        .then((result) => { setView(result); return result })
+        .catch((cause) => { setError(imErrorMessage(cause)); return null })
+
+      useEffect(() => { void reloadView() }, [])
+
+      const applyBindStatus = (status) => {
+        if (status.phase === 'idle') {
+          setBind(null)
+          setVerifyCode('')
+          setQrFailedFor('')
+          setNotice(t('im.bindDone'))
+          void reloadView()
+          return
+        }
+        setBind((current) => current === null ? current : { ...current, ...status })
+      }
+
+      // 相位轮询：只在等待/验证码/落库三个活动相位里跑，idle/failed 立刻停表。
+      const bindChannel = bind?.channel ?? ''
+      const bindRunning = bind !== null
+        && (bind.phase === 'waiting' || bind.phase === 'verify' || bind.phase === 'saving')
+      useEffect(() => {
+        if (!bindRunning) return undefined
+        let stopped = false
+        const timer = setInterval(() => {
+          void api('im/bind/status')
+            .then((status) => { if (!stopped) applyBindStatus(status) })
+            .catch((cause) => { if (!stopped) setError(imErrorMessage(cause)) })
+        }, IM_BIND_POLL_MS)
+        return () => {
+          stopped = true
+          clearInterval(timer)
+        }
+      }, [bindRunning, bindChannel])
+
+      const startBind = (channel) => {
+        setError('')
+        setNotice('')
+        setBusy(`bind:${channel}`)
+        void api('im/bind/start', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ channel }),
+        })
+          .then((status) => {
+            setQrFailedFor('')
+            setVerifyCode('')
+            setBind({ channel, ...status })
+          })
+          .catch((cause) => setError(imErrorMessage(cause)))
+          .finally(() => setBusy(''))
+      }
+
+      const submitVerify = () => {
+        const code = verifyCode.trim()
+        if (code === '') return
+        setError('')
+        setBusy('verify')
+        void api('im/bind/verify', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ code }),
+        })
+          .then((status) => {
+            // 服务端收下验证码后继续轮询；清空输入框，判断错误时提示会换成
+            // 「验证码不正确」，用户直接重输而不是拿旧值再提交一遍。
+            setVerifyCode('')
+            applyBindStatus(status)
+          })
+          .catch((cause) => setError(imErrorMessage(cause)))
+          .finally(() => setBusy(''))
+      }
+
+      const cancelBind = () => {
+        setError('')
+        setBusy('bind:cancel')
+        void api('im/bind/cancel', { method: 'POST', headers: jsonHeaders(), body: '{}' })
+          .then(() => {
+            setBind(null)
+            setVerifyCode('')
+            setQrFailedFor('')
+            setNotice('')
+          })
+          .catch((cause) => setError(imErrorMessage(cause)))
+          .finally(() => setBusy(''))
+      }
+
+      const createOneBot = (accountId, token) => {
+        setError('')
+        setNotice('')
+        setBusy('account:onebot')
+        return api('im/accounts', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ channel: 'onebot', accountId, secret: { token } }),
+        })
+          .then(async () => {
+            await reloadView()
+            setEndpoint(accountId)
+            setNotice(t('im.onebot.created'))
+            return true
+          })
+          .catch((cause) => {
+            setError(imErrorMessage(cause))
+            return false
+          })
+          .finally(() => setBusy(''))
+      }
+
+      const removeAccount = (channel, accountId) => {
+        if (!window.confirm(t('im.accountRemoveConfirm', { id: accountId }))) return
+        setError('')
+        setNotice('')
+        setBusy(`account:delete:${channel}:${accountId}`)
+        void api(`im/accounts?channel=${encodeURIComponent(channel)}&accountId=${encodeURIComponent(accountId)}`, { method: 'DELETE' })
+          .then(() => reloadView())
+          .catch((cause) => setError(imErrorMessage(cause)))
+          .finally(() => setBusy(''))
+      }
+
+      const saveSettings = (patch) => {
+        setError('')
+        setNotice('')
+        setBusy('settings')
+        return api('im/settings', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ settings: patch }),
+        })
+          .then((result) => {
+            setView((current) => current === null ? current : { ...current, settings: result.settings })
+            setNotice(t('im.settings.saved'))
+            return true
+          })
+          .catch((cause) => {
+            setError(imErrorMessage(cause))
+            return false
+          })
+          .finally(() => setBusy(''))
+      }
+
+      const commitAllow = (scope) => {
+        const draft = allowDraft[scope]
+        if (draft === null || settings === null) return
+        const field = scope === 'private' ? 'privateAllow' : 'groupAllow'
+        const current = settings[field] ?? []
+        const next = imIdList(draft)
+        if (current.join('\u0000') === next.join('\u0000')) {
+          setAllowDraft((draftState) => ({ ...draftState, [scope]: null }))
+          return
+        }
+        // 保存失败时保留草稿：用户还得能用自己输入的那份重试，不能被服务端旧值顶掉。
+        void saveSettings({ [field]: next }).then((saved) => {
+          if (saved !== true) return
+          setAllowDraft((draftState) => ({ ...draftState, [scope]: null }))
+        })
+      }
+
+      const rebindPeer = (peer, ref) => {
+        const parts = imPeerParts(peer.key)
+        if (parts === null) {
+          setError(`cannot parse the peer key '${peer.key}'`)
+          return
+        }
+        setError('')
+        setNotice('')
+        setBusy(`peer:${peer.key}`)
+        void api('im/peers', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({
+            channel: parts.channel,
+            accountId: parts.accountId,
+            scope: peer.scope,
+            peerId: parts.peerId,
+            character: ref.character,
+            chatId: ref.chatId,
+          }),
+        })
+          .then(() => reloadView())
+          .catch((cause) => setError(imErrorMessage(cause)))
+          .finally(() => setBusy(''))
+      }
+
+      const unbindPeer = (peer) => {
+        if (!window.confirm(t('im.peers.unbindConfirm', { peer: peer.key }))) return
+        setError('')
+        setNotice('')
+        setBusy(`peer:${peer.key}`)
+        void api(`im/peers?key=${encodeURIComponent(peer.key)}`, { method: 'DELETE' })
+          .then(() => reloadView())
+          .catch((cause) => setError(imErrorMessage(cause)))
+          .finally(() => setBusy(''))
+      }
+
+      const scanningChannel = bind !== null && bind.phase !== 'failed' ? bind.channel : ''
+      const cards = IM_CHANNELS.map((channel) => h(ImChannelCard, {
+        key: channel,
+        channel,
+        accounts: channels.filter((row) => row.channel === channel),
+        scanning: scanningChannel === channel,
+        runtimeMissing: channel === 'qq' && qqRuntime !== null && qqRuntime.installed === false,
+        installCommand: channel === 'qq' ? qqInstall : '',
+        disabled: !available,
+        busy,
+        onBind: () => startBind(channel),
+        onRemove: (accountId) => removeAccount(channel, accountId),
+      }))
+
+      const bindCard = bind !== null
+        ? h(ImBindPanel, {
+          bind,
+          qrFailedFor,
+          verifyCode,
+          busy,
+          onQrFailed: setQrFailedFor,
+          onVerifyCode: setVerifyCode,
+          onSubmit: submitVerify,
+          onRetry: () => startBind(bind.channel),
+          onCancel: cancelBind,
+        })
+        : null
+
+      return h(React.Fragment, null,
+        h('section', { className: 'dt-settings-band' },
+          h('h3', null, t('im.hint.title')),
+          h('p', { className: 'dt-hint' }, t('im.hint')),
+          view === null
+            ? h('p', { className: 'dt-muted' }, t('nav.loading'))
+            : view.disabled === true
+              ? h('p', { className: 'dt-error' }, t('im.disabled'))
+              : view.available === false
+                ? h('p', { className: 'dt-error' }, t('im.unavailable', { reasons: (view.reasons ?? []).join('; ') || '—' }))
+                : null),
+        h('section', { className: 'dt-settings-band' },
+          h('h3', null, t('im.channels')),
+          h('div', { className: 'dt-im-cards' }, cards)),
+        bindCard,
+        h(ImOneBotBand, { endpoint, busy, disabled: !available, onCreate: createOneBot }),
+        h(ImPeersBand, {
+          peers,
+          sharedSessions,
+          chatOptions,
+          busy,
+          onRebind: rebindPeer,
+          onUnbind: unbindPeer,
+        }),
+        h(ImSettingsBand, {
+          settings,
+          chatOptions,
+          allowDraft,
+          busy,
+          onPatch: (patch) => { void saveSettings(patch) },
+          onAllowDraft: (scope, value) => setAllowDraft((current) => ({ ...current, [scope]: value })),
+          onAllowCommit: commitAllow,
+        }),
+        notice !== '' ? h('section', { className: 'dt-settings-band' }, h('p', { className: 'dt-im-notice' }, notice)) : null,
+        error !== '' ? h('section', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
+    }
+
+    /** 一张通道卡片：状态灯 + 一行原因 + 账号清单 + 通道动作。 */
+    function ImChannelCard({ channel, accounts, scanning, runtimeMissing, installCommand, disabled, busy, onBind, onRemove }) {
+      const t = useTranslate()
+      const [copied, setCopied] = useState(false)
+      const [copyError, setCopyError] = useState('')
+      const tone = imChannelTone(accounts, scanning)
+      const reason = imChannelReason(accounts)
+      const bindLabel = channel === 'qq' ? t('im.bindStartQq') : t('im.bindStartWeixin')
+      const copy = () => {
+        if (installCommand === '') return
+        setCopyError('')
+        void imCopyText(installCommand)
+          .then(() => setCopied(true))
+          .catch((cause) => setCopyError(imErrorMessage(cause)))
+      }
+      return h('div', { className: `dt-im-card dt-im-card-${tone}`, 'data-im-channel': channel, 'data-im-tone': tone },
+        h('div', { className: 'dt-im-card-head' },
+          h('span', { className: `dt-im-light dt-im-light-${tone}`, 'aria-hidden': 'true' }),
+          h('div', { className: 'dt-im-card-title' },
+            h('strong', null, t(`im.channel.${channel}`)),
+            h('span', null, t(`im.state.${tone}`)))),
+        reason !== '' ? h('p', { className: 'dt-im-card-reason' }, reason) : null,
+        accounts.length === 0
+          ? h('p', { className: 'dt-muted' }, t('im.accountsEmpty'))
+          : h('div', { className: 'dt-im-accounts' }, accounts.map((row) => h('div', { key: `${row.channel}:${row.accountId}`, className: 'dt-im-account' },
+            h('div', { className: 'dt-im-account-copy' },
+              h('strong', null, row.label || row.accountId),
+              h('span', { className: 'dt-im-monospace' }, row.accountId),
+              h('span', null, `${t(`im.state.${row.status?.state ?? 'idle'}`)} · ${t('im.accountPeers', { count: row.peers ?? 0 })}`)),
+            h('div', { className: 'dt-im-account-actions' },
+              h(Button, {
+                size: 'sm',
+                variant: 'ghost',
+                icon: h(IconTrashOutline16),
+                disabled: disabled || busy !== '',
+                'aria-label': t('im.accountRemove', { id: row.accountId }),
+                title: t('im.accountRemove', { id: row.accountId }),
+                onClick: () => onRemove(row.accountId),
+              }))))),
+        channel === 'onebot'
+          ? h('p', { className: 'dt-hint' }, t('im.onebotCardHint'))
+          : h('div', { className: 'dt-im-card-actions' },
+            h(Button, {
+              size: 'sm',
+              variant: 'outline',
+              disabled: disabled || runtimeMissing || busy !== '',
+              onClick: onBind,
+            }, bindLabel)),
+        runtimeMissing
+          ? h('div', { className: 'dt-im-install' },
+            h('p', { className: 'dt-hint' }, t('im.qqRuntimeMissing')),
+            installCommand === '' ? null : h('div', { className: 'dt-im-url' },
+              h('code', { className: 'dt-im-monospace' }, installCommand),
+              h(Button, { size: 'sm', variant: 'ghost', disabled: copied, onClick: copy }, copied ? t('im.copied') : t('im.copy'))),
+            copyError !== '' ? h('p', { className: 'dt-error' }, copyError) : null)
+          : null)
+    }
+
+    /** 扫码面板：二维码 / 微信验证码 / 失败原因 + 重试。单会话共用。 */
+    function ImBindPanel({ bind, qrFailedFor, verifyCode, busy, onQrFailed, onVerifyCode, onSubmit, onRetry, onCancel }) {
+      const t = useTranslate()
+      const qrSvg = typeof bind.qrSvg === 'string' ? bind.qrSvg : ''
+      const url = typeof bind.url === 'string' ? bind.url : ''
+      const src = qrSvg !== '' ? qrSvg : url
+      const phase = bind.phase
+      return h('section', { className: 'dt-settings-band dt-im-bind', 'data-im-bind-phase': phase },
+        h('h3', null, t('im.bindTitle', { channel: t(`im.channel.${bind.channel}`) })),
+        phase === 'failed'
+          ? h('p', { className: 'dt-error' }, t('im.bindFailed', { reason: bind.reason || '—' }))
+          : null,
+        phase === 'verify'
+          ? h('div', { className: 'dt-im-verify' },
+            h('label', { className: 'dt-field' },
+              h('span', { className: 'dt-label' }, t('im.bindVerify')),
+              h('input', {
+                type: 'text',
+                inputMode: 'numeric',
+                value: verifyCode,
+                'aria-label': t('im.bindVerify'),
+                onChange: (event) => onVerifyCode(event.target.value),
+              })),
+            h(Button, {
+              size: 'sm',
+              variant: 'primary',
+              disabled: busy !== '' || verifyCode.trim() === '',
+              onClick: onSubmit,
+            }, busy === 'verify' ? t('im.bindSubmitting') : t('im.bindVerifySubmit')),
+            h('p', { className: 'dt-hint dt-hint-wide' }, bind.prompt || t('im.bindVerifyHint')))
+          : null,
+        phase === 'waiting' || phase === 'saving'
+          ? h('div', { className: 'dt-im-qr' },
+            src !== '' && qrFailedFor !== src
+              ? h('img', { src, alt: t('im.bindQrAlt'), onError: () => onQrFailed(src) })
+              : null,
+            src === ''
+              ? h('p', { className: 'dt-muted' }, t('im.bindQrPending'))
+              : h('a', {
+                className: 'dt-im-qr-link',
+                href: src,
+                target: '_blank',
+                rel: 'noreferrer',
+              }, t('im.bindQrLink')),
+            phase === 'saving'
+              ? h('p', { className: 'dt-hint' }, t('im.bindSaving'))
+              : h('p', { className: 'dt-hint' }, t('im.bindWaiting')))
+          : null,
+        h('div', { className: 'dt-im-bind-actions' },
+          phase === 'failed'
+            ? h(Button, { size: 'sm', variant: 'outline', disabled: busy !== '', onClick: onRetry }, t('im.bindRetry'))
+            : null,
+          h(Button, { size: 'sm', variant: 'ghost', disabled: busy !== '', onClick: onCancel }, t('im.bindCancel'))))
+    }
+
+    /**
+     * OneBot 11 端点：账号 id + token → 反向 WS 地址与填写指引。地址是固定
+     * 路由（服务端按 token 认账号），所以建完一个账号就能照着填。
+     */
+    function ImOneBotBand({ endpoint, busy, disabled, onCreate }) {
+      const t = useTranslate()
+      const [accountId, setAccountId] = useState('')
+      const [token, setToken] = useState('')
+      const [copied, setCopied] = useState(false)
+      const [copyError, setCopyError] = useState('')
+      const wsUrl = `${location.origin}${API}/im/onebot/ws`
+      const submit = () => {
+        const id = accountId.trim()
+        const secret = token.trim()
+        if (id === '' || secret === '') return
+        void onCreate(id, secret).then((saved) => {
+          if (saved) {
+            setAccountId('')
+            setToken('')
+            setCopied(false)
+          }
+        })
+      }
+      const copy = () => {
+        setCopyError('')
+        void imCopyText(wsUrl)
+          .then(() => setCopied(true))
+          .catch((cause) => setCopyError(imErrorMessage(cause)))
+      }
+      return h('section', { className: 'dt-settings-band' },
+        h('h3', null, t('im.onebot.title')),
+        h('p', { className: 'dt-hint' }, t('im.onebot.hint')),
+        h('div', { className: 'dt-im-form' },
+          h('label', { className: 'dt-field' },
+            h('span', { className: 'dt-label' }, t('im.onebot.accountId')),
+            h('input', {
+              type: 'text',
+              value: accountId,
+              'aria-label': t('im.onebot.accountId'),
+              onChange: (event) => setAccountId(event.target.value),
+            })),
+          h('label', { className: 'dt-field' },
+            h('span', { className: 'dt-label' }, t('im.onebot.token')),
+            h('input', {
+              type: 'password',
+              value: token,
+              'aria-label': t('im.onebot.token'),
+              onChange: (event) => setToken(event.target.value),
+            })),
+          h(Button, {
+            size: 'sm',
+            variant: 'primary',
+            disabled: disabled || busy !== '' || accountId.trim() === '' || token.trim() === '',
+            onClick: submit,
+          }, busy === 'account:onebot' ? t('im.onebot.creating') : t('im.onebot.create'))),
+        endpoint === ''
+          ? null
+          : h('div', { className: 'dt-im-endpoint' },
+            h('p', { className: 'dt-label' }, t('im.onebot.ws')),
+            h('div', { className: 'dt-im-url' },
+              h('code', { className: 'dt-im-monospace dt-im-ws' }, wsUrl),
+              h(Button, { size: 'sm', variant: 'ghost', disabled: copied, onClick: copy }, copied ? t('im.copied') : t('im.copy'))),
+            h('p', { className: 'dt-hint' }, t('im.onebot.wsHint', { account: endpoint })),
+            h('p', { className: 'dt-hint' }, t('im.onebot.upstream')),
+            copyError !== '' ? h('p', { className: 'dt-error' }, copyError) : null))
+    }
+
+    /** 绑定表：peer → 角色/聊天，共享会话徽标，改绑与解绑。 */
+    function ImPeersBand({ peers, sharedSessions, chatOptions, busy, onRebind, onUnbind }) {
+      const t = useTranslate()
+      if (peers.length === 0) {
+        return h('section', { className: 'dt-settings-band' },
+          h('h3', null, t('im.peers.title')),
+          h('p', { className: 'dt-muted' }, t('im.peers.empty')),
+          h('p', { className: 'dt-hint' }, t('im.peers.emptyHint')))
+      }
+      return h('section', { className: 'dt-settings-band' },
+        h('h3', null, t('im.peers.title')),
+        h('p', { className: 'dt-hint' }, t('im.peers.hint')),
+        h('div', { className: 'dt-im-peers' }, peers.map((peer) => h(ImPeerRow, {
+          key: peer.key,
+          peer,
+          shared: sharedSessions.has(peer.sessionId),
+          chatOptions,
+          disabled: busy !== '',
+          onRebind,
+          onUnbind,
+        }))))
+    }
+
+    function ImPeerRow({ peer, shared, chatOptions, disabled, onRebind, onUnbind }) {
+      const t = useTranslate()
+      const [choice, setChoice] = useState('')
+      const options = imWithChatOption(chatOptions, { character: peer.character, chatId: peer.chatId })
+      const target = imChatRefFromKey(choice)
+      return h('div', { className: 'dt-im-peer', 'data-im-peer': peer.key },
+        h('div', { className: 'dt-im-peer-head' },
+          h('code', { className: 'dt-im-peer-key' }, peer.key),
+          h(Pill, null, t(peer.scope === 'group' ? 'im.scope.group' : 'im.scope.private')),
+          shared ? h(Pill, { active: true }, t('im.peers.shared')) : null),
+        h('p', { className: 'dt-im-peer-chat' },
+          t('im.peers.chat', { character: peer.character, chat: peer.chatId }),
+          shared ? ` · ${t('im.peers.sharedHint')}` : ''),
+        h('p', { className: 'dt-hint' }, t('im.peers.boundAt', { at: new Date(peer.createdAt).toLocaleString() })),
+        h('div', { className: 'dt-im-peer-actions' },
+          h('select', {
+            value: choice,
+            'aria-label': t('im.peers.rebind'),
+            onChange: (event) => setChoice(event.target.value),
+          },
+          h('option', { value: '' }, t('im.peers.select')),
+          options.map((option) => h('option', { key: option.key, value: option.key }, option.label))),
+          h(Button, {
+            size: 'sm',
+            variant: 'outline',
+            disabled: disabled || target === null,
+            onClick: () => { if (target !== null) onRebind(peer, target) },
+          }, t('im.peers.rebind')),
+          h(Button, { size: 'sm', variant: 'ghost', disabled, onClick: () => onUnbind(peer) }, t('im.peers.unbind'))))
+    }
+
+    /** 自动绑定与访问控制：模式三选一 + 来源/共享聊天 + 群 @ 开关 + 两份白名单。 */
+    function ImSettingsBand({ settings, chatOptions, allowDraft, busy, onPatch, onAllowDraft, onAllowCommit }) {
+      const t = useTranslate()
+      if (settings === null) {
+        return h('section', { className: 'dt-settings-band' },
+          h('h3', null, t('im.settings.title')),
+          h('p', { className: 'dt-muted' }, t('nav.loading')))
+      }
+      const sourceKey = settings.sourceChat === undefined ? '' : imChatKey(settings.sourceChat.character, settings.sourceChat.chatId)
+      const sharedKey = settings.sharedChat === undefined ? '' : imChatKey(settings.sharedChat.character, settings.sharedChat.chatId)
+      const sourceOptions = imWithChatOption(chatOptions, settings.sourceChat ?? null)
+      const sharedOptions = imWithChatOption(chatOptions, settings.sharedChat ?? null)
+      const missing = (settings.bindingMode === 'independent' && settings.sourceChat === undefined)
+        || (settings.bindingMode === 'shared' && settings.sharedChat === undefined)
+      const allowText = (scope) => {
+        const draft = allowDraft[scope]
+        if (draft !== null) return draft
+        return (scope === 'private' ? settings.privateAllow : settings.groupAllow).join(', ')
+      }
+      return h('section', { className: 'dt-settings-band' },
+        h('h3', null, t('im.settings.title')),
+        h('p', { className: 'dt-hint' }, t('im.settings.hint')),
+        h('div', { className: 'dt-im-settings' },
+          h('label', { className: 'dt-field' },
+            h('span', { className: 'dt-label' }, t('im.settings.bindingMode')),
+            h('select', {
+              value: settings.bindingMode,
+              disabled: busy !== '',
+              onChange: (event) => onPatch({ bindingMode: event.target.value }),
+            }, IM_BINDING_MODES.map((mode) => h('option', { key: mode, value: mode }, t(`im.settings.mode.${mode}`))))),
+          h('p', { className: 'dt-hint' }, t(`im.settings.mode.${settings.bindingMode}Hint`)),
+          h('label', { className: 'dt-field' },
+            h('span', { className: 'dt-label' }, t('im.settings.sourceChat')),
+            h('select', {
+              value: sourceKey,
+              disabled: busy !== '',
+              onChange: (event) => onPatch({ sourceChat: imChatRefFromKey(event.target.value) }),
+            },
+            h('option', { value: '' }, t('im.settings.sourceChatNone')),
+            sourceOptions.map((option) => h('option', { key: option.key, value: option.key }, option.label)))),
+          h('p', { className: 'dt-hint' }, t('im.settings.sourceChatHint')),
+          h('label', { className: 'dt-field' },
+            h('span', { className: 'dt-label' }, t('im.settings.sharedChat')),
+            h('select', {
+              value: sharedKey,
+              disabled: busy !== '',
+              onChange: (event) => onPatch({ sharedChat: imChatRefFromKey(event.target.value) }),
+            },
+            h('option', { value: '' }, t('im.settings.sharedChatNone')),
+            sharedOptions.map((option) => h('option', { key: option.key, value: option.key }, option.label)))),
+          h('p', { className: 'dt-hint' }, t('im.settings.sharedChatHint')),
+          missing ? h('p', { className: 'dt-error' }, t('im.settings.incomplete')) : null,
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: settings.groupRequireMention === true,
+              disabled: busy !== '',
+              onChange: (event) => onPatch({ groupRequireMention: event.target.checked }),
+            }),
+            h('span', null, t('im.settings.groupRequireMention'))),
+          h('p', { className: 'dt-hint' }, t('im.settings.groupRequireMentionHint')),
+          h('div', { className: 'dt-im-allow' },
+            h('label', { className: 'dt-field' },
+              h('span', { className: 'dt-label' }, t('im.settings.privateAllow')),
+              h('textarea', {
+                value: allowText('private'),
+                'aria-label': t('im.settings.privateAllow'),
+                onChange: (event) => onAllowDraft('private', event.target.value),
+                onBlur: () => onAllowCommit('private'),
+              }),
+              h('span', { className: 'dt-hint' }, t('im.settings.allowHint'))),
+            h('label', { className: 'dt-field' },
+              h('span', { className: 'dt-label' }, t('im.settings.groupAllow')),
+              h('textarea', {
+                value: allowText('group'),
+                'aria-label': t('im.settings.groupAllow'),
+                onChange: (event) => onAllowDraft('group', event.target.value),
+                onBlur: () => onAllowCommit('group'),
+              }),
+              h('span', { className: 'dt-hint' }, t('im.settings.allowHint'))))))
     }
 
     function apply(ctx) {
