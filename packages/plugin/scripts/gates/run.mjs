@@ -2363,6 +2363,65 @@ function checkContentLexicon() {
   return problems
 }
 
+// ---- IM 通道打包不变量（提案 0024 §5 / M4 微信通道收口）----
+
+const IM_SOURCE_ROOT = join(PLUGIN_ROOT, 'src', 'im')
+const IM_BUILD_SCRIPT_PATH = join(REPO_ROOT, 'scripts', 'build-plugin.mjs')
+
+/**
+ * 注释里的示例不算依赖：`im/qq/sdk.ts` 的文档注释明确写着「禁止 import ... from
+ * '@tencent-connect/...'」，按原文匹配会把说明文字当成真 import 翻红。
+ */
+function stripCodeComments(text) {
+  return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+}
+
+function imChannelSources() {
+  const files = []
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) walk(full)
+      else if (entry.isFile() && entry.name.endsWith('.ts')) files.push(full)
+    }
+  }
+  walk(IM_SOURCE_ROOT)
+  return files.sort().map((file) => [relative(REPO_ROOT, file), readFileSync(file, 'utf8')])
+}
+
+/**
+ * 四条不变量（提案 0024 §5）：腾讯包只外挂、构建脚本不需要 external/垫片、
+ * 包清单没有 dependencies、产物里两条 OneBot 路径在场。任何一条回退都说明
+ * 「自包含产物」这条性质被打破。
+ */
+function checkImChannelInvariants(sample) {
+  const problems = []
+  for (const [file, text] of sample.sources) {
+    if (/\bfrom\s*['"]@tencent-connect\//.test(stripCodeComments(text))) {
+      problems.push(`${file}: static import from '@tencent-connect/*' (the QQ SDK must stay a runtime-only dynamic import)`)
+    }
+  }
+  const buildScript = stripCodeComments(sample.buildScript)
+  if (/\bexternal\s*:/.test(buildScript)) {
+    problems.push('scripts/build-plugin.mjs must not declare an external: list; third-party code stays out of the bundle')
+  }
+  if (buildScript.includes('createRequire')) {
+    problems.push('scripts/build-plugin.mjs must not need a createRequire shim')
+  }
+  if (Object.prototype.hasOwnProperty.call(sample.pkg, 'dependencies')) {
+    problems.push("packages/plugin/package.json must not declare 'dependencies'; the bundle is self-contained")
+  }
+  // 只认代码行：esbuild 会给每个入口留 `// path/to/file.ts` 注释，注释不算路由。
+  const bundleCode = sample.bundle
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('//'))
+    .join('\n')
+  for (const fragment of ['im/onebot/ws', 'im/onebot/webhook']) {
+    if (!bundleCode.includes(fragment)) problems.push(`built index.mjs is missing the '${fragment}' path fragment`)
+  }
+  return problems
+}
+
 const gates = [
   {
     name: 'update-routes',
@@ -3458,6 +3517,56 @@ const gates = [
       const [envProblems, envResult] = runModLoaderProbe(MOD_LOADER_ENV_SCRIPT, { DSH_SOULMOJITO_DISABLE_MODS: '1' })
       if (envProblems !== null) return [...problems, ...envProblems]
       problems.push(...checkModLoaderResult({ ...(result ?? {}), envOff: envResult }))
+      return problems
+    },
+  },
+  {
+    name: 'im-channels',
+    selfTest: () => {
+      const good = {
+        sources: [
+          [
+            'packages/plugin/src/im/qq/sdk.ts',
+            "// 禁止 import ... from '@tencent-connect/qqbot-nodejs'\nexport async function loadQqSdk() { return import('@tencent-connect/qqbot-nodejs') }",
+          ],
+        ],
+        buildScript: 'const output = await esbuildBuild({ entryPoints, bundle: true, format: \'esm\' })',
+        pkg: { name: PLUGIN_NAME },
+        bundle: 'var webhookRoute = "im/onebot/webhook";\nvar seat = `${API}/im/onebot/ws`;',
+      }
+      // 负样本一：源码里塞一句真的静态 import（注释里的示例必须仍然放行）。
+      const badSource = {
+        ...good,
+        sources: [
+          ...good.sources,
+          ['packages/plugin/src/im/qq/leak.ts', "import { QQBot } from '@tencent-connect/qqbot-nodejs'"],
+        ],
+      }
+      // 负样本二：构建脚本里塞 external 列表。
+      const badExternal = {
+        ...good,
+        buildScript: 'const output = await esbuildBuild({ bundle: true, external: [\'@tencent-connect/qqbot-nodejs\'] })',
+      }
+      // 负样本三：构建脚本里塞 createRequire 垫片。
+      const badShim = { ...good, buildScript: 'const require = createRequire(import.meta.url)' }
+      // 负样本四：包清单出现 dependencies。
+      const badDependencies = { ...good, pkg: { name: PLUGIN_NAME, dependencies: { ws: '^8.0.0' } } }
+      // 负样本五：产物里丢了两条 OneBot 路径。
+      const badBundle = { ...good, bundle: 'var webhookRoute = "im/gone/webhook";' }
+      const rejected = [badSource, badExternal, badShim, badDependencies, badBundle]
+        .filter((sample) => checkImChannelInvariants(sample).length > 0).length
+      return checkImChannelInvariants(good).length === 0 && rejected === 5
+        ? []
+        : ['im channel packaging bad samples were not rejected']
+    },
+    check: () => {
+      const problems = checkImChannelInvariants({
+        sources: imChannelSources(),
+        buildScript: readFileSync(IM_BUILD_SCRIPT_PATH, 'utf8'),
+        pkg: readJson(PACKAGE_PATH),
+        bundle: existsSync(SERVER_PATH) ? readFileSync(SERVER_PATH, 'utf8') : '',
+      })
+      if (!existsSync(SERVER_PATH)) problems.push('generated packages/plugin/index.mjs does not exist')
       return problems
     },
   },

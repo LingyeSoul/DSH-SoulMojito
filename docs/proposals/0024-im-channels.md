@@ -1,6 +1,6 @@
 # 提案 0024：IM 通道（QQ / 微信 / OneBot 11）
 
-> 状态：设计；M0–M3 已实现（OneBot 11 / QQ），M4/M5 未开始。日期：2026-10-30。
+> 状态：M0–M4 已实现（OneBot 11 / QQ / 微信），M5 未开始。日期：2026-10-30。
 > 目标宿主：DSH `0.2.1-rc.2`（兼容 `0.2.0-rc.2`）；验证基线 `pnpm run check`。
 > 参考物（只读研究，不复制其源码进本仓库）：
 > - QQ 官方机器人平台：`tencent-connect/dsh-qqbot`（MIT）与其依赖
@@ -366,7 +366,7 @@ type BindPhase =
 $DSH_HOME/soulmojito/im/                # 旧装：$DSH_HOME/tavern/im/
   accounts.json                         # 账号清单（无密钥内容）
   secrets/<channel>-<accountId>.json    # 密钥，mode 0600
-  weixin/<accountId>/sync-buf.json      # get_updates_buf 游标
+  cursors/<accountId>.json              # get_updates_buf 游标（各通道共用 ImStore 游标面）
   weixin/<accountId>/context-tokens.json# peer → context_token
   dedupe.log                            # 24h 去重键（追加 + 定期压实）
   media/                                # 入站媒体临时目录（TTL 清理）
@@ -430,7 +430,7 @@ API 破一次隔离纪律，代价大于收益。
 | `ws` | 插件当前零运行时依赖 | 不再内联：OneBot 用自研最小服务端（`im/onebot/ws.ts`），QQ 客户端由外挂的官方 SDK 自带 |
 | `@tencent-connect/qqbot-nodejs` | 官方 SDK，纯 ESM；带 `ws` 与可选原生依赖 | **外挂安装**（MIT）：装在 `$DSH_HOME/<tavern>/im/runtime/`，运行期 `import()`；不进产物、不进 dependencies |
 | `@tencent-connect/qqbot-connector` | 扫码状态机，纯 ESM；包声明 **UNLICENSED** | **外挂安装**：UNLICENSED 不能随本仓库的 GPL 产物再分发，由用户在自己的数据目录安装 |
-| 微信协议 | 官方文档 + 参考实现 | 自研 HTTP 客户端（4 个端点），不引入 OpenClaw peer 依赖 |
+| 微信协议 | 官方文档 + 参考实现 | 自研 HTTP 客户端（6 个端点），不引入 OpenClaw peer 依赖 |
 | OneBot 11 | 文本标准 | 自研事件/动作映射，无依赖 |
 
 **打包不变量**：`packages/plugin/package.json` 保持无 `dependencies`；产物仍自包含。
@@ -526,7 +526,7 @@ gate 同步更新。
 | `im-tools.spec.ts` | 真工具面 | `im_send` 默认只能发当前 peer；跨 peer 关闭时拒绝；身份不可由参数伪造 |
 | `onebot-protocol.spec.ts` | 真 `ws` 服务端与客户端环回 | universal 握手头、`post_type` 解析、`echo` 配对、错误 token 401 |
 | `onebot-webhook.spec.ts` | 真 HTTP 环回 | 事件接收、快速操作 `reply`、超大 body 拒绝 |
-| `weixin-protocol.spec.ts` | 本地 HTTP 桩服务（真实 socket） | 扫码全状态机（含 `need_verifycode`/`scaned_but_redirect`）、游标推进、`-14` 暂停、`sendmessage` 载荷 |
+| `weixin-channel.spec.ts` | 本地 HTTP 桩服务（真实 socket） | 扫码全状态机（含 `need_verifycode`/`scaned_but_redirect`/`binded_redirect`）、游标推进与「投递先于落盘」、`-14` 暂停与暂停期不出站、`sendmessage` 载荷 |
 | `qq-transport.spec.ts` | SDK 对桩 OpenAPI + 桩网关 WS | 鉴权头、`msg_id/msg_seq`、限流到 4 后降级、分块不切断代码块 |
 | `im-security.spec.ts` | 真 store + 真 HTTP | 空名单拒绝、密钥不落 `state.json`、日志脱敏、媒体超限拒绝 |
 | GUI 手测 | 桌面 + 390×844 | 扫码弹窗、状态灯、绑定表、解绑后连接消失 |
@@ -560,5 +560,13 @@ gate 同步更新。
 - QQ 群默认必须 @ 才投递，面板提供 `imGroupRequireMention` 开关可关。
 - `im_send` **不允许跨会话**：目标必须已绑定到当前 session。
 - 解绑 peer 时**保留**聊天与会话，只删绑定。
+
+**已知行为（2026-10-30，微信通道落地）**
+- **暂停态不持久化**：`-14` 的一小时暂停只活在进程内（`pausedUntil`），重启/重连即清空
+  并立刻重新探测；token 仍失效时会在首个 `getupdates` 再次暂停。好处是不用维护一张
+  带时钟的磁盘状态，代价是重启后可能多发一次请求。
+- **`verify_code_blocked` 判死**：验证码尝试过多时本次扫码直接 `failed` 并要求重新扫码；
+  参考实现把该状态继续当作可轮询状态返回。协议没有解除封锁的路径，继续轮询一张已封锁
+  的二维码只是空转（详见 [`decisions/2026-10-30-weixin-channel.md`](../../decisions/2026-10-30-weixin-channel.md) §5）。
 
 **未决问题**：无。

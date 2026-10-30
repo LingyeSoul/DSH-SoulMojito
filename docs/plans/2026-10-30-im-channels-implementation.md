@@ -1,6 +1,6 @@
 # 施工计划：IM 通道（提案 0024）
 
-> 日期：2026-10-30。状态：M0–M3 已落地（M4/M5 未开始）。
+> 日期：2026-10-30。状态：M0–M4 已落地（M5 未开始）。
 > 设计契约：[`docs/proposals/0024-im-channels.md`](../proposals/0024-im-channels.md)。
 > 验证口径：`pnpm run check`（tsc + vitest + build + gates）。
 
@@ -59,10 +59,10 @@ $DSH_HOME/soulmojito/im/dedupe.log
 | M1（已完成） | `ensureImSession` 独立/共享两种模式都能建绑定；缺 `agents.create` 时 fail-closed；IM 工具族与历史导入落地 |
 | M2（已完成） | OneBot 11 反向 WS + HTTP POST 打通（codec + 连接层 + 账号路由） |
 | M3（已完成） | QQ 扫码绑定 + 官方网关；两个腾讯包外挂安装、运行期动态导入 |
-| M4 | 微信扫码 + 长轮询 |
+| M4（已完成） | 微信扫码（含验证码）、长轮询与游标、context token、`-14` 暂停、出站文本投影 |
 | M5 | 客户端面板 + 媒体 + 收口 |
 
-### 4.1 已落地（2026-10-30，三批）
+### 4.1 已落地（2026-10-30，四批）
 
 第一批（`098db83`）：`im/types.ts`、`im/settings.ts`、`im/store.ts`、`im/project.ts`、
 `im/session-host.ts`、`im/reply.ts`、`im/router.ts`、`im/runtime.ts`、
@@ -84,11 +84,20 @@ $DSH_HOME/soulmojito/im/dedupe.log
 `createRequire` 垫片——第三方 QQ 代码根本不进产物。决策记录：
 [`decisions/2026-10-30-qq-channel.md`](../../decisions/2026-10-30-qq-channel.md)。
 
+第四批：`im/weixin/api.ts`（六端点 + 两套错误面 + 响应形状校验）、`im/weixin/bind.ts`
+（扫码八状态 + `verify` 相位 + 一次刷新额度 + IDC 重定向）、`im/weixin/channel.ts`
+（长轮询、游标、context token、`-14` 暂停与暂停期不出站、出站串行）、
+`im/weixin/context-tokens.ts`（按对端落盘，0600）、`im/weixin/clock.ts`、
+`im/runtime.ts` 的微信账号安装/扫码接线与白名单、`http/im.ts` 的微信错误映射。
+游标复用 `ImStore` 的 `cursors/<accountId>.json`。新增 `im-channels` gate 锁住
+「腾讯包不进产物」四条不变量。决策记录：
+[`decisions/2026-10-30-weixin-channel.md`](../../decisions/2026-10-30-weixin-channel.md)。
+
 **明确未做（下一轮）**：
-1. 客户端「聊天渠道」面板（含 `qqRuntime` 安装指引的展示）。
-2. 微信通道（M4）。
-3. `im-channels` gate。
-4. QQ 群聊流式输出、媒体上下行、真人扫码的端到端验证。
+1. 客户端「聊天渠道」面板（含 `qqRuntime` 安装指引与微信验证码输入框的展示）。
+2. 媒体双向：微信 CDN 上传/下载与 QQ 附件；当前入站只记 `ImMediaRef`，出站只发文本。
+3. 真人扫码的端到端验证（微信八状态与 QQ 四相位都只有本地桩）。
+4. QQ 群聊流式输出；微信 typing 的 `typing_ticket` 缓存（当前每条都重新 `getconfig`）。
 
 ## 5. 测试面
 
@@ -105,6 +114,7 @@ $DSH_HOME/soulmojito/im/dedupe.log
 | `tests/onebot-codec.spec.ts` | 事件归一、CQ 转义、出站参数 |
 | `tests/onebot-server.spec.ts` | 握手/401、入站、群 @、分片、未掩码 1002、并发发送不交错、webhook |
 | `tests/qq-channel.spec.ts` | 入站归一、无 id 用 UUID 去重、群 @ 门控、被动回复上限 4 条、markdown 两档、并发出站不交错、相位与重连清错、缺包不落盘、安装失败回滚、扫码四相位 |
+| `tests/weixin-channel.spec.ts` | 扫码八状态与 `verify` 相位、IDC 重定向、过期刷新、`binded_redirect` 成功语义、游标续读与「投递先于落盘」、`-14` 暂停与暂停期不出站、`message_type` 缺省按用户消息、出站载荷/认证头、typing 失败不阻断 |
 | `tests/im-runtime-accounts.spec.ts` | 账号 upsert/remove、重启恢复、缺 seam 原因 |
 | `tests/im-http-accounts.spec.ts` | 账号路由校验、webhook 401、`GET im` 的 `qqRuntime` 投影 |
 

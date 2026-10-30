@@ -128,7 +128,7 @@ async function renameWithWindowsRetry(from, to, attempts) {
     } catch (cause) {
       const code = cause.code;
       if (attempt >= attempts || code !== "EPERM" && code !== "EACCES" && code !== "EBUSY" && code !== "ENOTEMPTY") throw cause;
-      await new Promise((resolve7) => setTimeout(resolve7, 10 * attempt));
+      await new Promise((resolve8) => setTimeout(resolve8, 10 * attempt));
     }
   }
 }
@@ -3981,8 +3981,8 @@ function normalizeScore(value, fallback = 0) {
   if (!Number.isFinite(score) || score < 0 || score > 1) throw new Error("memory importance/confidence must be between 0 and 1");
   return score;
 }
-function validateDate(value, field) {
-  if (typeof value !== "string" || Number.isNaN(Date.parse(value))) throw new Error(`invalid memory ${field}`);
+function validateDate(value, field2) {
+  if (typeof value !== "string" || Number.isNaN(Date.parse(value))) throw new Error(`invalid memory ${field2}`);
   return value;
 }
 function withRevision(record) {
@@ -4751,9 +4751,9 @@ function validateRunBudgets(budgets) {
   }
   const errors = [];
   const b = budgets;
-  for (const field of ["maxTurns", "maxDurationMs", "stallThresholdTurns", "consecutiveFailureLimit", "maxDeduceRuns"]) {
-    if (!isPositiveInteger(b[field])) {
-      errors.push({ field: `budgets.${field}`, message: `${field} must be a positive integer` });
+  for (const field2 of ["maxTurns", "maxDurationMs", "stallThresholdTurns", "consecutiveFailureLimit", "maxDeduceRuns"]) {
+    if (!isPositiveInteger(b[field2])) {
+      errors.push({ field: `budgets.${field2}`, message: `${field2} must be a positive integer` });
     }
   }
   const retry = b.externalRetry;
@@ -4768,9 +4768,9 @@ function validateRunBudgets(budgets) {
 function validateCreateConfig(config) {
   const errors = [];
   const c = config;
-  for (const field of ["title", "requirement", "language", "genre", "narrativePerspective"]) {
-    if (typeof c[field] !== "string" || c[field].trim() === "") {
-      errors.push({ field, message: `${field} must be a non-empty string` });
+  for (const field2 of ["title", "requirement", "language", "genre", "narrativePerspective"]) {
+    if (typeof c[field2] !== "string" || c[field2].trim() === "") {
+      errors.push({ field: field2, message: `${field2} must be a non-empty string` });
     }
   }
   if (typeof c.styleNotes !== "string") {
@@ -4812,12 +4812,12 @@ function validateCreateConfig(config) {
   if (c.writerMode !== void 0 && !isWriterMode(c.writerMode)) {
     errors.push({ field: "writerMode", message: "writerMode must be 'inline' or 'subagent'" });
   }
-  for (const field of ["characterNames", "worldNames"]) {
-    const list = c[field];
+  for (const field2 of ["characterNames", "worldNames"]) {
+    const list = c[field2];
     if (!Array.isArray(list) || list.some((name2) => typeof name2 !== "string" || name2.trim() === "")) {
-      errors.push({ field, message: `${field} must be an array of non-empty strings` });
+      errors.push({ field: field2, message: `${field2} must be an array of non-empty strings` });
     } else if (new Set(list).size !== list.length) {
-      errors.push({ field, message: `${field} must not contain duplicates` });
+      errors.push({ field: field2, message: `${field2} must not contain duplicates` });
     }
   }
   errors.push(...validateRunBudgets(c.budgets));
@@ -4876,9 +4876,9 @@ function validateOutlinePayload(payload, mode = "create") {
   } else if (typeof story !== "object" || story === null || Array.isArray(story)) {
     errors.push({ field: "story", message: "story is required" });
   } else {
-    for (const field of ["premise", "theme", "mainConflict", "endingDirection"]) {
-      if (typeof story[field] !== "string" || story[field].trim() === "") {
-        errors.push({ field: `story.${field}`, message: `${field} must be a non-empty string` });
+    for (const field2 of ["premise", "theme", "mainConflict", "endingDirection"]) {
+      if (typeof story[field2] !== "string" || story[field2].trim() === "") {
+        errors.push({ field: `story.${field2}`, message: `${field2} must be a non-empty string` });
       }
     }
     if (!Array.isArray(story.taboos) || story.taboos.some((t) => typeof t !== "string")) {
@@ -4900,9 +4900,9 @@ function validateOutlinePayload(payload, mode = "create") {
       } else {
         seen.add(c.characterId);
       }
-      for (const field of ["name", "initialState", "motivation", "arc"]) {
-        if (typeof c[field] !== "string" || c[field].trim() === "") {
-          errors.push({ field: `characters[${index}].${field}`, message: `${field} must be a non-empty string` });
+      for (const field2 of ["name", "initialState", "motivation", "arc"]) {
+        if (typeof c[field2] !== "string" || c[field2].trim() === "") {
+          errors.push({ field: `characters[${index}].${field2}`, message: `${field2} must be a non-empty string` });
         }
       }
       if (!Array.isArray(c.relations) || c.relations.some((r) => typeof r !== "string")) {
@@ -4931,9 +4931,9 @@ function validateOutlinePayload(payload, mode = "create") {
       } else {
         orders.push(c.order);
       }
-      for (const field of ["title", "purpose", "entryCondition", "exitCondition"]) {
-        if (typeof c[field] !== "string" || c[field].trim() === "") {
-          errors.push({ field: `chapters[${index}].${field}`, message: `${field} must be a non-empty string` });
+      for (const field2 of ["title", "purpose", "entryCondition", "exitCondition"]) {
+        if (typeof c[field2] !== "string" || c[field2].trim() === "") {
+          errors.push({ field: `chapters[${index}].${field2}`, message: `${field2} must be a non-empty string` });
         }
       }
       if (c.keyEvents !== void 0 && (!Array.isArray(c.keyEvents) || c.keyEvents.some((e) => typeof e !== "string"))) {
@@ -4969,9 +4969,9 @@ function validateOutlinePayload(payload, mode = "create") {
       if (!isPositiveInteger(s.order)) {
         errors.push({ field: `scenes[${index}].order`, message: "order must be a positive integer" });
       }
-      for (const field of ["goal", "timeLocation", "causality", "conflict", "expectedChange"]) {
-        if (typeof s[field] !== "string" || s[field].trim() === "") {
-          errors.push({ field: `scenes[${index}].${field}`, message: `${field} must be a non-empty string` });
+      for (const field2 of ["goal", "timeLocation", "causality", "conflict", "expectedChange"]) {
+        if (typeof s[field2] !== "string" || s[field2].trim() === "") {
+          errors.push({ field: `scenes[${index}].${field2}`, message: `${field2} must be a non-empty string` });
         }
       }
       if (!Array.isArray(s.participants) || s.participants.some((x) => typeof x !== "string")) {
@@ -5442,31 +5442,31 @@ function parseImportedNovelText(input) {
 function clip(value, max2) {
   return value.length <= max2 ? value : `${value.slice(0, max2)}\u2026`;
 }
-function requiredText(value, field, max2, errors) {
+function requiredText(value, field2, max2, errors) {
   if (typeof value !== "string" || value.trim() === "") {
-    errors.push(`${field} must be a non-empty string`);
+    errors.push(`${field2} must be a non-empty string`);
     return "";
   }
   return clip(value.trim(), max2);
 }
-function optionalText(value, field, max2, errors) {
+function optionalText(value, field2, max2, errors) {
   if (value === void 0 || value === null) return "";
   if (typeof value !== "string") {
-    errors.push(`${field} must be a string`);
+    errors.push(`${field2} must be a string`);
     return "";
   }
   return clip(value.trim(), max2);
 }
-function stringArray(value, field, maxItems, maxLength, errors) {
+function stringArray(value, field2, maxItems, maxLength, errors) {
   if (value === void 0 || value === null) return [];
   if (!Array.isArray(value)) {
-    errors.push(`${field} must be an array`);
+    errors.push(`${field2} must be an array`);
     return [];
   }
   const result = [];
   for (const item of value.slice(0, maxItems)) {
     if (typeof item !== "string") {
-      errors.push(`${field} entries must be strings`);
+      errors.push(`${field2} entries must be strings`);
       continue;
     }
     const text = clip(item.trim(), maxLength);
@@ -5474,17 +5474,17 @@ function stringArray(value, field, maxItems, maxLength, errors) {
   }
   return result;
 }
-function objectOf(value, field, errors) {
+function objectOf(value, field2, errors) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    errors.push(`${field} must be an object`);
+    errors.push(`${field2} must be an object`);
     return {};
   }
   return value;
 }
-function arrayOf(value, field, errors) {
+function arrayOf(value, field2, errors) {
   if (value === void 0 || value === null) return [];
   if (!Array.isArray(value)) {
-    errors.push(`${field} must be an array`);
+    errors.push(`${field2} must be an array`);
     return [];
   }
   return value;
@@ -5495,65 +5495,65 @@ function importanceOf(value) {
 function confidenceOf(value) {
   return value === "high" || value === "low" ? value : "medium";
 }
-function normaliseTimeline(value, field, errors, maxEvents) {
-  return arrayOf(value, field, errors).slice(0, maxEvents).map((item, index) => {
-    const record = objectOf(item, `${field}[${index}]`, errors);
+function normaliseTimeline(value, field2, errors, maxEvents) {
+  return arrayOf(value, field2, errors).slice(0, maxEvents).map((item, index) => {
+    const record = objectOf(item, `${field2}[${index}]`, errors);
     return {
       order: index + 1,
-      summary: requiredText(record.summary, `${field}[${index}].summary`, TIMELINE_SUMMARY_LIMIT, errors),
-      characters: stringArray(record.characters, `${field}[${index}].characters`, 20, 80, errors),
+      summary: requiredText(record.summary, `${field2}[${index}].summary`, TIMELINE_SUMMARY_LIMIT, errors),
+      characters: stringArray(record.characters, `${field2}[${index}].characters`, 20, 80, errors),
       importance: importanceOf(record.importance)
     };
   }).filter((event) => event.summary !== "");
 }
-function normaliseRelationships(value, field, errors) {
-  return arrayOf(value, field, errors).slice(0, RELATIONSHIPS_PER_CHARACTER).map((item, index) => {
-    const record = objectOf(item, `${field}[${index}]`, errors);
+function normaliseRelationships(value, field2, errors) {
+  return arrayOf(value, field2, errors).slice(0, RELATIONSHIPS_PER_CHARACTER).map((item, index) => {
+    const record = objectOf(item, `${field2}[${index}]`, errors);
     return {
-      name: requiredText(record.name, `${field}[${index}].name`, 120, errors),
-      relation: requiredText(record.relation, `${field}[${index}].relation`, 300, errors)
+      name: requiredText(record.name, `${field2}[${index}].name`, 120, errors),
+      relation: requiredText(record.relation, `${field2}[${index}].relation`, 300, errors)
     };
   }).filter((relationship) => relationship.name !== "");
 }
-function normaliseCharacters(value, field, errors, maxCharacters) {
-  return arrayOf(value, field, errors).slice(0, maxCharacters).map((item, index) => {
-    const record = objectOf(item, `${field}[${index}]`, errors);
+function normaliseCharacters(value, field2, errors, maxCharacters) {
+  return arrayOf(value, field2, errors).slice(0, maxCharacters).map((item, index) => {
+    const record = objectOf(item, `${field2}[${index}]`, errors);
     return {
-      name: requiredText(record.name, `${field}[${index}].name`, 120, errors),
-      aliases: stringArray(record.aliases, `${field}[${index}].aliases`, 8, 80, errors),
-      role: optionalText(record.role, `${field}[${index}].role`, 300, errors),
-      identity: optionalText(record.identity, `${field}[${index}].identity`, CHARACTER_FIELD_LIMIT, errors),
-      personality: optionalText(record.personality, `${field}[${index}].personality`, CHARACTER_FIELD_LIMIT, errors),
-      appearance: optionalText(record.appearance, `${field}[${index}].appearance`, CHARACTER_FIELD_LIMIT, errors),
-      motivation: optionalText(record.motivation, `${field}[${index}].motivation`, CHARACTER_FIELD_LIMIT, errors),
-      relationships: normaliseRelationships(record.relationships, `${field}[${index}].relationships`, errors),
-      stateAtEnd: optionalText(record.stateAtEnd, `${field}[${index}].stateAtEnd`, CHARACTER_FIELD_LIMIT, errors),
+      name: requiredText(record.name, `${field2}[${index}].name`, 120, errors),
+      aliases: stringArray(record.aliases, `${field2}[${index}].aliases`, 8, 80, errors),
+      role: optionalText(record.role, `${field2}[${index}].role`, 300, errors),
+      identity: optionalText(record.identity, `${field2}[${index}].identity`, CHARACTER_FIELD_LIMIT, errors),
+      personality: optionalText(record.personality, `${field2}[${index}].personality`, CHARACTER_FIELD_LIMIT, errors),
+      appearance: optionalText(record.appearance, `${field2}[${index}].appearance`, CHARACTER_FIELD_LIMIT, errors),
+      motivation: optionalText(record.motivation, `${field2}[${index}].motivation`, CHARACTER_FIELD_LIMIT, errors),
+      relationships: normaliseRelationships(record.relationships, `${field2}[${index}].relationships`, errors),
+      stateAtEnd: optionalText(record.stateAtEnd, `${field2}[${index}].stateAtEnd`, CHARACTER_FIELD_LIMIT, errors),
       confidence: confidenceOf(record.confidence)
     };
   }).filter((character) => character.name !== "");
 }
-function normaliseWorldEntries(value, field, errors, maxEntries) {
-  return arrayOf(value, field, errors).slice(0, maxEntries).map((item, index) => {
-    const record = objectOf(item, `${field}[${index}]`, errors);
+function normaliseWorldEntries(value, field2, errors, maxEntries) {
+  return arrayOf(value, field2, errors).slice(0, maxEntries).map((item, index) => {
+    const record = objectOf(item, `${field2}[${index}]`, errors);
     return {
-      title: requiredText(record.title, `${field}[${index}].title`, 200, errors),
-      keys: stringArray(record.keys, `${field}[${index}].keys`, 20, 80, errors),
-      category: optionalText(record.category, `${field}[${index}].category`, 120, errors),
-      content: requiredText(record.content, `${field}[${index}].content`, WORLD_CONTENT_LIMIT, errors)
+      title: requiredText(record.title, `${field2}[${index}].title`, 200, errors),
+      keys: stringArray(record.keys, `${field2}[${index}].keys`, 20, 80, errors),
+      category: optionalText(record.category, `${field2}[${index}].category`, 120, errors),
+      content: requiredText(record.content, `${field2}[${index}].content`, WORLD_CONTENT_LIMIT, errors)
     };
   }).filter((entry) => entry.title !== "" && entry.content !== "");
 }
-function normaliseStyle(value, field, errors) {
+function normaliseStyle(value, field2, errors) {
   if (value === void 0 || value === null) {
     return { pointOfView: "", tone: "", pacing: "", proseNotes: "", dialogueStyle: "" };
   }
-  const record = objectOf(value, field, errors);
+  const record = objectOf(value, field2, errors);
   return {
-    pointOfView: optionalText(record.pointOfView, `${field}.pointOfView`, STYLE_LIMIT, errors),
-    tone: optionalText(record.tone, `${field}.tone`, STYLE_LIMIT, errors),
-    pacing: optionalText(record.pacing, `${field}.pacing`, STYLE_LIMIT, errors),
-    proseNotes: optionalText(record.proseNotes, `${field}.proseNotes`, STYLE_LIMIT, errors),
-    dialogueStyle: optionalText(record.dialogueStyle, `${field}.dialogueStyle`, STYLE_LIMIT, errors)
+    pointOfView: optionalText(record.pointOfView, `${field2}.pointOfView`, STYLE_LIMIT, errors),
+    tone: optionalText(record.tone, `${field2}.tone`, STYLE_LIMIT, errors),
+    pacing: optionalText(record.pacing, `${field2}.pacing`, STYLE_LIMIT, errors),
+    proseNotes: optionalText(record.proseNotes, `${field2}.proseNotes`, STYLE_LIMIT, errors),
+    dialogueStyle: optionalText(record.dialogueStyle, `${field2}.dialogueStyle`, STYLE_LIMIT, errors)
   };
 }
 function throwIfErrors(errors, label) {
@@ -5957,14 +5957,14 @@ function validateUsageSample(sample) {
   }
   return errors;
 }
-function validateSampleCounts(value, field) {
+function validateSampleCounts(value, field2) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return [{ field, message: `${field} must be an object of numbers` }];
+    return [{ field: field2, message: `${field2} must be an object of numbers` }];
   }
   const errors = [];
   for (const [key, count] of Object.entries(value)) {
     if (!isNonNegativeInteger(count)) {
-      errors.push({ field: `${field}.${key}`, message: `${field}.${key} must be a non-negative integer` });
+      errors.push({ field: `${field2}.${key}`, message: `${field2}.${key} must be a non-negative integer` });
     }
   }
   return errors;
@@ -5983,10 +5983,10 @@ import { randomBytes } from "node:crypto";
 import { promises as fs7 } from "node:fs";
 function commandLineOf(pid) {
   if (process.platform === "win32") {
-    return new Promise((resolve7) => {
+    return new Promise((resolve8) => {
       execFile("powershell.exe", ["-NoProfile", "-Command", `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`], { timeout: 5e3, windowsHide: true }, (error, stdout) => {
-        if (error) resolve7(null);
-        else resolve7(stdout.trim() === "" ? void 0 : stdout.trim());
+        if (error) resolve8(null);
+        else resolve8(stdout.trim() === "" ? void 0 : stdout.trim());
       });
     });
   }
@@ -6000,10 +6000,10 @@ function commandLineOf(pid) {
     );
   }
   if (process.platform === "darwin") {
-    return new Promise((resolve7) => {
+    return new Promise((resolve8) => {
       execFile("ps", ["-p", String(pid), "-o", "command="], { timeout: 5e3 }, (error, stdout) => {
-        if (error) resolve7(Number(error.code) === 1 ? void 0 : null);
-        else resolve7(stdout.trim() === "" ? void 0 : stdout.trim());
+        if (error) resolve8(Number(error.code) === 1 ? void 0 : null);
+        else resolve8(stdout.trim() === "" ? void 0 : stdout.trim());
       });
     });
   }
@@ -7212,8 +7212,8 @@ ${tail}`;
       }
       /* ------------------------------ units (§6.2) ------------------------------ */
       async prepareUnit(novelId, input) {
-        for (const [field, value] of [["chapterId", input.chapterId], ["sceneId", input.sceneId], ["label", input.label], ["goal", input.goal]]) {
-          if (typeof value !== "string" || value.trim() === "") throw new NovelConfigError({ message: `${field} must be a non-empty string` });
+        for (const [field2, value] of [["chapterId", input.chapterId], ["sceneId", input.sceneId], ["label", input.label], ["goal", input.goal]]) {
+          if (typeof value !== "string" || value.trim() === "") throw new NovelConfigError({ message: `${field2} must be a non-empty string` });
         }
         if (input.continuationAnchor !== void 0 && input.continuationAnchor !== null && typeof input.continuationAnchor !== "string") {
           throw new NovelConfigError({ message: "continuationAnchor must be a string or null" });
@@ -10184,7 +10184,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("f5a9b6f") : void 0;
+  const commit = true ? normalizeCommit("e82c864") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -10357,7 +10357,7 @@ var init_handle = __esm({
 
 // packages/plugin/src/generation-hooks.ts
 function withTimeout(promise, ms) {
-  return new Promise((resolve7, reject) => {
+  return new Promise((resolve8, reject) => {
     const timer = setTimeout(() => {
       const timeoutError = new Error(`generation hook timed out after ${ms}ms`);
       timeoutError.hookTimeout = true;
@@ -10366,7 +10366,7 @@ function withTimeout(promise, ms) {
     Promise.resolve(promise).then(
       (value) => {
         clearTimeout(timer);
-        resolve7(value);
+        resolve8(value);
       },
       (error) => {
         clearTimeout(timer);
@@ -11353,7 +11353,7 @@ function readJson(req, maxBytes) {
   if (contentType !== void 0 && !contentType.toLowerCase().startsWith("application/json")) {
     return Promise.reject(new HttpError(415, `unsupported content-type '${contentType}'; expected application/json`));
   }
-  return new Promise((resolve7, reject) => {
+  return new Promise((resolve8, reject) => {
     let bytes = 0;
     const chunks = [];
     req.on("data", (rawChunk) => {
@@ -11366,7 +11366,7 @@ function readJson(req, maxBytes) {
     });
     req.on("end", () => {
       try {
-        resolve7(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        resolve8(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
       } catch {
         reject(new HttpError(400, "invalid JSON body"));
       }
@@ -11691,7 +11691,7 @@ function renderModHtmlDocument(document, csp) {
   return `<!doctype html><html><head><meta charset="utf-8">${meta}${scripts}</head><body>${rewritten}</body></html>`;
 }
 function readModRequestBody(req, maxBytes = 2 * 1024 * 1024) {
-  return new Promise((resolve7, reject) => {
+  return new Promise((resolve8, reject) => {
     let bytes = 0;
     const chunks = [];
     req.on("data", (chunk) => {
@@ -11705,7 +11705,7 @@ function readModRequestBody(req, maxBytes = 2 * 1024 * 1024) {
     });
     req.on("end", () => {
       try {
-        resolve7(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        resolve8(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
       } catch {
         reject(new Error("invalid JSON body"));
       }
@@ -11764,10 +11764,10 @@ function checkModManifest(raw, options) {
   else if (id.length > MOD_ID_MAX_LENGTH) errors.push(`id must be at most ${MOD_ID_MAX_LENGTH} characters`);
   else if (!MOD_ID_PATTERN.test(id)) errors.push("id must be [a-z0-9-] labels or reverse-domain joined by '.'");
   else if (id !== options.directory) errors.push(`id '${id}' must match the directory name '${options.directory}'`);
-  for (const field of ["name", "version", "author", "description", "main"]) {
-    const value = record[field];
-    if (typeof value !== "string" || value.trim() === "") errors.push(`${field} is required and must be a non-empty string`);
-    else if (value.length > 2e3) errors.push(`${field} must be at most 2000 characters`);
+  for (const field2 of ["name", "version", "author", "description", "main"]) {
+    const value = record[field2];
+    if (typeof value !== "string" || value.trim() === "") errors.push(`${field2} is required and must be a non-empty string`);
+    else if (value.length > 2e3) errors.push(`${field2} must be at most 2000 characters`);
   }
   if (typeof record.main === "string") {
     const mainError = checkMainPath(record.main);
@@ -11821,11 +11821,11 @@ function checkModManifest(raw, options) {
       errors.push("surfaces must be an object");
     } else {
       const surfaces2 = record.surfaces;
-      for (const field of ["hooks", "tools", "http"]) {
-        if (surfaces2[field] === void 0) continue;
-        const value = surfaces2[field];
+      for (const field2 of ["hooks", "tools", "http"]) {
+        if (surfaces2[field2] === void 0) continue;
+        const value = surfaces2[field2];
         if (!Array.isArray(value) || value.length > 32 || value.some((entry) => typeof entry !== "string" || entry === "" || entry.length > 200)) {
-          errors.push(`surfaces.${field} must be an array of non-empty strings (at most 32)`);
+          errors.push(`surfaces.${field2} must be an array of non-empty strings (at most 32)`);
           break;
         }
       }
@@ -12420,7 +12420,7 @@ async function readPackageVersion(options, ref, preferApi) {
   return UNKNOWN_FIELD;
 }
 function resolveRemoteCommit(repository, ref, timeoutMs) {
-  return new Promise((resolve7) => {
+  return new Promise((resolve8) => {
     const url = /^https?:|^git@/i.test(repository) ? repository : `https://github.com/${repository.replace(/^\//, "")}.git`;
     execFile2("git", ["ls-remote", url, `refs/heads/${ref}`, ref], {
       encoding: "utf8",
@@ -12429,11 +12429,11 @@ function resolveRemoteCommit(repository, ref, timeoutMs) {
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }
     }, (error, stdout) => {
       if (error) {
-        resolve7("");
+        resolve8("");
         return;
       }
       const first = String(stdout ?? "").split("\n").map((line) => line.trim()).find(Boolean) ?? "";
-      resolve7(first.split(/\s+/)[0] ?? "");
+      resolve8(first.split(/\s+/)[0] ?? "");
     });
   });
 }
@@ -12503,7 +12503,7 @@ function isTransientHttpFailure(error) {
   return /ECONNRESET|EPIPE|EAI_AGAIN|socket hang up|network is unreachable/i.test(message);
 }
 function delay(ms) {
-  return new Promise((resolve7) => setTimeout(resolve7, ms));
+  return new Promise((resolve8) => setTimeout(resolve8, ms));
 }
 function describeError(error) {
   if (error instanceof Error) {
@@ -12516,7 +12516,7 @@ function describeError(error) {
 function curlGet(url, accept, timeoutMs, exec = execFile2) {
   const command = envCompat("CURL")?.trim() || (process.platform === "win32" ? "curl.exe" : "curl");
   const seconds = String(Math.max(1, Math.ceil(timeoutMs / 1e3)));
-  return new Promise((resolve7, reject) => {
+  return new Promise((resolve8, reject) => {
     exec(command, [
       "--silent",
       "--show-error",
@@ -12540,7 +12540,7 @@ function curlGet(url, accept, timeoutMs, exec = execFile2) {
         reject(new Error(detail === "" ? error.message : `${error.message}: ${detail}`));
         return;
       }
-      resolve7(String(stdout ?? ""));
+      resolve8(String(stdout ?? ""));
     });
   });
 }
@@ -12605,7 +12605,7 @@ function gitClone(url, directory, ref, timeoutMs, exec = execFile3) {
   return runGit(args, exec, timeoutMs).then(() => runGit(["-C", directory, "checkout", "HEAD", "--", "."], exec, timeoutMs));
 }
 function runGit(args, exec, timeoutMs) {
-  return new Promise((resolve7, reject) => {
+  return new Promise((resolve8, reject) => {
     exec("git", args, {
       encoding: "utf8",
       timeout: timeoutMs,
@@ -12618,7 +12618,7 @@ function runGit(args, exec, timeoutMs) {
         reject(new Error(detail === "" ? error.message : `${error.message}: ${detail}`));
         return;
       }
-      resolve7();
+      resolve8();
     });
   });
 }
@@ -13951,7 +13951,7 @@ function readInstalledStamp(pluginDir, spec = "") {
   return { version, commit };
 }
 function runCapture(command, args, options = {}) {
-  return new Promise((resolve7, reject) => {
+  return new Promise((resolve8, reject) => {
     const child = spawn(command, args, {
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -13980,7 +13980,7 @@ function runCapture(command, args, options = {}) {
     });
     child.once("close", (code) => {
       clearTimeout(timer);
-      resolve7({ code: code ?? -1, output });
+      resolve8({ code: code ?? -1, output });
     });
   });
 }
@@ -20400,37 +20400,37 @@ function parseBodyEventData(data, seq) {
 function requireGroupId(record, where) {
   return requireNonEmpty(record, "groupId", where, "invalid-body-group-id");
 }
-function requireMessageId(record, field, where) {
-  return requireNonEmpty(record, field, where, "invalid-body-message-id");
+function requireMessageId(record, field2, where) {
+  return requireNonEmpty(record, field2, where, "invalid-body-message-id");
 }
-function requireNonEmpty(record, field, where, code) {
-  const value = record[field];
+function requireNonEmpty(record, field2, where, code) {
+  const value = record[field2];
   if (typeof value !== "string" || value.trim() === "") {
-    throw new BodyLedgerError(code, `${where} field '${field}' must be a non-empty string`);
+    throw new BodyLedgerError(code, `${where} field '${field2}' must be a non-empty string`);
   }
   return value;
 }
-function requireText(record, field, where) {
-  const value = record[field];
+function requireText(record, field2, where) {
+  const value = record[field2];
   if (typeof value !== "string") {
-    throw new BodyLedgerError("invalid-body-event", `${where} field '${field}' must be a string`);
+    throw new BodyLedgerError("invalid-body-event", `${where} field '${field2}' must be a string`);
   }
   return value;
 }
-function optionalText2(record, field, where) {
-  const value = record[field];
+function optionalText2(record, field2, where) {
+  const value = record[field2];
   if (value === void 0) return void 0;
   if (typeof value !== "string") {
-    throw new BodyLedgerError("invalid-body-event", `${where} field '${field}' must be a string when present`);
+    throw new BodyLedgerError("invalid-body-event", `${where} field '${field2}' must be a string when present`);
   }
   return value;
 }
-function requireIndex(record, field, where) {
-  const value = record[field];
+function requireIndex(record, field2, where) {
+  const value = record[field2];
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
     throw new BodyLedgerError(
       "invalid-body-index",
-      `${where} field '${field}' must be a non-negative safe integer, received ${String(value)}`
+      `${where} field '${field2}' must be a non-negative safe integer, received ${String(value)}`
     );
   }
   return value;
@@ -21912,9 +21912,9 @@ function settlementEvidenceOf(events, opId) {
   }
   return evidence;
 }
-function settledString(value, seq, field) {
+function settledString(value, seq, field2) {
   if (typeof value !== "string" || value === "") {
-    throw bodyRuntimeError("invalid-event", `body settled record at seq ${seq} requires ${field} to be a non-empty string`);
+    throw bodyRuntimeError("invalid-event", `body settled record at seq ${seq} requires ${field2} to be a non-empty string`);
   }
   return value;
 }
@@ -22062,24 +22062,24 @@ function bindingOf(value, seq) {
     chatId: requirePlanString(value["chatId"], seq, "binding.chatId")
   };
 }
-function requirePlanString(value, seq, field) {
+function requirePlanString(value, seq, field2) {
   if (typeof value !== "string" || value.trim() === "") {
-    throw planError(seq, field, "a non-empty string");
+    throw planError(seq, field2, "a non-empty string");
   }
   return value;
 }
-function requirePlanText(value, seq, field) {
-  if (typeof value !== "string") throw planError(seq, field, "a string");
+function requirePlanText(value, seq, field2) {
+  if (typeof value !== "string") throw planError(seq, field2, "a string");
   return value;
 }
-function requirePlanInteger(value, seq, field) {
+function requirePlanInteger(value, seq, field2) {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-    throw planError(seq, field, "a non-negative safe integer");
+    throw planError(seq, field2, "a non-negative safe integer");
   }
   return value;
 }
-function planError(seq, field, expectation) {
-  const path12 = field === "" ? PLAN_FIELD : `${PLAN_FIELD}.${field}`;
+function planError(seq, field2, expectation) {
+  const path12 = field2 === "" ? PLAN_FIELD : `${PLAN_FIELD}.${field2}`;
   return bodyRuntimeError("invalid-event", `body event at seq ${seq} requires ${path12} to be ${expectation}`);
 }
 function requireJsonValue(value, path12, ancestors) {
@@ -22312,15 +22312,15 @@ function pendingEventOf(event) {
   }
   return void 0;
 }
-function pendingNonEmptyString(value, seq, field) {
+function pendingNonEmptyString(value, seq, field2) {
   if (typeof value !== "string" || value === "") {
-    throw bodyRuntimeError("invalid-event", `body event at seq ${seq} requires ${field} to be a non-empty string`);
+    throw bodyRuntimeError("invalid-event", `body event at seq ${seq} requires ${field2} to be a non-empty string`);
   }
   return value;
 }
-function pendingInteger(value, seq, field) {
+function pendingInteger(value, seq, field2) {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-    throw bodyRuntimeError("invalid-event", `body event at seq ${seq} requires ${field} to be a non-negative safe integer`);
+    throw bodyRuntimeError("invalid-event", `body event at seq ${seq} requires ${field2} to be a non-negative safe integer`);
   }
   return value;
 }
@@ -22940,9 +22940,9 @@ function abortedOperation(events, opId) {
   }
   return found;
 }
-function abortString(value, seq, field) {
+function abortString(value, seq, field2) {
   if (typeof value !== "string" || value === "") {
-    throw bodyRuntimeError("invalid-event", `body abort record at seq ${seq} requires ${field} to be a non-empty string`);
+    throw bodyRuntimeError("invalid-event", `body abort record at seq ${seq} requires ${field2} to be a non-empty string`);
   }
   return value;
 }
@@ -24014,10 +24014,10 @@ function abortedOperationRecord(event) {
     ...operationTimeOf(event)
   };
 }
-function requiredOperationString(event, field) {
-  const value = nonEmptyString(event.data[field]);
+function requiredOperationString(event, field2) {
+  const value = nonEmptyString(event.data[field2]);
   if (value === void 0) {
-    throw new Error(`body operation record at seq ${event.seq} requires ${field} to be a non-empty string`);
+    throw new Error(`body operation record at seq ${event.seq} requires ${field2} to be a non-empty string`);
   }
   return value;
 }
@@ -25185,7 +25185,7 @@ function localRuntimeProfileRoot(pluginDir) {
   return dirname10(parent);
 }
 function defaultSpawnRunner(command, args, options) {
-  return new Promise((resolve7, reject) => {
+  return new Promise((resolve8, reject) => {
     const child = spawn2(command, [...args], {
       cwd: options.cwd,
       shell: process.platform === "win32",
@@ -25211,7 +25211,7 @@ function defaultSpawnRunner(command, args, options) {
     });
     child.once("close", (code) => {
       clearTimeout(timer);
-      resolve7({ code: code ?? -1, output });
+      resolve8({ code: code ?? -1, output });
     });
   });
 }
@@ -25520,7 +25520,7 @@ function parseEmbeddings(payload, count, expectedDims2) {
   return vectors;
 }
 function delay2(ms) {
-  return new Promise((resolve7) => setTimeout(resolve7, ms));
+  return new Promise((resolve8) => setTimeout(resolve8, ms));
 }
 async function embedProbe(root, config, options = {}) {
   const status2 = await readEmbedStatus(root);
@@ -25648,20 +25648,20 @@ async function readAgentTavernBinding(store5, agentId) {
   }
   return { character, chatId };
 }
-function requireNonEmptyString2(value, field) {
+function requireNonEmptyString2(value, field2) {
   if (!isNonEmptyString(value)) {
     throw new BodyRollbackError(
       "invalid-arguments",
-      `body rollback rejected: ${field} must be a non-empty string`,
+      `body rollback rejected: ${field2} must be a non-empty string`,
       { stage: "prepare" }
     );
   }
 }
-function requireNonNegativeInteger2(value, field) {
+function requireNonNegativeInteger2(value, field2) {
   if (!isNonNegativeInteger2(value)) {
     throw new BodyRollbackError(
       "invalid-arguments",
-      `body rollback rejected: ${field} must be a non-negative safe integer`,
+      `body rollback rejected: ${field2} must be a non-negative safe integer`,
       { stage: "prepare" }
     );
   }
@@ -25795,17 +25795,17 @@ function recordAt(value, where) {
   if (!isRecord8(value)) throw invalid(where, "must be an object");
   return value;
 }
-function textAt(record, field, where) {
-  const value = record[field];
+function textAt(record, field2, where) {
+  const value = record[field2];
   if (typeof value !== "string" || value.trim() === "") {
-    throw invalid(where, `field '${field}' must be a non-empty string`);
+    throw invalid(where, `field '${field2}' must be a non-empty string`);
   }
   return value;
 }
-function timestampAt(record, field, where) {
-  const value = record[field];
+function timestampAt(record, field2, where) {
+  const value = record[field2];
   if (typeof value !== "string" || Number.isNaN(Date.parse(value))) {
-    throw invalid(where, `field '${field}' must be an ISO 8601 timestamp`);
+    throw invalid(where, `field '${field2}' must be an ISO 8601 timestamp`);
   }
   return value;
 }
@@ -26169,10 +26169,10 @@ function turnAt2(record, where) {
   }
   return value;
 }
-function scoreAt(record, field, where) {
-  const value = record[field];
+function scoreAt(record, field2, where) {
+  const value = record[field2];
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) {
-    throw invalid(where, `field '${field}' must be a number between 0 and 1`);
+    throw invalid(where, `field '${field2}' must be a number between 0 and 1`);
   }
   return value;
 }
@@ -28223,11 +28223,11 @@ function parsePrepareRecord(event) {
     plan: rollbackPlanOfEvent(event.data.plan, event.seq)
   };
 }
-function prepareString(value, seq, field) {
+function prepareString(value, seq, field2) {
   if (typeof value !== "string" || value === "") {
     throw bodyRuntimeError(
       "invalid-event",
-      `body prepare record at seq ${seq} requires ${field} to be a non-empty string`
+      `body prepare record at seq ${seq} requires ${field2} to be a non-empty string`
     );
   }
   return value;
@@ -29131,10 +29131,10 @@ async function restoreInterruptedPrepares(ctx, deps, prepares) {
   return { restored, failed };
 }
 async function recoveryStateSafety(ctx, sessionId, binding) {
-  const resolve7 = ctx.safetyOf;
-  if (typeof resolve7 === "function") {
+  const resolve8 = ctx.safetyOf;
+  if (typeof resolve8 === "function") {
     try {
-      return await resolve7(sessionId, binding) ?? unsafeBodyState("safety-unavailable");
+      return await resolve8(sessionId, binding) ?? unsafeBodyState("safety-unavailable");
     } catch (error) {
       errorLog(ctx, "dsh-soulmojito body: recovery state safety resolver failed", {
         sessionId,
@@ -30845,7 +30845,7 @@ var NovelDriver = class _NovelDriver {
       } catch (error) {
         lastError = error;
         this.logWarn("followup-attempt-failed", { novelId, sessionId: agent.session.id, intentId, errorCode: errorCodeOf(error), attempt });
-        if (attempt < retry.maxAttempts) await new Promise((resolve7) => setTimeout(resolve7, retry.backoffMs));
+        if (attempt < retry.maxAttempts) await new Promise((resolve8) => setTimeout(resolve8, retry.backoffMs));
       }
     }
     throw lastError;
@@ -32568,18 +32568,18 @@ function cloneState2(state) {
     winner: state.winner
   };
 }
-function readCell(raw, field) {
+function readCell(raw, field2) {
   if (!Array.isArray(raw) || raw.length !== 2) {
-    throw new Error(`\u52A8\u4F5C ${field} \u5FC5\u987B\u662F [\u884C, \u5217] \u4E24\u5143\u7EC4\uFF080 \u57FA\uFF0C\u884C 0-16\uFF09\uFF0C\u6536\u5230 ${Array.isArray(raw) ? `${raw.length} \u9879\u6570\u7EC4` : typeof raw}`);
+    throw new Error(`\u52A8\u4F5C ${field2} \u5FC5\u987B\u662F [\u884C, \u5217] \u4E24\u5143\u7EC4\uFF080 \u57FA\uFF0C\u884C 0-16\uFF09\uFF0C\u6536\u5230 ${Array.isArray(raw) ? `${raw.length} \u9879\u6570\u7EC4` : typeof raw}`);
   }
   const row = parseBoardCoord(raw[0]);
   const col = parseBoardCoord(raw[1]);
   if (row === null || col === null) {
-    throw new Error(`\u52A8\u4F5C ${field} \u7684\u884C\u5217\u5FC5\u987B\u662F\u6574\u6570\uFF0C\u6536\u5230 [${String(raw[0])}, ${String(raw[1])}]`);
+    throw new Error(`\u52A8\u4F5C ${field2} \u7684\u884C\u5217\u5FC5\u987B\u662F\u6574\u6570\uFF0C\u6536\u5230 [${String(raw[0])}, ${String(raw[1])}]`);
   }
   const hole = holeOf(row, col);
   if (hole === null) {
-    throw new Error(`\u52A8\u4F5C ${field} [${row}, ${col}] \u4E0D\u5728\u68CB\u76D8\u6D1E\u4F4D\u5185`);
+    throw new Error(`\u52A8\u4F5C ${field2} [${row}, ${col}] \u4E0D\u5728\u68CB\u76D8\u6D1E\u4F4D\u5185`);
   }
   return { row, col, hole };
 }
@@ -38624,7 +38624,7 @@ var GameSessionStore = class _GameSessionStore {
       }
       actor = human.role;
     }
-    let describe;
+    let describe2;
     let summary;
     let winner;
     let finished;
@@ -38632,13 +38632,13 @@ var GameSessionStore = class _GameSessionStore {
     if (action.type === "resign") {
       winner = session.players.find((candidate) => candidate.role !== actor).role;
       finished = true;
-      describe = `${actor} \u8BA4\u8F93`;
-      summary = describe;
+      describe2 = `${actor} \u8BA4\u8F93`;
+      summary = describe2;
     } else {
       try {
-        describe = engine10.describe(session.state, actor, action);
+        describe2 = engine10.describe(session.state, actor, action);
       } catch {
-        describe = `${actor} \u7684\u52A8\u4F5C ${action.type}`;
+        describe2 = `${actor} \u7684\u52A8\u4F5C ${action.type}`;
       }
       let result;
       try {
@@ -38654,14 +38654,14 @@ var GameSessionStore = class _GameSessionStore {
       winner = result.winner;
       finished = result.finished === true;
     }
-    session.moves.push({ actor, action, at: (/* @__PURE__ */ new Date()).toISOString(), summary, describe });
+    session.moves.push({ actor, action, at: (/* @__PURE__ */ new Date()).toISOString(), summary, describe: describe2 });
     session.state = nextState;
     session.finished = finished;
     session.winner = finished ? winner : session.winner;
     session.summary = summary;
     session.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
     await this.persist(session);
-    return { session: this.summarize(session), view: this.viewOf(session), describe };
+    return { session: this.summarize(session), view: this.viewOf(session), describe: describe2 };
   }
   /* ------------------------------ 内部 ------------------------------ */
   async persist(session) {
@@ -42969,11 +42969,11 @@ var FrontendTargetBlockedError = class extends FrontendGenerationError {
 function asRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
 }
-function requireText2(value, field, maxChars) {
-  if (typeof value !== "string") throw new FrontendGenerationError(`${field} must be a string`);
+function requireText2(value, field2, maxChars) {
+  if (typeof value !== "string") throw new FrontendGenerationError(`${field2} must be a string`);
   const text = value.trim();
-  if (text === "") throw new FrontendGenerationError(`${field} must not be empty`);
-  if (text.length > maxChars) throw new FrontendGenerationError(`${field} is too long (${text.length} > ${maxChars})`);
+  if (text === "") throw new FrontendGenerationError(`${field2} must not be empty`);
+  if (text.length > maxChars) throw new FrontendGenerationError(`${field2} is too long (${text.length} > ${maxChars})`);
   return text;
 }
 function normalizeBaseUrl(url) {
@@ -45179,7 +45179,7 @@ async function retryChatWrite(operation) {
     } catch (error) {
       if (!(error instanceof ChatRevisionConflictError)) throw error;
       lastError = error;
-      await new Promise((resolve7) => setTimeout(resolve7, 10 * (attempt + 1)));
+      await new Promise((resolve8) => setTimeout(resolve8, 10 * (attempt + 1)));
     }
   }
   throw lastError;
@@ -46261,12 +46261,12 @@ function senderNameFor(scope, sender, userId) {
   }
   return nonEmptyString4(sender.nickname) ?? `(${userId})`;
 }
-function requireInteger(event, field) {
-  const value = event[field];
+function requireInteger(event, field2) {
+  const value = event[field2];
   if (typeof value !== "number" || !Number.isInteger(value)) {
     throw new OneBotCodecError(
       "BAD_EVENT",
-      `onebot event field '${field}' must be an integer, got ${describeValue(value)}`
+      `onebot event field '${field2}' must be an integer, got ${describeValue(value)}`
     );
   }
   return value;
@@ -46396,14 +46396,14 @@ function openConnection(socket, head) {
     });
   }
   function writeFrame(frame) {
-    return new Promise((resolve7, reject) => {
+    return new Promise((resolve8, reject) => {
       if (socket.destroyed || socket.writableEnded) {
         reject(new Error("websocket socket is closed"));
         return;
       }
       socket.write(frame, (error) => {
         if (error) reject(error);
-        else resolve7();
+        else resolve8();
       });
     });
   }
@@ -46899,7 +46899,7 @@ var OneBotChannel = class {
   }
   call(live, action, params) {
     const echo = randomUUID11();
-    return new Promise((resolve7, reject) => {
+    return new Promise((resolve8, reject) => {
       const timer = setTimeout(() => {
         live.waiters.delete(echo);
         reject(new OneBotError(
@@ -46908,7 +46908,7 @@ var OneBotChannel = class {
         ));
       }, REQUEST_TIMEOUT_MS2);
       timer.unref?.();
-      live.waiters.set(echo, { resolve: resolve7, reject, timer });
+      live.waiters.set(echo, { resolve: resolve8, reject, timer });
       try {
         live.connection.send(JSON.stringify({ action, params, echo }));
       } catch (error) {
@@ -47078,7 +47078,7 @@ function respondJson(res, status2, body) {
   res.end(JSON.stringify(body));
 }
 function readJsonBody(req, maxBytes) {
-  return new Promise((resolve7, reject) => {
+  return new Promise((resolve8, reject) => {
     const chunks = [];
     let bytes = 0;
     let settled = false;
@@ -47097,11 +47097,11 @@ function readJsonBody(req, maxBytes) {
       if (settled) return;
       settled = true;
       if (chunks.length === 0) {
-        resolve7(void 0);
+        resolve8(void 0);
         return;
       }
       try {
-        resolve7(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        resolve8(JSON.parse(Buffer.concat(chunks).toString("utf8")));
       } catch (error) {
         reject(new OneBotError("ONEBOT_BAD_REQUEST", "onebot webhook body is not valid JSON", { cause: error }));
       }
@@ -47252,8 +47252,8 @@ function createStartupGate() {
   let resolveGate;
   let rejectGate;
   let settled = false;
-  const promise = new Promise((resolve7, reject) => {
-    resolveGate = resolve7;
+  const promise = new Promise((resolve8, reject) => {
+    resolveGate = resolve8;
     rejectGate = reject;
   });
   return {
@@ -47570,7 +47570,7 @@ function qqLoggerOf(logger) {
   };
 }
 function withTimeout2(promise, timeoutMs, message) {
-  return new Promise((resolve7, reject) => {
+  return new Promise((resolve8, reject) => {
     const timer = setTimeout(() => {
       reject(new QQChannelError("QQ_START_TIMEOUT", message));
     }, timeoutMs);
@@ -47578,7 +47578,7 @@ function withTimeout2(promise, timeoutMs, message) {
     promise.then(
       () => {
         clearTimeout(timer);
-        resolve7();
+        resolve8();
       },
       (error) => {
         clearTimeout(timer);
@@ -48213,6 +48213,1264 @@ async function imStoreWriteSecret(file, record) {
   }
 }
 
+// packages/plugin/src/im/weixin/api.ts
+init_build_info();
+import { randomBytes as randomBytes5, randomUUID as randomUUID14 } from "node:crypto";
+var WEIXIN_FIXED_BASE_URL = "https://ilinkai.weixin.qq.com";
+var WEIXIN_DEFAULT_BOT_TYPE = "3";
+var WEIXIN_STALE_TOKEN_RETCODE = -14;
+var ILINK_APP_ID = "bot";
+var BOT_AGENT = "DSH-SoulMojito";
+var QRCODE_STATUSES = [
+  "wait",
+  "scaned",
+  "confirmed",
+  "expired",
+  "need_verifycode",
+  "verify_code_blocked",
+  "scaned_but_redirect",
+  "binded_redirect"
+];
+var WeixinApiError = class extends Error {
+  code;
+  status;
+  retcode;
+  timedOut;
+  constructor(code, message, options) {
+    super(message, options.cause === void 0 ? void 0 : { cause: options.cause });
+    this.name = "WeixinApiError";
+    this.code = code;
+    this.status = options.status;
+    this.retcode = options.retcode;
+    this.timedOut = options.timedOut ?? false;
+  }
+};
+async function getBotQrcode(context, options) {
+  const raw = await requestJson2({
+    method: "POST",
+    context,
+    path: `ilink/bot/get_bot_qrcode?bot_type=${encodeURIComponent(options.botType)}`,
+    label: "get_bot_qrcode",
+    body: { local_token_list: [...options.localTokenList] }
+  });
+  const record = asRecord6(raw, "get_bot_qrcode response");
+  const qrcode = requireText3(record, "qrcode", "get_bot_qrcode response");
+  const url = requireText3(record, "qrcode_img_content", "get_bot_qrcode response");
+  return { qrcode, url };
+}
+async function getQrcodeStatus(context, options) {
+  const query = new URLSearchParams({ qrcode: options.qrcode });
+  if (options.verifyCode !== void 0 && options.verifyCode !== "") {
+    query.set("verify_code", options.verifyCode);
+  }
+  const raw = await requestJson2({
+    method: "GET",
+    context,
+    path: `ilink/bot/get_qrcode_status?${query.toString()}`,
+    label: "get_qrcode_status"
+  });
+  const record = asRecord6(raw, "get_qrcode_status response");
+  const status2 = record["status"];
+  if (!isQrcodeStatus(status2)) {
+    throw badBody(`get_qrcode_status response.status is not a known state: ${JSON.stringify(status2)}`);
+  }
+  if (status2 === "confirmed") {
+    return { status: status2, credential: parseCredential(record) };
+  }
+  if (status2 === "scaned_but_redirect") {
+    const redirectHost = optionalText3(record["redirect_host"]);
+    return redirectHost === void 0 ? { status: status2 } : { status: status2, redirectHost };
+  }
+  return { status: status2 };
+}
+async function getUpdates(context, options) {
+  let raw;
+  try {
+    raw = await requestJson2({
+      method: "POST",
+      context,
+      path: "ilink/bot/getupdates",
+      label: "getupdates",
+      body: { get_updates_buf: options.cursor, base_info: baseInfo() }
+    });
+  } catch (error) {
+    if (error instanceof WeixinApiError && error.timedOut) {
+      return { messages: [], cursor: void 0, longPollTimeoutMs: 0 };
+    }
+    throw error;
+  }
+  const record = asRecord6(raw, "getupdates response");
+  const retcode = nonzeroOf(record, "getupdates response");
+  if (retcode !== void 0) throw apiError("getupdates", retcode, record);
+  const messages = parseMessages(record["msgs"]);
+  const cursor = optionalText3(record["get_updates_buf"]);
+  const suggested = optionalFiniteNumber(record["longpolling_timeout_ms"]);
+  return {
+    messages,
+    cursor,
+    longPollTimeoutMs: suggested !== void 0 && suggested > 0 ? suggested : 0
+  };
+}
+async function sendMessage(context, options) {
+  const toUserId = options.toUserId.trim();
+  if (toUserId === "") throw badBody("sendMessage requires a non-empty to_user_id");
+  if (options.text.trim() === "") {
+    throw badBody(`sendMessage to '${toUserId}' has empty text; an empty message must not be sent`);
+  }
+  const msg = {
+    from_user_id: "",
+    to_user_id: toUserId,
+    client_id: randomUUID14(),
+    message_type: 2,
+    message_state: 2,
+    item_list: [{ type: 1, text_item: { text: options.text } }]
+  };
+  if (options.contextToken !== void 0 && options.contextToken !== "") {
+    msg["context_token"] = options.contextToken;
+  }
+  const raw = await requestJson2({
+    method: "POST",
+    context,
+    path: "ilink/bot/sendmessage",
+    label: "sendmessage",
+    body: { msg, base_info: baseInfo() }
+  });
+  const record = asRecord6(raw, "sendmessage response");
+  const retcode = nonzeroOf(record, "sendmessage response");
+  if (retcode !== void 0) throw apiError("sendmessage", retcode, record);
+  const messageId = optionalId(record["message_id"]);
+  return messageId === void 0 ? {} : { messageId };
+}
+async function getConfig(context, options) {
+  const body = { ilink_user_id: options.ilinkUserId, base_info: baseInfo() };
+  if (options.contextToken !== void 0 && options.contextToken !== "") {
+    body["context_token"] = options.contextToken;
+  }
+  const raw = await requestJson2({
+    method: "POST",
+    context,
+    path: "ilink/bot/getconfig",
+    label: "getconfig",
+    body
+  });
+  const record = asRecord6(raw, "getconfig response");
+  const retcode = nonzeroOf(record, "getconfig response");
+  if (retcode !== void 0) throw apiError("getconfig", retcode, record);
+  const typingTicket = optionalText3(record["typing_ticket"]);
+  return typingTicket === void 0 ? {} : { typingTicket };
+}
+async function sendTyping(context, options) {
+  const raw = await requestJson2({
+    method: "POST",
+    context,
+    path: "ilink/bot/sendtyping",
+    label: "sendtyping",
+    body: {
+      ilink_user_id: options.ilinkUserId,
+      typing_ticket: options.typingTicket,
+      status: options.status,
+      base_info: baseInfo()
+    },
+    allowEmptyBody: true
+  });
+  if (raw === void 0) return;
+  const record = asRecord6(raw, "sendtyping response");
+  const retcode = nonzeroOf(record, "sendtyping response");
+  if (retcode !== void 0) throw apiError("sendtyping", retcode, record);
+}
+async function requestJson2(request) {
+  const url = new URL(request.path, ensureTrailingSlash(request.context.baseUrl));
+  const headers = { ...applicationHeaders() };
+  if (request.method === "POST") {
+    headers["Content-Type"] = "application/json";
+    headers["AuthorizationType"] = "ilink_bot_token";
+    headers["X-WECHAT-UIN"] = randomWechatUin();
+  }
+  const token = request.context.token?.trim() ?? "";
+  if (token !== "") headers["Authorization"] = `Bearer ${token}`;
+  const init = {
+    method: request.method,
+    headers,
+    ...request.body === void 0 ? {} : { body: JSON.stringify(request.body) }
+  };
+  const response = await requestText(url, init, request.context.timeoutMs, request.context.signal, request.label);
+  if (!response.ok) {
+    throw new WeixinApiError(
+      "WEIXIN_HTTP",
+      `${request.label} returned HTTP ${response.status}: ${snippet(response.text)}`,
+      { status: response.status }
+    );
+  }
+  if (response.text.trim() === "") {
+    if (request.allowEmptyBody === true) return void 0;
+    throw badBody(`${request.label} returned an empty body; expected a JSON object`);
+  }
+  try {
+    return JSON.parse(response.text);
+  } catch (cause) {
+    throw new WeixinApiError("WEIXIN_BAD_BODY", `${request.label} returned invalid JSON: ${messageOf9(cause)}`, { cause });
+  }
+}
+async function requestText(url, init, timeoutMs, signal, label) {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  timer.unref?.();
+  const onAbort = () => {
+    controller.abort();
+  };
+  if (signal !== void 0) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  }
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    const text = await response.text();
+    return { status: response.status, ok: response.ok, text };
+  } catch (cause) {
+    if (signal?.aborted === true) {
+      throw new WeixinApiError("WEIXIN_HTTP", `${label} was aborted`, { cause });
+    }
+    if (timedOut) {
+      throw new WeixinApiError("WEIXIN_HTTP", `${label} timed out after ${timeoutMs}ms`, {
+        timedOut: true,
+        cause
+      });
+    }
+    throw new WeixinApiError("WEIXIN_HTTP", `${label} failed: ${messageOf9(cause)}`, { cause });
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+  }
+}
+function applicationHeaders() {
+  return {
+    "iLink-App-Id": ILINK_APP_ID,
+    "iLink-App-ClientVersion": String(encodeClientVersion(BUILD_INFO.version))
+  };
+}
+function baseInfo() {
+  return { channel_version: BUILD_INFO.version, bot_agent: BOT_AGENT };
+}
+function randomWechatUin() {
+  const uint32 = randomBytes5(4).readUInt32BE(0);
+  return Buffer.from(String(uint32), "utf8").toString("base64");
+}
+function encodeClientVersion(version) {
+  const [major = 0, minor = 0, patch = 0] = version.split(".").map((part) => {
+    const value = Number.parseInt(part, 10);
+    return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+  });
+  return (major & 255) << 16 | (minor & 255) << 8 | patch & 255;
+}
+function ensureTrailingSlash(url) {
+  return url.endsWith("/") ? url : `${url}/`;
+}
+function parseCredential(record) {
+  const botToken = requireText3(record, "bot_token", "get_qrcode_status confirmed response");
+  const baseUrl = requireText3(record, "baseurl", "get_qrcode_status confirmed response");
+  const ilinkBotId = requireText3(record, "ilink_bot_id", "get_qrcode_status confirmed response");
+  const ilinkUserId = optionalText3(record["ilink_user_id"]);
+  return ilinkUserId === void 0 ? { botToken, baseUrl, ilinkBotId } : { botToken, baseUrl, ilinkBotId, ilinkUserId };
+}
+function parseMessages(value) {
+  if (value === void 0) return [];
+  if (!Array.isArray(value)) throw badBody("getupdates response.msgs must be an array");
+  return value.map((entry, index) => parseMessage(entry, index));
+}
+function parseMessage(value, index) {
+  const label = `getupdates response.msgs[${index}]`;
+  const record = asRecord6(value, label);
+  const itemList = record["item_list"];
+  const items = itemList === void 0 ? [] : parseItems(itemList, label);
+  const messageId = optionalId(record["message_id"]);
+  const fromUserId = optionalText3(record["from_user_id"]);
+  const messageType = optionalFiniteNumber(record["message_type"]);
+  const groupId = optionalText3(record["group_id"]);
+  const contextToken = optionalText3(record["context_token"]);
+  return {
+    ...messageId === void 0 ? {} : { messageId },
+    ...fromUserId === void 0 ? {} : { fromUserId },
+    ...messageType === void 0 ? {} : { messageType },
+    ...groupId === void 0 ? {} : { groupId },
+    ...contextToken === void 0 ? {} : { contextToken },
+    items
+  };
+}
+function parseItems(value, label) {
+  if (!Array.isArray(value)) throw badBody(`${label}.item_list must be an array`);
+  return value.map((entry, index) => {
+    const itemLabel = `${label}.item_list[${index}]`;
+    const record = asRecord6(entry, itemLabel);
+    const type = optionalFiniteNumber(record["type"]);
+    if (type === void 0) throw badBody(`${itemLabel}.type must be a number`);
+    return parseItem(type, record);
+  });
+}
+function parseItem(type, record) {
+  if (type === 1) {
+    const text = optionalText3(field(record["text_item"], "text"));
+    return text === void 0 ? { type } : { type, text };
+  }
+  if (type === 3) {
+    const voice = record["voice_item"];
+    const voiceText = optionalText3(field(voice, "text"));
+    const mediaUrl = mediaUrlOf(voice);
+    return {
+      type,
+      ...voiceText === void 0 ? {} : { voiceText },
+      ...mediaUrl === void 0 ? {} : { mediaUrl }
+    };
+  }
+  if (type === 2 || type === 4 || type === 5) {
+    const item = record[itemKeyOf(type)];
+    const mediaUrl = mediaUrlOf(item);
+    const fileName = optionalText3(field(item, "file_name"));
+    const size = sizeOf(type, item);
+    return {
+      type,
+      ...mediaUrl === void 0 ? {} : { mediaUrl },
+      ...fileName === void 0 ? {} : { fileName },
+      ...size === void 0 ? {} : { size }
+    };
+  }
+  return { type };
+}
+function itemKeyOf(type) {
+  if (type === 2) return "image_item";
+  if (type === 4) return "file_item";
+  return "video_item";
+}
+function mediaUrlOf(item) {
+  return optionalText3(field(field(item, "media"), "full_url"));
+}
+function sizeOf(type, item) {
+  if (type === 2) return optionalFiniteNumber(field(item, "mid_size"));
+  if (type === 5) return optionalFiniteNumber(field(item, "video_size"));
+  const raw = optionalText3(field(item, "len"));
+  if (raw === void 0) return void 0;
+  const value = Number.parseInt(raw, 10);
+  return Number.isSafeInteger(value) && value >= 0 ? value : void 0;
+}
+function field(value, key) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
+  return value[key];
+}
+function asRecord6(value, label) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw badBody(`${label} must be a JSON object, received ${describe(value)}`);
+  }
+  return value;
+}
+function requireText3(record, key, label) {
+  const value = record[key];
+  if (typeof value !== "string" || value.trim() === "") {
+    throw badBody(`${label}.${key} must be a non-empty string, received ${describe(value)}`);
+  }
+  return value.trim();
+}
+function optionalText3(value) {
+  if (typeof value !== "string") return void 0;
+  const trimmed = value.trim();
+  return trimmed === "" ? void 0 : trimmed;
+}
+function optionalFiniteNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : void 0;
+}
+function optionalId(value) {
+  if (typeof value === "number" && Number.isSafeInteger(value)) return String(value);
+  if (typeof value === "string" && value.trim() !== "") return value.trim();
+  return void 0;
+}
+function isQrcodeStatus(value) {
+  return typeof value === "string" && QRCODE_STATUSES.includes(value);
+}
+function nonzeroOf(record, label) {
+  const ret = numberField4(record, "ret", label);
+  const errcode = numberField4(record, "errcode", label);
+  if (ret !== void 0 && ret !== 0) return ret;
+  if (errcode !== void 0 && errcode !== 0) return errcode;
+  return void 0;
+}
+function numberField4(record, key, label) {
+  const value = record[key];
+  if (value === void 0) return void 0;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw badBody(`${label}.${key} must be a number, received ${describe(value)}`);
+  }
+  return value;
+}
+function apiError(label, retcode, record) {
+  const errmsg = optionalText3(record["errmsg"]);
+  return new WeixinApiError(
+    "WEIXIN_API",
+    `${label} returned ret/errcode ${retcode}${errmsg === void 0 ? "" : `: ${errmsg}`}`,
+    { retcode }
+  );
+}
+function badBody(message) {
+  return new WeixinApiError("WEIXIN_BAD_BODY", message, {});
+}
+function describe(value) {
+  if (value === void 0) return "undefined";
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "an array";
+  return `a ${typeof value}`;
+}
+function snippet(text) {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > 300 ? `${flat.slice(0, 300)}\u2026` : flat;
+}
+function messageOf9(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+// packages/plugin/src/im/weixin/bind.ts
+var QR_FETCH_TIMEOUT_MS = 15e3;
+var QR_STATUS_TIMEOUT_MS = 35e3;
+var QR_TTL_MS = 5 * 6e4;
+var MAX_QR_REFRESHES = 1;
+var WeixinBindError = class extends Error {
+  code;
+  constructor(code, message) {
+    super(message);
+    this.name = "WeixinBindError";
+    this.code = code;
+  }
+};
+function createWeixinBinding(options) {
+  const qrBaseUrl = requireHttpUrl(options.qrBaseUrl);
+  let phase = { phase: "idle" };
+  let session;
+  function status2() {
+    return { ...phase };
+  }
+  async function start(callbacks, startOptions) {
+    if (session !== void 0) {
+      throw new WeixinBindError("WEIXIN_BIND_BUSY", "a WeChat QR binding session is already running; cancel it before starting another one");
+    }
+    if (startOptions.signal.aborted) {
+      throw new WeixinBindError("WEIXIN_BIND_ABORTED", "the WeChat QR binding cannot start: the runtime is already shutting down");
+    }
+    const current = {
+      controller: new AbortController(),
+      callbacks,
+      qrcode: "",
+      url: "",
+      pollBaseUrl: qrBaseUrl,
+      verifyCode: void 0,
+      refreshes: 0,
+      issuedAt: options.clock.now(),
+      detach: () => {
+      }
+    };
+    session = current;
+    phase = { phase: "waiting" };
+    const onAbort = () => {
+      if (session === current) cancel();
+    };
+    startOptions.signal.addEventListener("abort", onAbort, { once: true });
+    current.detach = () => {
+      startOptions.signal.removeEventListener("abort", onAbort);
+    };
+    let qr;
+    try {
+      qr = await fetchQrcode(current.controller.signal);
+    } catch (error) {
+      if (startOptions.signal.aborted) {
+        throw new WeixinBindError("WEIXIN_BIND_ABORTED", "the WeChat QR binding was cancelled while fetching the QR code");
+      }
+      if (session !== current) return status2();
+      session = void 0;
+      current.detach();
+      phase = { phase: "failed", reason: messageOf10(error) };
+      throw error;
+    }
+    if (session !== current) {
+      if (startOptions.signal.aborted) {
+        throw new WeixinBindError("WEIXIN_BIND_ABORTED", "the WeChat QR binding was cancelled while fetching the QR code");
+      }
+      return status2();
+    }
+    current.qrcode = qr.qrcode;
+    current.url = qr.url;
+    current.issuedAt = options.clock.now();
+    phase = { phase: "waiting", url: qr.url };
+    callbacks.onQrDisplayed?.(qr.url);
+    void poll(current);
+    return status2();
+  }
+  async function fetchQrcode(signal) {
+    const tokens = await options.localTokenList();
+    return getBotQrcode(
+      { baseUrl: qrBaseUrl, signal, timeoutMs: QR_FETCH_TIMEOUT_MS },
+      { botType: options.botType, localTokenList: tokens }
+    );
+  }
+  async function poll(current) {
+    while (session === current && !current.controller.signal.aborted) {
+      if (options.clock.now() - current.issuedAt >= QR_TTL_MS) {
+        failSession(current, `the WeChat QR code was not confirmed within ${Math.round(QR_TTL_MS / 6e4)} minutes`);
+        return;
+      }
+      try {
+        const result = await getQrcodeStatus(
+          {
+            baseUrl: current.pollBaseUrl,
+            signal: current.controller.signal,
+            timeoutMs: QR_STATUS_TIMEOUT_MS
+          },
+          {
+            qrcode: current.qrcode,
+            ...current.verifyCode === void 0 ? {} : { verifyCode: current.verifyCode }
+          }
+        );
+        if (session !== current) return;
+        if (await handleStatus(current, result)) return;
+      } catch (error) {
+        if (session !== current || current.controller.signal.aborted) return;
+        if (!(error instanceof WeixinApiError && error.timedOut)) {
+          options.logger?.warn?.(`dsh-soulmojito im weixin bind: QR status poll failed, retrying: ${messageOf10(error)}`);
+        }
+      }
+      await options.clock.sleep(options.pollIntervalMs, current.controller.signal);
+    }
+  }
+  async function handleStatus(current, result) {
+    switch (result.status) {
+      case "wait":
+        if (phase.phase !== "verify") phase = waitingOf(current);
+        return false;
+      case "scaned":
+        current.verifyCode = void 0;
+        phase = waitingOf(current);
+        return false;
+      case "need_verifycode":
+        phase = {
+          phase: "verify",
+          url: current.url,
+          prompt: current.verifyCode === void 0 ? "\u8F93\u5165\u624B\u673A\u5FAE\u4FE1\u663E\u793A\u7684\u6570\u5B57\uFF0C\u4EE5\u7EE7\u7EED\u8FDE\u63A5" : "\u9A8C\u8BC1\u7801\u4E0D\u6B63\u786E\uFF0C\u8BF7\u91CD\u65B0\u8F93\u5165"
+        };
+        return false;
+      case "scaned_but_redirect": {
+        const host = result.redirectHost;
+        if (host === void 0) {
+          options.logger?.warn?.("dsh-soulmojito im weixin bind: scaned_but_redirect without redirect_host; keeping the current host");
+          return false;
+        }
+        current.pollBaseUrl = redirectBaseUrl(host, current.pollBaseUrl);
+        options.logger?.info?.(`dsh-soulmojito im weixin bind: polling host switched to ${new URL(current.pollBaseUrl).host}`);
+        return false;
+      }
+      case "confirmed": {
+        const credential = result.credential;
+        if (credential === void 0) {
+          failSession(current, "the WeChat backend reported confirmed without a usable credential");
+          return true;
+        }
+        phase = { phase: "saving" };
+        try {
+          await current.callbacks.onSuccess(credential);
+        } catch (error) {
+          failSession(current, `saving the WeChat credential failed: ${messageOf10(error)}`);
+          return true;
+        }
+        if (session === current) {
+          session = void 0;
+          current.detach();
+          phase = { phase: "idle" };
+        }
+        return true;
+      }
+      case "expired": {
+        if (current.refreshes >= MAX_QR_REFRESHES) {
+          failSession(current, "the WeChat QR code expired again after one refresh");
+          return true;
+        }
+        return !await refreshSession(current);
+      }
+      case "verify_code_blocked":
+        failSession(current, "too many verification attempts; the WeChat backend blocked this QR code");
+        return true;
+      case "binded_redirect":
+        if (session === current) {
+          session = void 0;
+          current.detach();
+          phase = { phase: "idle" };
+        }
+        options.logger?.info?.("dsh-soulmojito im weixin bind: this bot is already bound; no new credential was issued");
+        current.callbacks.onAlreadyBound?.();
+        return true;
+    }
+  }
+  async function refreshSession(current) {
+    let qr;
+    try {
+      qr = await fetchQrcode(current.controller.signal);
+    } catch (error) {
+      failSession(current, `refreshing the WeChat QR code failed: ${messageOf10(error)}`);
+      return false;
+    }
+    if (session !== current) return false;
+    current.qrcode = qr.qrcode;
+    current.url = qr.url;
+    current.pollBaseUrl = qrBaseUrl;
+    current.verifyCode = void 0;
+    current.refreshes += 1;
+    current.issuedAt = options.clock.now();
+    phase = { phase: "waiting", url: qr.url };
+    current.callbacks.onQrDisplayed?.(qr.url);
+    return true;
+  }
+  async function refresh() {
+    const current = session;
+    if (current === void 0) {
+      throw new WeixinBindError("WEIXIN_BIND_IDLE", "no WeChat QR binding is running; start a new scan first");
+    }
+    if (current.refreshes >= MAX_QR_REFRESHES) {
+      throw new WeixinBindError(
+        "WEIXIN_BIND_REFRESH_EXHAUSTED",
+        "the WeChat QR code has already been refreshed once; start a new scan instead"
+      );
+    }
+    if (!await refreshSession(current)) {
+      const reason = phase.phase === "failed" ? phase.reason : void 0;
+      throw new WeixinBindError(
+        "WEIXIN_BIND_REFRESH_FAILED",
+        reason ?? "refreshing the WeChat QR code failed"
+      );
+    }
+    return status2();
+  }
+  function submitVerifyCode(code) {
+    const current = session;
+    if (current === void 0) {
+      throw new WeixinBindError("WEIXIN_BIND_IDLE", "no WeChat QR binding is running; start a new scan first");
+    }
+    if (phase.phase !== "verify") {
+      throw new WeixinBindError(
+        "WEIXIN_BIND_NOT_VERIFYING",
+        `the WeChat QR binding is in phase '${phase.phase}', not 'verify'; no verification code is expected now`
+      );
+    }
+    const trimmed = code.trim();
+    if (trimmed === "") {
+      throw new WeixinBindError("WEIXIN_BIND_BAD_CODE", "the WeChat verification code must be a non-empty string");
+    }
+    current.verifyCode = trimmed;
+    phase = waitingOf(current);
+    return status2();
+  }
+  function cancel() {
+    const current = session;
+    if (current === void 0) return status2();
+    session = void 0;
+    phase = { phase: "idle" };
+    current.detach();
+    current.controller.abort();
+    return status2();
+  }
+  function failSession(current, reason) {
+    if (session !== current) return;
+    session = void 0;
+    current.detach();
+    current.controller.abort();
+    phase = { phase: "failed", reason };
+    current.callbacks.onFailure?.(new Error(reason));
+  }
+  function waitingOf(current) {
+    return { phase: "waiting", url: current.url };
+  }
+  return {
+    start,
+    submitVerifyCode,
+    refresh,
+    cancel,
+    status: status2,
+    dispose: () => {
+      cancel();
+    }
+  };
+}
+function redirectBaseUrl(host, currentBaseUrl) {
+  const protocol = new URL(currentBaseUrl).protocol === "http:" ? "http:" : "https:";
+  return `${protocol}//${host}`;
+}
+function requireHttpUrl(value) {
+  const trimmed = value.trim();
+  if (trimmed === "") throw new TypeError("the WeChat QR base URL must be a non-empty absolute URL");
+  const parsed = new URL(trimmed);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new TypeError(`the WeChat QR base URL '${trimmed}' has protocol '${parsed.protocol}'; expected http(s)`);
+  }
+  return trimmed.replace(/\/+$/, "");
+}
+function messageOf10(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+// packages/plugin/src/im/weixin/channel.ts
+import { randomUUID as randomUUID15 } from "node:crypto";
+
+// packages/plugin/src/im/weixin/clock.ts
+var WEIXIN_REAL_CLOCK = {
+  now: () => Date.now(),
+  sleep: (ms, signal) => new Promise((resolve8) => {
+    if (signal.aborted) {
+      resolve8();
+      return;
+    }
+    let timer;
+    const onAbort = () => {
+      finish();
+    };
+    const finish = () => {
+      if (timer !== void 0) clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      resolve8();
+    };
+    timer = setTimeout(finish, ms);
+    timer.unref?.();
+    signal.addEventListener("abort", onAbort, { once: true });
+  })
+};
+
+// packages/plugin/src/im/weixin/channel.ts
+var WEIXIN_LONG_POLL_TIMEOUT_MS = 35e3;
+var LONG_POLL_GRACE_MS = 5e3;
+var LONG_POLL_MIN_MS = 1e3;
+var LONG_POLL_MAX_MS = 12e4;
+var SEND_TIMEOUT_MS = 15e3;
+var CONFIG_TIMEOUT_MS = 1e4;
+var STALE_TOKEN_PAUSE_MS = 60 * 60 * 1e3;
+var RETRY_DELAY_MS = 2e3;
+var BACKOFF_DELAY_MS = 3e4;
+var FAILURES_BEFORE_BACKOFF = 3;
+var START_PROBE_TIMEOUT_MS = 3e3;
+var PEER_LABEL_LENGTH = 8;
+var MAX_CONTEXT_TOKENS = 500;
+var WeixinChannelError = class extends Error {
+  code;
+  constructor(code, message, options) {
+    super(message, options);
+    this.name = "WeixinChannelError";
+    this.code = code;
+  }
+};
+function createStartGate() {
+  let resolveGate;
+  let rejectGate;
+  let settled = false;
+  const promise = new Promise((resolve8, reject) => {
+    resolveGate = resolve8;
+    rejectGate = reject;
+  });
+  return {
+    promise,
+    get settled() {
+      return settled;
+    },
+    settle(error) {
+      if (settled) return;
+      settled = true;
+      if (error === void 0) resolveGate?.();
+      else rejectGate?.(error);
+    }
+  };
+}
+var WeixinChannel = class {
+  channel = "weixin";
+  accountId;
+  token;
+  baseUrl;
+  router;
+  loadCursor;
+  saveCursor;
+  loadContextTokens;
+  saveContextTokens;
+  clock;
+  typingEnabled;
+  logger;
+  longPollTimeoutMs;
+  cursor = "";
+  contextTokens = {};
+  controller;
+  lifetimeSignal;
+  abortListener;
+  loopPromise;
+  gate;
+  starting = false;
+  onlineSince;
+  lastError;
+  pausedUntil;
+  pauseReason;
+  /** 同一账号的出站按整轮串行：两轮回复并发时不得出现 A1,B1,A2,B2 的碎片。 */
+  sendChain = Promise.resolve();
+  constructor(options) {
+    this.token = requireToken(options.token, options.accountId);
+    this.baseUrl = requireBaseUrl(options.baseUrl, options.accountId);
+    this.accountId = options.accountId;
+    this.router = options.router;
+    this.loadCursor = options.loadCursor;
+    this.saveCursor = options.saveCursor;
+    this.loadContextTokens = options.loadContextTokens;
+    this.saveContextTokens = options.saveContextTokens;
+    this.clock = options.clock;
+    this.longPollTimeoutMs = clampLongPoll(options.longPollTimeoutMs);
+    this.typingEnabled = options.typingEnabled;
+    this.logger = options.logger;
+  }
+  async start(signal) {
+    if (this.loopPromise !== void 0) return;
+    if (signal.aborted) {
+      throw new WeixinChannelError("WEIXIN_CLOSED", `weixin account '${this.accountId}' cannot start: signal is already aborted`);
+    }
+    this.starting = true;
+    this.lastError = void 0;
+    this.pausedUntil = void 0;
+    this.pauseReason = void 0;
+    try {
+      const [cursor, tokens] = await Promise.all([this.loadCursor(), this.loadContextTokens()]);
+      this.cursor = cursor ?? "";
+      this.contextTokens = { ...tokens };
+    } catch (error) {
+      this.starting = false;
+      throw new WeixinChannelError(
+        "WEIXIN_STATE",
+        `weixin account '${this.accountId}' could not load its persisted cursor/context tokens: ${messageOf11(error)}`,
+        { cause: error }
+      );
+    }
+    const controller = new AbortController();
+    const onAbort = () => {
+      controller.abort();
+    };
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+    this.lifetimeSignal = signal;
+    this.abortListener = onAbort;
+    this.controller = controller;
+    const gate = createStartGate();
+    this.gate = gate;
+    const loop = this.runLoop(controller.signal, gate);
+    this.loopPromise = loop;
+    if (controller.signal.aborted) {
+      gate.settle(new WeixinChannelError("WEIXIN_CLOSED", `weixin account '${this.accountId}' cannot start: the runtime aborted while loading its state`));
+    }
+    const probe = setTimeout(() => {
+      gate.settle(void 0);
+    }, START_PROBE_TIMEOUT_MS);
+    probe.unref?.();
+    try {
+      await gate.promise;
+    } catch (error) {
+      await this.stop();
+      if (error instanceof WeixinChannelError) throw error;
+      throw new WeixinChannelError(
+        "WEIXIN_CLOSED",
+        `weixin account '${this.accountId}' failed to start: ${messageOf11(error)}`,
+        { cause: error }
+      );
+    } finally {
+      clearTimeout(probe);
+    }
+    if (this.starting) {
+      this.starting = false;
+      if (this.onlineSince === void 0) this.onlineSince = this.clock.now();
+    }
+    void loop.catch((error) => {
+      this.logger?.warn?.(`dsh-soulmojito im weixin/${this.accountId}: poll loop ended: ${messageOf11(error)}`);
+    });
+  }
+  async stop() {
+    const loop = this.loopPromise;
+    this.loopPromise = void 0;
+    this.gate?.settle(void 0);
+    this.gate = void 0;
+    this.controller?.abort();
+    this.controller = void 0;
+    this.detachAbort();
+    if (loop !== void 0) {
+      await loop.catch((error) => {
+        this.logger?.warn?.(`dsh-soulmojito im weixin/${this.accountId}: poll loop ended: ${messageOf11(error)}`);
+      });
+    }
+    this.starting = false;
+    this.onlineSince = void 0;
+    this.lastError = void 0;
+    this.pausedUntil = void 0;
+    this.pauseReason = void 0;
+  }
+  status() {
+    if (this.pausedUntil !== void 0 && this.clock.now() < this.pausedUntil) {
+      return {
+        state: "paused",
+        reason: this.pauseReason ?? "the WeChat bot token is stale",
+        until: this.pausedUntil
+      };
+    }
+    if (this.lastError !== void 0) return { state: "error", message: this.lastError };
+    if (this.starting) return { state: "starting" };
+    if (this.onlineSince !== void 0) return { state: "online", since: this.onlineSince };
+    return { state: "idle" };
+  }
+  async send(target, parts) {
+    if (target.channel !== "weixin") {
+      throw new WeixinChannelError("WEIXIN_BAD_TARGET", `weixin channel cannot send to channel '${target.channel}'`);
+    }
+    if (target.accountId !== this.accountId) {
+      throw new WeixinChannelError(
+        "WEIXIN_BAD_TARGET",
+        `weixin account '${target.accountId}' cannot send through account '${this.accountId}'`
+      );
+    }
+    if (target.scope !== "private") {
+      throw new WeixinChannelError("WEIXIN_BAD_TARGET", `weixin only supports private chats, got scope '${target.scope}'`);
+    }
+    const pausedFor = this.pauseRemaining();
+    if (pausedFor > 0) throw pausedError(this.accountId, pausedFor, this.clock.now());
+    if (parts.length === 0) return { parts: 0, at: this.clock.now() };
+    const queued = this.sendChain.then(() => this.sendParts(target, parts));
+    this.sendChain = queued.then(noop, noop);
+    return queued;
+  }
+  /**
+   * 输入状态（可选能力）：`getconfig` 取 ticket → `sendtyping`。
+   *
+   * 失败只 warn：打字状态掉了，用户顶多少看到一个「正在输入」，回复本身不能
+   * 因此失败；没有 ticket 的账号直接跳过，不算错误。
+   */
+  async setTyping(peerId, status2) {
+    if (!this.typingEnabled) return;
+    if (this.pauseRemaining() > 0) return;
+    try {
+      const contextToken = this.contextTokens[peerId];
+      const config = await getConfig(
+        {
+          baseUrl: this.baseUrl,
+          token: this.token,
+          timeoutMs: CONFIG_TIMEOUT_MS,
+          ...this.controller === void 0 ? {} : { signal: this.controller.signal }
+        },
+        {
+          ilinkUserId: peerId,
+          ...contextToken === void 0 ? {} : { contextToken }
+        }
+      );
+      if (config.typingTicket === void 0) {
+        this.logger?.debug?.(`dsh-soulmojito im weixin/${this.accountId}: no typing ticket for ${peerId}; typing skipped`);
+        return;
+      }
+      await sendTyping(
+        {
+          baseUrl: this.baseUrl,
+          token: this.token,
+          timeoutMs: CONFIG_TIMEOUT_MS,
+          ...this.controller === void 0 ? {} : { signal: this.controller.signal }
+        },
+        { ilinkUserId: peerId, typingTicket: config.typingTicket, status: status2 }
+      );
+    } catch (error) {
+      this.logger?.warn?.(
+        `dsh-soulmojito im weixin/${this.accountId}: typing ${status2} for ${peerId} failed: ${messageOf11(error)}`
+      );
+    }
+  }
+  async sendParts(target, parts) {
+    if (this.controller === void 0) {
+      throw new WeixinChannelError(
+        "WEIXIN_CLOSED",
+        `weixin account '${this.accountId}' is not running; replies can only be delivered while polling is active`
+      );
+    }
+    const pausedFor = this.pauseRemaining();
+    if (pausedFor > 0) throw pausedError(this.accountId, pausedFor, this.clock.now());
+    const contextToken = this.contextTokens[target.peerId];
+    if (contextToken === void 0) {
+      this.logger?.warn?.(
+        `dsh-soulmojito im weixin/${this.accountId}: no context_token for ${target.peerId}; sending without context`
+      );
+    }
+    void this.setTyping(target.peerId, 2);
+    let messageId;
+    for (const part of parts) {
+      try {
+        const sent = await sendMessage(
+          {
+            baseUrl: this.baseUrl,
+            token: this.token,
+            timeoutMs: SEND_TIMEOUT_MS,
+            ...this.controller === void 0 ? {} : { signal: this.controller.signal }
+          },
+          {
+            toUserId: target.peerId,
+            text: part.text,
+            ...contextToken === void 0 ? {} : { contextToken }
+          }
+        );
+        if (sent.messageId !== void 0) messageId = sent.messageId;
+      } catch (error) {
+        throw new WeixinChannelError(
+          "WEIXIN_SEND_FAILED",
+          `weixin send part ${part.index + 1}/${part.total} to ${target.scope}/${target.peerId} failed: ${messageOf11(error)}`,
+          { cause: error }
+        );
+      }
+    }
+    return {
+      parts: parts.length,
+      at: this.clock.now(),
+      ...messageId === void 0 ? {} : { messageId }
+    };
+  }
+  async runLoop(signal, gate) {
+    let failures = 0;
+    while (!signal.aborted) {
+      const pauseRemaining = this.pauseRemaining();
+      if (pauseRemaining > 0) {
+        await this.clock.sleep(pauseRemaining, signal);
+        continue;
+      }
+      try {
+        const page = await getUpdates(
+          {
+            baseUrl: this.baseUrl,
+            token: this.token,
+            signal,
+            timeoutMs: this.longPollTimeoutMs + LONG_POLL_GRACE_MS
+          },
+          { cursor: this.cursor }
+        );
+        failures = 0;
+        this.pausedUntil = void 0;
+        this.pauseReason = void 0;
+        this.lastError = void 0;
+        if (this.onlineSince === void 0) this.onlineSince = this.clock.now();
+        this.starting = false;
+        gate.settle(void 0);
+        if (page.longPollTimeoutMs > 0) this.longPollTimeoutMs = clampLongPoll(page.longPollTimeoutMs);
+        for (const message of page.messages) {
+          try {
+            await this.deliver(message);
+          } catch (error) {
+            this.logger?.warn?.(
+              `dsh-soulmojito im weixin/${this.accountId}: inbound message failed: ${messageOf11(error)}`
+            );
+          }
+        }
+        if (page.cursor !== void 0 && page.cursor !== "" && page.cursor !== this.cursor) {
+          this.cursor = page.cursor;
+          await this.persistCursor(page.cursor);
+        }
+      } catch (error) {
+        if (signal.aborted) break;
+        if (isStaleToken(error)) {
+          const until = this.clock.now() + STALE_TOKEN_PAUSE_MS;
+          this.pausedUntil = until;
+          this.pauseReason = `the WeChat bot token for '${this.accountId}' was rejected with ret/errcode ${WEIXIN_STALE_TOKEN_RETCODE}; paused until ${new Date(until).toISOString()}`;
+          this.starting = false;
+          this.onlineSince = void 0;
+          this.lastError = void 0;
+          this.logger?.warn?.(`dsh-soulmojito im weixin/${this.accountId}: ${this.pauseReason}`);
+          gate.settle(void 0);
+          await this.clock.sleep(STALE_TOKEN_PAUSE_MS, signal);
+          continue;
+        }
+        failures += 1;
+        const reason = `weixin getupdates for '${this.accountId}' failed (${failures} consecutive): ${messageOf11(error)}`;
+        this.lastError = reason;
+        this.logger?.warn?.(`dsh-soulmojito im weixin/${this.accountId}: ${reason}`);
+        if (!gate.settled) {
+          gate.settle(
+            new WeixinChannelError("WEIXIN_CLOSED", `weixin account '${this.accountId}' failed to start: ${messageOf11(error)}`, { cause: error })
+          );
+          return;
+        }
+        if (failures >= FAILURES_BEFORE_BACKOFF) {
+          failures = 0;
+          await this.clock.sleep(BACKOFF_DELAY_MS, signal);
+        } else {
+          await this.clock.sleep(RETRY_DELAY_MS, signal);
+        }
+      }
+    }
+  }
+  /** 游标落盘失败只 warn：内存游标已推进，下一轮仍能续读，不该卡住消息流。 */
+  async persistCursor(cursor) {
+    try {
+      await this.saveCursor(cursor);
+    } catch (error) {
+      this.logger?.warn?.(
+        `dsh-soulmojito im weixin/${this.accountId}: saving get_updates_buf failed: ${messageOf11(error)}`
+      );
+    }
+  }
+  pauseRemaining() {
+    if (this.pausedUntil === void 0) return 0;
+    const remaining = this.pausedUntil - this.clock.now();
+    return remaining > 0 ? remaining : 0;
+  }
+  async deliver(message) {
+    const inbound = this.inboundOf(message);
+    if (inbound === void 0) return;
+    if (message.contextToken !== void 0) await this.rememberContextToken(inbound.peerId, message.contextToken);
+    void this.setTyping(inbound.peerId, 1);
+    await this.router.handle(inbound);
+  }
+  /**
+   * 单条消息 → `ImInbound`。返回 undefined 表示按协议主动忽略：
+   * `message_type === 2`（机器人自己的回显）与带 `group_id` 的群消息。
+   * `message_type` 是可选字段：缺失或为 1 都按真实用户消息处理。
+   *
+   * 正文取 `type:1` 的 text_item 拼接；没有正文时用 `type:3` 的语音转录；
+   * 图片/文件/视频只记 media，正文占位交给 router 统一拼「（附件：…）」。
+   */
+  inboundOf(message) {
+    if (message.messageType === 2) {
+      this.logger?.debug?.(
+        `dsh-soulmojito im weixin/${this.accountId}: ignored message_type ${String(message.messageType)}`
+      );
+      return void 0;
+    }
+    if (message.groupId !== void 0) {
+      this.logger?.debug?.(`dsh-soulmojito im weixin/${this.accountId}: ignored a group message`);
+      return void 0;
+    }
+    const peerId = message.fromUserId?.trim() ?? "";
+    if (peerId === "") {
+      throw new WeixinChannelError(
+        "WEIXIN_BAD_MESSAGE",
+        `weixin account '${this.accountId}' got a message without from_user_id; it cannot be routed to any peer`
+      );
+    }
+    const textParts = [];
+    const voiceParts = [];
+    const media = [];
+    for (const item of message.items) {
+      if (item.type === 1 && item.text !== void 0) {
+        textParts.push(item.text);
+        continue;
+      }
+      if (item.type === 3) {
+        if (item.voiceText !== void 0) {
+          voiceParts.push(item.voiceText);
+          continue;
+        }
+        media.push({
+          kind: "voice",
+          ...item.mediaUrl === void 0 ? {} : { url: item.mediaUrl }
+        });
+        continue;
+      }
+      if (item.type === 2 || item.type === 4 || item.type === 5) {
+        media.push({
+          kind: item.type === 2 ? "image" : item.type === 4 ? "file" : "video",
+          ...item.mediaUrl === void 0 ? {} : { url: item.mediaUrl },
+          ...item.fileName === void 0 ? {} : { name: item.fileName },
+          ...item.size === void 0 ? {} : { size: item.size }
+        });
+      }
+    }
+    const text = textParts.length > 0 ? textParts.join("\n") : voiceParts.join("\n");
+    const messageId = message.messageId;
+    const receivedAt = this.clock.now();
+    return {
+      channel: "weixin",
+      accountId: this.accountId,
+      scope: "private",
+      peerId,
+      senderId: peerId,
+      senderName: peerId.slice(0, PEER_LABEL_LENGTH),
+      text,
+      media,
+      // 平台不给 message_id 时用随机 UUID 降级：宁可重复投递，不可吞消息。
+      dedupeKey: imDedupeKey("weixin", this.accountId, "private", peerId, messageId ?? randomUUID15()),
+      receivedAt
+    };
+  }
+  async rememberContextToken(peerId, contextToken) {
+    if (this.contextTokens[peerId] === contextToken) return;
+    delete this.contextTokens[peerId];
+    this.contextTokens[peerId] = contextToken;
+    const keys = Object.keys(this.contextTokens);
+    if (keys.length > MAX_CONTEXT_TOKENS) {
+      for (const key of keys.slice(0, keys.length - MAX_CONTEXT_TOKENS)) delete this.contextTokens[key];
+    }
+    try {
+      await this.saveContextTokens({ ...this.contextTokens });
+    } catch (error) {
+      this.logger?.warn?.(
+        `dsh-soulmojito im weixin/${this.accountId}: saving context token failed: ${messageOf11(error)}`
+      );
+    }
+  }
+  detachAbort() {
+    if (this.lifetimeSignal !== void 0 && this.abortListener !== void 0) {
+      this.lifetimeSignal.removeEventListener("abort", this.abortListener);
+    }
+    this.lifetimeSignal = void 0;
+    this.abortListener = void 0;
+  }
+};
+function isStaleToken(error) {
+  return error instanceof WeixinApiError && error.retcode === WEIXIN_STALE_TOKEN_RETCODE;
+}
+function pausedError(accountId, remainingMs, now) {
+  const resumeAt = new Date(now + remainingMs).toISOString();
+  return new WeixinChannelError(
+    "WEIXIN_PAUSED",
+    `weixin account '${accountId}' is paused until ${resumeAt} after ret/errcode ${WEIXIN_STALE_TOKEN_RETCODE}; nothing can be sent before then`
+  );
+}
+function clampLongPoll(value) {
+  if (!Number.isFinite(value) || value <= 0) return WEIXIN_LONG_POLL_TIMEOUT_MS;
+  return Math.min(Math.max(Math.trunc(value), LONG_POLL_MIN_MS), LONG_POLL_MAX_MS);
+}
+function requireToken(value, accountId) {
+  const token = value.trim();
+  if (token === "") {
+    throw new WeixinChannelError(
+      "WEIXIN_BAD_SECRET",
+      `weixin account '${accountId}' has no botToken; secret.botToken must be a non-empty string`
+    );
+  }
+  return token;
+}
+function requireBaseUrl(value, accountId) {
+  const baseUrl = value.trim();
+  if (baseUrl === "") {
+    throw new WeixinChannelError(
+      "WEIXIN_BAD_SECRET",
+      `weixin account '${accountId}' has no baseUrl; secret.baseUrl must be the API host returned by the QR scan`
+    );
+  }
+  let parsed;
+  try {
+    parsed = new URL(baseUrl);
+  } catch (cause) {
+    throw new WeixinChannelError(
+      "WEIXIN_BAD_SECRET",
+      `weixin account '${accountId}' has an invalid baseUrl '${baseUrl}'; expected an absolute http(s) URL`,
+      { cause }
+    );
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new WeixinChannelError(
+      "WEIXIN_BAD_SECRET",
+      `weixin account '${accountId}' has baseUrl '${baseUrl}' with protocol '${parsed.protocol}'; expected http(s)`
+    );
+  }
+  return baseUrl.replace(/\/+$/, "");
+}
+function messageOf11(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function noop() {
+}
+
 // packages/plugin/src/http/im.ts
 init_errors();
 init_io();
@@ -48259,6 +49517,7 @@ async function handleImApi(req, res, url, route, method, db, runtime) {
       if (error instanceof ImChannelUnsupportedError) throw new HttpError(501, error.message);
       if (error instanceof OneBotError) throw new HttpError(400, error.message);
       if (error instanceof QQChannelError) throw new HttpError(400, error.message);
+      if (error instanceof WeixinChannelError) throw new HttpError(weixinChannelErrorStatus(error.code), error.message);
       if (error instanceof QqRuntimeError) throw new HttpError(503, error.message);
       throw error;
     }
@@ -48278,16 +49537,35 @@ async function handleImApi(req, res, url, route, method, db, runtime) {
     if (runtime === void 0) throw new HttpError(503, "IM runtime is not available in this host process");
     const body = await readJson(req);
     const channel = parseChannel(body.channel);
-    if (channel !== "qq") {
-      throw new HttpError(501, `QR binding for '${channel}' is not available in this build; only 'qq' can be bound by QR code`);
+    if (channel === "onebot") {
+      throw new HttpError(501, "QR binding for 'onebot' is not available: OneBot endpoints are configured with a token, not a QR code");
     }
     if (runtime.startQrBind === void 0) throw new HttpError(501, "this IM runtime exposes no QR binding");
     try {
-      return sendJson(res, 200, { ok: true, ...await runtime.startQrBind("qq") });
+      return sendJson(res, 200, { ok: true, ...await runtime.startQrBind(channel) });
     } catch (error) {
       if (error instanceof QQBindError) throw new HttpError(error.code === "QQ_BIND_BUSY" ? 409 : 503, error.message);
+      if (error instanceof WeixinBindError) throw new HttpError(bindErrorStatus(error.code), error.message);
+      if (error instanceof WeixinApiError) throw new HttpError(503, error.message);
       if (error instanceof ImChannelUnsupportedError) throw new HttpError(501, error.message);
       if (error instanceof QqRuntimeError) throw new HttpError(503, error.message);
+      throw error;
+    }
+  }
+  if (method === "POST" && route === "im/bind/verify") {
+    if (runtime === void 0) throw new HttpError(503, "IM runtime is not available in this host process");
+    if (runtime.submitQrVerifyCode === void 0) {
+      throw new HttpError(501, "this IM runtime exposes no verification-code binding (only the WeChat QR flow needs one)");
+    }
+    const body = await readJson(req);
+    const code = body.code;
+    if (typeof code !== "string" || code.trim() === "") {
+      throw new HttpError(400, "code must be a non-empty string (the digits shown in the mobile WeChat app)");
+    }
+    try {
+      return sendJson(res, 200, { ok: true, ...runtime.submitQrVerifyCode(code) });
+    } catch (error) {
+      if (error instanceof WeixinBindError) throw new HttpError(bindErrorStatus(error.code), error.message);
       throw error;
     }
   }
@@ -48416,12 +49694,21 @@ function parseChannel(value) {
   }
   return value;
 }
+function weixinChannelErrorStatus(code) {
+  if (code === "WEIXIN_BAD_SECRET" || code === "WEIXIN_BAD_TARGET" || code === "WEIXIN_BAD_MESSAGE") return 400;
+  return 503;
+}
+function bindErrorStatus(code) {
+  if (code === "WEIXIN_BIND_BAD_CODE") return 400;
+  if (code === "WEIXIN_BIND_BUSY" || code === "WEIXIN_BIND_NOT_VERIFYING" || code === "WEIXIN_BIND_IDLE" || code === "WEIXIN_BIND_REFRESH_EXHAUSTED") return 409;
+  return 503;
+}
 function parseScope(value) {
   if (value !== "private" && value !== "group") throw new HttpError(400, "scope must be 'private' or 'group'");
   return value;
 }
-function requireId(value, field) {
-  if (typeof value !== "string" || value.trim() === "") throw new HttpError(400, `${field} must be a non-empty string`);
+function requireId(value, field2) {
+  if (typeof value !== "string" || value.trim() === "") throw new HttpError(400, `${field2} must be a non-empty string`);
   return value.trim();
 }
 
@@ -48435,7 +49722,7 @@ import { resolve as resolve6 } from "node:path";
 
 // packages/plugin/src/memory-maintenance.ts
 init_src();
-import { randomUUID as randomUUID14 } from "node:crypto";
+import { randomUUID as randomUUID16 } from "node:crypto";
 var MAINTENANCE_MAX_LLM_REQUESTS = 24;
 var MAINTENANCE_OPENING_MAX_CHARS = 1e5;
 var MAINTENANCE_PAGE_RECORDS = 32;
@@ -48463,7 +49750,7 @@ async function startMemoryMaintenance(ctx, deps, scope) {
   const existing = activeRuns.get(key);
   if (existing !== void 0) throw new MaintenanceRunConflictError(scope.character, scope.chatId, existing.runId);
   const active = {
-    runId: randomUUID14(),
+    runId: randomUUID16(),
     character: scope.character,
     chatId: scope.chatId,
     startedAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -48664,7 +49951,7 @@ async function executeRun(ctx, deps, scope, active) {
       opening = buildOpeningMessage(run, listing);
     }
     const messages = [
-      { role: "user", id: randomUUID14(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
+      { role: "user", id: randomUUID16(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
     ];
     let outcome = "completed";
     let errorMessage7;
@@ -48721,7 +50008,7 @@ async function executeRun(ctx, deps, scope, active) {
         blocks.push({ type: "text", text: textBuffer });
       }
       const toolCalls = blocks.filter((block) => block.type === "tool-call");
-      messages.push({ role: "assistant", id: randomUUID14(), content: blocks, source: { kind: "model", provider: run.provider, model: run.model } });
+      messages.push({ role: "assistant", id: randomUUID16(), content: blocks, source: { kind: "model", provider: run.provider, model: run.model } });
       if (toolCalls.length === 0) {
         report = textBuffer !== "" ? textBuffer : blocks.filter((block) => block.type === "text").map((block) => String(block.text ?? "")).join("");
         break;
@@ -48735,7 +50022,7 @@ async function executeRun(ctx, deps, scope, active) {
         const result = await executeToolCall(run, call);
         messages.push({
           role: "tool",
-          id: randomUUID14(),
+          id: randomUUID16(),
           content: [{ type: "text", text: safeJson(result.payload) }],
           source: { kind: "tool", callId: call.id },
           toolCallId: call.id,
@@ -49038,8 +50325,8 @@ function parseEdits(value) {
         expectedRevision: record.expectedRevision,
         ...record.content === void 0 ? {} : { content: record.content },
         ...record.tags === void 0 ? {} : { tags: record.tags },
-        ...record.importance === void 0 ? {} : { importance: Math.max(0, Math.min(1, numberField4(record.importance, "importance"))) },
-        ...record.confidence === void 0 ? {} : { confidence: Math.max(0, Math.min(1, numberField4(record.confidence, "confidence"))) },
+        ...record.importance === void 0 ? {} : { importance: Math.max(0, Math.min(1, numberField5(record.importance, "importance"))) },
+        ...record.confidence === void 0 ? {} : { confidence: Math.max(0, Math.min(1, numberField5(record.confidence, "confidence"))) },
         ...record.reason === "merge" ? { reason: "merge" } : {}
       });
       return;
@@ -49059,8 +50346,8 @@ function parseEdits(value) {
         content: record.content,
         kind: record.kind,
         ...record.tags === void 0 ? {} : { tags: record.tags },
-        ...record.importance === void 0 ? {} : { importance: Math.max(0, Math.min(1, numberField4(record.importance, "importance"))) },
-        ...record.confidence === void 0 ? {} : { confidence: Math.max(0, Math.min(1, numberField4(record.confidence, "confidence"))) }
+        ...record.importance === void 0 ? {} : { importance: Math.max(0, Math.min(1, numberField5(record.importance, "importance"))) },
+        ...record.confidence === void 0 ? {} : { confidence: Math.max(0, Math.min(1, numberField5(record.confidence, "confidence"))) }
       });
       return;
     }
@@ -49267,7 +50554,7 @@ async function toolCompleteMaintenance(run, args) {
   run.summary.completion = { baseFloor: base, headFloor: head };
   return { payload: { ok: true, baseFloor: base, headFloor: head, coveredRecords: records.length }, isError: false };
 }
-function numberField4(value, label) {
+function numberField5(value, label) {
   if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${label} must be a finite number`);
   return value;
 }
@@ -49395,16 +50682,16 @@ function validateCardChangeShape(entry, index) {
   if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
     throw new Error(`changes[${index}] must be an object of { field, currentValue, newValue, note? }`);
   }
-  const { field, currentValue, newValue, note } = entry;
-  if (typeof field !== "string" || field.trim() === "") throw new Error(`changes[${index}].field must be a non-empty string`);
-  if (!isValidCardPlanValue(currentValue)) throw new Error(`changes[${index}].currentValue for field '${field}' must be a string or string array`);
-  if (!isValidCardPlanValue(newValue)) throw new Error(`changes[${index}].newValue for field '${field}' must be a string or string array`);
-  if (cardPlanValueLength(currentValue) > MAX_VALUE_LENGTH) throw new Error(`changes[${index}].currentValue for field '${field}' exceeds the ${MAX_VALUE_LENGTH}-character limit`);
-  if (cardPlanValueLength(newValue) > MAX_VALUE_LENGTH) throw new Error(`changes[${index}].newValue for field '${field}' exceeds the ${MAX_VALUE_LENGTH}-character limit`);
+  const { field: field2, currentValue, newValue, note } = entry;
+  if (typeof field2 !== "string" || field2.trim() === "") throw new Error(`changes[${index}].field must be a non-empty string`);
+  if (!isValidCardPlanValue(currentValue)) throw new Error(`changes[${index}].currentValue for field '${field2}' must be a string or string array`);
+  if (!isValidCardPlanValue(newValue)) throw new Error(`changes[${index}].newValue for field '${field2}' must be a string or string array`);
+  if (cardPlanValueLength(currentValue) > MAX_VALUE_LENGTH) throw new Error(`changes[${index}].currentValue for field '${field2}' exceeds the ${MAX_VALUE_LENGTH}-character limit`);
+  if (cardPlanValueLength(newValue) > MAX_VALUE_LENGTH) throw new Error(`changes[${index}].newValue for field '${field2}' exceeds the ${MAX_VALUE_LENGTH}-character limit`);
   if (note !== void 0 && (typeof note !== "string" || note.length > MAX_NOTE_LENGTH)) {
     throw new Error(`changes[${index}].note must be a string of at most ${MAX_NOTE_LENGTH} characters`);
   }
-  return note === void 0 ? { field, currentValue, newValue } : { field, currentValue, newValue, note };
+  return note === void 0 ? { field: field2, currentValue, newValue } : { field: field2, currentValue, newValue, note };
 }
 function isValidWorldPlanValue(value) {
   if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") return true;
@@ -49420,8 +50707,8 @@ function validateWorldFieldShape(entry, label) {
   if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
     throw new Error(`fields${label} entries must be objects of { field, currentValue?, newValue }`);
   }
-  const { field, currentValue, newValue } = entry;
-  if (typeof field !== "string" || field.trim() === "") throw new Error(`field${label} must be a non-empty string`);
+  const { field: field2, currentValue, newValue } = entry;
+  if (typeof field2 !== "string" || field2.trim() === "") throw new Error(`field${label} must be a non-empty string`);
   if (currentValue !== void 0 && !isValidWorldPlanValue(currentValue)) {
     throw new Error(`currentValue${label} must be a string, number, boolean, null or string array`);
   }
@@ -49434,7 +50721,7 @@ function validateWorldFieldShape(entry, label) {
   if (worldPlanValueLength(newValue) > MAX_VALUE_LENGTH) {
     throw new Error(`newValue${label} exceeds the ${MAX_VALUE_LENGTH}-character limit`);
   }
-  return currentValue === void 0 ? { field, newValue } : { field, currentValue, newValue };
+  return currentValue === void 0 ? { field: field2, newValue } : { field: field2, currentValue, newValue };
 }
 function validateWorldEntryShape(entry, index) {
   if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
@@ -49448,10 +50735,10 @@ function validateWorldEntryShape(entry, index) {
   if (!Array.isArray(fields)) throw new Error(`entries[${index}].fields must be an array`);
   if (fields.length > MAX_ENTRY_FIELDS) throw new Error(`entries[${index}].fields accepts at most ${MAX_ENTRY_FIELDS} entries`);
   const label = ` for uid ${uid}`;
-  const parsedFields = fields.map((field, fieldIndex) => validateWorldFieldShape(field, `${label} [${fieldIndex}]`));
+  const parsedFields = fields.map((field2, fieldIndex) => validateWorldFieldShape(field2, `${label} [${fieldIndex}]`));
   if (action === "remove" && parsedFields.length > 0) throw new Error(`entries[${index}].fields must be empty when action is 'remove'`);
   if (action !== "remove" && parsedFields.length === 0) throw new Error(`entries[${index}].fields must have at least one entry when action is '${action}'`);
-  const fieldNames = new Set(parsedFields.map((field) => field.field));
+  const fieldNames = new Set(parsedFields.map((field2) => field2.field));
   if (fieldNames.size !== parsedFields.length) throw new Error(`duplicate field in entries[${index}]`);
   if (note !== void 0 && (typeof note !== "string" || note.length > MAX_NOTE_LENGTH)) {
     throw new Error(`entries[${index}].note must be a string of at most ${MAX_NOTE_LENGTH} characters`);
@@ -49472,10 +50759,10 @@ function normalizeWorldPlan(raw) {
     const fields = [];
     for (const fieldEntry of record.fields) {
       if (typeof fieldEntry !== "object" || fieldEntry === null || Array.isArray(fieldEntry)) return void 0;
-      const field = fieldEntry;
-      if (typeof field.field !== "string" || !isValidWorldPlanValue(field.newValue)) return void 0;
-      if (field.currentValue !== void 0 && !isValidWorldPlanValue(field.currentValue)) return void 0;
-      fields.push(field.currentValue === void 0 ? { field: field.field, newValue: field.newValue } : { field: field.field, currentValue: field.currentValue, newValue: field.newValue });
+      const field2 = fieldEntry;
+      if (typeof field2.field !== "string" || !isValidWorldPlanValue(field2.newValue)) return void 0;
+      if (field2.currentValue !== void 0 && !isValidWorldPlanValue(field2.currentValue)) return void 0;
+      fields.push(field2.currentValue === void 0 ? { field: field2.field, newValue: field2.newValue } : { field: field2.field, currentValue: field2.currentValue, newValue: field2.newValue });
     }
     const note = record.note;
     if (note !== void 0 && typeof note !== "string") return void 0;
@@ -49761,7 +51048,7 @@ var cardCoreTools = [
     if (full !== void 0) {
       const data = found.card.data;
       const fullValues = {};
-      for (const field of full) fullValues[field] = field in CARD_ARRAY_FIELDS ? [...data[field] ?? []] : data[field] ?? "";
+      for (const field2 of full) fullValues[field2] = field2 in CARD_ARRAY_FIELDS ? [...data[field2] ?? []] : data[field2] ?? "";
       summary.fullValues = fullValues;
     }
     return { found: true, ...summary };
@@ -49898,9 +51185,9 @@ var cardCoreTools = [
     const found = await requireCharacter(character);
     const plan = await proposeCardPlan(tavernDataRoot(), character, {
       title,
-      changes: proposed.map(({ field, newValue, note }) => ({
-        field,
-        currentValue: cardLiveValue(found.card.data, field),
+      changes: proposed.map(({ field: field2, newValue, note }) => ({
+        field: field2,
+        currentValue: cardLiveValue(found.card.data, field2),
         newValue,
         ...note !== void 0 ? { note } : {}
       }))
@@ -50073,24 +51360,24 @@ function parseChanges(value) {
   const parsed = [];
   for (const entry of value) {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) throw new Error("each change must be an object of { field, value }");
-    const { field, value: raw } = entry;
-    if (typeof field !== "string" || !CARD_FIELD_KEYS.includes(field)) {
-      throw new Error(`field '${String(field)}' is not editable; editable fields: ${CARD_FIELD_LIST}`);
+    const { field: field2, value: raw } = entry;
+    if (typeof field2 !== "string" || !CARD_FIELD_KEYS.includes(field2)) {
+      throw new Error(`field '${String(field2)}' is not editable; editable fields: ${CARD_FIELD_LIST}`);
     }
-    const parsedValue = editableValue(field, raw);
-    if (parsed.some((item) => item.field === field)) throw new Error(`duplicate change for field '${field}'`);
-    parsed.push({ field, value: parsedValue });
+    const parsedValue = editableValue(field2, raw);
+    if (parsed.some((item) => item.field === field2)) throw new Error(`duplicate change for field '${field2}'`);
+    parsed.push({ field: field2, value: parsedValue });
   }
   return parsed;
 }
 function fieldLengthsOf(data) {
   const record = data;
   const lengths = {};
-  for (const field of Object.keys(CARD_FIELDS)) {
-    lengths[field] = typeof record[field] === "string" ? record[field].length : 0;
+  for (const field2 of Object.keys(CARD_FIELDS)) {
+    lengths[field2] = typeof record[field2] === "string" ? record[field2].length : 0;
   }
-  for (const field of Object.keys(CARD_ARRAY_FIELDS)) {
-    lengths[field] = Array.isArray(record[field]) ? record[field].join("\n").length : 0;
+  for (const field2 of Object.keys(CARD_ARRAY_FIELDS)) {
+    lengths[field2] = Array.isArray(record[field2]) ? record[field2].join("\n").length : 0;
   }
   return lengths;
 }
@@ -50099,7 +51386,7 @@ async function saveCardValues(character, values, found) {
   const current = found ?? await requireCharacter(character);
   const nextData = { ...current.card.data };
   const target = nextData;
-  for (const { field, value } of values) target[field] = value;
+  for (const { field: field2, value } of values) target[field2] = value;
   const saved = await db.updateCharacter(character, {
     spec: current.card.spec,
     specVersion: current.card.specVersion,
@@ -50115,17 +51402,17 @@ function formatWriteResult(found, saved, values) {
   return {
     character: saved.card.data.name,
     ...renamed ? { renamedFrom: found.card.data.name } : {},
-    changes: values.map(({ field, value }) => {
+    changes: values.map(({ field: field2, value }) => {
       const text = Array.isArray(value) ? value.join("\n") : value;
-      return { field, length: text.length, preview: limitText(text, 200) };
+      return { field: field2, length: text.length, preview: limitText(text, 200) };
     }),
     fieldLengths: fieldLengthsOf(saved.card.data),
     source: { kind: "character-card", id: saved.card.data.name, version: saved.card.specVersion }
   };
 }
-function cardLiveValue(data, field) {
-  const raw = data[field];
-  if (field in CARD_ARRAY_FIELDS) return Array.isArray(raw) ? [...raw] : [];
+function cardLiveValue(data, field2) {
+  const raw = data[field2];
+  if (field2 in CARD_ARRAY_FIELDS) return Array.isArray(raw) ? [...raw] : [];
   return typeof raw === "string" ? raw : "";
 }
 function cardPlanValueMatches(live, recorded) {
@@ -50136,11 +51423,11 @@ async function executeCardPlan(plan) {
   if (plan.status === "rejected") throw new Error(`plan '${plan.id}' was rejected and cannot be applied`);
   if (plan.status === "applied") throw new Error(`plan '${plan.id}' was already applied`);
   if (plan.changes.length === 0) throw new Error(`plan '${plan.id}' has no changes`);
-  const values = plan.changes.map(({ field, newValue }) => ({ field: editableField(field), value: editableValue(field, newValue) }));
+  const values = plan.changes.map(({ field: field2, newValue }) => ({ field: editableField(field2), value: editableValue(field2, newValue) }));
   const found = await requireCharacter(plan.character);
   for (const change of plan.changes) {
-    const field = editableField(change.field);
-    const live = cardLiveValue(found.card.data, field);
+    const field2 = editableField(change.field);
+    const live = cardLiveValue(found.card.data, field2);
     if (!cardPlanValueMatches(live, change.currentValue)) {
       throw new Error(`plan '${plan.id}' is stale: field '${change.field}' changed since the plan was proposed; re-propose the plan`);
     }
@@ -50157,30 +51444,30 @@ async function executeCardPlan(plan) {
     source: formatted.source
   };
 }
-function editableField(field) {
-  if (typeof field !== "string" || !CARD_FIELD_KEYS.includes(field)) {
-    throw new Error(`field '${String(field)}' is not editable; editable fields: ${CARD_FIELD_LIST}`);
+function editableField(field2) {
+  if (typeof field2 !== "string" || !CARD_FIELD_KEYS.includes(field2)) {
+    throw new Error(`field '${String(field2)}' is not editable; editable fields: ${CARD_FIELD_LIST}`);
   }
-  return field;
+  return field2;
 }
-function editableValue(field, value) {
-  if (field in CARD_ARRAY_FIELDS) return arrayFieldValue(field, value);
-  if (!(field in CARD_FIELDS)) {
-    throw new Error(`field '${field}' is not editable; editable fields: ${CARD_FIELD_LIST}`);
+function editableValue(field2, value) {
+  if (field2 in CARD_ARRAY_FIELDS) return arrayFieldValue(field2, value);
+  if (!(field2 in CARD_FIELDS)) {
+    throw new Error(`field '${field2}' is not editable; editable fields: ${CARD_FIELD_LIST}`);
   }
-  if (typeof value !== "string") throw new Error(`value for field '${field}' must be a string`);
-  const max2 = CARD_FIELDS[field];
-  if (value.length > max2) throw new Error(`value for field '${field}' exceeds the ${max2}-character limit (got ${value.length})`);
-  if ((field === "name" || field === "nickname") && value.trim() === "") throw new Error(`field '${field}' must not be blank`);
+  if (typeof value !== "string") throw new Error(`value for field '${field2}' must be a string`);
+  const max2 = CARD_FIELDS[field2];
+  if (value.length > max2) throw new Error(`value for field '${field2}' exceeds the ${max2}-character limit (got ${value.length})`);
+  if ((field2 === "name" || field2 === "nickname") && value.trim() === "") throw new Error(`field '${field2}' must not be blank`);
   return value;
 }
-function arrayFieldValue(field, value) {
-  const spec = CARD_ARRAY_FIELDS[field];
-  if (!Array.isArray(value)) throw new Error(`${field} must be an array of at most ${spec.maxItems} non-empty strings (whole-group replacement)`);
-  if (value.some((item) => typeof item !== "string")) throw new Error(`each item of ${field} must be a string`);
+function arrayFieldValue(field2, value) {
+  const spec = CARD_ARRAY_FIELDS[field2];
+  if (!Array.isArray(value)) throw new Error(`${field2} must be an array of at most ${spec.maxItems} non-empty strings (whole-group replacement)`);
+  if (value.some((item) => typeof item !== "string")) throw new Error(`each item of ${field2} must be a string`);
   const items = value.map((item) => item.trim()).filter((item) => item !== "");
-  if (items.length > spec.maxItems) throw new Error(`${field} accepts at most ${spec.maxItems} non-empty items (got ${items.length})`);
-  if (items.some((item) => item.length > spec.itemMax)) throw new Error(`an item of ${field} exceeds the ${spec.itemMax}-character limit`);
+  if (items.length > spec.maxItems) throw new Error(`${field2} accepts at most ${spec.maxItems} non-empty items (got ${items.length})`);
+  if (items.some((item) => item.length > spec.itemMax)) throw new Error(`an item of ${field2} exceeds the ${spec.itemMax}-character limit`);
   return items;
 }
 function previewPlanValue(value) {
@@ -50188,11 +51475,11 @@ function previewPlanValue(value) {
 }
 function parseFullFields(value) {
   if (!Array.isArray(value) || value.length === 0) throw new Error("full must be a non-empty array of field names");
-  return [...new Set(value.map((field) => {
-    if (typeof field !== "string" || !CARD_FIELD_KEYS.includes(field)) {
-      throw new Error(`field '${String(field)}' is not a card field; fields: ${CARD_FIELD_LIST}`);
+  return [...new Set(value.map((field2) => {
+    if (typeof field2 !== "string" || !CARD_FIELD_KEYS.includes(field2)) {
+      throw new Error(`field '${String(field2)}' is not a card field; fields: ${CARD_FIELD_LIST}`);
     }
-    return field;
+    return field2;
   }))];
 }
 var CREATE_FIELD_KEYS = CARD_FIELD_KEYS;
@@ -50245,8 +51532,8 @@ function parsePlanChanges(value) {
   const parsed = [];
   for (const entry of value) {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) throw new Error("each change must be an object of { field, newValue, note? }");
-    const { field, newValue, note } = entry;
-    const editable = editableField(field);
+    const { field: field2, newValue, note } = entry;
+    const editable = editableField(field2);
     if (parsed.some((item) => item.field === editable)) throw new Error(`duplicate change for field '${editable}'`);
     parsed.push({
       field: editable,
@@ -50458,7 +51745,7 @@ var worldTools = [
       return {
         uid: index,
         action: "create",
-        fields: Object.entries(edit.values).map(([field, newValue]) => ({ field, newValue })),
+        fields: Object.entries(edit.values).map(([field2, newValue]) => ({ field: field2, newValue })),
         ...note !== void 0 ? { note } : {}
       };
     }) : parseWorldEdits(cleaned).map((edit, index) => {
@@ -50468,10 +51755,10 @@ var worldTools = [
         if (existing === void 0) throw new Error(`uid ${edit.uid} not found in world '${world}'; removal matches existing entries only (see world_get)`);
         return { uid: edit.uid, action: "remove", fields: [], ...note !== void 0 ? { note } : {} };
       }
-      const fields = edit.fields.map((field) => ({
-        field,
-        ...existing !== void 0 ? { currentValue: worldLiveValue(existing, field) } : {},
-        newValue: edit.values[field]
+      const fields = edit.fields.map((field2) => ({
+        field: field2,
+        ...existing !== void 0 ? { currentValue: worldLiveValue(existing, field2) } : {},
+        newValue: edit.values[field2]
       }));
       return { uid: edit.uid, action: existing === void 0 ? "create" : "update", fields, ...note !== void 0 ? { note } : {} };
     });
@@ -50490,10 +51777,10 @@ var worldTools = [
       entries: plan.entries.map((entry) => ({
         uid: entry.uid,
         action: entry.action,
-        fields: entry.fields.map((field) => ({
-          field: field.field,
-          ...field.currentValue !== void 0 ? { currentValue: previewWorldPlanValue(field.currentValue) } : {},
-          newValue: previewWorldPlanValue(field.newValue)
+        fields: entry.fields.map((field2) => ({
+          field: field2.field,
+          ...field2.currentValue !== void 0 ? { currentValue: previewWorldPlanValue(field2.currentValue) } : {},
+          newValue: previewWorldPlanValue(field2.newValue)
         })),
         ...entry.note !== void 0 ? { note: entry.note } : {}
       }))
@@ -50746,7 +52033,7 @@ async function executeWorldPlan(plan) {
     }
     const seeds = plan.entries.map((entry) => {
       const values = {};
-      for (const field of entry.fields) values[editableWorldField(field.field)] = worldFieldValue(editableWorldField(field.field), field.newValue, ` for uid ${entry.uid}`);
+      for (const field2 of entry.fields) values[editableWorldField(field2.field)] = worldFieldValue(editableWorldField(field2.field), field2.newValue, ` for uid ${entry.uid}`);
       return values;
     });
     const entries2 = seeds.map((values, uid) => worldEntryFromValues(uid, values));
@@ -50760,7 +52047,7 @@ async function executeWorldPlan(plan) {
       touched: entries2.map((_entry, uid) => {
         const planEntry = plan.entries[uid];
         if (planEntry === void 0) throw new Error(`plan '${plan.id}' has no entry ${uid}`);
-        return { uid, created: true, fields: planEntry.fields.map((field) => field.field) };
+        return { uid, created: true, fields: planEntry.fields.map((field2) => field2.field) };
       })
     };
   }
@@ -50782,15 +52069,15 @@ async function executeWorldPlan(plan) {
     const values = {};
     const fields = [];
     for (const fieldChange of entry.fields) {
-      const field = editableWorldField(fieldChange.field);
+      const field2 = editableWorldField(fieldChange.field);
       if (entry.action === "update") {
-        const live = worldLiveValue(existing, field);
+        const live = worldLiveValue(existing, field2);
         if (fieldChange.currentValue === void 0 || !worldPlanValueMatches(live, fieldChange.currentValue)) {
-          throw new Error(`plan '${plan.id}' is stale: field '${field}' on uid ${entry.uid} changed since the plan was proposed; re-propose the plan`);
+          throw new Error(`plan '${plan.id}' is stale: field '${field2}' on uid ${entry.uid} changed since the plan was proposed; re-propose the plan`);
         }
       }
-      values[field] = worldFieldValue(field, fieldChange.newValue, ` for uid ${entry.uid}`);
-      fields.push(field);
+      values[field2] = worldFieldValue(field2, fieldChange.newValue, ` for uid ${entry.uid}`);
+      fields.push(field2);
     }
     return { uid: entry.uid, remove: false, values, fields };
   });
@@ -50950,10 +52237,10 @@ function applyWorldEdits(world, book, edits) {
   }
   return { entries: [...byUid.values()].sort((a, b) => a.uid - b.uid), touched };
 }
-function worldLiveValue(entry, field) {
-  const spec = WORLD_ENTRY_FIELDS[field];
+function worldLiveValue(entry, field2) {
+  const spec = WORLD_ENTRY_FIELDS[field2];
   const record = entry;
-  const raw = record[spec.loreKey ?? field];
+  const raw = record[spec.loreKey ?? field2];
   if (spec.invert === true) return typeof raw === "boolean" ? !raw : true;
   if (raw === void 0) {
     if (Array.isArray(spec.fallback)) return [];
@@ -50977,11 +52264,11 @@ function previewWorldPlanValue(value) {
   if (Array.isArray(value)) return value.map((item) => limitText(item, 200));
   return value;
 }
-function editableWorldField(field) {
-  if (!WORLD_EDITABLE_FIELDS.includes(field)) {
-    throw new Error(`field '${field}' is not an editable world entry field; editable fields: ${WORLD_EDITABLE_FIELD_LIST}`);
+function editableWorldField(field2) {
+  if (!WORLD_EDITABLE_FIELDS.includes(field2)) {
+    throw new Error(`field '${field2}' is not an editable world entry field; editable fields: ${WORLD_EDITABLE_FIELD_LIST}`);
   }
-  return field;
+  return field2;
 }
 function parseWorldUids(value) {
   if (!Array.isArray(value) || value.length === 0) throw new Error("uids must be a non-empty array of entry uids");
@@ -51137,7 +52424,7 @@ var presetTools = [
         const identifier = prompt.identifier;
         identifiers.push(typeof identifier === "string" ? identifier : "");
       }
-      for (const field of ["role", "content", "enabled"]) if (edit[field] !== void 0) fields.push(field);
+      for (const field2 of ["role", "content", "enabled"]) if (edit[field2] !== void 0) fields.push(field2);
       applied.push({ name: edit.name, identifiers, fields });
     }
     await db.putPreset(preset, next);
@@ -52412,7 +53699,7 @@ async function handleApi(ctx, req, res) {
     if (typeof body.sessionId !== "string") throw new Error("expected { sessionId, selection }");
     const sessionId = body.sessionId;
     let selection = null;
-    const selectionBody = asRecord6(body.selection);
+    const selectionBody = asRecord7(body.selection);
     if (selectionBody !== void 0) {
       if (typeof selectionBody["provider"] !== "string" || typeof selectionBody["model"] !== "string") {
         throw new Error("selection must be { provider, model, reasoningEffort? }");
@@ -52507,7 +53794,7 @@ async function handleApi(ctx, req, res) {
   }
   if (method === "POST" && route === "import/world") {
     const body = await readJson(req);
-    const data = asRecord6(body.data);
+    const data = asRecord7(body.data);
     if (typeof body.name !== "string" || data === void 0) throw new Error("expected { name, data }");
     const book = await db.importWorldFile(body.name, data);
     await emitAssetsSaved("world", book.name);
@@ -52515,7 +53802,7 @@ async function handleApi(ctx, req, res) {
   }
   if (method === "POST" && route === "import/preset") {
     const body = await readJson(req);
-    const data = asRecord6(body.data);
+    const data = asRecord7(body.data);
     if (typeof body.name !== "string" || data === void 0) throw new Error("expected { name, data }");
     parsePresetOrThrow(data);
     const result = await db.importPreset(body.name, data);
@@ -52532,7 +53819,7 @@ async function handleApi(ctx, req, res) {
   if (method === "PUT" && route.startsWith("preset/")) {
     const oldName = decodeURIComponent(route.slice("preset/".length));
     const body = await readJson(req, 10 * 1024 * 1024);
-    const data = asRecord6(body.data);
+    const data = asRecord7(body.data);
     if (typeof body.name !== "string" || body.name.trim() === "" || data === void 0) {
       throw new Error("expected { name, data }");
     }
@@ -52757,8 +54044,8 @@ async function handleApi(ctx, req, res) {
     const found = await db.getCharacter(character);
     if (!found) throw new Error(`character '${character}' not found`);
     const seedVariables = (() => {
-      const holder = asRecord6(found.card.data.extensions.agentTavern);
-      const initial = asRecord6(holder?.["initialVariables"]);
+      const holder = asRecord7(found.card.data.extensions.agentTavern);
+      const initial = asRecord7(holder?.["initialVariables"]);
       if (initial === void 0 || Object.keys(initial).length === 0) return void 0;
       return structuredClone(initial);
     })();
@@ -52874,7 +54161,7 @@ async function handleApi(ctx, req, res) {
   if (method === "PUT" && route.startsWith("world/")) {
     const oldName = decodeURIComponent(route.slice("world/".length));
     const body = await readJson(req, 10 * 1024 * 1024);
-    const data = asRecord6(body.data);
+    const data = asRecord7(body.data);
     if (typeof body.name !== "string" || body.name.trim() === "" || data === void 0) {
       throw new Error("expected { name, data }");
     }
@@ -53445,14 +54732,14 @@ function sendBodyFailure(res, failure, pendingOperation) {
     ...pendingOperation === void 0 ? {} : { pendingOperation }
   });
 }
-function bodyString(body, field) {
-  const value = body[field];
+function bodyString(body, field2) {
+  const value = body[field2];
   return typeof value === "string" && value.trim() !== "" ? value : void 0;
 }
-function bodyIndex(body, field) {
-  const value = body[field];
+function bodyIndex(body, field2) {
+  const value = body[field2];
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-    throw bodyRuntimeError("invalid-arguments", `${field} must be a non-negative safe integer`);
+    throw bodyRuntimeError("invalid-arguments", `${field2} must be a non-negative safe integer`);
   }
   return value;
 }
@@ -53468,7 +54755,7 @@ async function projectedBodyFloor(chat, messageId, groupIdHint, selectedIndexHin
   }
   if (index === void 0) return { ok: true, floor: void 0 };
   const floor = chat.messages[index];
-  const tavern = asRecord6(asRecord6(floor.extra)?.["agentTavern"]);
+  const tavern = asRecord7(asRecord7(floor.extra)?.["agentTavern"]);
   const scripts = await readScripts();
   const selectedSwipe = selectedIndexHint === void 0 ? floor : Array.isArray(floor.swipes) && typeof floor.swipes[selectedIndexHint] === "string" ? { ...floor, mes: floor.swipes[selectedIndexHint] } : void 0;
   const text = selectedSwipe === void 0 ? void 0 : stripFrontendDocuments(displayTextForMessage(scripts, selectedSwipe, chat.messages.length - 1 - index));
@@ -53526,13 +54813,13 @@ function bodyProjectionState(projected, ledger, latestEditSeq) {
   const selectionCurrent = (projected.anchorMessageId === void 0 || projected.anchorMessageId === ledger.anchorMessageId) && (projected.selectedIndex === void 0 || projected.selectedIndex === ledger.selectedIndex);
   return { current: textCurrent && selectionCurrent, textCurrent };
 }
-function asRecord6(value) {
+function asRecord7(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
 }
 function asChatLog(value) {
-  const record = asRecord6(value);
+  const record = asRecord7(value);
   if (record === void 0) return void 0;
-  const header = asRecord6(record["header"]);
+  const header = asRecord7(record["header"]);
   if (header === void 0) return void 0;
   if (typeof header["user_name"] !== "string" || typeof header["character_name"] !== "string") return void 0;
   if (!Array.isArray(record["messages"])) return void 0;
@@ -53595,8 +54882,96 @@ ${reason}`);
   }
 }
 
+// packages/plugin/src/im/weixin/context-tokens.ts
+import { randomUUID as randomUUID17 } from "node:crypto";
+import { promises as fs21 } from "node:fs";
+import { dirname as dirname15, join as join25, resolve as resolve7 } from "node:path";
+var WeixinContextTokenError = class extends Error {
+  code;
+  path;
+  constructor(code, message, path12) {
+    super(message);
+    this.name = "WeixinContextTokenError";
+    this.code = code;
+    this.path = path12;
+  }
+};
+var ACCOUNT_ID_PATTERN2 = /^[A-Za-z0-9._-]+$/;
+var FILE_MODE = 384;
+function openWeixinContextTokens(root, accountId) {
+  if (!ACCOUNT_ID_PATTERN2.test(accountId) || accountId === "." || accountId === "..") {
+    throw new TypeError(
+      `weixin context token store got an illegal accountId ${JSON.stringify(accountId)}: only [A-Za-z0-9._-] is allowed`
+    );
+  }
+  const file = join25(resolve7(root), "weixin", accountId, "context-tokens.json");
+  return {
+    load: () => loadTokens(file),
+    save: (tokens) => saveTokens(file, tokens)
+  };
+}
+async function loadTokens(file) {
+  let text;
+  try {
+    text = await fs21.readFile(file, "utf8");
+  } catch (cause) {
+    if (isErrno(cause, "ENOENT")) return {};
+    throw new WeixinContextTokenError("WEIXIN_TOKEN_STORE_IO", `failed to read ${file}: ${reasonOf(cause)}`, file);
+  }
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch (cause) {
+    throw new WeixinContextTokenError(
+      "WEIXIN_TOKEN_STORE_CORRUPT",
+      `corrupt token file ${file}: not valid JSON: ${reasonOf(cause)}`,
+      file
+    );
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new WeixinContextTokenError("WEIXIN_TOKEN_STORE_CORRUPT", `corrupt token file ${file}: the top level is not an object`, file);
+  }
+  const tokens = {};
+  for (const [peerId, token] of Object.entries(value)) {
+    if (peerId.trim() === "" || typeof token !== "string" || token === "") {
+      throw new WeixinContextTokenError(
+        "WEIXIN_TOKEN_STORE_CORRUPT",
+        `corrupt token file ${file}: the token for ${JSON.stringify(peerId)} is not a non-empty string`,
+        file
+      );
+    }
+    tokens[peerId] = token;
+  }
+  return tokens;
+}
+async function saveTokens(file, tokens) {
+  const snapshot2 = {};
+  for (const [peerId, token] of Object.entries(tokens)) {
+    if (typeof token !== "string" || token === "") {
+      throw new TypeError(`weixin context token for ${JSON.stringify(peerId)} must be a non-empty string`);
+    }
+    snapshot2[peerId] = token;
+  }
+  const tmp = `${file}.tmp-${randomUUID17()}`;
+  try {
+    await fs21.mkdir(dirname15(file), { recursive: true });
+    await fs21.writeFile(tmp, `${JSON.stringify(snapshot2, null, 2)}
+`, { encoding: "utf8", mode: FILE_MODE });
+    await fs21.rename(tmp, file);
+  } catch (cause) {
+    await fs21.rm(tmp, { force: true }).catch(() => void 0);
+    throw new WeixinContextTokenError("WEIXIN_TOKEN_STORE_IO", `failed to write ${file}: ${reasonOf(cause)}`, file);
+  }
+}
+function isErrno(cause, code) {
+  return typeof cause === "object" && cause !== null && cause.code === code;
+}
+function reasonOf(cause) {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
 // packages/plugin/src/im/router.ts
-import { randomUUID as randomUUID16 } from "node:crypto";
+import { randomUUID as randomUUID19 } from "node:crypto";
 
 // packages/plugin/src/im/project.ts
 var IM_EMPTY_REPLY = "\uFF08\u65E0\u6587\u672C\u56DE\u590D\uFF09";
@@ -53800,7 +55175,7 @@ function turnFailedOf(events, turn) {
   for (const event of events) {
     if (event.type !== "turn/end") continue;
     if (turnOf2(event) !== turn) continue;
-    const reason = asRecord7(event.data?.["reason"]);
+    const reason = asRecord8(event.data?.["reason"]);
     return reason?.["kind"] === "error";
   }
   return false;
@@ -53814,24 +55189,24 @@ function messageIdOf4(data) {
   return typeof id === "string" && id !== "" ? id : void 0;
 }
 function assistantTextOf(data) {
-  const message = asRecord7(data?.["message"]);
+  const message = asRecord8(data?.["message"]);
   const content = message?.["content"];
   if (!Array.isArray(content)) return void 0;
   const parts = [];
   for (const block of content) {
-    const entry = asRecord7(block);
+    const entry = asRecord8(block);
     if (entry?.["type"] !== "text") continue;
     const text = entry["text"];
     if (typeof text === "string" && text !== "") parts.push(text);
   }
   return parts.length === 0 ? void 0 : parts.join("\n");
 }
-function asRecord7(value) {
+function asRecord8(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
 }
 
 // packages/plugin/src/im/session-host.ts
-import { randomUUID as randomUUID15 } from "node:crypto";
+import { randomUUID as randomUUID18 } from "node:crypto";
 var ImSessionError = class extends Error {
   code;
   constructor(code, message) {
@@ -53853,7 +55228,7 @@ function inspectImSessionCapabilities(agents, presets) {
   return { available: reasons.length === 0, reasons };
 }
 function mintImSessionId() {
-  return `session-${randomUUID15()}`;
+  return `session-${randomUUID18()}`;
 }
 async function ensureImSession(deps, request) {
   const capability = inspectImSessionCapabilities(deps.agents, deps.presets);
@@ -53976,7 +55351,7 @@ async function ensureImAgent(deps, sessionId) {
       const resumed = await deps.agents.resume({ resumeSessionId: sessionId, setup });
       return resumed.agent;
     } catch (error) {
-      deps.logger?.warn?.(`dsh-soulmojito im: resume ${sessionId} failed, creating a new session: ${messageOf9(error)}`);
+      deps.logger?.warn?.(`dsh-soulmojito im: resume ${sessionId} failed, creating a new session: ${messageOf12(error)}`);
     }
   }
   if (typeof deps.agents?.create !== "function") {
@@ -53989,7 +55364,7 @@ async function ensureImAgent(deps, sessionId) {
   });
   return created.agent;
 }
-function messageOf9(error) {
+function messageOf12(error) {
   return error instanceof Error ? error.message : String(error);
 }
 function imUnboundMessage(peerKey) {
@@ -54037,13 +55412,13 @@ function createImRouter(deps) {
       await notifyUnbound(target, peerKey, now);
       return;
     }
-    const messageId = `im-${randomUUID16()}`;
+    const messageId = `im-${randomUUID19()}`;
     origins.remember(binding.sessionId, messageId, peerKey, target, now);
     try {
       await deps.followup(binding.sessionId, { id: messageId, text });
     } catch (error) {
       origins.forgetSession(binding.sessionId);
-      deps.logger?.warn?.(`dsh-soulmojito im: followup to ${binding.sessionId} failed: ${messageOf10(error)}`);
+      deps.logger?.warn?.(`dsh-soulmojito im: followup to ${binding.sessionId} failed: ${messageOf13(error)}`);
       await sendNotice(target, IM_TURN_FAILED);
     }
   }
@@ -54130,7 +55505,7 @@ function createImRouter(deps) {
         total: chunks.length
       })));
     } catch (error) {
-      throw new ImSendError("IM_SEND_FAILED", `IM send to ${peerKey} failed: ${messageOf10(error)}`, { cause: error });
+      throw new ImSendError("IM_SEND_FAILED", `IM send to ${peerKey} failed: ${messageOf13(error)}`, { cause: error });
     }
     return { parts: chunks.length, at: deps.now() };
   }
@@ -54144,7 +55519,7 @@ function createImRouter(deps) {
     try {
       await deps.send(target, [{ kind: "text", text, index: 0, total: 1 }]);
     } catch (error) {
-      deps.logger?.warn?.(`dsh-soulmojito im: notice to ${target.channel}/${target.peerId} failed: ${messageOf10(error)}`);
+      deps.logger?.warn?.(`dsh-soulmojito im: notice to ${target.channel}/${target.peerId} failed: ${messageOf13(error)}`);
     }
   }
   return {
@@ -54178,7 +55553,7 @@ function sharedSessionOf(peers, settings) {
   }
   return {};
 }
-function messageOf10(error) {
+function messageOf13(error) {
   return error instanceof Error ? error.message : String(error);
 }
 function channelOf(value) {
@@ -54187,11 +55562,13 @@ function channelOf(value) {
 
 // packages/plugin/src/im/runtime.ts
 var QQ_BOUND_ACCOUNT_LABEL = "QQ \u673A\u5668\u4EBA";
+var WEIXIN_BOUND_ACCOUNT_LABEL = "\u5FAE\u4FE1\u673A\u5668\u4EBA";
+var WEIXIN_BIND_POLL_INTERVAL_MS = 1e3;
 var ImChannelUnsupportedError = class extends Error {
   code = "IM_CHANNEL_UNSUPPORTED";
   channel;
   constructor(channel) {
-    super(`IM channel '${channel}' has no adapter in this build; only 'onebot' and 'qq' can be started`);
+    super(`IM channel '${channel}' has no adapter in this build; 'onebot', 'qq' and 'weixin' are the supported channels`);
     this.name = "ImChannelUnsupportedError";
     this.channel = channel;
   }
@@ -54259,7 +55636,7 @@ function createImRuntime(ctx, options) {
       if (!bound) return;
       return router.finishTurn(sessionId, turn, sessionEvents(session));
     }).catch((error) => {
-      options.logger?.warn?.(`dsh-soulmojito im: turn ${turn} of ${sessionId} reply failed: ${messageOf11(error)}`);
+      options.logger?.warn?.(`dsh-soulmojito im: turn ${turn} of ${sessionId} reply failed: ${messageOf14(error)}`);
     });
   }
   function openOneBot(account, secret) {
@@ -54303,7 +55680,25 @@ function createImRuntime(ctx, options) {
       ...options.logger === void 0 ? {} : { logger: options.logger }
     });
   }
-  async function installQQ(account, channel) {
+  function openWeixin(account, secret) {
+    const contextTokens = openWeixinContextTokens(tavernDataRoot("im"), account.accountId);
+    return new WeixinChannel({
+      accountId: account.accountId,
+      // 构造期校验 botToken/baseUrl：坏凭据在落盘前就被拒绝（见 upsertAccount）。
+      token: secret["botToken"] ?? "",
+      baseUrl: secret["baseUrl"] ?? "",
+      router: { handle: async (inbound) => router.inbound(inbound) },
+      loadCursor: async () => store5.readCursor(account.accountId),
+      saveCursor: async (cursor) => store5.writeCursor(account.accountId, cursor),
+      loadContextTokens: async () => contextTokens.load(),
+      saveContextTokens: async (tokens) => contextTokens.save(tokens),
+      clock: WEIXIN_REAL_CLOCK,
+      longPollTimeoutMs: WEIXIN_LONG_POLL_TIMEOUT_MS,
+      typingEnabled: true,
+      ...options.logger === void 0 ? {} : { logger: options.logger }
+    });
+  }
+  async function installSingleChannel(account, channel) {
     const key = channelKey(account.channel, account.accountId);
     const previous = channels.get(key);
     if (previous !== void 0) {
@@ -54322,6 +55717,15 @@ function createImRuntime(ctx, options) {
   const qqBinding = createQQBinding({
     connect: injectedConnector === void 0 ? () => loadQqConnector() : () => Promise.resolve(injectedConnector)
   });
+  const weixinBinding = createWeixinBinding({
+    qrBaseUrl: options.weixinQrBaseUrl ?? WEIXIN_FIXED_BASE_URL,
+    botType: WEIXIN_DEFAULT_BOT_TYPE,
+    pollIntervalMs: WEIXIN_BIND_POLL_INTERVAL_MS,
+    clock: WEIXIN_REAL_CLOCK,
+    localTokenList: loadWeixinLocalTokens,
+    ...options.logger === void 0 ? {} : { logger: options.logger }
+  });
+  let activeQrBind;
   async function adoptQQCredential(credentials) {
     const credential = credentials[0];
     if (credential === void 0) {
@@ -54343,6 +55747,48 @@ function createImRuntime(ctx, options) {
     const openid = typeof credential.userOpenid === "string" ? credential.userOpenid.trim() : "";
     if (openid !== "") await addImPrivateAllow(openid);
   }
+  async function adoptWeixinCredential(credential) {
+    const botToken = credential.botToken.trim();
+    const baseUrl = credential.baseUrl.trim();
+    const ilinkBotId = credential.ilinkBotId.trim();
+    if (botToken === "" || baseUrl === "" || ilinkBotId === "") {
+      throw new Error("the WeChat backend confirmed the scan without bot_token/baseurl/ilink_bot_id; nothing was saved");
+    }
+    const ilinkUserId = credential.ilinkUserId?.trim() ?? "";
+    const accounts = await store5.accounts();
+    const existing = accounts.find((entry) => entry.channel === "weixin" && entry.accountId === ilinkBotId);
+    await upsertAccount({
+      channel: "weixin",
+      accountId: ilinkBotId,
+      label: WEIXIN_BOUND_ACCOUNT_LABEL,
+      createdAt: existing?.createdAt ?? (/* @__PURE__ */ new Date()).toISOString()
+    }, {
+      botToken,
+      baseUrl,
+      ilinkBotId,
+      ...ilinkUserId === "" ? {} : { ilinkUserId }
+    });
+    if (ilinkUserId !== "") await addImPrivateAllow(ilinkUserId);
+  }
+  async function loadWeixinLocalTokens() {
+    const accounts = await store5.accounts();
+    const tokens = [];
+    for (const account of [...accounts].reverse()) {
+      if (account.channel !== "weixin") continue;
+      let secret;
+      try {
+        secret = await store5.readSecret("weixin", account.accountId);
+      } catch (error) {
+        options.logger?.warn?.(`dsh-soulmojito im weixin bind: skipped ${account.accountId} local token: ${messageOf14(error)}`);
+        continue;
+      }
+      const token = secret?.["botToken"]?.trim() ?? "";
+      if (token === "") continue;
+      tokens.push(token);
+      if (tokens.length >= 10) break;
+    }
+    return tokens;
+  }
   async function addImPrivateAllow(openid) {
     const state = await db.getState();
     if ((state.imSettings ?? DEFAULT_IM_SETTINGS).privateAllow.includes(openid)) return;
@@ -54353,23 +55799,65 @@ function createImRuntime(ctx, options) {
     });
   }
   async function startQrBind(channelId) {
-    if (channelId !== "qq") throw new ImChannelUnsupportedError(channelId);
-    return qqBinding.startQrConnect({
-      onQrDisplayed: (url) => {
-        options.logger?.info?.(`dsh-soulmojito im qq bind: QR code ready${qrHostSuffix(url)}`);
-      },
-      onSuccess: async (credentials) => {
-        await adoptQQCredential(credentials);
-      },
-      onFailure: (error) => {
-        options.logger?.warn?.(`dsh-soulmojito im qq bind failed: ${error.message}`);
-      }
-    }, { signal: lifetime.signal, source: "dsh-soulmojito" });
+    if (channelId === "qq") {
+      activeQrBind = "qq";
+      return qqBinding.startQrConnect({
+        onQrDisplayed: (url) => {
+          options.logger?.info?.(`dsh-soulmojito im qq bind: QR code ready${qrHostSuffix(url)}`);
+        },
+        onSuccess: async (credentials) => {
+          await adoptQQCredential(credentials);
+        },
+        onFailure: (error) => {
+          options.logger?.warn?.(`dsh-soulmojito im qq bind failed: ${error.message}`);
+        }
+      }, { signal: lifetime.signal, source: "dsh-soulmojito" });
+    }
+    if (channelId === "weixin") {
+      activeQrBind = "weixin";
+      return weixinBinding.start({
+        onQrDisplayed: (url) => {
+          options.logger?.info?.(`dsh-soulmojito im weixin bind: QR code ready${qrHostSuffix(url)}`);
+        },
+        onSuccess: async (credential) => {
+          await adoptWeixinCredential(credential);
+        },
+        onAlreadyBound: () => {
+          options.logger?.info?.("dsh-soulmojito im weixin bind: the bot is already bound; existing credential stays in use");
+        },
+        onFailure: (error) => {
+          options.logger?.warn?.(`dsh-soulmojito im weixin bind failed: ${error.message}`);
+        }
+      }, { signal: lifetime.signal });
+    }
+    throw new ImChannelUnsupportedError(channelId);
+  }
+  function qrBindStatus() {
+    const qqStatus = qqBinding.status();
+    const weixinStatus = weixinBinding.status();
+    if (activeQrBind === "qq" && qqStatus.phase !== "idle") return qqStatus;
+    if (activeQrBind === "weixin" && weixinStatus.phase !== "idle") return weixinStatus;
+    if (activeQrBind !== void 0) activeQrBind = void 0;
+    if (isRunningBindPhase(weixinStatus.phase)) return weixinStatus;
+    if (isRunningBindPhase(qqStatus.phase)) return qqStatus;
+    return { phase: "idle" };
+  }
+  function submitQrVerifyCode(code) {
+    return weixinBinding.submitVerifyCode(code);
+  }
+  function cancelQrBind() {
+    const active = activeQrBind;
+    activeQrBind = void 0;
+    if (active === "qq") return qqBinding.cancel();
+    if (active === "weixin") return weixinBinding.cancel();
+    qqBinding.cancel();
+    weixinBinding.cancel();
+    return { phase: "idle" };
   }
   let accountTail = Promise.resolve();
   function serialAccounts(task) {
     const run = accountTail.then(task, task);
-    accountTail = run.then(noop, noop);
+    accountTail = run.then(noop2, noop2);
     return run;
   }
   async function upsertAccount(account, secret) {
@@ -54386,23 +55874,38 @@ function createImRuntime(ctx, options) {
         const previous = await store5.readSecret("qq", account.accountId);
         await store5.putAccount(account, { ...secret });
         try {
-          await installQQ(account, channel);
+          await installSingleChannel(account, channel);
         } catch (error) {
-          try {
-            if (previous === void 0) await store5.deleteAccount("qq", account.accountId);
-            else await store5.putAccount(account, previous);
-          } catch (rollbackError) {
-            throw new Error(
-              `qq account '${account.accountId}' failed to install and its credential rollback also failed: ${messageOf11(rollbackError)}`,
-              { cause: error }
-            );
-          }
+          await rollbackAccountSecret(account, previous, error);
+          throw error;
+        }
+        return;
+      }
+      if (account.channel === "weixin") {
+        const channel = openWeixin(account, secret);
+        const previous = await store5.readSecret("weixin", account.accountId);
+        await store5.putAccount(account, { ...secret });
+        try {
+          await installSingleChannel(account, channel);
+        } catch (error) {
+          await rollbackAccountSecret(account, previous, error);
           throw error;
         }
         return;
       }
       throw new ImChannelUnsupportedError(account.channel);
     });
+  }
+  async function rollbackAccountSecret(account, previous, error) {
+    try {
+      if (previous === void 0) await store5.deleteAccount(account.channel, account.accountId);
+      else await store5.putAccount(account, previous);
+    } catch (rollbackError) {
+      throw new Error(
+        `${account.channel} account '${account.accountId}' failed to install and its credential rollback also failed: ${messageOf14(rollbackError)}`,
+        { cause: error }
+      );
+    }
   }
   async function removeAccount(channelId, accountId) {
     return serialAccounts(async () => {
@@ -54440,7 +55943,6 @@ function createImRuntime(ctx, options) {
   async function restoreAccounts() {
     const accounts = await store5.accounts();
     for (const account of accounts) {
-      if (account.channel !== "onebot" && account.channel !== "qq") continue;
       try {
         const secret = await store5.readSecret(account.channel, account.accountId);
         if (secret === void 0) {
@@ -54449,12 +55951,12 @@ function createImRuntime(ctx, options) {
         }
         await upsertAccount(account, secret);
       } catch (error) {
-        options.logger?.warn?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} failed to start: ${messageOf11(error)}`);
+        options.logger?.warn?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} failed to start: ${messageOf14(error)}`);
       }
     }
   }
   void restoreAccounts().catch((error) => {
-    options.logger?.warn?.(`dsh-soulmojito im: restoring stored accounts failed: ${messageOf11(error)}`);
+    options.logger?.warn?.(`dsh-soulmojito im: restoring stored accounts failed: ${messageOf14(error)}`);
   });
   return {
     router,
@@ -54472,14 +55974,17 @@ function createImRuntime(ctx, options) {
     handleSessionEvent,
     handleOneBotUpgrade,
     startQrBind,
-    qrBindStatus: () => qqBinding.status(),
-    cancelQrBind: () => qqBinding.cancel(),
+    qrBindStatus,
+    submitQrVerifyCode,
+    cancelQrBind,
     dispose: async () => {
       qqBinding.cancel();
+      weixinBinding.cancel();
+      activeQrBind = void 0;
       lifetime.abort();
       for (const channel of channels.values()) {
         await channel.stop().catch((error) => {
-          options.logger?.warn?.(`dsh-soulmojito im: stopping ${channel.channel}/${channel.accountId} failed: ${messageOf11(error)}`);
+          options.logger?.warn?.(`dsh-soulmojito im: stopping ${channel.channel}/${channel.accountId} failed: ${messageOf14(error)}`);
         });
       }
       channels.clear();
@@ -54529,9 +56034,12 @@ function qrHostSuffix(url) {
     return "";
   }
 }
-function noop() {
+function isRunningBindPhase(phase) {
+  return phase === "waiting" || phase === "verify" || phase === "saving";
 }
-function messageOf11(error) {
+function noop2() {
+}
+function messageOf14(error) {
   return error instanceof Error ? error.message : String(error);
 }
 

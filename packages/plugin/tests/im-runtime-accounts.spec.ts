@@ -104,12 +104,14 @@ describe('im runtime account lifecycle', () => {
     }
   })
 
-  it('refuses a channel without an adapter instead of persisting a dead account', async () => {
+  it('refuses a weixin account without botToken/baseUrl and persists nothing', async () => {
     const runtime = createImRuntime(fakeContext(), { db })
     try {
+      // 微信凭据先验后存：缺 botToken/baseUrl 时不落盘，也不登记通道。
       await expect(runtime.upsertAccount({ ...ACCOUNT, channel: 'weixin' }, { token: 'secret-token' }))
-        .rejects.toMatchObject({ code: 'IM_CHANNEL_UNSUPPORTED' })
+        .rejects.toMatchObject({ code: 'WEIXIN_BAD_SECRET' })
       expect(await store().accounts()).toEqual([])
+      expect(await store().readSecret('weixin', ACCOUNT.accountId)).toBeUndefined()
     } finally {
       await runtime.dispose()
     }

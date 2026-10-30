@@ -1,12 +1,13 @@
 /**
  * IM 运行时（提案 0024 §3）：把通道、路由、会话托管与宿主 seam 装到一起。
  *
- * 单进程单实例，由 `apply()` 创建、`ctx.effect` 的 disposer 关闭。OneBot 与 QQ
- * 是两条真实通道：账号都来自 store，OneBot 的反向 WS 走
+ * 单进程单实例，由 `apply()` 创建、`ctx.effect` 的 disposer 关闭。OneBot、QQ 与
+ * 微信是三条真实通道：账号都来自 store，OneBot 的反向 WS 走
  * `webServer.registerUpgrade`（缺这条 seam 的宿主只剩 HTTP POST webhook，能力原因
- * 写进 `capabilities.reasons`），QQ 走官方 SDK 的 WebSocket 网关 + 扫码绑定。
- * 两个外部系统都从 `CreateImRuntimeOptions` 注入，测试因此完全不碰网络；
- * QQ 的真实 SDK 由 `im/qq/sdk.ts` 从数据目录动态加载（包外挂安装，不进产物）。
+ * 写进 `capabilities.reasons`），QQ 走官方 SDK 的 WebSocket 网关 + 扫码绑定，
+ * 微信走自研 iLink HTTP 客户端的长轮询 + 扫码绑定。两个外部系统都从
+ * `CreateImRuntimeOptions` 注入，测试因此完全不碰网络；QQ 的真实 SDK 由
+ * `im/qq/sdk.ts` 从数据目录动态加载（包外挂安装，不进产物）。
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -31,6 +32,11 @@ import { ensureOneBotUpgradeSeat } from './onebot/seat.js'
 import { createQQBinding, type QQBindCredential, type QQConnector } from './qq/bind.js'
 import { QQChannel, type QQBotFactory } from './qq/channel.js'
 import { loadQqConnector, loadQqSdk, type QqSdk } from './qq/sdk.js'
+import { WEIXIN_DEFAULT_BOT_TYPE, WEIXIN_FIXED_BASE_URL, type WeixinCredential } from './weixin/api.js'
+import { createWeixinBinding } from './weixin/bind.js'
+import { WeixinChannel, WEIXIN_LONG_POLL_TIMEOUT_MS } from './weixin/channel.js'
+import { WEIXIN_REAL_CLOCK } from './weixin/clock.js'
+import { openWeixinContextTokens } from './weixin/context-tokens.js'
 import { createImRouter, type ImRouter } from './router.js'
 import {
   bindImChat,
@@ -59,18 +65,24 @@ export interface CreateImRuntimeOptions {
   qqBot?: QQBotFactory
   /** QQ 扫码连接器。缺省从数据目录动态加载；测试注入假连接器。 */
   qqConnector?: QQConnector
+  /** 微信扫码入口。缺省官方固定地址；测试指向本地桩服务，自建反代也可覆盖。 */
+  weixinQrBaseUrl?: string
 }
 
 /** QR 绑定出来的账号默认标签；用户可在账号路由里改成自己的备注。 */
 const QQ_BOUND_ACCOUNT_LABEL = 'QQ 机器人'
+const WEIXIN_BOUND_ACCOUNT_LABEL = '微信机器人'
 
-/** 账号落在 store 里，但本构建还没有该通道的适配器（微信在后续里程碑）。 */
+/** 扫码轮询节奏：1s 一次与参考实现一致；二维码有效期由绑定器自己管。 */
+const WEIXIN_BIND_POLL_INTERVAL_MS = 1_000
+
+/** 账号落在 store 里，但本构建还没有该通道的适配器（三条通道之外不可达）。 */
 export class ImChannelUnsupportedError extends Error {
   readonly code = 'IM_CHANNEL_UNSUPPORTED'
   readonly channel: ImChannelId
 
   constructor(channel: ImChannelId) {
-    super(`IM channel '${channel}' has no adapter in this build; only 'onebot' and 'qq' can be started`)
+    super(`IM channel '${channel}' has no adapter in this build; 'onebot', 'qq' and 'weixin' are the supported channels`)
     this.name = 'ImChannelUnsupportedError'
     this.channel = channel
   }
@@ -193,8 +205,30 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
     })
   }
 
-  /** QQ 没有 upgrade/webhook 索引表：换账号就是停旧通道、装新通道，再无别的登记。 */
-  async function installQQ(account: ImAccountRef, channel: QQChannel): Promise<void> {
+  function openWeixin(account: ImAccountRef, secret: Record<string, string>): WeixinChannel {
+    const contextTokens = openWeixinContextTokens(tavernDataRoot('im'), account.accountId)
+    return new WeixinChannel({
+      accountId: account.accountId,
+      // 构造期校验 botToken/baseUrl：坏凭据在落盘前就被拒绝（见 upsertAccount）。
+      token: secret['botToken'] ?? '',
+      baseUrl: secret['baseUrl'] ?? '',
+      router: { handle: async (inbound) => router.inbound(inbound) },
+      loadCursor: async () => store.readCursor(account.accountId),
+      saveCursor: async (cursor) => store.writeCursor(account.accountId, cursor),
+      loadContextTokens: async () => contextTokens.load(),
+      saveContextTokens: async (tokens) => contextTokens.save(tokens),
+      clock: WEIXIN_REAL_CLOCK,
+      longPollTimeoutMs: WEIXIN_LONG_POLL_TIMEOUT_MS,
+      typingEnabled: true,
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
+    })
+  }
+
+  /**
+   * QQ / 微信都没有 upgrade/webhook 索引表：换账号就是停旧通道、装新通道，
+   * 再无别的登记。启动失败时把新通道从表里摘掉，调用方负责回滚密钥。
+   */
+  async function installSingleChannel(account: ImAccountRef, channel: ImChannel): Promise<void> {
     const key = channelKey(account.channel, account.accountId)
     const previous = channels.get(key)
     if (previous !== undefined) {
@@ -210,13 +244,24 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
     }
   }
 
-  // ---- 扫码绑定（本轮只有 QQ；实例进程内唯一，见 im/qq/bind.ts）----
+  // ---- 扫码绑定（QQ 与微信各自一个活动会话，互不顶掉）----
 
   // 扫码连接器只在真正扫码时加载：没装腾讯包不影响其它通道，也不影响面板打开。
   const injectedConnector: QQConnector | undefined = options.qqConnector
   const qqBinding = createQQBinding({
     connect: injectedConnector === undefined ? () => loadQqConnector() : () => Promise.resolve(injectedConnector),
   })
+  // 微信不需要外挂包：协议客户端是自研 HTTP，入口只影响「扫哪台服务器」。
+  const weixinBinding = createWeixinBinding({
+    qrBaseUrl: options.weixinQrBaseUrl ?? WEIXIN_FIXED_BASE_URL,
+    botType: WEIXIN_DEFAULT_BOT_TYPE,
+    pollIntervalMs: WEIXIN_BIND_POLL_INTERVAL_MS,
+    clock: WEIXIN_REAL_CLOCK,
+    localTokenList: loadWeixinLocalTokens,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+  })
+  /** 最近一次 startQrBind 选中的通道；两个绑定器各自保留自己的相位。 */
+  let activeQrBind: 'qq' | 'weixin' | undefined
 
   /**
    * 扫码成功后的落库顺序：先账号与密钥（upsertAccount 会立刻接通道），再把人加进
@@ -245,6 +290,56 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
     if (openid !== '') await addImPrivateAllow(openid)
   }
 
+  /** 微信扫码确认：账号 id 就是 `ilink_bot_id`，baseUrl 后续所有请求都用它。 */
+  async function adoptWeixinCredential(credential: WeixinCredential): Promise<void> {
+    const botToken = credential.botToken.trim()
+    const baseUrl = credential.baseUrl.trim()
+    const ilinkBotId = credential.ilinkBotId.trim()
+    if (botToken === '' || baseUrl === '' || ilinkBotId === '') {
+      throw new Error('the WeChat backend confirmed the scan without bot_token/baseurl/ilink_bot_id; nothing was saved')
+    }
+    const ilinkUserId = credential.ilinkUserId?.trim() ?? ''
+    const accounts = await store.accounts()
+    const existing = accounts.find((entry) => entry.channel === 'weixin' && entry.accountId === ilinkBotId)
+    await upsertAccount({
+      channel: 'weixin',
+      accountId: ilinkBotId,
+      label: WEIXIN_BOUND_ACCOUNT_LABEL,
+      createdAt: existing?.createdAt ?? new Date().toISOString(),
+    }, {
+      botToken,
+      baseUrl,
+      ilinkBotId,
+      ...(ilinkUserId === '' ? {} : { ilinkUserId }),
+    })
+    if (ilinkUserId !== '') await addImPrivateAllow(ilinkUserId)
+  }
+
+  /**
+   * 本机已存的 bot token，最多 10 个：重复扫码时平台回 `binded_redirect`，
+   * 不会给同一个机器人重发凭据。单个账号密钥读不出来只 warn 并跳过——
+   * 它是「让平台少发一张码」的优化，不该让新扫码整个失败。
+   */
+  async function loadWeixinLocalTokens(): Promise<readonly string[]> {
+    const accounts = await store.accounts()
+    const tokens: string[] = []
+    for (const account of [...accounts].reverse()) {
+      if (account.channel !== 'weixin') continue
+      let secret: Record<string, string> | undefined
+      try {
+        secret = await store.readSecret('weixin', account.accountId)
+      } catch (error) {
+        options.logger?.warn?.(`dsh-soulmojito im weixin bind: skipped ${account.accountId} local token: ${messageOf(error)}`)
+        continue
+      }
+      const token = secret?.['botToken']?.trim() ?? ''
+      if (token === '') continue
+      tokens.push(token)
+      if (tokens.length >= 10) break
+    }
+    return tokens
+  }
+
   /** 扫码人即 owner：只追加白名单，不改访问模式——空名单仍然是「拒绝所有人」。 */
   async function addImPrivateAllow(openid: string): Promise<void> {
     const state = await db.getState()
@@ -258,17 +353,67 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
   }
 
   async function startQrBind(channelId: ImChannelId): Promise<ImBindStatus> {
-    if (channelId !== 'qq') throw new ImChannelUnsupportedError(channelId)
-    return qqBinding.startQrConnect({
-      onQrDisplayed: (url) => {
-        // 二维码链接带一次性凭据：日志只留 host，解析不了就只写就绪（审查 P2-3）。
-        options.logger?.info?.(`dsh-soulmojito im qq bind: QR code ready${qrHostSuffix(url)}`)
-      },
-      onSuccess: async (credentials) => { await adoptQQCredential(credentials) },
-      onFailure: (error) => {
-        options.logger?.warn?.(`dsh-soulmojito im qq bind failed: ${error.message}`)
-      },
-    }, { signal: lifetime.signal, source: 'dsh-soulmojito' })
+    if (channelId === 'qq') {
+      activeQrBind = 'qq'
+      return qqBinding.startQrConnect({
+        onQrDisplayed: (url) => {
+          // 二维码链接带一次性凭据：日志只留 host，解析不了就只写就绪（审查 P2-3）。
+          options.logger?.info?.(`dsh-soulmojito im qq bind: QR code ready${qrHostSuffix(url)}`)
+        },
+        onSuccess: async (credentials) => { await adoptQQCredential(credentials) },
+        onFailure: (error) => {
+          options.logger?.warn?.(`dsh-soulmojito im qq bind failed: ${error.message}`)
+        },
+      }, { signal: lifetime.signal, source: 'dsh-soulmojito' })
+    }
+    if (channelId === 'weixin') {
+      activeQrBind = 'weixin'
+      return weixinBinding.start({
+        onQrDisplayed: (url) => {
+          options.logger?.info?.(`dsh-soulmojito im weixin bind: QR code ready${qrHostSuffix(url)}`)
+        },
+        onSuccess: async (credential) => { await adoptWeixinCredential(credential) },
+        onAlreadyBound: () => {
+          options.logger?.info?.('dsh-soulmojito im weixin bind: the bot is already bound; existing credential stays in use')
+        },
+        onFailure: (error) => {
+          options.logger?.warn?.(`dsh-soulmojito im weixin bind failed: ${error.message}`)
+        },
+      }, { signal: lifetime.signal })
+    }
+    throw new ImChannelUnsupportedError(channelId)
+  }
+
+  /**
+   * 面板轮询的相位：优先回当前扫描通道；它回到 idle 后把身份还回去。
+   * 另一个绑定器只有「还在进行中」的相位值得展示——终态失败不该在
+   * 另一个通道刚成功后被翻出来。
+   */
+  function qrBindStatus(): ImBindStatus {
+    const qqStatus = qqBinding.status()
+    const weixinStatus = weixinBinding.status()
+    if (activeQrBind === 'qq' && qqStatus.phase !== 'idle') return qqStatus
+    if (activeQrBind === 'weixin' && weixinStatus.phase !== 'idle') return weixinStatus
+    if (activeQrBind !== undefined) activeQrBind = undefined
+    if (isRunningBindPhase(weixinStatus.phase)) return weixinStatus
+    if (isRunningBindPhase(qqStatus.phase)) return qqStatus
+    return { phase: 'idle' }
+  }
+
+  /** 微信验证码：只在 `verify` 相位合法；非法相位由绑定器抛结构化错误。 */
+  function submitQrVerifyCode(code: string): ImBindStatus {
+    return weixinBinding.submitVerifyCode(code)
+  }
+
+  function cancelQrBind(): ImBindStatus {
+    const active = activeQrBind
+    activeQrBind = undefined
+    if (active === 'qq') return qqBinding.cancel()
+    if (active === 'weixin') return weixinBinding.cancel()
+    // 没有活动会话：两边都取消（两个 cancel 都是幂等空操作），返回 idle 收起弹窗。
+    qqBinding.cancel()
+    weixinBinding.cancel()
+    return { phase: 'idle' }
   }
 
   // 账号增删串行化：启动恢复与面板请求可能同时改写同一个账号，后写必须赢。
@@ -299,28 +444,50 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
         const previous = await store.readSecret('qq', account.accountId)
         await store.putAccount(account, { ...secret })
         try {
-          await installQQ(account, channel)
+          await installSingleChannel(account, channel)
         } catch (error) {
-          // 落盘后安装失败必须回滚：新建账号删掉；改配置的账号还原旧密钥。
-          // 两者都保证「store 里没有连不上的半残配置」，同时不因一次网络抖动
-          // 抹掉用户已有的机器人（审查 P2-2）。
-          try {
-            if (previous === undefined) await store.deleteAccount('qq', account.accountId)
-            else await store.putAccount(account, previous)
-          } catch (rollbackError) {
-            // 回滚本身失败时把原始失败挂在 cause 上：调用方至少能分辨「网关拒绝」
-            // 与「磁盘写坏」，否则只剩最后一条错误，排障无门（审查 P2-3）。
-            throw new Error(
-              `qq account '${account.accountId}' failed to install and its credential rollback also failed: ${messageOf(rollbackError)}`,
-              { cause: error },
-            )
-          }
+          await rollbackAccountSecret(account, previous, error)
+          throw error
+        }
+        return
+      }
+      if (account.channel === 'weixin') {
+        // 微信凭据同样先验后存：缺 botToken/baseUrl 时 openWeixin 就抛错，账号不落盘。
+        const channel = openWeixin(account, secret)
+        const previous = await store.readSecret('weixin', account.accountId)
+        await store.putAccount(account, { ...secret })
+        try {
+          await installSingleChannel(account, channel)
+        } catch (error) {
+          await rollbackAccountSecret(account, previous, error)
           throw error
         }
         return
       }
       throw new ImChannelUnsupportedError(account.channel)
     })
+  }
+
+  /**
+   * 落盘后安装失败必须回滚：新建账号删掉；改配置的账号还原旧密钥。
+   * 两者都保证「store 里没有连不上的半残配置」，同时不因一次网络抖动抹掉
+   * 用户已有的机器人（审查 P2-2）。回滚本身失败时把原始失败挂在 cause 上，
+   * 调用方至少能分辨「网关拒绝」与「磁盘写坏」（审查 P2-3）。
+   */
+  async function rollbackAccountSecret(
+    account: ImAccountRef,
+    previous: Record<string, string> | undefined,
+    error: unknown,
+  ): Promise<void> {
+    try {
+      if (previous === undefined) await store.deleteAccount(account.channel, account.accountId)
+      else await store.putAccount(account, previous)
+    } catch (rollbackError) {
+      throw new Error(
+        `${account.channel} account '${account.accountId}' failed to install and its credential rollback also failed: ${messageOf(rollbackError)}`,
+        { cause: error },
+      )
+    }
   }
 
   async function removeAccount(channelId: ImChannelId, accountId: string): Promise<boolean> {
@@ -361,11 +528,10 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
     return false
   }
 
-  // 重启恢复：store 里已有的 OneBot / QQ 账号逐个重建通道（走与面板登记同一条 upsert）。
+  // 重启恢复：store 里已有的账号逐个重建通道（走与面板登记同一条 upsert）。
   async function restoreAccounts(): Promise<void> {
     const accounts = await store.accounts()
     for (const account of accounts) {
-      if (account.channel !== 'onebot' && account.channel !== 'qq') continue
       try {
         const secret = await store.readSecret(account.channel, account.accountId)
         if (secret === undefined) {
@@ -398,11 +564,14 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
     handleSessionEvent,
     handleOneBotUpgrade,
     startQrBind,
-    qrBindStatus: () => qqBinding.status(),
-    cancelQrBind: () => qqBinding.cancel(),
+    qrBindStatus,
+    submitQrVerifyCode,
+    cancelQrBind,
     dispose: async () => {
       // 先取消扫码再中止生命信号：连接器的「已取消」回调不能和卸载抢同一份状态。
       qqBinding.cancel()
+      weixinBinding.cancel()
+      activeQrBind = undefined
       lifetime.abort()
       for (const channel of channels.values()) {
         await channel.stop().catch((error: unknown) => {
@@ -472,6 +641,11 @@ function qrHostSuffix(url: string): string {
   } catch {
     return ''
   }
+}
+
+/** 只有「用户还能继续操作」的相位值得跨通道兜底展示。 */
+function isRunningBindPhase(phase: ImBindStatus['phase']): boolean {
+  return phase === 'waiting' || phase === 'verify' || phase === 'saving'
 }
 
 function noop(): void {

@@ -4,10 +4,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { TavernStore } from '../../tavern-store/src/index.js'
 import { tavernDataRoot } from '../src/dsh-home.js'
+import type { PluginContext } from '../src/host-contract.js'
 import { handleImApi } from '../src/http/im.js'
 import type { HttpRequest, HttpResponse } from '../src/http/io.js'
+import { createImRuntime } from '../src/im/runtime.js'
 import { ImStore } from '../src/im/store.js'
 import type { ImRuntime } from '../src/im/runtime.js'
+import { WeixinBindError } from '../src/im/weixin/bind.js'
+import { WeixinChannelError } from '../src/im/weixin/channel.js'
 import type { ImAccountRef } from '../src/im/types.js'
 
 let root: string
@@ -138,8 +142,9 @@ describe('im account routes', () => {
     expect(result.statusCode).toBe(401)
   })
 
-  it('serves qr binding start/status/cancel for qq and refuses channels without a binder', async () => {
+  it('serves qr binding start/status/cancel for qq and weixin, and refuses channels without a binder', async () => {
     let phase: 'idle' | 'waiting' = 'idle'
+    const verifyCodes: string[] = []
     const runtime: ImRuntime = {
       ...runtimeOf(),
       startQrBind: async () => {
@@ -149,6 +154,11 @@ describe('im account routes', () => {
       qrBindStatus: () => (phase === 'waiting'
         ? { phase: 'waiting', url: 'https://example.invalid/qq-qr' }
         : { phase: 'idle' }),
+      submitQrVerifyCode: (code: string) => {
+        verifyCodes.push(code)
+        phase = 'waiting'
+        return { phase: 'waiting', url: 'https://example.invalid/weixin-qr' }
+      },
       cancelQrBind: () => {
         phase = 'idle'
         return { phase: 'idle' }
@@ -158,14 +168,85 @@ describe('im account routes', () => {
     expect(started.statusCode).toBe(200)
     expect(started.body).toMatchObject({ ok: true, phase: 'waiting', url: 'https://example.invalid/qq-qr' })
 
+    const weixin = await call({ channel: 'weixin' }, '/api/dsh-soulmojito/im/bind/start', 'im/bind/start', 'POST', runtime)
+    expect(weixin.statusCode).toBe(200)
+    expect(weixin.body).toMatchObject({ ok: true, phase: 'waiting' })
+
+    const verified = await call({ code: ' 246810 ' }, '/api/dsh-soulmojito/im/bind/verify', 'im/bind/verify', 'POST', runtime)
+    expect(verified.statusCode).toBe(200)
+    expect(verified.body).toMatchObject({ ok: true, phase: 'waiting' })
+    expect(verifyCodes).toEqual([' 246810 '])
+
     const status = await call(undefined, '/api/dsh-soulmojito/im/bind/status', 'im/bind/status', 'GET', runtime)
     expect(status.body).toMatchObject({ ok: true, phase: 'waiting' })
 
     const cancelled = await call(undefined, '/api/dsh-soulmojito/im/bind/cancel', 'im/bind/cancel', 'POST', runtime)
     expect(cancelled.body).toMatchObject({ ok: true, phase: 'idle' })
 
-    // 微信扫码不在本轮：路由如实 501，不假装二维码可用。
-    await expect(call({ channel: 'weixin' }, '/api/dsh-soulmojito/im/bind/start', 'im/bind/start', 'POST', runtime))
+    // OneBot 没有二维码：路由如实 501，不假装扫码可用。
+    await expect(call({ channel: 'onebot' }, '/api/dsh-soulmojito/im/bind/start', 'im/bind/start', 'POST', runtime))
       .rejects.toMatchObject({ status: 501 })
+    // 没有验证码能力（旧运行时）时同样 501。
+    await expect(call({ code: '1' }, '/api/dsh-soulmojito/im/bind/verify', 'im/bind/verify', 'POST', runtimeOf()))
+      .rejects.toMatchObject({ status: 501 })
+    // 空验证码是用户输入错误，不是服务器故障。
+    await expect(call({ code: '  ' }, '/api/dsh-soulmojito/im/bind/verify', 'im/bind/verify', 'POST', runtime))
+      .rejects.toMatchObject({ status: 400 })
+  })
+
+  it('maps WeChat bind phases to 409/503 instead of an opaque 500', async () => {
+    const path = '/api/dsh-soulmojito/im/bind/start'
+    const busy: ImRuntime = {
+      ...runtimeOf(),
+      startQrBind: async () => {
+        throw new WeixinBindError('WEIXIN_BIND_BUSY', 'a WeChat QR binding session is already running')
+      },
+    }
+    await expect(call({ channel: 'weixin' }, path, 'im/bind/start', 'POST', busy))
+      .rejects.toMatchObject({ status: 409 })
+
+    const shuttingDown: ImRuntime = {
+      ...runtimeOf(),
+      startQrBind: async () => {
+        throw new WeixinBindError('WEIXIN_BIND_ABORTED', 'the runtime is already shutting down')
+      },
+    }
+    await expect(call({ channel: 'weixin' }, path, 'im/bind/start', 'POST', shuttingDown))
+      .rejects.toMatchObject({ status: 503 })
+  })
+
+  it('answers 400 when a WeChat account is created without botToken and 503 when the channel is closed', async () => {
+    const path = '/api/dsh-soulmojito/im/accounts'
+    // 真实运行时：微信凭据在构造期校验，缺 botToken 时账号根本不会落盘。
+    const runtime = createImRuntime(
+      { webServer: { register: () => () => {} } } as unknown as PluginContext,
+      { db },
+    )
+    try {
+      await expect(call({
+        channel: 'weixin',
+        accountId: 'wx-bot-1',
+        secret: { baseUrl: 'https://example.invalid' },
+      }, path, 'im/accounts', 'POST', runtime)).rejects.toMatchObject({
+        status: 400,
+        message: expect.stringContaining('botToken'),
+      })
+      expect(await ImStore.open(tavernDataRoot('im')).accounts()).toEqual([])
+    } finally {
+      await runtime.dispose()
+    }
+
+    // 通道没在跑（WEIXIN_CLOSED）是运行时事实，不是用户输入错误。
+    const closed: ImRuntime = {
+      ...runtimeOf(),
+      upsertAccount: async () => {
+        throw new WeixinChannelError('WEIXIN_CLOSED', 'weixin account \'wx-bot-1\' is not running')
+      },
+    }
+    await expect(call({
+      channel: 'weixin',
+      accountId: 'wx-bot-1',
+      secret: { botToken: 'synthetic-bot-token', baseUrl: 'https://example.invalid' },
+    }, path, 'im/accounts', 'POST', closed)).rejects.toMatchObject({ status: 503 })
   })
 })

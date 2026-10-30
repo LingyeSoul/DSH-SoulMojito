@@ -86,12 +86,14 @@ export type ImChannelStatus =
   | { state: 'error'; message: string }
 
 /** 扫码绑定的相位（提案 0024 §4.1）：面板只读投影，协议跑在插件侧。 */
-export type ImBindPhase = 'idle' | 'waiting' | 'saving' | 'failed'
+export type ImBindPhase = 'idle' | 'waiting' | 'verify' | 'saving' | 'failed'
 
 export interface ImBindStatus {
   phase: ImBindPhase
   /** `waiting` 相位里二维码链接就绪后出现；刷新二维码时会被清掉。 */
   url?: string
+  /** `verify` 相位给用户的提示（微信 `need_verifycode`）。 */
+  prompt?: string
   /** `failed` 相位的可读原因。 */
   reason?: string
 }

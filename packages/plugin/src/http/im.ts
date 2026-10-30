@@ -16,6 +16,9 @@ import { applyImSettingsPatch, ImSettingsError } from '../im/settings.js'
 import { ImStore, ImStoreError } from '../im/store.js'
 import type { ImRuntime } from '../im/runtime.js'
 import { imDisabledByEnv, ImChannelUnsupportedError } from '../im/runtime.js'
+import { WeixinApiError } from '../im/weixin/api.js'
+import { WeixinBindError, type WeixinBindErrorCode } from '../im/weixin/bind.js'
+import { WeixinChannelError, type WeixinChannelErrorCode } from '../im/weixin/channel.js'
 import type { ImAccountRef, ImChannelId, ImChannelView, ImPeerBinding, ImScope } from '../im/types.js'
 import { DEFAULT_IM_SETTINGS, imPeerKey, imPeerKeyParts } from '../im/types.js'
 import { HttpError } from './errors.js'
@@ -79,6 +82,8 @@ export async function handleImApi(
       if (error instanceof ImChannelUnsupportedError) throw new HttpError(501, error.message)
       if (error instanceof OneBotError) throw new HttpError(400, error.message)
       if (error instanceof QQChannelError) throw new HttpError(400, error.message)
+      // 微信凭据/参数错误与 QQ 同口径：坏输入 400，通道没在跑/状态读不出来 503。
+      if (error instanceof WeixinChannelError) throw new HttpError(weixinChannelErrorStatus(error.code), error.message)
       // 腾讯包没装是部署事实，不是用户输入错误：503 + 原文里的安装命令。
       if (error instanceof QqRuntimeError) throw new HttpError(503, error.message)
       throw error
@@ -97,24 +102,47 @@ export async function handleImApi(
     return sendJson(res, 200, { ok: true })
   }
 
-  // 扫码绑定（提案 0024 §4.1 / §6.2）：本轮只服务 QQ；微信的 verify 相位不在本轮，
-  // 请求其它通道时如实 501，不假装扫描可用。
+  // 扫码绑定（提案 0024 §4.1 / §6.2）：QQ 与微信两条真实通道。OneBot 没有二维码，
+  // 请求它时如实 501；微信多一个 verify 相位（POST im/bind/verify）。
   if (method === 'POST' && route === 'im/bind/start') {
     if (runtime === undefined) throw new HttpError(503, 'IM runtime is not available in this host process')
     const body = await readJson(req)
     const channel = parseChannel(body.channel)
-    if (channel !== 'qq') {
-      throw new HttpError(501, `QR binding for '${channel}' is not available in this build; only 'qq' can be bound by QR code`)
+    if (channel === 'onebot') {
+      throw new HttpError(501, 'QR binding for \'onebot\' is not available: OneBot endpoints are configured with a token, not a QR code')
     }
     if (runtime.startQrBind === undefined) throw new HttpError(501, 'this IM runtime exposes no QR binding')
     try {
-      return sendJson(res, 200, { ok: true, ...(await runtime.startQrBind('qq')) })
+      return sendJson(res, 200, { ok: true, ...(await runtime.startQrBind(channel)) })
     } catch (error) {
       // 已有会话在跑不是服务器错误：面板据此提示「先取消上一次扫码」。
       if (error instanceof QQBindError) throw new HttpError(error.code === 'QQ_BIND_BUSY' ? 409 : 503, error.message)
+      if (error instanceof WeixinBindError) throw new HttpError(bindErrorStatus(error.code), error.message)
+      // 拉二维码是真实网络请求：上游不可用是部署事实，不是用户输入错误。
+      if (error instanceof WeixinApiError) throw new HttpError(503, error.message)
       if (error instanceof ImChannelUnsupportedError) throw new HttpError(501, error.message)
       // 连接器是运行期加载的：没装腾讯包时如实 503，并带上安装命令。
       if (error instanceof QqRuntimeError) throw new HttpError(503, error.message)
+      throw error
+    }
+  }
+
+  // 微信验证码（`need_verifycode` 相位）：服务端解析后继续轮询，成功与否都体现在
+  // 下一次 `im/bind/status` 的相位上。
+  if (method === 'POST' && route === 'im/bind/verify') {
+    if (runtime === undefined) throw new HttpError(503, 'IM runtime is not available in this host process')
+    if (runtime.submitQrVerifyCode === undefined) {
+      throw new HttpError(501, 'this IM runtime exposes no verification-code binding (only the WeChat QR flow needs one)')
+    }
+    const body = await readJson(req)
+    const code = body.code
+    if (typeof code !== 'string' || code.trim() === '') {
+      throw new HttpError(400, 'code must be a non-empty string (the digits shown in the mobile WeChat app)')
+    }
+    try {
+      return sendJson(res, 200, { ok: true, ...runtime.submitQrVerifyCode(code) })
+    } catch (error) {
+      if (error instanceof WeixinBindError) throw new HttpError(bindErrorStatus(error.code), error.message)
       throw error
     }
   }
@@ -273,6 +301,31 @@ function parseChannel(value: unknown): ImChannelId {
     throw new HttpError(400, `channel must be one of ${CHANNELS.join(' | ')}`)
   }
   return value as ImChannelId
+}
+
+/**
+ * 微信通道错误 → HTTP 状态：坏凭据/坏参数是用户输入（400）；通道没在跑、
+ * 持久化状态读不出来、发送失败属运行时事实（503）。与 `QQChannelError → 400`、
+ * `QqRuntimeError → 503` 同口径。
+ */
+function weixinChannelErrorStatus(code: WeixinChannelErrorCode): number {
+  if (code === 'WEIXIN_BAD_SECRET' || code === 'WEIXIN_BAD_TARGET' || code === 'WEIXIN_BAD_MESSAGE') return 400
+  return 503
+}
+
+/**
+ * 微信绑定错误 → HTTP 状态：验证码本身坏是 400；「不是现在能做的事」
+ * （忙碌、不在 verify 相位、没有会话、刷新额度用完）是 409；其余按不可用 503。
+ */
+function bindErrorStatus(code: WeixinBindErrorCode): number {
+  if (code === 'WEIXIN_BIND_BAD_CODE') return 400
+  if (
+    code === 'WEIXIN_BIND_BUSY'
+    || code === 'WEIXIN_BIND_NOT_VERIFYING'
+    || code === 'WEIXIN_BIND_IDLE'
+    || code === 'WEIXIN_BIND_REFRESH_EXHAUSTED'
+  ) return 409
+  return 503
 }
 
 function parseScope(value: unknown): ImScope {

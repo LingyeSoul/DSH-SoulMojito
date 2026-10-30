@@ -52,12 +52,14 @@ export interface ImRuntimeHandle {
    */
   handleOneBotUpgrade?(req: unknown, socket: unknown, head: Buffer): Promise<void>
   /**
-   * 扫码绑定（提案 0024 §4.1）：本轮只有 QQ。三个成员都可选，缺省表示这个
-   * 运行时没有绑定能力（面板照实显示 501，不假装扫码可用）。
+   * 扫码绑定（提案 0024 §4.1）：QQ 与微信各自一个活动会话。这些成员都可选，
+   * 缺省表示这个运行时没有绑定能力（面板照实显示 501，不假装扫码可用）。
    */
   startQrBind?(channel: ImChannelId): Promise<ImBindStatus>
-  /** 当前绑定相位；`waiting` 相位里的 `url` 供面板渲染二维码。 */
+  /** 当前绑定相位；`waiting` 相位里的 `url`、`verify` 相位的 `prompt` 供面板渲染。 */
   qrBindStatus?(): ImBindStatus
+  /** 提交微信 `need_verifycode` 的数字；没有微信绑定能力时缺省。 */
+  submitQrVerifyCode?(code: string): ImBindStatus
   /** 取消进行中的扫码；没有活动会话时是空操作。 */
   cancelQrBind?(): ImBindStatus
   dispose(): Promise<void>

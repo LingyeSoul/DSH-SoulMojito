@@ -32,7 +32,7 @@
 | [`0021`](proposals/0021-agent-tavern-body-ops.md) | AgentTavern 正文编辑、重生成与正文候选（DSH 原生 seam，不 fork） |
 | [`0022`](proposals/0022-agent-tavern-write-rollback.md) | AgentTavern 正文重生成的写入回滚（MVU 变量、记忆/变量工具 journal） |
 | [`0023`](proposals/0023-agent-tavern-mvu-body-switching.md) | AgentTavern MVU 正文编辑与候选切换（候选级 receipt） |
-| [`0024`](proposals/0024-im-channels.md) | IM 通道（QQ / 微信 / OneBot 11）：peer→AgentTavern 会话绑定、立即投递、IM 工具族、扫码绑定与安全边界（M0–M3 已实现：OneBot 11 + QQ；M4/M5 未开始） |
+| [`0024`](proposals/0024-im-channels.md) | IM 通道（QQ / 微信 / OneBot 11）：peer→AgentTavern 会话绑定、立即投递、IM 工具族、扫码绑定与安全边界（M0–M4 已实现：OneBot 11 + QQ + 微信；M5 未开始） |
 
 ## 开发者文档（`mods/`、`games/`、`frontend/`）
 
@@ -61,6 +61,7 @@
 - [`2026-10-30-im-tools-and-activation.md`](../decisions/2026-10-30-im-tools-and-activation.md) — IM 工具族与历史导入抽取（提案 0024 第二批：alias 身份、env 门控、跨 bundle 句柄守卫）
 - [`2026-10-30-onebot-transport.md`](../decisions/2026-10-30-onebot-transport.md) — OneBot 11 连接层（提案 0024 第三批：自研最小 WS 服务端、常驻升级席位、出站串行、header-only 凭据）
 - [`2026-10-30-qq-channel.md`](../decisions/2026-10-30-qq-channel.md) — QQ 官方机器人通道（提案 0024 M3：两个腾讯包外挂安装、`start()` 的 resolve 语义、被动回复上限、markdown 能力、启动回滚）
+- [`2026-10-30-weixin-channel.md`](../decisions/2026-10-30-weixin-channel.md) — 微信官方 iLink 通道（提案 0024 M4：六端点与鉴权头、游标先投递后落盘、`context_token` 按对端、`-14` 暂停一小时且暂停期不出站、扫码八状态与 `verify` 相位、`binded_redirect` 语义、`verify_code_blocked` 判死）
 
 ### 宿主兼容与 DSH 版本适配
 
