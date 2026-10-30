@@ -9,6 +9,7 @@ import { envCompat } from './env-compat.js'
 import type { GamesService } from './games/service.js'
 import type { PluginContext } from './host-contract.js'
 import { ModHost, type ModHostContext, type ModHostSnapshot } from './mods/host.js'
+import type { ImRuntime } from './im/runtime.js'
 import { TavernUpdateService } from './update/service.js'
 import { MemoryStore, MemoryVectorStore, NovelStore, TavernStore, VariableStore } from '../../tavern-store/src/index.js'
 
@@ -38,6 +39,16 @@ let modHostContext: ModHostContext | undefined
 // 句柄发布（agent bundle 的 game_* 工具逐调用解析，见 src/games/handle.ts）。
 // 单进程单实例；apply 打开、effect 清理时 dispose 摘句柄。
 let gamesServicePromise: Promise<GamesService> | undefined
+// IM 通道运行时（提案 0024）：单进程单实例，apply 装配、effect 卸载时 dispose。
+// 本轮只装配不活动（无真实通道适配器），HTTP 面与面板投影共用同一实例。
+let imRuntimeInstance: ImRuntime | undefined
+export function getImRuntime(): ImRuntime | undefined {
+  return imRuntimeInstance
+}
+
+export function setImRuntime(value: ImRuntime | undefined): void {
+  imRuntimeInstance = value
+}
 // Prompt Template（提案 0008）总开关：默认关闭（安全默认）；profile 行
 // templateEnabled: true 显式开启，DSH_SOULMOJITO_DISABLE_TEMPLATES 环境 kill
 // switch 始终优先。无模板标签时链路直通，无额外开销。

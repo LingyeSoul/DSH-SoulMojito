@@ -67,6 +67,7 @@ import {
   getAgentTavernCapabilitiesPromise,
   getAgentTavernProjectorPromise,
   getGamesServicePromise,
+  getImRuntime,
   memories,
   modHostProjection,
   store,
@@ -85,6 +86,7 @@ import { activeCharacterPatch } from '../session/active-character.js'
 import { normalizeChatId } from '../session/trace.js'
 import { prepareInternalWorkspace, prepareWorkbenchWorkspace } from '../workspace.js'
 import { HttpError } from './errors.js'
+import { handleImApi } from './im.js'
 import type { PluginContext } from '../host-contract.js'
 import { readJson, sendJson, type HttpRequest, type HttpResponse } from './io.js'
 import { handleMemoryEmbedApi, handleMemoryMaintenanceApi } from './memory.js'
@@ -120,6 +122,12 @@ export async function handleApi(ctx: PluginContext, req: HttpRequest, res: HttpR
   }
 
   const db = await store()
+
+  // IM 通道管理面（提案 0024 §6.2）：不依赖通道是否在线；禁用/未装配时如实报原因，
+  // 面板据此显示「不可用」而不是把绑定按钮点成 500。
+  if (route === 'im' || route.startsWith('im/')) {
+    return handleImApi(req, res, url, route, method, db, getImRuntime())
+  }
 
   if (method === 'GET' && route === 'bootstrap') {
     await getAgentTavernCapabilitiesPromise()

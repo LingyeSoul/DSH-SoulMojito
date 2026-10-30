@@ -25,6 +25,7 @@ import { getActiveAgentPrompt, refreshActivePrompt } from './model-catalog.js'
 import {
   getAgentTavernProjectorPromise,
   getGamesServicePromise,
+  getImRuntime,
   memories,
   memoryVectors,
   modHost,
@@ -34,6 +35,7 @@ import {
   setAgentTavernCapabilitiesPromise,
   setAgentTavernProjectorPromise,
   setGamesServicePromise,
+  setImRuntime,
   setModHostContext,
   setNovelDriverPromise,
   setNovelProjectorPromise,
@@ -47,6 +49,7 @@ import {
 } from './runtime.js'
 import { bindSession } from './session/binding.js'
 import { registerTavernSessionCommand } from './session/command.js'
+import { createImRuntime, imDisabledByEnv } from './im/runtime.js'
 import { API, handleApi } from './http/router.js'
 import { sendJson } from './http/io.js'
 import { sendApiError } from './http/public-error.js'
@@ -128,6 +131,9 @@ export function apply(ctx: PluginContext, config: { anchorEveryTurns?: unknown, 
   ctx.on?.('session/event', (session, event) => {
     void getAgentTavernProjectorPromise()!.then((projector) => projector.project(session, event))
       .catch((error) => ctx.logger?.warn?.(`AgentTavern projection failed: ${error instanceof Error ? error.message : String(error)}`))
+    // IM 回复抽取（提案 0024 §3.3.1）：只有被 IM peer 绑定的会话才参与，
+    // 未绑定的会话在第一行就返回，不给普通聊天加负担。
+    getImRuntime()?.handleSessionEvent(session, event)
     // turn 作用域变量是单轮 scratch 状态，turn 结束即过期。
     if (event?.type === 'turn/end' && typeof session?.id === 'string') {
       void variables().then((store) => store.clear('turn', session.id)).catch(() => {})
@@ -231,6 +237,28 @@ export function apply(ctx: PluginContext, config: { anchorEveryTurns?: unknown, 
     }, 'dsh-soulmojito: games unload')
   } catch {
     // 拒绝晚注册 effect 的宿主只失去摘句柄兜底；句柄本身不受影响。
+  }
+
+  // IM 通道（提案 0024）：本轮只装配、不活动——没有真实通道适配器时不发任何
+  // 网络请求，HTTP 面仍可查看绑定与设置。环境硬关（DSH_SOULMOJITO_DISABLE_IM）
+  // 时整块不装配，面板如实显示不可用。
+  if (imDisabledByEnv()) {
+    ctx.logger?.info?.('dsh-soulmojito im: disabled by DSH_SOULMOJITO_DISABLE_IM')
+  } else {
+    void store().then((db) => {
+      setImRuntime(createImRuntime(ctx, { db, ...(ctx.logger === undefined ? {} : { logger: ctx.logger }) }))
+    }).catch((error: unknown) => {
+      ctx.logger?.warn?.(`dsh-soulmojito im: runtime unavailable: ${error instanceof Error ? error.message : String(error)}`)
+    })
+    try {
+      ctx.effect?.(() => () => {
+        const runtime = getImRuntime()
+        setImRuntime(undefined)
+        void runtime?.dispose()
+      }, 'dsh-soulmojito: im unload')
+    } catch {
+      // 拒绝晚注册 effect 的宿主只失去卸载兜底；运行时句柄本身不受影响。
+    }
   }
 
   // Mod 宿主（提案 0015 P3）：stores 就绪后扫描 <tavern>/mods/ 并按三层

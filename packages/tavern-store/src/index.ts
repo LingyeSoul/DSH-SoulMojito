@@ -1,4 +1,5 @@
 export * from './store.js'
+export * from './im-state.js'
 export * from './fs-atomic.js'
 export * from './mutation-tail.js'
 export * from './memory.js'

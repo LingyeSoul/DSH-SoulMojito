@@ -113,6 +113,79 @@ async function renameWithWindowsRetry(from, to, attempts) {
   }
 }
 
+// packages/tavern-store/src/im-state.ts
+var DEFAULT_IM_SETTINGS = {
+  bindingMode: "independent",
+  groupRequireMention: true,
+  privateMode: "allowlist",
+  privateAllow: [],
+  groupMode: "allowlist",
+  groupAllow: []
+};
+function normalizeChatRef(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
+  const record = value;
+  const character = record["character"];
+  const chatId = record["chatId"];
+  if (typeof character !== "string" || character.trim() === "") return void 0;
+  if (typeof chatId !== "string" || chatId.trim() === "") return void 0;
+  return { character, chatId };
+}
+function normalizeAccessMode(value, fallback) {
+  return value === "open" || value === "allowlist" || value === "disabled" ? value : fallback;
+}
+function normalizeStringList(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = /* @__PURE__ */ new Set();
+  const result = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") continue;
+    const trimmed = entry.trim();
+    if (trimmed === "" || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    result.push(trimmed);
+  }
+  return result;
+}
+function normalizeImSettings(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return structuredClone(DEFAULT_IM_SETTINGS);
+  }
+  const record = value;
+  const bindingMode = record["bindingMode"] === "manual" || record["bindingMode"] === "shared" ? record["bindingMode"] : "independent";
+  const chunkLimit = record["chunkLimit"];
+  return {
+    bindingMode,
+    ...normalizeChatRef(record["sourceChat"]) === void 0 ? {} : { sourceChat: normalizeChatRef(record["sourceChat"]) },
+    ...normalizeChatRef(record["sharedChat"]) === void 0 ? {} : { sharedChat: normalizeChatRef(record["sharedChat"]) },
+    groupRequireMention: record["groupRequireMention"] !== false,
+    privateMode: normalizeAccessMode(record["privateMode"], "allowlist"),
+    privateAllow: normalizeStringList(record["privateAllow"]),
+    groupMode: normalizeAccessMode(record["groupMode"], "allowlist"),
+    groupAllow: normalizeStringList(record["groupAllow"]),
+    ...typeof chunkLimit === "number" && Number.isSafeInteger(chunkLimit) && chunkLimit > 0 ? { chunkLimit } : {}
+  };
+}
+function normalizeImPeers(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const result = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+    const record = entry;
+    const sessionId = record["sessionId"];
+    const character = record["character"];
+    const chatId = record["chatId"];
+    if (typeof sessionId !== "string" || sessionId === "") continue;
+    if (typeof character !== "string" || character === "") continue;
+    if (typeof chatId !== "string" || chatId === "") continue;
+    const scope = record["scope"] === "group" ? "group" : "private";
+    const boundBy = record["boundBy"] === "manual" ? "manual" : "auto";
+    const createdAt = typeof record["createdAt"] === "string" ? record["createdAt"] : (/* @__PURE__ */ new Date(0)).toISOString();
+    result[key] = { sessionId, character, chatId, scope, boundBy, createdAt };
+  }
+  return result;
+}
+
 // packages/tavern-store/src/mutation-tail.ts
 var MutationTail = class {
   constructor(onIdle) {
@@ -2046,7 +2119,9 @@ var DEFAULT_STATE = {
   characterVariables: {},
   frontendStorage: {},
   modsEnabled: false,
-  mods: { enabled: {} }
+  mods: { enabled: {} },
+  imSettings: structuredClone(DEFAULT_IM_SETTINGS),
+  imPeers: {}
 };
 function normalizeCharacterVariables(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
@@ -3106,7 +3181,7 @@ var TavernStore = class _TavernStore {
       cardWorkbenchPresetEnabled: parsed.cardWorkbenchPresetEnabled === true,
       agentNovelPresetEnabled: parsed.agentNovelPresetEnabled === true,
       worldFollowsCharacter: parsed.worldFollowsCharacter !== false,
-      disabledAutoWorlds: normalizeStringList(parsed.disabledAutoWorlds),
+      disabledAutoWorlds: normalizeStringList2(parsed.disabledAutoWorlds),
       ...typeof parsed.regexOwnershipVersion === "number" && Number.isFinite(parsed.regexOwnershipVersion) ? { regexOwnershipVersion: parsed.regexOwnershipVersion } : {},
       modelSelections: parsed.modelSelections ?? {},
       chats: parsed.chats ?? {},
@@ -3120,7 +3195,9 @@ var TavernStore = class _TavernStore {
       // Mod 三层开关的前两层（提案 0015 §3.2）：双默认 false，只有显式 true 才开。
       modsEnabled: parsed.modsEnabled === true,
       mods: { enabled: normalizeModEnables(parsed.mods) },
-      memoryEmbedding: normalizeMemoryEmbedding(parsed.memoryEmbedding)
+      memoryEmbedding: normalizeMemoryEmbedding(parsed.memoryEmbedding),
+      imSettings: normalizeImSettings(parsed.imSettings),
+      imPeers: normalizeImPeers(parsed.imPeers)
     };
   }
   async assertChatRevision(file, expectedRevision) {
@@ -3257,7 +3334,7 @@ function normalizeCompactionOverride(value) {
   if (provider.trim() === "" || model.trim() === "") return void 0;
   return { curatorProvider: provider, curatorModel: model };
 }
-function normalizeStringList(value) {
+function normalizeStringList2(value) {
   if (!Array.isArray(value)) return [];
   const seen = /* @__PURE__ */ new Set();
   const result = [];

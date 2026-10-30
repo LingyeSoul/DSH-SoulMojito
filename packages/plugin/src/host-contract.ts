@@ -94,12 +94,17 @@ export interface HostAgentLike {
   session?: HostSessionLog & { id: string }
   ctx?: unknown
   status?: unknown
+  /** Inbox append used by IM and game wake; the host loop owns turn scheduling. */
+  followup?(message: unknown): Promise<unknown> | unknown
+  whenIdle?(): Promise<unknown>
   [key: string]: unknown
 }
 
 export interface HostAgentsService {
   get?(id: string): HostAgentLike | undefined | null
   create?(...args: unknown[]): unknown
+  /** Resume a persisted session (DSH 0.2.x shape, as used by official plugins). */
+  resume?(...args: unknown[]): unknown
   /** All live agents, in registration order (0.2.x registry shape). */
   list?(): readonly HostAgentLike[]
 }
@@ -197,9 +202,20 @@ export type HostWebResponse = HttpResponse
 
 export interface HostWebServerService {
   register(route: HostWebRoute): () => void
+  /**
+   * Exact-path HTTP upgrade seat (DSH `dsh-host-webserver`). Optional: hosts
+   * without it keep the HTTP POST fallback and the panel reports it.
+   */
+  registerUpgrade?(route: HostWebUpgradeRoute): () => void
   host?: unknown
   port?: unknown
   getOrigin?(): unknown
+}
+
+/** One upgrade registration: the handler owns protocol negotiation and the socket. */
+export interface HostWebUpgradeRoute {
+  path: string
+  handler: (req: HostWebRequest, socket: unknown, head: Buffer) => Promise<void> | void
 }
 
 /**

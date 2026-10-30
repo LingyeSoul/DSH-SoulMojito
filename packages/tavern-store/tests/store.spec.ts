@@ -774,6 +774,17 @@ describe('TavernStore', () => {
       frontendStorage: {},
       // Mod 三层开关的前两层（提案 0015 §3.2）：双默认 false。
       modsEnabled: false, mods: { enabled: {} },
+      // IM 通道（提案 0024 §4.3）：默认白名单且名单为空 = 拒绝所有人；
+      // 新 peer 默认独立会话；群聊必须 @。旧 state.json 缺字段按同一份默认补齐。
+      imSettings: {
+        bindingMode: 'independent',
+        groupRequireMention: true,
+        privateMode: 'allowlist',
+        privateAllow: [],
+        groupMode: 'allowlist',
+        groupAllow: [],
+      },
+      imPeers: {},
     })
     await store.patchState({
       activeCharacter: 'ExampleCard',

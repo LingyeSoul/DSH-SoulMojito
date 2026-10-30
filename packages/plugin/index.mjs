@@ -128,7 +128,7 @@ async function renameWithWindowsRetry(from, to, attempts) {
     } catch (cause) {
       const code = cause.code;
       if (attempt >= attempts || code !== "EPERM" && code !== "EACCES" && code !== "EBUSY" && code !== "ENOTEMPTY") throw cause;
-      await new Promise((resolve6) => setTimeout(resolve6, 10 * attempt));
+      await new Promise((resolve7) => setTimeout(resolve7, 10 * attempt));
     }
   }
 }
@@ -138,6 +138,88 @@ var init_fs_atomic = __esm({
     "use strict";
     tmpCounter = 0;
     RENAME_ATTEMPTS = 5;
+  }
+});
+
+// packages/tavern-store/src/im-state.ts
+function imPeerKey(channel, accountId, scope, peerId) {
+  return `${channel}:${accountId}:${scope}:${peerId}`;
+}
+function normalizeChatRef(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
+  const record = value;
+  const character = record["character"];
+  const chatId = record["chatId"];
+  if (typeof character !== "string" || character.trim() === "") return void 0;
+  if (typeof chatId !== "string" || chatId.trim() === "") return void 0;
+  return { character, chatId };
+}
+function normalizeAccessMode(value, fallback) {
+  return value === "open" || value === "allowlist" || value === "disabled" ? value : fallback;
+}
+function normalizeStringList(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = /* @__PURE__ */ new Set();
+  const result = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") continue;
+    const trimmed = entry.trim();
+    if (trimmed === "" || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    result.push(trimmed);
+  }
+  return result;
+}
+function normalizeImSettings(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return structuredClone(DEFAULT_IM_SETTINGS);
+  }
+  const record = value;
+  const bindingMode = record["bindingMode"] === "manual" || record["bindingMode"] === "shared" ? record["bindingMode"] : "independent";
+  const chunkLimit = record["chunkLimit"];
+  return {
+    bindingMode,
+    ...normalizeChatRef(record["sourceChat"]) === void 0 ? {} : { sourceChat: normalizeChatRef(record["sourceChat"]) },
+    ...normalizeChatRef(record["sharedChat"]) === void 0 ? {} : { sharedChat: normalizeChatRef(record["sharedChat"]) },
+    groupRequireMention: record["groupRequireMention"] !== false,
+    privateMode: normalizeAccessMode(record["privateMode"], "allowlist"),
+    privateAllow: normalizeStringList(record["privateAllow"]),
+    groupMode: normalizeAccessMode(record["groupMode"], "allowlist"),
+    groupAllow: normalizeStringList(record["groupAllow"]),
+    ...typeof chunkLimit === "number" && Number.isSafeInteger(chunkLimit) && chunkLimit > 0 ? { chunkLimit } : {}
+  };
+}
+function normalizeImPeers(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const result = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+    const record = entry;
+    const sessionId = record["sessionId"];
+    const character = record["character"];
+    const chatId = record["chatId"];
+    if (typeof sessionId !== "string" || sessionId === "") continue;
+    if (typeof character !== "string" || character === "") continue;
+    if (typeof chatId !== "string" || chatId === "") continue;
+    const scope = record["scope"] === "group" ? "group" : "private";
+    const boundBy = record["boundBy"] === "manual" ? "manual" : "auto";
+    const createdAt = typeof record["createdAt"] === "string" ? record["createdAt"] : (/* @__PURE__ */ new Date(0)).toISOString();
+    result[key] = { sessionId, character, chatId, scope, boundBy, createdAt };
+  }
+  return result;
+}
+var DEFAULT_IM_SETTINGS;
+var init_im_state = __esm({
+  "packages/tavern-store/src/im-state.ts"() {
+    "use strict";
+    DEFAULT_IM_SETTINGS = {
+      bindingMode: "independent",
+      groupRequireMention: true,
+      privateMode: "allowlist",
+      privateAllow: [],
+      groupMode: "allowlist",
+      groupAllow: []
+    };
   }
 });
 
@@ -2286,7 +2368,7 @@ function normalizeCompactionOverride(value) {
   if (provider.trim() === "" || model.trim() === "") return void 0;
   return { curatorProvider: provider, curatorModel: model };
 }
-function normalizeStringList(value) {
+function normalizeStringList2(value) {
   if (!Array.isArray(value)) return [];
   const seen = /* @__PURE__ */ new Set();
   const result = [];
@@ -2663,6 +2745,7 @@ var init_store = __esm({
   "packages/tavern-store/src/store.ts"() {
     "use strict";
     init_fs_atomic();
+    init_im_state();
     init_mutation_tail();
     init_lib();
     LOCAL_EMBED_PRECISIONS = [
@@ -2712,7 +2795,9 @@ var init_store = __esm({
       characterVariables: {},
       frontendStorage: {},
       modsEnabled: false,
-      mods: { enabled: {} }
+      mods: { enabled: {} },
+      imSettings: structuredClone(DEFAULT_IM_SETTINGS),
+      imPeers: {}
     };
     MEMORY_EMBED_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,255}$/;
     TavernStore = class _TavernStore {
@@ -3694,7 +3779,7 @@ var init_store = __esm({
           cardWorkbenchPresetEnabled: parsed.cardWorkbenchPresetEnabled === true,
           agentNovelPresetEnabled: parsed.agentNovelPresetEnabled === true,
           worldFollowsCharacter: parsed.worldFollowsCharacter !== false,
-          disabledAutoWorlds: normalizeStringList(parsed.disabledAutoWorlds),
+          disabledAutoWorlds: normalizeStringList2(parsed.disabledAutoWorlds),
           ...typeof parsed.regexOwnershipVersion === "number" && Number.isFinite(parsed.regexOwnershipVersion) ? { regexOwnershipVersion: parsed.regexOwnershipVersion } : {},
           modelSelections: parsed.modelSelections ?? {},
           chats: parsed.chats ?? {},
@@ -3708,7 +3793,9 @@ var init_store = __esm({
           // Mod 三层开关的前两层（提案 0015 §3.2）：双默认 false，只有显式 true 才开。
           modsEnabled: parsed.modsEnabled === true,
           mods: { enabled: normalizeModEnables(parsed.mods) },
-          memoryEmbedding: normalizeMemoryEmbedding(parsed.memoryEmbedding)
+          memoryEmbedding: normalizeMemoryEmbedding(parsed.memoryEmbedding),
+          imSettings: normalizeImSettings(parsed.imSettings),
+          imPeers: normalizeImPeers(parsed.imPeers)
         };
       }
       async assertChatRevision(file, expectedRevision) {
@@ -5896,10 +5983,10 @@ import { randomBytes } from "node:crypto";
 import { promises as fs7 } from "node:fs";
 function commandLineOf(pid) {
   if (process.platform === "win32") {
-    return new Promise((resolve6) => {
+    return new Promise((resolve7) => {
       execFile("powershell.exe", ["-NoProfile", "-Command", `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`], { timeout: 5e3, windowsHide: true }, (error, stdout) => {
-        if (error) resolve6(null);
-        else resolve6(stdout.trim() === "" ? void 0 : stdout.trim());
+        if (error) resolve7(null);
+        else resolve7(stdout.trim() === "" ? void 0 : stdout.trim());
       });
     });
   }
@@ -5913,10 +6000,10 @@ function commandLineOf(pid) {
     );
   }
   if (process.platform === "darwin") {
-    return new Promise((resolve6) => {
+    return new Promise((resolve7) => {
       execFile("ps", ["-p", String(pid), "-o", "command="], { timeout: 5e3 }, (error, stdout) => {
-        if (error) resolve6(Number(error.code) === 1 ? void 0 : null);
-        else resolve6(stdout.trim() === "" ? void 0 : stdout.trim());
+        if (error) resolve7(Number(error.code) === 1 ? void 0 : null);
+        else resolve7(stdout.trim() === "" ? void 0 : stdout.trim());
       });
     });
   }
@@ -8529,6 +8616,7 @@ var init_src = __esm({
   "packages/tavern-store/src/index.ts"() {
     "use strict";
     init_store();
+    init_im_state();
     init_fs_atomic();
     init_mutation_tail();
     init_memory();
@@ -10096,7 +10184,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("92d806d") : void 0;
+  const commit = true ? normalizeCommit("b511adc") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -10269,7 +10357,7 @@ var init_handle = __esm({
 
 // packages/plugin/src/generation-hooks.ts
 function withTimeout(promise, ms) {
-  return new Promise((resolve6, reject) => {
+  return new Promise((resolve7, reject) => {
     const timer = setTimeout(() => {
       const timeoutError = new Error(`generation hook timed out after ${ms}ms`);
       timeoutError.hookTimeout = true;
@@ -10278,7 +10366,7 @@ function withTimeout(promise, ms) {
     Promise.resolve(promise).then(
       (value) => {
         clearTimeout(timer);
-        resolve6(value);
+        resolve7(value);
       },
       (error) => {
         clearTimeout(timer);
@@ -11265,7 +11353,7 @@ function readJson(req, maxBytes) {
   if (contentType !== void 0 && !contentType.toLowerCase().startsWith("application/json")) {
     return Promise.reject(new HttpError(415, `unsupported content-type '${contentType}'; expected application/json`));
   }
-  return new Promise((resolve6, reject) => {
+  return new Promise((resolve7, reject) => {
     let bytes = 0;
     const chunks = [];
     req.on("data", (rawChunk) => {
@@ -11278,7 +11366,7 @@ function readJson(req, maxBytes) {
     });
     req.on("end", () => {
       try {
-        resolve6(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        resolve7(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
       } catch {
         reject(new HttpError(400, "invalid JSON body"));
       }
@@ -11603,7 +11691,7 @@ function renderModHtmlDocument(document, csp) {
   return `<!doctype html><html><head><meta charset="utf-8">${meta}${scripts}</head><body>${rewritten}</body></html>`;
 }
 function readModRequestBody(req, maxBytes = 2 * 1024 * 1024) {
-  return new Promise((resolve6, reject) => {
+  return new Promise((resolve7, reject) => {
     let bytes = 0;
     const chunks = [];
     req.on("data", (chunk) => {
@@ -11617,7 +11705,7 @@ function readModRequestBody(req, maxBytes = 2 * 1024 * 1024) {
     });
     req.on("end", () => {
       try {
-        resolve6(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        resolve7(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
       } catch {
         reject(new Error("invalid JSON body"));
       }
@@ -12332,7 +12420,7 @@ async function readPackageVersion(options, ref, preferApi) {
   return UNKNOWN_FIELD;
 }
 function resolveRemoteCommit(repository, ref, timeoutMs) {
-  return new Promise((resolve6) => {
+  return new Promise((resolve7) => {
     const url = /^https?:|^git@/i.test(repository) ? repository : `https://github.com/${repository.replace(/^\//, "")}.git`;
     execFile2("git", ["ls-remote", url, `refs/heads/${ref}`, ref], {
       encoding: "utf8",
@@ -12341,11 +12429,11 @@ function resolveRemoteCommit(repository, ref, timeoutMs) {
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }
     }, (error, stdout) => {
       if (error) {
-        resolve6("");
+        resolve7("");
         return;
       }
       const first = String(stdout ?? "").split("\n").map((line) => line.trim()).find(Boolean) ?? "";
-      resolve6(first.split(/\s+/)[0] ?? "");
+      resolve7(first.split(/\s+/)[0] ?? "");
     });
   });
 }
@@ -12415,7 +12503,7 @@ function isTransientHttpFailure(error) {
   return /ECONNRESET|EPIPE|EAI_AGAIN|socket hang up|network is unreachable/i.test(message);
 }
 function delay(ms) {
-  return new Promise((resolve6) => setTimeout(resolve6, ms));
+  return new Promise((resolve7) => setTimeout(resolve7, ms));
 }
 function describeError(error) {
   if (error instanceof Error) {
@@ -12428,7 +12516,7 @@ function describeError(error) {
 function curlGet(url, accept, timeoutMs, exec = execFile2) {
   const command = envCompat("CURL")?.trim() || (process.platform === "win32" ? "curl.exe" : "curl");
   const seconds = String(Math.max(1, Math.ceil(timeoutMs / 1e3)));
-  return new Promise((resolve6, reject) => {
+  return new Promise((resolve7, reject) => {
     exec(command, [
       "--silent",
       "--show-error",
@@ -12452,7 +12540,7 @@ function curlGet(url, accept, timeoutMs, exec = execFile2) {
         reject(new Error(detail === "" ? error.message : `${error.message}: ${detail}`));
         return;
       }
-      resolve6(String(stdout ?? ""));
+      resolve7(String(stdout ?? ""));
     });
   });
 }
@@ -12517,7 +12605,7 @@ function gitClone(url, directory, ref, timeoutMs, exec = execFile3) {
   return runGit(args, exec, timeoutMs).then(() => runGit(["-C", directory, "checkout", "HEAD", "--", "."], exec, timeoutMs));
 }
 function runGit(args, exec, timeoutMs) {
-  return new Promise((resolve6, reject) => {
+  return new Promise((resolve7, reject) => {
     exec("git", args, {
       encoding: "utf8",
       timeout: timeoutMs,
@@ -12530,7 +12618,7 @@ function runGit(args, exec, timeoutMs) {
         reject(new Error(detail === "" ? error.message : `${error.message}: ${detail}`));
         return;
       }
-      resolve6();
+      resolve7();
     });
   });
 }
@@ -13836,7 +13924,7 @@ function readInstalledStamp(pluginDir, spec = "") {
   return { version, commit };
 }
 function runCapture(command, args, options = {}) {
-  return new Promise((resolve6, reject) => {
+  return new Promise((resolve7, reject) => {
     const child = spawn(command, args, {
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -13865,7 +13953,7 @@ function runCapture(command, args, options = {}) {
     });
     child.once("close", (code) => {
       clearTimeout(timer);
-      resolve6({ code: code ?? -1, output });
+      resolve7({ code: code ?? -1, output });
     });
   });
 }
@@ -14227,6 +14315,7 @@ __export(runtime_exports, {
   getAgentTavernCapabilitiesPromise: () => getAgentTavernCapabilitiesPromise,
   getAgentTavernProjectorPromise: () => getAgentTavernProjectorPromise,
   getGamesServicePromise: () => getGamesServicePromise,
+  getImRuntime: () => getImRuntime,
   getNovelDriverPromise: () => getNovelDriverPromise,
   getNovelProjectorPromise: () => getNovelProjectorPromise,
   memories: () => memories,
@@ -14239,6 +14328,7 @@ __export(runtime_exports, {
   setAgentTavernCapabilitiesPromise: () => setAgentTavernCapabilitiesPromise,
   setAgentTavernProjectorPromise: () => setAgentTavernProjectorPromise,
   setGamesServicePromise: () => setGamesServicePromise,
+  setImRuntime: () => setImRuntime,
   setModHostContext: () => setModHostContext,
   setNovelDriverPromise: () => setNovelDriverPromise,
   setNovelProjectorPromise: () => setNovelProjectorPromise,
@@ -14252,6 +14342,12 @@ __export(runtime_exports, {
   updateChecksEnabled: () => updateChecksEnabled,
   variables: () => variables
 });
+function getImRuntime() {
+  return imRuntimeInstance;
+}
+function setImRuntime(value) {
+  imRuntimeInstance = value;
+}
 function store3() {
   return storePromise ??= TavernStore.open(tavernDataRoot());
 }
@@ -14378,7 +14474,7 @@ function getGamesServicePromise() {
 function setGamesServicePromise(value) {
   gamesServicePromise = value;
 }
-var storePromise, memoryStorePromise, variableStorePromise, agentTavernCapabilities, agentTavernCapabilitiesPromise, agentTavernProjectorPromise, agentNovelCapabilities, novelStorePromise, novelProjectorPromise, novelDriverPromise, updateServiceInstance, updateChecksEnabledFlag, modHostPromise, modHostContext, gamesServicePromise, templatesEnabledFlag, memoryVectorStorePromise;
+var storePromise, memoryStorePromise, variableStorePromise, agentTavernCapabilities, agentTavernCapabilitiesPromise, agentTavernProjectorPromise, agentNovelCapabilities, novelStorePromise, novelProjectorPromise, novelDriverPromise, updateServiceInstance, updateChecksEnabledFlag, modHostPromise, modHostContext, gamesServicePromise, imRuntimeInstance, templatesEnabledFlag, memoryVectorStorePromise;
 var init_runtime = __esm({
   "packages/plugin/src/runtime.ts"() {
     "use strict";
@@ -25052,7 +25148,7 @@ function localRuntimeProfileRoot(pluginDir) {
   return dirname10(parent);
 }
 function defaultSpawnRunner(command, args, options) {
-  return new Promise((resolve6, reject) => {
+  return new Promise((resolve7, reject) => {
     const child = spawn2(command, [...args], {
       cwd: options.cwd,
       shell: process.platform === "win32",
@@ -25078,7 +25174,7 @@ function defaultSpawnRunner(command, args, options) {
     });
     child.once("close", (code) => {
       clearTimeout(timer);
-      resolve6({ code: code ?? -1, output });
+      resolve7({ code: code ?? -1, output });
     });
   });
 }
@@ -25387,7 +25483,7 @@ function parseEmbeddings(payload, count, expectedDims2) {
   return vectors;
 }
 function delay2(ms) {
-  return new Promise((resolve6) => setTimeout(resolve6, ms));
+  return new Promise((resolve7) => setTimeout(resolve7, ms));
 }
 async function embedProbe(root, config, options = {}) {
   const status2 = await readEmbedStatus(root);
@@ -28998,10 +29094,10 @@ async function restoreInterruptedPrepares(ctx, deps, prepares) {
   return { restored, failed };
 }
 async function recoveryStateSafety(ctx, sessionId, binding) {
-  const resolve6 = ctx.safetyOf;
-  if (typeof resolve6 === "function") {
+  const resolve7 = ctx.safetyOf;
+  if (typeof resolve7 === "function") {
     try {
-      return await resolve6(sessionId, binding) ?? unsafeBodyState("safety-unavailable");
+      return await resolve7(sessionId, binding) ?? unsafeBodyState("safety-unavailable");
     } catch (error) {
       errorLog(ctx, "dsh-soulmojito body: recovery state safety resolver failed", {
         sessionId,
@@ -29507,8 +29603,8 @@ function handleBodySessionEvent(ctx, session, event) {
     if (reasonKind === void 0) return;
     const sessionId = nonEmptyString2(isRecord9(session) ? session["id"] : void 0);
     if (sessionId === void 0) return;
-    const liveAgent = resolveLiveAgent(ctx, sessionId);
-    const agentId = liveAgent === void 0 ? sessionId : agentIdOf(liveAgent) ?? sessionId;
+    const liveAgent2 = resolveLiveAgent(ctx, sessionId);
+    const agentId = liveAgent2 === void 0 ? sessionId : agentIdOf(liveAgent2) ?? sessionId;
     const pending = pendingByAgent.get(agentId) ?? pendingByAgent.get(sessionId);
     const turn = data === void 0 ? void 0 : numberField3(data["turn"]);
     if (TURN_END_FAILURE_REASONS.has(reasonKind)) {
@@ -30712,7 +30808,7 @@ var NovelDriver = class _NovelDriver {
       } catch (error) {
         lastError = error;
         this.logWarn("followup-attempt-failed", { novelId, sessionId: agent.session.id, intentId, errorCode: errorCodeOf(error), attempt });
-        if (attempt < retry.maxAttempts) await new Promise((resolve6) => setTimeout(resolve6, retry.backoffMs));
+        if (attempt < retry.maxAttempts) await new Promise((resolve7) => setTimeout(resolve7, retry.backoffMs));
       }
     }
     throw lastError;
@@ -41547,18 +41643,1220 @@ function registerTavernSessionCommand(ctx) {
   });
 }
 
+// packages/plugin/src/im/runtime.ts
+init_capabilities();
+init_env_compat();
+init_dsh_home();
+
+// packages/plugin/src/workspace.ts
+init_dsh_home();
+import { mkdir as mkdir4 } from "node:fs/promises";
+var TAVERN_WORKSPACE_TITLE = "Tavern (internal)";
+var TAVERN_WORKBENCH_WORKSPACE_TITLE = "Tavern Workbench (internal)";
+async function prepareInternalWorkspace() {
+  const path12 = tavernDataRoot("workspace");
+  await mkdir4(path12, { recursive: true });
+  return { path: path12, title: TAVERN_WORKSPACE_TITLE };
+}
+async function prepareWorkbenchWorkspace() {
+  const path12 = tavernDataRoot("workbench");
+  await mkdir4(path12, { recursive: true });
+  return { path: path12, title: TAVERN_WORKBENCH_WORKSPACE_TITLE };
+}
+
+// packages/plugin/src/im/router.ts
+import { randomUUID as randomUUID9 } from "node:crypto";
+
+// packages/plugin/src/frontend-documents.ts
+var FENCED_DOCUMENT = /```[^\n]*\n([\s\S]*?)```/gi;
+function isFrontendDocument(value) {
+  const text = typeof value === "string" ? value : "";
+  return /<!doctype\s+html\b/i.test(text) || /<html(?:\s[^>]*)?>/i.test(text) && /<(?:head|body)(?:\s[^>]*)?>/i.test(text) || /<(?:head|body)(?:\s[^>]*)?>/i.test(text);
+}
+function extractFrontendDocuments(value) {
+  const text = typeof value === "string" ? value : "";
+  const documents = [];
+  FENCED_DOCUMENT.lastIndex = 0;
+  let match;
+  while ((match = FENCED_DOCUMENT.exec(text)) !== null) {
+    const candidate = match[1]?.trim() ?? "";
+    if (isFrontendDocument(candidate)) documents.push(candidate);
+  }
+  if (documents.length > 0) return documents;
+  const raw = text.trim();
+  return isFrontendDocument(raw) ? [raw] : [];
+}
+function stripFrontendDocuments(value) {
+  const text = typeof value === "string" ? value : "";
+  if (text === "") return "";
+  let stripped = text.replace(FENCED_DOCUMENT, (whole, inner) => isFrontendDocument(inner) ? "" : whole);
+  stripped = stripped.replace(/<UpdateVariable(?:Variable)?\b[^>]*>[\s\S]*?<\/UpdateVariable(?:Variable)?\s*>/gi, "").replace(/<\/UpdateVariable(?:Variable)?\s*>/gi, "").replace(/<StatusPlaceHolder(?:Impl|READY)\s*\/?>/gi, "").replace(/<div class="matte-black-log"[\s\S]*?<\/details>\s*<\/div>/gi, "").replace(/<style>\s*\.matte-black-log[\s\S]*?<\/style>/gi, "").replace(/<!--\s*MVU:OK\s*-->/gi, "");
+  if (isFrontendDocument(stripped.trim())) return "";
+  return stripped.replace(/\n{3,}/g, "\n\n").trim();
+}
+function latestFrontendMessage(messages, render) {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message === void 0 || message.is_system === true) continue;
+    const documents = extractFrontendDocuments(render(message, index));
+    if (documents.length === 0) continue;
+    return {
+      index,
+      name: typeof message.name === "string" ? message.name : "",
+      isUser: message.is_user === true,
+      documents
+    };
+  }
+  return void 0;
+}
+
+// packages/plugin/src/im/project.ts
+var IM_EMPTY_REPLY = "\uFF08\u65E0\u6587\u672C\u56DE\u590D\uFF09";
+var ImProjectError = class extends Error {
+  code = "IM_PROJECT_INVALID";
+  constructor(message) {
+    super(message);
+    this.name = "ImProjectError";
+  }
+};
+function projectImText(displayText, channel, limit) {
+  assertLimit(limit);
+  const collapsed = stripFrontendDocuments(displayText);
+  const normalized = channel === "weixin" ? stripWeixinMarkdown(collapsed) : collapsed;
+  const text = normalizeBlankLines(normalized);
+  if (text === "") return [IM_EMPTY_REPLY];
+  const parts = channel === "qq" ? chunkMarkdown(text, limit) : chunkParagraphs(text, limit);
+  return parts.length === 0 ? [IM_EMPTY_REPLY] : parts;
+}
+function assertLimit(limit) {
+  if (!Number.isSafeInteger(limit) || limit <= 0) {
+    throw new ImProjectError(`chunk limit must be a positive integer, received ${String(limit)}`);
+  }
+}
+function normalizeBlankLines(text) {
+  return text.replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n").trim();
+}
+function stripWeixinMarkdown(text) {
+  const lines = text.split("\n");
+  let fence = false;
+  const out = [];
+  for (const line of lines) {
+    if (/^\s*```/.test(line)) {
+      fence = !fence;
+      out.push(line);
+      continue;
+    }
+    if (fence) {
+      out.push(line);
+      continue;
+    }
+    let next = line.replace(/!\[[^\]]*\]\([^)]*\)/g, "").replace(/^\s{0,3}#{1,6}\s+/, "").replace(/~~([^~]+)~~/g, "$1").replace(/\*\*\*([^*]+)\*\*\*/g, "$1").replace(/\*\*([^*]+)\*\*/g, "$1").replace(/\*([^*\n]+)\*/g, "$1").replace(/___([^_]+)___/g, "$1").replace(/__([^_]+)__/g, "$1").replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,!?]|$)/g, "$1$2").replace(/`([^`\n]+)`/g, "$1").replace(/^\s{0,3}>\s?/, "");
+    next = next.replace(/[ \t]+$/, "");
+    out.push(next);
+  }
+  return out.join("\n");
+}
+function chunkMarkdown(text, limit) {
+  assertLimit(limit);
+  const lines = text.split("\n");
+  const parts = [];
+  let buffer = [];
+  let bufferLength = 0;
+  let fenceInfo;
+  const flush = (reopen) => {
+    if (buffer.length === 0) return;
+    const body = buffer.join("\n");
+    if (reopen && fenceInfo !== void 0) {
+      parts.push(`${body}
+\`\`\``);
+      buffer = [`\`\`\`${fenceInfo}`];
+      bufferLength = 3 + fenceInfo.length;
+      return;
+    }
+    parts.push(body);
+    buffer = [];
+    bufferLength = 0;
+  };
+  for (const line of lines) {
+    const fenceMatch = /^\s*```(.*)$/.exec(line);
+    const isFence = fenceMatch !== null;
+    const cost = line.length + (buffer.length === 0 ? 0 : 1);
+    if (bufferLength + cost > limit && buffer.length > 0) {
+      const keepFence = fenceInfo !== void 0;
+      flush(keepFence);
+    }
+    if (line.length > limit && buffer.length === 0) {
+      for (const piece of hardSplit(line, limit)) parts.push(piece);
+      bufferLength = 0;
+      continue;
+    }
+    buffer.push(line);
+    bufferLength += cost;
+    if (isFence) {
+      if (fenceInfo === void 0) fenceInfo = fenceMatch[1] ?? "";
+      else fenceInfo = void 0;
+    }
+  }
+  flush(false);
+  return parts.map((part) => part.trim()).filter((part) => part !== "");
+}
+function chunkParagraphs(text, limit) {
+  assertLimit(limit);
+  const paragraphs = text.split(/\n{2,}/);
+  const parts = [];
+  let buffer = "";
+  for (const paragraph of paragraphs) {
+    const trimmed = paragraph.trim();
+    if (trimmed === "") continue;
+    const candidate = buffer === "" ? trimmed : `${buffer}
+
+${trimmed}`;
+    if (candidate.length <= limit) {
+      buffer = candidate;
+      continue;
+    }
+    if (buffer !== "") {
+      parts.push(buffer);
+      buffer = "";
+    }
+    if (trimmed.length <= limit) {
+      buffer = trimmed;
+      continue;
+    }
+    const pieces = hardSplit(trimmed, limit);
+    for (const piece of pieces.slice(0, -1)) parts.push(piece);
+    buffer = pieces[pieces.length - 1] ?? "";
+  }
+  if (buffer !== "") parts.push(buffer);
+  return parts;
+}
+function hardSplit(text, limit) {
+  const pieces = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    let end = Math.min(cursor + limit, text.length);
+    const code = text.charCodeAt(end - 1);
+    if (end < text.length && code >= 55296 && code <= 56319) end -= 1;
+    if (end <= cursor) end = Math.min(cursor + limit, text.length);
+    pieces.push(text.slice(cursor, end));
+    cursor = end;
+  }
+  return pieces;
+}
+
+// packages/plugin/src/im/reply.ts
+var PendingOrigins = class {
+  bySession = /* @__PURE__ */ new Map();
+  options;
+  constructor(options) {
+    this.options = options;
+  }
+  remember(sessionId, messageId, peerKey, target, now) {
+    this.prune(now);
+    const list = this.bySession.get(sessionId) ?? [];
+    list.push({ messageId, peerKey, target, at: now });
+    while (list.length > this.options.maxPerSession) list.shift();
+    this.bySession.set(sessionId, list);
+  }
+  /**
+   * 按本轮出现过的 user message id 解析来源。命中即删除（一轮只回一次），
+   * 同时清掉本轮其它命中项——它们的内容已并入同一轮，再各回一次会刷屏。
+   */
+  resolve(sessionId, messageIds, now) {
+    this.prune(now);
+    const list = this.bySession.get(sessionId);
+    if (list === void 0 || list.length === 0) return void 0;
+    const wanted = new Set(messageIds);
+    const first = list.find((entry) => wanted.has(entry.messageId));
+    if (first === void 0) return void 0;
+    const remaining = list.filter((entry) => entry !== first && !wanted.has(entry.messageId));
+    if (remaining.length === 0) this.bySession.delete(sessionId);
+    else this.bySession.set(sessionId, remaining);
+    return first;
+  }
+  forgetSession(sessionId) {
+    this.bySession.delete(sessionId);
+  }
+  pendingCount(sessionId) {
+    return this.bySession.get(sessionId)?.length ?? 0;
+  }
+  prune(now) {
+    for (const [sessionId, list] of this.bySession) {
+      const alive = list.filter((entry) => now - entry.at <= this.options.ttlMs);
+      if (alive.length === 0) this.bySession.delete(sessionId);
+      else if (alive.length !== list.length) this.bySession.set(sessionId, alive);
+    }
+  }
+};
+function userMessageIdsOfTurn(events, turn) {
+  const ids = [];
+  for (const event of events) {
+    if (event.type !== "user/message") continue;
+    if (turnOf2(event) !== turn) continue;
+    const id = messageIdOf3(event.data);
+    if (id !== void 0) ids.push(id);
+  }
+  return ids;
+}
+function assistantTextOfTurn(events, turn) {
+  let text;
+  for (const event of events) {
+    if (event.type !== "assistant/message") continue;
+    if (turnOf2(event) !== turn) continue;
+    const candidate = assistantTextOf(event.data);
+    if (candidate !== void 0 && candidate.trim() !== "") text = candidate;
+  }
+  return text;
+}
+function turnFailedOf(events, turn) {
+  for (const event of events) {
+    if (event.type !== "turn/end") continue;
+    if (turnOf2(event) !== turn) continue;
+    const reason = asRecord2(event.data?.["reason"]);
+    return reason?.["kind"] === "error";
+  }
+  return false;
+}
+function turnOf2(event) {
+  const value = event.data?.["turn"];
+  return typeof value === "number" && Number.isSafeInteger(value) ? value : void 0;
+}
+function messageIdOf3(data) {
+  const id = data?.["id"];
+  return typeof id === "string" && id !== "" ? id : void 0;
+}
+function assistantTextOf(data) {
+  const message = asRecord2(data?.["message"]);
+  const content = message?.["content"];
+  if (!Array.isArray(content)) return void 0;
+  const parts = [];
+  for (const block of content) {
+    const entry = asRecord2(block);
+    if (entry?.["type"] !== "text") continue;
+    const text = entry["text"];
+    if (typeof text === "string" && text !== "") parts.push(text);
+  }
+  return parts.length === 0 ? void 0 : parts.join("\n");
+}
+function asRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
+}
+
+// packages/plugin/src/im/types.ts
+init_src();
+
+// packages/plugin/src/im/settings.ts
+var IM_CHUNK_DEFAULTS = {
+  qq: 4500,
+  weixin: 1800,
+  onebot: 2e3
+};
+var ImSettingsError = class extends Error {
+  code = "IM_SETTINGS_INVALID";
+  constructor(message) {
+    super(message);
+    this.name = "ImSettingsError";
+  }
+};
+function imChunkLimit(channel, settings) {
+  return settings.chunkLimit ?? IM_CHUNK_DEFAULTS[channel];
+}
+function imAccessAllows(settings, scope, peerId) {
+  const mode = scope === "group" ? settings.groupMode : settings.privateMode;
+  if (mode === "disabled") return false;
+  if (mode === "open") return true;
+  const allow = scope === "group" ? settings.groupAllow : settings.privateAllow;
+  return allow.includes(peerId);
+}
+function asRecord3(value, label) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new ImSettingsError(`${label} must be an object`);
+  }
+  return value;
+}
+function parseAccessMode(value, label) {
+  if (value === "open" || value === "allowlist" || value === "disabled") return value;
+  throw new ImSettingsError(`${label} must be one of 'open' | 'allowlist' | 'disabled'`);
+}
+function parseStringList(value, label) {
+  if (!Array.isArray(value)) throw new ImSettingsError(`${label} must be an array of strings`);
+  const seen = /* @__PURE__ */ new Set();
+  const result = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") throw new ImSettingsError(`${label} must contain only strings`);
+    const trimmed = entry.trim();
+    if (trimmed === "" || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    result.push(trimmed);
+  }
+  return result;
+}
+function parseChatRef(value, label) {
+  if (value === null || value === void 0) return void 0;
+  const record = asRecord3(value, label);
+  const character = record["character"];
+  const chatId = record["chatId"];
+  if (typeof character !== "string" || character.trim() === "") {
+    throw new ImSettingsError(`${label}.character must be a non-empty string`);
+  }
+  if (typeof chatId !== "string" || chatId.trim() === "") {
+    throw new ImSettingsError(`${label}.chatId must be a non-empty string`);
+  }
+  return { character, chatId };
+}
+function applyImSettingsPatch(current, patch) {
+  const record = asRecord3(patch, "im settings patch");
+  const next = {
+    ...current,
+    privateAllow: [...current.privateAllow],
+    groupAllow: [...current.groupAllow]
+  };
+  if (record["bindingMode"] !== void 0) {
+    const value = record["bindingMode"];
+    if (value !== "manual" && value !== "independent" && value !== "shared") {
+      throw new ImSettingsError("bindingMode must be one of 'manual' | 'independent' | 'shared'");
+    }
+    next.bindingMode = value;
+  }
+  if ("sourceChat" in record) {
+    const parsed = parseChatRef(record["sourceChat"], "sourceChat");
+    if (parsed === void 0) delete next.sourceChat;
+    else next.sourceChat = parsed;
+  }
+  if ("sharedChat" in record) {
+    const parsed = parseChatRef(record["sharedChat"], "sharedChat");
+    if (parsed === void 0) delete next.sharedChat;
+    else next.sharedChat = parsed;
+  }
+  if (record["groupRequireMention"] !== void 0) {
+    if (typeof record["groupRequireMention"] !== "boolean") {
+      throw new ImSettingsError("groupRequireMention must be a boolean");
+    }
+    next.groupRequireMention = record["groupRequireMention"];
+  }
+  if (record["privateMode"] !== void 0) next.privateMode = parseAccessMode(record["privateMode"], "privateMode");
+  if (record["groupMode"] !== void 0) next.groupMode = parseAccessMode(record["groupMode"], "groupMode");
+  if (record["privateAllow"] !== void 0) next.privateAllow = parseStringList(record["privateAllow"], "privateAllow");
+  if (record["groupAllow"] !== void 0) next.groupAllow = parseStringList(record["groupAllow"], "groupAllow");
+  if ("chunkLimit" in record) {
+    const value = record["chunkLimit"];
+    if (value === null) delete next.chunkLimit;
+    else if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) next.chunkLimit = value;
+    else throw new ImSettingsError("chunkLimit must be a positive integer or null");
+  }
+  assertImSettingsUsable(next);
+  return next;
+}
+function assertImSettingsUsable(settings) {
+  if (settings.bindingMode === "independent" && settings.sourceChat === void 0) {
+    throw new ImSettingsError("bindingMode independent requires sourceChat (the character template chat)");
+  }
+  if (settings.bindingMode === "shared" && settings.sharedChat === void 0) {
+    throw new ImSettingsError("bindingMode shared requires sharedChat (the conversation every peer reuses)");
+  }
+}
+
+// packages/plugin/src/im/session-host.ts
+import { randomUUID as randomUUID8 } from "node:crypto";
+var ImSessionError = class extends Error {
+  code;
+  constructor(code, message) {
+    super(message);
+    this.name = "ImSessionError";
+    this.code = code;
+  }
+};
+function inspectImSessionCapabilities(agents, presets) {
+  const reasons = [];
+  if (agents === void 0) {
+    reasons.push("the host exposes no agents service");
+  } else if (typeof agents.create !== "function" && typeof agents.resume !== "function") {
+    reasons.push("the host agents service exposes neither create nor resume");
+  }
+  if (presets === void 0 || typeof presets.mount !== "function") {
+    reasons.push("the host cannot mount an agent preset (agentPresets.mount is missing)");
+  }
+  return { available: reasons.length === 0, reasons };
+}
+function mintImSessionId() {
+  return `session-${randomUUID8()}`;
+}
+async function ensureImSession(deps, request) {
+  const capability = inspectImSessionCapabilities(deps.agents, deps.presets);
+  if (!capability.available) {
+    throw new ImSessionError("IM_SESSION_UNAVAILABLE", `IM sessions are unavailable: ${capability.reasons.join("; ")}`);
+  }
+  const chat = request.mode === "shared" ? request.sharedChat : request.sourceChat;
+  if (chat === void 0) {
+    throw new ImSessionError("IM_SOURCE_MISSING", request.mode === "shared" ? "shared mode requires the configured shared chat" : "independent mode requires the configured source chat");
+  }
+  if (request.mode === "shared") {
+    return bindImChat(deps, chat, request.existingSessionId);
+  }
+  const chatId = await createChatFromSource(deps, chat);
+  const sessionId = request.existingSessionId ?? mintImSessionId();
+  await ensureImAgent(deps, sessionId);
+  await deps.bind(sessionId, chat.character, chatId);
+  await deps.presetChanged();
+  return { sessionId, character: chat.character, chatId };
+}
+async function bindImChat(deps, chat, existingSessionId) {
+  const capability = inspectImSessionCapabilities(deps.agents, deps.presets);
+  if (!capability.available) {
+    throw new ImSessionError("IM_SESSION_UNAVAILABLE", `IM sessions are unavailable: ${capability.reasons.join("; ")}`);
+  }
+  const chatId = await requireExistingChat(deps, chat);
+  const sessionId = existingSessionId ?? mintImSessionId();
+  await ensureImAgent(deps, sessionId);
+  await deps.bind(sessionId, chat.character, chatId);
+  await deps.presetChanged();
+  return { sessionId, character: chat.character, chatId };
+}
+async function requireExistingChat(deps, chat) {
+  const snapshot2 = await deps.db.getChatSnapshot(chat.character, chat.chatId);
+  if (snapshot2 === void 0) {
+    throw new ImSessionError("IM_CHAT_MISSING", `shared chat ${chat.character}/${chat.chatId} no longer exists`);
+  }
+  return chat.chatId;
+}
+async function createChatFromSource(deps, source) {
+  const found = await deps.db.getCharacter(source.character);
+  if (found === void 0) {
+    throw new ImSessionError("IM_SOURCE_MISSING", `source character ${source.character} no longer exists`);
+  }
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const card = found.card;
+  const seedVariables = (() => {
+    const holder = card.data.extensions?.["agentTavern"];
+    if (typeof holder !== "object" || holder === null) return void 0;
+    const initial = holder["initialVariables"];
+    if (typeof initial !== "object" || initial === null || Array.isArray(initial)) return void 0;
+    const entries = Object.entries(initial);
+    return entries.length === 0 ? void 0 : Object.fromEntries(entries);
+  })();
+  const variablesSeed = seedVariables ?? {};
+  const mvuSeeded = seedJsrMvuVariables(card, { ...variablesSeed });
+  const greetings = [card.data.firstMes, ...card.data.alternateGreetings];
+  const chatId = await deps.db.createChat(source.character, {
+    user_name: "unused",
+    character_name: "unused",
+    chat_metadata: {
+      character: source.character,
+      createdAt: now,
+      timedWorldInfo: {},
+      ...seedVariables !== void 0 || mvuSeeded ? { variables: variablesSeed } : {}
+    }
+  }, [{
+    name: card.data.nickname || card.data.name,
+    is_user: false,
+    is_system: false,
+    send_date: now,
+    mes: greetings[0] ?? ""
+  }]);
+  return chatId;
+}
+async function ensureImAgent(deps, sessionId) {
+  const live = deps.agents?.get?.(sessionId);
+  if (live !== void 0 && live !== null) return live;
+  const presets = deps.presets;
+  if (presets === void 0 || typeof presets.mount !== "function") {
+    throw new ImSessionError("IM_SESSION_UNAVAILABLE", "the host cannot mount an agent preset");
+  }
+  await deps.ensurePreset();
+  const workspace = await deps.workspace();
+  const setup = async (agentContext) => {
+    await presets.mount?.(agentContext, deps.presetId);
+  };
+  if (typeof deps.agents?.resume === "function") {
+    try {
+      const resumed = await deps.agents.resume({ resumeSessionId: sessionId, setup });
+      return resumed.agent;
+    } catch (error) {
+      deps.logger?.warn?.(`dsh-soulmojito im: resume ${sessionId} failed, creating a new session: ${messageOf6(error)}`);
+    }
+  }
+  if (typeof deps.agents?.create !== "function") {
+    throw new ImSessionError("IM_SESSION_UNAVAILABLE", "the host agents service exposes neither create nor resume");
+  }
+  const created = await deps.agents.create({
+    sessionId,
+    meta: { cwd: workspace, agentPreset: deps.presetId },
+    setup
+  });
+  return created.agent;
+}
+function messageOf6(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function imUnboundMessage(peerKey) {
+  return `\u8FD9\u4E2A\u4F1A\u8BDD\u8FD8\u6CA1\u6709\u7ED1\u5B9A\uFF1A${peerKey}\u3002\u8BF7\u5728 DSH-SoulMojito \u9762\u677F\u7684\u300C\u804A\u5929\u6E20\u9053\u300D\u91CC\u7ED1\u5B9A\u4E00\u4E2A\u804A\u5929\u3002`;
+}
+
+// packages/plugin/src/im/router.ts
+var IM_TURN_FAILED = "\uFF08\u8FD9\u4E00\u8F6E\u6CA1\u6709\u751F\u6210\u6210\u529F\uFF0C\u7A0D\u540E\u518D\u8BD5\uFF09";
+var UNBOUND_NOTICE_TTL_MS = 10 * 6e4;
+function createImRouter(deps) {
+  const origins = new PendingOrigins({ ttlMs: 10 * 6e4, maxPerSession: 200 });
+  const noticed = /* @__PURE__ */ new Map();
+  async function settingsOf() {
+    const state = await deps.db.getState();
+    return state.imSettings ?? DEFAULT_IM_SETTINGS;
+  }
+  async function inbound(inboundMessage) {
+    const now = deps.now();
+    if (await deps.seenDedupe(inboundMessage.dedupeKey, now)) return;
+    const settings = await settingsOf();
+    if (!imAccessAllows(settings, inboundMessage.scope, inboundMessage.peerId)) {
+      deps.logger?.warn?.(`dsh-soulmojito im: dropped ${inboundMessage.channel}/${inboundMessage.peerId} (access policy)`);
+      return;
+    }
+    const target = {
+      channel: inboundMessage.channel,
+      accountId: inboundMessage.accountId,
+      scope: inboundMessage.scope,
+      peerId: inboundMessage.peerId,
+      ...inboundMessage.replyTo === void 0 ? {} : { replyTo: inboundMessage.replyTo }
+    };
+    const text = imUserTextOf(inboundMessage);
+    if (text === void 0) return;
+    const peerKey = imPeerKey(inboundMessage.channel, inboundMessage.accountId, inboundMessage.scope, inboundMessage.peerId);
+    const binding = await resolveBinding(peerKey, inboundMessage.scope, settings);
+    if (binding === void 0) {
+      await notifyUnbound(target, peerKey, now);
+      return;
+    }
+    const messageId = `im-${randomUUID9()}`;
+    origins.remember(binding.sessionId, messageId, peerKey, target, now);
+    try {
+      await deps.followup(binding.sessionId, { id: messageId, text });
+    } catch (error) {
+      origins.forgetSession(binding.sessionId);
+      deps.logger?.warn?.(`dsh-soulmojito im: followup to ${binding.sessionId} failed: ${messageOf7(error)}`);
+      await sendNotice(target, IM_TURN_FAILED);
+    }
+  }
+  async function resolveBinding(peerKey, scope, settings) {
+    const state = await deps.db.getState();
+    const existing = state.imPeers?.[peerKey];
+    if (existing !== void 0) return existing;
+    if (settings.bindingMode === "manual") return void 0;
+    const request = {
+      mode: settings.bindingMode,
+      peerKey,
+      ...settings.sourceChat === void 0 ? {} : { sourceChat: settings.sourceChat },
+      ...settings.sharedChat === void 0 ? {} : { sharedChat: settings.sharedChat },
+      ...sharedSessionOf(state.imPeers, settings)
+    };
+    const result = await deps.ensureSession(request);
+    const binding = {
+      sessionId: result.sessionId,
+      character: result.character,
+      chatId: result.chatId,
+      scope,
+      boundBy: "auto",
+      createdAt: new Date(deps.now()).toISOString()
+    };
+    await deps.db.updateState((current) => ({
+      imPeers: { ...current.imPeers ?? {}, [peerKey]: binding }
+    }));
+    return binding;
+  }
+  async function finishTurn(sessionId, turn, events) {
+    const now = deps.now();
+    const origin = origins.resolve(sessionId, userMessageIdsOfTurn(events, turn), now);
+    if (origin === void 0) return;
+    if (turnFailedOf(events, turn)) {
+      await sendNotice(origin.target, IM_TURN_FAILED);
+      return;
+    }
+    const text = assistantTextOfTurn(events, turn);
+    if (text === void 0) return;
+    const settings = await settingsOf();
+    const rendered = await deps.render(origin.target, text);
+    const parts = projectImText(rendered, origin.target.channel, imChunkLimit(origin.target.channel, settings));
+    await deps.send(origin.target, parts.map((part, index) => ({
+      kind: "text",
+      text: part,
+      index,
+      total: parts.length
+    })));
+  }
+  async function notifyUnbound(target, peerKey, now) {
+    const last = noticed.get(peerKey);
+    if (last !== void 0 && now - last < UNBOUND_NOTICE_TTL_MS) return;
+    noticed.set(peerKey, now);
+    await sendNotice(target, imUnboundMessage(peerKey));
+  }
+  async function sendNotice(target, text) {
+    try {
+      await deps.send(target, [{ kind: "text", text, index: 0, total: 1 }]);
+    } catch (error) {
+      deps.logger?.warn?.(`dsh-soulmojito im: notice to ${target.channel}/${target.peerId} failed: ${messageOf7(error)}`);
+    }
+  }
+  return {
+    inbound,
+    finishTurn,
+    pending: (sessionId) => origins.pendingCount(sessionId)
+  };
+}
+function imUserTextOf(inbound) {
+  const body = inbound.text.trim();
+  const attachments = attachmentSummaryOf(inbound);
+  const composed = inbound.scope === "group" ? `[${inbound.senderName || inbound.senderId}] ${body}`.trim() : body;
+  const withAttachments = attachments === void 0 ? composed : `${composed}${composed === "" ? "" : "\n"}${attachments}`.trim();
+  return withAttachments === "" ? void 0 : withAttachments;
+}
+function attachmentSummaryOf(inbound) {
+  if (inbound.media.length === 0) return void 0;
+  const counts = /* @__PURE__ */ new Map();
+  for (const media of inbound.media) {
+    const label = media.kind === "image" ? "\u56FE\u7247" : media.kind === "voice" ? "\u8BED\u97F3" : media.kind === "video" ? "\u89C6\u9891" : "\u6587\u4EF6";
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return `\uFF08\u9644\u4EF6\uFF1A${[...counts].map(([label, count]) => `${label}\xD7${count}`).join("\u3001")}\uFF09`;
+}
+function sharedSessionOf(peers, settings) {
+  if (settings.bindingMode !== "shared" || settings.sharedChat === void 0) return {};
+  const { character, chatId } = settings.sharedChat;
+  for (const binding of Object.values(peers ?? {})) {
+    if (binding.character === character && binding.chatId === chatId) return { existingSessionId: binding.sessionId };
+  }
+  return {};
+}
+function messageOf7(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+// packages/plugin/src/im/store.ts
+import { randomUUID as randomUUID10 } from "node:crypto";
+import { promises as fs19 } from "node:fs";
+import { dirname as dirname13, join as join20, resolve as resolve5 } from "node:path";
+var ImStoreError = class extends Error {
+  code;
+  /** 出问题的文件或目录；纯校验错误还没有落盘路径时为 undefined。 */
+  path;
+  constructor(code, message, path12) {
+    super(message);
+    this.name = "ImStoreError";
+    this.code = code;
+    this.path = path12;
+  }
+};
+var ACCOUNTS_VERSION = 1;
+var CHANNEL_IDS = ["qq", "weixin", "onebot"];
+var ACCOUNT_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+var SECRET_FILE_MODE = 384;
+var DEDUPE_WINDOW_MS = 24 * 60 * 60 * 1e3;
+var DEDUPE_COMPACT_THRESHOLD = 5e3;
+var ImStore = class _ImStore {
+  static open(root) {
+    return new _ImStore(root);
+  }
+  root;
+  /** accounts.json 读改写的串行链；某个任务失败也不能掐断后面的任务。 */
+  accountsTail = Promise.resolve();
+  /** dedupe.log 读追加的串行链；同一 key 的并发回包只允许一次未命中。 */
+  dedupeTail = Promise.resolve();
+  /**
+   * dedupe.log 的进程内镜像，首次 seenDedupe 时装载并回收过期条目。
+   * 同一 root 只应有一个长期存活的实例（插件单例）：多实例并存时各自只看到
+   * 自己 append 的 key，去重会退化——重启与测试里的短暂并存不受影响。
+   */
+  dedupeEntries;
+  constructor(root) {
+    this.root = resolve5(root);
+  }
+  /** 清单按 channel、accountId 排序；排序稳定，面板顺序不随写入先后跳动。 */
+  async accounts() {
+    const entries = await this.readAccountsFile();
+    return [...entries].sort(imStoreCompareAccounts);
+  }
+  /**
+   * 登记或替换账号。密钥先落盘再改清单：登记成功的账号一定有可读密钥；
+   * 反过来只会留下一个无人引用的孤儿文件（下次 putAccount 覆盖），不会对外
+   * 宣告一个没有凭据的半残账号。两步同在一把锁里，与同账号的注销线性化。
+   */
+  async putAccount(account, secret) {
+    imStoreAssertAccount(account);
+    imStoreAssertSecretBag(secret);
+    const record = {
+      channel: account.channel,
+      accountId: account.accountId,
+      secret: { ...secret },
+      // 凭据被替换过就重盖时间戳：这个字段回答的是「当前密钥何时写入」。
+      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    await this.serialAccounts(async () => {
+      await imStoreWriteSecret(this.secretPath(account.channel, account.accountId), record);
+      const accounts = await this.readAccountsFile();
+      const next = accounts.filter((entry) => !imStoreSameAccount(entry, account.channel, account.accountId));
+      next.push(imStoreSnapshotAccount(account));
+      next.sort(imStoreCompareAccounts);
+      await imStoreWriteJson(this.accountsPath(), { version: ACCOUNTS_VERSION, accounts: next });
+    });
+  }
+  /** 未知账号返回 undefined；文件存在但内容坏了必须报错，不能当成没配置。 */
+  async readSecret(channel, accountId) {
+    imStoreAssertChannel(channel);
+    imStoreAssertAccountId(accountId);
+    const file = this.secretPath(channel, accountId);
+    const value = await imStoreReadJson(file);
+    if (value === void 0) return void 0;
+    return { ...imStoreParseSecretRecord(value, file, channel, accountId).secret };
+  }
+  /**
+   * 注销账号：先摘清单再删密钥。反过来若清单写失败，会留下一个「已登记但
+   * 没凭据」的账号，适配器会以空配置启动；先摘清单只可能留下孤儿密钥。
+   * 两步与 putAccount 共用一把锁，同账号的「登录中删号」不会留下半残记录。
+   * 已不在清单时仍清理同名密钥（幂等），凭据不应比账号活得更久。
+   */
+  async deleteAccount(channel, accountId) {
+    imStoreAssertChannel(channel);
+    imStoreAssertAccountId(accountId);
+    return this.serialAccounts(async () => {
+      const accounts = await this.readAccountsFile();
+      const next = accounts.filter((entry) => !imStoreSameAccount(entry, channel, accountId));
+      const removed = next.length !== accounts.length;
+      if (removed) {
+        await imStoreWriteJson(this.accountsPath(), { version: ACCOUNTS_VERSION, accounts: next });
+      }
+      await imStoreRemoveFile(this.secretPath(channel, accountId));
+      return removed;
+    });
+  }
+  /** true 表示该 key 已在 24h 窗口内记录过；未记录时顺带记下。 */
+  async seenDedupe(dedupeKey, now) {
+    if (dedupeKey === "") throw new TypeError("dedupeKey \u4E0D\u80FD\u4E3A\u7A7A");
+    if (!Number.isFinite(now)) throw new TypeError(`now \u5FC5\u987B\u662F\u6709\u9650\u65F6\u95F4\u6233\uFF0C\u5B9E\u9645\u4E3A ${String(now)}`);
+    return this.serialDedupe(async () => {
+      const entries = await this.loadDedupe();
+      imStorePruneDedupe(entries, now);
+      if (entries.has(dedupeKey)) return true;
+      entries.set(dedupeKey, now);
+      const file = this.dedupePath();
+      await imStoreEnsureDir(this.root);
+      try {
+        await fs19.appendFile(file, `${JSON.stringify({ key: dedupeKey, at: now })}
+`, "utf8");
+      } catch (cause) {
+        entries.delete(dedupeKey);
+        throw new ImStoreError("IO", `\u8FFD\u52A0\u5931\u8D25: ${file}: ${imStoreReason(cause)}`, file);
+      }
+      if (entries.size > DEDUPE_COMPACT_THRESHOLD) {
+        await imStoreWriteText(file, imStoreSerializeDedupe(entries));
+      }
+      return false;
+    });
+  }
+  async readCursor(accountId) {
+    imStoreAssertAccountId(accountId);
+    const file = this.cursorPath(accountId);
+    const value = await imStoreReadJson(file);
+    if (value === void 0) return void 0;
+    return imStoreParseCursor(value, file);
+  }
+  async writeCursor(accountId, value) {
+    imStoreAssertAccountId(accountId);
+    if (typeof value !== "string") throw new TypeError(`cursor \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\uFF0C\u5B9E\u9645\u4E3A ${typeof value}`);
+    await imStoreWriteJson(this.cursorPath(accountId), { cursor: value });
+  }
+  // ---- 内部：路径 ----
+  accountsPath() {
+    return join20(this.root, "accounts.json");
+  }
+  secretPath(channel, accountId) {
+    return join20(this.root, "secrets", `${channel}-${accountId}.json`);
+  }
+  dedupePath() {
+    return join20(this.root, "dedupe.log");
+  }
+  cursorPath(accountId) {
+    return join20(this.root, "cursors", `${accountId}.json`);
+  }
+  // ---- 内部：串行化 ----
+  serialAccounts(task) {
+    const run = this.accountsTail.then(task, task);
+    this.accountsTail = run.then(imStoreNoop, imStoreNoop);
+    return run;
+  }
+  serialDedupe(task) {
+    const run = this.dedupeTail.then(task, task);
+    this.dedupeTail = run.then(imStoreNoop, imStoreNoop);
+    return run;
+  }
+  // ---- 内部：读取 ----
+  async readAccountsFile() {
+    const file = this.accountsPath();
+    const value = await imStoreReadJson(file);
+    if (value === void 0) return [];
+    return imStoreParseAccountsFile(value, file);
+  }
+  async loadDedupe() {
+    const cached = this.dedupeEntries;
+    if (cached !== void 0) return cached;
+    const file = this.dedupePath();
+    const entries = /* @__PURE__ */ new Map();
+    let text;
+    try {
+      text = await fs19.readFile(file, "utf8");
+    } catch (cause) {
+      if (imStoreIsErrno(cause, "ENOENT")) {
+        this.dedupeEntries = entries;
+        return entries;
+      }
+      throw new ImStoreError("IO", `\u8BFB\u53D6\u5931\u8D25: ${file}: ${imStoreReason(cause)}`, file);
+    }
+    const lines = text.split("\n");
+    for (const [index, raw] of lines.entries()) {
+      const line = raw.trim();
+      if (line === "") continue;
+      let value;
+      try {
+        value = JSON.parse(line);
+      } catch (cause) {
+        throw imStoreCorrupt(file, `\u7B2C ${index + 1} \u884C\u4E0D\u662F JSON: ${imStoreReason(cause)}`);
+      }
+      if (!imStoreIsRecord(value)) throw imStoreCorrupt(file, `\u7B2C ${index + 1} \u884C\u4E0D\u662F\u5BF9\u8C61`);
+      const key = value["key"];
+      if (typeof key !== "string" || key === "") throw imStoreCorrupt(file, `\u7B2C ${index + 1} \u884C key \u975E\u6CD5`);
+      const at = value["at"];
+      if (typeof at !== "number" || !Number.isFinite(at)) throw imStoreCorrupt(file, `\u7B2C ${index + 1} \u884C at \u975E\u6CD5`);
+      const previous = entries.get(key);
+      if (previous === void 0 || at > previous) entries.set(key, at);
+    }
+    this.dedupeEntries = entries;
+    return entries;
+  }
+};
+function imStoreAssertChannel(channel) {
+  if (!imStoreIsChannelId(channel)) {
+    throw new ImStoreError(
+      "BAD_ACCOUNT_ID",
+      `\u672A\u77E5\u901A\u9053 ${JSON.stringify(channel)}\uFF1A\u53EA\u63A5\u53D7 ${CHANNEL_IDS.join("|")}`,
+      void 0
+    );
+  }
+}
+function imStoreAssertAccountId(accountId) {
+  if (!imStoreIsAccountId(accountId)) {
+    throw new ImStoreError(
+      "BAD_ACCOUNT_ID",
+      `\u975E\u6CD5 accountId ${JSON.stringify(accountId)}\uFF1A\u53EA\u5141\u8BB8 [A-Za-z0-9._-]\uFF0C\u4E14\u4E0D\u80FD\u662F . \u6216 ..\uFF08accountId \u4F1A\u62FC\u8FDB\u6587\u4EF6\u540D\uFF09`,
+      void 0
+    );
+  }
+}
+function imStoreAssertAccount(account) {
+  imStoreAssertChannel(account.channel);
+  imStoreAssertAccountId(account.accountId);
+  if (typeof account.createdAt !== "string" || account.createdAt === "") {
+    throw new TypeError(`account.createdAt \u5FC5\u987B\u662F\u975E\u7A7A\u65F6\u95F4\u4E32\uFF0C\u5B9E\u9645\u4E3A ${JSON.stringify(account.createdAt)}`);
+  }
+  if (account.label !== void 0 && typeof account.label !== "string") {
+    throw new TypeError(`account.label \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\uFF0C\u5B9E\u9645\u4E3A ${JSON.stringify(account.label)}`);
+  }
+}
+function imStoreAssertSecretBag(secret) {
+  for (const [key, value] of Object.entries(secret)) {
+    if (typeof value !== "string") throw new TypeError(`secret["${key}"] \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\uFF0C\u5B9E\u9645\u4E3A ${typeof value}`);
+  }
+}
+function imStoreIsChannelId(value) {
+  return typeof value === "string" && CHANNEL_IDS.includes(value);
+}
+function imStoreIsAccountId(value) {
+  if (value === "." || value === "..") return false;
+  return typeof value === "string" && ACCOUNT_ID_PATTERN.test(value);
+}
+function imStoreIsRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function imStoreSameAccount(entry, channel, accountId) {
+  return entry.channel === channel && entry.accountId === accountId;
+}
+function imStoreSnapshotAccount(account) {
+  return account.label === void 0 ? { channel: account.channel, accountId: account.accountId, createdAt: account.createdAt } : { channel: account.channel, accountId: account.accountId, label: account.label, createdAt: account.createdAt };
+}
+function imStoreCompareAccounts(a, b) {
+  if (a.channel !== b.channel) return a.channel < b.channel ? -1 : 1;
+  if (a.accountId !== b.accountId) return a.accountId < b.accountId ? -1 : 1;
+  return 0;
+}
+function imStoreParseAccountsFile(value, file) {
+  if (!imStoreIsRecord(value)) throw imStoreCorrupt(file, "\u9876\u5C42\u4E0D\u662F\u5BF9\u8C61");
+  if (value["version"] !== ACCOUNTS_VERSION) {
+    throw imStoreCorrupt(file, `\u4E0D\u652F\u6301\u7684 version ${JSON.stringify(value["version"])}\uFF08\u671F\u671B ${ACCOUNTS_VERSION}\uFF09`);
+  }
+  const accounts = value["accounts"];
+  if (!Array.isArray(accounts)) throw imStoreCorrupt(file, "accounts \u4E0D\u662F\u6570\u7EC4");
+  return accounts.map((entry, index) => imStoreParseAccountRef(entry, file, index));
+}
+function imStoreParseAccountRef(value, file, index) {
+  const at = `accounts[${index}]`;
+  if (!imStoreIsRecord(value)) throw imStoreCorrupt(file, `${at} \u4E0D\u662F\u5BF9\u8C61`);
+  const channel = value["channel"];
+  if (!imStoreIsChannelId(channel)) throw imStoreCorrupt(file, `${at}.channel \u975E\u6CD5: ${JSON.stringify(channel)}`);
+  const accountId = value["accountId"];
+  if (!imStoreIsAccountId(accountId)) throw imStoreCorrupt(file, `${at}.accountId \u975E\u6CD5: ${JSON.stringify(accountId)}`);
+  const createdAt = value["createdAt"];
+  if (typeof createdAt !== "string") throw imStoreCorrupt(file, `${at}.createdAt \u5FC5\u987B\u662F\u5B57\u7B26\u4E32`);
+  const label = value["label"];
+  if (label !== void 0 && typeof label !== "string") throw imStoreCorrupt(file, `${at}.label \u5FC5\u987B\u662F\u5B57\u7B26\u4E32`);
+  return label === void 0 ? { channel, accountId, createdAt } : { channel, accountId, label, createdAt };
+}
+function imStoreParseSecretRecord(value, file, channel, accountId) {
+  if (!imStoreIsRecord(value)) throw imStoreCorrupt(file, "\u9876\u5C42\u4E0D\u662F\u5BF9\u8C61");
+  if (value["channel"] !== channel || value["accountId"] !== accountId) {
+    throw imStoreCorrupt(
+      file,
+      `\u8BB0\u5F55\u8EAB\u4EFD ${JSON.stringify(value["channel"])}/${JSON.stringify(value["accountId"])} \u4E0E\u6587\u4EF6\u540D ${channel}/${accountId} \u4E0D\u7B26`
+    );
+  }
+  const createdAt = value["createdAt"];
+  if (typeof createdAt !== "string") throw imStoreCorrupt(file, "createdAt \u5FC5\u987B\u662F\u5B57\u7B26\u4E32");
+  const secret = value["secret"];
+  if (!imStoreIsRecord(secret)) throw imStoreCorrupt(file, "secret \u4E0D\u662F\u5BF9\u8C61");
+  const bag = {};
+  for (const [key, entry] of Object.entries(secret)) {
+    if (typeof entry !== "string") throw imStoreCorrupt(file, `secret["${key}"] \u5FC5\u987B\u662F\u5B57\u7B26\u4E32`);
+    bag[key] = entry;
+  }
+  return { channel, accountId, secret: bag, createdAt };
+}
+function imStoreParseCursor(value, file) {
+  if (!imStoreIsRecord(value)) throw imStoreCorrupt(file, "\u9876\u5C42\u4E0D\u662F\u5BF9\u8C61");
+  const cursor = value["cursor"];
+  if (typeof cursor !== "string") throw imStoreCorrupt(file, "cursor \u5FC5\u987B\u662F\u5B57\u7B26\u4E32");
+  return cursor;
+}
+function imStorePruneDedupe(entries, now) {
+  const cutoff = now - DEDUPE_WINDOW_MS;
+  for (const [key, at] of entries) {
+    if (at < cutoff) entries.delete(key);
+  }
+}
+function imStoreSerializeDedupe(entries) {
+  const lines = [];
+  for (const [key, at] of entries) lines.push(JSON.stringify({ key, at }));
+  return lines.length === 0 ? "" : `${lines.join("\n")}
+`;
+}
+function imStoreCorrupt(file, detail) {
+  return new ImStoreError("CORRUPT_FILE", `\u6587\u4EF6\u635F\u574F: ${file}: ${detail}`, file);
+}
+function imStoreReason(cause) {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+function imStoreIsErrno(cause, code) {
+  return typeof cause === "object" && cause !== null && cause.code === code;
+}
+function imStoreNoop() {
+}
+async function imStoreEnsureDir(dir) {
+  try {
+    await fs19.mkdir(dir, { recursive: true });
+  } catch (cause) {
+    throw new ImStoreError("IO", `\u521B\u5EFA\u76EE\u5F55\u5931\u8D25: ${dir}: ${imStoreReason(cause)}`, dir);
+  }
+}
+async function imStoreReadJson(file) {
+  let text;
+  try {
+    text = await fs19.readFile(file, "utf8");
+  } catch (cause) {
+    if (imStoreIsErrno(cause, "ENOENT")) return void 0;
+    throw new ImStoreError("IO", `\u8BFB\u53D6\u5931\u8D25: ${file}: ${imStoreReason(cause)}`, file);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (cause) {
+    throw imStoreCorrupt(file, `JSON \u89E3\u6790\u5931\u8D25: ${imStoreReason(cause)}`);
+  }
+}
+async function imStoreRemoveFile(file) {
+  try {
+    await fs19.unlink(file);
+  } catch (cause) {
+    if (imStoreIsErrno(cause, "ENOENT")) return;
+    throw new ImStoreError("IO", `\u5220\u9664\u5931\u8D25: ${file}: ${imStoreReason(cause)}`, file);
+  }
+}
+async function imStoreWriteFile(file, text, mode) {
+  await imStoreEnsureDir(dirname13(file));
+  const tmp = `${file}.tmp-${randomUUID10()}`;
+  try {
+    await fs19.writeFile(tmp, text, mode === void 0 ? { encoding: "utf8" } : { encoding: "utf8", mode });
+    await fs19.rename(tmp, file);
+  } catch (cause) {
+    await fs19.rm(tmp, { force: true }).catch(() => void 0);
+    throw new ImStoreError("IO", `\u5199\u5165\u5931\u8D25: ${file}: ${imStoreReason(cause)}`, file);
+  }
+}
+async function imStoreWriteText(file, text) {
+  await imStoreWriteFile(file, text, void 0);
+}
+async function imStoreWriteJson(file, value) {
+  await imStoreWriteText(file, `${JSON.stringify(value, null, 2)}
+`);
+}
+async function imStoreWriteSecret(file, record) {
+  await imStoreWriteFile(file, `${JSON.stringify(record, null, 2)}
+`, SECRET_FILE_MODE);
+  if (process.platform === "win32") return;
+  try {
+    await fs19.chmod(file, SECRET_FILE_MODE);
+    const stats = await fs19.stat(file);
+    const mode = stats.mode & 511;
+    if (mode !== SECRET_FILE_MODE) {
+      throw new ImStoreError(
+        "SECRET_PERMISSION",
+        `\u5BC6\u94A5\u6587\u4EF6\u6743\u9650\u5F02\u5E38: ${file}: \u671F\u671B 0600\uFF0C\u5B9E\u9645 0${mode.toString(8)}`,
+        file
+      );
+    }
+  } catch (cause) {
+    if (cause instanceof ImStoreError) throw cause;
+    throw new ImStoreError("IO", `\u6821\u9A8C\u5BC6\u94A5\u6743\u9650\u5931\u8D25: ${file}: ${imStoreReason(cause)}`, file);
+  }
+}
+
+// packages/plugin/src/im/runtime.ts
+function imDisabledByEnv() {
+  const disabled = envCompat("DISABLE_IM")?.trim();
+  return disabled !== void 0 && disabled !== "" && disabled !== "0" && disabled !== "false";
+}
+function createImRuntime(ctx, options) {
+  const { db } = options;
+  const agents = ctx.agents;
+  const presets = ctx.agentPresets;
+  const capabilities = inspectImSessionCapabilities(agents, presets);
+  const channels = /* @__PURE__ */ new Map();
+  const store5 = ImStore.open(tavernDataRoot("im"));
+  const sessionDeps = {
+    db,
+    agents,
+    presets,
+    presetId: AGENT_TAVERN_PRESET_ID,
+    ensurePreset: async () => {
+      await ensureAgentPresetDeclared(ctx, AGENT_TAVERN_PRESET_ID);
+    },
+    workspace: async () => (await prepareInternalWorkspace()).path,
+    bind: async (sessionId, character, chatId) => bindSession(db, sessionId, character, chatId, false, "agent-tavern", "dsh-native"),
+    presetChanged: async () => {
+      await emitAgentPresetChanged();
+    },
+    ...options.logger === void 0 ? {} : { logger: options.logger }
+  };
+  const router = createImRouter({
+    db,
+    now: () => Date.now(),
+    seenDedupe: (dedupeKey, now) => store5.seenDedupe(dedupeKey, now),
+    ensureSession: async (request) => ensureImSession(sessionDeps, request),
+    followup: async (sessionId, message) => {
+      const agent = await liveAgent(sessionDeps, sessionId);
+      const target = agent;
+      if (typeof target.followup !== "function") {
+        throw new Error(`the host agent for session ${sessionId} exposes no followup()`);
+      }
+      await target.followup({
+        id: message.id,
+        role: "user",
+        content: [{ type: "text", text: message.text }],
+        source: { kind: "user" }
+      });
+    },
+    render: async (target, text) => renderForTarget(db, target, text),
+    send: async (target, parts) => {
+      const channel = channels.get(channelKey(target.channel, target.accountId));
+      if (channel === void 0) {
+        throw new Error(`IM channel ${target.channel}/${target.accountId} is not running`);
+      }
+      await channel.send(target, parts);
+    },
+    ...options.logger === void 0 ? {} : { logger: options.logger }
+  });
+  function handleSessionEvent(session, event) {
+    if (event.type !== "turn/end") return;
+    const sessionId = session.id;
+    if (typeof sessionId !== "string" || sessionId === "") return;
+    const turn = event.data?.["turn"];
+    if (typeof turn !== "number" || !Number.isSafeInteger(turn)) return;
+    void isImSession(db, sessionId).then((bound) => {
+      if (!bound) return;
+      return router.finishTurn(sessionId, turn, sessionEvents(session));
+    }).catch((error) => {
+      options.logger?.warn?.(`dsh-soulmojito im: turn ${turn} of ${sessionId} reply failed: ${messageOf8(error)}`);
+    });
+  }
+  return {
+    router,
+    capabilities,
+    views: () => [...channels.values()].map((channel) => ({
+      channel: channel.channel,
+      accountId: channel.accountId,
+      status: channel.status(),
+      peers: 0
+    })),
+    bindChat: async (chat, existingSessionId) => bindImChat(sessionDeps, chat, existingSessionId),
+    handleSessionEvent,
+    dispose: async () => {
+      for (const channel of channels.values()) {
+        await channel.stop().catch((error) => {
+          options.logger?.warn?.(`dsh-soulmojito im: stopping ${channel.channel}/${channel.accountId} failed: ${messageOf8(error)}`);
+        });
+      }
+      channels.clear();
+    }
+  };
+}
+async function isImSession(db, sessionId) {
+  const state = await db.getState();
+  for (const binding of Object.values(state.imPeers ?? {})) {
+    if (binding.sessionId === sessionId) return true;
+  }
+  return false;
+}
+async function liveAgent(deps, sessionId) {
+  const live = deps.agents?.get?.(sessionId);
+  if (live !== void 0 && live !== null) return live;
+  return ensureImAgent(deps, sessionId);
+}
+async function renderForTarget(db, target, text) {
+  const state = await db.getState();
+  const key = imPeerKey(target.channel, target.accountId, target.scope, target.peerId);
+  const binding = state.imPeers?.[key];
+  if (binding === void 0) return text;
+  const card = await db.getCharacter(binding.character);
+  const scripts = await collectSessionRegexScripts(db, state, binding.character, binding.chatId, card);
+  const message = {
+    name: "",
+    is_user: false,
+    is_system: false,
+    send_date: (/* @__PURE__ */ new Date()).toISOString(),
+    mes: text
+  };
+  return displayTextForMessage(scripts, message, 0);
+}
+function channelKey(channel, accountId) {
+  return `${channel}:${accountId}`;
+}
+function messageOf8(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 // packages/plugin/src/http/router.ts
 init_src();
 import { createReadStream, createWriteStream } from "node:fs";
 import { mkdtemp, rm as rm2 } from "node:fs/promises";
 import { tmpdir as tmpdir4 } from "node:os";
-import { join as join22 } from "node:path";
+import { join as join23 } from "node:path";
 import { pipeline } from "node:stream/promises";
 
 // packages/tavern-frontend-storage/src/idb-store.ts
 import { createHash as createHash12 } from "node:crypto";
-import { copyFile, mkdir as mkdir4, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { dirname as dirname13, join as join20 } from "node:path";
+import { copyFile, mkdir as mkdir5, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { dirname as dirname14, join as join21 } from "node:path";
 var IDB_MAX_RECORD_BYTES = 1024 * 1024 * 1024;
 var IDB_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
 var databaseLocks = /* @__PURE__ */ new Map();
@@ -41566,29 +42864,29 @@ function sha256(value) {
   return createHash12("sha256").update(value).digest("hex");
 }
 function databaseDir(root, character, name2) {
-  return join20(root, "frontend-idb", sha256(character), sha256(name2));
+  return join21(root, "frontend-idb", sha256(character), sha256(name2));
 }
 function recordKeyHash(store5, key) {
   return sha256(`${store5}\0${key}`);
 }
 function recordPath(root, character, name2, store5, key) {
-  return join20(databaseDir(root, character, name2), "records", `${recordKeyHash(store5, key)}.bin`);
+  return join21(databaseDir(root, character, name2), "records", `${recordKeyHash(store5, key)}.bin`);
 }
 function metaPath(dir) {
-  return join20(dir, "meta.json");
+  return join21(dir, "meta.json");
 }
 function emptyDatabase(name2) {
   return { name: name2, version: 0, stores: {}, records: {}, updatedAt: 0 };
 }
-function asRecord2(value) {
+function asRecord4(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
 }
 function normalizeIndexes(value) {
   const indexes = {};
-  const record = asRecord2(value);
+  const record = asRecord4(value);
   if (record === void 0) return indexes;
   for (const [indexName, descriptor] of Object.entries(record)) {
-    const entry = asRecord2(descriptor);
+    const entry = asRecord4(descriptor);
     if (entry === void 0 || typeof entry.keyPath !== "string" || entry.keyPath.trim() === "") continue;
     indexes[indexName] = {
       keyPath: entry.keyPath,
@@ -41599,13 +42897,13 @@ function normalizeIndexes(value) {
   return indexes;
 }
 function normalizeDatabase(value, name2) {
-  const record = asRecord2(value);
+  const record = asRecord4(value);
   if (record === void 0) return emptyDatabase(name2);
   const stores = {};
-  const rawStores = asRecord2(record.stores);
+  const rawStores = asRecord4(record.stores);
   if (rawStores !== void 0) {
     for (const [storeName, descriptor] of Object.entries(rawStores)) {
-      const entry = asRecord2(descriptor);
+      const entry = asRecord4(descriptor);
       if (entry === void 0) continue;
       stores[storeName] = {
         keyPath: typeof entry.keyPath === "string" ? entry.keyPath : "",
@@ -41614,10 +42912,10 @@ function normalizeDatabase(value, name2) {
     }
   }
   const records = {};
-  const rawRecords = asRecord2(record.records);
+  const rawRecords = asRecord4(record.records);
   if (rawRecords !== void 0) {
     for (const [keyHash, descriptor] of Object.entries(rawRecords)) {
-      const entry = asRecord2(descriptor);
+      const entry = asRecord4(descriptor);
       if (entry === void 0) continue;
       if (typeof entry.key !== "string" || typeof entry.size !== "number" || !Number.isFinite(entry.size) || entry.size < 0) continue;
       records[keyHash] = {
@@ -41625,7 +42923,7 @@ function normalizeDatabase(value, name2) {
         key: entry.key,
         size: entry.size,
         updatedAt: typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt) ? entry.updatedAt : 0,
-        meta: asRecord2(entry.meta) ?? {}
+        meta: asRecord4(entry.meta) ?? {}
       };
     }
   }
@@ -41679,7 +42977,7 @@ function describeFsError(error) {
 }
 async function writeDatabase(root, character, database) {
   const dir = databaseDir(root, character, database.name);
-  await mkdir4(dir, { recursive: true });
+  await mkdir5(dir, { recursive: true });
   const target = metaPath(dir);
   const temporary = temporarySibling(target);
   try {
@@ -41718,7 +43016,7 @@ function requireKey(value) {
   return key;
 }
 function normalizeRecordMeta(value) {
-  const record = asRecord2(value) ?? {};
+  const record = asRecord4(value) ?? {};
   const text = JSON.stringify(record);
   if (text.length > 64 * 1024) throw new Error("idb record metadata is too large (max 64KB)");
   return record;
@@ -41810,7 +43108,7 @@ async function putIdbRecordFromFile(root, character, nameValue, storeValue, keyV
     if (total > IDB_MAX_TOTAL_BYTES) {
       throw new Error(`idb storage for '${character}' exceeds ${IDB_MAX_TOTAL_BYTES} bytes`);
     }
-    await mkdir4(dirname13(destination), { recursive: true });
+    await mkdir5(dirname14(destination), { recursive: true });
     await moveRecordFile(temporaryPath, destination);
     database.records[keyHash] = { store: store5, key, size, updatedAt: Date.now(), meta };
     database.updatedAt = Date.now();
@@ -42294,49 +43592,6 @@ async function runCandidateGeneration(ctx, db, options) {
 // packages/plugin/src/http/router.ts
 init_dsh_home();
 
-// packages/plugin/src/frontend-documents.ts
-var FENCED_DOCUMENT = /```[^\n]*\n([\s\S]*?)```/gi;
-function isFrontendDocument(value) {
-  const text = typeof value === "string" ? value : "";
-  return /<!doctype\s+html\b/i.test(text) || /<html(?:\s[^>]*)?>/i.test(text) && /<(?:head|body)(?:\s[^>]*)?>/i.test(text) || /<(?:head|body)(?:\s[^>]*)?>/i.test(text);
-}
-function extractFrontendDocuments(value) {
-  const text = typeof value === "string" ? value : "";
-  const documents = [];
-  FENCED_DOCUMENT.lastIndex = 0;
-  let match;
-  while ((match = FENCED_DOCUMENT.exec(text)) !== null) {
-    const candidate = match[1]?.trim() ?? "";
-    if (isFrontendDocument(candidate)) documents.push(candidate);
-  }
-  if (documents.length > 0) return documents;
-  const raw = text.trim();
-  return isFrontendDocument(raw) ? [raw] : [];
-}
-function stripFrontendDocuments(value) {
-  const text = typeof value === "string" ? value : "";
-  if (text === "") return "";
-  let stripped = text.replace(FENCED_DOCUMENT, (whole, inner) => isFrontendDocument(inner) ? "" : whole);
-  stripped = stripped.replace(/<UpdateVariable(?:Variable)?\b[^>]*>[\s\S]*?<\/UpdateVariable(?:Variable)?\s*>/gi, "").replace(/<\/UpdateVariable(?:Variable)?\s*>/gi, "").replace(/<StatusPlaceHolder(?:Impl|READY)\s*\/?>/gi, "").replace(/<div class="matte-black-log"[\s\S]*?<\/details>\s*<\/div>/gi, "").replace(/<style>\s*\.matte-black-log[\s\S]*?<\/style>/gi, "").replace(/<!--\s*MVU:OK\s*-->/gi, "");
-  if (isFrontendDocument(stripped.trim())) return "";
-  return stripped.replace(/\n{3,}/g, "\n\n").trim();
-}
-function latestFrontendMessage(messages, render) {
-  for (let index = messages.length - 1; index >= 0; index--) {
-    const message = messages[index];
-    if (message === void 0 || message.is_system === true) continue;
-    const documents = extractFrontendDocuments(render(message, index));
-    if (documents.length === 0) continue;
-    return {
-      index,
-      name: typeof message.name === "string" ? message.name : "",
-      isUser: message.is_user === true,
-      documents
-    };
-  }
-  return void 0;
-}
-
 // packages/plugin/src/games/http.ts
 init_public_error();
 init_http();
@@ -42468,7 +43723,7 @@ async function handleGamesApi(options) {
 }
 
 // packages/plugin/src/helper.ts
-import { randomUUID as randomUUID9 } from "node:crypto";
+import { randomUUID as randomUUID12 } from "node:crypto";
 init_src3();
 init_src2();
 init_src();
@@ -42755,7 +44010,7 @@ var FrontendTargetBlockedError = class extends FrontendGenerationError {
     this.host = host;
   }
 };
-function asRecord3(value) {
+function asRecord5(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
 }
 function requireText2(value, field, maxChars) {
@@ -42776,7 +44031,7 @@ function normalizeBaseUrl(url) {
   return base;
 }
 function parseApiTarget(value, requireModel) {
-  const record = asRecord3(value);
+  const record = asRecord5(value);
   if (record === void 0) throw new FrontendGenerationError("custom_api must be an object");
   const rawUrl = requireText2(record.apiurl, "custom_api.apiurl", 2048);
   let url;
@@ -42855,7 +44110,7 @@ async function requestJson(endpoint, init, label, secret) {
   }
 }
 function modelIds(payload) {
-  const record = asRecord3(payload);
+  const record = asRecord5(payload);
   const list = record === void 0 ? [] : Array.isArray(record.data) ? record.data : Array.isArray(record.models) ? record.models : [];
   const ids = [];
   for (const entry of list) {
@@ -42864,7 +44119,7 @@ function modelIds(payload) {
       if (id2 !== "") ids.push(id2);
       continue;
     }
-    const item = asRecord3(entry);
+    const item = asRecord5(entry);
     if (item === void 0) continue;
     const id = typeof item.id === "string" ? item.id.trim() : typeof item.name === "string" ? item.name.trim() : "";
     if (id !== "") ids.push(id);
@@ -42892,17 +44147,17 @@ function buildMessages(config) {
   const messages = [];
   const injects = Array.isArray(config.injects) ? config.injects : [];
   for (const entry of injects) {
-    const inject2 = asRecord3(entry);
+    const inject2 = asRecord5(entry);
     if (inject2 === void 0) continue;
     if (inject2.position === "none") continue;
     if (typeof inject2.content !== "string" || inject2.content.trim() === "") continue;
     messages.push({ role: parseRole(inject2.role, "system"), content: inject2.content });
   }
-  const overrides = asRecord3(config.overrides);
-  const history = asRecord3(overrides?.chat_history);
+  const overrides = asRecord5(config.overrides);
+  const history = asRecord5(overrides?.chat_history);
   const prompts = history !== void 0 && Array.isArray(history.prompts) ? history.prompts : [];
   for (const entry of prompts) {
-    const prompt = asRecord3(entry);
+    const prompt = asRecord5(entry);
     if (prompt === void 0) continue;
     if (typeof prompt.content !== "string") {
       throw new FrontendGenerationError("overrides.chat_history.prompts[].content must be a string");
@@ -42927,9 +44182,9 @@ function toolCallArgumentsText(message) {
   if (message === void 0) return "";
   const parts = [];
   const collect = (value) => {
-    const call = asRecord3(value);
+    const call = asRecord5(value);
     if (call === void 0) return;
-    const fn = asRecord3(call.function);
+    const fn = asRecord5(call.function);
     const raw = fn?.arguments ?? call.arguments;
     if (typeof raw === "string") {
       if (raw.trim() !== "") parts.push(raw);
@@ -42949,19 +44204,19 @@ function toolCallArgumentsText(message) {
   return parts.join("\n");
 }
 function completionText(payload) {
-  const record = asRecord3(payload);
+  const record = asRecord5(payload);
   const choices = record !== void 0 && Array.isArray(record.choices) ? record.choices : [];
-  const first = choices.length > 0 ? asRecord3(choices[0]) : void 0;
+  const first = choices.length > 0 ? asRecord5(choices[0]) : void 0;
   if (first === void 0) {
     throw new FrontendGenerationError("custom API /chat/completions returned no choices");
   }
-  const message = asRecord3(first.message);
+  const message = asRecord5(first.message);
   const content = message?.content;
   if (typeof content === "string" && content.trim() !== "") return content;
   if (Array.isArray(content)) {
     const joined = content.map((part) => {
       if (typeof part === "string") return part;
-      const item = asRecord3(part);
+      const item = asRecord5(part);
       return item !== void 0 && typeof item.text === "string" ? item.text : "";
     }).join("");
     if (joined.trim() !== "") return joined;
@@ -42973,7 +44228,7 @@ function completionText(payload) {
   throw new FrontendGenerationError(`custom API /chat/completions returned no text or tool arguments (finish_reason=${finishReason})`);
 }
 async function generateWithCustomApi(value, signal) {
-  const config = asRecord3(value);
+  const config = asRecord5(value);
   if (config === void 0) throw new FrontendGenerationError("generate config must be an object");
   const target = parseApiTarget(config.custom_api, true);
   const messages = buildMessages(config);
@@ -42999,22 +44254,22 @@ function textFromContent(value) {
   if (!Array.isArray(value)) return "";
   return value.map((part) => {
     if (typeof part === "string") return part;
-    const item = asRecord3(part);
+    const item = asRecord5(part);
     return item !== void 0 && typeof item.text === "string" ? item.text : "";
   }).join("");
 }
 function deltaText(payload) {
-  const record = asRecord3(payload);
+  const record = asRecord5(payload);
   const choices = record !== void 0 && Array.isArray(record.choices) ? record.choices : [];
   if (choices.length === 0) return "";
-  const first = asRecord3(choices[0]);
+  const first = asRecord5(choices[0]);
   if (first === void 0) return "";
-  const delta = asRecord3(first.delta);
+  const delta = asRecord5(first.delta);
   if (delta !== void 0) {
     const content = textFromContent(delta.content);
     if (content !== "") return content;
   }
-  const message = asRecord3(first.message);
+  const message = asRecord5(first.message);
   if (message !== void 0) {
     const content = textFromContent(message.content);
     if (content !== "") return content;
@@ -43036,7 +44291,7 @@ function streamChunkText(line, secret) {
   return deltaText(payload);
 }
 async function generateWithCustomApiStream(value, onDelta, signal) {
-  const config = asRecord3(value);
+  const config = asRecord5(value);
   if (config === void 0) throw new FrontendGenerationError("generate config must be an object");
   const target = parseApiTarget(config.custom_api, true);
   const messages = buildMessages(config);
@@ -43668,7 +44923,7 @@ async function resolveGenerationSpeaker(db, state, options) {
   }
   const groupDef = await db.getGroup(characterName);
   if (!groupDef) throw new Error(`group '${characterName}' not found`);
-  const chatGroup = asRecord4(chat.header.chat_metadata?.group);
+  const chatGroup = asRecord6(chat.header.chat_metadata?.group);
   const chatMembers = stringArray2(chatGroup?.["members"]);
   const members = chatMembers !== void 0 && chatMembers.length > 0 ? chatMembers : groupDef.members;
   const disabled = stringArray2(chatGroup?.["disabledMembers"]) ?? groupDef.disabledMembers;
@@ -43676,7 +44931,7 @@ async function resolveGenerationSpeaker(db, state, options) {
   const talkativeness = /* @__PURE__ */ new Map();
   for (const member of members) {
     const file = await db.getCharacter(member);
-    const extensions = asRecord4(file?.card?.data?.extensions);
+    const extensions = asRecord6(file?.card?.data?.extensions);
     const raw = extensions?.["talkativeness"];
     talkativeness.set(member, typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : 0.5);
   }
@@ -44203,7 +45458,7 @@ function roleName(role) {
 function numberOr(value, fallback) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
-function asRecord4(value) {
+function asRecord6(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
 }
 function stringArray2(value) {
@@ -44211,11 +45466,11 @@ function stringArray2(value) {
   return value.filter((item) => typeof item === "string");
 }
 function asTimedEffectsState(value) {
-  return asRecord4(value) === void 0 ? void 0 : value;
+  return asRecord6(value) === void 0 ? void 0 : value;
 }
 
 // packages/plugin/src/helper-bindings.ts
-import { randomUUID as randomUUID8 } from "node:crypto";
+import { randomUUID as randomUUID11 } from "node:crypto";
 var HELPER_TOKEN_HEADER = "x-dsh-helper-token";
 var HELPER_BINDING_TTL_MS = 30 * 60 * 1e3;
 var bindings = /* @__PURE__ */ new Map();
@@ -44227,7 +45482,7 @@ function pruneExpired(now) {
 function createHelperBinding(character, chatId) {
   const now = Date.now();
   pruneExpired(now);
-  const token = randomUUID8();
+  const token = randomUUID11();
   bindings.set(token, { character, chatId, createdAt: now });
   return token;
 }
@@ -44968,7 +46223,7 @@ async function retryChatWrite(operation) {
     } catch (error) {
       if (!(error instanceof ChatRevisionConflictError)) throw error;
       lastError = error;
-      await new Promise((resolve6) => setTimeout(resolve6, 10 * (attempt + 1)));
+      await new Promise((resolve7) => setTimeout(resolve7, 10 * (attempt + 1)));
     }
   }
   throw lastError;
@@ -45283,7 +46538,7 @@ async function resetSessionRegexScripts(db, character, chatId, type) {
 function generationIdOf(config) {
   const record = isPlainObject4(config) ? config : {};
   const value = record["generation_id"];
-  return typeof value === "string" && value.trim() !== "" ? value.trim() : randomUUID9();
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : randomUUID12();
 }
 function requireScriptTrees(value) {
   if (!Array.isArray(value)) throw new Error("scriptTrees must be an array of card script nodes");
@@ -45785,35 +47040,109 @@ function jsonValueOf2(value) {
 init_events();
 init_host();
 init_runtime();
+init_errors();
 
-// packages/plugin/src/workspace.ts
-init_dsh_home();
-import { mkdir as mkdir5 } from "node:fs/promises";
-var TAVERN_WORKSPACE_TITLE = "Tavern (internal)";
-var TAVERN_WORKBENCH_WORKSPACE_TITLE = "Tavern Workbench (internal)";
-async function prepareInternalWorkspace() {
-  const path12 = tavernDataRoot("workspace");
-  await mkdir5(path12, { recursive: true });
-  return { path: path12, title: TAVERN_WORKSPACE_TITLE };
+// packages/plugin/src/http/im.ts
+init_errors();
+init_io();
+var CHANNELS = ["qq", "weixin", "onebot"];
+async function handleImApi(req, res, url, route, method, db, runtime) {
+  if (!route.startsWith("im")) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  if (method === "GET" && route === "im") {
+    const state = await db.getState();
+    const disabled = imDisabledByEnv();
+    return sendJson(res, 200, {
+      ok: true,
+      disabled,
+      available: !disabled && runtime !== void 0 && runtime.capabilities.available,
+      reasons: disabled ? ["DSH_SOULMOJITO_DISABLE_IM is set"] : runtime?.capabilities.reasons ?? ["IM runtime was not mounted in this host process"],
+      settings: state.imSettings ?? DEFAULT_IM_SETTINGS,
+      peers: peerRows(state.imPeers),
+      channels: runtime?.views() ?? []
+    });
+  }
+  if (method === "POST" && route === "im/settings") {
+    const body = await readJson(req);
+    const current = (await db.getState()).imSettings ?? DEFAULT_IM_SETTINGS;
+    let next;
+    try {
+      next = applyImSettingsPatch(current, body.settings ?? body);
+    } catch (error) {
+      if (error instanceof ImSettingsError) throw new HttpError(400, error.message);
+      throw error;
+    }
+    await db.patchState({ imSettings: next });
+    return sendJson(res, 200, { ok: true, settings: next });
+  }
+  if (method === "POST" && route === "im/peers") {
+    if (runtime === void 0) throw new HttpError(503, "IM runtime is not available in this host process");
+    const body = await readJson(req);
+    const channel = parseChannel(body.channel);
+    const scope = parseScope(body.scope);
+    const accountId = requireId(body.accountId, "accountId");
+    const peerId = requireId(body.peerId, "peerId");
+    const character = requireId(body.character, "character");
+    const chatId = requireId(body.chatId, "chatId");
+    const key = imPeerKey(channel, accountId, scope, peerId);
+    const state = await db.getState();
+    const existing = state.imPeers?.[key];
+    const result = await runtime.bindChat({ character, chatId }, existing?.sessionId);
+    const binding = {
+      sessionId: result.sessionId,
+      character: result.character,
+      chatId: result.chatId,
+      scope,
+      boundBy: "manual",
+      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    await db.updateState((current) => ({
+      imPeers: { ...current.imPeers ?? {}, [key]: binding }
+    }));
+    return sendJson(res, 200, { ok: true, peer: { key, ...binding } });
+  }
+  if (method === "DELETE" && route === "im/peers") {
+    const key = url.searchParams.get("key");
+    if (key === null || key.trim() === "") throw new HttpError(400, "key query is required");
+    const state = await db.getState();
+    if (state.imPeers?.[key] === void 0) return sendJson(res, 404, { ok: false, message: `no IM peer binding for ${key}` });
+    const next = await db.updateState((current) => {
+      const peers = { ...current.imPeers ?? {} };
+      delete peers[key];
+      return { imPeers: peers };
+    });
+    return sendJson(res, 200, { ok: true, peers: peerRows(next.imPeers) });
+  }
+  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
 }
-async function prepareWorkbenchWorkspace() {
-  const path12 = tavernDataRoot("workbench");
-  await mkdir5(path12, { recursive: true });
-  return { path: path12, title: TAVERN_WORKBENCH_WORKSPACE_TITLE };
+function peerRows(peers) {
+  return Object.entries(peers ?? {}).map(([key, binding]) => ({ key, ...binding })).sort((left, right) => left.key.localeCompare(right.key));
+}
+function parseChannel(value) {
+  if (typeof value !== "string" || !CHANNELS.includes(value)) {
+    throw new HttpError(400, `channel must be one of ${CHANNELS.join(" | ")}`);
+  }
+  return value;
+}
+function parseScope(value) {
+  if (value !== "private" && value !== "group") throw new HttpError(400, "scope must be 'private' or 'group'");
+  return value;
+}
+function requireId(value, field) {
+  if (typeof value !== "string" || value.trim() === "") throw new HttpError(400, `${field} must be a non-empty string`);
+  return value.trim();
 }
 
 // packages/plugin/src/http/router.ts
-init_errors();
 init_io();
 
 // packages/plugin/src/http/memory.ts
 init_src();
 init_dsh_home();
-import { resolve as resolve5 } from "node:path";
+import { resolve as resolve6 } from "node:path";
 
 // packages/plugin/src/memory-maintenance.ts
 init_src();
-import { randomUUID as randomUUID10 } from "node:crypto";
+import { randomUUID as randomUUID13 } from "node:crypto";
 var MAINTENANCE_MAX_LLM_REQUESTS = 24;
 var MAINTENANCE_OPENING_MAX_CHARS = 1e5;
 var MAINTENANCE_PAGE_RECORDS = 32;
@@ -45841,7 +47170,7 @@ async function startMemoryMaintenance(ctx, deps, scope) {
   const existing = activeRuns.get(key);
   if (existing !== void 0) throw new MaintenanceRunConflictError(scope.character, scope.chatId, existing.runId);
   const active = {
-    runId: randomUUID10(),
+    runId: randomUUID13(),
     character: scope.character,
     chatId: scope.chatId,
     startedAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -46042,7 +47371,7 @@ async function executeRun(ctx, deps, scope, active) {
       opening = buildOpeningMessage(run, listing);
     }
     const messages = [
-      { role: "user", id: randomUUID10(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
+      { role: "user", id: randomUUID13(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
     ];
     let outcome = "completed";
     let errorMessage7;
@@ -46099,7 +47428,7 @@ async function executeRun(ctx, deps, scope, active) {
         blocks.push({ type: "text", text: textBuffer });
       }
       const toolCalls = blocks.filter((block) => block.type === "tool-call");
-      messages.push({ role: "assistant", id: randomUUID10(), content: blocks, source: { kind: "model", provider: run.provider, model: run.model } });
+      messages.push({ role: "assistant", id: randomUUID13(), content: blocks, source: { kind: "model", provider: run.provider, model: run.model } });
       if (toolCalls.length === 0) {
         report = textBuffer !== "" ? textBuffer : blocks.filter((block) => block.type === "text").map((block) => String(block.text ?? "")).join("");
         break;
@@ -46113,7 +47442,7 @@ async function executeRun(ctx, deps, scope, active) {
         const result = await executeToolCall(run, call);
         messages.push({
           role: "tool",
-          id: randomUUID10(),
+          id: randomUUID13(),
           content: [{ type: "text", text: safeJson(result.payload) }],
           source: { kind: "tool", callId: call.id },
           toolCallId: call.id,
@@ -46720,7 +48049,7 @@ init_dsh_home();
 
 // packages/plugin/src/card-workbench/plans.ts
 init_fs_atomic();
-import { promises as fs19 } from "node:fs";
+import { promises as fs20 } from "node:fs";
 import * as path11 from "node:path";
 var MAX_PLAN_CHANGES = 16;
 var MAX_PLAN_ENTRIES = 32;
@@ -46901,7 +48230,7 @@ async function proposeCardPlan(dir, character, input) {
     createdAt: (/* @__PURE__ */ new Date()).toISOString(),
     status: "pending"
   };
-  await fs19.mkdir(plansDir(dir), { recursive: true });
+  await fs20.mkdir(plansDir(dir), { recursive: true });
   await writeAtomicText(planFile(dir, plan.id), `${JSON.stringify(plan, null, 2)}
 `);
   return plan;
@@ -46931,7 +48260,7 @@ async function proposeWorldPlan(dir, world, input) {
     createdAt: (/* @__PURE__ */ new Date()).toISOString(),
     status: "pending"
   };
-  await fs19.mkdir(plansDir(dir), { recursive: true });
+  await fs20.mkdir(plansDir(dir), { recursive: true });
   await writeAtomicText(planFile(dir, plan.id), `${JSON.stringify(plan, null, 2)}
 `);
   return plan;
@@ -46940,7 +48269,7 @@ async function getPlan(dir, planId) {
   if (typeof planId !== "string" || !PLAN_ID_PATTERN.test(planId)) return void 0;
   let text;
   try {
-    text = (await fs19.readFile(planFile(dir, planId))).toString("utf8");
+    text = (await fs20.readFile(planFile(dir, planId))).toString("utf8");
   } catch (cause) {
     if (cause.code === "ENOENT") return void 0;
     throw cause;
@@ -46950,7 +48279,7 @@ async function getPlan(dir, planId) {
 async function listPlans(dir, filter = {}) {
   let files;
   try {
-    files = await fs19.readdir(plansDir(dir));
+    files = await fs20.readdir(plansDir(dir));
   } catch (cause) {
     if (cause.code === "ENOENT") return [];
     throw cause;
@@ -46959,7 +48288,7 @@ async function listPlans(dir, filter = {}) {
   for (const file of files) {
     if (!file.endsWith(".json")) continue;
     try {
-      const plan = normalizePlan(JSON.parse((await fs19.readFile(path11.join(plansDir(dir), file))).toString("utf8")));
+      const plan = normalizePlan(JSON.parse((await fs20.readFile(path11.join(plansDir(dir), file))).toString("utf8")));
       if (plan !== void 0) plans.push(plan);
     } catch {
     }
@@ -49159,7 +50488,7 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
         await clearEmbedStatus(root);
         return sendJson(res, 200, { ok: true, config: null });
       }
-      const modelDir = resolve5(modelDirRaw);
+      const modelDir = resolve6(modelDirRaw);
       const dirProblem = validateLocalModelDir(modelDir);
       if (dirProblem !== null) {
         return sendJson(res, 400, { ok: false, message: dirProblem });
@@ -49280,7 +50609,7 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
     if (modelDirRaw === "") {
       return sendJson(res, 400, { ok: false, message: "expected { modelDir }" });
     }
-    const modelDir = resolve5(modelDirRaw);
+    const modelDir = resolve6(modelDirRaw);
     const dirProblem = validateLocalModelDir(modelDir);
     if (dirProblem !== null) {
       return sendJson(res, 400, { ok: false, message: dirProblem });
@@ -49529,6 +50858,9 @@ async function handleApi(ctx, req, res) {
     });
   }
   const db = await store3();
+  if (route === "im" || route.startsWith("im/")) {
+    return handleImApi(req, res, url, route, method, db, getImRuntime());
+  }
   if (method === "GET" && route === "bootstrap") {
     await getAgentTavernCapabilitiesPromise();
     const internalWorkspace = await prepareInternalWorkspace();
@@ -49787,7 +51119,7 @@ async function handleApi(ctx, req, res) {
     if (typeof body.sessionId !== "string") throw new Error("expected { sessionId, selection }");
     const sessionId = body.sessionId;
     let selection = null;
-    const selectionBody = asRecord5(body.selection);
+    const selectionBody = asRecord7(body.selection);
     if (selectionBody !== void 0) {
       if (typeof selectionBody["provider"] !== "string" || typeof selectionBody["model"] !== "string") {
         throw new Error("selection must be { provider, model, reasoningEffort? }");
@@ -49882,7 +51214,7 @@ async function handleApi(ctx, req, res) {
   }
   if (method === "POST" && route === "import/world") {
     const body = await readJson(req);
-    const data = asRecord5(body.data);
+    const data = asRecord7(body.data);
     if (typeof body.name !== "string" || data === void 0) throw new Error("expected { name, data }");
     const book = await db.importWorldFile(body.name, data);
     await emitAssetsSaved("world", book.name);
@@ -49890,7 +51222,7 @@ async function handleApi(ctx, req, res) {
   }
   if (method === "POST" && route === "import/preset") {
     const body = await readJson(req);
-    const data = asRecord5(body.data);
+    const data = asRecord7(body.data);
     if (typeof body.name !== "string" || data === void 0) throw new Error("expected { name, data }");
     parsePresetOrThrow(data);
     const result = await db.importPreset(body.name, data);
@@ -49907,7 +51239,7 @@ async function handleApi(ctx, req, res) {
   if (method === "PUT" && route.startsWith("preset/")) {
     const oldName = decodeURIComponent(route.slice("preset/".length));
     const body = await readJson(req, 10 * 1024 * 1024);
-    const data = asRecord5(body.data);
+    const data = asRecord7(body.data);
     if (typeof body.name !== "string" || body.name.trim() === "" || data === void 0) {
       throw new Error("expected { name, data }");
     }
@@ -50132,8 +51464,8 @@ async function handleApi(ctx, req, res) {
     const found = await db.getCharacter(character);
     if (!found) throw new Error(`character '${character}' not found`);
     const seedVariables = (() => {
-      const holder = asRecord5(found.card.data.extensions.agentTavern);
-      const initial = asRecord5(holder?.["initialVariables"]);
+      const holder = asRecord7(found.card.data.extensions.agentTavern);
+      const initial = asRecord7(holder?.["initialVariables"]);
       if (initial === void 0 || Object.keys(initial).length === 0) return void 0;
       return structuredClone(initial);
     })();
@@ -50249,7 +51581,7 @@ async function handleApi(ctx, req, res) {
   if (method === "PUT" && route.startsWith("world/")) {
     const oldName = decodeURIComponent(route.slice("world/".length));
     const body = await readJson(req, 10 * 1024 * 1024);
-    const data = asRecord5(body.data);
+    const data = asRecord7(body.data);
     if (typeof body.name !== "string" || body.name.trim() === "" || data === void 0) {
       throw new Error("expected { name, data }");
     }
@@ -50464,8 +51796,8 @@ async function handleApi(ctx, req, res) {
       req.destroy?.();
       throw new Error(`idb record is too large (${declared} > ${IDB_MAX_RECORD_BYTES} bytes)`);
     }
-    const temporaryDir = await mkdtemp(join22(tmpdir4(), "dsh-soulmojito-idb-"));
-    const temporaryPath = join22(temporaryDir, "record.bin");
+    const temporaryDir = await mkdtemp(join23(tmpdir4(), "dsh-soulmojito-idb-"));
+    const temporaryPath = join23(temporaryDir, "record.bin");
     try {
       await pipeline(req, createWriteStream(temporaryPath));
       const metaHeader = typeof req.headers?.["x-dsh-idb-meta"] === "string" ? req.headers["x-dsh-idb-meta"] : "";
@@ -50843,7 +52175,7 @@ async function projectedBodyFloor(chat, messageId, groupIdHint, selectedIndexHin
   }
   if (index === void 0) return { ok: true, floor: void 0 };
   const floor = chat.messages[index];
-  const tavern = asRecord5(asRecord5(floor.extra)?.["agentTavern"]);
+  const tavern = asRecord7(asRecord7(floor.extra)?.["agentTavern"]);
   const scripts = await readScripts();
   const selectedSwipe = selectedIndexHint === void 0 ? floor : Array.isArray(floor.swipes) && typeof floor.swipes[selectedIndexHint] === "string" ? { ...floor, mes: floor.swipes[selectedIndexHint] } : void 0;
   const text = selectedSwipe === void 0 ? void 0 : stripFrontendDocuments(displayTextForMessage(scripts, selectedSwipe, chat.messages.length - 1 - index));
@@ -50901,13 +52233,13 @@ function bodyProjectionState(projected, ledger, latestEditSeq) {
   const selectionCurrent = (projected.anchorMessageId === void 0 || projected.anchorMessageId === ledger.anchorMessageId) && (projected.selectedIndex === void 0 || projected.selectedIndex === ledger.selectedIndex);
   return { current: textCurrent && selectionCurrent, textCurrent };
 }
-function asRecord5(value) {
+function asRecord7(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
 }
 function asChatLog(value) {
-  const record = asRecord5(value);
+  const record = asRecord7(value);
   if (record === void 0) return void 0;
-  const header = asRecord5(record["header"]);
+  const header = asRecord7(record["header"]);
   if (header === void 0) return void 0;
   if (typeof header["user_name"] !== "string" || typeof header["character_name"] !== "string") return void 0;
   if (!Array.isArray(record["messages"])) return void 0;
@@ -51127,6 +52459,7 @@ function apply(ctx, config = {}) {
   setNovelDriverPromise(novelDriverPromise2);
   ctx.on?.("session/event", (session, event) => {
     void getAgentTavernProjectorPromise().then((projector) => projector.project(session, event)).catch((error) => ctx.logger?.warn?.(`AgentTavern projection failed: ${error instanceof Error ? error.message : String(error)}`));
+    getImRuntime()?.handleSessionEvent(session, event);
     if (event?.type === "turn/end" && typeof session?.id === "string") {
       void variables().then((store5) => store5.clear("turn", session.id)).catch(() => {
       });
@@ -51210,6 +52543,23 @@ function apply(ctx, config = {}) {
       setGamesServicePromise(void 0);
     }, "dsh-soulmojito: games unload");
   } catch {
+  }
+  if (imDisabledByEnv()) {
+    ctx.logger?.info?.("dsh-soulmojito im: disabled by DSH_SOULMOJITO_DISABLE_IM");
+  } else {
+    void store3().then((db) => {
+      setImRuntime(createImRuntime(ctx, { db, ...ctx.logger === void 0 ? {} : { logger: ctx.logger } }));
+    }).catch((error) => {
+      ctx.logger?.warn?.(`dsh-soulmojito im: runtime unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    try {
+      ctx.effect?.(() => () => {
+        const runtime = getImRuntime();
+        setImRuntime(void 0);
+        void runtime?.dispose();
+      }, "dsh-soulmojito: im unload");
+    } catch {
+    }
   }
   setModHostContext(ctx);
   void gamesServicePromise2.catch(() => {

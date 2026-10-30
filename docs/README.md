@@ -32,6 +32,7 @@
 | [`0021`](proposals/0021-agent-tavern-body-ops.md) | AgentTavern 正文编辑、重生成与正文候选（DSH 原生 seam，不 fork） |
 | [`0022`](proposals/0022-agent-tavern-write-rollback.md) | AgentTavern 正文重生成的写入回滚（MVU 变量、记忆/变量工具 journal） |
 | [`0023`](proposals/0023-agent-tavern-mvu-body-switching.md) | AgentTavern MVU 正文编辑与候选切换（候选级 receipt） |
+| [`0024`](proposals/0024-im-channels.md) | IM 通道（QQ / 微信 / OneBot 11）：peer→AgentTavern 会话绑定、立即投递、IM 工具族、扫码绑定与安全边界（设计，未实现） |
 
 ## 开发者文档（`mods/`、`games/`、`frontend/`）
 
