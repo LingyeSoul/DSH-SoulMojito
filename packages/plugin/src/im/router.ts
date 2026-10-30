@@ -15,11 +15,29 @@ import { projectImText } from './project.js'
 import { PendingOrigins, assistantTextOfTurn, turnFailedOf, userMessageIdsOfTurn, type ImSessionEventLike } from './reply.js'
 import { imAccessAllows, imChunkLimit } from './settings.js'
 import { imUnboundMessage, type EnsureImSessionRequest, type EnsureImSessionResult } from './session-host.js'
-import type { OutboundPart, ImInbound, ImPeerBinding, ImSettings, ImTarget } from './types.js'
-import { DEFAULT_IM_SETTINGS, imPeerKey } from './types.js'
+import type { OutboundPart, ImChannelId, ImInbound, ImPeerBinding, ImSendReceipt, ImSettings, ImTarget } from './types.js'
+import { DEFAULT_IM_SETTINGS, imPeerKey, imPeerKeyParts } from './types.js'
 
 /** 轮次失败时的固定话术：不回模型原文，也不暴露内部错误。 */
 export const IM_TURN_FAILED = '（这一轮没有生成成功，稍后再试）'
+
+/**
+ * 主动发送的结构化失败（提案 0024 §3.6 的 `im_send`）：绑定缺失、目标非法与
+ * 传输失败必须能区分，工具面据此如实点名原因，而不是一句通用异常。
+ */
+export class ImSendError extends Error {
+  readonly code: 'IM_SEND_INVALID' | 'IM_SEND_INVALID_TARGET' | 'IM_SEND_UNBOUND' | 'IM_SEND_FAILED'
+  constructor(
+    code: ImSendError['code'],
+    message: string,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options)
+    this.name = 'ImSendError'
+    this.code = code
+  }
+}
+
 
 /** 未绑定提示的抑制窗口：同一个 peer 十分钟内只被提醒一次。 */
 const UNBOUND_NOTICE_TTL_MS = 10 * 60_000
@@ -47,6 +65,11 @@ export interface ImRouter {
   inbound(inbound: ImInbound): Promise<void>
   /** 该会话的某一轮结束：把正文回给发起这一轮的那个 peer。 */
   finishTurn(sessionId: string, turn: number, events: readonly ImSessionEventLike[]): Promise<void>
+  /**
+   * 主动发一条文本给已绑定的 peer（`im_send` 的落点）。绑定存在性在这里再验
+   * 一次：工具面只保证「绑到本会话」，路由保证「peer 真的有绑定」。
+   */
+  sendText(peerKey: string, text: string): Promise<ImSendReceipt>
   /** 供测试与面板观测。 */
   pending(sessionId: string): number
 }
@@ -143,6 +166,49 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
     })))
   }
 
+  async function sendText(peerKey: string, text: string): Promise<ImSendReceipt> {
+    const body = text.trim()
+    if (body === '') {
+      throw new ImSendError('IM_SEND_INVALID', 'IM text is empty after trimming whitespace')
+    }
+    const parts = imPeerKeyParts(peerKey)
+    if (parts === undefined) {
+      throw new ImSendError('IM_SEND_INVALID_TARGET', `malformed IM peer key '${peerKey}'; expected '<channel>:<accountId>:<scope>:<peerId>'`)
+    }
+    const channel = channelOf(parts.channel)
+    if (channel === undefined) {
+      throw new ImSendError('IM_SEND_INVALID_TARGET', `IM peer key '${peerKey}' names unknown channel '${parts.channel}'`)
+    }
+    const scope = parts.scope === 'private' || parts.scope === 'group' ? parts.scope : undefined
+    if (scope === undefined) {
+      throw new ImSendError('IM_SEND_INVALID_TARGET', `IM peer key '${peerKey}' names unknown scope '${parts.scope}'`)
+    }
+    const state = await deps.db.getState()
+    if (state.imPeers?.[peerKey] === undefined) {
+      throw new ImSendError('IM_SEND_UNBOUND', `IM peer '${peerKey}' has no binding; bind it in the DSH-SoulMojito IM panel first`)
+    }
+    const settings = state.imSettings ?? DEFAULT_IM_SETTINGS
+    const target: ImTarget = {
+      channel,
+      accountId: parts.accountId,
+      scope,
+      peerId: parts.peerId,
+    }
+    const chunks = projectImText(body, channel, imChunkLimit(channel, settings))
+    try {
+      await deps.send(target, chunks.map((chunk, index) => ({
+        kind: 'text' as const,
+        text: chunk,
+        index,
+        total: chunks.length,
+      })))
+    } catch (error) {
+      // 主动发送失败必须上抛：工具层要如实告诉模型这条消息没出去。
+      throw new ImSendError('IM_SEND_FAILED', `IM send to ${peerKey} failed: ${messageOf(error)}`, { cause: error })
+    }
+    return { parts: chunks.length, at: deps.now() }
+  }
+
   async function notifyUnbound(target: ImTarget, peerKey: string, now: number): Promise<void> {
     const last = noticed.get(peerKey)
     if (last !== undefined && now - last < UNBOUND_NOTICE_TTL_MS) return
@@ -161,6 +227,7 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
   return {
     inbound,
     finishTurn,
+    sendText,
     pending: (sessionId: string) => origins.pendingCount(sessionId),
   }
 }
@@ -208,4 +275,9 @@ function sharedSessionOf(
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/** peerKey 的渠道段只认三条真实通道；其余值说明绑定键被手改坏了。 */
+function channelOf(value: string): ImChannelId | undefined {
+  return value === 'qq' || value === 'weixin' || value === 'onebot' ? value : undefined
 }

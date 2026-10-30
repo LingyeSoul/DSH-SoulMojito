@@ -169,6 +169,44 @@ describe('ensureImSession', () => {
     expect(h.created).toHaveLength(1)
   })
 
+  it('imports history only after the binding is written', async () => {
+    const sourceChatId = await seedCharacterAndChat('Example')
+    const events: Array<{ type: string; data: unknown }> = []
+    let binds = 0
+    let bindingCountAtFirstAppend = -1
+    const agent = {
+      id: 'session-import-order',
+      phase: { kind: 'idle', lastTurn: 0 },
+      session: {
+        events,
+        append: (type: string, data: unknown) => {
+          if (bindingCountAtFirstAppend < 0) bindingCountAtFirstAppend = binds
+          events.push({ type, data })
+        },
+      },
+      followup: async () => {},
+    }
+    const deps: ImSessionDeps = {
+      db,
+      agents: { get: () => undefined, create: async () => ({ agent }) },
+      presets: { mount: async () => ({}) },
+      presetId: 'agent-tavern',
+      ensurePreset: async () => {},
+      workspace: async () => root,
+      bind: async () => { binds += 1 },
+      presetChanged: async () => {},
+    }
+    const result = await ensureImSession(deps, {
+      mode: 'independent',
+      peerKey: 'qq:acct:private:peer-a',
+      sourceChat: { character: 'Example', chatId: sourceChatId },
+    })
+    // 绑定先落盘，导入才被投影器认作本会话；顺序反了就会写成无主楼层。
+    expect(bindingCountAtFirstAppend).toBe(1)
+    expect(events.some((event) => event.type === 'turn/start')).toBe(true)
+    expect(result.chatId).not.toBe(sourceChatId)
+  })
+
   it('reports a missing source chat instead of inventing one', async () => {
     const h = harness()
     await expect(ensureImSession(h.deps, {

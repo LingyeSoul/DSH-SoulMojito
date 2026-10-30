@@ -10,8 +10,14 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import type { ChatLogIR } from '../../../tavern-format/src/index.js'
 import type { TavernStore } from '../../../tavern-store/src/index.js'
+import { readSessionEvents } from '../../../bind/src/index.js'
 import { seedJsrMvuVariables } from '../agent-tavern/mvu-compat.js'
+import { historyImportAppends } from '../agent-tavern/projector.js'
+import { tavernMacroExpand } from '../prompt-context.js'
+import { collectSessionRegexScripts } from '../regex-session.js'
+import { applyAgentTavernHistoryImport, type HistoryImportAgent } from '../session/activate.js'
 
 /** 宿主 `ctx.agents` 的最小面（0.2.x 形状；缺失时 IM 整体不可用）。 */
 export interface ImAgentsSeam {
@@ -62,7 +68,7 @@ export interface ImSessionDeps {
   bind: (sessionId: string, character: string, chatId: string) => Promise<unknown>
   /** 写穿 AgentTavern 预设投影（`agent-tavern/preset.ts`）。 */
   presetChanged: () => Promise<void>
-  logger?: { warn?: (message: string) => void }
+  logger?: { warn?: (message: string) => void; error?: (message: string) => void }
 }
 
 export interface EnsureImSessionRequest {
@@ -126,19 +132,39 @@ export async function ensureImSession(
       : 'independent mode requires the configured source chat')
   }
   if (request.mode === 'shared') {
-    return bindImChat(deps, chat, request.existingSessionId)
+    if (request.existingSessionId !== undefined) {
+      // 共享模式复用既有会话是常态；但 independent 模式复用既有会话会把新聊天
+      // 的历史导进旧会话（重复开场白），这一组合直接拒绝而不是猜意图。
+      return bindImChat(deps, chat, request.existingSessionId)
+    }
+    return bindImChat(deps, chat, undefined)
+  }
+  if (request.existingSessionId !== undefined) {
+    throw new ImSessionError('IM_SESSION_UNAVAILABLE', 'independent mode always mints a new session; existingSessionId is only valid for shared mode')
   }
   const chatId = await createChatFromSource(deps, chat)
-  const sessionId = request.existingSessionId ?? mintImSessionId()
-  await ensureImAgent(deps, sessionId)
+  // 开场白导入要用刚建好的聊天（greeting 是它的唯一一条消息）。读不到就是
+  // store 不一致——在落绑定之前如实报错，不留一个「绑了但没历史」的会话。
+  const createdChat = await deps.db.getChat(chat.character, chatId)
+  if (createdChat === undefined) {
+    throw new ImSessionError('IM_CHAT_MISSING', `IM chat ${chat.character}/${chatId} vanished right after creation; the opening greeting cannot be imported`)
+  }
+  const sessionId = mintImSessionId()
+  const agent = await ensureImAgent(deps, sessionId)
   await deps.bind(sessionId, chat.character, chatId)
+  // 历史导入（提案 0024 §3.3）：binding 必须先落盘，导入的事件才被投影器认作
+  // 本会话；宿主不支持时只打 warn——绑定已成立，历史仍留在 JSONL 可重放。
+  await importChatHistory(deps, agent, createdChat, chat.character, chatId, sessionId)
   await deps.presetChanged()
   return { sessionId, character: chat.character, chatId }
 }
 
 /**
- * 手动绑定 / 共享模式的入口：聊天必须已经存在，只负责补会话与绑定。
+ * 手动绑定 / 共享模式的入口：聊天必须已经存在，只负责补会话、绑定与历史导入。
  * 已有会话 id 时沿用它（共享模式多个 peer 同一个会话）。
+ *
+ * 历史导入是必须的：手动绑定的通常是**已经聊过很久**的聊天，不导入就等于让模型
+ * 在一段它看不见的对话后面接着说话（审查 P1-1）。
  */
 export async function bindImChat(
   deps: ImSessionDeps,
@@ -150,9 +176,14 @@ export async function bindImChat(
     throw new ImSessionError('IM_SESSION_UNAVAILABLE', `IM sessions are unavailable: ${capability.reasons.join('; ')}`)
   }
   const chatId = await requireExistingChat(deps, chat)
+  const existingChat = await deps.db.getChat(chat.character, chatId)
+  if (existingChat === undefined) {
+    throw new ImSessionError('IM_CHAT_MISSING', `chat ${chat.character}/${chatId} disappeared while binding`)
+  }
   const sessionId = existingSessionId ?? mintImSessionId()
-  await ensureImAgent(deps, sessionId)
+  const agent = await ensureImAgent(deps, sessionId)
   await deps.bind(sessionId, chat.character, chatId)
+  await importChatHistory(deps, agent, existingChat, chat.character, chatId, sessionId)
   await deps.presetChanged()
   return { sessionId, character: chat.character, chatId }
 }
@@ -208,6 +239,38 @@ async function createChatFromSource(deps: ImSessionDeps, source: ImChatRefLike):
     mes: greetings[0] ?? '',
   }])
   return chatId
+}
+
+/**
+ * 历史/开场白导入（提案 0024 §3.3）：IM 与命令激活走同一段 `activate.ts`。
+ *
+ * 三种调用方共用它：independent 新建聊天（只有 greeting）、手动绑定已有聊天
+ * （可能是几十楼的历史）、shared 复用聊天。**必须在 `deps.bind(...)` 之后调用**
+ * ——投影器按 binding 认领楼层，绑定之前的导入会被当成别的会话。
+ *
+ * 会话已经有 turn（共享模式复用了网页端跑过的会话）时跳过：重复导入会把整段
+ * 历史再写一遍。读不到日志时不跳过，交给 activate.ts 的降级路径处理。
+ */
+async function importChatHistory(
+  deps: ImSessionDeps,
+  agent: unknown,
+  chat: ChatLogIR,
+  character: string,
+  chatId: string,
+  sessionId: string,
+): Promise<void> {
+  const live = (agent ?? {}) as HistoryImportAgent
+  const events = readSessionEvents(live.session as Parameters<typeof readSessionEvents>[0]) as readonly { type?: unknown }[] | undefined
+  if (events !== undefined && events.some((event) => event.type === 'turn/start')) return
+  const state = await deps.db.getState()
+  const found = await deps.db.getCharacter(character)
+  const scripts = await collectSessionRegexScripts(deps.db, state, character, chatId, found)
+  const plan = historyImportAppends(chat, sessionId, scripts, tavernMacroExpand(state, character, found), live.session)
+  applyAgentTavernHistoryImport({
+    agent: live,
+    plan,
+    ...(deps.logger === undefined ? {} : { logger: deps.logger }),
+  })
 }
 
 /**

@@ -8752,6 +8752,27 @@ var init_handle = __esm({
   }
 });
 
+// packages/plugin/src/env-compat.ts
+function envCompat(suffix) {
+  return process.env[`DSH_SOULMOJITO_${suffix}`] ?? process.env[`DSH_TAVERN_${suffix}`];
+}
+var init_env_compat = __esm({
+  "packages/plugin/src/env-compat.ts"() {
+    "use strict";
+  }
+});
+
+// packages/plugin/src/im/handle.ts
+var IM_RUNTIME_KEY, runtimeSymbol;
+var init_handle2 = __esm({
+  "packages/plugin/src/im/handle.ts"() {
+    "use strict";
+    init_env_compat();
+    IM_RUNTIME_KEY = "dsh-soulmojito:im-runtime";
+    runtimeSymbol = Symbol.for(IM_RUNTIME_KEY);
+  }
+});
+
 // packages/tavern-lore/lib/types.js
 var MESSAGE_BOUNDARY2;
 var init_types3 = __esm({
@@ -9268,16 +9289,6 @@ var init_capabilities2 = __esm({
   }
 });
 
-// packages/plugin/src/env-compat.ts
-function envCompat(suffix) {
-  return process.env[`DSH_SOULMOJITO_${suffix}`] ?? process.env[`DSH_TAVERN_${suffix}`];
-}
-var init_env_compat = __esm({
-  "packages/plugin/src/env-compat.ts"() {
-    "use strict";
-  }
-});
-
 // packages/plugin/src/build-info.ts
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -9313,7 +9324,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("b511adc") : void 0;
+  const commit = true ? normalizeCommit("098db83") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -9651,6 +9662,7 @@ var init_runtime = __esm({
     init_dsh_home();
     init_env_compat();
     init_host();
+    init_handle2();
     init_service();
     init_src2();
     agentTavernCapabilities = inspectAgentTavernCapabilities({});
@@ -10064,25 +10076,7 @@ init_deduce();
 // packages/plugin/src/agent-tavern/agent.ts
 init_guides();
 init_handle();
-init_cross_bundle();
-
-// packages/plugin/src/prompt-viewer.ts
-var PROMPT_VIEWER_STATE_KEY = Symbol.for("dsh-soulmojito:prompt-viewer");
-
-// packages/bind/src/host-session.ts
-var PLUGIN_NAME = "dsh-soulmojito";
-var LEGACY_PLUGIN_NAME = "dsh-tavern";
-var TAVERN_PLUGIN_SOURCE_KIND = `plugin:${PLUGIN_NAME}`;
-var LEGACY_TAVERN_PLUGIN_SOURCE_KIND = `plugin:${LEGACY_PLUGIN_NAME}`;
-
-// packages/plugin/src/agent-tavern/tools/character.ts
-init_src2();
-
-// packages/tavern-lore/src/types.ts
-var MESSAGE_BOUNDARY = "";
-
-// packages/tavern-lore/src/buffer.ts
-var JOINER = "\n" + MESSAGE_BOUNDARY;
+init_handle2();
 
 // packages/plugin/src/agent-tavern/tools/stores.ts
 init_src2();
@@ -10093,6 +10087,12 @@ init_src2();
 
 // packages/plugin/src/memory-embed.ts
 init_src2();
+
+// packages/bind/src/host-session.ts
+var PLUGIN_NAME = "dsh-soulmojito";
+var LEGACY_PLUGIN_NAME = "dsh-tavern";
+var TAVERN_PLUGIN_SOURCE_KIND = `plugin:${PLUGIN_NAME}`;
+var LEGACY_TAVERN_PLUGIN_SOURCE_KIND = `plugin:${LEGACY_PLUGIN_NAME}`;
 
 // packages/plugin/src/memory-embed-local.ts
 var TRANSFORMERS_PACKAGE = "@huggingface/transformers";
@@ -10115,6 +10115,66 @@ function identitySummaryOf(data) {
   const summary = agentTavern?.identitySummary;
   return typeof summary === "string" && summary.trim() !== "" ? summary : void 0;
 }
+
+// packages/plugin/src/im/types.ts
+init_src2();
+
+// packages/plugin/src/im/tools.ts
+var identityOutput = objectOutput({
+  peers: {
+    type: "array",
+    items: {
+      type: "object",
+      properties: {
+        alias: { type: "string" },
+        channel: { type: "string" },
+        scope: { type: "string", enum: ["private", "group"] },
+        character: { type: "string" },
+        chatId: { type: "string" }
+      },
+      required: ["alias", "channel", "scope", "character", "chatId"],
+      additionalProperties: false
+    }
+  }
+});
+var channelsOutput = objectOutput({
+  available: { type: "boolean" },
+  reasons: { type: "array", items: { type: "string" } },
+  channels: {
+    type: "array",
+    items: {
+      type: "object",
+      properties: {
+        channel: { type: "string" },
+        accountId: { type: "string" },
+        state: { type: "string", enum: ["idle", "starting", "online", "paused", "error"] }
+      },
+      required: ["channel", "accountId", "state"],
+      additionalProperties: false
+    }
+  }
+});
+var sendOutput = objectOutput({
+  peer: { type: "string" },
+  parts: { type: "integer" },
+  sentAt: { type: "string" },
+  messageId: { type: "string" }
+}, ["messageId"]);
+
+// packages/plugin/src/agent-tavern/agent.ts
+init_cross_bundle();
+
+// packages/plugin/src/prompt-viewer.ts
+var PROMPT_VIEWER_STATE_KEY = Symbol.for("dsh-soulmojito:prompt-viewer");
+
+// packages/plugin/src/agent-tavern/tools/character.ts
+init_src2();
+
+// packages/tavern-lore/src/types.ts
+var MESSAGE_BOUNDARY = "";
+
+// packages/tavern-lore/src/buffer.ts
+var JOINER = "\n" + MESSAGE_BOUNDARY;
 
 // packages/plugin/src/agent-tavern/tools/character.ts
 var characterOutput = objectOutput({

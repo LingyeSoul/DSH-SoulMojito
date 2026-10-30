@@ -55,27 +55,31 @@ $DSH_HOME/soulmojito/im/dedupe.log
 
 | 里程碑 | 出口 |
 |---|---|
-| M0（本轮，已完成） | 假通道 + 假 Agent 跑通「入站 → 绑定 → followup → turn/end → 回复」；`im-*.spec.ts` 全绿 |
-| M1（本轮，部分完成） | `ensureImSession` 独立/共享两种模式都能建绑定；缺 `agents.create` 时 fail-closed。**未含**：IM 工具族、开场白导入抽取 |
+| M0（已完成） | 假通道 + 假 Agent 跑通「入站 → 绑定 → followup → turn/end → 回复」；`im-*.spec.ts` 全绿 |
+| M1（已完成） | `ensureImSession` 独立/共享两种模式都能建绑定；缺 `agents.create` 时 fail-closed；IM 工具族与历史导入落地 |
 | M2 | OneBot 11 反向 WS + HTTP POST 打通（codec 已就绪，连接层待做） |
 | M3 | QQ 扫码 + 网关 |
 | M4 | 微信扫码 + 长轮询 |
 | M5 | 客户端面板 + 媒体 + 收口 |
 
-### 4.1 本轮实际落地（2026-10-30）
+### 4.1 已落地（2026-10-30，两批）
 
-已交付：`im/types.ts`、`im/settings.ts`、`im/store.ts`、`im/project.ts`、
+第一批（`098db83`）：`im/types.ts`、`im/settings.ts`、`im/store.ts`、`im/project.ts`、
 `im/session-host.ts`、`im/reply.ts`、`im/router.ts`、`im/runtime.ts`、
 `im/onebot/codec.ts`、`http/im.ts`；`tavern-store/src/im-state.ts` 与
 `TavernState.imSettings/imPeers`；`host-contract` 的 `registerUpgrade` 与
 `agents.resume` / `followup` 声明。
 
-验证：`pnpm run check` = tsc 三段 + 2782 passed / 2 skipped + build + 18 gates PASS。
+第二批：`im/handle.ts`（跨 bundle 句柄 + env 硬关）、`im/tools.ts`
+（`im_identity` / `im_channels` / `im_send`）、`session/activate.ts`
+（历史导入抽给命令与 IM 共用）、`agent-tavern/agent.ts` 追加工具、
+`session/command.ts` 改为调用抽出的导入函数、`im/session-host.ts` 在手绑/共享
+模式下也导入历史。
 
 **明确未做（下一轮）**：
-1. `im_identity` / `im_channels` / `im_send` 工具族。
-2. 开场白导入（`session/activate.ts` 抽取）——IM 新建会话目前看不到角色开场白。
-3. 客户端「聊天渠道」面板；`webServer.registerUpgrade` 尚未被任何通道使用。
+1. 客户端「聊天渠道」面板；`webServer.registerUpgrade` 尚未被任何通道使用。
+2. OneBot 连接层（反向 WS + HTTP POST + 出站）。
+3. QQ / 微信通道。
 4. `im-channels` gate。
 
 ## 5. 测试面
@@ -87,7 +91,9 @@ $DSH_HOME/soulmojito/im/dedupe.log
 | `tests/im-store.spec.ts` | 0600、去重键 TTL、游标读写、坏文件不静默 |
 | `tests/im-session-host.spec.ts` | 独立/共享绑定、resume 复用、缺能力 fail-closed |
 | `tests/im-reply-target.spec.ts` | 谁的 message id 命中回给谁、无命中不发、多 origin 取最早 |
-| `tests/im-router.spec.ts` | 立即投递、去重、白名单拒绝、未绑定提示 |
+| `tests/im-router.spec.ts` | 立即投递、去重、白名单拒绝、未绑定提示、sendText 目标校验 |
+| `tests/im-tools.spec.ts` | 身份只认 agent id、alias 不泄露平台 id、跨会话拒绝、多绑定需指定、env 关闭不注册 |
+| `tests/session-activate.spec.ts` | 导入计划落地、读回失败降级关 turn、基线不可推进只 warn |
 | `tests/onebot-codec.spec.ts` | 事件归一、CQ 转义、出站参数 |
 
 ## 6. 下一轮入口

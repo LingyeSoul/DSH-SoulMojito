@@ -20,6 +20,7 @@ import type { TavernStore } from '../../../tavern-store/src/index.js'
 import { sessionEvents } from '../../../bind/src/index.js'
 import { tavernDataRoot } from '../dsh-home.js'
 import { prepareInternalWorkspace } from '../workspace.js'
+import { imDisabledByEnv, type ImRuntimeHandle } from './handle.js'
 import { createImRouter, type ImRouter } from './router.js'
 import {
   bindImChat,
@@ -35,28 +36,14 @@ import type { ImChannel, ImChannelView, ImTarget } from './types.js'
 import { imPeerKey } from './types.js'
 import { ImStore } from './store.js'
 
-export interface ImRuntime {
-  readonly router: ImRouter
-  readonly capabilities: ImSessionCapabilities
-  /** 面板投影：通道 + 账号 + 状态。本轮恒为空数组。 */
-  views(): ImChannelView[]
-  /** 手动绑定：把一个已存在的聊天补上会话与 AgentTavern 绑定。 */
-  bindChat(chat: { character: string; chatId: string }, existingSessionId: string | undefined): Promise<{ sessionId: string; character: string; chatId: string }>
-  /** `session/event` 的接线点；非 IM 会话直接返回。 */
-  handleSessionEvent(session: HostSessionLike, event: HostSessionEventLike): void
-  dispose(): Promise<void>
-}
+export type ImRuntime = ImRuntimeHandle
 
 export interface CreateImRuntimeOptions {
   db: TavernStore
   logger?: HostLogger
 }
 
-/** 环境硬关：`DSH_SOULMOJITO_DISABLE_IM` 非空且不为 0/false 即整块不装配。 */
-export function imDisabledByEnv(): boolean {
-  const disabled = envCompat('DISABLE_IM')?.trim()
-  return disabled !== undefined && disabled !== '' && disabled !== '0' && disabled !== 'false'
-}
+export { imDisabledByEnv }
 
 export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOptions): ImRuntime {
   const { db } = options

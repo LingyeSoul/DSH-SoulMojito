@@ -125,6 +125,11 @@ describe('AgentTavern native tools', () => {
     'game_move',
     'game_wait',
     'game_wait_full',
+    // IM 工具族（提案 0024 §3.6）：随 IM 子系统一起注册；`DSH_SOULMOJITO_DISABLE_IM`
+    // 硬关时整组消失，工具面回到 25 件。
+    'im_identity',
+    'im_channels',
+    'im_send',
   ])
     for (const tool of tools.values()) {
       // 游戏桥六件（提案 0018 §4.2）豁免 sessionId 面：其 sessionId 是**会话

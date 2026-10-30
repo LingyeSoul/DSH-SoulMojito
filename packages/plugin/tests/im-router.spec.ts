@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { TavernStore } from '../../tavern-store/src/index.js'
-import { createImRouter } from '../src/im/router.js'
+import { createImRouter, ImSendError } from '../src/im/router.js'
 import type { ImInbound } from '../src/im/types.js'
 import { DEFAULT_IM_SETTINGS } from '../src/im/types.js'
 
@@ -163,6 +163,80 @@ describe('im router inbound', () => {
       boundBy: 'auto',
     })
     expect(h.followups).toHaveLength(1)
+  })
+})
+
+describe('im router sendText', () => {
+  const BOUND_PEER = 'qq:acct:private:peer-a'
+
+  it('splits by the channel limit and sends to the bound peer', async () => {
+    await db.patchState({
+      imSettings: { ...DEFAULT_IM_SETTINGS, bindingMode: 'manual', chunkLimit: 5 },
+      imPeers: {
+        [BOUND_PEER]: {
+          sessionId: 'session-a',
+          character: 'Example',
+          chatId: 'chat.jsonl',
+          scope: 'private',
+          boundBy: 'manual',
+          createdAt: new Date(0).toISOString(),
+        },
+      },
+    })
+    const h = harness()
+    const receipt = await h.router.sendText(BOUND_PEER, 'abcdefghij')
+    expect(h.sent).toEqual([{ peerId: 'peer-a', texts: ['abcde', 'fghij'] }])
+    expect(receipt).toEqual({ parts: 2, at: 1_000 })
+  })
+
+  it('refuses a peer without a binding', async () => {
+    const h = harness()
+    const failure = h.router.sendText('qq:acct:private:ghost', 'hi')
+    await expect(failure).rejects.toBeInstanceOf(ImSendError)
+    await expect(failure).rejects.toThrow("IM peer 'qq:acct:private:ghost' has no binding")
+    expect(h.sent).toEqual([])
+  })
+
+  it('wraps a transport failure with the peer key instead of swallowing it', async () => {
+    await db.patchState({
+      imPeers: {
+        [BOUND_PEER]: {
+          sessionId: 'session-a',
+          character: 'Example',
+          chatId: 'chat.jsonl',
+          scope: 'private',
+          boundBy: 'manual',
+          createdAt: new Date(0).toISOString(),
+        },
+      },
+    })
+    const router = createImRouter({
+      db,
+      now: () => 1_000,
+      seenDedupe: async () => false,
+      ensureSession: async () => ({ sessionId: 'session-new', character: 'Example', chatId: 'chat.jsonl' }),
+      followup: async () => {},
+      render: async (_target, text) => text,
+      send: async () => { throw new Error('socket closed') },
+    })
+    await expect(router.sendText(BOUND_PEER, 'hi')).rejects.toThrow(`IM send to ${BOUND_PEER} failed: socket closed`)
+  })
+})
+
+describe('im router sendText', () => {
+  it('rejects a malformed peer key, an unknown channel and an unbound peer', async () => {
+    await allowAll()
+    const h = harness()
+    await expect(h.router.sendText('not-a-key', 'hi')).rejects.toMatchObject({ code: 'IM_SEND_INVALID_TARGET' })
+    await expect(h.router.sendText('telegram:acct:private:p1', 'hi')).rejects.toMatchObject({ code: 'IM_SEND_INVALID_TARGET' })
+    await expect(h.router.sendText('qq:acct:private:peer-a', 'hi')).rejects.toMatchObject({ code: 'IM_SEND_UNBOUND' })
+    expect(h.sent).toHaveLength(0)
+  })
+
+  it('refuses blank text before touching the channel', async () => {
+    await allowAll()
+    const h = harness()
+    await expect(h.router.sendText('qq:acct:private:peer-a', '   ')).rejects.toMatchObject({ code: 'IM_SEND_INVALID' })
   })
 })
 

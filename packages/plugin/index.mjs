@@ -10184,7 +10184,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("b511adc") : void 0;
+  const commit = true ? normalizeCommit("098db83") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -13506,6 +13506,33 @@ var init_host = __esm({
   }
 });
 
+// packages/plugin/src/im/handle.ts
+function publishImRuntime(runtime) {
+  const holder = globalThis;
+  const token = nextToken2++;
+  holder[runtimeSymbol] = { runtime, token };
+  return () => {
+    if (holder[runtimeSymbol]?.token === token) delete holder[runtimeSymbol];
+  };
+}
+function resolveImRuntime() {
+  return globalThis[runtimeSymbol]?.runtime;
+}
+function imDisabledByEnv() {
+  const disabled = envCompat("DISABLE_IM")?.trim();
+  return disabled !== void 0 && disabled !== "" && disabled !== "0" && disabled !== "false";
+}
+var IM_RUNTIME_KEY, runtimeSymbol, nextToken2;
+var init_handle2 = __esm({
+  "packages/plugin/src/im/handle.ts"() {
+    "use strict";
+    init_env_compat();
+    IM_RUNTIME_KEY = "dsh-soulmojito:im-runtime";
+    runtimeSymbol = Symbol.for(IM_RUNTIME_KEY);
+    nextToken2 = 1;
+  }
+});
+
 // packages/plugin/src/update/apply.ts
 import { spawn } from "node:child_process";
 import { copyFileSync, existsSync as existsSync2, mkdirSync, mkdtempSync as mkdtempSync2, readdirSync as readdirSync2, readFileSync as readFileSync3, renameSync, rmSync as rmSync2, statSync, writeFileSync } from "node:fs";
@@ -14343,10 +14370,11 @@ __export(runtime_exports, {
   variables: () => variables
 });
 function getImRuntime() {
-  return imRuntimeInstance;
+  return resolveImRuntime();
 }
 function setImRuntime(value) {
-  imRuntimeInstance = value;
+  imRuntimeDisposer?.();
+  imRuntimeDisposer = value === void 0 ? void 0 : publishImRuntime(value);
 }
 function store3() {
   return storePromise ??= TavernStore.open(tavernDataRoot());
@@ -14474,7 +14502,7 @@ function getGamesServicePromise() {
 function setGamesServicePromise(value) {
   gamesServicePromise = value;
 }
-var storePromise, memoryStorePromise, variableStorePromise, agentTavernCapabilities, agentTavernCapabilitiesPromise, agentTavernProjectorPromise, agentNovelCapabilities, novelStorePromise, novelProjectorPromise, novelDriverPromise, updateServiceInstance, updateChecksEnabledFlag, modHostPromise, modHostContext, gamesServicePromise, imRuntimeInstance, templatesEnabledFlag, memoryVectorStorePromise;
+var storePromise, memoryStorePromise, variableStorePromise, agentTavernCapabilities, agentTavernCapabilitiesPromise, agentTavernProjectorPromise, agentNovelCapabilities, novelStorePromise, novelProjectorPromise, novelDriverPromise, updateServiceInstance, updateChecksEnabledFlag, modHostPromise, modHostContext, gamesServicePromise, imRuntimeDisposer, templatesEnabledFlag, memoryVectorStorePromise;
 var init_runtime = __esm({
   "packages/plugin/src/runtime.ts"() {
     "use strict";
@@ -14484,6 +14512,7 @@ var init_runtime = __esm({
     init_dsh_home();
     init_env_compat();
     init_host();
+    init_handle2();
     init_service();
     init_src();
     agentTavernCapabilities = inspectAgentTavernCapabilities({});
@@ -39034,6 +39063,62 @@ init_runtime();
 init_capabilities();
 init_runtime();
 
+// packages/plugin/src/session/activate.ts
+function applyAgentTavernHistoryImport(options) {
+  const { agent, plan } = options;
+  const total = plan.length;
+  const session = agent.session;
+  if (session === void 0 || typeof session.append !== "function") {
+    options.logger?.warn?.("AgentTavern history import skipped: the host agent exposes no appendable session, so the greeting stays in the Tavern JSONL only.");
+    return { status: "skipped", landed: 0, total };
+  }
+  const importedTurn = lastImportedTurn(plan);
+  if (importedTurn !== void 0 && !canAdvanceHostTurnBase(agent)) {
+    options.logger?.warn?.("AgentTavern history import skipped: the host session exposes no advanceable turn base, so imported turn boundaries would desynchronise the live loop.");
+    return { status: "skipped", landed: 0, total };
+  }
+  const logger = options.logger;
+  const appendable = session;
+  const baseLength = sessionEvents(session).length;
+  const appendItem = (item) => {
+    appendable.append(item.type, item.data, item.surfaceOp === void 0 ? void 0 : { surfaceOp: item.surfaceOp });
+  };
+  let attemptError;
+  try {
+    for (const item of plan) appendItem(item);
+  } catch (error) {
+    attemptError = error;
+  }
+  let landed = landedPlanAppends(session, plan, baseLength);
+  const firstLanded = landed;
+  let retryRefused = false;
+  if (landed < total && attemptError === void 0 && sessionEvents(session).length === baseLength + landed) {
+    try {
+      for (const item of plan.slice(landed)) appendItem(item);
+    } catch (error) {
+      attemptError = error;
+    }
+    landed = Math.max(landed, landedPlanAppends(session, plan, baseLength));
+  } else if (landed < total && attemptError === void 0) {
+    retryRefused = true;
+  }
+  if (attemptError !== void 0) {
+    logger?.warn?.(`AgentTavern history import failed: ${attemptError instanceof Error ? attemptError.message : String(attemptError)}`);
+  } else if (landed < total) {
+    const attempts = retryRefused ? `attempt 1: ${firstLanded}/${total} appends visible; suffix retry refused \u2014 the log tail holds unplanned events, replaying would duplicate turn boundaries` : `attempt 1: ${firstLanded}/${total} appends visible, attempt 2: ${landed}/${total}`;
+    logger?.error?.(`AgentTavern history import could not be confirmed by read-back (${attempts}); degrading to the verified prefix \u2014 the missing history stays in the Tavern JSONL and remains replayable`);
+  }
+  if (landed < total) {
+    closeImportBracket(agent, {
+      kind: "error",
+      error: { message: "AgentTavern history import failed", code: "TAVERN_IMPORT" }
+    });
+  }
+  const verifiedTurn = lastLoggedTurn(agent);
+  if (verifiedTurn !== void 0) advanceHostTurnBase(agent, verifiedTurn);
+  return { status: landed < total ? "partial" : "applied", landed, total };
+}
+
 // packages/plugin/src/session/preset-marker.ts
 function lastSelectedPresetId(session) {
   const events = sessionEvents(session);
@@ -39201,6 +39286,70 @@ init_deduce();
 // packages/plugin/src/agent-tavern/agent.ts
 init_guides();
 init_handle();
+init_handle2();
+
+// packages/plugin/src/agent-tavern/tools/shared.ts
+var DEFAULT_USER3 = "User";
+function objectOutput(properties, optionalKeys = ["value", "revision", "updatedAt"]) {
+  return { type: "object", properties, required: Object.keys(properties).filter((key) => !optionalKeys.includes(key)), additionalProperties: false };
+}
+function identitySummaryOf(data) {
+  const agentTavern = data.extensions?.agentTavern;
+  const summary = agentTavern?.identitySummary;
+  return typeof summary === "string" && summary.trim() !== "" ? summary : void 0;
+}
+
+// packages/plugin/src/im/types.ts
+init_src();
+function imPeerKeyParts(key) {
+  const parts = key.split(":");
+  if (parts.length < 4) return void 0;
+  const [channel, accountId, scope, ...rest] = parts;
+  if (channel === void 0 || accountId === void 0 || scope === void 0) return void 0;
+  return { channel, accountId, scope, peerId: rest.join(":") };
+}
+
+// packages/plugin/src/im/tools.ts
+var identityOutput = objectOutput({
+  peers: {
+    type: "array",
+    items: {
+      type: "object",
+      properties: {
+        alias: { type: "string" },
+        channel: { type: "string" },
+        scope: { type: "string", enum: ["private", "group"] },
+        character: { type: "string" },
+        chatId: { type: "string" }
+      },
+      required: ["alias", "channel", "scope", "character", "chatId"],
+      additionalProperties: false
+    }
+  }
+});
+var channelsOutput = objectOutput({
+  available: { type: "boolean" },
+  reasons: { type: "array", items: { type: "string" } },
+  channels: {
+    type: "array",
+    items: {
+      type: "object",
+      properties: {
+        channel: { type: "string" },
+        accountId: { type: "string" },
+        state: { type: "string", enum: ["idle", "starting", "online", "paused", "error"] }
+      },
+      required: ["channel", "accountId", "state"],
+      additionalProperties: false
+    }
+  }
+});
+var sendOutput = objectOutput({
+  peer: { type: "string" },
+  parts: { type: "integer" },
+  sentAt: { type: "string" },
+  messageId: { type: "string" }
+}, ["messageId"]);
 
 // packages/plugin/src/lazy-projection.ts
 function createLazyProjection(options) {
@@ -40150,17 +40299,6 @@ function assembleResult(allActivated, diagnostics, timedState) {
     diagnostics,
     timedState
   };
-}
-
-// packages/plugin/src/agent-tavern/tools/shared.ts
-var DEFAULT_USER3 = "User";
-function objectOutput(properties, optionalKeys = ["value", "revision", "updatedAt"]) {
-  return { type: "object", properties, required: Object.keys(properties).filter((key) => !optionalKeys.includes(key)), additionalProperties: false };
-}
-function identitySummaryOf(data) {
-  const agentTavern = data.extensions?.agentTavern;
-  const summary = agentTavern?.identitySummary;
-  return typeof summary === "string" && summary.trim() !== "" ? summary : void 0;
 }
 
 // packages/plugin/src/agent-tavern/tools/character.ts
@@ -41571,49 +41709,11 @@ function registerTavernSessionCommand(ctx) {
         }));
       }
       if (historyImport !== void 0) {
-        const importedTurn = lastImportedTurn(historyImport);
-        if (importedTurn !== void 0 && !canAdvanceHostTurnBase(agent)) {
-          ctx.logger?.warn?.("AgentTavern history import skipped: the host session exposes no advanceable turn base, so imported turn boundaries would desynchronise the live loop.");
-        } else {
-          const total = historyImport.length;
-          const baseLength = sessionEvents(agent.session).length;
-          const appendItem = (item) => {
-            agent.session.append(item.type, item.data, item.surfaceOp === void 0 ? void 0 : { surfaceOp: item.surfaceOp });
-          };
-          let attemptError;
-          try {
-            for (const item of historyImport) appendItem(item);
-          } catch (error) {
-            attemptError = error;
-          }
-          let landed = landedPlanAppends(agent.session, historyImport, baseLength);
-          const firstLanded = landed;
-          let retryRefused = false;
-          if (landed < total && attemptError === void 0 && sessionEvents(agent.session).length === baseLength + landed) {
-            try {
-              for (const item of historyImport.slice(landed)) appendItem(item);
-            } catch (error) {
-              attemptError = error;
-            }
-            landed = Math.max(landed, landedPlanAppends(agent.session, historyImport, baseLength));
-          } else if (landed < total && attemptError === void 0) {
-            retryRefused = true;
-          }
-          if (attemptError !== void 0) {
-            ctx.logger?.warn?.(`AgentTavern history import failed: ${attemptError instanceof Error ? attemptError.message : String(attemptError)}`);
-          } else if (landed < total) {
-            const attempts = retryRefused ? `attempt 1: ${firstLanded}/${total} appends visible; suffix retry refused \u2014 the log tail holds unplanned events, replaying would duplicate turn boundaries` : `attempt 1: ${firstLanded}/${total} appends visible, attempt 2: ${landed}/${total}`;
-            ctx.logger?.error?.(`AgentTavern history import could not be confirmed by read-back (${attempts}); degrading to the verified prefix \u2014 the missing history stays in the Tavern JSONL and remains replayable`);
-          }
-          if (landed < total) {
-            closeImportBracket(agent, {
-              kind: "error",
-              error: { message: "AgentTavern history import failed", code: "TAVERN_IMPORT" }
-            });
-          }
-          const verifiedTurn = lastLoggedTurn(agent);
-          if (verifiedTurn !== void 0) advanceHostTurnBase(agent, verifiedTurn);
-        }
+        applyAgentTavernHistoryImport({
+          agent,
+          plan: historyImport,
+          ...ctx.logger === void 0 ? {} : { logger: ctx.logger }
+        });
       }
       await refreshActivePrompt();
       if (parsed.architecture === "st") {
@@ -41663,6 +41763,9 @@ async function prepareWorkbenchWorkspace() {
   await mkdir4(path12, { recursive: true });
   return { path: path12, title: TAVERN_WORKBENCH_WORKSPACE_TITLE };
 }
+
+// packages/plugin/src/im/runtime.ts
+init_handle2();
 
 // packages/plugin/src/im/router.ts
 import { randomUUID as randomUUID9 } from "node:crypto";
@@ -41942,9 +42045,6 @@ function asRecord2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
 }
 
-// packages/plugin/src/im/types.ts
-init_src();
-
 // packages/plugin/src/im/settings.ts
 var IM_CHUNK_DEFAULTS = {
   qq: 4500,
@@ -42091,12 +42191,23 @@ async function ensureImSession(deps, request) {
     throw new ImSessionError("IM_SOURCE_MISSING", request.mode === "shared" ? "shared mode requires the configured shared chat" : "independent mode requires the configured source chat");
   }
   if (request.mode === "shared") {
-    return bindImChat(deps, chat, request.existingSessionId);
+    if (request.existingSessionId !== void 0) {
+      return bindImChat(deps, chat, request.existingSessionId);
+    }
+    return bindImChat(deps, chat, void 0);
+  }
+  if (request.existingSessionId !== void 0) {
+    throw new ImSessionError("IM_SESSION_UNAVAILABLE", "independent mode always mints a new session; existingSessionId is only valid for shared mode");
   }
   const chatId = await createChatFromSource(deps, chat);
-  const sessionId = request.existingSessionId ?? mintImSessionId();
-  await ensureImAgent(deps, sessionId);
+  const createdChat = await deps.db.getChat(chat.character, chatId);
+  if (createdChat === void 0) {
+    throw new ImSessionError("IM_CHAT_MISSING", `IM chat ${chat.character}/${chatId} vanished right after creation; the opening greeting cannot be imported`);
+  }
+  const sessionId = mintImSessionId();
+  const agent = await ensureImAgent(deps, sessionId);
   await deps.bind(sessionId, chat.character, chatId);
+  await importChatHistory(deps, agent, createdChat, chat.character, chatId, sessionId);
   await deps.presetChanged();
   return { sessionId, character: chat.character, chatId };
 }
@@ -42106,9 +42217,14 @@ async function bindImChat(deps, chat, existingSessionId) {
     throw new ImSessionError("IM_SESSION_UNAVAILABLE", `IM sessions are unavailable: ${capability.reasons.join("; ")}`);
   }
   const chatId = await requireExistingChat(deps, chat);
+  const existingChat = await deps.db.getChat(chat.character, chatId);
+  if (existingChat === void 0) {
+    throw new ImSessionError("IM_CHAT_MISSING", `chat ${chat.character}/${chatId} disappeared while binding`);
+  }
   const sessionId = existingSessionId ?? mintImSessionId();
-  await ensureImAgent(deps, sessionId);
+  const agent = await ensureImAgent(deps, sessionId);
   await deps.bind(sessionId, chat.character, chatId);
+  await importChatHistory(deps, agent, existingChat, chat.character, chatId, sessionId);
   await deps.presetChanged();
   return { sessionId, character: chat.character, chatId };
 }
@@ -42155,6 +42271,20 @@ async function createChatFromSource(deps, source) {
   }]);
   return chatId;
 }
+async function importChatHistory(deps, agent, chat, character, chatId, sessionId) {
+  const live = agent ?? {};
+  const events = readSessionEvents(live.session);
+  if (events !== void 0 && events.some((event) => event.type === "turn/start")) return;
+  const state = await deps.db.getState();
+  const found = await deps.db.getCharacter(character);
+  const scripts = await collectSessionRegexScripts(deps.db, state, character, chatId, found);
+  const plan = historyImportAppends(chat, sessionId, scripts, tavernMacroExpand(state, character, found), live.session);
+  applyAgentTavernHistoryImport({
+    agent: live,
+    plan,
+    ...deps.logger === void 0 ? {} : { logger: deps.logger }
+  });
+}
 async function ensureImAgent(deps, sessionId) {
   const live = deps.agents?.get?.(sessionId);
   if (live !== void 0 && live !== null) return live;
@@ -42194,6 +42324,14 @@ function imUnboundMessage(peerKey) {
 
 // packages/plugin/src/im/router.ts
 var IM_TURN_FAILED = "\uFF08\u8FD9\u4E00\u8F6E\u6CA1\u6709\u751F\u6210\u6210\u529F\uFF0C\u7A0D\u540E\u518D\u8BD5\uFF09";
+var ImSendError = class extends Error {
+  code;
+  constructor(code, message, options) {
+    super(message, options);
+    this.name = "ImSendError";
+    this.code = code;
+  }
+};
 var UNBOUND_NOTICE_TTL_MS = 10 * 6e4;
 function createImRouter(deps) {
   const origins = new PendingOrigins({ ttlMs: 10 * 6e4, maxPerSession: 200 });
@@ -42281,6 +42419,47 @@ function createImRouter(deps) {
       total: parts.length
     })));
   }
+  async function sendText(peerKey, text) {
+    const body = text.trim();
+    if (body === "") {
+      throw new ImSendError("IM_SEND_INVALID", "IM text is empty after trimming whitespace");
+    }
+    const parts = imPeerKeyParts(peerKey);
+    if (parts === void 0) {
+      throw new ImSendError("IM_SEND_INVALID_TARGET", `malformed IM peer key '${peerKey}'; expected '<channel>:<accountId>:<scope>:<peerId>'`);
+    }
+    const channel = channelOf(parts.channel);
+    if (channel === void 0) {
+      throw new ImSendError("IM_SEND_INVALID_TARGET", `IM peer key '${peerKey}' names unknown channel '${parts.channel}'`);
+    }
+    const scope = parts.scope === "private" || parts.scope === "group" ? parts.scope : void 0;
+    if (scope === void 0) {
+      throw new ImSendError("IM_SEND_INVALID_TARGET", `IM peer key '${peerKey}' names unknown scope '${parts.scope}'`);
+    }
+    const state = await deps.db.getState();
+    if (state.imPeers?.[peerKey] === void 0) {
+      throw new ImSendError("IM_SEND_UNBOUND", `IM peer '${peerKey}' has no binding; bind it in the DSH-SoulMojito IM panel first`);
+    }
+    const settings = state.imSettings ?? DEFAULT_IM_SETTINGS;
+    const target = {
+      channel,
+      accountId: parts.accountId,
+      scope,
+      peerId: parts.peerId
+    };
+    const chunks = projectImText(body, channel, imChunkLimit(channel, settings));
+    try {
+      await deps.send(target, chunks.map((chunk, index) => ({
+        kind: "text",
+        text: chunk,
+        index,
+        total: chunks.length
+      })));
+    } catch (error) {
+      throw new ImSendError("IM_SEND_FAILED", `IM send to ${peerKey} failed: ${messageOf7(error)}`, { cause: error });
+    }
+    return { parts: chunks.length, at: deps.now() };
+  }
   async function notifyUnbound(target, peerKey, now) {
     const last = noticed.get(peerKey);
     if (last !== void 0 && now - last < UNBOUND_NOTICE_TTL_MS) return;
@@ -42297,6 +42476,7 @@ function createImRouter(deps) {
   return {
     inbound,
     finishTurn,
+    sendText,
     pending: (sessionId) => origins.pendingCount(sessionId)
   };
 }
@@ -42326,6 +42506,9 @@ function sharedSessionOf(peers, settings) {
 }
 function messageOf7(error) {
   return error instanceof Error ? error.message : String(error);
+}
+function channelOf(value) {
+  return value === "qq" || value === "weixin" || value === "onebot" ? value : void 0;
 }
 
 // packages/plugin/src/im/store.ts
@@ -42722,10 +42905,6 @@ async function imStoreWriteSecret(file, record) {
 }
 
 // packages/plugin/src/im/runtime.ts
-function imDisabledByEnv() {
-  const disabled = envCompat("DISABLE_IM")?.trim();
-  return disabled !== void 0 && disabled !== "" && disabled !== "0" && disabled !== "false";
-}
 function createImRuntime(ctx, options) {
   const { db } = options;
   const agents = ctx.agents;

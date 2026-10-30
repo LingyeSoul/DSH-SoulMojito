@@ -1,5 +1,7 @@
 import { formatGuidesBlock, onGuidesChanged } from '../guides.js'
 import { onGamesChanged } from '../games/handle.js'
+import { imDisabledByEnv, resolveImRuntime } from '../im/handle.js'
+import { createImTools } from '../im/tools.js'
 import { createLazyProjection } from '../lazy-projection.js'
 import { clampModSectionOrder, modSectionSnapshot } from '../mods/cross-bundle.js'
 import { mountModExtensions } from '../mods/agent-mount.js'
@@ -179,7 +181,7 @@ interface LlmCallConfigLike {
 }
 
 function createTools(): ToolDefinition[] {
-  return [
+  const tools = [
     ...characterTools(),
     ...memoryTools(),
     ...variableTools(),
@@ -187,6 +189,14 @@ function createTools(): ToolDefinition[] {
     ...deductionTools(),
     ...gameTools(),
   ]
+  // IM 工具族（提案 0024 §3.6）：按**环境开关**决定是否注册，不按运行时是否已
+  // 发布——运行时的发布挂在 `store()` 的异步链上，用它做门控会让启动期先挂载的
+  // 会话静默少三件工具，直到下一次 recompose 才补上（审查 P2-2）。环境是同步的，
+  // 判据稳定；运行时就绪与否由工具调用时各自降级。
+  if (!imDisabledByEnv()) {
+    tools.push(...createImTools({ db: tavernStore, runtime: resolveImRuntime }))
+  }
+  return tools
 }
 
 /** facts 文本通道：首次为某 agent 装配时异步装载一次，装载完成前返回空串。

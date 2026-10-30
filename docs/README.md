@@ -58,6 +58,7 @@
 
 - [`2026-08-15-v2-feature-scope.md`](../decisions/2026-08-15-v2-feature-scope.md) — v2 功能面的范围与形态选择
 - [`2026-10-25-template-default-off.md`](../decisions/2026-10-25-template-default-off.md) — Prompt Template（EJS）默认关闭，profile 显式 opt-in
+- [`2026-10-30-im-tools-and-activation.md`](../decisions/2026-10-30-im-tools-and-activation.md) — IM 工具族与历史导入抽取（提案 0024 第二批：alias 身份、env 门控、跨 bundle 句柄守卫）
 
 ### 宿主兼容与 DSH 版本适配
 

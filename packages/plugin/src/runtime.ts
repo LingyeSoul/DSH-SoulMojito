@@ -9,6 +9,7 @@ import { envCompat } from './env-compat.js'
 import type { GamesService } from './games/service.js'
 import type { PluginContext } from './host-contract.js'
 import { ModHost, type ModHostContext, type ModHostSnapshot } from './mods/host.js'
+import { publishImRuntime, resolveImRuntime } from './im/handle.js'
 import type { ImRuntime } from './im/runtime.js'
 import { TavernUpdateService } from './update/service.js'
 import { MemoryStore, MemoryVectorStore, NovelStore, TavernStore, VariableStore } from '../../tavern-store/src/index.js'
@@ -41,13 +42,19 @@ let modHostContext: ModHostContext | undefined
 let gamesServicePromise: Promise<GamesService> | undefined
 // IM 通道运行时（提案 0024）：单进程单实例，apply 装配、effect 卸载时 dispose。
 // 本轮只装配不活动（无真实通道适配器），HTTP 面与面板投影共用同一实例。
-let imRuntimeInstance: ImRuntime | undefined
+// 句柄锚在 globalThis（im/handle.ts）：agent bundle 与 index bundle 是两份独立
+// esbuild 产物，模块级变量互不可见，IM 工具族必须从这里读到同一实例。
+// 撤销走 sequence 守卫：热重载时旧 fiber 的 disposer 晚于新 fiber 执行，无条件
+// 摘除会把新句柄一起抹掉，回复抽取随后静默停摆。
+let imRuntimeDisposer: (() => void) | undefined
+
 export function getImRuntime(): ImRuntime | undefined {
-  return imRuntimeInstance
+  return resolveImRuntime()
 }
 
 export function setImRuntime(value: ImRuntime | undefined): void {
-  imRuntimeInstance = value
+  imRuntimeDisposer?.()
+  imRuntimeDisposer = value === undefined ? undefined : publishImRuntime(value)
 }
 // Prompt Template（提案 0008）总开关：默认关闭（安全默认）；profile 行
 // templateEnabled: true 显式开启，DSH_SOULMOJITO_DISABLE_TEMPLATES 环境 kill

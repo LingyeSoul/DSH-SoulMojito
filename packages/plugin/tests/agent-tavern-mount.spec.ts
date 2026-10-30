@@ -101,8 +101,9 @@ describe('AgentTavern native module mount', () => {
     expect(contexts.map((context) => context.name)).toContain('dsh-soulmojito:agent-facts')
     expect([...tools.keys()]).toContain('tavern_character_get')
     // 18 原有 + 游戏桥七件（提案 0018 §4.2；game_wait 为 2026-10-14 修订，
-    // game_history 为同日增量修订，game_wait_full 为 2026-10-16 新增）。
-    expect(tools.size).toBe(25)
+    // game_history 为同日增量修订，game_wait_full 为 2026-10-16 新增）
+    // + IM 三件（提案 0024 §3.6，DSH_SOULMOJITO_DISABLE_IM 硬关时退回 25）。
+    expect(tools.size).toBe(28)
   })
 
   it('resolves the per-agent facts from the assembly context instead of the mount context', async () => {
