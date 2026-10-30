@@ -476,6 +476,7 @@ describe('IM channels panel (client-src source check)', () => {
     expect(verify.texts).toContain('digits please')
     expect(verify.types).toContain('input')
 
+    // 平台给图片地址：直接透传，不要再包一层自绘二维码。
     const waiting = collectNode(components.ImBindPanel({
       bind: { channel: 'qq', phase: 'waiting', url: 'https://example.test/qr.png' },
       qrFailedFor: '', verifyCode: '', busy: '', onQrFailed: () => {}, onVerifyCode: () => {}, onSubmit: () => {}, onRetry: () => {}, onCancel: () => {},
@@ -483,6 +484,14 @@ describe('IM channels panel (client-src source check)', () => {
     expect(waiting.attrs).toContain('src=https://example.test/qr.png')
     expect(waiting.attrs).toContain('href=https://example.test/qr.png')
     expect(waiting.texts).toContain('im.bindQrLink')
+
+    // 平台给内容串：用服务端渲染好的 SVG（实机破图就是这条没走通）。
+    const rendered = collectNode(components.ImBindPanel({
+      bind: { channel: 'weixin', phase: 'waiting', url: 'https://weixin.qq.com/x/abc', qrSvg: 'data:image/svg+xml;base64,AAA' },
+      qrFailedFor: '', verifyCode: '', busy: '', onQrFailed: () => {}, onVerifyCode: () => {}, onSubmit: () => {}, onRetry: () => {}, onCancel: () => {},
+    }))
+    expect(rendered.attrs).toContain('src=data:image/svg+xml;base64,AAA')
+    expect(rendered.attrs).toContain('href=https://weixin.qq.com/x/abc')
 
     const failed = collectNode(components.ImBindPanel({
       bind: { channel: 'qq', phase: 'failed', reason: 'connector exploded' },
