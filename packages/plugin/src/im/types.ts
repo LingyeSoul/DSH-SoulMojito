@@ -114,9 +114,20 @@ export interface ImChannelView {
   peers: number
 }
 
-/** Stable dedupe key; platform retries and reconnects replay the same id. */
-export function imDedupeKey(channel: ImChannelId, accountId: string, messageId: string): string {
-  return `${channel}:${accountId}:${messageId}`
+/**
+ * Stable dedupe key; platform retries and reconnects replay the same id.
+ *
+ * scope/peerId 必须进键：platform 的 `message_id` 只在单个会话内唯一，两个群
+ * 恰好撞号时，缺这两段的键会把后到的一条当重放丢掉（审查 P2-2）。
+ */
+export function imDedupeKey(
+  channel: ImChannelId,
+  accountId: string,
+  scope: ImScope,
+  peerId: string,
+  messageId: string,
+): string {
+  return `${channel}:${accountId}:${scope}:${peerId}:${messageId}`
 }
 
 /** Reverse of `imPeerKey`, for panel display only. */

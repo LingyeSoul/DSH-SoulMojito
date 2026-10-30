@@ -86,6 +86,11 @@ function runtimeHarness(options: { available?: boolean; reasons?: string[]; fail
         { channel: 'qq', accountId: 'acct-a', status: { state: 'online', since: 1_000 }, peers: 2 },
         { channel: 'weixin', accountId: 'acct-b', status: { state: 'paused', reason: 'token expired' }, peers: 0 },
       ],
+      // 账号管理与 OneBot webhook 不属于工具面用例的覆盖范围；补空实现只为
+      // 让这个假运行时保持与 ImRuntimeHandle 同形。
+      upsertAccount: async () => {},
+      removeAccount: async () => false,
+      handleOneBotWebhook: async () => false,
       bindChat: async (chat) => ({ sessionId: 'session-a', character: chat.character, chatId: chat.chatId }),
       handleSessionEvent: () => {},
       dispose: async () => {},

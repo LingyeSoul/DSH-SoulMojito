@@ -62,7 +62,7 @@ const messageCases: readonly MessageCase[] = [
       senderName: '阿澈',
       text: '晚上好',
       media: [],
-      dedupeKey: 'onebot:qq-main:4001',
+      dedupeKey: 'onebot:qq-main:private:10001:4001',
       receivedAt: RECEIVED_AT,
     },
   },
@@ -92,7 +92,7 @@ const messageCases: readonly MessageCase[] = [
       senderName: '群名片甲',
       text: '@123 [图片]',
       media: [{ kind: 'image', url: 'https://cdn.example/a.jpg', name: 'a.jpg' }],
-      dedupeKey: 'onebot:qq-main:4002',
+      dedupeKey: 'onebot:qq-main:group:20001:4002',
       receivedAt: RECEIVED_AT,
     },
   },
@@ -109,7 +109,7 @@ const messageCases: readonly MessageCase[] = [
       text: '[草稿]看看[图片]',
       media: [{ kind: 'image', url: 'https://cdn.example/b.jpg', name: 'b.jpg' }],
       replyTo: '3001',
-      dedupeKey: 'onebot:qq-main:4003',
+      dedupeKey: 'onebot:qq-main:private:10003:4003',
       receivedAt: RECEIVED_AT,
     },
   },
@@ -208,7 +208,7 @@ describe('parseOneBotMessage', () => {
       RECEIVED_AT,
     )
     expect(inbound?.accountId).toBe(ACCOUNT)
-    expect(inbound?.dedupeKey).toBe('onebot:qq-main:4009')
+    expect(inbound?.dedupeKey).toBe('onebot:qq-main:private:10009:4009')
   })
 
   it('私聊缺昵称时用 (user_id) 兜底', () => {

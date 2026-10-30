@@ -10184,7 +10184,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("098db83") : void 0;
+  const commit = true ? normalizeCommit("2c1cfa4") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -10969,7 +10969,7 @@ function createMacroEngine(init) {
     let out = "";
     let pos = 0;
     let skipNewlines = false;
-    const appendText = (chunk) => {
+    const appendText2 = (chunk) => {
       if (chunk === "") {
         return;
       }
@@ -10985,18 +10985,18 @@ function createMacroEngine(init) {
     for (; ; ) {
       const open2 = text.indexOf("{{", pos);
       if (open2 === -1) {
-        appendText(text.slice(pos));
+        appendText2(text.slice(pos));
         break;
       }
-      appendText(text.slice(pos, open2));
+      appendText2(text.slice(pos, open2));
       const close = text.indexOf("}}", open2 + 2);
       if (close === -1) {
-        appendText(text.slice(open2));
+        appendText2(text.slice(open2));
         break;
       }
       const result = evalInside(text.slice(open2 + 2, close), open2, rawHash);
       if (result === null) {
-        appendText(text.slice(open2, close + 2));
+        appendText2(text.slice(open2, close + 2));
       } else if (result === TRIM) {
         out = out.replace(/(?:\r?\n)+$/, "");
         skipNewlines = true;
@@ -14374,7 +14374,15 @@ function getImRuntime() {
 }
 function setImRuntime(value) {
   imRuntimeDisposer?.();
-  imRuntimeDisposer = value === void 0 ? void 0 : publishImRuntime(value);
+  if (value === void 0) {
+    imRuntimeDisposer = void 0;
+    return noopRuntimeDisposer;
+  }
+  const dispose = publishImRuntime(value);
+  imRuntimeDisposer = dispose;
+  return dispose;
+}
+function noopRuntimeDisposer() {
 }
 function store3() {
   return storePromise ??= TavernStore.open(tavernDataRoot());
@@ -39301,6 +39309,9 @@ function identitySummaryOf(data) {
 
 // packages/plugin/src/im/types.ts
 init_src();
+function imDedupeKey(channel, accountId, scope, peerId, messageId) {
+  return `${channel}:${accountId}:${scope}:${peerId}:${messageId}`;
+}
 function imPeerKeyParts(key) {
   const parts = key.split(":");
   if (parts.length < 4) return void 0;
@@ -41746,1283 +41757,6 @@ function registerTavernSessionCommand(ctx) {
 // packages/plugin/src/im/runtime.ts
 init_capabilities();
 init_env_compat();
-init_dsh_home();
-
-// packages/plugin/src/workspace.ts
-init_dsh_home();
-import { mkdir as mkdir4 } from "node:fs/promises";
-var TAVERN_WORKSPACE_TITLE = "Tavern (internal)";
-var TAVERN_WORKBENCH_WORKSPACE_TITLE = "Tavern Workbench (internal)";
-async function prepareInternalWorkspace() {
-  const path12 = tavernDataRoot("workspace");
-  await mkdir4(path12, { recursive: true });
-  return { path: path12, title: TAVERN_WORKSPACE_TITLE };
-}
-async function prepareWorkbenchWorkspace() {
-  const path12 = tavernDataRoot("workbench");
-  await mkdir4(path12, { recursive: true });
-  return { path: path12, title: TAVERN_WORKBENCH_WORKSPACE_TITLE };
-}
-
-// packages/plugin/src/im/runtime.ts
-init_handle2();
-
-// packages/plugin/src/im/router.ts
-import { randomUUID as randomUUID9 } from "node:crypto";
-
-// packages/plugin/src/frontend-documents.ts
-var FENCED_DOCUMENT = /```[^\n]*\n([\s\S]*?)```/gi;
-function isFrontendDocument(value) {
-  const text = typeof value === "string" ? value : "";
-  return /<!doctype\s+html\b/i.test(text) || /<html(?:\s[^>]*)?>/i.test(text) && /<(?:head|body)(?:\s[^>]*)?>/i.test(text) || /<(?:head|body)(?:\s[^>]*)?>/i.test(text);
-}
-function extractFrontendDocuments(value) {
-  const text = typeof value === "string" ? value : "";
-  const documents = [];
-  FENCED_DOCUMENT.lastIndex = 0;
-  let match;
-  while ((match = FENCED_DOCUMENT.exec(text)) !== null) {
-    const candidate = match[1]?.trim() ?? "";
-    if (isFrontendDocument(candidate)) documents.push(candidate);
-  }
-  if (documents.length > 0) return documents;
-  const raw = text.trim();
-  return isFrontendDocument(raw) ? [raw] : [];
-}
-function stripFrontendDocuments(value) {
-  const text = typeof value === "string" ? value : "";
-  if (text === "") return "";
-  let stripped = text.replace(FENCED_DOCUMENT, (whole, inner) => isFrontendDocument(inner) ? "" : whole);
-  stripped = stripped.replace(/<UpdateVariable(?:Variable)?\b[^>]*>[\s\S]*?<\/UpdateVariable(?:Variable)?\s*>/gi, "").replace(/<\/UpdateVariable(?:Variable)?\s*>/gi, "").replace(/<StatusPlaceHolder(?:Impl|READY)\s*\/?>/gi, "").replace(/<div class="matte-black-log"[\s\S]*?<\/details>\s*<\/div>/gi, "").replace(/<style>\s*\.matte-black-log[\s\S]*?<\/style>/gi, "").replace(/<!--\s*MVU:OK\s*-->/gi, "");
-  if (isFrontendDocument(stripped.trim())) return "";
-  return stripped.replace(/\n{3,}/g, "\n\n").trim();
-}
-function latestFrontendMessage(messages, render) {
-  for (let index = messages.length - 1; index >= 0; index--) {
-    const message = messages[index];
-    if (message === void 0 || message.is_system === true) continue;
-    const documents = extractFrontendDocuments(render(message, index));
-    if (documents.length === 0) continue;
-    return {
-      index,
-      name: typeof message.name === "string" ? message.name : "",
-      isUser: message.is_user === true,
-      documents
-    };
-  }
-  return void 0;
-}
-
-// packages/plugin/src/im/project.ts
-var IM_EMPTY_REPLY = "\uFF08\u65E0\u6587\u672C\u56DE\u590D\uFF09";
-var ImProjectError = class extends Error {
-  code = "IM_PROJECT_INVALID";
-  constructor(message) {
-    super(message);
-    this.name = "ImProjectError";
-  }
-};
-function projectImText(displayText, channel, limit) {
-  assertLimit(limit);
-  const collapsed = stripFrontendDocuments(displayText);
-  const normalized = channel === "weixin" ? stripWeixinMarkdown(collapsed) : collapsed;
-  const text = normalizeBlankLines(normalized);
-  if (text === "") return [IM_EMPTY_REPLY];
-  const parts = channel === "qq" ? chunkMarkdown(text, limit) : chunkParagraphs(text, limit);
-  return parts.length === 0 ? [IM_EMPTY_REPLY] : parts;
-}
-function assertLimit(limit) {
-  if (!Number.isSafeInteger(limit) || limit <= 0) {
-    throw new ImProjectError(`chunk limit must be a positive integer, received ${String(limit)}`);
-  }
-}
-function normalizeBlankLines(text) {
-  return text.replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n").trim();
-}
-function stripWeixinMarkdown(text) {
-  const lines = text.split("\n");
-  let fence = false;
-  const out = [];
-  for (const line of lines) {
-    if (/^\s*```/.test(line)) {
-      fence = !fence;
-      out.push(line);
-      continue;
-    }
-    if (fence) {
-      out.push(line);
-      continue;
-    }
-    let next = line.replace(/!\[[^\]]*\]\([^)]*\)/g, "").replace(/^\s{0,3}#{1,6}\s+/, "").replace(/~~([^~]+)~~/g, "$1").replace(/\*\*\*([^*]+)\*\*\*/g, "$1").replace(/\*\*([^*]+)\*\*/g, "$1").replace(/\*([^*\n]+)\*/g, "$1").replace(/___([^_]+)___/g, "$1").replace(/__([^_]+)__/g, "$1").replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,!?]|$)/g, "$1$2").replace(/`([^`\n]+)`/g, "$1").replace(/^\s{0,3}>\s?/, "");
-    next = next.replace(/[ \t]+$/, "");
-    out.push(next);
-  }
-  return out.join("\n");
-}
-function chunkMarkdown(text, limit) {
-  assertLimit(limit);
-  const lines = text.split("\n");
-  const parts = [];
-  let buffer = [];
-  let bufferLength = 0;
-  let fenceInfo;
-  const flush = (reopen) => {
-    if (buffer.length === 0) return;
-    const body = buffer.join("\n");
-    if (reopen && fenceInfo !== void 0) {
-      parts.push(`${body}
-\`\`\``);
-      buffer = [`\`\`\`${fenceInfo}`];
-      bufferLength = 3 + fenceInfo.length;
-      return;
-    }
-    parts.push(body);
-    buffer = [];
-    bufferLength = 0;
-  };
-  for (const line of lines) {
-    const fenceMatch = /^\s*```(.*)$/.exec(line);
-    const isFence = fenceMatch !== null;
-    const cost = line.length + (buffer.length === 0 ? 0 : 1);
-    if (bufferLength + cost > limit && buffer.length > 0) {
-      const keepFence = fenceInfo !== void 0;
-      flush(keepFence);
-    }
-    if (line.length > limit && buffer.length === 0) {
-      for (const piece of hardSplit(line, limit)) parts.push(piece);
-      bufferLength = 0;
-      continue;
-    }
-    buffer.push(line);
-    bufferLength += cost;
-    if (isFence) {
-      if (fenceInfo === void 0) fenceInfo = fenceMatch[1] ?? "";
-      else fenceInfo = void 0;
-    }
-  }
-  flush(false);
-  return parts.map((part) => part.trim()).filter((part) => part !== "");
-}
-function chunkParagraphs(text, limit) {
-  assertLimit(limit);
-  const paragraphs = text.split(/\n{2,}/);
-  const parts = [];
-  let buffer = "";
-  for (const paragraph of paragraphs) {
-    const trimmed = paragraph.trim();
-    if (trimmed === "") continue;
-    const candidate = buffer === "" ? trimmed : `${buffer}
-
-${trimmed}`;
-    if (candidate.length <= limit) {
-      buffer = candidate;
-      continue;
-    }
-    if (buffer !== "") {
-      parts.push(buffer);
-      buffer = "";
-    }
-    if (trimmed.length <= limit) {
-      buffer = trimmed;
-      continue;
-    }
-    const pieces = hardSplit(trimmed, limit);
-    for (const piece of pieces.slice(0, -1)) parts.push(piece);
-    buffer = pieces[pieces.length - 1] ?? "";
-  }
-  if (buffer !== "") parts.push(buffer);
-  return parts;
-}
-function hardSplit(text, limit) {
-  const pieces = [];
-  let cursor = 0;
-  while (cursor < text.length) {
-    let end = Math.min(cursor + limit, text.length);
-    const code = text.charCodeAt(end - 1);
-    if (end < text.length && code >= 55296 && code <= 56319) end -= 1;
-    if (end <= cursor) end = Math.min(cursor + limit, text.length);
-    pieces.push(text.slice(cursor, end));
-    cursor = end;
-  }
-  return pieces;
-}
-
-// packages/plugin/src/im/reply.ts
-var PendingOrigins = class {
-  bySession = /* @__PURE__ */ new Map();
-  options;
-  constructor(options) {
-    this.options = options;
-  }
-  remember(sessionId, messageId, peerKey, target, now) {
-    this.prune(now);
-    const list = this.bySession.get(sessionId) ?? [];
-    list.push({ messageId, peerKey, target, at: now });
-    while (list.length > this.options.maxPerSession) list.shift();
-    this.bySession.set(sessionId, list);
-  }
-  /**
-   * 按本轮出现过的 user message id 解析来源。命中即删除（一轮只回一次），
-   * 同时清掉本轮其它命中项——它们的内容已并入同一轮，再各回一次会刷屏。
-   */
-  resolve(sessionId, messageIds, now) {
-    this.prune(now);
-    const list = this.bySession.get(sessionId);
-    if (list === void 0 || list.length === 0) return void 0;
-    const wanted = new Set(messageIds);
-    const first = list.find((entry) => wanted.has(entry.messageId));
-    if (first === void 0) return void 0;
-    const remaining = list.filter((entry) => entry !== first && !wanted.has(entry.messageId));
-    if (remaining.length === 0) this.bySession.delete(sessionId);
-    else this.bySession.set(sessionId, remaining);
-    return first;
-  }
-  forgetSession(sessionId) {
-    this.bySession.delete(sessionId);
-  }
-  pendingCount(sessionId) {
-    return this.bySession.get(sessionId)?.length ?? 0;
-  }
-  prune(now) {
-    for (const [sessionId, list] of this.bySession) {
-      const alive = list.filter((entry) => now - entry.at <= this.options.ttlMs);
-      if (alive.length === 0) this.bySession.delete(sessionId);
-      else if (alive.length !== list.length) this.bySession.set(sessionId, alive);
-    }
-  }
-};
-function userMessageIdsOfTurn(events, turn) {
-  const ids = [];
-  for (const event of events) {
-    if (event.type !== "user/message") continue;
-    if (turnOf2(event) !== turn) continue;
-    const id = messageIdOf3(event.data);
-    if (id !== void 0) ids.push(id);
-  }
-  return ids;
-}
-function assistantTextOfTurn(events, turn) {
-  let text;
-  for (const event of events) {
-    if (event.type !== "assistant/message") continue;
-    if (turnOf2(event) !== turn) continue;
-    const candidate = assistantTextOf(event.data);
-    if (candidate !== void 0 && candidate.trim() !== "") text = candidate;
-  }
-  return text;
-}
-function turnFailedOf(events, turn) {
-  for (const event of events) {
-    if (event.type !== "turn/end") continue;
-    if (turnOf2(event) !== turn) continue;
-    const reason = asRecord2(event.data?.["reason"]);
-    return reason?.["kind"] === "error";
-  }
-  return false;
-}
-function turnOf2(event) {
-  const value = event.data?.["turn"];
-  return typeof value === "number" && Number.isSafeInteger(value) ? value : void 0;
-}
-function messageIdOf3(data) {
-  const id = data?.["id"];
-  return typeof id === "string" && id !== "" ? id : void 0;
-}
-function assistantTextOf(data) {
-  const message = asRecord2(data?.["message"]);
-  const content = message?.["content"];
-  if (!Array.isArray(content)) return void 0;
-  const parts = [];
-  for (const block of content) {
-    const entry = asRecord2(block);
-    if (entry?.["type"] !== "text") continue;
-    const text = entry["text"];
-    if (typeof text === "string" && text !== "") parts.push(text);
-  }
-  return parts.length === 0 ? void 0 : parts.join("\n");
-}
-function asRecord2(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
-}
-
-// packages/plugin/src/im/settings.ts
-var IM_CHUNK_DEFAULTS = {
-  qq: 4500,
-  weixin: 1800,
-  onebot: 2e3
-};
-var ImSettingsError = class extends Error {
-  code = "IM_SETTINGS_INVALID";
-  constructor(message) {
-    super(message);
-    this.name = "ImSettingsError";
-  }
-};
-function imChunkLimit(channel, settings) {
-  return settings.chunkLimit ?? IM_CHUNK_DEFAULTS[channel];
-}
-function imAccessAllows(settings, scope, peerId) {
-  const mode = scope === "group" ? settings.groupMode : settings.privateMode;
-  if (mode === "disabled") return false;
-  if (mode === "open") return true;
-  const allow = scope === "group" ? settings.groupAllow : settings.privateAllow;
-  return allow.includes(peerId);
-}
-function asRecord3(value, label) {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new ImSettingsError(`${label} must be an object`);
-  }
-  return value;
-}
-function parseAccessMode(value, label) {
-  if (value === "open" || value === "allowlist" || value === "disabled") return value;
-  throw new ImSettingsError(`${label} must be one of 'open' | 'allowlist' | 'disabled'`);
-}
-function parseStringList(value, label) {
-  if (!Array.isArray(value)) throw new ImSettingsError(`${label} must be an array of strings`);
-  const seen = /* @__PURE__ */ new Set();
-  const result = [];
-  for (const entry of value) {
-    if (typeof entry !== "string") throw new ImSettingsError(`${label} must contain only strings`);
-    const trimmed = entry.trim();
-    if (trimmed === "" || seen.has(trimmed)) continue;
-    seen.add(trimmed);
-    result.push(trimmed);
-  }
-  return result;
-}
-function parseChatRef(value, label) {
-  if (value === null || value === void 0) return void 0;
-  const record = asRecord3(value, label);
-  const character = record["character"];
-  const chatId = record["chatId"];
-  if (typeof character !== "string" || character.trim() === "") {
-    throw new ImSettingsError(`${label}.character must be a non-empty string`);
-  }
-  if (typeof chatId !== "string" || chatId.trim() === "") {
-    throw new ImSettingsError(`${label}.chatId must be a non-empty string`);
-  }
-  return { character, chatId };
-}
-function applyImSettingsPatch(current, patch) {
-  const record = asRecord3(patch, "im settings patch");
-  const next = {
-    ...current,
-    privateAllow: [...current.privateAllow],
-    groupAllow: [...current.groupAllow]
-  };
-  if (record["bindingMode"] !== void 0) {
-    const value = record["bindingMode"];
-    if (value !== "manual" && value !== "independent" && value !== "shared") {
-      throw new ImSettingsError("bindingMode must be one of 'manual' | 'independent' | 'shared'");
-    }
-    next.bindingMode = value;
-  }
-  if ("sourceChat" in record) {
-    const parsed = parseChatRef(record["sourceChat"], "sourceChat");
-    if (parsed === void 0) delete next.sourceChat;
-    else next.sourceChat = parsed;
-  }
-  if ("sharedChat" in record) {
-    const parsed = parseChatRef(record["sharedChat"], "sharedChat");
-    if (parsed === void 0) delete next.sharedChat;
-    else next.sharedChat = parsed;
-  }
-  if (record["groupRequireMention"] !== void 0) {
-    if (typeof record["groupRequireMention"] !== "boolean") {
-      throw new ImSettingsError("groupRequireMention must be a boolean");
-    }
-    next.groupRequireMention = record["groupRequireMention"];
-  }
-  if (record["privateMode"] !== void 0) next.privateMode = parseAccessMode(record["privateMode"], "privateMode");
-  if (record["groupMode"] !== void 0) next.groupMode = parseAccessMode(record["groupMode"], "groupMode");
-  if (record["privateAllow"] !== void 0) next.privateAllow = parseStringList(record["privateAllow"], "privateAllow");
-  if (record["groupAllow"] !== void 0) next.groupAllow = parseStringList(record["groupAllow"], "groupAllow");
-  if ("chunkLimit" in record) {
-    const value = record["chunkLimit"];
-    if (value === null) delete next.chunkLimit;
-    else if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) next.chunkLimit = value;
-    else throw new ImSettingsError("chunkLimit must be a positive integer or null");
-  }
-  assertImSettingsUsable(next);
-  return next;
-}
-function assertImSettingsUsable(settings) {
-  if (settings.bindingMode === "independent" && settings.sourceChat === void 0) {
-    throw new ImSettingsError("bindingMode independent requires sourceChat (the character template chat)");
-  }
-  if (settings.bindingMode === "shared" && settings.sharedChat === void 0) {
-    throw new ImSettingsError("bindingMode shared requires sharedChat (the conversation every peer reuses)");
-  }
-}
-
-// packages/plugin/src/im/session-host.ts
-import { randomUUID as randomUUID8 } from "node:crypto";
-var ImSessionError = class extends Error {
-  code;
-  constructor(code, message) {
-    super(message);
-    this.name = "ImSessionError";
-    this.code = code;
-  }
-};
-function inspectImSessionCapabilities(agents, presets) {
-  const reasons = [];
-  if (agents === void 0) {
-    reasons.push("the host exposes no agents service");
-  } else if (typeof agents.create !== "function" && typeof agents.resume !== "function") {
-    reasons.push("the host agents service exposes neither create nor resume");
-  }
-  if (presets === void 0 || typeof presets.mount !== "function") {
-    reasons.push("the host cannot mount an agent preset (agentPresets.mount is missing)");
-  }
-  return { available: reasons.length === 0, reasons };
-}
-function mintImSessionId() {
-  return `session-${randomUUID8()}`;
-}
-async function ensureImSession(deps, request) {
-  const capability = inspectImSessionCapabilities(deps.agents, deps.presets);
-  if (!capability.available) {
-    throw new ImSessionError("IM_SESSION_UNAVAILABLE", `IM sessions are unavailable: ${capability.reasons.join("; ")}`);
-  }
-  const chat = request.mode === "shared" ? request.sharedChat : request.sourceChat;
-  if (chat === void 0) {
-    throw new ImSessionError("IM_SOURCE_MISSING", request.mode === "shared" ? "shared mode requires the configured shared chat" : "independent mode requires the configured source chat");
-  }
-  if (request.mode === "shared") {
-    if (request.existingSessionId !== void 0) {
-      return bindImChat(deps, chat, request.existingSessionId);
-    }
-    return bindImChat(deps, chat, void 0);
-  }
-  if (request.existingSessionId !== void 0) {
-    throw new ImSessionError("IM_SESSION_UNAVAILABLE", "independent mode always mints a new session; existingSessionId is only valid for shared mode");
-  }
-  const chatId = await createChatFromSource(deps, chat);
-  const createdChat = await deps.db.getChat(chat.character, chatId);
-  if (createdChat === void 0) {
-    throw new ImSessionError("IM_CHAT_MISSING", `IM chat ${chat.character}/${chatId} vanished right after creation; the opening greeting cannot be imported`);
-  }
-  const sessionId = mintImSessionId();
-  const agent = await ensureImAgent(deps, sessionId);
-  await deps.bind(sessionId, chat.character, chatId);
-  await importChatHistory(deps, agent, createdChat, chat.character, chatId, sessionId);
-  await deps.presetChanged();
-  return { sessionId, character: chat.character, chatId };
-}
-async function bindImChat(deps, chat, existingSessionId) {
-  const capability = inspectImSessionCapabilities(deps.agents, deps.presets);
-  if (!capability.available) {
-    throw new ImSessionError("IM_SESSION_UNAVAILABLE", `IM sessions are unavailable: ${capability.reasons.join("; ")}`);
-  }
-  const chatId = await requireExistingChat(deps, chat);
-  const existingChat = await deps.db.getChat(chat.character, chatId);
-  if (existingChat === void 0) {
-    throw new ImSessionError("IM_CHAT_MISSING", `chat ${chat.character}/${chatId} disappeared while binding`);
-  }
-  const sessionId = existingSessionId ?? mintImSessionId();
-  const agent = await ensureImAgent(deps, sessionId);
-  await deps.bind(sessionId, chat.character, chatId);
-  await importChatHistory(deps, agent, existingChat, chat.character, chatId, sessionId);
-  await deps.presetChanged();
-  return { sessionId, character: chat.character, chatId };
-}
-async function requireExistingChat(deps, chat) {
-  const snapshot2 = await deps.db.getChatSnapshot(chat.character, chat.chatId);
-  if (snapshot2 === void 0) {
-    throw new ImSessionError("IM_CHAT_MISSING", `shared chat ${chat.character}/${chat.chatId} no longer exists`);
-  }
-  return chat.chatId;
-}
-async function createChatFromSource(deps, source) {
-  const found = await deps.db.getCharacter(source.character);
-  if (found === void 0) {
-    throw new ImSessionError("IM_SOURCE_MISSING", `source character ${source.character} no longer exists`);
-  }
-  const now = (/* @__PURE__ */ new Date()).toISOString();
-  const card = found.card;
-  const seedVariables = (() => {
-    const holder = card.data.extensions?.["agentTavern"];
-    if (typeof holder !== "object" || holder === null) return void 0;
-    const initial = holder["initialVariables"];
-    if (typeof initial !== "object" || initial === null || Array.isArray(initial)) return void 0;
-    const entries = Object.entries(initial);
-    return entries.length === 0 ? void 0 : Object.fromEntries(entries);
-  })();
-  const variablesSeed = seedVariables ?? {};
-  const mvuSeeded = seedJsrMvuVariables(card, { ...variablesSeed });
-  const greetings = [card.data.firstMes, ...card.data.alternateGreetings];
-  const chatId = await deps.db.createChat(source.character, {
-    user_name: "unused",
-    character_name: "unused",
-    chat_metadata: {
-      character: source.character,
-      createdAt: now,
-      timedWorldInfo: {},
-      ...seedVariables !== void 0 || mvuSeeded ? { variables: variablesSeed } : {}
-    }
-  }, [{
-    name: card.data.nickname || card.data.name,
-    is_user: false,
-    is_system: false,
-    send_date: now,
-    mes: greetings[0] ?? ""
-  }]);
-  return chatId;
-}
-async function importChatHistory(deps, agent, chat, character, chatId, sessionId) {
-  const live = agent ?? {};
-  const events = readSessionEvents(live.session);
-  if (events !== void 0 && events.some((event) => event.type === "turn/start")) return;
-  const state = await deps.db.getState();
-  const found = await deps.db.getCharacter(character);
-  const scripts = await collectSessionRegexScripts(deps.db, state, character, chatId, found);
-  const plan = historyImportAppends(chat, sessionId, scripts, tavernMacroExpand(state, character, found), live.session);
-  applyAgentTavernHistoryImport({
-    agent: live,
-    plan,
-    ...deps.logger === void 0 ? {} : { logger: deps.logger }
-  });
-}
-async function ensureImAgent(deps, sessionId) {
-  const live = deps.agents?.get?.(sessionId);
-  if (live !== void 0 && live !== null) return live;
-  const presets = deps.presets;
-  if (presets === void 0 || typeof presets.mount !== "function") {
-    throw new ImSessionError("IM_SESSION_UNAVAILABLE", "the host cannot mount an agent preset");
-  }
-  await deps.ensurePreset();
-  const workspace = await deps.workspace();
-  const setup = async (agentContext) => {
-    await presets.mount?.(agentContext, deps.presetId);
-  };
-  if (typeof deps.agents?.resume === "function") {
-    try {
-      const resumed = await deps.agents.resume({ resumeSessionId: sessionId, setup });
-      return resumed.agent;
-    } catch (error) {
-      deps.logger?.warn?.(`dsh-soulmojito im: resume ${sessionId} failed, creating a new session: ${messageOf6(error)}`);
-    }
-  }
-  if (typeof deps.agents?.create !== "function") {
-    throw new ImSessionError("IM_SESSION_UNAVAILABLE", "the host agents service exposes neither create nor resume");
-  }
-  const created = await deps.agents.create({
-    sessionId,
-    meta: { cwd: workspace, agentPreset: deps.presetId },
-    setup
-  });
-  return created.agent;
-}
-function messageOf6(error) {
-  return error instanceof Error ? error.message : String(error);
-}
-function imUnboundMessage(peerKey) {
-  return `\u8FD9\u4E2A\u4F1A\u8BDD\u8FD8\u6CA1\u6709\u7ED1\u5B9A\uFF1A${peerKey}\u3002\u8BF7\u5728 DSH-SoulMojito \u9762\u677F\u7684\u300C\u804A\u5929\u6E20\u9053\u300D\u91CC\u7ED1\u5B9A\u4E00\u4E2A\u804A\u5929\u3002`;
-}
-
-// packages/plugin/src/im/router.ts
-var IM_TURN_FAILED = "\uFF08\u8FD9\u4E00\u8F6E\u6CA1\u6709\u751F\u6210\u6210\u529F\uFF0C\u7A0D\u540E\u518D\u8BD5\uFF09";
-var ImSendError = class extends Error {
-  code;
-  constructor(code, message, options) {
-    super(message, options);
-    this.name = "ImSendError";
-    this.code = code;
-  }
-};
-var UNBOUND_NOTICE_TTL_MS = 10 * 6e4;
-function createImRouter(deps) {
-  const origins = new PendingOrigins({ ttlMs: 10 * 6e4, maxPerSession: 200 });
-  const noticed = /* @__PURE__ */ new Map();
-  async function settingsOf() {
-    const state = await deps.db.getState();
-    return state.imSettings ?? DEFAULT_IM_SETTINGS;
-  }
-  async function inbound(inboundMessage) {
-    const now = deps.now();
-    if (await deps.seenDedupe(inboundMessage.dedupeKey, now)) return;
-    const settings = await settingsOf();
-    if (!imAccessAllows(settings, inboundMessage.scope, inboundMessage.peerId)) {
-      deps.logger?.warn?.(`dsh-soulmojito im: dropped ${inboundMessage.channel}/${inboundMessage.peerId} (access policy)`);
-      return;
-    }
-    const target = {
-      channel: inboundMessage.channel,
-      accountId: inboundMessage.accountId,
-      scope: inboundMessage.scope,
-      peerId: inboundMessage.peerId,
-      ...inboundMessage.replyTo === void 0 ? {} : { replyTo: inboundMessage.replyTo }
-    };
-    const text = imUserTextOf(inboundMessage);
-    if (text === void 0) return;
-    const peerKey = imPeerKey(inboundMessage.channel, inboundMessage.accountId, inboundMessage.scope, inboundMessage.peerId);
-    const binding = await resolveBinding(peerKey, inboundMessage.scope, settings);
-    if (binding === void 0) {
-      await notifyUnbound(target, peerKey, now);
-      return;
-    }
-    const messageId = `im-${randomUUID9()}`;
-    origins.remember(binding.sessionId, messageId, peerKey, target, now);
-    try {
-      await deps.followup(binding.sessionId, { id: messageId, text });
-    } catch (error) {
-      origins.forgetSession(binding.sessionId);
-      deps.logger?.warn?.(`dsh-soulmojito im: followup to ${binding.sessionId} failed: ${messageOf7(error)}`);
-      await sendNotice(target, IM_TURN_FAILED);
-    }
-  }
-  async function resolveBinding(peerKey, scope, settings) {
-    const state = await deps.db.getState();
-    const existing = state.imPeers?.[peerKey];
-    if (existing !== void 0) return existing;
-    if (settings.bindingMode === "manual") return void 0;
-    const request = {
-      mode: settings.bindingMode,
-      peerKey,
-      ...settings.sourceChat === void 0 ? {} : { sourceChat: settings.sourceChat },
-      ...settings.sharedChat === void 0 ? {} : { sharedChat: settings.sharedChat },
-      ...sharedSessionOf(state.imPeers, settings)
-    };
-    const result = await deps.ensureSession(request);
-    const binding = {
-      sessionId: result.sessionId,
-      character: result.character,
-      chatId: result.chatId,
-      scope,
-      boundBy: "auto",
-      createdAt: new Date(deps.now()).toISOString()
-    };
-    await deps.db.updateState((current) => ({
-      imPeers: { ...current.imPeers ?? {}, [peerKey]: binding }
-    }));
-    return binding;
-  }
-  async function finishTurn(sessionId, turn, events) {
-    const now = deps.now();
-    const origin = origins.resolve(sessionId, userMessageIdsOfTurn(events, turn), now);
-    if (origin === void 0) return;
-    if (turnFailedOf(events, turn)) {
-      await sendNotice(origin.target, IM_TURN_FAILED);
-      return;
-    }
-    const text = assistantTextOfTurn(events, turn);
-    if (text === void 0) return;
-    const settings = await settingsOf();
-    const rendered = await deps.render(origin.target, text);
-    const parts = projectImText(rendered, origin.target.channel, imChunkLimit(origin.target.channel, settings));
-    await deps.send(origin.target, parts.map((part, index) => ({
-      kind: "text",
-      text: part,
-      index,
-      total: parts.length
-    })));
-  }
-  async function sendText(peerKey, text) {
-    const body = text.trim();
-    if (body === "") {
-      throw new ImSendError("IM_SEND_INVALID", "IM text is empty after trimming whitespace");
-    }
-    const parts = imPeerKeyParts(peerKey);
-    if (parts === void 0) {
-      throw new ImSendError("IM_SEND_INVALID_TARGET", `malformed IM peer key '${peerKey}'; expected '<channel>:<accountId>:<scope>:<peerId>'`);
-    }
-    const channel = channelOf(parts.channel);
-    if (channel === void 0) {
-      throw new ImSendError("IM_SEND_INVALID_TARGET", `IM peer key '${peerKey}' names unknown channel '${parts.channel}'`);
-    }
-    const scope = parts.scope === "private" || parts.scope === "group" ? parts.scope : void 0;
-    if (scope === void 0) {
-      throw new ImSendError("IM_SEND_INVALID_TARGET", `IM peer key '${peerKey}' names unknown scope '${parts.scope}'`);
-    }
-    const state = await deps.db.getState();
-    if (state.imPeers?.[peerKey] === void 0) {
-      throw new ImSendError("IM_SEND_UNBOUND", `IM peer '${peerKey}' has no binding; bind it in the DSH-SoulMojito IM panel first`);
-    }
-    const settings = state.imSettings ?? DEFAULT_IM_SETTINGS;
-    const target = {
-      channel,
-      accountId: parts.accountId,
-      scope,
-      peerId: parts.peerId
-    };
-    const chunks = projectImText(body, channel, imChunkLimit(channel, settings));
-    try {
-      await deps.send(target, chunks.map((chunk, index) => ({
-        kind: "text",
-        text: chunk,
-        index,
-        total: chunks.length
-      })));
-    } catch (error) {
-      throw new ImSendError("IM_SEND_FAILED", `IM send to ${peerKey} failed: ${messageOf7(error)}`, { cause: error });
-    }
-    return { parts: chunks.length, at: deps.now() };
-  }
-  async function notifyUnbound(target, peerKey, now) {
-    const last = noticed.get(peerKey);
-    if (last !== void 0 && now - last < UNBOUND_NOTICE_TTL_MS) return;
-    noticed.set(peerKey, now);
-    await sendNotice(target, imUnboundMessage(peerKey));
-  }
-  async function sendNotice(target, text) {
-    try {
-      await deps.send(target, [{ kind: "text", text, index: 0, total: 1 }]);
-    } catch (error) {
-      deps.logger?.warn?.(`dsh-soulmojito im: notice to ${target.channel}/${target.peerId} failed: ${messageOf7(error)}`);
-    }
-  }
-  return {
-    inbound,
-    finishTurn,
-    sendText,
-    pending: (sessionId) => origins.pendingCount(sessionId)
-  };
-}
-function imUserTextOf(inbound) {
-  const body = inbound.text.trim();
-  const attachments = attachmentSummaryOf(inbound);
-  const composed = inbound.scope === "group" ? `[${inbound.senderName || inbound.senderId}] ${body}`.trim() : body;
-  const withAttachments = attachments === void 0 ? composed : `${composed}${composed === "" ? "" : "\n"}${attachments}`.trim();
-  return withAttachments === "" ? void 0 : withAttachments;
-}
-function attachmentSummaryOf(inbound) {
-  if (inbound.media.length === 0) return void 0;
-  const counts = /* @__PURE__ */ new Map();
-  for (const media of inbound.media) {
-    const label = media.kind === "image" ? "\u56FE\u7247" : media.kind === "voice" ? "\u8BED\u97F3" : media.kind === "video" ? "\u89C6\u9891" : "\u6587\u4EF6";
-    counts.set(label, (counts.get(label) ?? 0) + 1);
-  }
-  return `\uFF08\u9644\u4EF6\uFF1A${[...counts].map(([label, count]) => `${label}\xD7${count}`).join("\u3001")}\uFF09`;
-}
-function sharedSessionOf(peers, settings) {
-  if (settings.bindingMode !== "shared" || settings.sharedChat === void 0) return {};
-  const { character, chatId } = settings.sharedChat;
-  for (const binding of Object.values(peers ?? {})) {
-    if (binding.character === character && binding.chatId === chatId) return { existingSessionId: binding.sessionId };
-  }
-  return {};
-}
-function messageOf7(error) {
-  return error instanceof Error ? error.message : String(error);
-}
-function channelOf(value) {
-  return value === "qq" || value === "weixin" || value === "onebot" ? value : void 0;
-}
-
-// packages/plugin/src/im/store.ts
-import { randomUUID as randomUUID10 } from "node:crypto";
-import { promises as fs19 } from "node:fs";
-import { dirname as dirname13, join as join20, resolve as resolve5 } from "node:path";
-var ImStoreError = class extends Error {
-  code;
-  /** 出问题的文件或目录；纯校验错误还没有落盘路径时为 undefined。 */
-  path;
-  constructor(code, message, path12) {
-    super(message);
-    this.name = "ImStoreError";
-    this.code = code;
-    this.path = path12;
-  }
-};
-var ACCOUNTS_VERSION = 1;
-var CHANNEL_IDS = ["qq", "weixin", "onebot"];
-var ACCOUNT_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
-var SECRET_FILE_MODE = 384;
-var DEDUPE_WINDOW_MS = 24 * 60 * 60 * 1e3;
-var DEDUPE_COMPACT_THRESHOLD = 5e3;
-var ImStore = class _ImStore {
-  static open(root) {
-    return new _ImStore(root);
-  }
-  root;
-  /** accounts.json 读改写的串行链；某个任务失败也不能掐断后面的任务。 */
-  accountsTail = Promise.resolve();
-  /** dedupe.log 读追加的串行链；同一 key 的并发回包只允许一次未命中。 */
-  dedupeTail = Promise.resolve();
-  /**
-   * dedupe.log 的进程内镜像，首次 seenDedupe 时装载并回收过期条目。
-   * 同一 root 只应有一个长期存活的实例（插件单例）：多实例并存时各自只看到
-   * 自己 append 的 key，去重会退化——重启与测试里的短暂并存不受影响。
-   */
-  dedupeEntries;
-  constructor(root) {
-    this.root = resolve5(root);
-  }
-  /** 清单按 channel、accountId 排序；排序稳定，面板顺序不随写入先后跳动。 */
-  async accounts() {
-    const entries = await this.readAccountsFile();
-    return [...entries].sort(imStoreCompareAccounts);
-  }
-  /**
-   * 登记或替换账号。密钥先落盘再改清单：登记成功的账号一定有可读密钥；
-   * 反过来只会留下一个无人引用的孤儿文件（下次 putAccount 覆盖），不会对外
-   * 宣告一个没有凭据的半残账号。两步同在一把锁里，与同账号的注销线性化。
-   */
-  async putAccount(account, secret) {
-    imStoreAssertAccount(account);
-    imStoreAssertSecretBag(secret);
-    const record = {
-      channel: account.channel,
-      accountId: account.accountId,
-      secret: { ...secret },
-      // 凭据被替换过就重盖时间戳：这个字段回答的是「当前密钥何时写入」。
-      createdAt: (/* @__PURE__ */ new Date()).toISOString()
-    };
-    await this.serialAccounts(async () => {
-      await imStoreWriteSecret(this.secretPath(account.channel, account.accountId), record);
-      const accounts = await this.readAccountsFile();
-      const next = accounts.filter((entry) => !imStoreSameAccount(entry, account.channel, account.accountId));
-      next.push(imStoreSnapshotAccount(account));
-      next.sort(imStoreCompareAccounts);
-      await imStoreWriteJson(this.accountsPath(), { version: ACCOUNTS_VERSION, accounts: next });
-    });
-  }
-  /** 未知账号返回 undefined；文件存在但内容坏了必须报错，不能当成没配置。 */
-  async readSecret(channel, accountId) {
-    imStoreAssertChannel(channel);
-    imStoreAssertAccountId(accountId);
-    const file = this.secretPath(channel, accountId);
-    const value = await imStoreReadJson(file);
-    if (value === void 0) return void 0;
-    return { ...imStoreParseSecretRecord(value, file, channel, accountId).secret };
-  }
-  /**
-   * 注销账号：先摘清单再删密钥。反过来若清单写失败，会留下一个「已登记但
-   * 没凭据」的账号，适配器会以空配置启动；先摘清单只可能留下孤儿密钥。
-   * 两步与 putAccount 共用一把锁，同账号的「登录中删号」不会留下半残记录。
-   * 已不在清单时仍清理同名密钥（幂等），凭据不应比账号活得更久。
-   */
-  async deleteAccount(channel, accountId) {
-    imStoreAssertChannel(channel);
-    imStoreAssertAccountId(accountId);
-    return this.serialAccounts(async () => {
-      const accounts = await this.readAccountsFile();
-      const next = accounts.filter((entry) => !imStoreSameAccount(entry, channel, accountId));
-      const removed = next.length !== accounts.length;
-      if (removed) {
-        await imStoreWriteJson(this.accountsPath(), { version: ACCOUNTS_VERSION, accounts: next });
-      }
-      await imStoreRemoveFile(this.secretPath(channel, accountId));
-      return removed;
-    });
-  }
-  /** true 表示该 key 已在 24h 窗口内记录过；未记录时顺带记下。 */
-  async seenDedupe(dedupeKey, now) {
-    if (dedupeKey === "") throw new TypeError("dedupeKey \u4E0D\u80FD\u4E3A\u7A7A");
-    if (!Number.isFinite(now)) throw new TypeError(`now \u5FC5\u987B\u662F\u6709\u9650\u65F6\u95F4\u6233\uFF0C\u5B9E\u9645\u4E3A ${String(now)}`);
-    return this.serialDedupe(async () => {
-      const entries = await this.loadDedupe();
-      imStorePruneDedupe(entries, now);
-      if (entries.has(dedupeKey)) return true;
-      entries.set(dedupeKey, now);
-      const file = this.dedupePath();
-      await imStoreEnsureDir(this.root);
-      try {
-        await fs19.appendFile(file, `${JSON.stringify({ key: dedupeKey, at: now })}
-`, "utf8");
-      } catch (cause) {
-        entries.delete(dedupeKey);
-        throw new ImStoreError("IO", `\u8FFD\u52A0\u5931\u8D25: ${file}: ${imStoreReason(cause)}`, file);
-      }
-      if (entries.size > DEDUPE_COMPACT_THRESHOLD) {
-        await imStoreWriteText(file, imStoreSerializeDedupe(entries));
-      }
-      return false;
-    });
-  }
-  async readCursor(accountId) {
-    imStoreAssertAccountId(accountId);
-    const file = this.cursorPath(accountId);
-    const value = await imStoreReadJson(file);
-    if (value === void 0) return void 0;
-    return imStoreParseCursor(value, file);
-  }
-  async writeCursor(accountId, value) {
-    imStoreAssertAccountId(accountId);
-    if (typeof value !== "string") throw new TypeError(`cursor \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\uFF0C\u5B9E\u9645\u4E3A ${typeof value}`);
-    await imStoreWriteJson(this.cursorPath(accountId), { cursor: value });
-  }
-  // ---- 内部：路径 ----
-  accountsPath() {
-    return join20(this.root, "accounts.json");
-  }
-  secretPath(channel, accountId) {
-    return join20(this.root, "secrets", `${channel}-${accountId}.json`);
-  }
-  dedupePath() {
-    return join20(this.root, "dedupe.log");
-  }
-  cursorPath(accountId) {
-    return join20(this.root, "cursors", `${accountId}.json`);
-  }
-  // ---- 内部：串行化 ----
-  serialAccounts(task) {
-    const run = this.accountsTail.then(task, task);
-    this.accountsTail = run.then(imStoreNoop, imStoreNoop);
-    return run;
-  }
-  serialDedupe(task) {
-    const run = this.dedupeTail.then(task, task);
-    this.dedupeTail = run.then(imStoreNoop, imStoreNoop);
-    return run;
-  }
-  // ---- 内部：读取 ----
-  async readAccountsFile() {
-    const file = this.accountsPath();
-    const value = await imStoreReadJson(file);
-    if (value === void 0) return [];
-    return imStoreParseAccountsFile(value, file);
-  }
-  async loadDedupe() {
-    const cached = this.dedupeEntries;
-    if (cached !== void 0) return cached;
-    const file = this.dedupePath();
-    const entries = /* @__PURE__ */ new Map();
-    let text;
-    try {
-      text = await fs19.readFile(file, "utf8");
-    } catch (cause) {
-      if (imStoreIsErrno(cause, "ENOENT")) {
-        this.dedupeEntries = entries;
-        return entries;
-      }
-      throw new ImStoreError("IO", `\u8BFB\u53D6\u5931\u8D25: ${file}: ${imStoreReason(cause)}`, file);
-    }
-    const lines = text.split("\n");
-    for (const [index, raw] of lines.entries()) {
-      const line = raw.trim();
-      if (line === "") continue;
-      let value;
-      try {
-        value = JSON.parse(line);
-      } catch (cause) {
-        throw imStoreCorrupt(file, `\u7B2C ${index + 1} \u884C\u4E0D\u662F JSON: ${imStoreReason(cause)}`);
-      }
-      if (!imStoreIsRecord(value)) throw imStoreCorrupt(file, `\u7B2C ${index + 1} \u884C\u4E0D\u662F\u5BF9\u8C61`);
-      const key = value["key"];
-      if (typeof key !== "string" || key === "") throw imStoreCorrupt(file, `\u7B2C ${index + 1} \u884C key \u975E\u6CD5`);
-      const at = value["at"];
-      if (typeof at !== "number" || !Number.isFinite(at)) throw imStoreCorrupt(file, `\u7B2C ${index + 1} \u884C at \u975E\u6CD5`);
-      const previous = entries.get(key);
-      if (previous === void 0 || at > previous) entries.set(key, at);
-    }
-    this.dedupeEntries = entries;
-    return entries;
-  }
-};
-function imStoreAssertChannel(channel) {
-  if (!imStoreIsChannelId(channel)) {
-    throw new ImStoreError(
-      "BAD_ACCOUNT_ID",
-      `\u672A\u77E5\u901A\u9053 ${JSON.stringify(channel)}\uFF1A\u53EA\u63A5\u53D7 ${CHANNEL_IDS.join("|")}`,
-      void 0
-    );
-  }
-}
-function imStoreAssertAccountId(accountId) {
-  if (!imStoreIsAccountId(accountId)) {
-    throw new ImStoreError(
-      "BAD_ACCOUNT_ID",
-      `\u975E\u6CD5 accountId ${JSON.stringify(accountId)}\uFF1A\u53EA\u5141\u8BB8 [A-Za-z0-9._-]\uFF0C\u4E14\u4E0D\u80FD\u662F . \u6216 ..\uFF08accountId \u4F1A\u62FC\u8FDB\u6587\u4EF6\u540D\uFF09`,
-      void 0
-    );
-  }
-}
-function imStoreAssertAccount(account) {
-  imStoreAssertChannel(account.channel);
-  imStoreAssertAccountId(account.accountId);
-  if (typeof account.createdAt !== "string" || account.createdAt === "") {
-    throw new TypeError(`account.createdAt \u5FC5\u987B\u662F\u975E\u7A7A\u65F6\u95F4\u4E32\uFF0C\u5B9E\u9645\u4E3A ${JSON.stringify(account.createdAt)}`);
-  }
-  if (account.label !== void 0 && typeof account.label !== "string") {
-    throw new TypeError(`account.label \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\uFF0C\u5B9E\u9645\u4E3A ${JSON.stringify(account.label)}`);
-  }
-}
-function imStoreAssertSecretBag(secret) {
-  for (const [key, value] of Object.entries(secret)) {
-    if (typeof value !== "string") throw new TypeError(`secret["${key}"] \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\uFF0C\u5B9E\u9645\u4E3A ${typeof value}`);
-  }
-}
-function imStoreIsChannelId(value) {
-  return typeof value === "string" && CHANNEL_IDS.includes(value);
-}
-function imStoreIsAccountId(value) {
-  if (value === "." || value === "..") return false;
-  return typeof value === "string" && ACCOUNT_ID_PATTERN.test(value);
-}
-function imStoreIsRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function imStoreSameAccount(entry, channel, accountId) {
-  return entry.channel === channel && entry.accountId === accountId;
-}
-function imStoreSnapshotAccount(account) {
-  return account.label === void 0 ? { channel: account.channel, accountId: account.accountId, createdAt: account.createdAt } : { channel: account.channel, accountId: account.accountId, label: account.label, createdAt: account.createdAt };
-}
-function imStoreCompareAccounts(a, b) {
-  if (a.channel !== b.channel) return a.channel < b.channel ? -1 : 1;
-  if (a.accountId !== b.accountId) return a.accountId < b.accountId ? -1 : 1;
-  return 0;
-}
-function imStoreParseAccountsFile(value, file) {
-  if (!imStoreIsRecord(value)) throw imStoreCorrupt(file, "\u9876\u5C42\u4E0D\u662F\u5BF9\u8C61");
-  if (value["version"] !== ACCOUNTS_VERSION) {
-    throw imStoreCorrupt(file, `\u4E0D\u652F\u6301\u7684 version ${JSON.stringify(value["version"])}\uFF08\u671F\u671B ${ACCOUNTS_VERSION}\uFF09`);
-  }
-  const accounts = value["accounts"];
-  if (!Array.isArray(accounts)) throw imStoreCorrupt(file, "accounts \u4E0D\u662F\u6570\u7EC4");
-  return accounts.map((entry, index) => imStoreParseAccountRef(entry, file, index));
-}
-function imStoreParseAccountRef(value, file, index) {
-  const at = `accounts[${index}]`;
-  if (!imStoreIsRecord(value)) throw imStoreCorrupt(file, `${at} \u4E0D\u662F\u5BF9\u8C61`);
-  const channel = value["channel"];
-  if (!imStoreIsChannelId(channel)) throw imStoreCorrupt(file, `${at}.channel \u975E\u6CD5: ${JSON.stringify(channel)}`);
-  const accountId = value["accountId"];
-  if (!imStoreIsAccountId(accountId)) throw imStoreCorrupt(file, `${at}.accountId \u975E\u6CD5: ${JSON.stringify(accountId)}`);
-  const createdAt = value["createdAt"];
-  if (typeof createdAt !== "string") throw imStoreCorrupt(file, `${at}.createdAt \u5FC5\u987B\u662F\u5B57\u7B26\u4E32`);
-  const label = value["label"];
-  if (label !== void 0 && typeof label !== "string") throw imStoreCorrupt(file, `${at}.label \u5FC5\u987B\u662F\u5B57\u7B26\u4E32`);
-  return label === void 0 ? { channel, accountId, createdAt } : { channel, accountId, label, createdAt };
-}
-function imStoreParseSecretRecord(value, file, channel, accountId) {
-  if (!imStoreIsRecord(value)) throw imStoreCorrupt(file, "\u9876\u5C42\u4E0D\u662F\u5BF9\u8C61");
-  if (value["channel"] !== channel || value["accountId"] !== accountId) {
-    throw imStoreCorrupt(
-      file,
-      `\u8BB0\u5F55\u8EAB\u4EFD ${JSON.stringify(value["channel"])}/${JSON.stringify(value["accountId"])} \u4E0E\u6587\u4EF6\u540D ${channel}/${accountId} \u4E0D\u7B26`
-    );
-  }
-  const createdAt = value["createdAt"];
-  if (typeof createdAt !== "string") throw imStoreCorrupt(file, "createdAt \u5FC5\u987B\u662F\u5B57\u7B26\u4E32");
-  const secret = value["secret"];
-  if (!imStoreIsRecord(secret)) throw imStoreCorrupt(file, "secret \u4E0D\u662F\u5BF9\u8C61");
-  const bag = {};
-  for (const [key, entry] of Object.entries(secret)) {
-    if (typeof entry !== "string") throw imStoreCorrupt(file, `secret["${key}"] \u5FC5\u987B\u662F\u5B57\u7B26\u4E32`);
-    bag[key] = entry;
-  }
-  return { channel, accountId, secret: bag, createdAt };
-}
-function imStoreParseCursor(value, file) {
-  if (!imStoreIsRecord(value)) throw imStoreCorrupt(file, "\u9876\u5C42\u4E0D\u662F\u5BF9\u8C61");
-  const cursor = value["cursor"];
-  if (typeof cursor !== "string") throw imStoreCorrupt(file, "cursor \u5FC5\u987B\u662F\u5B57\u7B26\u4E32");
-  return cursor;
-}
-function imStorePruneDedupe(entries, now) {
-  const cutoff = now - DEDUPE_WINDOW_MS;
-  for (const [key, at] of entries) {
-    if (at < cutoff) entries.delete(key);
-  }
-}
-function imStoreSerializeDedupe(entries) {
-  const lines = [];
-  for (const [key, at] of entries) lines.push(JSON.stringify({ key, at }));
-  return lines.length === 0 ? "" : `${lines.join("\n")}
-`;
-}
-function imStoreCorrupt(file, detail) {
-  return new ImStoreError("CORRUPT_FILE", `\u6587\u4EF6\u635F\u574F: ${file}: ${detail}`, file);
-}
-function imStoreReason(cause) {
-  return cause instanceof Error ? cause.message : String(cause);
-}
-function imStoreIsErrno(cause, code) {
-  return typeof cause === "object" && cause !== null && cause.code === code;
-}
-function imStoreNoop() {
-}
-async function imStoreEnsureDir(dir) {
-  try {
-    await fs19.mkdir(dir, { recursive: true });
-  } catch (cause) {
-    throw new ImStoreError("IO", `\u521B\u5EFA\u76EE\u5F55\u5931\u8D25: ${dir}: ${imStoreReason(cause)}`, dir);
-  }
-}
-async function imStoreReadJson(file) {
-  let text;
-  try {
-    text = await fs19.readFile(file, "utf8");
-  } catch (cause) {
-    if (imStoreIsErrno(cause, "ENOENT")) return void 0;
-    throw new ImStoreError("IO", `\u8BFB\u53D6\u5931\u8D25: ${file}: ${imStoreReason(cause)}`, file);
-  }
-  try {
-    return JSON.parse(text);
-  } catch (cause) {
-    throw imStoreCorrupt(file, `JSON \u89E3\u6790\u5931\u8D25: ${imStoreReason(cause)}`);
-  }
-}
-async function imStoreRemoveFile(file) {
-  try {
-    await fs19.unlink(file);
-  } catch (cause) {
-    if (imStoreIsErrno(cause, "ENOENT")) return;
-    throw new ImStoreError("IO", `\u5220\u9664\u5931\u8D25: ${file}: ${imStoreReason(cause)}`, file);
-  }
-}
-async function imStoreWriteFile(file, text, mode) {
-  await imStoreEnsureDir(dirname13(file));
-  const tmp = `${file}.tmp-${randomUUID10()}`;
-  try {
-    await fs19.writeFile(tmp, text, mode === void 0 ? { encoding: "utf8" } : { encoding: "utf8", mode });
-    await fs19.rename(tmp, file);
-  } catch (cause) {
-    await fs19.rm(tmp, { force: true }).catch(() => void 0);
-    throw new ImStoreError("IO", `\u5199\u5165\u5931\u8D25: ${file}: ${imStoreReason(cause)}`, file);
-  }
-}
-async function imStoreWriteText(file, text) {
-  await imStoreWriteFile(file, text, void 0);
-}
-async function imStoreWriteJson(file, value) {
-  await imStoreWriteText(file, `${JSON.stringify(value, null, 2)}
-`);
-}
-async function imStoreWriteSecret(file, record) {
-  await imStoreWriteFile(file, `${JSON.stringify(record, null, 2)}
-`, SECRET_FILE_MODE);
-  if (process.platform === "win32") return;
-  try {
-    await fs19.chmod(file, SECRET_FILE_MODE);
-    const stats = await fs19.stat(file);
-    const mode = stats.mode & 511;
-    if (mode !== SECRET_FILE_MODE) {
-      throw new ImStoreError(
-        "SECRET_PERMISSION",
-        `\u5BC6\u94A5\u6587\u4EF6\u6743\u9650\u5F02\u5E38: ${file}: \u671F\u671B 0600\uFF0C\u5B9E\u9645 0${mode.toString(8)}`,
-        file
-      );
-    }
-  } catch (cause) {
-    if (cause instanceof ImStoreError) throw cause;
-    throw new ImStoreError("IO", `\u6821\u9A8C\u5BC6\u94A5\u6743\u9650\u5931\u8D25: ${file}: ${imStoreReason(cause)}`, file);
-  }
-}
-
-// packages/plugin/src/im/runtime.ts
-function createImRuntime(ctx, options) {
-  const { db } = options;
-  const agents = ctx.agents;
-  const presets = ctx.agentPresets;
-  const capabilities = inspectImSessionCapabilities(agents, presets);
-  const channels = /* @__PURE__ */ new Map();
-  const store5 = ImStore.open(tavernDataRoot("im"));
-  const sessionDeps = {
-    db,
-    agents,
-    presets,
-    presetId: AGENT_TAVERN_PRESET_ID,
-    ensurePreset: async () => {
-      await ensureAgentPresetDeclared(ctx, AGENT_TAVERN_PRESET_ID);
-    },
-    workspace: async () => (await prepareInternalWorkspace()).path,
-    bind: async (sessionId, character, chatId) => bindSession(db, sessionId, character, chatId, false, "agent-tavern", "dsh-native"),
-    presetChanged: async () => {
-      await emitAgentPresetChanged();
-    },
-    ...options.logger === void 0 ? {} : { logger: options.logger }
-  };
-  const router = createImRouter({
-    db,
-    now: () => Date.now(),
-    seenDedupe: (dedupeKey, now) => store5.seenDedupe(dedupeKey, now),
-    ensureSession: async (request) => ensureImSession(sessionDeps, request),
-    followup: async (sessionId, message) => {
-      const agent = await liveAgent(sessionDeps, sessionId);
-      const target = agent;
-      if (typeof target.followup !== "function") {
-        throw new Error(`the host agent for session ${sessionId} exposes no followup()`);
-      }
-      await target.followup({
-        id: message.id,
-        role: "user",
-        content: [{ type: "text", text: message.text }],
-        source: { kind: "user" }
-      });
-    },
-    render: async (target, text) => renderForTarget(db, target, text),
-    send: async (target, parts) => {
-      const channel = channels.get(channelKey(target.channel, target.accountId));
-      if (channel === void 0) {
-        throw new Error(`IM channel ${target.channel}/${target.accountId} is not running`);
-      }
-      await channel.send(target, parts);
-    },
-    ...options.logger === void 0 ? {} : { logger: options.logger }
-  });
-  function handleSessionEvent(session, event) {
-    if (event.type !== "turn/end") return;
-    const sessionId = session.id;
-    if (typeof sessionId !== "string" || sessionId === "") return;
-    const turn = event.data?.["turn"];
-    if (typeof turn !== "number" || !Number.isSafeInteger(turn)) return;
-    void isImSession(db, sessionId).then((bound) => {
-      if (!bound) return;
-      return router.finishTurn(sessionId, turn, sessionEvents(session));
-    }).catch((error) => {
-      options.logger?.warn?.(`dsh-soulmojito im: turn ${turn} of ${sessionId} reply failed: ${messageOf8(error)}`);
-    });
-  }
-  return {
-    router,
-    capabilities,
-    views: () => [...channels.values()].map((channel) => ({
-      channel: channel.channel,
-      accountId: channel.accountId,
-      status: channel.status(),
-      peers: 0
-    })),
-    bindChat: async (chat, existingSessionId) => bindImChat(sessionDeps, chat, existingSessionId),
-    handleSessionEvent,
-    dispose: async () => {
-      for (const channel of channels.values()) {
-        await channel.stop().catch((error) => {
-          options.logger?.warn?.(`dsh-soulmojito im: stopping ${channel.channel}/${channel.accountId} failed: ${messageOf8(error)}`);
-        });
-      }
-      channels.clear();
-    }
-  };
-}
-async function isImSession(db, sessionId) {
-  const state = await db.getState();
-  for (const binding of Object.values(state.imPeers ?? {})) {
-    if (binding.sessionId === sessionId) return true;
-  }
-  return false;
-}
-async function liveAgent(deps, sessionId) {
-  const live = deps.agents?.get?.(sessionId);
-  if (live !== void 0 && live !== null) return live;
-  return ensureImAgent(deps, sessionId);
-}
-async function renderForTarget(db, target, text) {
-  const state = await db.getState();
-  const key = imPeerKey(target.channel, target.accountId, target.scope, target.peerId);
-  const binding = state.imPeers?.[key];
-  if (binding === void 0) return text;
-  const card = await db.getCharacter(binding.character);
-  const scripts = await collectSessionRegexScripts(db, state, binding.character, binding.chatId, card);
-  const message = {
-    name: "",
-    is_user: false,
-    is_system: false,
-    send_date: (/* @__PURE__ */ new Date()).toISOString(),
-    mes: text
-  };
-  return displayTextForMessage(scripts, message, 0);
-}
-function channelKey(channel, accountId) {
-  return `${channel}:${accountId}`;
-}
-function messageOf8(error) {
-  return error instanceof Error ? error.message : String(error);
-}
 
 // packages/plugin/src/http/router.ts
 init_src();
@@ -43034,8 +41768,8 @@ import { pipeline } from "node:stream/promises";
 
 // packages/tavern-frontend-storage/src/idb-store.ts
 import { createHash as createHash12 } from "node:crypto";
-import { copyFile, mkdir as mkdir5, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { dirname as dirname14, join as join21 } from "node:path";
+import { copyFile, mkdir as mkdir4, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { dirname as dirname13, join as join20 } from "node:path";
 var IDB_MAX_RECORD_BYTES = 1024 * 1024 * 1024;
 var IDB_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
 var databaseLocks = /* @__PURE__ */ new Map();
@@ -43043,29 +41777,29 @@ function sha256(value) {
   return createHash12("sha256").update(value).digest("hex");
 }
 function databaseDir(root, character, name2) {
-  return join21(root, "frontend-idb", sha256(character), sha256(name2));
+  return join20(root, "frontend-idb", sha256(character), sha256(name2));
 }
 function recordKeyHash(store5, key) {
   return sha256(`${store5}\0${key}`);
 }
 function recordPath(root, character, name2, store5, key) {
-  return join21(databaseDir(root, character, name2), "records", `${recordKeyHash(store5, key)}.bin`);
+  return join20(databaseDir(root, character, name2), "records", `${recordKeyHash(store5, key)}.bin`);
 }
 function metaPath(dir) {
-  return join21(dir, "meta.json");
+  return join20(dir, "meta.json");
 }
 function emptyDatabase(name2) {
   return { name: name2, version: 0, stores: {}, records: {}, updatedAt: 0 };
 }
-function asRecord4(value) {
+function asRecord2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
 }
 function normalizeIndexes(value) {
   const indexes = {};
-  const record = asRecord4(value);
+  const record = asRecord2(value);
   if (record === void 0) return indexes;
   for (const [indexName, descriptor] of Object.entries(record)) {
-    const entry = asRecord4(descriptor);
+    const entry = asRecord2(descriptor);
     if (entry === void 0 || typeof entry.keyPath !== "string" || entry.keyPath.trim() === "") continue;
     indexes[indexName] = {
       keyPath: entry.keyPath,
@@ -43076,13 +41810,13 @@ function normalizeIndexes(value) {
   return indexes;
 }
 function normalizeDatabase(value, name2) {
-  const record = asRecord4(value);
+  const record = asRecord2(value);
   if (record === void 0) return emptyDatabase(name2);
   const stores = {};
-  const rawStores = asRecord4(record.stores);
+  const rawStores = asRecord2(record.stores);
   if (rawStores !== void 0) {
     for (const [storeName, descriptor] of Object.entries(rawStores)) {
-      const entry = asRecord4(descriptor);
+      const entry = asRecord2(descriptor);
       if (entry === void 0) continue;
       stores[storeName] = {
         keyPath: typeof entry.keyPath === "string" ? entry.keyPath : "",
@@ -43091,10 +41825,10 @@ function normalizeDatabase(value, name2) {
     }
   }
   const records = {};
-  const rawRecords = asRecord4(record.records);
+  const rawRecords = asRecord2(record.records);
   if (rawRecords !== void 0) {
     for (const [keyHash, descriptor] of Object.entries(rawRecords)) {
-      const entry = asRecord4(descriptor);
+      const entry = asRecord2(descriptor);
       if (entry === void 0) continue;
       if (typeof entry.key !== "string" || typeof entry.size !== "number" || !Number.isFinite(entry.size) || entry.size < 0) continue;
       records[keyHash] = {
@@ -43102,7 +41836,7 @@ function normalizeDatabase(value, name2) {
         key: entry.key,
         size: entry.size,
         updatedAt: typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt) ? entry.updatedAt : 0,
-        meta: asRecord4(entry.meta) ?? {}
+        meta: asRecord2(entry.meta) ?? {}
       };
     }
   }
@@ -43156,7 +41890,7 @@ function describeFsError(error) {
 }
 async function writeDatabase(root, character, database) {
   const dir = databaseDir(root, character, database.name);
-  await mkdir5(dir, { recursive: true });
+  await mkdir4(dir, { recursive: true });
   const target = metaPath(dir);
   const temporary = temporarySibling(target);
   try {
@@ -43195,7 +41929,7 @@ function requireKey(value) {
   return key;
 }
 function normalizeRecordMeta(value) {
-  const record = asRecord4(value) ?? {};
+  const record = asRecord2(value) ?? {};
   const text = JSON.stringify(record);
   if (text.length > 64 * 1024) throw new Error("idb record metadata is too large (max 64KB)");
   return record;
@@ -43287,7 +42021,7 @@ async function putIdbRecordFromFile(root, character, nameValue, storeValue, keyV
     if (total > IDB_MAX_TOTAL_BYTES) {
       throw new Error(`idb storage for '${character}' exceeds ${IDB_MAX_TOTAL_BYTES} bytes`);
     }
-    await mkdir5(dirname14(destination), { recursive: true });
+    await mkdir4(dirname13(destination), { recursive: true });
     await moveRecordFile(temporaryPath, destination);
     database.records[keyHash] = { store: store5, key, size, updatedAt: Date.now(), meta };
     database.updatedAt = Date.now();
@@ -43771,6 +42505,49 @@ async function runCandidateGeneration(ctx, db, options) {
 // packages/plugin/src/http/router.ts
 init_dsh_home();
 
+// packages/plugin/src/frontend-documents.ts
+var FENCED_DOCUMENT = /```[^\n]*\n([\s\S]*?)```/gi;
+function isFrontendDocument(value) {
+  const text = typeof value === "string" ? value : "";
+  return /<!doctype\s+html\b/i.test(text) || /<html(?:\s[^>]*)?>/i.test(text) && /<(?:head|body)(?:\s[^>]*)?>/i.test(text) || /<(?:head|body)(?:\s[^>]*)?>/i.test(text);
+}
+function extractFrontendDocuments(value) {
+  const text = typeof value === "string" ? value : "";
+  const documents = [];
+  FENCED_DOCUMENT.lastIndex = 0;
+  let match;
+  while ((match = FENCED_DOCUMENT.exec(text)) !== null) {
+    const candidate = match[1]?.trim() ?? "";
+    if (isFrontendDocument(candidate)) documents.push(candidate);
+  }
+  if (documents.length > 0) return documents;
+  const raw = text.trim();
+  return isFrontendDocument(raw) ? [raw] : [];
+}
+function stripFrontendDocuments(value) {
+  const text = typeof value === "string" ? value : "";
+  if (text === "") return "";
+  let stripped = text.replace(FENCED_DOCUMENT, (whole, inner) => isFrontendDocument(inner) ? "" : whole);
+  stripped = stripped.replace(/<UpdateVariable(?:Variable)?\b[^>]*>[\s\S]*?<\/UpdateVariable(?:Variable)?\s*>/gi, "").replace(/<\/UpdateVariable(?:Variable)?\s*>/gi, "").replace(/<StatusPlaceHolder(?:Impl|READY)\s*\/?>/gi, "").replace(/<div class="matte-black-log"[\s\S]*?<\/details>\s*<\/div>/gi, "").replace(/<style>\s*\.matte-black-log[\s\S]*?<\/style>/gi, "").replace(/<!--\s*MVU:OK\s*-->/gi, "");
+  if (isFrontendDocument(stripped.trim())) return "";
+  return stripped.replace(/\n{3,}/g, "\n\n").trim();
+}
+function latestFrontendMessage(messages, render) {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message === void 0 || message.is_system === true) continue;
+    const documents = extractFrontendDocuments(render(message, index));
+    if (documents.length === 0) continue;
+    return {
+      index,
+      name: typeof message.name === "string" ? message.name : "",
+      isUser: message.is_user === true,
+      documents
+    };
+  }
+  return void 0;
+}
+
 // packages/plugin/src/games/http.ts
 init_public_error();
 init_http();
@@ -43902,7 +42679,7 @@ async function handleGamesApi(options) {
 }
 
 // packages/plugin/src/helper.ts
-import { randomUUID as randomUUID12 } from "node:crypto";
+import { randomUUID as randomUUID9 } from "node:crypto";
 init_src3();
 init_src2();
 init_src();
@@ -44189,7 +42966,7 @@ var FrontendTargetBlockedError = class extends FrontendGenerationError {
     this.host = host;
   }
 };
-function asRecord5(value) {
+function asRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
 }
 function requireText2(value, field, maxChars) {
@@ -44210,7 +42987,7 @@ function normalizeBaseUrl(url) {
   return base;
 }
 function parseApiTarget(value, requireModel) {
-  const record = asRecord5(value);
+  const record = asRecord3(value);
   if (record === void 0) throw new FrontendGenerationError("custom_api must be an object");
   const rawUrl = requireText2(record.apiurl, "custom_api.apiurl", 2048);
   let url;
@@ -44289,7 +43066,7 @@ async function requestJson(endpoint, init, label, secret) {
   }
 }
 function modelIds(payload) {
-  const record = asRecord5(payload);
+  const record = asRecord3(payload);
   const list = record === void 0 ? [] : Array.isArray(record.data) ? record.data : Array.isArray(record.models) ? record.models : [];
   const ids = [];
   for (const entry of list) {
@@ -44298,7 +43075,7 @@ function modelIds(payload) {
       if (id2 !== "") ids.push(id2);
       continue;
     }
-    const item = asRecord5(entry);
+    const item = asRecord3(entry);
     if (item === void 0) continue;
     const id = typeof item.id === "string" ? item.id.trim() : typeof item.name === "string" ? item.name.trim() : "";
     if (id !== "") ids.push(id);
@@ -44326,17 +43103,17 @@ function buildMessages(config) {
   const messages = [];
   const injects = Array.isArray(config.injects) ? config.injects : [];
   for (const entry of injects) {
-    const inject2 = asRecord5(entry);
+    const inject2 = asRecord3(entry);
     if (inject2 === void 0) continue;
     if (inject2.position === "none") continue;
     if (typeof inject2.content !== "string" || inject2.content.trim() === "") continue;
     messages.push({ role: parseRole(inject2.role, "system"), content: inject2.content });
   }
-  const overrides = asRecord5(config.overrides);
-  const history = asRecord5(overrides?.chat_history);
+  const overrides = asRecord3(config.overrides);
+  const history = asRecord3(overrides?.chat_history);
   const prompts = history !== void 0 && Array.isArray(history.prompts) ? history.prompts : [];
   for (const entry of prompts) {
-    const prompt = asRecord5(entry);
+    const prompt = asRecord3(entry);
     if (prompt === void 0) continue;
     if (typeof prompt.content !== "string") {
       throw new FrontendGenerationError("overrides.chat_history.prompts[].content must be a string");
@@ -44361,9 +43138,9 @@ function toolCallArgumentsText(message) {
   if (message === void 0) return "";
   const parts = [];
   const collect = (value) => {
-    const call = asRecord5(value);
+    const call = asRecord3(value);
     if (call === void 0) return;
-    const fn = asRecord5(call.function);
+    const fn = asRecord3(call.function);
     const raw = fn?.arguments ?? call.arguments;
     if (typeof raw === "string") {
       if (raw.trim() !== "") parts.push(raw);
@@ -44383,19 +43160,19 @@ function toolCallArgumentsText(message) {
   return parts.join("\n");
 }
 function completionText(payload) {
-  const record = asRecord5(payload);
+  const record = asRecord3(payload);
   const choices = record !== void 0 && Array.isArray(record.choices) ? record.choices : [];
-  const first = choices.length > 0 ? asRecord5(choices[0]) : void 0;
+  const first = choices.length > 0 ? asRecord3(choices[0]) : void 0;
   if (first === void 0) {
     throw new FrontendGenerationError("custom API /chat/completions returned no choices");
   }
-  const message = asRecord5(first.message);
+  const message = asRecord3(first.message);
   const content = message?.content;
   if (typeof content === "string" && content.trim() !== "") return content;
   if (Array.isArray(content)) {
     const joined = content.map((part) => {
       if (typeof part === "string") return part;
-      const item = asRecord5(part);
+      const item = asRecord3(part);
       return item !== void 0 && typeof item.text === "string" ? item.text : "";
     }).join("");
     if (joined.trim() !== "") return joined;
@@ -44407,7 +43184,7 @@ function completionText(payload) {
   throw new FrontendGenerationError(`custom API /chat/completions returned no text or tool arguments (finish_reason=${finishReason})`);
 }
 async function generateWithCustomApi(value, signal) {
-  const config = asRecord5(value);
+  const config = asRecord3(value);
   if (config === void 0) throw new FrontendGenerationError("generate config must be an object");
   const target = parseApiTarget(config.custom_api, true);
   const messages = buildMessages(config);
@@ -44433,22 +43210,22 @@ function textFromContent(value) {
   if (!Array.isArray(value)) return "";
   return value.map((part) => {
     if (typeof part === "string") return part;
-    const item = asRecord5(part);
+    const item = asRecord3(part);
     return item !== void 0 && typeof item.text === "string" ? item.text : "";
   }).join("");
 }
 function deltaText(payload) {
-  const record = asRecord5(payload);
+  const record = asRecord3(payload);
   const choices = record !== void 0 && Array.isArray(record.choices) ? record.choices : [];
   if (choices.length === 0) return "";
-  const first = asRecord5(choices[0]);
+  const first = asRecord3(choices[0]);
   if (first === void 0) return "";
-  const delta = asRecord5(first.delta);
+  const delta = asRecord3(first.delta);
   if (delta !== void 0) {
     const content = textFromContent(delta.content);
     if (content !== "") return content;
   }
-  const message = asRecord5(first.message);
+  const message = asRecord3(first.message);
   if (message !== void 0) {
     const content = textFromContent(message.content);
     if (content !== "") return content;
@@ -44470,7 +43247,7 @@ function streamChunkText(line, secret) {
   return deltaText(payload);
 }
 async function generateWithCustomApiStream(value, onDelta, signal) {
-  const config = asRecord5(value);
+  const config = asRecord3(value);
   if (config === void 0) throw new FrontendGenerationError("generate config must be an object");
   const target = parseApiTarget(config.custom_api, true);
   const messages = buildMessages(config);
@@ -45102,7 +43879,7 @@ async function resolveGenerationSpeaker(db, state, options) {
   }
   const groupDef = await db.getGroup(characterName);
   if (!groupDef) throw new Error(`group '${characterName}' not found`);
-  const chatGroup = asRecord6(chat.header.chat_metadata?.group);
+  const chatGroup = asRecord4(chat.header.chat_metadata?.group);
   const chatMembers = stringArray2(chatGroup?.["members"]);
   const members = chatMembers !== void 0 && chatMembers.length > 0 ? chatMembers : groupDef.members;
   const disabled = stringArray2(chatGroup?.["disabledMembers"]) ?? groupDef.disabledMembers;
@@ -45110,7 +43887,7 @@ async function resolveGenerationSpeaker(db, state, options) {
   const talkativeness = /* @__PURE__ */ new Map();
   for (const member of members) {
     const file = await db.getCharacter(member);
-    const extensions = asRecord6(file?.card?.data?.extensions);
+    const extensions = asRecord4(file?.card?.data?.extensions);
     const raw = extensions?.["talkativeness"];
     talkativeness.set(member, typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : 0.5);
   }
@@ -45637,7 +44414,7 @@ function roleName(role) {
 function numberOr(value, fallback) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
-function asRecord6(value) {
+function asRecord4(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
 }
 function stringArray2(value) {
@@ -45645,11 +44422,11 @@ function stringArray2(value) {
   return value.filter((item) => typeof item === "string");
 }
 function asTimedEffectsState(value) {
-  return asRecord6(value) === void 0 ? void 0 : value;
+  return asRecord4(value) === void 0 ? void 0 : value;
 }
 
 // packages/plugin/src/helper-bindings.ts
-import { randomUUID as randomUUID11 } from "node:crypto";
+import { randomUUID as randomUUID8 } from "node:crypto";
 var HELPER_TOKEN_HEADER = "x-dsh-helper-token";
 var HELPER_BINDING_TTL_MS = 30 * 60 * 1e3;
 var bindings = /* @__PURE__ */ new Map();
@@ -45661,7 +44438,7 @@ function pruneExpired(now) {
 function createHelperBinding(character, chatId) {
   const now = Date.now();
   pruneExpired(now);
-  const token = randomUUID11();
+  const token = randomUUID8();
   bindings.set(token, { character, chatId, createdAt: now });
   return token;
 }
@@ -46717,7 +45494,7 @@ async function resetSessionRegexScripts(db, character, chatId, type) {
 function generationIdOf(config) {
   const record = isPlainObject4(config) ? config : {};
   const value = record["generation_id"];
-  return typeof value === "string" && value.trim() !== "" ? value.trim() : randomUUID12();
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : randomUUID9();
 }
 function requireScriptTrees(value) {
   if (!Array.isArray(value)) throw new Error("scriptTrees must be an array of card script nodes");
@@ -47219,7 +45996,1633 @@ function jsonValueOf2(value) {
 init_events();
 init_host();
 init_runtime();
+
+// packages/plugin/src/workspace.ts
+init_dsh_home();
+import { mkdir as mkdir5 } from "node:fs/promises";
+var TAVERN_WORKSPACE_TITLE = "Tavern (internal)";
+var TAVERN_WORKBENCH_WORKSPACE_TITLE = "Tavern Workbench (internal)";
+async function prepareInternalWorkspace() {
+  const path12 = tavernDataRoot("workspace");
+  await mkdir5(path12, { recursive: true });
+  return { path: path12, title: TAVERN_WORKSPACE_TITLE };
+}
+async function prepareWorkbenchWorkspace() {
+  const path12 = tavernDataRoot("workbench");
+  await mkdir5(path12, { recursive: true });
+  return { path: path12, title: TAVERN_WORKBENCH_WORKSPACE_TITLE };
+}
+
+// packages/plugin/src/http/router.ts
 init_errors();
+
+// packages/plugin/src/http/im.ts
+init_dsh_home();
+
+// packages/plugin/src/im/onebot/server.ts
+import { randomUUID as randomUUID11, timingSafeEqual } from "node:crypto";
+
+// packages/plugin/src/im/onebot/codec.ts
+var OneBotCodecError = class extends Error {
+  code;
+  constructor(code, message) {
+    super(message);
+    this.name = "OneBotCodecError";
+    this.code = code;
+  }
+};
+var SEGMENT_LABEL = {
+  face: "[\u8868\u60C5]",
+  image: "[\u56FE\u7247]",
+  record: "[\u8BED\u97F3]",
+  video: "[\u89C6\u9891]",
+  file: "[\u6587\u4EF6]"
+};
+var CQ_UNESCAPES = {
+  "38": "&",
+  "91": "[",
+  "93": "]",
+  "44": ","
+};
+function parseOneBotMessage(event, accountId, receivedAt) {
+  if (!isJsonObject2(event)) {
+    throw new OneBotCodecError("BAD_EVENT", `onebot event must be a JSON object, got ${describeValue(event)}`);
+  }
+  if (event.post_type !== "message") return void 0;
+  const messageType = event.message_type;
+  if (messageType !== "private" && messageType !== "group") return void 0;
+  if (messageType === "group" && event.sub_type === "notice") return void 0;
+  const messageId = requireInteger(event, "message_id");
+  const userId = requireInteger(event, "user_id");
+  const peerId = messageType === "group" ? String(requireInteger(event, "group_id")) : String(userId);
+  const sender = isJsonObject2(event.sender) ? event.sender : {};
+  const segments = readSegments(event.message);
+  let text = "";
+  let replyTo;
+  const media = [];
+  for (const segment of segments) {
+    switch (segment.type) {
+      case "text":
+        text += segment.data.text;
+        break;
+      case "at":
+        text += segment.data.qq === "all" ? "@\u5168\u4F53\u6210\u5458" : `@${segment.data.qq}`;
+        break;
+      case "face":
+        text += SEGMENT_LABEL.face;
+        break;
+      case "image":
+      case "record":
+      case "video":
+      case "file":
+        text += SEGMENT_LABEL[segment.type];
+        media.push(toMediaRef(segment));
+        break;
+      case "reply":
+        if (replyTo === void 0 && segment.data.id !== "") replyTo = segment.data.id;
+        break;
+      case "unknown":
+        break;
+    }
+  }
+  if (text.trim() === "" && media.length === 0) return void 0;
+  return {
+    channel: "onebot",
+    accountId,
+    scope: messageType,
+    peerId,
+    senderId: String(userId),
+    senderName: senderNameFor(messageType, sender, userId),
+    text,
+    media,
+    ...replyTo === void 0 ? {} : { replyTo },
+    dedupeKey: imDedupeKey("onebot", accountId, messageType, peerId, String(messageId)),
+    receivedAt
+  };
+}
+function oneBotMentioned(event, selfId) {
+  if (selfId === "" || !isJsonObject2(event)) return false;
+  if (event.post_type !== "message" || event.message_type !== "group") return false;
+  let segments;
+  try {
+    segments = readSegments(event.message);
+  } catch (error) {
+    if (error instanceof OneBotCodecError) return false;
+    throw error;
+  }
+  return segments.some((segment) => segment.type === "at" && segment.data.qq === selfId);
+}
+function oneBotSendCall(target, part) {
+  const peerId = parsePeerId(target.peerId);
+  const message = [{ type: "text", data: { text: part.text } }];
+  if (target.scope === "private") {
+    return { action: "send_private_msg", params: { user_id: peerId, message, auto_escape: false } };
+  }
+  return { action: "send_group_msg", params: { group_id: peerId, message, auto_escape: false } };
+}
+function cqUnescape(text) {
+  return text.replace(/&#(38|91|93|44);/g, (entity, code) => CQ_UNESCAPES[code] ?? entity);
+}
+function parseCqString(raw) {
+  const segments = [];
+  let cursor = 0;
+  while (cursor < raw.length) {
+    const start = raw.indexOf("[CQ:", cursor);
+    if (start < 0) {
+      appendText(segments, raw.slice(cursor));
+      break;
+    }
+    if (start > cursor) appendText(segments, raw.slice(cursor, start));
+    const end = raw.indexOf("]", start);
+    if (end < 0) {
+      appendText(segments, raw.slice(start));
+      break;
+    }
+    segments.push(parseCqCode(raw.slice(start + 4, end)));
+    cursor = end + 1;
+  }
+  return segments;
+}
+function parseCqCode(body) {
+  const parts = body.split(",");
+  const type = (parts[0] ?? "").toLowerCase();
+  const fields = {};
+  for (const part of parts.slice(1)) {
+    if (part === "") continue;
+    const assignAt = part.indexOf("=");
+    const key = assignAt < 0 ? part : part.slice(0, assignAt);
+    if (key === "") continue;
+    fields[key] = cqUnescape(assignAt < 0 ? "" : part.slice(assignAt + 1));
+  }
+  return knownSegment(type, fields) ?? { type: "unknown", data: fields };
+}
+function readSegments(message) {
+  if (message === void 0 || message === null) return [];
+  if (typeof message === "string") return parseCqString(message);
+  if (Array.isArray(message)) return message.map((entry, index) => segmentFromArray(entry, index));
+  throw new OneBotCodecError(
+    "BAD_SEGMENT",
+    `onebot 'message' must be a CQ string or a segment array, got ${describeValue(message)}`
+  );
+}
+function segmentFromArray(entry, index) {
+  if (!isJsonObject2(entry)) {
+    throw new OneBotCodecError(
+      "BAD_SEGMENT",
+      `onebot message[${index}] must be a segment object, got ${describeValue(entry)}`
+    );
+  }
+  const type = entry.type;
+  if (typeof type !== "string" || type === "") {
+    throw new OneBotCodecError(
+      "BAD_SEGMENT",
+      `onebot message[${index}].type must be a non-empty string, got ${describeValue(type)}`
+    );
+  }
+  const data = entry.data;
+  if (data !== void 0 && data !== null && !isJsonObject2(data)) {
+    throw new OneBotCodecError(
+      "BAD_SEGMENT",
+      `onebot message[${index}].data must be an object or null, got ${describeValue(data)}`
+    );
+  }
+  const fields = data === void 0 || data === null ? {} : data;
+  return knownSegment(type, stringFields(fields)) ?? { type: "unknown", data: { ...fields } };
+}
+function knownSegment(type, fields) {
+  switch (type) {
+    case "text":
+      return { type: "text", data: { text: fields.text ?? "" } };
+    case "at":
+      return { type: "at", data: { qq: fields.qq ?? "" } };
+    case "image":
+      return { type: "image", data: presentFields(fields, ["file", "url", "summary"]) };
+    case "record":
+      return { type: "record", data: presentFields(fields, ["file", "url"]) };
+    case "video":
+      return { type: "video", data: presentFields(fields, ["file", "url"]) };
+    case "file":
+      return { type: "file", data: presentFields(fields, ["file", "name", "size"]) };
+    case "reply":
+      return { type: "reply", data: { id: fields.id ?? "" } };
+    case "face":
+      return { type: "face", data: { id: fields.id ?? "" } };
+    default:
+      return void 0;
+  }
+}
+function presentFields(fields, names) {
+  const picked = {};
+  for (const name2 of names) {
+    const value = fields[name2];
+    if (value !== void 0 && value !== "") picked[name2] = value;
+  }
+  return picked;
+}
+function stringFields(data) {
+  const fields = {};
+  for (const [key, value] of Object.entries(data)) {
+    const text = optionalString(value);
+    if (text !== void 0) fields[key] = text;
+  }
+  return fields;
+}
+function toMediaRef(segment) {
+  switch (segment.type) {
+    case "image":
+      return buildMediaRef("image", { url: segment.data.url, name: segment.data.file });
+    case "record":
+      return buildMediaRef("voice", { url: segment.data.url, name: segment.data.file });
+    case "video":
+      return buildMediaRef("video", { url: segment.data.url, name: segment.data.file });
+    case "file":
+      return buildMediaRef("file", {
+        name: segment.data.name ?? segment.data.file,
+        size: segment.data.size
+      });
+  }
+}
+function buildMediaRef(kind, fields) {
+  const ref = { kind };
+  const url = nonEmptyString4(fields.url);
+  if (url !== void 0) ref.url = url;
+  const name2 = nonEmptyString4(fields.name);
+  if (name2 !== void 0) ref.name = name2;
+  const size = nonEmptyString4(fields.size);
+  if (size !== void 0) {
+    const bytes = Number(size);
+    if (Number.isFinite(bytes)) ref.size = bytes;
+  }
+  return ref;
+}
+function senderNameFor(scope, sender, userId) {
+  if (scope === "group") {
+    return nonEmptyString4(sender.card) ?? nonEmptyString4(sender.nickname) ?? `\u7FA4\u6210\u5458(${userId})`;
+  }
+  return nonEmptyString4(sender.nickname) ?? `(${userId})`;
+}
+function requireInteger(event, field) {
+  const value = event[field];
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    throw new OneBotCodecError(
+      "BAD_EVENT",
+      `onebot event field '${field}' must be an integer, got ${describeValue(value)}`
+    );
+  }
+  return value;
+}
+function parsePeerId(peerId) {
+  if (!/^\d+$/.test(peerId)) {
+    throw new OneBotCodecError("BAD_TARGET", `onebot peerId '${peerId}' is not a decimal id`);
+  }
+  const value = Number(peerId);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new OneBotCodecError("BAD_TARGET", `onebot peerId '${peerId}' is not a positive safe integer`);
+  }
+  return value;
+}
+function appendText(segments, raw) {
+  if (raw === "") return;
+  const text = cqUnescape(raw);
+  const last = segments[segments.length - 1];
+  if (last !== void 0 && last.type === "text") {
+    segments[segments.length - 1] = { type: "text", data: { text: last.data.text + text } };
+    return;
+  }
+  segments.push({ type: "text", data: { text } });
+}
+function optionalString(value) {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return void 0;
+}
+function nonEmptyString4(value) {
+  const text = optionalString(value);
+  return text === void 0 || text.trim() === "" ? void 0 : text;
+}
+function isJsonObject2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function describeValue(value) {
+  if (value === void 0) return "undefined";
+  if (value === null) return "null";
+  if (typeof value === "string") return `string '${value.length > 32 ? `${value.slice(0, 32)}...` : value}'`;
+  if (typeof value === "number" || typeof value === "boolean") return `${typeof value} ${String(value)}`;
+  if (Array.isArray(value)) return `array of ${value.length}`;
+  return typeof value;
+}
+
+// packages/plugin/src/im/onebot/ws.ts
+import { createHash as createHash13, randomUUID as randomUUID10 } from "node:crypto";
+var WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+var MAX_MESSAGE_BYTES = 1024 * 1024;
+var CONTROL_PAYLOAD_LIMIT = 125;
+var CLOSE_NORMAL = 1e3;
+var CLOSE_GOING_AWAY = 1001;
+var CLOSE_PROTOCOL_ERROR = 1002;
+var CLOSE_UNSUPPORTED_DATA = 1003;
+var CLOSE_INVALID_PAYLOAD = 1007;
+var CLOSE_TOO_BIG = 1009;
+var CLOSE_INTERNAL_ERROR = 1011;
+var CLOSE_LINGER_MS = 1e3;
+var OPCODE_CONTINUATION = 0;
+var OPCODE_TEXT = 1;
+var OPCODE_BINARY = 2;
+var OPCODE_CLOSE = 8;
+var OPCODE_PING = 9;
+var OPCODE_PONG = 10;
+var WsProtocolError = class extends Error {
+  code;
+  constructor(code, message) {
+    super(message);
+    this.name = "WsProtocolError";
+    this.code = code;
+  }
+};
+function acceptWebSocket(req, socket, head) {
+  const key = requireHandshakeKey(req, socket);
+  const accept = createHash13("sha1").update(`${key}${WS_GUID}`).digest("base64");
+  socket.write([
+    "HTTP/1.1 101 Switching Protocols",
+    "Upgrade: websocket",
+    "Connection: Upgrade",
+    `Sec-WebSocket-Accept: ${accept}`,
+    "",
+    ""
+  ].join("\r\n"));
+  return openConnection(socket, head);
+}
+function openConnection(socket, head) {
+  const id = randomUUID10();
+  const textListeners = [];
+  const closeListeners = [];
+  const queuedTexts = [];
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let closed = false;
+  let input = Buffer.alloc(0);
+  let fragments = [];
+  let fragmentedBytes = 0;
+  let fragmented = false;
+  let writeTail = Promise.resolve();
+  function finish() {
+    if (closed) return;
+    closed = true;
+    queuedTexts.length = 0;
+    fragments = [];
+    fragmented = false;
+    for (const listener of closeListeners) {
+      try {
+        listener();
+      } catch {
+      }
+    }
+    closeListeners.length = 0;
+  }
+  function fail(code, reason) {
+    shutdown(code, reason);
+  }
+  function shutdown(code, reason) {
+    if (closed) return;
+    finish();
+    const frame = encodeCloseFrame(code, reason);
+    writeTail = writeTail.then(() => writeFrame(frame)).then(() => {
+      socket.end();
+      const linger = setTimeout(() => {
+        socket.destroy();
+      }, CLOSE_LINGER_MS);
+      linger.unref?.();
+    }).catch(() => {
+      socket.destroy();
+    });
+  }
+  function writeFrame(frame) {
+    return new Promise((resolve7, reject) => {
+      if (socket.destroyed || socket.writableEnded) {
+        reject(new Error("websocket socket is closed"));
+        return;
+      }
+      socket.write(frame, (error) => {
+        if (error) reject(error);
+        else resolve7();
+      });
+    });
+  }
+  function enqueueWrite(frame) {
+    writeTail = writeTail.then(() => writeFrame(frame)).catch(() => {
+      socket.destroy();
+      finish();
+    });
+  }
+  function send(text) {
+    if (closed) throw new Error(`websocket connection '${id}' is closed`);
+    enqueueWrite(encodeFrame(OPCODE_TEXT, Buffer.from(text, "utf8")));
+  }
+  function close(code, reason) {
+    shutdown(normalizeCloseCode(code), reason ?? "");
+  }
+  function onText(listener) {
+    textListeners.push(listener);
+    if (queuedTexts.length === 0) return;
+    const pending = queuedTexts.splice(0);
+    for (const text of pending) listener(text);
+  }
+  function onClose(listener) {
+    if (closed) {
+      listener();
+      return;
+    }
+    closeListeners.push(listener);
+  }
+  function emitText(text) {
+    if (textListeners.length === 0) {
+      queuedTexts.push(text);
+      return;
+    }
+    for (const listener of textListeners) {
+      try {
+        listener(text);
+      } catch {
+        fail(CLOSE_INTERNAL_ERROR, "text listener failed");
+        return;
+      }
+    }
+  }
+  function handleDataFrame(opcode, fin, payload) {
+    if (opcode === OPCODE_BINARY) {
+      throw new WsProtocolError(CLOSE_UNSUPPORTED_DATA, "binary messages are not supported");
+    }
+    if (opcode === OPCODE_CONTINUATION) {
+      if (!fragmented) throw new WsProtocolError(CLOSE_PROTOCOL_ERROR, "continuation frame without a preceding data frame");
+      fragmentedBytes += payload.length;
+      if (fragmentedBytes > MAX_MESSAGE_BYTES) {
+        throw new WsProtocolError(CLOSE_TOO_BIG, `fragmented message exceeds ${MAX_MESSAGE_BYTES} bytes`);
+      }
+      fragments.push(payload);
+      if (!fin) return;
+      const message = Buffer.concat(fragments, fragmentedBytes);
+      fragments = [];
+      fragmentedBytes = 0;
+      fragmented = false;
+      emitText(decodeText(message));
+      return;
+    }
+    if (fragmented) throw new WsProtocolError(CLOSE_PROTOCOL_ERROR, "new data frame while a fragmented message is open");
+    if (fin) {
+      emitText(decodeText(payload));
+      return;
+    }
+    fragmented = true;
+    fragmentedBytes = payload.length;
+    fragments = [payload];
+  }
+  function handleClose(payload) {
+    if (payload.length === 1) throw new WsProtocolError(CLOSE_PROTOCOL_ERROR, "close frame payload of 1 byte is invalid");
+    const code = payload.length >= 2 ? payload.readUInt16BE(0) : CLOSE_NORMAL;
+    if (!isValidReceivedCloseCode(code)) {
+      throw new WsProtocolError(CLOSE_PROTOCOL_ERROR, `close frame carries reserved code ${code}`);
+    }
+    shutdown(code, "");
+  }
+  function handleFrame(frame) {
+    if (frame.opcode >= OPCODE_CLOSE) {
+      if (frame.opcode === OPCODE_CLOSE) {
+        handleClose(frame.payload);
+        return;
+      }
+      if (frame.opcode === OPCODE_PING) {
+        enqueueWrite(encodeFrame(OPCODE_PONG, frame.payload));
+        return;
+      }
+      if (frame.opcode === OPCODE_PONG) return;
+      throw new WsProtocolError(CLOSE_PROTOCOL_ERROR, `unknown control opcode ${frame.opcode}`);
+    }
+    if (frame.opcode !== OPCODE_TEXT && frame.opcode !== OPCODE_BINARY && frame.opcode !== OPCODE_CONTINUATION) {
+      throw new WsProtocolError(CLOSE_PROTOCOL_ERROR, `unknown data opcode ${frame.opcode}`);
+    }
+    handleDataFrame(frame.opcode, frame.fin, frame.payload);
+  }
+  function decodeText(bytes) {
+    try {
+      return decoder.decode(bytes);
+    } catch {
+      throw new WsProtocolError(CLOSE_INVALID_PAYLOAD, "text frame is not valid UTF-8");
+    }
+  }
+  function takeFrame() {
+    if (input.length < 2) return void 0;
+    const first = input[0];
+    const second = input[1];
+    if ((first & 112) !== 0) throw new WsProtocolError(CLOSE_PROTOCOL_ERROR, "reserved bits are set without a negotiated extension");
+    const fin = (first & 128) !== 0;
+    const opcode = first & 15;
+    const masked = (second & 128) !== 0;
+    let length = second & 127;
+    let offset = 2;
+    if (length === 126) {
+      if (input.length < 4) return void 0;
+      length = input.readUInt16BE(2);
+      offset = 4;
+    } else if (length === 127) {
+      if (input.length < 10) return void 0;
+      const wide = input.readBigUInt64BE(2);
+      if (wide > BigInt(MAX_MESSAGE_BYTES)) {
+        throw new WsProtocolError(CLOSE_TOO_BIG, `frame exceeds ${MAX_MESSAGE_BYTES} bytes`);
+      }
+      length = Number(wide);
+      offset = 10;
+    }
+    if (length > MAX_MESSAGE_BYTES) {
+      throw new WsProtocolError(CLOSE_TOO_BIG, `frame exceeds ${MAX_MESSAGE_BYTES} bytes`);
+    }
+    const isControl = (opcode & 8) !== 0;
+    if (isControl) {
+      if (!fin) throw new WsProtocolError(CLOSE_PROTOCOL_ERROR, "control frames must not be fragmented");
+      if (length > CONTROL_PAYLOAD_LIMIT) {
+        throw new WsProtocolError(CLOSE_PROTOCOL_ERROR, "control frame payload exceeds 125 bytes");
+      }
+    }
+    if (!masked) throw new WsProtocolError(CLOSE_PROTOCOL_ERROR, "client frames must be masked");
+    if (input.length < offset + 4 + length) return void 0;
+    const mask = input.subarray(offset, offset + 4);
+    offset += 4;
+    const payload = Buffer.allocUnsafe(length);
+    for (let index = 0; index < length; index += 1) {
+      payload[index] = input[offset + index] ^ mask[index & 3];
+    }
+    input = input.subarray(offset + length);
+    return { fin, opcode, payload };
+  }
+  function onData(chunk) {
+    if (closed) return;
+    input = input.length === 0 ? chunk : Buffer.concat([input, chunk]);
+    try {
+      while (!closed) {
+        const frame = takeFrame();
+        if (frame === void 0) return;
+        handleFrame(frame);
+      }
+    } catch (error) {
+      if (error instanceof WsProtocolError) {
+        fail(error.code, error.message);
+        return;
+      }
+      fail(CLOSE_INTERNAL_ERROR, `websocket frame handling failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  socket.on("data", onData);
+  socket.on("error", finish);
+  socket.on("close", finish);
+  socket.on("end", finish);
+  const connection = { id, send, close, onText, onClose };
+  if (head.length > 0) onData(head);
+  return connection;
+}
+function requireHandshakeKey(req, socket) {
+  if (req.method !== "GET") rejectHandshake(socket, "the upgrade request must be GET");
+  const upgrade = headerOf(req, "upgrade");
+  if (upgrade === void 0 || upgrade.toLowerCase() !== "websocket") {
+    rejectHandshake(socket, "missing 'Upgrade: websocket'");
+  }
+  if (!connectionHeaderHasUpgrade(headerOf(req, "connection"))) {
+    rejectHandshake(socket, "missing 'Connection: Upgrade'");
+  }
+  if (headerOf(req, "sec-websocket-version") !== "13") {
+    rejectHandshake(socket, "only Sec-WebSocket-Version 13 is supported");
+  }
+  const key = headerOf(req, "sec-websocket-key");
+  if (key === void 0 || !/^[A-Za-z0-9+/]{22}==$/.test(key) || Buffer.from(key, "base64").length !== 16) {
+    rejectHandshake(socket, "Sec-WebSocket-Key must be the base64 of 16 random bytes");
+  }
+  return key;
+}
+function rejectHandshake(socket, reason) {
+  const body = `${reason}
+`;
+  if (!socket.destroyed && socket.writable) {
+    socket.end([
+      "HTTP/1.1 400 Bad Request",
+      "Connection: close",
+      "Content-Type: text/plain; charset=utf-8",
+      `Content-Length: ${Buffer.byteLength(body)}`,
+      "",
+      body
+    ].join("\r\n"));
+  }
+  throw new Error(`websocket handshake rejected: ${reason}`);
+}
+function connectionHeaderHasUpgrade(value) {
+  if (value === void 0) return false;
+  return value.split(",").some((token) => token.trim().toLowerCase() === "upgrade");
+}
+function headerOf(req, name2) {
+  const raw = req.headers[name2];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : void 0;
+}
+function encodeFrame(opcode, payload) {
+  const length = payload.length;
+  let header;
+  if (length < 126) {
+    header = Buffer.allocUnsafe(2);
+    header[1] = length;
+  } else if (length <= 65535) {
+    header = Buffer.allocUnsafe(4);
+    header[1] = 126;
+    header.writeUInt16BE(length, 2);
+  } else {
+    header = Buffer.allocUnsafe(10);
+    header[1] = 127;
+    header.writeBigUInt64BE(BigInt(length), 2);
+  }
+  header[0] = 128 | opcode;
+  return Buffer.concat([header, payload]);
+}
+function encodeCloseFrame(code, reason) {
+  const reasonBytes = truncateUtf8(Buffer.from(reason, "utf8"), CONTROL_PAYLOAD_LIMIT - 2);
+  const payload = Buffer.allocUnsafe(2 + reasonBytes.length);
+  payload.writeUInt16BE(code, 0);
+  reasonBytes.copy(payload, 2);
+  return encodeFrame(OPCODE_CLOSE, payload);
+}
+function truncateUtf8(bytes, max2) {
+  if (bytes.length <= max2) return bytes;
+  let end = max2;
+  while (end > 0) {
+    const boundary = bytes[end];
+    if (boundary === void 0 || (boundary & 192) !== 128) break;
+    end -= 1;
+  }
+  return bytes.subarray(0, end);
+}
+function normalizeCloseCode(code) {
+  if (code === void 0) return CLOSE_NORMAL;
+  if (code === CLOSE_NORMAL || code === CLOSE_GOING_AWAY || code === CLOSE_INTERNAL_ERROR) return code;
+  if (code >= 3e3 && code <= 4999) return code;
+  return CLOSE_NORMAL;
+}
+function isValidReceivedCloseCode(code) {
+  if (code === CLOSE_NORMAL || code === CLOSE_GOING_AWAY) return true;
+  if (code >= 1002 && code <= 1011 && code !== 1004 && code !== 1005 && code !== 1006) return true;
+  return code >= 3e3 && code <= 4999;
+}
+
+// packages/plugin/src/im/onebot/server.ts
+var REQUEST_TIMEOUT_MS2 = 1e4;
+var WEBHOOK_BODY_LIMIT = 256 * 1024;
+var OneBotError = class extends Error {
+  code;
+  constructor(code, message, options) {
+    super(message, options);
+    this.name = "OneBotError";
+    this.code = code;
+  }
+};
+var OneBotChannel = class {
+  channel = "onebot";
+  accountId;
+  token;
+  router;
+  groupRequireMention;
+  now;
+  logger;
+  connections = /* @__PURE__ */ new Map();
+  started = false;
+  lastError;
+  signal;
+  abortListener;
+  constructor(options) {
+    const token = options.secret.token;
+    if (typeof token !== "string" || token.trim() === "") {
+      throw new OneBotError(
+        "ONEBOT_BAD_SECRET",
+        `onebot account '${options.accountId}' has no token; secret.token must be a non-empty string`
+      );
+    }
+    this.accountId = options.accountId;
+    this.token = token;
+    this.router = options.router;
+    this.groupRequireMention = options.groupRequireMention;
+    this.now = options.now;
+    this.logger = options.logger;
+  }
+  /** 反向 WS 只登记「等待连接」，不发任何网络请求；连接由 upgrade 路由送进来。 */
+  async start(signal) {
+    if (this.started) return;
+    if (signal.aborted) {
+      throw new OneBotError("ONEBOT_CLOSED", `onebot account '${this.accountId}' cannot start: signal is already aborted`);
+    }
+    this.started = true;
+    this.signal = signal;
+    this.abortListener = () => {
+      void this.stop();
+    };
+    signal.addEventListener("abort", this.abortListener, { once: true });
+  }
+  async stop() {
+    this.started = false;
+    if (this.signal !== void 0 && this.abortListener !== void 0) {
+      this.signal.removeEventListener("abort", this.abortListener);
+    }
+    this.signal = void 0;
+    this.abortListener = void 0;
+    for (const live of [...this.connections.values()]) {
+      this.connections.delete(live.connection.id);
+      this.rejectWaiters(live, "channel stopped");
+      live.connection.close(1001, "channel stopped");
+    }
+  }
+  status() {
+    const sendable = this.sendConnection();
+    if (sendable !== void 0) {
+      let since = Number.POSITIVE_INFINITY;
+      for (const live of this.connections.values()) since = Math.min(since, live.since);
+      return { state: "online", since };
+    }
+    if (this.connections.size > 0) {
+      return { state: "paused", reason: "connected without an API/Universal client; outbound messages are unavailable" };
+    }
+    if (this.lastError !== void 0) return { state: "error", message: this.lastError };
+    return { state: "idle" };
+  }
+  async send(target, parts) {
+    if (target.channel !== "onebot") {
+      throw new OneBotError("ONEBOT_BAD_TARGET", `onebot channel cannot send to channel '${target.channel}'`);
+    }
+    if (target.accountId !== this.accountId) {
+      throw new OneBotError(
+        "ONEBOT_BAD_TARGET",
+        `onebot account '${target.accountId}' cannot send through account '${this.accountId}'`
+      );
+    }
+    if (parts.length === 0) return { parts: 0, at: this.now() };
+    const live = this.sendConnection();
+    if (live === void 0) {
+      throw new OneBotError(
+        "ONEBOT_NO_CONNECTION",
+        `onebot account '${this.accountId}' has no onebot connection; the upstream must connect before replies can be delivered`
+      );
+    }
+    const queued = live.sendChain.then(() => this.sendParts(live, target, parts));
+    live.sendChain = queued.then(() => void 0, () => void 0);
+    return queued;
+  }
+  async sendParts(live, target, parts) {
+    let messageId;
+    for (const part of parts) {
+      const call = this.sendCallOf(target, part);
+      const response = await this.call(live, call.action, call.params);
+      if (response.status !== "ok") {
+        throw new OneBotError(
+          "ONEBOT_API_FAILED",
+          `onebot action '${call.action}' failed: status=${describeValue2(response.status)} retcode=${describeValue2(response.retcode)}${apiDetailOf(response)}`
+        );
+      }
+      const id = messageIdOf3(response);
+      if (id !== void 0) messageId = id;
+    }
+    return { parts: parts.length, at: this.now(), ...messageId === void 0 ? {} : { messageId } };
+  }
+  /** upgrade 鉴权：token + 两个握手头都必须合法，否则调用方回 401 而不是升级。 */
+  authorizeUpgrade(req) {
+    if (!this.tokenMatches(requestToken(req))) return void 0;
+    const selfId = headerOf2(req, "x-self-id");
+    const role = roleOf2(headerOf2(req, "x-client-role"));
+    if (selfId === void 0 || !/^\d+$/.test(selfId) || role === void 0) return void 0;
+    return { role, selfId };
+  }
+  /** webhook 不要求握手头，只认 token；供运行时在多账号间挑选归属。 */
+  acceptsWebhook(req) {
+    return this.tokenMatches(requestToken(req));
+  }
+  /** 接管已握手的连接；调用方保证 authorizeUpgrade 已通过。 */
+  attach(connection, claims) {
+    const live = {
+      connection,
+      role: claims.role,
+      selfId: claims.selfId,
+      since: this.now(),
+      closed: false,
+      waiters: /* @__PURE__ */ new Map(),
+      eventChain: Promise.resolve(),
+      sendChain: Promise.resolve()
+    };
+    this.connections.set(connection.id, live);
+    this.lastError = void 0;
+    this.logger?.info?.(`dsh-soulmojito im onebot/${this.accountId}: ${claims.role} connection ${connection.id} attached (self_id ${claims.selfId})`);
+    connection.onText((text) => {
+      this.onFrame(live, text);
+    });
+    connection.onClose(() => {
+      live.closed = true;
+      if (this.connections.get(connection.id) === live) this.connections.delete(connection.id);
+      this.rejectWaiters(live, "connection closed");
+    });
+  }
+  /** 握手/协议错误记在账号状态上；下次成功连接时清掉。 */
+  noteError(message) {
+    this.lastError = message;
+    this.logger?.warn?.(`dsh-soulmojito im onebot/${this.accountId}: ${message}`);
+  }
+  /**
+   * HTTP POST 入站（提案 §6.2 的 webhook）。响应体只回 `{}`：本实现不做快速
+   * 操作，入站结果由回复链路另发，调用方不需要从响应里读生成内容。
+   */
+  async handleWebhook(req, res) {
+    if (!this.tokenMatches(requestToken(req))) {
+      respondJson(res, 401, { ok: false, message: "unauthorized" });
+      return;
+    }
+    if (req.method !== "POST") {
+      respondJson(res, 405, { ok: false, message: "onebot webhook only accepts POST" });
+      return;
+    }
+    let body;
+    try {
+      body = await readJsonBody(req, WEBHOOK_BODY_LIMIT);
+    } catch (error) {
+      if (error instanceof OneBotError) {
+        respondJson(res, error.code === "ONEBOT_BODY_TOO_LARGE" ? 413 : 400, { ok: false, message: error.message });
+        return;
+      }
+      throw error;
+    }
+    if (!isJsonObject3(body)) {
+      respondJson(res, 400, { ok: false, message: "onebot webhook body must be a JSON object" });
+      return;
+    }
+    let inbound;
+    try {
+      inbound = parseOneBotMessage(body, this.accountId, this.now());
+    } catch (error) {
+      if (error instanceof OneBotCodecError) {
+        respondJson(res, 400, { ok: false, message: error.message });
+        return;
+      }
+      throw error;
+    }
+    if (inbound === void 0) {
+      respondJson(res, 200, {});
+      return;
+    }
+    if (inbound.scope === "group" && await this.groupRequireMention() && !oneBotMentioned(body, selfIdOf(body))) {
+      respondJson(res, 200, {});
+      return;
+    }
+    try {
+      await this.router.handle(inbound);
+    } catch (error) {
+      this.logger?.warn?.(`dsh-soulmojito im onebot/${this.accountId}: webhook inbound failed: ${messageOf6(error)}`);
+      respondJson(res, 500, { ok: false, message: "onebot inbound handling failed" });
+      return;
+    }
+    respondJson(res, 200, {});
+  }
+  tokenMatches(presented) {
+    if (presented === void 0 || presented === "") return false;
+    const expected = Buffer.from(this.token, "utf8");
+    const actual = Buffer.from(presented, "utf8");
+    return expected.length === actual.length && timingSafeEqual(expected, actual);
+  }
+  sendCallOf(target, part) {
+    try {
+      return oneBotSendCall(target, part);
+    } catch (error) {
+      if (error instanceof OneBotCodecError) {
+        throw new OneBotError("ONEBOT_BAD_TARGET", error.message, { cause: error });
+      }
+      throw error;
+    }
+  }
+  sendConnection() {
+    const live = [...this.connections.values()].filter((entry) => !entry.closed);
+    return live.find((entry) => entry.role === "Universal") ?? live.find((entry) => entry.role === "API");
+  }
+  call(live, action, params) {
+    const echo = randomUUID11();
+    return new Promise((resolve7, reject) => {
+      const timer = setTimeout(() => {
+        live.waiters.delete(echo);
+        reject(new OneBotError(
+          "ONEBOT_TIMEOUT",
+          `onebot action '${action}' got no response within ${REQUEST_TIMEOUT_MS2}ms (echo ${echo})`
+        ));
+      }, REQUEST_TIMEOUT_MS2);
+      timer.unref?.();
+      live.waiters.set(echo, { resolve: resolve7, reject, timer });
+      try {
+        live.connection.send(JSON.stringify({ action, params, echo }));
+      } catch (error) {
+        clearTimeout(timer);
+        live.waiters.delete(echo);
+        reject(new OneBotError(
+          "ONEBOT_CLOSED",
+          `onebot connection '${live.connection.id}' is closed; action '${action}' was not sent`,
+          { cause: error }
+        ));
+      }
+    });
+  }
+  onFrame(live, text) {
+    if (live.closed) return;
+    let value;
+    try {
+      value = JSON.parse(text);
+    } catch {
+      this.logger?.warn?.(`dsh-soulmojito im onebot/${this.accountId}: dropped a non-JSON frame`);
+      return;
+    }
+    if (!isJsonObject3(value)) {
+      this.logger?.warn?.(`dsh-soulmojito im onebot/${this.accountId}: dropped a frame that is not a JSON object`);
+      return;
+    }
+    const echo = value.echo;
+    if (typeof echo === "string") {
+      const waiter = live.waiters.get(echo);
+      if (waiter === void 0) {
+        this.logger?.debug?.(`dsh-soulmojito im onebot/${this.accountId}: ignored a response for unknown echo ${echo}`);
+        return;
+      }
+      live.waiters.delete(echo);
+      clearTimeout(waiter.timer);
+      waiter.resolve(value);
+      return;
+    }
+    if (live.role === "API") return;
+    live.eventChain = live.eventChain.then(() => this.deliverEvent(live, value)).catch((error) => {
+      this.logger?.warn?.(`dsh-soulmojito im onebot/${this.accountId}: inbound event failed: ${messageOf6(error)}`);
+    });
+  }
+  async deliverEvent(live, event) {
+    let inbound;
+    try {
+      inbound = parseOneBotMessage(event, this.accountId, this.now());
+    } catch (error) {
+      if (error instanceof OneBotCodecError) {
+        this.logger?.warn?.(`dsh-soulmojito im onebot/${this.accountId}: dropped a malformed event: ${error.message}`);
+        return;
+      }
+      throw error;
+    }
+    if (inbound === void 0) return;
+    if (inbound.scope === "group" && await this.groupRequireMention() && !oneBotMentioned(event, live.selfId)) {
+      return;
+    }
+    await this.router.handle(inbound);
+  }
+  rejectWaiters(live, reason) {
+    for (const waiter of live.waiters.values()) {
+      clearTimeout(waiter.timer);
+      waiter.reject(new OneBotError(
+        "ONEBOT_CLOSED",
+        `onebot connection '${live.connection.id}' closed before the action replied: ${reason}`
+      ));
+    }
+    live.waiters.clear();
+  }
+};
+function createOneBotUpgradeHandler(options) {
+  return (req, socket, head) => {
+    let owner;
+    let claims;
+    for (const channel of options.channels()) {
+      const found = channel.authorizeUpgrade(req);
+      if (found !== void 0) {
+        owner = channel;
+        claims = found;
+        break;
+      }
+    }
+    if (owner === void 0 || claims === void 0) {
+      rejectUpgrade(socket, 401, "Unauthorized");
+      options.logger?.warn?.("dsh-soulmojito im: rejected an OneBot upgrade without a matching token");
+      return;
+    }
+    let connection;
+    try {
+      connection = acceptWebSocket(req, socket, head);
+    } catch (error) {
+      owner.noteError(messageOf6(error));
+      return;
+    }
+    owner.attach(connection, claims);
+  };
+}
+function rejectUpgrade(socket, status2, statusText) {
+  const body = `${statusText}
+`;
+  if (socket.destroyed || !socket.writable) {
+    socket.destroy();
+    return;
+  }
+  socket.end([
+    `HTTP/1.1 ${status2} ${statusText}`,
+    "Connection: close",
+    "Content-Type: text/plain; charset=utf-8",
+    `Content-Length: ${Buffer.byteLength(body)}`,
+    "",
+    body
+  ].join("\r\n"));
+}
+function requestToken(req) {
+  const authorization = headerOf2(req, "authorization");
+  if (authorization !== void 0) {
+    const match = /^Bearer\s+(.+)$/i.exec(authorization);
+    return match?.[1]?.trim();
+  }
+  return headerOf2(req, "x-onebot-token");
+}
+function roleOf2(value) {
+  switch (value?.trim().toLowerCase()) {
+    case "api":
+      return "API";
+    case "event":
+      return "Event";
+    case "universal":
+      return "Universal";
+    default:
+      return void 0;
+  }
+}
+function headerOf2(req, name2) {
+  const raw = req.headers[name2];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : void 0;
+}
+function selfIdOf(event) {
+  const value = event.self_id;
+  return typeof value === "number" && Number.isSafeInteger(value) ? String(value) : "";
+}
+function messageIdOf3(response) {
+  const data = response.data;
+  if (!isJsonObject3(data)) return void 0;
+  const id = data.message_id;
+  if (typeof id === "number" && Number.isSafeInteger(id)) return String(id);
+  if (typeof id === "string" && id !== "") return id;
+  return void 0;
+}
+function apiDetailOf(response) {
+  const parts = [];
+  if (typeof response.message === "string" && response.message !== "") parts.push(`message='${response.message}'`);
+  if (typeof response.wording === "string" && response.wording !== "") parts.push(`wording='${response.wording}'`);
+  return parts.length === 0 ? "" : ` (${parts.join(", ")})`;
+}
+function describeValue2(value) {
+  if (typeof value === "string") return `'${value}'`;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return typeof value;
+}
+function respondJson(res, status2, body) {
+  if (res.writableEnded === true) return;
+  res.statusCode = status2;
+  res.setHeader("content-type", "application/json; charset=utf-8");
+  res.end(JSON.stringify(body));
+}
+function readJsonBody(req, maxBytes) {
+  return new Promise((resolve7, reject) => {
+    const chunks = [];
+    let bytes = 0;
+    let settled = false;
+    req.on("data", (chunk) => {
+      if (settled) return;
+      bytes += chunk.length;
+      if (bytes > maxBytes) {
+        settled = true;
+        req.resume();
+        reject(new OneBotError("ONEBOT_BODY_TOO_LARGE", `onebot webhook body exceeds ${maxBytes} bytes`));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      if (settled) return;
+      settled = true;
+      if (chunks.length === 0) {
+        resolve7(void 0);
+        return;
+      }
+      try {
+        resolve7(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      } catch (error) {
+        reject(new OneBotError("ONEBOT_BAD_REQUEST", "onebot webhook body is not valid JSON", { cause: error }));
+      }
+    });
+    req.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      reject(new OneBotError("ONEBOT_BAD_REQUEST", "reading the onebot webhook body failed", { cause: error }));
+    });
+  });
+}
+function isJsonObject3(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function messageOf6(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+// packages/plugin/src/im/settings.ts
+var IM_CHUNK_DEFAULTS = {
+  qq: 4500,
+  weixin: 1800,
+  onebot: 2e3
+};
+var ImSettingsError = class extends Error {
+  code = "IM_SETTINGS_INVALID";
+  constructor(message) {
+    super(message);
+    this.name = "ImSettingsError";
+  }
+};
+function imChunkLimit(channel, settings) {
+  return settings.chunkLimit ?? IM_CHUNK_DEFAULTS[channel];
+}
+function imAccessAllows(settings, scope, peerId) {
+  const mode = scope === "group" ? settings.groupMode : settings.privateMode;
+  if (mode === "disabled") return false;
+  if (mode === "open") return true;
+  const allow = scope === "group" ? settings.groupAllow : settings.privateAllow;
+  return allow.includes(peerId);
+}
+function asRecord5(value, label) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new ImSettingsError(`${label} must be an object`);
+  }
+  return value;
+}
+function parseAccessMode(value, label) {
+  if (value === "open" || value === "allowlist" || value === "disabled") return value;
+  throw new ImSettingsError(`${label} must be one of 'open' | 'allowlist' | 'disabled'`);
+}
+function parseStringList(value, label) {
+  if (!Array.isArray(value)) throw new ImSettingsError(`${label} must be an array of strings`);
+  const seen = /* @__PURE__ */ new Set();
+  const result = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") throw new ImSettingsError(`${label} must contain only strings`);
+    const trimmed = entry.trim();
+    if (trimmed === "" || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    result.push(trimmed);
+  }
+  return result;
+}
+function parseChatRef(value, label) {
+  if (value === null || value === void 0) return void 0;
+  const record = asRecord5(value, label);
+  const character = record["character"];
+  const chatId = record["chatId"];
+  if (typeof character !== "string" || character.trim() === "") {
+    throw new ImSettingsError(`${label}.character must be a non-empty string`);
+  }
+  if (typeof chatId !== "string" || chatId.trim() === "") {
+    throw new ImSettingsError(`${label}.chatId must be a non-empty string`);
+  }
+  return { character, chatId };
+}
+function applyImSettingsPatch(current, patch) {
+  const record = asRecord5(patch, "im settings patch");
+  const next = {
+    ...current,
+    privateAllow: [...current.privateAllow],
+    groupAllow: [...current.groupAllow]
+  };
+  if (record["bindingMode"] !== void 0) {
+    const value = record["bindingMode"];
+    if (value !== "manual" && value !== "independent" && value !== "shared") {
+      throw new ImSettingsError("bindingMode must be one of 'manual' | 'independent' | 'shared'");
+    }
+    next.bindingMode = value;
+  }
+  if ("sourceChat" in record) {
+    const parsed = parseChatRef(record["sourceChat"], "sourceChat");
+    if (parsed === void 0) delete next.sourceChat;
+    else next.sourceChat = parsed;
+  }
+  if ("sharedChat" in record) {
+    const parsed = parseChatRef(record["sharedChat"], "sharedChat");
+    if (parsed === void 0) delete next.sharedChat;
+    else next.sharedChat = parsed;
+  }
+  if (record["groupRequireMention"] !== void 0) {
+    if (typeof record["groupRequireMention"] !== "boolean") {
+      throw new ImSettingsError("groupRequireMention must be a boolean");
+    }
+    next.groupRequireMention = record["groupRequireMention"];
+  }
+  if (record["privateMode"] !== void 0) next.privateMode = parseAccessMode(record["privateMode"], "privateMode");
+  if (record["groupMode"] !== void 0) next.groupMode = parseAccessMode(record["groupMode"], "groupMode");
+  if (record["privateAllow"] !== void 0) next.privateAllow = parseStringList(record["privateAllow"], "privateAllow");
+  if (record["groupAllow"] !== void 0) next.groupAllow = parseStringList(record["groupAllow"], "groupAllow");
+  if ("chunkLimit" in record) {
+    const value = record["chunkLimit"];
+    if (value === null) delete next.chunkLimit;
+    else if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) next.chunkLimit = value;
+    else throw new ImSettingsError("chunkLimit must be a positive integer or null");
+  }
+  assertImSettingsUsable(next);
+  return next;
+}
+function assertImSettingsUsable(settings) {
+  if (settings.bindingMode === "independent" && settings.sourceChat === void 0) {
+    throw new ImSettingsError("bindingMode independent requires sourceChat (the character template chat)");
+  }
+  if (settings.bindingMode === "shared" && settings.sharedChat === void 0) {
+    throw new ImSettingsError("bindingMode shared requires sharedChat (the conversation every peer reuses)");
+  }
+}
+
+// packages/plugin/src/im/store.ts
+import { randomUUID as randomUUID12 } from "node:crypto";
+import { promises as fs19 } from "node:fs";
+import { dirname as dirname14, join as join21, resolve as resolve5 } from "node:path";
+var ImStoreError = class extends Error {
+  code;
+  /** 出问题的文件或目录；纯校验错误还没有落盘路径时为 undefined。 */
+  path;
+  constructor(code, message, path12) {
+    super(message);
+    this.name = "ImStoreError";
+    this.code = code;
+    this.path = path12;
+  }
+};
+var ACCOUNTS_VERSION = 1;
+var CHANNEL_IDS = ["qq", "weixin", "onebot"];
+var ACCOUNT_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+var SECRET_FILE_MODE = 384;
+var DEDUPE_WINDOW_MS = 24 * 60 * 60 * 1e3;
+var DEDUPE_COMPACT_THRESHOLD = 5e3;
+var ImStore = class _ImStore {
+  static open(root) {
+    return new _ImStore(root);
+  }
+  root;
+  /** accounts.json 读改写的串行链；某个任务失败也不能掐断后面的任务。 */
+  accountsTail = Promise.resolve();
+  /** dedupe.log 读追加的串行链；同一 key 的并发回包只允许一次未命中。 */
+  dedupeTail = Promise.resolve();
+  /**
+   * dedupe.log 的进程内镜像，首次 seenDedupe 时装载并回收过期条目。
+   * 同一 root 只应有一个长期存活的实例（插件单例）：多实例并存时各自只看到
+   * 自己 append 的 key，去重会退化——重启与测试里的短暂并存不受影响。
+   */
+  dedupeEntries;
+  constructor(root) {
+    this.root = resolve5(root);
+  }
+  /** 清单按 channel、accountId 排序；排序稳定，面板顺序不随写入先后跳动。 */
+  async accounts() {
+    const entries = await this.readAccountsFile();
+    return [...entries].sort(imStoreCompareAccounts);
+  }
+  /**
+   * 登记或替换账号。密钥先落盘再改清单：登记成功的账号一定有可读密钥；
+   * 反过来只会留下一个无人引用的孤儿文件（下次 putAccount 覆盖），不会对外
+   * 宣告一个没有凭据的半残账号。两步同在一把锁里，与同账号的注销线性化。
+   */
+  async putAccount(account, secret) {
+    imStoreAssertAccount(account);
+    imStoreAssertSecretBag(secret);
+    const record = {
+      channel: account.channel,
+      accountId: account.accountId,
+      secret: { ...secret },
+      // 凭据被替换过就重盖时间戳：这个字段回答的是「当前密钥何时写入」。
+      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    await this.serialAccounts(async () => {
+      await imStoreWriteSecret(this.secretPath(account.channel, account.accountId), record);
+      const accounts = await this.readAccountsFile();
+      const next = accounts.filter((entry) => !imStoreSameAccount(entry, account.channel, account.accountId));
+      next.push(imStoreSnapshotAccount(account));
+      next.sort(imStoreCompareAccounts);
+      await imStoreWriteJson(this.accountsPath(), { version: ACCOUNTS_VERSION, accounts: next });
+    });
+  }
+  /** 未知账号返回 undefined；文件存在但内容坏了必须报错，不能当成没配置。 */
+  async readSecret(channel, accountId) {
+    imStoreAssertChannel(channel);
+    imStoreAssertAccountId(accountId);
+    const file = this.secretPath(channel, accountId);
+    const value = await imStoreReadJson(file);
+    if (value === void 0) return void 0;
+    return { ...imStoreParseSecretRecord(value, file, channel, accountId).secret };
+  }
+  /**
+   * 注销账号：先摘清单再删密钥。反过来若清单写失败，会留下一个「已登记但
+   * 没凭据」的账号，适配器会以空配置启动；先摘清单只可能留下孤儿密钥。
+   * 两步与 putAccount 共用一把锁，同账号的「登录中删号」不会留下半残记录。
+   * 已不在清单时仍清理同名密钥（幂等），凭据不应比账号活得更久。
+   */
+  async deleteAccount(channel, accountId) {
+    imStoreAssertChannel(channel);
+    imStoreAssertAccountId(accountId);
+    return this.serialAccounts(async () => {
+      const accounts = await this.readAccountsFile();
+      const next = accounts.filter((entry) => !imStoreSameAccount(entry, channel, accountId));
+      const removed = next.length !== accounts.length;
+      if (removed) {
+        await imStoreWriteJson(this.accountsPath(), { version: ACCOUNTS_VERSION, accounts: next });
+      }
+      await imStoreRemoveFile(this.secretPath(channel, accountId));
+      return removed;
+    });
+  }
+  /** true 表示该 key 已在 24h 窗口内记录过；未记录时顺带记下。 */
+  async seenDedupe(dedupeKey, now) {
+    if (dedupeKey === "") throw new TypeError("dedupeKey \u4E0D\u80FD\u4E3A\u7A7A");
+    if (!Number.isFinite(now)) throw new TypeError(`now \u5FC5\u987B\u662F\u6709\u9650\u65F6\u95F4\u6233\uFF0C\u5B9E\u9645\u4E3A ${String(now)}`);
+    return this.serialDedupe(async () => {
+      const entries = await this.loadDedupe();
+      imStorePruneDedupe(entries, now);
+      if (entries.has(dedupeKey)) return true;
+      entries.set(dedupeKey, now);
+      const file = this.dedupePath();
+      await imStoreEnsureDir(this.root);
+      try {
+        await fs19.appendFile(file, `${JSON.stringify({ key: dedupeKey, at: now })}
+`, "utf8");
+      } catch (cause) {
+        entries.delete(dedupeKey);
+        throw new ImStoreError("IO", `\u8FFD\u52A0\u5931\u8D25: ${file}: ${imStoreReason(cause)}`, file);
+      }
+      if (entries.size > DEDUPE_COMPACT_THRESHOLD) {
+        await imStoreWriteText(file, imStoreSerializeDedupe(entries));
+      }
+      return false;
+    });
+  }
+  async readCursor(accountId) {
+    imStoreAssertAccountId(accountId);
+    const file = this.cursorPath(accountId);
+    const value = await imStoreReadJson(file);
+    if (value === void 0) return void 0;
+    return imStoreParseCursor(value, file);
+  }
+  async writeCursor(accountId, value) {
+    imStoreAssertAccountId(accountId);
+    if (typeof value !== "string") throw new TypeError(`cursor \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\uFF0C\u5B9E\u9645\u4E3A ${typeof value}`);
+    await imStoreWriteJson(this.cursorPath(accountId), { cursor: value });
+  }
+  // ---- 内部：路径 ----
+  accountsPath() {
+    return join21(this.root, "accounts.json");
+  }
+  secretPath(channel, accountId) {
+    return join21(this.root, "secrets", `${channel}-${accountId}.json`);
+  }
+  dedupePath() {
+    return join21(this.root, "dedupe.log");
+  }
+  cursorPath(accountId) {
+    return join21(this.root, "cursors", `${accountId}.json`);
+  }
+  // ---- 内部：串行化 ----
+  serialAccounts(task) {
+    const run = this.accountsTail.then(task, task);
+    this.accountsTail = run.then(imStoreNoop, imStoreNoop);
+    return run;
+  }
+  serialDedupe(task) {
+    const run = this.dedupeTail.then(task, task);
+    this.dedupeTail = run.then(imStoreNoop, imStoreNoop);
+    return run;
+  }
+  // ---- 内部：读取 ----
+  async readAccountsFile() {
+    const file = this.accountsPath();
+    const value = await imStoreReadJson(file);
+    if (value === void 0) return [];
+    return imStoreParseAccountsFile(value, file);
+  }
+  async loadDedupe() {
+    const cached = this.dedupeEntries;
+    if (cached !== void 0) return cached;
+    const file = this.dedupePath();
+    const entries = /* @__PURE__ */ new Map();
+    let text;
+    try {
+      text = await fs19.readFile(file, "utf8");
+    } catch (cause) {
+      if (imStoreIsErrno(cause, "ENOENT")) {
+        this.dedupeEntries = entries;
+        return entries;
+      }
+      throw new ImStoreError("IO", `\u8BFB\u53D6\u5931\u8D25: ${file}: ${imStoreReason(cause)}`, file);
+    }
+    const lines = text.split("\n");
+    for (const [index, raw] of lines.entries()) {
+      const line = raw.trim();
+      if (line === "") continue;
+      let value;
+      try {
+        value = JSON.parse(line);
+      } catch (cause) {
+        throw imStoreCorrupt(file, `\u7B2C ${index + 1} \u884C\u4E0D\u662F JSON: ${imStoreReason(cause)}`);
+      }
+      if (!imStoreIsRecord(value)) throw imStoreCorrupt(file, `\u7B2C ${index + 1} \u884C\u4E0D\u662F\u5BF9\u8C61`);
+      const key = value["key"];
+      if (typeof key !== "string" || key === "") throw imStoreCorrupt(file, `\u7B2C ${index + 1} \u884C key \u975E\u6CD5`);
+      const at = value["at"];
+      if (typeof at !== "number" || !Number.isFinite(at)) throw imStoreCorrupt(file, `\u7B2C ${index + 1} \u884C at \u975E\u6CD5`);
+      const previous = entries.get(key);
+      if (previous === void 0 || at > previous) entries.set(key, at);
+    }
+    this.dedupeEntries = entries;
+    return entries;
+  }
+};
+function imStoreAssertChannel(channel) {
+  if (!imStoreIsChannelId(channel)) {
+    throw new ImStoreError(
+      "BAD_ACCOUNT_ID",
+      `\u672A\u77E5\u901A\u9053 ${JSON.stringify(channel)}\uFF1A\u53EA\u63A5\u53D7 ${CHANNEL_IDS.join("|")}`,
+      void 0
+    );
+  }
+}
+function imStoreAssertAccountId(accountId) {
+  if (!imStoreIsAccountId(accountId)) {
+    throw new ImStoreError(
+      "BAD_ACCOUNT_ID",
+      `\u975E\u6CD5 accountId ${JSON.stringify(accountId)}\uFF1A\u53EA\u5141\u8BB8 [A-Za-z0-9._-]\uFF0C\u4E14\u4E0D\u80FD\u662F . \u6216 ..\uFF08accountId \u4F1A\u62FC\u8FDB\u6587\u4EF6\u540D\uFF09`,
+      void 0
+    );
+  }
+}
+function imStoreAssertAccount(account) {
+  imStoreAssertChannel(account.channel);
+  imStoreAssertAccountId(account.accountId);
+  if (typeof account.createdAt !== "string" || account.createdAt === "") {
+    throw new TypeError(`account.createdAt \u5FC5\u987B\u662F\u975E\u7A7A\u65F6\u95F4\u4E32\uFF0C\u5B9E\u9645\u4E3A ${JSON.stringify(account.createdAt)}`);
+  }
+  if (account.label !== void 0 && typeof account.label !== "string") {
+    throw new TypeError(`account.label \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\uFF0C\u5B9E\u9645\u4E3A ${JSON.stringify(account.label)}`);
+  }
+}
+function imStoreAssertSecretBag(secret) {
+  for (const [key, value] of Object.entries(secret)) {
+    if (typeof value !== "string") throw new TypeError(`secret["${key}"] \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\uFF0C\u5B9E\u9645\u4E3A ${typeof value}`);
+  }
+}
+function imStoreIsChannelId(value) {
+  return typeof value === "string" && CHANNEL_IDS.includes(value);
+}
+function imStoreIsAccountId(value) {
+  if (value === "." || value === "..") return false;
+  return typeof value === "string" && ACCOUNT_ID_PATTERN.test(value);
+}
+function imStoreIsRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function imStoreSameAccount(entry, channel, accountId) {
+  return entry.channel === channel && entry.accountId === accountId;
+}
+function imStoreSnapshotAccount(account) {
+  return account.label === void 0 ? { channel: account.channel, accountId: account.accountId, createdAt: account.createdAt } : { channel: account.channel, accountId: account.accountId, label: account.label, createdAt: account.createdAt };
+}
+function imStoreCompareAccounts(a, b) {
+  if (a.channel !== b.channel) return a.channel < b.channel ? -1 : 1;
+  if (a.accountId !== b.accountId) return a.accountId < b.accountId ? -1 : 1;
+  return 0;
+}
+function imStoreParseAccountsFile(value, file) {
+  if (!imStoreIsRecord(value)) throw imStoreCorrupt(file, "\u9876\u5C42\u4E0D\u662F\u5BF9\u8C61");
+  if (value["version"] !== ACCOUNTS_VERSION) {
+    throw imStoreCorrupt(file, `\u4E0D\u652F\u6301\u7684 version ${JSON.stringify(value["version"])}\uFF08\u671F\u671B ${ACCOUNTS_VERSION}\uFF09`);
+  }
+  const accounts = value["accounts"];
+  if (!Array.isArray(accounts)) throw imStoreCorrupt(file, "accounts \u4E0D\u662F\u6570\u7EC4");
+  return accounts.map((entry, index) => imStoreParseAccountRef(entry, file, index));
+}
+function imStoreParseAccountRef(value, file, index) {
+  const at = `accounts[${index}]`;
+  if (!imStoreIsRecord(value)) throw imStoreCorrupt(file, `${at} \u4E0D\u662F\u5BF9\u8C61`);
+  const channel = value["channel"];
+  if (!imStoreIsChannelId(channel)) throw imStoreCorrupt(file, `${at}.channel \u975E\u6CD5: ${JSON.stringify(channel)}`);
+  const accountId = value["accountId"];
+  if (!imStoreIsAccountId(accountId)) throw imStoreCorrupt(file, `${at}.accountId \u975E\u6CD5: ${JSON.stringify(accountId)}`);
+  const createdAt = value["createdAt"];
+  if (typeof createdAt !== "string") throw imStoreCorrupt(file, `${at}.createdAt \u5FC5\u987B\u662F\u5B57\u7B26\u4E32`);
+  const label = value["label"];
+  if (label !== void 0 && typeof label !== "string") throw imStoreCorrupt(file, `${at}.label \u5FC5\u987B\u662F\u5B57\u7B26\u4E32`);
+  return label === void 0 ? { channel, accountId, createdAt } : { channel, accountId, label, createdAt };
+}
+function imStoreParseSecretRecord(value, file, channel, accountId) {
+  if (!imStoreIsRecord(value)) throw imStoreCorrupt(file, "\u9876\u5C42\u4E0D\u662F\u5BF9\u8C61");
+  if (value["channel"] !== channel || value["accountId"] !== accountId) {
+    throw imStoreCorrupt(
+      file,
+      `\u8BB0\u5F55\u8EAB\u4EFD ${JSON.stringify(value["channel"])}/${JSON.stringify(value["accountId"])} \u4E0E\u6587\u4EF6\u540D ${channel}/${accountId} \u4E0D\u7B26`
+    );
+  }
+  const createdAt = value["createdAt"];
+  if (typeof createdAt !== "string") throw imStoreCorrupt(file, "createdAt \u5FC5\u987B\u662F\u5B57\u7B26\u4E32");
+  const secret = value["secret"];
+  if (!imStoreIsRecord(secret)) throw imStoreCorrupt(file, "secret \u4E0D\u662F\u5BF9\u8C61");
+  const bag = {};
+  for (const [key, entry] of Object.entries(secret)) {
+    if (typeof entry !== "string") throw imStoreCorrupt(file, `secret["${key}"] \u5FC5\u987B\u662F\u5B57\u7B26\u4E32`);
+    bag[key] = entry;
+  }
+  return { channel, accountId, secret: bag, createdAt };
+}
+function imStoreParseCursor(value, file) {
+  if (!imStoreIsRecord(value)) throw imStoreCorrupt(file, "\u9876\u5C42\u4E0D\u662F\u5BF9\u8C61");
+  const cursor = value["cursor"];
+  if (typeof cursor !== "string") throw imStoreCorrupt(file, "cursor \u5FC5\u987B\u662F\u5B57\u7B26\u4E32");
+  return cursor;
+}
+function imStorePruneDedupe(entries, now) {
+  const cutoff = now - DEDUPE_WINDOW_MS;
+  for (const [key, at] of entries) {
+    if (at < cutoff) entries.delete(key);
+  }
+}
+function imStoreSerializeDedupe(entries) {
+  const lines = [];
+  for (const [key, at] of entries) lines.push(JSON.stringify({ key, at }));
+  return lines.length === 0 ? "" : `${lines.join("\n")}
+`;
+}
+function imStoreCorrupt(file, detail) {
+  return new ImStoreError("CORRUPT_FILE", `\u6587\u4EF6\u635F\u574F: ${file}: ${detail}`, file);
+}
+function imStoreReason(cause) {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+function imStoreIsErrno(cause, code) {
+  return typeof cause === "object" && cause !== null && cause.code === code;
+}
+function imStoreNoop() {
+}
+async function imStoreEnsureDir(dir) {
+  try {
+    await fs19.mkdir(dir, { recursive: true });
+  } catch (cause) {
+    throw new ImStoreError("IO", `\u521B\u5EFA\u76EE\u5F55\u5931\u8D25: ${dir}: ${imStoreReason(cause)}`, dir);
+  }
+}
+async function imStoreReadJson(file) {
+  let text;
+  try {
+    text = await fs19.readFile(file, "utf8");
+  } catch (cause) {
+    if (imStoreIsErrno(cause, "ENOENT")) return void 0;
+    throw new ImStoreError("IO", `\u8BFB\u53D6\u5931\u8D25: ${file}: ${imStoreReason(cause)}`, file);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (cause) {
+    throw imStoreCorrupt(file, `JSON \u89E3\u6790\u5931\u8D25: ${imStoreReason(cause)}`);
+  }
+}
+async function imStoreRemoveFile(file) {
+  try {
+    await fs19.unlink(file);
+  } catch (cause) {
+    if (imStoreIsErrno(cause, "ENOENT")) return;
+    throw new ImStoreError("IO", `\u5220\u9664\u5931\u8D25: ${file}: ${imStoreReason(cause)}`, file);
+  }
+}
+async function imStoreWriteFile(file, text, mode) {
+  await imStoreEnsureDir(dirname14(file));
+  const tmp = `${file}.tmp-${randomUUID12()}`;
+  try {
+    await fs19.writeFile(tmp, text, mode === void 0 ? { encoding: "utf8" } : { encoding: "utf8", mode });
+    await fs19.rename(tmp, file);
+  } catch (cause) {
+    await fs19.rm(tmp, { force: true }).catch(() => void 0);
+    throw new ImStoreError("IO", `\u5199\u5165\u5931\u8D25: ${file}: ${imStoreReason(cause)}`, file);
+  }
+}
+async function imStoreWriteText(file, text) {
+  await imStoreWriteFile(file, text, void 0);
+}
+async function imStoreWriteJson(file, value) {
+  await imStoreWriteText(file, `${JSON.stringify(value, null, 2)}
+`);
+}
+async function imStoreWriteSecret(file, record) {
+  await imStoreWriteFile(file, `${JSON.stringify(record, null, 2)}
+`, SECRET_FILE_MODE);
+  if (process.platform === "win32") return;
+  try {
+    await fs19.chmod(file, SECRET_FILE_MODE);
+    const stats = await fs19.stat(file);
+    const mode = stats.mode & 511;
+    if (mode !== SECRET_FILE_MODE) {
+      throw new ImStoreError(
+        "SECRET_PERMISSION",
+        `\u5BC6\u94A5\u6587\u4EF6\u6743\u9650\u5F02\u5E38: ${file}: \u671F\u671B 0600\uFF0C\u5B9E\u9645 0${mode.toString(8)}`,
+        file
+      );
+    }
+  } catch (cause) {
+    if (cause instanceof ImStoreError) throw cause;
+    throw new ImStoreError("IO", `\u6821\u9A8C\u5BC6\u94A5\u6743\u9650\u5931\u8D25: ${file}: ${imStoreReason(cause)}`, file);
+  }
+}
 
 // packages/plugin/src/http/im.ts
 init_errors();
@@ -47237,8 +47640,52 @@ async function handleImApi(req, res, url, route, method, db, runtime) {
       reasons: disabled ? ["DSH_SOULMOJITO_DISABLE_IM is set"] : runtime?.capabilities.reasons ?? ["IM runtime was not mounted in this host process"],
       settings: state.imSettings ?? DEFAULT_IM_SETTINGS,
       peers: peerRows(state.imPeers),
-      channels: runtime?.views() ?? []
+      // 账号清单是 store 的事实、状态是运行时的投影：只列内存通道会让重启前的
+      // 账号在面板上凭空消失，也会让「已配置但未连上」显示成不存在。
+      channels: await channelViews(runtime, state.imPeers)
     });
+  }
+  if (method === "POST" && route === "im/accounts") {
+    if (runtime === void 0) throw new HttpError(503, "IM runtime is not available in this host process");
+    const body = await readJson(req);
+    const channel = parseChannel(body.channel);
+    const accountId = requireId(body.accountId, "accountId");
+    const secret = parseSecretBag(body.secret);
+    const label = optionalLabel(body.label);
+    const accounts = await ImStore.open(tavernDataRoot("im")).accounts();
+    const existing = accounts.find((entry) => entry.channel === channel && entry.accountId === accountId);
+    const effectiveLabel = label ?? existing?.label;
+    const account = {
+      channel,
+      accountId,
+      ...effectiveLabel === void 0 ? {} : { label: effectiveLabel },
+      createdAt: existing?.createdAt ?? (/* @__PURE__ */ new Date()).toISOString()
+    };
+    try {
+      await runtime.upsertAccount(account, secret);
+    } catch (error) {
+      if (error instanceof ImStoreError) throw new HttpError(400, error.message);
+      if (error instanceof ImChannelUnsupportedError) throw new HttpError(501, error.message);
+      if (error instanceof OneBotError) throw new HttpError(400, error.message);
+      throw error;
+    }
+    return sendJson(res, 200, { ok: true, account });
+  }
+  if (method === "DELETE" && route === "im/accounts") {
+    if (runtime === void 0) throw new HttpError(503, "IM runtime is not available in this host process");
+    const channel = parseChannel(url.searchParams.get("channel"));
+    const accountId = requireId(url.searchParams.get("accountId"), "accountId");
+    const removed = await runtime.removeAccount(channel, accountId);
+    if (!removed) {
+      return sendJson(res, 404, { ok: false, message: `no IM account ${channel}/${accountId}` });
+    }
+    return sendJson(res, 200, { ok: true });
+  }
+  if (method === "POST" && route === "im/onebot/webhook") {
+    if (runtime === void 0) throw new HttpError(503, "IM runtime is not available in this host process");
+    const handled = await runtime.handleOneBotWebhook(req, res);
+    if (!handled) return sendJson(res, 401, { ok: false, message: "no OneBot account accepts this token" });
+    return;
   }
   if (method === "POST" && route === "im/settings") {
     const body = await readJson(req);
@@ -47295,6 +47742,53 @@ async function handleImApi(req, res, url, route, method, db, runtime) {
 }
 function peerRows(peers) {
   return Object.entries(peers ?? {}).map(([key, binding]) => ({ key, ...binding })).sort((left, right) => left.key.localeCompare(right.key));
+}
+async function channelViews(runtime, peers) {
+  const accounts = await ImStore.open(tavernDataRoot("im")).accounts();
+  const live = /* @__PURE__ */ new Map();
+  for (const view of runtime?.views() ?? []) live.set(imAccountKey(view.channel, view.accountId), view);
+  const rows = [];
+  for (const account of accounts) {
+    const key = imAccountKey(account.channel, account.accountId);
+    const view = live.get(key);
+    live.delete(key);
+    rows.push({
+      channel: account.channel,
+      accountId: account.accountId,
+      ...account.label === void 0 ? {} : { label: account.label },
+      status: view?.status ?? { state: "idle" },
+      peers: peerCount(peers, account.channel, account.accountId)
+    });
+  }
+  rows.push(...live.values());
+  return rows;
+}
+function peerCount(peers, channel, accountId) {
+  let count = 0;
+  for (const key of Object.keys(peers ?? {})) {
+    const parts = imPeerKeyParts(key);
+    if (parts !== void 0 && parts.channel === channel && parts.accountId === accountId) count += 1;
+  }
+  return count;
+}
+function imAccountKey(channel, accountId) {
+  return `${channel}:${accountId}`;
+}
+function parseSecretBag(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new HttpError(400, "secret must be an object of string values");
+  }
+  const bag = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== "string") throw new HttpError(400, `secret.${key} must be a string`);
+    bag[key] = entry;
+  }
+  return bag;
+}
+function optionalLabel(value) {
+  if (value === void 0 || value === null) return void 0;
+  if (typeof value !== "string" || value.trim() === "") throw new HttpError(400, "label must be a non-empty string");
+  return value.trim();
 }
 function parseChannel(value) {
   if (typeof value !== "string" || !CHANNELS.includes(value)) {
@@ -51298,7 +51792,7 @@ async function handleApi(ctx, req, res) {
     if (typeof body.sessionId !== "string") throw new Error("expected { sessionId, selection }");
     const sessionId = body.sessionId;
     let selection = null;
-    const selectionBody = asRecord7(body.selection);
+    const selectionBody = asRecord6(body.selection);
     if (selectionBody !== void 0) {
       if (typeof selectionBody["provider"] !== "string" || typeof selectionBody["model"] !== "string") {
         throw new Error("selection must be { provider, model, reasoningEffort? }");
@@ -51393,7 +51887,7 @@ async function handleApi(ctx, req, res) {
   }
   if (method === "POST" && route === "import/world") {
     const body = await readJson(req);
-    const data = asRecord7(body.data);
+    const data = asRecord6(body.data);
     if (typeof body.name !== "string" || data === void 0) throw new Error("expected { name, data }");
     const book = await db.importWorldFile(body.name, data);
     await emitAssetsSaved("world", book.name);
@@ -51401,7 +51895,7 @@ async function handleApi(ctx, req, res) {
   }
   if (method === "POST" && route === "import/preset") {
     const body = await readJson(req);
-    const data = asRecord7(body.data);
+    const data = asRecord6(body.data);
     if (typeof body.name !== "string" || data === void 0) throw new Error("expected { name, data }");
     parsePresetOrThrow(data);
     const result = await db.importPreset(body.name, data);
@@ -51418,7 +51912,7 @@ async function handleApi(ctx, req, res) {
   if (method === "PUT" && route.startsWith("preset/")) {
     const oldName = decodeURIComponent(route.slice("preset/".length));
     const body = await readJson(req, 10 * 1024 * 1024);
-    const data = asRecord7(body.data);
+    const data = asRecord6(body.data);
     if (typeof body.name !== "string" || body.name.trim() === "" || data === void 0) {
       throw new Error("expected { name, data }");
     }
@@ -51643,8 +52137,8 @@ async function handleApi(ctx, req, res) {
     const found = await db.getCharacter(character);
     if (!found) throw new Error(`character '${character}' not found`);
     const seedVariables = (() => {
-      const holder = asRecord7(found.card.data.extensions.agentTavern);
-      const initial = asRecord7(holder?.["initialVariables"]);
+      const holder = asRecord6(found.card.data.extensions.agentTavern);
+      const initial = asRecord6(holder?.["initialVariables"]);
       if (initial === void 0 || Object.keys(initial).length === 0) return void 0;
       return structuredClone(initial);
     })();
@@ -51760,7 +52254,7 @@ async function handleApi(ctx, req, res) {
   if (method === "PUT" && route.startsWith("world/")) {
     const oldName = decodeURIComponent(route.slice("world/".length));
     const body = await readJson(req, 10 * 1024 * 1024);
-    const data = asRecord7(body.data);
+    const data = asRecord6(body.data);
     if (typeof body.name !== "string" || body.name.trim() === "" || data === void 0) {
       throw new Error("expected { name, data }");
     }
@@ -52354,7 +52848,7 @@ async function projectedBodyFloor(chat, messageId, groupIdHint, selectedIndexHin
   }
   if (index === void 0) return { ok: true, floor: void 0 };
   const floor = chat.messages[index];
-  const tavern = asRecord7(asRecord7(floor.extra)?.["agentTavern"]);
+  const tavern = asRecord6(asRecord6(floor.extra)?.["agentTavern"]);
   const scripts = await readScripts();
   const selectedSwipe = selectedIndexHint === void 0 ? floor : Array.isArray(floor.swipes) && typeof floor.swipes[selectedIndexHint] === "string" ? { ...floor, mes: floor.swipes[selectedIndexHint] } : void 0;
   const text = selectedSwipe === void 0 ? void 0 : stripFrontendDocuments(displayTextForMessage(scripts, selectedSwipe, chat.messages.length - 1 - index));
@@ -52412,17 +52906,896 @@ function bodyProjectionState(projected, ledger, latestEditSeq) {
   const selectionCurrent = (projected.anchorMessageId === void 0 || projected.anchorMessageId === ledger.anchorMessageId) && (projected.selectedIndex === void 0 || projected.selectedIndex === ledger.selectedIndex);
   return { current: textCurrent && selectionCurrent, textCurrent };
 }
-function asRecord7(value) {
+function asRecord6(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
 }
 function asChatLog(value) {
-  const record = asRecord7(value);
+  const record = asRecord6(value);
   if (record === void 0) return void 0;
-  const header = asRecord7(record["header"]);
+  const header = asRecord6(record["header"]);
   if (header === void 0) return void 0;
   if (typeof header["user_name"] !== "string" || typeof header["character_name"] !== "string") return void 0;
   if (!Array.isArray(record["messages"])) return void 0;
   return value;
+}
+
+// packages/plugin/src/im/runtime.ts
+init_dsh_home();
+init_handle2();
+
+// packages/plugin/src/im/onebot/seat.ts
+init_handle2();
+var ONEBOT_SEAT_KEY = "dsh-soulmojito:im-onebot-upgrade-seat";
+var seatSymbol = Symbol.for(ONEBOT_SEAT_KEY);
+function ensureOneBotUpgradeSeat(host, path12) {
+  if (host === void 0 || typeof host.registerUpgrade !== "function") {
+    return {
+      registered: false,
+      reason: "the host exposes no webServer.registerUpgrade; OneBot reverse WebSocket is unavailable (HTTP POST webhook still works)"
+    };
+  }
+  const holder = globalThis;
+  if (holder[seatSymbol]?.path === path12) return { registered: true };
+  try {
+    host.registerUpgrade.call(host, {
+      path: path12,
+      handler: (req, socket, head) => dispatchUpgrade(req, socket, head)
+    });
+  } catch (error) {
+    return {
+      registered: false,
+      reason: `registering the OneBot upgrade route at ${path12} failed: ${error instanceof Error ? error.message : String(error)}`
+    };
+  }
+  holder[seatSymbol] = { path: path12 };
+  return { registered: true };
+}
+function dispatchUpgrade(req, socket, head) {
+  const runtime = resolveImRuntime();
+  const handler = runtime?.handleOneBotUpgrade;
+  if (handler === void 0) {
+    rejectUpgrade2(socket, "IM runtime is not available; the OneBot endpoint is closed");
+    return;
+  }
+  void Promise.resolve(handler(req, socket, head)).catch(() => {
+    rejectUpgrade2(socket, "OneBot upgrade handling failed");
+  });
+}
+function rejectUpgrade2(socket, reason) {
+  const duplex = socket;
+  if (duplex.destroyed) return;
+  try {
+    duplex.write(`HTTP/1.1 503 Service Unavailable\r
+Connection: close\r
+Content-Length: ${Buffer.byteLength(reason)}\r
+\r
+${reason}`);
+  } finally {
+    duplex.destroy();
+  }
+}
+
+// packages/plugin/src/im/router.ts
+import { randomUUID as randomUUID15 } from "node:crypto";
+
+// packages/plugin/src/im/project.ts
+var IM_EMPTY_REPLY = "\uFF08\u65E0\u6587\u672C\u56DE\u590D\uFF09";
+var ImProjectError = class extends Error {
+  code = "IM_PROJECT_INVALID";
+  constructor(message) {
+    super(message);
+    this.name = "ImProjectError";
+  }
+};
+function projectImText(displayText, channel, limit) {
+  assertLimit(limit);
+  const collapsed = stripFrontendDocuments(displayText);
+  const normalized = channel === "weixin" ? stripWeixinMarkdown(collapsed) : collapsed;
+  const text = normalizeBlankLines(normalized);
+  if (text === "") return [IM_EMPTY_REPLY];
+  const parts = channel === "qq" ? chunkMarkdown(text, limit) : chunkParagraphs(text, limit);
+  return parts.length === 0 ? [IM_EMPTY_REPLY] : parts;
+}
+function assertLimit(limit) {
+  if (!Number.isSafeInteger(limit) || limit <= 0) {
+    throw new ImProjectError(`chunk limit must be a positive integer, received ${String(limit)}`);
+  }
+}
+function normalizeBlankLines(text) {
+  return text.replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n").trim();
+}
+function stripWeixinMarkdown(text) {
+  const lines = text.split("\n");
+  let fence = false;
+  const out = [];
+  for (const line of lines) {
+    if (/^\s*```/.test(line)) {
+      fence = !fence;
+      out.push(line);
+      continue;
+    }
+    if (fence) {
+      out.push(line);
+      continue;
+    }
+    let next = line.replace(/!\[[^\]]*\]\([^)]*\)/g, "").replace(/^\s{0,3}#{1,6}\s+/, "").replace(/~~([^~]+)~~/g, "$1").replace(/\*\*\*([^*]+)\*\*\*/g, "$1").replace(/\*\*([^*]+)\*\*/g, "$1").replace(/\*([^*\n]+)\*/g, "$1").replace(/___([^_]+)___/g, "$1").replace(/__([^_]+)__/g, "$1").replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,!?]|$)/g, "$1$2").replace(/`([^`\n]+)`/g, "$1").replace(/^\s{0,3}>\s?/, "");
+    next = next.replace(/[ \t]+$/, "");
+    out.push(next);
+  }
+  return out.join("\n");
+}
+function chunkMarkdown(text, limit) {
+  assertLimit(limit);
+  const lines = text.split("\n");
+  const parts = [];
+  let buffer = [];
+  let bufferLength = 0;
+  let fenceInfo;
+  const flush = (reopen) => {
+    if (buffer.length === 0) return;
+    const body = buffer.join("\n");
+    if (reopen && fenceInfo !== void 0) {
+      parts.push(`${body}
+\`\`\``);
+      buffer = [`\`\`\`${fenceInfo}`];
+      bufferLength = 3 + fenceInfo.length;
+      return;
+    }
+    parts.push(body);
+    buffer = [];
+    bufferLength = 0;
+  };
+  for (const line of lines) {
+    const fenceMatch = /^\s*```(.*)$/.exec(line);
+    const isFence = fenceMatch !== null;
+    const cost = line.length + (buffer.length === 0 ? 0 : 1);
+    if (bufferLength + cost > limit && buffer.length > 0) {
+      const keepFence = fenceInfo !== void 0;
+      flush(keepFence);
+    }
+    if (line.length > limit && buffer.length === 0) {
+      for (const piece of hardSplit(line, limit)) parts.push(piece);
+      bufferLength = 0;
+      continue;
+    }
+    buffer.push(line);
+    bufferLength += cost;
+    if (isFence) {
+      if (fenceInfo === void 0) fenceInfo = fenceMatch[1] ?? "";
+      else fenceInfo = void 0;
+    }
+  }
+  flush(false);
+  return parts.map((part) => part.trim()).filter((part) => part !== "");
+}
+function chunkParagraphs(text, limit) {
+  assertLimit(limit);
+  const paragraphs = text.split(/\n{2,}/);
+  const parts = [];
+  let buffer = "";
+  for (const paragraph of paragraphs) {
+    const trimmed = paragraph.trim();
+    if (trimmed === "") continue;
+    const candidate = buffer === "" ? trimmed : `${buffer}
+
+${trimmed}`;
+    if (candidate.length <= limit) {
+      buffer = candidate;
+      continue;
+    }
+    if (buffer !== "") {
+      parts.push(buffer);
+      buffer = "";
+    }
+    if (trimmed.length <= limit) {
+      buffer = trimmed;
+      continue;
+    }
+    const pieces = hardSplit(trimmed, limit);
+    for (const piece of pieces.slice(0, -1)) parts.push(piece);
+    buffer = pieces[pieces.length - 1] ?? "";
+  }
+  if (buffer !== "") parts.push(buffer);
+  return parts;
+}
+function hardSplit(text, limit) {
+  const pieces = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    let end = Math.min(cursor + limit, text.length);
+    const code = text.charCodeAt(end - 1);
+    if (end < text.length && code >= 55296 && code <= 56319) end -= 1;
+    if (end <= cursor) end = Math.min(cursor + limit, text.length);
+    pieces.push(text.slice(cursor, end));
+    cursor = end;
+  }
+  return pieces;
+}
+
+// packages/plugin/src/im/reply.ts
+var PendingOrigins = class {
+  bySession = /* @__PURE__ */ new Map();
+  options;
+  constructor(options) {
+    this.options = options;
+  }
+  remember(sessionId, messageId, peerKey, target, now) {
+    this.prune(now);
+    const list = this.bySession.get(sessionId) ?? [];
+    list.push({ messageId, peerKey, target, at: now });
+    while (list.length > this.options.maxPerSession) list.shift();
+    this.bySession.set(sessionId, list);
+  }
+  /**
+   * 按本轮出现过的 user message id 解析来源。命中即删除（一轮只回一次），
+   * 同时清掉本轮其它命中项——它们的内容已并入同一轮，再各回一次会刷屏。
+   */
+  resolve(sessionId, messageIds, now) {
+    this.prune(now);
+    const list = this.bySession.get(sessionId);
+    if (list === void 0 || list.length === 0) return void 0;
+    const wanted = new Set(messageIds);
+    const first = list.find((entry) => wanted.has(entry.messageId));
+    if (first === void 0) return void 0;
+    const remaining = list.filter((entry) => entry !== first && !wanted.has(entry.messageId));
+    if (remaining.length === 0) this.bySession.delete(sessionId);
+    else this.bySession.set(sessionId, remaining);
+    return first;
+  }
+  forgetSession(sessionId) {
+    this.bySession.delete(sessionId);
+  }
+  pendingCount(sessionId) {
+    return this.bySession.get(sessionId)?.length ?? 0;
+  }
+  prune(now) {
+    for (const [sessionId, list] of this.bySession) {
+      const alive = list.filter((entry) => now - entry.at <= this.options.ttlMs);
+      if (alive.length === 0) this.bySession.delete(sessionId);
+      else if (alive.length !== list.length) this.bySession.set(sessionId, alive);
+    }
+  }
+};
+function userMessageIdsOfTurn(events, turn) {
+  const ids = [];
+  for (const event of events) {
+    if (event.type !== "user/message") continue;
+    if (turnOf2(event) !== turn) continue;
+    const id = messageIdOf4(event.data);
+    if (id !== void 0) ids.push(id);
+  }
+  return ids;
+}
+function assistantTextOfTurn(events, turn) {
+  let text;
+  for (const event of events) {
+    if (event.type !== "assistant/message") continue;
+    if (turnOf2(event) !== turn) continue;
+    const candidate = assistantTextOf(event.data);
+    if (candidate !== void 0 && candidate.trim() !== "") text = candidate;
+  }
+  return text;
+}
+function turnFailedOf(events, turn) {
+  for (const event of events) {
+    if (event.type !== "turn/end") continue;
+    if (turnOf2(event) !== turn) continue;
+    const reason = asRecord7(event.data?.["reason"]);
+    return reason?.["kind"] === "error";
+  }
+  return false;
+}
+function turnOf2(event) {
+  const value = event.data?.["turn"];
+  return typeof value === "number" && Number.isSafeInteger(value) ? value : void 0;
+}
+function messageIdOf4(data) {
+  const id = data?.["id"];
+  return typeof id === "string" && id !== "" ? id : void 0;
+}
+function assistantTextOf(data) {
+  const message = asRecord7(data?.["message"]);
+  const content = message?.["content"];
+  if (!Array.isArray(content)) return void 0;
+  const parts = [];
+  for (const block of content) {
+    const entry = asRecord7(block);
+    if (entry?.["type"] !== "text") continue;
+    const text = entry["text"];
+    if (typeof text === "string" && text !== "") parts.push(text);
+  }
+  return parts.length === 0 ? void 0 : parts.join("\n");
+}
+function asRecord7(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
+}
+
+// packages/plugin/src/im/session-host.ts
+import { randomUUID as randomUUID14 } from "node:crypto";
+var ImSessionError = class extends Error {
+  code;
+  constructor(code, message) {
+    super(message);
+    this.name = "ImSessionError";
+    this.code = code;
+  }
+};
+function inspectImSessionCapabilities(agents, presets) {
+  const reasons = [];
+  if (agents === void 0) {
+    reasons.push("the host exposes no agents service");
+  } else if (typeof agents.create !== "function" && typeof agents.resume !== "function") {
+    reasons.push("the host agents service exposes neither create nor resume");
+  }
+  if (presets === void 0 || typeof presets.mount !== "function") {
+    reasons.push("the host cannot mount an agent preset (agentPresets.mount is missing)");
+  }
+  return { available: reasons.length === 0, reasons };
+}
+function mintImSessionId() {
+  return `session-${randomUUID14()}`;
+}
+async function ensureImSession(deps, request) {
+  const capability = inspectImSessionCapabilities(deps.agents, deps.presets);
+  if (!capability.available) {
+    throw new ImSessionError("IM_SESSION_UNAVAILABLE", `IM sessions are unavailable: ${capability.reasons.join("; ")}`);
+  }
+  const chat = request.mode === "shared" ? request.sharedChat : request.sourceChat;
+  if (chat === void 0) {
+    throw new ImSessionError("IM_SOURCE_MISSING", request.mode === "shared" ? "shared mode requires the configured shared chat" : "independent mode requires the configured source chat");
+  }
+  if (request.mode === "shared") {
+    if (request.existingSessionId !== void 0) {
+      return bindImChat(deps, chat, request.existingSessionId);
+    }
+    return bindImChat(deps, chat, void 0);
+  }
+  if (request.existingSessionId !== void 0) {
+    throw new ImSessionError("IM_SESSION_UNAVAILABLE", "independent mode always mints a new session; existingSessionId is only valid for shared mode");
+  }
+  const chatId = await createChatFromSource(deps, chat);
+  const createdChat = await deps.db.getChat(chat.character, chatId);
+  if (createdChat === void 0) {
+    throw new ImSessionError("IM_CHAT_MISSING", `IM chat ${chat.character}/${chatId} vanished right after creation; the opening greeting cannot be imported`);
+  }
+  const sessionId = mintImSessionId();
+  const agent = await ensureImAgent(deps, sessionId);
+  await deps.bind(sessionId, chat.character, chatId);
+  await importChatHistory(deps, agent, createdChat, chat.character, chatId, sessionId);
+  await deps.presetChanged();
+  return { sessionId, character: chat.character, chatId };
+}
+async function bindImChat(deps, chat, existingSessionId) {
+  const capability = inspectImSessionCapabilities(deps.agents, deps.presets);
+  if (!capability.available) {
+    throw new ImSessionError("IM_SESSION_UNAVAILABLE", `IM sessions are unavailable: ${capability.reasons.join("; ")}`);
+  }
+  const chatId = await requireExistingChat(deps, chat);
+  const existingChat = await deps.db.getChat(chat.character, chatId);
+  if (existingChat === void 0) {
+    throw new ImSessionError("IM_CHAT_MISSING", `chat ${chat.character}/${chatId} disappeared while binding`);
+  }
+  const sessionId = existingSessionId ?? mintImSessionId();
+  const agent = await ensureImAgent(deps, sessionId);
+  await deps.bind(sessionId, chat.character, chatId);
+  await importChatHistory(deps, agent, existingChat, chat.character, chatId, sessionId);
+  await deps.presetChanged();
+  return { sessionId, character: chat.character, chatId };
+}
+async function requireExistingChat(deps, chat) {
+  const snapshot2 = await deps.db.getChatSnapshot(chat.character, chat.chatId);
+  if (snapshot2 === void 0) {
+    throw new ImSessionError("IM_CHAT_MISSING", `shared chat ${chat.character}/${chat.chatId} no longer exists`);
+  }
+  return chat.chatId;
+}
+async function createChatFromSource(deps, source) {
+  const found = await deps.db.getCharacter(source.character);
+  if (found === void 0) {
+    throw new ImSessionError("IM_SOURCE_MISSING", `source character ${source.character} no longer exists`);
+  }
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const card = found.card;
+  const seedVariables = (() => {
+    const holder = card.data.extensions?.["agentTavern"];
+    if (typeof holder !== "object" || holder === null) return void 0;
+    const initial = holder["initialVariables"];
+    if (typeof initial !== "object" || initial === null || Array.isArray(initial)) return void 0;
+    const entries = Object.entries(initial);
+    return entries.length === 0 ? void 0 : Object.fromEntries(entries);
+  })();
+  const variablesSeed = seedVariables ?? {};
+  const mvuSeeded = seedJsrMvuVariables(card, { ...variablesSeed });
+  const greetings = [card.data.firstMes, ...card.data.alternateGreetings];
+  const chatId = await deps.db.createChat(source.character, {
+    user_name: "unused",
+    character_name: "unused",
+    chat_metadata: {
+      character: source.character,
+      createdAt: now,
+      timedWorldInfo: {},
+      ...seedVariables !== void 0 || mvuSeeded ? { variables: variablesSeed } : {}
+    }
+  }, [{
+    name: card.data.nickname || card.data.name,
+    is_user: false,
+    is_system: false,
+    send_date: now,
+    mes: greetings[0] ?? ""
+  }]);
+  return chatId;
+}
+async function importChatHistory(deps, agent, chat, character, chatId, sessionId) {
+  const live = agent ?? {};
+  const events = readSessionEvents(live.session);
+  if (events !== void 0 && events.some((event) => event.type === "turn/start")) return;
+  const state = await deps.db.getState();
+  const found = await deps.db.getCharacter(character);
+  const scripts = await collectSessionRegexScripts(deps.db, state, character, chatId, found);
+  const plan = historyImportAppends(chat, sessionId, scripts, tavernMacroExpand(state, character, found), live.session);
+  applyAgentTavernHistoryImport({
+    agent: live,
+    plan,
+    ...deps.logger === void 0 ? {} : { logger: deps.logger }
+  });
+}
+async function ensureImAgent(deps, sessionId) {
+  const live = deps.agents?.get?.(sessionId);
+  if (live !== void 0 && live !== null) return live;
+  const presets = deps.presets;
+  if (presets === void 0 || typeof presets.mount !== "function") {
+    throw new ImSessionError("IM_SESSION_UNAVAILABLE", "the host cannot mount an agent preset");
+  }
+  await deps.ensurePreset();
+  const workspace = await deps.workspace();
+  const setup = async (agentContext) => {
+    await presets.mount?.(agentContext, deps.presetId);
+  };
+  if (typeof deps.agents?.resume === "function") {
+    try {
+      const resumed = await deps.agents.resume({ resumeSessionId: sessionId, setup });
+      return resumed.agent;
+    } catch (error) {
+      deps.logger?.warn?.(`dsh-soulmojito im: resume ${sessionId} failed, creating a new session: ${messageOf7(error)}`);
+    }
+  }
+  if (typeof deps.agents?.create !== "function") {
+    throw new ImSessionError("IM_SESSION_UNAVAILABLE", "the host agents service exposes neither create nor resume");
+  }
+  const created = await deps.agents.create({
+    sessionId,
+    meta: { cwd: workspace, agentPreset: deps.presetId },
+    setup
+  });
+  return created.agent;
+}
+function messageOf7(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function imUnboundMessage(peerKey) {
+  return `\u8FD9\u4E2A\u4F1A\u8BDD\u8FD8\u6CA1\u6709\u7ED1\u5B9A\uFF1A${peerKey}\u3002\u8BF7\u5728 DSH-SoulMojito \u9762\u677F\u7684\u300C\u804A\u5929\u6E20\u9053\u300D\u91CC\u7ED1\u5B9A\u4E00\u4E2A\u804A\u5929\u3002`;
+}
+
+// packages/plugin/src/im/router.ts
+var IM_TURN_FAILED = "\uFF08\u8FD9\u4E00\u8F6E\u6CA1\u6709\u751F\u6210\u6210\u529F\uFF0C\u7A0D\u540E\u518D\u8BD5\uFF09";
+var ImSendError = class extends Error {
+  code;
+  constructor(code, message, options) {
+    super(message, options);
+    this.name = "ImSendError";
+    this.code = code;
+  }
+};
+var UNBOUND_NOTICE_TTL_MS = 10 * 6e4;
+function createImRouter(deps) {
+  const origins = new PendingOrigins({ ttlMs: 10 * 6e4, maxPerSession: 200 });
+  const noticed = /* @__PURE__ */ new Map();
+  async function settingsOf() {
+    const state = await deps.db.getState();
+    return state.imSettings ?? DEFAULT_IM_SETTINGS;
+  }
+  async function inbound(inboundMessage) {
+    const now = deps.now();
+    if (await deps.seenDedupe(inboundMessage.dedupeKey, now)) return;
+    const settings = await settingsOf();
+    if (!imAccessAllows(settings, inboundMessage.scope, inboundMessage.peerId)) {
+      deps.logger?.warn?.(`dsh-soulmojito im: dropped ${inboundMessage.channel}/${inboundMessage.peerId} (access policy)`);
+      return;
+    }
+    const target = {
+      channel: inboundMessage.channel,
+      accountId: inboundMessage.accountId,
+      scope: inboundMessage.scope,
+      peerId: inboundMessage.peerId,
+      ...inboundMessage.replyTo === void 0 ? {} : { replyTo: inboundMessage.replyTo }
+    };
+    const text = imUserTextOf(inboundMessage);
+    if (text === void 0) return;
+    const peerKey = imPeerKey(inboundMessage.channel, inboundMessage.accountId, inboundMessage.scope, inboundMessage.peerId);
+    const binding = await resolveBinding(peerKey, inboundMessage.scope, settings);
+    if (binding === void 0) {
+      await notifyUnbound(target, peerKey, now);
+      return;
+    }
+    const messageId = `im-${randomUUID15()}`;
+    origins.remember(binding.sessionId, messageId, peerKey, target, now);
+    try {
+      await deps.followup(binding.sessionId, { id: messageId, text });
+    } catch (error) {
+      origins.forgetSession(binding.sessionId);
+      deps.logger?.warn?.(`dsh-soulmojito im: followup to ${binding.sessionId} failed: ${messageOf8(error)}`);
+      await sendNotice(target, IM_TURN_FAILED);
+    }
+  }
+  async function resolveBinding(peerKey, scope, settings) {
+    const state = await deps.db.getState();
+    const existing = state.imPeers?.[peerKey];
+    if (existing !== void 0) return existing;
+    if (settings.bindingMode === "manual") return void 0;
+    const request = {
+      mode: settings.bindingMode,
+      peerKey,
+      ...settings.sourceChat === void 0 ? {} : { sourceChat: settings.sourceChat },
+      ...settings.sharedChat === void 0 ? {} : { sharedChat: settings.sharedChat },
+      ...sharedSessionOf(state.imPeers, settings)
+    };
+    const result = await deps.ensureSession(request);
+    const binding = {
+      sessionId: result.sessionId,
+      character: result.character,
+      chatId: result.chatId,
+      scope,
+      boundBy: "auto",
+      createdAt: new Date(deps.now()).toISOString()
+    };
+    await deps.db.updateState((current) => ({
+      imPeers: { ...current.imPeers ?? {}, [peerKey]: binding }
+    }));
+    return binding;
+  }
+  async function finishTurn(sessionId, turn, events) {
+    const now = deps.now();
+    const origin = origins.resolve(sessionId, userMessageIdsOfTurn(events, turn), now);
+    if (origin === void 0) return;
+    if (turnFailedOf(events, turn)) {
+      await sendNotice(origin.target, IM_TURN_FAILED);
+      return;
+    }
+    const text = assistantTextOfTurn(events, turn);
+    if (text === void 0) return;
+    const settings = await settingsOf();
+    const rendered = await deps.render(origin.target, text);
+    const parts = projectImText(rendered, origin.target.channel, imChunkLimit(origin.target.channel, settings));
+    await deps.send(origin.target, parts.map((part, index) => ({
+      kind: "text",
+      text: part,
+      index,
+      total: parts.length
+    })));
+  }
+  async function sendText(peerKey, text) {
+    const body = text.trim();
+    if (body === "") {
+      throw new ImSendError("IM_SEND_INVALID", "IM text is empty after trimming whitespace");
+    }
+    const parts = imPeerKeyParts(peerKey);
+    if (parts === void 0) {
+      throw new ImSendError("IM_SEND_INVALID_TARGET", `malformed IM peer key '${peerKey}'; expected '<channel>:<accountId>:<scope>:<peerId>'`);
+    }
+    const channel = channelOf(parts.channel);
+    if (channel === void 0) {
+      throw new ImSendError("IM_SEND_INVALID_TARGET", `IM peer key '${peerKey}' names unknown channel '${parts.channel}'`);
+    }
+    const scope = parts.scope === "private" || parts.scope === "group" ? parts.scope : void 0;
+    if (scope === void 0) {
+      throw new ImSendError("IM_SEND_INVALID_TARGET", `IM peer key '${peerKey}' names unknown scope '${parts.scope}'`);
+    }
+    const state = await deps.db.getState();
+    if (state.imPeers?.[peerKey] === void 0) {
+      throw new ImSendError("IM_SEND_UNBOUND", `IM peer '${peerKey}' has no binding; bind it in the DSH-SoulMojito IM panel first`);
+    }
+    const settings = state.imSettings ?? DEFAULT_IM_SETTINGS;
+    const target = {
+      channel,
+      accountId: parts.accountId,
+      scope,
+      peerId: parts.peerId
+    };
+    const chunks = projectImText(body, channel, imChunkLimit(channel, settings));
+    try {
+      await deps.send(target, chunks.map((chunk, index) => ({
+        kind: "text",
+        text: chunk,
+        index,
+        total: chunks.length
+      })));
+    } catch (error) {
+      throw new ImSendError("IM_SEND_FAILED", `IM send to ${peerKey} failed: ${messageOf8(error)}`, { cause: error });
+    }
+    return { parts: chunks.length, at: deps.now() };
+  }
+  async function notifyUnbound(target, peerKey, now) {
+    const last = noticed.get(peerKey);
+    if (last !== void 0 && now - last < UNBOUND_NOTICE_TTL_MS) return;
+    noticed.set(peerKey, now);
+    await sendNotice(target, imUnboundMessage(peerKey));
+  }
+  async function sendNotice(target, text) {
+    try {
+      await deps.send(target, [{ kind: "text", text, index: 0, total: 1 }]);
+    } catch (error) {
+      deps.logger?.warn?.(`dsh-soulmojito im: notice to ${target.channel}/${target.peerId} failed: ${messageOf8(error)}`);
+    }
+  }
+  return {
+    inbound,
+    finishTurn,
+    sendText,
+    pending: (sessionId) => origins.pendingCount(sessionId)
+  };
+}
+function imUserTextOf(inbound) {
+  const body = inbound.text.trim();
+  const attachments = attachmentSummaryOf(inbound);
+  const composed = inbound.scope === "group" ? `[${inbound.senderName || inbound.senderId}] ${body}`.trim() : body;
+  const withAttachments = attachments === void 0 ? composed : `${composed}${composed === "" ? "" : "\n"}${attachments}`.trim();
+  return withAttachments === "" ? void 0 : withAttachments;
+}
+function attachmentSummaryOf(inbound) {
+  if (inbound.media.length === 0) return void 0;
+  const counts = /* @__PURE__ */ new Map();
+  for (const media of inbound.media) {
+    const label = media.kind === "image" ? "\u56FE\u7247" : media.kind === "voice" ? "\u8BED\u97F3" : media.kind === "video" ? "\u89C6\u9891" : "\u6587\u4EF6";
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return `\uFF08\u9644\u4EF6\uFF1A${[...counts].map(([label, count]) => `${label}\xD7${count}`).join("\u3001")}\uFF09`;
+}
+function sharedSessionOf(peers, settings) {
+  if (settings.bindingMode !== "shared" || settings.sharedChat === void 0) return {};
+  const { character, chatId } = settings.sharedChat;
+  for (const binding of Object.values(peers ?? {})) {
+    if (binding.character === character && binding.chatId === chatId) return { existingSessionId: binding.sessionId };
+  }
+  return {};
+}
+function messageOf8(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function channelOf(value) {
+  return value === "qq" || value === "weixin" || value === "onebot" ? value : void 0;
+}
+
+// packages/plugin/src/im/runtime.ts
+var ImChannelUnsupportedError = class extends Error {
+  code = "IM_CHANNEL_UNSUPPORTED";
+  channel;
+  constructor(channel) {
+    super(`IM channel '${channel}' has no adapter in this build; only 'onebot' can be started`);
+    this.name = "ImChannelUnsupportedError";
+    this.channel = channel;
+  }
+};
+function createImRuntime(ctx, options) {
+  const { db } = options;
+  const agents = ctx.agents;
+  const presets = ctx.agentPresets;
+  const capabilities = inspectImSessionCapabilities(agents, presets);
+  const channels = /* @__PURE__ */ new Map();
+  const oneBotChannels = /* @__PURE__ */ new Map();
+  const store5 = ImStore.open(tavernDataRoot("im"));
+  const lifetime = new AbortController();
+  const sessionDeps = {
+    db,
+    agents,
+    presets,
+    presetId: AGENT_TAVERN_PRESET_ID,
+    ensurePreset: async () => {
+      await ensureAgentPresetDeclared(ctx, AGENT_TAVERN_PRESET_ID);
+    },
+    workspace: async () => (await prepareInternalWorkspace()).path,
+    bind: async (sessionId, character, chatId) => bindSession(db, sessionId, character, chatId, false, "agent-tavern", "dsh-native"),
+    presetChanged: async () => {
+      await emitAgentPresetChanged();
+    },
+    ...options.logger === void 0 ? {} : { logger: options.logger }
+  };
+  const router = createImRouter({
+    db,
+    now: () => Date.now(),
+    seenDedupe: (dedupeKey, now) => store5.seenDedupe(dedupeKey, now),
+    ensureSession: async (request) => ensureImSession(sessionDeps, request),
+    followup: async (sessionId, message) => {
+      const agent = await liveAgent(sessionDeps, sessionId);
+      const target = agent;
+      if (typeof target.followup !== "function") {
+        throw new Error(`the host agent for session ${sessionId} exposes no followup()`);
+      }
+      await target.followup({
+        id: message.id,
+        role: "user",
+        content: [{ type: "text", text: message.text }],
+        source: { kind: "user" }
+      });
+    },
+    render: async (target, text) => renderForTarget(db, target, text),
+    send: async (target, parts) => {
+      const channel = channels.get(channelKey(target.channel, target.accountId));
+      if (channel === void 0) {
+        throw new Error(`IM channel ${target.channel}/${target.accountId} is not running`);
+      }
+      await channel.send(target, parts);
+    },
+    ...options.logger === void 0 ? {} : { logger: options.logger }
+  });
+  function handleSessionEvent(session, event) {
+    if (event.type !== "turn/end") return;
+    const sessionId = session.id;
+    if (typeof sessionId !== "string" || sessionId === "") return;
+    const turn = event.data?.["turn"];
+    if (typeof turn !== "number" || !Number.isSafeInteger(turn)) return;
+    void isImSession(db, sessionId).then((bound) => {
+      if (!bound) return;
+      return router.finishTurn(sessionId, turn, sessionEvents(session));
+    }).catch((error) => {
+      options.logger?.warn?.(`dsh-soulmojito im: turn ${turn} of ${sessionId} reply failed: ${messageOf9(error)}`);
+    });
+  }
+  function openOneBot(account, secret) {
+    return new OneBotChannel({
+      accountId: account.accountId,
+      secret,
+      router: { handle: async (inbound) => router.inbound(inbound) },
+      groupRequireMention: async () => ((await db.getState()).imSettings ?? DEFAULT_IM_SETTINGS).groupRequireMention,
+      now: () => Date.now(),
+      ...options.logger === void 0 ? {} : { logger: options.logger }
+    });
+  }
+  async function installOneBot(account, channel) {
+    const key = channelKey(account.channel, account.accountId);
+    const previous = channels.get(key);
+    if (previous !== void 0) {
+      await previous.stop();
+      channels.delete(key);
+      oneBotChannels.delete(key);
+    }
+    channels.set(key, channel);
+    oneBotChannels.set(key, channel);
+    try {
+      await channel.start(lifetime.signal);
+    } catch (error) {
+      channels.delete(key);
+      oneBotChannels.delete(key);
+      throw error;
+    }
+  }
+  let accountTail = Promise.resolve();
+  function serialAccounts(task) {
+    const run = accountTail.then(task, task);
+    accountTail = run.then(noop, noop);
+    return run;
+  }
+  async function upsertAccount(account, secret) {
+    return serialAccounts(async () => {
+      if (account.channel !== "onebot") throw new ImChannelUnsupportedError(account.channel);
+      const channel = openOneBot(account, secret);
+      await store5.putAccount(account, { ...secret });
+      await installOneBot(account, channel);
+    });
+  }
+  async function removeAccount(channelId, accountId) {
+    return serialAccounts(async () => {
+      const key = channelKey(channelId, accountId);
+      const live = channels.get(key);
+      if (live !== void 0) {
+        await live.stop();
+        channels.delete(key);
+      }
+      oneBotChannels.delete(key);
+      const removed = await store5.deleteAccount(channelId, accountId);
+      return removed || live !== void 0;
+    });
+  }
+  const upgradeHandler = createOneBotUpgradeHandler({
+    channels: () => [...oneBotChannels.values()],
+    ...options.logger === void 0 ? {} : { logger: options.logger }
+  });
+  const seat = ensureOneBotUpgradeSeat(ctx.webServer, `${API}/im/onebot/ws`);
+  if (!seat.registered) {
+    const reason = seat.reason ?? "the OneBot reverse WebSocket endpoint could not be registered";
+    capabilities.reasons.push(reason);
+  }
+  async function handleOneBotUpgrade(req, socket, head) {
+    await upgradeHandler(req, socket, head);
+  }
+  async function handleOneBotWebhook(req, res) {
+    for (const channel of oneBotChannels.values()) {
+      if (!channel.acceptsWebhook(req)) continue;
+      await channel.handleWebhook(req, res);
+      return true;
+    }
+    return false;
+  }
+  async function restoreAccounts() {
+    const accounts = await store5.accounts();
+    for (const account of accounts) {
+      if (account.channel !== "onebot") continue;
+      try {
+        const secret = await store5.readSecret("onebot", account.accountId);
+        if (secret === void 0) {
+          options.logger?.warn?.(`dsh-soulmojito im: onebot/${account.accountId} has no stored secret; skipped`);
+          continue;
+        }
+        await upsertAccount(account, secret);
+      } catch (error) {
+        options.logger?.warn?.(`dsh-soulmojito im: onebot/${account.accountId} failed to start: ${messageOf9(error)}`);
+      }
+    }
+  }
+  void restoreAccounts().catch((error) => {
+    options.logger?.warn?.(`dsh-soulmojito im: restoring onebot accounts failed: ${messageOf9(error)}`);
+  });
+  return {
+    router,
+    capabilities,
+    upsertAccount,
+    removeAccount,
+    handleOneBotWebhook,
+    views: () => [...channels.values()].map((channel) => ({
+      channel: channel.channel,
+      accountId: channel.accountId,
+      status: channel.status(),
+      peers: 0
+    })),
+    bindChat: async (chat, existingSessionId) => bindImChat(sessionDeps, chat, existingSessionId),
+    handleSessionEvent,
+    handleOneBotUpgrade,
+    dispose: async () => {
+      lifetime.abort();
+      for (const channel of channels.values()) {
+        await channel.stop().catch((error) => {
+          options.logger?.warn?.(`dsh-soulmojito im: stopping ${channel.channel}/${channel.accountId} failed: ${messageOf9(error)}`);
+        });
+      }
+      channels.clear();
+      oneBotChannels.clear();
+    }
+  };
+}
+async function isImSession(db, sessionId) {
+  const state = await db.getState();
+  for (const binding of Object.values(state.imPeers ?? {})) {
+    if (binding.sessionId === sessionId) return true;
+  }
+  return false;
+}
+async function liveAgent(deps, sessionId) {
+  const live = deps.agents?.get?.(sessionId);
+  if (live !== void 0 && live !== null) return live;
+  return ensureImAgent(deps, sessionId);
+}
+async function renderForTarget(db, target, text) {
+  const state = await db.getState();
+  const key = imPeerKey(target.channel, target.accountId, target.scope, target.peerId);
+  const binding = state.imPeers?.[key];
+  if (binding === void 0) return text;
+  const card = await db.getCharacter(binding.character);
+  const scripts = await collectSessionRegexScripts(db, state, binding.character, binding.chatId, card);
+  const message = {
+    name: "",
+    is_user: false,
+    is_system: false,
+    send_date: (/* @__PURE__ */ new Date()).toISOString(),
+    mes: text
+  };
+  return displayTextForMessage(scripts, message, 0);
+}
+function channelKey(channel, accountId) {
+  return `${channel}:${accountId}`;
+}
+function noop() {
+}
+function messageOf9(error) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 // packages/plugin/src/index.ts
@@ -52726,16 +54099,21 @@ function apply(ctx, config = {}) {
   if (imDisabledByEnv()) {
     ctx.logger?.info?.("dsh-soulmojito im: disabled by DSH_SOULMOJITO_DISABLE_IM");
   } else {
+    let ownedRuntime;
+    let ownedDispose;
     void store3().then((db) => {
-      setImRuntime(createImRuntime(ctx, { db, ...ctx.logger === void 0 ? {} : { logger: ctx.logger } }));
+      ownedRuntime = createImRuntime(ctx, { db, ...ctx.logger === void 0 ? {} : { logger: ctx.logger } });
+      ownedDispose = setImRuntime(ownedRuntime);
     }).catch((error) => {
       ctx.logger?.warn?.(`dsh-soulmojito im: runtime unavailable: ${error instanceof Error ? error.message : String(error)}`);
     });
     try {
       ctx.effect?.(() => () => {
-        const runtime = getImRuntime();
-        setImRuntime(void 0);
-        void runtime?.dispose();
+        ownedDispose?.();
+        ownedDispose = void 0;
+        const owned = ownedRuntime;
+        ownedRuntime = void 0;
+        void owned?.dispose();
       }, "dsh-soulmojito: im unload");
     } catch {
     }

@@ -49,7 +49,7 @@ import {
 } from './runtime.js'
 import { bindSession } from './session/binding.js'
 import { registerTavernSessionCommand } from './session/command.js'
-import { createImRuntime, imDisabledByEnv } from './im/runtime.js'
+import { createImRuntime, imDisabledByEnv, type ImRuntime } from './im/runtime.js'
 import { API, handleApi } from './http/router.js'
 import { sendJson } from './http/io.js'
 import { sendApiError } from './http/public-error.js'
@@ -245,16 +245,23 @@ export function apply(ctx: PluginContext, config: { anchorEveryTurns?: unknown, 
   if (imDisabledByEnv()) {
     ctx.logger?.info?.('dsh-soulmojito im: disabled by DSH_SOULMOJITO_DISABLE_IM')
   } else {
+    // 实例与它自己的撤销函数都留在本次 apply 的闭包里：重载时旧 fiber 只能摘掉
+    // 自己那一次发布、只 dispose 自己的实例，不会误伤新 fiber（审查 P1-1）。
+    let ownedRuntime: ImRuntime | undefined
+    let ownedDispose: (() => void) | undefined
     void store().then((db) => {
-      setImRuntime(createImRuntime(ctx, { db, ...(ctx.logger === undefined ? {} : { logger: ctx.logger }) }))
+      ownedRuntime = createImRuntime(ctx, { db, ...(ctx.logger === undefined ? {} : { logger: ctx.logger }) })
+      ownedDispose = setImRuntime(ownedRuntime)
     }).catch((error: unknown) => {
       ctx.logger?.warn?.(`dsh-soulmojito im: runtime unavailable: ${error instanceof Error ? error.message : String(error)}`)
     })
     try {
       ctx.effect?.(() => () => {
-        const runtime = getImRuntime()
-        setImRuntime(undefined)
-        void runtime?.dispose()
+        ownedDispose?.()
+        ownedDispose = undefined
+        const owned = ownedRuntime
+        ownedRuntime = undefined
+        void owned?.dispose()
       }, 'dsh-soulmojito: im unload')
     } catch {
       // 拒绝晚注册 effect 的宿主只失去卸载兜底；运行时句柄本身不受影响。

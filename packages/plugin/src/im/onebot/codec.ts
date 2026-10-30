@@ -134,7 +134,7 @@ export function parseOneBotMessage(
     text,
     media,
     ...(replyTo === undefined ? {} : { replyTo }),
-    dedupeKey: imDedupeKey('onebot', accountId, String(messageId)),
+    dedupeKey: imDedupeKey('onebot', accountId, messageType, peerId, String(messageId)),
     receivedAt,
   }
 }

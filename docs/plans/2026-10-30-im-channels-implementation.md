@@ -57,7 +57,7 @@ $DSH_HOME/soulmojito/im/dedupe.log
 |---|---|
 | M0（已完成） | 假通道 + 假 Agent 跑通「入站 → 绑定 → followup → turn/end → 回复」；`im-*.spec.ts` 全绿 |
 | M1（已完成） | `ensureImSession` 独立/共享两种模式都能建绑定；缺 `agents.create` 时 fail-closed；IM 工具族与历史导入落地 |
-| M2 | OneBot 11 反向 WS + HTTP POST 打通（codec 已就绪，连接层待做） |
+| M2（已完成） | OneBot 11 反向 WS + HTTP POST 打通（codec + 连接层 + 账号路由） |
 | M3 | QQ 扫码 + 网关 |
 | M4 | 微信扫码 + 长轮询 |
 | M5 | 客户端面板 + 媒体 + 收口 |
@@ -77,10 +77,9 @@ $DSH_HOME/soulmojito/im/dedupe.log
 模式下也导入历史。
 
 **明确未做（下一轮）**：
-1. 客户端「聊天渠道」面板；`webServer.registerUpgrade` 尚未被任何通道使用。
-2. OneBot 连接层（反向 WS + HTTP POST + 出站）。
-3. QQ / 微信通道。
-4. `im-channels` gate。
+1. 客户端「聊天渠道」面板。
+2. QQ / 微信通道。
+3. `im-channels` gate。
 
 ## 5. 测试面
 
@@ -95,6 +94,9 @@ $DSH_HOME/soulmojito/im/dedupe.log
 | `tests/im-tools.spec.ts` | 身份只认 agent id、alias 不泄露平台 id、跨会话拒绝、多绑定需指定、env 关闭不注册 |
 | `tests/session-activate.spec.ts` | 导入计划落地、读回失败降级关 turn、基线不可推进只 warn |
 | `tests/onebot-codec.spec.ts` | 事件归一、CQ 转义、出站参数 |
+| `tests/onebot-server.spec.ts` | 握手/401、入站、群 @、分片、未掩码 1002、并发发送不交错、webhook |
+| `tests/im-runtime-accounts.spec.ts` | 账号 upsert/remove、重启恢复、缺 seam 原因 |
+| `tests/im-http-accounts.spec.ts` | 账号路由校验、webhook 401 |
 
 ## 6. 下一轮入口
 

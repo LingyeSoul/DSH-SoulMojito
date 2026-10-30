@@ -41,7 +41,7 @@ let modHostContext: ModHostContext | undefined
 // 单进程单实例；apply 打开、effect 清理时 dispose 摘句柄。
 let gamesServicePromise: Promise<GamesService> | undefined
 // IM 通道运行时（提案 0024）：单进程单实例，apply 装配、effect 卸载时 dispose。
-// 本轮只装配不活动（无真实通道适配器），HTTP 面与面板投影共用同一实例。
+// 已装配 OneBot 反向 WS（升级席位常驻，路由按句柄分派到当前实例）；QQ/微信尚未接入。
 // 句柄锚在 globalThis（im/handle.ts）：agent bundle 与 index bundle 是两份独立
 // esbuild 产物，模块级变量互不可见，IM 工具族必须从这里读到同一实例。
 // 撤销走 sequence 守卫：热重载时旧 fiber 的 disposer 晚于新 fiber 执行，无条件
@@ -52,10 +52,25 @@ export function getImRuntime(): ImRuntime | undefined {
   return resolveImRuntime()
 }
 
-export function setImRuntime(value: ImRuntime | undefined): void {
+/**
+ * 发布/摘除当前运行时，返回**本次发布**的撤销函数。
+ *
+ * 返回撤销函数而不是让调用方自己 `setImRuntime(undefined)`：热重载时新 fiber
+ * 可能先发布，旧 fiber 的 disposer 若走无条件的「摘除当前句柄」，就会把新实例
+ * 连同它的 upgrade 路由一起拆掉（审查 P1-1）。
+ */
+export function setImRuntime(value: ImRuntime | undefined): () => void {
   imRuntimeDisposer?.()
-  imRuntimeDisposer = value === undefined ? undefined : publishImRuntime(value)
+  if (value === undefined) {
+    imRuntimeDisposer = undefined
+    return noopRuntimeDisposer
+  }
+  const dispose = publishImRuntime(value)
+  imRuntimeDisposer = dispose
+  return dispose
 }
+
+function noopRuntimeDisposer(): void {}
 // Prompt Template（提案 0008）总开关：默认关闭（安全默认）；profile 行
 // templateEnabled: true 显式开启，DSH_SOULMOJITO_DISABLE_TEMPLATES 环境 kill
 // switch 始终优先。无模板标签时链路直通，无额外开销。

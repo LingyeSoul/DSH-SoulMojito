@@ -10,10 +10,11 @@
  * 服务、Mod 宿主与 store 装配整图拖进去。
  */
 
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { HostSessionEventLike, HostSessionLike } from '../host-contract.js'
 import { envCompat } from '../env-compat.js'
 import type { ImSessionCapabilities } from './session-host.js'
-import type { ImChannelView, ImSendReceipt } from './types.js'
+import type { ImAccountRef, ImChannelId, ImChannelView, ImSendReceipt } from './types.js'
 
 /** bundle 间互见契约 key（不得变更）。 */
 export const IM_RUNTIME_KEY = 'dsh-soulmojito:im-runtime'
@@ -29,6 +30,15 @@ export interface ImRouterHandle {
 export interface ImRuntimeHandle {
   readonly capabilities: ImSessionCapabilities
   views(): ImChannelView[]
+  /** 登记或更新一个账号：密钥落盘后按通道适配器启动。 */
+  upsertAccount(account: ImAccountRef, secret: Record<string, string>): Promise<void>
+  /** 停通道并删账号与密钥；账号原本不存在时返回 false。 */
+  removeAccount(channel: ImChannelId, accountId: string): Promise<boolean>
+  /**
+   * OneBot HTTP POST 入站：按 token 选中账号并处理。
+   * 返回 false 表示当前没有任何账号接受这个 token（调用方回 401）。
+   */
+  handleOneBotWebhook(req: IncomingMessage, res: ServerResponse): Promise<boolean>
   /** 手动绑定：把已存在的聊天补上会话与 AgentTavern 绑定。 */
   bindChat(
     chat: { character: string; chatId: string },
@@ -36,6 +46,11 @@ export interface ImRuntimeHandle {
   ): Promise<{ sessionId: string; character: string; chatId: string }>
   /** `session/event` 接线点；非 IM 会话直接返回。 */
   handleSessionEvent(session: HostSessionLike, event: HostSessionEventLike): void
+  /**
+   * 反向 WS 握手分派（由常驻的升级席位调用）。可选：没有 OneBot 通道的实现
+   * （测试假件、将来的空装）不必实现它。
+   */
+  handleOneBotUpgrade?(req: unknown, socket: unknown, head: Buffer): Promise<void>
   dispose(): Promise<void>
   readonly router: ImRouterHandle
 }
