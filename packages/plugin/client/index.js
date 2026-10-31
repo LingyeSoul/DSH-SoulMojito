@@ -7874,6 +7874,14 @@ window.__ModuleLoader__.load({
       'im.pending.hint': 'These senders messaged the bot but are not bound. Bind one to the session you are viewing.',
       'im.pending.bind': 'Bind to current session',
       'im.pending.lastAt': 'Last message {at}',
+      // Conversation owner (decision 2026-10-31-im-owner-designation): panel shows hashes + names only.
+      'im.owner.label': 'Owner: {name}',
+      'im.owner.none': 'not set',
+      'im.owner.pick': 'Pick the owner of this conversation…',
+      'im.owner.clear': 'Clear owner',
+      'im.owner.setSelf': 'Set the peer as owner',
+      'im.owner.selfName': 'the peer',
+      'im.owner.saved': 'Owner saved.',
       'im.scope.private': 'Private',
       'im.scope.group': 'Group',
       'im.settings.title': 'Access',
@@ -8923,6 +8931,14 @@ window.__ModuleLoader__.load({
       'im.pending.hint': '这些对端给机器人发过消息但还没绑定。选中一个，把它绑到你正在看的会话。',
       'im.pending.bind': '绑定到当前会话',
       'im.pending.lastAt': '最近消息 {at}',
+      // 会话主人（决策 2026-10-31-im-owner-designation）：面板只显示哈希+昵称。
+      'im.owner.label': '主人：{name}',
+      'im.owner.none': '未指定',
+      'im.owner.pick': '选择此对话的主人…',
+      'im.owner.clear': '取消主人',
+      'im.owner.setSelf': '设为对端为主人',
+      'im.owner.selfName': '对端',
+      'im.owner.saved': '主人设置已保存。',
       'im.scope.private': '私聊',
       'im.scope.group': '群聊',
       'im.settings.title': '访问控制',
@@ -20498,6 +20514,10 @@ window.__ModuleLoader__.load({
       const channels = view?.channels ?? []
       const peers = view?.peers ?? []
       const pendingPeers = view?.pendingPeers ?? []
+      // 会话主人与最近发言人（决策 2026-10-31-im-owner-designation）：服务端已
+      // 按绑定过滤，值是 `snd-<hash>` + 昵称；面板从不接触原始 id。
+      const owners = view?.owners ?? {}
+      const senders = view?.senders ?? {}
       const settings = view?.settings ?? null
       const qqRuntime = view?.qqRuntime ?? null
       const available = view?.available === true
@@ -20769,6 +20789,38 @@ window.__ModuleLoader__.load({
           .finally(() => releaseBusy(`peer:${peer.key}`))
       }
 
+      /**
+       * 指定/清除会话主人（决策 2026-10-31-im-owner-designation）：提交的只有
+       * 服务端投影里的 `snd-<hash>`（或 null 清除），面板从不接触原始 id。
+       */
+      const setOwner = (peer, senderId) => {
+        const parts = imPeerParts(peer.key)
+        if (parts === null) {
+          setError(`cannot parse the peer key '${peer.key}'`)
+          return
+        }
+        setError('')
+        setNotice('')
+        setBusy(`owner:${peer.key}`)
+        void api('im/owner', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({
+            channel: parts.channel,
+            accountId: parts.accountId,
+            scope: peer.scope,
+            peerId: parts.peerId,
+            senderId,
+          }),
+        })
+          .then(() => {
+            setNotice(t('im.owner.saved'))
+            return reloadView()
+          })
+          .catch((cause) => setError(imErrorMessage(cause)))
+          .finally(() => releaseBusy(`owner:${peer.key}`))
+      }
+
       const scanningChannel = bind !== null && bind.phase !== 'failed' ? bind.channel : ''
       const cards = IM_CHANNELS.map((channel) => h(ImChannelCard, {
         key: channel,
@@ -20801,8 +20853,8 @@ window.__ModuleLoader__.load({
       if (activeTab === 'bindings') {
         tabContent = h(React.Fragment, null,
           h(ImPeersBand, {
-            peers, pendingPeers, sharedSessions, currentSession, sessionLabel, busy,
-            onRebind: bindPeerToSession, onBindPending: bindPeerToSession, onUnbind: unbindPeer,
+            peers, pendingPeers, owners, senders, sharedSessions, currentSession, sessionLabel, busy,
+            onRebind: bindPeerToSession, onBindPending: bindPeerToSession, onUnbind: unbindPeer, onSetOwner: setOwner,
           }),
           h(ImSettingsBand, {
             settings, allowDraft, busy, onAllowCommit: commitAllow,
@@ -20959,70 +21011,6 @@ window.__ModuleLoader__.load({
             h('p', { className: 'dt-hint' }, t('im.onebot.wsHint', { account: endpoint })),
             h('p', { className: 'dt-hint' }, t('im.onebot.upstream')),
             copyError !== '' ? h('p', { className: 'dt-error' }, copyError) : null))
-    }
-
-    /** 绑定表 + 未绑定待办：对端 → 原生会话；未绑定的显示在最上面。 */
-    function ImPeersBand({ peers, pendingPeers, sharedSessions, currentSession, sessionLabel, busy, onRebind, onBindPending, onUnbind }) {
-      const t = useTranslate()
-      const current = typeof currentSession === 'string' ? currentSession : ''
-      const empty = peers.length === 0 && pendingPeers.length === 0
-      return h('section', { className: 'dt-settings-band' },
-        h('h3', null, t('im.peers.title')),
-        h('p', { className: 'dt-hint' }, t('im.peers.hint')),
-        pendingPeers.length > 0
-          ? h('div', { className: 'dt-im-pending' },
-            h('h4', null, t('im.pending.title')),
-            h('p', { className: 'dt-hint' }, current === '' ? t('im.peers.noCurrentSession') : t('im.pending.hint')),
-            pendingPeers.map((peer) => h('div', { key: peer.key, className: 'dt-im-pending-row', 'data-im-pending': peer.key },
-              h('div', { className: 'dt-im-pending-copy' },
-                h('code', { className: 'dt-im-peer-key' }, peer.alias),
-                h('span', null, `${t(`im.channel.${peer.channel}`)} · ${t(peer.scope === 'group' ? 'im.scope.group' : 'im.scope.private')}${peer.senderName === undefined ? '' : ` · ${peer.senderName}`}`),
-                h('span', { className: 'dt-hint' }, t('im.pending.lastAt', { at: new Date(peer.lastAt).toLocaleString() }))),
-              h(Button, {
-                size: 'sm',
-                variant: 'outline',
-                disabled: imPeerBusy(busy) || current === '',
-                onClick: () => onBindPending(peer, current),
-              }, t('im.pending.bind')))))
-          : null,
-        empty
-          ? h('div', null,
-            h('p', { className: 'dt-muted' }, t('im.peers.empty')),
-            h('p', { className: 'dt-hint' }, t('im.peers.emptyHint')))
-          : h('div', { className: 'dt-im-peers' }, peers.map((peer) => h(ImPeerRow, {
-            key: peer.key,
-            peer,
-            shared: sharedSessions.has(peer.sessionId),
-            currentSession: current,
-            sessionLabel,
-            disabled: imPeerBusy(busy),
-            onRebind,
-            onUnbind,
-          }))))
-    }
-
-    function ImPeerRow({ peer, shared, currentSession, sessionLabel, disabled, onRebind, onUnbind }) {
-      const t = useTranslate()
-      const same = currentSession !== '' && peer.sessionId === currentSession
-      return h('div', { className: 'dt-im-peer', 'data-im-peer': peer.key },
-        h('div', { className: 'dt-im-peer-main' },
-          h('div', { className: 'dt-im-peer-head' },
-            h('code', { className: 'dt-im-peer-key' }, peer.key),
-            h(Pill, null, t(peer.scope === 'group' ? 'im.scope.group' : 'im.scope.private')),
-            shared ? h(Pill, { active: true }, t('im.peers.shared')) : null),
-          h('p', { className: 'dt-im-peer-chat' },
-            t('im.peers.session', { session: sessionLabel(peer.sessionId) }),
-            shared ? ` · ${t('im.peers.sharedHint')}` : ''),
-          peer.live === false ? h('p', { className: 'dt-hint dt-im-peer-closed' }, t('im.peers.closed')) : null,
-          h('p', { className: 'dt-hint' }, t('im.peers.boundAt', { at: new Date(peer.createdAt).toLocaleString() }))),
-        h('div', { className: 'dt-im-peer-actions' },
-          h(Button, {
-            size: 'sm',
-            variant: 'outline',
-            disabled: disabled || same || currentSession === '',
-            onClick: () => onRebind(peer, currentSession),
-          }, t('im.peers.rebindCurrent')),
-          h(Button, { size: 'sm', variant: 'ghost', disabled, onClick: () => onUnbind(peer) }, t('im.peers.unbind'))))
     }
 
     /** 访问控制：群 @ 开关 + 两份白名单。绑定改为手动绑原生会话，不再有自动模式。 */
@@ -21383,6 +21371,143 @@ window.__ModuleLoader__.load({
           h(Button, { size: 'sm', variant: 'ghost', disabled: imBindBusy(busy), onClick: onCancel }, t('im.bindCancel'))))
     }
 
+// 会话主人（决策 2026-10-31-im-owner-designation）：绑定行上的主人标签与选择器。
+    // 投影来源：`owners[peerKey]`（`snd-` 哈希 + 昵称）与 `senders[peerKey]`（最近发言人，
+    // 已哈希），私聊绑定行多一个 `peerSelfId`（对端自己的哈希）——对端没发过消息也能
+    // 设主人。面板只接触哈希：提交的 senderId 必须是 `snd-` 形状，原始 openid 从不出现。
+    // 与主面板共用同一作用域（manifest 里紧跟 97d 拼接），选择动作调用在 97-ui-im.js。
+
+    /** 主人动作的忙碌键判定：与改绑/解绑（`peer:`）分开锁，互不禁用。 */
+    function imOwnerBusy(busy) {
+      return busy.startsWith('owner:')
+    }
+
+    /** 主人展示名：私聊自哈希用「对端」标签，其次昵称，最后回退哈希。 */
+    function imOwnerNameOf(peer, owner, t) {
+      if (owner === null || owner === undefined) return t('im.owner.none')
+      const selfId = typeof peer?.peerSelfId === 'string' ? peer.peerSelfId : ''
+      if (selfId !== '' && owner.id === selfId) return t('im.owner.selfName')
+      const name = typeof owner.name === 'string' ? owner.name.trim() : ''
+      return name !== '' ? name : String(owner.id ?? '')
+    }
+
+    /** 选择器选项：最近发言人（已哈希）+ 私聊对端；按 id 去重，对端重标「设为对端为主人」。 */
+    function imOwnerOptionsOf(peer, senders, t) {
+      const selfId = peer?.scope === 'private' && typeof peer?.peerSelfId === 'string' ? peer.peerSelfId : ''
+      const options = []
+      const seen = new Set()
+      for (const entry of senders ?? []) {
+        const id = typeof entry?.id === 'string' ? entry.id : ''
+        if (id === '' || seen.has(id)) continue
+        seen.add(id)
+        const name = typeof entry?.name === 'string' ? entry.name.trim() : ''
+        options.push({ id, label: id === selfId ? t('im.owner.setSelf') : (name !== '' ? name : id) })
+      }
+      if (selfId !== '' && !seen.has(selfId)) options.push({ id: selfId, label: t('im.owner.setSelf') })
+      return options
+    }
+
+    /** 绑定行里的主人控件：标签由绑定行渲染，这里只给选择器与「取消主人」。 */
+    function ImOwnerControls({ peer, owner, senders, disabled, onSetOwner }) {
+      const t = useTranslate()
+      const options = imOwnerOptionsOf(peer, senders, t)
+      const pick = (event) => {
+        const value = String(event.target.value ?? '')
+        if (value === '') return
+        onSetOwner(peer, value)
+      }
+      return h('div', { className: 'dt-im-peer-actions dt-im-owner', 'data-im-owner': peer.key },
+        h('select', {
+          value: '',
+          disabled: disabled === true,
+          'aria-label': t('im.owner.pick'),
+          onChange: pick,
+        },
+          h('option', { value: '' }, t('im.owner.pick')),
+          options.map((option) => h('option', { key: option.id, value: option.id }, option.label))),
+        owner !== null && owner !== undefined
+          ? h(Button, { size: 'sm', variant: 'ghost', disabled: disabled === true, onClick: () => onSetOwner(peer, null) }, t('im.owner.clear'))
+          : null)
+    }
+// 绑定表与绑定行（决策 2026-10-31-im-owner-designation）：peer → 原生会话的
+    // 列表、共享会话徽标、主人文案与主人控件入口。与主面板共用同一作用域
+    // （manifest 里紧跟 97e 主人控件拼接）；`ImPeersBand` 由 97-ui-im.js 的
+    // PanelIm 调用，拆到这里只为守住 97-ui-im.js 的 800 行源码预算。
+    /** 绑定表 + 未绑定待办：对端 → 原生会话；未绑定的显示在最上面。 */
+    function ImPeersBand({ peers, pendingPeers, owners, senders, sharedSessions, currentSession, sessionLabel, busy, onRebind, onBindPending, onUnbind, onSetOwner }) {
+      const t = useTranslate()
+      const current = typeof currentSession === 'string' ? currentSession : ''
+      const empty = peers.length === 0 && pendingPeers.length === 0
+      return h('section', { className: 'dt-settings-band' },
+        h('h3', null, t('im.peers.title')),
+        h('p', { className: 'dt-hint' }, t('im.peers.hint')),
+        pendingPeers.length > 0
+          ? h('div', { className: 'dt-im-pending' },
+            h('h4', null, t('im.pending.title')),
+            h('p', { className: 'dt-hint' }, current === '' ? t('im.peers.noCurrentSession') : t('im.pending.hint')),
+            pendingPeers.map((peer) => h('div', { key: peer.key, className: 'dt-im-pending-row', 'data-im-pending': peer.key },
+              h('div', { className: 'dt-im-pending-copy' },
+                h('code', { className: 'dt-im-peer-key' }, peer.alias),
+                h('span', null, `${t(`im.channel.${peer.channel}`)} · ${t(peer.scope === 'group' ? 'im.scope.group' : 'im.scope.private')}${peer.senderName === undefined ? '' : ` · ${peer.senderName}`}`),
+                h('span', { className: 'dt-hint' }, t('im.pending.lastAt', { at: new Date(peer.lastAt).toLocaleString() }))),
+              h(Button, {
+                size: 'sm',
+                variant: 'outline',
+                disabled: imPeerBusy(busy) || current === '',
+                onClick: () => onBindPending(peer, current),
+              }, t('im.pending.bind')))))
+          : null,
+        empty
+          ? h('div', null,
+            h('p', { className: 'dt-muted' }, t('im.peers.empty')),
+            h('p', { className: 'dt-hint' }, t('im.peers.emptyHint')))
+          : h('div', { className: 'dt-im-peers' }, peers.map((peer) => h(ImPeerRow, {
+            key: peer.key,
+            peer,
+            shared: sharedSessions.has(peer.sessionId),
+            owner: owners?.[peer.key] ?? null,
+            senders: senders?.[peer.key] ?? [],
+            currentSession: current,
+            sessionLabel,
+            disabled: imPeerBusy(busy),
+            ownerDisabled: imOwnerBusy(busy),
+            onRebind,
+            onUnbind,
+            onSetOwner,
+          }))))
+    }
+
+    function ImPeerRow({ peer, shared, owner, senders, currentSession, sessionLabel, disabled, ownerDisabled, onRebind, onUnbind, onSetOwner }) {
+      const t = useTranslate()
+      const same = currentSession !== '' && peer.sessionId === currentSession
+      return h('div', { className: 'dt-im-peer', 'data-im-peer': peer.key },
+        h('div', { className: 'dt-im-peer-main' },
+          h('div', { className: 'dt-im-peer-head' },
+            h('code', { className: 'dt-im-peer-key' }, peer.key),
+            h(Pill, null, t(peer.scope === 'group' ? 'im.scope.group' : 'im.scope.private')),
+            shared ? h(Pill, { active: true }, t('im.peers.shared')) : null),
+          h('p', { className: 'dt-im-peer-chat' },
+            t('im.peers.session', { session: sessionLabel(peer.sessionId) }),
+            shared ? ` · ${t('im.peers.sharedHint')}` : ''),
+          peer.live === false ? h('p', { className: 'dt-hint dt-im-peer-closed' }, t('im.peers.closed')) : null,
+          h('p', { className: 'dt-hint dt-im-owner-line' }, t('im.owner.label', { name: imOwnerNameOf(peer, owner ?? null, t) })),
+          h(ImOwnerControls, {
+            peer,
+            owner: owner ?? null,
+            senders: senders ?? [],
+            disabled: ownerDisabled === true,
+            onSetOwner,
+          }),
+          h('p', { className: 'dt-hint' }, t('im.peers.boundAt', { at: new Date(peer.createdAt).toLocaleString() }))),
+        h('div', { className: 'dt-im-peer-actions' },
+          h(Button, {
+            size: 'sm',
+            variant: 'outline',
+            disabled: disabled || same || currentSession === '',
+            onClick: () => onRebind(peer, currentSession),
+          }, t('im.peers.rebindCurrent')),
+          h(Button, { size: 'sm', variant: 'ghost', disabled, onClick: () => onUnbind(peer) }, t('im.peers.unbind'))))
+    }
     function apply(ctx) {
       installStyle()
       PanelHost.context = ctx

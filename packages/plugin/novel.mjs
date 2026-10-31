@@ -1780,6 +1780,9 @@ var init_fs_atomic = __esm({
 });
 
 // packages/tavern-store/src/im-state.ts
+function isImSenderHash(value) {
+  return IM_SENDER_HASH_PATTERN.test(value);
+}
 function normalizeAccessMode(value, fallback) {
   return value === "open" || value === "allowlist" || value === "disabled" ? value : fallback;
 }
@@ -1836,7 +1839,7 @@ function normalizeImPendingPeers(value) {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
     const record = entry;
     const lastAt = record["lastAt"];
-    if (typeof lastAt !== "number" || !Number.isFinite(lastAt) || lastAt < 0) continue;
+    if (typeof lastAt !== "number" || !Number.isFinite(lastAt) || lastAt < 0 || lastAt > IM_MAX_TIMESTAMP_MS) continue;
     const senderName = record["senderName"];
     result[key] = {
       lastAt,
@@ -1845,12 +1848,64 @@ function normalizeImPendingPeers(value) {
   }
   return result;
 }
-var WEIXIN_SEND_INTERVAL_MIN_MS, WEIXIN_SEND_INTERVAL_MAX_MS, DEFAULT_IM_SETTINGS;
+function normalizeImSenders(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const result = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (!Array.isArray(entry)) continue;
+    const byId = /* @__PURE__ */ new Map();
+    for (const item of entry) {
+      if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
+      const record = item;
+      const id = record["id"];
+      const lastAt = record["lastAt"];
+      if (typeof id !== "string" || !isImSenderHash(id.trim())) continue;
+      if (typeof lastAt !== "number" || !Number.isFinite(lastAt) || lastAt < 0 || lastAt > IM_MAX_TIMESTAMP_MS) continue;
+      const name2 = record["name"];
+      const trimmed = id.trim();
+      const previous = byId.get(trimmed);
+      if (previous !== void 0 && previous.lastAt >= lastAt) continue;
+      byId.set(trimmed, {
+        id: trimmed,
+        name: typeof name2 === "string" ? name2.trim() : "",
+        lastAt
+      });
+    }
+    if (byId.size === 0) continue;
+    result[key] = [...byId.values()].sort((left, right) => right.lastAt - left.lastAt).slice(0, IM_SENDERS_MAX_PER_PEER);
+  }
+  return result;
+}
+function normalizeImOwners(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const result = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+    const record = entry;
+    const id = record["id"];
+    if (typeof id !== "string" || !isImSenderHash(id.trim())) continue;
+    const name2 = record["name"];
+    const setAt = record["setAt"];
+    result[key] = {
+      id: id.trim(),
+      name: typeof name2 === "string" ? name2.trim() : "",
+      setAt: typeof setAt === "string" && setAt.trim() !== "" ? setAt : (/* @__PURE__ */ new Date(0)).toISOString()
+    };
+  }
+  return result;
+}
+var IM_SENDER_HASH_PREFIX, IM_SENDER_HASH_HEX_LENGTH, IM_MAX_TIMESTAMP_MS, IM_SENDER_HASH_PATTERN, WEIXIN_SEND_INTERVAL_MIN_MS, WEIXIN_SEND_INTERVAL_MAX_MS, IM_SENDERS_MAX_PER_PEER, IM_SENDER_REFRESH_WINDOW_MS, DEFAULT_IM_SETTINGS;
 var init_im_state = __esm({
   "packages/tavern-store/src/im-state.ts"() {
     "use strict";
+    IM_SENDER_HASH_PREFIX = "snd-";
+    IM_SENDER_HASH_HEX_LENGTH = 10;
+    IM_MAX_TIMESTAMP_MS = 864e13;
+    IM_SENDER_HASH_PATTERN = new RegExp(`^${IM_SENDER_HASH_PREFIX}[0-9a-f]{${IM_SENDER_HASH_HEX_LENGTH}}$`);
     WEIXIN_SEND_INTERVAL_MIN_MS = 500;
     WEIXIN_SEND_INTERVAL_MAX_MS = 6e4;
+    IM_SENDERS_MAX_PER_PEER = 20;
+    IM_SENDER_REFRESH_WINDOW_MS = 5 * 6e4;
     DEFAULT_IM_SETTINGS = {
       groupRequireMention: true,
       privateMode: "allowlist",
@@ -3452,7 +3507,9 @@ var init_store = __esm({
       mods: { enabled: {} },
       imSettings: structuredClone(DEFAULT_IM_SETTINGS),
       imPeers: {},
-      imPendingPeers: {}
+      imPendingPeers: {},
+      imSenders: {},
+      imOwners: {}
     };
     MEMORY_EMBED_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,255}$/;
     TavernStore = class _TavernStore {
@@ -4451,7 +4508,9 @@ var init_store = __esm({
           memoryEmbedding: normalizeMemoryEmbedding(parsed.memoryEmbedding),
           imSettings: normalizeImSettings(parsed.imSettings),
           imPeers: normalizeImPeers(parsed.imPeers),
-          imPendingPeers: normalizeImPendingPeers(parsed.imPendingPeers)
+          imPendingPeers: normalizeImPendingPeers(parsed.imPendingPeers),
+          imSenders: normalizeImSenders(parsed.imSenders),
+          imOwners: normalizeImOwners(parsed.imOwners)
         };
       }
       async assertChatRevision(file, expectedRevision) {
@@ -9318,7 +9377,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("4889a73") : void 0;
+  const commit = true ? normalizeCommit("bf2890c") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

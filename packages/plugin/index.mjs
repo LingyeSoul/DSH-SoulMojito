@@ -142,6 +142,14 @@ var init_fs_atomic = __esm({
 });
 
 // packages/tavern-store/src/im-state.ts
+import { createHash } from "node:crypto";
+function imSenderHash(channel, accountId, senderId) {
+  const hex = createHash("sha256").update(`${channel}:${accountId}:${senderId}`).digest("hex").slice(0, IM_SENDER_HASH_HEX_LENGTH);
+  return `${IM_SENDER_HASH_PREFIX}${hex}`;
+}
+function isImSenderHash(value) {
+  return IM_SENDER_HASH_PATTERN.test(value);
+}
 function imPeerKey(channel, accountId, scope, peerId) {
   return `${channel}:${accountId}:${scope}:${peerId}`;
 }
@@ -201,7 +209,7 @@ function normalizeImPendingPeers(value) {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
     const record = entry;
     const lastAt = record["lastAt"];
-    if (typeof lastAt !== "number" || !Number.isFinite(lastAt) || lastAt < 0) continue;
+    if (typeof lastAt !== "number" || !Number.isFinite(lastAt) || lastAt < 0 || lastAt > IM_MAX_TIMESTAMP_MS) continue;
     const senderName = record["senderName"];
     result[key] = {
       lastAt,
@@ -210,13 +218,65 @@ function normalizeImPendingPeers(value) {
   }
   return result;
 }
-var WEIXIN_SEND_INTERVAL_DEFAULT_MS, WEIXIN_SEND_INTERVAL_MIN_MS, WEIXIN_SEND_INTERVAL_MAX_MS, DEFAULT_IM_SETTINGS;
+function normalizeImSenders(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const result = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (!Array.isArray(entry)) continue;
+    const byId = /* @__PURE__ */ new Map();
+    for (const item of entry) {
+      if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
+      const record = item;
+      const id = record["id"];
+      const lastAt = record["lastAt"];
+      if (typeof id !== "string" || !isImSenderHash(id.trim())) continue;
+      if (typeof lastAt !== "number" || !Number.isFinite(lastAt) || lastAt < 0 || lastAt > IM_MAX_TIMESTAMP_MS) continue;
+      const name2 = record["name"];
+      const trimmed = id.trim();
+      const previous = byId.get(trimmed);
+      if (previous !== void 0 && previous.lastAt >= lastAt) continue;
+      byId.set(trimmed, {
+        id: trimmed,
+        name: typeof name2 === "string" ? name2.trim() : "",
+        lastAt
+      });
+    }
+    if (byId.size === 0) continue;
+    result[key] = [...byId.values()].sort((left, right) => right.lastAt - left.lastAt).slice(0, IM_SENDERS_MAX_PER_PEER);
+  }
+  return result;
+}
+function normalizeImOwners(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const result = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+    const record = entry;
+    const id = record["id"];
+    if (typeof id !== "string" || !isImSenderHash(id.trim())) continue;
+    const name2 = record["name"];
+    const setAt = record["setAt"];
+    result[key] = {
+      id: id.trim(),
+      name: typeof name2 === "string" ? name2.trim() : "",
+      setAt: typeof setAt === "string" && setAt.trim() !== "" ? setAt : (/* @__PURE__ */ new Date(0)).toISOString()
+    };
+  }
+  return result;
+}
+var IM_SENDER_HASH_PREFIX, IM_SENDER_HASH_HEX_LENGTH, IM_MAX_TIMESTAMP_MS, IM_SENDER_HASH_PATTERN, WEIXIN_SEND_INTERVAL_DEFAULT_MS, WEIXIN_SEND_INTERVAL_MIN_MS, WEIXIN_SEND_INTERVAL_MAX_MS, IM_SENDERS_MAX_PER_PEER, IM_SENDER_REFRESH_WINDOW_MS, DEFAULT_IM_SETTINGS;
 var init_im_state = __esm({
   "packages/tavern-store/src/im-state.ts"() {
     "use strict";
+    IM_SENDER_HASH_PREFIX = "snd-";
+    IM_SENDER_HASH_HEX_LENGTH = 10;
+    IM_MAX_TIMESTAMP_MS = 864e13;
+    IM_SENDER_HASH_PATTERN = new RegExp(`^${IM_SENDER_HASH_PREFIX}[0-9a-f]{${IM_SENDER_HASH_HEX_LENGTH}}$`);
     WEIXIN_SEND_INTERVAL_DEFAULT_MS = 3e3;
     WEIXIN_SEND_INTERVAL_MIN_MS = 500;
     WEIXIN_SEND_INTERVAL_MAX_MS = 6e4;
+    IM_SENDERS_MAX_PER_PEER = 20;
+    IM_SENDER_REFRESH_WINDOW_MS = 5 * 6e4;
     DEFAULT_IM_SETTINGS = {
       groupRequireMention: true,
       privateMode: "allowlist",
@@ -2239,7 +2299,7 @@ var init_lib = __esm({
 });
 
 // packages/tavern-store/src/store.ts
-import { createHash } from "node:crypto";
+import { createHash as createHash2 } from "node:crypto";
 import { promises as fs2 } from "node:fs";
 import * as path from "node:path";
 function normalizeCharacterVariables(value) {
@@ -2675,7 +2735,7 @@ function chatBytes(log2) {
   return new Uint8Array(Buffer.from(serializeChatLog(log2), "utf8"));
 }
 function chatRevision(bytes) {
-  return createHash("sha256").update(bytes).digest("base64url");
+  return createHash2("sha256").update(bytes).digest("base64url");
 }
 function cloneChatSnapshot(snapshot2) {
   return {
@@ -2802,7 +2862,9 @@ var init_store = __esm({
       mods: { enabled: {} },
       imSettings: structuredClone(DEFAULT_IM_SETTINGS),
       imPeers: {},
-      imPendingPeers: {}
+      imPendingPeers: {},
+      imSenders: {},
+      imOwners: {}
     };
     MEMORY_EMBED_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,255}$/;
     TavernStore = class _TavernStore {
@@ -2834,7 +2896,7 @@ var init_store = __esm({
        * state.json 由面板写路径自行刷新，都不参与。
        */
       async storeRevision() {
-        const hash = createHash("sha256");
+        const hash = createHash2("sha256");
         for (const dir of ["characters", "worlds", "presets", "personas", "personas/avatars", "groups"]) {
           hash.update(`${dir}
 `);
@@ -3801,7 +3863,9 @@ var init_store = __esm({
           memoryEmbedding: normalizeMemoryEmbedding(parsed.memoryEmbedding),
           imSettings: normalizeImSettings(parsed.imSettings),
           imPeers: normalizeImPeers(parsed.imPeers),
-          imPendingPeers: normalizeImPendingPeers(parsed.imPendingPeers)
+          imPendingPeers: normalizeImPendingPeers(parsed.imPendingPeers),
+          imSenders: normalizeImSenders(parsed.imSenders),
+          imOwners: normalizeImOwners(parsed.imOwners)
         };
       }
       async assertChatRevision(file, expectedRevision) {
@@ -3946,7 +4010,7 @@ var init_tokenize = __esm({
 });
 
 // packages/tavern-store/src/memory.ts
-import { createHash as createHash2, randomUUID } from "node:crypto";
+import { createHash as createHash3, randomUUID } from "node:crypto";
 import { promises as fs3 } from "node:fs";
 import * as path2 from "node:path";
 function normalizeQuery(query) {
@@ -3992,7 +4056,7 @@ function validateDate(value, field2) {
   return value;
 }
 function withRevision(record) {
-  const revision = createHash2("sha256").update(JSON.stringify(record)).digest("hex").slice(0, 16);
+  const revision = createHash3("sha256").update(JSON.stringify(record)).digest("hex").slice(0, 16);
   return { ...record, revision };
 }
 function isInactive(record) {
@@ -4265,13 +4329,13 @@ ${record.tags.join(" ")}`.toLocaleLowerCase();
 });
 
 // packages/tavern-store/src/memory-maintenance.ts
-import { createHash as createHash3 } from "node:crypto";
+import { createHash as createHash4 } from "node:crypto";
 import { promises as fs4 } from "node:fs";
 import * as path3 from "node:path";
 function floorSignature(messages, baseFloor, headFloor) {
   if (!Number.isInteger(baseFloor) || !Number.isInteger(headFloor) || baseFloor < 0 || headFloor < baseFloor || headFloor >= messages.length) return void 0;
   const identity = messages.slice(baseFloor, headFloor + 1).map((message) => [message.name, message.is_user === true, message.is_system === true, message.mes]);
-  return createHash3("sha256").update(JSON.stringify(identity)).digest("hex");
+  return createHash4("sha256").update(JSON.stringify(identity)).digest("hex");
 }
 function unionRanges(ranges) {
   const sorted = ranges.filter((range) => range.headFloor >= range.baseFloor).map((range) => ({ baseFloor: range.baseFloor, headFloor: range.headFloor })).sort((left, right) => left.baseFloor - right.baseFloor);
@@ -4368,11 +4432,11 @@ var init_memory_maintenance = __esm({
 });
 
 // packages/tavern-store/src/memory-vectors.ts
-import { createHash as createHash4 } from "node:crypto";
+import { createHash as createHash5 } from "node:crypto";
 import { promises as fs5 } from "node:fs";
 import * as path4 from "node:path";
 function memoryContentDigest(model, content) {
-  return createHash4("sha256").update(JSON.stringify([model, content])).digest("hex");
+  return createHash5("sha256").update(JSON.stringify([model, content])).digest("hex");
 }
 function encodeVector(values) {
   return Buffer.from(new Float32Array(values).buffer).toString("base64");
@@ -4531,7 +4595,7 @@ var init_memory_vectors = __esm({
 });
 
 // packages/tavern-store/src/variable.ts
-import { createHash as createHash5 } from "node:crypto";
+import { createHash as createHash6 } from "node:crypto";
 import { promises as fs6 } from "node:fs";
 import * as path5 from "node:path";
 function emptyFile2(scope, scopeId) {
@@ -4557,10 +4621,10 @@ function snapshot(file, name2) {
   };
 }
 function revisionOfValue(value) {
-  return createHash5("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
+  return createHash6("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
 }
 function revisionOfFile(file) {
-  return createHash5("sha256").update(JSON.stringify(file.values)).digest("hex").slice(0, 16);
+  return createHash6("sha256").update(JSON.stringify(file.values)).digest("hex").slice(0, 16);
 }
 function validateFile(file, scope, scopeId) {
   if (file.version !== 1 || file.scope !== scope || file.scopeId !== scopeId || typeof file.values !== "object" || file.values === null || typeof file.revisions !== "object" || file.revisions === null) throw new Error("invalid variable file");
@@ -6060,10 +6124,10 @@ var init_novel_owner = __esm({
 });
 
 // packages/tavern-store/src/novel-io.ts
-import { createHash as createHash6, randomBytes as randomBytes2 } from "node:crypto";
+import { createHash as createHash7, randomBytes as randomBytes2 } from "node:crypto";
 import { promises as fs8 } from "node:fs";
 function sha256hex(data) {
-  return createHash6("sha256").update(data).digest("hex");
+  return createHash7("sha256").update(data).digest("hex");
 }
 function hash16(value) {
   return sha256hex(stableStringify(value)).slice(0, 16);
@@ -10190,7 +10254,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("4889a73") : void 0;
+  const commit = true ? normalizeCommit("bf2890c") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -15095,7 +15159,7 @@ function applyCardOverride(identifier, content, card) {
 
 // packages/plugin/src/agent-tavern/projector.ts
 init_src();
-import { createHash as createHash8, randomUUID as randomUUID4 } from "node:crypto";
+import { createHash as createHash9, randomUUID as randomUUID4 } from "node:crypto";
 import { promises as fs14 } from "node:fs";
 import { join as join14 } from "node:path";
 
@@ -24535,7 +24599,7 @@ init_src2();
 
 // packages/plugin/src/im/types.ts
 init_src();
-import { createHash as createHash7 } from "node:crypto";
+import { createHash as createHash8 } from "node:crypto";
 var AGENT_TAVERN_IM_PRESET_ID = "agent-tavern-im";
 function imDedupeKey(channel, accountId, scope, peerId, messageId) {
   return `${channel}:${accountId}:${scope}:${peerId}:${messageId}`;
@@ -24548,7 +24612,7 @@ function imPeerKeyParts(key) {
   return { channel, accountId, scope, peerId: rest.join(":") };
 }
 function imPeerAlias(channel, scope, peerKey) {
-  return `peer-${createHash7("sha256").update(`${channel}:${scope}:${peerKey}`).digest("hex").slice(0, 10)}`;
+  return `peer-${createHash8("sha256").update(`${channel}:${scope}:${peerKey}`).digest("hex").slice(0, 10)}`;
 }
 
 // packages/plugin/src/agent-tavern/im-projection.ts
@@ -25020,7 +25084,7 @@ var AgentTavernProjector = class _AgentTavernProjector {
     this.checkpoints.set(sessionId, next === void 0 ? { version: 2, sessionId, lastCursor: checkpoint.lastCursor, status: "ok", updatedAt: (/* @__PURE__ */ new Date()).toISOString() } : { ...checkpoint, pendingCursor: next.seq });
   }
   checkpointPath(sessionId) {
-    const name2 = createHash8("sha256").update(sessionId).digest("hex");
+    const name2 = createHash9("sha256").update(sessionId).digest("hex");
     return join14(this.root, `${name2}.json`);
   }
 };
@@ -25304,7 +25368,7 @@ import { promises as fs15 } from "node:fs";
 import * as path9 from "node:path";
 
 // packages/plugin/src/memory-embed-local.ts
-import { createHash as createHash9 } from "node:crypto";
+import { createHash as createHash10 } from "node:crypto";
 import { readdirSync as readdirSync3, readFileSync as readFileSync5, realpathSync as realpathSync2, statSync as statSync2 } from "node:fs";
 import { createRequire as createRequire3 } from "node:module";
 import { basename as basename2, dirname as dirname10, join as join15 } from "node:path";
@@ -25378,7 +25442,7 @@ function localModelFingerprint(modelDir) {
       }
     }
     if (parts.length === 0) return "unreadable";
-    return createHash9("sha256").update(parts.join("|")).digest("hex").slice(0, 16);
+    return createHash10("sha256").update(parts.join("|")).digest("hex").slice(0, 16);
   } catch {
     return "unreadable";
   }
@@ -30393,7 +30457,7 @@ function registerAgentTavernAnchor(ctx, options = {}) {
 }
 
 // packages/plugin/src/agent-tavern/card-state.ts
-import { createHash as createHash10, randomUUID as randomUUID7 } from "node:crypto";
+import { createHash as createHash11, randomUUID as randomUUID7 } from "node:crypto";
 
 // packages/plugin/src/prompt-safety.ts
 init_src3();
@@ -30484,7 +30548,7 @@ function jsonObjectOf2(value) {
   return JSON.parse(JSON.stringify(value));
 }
 function sectionHash(text) {
-  return createHash10("sha256").update(text).digest("hex").slice(0, 16);
+  return createHash11("sha256").update(text).digest("hex").slice(0, 16);
 }
 function cardStateEntryKey(book, entry) {
   return `${book}#${entry.uid}`;
@@ -38825,7 +38889,7 @@ function unwrapSingleRootDirectory(files) {
 
 // packages/plugin/src/games/sessions.ts
 init_apply();
-import { createHash as createHash11, randomBytes as randomBytes4 } from "node:crypto";
+import { createHash as createHash12, randomBytes as randomBytes4 } from "node:crypto";
 import { promises as fs18 } from "node:fs";
 import { join as join19 } from "node:path";
 var GAME_HISTORY_DEFAULT_LIMIT = 20;
@@ -38856,7 +38920,7 @@ var GameSessionStore = class _GameSessionStore {
   /* ------------------------------ 查询面 ------------------------------ */
   /** 会话目录 name+size+mtimeMs 的 sha256（镜像 tavern-store storeRevision 的便宜纪律：只 stat 不读内容）。 */
   async revision() {
-    const hash = createHash11("sha256");
+    const hash = createHash12("sha256");
     const names = (await fs18.readdir(this.sessionsRoot).catch(() => [])).filter((name2) => name2.endsWith(".json")).sort();
     for (const name2 of names) {
       const stat3 = await fs18.stat(join19(this.sessionsRoot, name2)).catch(() => void 0);
@@ -41197,9 +41261,9 @@ init_capabilities2();
 
 // packages/plugin/src/agent-novel/requirements.ts
 init_src();
-import { createHash as createHash12 } from "node:crypto";
+import { createHash as createHash13 } from "node:crypto";
 function stableMessageKey(sessionId, messageKey) {
-  return createHash12("sha256").update(`${sessionId}\0${messageKey}`).digest("hex");
+  return createHash13("sha256").update(`${sessionId}\0${messageKey}`).digest("hex");
 }
 function isNovelAuthorMessage(event) {
   return extractAuthorMessage(event) !== null;
@@ -42112,14 +42176,14 @@ import { join as join26 } from "node:path";
 import { pipeline } from "node:stream/promises";
 
 // packages/tavern-frontend-storage/src/idb-store.ts
-import { createHash as createHash13 } from "node:crypto";
+import { createHash as createHash14 } from "node:crypto";
 import { copyFile, mkdir as mkdir4, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname as dirname13, join as join20 } from "node:path";
 var IDB_MAX_RECORD_BYTES = 1024 * 1024 * 1024;
 var IDB_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
 var databaseLocks = /* @__PURE__ */ new Map();
 function sha256(value) {
-  return createHash13("sha256").update(value).digest("hex");
+  return createHash14("sha256").update(value).digest("hex");
 }
 function databaseDir(root, character, name2) {
   return join20(root, "frontend-idb", sha256(character), sha256(name2));
@@ -46668,7 +46732,7 @@ function describeValue(value) {
 }
 
 // packages/plugin/src/im/onebot/ws.ts
-import { createHash as createHash14, randomUUID as randomUUID10 } from "node:crypto";
+import { createHash as createHash15, randomUUID as randomUUID10 } from "node:crypto";
 var WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 var MAX_MESSAGE_BYTES = 1024 * 1024;
 var CONTROL_PAYLOAD_LIMIT = 125;
@@ -46696,7 +46760,7 @@ var WsProtocolError = class extends Error {
 };
 function acceptWebSocket(req, socket, head) {
   const key = requireHandshakeKey(req, socket);
-  const accept = createHash14("sha1").update(`${key}${WS_GUID}`).digest("base64");
+  const accept = createHash15("sha1").update(`${key}${WS_GUID}`).digest("base64");
   socket.write([
     "HTTP/1.1 101 Switching Protocols",
     "Upgrade: websocket",
@@ -48001,7 +48065,7 @@ function messageOf7(error) {
 }
 
 // packages/plugin/src/im/qq/channel.ts
-import { createHash as createHash15 } from "node:crypto";
+import { createHash as createHash16 } from "node:crypto";
 
 // packages/plugin/src/im/settings.ts
 var IM_CHUNK_DEFAULTS = {
@@ -49027,7 +49091,7 @@ function fallbackDedupeId(input) {
     platformTimestamp,
     input.attachments.map((attachment) => attachmentIdentityOf(attachment))
   ]);
-  return `fallback-${createHash15("sha256").update(canonical).digest("hex").slice(0, 16)}`;
+  return `fallback-${createHash16("sha256").update(canonical).digest("hex").slice(0, 16)}`;
 }
 function attachmentIdentityOf(attachment) {
   const size = attachment.size;
@@ -49262,6 +49326,27 @@ async function ensureRuntimePackageJson(root) {
     if (errno === "EEXIST") return;
     throw cause;
   }
+}
+
+// packages/plugin/src/im/owner.ts
+function mergeImSenderEntries(existing, updates, options) {
+  if (updates.length === 0) return void 0;
+  const latest = /* @__PURE__ */ new Map();
+  for (const update of updates) {
+    const previous = latest.get(update.id);
+    if (previous === void 0 || update.lastAt >= previous.lastAt) latest.set(update.id, update);
+  }
+  const moved = /* @__PURE__ */ new Map();
+  for (const update of latest.values()) {
+    const previous = existing.find((entry) => entry.id === update.id);
+    if (previous !== void 0 && update.lastAt - previous.lastAt < options.refreshWindowMs) continue;
+    moved.set(update.id, { id: update.id, name: update.name, lastAt: update.lastAt });
+  }
+  if (moved.size === 0) return void 0;
+  const added = [...moved.values()].sort((left, right) => right.lastAt - left.lastAt);
+  const kept = existing.filter((entry) => !moved.has(entry.id));
+  const next = [...added, ...kept].slice(0, options.maxEntries);
+  return next;
 }
 
 // packages/plugin/src/im/store.ts
@@ -50447,7 +50532,7 @@ var WeixinChannelError = class extends Error {
 };
 
 // packages/plugin/src/im/weixin/inbound.ts
-import { createHash as createHash16 } from "node:crypto";
+import { createHash as createHash17 } from "node:crypto";
 var PEER_LABEL_LENGTH = 8;
 var WEIXIN_FALLBACK_DEDUPE_BUCKET_MS = 10 * 60 * 1e3;
 function weixinInboundOf(message, accountId, now) {
@@ -50525,7 +50610,7 @@ function fallbackMessageId(message, receivedAt) {
     ]),
     bucket
   ]);
-  return `fallback-${createHash16("sha256").update(canonical).digest("hex").slice(0, 16)}`;
+  return `fallback-${createHash17("sha256").update(canonical).digest("hex").slice(0, 16)}`;
 }
 
 // packages/plugin/src/im/weixin/send-guard.ts
@@ -50973,7 +51058,7 @@ function createTypingTicketCache(options) {
 }
 
 // packages/plugin/src/im/weixin/media.ts
-import { createCipheriv, createDecipheriv, createHash as createHash17, randomBytes as randomBytes6 } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash as createHash18, randomBytes as randomBytes6 } from "node:crypto";
 import { promises as fs21 } from "node:fs";
 import { basename as basename3, extname } from "node:path";
 var WEIXIN_MEDIA_MAX_BYTES = 20 * 1024 * 1024;
@@ -51349,7 +51434,7 @@ async function sendWeixinMedia(context, request) {
   return sent.messageId;
 }
 function md5Hex(bytes) {
-  return createHash17("md5").update(bytes).digest("hex");
+  return createHash18("md5").update(bytes).digest("hex");
 }
 async function readLocalMedia(path12, kind) {
   try {
@@ -52132,6 +52217,11 @@ async function handleImApi(req, res, url, route, method, db, runtime) {
         const live = runtime?.isSessionLive?.(peer.sessionId);
         return { ...peer, ...live === void 0 ? {} : { live } };
       }),
+      // 会话主人与最近发言人（决策 2026-10-31-im-owner-designation）：只投影已
+      // 绑定 peer。主人/发言人的**值**只有 `snd-<hash>` + 昵称；绑定行沿用既有
+      // peerKey 约定（键里含 peerId，本次不迁移）。
+      owners: ownerRows(state.imOwners, state.imPeers),
+      senders: senderRows(state.imSenders, state.imPeers),
       // 未绑定对端：面板「待绑定」表的数据源。对端发过消息但还没绑会话时出现，
       // 绑定成功后从这张表移除。
       pendingPeers: pendingPeerRows(state.imPendingPeers),
@@ -52327,6 +52417,39 @@ ${outputTail}`
       ...presetSwitch === void 0 ? {} : { presetSwitch }
     });
   }
+  if (method === "POST" && route === "im/owner") {
+    const body = await readJson(req);
+    const channel = parseChannel(body.channel);
+    const scope = parseScope(body.scope);
+    const accountId = requireId(body.accountId, "accountId");
+    const peerId = requireId(body.peerId, "peerId");
+    const key = imPeerKey(channel, accountId, scope, peerId);
+    const state = await db.getState();
+    if (state.imPeers?.[key] === void 0) {
+      return sendJson(res, 404, { ok: false, message: `no IM peer binding for ${imPeerAlias(channel, scope, key)}; bind the peer in the panel before designating its owner` });
+    }
+    const senderId = parseSenderRef(body.senderId);
+    if (senderId === null) {
+      const next2 = await db.updateState((current) => {
+        const owners = { ...current.imOwners ?? {} };
+        delete owners[key];
+        return { imOwners: owners };
+      });
+      return sendJson(res, 200, { ok: true, key, owner: null, owners: ownerRows(next2.imOwners, next2.imPeers) });
+    }
+    const known = (state.imSenders?.[key] ?? []).find((entry) => entry.id === senderId);
+    const selfId = scope === "private" ? imSenderHash(channel, accountId, peerId) : void 0;
+    if (known === void 0 && senderId !== selfId) {
+      throw new HttpError(400, `sender '${senderId}' is not a recent sender of ${imPeerAlias(channel, scope, key)}; wait for their message first or pick from the panel list`);
+    }
+    const owner = { id: senderId, name: known?.name ?? "", setAt: (/* @__PURE__ */ new Date()).toISOString() };
+    const next = await db.updateState((current) => {
+      const owners = { ...current.imOwners ?? {} };
+      owners[key] = owner;
+      return { imOwners: owners };
+    });
+    return sendJson(res, 200, { ok: true, key, owner, owners: ownerRows(next.imOwners, next.imPeers) });
+  }
   if (method === "DELETE" && route === "im/peers") {
     const key = url.searchParams.get("key");
     if (key === null || key.trim() === "") throw new HttpError(400, "key query is required");
@@ -52342,11 +52465,40 @@ ${outputTail}`
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
 }
 function peerRows(peers) {
-  return Object.entries(peers ?? {}).map(([key, binding]) => ({ key, ...binding })).sort((left, right) => left.key.localeCompare(right.key));
+  return Object.entries(peers ?? {}).map(([key, binding]) => {
+    const parts = imPeerKeyParts(key);
+    return {
+      key,
+      ...binding,
+      ...binding.scope === "private" && parts !== void 0 ? { peerSelfId: imSenderHash(parts.channel, parts.accountId, parts.peerId) } : {}
+    };
+  }).sort((left, right) => left.key.localeCompare(right.key));
+}
+function ownerRows(owners, peers) {
+  const result = {};
+  for (const key of Object.keys(peers ?? {})) {
+    const owner = owners?.[key];
+    if (owner !== void 0) result[key] = owner;
+  }
+  return result;
+}
+function senderRows(senders, peers) {
+  const result = {};
+  for (const key of Object.keys(peers ?? {})) {
+    const list = senders?.[key];
+    if (list === void 0 || list.length === 0) continue;
+    const rows = list.flatMap((entry) => {
+      if (!Number.isFinite(entry.lastAt) || entry.lastAt < 0 || entry.lastAt > IM_MAX_TIMESTAMP_MS) return [];
+      return [{ id: entry.id, name: entry.name, lastAt: new Date(entry.lastAt).toISOString() }];
+    });
+    if (rows.length > 0) result[key] = rows;
+  }
+  return result;
 }
 function pendingPeerRows(pending) {
   const rows = [];
   for (const [key, entry] of Object.entries(pending ?? {})) {
+    if (!Number.isFinite(entry.lastAt) || entry.lastAt < 0 || entry.lastAt > IM_MAX_TIMESTAMP_MS) continue;
     const parts = imPeerKeyParts(key);
     if (parts === void 0) continue;
     const scope = parts.scope === "group" ? "group" : "private";
@@ -52436,6 +52588,17 @@ function parseScope(value) {
 function requireId(value, field2) {
   if (typeof value !== "string" || value.trim() === "") throw new HttpError(400, `${field2} must be a non-empty string`);
   return value.trim();
+}
+function parseSenderRef(value) {
+  if (value === null) return null;
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new HttpError(400, `senderId must be a '${IM_SENDER_HASH_PREFIX}<10 hex>' sender hash, or null to clear the owner`);
+  }
+  const trimmed = value.trim();
+  if (!isImSenderHash(trimmed)) {
+    throw new HttpError(400, `senderId must be a '${IM_SENDER_HASH_PREFIX}<10 hex>' sender hash; raw platform ids are never accepted`);
+  }
+  return trimmed;
 }
 function safeInstallOutput(outputTail) {
   if (outputTail === "") return void 0;
@@ -57769,21 +57932,22 @@ function orderInboundEntries(entries) {
     return left.seq - right.seq;
   });
 }
-function mergedRelayTextOf(items, alias, channel, scope) {
+function mergedRelayTextOf(items, alias, channel, scope, options) {
   const scopeLabel = scope === "group" ? "\u7FA4\u804A" : "\u79C1\u804A";
+  const ownerFlag = options?.owner === true ? " owner=1" : options?.ownerItems !== void 0 && options.ownerItems.length > 0 ? ` ownerItems=${options.ownerItems.join(",")}` : "";
   return [
-    `[IM ${channel}/${scopeLabel} peer=${alias}]\uFF08\u8FDE\u7EED ${items.length} \u6761\u6D88\u606F\uFF09`,
+    `[IM ${channel}/${scopeLabel} peer=${alias}${ownerFlag}]\uFF08\u8FDE\u7EED ${items.length} \u6761\u6D88\u606F\uFF09`,
     ...items.map((item) => `[${item.ref}] ${item.body}`),
     `\uFF08\u8FD9\u662F\u4ECE IM \u8F6C\u53D1\u7ED9\u4F60\u7684\u6D88\u606F\uFF0C\u4E0D\u662F DSH \u7528\u6237\u8F93\u5165\u3002\u56DE\u590D\u8BF7\u8C03\u7528 im_send\uFF0Cpeer \u53C2\u6570\u7528 ${alias}\u3002\uFF09`
   ].join("\n");
 }
 
 // packages/plugin/src/im/refs.ts
-import { createHash as createHash18 } from "node:crypto";
+import { createHash as createHash19 } from "node:crypto";
 var IM_MESSAGE_REF_TTL_MS = 10 * 6e4;
 var IM_MESSAGE_REF_MAX_ENTRIES = 1e3;
 function imMessageRef(dedupeKey) {
-  return `msg-${createHash18("sha256").update(dedupeKey).digest("hex").slice(0, 10)}`;
+  return `msg-${createHash19("sha256").update(dedupeKey).digest("hex").slice(0, 10)}`;
 }
 function createImMessageRefStore(options) {
   const entries = /* @__PURE__ */ new Map();
@@ -57812,6 +57976,90 @@ function createImMessageRefStore(options) {
       return entries.size;
     }
   };
+}
+
+// packages/plugin/src/im/relay.ts
+var IM_OWNER_LINE_PREFIX = "[\u4E3B\u4EBA]";
+var IM_OWNER_ESCAPED_LINE_PREFIX = "\uFF3B\u4E3B\u4EBA\uFF3D";
+var IM_OWNER_RESERVED_NAME = "\u4E3B\u4EBA";
+function normalizeDisplayName(raw) {
+  return raw.normalize("NFKC").replace(/[\u200B-\u200D\uFEFF]/g, "").replace(/[\[\]]/g, "").replace(/\s+/g, " ").trim();
+}
+function escapeOwnerMarkerLines(text) {
+  return text.split("\n").map((line) => line.startsWith(IM_OWNER_LINE_PREFIX) ? `${IM_OWNER_ESCAPED_LINE_PREFIX}${line.slice(IM_OWNER_LINE_PREFIX.length)}` : line).join("\n");
+}
+function relayTextOf(inbound, body, alias, options) {
+  const scope = inbound.scope === "group" ? "\u7FA4\u804A" : "\u79C1\u804A";
+  const ownerFlag = options?.owner === true ? " owner=1" : "";
+  return [
+    `[IM ${inbound.channel}/${scope} peer=${alias} msg=${imMessageRef(inbound.dedupeKey)} time=${new Date(inbound.receivedAt).toISOString()}${ownerFlag}]`,
+    body,
+    `\uFF08\u8FD9\u662F\u4ECE IM \u8F6C\u53D1\u7ED9\u4F60\u7684\u6D88\u606F\uFF0C\u4E0D\u662F DSH \u7528\u6237\u8F93\u5165\u3002\u56DE\u590D\u8BF7\u8C03\u7528 im_send\uFF0Cpeer \u53C2\u6570\u7528 ${alias}\u3002\uFF09`
+  ].join("\n");
+}
+function imUserTextOf(inbound) {
+  const body = inbound.text.trim();
+  const attachments = attachmentSummaryOf(inbound);
+  const composed = inbound.scope === "group" ? `[${displaySenderNameOf(inbound) ?? "\u7FA4\u6210\u5458"}] ${body}`.trim() : body;
+  const withAttachments = attachments === void 0 ? composed : `${composed}${composed === "" ? "" : "\n"}${attachments}`.trim();
+  return withAttachments === "" ? void 0 : escapeOwnerMarkerLines(withAttachments);
+}
+function displaySenderNameOf(inbound) {
+  const name2 = normalizeDisplayName(inbound.senderName);
+  if (name2 === "" || name2 === IM_OWNER_RESERVED_NAME) return void 0;
+  const id = inbound.senderId.trim();
+  if (id.startsWith(name2)) return void 0;
+  return name2;
+}
+function attachmentSummaryOf(inbound) {
+  if (inbound.media.length === 0) return void 0;
+  const labels = inbound.media.slice(0, 6).map((media) => {
+    const label = media.kind === "image" ? "\u56FE\u7247" : media.kind === "voice" ? "\u8BED\u97F3" : media.kind === "video" ? "\u89C6\u9891" : "\u6587\u4EF6";
+    if (media.localPath !== void 0) return `${label}\uFF08${media.localPath}\uFF09`;
+    if (media.url !== void 0) return `${label}\uFF08\u672A\u4E0B\u8F7D\uFF09`;
+    return label;
+  });
+  const rest = inbound.media.length > labels.length ? `\u7B49 ${inbound.media.length} \u4E2A` : "";
+  return `\uFF08\u9644\u4EF6\uFF1A${labels.join("\u3001")}${rest}\uFF09`;
+}
+
+// packages/plugin/src/im/owner-ledger.ts
+function createImOwnerLedger(deps) {
+  async function ownerIdOf(peerKey) {
+    const state = await deps.db.getState();
+    return state.imOwners?.[peerKey]?.id;
+  }
+  function isOwnerMessage(message, ownerId) {
+    if (ownerId === void 0) return false;
+    return imSenderHash(message.channel, message.accountId, message.senderId) === ownerId;
+  }
+  async function rememberSenders(peerKey, alias, messages) {
+    try {
+      const now = deps.now();
+      const updates = messages.map((message) => ({
+        id: imSenderHash(message.channel, message.accountId, message.senderId),
+        name: message.scope === "group" ? displaySenderNameOf(message) ?? "" : "",
+        lastAt: now
+      }));
+      const options = { maxEntries: IM_SENDERS_MAX_PER_PEER, refreshWindowMs: IM_SENDER_REFRESH_WINDOW_MS };
+      const state = await deps.db.getState();
+      if (mergeImSenderEntries(state.imSenders?.[peerKey] ?? [], updates, options) === void 0) {
+        deps.log?.note("debug", `sender refresh for ${alias} is within the ${IM_SENDER_REFRESH_WINDOW_MS}ms write window; state not rewritten`);
+        return;
+      }
+      await deps.db.updateState((current) => {
+        const merged = mergeImSenderEntries(current.imSenders?.[peerKey] ?? [], updates, options);
+        if (merged === void 0) return {};
+        return { imSenders: { ...current.imSenders ?? {}, [peerKey]: merged } };
+      });
+    } catch (error) {
+      deps.log?.note("warn", `could not record recent senders for ${alias}; the message was delivered: ${messageOf13(error)}`);
+    }
+  }
+  return { ownerIdOf, isOwnerMessage, rememberSenders };
+}
+function messageOf13(error) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 // packages/plugin/src/im/project.ts
@@ -57973,6 +58221,11 @@ function createImRouter(deps) {
     ttlMs: IM_MESSAGE_REF_TTL_MS,
     maxEntries: IM_MESSAGE_REF_MAX_ENTRIES
   });
+  const ownerLedger = createImOwnerLedger({
+    db: deps.db,
+    now: deps.now,
+    ...deps.log === void 0 ? {} : { log: deps.log }
+  });
   const coalesceWindowMs = deps.coalesceWindowMs ?? IM_COALESCE_WINDOW_MS;
   const scheduleFlush = deps.scheduleFlush ?? ((delayMs, run) => {
     const timer = setTimeout(run, delayMs);
@@ -58059,7 +58312,7 @@ function createImRouter(deps) {
     try {
       await deliverBatch(peerKey, alias, orderInboundEntries(buffered));
     } catch (error) {
-      deps.log?.note("error", `flushing the buffered messages from ${alias} failed: ${messageOf13(error)}`);
+      deps.log?.note("error", `flushing the buffered messages from ${alias} failed: ${messageOf14(error)}`);
     }
   }
   async function flushPending() {
@@ -58095,15 +58348,16 @@ function createImRouter(deps) {
         const deliverable = await consumeEntry(peerKey, alias, entry, settings, binding);
         if (deliverable !== void 0) deliverables.push(deliverable);
       } catch (error) {
-        deps.log?.note("error", `processing a buffered message from ${alias} failed: ${messageOf13(error)}`);
+        deps.log?.note("error", `processing a buffered message from ${alias} failed: ${messageOf14(error)}`);
       }
     }
     if (binding === void 0 || deliverables.length === 0) return;
+    const ownerId = await ownerLedger.ownerIdOf(peerKey);
     if (deliverables.length > 1 && deliverables.every((item) => item.message.media.length === 0)) {
-      await deliverMerged(alias, binding.sessionId, deliverables);
+      await deliverMerged(peerKey, alias, binding.sessionId, deliverables, ownerId);
       return;
     }
-    for (const item of deliverables) await deliverOne(alias, binding.sessionId, item);
+    for (const item of deliverables) await deliverOne(peerKey, alias, binding.sessionId, item, ownerId);
   }
   async function consumeEntry(peerKey, alias, entry, settings, binding) {
     const inboundMessage = entry.inbound;
@@ -58135,7 +58389,7 @@ function createImRouter(deps) {
       } catch (error) {
         deps.log?.note(
           "warn",
-          `media for a ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias} failed to load; delivering it without local copies: ${messageOf13(error)}`
+          `media for a ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias} failed to load; delivering it without local copies: ${messageOf14(error)}`
         );
       }
     }
@@ -58148,11 +58402,12 @@ function createImRouter(deps) {
     }
     return { message, body };
   }
-  async function deliverOne(alias, sessionId, item) {
+  async function deliverOne(peerKey, alias, sessionId, item, ownerId) {
     const message = item.message;
-    const body = item.body;
+    const isOwner = ownerLedger.isOwnerMessage(message, ownerId);
+    const body = isOwner && message.scope === "group" ? `${IM_OWNER_LINE_PREFIX}${item.body}` : item.body;
     const ref = imMessageRef(message.dedupeKey);
-    const text = relayTextOf(message, body, alias);
+    const text = relayTextOf(message, body, alias, { owner: isOwner });
     deps.log?.note("info", `accepted a ${message.channel}/${message.scope} message from ${alias} (${body.length} chars) for session ${sessionId}`);
     const messageId = `im-${randomUUID17()}`;
     try {
@@ -58163,26 +58418,29 @@ function createImRouter(deps) {
       });
     } catch (error) {
       const code = error?.code;
-      deps.log?.note("error", `could not insert a message from ${alias} into session ${sessionId}: ${messageOf13(error)}`);
-      deps.logger?.warn?.(`dsh-soulmojito im: inserting into ${sessionId} failed: ${messageOf13(error)}`);
+      deps.log?.note("error", `could not insert a message from ${alias} into session ${sessionId}: ${messageOf14(error)}`);
+      deps.logger?.warn?.(`dsh-soulmojito im: inserting into ${sessionId} failed: ${messageOf14(error)}`);
       await sendNotice(imTargetOf(message), code === "IM_SESSION_NOT_LIVE" ? IM_SESSION_NOT_LIVE : IM_DELIVERY_FAILED, alias);
       return;
     }
     rememberDeliveredMessage(ref, sessionId, message);
+    await ownerLedger.rememberSenders(peerKey, alias, [message]);
     deps.log?.note("debug", `inserted an IM message from ${alias} into session ${sessionId} (${messageId})`);
   }
-  async function deliverMerged(alias, sessionId, items) {
+  async function deliverMerged(peerKey, alias, sessionId, items, ownerId) {
     const first = items[0];
     const last = items[items.length - 1];
     if (first === void 0 || last === void 0) return;
     const channel = first.message.channel;
     const scope = first.message.scope;
-    const relayItems = items.map((item) => ({
+    const ownerFlags = items.map((item) => ownerLedger.isOwnerMessage(item.message, ownerId));
+    const ownerItems = ownerFlags.flatMap((flag, index) => flag ? [index + 1] : []);
+    const relayItems = items.map((item, index) => ({
       message: item.message,
-      body: item.body,
+      body: ownerFlags[index] === true && item.message.scope === "group" ? `${IM_OWNER_LINE_PREFIX}${item.body}` : item.body,
       ref: imMessageRef(item.message.dedupeKey)
     }));
-    const text = mergedRelayTextOf(relayItems, alias, channel, scope);
+    const text = mergedRelayTextOf(relayItems, alias, channel, scope, ownerItems.length === ownerFlags.length ? { owner: true } : ownerItems.length > 0 ? { ownerItems } : void 0);
     const chars = relayItems.reduce((total, entry) => total + entry.body.length, 0);
     deps.log?.note("info", `accepted ${relayItems.length} ${channel}/${scope} messages from ${alias} (${chars} chars) for session ${sessionId}`);
     const messageId = `im-${randomUUID17()}`;
@@ -58194,12 +58452,13 @@ function createImRouter(deps) {
       });
     } catch (error) {
       const code = error?.code;
-      deps.log?.note("error", `could not insert a merged message from ${alias} into session ${sessionId}: ${messageOf13(error)}`);
-      deps.logger?.warn?.(`dsh-soulmojito im: inserting into ${sessionId} failed: ${messageOf13(error)}`);
+      deps.log?.note("error", `could not insert a merged message from ${alias} into session ${sessionId}: ${messageOf14(error)}`);
+      deps.logger?.warn?.(`dsh-soulmojito im: inserting into ${sessionId} failed: ${messageOf14(error)}`);
       await sendNotice(imTargetOf(last.message), code === "IM_SESSION_NOT_LIVE" ? IM_SESSION_NOT_LIVE : IM_DELIVERY_FAILED, alias);
       return;
     }
     for (const relayItem of relayItems) rememberDeliveredMessage(relayItem.ref, sessionId, relayItem.message);
+    await ownerLedger.rememberSenders(peerKey, alias, items.map((item) => item.message));
     deps.log?.note("debug", `inserted a merged IM message from ${alias} into session ${sessionId} (${messageId})`);
   }
   function rememberDeliveredMessage(ref, sessionId, inboundMessage) {
@@ -58258,8 +58517,8 @@ function createImRouter(deps) {
         total: chunks.length
       })));
     } catch (error) {
-      deps.log?.note("error", `im_send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf13(error)}`);
-      throw new ImSendError("IM_SEND_FAILED", `IM send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf13(error)}`, { cause: error });
+      deps.log?.note("error", `im_send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf14(error)}`);
+      throw new ImSendError("IM_SEND_FAILED", `IM send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf14(error)}`, { cause: error });
     }
     deps.log?.note(
       "info",
@@ -58297,8 +58556,8 @@ function createImRouter(deps) {
     try {
       outcome = await deps.send(target, parts);
     } catch (error) {
-      deps.log?.note("error", `im_send media to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf13(error)}`);
-      throw new ImSendError("IM_SEND_FAILED", `IM media send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf13(error)}`, { cause: error });
+      deps.log?.note("error", `im_send media to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf14(error)}`);
+      throw new ImSendError("IM_SEND_FAILED", `IM media send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf14(error)}`, { cause: error });
     }
     deps.log?.note(
       "info",
@@ -58349,7 +58608,7 @@ function createImRouter(deps) {
       root = await realpath(await deps.workspaceRoot());
       target = await realpath(localPath);
     } catch (cause) {
-      throw new ImSendError("IM_SEND_INVALID", `media path '${localPath}' cannot be resolved: ${messageOf13(cause)}`);
+      throw new ImSendError("IM_SEND_INVALID", `media path '${localPath}' cannot be resolved: ${messageOf14(cause)}`);
     }
     const rel = relative3(root, target);
     if (rel === "" || rel.startsWith("..") || isAbsolute2(rel)) {
@@ -58373,7 +58632,7 @@ function createImRouter(deps) {
     try {
       await deps.send(target, [{ kind: "text", text, index: 0, total: 1 }]);
     } catch (error) {
-      deps.log?.note("error", `sending a notice to ${alias} failed: ${messageOf13(error)}`);
+      deps.log?.note("error", `sending a notice to ${alias} failed: ${messageOf14(error)}`);
     }
   }
   return {
@@ -58384,40 +58643,7 @@ function createImRouter(deps) {
     resolveMessageRef: (ref) => messageRefs.resolve(ref)
   };
 }
-function relayTextOf(inbound, body, alias) {
-  const scope = inbound.scope === "group" ? "\u7FA4\u804A" : "\u79C1\u804A";
-  return [
-    `[IM ${inbound.channel}/${scope} peer=${alias} msg=${imMessageRef(inbound.dedupeKey)} time=${new Date(inbound.receivedAt).toISOString()}]`,
-    body,
-    `\uFF08\u8FD9\u662F\u4ECE IM \u8F6C\u53D1\u7ED9\u4F60\u7684\u6D88\u606F\uFF0C\u4E0D\u662F DSH \u7528\u6237\u8F93\u5165\u3002\u56DE\u590D\u8BF7\u8C03\u7528 im_send\uFF0Cpeer \u53C2\u6570\u7528 ${alias}\u3002\uFF09`
-  ].join("\n");
-}
-function imUserTextOf(inbound) {
-  const body = inbound.text.trim();
-  const attachments = attachmentSummaryOf(inbound);
-  const composed = inbound.scope === "group" ? `[${displaySenderNameOf(inbound) ?? "\u7FA4\u6210\u5458"}] ${body}`.trim() : body;
-  const withAttachments = attachments === void 0 ? composed : `${composed}${composed === "" ? "" : "\n"}${attachments}`.trim();
-  return withAttachments === "" ? void 0 : withAttachments;
-}
-function displaySenderNameOf(inbound) {
-  const name2 = inbound.senderName.trim();
-  if (name2 === "") return void 0;
-  const id = inbound.senderId.trim();
-  if (id.startsWith(name2)) return void 0;
-  return name2;
-}
-function attachmentSummaryOf(inbound) {
-  if (inbound.media.length === 0) return void 0;
-  const labels = inbound.media.slice(0, 6).map((media) => {
-    const label = media.kind === "image" ? "\u56FE\u7247" : media.kind === "voice" ? "\u8BED\u97F3" : media.kind === "video" ? "\u89C6\u9891" : "\u6587\u4EF6";
-    if (media.localPath !== void 0) return `${label}\uFF08${media.localPath}\uFF09`;
-    if (media.url !== void 0) return `${label}\uFF08\u672A\u4E0B\u8F7D\uFF09`;
-    return label;
-  });
-  const rest = inbound.media.length > labels.length ? `\u7B49 ${inbound.media.length} \u4E2A` : "";
-  return `\uFF08\u9644\u4EF6\uFF1A${labels.join("\u3001")}${rest}\uFF09`;
-}
-function messageOf13(error) {
+function messageOf14(error) {
   return error instanceof Error ? error.message : String(error);
 }
 function isQueuedOutcome(outcome) {
@@ -58428,7 +58654,7 @@ function channelOf(value) {
 }
 
 // packages/plugin/src/im/account-id.ts
-import { createHash as createHash19 } from "node:crypto";
+import { createHash as createHash20 } from "node:crypto";
 var SAFE_ACCOUNT_ID = /^[A-Za-z0-9._-]+$/;
 function imAccountIdOf(channel, raw) {
   const trimmed = raw.trim();
@@ -58437,7 +58663,7 @@ function imAccountIdOf(channel, raw) {
     throw new Error(`cannot derive an IM account id: '${trimmed}' is a path traversal name`);
   }
   if (SAFE_ACCOUNT_ID.test(trimmed)) return trimmed;
-  const digest = createHash19("sha256").update(trimmed, "utf8").digest("hex").slice(0, 12);
+  const digest = createHash20("sha256").update(trimmed, "utf8").digest("hex").slice(0, 12);
   return `${channel}-${digest}`;
 }
 
@@ -58661,7 +58887,7 @@ function createImRuntime(ctx, options) {
       imLog.note("info", `im bind: switched ${sessionId} to ${AGENT_TAVERN_IM_PRESET_ID}`);
       return { applied: true };
     } catch (error) {
-      return { applied: false, reason: messageOf14(error) };
+      return { applied: false, reason: messageOf15(error) };
     }
   }
   async function applyImPreset(sessionId) {
@@ -58690,7 +58916,7 @@ function createImRuntime(ctx, options) {
       const sessionId = agent.session?.id ?? agent.id;
       if (typeof sessionId !== "string" || !bound.has(sessionId)) continue;
       await applyPresetToAgent(agent).then((result) => notePresetResult(sessionId, result)).catch((error) => {
-        logger?.warn?.(`dsh-soulmojito im: switching ${sessionId} to AgentTavernIM failed: ${messageOf14(error)}`);
+        logger?.warn?.(`dsh-soulmojito im: switching ${sessionId} to AgentTavernIM failed: ${messageOf15(error)}`);
       });
     }
   }
@@ -58868,7 +59094,7 @@ function createImRuntime(ctx, options) {
       try {
         secret = await store5.readSecret("weixin", account.accountId);
       } catch (error) {
-        logger?.warn?.(`dsh-soulmojito im weixin bind: skipped ${account.accountId} local token: ${messageOf14(error)}`);
+        logger?.warn?.(`dsh-soulmojito im weixin bind: skipped ${account.accountId} local token: ${messageOf15(error)}`);
         continue;
       }
       const token = secret?.["botToken"]?.trim() ?? "";
@@ -58992,7 +59218,7 @@ function createImRuntime(ctx, options) {
       else await store5.putAccount(account, previous);
     } catch (rollbackError) {
       throw new Error(
-        `${account.channel} account '${account.accountId}' failed to install and its credential rollback also failed: ${messageOf14(rollbackError)}`,
+        `${account.channel} account '${account.accountId}' failed to install and its credential rollback also failed: ${messageOf15(rollbackError)}`,
         { cause: error }
       );
     }
@@ -59010,11 +59236,11 @@ function createImRuntime(ctx, options) {
       const stillUsed = (await store5.accounts()).some((entry) => entry.accountId === accountId);
       if (!stillUsed) {
         await store5.deleteCursor(accountId).catch((error) => {
-          logger?.warn?.(`dsh-soulmojito im: deleting the cursor for ${channelId}/${accountId} failed: ${messageOf14(error)}`);
+          logger?.warn?.(`dsh-soulmojito im: deleting the cursor for ${channelId}/${accountId} failed: ${messageOf15(error)}`);
         });
       }
       await mediaStore.remove(channelId, accountId).catch((error) => {
-        logger?.warn?.(`dsh-soulmojito im: deleting the media of ${channelId}/${accountId} failed: ${messageOf14(error)}`);
+        logger?.warn?.(`dsh-soulmojito im: deleting the media of ${channelId}/${accountId} failed: ${messageOf15(error)}`);
       });
       await db.updateState((current) => {
         const peers = { ...current.imPeers ?? {} };
@@ -59029,11 +59255,11 @@ function createImRuntime(ctx, options) {
         }
         return { imPeers: peers, imPendingPeers: pending };
       }).catch((error) => {
-        logger?.warn?.(`dsh-soulmojito im: deleting the bindings of ${channelId}/${accountId} failed: ${messageOf14(error)}`);
+        logger?.warn?.(`dsh-soulmojito im: deleting the bindings of ${channelId}/${accountId} failed: ${messageOf15(error)}`);
       });
       if (channelId === "weixin") {
         await openWeixinContextTokens(tavernDataRoot("im"), accountId).clear().catch((error) => {
-          logger?.warn?.(`dsh-soulmojito im: deleting the weixin context tokens for ${accountId} failed: ${messageOf14(error)}`);
+          logger?.warn?.(`dsh-soulmojito im: deleting the weixin context tokens for ${accountId} failed: ${messageOf15(error)}`);
         });
       }
       return removed || live !== void 0;
@@ -59070,12 +59296,12 @@ function createImRuntime(ctx, options) {
         }
         await upsertAccount(account, secret);
       } catch (error) {
-        logger?.warn?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} failed to start: ${messageOf14(error)}`);
+        logger?.warn?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} failed to start: ${messageOf15(error)}`);
       }
     }
   }
   void restoreAccounts().catch((error) => {
-    logger?.warn?.(`dsh-soulmojito im: restoring stored accounts failed: ${messageOf14(error)}`);
+    logger?.warn?.(`dsh-soulmojito im: restoring stored accounts failed: ${messageOf15(error)}`);
   });
   return {
     router,
@@ -59120,12 +59346,12 @@ function createImRuntime(ctx, options) {
       weixinBinding.cancel();
       activeQrBind = void 0;
       await router.flushPending().catch((error) => {
-        logger?.warn?.(`dsh-soulmojito im: flushing buffered inbound messages failed: ${messageOf14(error)}`);
+        logger?.warn?.(`dsh-soulmojito im: flushing buffered inbound messages failed: ${messageOf15(error)}`);
       });
       lifetime.abort();
       for (const channel of channels.values()) {
         await channel.stop().catch((error) => {
-          logger?.warn?.(`dsh-soulmojito im: stopping ${channel.channel}/${channel.accountId} failed: ${messageOf14(error)}`);
+          logger?.warn?.(`dsh-soulmojito im: stopping ${channel.channel}/${channel.accountId} failed: ${messageOf15(error)}`);
         });
       }
       channels.clear();
@@ -59152,7 +59378,7 @@ function isRunningBindPhase(phase) {
 }
 function noop() {
 }
-function messageOf14(error) {
+function messageOf15(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -59482,7 +59708,7 @@ function replyToOf(args) {
 // packages/plugin/src/im/agent-mount.ts
 var disposersByAgent = /* @__PURE__ */ new Map();
 var warnedAgents = /* @__PURE__ */ new Set();
-function messageOf15(error) {
+function messageOf16(error) {
   return error instanceof Error ? error.message : String(error);
 }
 function agentIdOf2(agent) {
@@ -59513,7 +59739,7 @@ function mountImToolsOnAgent(deps, agent) {
       const disposer = register.call(tools, tool4);
       if (typeof disposer === "function") disposers.push(disposer);
     } catch (error) {
-      deps.logger?.warn?.(`dsh-soulmojito im: registering ${tool4.name} on agent ${agentId} failed: ${messageOf15(error)}`);
+      deps.logger?.warn?.(`dsh-soulmojito im: registering ${tool4.name} on agent ${agentId} failed: ${messageOf16(error)}`);
       for (const dispose of disposers) dispose();
       return false;
     }
