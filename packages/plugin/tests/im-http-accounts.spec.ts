@@ -12,7 +12,7 @@ import { ImStore, ImStoreError } from '../src/im/store.js'
 import type { ImRuntime } from '../src/im/runtime.js'
 import { WeixinBindError } from '../src/im/weixin/bind.js'
 import { WeixinChannelError } from '../src/im/weixin/channel.js'
-import type { ImAccountRef } from '../src/im/types.js'
+import type { ImAccountRef, ImSettings } from '../src/im/types.js'
 import { imPeerAlias, imPeerKey } from '../src/im/types.js'
 
 let root: string
@@ -69,7 +69,7 @@ function makeResponse(): FakeResponse {
   return response
 }
 
-function runtimeOf(): ImRuntime {
+function runtimeOf(overrides: Partial<ImRuntime> = {}): ImRuntime {
   return {
     capabilities: { available: true, reasons: [] },
     views: () => [],
@@ -80,6 +80,7 @@ function runtimeOf(): ImRuntime {
     handleOneBotWebhook: async () => false,
     dispose: async () => {},
     router: { sendText: async () => { throw new Error('sendText is not part of this test') } },
+    ...overrides,
   }
 }
 
@@ -134,6 +135,48 @@ describe('im account routes', () => {
     expect(removed.statusCode).toBe(200)
     const after = await call(undefined, '/api/dsh-soulmojito/im', 'im', 'GET', runtime)
     expect(after.body['channels']).toEqual([])
+  })
+
+  it('projects send pacing in GET im and applies POST im/settings to the runtime', async () => {
+    const applied: ImSettings[] = []
+    const runtime = runtimeOf({
+      sendStatuses: () => [{
+        channel: 'weixin',
+        accountId: 'wechat-bot',
+        allowedNow: false,
+        nextSendAt: 1_700_000_030_000,
+        throttleUntil: 1_700_000_300_000,
+        queueDepth: 2,
+      }],
+      applySettings: (settings) => { applied.push(settings) },
+    })
+    const listed = await call(undefined, '/api/dsh-soulmojito/im', 'im', 'GET', runtime)
+    expect(listed.body['sendStatuses']).toEqual([{
+      channel: 'weixin',
+      accountId: 'wechat-bot',
+      allowedNow: false,
+      nextSendAt: 1_700_000_030_000,
+      throttleUntil: 1_700_000_300_000,
+      queueDepth: 2,
+    }])
+    expect(listed.body['settings']).toMatchObject({ groupRequireMention: true })
+
+    const path = '/api/dsh-soulmojito/im/settings'
+    const saved = await call({ settings: { weixinSendIntervalMs: 2_500 } }, path, 'im/settings', 'POST', runtime)
+    expect(saved.statusCode).toBe(200)
+    expect(saved.body['settings']).toMatchObject({ weixinSendIntervalMs: 2_500 })
+    expect((await db.getState()).imSettings?.weixinSendIntervalMs).toBe(2_500)
+    // 保存后运行中的队列立刻换挡，不等下次重启。
+    expect(applied).toMatchObject([{ weixinSendIntervalMs: 2_500 }])
+
+    const cleared = await call({ settings: { weixinSendIntervalMs: null } }, path, 'im/settings', 'POST', runtime)
+    expect(cleared.statusCode).toBe(200)
+    expect((await db.getState()).imSettings?.weixinSendIntervalMs).toBeUndefined()
+
+    // 越界值不静默钳制：400 且不改动已落盘的设置。
+    await expect(call({ settings: { weixinSendIntervalMs: 499 } }, path, 'im/settings', 'POST', runtime))
+      .rejects.toMatchObject({ status: 400 })
+    expect((await db.getState()).imSettings?.weixinSendIntervalMs).toBeUndefined()
   })
 
   it('answers 401 for a webhook that no account accepts', async () => {

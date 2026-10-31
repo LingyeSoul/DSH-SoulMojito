@@ -246,6 +246,8 @@ interface HarnessOptions {
   typingEnabled?: boolean
   cursor?: string
   contextTokens?: Record<string, string>
+  /** 出站间隔（毫秒）；测试缺省 0 让单发不用真等，节奏用例显式传真实值。 */
+  sendIntervalMs?: number
   /** 可选事件序：`deliver:<n>` 与 `cursor:<value>` 按真实发生顺序落进来（F3）。 */
   events?: string[]
 }
@@ -289,6 +291,7 @@ function channelHarness(options: HarnessOptions): Harness {
     clock: options.clock,
     longPollTimeoutMs: 50,
     typingEnabled: options.typingEnabled ?? false,
+    sendIntervalMs: options.sendIntervalMs ?? 0,
   })
   return {
     channel,
@@ -1071,9 +1074,9 @@ describe('weixin outbound', () => {
     }
   })
 
-  it('refuses a sixth separate send inside 30s instead of letting iLink throttle the bot', async () => {
+  it('queues a sixth separate send inside 30s and delivers it after the window instead of rejecting', async () => {
     const stub = await startStub(defaultReply)
-    const clock = settableClock(NOW)
+    const clock = manualClock(NOW)
     const harness = channelHarness({ baseUrl: stub.baseUrl, clock: clock.clock })
     try {
       await harness.channel.start(harness.signal)
@@ -1083,25 +1086,27 @@ describe('weixin outbound', () => {
       const sends = (): number => stub.requests.filter((request) => request.path === '/ilink/bot/sendmessage').length
       expect(sends()).toBe(5)
 
-      await expect(harness.channel.send(privateTarget(), [textPart('第六条', 0, 1)]))
-        .rejects.toMatchObject({
-          code: 'WEIXIN_SEND_BUDGET_EXHAUSTED',
-          message: expect.stringContaining('within 30s'),
-        })
-      // The rejected part never reaches the server: the burst must not escalate.
+      // 第六条不再立刻拒绝：窗口把预计开始时间推到 30s 后，回执如实带时间。
+      const receipt = await harness.channel.send(privateTarget(), [textPart('第六条', 0, 1)])
+      expect(receipt).toMatchObject({ status: 'queued', parts: 1, scheduledAt: NOW + 30_000 })
+      expect(harness.channel.sendStatus()).toMatchObject({
+        allowedNow: false,
+        nextSendAt: NOW + 30_000,
+        queueDepth: 1,
+      })
+      // 被排队的一条没有打到服务端：突发上限仍是硬的，只是不再靠拒绝实现。
       expect(sends()).toBe(5)
 
-      clock.set(NOW + 30_000)
-      await expect(harness.channel.send(privateTarget(), [textPart('窗口后再发', 0, 1)]))
-        .resolves.toMatchObject({ parts: 1 })
-      expect(sends()).toBe(6)
+      clock.advance(30_000)
+      await waitFor(() => sends() === 6, 'the queued sixth send', 5_000)
+      await waitFor(() => harness.channel.sendStatus().queueDepth === 0, 'the queue to drain', 5_000)
     } finally {
       await harness.stop()
       await stub.close()
     }
   })
 
-  it('classifies ret -2 as a throttle, stops sending during the cooldown and recovers after it', async () => {
+  it('queues a ret -2 send through the cooldown, retries it once and never lets the burst escalate', async () => {
     const stub = await startStub(defaultReply)
     stub.setHandler((request) => {
       if (request.path === '/ilink/bot/getupdates') {
@@ -1110,28 +1115,56 @@ describe('weixin outbound', () => {
       if (request.path === '/ilink/bot/sendmessage') return { json: { ret: -2, errmsg: 'prepare failed' } }
       return defaultReply(request)
     })
-    const clock = settableClock(NOW)
+    const clock = manualClock(NOW)
     const harness = channelHarness({ baseUrl: stub.baseUrl, clock: clock.clock })
     const sends = (): number => stub.requests.filter((request) => request.path === '/ilink/bot/sendmessage').length
     try {
       await harness.channel.start(harness.signal)
-      await expect(harness.channel.send(privateTarget(), [textPart('被节流', 0, 1)]))
-        .rejects.toMatchObject({
-          code: 'WEIXIN_THROTTLED',
-          message: expect.stringContaining('prepare failed'),
-        })
+      // `-2` 不再立刻上抛：冷却 5 分钟超过工具等待上限，先给带时间的排队回执。
+      const throttled = await harness.channel.send(privateTarget(), [textPart('被节流', 0, 1)])
+      expect(throttled).toMatchObject({ status: 'queued', scheduledAt: NOW + 5 * 60_000 })
       expect(sends()).toBe(1)
 
-      // Cooling down: a second attempt fails locally, without touching iLink.
-      await expect(harness.channel.send(privateTarget(), [textPart('不要重试', 0, 1)]))
-        .rejects.toMatchObject({ code: 'WEIXIN_THROTTLED' })
+      // 冷却期再入队也一样排队，且一个请求都不发到服务端。
+      const followUp = await harness.channel.send(privateTarget(), [textPart('冷却里再发', 0, 1)])
+      expect(followUp).toMatchObject({ status: 'queued' })
       expect(sends()).toBe(1)
+      expect(harness.channel.sendStatus()).toMatchObject({
+        allowedNow: false,
+        throttleUntil: NOW + 5 * 60_000,
+        queueDepth: 2,
+      })
 
-      clock.set(NOW + 5 * 60_000)
+      // 冷却结束：队首重试一次成功，后面排队的一条接着送出。
       stub.setHandler(defaultReply)
-      await expect(harness.channel.send(privateTarget(), [textPart('冷却结束后', 0, 1)]))
-        .resolves.toMatchObject({ parts: 1 })
+      clock.advance(5 * 60_000)
+      await waitFor(() => sends() === 3, 'the retried send and the queued follow-up', 5_000)
+      await waitFor(() => harness.channel.sendStatus().queueDepth === 0, 'the queue to drain', 5_000)
+    } finally {
+      await harness.stop()
+      await stub.close()
+    }
+  })
+
+  it('projects allowedNow, nextSendAt and queue depth from the injected clock', async () => {
+    const stub = await startStub(defaultReply)
+    const clock = manualClock(NOW)
+    const harness = channelHarness({ baseUrl: stub.baseUrl, clock: clock.clock, sendIntervalMs: 500 })
+    const sends = (): number => stub.requests.filter((request) => request.path === '/ilink/bot/sendmessage').length
+    try {
+      await harness.channel.start(harness.signal)
+      expect(harness.channel.sendStatus()).toEqual({ allowedNow: true, queueDepth: 0 })
+
+      await harness.channel.send(privateTarget(), [textPart('第一条', 0, 1)])
+      expect(harness.channel.sendStatus()).toMatchObject({ allowedNow: false, nextSendAt: NOW + 500, queueDepth: 0 })
+
+      // 第二条在 500ms 的间隔内开始等待：调用方按快速路径等真实结果。
+      const second = harness.channel.send(privateTarget(), [textPart('第二条', 0, 1)])
+      expect(harness.channel.sendStatus()).toMatchObject({ allowedNow: false, queueDepth: 1 })
+      clock.advance(500)
+      await expect(second).resolves.toMatchObject({ parts: 1 })
       expect(sends()).toBe(2)
+      expect(harness.channel.sendStatus().queueDepth).toBe(0)
     } finally {
       await harness.stop()
       await stub.close()

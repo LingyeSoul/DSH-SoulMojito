@@ -27,10 +27,10 @@ describe('mountImToolsOnAgent', () => {
     const log = { names: [] as string[], disposed: [] as string[] }
     const agent: HostAgentLike = { id: 'session-a', ctx: { tools: toolService(log) } }
     expect(mountImToolsOnAgent(deps, agent)).toBe(true)
-    expect(log.names).toEqual(['im_identity', 'im_channels', 'im_send'])
+    expect(log.names).toEqual(['im_identity', 'im_channels', 'im_send', 'im_time'])
     // 第二次（agent/created + agent/status 双入口）是空操作，不会重复注册。
     expect(mountImToolsOnAgent(deps, agent)).toBe(false)
-    expect(log.names).toHaveLength(3)
+    expect(log.names).toHaveLength(4)
   })
 
   it('retries when the tools service was not ready on the first attempt', () => {
@@ -40,7 +40,7 @@ describe('mountImToolsOnAgent', () => {
     // 宿主 compose 完成后 status 入口再试一次。
     ;(agent.ctx as { tools?: unknown }).tools = toolService(log)
     expect(mountImToolsOnAgent(deps, agent)).toBe(true)
-    expect(log.names).toHaveLength(3)
+    expect(log.names).toHaveLength(4)
   })
 
   it('falls back to the session id and skips agents without any id', () => {
@@ -48,7 +48,7 @@ describe('mountImToolsOnAgent', () => {
     const fromSession: HostAgentLike = { session: { id: 'session-b' }, ctx: { tools: toolService(log) } }
     expect(mountImToolsOnAgent(deps, fromSession)).toBe(true)
     expect(mountImToolsOnAgent(deps, { ctx: { tools: toolService(log) } })).toBe(false)
-    expect(log.names).toHaveLength(3)
+    expect(log.names).toHaveLength(4)
   })
 
   it('warns once when the agent has no tools.register', () => {
@@ -95,8 +95,8 @@ describe('mountImToolsOnAgent', () => {
     const agent: HostAgentLike = { id: 'session-a', ctx: { tools: toolService(log) } }
     mountImToolsOnAgent(deps, agent)
     unmountImToolsForAgent('session-a')
-    expect(log.disposed).toEqual(['im_identity', 'im_channels', 'im_send'])
+    expect(log.disposed).toEqual(['im_identity', 'im_channels', 'im_send', 'im_time'])
     expect(mountImToolsOnAgent(deps, agent)).toBe(true)
-    expect(log.names).toHaveLength(6)
+    expect(log.names).toHaveLength(8)
   })
 })

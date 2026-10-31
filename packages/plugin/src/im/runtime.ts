@@ -41,6 +41,7 @@ import { WEIXIN_MEDIA_MAX_BYTES } from './weixin/media.js'
 import { createImRouter, type ImRouter } from './router.js'
 import { imAccountIdOf } from './account-id.js'
 import { createImLog, IM_LOG_CAPACITY, wrapImLogger } from './log.js'
+import { weixinSendIntervalOf } from './settings.js'
 import {
   inspectImSessionCapabilities,
   insertImMessage,
@@ -50,7 +51,7 @@ import {
   type ImAgentsSeam,
   type ImSessionCapabilities,
 } from './session-host.js'
-import type { ImAccountRef, ImBindStatus, ImChannel, ImChannelId, ImChannelView, ImTarget } from './types.js'
+import type { ImAccountRef, ImBindStatus, ImChannel, ImChannelId, ImChannelView, ImSendStatusView, ImTarget } from './types.js'
 import { AGENT_TAVERN_IM_PRESET_ID, DEFAULT_IM_SETTINGS, imPeerKey, imPeerKeyParts } from './types.js'
 import { ImStore } from './store.js'
 
@@ -244,7 +245,7 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       if (channel === undefined) {
         throw new Error(`IM channel ${target.channel}/${target.accountId} is not running`)
       }
-      await channel.send(target, parts)
+      return channel.send(target, parts)
     },
     log: imLog,
     logger,
@@ -298,7 +299,7 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
     })
   }
 
-  function openWeixin(account: ImAccountRef, secret: Record<string, string>): WeixinChannel {
+  function openWeixin(account: ImAccountRef, secret: Record<string, string>, sendIntervalMs: number): WeixinChannel {
     const contextTokens = openWeixinContextTokens(tavernDataRoot('im'), account.accountId)
     return new WeixinChannel({
       accountId: account.accountId,
@@ -315,6 +316,7 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       typingEnabled: true,
       cdnBaseUrl: options.weixinCdnBaseUrl ?? WEIXIN_DEFAULT_CDN_BASE_URL,
       media: mediaStore,
+      sendIntervalMs,
       logger,
     })
   }
@@ -551,7 +553,9 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       }
       if (account.channel === 'weixin') {
         // 微信凭据同样先验后存：缺 botToken/baseUrl 时 openWeixin 就抛错，账号不落盘。
-        const channel = openWeixin(account, secret)
+        // 间隔取当前设置（缺省 3s）；面板改设置走 applySettings 更新运行中的队列。
+        const settings = (await db.getState()).imSettings ?? DEFAULT_IM_SETTINGS
+        const channel = openWeixin(account, secret, weixinSendIntervalOf(settings))
         const previous = await store.readSecret('weixin', account.accountId)
         await store.putAccount(account, { ...secret })
         try {
@@ -692,6 +696,22 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       status: channel.status(),
       peers: 0,
     })),
+    // 出站节奏投影（决策 2026-10-31-weixin-send-queue）：只有实现了队列的通道
+    // （当前是微信）有 sendStatus；QQ/OneBot 没有排队语义，投影里不出现。
+    sendStatuses: (): ImSendStatusView[] => {
+      const rows: ImSendStatusView[] = []
+      for (const channel of channels.values()) {
+        const status = channel.sendStatus?.()
+        if (status === undefined) continue
+        rows.push({ channel: channel.channel, accountId: channel.accountId, ...status })
+      }
+      return rows
+    },
+    // 设置页改动间隔：运行中的微信通道即时换挡，未接上的账号下次 upsert 读新值。
+    applySettings: (settings) => {
+      const interval = weixinSendIntervalOf(settings)
+      for (const channel of channels.values()) channel.setSendIntervalMs?.(interval)
+    },
     isSessionLive: (sessionId) => liveAgentOf(agents, sessionId) !== undefined,
     applyImPreset,
     ensurePresetForAgent,

@@ -38,6 +38,8 @@
     "96-panels-presets.js",
     "97-ui-im.js",
     "97b-ui-im-logs.js",
+    "97cc-ui-im-behavior.js",
+    "97d-ui-im-bind.js",
     "98-apply.js",
     "99-shell-tail.js"
   ]

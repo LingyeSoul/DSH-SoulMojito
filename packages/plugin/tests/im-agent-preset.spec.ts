@@ -56,6 +56,18 @@ describe('AgentTavernIM prompt', () => {
     expect(text).toContain('replyTo')
   })
 
+  it('documents queued receipts and leaves pacing/retry to the plugin', () => {
+    const text = imModePromptText()
+    expect(text).toContain('status: "queued"')
+    expect(text).toContain('scheduledAt')
+    expect(text).toContain('不要宣称已经发出')
+    expect(text).toContain('im_time')
+    expect(text).toContain('WEIXIN_THROTTLED')
+    // 预算窗口现在由插件排队等待：旧的「立刻失败、本轮别重试」口径必须消失，
+    // 更不能把 WEIXIN_SEND_BUDGET_EXHAUSTED 当成模型要处理的错误。
+    expect(text).not.toContain('WEIXIN_SEND_BUDGET_EXHAUSTED')
+  })
+
   it('points the model at the Tavern chat history for recalling earlier IM messages', () => {
     const text = imModePromptText()
     expect(text).toContain('记进绑定的酒馆聊天历史')

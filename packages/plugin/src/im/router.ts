@@ -30,7 +30,7 @@ import { IM_MESSAGE_REF_MAX_ENTRIES, IM_MESSAGE_REF_TTL_MS, createImMessageRefSt
 import { projectImText } from './project.js'
 import { imAccessAllows, imChunkLimit } from './settings.js'
 import type { ImLogSink } from './log.js'
-import type { ImChannelId, ImInbound, ImMediaRef, ImOutboundMedia, ImScope, ImSendReceipt, ImSettings, ImTarget, OutboundPart } from './types.js'
+import type { ImChannelId, ImInbound, ImMediaRef, ImOutboundMedia, ImQueuedSendReceipt, ImScope, ImSendOutcome, ImSettings, ImTarget, OutboundPart } from './types.js'
 import { DEFAULT_IM_SETTINGS, imPeerAlias, imPeerKey, imPeerKeyParts } from './types.js'
 
 /** 未绑定提示：对端只知道「没绑上」，具体绑定发生在 DSH 面板。 */
@@ -101,7 +101,7 @@ export interface ImRouterDeps {
    * （路由据此回 `IM_SESSION_NOT_LIVE`，不假装成功）。
    */
   insert: (sessionId: string, message: ImAgentMessage) => Promise<void>
-  send: (target: ImTarget, parts: readonly OutboundPart[]) => Promise<void>
+  send: (target: ImTarget, parts: readonly OutboundPart[]) => Promise<ImSendOutcome>
   /**
    * 媒体文件的合法根（内部工作区）。给定时 `sendMedia` 拒绝根目录之外的文件：
    * 模型不能被诱导把密钥/聊天记录当附件发出去。缺省（测试假件）不启用。
@@ -144,9 +144,9 @@ export interface ImRouter {
    * 一次：工具面只保证「绑到本会话」，路由保证「peer 真的有绑定」。
    * `options.passiveReplyTo` 给定时用它替代该 peer 的自动锚点（消息引用回复）。
    */
-  sendText(peerKey: string, text: string, options?: { passiveReplyTo?: string }): Promise<ImSendReceipt>
+  sendText(peerKey: string, text: string, options?: { passiveReplyTo?: string }): Promise<ImSendOutcome>
   /** 主动发一条媒体（可选配文）；目标校验与 `sendText` 同一套。 */
-  sendMedia(peerKey: string, media: ImOutboundMedia, options?: { passiveReplyTo?: string }): Promise<ImSendReceipt>
+  sendMedia(peerKey: string, media: ImOutboundMedia, options?: { passiveReplyTo?: string }): Promise<ImSendOutcome>
   /**
    * 解析 relay 头部的 `msg=` 引用 → 该消息投递时的 peer、会话与被动锚点。
    * 只认本进程已投递且未过期的条目；未知/过期返回 undefined，绝不猜。
@@ -535,15 +535,16 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
     deps.log?.note('info', `no binding for ${alias}; recorded it in the IM panel pending peers`)
   }
 
-  async function sendText(peerKey: string, text: string, options?: { passiveReplyTo?: string }): Promise<ImSendReceipt> {
+  async function sendText(peerKey: string, text: string, options?: { passiveReplyTo?: string }): Promise<ImSendOutcome> {
     const body = text.trim()
     if (body === '') {
       throw new ImSendError('IM_SEND_INVALID', 'IM text is empty after trimming whitespace')
     }
     const { target, channel, scope, settings } = await sendTargetOf(peerKey, options?.passiveReplyTo)
     const chunks = projectImText(body, channel, imChunkLimit(channel, settings))
+    let outcome: ImSendOutcome
     try {
-      await deps.send(target, chunks.map((chunk, index) => ({
+      outcome = await deps.send(target, chunks.map((chunk, index) => ({
         kind: 'text' as const,
         text: chunk,
         index,
@@ -554,11 +555,16 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
       deps.log?.note('error', `im_send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf(error)}`)
       throw new ImSendError('IM_SEND_FAILED', `IM send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf(error)}`, { cause: error })
     }
-    deps.log?.note('info', `im_send delivered ${chunks.length} part(s) to ${imPeerAlias(channel, scope, peerKey)}`)
-    return { parts: chunks.length, at: deps.now() }
+    deps.log?.note(
+      'info',
+      isQueuedOutcome(outcome)
+        ? `im_send queued ${chunks.length} part(s) for ${imPeerAlias(channel, scope, peerKey)} until ${new Date(outcome.scheduledAt).toISOString()}`
+        : `im_send delivered ${chunks.length} part(s) to ${imPeerAlias(channel, scope, peerKey)}`,
+    )
+    return outcome
   }
 
-  async function sendMedia(peerKey: string, media: ImOutboundMedia, options?: { passiveReplyTo?: string }): Promise<ImSendReceipt> {
+  async function sendMedia(peerKey: string, media: ImOutboundMedia, options?: { passiveReplyTo?: string }): Promise<ImSendOutcome> {
     if (media.localPath === undefined && media.url === undefined) {
       throw new ImSendError('IM_SEND_INVALID', 'media needs a localPath (preferred) or a url')
     }
@@ -588,14 +594,20 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
     })
     // total 必须先定下来再发：通道用 index/total 加序号，事后改不了。
     for (const part of parts) part.total = parts.length
+    let outcome: ImSendOutcome
     try {
-      await deps.send(target, parts)
+      outcome = await deps.send(target, parts)
     } catch (error) {
       deps.log?.note('error', `im_send media to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf(error)}`)
       throw new ImSendError('IM_SEND_FAILED', `IM media send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf(error)}`, { cause: error })
     }
-    deps.log?.note('info', `im_send delivered a ${media.kind} to ${imPeerAlias(channel, scope, peerKey)}`)
-    return { parts: parts.length, at: deps.now() }
+    deps.log?.note(
+      'info',
+      isQueuedOutcome(outcome)
+        ? `im_send queued a ${media.kind} for ${imPeerAlias(channel, scope, peerKey)} until ${new Date(outcome.scheduledAt).toISOString()}`
+        : `im_send delivered a ${media.kind} to ${imPeerAlias(channel, scope, peerKey)}`,
+    )
+    return outcome
   }
 
   /**
@@ -763,6 +775,11 @@ function attachmentSummaryOf(inbound: ImInbound): string | undefined {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/** 排队回执的判别：送达回执没有 `status` 字段。 */
+function isQueuedOutcome(outcome: ImSendOutcome): outcome is ImQueuedSendReceipt {
+  return 'status' in outcome && outcome.status === 'queued'
 }
 
 /** peerKey 的渠道段只认三条真实通道；其余值说明绑定键被手改坏了。 */

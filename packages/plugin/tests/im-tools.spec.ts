@@ -75,7 +75,7 @@ type FakeImRouterHandle = ImRuntimeHandle['router'] & {
   lastPeerOf: (sessionId: string) => string | undefined
 }
 
-function runtimeHarness(options: { available?: boolean; reasons?: string[]; fail?: string; lastPeer?: string; messageRefs?: Record<string, ImMessageRefEntry> } = {}): RuntimeHarness {
+function runtimeHarness(options: { available?: boolean; reasons?: string[]; fail?: string; queued?: boolean; lastPeer?: string; messageRefs?: Record<string, ImMessageRefEntry> } = {}): RuntimeHarness {
   const sent: RuntimeHarness['sent'] = []
   const media: RuntimeHarness['media'] = []
   const refs = new Map(Object.entries(options.messageRefs ?? {}))
@@ -91,6 +91,17 @@ function runtimeHarness(options: { available?: boolean; reasons?: string[]; fail
         { channel: 'qq', accountId: 'acct-a', status: { state: 'online', since: 1_000 }, peers: 2 },
         { channel: 'weixin', accountId: 'acct-b', status: { state: 'paused', reason: 'token expired' }, peers: 0 },
       ],
+      // 出站节奏投影：im_time 的只读数据源（只列实现了队列的账号）。
+      sendStatuses: () => [
+        {
+          channel: 'weixin',
+          accountId: 'acct-b',
+          allowedNow: false,
+          nextSendAt: 1_700_000_030_000,
+          throttleUntil: 1_700_000_300_000,
+          queueDepth: 2,
+        },
+      ],
       // 账号管理与 OneBot webhook 不属于工具面用例的覆盖范围；补空实现只为
       // 让这个假运行时保持与 ImRuntimeHandle 同形。
       upsertAccount: async () => {},
@@ -101,7 +112,9 @@ function runtimeHarness(options: { available?: boolean; reasons?: string[]; fail
         sendText: async (peerKey, text, sendOptions) => {
           if (options.fail !== undefined) throw new Error(options.fail)
           sent.push({ peerKey, text, ...(sendOptions === undefined ? {} : { options: sendOptions }) })
-          return { parts: 1, at: 1_700_000_000_000 }
+          return options.queued === true
+            ? { status: 'queued', parts: 2, scheduledAt: 1_700_000_030_000 }
+            : { parts: 1, at: 1_700_000_000_000 }
         },
         sendMedia: async (peerKey, payload, sendOptions) => {
           if (options.fail !== undefined) throw new Error(options.fail)
@@ -202,6 +215,52 @@ describe('im_channels', () => {
   })
 })
 
+describe('im_time', () => {
+  it('reports the server clock and the per-account send pacing without secrets or peer ids', async () => {
+    const { runtime } = runtimeHarness()
+    const { call } = toolsOf(runtime)
+    const result = await call('im_time', {}) as {
+      available: boolean
+      now: string
+      timeZone: string
+      channels: Array<Record<string, unknown>>
+    }
+    expect(result.available).toBe(true)
+    expect(Number.isNaN(Date.parse(result.now))).toBe(false)
+    expect(result.timeZone.length).toBeGreaterThan(0)
+    expect(result.channels).toEqual([{
+      channel: 'weixin',
+      accountId: 'acct-b',
+      allowedNow: false,
+      nextSendAt: new Date(1_700_000_030_000).toISOString(),
+      throttleUntil: new Date(1_700_000_300_000).toISOString(),
+      queueDepth: 2,
+    }])
+    const serialized = JSON.stringify(result)
+    // 只读时间面：凭据、对端 id 与消息正文都不进上下文。
+    for (const secret of ['token', 'peer-', 'alice', 'secret']) {
+      expect(serialized).not.toContain(secret)
+    }
+  })
+
+  it('degrades to available:false with a reason when the runtime is missing', async () => {
+    const { call } = toolsOf(undefined)
+    const result = await call('im_time', {}) as { available: boolean; reasons: string[]; channels: unknown[]; now: string }
+    expect(result.available).toBe(false)
+    expect(result.reasons).toEqual(['IM runtime is not mounted in this host process'])
+    expect(result.channels).toEqual([])
+    expect(Number.isNaN(Date.parse(result.now))).toBe(false)
+  })
+
+  it('tells the model to check it before assuming a delayed send was lost', () => {
+    const { runtime } = runtimeHarness()
+    const { list } = toolsOf(runtime)
+    const time = list.find((tool) => tool.name === 'im_time')
+    expect(time?.description).toContain('queued')
+    expect(time?.description).toContain('scheduledAt')
+  })
+})
+
 describe('im_send', () => {
   it('uses the single binding when peer is omitted and sends trimmed text', async () => {
     const { runtime, sent } = runtimeHarness()
@@ -215,6 +274,19 @@ describe('im_send', () => {
     const result = await call('im_send', { text: '  在吗  ' }) as { peer: string; parts: number }
     expect(result).toMatchObject({ peer: aliceAlias, parts: 1 })
     expect(sent).toEqual([{ peerKey: ALICE, text: '在吗' }])
+  })
+
+  it('reports a queued send with its scheduled time instead of faking a delivery', async () => {
+    const { runtime, sent } = runtimeHarness({ queued: true })
+    const { call } = toolsOf(runtime)
+    const result = await call('im_send', { text: 'hi', peer: aliceAlias }) as Record<string, unknown>
+    expect(result).toEqual({
+      peer: aliceAlias,
+      parts: 2,
+      status: 'queued',
+      scheduledAt: new Date(1_700_000_030_000).toISOString(),
+    })
+    expect(sent).toEqual([{ peerKey: ALICE, text: 'hi' }])
   })
 
   it('rejects an alias bound to another session', async () => {
@@ -309,6 +381,11 @@ describe('im_send', () => {
     const send = list.find((entry) => entry.name === 'im_send')
     expect(send?.description).toContain('msg=')
     expect(send?.description).toContain('replyTo')
+    // 排队回执与冷却失败语义必须在描述里：模型不能把 queued 当已送达，
+    // 也不能在 WEIXIN_THROTTLED 之后继续本轮重试。
+    expect(send?.description).toContain('scheduledAt')
+    expect(send?.description).toContain('im_time')
+    expect(send?.description).toContain('WEIXIN_THROTTLED')
   })
 
   it('rejects an omitted peer with the zero-binding error and an unknown alias with its own error', async () => {

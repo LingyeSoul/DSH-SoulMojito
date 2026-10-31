@@ -15,7 +15,7 @@ import { envCompat } from '../env-compat.js'
 import type { ImLogQuery, ImLogSnapshot } from './log.js'
 import type { ImMessageRefEntry } from './refs.js'
 import type { ImSessionCapabilities } from './session-host.js'
-import type { ImAccountRef, ImBindStatus, ImChannelId, ImChannelView, ImOutboundMedia, ImSendReceipt } from './types.js'
+import type { ImAccountRef, ImBindStatus, ImChannelId, ImChannelView, ImOutboundMedia, ImSendOutcome, ImSendStatusView, ImSettings } from './types.js'
 
 /** bundle 间互见契约 key（不得变更）。 */
 export const IM_RUNTIME_KEY = 'dsh-soulmojito:im-runtime'
@@ -25,9 +25,9 @@ const runtimeSymbol = Symbol.for(IM_RUNTIME_KEY)
 /** 工具面需要的最小路由投影：主动发文本与媒体。 */
 export interface ImRouterHandle {
   /** `options.passiveReplyTo` 覆盖该 peer 的自动锚点（im_send 的 replyTo 用）。 */
-  sendText(peerKey: string, text: string, options?: { passiveReplyTo?: string }): Promise<ImSendReceipt>
+  sendText(peerKey: string, text: string, options?: { passiveReplyTo?: string }): Promise<ImSendOutcome>
   /** 可选：旧假件没有媒体面时，工具按「该运行时不能发媒体」报错。 */
-  sendMedia?(peerKey: string, media: ImOutboundMedia, options?: { passiveReplyTo?: string }): Promise<ImSendReceipt>
+  sendMedia?(peerKey: string, media: ImOutboundMedia, options?: { passiveReplyTo?: string }): Promise<ImSendOutcome>
   /**
    * 可选：解析 relay 头部的 `msg=` 引用 → peer、会话与被动锚点。缺省的旧假件
    * 按「未知/过期」处理，工具绝不据此猜目标。
@@ -45,6 +45,17 @@ export interface ImPresetSwitchResult {
 export interface ImRuntimeHandle {
   readonly capabilities: ImSessionCapabilities
   views(): ImChannelView[]
+  /**
+   * 出站节奏投影（决策 2026-10-31-weixin-send-queue）：每个实现了发送队列的
+   * 账号一行，供 `GET im` 与 `im_time` 使用。可选：没有队列的实现（测试假件）
+   * 不提供时按「无排队信息」处理。
+   */
+  sendStatuses?(): ImSendStatusView[]
+  /**
+   * 设置页写入后的生效点：运行中的微信通道即时换出站间隔。可选：实现可缺省，
+   * 调用方（`POST im/settings`）只在存在时调用。
+   */
+  applySettings?(settings: ImSettings): void
   /**
    * 面板「IM 运行日志」：进程内环形缓冲的增量读取。可选，缺省表示这个运行时
    * 没有日志面（测试假件）。

@@ -1,12 +1,13 @@
 /**
  * 「聊天渠道」面板源检查（提案 0024 §6.1 / §6.3 / §6.4，M5）：三张通道卡与状态灯、
  * 扫码相位轮询与微信验证码、OneBot 端点地址、绑定表（共享会话徽标/改绑/解绑）、自动
- * 绑定设置与两份白名单、运行日志带与腾讯包一键安装。
+ * 绑定设置与两份白名单、运行日志带、行为页与腾讯包一键安装。
  *
- * 读 `client-src/97-ui-im.js` / `97b-ui-im-logs.js` 而不是 `client/main.js`：后者是
- * 构建产物，而 `pnpm run check` 里 vitest 跑在 `scripts/build-plugin.mjs` 之前（与
- * agent-tavern-body-client.spec.ts 同一条理由）。纯函数（共享徽标判定、白名单
- * 解析、日志合并、状态灯）用 vm 真实执行，其余是字符串/正则结构断言。
+ * 读 `client-src/97-ui-im.js` 及其伴随分片（97b 日志 / 97cc 行为 / 97d 扫码）而不是
+ * `client/main.js`：后者是构建产物，而 `pnpm run check` 里 vitest 跑在
+ * `scripts/build-plugin.mjs` 之前（与 agent-tavern-body-client.spec.ts 同一条理由）。
+ * 纯函数（共享徽标判定、白名单解析、日志合并、状态灯、间隔与时间格式化）用 vm 真实
+ * 执行，其余是字符串/正则结构断言。
  */
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -18,8 +19,10 @@ const here = dirname(fileURLToPath(import.meta.url))
 const sourceDir = join(here, '../client-src')
 const imSource = readFileSync(join(sourceDir, '97-ui-im.js'), 'utf8')
 const logsSource = readFileSync(join(sourceDir, '97b-ui-im-logs.js'), 'utf8')
+const behaviorSource = readFileSync(join(sourceDir, '97cc-ui-im-behavior.js'), 'utf8')
+const bindSource = readFileSync(join(sourceDir, '97d-ui-im-bind.js'), 'utf8')
 /** 分片在同一 factory 作用域里按清单顺序拼接：vm 里也照这个顺序拼。 */
-const imPanelSource = `${imSource}\n${logsSource}`
+const imPanelSource = `${imSource}\n${logsSource}\n${behaviorSource}\n${bindSource}`
 const coreSource = readFileSync(join(sourceDir, '90-panels-core.js'), 'utf8')
 const iconSource = readFileSync(join(sourceDir, '30-games-ui.js'), 'utf8')
 const stylesSource = readFileSync(join(sourceDir, '95-ui-styles.js'), 'utf8')
@@ -37,6 +40,7 @@ const IM_I18N_KEYS = [
   'im.tabs.label',
   'im.tabs.channels',
   'im.tabs.bindings',
+  'im.tabs.behavior',
   'im.tabs.logs',
   'im.channels',
   'im.channel.qq',
@@ -126,6 +130,20 @@ const IM_I18N_KEYS = [
   'im.qqInstallAlready',
   'im.qqInstallBusy',
   'im.qqInstallFailed',
+  'im.behavior.title',
+  'im.behavior.hint',
+  'im.behavior.interval',
+  'im.behavior.intervalHint',
+  'im.behavior.save',
+  'im.behavior.reset',
+  'im.behavior.statusTitle',
+  'im.behavior.statusEmpty',
+  'im.behavior.allowedNow',
+  'im.behavior.waiting',
+  'im.behavior.nextSendAt',
+  'im.behavior.throttleUntil',
+  'im.behavior.queueDepth',
+  'im.behavior.invalidInterval',
 ]
 
 type LogEntry = { seq: number; at: string; level: string; text: string }
@@ -143,6 +161,8 @@ type PanelPure = {
   imMergeLogEntries: (existing: LogEntry[], incoming: LogEntry[], cap: number) => LogEntry[]
   imLogFilter: (entries: LogEntry[], level: string) => LogEntry[]
   imLogTime: (at: string) => string
+  imSendIntervalValue: (settings: { weixinSendIntervalMs?: unknown } | null) => number | null
+  imStatusTime: (at: number | string) => string
 }
 
 /** 在 vm 里执行分片并取回纯函数：顶层只有常量与函数声明，不依赖 React。 */
@@ -156,6 +176,7 @@ function loadPanelPure(): PanelPure {
 ;globalThis.__imPanel = {
   imChannelTone, imChannelReason, imPeerParts, imSharedSessionIds, imIdList,
   imSessionLabeler, imMergeLogEntries, imLogFilter, imLogTime,
+  imSendIntervalValue, imStatusTime,
 }`,
     context,
     { filename: '97-ui-im.js' },
@@ -208,7 +229,7 @@ function createPanelRender(options: { characters?: string[]; chatLists?: Record<
   })
   vm.runInContext(
     `${imPanelSource}
-;globalThis.__imRender = { PanelIm, ImTabs, ImChannelCard, ImBindPanel, ImPeerRow, ImPeersBand, ImSettingsBand, ImOneBotBand, ImLogBand, ImLogRows }`,
+;globalThis.__imRender = { PanelIm, ImTabs, ImChannelCard, ImBindPanel, ImPeerRow, ImPeersBand, ImSettingsBand, ImOneBotBand, ImLogBand, ImLogRows, ImBehaviorBand }`,
     context,
     { filename: '97-ui-im.js' },
   )
@@ -287,16 +308,25 @@ function definitionCount(source: string, key: string): number {
 }
 
 describe('IM channels panel (client-src source check)', () => {
-  it('ships the 97-ui-im fragment and its log companion between the presets and apply fragments', () => {
+  it('ships the 97-ui-im fragment and its log/behavior/bind companions between the presets and apply fragments', () => {
     const presetsAt = manifest.fragments.indexOf('96-panels-presets.js')
     const imAt = manifest.fragments.indexOf('97-ui-im.js')
     const logsAt = manifest.fragments.indexOf('97b-ui-im-logs.js')
+    const behaviorAt = manifest.fragments.indexOf('97cc-ui-im-behavior.js')
+    const bindAt = manifest.fragments.indexOf('97d-ui-im-bind.js')
     const applyAt = manifest.fragments.indexOf('98-apply.js')
     expect(presetsAt).toBeGreaterThanOrEqual(0)
     expect(imAt).toBe(presetsAt + 1)
-    // 日志带与面板共用作用域（imErrorMessage / Button 等）：必须紧跟其后拼接。
+    // 伴随分片与面板共用作用域（imErrorMessage / Button / imBindBusy 等）：
+    // 必须紧跟其后、按清单顺序拼接。
     expect(logsAt).toBe(imAt + 1)
-    expect(applyAt).toBe(logsAt + 1)
+    expect(behaviorAt).toBe(logsAt + 1)
+    expect(bindAt).toBe(behaviorAt + 1)
+    expect(applyAt).toBe(bindAt + 1)
+    // 扫码面板确实搬到了伴随分片：主分片只剩引用，定义只在一处。
+    expect(bindSource).toContain('function ImBindPanel(')
+    expect(imSource).not.toContain('function ImBindPanel(')
+    expect(imSource).toContain('h(ImBindPanel, {')
   })
 
   it('registers the im section in the system group with a locale thunk', () => {
@@ -396,9 +426,10 @@ describe('IM channels panel (client-src source check)', () => {
     expect(imSource).toContain("phase === 'verify'")
     expect(imSource).toContain("api('im/bind/verify'")
     expect(imSource).toContain('body: JSON.stringify({ code })')
-    expect(imSource).toContain("t('im.bindVerify')")
-    expect(imSource).toContain("t('im.bindFailed', { reason: bind.reason || '—' })")
-    expect(imSource).toContain("t('im.bindRetry')")
+    // 扫码面板本体在 97d 伴随分片：键与失败分支从那里断言。
+    expect(bindSource).toContain("t('im.bindVerify')")
+    expect(bindSource).toContain("t('im.bindFailed', { reason: bind.reason || '—' })")
+    expect(bindSource).toContain("t('im.bindRetry')")
   })
 
   it('offers a one-click QQ runtime install instead of a shell command', () => {
@@ -617,15 +648,23 @@ describe('IM channels panel (client-src source check)', () => {
     expect(tree.attrs).toContain('data-im-tab-panel=channels')
   })
 
-  it('isolates bindings and logs in their own tab panels (render smoke)', () => {
+  it('isolates bindings, behavior and logs in their own tab panels (render smoke)', () => {
     const useSessions = (selector: (value: { ids: string[]; byId: Record<string, unknown>; phase: string }) => unknown) => selector({ ids: [], byId: {}, phase: 'ready' })
     const bindings = collectNode(createPanelRender({ initialTab: 'bindings' }).PanelIm({ useSessions }))
     expect(bindings.types).toContain('ImPeersBand')
     expect(bindings.types).toContain('ImSettingsBand')
     expect(bindings.types).not.toContain('ImChannelCard')
     expect(bindings.types).not.toContain('ImOneBotBand')
+    expect(bindings.types).not.toContain('ImBehaviorBand')
     expect(bindings.types).not.toContain('ImLogBand')
     expect(bindings.attrs).toContain('data-im-tab-panel=bindings')
+
+    const behavior = collectNode(createPanelRender({ initialTab: 'behavior' }).PanelIm({ useSessions }))
+    expect(behavior.types).toContain('ImBehaviorBand')
+    expect(behavior.types).not.toContain('ImChannelCard')
+    expect(behavior.types).not.toContain('ImPeersBand')
+    expect(behavior.types).not.toContain('ImLogBand')
+    expect(behavior.attrs).toContain('data-im-tab-panel=behavior')
 
     const logs = collectNode(createPanelRender({ initialTab: 'logs' }).PanelIm({ useSessions }))
     expect(logs.types).toContain('ImLogBand')
@@ -633,6 +672,7 @@ describe('IM channels panel (client-src source check)', () => {
     expect(logs.types).not.toContain('ImOneBotBand')
     expect(logs.types).not.toContain('ImPeersBand')
     expect(logs.types).not.toContain('ImSettingsBand')
+    expect(logs.types).not.toContain('ImBehaviorBand')
     expect(logs.attrs).toContain('data-im-tab-panel=logs')
   })
 
@@ -644,14 +684,15 @@ describe('IM channels panel (client-src source check)', () => {
     const collected = collectNode(tree)
     expect(collected.texts).toContain('im.tabs.channels')
     expect(collected.texts).toContain('im.tabs.bindings')
+    expect(collected.texts).toContain('im.tabs.behavior')
     expect(collected.texts).toContain('im.tabs.logs')
-    expect(tabs.map((tab) => tab.props['data-im-tab'])).toEqual(['channels', 'bindings', 'logs'])
-    expect(tabs.map((tab) => tab.props['aria-selected'])).toEqual([false, true, false])
+    expect(tabs.map((tab) => tab.props['data-im-tab'])).toEqual(['channels', 'bindings', 'behavior', 'logs'])
+    expect(tabs.map((tab) => tab.props['aria-selected'])).toEqual([false, true, false, false])
     expect(tabs.every((tab) => tab.props.type === 'button' && typeof tab.props['aria-controls'] === 'string')).toBe(true)
-    const logs = tabs.find((tab) => tab.props['data-im-tab'] === 'logs')
-    expect(logs).toBeDefined()
-    ;(logs?.props.onClick as () => void)()
-    expect(selected).toBe('logs')
+    const behavior = tabs.find((tab) => tab.props['data-im-tab'] === 'behavior')
+    expect(behavior).toBeDefined()
+    ;(behavior?.props.onClick as () => void)()
+    expect(selected).toBe('behavior')
   })
 
   it('renders channel state, the install button and every bind phase (render smoke)', () => {
@@ -757,6 +798,82 @@ describe('IM channels panel (client-src source check)', () => {
     // 空列表不渲染行容器，只有工具栏与空态。
     expect(band.types).not.toContain('ImLogRows')
     expect(band.types.filter((type) => type === 'button')).toHaveLength(5)
+  })
+
+  it('wires the Behavior tab to im/settings and the send-pacing projection', () => {
+    expect(imSource).toContain("activeTab === 'behavior'")
+    expect(imSource).toContain('view?.sendStatuses ?? []')
+    expect(imSource).toContain("onSave: saveSettings")
+    expect(imSource).toContain("onError: setError")
+    expect(behaviorSource).toContain("t('im.behavior.interval')")
+    expect(behaviorSource).toContain('weixinSendIntervalMs: parsed')
+    expect(behaviorSource).toContain('weixinSendIntervalMs: null')
+    expect(behaviorSource).toContain("'data-im-send-status'")
+    expect(behaviorSource).toContain("'data-im-behavior': 'band'")
+  })
+
+  it('renders the interval form and the read-only send status rows (render smoke)', () => {
+    const components = createPanelRender({})
+    const behaviorTree = components.ImBehaviorBand({
+      settings: { weixinSendIntervalMs: 2_500 },
+      statuses: [
+        { channel: 'weixin', accountId: 'wechat-a', allowedNow: true, queueDepth: 0 },
+        {
+          channel: 'weixin',
+          accountId: 'wechat-b',
+          allowedNow: false,
+          nextSendAt: new Date(2026, 9, 31, 9, 5, 7).getTime(),
+          throttleUntil: new Date(2026, 9, 31, 9, 10, 7).getTime(),
+          queueDepth: 3,
+        },
+      ],
+      busy: '',
+      onSave: () => Promise.resolve(true),
+      onError: () => {},
+    })
+    const behavior = collectNode(behaviorTree)
+    expect(behavior.attrs).toContain('data-im-behavior=band')
+    expect(behavior.attrs).toContain('data-im-send-status=weixin:wechat-a')
+    expect(behavior.attrs).toContain('data-im-send-status=weixin:wechat-b')
+    expect(behavior.texts).toContain('im.behavior.title')
+    expect(behavior.texts).toContain('im.behavior.allowedNow')
+    expect(behavior.texts).toContain('im.behavior.waiting')
+    expect(behavior.texts).toContain('im.behavior.statusTitle')
+    expect(behavior.texts.some((text) => text.includes('im.behavior.queueDepth(count=3)'))).toBe(true)
+    expect(behavior.texts.some((text) => text.includes('im.behavior.nextSendAt(at='))).toBe(true)
+    expect(behavior.texts.some((text) => text.includes('im.behavior.throttleUntil(at='))).toBe(true)
+    expect(behavior.types).toContain('input')
+    const buttons = findButtons(behaviorTree)
+    expect(buttons.map((button) => button.label)).toEqual(['im.behavior.save', 'im.behavior.reset'])
+    expect(buttons[1]?.props.disabled).toBe(false)
+
+    // 没有在线账号：只说明事实，不编造状态行。
+    const emptyTree = components.ImBehaviorBand({
+      settings: { groupRequireMention: true },
+      statuses: [],
+      busy: '',
+      onSave: () => Promise.resolve(true),
+      onError: () => {},
+    })
+    const empty = collectNode(emptyTree)
+    expect(empty.texts).toContain('im.behavior.statusEmpty')
+    expect(empty.attrs).not.toContain('data-im-send-status=undefined:undefined')
+    // 间隔清除后「恢复默认」不可点；设置未加载时显示加载态。
+    expect(findButtons(emptyTree)[1]?.props.disabled).toBe(true)
+    const loading = collectNode(components.ImBehaviorBand({
+      settings: null, statuses: [], busy: '', onSave: () => Promise.resolve(true), onError: () => {},
+    }))
+    expect(loading.texts).toContain('nav.loading')
+  })
+
+  it('parses the interval draft and formats status times', () => {
+    const panel = loadPanelPure()
+    expect(panel.imSendIntervalValue({ weixinSendIntervalMs: 2_500 })).toBe(2_500)
+    expect(panel.imSendIntervalValue({})).toBeNull()
+    expect(panel.imSendIntervalValue(null)).toBeNull()
+    const at = new Date(2026, 9, 31, 9, 5, 7).toISOString()
+    expect(panel.imStatusTime(at)).toBe(new Date(at).toLocaleString())
+    expect(panel.imStatusTime('not-a-date')).toBe('—')
   })
 
   it('renders the shared-session badge and the access form (render smoke)', () => {

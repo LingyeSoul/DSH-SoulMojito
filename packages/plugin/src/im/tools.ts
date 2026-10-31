@@ -1,5 +1,6 @@
 /**
- * IM 工具族（提案 0024 §3.6）：`im_identity` / `im_channels` / `im_send`。
+ * IM 工具族（提案 0024 §3.6）：`im_identity` / `im_channels` / `im_send` /
+ * `im_time`（当前时间 + 各账号出站节奏，决策 2026-10-31-weixin-send-queue）。
  *
  * 身份只来自宿主注入的 agent id + `state.imPeers` 反查，**没有任何 sessionId
  * 参数**——工具面不能变成「给任意 QQ 号发消息」的开放接口。
@@ -14,7 +15,7 @@ import type { TavernStore } from '../../../tavern-store/src/index.js'
 import type { HostLogger } from '../host-contract.js'
 import { objectOutput, tool, type ToolDefinition, type ToolExecution } from '../agent-tavern/tools/shared.js'
 import type { ImRuntimeHandle } from './handle.js'
-import type { ImOutboundMedia, ImScope } from './types.js'
+import type { ImOutboundMedia, ImQueuedSendReceipt, ImSendOutcome, ImScope } from './types.js'
 import { imPeerAlias, imPeerKeyParts } from './types.js'
 
 /** 工具面单条上限：不在这里切分，超长交给模型自己分段（提案 §3.7 的切分属出站投影）。 */
@@ -62,7 +63,7 @@ export function createImTools(deps: ImToolsDeps): ToolDefinition[] {
         })),
       }
     }),
-    tool('im_send', 'Send one message to an IM peer that is bound to this session. Use it to reply when an IM message has been relayed into this session. Send text, a media item, or a media item with a caption. Each relay header carries msg=<ref> (with the receive time); replyTo is optional, usually omitted, and citing that ref anchors the reply to that exact message (and its peer). Omit peer only when exactly one peer is bound; when several peers are bound, pass the alias from im_identity because there is no deterministic target otherwise — replyTo is the only exception, since the ref already names its peer. Text is trimmed and capped at 4000 characters. Media is read from an absolute local path (preferred) or an http(s) URL for image/video. Cross-session sending is forbidden: an alias or replyTo outside this session is rejected.', {
+    tool('im_send', 'Send one message to an IM peer that is bound to this session. Use it to reply when an IM message has been relayed into this session. Send text, a media item, or a media item with a caption. Each relay header carries msg=<ref> (with the receive time); replyTo is optional, usually omitted, and citing that ref anchors the reply to that exact message (and its peer). Omit peer only when exactly one peer is bound; when several peers are bound, pass the alias from im_identity because there is no deterministic target otherwise — replyTo is the only exception, since the ref already names its peer. Text is trimmed and capped at 4000 characters. Media is read from an absolute local path (preferred) or an http(s) URL for image/video. Cross-session sending is forbidden: an alias or replyTo outside this session is rejected. The result can be a queued receipt (status "queued" with scheduledAt) when the channel paces a burst (WeChat): report that scheduled time as not yet delivered instead of claiming success, and check im_time for the next allowed send, any cooldown and the queue depth; a thrown WEIXIN_THROTTLED means the plugin already retried once after the cooldown and gave up, so do not retry in the same turn.', {
       text: { type: 'string', description: 'Message text, 1-4000 characters after trimming. Optional when media is attached; then it becomes the caption.' },
       peer: { type: 'string', description: 'Target peer alias from im_identity; required when this session has more than one binding.' },
       replyTo: { type: 'string', description: 'Optional message ref from a relay header (msg=...): anchors this reply to that exact message and its peer. The ref alone may pick the peer; normally omit.' },
@@ -123,20 +124,36 @@ export function createImTools(deps: ImToolsDeps): ToolDefinition[] {
         }
         const withCaption: typeof media = text === undefined ? media : { ...media, caption: text }
         const receipt = await runtime.router.sendMedia(peer.peerKey, withCaption, sendOptions)
-        return {
-          peer: peer.alias,
-          parts: receipt.parts,
-          sentAt: new Date(receipt.at).toISOString(),
-          mediaKind: media.kind,
-          ...(receipt.messageId === undefined ? {} : { messageId: receipt.messageId }),
-        }
+        return sentResultOf(peer.alias, receipt, media.kind)
       }
       const receipt = await runtime.router.sendText(peer.peerKey, text as string, sendOptions)
+      return sentResultOf(peer.alias, receipt)
+    }),
+    tool('im_time', 'Report the current server time (ISO 8601 with the IANA time zone) and the outbound pacing of every configured IM account: whether a message can start now, the next allowed send time, any WeChat -2 cooldown end, and how many sends are queued. Use it before assuming a delayed send was lost: a queued im_send result carries scheduledAt, and this tool confirms the queue and the next window. Read-only; never returns credentials or peer ids.', {}, timeOutput, async () => {
+      const runtime = deps.runtime()
+      const now = new Date()
+      if (runtime === undefined) {
+        return {
+          available: false,
+          reasons: ['IM runtime is not mounted in this host process'],
+          now: now.toISOString(),
+          timeZone: resolveTimeZone(),
+          channels: [],
+        }
+      }
       return {
-        peer: peer.alias,
-        parts: receipt.parts,
-        sentAt: new Date(receipt.at).toISOString(),
-        ...(receipt.messageId === undefined ? {} : { messageId: receipt.messageId }),
+        available: runtime.capabilities.available,
+        reasons: [...runtime.capabilities.reasons],
+        now: now.toISOString(),
+        timeZone: resolveTimeZone(),
+        channels: (runtime.sendStatuses?.() ?? []).map((row) => ({
+          channel: row.channel,
+          accountId: row.accountId,
+          allowedNow: row.allowedNow,
+          ...(row.nextSendAt === undefined ? {} : { nextSendAt: new Date(row.nextSendAt).toISOString() }),
+          ...(row.throttleUntil === undefined ? {} : { throttleUntil: new Date(row.throttleUntil).toISOString() }),
+          queueDepth: row.queueDepth,
+        })),
       }
     }),
   ]
@@ -148,6 +165,42 @@ function publicPeer(peer: BoundPeer): { alias: string; channel: string; scope: I
     alias: peer.alias,
     channel: peer.channel,
     scope: peer.scope,
+  }
+}
+
+/**
+ * 出站回执 → 工具结果。送达回执给 `sentAt`；排队回执（微信突发/冷却）给
+ * `scheduledAt`，模型据此告诉用户「几点会发出去」，而不是当成失败或已送达。
+ */
+function sentResultOf(alias: string, outcome: ImSendOutcome, mediaKind?: ImOutboundMedia['kind']): Record<string, unknown> {
+  const base = {
+    peer: alias,
+    parts: outcome.parts,
+    ...(mediaKind === undefined ? {} : { mediaKind }),
+  }
+  if (isQueuedReceipt(outcome)) {
+    return { ...base, status: 'queued', scheduledAt: new Date(outcome.scheduledAt).toISOString() }
+  }
+  return {
+    ...base,
+    status: 'sent',
+    sentAt: new Date(outcome.at).toISOString(),
+    ...(outcome.messageId === undefined ? {} : { messageId: outcome.messageId }),
+  }
+}
+
+/** 判别排队回执：送达回执是 `{ parts, at, messageId? }`，没有 status 字段。 */
+function isQueuedReceipt(outcome: ImSendOutcome): outcome is ImQueuedSendReceipt {
+  return 'status' in outcome && outcome.status === 'queued'
+}
+
+/** IANA 时区名；极端环境下 Intl 不可用时回 UTC，不编造本地偏移。 */
+function resolveTimeZone(): string {
+  try {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone
+    return typeof zone === 'string' && zone !== '' ? zone : 'UTC'
+  } catch {
+    return 'UTC'
   }
 }
 
@@ -188,10 +241,35 @@ const channelsOutput = objectOutput({
 const sendOutput = objectOutput({
   peer: { type: 'string' },
   parts: { type: 'integer' },
+  status: { type: 'string', enum: ['sent', 'queued'] },
   sentAt: { type: 'string' },
+  scheduledAt: { type: 'string' },
   messageId: { type: 'string' },
   mediaKind: { type: 'string', enum: ['image', 'voice', 'video', 'file'] },
-}, ['messageId', 'mediaKind'])
+}, ['sentAt', 'scheduledAt', 'messageId', 'mediaKind'])
+
+const timeOutput = objectOutput({
+  available: { type: 'boolean' },
+  reasons: { type: 'array', items: { type: 'string' } },
+  now: { type: 'string' },
+  timeZone: { type: 'string' },
+  channels: {
+    type: 'array',
+    items: {
+      type: 'object',
+      properties: {
+        channel: { type: 'string' },
+        accountId: { type: 'string' },
+        allowedNow: { type: 'boolean' },
+        nextSendAt: { type: 'string' },
+        throttleUntil: { type: 'string' },
+        queueDepth: { type: 'integer' },
+      },
+      required: ['channel', 'accountId', 'allowedNow', 'queueDepth'],
+      additionalProperties: false,
+    },
+  },
+}, [])
 
 /** 工具身份只认宿主注入的 agent id；缺它就拒绝执行，绝不回落到会话参数。 */
 function requireAgentId(exec: ToolExecution): string {

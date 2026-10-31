@@ -64,6 +64,8 @@ export async function handleImApi(
       // 账号清单是 store 的事实、状态是运行时的投影：只列内存通道会让重启前的
       // 账号在面板上凭空消失，也会让「已配置但未连上」显示成不存在。
       channels: await channelViews(runtime, state.imPeers),
+      // 出站节奏（决策 2026-10-31-weixin-send-queue）：面板「行为」页的只读数据源。
+      sendStatuses: runtime?.sendStatuses?.() ?? [],
       // 两个腾讯包外挂安装：面板据此显示安装指引，而不是把「没装 SDK」显示成通道故障。
       qqRuntime: await qqRuntimeStatus(),
     })
@@ -248,6 +250,8 @@ export async function handleImApi(
       throw error
     }
     await db.patchState({ imSettings: next })
+    // 间隔改动要立刻生效：运行中的微信队列换挡，下次发送按新节奏排。
+    runtime?.applySettings?.(next)
     return sendJson(res, 200, { ok: true, settings: next })
   }
 

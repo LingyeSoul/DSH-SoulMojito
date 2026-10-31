@@ -14,7 +14,13 @@ import { createHash } from 'node:crypto'
 import type { ImScope } from '../../../tavern-store/src/index.js'
 
 export type { ImAccessMode, ImPeerBinding, ImPendingPeer, ImScope, ImSettings } from '../../../tavern-store/src/index.js'
-export { DEFAULT_IM_SETTINGS, imPeerKey } from '../../../tavern-store/src/index.js'
+export {
+  DEFAULT_IM_SETTINGS,
+  imPeerKey,
+  WEIXIN_SEND_INTERVAL_DEFAULT_MS,
+  WEIXIN_SEND_INTERVAL_MAX_MS,
+  WEIXIN_SEND_INTERVAL_MIN_MS,
+} from '../../../tavern-store/src/index.js'
 
 export type ImChannelId = 'qq' | 'weixin' | 'onebot'
 
@@ -114,6 +120,37 @@ export interface ImSendReceipt {
   at: number
 }
 
+/**
+ * 已排队的出站回执（决策 2026-10-31-weixin-send-queue）：微信突发/冷却被
+ * 队列接管后，工具调用拿不到「已送达」时如实回执「已排期」。
+ */
+export interface ImQueuedSendReceipt {
+  status: 'queued'
+  parts: number
+  /** 队列预计的第一部分开始时间（epoch ms）。 */
+  scheduledAt: number
+}
+
+export type ImSendOutcome = ImSendReceipt | ImQueuedSendReceipt
+
+/** 一个账号的出站节奏投影：`im_time` 与面板「行为」页共用。 */
+export interface ImSendStatus {
+  /** 现在立刻发起一条新消息是否无需等待（队列空、间隔已过、窗口有额、无冷却）。 */
+  allowedNow: boolean
+  /** `allowedNow` 为 false 时，最早可发起新消息的时间（epoch ms）。 */
+  nextSendAt?: number
+  /** `-2` 冷却结束时间（epoch ms）；未冷却时为 undefined。 */
+  throttleUntil?: number
+  /** 队列里尚未发完的逻辑发送数（含正在发送的那一条）。 */
+  queueDepth: number
+}
+
+/** 账号级投影：通道 + 账号 id + 出站节奏。 */
+export interface ImSendStatusView extends ImSendStatus {
+  channel: ImChannelId
+  accountId: string
+}
+
 export type ImChannelStatus =
   | { state: 'idle' }
   | { state: 'starting' }
@@ -150,7 +187,12 @@ export interface ImChannel {
   /** Close sockets, abort polls, release upgrade routes. Idempotent. */
   stop(): Promise<void>
   status(): ImChannelStatus
-  send(target: ImTarget, parts: readonly OutboundPart[]): Promise<ImSendReceipt>
+  /** 可能回「已送达」或「已排队」；只有微信有排队语义。 */
+  send(target: ImTarget, parts: readonly OutboundPart[]): Promise<ImSendOutcome>
+  /** 出站节奏投影（可选）：没有队列的通道不实现。 */
+  sendStatus?(): ImSendStatus
+  /** 面板改动微信间隔时的注入面（可选）：只对实现了队列的通道有意义。 */
+  setSendIntervalMs?(value: number): void
 }
 
 /** One account of one channel; secrets live outside this file. */

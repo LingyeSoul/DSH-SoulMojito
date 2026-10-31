@@ -88,6 +88,8 @@ function harness(options: HarnessOptions = {}): Harness {
         ...(part.localPath === undefined ? {} : { localPath: part.localPath }),
         ...(part.url === undefined ? {} : { url: part.url }),
       })))
+      // 路由现在原样透传通道出站结果（含微信的排队回执）；假通道按已送达回执。
+      return { parts: parts.length, at: clock }
     },
   })
   return {
@@ -511,7 +513,7 @@ describe('im router inbound coalescing', () => {
       },
       // 窗口定时器永不触发：只剩 flushPending 自己会冲刷。
       scheduleFlush: () => () => {},
-      send: async () => {},
+      send: async () => ({ parts: 1, at: 1_000 }),
       log: {
         note: (level, text) => { logs.push({ level, text }) },
         read: () => ({ entries: [], nextSeq: 0 }),

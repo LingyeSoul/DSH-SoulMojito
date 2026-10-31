@@ -17,6 +17,18 @@ export type ImScope = 'private' | 'group'
 /** 访问控制三态：开放 / 白名单 / 关闭。 */
 export type ImAccessMode = 'open' | 'allowlist' | 'disabled'
 
+/**
+ * 微信出站节奏的取值边界（决策 2026-10-31-weixin-send-queue）。
+ *
+ * 缺省 3s：iLink 的硬上限是 30s 窗口 5 条，日常短句回复按 3s 间隔铺开既能守住
+ * 窗口，又不至于让一次 2–5 条回复拖过一整分钟；下限 500ms 防止面板填出仍会触发
+ * 平台突发的节奏，上限 60s 防止把回复拖到对端以为机器人离线。校验在
+ * `packages/plugin/src/im/settings.ts` 的 `applyImSettingsPatch` 里生效。
+ */
+export const WEIXIN_SEND_INTERVAL_DEFAULT_MS = 3_000
+export const WEIXIN_SEND_INTERVAL_MIN_MS = 500
+export const WEIXIN_SEND_INTERVAL_MAX_MS = 60_000
+
 export interface ImSettings {
   /** QQ 群必须 @ 机器人才投递；默认开启，可关。 */
   groupRequireMention: boolean
@@ -26,6 +38,12 @@ export interface ImSettings {
   groupAllow: string[]
   /** 单条出站上限；缺省按渠道默认（QQ 4500 / 微信 1800 / OneBot 2000）。 */
   chunkLimit?: number
+  /**
+   * 微信出站间隔（毫秒）；缺省 = `WEIXIN_SEND_INTERVAL_DEFAULT_MS`。
+   * 面板可填 500..60000 的整数，`null` 清除回默认；30s/5 条的窗口与 `-2`
+   * 冷却仍是改不动的硬上限。
+   */
+  weixinSendIntervalMs?: number
 }
 
 /** 一条 peer → 原生会话的绑定。会话本身由用户在 DSH 里创建与打开。 */
@@ -94,6 +112,7 @@ export function normalizeImSettings(value: unknown): ImSettings {
   }
   const record = value as Record<string, unknown>
   const chunkLimit = record['chunkLimit']
+  const sendInterval = record['weixinSendIntervalMs']
   return {
     groupRequireMention: record['groupRequireMention'] !== false,
     privateMode: normalizeAccessMode(record['privateMode'], 'allowlist'),
@@ -102,6 +121,13 @@ export function normalizeImSettings(value: unknown): ImSettings {
     groupAllow: normalizeStringList(record['groupAllow']),
     ...(typeof chunkLimit === 'number' && Number.isSafeInteger(chunkLimit) && chunkLimit > 0
       ? { chunkLimit }
+      : {}),
+    // 手改坏了的间隔（非整数/越界）直接丢弃回落默认，不拖垮整份设置。
+    ...(typeof sendInterval === 'number'
+      && Number.isSafeInteger(sendInterval)
+      && sendInterval >= WEIXIN_SEND_INTERVAL_MIN_MS
+      && sendInterval <= WEIXIN_SEND_INTERVAL_MAX_MS
+      ? { weixinSendIntervalMs: sendInterval }
       : {}),
   }
 }

@@ -226,6 +226,8 @@ interface HarnessOptions {
   clock: WeixinClock
   typingEnabled?: boolean
   media?: ImMediaStore
+  /** 出站间隔（毫秒）；媒体用例缺省 0，不让固定时钟把 3s 节奏真的等满。 */
+  sendIntervalMs?: number
 }
 
 function channelHarness(options: HarnessOptions): Harness {
@@ -250,6 +252,7 @@ function channelHarness(options: HarnessOptions): Harness {
     clock: options.clock,
     longPollTimeoutMs: 50,
     typingEnabled: options.typingEnabled ?? false,
+    sendIntervalMs: options.sendIntervalMs ?? 0,
     ...(options.media === undefined ? {} : { media: options.media }),
   })
   return {

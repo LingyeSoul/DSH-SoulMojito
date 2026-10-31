@@ -7,7 +7,12 @@
  */
 
 import type { ImChannelId, ImScope, ImSettings } from './types.js'
-import { DEFAULT_IM_SETTINGS } from './types.js'
+import {
+  DEFAULT_IM_SETTINGS,
+  WEIXIN_SEND_INTERVAL_DEFAULT_MS,
+  WEIXIN_SEND_INTERVAL_MAX_MS,
+  WEIXIN_SEND_INTERVAL_MIN_MS,
+} from './types.js'
 
 /** 单条消息的默认上限：QQ 保守取 4500（平台约 5000），微信按段落阅读习惯取 1800。 */
 export const IM_CHUNK_DEFAULTS: Readonly<Record<ImChannelId, number>> = {
@@ -26,6 +31,11 @@ export class ImSettingsError extends Error {
 
 export function imChunkLimit(channel: ImChannelId, settings: ImSettings): number {
   return settings.chunkLimit ?? IM_CHUNK_DEFAULTS[channel]
+}
+
+/** 微信出站间隔：缺省回落到常量；面板 `null` 清除后同样走这条。 */
+export function weixinSendIntervalOf(settings: ImSettings): number {
+  return settings.weixinSendIntervalMs ?? WEIXIN_SEND_INTERVAL_DEFAULT_MS
 }
 
 /**
@@ -92,6 +102,24 @@ export function applyImSettingsPatch(current: ImSettings, patch: unknown): ImSet
     if (value === null) delete next.chunkLimit
     else if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) next.chunkLimit = value
     else throw new ImSettingsError('chunkLimit must be a positive integer or null')
+  }
+  if ('weixinSendIntervalMs' in record) {
+    const value = record['weixinSendIntervalMs']
+    // null = 清除回默认；面板清空输入框就是这条路径。越界不静默钳制：静默纠正
+    // 会让面板显示值与真实节奏分叉。
+    if (value === null) delete next.weixinSendIntervalMs
+    else if (
+      typeof value === 'number'
+      && Number.isSafeInteger(value)
+      && value >= WEIXIN_SEND_INTERVAL_MIN_MS
+      && value <= WEIXIN_SEND_INTERVAL_MAX_MS
+    ) {
+      next.weixinSendIntervalMs = value
+    } else {
+      throw new ImSettingsError(
+        `weixinSendIntervalMs must be an integer between ${WEIXIN_SEND_INTERVAL_MIN_MS} and ${WEIXIN_SEND_INTERVAL_MAX_MS} or null`,
+      )
+    }
   }
   assertImSettingsUsable(next)
   return next
