@@ -10,6 +10,7 @@ import { createImRuntime } from '../src/im/runtime.js'
 import { clearOneBotSeatForTest } from '../src/im/onebot/seat.js'
 import { ImStore } from '../src/im/store.js'
 import type { ImAccountRef } from '../src/im/types.js'
+import { imPeerKey } from '../src/im/types.js'
 
 const ACCOUNT: ImAccountRef = {
   channel: 'onebot',
@@ -81,9 +82,27 @@ describe('im runtime account lifecycle', () => {
     const runtime = createImRuntime(fakeContext(), { db })
     try {
       await runtime.upsertAccount(ACCOUNT, { token: 'secret-token' })
+      const peerKey = imPeerKey('onebot', '10001', 'private', 'u1')
+      const otherKey = imPeerKey('onebot', '20002', 'private', 'u2')
+      await db.updateState(() => ({
+        imPeers: {
+          [peerKey]: { sessionId: 'session-a', scope: 'private', boundBy: 'manual', createdAt: new Date(0).toISOString() },
+          [otherKey]: { sessionId: 'session-b', scope: 'private', boundBy: 'manual', createdAt: new Date(0).toISOString() },
+        },
+        imPendingPeers: {
+          [peerKey]: { lastAt: 1 },
+          [otherKey]: { lastAt: 2 },
+        },
+      }))
       expect(await runtime.removeAccount('onebot', '10001')).toBe(true)
       expect(runtime.views()).toEqual([])
       expect(await store().readSecret('onebot', '10001')).toBeUndefined()
+      const state = await db.getState()
+      // 账号没了，它的绑定与待办一起删；另一个账号的记录不受影响。
+      expect(state.imPeers?.[peerKey]).toBeUndefined()
+      expect(state.imPendingPeers?.[peerKey]).toBeUndefined()
+      expect(state.imPeers?.[otherKey]).toBeDefined()
+      expect(state.imPendingPeers?.[otherKey]).toBeDefined()
       expect(await runtime.removeAccount('onebot', '10001')).toBe(false)
     } finally {
       await runtime.dispose()

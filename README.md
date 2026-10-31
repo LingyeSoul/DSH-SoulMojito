@@ -56,7 +56,7 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 
 ### 原生 Agent 模式（AgentTavern）
 
-- **工具面 25 件 + IM 3 件**：角色/世界书/历史/场景读面 4 件、记忆 5 件、变量 5 件、剧本 2 件、多 Agent 推演 1 件、MVU 结算 1 件、游戏 7 件，以及 IM 通道 3 件（`im_identity` / `im_channels` / `im_send`，`DSH_SOULMOJITO_DISABLE_IM` 硬关时整组消失）。身份一律来自真实 session binding，模型无法通过参数伪造 `sessionId`、`scopeId`、角色或聊天身份。
+- **工具面 25 件 + IM 3 件**：角色/世界书/历史/场景读面 4 件、记忆 5 件、变量 5 件、剧本 2 件、多 Agent 推演 1 件、MVU 结算 1 件、游戏 7 件；IM 3 件（`im_identity` / `im_channels` / `im_send`）由 index bundle 挂进**每个原生会话**（`im/agent-mount.ts`，`DSH_SOULMOJITO_DISABLE_IM` 硬关时整组消失）。身份一律来自真实 session binding，模型无法通过参数伪造 `sessionId`、`scopeId`、角色或聊天身份。
 - **记忆** — 词法检索为基线；配置 embed 来源后升级为词法 + 语义混合检索（RRF 融合）。两种来源：OpenAI 兼容远程端点（[提案 0016](docs/proposals/0016-hybrid-memory-retrieval.md)）或本地 ONNX 模型目录（[提案 0017](docs/proposals/0017-local-onnx-embed.md)，离线零网络，面板一键安装运行时）。
 - **记忆维护** — 面板可对单个聊天手动发起维护 run：按原文依据合并重复事件、纠正冲突陈述、删除被证伪记录；收据记录楼面指纹与版本快照，原文再变即退役重扫。
 - **变量作用域** — `turn`（单轮 scratch，回合结束清空）/ `chat` / `character` / `agent` / `global`（默认关闭，需设置开启）；写入带 expected revision CAS。

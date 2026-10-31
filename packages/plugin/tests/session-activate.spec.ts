@@ -1,11 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { describe, expect, it } from 'vitest'
 import type { SessionImportAppend } from '../src/agent-tavern/projector.js'
-import { ensureImSession, type ImSessionDeps } from '../src/im/session-host.js'
 import { applyAgentTavernHistoryImport } from '../src/session/activate.js'
-import { TavernStore } from '../../tavern-store/src/index.js'
 
 interface FakeEvent {
   type: string
@@ -154,88 +149,5 @@ describe('applyAgentTavernHistoryImport', () => {
       expect(warnings).toHaveLength(1)
       expect(warnings[0]).toContain('no appendable session')
     }
-  })
-})
-
-describe('IM independent session opening import', () => {
-  let root: string
-  let db: TavernStore
-
-  beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'session-activate-'))
-    db = await TavernStore.open(root)
-  })
-
-  afterEach(async () => {
-    await rm(root, { recursive: true, force: true })
-  })
-
-  it('imports the greeting into a freshly created IM session and advances the turn base', async () => {
-    await db.importCharacter({
-      spec: 'chara_card_v2',
-      spec_version: '2.0',
-      data: {
-        name: 'Example',
-        description: '',
-        personality: '',
-        scenario: '',
-        first_mes: '早上好。',
-        mes_example: '',
-        creator_notes: '',
-        system_prompt: '',
-        post_history_instructions: '',
-        alternate_greetings: [],
-        tags: [],
-        creator: '',
-        character_version: '',
-        extensions: {},
-      },
-    })
-    const sourceChatId = await db.createChat('Example', {
-      user_name: 'unused',
-      character_name: 'unused',
-      chat_metadata: {},
-    }, [])
-    const events: FakeEvent[] = []
-    const agent: FakeAgent = {
-      id: 'session-imported',
-      phase: { kind: 'idle', lastTurn: 0 },
-      session: {
-        events,
-        append: (type: string, data: unknown, opts?: unknown) => {
-          events.push(opts === undefined ? { type, data } : { type, data, opts })
-        },
-      },
-    }
-    const binds: Array<{ sessionId: string; character: string; chatId: string }> = []
-    const deps: ImSessionDeps = {
-      db,
-      agents: {
-        get: () => undefined,
-        create: async () => ({ agent }),
-      },
-      presets: { mount: async () => ({}) },
-      presetId: 'agent-tavern',
-      ensurePreset: async () => {},
-      workspace: async () => root,
-      agentOptions: () => ({ provider: 'test-provider', model: 'test-model' }),
-      bind: async (sessionId, character, chatId) => {
-        binds.push({ sessionId, character, chatId })
-      },
-      presetChanged: async () => {},
-    }
-
-    const result = await ensureImSession(deps, {
-      mode: 'independent',
-      peerKey: 'qq:acct:private:peer-a',
-      sourceChat: { character: 'Example', chatId: sourceChatId },
-    })
-
-    expect(binds).toEqual([{ sessionId: result.sessionId, character: 'Example', chatId: result.chatId }])
-    const imported = events.find((event) => event.type === 'assistant/message')
-    expect(imported?.data).toMatchObject({
-      message: { role: 'assistant', content: [{ type: 'text', text: '早上好。' }] },
-    })
-    expect(agent.phase?.lastTurn).toBe(1)
   })
 })

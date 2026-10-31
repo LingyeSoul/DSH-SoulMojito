@@ -114,852 +114,725 @@ var init_handle = __esm({
   }
 });
 
-// packages/plugin/src/env-compat.ts
-function envCompat(suffix) {
-  return process.env[`DSH_SOULMOJITO_${suffix}`] ?? process.env[`DSH_TAVERN_${suffix}`];
+// packages/plugin/src/mods/cross-bundle.ts
+function clampModSectionOrder(order) {
+  const value = typeof order === "number" && Number.isFinite(order) ? order : MOD_SECTION_ORDER_MIN;
+  return Math.max(MOD_SECTION_ORDER_MIN, Math.min(MOD_SECTION_ORDER_MAX, value));
 }
-var init_env_compat = __esm({
-  "packages/plugin/src/env-compat.ts"() {
-    "use strict";
-  }
-});
-
-// packages/plugin/src/im/handle.ts
-function resolveImRuntime() {
-  return globalThis[runtimeSymbol]?.runtime;
-}
-function imDisabledByEnv() {
-  const disabled = envCompat("DISABLE_IM")?.trim();
-  return disabled !== void 0 && disabled !== "" && disabled !== "0" && disabled !== "false";
-}
-var IM_RUNTIME_KEY, runtimeSymbol;
-var init_handle2 = __esm({
-  "packages/plugin/src/im/handle.ts"() {
-    "use strict";
-    init_env_compat();
-    IM_RUNTIME_KEY = "dsh-soulmojito:im-runtime";
-    runtimeSymbol = Symbol.for(IM_RUNTIME_KEY);
-  }
-});
-
-// packages/tavern-store/src/fs-atomic.ts
-import { promises as fs } from "node:fs";
-async function moveAtomic(from, to) {
-  await renameWithWindowsRetry(from, to, RENAME_ATTEMPTS);
-}
-async function writeAtomicBytes(file, bytes) {
-  const tmp = `${file}.${process.pid}.${Date.now()}.${tmpCounter++}.tmp`;
-  try {
-    await fs.writeFile(tmp, bytes);
-    await moveAtomic(tmp, file);
-  } catch (cause) {
-    await fs.rm(tmp, { force: true }).catch(() => {
-    });
-    throw cause;
-  }
-}
-async function writeAtomicText(file, text) {
-  await writeAtomicBytes(file, new Uint8Array(Buffer.from(text, "utf8")));
-}
-async function renameWithWindowsRetry(from, to, attempts) {
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      await fs.rename(from, to);
-      return;
-    } catch (cause) {
-      const code = cause.code;
-      if (attempt >= attempts || code !== "EPERM" && code !== "EACCES" && code !== "EBUSY" && code !== "ENOTEMPTY") throw cause;
-      await new Promise((resolve3) => setTimeout(resolve3, 10 * attempt));
-    }
-  }
-}
-var tmpCounter, RENAME_ATTEMPTS;
-var init_fs_atomic = __esm({
-  "packages/tavern-store/src/fs-atomic.ts"() {
-    "use strict";
-    tmpCounter = 0;
-    RENAME_ATTEMPTS = 5;
-  }
-});
-
-// packages/tavern-store/src/im-state.ts
-function normalizeChatRef(value) {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
-  const record = value;
-  const character = record["character"];
-  const chatId = record["chatId"];
-  if (typeof character !== "string" || character.trim() === "") return void 0;
-  if (typeof chatId !== "string" || chatId.trim() === "") return void 0;
-  return { character, chatId };
-}
-function normalizeAccessMode(value, fallback) {
-  return value === "open" || value === "allowlist" || value === "disabled" ? value : fallback;
-}
-function normalizeStringList(value) {
-  if (!Array.isArray(value)) return [];
-  const seen = /* @__PURE__ */ new Set();
-  const result = [];
-  for (const entry of value) {
-    if (typeof entry !== "string") continue;
-    const trimmed = entry.trim();
-    if (trimmed === "" || seen.has(trimmed)) continue;
-    seen.add(trimmed);
-    result.push(trimmed);
-  }
-  return result;
-}
-function normalizeImSettings(value) {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return structuredClone(DEFAULT_IM_SETTINGS);
-  }
-  const record = value;
-  const bindingMode = record["bindingMode"] === "manual" || record["bindingMode"] === "shared" ? record["bindingMode"] : "independent";
-  const chunkLimit = record["chunkLimit"];
-  return {
-    bindingMode,
-    ...normalizeChatRef(record["sourceChat"]) === void 0 ? {} : { sourceChat: normalizeChatRef(record["sourceChat"]) },
-    ...normalizeChatRef(record["sharedChat"]) === void 0 ? {} : { sharedChat: normalizeChatRef(record["sharedChat"]) },
-    groupRequireMention: record["groupRequireMention"] !== false,
-    privateMode: normalizeAccessMode(record["privateMode"], "allowlist"),
-    privateAllow: normalizeStringList(record["privateAllow"]),
-    groupMode: normalizeAccessMode(record["groupMode"], "allowlist"),
-    groupAllow: normalizeStringList(record["groupAllow"]),
-    ...typeof chunkLimit === "number" && Number.isSafeInteger(chunkLimit) && chunkLimit > 0 ? { chunkLimit } : {}
+function store() {
+  const holder = globalThis;
+  return holder[registrySymbol] ??= {
+    tools: /* @__PURE__ */ new Map(),
+    sections: /* @__PURE__ */ new Map(),
+    builtinNames: new Set(BUILTIN_TOOL_NAMES_SEED),
+    nextSequence: 1
   };
 }
-function normalizeImPeers(value) {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
-  const result = {};
-  for (const [key, entry] of Object.entries(value)) {
-    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
-    const record = entry;
-    const sessionId = record["sessionId"];
-    const character = record["character"];
-    const chatId = record["chatId"];
-    if (typeof sessionId !== "string" || sessionId === "") continue;
-    if (typeof character !== "string" || character === "") continue;
-    if (typeof chatId !== "string" || chatId === "") continue;
-    const scope = record["scope"] === "group" ? "group" : "private";
-    const boundBy = record["boundBy"] === "manual" ? "manual" : "auto";
-    const createdAt = typeof record["createdAt"] === "string" ? record["createdAt"] : (/* @__PURE__ */ new Date(0)).toISOString();
-    result[key] = { sessionId, character, chatId, scope, boundBy, createdAt };
-  }
-  return result;
+function modToolSnapshot() {
+  return [...store().tools.values()].sort((a, b) => a.order - b.order || a.sequence - b.sequence).map(({ modId, order, sequence, definition }) => ({ modId, order, sequence, definition }));
 }
-var DEFAULT_IM_SETTINGS;
-var init_im_state = __esm({
-  "packages/tavern-store/src/im-state.ts"() {
+function modSectionSnapshot() {
+  return [...store().sections.values()].sort((a, b) => a.order - b.order || a.sequence - b.sequence).map(({ modId, order, sequence, definition }) => ({ modId, order, sequence, definition }));
+}
+function claimHostToolNames(names) {
+  for (const name2 of names) store().builtinNames.add(name2);
+}
+function onModsChanged(listener) {
+  return modsChangedListeners.on(listener);
+}
+var MOD_SECTION_ORDER_MIN, MOD_SECTION_ORDER_MAX, BUILTIN_TOOL_NAMES_SEED, MOD_REGISTRY_KEY, registrySymbol, modsChangedListeners;
+var init_cross_bundle = __esm({
+  "packages/plugin/src/mods/cross-bundle.ts"() {
     "use strict";
-    DEFAULT_IM_SETTINGS = {
-      bindingMode: "independent",
-      groupRequireMention: true,
-      privateMode: "allowlist",
-      privateAllow: [],
-      groupMode: "allowlist",
-      groupAllow: []
-    };
+    init_cross_bundle_events();
+    MOD_SECTION_ORDER_MIN = -50;
+    MOD_SECTION_ORDER_MAX = 0;
+    BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
+      // agent-tavern（agent.ts createTools，25：18 原有 + 游戏桥七件，提案 0018 §4.2；
+      // game_wait 为 2026-10-14 修订新增，game_history 为同日增量修订新增，
+      // game_wait_full 为 2026-10-16 带棋盘视图的等待变体新增）
+      "tavern_character_get",
+      "tavern_lore_search",
+      "tavern_scene_get",
+      "tavern_history_search",
+      "memory_search",
+      "memory_read",
+      "memory_write",
+      "memory_update",
+      "memory_forget",
+      "variable_get",
+      "variable_set",
+      "variable_patch",
+      "variable_delete",
+      "variable_list",
+      "tavern_script_read",
+      "tavern_script_advance",
+      "tavern_deduce",
+      "tavern_variable_settle",
+      "game_list",
+      "game_start",
+      "game_state",
+      "game_history",
+      "game_move",
+      "game_wait",
+      "game_wait_full",
+      // agent-novel（agent-novel/agent.ts createTools，22；memory_*/tavern_deduce 交集去重）
+      "novel_status_read",
+      "novel_requirements_read",
+      "novel_outline_read",
+      "novel_outline_create",
+      "novel_outline_revise",
+      "novel_requirement_block",
+      "novel_facts_read",
+      "novel_lore_search",
+      "novel_character_read",
+      "novel_body_read",
+      "novel_body_search",
+      "novel_body_commit",
+      "novel_chapter_complete",
+      "novel_unit_claim",
+      "novel_unit_release",
+      "novel_unit_supersede",
+      "novel_writer_draft",
+      "novel_writer_delegate",
+      "novel_finish",
+      // card-workbench（card-workbench/tools-*.ts，22）
+      "card_get",
+      "card_put",
+      "card_create",
+      "card_delete",
+      "card_original_get",
+      "card_restore_original",
+      "card_plan_propose",
+      "card_apply_mvu",
+      "chat_log_read",
+      "world_get",
+      "world_put",
+      "world_create",
+      "world_delete",
+      "world_copy",
+      "world_rename",
+      "world_bind",
+      "world_list",
+      "world_plan_propose",
+      "preset_get",
+      "preset_put",
+      "material_list",
+      "material_read"
+    ]);
+    MOD_REGISTRY_KEY = "dsh-soulmojito:mod-registry";
+    registrySymbol = Symbol.for(MOD_REGISTRY_KEY);
+    modsChangedListeners = createGlobalListenerRegistry("dsh-soulmojito:mods-changed-listeners");
   }
 });
 
-// packages/tavern-store/src/mutation-tail.ts
-var MutationTail, KeyedMutationTails;
-var init_mutation_tail = __esm({
-  "packages/tavern-store/src/mutation-tail.ts"() {
-    "use strict";
-    MutationTail = class {
-      constructor(onIdle) {
-        this.onIdle = onIdle;
-      }
-      tail = Promise.resolve();
-      pending = 0;
-      /** 入队一个变更并返回其结果；后续变更在该变更落定后才执行。 */
-      enqueue(operation) {
-        const run = this.tail.catch(() => {
-        }).then(operation);
-        this.tail = run.then(() => {
-        }, () => {
-        });
-        this.pending++;
-        void this.tail.then(() => {
-          this.pending--;
-          if (this.pending === 0) this.onIdle?.();
-        });
-        return run;
-      }
-      /** 排空在飞变更：返回时已入队的全部变更均已落定（失败被吞掉不外抛）。 */
-      drain() {
-        return this.tail.catch(() => {
-        });
-      }
-    };
-    KeyedMutationTails = class {
-      constructor(deleteWhenIdle = false) {
-        this.deleteWhenIdle = deleteWhenIdle;
-      }
-      tails = /* @__PURE__ */ new Map();
-      enqueue(key, operation) {
-        return this.tailFor(key).enqueue(operation);
-      }
-      /** 排空指定键的在飞变更；键不存在时立即落定。 */
-      drain(key) {
-        return this.tails.get(key)?.drain() ?? Promise.resolve();
-      }
-      tailFor(key) {
-        const existing = this.tails.get(key);
-        if (existing !== void 0) return existing;
-        const tail = new MutationTail(() => {
-          if (this.deleteWhenIdle) this.tails.delete(key);
-        });
-        this.tails.set(key, tail);
-        return tail;
-      }
-    };
-  }
-});
-
-// packages/tavern-format/lib/types.js
+// packages/tavern-macros/src/types.ts
 var init_types = __esm({
-  "packages/tavern-format/lib/types.js"() {
+  "packages/tavern-macros/src/types.ts"() {
     "use strict";
   }
 });
 
-// packages/tavern-format/lib/png.js
-function crc32(...buffers) {
-  let crc2 = 4294967295;
-  for (const buf of buffers) {
-    for (let i = 0; i < buf.length; i++) {
-      crc2 = CRC_TABLE[(crc2 ^ buf[i]) >>> 0 & 255] ^ crc2 >>> 8;
-    }
-  }
-  return (crc2 ^ 4294967295) >>> 0;
+// packages/tavern-macros/src/host-registry.ts
+function store2() {
+  const holder = globalThis;
+  return holder[registrySymbol2] ??= { nextSequence: 1, entries: /* @__PURE__ */ new Map() };
 }
-function isPng(buf) {
-  if (buf.length < PNG_SIGNATURE.length)
-    return false;
-  for (let i = 0; i < PNG_SIGNATURE.length; i++) {
-    if (buf[i] !== PNG_SIGNATURE[i])
-      return false;
-  }
-  return true;
+function hostMacroSnapshot() {
+  return [...store2().entries.values()].sort((a, b) => a.order - b.order || a.sequence - b.sequence).map(({ name: name2, fn, order }) => ({ name: name2, fn, order }));
 }
-function parsePngChunks(buf) {
-  if (!isPng(buf))
-    throw new PngFormatError("not a PNG file (bad signature)");
-  const chunks = [];
-  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-  let offset = PNG_SIGNATURE.length;
-  while (offset + 8 <= buf.length) {
-    const length = view.getUint32(offset);
-    const typeBytes = buf.subarray(offset + 4, offset + 8);
-    const type = String.fromCharCode(...typeBytes);
-    const dataStart = offset + 8;
-    const dataEnd = dataStart + length;
-    if (dataEnd + 4 > buf.length) {
-      throw new PngFormatError(`chunk '${type}' at ${offset} overruns file end`);
-    }
-    chunks.push({ type, data: buf.subarray(dataStart, dataEnd), offset });
-    const storedCrc = view.getUint32(dataEnd);
-    const actualCrc = crc32(typeBytes, buf.subarray(dataStart, dataEnd));
-    if (storedCrc !== actualCrc) {
-      throw new PngFormatError(`chunk '${type}' at ${offset} has bad CRC (stored ${storedCrc.toString(16)}, actual ${actualCrc.toString(16)})`);
-    }
-    offset = dataEnd + 4;
-    if (type === "IEND")
-      break;
+var HOST_MACRO_REGISTRY_KEY, registrySymbol2;
+var init_host_registry = __esm({
+  "packages/tavern-macros/src/host-registry.ts"() {
+    "use strict";
+    HOST_MACRO_REGISTRY_KEY = "dsh-soulmojito:host-macros";
+    registrySymbol2 = Symbol.for(HOST_MACRO_REGISTRY_KEY);
   }
-  const last = chunks[chunks.length - 1];
-  if (!last || last.type !== "IEND")
-    throw new PngFormatError("missing IEND chunk");
-  return chunks;
-}
-function readTextChunks(buf) {
-  const out = [];
-  for (const chunk of parsePngChunks(buf)) {
-    if (chunk.type !== "tEXt")
-      continue;
-    const nul = chunk.data.indexOf(0);
-    if (nul < 0)
-      continue;
-    const keyword = latin1Decode(chunk.data.subarray(0, nul));
-    const text = latin1Decode(chunk.data.subarray(nul + 1));
-    out.push({ keyword, text });
+});
+
+// packages/tavern-macros/src/random.ts
+function hash32(input) {
+  let h = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 16777619);
   }
-  return out;
+  return h >>> 0;
 }
-function latin1Decode(bytes) {
+function splitMacroList(listString) {
+  if (listString.includes("::")) {
+    return listString.split("::");
+  }
+  return listString.replace(/\\,/g, ESCAPED_COMMA).split(",").map((item) => item.trim().replace(/\u0000/g, ","));
+}
+function parseRoll(formula) {
+  let f = formula.trim();
+  if (/^\d+$/.test(f)) {
+    f = `1d${f}`;
+  }
+  const m = /^(\d+)d(\d+)([+-]\d+)?$/.exec(f);
+  if (m === null) return null;
+  const count = Number(m[1]);
+  const sides = Number(m[2]);
+  const modifier = m[3] === void 0 ? 0 : Number(m[3]);
+  if (!Number.isInteger(count) || count < 1 || count > 999) return null;
+  if (!Number.isInteger(sides) || sides < 2 || sides > 999) return null;
+  if (!Number.isFinite(modifier)) return null;
+  return { count, sides, modifier };
+}
+function evalRoll(spec, rng) {
+  let total = spec.modifier;
+  for (let i = 0; i < spec.count; i++) {
+    const r = rng();
+    total += Math.floor(r < 0 ? 0 : r >= 1 ? spec.sides - 1 : r * spec.sides) + 1;
+  }
+  return total;
+}
+var ESCAPED_COMMA;
+var init_random = __esm({
+  "packages/tavern-macros/src/random.ts"() {
+    "use strict";
+    ESCAPED_COMMA = "\0";
+  }
+});
+
+// packages/tavern-macros/src/time.ts
+function pad2(n) {
+  return n < 10 ? `0${n}` : String(n);
+}
+function formatTime12(hours24, minutes) {
+  const h12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
+  return `${h12}:${pad2(minutes)} ${hours24 < 12 ? "AM" : "PM"}`;
+}
+function formatLocalTime(d) {
+  return formatTime12(d.getHours(), d.getMinutes());
+}
+function formatTimeAtUtcOffset(d, offsetHours) {
+  const shifted = new Date(d.getTime() + offsetHours * 36e5);
+  return formatTime12(shifted.getUTCHours(), shifted.getUTCMinutes());
+}
+function formatLocalDateLong(d) {
+  return `${MONTHS_FULL[d.getMonth()] ?? ""} ${d.getDate()}, ${d.getFullYear()}`;
+}
+function formatWeekday(d) {
+  return WEEKDAYS_FULL[d.getDay()] ?? "";
+}
+function formatLocalIsoTime(d) {
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+function formatLocalIsoDate(d) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+function formatWithTokens(d, fmt) {
   let out = "";
-  for (let i = 0; i < bytes.length; i++)
-    out += String.fromCharCode(bytes[i]);
-  return out;
-}
-function latin1Encode(text) {
-  const out = new Uint8Array(text.length);
-  for (let i = 0; i < text.length; i++)
-    out[i] = text.charCodeAt(i) & 255;
-  return out;
-}
-function u32be(value) {
-  return new Uint8Array([value >>> 24 & 255, value >>> 16 & 255, value >>> 8 & 255, value & 255]);
-}
-function encodeChunk(type, data) {
-  const typeBytes = latin1Encode(type);
-  const crc2 = crc32(typeBytes, data);
-  const out = new Uint8Array(12 + data.length);
-  out.set(u32be(data.length), 0);
-  out.set(typeBytes, 4);
-  out.set(data, 8);
-  out.set(u32be(crc2), 8 + data.length);
-  return out;
-}
-function encodeTextChunk(keyword, text) {
-  const data = new Uint8Array(keyword.length + 1 + text.length);
-  data.set(latin1Encode(keyword), 0);
-  data[keyword.length] = 0;
-  data.set(latin1Encode(text), keyword.length + 1);
-  return encodeChunk("tEXt", data);
-}
-function concat(...parts) {
-  const total = parts.reduce((n, p) => n + p.length, 0);
-  const out = new Uint8Array(total);
-  let at = 0;
-  for (const p of parts) {
-    out.set(p, at);
-    at += p.length;
-  }
-  return out;
-}
-function writeTextChunks(png, entries) {
-  const chunks = parsePngChunks(png);
-  const parts = [PNG_SIGNATURE];
-  const pending = new Map(entries.map((e) => [e.keyword, e]));
-  for (const chunk of chunks) {
-    let bytes;
-    if (chunk.type === "tEXt") {
-      const nul = chunk.data.indexOf(0);
-      const keyword = nul >= 0 ? latin1Decode(chunk.data.subarray(0, nul)) : "";
-      const replacement = pending.get(keyword);
-      if (replacement) {
-        pending.delete(keyword);
-        bytes = encodeTextChunk(replacement.keyword, replacement.text);
-      } else {
-        bytes = sliceChunkBytes(png, chunk);
-      }
-    } else if (chunk.type === "IEND") {
-      for (const e of pending.values())
-        parts.push(encodeTextChunk(e.keyword, e.text));
-      pending.clear();
-      bytes = sliceChunkBytes(png, chunk);
-    } else {
-      bytes = sliceChunkBytes(png, chunk);
+  let i = 0;
+  while (i < fmt.length) {
+    const four = fmt.slice(i, i + 4);
+    if (four === "yyyy" || four === "YYYY") {
+      out += String(d.getFullYear()).padStart(4, "0");
+      i += 4;
+      continue;
     }
-    parts.push(bytes);
-  }
-  return concat(...parts);
-}
-function sliceChunkBytes(png, chunk) {
-  return png.subarray(chunk.offset, chunk.offset + 12 + chunk.data.length);
-}
-function extractCardJson(png) {
-  const texts = readTextChunks(png);
-  const found = texts.find((t) => t.keyword === CARD_CHUNK_V3) ?? texts.find((t) => t.keyword === CARD_CHUNK_V2);
-  if (!found || !found.text)
-    return null;
-  return base64ToUtf8(found.text);
-}
-function base64ToUtf8(base64) {
-  return Buffer.from(base64, "base64").toString("utf8");
-}
-function utf8ToBase64(text) {
-  return Buffer.from(text, "utf8").toString("base64");
-}
-var PNG_SIGNATURE, PngFormatError, CRC_TABLE, CARD_CHUNK_V2, CARD_CHUNK_V3;
-var init_png = __esm({
-  "packages/tavern-format/lib/png.js"() {
-    "use strict";
-    PNG_SIGNATURE = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
-    PngFormatError = class extends Error {
-      constructor(message) {
-        super(message);
-        this.name = "PngFormatError";
-      }
-    };
-    CRC_TABLE = (() => {
-      const table = new Uint32Array(256);
-      for (let n = 0; n < 256; n++) {
-        let c = n;
-        for (let k = 0; k < 8; k++) {
-          c = c & 1 ? 3988292384 ^ c >>> 1 : c >>> 1;
-        }
-        table[n] = c >>> 0;
-      }
-      return table;
-    })();
-    CARD_CHUNK_V2 = "chara";
-    CARD_CHUNK_V3 = "ccv3";
-  }
-});
-
-// packages/tavern-format/lib/card.js
-function decodeCharacterCard(input) {
-  let obj;
-  if (input instanceof Uint8Array || input instanceof ArrayBuffer) {
-    const bytes = input instanceof ArrayBuffer ? new Uint8Array(input) : input;
-    if (!isPng(bytes))
-      throw new CardFormatError("binary input is not a PNG file");
-    const json = extractCardJson(bytes);
-    if (json === null)
-      throw new CardFormatError("PNG has no chara/ccv3 tEXt chunk");
-    obj = parseJson(json);
-  } else {
-    obj = input;
-  }
-  if (typeof obj !== "object" || obj === null || Array.isArray(obj)) {
-    throw new CardFormatError("card root is not an object");
-  }
-  return fromCardObject(obj);
-}
-function parseJson(text) {
-  try {
-    return JSON.parse(text);
-  } catch (cause) {
-    throw new CardFormatError(`card chunk JSON is invalid: ${String(cause)}`);
-  }
-}
-function fromCardObject(root) {
-  const spec = typeof root["spec"] === "string" ? root["spec"] : void 0;
-  let data;
-  let specName;
-  let specVersion;
-  if (spec === "chara_card_v2" || spec === "chara_card_v3") {
-    const raw = root["data"];
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-      throw new CardFormatError(`spec ${spec} present but 'data' is not an object`);
+    const two = fmt.slice(i, i + 2);
+    if (two === "MM") {
+      out += pad2(d.getMonth() + 1);
+      i += 2;
+      continue;
     }
-    data = raw;
-    specName = spec;
-    specVersion = typeof root["spec_version"] === "string" ? root["spec_version"] : spec === "chara_card_v3" ? "3.0" : "2.0";
-  } else if (spec !== void 0) {
-    data = root["data"] ?? {};
-    specName = "chara_card_v3";
-    specVersion = typeof root["spec_version"] === "string" ? root["spec_version"] : "3.0";
-  } else {
-    data = root;
-    specName = "chara_card_v2";
-    specVersion = "1.0";
+    if (two === "dd" || two === "DD") {
+      out += pad2(d.getDate());
+      i += 2;
+      continue;
+    }
+    if (two === "HH") {
+      out += pad2(d.getHours());
+      i += 2;
+      continue;
+    }
+    if (two === "mm") {
+      out += pad2(d.getMinutes());
+      i += 2;
+      continue;
+    }
+    if (two === "ss") {
+      out += pad2(d.getSeconds());
+      i += 2;
+      continue;
+    }
+    out += fmt.charAt(i);
+    i += 1;
   }
-  if (typeof data["name"] !== "string" || data["name"].length === 0) {
-    throw new CardFormatError("card data has no 'name' string");
-  }
-  return {
-    spec: specName,
-    specVersion,
-    data: toCardDataIR(data),
-    // ST 导出的真实卡顶层并存 V1 兼容字段与 spec/data 三层——raw 必须存整个对象
-    raw: structuredClone(root)
-  };
+  return out;
 }
-function str(value, fallback = "") {
-  return typeof value === "string" ? value : fallback;
+function humanizeDuration(totalSeconds) {
+  const s = totalSeconds < 0 ? 0 : totalSeconds;
+  if (s < 45) return "a few seconds";
+  if (s < 90) return "a minute";
+  const minutes = s / 60;
+  if (minutes < 45) return `${Math.round(minutes)} minutes`;
+  if (minutes < 90) return "an hour";
+  const hours = minutes / 60;
+  if (hours < 22) return `${Math.round(hours)} hours`;
+  if (hours < 36) return "a day";
+  const days = hours / 24;
+  if (days < 26) return `${Math.round(days)} days`;
+  if (days < 45) return "a month";
+  const months = days / 30;
+  if (months < 11) return `${Math.round(months)} months`;
+  if (months < 18) return "a year";
+  return `${Math.round(months / 12)} years`;
 }
-function strArray(value) {
-  return Array.isArray(value) ? value.filter((v) => typeof v === "string") : [];
-}
-function toCardDataIR(data) {
-  const book = data["character_book"];
-  const ir = {
-    name: str(data["name"]),
-    description: str(data["description"]),
-    personality: str(data["personality"]),
-    scenario: str(data["scenario"]),
-    firstMes: str(data["first_mes"]),
-    mesExample: str(data["mes_example"]),
-    creatorNotes: str(data["creator_notes"]),
-    systemPrompt: str(data["system_prompt"]),
-    postHistoryInstructions: str(data["post_history_instructions"]),
-    alternateGreetings: strArray(data["alternate_greetings"]),
-    tags: strArray(data["tags"]),
-    creator: str(data["creator"]),
-    characterVersion: str(data["character_version"]),
-    extensions: typeof data["extensions"] === "object" && data["extensions"] !== null ? data["extensions"] : {}
-  };
-  if (isCharacterBook(book))
-    ir.characterBook = book;
-  if (Array.isArray(data["assets"]))
-    ir.assets = data["assets"].filter((a) => typeof a === "object" && a !== null);
-  if (typeof data["nickname"] === "string")
-    ir.nickname = data["nickname"];
-  if (isStringRecord(data["creator_notes_multilingual"]))
-    ir.creatorNotesMultilingual = data["creator_notes_multilingual"];
-  if (strArray(data["source"]).length > 0)
-    ir.source = strArray(data["source"]);
-  if (Array.isArray(data["group_only_greetings"]))
-    ir.groupOnlyGreetings = strArray(data["group_only_greetings"]);
-  if (typeof data["creation_date"] === "number")
-    ir.creationDate = data["creation_date"];
-  if (typeof data["modification_date"] === "number")
-    ir.modificationDate = data["modification_date"];
-  return ir;
-}
-function isCharacterBook(value) {
-  return typeof value === "object" && value !== null && Array.isArray(value.entries);
-}
-function isStringRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function cardDataToRaw(ir) {
-  const rawBase = typeof ir.raw["data"] === "object" && ir.raw["data"] !== null ? structuredClone(ir.raw["data"]) : {};
-  const data = { ...rawBase };
-  const d = ir.data;
-  data["name"] = d.name;
-  data["description"] = d.description;
-  data["personality"] = d.personality;
-  data["scenario"] = d.scenario;
-  data["first_mes"] = d.firstMes;
-  data["mes_example"] = d.mesExample;
-  data["creator_notes"] = d.creatorNotes;
-  data["system_prompt"] = d.systemPrompt;
-  data["post_history_instructions"] = d.postHistoryInstructions;
-  data["alternate_greetings"] = d.alternateGreetings;
-  data["tags"] = d.tags;
-  data["creator"] = d.creator;
-  data["character_version"] = d.characterVersion;
-  data["extensions"] = d.extensions;
-  if (d.characterBook === void 0)
-    delete data["character_book"];
-  else
-    data["character_book"] = d.characterBook;
-  for (const [irKey, jsonKey] of V3_FIELDS) {
-    const value = d[irKey];
-    if (value === void 0)
-      delete data[jsonKey];
-    else
-      data[jsonKey] = value;
-  }
-  return data;
-}
-function encodeCharacterCardJson(ir) {
-  return {
-    ...structuredClone(ir.raw),
-    spec: ir.spec,
-    spec_version: ir.specVersion,
-    data: cardDataToRaw(ir)
-  };
-}
-function encodeCharacterCardPng(ir, template) {
-  const entries = [
-    { keyword: CARD_CHUNK_V2, text: utf8ToBase64(JSON.stringify(toV2Json(ir))) }
-  ];
-  if (ir.spec === "chara_card_v3") {
-    entries.push({ keyword: CARD_CHUNK_V3, text: utf8ToBase64(JSON.stringify(encodeCharacterCardJson(ir))) });
-  }
-  return writeTextChunks(template, entries);
-}
-function toV2Json(ir) {
-  const data = cardDataToRaw(ir);
-  for (const jsonKey of V3_FIELDS.map((f) => f[1]))
-    delete data[jsonKey];
-  return {
-    ...structuredClone(ir.raw),
-    name: ir.data.name,
-    description: ir.data.description,
-    personality: ir.data.personality,
-    scenario: ir.data.scenario,
-    first_mes: ir.data.firstMes,
-    mes_example: ir.data.mesExample,
-    tags: ir.data.tags,
-    spec: "chara_card_v2",
-    spec_version: "2.0",
-    data
-  };
-}
-var CardFormatError, V3_FIELDS;
-var init_card = __esm({
-  "packages/tavern-format/lib/card.js"() {
+var MONTHS_FULL, WEEKDAYS_FULL;
+var init_time = __esm({
+  "packages/tavern-macros/src/time.ts"() {
     "use strict";
-    init_png();
-    CardFormatError = class extends Error {
-      constructor(message) {
-        super(message);
-        this.name = "CardFormatError";
-      }
-    };
-    V3_FIELDS = [
-      ["assets", "assets"],
-      ["nickname", "nickname"],
-      ["creatorNotesMultilingual", "creator_notes_multilingual"],
-      ["source", "source"],
-      ["groupOnlyGreetings", "group_only_greetings"],
-      ["creationDate", "creation_date"],
-      ["modificationDate", "modification_date"]
+    MONTHS_FULL = [
+      "January",
+      "February",
+      "March",
+      "April",
+      "May",
+      "June",
+      "July",
+      "August",
+      "September",
+      "October",
+      "November",
+      "December"
+    ];
+    WEEKDAYS_FULL = [
+      "Sunday",
+      "Monday",
+      "Tuesday",
+      "Wednesday",
+      "Thursday",
+      "Friday",
+      "Saturday"
     ];
   }
 });
 
-// packages/tavern-format/lib/worldbook.js
-function parseWorldInfoFile(name2, obj) {
-  const rawEntries = obj["entries"];
-  if (typeof rawEntries !== "object" || rawEntries === null || Array.isArray(rawEntries)) {
-    throw new WorldBookFormatError("world info file has no 'entries' object");
+// packages/tavern-macros/src/engine.ts
+function opt(v) {
+  return v ?? "";
+}
+function coerceRead(v) {
+  if (typeof v === "string" && v.trim() !== "" && !Number.isNaN(Number(v))) {
+    return Number(v);
   }
-  const entries = [];
-  for (const value of Object.values(rawEntries)) {
-    if (typeof value !== "object" || value === null)
-      continue;
-    entries.push(normalizeEntry(value));
+  return v;
+}
+function createMacroEngine(init) {
+  const card = init.card ?? {};
+  const localVars = new Map(Object.entries(init.local ?? {}));
+  const globalVars = new Map(Object.entries(init.global ?? {}));
+  const now = init.now ?? (() => /* @__PURE__ */ new Date());
+  const rng = init.rng ?? Math.random;
+  const groupValue = init.group ?? init.char;
+  const registry = /* @__PURE__ */ new Map();
+  function reg(name2, handler) {
+    registry.set(name2.toLowerCase(), handler);
   }
-  entries.sort((a, b) => a.uid - b.uid);
-  const { ["entries"]: _dropped, ...extra } = obj;
-  return { name: name2, entries, extra: Object.keys(extra).length > 0 ? extra : void 0 };
-}
-function serializeWorldInfoFile(ir) {
-  const entries = {};
-  for (const entry of [...ir.entries].sort((a, b) => a.uid - b.uid)) {
-    entries[String(entry.uid)] = entryToFileObject(entry);
+  function regExact(name2, getValue) {
+    reg(name2, (ctx) => ctx.rest === "" ? getValue() : null);
   }
-  return { ...ir.extra ?? {}, entries };
-}
-function normalizeEntry(raw) {
-  const extra = {};
-  for (const [k, v] of Object.entries(raw)) {
-    if (!KNOWN_FIELDS.has(k))
-      extra[k] = v;
+  function colonArg(ctx) {
+    return ctx.rest.startsWith("::") ? ctx.rest.slice(2) : null;
   }
-  return {
-    uid: num(raw["uid"], 0),
-    key: strArray2(raw["key"]),
-    keysecondary: strArray2(raw["keysecondary"]),
-    comment: str2(raw["comment"]),
-    content: str2(raw["content"]),
-    constant: bool(raw["constant"], false),
-    vectorized: bool(raw["vectorized"], false),
-    selective: bool(raw["selective"], true),
-    selectiveLogic: num(raw["selectiveLogic"], 0),
-    addMemo: bool(raw["addMemo"], false),
-    order: num(raw["order"], 100),
-    position: num(raw["position"], 0),
-    disable: bool(raw["disable"], false),
-    ignoreBudget: bool(raw["ignoreBudget"], false),
-    excludeRecursion: bool(raw["excludeRecursion"], false),
-    preventRecursion: bool(raw["preventRecursion"], false),
-    delayUntilRecursion: num(raw["delayUntilRecursion"], 0),
-    probability: num(raw["probability"], 100),
-    useProbability: bool(raw["useProbability"], true),
-    depth: num(raw["depth"], 4),
-    outletName: str2(raw["outletName"]),
-    group: str2(raw["group"]),
-    groupOverride: bool(raw["groupOverride"], false),
-    groupWeight: num(raw["groupWeight"], 100),
-    scanDepth: nullableNum(raw["scanDepth"]),
-    caseSensitive: nullableBool(raw["caseSensitive"]),
-    matchWholeWords: nullableBool(raw["matchWholeWords"]),
-    useGroupScoring: nullableBool(raw["useGroupScoring"]),
-    automationId: str2(raw["automationId"]),
-    role: num(raw["role"], 0),
-    sticky: nullableNum(raw["sticky"]),
-    cooldown: nullableNum(raw["cooldown"]),
-    delay: nullableNum(raw["delay"]),
-    triggers: strArray2(raw["triggers"]),
-    matchPersonaDescription: bool(raw["matchPersonaDescription"], false),
-    matchCharacterDescription: bool(raw["matchCharacterDescription"], false),
-    matchCharacterPersonality: bool(raw["matchCharacterPersonality"], false),
-    matchCharacterDepthPrompt: bool(raw["matchCharacterDepthPrompt"], false),
-    matchScenario: bool(raw["matchScenario"], false),
-    matchCreatorNotes: bool(raw["matchCreatorNotes"], false),
-    extra: Object.keys(extra).length > 0 ? extra : void 0
-  };
-}
-function entryToFileObject(entry) {
-  const { extra, ...fields } = entry;
-  return { ...fields, ...extra ?? {} };
-}
-function parseCharacterBook(book) {
-  const entries = (book.entries ?? []).map((raw, index) => bookEntryToLoreEntry(raw, index));
-  return { name: book.name ?? "", entries };
-}
-function bookEntryToLoreEntry(raw, index) {
-  const ext = raw.extensions ?? {};
-  const uid = numOr(raw.id, ext["uid"], index);
-  const entry = normalizeEntry({
-    uid,
-    key: raw.keys ?? [],
-    keysecondary: raw.secondary_keys ?? [],
-    comment: raw.comment ?? raw.name ?? "",
-    content: raw.content ?? "",
-    constant: boolOr(raw.constant, ext["constant"], false),
-    disable: raw.enabled === false,
-    order: numOr(ext["order"], raw.insertion_order, 100),
-    position: bookPositionToSt(raw.position, ext["position"]),
-    selective: boolOr(raw.selective, ext["selective"], true),
-    selectiveLogic: num(ext["selectiveLogic"], 0),
-    caseSensitive: nullableBoolOr(raw.case_sensitive, ext["case_sensitive"]),
-    probability: numOr(ext["probability"], 100, 100),
-    useProbability: boolOr(ext["useProbability"], true, true),
-    depth: numOr(ext["depth"], 4, 4),
-    group: str2(ext["group"]),
-    groupOverride: bool(ext["group_override"], false),
-    groupWeight: numOr(ext["group_weight"], 100, 100),
-    excludeRecursion: boolOr(ext["exclude_recursion"], false, false),
-    preventRecursion: boolOr(ext["prevent_recursion"], false, false),
-    delayUntilRecursion: numOr(ext["delay_until_recursion"], 0, 0),
-    scanDepth: nullableNum(ext["scan_depth"]),
-    matchWholeWords: nullableBool(ext["match_whole_words"]),
-    useGroupScoring: nullableBool(ext["use_group_scoring"]),
-    role: num(ext["role"], 0),
-    vectorized: bool(ext["vectorized"], false),
-    sticky: nullableNum(ext["sticky"]),
-    cooldown: nullableNum(ext["cooldown"]),
-    delay: nullableNum(ext["delay"]),
-    triggers: strArray2(ext["triggers"])
-  });
-  const carried = {};
-  if (raw.priority !== void 0)
-    carried["book.priority"] = raw.priority;
-  if (raw.use_regex !== void 0)
-    carried["book.use_regex"] = raw.use_regex;
-  if (raw.name !== void 0)
-    carried["book.name"] = raw.name;
-  if (Object.keys(carried).length > 0)
-    entry.extra = { ...entry.extra ?? {}, ...carried };
-  return entry;
-}
-function bookPositionToSt(bookPos, extPos) {
-  if (typeof extPos === "number")
-    return extPos;
-  if (bookPos === "after_char")
-    return 1;
-  return 0;
-}
-function str2(v) {
-  return typeof v === "string" ? v : "";
-}
-function num(v, fallback) {
-  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
-}
-function numOr(v, v2, fallback) {
-  return typeof v === "number" && Number.isFinite(v) ? v : num(v2, fallback);
-}
-function nullableNum(v) {
-  return typeof v === "number" && Number.isFinite(v) ? v : null;
-}
-function bool(v, fallback) {
-  return typeof v === "boolean" ? v : fallback;
-}
-function boolOr(v, v2, fallback) {
-  return typeof v === "boolean" ? v : bool(v2, fallback);
-}
-function nullableBool(v) {
-  return typeof v === "boolean" ? v : null;
-}
-function nullableBoolOr(v, v2) {
-  return typeof v === "boolean" ? v : nullableBool(v2);
-}
-function strArray2(v) {
-  return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
-}
-var WorldBookFormatError, KNOWN_FIELDS;
-var init_worldbook = __esm({
-  "packages/tavern-format/lib/worldbook.js"() {
-    "use strict";
-    WorldBookFormatError = class extends Error {
-      constructor(message) {
-        super(message);
-        this.name = "WorldBookFormatError";
+  function laxArg(ctx) {
+    const m = /^\s?::?/.exec(ctx.rest);
+    return m === null ? null : ctx.rest.slice(m[0].length);
+  }
+  function rollArg(ctx) {
+    const m = /^(?:\s?::?|\s)/.exec(ctx.rest);
+    return m === null ? null : ctx.rest.slice(m[0].length);
+  }
+  function storeOf(scope) {
+    return scope === "local" ? localVars : globalVars;
+  }
+  function readVar(scope, name2) {
+    return coerceRead(storeOf(scope).get(name2));
+  }
+  function addToVar(scope, name2, value) {
+    const store3 = storeOf(scope);
+    const current = (coerceRead(store3.get(name2)) ?? 0) || 0;
+    if (typeof current === "string") {
+      try {
+        const parsed = JSON.parse(current);
+        if (Array.isArray(parsed)) {
+          parsed.push(value);
+          const json = JSON.stringify(parsed);
+          store3.set(name2, json);
+          return json;
+        }
+      } catch {
       }
-    };
-    KNOWN_FIELDS = /* @__PURE__ */ new Set([
-      "uid",
-      "key",
-      "keysecondary",
-      "comment",
-      "content",
-      "constant",
-      "vectorized",
-      "selective",
-      "selectiveLogic",
-      "addMemo",
-      "order",
-      "position",
-      "disable",
-      "ignoreBudget",
-      "excludeRecursion",
-      "preventRecursion",
-      "delayUntilRecursion",
-      "probability",
-      "useProbability",
-      "depth",
-      "outletName",
-      "group",
-      "groupOverride",
-      "groupWeight",
-      "scanDepth",
-      "caseSensitive",
-      "matchWholeWords",
-      "useGroupScoring",
-      "automationId",
-      "role",
-      "sticky",
-      "cooldown",
-      "delay",
-      "triggers",
-      "matchPersonaDescription",
-      "matchCharacterDescription",
-      "matchCharacterPersonality",
-      "matchCharacterDepthPrompt",
-      "matchScenario",
-      "matchCreatorNotes",
-      "extra"
-    ]);
-  }
-});
-
-// packages/tavern-format/lib/preset.js
-var init_preset = __esm({
-  "packages/tavern-format/lib/preset.js"() {
-    "use strict";
-  }
-});
-
-// packages/tavern-format/lib/chat.js
-function parseChatLog(text) {
-  const lines = text.split("\n");
-  let header;
-  const messages = [];
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (line.length === 0)
-      continue;
-    let obj;
-    try {
-      obj = JSON.parse(line);
-    } catch (cause) {
-      throw new ChatFormatError(`line ${i + 1} is not valid JSON: ${String(cause)}`);
     }
-    if (typeof obj !== "object" || obj === null)
-      throw new ChatFormatError(`line ${i + 1} is not an object`);
-    if (header === void 0)
-      header = obj;
-    else
-      messages.push(obj);
+    const inc = Number(value);
+    const currentNum = Number(current);
+    if (Number.isNaN(inc) || Number.isNaN(currentNum)) {
+      const concatenated = `${String(current || "")}${String(value)}`;
+      store3.set(name2, concatenated);
+      return concatenated;
+    }
+    const next = currentNum + inc;
+    if (Number.isNaN(next)) {
+      return "";
+    }
+    store3.set(name2, next);
+    return String(next);
   }
-  if (header === void 0)
-    throw new ChatFormatError("chat log is empty");
-  return { header, messages };
-}
-function serializeChatLog(ir) {
-  const lines = [JSON.stringify(ir.header), ...ir.messages.map((m) => JSON.stringify(m))];
-  return lines.join("\n") + "\n";
-}
-var ChatFormatError;
-var init_chat = __esm({
-  "packages/tavern-format/lib/chat.js"() {
-    "use strict";
-    ChatFormatError = class extends Error {
-      constructor(message) {
-        super(message);
-        this.name = "ChatFormatError";
+  regExact("char", () => init.char);
+  regExact("user", () => init.user);
+  regExact("group", () => groupValue);
+  regExact("charIfNotGroup", () => groupValue);
+  regExact("groupNotMuted", () => groupValue);
+  regExact("notChar", () => init.user);
+  regExact("persona", () => opt(init.persona));
+  regExact("description", () => opt(card.description));
+  regExact("personality", () => opt(card.personality));
+  regExact("scenario", () => opt(card.scenario));
+  regExact("mesExamples", () => opt(card.mesExample));
+  regExact("mesExamplesRaw", () => opt(card.mesExample));
+  regExact("charPrompt", () => opt(card.systemPrompt));
+  regExact("charInstruction", () => opt(card.postHistoryInstructions));
+  regExact("charJailbreak", () => opt(card.postHistoryInstructions));
+  regExact("charDepthPrompt", () => opt(card.charDepthPrompt));
+  regExact("creatorNotes", () => opt(card.creatorNotes));
+  regExact("charCreatorNotes", () => opt(card.creatorNotes));
+  regExact("systemPrompt", () => opt(init.systemPrompt));
+  regExact("original", () => opt(init.original));
+  regExact("lastMessage", () => opt(init.lastMessage));
+  regExact("lastUserMessage", () => opt(init.lastUserMessage));
+  regExact("lastCharMessage", () => opt(init.lastCharMessage));
+  regExact(
+    "lastMessageId",
+    () => init.lastMessageId === void 0 ? "" : String(init.lastMessageId)
+  );
+  regExact("model", () => opt(init.model));
+  regExact(
+    "maxContextTokens",
+    () => init.maxContextTokens === void 0 ? "" : String(init.maxContextTokens)
+  );
+  regExact("maxPrompt", () => {
+    const n = init.maxPrompt ?? init.maxContextTokens;
+    return n === void 0 ? "" : String(n);
+  });
+  regExact(
+    "maxResponseTokens",
+    () => init.maxResponseTokens === void 0 ? "" : String(init.maxResponseTokens)
+  );
+  regExact("newline", () => "\n");
+  regExact("space", () => " ");
+  regExact("noop", () => "");
+  reg("trim", (ctx) => ctx.rest === "" ? TRIM : null);
+  reg("time", (ctx) => {
+    if (ctx.rest === "") {
+      return formatLocalTime(now());
+    }
+    const arg = laxArg(ctx);
+    if (arg === null) {
+      return null;
+    }
+    const m = /^UTC([+-]\d+)$/i.exec(arg.trim());
+    if (m === null) {
+      return null;
+    }
+    return formatTimeAtUtcOffset(now(), Number(m[1]));
+  });
+  reg("time_utc", (ctx) => {
+    const m = /^([+-]\d+)$/.exec(ctx.rest);
+    if (m === null) {
+      return null;
+    }
+    return formatTimeAtUtcOffset(now(), Number(m[1]));
+  });
+  regExact("date", () => formatLocalDateLong(now()));
+  regExact("weekday", () => formatWeekday(now()));
+  regExact("isotime", () => formatLocalIsoTime(now()));
+  regExact("isodate", () => formatLocalIsoDate(now()));
+  reg("datetimeformat", (ctx) => {
+    const m = /^(?:\s+|::?)/.exec(ctx.rest);
+    if (m === null) {
+      return null;
+    }
+    return formatWithTokens(now(), ctx.rest.slice(m[0].length));
+  });
+  regExact(
+    "idle_duration",
+    () => init.idleDurationSeconds === void 0 ? "just now" : humanizeDuration(init.idleDurationSeconds)
+  );
+  regExact(
+    "idleDuration",
+    () => init.idleDurationSeconds === void 0 ? "just now" : humanizeDuration(init.idleDurationSeconds)
+  );
+  reg("random", (ctx) => {
+    const arg = laxArg(ctx);
+    if (arg === null || arg === "") {
+      return null;
+    }
+    const list = splitMacroList(arg);
+    const idx = Math.floor(rng() * list.length);
+    const safe = idx < 0 ? 0 : idx >= list.length ? list.length - 1 : idx;
+    return list[safe] ?? "";
+  });
+  reg("pick", (ctx) => {
+    const arg = laxArg(ctx);
+    if (arg === null || arg === "") {
+      return null;
+    }
+    const list = splitMacroList(arg);
+    const chatHash = hash32(init.chatId ?? "");
+    const seed = hash32(`${chatHash}|${ctx.rawHash}|${ctx.offset}`);
+    return list[seed % list.length] ?? "";
+  });
+  reg("roll", (ctx) => {
+    const arg = rollArg(ctx);
+    if (arg === null) {
+      return null;
+    }
+    const spec = parseRoll(arg);
+    if (spec === null) {
+      return "";
+    }
+    return String(evalRoll(spec, rng));
+  });
+  function registerVarMacros(scope, infix) {
+    const store3 = storeOf(scope);
+    reg(`get${infix}var`, (ctx) => {
+      const arg = colonArg(ctx);
+      if (arg === null || arg === "") {
+        return null;
       }
+      const v = coerceRead(store3.get(arg.trim()));
+      return v === void 0 ? "" : String(v);
+    });
+    reg(`set${infix}var`, (ctx) => {
+      const arg = colonArg(ctx);
+      if (arg === null) {
+        return null;
+      }
+      const m = /^([^:]+)::([\s\S]*)$/.exec(arg);
+      if (m === null || m[1] === void 0 || m[1] === "") {
+        return null;
+      }
+      store3.set(m[1].trim(), m[2] ?? "");
+      return "";
+    });
+    reg(`add${infix}var`, (ctx) => {
+      const arg = colonArg(ctx);
+      if (arg === null) {
+        return null;
+      }
+      const m = /^([^:]+)::([\s\S]+)$/.exec(arg);
+      if (m === null || m[1] === void 0 || m[1] === "") {
+        return null;
+      }
+      addToVar(scope, m[1].trim(), m[2] ?? "");
+      return "";
+    });
+    reg(`inc${infix}var`, (ctx) => {
+      const arg = colonArg(ctx);
+      if (arg === null || arg === "") {
+        return null;
+      }
+      const m = /^([^:]+?)(?:::([\s\S]*))?$/.exec(arg);
+      if (m === null || m[1] === void 0 || m[1] === "") {
+        return null;
+      }
+      const delta = m[2] === void 0 ? "1" : m[2];
+      return addToVar(scope, m[1].trim(), delta);
+    });
+    reg(`dec${infix}var`, (ctx) => {
+      const arg = colonArg(ctx);
+      if (arg === null || arg === "") {
+        return null;
+      }
+      const m = /^([^:]+?)(?:::([\s\S]*))?$/.exec(arg);
+      if (m === null || m[1] === void 0 || m[1] === "") {
+        return null;
+      }
+      const value = m[2] === void 0 ? -1 : Number.isNaN(Number(m[2])) ? `-${m[2]}` : -Number(m[2]);
+      return addToVar(scope, m[1].trim(), value);
+    });
+    reg(`has${infix}var`, (ctx) => {
+      const arg = colonArg(ctx);
+      if (arg === null || arg === "") {
+        return null;
+      }
+      return store3.has(arg.trim()) ? "true" : "false";
+    });
+    reg(`delete${infix}var`, (ctx) => {
+      const arg = colonArg(ctx);
+      if (arg === null || arg === "") {
+        return null;
+      }
+      store3.delete(arg.trim());
+      return "";
+    });
+  }
+  registerVarMacros("local", "");
+  registerVarMacros("global", "global");
+  const LEGACY_RE = /<CHARIFNOTGROUP>|<GROUP>|<CHAR>|<BOT>|<USER>|(?<!\{)\{char\}(?!\})|(?<!\{)\{user\}(?!\})/gi;
+  function applyLegacy(text) {
+    if (!text.includes("<") && !text.includes("{")) {
+      return text;
+    }
+    return text.replace(LEGACY_RE, (tag) => {
+      switch (tag.toLowerCase()) {
+        case "<bot>":
+        case "<char>":
+        case "{char}":
+          return init.char;
+        case "<user>":
+        case "{user}":
+          return init.user;
+        case "<group>":
+        case "<charifnotgroup>":
+          return groupValue;
+        default:
+          return tag;
+      }
+    });
+  }
+  function evalInside(inside, offset, rawHash) {
+    if (inside === "") {
+      return null;
+    }
+    if (inside.startsWith("//")) {
+      return "";
+    }
+    const m = /^([A-Za-z0-9_]+)/.exec(inside);
+    if (m === null) {
+      return null;
+    }
+    const macroName = m[1];
+    const rest = inside.slice(macroName.length);
+    if (rest.includes("}")) {
+      return null;
+    }
+    const handler = registry.get(macroName.toLowerCase());
+    if (handler === void 0) {
+      return null;
+    }
+    return handler({ rest, offset, rawHash });
+  }
+  function expand(rawText) {
+    if (!rawText) {
+      return "";
+    }
+    const text = applyLegacy(rawText);
+    const rawHash = hash32(rawText);
+    let out = "";
+    let pos = 0;
+    let skipNewlines = false;
+    const appendText = (chunk) => {
+      if (chunk === "") {
+        return;
+      }
+      let c = chunk;
+      if (skipNewlines) {
+        c = c.replace(/^(?:\r?\n)+/, "");
+        if (c !== "") {
+          skipNewlines = false;
+        }
+      }
+      out += c;
     };
+    for (; ; ) {
+      const open = text.indexOf("{{", pos);
+      if (open === -1) {
+        appendText(text.slice(pos));
+        break;
+      }
+      appendText(text.slice(pos, open));
+      const close = text.indexOf("}}", open + 2);
+      if (close === -1) {
+        appendText(text.slice(open));
+        break;
+      }
+      const result = evalInside(text.slice(open + 2, close), open, rawHash);
+      if (result === null) {
+        appendText(text.slice(open, close + 2));
+      } else if (result === TRIM) {
+        out = out.replace(/(?:\r?\n)+$/, "");
+        skipNewlines = true;
+      } else {
+        skipNewlines = false;
+        out += result;
+      }
+      pos = close + 2;
+    }
+    return out;
+  }
+  function registerMacro(name2, fn) {
+    const key = name2.trim();
+    if (key === "") {
+      throw new TypeError("Macro key must not be empty or whitespace only");
+    }
+    if (key.startsWith("{{") || key.endsWith("}}")) {
+      throw new TypeError("Macro key must not include the surrounding braces");
+    }
+    reg(key, (ctx) => {
+      const stripped = ctx.rest.replace(/^(?:\s?::?|\s)/, "");
+      const args = stripped === "" ? [] : stripped.split("::");
+      try {
+        return fn(args, api);
+      } catch {
+        return null;
+      }
+    });
+  }
+  for (const key of registry.keys()) builtinMacroNameSet.add(key);
+  for (const entry of hostMacroSnapshot()) {
+    try {
+      registerMacro(entry.name, entry.fn);
+    } catch {
+    }
+  }
+  const api = {
+    expand,
+    getVar: (name2) => readVar("local", name2),
+    setVar: (name2, value) => {
+      localVars.set(name2, value);
+    },
+    hasVar: (name2) => localVars.has(name2),
+    deleteVar: (name2) => localVars.delete(name2),
+    getGlobalVar: (name2) => readVar("global", name2),
+    setGlobalVar: (name2, value) => {
+      globalVars.set(name2, value);
+    },
+    hasGlobalVar: (name2) => globalVars.has(name2),
+    deleteGlobalVar: (name2) => globalVars.delete(name2),
+    registerMacro,
+    snapshotVars: () => ({
+      local: Object.fromEntries(localVars),
+      global: Object.fromEntries(globalVars)
+    })
+  };
+  return api;
+}
+var TRIM, builtinMacroNameSet;
+var init_engine = __esm({
+  "packages/tavern-macros/src/engine.ts"() {
+    "use strict";
+    init_host_registry();
+    init_random();
+    init_time();
+    TRIM = Symbol("trim");
+    builtinMacroNameSet = /* @__PURE__ */ new Set();
+  }
+});
+
+// packages/tavern-macros/src/index.ts
+var init_src = __esm({
+  "packages/tavern-macros/src/index.ts"() {
+    "use strict";
+    init_types();
+    init_engine();
+    init_host_registry();
+    init_random();
+    init_time();
   }
 });
 
@@ -1944,6 +1817,825 @@ var init_esm = __esm({
   }
 });
 
+// packages/tavern-store/src/fs-atomic.ts
+import { promises as fs } from "node:fs";
+async function moveAtomic(from, to) {
+  await renameWithWindowsRetry(from, to, RENAME_ATTEMPTS);
+}
+async function writeAtomicBytes(file, bytes) {
+  const tmp = `${file}.${process.pid}.${Date.now()}.${tmpCounter++}.tmp`;
+  try {
+    await fs.writeFile(tmp, bytes);
+    await moveAtomic(tmp, file);
+  } catch (cause) {
+    await fs.rm(tmp, { force: true }).catch(() => {
+    });
+    throw cause;
+  }
+}
+async function writeAtomicText(file, text) {
+  await writeAtomicBytes(file, new Uint8Array(Buffer.from(text, "utf8")));
+}
+async function renameWithWindowsRetry(from, to, attempts) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await fs.rename(from, to);
+      return;
+    } catch (cause) {
+      const code = cause.code;
+      if (attempt >= attempts || code !== "EPERM" && code !== "EACCES" && code !== "EBUSY" && code !== "ENOTEMPTY") throw cause;
+      await new Promise((resolve3) => setTimeout(resolve3, 10 * attempt));
+    }
+  }
+}
+var tmpCounter, RENAME_ATTEMPTS;
+var init_fs_atomic = __esm({
+  "packages/tavern-store/src/fs-atomic.ts"() {
+    "use strict";
+    tmpCounter = 0;
+    RENAME_ATTEMPTS = 5;
+  }
+});
+
+// packages/tavern-store/src/im-state.ts
+function normalizeAccessMode(value, fallback) {
+  return value === "open" || value === "allowlist" || value === "disabled" ? value : fallback;
+}
+function normalizeStringList(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = /* @__PURE__ */ new Set();
+  const result = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") continue;
+    const trimmed = entry.trim();
+    if (trimmed === "" || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    result.push(trimmed);
+  }
+  return result;
+}
+function normalizeImSettings(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return structuredClone(DEFAULT_IM_SETTINGS);
+  }
+  const record = value;
+  const chunkLimit = record["chunkLimit"];
+  return {
+    groupRequireMention: record["groupRequireMention"] !== false,
+    privateMode: normalizeAccessMode(record["privateMode"], "allowlist"),
+    privateAllow: normalizeStringList(record["privateAllow"]),
+    groupMode: normalizeAccessMode(record["groupMode"], "allowlist"),
+    groupAllow: normalizeStringList(record["groupAllow"]),
+    ...typeof chunkLimit === "number" && Number.isSafeInteger(chunkLimit) && chunkLimit > 0 ? { chunkLimit } : {}
+  };
+}
+function normalizeImPeers(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const result = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+    const record = entry;
+    const sessionId = record["sessionId"];
+    if (typeof sessionId !== "string" || sessionId.trim() === "") continue;
+    const scope = record["scope"] === "group" ? "group" : "private";
+    const boundBy = record["boundBy"] === "manual" ? "manual" : "auto";
+    const createdAt = typeof record["createdAt"] === "string" ? record["createdAt"] : (/* @__PURE__ */ new Date(0)).toISOString();
+    result[key] = { sessionId, scope, boundBy, createdAt };
+  }
+  return result;
+}
+function normalizeImPendingPeers(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const result = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+    const record = entry;
+    const lastAt = record["lastAt"];
+    if (typeof lastAt !== "number" || !Number.isFinite(lastAt) || lastAt < 0) continue;
+    const senderName = record["senderName"];
+    result[key] = {
+      lastAt,
+      ...typeof senderName === "string" && senderName.trim() !== "" ? { senderName: senderName.trim() } : {}
+    };
+  }
+  return result;
+}
+var DEFAULT_IM_SETTINGS;
+var init_im_state = __esm({
+  "packages/tavern-store/src/im-state.ts"() {
+    "use strict";
+    DEFAULT_IM_SETTINGS = {
+      groupRequireMention: true,
+      privateMode: "allowlist",
+      privateAllow: [],
+      groupMode: "allowlist",
+      groupAllow: []
+    };
+  }
+});
+
+// packages/tavern-store/src/mutation-tail.ts
+var MutationTail, KeyedMutationTails;
+var init_mutation_tail = __esm({
+  "packages/tavern-store/src/mutation-tail.ts"() {
+    "use strict";
+    MutationTail = class {
+      constructor(onIdle) {
+        this.onIdle = onIdle;
+      }
+      tail = Promise.resolve();
+      pending = 0;
+      /** 入队一个变更并返回其结果；后续变更在该变更落定后才执行。 */
+      enqueue(operation) {
+        const run = this.tail.catch(() => {
+        }).then(operation);
+        this.tail = run.then(() => {
+        }, () => {
+        });
+        this.pending++;
+        void this.tail.then(() => {
+          this.pending--;
+          if (this.pending === 0) this.onIdle?.();
+        });
+        return run;
+      }
+      /** 排空在飞变更：返回时已入队的全部变更均已落定（失败被吞掉不外抛）。 */
+      drain() {
+        return this.tail.catch(() => {
+        });
+      }
+    };
+    KeyedMutationTails = class {
+      constructor(deleteWhenIdle = false) {
+        this.deleteWhenIdle = deleteWhenIdle;
+      }
+      tails = /* @__PURE__ */ new Map();
+      enqueue(key, operation) {
+        return this.tailFor(key).enqueue(operation);
+      }
+      /** 排空指定键的在飞变更；键不存在时立即落定。 */
+      drain(key) {
+        return this.tails.get(key)?.drain() ?? Promise.resolve();
+      }
+      tailFor(key) {
+        const existing = this.tails.get(key);
+        if (existing !== void 0) return existing;
+        const tail = new MutationTail(() => {
+          if (this.deleteWhenIdle) this.tails.delete(key);
+        });
+        this.tails.set(key, tail);
+        return tail;
+      }
+    };
+  }
+});
+
+// packages/tavern-format/lib/types.js
+var init_types2 = __esm({
+  "packages/tavern-format/lib/types.js"() {
+    "use strict";
+  }
+});
+
+// packages/tavern-format/lib/png.js
+function crc32(...buffers) {
+  let crc2 = 4294967295;
+  for (const buf of buffers) {
+    for (let i = 0; i < buf.length; i++) {
+      crc2 = CRC_TABLE2[(crc2 ^ buf[i]) >>> 0 & 255] ^ crc2 >>> 8;
+    }
+  }
+  return (crc2 ^ 4294967295) >>> 0;
+}
+function isPng2(buf) {
+  if (buf.length < PNG_SIGNATURE2.length)
+    return false;
+  for (let i = 0; i < PNG_SIGNATURE2.length; i++) {
+    if (buf[i] !== PNG_SIGNATURE2[i])
+      return false;
+  }
+  return true;
+}
+function parsePngChunks(buf) {
+  if (!isPng2(buf))
+    throw new PngFormatError("not a PNG file (bad signature)");
+  const chunks = [];
+  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  let offset = PNG_SIGNATURE2.length;
+  while (offset + 8 <= buf.length) {
+    const length = view.getUint32(offset);
+    const typeBytes = buf.subarray(offset + 4, offset + 8);
+    const type = String.fromCharCode(...typeBytes);
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + length;
+    if (dataEnd + 4 > buf.length) {
+      throw new PngFormatError(`chunk '${type}' at ${offset} overruns file end`);
+    }
+    chunks.push({ type, data: buf.subarray(dataStart, dataEnd), offset });
+    const storedCrc = view.getUint32(dataEnd);
+    const actualCrc = crc32(typeBytes, buf.subarray(dataStart, dataEnd));
+    if (storedCrc !== actualCrc) {
+      throw new PngFormatError(`chunk '${type}' at ${offset} has bad CRC (stored ${storedCrc.toString(16)}, actual ${actualCrc.toString(16)})`);
+    }
+    offset = dataEnd + 4;
+    if (type === "IEND")
+      break;
+  }
+  const last = chunks[chunks.length - 1];
+  if (!last || last.type !== "IEND")
+    throw new PngFormatError("missing IEND chunk");
+  return chunks;
+}
+function readTextChunks(buf) {
+  const out = [];
+  for (const chunk of parsePngChunks(buf)) {
+    if (chunk.type !== "tEXt")
+      continue;
+    const nul = chunk.data.indexOf(0);
+    if (nul < 0)
+      continue;
+    const keyword = latin1Decode(chunk.data.subarray(0, nul));
+    const text = latin1Decode(chunk.data.subarray(nul + 1));
+    out.push({ keyword, text });
+  }
+  return out;
+}
+function latin1Decode(bytes) {
+  let out = "";
+  for (let i = 0; i < bytes.length; i++)
+    out += String.fromCharCode(bytes[i]);
+  return out;
+}
+function latin1Encode(text) {
+  const out = new Uint8Array(text.length);
+  for (let i = 0; i < text.length; i++)
+    out[i] = text.charCodeAt(i) & 255;
+  return out;
+}
+function u32be(value) {
+  return new Uint8Array([value >>> 24 & 255, value >>> 16 & 255, value >>> 8 & 255, value & 255]);
+}
+function encodeChunk(type, data) {
+  const typeBytes = latin1Encode(type);
+  const crc2 = crc32(typeBytes, data);
+  const out = new Uint8Array(12 + data.length);
+  out.set(u32be(data.length), 0);
+  out.set(typeBytes, 4);
+  out.set(data, 8);
+  out.set(u32be(crc2), 8 + data.length);
+  return out;
+}
+function encodeTextChunk(keyword, text) {
+  const data = new Uint8Array(keyword.length + 1 + text.length);
+  data.set(latin1Encode(keyword), 0);
+  data[keyword.length] = 0;
+  data.set(latin1Encode(text), keyword.length + 1);
+  return encodeChunk("tEXt", data);
+}
+function concat(...parts) {
+  const total = parts.reduce((n, p) => n + p.length, 0);
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const p of parts) {
+    out.set(p, at);
+    at += p.length;
+  }
+  return out;
+}
+function writeTextChunks2(png, entries) {
+  const chunks = parsePngChunks(png);
+  const parts = [PNG_SIGNATURE2];
+  const pending = new Map(entries.map((e) => [e.keyword, e]));
+  for (const chunk of chunks) {
+    let bytes;
+    if (chunk.type === "tEXt") {
+      const nul = chunk.data.indexOf(0);
+      const keyword = nul >= 0 ? latin1Decode(chunk.data.subarray(0, nul)) : "";
+      const replacement = pending.get(keyword);
+      if (replacement) {
+        pending.delete(keyword);
+        bytes = encodeTextChunk(replacement.keyword, replacement.text);
+      } else {
+        bytes = sliceChunkBytes(png, chunk);
+      }
+    } else if (chunk.type === "IEND") {
+      for (const e of pending.values())
+        parts.push(encodeTextChunk(e.keyword, e.text));
+      pending.clear();
+      bytes = sliceChunkBytes(png, chunk);
+    } else {
+      bytes = sliceChunkBytes(png, chunk);
+    }
+    parts.push(bytes);
+  }
+  return concat(...parts);
+}
+function sliceChunkBytes(png, chunk) {
+  return png.subarray(chunk.offset, chunk.offset + 12 + chunk.data.length);
+}
+function extractCardJson2(png) {
+  const texts = readTextChunks(png);
+  const found = texts.find((t) => t.keyword === CARD_CHUNK_V32) ?? texts.find((t) => t.keyword === CARD_CHUNK_V22);
+  if (!found || !found.text)
+    return null;
+  return base64ToUtf82(found.text);
+}
+function base64ToUtf82(base64) {
+  return Buffer.from(base64, "base64").toString("utf8");
+}
+function utf8ToBase642(text) {
+  return Buffer.from(text, "utf8").toString("base64");
+}
+var PNG_SIGNATURE2, PngFormatError, CRC_TABLE2, CARD_CHUNK_V22, CARD_CHUNK_V32;
+var init_png = __esm({
+  "packages/tavern-format/lib/png.js"() {
+    "use strict";
+    PNG_SIGNATURE2 = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
+    PngFormatError = class extends Error {
+      constructor(message) {
+        super(message);
+        this.name = "PngFormatError";
+      }
+    };
+    CRC_TABLE2 = (() => {
+      const table = new Uint32Array(256);
+      for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) {
+          c = c & 1 ? 3988292384 ^ c >>> 1 : c >>> 1;
+        }
+        table[n] = c >>> 0;
+      }
+      return table;
+    })();
+    CARD_CHUNK_V22 = "chara";
+    CARD_CHUNK_V32 = "ccv3";
+  }
+});
+
+// packages/tavern-format/lib/card.js
+function decodeCharacterCard2(input) {
+  let obj;
+  if (input instanceof Uint8Array || input instanceof ArrayBuffer) {
+    const bytes = input instanceof ArrayBuffer ? new Uint8Array(input) : input;
+    if (!isPng2(bytes))
+      throw new CardFormatError("binary input is not a PNG file");
+    const json = extractCardJson2(bytes);
+    if (json === null)
+      throw new CardFormatError("PNG has no chara/ccv3 tEXt chunk");
+    obj = parseJson(json);
+  } else {
+    obj = input;
+  }
+  if (typeof obj !== "object" || obj === null || Array.isArray(obj)) {
+    throw new CardFormatError("card root is not an object");
+  }
+  return fromCardObject(obj);
+}
+function parseJson(text) {
+  try {
+    return JSON.parse(text);
+  } catch (cause) {
+    throw new CardFormatError(`card chunk JSON is invalid: ${String(cause)}`);
+  }
+}
+function fromCardObject(root) {
+  const spec = typeof root["spec"] === "string" ? root["spec"] : void 0;
+  let data;
+  let specName;
+  let specVersion;
+  if (spec === "chara_card_v2" || spec === "chara_card_v3") {
+    const raw = root["data"];
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      throw new CardFormatError(`spec ${spec} present but 'data' is not an object`);
+    }
+    data = raw;
+    specName = spec;
+    specVersion = typeof root["spec_version"] === "string" ? root["spec_version"] : spec === "chara_card_v3" ? "3.0" : "2.0";
+  } else if (spec !== void 0) {
+    data = root["data"] ?? {};
+    specName = "chara_card_v3";
+    specVersion = typeof root["spec_version"] === "string" ? root["spec_version"] : "3.0";
+  } else {
+    data = root;
+    specName = "chara_card_v2";
+    specVersion = "1.0";
+  }
+  if (typeof data["name"] !== "string" || data["name"].length === 0) {
+    throw new CardFormatError("card data has no 'name' string");
+  }
+  return {
+    spec: specName,
+    specVersion,
+    data: toCardDataIR(data),
+    // ST 导出的真实卡顶层并存 V1 兼容字段与 spec/data 三层——raw 必须存整个对象
+    raw: structuredClone(root)
+  };
+}
+function str2(value, fallback = "") {
+  return typeof value === "string" ? value : fallback;
+}
+function strArray2(value) {
+  return Array.isArray(value) ? value.filter((v) => typeof v === "string") : [];
+}
+function toCardDataIR(data) {
+  const book = data["character_book"];
+  const ir = {
+    name: str2(data["name"]),
+    description: str2(data["description"]),
+    personality: str2(data["personality"]),
+    scenario: str2(data["scenario"]),
+    firstMes: str2(data["first_mes"]),
+    mesExample: str2(data["mes_example"]),
+    creatorNotes: str2(data["creator_notes"]),
+    systemPrompt: str2(data["system_prompt"]),
+    postHistoryInstructions: str2(data["post_history_instructions"]),
+    alternateGreetings: strArray2(data["alternate_greetings"]),
+    tags: strArray2(data["tags"]),
+    creator: str2(data["creator"]),
+    characterVersion: str2(data["character_version"]),
+    extensions: typeof data["extensions"] === "object" && data["extensions"] !== null ? data["extensions"] : {}
+  };
+  if (isCharacterBook(book))
+    ir.characterBook = book;
+  if (Array.isArray(data["assets"]))
+    ir.assets = data["assets"].filter((a) => typeof a === "object" && a !== null);
+  if (typeof data["nickname"] === "string")
+    ir.nickname = data["nickname"];
+  if (isStringRecord(data["creator_notes_multilingual"]))
+    ir.creatorNotesMultilingual = data["creator_notes_multilingual"];
+  if (strArray2(data["source"]).length > 0)
+    ir.source = strArray2(data["source"]);
+  if (Array.isArray(data["group_only_greetings"]))
+    ir.groupOnlyGreetings = strArray2(data["group_only_greetings"]);
+  if (typeof data["creation_date"] === "number")
+    ir.creationDate = data["creation_date"];
+  if (typeof data["modification_date"] === "number")
+    ir.modificationDate = data["modification_date"];
+  return ir;
+}
+function isCharacterBook(value) {
+  return typeof value === "object" && value !== null && Array.isArray(value.entries);
+}
+function isStringRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function cardDataToRaw(ir) {
+  const rawBase = typeof ir.raw["data"] === "object" && ir.raw["data"] !== null ? structuredClone(ir.raw["data"]) : {};
+  const data = { ...rawBase };
+  const d = ir.data;
+  data["name"] = d.name;
+  data["description"] = d.description;
+  data["personality"] = d.personality;
+  data["scenario"] = d.scenario;
+  data["first_mes"] = d.firstMes;
+  data["mes_example"] = d.mesExample;
+  data["creator_notes"] = d.creatorNotes;
+  data["system_prompt"] = d.systemPrompt;
+  data["post_history_instructions"] = d.postHistoryInstructions;
+  data["alternate_greetings"] = d.alternateGreetings;
+  data["tags"] = d.tags;
+  data["creator"] = d.creator;
+  data["character_version"] = d.characterVersion;
+  data["extensions"] = d.extensions;
+  if (d.characterBook === void 0)
+    delete data["character_book"];
+  else
+    data["character_book"] = d.characterBook;
+  for (const [irKey, jsonKey] of V3_FIELDS) {
+    const value = d[irKey];
+    if (value === void 0)
+      delete data[jsonKey];
+    else
+      data[jsonKey] = value;
+  }
+  return data;
+}
+function encodeCharacterCardJson2(ir) {
+  return {
+    ...structuredClone(ir.raw),
+    spec: ir.spec,
+    spec_version: ir.specVersion,
+    data: cardDataToRaw(ir)
+  };
+}
+function encodeCharacterCardPng(ir, template) {
+  const entries = [
+    { keyword: CARD_CHUNK_V22, text: utf8ToBase642(JSON.stringify(toV2Json(ir))) }
+  ];
+  if (ir.spec === "chara_card_v3") {
+    entries.push({ keyword: CARD_CHUNK_V32, text: utf8ToBase642(JSON.stringify(encodeCharacterCardJson2(ir))) });
+  }
+  return writeTextChunks2(template, entries);
+}
+function toV2Json(ir) {
+  const data = cardDataToRaw(ir);
+  for (const jsonKey of V3_FIELDS.map((f) => f[1]))
+    delete data[jsonKey];
+  return {
+    ...structuredClone(ir.raw),
+    name: ir.data.name,
+    description: ir.data.description,
+    personality: ir.data.personality,
+    scenario: ir.data.scenario,
+    first_mes: ir.data.firstMes,
+    mes_example: ir.data.mesExample,
+    tags: ir.data.tags,
+    spec: "chara_card_v2",
+    spec_version: "2.0",
+    data
+  };
+}
+var CardFormatError, V3_FIELDS;
+var init_card = __esm({
+  "packages/tavern-format/lib/card.js"() {
+    "use strict";
+    init_png();
+    CardFormatError = class extends Error {
+      constructor(message) {
+        super(message);
+        this.name = "CardFormatError";
+      }
+    };
+    V3_FIELDS = [
+      ["assets", "assets"],
+      ["nickname", "nickname"],
+      ["creatorNotesMultilingual", "creator_notes_multilingual"],
+      ["source", "source"],
+      ["groupOnlyGreetings", "group_only_greetings"],
+      ["creationDate", "creation_date"],
+      ["modificationDate", "modification_date"]
+    ];
+  }
+});
+
+// packages/tavern-format/lib/worldbook.js
+function parseWorldInfoFile(name2, obj) {
+  const rawEntries = obj["entries"];
+  if (typeof rawEntries !== "object" || rawEntries === null || Array.isArray(rawEntries)) {
+    throw new WorldBookFormatError("world info file has no 'entries' object");
+  }
+  const entries = [];
+  for (const value of Object.values(rawEntries)) {
+    if (typeof value !== "object" || value === null)
+      continue;
+    entries.push(normalizeEntry2(value));
+  }
+  entries.sort((a, b) => a.uid - b.uid);
+  const { ["entries"]: _dropped, ...extra } = obj;
+  return { name: name2, entries, extra: Object.keys(extra).length > 0 ? extra : void 0 };
+}
+function serializeWorldInfoFile(ir) {
+  const entries = {};
+  for (const entry of [...ir.entries].sort((a, b) => a.uid - b.uid)) {
+    entries[String(entry.uid)] = entryToFileObject(entry);
+  }
+  return { ...ir.extra ?? {}, entries };
+}
+function normalizeEntry2(raw) {
+  const extra = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (!KNOWN_FIELDS2.has(k))
+      extra[k] = v;
+  }
+  return {
+    uid: num2(raw["uid"], 0),
+    key: strArray3(raw["key"]),
+    keysecondary: strArray3(raw["keysecondary"]),
+    comment: str3(raw["comment"]),
+    content: str3(raw["content"]),
+    constant: bool2(raw["constant"], false),
+    vectorized: bool2(raw["vectorized"], false),
+    selective: bool2(raw["selective"], true),
+    selectiveLogic: num2(raw["selectiveLogic"], 0),
+    addMemo: bool2(raw["addMemo"], false),
+    order: num2(raw["order"], 100),
+    position: num2(raw["position"], 0),
+    disable: bool2(raw["disable"], false),
+    ignoreBudget: bool2(raw["ignoreBudget"], false),
+    excludeRecursion: bool2(raw["excludeRecursion"], false),
+    preventRecursion: bool2(raw["preventRecursion"], false),
+    delayUntilRecursion: num2(raw["delayUntilRecursion"], 0),
+    probability: num2(raw["probability"], 100),
+    useProbability: bool2(raw["useProbability"], true),
+    depth: num2(raw["depth"], 4),
+    outletName: str3(raw["outletName"]),
+    group: str3(raw["group"]),
+    groupOverride: bool2(raw["groupOverride"], false),
+    groupWeight: num2(raw["groupWeight"], 100),
+    scanDepth: nullableNum2(raw["scanDepth"]),
+    caseSensitive: nullableBool2(raw["caseSensitive"]),
+    matchWholeWords: nullableBool2(raw["matchWholeWords"]),
+    useGroupScoring: nullableBool2(raw["useGroupScoring"]),
+    automationId: str3(raw["automationId"]),
+    role: num2(raw["role"], 0),
+    sticky: nullableNum2(raw["sticky"]),
+    cooldown: nullableNum2(raw["cooldown"]),
+    delay: nullableNum2(raw["delay"]),
+    triggers: strArray3(raw["triggers"]),
+    matchPersonaDescription: bool2(raw["matchPersonaDescription"], false),
+    matchCharacterDescription: bool2(raw["matchCharacterDescription"], false),
+    matchCharacterPersonality: bool2(raw["matchCharacterPersonality"], false),
+    matchCharacterDepthPrompt: bool2(raw["matchCharacterDepthPrompt"], false),
+    matchScenario: bool2(raw["matchScenario"], false),
+    matchCreatorNotes: bool2(raw["matchCreatorNotes"], false),
+    extra: Object.keys(extra).length > 0 ? extra : void 0
+  };
+}
+function entryToFileObject(entry) {
+  const { extra, ...fields } = entry;
+  return { ...fields, ...extra ?? {} };
+}
+function parseCharacterBook2(book) {
+  const entries = (book.entries ?? []).map((raw, index) => bookEntryToLoreEntry2(raw, index));
+  return { name: book.name ?? "", entries };
+}
+function bookEntryToLoreEntry2(raw, index) {
+  const ext = raw.extensions ?? {};
+  const uid = numOr2(raw.id, ext["uid"], index);
+  const entry = normalizeEntry2({
+    uid,
+    key: raw.keys ?? [],
+    keysecondary: raw.secondary_keys ?? [],
+    comment: raw.comment ?? raw.name ?? "",
+    content: raw.content ?? "",
+    constant: boolOr2(raw.constant, ext["constant"], false),
+    disable: raw.enabled === false,
+    order: numOr2(ext["order"], raw.insertion_order, 100),
+    position: bookPositionToSt2(raw.position, ext["position"]),
+    selective: boolOr2(raw.selective, ext["selective"], true),
+    selectiveLogic: num2(ext["selectiveLogic"], 0),
+    caseSensitive: nullableBoolOr2(raw.case_sensitive, ext["case_sensitive"]),
+    probability: numOr2(ext["probability"], 100, 100),
+    useProbability: boolOr2(ext["useProbability"], true, true),
+    depth: numOr2(ext["depth"], 4, 4),
+    group: str3(ext["group"]),
+    groupOverride: bool2(ext["group_override"], false),
+    groupWeight: numOr2(ext["group_weight"], 100, 100),
+    excludeRecursion: boolOr2(ext["exclude_recursion"], false, false),
+    preventRecursion: boolOr2(ext["prevent_recursion"], false, false),
+    delayUntilRecursion: numOr2(ext["delay_until_recursion"], 0, 0),
+    scanDepth: nullableNum2(ext["scan_depth"]),
+    matchWholeWords: nullableBool2(ext["match_whole_words"]),
+    useGroupScoring: nullableBool2(ext["use_group_scoring"]),
+    role: num2(ext["role"], 0),
+    vectorized: bool2(ext["vectorized"], false),
+    sticky: nullableNum2(ext["sticky"]),
+    cooldown: nullableNum2(ext["cooldown"]),
+    delay: nullableNum2(ext["delay"]),
+    triggers: strArray3(ext["triggers"])
+  });
+  const carried = {};
+  if (raw.priority !== void 0)
+    carried["book.priority"] = raw.priority;
+  if (raw.use_regex !== void 0)
+    carried["book.use_regex"] = raw.use_regex;
+  if (raw.name !== void 0)
+    carried["book.name"] = raw.name;
+  if (Object.keys(carried).length > 0)
+    entry.extra = { ...entry.extra ?? {}, ...carried };
+  return entry;
+}
+function bookPositionToSt2(bookPos, extPos) {
+  if (typeof extPos === "number")
+    return extPos;
+  if (bookPos === "after_char")
+    return 1;
+  return 0;
+}
+function str3(v) {
+  return typeof v === "string" ? v : "";
+}
+function num2(v, fallback) {
+  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
+}
+function numOr2(v, v2, fallback) {
+  return typeof v === "number" && Number.isFinite(v) ? v : num2(v2, fallback);
+}
+function nullableNum2(v) {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+function bool2(v, fallback) {
+  return typeof v === "boolean" ? v : fallback;
+}
+function boolOr2(v, v2, fallback) {
+  return typeof v === "boolean" ? v : bool2(v2, fallback);
+}
+function nullableBool2(v) {
+  return typeof v === "boolean" ? v : null;
+}
+function nullableBoolOr2(v, v2) {
+  return typeof v === "boolean" ? v : nullableBool2(v2);
+}
+function strArray3(v) {
+  return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+}
+var WorldBookFormatError, KNOWN_FIELDS2;
+var init_worldbook = __esm({
+  "packages/tavern-format/lib/worldbook.js"() {
+    "use strict";
+    WorldBookFormatError = class extends Error {
+      constructor(message) {
+        super(message);
+        this.name = "WorldBookFormatError";
+      }
+    };
+    KNOWN_FIELDS2 = /* @__PURE__ */ new Set([
+      "uid",
+      "key",
+      "keysecondary",
+      "comment",
+      "content",
+      "constant",
+      "vectorized",
+      "selective",
+      "selectiveLogic",
+      "addMemo",
+      "order",
+      "position",
+      "disable",
+      "ignoreBudget",
+      "excludeRecursion",
+      "preventRecursion",
+      "delayUntilRecursion",
+      "probability",
+      "useProbability",
+      "depth",
+      "outletName",
+      "group",
+      "groupOverride",
+      "groupWeight",
+      "scanDepth",
+      "caseSensitive",
+      "matchWholeWords",
+      "useGroupScoring",
+      "automationId",
+      "role",
+      "sticky",
+      "cooldown",
+      "delay",
+      "triggers",
+      "matchPersonaDescription",
+      "matchCharacterDescription",
+      "matchCharacterPersonality",
+      "matchCharacterDepthPrompt",
+      "matchScenario",
+      "matchCreatorNotes",
+      "extra"
+    ]);
+  }
+});
+
+// packages/tavern-format/lib/preset.js
+var init_preset = __esm({
+  "packages/tavern-format/lib/preset.js"() {
+    "use strict";
+  }
+});
+
+// packages/tavern-format/lib/chat.js
+function parseChatLog(text) {
+  const lines = text.split("\n");
+  let header;
+  const messages = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.length === 0)
+      continue;
+    let obj;
+    try {
+      obj = JSON.parse(line);
+    } catch (cause) {
+      throw new ChatFormatError(`line ${i + 1} is not valid JSON: ${String(cause)}`);
+    }
+    if (typeof obj !== "object" || obj === null)
+      throw new ChatFormatError(`line ${i + 1} is not an object`);
+    if (header === void 0)
+      header = obj;
+    else
+      messages.push(obj);
+  }
+  if (header === void 0)
+    throw new ChatFormatError("chat log is empty");
+  return { header, messages };
+}
+function serializeChatLog(ir) {
+  const lines = [JSON.stringify(ir.header), ...ir.messages.map((m) => JSON.stringify(m))];
+  return lines.join("\n") + "\n";
+}
+var ChatFormatError;
+var init_chat = __esm({
+  "packages/tavern-format/lib/chat.js"() {
+    "use strict";
+    ChatFormatError = class extends Error {
+      constructor(message) {
+        super(message);
+        this.name = "ChatFormatError";
+      }
+    };
+  }
+});
+
 // packages/tavern-format/lib/zip.js
 function requireLimit(value, name2) {
   if (!Number.isFinite(value) || value < 0) {
@@ -1951,8 +2643,8 @@ function requireLimit(value, name2) {
   }
   return value;
 }
-function unzipArchive(bytes, limits) {
-  const source = limits ?? DEFAULT_ZIP_LIMITS;
+function unzipArchive2(bytes, limits) {
+  const source = limits ?? DEFAULT_ZIP_LIMITS2;
   const maxEntries = requireLimit(source.maxEntries, "maxEntries");
   const maxFileBytes = requireLimit(source.maxFileBytes, "maxFileBytes");
   const maxTotalBytes = requireLimit(source.maxTotalBytes, "maxTotalBytes");
@@ -1981,7 +2673,7 @@ function unzipArchive(bytes, limits) {
     throw new ZipArchiveError(`not a valid zip: ${cause instanceof Error ? cause.message : String(cause)}`);
   }
 }
-var ZipArchiveError, ZipLimitError, DEFAULT_ZIP_LIMITS;
+var ZipArchiveError, ZipLimitError, DEFAULT_ZIP_LIMITS2;
 var init_zip = __esm({
   "packages/tavern-format/lib/zip.js"() {
     "use strict";
@@ -2002,7 +2694,7 @@ var init_zip = __esm({
         this.entry = entry;
       }
     };
-    DEFAULT_ZIP_LIMITS = {
+    DEFAULT_ZIP_LIMITS2 = {
       maxEntries: 256,
       maxFileBytes: 64 * 1024 * 1024,
       maxTotalBytes: 128 * 1024 * 1024
@@ -2013,7 +2705,7 @@ var init_zip = __esm({
 // packages/tavern-format/lib/charx.js
 function unzipCharx(bytes) {
   try {
-    return unzipArchive(bytes);
+    return unzipArchive2(bytes);
   } catch (cause) {
     throw new CharxFormatError(cause instanceof Error ? cause.message : String(cause));
   }
@@ -2023,7 +2715,7 @@ function decodeCharx(bytes) {
   const cardJson = files["card.json"];
   if (cardJson === void 0)
     throw new CharxFormatError("CHARX has no 'card.json' at zip root");
-  const card = decodeCharacterCard(JSON.parse(strFromU8(cardJson)));
+  const card = decodeCharacterCard2(JSON.parse(strFromU8(cardJson)));
   const assetPaths = Object.keys(files).filter((p) => p !== "card.json");
   return { card, assetPaths };
 }
@@ -2036,7 +2728,7 @@ function decodeCharxAsset(bytes, path7) {
 }
 function encodeCharx(ir, assets) {
   const files = {
-    "card.json": strToU8(JSON.stringify(encodeCharacterCardJson(ir)))
+    "card.json": strToU8(JSON.stringify(encodeCharacterCardJson2(ir)))
   };
   for (const asset of assets ?? [])
     files[asset.path] = asset.data;
@@ -2067,7 +2759,7 @@ var init_roundtrip = __esm({
 
 // packages/tavern-format/lib/group.js
 function parseGroupFile(obj, name2) {
-  const groupName = str3(obj["name"]) || (name2 ?? "");
+  const groupName = str4(obj["name"]) || (name2 ?? "");
   if (groupName === "")
     throw new GroupFormatError("group has no name");
   const membersRaw = Array.isArray(obj["members"]) ? obj["members"] : [];
@@ -2098,18 +2790,18 @@ function parseGroupFile(obj, name2) {
     if (!KNOWN_GROUP_FIELDS.includes(key))
       extra[key] = value;
   }
-  const strategy = num2(obj["activation_strategy"], 1);
+  const strategy = num3(obj["activation_strategy"], 1);
   const chats = Array.isArray(obj["chats"]) ? obj["chats"].filter((value) => typeof value === "string") : [];
   return {
-    id: str3(obj["id"]) || `group-${groupName}`,
+    id: str4(obj["id"]) || `group-${groupName}`,
     name: groupName,
     members,
-    allowSelfResponses: bool2(obj["allow_self_responses"], false),
+    allowSelfResponses: bool3(obj["allow_self_responses"], false),
     activationStrategy: strategy === 2 ? 2 : 1,
     disabledMembers: Array.isArray(obj["disabled_members"]) ? obj["disabled_members"].filter((value) => typeof value === "string") : [],
-    chatId: str3(obj["chat_id"]),
+    chatId: str4(obj["chat_id"]),
     chats,
-    autoModeDelay: num2(obj["auto_mode_delay"], 3),
+    autoModeDelay: num3(obj["auto_mode_delay"], 3),
     extra: Object.keys(extra).length > 0 ? extra : void 0,
     ...droppedMembers > 0 ? { droppedMembers } : {}
   };
@@ -2128,13 +2820,13 @@ function serializeGroupFile(ir) {
     auto_mode_delay: ir.autoModeDelay
   };
 }
-function str3(value) {
+function str4(value) {
   return typeof value === "string" ? value : "";
 }
-function num2(value, fallback) {
+function num3(value, fallback) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
-function bool2(value, fallback) {
+function bool3(value, fallback) {
   return typeof value === "boolean" ? value : fallback;
 }
 var GroupFormatError;
@@ -2172,42 +2864,42 @@ function parseRegexScript(raw, index = 0) {
     throw new RegexScriptFormatError(`regex script ${index} is not an object`);
   }
   const obj = raw;
-  const findRegex = str4(obj["findRegex"]);
+  const findRegex = str5(obj["findRegex"]);
   if (findRegex === "")
     throw new RegexScriptFormatError(`regex script ${index} has empty findRegex`);
   const extra = {};
   for (const [k, v] of Object.entries(obj)) {
-    if (!KNOWN_FIELDS2.has(k))
+    if (!KNOWN_FIELDS3.has(k))
       extra[k] = v;
   }
   const placement = (Array.isArray(obj["placement"]) ? obj["placement"] : [obj["placement"]]).map((value) => typeof value === "number" && Number.isFinite(value) ? value : 0).filter((value) => PLACEMENT_VALUES.has(value));
   return {
-    id: str4(obj["id"]) || `regex-${index}-${str4(obj["scriptName"]) || "script"}`,
-    scriptName: str4(obj["scriptName"]) || str4(obj["script_name"]) || `Script ${index + 1}`,
+    id: str5(obj["id"]) || `regex-${index}-${str5(obj["scriptName"]) || "script"}`,
+    scriptName: str5(obj["scriptName"]) || str5(obj["script_name"]) || `Script ${index + 1}`,
     findRegex,
-    replaceString: str4(obj["replaceString"]),
+    replaceString: str5(obj["replaceString"]),
     trimStrings: Array.isArray(obj["trimStrings"]) ? obj["trimStrings"].filter((value) => typeof value === "string") : [],
     placement: placement.length > 0 ? [...new Set(placement)] : [RegexPlacement.AI_OUTPUT],
-    disabled: bool3(obj["disabled"], false),
-    markdownOnly: bool3(obj["markdownOnly"], false),
-    promptOnly: bool3(obj["promptOnly"], false),
-    runOnEdit: bool3(obj["runOnEdit"], false),
-    substituteRegex: bool3(obj["substituteRegex"], false),
+    disabled: bool4(obj["disabled"], false),
+    markdownOnly: bool4(obj["markdownOnly"], false),
+    promptOnly: bool4(obj["promptOnly"], false),
+    runOnEdit: bool4(obj["runOnEdit"], false),
+    substituteRegex: bool4(obj["substituteRegex"], false),
     minDepth: numOrNull(obj["minDepth"]),
     maxDepth: numOrNull(obj["maxDepth"]),
     extra: Object.keys(extra).length > 0 ? extra : void 0
   };
 }
-function str4(value) {
+function str5(value) {
   return typeof value === "string" ? value : "";
 }
-function bool3(value, fallback) {
+function bool4(value, fallback) {
   return typeof value === "boolean" ? value : fallback;
 }
 function numOrNull(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
-var RegexPlacement, RegexScriptFormatError, KNOWN_FIELDS2, PLACEMENT_VALUES;
+var RegexPlacement, RegexScriptFormatError, KNOWN_FIELDS3, PLACEMENT_VALUES;
 var init_regex_script = __esm({
   "packages/tavern-format/lib/regex-script.js"() {
     "use strict";
@@ -2224,7 +2916,7 @@ var init_regex_script = __esm({
         this.name = "RegexScriptFormatError";
       }
     };
-    KNOWN_FIELDS2 = /* @__PURE__ */ new Set([
+    KNOWN_FIELDS3 = /* @__PURE__ */ new Set([
       "id",
       "scriptName",
       "findRegex",
@@ -2254,7 +2946,7 @@ var init_textcompletion = __esm({
 var init_lib = __esm({
   "packages/tavern-format/lib/index.js"() {
     "use strict";
-    init_types();
+    init_types2();
     init_png();
     init_card();
     init_worldbook();
@@ -2596,7 +3288,7 @@ function parseChatWorldsFile(file, bytes) {
       if (!isPlainRecord(entry)) {
         throw new Error(`chat world book '${name2}' entry ${index} must be an object: ${file}`);
       }
-      return normalizeEntry(entry);
+      return normalizeEntry2(entry);
     });
     worlds[name2] = {
       name: name2,
@@ -2832,7 +3524,8 @@ var init_store = __esm({
       modsEnabled: false,
       mods: { enabled: {} },
       imSettings: structuredClone(DEFAULT_IM_SETTINGS),
-      imPeers: {}
+      imPeers: {},
+      imPendingPeers: {}
     };
     MEMORY_EMBED_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,255}$/;
     TavernStore = class _TavernStore {
@@ -2889,7 +3582,7 @@ var init_store = __esm({
           if (source[0] === 137 && source[1] === 80) {
             bytes = source;
             kind = "png";
-            card = decodeCharacterCard(bytes);
+            card = decodeCharacterCard2(bytes);
           } else if (source[0] === 80 && source[1] === 75) {
             bytes = source;
             kind = "charx";
@@ -2897,19 +3590,19 @@ var init_store = __esm({
             card = decoded.card;
             charxAssets = decoded.assetPaths.map((assetPath) => ({ path: assetPath, data: decodeCharxAsset(bytes, assetPath) }));
           } else {
-            card = decodeCharacterCard(JSON.parse(Buffer.from(source).toString("utf8")));
-            bytes = jsonBytes(encodeCharacterCardJson(card));
+            card = decodeCharacterCard2(JSON.parse(Buffer.from(source).toString("utf8")));
+            bytes = jsonBytes(encodeCharacterCardJson2(card));
             kind = "json";
           }
         } else {
-          card = decodeCharacterCard(source);
-          bytes = jsonBytes(encodeCharacterCardJson(card));
+          card = decodeCharacterCard2(source);
+          bytes = jsonBytes(encodeCharacterCardJson2(card));
           kind = "json";
         }
         const importedWorld = await this.materializeEmbeddedBook(card);
         const importedRegex = await this.importEmbeddedRegex(card);
         if (importedWorld !== void 0) {
-          bytes = kind === "png" ? encodeCharacterCardPng(card, bytes) : kind === "charx" ? encodeCharx(card, charxAssets) : jsonBytes(encodeCharacterCardJson(card));
+          bytes = kind === "png" ? encodeCharacterCardPng(card, bytes) : kind === "charx" ? encodeCharx(card, charxAssets) : jsonBytes(encodeCharacterCardJson2(card));
         }
         const stem = safeFileName(card.data.name);
         const fileName = `${stem}.${kind}`;
@@ -2928,7 +3621,7 @@ var init_store = __esm({
         const rawLinked = card.data.extensions["world"];
         const linkedName = typeof rawLinked === "string" ? rawLinked.trim() : "";
         const bookName = linkedName !== "" ? linkedName : typeof book.name === "string" && book.name.trim() !== "" ? book.name.trim() : card.data.name;
-        await this.putWorld({ ...parseCharacterBook(book), name: bookName });
+        await this.putWorld({ ...parseCharacterBook2(book), name: bookName });
         if (linkedName === "") {
           card.data.extensions = { ...card.data.extensions, world: bookName };
         }
@@ -3008,7 +3701,7 @@ var init_store = __esm({
           return new Uint8Array(await fs2.readFile(path.join(this.root, "characters", file.fileName)));
         }
         if (template !== void 0) return encodeCharacterCardPng(file.card, template);
-        return new Uint8Array(Buffer.from(JSON.stringify(encodeCharacterCardJson(file.card), null, 2), "utf8"));
+        return new Uint8Array(Buffer.from(JSON.stringify(encodeCharacterCardJson2(file.card), null, 2), "utf8"));
       }
       /**
        * 保存已编辑的角色卡，并尽量保留原始容器：PNG 继续写回原图的 chunks，
@@ -3024,7 +3717,7 @@ var init_store = __esm({
           specVersion: typeof source.specVersion === "string" ? source.specVersion : current.card.specVersion,
           data: { ...current.card.data, ...incomingData },
           raw: structuredClone(current.card.raw)
-        } : decodeCharacterCard(source);
+        } : decodeCharacterCard2(source);
         if (typeof card.data.name !== "string" || card.data.name.trim() === "") {
           throw new Error("character name cannot be empty");
         }
@@ -3043,7 +3736,7 @@ var init_store = __esm({
           const decoded = decodeCharx(original);
           bytes = encodeCharx(card, decoded.assetPaths.map((assetPath) => ({ path: assetPath, data: decodeCharxAsset(original, assetPath) })));
         } else {
-          bytes = jsonBytes(encodeCharacterCardJson(card));
+          bytes = jsonBytes(encodeCharacterCardJson2(card));
         }
         await this.writeAtomic(path.join(this.root, "characters", `${nextStem}.${kind}`), bytes);
         if (currentStem !== nextStem || current.kind !== kind) {
@@ -3087,7 +3780,7 @@ var init_store = __esm({
           const fileName = `${safeFileName(name2)}.${kind}`;
           try {
             const bytes = new Uint8Array(await fs2.readFile(path.join(this.root, "characters", fileName)));
-            const card = kind === "png" ? decodeCharacterCard(bytes) : kind === "charx" ? decodeCharx(bytes).card : decodeCharacterCard(JSON.parse(Buffer.from(bytes).toString("utf8")));
+            const card = kind === "png" ? decodeCharacterCard2(bytes) : kind === "charx" ? decodeCharx(bytes).card : decodeCharacterCard2(JSON.parse(Buffer.from(bytes).toString("utf8")));
             return { fileName, kind, card };
           } catch (cause) {
             if (cause.code !== "ENOENT") throw cause;
@@ -3449,7 +4142,7 @@ var init_store = __esm({
       async importPersonaPng(bytes, fallbackName) {
         let description = "";
         try {
-          const card = decodeCharacterCard(bytes);
+          const card = decodeCharacterCard2(bytes);
           description = card.data.description;
         } catch {
         }
@@ -3830,7 +4523,8 @@ var init_store = __esm({
           mods: { enabled: normalizeModEnables(parsed.mods) },
           memoryEmbedding: normalizeMemoryEmbedding(parsed.memoryEmbedding),
           imSettings: normalizeImSettings(parsed.imSettings),
-          imPeers: normalizeImPeers(parsed.imPeers)
+          imPeers: normalizeImPeers(parsed.imPeers),
+          imPendingPeers: normalizeImPendingPeers(parsed.imPendingPeers)
         };
       }
       async assertChatRevision(file, expectedRevision) {
@@ -4862,7 +5556,7 @@ var init_scripts = __esm({
 });
 
 // packages/tavern-store/src/index.ts
-var init_src = __esm({
+var init_src2 = __esm({
   "packages/tavern-store/src/index.ts"() {
     "use strict";
     init_store();
@@ -4910,728 +5604,6 @@ var init_dsh_home = __esm({
     "use strict";
     TAVERN_DATA_DIR = "soulmojito";
     LEGACY_TAVERN_DATA_DIR = "tavern";
-  }
-});
-
-// packages/plugin/src/mods/cross-bundle.ts
-function clampModSectionOrder(order) {
-  const value = typeof order === "number" && Number.isFinite(order) ? order : MOD_SECTION_ORDER_MIN;
-  return Math.max(MOD_SECTION_ORDER_MIN, Math.min(MOD_SECTION_ORDER_MAX, value));
-}
-function store() {
-  const holder = globalThis;
-  return holder[registrySymbol] ??= {
-    tools: /* @__PURE__ */ new Map(),
-    sections: /* @__PURE__ */ new Map(),
-    builtinNames: new Set(BUILTIN_TOOL_NAMES_SEED),
-    nextSequence: 1
-  };
-}
-function modToolSnapshot() {
-  return [...store().tools.values()].sort((a, b) => a.order - b.order || a.sequence - b.sequence).map(({ modId, order, sequence, definition }) => ({ modId, order, sequence, definition }));
-}
-function modSectionSnapshot() {
-  return [...store().sections.values()].sort((a, b) => a.order - b.order || a.sequence - b.sequence).map(({ modId, order, sequence, definition }) => ({ modId, order, sequence, definition }));
-}
-function claimHostToolNames(names) {
-  for (const name2 of names) store().builtinNames.add(name2);
-}
-function onModsChanged(listener) {
-  return modsChangedListeners.on(listener);
-}
-var MOD_SECTION_ORDER_MIN, MOD_SECTION_ORDER_MAX, BUILTIN_TOOL_NAMES_SEED, MOD_REGISTRY_KEY, registrySymbol, modsChangedListeners;
-var init_cross_bundle = __esm({
-  "packages/plugin/src/mods/cross-bundle.ts"() {
-    "use strict";
-    init_cross_bundle_events();
-    MOD_SECTION_ORDER_MIN = -50;
-    MOD_SECTION_ORDER_MAX = 0;
-    BUILTIN_TOOL_NAMES_SEED = /* @__PURE__ */ new Set([
-      // agent-tavern（agent.ts createTools，25：18 原有 + 游戏桥七件，提案 0018 §4.2；
-      // game_wait 为 2026-10-14 修订新增，game_history 为同日增量修订新增，
-      // game_wait_full 为 2026-10-16 带棋盘视图的等待变体新增）
-      "tavern_character_get",
-      "tavern_lore_search",
-      "tavern_scene_get",
-      "tavern_history_search",
-      "memory_search",
-      "memory_read",
-      "memory_write",
-      "memory_update",
-      "memory_forget",
-      "variable_get",
-      "variable_set",
-      "variable_patch",
-      "variable_delete",
-      "variable_list",
-      "tavern_script_read",
-      "tavern_script_advance",
-      "tavern_deduce",
-      "tavern_variable_settle",
-      "game_list",
-      "game_start",
-      "game_state",
-      "game_history",
-      "game_move",
-      "game_wait",
-      "game_wait_full",
-      // agent-novel（agent-novel/agent.ts createTools，22；memory_*/tavern_deduce 交集去重）
-      "novel_status_read",
-      "novel_requirements_read",
-      "novel_outline_read",
-      "novel_outline_create",
-      "novel_outline_revise",
-      "novel_requirement_block",
-      "novel_facts_read",
-      "novel_lore_search",
-      "novel_character_read",
-      "novel_body_read",
-      "novel_body_search",
-      "novel_body_commit",
-      "novel_chapter_complete",
-      "novel_unit_claim",
-      "novel_unit_release",
-      "novel_unit_supersede",
-      "novel_writer_draft",
-      "novel_writer_delegate",
-      "novel_finish",
-      // card-workbench（card-workbench/tools-*.ts，22）
-      "card_get",
-      "card_put",
-      "card_create",
-      "card_delete",
-      "card_original_get",
-      "card_restore_original",
-      "card_plan_propose",
-      "card_apply_mvu",
-      "chat_log_read",
-      "world_get",
-      "world_put",
-      "world_create",
-      "world_delete",
-      "world_copy",
-      "world_rename",
-      "world_bind",
-      "world_list",
-      "world_plan_propose",
-      "preset_get",
-      "preset_put",
-      "material_list",
-      "material_read"
-    ]);
-    MOD_REGISTRY_KEY = "dsh-soulmojito:mod-registry";
-    registrySymbol = Symbol.for(MOD_REGISTRY_KEY);
-    modsChangedListeners = createGlobalListenerRegistry("dsh-soulmojito:mods-changed-listeners");
-  }
-});
-
-// packages/tavern-macros/src/types.ts
-var init_types2 = __esm({
-  "packages/tavern-macros/src/types.ts"() {
-    "use strict";
-  }
-});
-
-// packages/tavern-macros/src/host-registry.ts
-function store2() {
-  const holder = globalThis;
-  return holder[registrySymbol2] ??= { nextSequence: 1, entries: /* @__PURE__ */ new Map() };
-}
-function hostMacroSnapshot() {
-  return [...store2().entries.values()].sort((a, b) => a.order - b.order || a.sequence - b.sequence).map(({ name: name2, fn, order }) => ({ name: name2, fn, order }));
-}
-var HOST_MACRO_REGISTRY_KEY, registrySymbol2;
-var init_host_registry = __esm({
-  "packages/tavern-macros/src/host-registry.ts"() {
-    "use strict";
-    HOST_MACRO_REGISTRY_KEY = "dsh-soulmojito:host-macros";
-    registrySymbol2 = Symbol.for(HOST_MACRO_REGISTRY_KEY);
-  }
-});
-
-// packages/tavern-macros/src/random.ts
-function hash32(input) {
-  let h = 2166136261;
-  for (let i = 0; i < input.length; i++) {
-    h ^= input.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return h >>> 0;
-}
-function splitMacroList(listString) {
-  if (listString.includes("::")) {
-    return listString.split("::");
-  }
-  return listString.replace(/\\,/g, ESCAPED_COMMA).split(",").map((item) => item.trim().replace(/\u0000/g, ","));
-}
-function parseRoll(formula) {
-  let f = formula.trim();
-  if (/^\d+$/.test(f)) {
-    f = `1d${f}`;
-  }
-  const m = /^(\d+)d(\d+)([+-]\d+)?$/.exec(f);
-  if (m === null) return null;
-  const count = Number(m[1]);
-  const sides = Number(m[2]);
-  const modifier = m[3] === void 0 ? 0 : Number(m[3]);
-  if (!Number.isInteger(count) || count < 1 || count > 999) return null;
-  if (!Number.isInteger(sides) || sides < 2 || sides > 999) return null;
-  if (!Number.isFinite(modifier)) return null;
-  return { count, sides, modifier };
-}
-function evalRoll(spec, rng) {
-  let total = spec.modifier;
-  for (let i = 0; i < spec.count; i++) {
-    const r = rng();
-    total += Math.floor(r < 0 ? 0 : r >= 1 ? spec.sides - 1 : r * spec.sides) + 1;
-  }
-  return total;
-}
-var ESCAPED_COMMA;
-var init_random = __esm({
-  "packages/tavern-macros/src/random.ts"() {
-    "use strict";
-    ESCAPED_COMMA = "\0";
-  }
-});
-
-// packages/tavern-macros/src/time.ts
-function pad2(n) {
-  return n < 10 ? `0${n}` : String(n);
-}
-function formatTime12(hours24, minutes) {
-  const h12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
-  return `${h12}:${pad2(minutes)} ${hours24 < 12 ? "AM" : "PM"}`;
-}
-function formatLocalTime(d) {
-  return formatTime12(d.getHours(), d.getMinutes());
-}
-function formatTimeAtUtcOffset(d, offsetHours) {
-  const shifted = new Date(d.getTime() + offsetHours * 36e5);
-  return formatTime12(shifted.getUTCHours(), shifted.getUTCMinutes());
-}
-function formatLocalDateLong(d) {
-  return `${MONTHS_FULL[d.getMonth()] ?? ""} ${d.getDate()}, ${d.getFullYear()}`;
-}
-function formatWeekday(d) {
-  return WEEKDAYS_FULL[d.getDay()] ?? "";
-}
-function formatLocalIsoTime(d) {
-  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-}
-function formatLocalIsoDate(d) {
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-}
-function formatWithTokens(d, fmt) {
-  let out = "";
-  let i = 0;
-  while (i < fmt.length) {
-    const four = fmt.slice(i, i + 4);
-    if (four === "yyyy" || four === "YYYY") {
-      out += String(d.getFullYear()).padStart(4, "0");
-      i += 4;
-      continue;
-    }
-    const two = fmt.slice(i, i + 2);
-    if (two === "MM") {
-      out += pad2(d.getMonth() + 1);
-      i += 2;
-      continue;
-    }
-    if (two === "dd" || two === "DD") {
-      out += pad2(d.getDate());
-      i += 2;
-      continue;
-    }
-    if (two === "HH") {
-      out += pad2(d.getHours());
-      i += 2;
-      continue;
-    }
-    if (two === "mm") {
-      out += pad2(d.getMinutes());
-      i += 2;
-      continue;
-    }
-    if (two === "ss") {
-      out += pad2(d.getSeconds());
-      i += 2;
-      continue;
-    }
-    out += fmt.charAt(i);
-    i += 1;
-  }
-  return out;
-}
-function humanizeDuration(totalSeconds) {
-  const s = totalSeconds < 0 ? 0 : totalSeconds;
-  if (s < 45) return "a few seconds";
-  if (s < 90) return "a minute";
-  const minutes = s / 60;
-  if (minutes < 45) return `${Math.round(minutes)} minutes`;
-  if (minutes < 90) return "an hour";
-  const hours = minutes / 60;
-  if (hours < 22) return `${Math.round(hours)} hours`;
-  if (hours < 36) return "a day";
-  const days = hours / 24;
-  if (days < 26) return `${Math.round(days)} days`;
-  if (days < 45) return "a month";
-  const months = days / 30;
-  if (months < 11) return `${Math.round(months)} months`;
-  if (months < 18) return "a year";
-  return `${Math.round(months / 12)} years`;
-}
-var MONTHS_FULL, WEEKDAYS_FULL;
-var init_time = __esm({
-  "packages/tavern-macros/src/time.ts"() {
-    "use strict";
-    MONTHS_FULL = [
-      "January",
-      "February",
-      "March",
-      "April",
-      "May",
-      "June",
-      "July",
-      "August",
-      "September",
-      "October",
-      "November",
-      "December"
-    ];
-    WEEKDAYS_FULL = [
-      "Sunday",
-      "Monday",
-      "Tuesday",
-      "Wednesday",
-      "Thursday",
-      "Friday",
-      "Saturday"
-    ];
-  }
-});
-
-// packages/tavern-macros/src/engine.ts
-function opt(v) {
-  return v ?? "";
-}
-function coerceRead(v) {
-  if (typeof v === "string" && v.trim() !== "" && !Number.isNaN(Number(v))) {
-    return Number(v);
-  }
-  return v;
-}
-function createMacroEngine(init) {
-  const card = init.card ?? {};
-  const localVars = new Map(Object.entries(init.local ?? {}));
-  const globalVars = new Map(Object.entries(init.global ?? {}));
-  const now = init.now ?? (() => /* @__PURE__ */ new Date());
-  const rng = init.rng ?? Math.random;
-  const groupValue = init.group ?? init.char;
-  const registry = /* @__PURE__ */ new Map();
-  function reg(name2, handler) {
-    registry.set(name2.toLowerCase(), handler);
-  }
-  function regExact(name2, getValue) {
-    reg(name2, (ctx) => ctx.rest === "" ? getValue() : null);
-  }
-  function colonArg(ctx) {
-    return ctx.rest.startsWith("::") ? ctx.rest.slice(2) : null;
-  }
-  function laxArg(ctx) {
-    const m = /^\s?::?/.exec(ctx.rest);
-    return m === null ? null : ctx.rest.slice(m[0].length);
-  }
-  function rollArg(ctx) {
-    const m = /^(?:\s?::?|\s)/.exec(ctx.rest);
-    return m === null ? null : ctx.rest.slice(m[0].length);
-  }
-  function storeOf(scope) {
-    return scope === "local" ? localVars : globalVars;
-  }
-  function readVar(scope, name2) {
-    return coerceRead(storeOf(scope).get(name2));
-  }
-  function addToVar(scope, name2, value) {
-    const store3 = storeOf(scope);
-    const current = (coerceRead(store3.get(name2)) ?? 0) || 0;
-    if (typeof current === "string") {
-      try {
-        const parsed = JSON.parse(current);
-        if (Array.isArray(parsed)) {
-          parsed.push(value);
-          const json = JSON.stringify(parsed);
-          store3.set(name2, json);
-          return json;
-        }
-      } catch {
-      }
-    }
-    const inc = Number(value);
-    const currentNum = Number(current);
-    if (Number.isNaN(inc) || Number.isNaN(currentNum)) {
-      const concatenated = `${String(current || "")}${String(value)}`;
-      store3.set(name2, concatenated);
-      return concatenated;
-    }
-    const next = currentNum + inc;
-    if (Number.isNaN(next)) {
-      return "";
-    }
-    store3.set(name2, next);
-    return String(next);
-  }
-  regExact("char", () => init.char);
-  regExact("user", () => init.user);
-  regExact("group", () => groupValue);
-  regExact("charIfNotGroup", () => groupValue);
-  regExact("groupNotMuted", () => groupValue);
-  regExact("notChar", () => init.user);
-  regExact("persona", () => opt(init.persona));
-  regExact("description", () => opt(card.description));
-  regExact("personality", () => opt(card.personality));
-  regExact("scenario", () => opt(card.scenario));
-  regExact("mesExamples", () => opt(card.mesExample));
-  regExact("mesExamplesRaw", () => opt(card.mesExample));
-  regExact("charPrompt", () => opt(card.systemPrompt));
-  regExact("charInstruction", () => opt(card.postHistoryInstructions));
-  regExact("charJailbreak", () => opt(card.postHistoryInstructions));
-  regExact("charDepthPrompt", () => opt(card.charDepthPrompt));
-  regExact("creatorNotes", () => opt(card.creatorNotes));
-  regExact("charCreatorNotes", () => opt(card.creatorNotes));
-  regExact("systemPrompt", () => opt(init.systemPrompt));
-  regExact("original", () => opt(init.original));
-  regExact("lastMessage", () => opt(init.lastMessage));
-  regExact("lastUserMessage", () => opt(init.lastUserMessage));
-  regExact("lastCharMessage", () => opt(init.lastCharMessage));
-  regExact(
-    "lastMessageId",
-    () => init.lastMessageId === void 0 ? "" : String(init.lastMessageId)
-  );
-  regExact("model", () => opt(init.model));
-  regExact(
-    "maxContextTokens",
-    () => init.maxContextTokens === void 0 ? "" : String(init.maxContextTokens)
-  );
-  regExact("maxPrompt", () => {
-    const n = init.maxPrompt ?? init.maxContextTokens;
-    return n === void 0 ? "" : String(n);
-  });
-  regExact(
-    "maxResponseTokens",
-    () => init.maxResponseTokens === void 0 ? "" : String(init.maxResponseTokens)
-  );
-  regExact("newline", () => "\n");
-  regExact("space", () => " ");
-  regExact("noop", () => "");
-  reg("trim", (ctx) => ctx.rest === "" ? TRIM : null);
-  reg("time", (ctx) => {
-    if (ctx.rest === "") {
-      return formatLocalTime(now());
-    }
-    const arg = laxArg(ctx);
-    if (arg === null) {
-      return null;
-    }
-    const m = /^UTC([+-]\d+)$/i.exec(arg.trim());
-    if (m === null) {
-      return null;
-    }
-    return formatTimeAtUtcOffset(now(), Number(m[1]));
-  });
-  reg("time_utc", (ctx) => {
-    const m = /^([+-]\d+)$/.exec(ctx.rest);
-    if (m === null) {
-      return null;
-    }
-    return formatTimeAtUtcOffset(now(), Number(m[1]));
-  });
-  regExact("date", () => formatLocalDateLong(now()));
-  regExact("weekday", () => formatWeekday(now()));
-  regExact("isotime", () => formatLocalIsoTime(now()));
-  regExact("isodate", () => formatLocalIsoDate(now()));
-  reg("datetimeformat", (ctx) => {
-    const m = /^(?:\s+|::?)/.exec(ctx.rest);
-    if (m === null) {
-      return null;
-    }
-    return formatWithTokens(now(), ctx.rest.slice(m[0].length));
-  });
-  regExact(
-    "idle_duration",
-    () => init.idleDurationSeconds === void 0 ? "just now" : humanizeDuration(init.idleDurationSeconds)
-  );
-  regExact(
-    "idleDuration",
-    () => init.idleDurationSeconds === void 0 ? "just now" : humanizeDuration(init.idleDurationSeconds)
-  );
-  reg("random", (ctx) => {
-    const arg = laxArg(ctx);
-    if (arg === null || arg === "") {
-      return null;
-    }
-    const list = splitMacroList(arg);
-    const idx = Math.floor(rng() * list.length);
-    const safe = idx < 0 ? 0 : idx >= list.length ? list.length - 1 : idx;
-    return list[safe] ?? "";
-  });
-  reg("pick", (ctx) => {
-    const arg = laxArg(ctx);
-    if (arg === null || arg === "") {
-      return null;
-    }
-    const list = splitMacroList(arg);
-    const chatHash = hash32(init.chatId ?? "");
-    const seed = hash32(`${chatHash}|${ctx.rawHash}|${ctx.offset}`);
-    return list[seed % list.length] ?? "";
-  });
-  reg("roll", (ctx) => {
-    const arg = rollArg(ctx);
-    if (arg === null) {
-      return null;
-    }
-    const spec = parseRoll(arg);
-    if (spec === null) {
-      return "";
-    }
-    return String(evalRoll(spec, rng));
-  });
-  function registerVarMacros(scope, infix) {
-    const store3 = storeOf(scope);
-    reg(`get${infix}var`, (ctx) => {
-      const arg = colonArg(ctx);
-      if (arg === null || arg === "") {
-        return null;
-      }
-      const v = coerceRead(store3.get(arg.trim()));
-      return v === void 0 ? "" : String(v);
-    });
-    reg(`set${infix}var`, (ctx) => {
-      const arg = colonArg(ctx);
-      if (arg === null) {
-        return null;
-      }
-      const m = /^([^:]+)::([\s\S]*)$/.exec(arg);
-      if (m === null || m[1] === void 0 || m[1] === "") {
-        return null;
-      }
-      store3.set(m[1].trim(), m[2] ?? "");
-      return "";
-    });
-    reg(`add${infix}var`, (ctx) => {
-      const arg = colonArg(ctx);
-      if (arg === null) {
-        return null;
-      }
-      const m = /^([^:]+)::([\s\S]+)$/.exec(arg);
-      if (m === null || m[1] === void 0 || m[1] === "") {
-        return null;
-      }
-      addToVar(scope, m[1].trim(), m[2] ?? "");
-      return "";
-    });
-    reg(`inc${infix}var`, (ctx) => {
-      const arg = colonArg(ctx);
-      if (arg === null || arg === "") {
-        return null;
-      }
-      const m = /^([^:]+?)(?:::([\s\S]*))?$/.exec(arg);
-      if (m === null || m[1] === void 0 || m[1] === "") {
-        return null;
-      }
-      const delta = m[2] === void 0 ? "1" : m[2];
-      return addToVar(scope, m[1].trim(), delta);
-    });
-    reg(`dec${infix}var`, (ctx) => {
-      const arg = colonArg(ctx);
-      if (arg === null || arg === "") {
-        return null;
-      }
-      const m = /^([^:]+?)(?:::([\s\S]*))?$/.exec(arg);
-      if (m === null || m[1] === void 0 || m[1] === "") {
-        return null;
-      }
-      const value = m[2] === void 0 ? -1 : Number.isNaN(Number(m[2])) ? `-${m[2]}` : -Number(m[2]);
-      return addToVar(scope, m[1].trim(), value);
-    });
-    reg(`has${infix}var`, (ctx) => {
-      const arg = colonArg(ctx);
-      if (arg === null || arg === "") {
-        return null;
-      }
-      return store3.has(arg.trim()) ? "true" : "false";
-    });
-    reg(`delete${infix}var`, (ctx) => {
-      const arg = colonArg(ctx);
-      if (arg === null || arg === "") {
-        return null;
-      }
-      store3.delete(arg.trim());
-      return "";
-    });
-  }
-  registerVarMacros("local", "");
-  registerVarMacros("global", "global");
-  const LEGACY_RE = /<CHARIFNOTGROUP>|<GROUP>|<CHAR>|<BOT>|<USER>|(?<!\{)\{char\}(?!\})|(?<!\{)\{user\}(?!\})/gi;
-  function applyLegacy(text) {
-    if (!text.includes("<") && !text.includes("{")) {
-      return text;
-    }
-    return text.replace(LEGACY_RE, (tag) => {
-      switch (tag.toLowerCase()) {
-        case "<bot>":
-        case "<char>":
-        case "{char}":
-          return init.char;
-        case "<user>":
-        case "{user}":
-          return init.user;
-        case "<group>":
-        case "<charifnotgroup>":
-          return groupValue;
-        default:
-          return tag;
-      }
-    });
-  }
-  function evalInside(inside, offset, rawHash) {
-    if (inside === "") {
-      return null;
-    }
-    if (inside.startsWith("//")) {
-      return "";
-    }
-    const m = /^([A-Za-z0-9_]+)/.exec(inside);
-    if (m === null) {
-      return null;
-    }
-    const macroName = m[1];
-    const rest = inside.slice(macroName.length);
-    if (rest.includes("}")) {
-      return null;
-    }
-    const handler = registry.get(macroName.toLowerCase());
-    if (handler === void 0) {
-      return null;
-    }
-    return handler({ rest, offset, rawHash });
-  }
-  function expand(rawText) {
-    if (!rawText) {
-      return "";
-    }
-    const text = applyLegacy(rawText);
-    const rawHash = hash32(rawText);
-    let out = "";
-    let pos = 0;
-    let skipNewlines = false;
-    const appendText = (chunk) => {
-      if (chunk === "") {
-        return;
-      }
-      let c = chunk;
-      if (skipNewlines) {
-        c = c.replace(/^(?:\r?\n)+/, "");
-        if (c !== "") {
-          skipNewlines = false;
-        }
-      }
-      out += c;
-    };
-    for (; ; ) {
-      const open = text.indexOf("{{", pos);
-      if (open === -1) {
-        appendText(text.slice(pos));
-        break;
-      }
-      appendText(text.slice(pos, open));
-      const close = text.indexOf("}}", open + 2);
-      if (close === -1) {
-        appendText(text.slice(open));
-        break;
-      }
-      const result = evalInside(text.slice(open + 2, close), open, rawHash);
-      if (result === null) {
-        appendText(text.slice(open, close + 2));
-      } else if (result === TRIM) {
-        out = out.replace(/(?:\r?\n)+$/, "");
-        skipNewlines = true;
-      } else {
-        skipNewlines = false;
-        out += result;
-      }
-      pos = close + 2;
-    }
-    return out;
-  }
-  function registerMacro(name2, fn) {
-    const key = name2.trim();
-    if (key === "") {
-      throw new TypeError("Macro key must not be empty or whitespace only");
-    }
-    if (key.startsWith("{{") || key.endsWith("}}")) {
-      throw new TypeError("Macro key must not include the surrounding braces");
-    }
-    reg(key, (ctx) => {
-      const stripped = ctx.rest.replace(/^(?:\s?::?|\s)/, "");
-      const args = stripped === "" ? [] : stripped.split("::");
-      try {
-        return fn(args, api);
-      } catch {
-        return null;
-      }
-    });
-  }
-  for (const key of registry.keys()) builtinMacroNameSet.add(key);
-  for (const entry of hostMacroSnapshot()) {
-    try {
-      registerMacro(entry.name, entry.fn);
-    } catch {
-    }
-  }
-  const api = {
-    expand,
-    getVar: (name2) => readVar("local", name2),
-    setVar: (name2, value) => {
-      localVars.set(name2, value);
-    },
-    hasVar: (name2) => localVars.has(name2),
-    deleteVar: (name2) => localVars.delete(name2),
-    getGlobalVar: (name2) => readVar("global", name2),
-    setGlobalVar: (name2, value) => {
-      globalVars.set(name2, value);
-    },
-    hasGlobalVar: (name2) => globalVars.has(name2),
-    deleteGlobalVar: (name2) => globalVars.delete(name2),
-    registerMacro,
-    snapshotVars: () => ({
-      local: Object.fromEntries(localVars),
-      global: Object.fromEntries(globalVars)
-    })
-  };
-  return api;
-}
-var TRIM, builtinMacroNameSet;
-var init_engine = __esm({
-  "packages/tavern-macros/src/engine.ts"() {
-    "use strict";
-    init_host_registry();
-    init_random();
-    init_time();
-    TRIM = Symbol("trim");
-    builtinMacroNameSet = /* @__PURE__ */ new Set();
-  }
-});
-
-// packages/tavern-macros/src/index.ts
-var init_src2 = __esm({
-  "packages/tavern-macros/src/index.ts"() {
-    "use strict";
-    init_types2();
-    init_engine();
-    init_host_registry();
-    init_random();
-    init_time();
   }
 });
 
@@ -6292,6 +6264,16 @@ var init_capabilities2 = __esm({
   }
 });
 
+// packages/plugin/src/env-compat.ts
+function envCompat(suffix) {
+  return process.env[`DSH_SOULMOJITO_${suffix}`] ?? process.env[`DSH_TAVERN_${suffix}`];
+}
+var init_env_compat = __esm({
+  "packages/plugin/src/env-compat.ts"() {
+    "use strict";
+  }
+});
+
 // packages/plugin/src/build-info.ts
 import { execFileSync } from "node:child_process";
 import { readFileSync as readFileSync2 } from "node:fs";
@@ -6327,7 +6309,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("545dc42") : void 0;
+  const commit = true ? normalizeCommit("e51ccdf") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -6615,10 +6597,10 @@ var init_host = __esm({
     init_handle();
     init_env_compat();
     init_generation_hooks();
-    init_src2();
-    init_src2();
-    init_src3();
     init_src();
+    init_src();
+    init_src3();
+    init_src2();
     init_audit();
     init_events();
     init_cross_bundle();
@@ -6627,6 +6609,17 @@ var init_host = __esm({
     init_manifest();
     init_storage();
     init_install();
+  }
+});
+
+// packages/plugin/src/im/handle.ts
+var IM_RUNTIME_KEY, runtimeSymbol;
+var init_handle2 = __esm({
+  "packages/plugin/src/im/handle.ts"() {
+    "use strict";
+    init_env_compat();
+    IM_RUNTIME_KEY = "dsh-soulmojito:im-runtime";
+    runtimeSymbol = Symbol.for(IM_RUNTIME_KEY);
   }
 });
 
@@ -6667,7 +6660,7 @@ var init_runtime = __esm({
     init_host();
     init_handle2();
     init_service();
-    init_src();
+    init_src2();
     agentTavernCapabilities = inspectAgentTavernCapabilities({});
     agentNovelCapabilities = inspectAgentNovelCapabilities({});
   }
@@ -6676,1005 +6669,6 @@ var init_runtime = __esm({
 // packages/plugin/src/agent-tavern/agent.ts
 init_guides();
 init_handle();
-init_handle2();
-
-// packages/plugin/src/im/tools.ts
-import { isAbsolute } from "node:path";
-
-// packages/plugin/src/tool-args.ts
-function stringArg(value) {
-  if (typeof value !== "string" || value.trim() === "") throw new Error("string argument is required");
-  return value;
-}
-function boundedStringArg(value, maxLength) {
-  return stringArg(value).slice(0, maxLength);
-}
-function clampInt(value, min, max2, fallback) {
-  if (!Number.isInteger(value)) return fallback;
-  return Math.max(min, Math.min(max2, value));
-}
-function limitText(value, max2) {
-  return typeof value === "string" ? value.slice(0, max2) : "";
-}
-
-// packages/plugin/src/agent-tavern/tools/stores.ts
-init_src();
-init_dsh_home();
-
-// packages/plugin/src/memory-hybrid.ts
-init_src();
-
-// packages/plugin/src/memory-embed.ts
-init_src();
-import { promises as fs7 } from "node:fs";
-import * as path6 from "node:path";
-
-// packages/plugin/src/memory-embed-local.ts
-import { createHash as createHash5 } from "node:crypto";
-import { readdirSync as readdirSync2, readFileSync, realpathSync as realpathSync2, statSync } from "node:fs";
-import { createRequire as createRequire3 } from "node:module";
-import { basename as basename2, dirname as dirname4, join as join7 } from "node:path";
-import { fileURLToPath, pathToFileURL as pathToFileURL2 } from "node:url";
-
-// packages/bind/src/host-session.ts
-function readSessionEvents(session) {
-  if (!session) return void 0;
-  if (Array.isArray(session.events)) return session.events;
-  if (typeof session.snapshotEvents === "function") {
-    const snapshot2 = session.snapshotEvents();
-    if (Array.isArray(snapshot2)) return snapshot2;
-  }
-  if (Array.isArray(session.log)) return session.log;
-  return void 0;
-}
-var PLUGIN_NAME = "dsh-soulmojito";
-var LEGACY_PLUGIN_NAME = "dsh-tavern";
-var TAVERN_PLUGIN_SOURCE_KIND = `plugin:${PLUGIN_NAME}`;
-var LEGACY_TAVERN_PLUGIN_SOURCE_KIND = `plugin:${LEGACY_PLUGIN_NAME}`;
-
-// packages/bind/src/host-package.ts
-import { realpathSync } from "node:fs";
-import { createRequire as createRequire2 } from "node:module";
-import { pathToFileURL } from "node:url";
-async function importHostPackage(name2, anchor = process.argv[1]) {
-  for (const candidate of anchorCandidates(anchor)) {
-    try {
-      const hostRequire = createRequire2(candidate);
-      return await import(pathToFileURL(hostRequire.resolve(name2)).href);
-    } catch {
-    }
-  }
-  return await import(name2);
-}
-function anchorCandidates(anchor) {
-  const candidates = [];
-  const seen = /* @__PURE__ */ new Set();
-  const push = (value) => {
-    if (typeof value !== "string" || value === "" || seen.has(value)) return;
-    seen.add(value);
-    candidates.push(value);
-  };
-  push(anchor);
-  if (typeof anchor === "string" && anchor !== "") {
-    try {
-      push(realpathSync(anchor));
-    } catch {
-    }
-  }
-  return candidates;
-}
-
-// packages/plugin/src/memory-embed-local.ts
-var TRANSFORMERS_PACKAGE = "@huggingface/transformers";
-var TRANSFORMERS_INSTALL_HINT = `local ONNX embed requires '${TRANSFORMERS_PACKAGE}' (not bundled with the plugin): run "pnpm add ${TRANSFORMERS_PACKAGE}" in the DSH profile root (the directory whose node_modules contains the installed dsh-soulmojito, NOT the dsh-soulmojito source repository), then restart DSH`;
-var SESSION_CACHE_LIMIT = 2;
-function localModelFingerprint(modelDir) {
-  try {
-    const parts = [];
-    for (const entry of readdirSync2(modelDir).sort()) {
-      const full = join7(modelDir, entry);
-      const info3 = statSync(full);
-      if (info3.isFile()) {
-        parts.push(`${entry}:${info3.size}:${Math.round(info3.mtimeMs)}`);
-      } else if (info3.isDirectory()) {
-        for (const child of readdirSync2(full).sort()) {
-          const childInfo = statSync(join7(full, child));
-          if (childInfo.isFile()) parts.push(`${entry}/${child}:${childInfo.size}:${Math.round(childInfo.mtimeMs)}`);
-        }
-      }
-    }
-    if (parts.length === 0) return "unreadable";
-    return createHash5("sha256").update(parts.join("|")).digest("hex").slice(0, 16);
-  } catch {
-    return "unreadable";
-  }
-}
-function localModelIdentity(config) {
-  return `local-onnx:${basename2(config.modelDir)}@${localModelFingerprint(config.modelDir)}:${config.pooling ?? "cls"}:${resolveLocalDtype(config) ?? "auto"}`;
-}
-var DTYPE_FILE_SUFFIXES = [
-  ["fp32", ""],
-  ["fp16", "_fp16"],
-  ["q8", "_quantized"],
-  ["int8", "_int8"],
-  ["uint8", "_uint8"],
-  ["q4", "_q4"],
-  ["q4f16", "_q4f16"],
-  ["q2", "_q2"],
-  ["q2f16", "_q2f16"],
-  ["q1", "_q1"],
-  ["q1f16", "_q1f16"]
-];
-var AUTO_DTYPE_PRIORITY = ["fp16", "q8", "q4", "q4f16", "int8", "uint8", "q2", "q2f16", "q1", "q1f16", "fp32"];
-function detectLocalQuantizations(modelDir) {
-  let names;
-  try {
-    names = readdirSync2(join7(modelDir, "onnx"));
-  } catch {
-    return [];
-  }
-  const found = [];
-  for (const [dtype, suffix] of DTYPE_FILE_SUFFIXES) {
-    const file = `onnx/model${suffix}.onnx`;
-    try {
-      const info3 = statSync(join7(modelDir, file));
-      if (info3.isFile()) found.push({ precision: dtype, file, sizeBytes: info3.size });
-    } catch {
-    }
-  }
-  return found.sort((a, b) => AUTO_DTYPE_PRIORITY.indexOf(a.precision) - AUTO_DTYPE_PRIORITY.indexOf(b.precision));
-}
-function resolveLocalDtype(config) {
-  if (config.precision !== void 0 && config.precision !== "auto") return config.precision;
-  return detectLocalQuantizations(config.modelDir)[0]?.precision;
-}
-function resolutionAnchors() {
-  const candidates = [];
-  const push = (value) => {
-    if (typeof value !== "string" || value === "" || candidates.includes(value)) return;
-    candidates.push(value);
-  };
-  if (import.meta.url.startsWith("file:")) {
-    try {
-      push(fileURLToPath(import.meta.url));
-    } catch {
-    }
-  }
-  if (typeof process.argv[1] === "string" && process.argv[1] !== "") {
-    push(process.argv[1]);
-    try {
-      push(realpathSync2(process.argv[1]));
-    } catch {
-    }
-  }
-  return candidates;
-}
-async function importTransformers() {
-  for (const anchor of resolutionAnchors()) {
-    try {
-      const resolved = createRequire3(anchor).resolve(TRANSFORMERS_PACKAGE);
-      return await import(pathToFileURL2(resolved).href);
-    } catch {
-    }
-  }
-  return await importHostPackage(TRANSFORMERS_PACKAGE);
-}
-var defaultLocalEmbedRuntime = {
-  async load(modelDir, options = {}) {
-    let transformers;
-    try {
-      transformers = await importTransformers();
-    } catch (cause) {
-      throw new Error(`${TRANSFORMERS_INSTALL_HINT} (resolution failed: ${cause instanceof Error ? cause.message : String(cause)})`);
-    }
-    transformers.env.allowRemoteModels = false;
-    transformers.env.allowLocalModels = true;
-    let pipeline;
-    if (options.dtype !== void 0) {
-      pipeline = await transformers.pipeline("feature-extraction", modelDir, { dtype: options.dtype });
-    } else {
-      const chain = ["fp16", "q8", "fp32"];
-      let lastError;
-      for (const dtype of chain) {
-        try {
-          pipeline = await transformers.pipeline("feature-extraction", modelDir, { dtype });
-          break;
-        } catch (cause) {
-          lastError = cause;
-        }
-      }
-      if (pipeline === void 0) {
-        throw lastError instanceof Error ? lastError : new Error(String(lastError));
-      }
-    }
-    return {
-      async embed(texts) {
-        const output = await pipeline([...texts], {
-          pooling: options.pooling ?? "cls",
-          normalize: true
-        });
-        return output.tolist();
-      }
-    };
-  }
-};
-var LOCAL_RUNTIME_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
-var sessionCache = /* @__PURE__ */ new Map();
-function sessionKey(config, options) {
-  return `${config.modelDir}|${localModelFingerprint(config.modelDir)}|${options.pooling ?? "cls"}|${resolveLocalDtype(config) ?? "auto"}`;
-}
-function loadLocalEmbedModel(config, runtime = defaultLocalEmbedRuntime) {
-  const options = {};
-  if (config.pooling !== void 0) options.pooling = config.pooling;
-  const dtype = resolveLocalDtype(config);
-  if (dtype !== void 0) options.dtype = dtype;
-  const key = sessionKey(config, options);
-  const cached = sessionCache.get(key);
-  if (cached !== void 0) return cached;
-  const promise = runtime.load(config.modelDir, options).catch((cause) => {
-    sessionCache.delete(key);
-    throw cause;
-  });
-  sessionCache.set(key, promise);
-  while (sessionCache.size > SESSION_CACHE_LIMIT) {
-    const oldest = sessionCache.keys().next().value;
-    if (oldest === void 0) break;
-    sessionCache.delete(oldest);
-  }
-  return promise;
-}
-
-// packages/plugin/src/memory-embed.ts
-var EMBED_BREAKER_MS = 6e4;
-var EMBED_RETRY_BACKOFF_MS = 250;
-var EMBED_INPUT_MAX_CHARS = 6e3;
-var QUERY_MEMO_LIMIT = 32;
-function emptyStatus() {
-  return { version: 1, breakerUntil: 0 };
-}
-var EmbedHttpError = class extends Error {
-  constructor(kind, message, status2, retriable = false) {
-    super(message);
-    this.kind = kind;
-    this.status = status2;
-    this.retriable = retriable;
-    this.name = "EmbedHttpError";
-  }
-};
-function embedStatusPath(root) {
-  return path6.join(root, "memory-vectors", "status.json");
-}
-async function readEmbedStatus(root) {
-  try {
-    const parsed = JSON.parse(await fs7.readFile(embedStatusPath(root), "utf8"));
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return emptyStatus();
-    return {
-      version: 1,
-      ...typeof parsed.model === "string" && parsed.model !== "" ? { model: parsed.model } : {},
-      ...typeof parsed.dims === "number" && Number.isFinite(parsed.dims) && parsed.dims > 0 ? { dims: parsed.dims } : {},
-      ...typeof parsed.lastError === "string" && parsed.lastError !== "" ? { lastError: parsed.lastError } : {},
-      ...typeof parsed.lastErrorAt === "string" ? { lastErrorAt: parsed.lastErrorAt } : {},
-      ...typeof parsed.lastSuccessAt === "string" ? { lastSuccessAt: parsed.lastSuccessAt } : {},
-      breakerUntil: typeof parsed.breakerUntil === "number" && Number.isFinite(parsed.breakerUntil) ? parsed.breakerUntil : 0
-    };
-  } catch {
-    return emptyStatus();
-  }
-}
-async function writeEmbedStatus(root, status2) {
-  await fs7.mkdir(path6.dirname(embedStatusPath(root)), { recursive: true });
-  await writeAtomicText(embedStatusPath(root), `${JSON.stringify(status2)}
-`);
-}
-function embedBreakerOpen(status2, now = Date.now()) {
-  return now < status2.breakerUntil;
-}
-async function recordEmbedFailure(root, message) {
-  const status2 = await readEmbedStatus(root);
-  await writeEmbedStatus(root, {
-    ...status2,
-    lastError: message.slice(0, 300),
-    lastErrorAt: (/* @__PURE__ */ new Date()).toISOString(),
-    breakerUntil: Date.now() + EMBED_BREAKER_MS
-  });
-}
-async function recordEmbedSuccess(root, info3) {
-  const status2 = await readEmbedStatus(root);
-  await writeEmbedStatus(root, {
-    ...status2,
-    model: info3.model,
-    dims: info3.dims,
-    lastSuccessAt: (/* @__PURE__ */ new Date()).toISOString(),
-    breakerUntil: 0
-  });
-}
-function resolveApiKey(config) {
-  if (config.provider === "local") return void 0;
-  if (config.apiKeyEnv === "") return void 0;
-  const value = process.env[config.apiKeyEnv];
-  if (value === void 0) return void 0;
-  const trimmed = value.trim();
-  return trimmed === "" ? void 0 : trimmed;
-}
-function embedModelIdentity(config) {
-  if (config.provider === "local") return localModelIdentity(config);
-  return config.model;
-}
-function expectedDims(config, status2) {
-  return config.dims ?? status2.dims;
-}
-async function embedTexts(config, texts, options = {}) {
-  if (texts.length === 0) return [];
-  if (config.provider === "local") return embedTextsLocal(config, texts, options);
-  const batchSize = config.batchSize ?? 16;
-  const timeoutMs = config.timeoutMs ?? 1e4;
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const vectors = [];
-  for (let start = 0; start < texts.length; start += batchSize) {
-    const batch = texts.slice(start, start + batchSize);
-    vectors.push(...await embedBatchWithRetry(config, batch, { ...options, timeoutMs, fetchImpl }));
-  }
-  return vectors;
-}
-async function embedTextsLocal(config, texts, options) {
-  let model;
-  try {
-    model = await loadLocalEmbedModel(config, options.localRuntime ?? defaultLocalEmbedRuntime);
-  } catch (cause) {
-    throw new EmbedHttpError(
-      "runtime",
-      cause instanceof Error ? cause.message : String(cause),
-      void 0,
-      false
-    );
-  }
-  const batchSize = config.batchSize ?? 16;
-  const vectors = [];
-  for (let start = 0; start < texts.length; start += batchSize) {
-    const batch = texts.slice(start, start + batchSize);
-    let embedded;
-    try {
-      embedded = await model.embed(batch);
-    } catch (cause) {
-      throw new EmbedHttpError(
-        "runtime",
-        cause instanceof Error ? cause.message : String(cause),
-        void 0,
-        false
-      );
-    }
-    if (embedded.length !== batch.length) {
-      throw new EmbedHttpError(
-        "payload",
-        `local embed returned ${embedded.length} vectors for ${batch.length} inputs`,
-        void 0,
-        false
-      );
-    }
-    vectors.push(...validateLocalVectors(embedded, options.expectedDims));
-  }
-  return vectors;
-}
-function validateLocalVectors(embedded, expectedDims2) {
-  if (embedded.length === 0) {
-    throw new EmbedHttpError("payload", "local embed returned no vectors", void 0, false);
-  }
-  const dims = embedded[0]?.length ?? 0;
-  if (dims === 0 || embedded.some((vector) => vector.length !== dims)) {
-    throw new EmbedHttpError(
-      "dims",
-      `local embed dimensions inconsistent (batch dims: ${embedded.map((vector) => vector.length).join(",")})`,
-      void 0,
-      false
-    );
-  }
-  for (const vector of embedded) {
-    if (vector.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
-      throw new EmbedHttpError("payload", "local embed vector is not a finite number array", void 0, false);
-    }
-  }
-  if (expectedDims2 !== void 0 && dims !== expectedDims2) {
-    throw new EmbedHttpError("dims", `local embed has ${dims} dims, expected ${expectedDims2}`, void 0, false);
-  }
-  return [...embedded];
-}
-async function embedBatchWithRetry(config, batch, options) {
-  let lastError;
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      return await embedBatchOnce(config, batch, options);
-    } catch (cause) {
-      const error = cause instanceof EmbedHttpError ? cause : new EmbedHttpError("network", cause instanceof Error ? cause.message : String(cause), void 0, true);
-      lastError = error;
-      if (!error.retriable || attempt >= 2) throw lastError;
-      await delay(EMBED_RETRY_BACKOFF_MS);
-    }
-  }
-}
-async function embedBatchOnce(config, batch, options) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs);
-  let response;
-  if (config.provider === "local") throw new Error("local memory embedding does not use the HTTP embeddings endpoint");
-  try {
-    response = await options.fetchImpl(`${config.baseURL}/embeddings`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        // 免密反代：无 key 时不带 Authorization 头（不是带空串）。
-        ...resolveApiKey(config) !== void 0 ? { authorization: `Bearer ${resolveApiKey(config)}` } : {}
-      },
-      body: JSON.stringify({ model: config.model, input: batch }),
-      signal: controller.signal
-    });
-  } catch (cause) {
-    if (controller.signal.aborted) {
-      throw new EmbedHttpError("timeout", `embed request timed out after ${options.timeoutMs}ms`, void 0, true);
-    }
-    throw new EmbedHttpError("network", cause instanceof Error ? cause.message : String(cause), void 0, true);
-  } finally {
-    clearTimeout(timer);
-  }
-  if (!response.ok) {
-    const retriable = response.status === 429 || response.status >= 500;
-    const detail = await response.text().then((text) => text.slice(0, 200)).catch(() => "");
-    throw new EmbedHttpError(
-      "http",
-      `embed endpoint returned ${response.status}${detail === "" ? "" : `: ${detail}`}`,
-      response.status,
-      retriable
-    );
-  }
-  let payload;
-  try {
-    payload = await response.json();
-  } catch (cause) {
-    throw new EmbedHttpError("payload", `embed response is not JSON: ${cause instanceof Error ? cause.message : String(cause)}`);
-  }
-  return parseEmbeddings(payload, batch.length, options.expectedDims);
-}
-function parseEmbeddings(payload, count, expectedDims2) {
-  if (payload === null || typeof payload !== "object" || !Array.isArray(payload.data)) {
-    throw new EmbedHttpError("payload", "embed response has no data array");
-  }
-  const data = payload.data;
-  if (data.length !== count) {
-    throw new EmbedHttpError("payload", `embed response count mismatch: sent ${count}, received ${data.length}`);
-  }
-  const items = data.map((item) => {
-    if (item === null || typeof item !== "object" || Array.isArray(item)) {
-      throw new EmbedHttpError("payload", "embed response item is not an object");
-    }
-    return item;
-  });
-  const ordered = items.every((item) => typeof item.index === "number") ? items.slice().sort((left, right) => left.index - right.index) : items;
-  const vectors = ordered.map((item) => {
-    if (!Array.isArray(item.embedding) || item.embedding.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
-      throw new EmbedHttpError("payload", "embed response embedding is not a finite number array");
-    }
-    return item.embedding;
-  });
-  const dims = vectors[0]?.length ?? 0;
-  if (dims === 0 || vectors.some((vector) => vector.length !== dims)) {
-    throw new EmbedHttpError("dims", `embed response dimensions inconsistent (batch dims: ${vectors.map((vector) => vector.length).join(",")})`);
-  }
-  if (expectedDims2 !== void 0 && dims !== expectedDims2) {
-    throw new EmbedHttpError("dims", `embed response has ${dims} dims, expected ${expectedDims2}`);
-  }
-  return vectors;
-}
-function delay(ms) {
-  return new Promise((resolve3) => setTimeout(resolve3, ms));
-}
-var queryVectorMemo = /* @__PURE__ */ new Map();
-function memoKey(config, query) {
-  if (config.provider === "local") {
-    return `local\0${localModelIdentity(config)}\0${query}`;
-  }
-  return `${config.baseURL}\0${config.model}\0${query}`;
-}
-function memoizedQueryVector(config, query) {
-  const key = memoKey(config, query);
-  const vector = queryVectorMemo.get(key);
-  if (vector === void 0) return void 0;
-  queryVectorMemo.delete(key);
-  queryVectorMemo.set(key, vector);
-  return vector;
-}
-function storeMemoizedQueryVector(config, query, vector) {
-  const key = memoKey(config, query);
-  queryVectorMemo.delete(key);
-  queryVectorMemo.set(key, vector);
-  while (queryVectorMemo.size > QUERY_MEMO_LIMIT) {
-    const oldest = queryVectorMemo.keys().next().value;
-    if (oldest === void 0) break;
-    queryVectorMemo.delete(oldest);
-  }
-}
-
-// packages/plugin/src/memory-hybrid.ts
-var HYBRID_BACKFILL_LIMIT = 32;
-var HYBRID_POOL_PER_SCOPE = 50;
-async function hybridMemorySearch(input) {
-  const { root, config, store: store3, vectorStore, query, scopes, limit, maxTokens, fetchImpl, localRuntime } = input;
-  const status2 = await readEmbedStatus(root);
-  if (embedBreakerOpen(status2)) return void 0;
-  const modelId = embedModelIdentity(config);
-  let queryVector = memoizedQueryVector(config, query);
-  if (queryVector === void 0) {
-    try {
-      const [vector] = await embedTexts(config, [query], { expectedDims: expectedDims(config, status2), fetchImpl, localRuntime });
-      if (vector === void 0) return void 0;
-      queryVector = vector;
-      storeMemoizedQueryVector(config, query, vector);
-      await recordEmbedSuccess(root, { model: modelId, dims: vector.length });
-    } catch (cause) {
-      await recordEmbedFailure(root, cause instanceof Error ? cause.message : String(cause));
-      return void 0;
-    }
-  }
-  const pool = (await Promise.all(scopes.map(
-    ({ scope, scopeId }) => store3.search({ query, scope, scopeId, limit: HYBRID_POOL_PER_SCOPE })
-  ))).flat();
-  pool.sort((left, right) => right.score - left.score || left.record.id.localeCompare(right.record.id));
-  const lexicalRank = new Map(pool.map((hit, index) => [hit.record.id, index]));
-  const entries = /* @__PURE__ */ new Map();
-  for (const { scope, scopeId } of scopes) {
-    for (const entry of await vectorStore.list(scope, scopeId)) {
-      entries.set(vectorKey(entry.scope, entry.scopeId, entry.id), entry);
-    }
-  }
-  const fresh = /* @__PURE__ */ new Map();
-  const stale = [];
-  for (const hit of pool) {
-    const entry = entries.get(vectorKey(hit.record.scope, hit.record.scopeId, hit.record.id));
-    if (entry !== void 0 && entry.model === modelId && entry.digest === memoryContentDigest(modelId, hit.record.content)) {
-      fresh.set(hit.record.id, entry.vector);
-    } else {
-      stale.push(hit);
-    }
-  }
-  if (stale.length > 0) {
-    const targets = stale.slice(0, HYBRID_BACKFILL_LIMIT);
-    try {
-      const vectors = await embedTexts(
-        config,
-        targets.map((hit) => hit.record.content.slice(0, EMBED_INPUT_MAX_CHARS)),
-        { expectedDims: queryVector?.length, fetchImpl, localRuntime }
-      );
-      await vectorStore.put(targets.map((hit, index) => ({
-        id: hit.record.id,
-        scope: hit.record.scope,
-        scopeId: hit.record.scopeId,
-        digest: memoryContentDigest(modelId, hit.record.content),
-        model: modelId,
-        vector: encodeVector(vectors[index] ?? [])
-      })));
-      targets.forEach((hit, index) => {
-        if (vectors[index] !== void 0) fresh.set(hit.record.id, encodeVector(vectors[index]));
-      });
-    } catch (cause) {
-      await recordEmbedFailure(root, cause instanceof Error ? cause.message : String(cause));
-    }
-  }
-  if (fresh.size === 0) return void 0;
-  const denseOrder = [...fresh.entries()].map(([id, base64]) => ({ id, similarity: cosineSimilarity(queryVector, decodeVector(base64)) })).sort((left, right) => right.similarity - left.similarity || left.id.localeCompare(right.id));
-  const rrf = rrfFuse(
-    pool.map((hit) => hit.record.id),
-    denseOrder.map((item) => item.id)
-  );
-  const ordered = pool.slice().sort((left, right) => {
-    const rrfLeft = rrf.get(left.record.id) ?? 0;
-    const rrfRight = rrf.get(right.record.id) ?? 0;
-    if (rrfLeft !== rrfRight) return rrfRight - rrfLeft;
-    return (lexicalRank.get(left.record.id) ?? 0) - (lexicalRank.get(right.record.id) ?? 0) || left.record.id.localeCompare(right.record.id);
-  }).slice(0, limit);
-  return applyTokenBudget(ordered, maxTokens);
-}
-async function embedMemoryRecord(input) {
-  const { root, config, vectorStore, record, fetchImpl, localRuntime } = input;
-  const status2 = await readEmbedStatus(root);
-  if (embedBreakerOpen(status2)) return false;
-  const modelId = embedModelIdentity(config);
-  try {
-    const [vector] = await embedTexts(
-      config,
-      [record.content.slice(0, EMBED_INPUT_MAX_CHARS)],
-      { expectedDims: expectedDims(config, status2), fetchImpl, localRuntime }
-    );
-    if (vector === void 0) return false;
-    await recordEmbedSuccess(root, { model: modelId, dims: vector.length });
-    await vectorStore.put([{
-      id: record.id,
-      scope: record.scope,
-      scopeId: record.scopeId,
-      digest: memoryContentDigest(modelId, record.content),
-      model: modelId,
-      vector: encodeVector(vector)
-    }]);
-    return true;
-  } catch (cause) {
-    await recordEmbedFailure(root, cause instanceof Error ? cause.message : String(cause));
-    return false;
-  }
-}
-function vectorKey(scope, scopeId, id) {
-  return `${scope}\0${scopeId}\0${id}`;
-}
-function applyTokenBudget(hits, maxTokens) {
-  const result = [];
-  let used = 0;
-  for (const hit of hits) {
-    const words = Math.max(1, Math.ceil(hit.record.content.length / 4));
-    if (used + words <= maxTokens) {
-      used += words;
-      result.push(hit);
-      continue;
-    }
-    const remaining = Math.max(0, maxTokens - used);
-    if (remaining === 0) break;
-    result.push({
-      ...hit,
-      record: { ...hit.record, content: hit.record.content.slice(0, Math.max(1, remaining * 4)).trimEnd() },
-      truncated: true
-    });
-    break;
-  }
-  return result;
-}
-
-// packages/plugin/src/agent-tavern/tools/stores.ts
-var tavernStorePromise;
-var memoryStorePromise;
-var memoryVectorStorePromise;
-var variableStorePromise;
-function tavernStore() {
-  return tavernStorePromise ??= TavernStore.open(tavernDataRoot());
-}
-function memoryStore() {
-  return memoryStorePromise ??= MemoryStore.open(tavernDataRoot());
-}
-function memoryVectorStore() {
-  return memoryVectorStorePromise ??= MemoryVectorStore.open(tavernDataRoot());
-}
-async function memoryEmbeddingConfig() {
-  const state = await (await tavernStore()).getState();
-  return normalizeMemoryEmbedding(state.memoryEmbedding);
-}
-async function embedWrittenMemory(record) {
-  try {
-    const config = await memoryEmbeddingConfig();
-    if (config === void 0) return;
-    await embedMemoryRecord({ root: tavernDataRoot(), config, vectorStore: await memoryVectorStore(), record });
-  } catch {
-  }
-}
-function variableStore() {
-  return variableStorePromise ??= VariableStore.open(tavernDataRoot());
-}
-
-// packages/plugin/src/agent-tavern/tools/shared.ts
-var DEFAULT_USER = "User";
-function tool(name2, description, properties, schema, execute) {
-  return {
-    name: name2,
-    description,
-    parameters: compileParameters(properties),
-    output: { schema, render: (_args, value) => [{ type: "text", text: JSON.stringify(value) }] },
-    execute
-  };
-}
-function compileParameters(properties) {
-  const required = [];
-  const compiled = Object.fromEntries(Object.entries(properties).map(([key, value]) => {
-    if (typeof value !== "object" || value === null || Array.isArray(value)) return [key, value];
-    const property = { ...value };
-    if (property.required === true) required.push(key);
-    delete property.required;
-    return [key, property];
-  }));
-  return {
-    type: "object",
-    properties: compiled,
-    ...required.length > 0 ? { required } : {},
-    additionalProperties: false
-  };
-}
-function objectOutput(properties, optionalKeys = ["value", "revision", "updatedAt"]) {
-  return { type: "object", properties, required: Object.keys(properties).filter((key) => !optionalKeys.includes(key)), additionalProperties: false };
-}
-var MEMORY_SCOPES = ["chat", "character", "agent", "global"];
-var VARIABLE_SCOPES = ["chat", "character", "agent", "global", "turn"];
-function memoryScopeParameter(required) {
-  return { type: "string", enum: [...MEMORY_SCOPES], ...required ? { required: true } : {} };
-}
-function variableScopeParameter(required) {
-  return { type: "string", enum: [...VARIABLE_SCOPES], ...required ? { required: true } : {} };
-}
-function scopeTarget(name2, binding) {
-  if (name2 === "chat") return { scope: "chat", scopeId: binding.chatId };
-  if (name2 === "character") return { scope: "character", scopeId: binding.character };
-  if (name2 === "agent") return { scope: "agent", scopeId: binding.agentId };
-  if (name2 === "global") return { scope: "global", scopeId: "global" };
-  if (name2 === "turn") return { scope: "turn", scopeId: binding.agentId };
-  throw new Error(`unsupported AgentTavern scope '${name2}'`);
-}
-function selectedMemoryScopes(scope, binding) {
-  const names = scope === void 0 ? [...MEMORY_SCOPES] : [stringArg(scope)];
-  return names.map((name2) => {
-    if (name2 === "turn") throw new Error(`unsupported AgentTavern scope '${name2}'`);
-    return scopeTarget(name2, binding);
-  });
-}
-function selectedVariableScope(scope, binding) {
-  return scopeTarget(stringArg(scope), binding);
-}
-async function assertWriteScopeAllowed(scope) {
-  if (scope !== "global") return;
-  const state = await (await tavernStore()).getState();
-  if (state.agentTavernAllowGlobalWrites !== true) {
-    throw new Error("global scope writes are disabled; ask the user to enable them in the Tavern settings");
-  }
-}
-async function bindingFor(exec) {
-  const agentId = exec.agent?.id;
-  if (typeof agentId !== "string" || agentId.trim() === "") throw new Error("AgentTavern tool requires the current agent");
-  const binding = (await (await tavernStore()).getState()).sessionBindings[agentId];
-  if (!binding || binding.architecture !== "agent-tavern" || binding.group === true) {
-    throw new Error("AgentTavern binding is unavailable for this agent");
-  }
-  return { agentId, character: binding.character, chatId: binding.chatId };
-}
-function identitySummaryOf(data) {
-  const agentTavern = data.extensions?.agentTavern;
-  const summary = agentTavern?.identitySummary;
-  return typeof summary === "string" && summary.trim() !== "" ? summary : void 0;
-}
-
-// packages/plugin/src/im/types.ts
-init_src();
-import { createHash as createHash6 } from "node:crypto";
-function imPeerKeyParts(key) {
-  const parts = key.split(":");
-  if (parts.length < 4) return void 0;
-  const [channel, accountId, scope, ...rest] = parts;
-  if (channel === void 0 || accountId === void 0 || scope === void 0) return void 0;
-  return { channel, accountId, scope, peerId: rest.join(":") };
-}
-function imPeerAlias(channel, scope, peerKey) {
-  return `peer-${createHash6("sha256").update(`${channel}:${scope}:${peerKey}`).digest("hex").slice(0, 10)}`;
-}
-
-// packages/plugin/src/im/tools.ts
-var IM_SEND_MAX_CHARS = 4e3;
-function createImTools(deps) {
-  return [
-    tool("im_identity", "Report the IM peers bound to this very session: channel, private/group scope, character and chat. Use it when you need to know which chat window this conversation is coming from. Returns an empty peer list when the session has no IM binding; it cannot look up any other session.", {}, identityOutput, async (_args, exec) => {
-      return { peers: (await boundPeers(deps, requireAgentId(exec))).map(publicPeer) };
-    }),
-    tool("im_channels", "Report whether the IM subsystem is available in this host process and the current state of every configured channel account (idle, starting, online, paused, error). Read-only; never returns credentials.", {}, channelsOutput, async () => {
-      const runtime = deps.runtime();
-      if (runtime === void 0) {
-        return {
-          available: false,
-          reasons: ["IM runtime is not mounted in this host process"],
-          channels: []
-        };
-      }
-      return {
-        available: runtime.capabilities.available,
-        reasons: [...runtime.capabilities.reasons],
-        channels: runtime.views().map((view) => ({
-          channel: view.channel,
-          accountId: view.accountId,
-          state: view.status.state
-        }))
-      };
-    }),
-    tool("im_send", "Send one message to an IM peer that is bound to this session. Send text, a media item, or a media item with a caption. Omit peer when exactly one peer is bound; pass the alias from im_identity when several are. Text is trimmed and capped at 4000 characters. Media is read from an absolute local path (preferred) or an http(s) URL for image/video. Cross-session sending is forbidden: an alias outside this session is rejected.", {
-      text: { type: "string", description: "Message text, 1-4000 characters after trimming. Optional when media is attached; then it becomes the caption." },
-      peer: { type: "string", description: "Target peer alias from im_identity; required when this session has more than one binding." },
-      mediaKind: { type: "string", enum: ["image", "voice", "video", "file"], description: "Kind of the media item; required when mediaPath or mediaUrl is given." },
-      mediaPath: { type: "string", description: "Absolute path of a local file to send (preferred: no network fetch)." },
-      mediaUrl: { type: "string", description: "Remote http(s) URL to send. Only image and video are supported by every channel." },
-      mediaName: { type: "string", description: "Optional display file name for the media item." }
-    }, sendOutput, async (args, exec) => {
-      const text = optionalTextOf(args);
-      const media = mediaOf(args);
-      if (text === void 0 && media === void 0) {
-        throw new Error("im_send needs text, mediaPath or mediaUrl");
-      }
-      const requested = aliasOf(args);
-      const peers = await boundPeers(deps, requireAgentId(exec));
-      let peer;
-      if (requested !== void 0) {
-        const found = peers.find((entry) => entry.alias === requested);
-        if (found === void 0) throw new Error(`peer '${requested}' is not bound to this session`);
-        peer = found;
-      } else if (peers.length === 0) {
-        throw new Error("this session has no IM peer binding; bind one in the dsh-soulmojito IM panel first");
-      } else {
-        peer = peerWhenSingle(peers);
-      }
-      const runtime = deps.runtime();
-      if (runtime === void 0) {
-        throw new Error("IM runtime is not available in this host process; im_send cannot deliver messages");
-      }
-      if (media !== void 0) {
-        if (runtime.router.sendMedia === void 0) {
-          throw new Error("this IM runtime cannot send media; update dsh-soulmojito and restart DSH");
-        }
-        const withCaption = text === void 0 ? media : { ...media, caption: text };
-        const receipt2 = await runtime.router.sendMedia(peer.peerKey, withCaption);
-        return {
-          peer: peer.alias,
-          parts: receipt2.parts,
-          sentAt: new Date(receipt2.at).toISOString(),
-          mediaKind: media.kind,
-          ...receipt2.messageId === void 0 ? {} : { messageId: receipt2.messageId }
-        };
-      }
-      const receipt = await runtime.router.sendText(peer.peerKey, text);
-      return {
-        peer: peer.alias,
-        parts: receipt.parts,
-        sentAt: new Date(receipt.at).toISOString(),
-        ...receipt.messageId === void 0 ? {} : { messageId: receipt.messageId }
-      };
-    })
-  ];
-}
-function publicPeer(peer) {
-  return {
-    alias: peer.alias,
-    channel: peer.channel,
-    scope: peer.scope,
-    character: peer.character,
-    chatId: peer.chatId
-  };
-}
-var identityOutput = objectOutput({
-  peers: {
-    type: "array",
-    items: {
-      type: "object",
-      properties: {
-        alias: { type: "string" },
-        channel: { type: "string" },
-        scope: { type: "string", enum: ["private", "group"] },
-        character: { type: "string" },
-        chatId: { type: "string" }
-      },
-      required: ["alias", "channel", "scope", "character", "chatId"],
-      additionalProperties: false
-    }
-  }
-});
-var channelsOutput = objectOutput({
-  available: { type: "boolean" },
-  reasons: { type: "array", items: { type: "string" } },
-  channels: {
-    type: "array",
-    items: {
-      type: "object",
-      properties: {
-        channel: { type: "string" },
-        accountId: { type: "string" },
-        state: { type: "string", enum: ["idle", "starting", "online", "paused", "error"] }
-      },
-      required: ["channel", "accountId", "state"],
-      additionalProperties: false
-    }
-  }
-});
-var sendOutput = objectOutput({
-  peer: { type: "string" },
-  parts: { type: "integer" },
-  sentAt: { type: "string" },
-  messageId: { type: "string" },
-  mediaKind: { type: "string", enum: ["image", "voice", "video", "file"] }
-}, ["messageId", "mediaKind"]);
-function requireAgentId(exec) {
-  const agentId = exec.agent?.id;
-  if (typeof agentId !== "string" || agentId.trim() === "") {
-    throw new Error("IM tool requires the current agent");
-  }
-  return agentId;
-}
-async function boundPeers(deps, sessionId) {
-  const state = await (await deps.db()).getState();
-  const peers = [];
-  for (const [peerKey, binding] of Object.entries(state.imPeers ?? {})) {
-    if (binding.sessionId !== sessionId) continue;
-    const parts = imPeerKeyParts(peerKey);
-    if (parts === void 0) {
-      throw new Error(`IM peer key '${peerKey}' is malformed; expected '<channel>:<accountId>:<scope>:<peerId>'`);
-    }
-    peers.push({
-      peerKey,
-      alias: imPeerAlias(parts.channel, parts.scope, peerKey),
-      channel: parts.channel,
-      scope: binding.scope,
-      character: binding.character,
-      chatId: binding.chatId
-    });
-  }
-  return peers.sort((left, right) => left.alias.localeCompare(right.alias));
-}
-function peerWhenSingle(peers) {
-  if (peers.length === 1) return peers[0];
-  throw new Error(`this session is bound to ${peers.length} IM peers; pass peer to choose one of: ${peers.map((peer) => peer.alias).join(", ")}`);
-}
-function optionalTextOf(args) {
-  const value = args["text"];
-  if (value === void 0) return void 0;
-  if (typeof value !== "string") throw new Error("text must be a string");
-  const text = value.trim();
-  if (text === "") throw new Error("text must not be blank; omit it when sending only media");
-  if (text.length > IM_SEND_MAX_CHARS) {
-    throw new Error(`text must be at most ${IM_SEND_MAX_CHARS} characters, received ${text.length}`);
-  }
-  return text;
-}
-var MEDIA_KINDS = ["image", "voice", "video", "file"];
-function mediaOf(args) {
-  const kindValue = args["mediaKind"];
-  const pathValue = args["mediaPath"];
-  const urlValue = args["mediaUrl"];
-  const nameValue = args["mediaName"];
-  const hasPath = pathValue !== void 0;
-  const hasUrl = urlValue !== void 0;
-  if (!hasPath && !hasUrl) {
-    if (kindValue !== void 0 || nameValue !== void 0) {
-      throw new Error("mediaKind/mediaName need mediaPath or mediaUrl");
-    }
-    return void 0;
-  }
-  if (hasPath && hasUrl) throw new Error("pass either mediaPath or mediaUrl, not both");
-  if (typeof kindValue !== "string" || !MEDIA_KINDS.includes(kindValue)) {
-    throw new Error("mediaKind must be one of 'image' | 'voice' | 'video' | 'file' when sending media");
-  }
-  const kind = kindValue;
-  let name2;
-  if (nameValue !== void 0) {
-    if (typeof nameValue !== "string" || nameValue.trim() === "") {
-      throw new Error("mediaName must be a non-empty string when provided");
-    }
-    name2 = nameValue.trim();
-  }
-  if (hasPath) {
-    if (typeof pathValue !== "string" || pathValue.trim() === "") {
-      throw new Error("mediaPath must be a non-empty absolute path");
-    }
-    const localPath = pathValue.trim();
-    if (!isAbsolute(localPath)) {
-      throw new Error(`mediaPath '${localPath}' is not absolute; pass a full path (the attachment summary prints one)`);
-    }
-    return { kind, localPath, ...name2 === void 0 ? {} : { name: name2 } };
-  }
-  if (typeof urlValue !== "string" || urlValue.trim() === "") {
-    throw new Error("mediaUrl must be a non-empty http(s) URL");
-  }
-  const raw = urlValue.trim();
-  let parsed;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    throw new Error(`mediaUrl '${raw}' is not a valid absolute URL`);
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error(`mediaUrl '${raw}' uses protocol '${parsed.protocol}'; expected http(s)`);
-  }
-  return { kind, url: raw, ...name2 === void 0 ? {} : { name: name2 } };
-}
-function aliasOf(args) {
-  const value = args["peer"];
-  if (value === void 0) return void 0;
-  if (typeof value !== "string") throw new Error("peer must be a string when provided");
-  const alias = value.trim();
-  if (alias === "") throw new Error("peer must not be blank when provided");
-  return alias;
-}
 
 // packages/plugin/src/lazy-projection.ts
 function createLazyProjection(options) {
@@ -7735,7 +6729,7 @@ init_cross_bundle();
 init_cross_bundle();
 
 // packages/plugin/src/prompt-safety.ts
-init_src2();
+init_src();
 function createHostPromptExpander(char, user, frozen) {
   const macros = createMacroEngine({
     char,
@@ -7985,8 +6979,8 @@ function sanitizeParams(params) {
 }
 
 // packages/tavern-format/src/png.ts
-var PNG_SIGNATURE2 = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
-var CRC_TABLE2 = (() => {
+var PNG_SIGNATURE = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
+var CRC_TABLE = (() => {
   const table = new Uint32Array(256);
   for (let n = 0; n < 256; n++) {
     let c = n;
@@ -7999,7 +6993,7 @@ var CRC_TABLE2 = (() => {
 })();
 
 // packages/tavern-format/src/worldbook.ts
-var KNOWN_FIELDS3 = /* @__PURE__ */ new Set([
+var KNOWN_FIELDS = /* @__PURE__ */ new Set([
   "uid",
   "key",
   "keysecondary",
@@ -8042,93 +7036,93 @@ var KNOWN_FIELDS3 = /* @__PURE__ */ new Set([
   "matchCreatorNotes",
   "extra"
 ]);
-function normalizeEntry2(raw) {
+function normalizeEntry(raw) {
   const extra = {};
   for (const [k, v] of Object.entries(raw)) {
-    if (!KNOWN_FIELDS3.has(k)) extra[k] = v;
+    if (!KNOWN_FIELDS.has(k)) extra[k] = v;
   }
   return {
-    uid: num3(raw["uid"], 0),
-    key: strArray3(raw["key"]),
-    keysecondary: strArray3(raw["keysecondary"]),
-    comment: str5(raw["comment"]),
-    content: str5(raw["content"]),
-    constant: bool4(raw["constant"], false),
-    vectorized: bool4(raw["vectorized"], false),
-    selective: bool4(raw["selective"], true),
-    selectiveLogic: num3(raw["selectiveLogic"], 0),
-    addMemo: bool4(raw["addMemo"], false),
-    order: num3(raw["order"], 100),
-    position: num3(raw["position"], 0),
-    disable: bool4(raw["disable"], false),
-    ignoreBudget: bool4(raw["ignoreBudget"], false),
-    excludeRecursion: bool4(raw["excludeRecursion"], false),
-    preventRecursion: bool4(raw["preventRecursion"], false),
-    delayUntilRecursion: num3(raw["delayUntilRecursion"], 0),
-    probability: num3(raw["probability"], 100),
-    useProbability: bool4(raw["useProbability"], true),
-    depth: num3(raw["depth"], 4),
-    outletName: str5(raw["outletName"]),
-    group: str5(raw["group"]),
-    groupOverride: bool4(raw["groupOverride"], false),
-    groupWeight: num3(raw["groupWeight"], 100),
-    scanDepth: nullableNum2(raw["scanDepth"]),
-    caseSensitive: nullableBool2(raw["caseSensitive"]),
-    matchWholeWords: nullableBool2(raw["matchWholeWords"]),
-    useGroupScoring: nullableBool2(raw["useGroupScoring"]),
-    automationId: str5(raw["automationId"]),
-    role: num3(raw["role"], 0),
-    sticky: nullableNum2(raw["sticky"]),
-    cooldown: nullableNum2(raw["cooldown"]),
-    delay: nullableNum2(raw["delay"]),
-    triggers: strArray3(raw["triggers"]),
-    matchPersonaDescription: bool4(raw["matchPersonaDescription"], false),
-    matchCharacterDescription: bool4(raw["matchCharacterDescription"], false),
-    matchCharacterPersonality: bool4(raw["matchCharacterPersonality"], false),
-    matchCharacterDepthPrompt: bool4(raw["matchCharacterDepthPrompt"], false),
-    matchScenario: bool4(raw["matchScenario"], false),
-    matchCreatorNotes: bool4(raw["matchCreatorNotes"], false),
+    uid: num(raw["uid"], 0),
+    key: strArray(raw["key"]),
+    keysecondary: strArray(raw["keysecondary"]),
+    comment: str(raw["comment"]),
+    content: str(raw["content"]),
+    constant: bool(raw["constant"], false),
+    vectorized: bool(raw["vectorized"], false),
+    selective: bool(raw["selective"], true),
+    selectiveLogic: num(raw["selectiveLogic"], 0),
+    addMemo: bool(raw["addMemo"], false),
+    order: num(raw["order"], 100),
+    position: num(raw["position"], 0),
+    disable: bool(raw["disable"], false),
+    ignoreBudget: bool(raw["ignoreBudget"], false),
+    excludeRecursion: bool(raw["excludeRecursion"], false),
+    preventRecursion: bool(raw["preventRecursion"], false),
+    delayUntilRecursion: num(raw["delayUntilRecursion"], 0),
+    probability: num(raw["probability"], 100),
+    useProbability: bool(raw["useProbability"], true),
+    depth: num(raw["depth"], 4),
+    outletName: str(raw["outletName"]),
+    group: str(raw["group"]),
+    groupOverride: bool(raw["groupOverride"], false),
+    groupWeight: num(raw["groupWeight"], 100),
+    scanDepth: nullableNum(raw["scanDepth"]),
+    caseSensitive: nullableBool(raw["caseSensitive"]),
+    matchWholeWords: nullableBool(raw["matchWholeWords"]),
+    useGroupScoring: nullableBool(raw["useGroupScoring"]),
+    automationId: str(raw["automationId"]),
+    role: num(raw["role"], 0),
+    sticky: nullableNum(raw["sticky"]),
+    cooldown: nullableNum(raw["cooldown"]),
+    delay: nullableNum(raw["delay"]),
+    triggers: strArray(raw["triggers"]),
+    matchPersonaDescription: bool(raw["matchPersonaDescription"], false),
+    matchCharacterDescription: bool(raw["matchCharacterDescription"], false),
+    matchCharacterPersonality: bool(raw["matchCharacterPersonality"], false),
+    matchCharacterDepthPrompt: bool(raw["matchCharacterDepthPrompt"], false),
+    matchScenario: bool(raw["matchScenario"], false),
+    matchCreatorNotes: bool(raw["matchCreatorNotes"], false),
     extra: Object.keys(extra).length > 0 ? extra : void 0
   };
 }
-function parseCharacterBook2(book) {
-  const entries = (book.entries ?? []).map((raw, index) => bookEntryToLoreEntry2(raw, index));
+function parseCharacterBook(book) {
+  const entries = (book.entries ?? []).map((raw, index) => bookEntryToLoreEntry(raw, index));
   return { name: book.name ?? "", entries };
 }
-function bookEntryToLoreEntry2(raw, index) {
+function bookEntryToLoreEntry(raw, index) {
   const ext = raw.extensions ?? {};
-  const uid = numOr2(raw.id, ext["uid"], index);
-  const entry = normalizeEntry2({
+  const uid = numOr(raw.id, ext["uid"], index);
+  const entry = normalizeEntry({
     uid,
     key: raw.keys ?? [],
     keysecondary: raw.secondary_keys ?? [],
     comment: raw.comment ?? raw.name ?? "",
     content: raw.content ?? "",
-    constant: boolOr2(raw.constant, ext["constant"], false),
+    constant: boolOr(raw.constant, ext["constant"], false),
     disable: raw.enabled === false,
-    order: numOr2(ext["order"], raw.insertion_order, 100),
-    position: bookPositionToSt2(raw.position, ext["position"]),
-    selective: boolOr2(raw.selective, ext["selective"], true),
-    selectiveLogic: num3(ext["selectiveLogic"], 0),
-    caseSensitive: nullableBoolOr2(raw.case_sensitive, ext["case_sensitive"]),
-    probability: numOr2(ext["probability"], 100, 100),
-    useProbability: boolOr2(ext["useProbability"], true, true),
-    depth: numOr2(ext["depth"], 4, 4),
-    group: str5(ext["group"]),
-    groupOverride: bool4(ext["group_override"], false),
-    groupWeight: numOr2(ext["group_weight"], 100, 100),
-    excludeRecursion: boolOr2(ext["exclude_recursion"], false, false),
-    preventRecursion: boolOr2(ext["prevent_recursion"], false, false),
-    delayUntilRecursion: numOr2(ext["delay_until_recursion"], 0, 0),
-    scanDepth: nullableNum2(ext["scan_depth"]),
-    matchWholeWords: nullableBool2(ext["match_whole_words"]),
-    useGroupScoring: nullableBool2(ext["use_group_scoring"]),
-    role: num3(ext["role"], 0),
-    vectorized: bool4(ext["vectorized"], false),
-    sticky: nullableNum2(ext["sticky"]),
-    cooldown: nullableNum2(ext["cooldown"]),
-    delay: nullableNum2(ext["delay"]),
-    triggers: strArray3(ext["triggers"])
+    order: numOr(ext["order"], raw.insertion_order, 100),
+    position: bookPositionToSt(raw.position, ext["position"]),
+    selective: boolOr(raw.selective, ext["selective"], true),
+    selectiveLogic: num(ext["selectiveLogic"], 0),
+    caseSensitive: nullableBoolOr(raw.case_sensitive, ext["case_sensitive"]),
+    probability: numOr(ext["probability"], 100, 100),
+    useProbability: boolOr(ext["useProbability"], true, true),
+    depth: numOr(ext["depth"], 4, 4),
+    group: str(ext["group"]),
+    groupOverride: bool(ext["group_override"], false),
+    groupWeight: numOr(ext["group_weight"], 100, 100),
+    excludeRecursion: boolOr(ext["exclude_recursion"], false, false),
+    preventRecursion: boolOr(ext["prevent_recursion"], false, false),
+    delayUntilRecursion: numOr(ext["delay_until_recursion"], 0, 0),
+    scanDepth: nullableNum(ext["scan_depth"]),
+    matchWholeWords: nullableBool(ext["match_whole_words"]),
+    useGroupScoring: nullableBool(ext["use_group_scoring"]),
+    role: num(ext["role"], 0),
+    vectorized: bool(ext["vectorized"], false),
+    sticky: nullableNum(ext["sticky"]),
+    cooldown: nullableNum(ext["cooldown"]),
+    delay: nullableNum(ext["delay"]),
+    triggers: strArray(ext["triggers"])
   });
   const carried = {};
   if (raw.priority !== void 0) carried["book.priority"] = raw.priority;
@@ -8137,36 +7131,36 @@ function bookEntryToLoreEntry2(raw, index) {
   if (Object.keys(carried).length > 0) entry.extra = { ...entry.extra ?? {}, ...carried };
   return entry;
 }
-function bookPositionToSt2(bookPos, extPos) {
+function bookPositionToSt(bookPos, extPos) {
   if (typeof extPos === "number") return extPos;
   if (bookPos === "after_char") return 1;
   return 0;
 }
-function str5(v) {
+function str(v) {
   return typeof v === "string" ? v : "";
 }
-function num3(v, fallback) {
+function num(v, fallback) {
   return typeof v === "number" && Number.isFinite(v) ? v : fallback;
 }
-function numOr2(v, v2, fallback) {
-  return typeof v === "number" && Number.isFinite(v) ? v : num3(v2, fallback);
+function numOr(v, v2, fallback) {
+  return typeof v === "number" && Number.isFinite(v) ? v : num(v2, fallback);
 }
-function nullableNum2(v) {
+function nullableNum(v) {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
-function bool4(v, fallback) {
+function bool(v, fallback) {
   return typeof v === "boolean" ? v : fallback;
 }
-function boolOr2(v, v2, fallback) {
-  return typeof v === "boolean" ? v : bool4(v2, fallback);
+function boolOr(v, v2, fallback) {
+  return typeof v === "boolean" ? v : bool(v2, fallback);
 }
-function nullableBool2(v) {
+function nullableBool(v) {
   return typeof v === "boolean" ? v : null;
 }
-function nullableBoolOr2(v, v2) {
-  return typeof v === "boolean" ? v : nullableBool2(v2);
+function nullableBoolOr(v, v2) {
+  return typeof v === "boolean" ? v : nullableBool(v2);
 }
-function strArray3(v) {
+function strArray(v) {
   return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
 }
 
@@ -8199,11 +7193,75 @@ function parsePreset(obj) {
 }
 
 // packages/tavern-format/src/zip.ts
-var DEFAULT_ZIP_LIMITS2 = {
+var DEFAULT_ZIP_LIMITS = {
   maxEntries: 256,
   maxFileBytes: 64 * 1024 * 1024,
   maxTotalBytes: 128 * 1024 * 1024
 };
+
+// packages/plugin/src/tool-args.ts
+function stringArg(value) {
+  if (typeof value !== "string" || value.trim() === "") throw new Error("string argument is required");
+  return value;
+}
+function boundedStringArg(value, maxLength) {
+  return stringArg(value).slice(0, maxLength);
+}
+function clampInt(value, min, max2, fallback) {
+  if (!Number.isInteger(value)) return fallback;
+  return Math.max(min, Math.min(max2, value));
+}
+function limitText(value, max2) {
+  return typeof value === "string" ? value.slice(0, max2) : "";
+}
+
+// packages/bind/src/host-session.ts
+function readSessionEvents(session) {
+  if (!session) return void 0;
+  if (Array.isArray(session.events)) return session.events;
+  if (typeof session.snapshotEvents === "function") {
+    const snapshot2 = session.snapshotEvents();
+    if (Array.isArray(snapshot2)) return snapshot2;
+  }
+  if (Array.isArray(session.log)) return session.log;
+  return void 0;
+}
+var PLUGIN_NAME = "dsh-soulmojito";
+var LEGACY_PLUGIN_NAME = "dsh-tavern";
+var TAVERN_PLUGIN_SOURCE_KIND = `plugin:${PLUGIN_NAME}`;
+var LEGACY_TAVERN_PLUGIN_SOURCE_KIND = `plugin:${LEGACY_PLUGIN_NAME}`;
+
+// packages/bind/src/host-package.ts
+import { realpathSync } from "node:fs";
+import { createRequire as createRequire2 } from "node:module";
+import { pathToFileURL } from "node:url";
+async function importHostPackage(name2, anchor = process.argv[1]) {
+  for (const candidate of anchorCandidates(anchor)) {
+    try {
+      const hostRequire = createRequire2(candidate);
+      return await import(pathToFileURL(hostRequire.resolve(name2)).href);
+    } catch {
+    }
+  }
+  return await import(name2);
+}
+function anchorCandidates(anchor) {
+  const candidates = [];
+  const seen = /* @__PURE__ */ new Set();
+  const push = (value) => {
+    if (typeof value !== "string" || value === "" || seen.has(value)) return;
+    seen.add(value);
+    candidates.push(value);
+  };
+  push(anchor);
+  if (typeof anchor === "string" && anchor !== "") {
+    try {
+      push(realpathSync(anchor));
+    } catch {
+    }
+  }
+  return candidates;
+}
 
 // packages/plugin/src/agent-tavern/prompt-capture.ts
 var agentStepCaptures = /* @__PURE__ */ new Map();
@@ -8300,7 +7358,7 @@ function applyCardOverride(identifier, content, card) {
 }
 
 // packages/plugin/src/agent-tavern/tools/character.ts
-init_src();
+init_src2();
 
 // packages/tavern-lore/src/types.ts
 var WI_POSITION = {
@@ -9097,7 +8155,7 @@ async function collectWorldInfoBooks(db, state, characterName, character, chatId
   const characterBook = follow ? character.card.data.characterBook : void 0;
   const linkedSuppressed = linkedName !== void 0 && disabledAuto.has(linkedName);
   if (characterBook && !linkedImported && !linkedSuppressed) {
-    const embedded = parseCharacterBook2(characterBook);
+    const embedded = parseCharacterBook(characterBook);
     books.unshift({
       name: `${characterName}:embedded`,
       entries: formatEntriesToLore(embedded.entries),
@@ -9107,6 +8165,690 @@ async function collectWorldInfoBooks(db, state, characterName, character, chatId
     });
   }
   return books;
+}
+
+// packages/plugin/src/agent-tavern/tools/stores.ts
+init_src2();
+init_dsh_home();
+
+// packages/plugin/src/memory-hybrid.ts
+init_src2();
+
+// packages/plugin/src/memory-embed.ts
+init_src2();
+import { promises as fs7 } from "node:fs";
+import * as path6 from "node:path";
+
+// packages/plugin/src/memory-embed-local.ts
+import { createHash as createHash5 } from "node:crypto";
+import { readdirSync as readdirSync2, readFileSync, realpathSync as realpathSync2, statSync } from "node:fs";
+import { createRequire as createRequire3 } from "node:module";
+import { basename as basename2, dirname as dirname4, join as join7 } from "node:path";
+import { fileURLToPath, pathToFileURL as pathToFileURL2 } from "node:url";
+var TRANSFORMERS_PACKAGE = "@huggingface/transformers";
+var TRANSFORMERS_INSTALL_HINT = `local ONNX embed requires '${TRANSFORMERS_PACKAGE}' (not bundled with the plugin): run "pnpm add ${TRANSFORMERS_PACKAGE}" in the DSH profile root (the directory whose node_modules contains the installed dsh-soulmojito, NOT the dsh-soulmojito source repository), then restart DSH`;
+var SESSION_CACHE_LIMIT = 2;
+function localModelFingerprint(modelDir) {
+  try {
+    const parts = [];
+    for (const entry of readdirSync2(modelDir).sort()) {
+      const full = join7(modelDir, entry);
+      const info3 = statSync(full);
+      if (info3.isFile()) {
+        parts.push(`${entry}:${info3.size}:${Math.round(info3.mtimeMs)}`);
+      } else if (info3.isDirectory()) {
+        for (const child of readdirSync2(full).sort()) {
+          const childInfo = statSync(join7(full, child));
+          if (childInfo.isFile()) parts.push(`${entry}/${child}:${childInfo.size}:${Math.round(childInfo.mtimeMs)}`);
+        }
+      }
+    }
+    if (parts.length === 0) return "unreadable";
+    return createHash5("sha256").update(parts.join("|")).digest("hex").slice(0, 16);
+  } catch {
+    return "unreadable";
+  }
+}
+function localModelIdentity(config) {
+  return `local-onnx:${basename2(config.modelDir)}@${localModelFingerprint(config.modelDir)}:${config.pooling ?? "cls"}:${resolveLocalDtype(config) ?? "auto"}`;
+}
+var DTYPE_FILE_SUFFIXES = [
+  ["fp32", ""],
+  ["fp16", "_fp16"],
+  ["q8", "_quantized"],
+  ["int8", "_int8"],
+  ["uint8", "_uint8"],
+  ["q4", "_q4"],
+  ["q4f16", "_q4f16"],
+  ["q2", "_q2"],
+  ["q2f16", "_q2f16"],
+  ["q1", "_q1"],
+  ["q1f16", "_q1f16"]
+];
+var AUTO_DTYPE_PRIORITY = ["fp16", "q8", "q4", "q4f16", "int8", "uint8", "q2", "q2f16", "q1", "q1f16", "fp32"];
+function detectLocalQuantizations(modelDir) {
+  let names;
+  try {
+    names = readdirSync2(join7(modelDir, "onnx"));
+  } catch {
+    return [];
+  }
+  const found = [];
+  for (const [dtype, suffix] of DTYPE_FILE_SUFFIXES) {
+    const file = `onnx/model${suffix}.onnx`;
+    try {
+      const info3 = statSync(join7(modelDir, file));
+      if (info3.isFile()) found.push({ precision: dtype, file, sizeBytes: info3.size });
+    } catch {
+    }
+  }
+  return found.sort((a, b) => AUTO_DTYPE_PRIORITY.indexOf(a.precision) - AUTO_DTYPE_PRIORITY.indexOf(b.precision));
+}
+function resolveLocalDtype(config) {
+  if (config.precision !== void 0 && config.precision !== "auto") return config.precision;
+  return detectLocalQuantizations(config.modelDir)[0]?.precision;
+}
+function resolutionAnchors() {
+  const candidates = [];
+  const push = (value) => {
+    if (typeof value !== "string" || value === "" || candidates.includes(value)) return;
+    candidates.push(value);
+  };
+  if (import.meta.url.startsWith("file:")) {
+    try {
+      push(fileURLToPath(import.meta.url));
+    } catch {
+    }
+  }
+  if (typeof process.argv[1] === "string" && process.argv[1] !== "") {
+    push(process.argv[1]);
+    try {
+      push(realpathSync2(process.argv[1]));
+    } catch {
+    }
+  }
+  return candidates;
+}
+async function importTransformers() {
+  for (const anchor of resolutionAnchors()) {
+    try {
+      const resolved = createRequire3(anchor).resolve(TRANSFORMERS_PACKAGE);
+      return await import(pathToFileURL2(resolved).href);
+    } catch {
+    }
+  }
+  return await importHostPackage(TRANSFORMERS_PACKAGE);
+}
+var defaultLocalEmbedRuntime = {
+  async load(modelDir, options = {}) {
+    let transformers;
+    try {
+      transformers = await importTransformers();
+    } catch (cause) {
+      throw new Error(`${TRANSFORMERS_INSTALL_HINT} (resolution failed: ${cause instanceof Error ? cause.message : String(cause)})`);
+    }
+    transformers.env.allowRemoteModels = false;
+    transformers.env.allowLocalModels = true;
+    let pipeline;
+    if (options.dtype !== void 0) {
+      pipeline = await transformers.pipeline("feature-extraction", modelDir, { dtype: options.dtype });
+    } else {
+      const chain = ["fp16", "q8", "fp32"];
+      let lastError;
+      for (const dtype of chain) {
+        try {
+          pipeline = await transformers.pipeline("feature-extraction", modelDir, { dtype });
+          break;
+        } catch (cause) {
+          lastError = cause;
+        }
+      }
+      if (pipeline === void 0) {
+        throw lastError instanceof Error ? lastError : new Error(String(lastError));
+      }
+    }
+    return {
+      async embed(texts) {
+        const output = await pipeline([...texts], {
+          pooling: options.pooling ?? "cls",
+          normalize: true
+        });
+        return output.tolist();
+      }
+    };
+  }
+};
+var LOCAL_RUNTIME_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
+var sessionCache = /* @__PURE__ */ new Map();
+function sessionKey(config, options) {
+  return `${config.modelDir}|${localModelFingerprint(config.modelDir)}|${options.pooling ?? "cls"}|${resolveLocalDtype(config) ?? "auto"}`;
+}
+function loadLocalEmbedModel(config, runtime = defaultLocalEmbedRuntime) {
+  const options = {};
+  if (config.pooling !== void 0) options.pooling = config.pooling;
+  const dtype = resolveLocalDtype(config);
+  if (dtype !== void 0) options.dtype = dtype;
+  const key = sessionKey(config, options);
+  const cached = sessionCache.get(key);
+  if (cached !== void 0) return cached;
+  const promise = runtime.load(config.modelDir, options).catch((cause) => {
+    sessionCache.delete(key);
+    throw cause;
+  });
+  sessionCache.set(key, promise);
+  while (sessionCache.size > SESSION_CACHE_LIMIT) {
+    const oldest = sessionCache.keys().next().value;
+    if (oldest === void 0) break;
+    sessionCache.delete(oldest);
+  }
+  return promise;
+}
+
+// packages/plugin/src/memory-embed.ts
+var EMBED_BREAKER_MS = 6e4;
+var EMBED_RETRY_BACKOFF_MS = 250;
+var EMBED_INPUT_MAX_CHARS = 6e3;
+var QUERY_MEMO_LIMIT = 32;
+function emptyStatus() {
+  return { version: 1, breakerUntil: 0 };
+}
+var EmbedHttpError = class extends Error {
+  constructor(kind, message, status2, retriable = false) {
+    super(message);
+    this.kind = kind;
+    this.status = status2;
+    this.retriable = retriable;
+    this.name = "EmbedHttpError";
+  }
+};
+function embedStatusPath(root) {
+  return path6.join(root, "memory-vectors", "status.json");
+}
+async function readEmbedStatus(root) {
+  try {
+    const parsed = JSON.parse(await fs7.readFile(embedStatusPath(root), "utf8"));
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return emptyStatus();
+    return {
+      version: 1,
+      ...typeof parsed.model === "string" && parsed.model !== "" ? { model: parsed.model } : {},
+      ...typeof parsed.dims === "number" && Number.isFinite(parsed.dims) && parsed.dims > 0 ? { dims: parsed.dims } : {},
+      ...typeof parsed.lastError === "string" && parsed.lastError !== "" ? { lastError: parsed.lastError } : {},
+      ...typeof parsed.lastErrorAt === "string" ? { lastErrorAt: parsed.lastErrorAt } : {},
+      ...typeof parsed.lastSuccessAt === "string" ? { lastSuccessAt: parsed.lastSuccessAt } : {},
+      breakerUntil: typeof parsed.breakerUntil === "number" && Number.isFinite(parsed.breakerUntil) ? parsed.breakerUntil : 0
+    };
+  } catch {
+    return emptyStatus();
+  }
+}
+async function writeEmbedStatus(root, status2) {
+  await fs7.mkdir(path6.dirname(embedStatusPath(root)), { recursive: true });
+  await writeAtomicText(embedStatusPath(root), `${JSON.stringify(status2)}
+`);
+}
+function embedBreakerOpen(status2, now = Date.now()) {
+  return now < status2.breakerUntil;
+}
+async function recordEmbedFailure(root, message) {
+  const status2 = await readEmbedStatus(root);
+  await writeEmbedStatus(root, {
+    ...status2,
+    lastError: message.slice(0, 300),
+    lastErrorAt: (/* @__PURE__ */ new Date()).toISOString(),
+    breakerUntil: Date.now() + EMBED_BREAKER_MS
+  });
+}
+async function recordEmbedSuccess(root, info3) {
+  const status2 = await readEmbedStatus(root);
+  await writeEmbedStatus(root, {
+    ...status2,
+    model: info3.model,
+    dims: info3.dims,
+    lastSuccessAt: (/* @__PURE__ */ new Date()).toISOString(),
+    breakerUntil: 0
+  });
+}
+function resolveApiKey(config) {
+  if (config.provider === "local") return void 0;
+  if (config.apiKeyEnv === "") return void 0;
+  const value = process.env[config.apiKeyEnv];
+  if (value === void 0) return void 0;
+  const trimmed = value.trim();
+  return trimmed === "" ? void 0 : trimmed;
+}
+function embedModelIdentity(config) {
+  if (config.provider === "local") return localModelIdentity(config);
+  return config.model;
+}
+function expectedDims(config, status2) {
+  return config.dims ?? status2.dims;
+}
+async function embedTexts(config, texts, options = {}) {
+  if (texts.length === 0) return [];
+  if (config.provider === "local") return embedTextsLocal(config, texts, options);
+  const batchSize = config.batchSize ?? 16;
+  const timeoutMs = config.timeoutMs ?? 1e4;
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const vectors = [];
+  for (let start = 0; start < texts.length; start += batchSize) {
+    const batch = texts.slice(start, start + batchSize);
+    vectors.push(...await embedBatchWithRetry(config, batch, { ...options, timeoutMs, fetchImpl }));
+  }
+  return vectors;
+}
+async function embedTextsLocal(config, texts, options) {
+  let model;
+  try {
+    model = await loadLocalEmbedModel(config, options.localRuntime ?? defaultLocalEmbedRuntime);
+  } catch (cause) {
+    throw new EmbedHttpError(
+      "runtime",
+      cause instanceof Error ? cause.message : String(cause),
+      void 0,
+      false
+    );
+  }
+  const batchSize = config.batchSize ?? 16;
+  const vectors = [];
+  for (let start = 0; start < texts.length; start += batchSize) {
+    const batch = texts.slice(start, start + batchSize);
+    let embedded;
+    try {
+      embedded = await model.embed(batch);
+    } catch (cause) {
+      throw new EmbedHttpError(
+        "runtime",
+        cause instanceof Error ? cause.message : String(cause),
+        void 0,
+        false
+      );
+    }
+    if (embedded.length !== batch.length) {
+      throw new EmbedHttpError(
+        "payload",
+        `local embed returned ${embedded.length} vectors for ${batch.length} inputs`,
+        void 0,
+        false
+      );
+    }
+    vectors.push(...validateLocalVectors(embedded, options.expectedDims));
+  }
+  return vectors;
+}
+function validateLocalVectors(embedded, expectedDims2) {
+  if (embedded.length === 0) {
+    throw new EmbedHttpError("payload", "local embed returned no vectors", void 0, false);
+  }
+  const dims = embedded[0]?.length ?? 0;
+  if (dims === 0 || embedded.some((vector) => vector.length !== dims)) {
+    throw new EmbedHttpError(
+      "dims",
+      `local embed dimensions inconsistent (batch dims: ${embedded.map((vector) => vector.length).join(",")})`,
+      void 0,
+      false
+    );
+  }
+  for (const vector of embedded) {
+    if (vector.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
+      throw new EmbedHttpError("payload", "local embed vector is not a finite number array", void 0, false);
+    }
+  }
+  if (expectedDims2 !== void 0 && dims !== expectedDims2) {
+    throw new EmbedHttpError("dims", `local embed has ${dims} dims, expected ${expectedDims2}`, void 0, false);
+  }
+  return [...embedded];
+}
+async function embedBatchWithRetry(config, batch, options) {
+  let lastError;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await embedBatchOnce(config, batch, options);
+    } catch (cause) {
+      const error = cause instanceof EmbedHttpError ? cause : new EmbedHttpError("network", cause instanceof Error ? cause.message : String(cause), void 0, true);
+      lastError = error;
+      if (!error.retriable || attempt >= 2) throw lastError;
+      await delay(EMBED_RETRY_BACKOFF_MS);
+    }
+  }
+}
+async function embedBatchOnce(config, batch, options) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs);
+  let response;
+  if (config.provider === "local") throw new Error("local memory embedding does not use the HTTP embeddings endpoint");
+  try {
+    response = await options.fetchImpl(`${config.baseURL}/embeddings`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        // 免密反代：无 key 时不带 Authorization 头（不是带空串）。
+        ...resolveApiKey(config) !== void 0 ? { authorization: `Bearer ${resolveApiKey(config)}` } : {}
+      },
+      body: JSON.stringify({ model: config.model, input: batch }),
+      signal: controller.signal
+    });
+  } catch (cause) {
+    if (controller.signal.aborted) {
+      throw new EmbedHttpError("timeout", `embed request timed out after ${options.timeoutMs}ms`, void 0, true);
+    }
+    throw new EmbedHttpError("network", cause instanceof Error ? cause.message : String(cause), void 0, true);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!response.ok) {
+    const retriable = response.status === 429 || response.status >= 500;
+    const detail = await response.text().then((text) => text.slice(0, 200)).catch(() => "");
+    throw new EmbedHttpError(
+      "http",
+      `embed endpoint returned ${response.status}${detail === "" ? "" : `: ${detail}`}`,
+      response.status,
+      retriable
+    );
+  }
+  let payload;
+  try {
+    payload = await response.json();
+  } catch (cause) {
+    throw new EmbedHttpError("payload", `embed response is not JSON: ${cause instanceof Error ? cause.message : String(cause)}`);
+  }
+  return parseEmbeddings(payload, batch.length, options.expectedDims);
+}
+function parseEmbeddings(payload, count, expectedDims2) {
+  if (payload === null || typeof payload !== "object" || !Array.isArray(payload.data)) {
+    throw new EmbedHttpError("payload", "embed response has no data array");
+  }
+  const data = payload.data;
+  if (data.length !== count) {
+    throw new EmbedHttpError("payload", `embed response count mismatch: sent ${count}, received ${data.length}`);
+  }
+  const items = data.map((item) => {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) {
+      throw new EmbedHttpError("payload", "embed response item is not an object");
+    }
+    return item;
+  });
+  const ordered = items.every((item) => typeof item.index === "number") ? items.slice().sort((left, right) => left.index - right.index) : items;
+  const vectors = ordered.map((item) => {
+    if (!Array.isArray(item.embedding) || item.embedding.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
+      throw new EmbedHttpError("payload", "embed response embedding is not a finite number array");
+    }
+    return item.embedding;
+  });
+  const dims = vectors[0]?.length ?? 0;
+  if (dims === 0 || vectors.some((vector) => vector.length !== dims)) {
+    throw new EmbedHttpError("dims", `embed response dimensions inconsistent (batch dims: ${vectors.map((vector) => vector.length).join(",")})`);
+  }
+  if (expectedDims2 !== void 0 && dims !== expectedDims2) {
+    throw new EmbedHttpError("dims", `embed response has ${dims} dims, expected ${expectedDims2}`);
+  }
+  return vectors;
+}
+function delay(ms) {
+  return new Promise((resolve3) => setTimeout(resolve3, ms));
+}
+var queryVectorMemo = /* @__PURE__ */ new Map();
+function memoKey(config, query) {
+  if (config.provider === "local") {
+    return `local\0${localModelIdentity(config)}\0${query}`;
+  }
+  return `${config.baseURL}\0${config.model}\0${query}`;
+}
+function memoizedQueryVector(config, query) {
+  const key = memoKey(config, query);
+  const vector = queryVectorMemo.get(key);
+  if (vector === void 0) return void 0;
+  queryVectorMemo.delete(key);
+  queryVectorMemo.set(key, vector);
+  return vector;
+}
+function storeMemoizedQueryVector(config, query, vector) {
+  const key = memoKey(config, query);
+  queryVectorMemo.delete(key);
+  queryVectorMemo.set(key, vector);
+  while (queryVectorMemo.size > QUERY_MEMO_LIMIT) {
+    const oldest = queryVectorMemo.keys().next().value;
+    if (oldest === void 0) break;
+    queryVectorMemo.delete(oldest);
+  }
+}
+
+// packages/plugin/src/memory-hybrid.ts
+var HYBRID_BACKFILL_LIMIT = 32;
+var HYBRID_POOL_PER_SCOPE = 50;
+async function hybridMemorySearch(input) {
+  const { root, config, store: store3, vectorStore, query, scopes, limit, maxTokens, fetchImpl, localRuntime } = input;
+  const status2 = await readEmbedStatus(root);
+  if (embedBreakerOpen(status2)) return void 0;
+  const modelId = embedModelIdentity(config);
+  let queryVector = memoizedQueryVector(config, query);
+  if (queryVector === void 0) {
+    try {
+      const [vector] = await embedTexts(config, [query], { expectedDims: expectedDims(config, status2), fetchImpl, localRuntime });
+      if (vector === void 0) return void 0;
+      queryVector = vector;
+      storeMemoizedQueryVector(config, query, vector);
+      await recordEmbedSuccess(root, { model: modelId, dims: vector.length });
+    } catch (cause) {
+      await recordEmbedFailure(root, cause instanceof Error ? cause.message : String(cause));
+      return void 0;
+    }
+  }
+  const pool = (await Promise.all(scopes.map(
+    ({ scope, scopeId }) => store3.search({ query, scope, scopeId, limit: HYBRID_POOL_PER_SCOPE })
+  ))).flat();
+  pool.sort((left, right) => right.score - left.score || left.record.id.localeCompare(right.record.id));
+  const lexicalRank = new Map(pool.map((hit, index) => [hit.record.id, index]));
+  const entries = /* @__PURE__ */ new Map();
+  for (const { scope, scopeId } of scopes) {
+    for (const entry of await vectorStore.list(scope, scopeId)) {
+      entries.set(vectorKey(entry.scope, entry.scopeId, entry.id), entry);
+    }
+  }
+  const fresh = /* @__PURE__ */ new Map();
+  const stale = [];
+  for (const hit of pool) {
+    const entry = entries.get(vectorKey(hit.record.scope, hit.record.scopeId, hit.record.id));
+    if (entry !== void 0 && entry.model === modelId && entry.digest === memoryContentDigest(modelId, hit.record.content)) {
+      fresh.set(hit.record.id, entry.vector);
+    } else {
+      stale.push(hit);
+    }
+  }
+  if (stale.length > 0) {
+    const targets = stale.slice(0, HYBRID_BACKFILL_LIMIT);
+    try {
+      const vectors = await embedTexts(
+        config,
+        targets.map((hit) => hit.record.content.slice(0, EMBED_INPUT_MAX_CHARS)),
+        { expectedDims: queryVector?.length, fetchImpl, localRuntime }
+      );
+      await vectorStore.put(targets.map((hit, index) => ({
+        id: hit.record.id,
+        scope: hit.record.scope,
+        scopeId: hit.record.scopeId,
+        digest: memoryContentDigest(modelId, hit.record.content),
+        model: modelId,
+        vector: encodeVector(vectors[index] ?? [])
+      })));
+      targets.forEach((hit, index) => {
+        if (vectors[index] !== void 0) fresh.set(hit.record.id, encodeVector(vectors[index]));
+      });
+    } catch (cause) {
+      await recordEmbedFailure(root, cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+  if (fresh.size === 0) return void 0;
+  const denseOrder = [...fresh.entries()].map(([id, base64]) => ({ id, similarity: cosineSimilarity(queryVector, decodeVector(base64)) })).sort((left, right) => right.similarity - left.similarity || left.id.localeCompare(right.id));
+  const rrf = rrfFuse(
+    pool.map((hit) => hit.record.id),
+    denseOrder.map((item) => item.id)
+  );
+  const ordered = pool.slice().sort((left, right) => {
+    const rrfLeft = rrf.get(left.record.id) ?? 0;
+    const rrfRight = rrf.get(right.record.id) ?? 0;
+    if (rrfLeft !== rrfRight) return rrfRight - rrfLeft;
+    return (lexicalRank.get(left.record.id) ?? 0) - (lexicalRank.get(right.record.id) ?? 0) || left.record.id.localeCompare(right.record.id);
+  }).slice(0, limit);
+  return applyTokenBudget(ordered, maxTokens);
+}
+async function embedMemoryRecord(input) {
+  const { root, config, vectorStore, record, fetchImpl, localRuntime } = input;
+  const status2 = await readEmbedStatus(root);
+  if (embedBreakerOpen(status2)) return false;
+  const modelId = embedModelIdentity(config);
+  try {
+    const [vector] = await embedTexts(
+      config,
+      [record.content.slice(0, EMBED_INPUT_MAX_CHARS)],
+      { expectedDims: expectedDims(config, status2), fetchImpl, localRuntime }
+    );
+    if (vector === void 0) return false;
+    await recordEmbedSuccess(root, { model: modelId, dims: vector.length });
+    await vectorStore.put([{
+      id: record.id,
+      scope: record.scope,
+      scopeId: record.scopeId,
+      digest: memoryContentDigest(modelId, record.content),
+      model: modelId,
+      vector: encodeVector(vector)
+    }]);
+    return true;
+  } catch (cause) {
+    await recordEmbedFailure(root, cause instanceof Error ? cause.message : String(cause));
+    return false;
+  }
+}
+function vectorKey(scope, scopeId, id) {
+  return `${scope}\0${scopeId}\0${id}`;
+}
+function applyTokenBudget(hits, maxTokens) {
+  const result = [];
+  let used = 0;
+  for (const hit of hits) {
+    const words = Math.max(1, Math.ceil(hit.record.content.length / 4));
+    if (used + words <= maxTokens) {
+      used += words;
+      result.push(hit);
+      continue;
+    }
+    const remaining = Math.max(0, maxTokens - used);
+    if (remaining === 0) break;
+    result.push({
+      ...hit,
+      record: { ...hit.record, content: hit.record.content.slice(0, Math.max(1, remaining * 4)).trimEnd() },
+      truncated: true
+    });
+    break;
+  }
+  return result;
+}
+
+// packages/plugin/src/agent-tavern/tools/stores.ts
+var tavernStorePromise;
+var memoryStorePromise;
+var memoryVectorStorePromise;
+var variableStorePromise;
+function tavernStore() {
+  return tavernStorePromise ??= TavernStore.open(tavernDataRoot());
+}
+function memoryStore() {
+  return memoryStorePromise ??= MemoryStore.open(tavernDataRoot());
+}
+function memoryVectorStore() {
+  return memoryVectorStorePromise ??= MemoryVectorStore.open(tavernDataRoot());
+}
+async function memoryEmbeddingConfig() {
+  const state = await (await tavernStore()).getState();
+  return normalizeMemoryEmbedding(state.memoryEmbedding);
+}
+async function embedWrittenMemory(record) {
+  try {
+    const config = await memoryEmbeddingConfig();
+    if (config === void 0) return;
+    await embedMemoryRecord({ root: tavernDataRoot(), config, vectorStore: await memoryVectorStore(), record });
+  } catch {
+  }
+}
+function variableStore() {
+  return variableStorePromise ??= VariableStore.open(tavernDataRoot());
+}
+
+// packages/plugin/src/agent-tavern/tools/shared.ts
+var DEFAULT_USER = "User";
+function tool(name2, description, properties, schema, execute) {
+  return {
+    name: name2,
+    description,
+    parameters: compileParameters(properties),
+    output: { schema, render: (_args, value) => [{ type: "text", text: JSON.stringify(value) }] },
+    execute
+  };
+}
+function compileParameters(properties) {
+  const required = [];
+  const compiled = Object.fromEntries(Object.entries(properties).map(([key, value]) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return [key, value];
+    const property = { ...value };
+    if (property.required === true) required.push(key);
+    delete property.required;
+    return [key, property];
+  }));
+  return {
+    type: "object",
+    properties: compiled,
+    ...required.length > 0 ? { required } : {},
+    additionalProperties: false
+  };
+}
+function objectOutput(properties, optionalKeys = ["value", "revision", "updatedAt"]) {
+  return { type: "object", properties, required: Object.keys(properties).filter((key) => !optionalKeys.includes(key)), additionalProperties: false };
+}
+var MEMORY_SCOPES = ["chat", "character", "agent", "global"];
+var VARIABLE_SCOPES = ["chat", "character", "agent", "global", "turn"];
+function memoryScopeParameter(required) {
+  return { type: "string", enum: [...MEMORY_SCOPES], ...required ? { required: true } : {} };
+}
+function variableScopeParameter(required) {
+  return { type: "string", enum: [...VARIABLE_SCOPES], ...required ? { required: true } : {} };
+}
+function scopeTarget(name2, binding) {
+  if (name2 === "chat") return { scope: "chat", scopeId: binding.chatId };
+  if (name2 === "character") return { scope: "character", scopeId: binding.character };
+  if (name2 === "agent") return { scope: "agent", scopeId: binding.agentId };
+  if (name2 === "global") return { scope: "global", scopeId: "global" };
+  if (name2 === "turn") return { scope: "turn", scopeId: binding.agentId };
+  throw new Error(`unsupported AgentTavern scope '${name2}'`);
+}
+function selectedMemoryScopes(scope, binding) {
+  const names = scope === void 0 ? [...MEMORY_SCOPES] : [stringArg(scope)];
+  return names.map((name2) => {
+    if (name2 === "turn") throw new Error(`unsupported AgentTavern scope '${name2}'`);
+    return scopeTarget(name2, binding);
+  });
+}
+function selectedVariableScope(scope, binding) {
+  return scopeTarget(stringArg(scope), binding);
+}
+async function assertWriteScopeAllowed(scope) {
+  if (scope !== "global") return;
+  const state = await (await tavernStore()).getState();
+  if (state.agentTavernAllowGlobalWrites !== true) {
+    throw new Error("global scope writes are disabled; ask the user to enable them in the Tavern settings");
+  }
+}
+async function bindingFor(exec) {
+  const agentId = exec.agent?.id;
+  if (typeof agentId !== "string" || agentId.trim() === "") throw new Error("AgentTavern tool requires the current agent");
+  const binding = (await (await tavernStore()).getState()).sessionBindings[agentId];
+  if (!binding || binding.architecture !== "agent-tavern" || binding.group === true) {
+    throw new Error("AgentTavern binding is unavailable for this agent");
+  }
+  return { agentId, character: binding.character, chatId: binding.chatId };
+}
+function identitySummaryOf(data) {
+  const agentTavern = data.extensions?.agentTavern;
+  const summary = agentTavern?.identitySummary;
+  return typeof summary === "string" && summary.trim() !== "" ? summary : void 0;
 }
 
 // packages/plugin/src/agent-tavern/tools/character.ts
@@ -10313,7 +10055,7 @@ async function evalExpressionSandboxed(expression, env) {
 }
 
 // packages/plugin/src/mvu.ts
-init_src();
+init_src2();
 
 // packages/plugin/src/mvu-guard.ts
 var DIRECTIVE_KEYS = ["$range", "$step", "$enum", "$ro", "$type"];
@@ -11336,20 +11078,20 @@ function turnOfEvent(event, index) {
 }
 
 // packages/plugin/src/agent-tavern/projector.ts
-init_src();
+init_src2();
 import { promises as fs8 } from "node:fs";
 import { join as join9 } from "node:path";
 init_src3();
 
 // packages/plugin/src/agent-tavern/body-projector.ts
-init_src();
+init_src2();
 init_src3();
 
 // packages/plugin/src/session/binding.ts
 init_runtime();
 
 // packages/plugin/src/agent-tavern/body-runtime-core.ts
-init_src();
+init_src2();
 var bodyTails = new KeyedMutationTails(true);
 
 // packages/plugin/src/agent-tavern/projector.ts
@@ -12571,7 +12313,7 @@ function optionalExpiry(value) {
 }
 
 // packages/plugin/src/agent-tavern/tools/script.ts
-init_src();
+init_src2();
 init_dsh_home();
 function scriptTools() {
   return [
@@ -13033,9 +12775,6 @@ function createTools() {
     ...deductionTools(),
     ...gameTools()
   ];
-  if (!imDisabledByEnv()) {
-    tools.push(...createImTools({ db: tavernStore, runtime: resolveImRuntime }));
-  }
   return tools;
 }
 var factsProjection = createLazyProjection({

@@ -20,8 +20,8 @@
 | `src/im/settings.ts` | 设置默认值、patch 校验、白名单判定 | `tavern-store` 类型 |
 | `src/im/store.ts` | 密钥文件（0600）、去重键、游标 | `node:fs` |
 | `src/im/project.ts` | 展示文本 → IM 文本 → 切分（QQ/微信/OneBot 三档） | 无 |
-| `src/im/session-host.ts` | `ensureImSession`：resume/create + preset mount + bindSession + 开场白导入 | 注入式 host seam |
-| `src/im/reply.ts` | `pendingOrigins` + `turn/end` 取正文 + 投影等待 | `sessionEvents` |
+| `src/im/session-host.ts` | 活 agent 查找、能力探测、`buildImFollowupMessage`（插件来源 relay） | 注入式 host seam |
+| `src/im/agent-mount.ts` | 把 `im_identity`/`im_channels`/`im_send` 挂进每个 agent 的 `ctx.tools` | `im/tools.ts` |
 | `src/im/router.ts` | 入站流水线：去重 → 白名单 → 绑定 → 立即投递 | 上述模块 |
 | `src/im/runtime.ts` | 单例注册表：通道集合、路由、生命周期 | `router` |
 | `src/http/im.ts` | 面板 API（状态/绑定/设置） | `router`/`store` |
@@ -38,8 +38,9 @@
 
 ```ts
 interface TavernState {
-  imSettings?: ImSettings            // 缺省用 DEFAULT_IM_SETTINGS
-  imPeers?: Record<string, ImPeerBinding>   // key = imPeerKey(...)
+  imSettings?: ImSettings                    // 缺省用 DEFAULT_IM_SETTINGS
+  imPeers?: Record<string, ImPeerBinding>    // key = imPeerKey(...)，值为原生 sessionId
+  imPendingPeers?: Record<string, ImPendingPeer>  // 未绑定对端待办
 }
 ```
 
@@ -55,8 +56,8 @@ $DSH_HOME/soulmojito/im/dedupe.log
 
 | 里程碑 | 出口 |
 |---|---|
-| M0（已完成） | 假通道 + 假 Agent 跑通「入站 → 绑定 → followup → turn/end → 回复」；`im-*.spec.ts` 全绿 |
-| M1（已完成） | `ensureImSession` 独立/共享两种模式都能建绑定；缺 `agents.create` 时 fail-closed；IM 工具族与历史导入落地 |
+| M0（已完成） | 假通道 + 假 Agent 跑通「入站 → 绑定 → followup → 插入」；`im-*.spec.ts` 全绿 |
+| M1（已完成，2026-10-31 修正） | 绑定原生 sessionId；未绑定对端进面板待办；`agent.followup(plugin relay)` 立即插入；IM 工具挂进每个 agent 域，模型用 `im_send` 回复 |
 | M2（已完成） | OneBot 11 反向 WS + HTTP POST 打通（codec + 连接层 + 账号路由） |
 | M3（已完成） | QQ 扫码绑定 + 官方网关；两个腾讯包外挂安装、运行期动态导入 |
 | M4（已完成） | 微信扫码（含验证码）、长轮询与游标、context token、`-14` 暂停、出站文本投影 |
@@ -130,10 +131,10 @@ vm 纯函数、渲染冒烟）。改绑下拉直接取 bootstrap 的 `characters
 | `tests/im-project.spec.ts` | 剥前端/MVU、CJK markdown、三档切分、空投影占位 |
 | `tests/im-settings.spec.ts` | 默认值、非法 patch 拒绝、白名单三态 |
 | `tests/im-store.spec.ts` | 0600、去重键 TTL、游标读写、坏文件不静默 |
-| `tests/im-session-host.spec.ts` | 独立/共享绑定、resume 复用、缺能力 fail-closed |
-| `tests/im-reply-target.spec.ts` | 谁的 message id 命中回给谁、无命中不发、多 origin 取最早 |
-| `tests/im-router.spec.ts` | 立即投递、去重、白名单拒绝、未绑定提示、sendText 目标校验 |
-| `tests/im-tools.spec.ts` | 身份只认 agent id、alias 不泄露平台 id、跨会话拒绝、多绑定需指定、env 关闭不注册 |
+| `tests/im-session-host.spec.ts` | 能力探测、活 agent 查找、会话未打开、followup 消息的 v4/v0 source 形状 |
+| `tests/im-agent-mount.spec.ts` | 三件工具注册一次、tools 晚就绪重试、卸载与重挂 |
+| `tests/im-router.spec.ts` | 绑定会话立即插入、未绑定待办与提示、媒体排在访问控制之后、去重、sendText/媒体校验 |
+| `tests/im-tools.spec.ts` | 身份只认 agent id、alias 不泄露平台 id、跨会话拒绝、多绑定需指定 |
 | `tests/session-activate.spec.ts` | 导入计划落地、读回失败降级关 turn、基线不可推进只 warn |
 | `tests/onebot-codec.spec.ts` | 事件归一、CQ 转义、出站参数 |
 | `tests/onebot-server.spec.ts` | 握手/401、入站、群 @、分片、未掩码 1002、并发发送不交错、webhook |
@@ -150,3 +151,11 @@ vm 纯函数、渲染冒烟）。改绑下拉直接取 bootstrap 的 `characters
   `GET im` 的 `qqRuntime` 指引安装（见决策 §1）。
 - OneBot 反向 WS 需要 `webServer.registerUpgrade`；缺失时只开 HTTP POST 并在面板标注。
 - QQ/微信凭据一律只在 `im/secrets/`，面板只读前缀。
+
+## 7. 2026-10-31 修正：绑原生会话
+
+首版把绑定做成「插件代建 AgentTavern 会话 + turn/end 自动回复」，与用户要求不符。
+现已改为：绑定原生 sessionId、入站 `agent.followup(plugin relay)` 立即插入、IM 工具由
+index bundle 挂进每个 agent 域、模型用 `im_send` 回复；`im/reply.ts` 与
+`ensureImSession`/`bindImChat` 删除。决策见
+[`2026-10-31-im-native-session-binding.md`](../../decisions/2026-10-31-im-native-session-binding.md)。

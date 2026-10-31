@@ -364,6 +364,10 @@
       const sessionPhase = useSessions((value) => value.phase)
       const currentSession = useCurrentSessionId(useSessions)
       const bindingIds = Object.keys(state.bootstrap.state.sessionBindings || {})
+      const imPeerIds = Object.values(state.bootstrap.state.imPeers || {})
+        .map((binding) => binding?.sessionId)
+        .filter((sessionId) => typeof sessionId === 'string' && sessionId !== '')
+      const pruneIds = [...new Set([...bindingIds, ...imPeerIds])]
       const currentBinding = currentSession ? state.bootstrap.state.sessionBindings?.[currentSession] : null
       const agentTavernActive = Boolean(currentBinding && bindingArchitecture(currentBinding) === 'agent-tavern')
       // AgentTavern stays hidden from the native session tree, but its native
@@ -387,13 +391,13 @@
       const host = useSidebarHost()
       useEffect(() => {
         if (sessionPhase !== 'ready') return
-        if (bindingIds.every((sessionId) => sessionIds.includes(sessionId))) return
+        if (pruneIds.every((sessionId) => sessionIds.includes(sessionId))) return
         void api('bindings/prune', {
           method: 'POST',
           headers: jsonHeaders(),
           body: JSON.stringify({ sessionIds }),
         }).then((result) => update({ bootstrap: { ...snapshot.bootstrap, state: result.state } })).catch(() => {})
-      }, [sessionPhase, sessionIds.join('\u0000'), bindingIds.join('\u0000')])
+      }, [sessionPhase, sessionIds.join('\u0000'), pruneIds.join('\u0000')])
       // 存量修复：旧版本激活的绑定会话在宿主侧仍是 blank（无 turn/start），会被
       // 原生「新建会话」的 blank 复用逻辑劫持。会话列表就绪后对宿主仍标记 blank
       // 的绑定会话统一修复（repairBinding 幂等、失败可重试；点击聊天/Tavern 视图

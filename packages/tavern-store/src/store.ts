@@ -25,7 +25,7 @@ import * as path from 'node:path'
 // 原子写统一实现（fs-atomic.ts）：唯一 tmp 名 + Windows 瞬态 rename 重试
 // （2290eb0 的重试逻辑原样迁入，全包自建 writeAtomic 的收敛点）。
 import { writeAtomicBytes } from './fs-atomic.js'
-import { DEFAULT_IM_SETTINGS, normalizeImPeers, normalizeImSettings, type ImPeerBinding, type ImSettings } from './im-state.js'
+import { DEFAULT_IM_SETTINGS, normalizeImPeers, normalizeImPendingPeers, normalizeImSettings, type ImPeerBinding, type ImPendingPeer, type ImSettings } from './im-state.js'
 import { MutationTail } from './mutation-tail.js'
 import {
   decodeCharacterCard,
@@ -231,12 +231,14 @@ export interface TavernState {
    */
   memoryEmbedding?: MemoryEmbeddingSettings
   /**
-   * IM 通道设置（提案 0024 §3.3/§4.3）：绑定策略、访问白名单、群 @ 门控与切分上限。
+   * IM 通道设置（提案 0024 §3.3/§4.3）：访问白名单、群 @ 门控与切分上限。
    * 缺省即 DEFAULT_IM_SETTINGS（白名单空 = 拒绝所有人），旧 state.json 零迁移。
    */
   imSettings?: ImSettings
-  /** IM peer → Tavern 会话绑定（提案 0024 §3.3）；键 = `channel:account:scope:peerId`。 */
+  /** IM peer → 宿主原生会话绑定（提案 0024 §3.3）；键 = `channel:account:scope:peerId`。 */
   imPeers?: Record<string, ImPeerBinding>
+  /** 发过消息但尚未绑定的对端；面板据此显示「未绑定对端」待办。 */
+  imPendingPeers?: Record<string, ImPendingPeer>
 }
 
 /**
@@ -424,6 +426,7 @@ const DEFAULT_STATE: TavernState = {
   mods: { enabled: {} },
   imSettings: structuredClone(DEFAULT_IM_SETTINGS),
   imPeers: {},
+  imPendingPeers: {},
 }
 
 /** characterVariables keeps only per-character plain objects; hand edits are tolerant. */
@@ -1699,6 +1702,7 @@ export class TavernStore {
       memoryEmbedding: normalizeMemoryEmbedding(parsed.memoryEmbedding),
       imSettings: normalizeImSettings(parsed.imSettings),
       imPeers: normalizeImPeers(parsed.imPeers),
+      imPendingPeers: normalizeImPendingPeers(parsed.imPendingPeers),
     }
   }
 

@@ -12,18 +12,10 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
-import { AGENT_TAVERN_PRESET_ID } from '../agent-tavern/capabilities.js'
-import { emitAgentPresetChanged } from '../agent-tavern/preset.js'
 import { envCompat } from '../env-compat.js'
-import type { HostLogger, HostSessionEventLike, HostSessionLike, PluginContext } from '../host-contract.js'
+import type { HostLogger, PluginContext } from '../host-contract.js'
 import { API } from '../http/router.js'
-import { ensureAgentPresetDeclared } from '../http/novel.js'
-import { displayTextForMessage } from '../prompt-context.js'
-import { collectSessionRegexScripts } from '../regex-session.js'
-import { bindSession } from '../session/binding.js'
-import type { ChatMessage } from '../../../tavern-format/src/index.js'
 import type { TavernStore } from '../../../tavern-store/src/index.js'
-import { sessionEvents } from '../../../bind/src/index.js'
 import { tavernDataRoot } from '../dsh-home.js'
 import { prepareInternalWorkspace } from '../workspace.js'
 import { imDisabledByEnv, type ImRuntimeHandle } from './handle.js'
@@ -48,18 +40,15 @@ import { createImRouter, type ImRouter } from './router.js'
 import { imAccountIdOf } from './account-id.js'
 import { createImLog, IM_LOG_CAPACITY, wrapImLogger } from './log.js'
 import {
-  bindImChat,
-  ensureImAgent,
-  ensureImSession,
+  buildImFollowupMessage,
   inspectImSessionCapabilities,
-  resolveBindSessionId,
+  liveAgentOf,
+  requireLiveAgent,
   type ImAgentsSeam,
-  type ImPresetsSeam,
   type ImSessionCapabilities,
-  type ImSessionDeps,
 } from './session-host.js'
 import type { ImAccountRef, ImBindStatus, ImChannel, ImChannelId, ImChannelView, ImTarget } from './types.js'
-import { DEFAULT_IM_SETTINGS, imPeerKey } from './types.js'
+import { DEFAULT_IM_SETTINGS, imPeerKey, imPeerKeyParts } from './types.js'
 import { ImStore } from './store.js'
 
 export type ImRuntime = ImRuntimeHandle
@@ -105,8 +94,7 @@ export { imDisabledByEnv }
 export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOptions): ImRuntime {
   const { db } = options
   const agents = ctx.agents as ImAgentsSeam | undefined
-  const presets = ctx.agentPresets as ImPresetsSeam | undefined
-  const capabilities = inspectImSessionCapabilities(agents, presets)
+  const capabilities = inspectImSessionCapabilities(agents)
   const channels = new Map<string, ImChannel>()
   const oneBotChannels = new Map<string, OneBotChannel>()
   // 外部系统的接缝都从 options 进来：生产由运行期加载器给，测试注入假件。
@@ -124,43 +112,15 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
     maxBytes: WEIXIN_MEDIA_MAX_BYTES,
   })
 
-  const sessionDeps: ImSessionDeps = {
-    db,
-    agents,
-    presets,
-    presetId: AGENT_TAVERN_PRESET_ID,
-    ensurePreset: async () => { await ensureAgentPresetDeclared(ctx, AGENT_TAVERN_PRESET_ID) },
-    workspace: async () => (await prepareInternalWorkspace()).path,
-    // 宿主用 agent.options.model 解析 {{model}} 等提示变量；缺了整轮在组装阶段失败。
-    agentOptions: () => {
-      const { provider, model } = ctx.agentDefaultModel.currentSelection()
-      return { provider, model }
-    },
-    bind: async (sessionId, character, chatId) =>
-      bindSession(db, sessionId, character, chatId, false, 'agent-tavern', 'dsh-native'),
-    presetChanged: async () => { await emitAgentPresetChanged() },
-    logger,
-  }
-
   const router = createImRouter({
     db,
     now: () => Date.now(),
     seenDedupe: (dedupeKey, now) => store.seenDedupe(dedupeKey, now),
-    ensureSession: async (request) => ensureImSession(sessionDeps, request),
     followup: async (sessionId, message) => {
-      const agent = await liveAgent(sessionDeps, sessionId)
-      const target = agent as { followup?: (payload: unknown) => unknown }
-      if (typeof target.followup !== 'function') {
-        throw new Error(`the host agent for session ${sessionId} exposes no followup()`)
-      }
-      await target.followup({
-        id: message.id,
-        role: 'user',
-        content: [{ type: 'text', text: message.text }],
-        source: { kind: 'user' },
-      })
+      // 绑定的是原生会话：只投给活着的 agent，绝不创建/resume 会话。
+      const agent = requireLiveAgent(agents, sessionId)
+      await agent.followup?.(buildImFollowupMessage(agent.session, message))
     },
-    render: async (target, text) => renderForTarget(db, target, text),
     workspaceRoot: async () => (await prepareInternalWorkspace()).path,
     send: async (target, parts) => {
       const channel = channels.get(channelKey(target.channel, target.accountId))
@@ -172,20 +132,6 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
     log: imLog,
     logger,
   })
-
-  function handleSessionEvent(session: HostSessionLike, event: HostSessionEventLike): void {
-    if (event.type !== 'turn/end') return
-    const sessionId = session.id
-    if (typeof sessionId !== 'string' || sessionId === '') return
-    const turn = event.data?.['turn']
-    if (typeof turn !== 'number' || !Number.isSafeInteger(turn)) return
-    void isImSession(db, sessionId).then((bound) => {
-      if (!bound) return
-      return router.finishTurn(sessionId, turn, sessionEvents(session))
-    }).catch((error: unknown) => {
-      logger?.warn?.(`dsh-soulmojito im: turn ${turn} of ${sessionId} reply failed: ${messageOf(error)}`)
-    })
-  }
 
   // ---- 账号生命周期 ----
 
@@ -546,6 +492,22 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       await mediaStore.remove(channelId, accountId).catch((error: unknown) => {
         logger?.warn?.(`dsh-soulmojito im: deleting the media of ${channelId}/${accountId} failed: ${messageOf(error)}`)
       })
+      // 账号没了，绑定与待办就是死记录：面板不能继续显示它、im_send 也不该再选中它。
+      await db.updateState((current) => {
+        const peers = { ...(current.imPeers ?? {}) }
+        const pending = { ...(current.imPendingPeers ?? {}) }
+        for (const key of Object.keys(peers)) {
+          const parts = imPeerKeyParts(key)
+          if (parts?.channel === channelId && parts.accountId === accountId) delete peers[key]
+        }
+        for (const key of Object.keys(pending)) {
+          const parts = imPeerKeyParts(key)
+          if (parts?.channel === channelId && parts.accountId === accountId) delete pending[key]
+        }
+        return { imPeers: peers, imPendingPeers: pending }
+      }).catch((error: unknown) => {
+        logger?.warn?.(`dsh-soulmojito im: deleting the bindings of ${channelId}/${accountId} failed: ${messageOf(error)}`)
+      })
       if (channelId === 'weixin') {
         await openWeixinContextTokens(tavernDataRoot('im'), accountId).clear().catch((error: unknown) => {
           logger?.warn?.(`dsh-soulmojito im: deleting the weixin context tokens for ${accountId} failed: ${messageOf(error)}`)
@@ -612,21 +574,7 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       status: channel.status(),
       peers: 0,
     })),
-    bindChat: async (chat, existingSessionId) => {
-      const state = await db.getState()
-      // 改绑到另一个聊天时不能沿用旧会话：目标聊天已有的会话优先，其次才是
-      // peer 当前会话（幂等改绑）。归档会话永不作为绑定目标。
-      const sessionId = resolveBindSessionId(
-        state.sessionBindings,
-        existingSessionId,
-        chat.character,
-        chat.chatId,
-        archivedSessionIdsOf(ctx),
-      )
-      imLog.note('info', `im bind: ${chat.character}/${chat.chatId} -> ${sessionId ?? 'new session'}`)
-      return bindImChat(sessionDeps, chat, sessionId)
-    },
-    handleSessionEvent,
+    isSessionLive: (sessionId) => liveAgentOf(agents, sessionId) !== undefined,
     handleOneBotUpgrade,
     startQrBind,
     qrBindStatus,
@@ -647,43 +595,6 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       oneBotChannels.clear()
     },
   }
-}
-
-/** 会话是否被任一 IM peer 绑定；未绑定的会话不参与回复抽取。 */
-async function isImSession(db: TavernStore, sessionId: string): Promise<boolean> {
-  const state = await db.getState()
-  for (const binding of Object.values(state.imPeers ?? {})) {
-    if (binding.sessionId === sessionId) return true
-  }
-  return false
-}
-
-/** 重启后 live agent 可能已不在注册表里：先 resume/create，再投递。 */
-async function liveAgent(deps: ImSessionDeps, sessionId: string): Promise<unknown> {
-  const live = deps.agents?.get?.(sessionId)
-  if (live !== undefined && live !== null) return live
-  return ensureImAgent(deps, sessionId)
-}
-
-/**
- * 展示层渲染：与面板渲染走同一套 `markdownOnly` 正则，IM 看到的正文因此
- * 与网页端一致；渲染失败时退回原文——宁可少一层正则，也不要丢一整轮回复。
- */
-async function renderForTarget(db: TavernStore, target: ImTarget, text: string): Promise<string> {
-  const state = await db.getState()
-  const key = imPeerKey(target.channel, target.accountId, target.scope, target.peerId)
-  const binding = state.imPeers?.[key]
-  if (binding === undefined) return text
-  const card = await db.getCharacter(binding.character)
-  const scripts = await collectSessionRegexScripts(db, state, binding.character, binding.chatId, card)
-  const message: ChatMessage = {
-    name: '',
-    is_user: false,
-    is_system: false,
-    send_date: new Date().toISOString(),
-    mes: text,
-  }
-  return displayTextForMessage(scripts, message, 0)
 }
 
 function channelKey(channel: string, accountId: string): string {
@@ -715,31 +626,6 @@ function isRunningBindPhase(phase: ImBindStatus['phase']): boolean {
 
 function noop(): void {
   // 串行链只关心「上一步已结束」，失败由各自返回的 promise 上抛。
-}
-
-/**
- * 宿主归档集合的只读投影。
- *
- * `workspaceRegistry` 不是本插件的静态依赖（写进 inject 会让没有该服务的宿主
- * 整个插件不挂载），所以两个面都试：`ctx.workspaceRegistry` 与
- * `ctx.get('workspaceRegistry')`。Cordis 对未声明 inject 的服务属性会抛错，
- * 逐面捕获；都读不到就按「没有归档」处理。
- */
-function archivedSessionIdsOf(ctx: PluginContext): ReadonlySet<string> {
-  for (const read of [
-    () => ctx.workspaceRegistry,
-    () => ctx.get?.('workspaceRegistry'),
-  ]) {
-    try {
-      const registry = read() as { archivedSessionIds?: unknown } | null | undefined
-      const ids = registry?.archivedSessionIds
-      if (ids instanceof Set) return new Set([...ids].filter((id): id is string => typeof id === 'string'))
-      if (Array.isArray(ids)) return new Set(ids.filter((id): id is string => typeof id === 'string'))
-    } catch {
-      // 未声明 inject 的服务属性在 Cordis 会抛错：继续试下一个面。
-    }
-  }
-  return new Set()
 }
 
 function messageOf(error: unknown): string {

@@ -11,7 +11,6 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { HostSessionEventLike, HostSessionLike } from '../host-contract.js'
 import { envCompat } from '../env-compat.js'
 import type { ImLogQuery, ImLogSnapshot } from './log.js'
 import type { ImSessionCapabilities } from './session-host.js'
@@ -47,13 +46,11 @@ export interface ImRuntimeHandle {
    * 返回 false 表示当前没有任何账号接受这个 token（调用方回 401）。
    */
   handleOneBotWebhook(req: IncomingMessage, res: ServerResponse): Promise<boolean>
-  /** 手动绑定：把已存在的聊天补上会话与 AgentTavern 绑定。 */
-  bindChat(
-    chat: { character: string; chatId: string },
-    existingSessionId: string | undefined,
-  ): Promise<{ sessionId: string; character: string; chatId: string }>
-  /** `session/event` 接线点；非 IM 会话直接返回。 */
-  handleSessionEvent(session: HostSessionLike, event: HostSessionEventLike): void
+  /**
+   * 绑定的原生会话当前是否活着（有 live agent）。面板据此显示「会话已关闭」，
+   * 避免用户以为绑定坏了。可选：测试假件可以没有这个探测。
+   */
+  isSessionLive?(sessionId: string): boolean
   /**
    * 反向 WS 握手分派（由常驻的升级席位调用）。可选：没有 OneBot 通道的实现
    * （测试假件、将来的空装）不必实现它。

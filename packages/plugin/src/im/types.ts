@@ -13,7 +13,7 @@
 import { createHash } from 'node:crypto'
 import type { ImScope } from '../../../tavern-store/src/index.js'
 
-export type { ImAccessMode, ImBindingMode, ImChatRef, ImPeerBinding, ImScope, ImSettings } from '../../../tavern-store/src/index.js'
+export type { ImAccessMode, ImPeerBinding, ImPendingPeer, ImScope, ImSettings } from '../../../tavern-store/src/index.js'
 export { DEFAULT_IM_SETTINGS, imPeerKey } from '../../../tavern-store/src/index.js'
 
 export type ImChannelId = 'qq' | 'weixin' | 'onebot'

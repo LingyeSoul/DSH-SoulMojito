@@ -590,6 +590,11 @@
         .dt-im-endpoint>.dt-hint{margin:0}
         .dt-im-ws{user-select:text}
         .dt-im-peers{display:flex;flex-direction:column;gap:8px}
+        .dt-im-pending{display:flex;flex-direction:column;gap:8px;margin:0 0 12px;padding:9px 10px;border:1px dashed var(--dsw-alias-border-l2);border-radius:8px}
+        .dt-im-pending h4{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-primary)}
+        .dt-im-pending>.dt-hint{margin:0}
+        .dt-im-pending-row{display:flex;align-items:flex-start;gap:8px;justify-content:space-between;flex-wrap:wrap}
+        .dt-im-pending-copy{display:flex;flex-direction:column;gap:3px;min-width:0}
         .dt-im-peer{display:flex;flex-direction:column;gap:5px;min-width:0;padding:9px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
         .dt-im-peer-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
         .dt-im-peer-key{flex:1;min-width:140px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px;line-height:17px;overflow-wrap:anywhere}

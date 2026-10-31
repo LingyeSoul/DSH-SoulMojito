@@ -82,32 +82,23 @@ const IM_I18N_KEYS = [
   'im.peers.hint',
   'im.peers.empty',
   'im.peers.emptyHint',
-  'im.peers.chat',
+  'im.peers.session',
+  'im.peers.closed',
   'im.peers.boundAt',
   'im.peers.shared',
   'im.peers.sharedHint',
-  'im.peers.rebind',
-  'im.peers.select',
+  'im.peers.rebindCurrent',
+  'im.peers.noCurrentSession',
   'im.peers.unbind',
   'im.peers.unbindConfirm',
+  'im.pending.title',
+  'im.pending.hint',
+  'im.pending.bind',
+  'im.pending.lastAt',
   'im.scope.private',
   'im.scope.group',
   'im.settings.title',
   'im.settings.hint',
-  'im.settings.bindingMode',
-  'im.settings.mode.manual',
-  'im.settings.mode.independent',
-  'im.settings.mode.shared',
-  'im.settings.mode.manualHint',
-  'im.settings.mode.independentHint',
-  'im.settings.mode.sharedHint',
-  'im.settings.sourceChat',
-  'im.settings.sourceChatNone',
-  'im.settings.sourceChatHint',
-  'im.settings.sharedChat',
-  'im.settings.sharedChatNone',
-  'im.settings.sharedChatHint',
-  'im.settings.incomplete',
   'im.settings.groupRequireMention',
   'im.settings.groupRequireMentionHint',
   'im.settings.privateAllow',
@@ -136,10 +127,10 @@ type PanelPure = {
   imPeerParts: (key: string) => { channel: string; accountId: string; scope: string; peerId: string } | null
   imSharedSessionIds: (peers: Array<{ sessionId?: string }>) => Set<string>
   imIdList: (text: string) => string[]
-  imChatKey: (character: string, chatId: string) => string
-  imChatRefFromKey: (key: string) => { character: string; chatId: string } | null
-  imChatOptions: (characters: string[], chatLists: Record<string, string[]>) => Array<{ key: string; label: string }>
-  imWithChatOption: (options: Array<{ key: string }>, ref: { character: string; chatId: string } | null) => Array<{ key: string }>
+  imSessionLabeler: (
+    bindings: Record<string, { character?: unknown; chatId?: unknown; title?: unknown }> | undefined,
+    sessionsById: Record<string, { title?: unknown; header?: { title?: unknown } }> | undefined,
+  ) => (sessionId: string) => string
   imMergeLogEntries: (existing: LogEntry[], incoming: LogEntry[], cap: number) => LogEntry[]
   imLogFilter: (entries: LogEntry[], level: string) => LogEntry[]
   imLogTime: (at: string) => string
@@ -155,8 +146,7 @@ function loadPanelPure(): PanelPure {
     `${imPanelSource}
 ;globalThis.__imPanel = {
   imChannelTone, imChannelReason, imPeerParts, imSharedSessionIds, imIdList,
-  imChatKey, imChatRefFromKey, imChatOptions, imWithChatOption,
-  imMergeLogEntries, imLogFilter, imLogTime,
+  imSessionLabeler, imMergeLogEntries, imLogFilter, imLogTime,
 }`,
     context,
     { filename: '97-ui-im.js' },
@@ -174,9 +164,10 @@ type PanelComponents = Record<string, (props?: Record<string, unknown>) => unkno
  */
 function createPanelRender(options: { characters?: string[]; chatLists?: Record<string, string[]> }): PanelComponents {
   const store = {
-    bootstrap: { characters: options.characters ?? [] },
+    bootstrap: { characters: options.characters ?? [], state: { sessionBindings: {} } },
     chatLists: options.chatLists ?? {},
   }
+  const sessions = { ids: [], byId: {}, phase: 'ready' }
   const context = vm.createContext({
     React: { Fragment: 'Fragment' },
     h: (type: unknown, props: Record<string, unknown> | null, ...children: unknown[]): RenderNode => ({ type, props: props ?? {}, children }),
@@ -187,6 +178,8 @@ function createPanelRender(options: { characters?: string[]; chatLists?: Record<
       params === undefined ? key : `${key}(${Object.entries(params).map(([name, value]) => `${name}=${String(value)}`).join(';')})`
     ),
     useTavernStore: () => store,
+    useSessions: (selector: (value: typeof sessions) => unknown) => (typeof selector === 'function' ? selector(sessions) : sessions),
+    useCurrentSessionId: () => 'session-current',
     Button: 'Button',
     Pill: 'Pill',
     IconTrashOutline16: 'IconTrash',
@@ -196,7 +189,6 @@ function createPanelRender(options: { characters?: string[]; chatLists?: Record<
     setInterval: () => 0,
     clearInterval: () => {},
     jsonHeaders: () => ({ 'content-type': 'application/json' }),
-    loadChatList: () => Promise.resolve([]),
     window: { confirm: () => true },
     navigator: {},
     location: { origin: 'http://localhost:3000' },
@@ -285,7 +277,7 @@ describe('IM channels panel (client-src source check)', () => {
     const scriptsAt = coreSource.indexOf("{ id: 'scripts',")
     expect(imAt).toBeGreaterThan(presetsAt)
     expect(imAt).toBeLessThan(scriptsAt)
-    expect(coreSource).toContain("{ id: 'im', group: 'system', icon: IconSendOutline16, label: (t) => t('panel.section.im'), component: () => h(PanelIm) }")
+    expect(coreSource).toContain("{ id: 'im', group: 'system', icon: IconSendOutline16, label: (t) => t('panel.section.im'), component: (host) => h(PanelIm, { useSessions: host.useSessions }) }")
   })
 
   it('carries every panel locale key once in each table', () => {
@@ -307,14 +299,16 @@ describe('IM channels panel (client-src source check)', () => {
     for (const key of referenced) expect(declared.has(key), key).toBe(true)
     // 模板拼出来的族必须整族齐备（gate 只检查 zh/en 互为镜像，不检查族完整性）。
     for (const channel of ['qq', 'weixin', 'onebot']) expect(declared.has(`im.channel.${channel}`)).toBe(true)
-    for (const mode of ['manual', 'independent', 'shared']) {
-      expect(declared.has(`im.settings.mode.${mode}`)).toBe(true)
-      expect(declared.has(`im.settings.mode.${mode}Hint`)).toBe(true)
-    }
   })
 
   it('polls im/bind/status on a 1.5s interval and stops on idle/failed', () => {
     expect(imSource).toContain('const IM_BIND_POLL_MS = 1500')
+    // 面板数据（未绑定对端/通道状态）自己刷新，不要求用户关掉再打开。
+    expect(imSource).toContain('const IM_VIEW_POLL_MS = 5000')
+    expect(imSource).toContain('void loadView(true)')
+    expect(imSource).toContain('document.visibilityState === \'hidden\'')
+    expect(imSource).toContain('if (seq === viewSeq.current) setView(result)')
+    expect(imSource).toContain('if (quiet && viewInFlight.current) return Promise.resolve(null)')
     expect(imSource).toContain('setInterval(() => {')
     expect(imSource).toContain('}, IM_BIND_POLL_MS)')
     expect(imSource).toContain("api('im/bind/status')")
@@ -440,31 +434,36 @@ describe('IM channels panel (client-src source check)', () => {
     expect(imSource).toContain("t('im.onebot.created')")
   })
 
-  it('marks shared sessions and wires rebind/unbind from the bootstrap chat lists', () => {
+  it('marks shared sessions and wires bind/rebind to the current native session', () => {
     expect(imSource).toContain('function imSharedSessionIds(peers)')
     expect(imSource).toContain('sharedSessions.has(peer.sessionId)')
     expect(imSource).toContain("h(Pill, { active: true }, t('im.peers.shared'))")
     expect(imSource).toContain('function imPeerParts(key)')
-    expect(imSource).toContain('function imChatOptions(characters, chatLists)')
-    expect(imSource).toContain('imChatOptions(characters, state.chatLists)')
+    expect(imSource).toContain('function imSessionLabeler(bindings, sessionsById)')
+    expect(imSource).toContain('const currentSession = useCurrentSessionId(useSessions)')
+    expect(imSource).toContain('sessionId: target')
+    expect(imSource).toContain("t('im.peers.rebindCurrent')")
     expect(imSource).toContain("api(`im/peers?key=${encodeURIComponent(peer.key)}`, { method: 'DELETE' })")
     expect(imSource).toContain("t('im.peers.unbindConfirm', { peer: peer.key })")
   })
 
-  it('submits the three binding modes, both chat refs and both allowlists', () => {
+  it('binds unbound senders to the current session and keeps both allowlists', () => {
     for (const marker of [
-      "const IM_BINDING_MODES = ['manual', 'independent', 'shared']",
-      'onPatch({ bindingMode: event.target.value })',
-      'onPatch({ sourceChat: imChatRefFromKey(event.target.value) })',
-      'onPatch({ sharedChat: imChatRefFromKey(event.target.value) })',
+      'pendingPeers',
+      "t('im.pending.bind')",
+      'onBindPending(peer, current)',
       'onPatch({ groupRequireMention: event.target.checked })',
       "onBlur: () => onAllowCommit('private')",
       "onBlur: () => onAllowCommit('group')",
       "void saveSettings({ [field]: next })",
-      "t(`im.settings.mode.${settings.bindingMode}Hint`)",
+      "t('im.peers.noCurrentSession')",
     ]) {
       expect(imSource).toContain(marker)
     }
+    // 旧的自动绑定模式已删除：面板不再提交 bindingMode/sourceChat/sharedChat。
+    expect(imSource).not.toContain('bindingMode')
+    expect(imSource).not.toContain('sourceChat')
+    expect(imSource).not.toContain('sharedChat')
   })
 
   it('keeps the panel styles on existing design tokens', () => {
@@ -550,27 +549,26 @@ describe('IM channels panel (client-src source check)', () => {
     expect(panel.imLogTime('not-a-date')).toBe('--:--:--')
   })
 
-  it('round-trips chat refs through the null-separated select key', () => {
+  it('labels a bound session by title, Tavern binding, then a short id', () => {
     const panel = loadPanelPure()
-    const key = panel.imChatKey('角色 A', '2026-10-30 12-00-00.jsonl')
-    expect(key).toBe('角色 A\u00002026-10-30 12-00-00.jsonl')
-    // 对象来自 vm 另一个 realm，逐字段比对，别依赖原型。
-    const parsed = panel.imChatRefFromKey(key)
-    expect(parsed?.character).toBe('角色 A')
-    expect(parsed?.chatId).toBe('2026-10-30 12-00-00.jsonl')
-    expect(panel.imChatRefFromKey('')).toBeNull()
-    expect(panel.imChatRefFromKey('no-separator')).toBeNull()
-    const options = panel.imChatOptions(['A'], { A: ['one.jsonl', 'two.jsonl'] })
-    expect(options.map((option) => option.label)).toEqual(['A / one', 'A / two'])
-    // 未加载的当前聊天仍要出现在下拉里（否则用户看到「未选择」）。
-    const merged = panel.imWithChatOption(options, { character: 'B', chatId: 'three.jsonl' })
-    expect(merged[0]?.key).toBe('B\u0000three.jsonl')
-    expect(panel.imWithChatOption(options, null)).toBe(options)
+    const label = panel.imSessionLabeler(
+      {
+        'session-title': { title: '我的会话', character: 'Alice', chatId: 'chat.jsonl' },
+        'session-tavern': { character: '角色 A', chatId: '2026-10-30 12-00-00.jsonl' },
+      },
+      { 'session-host': { title: 'Host title' } },
+    )
+    expect(label('session-title')).toBe('我的会话')
+    expect(label('session-tavern')).toBe('角色 A · 2026-10-30 12-00-00')
+    expect(label('session-host')).toBe('Host title')
+    expect(label('session-1234567890abcdef')).toBe('session-…')
+    expect(label('')).toBe('')
   })
 
   it('renders the panel shell with all three channel cards, every band and the runtime log (render smoke)', () => {
     const components = createPanelRender({ characters: ['Alice'], chatLists: { Alice: ['one.jsonl'] } })
-    const tree = collectNode(components.PanelIm())
+    const useSessions = (selector: (value: { ids: string[]; byId: Record<string, unknown>; phase: string }) => unknown) => selector({ ids: [], byId: {}, phase: 'ready' })
+    const tree = collectNode(components.PanelIm({ useSessions }))
     expect(tree.texts).toContain('nav.loading')
     expect(tree.texts).toContain('im.hint.title')
     expect(tree.texts).toContain('im.channels')
@@ -681,12 +679,13 @@ describe('IM channels panel (client-src source check)', () => {
     expect(band.types.filter((type) => type === 'button')).toHaveLength(5)
   })
 
-  it('renders the shared-session badge and the full settings form (render smoke)', () => {
+  it('renders the shared-session badge and the access form (render smoke)', () => {
     const components = createPanelRender({})
     const row = collectNode(components.ImPeerRow({
-      peer: { key: 'qq:1024:private:u1', sessionId: 'session-a', character: 'Alice', chatId: '2026-10-30 10-00-00.jsonl', scope: 'private', boundBy: 'manual', createdAt: '2026-10-30T10:00:00.000Z' },
+      peer: { key: 'qq:1024:private:u1', sessionId: 'session-a', scope: 'private', boundBy: 'manual', createdAt: '2026-10-30T10:00:00.000Z', live: false },
       shared: true,
-      chatOptions: [{ key: 'Alice\u00002026-10-30 10-00-00.jsonl', label: 'Alice / ten' }],
+      currentSession: 'session-current',
+      sessionLabel: () => 'Alice · ten',
       disabled: false,
       onRebind: () => {},
       onUnbind: () => {},
@@ -695,24 +694,24 @@ describe('IM channels panel (client-src source check)', () => {
     expect(row.texts).toContain('qq:1024:private:u1')
     expect(row.texts).toContain('im.scope.private')
     expect(row.texts).toContain('im.peers.shared')
-    expect(row.texts).toContain('im.peers.chat(character=Alice;chat=2026-10-30 10-00-00.jsonl)')
+    expect(row.texts).toContain('im.peers.session(session=Alice · ten)')
+    expect(row.texts).toContain('im.peers.closed')
+    expect(row.texts).toContain('im.peers.rebindCurrent')
 
     const settings = collectNode(components.ImSettingsBand({
-      settings: { bindingMode: 'shared', groupRequireMention: true, privateAllow: ['u1'], groupAllow: [] },
-      chatOptions: [],
+      settings: { groupRequireMention: true, privateAllow: ['u1'], groupAllow: [] },
       allowDraft: { private: null, group: null },
       busy: '',
       onPatch: () => {},
       onAllowDraft: () => {},
       onAllowCommit: () => {},
     }))
-    expect(settings.texts).toContain('im.settings.mode.shared')
-    expect(settings.texts).toContain('im.settings.mode.sharedHint')
-    // 共享模式没选共享聊天 = 服务端会拒；面板必须提前把条件说清。
-    expect(settings.texts).toContain('im.settings.incomplete')
+    expect(settings.texts).toContain('im.settings.groupRequireMention')
     expect(settings.texts).toContain('im.settings.privateAllow')
     expect(settings.texts).toContain('im.settings.groupAllow')
     expect(settings.types.filter((type) => type === 'textarea')).toHaveLength(2)
+    // 自动绑定模式字段已删除。
+    expect(settings.texts).not.toContain('im.settings.bindingMode')
   })
 
   it('marker does not match near-miss samples (negative sample)', () => {

@@ -17,23 +17,22 @@
 
 ## 1. 目标行为（Working Backwards）
 
-**PR**：玩家在管理面板把 QQ 私聊、QQ 群、微信私聊各绑到一个 Tavern 会话。之后他打开
-手机 QQ 或微信直接说话——消息**立刻**进入该会话的 AgentTavern 原生 AgentLoop，角色卡、
-世界书、预设、记忆、变量、工具全部照常生效；本回合结束后正文原路发回手机。Agent 也能
-透过 IM 工具主动发消息。全程不需要打开 DSH 页面。
+**PR**：玩家在管理面板把 QQ 私聊、QQ 群、微信私聊各绑到一个**已经打开的 DSH 原生会话**。
+之后他打开手机 QQ 或微信直接说话——消息**立刻**以插件来源插进该会话，会话自己的
+preset、工具、上下文照常生效；模型用 `im_send` 把回复发回手机。插件不代建会话、
+不导入聊天、也不自动抓 `turn/end` 的正文。
 
 **客户与验收**：
 - 玩家：三条通道各自独立开关，默认关闭；扫码即绑定，无需手填 AppID/Secret。
-- 玩家：QQ 群就是**普通群聊**——多个人在同一群里说话，全部进**同一个** Tavern 会话，
+- 玩家：QQ 群就是**普通群聊**——多个人在同一群里说话，全部进**同一个**绑定会话，
   每条消息带发言人标签；不是 Tavern 群组资产，不跑多角色仲裁。
-- 玩家：新 peer 的绑定方式三选一——手动绑定、独立会话（默认）、共享会话；共享会话必须
-  显式打开。哪个 peer 说的那一轮，回复就回到哪个 peer。
+- 玩家：未绑定 peer 发来消息时，面板列出「未绑定对端」，点一下绑到当前会话；
+  插件不自动新建会话。
 - 玩家：消息立即投递，不攒批、不等空闲、不做「延迟合并」；同一个人连发三条就是三条
   用户消息。
-- 玩家：回复在 turn 结束后原路返回；美化前端 HTML、`<UpdateVariable>` 之类的内部协议
-  不会出现在聊天窗口。
-- 玩家：Agent 在回合内可以主动补一句、可以查「这个会话是哪个群、谁在说话」。
-- 维护者：IM **不新增第二条生成循环**；AgentTavern 的 preset/工具/投影纪律原样复用，
+- 玩家：模型用 `im_send` 把回复原路发回；插件不自动抓 `turn/end` 的正文。
+- 玩家：Agent 在回合内可以主动补一句、可以查「这个会话绑了哪些群/谁在说话」。
+- 维护者：IM **不新增第二条生成循环**；会话自己的 preset/工具/上下文原样复用，
   `pnpm run check` 仍是唯一权威口径。
 
 **明确不做**（v1 边界）：
@@ -62,10 +61,10 @@
 | 被动回复有次数与时效约束 | `gateway/bootstrap.ts`：`new ReplyLimiter({ limit: 4 })`，超限降级主动推送 |
 | 单条约 5000 字符上限 | `config.ts` 的 `textChunkLimit` 默认 `4500` |
 
-**可借的**：SDK 调用、二维码状态机、限流、分块、中间件纪律。
-**不可借的**：`sessionKey = qqbot:${appId}:${scope}:${peerId}` → 一个裸 DSH Agent
-（`session/session-manager.ts`），入站直接 `followup` 后把 assistant 文本原样发出。
-本项目的会话身份是 Tavern 会话绑定，不是一个无资产的原生会话。
+**可借的**：SDK 调用、二维码状态机、限流、分块、中间件纪律，以及「入站消息插进
+绑定会话、由 Agent 自己处理」的原生会话模型。
+**不可借的**：把 Tavern 聊天当成 IM 的会话身份——本项目的绑定目标就是宿主原生
+session，消息插入后用 IM 工具回复（决策 2026-10-31-im-native-session-binding）。
 
 **群 @ 开关的实际可达性**（2026-10-30 修正）：官方群机器人只在用户真的 @ 了机器人时
 投递 `GROUP_AT_MESSAGE_CREATE`，非 @ 消息根本不会到达进程。因此
@@ -130,16 +129,16 @@ QQ 网关 ─┐
 OneBot WS/HTTP ─┘                                 │
                                                    ▼
                                      ImRouter（去重 · 白名单 · 立即投递）
-                                                   │
-                         peer → Tavern 会话绑定（sessionId + character + chatId）
-                                                   │
-                                        agent.followup(user/message)
-                                                   │
-                                 宿主 AgentLoop（AgentTavern preset）
-                                                   │
-                     turn/end → 读投影楼层 → displayTextForMessage
-                                                   ▼
-                                    ImChannel.send() → 原路回复
+                                                    │
+                               peer → 原生会话绑定（sessionId）
+                                                    │
+                            agent.followup(plugin relay message)
+                                                    │
+                              宿主 AgentLoop（会话自己的 preset）
+                                                    │
+                                    模型调用 im_send
+                                                    ▼
+                                     ImChannel.send() → 原路回复
 ```
 
 ### 3.1 三层职责
@@ -184,80 +183,60 @@ export interface ImInbound {
 `dedupeKey` 落盘保留 24h：QQ 网关重连补发、微信游标回退、OneBot 重连重投都会重复
 投递，重复投递等于给模型喂两遍同一句话。
 
-### 3.3 peer → Tavern 会话绑定（核心）
+### 3.3 peer → 原生会话绑定（核心）
 
-一条 IM 对话 = **一个 Tavern 聊天 + 一个 DSH 会话 + 一份 AgentTavern 绑定**。
-角色、预设、世界书全部来自那个聊天，**不存在独立的「IM 默认角色」配置**。
+一条 IM 对话 = **一个 peer → 一个已存在的宿主原生 session**。绑定不创建会话、
+不创建 Tavern 聊天、不导入历史；会话由用户在 DSH 里创建并打开，IM 只负责把消息
+插进去，并把回复工具的落点限制在该会话。
 
 ```ts
 interface ImPeerBinding {
-  sessionId: string     // DSH 会话（AgentTavern 绑定在同一 sessionId 上）
-  character: string     // 取自聊天，不单独配置
-  chatId: string
+  sessionId: string     // 宿主原生会话 id（session.id）
   scope: 'private' | 'group'
   createdAt: string
   boundBy: 'auto' | 'manual'
 }
 ```
 
-**多条绑定可以指向同一个 `sessionId/chatId`**：绑定粒度是 peer，聊天归属不是。默认
-`independent` 模式下每个 peer 一条独立会话；只有 `shared` 模式才会让多条绑定落进同一个
-聊天，所以代码里不允许把「peer」和「聊天」当成一对一。
-
 键：`peerKey = ${channel}:${accountId}:${scope}:${peerId}`，存 `state.imPeers[peerKey]`。
+多条绑定可以指向同一个 `sessionId`（共享上下文）；绑定粒度是 peer，不是会话。
 
-**新 peer 的绑定方式**（`state.imBindingMode`，默认 `independent`）：
+**未知 peer**：入站消息先记进 `state.imPendingPeers[peerKey]`（只存最近时间与安全的
+群昵称），面板「未绑定对端」显示它；同时回一条固定提示。用户在面板里把该对端点一
+下绑到**当前会话**（面板经宿主 `useSessions` 取当前 session id）。没有自动绑定模式：
+不替用户新建会话，也不猜目标。
 
-| 模式 | 行为 | 需要配置 |
-|---|---|---|
-| `manual` | 未知 peer 不触发生成，只回「尚未绑定，请在面板绑定」 | 无 |
-| `independent`（默认） | 为 peer **新建一个独立聊天**：角色与开场白取自 `imSourceChatId`，历史为空；再建会话 + 激活 AgentTavern | `imSourceChatId`（来源聊天 / 角色模板） |
-| `shared` | 直接**复用** `imSharedChatId` 指向的聊天与它已有的会话，不克隆、不改历史，只写一条绑定 | `imSharedChatId` |
+**投递**：通过去重与访问控制后，路由立即调用 `agent.followup(plugin relay message)`
+——与 agent-novel 驱动器同一种机制，不排队、不 debounce：
 
-共享是显式 opt-in：它把多个 peer 塞进同一段上下文（代价见 §3.3.1），默认不这么做。
-
-**会话生命周期**（新链路，需单独里程碑）：
-
+```ts
+{
+  id: `im-${uuid}`,
+  role: 'user',
+  content: [{ type: 'text', text: '[IM qq/私聊 peer=peer-xxx]
+<正文>
+（回复请调用 im_send，peer 参数用 peer-xxx）' }],
+  source: hostPluginMessageSource(session, {
+    form: 'relay',
+    summary: 'IM qq/private message from peer-xxx',
+  }),
+}
 ```
-ensureImSession(sessionId):
-  live = ctx.agents.get(sessionId)           → 命中即复用
-  else:
-    setup = agentCtx => agentPresets.mount(agentCtx, AGENT_TAVERN_PRESET_ID)
-    try   resume({ resumeSessionId, setup })   // 重启后按持久化会话恢复
-    catch create({ sessionId, meta:{ cwd: internalWorkspace, agentPreset }, setup })
-  bindSession(db, sessionId, character, chatId, false, 'agent-tavern', 'dsh-native')
-  emitAgentPresetChanged()
-```
 
-`agents.create/resume` + `agentPresets.mount` 已在官方插件里被验证可行
-（`dsh-qqbot/src/session/session-manager.ts` 的 `getOrCreate`），本仓库目前只观察宿主
-agent、从不创建（`src/games/wake.ts` 只 followup 已有 agent），所以这是**新增能力**，
-必须单独过宿主门禁。
+**回复**：插件不再从 `turn/end` 抓正文自动发送。IM 工具族由 index bundle 在
+`agent/created` / `agent/status` / 启动时的 live agent 列表三个入口注册进每个
+agent 的 `ctx.tools`（挂载域）；模型看到消息后调用 `im_send` 回复，`im_identity`
+列出本会话绑定的 alias。`im_send` 仍拒绝跨会话目标。
 
-**开场白导入**：新建聊天后，`session/command.ts:126-135,197-258` 会把开场白与既有历史
-以真实 turn 边界导入宿主会话（`historyImportAppends` + `confirmSessionAppend` +
-`advanceHostTurnBase`）。IM 必须走同一段逻辑，否则模型看不到角色开口。建议把该段抽成
-`src/session/activate.ts`，由命令与 IM 共用，禁止复制第二份。
+**会话必须在线**：v1 只投给 `agents.get(sessionId)` 拿得到的活 agent；拿不到时回
+「会话当前未打开」提示并记日志，不创建/resume 会话。冷会话恢复（需要宿主提供
+session meta 与 preset 组合）留作后续，不能用「插件代建会话」绕过。
 
-#### 3.3.1 回复要回到「发起这一轮的人」
+**迁移**：v1 的 `character/chatId` 绑定在 store 归一化时丢弃多余字段，只保留
+`sessionId`；只要该会话仍在，绑定继续可用。
 
-共享模式下，一个会话可能同时服务多个 peer；独立模式下也可能有客户端亲自打的字，所以
-「回复发到哪」不能靠聊天反查，只能靠**每条消息的回复目标**：
-
-- 入站消息在 `followup` 之前登记 `pendingOrigins: Map<messageId, peerKey>`（内存）。
-- `turn/end` 时扫描本轮的 `user/message` 事件，取第一个命中 `pendingOrigins` 的
-  message id 作为该轮回复目标，发送后删除。
-- 本轮没有命中的（客户端自己打的字、其它 Agent 注入）→ 不发 IM，正常结束。
-- 一轮命中多个（宿主把多条 followup 合进同一轮）→ 只回最早的发起者，其余清掉 origin
-  并记一条结构化 warning，避免下一轮错发。
-- `pendingOrigins` 带 TTL（默认 10 分钟）与上限（默认 200/会话），超限丢弃并记 warning。
-
-独立模式下这套判断同样跑，只是命中集合永远只有一个 peer；它顺带解决了「用户在网页里
-跟同一个会话说话，插件却把回复推去 QQ」这个串台问题。
-
-代价必须说清：**共享会话就是共享上下文**（仅 `shared` 模式）。A 与 B 在同一个人设下
-连续对话，模型能看见彼此说过的话——这是复用同一聊天的必然结果，不是 bug；面板的绑定表
-要给「共享会话」徽标。
+**不做自动回复归属**：共享模式下多个 peer 在同一会话里，模型用 alias 决定回给谁；
+插件不需要 `pendingOrigins`，也不会把「网页里用户自己说的话」误当成 IM 来源。
 
 ### 3.4 QQ 群就是普通群聊
 
@@ -281,23 +260,23 @@ agent、从不创建（`src/games/wake.ts` 只 followup 已有 agent），所以
 
 这样模型知道自己在群里，而管线里只有一条单角色时间线。
 
-### 3.5 生成循环：AgentTavern 优先，且只有这一条
+### 3.5 生成循环：由绑定会话自己跑
 
-- **入站即投递**：`agent.followup(createUserMessage(...))`，不 `await whenIdle()`、
-  不去抖、不合并、不等上一轮结束（宿主 inbox 自己排队）。
-- **出站来自 turn/end**：监听既有 `session/event`，会话有 IM 绑定时，在该轮
-  `turn/end` 之后读投影楼层，取本轮最后一条非空 assistant 正文。
-- **投影时序**：`assistant/message` 事件早于 `turn/end`，投影器通常已经写完；仍按
-  ≤3s 有界轮询等待「出现新的 `extra.agentTavern.messageId` 楼层」。超时则回退到该轮
-  原始 assistant 文本 + `AI_OUTPUT` 正则，并记一条结构化 warning——不让用户看到空白。
-- **失败话术**：`turn/end` 的 `reason.kind === 'error'` 时回一句固定短句，不回模型原文。
-- **不碰 ST**：IM 不调用 `runGeneration`，`assertStGenerationBinding` 的语义在 IM 侧
-  依然成立——绑定为 `agent-tavern` 的会话不允许被 ST 入口写入。
-
+- **入站即插入**：`agent.followup(plugin relay message)`，不 `await whenIdle()`、
+  不去抖、不合并、不等上一轮结束（宿主 inbox 自己排队）。消息来源是
+  `plugin:dsh-soulmojito` + `form: 'relay'`，与本地用户输入可区分。
+- **回复由模型发**：插件不在 `turn/end` 抓正文、不自动发送；模型看到 IM 消息后
+  调用 `im_send`，从 alias 选择目标。共享会话里谁发的话、回给谁，都由模型按
+  alias 决定。
+- **投递失败**：`agents.get(sessionId)` 拿不到活 agent（会话未打开）时回一句固定
+  提示并记日志；不创建/resume 会话，也不假装插入成功。
+- **不碰 ST**：IM 不调用 `runGeneration`；会话自己的 preset 负责生成。
 ### 3.6 IM 工具族
 
-挂在 AgentTavern preset 的工具面上（`src/agent-tavern/agent.ts` 的 `createTools`），
-仅当 IM 子系统启用时注册。**身份一律来自真实 session binding**，参数不能指定会话。
+由 index bundle 在 `agent/created` / `agent/status` / 启动时的 live agent 列表三个
+入口注册进每个 agent 的 `ctx.tools`（`src/im/agent-mount.ts`）——绑定目标可能是
+standard / novel / workbench 等任意原生会话，不能只挂在 AgentTavern preset 上。
+**身份一律来自真实 session binding**，参数不能指定会话。
 
 | 工具 | 作用 | 边界 |
 |---|---|---|
@@ -410,12 +389,12 @@ peer 绑定、默认设置、白名单走 `state.json` 的 `imPeers` / `imSettin
 
 ### 4.5 删除路径
 
-- **解绑 peer**：删 `state.imPeers[key]`；聊天与会话保留（用户资产不因解绑而丢）。
-- **解绑账号**：停通道 → 删密钥文件与账号条目 → 清游标/context token/去重键 →
-  该账号下的 peer 绑定标 `orphaned`。
+- **解绑 peer**：删 `state.imPeers[key]`；会话保留（用户资产不因解绑而丢）。
+- **解绑账号**：停通道 → 删密钥文件与账号条目 → 清游标/context token/去重键/媒体目录 →
+  删该账号下的 `imPeers` 与 `imPendingPeers`（死绑定不再出现在面板）。
 - **移除 OneBot 端点**：调用 upgrade 路由 disposer、断开活动连接、删 token。
 - **环境硬关**：`DSH_SOULMOJITO_DISABLE_IM=1` 时整个子系统不注册路由与连接。
-- **删除聊天/会话**：既有清理逻辑负责悬挂的 `imPeers`（照 `sessionBindings` 的做法）。
+- **删除会话**：`bindings/prune` 同时按 `sessionId` 过滤悬挂的 `imPeers`。
 
 ### 4.6 为什么不是 Mod
 
@@ -457,10 +436,8 @@ cd "<im runtime dir>" && pnpm add @tencent-connect/qqbot-nodejs@1.0.5 @tencent-c
 - 三张卡片：QQ / 微信 / OneBot，状态灯（未配置 / 扫码中 / 在线 / 已暂停 / 错误 + 原因）。
 - 账号列表：`appId` 或 `ilink_bot_id`、绑定时间、最近活动、解绑。
 - 扫码弹窗：二维码 SVG + 备用链接 + 刷新 + 微信验证码输入框 + 状态轮询。
-- 绑定表：`peer → 会话`，显示角色与聊天名、`共享会话` 徽标；支持改绑、解绑、一键
-  「用当前聊天新建绑定」。
-- 自动绑定：`绑定模式` 三选一（手动 / 独立会话 / 共享会话，默认独立）+ 对应配置项
-  （来源聊天 `imSourceChatId`、共享聊天 `imSharedChatId`）。
+- 绑定表：`peer → 原生会话`，显示会话标题、`共享会话` 徽标；支持改绑到当前会话、解绑。
+- 未绑定对端：发过消息但还没绑的对端列在这里，点一下绑到当前会话。
 - 群聊：`imGroupRequireMention` 开关，默认开启（必须 @）。官方 QQ 群机器人只投递 @
   消息，关掉开关在 QQ 通道上不可达（§2.1）；OneBot 11 上它才真的放行全部群消息。
 - 安全面：私聊/群聊白名单（从最近入站勾选或粘贴 id）。
@@ -477,7 +454,7 @@ POST   /api/dsh-soulmojito/im/bind/verify       # 提交微信验证码
 POST   /api/dsh-soulmojito/im/bind/cancel
 GET    /api/dsh-soulmojito/im/peers             # 绑定表 + 最近入站
 POST   /api/dsh-soulmojito/im/peers             # 手动绑定/改绑/解绑
-POST   /api/dsh-soulmojito/im/settings          # 自动绑定、白名单、节流
+POST   /api/dsh-soulmojito/im/settings          # 白名单、群 @ 门控、节流
 POST   /api/dsh-soulmojito/im/onebot/webhook    # OneBot HTTP POST 入站
 GET    /api/dsh-soulmojito/im/onebot/ws         # (upgrade) 反向 WS
 ```
@@ -494,24 +471,24 @@ gate 同步更新。
 
 | # | 项 | 答案 |
 |---|---|---|
-| 1 | 所有者 | `src/im/`（通道 + 路由 + 投影）、`src/session/activate.ts`（会话激活，与命令共用）、`http/im.ts`、面板「聊天渠道」 |
-| 2 | 唯一事实来源 | 凭据 = `im/secrets/*`；绑定 = `state.imPeers`；绑定策略 = `state.imBindingMode` + 来源/共享聊天 id；会话身份 = `state.sessionBindings`；聊天内容 = JSONL；轮次事实 = 宿主 session event log |
+| 1 | 所有者 | `src/im/`（通道 + 路由 + 投影 + 原生会话投递 + 工具挂载）、`http/im.ts`、面板「聊天渠道」 |
+| 2 | 唯一事实来源 | 凭据 = `im/secrets/*`；绑定 = `state.imPeers`（值只有原生 `sessionId`）；未绑定待办 = `state.imPendingPeers`；会话/聊天事实 = 宿主 session log 与 `state.sessionBindings`；回复 = 模型调用 `im_send` |
 | 3 | 持久态及理由 | 凭据（重启重连）、游标（不重收历史）、context token（微信回复必需）、去重键（防重复投喂）、peer→session 绑定（重启保持同一会话） |
-| 4 | 临时态 | 连接、扫码相位、令牌桶、`pendingOrigins`（回复目标）、live agent 句柄——重启即失，由 `agents.resume` 与绑定恢复 |
-| 5 | 外部依赖 | `webServer.registerUpgrade`（可选）、`agents.create/resume/followup/whenIdle`（可选）、`agentPresets.mount`、`api.bot.qq.com`、`ilinkai.weixin.qq.com`、上游 OneBot、`ws` |
-| 6 | 注册入口 | `apply()` 里 `ctx.effect(() => createImRuntime(ctx))`；`webServer.register` / `registerUpgrade`；AgentTavern preset 工具面；面板分区 |
+| 4 | 临时态 | 连接、扫码相位、令牌桶、未绑定提示抑制窗口——重启即失；绑定与会话由用户与宿主恢复 |
+| 5 | 外部依赖 | `webServer.registerUpgrade`（可选）、`agents.get/list` 与 `agent.followup`（可选，缺失即 IM 投递不可用）、`agent.ctx.tools.register`（工具挂载）、`api.bot.qq.com`、`ilinkai.weixin.qq.com`、上游 OneBot、`ws` |
+| 6 | 注册入口 | `apply()` 里创建 IM 运行时与 `agent/created`/`agent/status` 工具挂载；`webServer.register` / `registerUpgrade`；面板分区 |
 | 7 | 删除路径 | 见 §4.5；disposer 覆盖 socket、轮询、upgrade、定时器、live agent 句柄 |
-| 8 | 兼容对象 | 旧装 `tavern/` 数据根、无 `registerUpgrade` 的宿主（只开 HTTP POST）、无 `agents.create` 的宿主（IM 整体不可用并说明）、既有 AgentTavern 投影与工具纪律、`pnpm run check` 基线 |
+| 8 | 兼容对象 | 旧装 `tavern/` 数据根、旧 `character/chatId` 绑定（归一化为 `sessionId`）、无 `registerUpgrade` 的宿主（只开 HTTP POST）、无 `agents.get` 的宿主（IM 整体不可用并说明）、`pnpm run check` 基线 |
 
 ## 8. 里程碑
 
-> 先做 AgentTavern 的会话托管，再挂通道：核心链路（建会话→激活→立即投递→取回复）不
+> 先做原生会话绑定与投递，再挂通道：核心链路（绑定会话→立即插入→模型 im_send）不
 > 通，接三条协议也只是把坏链路接三遍。
 
 | 里程碑 | 内容 | 出口条件 |
 |---|---|---|
 | **M0 契约与骨架** | `ImChannel`/`ImInbound`、`ImRouter` 骨架、`projectImText`、凭据与绑定存储、面板占位、`registerUpgrade` 与 `agents.*` 探测、`im-channels` gate | 假通道 + 假 Agent 能跑通「入站→绑定→投递→回复」，`pnpm run check` 绿 |
-| **M1 会话托管 + IM 工具** | `ensureImSession`（create/resume + preset mount）、抽出 `session/activate.ts`、开场白导入、`turn/end` 回复捕获、立即投递、`im_identity`/`im_channels`/`im_send` | 手动绑定的聊天在无客户端下收到消息并回话；工具面可见且身份不可伪造 |
+| **M1 原生会话绑定 + IM 工具** | `sessionId` 绑定、未绑定对端待办、`agent.followup(plugin relay message)` 立即插入、`im/agent-mount.ts` 把 `im_identity`/`im_channels`/`im_send` 挂进每个 agent 域 | 绑定到原生会话后收到消息立即插入；模型用 im_send 回复；工具身份不可伪造 |
 | **M2 OneBot 11** | 反向 WS（Universal）+ HTTP POST + 出站 API、token 鉴权、单聊/群 @、去重 | 用户自备实现连入，私聊与群 @ 双通 |
 | **M3 QQ** | 扫码绑定、网关接入、被动回复限流、Markdown 分块、私聊流式、群 @ 门控、自动绑定 | 扫码后私聊/群聊双通，超长与超次回复正确降级 |
 | **M4 微信** | 扫码（含验证码）、长轮询与游标、context token、typing、markdown 过滤、-14 暂停 | 扫码后私聊双通，连续多轮不丢上下文 |
@@ -521,10 +498,8 @@ gate 同步更新。
 
 | 测试 | 形态 | 断言 |
 |---|---|---|
-| `im-session-host.spec.ts` | 临时 store + 假 agents 注册表 | 独立模式建新聊天（同角色、空历史）并 create→bind→激活；共享模式复用同一 chatId；resume 命中复用；缺 `agents.create` 时 fail-closed |
-| `im-delivery.spec.ts` | 假通道 + 假 Agent（记录 followup） | 入站立即 followup、无 debounce；`source.kind==='user'`；同消息二次投递被去重 |
-| `im-reply-target.spec.ts` | 真 store + 假 Agent + 独立/共享两种绑定 | 独立模式只回唯一 peer；共享模式谁的 message id 命中就回给谁；本轮无命中不发 IM；一轮多 origin 只回最早的并清空 |
-| `im-reply.spec.ts` | 真 store + 真实 JSONL + 投影桩 | `turn/end` 后取最后一条正文；前端/MVU 被剥；投影超时有回退 |
+| `im-session-host.spec.ts` | 假 agents 注册表 | 缺 get/list 的能力原因；活 agent 查找与「会话未打开」结构化错误；followup 消息的 v4/v0 source 形状 |
+| `im-router.spec.ts` | 真 store + 假通道/假 Agent（记录 followup） | 入站立即插入绑定会话、无 debounce；未绑定对端进待办并回提示；媒体物化排在访问控制之后 |
 | `im-tools.spec.ts` | 真工具面 | `im_send` 默认只能发当前 peer；跨 peer 关闭时拒绝；身份不可由参数伪造 |
 | `onebot-protocol.spec.ts` | 真 `ws` 服务端与客户端环回 | universal 握手头、`post_type` 解析、`echo` 配对、错误 token 401 |
 | `onebot-webhook.spec.ts` | 真 HTTP 环回 | 事件接收、快速操作 `reply`、超大 body 拒绝 |
@@ -551,17 +526,17 @@ gate 同步更新。
    关闭，OneBot 保留 HTTP POST 兜底。
 6. **群消息密度**：群里多人闲聊会持续触发生成 → @ 门控（默认开、可关）+ 令牌桶 +
    面板可见计数；但**不做攒批**（与「立即投递」互斥）。
-7. **共享会话＝共享上下文**（仅 `shared` 模式）：不同 peer 的对话互相可见。共享因此是
-   显式 opt-in，默认 `independent` 一 peer 一条独立会话；面板徽标、README 与设置说明都
-   要写清。
+7. **共享会话＝共享上下文**：多条绑定指向同一个原生 session 时，不同 peer 的对话互相
+   可见。绑定是逐 peer 的显式动作；面板徽标、README 与设置说明都要写清。
 8. **合规**：OneBot 上游可能是非官方客户端，本插件不提供、不内置、不背书；启用时面板
    明示「上游由你自备并自负合规责任」。
 
-**已定档（2026-10-30 产品决定）**
-- 新 peer 绑定三态：手动 / 独立会话（默认）/ 共享会话；共享必须显式打开。
+**已定档（2026-10-31 修订，取代 2026-10-30 的绑定三态）**
+- 绑定目标是**已存在的原生会话**：未绑定对端在面板列为待办，用户手动绑到当前会话；
+  插件不代建会话、不导入 Tavern 聊天。
 - QQ 群默认必须 @ 才投递，面板提供 `imGroupRequireMention` 开关可关。
 - `im_send` **不允许跨会话**：目标必须已绑定到当前 session。
-- 解绑 peer 时**保留**聊天与会话，只删绑定。
+- 解绑 peer 时**保留**会话，只删绑定。
 
 **已知行为（2026-10-30，微信通道落地）**
 - **暂停态不持久化**：`-14` 的一小时暂停只活在进程内（`pausedUntil`），重启/重连即清空

@@ -39,36 +39,15 @@ describe('imChunkLimit', () => {
 describe('applyImSettingsPatch', () => {
   it('keeps untouched fields and normalises allowlists', () => {
     const next = applyImSettingsPatch(
-      { ...base, bindingMode: 'manual' },
+      base,
       { privateAllow: [' peer-a ', 'peer-a', 'peer-b', ''], groupRequireMention: false },
     )
-    expect(next.bindingMode).toBe('manual')
     expect(next.privateAllow).toEqual(['peer-a', 'peer-b'])
     expect(next.groupRequireMention).toBe(false)
   })
 
   it('rejects an unknown access mode instead of guessing', () => {
     expect(() => applyImSettingsPatch(base, { privateMode: 'sometimes' })).toThrow(ImSettingsError)
-  })
-
-  it('requires sourceChat for independent mode', () => {
-    expect(() => applyImSettingsPatch(base, { bindingMode: 'independent' }))
-      .toThrow(/independent requires sourceChat/)
-  })
-
-  it('requires sharedChat for shared mode', () => {
-    expect(() => applyImSettingsPatch(base, { bindingMode: 'shared' }))
-      .toThrow(/shared requires sharedChat/)
-  })
-
-  it('can clear a chat reference with null once the mode no longer needs it', () => {
-    const withSource = applyImSettingsPatch(base, {
-      bindingMode: 'independent',
-      sourceChat: { character: 'Example', chatId: 'chat.jsonl' },
-    })
-    expect(withSource.sourceChat).toEqual({ character: 'Example', chatId: 'chat.jsonl' })
-    const cleared = applyImSettingsPatch(withSource, { bindingMode: 'manual', sourceChat: null })
-    expect(cleared.sourceChat).toBeUndefined()
   })
 
   it('rejects a non-integer chunk limit', () => {

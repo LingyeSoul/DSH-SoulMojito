@@ -5,7 +5,7 @@ import { promises as fsPromises } from 'node:fs'
 import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { MemoryStore, TavernStore, VariableStore, normalizeMemoryEmbedding, writeAtomicText } from '../src/index.js'
+import { MemoryStore, TavernStore, VariableStore, normalizeImPeers, normalizeMemoryEmbedding, writeAtomicText } from '../src/index.js'
 import { decodeCharacterCard, encodeCharx, encodeCharacterCardPng, normalizeEntry, parseRegexScripts, stableDeepEqual } from '@dsh-soulmojito/format'
 import type { WorldBookIR } from '@dsh-soulmojito/format'
 import { syntheticCardPng, syntheticWorldRaw } from '../../tavern-format/tests/helpers/synthetic.js'
@@ -774,10 +774,9 @@ describe('TavernStore', () => {
       frontendStorage: {},
       // Mod 三层开关的前两层（提案 0015 §3.2）：双默认 false。
       modsEnabled: false, mods: { enabled: {} },
-      // IM 通道（提案 0024 §4.3）：默认白名单且名单为空 = 拒绝所有人；
-      // 新 peer 默认独立会话；群聊必须 @。旧 state.json 缺字段按同一份默认补齐。
+      // IM 通道（提案 0024 §4.3）：默认白名单且名单为空 = 拒绝所有人；群聊必须 @。
+      // 绑定目标改为原生会话后不再有绑定模式；旧 state.json 缺字段按同一份默认补齐。
       imSettings: {
-        bindingMode: 'independent',
         groupRequireMention: true,
         privateMode: 'allowlist',
         privateAllow: [],
@@ -785,6 +784,7 @@ describe('TavernStore', () => {
         groupAllow: [],
       },
       imPeers: {},
+      imPendingPeers: {},
     })
     await store.patchState({
       activeCharacter: 'ExampleCard',
@@ -1324,5 +1324,30 @@ describe('normalizeMemoryEmbedding provider union', () => {
     // endpoint 形态下混入 modelDir 不影响其自身合法性
     const endpoint = normalizeMemoryEmbedding({ baseURL: 'http://x/v1', apiKeyEnv: '', model: 'm', modelDir: '/m' })
     expect(endpoint?.model).toBe('m')
+  })
+})
+
+describe('IM peer binding migration to native sessions', () => {
+  it('keeps sessionId and drops the old character/chatId fields', () => {
+    const migrated = normalizeImPeers({
+      'qq:acct:private:p1': {
+        sessionId: 'session-a',
+        character: 'Example',
+        chatId: 'chat.jsonl',
+        scope: 'private',
+        boundBy: 'manual',
+        createdAt: '2026-10-31T00:00:00.000Z',
+      },
+      // 缺 sessionId 的坏记录直接丢弃，不污染路由。
+      broken: { character: 'Example', chatId: 'chat.jsonl', scope: 'private' },
+    })
+    expect(migrated).toEqual({
+      'qq:acct:private:p1': {
+        sessionId: 'session-a',
+        scope: 'private',
+        boundBy: 'manual',
+        createdAt: '2026-10-31T00:00:00.000Z',
+      },
+    })
   })
 })

@@ -13,6 +13,7 @@ import type { ImRuntime } from '../src/im/runtime.js'
 import { WeixinBindError } from '../src/im/weixin/bind.js'
 import { WeixinChannelError } from '../src/im/weixin/channel.js'
 import type { ImAccountRef } from '../src/im/types.js'
+import { imPeerAlias, imPeerKey } from '../src/im/types.js'
 
 let root: string
 let db: TavernStore
@@ -77,8 +78,6 @@ function runtimeOf(): ImRuntime {
     },
     removeAccount: async (channel, accountId) => ImStore.open(tavernDataRoot('im')).deleteAccount(channel, accountId),
     handleOneBotWebhook: async () => false,
-    bindChat: async () => { throw new Error('bindChat is not part of this test') },
-    handleSessionEvent: () => {},
     dispose: async () => {},
     router: { sendText: async () => { throw new Error('sendText is not part of this test') } },
   }
@@ -141,6 +140,55 @@ describe('im account routes', () => {
     const path = '/api/dsh-soulmojito/im/onebot/webhook'
     const result = await call({ post_type: 'message' }, path, 'im/onebot/webhook', 'POST', runtimeOf())
     expect(result.statusCode).toBe(401)
+  })
+
+  it('lists unbound senders and binds one to a native session id', async () => {
+    const key = imPeerKey('onebot', '10001', 'private', 'u1')
+    await db.patchState({
+      imPendingPeers: {
+        [key]: { lastAt: 1_700_000_000_000, senderName: '小明' },
+      },
+    })
+    const runtime = runtimeOf()
+    const listed = await call(undefined, '/api/dsh-soulmojito/im', 'im', 'GET', runtime)
+    expect(listed.body['pendingPeers']).toEqual([{
+      key,
+      alias: imPeerAlias('onebot', 'private', key),
+      channel: 'onebot',
+      accountId: '10001',
+      scope: 'private',
+      peerId: 'u1',
+      lastAt: new Date(1_700_000_000_000).toISOString(),
+      senderName: '小明',
+    }])
+
+    const bound = await call({
+      channel: 'onebot',
+      accountId: '10001',
+      scope: 'private',
+      peerId: 'u1',
+      sessionId: 'session-native',
+    }, '/api/dsh-soulmojito/im/peers', 'im/peers', 'POST', runtime)
+    expect(bound.statusCode).toBe(200)
+    const state = await db.getState()
+    expect(state.imPeers?.[key]).toMatchObject({
+      sessionId: 'session-native',
+      scope: 'private',
+      boundBy: 'manual',
+    })
+    // 绑定成功后从「未绑定对端」待办里移除。
+    expect(state.imPendingPeers?.[key]).toBeUndefined()
+  })
+
+  it('rejects a binding without a native session id', async () => {
+    const result = await call({
+      channel: 'onebot',
+      accountId: '10001',
+      scope: 'private',
+      peerId: 'u1',
+    }, '/api/dsh-soulmojito/im/peers', 'im/peers', 'POST', runtimeOf()).catch((error: unknown) => error as { status: number; message: string })
+    expect(result.status).toBe(400)
+    expect(result.message).toContain('sessionId')
   })
 
   it('serves qr binding start/status/cancel for qq and weixin, and refuses channels without a binder', async () => {

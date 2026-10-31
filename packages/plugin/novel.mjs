@@ -1780,15 +1780,6 @@ var init_fs_atomic = __esm({
 });
 
 // packages/tavern-store/src/im-state.ts
-function normalizeChatRef(value) {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
-  const record = value;
-  const character = record["character"];
-  const chatId = record["chatId"];
-  if (typeof character !== "string" || character.trim() === "") return void 0;
-  if (typeof chatId !== "string" || chatId.trim() === "") return void 0;
-  return { character, chatId };
-}
 function normalizeAccessMode(value, fallback) {
   return value === "open" || value === "allowlist" || value === "disabled" ? value : fallback;
 }
@@ -1810,12 +1801,8 @@ function normalizeImSettings(value) {
     return structuredClone(DEFAULT_IM_SETTINGS);
   }
   const record = value;
-  const bindingMode = record["bindingMode"] === "manual" || record["bindingMode"] === "shared" ? record["bindingMode"] : "independent";
   const chunkLimit = record["chunkLimit"];
   return {
-    bindingMode,
-    ...normalizeChatRef(record["sourceChat"]) === void 0 ? {} : { sourceChat: normalizeChatRef(record["sourceChat"]) },
-    ...normalizeChatRef(record["sharedChat"]) === void 0 ? {} : { sharedChat: normalizeChatRef(record["sharedChat"]) },
     groupRequireMention: record["groupRequireMention"] !== false,
     privateMode: normalizeAccessMode(record["privateMode"], "allowlist"),
     privateAllow: normalizeStringList(record["privateAllow"]),
@@ -1831,15 +1818,27 @@ function normalizeImPeers(value) {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
     const record = entry;
     const sessionId = record["sessionId"];
-    const character = record["character"];
-    const chatId = record["chatId"];
-    if (typeof sessionId !== "string" || sessionId === "") continue;
-    if (typeof character !== "string" || character === "") continue;
-    if (typeof chatId !== "string" || chatId === "") continue;
+    if (typeof sessionId !== "string" || sessionId.trim() === "") continue;
     const scope = record["scope"] === "group" ? "group" : "private";
     const boundBy = record["boundBy"] === "manual" ? "manual" : "auto";
     const createdAt = typeof record["createdAt"] === "string" ? record["createdAt"] : (/* @__PURE__ */ new Date(0)).toISOString();
-    result[key] = { sessionId, character, chatId, scope, boundBy, createdAt };
+    result[key] = { sessionId, scope, boundBy, createdAt };
+  }
+  return result;
+}
+function normalizeImPendingPeers(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const result = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+    const record = entry;
+    const lastAt = record["lastAt"];
+    if (typeof lastAt !== "number" || !Number.isFinite(lastAt) || lastAt < 0) continue;
+    const senderName = record["senderName"];
+    result[key] = {
+      lastAt,
+      ...typeof senderName === "string" && senderName.trim() !== "" ? { senderName: senderName.trim() } : {}
+    };
   }
   return result;
 }
@@ -1848,7 +1847,6 @@ var init_im_state = __esm({
   "packages/tavern-store/src/im-state.ts"() {
     "use strict";
     DEFAULT_IM_SETTINGS = {
-      bindingMode: "independent",
       groupRequireMention: true,
       privateMode: "allowlist",
       privateAllow: [],
@@ -3448,7 +3446,8 @@ var init_store = __esm({
       modsEnabled: false,
       mods: { enabled: {} },
       imSettings: structuredClone(DEFAULT_IM_SETTINGS),
-      imPeers: {}
+      imPeers: {},
+      imPendingPeers: {}
     };
     MEMORY_EMBED_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,255}$/;
     TavernStore = class _TavernStore {
@@ -4446,7 +4445,8 @@ var init_store = __esm({
           mods: { enabled: normalizeModEnables(parsed.mods) },
           memoryEmbedding: normalizeMemoryEmbedding(parsed.memoryEmbedding),
           imSettings: normalizeImSettings(parsed.imSettings),
-          imPeers: normalizeImPeers(parsed.imPeers)
+          imPeers: normalizeImPeers(parsed.imPeers),
+          imPendingPeers: normalizeImPendingPeers(parsed.imPendingPeers)
         };
       }
       async assertChatRevision(file, expectedRevision) {
@@ -8752,27 +8752,6 @@ var init_handle = __esm({
   }
 });
 
-// packages/plugin/src/env-compat.ts
-function envCompat(suffix) {
-  return process.env[`DSH_SOULMOJITO_${suffix}`] ?? process.env[`DSH_TAVERN_${suffix}`];
-}
-var init_env_compat = __esm({
-  "packages/plugin/src/env-compat.ts"() {
-    "use strict";
-  }
-});
-
-// packages/plugin/src/im/handle.ts
-var IM_RUNTIME_KEY, runtimeSymbol;
-var init_handle2 = __esm({
-  "packages/plugin/src/im/handle.ts"() {
-    "use strict";
-    init_env_compat();
-    IM_RUNTIME_KEY = "dsh-soulmojito:im-runtime";
-    runtimeSymbol = Symbol.for(IM_RUNTIME_KEY);
-  }
-});
-
 // packages/tavern-lore/lib/types.js
 var MESSAGE_BOUNDARY2;
 var init_types3 = __esm({
@@ -9289,6 +9268,16 @@ var init_capabilities2 = __esm({
   }
 });
 
+// packages/plugin/src/env-compat.ts
+function envCompat(suffix) {
+  return process.env[`DSH_SOULMOJITO_${suffix}`] ?? process.env[`DSH_TAVERN_${suffix}`];
+}
+var init_env_compat = __esm({
+  "packages/plugin/src/env-compat.ts"() {
+    "use strict";
+  }
+});
+
 // packages/plugin/src/build-info.ts
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -9324,7 +9313,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("545dc42") : void 0;
+  const commit = true ? normalizeCommit("e51ccdf") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -9624,6 +9613,17 @@ var init_host = __esm({
     init_manifest();
     init_storage();
     init_install();
+  }
+});
+
+// packages/plugin/src/im/handle.ts
+var IM_RUNTIME_KEY, runtimeSymbol;
+var init_handle2 = __esm({
+  "packages/plugin/src/im/handle.ts"() {
+    "use strict";
+    init_env_compat();
+    IM_RUNTIME_KEY = "dsh-soulmojito:im-runtime";
+    runtimeSymbol = Symbol.for(IM_RUNTIME_KEY);
   }
 });
 
@@ -10076,7 +10076,25 @@ init_deduce();
 // packages/plugin/src/agent-tavern/agent.ts
 init_guides();
 init_handle();
-init_handle2();
+init_cross_bundle();
+
+// packages/plugin/src/prompt-viewer.ts
+var PROMPT_VIEWER_STATE_KEY = Symbol.for("dsh-soulmojito:prompt-viewer");
+
+// packages/bind/src/host-session.ts
+var PLUGIN_NAME = "dsh-soulmojito";
+var LEGACY_PLUGIN_NAME = "dsh-tavern";
+var TAVERN_PLUGIN_SOURCE_KIND = `plugin:${PLUGIN_NAME}`;
+var LEGACY_TAVERN_PLUGIN_SOURCE_KIND = `plugin:${LEGACY_PLUGIN_NAME}`;
+
+// packages/plugin/src/agent-tavern/tools/character.ts
+init_src2();
+
+// packages/tavern-lore/src/types.ts
+var MESSAGE_BOUNDARY = "";
+
+// packages/tavern-lore/src/buffer.ts
+var JOINER = "\n" + MESSAGE_BOUNDARY;
 
 // packages/plugin/src/agent-tavern/tools/stores.ts
 init_src2();
@@ -10087,12 +10105,6 @@ init_src2();
 
 // packages/plugin/src/memory-embed.ts
 init_src2();
-
-// packages/bind/src/host-session.ts
-var PLUGIN_NAME = "dsh-soulmojito";
-var LEGACY_PLUGIN_NAME = "dsh-tavern";
-var TAVERN_PLUGIN_SOURCE_KIND = `plugin:${PLUGIN_NAME}`;
-var LEGACY_TAVERN_PLUGIN_SOURCE_KIND = `plugin:${LEGACY_PLUGIN_NAME}`;
 
 // packages/plugin/src/memory-embed-local.ts
 var TRANSFORMERS_PACKAGE = "@huggingface/transformers";
@@ -10115,67 +10127,6 @@ function identitySummaryOf(data) {
   const summary = agentTavern?.identitySummary;
   return typeof summary === "string" && summary.trim() !== "" ? summary : void 0;
 }
-
-// packages/plugin/src/im/types.ts
-init_src2();
-
-// packages/plugin/src/im/tools.ts
-var identityOutput = objectOutput({
-  peers: {
-    type: "array",
-    items: {
-      type: "object",
-      properties: {
-        alias: { type: "string" },
-        channel: { type: "string" },
-        scope: { type: "string", enum: ["private", "group"] },
-        character: { type: "string" },
-        chatId: { type: "string" }
-      },
-      required: ["alias", "channel", "scope", "character", "chatId"],
-      additionalProperties: false
-    }
-  }
-});
-var channelsOutput = objectOutput({
-  available: { type: "boolean" },
-  reasons: { type: "array", items: { type: "string" } },
-  channels: {
-    type: "array",
-    items: {
-      type: "object",
-      properties: {
-        channel: { type: "string" },
-        accountId: { type: "string" },
-        state: { type: "string", enum: ["idle", "starting", "online", "paused", "error"] }
-      },
-      required: ["channel", "accountId", "state"],
-      additionalProperties: false
-    }
-  }
-});
-var sendOutput = objectOutput({
-  peer: { type: "string" },
-  parts: { type: "integer" },
-  sentAt: { type: "string" },
-  messageId: { type: "string" },
-  mediaKind: { type: "string", enum: ["image", "voice", "video", "file"] }
-}, ["messageId", "mediaKind"]);
-
-// packages/plugin/src/agent-tavern/agent.ts
-init_cross_bundle();
-
-// packages/plugin/src/prompt-viewer.ts
-var PROMPT_VIEWER_STATE_KEY = Symbol.for("dsh-soulmojito:prompt-viewer");
-
-// packages/plugin/src/agent-tavern/tools/character.ts
-init_src2();
-
-// packages/tavern-lore/src/types.ts
-var MESSAGE_BOUNDARY = "";
-
-// packages/tavern-lore/src/buffer.ts
-var JOINER = "\n" + MESSAGE_BOUNDARY;
 
 // packages/plugin/src/agent-tavern/tools/character.ts
 var characterOutput = objectOutput({

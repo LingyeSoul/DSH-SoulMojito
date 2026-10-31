@@ -11,6 +11,7 @@
 
 import { isAbsolute } from 'node:path'
 import type { TavernStore } from '../../../tavern-store/src/index.js'
+import type { HostLogger } from '../host-contract.js'
 import { objectOutput, tool, type ToolDefinition, type ToolExecution } from '../agent-tavern/tools/shared.js'
 import type { ImRuntimeHandle } from './handle.js'
 import type { ImOutboundMedia, ImScope } from './types.js'
@@ -24,6 +25,8 @@ export interface ImToolsDeps {
   db: () => Promise<TavernStore>
   /** 当前 IM 运行时；未装配时返回 undefined。 */
   runtime: () => ImRuntimeHandle | undefined
+  /** 工具挂载失败的可见日志（面板运行日志的宿主镜像）。 */
+  logger?: HostLogger
 }
 
 /** 本会话的一条绑定投影：只含对外安全的身份字段。 */
@@ -33,13 +36,11 @@ interface BoundPeer {
   alias: string
   channel: string
   scope: ImScope
-  character: string
-  chatId: string
 }
 
 export function createImTools(deps: ImToolsDeps): ToolDefinition[] {
   return [
-    tool('im_identity', 'Report the IM peers bound to this very session: channel, private/group scope, character and chat. Use it when you need to know which chat window this conversation is coming from. Returns an empty peer list when the session has no IM binding; it cannot look up any other session.', {}, identityOutput, async (_args, exec) => {
+    tool('im_identity', 'Report the IM peers bound to this very session: channel, private/group scope and the alias to pass to im_send. Use it when you need to know which IM conversations this session can answer. Returns an empty peer list when the session has no IM binding; it cannot look up any other session.', {}, identityOutput, async (_args, exec) => {
       return { peers: (await boundPeers(deps, requireAgentId(exec))).map(publicPeer) }
     }),
     tool('im_channels', 'Report whether the IM subsystem is available in this host process and the current state of every configured channel account (idle, starting, online, paused, error). Read-only; never returns credentials.', {}, channelsOutput, async () => {
@@ -61,7 +62,7 @@ export function createImTools(deps: ImToolsDeps): ToolDefinition[] {
         })),
       }
     }),
-    tool('im_send', 'Send one message to an IM peer that is bound to this session. Send text, a media item, or a media item with a caption. Omit peer when exactly one peer is bound; pass the alias from im_identity when several are. Text is trimmed and capped at 4000 characters. Media is read from an absolute local path (preferred) or an http(s) URL for image/video. Cross-session sending is forbidden: an alias outside this session is rejected.', {
+    tool('im_send', 'Send one message to an IM peer that is bound to this session. Use it to reply when an IM message has been relayed into this session. Send text, a media item, or a media item with a caption. Omit peer when exactly one peer is bound; pass the alias from im_identity when several are. Text is trimmed and capped at 4000 characters. Media is read from an absolute local path (preferred) or an http(s) URL for image/video. Cross-session sending is forbidden: an alias outside this session is rejected.', {
       text: { type: 'string', description: 'Message text, 1-4000 characters after trimming. Optional when media is attached; then it becomes the caption.' },
       peer: { type: 'string', description: 'Target peer alias from im_identity; required when this session has more than one binding.' },
       mediaKind: { type: 'string', enum: ['image', 'voice', 'video', 'file'], description: 'Kind of the media item; required when mediaPath or mediaUrl is given.' },
@@ -116,13 +117,11 @@ export function createImTools(deps: ImToolsDeps): ToolDefinition[] {
 }
 
 /** 对外投影：alias + 非标识性身份。 */
-function publicPeer(peer: BoundPeer): { alias: string; channel: string; scope: ImScope; character: string; chatId: string } {
+function publicPeer(peer: BoundPeer): { alias: string; channel: string; scope: ImScope } {
   return {
     alias: peer.alias,
     channel: peer.channel,
     scope: peer.scope,
-    character: peer.character,
-    chatId: peer.chatId,
   }
 }
 
@@ -135,10 +134,8 @@ const identityOutput = objectOutput({
         alias: { type: 'string' },
         channel: { type: 'string' },
         scope: { type: 'string', enum: ['private', 'group'] },
-        character: { type: 'string' },
-        chatId: { type: 'string' },
       },
-      required: ['alias', 'channel', 'scope', 'character', 'chatId'],
+      required: ['alias', 'channel', 'scope'],
       additionalProperties: false,
     },
   },
@@ -185,16 +182,15 @@ async function boundPeers(deps: ImToolsDeps, sessionId: string): Promise<BoundPe
   for (const [peerKey, binding] of Object.entries(state.imPeers ?? {})) {
     if (binding.sessionId !== sessionId) continue
     const parts = imPeerKeyParts(peerKey)
-    if (parts === undefined) {
-      throw new Error(`IM peer key '${peerKey}' is malformed; expected '<channel>:<accountId>:<scope>:<peerId>'`)
-    }
+    // 手工改坏/损坏的记录跳过：工具挂在每个会话上，一条坏 key 不能让所有会话的
+    // IM 工具一起失效。
+    if (parts === undefined) continue
+    if (parts.scope !== 'private' && parts.scope !== 'group') continue
     peers.push({
       peerKey,
       alias: imPeerAlias(parts.channel, parts.scope, peerKey),
       channel: parts.channel,
       scope: binding.scope,
-      character: binding.character,
-      chatId: binding.chatId,
     })
   }
   return peers.sort((left, right) => left.alias.localeCompare(right.alias))

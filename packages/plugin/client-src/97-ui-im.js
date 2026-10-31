@@ -10,8 +10,9 @@
 
     /** 扫码相位轮询间隔（提案 0024 §6.3「每 1.5s 轮询 im/bind/status」）。 */
     const IM_BIND_POLL_MS = 1500
+    /** 面板数据刷新间隔：未绑定对端与通道状态在面板打开时要能自己出现。 */
+    const IM_VIEW_POLL_MS = 5000
     const IM_CHANNELS = ['qq', 'weixin', 'onebot']
-    const IM_BINDING_MODES = ['manual', 'independent', 'shared']
 
     /** 错误一律取 Error.message：api() 已经把服务端 message 塞进去了。 */
     function imErrorMessage(cause) {
@@ -100,42 +101,23 @@
       return busy.startsWith('peer:')
     }
 
-    /** 聊天引用 → 下拉值；character 可能含分隔符，用 \u0000 拼键最稳。 */
-    function imChatKey(character, chatId) {
-      return `${character}\u0000${chatId}`
-    }
-
-    function imChatRefFromKey(key) {
-      const text = String(key ?? '')
-      const at = text.indexOf('\u0000')
-      if (at <= 0 || at === text.length - 1) return null
-      return { character: text.slice(0, at), chatId: text.slice(at + 1) }
-    }
-
-    /** 已有聊天清单（bootstrap.characters × 已加载的 chatLists）→ 下拉选项。 */
-    function imChatOptions(characters, chatLists) {
-      const options = []
-      const seen = new Set()
-      for (const character of characters) {
-        for (const chatId of chatLists?.[character] ?? []) {
-          const key = imChatKey(character, chatId)
-          if (seen.has(key)) continue
-          seen.add(key)
-          options.push({ key, character, chatId, label: `${character} / ${chatId.replace(/\.jsonl$/i, '')}` })
+    /** 绑定目标标签：优先用户给会话起的标题，其次 Tavern 绑定，最后短 id。 */
+    function imSessionLabeler(bindings, sessionsById) {
+      return (sessionId) => {
+        const id = String(sessionId ?? '')
+        if (id === '') return ''
+        const binding = bindings?.[id]
+        if (typeof binding?.title === 'string' && binding.title.trim() !== '') return binding.title.trim()
+        if (typeof binding?.character === 'string' && binding.character !== '') {
+          const chat = String(binding.chatId ?? '').replace(/\.jsonl$/i, '')
+          return chat === '' ? binding.character : `${binding.character} · ${chat}`
         }
+        const session = sessionsById?.[id]
+        for (const candidate of [session?.title, session?.header?.title]) {
+          if (typeof candidate === 'string' && candidate.trim() !== '') return candidate.trim()
+        }
+        return id.length > 12 ? `${id.slice(0, 8)}…` : id
       }
-      return options
-    }
-
-    /**
-     * 把一条聊天引用补进选项：绑定表里的聊天可能还没被 chatLists 加载（或已从
-     * 磁盘消失），下拉里必须仍能显示当前值，否则用户看到的是「未选择」。
-     */
-    function imWithChatOption(options, ref) {
-      if (ref === null || typeof ref.character !== 'string' || typeof ref.chatId !== 'string') return options
-      const key = imChatKey(ref.character, ref.chatId)
-      if (options.some((option) => option.key === key)) return options
-      return [{ key, character: ref.character, chatId: ref.chatId, label: `${ref.character} / ${ref.chatId.replace(/\.jsonl$/i, '')}` }, ...options]
     }
 
     /** 复制到剪贴板：没有 Clipboard API 时明确报错，不静默假装成功。 */
@@ -147,9 +129,11 @@
       return clipboard.writeText(text)
     }
 
-    function PanelIm() {
+    function PanelIm({ useSessions } = {}) {
       const state = useTavernStore()
       const t = useTranslate()
+      const currentSession = useCurrentSessionId(useSessions)
+      const sessionsById = useSessions((value) => value.byId)
       const [view, setView] = useState(null)
       const [error, setError] = useState('')
       const [notice, setNotice] = useState('')
@@ -159,30 +143,51 @@
       const [qrFailedFor, setQrFailedFor] = useState('')
       const [endpoint, setEndpoint] = useState('')
       const [allowDraft, setAllowDraft] = useState({ private: null, group: null })
+      /** 只接受最新一次 GET 的结果：绑定 POST 与 5s 轮询交错时旧响应不能覆盖新状态。 */
+      const viewSeq = useRef(0)
+      /** 后台轮询单飞：上一次 GET 还没回来时不再叠一个。 */
+      const viewInFlight = useRef(false)
 
-      const characters = state.bootstrap.characters
-      const characterKey = characters.join('\u0000')
       const channels = view?.channels ?? []
       const peers = view?.peers ?? []
+      const pendingPeers = view?.pendingPeers ?? []
       const settings = view?.settings ?? null
       const qqRuntime = view?.qqRuntime ?? null
       const available = view?.available === true
       const sharedSessions = imSharedSessionIds(peers)
-      const chatOptions = imChatOptions(characters, state.chatLists)
+      const sessionLabel = imSessionLabeler(state.bootstrap.state.sessionBindings, sessionsById)
 
-      // 改绑/来源聊天下拉要用已有聊天清单：与总览同款一次性拉取（按角色缓存）。
-      // 读不出来如实报错——下拉里少了聊天等于让用户以为「没有可绑的聊天」。
-      useEffect(() => {
-        for (const character of characters) {
-          void loadChatList(character).catch((cause) => setError(imErrorMessage(cause)))
-        }
-      }, [characterKey])
-
-      const reloadView = () => api('im')
-        .then((result) => { setView(result); return result })
-        .catch((cause) => { setError(imErrorMessage(cause)); return null })
+      const loadView = (quiet) => {
+        if (quiet && viewInFlight.current) return Promise.resolve(null)
+        const seq = viewSeq.current + 1
+        viewSeq.current = seq
+        viewInFlight.current = true
+        return api('im')
+          .then((result) => {
+            if (seq === viewSeq.current) setView(result)
+            return result
+          })
+          .catch((cause) => {
+            // 后台轮询失败不占用错误条：用户没发起的请求不该留下永久红字。
+            if (!quiet && seq === viewSeq.current) setError(imErrorMessage(cause))
+            return null
+          })
+          .finally(() => {
+            if (seq === viewSeq.current) viewInFlight.current = false
+          })
+      }
+      const reloadView = () => loadView(false)
 
       useEffect(() => { void reloadView() }, [])
+      // 面板打开期间定时刷新：对端发来消息后会出现在「未绑定对端」，用户不必
+      // 关掉再打开面板才知道有新的待绑定对话。页面隐藏时不打请求。
+      useEffect(() => {
+        const timer = setInterval(() => {
+          if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+          void loadView(true)
+        }, IM_VIEW_POLL_MS)
+        return () => clearInterval(timer)
+      }, [])
 
       const applyBindStatus = (status) => {
         if (status.phase === 'idle') {
@@ -365,10 +370,15 @@
         })
       }
 
-      const rebindPeer = (peer, ref) => {
+      const bindPeerToSession = (peer, sessionId) => {
         const parts = imPeerParts(peer.key)
         if (parts === null) {
           setError(`cannot parse the peer key '${peer.key}'`)
+          return
+        }
+        const target = String(sessionId ?? '').trim()
+        if (target === '') {
+          setError(t('im.peers.noCurrentSession'))
           return
         }
         setError('')
@@ -382,8 +392,7 @@
             accountId: parts.accountId,
             scope: peer.scope,
             peerId: parts.peerId,
-            character: ref.character,
-            chatId: ref.chatId,
+            sessionId: target,
           }),
         })
           .then(() => reloadView())
@@ -448,16 +457,18 @@
         h(ImOneBotBand, { endpoint, busy, disabled: !available, onCreate: createOneBot }),
         h(ImPeersBand, {
           peers,
+          pendingPeers,
           sharedSessions,
-          chatOptions,
+          currentSession,
+          sessionLabel,
           busy,
-          onRebind: rebindPeer,
+          onRebind: bindPeerToSession,
+          onBindPending: bindPeerToSession,
           onUnbind: unbindPeer,
         }),
         h(ImLogBand, { disabled: !available, onError: setError }),
         h(ImSettingsBand, {
           settings,
-          chatOptions,
           allowDraft,
           busy,
           onPatch: (patch) => { void saveSettings(patch) },
@@ -657,74 +668,77 @@
             copyError !== '' ? h('p', { className: 'dt-error' }, copyError) : null))
     }
 
-    /** 绑定表：peer → 角色/聊天，共享会话徽标，改绑与解绑。 */
-    function ImPeersBand({ peers, sharedSessions, chatOptions, busy, onRebind, onUnbind }) {
+    /** 绑定表 + 未绑定待办：对端 → 原生会话；未绑定的显示在最上面。 */
+    function ImPeersBand({ peers, pendingPeers, sharedSessions, currentSession, sessionLabel, busy, onRebind, onBindPending, onUnbind }) {
       const t = useTranslate()
-      if (peers.length === 0) {
-        return h('section', { className: 'dt-settings-band' },
-          h('h3', null, t('im.peers.title')),
-          h('p', { className: 'dt-muted' }, t('im.peers.empty')),
-          h('p', { className: 'dt-hint' }, t('im.peers.emptyHint')))
-      }
+      const current = typeof currentSession === 'string' ? currentSession : ''
+      const empty = peers.length === 0 && pendingPeers.length === 0
       return h('section', { className: 'dt-settings-band' },
         h('h3', null, t('im.peers.title')),
         h('p', { className: 'dt-hint' }, t('im.peers.hint')),
-        h('div', { className: 'dt-im-peers' }, peers.map((peer) => h(ImPeerRow, {
-          key: peer.key,
-          peer,
-          shared: sharedSessions.has(peer.sessionId),
-          chatOptions,
-          disabled: imPeerBusy(busy),
-          onRebind,
-          onUnbind,
-        }))))
+        pendingPeers.length > 0
+          ? h('div', { className: 'dt-im-pending' },
+            h('h4', null, t('im.pending.title')),
+            h('p', { className: 'dt-hint' }, current === '' ? t('im.peers.noCurrentSession') : t('im.pending.hint')),
+            pendingPeers.map((peer) => h('div', { key: peer.key, className: 'dt-im-pending-row', 'data-im-pending': peer.key },
+              h('div', { className: 'dt-im-pending-copy' },
+                h('code', { className: 'dt-im-peer-key' }, peer.alias),
+                h('span', null, `${t(`im.channel.${peer.channel}`)} · ${t(peer.scope === 'group' ? 'im.scope.group' : 'im.scope.private')}${peer.senderName === undefined ? '' : ` · ${peer.senderName}`}`),
+                h('span', { className: 'dt-hint' }, t('im.pending.lastAt', { at: new Date(peer.lastAt).toLocaleString() }))),
+              h(Button, {
+                size: 'sm',
+                variant: 'outline',
+                disabled: imPeerBusy(busy) || current === '',
+                onClick: () => onBindPending(peer, current),
+              }, t('im.pending.bind')))))
+          : null,
+        empty
+          ? h('div', null,
+            h('p', { className: 'dt-muted' }, t('im.peers.empty')),
+            h('p', { className: 'dt-hint' }, t('im.peers.emptyHint')))
+          : h('div', { className: 'dt-im-peers' }, peers.map((peer) => h(ImPeerRow, {
+            key: peer.key,
+            peer,
+            shared: sharedSessions.has(peer.sessionId),
+            currentSession: current,
+            sessionLabel,
+            disabled: imPeerBusy(busy),
+            onRebind,
+            onUnbind,
+          }))))
     }
 
-    function ImPeerRow({ peer, shared, chatOptions, disabled, onRebind, onUnbind }) {
+    function ImPeerRow({ peer, shared, currentSession, sessionLabel, disabled, onRebind, onUnbind }) {
       const t = useTranslate()
-      const [choice, setChoice] = useState('')
-      const options = imWithChatOption(chatOptions, { character: peer.character, chatId: peer.chatId })
-      const target = imChatRefFromKey(choice)
+      const same = currentSession !== '' && peer.sessionId === currentSession
       return h('div', { className: 'dt-im-peer', 'data-im-peer': peer.key },
         h('div', { className: 'dt-im-peer-head' },
           h('code', { className: 'dt-im-peer-key' }, peer.key),
           h(Pill, null, t(peer.scope === 'group' ? 'im.scope.group' : 'im.scope.private')),
           shared ? h(Pill, { active: true }, t('im.peers.shared')) : null),
         h('p', { className: 'dt-im-peer-chat' },
-          t('im.peers.chat', { character: peer.character, chat: peer.chatId }),
+          t('im.peers.session', { session: sessionLabel(peer.sessionId) }),
           shared ? ` · ${t('im.peers.sharedHint')}` : ''),
+        peer.live === false ? h('p', { className: 'dt-hint dt-im-peer-closed' }, t('im.peers.closed')) : null,
         h('p', { className: 'dt-hint' }, t('im.peers.boundAt', { at: new Date(peer.createdAt).toLocaleString() })),
         h('div', { className: 'dt-im-peer-actions' },
-          h('select', {
-            value: choice,
-            'aria-label': t('im.peers.rebind'),
-            onChange: (event) => setChoice(event.target.value),
-          },
-          h('option', { value: '' }, t('im.peers.select')),
-          options.map((option) => h('option', { key: option.key, value: option.key }, option.label))),
           h(Button, {
             size: 'sm',
             variant: 'outline',
-            disabled: disabled || target === null,
-            onClick: () => { if (target !== null) onRebind(peer, target) },
-          }, t('im.peers.rebind')),
+            disabled: disabled || same || currentSession === '',
+            onClick: () => onRebind(peer, currentSession),
+          }, t('im.peers.rebindCurrent')),
           h(Button, { size: 'sm', variant: 'ghost', disabled, onClick: () => onUnbind(peer) }, t('im.peers.unbind'))))
     }
 
-    /** 自动绑定与访问控制：模式三选一 + 来源/共享聊天 + 群 @ 开关 + 两份白名单。 */
-    function ImSettingsBand({ settings, chatOptions, allowDraft, busy, onPatch, onAllowDraft, onAllowCommit }) {
+    /** 访问控制：群 @ 开关 + 两份白名单。绑定改为手动绑原生会话，不再有自动模式。 */
+    function ImSettingsBand({ settings, allowDraft, busy, onPatch, onAllowDraft, onAllowCommit }) {
       const t = useTranslate()
       if (settings === null) {
         return h('section', { className: 'dt-settings-band' },
           h('h3', null, t('im.settings.title')),
           h('p', { className: 'dt-muted' }, t('nav.loading')))
       }
-      const sourceKey = settings.sourceChat === undefined ? '' : imChatKey(settings.sourceChat.character, settings.sourceChat.chatId)
-      const sharedKey = settings.sharedChat === undefined ? '' : imChatKey(settings.sharedChat.character, settings.sharedChat.chatId)
-      const sourceOptions = imWithChatOption(chatOptions, settings.sourceChat ?? null)
-      const sharedOptions = imWithChatOption(chatOptions, settings.sharedChat ?? null)
-      const missing = (settings.bindingMode === 'independent' && settings.sourceChat === undefined)
-        || (settings.bindingMode === 'shared' && settings.sharedChat === undefined)
       const allowText = (scope) => {
         const draft = allowDraft[scope]
         if (draft !== null) return draft
@@ -734,35 +748,6 @@
         h('h3', null, t('im.settings.title')),
         h('p', { className: 'dt-hint' }, t('im.settings.hint')),
         h('div', { className: 'dt-im-settings' },
-          h('label', { className: 'dt-field' },
-            h('span', { className: 'dt-label' }, t('im.settings.bindingMode')),
-            h('select', {
-              value: settings.bindingMode,
-              disabled: busy === 'settings',
-              onChange: (event) => onPatch({ bindingMode: event.target.value }),
-            }, IM_BINDING_MODES.map((mode) => h('option', { key: mode, value: mode }, t(`im.settings.mode.${mode}`))))),
-          h('p', { className: 'dt-hint' }, t(`im.settings.mode.${settings.bindingMode}Hint`)),
-          h('label', { className: 'dt-field' },
-            h('span', { className: 'dt-label' }, t('im.settings.sourceChat')),
-            h('select', {
-              value: sourceKey,
-              disabled: busy === 'settings',
-              onChange: (event) => onPatch({ sourceChat: imChatRefFromKey(event.target.value) }),
-            },
-            h('option', { value: '' }, t('im.settings.sourceChatNone')),
-            sourceOptions.map((option) => h('option', { key: option.key, value: option.key }, option.label)))),
-          h('p', { className: 'dt-hint' }, t('im.settings.sourceChatHint')),
-          h('label', { className: 'dt-field' },
-            h('span', { className: 'dt-label' }, t('im.settings.sharedChat')),
-            h('select', {
-              value: sharedKey,
-              disabled: busy === 'settings',
-              onChange: (event) => onPatch({ sharedChat: imChatRefFromKey(event.target.value) }),
-            },
-            h('option', { value: '' }, t('im.settings.sharedChatNone')),
-            sharedOptions.map((option) => h('option', { key: option.key, value: option.key }, option.label)))),
-          h('p', { className: 'dt-hint' }, t('im.settings.sharedChatHint')),
-          missing ? h('p', { className: 'dt-error' }, t('im.settings.incomplete')) : null,
           h('label', { className: 'dt-toggle' },
             h('input', {
               type: 'checkbox',

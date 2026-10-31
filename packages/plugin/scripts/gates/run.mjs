@@ -2433,6 +2433,16 @@ function checkImChannelInvariants(sample) {
   if (/pnpm add/.test(panel)) {
     problems.push('the IM panel must not print a shell install command; it must offer the install button')
   }
+  if (!panel.includes('sessionId')) {
+    problems.push('the IM panel must bind a sender to a native sessionId; character/chatId bindings are the old AgentTavern provisioning path')
+  }
+  // 决策 2026-10-31-im-native-session-binding：IM 只绑已存在的原生会话，入站消息经
+  // followup 插进该会话，回复由模型调用 im_send。代建/恢复 AgentTavern 会话的代码
+  // 不许回到 im/ 目录（否则又会变成「插件另开一个会话」）。
+  const imSources = sample.sources.map(([, text]) => stripCodeComments(text)).join('\n')
+  if (/\b(?:ensureImSession|bindImChat|ensureImAgent)\b/.test(imSources)) {
+    problems.push('im/ must not provision or resume AgentTavern sessions; bind an existing native session and insert with agent.followup')
+  }
   // 只认代码行：esbuild 会给每个入口留 `// path/to/file.ts` 注释，注释不算路由。
   const bundleCode = sample.bundle
     .split('\n')
@@ -3558,7 +3568,7 @@ const gates = [
         pkg: { name: PLUGIN_NAME },
         manifest: { fragments: ['96-panels-presets.js', '97-ui-im.js', '97b-ui-im-logs.js', '98-apply.js'] },
         bundle: 'var webhookRoute = "im/onebot/webhook";\nvar seat = `${API}/im/onebot/ws`;\nvar logs = "im/logs";\nvar install = "im/qq/install";',
-        panel: "api('im/logs'); api('im/qq/install', { method: 'POST' })",
+        panel: "api('im/logs'); api('im/qq/install', { method: 'POST' }); api('im/peers', { body: JSON.stringify({ sessionId }) })",
       }
       // 负样本一：源码里塞一句真的静态 import（注释里的示例必须仍然放行）。
       const badSource = {
@@ -3592,9 +3602,19 @@ const gates = [
       const badPanelCommand = { ...good, panel: "api('im/logs'); api('im/qq/install'); 'cd x && pnpm add @tencent-connect/qqbot-nodejs'" }
       // 负样本八：面板没有日志入口——「发了没反应」会再次无迹可查。
       const badPanelNoLogs = { ...good, panel: "api('im/qq/install')" }
-      const rejected = [badSource, badExternal, badShim, badDependencies, badBundle, badBundleNoConsole, badManifest, badPanelCommand, badPanelNoLogs]
+      // 负样本九：IM 目录又出现代建/恢复 AgentTavern 会话（回到错误设计）。
+      const badProvision = {
+        ...good,
+        sources: [
+          ...good.sources,
+          ['packages/plugin/src/im/session-host.ts', 'export async function ensureImSession() { return bindImChat() }'],
+        ],
+      }
+      // 负样本十：面板又按角色/聊天绑定，而不是原生 sessionId。
+      const badPanelNoSession = { ...good, panel: "api('im/logs'); api('im/qq/install'); api('im/peers', { body: JSON.stringify({ character, chatId }) })" }
+      const rejected = [badSource, badExternal, badShim, badDependencies, badBundle, badBundleNoConsole, badManifest, badPanelCommand, badPanelNoLogs, badProvision, badPanelNoSession]
         .filter((sample) => checkImChannelInvariants(sample).length > 0).length
-      return checkImChannelInvariants(good).length === 0 && rejected === 9
+      return checkImChannelInvariants(good).length === 0 && rejected === 11
         ? []
         : ['im channel packaging bad samples were not rejected']
     },

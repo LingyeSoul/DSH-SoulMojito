@@ -1,260 +1,89 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { TavernStore } from '../../tavern-store/src/index.js'
+import { describe, expect, it } from 'vitest'
+import type { HostAgentLike } from '../src/host-contract.js'
 import {
-  ImSessionError,
-  bindImChat,
-  ensureImSession,
+  ImSessionNotLiveError,
+  buildImFollowupMessage,
   inspectImSessionCapabilities,
-  resolveBindSessionId,
-  type ImSessionDeps,
+  listLiveAgents,
+  liveAgentOf,
+  requireLiveAgent,
 } from '../src/im/session-host.js'
 
-let root: string
-let db: TavernStore
+const followup = async (): Promise<void> => {}
 
-beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), 'im-session-'))
-  db = await TavernStore.open(root)
-})
-
-afterEach(async () => {
-  await rm(root, { recursive: true, force: true })
-})
-
-interface Harness {
-  deps: ImSessionDeps
-  created: Array<Record<string, unknown>>
-  resumed: Array<Record<string, unknown>>
-  binds: Array<{ sessionId: string; character: string; chatId: string }>
-  live: Map<string, unknown>
-}
-
-function harness(options: { withResume?: boolean; withPresets?: boolean } = {}): Harness {
-  const created: Harness['created'] = []
-  const resumed: Harness['resumed'] = []
-  const binds: Harness['binds'] = []
-  const live = new Map<string, unknown>()
-  const agents: NonNullable<ImSessionDeps['agents']> = {
-    get: (sessionId) => live.get(sessionId),
-    create: async (args) => {
-      created.push(args)
-      const agent = { id: args['sessionId'], followup: async () => {} }
-      live.set(String(args['sessionId']), agent)
-      return { agent }
-    },
-  }
-  if (options.withResume !== false) {
-    agents.resume = async (args) => {
-      resumed.push(args)
-      throw new Error(`no persisted session ${String(args['resumeSessionId'])}`)
-    }
-  }
-  const deps: ImSessionDeps = {
-    db,
-    agents,
-    presets: options.withPresets === false ? undefined : { mount: async () => ({}) },
-    presetId: 'agent-tavern',
-    ensurePreset: async () => {},
-    workspace: async () => root,
-    agentOptions: () => ({ provider: 'test-provider', model: 'test-model' }),
-    bind: async (sessionId, character, chatId) => {
-      binds.push({ sessionId, character, chatId })
-    },
-    presetChanged: async () => {},
-  }
-  return { deps, created, resumed, binds, live }
-}
-
-async function seedCharacterAndChat(character: string): Promise<string> {
-  await db.importCharacter({
-    spec: 'chara_card_v2',
-    spec_version: '2.0',
-    data: {
-      name: character,
-      description: '',
-      personality: '',
-      scenario: '',
-      first_mes: '你好。',
-      mes_example: '',
-      creator_notes: '',
-      system_prompt: '',
-      post_history_instructions: '',
-      alternate_greetings: [],
-      tags: [],
-      creator: '',
-      character_version: '',
-      extensions: {},
-    },
-  })
-  return db.createChat(character, { user_name: 'unused', character_name: 'unused', chat_metadata: {} }, [])
+function agent(id: string): HostAgentLike {
+  return { id, session: { id }, followup }
 }
 
 describe('inspectImSessionCapabilities', () => {
-  it('requires an agents service and a mountable preset', () => {
-    expect(inspectImSessionCapabilities(undefined, undefined).available).toBe(false)
-    expect(inspectImSessionCapabilities({ get: () => undefined }, { mount: async () => ({}) }).reasons)
-      .toContain('the host agents service exposes neither create nor resume')
-    expect(inspectImSessionCapabilities({ create: async () => ({ agent: {} }) }, {}).available).toBe(false)
-    expect(inspectImSessionCapabilities({ create: async () => ({ agent: {} }) }, { mount: async () => ({}) }).available).toBe(true)
+  it('requires the host agents service and its get(id)', () => {
+    expect(inspectImSessionCapabilities(undefined)).toEqual({
+      available: false,
+      reasons: ['the host exposes no agents service; IM cannot insert messages into a session'],
+    })
+    expect(inspectImSessionCapabilities({}).reasons)
+      .toEqual(['the host agents service exposes no get(id); IM cannot find the bound session agent'])
+    expect(inspectImSessionCapabilities({ get: () => undefined })).toEqual({ available: true, reasons: [] })
   })
 })
 
-describe('resolveBindSessionId', () => {
-  const bindings = {
-    'session-old': { architecture: 'agent-tavern', character: 'Example', chatId: 'old.jsonl' },
-    'session-web': { architecture: 'agent-tavern', character: 'Example', chatId: 'new.jsonl' },
-    'session-st': { architecture: 'st', character: 'Example', chatId: 'new.jsonl' },
-  }
-  const none: ReadonlySet<string> = new Set()
-
-  it('reuses the peer session while it still belongs to the requested chat', () => {
-    expect(resolveBindSessionId(bindings, 'session-old', 'Example', 'old.jsonl', none)).toBe('session-old')
-  })
-
-  it('never reuses a session that belongs to another chat', () => {
-    // 改绑到新聊天：旧会话不能被改写，目标聊天自己的会话优先。
-    expect(resolveBindSessionId(bindings, 'session-old', 'Example', 'new.jsonl', none)).toBe('session-web')
-  })
-
-  it('skips archived sessions even when the binding still names the chat', () => {
-    // 实机形状：旧会话的 sessionBindings 已被错误的改绑改写成新聊天，且随后被归档。
-    const polluted = { ...bindings, 'session-old': { architecture: 'agent-tavern', character: 'Example', chatId: 'new.jsonl' } }
-    expect(resolveBindSessionId(polluted, 'session-old', 'Example', 'new.jsonl', new Set(['session-old']))).toBe('session-web')
-    expect(resolveBindSessionId(polluted, 'session-old', 'Example', 'new.jsonl', new Set(['session-old', 'session-web']))).toBeUndefined()
-  })
-
-  it('ignores sessions that do not host AgentTavern', () => {
-    expect(resolveBindSessionId(bindings, undefined, 'Example', 'new.jsonl', new Set(['session-web']))).toBeUndefined()
+describe('liveAgentOf', () => {
+  it('returns the live agent and degrades a throwing get to "not open"', () => {
+    const live = agent('session-a')
+    expect(liveAgentOf({ get: (id) => (id === 'session-a' ? live : undefined) }, 'session-a')).toBe(live)
+    expect(liveAgentOf({ get: () => undefined }, 'session-a')).toBeUndefined()
+    expect(liveAgentOf({ get: () => { throw new Error('fiber inactive') } }, 'session-a')).toBeUndefined()
+    expect(liveAgentOf(undefined, 'session-a')).toBeUndefined()
   })
 })
 
-describe('bindImChat', () => {
-  it('creates a session for an existing chat and binds it to AgentTavern', async () => {
-    const chatId = await seedCharacterAndChat('Example')
-    const h = harness()
-    const result = await bindImChat(h.deps, { character: 'Example', chatId }, undefined)
-    expect(result.sessionId).toMatch(/^session-/)
-    expect(h.created).toHaveLength(1)
-    expect(h.created[0]?.['agentOptions']).toEqual({ provider: 'test-provider', model: 'test-model' })
-    expect(h.created[0]?.['meta']).toMatchObject({ agentPreset: 'agent-tavern', cwd: root })
-    expect(h.binds).toEqual([{ sessionId: result.sessionId, character: 'Example', chatId }])
-  })
-
-  it('resumes with the default model selection so the prompt can resolve {{model}}', async () => {
-    const chatId = await seedCharacterAndChat('Example')
-    const h = harness()
-    await bindImChat(h.deps, { character: 'Example', chatId }, 'session-resumed')
-    // 宿主 resume 失败时降级 create；两条路径都必须带上模型选择。
-    expect(h.resumed[0]?.['agentOptions']).toEqual({ provider: 'test-provider', model: 'test-model' })
-    expect(h.created[0]?.['agentOptions']).toEqual({ provider: 'test-provider', model: 'test-model' })
-  })
-
-  it('reuses the given session id and never creates a second one', async () => {
-    const chatId = await seedCharacterAndChat('Example')
-    const h = harness()
-    h.live.set('session-existing', { id: 'session-existing' })
-    const result = await bindImChat(h.deps, { character: 'Example', chatId }, 'session-existing')
-    expect(result.sessionId).toBe('session-existing')
-    expect(h.created).toHaveLength(0)
-  })
-
-  it('refuses a chat that no longer exists', async () => {
-    const h = harness()
-    await expect(bindImChat(h.deps, { character: 'Missing', chatId: 'gone.jsonl' }, undefined))
-      .rejects.toBeInstanceOf(ImSessionError)
-  })
-
-  it('fails closed when the host cannot mount a preset', async () => {
-    const chatId = await seedCharacterAndChat('Example')
-    const h = harness({ withPresets: false })
-    await expect(bindImChat(h.deps, { character: 'Example', chatId }, undefined))
-      .rejects.toThrow(/IM sessions are unavailable/)
-  })
-})
-
-describe('ensureImSession', () => {
-  it('independent mode creates a fresh chat from the source character', async () => {
-    const sourceChatId = await seedCharacterAndChat('Example')
-    const h = harness()
-    const result = await ensureImSession(h.deps, {
-      mode: 'independent',
-      peerKey: 'qq:acct:private:peer-a',
-      sourceChat: { character: 'Example', chatId: sourceChatId },
-    })
-    expect(result.chatId).not.toBe(sourceChatId)
-    const snapshot = await db.getChatSnapshot('Example', result.chatId)
-    expect(snapshot?.chat.messages[0]?.mes).toBe('你好。')
-    expect(h.created).toHaveLength(1)
-  })
-
-  it('shared mode binds the very same chat and session', async () => {
-    const chatId = await seedCharacterAndChat('Example')
-    const h = harness()
-    const first = await ensureImSession(h.deps, {
-      mode: 'shared',
-      peerKey: 'qq:acct:private:peer-a',
-      sharedChat: { character: 'Example', chatId },
-    })
-    h.live.set(first.sessionId, { id: first.sessionId })
-    const second = await ensureImSession(h.deps, {
-      mode: 'shared',
-      peerKey: 'qq:acct:group:g1',
-      sharedChat: { character: 'Example', chatId },
-      existingSessionId: first.sessionId,
-    })
-    expect(second.sessionId).toBe(first.sessionId)
-    expect(second.chatId).toBe(chatId)
-    expect(h.created).toHaveLength(1)
-  })
-
-  it('imports history only after the binding is written', async () => {
-    const sourceChatId = await seedCharacterAndChat('Example')
-    const events: Array<{ type: string; data: unknown }> = []
-    let binds = 0
-    let bindingCountAtFirstAppend = -1
-    const agent = {
-      id: 'session-import-order',
-      phase: { kind: 'idle', lastTurn: 0 },
-      session: {
-        events,
-        append: (type: string, data: unknown) => {
-          if (bindingCountAtFirstAppend < 0) bindingCountAtFirstAppend = binds
-          events.push({ type, data })
-        },
-      },
-      followup: async () => {},
+describe('requireLiveAgent', () => {
+  it('throws a structured "session not live" error when the session is closed', () => {
+    expect(() => requireLiveAgent({ get: () => undefined }, 'session-a')).toThrow(ImSessionNotLiveError)
+    try {
+      requireLiveAgent({ get: () => undefined }, 'session-a')
+    } catch (error) {
+      expect((error as ImSessionNotLiveError).code).toBe('IM_SESSION_NOT_LIVE')
+      expect((error as Error).message).toContain('session-a')
     }
-    const deps: ImSessionDeps = {
-      db,
-      agents: { get: () => undefined, create: async () => ({ agent }) },
-      presets: { mount: async () => ({}) },
-      presetId: 'agent-tavern',
-      ensurePreset: async () => {},
-      workspace: async () => root,
-      agentOptions: () => ({ provider: 'test-provider', model: 'test-model' }),
-      bind: async () => { binds += 1 },
-      presetChanged: async () => {},
-    }
-    const result = await ensureImSession(deps, {
-      mode: 'independent',
-      peerKey: 'qq:acct:private:peer-a',
-      sourceChat: { character: 'Example', chatId: sourceChatId },
-    })
-    // 绑定先落盘，导入才被投影器认作本会话；顺序反了就会写成无主楼层。
-    expect(bindingCountAtFirstAppend).toBe(1)
-    expect(events.some((event) => event.type === 'turn/start')).toBe(true)
-    expect(result.chatId).not.toBe(sourceChatId)
   })
 
-  it('reports a missing source chat instead of inventing one', async () => {
-    const h = harness()
-    await expect(ensureImSession(h.deps, {
-      mode: 'independent',
-      peerKey: 'qq:acct:private:peer-a',
-      sourceChat: { character: 'Missing', chatId: 'gone.jsonl' },
-    })).rejects.toThrow(/no longer exists/)
+  it('refuses an agent that cannot accept followup messages', () => {
+    const broken: HostAgentLike = { id: 'session-a', session: { id: 'session-a' } }
+    expect(() => requireLiveAgent({ get: () => broken }, 'session-a')).toThrow(/exposes no followup/)
+  })
+
+  it('returns the agent when it can accept messages', () => {
+    const live = agent('session-a')
+    expect(requireLiveAgent({ get: () => live }, 'session-a')).toBe(live)
+  })
+})
+
+describe('listLiveAgents', () => {
+  it('degrades a missing or throwing list to an empty array', () => {
+    expect(listLiveAgents(undefined)).toEqual([])
+    expect(listLiveAgents({})).toEqual([])
+    expect(listLiveAgents({ list: () => { throw new Error('not ready') } })).toEqual([])
+    const rows = [agent('session-a'), agent('session-b')]
+    expect(listLiveAgents({ list: () => rows })).toEqual(rows)
+  })
+})
+
+describe('buildImFollowupMessage', () => {
+  const message = { id: 'im-1', text: '[IM qq/私聊]\n在吗', summary: 'IM qq/private message from peer-x' }
+
+  it('builds a plugin-source relay message for a v4 session', () => {
+    const built = buildImFollowupMessage({ header: { version: 4 } }, message)
+    expect(built).toMatchObject({
+      id: 'im-1',
+      role: 'user',
+      content: [{ type: 'text', text: message.text }],
+      source: { kind: 'plugin:dsh-soulmojito', form: 'relay', summary: message.summary },
+    })
+  })
+
+  it('falls back to the v0 source shape for old sessions', () => {
+    const built = buildImFollowupMessage({}, message)
+    expect(built['source']).toEqual({ kind: 'plugin', plugin: 'dsh-soulmojito', form: 'relay', summary: message.summary })
   })
 })

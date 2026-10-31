@@ -42,7 +42,7 @@
       // 通道的账号、扫码绑定、peer 绑定表与自动绑定设置。system 组——它决定
       // 消息从哪进来，属于系统级配置而非资产。纸飞机图标与「发消息」语义最贴近，
       // 且不与既有分区图标复用。
-      { id: 'im', group: 'system', icon: IconSendOutline16, label: (t) => t('panel.section.im'), component: () => h(PanelIm) },
+      { id: 'im', group: 'system', icon: IconSendOutline16, label: (t) => t('panel.section.im'), component: (host) => h(PanelIm, { useSessions: host.useSessions }) },
       { id: 'scripts', group: 'content', icon: IconBookOutline16, label: (t) => t('panel.section.scripts'), component: () => h(PanelScripts) },
       { id: 'regex', group: 'system', icon: IconSearchOutline16, label: (t) => t('panel.section.regex'), component: (host) => h(RegexBand, { useSessions: host.useSessions }) },
       { id: 'variables', group: 'session', icon: IconDataOutline16, label: (t) => t('panel.section.variables'), component: (host) => h(PanelVariables, { useSessions: host.useSessions }) },

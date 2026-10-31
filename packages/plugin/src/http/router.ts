@@ -819,6 +819,10 @@ export async function handleApi(ctx: PluginContext, req: HttpRequest, res: HttpR
       modelSelections: Object.fromEntries(
         Object.entries(current.modelSelections ?? {}).filter(([sessionId]) => live.has(sessionId)),
       ),
+      // IM 绑定指向原生会话：会话被删掉后绑定就是死记录，和 sessionBindings 一起清。
+      imPeers: Object.fromEntries(
+        Object.entries(current.imPeers ?? {}).filter(([, binding]) => live.has(binding.sessionId)),
+      ),
     }))
     return sendJson(res, 200, { ok: true, state })
   }

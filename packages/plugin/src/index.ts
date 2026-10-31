@@ -50,6 +50,8 @@ import {
 import { bindSession } from './session/binding.js'
 import { registerTavernSessionCommand } from './session/command.js'
 import { createImRuntime, imDisabledByEnv, type ImRuntime } from './im/runtime.js'
+import { mountImToolsOnAgent, unmountAllImTools, unmountImToolsForAgent } from './im/agent-mount.js'
+import { listLiveAgents } from './im/session-host.js'
 import { API, handleApi } from './http/router.js'
 import { sendJson } from './http/io.js'
 import { sendApiError } from './http/public-error.js'
@@ -131,9 +133,6 @@ export function apply(ctx: PluginContext, config: { anchorEveryTurns?: unknown, 
   ctx.on?.('session/event', (session, event) => {
     void getAgentTavernProjectorPromise()!.then((projector) => projector.project(session, event))
       .catch((error) => ctx.logger?.warn?.(`AgentTavern projection failed: ${error instanceof Error ? error.message : String(error)}`))
-    // IM 回复抽取（提案 0024 §3.3.1）：只有被 IM peer 绑定的会话才参与，
-    // 未绑定的会话在第一行就返回，不给普通聊天加负担。
-    getImRuntime()?.handleSessionEvent(session, event)
     // turn 作用域变量是单轮 scratch 状态，turn 结束即过期。
     if (event?.type === 'turn/end' && typeof session?.id === 'string') {
       void variables().then((store) => store.clear('turn', session.id)).catch(() => {})
@@ -245,6 +244,44 @@ export function apply(ctx: PluginContext, config: { anchorEveryTurns?: unknown, 
   if (imDisabledByEnv()) {
     ctx.logger?.info?.('dsh-soulmojito im: disabled by DSH_SOULMOJITO_DISABLE_IM')
   } else {
+    // IM 工具挂进**每个原生会话**的 agent 域：绑定会话可能是 standard / novel /
+    // workbench，不能只在 agent-tavern preset 里注册。三个入口（created /
+    // status / 启动时的 live 列表）都试一次，按 agent id 去重。
+    const imToolsDeps = {
+      db: store,
+      runtime: getImRuntime,
+      ...(ctx.logger === undefined ? {} : { logger: ctx.logger }),
+    }
+    const mountImTools = (agent: unknown): void => {
+      try {
+        mountImToolsOnAgent(imToolsDeps, agent as Parameters<typeof mountImToolsOnAgent>[1])
+      } catch (error) {
+        ctx.logger?.warn?.(`dsh-soulmojito im: mounting IM tools failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    ctx.on?.('agent/created', ({ agent }) => { mountImTools(agent) })
+    // 宿主 compose 完成较晚时 agent/created 可能还看不到 tools.register；
+    // status 事件是低成本的重试点（已挂过就是空操作）。
+    ctx.on?.('agent/status' as string, (payload: unknown) => {
+      const agent = (payload as { agent?: unknown } | null | undefined)?.agent
+      if (agent !== undefined) mountImTools(agent)
+    })
+    ctx.on?.('agent/disposed' as string, (payload: unknown) => {
+      const agent = (payload as { agent?: { id?: unknown; session?: { id?: unknown } } } | null | undefined)?.agent
+      const id = typeof agent?.id === 'string' ? agent.id : typeof agent?.session?.id === 'string' ? agent.session.id : undefined
+      if (id !== undefined) unmountImToolsForAgent(id)
+    })
+    void store().then(() => {
+      for (const agent of listLiveAgents(ctx.agents)) mountImTools(agent)
+    }).catch((error: unknown) => {
+      ctx.logger?.warn?.(`dsh-soulmojito im: mounting IM tools on live agents failed: ${error instanceof Error ? error.message : String(error)}`)
+    })
+    try {
+      ctx.effect?.(() => () => { unmountAllImTools() }, 'dsh-soulmojito: im tool mount')
+    } catch {
+      // 晚注册被拒只失去卸载反注册；宿主销毁挂载域时注册自然失效。
+    }
+
     // 实例与它自己的撤销函数都留在本次 apply 的闭包里：重载时旧 fiber 只能摘掉
     // 自己那一次发布、只 dispose 自己的实例，不会误伤新 fiber（审查 P1-1）。
     let ownedRuntime: ImRuntime | undefined

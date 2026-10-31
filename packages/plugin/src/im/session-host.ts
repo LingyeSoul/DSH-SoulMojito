@@ -1,368 +1,103 @@
 /**
- * IM 会话托管（提案 0024 §3.3）。
+ * 原生会话投递（决策 2026-10-31-im-native-session-binding）。
  *
- * 这是本插件第一次**主动创建宿主 Agent**：此前所有会话都由客户端或宿主创建，
- * 插件只做观察（`games/wake.ts` 也只 followup 已有 agent）。因此这里把每个
- * 宿主 seam 都做成显式依赖并在入口探测，缺能力时 fail-closed，绝不静默退回
- * 一个「能聊天但没有 AgentTavern」的假会话。
+ * 绑定目标是一个**宿主已经存在的 native session**：IM 入站消息以插件来源
+ * 消息插进它的 inbox（与 `agent-novel` 驱动器同一种 `agent.followup` 机制），
+ * 模型再用 `im_send` 回复。插件不创建、不 resume、不导入 Tavern 聊天——会话
+ * 由用户在 DSH 里创建并打开，插件只负责找到活着的 agent。
  *
- * 本模块只认 chat/session，不认识任何 IM 协议——协议层调它，它不知道 QQ 存在。
+ * 宿主形状纪律（镜像 `agent-novel/driver.ts`）：不 import 宿主类型；`agents.get`
+ * 可能缺失/抛错/返回 undefined（fiber 未激活或会话未打开），逐条降级。
  */
 
-import { randomUUID } from 'node:crypto'
-import type { ChatLogIR } from '../../../tavern-format/src/index.js'
-import type { TavernStore } from '../../../tavern-store/src/index.js'
-import { readSessionEvents } from '../../../bind/src/index.js'
-import { seedJsrMvuVariables } from '../agent-tavern/mvu-compat.js'
-import { historyImportAppends } from '../agent-tavern/projector.js'
-import { tavernMacroExpand } from '../prompt-context.js'
-import { collectSessionRegexScripts } from '../regex-session.js'
-import { applyAgentTavernHistoryImport, type HistoryImportAgent } from '../session/activate.js'
+import type { HostAgentLike } from '../host-contract.js'
+import { hostPluginMessageSource, type HostSessionLog } from '../../../bind/src/index.js'
+import type { ImAgentMessage } from './router.js'
 
-/** 宿主 `ctx.agents` 的最小面（0.2.x 形状；缺失时 IM 整体不可用）。 */
+/** 宿主 `ctx.agents` 的最小面。 */
 export interface ImAgentsSeam {
-  get?(sessionId: string): unknown
-  resume?(options: Record<string, unknown>): Promise<{ agent: unknown }>
-  create?(options: Record<string, unknown>): Promise<{ agent: unknown }>
-}
-
-/** 宿主 `ctx.agentPresets` 的最小面：AgentTavern 的 preset 必须能挂。 */
-export interface ImPresetsSeam {
-  mount?(agentContext: unknown, presetId: string): Promise<unknown>
+  get?(id: string): HostAgentLike | undefined | null
+  list?(): readonly HostAgentLike[]
 }
 
 export interface ImSessionCapabilities {
-  available: boolean
-  reasons: string[]
+  readonly available: boolean
+  readonly reasons: string[]
 }
 
-export class ImSessionError extends Error {
-  readonly code:
-    | 'IM_SESSION_UNAVAILABLE'
-    | 'IM_CHAT_MISSING'
-    | 'IM_SOURCE_MISSING'
-    | 'IM_PEER_UNBOUND'
-  constructor(code: ImSessionError['code'], message: string) {
-    super(message)
-    this.name = 'ImSessionError'
-    this.code = code
+/** 绑定会话不在线：路由据此回「先打开会话」的提示，不假装插入成功。 */
+export class ImSessionNotLiveError extends Error {
+  readonly code = 'IM_SESSION_NOT_LIVE'
+  readonly sessionId: string
+
+  constructor(sessionId: string) {
+    super(`the bound DSH session '${sessionId}' has no live AgentLoop agent; open it in DSH and send again`)
+    this.name = 'ImSessionNotLiveError'
+    this.sessionId = sessionId
   }
 }
 
-export interface ImChatRefLike {
-  character: string
-  chatId: string
-}
-
-export interface ImSessionDeps {
-  db: TavernStore
-  agents: ImAgentsSeam | undefined
-  presets: ImPresetsSeam | undefined
-  /** AgentTavern preset id（`AGENT_TAVERN_PRESET_ID`）。 */
-  presetId: string
-  /** 声明 preset；已声明时幂等。 */
-  ensurePreset: () => Promise<void>
-  /** Agent 工作目录；复用插件的内部工作区。 */
-  workspace: () => Promise<string>
-  /**
-   * 插件代建 / 恢复 agent 时的模型选择。
-   *
-   * 宿主用 `agent.options.provider/model` 解析提示词变量（`{{model}}`）并做请求
-   * 准入；不带就是空串，整轮在提示词组装阶段就失败（`prompt variable "{{model}}"
-   * has no value`）。宿主自己的会话入口同样从 `agentDefaultModel` 取值传入。
-   */
-  agentOptions: () => { provider: string; model: string }
-  /** 写 sessionBindings（`session/binding.ts` 的 bindSession）。 */
-  bind: (sessionId: string, character: string, chatId: string) => Promise<unknown>
-  /** 写穿 AgentTavern 预设投影（`agent-tavern/preset.ts`）。 */
-  presetChanged: () => Promise<void>
-  logger?: { warn?: (message: string) => void; error?: (message: string) => void }
-}
-
-export interface EnsureImSessionRequest {
-  mode: 'independent' | 'shared'
-  peerKey: string
-  sourceChat?: ImChatRefLike
-  sharedChat?: ImChatRefLike
-  /** 共享模式已有绑定时的会话 id；缺省则铸造。 */
-  existingSessionId?: string
-}
-
-export interface EnsureImSessionResult {
-  sessionId: string
-  character: string
-  chatId: string
-}
-
-/**
- * 能力探测：`create` 与 `resume` 至少有一个，且 preset 能挂。缺任何一项，
- * IM 不注册任何通道——半开的通道比关着的通道更难诊断。
- */
-export function inspectImSessionCapabilities(
-  agents: ImAgentsSeam | undefined,
-  presets: ImPresetsSeam | undefined,
-): ImSessionCapabilities {
+export function inspectImSessionCapabilities(agents: ImAgentsSeam | undefined): ImSessionCapabilities {
   const reasons: string[] = []
   if (agents === undefined) {
-    reasons.push('the host exposes no agents service')
-  } else if (typeof agents.create !== 'function' && typeof agents.resume !== 'function') {
-    reasons.push('the host agents service exposes neither create nor resume')
-  }
-  if (presets === undefined || typeof presets.mount !== 'function') {
-    reasons.push('the host cannot mount an agent preset (agentPresets.mount is missing)')
+    reasons.push('the host exposes no agents service; IM cannot insert messages into a session')
+  } else if (typeof agents.get !== 'function') {
+    reasons.push('the host agents service exposes no get(id); IM cannot find the bound session agent')
   }
   return { available: reasons.length === 0, reasons }
 }
 
-/** 铸造会话 id：带 `session-` 前缀对齐宿主约定，裸 UUID 会被当成子代理会话。 */
-export function mintImSessionId(): string {
-  return `session-${randomUUID()}`
+/**
+ * 取活着的 agent。`get` 抛错（未声明 inject 的服务属性、fiber 未激活）与返回
+ * undefined（会话未打开）都按「不在线」处理，由调用方给出可行动提示。
+ */
+export function liveAgentOf(agents: ImAgentsSeam | undefined, sessionId: string): HostAgentLike | undefined {
+  if (agents?.get === undefined) return undefined
+  try {
+    return agents.get(sessionId) ?? undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** 取活着的 agent；不在线或没有 followup 时抛结构化错误。 */
+export function requireLiveAgent(agents: ImAgentsSeam | undefined, sessionId: string): HostAgentLike {
+  const agent = liveAgentOf(agents, sessionId)
+  if (agent === undefined) throw new ImSessionNotLiveError(sessionId)
+  if (typeof agent.followup !== 'function') {
+    const error = new Error(`the host agent for session '${sessionId}' exposes no followup(); IM cannot insert a message`)
+    ;(error as Error & { code?: string }).code = 'IM_SESSION_NO_FOLLOWUP'
+    throw error
+  }
+  return agent
+}
+
+/** `agents.list()` 的容错读取：旧宿主没有 list 时返回空数组。 */
+export function listLiveAgents(agents: ImAgentsSeam | undefined): readonly HostAgentLike[] {
+  if (agents?.list === undefined) return []
+  try {
+    return agents.list() ?? []
+  } catch {
+    return []
+  }
 }
 
 /**
- * 保证该 peer 有一个可投递的 AgentTavern 会话。
+ * 入站消息 → 宿主 `followup` 的插件来源消息（与小说驱动器同形状）。
  *
- * 顺序固定：先建/取聊天 → 再拿 live agent → resume/create → 落 binding → 写穿
- * 预设投影。binding 必须在首轮之前落盘：工具面、锚定与投影器都按 binding 反查。
+ * - `role: 'user'` + `source.form = 'relay'`：模型把它当一轮输入，宿主 / UI 能
+ *   区分「IM 转发」与本地用户输入；v4 持久化格式还要求 producer-owned source
+ *   kind，`hostPluginMessageSource` 按 session header 版本给对形状。
+ * - `summary` 只带渠道/范围/alias，不含正文与平台身份。
  */
-export async function ensureImSession(
-  deps: ImSessionDeps,
-  request: EnsureImSessionRequest,
-): Promise<EnsureImSessionResult> {
-  const capability = inspectImSessionCapabilities(deps.agents, deps.presets)
-  if (!capability.available) {
-    throw new ImSessionError('IM_SESSION_UNAVAILABLE', `IM sessions are unavailable: ${capability.reasons.join('; ')}`)
+export function buildImFollowupMessage(
+  session: HostSessionLog | null | undefined,
+  message: ImAgentMessage,
+): Record<string, unknown> {
+  return {
+    id: message.id,
+    role: 'user',
+    content: [{ type: 'text', text: message.text }],
+    source: hostPluginMessageSource(session, { form: 'relay', summary: message.summary }),
   }
-  const chat = request.mode === 'shared' ? request.sharedChat : request.sourceChat
-  if (chat === undefined) {
-    throw new ImSessionError('IM_SOURCE_MISSING', request.mode === 'shared'
-      ? 'shared mode requires the configured shared chat'
-      : 'independent mode requires the configured source chat')
-  }
-  if (request.mode === 'shared') {
-    if (request.existingSessionId !== undefined) {
-      // 共享模式复用既有会话是常态；但 independent 模式复用既有会话会把新聊天
-      // 的历史导进旧会话（重复开场白），这一组合直接拒绝而不是猜意图。
-      return bindImChat(deps, chat, request.existingSessionId)
-    }
-    return bindImChat(deps, chat, undefined)
-  }
-  if (request.existingSessionId !== undefined) {
-    throw new ImSessionError('IM_SESSION_UNAVAILABLE', 'independent mode always mints a new session; existingSessionId is only valid for shared mode')
-  }
-  const chatId = await createChatFromSource(deps, chat)
-  // 开场白导入要用刚建好的聊天（greeting 是它的唯一一条消息）。读不到就是
-  // store 不一致——在落绑定之前如实报错，不留一个「绑了但没历史」的会话。
-  const createdChat = await deps.db.getChat(chat.character, chatId)
-  if (createdChat === undefined) {
-    throw new ImSessionError('IM_CHAT_MISSING', `IM chat ${chat.character}/${chatId} vanished right after creation; the opening greeting cannot be imported`)
-  }
-  const sessionId = mintImSessionId()
-  const agent = await ensureImAgent(deps, sessionId)
-  await deps.bind(sessionId, chat.character, chatId)
-  // 历史导入（提案 0024 §3.3）：binding 必须先落盘，导入的事件才被投影器认作
-  // 本会话；宿主不支持时只打 warn——绑定已成立，历史仍留在 JSONL 可重放。
-  await importChatHistory(deps, agent, createdChat, chat.character, chatId, sessionId)
-  await deps.presetChanged()
-  return { sessionId, character: chat.character, chatId }
-}
-
-/**
- * 手动绑定 / 共享模式的入口：聊天必须已经存在，只负责补会话、绑定与历史导入。
- * 已有会话 id 时沿用它（共享模式多个 peer 同一个会话）。
- *
- * 历史导入是必须的：手动绑定的通常是**已经聊过很久**的聊天，不导入就等于让模型
- * 在一段它看不见的对话后面接着说话（审查 P1-1）。
- */
-export async function bindImChat(
-  deps: ImSessionDeps,
-  chat: ImChatRefLike,
-  existingSessionId: string | undefined,
-): Promise<EnsureImSessionResult> {
-  const capability = inspectImSessionCapabilities(deps.agents, deps.presets)
-  if (!capability.available) {
-    throw new ImSessionError('IM_SESSION_UNAVAILABLE', `IM sessions are unavailable: ${capability.reasons.join('; ')}`)
-  }
-  const chatId = await requireExistingChat(deps, chat)
-  const existingChat = await deps.db.getChat(chat.character, chatId)
-  if (existingChat === undefined) {
-    throw new ImSessionError('IM_CHAT_MISSING', `chat ${chat.character}/${chatId} disappeared while binding`)
-  }
-  const sessionId = existingSessionId ?? mintImSessionId()
-  const agent = await ensureImAgent(deps, sessionId)
-  await deps.bind(sessionId, chat.character, chatId)
-  await importChatHistory(deps, agent, existingChat, chat.character, chatId, sessionId)
-  await deps.presetChanged()
-  return { sessionId, character: chat.character, chatId }
-}
-
-/** 共享模式先确认聊天还在：源聊天被删时宁可报错，也不要凭空造一个新的。 */
-async function requireExistingChat(deps: ImSessionDeps, chat: ImChatRefLike): Promise<string> {
-  const snapshot = await deps.db.getChatSnapshot(chat.character, chat.chatId)
-  if (snapshot === undefined) {
-    throw new ImSessionError('IM_CHAT_MISSING', `shared chat ${chat.character}/${chat.chatId} no longer exists`)
-  }
-  return chat.chatId
-}
-
-/**
- * 手动绑定 / 改绑时确定目标会话。
- *
- * 会话与聊天是一对一的：改绑到另一个聊天时绝不能沿用旧聊天的会话，否则绑定
- * 记录写着新聊天、消息却继续投到旧会话（2026-10-31 实机：旧会话随后被归档，
- * 每一轮都被宿主的归档闸拒绝成 `blocked`）。
- *
- * 解析顺序：
- * 1. 本 peer 当前会话仍属于这个角色 + 聊天、且未归档 → 沿用（幂等改绑）；
- * 2. 这个聊天已有未归档的 AgentTavern 会话（网页端开着的那一个）→ 复用它，
- *    不让同一个聊天出现两个会写楼层的会话；
- * 3. 都没有 → undefined，由 `bindImChat` 铸造新会话并导入历史。
- *
- * `archived` 来自宿主 workspaceRegistry；宿主没有该服务时传空集合，退化为
- * 「只看聊天归属」的旧行为。
- */
-export function resolveBindSessionId(
-  bindings: Record<string, { architecture?: unknown; character?: unknown; chatId?: unknown }>,
-  existingSessionId: string | undefined,
-  character: string,
-  chatId: string,
-  archived: ReadonlySet<string>,
-): string | undefined {
-  const belongsToChat = (sessionId: string): boolean => {
-    const binding = bindings[sessionId]
-    return binding !== undefined && binding.character === character && binding.chatId === chatId
-  }
-  if (existingSessionId !== undefined && !archived.has(existingSessionId) && belongsToChat(existingSessionId)) {
-    return existingSessionId
-  }
-  for (const [sessionId, binding] of Object.entries(bindings)) {
-    if (binding.architecture !== 'agent-tavern') continue
-    if (archived.has(sessionId) || !belongsToChat(sessionId)) continue
-    return sessionId
-  }
-  return undefined
-}
-
-/**
- * 独立模式：按来源聊天的角色新建一个空聊天。
- *
- * v1 只带角色与开场白（首个 greeting），不复制来源聊天的历史、变量与正则覆盖
- * 层——IM 新会话应当是干净的。MVU 卡的初始变量仍按既有约定播种，否则第一轮
- * 结算就没有 stat_data 可写。
- */
-async function createChatFromSource(deps: ImSessionDeps, source: ImChatRefLike): Promise<string> {
-  const found = await deps.db.getCharacter(source.character)
-  if (found === undefined) {
-    throw new ImSessionError('IM_SOURCE_MISSING', `source character ${source.character} no longer exists`)
-  }
-  const now = new Date().toISOString()
-  const card = found.card
-  const seedVariables: Record<string, unknown> | undefined = (() => {
-    const holder = card.data.extensions?.['agentTavern']
-    if (typeof holder !== 'object' || holder === null) return undefined
-    const initial = (holder as Record<string, unknown>)['initialVariables']
-    if (typeof initial !== 'object' || initial === null || Array.isArray(initial)) return undefined
-    const entries = Object.entries(initial as Record<string, unknown>)
-    return entries.length === 0 ? undefined : Object.fromEntries(entries)
-  })()
-  const variablesSeed: Record<string, unknown> = seedVariables ?? {}
-  const mvuSeeded = seedJsrMvuVariables(card, { ...variablesSeed })
-  const greetings = [card.data.firstMes, ...card.data.alternateGreetings]
-  const chatId = await deps.db.createChat(source.character, {
-    user_name: 'unused',
-    character_name: 'unused',
-    chat_metadata: {
-      character: source.character,
-      createdAt: now,
-      timedWorldInfo: {},
-      ...(seedVariables !== undefined || mvuSeeded ? { variables: variablesSeed } : {}),
-    },
-  }, [{
-    name: card.data.nickname || card.data.name,
-    is_user: false,
-    is_system: false,
-    send_date: now,
-    mes: greetings[0] ?? '',
-  }])
-  return chatId
-}
-
-/**
- * 历史/开场白导入（提案 0024 §3.3）：IM 与命令激活走同一段 `activate.ts`。
- *
- * 三种调用方共用它：independent 新建聊天（只有 greeting）、手动绑定已有聊天
- * （可能是几十楼的历史）、shared 复用聊天。**必须在 `deps.bind(...)` 之后调用**
- * ——投影器按 binding 认领楼层，绑定之前的导入会被当成别的会话。
- *
- * 会话已经有 turn（共享模式复用了网页端跑过的会话）时跳过：重复导入会把整段
- * 历史再写一遍。读不到日志时不跳过，交给 activate.ts 的降级路径处理。
- */
-async function importChatHistory(
-  deps: ImSessionDeps,
-  agent: unknown,
-  chat: ChatLogIR,
-  character: string,
-  chatId: string,
-  sessionId: string,
-): Promise<void> {
-  const live = (agent ?? {}) as HistoryImportAgent
-  const events = readSessionEvents(live.session as Parameters<typeof readSessionEvents>[0]) as readonly { type?: unknown }[] | undefined
-  if (events !== undefined && events.some((event) => event.type === 'turn/start')) return
-  const state = await deps.db.getState()
-  const found = await deps.db.getCharacter(character)
-  const scripts = await collectSessionRegexScripts(deps.db, state, character, chatId, found)
-  const plan = historyImportAppends(chat, sessionId, scripts, tavernMacroExpand(state, character, found), live.session)
-  applyAgentTavernHistoryImport({
-    agent: live,
-    plan,
-    ...(deps.logger === undefined ? {} : { logger: deps.logger }),
-  })
-}
-
-/**
- * 拿 live agent：先复用 → 再 resume → 最后 create。
- *
- * resume 对「从未存在过的会话」必然失败，这里把失败降级为 create；但会记一条
- * 带错误码的 warning——真正的 resume 故障（会话文件损坏）不能被静默吞掉。
- */
-export async function ensureImAgent(deps: ImSessionDeps, sessionId: string): Promise<unknown> {
-  const live = deps.agents?.get?.(sessionId)
-  if (live !== undefined && live !== null) return live
-  const presets = deps.presets
-  if (presets === undefined || typeof presets.mount !== 'function') {
-    throw new ImSessionError('IM_SESSION_UNAVAILABLE', 'the host cannot mount an agent preset')
-  }
-  await deps.ensurePreset()
-  const workspace = await deps.workspace()
-  const agentOptions = deps.agentOptions()
-  const setup = async (agentContext: unknown): Promise<void> => {
-    await presets.mount?.(agentContext, deps.presetId)
-  }
-  if (typeof deps.agents?.resume === 'function') {
-    try {
-      const resumed = await deps.agents.resume({ resumeSessionId: sessionId, agentOptions, setup })
-      return resumed.agent
-    } catch (error) {
-      deps.logger?.warn?.(`dsh-soulmojito im: resume ${sessionId} failed, creating a new session: ${messageOf(error)}`)
-    }
-  }
-  if (typeof deps.agents?.create !== 'function') {
-    throw new ImSessionError('IM_SESSION_UNAVAILABLE', 'the host agents service exposes neither create nor resume')
-  }
-  const created = await deps.agents.create({
-    sessionId,
-    agentOptions,
-    meta: { cwd: workspace, agentPreset: deps.presetId },
-    setup,
-  })
-  return created.agent
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-/** 仅供路由使用：绑定缺失时的统一错误文案。 */
-export function imUnboundMessage(peerKey: string): string {
-  return `这个会话还没有绑定：${peerKey}。请在 DSH-SoulMojito 面板的「聊天渠道」里绑定一个聊天。`
 }

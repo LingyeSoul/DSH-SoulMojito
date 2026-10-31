@@ -21,8 +21,8 @@ import { imDisabledByEnv, ImChannelUnsupportedError } from '../im/runtime.js'
 import { WeixinApiError } from '../im/weixin/api.js'
 import { WeixinBindError, type WeixinBindErrorCode } from '../im/weixin/bind.js'
 import { WeixinChannelError, type WeixinChannelErrorCode } from '../im/weixin/channel.js'
-import type { ImAccountRef, ImChannelId, ImChannelView, ImPeerBinding, ImScope } from '../im/types.js'
-import { DEFAULT_IM_SETTINGS, imPeerKey, imPeerKeyParts } from '../im/types.js'
+import type { ImAccountRef, ImChannelId, ImChannelView, ImPeerBinding, ImPendingPeer, ImScope } from '../im/types.js'
+import { DEFAULT_IM_SETTINGS, imPeerAlias, imPeerKey, imPeerKeyParts } from '../im/types.js'
 import { HttpError } from './errors.js'
 import { readJson, sendJson, type HttpRequest, type HttpResponse } from './io.js'
 import { INTERNAL_ERROR_MESSAGE, publicErrorMessage } from './public-error.js'
@@ -54,7 +54,13 @@ export async function handleImApi(
         ? ['DSH_SOULMOJITO_DISABLE_IM is set']
         : (runtime?.capabilities.reasons ?? ['IM runtime was not mounted in this host process']),
       settings: state.imSettings ?? DEFAULT_IM_SETTINGS,
-      peers: peerRows(state.imPeers),
+      peers: peerRows(state.imPeers).map((peer) => {
+        const live = runtime?.isSessionLive?.(peer.sessionId)
+        return { ...peer, ...(live === undefined ? {} : { live }) }
+      }),
+      // 未绑定对端：面板「待绑定」表的数据源。对端发过消息但还没绑会话时出现，
+      // 绑定成功后从这张表移除。
+      pendingPeers: pendingPeerRows(state.imPendingPeers),
       // 账号清单是 store 的事实、状态是运行时的投影：只列内存通道会让重启前的
       // 账号在面板上凭空消失，也会让「已配置但未连上」显示成不存在。
       channels: await channelViews(runtime, state.imPeers),
@@ -246,30 +252,30 @@ export async function handleImApi(
   }
 
   if (method === 'POST' && route === 'im/peers') {
-    if (runtime === undefined) throw new HttpError(503, 'IM runtime is not available in this host process')
     const body = await readJson(req)
     const channel = parseChannel(body.channel)
     const scope = parseScope(body.scope)
     const accountId = requireId(body.accountId, 'accountId')
     const peerId = requireId(body.peerId, 'peerId')
-    const character = requireId(body.character, 'character')
-    const chatId = requireId(body.chatId, 'chatId')
+    // 绑定目标是宿主原生会话 id；不创建会话、不改聊天归属。
+    const sessionId = requireId(body.sessionId, 'sessionId')
     const key = imPeerKey(channel, accountId, scope, peerId)
-    const state = await db.getState()
-    const existing = state.imPeers?.[key]
-    const result = await runtime.bindChat({ character, chatId }, existing?.sessionId)
     const binding: ImPeerBinding = {
-      sessionId: result.sessionId,
-      character: result.character,
-      chatId: result.chatId,
+      sessionId,
       scope,
       boundBy: 'manual',
       createdAt: new Date().toISOString(),
     }
-    await db.updateState((current) => ({
-      imPeers: { ...(current.imPeers ?? {}), [key]: binding },
-    }))
-    return sendJson(res, 200, { ok: true, peer: { key, ...binding } })
+    const next = await db.updateState((current) => {
+      const pending = { ...(current.imPendingPeers ?? {}) }
+      // 绑上即从「未绑定对端」待办里移除。
+      delete pending[key]
+      return {
+        imPeers: { ...(current.imPeers ?? {}), [key]: binding },
+        imPendingPeers: pending,
+      }
+    })
+    return sendJson(res, 200, { ok: true, peer: { key, ...binding }, pendingPeers: pendingPeerRows(next.imPendingPeers) })
   }
 
   if (method === 'DELETE' && route === 'im/peers') {
@@ -293,6 +299,45 @@ function peerRows(peers: Record<string, ImPeerBinding> | undefined): Array<{ key
   return Object.entries(peers ?? {})
     .map(([key, binding]) => ({ key, ...binding }))
     .sort((left, right) => left.key.localeCompare(right.key))
+}
+
+/** 未绑定对端投影：面板按 alias 显示，点击时用 channel/accountId/scope/peerId 提交绑定。 */
+function pendingPeerRows(pending: Record<string, ImPendingPeer> | undefined): Array<{
+  key: string
+  alias: string
+  channel: string
+  accountId: string
+  scope: ImScope
+  peerId: string
+  lastAt: string
+  senderName?: string
+}> {
+  const rows: Array<{
+    key: string
+    alias: string
+    channel: string
+    accountId: string
+    scope: ImScope
+    peerId: string
+    lastAt: string
+    senderName?: string
+  }> = []
+  for (const [key, entry] of Object.entries(pending ?? {})) {
+    const parts = imPeerKeyParts(key)
+    if (parts === undefined) continue
+    const scope: ImScope = parts.scope === 'group' ? 'group' : 'private'
+    rows.push({
+      key,
+      alias: imPeerAlias(parts.channel, scope, key),
+      channel: parts.channel,
+      accountId: parts.accountId,
+      scope,
+      peerId: parts.peerId,
+      lastAt: new Date(entry.lastAt).toISOString(),
+      ...(entry.senderName === undefined ? {} : { senderName: entry.senderName }),
+    })
+  }
+  return rows.sort((left, right) => right.lastAt.localeCompare(left.lastAt))
 }
 
 /**

@@ -66,20 +66,6 @@ function parseStringList(value: unknown, label: string): string[] {
   return result
 }
 
-function parseChatRef(value: unknown, label: string): { character: string; chatId: string } | undefined {
-  if (value === null || value === undefined) return undefined
-  const record = asRecord(value, label)
-  const character = record['character']
-  const chatId = record['chatId']
-  if (typeof character !== 'string' || character.trim() === '') {
-    throw new ImSettingsError(`${label}.character must be a non-empty string`)
-  }
-  if (typeof chatId !== 'string' || chatId.trim() === '') {
-    throw new ImSettingsError(`${label}.chatId must be a non-empty string`)
-  }
-  return { character, chatId }
-}
-
 /**
  * 面板 patch → 新设置。未出现的键保持原值；出现但非法的值一律抛错，
  * 不做「猜一个最接近的」——静默纠正会让面板与真实生效值悄悄分叉。
@@ -90,23 +76,6 @@ export function applyImSettingsPatch(current: ImSettings, patch: unknown): ImSet
     ...current,
     privateAllow: [...current.privateAllow],
     groupAllow: [...current.groupAllow],
-  }
-  if (record['bindingMode'] !== undefined) {
-    const value = record['bindingMode']
-    if (value !== 'manual' && value !== 'independent' && value !== 'shared') {
-      throw new ImSettingsError("bindingMode must be one of 'manual' | 'independent' | 'shared'")
-    }
-    next.bindingMode = value
-  }
-  if ('sourceChat' in record) {
-    const parsed = parseChatRef(record['sourceChat'], 'sourceChat')
-    if (parsed === undefined) delete next.sourceChat
-    else next.sourceChat = parsed
-  }
-  if ('sharedChat' in record) {
-    const parsed = parseChatRef(record['sharedChat'], 'sharedChat')
-    if (parsed === undefined) delete next.sharedChat
-    else next.sharedChat = parsed
   }
   if (record['groupRequireMention'] !== undefined) {
     if (typeof record['groupRequireMention'] !== 'boolean') {
@@ -128,14 +97,12 @@ export function applyImSettingsPatch(current: ImSettings, patch: unknown): ImSet
   return next
 }
 
-/** 模式与配置必须自洽：缺来源聊天就无法建独立会话，缺共享聊天就无法复用。 */
-export function assertImSettingsUsable(settings: ImSettings): void {
-  if (settings.bindingMode === 'independent' && settings.sourceChat === undefined) {
-    throw new ImSettingsError('bindingMode independent requires sourceChat (the character template chat)')
-  }
-  if (settings.bindingMode === 'shared' && settings.sharedChat === undefined) {
-    throw new ImSettingsError('bindingMode shared requires sharedChat (the conversation every peer reuses)')
-  }
+/**
+ * 设置自洽校验：绑定改为「手动绑到原生会话」后没有必须成对出现的字段，
+ * 保留入口给调用方统一跑一次（未来新增字段仍走这里）。
+ */
+export function assertImSettingsUsable(_settings: ImSettings): void {
+  // 目前所有字段都是独立可选的：访问控制、群 @ 与切分上限互不依赖。
 }
 
 /** 面板首屏投影：只读副本，避免调用方改到 state 里的同一份对象。 */

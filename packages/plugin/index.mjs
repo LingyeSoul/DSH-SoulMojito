@@ -145,15 +145,6 @@ var init_fs_atomic = __esm({
 function imPeerKey(channel, accountId, scope, peerId) {
   return `${channel}:${accountId}:${scope}:${peerId}`;
 }
-function normalizeChatRef(value) {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
-  const record = value;
-  const character = record["character"];
-  const chatId = record["chatId"];
-  if (typeof character !== "string" || character.trim() === "") return void 0;
-  if (typeof chatId !== "string" || chatId.trim() === "") return void 0;
-  return { character, chatId };
-}
 function normalizeAccessMode(value, fallback) {
   return value === "open" || value === "allowlist" || value === "disabled" ? value : fallback;
 }
@@ -175,12 +166,8 @@ function normalizeImSettings(value) {
     return structuredClone(DEFAULT_IM_SETTINGS);
   }
   const record = value;
-  const bindingMode = record["bindingMode"] === "manual" || record["bindingMode"] === "shared" ? record["bindingMode"] : "independent";
   const chunkLimit = record["chunkLimit"];
   return {
-    bindingMode,
-    ...normalizeChatRef(record["sourceChat"]) === void 0 ? {} : { sourceChat: normalizeChatRef(record["sourceChat"]) },
-    ...normalizeChatRef(record["sharedChat"]) === void 0 ? {} : { sharedChat: normalizeChatRef(record["sharedChat"]) },
     groupRequireMention: record["groupRequireMention"] !== false,
     privateMode: normalizeAccessMode(record["privateMode"], "allowlist"),
     privateAllow: normalizeStringList(record["privateAllow"]),
@@ -196,15 +183,27 @@ function normalizeImPeers(value) {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
     const record = entry;
     const sessionId = record["sessionId"];
-    const character = record["character"];
-    const chatId = record["chatId"];
-    if (typeof sessionId !== "string" || sessionId === "") continue;
-    if (typeof character !== "string" || character === "") continue;
-    if (typeof chatId !== "string" || chatId === "") continue;
+    if (typeof sessionId !== "string" || sessionId.trim() === "") continue;
     const scope = record["scope"] === "group" ? "group" : "private";
     const boundBy = record["boundBy"] === "manual" ? "manual" : "auto";
     const createdAt = typeof record["createdAt"] === "string" ? record["createdAt"] : (/* @__PURE__ */ new Date(0)).toISOString();
-    result[key] = { sessionId, character, chatId, scope, boundBy, createdAt };
+    result[key] = { sessionId, scope, boundBy, createdAt };
+  }
+  return result;
+}
+function normalizeImPendingPeers(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const result = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+    const record = entry;
+    const lastAt = record["lastAt"];
+    if (typeof lastAt !== "number" || !Number.isFinite(lastAt) || lastAt < 0) continue;
+    const senderName = record["senderName"];
+    result[key] = {
+      lastAt,
+      ...typeof senderName === "string" && senderName.trim() !== "" ? { senderName: senderName.trim() } : {}
+    };
   }
   return result;
 }
@@ -213,7 +212,6 @@ var init_im_state = __esm({
   "packages/tavern-store/src/im-state.ts"() {
     "use strict";
     DEFAULT_IM_SETTINGS = {
-      bindingMode: "independent",
       groupRequireMention: true,
       privateMode: "allowlist",
       privateAllow: [],
@@ -2797,7 +2795,8 @@ var init_store = __esm({
       modsEnabled: false,
       mods: { enabled: {} },
       imSettings: structuredClone(DEFAULT_IM_SETTINGS),
-      imPeers: {}
+      imPeers: {},
+      imPendingPeers: {}
     };
     MEMORY_EMBED_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,255}$/;
     TavernStore = class _TavernStore {
@@ -3795,7 +3794,8 @@ var init_store = __esm({
           mods: { enabled: normalizeModEnables(parsed.mods) },
           memoryEmbedding: normalizeMemoryEmbedding(parsed.memoryEmbedding),
           imSettings: normalizeImSettings(parsed.imSettings),
-          imPeers: normalizeImPeers(parsed.imPeers)
+          imPeers: normalizeImPeers(parsed.imPeers),
+          imPendingPeers: normalizeImPendingPeers(parsed.imPendingPeers)
         };
       }
       async assertChatRevision(file, expectedRevision) {
@@ -10184,7 +10184,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("545dc42") : void 0;
+  const commit = true ? normalizeCommit("e51ccdf") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -29658,8 +29658,8 @@ function handleBodySessionEvent(ctx, session, event) {
     if (reasonKind === void 0) return;
     const sessionId = nonEmptyString2(isRecord9(session) ? session["id"] : void 0);
     if (sessionId === void 0) return;
-    const liveAgent2 = resolveLiveAgent(ctx, sessionId);
-    const agentId = liveAgent2 === void 0 ? sessionId : agentIdOf(liveAgent2) ?? sessionId;
+    const liveAgent = resolveLiveAgent(ctx, sessionId);
+    const agentId = liveAgent === void 0 ? sessionId : agentIdOf(liveAgent) ?? sessionId;
     const pending = pendingByAgent.get(agentId) ?? pendingByAgent.get(sessionId);
     const turn = data === void 0 ? void 0 : numberField3(data["turn"]);
     if (TURN_END_FAILURE_REASONS.has(reasonKind)) {
@@ -39312,78 +39312,6 @@ init_deduce();
 // packages/plugin/src/agent-tavern/agent.ts
 init_guides();
 init_handle();
-init_handle2();
-
-// packages/plugin/src/agent-tavern/tools/shared.ts
-var DEFAULT_USER3 = "User";
-function objectOutput(properties, optionalKeys = ["value", "revision", "updatedAt"]) {
-  return { type: "object", properties, required: Object.keys(properties).filter((key) => !optionalKeys.includes(key)), additionalProperties: false };
-}
-function identitySummaryOf(data) {
-  const agentTavern = data.extensions?.agentTavern;
-  const summary = agentTavern?.identitySummary;
-  return typeof summary === "string" && summary.trim() !== "" ? summary : void 0;
-}
-
-// packages/plugin/src/im/types.ts
-init_src();
-import { createHash as createHash11 } from "node:crypto";
-function imDedupeKey(channel, accountId, scope, peerId, messageId) {
-  return `${channel}:${accountId}:${scope}:${peerId}:${messageId}`;
-}
-function imPeerKeyParts(key) {
-  const parts = key.split(":");
-  if (parts.length < 4) return void 0;
-  const [channel, accountId, scope, ...rest] = parts;
-  if (channel === void 0 || accountId === void 0 || scope === void 0) return void 0;
-  return { channel, accountId, scope, peerId: rest.join(":") };
-}
-function imPeerAlias(channel, scope, peerKey) {
-  return `peer-${createHash11("sha256").update(`${channel}:${scope}:${peerKey}`).digest("hex").slice(0, 10)}`;
-}
-
-// packages/plugin/src/im/tools.ts
-var identityOutput = objectOutput({
-  peers: {
-    type: "array",
-    items: {
-      type: "object",
-      properties: {
-        alias: { type: "string" },
-        channel: { type: "string" },
-        scope: { type: "string", enum: ["private", "group"] },
-        character: { type: "string" },
-        chatId: { type: "string" }
-      },
-      required: ["alias", "channel", "scope", "character", "chatId"],
-      additionalProperties: false
-    }
-  }
-});
-var channelsOutput = objectOutput({
-  available: { type: "boolean" },
-  reasons: { type: "array", items: { type: "string" } },
-  channels: {
-    type: "array",
-    items: {
-      type: "object",
-      properties: {
-        channel: { type: "string" },
-        accountId: { type: "string" },
-        state: { type: "string", enum: ["idle", "starting", "online", "paused", "error"] }
-      },
-      required: ["channel", "accountId", "state"],
-      additionalProperties: false
-    }
-  }
-});
-var sendOutput = objectOutput({
-  peer: { type: "string" },
-  parts: { type: "integer" },
-  sentAt: { type: "string" },
-  messageId: { type: "string" },
-  mediaKind: { type: "string", enum: ["image", "voice", "video", "file"] }
-}, ["messageId", "mediaKind"]);
 
 // packages/plugin/src/lazy-projection.ts
 function createLazyProjection(options) {
@@ -40335,6 +40263,42 @@ function assembleResult(allActivated, diagnostics, timedState) {
   };
 }
 
+// packages/plugin/src/agent-tavern/tools/shared.ts
+var DEFAULT_USER3 = "User";
+function tool(name2, description, properties, schema, execute) {
+  return {
+    name: name2,
+    description,
+    parameters: compileParameters(properties),
+    output: { schema, render: (_args, value) => [{ type: "text", text: JSON.stringify(value) }] },
+    execute
+  };
+}
+function compileParameters(properties) {
+  const required = [];
+  const compiled = Object.fromEntries(Object.entries(properties).map(([key, value]) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return [key, value];
+    const property = { ...value };
+    if (property.required === true) required.push(key);
+    delete property.required;
+    return [key, property];
+  }));
+  return {
+    type: "object",
+    properties: compiled,
+    ...required.length > 0 ? { required } : {},
+    additionalProperties: false
+  };
+}
+function objectOutput(properties, optionalKeys = ["value", "revision", "updatedAt"]) {
+  return { type: "object", properties, required: Object.keys(properties).filter((key) => !optionalKeys.includes(key)), additionalProperties: false };
+}
+function identitySummaryOf(data) {
+  const agentTavern = data.extensions?.agentTavern;
+  const summary = agentTavern?.identitySummary;
+  return typeof summary === "string" && summary.trim() !== "" ? summary : void 0;
+}
+
 // packages/plugin/src/agent-tavern/tools/character.ts
 var characterOutput = objectOutput({
   character: { type: "string" },
@@ -40874,9 +40838,9 @@ init_capabilities2();
 
 // packages/plugin/src/agent-novel/requirements.ts
 init_src();
-import { createHash as createHash12 } from "node:crypto";
+import { createHash as createHash11 } from "node:crypto";
 function stableMessageKey(sessionId, messageKey) {
-  return createHash12("sha256").update(`${sessionId}\0${messageKey}`).digest("hex");
+  return createHash11("sha256").update(`${sessionId}\0${messageKey}`).digest("hex");
 }
 function isNovelAuthorMessage(event) {
   return extractAuthorMessage(event) !== null;
@@ -41778,7 +41742,6 @@ function registerTavernSessionCommand(ctx) {
 }
 
 // packages/plugin/src/im/runtime.ts
-init_capabilities();
 init_env_compat();
 
 // packages/plugin/src/http/router.ts
@@ -41790,14 +41753,14 @@ import { join as join26 } from "node:path";
 import { pipeline } from "node:stream/promises";
 
 // packages/tavern-frontend-storage/src/idb-store.ts
-import { createHash as createHash13 } from "node:crypto";
+import { createHash as createHash12 } from "node:crypto";
 import { copyFile, mkdir as mkdir4, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname as dirname13, join as join20 } from "node:path";
 var IDB_MAX_RECORD_BYTES = 1024 * 1024 * 1024;
 var IDB_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
 var databaseLocks = /* @__PURE__ */ new Map();
 function sha256(value) {
-  return createHash13("sha256").update(value).digest("hex");
+  return createHash12("sha256").update(value).digest("hex");
 }
 function databaseDir(root, character, name2) {
   return join20(root, "frontend-idb", sha256(character), sha256(name2));
@@ -46045,6 +46008,23 @@ init_dsh_home();
 // packages/plugin/src/im/onebot/server.ts
 import { randomUUID as randomUUID11, timingSafeEqual } from "node:crypto";
 
+// packages/plugin/src/im/types.ts
+init_src();
+import { createHash as createHash13 } from "node:crypto";
+function imDedupeKey(channel, accountId, scope, peerId, messageId) {
+  return `${channel}:${accountId}:${scope}:${peerId}:${messageId}`;
+}
+function imPeerKeyParts(key) {
+  const parts = key.split(":");
+  if (parts.length < 4) return void 0;
+  const [channel, accountId, scope, ...rest] = parts;
+  if (channel === void 0 || accountId === void 0 || scope === void 0) return void 0;
+  return { channel, accountId, scope, peerId: rest.join(":") };
+}
+function imPeerAlias(channel, scope, peerKey) {
+  return `peer-${createHash13("sha256").update(`${channel}:${scope}:${peerKey}`).digest("hex").slice(0, 10)}`;
+}
+
 // packages/plugin/src/im/onebot/codec.ts
 var OneBotCodecError = class extends Error {
   code;
@@ -47708,19 +47688,6 @@ function parseStringList(value, label) {
   }
   return result;
 }
-function parseChatRef(value, label) {
-  if (value === null || value === void 0) return void 0;
-  const record = asRecord5(value, label);
-  const character = record["character"];
-  const chatId = record["chatId"];
-  if (typeof character !== "string" || character.trim() === "") {
-    throw new ImSettingsError(`${label}.character must be a non-empty string`);
-  }
-  if (typeof chatId !== "string" || chatId.trim() === "") {
-    throw new ImSettingsError(`${label}.chatId must be a non-empty string`);
-  }
-  return { character, chatId };
-}
 function applyImSettingsPatch(current, patch) {
   const record = asRecord5(patch, "im settings patch");
   const next = {
@@ -47728,23 +47695,6 @@ function applyImSettingsPatch(current, patch) {
     privateAllow: [...current.privateAllow],
     groupAllow: [...current.groupAllow]
   };
-  if (record["bindingMode"] !== void 0) {
-    const value = record["bindingMode"];
-    if (value !== "manual" && value !== "independent" && value !== "shared") {
-      throw new ImSettingsError("bindingMode must be one of 'manual' | 'independent' | 'shared'");
-    }
-    next.bindingMode = value;
-  }
-  if ("sourceChat" in record) {
-    const parsed = parseChatRef(record["sourceChat"], "sourceChat");
-    if (parsed === void 0) delete next.sourceChat;
-    else next.sourceChat = parsed;
-  }
-  if ("sharedChat" in record) {
-    const parsed = parseChatRef(record["sharedChat"], "sharedChat");
-    if (parsed === void 0) delete next.sharedChat;
-    else next.sharedChat = parsed;
-  }
   if (record["groupRequireMention"] !== void 0) {
     if (typeof record["groupRequireMention"] !== "boolean") {
       throw new ImSettingsError("groupRequireMention must be a boolean");
@@ -47764,13 +47714,7 @@ function applyImSettingsPatch(current, patch) {
   assertImSettingsUsable(next);
   return next;
 }
-function assertImSettingsUsable(settings) {
-  if (settings.bindingMode === "independent" && settings.sourceChat === void 0) {
-    throw new ImSettingsError("bindingMode independent requires sourceChat (the character template chat)");
-  }
-  if (settings.bindingMode === "shared" && settings.sharedChat === void 0) {
-    throw new ImSettingsError("bindingMode shared requires sharedChat (the conversation every peer reuses)");
-  }
+function assertImSettingsUsable(_settings) {
 }
 
 // packages/plugin/src/im/qq/delivery.ts
@@ -51229,7 +51173,13 @@ async function handleImApi(req, res, url, route, method, db, runtime) {
       available: !disabled && runtime !== void 0 && runtime.capabilities.available,
       reasons: disabled ? ["DSH_SOULMOJITO_DISABLE_IM is set"] : runtime?.capabilities.reasons ?? ["IM runtime was not mounted in this host process"],
       settings: state.imSettings ?? DEFAULT_IM_SETTINGS,
-      peers: peerRows(state.imPeers),
+      peers: peerRows(state.imPeers).map((peer) => {
+        const live = runtime?.isSessionLive?.(peer.sessionId);
+        return { ...peer, ...live === void 0 ? {} : { live } };
+      }),
+      // 未绑定对端：面板「待绑定」表的数据源。对端发过消息但还没绑会话时出现，
+      // 绑定成功后从这张表移除。
+      pendingPeers: pendingPeerRows(state.imPendingPeers),
       // 账号清单是 store 的事实、状态是运行时的投影：只列内存通道会让重启前的
       // 账号在面板上凭空消失，也会让「已配置但未连上」显示成不存在。
       channels: await channelViews(runtime, state.imPeers),
@@ -51390,30 +51340,28 @@ ${outputTail}`
     return sendJson(res, 200, { ok: true, settings: next });
   }
   if (method === "POST" && route === "im/peers") {
-    if (runtime === void 0) throw new HttpError(503, "IM runtime is not available in this host process");
     const body = await readJson(req);
     const channel = parseChannel(body.channel);
     const scope = parseScope(body.scope);
     const accountId = requireId(body.accountId, "accountId");
     const peerId = requireId(body.peerId, "peerId");
-    const character = requireId(body.character, "character");
-    const chatId = requireId(body.chatId, "chatId");
+    const sessionId = requireId(body.sessionId, "sessionId");
     const key = imPeerKey(channel, accountId, scope, peerId);
-    const state = await db.getState();
-    const existing = state.imPeers?.[key];
-    const result = await runtime.bindChat({ character, chatId }, existing?.sessionId);
     const binding = {
-      sessionId: result.sessionId,
-      character: result.character,
-      chatId: result.chatId,
+      sessionId,
       scope,
       boundBy: "manual",
       createdAt: (/* @__PURE__ */ new Date()).toISOString()
     };
-    await db.updateState((current) => ({
-      imPeers: { ...current.imPeers ?? {}, [key]: binding }
-    }));
-    return sendJson(res, 200, { ok: true, peer: { key, ...binding } });
+    const next = await db.updateState((current) => {
+      const pending = { ...current.imPendingPeers ?? {} };
+      delete pending[key];
+      return {
+        imPeers: { ...current.imPeers ?? {}, [key]: binding },
+        imPendingPeers: pending
+      };
+    });
+    return sendJson(res, 200, { ok: true, peer: { key, ...binding }, pendingPeers: pendingPeerRows(next.imPendingPeers) });
   }
   if (method === "DELETE" && route === "im/peers") {
     const key = url.searchParams.get("key");
@@ -51431,6 +51379,25 @@ ${outputTail}`
 }
 function peerRows(peers) {
   return Object.entries(peers ?? {}).map(([key, binding]) => ({ key, ...binding })).sort((left, right) => left.key.localeCompare(right.key));
+}
+function pendingPeerRows(pending) {
+  const rows = [];
+  for (const [key, entry] of Object.entries(pending ?? {})) {
+    const parts = imPeerKeyParts(key);
+    if (parts === void 0) continue;
+    const scope = parts.scope === "group" ? "group" : "private";
+    rows.push({
+      key,
+      alias: imPeerAlias(parts.channel, scope, key),
+      channel: parts.channel,
+      accountId: parts.accountId,
+      scope,
+      peerId: parts.peerId,
+      lastAt: new Date(entry.lastAt).toISOString(),
+      ...entry.senderName === void 0 ? {} : { senderName: entry.senderName }
+    });
+  }
+  return rows.sort((left, right) => right.lastAt.localeCompare(left.lastAt));
 }
 async function channelViews(runtime, peers) {
   const accounts = await ImStore.open(tavernDataRoot("im")).accounts();
@@ -52742,12 +52709,12 @@ function tool3(name2, description, properties, schema, execute) {
   return {
     name: name2,
     description,
-    parameters: compileParameters(properties),
+    parameters: compileParameters2(properties),
     output: { schema, render: (_args, value) => [{ type: "text", text: JSON.stringify(value) }] },
     execute
   };
 }
-function compileParameters(properties) {
+function compileParameters2(properties) {
   const required = [];
   const compiled = Object.fromEntries(Object.entries(properties).map(([key, value]) => {
     if (typeof value !== "object" || value === null || Array.isArray(value)) return [key, value];
@@ -55831,6 +55798,10 @@ async function handleApi(ctx, req, res) {
       ),
       modelSelections: Object.fromEntries(
         Object.entries(current.modelSelections ?? {}).filter(([sessionId]) => live.has(sessionId))
+      ),
+      // IM 绑定指向原生会话：会话被删掉后绑定就是死记录，和 sessionBindings 一起清。
+      imPeers: Object.fromEntries(
+        Object.entries(current.imPeers ?? {}).filter(([, binding]) => live.has(binding.sessionId))
       )
     }));
     return sendJson(res, 200, { ok: true, state });
@@ -56807,7 +56778,7 @@ function reasonOf3(cause) {
 }
 
 // packages/plugin/src/im/router.ts
-import { randomUUID as randomUUID20 } from "node:crypto";
+import { randomUUID as randomUUID19 } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute as isAbsolute2, relative as relative3 } from "node:path";
 
@@ -56945,357 +56916,10 @@ function hardSplit(text, limit) {
   return pieces;
 }
 
-// packages/plugin/src/im/reply.ts
-var PendingOrigins = class {
-  bySession = /* @__PURE__ */ new Map();
-  options;
-  constructor(options) {
-    this.options = options;
-  }
-  remember(sessionId, messageId, peerKey, target, now) {
-    this.prune(now);
-    const list = this.bySession.get(sessionId) ?? [];
-    list.push({ messageId, peerKey, target, at: now });
-    while (list.length > this.options.maxPerSession) list.shift();
-    this.bySession.set(sessionId, list);
-  }
-  /**
-   * 按本轮出现过的 user message id 解析来源。命中即删除（一轮只回一次），
-   * 同时清掉本轮其它命中项——它们的内容已并入同一轮，再各回一次会刷屏。
-   */
-  resolve(sessionId, messageIds, now) {
-    this.prune(now);
-    const list = this.bySession.get(sessionId);
-    if (list === void 0 || list.length === 0) return void 0;
-    const wanted = new Set(messageIds);
-    const first = list.find((entry) => wanted.has(entry.messageId));
-    if (first === void 0) return void 0;
-    const remaining = list.filter((entry) => entry !== first && !wanted.has(entry.messageId));
-    if (remaining.length === 0) this.bySession.delete(sessionId);
-    else this.bySession.set(sessionId, remaining);
-    return first;
-  }
-  forgetSession(sessionId) {
-    this.bySession.delete(sessionId);
-  }
-  pendingCount(sessionId) {
-    return this.bySession.get(sessionId)?.length ?? 0;
-  }
-  prune(now) {
-    for (const [sessionId, list] of this.bySession) {
-      const alive = list.filter((entry) => now - entry.at <= this.options.ttlMs);
-      if (alive.length === 0) this.bySession.delete(sessionId);
-      else if (alive.length !== list.length) this.bySession.set(sessionId, alive);
-    }
-  }
-};
-function userMessageIdsOfTurn(events, turn) {
-  const ids = [];
-  let current;
-  let queued = [];
-  let pendingInbox = [];
-  for (const event of events) {
-    if (event.type === "turn/start") {
-      current = turnOf2(event);
-      if (current === turn) ids.push(...queued);
-      queued = [];
-      continue;
-    }
-    if (event.type === "turn/end") {
-      current = void 0;
-      continue;
-    }
-    if (event.type === "agent/inbox/spliced") {
-      const splice = inboxSpliceOf(event.data);
-      if (splice === void 0) continue;
-      if (splice.start + splice.removedCount > pendingInbox.length) continue;
-      const removed = pendingInbox.slice(splice.start, splice.start + splice.removedCount);
-      if (current === turn && splice.outcome !== "canceled") ids.push(...messageIdsOf(removed));
-      pendingInbox = [
-        ...pendingInbox.slice(0, splice.start),
-        ...splice.inserted,
-        ...pendingInbox.slice(splice.start + splice.removedCount)
-      ];
-      continue;
-    }
-    if (event.type !== "user/message") continue;
-    const id = messageIdOf4(event.data);
-    if (id === void 0) continue;
-    const explicit = turnOf2(event);
-    if (explicit !== void 0) {
-      if (explicit === turn) ids.push(id);
-      continue;
-    }
-    if (current === void 0) {
-      queued.push(id);
-      continue;
-    }
-    if (current === turn) ids.push(id);
-  }
-  return ids;
-}
-function inboxSpliceOf(data) {
-  if (data === void 0 || data["target"] !== "next-turn") return void 0;
-  const start = data["start"];
-  const removedCount = data["removedCount"] ?? 0;
-  const inserted = data["inserted"];
-  if (!Number.isSafeInteger(start) || start < 0) return void 0;
-  if (!Number.isSafeInteger(removedCount) || removedCount < 0) return void 0;
-  if (!Array.isArray(inserted)) return void 0;
-  return {
-    start,
-    removedCount,
-    ...data["outcome"] === void 0 ? {} : { outcome: data["outcome"] },
-    inserted
-  };
-}
-function messageIdsOf(messages) {
-  const ids = [];
-  for (const message of messages) {
-    const id = asRecord8(message)?.["id"];
-    if (typeof id === "string" && id !== "") ids.push(id);
-  }
-  return ids;
-}
-function assistantTextOfTurn(events, turn) {
-  let text;
-  for (const event of events) {
-    if (event.type !== "assistant/message") continue;
-    if (turnOf2(event) !== turn) continue;
-    const candidate = assistantTextOf(event.data);
-    if (candidate !== void 0 && candidate.trim() !== "") text = candidate;
-  }
-  return text;
-}
-function turnFailedOf(events, turn) {
-  for (const event of events) {
-    if (event.type !== "turn/end") continue;
-    if (turnOf2(event) !== turn) continue;
-    const reason = asRecord8(event.data?.["reason"]);
-    return reason?.["kind"] === "error";
-  }
-  return false;
-}
-function turnBlockedOf(events, turn) {
-  for (const event of events) {
-    if (event.type !== "turn/end") continue;
-    if (turnOf2(event) !== turn) continue;
-    const reason = asRecord8(event.data?.["reason"]);
-    return reason?.["kind"] === "blocked";
-  }
-  return false;
-}
-function turnOf2(event) {
-  const value = event.data?.["turn"];
-  return typeof value === "number" && Number.isSafeInteger(value) ? value : void 0;
-}
-function messageIdOf4(data) {
-  const id = data?.["id"];
-  return typeof id === "string" && id !== "" ? id : void 0;
-}
-function assistantTextOf(data) {
-  const message = asRecord8(data?.["message"]);
-  const content = message?.["content"];
-  if (!Array.isArray(content)) return void 0;
-  const parts = [];
-  for (const block of content) {
-    const entry = asRecord8(block);
-    if (entry?.["type"] !== "text") continue;
-    const text = entry["text"];
-    if (typeof text === "string" && text !== "") parts.push(text);
-  }
-  return parts.length === 0 ? void 0 : parts.join("\n");
-}
-function asRecord8(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
-}
-
-// packages/plugin/src/im/session-host.ts
-import { randomUUID as randomUUID19 } from "node:crypto";
-var ImSessionError = class extends Error {
-  code;
-  constructor(code, message) {
-    super(message);
-    this.name = "ImSessionError";
-    this.code = code;
-  }
-};
-function inspectImSessionCapabilities(agents, presets) {
-  const reasons = [];
-  if (agents === void 0) {
-    reasons.push("the host exposes no agents service");
-  } else if (typeof agents.create !== "function" && typeof agents.resume !== "function") {
-    reasons.push("the host agents service exposes neither create nor resume");
-  }
-  if (presets === void 0 || typeof presets.mount !== "function") {
-    reasons.push("the host cannot mount an agent preset (agentPresets.mount is missing)");
-  }
-  return { available: reasons.length === 0, reasons };
-}
-function mintImSessionId() {
-  return `session-${randomUUID19()}`;
-}
-async function ensureImSession(deps, request) {
-  const capability = inspectImSessionCapabilities(deps.agents, deps.presets);
-  if (!capability.available) {
-    throw new ImSessionError("IM_SESSION_UNAVAILABLE", `IM sessions are unavailable: ${capability.reasons.join("; ")}`);
-  }
-  const chat = request.mode === "shared" ? request.sharedChat : request.sourceChat;
-  if (chat === void 0) {
-    throw new ImSessionError("IM_SOURCE_MISSING", request.mode === "shared" ? "shared mode requires the configured shared chat" : "independent mode requires the configured source chat");
-  }
-  if (request.mode === "shared") {
-    if (request.existingSessionId !== void 0) {
-      return bindImChat(deps, chat, request.existingSessionId);
-    }
-    return bindImChat(deps, chat, void 0);
-  }
-  if (request.existingSessionId !== void 0) {
-    throw new ImSessionError("IM_SESSION_UNAVAILABLE", "independent mode always mints a new session; existingSessionId is only valid for shared mode");
-  }
-  const chatId = await createChatFromSource(deps, chat);
-  const createdChat = await deps.db.getChat(chat.character, chatId);
-  if (createdChat === void 0) {
-    throw new ImSessionError("IM_CHAT_MISSING", `IM chat ${chat.character}/${chatId} vanished right after creation; the opening greeting cannot be imported`);
-  }
-  const sessionId = mintImSessionId();
-  const agent = await ensureImAgent(deps, sessionId);
-  await deps.bind(sessionId, chat.character, chatId);
-  await importChatHistory(deps, agent, createdChat, chat.character, chatId, sessionId);
-  await deps.presetChanged();
-  return { sessionId, character: chat.character, chatId };
-}
-async function bindImChat(deps, chat, existingSessionId) {
-  const capability = inspectImSessionCapabilities(deps.agents, deps.presets);
-  if (!capability.available) {
-    throw new ImSessionError("IM_SESSION_UNAVAILABLE", `IM sessions are unavailable: ${capability.reasons.join("; ")}`);
-  }
-  const chatId = await requireExistingChat(deps, chat);
-  const existingChat = await deps.db.getChat(chat.character, chatId);
-  if (existingChat === void 0) {
-    throw new ImSessionError("IM_CHAT_MISSING", `chat ${chat.character}/${chatId} disappeared while binding`);
-  }
-  const sessionId = existingSessionId ?? mintImSessionId();
-  const agent = await ensureImAgent(deps, sessionId);
-  await deps.bind(sessionId, chat.character, chatId);
-  await importChatHistory(deps, agent, existingChat, chat.character, chatId, sessionId);
-  await deps.presetChanged();
-  return { sessionId, character: chat.character, chatId };
-}
-async function requireExistingChat(deps, chat) {
-  const snapshot2 = await deps.db.getChatSnapshot(chat.character, chat.chatId);
-  if (snapshot2 === void 0) {
-    throw new ImSessionError("IM_CHAT_MISSING", `shared chat ${chat.character}/${chat.chatId} no longer exists`);
-  }
-  return chat.chatId;
-}
-function resolveBindSessionId(bindings2, existingSessionId, character, chatId, archived) {
-  const belongsToChat = (sessionId) => {
-    const binding = bindings2[sessionId];
-    return binding !== void 0 && binding.character === character && binding.chatId === chatId;
-  };
-  if (existingSessionId !== void 0 && !archived.has(existingSessionId) && belongsToChat(existingSessionId)) {
-    return existingSessionId;
-  }
-  for (const [sessionId, binding] of Object.entries(bindings2)) {
-    if (binding.architecture !== "agent-tavern") continue;
-    if (archived.has(sessionId) || !belongsToChat(sessionId)) continue;
-    return sessionId;
-  }
-  return void 0;
-}
-async function createChatFromSource(deps, source) {
-  const found = await deps.db.getCharacter(source.character);
-  if (found === void 0) {
-    throw new ImSessionError("IM_SOURCE_MISSING", `source character ${source.character} no longer exists`);
-  }
-  const now = (/* @__PURE__ */ new Date()).toISOString();
-  const card = found.card;
-  const seedVariables = (() => {
-    const holder = card.data.extensions?.["agentTavern"];
-    if (typeof holder !== "object" || holder === null) return void 0;
-    const initial = holder["initialVariables"];
-    if (typeof initial !== "object" || initial === null || Array.isArray(initial)) return void 0;
-    const entries = Object.entries(initial);
-    return entries.length === 0 ? void 0 : Object.fromEntries(entries);
-  })();
-  const variablesSeed = seedVariables ?? {};
-  const mvuSeeded = seedJsrMvuVariables(card, { ...variablesSeed });
-  const greetings = [card.data.firstMes, ...card.data.alternateGreetings];
-  const chatId = await deps.db.createChat(source.character, {
-    user_name: "unused",
-    character_name: "unused",
-    chat_metadata: {
-      character: source.character,
-      createdAt: now,
-      timedWorldInfo: {},
-      ...seedVariables !== void 0 || mvuSeeded ? { variables: variablesSeed } : {}
-    }
-  }, [{
-    name: card.data.nickname || card.data.name,
-    is_user: false,
-    is_system: false,
-    send_date: now,
-    mes: greetings[0] ?? ""
-  }]);
-  return chatId;
-}
-async function importChatHistory(deps, agent, chat, character, chatId, sessionId) {
-  const live = agent ?? {};
-  const events = readSessionEvents(live.session);
-  if (events !== void 0 && events.some((event) => event.type === "turn/start")) return;
-  const state = await deps.db.getState();
-  const found = await deps.db.getCharacter(character);
-  const scripts = await collectSessionRegexScripts(deps.db, state, character, chatId, found);
-  const plan = historyImportAppends(chat, sessionId, scripts, tavernMacroExpand(state, character, found), live.session);
-  applyAgentTavernHistoryImport({
-    agent: live,
-    plan,
-    ...deps.logger === void 0 ? {} : { logger: deps.logger }
-  });
-}
-async function ensureImAgent(deps, sessionId) {
-  const live = deps.agents?.get?.(sessionId);
-  if (live !== void 0 && live !== null) return live;
-  const presets = deps.presets;
-  if (presets === void 0 || typeof presets.mount !== "function") {
-    throw new ImSessionError("IM_SESSION_UNAVAILABLE", "the host cannot mount an agent preset");
-  }
-  await deps.ensurePreset();
-  const workspace = await deps.workspace();
-  const agentOptions = deps.agentOptions();
-  const setup = async (agentContext) => {
-    await presets.mount?.(agentContext, deps.presetId);
-  };
-  if (typeof deps.agents?.resume === "function") {
-    try {
-      const resumed = await deps.agents.resume({ resumeSessionId: sessionId, agentOptions, setup });
-      return resumed.agent;
-    } catch (error) {
-      deps.logger?.warn?.(`dsh-soulmojito im: resume ${sessionId} failed, creating a new session: ${messageOf12(error)}`);
-    }
-  }
-  if (typeof deps.agents?.create !== "function") {
-    throw new ImSessionError("IM_SESSION_UNAVAILABLE", "the host agents service exposes neither create nor resume");
-  }
-  const created = await deps.agents.create({
-    sessionId,
-    agentOptions,
-    meta: { cwd: workspace, agentPreset: deps.presetId },
-    setup
-  });
-  return created.agent;
-}
-function messageOf12(error) {
-  return error instanceof Error ? error.message : String(error);
-}
-function imUnboundMessage(peerKey) {
-  return `\u8FD9\u4E2A\u4F1A\u8BDD\u8FD8\u6CA1\u6709\u7ED1\u5B9A\uFF1A${peerKey}\u3002\u8BF7\u5728 DSH-SoulMojito \u9762\u677F\u7684\u300C\u804A\u5929\u6E20\u9053\u300D\u91CC\u7ED1\u5B9A\u4E00\u4E2A\u804A\u5929\u3002`;
-}
-
 // packages/plugin/src/im/router.ts
-var IM_TURN_FAILED = "\uFF08\u8FD9\u4E00\u8F6E\u6CA1\u6709\u751F\u6210\u6210\u529F\uFF0C\u7A0D\u540E\u518D\u8BD5\uFF09";
-var IM_TURN_BLOCKED = "\uFF08\u8FD9\u4E2A\u4F1A\u8BDD\u6682\u65F6\u4E0D\u80FD\u7EE7\u7EED\uFF1A\u53EF\u80FD\u5DF2\u5728 DSH \u91CC\u88AB\u5F52\u6863\uFF0C\u8BF7\u5148\u53D6\u6D88\u5F52\u6863\u518D\u53D1\u4E00\u6B21\uFF09";
+var IM_UNBOUND_NOTICE = "\uFF08\u6D88\u606F\u5DF2\u6536\u5230\uFF0C\u4F46\u8FD9\u4E2A\u5BF9\u7AEF\u8FD8\u6CA1\u6709\u7ED1\u5B9A DSH \u4F1A\u8BDD\uFF1B\u8BF7\u5728 dsh-soulmojito \u7684 IM \u9762\u677F\u628A\u5B83\u7ED1\u5230\u4E00\u4E2A\u4F1A\u8BDD\uFF09";
+var IM_SESSION_NOT_LIVE = "\uFF08\u6D88\u606F\u5DF2\u6536\u5230\uFF0C\u4F46\u7ED1\u5B9A\u7684 DSH \u4F1A\u8BDD\u5F53\u524D\u4E0D\u53EF\u6295\u9012\uFF08\u672A\u6253\u5F00\u6216\u4E0D\u662F AgentLoop \u4F1A\u8BDD\uFF09\uFF1B\u8BF7\u6253\u5F00\u5B83\u6216\u6539\u7ED1\u540E\u518D\u53D1\u4E00\u6B21\uFF09";
+var IM_DELIVERY_FAILED = "\uFF08\u6D88\u606F\u5DF2\u6536\u5230\uFF0C\u4F46\u63D2\u5165\u7ED1\u5B9A\u7684 DSH \u4F1A\u8BDD\u5931\u8D25\uFF1B\u8BF7\u7A0D\u540E\u518D\u53D1\u4E00\u6B21\uFF09";
 var ImSendError = class extends Error {
   code;
   constructor(code, message, options) {
@@ -57305,9 +56929,11 @@ var ImSendError = class extends Error {
   }
 };
 var UNBOUND_NOTICE_TTL_MS = 10 * 6e4;
+var REPLY_ANCHOR_TTL_MS = 5 * 6e4;
+var MAX_PENDING_PEERS = 50;
 function createImRouter(deps) {
-  const origins = new PendingOrigins({ ttlMs: 10 * 6e4, maxPerSession: 200 });
   const noticed = /* @__PURE__ */ new Map();
+  const replyAnchors = /* @__PURE__ */ new Map();
   async function settingsOf() {
     const state = await deps.db.getState();
     return state.imSettings ?? DEFAULT_IM_SETTINGS;
@@ -57328,6 +56954,24 @@ function createImRouter(deps) {
       );
       return;
     }
+    const target = {
+      channel: inboundMessage.channel,
+      accountId: inboundMessage.accountId,
+      scope: inboundMessage.scope,
+      peerId: inboundMessage.peerId,
+      ...inboundMessage.replyTo === void 0 ? {} : { replyTo: inboundMessage.replyTo }
+    };
+    const binding = await boundSessionOf(peerKey);
+    if (binding === void 0) {
+      const unboundBody = imUserTextOf(inboundMessage);
+      if (unboundBody === void 0) {
+        deps.log?.note("debug", `ignored a ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias}: no text and no attachments`);
+        return;
+      }
+      await rememberPendingPeer(peerKey, inboundMessage, alias, now);
+      await notifyUnbound(target, peerKey, alias, now);
+      return;
+    }
     let media = inboundMessage.media;
     if (options?.loadMedia !== void 0) {
       try {
@@ -57335,110 +56979,60 @@ function createImRouter(deps) {
       } catch (error) {
         deps.log?.note(
           "warn",
-          `media for a ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias} failed to load; delivering it without local copies: ${messageOf13(error)}`
+          `media for a ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias} failed to load; delivering it without local copies: ${messageOf12(error)}`
         );
       }
     }
     const message = media === inboundMessage.media ? inboundMessage : { ...inboundMessage, media };
-    const target = {
-      channel: message.channel,
-      accountId: message.accountId,
-      scope: message.scope,
-      peerId: message.peerId,
-      ...message.replyTo === void 0 ? {} : { replyTo: message.replyTo }
-    };
-    const text = imUserTextOf(message);
-    if (text === void 0) {
+    if (message.replyTo !== void 0) replyAnchors.set(peerKey, { replyTo: message.replyTo, at: now });
+    const body = imUserTextOf(message);
+    if (body === void 0) {
       deps.log?.note("debug", `ignored a ${message.channel}/${message.scope} message from ${alias}: no text and no attachments`);
       return;
     }
-    const binding = await resolveBinding(peerKey, message.scope, settings);
-    if (binding === void 0) {
-      await notifyUnbound(target, peerKey, alias, now);
-      return;
-    }
+    const text = relayTextOf(message, body, alias);
     deps.log?.note(
       "info",
-      `accepted a ${message.channel}/${message.scope} message from ${alias} (${text.length} chars) for session ${binding.sessionId}`
+      `accepted a ${message.channel}/${message.scope} message from ${alias} (${body.length} chars) for session ${binding.sessionId}`
     );
-    const messageId = `im-${randomUUID20()}`;
-    origins.remember(binding.sessionId, messageId, peerKey, target, now);
+    const messageId = `im-${randomUUID19()}`;
     try {
-      await deps.followup(binding.sessionId, { id: messageId, text });
+      await deps.followup(binding.sessionId, {
+        id: messageId,
+        text,
+        summary: `IM ${message.channel}/${message.scope} message from ${alias}`
+      });
     } catch (error) {
-      origins.forgetSession(binding.sessionId);
-      deps.log?.note("error", `could not deliver a message from ${alias} to session ${binding.sessionId}: ${messageOf13(error)}`);
-      deps.logger?.warn?.(`dsh-soulmojito im: followup to ${binding.sessionId} failed: ${messageOf13(error)}`);
-      await sendNotice(target, IM_TURN_FAILED, alias);
+      const code = error?.code;
+      deps.log?.note("error", `could not insert a message from ${alias} into session ${binding.sessionId}: ${messageOf12(error)}`);
+      deps.logger?.warn?.(`dsh-soulmojito im: inserting into ${binding.sessionId} failed: ${messageOf12(error)}`);
+      await sendNotice(target, code === "IM_SESSION_NOT_LIVE" ? IM_SESSION_NOT_LIVE : IM_DELIVERY_FAILED, alias);
+      return;
     }
+    deps.log?.note("debug", `inserted an IM message from ${alias} into session ${binding.sessionId} (${messageId})`);
   }
-  async function resolveBinding(peerKey, scope, settings) {
+  async function boundSessionOf(peerKey) {
     const state = await deps.db.getState();
-    const existing = state.imPeers?.[peerKey];
-    if (existing !== void 0) return existing;
-    if (settings.bindingMode === "manual") return void 0;
-    const request = {
-      mode: settings.bindingMode,
-      peerKey,
-      ...settings.sourceChat === void 0 ? {} : { sourceChat: settings.sourceChat },
-      ...settings.sharedChat === void 0 ? {} : { sharedChat: settings.sharedChat },
-      ...sharedSessionOf(state.imPeers, settings)
-    };
-    const result = await deps.ensureSession(request);
-    const binding = {
-      sessionId: result.sessionId,
-      character: result.character,
-      chatId: result.chatId,
-      scope,
-      boundBy: "auto",
-      createdAt: new Date(deps.now()).toISOString()
-    };
-    await deps.db.updateState((current) => ({
-      imPeers: { ...current.imPeers ?? {}, [peerKey]: binding }
-    }));
-    return binding;
+    const binding = state.imPeers?.[peerKey];
+    return binding === void 0 ? void 0 : { sessionId: binding.sessionId };
   }
-  async function finishTurn(sessionId, turn, events) {
-    const now = deps.now();
-    const origin = origins.resolve(sessionId, userMessageIdsOfTurn(events, turn), now);
-    if (origin === void 0) {
-      deps.log?.note(
-        "debug",
-        `turn ${turn} of session ${sessionId} has no pending IM origin; no IM reply was sent`
-      );
+  async function rememberPendingPeer(peerKey, message, alias, now) {
+    const senderName = message.scope === "group" ? displaySenderNameOf(message) : void 0;
+    const next = await deps.db.updateState((current) => {
+      if (current.imPeers?.[peerKey] !== void 0) return {};
+      const pending = { ...current.imPendingPeers ?? {} };
+      pending[peerKey] = {
+        lastAt: now,
+        ...senderName === void 0 ? {} : { senderName }
+      };
+      const recent = Object.entries(pending).sort((left, right) => right[1].lastAt - left[1].lastAt).slice(0, MAX_PENDING_PEERS);
+      return { imPendingPeers: Object.fromEntries(recent) };
+    });
+    if (next.imPeers?.[peerKey] !== void 0) {
+      deps.log?.note("debug", `binding for ${alias} appeared before the pending write; pending not recorded`);
       return;
     }
-    const alias = imPeerAlias(origin.target.channel, origin.target.scope, origin.peerKey);
-    if (turnFailedOf(events, turn)) {
-      deps.log?.note("warn", `turn ${turn} failed before a reply could be produced; sent the fixed notice to ${alias}`);
-      await sendNotice(origin.target, IM_TURN_FAILED, alias);
-      return;
-    }
-    if (turnBlockedOf(events, turn)) {
-      deps.log?.note("warn", `turn ${turn} was blocked by the host before any step ran (is the session archived?); sent the blocked notice to ${alias}`);
-      await sendNotice(origin.target, IM_TURN_BLOCKED, alias);
-      return;
-    }
-    const text = assistantTextOfTurn(events, turn);
-    if (text === void 0) {
-      deps.log?.note("info", `turn ${turn} produced no assistant text; nothing was sent to ${alias}`);
-      return;
-    }
-    const settings = await settingsOf();
-    const rendered = await deps.render(origin.target, text);
-    const parts = projectImText(rendered, origin.target.channel, imChunkLimit(origin.target.channel, settings));
-    try {
-      await deps.send(origin.target, parts.map((part, index) => ({
-        kind: "text",
-        text: part,
-        index,
-        total: parts.length
-      })));
-      deps.log?.note("info", `replied to ${alias} with ${parts.length} part(s), ${rendered.length} chars`);
-    } catch (error) {
-      deps.log?.note("error", `sending the reply to ${alias} failed: ${messageOf13(error)}`);
-      throw error;
-    }
+    deps.log?.note("info", `no binding for ${alias}; recorded it in the IM panel pending peers`);
   }
   async function sendText(peerKey, text) {
     const body = text.trim();
@@ -57455,8 +57049,8 @@ function createImRouter(deps) {
         total: chunks.length
       })));
     } catch (error) {
-      deps.log?.note("error", `im_send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf13(error)}`);
-      throw new ImSendError("IM_SEND_FAILED", `IM send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf13(error)}`, { cause: error });
+      deps.log?.note("error", `im_send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf12(error)}`);
+      throw new ImSendError("IM_SEND_FAILED", `IM send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf12(error)}`, { cause: error });
     }
     deps.log?.note("info", `im_send delivered ${chunks.length} part(s) to ${imPeerAlias(channel, scope, peerKey)}`);
     return { parts: chunks.length, at: deps.now() };
@@ -57490,8 +57084,8 @@ function createImRouter(deps) {
     try {
       await deps.send(target, parts);
     } catch (error) {
-      deps.log?.note("error", `im_send media to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf13(error)}`);
-      throw new ImSendError("IM_SEND_FAILED", `IM media send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf13(error)}`, { cause: error });
+      deps.log?.note("error", `im_send media to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf12(error)}`);
+      throw new ImSendError("IM_SEND_FAILED", `IM media send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf12(error)}`, { cause: error });
     }
     deps.log?.note("info", `im_send delivered a ${media.kind} to ${imPeerAlias(channel, scope, peerKey)}`);
     return { parts: parts.length, at: deps.now() };
@@ -57513,12 +57107,16 @@ function createImRouter(deps) {
     if (state.imPeers?.[peerKey] === void 0) {
       throw new ImSendError("IM_SEND_UNBOUND", `IM peer '${peerKey}' has no binding; bind it in the dsh-soulmojito IM panel first`);
     }
+    const anchor = replyAnchors.get(peerKey);
+    const fresh = anchor !== void 0 && deps.now() - anchor.at <= REPLY_ANCHOR_TTL_MS;
+    if (anchor !== void 0 && !fresh) replyAnchors.delete(peerKey);
     return {
       target: {
         channel,
         accountId: parts.accountId,
         scope,
-        peerId: parts.peerId
+        peerId: parts.peerId,
+        ...fresh ? { replyTo: anchor.replyTo } : {}
       },
       channel,
       scope,
@@ -57533,7 +57131,7 @@ function createImRouter(deps) {
       root = await realpath(await deps.workspaceRoot());
       target = await realpath(localPath);
     } catch (cause) {
-      throw new ImSendError("IM_SEND_INVALID", `media path '${localPath}' cannot be resolved: ${messageOf13(cause)}`);
+      throw new ImSendError("IM_SEND_INVALID", `media path '${localPath}' cannot be resolved: ${messageOf12(cause)}`);
     }
     const rel = relative3(root, target);
     if (rel === "" || rel.startsWith("..") || isAbsolute2(rel)) {
@@ -57551,29 +57149,42 @@ function createImRouter(deps) {
     }
     noticed.set(peerKey, now);
     deps.log?.note("info", `no binding for ${alias}; replied with the bind notice`);
-    await sendNotice(target, imUnboundMessage(peerKey), alias);
+    await sendNotice(target, IM_UNBOUND_NOTICE, alias);
   }
   async function sendNotice(target, text, alias) {
     try {
       await deps.send(target, [{ kind: "text", text, index: 0, total: 1 }]);
     } catch (error) {
-      deps.log?.note("error", `sending a notice to ${alias} failed: ${messageOf13(error)}`);
+      deps.log?.note("error", `sending a notice to ${alias} failed: ${messageOf12(error)}`);
     }
   }
   return {
     inbound,
-    finishTurn,
     sendText,
-    sendMedia,
-    pending: (sessionId) => origins.pendingCount(sessionId)
+    sendMedia
   };
+}
+function relayTextOf(inbound, body, alias) {
+  const scope = inbound.scope === "group" ? "\u7FA4\u804A" : "\u79C1\u804A";
+  return [
+    `[IM ${inbound.channel}/${scope} peer=${alias}]`,
+    body,
+    `\uFF08\u8FD9\u662F\u4ECE IM \u8F6C\u53D1\u7ED9\u4F60\u7684\u6D88\u606F\uFF0C\u4E0D\u662F DSH \u7528\u6237\u8F93\u5165\u3002\u56DE\u590D\u8BF7\u8C03\u7528 im_send\uFF0Cpeer \u53C2\u6570\u7528 ${alias}\u3002\uFF09`
+  ].join("\n");
 }
 function imUserTextOf(inbound) {
   const body = inbound.text.trim();
   const attachments = attachmentSummaryOf(inbound);
-  const composed = inbound.scope === "group" ? `[${inbound.senderName || inbound.senderId}] ${body}`.trim() : body;
+  const composed = inbound.scope === "group" ? `[${displaySenderNameOf(inbound) ?? "\u7FA4\u6210\u5458"}] ${body}`.trim() : body;
   const withAttachments = attachments === void 0 ? composed : `${composed}${composed === "" ? "" : "\n"}${attachments}`.trim();
   return withAttachments === "" ? void 0 : withAttachments;
+}
+function displaySenderNameOf(inbound) {
+  const name2 = inbound.senderName.trim();
+  if (name2 === "") return void 0;
+  const id = inbound.senderId.trim();
+  if (id.startsWith(name2)) return void 0;
+  return name2;
 }
 function attachmentSummaryOf(inbound) {
   if (inbound.media.length === 0) return void 0;
@@ -57586,15 +57197,7 @@ function attachmentSummaryOf(inbound) {
   const rest = inbound.media.length > labels.length ? `\u7B49 ${inbound.media.length} \u4E2A` : "";
   return `\uFF08\u9644\u4EF6\uFF1A${labels.join("\u3001")}${rest}\uFF09`;
 }
-function sharedSessionOf(peers, settings) {
-  if (settings.bindingMode !== "shared" || settings.sharedChat === void 0) return {};
-  const { character, chatId } = settings.sharedChat;
-  for (const binding of Object.values(peers ?? {})) {
-    if (binding.character === character && binding.chatId === chatId) return { existingSessionId: binding.sessionId };
-  }
-  return {};
-}
-function messageOf13(error) {
+function messageOf12(error) {
   return error instanceof Error ? error.message : String(error);
 }
 function channelOf(value) {
@@ -57689,6 +57292,60 @@ function redactLogText(text) {
   return text.replace(/(['"`])((?:[A-Za-z]:[\\/]|\\\\|\/\/|\/(?!\/))[^'"`]*)\1/g, (_match, quote) => `${quote}<path>${quote}`).replace(/\b[A-Za-z]:[\\/][^\s'"`,;)]*/g, "<path>").replace(/\\\\[^\s'"`,;)]+/g, "<path>").replace(/(^|[\s"'`(=~])\/\/[^\s'"`,;)]+/g, (_match, prefix) => `${prefix}<path>`).replace(/(^|[\s"'`(=~])\/(?:[^\s/'"`,;)]+\/)+[^\s/'"`,;)]*/g, (_match, prefix) => `${prefix}<path>`);
 }
 
+// packages/plugin/src/im/session-host.ts
+var ImSessionNotLiveError = class extends Error {
+  code = "IM_SESSION_NOT_LIVE";
+  sessionId;
+  constructor(sessionId) {
+    super(`the bound DSH session '${sessionId}' has no live AgentLoop agent; open it in DSH and send again`);
+    this.name = "ImSessionNotLiveError";
+    this.sessionId = sessionId;
+  }
+};
+function inspectImSessionCapabilities(agents) {
+  const reasons = [];
+  if (agents === void 0) {
+    reasons.push("the host exposes no agents service; IM cannot insert messages into a session");
+  } else if (typeof agents.get !== "function") {
+    reasons.push("the host agents service exposes no get(id); IM cannot find the bound session agent");
+  }
+  return { available: reasons.length === 0, reasons };
+}
+function liveAgentOf(agents, sessionId) {
+  if (agents?.get === void 0) return void 0;
+  try {
+    return agents.get(sessionId) ?? void 0;
+  } catch {
+    return void 0;
+  }
+}
+function requireLiveAgent(agents, sessionId) {
+  const agent = liveAgentOf(agents, sessionId);
+  if (agent === void 0) throw new ImSessionNotLiveError(sessionId);
+  if (typeof agent.followup !== "function") {
+    const error = new Error(`the host agent for session '${sessionId}' exposes no followup(); IM cannot insert a message`);
+    error.code = "IM_SESSION_NO_FOLLOWUP";
+    throw error;
+  }
+  return agent;
+}
+function listLiveAgents2(agents) {
+  if (agents?.list === void 0) return [];
+  try {
+    return agents.list() ?? [];
+  } catch {
+    return [];
+  }
+}
+function buildImFollowupMessage(session, message) {
+  return {
+    id: message.id,
+    role: "user",
+    content: [{ type: "text", text: message.text }],
+    source: hostPluginMessageSource(session, { form: "relay", summary: message.summary })
+  };
+}
+
 // packages/plugin/src/im/runtime.ts
 var QQ_BOUND_ACCOUNT_LABEL = "QQ \u673A\u5668\u4EBA";
 var WEIXIN_BOUND_ACCOUNT_LABEL = "\u5FAE\u4FE1\u673A\u5668\u4EBA";
@@ -57705,8 +57362,7 @@ var ImChannelUnsupportedError = class extends Error {
 function createImRuntime(ctx, options) {
   const { db } = options;
   const agents = ctx.agents;
-  const presets = ctx.agentPresets;
-  const capabilities = inspectImSessionCapabilities(agents, presets);
+  const capabilities = inspectImSessionCapabilities(agents);
   const channels = /* @__PURE__ */ new Map();
   const oneBotChannels = /* @__PURE__ */ new Map();
   const injectedBot = options.qqBot;
@@ -57719,45 +57375,14 @@ function createImRuntime(ctx, options) {
     now: () => Date.now(),
     maxBytes: WEIXIN_MEDIA_MAX_BYTES
   });
-  const sessionDeps = {
-    db,
-    agents,
-    presets,
-    presetId: AGENT_TAVERN_PRESET_ID,
-    ensurePreset: async () => {
-      await ensureAgentPresetDeclared(ctx, AGENT_TAVERN_PRESET_ID);
-    },
-    workspace: async () => (await prepareInternalWorkspace()).path,
-    // 宿主用 agent.options.model 解析 {{model}} 等提示变量；缺了整轮在组装阶段失败。
-    agentOptions: () => {
-      const { provider, model } = ctx.agentDefaultModel.currentSelection();
-      return { provider, model };
-    },
-    bind: async (sessionId, character, chatId) => bindSession(db, sessionId, character, chatId, false, "agent-tavern", "dsh-native"),
-    presetChanged: async () => {
-      await emitAgentPresetChanged();
-    },
-    logger
-  };
   const router = createImRouter({
     db,
     now: () => Date.now(),
     seenDedupe: (dedupeKey, now) => store5.seenDedupe(dedupeKey, now),
-    ensureSession: async (request) => ensureImSession(sessionDeps, request),
     followup: async (sessionId, message) => {
-      const agent = await liveAgent(sessionDeps, sessionId);
-      const target = agent;
-      if (typeof target.followup !== "function") {
-        throw new Error(`the host agent for session ${sessionId} exposes no followup()`);
-      }
-      await target.followup({
-        id: message.id,
-        role: "user",
-        content: [{ type: "text", text: message.text }],
-        source: { kind: "user" }
-      });
+      const agent = requireLiveAgent(agents, sessionId);
+      await agent.followup?.(buildImFollowupMessage(agent.session, message));
     },
-    render: async (target, text) => renderForTarget(db, target, text),
     workspaceRoot: async () => (await prepareInternalWorkspace()).path,
     send: async (target, parts) => {
       const channel = channels.get(channelKey(target.channel, target.accountId));
@@ -57769,19 +57394,6 @@ function createImRuntime(ctx, options) {
     log: imLog,
     logger
   });
-  function handleSessionEvent(session, event) {
-    if (event.type !== "turn/end") return;
-    const sessionId = session.id;
-    if (typeof sessionId !== "string" || sessionId === "") return;
-    const turn = event.data?.["turn"];
-    if (typeof turn !== "number" || !Number.isSafeInteger(turn)) return;
-    void isImSession(db, sessionId).then((bound) => {
-      if (!bound) return;
-      return router.finishTurn(sessionId, turn, sessionEvents(session));
-    }).catch((error) => {
-      logger?.warn?.(`dsh-soulmojito im: turn ${turn} of ${sessionId} reply failed: ${messageOf14(error)}`);
-    });
-  }
   function openOneBot(account, secret) {
     return new OneBotChannel({
       accountId: account.accountId,
@@ -57927,7 +57539,7 @@ function createImRuntime(ctx, options) {
       try {
         secret = await store5.readSecret("weixin", account.accountId);
       } catch (error) {
-        logger?.warn?.(`dsh-soulmojito im weixin bind: skipped ${account.accountId} local token: ${messageOf14(error)}`);
+        logger?.warn?.(`dsh-soulmojito im weixin bind: skipped ${account.accountId} local token: ${messageOf13(error)}`);
         continue;
       }
       const token = secret?.["botToken"]?.trim() ?? "";
@@ -58050,7 +57662,7 @@ function createImRuntime(ctx, options) {
       else await store5.putAccount(account, previous);
     } catch (rollbackError) {
       throw new Error(
-        `${account.channel} account '${account.accountId}' failed to install and its credential rollback also failed: ${messageOf14(rollbackError)}`,
+        `${account.channel} account '${account.accountId}' failed to install and its credential rollback also failed: ${messageOf13(rollbackError)}`,
         { cause: error }
       );
     }
@@ -58068,15 +57680,30 @@ function createImRuntime(ctx, options) {
       const stillUsed = (await store5.accounts()).some((entry) => entry.accountId === accountId);
       if (!stillUsed) {
         await store5.deleteCursor(accountId).catch((error) => {
-          logger?.warn?.(`dsh-soulmojito im: deleting the cursor for ${channelId}/${accountId} failed: ${messageOf14(error)}`);
+          logger?.warn?.(`dsh-soulmojito im: deleting the cursor for ${channelId}/${accountId} failed: ${messageOf13(error)}`);
         });
       }
       await mediaStore.remove(channelId, accountId).catch((error) => {
-        logger?.warn?.(`dsh-soulmojito im: deleting the media of ${channelId}/${accountId} failed: ${messageOf14(error)}`);
+        logger?.warn?.(`dsh-soulmojito im: deleting the media of ${channelId}/${accountId} failed: ${messageOf13(error)}`);
+      });
+      await db.updateState((current) => {
+        const peers = { ...current.imPeers ?? {} };
+        const pending = { ...current.imPendingPeers ?? {} };
+        for (const key2 of Object.keys(peers)) {
+          const parts = imPeerKeyParts(key2);
+          if (parts?.channel === channelId && parts.accountId === accountId) delete peers[key2];
+        }
+        for (const key2 of Object.keys(pending)) {
+          const parts = imPeerKeyParts(key2);
+          if (parts?.channel === channelId && parts.accountId === accountId) delete pending[key2];
+        }
+        return { imPeers: peers, imPendingPeers: pending };
+      }).catch((error) => {
+        logger?.warn?.(`dsh-soulmojito im: deleting the bindings of ${channelId}/${accountId} failed: ${messageOf13(error)}`);
       });
       if (channelId === "weixin") {
         await openWeixinContextTokens(tavernDataRoot("im"), accountId).clear().catch((error) => {
-          logger?.warn?.(`dsh-soulmojito im: deleting the weixin context tokens for ${accountId} failed: ${messageOf14(error)}`);
+          logger?.warn?.(`dsh-soulmojito im: deleting the weixin context tokens for ${accountId} failed: ${messageOf13(error)}`);
         });
       }
       return removed || live !== void 0;
@@ -58113,12 +57740,12 @@ function createImRuntime(ctx, options) {
         }
         await upsertAccount(account, secret);
       } catch (error) {
-        logger?.warn?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} failed to start: ${messageOf14(error)}`);
+        logger?.warn?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} failed to start: ${messageOf13(error)}`);
       }
     }
   }
   void restoreAccounts().catch((error) => {
-    logger?.warn?.(`dsh-soulmojito im: restoring stored accounts failed: ${messageOf14(error)}`);
+    logger?.warn?.(`dsh-soulmojito im: restoring stored accounts failed: ${messageOf13(error)}`);
   });
   return {
     router,
@@ -58133,19 +57760,7 @@ function createImRuntime(ctx, options) {
       status: channel.status(),
       peers: 0
     })),
-    bindChat: async (chat, existingSessionId) => {
-      const state = await db.getState();
-      const sessionId = resolveBindSessionId(
-        state.sessionBindings,
-        existingSessionId,
-        chat.character,
-        chat.chatId,
-        archivedSessionIdsOf(ctx)
-      );
-      imLog.note("info", `im bind: ${chat.character}/${chat.chatId} -> ${sessionId ?? "new session"}`);
-      return bindImChat(sessionDeps, chat, sessionId);
-    },
-    handleSessionEvent,
+    isSessionLive: (sessionId) => liveAgentOf(agents, sessionId) !== void 0,
     handleOneBotUpgrade,
     startQrBind,
     qrBindStatus,
@@ -58158,41 +57773,13 @@ function createImRuntime(ctx, options) {
       lifetime.abort();
       for (const channel of channels.values()) {
         await channel.stop().catch((error) => {
-          logger?.warn?.(`dsh-soulmojito im: stopping ${channel.channel}/${channel.accountId} failed: ${messageOf14(error)}`);
+          logger?.warn?.(`dsh-soulmojito im: stopping ${channel.channel}/${channel.accountId} failed: ${messageOf13(error)}`);
         });
       }
       channels.clear();
       oneBotChannels.clear();
     }
   };
-}
-async function isImSession(db, sessionId) {
-  const state = await db.getState();
-  for (const binding of Object.values(state.imPeers ?? {})) {
-    if (binding.sessionId === sessionId) return true;
-  }
-  return false;
-}
-async function liveAgent(deps, sessionId) {
-  const live = deps.agents?.get?.(sessionId);
-  if (live !== void 0 && live !== null) return live;
-  return ensureImAgent(deps, sessionId);
-}
-async function renderForTarget(db, target, text) {
-  const state = await db.getState();
-  const key = imPeerKey(target.channel, target.accountId, target.scope, target.peerId);
-  const binding = state.imPeers?.[key];
-  if (binding === void 0) return text;
-  const card = await db.getCharacter(binding.character);
-  const scripts = await collectSessionRegexScripts(db, state, binding.character, binding.chatId, card);
-  const message = {
-    name: "",
-    is_user: false,
-    is_system: false,
-    send_date: (/* @__PURE__ */ new Date()).toISOString(),
-    mes: text
-  };
-  return displayTextForMessage(scripts, message, 0);
 }
 function channelKey(channel, accountId) {
   return `${channel}:${accountId}`;
@@ -58213,23 +57800,292 @@ function isRunningBindPhase(phase) {
 }
 function noop2() {
 }
-function archivedSessionIdsOf(ctx) {
-  for (const read of [
-    () => ctx.workspaceRegistry,
-    () => ctx.get?.("workspaceRegistry")
-  ]) {
+function messageOf13(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+// packages/plugin/src/im/tools.ts
+import { isAbsolute as isAbsolute3 } from "node:path";
+var IM_SEND_MAX_CHARS = 4e3;
+function createImTools(deps) {
+  return [
+    tool("im_identity", "Report the IM peers bound to this very session: channel, private/group scope and the alias to pass to im_send. Use it when you need to know which IM conversations this session can answer. Returns an empty peer list when the session has no IM binding; it cannot look up any other session.", {}, identityOutput, async (_args, exec) => {
+      return { peers: (await boundPeers(deps, requireAgentId2(exec))).map(publicPeer) };
+    }),
+    tool("im_channels", "Report whether the IM subsystem is available in this host process and the current state of every configured channel account (idle, starting, online, paused, error). Read-only; never returns credentials.", {}, channelsOutput, async () => {
+      const runtime = deps.runtime();
+      if (runtime === void 0) {
+        return {
+          available: false,
+          reasons: ["IM runtime is not mounted in this host process"],
+          channels: []
+        };
+      }
+      return {
+        available: runtime.capabilities.available,
+        reasons: [...runtime.capabilities.reasons],
+        channels: runtime.views().map((view) => ({
+          channel: view.channel,
+          accountId: view.accountId,
+          state: view.status.state
+        }))
+      };
+    }),
+    tool("im_send", "Send one message to an IM peer that is bound to this session. Use it to reply when an IM message has been relayed into this session. Send text, a media item, or a media item with a caption. Omit peer when exactly one peer is bound; pass the alias from im_identity when several are. Text is trimmed and capped at 4000 characters. Media is read from an absolute local path (preferred) or an http(s) URL for image/video. Cross-session sending is forbidden: an alias outside this session is rejected.", {
+      text: { type: "string", description: "Message text, 1-4000 characters after trimming. Optional when media is attached; then it becomes the caption." },
+      peer: { type: "string", description: "Target peer alias from im_identity; required when this session has more than one binding." },
+      mediaKind: { type: "string", enum: ["image", "voice", "video", "file"], description: "Kind of the media item; required when mediaPath or mediaUrl is given." },
+      mediaPath: { type: "string", description: "Absolute path of a local file to send (preferred: no network fetch)." },
+      mediaUrl: { type: "string", description: "Remote http(s) URL to send. Only image and video are supported by every channel." },
+      mediaName: { type: "string", description: "Optional display file name for the media item." }
+    }, sendOutput, async (args, exec) => {
+      const text = optionalTextOf(args);
+      const media = mediaOf(args);
+      if (text === void 0 && media === void 0) {
+        throw new Error("im_send needs text, mediaPath or mediaUrl");
+      }
+      const requested = aliasOf(args);
+      const peers = await boundPeers(deps, requireAgentId2(exec));
+      let peer;
+      if (requested !== void 0) {
+        const found = peers.find((entry) => entry.alias === requested);
+        if (found === void 0) throw new Error(`peer '${requested}' is not bound to this session`);
+        peer = found;
+      } else if (peers.length === 0) {
+        throw new Error("this session has no IM peer binding; bind one in the dsh-soulmojito IM panel first");
+      } else {
+        peer = peerWhenSingle(peers);
+      }
+      const runtime = deps.runtime();
+      if (runtime === void 0) {
+        throw new Error("IM runtime is not available in this host process; im_send cannot deliver messages");
+      }
+      if (media !== void 0) {
+        if (runtime.router.sendMedia === void 0) {
+          throw new Error("this IM runtime cannot send media; update dsh-soulmojito and restart DSH");
+        }
+        const withCaption = text === void 0 ? media : { ...media, caption: text };
+        const receipt2 = await runtime.router.sendMedia(peer.peerKey, withCaption);
+        return {
+          peer: peer.alias,
+          parts: receipt2.parts,
+          sentAt: new Date(receipt2.at).toISOString(),
+          mediaKind: media.kind,
+          ...receipt2.messageId === void 0 ? {} : { messageId: receipt2.messageId }
+        };
+      }
+      const receipt = await runtime.router.sendText(peer.peerKey, text);
+      return {
+        peer: peer.alias,
+        parts: receipt.parts,
+        sentAt: new Date(receipt.at).toISOString(),
+        ...receipt.messageId === void 0 ? {} : { messageId: receipt.messageId }
+      };
+    })
+  ];
+}
+function publicPeer(peer) {
+  return {
+    alias: peer.alias,
+    channel: peer.channel,
+    scope: peer.scope
+  };
+}
+var identityOutput = objectOutput({
+  peers: {
+    type: "array",
+    items: {
+      type: "object",
+      properties: {
+        alias: { type: "string" },
+        channel: { type: "string" },
+        scope: { type: "string", enum: ["private", "group"] }
+      },
+      required: ["alias", "channel", "scope"],
+      additionalProperties: false
+    }
+  }
+});
+var channelsOutput = objectOutput({
+  available: { type: "boolean" },
+  reasons: { type: "array", items: { type: "string" } },
+  channels: {
+    type: "array",
+    items: {
+      type: "object",
+      properties: {
+        channel: { type: "string" },
+        accountId: { type: "string" },
+        state: { type: "string", enum: ["idle", "starting", "online", "paused", "error"] }
+      },
+      required: ["channel", "accountId", "state"],
+      additionalProperties: false
+    }
+  }
+});
+var sendOutput = objectOutput({
+  peer: { type: "string" },
+  parts: { type: "integer" },
+  sentAt: { type: "string" },
+  messageId: { type: "string" },
+  mediaKind: { type: "string", enum: ["image", "voice", "video", "file"] }
+}, ["messageId", "mediaKind"]);
+function requireAgentId2(exec) {
+  const agentId = exec.agent?.id;
+  if (typeof agentId !== "string" || agentId.trim() === "") {
+    throw new Error("IM tool requires the current agent");
+  }
+  return agentId;
+}
+async function boundPeers(deps, sessionId) {
+  const state = await (await deps.db()).getState();
+  const peers = [];
+  for (const [peerKey, binding] of Object.entries(state.imPeers ?? {})) {
+    if (binding.sessionId !== sessionId) continue;
+    const parts = imPeerKeyParts(peerKey);
+    if (parts === void 0) continue;
+    if (parts.scope !== "private" && parts.scope !== "group") continue;
+    peers.push({
+      peerKey,
+      alias: imPeerAlias(parts.channel, parts.scope, peerKey),
+      channel: parts.channel,
+      scope: binding.scope
+    });
+  }
+  return peers.sort((left, right) => left.alias.localeCompare(right.alias));
+}
+function peerWhenSingle(peers) {
+  if (peers.length === 1) return peers[0];
+  throw new Error(`this session is bound to ${peers.length} IM peers; pass peer to choose one of: ${peers.map((peer) => peer.alias).join(", ")}`);
+}
+function optionalTextOf(args) {
+  const value = args["text"];
+  if (value === void 0) return void 0;
+  if (typeof value !== "string") throw new Error("text must be a string");
+  const text = value.trim();
+  if (text === "") throw new Error("text must not be blank; omit it when sending only media");
+  if (text.length > IM_SEND_MAX_CHARS) {
+    throw new Error(`text must be at most ${IM_SEND_MAX_CHARS} characters, received ${text.length}`);
+  }
+  return text;
+}
+var MEDIA_KINDS = ["image", "voice", "video", "file"];
+function mediaOf(args) {
+  const kindValue = args["mediaKind"];
+  const pathValue = args["mediaPath"];
+  const urlValue = args["mediaUrl"];
+  const nameValue = args["mediaName"];
+  const hasPath = pathValue !== void 0;
+  const hasUrl = urlValue !== void 0;
+  if (!hasPath && !hasUrl) {
+    if (kindValue !== void 0 || nameValue !== void 0) {
+      throw new Error("mediaKind/mediaName need mediaPath or mediaUrl");
+    }
+    return void 0;
+  }
+  if (hasPath && hasUrl) throw new Error("pass either mediaPath or mediaUrl, not both");
+  if (typeof kindValue !== "string" || !MEDIA_KINDS.includes(kindValue)) {
+    throw new Error("mediaKind must be one of 'image' | 'voice' | 'video' | 'file' when sending media");
+  }
+  const kind = kindValue;
+  let name2;
+  if (nameValue !== void 0) {
+    if (typeof nameValue !== "string" || nameValue.trim() === "") {
+      throw new Error("mediaName must be a non-empty string when provided");
+    }
+    name2 = nameValue.trim();
+  }
+  if (hasPath) {
+    if (typeof pathValue !== "string" || pathValue.trim() === "") {
+      throw new Error("mediaPath must be a non-empty absolute path");
+    }
+    const localPath = pathValue.trim();
+    if (!isAbsolute3(localPath)) {
+      throw new Error(`mediaPath '${localPath}' is not absolute; pass a full path (the attachment summary prints one)`);
+    }
+    return { kind, localPath, ...name2 === void 0 ? {} : { name: name2 } };
+  }
+  if (typeof urlValue !== "string" || urlValue.trim() === "") {
+    throw new Error("mediaUrl must be a non-empty http(s) URL");
+  }
+  const raw = urlValue.trim();
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(`mediaUrl '${raw}' is not a valid absolute URL`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`mediaUrl '${raw}' uses protocol '${parsed.protocol}'; expected http(s)`);
+  }
+  return { kind, url: raw, ...name2 === void 0 ? {} : { name: name2 } };
+}
+function aliasOf(args) {
+  const value = args["peer"];
+  if (value === void 0) return void 0;
+  if (typeof value !== "string") throw new Error("peer must be a string when provided");
+  const alias = value.trim();
+  if (alias === "") throw new Error("peer must not be blank when provided");
+  return alias;
+}
+
+// packages/plugin/src/im/agent-mount.ts
+var disposersByAgent = /* @__PURE__ */ new Map();
+var warnedAgents = /* @__PURE__ */ new Set();
+function messageOf14(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function agentIdOf2(agent) {
+  const id = agent.id;
+  if (typeof id === "string" && id.trim() !== "") return id;
+  const sessionId = agent.session?.id;
+  return typeof sessionId === "string" && sessionId.trim() !== "" ? sessionId : void 0;
+}
+function mountImToolsOnAgent(deps, agent) {
+  const agentId = agentIdOf2(agent);
+  if (agentId === void 0 || disposersByAgent.has(agentId)) return false;
+  const header = agent.session?.header;
+  if (header?.origin === "subagent" || typeof header?.delegationDepth === "number" && header.delegationDepth > 0) return false;
+  const tools = agent.ctx?.tools;
+  const register = tools?.register;
+  if (typeof register !== "function") {
+    if (!warnedAgents.has(agentId)) {
+      warnedAgents.add(agentId);
+      deps.logger?.warn?.(
+        `dsh-soulmojito im: agent ${agentId} has no tools.register; IM tools are not mounted, so the model cannot reply with im_send`
+      );
+    }
+    return false;
+  }
+  const disposers = [];
+  for (const tool4 of createImTools(deps)) {
     try {
-      const registry = read();
-      const ids = registry?.archivedSessionIds;
-      if (ids instanceof Set) return new Set([...ids].filter((id) => typeof id === "string"));
-      if (Array.isArray(ids)) return new Set(ids.filter((id) => typeof id === "string"));
+      const disposer = register.call(tools, tool4);
+      if (typeof disposer === "function") disposers.push(disposer);
+    } catch (error) {
+      deps.logger?.warn?.(`dsh-soulmojito im: registering ${tool4.name} on agent ${agentId} failed: ${messageOf14(error)}`);
+      for (const dispose of disposers) dispose();
+      return false;
+    }
+  }
+  disposersByAgent.set(agentId, disposers);
+  warnedAgents.delete(agentId);
+  deps.logger?.debug?.(`dsh-soulmojito im: mounted ${disposers.length} IM tools on agent ${agentId}`);
+  return true;
+}
+function unmountImToolsForAgent(agentId) {
+  const disposers = disposersByAgent.get(agentId);
+  if (disposers === void 0) return;
+  disposersByAgent.delete(agentId);
+  for (const dispose of disposers) {
+    try {
+      dispose();
     } catch {
     }
   }
-  return /* @__PURE__ */ new Set();
 }
-function messageOf14(error) {
-  return error instanceof Error ? error.message : String(error);
+function unmountAllImTools() {
+  for (const agentId of [...disposersByAgent.keys()]) unmountImToolsForAgent(agentId);
 }
 
 // packages/plugin/src/index.ts
@@ -58445,7 +58301,6 @@ function apply(ctx, config = {}) {
   setNovelDriverPromise(novelDriverPromise2);
   ctx.on?.("session/event", (session, event) => {
     void getAgentTavernProjectorPromise().then((projector) => projector.project(session, event)).catch((error) => ctx.logger?.warn?.(`AgentTavern projection failed: ${error instanceof Error ? error.message : String(error)}`));
-    getImRuntime()?.handleSessionEvent(session, event);
     if (event?.type === "turn/end" && typeof session?.id === "string") {
       void variables().then((store5) => store5.clear("turn", session.id)).catch(() => {
       });
@@ -58533,6 +58388,41 @@ function apply(ctx, config = {}) {
   if (imDisabledByEnv()) {
     ctx.logger?.info?.("dsh-soulmojito im: disabled by DSH_SOULMOJITO_DISABLE_IM");
   } else {
+    const imToolsDeps = {
+      db: store3,
+      runtime: getImRuntime,
+      ...ctx.logger === void 0 ? {} : { logger: ctx.logger }
+    };
+    const mountImTools = (agent) => {
+      try {
+        mountImToolsOnAgent(imToolsDeps, agent);
+      } catch (error) {
+        ctx.logger?.warn?.(`dsh-soulmojito im: mounting IM tools failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    };
+    ctx.on?.("agent/created", ({ agent }) => {
+      mountImTools(agent);
+    });
+    ctx.on?.("agent/status", (payload) => {
+      const agent = payload?.agent;
+      if (agent !== void 0) mountImTools(agent);
+    });
+    ctx.on?.("agent/disposed", (payload) => {
+      const agent = payload?.agent;
+      const id = typeof agent?.id === "string" ? agent.id : typeof agent?.session?.id === "string" ? agent.session.id : void 0;
+      if (id !== void 0) unmountImToolsForAgent(id);
+    });
+    void store3().then(() => {
+      for (const agent of listLiveAgents2(ctx.agents)) mountImTools(agent);
+    }).catch((error) => {
+      ctx.logger?.warn?.(`dsh-soulmojito im: mounting IM tools on live agents failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    try {
+      ctx.effect?.(() => () => {
+        unmountAllImTools();
+      }, "dsh-soulmojito: im tool mount");
+    } catch {
+    }
     let ownedRuntime;
     let ownedDispose;
     void store3().then((db) => {

@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { apply, type AgentContextLike } from '../src/agent-tavern/agent.js'
 import type { ImRuntimeHandle } from '../src/im/handle.js'
 import { createImTools, IM_SEND_MAX_CHARS, imPeerAlias, type ImToolsDeps } from '../src/im/tools.js'
 import { TavernStore } from '../../tavern-store/src/index.js'
@@ -11,8 +10,6 @@ interface PeerRow {
   alias: string
   channel: string
   scope: string
-  character: string
-  chatId: string
 }
 
 const ALICE = 'qq:acct-a:private:alice'
@@ -34,24 +31,18 @@ beforeEach(async () => {
     imPeers: {
       [ALICE]: {
         sessionId: 'session-a',
-        character: 'Example',
-        chatId: 'chat-a.jsonl',
         scope: 'private',
         boundBy: 'manual',
         createdAt: new Date(0).toISOString(),
       },
       [GROUP]: {
         sessionId: 'session-a',
-        character: 'Example',
-        chatId: 'chat-a.jsonl',
         scope: 'group',
         boundBy: 'auto',
         createdAt: new Date(0).toISOString(),
       },
       [BOB]: {
         sessionId: 'session-b',
-        character: 'Example',
-        chatId: 'chat-b.jsonl',
         scope: 'private',
         boundBy: 'manual',
         createdAt: new Date(0).toISOString(),
@@ -94,8 +85,6 @@ function runtimeHarness(options: { available?: boolean; reasons?: string[]; fail
       upsertAccount: async () => {},
       removeAccount: async () => false,
       handleOneBotWebhook: async () => false,
-      bindChat: async (chat) => ({ sessionId: 'session-a', character: chat.character, chatId: chat.chatId }),
-      handleSessionEvent: () => {},
       dispose: async () => {},
       router: {
         sendText: async (peerKey, text) => {
@@ -135,8 +124,8 @@ describe('im_identity', () => {
     const { call, list } = toolsOf(runtime)
     const result = await call('im_identity', {}) as { peers: PeerRow[] }
     expect(result.peers).toEqual([
-      { alias: groupAlias, channel: 'qq', scope: 'group', character: 'Example', chatId: 'chat-a.jsonl' },
-      { alias: aliceAlias, channel: 'qq', scope: 'private', character: 'Example', chatId: 'chat-a.jsonl' },
+      { alias: groupAlias, channel: 'qq', scope: 'group' },
+      { alias: aliceAlias, channel: 'qq', scope: 'private' },
     ])
     // 平台身份（openid/openid-like）不得进入模型上下文。
     const serialized = JSON.stringify(result)
@@ -150,6 +139,19 @@ describe('im_identity', () => {
     const { runtime } = runtimeHarness()
     const { call } = toolsOf(runtime)
     expect(await call('im_identity', {}, 'session-unknown')).toEqual({ peers: [] })
+  })
+
+  it('skips a malformed peer key instead of failing the whole tool surface', async () => {
+    await db.updateState((state) => ({
+      imPeers: {
+        ...(state.imPeers ?? {}),
+        'broken-key': { sessionId: 'session-a', scope: 'private', boundBy: 'manual', createdAt: new Date(0).toISOString() },
+      },
+    }))
+    const { runtime } = runtimeHarness()
+    const { call } = toolsOf(runtime)
+    const result = await call('im_identity', {}) as { peers: PeerRow[] }
+    expect(result.peers.map((peer) => peer.alias)).toEqual([groupAlias, aliceAlias])
   })
 })
 
@@ -293,30 +295,4 @@ describe('im_send media', () => {
   })
 })
 
-function registeredToolNames(): string[] {
-  const names: string[] = []
-  apply({
-    systemPrompt: { section: () => {}, context: () => {} },
-    tools: { register: (entry) => { names.push(entry.name) } },
-    effect: (factory) => factory(),
-  } satisfies AgentContextLike)
-  return names
-}
 
-describe('IM tool registration', () => {
-  it('appends the IM tools after the existing surface whenever IM is not disabled by env', () => {
-    const baseline = registeredToolNames()
-    expect(baseline.slice(-3)).toEqual(['im_identity', 'im_channels', 'im_send'])
-    // 运行时是否已发布不影响注册：发布是异步的，用它做门控会让启动期会话少三件工具。
-    expect(baseline.length).toBeGreaterThan(3)
-  })
-
-  it('registers no IM tool at all when the env kill switch is on', () => {
-    process.env.DSH_SOULMOJITO_DISABLE_IM = '1'
-    try {
-      expect(registeredToolNames()).not.toContain('im_identity')
-    } finally {
-      delete process.env.DSH_SOULMOJITO_DISABLE_IM
-    }
-  })
-})
