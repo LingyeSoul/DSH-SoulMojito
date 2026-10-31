@@ -14,7 +14,7 @@ import { isAbsolute, relative } from 'node:path'
 import type { TavernStore } from '../../../tavern-store/src/index.js'
 import type { HostLogger } from '../host-contract.js'
 import { projectImText } from './project.js'
-import { PendingOrigins, assistantTextOfTurn, turnFailedOf, userMessageIdsOfTurn, type ImSessionEventLike } from './reply.js'
+import { PendingOrigins, assistantTextOfTurn, turnBlockedOf, turnFailedOf, userMessageIdsOfTurn, type ImSessionEventLike } from './reply.js'
 import { imAccessAllows, imChunkLimit } from './settings.js'
 import { imUnboundMessage, type EnsureImSessionRequest, type EnsureImSessionResult } from './session-host.js'
 import type { ImLogSink } from './log.js'
@@ -23,6 +23,12 @@ import { DEFAULT_IM_SETTINGS, imPeerAlias, imPeerKey, imPeerKeyParts } from './t
 
 /** 轮次失败时的固定话术：不回模型原文，也不暴露内部错误。 */
 export const IM_TURN_FAILED = '（这一轮没有生成成功，稍后再试）'
+
+/**
+ * 轮次在第一步之前被宿主拒绝时的话术（典型：会话已被归档）。必须可行动——
+ * 「稍后再试」对归档状态是错的方向，重试多少次都一样。
+ */
+export const IM_TURN_BLOCKED = '（这个会话暂时不能继续：可能已在 DSH 里被归档，请先取消归档再发一次）'
 
 /**
  * 主动发送的结构化失败（提案 0024 §3.6 的 `im_send`）：绑定缺失、目标非法与
@@ -208,6 +214,12 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
     if (turnFailedOf(events, turn)) {
       deps.log?.note('warn', `turn ${turn} failed before a reply could be produced; sent the fixed notice to ${alias}`)
       await sendNotice(origin.target, IM_TURN_FAILED, alias)
+      return
+    }
+    if (turnBlockedOf(events, turn)) {
+      // 归档会话的 pre-step 拒绝：整轮没有发过任何请求，重试无用，必须说清方向。
+      deps.log?.note('warn', `turn ${turn} was blocked by the host before any step ran (is the session archived?); sent the blocked notice to ${alias}`)
+      await sendNotice(origin.target, IM_TURN_BLOCKED, alias)
       return
     }
     const text = assistantTextOfTurn(events, turn)

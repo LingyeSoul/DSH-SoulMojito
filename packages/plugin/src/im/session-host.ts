@@ -206,6 +206,44 @@ async function requireExistingChat(deps: ImSessionDeps, chat: ImChatRefLike): Pr
 }
 
 /**
+ * 手动绑定 / 改绑时确定目标会话。
+ *
+ * 会话与聊天是一对一的：改绑到另一个聊天时绝不能沿用旧聊天的会话，否则绑定
+ * 记录写着新聊天、消息却继续投到旧会话（2026-10-31 实机：旧会话随后被归档，
+ * 每一轮都被宿主的归档闸拒绝成 `blocked`）。
+ *
+ * 解析顺序：
+ * 1. 本 peer 当前会话仍属于这个角色 + 聊天、且未归档 → 沿用（幂等改绑）；
+ * 2. 这个聊天已有未归档的 AgentTavern 会话（网页端开着的那一个）→ 复用它，
+ *    不让同一个聊天出现两个会写楼层的会话；
+ * 3. 都没有 → undefined，由 `bindImChat` 铸造新会话并导入历史。
+ *
+ * `archived` 来自宿主 workspaceRegistry；宿主没有该服务时传空集合，退化为
+ * 「只看聊天归属」的旧行为。
+ */
+export function resolveBindSessionId(
+  bindings: Record<string, { architecture?: unknown; character?: unknown; chatId?: unknown }>,
+  existingSessionId: string | undefined,
+  character: string,
+  chatId: string,
+  archived: ReadonlySet<string>,
+): string | undefined {
+  const belongsToChat = (sessionId: string): boolean => {
+    const binding = bindings[sessionId]
+    return binding !== undefined && binding.character === character && binding.chatId === chatId
+  }
+  if (existingSessionId !== undefined && !archived.has(existingSessionId) && belongsToChat(existingSessionId)) {
+    return existingSessionId
+  }
+  for (const [sessionId, binding] of Object.entries(bindings)) {
+    if (binding.architecture !== 'agent-tavern') continue
+    if (archived.has(sessionId) || !belongsToChat(sessionId)) continue
+    return sessionId
+  }
+  return undefined
+}
+
+/**
  * 独立模式：按来源聊天的角色新建一个空聊天。
  *
  * v1 只带角色与开场白（首个 greeting），不复制来源聊天的历史、变量与正则覆盖

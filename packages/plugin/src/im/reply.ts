@@ -218,6 +218,23 @@ export function turnFailedOf(events: readonly ImSessionEventLike[], turn: number
   return false
 }
 
+/**
+ * 本轮是否在第一步之前就被宿主拒绝（`turn/end => { kind: 'blocked' }`）。
+ *
+ * 真实成因是宿主 `ArchivedSessionGate`：会话被归档后，任何迟到的 followup 都
+ * 会在 pre-step 被拒，整轮不发请求直接结束。它不是「空轮」，必须回一条可行动
+ * 的提示，而不是静默。
+ */
+export function turnBlockedOf(events: readonly ImSessionEventLike[], turn: number): boolean {
+  for (const event of events) {
+    if (event.type !== 'turn/end') continue
+    if (turnOf(event) !== turn) continue
+    const reason = asRecord(event.data?.['reason'])
+    return reason?.['kind'] === 'blocked'
+  }
+  return false
+}
+
 function turnOf(event: ImSessionEventLike): number | undefined {
   const value = event.data?.['turn']
   return typeof value === 'number' && Number.isSafeInteger(value) ? value : undefined

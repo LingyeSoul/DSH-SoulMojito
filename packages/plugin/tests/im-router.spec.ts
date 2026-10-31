@@ -419,4 +419,32 @@ describe('im router finishTurn', () => {
     ])
     expect(h.sent[0]?.texts[0]).toBe('（这一轮没有生成成功，稍后再试）')
   })
+
+  it('tells the peer to unarchive when the host blocks the turn', async () => {
+    await allowAll()
+    await db.patchState({
+      imPeers: {
+        'qq:acct:private:peer-a': {
+          sessionId: 'session-a',
+          character: 'Example',
+          chatId: 'chat.jsonl',
+          scope: 'private',
+          boundBy: 'manual',
+          createdAt: new Date(0).toISOString(),
+        },
+      },
+    })
+    const h = harness()
+    await h.router.inbound(inbound())
+    const messageId = h.followups[0]?.id ?? ''
+    // 归档会话的真实形状：消息进来、turn 打开，pre-step 被拒后直接 blocked。
+    await h.router.finishTurn('session-a', 2, [
+      { type: 'agent/inbox/spliced', data: { target: 'next-turn', start: 0, inserted: [{ id: messageId }] } },
+      { type: 'turn/start', data: { turn: 2 } },
+      { type: 'agent/inbox/spliced', data: { target: 'next-turn', start: 0, removedCount: 1, inserted: [] } },
+      { type: 'turn/end', data: { turn: 2, reason: { kind: 'blocked' } } },
+    ])
+    expect(h.sent[0]?.texts[0]).toContain('取消归档')
+    expect(h.router.pending('session-a')).toBe(0)
+  })
 })

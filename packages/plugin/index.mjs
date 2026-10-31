@@ -10184,7 +10184,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("1a27e81") : void 0;
+  const commit = true ? normalizeCommit("545dc42") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -57076,6 +57076,15 @@ function turnFailedOf(events, turn) {
   }
   return false;
 }
+function turnBlockedOf(events, turn) {
+  for (const event of events) {
+    if (event.type !== "turn/end") continue;
+    if (turnOf2(event) !== turn) continue;
+    const reason = asRecord8(event.data?.["reason"]);
+    return reason?.["kind"] === "blocked";
+  }
+  return false;
+}
 function turnOf2(event) {
   const value = event.data?.["turn"];
   return typeof value === "number" && Number.isSafeInteger(value) ? value : void 0;
@@ -57180,6 +57189,21 @@ async function requireExistingChat(deps, chat) {
   }
   return chat.chatId;
 }
+function resolveBindSessionId(bindings2, existingSessionId, character, chatId, archived) {
+  const belongsToChat = (sessionId) => {
+    const binding = bindings2[sessionId];
+    return binding !== void 0 && binding.character === character && binding.chatId === chatId;
+  };
+  if (existingSessionId !== void 0 && !archived.has(existingSessionId) && belongsToChat(existingSessionId)) {
+    return existingSessionId;
+  }
+  for (const [sessionId, binding] of Object.entries(bindings2)) {
+    if (binding.architecture !== "agent-tavern") continue;
+    if (archived.has(sessionId) || !belongsToChat(sessionId)) continue;
+    return sessionId;
+  }
+  return void 0;
+}
 async function createChatFromSource(deps, source) {
   const found = await deps.db.getCharacter(source.character);
   if (found === void 0) {
@@ -57271,6 +57295,7 @@ function imUnboundMessage(peerKey) {
 
 // packages/plugin/src/im/router.ts
 var IM_TURN_FAILED = "\uFF08\u8FD9\u4E00\u8F6E\u6CA1\u6709\u751F\u6210\u6210\u529F\uFF0C\u7A0D\u540E\u518D\u8BD5\uFF09";
+var IM_TURN_BLOCKED = "\uFF08\u8FD9\u4E2A\u4F1A\u8BDD\u6682\u65F6\u4E0D\u80FD\u7EE7\u7EED\uFF1A\u53EF\u80FD\u5DF2\u5728 DSH \u91CC\u88AB\u5F52\u6863\uFF0C\u8BF7\u5148\u53D6\u6D88\u5F52\u6863\u518D\u53D1\u4E00\u6B21\uFF09";
 var ImSendError = class extends Error {
   code;
   constructor(code, message, options) {
@@ -57387,6 +57412,11 @@ function createImRouter(deps) {
     if (turnFailedOf(events, turn)) {
       deps.log?.note("warn", `turn ${turn} failed before a reply could be produced; sent the fixed notice to ${alias}`);
       await sendNotice(origin.target, IM_TURN_FAILED, alias);
+      return;
+    }
+    if (turnBlockedOf(events, turn)) {
+      deps.log?.note("warn", `turn ${turn} was blocked by the host before any step ran (is the session archived?); sent the blocked notice to ${alias}`);
+      await sendNotice(origin.target, IM_TURN_BLOCKED, alias);
       return;
     }
     const text = assistantTextOfTurn(events, turn);
@@ -58103,7 +58133,18 @@ function createImRuntime(ctx, options) {
       status: channel.status(),
       peers: 0
     })),
-    bindChat: async (chat, existingSessionId) => bindImChat(sessionDeps, chat, existingSessionId),
+    bindChat: async (chat, existingSessionId) => {
+      const state = await db.getState();
+      const sessionId = resolveBindSessionId(
+        state.sessionBindings,
+        existingSessionId,
+        chat.character,
+        chat.chatId,
+        archivedSessionIdsOf(ctx)
+      );
+      imLog.note("info", `im bind: ${chat.character}/${chat.chatId} -> ${sessionId ?? "new session"}`);
+      return bindImChat(sessionDeps, chat, sessionId);
+    },
     handleSessionEvent,
     handleOneBotUpgrade,
     startQrBind,
@@ -58171,6 +58212,21 @@ function isRunningBindPhase(phase) {
   return phase === "waiting" || phase === "verify" || phase === "saving";
 }
 function noop2() {
+}
+function archivedSessionIdsOf(ctx) {
+  for (const read of [
+    () => ctx.workspaceRegistry,
+    () => ctx.get?.("workspaceRegistry")
+  ]) {
+    try {
+      const registry = read();
+      const ids = registry?.archivedSessionIds;
+      if (ids instanceof Set) return new Set([...ids].filter((id) => typeof id === "string"));
+      if (Array.isArray(ids)) return new Set(ids.filter((id) => typeof id === "string"));
+    } catch {
+    }
+  }
+  return /* @__PURE__ */ new Set();
 }
 function messageOf14(error) {
   return error instanceof Error ? error.message : String(error);

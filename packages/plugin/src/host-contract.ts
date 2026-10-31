@@ -241,6 +241,12 @@ export interface PluginContext {
   agent?: unknown
   subagents?: unknown
   pluginManager?: unknown
+  /**
+   * Host workspace registry (session archive / pin state). Not a static
+   * dependency: hosts without it must keep mounting, so it is probed at the
+   * call site (`ctx.workspaceRegistry` or `ctx.get('workspaceRegistry')`).
+   */
+  workspaceRegistry?: unknown
   profileContext?: { name?: string }
   get?(name: string): unknown
   inject?(deps: readonly string[], callback: (serviceContext: PluginContext) => unknown): unknown

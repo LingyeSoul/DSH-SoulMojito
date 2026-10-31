@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   PendingOrigins,
   assistantTextOfTurn,
+  turnBlockedOf,
   turnFailedOf,
   userMessageIdsOfTurn,
 } from '../src/im/reply.js'
@@ -102,6 +103,16 @@ describe('turn extraction', () => {
   it('detects an error turn', () => {
     expect(turnFailedOf(events, 4)).toBe(false)
     expect(turnFailedOf(events, 5)).toBe(true)
+  })
+
+  it('detects a turn the host blocked before any step ran', () => {
+    const blocked: ImSessionEventLike[] = [
+      { type: 'turn/start', data: { turn: 13 } },
+      { type: 'turn/end', data: { turn: 13, reason: { kind: 'blocked' } } },
+    ]
+    expect(turnBlockedOf(blocked, 13)).toBe(true)
+    expect(turnBlockedOf(blocked, 12)).toBe(false)
+    expect(turnFailedOf(blocked, 13)).toBe(false)
   })
 })
 

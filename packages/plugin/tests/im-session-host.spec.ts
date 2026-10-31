@@ -8,6 +8,7 @@ import {
   bindImChat,
   ensureImSession,
   inspectImSessionCapabilities,
+  resolveBindSessionId,
   type ImSessionDeps,
 } from '../src/im/session-host.js'
 
@@ -98,6 +99,35 @@ describe('inspectImSessionCapabilities', () => {
       .toContain('the host agents service exposes neither create nor resume')
     expect(inspectImSessionCapabilities({ create: async () => ({ agent: {} }) }, {}).available).toBe(false)
     expect(inspectImSessionCapabilities({ create: async () => ({ agent: {} }) }, { mount: async () => ({}) }).available).toBe(true)
+  })
+})
+
+describe('resolveBindSessionId', () => {
+  const bindings = {
+    'session-old': { architecture: 'agent-tavern', character: 'Example', chatId: 'old.jsonl' },
+    'session-web': { architecture: 'agent-tavern', character: 'Example', chatId: 'new.jsonl' },
+    'session-st': { architecture: 'st', character: 'Example', chatId: 'new.jsonl' },
+  }
+  const none: ReadonlySet<string> = new Set()
+
+  it('reuses the peer session while it still belongs to the requested chat', () => {
+    expect(resolveBindSessionId(bindings, 'session-old', 'Example', 'old.jsonl', none)).toBe('session-old')
+  })
+
+  it('never reuses a session that belongs to another chat', () => {
+    // 改绑到新聊天：旧会话不能被改写，目标聊天自己的会话优先。
+    expect(resolveBindSessionId(bindings, 'session-old', 'Example', 'new.jsonl', none)).toBe('session-web')
+  })
+
+  it('skips archived sessions even when the binding still names the chat', () => {
+    // 实机形状：旧会话的 sessionBindings 已被错误的改绑改写成新聊天，且随后被归档。
+    const polluted = { ...bindings, 'session-old': { architecture: 'agent-tavern', character: 'Example', chatId: 'new.jsonl' } }
+    expect(resolveBindSessionId(polluted, 'session-old', 'Example', 'new.jsonl', new Set(['session-old']))).toBe('session-web')
+    expect(resolveBindSessionId(polluted, 'session-old', 'Example', 'new.jsonl', new Set(['session-old', 'session-web']))).toBeUndefined()
+  })
+
+  it('ignores sessions that do not host AgentTavern', () => {
+    expect(resolveBindSessionId(bindings, undefined, 'Example', 'new.jsonl', new Set(['session-web']))).toBeUndefined()
   })
 })
 

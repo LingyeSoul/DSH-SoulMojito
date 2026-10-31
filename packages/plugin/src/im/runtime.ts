@@ -52,6 +52,7 @@ import {
   ensureImAgent,
   ensureImSession,
   inspectImSessionCapabilities,
+  resolveBindSessionId,
   type ImAgentsSeam,
   type ImPresetsSeam,
   type ImSessionCapabilities,
@@ -611,7 +612,20 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       status: channel.status(),
       peers: 0,
     })),
-    bindChat: async (chat, existingSessionId) => bindImChat(sessionDeps, chat, existingSessionId),
+    bindChat: async (chat, existingSessionId) => {
+      const state = await db.getState()
+      // 改绑到另一个聊天时不能沿用旧会话：目标聊天已有的会话优先，其次才是
+      // peer 当前会话（幂等改绑）。归档会话永不作为绑定目标。
+      const sessionId = resolveBindSessionId(
+        state.sessionBindings,
+        existingSessionId,
+        chat.character,
+        chat.chatId,
+        archivedSessionIdsOf(ctx),
+      )
+      imLog.note('info', `im bind: ${chat.character}/${chat.chatId} -> ${sessionId ?? 'new session'}`)
+      return bindImChat(sessionDeps, chat, sessionId)
+    },
     handleSessionEvent,
     handleOneBotUpgrade,
     startQrBind,
@@ -701,6 +715,31 @@ function isRunningBindPhase(phase: ImBindStatus['phase']): boolean {
 
 function noop(): void {
   // 串行链只关心「上一步已结束」，失败由各自返回的 promise 上抛。
+}
+
+/**
+ * 宿主归档集合的只读投影。
+ *
+ * `workspaceRegistry` 不是本插件的静态依赖（写进 inject 会让没有该服务的宿主
+ * 整个插件不挂载），所以两个面都试：`ctx.workspaceRegistry` 与
+ * `ctx.get('workspaceRegistry')`。Cordis 对未声明 inject 的服务属性会抛错，
+ * 逐面捕获；都读不到就按「没有归档」处理。
+ */
+function archivedSessionIdsOf(ctx: PluginContext): ReadonlySet<string> {
+  for (const read of [
+    () => ctx.workspaceRegistry,
+    () => ctx.get?.('workspaceRegistry'),
+  ]) {
+    try {
+      const registry = read() as { archivedSessionIds?: unknown } | null | undefined
+      const ids = registry?.archivedSessionIds
+      if (ids instanceof Set) return new Set([...ids].filter((id): id is string => typeof id === 'string'))
+      if (Array.isArray(ids)) return new Set(ids.filter((id): id is string => typeof id === 'string'))
+    } catch {
+      // 未声明 inject 的服务属性在 Cordis 会抛错：继续试下一个面。
+    }
+  }
+  return new Set()
 }
 
 function messageOf(error: unknown): string {
