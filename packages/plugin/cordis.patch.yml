@@ -25,6 +25,19 @@
           - id: dsh-soulmojito-agent
             name: 'dsh-soulmojito/agent'
 
+    - id: preset-agent-tavern-im
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: agent-tavern-im
+        name: AgentTavernIM
+        description: 原生 DSH AgentLoop 的 IM 模式：消息来自微信/QQ/OneBot，所有回复用 im_send 短句多条发出。
+        order: 11
+        plugins:
+          - id: dsh-soulmojito-agent
+            name: 'dsh-soulmojito/agent'
+          - id: dsh-soulmojito-im-agent
+            name: 'dsh-soulmojito/im-agent'
+
     - id: preset-agent-novel
       name: '@deepseek-ai/dsh-agent-preset'
       config:

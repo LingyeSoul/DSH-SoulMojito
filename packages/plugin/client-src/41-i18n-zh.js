@@ -932,7 +932,7 @@
       'body.detailUnknown': '当前状态不允许这项正文操作。',
       // IM 通道（提案 0024 §6.1，M5）：键集与 40-i18n-en.js 严格镜像。
       'im.hint.title': '即时通讯',
-      'im.hint': 'QQ、微信与 OneBot 11 的消息进入一个 AgentTavern 聊天，回合结束后正文原路回到手机。每个对端绑一个聊天：独立会话把每个对端分开，共享会话让多个对端落进同一段上下文。',
+      'im.hint': 'QQ、微信与 OneBot 11 的消息会插进你绑定的 DSH 会话，由模型调用 im_send 回复。绑定会话建议使用 AgentTavernIM 预设，模型才会按 IM 规则用短句、多条消息回复。',
       'im.disabled': '本宿主已关闭 IM（DSH_SOULMOJITO_DISABLE_IM）。通道与路由都没有注册；取消该环境变量并重启后才能使用本面板。',
       'im.unavailable': '本宿主无法运行 IM：{reasons}',
       'im.channels': '通道',

@@ -57,6 +57,9 @@ const UNBOUND_NOTICE_TTL_MS = 10 * 60_000
 /** 被动回复锚点的有效期：平台消息的被动回复窗口远短于此，过期就不带。 */
 const REPLY_ANCHOR_TTL_MS = 5 * 60_000
 
+/** 「最近一条入站 peer」的有效期：模型在同一轮/下一轮回复都够用。 */
+const LAST_PEER_TTL_MS = 10 * 60_000
+
 /** 面板待办上限：只留最近 50 个未绑定对端，防止陌生人群刷爆 state。 */
 const MAX_PENDING_PEERS = 50
 
@@ -103,6 +106,11 @@ export interface ImRouter {
   sendText(peerKey: string, text: string): Promise<ImSendReceipt>
   /** 主动发一条媒体（可选配文）；目标校验与 `sendText` 同一套。 */
   sendMedia(peerKey: string, media: ImOutboundMedia): Promise<ImSendReceipt>
+  /**
+   * 最近一条成功入站消息的 peerKey（同会话，10 分钟窗口）。`im_send` 省略
+   * `peer` 且会话绑了多个对端时用它回退；过期返回 undefined。
+   */
+  lastPeerOf(sessionId: string): string | undefined
 }
 
 export function createImRouter(deps: ImRouterDeps): ImRouter {
@@ -113,6 +121,11 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
    * 消息 id；路由在入站时记下最近一条，`im_send` 出站时自动带上。
    */
   const replyAnchors = new Map<string, { replyTo: string; at: number }>()
+  /**
+   * 最近一条入站消息的 peer（按会话）。`im_send` 省略 `peer` 时先看它：
+   * 微信一条绑定只有一个聊天，QQ/多通道共用会话时也能回给刚说话的人。
+   */
+  const lastPeerBySession = new Map<string, { peerKey: string; at: number }>()
 
   async function settingsOf(): Promise<ImSettings> {
     const state = await deps.db.getState()
@@ -181,6 +194,7 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
       return
     }
     const text = relayTextOf(message, body, alias)
+    lastPeerBySession.set(binding.sessionId, { peerKey, at: now })
     deps.log?.note(
       'info',
       `accepted a ${message.channel}/${message.scope} message from ${alias} (${body.length} chars) for session ${binding.sessionId}`,
@@ -394,10 +408,21 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
     }
   }
 
+  function lastPeerOf(sessionId: string): string | undefined {
+    const entry = lastPeerBySession.get(sessionId)
+    if (entry === undefined) return undefined
+    if (deps.now() - entry.at > LAST_PEER_TTL_MS) {
+      lastPeerBySession.delete(sessionId)
+      return undefined
+    }
+    return entry.peerKey
+  }
+
   return {
     inbound,
     sendText,
     sendMedia,
+    lastPeerOf,
   }
 }
 

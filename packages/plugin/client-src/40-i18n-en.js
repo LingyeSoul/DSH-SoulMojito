@@ -948,7 +948,7 @@
       'body.detailUnknown': 'The current state does not allow this body operation.',
       // IM channels (proposal 0024 §6.1, M5). Keys mirror 41-i18n-zh.js exactly.
       'im.hint.title': 'Instant messaging',
-      'im.hint': 'Messages from QQ, WeChat and OneBot 11 land in an AgentTavern chat, and the reply goes straight back to the phone. Bind one chat per sender: independent sessions keep every sender apart, shared sessions put several senders into one context.',
+      'im.hint': 'Messages from QQ, WeChat and OneBot 11 are inserted into the DSH session you bind; the agent replies with im_send. Use the AgentTavernIM preset for the bound session so the model follows the IM rules (short, multi-message replies).',
       'im.disabled': 'IM is disabled on this host (DSH_SOULMOJITO_DISABLE_IM). No channel or route is registered; unset it and restart to use this panel.',
       'im.unavailable': 'IM cannot run on this host: {reasons}',
       'im.channels': 'Channels',

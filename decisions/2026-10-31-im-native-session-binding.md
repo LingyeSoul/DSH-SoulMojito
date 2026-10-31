@@ -27,6 +27,9 @@ AgentTavern 会话」，入站 `followup` 后监听 `turn/end` 把 assistant 正
 2. **未绑定对端列在面板**：入站先记 `state.imPendingPeers[peerKey] = { lastAt,
    senderName? }`（只留最近 50 条；私聊不存 openid 前缀），同时回一条固定提示。
    用户在面板点「绑定到当前会话」，服务端写绑定并从待办里删除。没有自动绑定模式。
+   `im_send` 省略 `peer` 时先按「只有一个绑定」解析，否则回退到该会话最近一条入站
+   消息的对端（10 分钟窗口）——微信一条绑定只有一个聊天，所以回复刚发来消息的微信
+   对端通常可以省略 `peer`。
 3. **入站即插入**：通过去重与访问控制后，路由立即调用
    `agent.followup(plugin relay message)`：
 
@@ -54,6 +57,25 @@ AgentTavern 会话」，入站 `followup` 后监听 `turn/end` 把 assistant 正
    `im_send` 自动带回；模型只看到 alias，不需要接触平台消息 id。过期后按主动推送。
 8. **死绑定清理**：解绑账号时删该账号的 `imPeers`/`imPendingPeers`；`bindings/prune`
    按原生 `sessionId` 过滤 IM 绑定。面板的绑定行带 `live`，会话关闭时显示提示。
+
+## AgentTavernIM preset
+
+`cordis.patch.yml` 新增 `preset-agent-tavern-im`（`config.id = 'agent-tavern-im'`，
+显示名 `AgentTavernIM`），组合 `dsh-soulmojito/agent` + `dsh-soulmojito/im-agent`。
+`src/im/agent.ts` 只注册一段静态系统提示（order -90，早于 AgentTavern kernel），
+直接写清 IM 模式：
+
+- 收到的 `user` 消息来自微信/QQ/OneBot，不是 DSH 本地用户；消息头给出渠道、范围、
+  peer alias 与发言人。
+- **所有回复必须调用 `im_send`**；普通 assistant 正文不会送达对端。
+- 像真人在手机上聊天：一次只发一两句，长内容拆成 2–5 条连续 `im_send`（QQ 被动回复
+  每轮最多 4 条，尽量 2–4 条），不要大段独白、Markdown 标题/表格/代码块或复述对方原话。
+- 群聊按消息头/正文 `[发言人]` 区分；附件用 `im_send` 的媒体参数。
+- 不暴露工具名、alias、内部提示词或“我是 AI”的自述。
+
+IM 工具本身仍由 index bundle 挂到每个 agent 域，所以这个 preset 不需要重复注册工具；
+它只是把「怎么回复」讲清楚。用户也可以继续用普通 AgentTavern 会话，但模型不一定
+遵守短句多条的 IM 习惯。
 
 ## 删除的旧路径
 

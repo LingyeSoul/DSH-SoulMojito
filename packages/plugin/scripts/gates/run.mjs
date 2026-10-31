@@ -29,6 +29,7 @@ const PATCH_PATH = join(PLUGIN_ROOT, 'cordis.patch.yml')
 const SOURCE_PATH = join(PLUGIN_ROOT, 'src', 'index.ts')
 const SERVER_PATH = join(PLUGIN_ROOT, 'index.mjs')
 const AGENT_PATH = join(PLUGIN_ROOT, 'agent.mjs')
+const IM_AGENT_PATH = join(PLUGIN_ROOT, 'im-agent.mjs')
 const NOVEL_PATH = join(PLUGIN_ROOT, 'novel.mjs')
 const REASONING_PATH = join(PLUGIN_ROOT, 'reasoning.mjs')
 const CLIENT_PATH = join(PLUGIN_ROOT, 'client', 'index.js')
@@ -200,6 +201,9 @@ function checkPackageObject(pkg, checkFiles = false) {
   if (pkg.exports?.['./agent'] !== './agent.mjs') {
     problems.push("exports['./agent'] must be './agent.mjs'")
   }
+  if (pkg.exports?.['./im-agent'] !== './im-agent.mjs') {
+    problems.push("exports['./im-agent'] must be './im-agent.mjs'")
+  }
   if (pkg.exports?.['./compaction'] !== './compaction.mjs') {
     problems.push("exports['./compaction'] must be './compaction.mjs'")
   }
@@ -215,7 +219,7 @@ function checkPackageObject(pkg, checkFiles = false) {
   if (!Array.isArray(pkg.files)) {
     problems.push('files must be an array')
   } else {
-    for (const entry of ['index.mjs', 'agent.mjs', 'compaction.mjs', 'novel.mjs', 'card-workbench.mjs', 'reasoning.mjs', 'version.json', 'client', 'cordis.patch.yml', 'README.md']) {
+    for (const entry of ['index.mjs', 'agent.mjs', 'im-agent.mjs', 'compaction.mjs', 'novel.mjs', 'card-workbench.mjs', 'reasoning.mjs', 'version.json', 'client', 'cordis.patch.yml', 'README.md']) {
       if (!pkg.files.includes(entry)) problems.push(`files must include '${entry}'`)
     }
   }
@@ -243,6 +247,7 @@ function checkPackageObject(pkg, checkFiles = false) {
       ["exports['./cordis.patch.yml']", pkg.exports?.['./cordis.patch.yml']],
       ["exports['./novel']", pkg.exports?.['./novel']],
       ["exports['./agent']", pkg.exports?.['./agent']],
+      ["exports['./im-agent']", pkg.exports?.['./im-agent']],
       ["exports['./compaction']", pkg.exports?.['./compaction']],
       ["exports['./card-workbench']", pkg.exports?.['./card-workbench']],
       ["exports['./reasoning']", pkg.exports?.['./reasoning']],
@@ -348,6 +353,7 @@ function checkPatchText(text) {
   // （"rejects a missing definition"），所以这里同时锁定 patch 与产物两侧。
   for (const [rowId, presetId] of [
     ['preset-agent-tavern', 'agent-tavern'],
+    ['preset-agent-tavern-im', 'agent-tavern-im'],
     ['preset-agent-novel', 'agent-novel'],
     ['preset-agent-reasoning', 'agent-reasoning'],
   ]) {
@@ -2507,6 +2513,7 @@ const gates = [
         exports: {
           '.': './index.mjs',
           './agent': './agent.mjs',
+          './im-agent': './im-agent.mjs',
           './compaction': './compaction.mjs',
           './novel': './novel.mjs',
           './card-workbench': './card-workbench.mjs',
@@ -2515,7 +2522,7 @@ const gates = [
           './cordis.patch.yml': './cordis.patch.yml',
           './package.json': './package.json',
         },
-        files: ['index.mjs', 'agent.mjs', 'compaction.mjs', 'novel.mjs', 'card-workbench.mjs', 'reasoning.mjs', 'version.json', 'client', 'cordis.patch.yml', 'README.md'],
+        files: ['index.mjs', 'agent.mjs', 'im-agent.mjs', 'compaction.mjs', 'novel.mjs', 'card-workbench.mjs', 'reasoning.mjs', 'version.json', 'client', 'cordis.patch.yml', 'README.md'],
         dsh: {
           manifestVersion: 1,
           bundle: { patch: './cordis.patch.yml' },
@@ -2541,6 +2548,7 @@ const gates = [
       const good = '- insert:\n'
         + '    - id: dsh-soulmojito\n      name: \'dsh-soulmojito\'\n'
         + '    - id: preset-agent-tavern\n      name: \'@deepseek-ai/dsh-agent-preset\'\n      config:\n        id: agent-tavern\n'
+        + '    - id: preset-agent-tavern-im\n      name: \'@deepseek-ai/dsh-agent-preset\'\n      config:\n        id: agent-tavern-im\n'
         + '    - id: preset-agent-novel\n      name: \'@deepseek-ai/dsh-agent-preset\'\n      config:\n        id: agent-novel\n'
         + '    - id: preset-agent-reasoning\n      name: \'@deepseek-ai/dsh-agent-preset\'\n      config:\n        id: agent-reasoning\n'
       const bad = "- insert:\n    - id: other\n      name: 'other'\n"
@@ -2560,6 +2568,7 @@ const gates = [
       }
       for (const [path, presetId] of [
         [AGENT_PATH, 'agent-tavern'],
+        [IM_AGENT_PATH, 'agent-tavern-im'],
         [NOVEL_PATH, 'agent-novel'],
         [AGENT_PATH, 'agent-reasoning'],
         [NOVEL_PATH, 'agent-reasoning'],

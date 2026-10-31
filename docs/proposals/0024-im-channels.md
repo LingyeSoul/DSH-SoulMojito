@@ -278,6 +278,10 @@ session meta 与 preset 组合）留作后续，不能用「插件代建会话�
 standard / novel / workbench 等任意原生会话，不能只挂在 AgentTavern preset 上。
 **身份一律来自真实 session binding**，参数不能指定会话。
 
+IM 绑定的会话建议使用 `AgentTavernIM`（`agent-tavern-im`）preset：它在 AgentTavern
+之上加了 IM 模式提示（所有回复用 `im_send`、短句多条、群聊区分发言人、附件用媒体
+参数）。工具仍由 index bundle 统一挂载，preset 只负责把回复规范讲清楚。
+
 | 工具 | 作用 | 边界 |
 |---|---|---|
 | `im_identity` | 查当前会话绑定的通道、私聊/群、对端显示名、最近 N 条发言人与时间 | 只读，只返回本会话绑定 |

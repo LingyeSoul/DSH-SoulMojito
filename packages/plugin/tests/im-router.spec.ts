@@ -171,6 +171,16 @@ describe('im router inbound', () => {
     expect((await db.getState()).imPendingPeers?.[key]?.senderName).toBe('小明')
   })
 
+  it('remembers the latest inbound peer per session for im_send fallback', async () => {
+    await allowAll()
+    await bindPeer()
+    const h = harness()
+    await h.router.inbound(inbound())
+    expect(h.router.lastPeerOf('session-a')).toBe(PEER_KEY)
+    h.tick(11 * 60_000)
+    expect(h.router.lastPeerOf('session-a')).toBeUndefined()
+  })
+
   it('does not materialize media before the access policy passes', async () => {
     // 默认白名单为空：拒绝所有人，loadMedia 不能被调用。
     const h = harness()

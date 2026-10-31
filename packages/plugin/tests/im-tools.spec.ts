@@ -65,7 +65,7 @@ interface RuntimeHarness {
   media: Array<{ peerKey: string; media: unknown }>
 }
 
-function runtimeHarness(options: { available?: boolean; reasons?: string[]; fail?: string } = {}): RuntimeHarness {
+function runtimeHarness(options: { available?: boolean; reasons?: string[]; fail?: string; lastPeer?: string } = {}): RuntimeHarness {
   const sent: RuntimeHarness['sent'] = []
   const media: RuntimeHarness['media'] = []
   return {
@@ -97,6 +97,7 @@ function runtimeHarness(options: { available?: boolean; reasons?: string[]; fail
           media.push({ peerKey, media: payload })
           return { parts: 1, at: 1_700_000_000_000 }
         },
+        lastPeerOf: (sessionId) => (sessionId === 'session-a' ? options.lastPeer : undefined),
       },
     },
   }
@@ -219,6 +220,14 @@ describe('im_send', () => {
     expect(sent).toEqual([])
     await call('im_send', { text: 'hi', peer: aliceAlias })
     expect(sent).toEqual([{ peerKey: ALICE, text: 'hi' }])
+  })
+
+  it('falls back to the most recent inbound peer when several are bound', async () => {
+    const { runtime, sent } = runtimeHarness({ lastPeer: ALICE })
+    const { call } = toolsOf(runtime)
+    const result = await call('im_send', { text: '收到' }) as { peer: string }
+    expect(result.peer).toBe(aliceAlias)
+    expect(sent).toEqual([{ peerKey: ALICE, text: '收到' }])
   })
 
   it('refuses blank and over-long text before touching the runtime', async () => {

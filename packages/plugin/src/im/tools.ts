@@ -62,7 +62,7 @@ export function createImTools(deps: ImToolsDeps): ToolDefinition[] {
         })),
       }
     }),
-    tool('im_send', 'Send one message to an IM peer that is bound to this session. Use it to reply when an IM message has been relayed into this session. Send text, a media item, or a media item with a caption. Omit peer when exactly one peer is bound; pass the alias from im_identity when several are. Text is trimmed and capped at 4000 characters. Media is read from an absolute local path (preferred) or an http(s) URL for image/video. Cross-session sending is forbidden: an alias outside this session is rejected.', {
+    tool('im_send', 'Send one message to an IM peer that is bound to this session. Use it to reply when an IM message has been relayed into this session. Send text, a media item, or a media item with a caption. Omit peer when exactly one peer is bound, or to reply to the most recent inbound message of this session; otherwise pass the alias from im_identity. Text is trimmed and capped at 4000 characters. Media is read from an absolute local path (preferred) or an http(s) URL for image/video. Cross-session sending is forbidden: an alias outside this session is rejected.', {
       text: { type: 'string', description: 'Message text, 1-4000 characters after trimming. Optional when media is attached; then it becomes the caption.' },
       peer: { type: 'string', description: 'Target peer alias from im_identity; required when this session has more than one binding.' },
       mediaKind: { type: 'string', enum: ['image', 'voice', 'video', 'file'], description: 'Kind of the media item; required when mediaPath or mediaUrl is given.' },
@@ -76,7 +76,8 @@ export function createImTools(deps: ImToolsDeps): ToolDefinition[] {
         throw new Error('im_send needs text, mediaPath or mediaUrl')
       }
       const requested = aliasOf(args)
-      const peers = await boundPeers(deps, requireAgentId(exec))
+      const agentId = requireAgentId(exec)
+      const peers = await boundPeers(deps, agentId)
       let peer: BoundPeer
       if (requested !== undefined) {
         const found = peers.find((entry) => entry.alias === requested)
@@ -85,7 +86,10 @@ export function createImTools(deps: ImToolsDeps): ToolDefinition[] {
       } else if (peers.length === 0) {
         throw new Error('this session has no IM peer binding; bind one in the dsh-soulmojito IM panel first')
       } else {
-        peer = peerWhenSingle(peers)
+        // 微信一条绑定只有一个聊天；多通道共用会话时，回给最近一条入站消息的对端。
+        const lastKey = deps.runtime()?.router.lastPeerOf?.(agentId)
+        const recent = lastKey === undefined ? undefined : peers.find((entry) => entry.peerKey === lastKey)
+        peer = recent ?? peerWhenSingle(peers)
       }
       const runtime = deps.runtime()
       if (runtime === undefined) {

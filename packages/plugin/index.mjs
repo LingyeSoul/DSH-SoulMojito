@@ -10184,7 +10184,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("e51ccdf") : void 0;
+  const commit = true ? normalizeCommit("4335616") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -56930,10 +56930,12 @@ var ImSendError = class extends Error {
 };
 var UNBOUND_NOTICE_TTL_MS = 10 * 6e4;
 var REPLY_ANCHOR_TTL_MS = 5 * 6e4;
+var LAST_PEER_TTL_MS = 10 * 6e4;
 var MAX_PENDING_PEERS = 50;
 function createImRouter(deps) {
   const noticed = /* @__PURE__ */ new Map();
   const replyAnchors = /* @__PURE__ */ new Map();
+  const lastPeerBySession = /* @__PURE__ */ new Map();
   async function settingsOf() {
     const state = await deps.db.getState();
     return state.imSettings ?? DEFAULT_IM_SETTINGS;
@@ -56991,6 +56993,7 @@ function createImRouter(deps) {
       return;
     }
     const text = relayTextOf(message, body, alias);
+    lastPeerBySession.set(binding.sessionId, { peerKey, at: now });
     deps.log?.note(
       "info",
       `accepted a ${message.channel}/${message.scope} message from ${alias} (${body.length} chars) for session ${binding.sessionId}`
@@ -57158,10 +57161,20 @@ function createImRouter(deps) {
       deps.log?.note("error", `sending a notice to ${alias} failed: ${messageOf12(error)}`);
     }
   }
+  function lastPeerOf(sessionId) {
+    const entry = lastPeerBySession.get(sessionId);
+    if (entry === void 0) return void 0;
+    if (deps.now() - entry.at > LAST_PEER_TTL_MS) {
+      lastPeerBySession.delete(sessionId);
+      return void 0;
+    }
+    return entry.peerKey;
+  }
   return {
     inbound,
     sendText,
-    sendMedia
+    sendMedia,
+    lastPeerOf
   };
 }
 function relayTextOf(inbound, body, alias) {
@@ -57831,7 +57844,7 @@ function createImTools(deps) {
         }))
       };
     }),
-    tool("im_send", "Send one message to an IM peer that is bound to this session. Use it to reply when an IM message has been relayed into this session. Send text, a media item, or a media item with a caption. Omit peer when exactly one peer is bound; pass the alias from im_identity when several are. Text is trimmed and capped at 4000 characters. Media is read from an absolute local path (preferred) or an http(s) URL for image/video. Cross-session sending is forbidden: an alias outside this session is rejected.", {
+    tool("im_send", "Send one message to an IM peer that is bound to this session. Use it to reply when an IM message has been relayed into this session. Send text, a media item, or a media item with a caption. Omit peer when exactly one peer is bound, or to reply to the most recent inbound message of this session; otherwise pass the alias from im_identity. Text is trimmed and capped at 4000 characters. Media is read from an absolute local path (preferred) or an http(s) URL for image/video. Cross-session sending is forbidden: an alias outside this session is rejected.", {
       text: { type: "string", description: "Message text, 1-4000 characters after trimming. Optional when media is attached; then it becomes the caption." },
       peer: { type: "string", description: "Target peer alias from im_identity; required when this session has more than one binding." },
       mediaKind: { type: "string", enum: ["image", "voice", "video", "file"], description: "Kind of the media item; required when mediaPath or mediaUrl is given." },
@@ -57845,7 +57858,8 @@ function createImTools(deps) {
         throw new Error("im_send needs text, mediaPath or mediaUrl");
       }
       const requested = aliasOf(args);
-      const peers = await boundPeers(deps, requireAgentId2(exec));
+      const agentId = requireAgentId2(exec);
+      const peers = await boundPeers(deps, agentId);
       let peer;
       if (requested !== void 0) {
         const found = peers.find((entry) => entry.alias === requested);
@@ -57854,7 +57868,9 @@ function createImTools(deps) {
       } else if (peers.length === 0) {
         throw new Error("this session has no IM peer binding; bind one in the dsh-soulmojito IM panel first");
       } else {
-        peer = peerWhenSingle(peers);
+        const lastKey = deps.runtime()?.router.lastPeerOf?.(agentId);
+        const recent = lastKey === void 0 ? void 0 : peers.find((entry) => entry.peerKey === lastKey);
+        peer = recent ?? peerWhenSingle(peers);
       }
       const runtime = deps.runtime();
       if (runtime === void 0) {
