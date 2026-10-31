@@ -68,6 +68,7 @@
 - [`2026-10-31-im-native-session-binding.md`](../decisions/2026-10-31-im-native-session-binding.md) — IM 绑定原生 DSH 会话：入站即插入、模型用 `im_send` 回复、IM 工具挂进每个 agent
 - [`2026-10-31-im-steer-inbound.md`](../decisions/2026-10-31-im-steer-inbound.md) — IM 入站「插话发送」：运行中的会话用 `agent.steer`，空闲用 `followup`
 - [`2026-10-31-weixin-send-throttle.md`](../decisions/2026-10-31-weixin-send-throttle.md) — 微信出站突发预算（5 条/30 秒）与 `ret=-2 prepare failed` 的 5 分钟冷却
+- [`2026-10-31-qq-start-token-retry.md`](../decisions/2026-10-31-qq-start-token-retry.md) — QQ 启动被 access_token 的 10s 固定超时打断：网络类启动重试（3 次 / 1s+2s / 只认网络错误，每次留痕）
 
 ### 宿主兼容与 DSH 版本适配
 

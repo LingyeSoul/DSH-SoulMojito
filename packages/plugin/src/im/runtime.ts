@@ -67,6 +67,11 @@ export interface CreateImRuntimeOptions {
   qqBot?: QQBotFactory
   /** QQ 扫码连接器。缺省从数据目录动态加载；测试注入假连接器。 */
   qqConnector?: QQConnector
+  /**
+   * QQ 启动重试的退避等待。缺省真定时器（1s/2s）；测试注入即时解析，
+   * 让「三次网络失败 → 回滚」的集成用例不把退避写进墙钟。
+   */
+  qqStartRetrySleep?: (ms: number) => Promise<void>
   /** 微信扫码入口。缺省官方固定地址；测试指向本地桩服务，自建反代也可覆盖。 */
   weixinQrBaseUrl?: string
   /** 微信媒体 CDN 入口。缺省官方 c2c 域名；测试指向本地桩服务。 */
@@ -289,6 +294,7 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       media: mediaStore,
       now: () => Date.now(),
       logger,
+      ...(options.qqStartRetrySleep === undefined ? {} : { retrySleep: options.qqStartRetrySleep }),
     })
   }
 

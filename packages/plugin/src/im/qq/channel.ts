@@ -15,6 +15,10 @@
  * 3. 被动回复（带 `msgId`）对同一条触发消息最多 4 条，超出部分只能当主动推送发。
  * 4. 原生流式消息（`openStream`/`StreamSession`）只对 C2C 开放；群聊流式由本模块
  *    自己用「有序多段 + 被动额度重切片」近似（`planGroupParts`），不假装是平台流。
+ * 5. token 预取走 SDK 自己的固定 10s 超时（1.0.5 `protocol/api/token.ts` 的
+ *    `DEFAULT_TOKEN_TIMEOUT_MS`），超时抛 `Network error getting access_token:
+ *    This operation was aborted`。AbortController 只在 SDK 内部，插件拦不下——
+ *    网络抖动按「整次启动重试」处理（见 `start()`），不当凭据错误。
  *
  * SDK 本身不在产物里：构造器由运行时从 `im/qq/sdk.ts` 动态加载后注入，
  * 本模块只依赖那里的结构类型（见 `decisions/2026-10-30-qq-channel.md`）。
@@ -26,6 +30,7 @@ import { createHash } from 'node:crypto'
 import type { HostLogger } from '../../host-contract.js'
 import type { ImMediaStore } from '../media-store.js'
 import { PASSIVE_REPLY_LIMIT, planDeliveries, planGroupParts } from './delivery.js'
+import { isRetryableQqStartFailure, nextQqStartRetryDelayMs, QQ_START_ATTEMPTS, qqStartRetrySleep } from './start-retry.js'
 import { qqAttachmentsOf, qqMediaOfAttachments, qqTranscriptsOf } from './inbound-media.js'
 import { fetchInboundMedia } from '../media-fetch.js'
 import type {
@@ -121,6 +126,8 @@ export interface QQChannelOptions {
   media?: ImMediaStore
   now: () => number
   logger?: HostLogger
+  /** 启动重试的退避等待；测试注入即时解析，不把 1s/2s 写进墙钟。缺省真定时器。 */
+  retrySleep?: (ms: number) => Promise<void>
 }
 
 interface StartupGate {
@@ -165,10 +172,15 @@ export class QQChannel implements ImChannel {
   private readonly media: ImMediaStore | undefined
   private readonly now: () => number
   private readonly logger: HostLogger | undefined
+  private readonly retrySleep: (ms: number) => Promise<void>
 
   private bot: QqBotLike | undefined
   private ready: StartupGate | undefined
   private starting = false
+  /** stop() 之后的代次闸：重试等待期间被停掉的通道不许再起一条新连接。 */
+  private closed = false
+  /** 并发 start() 只让第一条跑：退避等待期间 bot 是空的，挡不住重入。 */
+  private startInFlight = false
   private onlineSince: number | undefined
   private lastError: string | undefined
   private signal: AbortSignal | undefined
@@ -192,32 +204,70 @@ export class QQChannel implements ImChannel {
     this.media = options.media
     this.now = options.now
     this.logger = options.logger
+    this.retrySleep = options.retrySleep ?? qqStartRetrySleep
   }
 
   async start(signal: AbortSignal): Promise<void> {
-    if (this.bot !== undefined) return
+    if (this.bot !== undefined || this.startInFlight) return
     if (signal.aborted) {
       throw new QQChannelError('QQ_CLOSED', `qq account '${this.accountId}' cannot start: signal is already aborted`)
     }
-    // 先构造再登记状态：构造抛错时通道仍是 idle，没有监听器或半截字段要回收。
-    const bot = this.createBot({
-      appId: this.appId,
-      appSecret: this.appSecret,
-      accountId: this.accountId,
-      transport: 'websocket',
-      logger: qqLoggerOf(this.logger),
-    })
-    this.starting = true
-    this.lastError = undefined
-    this.signal = signal
-    this.abortListener = () => { void this.stop() }
-    signal.addEventListener('abort', this.abortListener, { once: true })
-    this.bot = bot
-    const gate = createStartupGate()
-    this.ready = gate
-    this.attach(bot, gate)
-
+    this.closed = false
+    this.startInFlight = true
     try {
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          await this.startAttempt(signal)
+          return
+        } catch (error) {
+          const failure = error instanceof QQChannelError
+            ? error
+            : new QQChannelError('QQ_START_FAILED', `qq account '${this.accountId}' failed to start: ${messageOf(error)}`, { cause: error })
+          const delayMs = this.retryDelayMs(failure, attempt, signal)
+          if (delayMs === undefined) throw failure
+          // 退避期间如实投影为 starting：网络抖动不是「通道坏了」，也不该闪一下 error。
+          this.starting = true
+          this.lastError = undefined
+          // 每次重试都必须留痕：网络抖动被重试掩盖时，用户至少能从日志看出发生过几次。
+          this.logger?.warn?.(
+            `dsh-soulmojito im qq/${this.accountId}: ${failure.message}; retrying in ${delayMs}ms `
+              + `(attempt ${attempt + 1}/${QQ_START_ATTEMPTS}, network-class startup failure)`,
+          )
+          await this.retrySleep(delayMs)
+          if (this.closed || signal.aborted) {
+            // 退避期间被停/被中止：start(signal) 自己收干净，status 不许卡在 starting。
+            await this.stop()
+            throw new QQChannelError('QQ_CLOSED', `qq account '${this.accountId}' stopped before it became ready`)
+          }
+        }
+      }
+    } finally {
+      this.startInFlight = false
+    }
+  }
+
+  /** 单次启动：构造 bot、挂监听、等 ready；任何一步抛错都回收这一次的半成品。 */
+  private async startAttempt(signal: AbortSignal): Promise<void> {
+    let created: QqBotLike | undefined
+    try {
+      // 先构造再登记状态：构造抛错时还没有监听器要回收。
+      const bot = this.createBot({
+        appId: this.appId,
+        appSecret: this.appSecret,
+        accountId: this.accountId,
+        transport: 'websocket',
+        logger: qqLoggerOf(this.logger),
+      })
+      created = bot
+      this.starting = true
+      this.lastError = undefined
+      this.signal = signal
+      this.abortListener = () => { void this.stop() }
+      signal.addEventListener('abort', this.abortListener, { once: true })
+      this.bot = bot
+      const gate = createStartupGate()
+      this.ready = gate
+      this.attach(bot, gate)
       // start() 只在连接终止时解出：成功与否看 ready 事件，这里只接失败信号。
       // 调用本身也在 try 内：同步抛出（被替换的工厂或未来的 SDK 改动）同样走清理。
       void bot.start().then(
@@ -232,14 +282,28 @@ export class QQChannel implements ImChannel {
       const failure = error instanceof QQChannelError
         ? error
         : new QQChannelError('QQ_START_FAILED', `qq account '${this.accountId}' failed to start: ${messageOf(error)}`, { cause: error })
-      this.dropStartup(bot, failure.message)
+      // 构造就失败时没有 bot 可停；退避期写下的 starting 仍要收成 error。
+      if (created === undefined) {
+        this.starting = false
+        this.lastError = failure.message
+      } else {
+        this.dropStartup(created, failure.message)
+      }
       throw failure
     }
+  }
+
+  /** 退避间隔；`undefined` = 不再重试。凭据错误、超时与主动关闭都是确定性的。 */
+  private retryDelayMs(failure: QQChannelError, attempt: number, signal: AbortSignal): number | undefined {
+    if (this.closed || signal.aborted) return undefined
+    if (!isRetryableQqStartFailure(failure.message)) return undefined
+    return nextQqStartRetryDelayMs(attempt)
   }
 
   async stop(): Promise<void> {
     const bot = this.bot
     const gate = this.ready
+    this.closed = true
     this.bot = undefined
     this.ready = undefined
     this.starting = false

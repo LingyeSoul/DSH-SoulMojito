@@ -10,6 +10,7 @@ import type { ImRouter } from '../src/im/router.js'
 import { createImRuntime } from '../src/im/runtime.js'
 import type { ImRuntime } from '../src/im/runtime.js'
 import { clearOneBotSeatForTest } from '../src/im/onebot/seat.js'
+import type { QqBotLike } from '../src/im/qq/sdk.js'
 import { ImStore } from '../src/im/store.js'
 import type { ImAccountRef } from '../src/im/types.js'
 import { DEFAULT_IM_SETTINGS, imPeerKey } from '../src/im/types.js'
@@ -19,6 +20,28 @@ const ACCOUNT: ImAccountRef = {
   accountId: '10001',
   label: 'primary bot',
   createdAt: new Date(0).toISOString(),
+}
+
+/** 合成 QQ 账号：accountId 即平台 AppID，用不可达的测试号段。 */
+function qqAccount(accountId: string): ImAccountRef {
+  return { channel: 'qq', accountId, label: '扫码绑定', createdAt: new Date(0).toISOString() }
+}
+
+/**
+ * 每次 `start()` 都以 SDK 的真实原文失败：access_token 请求被
+ * `@tencent-connect/qqbot-nodejs` 的固定 10s 超时 abort。只做最小形状，
+ * 通道的 listener 注册与 stop 都有落点。
+ */
+function networkFailingQQBot(): QqBotLike {
+  return {
+    on: () => undefined,
+    start: async () => {
+      throw new Error('Network error getting access_token: This operation was aborted')
+    },
+    stop: () => {},
+    sendText: async () => ({ id: 'unused' }),
+    sendMarkdown: async () => ({ id: 'unused' }),
+  } as unknown as QqBotLike
 }
 
 let root: string
@@ -212,6 +235,49 @@ describe('im runtime account lifecycle', () => {
     } finally {
       if (!disposed) await runtime.dispose()
       vi.useRealTimers()
+    }
+  })
+
+  it('deletes a new qq account after every retried start only hit a token network abort', async () => {
+    let bots = 0
+    const runtime = createImRuntime(fakeContext(), {
+      db,
+      qqBot: () => {
+        bots += 1
+        return networkFailingQQBot()
+      },
+      qqStartRetrySleep: async () => {},
+    })
+    try {
+      // 启动恢复只读一次账号表：先让它读完空表，后面的 upsert 才不会被重放成第二个实例。
+      await new Promise((resolve) => { setTimeout(resolve, 25) })
+      await expect(runtime.upsertAccount(qqAccount('7100001'), { appId: '7100001', appSecret: 'network-secret' }))
+        .rejects.toMatchObject({ code: 'QQ_START_FAILED' })
+      expect(bots).toBe(3)
+      // 三次网络失败后不留半残账号：账号与密钥都要回滚干净。
+      expect(await store().accounts()).toEqual([])
+      expect(await store().readSecret('qq', '7100001')).toBeUndefined()
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  it('restores the previous qq secret after every retried start only hit a token network abort', async () => {
+    // 既有账号先落盘：启动恢复与面板改配置都会撞上同一个重试路径。
+    await store().putAccount(qqAccount('7100002'), { appId: '7100002', appSecret: 'old-secret' })
+    const runtime = createImRuntime(fakeContext(), {
+      db,
+      qqBot: () => networkFailingQQBot(),
+      qqStartRetrySleep: async () => {},
+    })
+    try {
+      await expect(runtime.upsertAccount(qqAccount('7100002'), { appId: '7100002', appSecret: 'replacement-secret' }))
+        .rejects.toMatchObject({ code: 'QQ_START_FAILED' })
+      // 回滚的目标是「store 里没有连不上的配置」，不是删掉用户已有的机器人。
+      expect(await store().readSecret('qq', '7100002')).toEqual({ appId: '7100002', appSecret: 'old-secret' })
+      expect((await store().accounts()).map((account) => account.accountId)).toEqual(['7100002'])
+    } finally {
+      await runtime.dispose()
     }
   })
 })

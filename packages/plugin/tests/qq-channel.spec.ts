@@ -58,6 +58,8 @@ interface FakeBotOptions {
   failOnContent?: string
   /** `start()` 直接 reject，用来验证启动失败必须抛。 */
   startError?: Error
+  /** `on()` 直接抛错：验证监听注册失败也要回收这条 bot。 */
+  attachError?: Error
   /** 每次发送前的延迟：没有出站串行时并发轮次会交错。 */
   sendDelayMs?: number
   /** 不暴露媒体方法：验证 build 缺 sendImage 等成员时的清晰报错。 */
@@ -67,6 +69,8 @@ interface FakeBotOptions {
 interface FakeBot {
   readonly sent: SentRecord[]
   readonly media: MediaRecord[]
+  /** `stop()` 次数：重试必须先把失败的那个 bot 停掉，不能留僵尸连接。 */
+  readonly stops: number
   on(event: string, handler: (...args: unknown[]) => unknown): FakeBot
   start(): Promise<void>
   stop(): void
@@ -88,10 +92,15 @@ function fakeBot(options: FakeBotOptions): FakeBot {
   const handlers = new Map<string, Array<(...args: unknown[]) => unknown>>()
   const sent: SentRecord[] = []
   const media: MediaRecord[] = []
+  let stops = 0
   const bot: FakeBot = {
     sent,
     media,
+    get stops(): number {
+      return stops
+    },
     on(event, handler) {
+      if (options.attachError !== undefined) throw options.attachError
       const list = handlers.get(event) ?? []
       list.push(handler)
       handlers.set(event, list)
@@ -101,7 +110,9 @@ function fakeBot(options: FakeBotOptions): FakeBot {
       if (options.startError !== undefined) throw options.startError
       await bot.emit('ready', { session_id: 'fake-session' })
     },
-    stop() {},
+    stop() {
+      stops += 1
+    },
     async sendText(target, content) {
       return send('sendText', target, content)
     },
@@ -138,6 +149,18 @@ function fakeBot(options: FakeBotOptions): FakeBot {
     return { message: { id: `media-${media.length}` } }
   }
   return bot
+}
+
+/**
+ * 真机失败的原文：`@tencent-connect/qqbot-nodejs` 1.0.5 的 token 预取在
+ * `protocol/api/token.ts` 里给 access_token 请求挂了固定 10s 超时，超时后 fetch
+ * 抛 AbortError（"This operation was aborted"），调用方看到的只有这一句。
+ * 重试判据必须认得出它，且不能把它当成凭据错误。
+ */
+function tokenNetworkAbort(): Error {
+  return new Error('Network error getting access_token: This operation was aborted', {
+    cause: new DOMException('This operation was aborted', 'AbortError'),
+  })
 }
 
 function c2cMessage(overrides: Partial<QqInboundMessage>): QqInboundMessage {
@@ -205,6 +228,8 @@ interface ChannelHarness {
   bot: FakeBot
   delivered: ImInbound[]
   signal: AbortSignal
+  /** 工厂被调用次数：不重试的失败必须只构造一个 bot。 */
+  readonly botsCreated: number
 }
 
 interface HarnessOptions {
@@ -219,16 +244,64 @@ function channelHarness(options: HarnessOptions): ChannelHarness {
   const bot = fakeBot(options.bot)
   const delivered: ImInbound[] = []
   const controller = new AbortController()
+  let botsCreated = 0
   const channel = new QQChannel({
     accountId: ACCOUNT_ID,
     secret: { appId: ACCOUNT_ID, appSecret: SYNTHETIC_SECRET },
     router: { handle: async (inbound) => { delivered.push(inbound) } },
     groupRequireMention: async () => options.requireMention,
-    createBot: () => bot as unknown as QqBotLike,
+    createBot: () => {
+      botsCreated += 1
+      return bot as unknown as QqBotLike
+    },
     markdownSupport: options.markdownSupport,
     now: options.now ?? (() => NOW),
   })
-  return { channel, bot, delivered, signal: controller.signal }
+  return {
+    channel,
+    bot,
+    delivered,
+    signal: controller.signal,
+    get botsCreated(): number {
+      return botsCreated
+    },
+  }
+}
+
+interface RetryHarness {
+  channel: QQChannel
+  bots: FakeBot[]
+  waits: number[]
+  warns: string[]
+  signal: AbortSignal
+}
+
+/**
+ * 每次构造 QqBot 时按序取一条启动错误：`undefined` 表示这一轮能 ready。
+ * 退避等待是注入的——重试策略本身要被验证，但测试不把 1s/2s 写进墙钟。
+ */
+function retryHarness(failures: readonly (Error | undefined)[]): RetryHarness {
+  const bots: FakeBot[] = []
+  const waits: number[] = []
+  const warns: string[] = []
+  const controller = new AbortController()
+  const channel = new QQChannel({
+    accountId: ACCOUNT_ID,
+    secret: { appId: ACCOUNT_ID, appSecret: SYNTHETIC_SECRET },
+    router: { handle: async () => {} },
+    groupRequireMention: async () => false,
+    createBot: () => {
+      const failure = failures[Math.min(bots.length, failures.length - 1)]
+      const bot = fakeBot(failure === undefined ? {} : { startError: failure })
+      bots.push(bot)
+      return bot as unknown as QqBotLike
+    },
+    markdownSupport: false,
+    now: () => NOW,
+    logger: { warn: (...args: unknown[]) => { warns.push(String(args[0])) } },
+    retrySleep: async (ms) => { waits.push(ms) },
+  })
+  return { channel, bots, waits, warns, signal: controller.signal }
 }
 
 describe('qq channel inbound', () => {
@@ -796,7 +869,141 @@ describe('qq channel lifecycle', () => {
       message: expect.stringContaining('invalid app secret'),
     })
     expect(harness.channel.status()).toMatchObject({ state: 'error' })
+    // 凭据错误是确定性的：重试只会把「配置错了」拖成一条更长的失败链。
+    expect(harness.botsCreated).toBe(1)
     await harness.channel.stop()
+  })
+
+  it('retries a token network abort with a fresh bot and logs the backoff', async () => {
+    const retry = retryHarness([tokenNetworkAbort(), undefined])
+    await retry.channel.start(retry.signal)
+    expect(retry.bots).toHaveLength(2)
+    expect(retry.waits).toEqual([1_000])
+    const retries = retry.warns.filter((line) => line.includes('retrying in'))
+    expect(retries).toHaveLength(1)
+    expect(retries[0]).toContain('Network error getting access_token')
+    expect(retries[0]).toContain('attempt 2/3')
+    // 失败的 bot 必须先停：重试不能把上一条半死的连接留在后台。
+    expect(retry.bots[0]?.stops).toBe(1)
+    expect(retry.channel.status()).toEqual({ state: 'online', since: NOW })
+    await retry.channel.stop()
+  })
+
+  it('does not revive a gateway that was stopped during the retry backoff', async () => {
+    const bots: FakeBot[] = []
+    const backoff: { release?: () => void } = {}
+    const controller = new AbortController()
+    const channel = new QQChannel({
+      accountId: ACCOUNT_ID,
+      secret: { appId: ACCOUNT_ID, appSecret: SYNTHETIC_SECRET },
+      router: { handle: async () => {} },
+      groupRequireMention: async () => false,
+      createBot: () => {
+        const bot = fakeBot(bots.length === 0 ? { startError: tokenNetworkAbort() } : {})
+        bots.push(bot)
+        return bot as unknown as QqBotLike
+      },
+      markdownSupport: false,
+      now: () => NOW,
+      retrySleep: () => new Promise<void>((resolve) => { backoff.release = resolve }),
+    })
+    const starting = channel.start(controller.signal)
+    await waitFor(() => backoff.release !== undefined, 1_000)
+    await channel.stop()
+    backoff.release?.()
+    await expect(starting).rejects.toMatchObject({ code: 'QQ_CLOSED' })
+    // 退避期间被停掉的通道不许再起第二条连接：卸载/换账号不能被重试翻回来。
+    expect(bots).toHaveLength(1)
+  })
+
+  it('cleans up the starting projection when the signal aborts during the retry backoff', async () => {
+    const bots: FakeBot[] = []
+    const backoff: { release?: () => void } = {}
+    const controller = new AbortController()
+    const channel = new QQChannel({
+      accountId: ACCOUNT_ID,
+      secret: { appId: ACCOUNT_ID, appSecret: SYNTHETIC_SECRET },
+      router: { handle: async () => {} },
+      groupRequireMention: async () => false,
+      createBot: () => {
+        const bot = fakeBot({ startError: tokenNetworkAbort() })
+        bots.push(bot)
+        return bot as unknown as QqBotLike
+      },
+      markdownSupport: false,
+      now: () => NOW,
+      retrySleep: () => new Promise<void>((resolve) => { backoff.release = resolve }),
+    })
+    const starting = channel.start(controller.signal)
+    await waitFor(() => backoff.release !== undefined, 1_000)
+    expect(channel.status()).toMatchObject({ state: 'starting' })
+
+    // 只 abort 生命周期 signal、不调 stop()：start() 必须自己把 starting 收干净。
+    controller.abort()
+    backoff.release?.()
+    await expect(starting).rejects.toMatchObject({ code: 'QQ_CLOSED' })
+    expect(channel.status()).toEqual({ state: 'idle' })
+    expect(bots).toHaveLength(1)
+  })
+
+  it('clears the starting projection when the bot factory throws on a retry attempt', async () => {
+    const bots: FakeBot[] = []
+    const controller = new AbortController()
+    const channel = new QQChannel({
+      accountId: ACCOUNT_ID,
+      secret: { appId: ACCOUNT_ID, appSecret: SYNTHETIC_SECRET },
+      router: { handle: async () => {} },
+      groupRequireMention: async () => false,
+      createBot: () => {
+        if (bots.length === 1) throw new Error('bot factory exploded')
+        const bot = fakeBot({ startError: tokenNetworkAbort() })
+        bots.push(bot)
+        return bot as unknown as QqBotLike
+      },
+      markdownSupport: false,
+      now: () => NOW,
+      retrySleep: async () => {},
+    })
+    await expect(channel.start(controller.signal)).rejects.toMatchObject({
+      code: 'QQ_START_FAILED',
+      message: expect.stringContaining('bot factory exploded'),
+    })
+    // 失败的那条已经停掉；第二轮构造失败没有 bot 可停，但 starting 不许留着。
+    expect(bots).toHaveLength(1)
+    expect(bots[0]?.stops).toBe(1)
+    expect(channel.status()).toMatchObject({ state: 'error' })
+    await channel.stop()
+  })
+
+  it('stops a bot whose listener registration throws', async () => {
+    const harness = channelHarness({
+      bot: { attachError: new Error('listener registration exploded') },
+      requireMention: false,
+      markdownSupport: false,
+    })
+    await expect(harness.channel.start(harness.signal)).rejects.toMatchObject({
+      code: 'QQ_START_FAILED',
+      message: expect.stringContaining('listener registration exploded'),
+    })
+    // attach 抛错时 bot 已经登记：必须走 dropStartup 停掉，而不是留在半连接状态。
+    expect(harness.bot.stops).toBe(1)
+    expect(harness.channel.status()).toMatchObject({ state: 'error' })
+    await harness.channel.stop()
+  })
+
+  it('gives up after three token network aborts with a diagnosable failure', async () => {
+    const retry = retryHarness([tokenNetworkAbort()])
+    await expect(retry.channel.start(retry.signal)).rejects.toMatchObject({
+      code: 'QQ_START_FAILED',
+      message: expect.stringContaining('This operation was aborted'),
+    })
+    expect(retry.bots).toHaveLength(3)
+    expect(retry.waits).toEqual([1_000, 2_000])
+    const retries = retry.warns.filter((line) => line.includes('retrying in'))
+    expect(retries).toHaveLength(2)
+    expect(retries[1]).toContain('attempt 3/3')
+    expect(retry.channel.status()).toMatchObject({ state: 'error' })
+    await retry.channel.stop()
   })
 })
 
@@ -997,6 +1204,37 @@ describe('qq qr binding', () => {
       expect(state.imSettings?.privateAllow).toEqual(['owner-openid-1'])
       expect(runtime.views()).toMatchObject([
         { channel: 'qq', accountId: '7000001', status: { state: 'online' } },
+      ])
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  it('keeps the scanned account online when the first gateway start only hit a token network abort', async () => {
+    // 真机时序：扫码成功 → 账号落库 → 首次 bot.start() 的 access_token 请求被 SDK 的
+    // 10s 固定超时 abort。重试必须换一条新连接；账号与密钥都不该被回滚掉。
+    const harness = connectorHarness()
+    const bots: FakeBot[] = []
+    const runtime = createImRuntime(fakeContext(), {
+      db,
+      qqBot: () => {
+        const bot = fakeBot(bots.length === 0 ? { startError: tokenNetworkAbort() } : {})
+        bots.push(bot)
+        return bot as unknown as QqBotLike
+      },
+      qqConnector: harness.connector,
+    })
+    try {
+      await startBind(runtime)
+      harness.last().onSuccess([{ appId: '7000004', appSecret: SYNTHETIC_SECRET, userOpenid: 'owner-openid-4' }])
+      await waitFor(() => bindStatus(runtime).phase === 'idle', 3_000)
+
+      expect(bots).toHaveLength(2)
+      expect(bots[0]?.stops).toBe(1)
+      expect(await imStore().accounts()).toMatchObject([{ channel: 'qq', accountId: '7000004' }])
+      expect(await imStore().readSecret('qq', '7000004')).toEqual({ appId: '7000004', appSecret: SYNTHETIC_SECRET })
+      expect(runtime.views()).toMatchObject([
+        { channel: 'qq', accountId: '7000004', status: { state: 'online' } },
       ])
     } finally {
       await runtime.dispose()

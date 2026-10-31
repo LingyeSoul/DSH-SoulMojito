@@ -10184,7 +10184,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("13248ed") : void 0;
+  const commit = true ? normalizeCommit("ed583ea") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -47801,6 +47801,24 @@ function nonEmpty(value) {
   return trimmed === "" ? void 0 : trimmed;
 }
 
+// packages/plugin/src/im/qq/start-retry.ts
+var QQ_START_ATTEMPTS = 3;
+var QQ_START_RETRY_BASE_DELAY_MS = 1e3;
+function isRetryableQqStartFailure(message) {
+  if (message.includes("Network error getting access_token")) return true;
+  if (message.includes("Network error [")) return true;
+  return /ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|UND_ERR_CONNECT_TIMEOUT|socket hang up/i.test(message);
+}
+function nextQqStartRetryDelayMs(attempt) {
+  if (attempt >= QQ_START_ATTEMPTS) return void 0;
+  return QQ_START_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
+}
+function qqStartRetrySleep(ms) {
+  return new Promise((resolve9) => {
+    setTimeout(resolve9, ms);
+  });
+}
+
 // packages/plugin/src/im/qq/inbound-media.ts
 function qqAttachmentsOf(msg) {
   if (msg.attachments !== void 0) return Array.isArray(msg.attachments) ? msg.attachments : [];
@@ -48206,9 +48224,14 @@ var QQChannel = class {
   media;
   now;
   logger;
+  retrySleep;
   bot;
   ready;
   starting = false;
+  /** stop() 之后的代次闸：重试等待期间被停掉的通道不许再起一条新连接。 */
+  closed = false;
+  /** 并发 start() 只让第一条跑：退避等待期间 bot 是空的，挡不住重入。 */
+  startInFlight = false;
   onlineSince;
   lastError;
   signal;
@@ -48230,31 +48253,63 @@ var QQChannel = class {
     this.media = options.media;
     this.now = options.now;
     this.logger = options.logger;
+    this.retrySleep = options.retrySleep ?? qqStartRetrySleep;
   }
   async start(signal) {
-    if (this.bot !== void 0) return;
+    if (this.bot !== void 0 || this.startInFlight) return;
     if (signal.aborted) {
       throw new QQChannelError("QQ_CLOSED", `qq account '${this.accountId}' cannot start: signal is already aborted`);
     }
-    const bot = this.createBot({
-      appId: this.appId,
-      appSecret: this.appSecret,
-      accountId: this.accountId,
-      transport: "websocket",
-      logger: qqLoggerOf(this.logger)
-    });
-    this.starting = true;
-    this.lastError = void 0;
-    this.signal = signal;
-    this.abortListener = () => {
-      void this.stop();
-    };
-    signal.addEventListener("abort", this.abortListener, { once: true });
-    this.bot = bot;
-    const gate = createStartupGate();
-    this.ready = gate;
-    this.attach(bot, gate);
+    this.closed = false;
+    this.startInFlight = true;
     try {
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          await this.startAttempt(signal);
+          return;
+        } catch (error) {
+          const failure = error instanceof QQChannelError ? error : new QQChannelError("QQ_START_FAILED", `qq account '${this.accountId}' failed to start: ${messageOf8(error)}`, { cause: error });
+          const delayMs = this.retryDelayMs(failure, attempt, signal);
+          if (delayMs === void 0) throw failure;
+          this.starting = true;
+          this.lastError = void 0;
+          this.logger?.warn?.(
+            `dsh-soulmojito im qq/${this.accountId}: ${failure.message}; retrying in ${delayMs}ms (attempt ${attempt + 1}/${QQ_START_ATTEMPTS}, network-class startup failure)`
+          );
+          await this.retrySleep(delayMs);
+          if (this.closed || signal.aborted) {
+            await this.stop();
+            throw new QQChannelError("QQ_CLOSED", `qq account '${this.accountId}' stopped before it became ready`);
+          }
+        }
+      }
+    } finally {
+      this.startInFlight = false;
+    }
+  }
+  /** 单次启动：构造 bot、挂监听、等 ready；任何一步抛错都回收这一次的半成品。 */
+  async startAttempt(signal) {
+    let created;
+    try {
+      const bot = this.createBot({
+        appId: this.appId,
+        appSecret: this.appSecret,
+        accountId: this.accountId,
+        transport: "websocket",
+        logger: qqLoggerOf(this.logger)
+      });
+      created = bot;
+      this.starting = true;
+      this.lastError = void 0;
+      this.signal = signal;
+      this.abortListener = () => {
+        void this.stop();
+      };
+      signal.addEventListener("abort", this.abortListener, { once: true });
+      this.bot = bot;
+      const gate = createStartupGate();
+      this.ready = gate;
+      this.attach(bot, gate);
       void bot.start().then(
         () => {
           this.failStartup(bot, gate, "the QQ gateway closed before the bot became ready");
@@ -48267,13 +48322,25 @@ var QQChannel = class {
       await withTimeout2(gate.promise, START_TIMEOUT_MS, `qq account '${this.accountId}' was not ready within ${START_TIMEOUT_MS}ms`);
     } catch (error) {
       const failure = error instanceof QQChannelError ? error : new QQChannelError("QQ_START_FAILED", `qq account '${this.accountId}' failed to start: ${messageOf8(error)}`, { cause: error });
-      this.dropStartup(bot, failure.message);
+      if (created === void 0) {
+        this.starting = false;
+        this.lastError = failure.message;
+      } else {
+        this.dropStartup(created, failure.message);
+      }
       throw failure;
     }
+  }
+  /** 退避间隔；`undefined` = 不再重试。凭据错误、超时与主动关闭都是确定性的。 */
+  retryDelayMs(failure, attempt, signal) {
+    if (this.closed || signal.aborted) return void 0;
+    if (!isRetryableQqStartFailure(failure.message)) return void 0;
+    return nextQqStartRetryDelayMs(attempt);
   }
   async stop() {
     const bot = this.bot;
     const gate = this.ready;
+    this.closed = true;
     this.bot = void 0;
     this.ready = void 0;
     this.starting = false;
@@ -57949,7 +58016,8 @@ function createImRuntime(ctx, options) {
       markdownSupport: secret["markdownSupport"] === "true",
       media: mediaStore,
       now: () => Date.now(),
-      logger
+      logger,
+      ...options.qqStartRetrySleep === void 0 ? {} : { retrySleep: options.qqStartRetrySleep }
     });
   }
   function openWeixin(account, secret) {
