@@ -19,6 +19,13 @@ import { AGENT_TAVERN_IM_PRESET_ID } from './types.js'
 
 export const name = 'dsh-soulmojito/im-agent'
 
+/**
+ * The preset composition mounts this module in an isolated group, so every
+ * service it touches must be declared. Without this, Cordis rejects the whole
+ * `agent-tavern-im` preset as broken and `agentPresets.recompose()` fails.
+ */
+export const inject = ['systemPrompt']
+
 /** Preset id declared in `cordis.patch.yml`; re-exported for tests and the patch gate. */
 export { AGENT_TAVERN_IM_PRESET_ID }
 

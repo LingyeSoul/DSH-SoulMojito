@@ -10184,7 +10184,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("b1746b2") : void 0;
+  const commit = true ? normalizeCommit("d6cafcd") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -57446,7 +57446,9 @@ function createImRuntime(ctx, options) {
   async function applyImPreset(sessionId) {
     const agent = liveAgentOf(agents, sessionId);
     if (agent === void 0) return { applied: false, reason: "the session is not open" };
-    return applyPresetToAgent(agent);
+    const result = await applyPresetToAgent(agent);
+    notePresetResult(sessionId, result);
+    return result;
   }
   async function ensurePresetForAgent(agent) {
     if (typeof agent !== "object" || agent === null) return { applied: false, reason: "invalid agent" };
@@ -57456,7 +57458,9 @@ function createImRuntime(ctx, options) {
     const state = await db.getState();
     const bound = Object.values(state.imPeers ?? {}).some((binding) => binding.sessionId === sessionId);
     if (!bound) return { applied: false, reason: "the session has no IM binding" };
-    return applyPresetToAgent(candidate);
+    const result = await applyPresetToAgent(candidate);
+    notePresetResult(sessionId, result);
+    return result;
   }
   async function ensurePresets() {
     const state = await db.getState();
@@ -57464,10 +57468,17 @@ function createImRuntime(ctx, options) {
     for (const agent of listLiveAgents2(agents)) {
       const sessionId = agent.session?.id ?? agent.id;
       if (typeof sessionId !== "string" || !bound.has(sessionId)) continue;
-      await applyPresetToAgent(agent).catch((error) => {
+      await applyPresetToAgent(agent).then((result) => notePresetResult(sessionId, result)).catch((error) => {
         logger?.warn?.(`dsh-soulmojito im: switching ${sessionId} to AgentTavernIM failed: ${messageOf13(error)}`);
       });
     }
+  }
+  function notePresetResult(sessionId, result) {
+    if (result.applied) return;
+    const reason = result.reason ?? "unknown reason";
+    const text = `im preset: ${sessionId} was not switched to ${AGENT_TAVERN_IM_PRESET_ID}: ${reason}`;
+    const deferred = reason.includes("running") || reason.includes("not open");
+    imLog.note(deferred ? "debug" : "warn", text);
   }
   const router = createImRouter({
     db,

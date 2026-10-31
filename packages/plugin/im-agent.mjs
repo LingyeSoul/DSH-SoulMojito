@@ -108,6 +108,7 @@ var AGENT_TAVERN_IM_PRESET_ID = "agent-tavern-im";
 
 // packages/plugin/src/im/agent.ts
 var name = "dsh-soulmojito/im-agent";
+var inject = ["systemPrompt"];
 var IM_MODE_SECTION = "dsh-soulmojito:im-mode";
 var IM_MODE_PROMPT = [
   "# IM \u6A21\u5F0F\uFF08AgentTavernIM\uFF09",
@@ -155,5 +156,6 @@ export {
   IM_MODE_SECTION,
   apply,
   imModePromptText,
+  inject,
   name
 };

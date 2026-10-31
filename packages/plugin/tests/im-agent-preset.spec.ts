@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentContextLike } from '../src/agent-tavern/agent.js'
-import { apply, IM_MODE_SECTION, imModePromptText } from '../src/im/agent.js'
+import { apply, IM_MODE_SECTION, imModePromptText, inject } from '../src/im/agent.js'
 
 interface Section {
   name: string
@@ -9,6 +9,13 @@ interface Section {
 }
 
 describe('AgentTavernIM prompt', () => {
+  it('declares the systemPrompt service its preset composition mounts', () => {
+    // A missing inject makes Cordis reject the whole agent-tavern-im preset
+    // ("cannot get property systemPrompt without inject") and every
+    // recompose() call fails before the marker is written.
+    expect(inject).toContain('systemPrompt')
+  })
+
   it('registers one static IM-mode section before the AgentTavern kernel', () => {
     const sections: Section[] = []
     apply({

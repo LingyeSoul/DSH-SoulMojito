@@ -85,6 +85,14 @@ false`，由 index 的 `agent/created` / `agent/status(idle)` 重试。`agent-no
 会显示失败原因，让用户改用 AgentTavernIM 会话。marker 经 `confirmSessionAppend`
 读回确认，避免宿主重启后丢失 preset 身份。
 
+preset 模块挂载在隔离组合里，Cordis 要求每个服务显式声明 inject；`im-agent` 只读
+`systemPrompt`，因此必须 `export const inject = ['systemPrompt']`。缺这一行时
+`agent-tavern-im` 整条 preset 在宿主启动时就被标记 broken（composition inventory
+里 `broken: "cannot get property \"systemPrompt\" without inject"`），`recompose`
+直接抛 `agent-preset/invalid`，绑定会话会停在原 preset 且没有 marker。后台重试
+（`agent/created`、`agent/status(idle)`、启动 sweep）的失败原因现在写进 IM 运行
+日志，面板可见。
+
 ## 删除的旧路径
 
 - `src/im/reply.ts`（`PendingOrigins`、按轮归消息、assistant 正文抽取）与其测试；
@@ -115,6 +123,7 @@ false`，由 index 的 `agent/created` / `agent/status(idle)` 重试。`agent-no
 - `im-preset-switch.spec.ts`：live 空闲会话 recompose 并写 marker；running/未打开
   时延迟；novel/workbench 架构拒绝；已选 IM 时幂等；startup sweep 只处理已绑定会话。
 - `im-agent-preset.spec.ts`：IM 模式提示词注册在 kernel 之前，明确 `im_send`、
-  短句多条、群聊/附件规则，且不含宿主 `{{...}}` 宏。
+  短句多条、群聊/附件规则，且不含宿主 `{{...}}` 宏；`inject` 必须声明
+  `systemPrompt`，否则 preset 整条 broken。
 - `im-panel.spec.ts`：面板按当前会话绑定、未绑定对端带、自动绑定字段已移除、
   预设切换结果提示。

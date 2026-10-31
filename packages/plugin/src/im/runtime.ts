@@ -178,7 +178,9 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
   async function applyImPreset(sessionId: string): Promise<ImPresetSwitchResult> {
     const agent = liveAgentOf(agents, sessionId)
     if (agent === undefined) return { applied: false, reason: 'the session is not open' }
-    return applyPresetToAgent(agent)
+    const result = await applyPresetToAgent(agent)
+    notePresetResult(sessionId, result)
+    return result
   }
 
   async function ensurePresetForAgent(agent: unknown): Promise<ImPresetSwitchResult> {
@@ -189,7 +191,9 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
     const state = await db.getState()
     const bound = Object.values(state.imPeers ?? {}).some((binding) => binding.sessionId === sessionId)
     if (!bound) return { applied: false, reason: 'the session has no IM binding' }
-    return applyPresetToAgent(candidate)
+    const result = await applyPresetToAgent(candidate)
+    notePresetResult(sessionId, result)
+    return result
   }
 
   async function ensurePresets(): Promise<void> {
@@ -198,10 +202,25 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
     for (const agent of listLiveAgents(agents)) {
       const sessionId = agent.session?.id ?? agent.id
       if (typeof sessionId !== 'string' || !bound.has(sessionId)) continue
-      await applyPresetToAgent(agent).catch((error: unknown) => {
-        logger?.warn?.(`dsh-soulmojito im: switching ${sessionId} to AgentTavernIM failed: ${messageOf(error)}`)
-      })
+      await applyPresetToAgent(agent)
+        .then((result) => notePresetResult(sessionId, result))
+        .catch((error: unknown) => {
+          logger?.warn?.(`dsh-soulmojito im: switching ${sessionId} to AgentTavernIM failed: ${messageOf(error)}`)
+        })
     }
+  }
+
+  /**
+   * 预设切换失败必须可观测：绑定面板的即时提示只在一次点击里出现，后台重试
+   * （agent/created、agent/status idle、启动 sweep）没有 UI，失败原因必须进
+   * 运行日志。running/not open 属于延迟状态，用 debug，不刷屏。
+   */
+  function notePresetResult(sessionId: string, result: ImPresetSwitchResult): void {
+    if (result.applied) return
+    const reason = result.reason ?? 'unknown reason'
+    const text = `im preset: ${sessionId} was not switched to ${AGENT_TAVERN_IM_PRESET_ID}: ${reason}`
+    const deferred = reason.includes('running') || reason.includes('not open')
+    imLog.note(deferred ? 'debug' : 'warn', text)
   }
 
   const router = createImRouter({

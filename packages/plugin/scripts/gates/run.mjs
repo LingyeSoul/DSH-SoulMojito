@@ -380,6 +380,20 @@ function exportedNames(text) {
   return names
 }
 
+/** The IM preset module must declare every service it reads; a missing inject
+ * marks the whole `agent-tavern-im` preset broken before any binding runs. */
+function checkImAgentText(text) {
+  const problems = []
+  const exports = exportedNames(text)
+  for (const name of ['name', 'inject', 'apply']) {
+    if (!exports.has(name)) problems.push(`IM agent bundle does not export ${name}`)
+  }
+  if (!/\b(?:const|var)\s+inject\s*=\s*\[[^\]]*['"]systemPrompt['"]/.test(text)) {
+    problems.push("IM agent bundle inject array must declare 'systemPrompt'")
+  }
+  return problems
+}
+
 function checkServerText(text) {
   const problems = []
   const exports = exportedNames(text)
@@ -2585,6 +2599,23 @@ const gates = [
         problems.push(`generated ${REASONING_PATH} does not exist`)
       }
       return problems
+    },
+  },
+  {
+    name: 'im-agent-inject',
+    selfTest: () => {
+      const good = 'var name = "dsh-soulmojito/im-agent"; var inject = ["systemPrompt"]; function apply() {}\nexport { apply, inject, name };'
+      const missingService = 'var name = "dsh-soulmojito/im-agent"; var inject = []; function apply() {}\nexport { apply, inject, name };'
+      const missingExport = 'var name = "dsh-soulmojito/im-agent"; function apply() {}\nexport { apply, name };'
+      return checkImAgentText(good).length === 0
+        && checkImAgentText(missingService).length > 0
+        && checkImAgentText(missingExport).length > 0
+        ? []
+        : ['IM agent inject bad samples were not distinguished from the valid sample']
+    },
+    check: () => {
+      if (!existsSync(IM_AGENT_PATH)) return ['generated im-agent.mjs does not exist']
+      return checkImAgentText(readFileSync(IM_AGENT_PATH, 'utf8'))
     },
   },
   {
