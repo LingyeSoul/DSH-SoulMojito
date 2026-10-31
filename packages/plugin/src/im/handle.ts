@@ -30,6 +30,12 @@ export interface ImRouterHandle {
   lastPeerOf?(sessionId: string): string | undefined
 }
 
+/** 绑定后切换 AgentTavernIM 预设的结果（面板据此显示已切换/待切换/失败）。 */
+export interface ImPresetSwitchResult {
+  applied: boolean
+  reason?: string
+}
+
 /** 运行时契约：工具面、HTTP 面与装配面共用同一份形状。 */
 export interface ImRuntimeHandle {
   readonly capabilities: ImSessionCapabilities
@@ -53,6 +59,15 @@ export interface ImRuntimeHandle {
    * 避免用户以为绑定坏了。可选：测试假件可以没有这个探测。
    */
   isSessionLive?(sessionId: string): boolean
+  /**
+   * 把绑定会话切到 AgentTavernIM 预设。会话不在线/正在运行时返回 applied:false，
+   * 由 `agent/created` 或 `agent/status(idle)` 的自动重试补上。
+   */
+  applyImPreset?(sessionId: string): Promise<ImPresetSwitchResult>
+  /** `agent/created` / `agent/status` 的重试点：只处理已绑定到 IM 的会话。 */
+  ensurePresetForAgent?(agent: unknown): Promise<ImPresetSwitchResult>
+  /** 启动时对全部 live agent 补一次预设切换。 */
+  ensurePresets?(): Promise<void>
   /**
    * 反向 WS 握手分派（由常驻的升级席位调用）。可选：没有 OneBot 通道的实现
    * （测试假件、将来的空装）不必实现它。

@@ -77,6 +77,14 @@ IM 工具本身仍由 index bundle 挂到每个 agent 域，所以这个 preset 
 它只是把「怎么回复」讲清楚。用户也可以继续用普通 AgentTavern 会话，但模型不一定
 遵守短句多条的 IM 习惯。
 
+**绑定即切预设**：`POST im/peers` 成功后调用 `runtime.applyImPreset(sessionId)`，
+对 live 且空闲的会话 `agentPresets.recompose(agent.ctx, 'agent-tavern-im')` 并写
+`agent-preset/selected` marker；会话未打开或正在运行时返回 `presetSwitch.applied =
+false`，由 index 的 `agent/created` / `agent/status(idle)` 重试。`agent-novel` /
+`card-workbench` / `st` 架构不强行切换（recompose 会拆掉它们自己的工具面），面板
+会显示失败原因，让用户改用 AgentTavernIM 会话。marker 经 `confirmSessionAppend`
+读回确认，避免宿主重启后丢失 preset 身份。
+
 ## 删除的旧路径
 
 - `src/im/reply.ts`（`PendingOrigins`、按轮归消息、assistant 正文抽取）与其测试；
@@ -103,5 +111,10 @@ IM 工具本身仍由 index bundle 挂到每个 agent 域，所以这个 preset 
   v4/v0 source 形状。
 - `im-agent-mount.spec.ts`：三件工具注册一次、tools 服务晚就绪时重试、卸载后重挂。
 - `im-http-accounts.spec.ts`：`GET im` 的未绑定对端投影、`POST im/peers` 只收
-  `sessionId`、绑定后待办移除。
-- `im-panel.spec.ts`：面板按当前会话绑定、未绑定对端带、自动绑定字段已移除。
+  `sessionId`、绑定后待办移除、绑定返回 `presetSwitch`。
+- `im-preset-switch.spec.ts`：live 空闲会话 recompose 并写 marker；running/未打开
+  时延迟；novel/workbench 架构拒绝；已选 IM 时幂等；startup sweep 只处理已绑定会话。
+- `im-agent-preset.spec.ts`：IM 模式提示词注册在 kernel 之前，明确 `im_send`、
+  短句多条、群聊/附件规则，且不含宿主 `{{...}}` 宏。
+- `im-panel.spec.ts`：面板按当前会话绑定、未绑定对端带、自动绑定字段已移除、
+  预设切换结果提示。

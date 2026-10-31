@@ -280,7 +280,9 @@ standard / novel / workbench 等任意原生会话，不能只挂在 AgentTavern
 
 IM 绑定的会话建议使用 `AgentTavernIM`（`agent-tavern-im`）preset：它在 AgentTavern
 之上加了 IM 模式提示（所有回复用 `im_send`、短句多条、群聊区分发言人、附件用媒体
-参数）。工具仍由 index bundle 统一挂载，preset 只负责把回复规范讲清楚。
+参数）。工具仍由 index bundle 统一挂载，preset 只负责把回复规范讲清楚；`POST
+im/peers` 会对 live 空闲会话自动 `recompose` 到该 preset（未打开/运行中则等
+`agent/created`/`agent/status(idle)` 补切，novel/workbench/ST 不强行切换）。
 
 | 工具 | 作用 | 边界 |
 |---|---|---|

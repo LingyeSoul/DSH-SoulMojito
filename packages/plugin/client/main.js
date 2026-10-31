@@ -3451,6 +3451,9 @@ window.__ModuleLoader__.load({
       'im.peers.sharedHint': 'senders on this session see the turns of others.',
       'im.peers.rebindCurrent': 'Rebind to current session',
       'im.peers.noCurrentSession': 'Open the DSH session you want first; the panel binds to the current session.',
+      'im.peers.presetApplied': 'The session was switched to the AgentTavernIM preset.',
+      'im.peers.presetPending': 'Bound; the session is closed or busy, so the AgentTavernIM preset will switch when it opens or becomes idle.',
+      'im.peers.presetFailed': 'Bound, but the AgentTavernIM preset switch failed: {reason}. Select AgentTavernIM manually in DSH.',
       'im.peers.unbind': 'Unbind',
       'im.peers.unbindConfirm': 'Unbind {peer}? The session is kept.',
       'im.pending.title': 'Unbound senders',
@@ -4474,6 +4477,9 @@ window.__ModuleLoader__.load({
       'im.peers.sharedHint': '这条会话上的对端互相看得到对方的回合。',
       'im.peers.rebindCurrent': '改绑到当前会话',
       'im.peers.noCurrentSession': '请先打开一个 DSH 会话；面板按「当前会话」绑定。',
+      'im.peers.presetApplied': '已把该会话切换到 AgentTavernIM 预设。',
+      'im.peers.presetPending': '已绑定；会话未打开或正在运行，打开/空闲后会自动切换 AgentTavernIM。',
+      'im.peers.presetFailed': '已绑定，但切换 AgentTavernIM 失败：{reason}。请在 DSH 里手动选择 AgentTavernIM。',
       'im.peers.unbind': '解绑',
       'im.peers.unbindConfirm': '解绑 {peer}？会话保留。',
       'im.pending.title': '未绑定对端',
@@ -16224,7 +16230,18 @@ window.__ModuleLoader__.load({
             sessionId: target,
           }),
         })
-          .then(() => reloadView())
+          .then((result) => {
+            const preset = result?.presetSwitch
+            if (preset?.applied === true) {
+              setNotice(t('im.peers.presetApplied'))
+            } else if (preset !== undefined) {
+              const reason = String(preset.reason ?? '')
+              // 会话未打开/正在跑：绑定已成功，等宿主补切；其它原因如实报错。
+              if (/running|not open/i.test(reason)) setNotice(t('im.peers.presetPending'))
+              else setError(t('im.peers.presetFailed', { reason }))
+            }
+            return reloadView()
+          })
           .catch((cause) => setError(imErrorMessage(cause)))
           .finally(() => releaseBusy(`peer:${peer.key}`))
       }

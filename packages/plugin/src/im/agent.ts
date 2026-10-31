@@ -15,11 +15,12 @@
 
 import type { AgentContextLike } from '../agent-tavern/agent.js'
 import { hostPromptSafe } from '../prompt-safety.js'
+import { AGENT_TAVERN_IM_PRESET_ID } from './types.js'
 
 export const name = 'dsh-soulmojito/im-agent'
 
-/** Preset id declared in `cordis.patch.yml`; kept in the bundle for the patch gate. */
-export const AGENT_TAVERN_IM_PRESET_ID = 'agent-tavern-im'
+/** Preset id declared in `cordis.patch.yml`; re-exported for tests and the patch gate. */
+export { AGENT_TAVERN_IM_PRESET_ID }
 
 export const IM_MODE_SECTION = 'dsh-soulmojito:im-mode'
 

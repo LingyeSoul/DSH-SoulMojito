@@ -13,12 +13,14 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { envCompat } from '../env-compat.js'
-import type { HostLogger, PluginContext } from '../host-contract.js'
+import type { HostAgentLike, HostLogger, PluginContext } from '../host-contract.js'
 import { API } from '../http/router.js'
+import { lastSelectedPresetId } from '../session/preset-marker.js'
 import type { TavernStore } from '../../../tavern-store/src/index.js'
+import { confirmSessionAppend } from '../../../bind/src/index.js'
 import { tavernDataRoot } from '../dsh-home.js'
 import { prepareInternalWorkspace } from '../workspace.js'
-import { imDisabledByEnv, type ImRuntimeHandle } from './handle.js'
+import { imDisabledByEnv, type ImPresetSwitchResult, type ImRuntimeHandle } from './handle.js'
 import { openImMediaStore } from './media-store.js'
 import { createOneBotUpgradeHandler, OneBotChannel } from './onebot/server.js'
 import { ensureOneBotUpgradeSeat } from './onebot/seat.js'
@@ -43,12 +45,13 @@ import {
   buildImFollowupMessage,
   inspectImSessionCapabilities,
   liveAgentOf,
+  listLiveAgents,
   requireLiveAgent,
   type ImAgentsSeam,
   type ImSessionCapabilities,
 } from './session-host.js'
 import type { ImAccountRef, ImBindStatus, ImChannel, ImChannelId, ImChannelView, ImTarget } from './types.js'
-import { DEFAULT_IM_SETTINGS, imPeerKey, imPeerKeyParts } from './types.js'
+import { AGENT_TAVERN_IM_PRESET_ID, DEFAULT_IM_SETTINGS, imPeerKey, imPeerKeyParts } from './types.js'
 import { ImStore } from './store.js'
 
 export type ImRuntime = ImRuntimeHandle
@@ -111,6 +114,95 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
     now: () => Date.now(),
     maxBytes: WEIXIN_MEDIA_MAX_BYTES,
   })
+
+  /**
+   * 绑定会话时把 preset 切到 AgentTavernIM（决策 2026-10-31-im-native-session-binding）。
+   *
+   * - 只切 AgentLoop 会话；`agent-novel` / `card-workbench` / `st` 有各自的架构，
+   *   强行 recompose 会把它们的工具面拆掉，直接拒绝并在面板说明。
+   * - 会话正在跑或不在线时不动：由 index 的 agent/created / agent/status(idle)
+   *   重试，等它空闲/打开后再切；绑定本身已经成功。
+   * - marker 必须读回确认（confirmSessionAppend）：宿主重启后按最后一条
+   *   `agent-preset/selected` 恢复 preset，写丢等于下次又变回原预设。
+   */
+  async function applyPresetToAgent(agent: HostAgentLike): Promise<ImPresetSwitchResult> {
+    const presets = ctx.agentPresets
+    if (typeof presets?.recompose !== 'function') {
+      return { applied: false, reason: 'the host cannot recompose agent presets' }
+    }
+    const sessionId = agent.session?.id ?? agent.id
+    if (typeof sessionId !== 'string' || sessionId === '') {
+      return { applied: false, reason: 'the agent has no session id' }
+    }
+    try {
+      const header = agent.session?.header as { origin?: unknown; delegationDepth?: unknown } | undefined
+      if (header?.origin === 'subagent'
+        || (typeof header?.delegationDepth === 'number' && header.delegationDepth > 0)) {
+        return { applied: false, reason: 'subagent sessions cannot be switched to AgentTavernIM' }
+      }
+      const state = await db.getState()
+      const architecture = state.sessionBindings[sessionId]?.architecture
+      if (architecture === 'agent-novel' || architecture === 'card-workbench' || architecture === 'st') {
+        return {
+          applied: false,
+          reason: `session architecture '${architecture}' cannot be switched to AgentTavernIM`,
+        }
+      }
+      if (agent.status === 'running') {
+        return { applied: false, reason: 'the session is running; the preset will switch when it becomes idle' }
+      }
+      if (lastSelectedPresetId(agent.session) === AGENT_TAVERN_IM_PRESET_ID) return { applied: true }
+      const preset = await presets.recompose(agent.ctx, AGENT_TAVERN_IM_PRESET_ID)
+      if (preset.id !== AGENT_TAVERN_IM_PRESET_ID) {
+        return { applied: false, reason: `the host selected preset '${preset.id}' instead of AgentTavernIM` }
+      }
+      const session = agent.session as { append?: (type: string, data: unknown, opts?: unknown) => unknown }
+      if (typeof session.append !== 'function') {
+        return { applied: false, reason: 'the session does not expose append(); the preset cannot be made durable' }
+      }
+      const confirmed = confirmSessionAppend({
+        session: agent.session,
+        logger,
+        label: `AgentTavernIM preset marker (${sessionId})`,
+        append: () => session.append?.('agent-preset/selected', { agentPreset: preset.id }),
+        present: () => lastSelectedPresetId(agent.session) === preset.id,
+      })
+      if (!confirmed) return { applied: false, reason: 'the AgentTavernIM preset marker could not be confirmed' }
+      imLog.note('info', `im bind: switched ${sessionId} to ${AGENT_TAVERN_IM_PRESET_ID}`)
+      return { applied: true }
+    } catch (error) {
+      return { applied: false, reason: messageOf(error) }
+    }
+  }
+
+  async function applyImPreset(sessionId: string): Promise<ImPresetSwitchResult> {
+    const agent = liveAgentOf(agents, sessionId)
+    if (agent === undefined) return { applied: false, reason: 'the session is not open' }
+    return applyPresetToAgent(agent)
+  }
+
+  async function ensurePresetForAgent(agent: unknown): Promise<ImPresetSwitchResult> {
+    if (typeof agent !== 'object' || agent === null) return { applied: false, reason: 'invalid agent' }
+    const candidate = agent as HostAgentLike
+    const sessionId = candidate.session?.id ?? candidate.id
+    if (typeof sessionId !== 'string' || sessionId === '') return { applied: false, reason: 'the agent has no session id' }
+    const state = await db.getState()
+    const bound = Object.values(state.imPeers ?? {}).some((binding) => binding.sessionId === sessionId)
+    if (!bound) return { applied: false, reason: 'the session has no IM binding' }
+    return applyPresetToAgent(candidate)
+  }
+
+  async function ensurePresets(): Promise<void> {
+    const state = await db.getState()
+    const bound = new Set(Object.values(state.imPeers ?? {}).map((binding) => binding.sessionId))
+    for (const agent of listLiveAgents(agents)) {
+      const sessionId = agent.session?.id ?? agent.id
+      if (typeof sessionId !== 'string' || !bound.has(sessionId)) continue
+      await applyPresetToAgent(agent).catch((error: unknown) => {
+        logger?.warn?.(`dsh-soulmojito im: switching ${sessionId} to AgentTavernIM failed: ${messageOf(error)}`)
+      })
+    }
+  }
 
   const router = createImRouter({
     db,
@@ -575,6 +667,9 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       peers: 0,
     })),
     isSessionLive: (sessionId) => liveAgentOf(agents, sessionId) !== undefined,
+    applyImPreset,
+    ensurePresetForAgent,
+    ensurePresets,
     handleOneBotUpgrade,
     startQrBind,
     qrBindStatus,

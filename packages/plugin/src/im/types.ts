@@ -18,6 +18,9 @@ export { DEFAULT_IM_SETTINGS, imPeerKey } from '../../../tavern-store/src/index.
 
 export type ImChannelId = 'qq' | 'weixin' | 'onebot'
 
+/** AgentTavernIM preset id declared by `cordis.patch.yml` (`preset-agent-tavern-im`). */
+export const AGENT_TAVERN_IM_PRESET_ID = 'agent-tavern-im'
+
 export type ImMediaKind = 'image' | 'voice' | 'video' | 'file'
 
 export interface ImMediaRef {

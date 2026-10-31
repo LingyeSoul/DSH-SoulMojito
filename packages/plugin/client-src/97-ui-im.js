@@ -395,7 +395,18 @@
             sessionId: target,
           }),
         })
-          .then(() => reloadView())
+          .then((result) => {
+            const preset = result?.presetSwitch
+            if (preset?.applied === true) {
+              setNotice(t('im.peers.presetApplied'))
+            } else if (preset !== undefined) {
+              const reason = String(preset.reason ?? '')
+              // 会话未打开/正在跑：绑定已成功，等宿主补切；其它原因如实报错。
+              if (/running|not open/i.test(reason)) setNotice(t('im.peers.presetPending'))
+              else setError(t('im.peers.presetFailed', { reason }))
+            }
+            return reloadView()
+          })
           .catch((cause) => setError(imErrorMessage(cause)))
           .finally(() => releaseBusy(`peer:${peer.key}`))
       }

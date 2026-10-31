@@ -179,6 +179,17 @@ export function apply(ctx: PluginContext, config: { anchorEveryTurns?: unknown, 
     } catch (error) {
       ctx.logger?.warn?.(`dsh-soulmojito body: agent recovery failed: ${error instanceof Error ? error.message : String(error)}`)
     }
+    // IM 绑定会话的 preset 自动切换：绑定发生在会话未打开/运行中时，这里补上。
+    // await：preset 要在 loop 启动前生效，否则首轮仍按旧 preset 跑；失败只记日志，
+    // 不阻断 agent 创建。
+    const imRuntime = getImRuntime()
+    if (imRuntime?.ensurePresetForAgent !== undefined) {
+      try {
+        await imRuntime.ensurePresetForAgent(agent)
+      } catch (error) {
+        ctx.logger?.warn?.(`dsh-soulmojito im: AgentTavernIM preset switch failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
   })
   void refreshActivePrompt()
   // §12.3 restart recovery runs after apply returns; it never blocks mounting.
@@ -264,7 +275,16 @@ export function apply(ctx: PluginContext, config: { anchorEveryTurns?: unknown, 
     // status 事件是低成本的重试点（已挂过就是空操作）。
     ctx.on?.('agent/status' as string, (payload: unknown) => {
       const agent = (payload as { agent?: unknown } | null | undefined)?.agent
-      if (agent !== undefined) mountImTools(agent)
+      if (agent === undefined) return
+      mountImTools(agent)
+      const status = (payload as { status?: unknown }).status
+        ?? (agent as { status?: unknown }).status
+      if (status !== 'idle') return
+      const runtime = getImRuntime()
+      if (runtime?.ensurePresetForAgent === undefined) return
+      void runtime.ensurePresetForAgent(agent).catch((error: unknown) => {
+        ctx.logger?.warn?.(`dsh-soulmojito im: AgentTavernIM preset switch failed: ${error instanceof Error ? error.message : String(error)}`)
+      })
     })
     ctx.on?.('agent/disposed' as string, (payload: unknown) => {
       const agent = (payload as { agent?: { id?: unknown; session?: { id?: unknown } } } | null | undefined)?.agent
@@ -289,6 +309,10 @@ export function apply(ctx: PluginContext, config: { anchorEveryTurns?: unknown, 
     void store().then((db) => {
       ownedRuntime = createImRuntime(ctx, { db, ...(ctx.logger === undefined ? {} : { logger: ctx.logger }) })
       ownedDispose = setImRuntime(ownedRuntime)
+      // 启动时补一次：插件重启前已绑定、但会话还没重新打开/空闲的 preset 切换。
+      void ownedRuntime.ensurePresets?.().catch((error: unknown) => {
+        ctx.logger?.warn?.(`dsh-soulmojito im: AgentTavernIM preset sweep failed: ${error instanceof Error ? error.message : String(error)}`)
+      })
     }).catch((error: unknown) => {
       ctx.logger?.warn?.(`dsh-soulmojito im: runtime unavailable: ${error instanceof Error ? error.message : String(error)}`)
     })

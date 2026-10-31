@@ -13,9 +13,101 @@ function hostPromptSafe(text, expand = (value) => value) {
   return expand(text).replace(/\{+/g, (run) => run.split("").join(" "));
 }
 
+// packages/tavern-store/src/im-state.ts
+var DEFAULT_IM_SETTINGS = {
+  groupRequireMention: true,
+  privateMode: "allowlist",
+  privateAllow: [],
+  groupMode: "allowlist",
+  groupAllow: []
+};
+
+// packages/tavern-format/lib/png.js
+var PNG_SIGNATURE = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
+var CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) {
+      c = c & 1 ? 3988292384 ^ c >>> 1 : c >>> 1;
+    }
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+
+// packages/tavern-format/lib/zip.js
+var DEFAULT_ZIP_LIMITS = {
+  maxEntries: 256,
+  maxFileBytes: 64 * 1024 * 1024,
+  maxTotalBytes: 128 * 1024 * 1024
+};
+
+// packages/tavern-store/src/store.ts
+var DEFAULT_STATE = {
+  activeWorlds: [],
+  sessionBindings: {},
+  defaultArchitecture: "agent-tavern",
+  defaultContextMode: "dsh-native",
+  agentTavernPreloadAssets: false,
+  agentTavernAllowGlobalWrites: false,
+  frontendAutoOpen: false,
+  cardScriptsAutoRun: false,
+  frontendAllowExternalResources: false,
+  gamesDisableResign: false,
+  cardWorkbenchPresetEnabled: false,
+  agentNovelPresetEnabled: false,
+  worldFollowsCharacter: true,
+  disabledAutoWorlds: [],
+  modelSelections: {},
+  chats: {},
+  regexScripts: [],
+  scriptGlobals: {},
+  characterVariables: {},
+  frontendStorage: {},
+  modsEnabled: false,
+  mods: { enabled: {} },
+  imSettings: structuredClone(DEFAULT_IM_SETTINGS),
+  imPeers: {},
+  imPendingPeers: {}
+};
+
+// packages/tavern-store/src/tokenize.ts
+var CJK_STOP_BIGRAM_CHARS = /* @__PURE__ */ new Set([..."\u7684\u4E86\u662F\u5728\u5417\u5462\u5427\u554A\u5440\u4E48\u548C\u4E0E\u5C31\u90FD\u4E5F\u5F88\u88AB\u628A\u6CA1\u4E0D\u6709\u8FD8\u8FD9\u90A3\u4F60\u6211\u4ED6\u5979\u5B83\u4EEC\u4E2A"]);
+
+// packages/tavern-store/src/memory.ts
+var MAX_CONTENT = 64 * 1024;
+
+// packages/tavern-store/src/variable.ts
+var MAX_VALUE_BYTES = 32 * 1024;
+var MAX_SCOPE_BYTES = 256 * 1024;
+
+// packages/tavern-store/src/novel-import.ts
+var IMPORT_MAX_EXTRACTION_BYTES = 256 * 1024;
+var IMPORT_MAX_BIBLE_BYTES = 512 * 1024;
+var DIGEST_MAX_BYTES = 48 * 1024;
+var CN_NUMBER = "\u3007\u96F6\u4E00\u4E8C\u4E09\u56DB\u4E94\u516D\u4E03\u516B\u4E5D\u5341\u767E\u5343\u4E07\u4E240-9\uFF10-\uFF19";
+var CHAPTER_HEADING_PATTERNS = [
+  new RegExp(`^\u7B2C\\s*[${CN_NUMBER}]+\\s*[\u7AE0\u8282\u56DE\u5377\u90E8\u7BC7\u96C6]\\s*[^\\n]{0,50}$`),
+  /^(?:序章|楔子|引子|序言|前言|尾声|后记|终章|大结局|番外(?:篇)?(?:\s*[〇零一二三四五六七八九十百千万两0-9]+)?)\s*[^\n]{0,30}$/
+];
+
+// packages/tavern-store/src/novel-owner.ts
+import { randomBytes } from "node:crypto";
+var BOOT_ID = globalThis.__dshSoulMojitoNovelBootId ??= randomBytes(16).toString("hex");
+
+// packages/tavern-store/src/scripts.ts
+var EPUB_ZIP_LIMITS = {
+  maxEntries: 256,
+  maxFileBytes: 64 * 1024 * 1024,
+  maxTotalBytes: 128 * 1024 * 1024
+};
+
+// packages/plugin/src/im/types.ts
+var AGENT_TAVERN_IM_PRESET_ID = "agent-tavern-im";
+
 // packages/plugin/src/im/agent.ts
 var name = "dsh-soulmojito/im-agent";
-var AGENT_TAVERN_IM_PRESET_ID = "agent-tavern-im";
 var IM_MODE_SECTION = "dsh-soulmojito:im-mode";
 var IM_MODE_PROMPT = [
   "# IM \u6A21\u5F0F\uFF08AgentTavernIM\uFF09",

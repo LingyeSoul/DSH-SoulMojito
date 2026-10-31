@@ -10184,7 +10184,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("4335616") : void 0;
+  const commit = true ? normalizeCommit("b1746b2") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -46011,6 +46011,7 @@ import { randomUUID as randomUUID11, timingSafeEqual } from "node:crypto";
 // packages/plugin/src/im/types.ts
 init_src();
 import { createHash as createHash13 } from "node:crypto";
+var AGENT_TAVERN_IM_PRESET_ID = "agent-tavern-im";
 function imDedupeKey(channel, accountId, scope, peerId, messageId) {
   return `${channel}:${accountId}:${scope}:${peerId}:${messageId}`;
 }
@@ -51361,7 +51362,13 @@ ${outputTail}`
         imPendingPeers: pending
       };
     });
-    return sendJson(res, 200, { ok: true, peer: { key, ...binding }, pendingPeers: pendingPeerRows(next.imPendingPeers) });
+    const presetSwitch = runtime?.applyImPreset === void 0 ? void 0 : await runtime.applyImPreset(sessionId);
+    return sendJson(res, 200, {
+      ok: true,
+      peer: { key, ...binding },
+      pendingPeers: pendingPeerRows(next.imPendingPeers),
+      ...presetSwitch === void 0 ? {} : { presetSwitch }
+    });
   }
   if (method === "DELETE" && route === "im/peers") {
     const key = url.searchParams.get("key");
@@ -57388,6 +57395,80 @@ function createImRuntime(ctx, options) {
     now: () => Date.now(),
     maxBytes: WEIXIN_MEDIA_MAX_BYTES
   });
+  async function applyPresetToAgent(agent) {
+    const presets = ctx.agentPresets;
+    if (typeof presets?.recompose !== "function") {
+      return { applied: false, reason: "the host cannot recompose agent presets" };
+    }
+    const sessionId = agent.session?.id ?? agent.id;
+    if (typeof sessionId !== "string" || sessionId === "") {
+      return { applied: false, reason: "the agent has no session id" };
+    }
+    try {
+      const header = agent.session?.header;
+      if (header?.origin === "subagent" || typeof header?.delegationDepth === "number" && header.delegationDepth > 0) {
+        return { applied: false, reason: "subagent sessions cannot be switched to AgentTavernIM" };
+      }
+      const state = await db.getState();
+      const architecture = state.sessionBindings[sessionId]?.architecture;
+      if (architecture === "agent-novel" || architecture === "card-workbench" || architecture === "st") {
+        return {
+          applied: false,
+          reason: `session architecture '${architecture}' cannot be switched to AgentTavernIM`
+        };
+      }
+      if (agent.status === "running") {
+        return { applied: false, reason: "the session is running; the preset will switch when it becomes idle" };
+      }
+      if (lastSelectedPresetId(agent.session) === AGENT_TAVERN_IM_PRESET_ID) return { applied: true };
+      const preset = await presets.recompose(agent.ctx, AGENT_TAVERN_IM_PRESET_ID);
+      if (preset.id !== AGENT_TAVERN_IM_PRESET_ID) {
+        return { applied: false, reason: `the host selected preset '${preset.id}' instead of AgentTavernIM` };
+      }
+      const session = agent.session;
+      if (typeof session.append !== "function") {
+        return { applied: false, reason: "the session does not expose append(); the preset cannot be made durable" };
+      }
+      const confirmed = confirmSessionAppend({
+        session: agent.session,
+        logger,
+        label: `AgentTavernIM preset marker (${sessionId})`,
+        append: () => session.append?.("agent-preset/selected", { agentPreset: preset.id }),
+        present: () => lastSelectedPresetId(agent.session) === preset.id
+      });
+      if (!confirmed) return { applied: false, reason: "the AgentTavernIM preset marker could not be confirmed" };
+      imLog.note("info", `im bind: switched ${sessionId} to ${AGENT_TAVERN_IM_PRESET_ID}`);
+      return { applied: true };
+    } catch (error) {
+      return { applied: false, reason: messageOf13(error) };
+    }
+  }
+  async function applyImPreset(sessionId) {
+    const agent = liveAgentOf(agents, sessionId);
+    if (agent === void 0) return { applied: false, reason: "the session is not open" };
+    return applyPresetToAgent(agent);
+  }
+  async function ensurePresetForAgent(agent) {
+    if (typeof agent !== "object" || agent === null) return { applied: false, reason: "invalid agent" };
+    const candidate = agent;
+    const sessionId = candidate.session?.id ?? candidate.id;
+    if (typeof sessionId !== "string" || sessionId === "") return { applied: false, reason: "the agent has no session id" };
+    const state = await db.getState();
+    const bound = Object.values(state.imPeers ?? {}).some((binding) => binding.sessionId === sessionId);
+    if (!bound) return { applied: false, reason: "the session has no IM binding" };
+    return applyPresetToAgent(candidate);
+  }
+  async function ensurePresets() {
+    const state = await db.getState();
+    const bound = new Set(Object.values(state.imPeers ?? {}).map((binding) => binding.sessionId));
+    for (const agent of listLiveAgents2(agents)) {
+      const sessionId = agent.session?.id ?? agent.id;
+      if (typeof sessionId !== "string" || !bound.has(sessionId)) continue;
+      await applyPresetToAgent(agent).catch((error) => {
+        logger?.warn?.(`dsh-soulmojito im: switching ${sessionId} to AgentTavernIM failed: ${messageOf13(error)}`);
+      });
+    }
+  }
   const router = createImRouter({
     db,
     now: () => Date.now(),
@@ -57774,6 +57855,9 @@ function createImRuntime(ctx, options) {
       peers: 0
     })),
     isSessionLive: (sessionId) => liveAgentOf(agents, sessionId) !== void 0,
+    applyImPreset,
+    ensurePresetForAgent,
+    ensurePresets,
     handleOneBotUpgrade,
     startQrBind,
     qrBindStatus,
@@ -58351,6 +58435,14 @@ function apply(ctx, config = {}) {
     } catch (error) {
       ctx.logger?.warn?.(`dsh-soulmojito body: agent recovery failed: ${error instanceof Error ? error.message : String(error)}`);
     }
+    const imRuntime = getImRuntime();
+    if (imRuntime?.ensurePresetForAgent !== void 0) {
+      try {
+        await imRuntime.ensurePresetForAgent(agent);
+      } catch (error) {
+        ctx.logger?.warn?.(`dsh-soulmojito im: AgentTavernIM preset switch failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
   });
   void refreshActivePrompt();
   void recoverMountedNovels(ctx);
@@ -58421,7 +58513,15 @@ function apply(ctx, config = {}) {
     });
     ctx.on?.("agent/status", (payload) => {
       const agent = payload?.agent;
-      if (agent !== void 0) mountImTools(agent);
+      if (agent === void 0) return;
+      mountImTools(agent);
+      const status2 = payload.status ?? agent.status;
+      if (status2 !== "idle") return;
+      const runtime = getImRuntime();
+      if (runtime?.ensurePresetForAgent === void 0) return;
+      void runtime.ensurePresetForAgent(agent).catch((error) => {
+        ctx.logger?.warn?.(`dsh-soulmojito im: AgentTavernIM preset switch failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
     });
     ctx.on?.("agent/disposed", (payload) => {
       const agent = payload?.agent;
@@ -58444,6 +58544,9 @@ function apply(ctx, config = {}) {
     void store3().then((db) => {
       ownedRuntime = createImRuntime(ctx, { db, ...ctx.logger === void 0 ? {} : { logger: ctx.logger } });
       ownedDispose = setImRuntime(ownedRuntime);
+      void ownedRuntime.ensurePresets?.().catch((error) => {
+        ctx.logger?.warn?.(`dsh-soulmojito im: AgentTavernIM preset sweep failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
     }).catch((error) => {
       ctx.logger?.warn?.(`dsh-soulmojito im: runtime unavailable: ${error instanceof Error ? error.message : String(error)}`);
     });

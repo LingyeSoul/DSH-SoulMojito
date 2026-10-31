@@ -149,7 +149,7 @@ describe('im account routes', () => {
         [key]: { lastAt: 1_700_000_000_000, senderName: '小明' },
       },
     })
-    const runtime = runtimeOf()
+    const runtime = { ...runtimeOf(), applyImPreset: async () => ({ applied: true }) }
     const listed = await call(undefined, '/api/dsh-soulmojito/im', 'im', 'GET', runtime)
     expect(listed.body['pendingPeers']).toEqual([{
       key,
@@ -170,6 +170,7 @@ describe('im account routes', () => {
       sessionId: 'session-native',
     }, '/api/dsh-soulmojito/im/peers', 'im/peers', 'POST', runtime)
     expect(bound.statusCode).toBe(200)
+    expect(bound.body['presetSwitch']).toEqual({ applied: true })
     const state = await db.getState()
     expect(state.imPeers?.[key]).toMatchObject({
       sessionId: 'session-native',

@@ -275,7 +275,17 @@ export async function handleImApi(
         imPendingPeers: pending,
       }
     })
-    return sendJson(res, 200, { ok: true, peer: { key, ...binding }, pendingPeers: pendingPeerRows(next.imPendingPeers) })
+    // 绑定成功就把会话切到 AgentTavernIM；会话未打开/正在跑时留待
+    // agent/created / agent/status(idle) 的自动重试。
+    const presetSwitch = runtime?.applyImPreset === undefined
+      ? undefined
+      : await runtime.applyImPreset(sessionId)
+    return sendJson(res, 200, {
+      ok: true,
+      peer: { key, ...binding },
+      pendingPeers: pendingPeerRows(next.imPendingPeers),
+      ...(presetSwitch === undefined ? {} : { presetSwitch }),
+    })
   }
 
   if (method === 'DELETE' && route === 'im/peers') {

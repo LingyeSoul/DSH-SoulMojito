@@ -89,6 +89,9 @@ const IM_I18N_KEYS = [
   'im.peers.sharedHint',
   'im.peers.rebindCurrent',
   'im.peers.noCurrentSession',
+  'im.peers.presetApplied',
+  'im.peers.presetPending',
+  'im.peers.presetFailed',
   'im.peers.unbind',
   'im.peers.unbindConfirm',
   'im.pending.title',
@@ -457,6 +460,8 @@ describe('IM channels panel (client-src source check)', () => {
       "onBlur: () => onAllowCommit('group')",
       "void saveSettings({ [field]: next })",
       "t('im.peers.noCurrentSession')",
+      "t('im.peers.presetApplied')",
+      'result?.presetSwitch',
     ]) {
       expect(imSource).toContain(marker)
     }
