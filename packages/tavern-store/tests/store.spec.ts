@@ -785,6 +785,9 @@ describe('TavernStore', () => {
       },
       imPeers: {},
       imPendingPeers: {},
+      // 会话主人与最近发言人（决策 2026-10-31-im-owner-designation）：默认空表。
+      imSenders: {},
+      imOwners: {},
     })
     await store.patchState({
       activeCharacter: 'ExampleCard',

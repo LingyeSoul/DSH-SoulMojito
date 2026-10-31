@@ -74,6 +74,7 @@
 - [`2026-10-31-im-chat-projection.md`](../decisions/2026-10-31-im-chat-projection.md) — IM 对话投影进 Tavern 楼层：入站 relay 与成功 `im_send` 成为可检索聊天历史与记忆证据
 - [`2026-10-31-im-body-mutations-disabled.md`](../decisions/2026-10-31-im-body-mutations-disabled.md) — IM 绑定会话禁用正文编辑/重生成/候选切换（只读查看保留）
 - [`2026-10-31-weixin-send-queue.md`](../decisions/2026-10-31-weixin-send-queue.md) — 微信出站队列：面板可配发送间隔、窗口/冷却主动等待并重试一次、排队回执带排期
+- [`2026-10-31-im-owner-designation.md`](../decisions/2026-10-31-im-owner-designation.md) — IM 会话主人：每 peer 至多一位、主人/发言人值只存 `snd-` 哈希、头部 `owner=1`/`ownerItems` 权威标记与正文防伪造
 
 ### 宿主兼容与 DSH 版本适配
 

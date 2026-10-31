@@ -27,6 +27,8 @@ import type { TavernStore } from '../../../tavern-store/src/index.js'
 import type { HostLogger } from '../host-contract.js'
 import { IM_COALESCE_MAX_CHARS, IM_COALESCE_MAX_MESSAGES, IM_COALESCE_WINDOW_MS, mergedRelayTextOf, orderInboundEntries, type ImCoalesceEntry } from './coalesce.js'
 import { IM_MESSAGE_REF_MAX_ENTRIES, IM_MESSAGE_REF_TTL_MS, createImMessageRefStore, imMessageRef, type ImMessageRefEntry } from './refs.js'
+import { IM_OWNER_LINE_PREFIX, displaySenderNameOf, imUserTextOf, relayTextOf } from './relay.js'
+import { createImOwnerLedger } from './owner-ledger.js'
 import { projectImText } from './project.js'
 import { imAccessAllows, imChunkLimit } from './settings.js'
 import type { ImLogSink } from './log.js'
@@ -170,6 +172,12 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
     now: deps.now,
     ttlMs: IM_MESSAGE_REF_TTL_MS,
     maxEntries: IM_MESSAGE_REF_MAX_ENTRIES,
+  })
+  /** 主人比对与最近发言人账本（决策 2026-10-31-im-owner-designation）。 */
+  const ownerLedger = createImOwnerLedger({
+    db: deps.db,
+    now: deps.now,
+    ...(deps.log === undefined ? {} : { log: deps.log }),
   })
 
   const coalesceWindowMs = deps.coalesceWindowMs ?? IM_COALESCE_WINDOW_MS
@@ -338,12 +346,14 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
       }
     }
     if (binding === undefined || deliverables.length === 0) return
+    // 主人只在本 peer 已绑定且确定要投递时才查：未绑定/被拒绝的批次不碰两个新表。
+    const ownerId = await ownerLedger.ownerIdOf(peerKey)
     if (deliverables.length > 1 && deliverables.every((item) => item.message.media.length === 0)) {
-      await deliverMerged(alias, binding.sessionId, deliverables)
+      await deliverMerged(peerKey, alias, binding.sessionId, deliverables, ownerId)
       return
     }
     // 单条批次与含媒体的批次都不合并：逐条投递，单条正文与日志保持原样。
-    for (const item of deliverables) await deliverOne(alias, binding.sessionId, item)
+    for (const item of deliverables) await deliverOne(peerKey, alias, binding.sessionId, item, ownerId)
   }
 
   /**
@@ -407,12 +417,24 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
     return { message, body }
   }
 
-  /** 单条投递：正文与日志与合流上线前逐字节一致；摘要与引用表带 `msg=`。 */
-  async function deliverOne(alias: string, sessionId: string, item: DeliverableInbound): Promise<void> {
+  /**
+   * 单条投递：正文与日志与合流上线前逐字节一致；摘要与引用表带 `msg=`。
+   * 主人标记（决策 2026-10-31-im-owner-designation）：单条消息（群聊/私聊）在
+   * 头部加权威 `owner=1`；群聊额外给主人发言人行加 `[主人]` 展示前缀
+   * （`[主人][昵称] 正文`）。
+   */
+  async function deliverOne(
+    peerKey: string,
+    alias: string,
+    sessionId: string,
+    item: DeliverableInbound,
+    ownerId: string | undefined,
+  ): Promise<void> {
     const message = item.message
-    const body = item.body
+    const isOwner = ownerLedger.isOwnerMessage(message, ownerId)
+    const body = isOwner && message.scope === 'group' ? `${IM_OWNER_LINE_PREFIX}${item.body}` : item.body
     const ref = imMessageRef(message.dedupeKey)
-    const text = relayTextOf(message, body, alias)
+    const text = relayTextOf(message, body, alias, { owner: isOwner })
     deps.log?.note('info', `accepted a ${message.channel}/${message.scope} message from ${alias} (${body.length} chars) for session ${sessionId}`)
     const messageId = `im-${randomUUID()}`
     try {
@@ -430,6 +452,7 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
       return
     }
     rememberDeliveredMessage(ref, sessionId, message)
+    await ownerLedger.rememberSenders(peerKey, alias, [message])
     deps.log?.note('debug', `inserted an IM message from ${alias} into session ${sessionId} (${messageId})`)
   }
 
@@ -437,19 +460,34 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
    * 合流投递：整批拼成一条 `im-` 消息，头部标注连续条数，正文逐条换行——每条
    * 前缀自己的 `[msg-…]` 引用（头是复数，不挂单个 msg）。摘要与失败提示取批次
    * 最后一条（排序后），与「最后收到的那句话」一致；引用逐条记进引用表。
+   * 主人标记（决策 2026-10-31-im-owner-designation）：权威信号在头部——
+   * 整批全主人 `owner=1`，部分主人 `ownerItems=<1-based 条目序号>`；群聊主人
+   * 自己的正文行再加 `[主人]` 展示前缀（用户文本里的同形行首已被转义）。
    */
-  async function deliverMerged(alias: string, sessionId: string, items: readonly DeliverableInbound[]): Promise<void> {
+  async function deliverMerged(
+    peerKey: string,
+    alias: string,
+    sessionId: string,
+    items: readonly DeliverableInbound[],
+    ownerId: string | undefined,
+  ): Promise<void> {
     const first = items[0]
     const last = items[items.length - 1]
     if (first === undefined || last === undefined) return
     const channel = first.message.channel
     const scope = first.message.scope
-    const relayItems = items.map((item) => ({
+    const ownerFlags = items.map((item) => ownerLedger.isOwnerMessage(item.message, ownerId))
+    const ownerItems = ownerFlags.flatMap((flag, index) => (flag ? [index + 1] : []))
+    const relayItems = items.map((item, index) => ({
       message: item.message,
-      body: item.body,
+      body: ownerFlags[index] === true && item.message.scope === 'group'
+        ? `${IM_OWNER_LINE_PREFIX}${item.body}`
+        : item.body,
       ref: imMessageRef(item.message.dedupeKey),
     }))
-    const text = mergedRelayTextOf(relayItems, alias, channel, scope)
+    const text = mergedRelayTextOf(relayItems, alias, channel, scope, ownerItems.length === ownerFlags.length
+      ? { owner: true }
+      : (ownerItems.length > 0 ? { ownerItems } : undefined))
     const chars = relayItems.reduce((total, entry) => total + entry.body.length, 0)
     deps.log?.note('info', `accepted ${relayItems.length} ${channel}/${scope} messages from ${alias} (${chars} chars) for session ${sessionId}`)
     const messageId = `im-${randomUUID()}`
@@ -467,6 +505,7 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
       return
     }
     for (const relayItem of relayItems) rememberDeliveredMessage(relayItem.ref, sessionId, relayItem.message)
+    await ownerLedger.rememberSenders(peerKey, alias, items.map((item) => item.message))
     deps.log?.note('debug', `inserted a merged IM message from ${alias} into session ${sessionId} (${messageId})`)
   }
 
@@ -710,68 +749,8 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
   }
 }
 
-/**
- * 入站正文 → 插进会话的插件来源消息正文。
- *
- * 头部给模型四件事：这是 IM 消息不是 DSH 用户输入、来源渠道与范围、回复要用
- * 哪个 peer alias、这条消息的稳定引用与接收时间（`im_send` 的 `replyTo` 可用
- * `msg=` 指回它）。引用是哈希，不带平台身份。群聊的发言人前缀由 `imUserTextOf`
- * 提供。
- */
-export function relayTextOf(inbound: ImInbound, body: string, alias: string): string {
-  const scope = inbound.scope === 'group' ? '群聊' : '私聊'
-  return [
-    `[IM ${inbound.channel}/${scope} peer=${alias} msg=${imMessageRef(inbound.dedupeKey)} time=${new Date(inbound.receivedAt).toISOString()}]`,
-    body,
-    `（这是从 IM 转发给你的消息，不是 DSH 用户输入。回复请调用 im_send，peer 参数用 ${alias}。）`,
-  ].join('\n')
-}
-
-/**
- * 入站文本 → 会话里的一条用户消息。
- *
- * 群聊必须带发言人前缀：一个会话里可能有多个人说话，模型只能从文本看出「这是
- * 另一个人说的」。私聊不加前缀，避免每句话都被名字噪声切碎。
- */
-export function imUserTextOf(inbound: ImInbound): string | undefined {
-  const body = inbound.text.trim()
-  const attachments = attachmentSummaryOf(inbound)
-  const composed = inbound.scope === 'group'
-    ? `[${displaySenderNameOf(inbound) ?? '群成员'}] ${body}`.trim()
-    : body
-  const withAttachments = attachments === undefined
-    ? composed
-    : `${composed}${composed === '' ? '' : '\n'}${attachments}`.trim()
-  return withAttachments === '' ? undefined : withAttachments
-}
-
-/**
- * 平台显示名：QQ 群成员昵称、OneBot 名片等是安全可读的；私聊/C2C 的
- * `senderName` 常是 openid 前缀，不能当名字用——此时宁可缺省。
- */
-function displaySenderNameOf(inbound: ImInbound): string | undefined {
-  const name = inbound.senderName.trim()
-  if (name === '') return undefined
-  const id = inbound.senderId.trim()
-  if (id.startsWith(name)) return undefined
-  return name
-}
-
-/**
- * 附件摘要：本地路径必须进正文——模型只有看到路径才能用文件工具打开它。远程
- * 地址只说明「未下载」，不把 URL 塞进上下文（既不可取用，也会被复述出去）。
- */
-function attachmentSummaryOf(inbound: ImInbound): string | undefined {
-  if (inbound.media.length === 0) return undefined
-  const labels = inbound.media.slice(0, 6).map((media) => {
-    const label = media.kind === 'image' ? '图片' : media.kind === 'voice' ? '语音' : media.kind === 'video' ? '视频' : '文件'
-    if (media.localPath !== undefined) return `${label}（${media.localPath}）`
-    if (media.url !== undefined) return `${label}（未下载）`
-    return label
-  })
-  const rest = inbound.media.length > labels.length ? `等 ${inbound.media.length} 个` : ''
-  return `（附件：${labels.join('、')}${rest}）`
-}
+/** 兼容旧导入点：relay 文本函数住在纯函数模块 `im/relay.ts`。 */
+export { imUserTextOf, relayTextOf }
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)

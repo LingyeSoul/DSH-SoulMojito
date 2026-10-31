@@ -21,8 +21,10 @@ const imSource = readFileSync(join(sourceDir, '97-ui-im.js'), 'utf8')
 const logsSource = readFileSync(join(sourceDir, '97b-ui-im-logs.js'), 'utf8')
 const behaviorSource = readFileSync(join(sourceDir, '97cc-ui-im-behavior.js'), 'utf8')
 const bindSource = readFileSync(join(sourceDir, '97d-ui-im-bind.js'), 'utf8')
+const ownerSource = readFileSync(join(sourceDir, '97e-ui-im-owner.js'), 'utf8')
+const peersSource = readFileSync(join(sourceDir, '97f-ui-im-peers.js'), 'utf8')
 /** 分片在同一 factory 作用域里按清单顺序拼接：vm 里也照这个顺序拼。 */
-const imPanelSource = `${imSource}\n${logsSource}\n${behaviorSource}\n${bindSource}`
+const imPanelSource = `${imSource}\n${logsSource}\n${behaviorSource}\n${bindSource}\n${ownerSource}\n${peersSource}`
 const coreSource = readFileSync(join(sourceDir, '90-panels-core.js'), 'utf8')
 const iconSource = readFileSync(join(sourceDir, '30-games-ui.js'), 'utf8')
 const stylesSource = readFileSync(join(sourceDir, '95-ui-styles.js'), 'utf8')
@@ -107,6 +109,13 @@ const IM_I18N_KEYS = [
   'im.pending.hint',
   'im.pending.bind',
   'im.pending.lastAt',
+  'im.owner.label',
+  'im.owner.none',
+  'im.owner.pick',
+  'im.owner.clear',
+  'im.owner.setSelf',
+  'im.owner.selfName',
+  'im.owner.saved',
   'im.scope.private',
   'im.scope.group',
   'im.settings.title',
@@ -163,6 +172,16 @@ type PanelPure = {
   imLogTime: (at: string) => string
   imSendIntervalValue: (settings: { weixinSendIntervalMs?: unknown } | null) => number | null
   imStatusTime: (at: number | string) => string
+  imOwnerNameOf: (
+    peer: { scope?: string; peerSelfId?: string },
+    owner: { id?: string; name?: string } | null,
+    t: (key: string, params?: Record<string, unknown>) => string,
+  ) => string
+  imOwnerOptionsOf: (
+    peer: { scope?: string; peerSelfId?: string },
+    senders: Array<{ id?: string; name?: string }>,
+    t: (key: string, params?: Record<string, unknown>) => string,
+  ) => Array<{ id: string; label: string }>
 }
 
 /** 在 vm 里执行分片并取回纯函数：顶层只有常量与函数声明，不依赖 React。 */
@@ -176,7 +195,7 @@ function loadPanelPure(): PanelPure {
 ;globalThis.__imPanel = {
   imChannelTone, imChannelReason, imPeerParts, imSharedSessionIds, imIdList,
   imSessionLabeler, imMergeLogEntries, imLogFilter, imLogTime,
-  imSendIntervalValue, imStatusTime,
+  imSendIntervalValue, imStatusTime, imOwnerNameOf, imOwnerOptionsOf,
 }`,
     context,
     { filename: '97-ui-im.js' },
@@ -229,7 +248,7 @@ function createPanelRender(options: { characters?: string[]; chatLists?: Record<
   })
   vm.runInContext(
     `${imPanelSource}
-;globalThis.__imRender = { PanelIm, ImTabs, ImChannelCard, ImBindPanel, ImPeerRow, ImPeersBand, ImSettingsBand, ImOneBotBand, ImLogBand, ImLogRows, ImBehaviorBand }`,
+;globalThis.__imRender = { PanelIm, ImTabs, ImChannelCard, ImBindPanel, ImPeerRow, ImPeersBand, ImSettingsBand, ImOneBotBand, ImLogBand, ImLogRows, ImBehaviorBand, ImOwnerControls }`,
     context,
     { filename: '97-ui-im.js' },
   )
@@ -303,17 +322,37 @@ function findTabButtons(tree: unknown): RenderNode[] {
   return found
 }
 
+/** 按 h 的 type 字符串/组件函数名找元素节点（主人选择器用）。 */
+function findNodes(tree: unknown, type: string): RenderNode[] {
+  const found: RenderNode[] = []
+  const visit = (node: unknown): void => {
+    if (node === null || node === undefined || typeof node === 'boolean' || typeof node === 'string' || typeof node === 'number') return
+    if (Array.isArray(node)) {
+      for (const child of node) visit(child)
+      return
+    }
+    const entry = node as RenderNode
+    const name = typeof entry.type === 'function' ? (entry.type as { name?: string }).name : entry.type
+    if (name === type) found.push(entry)
+    for (const child of entry.children) visit(child)
+  }
+  visit(tree)
+  return found
+}
+
 function definitionCount(source: string, key: string): number {
   return source.split(`'${key}':`).length - 1
 }
 
 describe('IM channels panel (client-src source check)', () => {
-  it('ships the 97-ui-im fragment and its log/behavior/bind companions between the presets and apply fragments', () => {
+  it('ships the 97-ui-im fragment and its log/behavior/bind/owner/peers companions between the presets and apply fragments', () => {
     const presetsAt = manifest.fragments.indexOf('96-panels-presets.js')
     const imAt = manifest.fragments.indexOf('97-ui-im.js')
     const logsAt = manifest.fragments.indexOf('97b-ui-im-logs.js')
     const behaviorAt = manifest.fragments.indexOf('97cc-ui-im-behavior.js')
     const bindAt = manifest.fragments.indexOf('97d-ui-im-bind.js')
+    const ownerAt = manifest.fragments.indexOf('97e-ui-im-owner.js')
+    const peersAt = manifest.fragments.indexOf('97f-ui-im-peers.js')
     const applyAt = manifest.fragments.indexOf('98-apply.js')
     expect(presetsAt).toBeGreaterThanOrEqual(0)
     expect(imAt).toBe(presetsAt + 1)
@@ -322,11 +361,23 @@ describe('IM channels panel (client-src source check)', () => {
     expect(logsAt).toBe(imAt + 1)
     expect(behaviorAt).toBe(logsAt + 1)
     expect(bindAt).toBe(behaviorAt + 1)
-    expect(applyAt).toBe(bindAt + 1)
+    expect(ownerAt).toBe(bindAt + 1)
+    expect(peersAt).toBe(ownerAt + 1)
+    expect(applyAt).toBe(peersAt + 1)
     // 扫码面板确实搬到了伴随分片：主分片只剩引用，定义只在一处。
     expect(bindSource).toContain('function ImBindPanel(')
     expect(imSource).not.toContain('function ImBindPanel(')
     expect(imSource).toContain('h(ImBindPanel, {')
+    // 主人控件在 97e；绑定表/绑定行在 97f：主分片只保留调用点，守住 800 行预算。
+    expect(ownerSource).toContain('function ImOwnerControls(')
+    expect(ownerSource).toContain('function imOwnerOptionsOf(')
+    expect(peersSource).toContain('function ImPeersBand(')
+    expect(peersSource).toContain('function ImPeerRow(')
+    expect(imSource).not.toContain('function ImOwnerControls(')
+    expect(imSource).not.toContain('function ImPeersBand(')
+    expect(imSource).not.toContain('function ImPeerRow(')
+    expect(peersSource).toContain('h(ImOwnerControls, {')
+    expect(imSource).toContain('h(ImPeersBand, {')
   })
 
   it('registers the im section in the system group with a locale thunk', () => {
@@ -405,6 +456,7 @@ describe('IM channels panel (client-src source check)', () => {
       "'im/bind/verify'",
       "'im/bind/cancel'",
       "'im/qq/install'",
+      "'im/owner'",
     ]) {
       expect(imSource).toContain(marker)
     }
@@ -496,13 +548,13 @@ describe('IM channels panel (client-src source check)', () => {
 
   it('marks shared sessions and wires bind/rebind to the current native session', () => {
     expect(imSource).toContain('function imSharedSessionIds(peers)')
-    expect(imSource).toContain('sharedSessions.has(peer.sessionId)')
-    expect(imSource).toContain("h(Pill, { active: true }, t('im.peers.shared'))")
+    expect(peersSource).toContain('sharedSessions.has(peer.sessionId)')
+    expect(peersSource).toContain("h(Pill, { active: true }, t('im.peers.shared'))")
     expect(imSource).toContain('function imPeerParts(key)')
     expect(imSource).toContain('function imSessionLabeler(bindings, sessionsById)')
     expect(imSource).toContain('const currentSession = useCurrentSessionId(useSessions)')
     expect(imSource).toContain('sessionId: target')
-    expect(imSource).toContain("t('im.peers.rebindCurrent')")
+    expect(peersSource).toContain("t('im.peers.rebindCurrent')")
     expect(imSource).toContain("api(`im/peers?key=${encodeURIComponent(peer.key)}`, { method: 'DELETE' })")
     expect(imSource).toContain("t('im.peers.unbindConfirm', { peer: peer.key })")
   })
@@ -520,7 +572,7 @@ describe('IM channels panel (client-src source check)', () => {
       "t('im.peers.presetApplied')",
       'result?.presetSwitch',
     ]) {
-      expect(imSource).toContain(marker)
+      expect(imPanelSource).toContain(marker)
     }
     // 旧的自动绑定模式已删除：面板不再提交 bindingMode/sourceChat/sharedChat。
     expect(imSource).not.toContain('bindingMode')
@@ -876,16 +928,56 @@ describe('IM channels panel (client-src source check)', () => {
     expect(panel.imStatusTime('not-a-date')).toBe('—')
   })
 
+  it('labels self-owned private peers and lists hashed sender options', () => {
+    const panel = loadPanelPure()
+    const t = (key: string, params?: Record<string, unknown>): string => (
+      params === undefined
+        ? key
+        : `${key}(${Object.entries(params).map(([name, value]) => `${name}=${String(value)}`).join(';')})`
+    )
+    const privatePeer = { scope: 'private', peerSelfId: 'snd-self000001' }
+    expect(panel.imOwnerNameOf(privatePeer, null, t)).toBe('im.owner.none')
+    expect(panel.imOwnerNameOf(privatePeer, { id: 'snd-self000001', name: '' }, t)).toBe('im.owner.selfName')
+    expect(panel.imOwnerNameOf(privatePeer, { id: 'snd-other00001', name: '小红' }, t)).toBe('小红')
+    expect(panel.imOwnerNameOf(privatePeer, { id: 'snd-other00001', name: '' }, t)).toBe('snd-other00001')
+
+    // 私聊：自哈希重标「设为对端为主人」，重复 id 只出现一次。
+    expect(panel.imOwnerOptionsOf(privatePeer, [
+      { id: 'snd-self000001', name: '' },
+      { id: 'snd-other00001', name: '小红' },
+      { id: 'snd-other00001', name: '小红' },
+    ], t)).toEqual([
+      { id: 'snd-self000001', label: 'im.owner.setSelf' },
+      { id: 'snd-other00001', label: '小红' },
+    ])
+    // 私聊没发过消息：自哈希仍是一个可选项。
+    expect(panel.imOwnerOptionsOf(privatePeer, [], t)).toEqual([
+      { id: 'snd-self000001', label: 'im.owner.setSelf' },
+    ])
+    // 群聊没有「对端」选项，只列最近发言人（昵称缺省回退哈希）。
+    expect(panel.imOwnerOptionsOf({ scope: 'group' }, [
+      { id: 'snd-member0001', name: '小明' },
+      { id: 'snd-member0002', name: '' },
+    ], t)).toEqual([
+      { id: 'snd-member0001', label: '小明' },
+      { id: 'snd-member0002', label: 'snd-member0002' },
+    ])
+  })
+
   it('renders the shared-session badge and the access form (render smoke)', () => {
     const components = createPanelRender({})
     const row = collectNode(components.ImPeerRow({
       peer: { key: 'qq:1024:private:u1', sessionId: 'session-a', scope: 'private', boundBy: 'manual', createdAt: '2026-10-30T10:00:00.000Z', live: false },
       shared: true,
+      owner: null,
+      senders: [],
       currentSession: 'session-current',
       sessionLabel: () => 'Alice · ten',
       disabled: false,
+      ownerDisabled: false,
       onRebind: () => {},
       onUnbind: () => {},
+      onSetOwner: () => {},
     }))
     expect(row.attrs).toContain('data-im-peer=qq:1024:private:u1')
     expect(row.texts).toContain('qq:1024:private:u1')
@@ -894,6 +986,8 @@ describe('IM channels panel (client-src source check)', () => {
     expect(row.texts).toContain('im.peers.session(session=Alice · ten)')
     expect(row.texts).toContain('im.peers.closed')
     expect(row.texts).toContain('im.peers.rebindCurrent')
+    expect(row.texts).toContain('im.owner.label(name=im.owner.none)')
+    expect(row.types).toContain('ImOwnerControls')
     expect(row.classNames).toContain('dt-im-peer-main')
 
     const settings = collectNode(components.ImSettingsBand({
@@ -911,6 +1005,90 @@ describe('IM channels panel (client-src source check)', () => {
     expect(settings.classNames).toContain('dt-im-mention')
     // 自动绑定模式字段已删除。
     expect(settings.texts).not.toContain('im.settings.bindingMode')
+  })
+
+  it('renders the owner row and picker, and submits hashes or null (render smoke)', () => {
+    const components = createPanelRender({})
+    const picked: Array<[string, string | null]> = []
+    const privatePeer = {
+      key: 'qq:1024:private:u1', sessionId: 'session-a', scope: 'private', boundBy: 'manual',
+      createdAt: '2026-10-30T10:00:00.000Z', peerSelfId: 'snd-self000001',
+    }
+    const onSetOwner = (peer: { key: string }, senderId: string | null): void => { picked.push([peer.key, senderId]) }
+    const privateRow = components.ImPeerRow({
+      peer: privatePeer,
+      shared: false,
+      owner: { id: 'snd-self000001', name: '' },
+      senders: [
+        { id: 'snd-self000001', name: '', lastAt: 1_700_000_000_000 },
+        { id: 'snd-other00001', name: '小红', lastAt: 1_700_000_001_000 },
+      ],
+      currentSession: 'session-current',
+      sessionLabel: () => 'Alice',
+      disabled: false,
+      ownerDisabled: false,
+      onRebind: () => {},
+      onUnbind: () => {},
+      onSetOwner,
+    })
+    // 绑定行给出「主人：<name>」；私聊自哈希显示「对端」标签。
+    expect(collectNode(privateRow).texts).toContain('im.owner.label(name=im.owner.selfName)')
+
+    const privateControls = components.ImOwnerControls({
+      peer: privatePeer,
+      owner: { id: 'snd-self000001', name: '' },
+      senders: [
+        { id: 'snd-self000001', name: '', lastAt: 1_700_000_000_000 },
+        { id: 'snd-other00001', name: '小红', lastAt: 1_700_000_001_000 },
+      ],
+      disabled: false,
+      onSetOwner,
+    })
+    const privateView = collectNode(privateControls)
+    expect(privateView.texts).toContain('im.owner.clear')
+    expect(privateView.texts).toContain('im.owner.pick')
+    expect(privateView.texts).toContain('im.owner.setSelf')
+    expect(privateView.texts).toContain('小红')
+    // 选择器选项只来自哈希：原始 peer id 不出现。
+    const optionTexts = findNodes(privateControls, 'option').map((node) => node.children.join('')).join('\n')
+    expect(optionTexts).not.toContain('u1')
+    const select = findNodes(privateControls, 'select').find((node) => node.props['aria-label'] === 'im.owner.pick')
+    expect(select).toBeDefined()
+    ;(select?.props.onChange as (event: { target: { value: string } }) => void)({ target: { value: 'snd-other00001' } })
+    expect(picked).toEqual([['qq:1024:private:u1', 'snd-other00001']])
+    const clear = findButtons(privateControls).find((button) => button.label === 'im.owner.clear')
+    expect(clear).toBeDefined()
+    ;(clear?.props.onClick as () => void)()
+    expect(picked).toEqual([
+      ['qq:1024:private:u1', 'snd-other00001'],
+      ['qq:1024:private:u1', null],
+    ])
+
+    // 群聊：没有「对端」选项，只有最近发言人；主人显示昵称。
+    const groupPeer = { ...privatePeer, key: 'qq:1024:group:g1', scope: 'group', peerSelfId: undefined }
+    const groupRow = components.ImPeerRow({
+      peer: groupPeer,
+      shared: false,
+      owner: { id: 'snd-member0001', name: '小明' },
+      senders: [{ id: 'snd-member0001', name: '小明', lastAt: 1_700_000_000_000 }],
+      currentSession: 'session-current',
+      sessionLabel: () => 'Alice',
+      disabled: false,
+      ownerDisabled: false,
+      onRebind: () => {},
+      onUnbind: () => {},
+      onSetOwner: () => {},
+    })
+    expect(collectNode(groupRow).texts).toContain('im.owner.label(name=小明)')
+    const groupView = collectNode(components.ImOwnerControls({
+      peer: groupPeer,
+      owner: null,
+      senders: [{ id: 'snd-member0001', name: '小明', lastAt: 1_700_000_000_000 }],
+      disabled: false,
+      onSetOwner: () => {},
+    }))
+    expect(groupView.texts).not.toContain('im.owner.setSelf')
+    expect(groupView.texts).not.toContain('im.owner.clear')
   })
 
   it('marker does not match near-miss samples (negative sample)', () => {

@@ -14,6 +14,7 @@ import { QQChannelError } from '../im/qq/channel.js'
 import { installQqRuntime } from '../im/qq/install.js'
 import { qqRuntimeStatus, QqRuntimeError } from '../im/qq/sdk.js'
 import { applyImSettingsPatch, ImSettingsError } from '../im/settings.js'
+import { IM_SENDER_HASH_PREFIX, imSenderHash, isImSenderHash } from '../im/owner.js'
 import type { ImLogLevel } from '../im/log.js'
 import { ImStore, ImStoreError } from '../im/store.js'
 import type { ImRuntime } from '../im/runtime.js'
@@ -21,8 +22,8 @@ import { imDisabledByEnv, ImChannelUnsupportedError } from '../im/runtime.js'
 import { WeixinApiError } from '../im/weixin/api.js'
 import { WeixinBindError, type WeixinBindErrorCode } from '../im/weixin/bind.js'
 import { WeixinChannelError, type WeixinChannelErrorCode } from '../im/weixin/channel.js'
-import type { ImAccountRef, ImChannelId, ImChannelView, ImPeerBinding, ImPendingPeer, ImScope } from '../im/types.js'
-import { DEFAULT_IM_SETTINGS, imPeerAlias, imPeerKey, imPeerKeyParts } from '../im/types.js'
+import type { ImAccountRef, ImChannelId, ImChannelView, ImOwnerEntry, ImPeerBinding, ImPendingPeer, ImScope, ImSenderEntry } from '../im/types.js'
+import { DEFAULT_IM_SETTINGS, IM_MAX_TIMESTAMP_MS, imPeerAlias, imPeerKey, imPeerKeyParts } from '../im/types.js'
 import { HttpError } from './errors.js'
 import { readJson, sendJson, type HttpRequest, type HttpResponse } from './io.js'
 import { INTERNAL_ERROR_MESSAGE, publicErrorMessage } from './public-error.js'
@@ -58,6 +59,11 @@ export async function handleImApi(
         const live = runtime?.isSessionLive?.(peer.sessionId)
         return { ...peer, ...(live === undefined ? {} : { live }) }
       }),
+      // 会话主人与最近发言人（决策 2026-10-31-im-owner-designation）：只投影已
+      // 绑定 peer。主人/发言人的**值**只有 `snd-<hash>` + 昵称；绑定行沿用既有
+      // peerKey 约定（键里含 peerId，本次不迁移）。
+      owners: ownerRows(state.imOwners, state.imPeers),
+      senders: senderRows(state.imSenders, state.imPeers),
       // 未绑定对端：面板「待绑定」表的数据源。对端发过消息但还没绑会话时出现，
       // 绑定成功后从这张表移除。
       pendingPeers: pendingPeerRows(state.imPendingPeers),
@@ -292,6 +298,46 @@ export async function handleImApi(
     })
   }
 
+  /**
+   * 指定/清除会话主人（决策 2026-10-31-im-owner-designation）。`senderId` 只收
+   * `snd-<hash>`（面板投影里来的）或 null（清除）：原始 openid/user_id 永不接受。
+   * 群聊主人必须来自该 peer 的最近发言人表；私聊额外允许对端自己的哈希（对端还
+   * 没发过消息时也能设主人）。
+   */
+  if (method === 'POST' && route === 'im/owner') {
+    const body = await readJson(req)
+    const channel = parseChannel(body.channel)
+    const scope = parseScope(body.scope)
+    const accountId = requireId(body.accountId, 'accountId')
+    const peerId = requireId(body.peerId, 'peerId')
+    const key = imPeerKey(channel, accountId, scope, peerId)
+    const state = await db.getState()
+    if (state.imPeers?.[key] === undefined) {
+      return sendJson(res, 404, { ok: false, message: `no IM peer binding for ${imPeerAlias(channel, scope, key)}; bind the peer in the panel before designating its owner` })
+    }
+    const senderId = parseSenderRef(body.senderId)
+    if (senderId === null) {
+      const next = await db.updateState((current) => {
+        const owners = { ...(current.imOwners ?? {}) }
+        delete owners[key]
+        return { imOwners: owners }
+      })
+      return sendJson(res, 200, { ok: true, key, owner: null, owners: ownerRows(next.imOwners, next.imPeers) })
+    }
+    const known = (state.imSenders?.[key] ?? []).find((entry) => entry.id === senderId)
+    const selfId = scope === 'private' ? imSenderHash(channel, accountId, peerId) : undefined
+    if (known === undefined && senderId !== selfId) {
+      throw new HttpError(400, `sender '${senderId}' is not a recent sender of ${imPeerAlias(channel, scope, key)}; wait for their message first or pick from the panel list`)
+    }
+    const owner: ImOwnerEntry = { id: senderId, name: known?.name ?? '', setAt: new Date().toISOString() }
+    const next = await db.updateState((current) => {
+      const owners = { ...(current.imOwners ?? {}) }
+      owners[key] = owner
+      return { imOwners: owners }
+    })
+    return sendJson(res, 200, { ok: true, key, owner, owners: ownerRows(next.imOwners, next.imPeers) })
+  }
+
   if (method === 'DELETE' && route === 'im/peers') {
     const key = url.searchParams.get('key')
     if (key === null || key.trim() === '') throw new HttpError(400, 'key query is required')
@@ -309,10 +355,62 @@ export async function handleImApi(
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
 }
 
-function peerRows(peers: Record<string, ImPeerBinding> | undefined): Array<{ key: string } & ImPeerBinding> {
+/**
+ * 绑定行投影：私聊多带一个 `peerSelfId`——对端自己的发言人哈希（决策
+ * 2026-10-31-im-owner-designation）。面板拿它当「把对端设为主人」的目标，
+ * 对端没发过消息也能设；群聊没有这个字段。
+ */
+function peerRows(peers: Record<string, ImPeerBinding> | undefined): Array<{ key: string; peerSelfId?: string } & ImPeerBinding> {
   return Object.entries(peers ?? {})
-    .map(([key, binding]) => ({ key, ...binding }))
+    .map(([key, binding]) => {
+      const parts = imPeerKeyParts(key)
+      return {
+        key,
+        ...binding,
+        ...(binding.scope === 'private' && parts !== undefined
+          ? { peerSelfId: imSenderHash(parts.channel, parts.accountId, parts.peerId) }
+          : {}),
+      }
+    })
     .sort((left, right) => left.key.localeCompare(right.key))
+}
+
+/**
+ * 主人投影：只列已绑定 peer 的主人。形状与 state 一致（`snd-<hash>` + 昵称 +
+ * 设置时间）；值里没有原始平台身份（peerKey 沿用既有 `peerId` 约定）。
+ */
+function ownerRows(
+  owners: Record<string, ImOwnerEntry> | undefined,
+  peers: Record<string, ImPeerBinding> | undefined,
+): Record<string, ImOwnerEntry> {
+  const result: Record<string, ImOwnerEntry> = {}
+  for (const key of Object.keys(peers ?? {})) {
+    const owner = owners?.[key]
+    if (owner !== undefined) result[key] = owner
+  }
+  return result
+}
+
+/**
+ * 最近发言人投影：只列已绑定 peer 的条目；`lastAt` 转 ISO 供面板显示。
+ * 值里只有哈希与昵称；归一化已丢弃越界时间，这里再挡一层，防止手改/旧数据
+ * 让 `new Date(...).toISOString()` 抛 RangeError 把整块 `GET im` 打成 500。
+ */
+function senderRows(
+  senders: Record<string, ImSenderEntry[]> | undefined,
+  peers: Record<string, ImPeerBinding> | undefined,
+): Record<string, Array<{ id: string; name: string; lastAt: string }>> {
+  const result: Record<string, Array<{ id: string; name: string; lastAt: string }>> = {}
+  for (const key of Object.keys(peers ?? {})) {
+    const list = senders?.[key]
+    if (list === undefined || list.length === 0) continue
+    const rows = list.flatMap((entry) => {
+      if (!Number.isFinite(entry.lastAt) || entry.lastAt < 0 || entry.lastAt > IM_MAX_TIMESTAMP_MS) return []
+      return [{ id: entry.id, name: entry.name, lastAt: new Date(entry.lastAt).toISOString() }]
+    })
+    if (rows.length > 0) result[key] = rows
+  }
+  return result
 }
 
 /** 未绑定对端投影：面板按 alias 显示，点击时用 channel/accountId/scope/peerId 提交绑定。 */
@@ -337,6 +435,8 @@ function pendingPeerRows(pending: Record<string, ImPendingPeer> | undefined): Ar
     senderName?: string
   }> = []
   for (const [key, entry] of Object.entries(pending ?? {})) {
+    // 归一化已丢弃越界时间；这里再挡一层，手改/旧数据不能让 toISOString() 抛错。
+    if (!Number.isFinite(entry.lastAt) || entry.lastAt < 0 || entry.lastAt > IM_MAX_TIMESTAMP_MS) continue
     const parts = imPeerKeyParts(key)
     if (parts === undefined) continue
     const scope: ImScope = parts.scope === 'group' ? 'group' : 'private'
@@ -469,6 +569,22 @@ function parseScope(value: unknown): ImScope {
 function requireId(value: unknown, field: string): string {
   if (typeof value !== 'string' || value.trim() === '') throw new HttpError(400, `${field} must be a non-empty string`)
   return value.trim()
+}
+
+/**
+ * `senderId` 只接受服务端产出的 `snd-<10 hex>` 哈希或 null（清除）：面板从不
+ * 提交原始 id，服务器也不接受任何平台身份当输入（决策 2026-10-31-im-owner-designation）。
+ */
+function parseSenderRef(value: unknown): string | null {
+  if (value === null) return null
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new HttpError(400, `senderId must be a '${IM_SENDER_HASH_PREFIX}<10 hex>' sender hash, or null to clear the owner`)
+  }
+  const trimmed = value.trim()
+  if (!isImSenderHash(trimmed)) {
+    throw new HttpError(400, `senderId must be a '${IM_SENDER_HASH_PREFIX}<10 hex>' sender hash; raw platform ids are never accepted`)
+  }
+  return trimmed
 }
 
 /**

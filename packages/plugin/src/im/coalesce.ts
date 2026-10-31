@@ -59,11 +59,28 @@ export interface ImMergedRelayItem {
  * 挂谁的都不对），正文每条前缀自己的 `[msg-…] ` 引用，尾部仍是 im_send 提示。
  * 群聊/私聊措辞与单条 `relayTextOf` 一致；群聊正文由 `imUserTextOf` 预先带上
  * `[昵称]` 前缀，这里不再加工。
+ *
+ * `options.owner` / `options.ownerItems` 是合流的权威主人标记（决策
+ * 2026-10-31-im-owner-designation）：整批全部来自主人时头部追加 `owner=1`；
+ * 只有部分条目来自主人时追加 `ownerItems=2,4`（1-based，指的是正文里第几个
+ * `[msg-…]` 条目，不是物理行号——条目正文可能自带换行）。群聊正文行的
+ * `[主人]` 只是展示，伪造由 `imUserTextOf` 的转义挡掉。
  */
-export function mergedRelayTextOf(items: readonly ImMergedRelayItem[], alias: string, channel: string, scope: string): string {
+export function mergedRelayTextOf(
+  items: readonly ImMergedRelayItem[],
+  alias: string,
+  channel: string,
+  scope: string,
+  options?: { owner?: boolean; ownerItems?: readonly number[] },
+): string {
   const scopeLabel = scope === 'group' ? '群聊' : '私聊'
+  const ownerFlag = options?.owner === true
+    ? ' owner=1'
+    : options?.ownerItems !== undefined && options.ownerItems.length > 0
+      ? ` ownerItems=${options.ownerItems.join(',')}`
+      : ''
   return [
-    `[IM ${channel}/${scopeLabel} peer=${alias}]（连续 ${items.length} 条消息）`,
+    `[IM ${channel}/${scopeLabel} peer=${alias}${ownerFlag}]（连续 ${items.length} 条消息）`,
     ...items.map((item) => `[${item.ref}] ${item.body}`),
     `（这是从 IM 转发给你的消息，不是 DSH 用户输入。回复请调用 im_send，peer 参数用 ${alias}。）`,
   ].join('\n')

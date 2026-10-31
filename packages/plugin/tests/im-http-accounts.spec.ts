@@ -7,6 +7,7 @@ import { tavernDataRoot } from '../src/dsh-home.js'
 import type { PluginContext } from '../src/host-contract.js'
 import { handleImApi } from '../src/http/im.js'
 import type { HttpRequest, HttpResponse } from '../src/http/io.js'
+import { imSenderHash } from '../src/im/owner.js'
 import { createImRuntime } from '../src/im/runtime.js'
 import { ImStore, ImStoreError } from '../src/im/store.js'
 import type { ImRuntime } from '../src/im/runtime.js'
@@ -385,6 +386,193 @@ describe('im runtime log route', () => {
   it('returns an empty page when the runtime exposes no log surface', async () => {
     const result = await call(undefined, 'http://localhost/api/dsh-soulmojito/im/logs', 'im/logs', 'GET', runtimeOf())
     expect(result.body).toEqual({ ok: true, nextSeq: 0, entries: [] })
+  })
+})
+
+describe('im owner routes', () => {
+  const ownerPath = '/api/dsh-soulmojito/im/owner'
+  const privateKey = imPeerKey('onebot', '10001', 'private', 'u1')
+  const groupKey = imPeerKey('onebot', '10001', 'group', 'g1')
+  const unboundKey = imPeerKey('onebot', '10001', 'group', 'g2')
+  const memberHash = imSenderHash('onebot', '10001', 'member-1')
+  const peerSelf = imSenderHash('onebot', '10001', 'u1')
+
+  async function seed(): Promise<void> {
+    await db.patchState({
+      imPeers: {
+        [privateKey]: { sessionId: 'session-private', scope: 'private', boundBy: 'manual', createdAt: new Date(0).toISOString() },
+        [groupKey]: { sessionId: 'session-group', scope: 'group', boundBy: 'manual', createdAt: new Date(0).toISOString() },
+      },
+      imSenders: {
+        [groupKey]: [{ id: memberHash, name: '小红', lastAt: 1_700_000_000_000 }],
+        [privateKey]: [{ id: peerSelf, name: '', lastAt: 1_700_000_001_000 }],
+        // 未绑定 peer 的发言人：投影必须过滤掉。
+        [unboundKey]: [{ id: imSenderHash('onebot', '10001', 'ghost-sender'), name: '路人', lastAt: 1 }],
+      },
+      imOwners: {
+        [groupKey]: { id: memberHash, name: '小红', setAt: '2026-10-31T00:00:00.000Z' },
+        [unboundKey]: { id: imSenderHash('onebot', '10001', 'ghost-sender'), name: '路人', setAt: '2026-10-31T00:00:00.000Z' },
+      },
+    })
+  }
+
+  it('projects owners and senders for bound peers with hashes only', async () => {
+    await seed()
+    const listed = await call(undefined, '/api/dsh-soulmojito/im', 'im', 'GET', runtimeOf())
+    expect(listed.statusCode).toBe(200)
+    // 未绑定 peer 的主人/发言人不进投影。
+    expect(listed.body['owners']).toEqual({
+      [groupKey]: { id: memberHash, name: '小红', setAt: '2026-10-31T00:00:00.000Z' },
+    })
+    expect(listed.body['senders']).toEqual({
+      [privateKey]: [{ id: peerSelf, name: '', lastAt: new Date(1_700_000_001_000).toISOString() }],
+      [groupKey]: [{ id: memberHash, name: '小红', lastAt: new Date(1_700_000_000_000).toISOString() }],
+    })
+    // 私聊绑定行带对端自己的哈希；群聊没有。
+    const peers = listed.body['peers'] as Array<Record<string, unknown>>
+    expect(peers.find((peer) => peer['key'] === privateKey)?.['peerSelfId']).toBe(peerSelf)
+    expect(peers.find((peer) => peer['key'] === groupKey)?.['peerSelfId']).toBeUndefined()
+    // 投影只含 `snd-` 哈希：原始 senderId 不出现。
+    const projection = JSON.stringify({
+      owners: listed.body['owners'],
+      senders: listed.body['senders'],
+      peerSelfIds: peers.map((peer) => peer['peerSelfId']),
+    })
+    expect(projection).not.toContain('member-1')
+    expect(projection).not.toContain('ghost-sender')
+    expect(projection).toMatch(/snd-[0-9a-f]{10}/)
+  })
+
+  it('skips an out-of-range sender timestamp instead of 500ing GET im', async () => {
+    const fake = {
+      getState: async () => ({
+        imPeers: {
+          [privateKey]: { sessionId: 'session-private', scope: 'private', boundBy: 'manual', createdAt: new Date(0).toISOString() },
+        },
+        imOwners: {},
+        imSenders: { [privateKey]: [{ id: peerSelf, name: '', lastAt: 1e300 }] },
+        imPendingPeers: {},
+      }),
+      updateState: async () => { throw new Error('GET must not write state') },
+    } as unknown as TavernStore
+    const response = makeResponse()
+    await handleImApi(
+      makeRequest(undefined, 'http://localhost/api/dsh-soulmojito/im', 'GET'),
+      response as unknown as HttpResponse,
+      new URL('http://localhost/api/dsh-soulmojito/im'),
+      'im',
+      'GET',
+      fake,
+      runtimeOf(),
+    )
+    expect(response.statusCode).toBe(200)
+    const body = JSON.parse(response.chunks.join('')) as { senders?: Record<string, unknown> }
+    expect(body.senders?.[privateKey]).toBeUndefined()
+  })
+
+  it('drops an out-of-range pending peer timestamp and still answers GET im', async () => {
+    const key = imPeerKey('onebot', '10001', 'private', 'pending-x')
+    await db.patchState({ imPendingPeers: { [key]: { lastAt: 1e300 } } })
+    const listed = await call(undefined, '/api/dsh-soulmojito/im', 'im', 'GET', runtimeOf())
+    expect(listed.statusCode).toBe(200)
+    expect(listed.body['pendingPeers']).toEqual([])
+    // 真实 store 再读也丢弃：不会在下次启动后复活。
+    expect((await db.getState()).imPendingPeers?.[key]).toBeUndefined()
+  })
+
+  it('filters an out-of-range pending peer in the projection layer', async () => {
+    const key = imPeerKey('onebot', '10001', 'private', 'pending-x')
+    const fake = {
+      getState: async () => ({
+        imPeers: {},
+        imOwners: {},
+        imSenders: {},
+        imPendingPeers: { [key]: { lastAt: 1e300, senderName: 'pending raw' } },
+      }),
+      updateState: async () => { throw new Error('GET must not write state') },
+    } as unknown as TavernStore
+    const response = makeResponse()
+    await handleImApi(
+      makeRequest(undefined, 'http://localhost/api/dsh-soulmojito/im', 'GET'),
+      response as unknown as HttpResponse,
+      new URL('http://localhost/api/dsh-soulmojito/im'),
+      'im',
+      'GET',
+      fake,
+      runtimeOf(),
+    )
+    expect(response.statusCode).toBe(200)
+    const body = JSON.parse(response.chunks.join('')) as { pendingPeers?: unknown[] }
+    expect(body.pendingPeers).toEqual([])
+  })
+
+  it('sets and clears an owner, and rejects non-hash sender ids', async () => {
+    await seed()
+    const set = await call({
+      channel: 'onebot', accountId: '10001', scope: 'group', peerId: 'g1', senderId: memberHash,
+    }, ownerPath, 'im/owner', 'POST', runtimeOf())
+    expect(set.statusCode).toBe(200)
+    expect(set.body['owner']).toMatchObject({ id: memberHash, name: '小红' })
+    expect((await db.getState()).imOwners?.[groupKey]?.id).toBe(memberHash)
+    // 状态里只有哈希：原始 senderId 不落盘。
+    expect(JSON.stringify((await db.getState()).imOwners)).not.toContain('member-1')
+
+    const cleared = await call({
+      channel: 'onebot', accountId: '10001', scope: 'group', peerId: 'g1', senderId: null,
+    }, ownerPath, 'im/owner', 'POST', runtimeOf())
+    expect(cleared.statusCode).toBe(200)
+    expect(cleared.body['owner']).toBeNull()
+    expect((await db.getState()).imOwners?.[groupKey]).toBeUndefined()
+  })
+
+  it('accepts the peer self hash for a private peer without a recent message', async () => {
+    await db.patchState({
+      imPeers: {
+        [privateKey]: { sessionId: 'session-private', scope: 'private', boundBy: 'manual', createdAt: new Date(0).toISOString() },
+      },
+    })
+    const set = await call({
+      channel: 'onebot', accountId: '10001', scope: 'private', peerId: 'u1', senderId: peerSelf,
+    }, ownerPath, 'im/owner', 'POST', runtimeOf())
+    expect(set.statusCode).toBe(200)
+    expect(set.body['owner']).toMatchObject({ id: peerSelf, name: '' })
+    expect((await db.getState()).imOwners?.[privateKey]?.id).toBe(peerSelf)
+  })
+
+  it('rejects unbound peers, raw ids and unknown group senders without touching state', async () => {
+    await seed()
+    const failure = async (body: Record<string, unknown>): Promise<{ status: number; message: string }> => (
+      call(body, ownerPath, 'im/owner', 'POST', runtimeOf()).catch((error: unknown) => error as { status: number; message: string })
+    )
+
+    // 未绑定 peer：404 JSON，带绑定指引（这是响应的 404，不是异常）。
+    const unbound = await call({
+      channel: 'onebot', accountId: '10001', scope: 'group', peerId: 'g3', senderId: memberHash,
+    }, ownerPath, 'im/owner', 'POST', runtimeOf())
+    expect(unbound.statusCode).toBe(404)
+    expect(String(unbound.body['message'])).toContain('no IM peer binding')
+    expect(String(unbound.body['message'])).not.toContain('g3')
+
+    // 原始 id：400，明确只收 `snd-` 哈希。
+    const raw = await failure({ channel: 'onebot', accountId: '10001', scope: 'group', peerId: 'g1', senderId: 'member-1' })
+    expect(raw.status).toBe(400)
+    expect(raw.message).toContain('snd-')
+    expect(raw.message).not.toContain('member-1')
+
+    // 群聊里不认识的哈希：400（选择器只列最近发言人）。
+    const unknown = await failure({
+      channel: 'onebot', accountId: '10001', scope: 'group', peerId: 'g1',
+      senderId: imSenderHash('onebot', '10001', 'somebody-else'),
+    })
+    expect(unknown.status).toBe(400)
+    expect(unknown.message).toContain('not a recent sender')
+
+    // 缺 senderId 不等于 null：400，不能把「没传」当成清除。
+    const missing = await failure({ channel: 'onebot', accountId: '10001', scope: 'group', peerId: 'g1' })
+    expect(missing.status).toBe(400)
+
+    // 所有拒绝都不改 state。
+    expect((await db.getState()).imOwners?.[groupKey]?.id).toBe(memberHash)
   })
 })
 

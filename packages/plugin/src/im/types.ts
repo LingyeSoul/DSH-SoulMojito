@@ -13,10 +13,17 @@
 import { createHash } from 'node:crypto'
 import type { ImScope } from '../../../tavern-store/src/index.js'
 
-export type { ImAccessMode, ImPeerBinding, ImPendingPeer, ImScope, ImSettings } from '../../../tavern-store/src/index.js'
+export type { ImAccessMode, ImOwnerEntry, ImPeerBinding, ImPendingPeer, ImScope, ImSenderEntry, ImSettings } from '../../../tavern-store/src/index.js'
 export {
   DEFAULT_IM_SETTINGS,
   imPeerKey,
+  imSenderHash,
+  IM_MAX_TIMESTAMP_MS,
+  IM_SENDERS_MAX_PER_PEER,
+  IM_SENDER_HASH_HEX_LENGTH,
+  IM_SENDER_HASH_PREFIX,
+  IM_SENDER_REFRESH_WINDOW_MS,
+  isImSenderHash,
   WEIXIN_SEND_INTERVAL_DEFAULT_MS,
   WEIXIN_SEND_INTERVAL_MAX_MS,
   WEIXIN_SEND_INTERVAL_MIN_MS,

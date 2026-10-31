@@ -25,7 +25,7 @@ import * as path from 'node:path'
 // 原子写统一实现（fs-atomic.ts）：唯一 tmp 名 + Windows 瞬态 rename 重试
 // （2290eb0 的重试逻辑原样迁入，全包自建 writeAtomic 的收敛点）。
 import { writeAtomicBytes } from './fs-atomic.js'
-import { DEFAULT_IM_SETTINGS, normalizeImPeers, normalizeImPendingPeers, normalizeImSettings, type ImPeerBinding, type ImPendingPeer, type ImSettings } from './im-state.js'
+import { DEFAULT_IM_SETTINGS, normalizeImOwners, normalizeImPeers, normalizeImPendingPeers, normalizeImSenders, normalizeImSettings, type ImOwnerEntry, type ImPeerBinding, type ImPendingPeer, type ImSenderEntry, type ImSettings } from './im-state.js'
 import { MutationTail } from './mutation-tail.js'
 import {
   decodeCharacterCard,
@@ -239,6 +239,13 @@ export interface TavernState {
   imPeers?: Record<string, ImPeerBinding>
   /** 发过消息但尚未绑定的对端；面板据此显示「未绑定对端」待办。 */
   imPendingPeers?: Record<string, ImPendingPeer>
+  /**
+   * 已投递对端的最近发言人（决策 2026-10-31-im-owner-designation）：
+   * peerKey → `snd-<hash>` + 昵称 + 最近投递时间，倒序、每 peer 有界。
+   */
+  imSenders?: Record<string, ImSenderEntry[]>
+  /** peerKey → 指定主人（决策 2026-10-31-im-owner-designation）；键不存在 = 未指定。 */
+  imOwners?: Record<string, ImOwnerEntry>
 }
 
 /**
@@ -427,6 +434,8 @@ const DEFAULT_STATE: TavernState = {
   imSettings: structuredClone(DEFAULT_IM_SETTINGS),
   imPeers: {},
   imPendingPeers: {},
+  imSenders: {},
+  imOwners: {},
 }
 
 /** characterVariables keeps only per-character plain objects; hand edits are tolerant. */
@@ -1703,6 +1712,8 @@ export class TavernStore {
       imSettings: normalizeImSettings(parsed.imSettings),
       imPeers: normalizeImPeers(parsed.imPeers),
       imPendingPeers: normalizeImPendingPeers(parsed.imPendingPeers),
+      imSenders: normalizeImSenders(parsed.imSenders),
+      imOwners: normalizeImOwners(parsed.imOwners),
     }
   }
 
