@@ -3,7 +3,7 @@ import { createServer, request, type Server } from 'node:http'
 import type { Socket } from 'node:net'
 import type { Duplex } from 'node:stream'
 import type { ImInbound, ImTarget } from '../src/im/types.js'
-import { createOneBotUpgradeHandler, OneBotChannel } from '../src/im/onebot/server.js'
+import { createOneBotUpgradeHandler, OneBotChannel, type OneBotRouterSink } from '../src/im/onebot/server.js'
 
 const WS_PATH = '/api/dsh-soulmojito/im/onebot/ws'
 const WEBHOOK_PATH = '/api/dsh-soulmojito/im/onebot/webhook'
@@ -23,14 +23,18 @@ interface Harness {
   dispose(): Promise<void>
 }
 
-async function startHarness(options: { groupRequireMention?: boolean }): Promise<Harness> {
+async function startHarness(options: {
+  groupRequireMention?: boolean
+  router?: OneBotRouterSink
+  mentionGate?: () => Promise<boolean>
+}): Promise<Harness> {
   const inbound: ImInbound[] = []
   const channel = new OneBotChannel({
     accountId: ACCOUNT_ID,
     secret: { token: TOKEN },
-    router: { handle: async (message) => { inbound.push(message) } },
+    router: options.router ?? { handle: async (message) => { inbound.push(message) } },
     // 缺省视为开启 @ 门控；显式传 false 的用例才关闭。
-    groupRequireMention: async () => options.groupRequireMention !== false,
+    groupRequireMention: options.mentionGate ?? (async () => options.groupRequireMention !== false),
     now: () => Date.now(),
   })
   await channel.start(new AbortController().signal)
@@ -246,6 +250,76 @@ async function waitFor(condition: () => boolean, timeoutMs: number): Promise<voi
     if (Date.now() > deadline) throw new Error('timed out waiting for condition')
     await delay(10)
   }
+}
+
+interface Gate {
+  wait: Promise<void>
+  open(): void
+}
+
+function createGate(): Gate {
+  let open: () => void = () => {}
+  const wait = new Promise<void>((resolve) => { open = resolve })
+  return { wait, open }
+}
+
+/** 等一拍事件循环，让已排队的微任务（入站链推进）先跑完。 */
+function nextTurn(): Promise<void> {
+  return new Promise((resolve) => { setImmediate(resolve) })
+}
+
+interface GatedRouter {
+  router: OneBotRouterSink
+  /** 已进入 router.handle 的消息文本，按进入顺序。 */
+  started: string[]
+  /** 每次 handle 的放行闸门，按进入顺序。 */
+  gates: Gate[]
+  /** 同时在 router.handle 内的最大条数。 */
+  peakConcurrency(): number
+}
+
+/** 受闸门控制的 router：handle 进入后记录并卡住，直到测试放行，并发计数器能直接看见交错。 */
+function gatedRouter(): GatedRouter {
+  const started: string[] = []
+  const gates: Gate[] = []
+  let active = 0
+  let peak = 0
+  return {
+    router: {
+      handle: async (message) => {
+        active += 1
+        peak = Math.max(peak, active)
+        started.push(message.text)
+        const gate = createGate()
+        gates.push(gate)
+        await gate.wait
+        active -= 1
+      },
+    },
+    started,
+    gates,
+    peakConcurrency: () => peak,
+  }
+}
+
+/** 可控的 @ 门控：每次调用发一个闸门，测试据此确认请求已到达入队前一步。 */
+function gatedMentionGate(): { mentionGate: () => Promise<boolean>; gates: Gate[] } {
+  const gates: Gate[] = []
+  return {
+    gates,
+    mentionGate: () => {
+      const gate = createGate()
+      gates.push(gate)
+      return gate.wait.then(() => true)
+    },
+  }
+}
+
+function mentionedGroupEvent(messageId: number, text: string): Record<string, unknown> {
+  return groupEvent(messageId, [
+    { type: 'at', data: { qq: SELF_ID } },
+    { type: 'text', data: { text: ` ${text}` } },
+  ])
 }
 
 let harness: Harness | undefined
@@ -559,5 +633,81 @@ describe('onebot http post webhook', () => {
     // 只认 Authorization / X-OneBot-Token 两条头（审查 P2-1）。
     expect(result).toBe(401)
     expect(harness.inbound).toHaveLength(0)
+  })
+})
+
+describe('onebot inbound serialisation', () => {
+  it('never overlaps two concurrent webhook posts and keeps request order', async () => {
+    const gated = gatedRouter()
+    const mention = gatedMentionGate()
+    harness = await startHarness({ router: gated.router, mentionGate: mention.mentionGate })
+    const headers = { Authorization: `Bearer ${TOKEN}` }
+
+    const first = postWebhook(harness.port, headers, mentionedGroupEvent(7_001, '第一条'))
+    await waitFor(() => mention.gates.length === 1, 3_000)
+    mention.gates[0]!.open()
+    await waitFor(() => gated.started.length === 1, 3_000)
+
+    const second = postWebhook(harness.port, headers, mentionedGroupEvent(7_002, '第二条'))
+    await waitFor(() => mention.gates.length === 2, 3_000)
+    mention.gates[1]!.open()
+    await nextTurn()
+    // 第一条还卡在 router.handle 里：第二条必须仍在账号链上排队，而不是并发进入。
+    expect(gated.started).toEqual([`@${SELF_ID} 第一条`])
+
+    gated.gates[0]!.open()
+    await waitFor(() => gated.started.length === 2, 3_000)
+    expect(gated.started).toEqual([`@${SELF_ID} 第一条`, `@${SELF_ID} 第二条`])
+    gated.gates[1]!.open()
+
+    const responses = await Promise.all([first, second])
+    expect(responses.map((response) => response.statusCode)).toEqual([200, 200])
+    expect(gated.peakConcurrency()).toBe(1)
+  })
+
+  it('never overlaps a websocket event with a webhook event', async () => {
+    const gated = gatedRouter()
+    const mention = gatedMentionGate()
+    harness = await startHarness({ router: gated.router, mentionGate: mention.mentionGate })
+    const ws = await harness.connect({ Authorization: `Bearer ${TOKEN}` })
+
+    ws.send(JSON.stringify(privateEvent(7_101, '来自 WS')))
+    await waitFor(() => gated.started.length === 1, 3_000)
+
+    const webhook = postWebhook(harness.port, { Authorization: `Bearer ${TOKEN}` }, mentionedGroupEvent(7_102, '来自 webhook'))
+    await waitFor(() => mention.gates.length === 1, 3_000)
+    mention.gates[0]!.open()
+    await nextTurn()
+    // WS 事件还没放行，webhook 事件必须等在链尾。
+    expect(gated.started).toEqual(['来自 WS'])
+
+    gated.gates[0]!.open()
+    await waitFor(() => gated.started.length === 2, 3_000)
+    expect(gated.started).toEqual(['来自 WS', `@${SELF_ID} 来自 webhook`])
+    gated.gates[1]!.open()
+    const response = await webhook
+    expect(response.statusCode).toBe(200)
+    expect(gated.peakConcurrency()).toBe(1)
+    ws.close()
+  })
+
+  it('keeps the chain alive after a rejected inbound task', async () => {
+    const delivered: ImInbound[] = []
+    harness = await startHarness({
+      router: {
+        handle: async (message) => {
+          if (message.text === '会失败') throw new Error('router rejected this inbound')
+          delivered.push(message)
+        },
+      },
+    })
+
+    const failed = await postWebhook(harness.port, { Authorization: `Bearer ${TOKEN}` }, privateEvent(7_201, '会失败'))
+    expect(failed.statusCode).toBe(500)
+    expect(failed.body).toContain('onebot inbound handling failed')
+
+    const ok = await postWebhook(harness.port, { Authorization: `Bearer ${TOKEN}` }, privateEvent(7_202, '恢复'))
+    expect(ok.statusCode).toBe(200)
+    expect(delivered.map((message) => message.text)).toEqual(['恢复'])
   })
 })

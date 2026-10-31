@@ -85,8 +85,6 @@ interface LiveConnection {
   since: number
   closed: boolean
   waiters: Map<string, PendingCall>
-  /** 同一连接上的事件按到达顺序串行处理，群聊不会被并发投递打乱。 */
-  eventChain: Promise<void>
   /** 同一连接上的出站分片串行化：两轮回复并发时不得交错。 */
   sendChain: Promise<void>
 }
@@ -101,6 +99,8 @@ export class OneBotChannel implements ImChannel {
   private readonly now: () => number
   private readonly logger: HostLogger | undefined
   private readonly connections = new Map<string, LiveConnection>()
+  /** 账号级入站 FIFO 链尾：webhook 与反向 WS 共用一个账号的到达顺序。 */
+  private inboundTail: Promise<void> = Promise.resolve()
 
   private started = false
   private lastError: string | undefined
@@ -231,7 +231,6 @@ export class OneBotChannel implements ImChannel {
       since: this.now(),
       closed: false,
       waiters: new Map(),
-      eventChain: Promise.resolve(),
       sendChain: Promise.resolve(),
     }
     this.connections.set(connection.id, live)
@@ -297,14 +296,26 @@ export class OneBotChannel implements ImChannel {
       respondJson(res, 200, {})
       return
     }
+    const message = inbound
     try {
-      await this.router.handle(inbound)
+      await this.enqueueInbound(() => this.router.handle(message))
     } catch (error) {
       this.logger?.warn?.(`dsh-soulmojito im onebot/${this.accountId}: webhook inbound failed: ${messageOf(error)}`)
       respondJson(res, 500, { ok: false, message: 'onebot inbound handling failed' })
       return
     }
     respondJson(res, 200, {})
+  }
+
+  /**
+   * 入站按账号串行：webhook 与反向 WS 排进同一条 FIFO，两个连接同时到达也
+   * 不会并发进 router。返回本次任务自己的 Promise，调用方拿得到成功/失败；
+   * 链尾吞掉拒绝，一条消息失败不会毒化后续入站。
+   */
+  private enqueueInbound(task: () => Promise<void>): Promise<void> {
+    const queued = this.inboundTail.then(task)
+    this.inboundTail = queued.then(() => undefined, () => undefined)
+    return queued
   }
 
   private tokenMatches(presented: string | undefined): boolean {
@@ -389,8 +400,8 @@ export class OneBotChannel implements ImChannel {
     }
     // Event 连接只收事件；API 连接只发调用，事件从别的连接来。
     if (live.role === 'API') return
-    live.eventChain = live.eventChain
-      .then(() => this.deliverEvent(live, value))
+    // 入站走账号级 FIFO，不再按连接各排一条链：多连接与 webhook 混发也不交错。
+    void this.enqueueInbound(() => this.deliverEvent(live, value))
       .catch((error: unknown) => {
         this.logger?.warn?.(`dsh-soulmojito im onebot/${this.accountId}: inbound event failed: ${messageOf(error)}`)
       })

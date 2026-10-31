@@ -8,7 +8,7 @@
  * 文本仍要送达。本轮不做群聊。
  */
 
-import { randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import type { HostLogger } from '../../host-contract.js'
 import type { ImMediaStore } from '../media-store.js'
 import type {
@@ -77,6 +77,8 @@ const START_PROBE_TIMEOUT_MS = 3_000
 const PEER_LABEL_LENGTH = 8
 /** context_token 记账表上限：长跑进程不能让每个对端都永久驻留。 */
 const MAX_CONTEXT_TOKENS = 500
+/** 无 `message_id` 时内容指纹的时间桶：同一桶内的相同内容视为重放。 */
+const WEIXIN_FALLBACK_DEDUPE_BUCKET_MS = 10 * 60 * 1_000
 
 export { WeixinChannelError, type WeixinChannelErrorCode } from './errors.js'
 
@@ -678,8 +680,10 @@ export class WeixinChannel implements ImChannel {
         text,
         // 占位 ref 保留在摘要里；物化成功后由 loadMedia 换成带 localPath 的版本。
         media: mediaSources.map((source) => ({ kind: source.kind })),
-        // 平台不给 message_id 时用随机 UUID 降级：宁可重复投递，不可吞消息。
-        dedupeKey: imDedupeKey('weixin', this.accountId, 'private', peerId, messageId ?? randomUUID()),
+        // 平台不给 message_id 时改用内容指纹：随机 UUID 每次重放都换键，24h 去重日志
+        // 永远挡不住重放。代价：平台既不给 id 也不给时间戳，同一 10 分钟桶内的相同内容
+        // 会被当成重放丢弃（后到的那条被吞）；跨桶到来的重放仍可能重复投递。
+        dedupeKey: imDedupeKey('weixin', this.accountId, 'private', peerId, messageId ?? fallbackMessageId(message, receivedAt)),
         receivedAt,
       },
       sources: mediaSources,
@@ -728,6 +732,41 @@ export class WeixinChannel implements ImChannel {
     this.lifetimeSignal = undefined
     this.abortListener = undefined
   }
+}
+
+/**
+ * 平台缺 `message_id` 时的确定性降级 id：同一份平台身份 + 内容 + 时间桶 → 同一个键。
+ *
+ * 只收平台身份与消息内容：游标与序号会随重放变化，`context_token` 是按对端记账的
+ * 会话能力不是消息身份，两者都不能进指纹。
+ *
+ * 代价必须写明：内容指纹无法区分「两条真正相同的消息」，所以再带上由 `receivedAt`
+ * 推出的 10 分钟桶——**同一桶内两条真正相同的内容会被判成重放，后到的那条被 24h
+ * 去重日志吞掉**；反过来，跨桶到来的重放又可能重复投递。两个方向都做不完美。
+ */
+function fallbackMessageId(message: WeixinMessage, receivedAt: number): string {
+  const bucket = Math.floor(receivedAt / WEIXIN_FALLBACK_DEDUPE_BUCKET_MS)
+  // 数组固定字段顺序：对象键序与 undefined 的序列化差异会让同一内容算出不同哈希。
+  const canonical = JSON.stringify([
+    message.fromUserId ?? null,
+    message.messageType ?? null,
+    message.groupId ?? null,
+    message.items.map((item) => [
+      item.type,
+      item.text ?? null,
+      item.voiceText ?? null,
+      item.mediaUrl ?? null,
+      item.fullUrl ?? null,
+      item.encryptQueryParam ?? null,
+      item.thumbUrl ?? null,
+      item.aesKeyHex ?? null,
+      item.aesKey ?? null,
+      item.fileName ?? null,
+      item.size ?? null,
+    ]),
+    bucket,
+  ])
+  return `fallback-${createHash('sha256').update(canonical).digest('hex').slice(0, 16)}`
 }
 
 function isStaleToken(error: unknown): boolean {

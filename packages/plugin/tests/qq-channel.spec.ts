@@ -20,6 +20,7 @@ import { planGroupParts, QQChannel } from '../src/im/qq/channel.js'
 import { loadQqConnector, loadQqSdk, qqRuntimeRoot, qqRuntimeStatus } from '../src/im/qq/sdk.js'
 import type {
   QqBotLike,
+  QqInboundAttachment,
   QqInboundMessage,
   QqMediaSendOptions,
   QqMediaSendResult,
@@ -210,6 +211,8 @@ interface HarnessOptions {
   bot: FakeBotOptions
   requireMention: boolean
   markdownSupport: boolean
+  /** 时钟注入：只在需要跨时间桶的用例里覆盖；缺省固定在 NOW。 */
+  now?: () => number
 }
 
 function channelHarness(options: HarnessOptions): ChannelHarness {
@@ -223,7 +226,7 @@ function channelHarness(options: HarnessOptions): ChannelHarness {
     groupRequireMention: async () => options.requireMention,
     createBot: () => bot as unknown as QqBotLike,
     markdownSupport: options.markdownSupport,
-    now: () => NOW,
+    now: options.now ?? (() => NOW),
   })
   return { channel, bot, delivered, signal: controller.signal }
 }
@@ -262,7 +265,7 @@ describe('qq channel inbound', () => {
     }
   })
 
-  it('falls back to a random dedupe id when the payload carries no message id', async () => {
+  it('falls back to a deterministic dedupe id when the payload carries no message id', async () => {
     const harness = channelHarness({ bot: {}, requireMention: false, markdownSupport: false })
     await harness.channel.start(harness.signal)
     try {
@@ -272,8 +275,8 @@ describe('qq channel inbound', () => {
         messageId: '',
         replyTarget: { scope: 'c2c', targetId: 'openid-owner-2' },
       })
+      // 同一毫秒的重放：平台缺 id，但身份 + 内容 + 时间戳完全相同 → 同一个键。
       await harness.bot.emit('message', {}, truncated)
-      // 同一毫秒的第二条残缺消息：用时间戳做键会撞上第一条被当重放丢掉。
       await harness.bot.emit('message', {}, truncated)
       const [first, second] = harness.delivered
       expect(first).toMatchObject({
@@ -282,8 +285,82 @@ describe('qq channel inbound', () => {
         senderName: 'openid-o',
       })
       expect(first?.replyTo).toBeUndefined()
-      expect(first?.dedupeKey).toMatch(/^qq:10000001:private:openid-owner-2:[0-9a-f-]{36}$/)
+      expect(second?.dedupeKey).toBe(first?.dedupeKey)
+      expect(first?.dedupeKey).toMatch(/^qq:10000001:private:openid-owner-2:fallback-[0-9a-f]{16}$/)
+
+      // 内容不同 → 键必须不同，落在同一毫秒也不撞。
+      await harness.bot.emit('message', {}, c2cMessage({ ...truncated, content: '换了一句话' }))
+      // 同一内容、平台时间戳不同 → 是另一条消息，键必须不同。
+      await harness.bot.emit('message', {}, c2cMessage({ ...truncated, timestamp: String(NOW + 1) }))
+      // 平台给了 id 就用平台 id，不掺内容指纹。
+      await harness.bot.emit('message', {}, c2cMessage({ messageId: 'c2c-msg-2' }))
+      const keys = harness.delivered.map((inbound) => inbound.dedupeKey)
+      // 五条里前两条是同一键：互不相同的内容/时间/id 共四个键。
+      expect(new Set(keys).size).toBe(4)
+      expect(keys[2]).not.toBe(keys[0])
+      expect(keys[3]).not.toBe(keys[0])
+      expect(harness.delivered[4]?.dedupeKey).toBe(
+        imDedupeKey('qq', ACCOUNT_ID, 'private', 'openid-owner-1', 'c2c-msg-2'),
+      )
+    } finally {
+      await harness.channel.stop()
+    }
+  })
+
+  it('changes the dedupe key when only a voice attachment field differs without a message id', async () => {
+    const harness = channelHarness({ bot: {}, requireMention: false, markdownSupport: false })
+    await harness.channel.start(harness.signal)
+    try {
+      const truncated = c2cMessage({
+        senderId: '',
+        messageId: '',
+        content: '',
+        replyTarget: { scope: 'c2c', targetId: 'openid-owner-2' },
+      })
+      const voice = (asr: string): QqInboundAttachment => ({
+        content_type: 'voice',
+        url: 'https://multimedia.nt.qq.com.cn/download?fileid=voice-same',
+        asr_refer_text: asr,
+      })
+      await harness.bot.emit('message', {}, { ...truncated, attachments: [voice('听出来的第一版')] })
+      await harness.bot.emit('message', {}, { ...truncated, attachments: [voice('听出来的第二版')] })
+      const [first, second] = harness.delivered
+      // 识别文本进正文：只有它不同就说明是两条不同的语音，不能撞同一个键。
+      expect(first?.text).toBe('听出来的第一版')
+      expect(second?.text).toBe('听出来的第二版')
       expect(second?.dedupeKey).not.toBe(first?.dedupeKey)
+    } finally {
+      await harness.channel.stop()
+    }
+  })
+
+  it('falls back to the receivedAt bucket when the platform timestamp is missing', async () => {
+    let now = NOW
+    const harness = channelHarness({
+      bot: {},
+      requireMention: false,
+      markdownSupport: false,
+      now: () => now,
+    })
+    await harness.channel.start(harness.signal)
+    try {
+      const truncated = c2cMessage({
+        messageId: '',
+        timestamp: '',
+        replyTarget: { scope: 'c2c', targetId: 'openid-owner-2' },
+      })
+      await harness.bot.emit('message', {}, truncated)
+      // 十分钟桶内的第二次相同内容：视为重放，键必须一致。
+      now = NOW + 60_000
+      await harness.bot.emit('message', {}, truncated)
+      const [first, second] = harness.delivered
+      expect(first?.receivedAt).toBe(NOW)
+      expect(second?.dedupeKey).toBe(first?.dedupeKey)
+
+      // 下一桶里用户真的又发了一次同一条消息：键必须不同，不能被静默吞掉。
+      now = NOW + 10 * 60_000
+      await harness.bot.emit('message', {}, truncated)
+      expect(harness.delivered[2]?.dedupeKey).not.toBe(first?.dedupeKey)
     } finally {
       await harness.channel.stop()
     }

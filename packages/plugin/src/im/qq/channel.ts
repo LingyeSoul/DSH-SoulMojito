@@ -22,7 +22,7 @@
  * 本模块不认识 Tavern：入站走注入的 `router.handle`，出站只写 `OutboundPart`。
  */
 
-import { randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import type { HostLogger } from '../../host-contract.js'
 import type { ImMediaStore } from '../media-store.js'
 import { PASSIVE_REPLY_LIMIT, planDeliveries, planGroupParts } from './delivery.js'
@@ -63,6 +63,9 @@ const QQ_MEDIA_TIMEOUT_MS = 20_000
 
 /** 昵称兜底长度：C2C 事件不携带昵称，用 openid 前 8 位给模型一个稳定标签。 */
 const OPENID_LABEL_LENGTH = 8
+
+/** 无平台时间戳时的内容指纹时间桶：与微信侧各自独立；同桶内相同内容视为重放。 */
+const QQ_FALLBACK_DEDUPE_BUCKET_MS = 10 * 60 * 1_000
 
 /** 被动额度记账表上限：msg_id 用完即弃，长跑进程不能让它无限增长。 */
 const PASSIVE_USAGE_ENTRIES = 200
@@ -502,14 +505,21 @@ export class QQChannel implements ImChannel {
     const senderName = nonEmpty(msg.senderName) ?? openidLabel(senderId)
     const messageId = nonEmpty(msg.messageId)
     const receivedAt = this.now()
-    // 平台不给 id 时用随机 UUID 降级。取舍：宁可重复投递，不可吞消息——
-    // 用 peer+时间做键时，同毫秒的两条消息会撞键，后一条被当成重放丢掉。
-    const dedupeId = messageId ?? randomUUID()
     // 语音自带的识别文本是平台给的正文补充：丢了它，模型只看得到一条「语音」，
     // 而这正是 QQ 语音唯一可读的内容。
-    const transcript = qqTranscriptsOf(qqAttachmentsOf(msg))
+    const attachments = qqAttachmentsOf(msg)
+    const transcript = qqTranscriptsOf(attachments)
     const body = typeof msg.content === 'string' ? msg.content.trim() : ''
     const text = transcript === '' ? body : body === '' ? transcript : `${body}\n${transcript}`
+    // 平台不给 id 时改用内容指纹：随机 UUID 每次重放都换键，24h 去重日志永远挡不住重放。
+    // 同一平台毫秒时间戳 + 相同内容的重复投递视为重放；不同内容即使同一时间戳也不会撞键。
+    const dedupeId = messageId ?? fallbackDedupeId({
+      senderId,
+      content: body,
+      timestamp: msg.timestamp,
+      attachments,
+      receivedAt,
+    })
     return {
       channel: 'qq',
       accountId: this.accountId,
@@ -519,7 +529,7 @@ export class QQChannel implements ImChannel {
       senderName,
       text,
       // 附件先只带远端信息；路由通过访问控制后才由 loadMedia 下载并补 localPath。
-      media: qqMediaOfAttachments(qqAttachmentsOf(msg)),
+      media: qqMediaOfAttachments(attachments),
       // 被动回复锚点是本轮触发消息本身，不是它引用的消息。
       ...(messageId === undefined ? {} : { replyTo: messageId }),
       dedupeKey: imDedupeKey('qq', this.accountId, scope, peerId, dedupeId),
@@ -627,6 +637,51 @@ function nonEmpty(value: string | undefined): string | undefined {
   if (typeof value !== 'string') return undefined
   const trimmed = value.trim()
   return trimmed === '' ? undefined : trimmed
+}
+
+/**
+ * 平台缺 `messageId` 时的确定性降级 id：平台身份 + 正文 + 平台时间戳（缺失时用
+ * `receivedAt` 时间桶）+ 附件身份 → 同一个键。
+ *
+ * 同一平台毫秒时间戳 + 相同内容的重复投递视为重放，会被 24h 去重日志挡住；不同内容
+ * 即使落在同一毫秒也不会撞键。代价：平台没给时间戳（旧 build / 手写载荷）时只能退回
+ * 10 分钟桶——桶内两条真正相同的内容会被当成重放，后到的那条被吞掉。
+ */
+function fallbackDedupeId(input: {
+  senderId: string
+  content: string
+  timestamp: string
+  attachments: readonly QqInboundAttachment[]
+  receivedAt: number
+}): string {
+  // `bucket-` 前缀让桶值与毫秒时间戳字符串永不混淆，两者可以共用同一槽位。
+  const platformTimestamp =
+    nonEmpty(input.timestamp) ?? `bucket-${Math.floor(input.receivedAt / QQ_FALLBACK_DEDUPE_BUCKET_MS)}`
+  const canonical = JSON.stringify([
+    input.senderId,
+    input.content,
+    platformTimestamp,
+    input.attachments.map((attachment) => attachmentIdentityOf(attachment)),
+  ])
+  return `fallback-${createHash('sha256').update(canonical).digest('hex').slice(0, 16)}`
+}
+
+/**
+ * 附件的可交付身份：与 `qqMediaRefOf` 同口径（空白字段视为缺失、字节数取整）。
+ * `voice_wav_url` 与 `asr_refer_text` 也进指纹：语音交付的是 wav 直链与识别文本，
+ * 两者不同就是两条内容不同的消息，不能让它们撞同一个键。
+ */
+function attachmentIdentityOf(attachment: QqInboundAttachment): (string | number | null)[] {
+  const size = attachment.size
+  const usableSize = typeof size === 'number' && Number.isFinite(size) && size >= 0 ? Math.round(size) : null
+  return [
+    nonEmpty(attachment.content_type) ?? null,
+    nonEmpty(attachment.url) ?? null,
+    nonEmpty(attachment.filename) ?? null,
+    usableSize,
+    nonEmpty(attachment.voice_wav_url) ?? null,
+    nonEmpty(attachment.asr_refer_text) ?? null,
+  ]
 }
 
 function describeDisconnect(event: QqGatewayDisconnect): string {

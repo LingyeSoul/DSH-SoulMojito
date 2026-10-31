@@ -10184,7 +10184,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("0fe7933") : void 0;
+  const commit = true ? normalizeCommit("52fee8d") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -46693,6 +46693,8 @@ var OneBotChannel = class {
   now;
   logger;
   connections = /* @__PURE__ */ new Map();
+  /** 账号级入站 FIFO 链尾：webhook 与反向 WS 共用一个账号的到达顺序。 */
+  inboundTail = Promise.resolve();
   started = false;
   lastError;
   signal;
@@ -46810,7 +46812,6 @@ var OneBotChannel = class {
       since: this.now(),
       closed: false,
       waiters: /* @__PURE__ */ new Map(),
-      eventChain: Promise.resolve(),
       sendChain: Promise.resolve()
     };
     this.connections.set(connection.id, live);
@@ -46875,14 +46876,25 @@ var OneBotChannel = class {
       respondJson(res, 200, {});
       return;
     }
+    const message = inbound;
     try {
-      await this.router.handle(inbound);
+      await this.enqueueInbound(() => this.router.handle(message));
     } catch (error) {
       this.logger?.warn?.(`dsh-soulmojito im onebot/${this.accountId}: webhook inbound failed: ${messageOf6(error)}`);
       respondJson(res, 500, { ok: false, message: "onebot inbound handling failed" });
       return;
     }
     respondJson(res, 200, {});
+  }
+  /**
+   * 入站按账号串行：webhook 与反向 WS 排进同一条 FIFO，两个连接同时到达也
+   * 不会并发进 router。返回本次任务自己的 Promise，调用方拿得到成功/失败；
+   * 链尾吞掉拒绝，一条消息失败不会毒化后续入站。
+   */
+  enqueueInbound(task) {
+    const queued = this.inboundTail.then(task);
+    this.inboundTail = queued.then(() => void 0, () => void 0);
+    return queued;
   }
   tokenMatches(presented) {
     if (presented === void 0 || presented === "") return false;
@@ -46955,7 +46967,7 @@ var OneBotChannel = class {
       return;
     }
     if (live.role === "API") return;
-    live.eventChain = live.eventChain.then(() => this.deliverEvent(live, value)).catch((error) => {
+    void this.enqueueInbound(() => this.deliverEvent(live, value)).catch((error) => {
       this.logger?.warn?.(`dsh-soulmojito im onebot/${this.accountId}: inbound event failed: ${messageOf6(error)}`);
     });
   }
@@ -47641,7 +47653,7 @@ function messageOf7(error) {
 }
 
 // packages/plugin/src/im/qq/channel.ts
-import { randomUUID as randomUUID13 } from "node:crypto";
+import { createHash as createHash15 } from "node:crypto";
 
 // packages/plugin/src/im/settings.ts
 var IM_CHUNK_DEFAULTS = {
@@ -48144,6 +48156,7 @@ var START_TIMEOUT_MS = 3e4;
 var QQ_MEDIA_MAX_BYTES = 20 * 1024 * 1024;
 var QQ_MEDIA_TIMEOUT_MS = 2e4;
 var OPENID_LABEL_LENGTH = 8;
+var QQ_FALLBACK_DEDUPE_BUCKET_MS = 10 * 60 * 1e3;
 var PASSIVE_USAGE_ENTRIES = 200;
 var QQChannelError = class extends Error {
   code;
@@ -48469,11 +48482,18 @@ var QQChannel = class {
     const senderName = nonEmpty3(msg.senderName) ?? openidLabel(senderId);
     const messageId = nonEmpty3(msg.messageId);
     const receivedAt = this.now();
-    const dedupeId = messageId ?? randomUUID13();
-    const transcript = qqTranscriptsOf(qqAttachmentsOf(msg));
+    const attachments = qqAttachmentsOf(msg);
+    const transcript = qqTranscriptsOf(attachments);
     const body = typeof msg.content === "string" ? msg.content.trim() : "";
     const text = transcript === "" ? body : body === "" ? transcript : `${body}
 ${transcript}`;
+    const dedupeId = messageId ?? fallbackDedupeId({
+      senderId,
+      content: body,
+      timestamp: msg.timestamp,
+      attachments,
+      receivedAt
+    });
     return {
       channel: "qq",
       accountId: this.accountId,
@@ -48483,7 +48503,7 @@ ${transcript}`;
       senderName,
       text,
       // 附件先只带远端信息；路由通过访问控制后才由 loadMedia 下载并补 localPath。
-      media: qqMediaOfAttachments(qqAttachmentsOf(msg)),
+      media: qqMediaOfAttachments(attachments),
       // 被动回复锚点是本轮触发消息本身，不是它引用的消息。
       ...messageId === void 0 ? {} : { replyTo: messageId },
       dedupeKey: imDedupeKey("qq", this.accountId, scope, peerId, dedupeId),
@@ -48561,6 +48581,28 @@ function nonEmpty3(value) {
   if (typeof value !== "string") return void 0;
   const trimmed = value.trim();
   return trimmed === "" ? void 0 : trimmed;
+}
+function fallbackDedupeId(input) {
+  const platformTimestamp = nonEmpty3(input.timestamp) ?? `bucket-${Math.floor(input.receivedAt / QQ_FALLBACK_DEDUPE_BUCKET_MS)}`;
+  const canonical = JSON.stringify([
+    input.senderId,
+    input.content,
+    platformTimestamp,
+    input.attachments.map((attachment) => attachmentIdentityOf(attachment))
+  ]);
+  return `fallback-${createHash15("sha256").update(canonical).digest("hex").slice(0, 16)}`;
+}
+function attachmentIdentityOf(attachment) {
+  const size = attachment.size;
+  const usableSize = typeof size === "number" && Number.isFinite(size) && size >= 0 ? Math.round(size) : null;
+  return [
+    nonEmpty3(attachment.content_type) ?? null,
+    nonEmpty3(attachment.url) ?? null,
+    nonEmpty3(attachment.filename) ?? null,
+    usableSize,
+    nonEmpty3(attachment.voice_wav_url) ?? null,
+    nonEmpty3(attachment.asr_refer_text) ?? null
+  ];
 }
 function describeDisconnect(event) {
   return `code=${event.code} reason='${event.reason}' willReconnect=${event.willReconnect}`;
@@ -48786,7 +48828,7 @@ async function ensureRuntimePackageJson(root) {
 }
 
 // packages/plugin/src/im/store.ts
-import { randomUUID as randomUUID14 } from "node:crypto";
+import { randomUUID as randomUUID13 } from "node:crypto";
 import { promises as fs20 } from "node:fs";
 import { dirname as dirname14, join as join24, resolve as resolve6 } from "node:path";
 var ImStoreError = class extends Error {
@@ -49156,7 +49198,7 @@ async function imStoreRemoveFile(file) {
 }
 async function imStoreWriteFile(file, text, mode) {
   await imStoreEnsureDir(dirname14(file));
-  const tmp = `${file}.tmp-${randomUUID14()}`;
+  const tmp = `${file}.tmp-${randomUUID13()}`;
   try {
     await fs20.writeFile(tmp, text, mode === void 0 ? { encoding: "utf8" } : { encoding: "utf8", mode });
     await fs20.rename(tmp, file);
@@ -49195,7 +49237,7 @@ async function imStoreWriteSecret(file, record) {
 
 // packages/plugin/src/im/weixin/api.ts
 init_build_info();
-import { randomBytes as randomBytes5, randomUUID as randomUUID15 } from "node:crypto";
+import { randomBytes as randomBytes5, randomUUID as randomUUID14 } from "node:crypto";
 var WEIXIN_FIXED_BASE_URL = "https://ilinkai.weixin.qq.com";
 var WEIXIN_DEFAULT_CDN_BASE_URL = "https://novac2c.cdn.weixin.qq.com/c2c";
 var WEIXIN_DEFAULT_BOT_TYPE = "3";
@@ -49311,7 +49353,7 @@ async function sendMessageItems(context, options) {
   const msg = {
     from_user_id: "",
     to_user_id: toUserId,
-    client_id: randomUUID15(),
+    client_id: randomUUID14(),
     message_type: 2,
     message_state: 2,
     item_list: [...options.items]
@@ -49958,7 +50000,7 @@ function messageOf10(error) {
 }
 
 // packages/plugin/src/im/weixin/channel.ts
-import { randomUUID as randomUUID16 } from "node:crypto";
+import { createHash as createHash17 } from "node:crypto";
 
 // packages/plugin/src/im/weixin/errors.ts
 var WeixinChannelError = class extends Error {
@@ -50071,7 +50113,7 @@ function createTypingTicketCache(options) {
 }
 
 // packages/plugin/src/im/weixin/media.ts
-import { createCipheriv, createDecipheriv, createHash as createHash15, randomBytes as randomBytes6 } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash as createHash16, randomBytes as randomBytes6 } from "node:crypto";
 import { promises as fs21 } from "node:fs";
 import { basename as basename3, extname } from "node:path";
 var WEIXIN_MEDIA_MAX_BYTES = 20 * 1024 * 1024;
@@ -50447,7 +50489,7 @@ async function sendWeixinMedia(context, request) {
   return sent.messageId;
 }
 function md5Hex(bytes) {
-  return createHash15("md5").update(bytes).digest("hex");
+  return createHash16("md5").update(bytes).digest("hex");
 }
 async function readLocalMedia(path12, kind) {
   try {
@@ -50641,6 +50683,7 @@ var FAILURES_BEFORE_BACKOFF = 3;
 var START_PROBE_TIMEOUT_MS = 3e3;
 var PEER_LABEL_LENGTH = 8;
 var MAX_CONTEXT_TOKENS = 500;
+var WEIXIN_FALLBACK_DEDUPE_BUCKET_MS = 10 * 60 * 1e3;
 function createStartGate() {
   let resolveGate;
   let rejectGate;
@@ -51139,8 +51182,10 @@ var WeixinChannel = class {
         text,
         // 占位 ref 保留在摘要里；物化成功后由 loadMedia 换成带 localPath 的版本。
         media: mediaSources.map((source) => ({ kind: source.kind })),
-        // 平台不给 message_id 时用随机 UUID 降级：宁可重复投递，不可吞消息。
-        dedupeKey: imDedupeKey("weixin", this.accountId, "private", peerId, messageId ?? randomUUID16()),
+        // 平台不给 message_id 时改用内容指纹：随机 UUID 每次重放都换键，24h 去重日志
+        // 永远挡不住重放。代价：平台既不给 id 也不给时间戳，同一 10 分钟桶内的相同内容
+        // 会被当成重放丢弃（后到的那条被吞）；跨桶到来的重放仍可能重复投递。
+        dedupeKey: imDedupeKey("weixin", this.accountId, "private", peerId, messageId ?? fallbackMessageId(message, receivedAt)),
         receivedAt
       },
       sources: mediaSources
@@ -51186,6 +51231,29 @@ var WeixinChannel = class {
     this.abortListener = void 0;
   }
 };
+function fallbackMessageId(message, receivedAt) {
+  const bucket = Math.floor(receivedAt / WEIXIN_FALLBACK_DEDUPE_BUCKET_MS);
+  const canonical = JSON.stringify([
+    message.fromUserId ?? null,
+    message.messageType ?? null,
+    message.groupId ?? null,
+    message.items.map((item) => [
+      item.type,
+      item.text ?? null,
+      item.voiceText ?? null,
+      item.mediaUrl ?? null,
+      item.fullUrl ?? null,
+      item.encryptQueryParam ?? null,
+      item.thumbUrl ?? null,
+      item.aesKeyHex ?? null,
+      item.aesKey ?? null,
+      item.fileName ?? null,
+      item.size ?? null
+    ]),
+    bucket
+  ]);
+  return `fallback-${createHash17("sha256").update(canonical).digest("hex").slice(0, 16)}`;
+}
 function isStaleToken(error) {
   return error instanceof WeixinApiError && error.retcode === WEIXIN_STALE_TOKEN_RETCODE;
 }
@@ -51610,7 +51678,7 @@ import { resolve as resolve7 } from "node:path";
 
 // packages/plugin/src/memory-maintenance.ts
 init_src();
-import { randomUUID as randomUUID17 } from "node:crypto";
+import { randomUUID as randomUUID15 } from "node:crypto";
 var MAINTENANCE_MAX_LLM_REQUESTS = 24;
 var MAINTENANCE_OPENING_MAX_CHARS = 1e5;
 var MAINTENANCE_PAGE_RECORDS = 32;
@@ -51638,7 +51706,7 @@ async function startMemoryMaintenance(ctx, deps, scope) {
   const existing = activeRuns.get(key);
   if (existing !== void 0) throw new MaintenanceRunConflictError(scope.character, scope.chatId, existing.runId);
   const active = {
-    runId: randomUUID17(),
+    runId: randomUUID15(),
     character: scope.character,
     chatId: scope.chatId,
     startedAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -51839,7 +51907,7 @@ async function executeRun(ctx, deps, scope, active) {
       opening = buildOpeningMessage(run, listing);
     }
     const messages = [
-      { role: "user", id: randomUUID17(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
+      { role: "user", id: randomUUID15(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
     ];
     let outcome = "completed";
     let errorMessage7;
@@ -51896,7 +51964,7 @@ async function executeRun(ctx, deps, scope, active) {
         blocks.push({ type: "text", text: textBuffer });
       }
       const toolCalls = blocks.filter((block) => block.type === "tool-call");
-      messages.push({ role: "assistant", id: randomUUID17(), content: blocks, source: { kind: "model", provider: run.provider, model: run.model } });
+      messages.push({ role: "assistant", id: randomUUID15(), content: blocks, source: { kind: "model", provider: run.provider, model: run.model } });
       if (toolCalls.length === 0) {
         report = textBuffer !== "" ? textBuffer : blocks.filter((block) => block.type === "text").map((block) => String(block.text ?? "")).join("");
         break;
@@ -51910,7 +51978,7 @@ async function executeRun(ctx, deps, scope, active) {
         const result = await executeToolCall(run, call);
         messages.push({
           role: "tool",
-          id: randomUUID17(),
+          id: randomUUID15(),
           content: [{ type: "text", text: safeJson(result.payload) }],
           source: { kind: "tool", callId: call.id },
           toolCallId: call.id,
@@ -56775,7 +56843,7 @@ ${reason}`);
 }
 
 // packages/plugin/src/im/weixin/context-tokens.ts
-import { randomUUID as randomUUID18 } from "node:crypto";
+import { randomUUID as randomUUID16 } from "node:crypto";
 import { promises as fs23 } from "node:fs";
 import { dirname as dirname15, join as join27, resolve as resolve8 } from "node:path";
 var WeixinContextTokenError = class extends Error {
@@ -56851,7 +56919,7 @@ async function saveTokens(file, tokens) {
     }
     snapshot2[peerId] = token;
   }
-  const tmp = `${file}.tmp-${randomUUID18()}`;
+  const tmp = `${file}.tmp-${randomUUID16()}`;
   try {
     await fs23.mkdir(dirname15(file), { recursive: true });
     await fs23.writeFile(tmp, `${JSON.stringify(snapshot2, null, 2)}
@@ -56870,7 +56938,7 @@ function reasonOf3(cause) {
 }
 
 // packages/plugin/src/im/router.ts
-import { randomUUID as randomUUID19 } from "node:crypto";
+import { randomUUID as randomUUID17 } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute as isAbsolute2, relative as relative3 } from "node:path";
 
@@ -57090,7 +57158,7 @@ function createImRouter(deps) {
       "info",
       `accepted a ${message.channel}/${message.scope} message from ${alias} (${body.length} chars) for session ${binding.sessionId}`
     );
-    const messageId = `im-${randomUUID19()}`;
+    const messageId = `im-${randomUUID17()}`;
     try {
       await deps.insert(binding.sessionId, {
         id: messageId,
@@ -57310,7 +57378,7 @@ function channelOf(value) {
 }
 
 // packages/plugin/src/im/account-id.ts
-import { createHash as createHash16 } from "node:crypto";
+import { createHash as createHash18 } from "node:crypto";
 var SAFE_ACCOUNT_ID = /^[A-Za-z0-9._-]+$/;
 function imAccountIdOf(channel, raw) {
   const trimmed = raw.trim();
@@ -57319,7 +57387,7 @@ function imAccountIdOf(channel, raw) {
     throw new Error(`cannot derive an IM account id: '${trimmed}' is a path traversal name`);
   }
   if (SAFE_ACCOUNT_ID.test(trimmed)) return trimmed;
-  const digest = createHash16("sha256").update(trimmed, "utf8").digest("hex").slice(0, 12);
+  const digest = createHash18("sha256").update(trimmed, "utf8").digest("hex").slice(0, 12);
   return `${channel}-${digest}`;
 }
 

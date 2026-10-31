@@ -702,6 +702,148 @@ describe('weixin inbound', () => {
   })
 })
 
+// ---- 无 message_id 的降级去重键 ----
+
+describe('weixin fallback dedupe', () => {
+  /** 与通道内的 WEIXIN_FALLBACK_DEDUPE_BUCKET_MS 同值：断言的是跨桶行为，不是常量本身。 */
+  const TEN_MINUTES_MS = 10 * 60 * 1_000
+
+  /** 平台没给 message_id 的小消息：只写 from_user_id / message_type / item_list。 */
+  function idlessMessage(text: string): Record<string, unknown> {
+    return { from_user_id: 'wx-user-1', message_type: 1, item_list: [textItem(text)] }
+  }
+
+  /**
+   * 每轮长轮询从队列里弹一页；测试用「何时入队」决定消息落在哪个 `receivedAt`。
+   * 游标给固定值，避免每轮都触发落盘干扰断言。
+   */
+  function queuedUpdates(stub: Stub, queue: unknown[][]): void {
+    stub.setHandler((request) => {
+      if (request.path !== '/ilink/bot/getupdates') return defaultReply(request)
+      return {
+        json: {
+          ret: 0,
+          msgs: queue.shift() ?? [],
+          get_updates_buf: 'cursor-fallback',
+          longpolling_timeout_ms: 1_000,
+        },
+      }
+    })
+  }
+
+  it('keeps one dedupe key when a message without message_id is replayed inside the same ten-minute bucket', async () => {
+    const stub = await startStub(defaultReply)
+    // 两轮都缺 message_id 且内容相同：这就是游标回滚后平台重放的一页。
+    const queue: unknown[][] = [[idlessMessage('同一条重放的问候')], [idlessMessage('同一条重放的问候')]]
+    queuedUpdates(stub, queue)
+    const harness = channelHarness({ baseUrl: stub.baseUrl, clock: fixedClock(NOW) })
+    try {
+      await harness.channel.start(harness.signal)
+      await waitFor(() => harness.delivered.length === 2, 'the replayed inbound', 5_000)
+      const [first, second] = harness.delivered
+      expect(first?.receivedAt).toBe(NOW)
+      expect(second?.receivedAt).toBe(NOW)
+      // 同一时间桶内的相同内容必须算出同一个键，24h 去重日志才挡得住重放。
+      expect(first?.dedupeKey).toBe(second?.dedupeKey)
+      expect(first?.dedupeKey).toMatch(/^weixin:synthetic-bot-1:private:wx-user-1:fallback-[0-9a-f]{16}$/)
+    } finally {
+      await harness.stop()
+      await stub.close()
+    }
+  })
+
+  it('changes the dedupe key when the text changes without a message_id', async () => {
+    const stub = await startStub(defaultReply)
+    const queue: unknown[][] = [[idlessMessage('第一句话')], [idlessMessage('第二句话')]]
+    queuedUpdates(stub, queue)
+    const harness = channelHarness({ baseUrl: stub.baseUrl, clock: fixedClock(NOW) })
+    try {
+      await harness.channel.start(harness.signal)
+      await waitFor(() => harness.delivered.length === 2, 'both id-less inbounds', 5_000)
+      const [first, second] = harness.delivered
+      expect(first?.text).toBe('第一句话')
+      expect(second?.text).toBe('第二句话')
+      expect(first?.dedupeKey).not.toBe(second?.dedupeKey)
+    } finally {
+      await harness.stop()
+      await stub.close()
+    }
+  })
+
+  it('changes the dedupe key when the same content arrives in a later ten-minute bucket', async () => {
+    const stub = await startStub(defaultReply)
+    const queue: unknown[][] = [[idlessMessage('晚上好')]]
+    queuedUpdates(stub, queue)
+    const clock = settableClock(NOW)
+    const harness = channelHarness({ baseUrl: stub.baseUrl, clock: clock.clock })
+    try {
+      await harness.channel.start(harness.signal)
+      await waitFor(() => harness.delivered.length === 1, 'the first inbound', 5_000)
+
+      // 十分钟后同样一句「晚上好」是用户真的又发了一次，不是重放：键必须变。
+      clock.set(NOW + TEN_MINUTES_MS)
+      queue.push([idlessMessage('晚上好')])
+      await waitFor(() => harness.delivered.length === 2, 'the repeated inbound in the next bucket', 5_000)
+      const [first, second] = harness.delivered
+      expect(first?.receivedAt).toBe(NOW)
+      expect(second?.receivedAt).toBe(NOW + TEN_MINUTES_MS)
+      expect(first?.dedupeKey).not.toBe(second?.dedupeKey)
+    } finally {
+      await harness.stop()
+      await stub.close()
+    }
+  })
+
+  it('changes the dedupe key when only a media identity field differs without a message_id', async () => {
+    const stub = await startStub(defaultReply)
+    // media 允许没有 full_url：这时 thumb_url / aeskey 是唯一能区分两张图片的身份字段。
+    const imageMessage = (thumbUrl: string, aesKeyHex: string): Record<string, unknown> => ({
+      from_user_id: 'wx-user-1',
+      message_type: 1,
+      item_list: [{ type: 2, image_item: { aeskey: aesKeyHex, media: { thumb_url: thumbUrl } } }],
+    })
+    const thumbA = 'https://example.invalid/thumb-a.png'
+    const thumbB = 'https://example.invalid/thumb-b.png'
+    const queue: unknown[][] = [
+      [imageMessage(thumbA, 'a'.repeat(32))],
+      [imageMessage(thumbB, 'a'.repeat(32))],
+      [imageMessage(thumbA, 'b'.repeat(32))],
+    ]
+    queuedUpdates(stub, queue)
+    const harness = channelHarness({ baseUrl: stub.baseUrl, clock: fixedClock(NOW) })
+    try {
+      await harness.channel.start(harness.signal)
+      await waitFor(() => harness.delivered.length === 3, 'all three media inbounds', 5_000)
+      const keys = harness.delivered.map((inbound) => inbound.dedupeKey)
+      // 只有 thumbUrl 不同：两条内容不同的图片，漏收该字段就会撞同一个键、后一条被吞。
+      expect(keys[1]).not.toBe(keys[0])
+      // 只有 aeskey 不同：同理，图片解密密钥也是媒体身份的一部分。
+      expect(keys[2]).not.toBe(keys[0])
+      expect(new Set(keys).size).toBe(3)
+    } finally {
+      await harness.stop()
+      await stub.close()
+    }
+  })
+
+  it('keeps the platform message id in the dedupe key when the platform supplies one', async () => {
+    const stub = await startStub(defaultReply)
+    queuedUpdates(stub, [[wireMessage({ messageId: 4201, fromUserId: 'wx-user-1', itemList: [textItem('带 id 的消息')] })]])
+    const harness = channelHarness({ baseUrl: stub.baseUrl, clock: fixedClock(NOW) })
+    try {
+      await harness.channel.start(harness.signal)
+      await waitFor(() => harness.delivered.length === 1, 'the inbound with a platform id', 5_000)
+      // 平台给了 id 就走原键，绝不掺内容指纹：id 才是权威身份。
+      expect(harness.delivered[0]?.dedupeKey).toBe(
+        imDedupeKey('weixin', ACCOUNT_ID, 'private', 'wx-user-1', '4201'),
+      )
+    } finally {
+      await harness.stop()
+      await stub.close()
+    }
+  })
+})
+
 // ---- 游标 ----
 
 describe('weixin getupdates cursor', () => {
