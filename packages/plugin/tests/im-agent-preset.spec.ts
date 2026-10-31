@@ -55,4 +55,10 @@ describe('AgentTavernIM prompt', () => {
     expect(text).toContain('msg=')
     expect(text).toContain('replyTo')
   })
+
+  it('points the model at the Tavern chat history for recalling earlier IM messages', () => {
+    const text = imModePromptText()
+    expect(text).toContain('记进绑定的酒馆聊天历史')
+    expect(text).toContain('tavern_history_search')
+  })
 })

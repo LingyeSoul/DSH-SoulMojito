@@ -10,6 +10,20 @@ import { isBodyLogEvent, isBodyMergedAssistant, projectBodyEvent, type BodyProje
 import { isTavernSessionMarker } from './body-session.js'
 import { collectSessionRegexScripts } from '../regex-session.js'
 import { recordMvuTurnReceipt, snapshotChatVariables } from '../mvu.js'
+import {
+  boundImPeerAliases,
+  imFloorContextOf,
+  imSendEntriesOf,
+  imToolResultOf,
+  isImRelaySource,
+  messageTextOf,
+  projectImRelayFloors,
+  projectImSendFloors,
+  projectionExtra,
+  projectionIdentity,
+  sessionEventDate,
+  type ImPendingSend,
+} from './im-projection.js'
 
 export interface NativeSessionEvent {
   type: string
@@ -52,6 +66,14 @@ export interface ProjectionCheckpoint {
 export class AgentTavernProjector {
   private readonly tails = new KeyedMutationTails<string>(true)
   private readonly checkpoints = new Map<string, ProjectionCheckpoint>()
+  /**
+   * 每个会话的待回执 `im_send` 调用：assistant 事件记录 callId → 参数/坐标，
+   * `tool/result` 取用。只服务投影，不写回宿主事件；结果只读不删——楼层写入
+   * 失败重放时要能再次取到，callId 在会话内唯一。
+   */
+  private readonly imSends = new Map<string, Map<string, ImPendingSend>>()
+  /** 每个会话回填扫描到的 `sessionEvents` 下标（日志只追加，游标只前进）。 */
+  private readonly imSendCursors = new Map<string, number>()
 
   private constructor(
     private readonly root: string,
@@ -102,10 +124,13 @@ export class AgentTavernProjector {
         if (isBodyLogEvent(event.type)) {
           await projectBodyEvent(this.store, session, state, binding, event)
         } else {
+          const imPeerAliases = boundImPeerAliases(state, session.id)
+          if (event.type === 'assistant/message' && imPeerAliases.length > 0) this.rememberImSends(session, event)
           const character = await this.store.getCharacter(binding.character)
           const scripts = await collectSessionRegexScripts(this.store, state, binding.character, binding.chatId, character)
-          const message = projectMessage(session, event, binding, scripts)
-          if (message !== undefined) await this.appendMessage(binding, session.id, event.seq, message, character?.card)
+          const pendingImSend = event.type === 'tool/result' && imPeerAliases.length > 0 ? this.pendingImSend(session, event) : undefined
+          const messages = projectMessages(session, event, binding, scripts, imPeerAliases, pendingImSend)
+          for (const message of messages) await this.appendMessage(binding, session.id, event.seq, message, character?.card)
         }
       }
       await this.writeCheckpoint(advanceCheckpoint(checkpoint, event.seq))
@@ -113,6 +138,40 @@ export class AgentTavernProjector {
       await this.writeCheckpoint(pendingCheckpoint(checkpoint, event.seq, error))
       throw error
     }
+  }
+
+  /** 记录 assistant 消息里的 `im_send` 调用，供随后的 tool/result 取参数。 */
+  private rememberImSends(session: NativeSession, event: NativeSessionEvent): void {
+    const entries = imSendEntriesOf(session, event)
+    if (entries.length === 0) return
+    const index = this.imSends.get(session.id) ?? new Map<string, ImPendingSend>()
+    for (const entry of entries) index.set(entry.call.callId, entry)
+    this.imSends.set(session.id, index)
+  }
+
+  /**
+   * 取某次 `im_send` 的调用参数；进程在 assistant 与 tool/result 之间重启时，
+   * assistant 事件已越过检查点不会再投影，按日志游标回填一次索引。
+   *
+   * 游标只前进：首次 miss 从 0 扫到当前事件，之后的 miss 只补扫新窗口，不会
+   * 为每个工具回执重新全量扫描日志。
+   */
+  private pendingImSend(session: NativeSession, event: NativeSessionEvent): ImPendingSend | undefined {
+    const callId = imToolResultOf(event.data)?.callId
+    if (callId === undefined) return undefined
+    const index = this.imSends.get(session.id) ?? new Map<string, ImPendingSend>()
+    this.imSends.set(session.id, index)
+    const cached = index.get(callId)
+    if (cached !== undefined) return cached
+    const events = sessionEvents(session)
+    let cursor = this.imSendCursors.get(session.id) ?? 0
+    for (; cursor < events.length; cursor += 1) {
+      const prior = events[cursor] as NativeSessionEvent
+      if (prior.seq >= event.seq) break
+      for (const entry of imSendEntriesOf(session, prior)) index.set(entry.call.callId, entry)
+    }
+    this.imSendCursors.set(session.id, cursor)
+    return index.get(callId)
   }
 
   private async appendMessage(
@@ -129,7 +188,7 @@ export class AgentTavernProjector {
           `AgentTavern projection target chat not found: chat '${binding.chatId}' of '${binding.character}' while appending the message of session '${sessionId}' event seq ${eventSeq}`,
         )
       }
-      if (snapshot.chat.messages.some((candidate) => projectionIdentity(candidate, sessionId, eventSeq))) return
+      if (snapshot.chat.messages.some((candidate) => projectionIdentity(candidate, message, { sessionId, eventSeq }))) return
       const next = structuredClone(snapshot.chat)
       let projected = message
       if (card !== undefined) {
@@ -149,8 +208,8 @@ export class AgentTavernProjector {
             ...(applied.statData !== undefined ? { variables: { ...(plainObjectRecord(message.variables) ?? {}), stat_data: applied.statData } } : {}),
           }
           if (applied.found) {
-            const messageId = projectedMessageId(message)
-            if (messageId === undefined) {
+            const messageId = plainObjectRecord(message.extra?.['agentTavern'])?.['messageId']
+            if (typeof messageId !== 'string' || messageId === '') {
               throw new Error(
                 `AgentTavern projector cannot record the body MVU receipt: assistant message at event seq ${eventSeq} has no projection message id`,
               )
@@ -230,81 +289,80 @@ export class AgentTavernProjector {
   }
 }
 
-function projectMessage(
+function projectMessages(
   session: NativeSession,
   event: NativeSessionEvent,
   binding: Extract<TavernSessionBinding, { architecture: 'agent-tavern' }>,
   scripts: RegexScriptIR[],
-): ChatMessage | undefined {
+  imPeerAliases: readonly string[],
+  pendingImSend: ImPendingSend | undefined,
+): ChatMessage[] {
+  const imContext = imFloorContextOf(session.id, binding.contextMode, binding.character, event)
+  if (event.type === 'agent/inbox/spliced') {
+    const inserted = event.data?.inserted
+    if (imPeerAliases.length === 0 || !Array.isArray(inserted)) return []
+    return projectImRelayFloors(imContext, inserted, scripts, imPeerAliases)
+  }
   if (event.type === 'user/message') {
     const source = event.data?.source
-    if (typeof source !== 'object' || source === null || Array.isArray(source) || (source as Record<string, unknown>)['kind'] !== 'user') return undefined
-    const text = messageText(event.data?.content)
-    if (text === '') return undefined
-    return {
+    if (isImRelaySource(source)) {
+      return imPeerAliases.length === 0 ? [] : projectImRelayFloors(imContext, [event.data], scripts, imPeerAliases)
+    }
+    if (plainObjectRecord(source)?.['kind'] !== 'user') return []
+    const text = messageTextOf(event.data?.content)
+    if (text === '') return []
+    return [{
       name: 'User',
       is_user: true,
       is_system: false,
-      send_date: eventDate(event.time, event.seq, event.type),
+      send_date: sessionEventDate(event.time, event.seq, event.type),
       // ST 语义：USER_INPUT 正则在消息落库前生效（ST 管线同样保存变换后文本）。
       mes: applyRegexScripts(text, scripts, RegexPlacement.USER_INPUT),
-      extra: projectionExtra(session, event, binding.contextMode, turnAt(session, event.seq)),
-    }
+      extra: projectionExtra({
+        sessionId: session.id,
+        eventSeq: event.seq,
+        contextMode: binding.contextMode,
+        projectionKey: `${session.id}:${event.seq}`,
+        messageId: event.data?.id,
+        turn: turnAt(session, event.seq),
+      }),
+    }]
   }
 
-  if (event.type !== 'assistant/message') return undefined
+  if (event.type === 'tool/result') {
+    return imPeerAliases.length === 0 ? [] : projectImSendFloors(imContext, event.data, pendingImSend, scripts, imPeerAliases)
+  }
+
+  if (event.type !== 'assistant/message') return []
   // 从 Tavern 聊天导入的镜像消息（开场白/历史）不再投影回 JSONL，否则会重复。
-  if (isTavernSessionMarker(event.data?.message?.source)) return undefined
+  if (isTavernSessionMarker(event.data?.message?.source)) return []
   // Body regeneration / restore turns merge through body candidate events; they
   // must not add a second floor next to the body they replace.
-  if (isBodyMergedAssistant(session, event)) return undefined
+  if (isBodyMergedAssistant(session, event)) return []
   const content = event.data?.message?.content
-  if (!Array.isArray(content) || content.some((block) => block?.type === 'tool-call')) return undefined
-  const text = messageText(content)
-  if (text === '') return undefined
+  // 带工具调用的 assistant 正文没有送达对端；出站楼层由成功的 im_send 回执产生。
+  if (!Array.isArray(content) || content.some((block) => block?.type === 'tool-call')) return []
+  const text = messageTextOf(content)
+  if (text === '') return []
   // 落库层只应用非 promptOnly、非 markdownOnly 的脚本；display 与 prompt 层
   // 分别由 displayTexts 和历史导入处理。
   const saveScripts = scripts.filter((script) => !script.promptOnly && !script.markdownOnly)
-  return {
+  return [{
     name: binding.character,
     is_user: false,
     is_system: false,
-    send_date: eventDate(event.time, event.seq, event.type),
+    send_date: sessionEventDate(event.time, event.seq, event.type),
     mes: saveScripts.length > 0 ? applyRegexScripts(text, saveScripts, RegexPlacement.AI_OUTPUT) : text,
-    extra: projectionExtra(session, event, binding.contextMode, event.data?.turn, event.data?.step),
-  }
-}
-
-function projectionExtra(
-  session: NativeSession,
-  event: NativeSessionEvent,
-  contextMode: string,
-  turn?: unknown,
-  step?: unknown,
-): Record<string, unknown> {
-  return {
-    agentTavern: {
-      architecture: 'agent-tavern',
-      contextMode,
+    extra: projectionExtra({
       sessionId: session.id,
       eventSeq: event.seq,
-      messageId: event.type === 'assistant/message' ? event.data?.message?.id : event.data?.id,
-      ...(typeof turn === 'number' && Number.isSafeInteger(turn) ? { turn } : {}),
-      ...(typeof step === 'number' && Number.isSafeInteger(step) ? { step } : {}),
-    },
-  }
-}
-
-function projectionIdentity(message: ChatMessage, sessionId: string, eventSeq: number): boolean {
-  const source = message.extra?.agentTavern as Record<string, unknown> | undefined
-  return source?.sessionId === sessionId && source.eventSeq === eventSeq
-}
-
-/** Projection message id carried in `extra.agentTavern.messageId`; absent for events without one. */
-function projectedMessageId(message: ChatMessage): string | undefined {
-  const agentTavern = plainObjectRecord(message.extra?.['agentTavern'])
-  const messageId = agentTavern?.['messageId']
-  return typeof messageId === 'string' && messageId !== '' ? messageId : undefined
+      contextMode: binding.contextMode,
+      projectionKey: `${session.id}:${event.seq}`,
+      messageId: event.data?.message?.id,
+      turn: event.data?.turn,
+      step: event.data?.step,
+    }),
+  }]
 }
 
 /**
@@ -527,15 +585,6 @@ function plainObjectRecord(value: unknown): Record<string, unknown> | undefined 
   return value as Record<string, unknown>
 }
 
-function messageText(content: unknown): string {
-  if (!Array.isArray(content)) return ''
-  return content
-    .filter((block) => block?.type === 'text' && typeof block.text === 'string')
-    .map((block) => block.text)
-    .join('')
-    .trim()
-}
-
 function turnAt(session: NativeSession, cursor: number): number | undefined {
   let turn: number | undefined
   for (const event of sessionEvents(session) as readonly NativeSessionEvent[]) {
@@ -543,26 +592,6 @@ function turnAt(session: NativeSession, cursor: number): number | undefined {
     if (event.type === 'turn/start' && typeof event.data?.turn === 'number' && Number.isSafeInteger(event.data.turn)) turn = event.data.turn
   }
   return turn
-}
-
-/** Largest millisecond value a `Date` can represent (±100,000,000 days). */
-const MAX_DATE_MILLISECONDS = 8.64e15
-
-/**
- * ISO timestamp of a session event.
- *
- * A wall-clock fallback would make replay non-reproducible, so an unusable
- * event time is a hard error instead. `time` is required by the host event
- * contract; a historical or damaged event without it reaches this check as
- * `undefined` and is rejected rather than silently dated at read time.
- */
-function eventDate(time: number, seq: number, type: string): string {
-  if (!Number.isSafeInteger(time) || time < 0 || time > MAX_DATE_MILLISECONDS) {
-    throw new Error(
-      `session event '${type}' at seq ${seq} has unusable time ${String(time)}; expected a non-negative safe integer within the Date range`,
-    )
-  }
-  return new Date(time).toISOString()
 }
 
 function validateCheckpoint(value: ProjectionCheckpoint, sessionId: string): void {

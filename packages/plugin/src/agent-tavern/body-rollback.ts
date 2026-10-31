@@ -541,6 +541,8 @@ function locateBodyFloor(chat: ChatLogIR, messageId: string): number | undefined
     const extra = message.extra
     const tavern = isRecord(extra) ? extra['agentTavern'] : undefined
     if (!isRecord(tavern)) continue
+    // IM 出站楼层共享 assistant message id 但不是 body 楼层，回滚不能选中它。
+    if (tavern['via'] === 'im-send') continue
     if (tavern['messageId'] === messageId
       || tavern['anchorMessageId'] === messageId
       || tavern['bodyGroupId'] === messageId) {

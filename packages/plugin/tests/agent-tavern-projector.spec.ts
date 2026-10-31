@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { AgentTavernProjector, historyImportAppends, isTavernSessionMarker, lastImportedTurn, type NativeSession, type NativeSessionEvent } from '../src/agent-tavern/projector.js'
+import { imMessageRef } from '../src/im/refs.js'
+import { imPeerAlias, imPeerKeyParts } from '../src/im/types.js'
 import { ChatRevisionConflictError, TavernStore } from '../../tavern-store/src/index.js'
 import type { ChatLogIR, RegexScriptIR } from '../../tavern-format/src/index.js'
 
@@ -84,6 +86,103 @@ function session(id: string): NativeSession {
         },
       },
     ],
+  }
+}
+
+/**
+ * IM 绑定夹具：在普通投影夹具上挂 `imPeers`（peerKey 的第三段决定 private/group）。
+ * 只有 `sessionId` 命中的会话才会走新的 IM 投影路径。
+ */
+async function imFixture(sessionId: string, peerKeys: readonly string[]) {
+  const base = await fixture(sessionId)
+  await base.store.updateState(() => ({
+    imPeers: Object.fromEntries(peerKeys.map((peerKey) => {
+      const scope: 'private' | 'group' = peerKey.split(':')[2] === 'group' ? 'group' : 'private'
+      return [peerKey, { sessionId, scope, boundBy: 'manual' as const, createdAt: new Date(0).toISOString() }]
+    })),
+  }))
+  return base
+}
+
+function peerAliasOf(peerKey: string): string {
+  const parts = imPeerKeyParts(peerKey)
+  if (parts === undefined) throw new Error(`bad IM peer key '${peerKey}'`)
+  return imPeerAlias(parts.channel, parts.scope, peerKey)
+}
+
+const imFooterOf = (alias: string): string =>
+  `（这是从 IM 转发给你的消息，不是 DSH 用户输入。回复请调用 im_send，peer 参数用 ${alias}。）`
+
+/** 单条 relay 正文：与 `router.ts` 的 `relayTextOf` 逐字同形（带 msg 引用与时间）。 */
+function imRelayTextOf(body: string, alias: string, ref: string): string {
+  return [
+    `[IM weixin/私聊 peer=${alias} msg=${ref} time=2026-10-31T05:17:33.928Z]`,
+    body,
+    imFooterOf(alias),
+  ].join('\n')
+}
+
+/** 合流 relay 正文：头部标条数，正文逐行带 `[msg-…]`，群昵称由正文自带。 */
+function imMergedRelayTextOf(bodies: readonly string[], alias: string, refs: readonly string[]): string {
+  return [
+    `[IM weixin/群聊 peer=${alias}]（连续 ${bodies.length} 条消息）`,
+    ...bodies.map((body, index) => `[${refs[index]}] ${body}`),
+    imFooterOf(alias),
+  ].join('\n')
+}
+
+function imRelayMessageOf(id: string, text: string, alias: string): Record<string, unknown> {
+  return {
+    id,
+    role: 'user',
+    content: [{ type: 'text', text }],
+    source: { kind: 'plugin:dsh-soulmojito', form: 'relay', summary: `IM weixin/private message from ${alias}` },
+  }
+}
+
+function imSpliceOf(seq: number, inserted: readonly unknown[]): NativeSessionEvent {
+  return { type: 'agent/inbox/spliced', seq, time: 1000 + seq, data: { target: 'next-turn', start: 0, inserted } }
+}
+
+/** assistant 工具轮：一段不送达的正文 + 若干 im_send 调用（真实 v4 用 `id` 标 callId）。 */
+function imSendAssistantOf(
+  seq: number,
+  messageId: string,
+  calls: readonly { callId: string; args: Record<string, unknown> }[],
+  turn: number,
+  step: number,
+): NativeSessionEvent {
+  return {
+    type: 'assistant/message', seq, time: 2000 + seq,
+    data: {
+      turn, step,
+      message: {
+        id: messageId, role: 'assistant',
+        content: [
+          { type: 'text', text: '（这段正文不会送达对端）' },
+          ...calls.map((call) => ({ type: 'tool-call', id: call.callId, name: 'im_send', arguments: JSON.stringify(call.args) })),
+        ],
+        source: { kind: 'model', provider: 'test', model: 'test' },
+      },
+    },
+  }
+}
+
+/** 真实 v4 的 tool/result 形状（本机 ~/.dsh/sessions 会话日志解压取证：message.toolCallId + isError + tool source.callId）。 */
+function imSendResultOf(seq: number, callId: string, ok: boolean, turn: number, step: number): NativeSessionEvent {
+  const text = ok
+    ? JSON.stringify({ peer: 'peer', parts: 1, sentAt: new Date(0).toISOString() })
+    : JSON.stringify({ error: 'transport failed' })
+  return {
+    type: 'tool/result', seq, time: 2000 + seq,
+    data: {
+      turn, step,
+      message: {
+        id: `result-${callId}`, role: 'tool', toolCallId: callId, isError: !ok,
+        content: [{ type: 'text', text }],
+        source: { kind: 'tool', callId },
+      },
+    },
   }
 }
 
@@ -703,5 +802,344 @@ describe('AgentTavern native event projector', () => {
       })
     expect(texts).toEqual(['Nova waves at Alice.', 'hello Nova'])
     expect(chat.messages.map((message) => message.mes)).toEqual(['{{char}} waves at {{user}}.', 'hello {{char}}'])
+  })
+})
+
+describe('AgentTavern IM chat projection', () => {
+  const privateKey = 'weixin:account:private:alice'
+  const privateAlias = peerAliasOf(privateKey)
+  const groupKey = 'weixin:account:group:family'
+  const groupAlias = peerAliasOf(groupKey)
+
+  it('projects an inbound relay as one clean user floor and stays replay-safe', async () => {
+    const { root, store, chatId, sessionId } = await imFixture('im-inbound', [privateKey])
+    const ref = imMessageRef('im-dedupe-alice-1')
+    const native: NativeSession = {
+      id: sessionId,
+      events: [imSpliceOf(0, [imRelayMessageOf('im-1', imRelayTextOf('示例消息', privateAlias, ref), privateAlias)])],
+    }
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(native)
+    await projector.replay(native)
+
+    const snapshot = await store.getChatSnapshot('Projector Character', chatId)
+    expect(snapshot!.chat.messages).toHaveLength(1)
+    const message = snapshot!.chat.messages[0]!
+    // 头部/尾部/msg 引用都不落库，只留正文；user 楼层沿用聊天用户名。
+    expect([message.name, message.is_user, message.mes]).toEqual(['Alice', true, '示例消息'])
+    expect(message.extra!.agentTavern).toMatchObject({
+      sessionId,
+      eventSeq: 0,
+      projectionKey: `${sessionId}:0:im:im-1`,
+      messageId: 'im-1',
+      via: 'im-relay',
+      im: { direction: 'in', peerAlias: privateAlias, ref },
+    })
+    expect(message.extra!.agentTavern).not.toHaveProperty('parse')
+  })
+
+  it('projects every relay inserted by one splice as separate floors', async () => {
+    const { root, store, chatId, sessionId } = await imFixture('im-multi-insert', [privateKey])
+    const first = imRelayMessageOf('im-1', imRelayTextOf('第一条', privateAlias, imMessageRef('im-multi-insert-1')), privateAlias)
+    const second = imRelayMessageOf('im-2', imRelayTextOf('第二条', privateAlias, imMessageRef('im-multi-insert-2')), privateAlias)
+    const native: NativeSession = { id: sessionId, events: [imSpliceOf(0, [first, second])] }
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(native)
+    await projector.replay(native)
+
+    const snapshot = await store.getChatSnapshot('Projector Character', chatId)
+    expect(snapshot!.chat.messages.map((message) => message.mes)).toEqual(['第一条', '第二条'])
+    expect(snapshot!.chat.messages.map((message) => (message.extra!.agentTavern as any).projectionKey))
+      .toEqual([`${sessionId}:0:im:im-1`, `${sessionId}:0:im:im-2`])
+  })
+
+  it('keeps merged group bodies in order and preserves nickname prefixes', async () => {
+    const { root, store, chatId, sessionId } = await imFixture('im-merged', [groupKey])
+    const text = imMergedRelayTextOf(
+      ['[小明] 第一条', '[小红] 第二条'],
+      groupAlias,
+      [imMessageRef('im-group-1'), imMessageRef('im-group-2')],
+    )
+    const native: NativeSession = {
+      id: sessionId,
+      events: [imSpliceOf(0, [imRelayMessageOf('im-1', text, groupAlias)])],
+    }
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(native)
+
+    const snapshot = await store.getChatSnapshot('Projector Character', chatId)
+    expect(snapshot!.chat.messages).toHaveLength(1)
+    expect(snapshot!.chat.messages[0]!.mes).toBe('[小明] 第一条\n[小红] 第二条')
+    const im = (snapshot!.chat.messages[0]!.extra!.agentTavern as any).im
+    // 合流头没有单一 msg=：不伪造引用。
+    expect(im).toEqual({ direction: 'in', peerAlias: groupAlias })
+  })
+
+  it('does not duplicate a relay the host also materializes as user/message', async () => {
+    const { root, store, chatId, sessionId } = await imFixture('im-materialized', [privateKey])
+    const text = imRelayTextOf('同一条消息', privateAlias, imMessageRef('im-dedupe-materialized'))
+    const relay = imRelayMessageOf('im-1', text, privateAlias)
+    const native: NativeSession = {
+      id: sessionId,
+      events: [
+        imSpliceOf(0, [relay]),
+        // 真实 v4 会话取证：splice 插入后，宿主在轮内把同 id 消息物化成 user/message。
+        { type: 'user/message', seq: 1, time: 1001, data: relay },
+      ],
+    }
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(native)
+    await projector.replay(native)
+
+    const snapshot = await store.getChatSnapshot('Projector Character', chatId)
+    expect(snapshot!.chat.messages.map((message) => message.mes)).toEqual(['同一条消息'])
+  })
+
+  it('projects a relay that exists only as user/message (legacy source shape)', async () => {
+    const { root, store, chatId, sessionId } = await imFixture('im-user-message', [privateKey])
+    // v0-v3 relay 头没有 msg/time，source 是 { kind: 'plugin', plugin } 老形状。
+    const text = `[IM weixin/私聊 peer=${privateAlias}]\n只物化成用户消息\n${imFooterOf(privateAlias)}`
+    const legacyRelay = {
+      id: 'im-1',
+      role: 'user',
+      content: [{ type: 'text', text }],
+      source: { kind: 'plugin', plugin: 'dsh-soulmojito', form: 'relay', summary: `IM weixin/private message from ${privateAlias}` },
+    }
+    const native: NativeSession = {
+      id: sessionId,
+      events: [{ type: 'user/message', seq: 0, time: 1000, data: legacyRelay }],
+    }
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(native)
+
+    const snapshot = await store.getChatSnapshot('Projector Character', chatId)
+    expect(snapshot!.chat.messages.map((message) => message.mes)).toEqual(['只物化成用户消息'])
+    expect(snapshot!.chat.messages[0]!.extra!.agentTavern).toMatchObject({ via: 'im-relay', im: { direction: 'in' } })
+    expect((snapshot!.chat.messages[0]!.extra!.agentTavern as any).im.ref).toBeUndefined()
+  })
+
+  it('projects a successful im_send as one assistant floor after its result', async () => {
+    const { root, store, chatId, sessionId } = await imFixture('im-send-ok', [privateKey])
+    const native: NativeSession = {
+      id: sessionId,
+      events: [
+        { type: 'turn/start', seq: 0, time: 1000, data: { turn: 1 } },
+        imSendAssistantOf(1, 'assistant-1', [{ callId: 'call-1', args: { peer: privateAlias, text: '在的' } }], 1, 1),
+        imSendResultOf(2, 'call-1', true, 1, 1),
+      ],
+    }
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(native)
+    await projector.replay(native)
+
+    const snapshot = await store.getChatSnapshot('Projector Character', chatId)
+    // 带 tool-call 的 assistant 正文不落库，只落成功回执对应的发送文本。
+    expect(snapshot!.chat.messages.map((message) => [message.name, message.is_user, message.mes])).toEqual([
+      ['Projector Character', false, '在的'],
+    ])
+    expect(snapshot!.chat.messages[0]!.extra!.agentTavern).toMatchObject({
+      sessionId,
+      eventSeq: 2,
+      messageId: 'assistant-1',
+      via: 'im-send',
+      turn: 1,
+      step: 1,
+      im: { direction: 'out', peerAlias: privateAlias, callId: 'call-1' },
+    })
+  })
+
+  it('produces no floor for failed sends, including structured transport errors', async () => {
+    const { root, store, chatId, sessionId } = await imFixture('im-send-failed', [privateKey])
+    const payloadError = imSendResultOf(3, 'call-2', true, 1, 1)
+    ;(payloadError.data as any).message.content = [{ type: 'text', text: JSON.stringify({ error: 'weixin throttled' }) }]
+    const native: NativeSession = {
+      id: sessionId,
+      events: [
+        { type: 'turn/start', seq: 0, time: 1000, data: { turn: 1 } },
+        imSendAssistantOf(1, 'assistant-1', [
+          { callId: 'call-1', args: { peer: privateAlias, text: '第一条' } },
+          { callId: 'call-2', args: { peer: privateAlias, text: '第二条' } },
+        ], 1, 1),
+        imSendResultOf(2, 'call-1', false, 1, 1),
+        payloadError,
+      ],
+    }
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(native)
+
+    const snapshot = await store.getChatSnapshot('Projector Character', chatId)
+    expect(snapshot!.chat.messages).toEqual([])
+  })
+
+  it('projects every im_send of one assistant message in call/result order', async () => {
+    const { root, store, chatId, sessionId } = await imFixture('im-send-many', [privateKey])
+    const native: NativeSession = {
+      id: sessionId,
+      events: [
+        { type: 'turn/start', seq: 0, time: 1000, data: { turn: 1 } },
+        imSendAssistantOf(1, 'assistant-1', [
+          { callId: 'call-1', args: { peer: privateAlias, text: '第一句' } },
+          { callId: 'call-2', args: { peer: privateAlias, text: '第二句' } },
+        ], 1, 1),
+        imSendResultOf(2, 'call-1', true, 1, 1),
+        imSendResultOf(3, 'call-2', true, 1, 1),
+      ],
+    }
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(native)
+
+    const snapshot = await store.getChatSnapshot('Projector Character', chatId)
+    expect(snapshot!.chat.messages.map((message) => message.mes)).toEqual(['第一句', '第二句'])
+    expect(snapshot!.chat.messages.map((message) => (message.extra!.agentTavern as any).im.callId))
+      .toEqual(['call-1', 'call-2'])
+  })
+
+  it('writes a compact marker for media-only sends and both parts for captions', async () => {
+    const { root, store, chatId, sessionId } = await imFixture('im-send-media', [privateKey])
+    const native: NativeSession = {
+      id: sessionId,
+      events: [
+        { type: 'turn/start', seq: 0, time: 1000, data: { turn: 1 } },
+        imSendAssistantOf(1, 'assistant-1', [
+          { callId: 'call-1', args: { peer: privateAlias, mediaKind: 'image', mediaPath: 'C:/workspace/pic.png' } },
+          { callId: 'call-2', args: { peer: privateAlias, text: '看这个', mediaKind: 'video', mediaUrl: 'https://example.com/a.mp4' } },
+        ], 1, 1),
+        imSendResultOf(2, 'call-1', true, 1, 1),
+        imSendResultOf(3, 'call-2', true, 1, 1),
+      ],
+    }
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(native)
+
+    const snapshot = await store.getChatSnapshot('Projector Character', chatId)
+    expect(snapshot!.chat.messages.map((message) => message.mes)).toEqual(['（图片）', '看这个\n（视频）'])
+    expect(snapshot!.chat.messages.map((message) => (message.extra!.agentTavern as any).im.mediaKind))
+      .toEqual(['image', 'video'])
+  })
+
+  it('prefixes floors with the peer alias only in multi-peer sessions', async () => {
+    const { root, store, chatId, sessionId } = await imFixture('im-multi-peer', [privateKey, groupKey])
+    const native: NativeSession = {
+      id: sessionId,
+      events: [
+        imSpliceOf(0, [imRelayMessageOf('im-1', imRelayTextOf('大家好', groupAlias, imMessageRef('im-multi-1')), groupAlias)]),
+        { type: 'turn/start', seq: 1, time: 1001, data: { turn: 1 } },
+        imSendAssistantOf(2, 'assistant-1', [{ callId: 'call-1', args: { peer: privateAlias, text: '收到' } }], 1, 1),
+        imSendResultOf(3, 'call-1', true, 1, 1),
+      ],
+    }
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(native)
+
+    const snapshot = await store.getChatSnapshot('Projector Character', chatId)
+    expect(snapshot!.chat.messages.map((message) => message.mes)).toEqual([
+      `[${groupAlias}] 大家好`,
+      `[${privateAlias}] 收到`,
+    ])
+    expect(snapshot!.chat.messages.map((message) => (message.extra!.agentTavern as any).im.peerAlias))
+      .toEqual([groupAlias, privateAlias])
+  })
+
+  it('stores the full text and marks fallback when the relay format is unrecognized', async () => {
+    const { root, store, chatId, sessionId } = await imFixture('im-fallback', [privateKey])
+    const broken = `[IM weixin/私聊 peer=${privateAlias}]\n原始正文还在\n（尾部被上游改掉了）`
+    const native: NativeSession = {
+      id: sessionId,
+      events: [imSpliceOf(0, [imRelayMessageOf('im-1', broken, privateAlias)])],
+    }
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(native)
+
+    const snapshot = await store.getChatSnapshot('Projector Character', chatId)
+    expect(snapshot!.chat.messages).toHaveLength(1)
+    expect(snapshot!.chat.messages[0]!.mes).toBe(broken)
+    expect(snapshot!.chat.messages[0]!.extra!.agentTavern).toMatchObject({
+      via: 'im-relay',
+      parse: 'fallback',
+      im: { direction: 'in', peerAlias: privateAlias },
+    })
+  })
+
+  it('rebuilds the pending im_send index after a restart between call and result', async () => {
+    const { root, store, chatId, sessionId } = await imFixture('im-send-restart', [privateKey])
+    const native: NativeSession = {
+      id: sessionId,
+      events: [
+        { type: 'turn/start', seq: 0, time: 1000, data: { turn: 1 } },
+        imSendAssistantOf(1, 'assistant-1', [{ callId: 'call-1', args: { peer: privateAlias, text: '重启后仍记录' } }], 1, 1),
+        imSendResultOf(2, 'call-1', true, 1, 1),
+      ],
+    }
+    const first = await AgentTavernProjector.open(root, store)
+    await first.project(native, native.events[1]!)
+    expect(await first.status(sessionId)).toMatchObject({ lastCursor: 1, status: 'ok' })
+
+    // 新实例（进程重启）没有内存索引：回填日志里的 assistant 调用后再投影结果。
+    const resumed = await AgentTavernProjector.open(root, store)
+    await resumed.project(native, native.events[2]!)
+    const snapshot = await store.getChatSnapshot('Projector Character', chatId)
+    expect(snapshot!.chat.messages.map((message) => message.mes)).toEqual(['重启后仍记录'])
+  })
+
+  it('resumes the backfill scan from its cursor instead of rescanning the whole log', async () => {
+    const { root, store, sessionId } = await imFixture('im-send-cursor', [privateKey])
+    const raw: NativeSessionEvent[] = [
+      { type: 'turn/start', seq: 0, time: 1000, data: { turn: 1 } },
+      {
+        type: 'assistant/message', seq: 1, time: 1001,
+        data: {
+          turn: 1, step: 1,
+          message: {
+            id: 'assistant-1', role: 'assistant',
+            content: [{ type: 'tool-call', id: 'call-memory', name: 'memory_search', arguments: '{}' }],
+            source: { kind: 'model', provider: 'test', model: 'test' },
+          },
+        },
+      },
+      imSendResultOf(2, 'call-memory', true, 1, 1),
+      ...Array.from({ length: 19 }, (_, offset): NativeSessionEvent => ({
+        type: 'turn/start', seq: 3 + offset, time: 1003 + offset, data: { turn: 1 },
+      })),
+      imSendResultOf(22, 'call-late', true, 1, 1),
+    ]
+    // 回填扫描对日志数组的唯一读点是 `prior.seq`；按事件对象计数即可区分
+    //「第二次 miss 从 0 全量重扫」与「从上次游标继续」。
+    const seqReads = raw.map(() => 0)
+    const tracked = raw.map((event, index) => new Proxy(event, {
+      get(target, property, receiver) {
+        if (property === 'seq') seqReads[index] = (seqReads[index] ?? 0) + 1
+        return Reflect.get(target, property, receiver)
+      },
+    }))
+    const native: NativeSession = { id: sessionId, events: tracked }
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.project(native, tracked[2]!)
+    expect([seqReads[0], seqReads[1]]).toEqual([1, 1])
+
+    await projector.project(native, tracked[22]!)
+    // 游标 22 之后只扫新窗口：前缀 0、1 不再被读，窗口内每个事件各读一次。
+    expect([seqReads[0], seqReads[1]]).toEqual([1, 1])
+    expect(seqReads[3]).toBe(1)
+    expect(seqReads[21]).toBe(1)
+    expect(seqReads[22]).toBeGreaterThanOrEqual(2)
+  })
+
+  it('ignores relay and im_send events when the session has no IM binding', async () => {
+    const { root, store, chatId, sessionId } = await fixture('im-unbound')
+    const native: NativeSession = {
+      id: sessionId,
+      events: [
+        imSpliceOf(0, [imRelayMessageOf('im-1', imRelayTextOf('没有绑定', privateAlias, imMessageRef('im-unbound')), privateAlias)]),
+        { type: 'turn/start', seq: 1, time: 1001, data: { turn: 1 } },
+        imSendAssistantOf(2, 'assistant-1', [{ callId: 'call-1', args: { peer: privateAlias, text: '无绑定回复' } }], 1, 1),
+        imSendResultOf(3, 'call-1', true, 1, 1),
+      ],
+    }
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(native)
+
+    const snapshot = await store.getChatSnapshot('Projector Character', chatId)
+    expect(snapshot!.chat.messages).toEqual([])
+    expect(await projector.status(sessionId)).toMatchObject({ lastCursor: 3, status: 'ok' })
   })
 })

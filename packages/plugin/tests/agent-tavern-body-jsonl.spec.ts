@@ -137,6 +137,29 @@ function seedTwoCandidates(): ChatLogIR {
   )
 }
 
+/** IM 出站楼层形状：同一条 assistant 消息的多个 im_send 共享 `messageId`。 */
+function imSendFloor(messageId: string, callId: string, mes: string): ChatMessage {
+  return {
+    name: 'ExampleCard',
+    is_user: false,
+    is_system: false,
+    send_date: SEND_DATE,
+    mes,
+    extra: {
+      agentTavern: {
+        architecture: 'agent-tavern',
+        contextMode: 'dsh-native',
+        sessionId: 'session-im',
+        eventSeq: 4,
+        projectionKey: `session-im:4:im:${callId}`,
+        messageId,
+        via: 'im-send',
+        im: { direction: 'out', peerAlias: 'peer-example', callId },
+      },
+    },
+  }
+}
+
 function captureError(run: () => unknown): BodyJsonlProjectionError {
   try {
     run()
@@ -554,6 +577,30 @@ describe('body floor locators', () => {
     expect(chat).toEqual(snapshot)
   })
 
+  it('ignores IM outbound floors that reuse the assistant message id', () => {
+    // 同一 assistant 消息带两个 im_send 时，两个楼层共享 messageId；
+    // 它们不是 body 楼层，定位器不能把它们算成重复绑定。
+    const chat = bindBodyGroup(makeAssistantChat('message-1', 'original body'), 'group-1')
+    chat.messages.push(imSendFloor('message-1', 'call-1', 'reply one'))
+    chat.messages.push(imSendFloor('message-1', 'call-2', 'reply two'))
+
+    expect(findBodyFloorIndexByMessageId(chat, 'message-1')).toBe(1)
+    expect(locateBodyFloor(chat, 'group-1', 'message-1')).toBe(1)
+  })
+
+  it('does not treat IM-only message ids as body floors', () => {
+    const chat: ChatLogIR = {
+      header: { user_name: 'User', character_name: 'ExampleCard', chat_metadata: {} },
+      messages: [
+        imSendFloor('message-1', 'call-1', 'reply one'),
+        imSendFloor('message-1', 'call-2', 'reply two'),
+      ],
+    }
+
+    expect(findBodyFloorIndexByMessageId(chat, 'message-1')).toBeUndefined()
+    expect(locateBodyFloorForRead(chat, { messageId: 'message-1' })).toBeUndefined()
+  })
+
   it('throws when a group cannot be located by id', () => {
     expectErrorCode(
       () => locateBodyFloor(makeAssistantChat('message-1', 'original body'), 'group-1', undefined),
@@ -585,6 +632,15 @@ describe('locateBodyFloorForRead', () => {
     const chat = seedTwoCandidates()
 
     expect(locateBodyFloorForRead(chat, { messageId: 'message-2' })).toBe(1)
+  })
+
+  it('resolves the body floor when IM outbound floors reuse the message id', () => {
+    const chat = bindBodyGroup(makeAssistantChat('message-1', 'original body'), 'group-1')
+    chat.messages.push(imSendFloor('message-1', 'call-1', 'reply one'))
+    chat.messages.push(imSendFloor('message-1', 'call-2', 'reply two'))
+
+    expect(locateBodyFloorForRead(chat, { messageId: 'message-1' })).toBe(1)
+    expect(locateBodyFloorForRead(chat, { messageId: 'message-1', groupId: 'group-1' })).toBe(1)
   })
 
   it('refuses a duplicated group binding instead of serving one floor', () => {

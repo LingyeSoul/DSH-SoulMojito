@@ -205,7 +205,8 @@ function formatFloorIndices(matches: readonly number[]): string {
 export function findBodyFloorIndexByMessageId(chat: ChatLogIR, messageId: string): number | undefined {
   const matches: number[] = []
   for (const [index, message] of chat.messages.entries()) {
-    if (readAgentTavern(message)?.messageId !== messageId) continue
+    const tavern = readAgentTavern(message)
+    if (tavern === undefined || isImSendFloor(tavern) || tavern['messageId'] !== messageId) continue
     matches.push(index)
   }
   if (matches.length > 1) {
@@ -251,7 +252,7 @@ export function locateBodyFloorForRead(chat: ChatLogIR, hints: BodyJsonlReadHint
   const matches: number[] = []
   for (const [index, message] of chat.messages.entries()) {
     const tavern = readAgentTavern(message)
-    if (tavern === undefined) continue
+    if (tavern === undefined || isImSendFloor(tavern)) continue
     if (tavern.bodyGroupId !== hints.messageId
       && tavern.messageId !== hints.messageId
       && tavern.anchorMessageId !== hints.messageId) continue
@@ -692,6 +693,15 @@ function readAgentTavern(message: ChatMessage): Record<string, unknown> | undefi
   if (!isRecord(extra)) return undefined
   const agentTavern = extra.agentTavern
   return isRecord(agentTavern) ? agentTavern : undefined
+}
+
+/**
+ * IM 出站楼层（`via: 'im-send'`）用 assistant message id 做 `extra` 身份，但它
+ * 不是 body 楼层：同一条 assistant 消息的多个 `im_send` 楼层会共享该 id，按
+ * messageId 的定位器必须跳过它们，否则两个楼层就构成 `body-group-mismatch`。
+ */
+function isImSendFloor(tavern: Record<string, unknown> | undefined): boolean {
+  return tavern?.['via'] === 'im-send'
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
