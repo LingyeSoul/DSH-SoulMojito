@@ -128,7 +128,7 @@ async function renameWithWindowsRetry(from, to, attempts) {
     } catch (cause) {
       const code = cause.code;
       if (attempt >= attempts || code !== "EPERM" && code !== "EACCES" && code !== "EBUSY" && code !== "ENOTEMPTY") throw cause;
-      await new Promise((resolve8) => setTimeout(resolve8, 10 * attempt));
+      await new Promise((resolve9) => setTimeout(resolve9, 10 * attempt));
     }
   }
 }
@@ -5983,10 +5983,10 @@ import { randomBytes } from "node:crypto";
 import { promises as fs7 } from "node:fs";
 function commandLineOf(pid) {
   if (process.platform === "win32") {
-    return new Promise((resolve8) => {
+    return new Promise((resolve9) => {
       execFile("powershell.exe", ["-NoProfile", "-Command", `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`], { timeout: 5e3, windowsHide: true }, (error, stdout) => {
-        if (error) resolve8(null);
-        else resolve8(stdout.trim() === "" ? void 0 : stdout.trim());
+        if (error) resolve9(null);
+        else resolve9(stdout.trim() === "" ? void 0 : stdout.trim());
       });
     });
   }
@@ -6000,10 +6000,10 @@ function commandLineOf(pid) {
     );
   }
   if (process.platform === "darwin") {
-    return new Promise((resolve8) => {
+    return new Promise((resolve9) => {
       execFile("ps", ["-p", String(pid), "-o", "command="], { timeout: 5e3 }, (error, stdout) => {
-        if (error) resolve8(Number(error.code) === 1 ? void 0 : null);
-        else resolve8(stdout.trim() === "" ? void 0 : stdout.trim());
+        if (error) resolve9(Number(error.code) === 1 ? void 0 : null);
+        else resolve9(stdout.trim() === "" ? void 0 : stdout.trim());
       });
     });
   }
@@ -10184,7 +10184,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("dc6b32d") : void 0;
+  const commit = true ? normalizeCommit("1a27e81") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -10357,7 +10357,7 @@ var init_handle = __esm({
 
 // packages/plugin/src/generation-hooks.ts
 function withTimeout(promise, ms) {
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     const timer = setTimeout(() => {
       const timeoutError = new Error(`generation hook timed out after ${ms}ms`);
       timeoutError.hookTimeout = true;
@@ -10366,7 +10366,7 @@ function withTimeout(promise, ms) {
     Promise.resolve(promise).then(
       (value) => {
         clearTimeout(timer);
-        resolve8(value);
+        resolve9(value);
       },
       (error) => {
         clearTimeout(timer);
@@ -11353,7 +11353,7 @@ function readJson(req, maxBytes) {
   if (contentType !== void 0 && !contentType.toLowerCase().startsWith("application/json")) {
     return Promise.reject(new HttpError(415, `unsupported content-type '${contentType}'; expected application/json`));
   }
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     let bytes = 0;
     const chunks = [];
     req.on("data", (rawChunk) => {
@@ -11366,7 +11366,7 @@ function readJson(req, maxBytes) {
     });
     req.on("end", () => {
       try {
-        resolve8(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        resolve9(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
       } catch {
         reject(new HttpError(400, "invalid JSON body"));
       }
@@ -11691,7 +11691,7 @@ function renderModHtmlDocument(document, csp) {
   return `<!doctype html><html><head><meta charset="utf-8">${meta}${scripts}</head><body>${rewritten}</body></html>`;
 }
 function readModRequestBody(req, maxBytes = 2 * 1024 * 1024) {
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     let bytes = 0;
     const chunks = [];
     req.on("data", (chunk) => {
@@ -11705,7 +11705,7 @@ function readModRequestBody(req, maxBytes = 2 * 1024 * 1024) {
     });
     req.on("end", () => {
       try {
-        resolve8(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        resolve9(chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString("utf8")));
       } catch {
         reject(new Error("invalid JSON body"));
       }
@@ -12420,7 +12420,7 @@ async function readPackageVersion(options, ref, preferApi) {
   return UNKNOWN_FIELD;
 }
 function resolveRemoteCommit(repository, ref, timeoutMs) {
-  return new Promise((resolve8) => {
+  return new Promise((resolve9) => {
     const url = /^https?:|^git@/i.test(repository) ? repository : `https://github.com/${repository.replace(/^\//, "")}.git`;
     execFile2("git", ["ls-remote", url, `refs/heads/${ref}`, ref], {
       encoding: "utf8",
@@ -12429,11 +12429,11 @@ function resolveRemoteCommit(repository, ref, timeoutMs) {
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }
     }, (error, stdout) => {
       if (error) {
-        resolve8("");
+        resolve9("");
         return;
       }
       const first = String(stdout ?? "").split("\n").map((line) => line.trim()).find(Boolean) ?? "";
-      resolve8(first.split(/\s+/)[0] ?? "");
+      resolve9(first.split(/\s+/)[0] ?? "");
     });
   });
 }
@@ -12503,7 +12503,7 @@ function isTransientHttpFailure(error) {
   return /ECONNRESET|EPIPE|EAI_AGAIN|socket hang up|network is unreachable/i.test(message);
 }
 function delay(ms) {
-  return new Promise((resolve8) => setTimeout(resolve8, ms));
+  return new Promise((resolve9) => setTimeout(resolve9, ms));
 }
 function describeError(error) {
   if (error instanceof Error) {
@@ -12516,7 +12516,7 @@ function describeError(error) {
 function curlGet(url, accept, timeoutMs, exec = execFile2) {
   const command = envCompat("CURL")?.trim() || (process.platform === "win32" ? "curl.exe" : "curl");
   const seconds = String(Math.max(1, Math.ceil(timeoutMs / 1e3)));
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     exec(command, [
       "--silent",
       "--show-error",
@@ -12540,7 +12540,7 @@ function curlGet(url, accept, timeoutMs, exec = execFile2) {
         reject(new Error(detail === "" ? error.message : `${error.message}: ${detail}`));
         return;
       }
-      resolve8(String(stdout ?? ""));
+      resolve9(String(stdout ?? ""));
     });
   });
 }
@@ -12605,7 +12605,7 @@ function gitClone(url, directory, ref, timeoutMs, exec = execFile3) {
   return runGit(args, exec, timeoutMs).then(() => runGit(["-C", directory, "checkout", "HEAD", "--", "."], exec, timeoutMs));
 }
 function runGit(args, exec, timeoutMs) {
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     exec("git", args, {
       encoding: "utf8",
       timeout: timeoutMs,
@@ -12618,7 +12618,7 @@ function runGit(args, exec, timeoutMs) {
         reject(new Error(detail === "" ? error.message : `${error.message}: ${detail}`));
         return;
       }
-      resolve8();
+      resolve9();
     });
   });
 }
@@ -13880,11 +13880,11 @@ function copyShippedFiles(sourceDir, targetDir) {
       continue;
     }
     for (const file of listFiles(from)) {
-      const relative3 = file.slice(from.length + 1);
-      const to = join12(targetDir, entry, relative3);
+      const relative4 = file.slice(from.length + 1);
+      const to = join12(targetDir, entry, relative4);
       mkdirSync(dirname8(to), { recursive: true });
       writeFileAtomic(to, readFileSync3(file));
-      copied.push(`${entry}/${relative3.replaceAll("\\", "/")}`);
+      copied.push(`${entry}/${relative4.replaceAll("\\", "/")}`);
     }
   }
   return copied;
@@ -13951,7 +13951,7 @@ function readInstalledStamp(pluginDir, spec = "") {
   return { version, commit };
 }
 function runCapture(command, args, options = {}) {
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     const child = spawn(command, args, {
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -13980,7 +13980,7 @@ function runCapture(command, args, options = {}) {
     });
     child.once("close", (code) => {
       clearTimeout(timer);
-      resolve8({ code: code ?? -1, output });
+      resolve9({ code: code ?? -1, output });
     });
   });
 }
@@ -24956,11 +24956,60 @@ import * as path9 from "node:path";
 
 // packages/plugin/src/memory-embed-local.ts
 import { createHash as createHash8 } from "node:crypto";
-import { spawn as spawn2 } from "node:child_process";
 import { readdirSync as readdirSync3, readFileSync as readFileSync5, realpathSync as realpathSync2, statSync as statSync2 } from "node:fs";
 import { createRequire as createRequire3 } from "node:module";
 import { basename as basename2, dirname as dirname10, join as join15 } from "node:path";
 import { fileURLToPath, pathToFileURL as pathToFileURL3 } from "node:url";
+
+// packages/plugin/src/spawn.ts
+import { spawn as spawn2, spawnSync } from "node:child_process";
+function defaultSpawnRunner(command, args, options) {
+  return new Promise((resolve9, reject) => {
+    const child = spawn2(command, [...args], {
+      cwd: options.cwd,
+      shell: process.platform === "win32",
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: process.env
+    });
+    let output = "";
+    const feed = (chunk) => {
+      output += chunk.toString("utf8");
+      if (output.length > 1e6) output = output.slice(-1e6);
+    };
+    child.stdout?.on("data", feed);
+    child.stderr?.on("data", feed);
+    const timer = setTimeout(() => {
+      killProcessTree(child);
+      reject(new Error(`pnpm timed out after ${options.timeoutMs}ms`));
+    }, options.timeoutMs);
+    timer.unref?.();
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      resolve9({ code: code ?? -1, output });
+    });
+  });
+}
+function killProcessTree(child) {
+  const pid = child.pid;
+  if (process.platform === "win32" && pid !== void 0) {
+    try {
+      spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+    } catch {
+    }
+  }
+  try {
+    if (pid !== void 0 && process.platform !== "win32") process.kill(pid, "SIGKILL");
+    else child.kill();
+  } catch {
+  }
+}
+
+// packages/plugin/src/memory-embed-local.ts
 var TRANSFORMERS_PACKAGE = "@huggingface/transformers";
 var TRANSFORMERS_INSTALL_HINT = `local ONNX embed requires '${TRANSFORMERS_PACKAGE}' (not bundled with the plugin): run "pnpm add ${TRANSFORMERS_PACKAGE}" in the DSH profile root (the directory whose node_modules contains the installed dsh-soulmojito, NOT the dsh-soulmojito source repository), then restart DSH`;
 var SESSION_CACHE_LIMIT = 2;
@@ -25183,37 +25232,6 @@ function localRuntimeProfileRoot(pluginDir) {
   const parent = dirname10(pluginDir);
   if (basename2(parent) !== "node_modules") return void 0;
   return dirname10(parent);
-}
-function defaultSpawnRunner(command, args, options) {
-  return new Promise((resolve8, reject) => {
-    const child = spawn2(command, [...args], {
-      cwd: options.cwd,
-      shell: process.platform === "win32",
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: process.env
-    });
-    let output = "";
-    const feed = (chunk) => {
-      output += chunk.toString("utf8");
-      if (output.length > 1e6) output = output.slice(-1e6);
-    };
-    child.stdout?.on("data", feed);
-    child.stderr?.on("data", feed);
-    const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error(`pnpm timed out after ${options.timeoutMs}ms`));
-    }, options.timeoutMs);
-    timer.unref?.();
-    child.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.once("close", (code) => {
-      clearTimeout(timer);
-      resolve8({ code: code ?? -1, output });
-    });
-  });
 }
 async function installLocalEmbedRuntime(input) {
   if (isLocalEmbedRuntimeInstalled()) {
@@ -25520,7 +25538,7 @@ function parseEmbeddings(payload, count, expectedDims2) {
   return vectors;
 }
 function delay2(ms) {
-  return new Promise((resolve8) => setTimeout(resolve8, ms));
+  return new Promise((resolve9) => setTimeout(resolve9, ms));
 }
 async function embedProbe(root, config, options = {}) {
   const status2 = await readEmbedStatus(root);
@@ -29131,10 +29149,10 @@ async function restoreInterruptedPrepares(ctx, deps, prepares) {
   return { restored, failed };
 }
 async function recoveryStateSafety(ctx, sessionId, binding) {
-  const resolve8 = ctx.safetyOf;
-  if (typeof resolve8 === "function") {
+  const resolve9 = ctx.safetyOf;
+  if (typeof resolve9 === "function") {
     try {
-      return await resolve8(sessionId, binding) ?? unsafeBodyState("safety-unavailable");
+      return await resolve9(sessionId, binding) ?? unsafeBodyState("safety-unavailable");
     } catch (error) {
       errorLog(ctx, "dsh-soulmojito body: recovery state safety resolver failed", {
         sessionId,
@@ -30845,7 +30863,7 @@ var NovelDriver = class _NovelDriver {
       } catch (error) {
         lastError = error;
         this.logWarn("followup-attempt-failed", { novelId, sessionId: agent.session.id, intentId, errorCode: errorCodeOf(error), attempt });
-        if (attempt < retry.maxAttempts) await new Promise((resolve8) => setTimeout(resolve8, retry.backoffMs));
+        if (attempt < retry.maxAttempts) await new Promise((resolve9) => setTimeout(resolve9, retry.backoffMs));
       }
     }
     throw lastError;
@@ -39309,6 +39327,7 @@ function identitySummaryOf(data) {
 
 // packages/plugin/src/im/types.ts
 init_src();
+import { createHash as createHash11 } from "node:crypto";
 function imDedupeKey(channel, accountId, scope, peerId, messageId) {
   return `${channel}:${accountId}:${scope}:${peerId}:${messageId}`;
 }
@@ -39318,6 +39337,9 @@ function imPeerKeyParts(key) {
   const [channel, accountId, scope, ...rest] = parts;
   if (channel === void 0 || accountId === void 0 || scope === void 0) return void 0;
   return { channel, accountId, scope, peerId: rest.join(":") };
+}
+function imPeerAlias(channel, scope, peerKey) {
+  return `peer-${createHash11("sha256").update(`${channel}:${scope}:${peerKey}`).digest("hex").slice(0, 10)}`;
 }
 
 // packages/plugin/src/im/tools.ts
@@ -39359,8 +39381,9 @@ var sendOutput = objectOutput({
   peer: { type: "string" },
   parts: { type: "integer" },
   sentAt: { type: "string" },
-  messageId: { type: "string" }
-}, ["messageId"]);
+  messageId: { type: "string" },
+  mediaKind: { type: "string", enum: ["image", "voice", "video", "file"] }
+}, ["messageId", "mediaKind"]);
 
 // packages/plugin/src/lazy-projection.ts
 function createLazyProjection(options) {
@@ -40851,9 +40874,9 @@ init_capabilities2();
 
 // packages/plugin/src/agent-novel/requirements.ts
 init_src();
-import { createHash as createHash11 } from "node:crypto";
+import { createHash as createHash12 } from "node:crypto";
 function stableMessageKey(sessionId, messageKey) {
-  return createHash11("sha256").update(`${sessionId}\0${messageKey}`).digest("hex");
+  return createHash12("sha256").update(`${sessionId}\0${messageKey}`).digest("hex");
 }
 function isNovelAuthorMessage(event) {
   return extractAuthorMessage(event) !== null;
@@ -41763,18 +41786,18 @@ init_src();
 import { createReadStream, createWriteStream } from "node:fs";
 import { mkdtemp, rm as rm2 } from "node:fs/promises";
 import { tmpdir as tmpdir4 } from "node:os";
-import { join as join24 } from "node:path";
+import { join as join26 } from "node:path";
 import { pipeline } from "node:stream/promises";
 
 // packages/tavern-frontend-storage/src/idb-store.ts
-import { createHash as createHash12 } from "node:crypto";
+import { createHash as createHash13 } from "node:crypto";
 import { copyFile, mkdir as mkdir4, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname as dirname13, join as join20 } from "node:path";
 var IDB_MAX_RECORD_BYTES = 1024 * 1024 * 1024;
 var IDB_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
 var databaseLocks = /* @__PURE__ */ new Map();
 function sha256(value) {
-  return createHash12("sha256").update(value).digest("hex");
+  return createHash13("sha256").update(value).digest("hex");
 }
 function databaseDir(root, character, name2) {
   return join20(root, "frontend-idb", sha256(character), sha256(name2));
@@ -45179,7 +45202,7 @@ async function retryChatWrite(operation) {
     } catch (error) {
       if (!(error instanceof ChatRevisionConflictError)) throw error;
       lastError = error;
-      await new Promise((resolve8) => setTimeout(resolve8, 10 * (attempt + 1)));
+      await new Promise((resolve9) => setTimeout(resolve9, 10 * (attempt + 1)));
     }
   }
   throw lastError;
@@ -46114,6 +46137,9 @@ function oneBotMentioned(event, selfId) {
 }
 function oneBotSendCall(target, part) {
   const peerId = parsePeerId(target.peerId);
+  if (part.kind !== "text") {
+    throw new OneBotCodecError("BAD_TARGET", `onebot cannot send a ${part.kind} part: media parts are not implemented in this build`);
+  }
   const message = [{ type: "text", data: { text: part.text } }];
   if (target.scope === "private") {
     return { action: "send_private_msg", params: { user_id: peerId, message, auto_escape: false } };
@@ -46313,7 +46339,7 @@ function describeValue(value) {
 }
 
 // packages/plugin/src/im/onebot/ws.ts
-import { createHash as createHash13, randomUUID as randomUUID10 } from "node:crypto";
+import { createHash as createHash14, randomUUID as randomUUID10 } from "node:crypto";
 var WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 var MAX_MESSAGE_BYTES = 1024 * 1024;
 var CONTROL_PAYLOAD_LIMIT = 125;
@@ -46341,7 +46367,7 @@ var WsProtocolError = class extends Error {
 };
 function acceptWebSocket(req, socket, head) {
   const key = requireHandshakeKey(req, socket);
-  const accept = createHash13("sha1").update(`${key}${WS_GUID}`).digest("base64");
+  const accept = createHash14("sha1").update(`${key}${WS_GUID}`).digest("base64");
   socket.write([
     "HTTP/1.1 101 Switching Protocols",
     "Upgrade: websocket",
@@ -46396,14 +46422,14 @@ function openConnection(socket, head) {
     });
   }
   function writeFrame(frame) {
-    return new Promise((resolve8, reject) => {
+    return new Promise((resolve9, reject) => {
       if (socket.destroyed || socket.writableEnded) {
         reject(new Error("websocket socket is closed"));
         return;
       }
       socket.write(frame, (error) => {
         if (error) reject(error);
-        else resolve8();
+        else resolve9();
       });
     });
   }
@@ -46899,7 +46925,7 @@ var OneBotChannel = class {
   }
   call(live, action, params) {
     const echo = randomUUID11();
-    return new Promise((resolve8, reject) => {
+    return new Promise((resolve9, reject) => {
       const timer = setTimeout(() => {
         live.waiters.delete(echo);
         reject(new OneBotError(
@@ -46908,7 +46934,7 @@ var OneBotChannel = class {
         ));
       }, REQUEST_TIMEOUT_MS2);
       timer.unref?.();
-      live.waiters.set(echo, { resolve: resolve8, reject, timer });
+      live.waiters.set(echo, { resolve: resolve9, reject, timer });
       try {
         live.connection.send(JSON.stringify({ action, params, echo }));
       } catch (error) {
@@ -47078,7 +47104,7 @@ function respondJson(res, status2, body) {
   res.end(JSON.stringify(body));
 }
 function readJsonBody(req, maxBytes) {
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     const chunks = [];
     let bytes = 0;
     let settled = false;
@@ -47097,11 +47123,11 @@ function readJsonBody(req, maxBytes) {
       if (settled) return;
       settled = true;
       if (chunks.length === 0) {
-        resolve8(void 0);
+        resolve9(void 0);
         return;
       }
       try {
-        resolve8(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        resolve9(JSON.parse(Buffer.concat(chunks).toString("utf8")));
       } catch (error) {
         reject(new OneBotError("ONEBOT_BAD_REQUEST", "onebot webhook body is not valid JSON", { cause: error }));
       }
@@ -47634,479 +47660,7 @@ function messageOf7(error) {
 }
 
 // packages/plugin/src/im/qq/channel.ts
-import { randomUUID as randomUUID12 } from "node:crypto";
-var START_TIMEOUT_MS = 3e4;
-var OPENID_LABEL_LENGTH = 8;
-var PASSIVE_REPLY_LIMIT = 4;
-var PASSIVE_USAGE_ENTRIES = 200;
-var QQChannelError = class extends Error {
-  code;
-  constructor(code, message, options) {
-    super(message, options);
-    this.name = "QQChannelError";
-    this.code = code;
-  }
-};
-function createStartupGate() {
-  let resolveGate;
-  let rejectGate;
-  let settled = false;
-  const promise = new Promise((resolve8, reject) => {
-    resolveGate = resolve8;
-    rejectGate = reject;
-  });
-  return {
-    promise,
-    get settled() {
-      return settled;
-    },
-    settle(error) {
-      if (settled) return;
-      settled = true;
-      if (error === void 0) resolveGate?.();
-      else rejectGate?.(error);
-    }
-  };
-}
-var QQChannel = class {
-  channel = "qq";
-  accountId;
-  appId;
-  appSecret;
-  router;
-  groupRequireMention;
-  createBot;
-  markdownSupport;
-  now;
-  logger;
-  bot;
-  ready;
-  starting = false;
-  onlineSince;
-  lastError;
-  signal;
-  abortListener;
-  /** 同一账号的入站按到达顺序串行：群聊并发事件不得乱序，去重才可靠。 */
-  inboundChain = Promise.resolve();
-  /** 同一账号的出站按整轮串行：两轮回复并发时不得出现 A1,B1,A2,B2 的交错碎片。 */
-  sendChain = Promise.resolve();
-  /** 每个被动回复 msg_id 已用掉的条数：额度跨 send 累计，不是每次 send 归零。 */
-  passiveUsed = /* @__PURE__ */ new Map();
-  constructor(options) {
-    this.appId = requireSecret(options.secret, "appId", options.accountId);
-    this.appSecret = requireSecret(options.secret, "appSecret", options.accountId);
-    this.accountId = options.accountId;
-    this.router = options.router;
-    this.groupRequireMention = options.groupRequireMention;
-    this.createBot = options.createBot;
-    this.markdownSupport = options.markdownSupport;
-    this.now = options.now;
-    this.logger = options.logger;
-  }
-  async start(signal) {
-    if (this.bot !== void 0) return;
-    if (signal.aborted) {
-      throw new QQChannelError("QQ_CLOSED", `qq account '${this.accountId}' cannot start: signal is already aborted`);
-    }
-    const bot = this.createBot({
-      appId: this.appId,
-      appSecret: this.appSecret,
-      accountId: this.accountId,
-      transport: "websocket",
-      logger: qqLoggerOf(this.logger)
-    });
-    this.starting = true;
-    this.lastError = void 0;
-    this.signal = signal;
-    this.abortListener = () => {
-      void this.stop();
-    };
-    signal.addEventListener("abort", this.abortListener, { once: true });
-    this.bot = bot;
-    const gate = createStartupGate();
-    this.ready = gate;
-    this.attach(bot, gate);
-    try {
-      void bot.start().then(
-        () => {
-          this.failStartup(bot, gate, "the QQ gateway closed before the bot became ready");
-        },
-        (error) => {
-          this.failStartup(bot, gate, `the QQ gateway refused to start: ${messageOf8(error)}`);
-          this.noteFailure(bot, `QQ gateway start failed: ${messageOf8(error)}`);
-        }
-      );
-      await withTimeout2(gate.promise, START_TIMEOUT_MS, `qq account '${this.accountId}' was not ready within ${START_TIMEOUT_MS}ms`);
-    } catch (error) {
-      const failure = error instanceof QQChannelError ? error : new QQChannelError("QQ_START_FAILED", `qq account '${this.accountId}' failed to start: ${messageOf8(error)}`, { cause: error });
-      this.dropStartup(bot, failure.message);
-      throw failure;
-    }
-  }
-  async stop() {
-    const bot = this.bot;
-    const gate = this.ready;
-    this.bot = void 0;
-    this.ready = void 0;
-    this.starting = false;
-    this.onlineSince = void 0;
-    this.lastError = void 0;
-    this.detachAbort();
-    gate?.settle(new QQChannelError("QQ_CLOSED", `qq account '${this.accountId}' stopped before it became ready`));
-    bot?.stop();
-  }
-  status() {
-    if (this.lastError !== void 0) return { state: "error", message: this.lastError };
-    if (this.starting) return { state: "starting" };
-    if (this.onlineSince !== void 0) return { state: "online", since: this.onlineSince };
-    return { state: "idle" };
-  }
-  async send(target, parts) {
-    if (target.channel !== "qq") {
-      throw new QQChannelError("QQ_BAD_TARGET", `qq channel cannot send to channel '${target.channel}'`);
-    }
-    if (target.accountId !== this.accountId) {
-      throw new QQChannelError(
-        "QQ_BAD_TARGET",
-        `qq account '${target.accountId}' cannot send through account '${this.accountId}'`
-      );
-    }
-    if (parts.length === 0) return { parts: 0, at: this.now() };
-    const queued = this.sendChain.then(() => this.sendParts(target, parts));
-    this.sendChain = queued.then(() => void 0, () => void 0);
-    return queued;
-  }
-  async sendParts(target, parts) {
-    const bot = this.bot;
-    if (bot === void 0) {
-      throw new QQChannelError("QQ_CLOSED", `qq account '${this.accountId}' is not connected; the gateway must be ready before replies can be delivered`);
-    }
-    const reply = replyTargetOf(target);
-    let messageId;
-    let passiveUsed = reply.msgId === void 0 ? PASSIVE_REPLY_LIMIT : this.passiveUsed.get(reply.msgId) ?? 0;
-    for (const part of parts) {
-      const passive = reply.msgId !== void 0 && passiveUsed < PASSIVE_REPLY_LIMIT;
-      if (passive) passiveUsed += 1;
-      const partTarget = passive ? reply : { scope: reply.scope, targetId: reply.targetId };
-      const id = await this.sendPart(bot, partTarget, target, part);
-      if (id !== void 0) messageId = id;
-    }
-    if (reply.msgId !== void 0) this.rememberPassiveUsage(reply.msgId, passiveUsed);
-    return { parts: parts.length, at: this.now(), ...messageId === void 0 ? {} : { messageId } };
-  }
-  /** 记账并限制表大小：msg_id 是用完即弃的，长跑进程不能无限增长。 */
-  rememberPassiveUsage(msgId, used) {
-    this.passiveUsed.delete(msgId);
-    this.passiveUsed.set(msgId, used);
-    while (this.passiveUsed.size > PASSIVE_USAGE_ENTRIES) {
-      const oldest = this.passiveUsed.keys().next();
-      if (oldest.done === true) return;
-      this.passiveUsed.delete(oldest.value);
-    }
-  }
-  /**
-   * 单条发送失败必须上抛：静默吞掉会让「模型答了但用户没收到」变成不可见的故障。
-   * markdown 能力是账号级配置：没有该能力的机器人发 msg_type=2 会被平台拒绝，
-   * 因此降级到 `sendText` 而不是让整轮回复失败（审查 P1-4）。
-   */
-  async sendPart(bot, reply, target, part) {
-    try {
-      const sent = this.markdownSupport ? await bot.sendMarkdown(reply, part.text) : await bot.sendText(reply, part.text);
-      return nonEmpty(sent.id);
-    } catch (error) {
-      throw new QQChannelError(
-        "QQ_SEND_FAILED",
-        `qq send part ${part.index + 1}/${part.total} to ${target.scope}/${target.peerId} failed: ${messageOf8(error)}`,
-        { cause: error }
-      );
-    }
-  }
-  attach(bot, gate) {
-    bot.on("ready", () => {
-      this.markOnline(bot, gate);
-    });
-    bot.on("resumed", () => {
-      this.markOnline(bot, gate);
-    });
-    bot.on("disconnected", (event) => {
-      this.onlineSince = void 0;
-      this.noteFailure(bot, `QQ gateway disconnected: ${describeDisconnect(event)}`);
-    });
-    bot.on("error", (error) => {
-      this.noteFailure(bot, `QQ channel error: ${messageOf8(error)}`);
-    });
-    bot.on("message", (_ctx, msg) => this.enqueue(msg));
-  }
-  markOnline(bot, gate) {
-    if (this.bot !== bot) return;
-    this.starting = false;
-    this.lastError = void 0;
-    this.onlineSince = this.now();
-    gate.settle(void 0);
-    this.logger?.info?.(`dsh-soulmojito im qq/${this.accountId}: gateway ready`);
-  }
-  noteFailure(bot, reason) {
-    if (this.bot !== bot) return;
-    this.lastError = reason;
-    this.logger?.warn?.(`dsh-soulmojito im qq/${this.accountId}: ${reason}`);
-  }
-  failStartup(bot, gate, reason) {
-    if (this.bot !== bot || gate.settled) return;
-    gate.settle(new QQChannelError("QQ_START_FAILED", `qq account '${this.accountId}' failed to start: ${reason}`));
-  }
-  dropStartup(bot, reason) {
-    if (this.bot === bot) {
-      this.bot = void 0;
-      this.ready = void 0;
-      this.starting = false;
-      this.onlineSince = void 0;
-      this.lastError = reason;
-      this.detachAbort();
-    }
-    bot.stop();
-  }
-  detachAbort() {
-    if (this.signal !== void 0 && this.abortListener !== void 0) {
-      this.signal.removeEventListener("abort", this.abortListener);
-    }
-    this.signal = void 0;
-    this.abortListener = void 0;
-  }
-  enqueue(msg) {
-    const next = this.inboundChain.then(() => this.deliver(msg));
-    this.inboundChain = next.catch((error) => {
-      this.logger?.warn?.(`dsh-soulmojito im qq/${this.accountId}: inbound message failed: ${messageOf8(error)}`);
-    });
-    return this.inboundChain;
-  }
-  async deliver(msg) {
-    if (msg.kind !== "c2c" && msg.kind !== "group") {
-      this.logger?.debug?.(`dsh-soulmojito im qq/${this.accountId}: ignored a ${msg.kind} message`);
-      return;
-    }
-    const inbound = this.inboundOf(msg);
-    if (inbound.scope === "group" && await this.groupRequireMention() && !qqWasMentioned(msg)) return;
-    await this.router.handle(inbound);
-  }
-  inboundOf(msg) {
-    const replyTarget = msg.replyTarget;
-    if (replyTarget === void 0 || replyTarget.scope !== "c2c" && replyTarget.scope !== "group") {
-      throw new QQChannelError("QQ_BAD_MESSAGE", `qq account '${this.accountId}' got a message without a usable replyTarget`);
-    }
-    const peerId = replyTarget.targetId.trim();
-    if (peerId === "") {
-      throw new QQChannelError("QQ_BAD_MESSAGE", `qq account '${this.accountId}' got a message with an empty replyTarget.targetId`);
-    }
-    const scope = replyTarget.scope === "group" ? "group" : "private";
-    const senderId = nonEmpty(msg.senderId) ?? peerId;
-    const senderName = nonEmpty(msg.senderName) ?? openidLabel(senderId);
-    const messageId = nonEmpty(msg.messageId);
-    const receivedAt = this.now();
-    const dedupeId = messageId ?? randomUUID12();
-    return {
-      channel: "qq",
-      accountId: this.accountId,
-      scope,
-      peerId,
-      senderId,
-      senderName,
-      text: typeof msg.content === "string" ? msg.content : "",
-      // 媒体（图片/语音/文件）留到 M5：本轮不下载、不上传，附件消息只按文本投递。
-      media: [],
-      // 被动回复锚点是本轮触发消息本身，不是它引用的消息。
-      ...messageId === void 0 ? {} : { replyTo: messageId },
-      dedupeKey: imDedupeKey("qq", this.accountId, scope, peerId, dedupeId),
-      receivedAt
-    };
-  }
-};
-function qqWasMentioned(msg) {
-  if (msg.rawEventType === "GROUP_AT_MESSAGE_CREATE") return true;
-  return Array.isArray(msg.mentions) && msg.mentions.some((entry) => entry?.is_you === true);
-}
-function replyTargetOf(target) {
-  return {
-    scope: target.scope === "group" ? "group" : "c2c",
-    targetId: target.peerId,
-    ...target.replyTo === void 0 ? {} : { msgId: target.replyTo }
-  };
-}
-function requireSecret(secret, key, accountId) {
-  const value = secret[key];
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new QQChannelError(
-      "QQ_BAD_SECRET",
-      `qq account '${accountId}' has no ${key}; secret.${key} must be a non-empty string`
-    );
-  }
-  return value.trim();
-}
-function openidLabel(openid) {
-  return openid.slice(0, OPENID_LABEL_LENGTH);
-}
-function nonEmpty(value) {
-  if (typeof value !== "string") return void 0;
-  const trimmed = value.trim();
-  return trimmed === "" ? void 0 : trimmed;
-}
-function describeDisconnect(event) {
-  return `code=${event.code} reason='${event.reason}' willReconnect=${event.willReconnect}`;
-}
-function qqLoggerOf(logger) {
-  return {
-    info: (message, meta) => {
-      logger?.info?.(message, meta);
-    },
-    warn: (message, meta) => {
-      logger?.warn?.(message, meta);
-    },
-    error: (message, meta) => {
-      logger?.error?.(message, meta);
-    },
-    debug: (message, meta) => {
-      logger?.debug?.(message, meta);
-    }
-  };
-}
-function withTimeout2(promise, timeoutMs, message) {
-  return new Promise((resolve8, reject) => {
-    const timer = setTimeout(() => {
-      reject(new QQChannelError("QQ_START_TIMEOUT", message));
-    }, timeoutMs);
-    timer.unref?.();
-    promise.then(
-      () => {
-        clearTimeout(timer);
-        resolve8();
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      }
-    );
-  });
-}
-function messageOf8(error) {
-  return error instanceof Error ? error.message : String(error);
-}
-
-// packages/plugin/src/im/qq/sdk.ts
-init_dsh_home();
-import { stat as stat2 } from "node:fs/promises";
-import { join as join21 } from "node:path";
-import { pathToFileURL as pathToFileURL5 } from "node:url";
-var QQ_SDK_PACKAGE = "@tencent-connect/qqbot-nodejs";
-var QQ_CONNECTOR_PACKAGE = "@tencent-connect/qqbot-connector";
-var QQ_SDK_VERSION = "1.0.5";
-var QQ_CONNECTOR_VERSION = "1.2.0";
-var QQ_SDK_ENTRY = "dist/index.js";
-var QQ_CONNECTOR_ENTRY = "dist/esm/index.js";
-var QqRuntimeError = class extends Error {
-  code;
-  path;
-  constructor(code, message, path12, options) {
-    super(message, options);
-    this.name = "QqRuntimeError";
-    this.code = code;
-    this.path = path12;
-  }
-};
-function qqRuntimeRoot() {
-  return tavernDataRoot("im", "runtime");
-}
-function qqInstallCommand(root) {
-  return `cd "${root}" && pnpm add ${QQ_SDK_PACKAGE}@${QQ_SDK_VERSION} ${QQ_CONNECTOR_PACKAGE}@${QQ_CONNECTOR_VERSION}`;
-}
-async function qqRuntimeStatus() {
-  const root = qqRuntimeRoot();
-  const missing = [];
-  for (const dependency of [
-    { name: QQ_SDK_PACKAGE, entry: QQ_SDK_ENTRY, version: QQ_SDK_VERSION },
-    { name: QQ_CONNECTOR_PACKAGE, entry: QQ_CONNECTOR_ENTRY, version: QQ_CONNECTOR_VERSION }
-  ]) {
-    if (!await qqFileExists(join21(root, "node_modules", dependency.name, dependency.entry), root)) {
-      missing.push(`${dependency.name}@${dependency.version}`);
-    }
-  }
-  if (missing.length === 0) return { installed: true };
-  return {
-    installed: false,
-    reason: `QQ runtime packages are missing from ${root}: ${missing.join(", ")}. Install them with: ${qqInstallCommand(root)}`
-  };
-}
-async function loadQqSdk() {
-  const root = qqRuntimeRoot();
-  const entry = join21(root, "node_modules", QQ_SDK_PACKAGE, QQ_SDK_ENTRY);
-  const module = await qqImportRuntime(entry, QQ_SDK_PACKAGE, root);
-  const bot = module["QQBot"];
-  if (typeof bot !== "function") {
-    throw new QqRuntimeError(
-      "QQ_RUNTIME_INVALID",
-      `${QQ_SDK_PACKAGE} has no QQBot constructor at ${entry}; reinstall with: ${qqInstallCommand(root)}`,
-      entry
-    );
-  }
-  const msgType = module["MsgType"];
-  if (!qqIsRecord(msgType)) {
-    throw new QqRuntimeError(
-      "QQ_RUNTIME_INVALID",
-      `${QQ_SDK_PACKAGE} has no MsgType table at ${entry}; reinstall with: ${qqInstallCommand(root)}`,
-      entry
-    );
-  }
-  return { QQBot: bot, MsgType: msgType };
-}
-async function loadQqConnector() {
-  const root = qqRuntimeRoot();
-  const entry = join21(root, "node_modules", QQ_CONNECTOR_PACKAGE, QQ_CONNECTOR_ENTRY);
-  const module = await qqImportRuntime(entry, QQ_CONNECTOR_PACKAGE, root);
-  const startQrConnect = module["startQrConnect"];
-  if (typeof startQrConnect !== "function") {
-    throw new QqRuntimeError(
-      "QQ_RUNTIME_INVALID",
-      `${QQ_CONNECTOR_PACKAGE} has no startQrConnect() at ${entry}; reinstall with: ${qqInstallCommand(root)}`,
-      entry
-    );
-  }
-  return startQrConnect;
-}
-async function qqImportRuntime(entry, packageName, root) {
-  try {
-    return await import(pathToFileURL5(entry).href);
-  } catch (cause) {
-    throw new QqRuntimeError(
-      "QQ_RUNTIME_MISSING",
-      `${packageName} could not be loaded from ${entry}: ${qqReasonOf(cause)}. If it is not installed, run: ${qqInstallCommand(root)}`,
-      entry,
-      { cause }
-    );
-  }
-}
-async function qqFileExists(path12, root) {
-  try {
-    return (await stat2(path12)).isFile();
-  } catch (cause) {
-    const errno = qqErrnoOf(cause);
-    if (errno === "ENOENT" || errno === "ENOTDIR") return false;
-    throw new QqRuntimeError(
-      "QQ_RUNTIME_MISSING",
-      `cannot inspect ${path12}: ${qqReasonOf(cause)}. Fix the directory permissions, then retry; the packages install with: ${qqInstallCommand(root)}`,
-      path12,
-      { cause }
-    );
-  }
-}
-function qqErrnoOf(cause) {
-  if (typeof cause !== "object" || cause === null) return void 0;
-  const code = cause.code;
-  return typeof code === "string" ? code : void 0;
-}
-function qqIsRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function qqReasonOf(cause) {
-  return cause instanceof Error ? cause.message : String(cause);
-}
+import { randomUUID as randomUUID13 } from "node:crypto";
 
 // packages/plugin/src/im/settings.ts
 var IM_CHUNK_DEFAULTS = {
@@ -48219,10 +47773,1077 @@ function assertImSettingsUsable(settings) {
   }
 }
 
-// packages/plugin/src/im/store.ts
-import { randomUUID as randomUUID13 } from "node:crypto";
+// packages/plugin/src/im/qq/delivery.ts
+var PASSIVE_REPLY_LIMIT = 4;
+var GROUP_PART_MAX_CHARS = IM_CHUNK_DEFAULTS["qq"];
+function planGroupParts(texts, maxCharsPerPart) {
+  if (texts.length <= PASSIVE_REPLY_LIMIT) return { parts: [...texts], overflow: false };
+  const width = Math.max(1, Math.floor(maxCharsPerPart));
+  const joined = texts.join("\n\n");
+  if (joined === "") return { parts: [], overflow: false };
+  const overflow = joined.length > width * PASSIVE_REPLY_LIMIT;
+  const chunkWidth = overflow ? width : Math.max(1, Math.ceil(joined.length / PASSIVE_REPLY_LIMIT));
+  return { parts: qqChunkText(joined, chunkWidth), overflow };
+}
+function qqChunkText(text, width) {
+  const chunks = [];
+  let start = 0;
+  while (start < text.length) {
+    let end = Math.min(text.length, start + width);
+    if (end < text.length && isLowSurrogate(text.charCodeAt(end)) && isHighSurrogate(text.charCodeAt(end - 1))) {
+      end += 1;
+    }
+    chunks.push(text.slice(start, end));
+    start = end;
+  }
+  return chunks;
+}
+function isHighSurrogate(code) {
+  return code >= 55296 && code <= 56319;
+}
+function isLowSurrogate(code) {
+  return code >= 56320 && code <= 57343;
+}
+function planDeliveries(scope, parts) {
+  const planned = scope === "group" ? planGroupDelivery(parts) : { parts, overflow: false };
+  const deliveries = [];
+  for (const part of planned.parts) {
+    if (part.kind === "text") {
+      deliveries.push({ kind: "text", text: part.text, index: part.index, total: part.total });
+      continue;
+    }
+    const caption = nonEmpty(part.caption);
+    if (caption !== void 0) deliveries.push({ kind: "text", text: caption, index: part.index, total: part.total });
+    deliveries.push({ kind: "media", part });
+  }
+  return { deliveries, overflow: planned.overflow };
+}
+function planGroupDelivery(parts) {
+  const texts = [];
+  for (const part of parts) {
+    if (part.kind !== "text") return { parts, overflow: false };
+    texts.push(part.text);
+  }
+  const plan = planGroupParts(texts, GROUP_PART_MAX_CHARS);
+  if (plan.parts.length === texts.length) return { parts, overflow: plan.overflow };
+  return {
+    parts: plan.parts.map((text, index) => ({ kind: "text", text, index, total: plan.parts.length })),
+    overflow: plan.overflow
+  };
+}
+function nonEmpty(value) {
+  if (typeof value !== "string") return void 0;
+  const trimmed = value.trim();
+  return trimmed === "" ? void 0 : trimmed;
+}
+
+// packages/plugin/src/im/qq/inbound-media.ts
+function qqAttachmentsOf(msg) {
+  if (msg.attachments !== void 0) return Array.isArray(msg.attachments) ? msg.attachments : [];
+  const raw = msg.raw;
+  if (typeof raw !== "object" || raw === null) return [];
+  const attachments = raw.attachments;
+  return Array.isArray(attachments) ? attachments : [];
+}
+function qqMediaOfAttachments(attachments) {
+  const media = [];
+  for (const attachment of attachments) {
+    const ref = qqMediaRefOf(attachment);
+    if (ref !== void 0) media.push(ref);
+  }
+  return media;
+}
+function qqMediaRefOf(attachment) {
+  const kind = qqMediaKindOf(attachment.content_type);
+  const url = kind === "voice" ? nonEmpty2(attachment.voice_wav_url) ?? nonEmpty2(attachment.url) : nonEmpty2(attachment.url);
+  if (url === void 0) return void 0;
+  const name2 = nonEmpty2(attachment.filename);
+  const size = typeof attachment.size === "number" && Number.isFinite(attachment.size) && attachment.size >= 0 ? Math.round(attachment.size) : void 0;
+  const transcript = nonEmpty2(attachment.asr_refer_text);
+  return {
+    kind,
+    url,
+    ...name2 === void 0 ? {} : { name: name2 },
+    ...size === void 0 ? {} : { size },
+    ...transcript === void 0 ? {} : { transcript }
+  };
+}
+function qqTranscriptsOf(attachments) {
+  const lines = [];
+  for (const attachment of attachments) {
+    const text = nonEmpty2(attachment.asr_refer_text);
+    if (text !== void 0) lines.push(text);
+  }
+  return lines.join("\n");
+}
+function qqMediaKindOf(contentType) {
+  const type = typeof contentType === "string" ? contentType.trim().toLowerCase() : "";
+  if (type.startsWith("image/")) return "image";
+  if (type.startsWith("video/")) return "video";
+  if (type.startsWith("audio/") || type.startsWith("voice/") || type === "voice") return "voice";
+  return "file";
+}
+function nonEmpty2(value) {
+  if (typeof value !== "string") return void 0;
+  const trimmed = value.trim();
+  return trimmed === "" ? void 0 : trimmed;
+}
+
+// packages/plugin/src/im/media-store.ts
+import { randomUUID as randomUUID12 } from "node:crypto";
 import { promises as fs19 } from "node:fs";
-import { dirname as dirname14, join as join22, resolve as resolve5 } from "node:path";
+import { join as join21, resolve as resolve5 } from "node:path";
+var IM_MEDIA_ROOT_DIR = "im-media";
+var IM_MEDIA_EXTENSIONS = [
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "bmp",
+  "mp4",
+  "mov",
+  "mp3",
+  "wav",
+  "silk",
+  "amr",
+  "ogg",
+  "pdf",
+  "txt",
+  "md",
+  "json",
+  "zip",
+  "doc",
+  "docx",
+  "xls",
+  "xlsx",
+  "ppt",
+  "pptx"
+];
+var ALLOWED_EXTENSIONS = new Set(IM_MEDIA_EXTENSIONS);
+var SAFE_OWNER_PART = /^[A-Za-z0-9._-]+$/;
+var FILE_MODE = 384;
+var ImMediaStoreError = class extends Error {
+  code;
+  constructor(code, message, options) {
+    super(message, options);
+    this.name = "ImMediaStoreError";
+    this.code = code;
+  }
+};
+function isImMediaExtension(value) {
+  return ALLOWED_EXTENSIONS.has(value.trim().replace(/^\.+/, "").toLowerCase());
+}
+function openImMediaStore(options) {
+  if (!Number.isSafeInteger(options.maxBytes) || options.maxBytes <= 0) {
+    throw new TypeError(`openImMediaStore needs a positive integer maxBytes, got ${String(options.maxBytes)}`);
+  }
+  const maxBytes = options.maxBytes;
+  async function root() {
+    const workspace = (await options.workspaceRoot()).trim();
+    if (workspace === "") throw new ImMediaStoreError("IM_MEDIA_IO", "the internal workspace root is empty; media cannot be stored");
+    return join21(resolve5(workspace), IM_MEDIA_ROOT_DIR);
+  }
+  return {
+    async save(request) {
+      const channel = requireOwnerPart(request.channel, "channel");
+      const accountId = requireOwnerPart(request.accountId, "accountId");
+      const size = request.bytes.byteLength;
+      if (size > maxBytes) {
+        throw new ImMediaStoreError(
+          "IM_MEDIA_TOO_LARGE",
+          `${channel}/${accountId} media is ${size} bytes; the cap is ${maxBytes} bytes`
+        );
+      }
+      const extension = requireExtension(request.extension);
+      const directory = join21(await root(), `${channel}-${accountId}`);
+      const file = join21(directory, `${randomUUID12()}.${extension}`);
+      try {
+        await fs19.mkdir(directory, { recursive: true });
+        await fs19.writeFile(file, request.bytes, { mode: FILE_MODE });
+      } catch (cause) {
+        await fs19.rm(file, { force: true }).catch(() => void 0);
+        throw new ImMediaStoreError("IM_MEDIA_IO", `failed to save ${channel}/${accountId} media to ${file}: ${reasonOf(cause)}`, {
+          cause
+        });
+      }
+      return file;
+    },
+    async cleanupOlderThan(ms) {
+      if (!Number.isFinite(ms) || ms < 0) {
+        throw new TypeError(`cleanupOlderThan needs a non-negative finite TTL, got ${String(ms)}`);
+      }
+      return sweep(await root(), options.now() - ms);
+    },
+    async remove(channel, accountId) {
+      const ownerChannel = requireOwnerPart(channel, "channel");
+      const ownerAccount = requireOwnerPart(accountId, "accountId");
+      const directory = join21(await root(), `${ownerChannel}-${ownerAccount}`);
+      try {
+        const stats = await fs19.stat(directory);
+        if (!stats.isDirectory()) return false;
+      } catch (cause) {
+        if (isErrno(cause, "ENOENT")) return false;
+        throw new ImMediaStoreError("IM_MEDIA_IO", `failed to inspect ${directory}: ${reasonOf(cause)}`, { cause });
+      }
+      try {
+        await fs19.rm(directory, { recursive: true, force: true });
+        return true;
+      } catch (cause) {
+        throw new ImMediaStoreError("IM_MEDIA_IO", `failed to delete ${directory}: ${reasonOf(cause)}`, { cause });
+      }
+    }
+  };
+}
+function requireOwnerPart(value, label) {
+  const part = value.trim();
+  if (part === "" || part === "." || part === ".." || part.includes("/") || part.includes("\\") || !SAFE_OWNER_PART.test(part)) {
+    throw new ImMediaStoreError(
+      "IM_MEDIA_BAD_OWNER",
+      `im media store got an illegal ${label} ${JSON.stringify(value)}: only [A-Za-z0-9._-] is allowed and it must name one directory`
+    );
+  }
+  return part;
+}
+function requireExtension(value) {
+  const extension = value.trim().replace(/^\.+/, "").toLowerCase();
+  if (!ALLOWED_EXTENSIONS.has(extension)) {
+    throw new ImMediaStoreError(
+      "IM_MEDIA_BAD_EXTENSION",
+      `im media store refused extension ${JSON.stringify(value)}; allowed extensions: ${IM_MEDIA_EXTENSIONS.join(", ")}`
+    );
+  }
+  return extension;
+}
+async function sweep(directory, cutoff) {
+  let entries;
+  try {
+    entries = await fs19.readdir(directory, { withFileTypes: true });
+  } catch (cause) {
+    if (isErrno(cause, "ENOENT")) return 0;
+    throw new ImMediaStoreError("IM_MEDIA_IO", `failed to list ${directory} while sweeping expired media: ${reasonOf(cause)}`, {
+      cause
+    });
+  }
+  let removed = 0;
+  for (const entry of entries) {
+    const path12 = join21(directory, entry.name);
+    if (entry.isDirectory()) {
+      removed += await sweep(path12, cutoff);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    try {
+      const stats = await fs19.stat(path12);
+      if (stats.mtimeMs >= cutoff) continue;
+      await fs19.unlink(path12);
+      removed += 1;
+    } catch (cause) {
+      if (isErrno(cause, "ENOENT")) continue;
+      throw new ImMediaStoreError("IM_MEDIA_IO", `failed to delete expired media ${path12}: ${reasonOf(cause)}`, { cause });
+    }
+  }
+  return removed;
+}
+function isErrno(cause, code) {
+  return typeof cause === "object" && cause !== null && cause.code === code;
+}
+function reasonOf(cause) {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+// packages/plugin/src/im/media-fetch.ts
+var ImMediaFetchError = class extends Error {
+  code;
+  constructor(code, message, options) {
+    super(message, options);
+    this.name = "ImMediaFetchError";
+    this.code = code;
+  }
+};
+var EXTENSION_BY_TYPE = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/jpg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+  "image/bmp": "bmp",
+  "video/mp4": "mp4",
+  "video/quicktime": "mov",
+  "audio/mpeg": "mp3",
+  "audio/wav": "wav",
+  "audio/x-wav": "wav",
+  "audio/amr": "amr",
+  "audio/ogg": "ogg",
+  "application/pdf": "pdf",
+  "text/plain": "txt",
+  "application/json": "json",
+  "application/zip": "zip"
+};
+var FALLBACK_EXTENSION = {
+  image: "png",
+  video: "mp4",
+  voice: "mp3",
+  file: "txt"
+};
+async function fetchInboundMedia(ref, options) {
+  if (ref.url === void 0) return ref;
+  const url = parseHttpUrl(ref.url);
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, options.timeoutMs);
+  timer.unref?.();
+  const onAbort = () => {
+    controller.abort();
+  };
+  if (options.signal !== void 0) {
+    if (options.signal.aborted) controller.abort();
+    else options.signal.addEventListener("abort", onAbort, { once: true });
+  }
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) {
+      throw new ImMediaFetchError(
+        "IM_MEDIA_FETCH_HTTP",
+        `downloading ${ref.kind} ${url.host} failed with HTTP ${response.status}`
+      );
+    }
+    const declared = Number.parseInt(response.headers.get("content-length") ?? "", 10);
+    if (Number.isSafeInteger(declared) && declared > options.maxBytes) {
+      await response.body?.cancel().catch(() => void 0);
+      throw new ImMediaFetchError(
+        "IM_MEDIA_FETCH_TOO_LARGE",
+        `the remote ${ref.kind} declares ${declared} bytes; the cap is ${options.maxBytes} bytes`
+      );
+    }
+    const bytes = await readBoundedBody(response, options.maxBytes, ref.kind);
+    if (bytes.byteLength === 0) {
+      throw new ImMediaFetchError("IM_MEDIA_FETCH_HTTP", `the remote ${ref.kind} is empty`);
+    }
+    const extension = extensionOf(ref, url, response.headers.get("content-type"));
+    const localPath = await options.media.save({
+      channel: options.channel,
+      accountId: options.accountId,
+      bytes,
+      extension,
+      ...ref.name === void 0 ? {} : { originalName: ref.name }
+    });
+    return { ...ref, localPath };
+  } finally {
+    clearTimeout(timer);
+    options.signal?.removeEventListener("abort", onAbort);
+  }
+}
+async function readBoundedBody(response, cap, kind) {
+  const reader = response.body?.getReader();
+  if (reader === void 0) {
+    const buffer = new Uint8Array(await response.arrayBuffer());
+    if (buffer.byteLength > cap) {
+      throw new ImMediaFetchError("IM_MEDIA_FETCH_TOO_LARGE", `the remote ${kind} is ${buffer.byteLength} bytes; the cap is ${cap} bytes`);
+    }
+    return buffer;
+  }
+  const chunks = [];
+  let total = 0;
+  try {
+    for (; ; ) {
+      const next = await reader.read();
+      if (next.done) break;
+      total += next.value.byteLength;
+      if (total > cap) {
+        await reader.cancel().catch(() => void 0);
+        throw new ImMediaFetchError("IM_MEDIA_FETCH_TOO_LARGE", `the remote ${kind} exceeds ${cap} bytes`);
+      }
+      chunks.push(next.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return merged;
+}
+function parseHttpUrl(raw) {
+  let url;
+  try {
+    url = new URL(raw);
+  } catch (cause) {
+    throw new ImMediaFetchError("IM_MEDIA_FETCH_BAD_URL", `media URL '${raw}' is not a valid absolute URL`, { cause });
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new ImMediaFetchError("IM_MEDIA_FETCH_BAD_URL", `media URL '${raw}' uses protocol '${url.protocol}'; expected http(s)`);
+  }
+  return url;
+}
+function extensionOf(ref, url, contentType) {
+  for (const candidate of [ref.name, decodeURIComponent(url.pathname)]) {
+    if (candidate === void 0 || candidate === "") continue;
+    const match = /\.([A-Za-z0-9]{1,8})$/.exec(candidate);
+    if (match === null) continue;
+    const extension = match[1].toLowerCase();
+    if (isImMediaExtension(extension)) return extension;
+  }
+  const type = contentType?.split(";")[0]?.trim().toLowerCase() ?? "";
+  const byType = EXTENSION_BY_TYPE[type];
+  if (byType !== void 0) return byType;
+  return FALLBACK_EXTENSION[ref.kind];
+}
+
+// packages/plugin/src/im/qq/channel.ts
+var START_TIMEOUT_MS = 3e4;
+var QQ_MEDIA_MAX_BYTES = 20 * 1024 * 1024;
+var QQ_MEDIA_TIMEOUT_MS = 2e4;
+var OPENID_LABEL_LENGTH = 8;
+var PASSIVE_USAGE_ENTRIES = 200;
+var QQChannelError = class extends Error {
+  code;
+  constructor(code, message, options) {
+    super(message, options);
+    this.name = "QQChannelError";
+    this.code = code;
+  }
+};
+function createStartupGate() {
+  let resolveGate;
+  let rejectGate;
+  let settled = false;
+  const promise = new Promise((resolve9, reject) => {
+    resolveGate = resolve9;
+    rejectGate = reject;
+  });
+  return {
+    promise,
+    get settled() {
+      return settled;
+    },
+    settle(error) {
+      if (settled) return;
+      settled = true;
+      if (error === void 0) resolveGate?.();
+      else rejectGate?.(error);
+    }
+  };
+}
+var QQChannel = class {
+  channel = "qq";
+  accountId;
+  appId;
+  appSecret;
+  router;
+  groupRequireMention;
+  createBot;
+  markdownSupport;
+  media;
+  now;
+  logger;
+  bot;
+  ready;
+  starting = false;
+  onlineSince;
+  lastError;
+  signal;
+  abortListener;
+  /** 同一账号的入站按到达顺序串行：群聊并发事件不得乱序，去重才可靠。 */
+  inboundChain = Promise.resolve();
+  /** 同一账号的出站按整轮串行：两轮回复并发时不得出现 A1,B1,A2,B2 的交错碎片。 */
+  sendChain = Promise.resolve();
+  /** 每个被动回复 msg_id 已用掉的条数：额度跨 send 累计，不是每次 send 归零。 */
+  passiveUsed = /* @__PURE__ */ new Map();
+  constructor(options) {
+    this.appId = requireSecret(options.secret, "appId", options.accountId);
+    this.appSecret = requireSecret(options.secret, "appSecret", options.accountId);
+    this.accountId = options.accountId;
+    this.router = options.router;
+    this.groupRequireMention = options.groupRequireMention;
+    this.createBot = options.createBot;
+    this.markdownSupport = options.markdownSupport;
+    this.media = options.media;
+    this.now = options.now;
+    this.logger = options.logger;
+  }
+  async start(signal) {
+    if (this.bot !== void 0) return;
+    if (signal.aborted) {
+      throw new QQChannelError("QQ_CLOSED", `qq account '${this.accountId}' cannot start: signal is already aborted`);
+    }
+    const bot = this.createBot({
+      appId: this.appId,
+      appSecret: this.appSecret,
+      accountId: this.accountId,
+      transport: "websocket",
+      logger: qqLoggerOf(this.logger)
+    });
+    this.starting = true;
+    this.lastError = void 0;
+    this.signal = signal;
+    this.abortListener = () => {
+      void this.stop();
+    };
+    signal.addEventListener("abort", this.abortListener, { once: true });
+    this.bot = bot;
+    const gate = createStartupGate();
+    this.ready = gate;
+    this.attach(bot, gate);
+    try {
+      void bot.start().then(
+        () => {
+          this.failStartup(bot, gate, "the QQ gateway closed before the bot became ready");
+        },
+        (error) => {
+          this.failStartup(bot, gate, `the QQ gateway refused to start: ${messageOf8(error)}`);
+          this.noteFailure(bot, `QQ gateway start failed: ${messageOf8(error)}`);
+        }
+      );
+      await withTimeout2(gate.promise, START_TIMEOUT_MS, `qq account '${this.accountId}' was not ready within ${START_TIMEOUT_MS}ms`);
+    } catch (error) {
+      const failure = error instanceof QQChannelError ? error : new QQChannelError("QQ_START_FAILED", `qq account '${this.accountId}' failed to start: ${messageOf8(error)}`, { cause: error });
+      this.dropStartup(bot, failure.message);
+      throw failure;
+    }
+  }
+  async stop() {
+    const bot = this.bot;
+    const gate = this.ready;
+    this.bot = void 0;
+    this.ready = void 0;
+    this.starting = false;
+    this.onlineSince = void 0;
+    this.lastError = void 0;
+    this.detachAbort();
+    gate?.settle(new QQChannelError("QQ_CLOSED", `qq account '${this.accountId}' stopped before it became ready`));
+    bot?.stop();
+  }
+  status() {
+    if (this.lastError !== void 0) return { state: "error", message: this.lastError };
+    if (this.starting) return { state: "starting" };
+    if (this.onlineSince !== void 0) return { state: "online", since: this.onlineSince };
+    return { state: "idle" };
+  }
+  async send(target, parts) {
+    if (target.channel !== "qq") {
+      throw new QQChannelError("QQ_BAD_TARGET", `qq channel cannot send to channel '${target.channel}'`);
+    }
+    if (target.accountId !== this.accountId) {
+      throw new QQChannelError(
+        "QQ_BAD_TARGET",
+        `qq account '${target.accountId}' cannot send through account '${this.accountId}'`
+      );
+    }
+    if (parts.length === 0) return { parts: 0, at: this.now() };
+    const queued = this.sendChain.then(() => this.sendParts(target, parts));
+    this.sendChain = queued.then(() => void 0, () => void 0);
+    return queued;
+  }
+  async sendParts(target, parts) {
+    const bot = this.bot;
+    if (bot === void 0) {
+      throw new QQChannelError("QQ_CLOSED", `qq account '${this.accountId}' is not connected; the gateway must be ready before replies can be delivered`);
+    }
+    const reply = replyTargetOf(target);
+    const plan = planDeliveries(target.scope, parts);
+    if (plan.overflow) {
+      this.logger?.warn?.(
+        `dsh-soulmojito im qq/${this.accountId}: group reply exceeds the ${PASSIVE_REPLY_LIMIT} passive replies (${plan.deliveries.length} parts); the tail is sent as proactive push`
+      );
+    }
+    let messageId;
+    let passiveUsed = reply.msgId === void 0 ? PASSIVE_REPLY_LIMIT : this.passiveUsed.get(reply.msgId) ?? 0;
+    try {
+      for (const delivery of plan.deliveries) {
+        const passive = reply.msgId !== void 0 && passiveUsed < PASSIVE_REPLY_LIMIT;
+        if (passive) passiveUsed += 1;
+        const partTarget = passive ? reply : { scope: reply.scope, targetId: reply.targetId };
+        const id = delivery.kind === "text" ? await this.sendTextPart(bot, partTarget, target, delivery.text, delivery.index, delivery.total) : await this.sendMediaPart(bot, partTarget, target, delivery.part);
+        if (id !== void 0) messageId = id;
+      }
+    } finally {
+      if (reply.msgId !== void 0) this.rememberPassiveUsage(reply.msgId, passiveUsed);
+    }
+    return { parts: parts.length, at: this.now(), ...messageId === void 0 ? {} : { messageId } };
+  }
+  /** 记账并限制表大小：msg_id 是用完即弃的，长跑进程不能无限增长。 */
+  rememberPassiveUsage(msgId, used) {
+    this.passiveUsed.delete(msgId);
+    this.passiveUsed.set(msgId, used);
+    while (this.passiveUsed.size > PASSIVE_USAGE_ENTRIES) {
+      const oldest = this.passiveUsed.keys().next();
+      if (oldest.done === true) return;
+      this.passiveUsed.delete(oldest.value);
+    }
+  }
+  /**
+   * 单条发送失败必须上抛：静默吞掉会让「模型答了但用户没收到」变成不可见的故障。
+   * markdown 能力是账号级配置：没有该能力的机器人发 msg_type=2 会被平台拒绝，
+   * 因此降级到 `sendText` 而不是让整轮回复失败（审查 P1-4）。
+   */
+  async sendTextPart(bot, reply, target, text, index, total) {
+    try {
+      const sent = this.markdownSupport ? await bot.sendMarkdown(reply, text) : await bot.sendText(reply, text);
+      return nonEmpty3(sent.id);
+    } catch (error) {
+      throw new QQChannelError(
+        "QQ_SEND_FAILED",
+        `qq send part ${index + 1}/${total} to ${this.peerLabel(target)} failed: ${messageOf8(error)}`,
+        { cause: error }
+      );
+    }
+  }
+  /**
+   * 媒体发送：源与落点先解析，再按 kind 调 SDK 的便捷方法。缺方法/缺源是
+   * 可操作错误（QQChannelError 原样上抛），平台拒绝才是 QQ_SEND_FAILED 包装。
+   */
+  async sendMediaPart(bot, reply, target, part) {
+    const source = mediaSourceOf(part);
+    try {
+      const sent = await qqSendMedia(bot, reply, part, source);
+      return nonEmpty3(sent.message?.id);
+    } catch (error) {
+      if (error instanceof QQChannelError) throw error;
+      throw new QQChannelError(
+        "QQ_SEND_FAILED",
+        `qq send ${part.kind} part ${part.index + 1}/${part.total} to ${this.peerLabel(target)} failed: ${messageOf8(error)}`,
+        { cause: error }
+      );
+    }
+  }
+  /** 日志里的对端标签：openid 不进日志环/面板，只出现稳定 alias。 */
+  peerLabel(target) {
+    return imPeerAlias("qq", target.scope, imPeerKey("qq", this.accountId, target.scope, target.peerId));
+  }
+  attach(bot, gate) {
+    bot.on("ready", () => {
+      this.markOnline(bot, gate);
+    });
+    bot.on("resumed", () => {
+      this.markOnline(bot, gate);
+    });
+    bot.on("disconnected", (event) => {
+      this.onlineSince = void 0;
+      this.noteFailure(bot, `QQ gateway disconnected: ${describeDisconnect(event)}`);
+    });
+    bot.on("error", (error) => {
+      this.noteFailure(bot, `QQ channel error: ${messageOf8(error)}`);
+    });
+    bot.on("message", (_ctx, msg) => this.enqueue(msg));
+  }
+  markOnline(bot, gate) {
+    if (this.bot !== bot) return;
+    this.starting = false;
+    this.lastError = void 0;
+    this.onlineSince = this.now();
+    gate.settle(void 0);
+    this.logger?.info?.(`dsh-soulmojito im qq/${this.accountId}: gateway ready`);
+  }
+  noteFailure(bot, reason) {
+    if (this.bot !== bot) return;
+    this.lastError = reason;
+    this.logger?.warn?.(`dsh-soulmojito im qq/${this.accountId}: ${reason}`);
+  }
+  failStartup(bot, gate, reason) {
+    if (this.bot !== bot || gate.settled) return;
+    gate.settle(new QQChannelError("QQ_START_FAILED", `qq account '${this.accountId}' failed to start: ${reason}`));
+  }
+  dropStartup(bot, reason) {
+    if (this.bot === bot) {
+      this.bot = void 0;
+      this.ready = void 0;
+      this.starting = false;
+      this.onlineSince = void 0;
+      this.lastError = reason;
+      this.detachAbort();
+    }
+    bot.stop();
+  }
+  detachAbort() {
+    if (this.signal !== void 0 && this.abortListener !== void 0) {
+      this.signal.removeEventListener("abort", this.abortListener);
+    }
+    this.signal = void 0;
+    this.abortListener = void 0;
+  }
+  enqueue(msg) {
+    const next = this.inboundChain.then(() => this.deliver(msg));
+    this.inboundChain = next.catch((error) => {
+      this.logger?.warn?.(`dsh-soulmojito im qq/${this.accountId}: inbound message failed: ${messageOf8(error)}`);
+    });
+    return this.inboundChain;
+  }
+  async deliver(msg) {
+    if (msg.kind !== "c2c" && msg.kind !== "group") {
+      this.logger?.debug?.(`dsh-soulmojito im qq/${this.accountId}: ignored a ${msg.kind} message`);
+      return;
+    }
+    const inbound = this.inboundOf(msg);
+    if (inbound.scope === "group" && await this.groupRequireMention() && !qqWasMentioned(msg)) return;
+    await this.router.handle(inbound, { loadMedia: () => this.materializeInboundMedia(msg) });
+  }
+  /** 逐个下载附件；失败只 warn 并保留不带 localPath 的 ref，不阻断这一轮。 */
+  async materializeInboundMedia(msg) {
+    const refs = qqMediaOfAttachments(qqAttachmentsOf(msg));
+    if (this.media === void 0) return refs;
+    const enriched = [];
+    for (const ref of refs) {
+      if (ref.url === void 0) {
+        enriched.push(ref);
+        continue;
+      }
+      try {
+        enriched.push(await fetchInboundMedia(ref, {
+          channel: "qq",
+          accountId: this.accountId,
+          media: this.media,
+          maxBytes: QQ_MEDIA_MAX_BYTES,
+          timeoutMs: QQ_MEDIA_TIMEOUT_MS,
+          ...this.signal === void 0 ? {} : { signal: this.signal }
+        }));
+      } catch (error) {
+        this.logger?.warn?.(
+          `dsh-soulmojito im qq/${this.accountId}: inbound ${ref.kind} download failed: ${messageOf8(error)}`
+        );
+        enriched.push(ref);
+      }
+    }
+    return enriched;
+  }
+  inboundOf(msg) {
+    const replyTarget = msg.replyTarget;
+    if (replyTarget === void 0 || replyTarget.scope !== "c2c" && replyTarget.scope !== "group") {
+      throw new QQChannelError("QQ_BAD_MESSAGE", `qq account '${this.accountId}' got a message without a usable replyTarget`);
+    }
+    const peerId = replyTarget.targetId.trim();
+    if (peerId === "") {
+      throw new QQChannelError("QQ_BAD_MESSAGE", `qq account '${this.accountId}' got a message with an empty replyTarget.targetId`);
+    }
+    const scope = replyTarget.scope === "group" ? "group" : "private";
+    const senderId = nonEmpty3(msg.senderId) ?? peerId;
+    const senderName = nonEmpty3(msg.senderName) ?? openidLabel(senderId);
+    const messageId = nonEmpty3(msg.messageId);
+    const receivedAt = this.now();
+    const dedupeId = messageId ?? randomUUID13();
+    const transcript = qqTranscriptsOf(qqAttachmentsOf(msg));
+    const body = typeof msg.content === "string" ? msg.content.trim() : "";
+    const text = transcript === "" ? body : body === "" ? transcript : `${body}
+${transcript}`;
+    return {
+      channel: "qq",
+      accountId: this.accountId,
+      scope,
+      peerId,
+      senderId,
+      senderName,
+      text,
+      // 附件先只带远端信息；路由通过访问控制后才由 loadMedia 下载并补 localPath。
+      media: qqMediaOfAttachments(qqAttachmentsOf(msg)),
+      // 被动回复锚点是本轮触发消息本身，不是它引用的消息。
+      ...messageId === void 0 ? {} : { replyTo: messageId },
+      dedupeKey: imDedupeKey("qq", this.accountId, scope, peerId, dedupeId),
+      receivedAt
+    };
+  }
+};
+function qqWasMentioned(msg) {
+  if (msg.rawEventType === "GROUP_AT_MESSAGE_CREATE") return true;
+  return Array.isArray(msg.mentions) && msg.mentions.some((entry) => entry?.is_you === true);
+}
+function replyTargetOf(target) {
+  return {
+    scope: target.scope === "group" ? "group" : "c2c",
+    targetId: target.peerId,
+    ...target.replyTo === void 0 ? {} : { msgId: target.replyTo }
+  };
+}
+function mediaSourceOf(part) {
+  const localPath = nonEmpty3(part.localPath);
+  if (localPath !== void 0) return { localPath };
+  const url = nonEmpty3(part.url);
+  if (url === void 0) {
+    throw new QQChannelError(
+      "QQ_SEND_FAILED",
+      `qq ${part.kind} part ${part.index + 1}/${part.total} carries neither localPath nor url`
+    );
+  }
+  if (part.kind !== "image" && part.kind !== "video") {
+    throw new QQChannelError(
+      "QQ_SEND_FAILED",
+      `qq ${part.kind} parts must be sent from a local file; this adapter never downloads remote urls`
+    );
+  }
+  return { url };
+}
+async function qqSendMedia(bot, reply, part, source) {
+  switch (part.kind) {
+    case "image":
+      if (bot.sendImage === void 0) throw qqMissingMediaMethod("sendImage");
+      return await bot.sendImage(reply, source);
+    case "video":
+      if (bot.sendVideo === void 0) throw qqMissingMediaMethod("sendVideo");
+      return await bot.sendVideo(reply, source);
+    case "voice":
+      if (bot.sendVoice === void 0) throw qqMissingMediaMethod("sendVoice");
+      return await bot.sendVoice(reply, source);
+    case "file": {
+      if (bot.sendFile === void 0) throw qqMissingMediaMethod("sendFile");
+      const name2 = nonEmpty3(part.name);
+      return await bot.sendFile(reply, source, name2 === void 0 ? {} : { fileName: name2 });
+    }
+  }
+}
+function qqMissingMediaMethod(method) {
+  return new QQChannelError(
+    "QQ_SEND_FAILED",
+    `this qqbot-nodejs build exposes no ${method}(); reinstall the runtime from the IM panel`
+  );
+}
+function requireSecret(secret, key, accountId) {
+  const value = secret[key];
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new QQChannelError(
+      "QQ_BAD_SECRET",
+      `qq account '${accountId}' has no ${key}; secret.${key} must be a non-empty string`
+    );
+  }
+  return value.trim();
+}
+function openidLabel(openid) {
+  return openid.slice(0, OPENID_LABEL_LENGTH);
+}
+function nonEmpty3(value) {
+  if (typeof value !== "string") return void 0;
+  const trimmed = value.trim();
+  return trimmed === "" ? void 0 : trimmed;
+}
+function describeDisconnect(event) {
+  return `code=${event.code} reason='${event.reason}' willReconnect=${event.willReconnect}`;
+}
+function qqLoggerOf(logger) {
+  return {
+    info: (message, meta) => {
+      logger?.info?.(message, meta);
+    },
+    warn: (message, meta) => {
+      logger?.warn?.(message, meta);
+    },
+    error: (message, meta) => {
+      logger?.error?.(message, meta);
+    },
+    debug: (message, meta) => {
+      logger?.debug?.(message, meta);
+    }
+  };
+}
+function withTimeout2(promise, timeoutMs, message) {
+  return new Promise((resolve9, reject) => {
+    const timer = setTimeout(() => {
+      reject(new QQChannelError("QQ_START_TIMEOUT", message));
+    }, timeoutMs);
+    timer.unref?.();
+    promise.then(
+      () => {
+        clearTimeout(timer);
+        resolve9();
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+function messageOf8(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+// packages/plugin/src/im/qq/install.ts
+import { mkdir as mkdir6, writeFile as writeFile2 } from "node:fs/promises";
+import { join as join23 } from "node:path";
+
+// packages/plugin/src/im/qq/sdk.ts
+init_dsh_home();
+import { stat as stat2 } from "node:fs/promises";
+import { join as join22 } from "node:path";
+import { pathToFileURL as pathToFileURL5 } from "node:url";
+var QQ_SDK_PACKAGE = "@tencent-connect/qqbot-nodejs";
+var QQ_CONNECTOR_PACKAGE = "@tencent-connect/qqbot-connector";
+var QQ_SDK_VERSION = "1.0.5";
+var QQ_CONNECTOR_VERSION = "1.2.0";
+var QQ_SDK_ENTRY = "dist/index.js";
+var QQ_CONNECTOR_ENTRY = "dist/esm/index.js";
+var QQ_RUNTIME_PACKAGES = [
+  { name: QQ_SDK_PACKAGE, version: QQ_SDK_VERSION, entry: QQ_SDK_ENTRY },
+  { name: QQ_CONNECTOR_PACKAGE, version: QQ_CONNECTOR_VERSION, entry: QQ_CONNECTOR_ENTRY }
+];
+var QqRuntimeError = class extends Error {
+  code;
+  path;
+  constructor(code, message, path12, options) {
+    super(message, options);
+    this.name = "QqRuntimeError";
+    this.code = code;
+    this.path = path12;
+  }
+};
+function qqRuntimeRoot() {
+  return tavernDataRoot("im", "runtime");
+}
+async function qqRuntimeStatus() {
+  const root = qqRuntimeRoot();
+  const missing = [];
+  for (const dependency of QQ_RUNTIME_PACKAGES) {
+    if (!await qqFileExists(join22(root, "node_modules", dependency.name, dependency.entry), root)) {
+      missing.push(`${dependency.name}@${dependency.version}`);
+    }
+  }
+  if (missing.length === 0) return { installed: true };
+  return {
+    installed: false,
+    reason: `QQ runtime packages are missing: ${missing.join(", ")}. Open the IM panel and press \u5B89\u88C5 QQ \u4F9D\u8D56 to let the plugin install them.`
+  };
+}
+async function loadQqSdk() {
+  const root = qqRuntimeRoot();
+  const entry = join22(root, "node_modules", QQ_SDK_PACKAGE, QQ_SDK_ENTRY);
+  const module = await qqImportRuntime(entry, QQ_SDK_PACKAGE, root);
+  const bot = module["QQBot"];
+  if (typeof bot !== "function") {
+    throw new QqRuntimeError(
+      "QQ_RUNTIME_INVALID",
+      `${QQ_SDK_PACKAGE} has no QQBot constructor at ${entry}; open the IM panel and press \u5B89\u88C5 QQ \u4F9D\u8D56 to reinstall the runtime`,
+      entry
+    );
+  }
+  const msgType = module["MsgType"];
+  if (!qqIsRecord(msgType)) {
+    throw new QqRuntimeError(
+      "QQ_RUNTIME_INVALID",
+      `${QQ_SDK_PACKAGE} has no MsgType table at ${entry}; open the IM panel and press \u5B89\u88C5 QQ \u4F9D\u8D56 to reinstall the runtime`,
+      entry
+    );
+  }
+  const sdk = { QQBot: bot, MsgType: msgType };
+  const mediaFileType = module["MediaFileType"];
+  if (mediaFileType === void 0) return sdk;
+  if (!qqIsRecord(mediaFileType)) {
+    throw new QqRuntimeError(
+      "QQ_RUNTIME_INVALID",
+      `${QQ_SDK_PACKAGE} exports a non-object MediaFileType at ${entry}; open the IM panel and press \u5B89\u88C5 QQ \u4F9D\u8D56 to reinstall the runtime`,
+      entry
+    );
+  }
+  return { ...sdk, MediaFileType: mediaFileType };
+}
+async function loadQqConnector() {
+  const root = qqRuntimeRoot();
+  const entry = join22(root, "node_modules", QQ_CONNECTOR_PACKAGE, QQ_CONNECTOR_ENTRY);
+  const module = await qqImportRuntime(entry, QQ_CONNECTOR_PACKAGE, root);
+  const startQrConnect = module["startQrConnect"];
+  if (typeof startQrConnect !== "function") {
+    throw new QqRuntimeError(
+      "QQ_RUNTIME_INVALID",
+      `${QQ_CONNECTOR_PACKAGE} has no startQrConnect() at ${entry}; open the IM panel and press \u5B89\u88C5 QQ \u4F9D\u8D56 to reinstall the runtime`,
+      entry
+    );
+  }
+  return startQrConnect;
+}
+async function qqImportRuntime(entry, packageName, root) {
+  try {
+    return await import(pathToFileURL5(entry).href);
+  } catch (cause) {
+    throw new QqRuntimeError(
+      "QQ_RUNTIME_MISSING",
+      `${packageName} could not be loaded from ${entry}: ${qqReasonOf(cause)}. If it is not installed, open the IM panel and press \u5B89\u88C5 QQ \u4F9D\u8D56 (runtime root: ${root})`,
+      entry,
+      { cause }
+    );
+  }
+}
+async function qqFileExists(path12, root) {
+  try {
+    return (await stat2(path12)).isFile();
+  } catch (cause) {
+    const errno = qqErrnoOf(cause);
+    if (errno === "ENOENT" || errno === "ENOTDIR") return false;
+    throw new QqRuntimeError(
+      "QQ_RUNTIME_MISSING",
+      `cannot inspect ${path12}: ${qqReasonOf(cause)}. Fix the directory permissions and retry; the QQ runtime is installed from the IM panel (root: ${root})`,
+      path12,
+      { cause }
+    );
+  }
+}
+function qqErrnoOf(cause) {
+  if (typeof cause !== "object" || cause === null) return void 0;
+  const code = cause.code;
+  return typeof code === "string" ? code : void 0;
+}
+function qqIsRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function qqReasonOf(cause) {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+// packages/plugin/src/im/qq/install.ts
+var QQ_RUNTIME_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
+var INSTALL_OUTPUT_TAIL2 = 8e3;
+var RUNTIME_PACKAGE_JSON = `${JSON.stringify({ name: "dsh-soulmojito-im-runtime", private: true }, null, 2)}
+`;
+async function installQqRuntime(input) {
+  if ((await qqRuntimeStatus()).installed) {
+    return { ok: true, alreadyInstalled: true, outputTail: "" };
+  }
+  const root = qqRuntimeRoot();
+  await mkdir6(root, { recursive: true });
+  await ensureRuntimePackageJson(root);
+  const run = input.spawnRunner ?? defaultSpawnRunner;
+  try {
+    const result = await run(
+      "pnpm",
+      ["add", ...QQ_RUNTIME_PACKAGES.map((pkg) => `${pkg.name}@${pkg.version}`)],
+      { cwd: root, timeoutMs: input.timeoutMs ?? QQ_RUNTIME_INSTALL_TIMEOUT_MS }
+    );
+    const outputTail = result.output.slice(-INSTALL_OUTPUT_TAIL2);
+    if (result.code !== 0) {
+      return { ok: false, alreadyInstalled: false, message: `pnpm exited with ${result.code}`, outputTail };
+    }
+    if (!(await qqRuntimeStatus()).installed) {
+      return {
+        ok: false,
+        alreadyInstalled: false,
+        message: "pnpm succeeded but the runtime is still not resolvable; restart DSH and retry",
+        outputTail
+      };
+    }
+    return { ok: true, alreadyInstalled: false, outputTail };
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    return {
+      ok: false,
+      alreadyInstalled: false,
+      message: `pnpm add failed: ${detail}${/ENOENT|not found|not recognized/i.test(detail) ? " (is pnpm on PATH?)" : ""}`,
+      outputTail: ""
+    };
+  }
+}
+async function ensureRuntimePackageJson(root) {
+  try {
+    await writeFile2(join23(root, "package.json"), RUNTIME_PACKAGE_JSON, { encoding: "utf8", flag: "wx" });
+  } catch (cause) {
+    const errno = typeof cause === "object" && cause !== null ? cause.code : void 0;
+    if (errno === "EEXIST") return;
+    throw cause;
+  }
+}
+
+// packages/plugin/src/im/store.ts
+import { randomUUID as randomUUID14 } from "node:crypto";
+import { promises as fs20 } from "node:fs";
+import { dirname as dirname14, join as join24, resolve as resolve6 } from "node:path";
 var ImStoreError = class extends Error {
   code;
   /** 出问题的文件或目录；纯校验错误还没有落盘路径时为 undefined。 */
@@ -48256,7 +48877,7 @@ var ImStore = class _ImStore {
    */
   dedupeEntries;
   constructor(root) {
-    this.root = resolve5(root);
+    this.root = resolve6(root);
   }
   /** 清单按 channel、accountId 排序；排序稳定，面板顺序不随写入先后跳动。 */
   async accounts() {
@@ -48328,7 +48949,7 @@ var ImStore = class _ImStore {
       const file = this.dedupePath();
       await imStoreEnsureDir(this.root);
       try {
-        await fs19.appendFile(file, `${JSON.stringify({ key: dedupeKey, at: now })}
+        await fs20.appendFile(file, `${JSON.stringify({ key: dedupeKey, at: now })}
 `, "utf8");
       } catch (cause) {
         entries.delete(dedupeKey);
@@ -48352,18 +48973,33 @@ var ImStore = class _ImStore {
     if (typeof value !== "string") throw new TypeError(`cursor \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\uFF0C\u5B9E\u9645\u4E3A ${typeof value}`);
     await imStoreWriteJson(this.cursorPath(accountId), { cursor: value });
   }
+  /**
+   * 删游标（解绑账号时）：留着它等于把「重启后从哪里续读」的秘密渠道留在磁盘上，
+   * 而且同名账号重建时会跳过历史——那正是用户删号时最不希望发生的事。
+   */
+  async deleteCursor(accountId) {
+    imStoreAssertAccountId(accountId);
+    const file = this.cursorPath(accountId);
+    try {
+      await fs20.unlink(file);
+      return true;
+    } catch (cause) {
+      if (imStoreIsErrno(cause, "ENOENT")) return false;
+      throw new ImStoreError("IO", `\u5220\u9664\u6E38\u6807\u5931\u8D25: ${file}: ${imStoreReason(cause)}`, file);
+    }
+  }
   // ---- 内部：路径 ----
   accountsPath() {
-    return join22(this.root, "accounts.json");
+    return join24(this.root, "accounts.json");
   }
   secretPath(channel, accountId) {
-    return join22(this.root, "secrets", `${channel}-${accountId}.json`);
+    return join24(this.root, "secrets", `${channel}-${accountId}.json`);
   }
   dedupePath() {
-    return join22(this.root, "dedupe.log");
+    return join24(this.root, "dedupe.log");
   }
   cursorPath(accountId) {
-    return join22(this.root, "cursors", `${accountId}.json`);
+    return join24(this.root, "cursors", `${accountId}.json`);
   }
   // ---- 内部：串行化 ----
   serialAccounts(task) {
@@ -48390,7 +49026,7 @@ var ImStore = class _ImStore {
     const entries = /* @__PURE__ */ new Map();
     let text;
     try {
-      text = await fs19.readFile(file, "utf8");
+      text = await fs20.readFile(file, "utf8");
     } catch (cause) {
       if (imStoreIsErrno(cause, "ENOENT")) {
         this.dedupeEntries = entries;
@@ -48546,7 +49182,7 @@ function imStoreNoop() {
 }
 async function imStoreEnsureDir(dir) {
   try {
-    await fs19.mkdir(dir, { recursive: true });
+    await fs20.mkdir(dir, { recursive: true });
   } catch (cause) {
     throw new ImStoreError("IO", `\u521B\u5EFA\u76EE\u5F55\u5931\u8D25: ${dir}: ${imStoreReason(cause)}`, dir);
   }
@@ -48554,7 +49190,7 @@ async function imStoreEnsureDir(dir) {
 async function imStoreReadJson(file) {
   let text;
   try {
-    text = await fs19.readFile(file, "utf8");
+    text = await fs20.readFile(file, "utf8");
   } catch (cause) {
     if (imStoreIsErrno(cause, "ENOENT")) return void 0;
     throw new ImStoreError("IO", `\u8BFB\u53D6\u5931\u8D25: ${file}: ${imStoreReason(cause)}`, file);
@@ -48567,7 +49203,7 @@ async function imStoreReadJson(file) {
 }
 async function imStoreRemoveFile(file) {
   try {
-    await fs19.unlink(file);
+    await fs20.unlink(file);
   } catch (cause) {
     if (imStoreIsErrno(cause, "ENOENT")) return;
     throw new ImStoreError("IO", `\u5220\u9664\u5931\u8D25: ${file}: ${imStoreReason(cause)}`, file);
@@ -48575,12 +49211,12 @@ async function imStoreRemoveFile(file) {
 }
 async function imStoreWriteFile(file, text, mode) {
   await imStoreEnsureDir(dirname14(file));
-  const tmp = `${file}.tmp-${randomUUID13()}`;
+  const tmp = `${file}.tmp-${randomUUID14()}`;
   try {
-    await fs19.writeFile(tmp, text, mode === void 0 ? { encoding: "utf8" } : { encoding: "utf8", mode });
-    await fs19.rename(tmp, file);
+    await fs20.writeFile(tmp, text, mode === void 0 ? { encoding: "utf8" } : { encoding: "utf8", mode });
+    await fs20.rename(tmp, file);
   } catch (cause) {
-    await fs19.rm(tmp, { force: true }).catch(() => void 0);
+    await fs20.rm(tmp, { force: true }).catch(() => void 0);
     throw new ImStoreError("IO", `\u5199\u5165\u5931\u8D25: ${file}: ${imStoreReason(cause)}`, file);
   }
 }
@@ -48596,8 +49232,8 @@ async function imStoreWriteSecret(file, record) {
 `, SECRET_FILE_MODE);
   if (process.platform === "win32") return;
   try {
-    await fs19.chmod(file, SECRET_FILE_MODE);
-    const stats = await fs19.stat(file);
+    await fs20.chmod(file, SECRET_FILE_MODE);
+    const stats = await fs20.stat(file);
     const mode = stats.mode & 511;
     if (mode !== SECRET_FILE_MODE) {
       throw new ImStoreError(
@@ -48614,8 +49250,9 @@ async function imStoreWriteSecret(file, record) {
 
 // packages/plugin/src/im/weixin/api.ts
 init_build_info();
-import { randomBytes as randomBytes5, randomUUID as randomUUID14 } from "node:crypto";
+import { randomBytes as randomBytes5, randomUUID as randomUUID15 } from "node:crypto";
 var WEIXIN_FIXED_BASE_URL = "https://ilinkai.weixin.qq.com";
+var WEIXIN_DEFAULT_CDN_BASE_URL = "https://novac2c.cdn.weixin.qq.com/c2c";
 var WEIXIN_DEFAULT_BOT_TYPE = "3";
 var WEIXIN_STALE_TOKEN_RETCODE = -14;
 var ILINK_APP_ID = "bot";
@@ -48716,13 +49353,23 @@ async function sendMessage(context, options) {
   if (options.text.trim() === "") {
     throw badBody(`sendMessage to '${toUserId}' has empty text; an empty message must not be sent`);
   }
+  return sendMessageItems(context, {
+    toUserId: options.toUserId,
+    items: [{ type: 1, text_item: { text: options.text } }],
+    ...options.contextToken === void 0 ? {} : { contextToken: options.contextToken }
+  });
+}
+async function sendMessageItems(context, options) {
+  const toUserId = options.toUserId.trim();
+  if (toUserId === "") throw badBody("sendMessageItems requires a non-empty to_user_id");
+  if (options.items.length === 0) throw badBody(`sendMessageItems to '${toUserId}' has no items; nothing to send`);
   const msg = {
     from_user_id: "",
     to_user_id: toUserId,
-    client_id: randomUUID14(),
+    client_id: randomUUID15(),
     message_type: 2,
     message_state: 2,
-    item_list: [{ type: 1, text_item: { text: options.text } }]
+    item_list: [...options.items]
   };
   if (options.contextToken !== void 0 && options.contextToken !== "") {
     msg["context_token"] = options.contextToken;
@@ -48739,6 +49386,39 @@ async function sendMessage(context, options) {
   if (retcode !== void 0) throw apiError("sendmessage", retcode, record);
   const messageId = optionalId(record["message_id"]);
   return messageId === void 0 ? {} : { messageId };
+}
+async function getUploadUrl(context, options) {
+  const toUserId = options.toUserId.trim();
+  if (toUserId === "") throw badBody("getUploadUrl requires a non-empty to_user_id");
+  const raw = await requestJson2({
+    method: "POST",
+    context,
+    path: "ilink/bot/getuploadurl",
+    label: "getuploadurl",
+    body: {
+      filekey: options.filekey,
+      media_type: options.mediaType,
+      to_user_id: toUserId,
+      rawsize: options.rawsize,
+      rawfilemd5: options.rawfilemd5,
+      filesize: options.filesize,
+      no_need_thumb: true,
+      aeskey: options.aeskeyHex,
+      base_info: baseInfo()
+    }
+  });
+  const record = asRecord6(raw, "getuploadurl response");
+  const retcode = nonzeroOf(record, "getuploadurl response");
+  if (retcode !== void 0) throw apiError("getuploadurl", retcode, record);
+  const uploadFullUrl = strictOptionalText(record, "upload_full_url", "getuploadurl response");
+  const uploadParam = strictOptionalText(record, "upload_param", "getuploadurl response");
+  if (uploadFullUrl === void 0 && uploadParam === void 0) {
+    throw badBody("getuploadurl response carries neither upload_full_url nor upload_param; the upload cannot start");
+  }
+  return {
+    ...uploadFullUrl === void 0 ? {} : { uploadFullUrl },
+    ...uploadParam === void 0 ? {} : { uploadParam }
+  };
 }
 async function getConfig(context, options) {
   const body = { ilink_user_id: options.ilinkUserId, base_info: baseInfo() };
@@ -48917,34 +49597,46 @@ function parseItem(type, record) {
   if (type === 3) {
     const voice = record["voice_item"];
     const voiceText = optionalText3(field(voice, "text"));
-    const mediaUrl = mediaUrlOf(voice);
-    return {
-      type,
-      ...voiceText === void 0 ? {} : { voiceText },
-      ...mediaUrl === void 0 ? {} : { mediaUrl }
-    };
+    return { type, ...voiceText === void 0 ? {} : { voiceText }, ...mediaFieldsOf(voice) };
   }
   if (type === 2 || type === 4 || type === 5) {
     const item = record[itemKeyOf(type)];
-    const mediaUrl = mediaUrlOf(item);
-    const fileName = optionalText3(field(item, "file_name"));
-    const size = sizeOf(type, item);
+    const aesKeyHex = type === 2 ? optionalText3(field(item, "aeskey")) : void 0;
     return {
       type,
-      ...mediaUrl === void 0 ? {} : { mediaUrl },
-      ...fileName === void 0 ? {} : { fileName },
-      ...size === void 0 ? {} : { size }
+      ...mediaFieldsOf(item),
+      ...aesKeyHex === void 0 ? {} : { aesKeyHex },
+      ...optionalFileNameOf(item),
+      ...optionalSizeOf(type, item)
     };
   }
   return { type };
+}
+function mediaFieldsOf(item) {
+  const media = field(item, "media");
+  const fullUrl = optionalText3(field(media, "full_url"));
+  const thumbUrl = optionalText3(field(media, "thumb_url"));
+  const encryptQueryParam = optionalText3(field(media, "encrypt_query_param"));
+  const aesKey = optionalText3(field(media, "aes_key"));
+  return {
+    ...fullUrl === void 0 ? {} : { mediaUrl: fullUrl, fullUrl },
+    ...thumbUrl === void 0 ? {} : { thumbUrl },
+    ...encryptQueryParam === void 0 ? {} : { encryptQueryParam },
+    ...aesKey === void 0 ? {} : { aesKey }
+  };
+}
+function optionalFileNameOf(item) {
+  const fileName = optionalText3(field(item, "file_name"));
+  return fileName === void 0 ? {} : { fileName };
+}
+function optionalSizeOf(type, item) {
+  const size = sizeOf(type, item);
+  return size === void 0 ? {} : { size };
 }
 function itemKeyOf(type) {
   if (type === 2) return "image_item";
   if (type === 4) return "file_item";
   return "video_item";
-}
-function mediaUrlOf(item) {
-  return optionalText3(field(field(item, "media"), "full_url"));
 }
 function sizeOf(type, item) {
   if (type === 2) return optionalFiniteNumber(field(item, "mid_size"));
@@ -48975,6 +49667,14 @@ function optionalText3(value) {
   if (typeof value !== "string") return void 0;
   const trimmed = value.trim();
   return trimmed === "" ? void 0 : trimmed;
+}
+function strictOptionalText(record, key, label) {
+  const value = record[key];
+  if (value === void 0) return void 0;
+  if (typeof value !== "string") {
+    throw badBody(`${label}.${key} must be a string, received ${describe(value)}`);
+  }
+  return optionalText3(value);
 }
 function optionalFiniteNumber(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : void 0;
@@ -49313,14 +50013,582 @@ function messageOf10(error) {
 }
 
 // packages/plugin/src/im/weixin/channel.ts
-import { randomUUID as randomUUID15 } from "node:crypto";
+import { randomUUID as randomUUID16 } from "node:crypto";
+
+// packages/plugin/src/im/weixin/typing-cache.ts
+var TYPING_TICKET_TTL_MS = 30 * 60 * 1e3;
+var MAX_TYPING_TICKETS = 500;
+function createTypingTicketCache(options) {
+  if (!Number.isSafeInteger(options.ttlMs) || options.ttlMs <= 0) {
+    throw new TypeError(`typing ticket ttl must be a positive integer, got ${String(options.ttlMs)}`);
+  }
+  if (!Number.isSafeInteger(options.max) || options.max <= 0) {
+    throw new TypeError(`typing ticket capacity must be a positive integer, got ${String(options.max)}`);
+  }
+  const entries = /* @__PURE__ */ new Map();
+  return {
+    get(peerId, now) {
+      const cached = entries.get(peerId);
+      if (cached === void 0) return void 0;
+      if (now - cached.at >= options.ttlMs) {
+        entries.delete(peerId);
+        return void 0;
+      }
+      return cached.ticket;
+    },
+    set(peerId, ticket, now) {
+      entries.delete(peerId);
+      entries.set(peerId, { ticket, at: now });
+      while (entries.size > options.max) {
+        const oldest = entries.keys().next();
+        if (oldest.done === true) return;
+        entries.delete(oldest.value);
+      }
+    },
+    delete(peerId) {
+      entries.delete(peerId);
+    }
+  };
+}
+
+// packages/plugin/src/im/weixin/media.ts
+import { createCipheriv, createDecipheriv, createHash as createHash15, randomBytes as randomBytes6 } from "node:crypto";
+import { promises as fs21 } from "node:fs";
+import { basename as basename3, extname } from "node:path";
+var WEIXIN_MEDIA_MAX_BYTES = 20 * 1024 * 1024;
+var WEIXIN_MEDIA_TIMEOUT_MS = 2e4;
+var UPLOAD_ATTEMPTS = 3;
+var AES_KEY_BYTES = 16;
+var AES_BLOCK_SIZE = 16;
+var IMAGE_AES_KEY_HEX = /^[0-9a-fA-F]{32}$/;
+var HEX_TEXT_LENGTH = 32;
+var WeixinMediaError = class extends Error {
+  code;
+  /** HTTP 状态；只有传输层错误才有。 */
+  status;
+  constructor(code, message, options) {
+    super(message, options?.cause === void 0 ? void 0 : { cause: options.cause });
+    this.name = "WeixinMediaError";
+    this.code = code;
+    this.status = options?.status;
+  }
+};
+function parseAesKey(key, label) {
+  const text = key.trim();
+  if (text === "") {
+    throw new WeixinMediaError("WEIXIN_MEDIA_BAD_KEY", `${label} is an empty AES key; expected base64 of 16 bytes`);
+  }
+  const decoded = Buffer.from(text, "base64");
+  if (decoded.length === AES_KEY_BYTES) return decoded;
+  if (decoded.length === HEX_TEXT_LENGTH) {
+    const hex = decoded.toString("utf8");
+    if (IMAGE_AES_KEY_HEX.test(hex)) return Buffer.from(hex, "hex");
+    throw new WeixinMediaError(
+      "WEIXIN_MEDIA_BAD_KEY",
+      `${label} decodes to 32 bytes that are not a 32-character hex key; expected base64 of 16 bytes or of a hex string`
+    );
+  }
+  throw new WeixinMediaError(
+    "WEIXIN_MEDIA_BAD_KEY",
+    `${label} decodes to ${decoded.length} bytes; expected base64 of 16 bytes or of a 32-character hex string`
+  );
+}
+function parseImageAesKey(hexKey) {
+  const text = hexKey.trim();
+  if (!IMAGE_AES_KEY_HEX.test(text)) {
+    throw new WeixinMediaError(
+      "WEIXIN_MEDIA_BAD_KEY",
+      `image_item.aeskey must be 32 hex characters, got ${text.length} characters that are not all hex`
+    );
+  }
+  return Buffer.from(text, "hex");
+}
+function encryptAesEcb(buf, key) {
+  requireAesKey(key, "encryptAesEcb");
+  const cipher = createCipheriv("aes-128-ecb", key, null);
+  return Buffer.concat([cipher.update(buf), cipher.final()]);
+}
+function decryptAesEcb(buf, key) {
+  requireAesKey(key, "decryptAesEcb");
+  if (buf.length === 0 || buf.length % AES_BLOCK_SIZE !== 0) {
+    throw new WeixinMediaError(
+      "WEIXIN_MEDIA_DECRYPT_FAILED",
+      `AES-128-ECB ciphertext is ${buf.length} bytes; it must be a non-zero multiple of ${AES_BLOCK_SIZE}`
+    );
+  }
+  try {
+    const decipher = createDecipheriv("aes-128-ecb", key, null);
+    return Buffer.concat([decipher.update(buf), decipher.final()]);
+  } catch (cause) {
+    throw new WeixinMediaError(
+      "WEIXIN_MEDIA_DECRYPT_FAILED",
+      `AES-128-ECB decrypt failed for ${buf.length} bytes: ${reasonOf2(cause)}`,
+      { cause }
+    );
+  }
+}
+function cdnDownloadUrl(cdnBase, encryptQueryParam) {
+  return `${normalizeCdnBaseUrl(cdnBase)}/download?encrypted_query_param=${encodeURIComponent(encryptQueryParam)}`;
+}
+function cdnUploadUrl(cdnBase, uploadParam, filekey) {
+  return `${normalizeCdnBaseUrl(cdnBase)}/upload?encrypted_query_param=${encodeURIComponent(uploadParam)}&filekey=${encodeURIComponent(filekey)}`;
+}
+async function downloadAndDecrypt(context, request) {
+  const url = request.fullUrl ?? (request.encryptQueryParam === void 0 ? void 0 : cdnDownloadUrl(context.cdnBaseUrl, request.encryptQueryParam));
+  if (url === void 0) {
+    throw new WeixinMediaError(
+      "WEIXIN_MEDIA_DOWNLOAD_FAILED",
+      `${request.label} carries neither media.full_url nor encrypt_query_param; there is nothing to download`
+    );
+  }
+  return withTransport("WEIXIN_MEDIA_DOWNLOAD_FAILED", request.label, context, async (signal) => {
+    const response = await fetch(url, { method: "GET", signal });
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new WeixinMediaError(
+        "WEIXIN_MEDIA_DOWNLOAD_FAILED",
+        `${request.label} returned HTTP ${response.status}: ${snippet2(detail)}`,
+        { status: response.status }
+      );
+    }
+    const declared = contentLengthOf(response);
+    const ciphertextCap = request.maxBytes + AES_BLOCK_SIZE;
+    if (declared !== void 0 && declared > ciphertextCap) {
+      await response.body?.cancel().catch(() => void 0);
+      throw new WeixinMediaError(
+        "WEIXIN_MEDIA_TOO_LARGE",
+        `${request.label} declares ${declared} bytes; the cap is ${request.maxBytes} bytes of plaintext`
+      );
+    }
+    const body = await readBoundedBody2(response, ciphertextCap, request.label);
+    const plaintext = request.aesKey === void 0 ? body : decryptAesEcb(body, request.aesKey);
+    if (plaintext.byteLength > request.maxBytes) {
+      throw new WeixinMediaError(
+        "WEIXIN_MEDIA_TOO_LARGE",
+        `${request.label} decrypts to ${plaintext.byteLength} bytes; the cap is ${request.maxBytes} bytes`
+      );
+    }
+    return plaintext;
+  });
+}
+async function readBoundedBody2(response, cap, label) {
+  const reader = response.body?.getReader();
+  if (reader === void 0) {
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.byteLength > cap) {
+      throw new WeixinMediaError("WEIXIN_MEDIA_TOO_LARGE", `${label} is ${buffer.byteLength} bytes; the cap is ${cap} bytes of ciphertext`);
+    }
+    return buffer;
+  }
+  const chunks = [];
+  let total = 0;
+  try {
+    for (; ; ) {
+      const next = await reader.read();
+      if (next.done) break;
+      total += next.value.byteLength;
+      if (total > cap) {
+        await reader.cancel().catch(() => void 0);
+        throw new WeixinMediaError("WEIXIN_MEDIA_TOO_LARGE", `${label} exceeds ${cap} bytes of ciphertext`);
+      }
+      chunks.push(next.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
+}
+async function uploadToWeixinCdn(context, request) {
+  let lastError;
+  for (let attempt = 1; attempt <= UPLOAD_ATTEMPTS; attempt += 1) {
+    try {
+      const encryptQueryParam = await uploadOnce(context, request);
+      return { encryptQueryParam, ciphertextSize: request.ciphertext.byteLength };
+    } catch (cause) {
+      lastError = cause;
+      if (!isRetryableUpload(cause)) throw cause;
+    }
+  }
+  throw new WeixinMediaError(
+    "WEIXIN_MEDIA_UPLOAD_FAILED",
+    `${request.label} failed after ${UPLOAD_ATTEMPTS} attempts: ${reasonOf2(lastError)}`,
+    { cause: lastError }
+  );
+}
+function buildWeixinMediaItem(request) {
+  const media = {
+    encrypt_query_param: request.uploaded.encryptQueryParam,
+    aes_key: Buffer.from(request.uploaded.aesKeyHex, "utf8").toString("base64"),
+    encrypt_type: 1
+  };
+  if (request.kind === "image") {
+    return { type: 2, image_item: { media, mid_size: request.uploaded.ciphertextSize } };
+  }
+  if (request.kind === "video") {
+    return { type: 5, video_item: { media, video_size: request.uploaded.ciphertextSize } };
+  }
+  if (request.kind === "file") {
+    if (request.fileName.trim() === "") {
+      throw new WeixinMediaError("WEIXIN_MEDIA_UNSUPPORTED", "a weixin file item needs a non-empty file name");
+    }
+    return {
+      type: 4,
+      file_item: { media, file_name: request.fileName, len: String(request.plaintextSize) }
+    };
+  }
+  throw new WeixinMediaError(
+    "WEIXIN_MEDIA_UNSUPPORTED",
+    `weixin has no outbound '${request.kind}' item: the iLink reference implementation only sends images, videos and files`
+  );
+}
+function weixinMediaTypeOf(kind) {
+  if (kind === "image") return 1;
+  if (kind === "video") return 2;
+  if (kind === "file") return 3;
+  return 4;
+}
+async function sweepExpiredMedia(media, ttlMs, log2) {
+  try {
+    const removed = await media.cleanupOlderThan(ttlMs);
+    if (removed > 0) log2.debug(`removed ${removed} expired media file(s)`);
+  } catch (error) {
+    log2.warn(`sweeping expired media failed: ${reasonOf2(error)}`);
+  }
+}
+async function materializeInboundMedia(context, sources) {
+  const refs = [];
+  for (const source of sources) {
+    const item = source.item;
+    const ref = {
+      kind: source.kind,
+      ...item.mediaUrl === void 0 ? {} : { url: item.mediaUrl },
+      ...item.fileName === void 0 ? {} : { name: item.fileName },
+      ...item.size === void 0 ? {} : { size: item.size }
+    };
+    const localPath = await saveInboundMedia(context, source.kind, item);
+    refs.push(localPath === void 0 ? ref : { ...ref, localPath });
+  }
+  return refs;
+}
+async function saveInboundMedia(context, kind, item) {
+  const media = context.media;
+  if (media === void 0) return void 0;
+  if (item.fullUrl === void 0 && item.encryptQueryParam === void 0) return void 0;
+  if (item.size !== void 0 && item.size > WEIXIN_MEDIA_MAX_BYTES) {
+    context.log.warn(
+      `inbound ${kind} is ${item.size} bytes, above the ${WEIXIN_MEDIA_MAX_BYTES}-byte cap; kept as a reference without a local copy`
+    );
+    return void 0;
+  }
+  let key;
+  try {
+    key = inboundAesKeyOf(item, kind);
+  } catch (error) {
+    context.log.warn(`inbound ${kind} has an unusable AES key; kept as a reference without a local copy: ${reasonOf2(error)}`);
+    return void 0;
+  }
+  if (key === void 0 && kind !== "image") {
+    context.log.warn(
+      `inbound ${kind} carries no media.aes_key; the CDN payload cannot be decrypted, kept as a reference without a local copy`
+    );
+    return void 0;
+  }
+  const extension = inboundExtensionOf(kind, item);
+  if (extension === void 0) {
+    context.log.warn(`inbound ${kind} has no allowlisted file extension; kept as a reference without a local copy`);
+    return void 0;
+  }
+  let bytes;
+  try {
+    bytes = await downloadAndDecrypt(
+      {
+        cdnBaseUrl: context.cdnBaseUrl,
+        timeoutMs: context.timeoutMs,
+        ...context.signal === void 0 ? {} : { signal: context.signal }
+      },
+      {
+        ...item.fullUrl === void 0 ? {} : { fullUrl: item.fullUrl },
+        ...item.encryptQueryParam === void 0 ? {} : { encryptQueryParam: item.encryptQueryParam },
+        ...key === void 0 ? {} : { aesKey: key },
+        maxBytes: WEIXIN_MEDIA_MAX_BYTES,
+        label: `weixin inbound ${kind}`
+      }
+    );
+  } catch (error) {
+    context.log.warn(`downloading an inbound ${kind} failed; kept as a reference without a local copy: ${reasonOf2(error)}`);
+    return void 0;
+  }
+  try {
+    return await media.save({
+      channel: context.channel,
+      accountId: context.accountId,
+      bytes,
+      extension,
+      ...item.fileName === void 0 ? {} : { originalName: item.fileName }
+    });
+  } catch (error) {
+    context.log.warn(`saving an inbound ${kind} failed; kept as a reference without a local copy: ${reasonOf2(error)}`);
+    return void 0;
+  }
+}
+function inboundAesKeyOf(item, kind) {
+  if (item.aesKeyHex !== void 0) {
+    try {
+      return parseImageAesKey(item.aesKeyHex);
+    } catch (error) {
+      if (item.aesKey === void 0) throw error;
+      return parseAesKey(item.aesKey, `${kind} media.aes_key`);
+    }
+  }
+  if (item.aesKey === void 0) return void 0;
+  return parseAesKey(item.aesKey, `${kind} media.aes_key`);
+}
+var DEFAULT_EXTENSIONS = {
+  image: "png",
+  voice: "silk",
+  video: "mp4",
+  file: void 0
+};
+function inboundExtensionOf(kind, item) {
+  const candidates = [extensionOf2(item.fileName), extensionOf2(item.fullUrl ?? item.mediaUrl), DEFAULT_EXTENSIONS[kind]];
+  for (const candidate of candidates) {
+    if (candidate !== void 0 && isImMediaExtension(candidate)) return candidate;
+  }
+  return void 0;
+}
+function extensionOf2(value) {
+  if (value === void 0 || value === "") return void 0;
+  let path12 = value;
+  if (/^https?:\/\//i.test(value)) {
+    try {
+      path12 = new URL(value).pathname;
+    } catch {
+      return void 0;
+    }
+  }
+  const extension = extname(path12).replace(/^\.+/, "").toLowerCase();
+  return extension === "" ? void 0 : extension;
+}
+async function sendWeixinMedia(context, request) {
+  const bytes = await readLocalMedia(request.localPath, request.kind);
+  const fileName = request.name?.trim() || basename3(request.localPath);
+  const key = randomBytes6(16);
+  const aesKeyHex = key.toString("hex");
+  const filekey = randomBytes6(16).toString("hex");
+  const ciphertext = encryptAesEcb(bytes, key);
+  const upload = await getUploadUrl(
+    { ...context.api, timeoutMs: context.uploadTimeoutMs },
+    {
+      filekey,
+      mediaType: weixinMediaTypeOf(request.kind),
+      toUserId: context.toUserId,
+      rawsize: bytes.byteLength,
+      rawfilemd5: md5Hex(bytes),
+      filesize: ciphertext.byteLength,
+      aeskeyHex: aesKeyHex
+    }
+  );
+  const uploadUrl = upload.uploadFullUrl ?? (upload.uploadParam === void 0 ? void 0 : cdnUploadUrl(context.cdnBaseUrl, upload.uploadParam, filekey));
+  if (uploadUrl === void 0) {
+    throw new WeixinMediaError(
+      "WEIXIN_MEDIA_UPLOAD_FAILED",
+      `getuploadurl returned neither upload_full_url nor upload_param for a ${request.kind}`
+    );
+  }
+  const uploaded = await uploadToWeixinCdn(
+    {
+      cdnBaseUrl: context.cdnBaseUrl,
+      timeoutMs: context.uploadTimeoutMs,
+      ...context.signal === void 0 ? {} : { signal: context.signal }
+    },
+    { url: uploadUrl, ciphertext, label: `weixin ${request.kind} upload` }
+  );
+  if (request.caption !== void 0 && request.caption.trim() !== "") {
+    await sendMessage(context.api, {
+      toUserId: context.toUserId,
+      text: request.caption,
+      ...context.contextToken === void 0 ? {} : { contextToken: context.contextToken }
+    });
+  }
+  const item = buildWeixinMediaItem({
+    kind: request.kind,
+    uploaded: {
+      encryptQueryParam: uploaded.encryptQueryParam,
+      aesKeyHex,
+      ciphertextSize: uploaded.ciphertextSize
+    },
+    fileName,
+    plaintextSize: bytes.byteLength
+  });
+  const sent = await sendMessageItems(context.api, {
+    toUserId: context.toUserId,
+    items: [item],
+    ...context.contextToken === void 0 ? {} : { contextToken: context.contextToken }
+  });
+  return sent.messageId;
+}
+function md5Hex(bytes) {
+  return createHash15("md5").update(bytes).digest("hex");
+}
+async function readLocalMedia(path12, kind) {
+  try {
+    const stats = await fs21.stat(path12);
+    if (!stats.isFile()) {
+      throw new WeixinMediaError("WEIXIN_MEDIA_UNSUPPORTED", `the local ${kind} path '${path12}' is not a regular file`);
+    }
+    if (stats.size > WEIXIN_MEDIA_MAX_BYTES) {
+      throw new WeixinMediaError(
+        "WEIXIN_MEDIA_TOO_LARGE",
+        `the local ${kind} file is ${stats.size} bytes; the cap is ${WEIXIN_MEDIA_MAX_BYTES} bytes`
+      );
+    }
+  } catch (cause) {
+    if (cause instanceof WeixinMediaError) throw cause;
+    if (isErrno2(cause, "ENOENT")) {
+      throw new WeixinMediaError("WEIXIN_MEDIA_UNSUPPORTED", `the local ${kind} file '${path12}' does not exist`, {
+        cause
+      });
+    }
+    throw new WeixinMediaError(
+      "WEIXIN_MEDIA_UNSUPPORTED",
+      `could not inspect the local ${kind} file '${path12}': ${reasonOf2(cause)}`,
+      { cause }
+    );
+  }
+  let bytes;
+  try {
+    bytes = await fs21.readFile(path12);
+  } catch (cause) {
+    throw new WeixinMediaError(
+      "WEIXIN_MEDIA_UNSUPPORTED",
+      `could not read the local ${kind} file '${path12}': ${reasonOf2(cause)}`,
+      { cause }
+    );
+  }
+  if (bytes.byteLength === 0) {
+    throw new WeixinMediaError("WEIXIN_MEDIA_UNSUPPORTED", `the local ${kind} file '${path12}' is empty`);
+  }
+  return bytes;
+}
+function isErrno2(cause, code) {
+  return typeof cause === "object" && cause !== null && cause.code === code;
+}
+async function uploadOnce(context, request) {
+  return withTransport("WEIXIN_MEDIA_UPLOAD_FAILED", request.label, context, async (signal) => {
+    const response = await fetch(request.url, {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: request.ciphertext,
+      signal
+    });
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new WeixinMediaError(
+        "WEIXIN_MEDIA_UPLOAD_FAILED",
+        `${request.label} returned HTTP ${response.status}: ${snippet2(detail)}`,
+        { status: response.status }
+      );
+    }
+    const encryptQueryParam = response.headers.get("x-encrypted-param")?.trim() ?? "";
+    await response.arrayBuffer();
+    if (encryptQueryParam === "") {
+      throw new WeixinMediaError(
+        "WEIXIN_MEDIA_UPLOAD_FAILED",
+        `${request.label} returned HTTP ${response.status} without a non-empty x-encrypted-param header; the upload cannot be referenced`
+      );
+    }
+    return encryptQueryParam;
+  });
+}
+function isRetryableUpload(cause) {
+  if (!(cause instanceof WeixinMediaError)) return false;
+  if (cause.code !== "WEIXIN_MEDIA_UPLOAD_FAILED") return false;
+  return cause.status === void 0 || cause.status >= 500;
+}
+async function withTransport(code, label, context, run) {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, context.timeoutMs);
+  timer.unref?.();
+  const onAbort = () => {
+    controller.abort();
+  };
+  if (context.signal !== void 0) {
+    if (context.signal.aborted) controller.abort();
+    else context.signal.addEventListener("abort", onAbort, { once: true });
+  }
+  try {
+    return await run(controller.signal);
+  } catch (cause) {
+    if (cause instanceof WeixinMediaError) throw cause;
+    if (context.signal?.aborted === true) {
+      throw new WeixinMediaError(code, `${label} was aborted`, { cause });
+    }
+    if (timedOut) {
+      throw new WeixinMediaError(code, `${label} timed out after ${context.timeoutMs}ms`, { cause });
+    }
+    throw transportError(code, label, cause);
+  } finally {
+    clearTimeout(timer);
+    context.signal?.removeEventListener("abort", onAbort);
+  }
+}
+function transportError(code, label, cause) {
+  return new WeixinMediaError(code, `${label} failed: ${transportReason(cause)}`, { cause });
+}
+function transportReason(cause) {
+  if (!(cause instanceof Error)) return typeof cause;
+  const parts = [cause.name];
+  const code = cause.code;
+  if (typeof code === "string") parts.push(code);
+  const inner = cause.cause;
+  if (inner instanceof Error) {
+    const innerCode = inner.code;
+    if (typeof innerCode === "string") parts.push(innerCode);
+  }
+  return parts.join(" ");
+}
+function contentLengthOf(response) {
+  const header = response.headers.get("content-length");
+  if (header === null) return void 0;
+  const value = Number.parseInt(header, 10);
+  return Number.isSafeInteger(value) && value >= 0 ? value : void 0;
+}
+function normalizeCdnBaseUrl(cdnBase) {
+  const text = cdnBase.trim().replace(/\/+$/, "");
+  let parsed;
+  try {
+    parsed = new URL(text);
+  } catch (cause) {
+    throw new TypeError(`the weixin CDN base ${JSON.stringify(cdnBase)} is not an absolute URL`, { cause });
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new TypeError(`the weixin CDN base ${JSON.stringify(cdnBase)} must be http(s), got '${parsed.protocol}'`);
+  }
+  return text;
+}
+function requireAesKey(key, label) {
+  if (key.length !== AES_KEY_BYTES) {
+    throw new TypeError(`${label} needs a ${AES_KEY_BYTES}-byte AES-128 key, got ${key.length} bytes`);
+  }
+}
+function snippet2(text) {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > 300 ? `${flat.slice(0, 300)}\u2026` : flat;
+}
+function reasonOf2(cause) {
+  return cause instanceof Error ? cause.message : String(cause);
+}
 
 // packages/plugin/src/im/weixin/clock.ts
 var WEIXIN_REAL_CLOCK = {
   now: () => Date.now(),
-  sleep: (ms, signal) => new Promise((resolve8) => {
+  sleep: (ms, signal) => new Promise((resolve9) => {
     if (signal.aborted) {
-      resolve8();
+      resolve9();
       return;
     }
     let timer;
@@ -49330,7 +50598,7 @@ var WEIXIN_REAL_CLOCK = {
     const finish = () => {
       if (timer !== void 0) clearTimeout(timer);
       signal.removeEventListener("abort", onAbort);
-      resolve8();
+      resolve9();
     };
     timer = setTimeout(finish, ms);
     timer.unref?.();
@@ -49345,6 +50613,8 @@ var LONG_POLL_MIN_MS = 1e3;
 var LONG_POLL_MAX_MS = 12e4;
 var SEND_TIMEOUT_MS = 15e3;
 var CONFIG_TIMEOUT_MS = 1e4;
+var MEDIA_TIMEOUT_MS = WEIXIN_MEDIA_TIMEOUT_MS;
+var MEDIA_TTL_MS = 24 * 60 * 60 * 1e3;
 var STALE_TOKEN_PAUSE_MS = 60 * 60 * 1e3;
 var RETRY_DELAY_MS = 2e3;
 var BACKOFF_DELAY_MS = 3e4;
@@ -49364,8 +50634,8 @@ function createStartGate() {
   let resolveGate;
   let rejectGate;
   let settled = false;
-  const promise = new Promise((resolve8, reject) => {
-    resolveGate = resolve8;
+  const promise = new Promise((resolve9, reject) => {
+    resolveGate = resolve9;
     rejectGate = reject;
   });
   return {
@@ -49393,10 +50663,13 @@ var WeixinChannel = class {
   saveContextTokens;
   clock;
   typingEnabled;
+  cdnBaseUrl;
+  media;
   logger;
   longPollTimeoutMs;
   cursor = "";
   contextTokens = {};
+  typingTickets = createTypingTicketCache({ ttlMs: TYPING_TICKET_TTL_MS, max: MAX_TYPING_TICKETS });
   controller;
   lifetimeSignal;
   abortListener;
@@ -49421,6 +50694,8 @@ var WeixinChannel = class {
     this.clock = options.clock;
     this.longPollTimeoutMs = clampLongPoll(options.longPollTimeoutMs);
     this.typingEnabled = options.typingEnabled;
+    this.cdnBaseUrl = normalizeCdnBaseUrl(options.cdnBaseUrl ?? WEIXIN_DEFAULT_CDN_BASE_URL);
+    this.media = options.media;
     this.logger = options.logger;
   }
   async start(signal) {
@@ -49432,6 +50707,7 @@ var WeixinChannel = class {
     this.lastError = void 0;
     this.pausedUntil = void 0;
     this.pauseReason = void 0;
+    if (this.media !== void 0) void sweepExpiredMedia(this.media, MEDIA_TTL_MS, this.mediaLog());
     try {
       const [cursor, tokens] = await Promise.all([this.loadCursor(), this.loadContextTokens()]);
       this.cursor = cursor ?? "";
@@ -49538,46 +50814,72 @@ var WeixinChannel = class {
     return queued;
   }
   /**
-   * 输入状态（可选能力）：`getconfig` 取 ticket → `sendtyping`。
-   *
-   * 失败只 warn：打字状态掉了，用户顶多少看到一个「正在输入」，回复本身不能
-   * 因此失败；没有 ticket 的账号直接跳过，不算错误。
+   * 输入状态（可选）：ticket 按对端缓存 30 分钟（上限 500），命中就不问
+   * `getconfig`；`sendtyping` 失败会淘汰 ticket 并重试一次。失败只 warn。
    */
   async setTyping(peerId, status2) {
     if (!this.typingEnabled) return;
     if (this.pauseRemaining() > 0) return;
     try {
-      const contextToken = this.contextTokens[peerId];
-      const config = await getConfig(
-        {
-          baseUrl: this.baseUrl,
-          token: this.token,
-          timeoutMs: CONFIG_TIMEOUT_MS,
-          ...this.controller === void 0 ? {} : { signal: this.controller.signal }
-        },
-        {
-          ilinkUserId: peerId,
-          ...contextToken === void 0 ? {} : { contextToken }
-        }
-      );
-      if (config.typingTicket === void 0) {
-        this.logger?.debug?.(`dsh-soulmojito im weixin/${this.accountId}: no typing ticket for ${peerId}; typing skipped`);
+      const ticket = this.typingTickets.get(peerId, this.clock.now()) ?? await this.fetchTypingTicket(peerId);
+      if (ticket === void 0) {
+        this.logger?.debug?.(`dsh-soulmojito im weixin/${this.accountId}: no typing ticket for ${this.peerLabel(peerId)}; typing skipped`);
         return;
       }
-      await sendTyping(
-        {
-          baseUrl: this.baseUrl,
-          token: this.token,
-          timeoutMs: CONFIG_TIMEOUT_MS,
-          ...this.controller === void 0 ? {} : { signal: this.controller.signal }
-        },
-        { ilinkUserId: peerId, typingTicket: config.typingTicket, status: status2 }
-      );
+      try {
+        await this.postTyping(peerId, ticket, status2);
+      } catch {
+        this.typingTickets.delete(peerId);
+        const fresh = await this.fetchTypingTicket(peerId);
+        if (fresh === void 0) {
+          this.logger?.debug?.(
+            `dsh-soulmojito im weixin/${this.accountId}: no fresh typing ticket for ${this.peerLabel(peerId)}; typing skipped`
+          );
+          return;
+        }
+        await this.postTyping(peerId, fresh, status2);
+      }
     } catch (error) {
       this.logger?.warn?.(
-        `dsh-soulmojito im weixin/${this.accountId}: typing ${status2} for ${peerId} failed: ${messageOf11(error)}`
+        `dsh-soulmojito im weixin/${this.accountId}: typing ${status2} for ${this.peerLabel(peerId)} failed: ${messageOf11(error)}`
       );
     }
+  }
+  async postTyping(peerId, ticket, status2) {
+    await sendTyping(this.apiContext(CONFIG_TIMEOUT_MS), { ilinkUserId: peerId, typingTicket: ticket, status: status2 });
+  }
+  /** `getconfig` 拿新 ticket；服务端没给就不缓存（空 ticket 发出去只会白失败）。 */
+  async fetchTypingTicket(peerId) {
+    const contextToken = this.contextTokens[peerId];
+    const config = await getConfig(this.apiContext(CONFIG_TIMEOUT_MS), {
+      ilinkUserId: peerId,
+      ...contextToken === void 0 ? {} : { contextToken }
+    });
+    const ticket = config.typingTicket;
+    if (ticket === void 0) return void 0;
+    this.typingTickets.set(peerId, ticket, this.clock.now());
+    return ticket;
+  }
+  /** 媒体路径的日志：统一补账号前缀，细节由 media.ts 给固定文案。 */
+  mediaLog() {
+    const prefix = `dsh-soulmojito im weixin/${this.accountId}: `;
+    return {
+      debug: (message) => {
+        this.logger?.debug?.(`${prefix}${message}`);
+      },
+      warn: (message) => {
+        this.logger?.warn?.(`${prefix}${message}`);
+      }
+    };
+  }
+  /** 统一的请求注入面：入口、token、超时与运行期中止信号。 */
+  apiContext(timeoutMs) {
+    return {
+      baseUrl: this.baseUrl,
+      token: this.token,
+      timeoutMs,
+      ...this.controller === void 0 ? {} : { signal: this.controller.signal }
+    };
   }
   async sendParts(target, parts) {
     if (this.controller === void 0) {
@@ -49591,31 +50893,24 @@ var WeixinChannel = class {
     const contextToken = this.contextTokens[target.peerId];
     if (contextToken === void 0) {
       this.logger?.warn?.(
-        `dsh-soulmojito im weixin/${this.accountId}: no context_token for ${target.peerId}; sending without context`
+        `dsh-soulmojito im weixin/${this.accountId}: no context_token for ${this.peerLabel(target.peerId)}; sending without context`
       );
     }
     void this.setTyping(target.peerId, 2);
     let messageId;
     for (const part of parts) {
       try {
-        const sent = await sendMessage(
-          {
-            baseUrl: this.baseUrl,
-            token: this.token,
-            timeoutMs: SEND_TIMEOUT_MS,
-            ...this.controller === void 0 ? {} : { signal: this.controller.signal }
-          },
-          {
-            toUserId: target.peerId,
-            text: part.text,
-            ...contextToken === void 0 ? {} : { contextToken }
-          }
-        );
-        if (sent.messageId !== void 0) messageId = sent.messageId;
+        const sentId = part.kind === "text" ? (await sendMessage(this.apiContext(SEND_TIMEOUT_MS), {
+          toUserId: target.peerId,
+          text: part.text,
+          ...contextToken === void 0 ? {} : { contextToken }
+        })).messageId : await this.sendMediaPart(target, part, contextToken);
+        if (sentId !== void 0) messageId = sentId;
       } catch (error) {
+        if (error instanceof WeixinChannelError) throw error;
         throw new WeixinChannelError(
           "WEIXIN_SEND_FAILED",
-          `weixin send part ${part.index + 1}/${part.total} to ${target.scope}/${target.peerId} failed: ${messageOf11(error)}`,
+          `weixin send part ${part.index + 1}/${part.total} to ${this.peerLabel(target.peerId)} failed: ${messageOf11(error)}`,
           { cause: error }
         );
       }
@@ -49625,6 +50920,36 @@ var WeixinChannel = class {
       at: this.clock.now(),
       ...messageId === void 0 ? {} : { messageId }
     };
+  }
+  async sendMediaPart(target, part, contextToken) {
+    if (part.kind === "voice") {
+      throw new WeixinChannelError(
+        "WEIXIN_BAD_TARGET",
+        `weixin account '${this.accountId}' cannot send a voice part: the iLink reference implementation defines no outbound voice item`
+      );
+    }
+    if (part.localPath === void 0) {
+      throw new WeixinChannelError(
+        "WEIXIN_BAD_TARGET",
+        `weixin account '${this.accountId}' cannot send a ${part.kind} without localPath: WeChat uploads local bytes only, and a remote url cannot be fetched${part.url === void 0 ? "" : " (the url was ignored)"}`
+      );
+    }
+    return sendWeixinMedia(
+      {
+        api: this.apiContext(SEND_TIMEOUT_MS),
+        cdnBaseUrl: this.cdnBaseUrl,
+        uploadTimeoutMs: MEDIA_TIMEOUT_MS,
+        ...this.controller === void 0 ? {} : { signal: this.controller.signal },
+        toUserId: target.peerId,
+        ...contextToken === void 0 ? {} : { contextToken }
+      },
+      {
+        kind: part.kind,
+        localPath: part.localPath,
+        ...part.name === void 0 ? {} : { name: part.name },
+        ...part.caption === void 0 ? {} : { caption: part.caption }
+      }
+    );
   }
   async runLoop(signal, gate) {
     let failures = 0;
@@ -49708,25 +51033,29 @@ var WeixinChannel = class {
       );
     }
   }
+  /** 日志里的对端标签：openid 不进日志环/面板，只出现稳定 alias。 */
+  peerLabel(peerId) {
+    return imPeerAlias("weixin", "private", imPeerKey("weixin", this.accountId, "private", peerId));
+  }
   pauseRemaining() {
     if (this.pausedUntil === void 0) return 0;
     const remaining = this.pausedUntil - this.clock.now();
     return remaining > 0 ? remaining : 0;
   }
   async deliver(message) {
-    const inbound = this.inboundOf(message);
-    if (inbound === void 0) return;
+    const prepared = this.inboundOf(message);
+    if (prepared === void 0) return;
+    const inbound = prepared.inbound;
     if (message.contextToken !== void 0) await this.rememberContextToken(inbound.peerId, message.contextToken);
     void this.setTyping(inbound.peerId, 1);
-    await this.router.handle(inbound);
+    await this.router.handle(inbound, {
+      loadMedia: () => this.materializeMedia(prepared.sources)
+    });
   }
   /**
-   * 单条消息 → `ImInbound`。返回 undefined 表示按协议主动忽略：
-   * `message_type === 2`（机器人自己的回显）与带 `group_id` 的群消息。
-   * `message_type` 是可选字段：缺失或为 1 都按真实用户消息处理。
-   *
-   * 正文取 `type:1` 的 text_item 拼接；没有正文时用 `type:3` 的语音转录；
-   * 图片/文件/视频只记 media，正文占位交给 router 统一拼「（附件：…）」。
+   * 单条消息 → `ImInbound` + 待物化的媒体源。`message_type === 2` 与带
+   * `group_id` 的群消息按协议主动忽略；正文取 text_item，没有正文时用语音转录。
+   * 这里**不下载**附件：下载由路由在通过访问控制后触发。
    */
   inboundOf(message) {
     if (message.messageType === 2) {
@@ -49748,7 +51077,7 @@ var WeixinChannel = class {
     }
     const textParts = [];
     const voiceParts = [];
-    const media = [];
+    const mediaSources = [];
     for (const item of message.items) {
       if (item.type === 1 && item.text !== void 0) {
         textParts.push(item.text);
@@ -49759,38 +51088,50 @@ var WeixinChannel = class {
           voiceParts.push(item.voiceText);
           continue;
         }
-        media.push({
-          kind: "voice",
-          ...item.mediaUrl === void 0 ? {} : { url: item.mediaUrl }
-        });
+        mediaSources.push({ kind: "voice", item });
         continue;
       }
       if (item.type === 2 || item.type === 4 || item.type === 5) {
-        media.push({
-          kind: item.type === 2 ? "image" : item.type === 4 ? "file" : "video",
-          ...item.mediaUrl === void 0 ? {} : { url: item.mediaUrl },
-          ...item.fileName === void 0 ? {} : { name: item.fileName },
-          ...item.size === void 0 ? {} : { size: item.size }
-        });
+        mediaSources.push({ kind: item.type === 2 ? "image" : item.type === 4 ? "file" : "video", item });
       }
     }
     const text = textParts.length > 0 ? textParts.join("\n") : voiceParts.join("\n");
     const messageId = message.messageId;
     const receivedAt = this.clock.now();
     return {
-      channel: "weixin",
-      accountId: this.accountId,
-      scope: "private",
-      peerId,
-      senderId: peerId,
-      senderName: peerId.slice(0, PEER_LABEL_LENGTH),
-      text,
-      media,
-      // 平台不给 message_id 时用随机 UUID 降级：宁可重复投递，不可吞消息。
-      dedupeKey: imDedupeKey("weixin", this.accountId, "private", peerId, messageId ?? randomUUID15()),
-      receivedAt
+      inbound: {
+        channel: "weixin",
+        accountId: this.accountId,
+        scope: "private",
+        peerId,
+        senderId: peerId,
+        senderName: peerId.slice(0, PEER_LABEL_LENGTH),
+        text,
+        // 占位 ref 保留在摘要里；物化成功后由 loadMedia 换成带 localPath 的版本。
+        media: mediaSources.map((source) => ({ kind: source.kind })),
+        // 平台不给 message_id 时用随机 UUID 降级：宁可重复投递，不可吞消息。
+        dedupeKey: imDedupeKey("weixin", this.accountId, "private", peerId, messageId ?? randomUUID16()),
+        receivedAt
+      },
+      sources: mediaSources
     };
   }
+  /** 逐个落盘；顺序与消息里的 item 一致，失败不改变 ref 的数量与顺序。 */
+  async materializeMedia(sources) {
+    return materializeInboundMedia(
+      {
+        cdnBaseUrl: this.cdnBaseUrl,
+        timeoutMs: MEDIA_TIMEOUT_MS,
+        ...this.controller === void 0 ? {} : { signal: this.controller.signal },
+        ...this.media === void 0 ? {} : { media: this.media },
+        channel: "weixin",
+        accountId: this.accountId,
+        log: this.mediaLog()
+      },
+      sources
+    );
+  }
+  /** 重新插入以保持「最近使用」顺序，超限淘汰最旧的一条。 */
   async rememberContextToken(peerId, contextToken) {
     if (this.contextTokens[peerId] === contextToken) return;
     delete this.contextTokens[peerId];
@@ -49874,7 +51215,9 @@ function noop() {
 // packages/plugin/src/http/im.ts
 init_errors();
 init_io();
+init_public_error();
 var CHANNELS = ["qq", "weixin", "onebot"];
+var qqInstallInFlight;
 async function handleImApi(req, res, url, route, method, db, runtime) {
   if (!route.startsWith("im")) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
   if (method === "GET" && route === "im") {
@@ -49893,6 +51236,33 @@ async function handleImApi(req, res, url, route, method, db, runtime) {
       // 两个腾讯包外挂安装：面板据此显示安装指引，而不是把「没装 SDK」显示成通道故障。
       qqRuntime: await qqRuntimeStatus()
     });
+  }
+  if (method === "POST" && route === "im/qq/install") {
+    if (qqInstallInFlight !== void 0) {
+      return sendJson(res, 409, { ok: false, message: "a QQ runtime install is already in progress" });
+    }
+    const install = installQqRuntime({});
+    qqInstallInFlight = install;
+    try {
+      const outcome = await install;
+      const outputTail = safeInstallOutput(outcome.outputTail);
+      if (!outcome.ok) {
+        const detail = publicErrorMessage(new Error(outcome.message ?? "the QQ runtime install failed"));
+        const base = detail === INTERNAL_ERROR_MESSAGE ? "the QQ runtime install failed; see the IM log for details" : detail;
+        return sendJson(res, 400, {
+          ok: false,
+          message: outputTail === void 0 ? base : `${base}
+${outputTail}`
+        });
+      }
+      return sendJson(res, 200, {
+        ok: true,
+        alreadyInstalled: outcome.alreadyInstalled,
+        ...outputTail === void 0 ? {} : { outputTail }
+      });
+    } finally {
+      qqInstallInFlight = void 0;
+    }
   }
   if (method === "POST" && route === "im/accounts") {
     if (runtime === void 0) throw new HttpError(503, "IM runtime is not available in this host process");
@@ -49913,12 +51283,12 @@ async function handleImApi(req, res, url, route, method, db, runtime) {
     try {
       await runtime.upsertAccount(account, secret);
     } catch (error) {
-      if (error instanceof ImStoreError) throw new HttpError(400, error.message);
+      if (error instanceof ImStoreError) throw new HttpError(400, safeHttpMessage(error, "the IM store rejected the request; see the IM log for details"));
       if (error instanceof ImChannelUnsupportedError) throw new HttpError(501, error.message);
-      if (error instanceof OneBotError) throw new HttpError(400, error.message);
-      if (error instanceof QQChannelError) throw new HttpError(400, error.message);
-      if (error instanceof WeixinChannelError) throw new HttpError(weixinChannelErrorStatus(error.code), error.message);
-      if (error instanceof QqRuntimeError) throw new HttpError(503, error.message);
+      if (error instanceof OneBotError) throw new HttpError(400, safeHttpMessage(error, "the OneBot endpoint rejected the request; see the IM log for details"));
+      if (error instanceof QQChannelError) throw new HttpError(400, safeHttpMessage(error, "the QQ channel rejected the request; see the IM log for details"));
+      if (error instanceof WeixinChannelError) throw new HttpError(weixinChannelErrorStatus(error.code), safeHttpMessage(error, "the WeChat channel rejected the request; see the IM log for details"));
+      if (error instanceof QqRuntimeError) throw new HttpError(503, qqRuntimeUnavailableMessage(error));
       throw error;
     }
     return sendJson(res, 200, { ok: true, account });
@@ -49944,11 +51314,11 @@ async function handleImApi(req, res, url, route, method, db, runtime) {
     try {
       return sendJson(res, 200, { ok: true, ...await runtime.startQrBind(channel) });
     } catch (error) {
-      if (error instanceof QQBindError) throw new HttpError(error.code === "QQ_BIND_BUSY" ? 409 : 503, error.message);
-      if (error instanceof WeixinBindError) throw new HttpError(bindErrorStatus(error.code), error.message);
-      if (error instanceof WeixinApiError) throw new HttpError(503, error.message);
+      if (error instanceof QQBindError) throw new HttpError(error.code === "QQ_BIND_BUSY" ? 409 : 503, safeHttpMessage(error, "the QQ scan could not start; see the IM log for details"));
+      if (error instanceof WeixinBindError) throw new HttpError(bindErrorStatus(error.code), safeHttpMessage(error, "the WeChat scan was rejected; see the IM log for details"));
+      if (error instanceof WeixinApiError) throw new HttpError(503, safeHttpMessage(error, "the WeChat backend is unavailable; see the IM log for details"));
       if (error instanceof ImChannelUnsupportedError) throw new HttpError(501, error.message);
-      if (error instanceof QqRuntimeError) throw new HttpError(503, error.message);
+      if (error instanceof QqRuntimeError) throw new HttpError(503, qqRuntimeUnavailableMessage(error));
       throw error;
     }
   }
@@ -49984,6 +51354,27 @@ async function handleImApi(req, res, url, route, method, db, runtime) {
     const handled = await runtime.handleOneBotWebhook(req, res);
     if (!handled) return sendJson(res, 401, { ok: false, message: "no OneBot account accepts this token" });
     return;
+  }
+  if (method === "GET" && route === "im/logs") {
+    if (runtime === void 0) throw new HttpError(503, "IM runtime is not available in this host process");
+    const limit = parseLogLimit(url.searchParams.get("limit"));
+    const afterSeq = parseLogAfter(url.searchParams.get("after"));
+    const minLevel = parseLogLevel(url.searchParams.get("level"));
+    const snapshot2 = runtime.logs === void 0 ? { entries: [], nextSeq: 0 } : runtime.logs({
+      limit,
+      ...afterSeq === void 0 ? {} : { afterSeq },
+      ...minLevel === void 0 ? {} : { minLevel }
+    });
+    return sendJson(res, 200, {
+      ok: true,
+      nextSeq: snapshot2.nextSeq,
+      entries: snapshot2.entries.map((entry) => ({
+        seq: entry.seq,
+        at: new Date(entry.at).toISOString(),
+        level: entry.level,
+        text: entry.text
+      }))
+    });
   }
   if (method === "POST" && route === "im/settings") {
     const body = await readJson(req);
@@ -50072,6 +51463,10 @@ function peerCount(peers, channel, accountId) {
 function imAccountKey(channel, accountId) {
   return `${channel}:${accountId}`;
 }
+function safeHttpMessage(error, fallback) {
+  const message = error instanceof Error ? error.message : String(error);
+  return publicErrorMessage(new Error(message)) === INTERNAL_ERROR_MESSAGE ? fallback : message;
+}
 function parseSecretBag(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new HttpError(400, "secret must be an object of string values");
@@ -50111,6 +51506,40 @@ function requireId(value, field2) {
   if (typeof value !== "string" || value.trim() === "") throw new HttpError(400, `${field2} must be a non-empty string`);
   return value.trim();
 }
+function safeInstallOutput(outputTail) {
+  if (outputTail === "") return void 0;
+  if (publicErrorMessage(new Error(outputTail)) !== INTERNAL_ERROR_MESSAGE) return outputTail;
+  console.warn("dsh-soulmojito qq runtime install output withheld", {
+    operation: "qq-runtime-install",
+    outputTail
+  });
+  return void 0;
+}
+function parseLogLimit(value) {
+  if (value === null || value === "") return 200;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 500) {
+    throw new HttpError(400, "limit must be an integer in 1..500");
+  }
+  return parsed;
+}
+function parseLogAfter(value) {
+  if (value === null || value === "") return void 0;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new HttpError(400, "after must be a non-negative integer (the nextSeq of the previous page)");
+  }
+  return parsed;
+}
+function parseLogLevel(value) {
+  if (value === null || value === "") return void 0;
+  if (value === "debug" || value === "info" || value === "warn" || value === "error") return value;
+  throw new HttpError(400, "level must be one of 'debug' | 'info' | 'warn' | 'error'");
+}
+function qqRuntimeUnavailableMessage(error) {
+  const detail = error.code === "QQ_RUNTIME_MISSING" ? "is not installed or cannot be loaded" : "is installed but does not expose the expected exports";
+  return `the QQ runtime ${detail}; open the IM panel and press \u5B89\u88C5 QQ \u4F9D\u8D56 to install or repair it`;
+}
 
 // packages/plugin/src/http/router.ts
 init_io();
@@ -50118,11 +51547,11 @@ init_io();
 // packages/plugin/src/http/memory.ts
 init_src();
 init_dsh_home();
-import { resolve as resolve6 } from "node:path";
+import { resolve as resolve7 } from "node:path";
 
 // packages/plugin/src/memory-maintenance.ts
 init_src();
-import { randomUUID as randomUUID16 } from "node:crypto";
+import { randomUUID as randomUUID17 } from "node:crypto";
 var MAINTENANCE_MAX_LLM_REQUESTS = 24;
 var MAINTENANCE_OPENING_MAX_CHARS = 1e5;
 var MAINTENANCE_PAGE_RECORDS = 32;
@@ -50150,7 +51579,7 @@ async function startMemoryMaintenance(ctx, deps, scope) {
   const existing = activeRuns.get(key);
   if (existing !== void 0) throw new MaintenanceRunConflictError(scope.character, scope.chatId, existing.runId);
   const active = {
-    runId: randomUUID16(),
+    runId: randomUUID17(),
     character: scope.character,
     chatId: scope.chatId,
     startedAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -50351,7 +51780,7 @@ async function executeRun(ctx, deps, scope, active) {
       opening = buildOpeningMessage(run, listing);
     }
     const messages = [
-      { role: "user", id: randomUUID16(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
+      { role: "user", id: randomUUID17(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
     ];
     let outcome = "completed";
     let errorMessage7;
@@ -50408,7 +51837,7 @@ async function executeRun(ctx, deps, scope, active) {
         blocks.push({ type: "text", text: textBuffer });
       }
       const toolCalls = blocks.filter((block) => block.type === "tool-call");
-      messages.push({ role: "assistant", id: randomUUID16(), content: blocks, source: { kind: "model", provider: run.provider, model: run.model } });
+      messages.push({ role: "assistant", id: randomUUID17(), content: blocks, source: { kind: "model", provider: run.provider, model: run.model } });
       if (toolCalls.length === 0) {
         report = textBuffer !== "" ? textBuffer : blocks.filter((block) => block.type === "text").map((block) => String(block.text ?? "")).join("");
         break;
@@ -50422,7 +51851,7 @@ async function executeRun(ctx, deps, scope, active) {
         const result = await executeToolCall(run, call);
         messages.push({
           role: "tool",
-          id: randomUUID16(),
+          id: randomUUID17(),
           content: [{ type: "text", text: safeJson(result.payload) }],
           source: { kind: "tool", callId: call.id },
           toolCallId: call.id,
@@ -51029,7 +52458,7 @@ init_dsh_home();
 
 // packages/plugin/src/card-workbench/plans.ts
 init_fs_atomic();
-import { promises as fs20 } from "node:fs";
+import { promises as fs22 } from "node:fs";
 import * as path11 from "node:path";
 var MAX_PLAN_CHANGES = 16;
 var MAX_PLAN_ENTRIES = 32;
@@ -51210,7 +52639,7 @@ async function proposeCardPlan(dir, character, input) {
     createdAt: (/* @__PURE__ */ new Date()).toISOString(),
     status: "pending"
   };
-  await fs20.mkdir(plansDir(dir), { recursive: true });
+  await fs22.mkdir(plansDir(dir), { recursive: true });
   await writeAtomicText(planFile(dir, plan.id), `${JSON.stringify(plan, null, 2)}
 `);
   return plan;
@@ -51240,7 +52669,7 @@ async function proposeWorldPlan(dir, world, input) {
     createdAt: (/* @__PURE__ */ new Date()).toISOString(),
     status: "pending"
   };
-  await fs20.mkdir(plansDir(dir), { recursive: true });
+  await fs22.mkdir(plansDir(dir), { recursive: true });
   await writeAtomicText(planFile(dir, plan.id), `${JSON.stringify(plan, null, 2)}
 `);
   return plan;
@@ -51249,7 +52678,7 @@ async function getPlan(dir, planId) {
   if (typeof planId !== "string" || !PLAN_ID_PATTERN.test(planId)) return void 0;
   let text;
   try {
-    text = (await fs20.readFile(planFile(dir, planId))).toString("utf8");
+    text = (await fs22.readFile(planFile(dir, planId))).toString("utf8");
   } catch (cause) {
     if (cause.code === "ENOENT") return void 0;
     throw cause;
@@ -51259,7 +52688,7 @@ async function getPlan(dir, planId) {
 async function listPlans(dir, filter = {}) {
   let files;
   try {
-    files = await fs20.readdir(plansDir(dir));
+    files = await fs22.readdir(plansDir(dir));
   } catch (cause) {
     if (cause.code === "ENOENT") return [];
     throw cause;
@@ -51268,7 +52697,7 @@ async function listPlans(dir, filter = {}) {
   for (const file of files) {
     if (!file.endsWith(".json")) continue;
     try {
-      const plan = normalizePlan(JSON.parse((await fs20.readFile(path11.join(plansDir(dir), file))).toString("utf8")));
+      const plan = normalizePlan(JSON.parse((await fs22.readFile(path11.join(plansDir(dir), file))).toString("utf8")));
       if (plan !== void 0) plans.push(plan);
     } catch {
     }
@@ -53419,7 +54848,7 @@ function scriptContentOf(value) {
 
 // packages/plugin/src/http/memory.ts
 init_public_error();
-function safeInstallOutput(outputTail) {
+function safeInstallOutput2(outputTail) {
   if (outputTail === "") return void 0;
   if (publicErrorMessage(new Error(outputTail)) !== INTERNAL_ERROR_MESSAGE) return outputTail;
   console.warn("dsh-soulmojito: local embed runtime install output withheld", {
@@ -53468,7 +54897,7 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
         await clearEmbedStatus(root);
         return sendJson(res, 200, { ok: true, config: null });
       }
-      const modelDir = resolve6(modelDirRaw);
+      const modelDir = resolve7(modelDirRaw);
       const dirProblem = validateLocalModelDir(modelDir);
       if (dirProblem !== null) {
         return sendJson(res, 400, { ok: false, message: dirProblem });
@@ -53563,7 +54992,7 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
       const outcome = await installPromise;
       if (!outcome.ok) {
         const detail = publicErrorMessage(new Error(outcome.message ?? "install failed"));
-        const outputTail2 = safeInstallOutput(outcome.outputTail);
+        const outputTail2 = safeInstallOutput2(outcome.outputTail);
         return sendJson(res, 400, {
           ok: false,
           // A raw pnpm/cause message can carry a profile or model path; the
@@ -53572,7 +55001,7 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
           ...outputTail2 === void 0 ? {} : { outputTail: outputTail2 }
         });
       }
-      const outputTail = safeInstallOutput(outcome.outputTail);
+      const outputTail = safeInstallOutput2(outcome.outputTail);
       return sendJson(res, 200, {
         ok: true,
         alreadyInstalled: outcome.alreadyInstalled,
@@ -53589,7 +55018,7 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
     if (modelDirRaw === "") {
       return sendJson(res, 400, { ok: false, message: "expected { modelDir }" });
     }
-    const modelDir = resolve6(modelDirRaw);
+    const modelDir = resolve7(modelDirRaw);
     const dirProblem = validateLocalModelDir(modelDir);
     if (dirProblem !== null) {
       return sendJson(res, 400, { ok: false, message: dirProblem });
@@ -54776,8 +56205,8 @@ async function handleApi(ctx, req, res) {
       req.destroy?.();
       throw new Error(`idb record is too large (${declared} > ${IDB_MAX_RECORD_BYTES} bytes)`);
     }
-    const temporaryDir = await mkdtemp(join24(tmpdir4(), "dsh-soulmojito-idb-"));
-    const temporaryPath = join24(temporaryDir, "record.bin");
+    const temporaryDir = await mkdtemp(join26(tmpdir4(), "dsh-soulmojito-idb-"));
+    const temporaryPath = join26(temporaryDir, "record.bin");
     try {
       await pipeline(req, createWriteStream(temporaryPath));
       const metaHeader = typeof req.headers?.["x-dsh-idb-meta"] === "string" ? req.headers["x-dsh-idb-meta"] : "";
@@ -55283,9 +56712,9 @@ ${reason}`);
 }
 
 // packages/plugin/src/im/weixin/context-tokens.ts
-import { randomUUID as randomUUID17 } from "node:crypto";
-import { promises as fs21 } from "node:fs";
-import { dirname as dirname15, join as join25, resolve as resolve7 } from "node:path";
+import { randomUUID as randomUUID18 } from "node:crypto";
+import { promises as fs23 } from "node:fs";
+import { dirname as dirname15, join as join27, resolve as resolve8 } from "node:path";
 var WeixinContextTokenError = class extends Error {
   code;
   path;
@@ -55297,26 +56726,33 @@ var WeixinContextTokenError = class extends Error {
   }
 };
 var ACCOUNT_ID_PATTERN2 = /^[A-Za-z0-9._-]+$/;
-var FILE_MODE = 384;
+var FILE_MODE2 = 384;
 function openWeixinContextTokens(root, accountId) {
   if (!ACCOUNT_ID_PATTERN2.test(accountId) || accountId === "." || accountId === "..") {
     throw new TypeError(
       `weixin context token store got an illegal accountId ${JSON.stringify(accountId)}: only [A-Za-z0-9._-] is allowed`
     );
   }
-  const file = join25(resolve7(root), "weixin", accountId, "context-tokens.json");
+  const file = join27(resolve8(root), "weixin", accountId, "context-tokens.json");
   return {
     load: () => loadTokens(file),
-    save: (tokens) => saveTokens(file, tokens)
+    save: (tokens) => saveTokens(file, tokens),
+    clear: async () => {
+      try {
+        await fs23.rm(file, { force: true });
+      } catch (cause) {
+        throw new WeixinContextTokenError("WEIXIN_TOKEN_STORE_IO", `failed to delete ${file}: ${reasonOf3(cause)}`, file);
+      }
+    }
   };
 }
 async function loadTokens(file) {
   let text;
   try {
-    text = await fs21.readFile(file, "utf8");
+    text = await fs23.readFile(file, "utf8");
   } catch (cause) {
-    if (isErrno(cause, "ENOENT")) return {};
-    throw new WeixinContextTokenError("WEIXIN_TOKEN_STORE_IO", `failed to read ${file}: ${reasonOf(cause)}`, file);
+    if (isErrno3(cause, "ENOENT")) return {};
+    throw new WeixinContextTokenError("WEIXIN_TOKEN_STORE_IO", `failed to read ${file}: ${reasonOf3(cause)}`, file);
   }
   let value;
   try {
@@ -55324,7 +56760,7 @@ async function loadTokens(file) {
   } catch (cause) {
     throw new WeixinContextTokenError(
       "WEIXIN_TOKEN_STORE_CORRUPT",
-      `corrupt token file ${file}: not valid JSON: ${reasonOf(cause)}`,
+      `corrupt token file ${file}: not valid JSON: ${reasonOf3(cause)}`,
       file
     );
   }
@@ -55352,26 +56788,28 @@ async function saveTokens(file, tokens) {
     }
     snapshot2[peerId] = token;
   }
-  const tmp = `${file}.tmp-${randomUUID17()}`;
+  const tmp = `${file}.tmp-${randomUUID18()}`;
   try {
-    await fs21.mkdir(dirname15(file), { recursive: true });
-    await fs21.writeFile(tmp, `${JSON.stringify(snapshot2, null, 2)}
-`, { encoding: "utf8", mode: FILE_MODE });
-    await fs21.rename(tmp, file);
+    await fs23.mkdir(dirname15(file), { recursive: true });
+    await fs23.writeFile(tmp, `${JSON.stringify(snapshot2, null, 2)}
+`, { encoding: "utf8", mode: FILE_MODE2 });
+    await fs23.rename(tmp, file);
   } catch (cause) {
-    await fs21.rm(tmp, { force: true }).catch(() => void 0);
-    throw new WeixinContextTokenError("WEIXIN_TOKEN_STORE_IO", `failed to write ${file}: ${reasonOf(cause)}`, file);
+    await fs23.rm(tmp, { force: true }).catch(() => void 0);
+    throw new WeixinContextTokenError("WEIXIN_TOKEN_STORE_IO", `failed to write ${file}: ${reasonOf3(cause)}`, file);
   }
 }
-function isErrno(cause, code) {
+function isErrno3(cause, code) {
   return typeof cause === "object" && cause !== null && cause.code === code;
 }
-function reasonOf(cause) {
+function reasonOf3(cause) {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
 // packages/plugin/src/im/router.ts
-import { randomUUID as randomUUID19 } from "node:crypto";
+import { randomUUID as randomUUID20 } from "node:crypto";
+import { realpath } from "node:fs/promises";
+import { isAbsolute as isAbsolute2, relative as relative3 } from "node:path";
 
 // packages/plugin/src/im/project.ts
 var IM_EMPTY_REPLY = "\uFF08\u65E0\u6587\u672C\u56DE\u590D\uFF09";
@@ -55553,11 +56991,69 @@ var PendingOrigins = class {
 };
 function userMessageIdsOfTurn(events, turn) {
   const ids = [];
+  let current;
+  let queued = [];
+  let pendingInbox = [];
   for (const event of events) {
+    if (event.type === "turn/start") {
+      current = turnOf2(event);
+      if (current === turn) ids.push(...queued);
+      queued = [];
+      continue;
+    }
+    if (event.type === "turn/end") {
+      current = void 0;
+      continue;
+    }
+    if (event.type === "agent/inbox/spliced") {
+      const splice = inboxSpliceOf(event.data);
+      if (splice === void 0) continue;
+      if (splice.start + splice.removedCount > pendingInbox.length) continue;
+      const removed = pendingInbox.slice(splice.start, splice.start + splice.removedCount);
+      if (current === turn && splice.outcome !== "canceled") ids.push(...messageIdsOf(removed));
+      pendingInbox = [
+        ...pendingInbox.slice(0, splice.start),
+        ...splice.inserted,
+        ...pendingInbox.slice(splice.start + splice.removedCount)
+      ];
+      continue;
+    }
     if (event.type !== "user/message") continue;
-    if (turnOf2(event) !== turn) continue;
     const id = messageIdOf4(event.data);
-    if (id !== void 0) ids.push(id);
+    if (id === void 0) continue;
+    const explicit = turnOf2(event);
+    if (explicit !== void 0) {
+      if (explicit === turn) ids.push(id);
+      continue;
+    }
+    if (current === void 0) {
+      queued.push(id);
+      continue;
+    }
+    if (current === turn) ids.push(id);
+  }
+  return ids;
+}
+function inboxSpliceOf(data) {
+  if (data === void 0 || data["target"] !== "next-turn") return void 0;
+  const start = data["start"];
+  const removedCount = data["removedCount"] ?? 0;
+  const inserted = data["inserted"];
+  if (!Number.isSafeInteger(start) || start < 0) return void 0;
+  if (!Number.isSafeInteger(removedCount) || removedCount < 0) return void 0;
+  if (!Array.isArray(inserted)) return void 0;
+  return {
+    start,
+    removedCount,
+    ...data["outcome"] === void 0 ? {} : { outcome: data["outcome"] },
+    inserted
+  };
+}
+function messageIdsOf(messages) {
+  const ids = [];
+  for (const message of messages) {
+    const id = asRecord8(message)?.["id"];
+    if (typeof id === "string" && id !== "") ids.push(id);
   }
   return ids;
 }
@@ -55606,7 +57102,7 @@ function asRecord8(value) {
 }
 
 // packages/plugin/src/im/session-host.ts
-import { randomUUID as randomUUID18 } from "node:crypto";
+import { randomUUID as randomUUID19 } from "node:crypto";
 var ImSessionError = class extends Error {
   code;
   constructor(code, message) {
@@ -55628,7 +57124,7 @@ function inspectImSessionCapabilities(agents, presets) {
   return { available: reasons.length === 0, reasons };
 }
 function mintImSessionId() {
-  return `session-${randomUUID18()}`;
+  return `session-${randomUUID19()}`;
 }
 async function ensureImSession(deps, request) {
   const capability = inspectImSessionCapabilities(deps.agents, deps.presets);
@@ -55743,12 +57239,13 @@ async function ensureImAgent(deps, sessionId) {
   }
   await deps.ensurePreset();
   const workspace = await deps.workspace();
+  const agentOptions = deps.agentOptions();
   const setup = async (agentContext) => {
     await presets.mount?.(agentContext, deps.presetId);
   };
   if (typeof deps.agents?.resume === "function") {
     try {
-      const resumed = await deps.agents.resume({ resumeSessionId: sessionId, setup });
+      const resumed = await deps.agents.resume({ resumeSessionId: sessionId, agentOptions, setup });
       return resumed.agent;
     } catch (error) {
       deps.logger?.warn?.(`dsh-soulmojito im: resume ${sessionId} failed, creating a new session: ${messageOf12(error)}`);
@@ -55759,6 +57256,7 @@ async function ensureImAgent(deps, sessionId) {
   }
   const created = await deps.agents.create({
     sessionId,
+    agentOptions,
     meta: { cwd: workspace, agentPreset: deps.presetId },
     setup
   });
@@ -55789,37 +57287,64 @@ function createImRouter(deps) {
     const state = await deps.db.getState();
     return state.imSettings ?? DEFAULT_IM_SETTINGS;
   }
-  async function inbound(inboundMessage) {
+  async function inbound(inboundMessage, options) {
     const now = deps.now();
-    if (await deps.seenDedupe(inboundMessage.dedupeKey, now)) return;
+    const peerKey = imPeerKey(inboundMessage.channel, inboundMessage.accountId, inboundMessage.scope, inboundMessage.peerId);
+    const alias = imPeerAlias(inboundMessage.channel, inboundMessage.scope, peerKey);
+    if (await deps.seenDedupe(inboundMessage.dedupeKey, now)) {
+      deps.log?.note("debug", `ignored a duplicate ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias} (dedupe)`);
+      return;
+    }
     const settings = await settingsOf();
     if (!imAccessAllows(settings, inboundMessage.scope, inboundMessage.peerId)) {
-      deps.logger?.warn?.(`dsh-soulmojito im: dropped ${inboundMessage.channel}/${inboundMessage.peerId} (access policy)`);
+      deps.log?.note(
+        "warn",
+        `dropped a ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias}: the access policy does not allow this peer (mode is allowlist and the peer is not listed, or the scope is disabled)`
+      );
       return;
     }
+    let media = inboundMessage.media;
+    if (options?.loadMedia !== void 0) {
+      try {
+        media = await options.loadMedia();
+      } catch (error) {
+        deps.log?.note(
+          "warn",
+          `media for a ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias} failed to load; delivering it without local copies: ${messageOf13(error)}`
+        );
+      }
+    }
+    const message = media === inboundMessage.media ? inboundMessage : { ...inboundMessage, media };
     const target = {
-      channel: inboundMessage.channel,
-      accountId: inboundMessage.accountId,
-      scope: inboundMessage.scope,
-      peerId: inboundMessage.peerId,
-      ...inboundMessage.replyTo === void 0 ? {} : { replyTo: inboundMessage.replyTo }
+      channel: message.channel,
+      accountId: message.accountId,
+      scope: message.scope,
+      peerId: message.peerId,
+      ...message.replyTo === void 0 ? {} : { replyTo: message.replyTo }
     };
-    const text = imUserTextOf(inboundMessage);
-    if (text === void 0) return;
-    const peerKey = imPeerKey(inboundMessage.channel, inboundMessage.accountId, inboundMessage.scope, inboundMessage.peerId);
-    const binding = await resolveBinding(peerKey, inboundMessage.scope, settings);
-    if (binding === void 0) {
-      await notifyUnbound(target, peerKey, now);
+    const text = imUserTextOf(message);
+    if (text === void 0) {
+      deps.log?.note("debug", `ignored a ${message.channel}/${message.scope} message from ${alias}: no text and no attachments`);
       return;
     }
-    const messageId = `im-${randomUUID19()}`;
+    const binding = await resolveBinding(peerKey, message.scope, settings);
+    if (binding === void 0) {
+      await notifyUnbound(target, peerKey, alias, now);
+      return;
+    }
+    deps.log?.note(
+      "info",
+      `accepted a ${message.channel}/${message.scope} message from ${alias} (${text.length} chars) for session ${binding.sessionId}`
+    );
+    const messageId = `im-${randomUUID20()}`;
     origins.remember(binding.sessionId, messageId, peerKey, target, now);
     try {
       await deps.followup(binding.sessionId, { id: messageId, text });
     } catch (error) {
       origins.forgetSession(binding.sessionId);
+      deps.log?.note("error", `could not deliver a message from ${alias} to session ${binding.sessionId}: ${messageOf13(error)}`);
       deps.logger?.warn?.(`dsh-soulmojito im: followup to ${binding.sessionId} failed: ${messageOf13(error)}`);
-      await sendNotice(target, IM_TURN_FAILED);
+      await sendNotice(target, IM_TURN_FAILED, alias);
     }
   }
   async function resolveBinding(peerKey, scope, settings) {
@@ -55851,28 +57376,97 @@ function createImRouter(deps) {
   async function finishTurn(sessionId, turn, events) {
     const now = deps.now();
     const origin = origins.resolve(sessionId, userMessageIdsOfTurn(events, turn), now);
-    if (origin === void 0) return;
+    if (origin === void 0) {
+      deps.log?.note(
+        "debug",
+        `turn ${turn} of session ${sessionId} has no pending IM origin; no IM reply was sent`
+      );
+      return;
+    }
+    const alias = imPeerAlias(origin.target.channel, origin.target.scope, origin.peerKey);
     if (turnFailedOf(events, turn)) {
-      await sendNotice(origin.target, IM_TURN_FAILED);
+      deps.log?.note("warn", `turn ${turn} failed before a reply could be produced; sent the fixed notice to ${alias}`);
+      await sendNotice(origin.target, IM_TURN_FAILED, alias);
       return;
     }
     const text = assistantTextOfTurn(events, turn);
-    if (text === void 0) return;
+    if (text === void 0) {
+      deps.log?.note("info", `turn ${turn} produced no assistant text; nothing was sent to ${alias}`);
+      return;
+    }
     const settings = await settingsOf();
     const rendered = await deps.render(origin.target, text);
     const parts = projectImText(rendered, origin.target.channel, imChunkLimit(origin.target.channel, settings));
-    await deps.send(origin.target, parts.map((part, index) => ({
-      kind: "text",
-      text: part,
-      index,
-      total: parts.length
-    })));
+    try {
+      await deps.send(origin.target, parts.map((part, index) => ({
+        kind: "text",
+        text: part,
+        index,
+        total: parts.length
+      })));
+      deps.log?.note("info", `replied to ${alias} with ${parts.length} part(s), ${rendered.length} chars`);
+    } catch (error) {
+      deps.log?.note("error", `sending the reply to ${alias} failed: ${messageOf13(error)}`);
+      throw error;
+    }
   }
   async function sendText(peerKey, text) {
     const body = text.trim();
     if (body === "") {
       throw new ImSendError("IM_SEND_INVALID", "IM text is empty after trimming whitespace");
     }
+    const { target, channel, scope, settings } = await sendTargetOf(peerKey);
+    const chunks = projectImText(body, channel, imChunkLimit(channel, settings));
+    try {
+      await deps.send(target, chunks.map((chunk, index) => ({
+        kind: "text",
+        text: chunk,
+        index,
+        total: chunks.length
+      })));
+    } catch (error) {
+      deps.log?.note("error", `im_send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf13(error)}`);
+      throw new ImSendError("IM_SEND_FAILED", `IM send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf13(error)}`, { cause: error });
+    }
+    deps.log?.note("info", `im_send delivered ${chunks.length} part(s) to ${imPeerAlias(channel, scope, peerKey)}`);
+    return { parts: chunks.length, at: deps.now() };
+  }
+  async function sendMedia(peerKey, media) {
+    if (media.localPath === void 0 && media.url === void 0) {
+      throw new ImSendError("IM_SEND_INVALID", "media needs a localPath (preferred) or a url");
+    }
+    if (media.localPath !== void 0 && media.localPath.trim() === "") {
+      throw new ImSendError("IM_SEND_INVALID", "media.localPath is blank; pass an absolute file path or omit it");
+    }
+    if (media.localPath !== void 0) await assertInsideWorkspace(media.localPath);
+    const { target, channel, scope, settings } = await sendTargetOf(peerKey);
+    const caption = media.caption?.trim() ?? "";
+    const captionChunks = caption === "" ? [] : projectImText(caption, channel, imChunkLimit(channel, settings));
+    const parts = captionChunks.map((text, index) => ({
+      kind: "text",
+      text,
+      index,
+      total: 1
+    }));
+    parts.push({
+      kind: media.kind,
+      ...media.localPath === void 0 ? {} : { localPath: media.localPath },
+      ...media.url === void 0 ? {} : { url: media.url },
+      ...media.name === void 0 ? {} : { name: media.name },
+      index: parts.length,
+      total: 1
+    });
+    for (const part of parts) part.total = parts.length;
+    try {
+      await deps.send(target, parts);
+    } catch (error) {
+      deps.log?.note("error", `im_send media to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf13(error)}`);
+      throw new ImSendError("IM_SEND_FAILED", `IM media send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf13(error)}`, { cause: error });
+    }
+    deps.log?.note("info", `im_send delivered a ${media.kind} to ${imPeerAlias(channel, scope, peerKey)}`);
+    return { parts: parts.length, at: deps.now() };
+  }
+  async function sendTargetOf(peerKey) {
     const parts = imPeerKeyParts(peerKey);
     if (parts === void 0) {
       throw new ImSendError("IM_SEND_INVALID_TARGET", `malformed IM peer key '${peerKey}'; expected '<channel>:<accountId>:<scope>:<peerId>'`);
@@ -55887,45 +57481,60 @@ function createImRouter(deps) {
     }
     const state = await deps.db.getState();
     if (state.imPeers?.[peerKey] === void 0) {
-      throw new ImSendError("IM_SEND_UNBOUND", `IM peer '${peerKey}' has no binding; bind it in the DSH-SoulMojito IM panel first`);
+      throw new ImSendError("IM_SEND_UNBOUND", `IM peer '${peerKey}' has no binding; bind it in the dsh-soulmojito IM panel first`);
     }
-    const settings = state.imSettings ?? DEFAULT_IM_SETTINGS;
-    const target = {
+    return {
+      target: {
+        channel,
+        accountId: parts.accountId,
+        scope,
+        peerId: parts.peerId
+      },
       channel,
-      accountId: parts.accountId,
       scope,
-      peerId: parts.peerId
+      settings: state.imSettings ?? DEFAULT_IM_SETTINGS
     };
-    const chunks = projectImText(body, channel, imChunkLimit(channel, settings));
+  }
+  async function assertInsideWorkspace(localPath) {
+    if (deps.workspaceRoot === void 0) return;
+    let root;
+    let target;
     try {
-      await deps.send(target, chunks.map((chunk, index) => ({
-        kind: "text",
-        text: chunk,
-        index,
-        total: chunks.length
-      })));
-    } catch (error) {
-      throw new ImSendError("IM_SEND_FAILED", `IM send to ${peerKey} failed: ${messageOf13(error)}`, { cause: error });
+      root = await realpath(await deps.workspaceRoot());
+      target = await realpath(localPath);
+    } catch (cause) {
+      throw new ImSendError("IM_SEND_INVALID", `media path '${localPath}' cannot be resolved: ${messageOf13(cause)}`);
     }
-    return { parts: chunks.length, at: deps.now() };
+    const rel = relative3(root, target);
+    if (rel === "" || rel.startsWith("..") || isAbsolute2(rel)) {
+      throw new ImSendError(
+        "IM_SEND_INVALID",
+        `media path '${localPath}' is outside the session workspace; only files under the workspace (for example downloaded attachments) can be sent`
+      );
+    }
   }
-  async function notifyUnbound(target, peerKey, now) {
+  async function notifyUnbound(target, peerKey, alias, now) {
     const last = noticed.get(peerKey);
-    if (last !== void 0 && now - last < UNBOUND_NOTICE_TTL_MS) return;
+    if (last !== void 0 && now - last < UNBOUND_NOTICE_TTL_MS) {
+      deps.log?.note("debug", `no binding for ${alias}; the bind notice is still suppressed`);
+      return;
+    }
     noticed.set(peerKey, now);
-    await sendNotice(target, imUnboundMessage(peerKey));
+    deps.log?.note("info", `no binding for ${alias}; replied with the bind notice`);
+    await sendNotice(target, imUnboundMessage(peerKey), alias);
   }
-  async function sendNotice(target, text) {
+  async function sendNotice(target, text, alias) {
     try {
       await deps.send(target, [{ kind: "text", text, index: 0, total: 1 }]);
     } catch (error) {
-      deps.logger?.warn?.(`dsh-soulmojito im: notice to ${target.channel}/${target.peerId} failed: ${messageOf13(error)}`);
+      deps.log?.note("error", `sending a notice to ${alias} failed: ${messageOf13(error)}`);
     }
   }
   return {
     inbound,
     finishTurn,
     sendText,
+    sendMedia,
     pending: (sessionId) => origins.pendingCount(sessionId)
   };
 }
@@ -55938,12 +57547,14 @@ function imUserTextOf(inbound) {
 }
 function attachmentSummaryOf(inbound) {
   if (inbound.media.length === 0) return void 0;
-  const counts = /* @__PURE__ */ new Map();
-  for (const media of inbound.media) {
+  const labels = inbound.media.slice(0, 6).map((media) => {
     const label = media.kind === "image" ? "\u56FE\u7247" : media.kind === "voice" ? "\u8BED\u97F3" : media.kind === "video" ? "\u89C6\u9891" : "\u6587\u4EF6";
-    counts.set(label, (counts.get(label) ?? 0) + 1);
-  }
-  return `\uFF08\u9644\u4EF6\uFF1A${[...counts].map(([label, count]) => `${label}\xD7${count}`).join("\u3001")}\uFF09`;
+    if (media.localPath !== void 0) return `${label}\uFF08${media.localPath}\uFF09`;
+    if (media.url !== void 0) return `${label}\uFF08\u672A\u4E0B\u8F7D\uFF09`;
+    return label;
+  });
+  const rest = inbound.media.length > labels.length ? `\u7B49 ${inbound.media.length} \u4E2A` : "";
+  return `\uFF08\u9644\u4EF6\uFF1A${labels.join("\u3001")}${rest}\uFF09`;
 }
 function sharedSessionOf(peers, settings) {
   if (settings.bindingMode !== "shared" || settings.sharedChat === void 0) return {};
@@ -55961,7 +57572,7 @@ function channelOf(value) {
 }
 
 // packages/plugin/src/im/account-id.ts
-import { createHash as createHash14 } from "node:crypto";
+import { createHash as createHash16 } from "node:crypto";
 var SAFE_ACCOUNT_ID = /^[A-Za-z0-9._-]+$/;
 function imAccountIdOf(channel, raw) {
   const trimmed = raw.trim();
@@ -55970,8 +57581,82 @@ function imAccountIdOf(channel, raw) {
     throw new Error(`cannot derive an IM account id: '${trimmed}' is a path traversal name`);
   }
   if (SAFE_ACCOUNT_ID.test(trimmed)) return trimmed;
-  const digest = createHash14("sha256").update(trimmed, "utf8").digest("hex").slice(0, 12);
+  const digest = createHash16("sha256").update(trimmed, "utf8").digest("hex").slice(0, 12);
   return `${channel}-${digest}`;
+}
+
+// packages/plugin/src/im/log.ts
+var IM_LOG_CAPACITY = 500;
+var ENTRY_TEXT_LIMIT = 2e3;
+var LEVEL_WEIGHT = {
+  debug: 10,
+  info: 20,
+  warn: 30,
+  error: 40
+};
+function createImLog(options) {
+  if (!Number.isSafeInteger(options.capacity) || options.capacity < 1) {
+    throw new Error(`IM log capacity must be a positive integer, received ${String(options.capacity)}`);
+  }
+  const entries = [];
+  let seq = 0;
+  function note(level, text) {
+    const trimmed = text.trim();
+    if (trimmed === "") return;
+    seq += 1;
+    const safe = redactLogText(trimmed);
+    entries.push({
+      seq,
+      at: options.now(),
+      level,
+      text: safe.length > ENTRY_TEXT_LIMIT ? `${safe.slice(0, ENTRY_TEXT_LIMIT)}\u2026` : safe
+    });
+    if (entries.length > options.capacity) entries.splice(0, entries.length - options.capacity);
+  }
+  function read(query) {
+    const limit = Number.isSafeInteger(query.limit) && query.limit > 0 ? Math.min(query.limit, options.capacity) : options.capacity;
+    const minWeight = LEVEL_WEIGHT[query.minLevel ?? "debug"];
+    const after = query.afterSeq ?? 0;
+    const selected = [];
+    for (const entry of entries) {
+      if (entry.seq <= after) continue;
+      if (LEVEL_WEIGHT[entry.level] < minWeight) continue;
+      selected.push(entry);
+    }
+    const slice = selected.length > limit ? selected.slice(selected.length - limit) : selected;
+    return { entries: slice, nextSeq: seq };
+  }
+  return { note, read };
+}
+function wrapImLogger(base, sink) {
+  const record = (level, args) => {
+    sink.note(level, textOfLogArgs(args));
+  };
+  return {
+    debug: (...args) => {
+      record("debug", args);
+      base?.debug?.(...args);
+    },
+    info: (...args) => {
+      record("info", args);
+      base?.info?.(...args);
+    },
+    warn: (...args) => {
+      record("warn", args);
+      base?.warn?.(...args);
+    },
+    error: (...args) => {
+      record("error", args);
+      base?.error?.(...args);
+    }
+  };
+}
+function textOfLogArgs(args) {
+  const first = args[0];
+  return typeof first === "string" ? first : String(first ?? "");
+}
+function redactLogText(text) {
+  return text.replace(/(['"`])((?:[A-Za-z]:[\\/]|\\\\|\/\/|\/(?!\/))[^'"`]*)\1/g, (_match, quote) => `${quote}<path>${quote}`).replace(/\b[A-Za-z]:[\\/][^\s'"`,;)]*/g, "<path>").replace(/\\\\[^\s'"`,;)]+/g, "<path>").replace(/(^|[\s"'`(=~])\/\/[^\s'"`,;)]+/g, (_match, prefix) => `${prefix}<path>`).replace(/(^|[\s"'`(=~])\/(?:[^\s/'"`,;)]+\/)+[^\s/'"`,;)]*/g, (_match, prefix) => `${prefix}<path>`);
 }
 
 // packages/plugin/src/im/runtime.ts
@@ -55997,6 +57682,13 @@ function createImRuntime(ctx, options) {
   const injectedBot = options.qqBot;
   const store5 = ImStore.open(tavernDataRoot("im"));
   const lifetime = new AbortController();
+  const imLog = createImLog({ capacity: IM_LOG_CAPACITY, now: () => Date.now() });
+  const logger = wrapImLogger(options.logger, imLog);
+  const mediaStore = openImMediaStore({
+    workspaceRoot: async () => (await prepareInternalWorkspace()).path,
+    now: () => Date.now(),
+    maxBytes: WEIXIN_MEDIA_MAX_BYTES
+  });
   const sessionDeps = {
     db,
     agents,
@@ -56006,11 +57698,16 @@ function createImRuntime(ctx, options) {
       await ensureAgentPresetDeclared(ctx, AGENT_TAVERN_PRESET_ID);
     },
     workspace: async () => (await prepareInternalWorkspace()).path,
+    // 宿主用 agent.options.model 解析 {{model}} 等提示变量；缺了整轮在组装阶段失败。
+    agentOptions: () => {
+      const { provider, model } = ctx.agentDefaultModel.currentSelection();
+      return { provider, model };
+    },
     bind: async (sessionId, character, chatId) => bindSession(db, sessionId, character, chatId, false, "agent-tavern", "dsh-native"),
     presetChanged: async () => {
       await emitAgentPresetChanged();
     },
-    ...options.logger === void 0 ? {} : { logger: options.logger }
+    logger
   };
   const router = createImRouter({
     db,
@@ -56031,6 +57728,7 @@ function createImRuntime(ctx, options) {
       });
     },
     render: async (target, text) => renderForTarget(db, target, text),
+    workspaceRoot: async () => (await prepareInternalWorkspace()).path,
     send: async (target, parts) => {
       const channel = channels.get(channelKey(target.channel, target.accountId));
       if (channel === void 0) {
@@ -56038,7 +57736,8 @@ function createImRuntime(ctx, options) {
       }
       await channel.send(target, parts);
     },
-    ...options.logger === void 0 ? {} : { logger: options.logger }
+    log: imLog,
+    logger
   });
   function handleSessionEvent(session, event) {
     if (event.type !== "turn/end") return;
@@ -56050,7 +57749,7 @@ function createImRuntime(ctx, options) {
       if (!bound) return;
       return router.finishTurn(sessionId, turn, sessionEvents(session));
     }).catch((error) => {
-      options.logger?.warn?.(`dsh-soulmojito im: turn ${turn} of ${sessionId} reply failed: ${messageOf14(error)}`);
+      logger?.warn?.(`dsh-soulmojito im: turn ${turn} of ${sessionId} reply failed: ${messageOf14(error)}`);
     });
   }
   function openOneBot(account, secret) {
@@ -56060,7 +57759,7 @@ function createImRuntime(ctx, options) {
       router: { handle: async (inbound) => router.inbound(inbound) },
       groupRequireMention: async () => ((await db.getState()).imSettings ?? DEFAULT_IM_SETTINGS).groupRequireMention,
       now: () => Date.now(),
-      ...options.logger === void 0 ? {} : { logger: options.logger }
+      logger
     });
   }
   async function installOneBot(account, channel) {
@@ -56085,13 +57784,14 @@ function createImRuntime(ctx, options) {
     return new QQChannel({
       accountId: account.accountId,
       secret,
-      router: { handle: async (inbound) => router.inbound(inbound) },
+      router: { handle: async (inbound, inboundOptions) => router.inbound(inbound, inboundOptions) },
       groupRequireMention: async () => ((await db.getState()).imSettings ?? DEFAULT_IM_SETTINGS).groupRequireMention,
       createBot,
       // 账号级能力：官方机器人只有申请到 markdown 权限才能发 msg_type=2。
       markdownSupport: secret["markdownSupport"] === "true",
+      media: mediaStore,
       now: () => Date.now(),
-      ...options.logger === void 0 ? {} : { logger: options.logger }
+      logger
     });
   }
   function openWeixin(account, secret) {
@@ -56101,7 +57801,7 @@ function createImRuntime(ctx, options) {
       // 构造期校验 botToken/baseUrl：坏凭据在落盘前就被拒绝（见 upsertAccount）。
       token: secret["botToken"] ?? "",
       baseUrl: secret["baseUrl"] ?? "",
-      router: { handle: async (inbound) => router.inbound(inbound) },
+      router: { handle: async (inbound, inboundOptions) => router.inbound(inbound, inboundOptions) },
       loadCursor: async () => store5.readCursor(account.accountId),
       saveCursor: async (cursor) => store5.writeCursor(account.accountId, cursor),
       loadContextTokens: async () => contextTokens.load(),
@@ -56109,7 +57809,9 @@ function createImRuntime(ctx, options) {
       clock: WEIXIN_REAL_CLOCK,
       longPollTimeoutMs: WEIXIN_LONG_POLL_TIMEOUT_MS,
       typingEnabled: true,
-      ...options.logger === void 0 ? {} : { logger: options.logger }
+      cdnBaseUrl: options.weixinCdnBaseUrl ?? WEIXIN_DEFAULT_CDN_BASE_URL,
+      media: mediaStore,
+      logger
     });
   }
   async function installSingleChannel(account, channel) {
@@ -56122,6 +57824,7 @@ function createImRuntime(ctx, options) {
     channels.set(key, channel);
     try {
       await channel.start(lifetime.signal);
+      logger.info?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} channel installed and polling`);
     } catch (error) {
       channels.delete(key);
       throw error;
@@ -56137,7 +57840,7 @@ function createImRuntime(ctx, options) {
     pollIntervalMs: WEIXIN_BIND_POLL_INTERVAL_MS,
     clock: WEIXIN_REAL_CLOCK,
     localTokenList: loadWeixinLocalTokens,
-    ...options.logger === void 0 ? {} : { logger: options.logger }
+    logger
   });
   let activeQrBind;
   async function adoptQQCredential(credentials) {
@@ -56194,7 +57897,7 @@ function createImRuntime(ctx, options) {
       try {
         secret = await store5.readSecret("weixin", account.accountId);
       } catch (error) {
-        options.logger?.warn?.(`dsh-soulmojito im weixin bind: skipped ${account.accountId} local token: ${messageOf14(error)}`);
+        logger?.warn?.(`dsh-soulmojito im weixin bind: skipped ${account.accountId} local token: ${messageOf14(error)}`);
         continue;
       }
       const token = secret?.["botToken"]?.trim() ?? "";
@@ -56218,13 +57921,13 @@ function createImRuntime(ctx, options) {
       activeQrBind = "qq";
       return qqBinding.startQrConnect({
         onQrDisplayed: (url) => {
-          options.logger?.info?.(`dsh-soulmojito im qq bind: QR code ready${qrHostSuffix(url)}`);
+          logger?.info?.(`dsh-soulmojito im qq bind: QR code ready${qrHostSuffix(url)}`);
         },
         onSuccess: async (credentials) => {
           await adoptQQCredential(credentials);
         },
         onFailure: (error) => {
-          options.logger?.warn?.(`dsh-soulmojito im qq bind failed: ${error.message}`);
+          logger?.warn?.(`dsh-soulmojito im qq bind failed: ${error.message}`);
         }
       }, { signal: lifetime.signal, source: "dsh-soulmojito" });
     }
@@ -56232,16 +57935,16 @@ function createImRuntime(ctx, options) {
       activeQrBind = "weixin";
       return weixinBinding.start({
         onQrDisplayed: (url) => {
-          options.logger?.info?.(`dsh-soulmojito im weixin bind: QR code ready${qrHostSuffix(url)}`);
+          logger?.info?.(`dsh-soulmojito im weixin bind: QR code ready${qrHostSuffix(url)}`);
         },
         onSuccess: async (credential) => {
           await adoptWeixinCredential(credential);
         },
         onAlreadyBound: () => {
-          options.logger?.info?.("dsh-soulmojito im weixin bind: the bot is already bound; existing credential stays in use");
+          logger?.info?.("dsh-soulmojito im weixin bind: the bot is already bound; existing credential stays in use");
         },
         onFailure: (error) => {
-          options.logger?.warn?.(`dsh-soulmojito im weixin bind failed: ${error.message}`);
+          logger?.warn?.(`dsh-soulmojito im weixin bind failed: ${error.message}`);
         }
       }, { signal: lifetime.signal });
     }
@@ -56332,12 +58035,26 @@ function createImRuntime(ctx, options) {
       }
       oneBotChannels.delete(key);
       const removed = await store5.deleteAccount(channelId, accountId);
+      const stillUsed = (await store5.accounts()).some((entry) => entry.accountId === accountId);
+      if (!stillUsed) {
+        await store5.deleteCursor(accountId).catch((error) => {
+          logger?.warn?.(`dsh-soulmojito im: deleting the cursor for ${channelId}/${accountId} failed: ${messageOf14(error)}`);
+        });
+      }
+      await mediaStore.remove(channelId, accountId).catch((error) => {
+        logger?.warn?.(`dsh-soulmojito im: deleting the media of ${channelId}/${accountId} failed: ${messageOf14(error)}`);
+      });
+      if (channelId === "weixin") {
+        await openWeixinContextTokens(tavernDataRoot("im"), accountId).clear().catch((error) => {
+          logger?.warn?.(`dsh-soulmojito im: deleting the weixin context tokens for ${accountId} failed: ${messageOf14(error)}`);
+        });
+      }
       return removed || live !== void 0;
     });
   }
   const upgradeHandler = createOneBotUpgradeHandler({
     channels: () => [...oneBotChannels.values()],
-    ...options.logger === void 0 ? {} : { logger: options.logger }
+    logger
   });
   const seat = ensureOneBotUpgradeSeat(ctx.webServer, `${API}/im/onebot/ws`);
   if (!seat.registered) {
@@ -56361,21 +58078,22 @@ function createImRuntime(ctx, options) {
       try {
         const secret = await store5.readSecret(account.channel, account.accountId);
         if (secret === void 0) {
-          options.logger?.warn?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} has no stored secret; skipped`);
+          logger?.warn?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} has no stored secret; skipped`);
           continue;
         }
         await upsertAccount(account, secret);
       } catch (error) {
-        options.logger?.warn?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} failed to start: ${messageOf14(error)}`);
+        logger?.warn?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} failed to start: ${messageOf14(error)}`);
       }
     }
   }
   void restoreAccounts().catch((error) => {
-    options.logger?.warn?.(`dsh-soulmojito im: restoring stored accounts failed: ${messageOf14(error)}`);
+    logger?.warn?.(`dsh-soulmojito im: restoring stored accounts failed: ${messageOf14(error)}`);
   });
   return {
     router,
     capabilities,
+    logs: (query) => imLog.read(query),
     upsertAccount,
     removeAccount,
     handleOneBotWebhook,
@@ -56399,7 +58117,7 @@ function createImRuntime(ctx, options) {
       lifetime.abort();
       for (const channel of channels.values()) {
         await channel.stop().catch((error) => {
-          options.logger?.warn?.(`dsh-soulmojito im: stopping ${channel.channel}/${channel.accountId} failed: ${messageOf14(error)}`);
+          logger?.warn?.(`dsh-soulmojito im: stopping ${channel.channel}/${channel.accountId} failed: ${messageOf14(error)}`);
         });
       }
       channels.clear();

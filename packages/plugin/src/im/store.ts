@@ -197,6 +197,22 @@ export class ImStore {
     await imStoreWriteJson(this.cursorPath(accountId), { cursor: value } satisfies ImCursorFile)
   }
 
+  /**
+   * 删游标（解绑账号时）：留着它等于把「重启后从哪里续读」的秘密渠道留在磁盘上，
+   * 而且同名账号重建时会跳过历史——那正是用户删号时最不希望发生的事。
+   */
+  async deleteCursor(accountId: string): Promise<boolean> {
+    imStoreAssertAccountId(accountId)
+    const file = this.cursorPath(accountId)
+    try {
+      await fs.unlink(file)
+      return true
+    } catch (cause) {
+      if (imStoreIsErrno(cause, 'ENOENT')) return false
+      throw new ImStoreError('IO', `删除游标失败: ${file}: ${imStoreReason(cause)}`, file)
+    }
+  }
+
   // ---- 内部：路径 ----
 
   private accountsPath(): string {

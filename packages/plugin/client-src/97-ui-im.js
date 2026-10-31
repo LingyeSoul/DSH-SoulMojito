@@ -87,13 +87,17 @@
     }
 
     /**
-     * 从 `qqRuntime.reason` 里抠出安装命令：服务端把同一条命令拼在句子末尾
-     * （「Install them with: cd "…" && pnpm add …」），面板要能单独复制它。
+     * 动作级忙碌判定（提案 0024 §6.4）：每组动作只锁自己，扫码在跑不该顺手禁用
+     * 安装按钮。绑定组是 `bind:<channel>` + 验证码的 `verify`——验证码与扫码共用
+     * 一条绑定会话，必须互斥。
      */
-    function imQqInstallCommand(reason) {
-      const text = String(reason ?? '')
-      const at = text.indexOf('cd "')
-      return at < 0 ? '' : text.slice(at).trim()
+    function imBindBusy(busy) {
+      return busy.startsWith('bind:') || busy === 'verify'
+    }
+
+    /** 绑定表行的忙碌判定：改绑/解绑共用 `peer:<key>`，一条在跑就锁住整列。 */
+    function imPeerBusy(busy) {
+      return busy.startsWith('peer:')
     }
 
     /** 聊天引用 → 下拉值；character 可能含分隔符，用 \u0000 拼键最稳。 */
@@ -165,9 +169,6 @@
       const available = view?.available === true
       const sharedSessions = imSharedSessionIds(peers)
       const chatOptions = imChatOptions(characters, state.chatLists)
-      const qqInstall = qqRuntime !== null && qqRuntime.installed === false
-        ? imQqInstallCommand(qqRuntime.reason)
-        : ''
 
       // 改绑/来源聊天下拉要用已有聊天清单：与总览同款一次性拉取（按角色缓存）。
       // 读不出来如实报错——下拉里少了聊天等于让用户以为「没有可绑的聊天」。
@@ -213,6 +214,12 @@
         }
       }, [bindRunning, bindChannel])
 
+      /**
+       * 只清自己那把锁：两个动作并行时（例如安装 + 扫码），先结束的那个不能替
+       * 后一个解锁，否则按钮会在轮询仍在跑时重新可点。
+       */
+      const releaseBusy = (key) => setBusy((current) => (current === key ? '' : current))
+
       const startBind = (channel) => {
         setError('')
         setNotice('')
@@ -228,7 +235,7 @@
             setBind({ channel, ...status })
           })
           .catch((cause) => setError(imErrorMessage(cause)))
-          .finally(() => setBusy(''))
+          .finally(() => releaseBusy(`bind:${channel}`))
       }
 
       const submitVerify = () => {
@@ -248,7 +255,7 @@
             applyBindStatus(status)
           })
           .catch((cause) => setError(imErrorMessage(cause)))
-          .finally(() => setBusy(''))
+          .finally(() => releaseBusy('verify'))
       }
 
       const cancelBind = () => {
@@ -262,7 +269,7 @@
             setNotice('')
           })
           .catch((cause) => setError(imErrorMessage(cause)))
-          .finally(() => setBusy(''))
+          .finally(() => releaseBusy('bind:cancel'))
       }
 
       const createOneBot = (accountId, token) => {
@@ -284,18 +291,40 @@
             setError(imErrorMessage(cause))
             return false
           })
-          .finally(() => setBusy(''))
+          .finally(() => releaseBusy('account:onebot'))
       }
 
       const removeAccount = (channel, accountId) => {
         if (!window.confirm(t('im.accountRemoveConfirm', { id: accountId }))) return
         setError('')
         setNotice('')
-        setBusy(`account:delete:${channel}:${accountId}`)
+        setBusy(`remove:${channel}:${accountId}`)
         void api(`im/accounts?channel=${encodeURIComponent(channel)}&accountId=${encodeURIComponent(accountId)}`, { method: 'DELETE' })
           .then(() => reloadView())
           .catch((cause) => setError(imErrorMessage(cause)))
-          .finally(() => setBusy(''))
+          .finally(() => releaseBusy(`remove:${channel}:${accountId}`))
+      }
+
+      // 腾讯包一键安装：面板永不展示 shell 命令，按钮就是唯一入口。409 是「已有
+      // 一次安装在进行」（并发点击/另一个标签页），400 带服务端的失败原文——两条都
+      // 必须原样落到面上，吞掉就等于让用户对着一个没反应的按钮发呆。
+      const installQqRuntime = () => {
+        setError('')
+        setNotice('')
+        setBusy('install:qq')
+        void api('im/qq/install', { method: 'POST', headers: jsonHeaders(), body: '{}' })
+          .then((result) => {
+            setNotice(result.alreadyInstalled === true ? t('im.qqInstallAlready') : t('im.qqInstallDone'))
+            return reloadView()
+          })
+          .catch((cause) => {
+            if (cause?.status === 409) {
+              setError(t('im.qqInstallBusy'))
+              return
+            }
+            setError(t('im.qqInstallFailed', { reason: imErrorMessage(cause) }))
+          })
+          .finally(() => releaseBusy('install:qq'))
       }
 
       const saveSettings = (patch) => {
@@ -316,7 +345,7 @@
             setError(imErrorMessage(cause))
             return false
           })
-          .finally(() => setBusy(''))
+          .finally(() => releaseBusy('settings'))
       }
 
       const commitAllow = (scope) => {
@@ -359,7 +388,7 @@
         })
           .then(() => reloadView())
           .catch((cause) => setError(imErrorMessage(cause)))
-          .finally(() => setBusy(''))
+          .finally(() => releaseBusy(`peer:${peer.key}`))
       }
 
       const unbindPeer = (peer) => {
@@ -370,7 +399,7 @@
         void api(`im/peers?key=${encodeURIComponent(peer.key)}`, { method: 'DELETE' })
           .then(() => reloadView())
           .catch((cause) => setError(imErrorMessage(cause)))
-          .finally(() => setBusy(''))
+          .finally(() => releaseBusy(`peer:${peer.key}`))
       }
 
       const scanningChannel = bind !== null && bind.phase !== 'failed' ? bind.channel : ''
@@ -380,10 +409,10 @@
         accounts: channels.filter((row) => row.channel === channel),
         scanning: scanningChannel === channel,
         runtimeMissing: channel === 'qq' && qqRuntime !== null && qqRuntime.installed === false,
-        installCommand: channel === 'qq' ? qqInstall : '',
         disabled: !available,
         busy,
         onBind: () => startBind(channel),
+        onInstall: installQqRuntime,
         onRemove: (accountId) => removeAccount(channel, accountId),
       }))
 
@@ -425,6 +454,7 @@
           onRebind: rebindPeer,
           onUnbind: unbindPeer,
         }),
+        h(ImLogBand, { disabled: !available, onError: setError }),
         h(ImSettingsBand, {
           settings,
           chatOptions,
@@ -439,20 +469,11 @@
     }
 
     /** 一张通道卡片：状态灯 + 一行原因 + 账号清单 + 通道动作。 */
-    function ImChannelCard({ channel, accounts, scanning, runtimeMissing, installCommand, disabled, busy, onBind, onRemove }) {
+    function ImChannelCard({ channel, accounts, scanning, runtimeMissing, disabled, busy, onBind, onInstall, onRemove }) {
       const t = useTranslate()
-      const [copied, setCopied] = useState(false)
-      const [copyError, setCopyError] = useState('')
       const tone = imChannelTone(accounts, scanning)
       const reason = imChannelReason(accounts)
       const bindLabel = channel === 'qq' ? t('im.bindStartQq') : t('im.bindStartWeixin')
-      const copy = () => {
-        if (installCommand === '') return
-        setCopyError('')
-        void imCopyText(installCommand)
-          .then(() => setCopied(true))
-          .catch((cause) => setCopyError(imErrorMessage(cause)))
-      }
       return h('div', { className: `dt-im-card dt-im-card-${tone}`, 'data-im-channel': channel, 'data-im-tone': tone },
         h('div', { className: 'dt-im-card-head' },
           h('span', { className: `dt-im-light dt-im-light-${tone}`, 'aria-hidden': 'true' }),
@@ -472,7 +493,7 @@
                 size: 'sm',
                 variant: 'ghost',
                 icon: h(IconTrashOutline16),
-                disabled: disabled || busy !== '',
+                disabled: disabled || busy === `remove:${channel}:${row.accountId}`,
                 'aria-label': t('im.accountRemove', { id: row.accountId }),
                 title: t('im.accountRemove', { id: row.accountId }),
                 onClick: () => onRemove(row.accountId),
@@ -483,16 +504,18 @@
             h(Button, {
               size: 'sm',
               variant: 'outline',
-              disabled: disabled || runtimeMissing || busy !== '',
+              disabled: disabled || runtimeMissing || imBindBusy(busy),
               onClick: onBind,
             }, bindLabel)),
         runtimeMissing
           ? h('div', { className: 'dt-im-install' },
             h('p', { className: 'dt-hint' }, t('im.qqRuntimeMissing')),
-            installCommand === '' ? null : h('div', { className: 'dt-im-url' },
-              h('code', { className: 'dt-im-monospace' }, installCommand),
-              h(Button, { size: 'sm', variant: 'ghost', disabled: copied, onClick: copy }, copied ? t('im.copied') : t('im.copy'))),
-            copyError !== '' ? h('p', { className: 'dt-error' }, copyError) : null)
+            h(Button, {
+              size: 'sm',
+              variant: 'primary',
+              disabled: disabled || busy === 'install:qq',
+              onClick: onInstall,
+            }, busy === 'install:qq' ? t('im.log.installing') : t('im.qqInstall')))
           : null)
     }
 
@@ -537,7 +560,7 @@
             h(Button, {
               size: 'sm',
               variant: 'primary',
-              disabled: busy !== '' || verifyCode.trim() === '',
+              disabled: imBindBusy(busy) || verifyCode.trim() === '',
               onClick: onSubmit,
             }, busy === 'verify' ? t('im.bindSubmitting') : t('im.bindVerifySubmit')),
             h('p', { className: 'dt-hint dt-hint-wide' }, bind.prompt || t('im.bindVerifyHint')))
@@ -562,9 +585,9 @@
           : null,
         h('div', { className: 'dt-im-bind-actions' },
           phase === 'failed'
-            ? h(Button, { size: 'sm', variant: 'outline', disabled: busy !== '', onClick: onRetry }, t('im.bindRetry'))
+            ? h(Button, { size: 'sm', variant: 'outline', disabled: imBindBusy(busy), onClick: onRetry }, t('im.bindRetry'))
             : null,
-          h(Button, { size: 'sm', variant: 'ghost', disabled: busy !== '', onClick: onCancel }, t('im.bindCancel'))))
+          h(Button, { size: 'sm', variant: 'ghost', disabled: imBindBusy(busy), onClick: onCancel }, t('im.bindCancel'))))
     }
 
     /**
@@ -619,7 +642,7 @@
           h(Button, {
             size: 'sm',
             variant: 'primary',
-            disabled: disabled || busy !== '' || accountId.trim() === '' || token.trim() === '',
+            disabled: disabled || busy === 'account:onebot' || accountId.trim() === '' || token.trim() === '',
             onClick: submit,
           }, busy === 'account:onebot' ? t('im.onebot.creating') : t('im.onebot.create'))),
         endpoint === ''
@@ -651,7 +674,7 @@
           peer,
           shared: sharedSessions.has(peer.sessionId),
           chatOptions,
-          disabled: busy !== '',
+          disabled: imPeerBusy(busy),
           onRebind,
           onUnbind,
         }))))
@@ -715,7 +738,7 @@
             h('span', { className: 'dt-label' }, t('im.settings.bindingMode')),
             h('select', {
               value: settings.bindingMode,
-              disabled: busy !== '',
+              disabled: busy === 'settings',
               onChange: (event) => onPatch({ bindingMode: event.target.value }),
             }, IM_BINDING_MODES.map((mode) => h('option', { key: mode, value: mode }, t(`im.settings.mode.${mode}`))))),
           h('p', { className: 'dt-hint' }, t(`im.settings.mode.${settings.bindingMode}Hint`)),
@@ -723,7 +746,7 @@
             h('span', { className: 'dt-label' }, t('im.settings.sourceChat')),
             h('select', {
               value: sourceKey,
-              disabled: busy !== '',
+              disabled: busy === 'settings',
               onChange: (event) => onPatch({ sourceChat: imChatRefFromKey(event.target.value) }),
             },
             h('option', { value: '' }, t('im.settings.sourceChatNone')),
@@ -733,7 +756,7 @@
             h('span', { className: 'dt-label' }, t('im.settings.sharedChat')),
             h('select', {
               value: sharedKey,
-              disabled: busy !== '',
+              disabled: busy === 'settings',
               onChange: (event) => onPatch({ sharedChat: imChatRefFromKey(event.target.value) }),
             },
             h('option', { value: '' }, t('im.settings.sharedChatNone')),
@@ -744,7 +767,7 @@
             h('input', {
               type: 'checkbox',
               checked: settings.groupRequireMention === true,
-              disabled: busy !== '',
+              disabled: busy === 'settings',
               onChange: (event) => onPatch({ groupRequireMention: event.target.checked }),
             }),
             h('span', null, t('im.settings.groupRequireMention'))),

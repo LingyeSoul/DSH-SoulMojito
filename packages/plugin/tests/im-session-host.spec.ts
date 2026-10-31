@@ -58,6 +58,7 @@ function harness(options: { withResume?: boolean; withPresets?: boolean } = {}):
     presetId: 'agent-tavern',
     ensurePreset: async () => {},
     workspace: async () => root,
+    agentOptions: () => ({ provider: 'test-provider', model: 'test-model' }),
     bind: async (sessionId, character, chatId) => {
       binds.push({ sessionId, character, chatId })
     },
@@ -107,8 +108,18 @@ describe('bindImChat', () => {
     const result = await bindImChat(h.deps, { character: 'Example', chatId }, undefined)
     expect(result.sessionId).toMatch(/^session-/)
     expect(h.created).toHaveLength(1)
+    expect(h.created[0]?.['agentOptions']).toEqual({ provider: 'test-provider', model: 'test-model' })
     expect(h.created[0]?.['meta']).toMatchObject({ agentPreset: 'agent-tavern', cwd: root })
     expect(h.binds).toEqual([{ sessionId: result.sessionId, character: 'Example', chatId }])
+  })
+
+  it('resumes with the default model selection so the prompt can resolve {{model}}', async () => {
+    const chatId = await seedCharacterAndChat('Example')
+    const h = harness()
+    await bindImChat(h.deps, { character: 'Example', chatId }, 'session-resumed')
+    // 宿主 resume 失败时降级 create；两条路径都必须带上模型选择。
+    expect(h.resumed[0]?.['agentOptions']).toEqual({ provider: 'test-provider', model: 'test-model' })
+    expect(h.created[0]?.['agentOptions']).toEqual({ provider: 'test-provider', model: 'test-model' })
   })
 
   it('reuses the given session id and never creates a second one', async () => {
@@ -193,6 +204,7 @@ describe('ensureImSession', () => {
       presetId: 'agent-tavern',
       ensurePreset: async () => {},
       workspace: async () => root,
+      agentOptions: () => ({ provider: 'test-provider', model: 'test-model' }),
       bind: async () => { binds += 1 },
       presetChanged: async () => {},
     }

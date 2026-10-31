@@ -71,12 +71,15 @@ afterEach(async () => {
 interface RuntimeHarness {
   runtime: ImRuntimeHandle
   sent: Array<{ peerKey: string; text: string }>
+  media: Array<{ peerKey: string; media: unknown }>
 }
 
 function runtimeHarness(options: { available?: boolean; reasons?: string[]; fail?: string } = {}): RuntimeHarness {
   const sent: RuntimeHarness['sent'] = []
+  const media: RuntimeHarness['media'] = []
   return {
     sent,
+    media,
     runtime: {
       capabilities: {
         available: options.available ?? true,
@@ -98,6 +101,11 @@ function runtimeHarness(options: { available?: boolean; reasons?: string[]; fail
         sendText: async (peerKey, text) => {
           if (options.fail !== undefined) throw new Error(options.fail)
           sent.push({ peerKey, text })
+          return { parts: 1, at: 1_700_000_000_000 }
+        },
+        sendMedia: async (peerKey, payload) => {
+          if (options.fail !== undefined) throw new Error(options.fail)
+          media.push({ peerKey, media: payload })
           return { parts: 1, at: 1_700_000_000_000 }
         },
       },
@@ -231,6 +239,57 @@ describe('im_send', () => {
     const { call } = toolsOf(runtime)
     await expect(call('im_send', { text: 'hi', peer: aliceAlias }))
       .rejects.toThrow('socket closed')
+  })
+})
+
+
+describe('im_send media', () => {
+  it('sends an absolute local file and reports the media kind', async () => {
+    const { runtime, media } = runtimeHarness()
+    const { call } = toolsOf(runtime)
+    const result = await call('im_send', {
+      mediaKind: 'image',
+      mediaPath: 'C:\\tmp\\shot.png',
+      text: '看这个',
+      peer: aliceAlias,
+    })
+    expect(result).toMatchObject({ peer: aliceAlias, mediaKind: 'image', parts: 1 })
+    expect(media).toEqual([{
+      peerKey: ALICE,
+      media: { kind: 'image', localPath: 'C:\\tmp\\shot.png', caption: '看这个' },
+    }])
+  })
+
+  it('rejects both sources at once, relative paths, unknown kinds and dangling names', async () => {
+    const { runtime } = runtimeHarness()
+    const { call } = toolsOf(runtime)
+    await expect(call('im_send', { mediaKind: 'image', mediaPath: 'C:\\a.png', mediaUrl: 'https://example.invalid/a.png' }))
+      .rejects.toThrow(/either mediaPath or mediaUrl/)
+    await expect(call('im_send', { mediaKind: 'image', mediaPath: 'relative.png' }))
+      .rejects.toThrow(/not absolute/)
+    await expect(call('im_send', { mediaKind: 'sticker', mediaPath: 'C:\\a.png' }))
+      .rejects.toThrow(/mediaKind must be one of/)
+    await expect(call('im_send', { mediaName: 'x.png' }))
+      .rejects.toThrow(/need mediaPath or mediaUrl/)
+    await expect(call('im_send', {}))
+      .rejects.toThrow(/needs text, mediaPath or mediaUrl/)
+  })
+
+  it('accepts an http(s) url and rejects other protocols', async () => {
+    const { runtime, media } = runtimeHarness()
+    const { call } = toolsOf(runtime)
+    await call('im_send', { mediaKind: 'video', mediaUrl: 'https://example.invalid/v.mp4', peer: aliceAlias })
+    expect(media[0]?.media).toEqual({ kind: 'video', url: 'https://example.invalid/v.mp4' })
+    await expect(call('im_send', { mediaKind: 'video', mediaUrl: 'file:///c:/v.mp4' }))
+      .rejects.toThrow(/expected http\(s\)/)
+  })
+
+  it('reports a runtime that cannot send media instead of faking success', async () => {
+    const { runtime } = runtimeHarness()
+    const patched: ImRuntimeHandle = { ...runtime, router: { sendText: runtime.router.sendText } }
+    const { call } = toolsOf(patched)
+    await expect(call('im_send', { mediaKind: 'file', mediaPath: 'C:\\tmp\\a.pdf', peer: aliceAlias }))
+      .rejects.toThrow(/cannot send media/)
   })
 })
 

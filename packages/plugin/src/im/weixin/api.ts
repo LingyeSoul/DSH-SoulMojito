@@ -17,6 +17,8 @@ import { BUILD_INFO } from '../../build-info.js'
 
 /** 固定入口：二维码流程从这一个 host 开始，确认后由服务端给 `baseurl`。 */
 export const WEIXIN_FIXED_BASE_URL = 'https://ilinkai.weixin.qq.com'
+/** 媒体 CDN：上传/下载附件的默认入口（协议给出的 c2c 域名）。 */
+export const WEIXIN_DEFAULT_CDN_BASE_URL = 'https://novac2c.cdn.weixin.qq.com/c2c'
 /** 当前通道使用的 `bot_type`（参考实现同样是 3）。 */
 export const WEIXIN_DEFAULT_BOT_TYPE = '3'
 /** token 失效：`ret` 或 `errcode` 等于它时暂停该账号。 */
@@ -111,6 +113,16 @@ export interface WeixinMessageItem {
   readonly voiceText?: string
   /** 媒体项的 CDN 全量地址；协议要求优先用 `full_url`。 */
   readonly mediaUrl?: string
+  /** 与 `mediaUrl` 同值，保留协议字段名，下载路径按它选地址。 */
+  readonly fullUrl?: string
+  /** `media.thumb_url`：视频/图片的缩略图地址，仅记录。 */
+  readonly thumbUrl?: string
+  /** `media.encrypt_query_param`：没有 `full_url` 时用它拼下载地址。 */
+  readonly encryptQueryParam?: string
+  /** `image_item.aeskey`：32 字符 hex，图片解密优先用它。 */
+  readonly aesKeyHex?: string
+  /** `media.aes_key`：base64 密钥；语音/文件/视频必须有。 */
+  readonly aesKey?: string
   readonly fileName?: string
   readonly size?: number
 }
@@ -242,13 +254,33 @@ export async function sendMessage(
   if (options.text.trim() === '') {
     throw badBody(`sendMessage to '${toUserId}' has empty text; an empty message must not be sent`)
   }
+  return sendMessageItems(context, {
+    toUserId: options.toUserId,
+    items: [{ type: 1, text_item: { text: options.text } }],
+    ...(options.contextToken === undefined ? {} : { contextToken: options.contextToken }),
+  })
+}
+
+/**
+ * 一条消息带一组 item（媒体项、以及媒体前的说明文字各走一次请求）。
+ *
+ * 协议限定 `item_list` 里放一项媒体；多项时服务端行为未定义，所以由调用方
+ * 拆成多次 `sendMessageItems`，每次一项。
+ */
+export async function sendMessageItems(
+  context: WeixinApiContext,
+  options: { toUserId: string; items: readonly Record<string, unknown>[]; contextToken?: string | undefined },
+): Promise<{ messageId?: string }> {
+  const toUserId = options.toUserId.trim()
+  if (toUserId === '') throw badBody('sendMessageItems requires a non-empty to_user_id')
+  if (options.items.length === 0) throw badBody(`sendMessageItems to '${toUserId}' has no items; nothing to send`)
   const msg: Record<string, unknown> = {
     from_user_id: '',
     to_user_id: toUserId,
     client_id: randomUUID(),
     message_type: 2,
     message_state: 2,
-    item_list: [{ type: 1, text_item: { text: options.text } }],
+    item_list: [...options.items],
   }
   if (options.contextToken !== undefined && options.contextToken !== '') {
     msg['context_token'] = options.contextToken
@@ -265,6 +297,58 @@ export async function sendMessage(
   if (retcode !== undefined) throw apiError('sendmessage', retcode, record)
   const messageId = optionalId(record['message_id'])
   return messageId === undefined ? {} : { messageId }
+}
+
+/**
+ * `POST /ilink/bot/getuploadurl`：为一份密文换 CDN 上传地址。
+ *
+ * 响应不一定带 `ret`（参考实现只读 `upload_full_url`/`upload_param`），所以
+ * 与其它端点同一套校验：`ret` 缺省当成功，出现且非 0 才失败。两个地址都
+ * 没有时不能猜 CDN 域名，直接判为响应形状错误。
+ */
+export async function getUploadUrl(
+  context: WeixinApiContext,
+  options: {
+    filekey: string
+    mediaType: 1 | 2 | 3 | 4
+    toUserId: string
+    rawsize: number
+    rawfilemd5: string
+    filesize: number
+    aeskeyHex: string
+  },
+): Promise<{ uploadParam?: string; uploadFullUrl?: string }> {
+  const toUserId = options.toUserId.trim()
+  if (toUserId === '') throw badBody('getUploadUrl requires a non-empty to_user_id')
+  const raw = await requestJson({
+    method: 'POST',
+    context,
+    path: 'ilink/bot/getuploadurl',
+    label: 'getuploadurl',
+    body: {
+      filekey: options.filekey,
+      media_type: options.mediaType,
+      to_user_id: toUserId,
+      rawsize: options.rawsize,
+      rawfilemd5: options.rawfilemd5,
+      filesize: options.filesize,
+      no_need_thumb: true,
+      aeskey: options.aeskeyHex,
+      base_info: baseInfo(),
+    },
+  })
+  const record = asRecord(raw, 'getuploadurl response')
+  const retcode = nonzeroOf(record, 'getuploadurl response')
+  if (retcode !== undefined) throw apiError('getuploadurl', retcode, record)
+  const uploadFullUrl = strictOptionalText(record, 'upload_full_url', 'getuploadurl response')
+  const uploadParam = strictOptionalText(record, 'upload_param', 'getuploadurl response')
+  if (uploadFullUrl === undefined && uploadParam === undefined) {
+    throw badBody('getuploadurl response carries neither upload_full_url nor upload_param; the upload cannot start')
+  }
+  return {
+    ...(uploadFullUrl === undefined ? {} : { uploadFullUrl }),
+    ...(uploadParam === undefined ? {} : { uploadParam }),
+  }
 }
 
 /** `POST /ilink/bot/getconfig`：取 `typing_ticket`（输入状态的通行证）。 */
@@ -501,37 +585,58 @@ function parseItem(type: number, record: Record<string, unknown>): WeixinMessage
   if (type === 3) {
     const voice = record['voice_item']
     const voiceText = optionalText(field(voice, 'text'))
-    const mediaUrl = mediaUrlOf(voice)
-    return {
-      type,
-      ...(voiceText === undefined ? {} : { voiceText }),
-      ...(mediaUrl === undefined ? {} : { mediaUrl }),
-    }
+    return { type, ...(voiceText === undefined ? {} : { voiceText }), ...mediaFieldsOf(voice) }
   }
   if (type === 2 || type === 4 || type === 5) {
     const item = record[itemKeyOf(type)]
-    const mediaUrl = mediaUrlOf(item)
-    const fileName = optionalText(field(item, 'file_name'))
-    const size = sizeOf(type, item)
+    const aesKeyHex = type === 2 ? optionalText(field(item, 'aeskey')) : undefined
     return {
       type,
-      ...(mediaUrl === undefined ? {} : { mediaUrl }),
-      ...(fileName === undefined ? {} : { fileName }),
-      ...(size === undefined ? {} : { size }),
+      ...mediaFieldsOf(item),
+      ...(aesKeyHex === undefined ? {} : { aesKeyHex }),
+      ...optionalFileNameOf(item),
+      ...optionalSizeOf(type, item),
     }
   }
   return { type }
+}
+
+/**
+ * 媒体项里与传输有关的字段。`mediaUrl` 保留旧名（`full_url`），下载路径按
+ * `fullUrl` 读；没有 `full_url` 时用 `media.encrypt_query_param` 拼 CDN 地址。
+ * 这四个字段都可能缺省：缺省不是协议破坏，只是「不能下载」。
+ */
+function mediaFieldsOf(item: unknown): Pick<
+  WeixinMessageItem,
+  'mediaUrl' | 'fullUrl' | 'thumbUrl' | 'encryptQueryParam' | 'aesKey'
+> {
+  const media = field(item, 'media')
+  const fullUrl = optionalText(field(media, 'full_url'))
+  const thumbUrl = optionalText(field(media, 'thumb_url'))
+  const encryptQueryParam = optionalText(field(media, 'encrypt_query_param'))
+  const aesKey = optionalText(field(media, 'aes_key'))
+  return {
+    ...(fullUrl === undefined ? {} : { mediaUrl: fullUrl, fullUrl }),
+    ...(thumbUrl === undefined ? {} : { thumbUrl }),
+    ...(encryptQueryParam === undefined ? {} : { encryptQueryParam }),
+    ...(aesKey === undefined ? {} : { aesKey }),
+  }
+}
+
+function optionalFileNameOf(item: unknown): Pick<WeixinMessageItem, 'fileName'> {
+  const fileName = optionalText(field(item, 'file_name'))
+  return fileName === undefined ? {} : { fileName }
+}
+
+function optionalSizeOf(type: number, item: unknown): Pick<WeixinMessageItem, 'size'> {
+  const size = sizeOf(type, item)
+  return size === undefined ? {} : { size }
 }
 
 function itemKeyOf(type: number): string {
   if (type === 2) return 'image_item'
   if (type === 4) return 'file_item'
   return 'video_item'
-}
-
-/** 媒体地址只认 `media.full_url`：没有全量地址时不下猜 CDN 域名，也不下载。 */
-function mediaUrlOf(item: unknown): string | undefined {
-  return optionalText(field(field(item, 'media'), 'full_url'))
 }
 
 function sizeOf(type: number, item: unknown): number | undefined {
@@ -569,6 +674,19 @@ function optionalText(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
   const trimmed = value.trim()
   return trimmed === '' ? undefined : trimmed
+}
+
+/**
+ * 出现但类型不对的文本字段说明响应形状变了，不能当成「没写」；
+ * 空串按缺省处理（`upload_param` 为空等于没有地址）。
+ */
+function strictOptionalText(record: Record<string, unknown>, key: string, label: string): string | undefined {
+  const value = record[key]
+  if (value === undefined) return undefined
+  if (typeof value !== 'string') {
+    throw badBody(`${label}.${key} must be a string, received ${describe(value)}`)
+  }
+  return optionalText(value)
 }
 
 function optionalFiniteNumber(value: unknown): number | undefined {

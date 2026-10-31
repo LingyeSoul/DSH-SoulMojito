@@ -2368,6 +2368,11 @@ function checkContentLexicon() {
 
 const IM_SOURCE_ROOT = join(PLUGIN_ROOT, 'src', 'im')
 const IM_BUILD_SCRIPT_PATH = join(REPO_ROOT, 'scripts', 'build-plugin.mjs')
+/** 面板源码：`97-ui-im.js` + 日志分片；安装入口与日志入口都必须在这里。 */
+const IM_PANEL_SOURCE_PATHS = [
+  join(PLUGIN_ROOT, 'client-src', '97-ui-im.js'),
+  join(PLUGIN_ROOT, 'client-src', '97b-ui-im-logs.js'),
+]
 
 /**
  * 注释里的示例不算依赖：`im/qq/sdk.ts` 的文档注释明确写着「禁止 import ... from
@@ -2391,10 +2396,11 @@ function imChannelSources() {
 }
 
 /**
- * 五条不变量（提案 0024 §5）：腾讯包只外挂、构建脚本不需要 external/垫片、
- * 包清单没有 dependencies、产物里两条 OneBot 路径在场、客户端分片清单带着
- * 「聊天渠道」面板（`97-ui-im.js`——丢了它面板会从产物里静默消失，而服务端
- * 路由仍然齐全，只在浏览器里表现为「分区不见了」）。
+ * 不变量（提案 0024 §5）：腾讯包只外挂、构建脚本不需要 external/垫片、
+ * 包清单没有 dependencies、产物里两条 OneBot 路径与两个 IM 管理入口在场、
+ * 客户端分片清单带着「聊天渠道」面板（`97-ui-im.js`——丢了它面板会从产物里
+ * 静默消失，而服务端路由仍然齐全，只在浏览器里表现为「分区不见了」），
+ * 并且面板**只给安装按钮、不给 shell 命令**（2026-10-31 用户要求）。
  */
 function checkImChannelInvariants(sample) {
   const problems = []
@@ -2417,12 +2423,24 @@ function checkImChannelInvariants(sample) {
   if (!Array.isArray(fragments) || !fragments.includes('97-ui-im.js')) {
     problems.push("client-src/manifest.json must ship the '97-ui-im.js' fragment (the chat-channels panel)")
   }
+  const panel = typeof sample.panel === 'string' ? sample.panel : ''
+  if (!panel.includes('im/logs')) {
+    problems.push('the IM panel must read im/logs (the runtime log band is the only way users see why a message got no reply)')
+  }
+  if (!panel.includes('im/qq/install')) {
+    problems.push('the IM panel must call im/qq/install; the QQ runtime is installed from the button, never by the user')
+  }
+  if (/pnpm add/.test(panel)) {
+    problems.push('the IM panel must not print a shell install command; it must offer the install button')
+  }
   // 只认代码行：esbuild 会给每个入口留 `// path/to/file.ts` 注释，注释不算路由。
   const bundleCode = sample.bundle
     .split('\n')
     .filter((line) => !line.trimStart().startsWith('//'))
     .join('\n')
-  for (const fragment of ['im/onebot/ws', 'im/onebot/webhook']) {
+  // OneBot 两条入站入口 + 面板要用的日志与安装入口：缺任何一条都是「服务端路由被
+  // 打包掉了」，而浏览器里只表现为按钮没反应或日志空白。
+  for (const fragment of ['im/onebot/ws', 'im/onebot/webhook', 'im/logs', 'im/qq/install']) {
     if (!bundleCode.includes(fragment)) problems.push(`built index.mjs is missing the '${fragment}' path fragment`)
   }
   return problems
@@ -3538,8 +3556,9 @@ const gates = [
         ],
         buildScript: 'const output = await esbuildBuild({ entryPoints, bundle: true, format: \'esm\' })',
         pkg: { name: PLUGIN_NAME },
-        manifest: { fragments: ['96-panels-presets.js', '97-ui-im.js', '98-apply.js'] },
-        bundle: 'var webhookRoute = "im/onebot/webhook";\nvar seat = `${API}/im/onebot/ws`;',
+        manifest: { fragments: ['96-panels-presets.js', '97-ui-im.js', '97b-ui-im-logs.js', '98-apply.js'] },
+        bundle: 'var webhookRoute = "im/onebot/webhook";\nvar seat = `${API}/im/onebot/ws`;\nvar logs = "im/logs";\nvar install = "im/qq/install";',
+        panel: "api('im/logs'); api('im/qq/install', { method: 'POST' })",
       }
       // 负样本一：源码里塞一句真的静态 import（注释里的示例必须仍然放行）。
       const badSource = {
@@ -3560,12 +3579,22 @@ const gates = [
       const badDependencies = { ...good, pkg: { name: PLUGIN_NAME, dependencies: { ws: '^8.0.0' } } }
       // 负样本五：产物里丢了两条 OneBot 路径。
       const badBundle = { ...good, bundle: 'var webhookRoute = "im/gone/webhook";' }
+      // 负样本五之二：产物里丢了日志与安装入口（面板按钮与日志带会「没反应」，而
+      // 服务端源码看起来一切正常）。
+      const badBundleNoConsole = {
+        ...good,
+        bundle: 'var webhookRoute = "im/onebot/webhook";\nvar seat = `${API}/im/onebot/ws`;',
+      }
       // 负样本六：客户端分片清单漏掉「聊天渠道」面板（服务端路由全在，浏览器里
       // 只是分区消失——不锁住就会被当成「功能没做」而不是「打包掉了」）。
       const badManifest = { ...good, manifest: { fragments: ['96-panels-presets.js', '98-apply.js'] } }
-      const rejected = [badSource, badExternal, badShim, badDependencies, badBundle, badManifest]
+      // 负样本七：面板把安装命令甩给用户（2026-10-31 明确禁止）。
+      const badPanelCommand = { ...good, panel: "api('im/logs'); api('im/qq/install'); 'cd x && pnpm add @tencent-connect/qqbot-nodejs'" }
+      // 负样本八：面板没有日志入口——「发了没反应」会再次无迹可查。
+      const badPanelNoLogs = { ...good, panel: "api('im/qq/install')" }
+      const rejected = [badSource, badExternal, badShim, badDependencies, badBundle, badBundleNoConsole, badManifest, badPanelCommand, badPanelNoLogs]
         .filter((sample) => checkImChannelInvariants(sample).length > 0).length
-      return checkImChannelInvariants(good).length === 0 && rejected === 6
+      return checkImChannelInvariants(good).length === 0 && rejected === 9
         ? []
         : ['im channel packaging bad samples were not rejected']
     },
@@ -3576,6 +3605,7 @@ const gates = [
         pkg: readJson(PACKAGE_PATH),
         manifest: readJson(CLIENT_SRC_MANIFEST_PATH),
         bundle: existsSync(SERVER_PATH) ? readFileSync(SERVER_PATH, 'utf8') : '',
+        panel: IM_PANEL_SOURCE_PATHS.filter((file) => existsSync(file)).map((file) => readFileSync(file, 'utf8')).join('\n'),
       })
       if (!existsSync(SERVER_PATH)) problems.push('generated packages/plugin/index.mjs does not exist')
       return problems

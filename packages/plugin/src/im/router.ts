@@ -9,14 +9,17 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { realpath } from 'node:fs/promises'
+import { isAbsolute, relative } from 'node:path'
 import type { TavernStore } from '../../../tavern-store/src/index.js'
 import type { HostLogger } from '../host-contract.js'
 import { projectImText } from './project.js'
 import { PendingOrigins, assistantTextOfTurn, turnFailedOf, userMessageIdsOfTurn, type ImSessionEventLike } from './reply.js'
 import { imAccessAllows, imChunkLimit } from './settings.js'
 import { imUnboundMessage, type EnsureImSessionRequest, type EnsureImSessionResult } from './session-host.js'
-import type { OutboundPart, ImChannelId, ImInbound, ImPeerBinding, ImSendReceipt, ImSettings, ImTarget } from './types.js'
-import { DEFAULT_IM_SETTINGS, imPeerKey, imPeerKeyParts } from './types.js'
+import type { ImLogSink } from './log.js'
+import type { ImChannelId, ImInbound, ImMediaRef, ImOutboundMedia, ImPeerBinding, ImScope, ImSendReceipt, ImSettings, ImTarget, OutboundPart } from './types.js'
+import { DEFAULT_IM_SETTINGS, imPeerAlias, imPeerKey, imPeerKeyParts } from './types.js'
 
 /** 轮次失败时的固定话术：不回模型原文，也不暴露内部错误。 */
 export const IM_TURN_FAILED = '（这一轮没有生成成功，稍后再试）'
@@ -57,12 +60,24 @@ export interface ImRouterDeps {
   render: (target: ImTarget, text: string) => Promise<string>
   followup: (sessionId: string, message: ImAgentMessage) => Promise<void>
   send: (target: ImTarget, parts: readonly OutboundPart[]) => Promise<void>
+  /**
+   * 媒体文件的合法根（内部工作区）。给定时 `sendMedia` 拒绝根目录之外的文件：
+   * 模型不能被诱导把密钥/聊天记录当附件发出去。缺省（测试假件）不启用。
+   */
+  workspaceRoot?: () => Promise<string>
   logger?: HostLogger
+  /** 面板「IM 运行日志」的落点；缺省时只写宿主日志。 */
+  log?: ImLogSink
 }
 
 export interface ImRouter {
-  /** 一条入站消息：不阻塞调用方，通道的事件循环可以继续收消息。 */
-  inbound(inbound: ImInbound): Promise<void>
+  /**
+   * 一条入站消息：不阻塞调用方，通道的事件循环可以继续收消息。
+   *
+   * `loadMedia` 是惰性媒体物化：路由先完成去重与访问控制，只有通过之后才调用
+   * 它下载/解密。被拒绝的 peer 与重复投递因此不会触发任何落盘或网络请求。
+   */
+  inbound(inbound: ImInbound, options?: { loadMedia?: () => Promise<readonly ImMediaRef[]> }): Promise<void>
   /** 该会话的某一轮结束：把正文回给发起这一轮的那个 peer。 */
   finishTurn(sessionId: string, turn: number, events: readonly ImSessionEventLike[]): Promise<void>
   /**
@@ -70,6 +85,8 @@ export interface ImRouter {
    * 一次：工具面只保证「绑到本会话」，路由保证「peer 真的有绑定」。
    */
   sendText(peerKey: string, text: string): Promise<ImSendReceipt>
+  /** 主动发一条媒体（可选配文）；目标校验与 `sendText` 同一套。 */
+  sendMedia(peerKey: string, media: ImOutboundMedia): Promise<ImSendReceipt>
   /** 供测试与面板观测。 */
   pending(sessionId: string): number
 }
@@ -83,37 +100,69 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
     return state.imSettings ?? DEFAULT_IM_SETTINGS
   }
 
-  async function inbound(inboundMessage: ImInbound): Promise<void> {
+  async function inbound(
+    inboundMessage: ImInbound,
+    options?: { loadMedia?: () => Promise<readonly ImMediaRef[]> },
+  ): Promise<void> {
     const now = deps.now()
-    if (await deps.seenDedupe(inboundMessage.dedupeKey, now)) return
+    const peerKey = imPeerKey(inboundMessage.channel, inboundMessage.accountId, inboundMessage.scope, inboundMessage.peerId)
+    const alias = imPeerAlias(inboundMessage.channel, inboundMessage.scope, peerKey)
+    if (await deps.seenDedupe(inboundMessage.dedupeKey, now)) {
+      deps.log?.note('debug', `ignored a duplicate ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias} (dedupe)`)
+      return
+    }
     const settings = await settingsOf()
     if (!imAccessAllows(settings, inboundMessage.scope, inboundMessage.peerId)) {
-      deps.logger?.warn?.(`dsh-soulmojito im: dropped ${inboundMessage.channel}/${inboundMessage.peerId} (access policy)`)
+      deps.log?.note(
+        'warn',
+        `dropped a ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias}: the access policy does not allow this peer (mode is allowlist and the peer is not listed, or the scope is disabled)`,
+      )
       return
     }
+    // 媒体只在通过访问控制之后才物化：白名单外的人不能靠附件让进程下载/解密/写盘。
+    // 物化失败不能拖垮正文——去重条目已经记下，抛错等于让这条消息永远不再重投。
+    let media: readonly ImMediaRef[] = inboundMessage.media
+    if (options?.loadMedia !== undefined) {
+      try {
+        media = await options.loadMedia()
+      } catch (error) {
+        deps.log?.note(
+          'warn',
+          `media for a ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias} failed to load; delivering it without local copies: ${messageOf(error)}`,
+        )
+      }
+    }
+    const message: ImInbound = media === inboundMessage.media ? inboundMessage : { ...inboundMessage, media }
     const target: ImTarget = {
-      channel: inboundMessage.channel,
-      accountId: inboundMessage.accountId,
-      scope: inboundMessage.scope,
-      peerId: inboundMessage.peerId,
-      ...(inboundMessage.replyTo === undefined ? {} : { replyTo: inboundMessage.replyTo }),
+      channel: message.channel,
+      accountId: message.accountId,
+      scope: message.scope,
+      peerId: message.peerId,
+      ...(message.replyTo === undefined ? {} : { replyTo: message.replyTo }),
     }
-    const text = imUserTextOf(inboundMessage)
-    if (text === undefined) return
-    const peerKey = imPeerKey(inboundMessage.channel, inboundMessage.accountId, inboundMessage.scope, inboundMessage.peerId)
-    const binding = await resolveBinding(peerKey, inboundMessage.scope, settings)
-    if (binding === undefined) {
-      await notifyUnbound(target, peerKey, now)
+    const text = imUserTextOf(message)
+    if (text === undefined) {
+      deps.log?.note('debug', `ignored a ${message.channel}/${message.scope} message from ${alias}: no text and no attachments`)
       return
     }
+    const binding = await resolveBinding(peerKey, message.scope, settings)
+    if (binding === undefined) {
+      await notifyUnbound(target, peerKey, alias, now)
+      return
+    }
+    deps.log?.note(
+      'info',
+      `accepted a ${message.channel}/${message.scope} message from ${alias} (${text.length} chars) for session ${binding.sessionId}`,
+    )
     const messageId = `im-${randomUUID()}`
     origins.remember(binding.sessionId, messageId, peerKey, target, now)
     try {
       await deps.followup(binding.sessionId, { id: messageId, text })
     } catch (error) {
       origins.forgetSession(binding.sessionId)
+      deps.log?.note('error', `could not deliver a message from ${alias} to session ${binding.sessionId}: ${messageOf(error)}`)
       deps.logger?.warn?.(`dsh-soulmojito im: followup to ${binding.sessionId} failed: ${messageOf(error)}`)
-      await sendNotice(target, IM_TURN_FAILED)
+      await sendNotice(target, IM_TURN_FAILED, alias)
     }
   }
 
@@ -147,23 +196,41 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
   async function finishTurn(sessionId: string, turn: number, events: readonly ImSessionEventLike[]): Promise<void> {
     const now = deps.now()
     const origin = origins.resolve(sessionId, userMessageIdsOfTurn(events, turn), now)
-    if (origin === undefined) return
+    if (origin === undefined) {
+      // 这是「发了没反应」最可能的落点：宿主这轮不是 IM 起的，或 id 对不上。
+      deps.log?.note(
+        'debug',
+        `turn ${turn} of session ${sessionId} has no pending IM origin; no IM reply was sent`,
+      )
+      return
+    }
+    const alias = imPeerAlias(origin.target.channel, origin.target.scope, origin.peerKey)
     if (turnFailedOf(events, turn)) {
-      await sendNotice(origin.target, IM_TURN_FAILED)
+      deps.log?.note('warn', `turn ${turn} failed before a reply could be produced; sent the fixed notice to ${alias}`)
+      await sendNotice(origin.target, IM_TURN_FAILED, alias)
       return
     }
     const text = assistantTextOfTurn(events, turn)
     // 空轮（只有工具调用、没有正文）不推 IM：用户看到一条空气比看到旧话更糟。
-    if (text === undefined) return
+    if (text === undefined) {
+      deps.log?.note('info', `turn ${turn} produced no assistant text; nothing was sent to ${alias}`)
+      return
+    }
     const settings = await settingsOf()
     const rendered = await deps.render(origin.target, text)
     const parts = projectImText(rendered, origin.target.channel, imChunkLimit(origin.target.channel, settings))
-    await deps.send(origin.target, parts.map((part, index) => ({
-      kind: 'text' as const,
-      text: part,
-      index,
-      total: parts.length,
-    })))
+    try {
+      await deps.send(origin.target, parts.map((part, index) => ({
+        kind: 'text' as const,
+        text: part,
+        index,
+        total: parts.length,
+      })))
+      deps.log?.note('info', `replied to ${alias} with ${parts.length} part(s), ${rendered.length} chars`)
+    } catch (error) {
+      deps.log?.note('error', `sending the reply to ${alias} failed: ${messageOf(error)}`)
+      throw error
+    }
   }
 
   async function sendText(peerKey: string, text: string): Promise<ImSendReceipt> {
@@ -171,6 +238,74 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
     if (body === '') {
       throw new ImSendError('IM_SEND_INVALID', 'IM text is empty after trimming whitespace')
     }
+    const { target, channel, scope, settings } = await sendTargetOf(peerKey)
+    const chunks = projectImText(body, channel, imChunkLimit(channel, settings))
+    try {
+      await deps.send(target, chunks.map((chunk, index) => ({
+        kind: 'text' as const,
+        text: chunk,
+        index,
+        total: chunks.length,
+      })))
+    } catch (error) {
+      // 主动发送失败必须上抛：工具层要如实告诉模型这条消息没出去。
+      deps.log?.note('error', `im_send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf(error)}`)
+      throw new ImSendError('IM_SEND_FAILED', `IM send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf(error)}`, { cause: error })
+    }
+    deps.log?.note('info', `im_send delivered ${chunks.length} part(s) to ${imPeerAlias(channel, scope, peerKey)}`)
+    return { parts: chunks.length, at: deps.now() }
+  }
+
+  async function sendMedia(peerKey: string, media: ImOutboundMedia): Promise<ImSendReceipt> {
+    if (media.localPath === undefined && media.url === undefined) {
+      throw new ImSendError('IM_SEND_INVALID', 'media needs a localPath (preferred) or a url')
+    }
+    if (media.localPath !== undefined && media.localPath.trim() === '') {
+      throw new ImSendError('IM_SEND_INVALID', 'media.localPath is blank; pass an absolute file path or omit it')
+    }
+    if (media.localPath !== undefined) await assertInsideWorkspace(media.localPath)
+    const { target, channel, scope, settings } = await sendTargetOf(peerKey)
+    const caption = media.caption?.trim() ?? ''
+    // 配文也走按渠道的切分：微信 1800 的上限对 4000 字配文同样成立。
+    const captionChunks = caption === ''
+      ? []
+      : projectImText(caption, channel, imChunkLimit(channel, settings))
+    const parts: OutboundPart[] = captionChunks.map((text, index) => ({
+      kind: 'text' as const,
+      text,
+      index,
+      total: 1,
+    }))
+    parts.push({
+      kind: media.kind,
+      ...(media.localPath === undefined ? {} : { localPath: media.localPath }),
+      ...(media.url === undefined ? {} : { url: media.url }),
+      ...(media.name === undefined ? {} : { name: media.name }),
+      index: parts.length,
+      total: 1,
+    })
+    // total 必须先定下来再发：通道用 index/total 加序号，事后改不了。
+    for (const part of parts) part.total = parts.length
+    try {
+      await deps.send(target, parts)
+    } catch (error) {
+      deps.log?.note('error', `im_send media to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf(error)}`)
+      throw new ImSendError('IM_SEND_FAILED', `IM media send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf(error)}`, { cause: error })
+    }
+    deps.log?.note('info', `im_send delivered a ${media.kind} to ${imPeerAlias(channel, scope, peerKey)}`)
+    return { parts: parts.length, at: deps.now() }
+  }
+
+  /**
+   * 调用方给的 peerKey → 出站目标。绑定存在性每次都验：工具面只保证「绑到本
+   * 会话」，路由保证「peer 真的有绑定」。
+   */
+  async function sendTargetOf(peerKey: string): Promise<{
+    target: ImTarget
+    channel: ImChannelId
+    scope: ImScope
+    settings: ImSettings
+  }> {
     const parts = imPeerKeyParts(peerKey)
     if (parts === undefined) {
       throw new ImSendError('IM_SEND_INVALID_TARGET', `malformed IM peer key '${peerKey}'; expected '<channel>:<accountId>:<scope>:<peerId>'`)
@@ -185,42 +320,61 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
     }
     const state = await deps.db.getState()
     if (state.imPeers?.[peerKey] === undefined) {
-      throw new ImSendError('IM_SEND_UNBOUND', `IM peer '${peerKey}' has no binding; bind it in the DSH-SoulMojito IM panel first`)
+      throw new ImSendError('IM_SEND_UNBOUND', `IM peer '${peerKey}' has no binding; bind it in the dsh-soulmojito IM panel first`)
     }
-    const settings = state.imSettings ?? DEFAULT_IM_SETTINGS
-    const target: ImTarget = {
+    return {
+      target: {
+        channel,
+        accountId: parts.accountId,
+        scope,
+        peerId: parts.peerId,
+      },
       channel,
-      accountId: parts.accountId,
       scope,
-      peerId: parts.peerId,
+      settings: state.imSettings ?? DEFAULT_IM_SETTINGS,
     }
-    const chunks = projectImText(body, channel, imChunkLimit(channel, settings))
+  }
+
+  /**
+   * 媒体路径必须落在内部工作区内：模型不能把密钥、聊天记录或用户任意文件当
+   * 附件发出去（群里的陌生人可以诱导它这么做）。realpath 同时挡住符号链接逃逸。
+   */
+  async function assertInsideWorkspace(localPath: string): Promise<void> {
+    if (deps.workspaceRoot === undefined) return
+    let root: string
+    let target: string
     try {
-      await deps.send(target, chunks.map((chunk, index) => ({
-        kind: 'text' as const,
-        text: chunk,
-        index,
-        total: chunks.length,
-      })))
-    } catch (error) {
-      // 主动发送失败必须上抛：工具层要如实告诉模型这条消息没出去。
-      throw new ImSendError('IM_SEND_FAILED', `IM send to ${peerKey} failed: ${messageOf(error)}`, { cause: error })
+      root = await realpath(await deps.workspaceRoot())
+      target = await realpath(localPath)
+    } catch (cause) {
+      throw new ImSendError('IM_SEND_INVALID', `media path '${localPath}' cannot be resolved: ${messageOf(cause)}`)
     }
-    return { parts: chunks.length, at: deps.now() }
+    const rel = relative(root, target)
+    if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
+      throw new ImSendError(
+        'IM_SEND_INVALID',
+        `media path '${localPath}' is outside the session workspace; only files under the workspace (for example downloaded attachments) can be sent`,
+      )
+    }
   }
 
-  async function notifyUnbound(target: ImTarget, peerKey: string, now: number): Promise<void> {
+  async function notifyUnbound(target: ImTarget, peerKey: string, alias: string, now: number): Promise<void> {
     const last = noticed.get(peerKey)
-    if (last !== undefined && now - last < UNBOUND_NOTICE_TTL_MS) return
+    if (last !== undefined && now - last < UNBOUND_NOTICE_TTL_MS) {
+      deps.log?.note('debug', `no binding for ${alias}; the bind notice is still suppressed`)
+      return
+    }
     noticed.set(peerKey, now)
-    await sendNotice(target, imUnboundMessage(peerKey))
+    deps.log?.note('info', `no binding for ${alias}; replied with the bind notice`)
+    await sendNotice(target, imUnboundMessage(peerKey), alias)
   }
 
-  async function sendNotice(target: ImTarget, text: string): Promise<void> {
+  async function sendNotice(target: ImTarget, text: string, alias: string): Promise<void> {
     try {
       await deps.send(target, [{ kind: 'text', text, index: 0, total: 1 }])
     } catch (error) {
-      deps.logger?.warn?.(`dsh-soulmojito im: notice to ${target.channel}/${target.peerId} failed: ${messageOf(error)}`)
+      // 只写日志环一条：`deps.logger` 本身就是同一个 sink 的镜像，写两次会重复。
+      deps.log?.note('error', `sending a notice to ${alias} failed: ${messageOf(error)}`)
     }
   }
 
@@ -228,6 +382,7 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
     inbound,
     finishTurn,
     sendText,
+    sendMedia,
     pending: (sessionId: string) => origins.pendingCount(sessionId),
   }
 }
@@ -250,14 +405,20 @@ export function imUserTextOf(inbound: ImInbound): string | undefined {
   return withAttachments === '' ? undefined : withAttachments
 }
 
+/**
+ * 附件摘要：本地路径必须进正文——模型只有看到路径才能用文件工具打开它。远程
+ * 地址只说明「未下载」，不把 URL 塞进上下文（既不可取用，也会被复述出去）。
+ */
 function attachmentSummaryOf(inbound: ImInbound): string | undefined {
   if (inbound.media.length === 0) return undefined
-  const counts = new Map<string, number>()
-  for (const media of inbound.media) {
+  const labels = inbound.media.slice(0, 6).map((media) => {
     const label = media.kind === 'image' ? '图片' : media.kind === 'voice' ? '语音' : media.kind === 'video' ? '视频' : '文件'
-    counts.set(label, (counts.get(label) ?? 0) + 1)
-  }
-  return `（附件：${[...counts].map(([label, count]) => `${label}×${count}`).join('、')}）`
+    if (media.localPath !== undefined) return `${label}（${media.localPath}）`
+    if (media.url !== undefined) return `${label}（未下载）`
+    return label
+  })
+  const rest = inbound.media.length > labels.length ? `等 ${inbound.media.length} 个` : ''
+  return `（附件：${labels.join('、')}${rest}）`
 }
 
 /** 共享模式：已经有 peer 绑到同一个聊天时，复用它的会话 id。 */

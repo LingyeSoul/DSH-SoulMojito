@@ -37,6 +37,7 @@
     "95-ui-styles.js",
     "96-panels-presets.js",
     "97-ui-im.js",
+    "97b-ui-im-logs.js",
     "98-apply.js",
     "99-shell-tail.js"
   ]

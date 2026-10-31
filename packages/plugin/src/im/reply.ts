@@ -86,14 +86,106 @@ export class PendingOrigins {
   }
 }
 
-/** 本轮的用户消息 id（宿主 user/message 事件的 data.id）。 */
+/**
+ * 本轮的用户消息 id。
+ *
+ * 真实宿主有两条入站形状（2026-10-30/31 实机取证的 V4 会话日志）：
+ *
+ * - `user/message`：来自客户端的消息。**不带 `turn`**（只有 `turn/start`/
+ *   `turn/end`/`assistant/*` 带），所以按日志位置归轮；
+ * - `agent/inbox/spliced`：`followup` 投递的消息（IM 全走这条）。消息先 splice 进
+ *   `next-turn` 队列，下一轮开始时再以一条 `removedCount` 的 splice 取出消费——
+ *   日志里**没有** `user/message`。移除事件不带 id，只能按 splice 的
+ *   `start`/`removedCount` 从队列里定位被消费的那几条。
+ *
+ * 因此这里同时折叠两种形状：`turn/start` 打开一轮、`turn/end` 关闭；夹在中间的
+ * `user/message` 属于当前轮；`turn/end` 之后、下一次 `turn/start` 之前的属于下一
+ * 轮。inbox 队列则严格跟随 splice 事件（插入 + 移除），只有在某一轮**打开期间**
+ * 被移除的消息才算被这一轮消费（与宿主 `foldConsumedWork` 的判据一致）。
+ * 仍然接受 `user/message` 上显式的 `turn`（旧测试与未来宿主形状）。
+ */
 export function userMessageIdsOfTurn(events: readonly ImSessionEventLike[], turn: number): string[] {
   const ids: string[] = []
+  let current: number | undefined
+  let queued: string[] = []
+  let pendingInbox: readonly unknown[] = []
   for (const event of events) {
+    if (event.type === 'turn/start') {
+      current = turnOf(event)
+      if (current === turn) ids.push(...queued)
+      queued = []
+      continue
+    }
+    if (event.type === 'turn/end') {
+      current = undefined
+      continue
+    }
+    if (event.type === 'agent/inbox/spliced') {
+      const splice = inboxSpliceOf(event.data)
+      if (splice === undefined) continue
+      // 与宿主的写入校验一致：越界的 splice 说明日志不可信，整条跳过（保守失败）。
+      if (splice.start + splice.removedCount > pendingInbox.length) continue
+      const removed = pendingInbox.slice(splice.start, splice.start + splice.removedCount)
+      // 取消的投递（outcome === 'canceled'）从未被任何一轮读过，不能算来源。
+      if (current === turn && splice.outcome !== 'canceled') ids.push(...messageIdsOf(removed))
+      pendingInbox = [
+        ...pendingInbox.slice(0, splice.start),
+        ...splice.inserted,
+        ...pendingInbox.slice(splice.start + splice.removedCount),
+      ]
+      continue
+    }
     if (event.type !== 'user/message') continue
-    if (turnOf(event) !== turn) continue
     const id = messageIdOf(event.data)
-    if (id !== undefined) ids.push(id)
+    if (id === undefined) continue
+    const explicit = turnOf(event)
+    if (explicit !== undefined) {
+      if (explicit === turn) ids.push(id)
+      continue
+    }
+    if (current === undefined) {
+      queued.push(id)
+      continue
+    }
+    if (current === turn) ids.push(id)
+  }
+  return ids
+}
+
+/** 只认 `next-turn`：`next-step` 的 splice 进当前 step，与 IM 投递无关。 */
+interface InboxSplice {
+  start: number
+  removedCount: number
+  outcome?: unknown
+  inserted: readonly unknown[]
+}
+
+/**
+ * `agent/inbox/spliced` 的形状校验。坏 splice（宿主换形状、日志被手改）直接
+ * 跳过：这一轮最多不回 IM（保守失败），绝不按猜出来的下标误认来源。
+ */
+function inboxSpliceOf(data: Record<string, unknown> | undefined): InboxSplice | undefined {
+  if (data === undefined || data['target'] !== 'next-turn') return undefined
+  const start = data['start']
+  const removedCount = data['removedCount'] ?? 0
+  const inserted = data['inserted']
+  if (!Number.isSafeInteger(start) || (start as number) < 0) return undefined
+  if (!Number.isSafeInteger(removedCount) || (removedCount as number) < 0) return undefined
+  if (!Array.isArray(inserted)) return undefined
+  return {
+    start: start as number,
+    removedCount: removedCount as number,
+    ...(data['outcome'] === undefined ? {} : { outcome: data['outcome'] }),
+    inserted,
+  }
+}
+
+/** 队列里的消息 id（`{ id }`）；坏条目跳过，不参与归属。 */
+function messageIdsOf(messages: readonly unknown[]): string[] {
+  const ids: string[] = []
+  for (const message of messages) {
+    const id = asRecord(message)?.['id']
+    if (typeof id === 'string' && id !== '') ids.push(id)
   }
   return ids
 }

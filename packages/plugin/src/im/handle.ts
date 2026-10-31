@@ -13,23 +13,31 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { HostSessionEventLike, HostSessionLike } from '../host-contract.js'
 import { envCompat } from '../env-compat.js'
+import type { ImLogQuery, ImLogSnapshot } from './log.js'
 import type { ImSessionCapabilities } from './session-host.js'
-import type { ImAccountRef, ImBindStatus, ImChannelId, ImChannelView, ImSendReceipt } from './types.js'
+import type { ImAccountRef, ImBindStatus, ImChannelId, ImChannelView, ImOutboundMedia, ImSendReceipt } from './types.js'
 
 /** bundle 间互见契约 key（不得变更）。 */
 export const IM_RUNTIME_KEY = 'dsh-soulmojito:im-runtime'
 
 const runtimeSymbol = Symbol.for(IM_RUNTIME_KEY)
 
-/** 工具面需要的最小路由投影：主动发文本。 */
+/** 工具面需要的最小路由投影：主动发文本与媒体。 */
 export interface ImRouterHandle {
   sendText(peerKey: string, text: string): Promise<ImSendReceipt>
+  /** 可选：旧假件没有媒体面时，工具按「该运行时不能发媒体」报错。 */
+  sendMedia?(peerKey: string, media: ImOutboundMedia): Promise<ImSendReceipt>
 }
 
 /** 运行时契约：工具面、HTTP 面与装配面共用同一份形状。 */
 export interface ImRuntimeHandle {
   readonly capabilities: ImSessionCapabilities
   views(): ImChannelView[]
+  /**
+   * 面板「IM 运行日志」：进程内环形缓冲的增量读取。可选，缺省表示这个运行时
+   * 没有日志面（测试假件）。
+   */
+  logs?(query: ImLogQuery): ImLogSnapshot
   /** 登记或更新一个账号：密钥落盘后按通道适配器启动。 */
   upsertAccount(account: ImAccountRef, secret: Record<string, string>): Promise<void>
   /** 停通道并删账号与密钥；账号原本不存在时返回 false。 */

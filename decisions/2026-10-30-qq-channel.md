@@ -20,15 +20,13 @@
 - 加载：`im/qq/sdk.ts` 用 `pathToFileURL(...)` 动态 `import()` 各自的 ESM 入口
   （`dist/index.js` / `dist/esm/index.js`），校验 `QQBot` 是函数、`MsgType` 是对象、
   `startQrConnect` 是函数；失败统一抛 `QqRuntimeError`（`QQ_RUNTIME_MISSING` /
-  `QQ_RUNTIME_INVALID`），message 里带确切安装命令。
-- 安装命令（错误信息与面板同源，见 `qqInstallCommand()`）：
-
-  ```text
-  cd "<im runtime dir>" && pnpm add @tencent-connect/qqbot-nodejs@1.0.5 @tencent-connect/qqbot-connector@1.2.0
-  ```
-
-- `GET im` 投影新增 `qqRuntime: { installed, reason? }`，面板据此显示安装指引，而不是把
-  「没装包」显示成通道故障。写账号 / 开始扫码在缺包时回 `503` 并附同一段命令。
+  `QQ_RUNTIME_INVALID`），message 指向面板按钮**而不是** shell 命令。
+- 安装（2026-10-31 修订）：`im/qq/install.ts` 在运行期目录里执行 `pnpm add` 两个固定
+  版本，由 `POST im/qq/install` 触发、面板「安装 QQ 依赖」按钮调用；运行期目录有自己的
+  `private: true` `package.json`。用户永远不需要开终端（同本地 ONNX 运行时的一键安装，
+  见 [`2026-10-31-im-media-qq-install.md`](./2026-10-31-im-media-qq-install.md)）。
+- `GET im` 投影新增 `qqRuntime: { installed, reason? }`，面板据此显示安装按钮，而不是把
+  「没装包」显示成通道故障。写账号 / 开始扫码在缺包时回 `503`，文案同样指向面板。
 
 **为什么外挂而不是内联：**
 

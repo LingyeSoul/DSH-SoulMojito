@@ -1,20 +1,16 @@
 /**
  * 微信官方 iLink 通道（提案 0024 §2.2 / M4，仅私聊）。
  *
- * 传输是长轮询：`start()` 起一个循环，`getupdates` 服务端挂起、拿到一页就
- * 归一成 `ImInbound` 交给注入的 router。四条必须记住的协议事实：
- * 1. 游标 `get_updates_buf` 必须持久化并在重启后续用，否则重启即重收历史；
- * 2. `context_token` 是回复的通行证，按对端记账并在 `sendmessage` 里原样回带；
- * 3. `ret/errcode === -14` 是 token 失效，暂停该账号 1 小时，不参与普通重试；
- *    暂停期间不出站：`send()` 直接抛 `WEIXIN_PAUSED`，`setTyping()` 静默跳过；
- * 4. 微信不渲染 markdown，出站文本已由 `im/project.ts` 的 weixin 档剥过。
- *
- * 本轮只做私聊：`group_id` 非空的消息直接忽略（提案 §1「明确不做微信群聊」）。
- * 本模块不认识 Tavern：入站走注入的 sink，出站只写 `OutboundPart`。
+ * 传输是长轮询：`start()` 起循环，`getupdates` 挂起、取页、把消息归一成
+ * `ImInbound` 交给 router。协议事实：`get_updates_buf` 必须续用；
+ * `context_token` 按对端记账并在 `sendmessage` 原样回带；`ret/-14` 表示 token
+ * 失效，暂停账号 1 小时；微信不渲染 markdown。媒体走 CDN，失败只 warn，
+ * 文本仍要送达。本轮不做群聊。
  */
 
 import { randomUUID } from 'node:crypto'
 import type { HostLogger } from '../../host-contract.js'
+import type { ImMediaStore } from '../media-store.js'
 import type {
   ImChannel,
   ImChannelStatus,
@@ -22,19 +18,32 @@ import type {
   ImMediaRef,
   ImSendReceipt,
   ImTarget,
+  OutboundMediaPart,
   OutboundPart,
 } from '../types.js'
-import { imDedupeKey } from '../types.js'
+import { imDedupeKey, imPeerAlias, imPeerKey } from '../types.js'
 import {
   getConfig,
   getUpdates,
   sendMessage,
   sendTyping,
   WeixinApiError,
+  WEIXIN_DEFAULT_CDN_BASE_URL,
   WEIXIN_STALE_TOKEN_RETCODE,
+  type WeixinApiContext,
   type WeixinMessage,
 } from './api.js'
 import type { WeixinClock } from './clock.js'
+import { createTypingTicketCache, MAX_TYPING_TICKETS, TYPING_TICKET_TTL_MS } from './typing-cache.js'
+import {
+  materializeInboundMedia,
+  normalizeCdnBaseUrl,
+  sendWeixinMedia,
+  sweepExpiredMedia,
+  WEIXIN_MEDIA_TIMEOUT_MS,
+  type WeixinInboundMediaSource,
+  type WeixinMediaLog,
+} from './media.js'
 
 export type { WeixinClock } from './clock.js'
 export { WEIXIN_REAL_CLOCK } from './clock.js'
@@ -47,6 +56,10 @@ const LONG_POLL_MIN_MS = 1_000
 const LONG_POLL_MAX_MS = 120_000
 const SEND_TIMEOUT_MS = 15_000
 const CONFIG_TIMEOUT_MS = 10_000
+/** 入站附件下载/解密与出站上传的单次超时：附件不是正文，卡住就放弃。 */
+const MEDIA_TIMEOUT_MS = WEIXIN_MEDIA_TIMEOUT_MS
+/** 落盘附件的一次性 TTL：启动时清掉 24h 前的东西。 */
+const MEDIA_TTL_MS = 24 * 60 * 60 * 1_000
 /** token 失效后的暂停窗口：1 小时。 */
 const STALE_TOKEN_PAUSE_MS = 60 * 60 * 1_000
 /** 普通失败：前两次 2s 重试，连续第 3 次起退避 30s。 */
@@ -90,7 +103,10 @@ export class WeixinChannelError extends Error {
 
 /** 入站落点；运行时把 `router.inbound` 包一层交给通道。 */
 export interface WeixinRouterSink {
-  handle(inbound: ImInbound): Promise<void>
+  handle(
+    inbound: ImInbound,
+    options?: { loadMedia?: () => Promise<readonly ImMediaRef[]> },
+  ): Promise<void>
 }
 
 export interface WeixinChannelOptions {
@@ -113,6 +129,10 @@ export interface WeixinChannelOptions {
   longPollTimeoutMs: number
   /** 是否发输入状态；失败只 warn，绝不阻断回复。 */
   typingEnabled: boolean
+  /** 媒体 CDN 入口；默认官方 c2c 域名，测试/反代可覆盖。 */
+  cdnBaseUrl?: string
+  /** 附件落盘；缺省时入站媒体只留引用，不下载（测试与嵌入场景）。 */
+  media?: ImMediaStore
   logger?: HostLogger
 }
 
@@ -158,11 +178,14 @@ export class WeixinChannel implements ImChannel {
   private readonly saveContextTokens: (tokens: Readonly<Record<string, string>>) => Promise<void>
   private readonly clock: WeixinClock
   private readonly typingEnabled: boolean
+  private readonly cdnBaseUrl: string
+  private readonly media: ImMediaStore | undefined
   private readonly logger: HostLogger | undefined
 
   private longPollTimeoutMs: number
   private cursor = ''
   private contextTokens: Record<string, string> = {}
+  private readonly typingTickets = createTypingTicketCache({ ttlMs: TYPING_TICKET_TTL_MS, max: MAX_TYPING_TICKETS })
 
   private controller: AbortController | undefined
   private lifetimeSignal: AbortSignal | undefined
@@ -191,6 +214,8 @@ export class WeixinChannel implements ImChannel {
     this.clock = options.clock
     this.longPollTimeoutMs = clampLongPoll(options.longPollTimeoutMs)
     this.typingEnabled = options.typingEnabled
+    this.cdnBaseUrl = normalizeCdnBaseUrl(options.cdnBaseUrl ?? WEIXIN_DEFAULT_CDN_BASE_URL)
+    this.media = options.media
     this.logger = options.logger
   }
 
@@ -203,6 +228,8 @@ export class WeixinChannel implements ImChannel {
     this.lastError = undefined
     this.pausedUntil = undefined
     this.pauseReason = undefined
+    // 附件是一次性数据：启动时顺手清掉 24h 前的落盘件，失败只 warn。
+    if (this.media !== undefined) void sweepExpiredMedia(this.media, MEDIA_TTL_MS, this.mediaLog())
     // 游标与 context token 在首轮请求前装载：先发请求再读盘会让首轮用错游标。
     try {
       const [cursor, tokens] = await Promise.all([this.loadCursor(), this.loadContextTokens()])
@@ -318,46 +345,73 @@ export class WeixinChannel implements ImChannel {
   }
 
   /**
-   * 输入状态（可选能力）：`getconfig` 取 ticket → `sendtyping`。
-   *
-   * 失败只 warn：打字状态掉了，用户顶多少看到一个「正在输入」，回复本身不能
-   * 因此失败；没有 ticket 的账号直接跳过，不算错误。
+   * 输入状态（可选）：ticket 按对端缓存 30 分钟（上限 500），命中就不问
+   * `getconfig`；`sendtyping` 失败会淘汰 ticket 并重试一次。失败只 warn。
    */
   async setTyping(peerId: string, status: 1 | 2): Promise<void> {
     if (!this.typingEnabled) return
     // typing 不是关键路径：暂停期间直接跳过，不抛错，也不发 getconfig。
     if (this.pauseRemaining() > 0) return
     try {
-      const contextToken = this.contextTokens[peerId]
-      const config = await getConfig(
-        {
-          baseUrl: this.baseUrl,
-          token: this.token,
-          timeoutMs: CONFIG_TIMEOUT_MS,
-          ...(this.controller === undefined ? {} : { signal: this.controller.signal }),
-        },
-        {
-          ilinkUserId: peerId,
-          ...(contextToken === undefined ? {} : { contextToken }),
-        },
-      )
-      if (config.typingTicket === undefined) {
-        this.logger?.debug?.(`dsh-soulmojito im weixin/${this.accountId}: no typing ticket for ${peerId}; typing skipped`)
+      const ticket = this.typingTickets.get(peerId, this.clock.now()) ?? (await this.fetchTypingTicket(peerId))
+      if (ticket === undefined) {
+        this.logger?.debug?.(`dsh-soulmojito im weixin/${this.accountId}: no typing ticket for ${this.peerLabel(peerId)}; typing skipped`)
         return
       }
-      await sendTyping(
-        {
-          baseUrl: this.baseUrl,
-          token: this.token,
-          timeoutMs: CONFIG_TIMEOUT_MS,
-          ...(this.controller === undefined ? {} : { signal: this.controller.signal }),
-        },
-        { ilinkUserId: peerId, typingTicket: config.typingTicket, status },
-      )
+      try {
+        await this.postTyping(peerId, ticket, status)
+      } catch {
+        // 缓存/刚取的 ticket 都可能被服务端判过期：淘汰并只重试这一次。
+        this.typingTickets.delete(peerId)
+        const fresh = await this.fetchTypingTicket(peerId)
+        if (fresh === undefined) {
+          this.logger?.debug?.(
+            `dsh-soulmojito im weixin/${this.accountId}: no fresh typing ticket for ${this.peerLabel(peerId)}; typing skipped`,
+          )
+          return
+        }
+        await this.postTyping(peerId, fresh, status)
+      }
     } catch (error) {
       this.logger?.warn?.(
-        `dsh-soulmojito im weixin/${this.accountId}: typing ${status} for ${peerId} failed: ${messageOf(error)}`,
+        `dsh-soulmojito im weixin/${this.accountId}: typing ${status} for ${this.peerLabel(peerId)} failed: ${messageOf(error)}`,
       )
+    }
+  }
+
+  private async postTyping(peerId: string, ticket: string, status: 1 | 2): Promise<void> {
+    await sendTyping(this.apiContext(CONFIG_TIMEOUT_MS), { ilinkUserId: peerId, typingTicket: ticket, status })
+  }
+
+  /** `getconfig` 拿新 ticket；服务端没给就不缓存（空 ticket 发出去只会白失败）。 */
+  private async fetchTypingTicket(peerId: string): Promise<string | undefined> {
+    const contextToken = this.contextTokens[peerId]
+    const config = await getConfig(this.apiContext(CONFIG_TIMEOUT_MS), {
+      ilinkUserId: peerId,
+      ...(contextToken === undefined ? {} : { contextToken }),
+    })
+    const ticket = config.typingTicket
+    if (ticket === undefined) return undefined
+    this.typingTickets.set(peerId, ticket, this.clock.now())
+    return ticket
+  }
+
+  /** 媒体路径的日志：统一补账号前缀，细节由 media.ts 给固定文案。 */
+  private mediaLog(): WeixinMediaLog {
+    const prefix = `dsh-soulmojito im weixin/${this.accountId}: `
+    return {
+      debug: (message) => { this.logger?.debug?.(`${prefix}${message}`) },
+      warn: (message) => { this.logger?.warn?.(`${prefix}${message}`) },
+    }
+  }
+
+  /** 统一的请求注入面：入口、token、超时与运行期中止信号。 */
+  private apiContext(timeoutMs: number): WeixinApiContext {
+    return {
+      baseUrl: this.baseUrl,
+      token: this.token,
+      timeoutMs,
+      ...(this.controller === undefined ? {} : { signal: this.controller.signal }),
     }
   }
 
@@ -376,7 +430,7 @@ export class WeixinChannel implements ImChannel {
       // 协议没写「缺 context_token 会被拒」，但参考实现会给出 warning；照做，
       // 不因此拒绝发送——丢了 token 也不能丢了用户这一轮回复。
       this.logger?.warn?.(
-        `dsh-soulmojito im weixin/${this.accountId}: no context_token for ${target.peerId}; sending without context`,
+        `dsh-soulmojito im weixin/${this.accountId}: no context_token for ${this.peerLabel(target.peerId)}; sending without context`,
       )
     }
     // 开始回复即取消「正在输入」；失败只 warn，不影响正文。
@@ -384,24 +438,23 @@ export class WeixinChannel implements ImChannel {
     let messageId: string | undefined
     for (const part of parts) {
       try {
-        const sent = await sendMessage(
-          {
-            baseUrl: this.baseUrl,
-            token: this.token,
-            timeoutMs: SEND_TIMEOUT_MS,
-            ...(this.controller === undefined ? {} : { signal: this.controller.signal }),
-          },
-          {
-            toUserId: target.peerId,
-            text: part.text,
-            ...(contextToken === undefined ? {} : { contextToken }),
-          },
-        )
-        if (sent.messageId !== undefined) messageId = sent.messageId
+        const sentId =
+          part.kind === 'text'
+            ? (
+                await sendMessage(this.apiContext(SEND_TIMEOUT_MS), {
+                  toUserId: target.peerId,
+                  text: part.text,
+                  ...(contextToken === undefined ? {} : { contextToken }),
+                })
+              ).messageId
+            : await this.sendMediaPart(target, part, contextToken)
+        if (sentId !== undefined) messageId = sentId
       } catch (error) {
+        // 通道级错误（坏目标、坏本地文件）原样上抛；其余按发送失败包装。
+        if (error instanceof WeixinChannelError) throw error
         throw new WeixinChannelError(
           'WEIXIN_SEND_FAILED',
-          `weixin send part ${part.index + 1}/${part.total} to ${target.scope}/${target.peerId} failed: ${messageOf(error)}`,
+          `weixin send part ${part.index + 1}/${part.total} to ${this.peerLabel(target.peerId)} failed: ${messageOf(error)}`,
           { cause: error },
         )
       }
@@ -411,6 +464,41 @@ export class WeixinChannel implements ImChannel {
       at: this.clock.now(),
       ...(messageId === undefined ? {} : { messageId }),
     }
+  }
+
+  private async sendMediaPart(
+    target: ImTarget,
+    part: OutboundMediaPart,
+    contextToken: string | undefined,
+  ): Promise<string | undefined> {
+    if (part.kind === 'voice') {
+      throw new WeixinChannelError(
+        'WEIXIN_BAD_TARGET',
+        `weixin account '${this.accountId}' cannot send a voice part: the iLink reference implementation defines no outbound voice item`,
+      )
+    }
+    if (part.localPath === undefined) {
+      throw new WeixinChannelError(
+        'WEIXIN_BAD_TARGET',
+        `weixin account '${this.accountId}' cannot send a ${part.kind} without localPath: WeChat uploads local bytes only, and a remote url cannot be fetched${part.url === undefined ? '' : ' (the url was ignored)'}`,
+      )
+    }
+    return sendWeixinMedia(
+      {
+        api: this.apiContext(SEND_TIMEOUT_MS),
+        cdnBaseUrl: this.cdnBaseUrl,
+        uploadTimeoutMs: MEDIA_TIMEOUT_MS,
+        ...(this.controller === undefined ? {} : { signal: this.controller.signal }),
+        toUserId: target.peerId,
+        ...(contextToken === undefined ? {} : { contextToken }),
+      },
+      {
+        kind: part.kind,
+        localPath: part.localPath,
+        ...(part.name === undefined ? {} : { name: part.name }),
+        ...(part.caption === undefined ? {} : { caption: part.caption }),
+      },
+    )
   }
 
   private async runLoop(signal: AbortSignal, gate: StartGate): Promise<void> {
@@ -502,6 +590,11 @@ export class WeixinChannel implements ImChannel {
     }
   }
 
+  /** 日志里的对端标签：openid 不进日志环/面板，只出现稳定 alias。 */
+  private peerLabel(peerId: string): string {
+    return imPeerAlias('weixin', 'private', imPeerKey('weixin', this.accountId, 'private', peerId))
+  }
+
   private pauseRemaining(): number {
     if (this.pausedUntil === undefined) return 0
     const remaining = this.pausedUntil - this.clock.now()
@@ -509,24 +602,25 @@ export class WeixinChannel implements ImChannel {
   }
 
   private async deliver(message: WeixinMessage): Promise<void> {
-    const inbound = this.inboundOf(message)
-    if (inbound === undefined) return
+    const prepared = this.inboundOf(message)
+    if (prepared === undefined) return
+    const inbound = prepared.inbound
     // context_token 按对端记账：同一对端后一条覆盖前一条，回复总是回带最近的。
     if (message.contextToken !== undefined) await this.rememberContextToken(inbound.peerId, message.contextToken)
     // 输入状态是锦上添花：不等它，也不能让它挡住投递。
     void this.setTyping(inbound.peerId, 1)
-    await this.router.handle(inbound)
+    // 媒体在路由通过去重与访问控制之后才下载：白名单外的人不能靠附件让进程落盘。
+    await this.router.handle(inbound, {
+      loadMedia: () => this.materializeMedia(prepared.sources),
+    })
   }
 
   /**
-   * 单条消息 → `ImInbound`。返回 undefined 表示按协议主动忽略：
-   * `message_type === 2`（机器人自己的回显）与带 `group_id` 的群消息。
-   * `message_type` 是可选字段：缺失或为 1 都按真实用户消息处理。
-   *
-   * 正文取 `type:1` 的 text_item 拼接；没有正文时用 `type:3` 的语音转录；
-   * 图片/文件/视频只记 media，正文占位交给 router 统一拼「（附件：…）」。
+   * 单条消息 → `ImInbound` + 待物化的媒体源。`message_type === 2` 与带
+   * `group_id` 的群消息按协议主动忽略；正文取 text_item，没有正文时用语音转录。
+   * 这里**不下载**附件：下载由路由在通过访问控制后触发。
    */
-  private inboundOf(message: WeixinMessage): ImInbound | undefined {
+  private inboundOf(message: WeixinMessage): { inbound: ImInbound; sources: readonly WeixinInboundMediaSource[] } | undefined {
     if (message.messageType === 2) {
       this.logger?.debug?.(
         `dsh-soulmojito im weixin/${this.accountId}: ignored message_type ${String(message.messageType)}`,
@@ -547,7 +641,7 @@ export class WeixinChannel implements ImChannel {
     }
     const textParts: string[] = []
     const voiceParts: string[] = []
-    const media: ImMediaRef[] = []
+    const mediaSources: WeixinInboundMediaSource[] = []
     for (const item of message.items) {
       if (item.type === 1 && item.text !== undefined) {
         textParts.push(item.text)
@@ -558,42 +652,54 @@ export class WeixinChannel implements ImChannel {
           voiceParts.push(item.voiceText)
           continue
         }
-        media.push({
-          kind: 'voice',
-          ...(item.mediaUrl === undefined ? {} : { url: item.mediaUrl }),
-        })
+        mediaSources.push({ kind: 'voice', item })
         continue
       }
       if (item.type === 2 || item.type === 4 || item.type === 5) {
-        media.push({
-          kind: item.type === 2 ? 'image' : item.type === 4 ? 'file' : 'video',
-          ...(item.mediaUrl === undefined ? {} : { url: item.mediaUrl }),
-          ...(item.fileName === undefined ? {} : { name: item.fileName }),
-          ...(item.size === undefined ? {} : { size: item.size }),
-        })
+        mediaSources.push({ kind: item.type === 2 ? 'image' : item.type === 4 ? 'file' : 'video', item })
       }
     }
     const text = textParts.length > 0 ? textParts.join('\n') : voiceParts.join('\n')
     const messageId = message.messageId
     const receivedAt = this.clock.now()
     return {
-      channel: 'weixin',
-      accountId: this.accountId,
-      scope: 'private',
-      peerId,
-      senderId: peerId,
-      senderName: peerId.slice(0, PEER_LABEL_LENGTH),
-      text,
-      media,
-      // 平台不给 message_id 时用随机 UUID 降级：宁可重复投递，不可吞消息。
-      dedupeKey: imDedupeKey('weixin', this.accountId, 'private', peerId, messageId ?? randomUUID()),
-      receivedAt,
+      inbound: {
+        channel: 'weixin',
+        accountId: this.accountId,
+        scope: 'private',
+        peerId,
+        senderId: peerId,
+        senderName: peerId.slice(0, PEER_LABEL_LENGTH),
+        text,
+        // 占位 ref 保留在摘要里；物化成功后由 loadMedia 换成带 localPath 的版本。
+        media: mediaSources.map((source) => ({ kind: source.kind })),
+        // 平台不给 message_id 时用随机 UUID 降级：宁可重复投递，不可吞消息。
+        dedupeKey: imDedupeKey('weixin', this.accountId, 'private', peerId, messageId ?? randomUUID()),
+        receivedAt,
+      },
+      sources: mediaSources,
     }
   }
 
+  /** 逐个落盘；顺序与消息里的 item 一致，失败不改变 ref 的数量与顺序。 */
+  private async materializeMedia(sources: readonly WeixinInboundMediaSource[]): Promise<ImMediaRef[]> {
+    return materializeInboundMedia(
+      {
+        cdnBaseUrl: this.cdnBaseUrl,
+        timeoutMs: MEDIA_TIMEOUT_MS,
+        ...(this.controller === undefined ? {} : { signal: this.controller.signal }),
+        ...(this.media === undefined ? {} : { media: this.media }),
+        channel: 'weixin',
+        accountId: this.accountId,
+        log: this.mediaLog(),
+      },
+      sources,
+    )
+  }
+
+  /** 重新插入以保持「最近使用」顺序，超限淘汰最旧的一条。 */
   private async rememberContextToken(peerId: string, contextToken: string): Promise<void> {
     if (this.contextTokens[peerId] === contextToken) return
-    // 重新插入以保持 Map 语义下的「最近使用」顺序，超限时淘汰最旧的一条。
     delete this.contextTokens[peerId]
     this.contextTokens[peerId] = contextToken
     const keys = Object.keys(this.contextTokens)

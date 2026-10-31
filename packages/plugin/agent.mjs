@@ -6327,7 +6327,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("dc6b32d") : void 0;
+  const commit = true ? normalizeCommit("1a27e81") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -6679,7 +6679,7 @@ init_handle();
 init_handle2();
 
 // packages/plugin/src/im/tools.ts
-import { createHash as createHash6 } from "node:crypto";
+import { isAbsolute } from "node:path";
 
 // packages/plugin/src/tool-args.ts
 function stringArg(value) {
@@ -7433,12 +7433,16 @@ function identitySummaryOf(data) {
 
 // packages/plugin/src/im/types.ts
 init_src();
+import { createHash as createHash6 } from "node:crypto";
 function imPeerKeyParts(key) {
   const parts = key.split(":");
   if (parts.length < 4) return void 0;
   const [channel, accountId, scope, ...rest] = parts;
   if (channel === void 0 || accountId === void 0 || scope === void 0) return void 0;
   return { channel, accountId, scope, peerId: rest.join(":") };
+}
+function imPeerAlias(channel, scope, peerKey) {
+  return `peer-${createHash6("sha256").update(`${channel}:${scope}:${peerKey}`).digest("hex").slice(0, 10)}`;
 }
 
 // packages/plugin/src/im/tools.ts
@@ -7467,11 +7471,19 @@ function createImTools(deps) {
         }))
       };
     }),
-    tool("im_send", "Send one text message to an IM peer that is bound to this session. Omit peer when exactly one peer is bound; pass the alias from im_identity when several are. Text is trimmed and capped at 4000 characters. Cross-session sending is forbidden: an alias outside this session is rejected.", {
-      text: { type: "string", required: true, description: "Message text, 1-4000 characters after trimming." },
-      peer: { type: "string", description: "Target peer alias from im_identity; required when this session has more than one binding." }
+    tool("im_send", "Send one message to an IM peer that is bound to this session. Send text, a media item, or a media item with a caption. Omit peer when exactly one peer is bound; pass the alias from im_identity when several are. Text is trimmed and capped at 4000 characters. Media is read from an absolute local path (preferred) or an http(s) URL for image/video. Cross-session sending is forbidden: an alias outside this session is rejected.", {
+      text: { type: "string", description: "Message text, 1-4000 characters after trimming. Optional when media is attached; then it becomes the caption." },
+      peer: { type: "string", description: "Target peer alias from im_identity; required when this session has more than one binding." },
+      mediaKind: { type: "string", enum: ["image", "voice", "video", "file"], description: "Kind of the media item; required when mediaPath or mediaUrl is given." },
+      mediaPath: { type: "string", description: "Absolute path of a local file to send (preferred: no network fetch)." },
+      mediaUrl: { type: "string", description: "Remote http(s) URL to send. Only image and video are supported by every channel." },
+      mediaName: { type: "string", description: "Optional display file name for the media item." }
     }, sendOutput, async (args, exec) => {
-      const text = sendTextOf(args);
+      const text = optionalTextOf(args);
+      const media = mediaOf(args);
+      if (text === void 0 && media === void 0) {
+        throw new Error("im_send needs text, mediaPath or mediaUrl");
+      }
       const requested = aliasOf(args);
       const peers = await boundPeers(deps, requireAgentId(exec));
       let peer;
@@ -7480,13 +7492,27 @@ function createImTools(deps) {
         if (found === void 0) throw new Error(`peer '${requested}' is not bound to this session`);
         peer = found;
       } else if (peers.length === 0) {
-        throw new Error("this session has no IM peer binding; bind one in the DSH-SoulMojito IM panel first");
+        throw new Error("this session has no IM peer binding; bind one in the dsh-soulmojito IM panel first");
       } else {
         peer = peerWhenSingle(peers);
       }
       const runtime = deps.runtime();
       if (runtime === void 0) {
         throw new Error("IM runtime is not available in this host process; im_send cannot deliver messages");
+      }
+      if (media !== void 0) {
+        if (runtime.router.sendMedia === void 0) {
+          throw new Error("this IM runtime cannot send media; update dsh-soulmojito and restart DSH");
+        }
+        const withCaption = text === void 0 ? media : { ...media, caption: text };
+        const receipt2 = await runtime.router.sendMedia(peer.peerKey, withCaption);
+        return {
+          peer: peer.alias,
+          parts: receipt2.parts,
+          sentAt: new Date(receipt2.at).toISOString(),
+          mediaKind: media.kind,
+          ...receipt2.messageId === void 0 ? {} : { messageId: receipt2.messageId }
+        };
       }
       const receipt = await runtime.router.sendText(peer.peerKey, text);
       return {
@@ -7545,8 +7571,9 @@ var sendOutput = objectOutput({
   peer: { type: "string" },
   parts: { type: "integer" },
   sentAt: { type: "string" },
-  messageId: { type: "string" }
-}, ["messageId"]);
+  messageId: { type: "string" },
+  mediaKind: { type: "string", enum: ["image", "voice", "video", "file"] }
+}, ["messageId", "mediaKind"]);
 function requireAgentId(exec) {
   const agentId = exec.agent?.id;
   if (typeof agentId !== "string" || agentId.trim() === "") {
@@ -7574,22 +7601,71 @@ async function boundPeers(deps, sessionId) {
   }
   return peers.sort((left, right) => left.alias.localeCompare(right.alias));
 }
-function imPeerAlias(channel, scope, peerKey) {
-  return `peer-${createHash6("sha256").update(`${channel}:${scope}:${peerKey}`).digest("hex").slice(0, 10)}`;
-}
 function peerWhenSingle(peers) {
   if (peers.length === 1) return peers[0];
   throw new Error(`this session is bound to ${peers.length} IM peers; pass peer to choose one of: ${peers.map((peer) => peer.alias).join(", ")}`);
 }
-function sendTextOf(args) {
+function optionalTextOf(args) {
   const value = args["text"];
+  if (value === void 0) return void 0;
   if (typeof value !== "string") throw new Error("text must be a string");
   const text = value.trim();
-  if (text === "") throw new Error("text must not be blank; im_send sends exactly the text you give it");
+  if (text === "") throw new Error("text must not be blank; omit it when sending only media");
   if (text.length > IM_SEND_MAX_CHARS) {
     throw new Error(`text must be at most ${IM_SEND_MAX_CHARS} characters, received ${text.length}`);
   }
   return text;
+}
+var MEDIA_KINDS = ["image", "voice", "video", "file"];
+function mediaOf(args) {
+  const kindValue = args["mediaKind"];
+  const pathValue = args["mediaPath"];
+  const urlValue = args["mediaUrl"];
+  const nameValue = args["mediaName"];
+  const hasPath = pathValue !== void 0;
+  const hasUrl = urlValue !== void 0;
+  if (!hasPath && !hasUrl) {
+    if (kindValue !== void 0 || nameValue !== void 0) {
+      throw new Error("mediaKind/mediaName need mediaPath or mediaUrl");
+    }
+    return void 0;
+  }
+  if (hasPath && hasUrl) throw new Error("pass either mediaPath or mediaUrl, not both");
+  if (typeof kindValue !== "string" || !MEDIA_KINDS.includes(kindValue)) {
+    throw new Error("mediaKind must be one of 'image' | 'voice' | 'video' | 'file' when sending media");
+  }
+  const kind = kindValue;
+  let name2;
+  if (nameValue !== void 0) {
+    if (typeof nameValue !== "string" || nameValue.trim() === "") {
+      throw new Error("mediaName must be a non-empty string when provided");
+    }
+    name2 = nameValue.trim();
+  }
+  if (hasPath) {
+    if (typeof pathValue !== "string" || pathValue.trim() === "") {
+      throw new Error("mediaPath must be a non-empty absolute path");
+    }
+    const localPath = pathValue.trim();
+    if (!isAbsolute(localPath)) {
+      throw new Error(`mediaPath '${localPath}' is not absolute; pass a full path (the attachment summary prints one)`);
+    }
+    return { kind, localPath, ...name2 === void 0 ? {} : { name: name2 } };
+  }
+  if (typeof urlValue !== "string" || urlValue.trim() === "") {
+    throw new Error("mediaUrl must be a non-empty http(s) URL");
+  }
+  const raw = urlValue.trim();
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(`mediaUrl '${raw}' is not a valid absolute URL`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`mediaUrl '${raw}' uses protocol '${parsed.protocol}'; expected http(s)`);
+  }
+  return { kind, url: raw, ...name2 === void 0 ? {} : { name: name2 } };
 }
 function aliasOf(args) {
   const value = args["peer"];

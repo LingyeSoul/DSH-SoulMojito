@@ -9324,7 +9324,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("dc6b32d") : void 0;
+  const commit = true ? normalizeCommit("1a27e81") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -10158,8 +10158,9 @@ var sendOutput = objectOutput({
   peer: { type: "string" },
   parts: { type: "integer" },
   sentAt: { type: "string" },
-  messageId: { type: "string" }
-}, ["messageId"]);
+  messageId: { type: "string" },
+  mediaKind: { type: "string", enum: ["image", "voice", "video", "file"] }
+}, ["messageId", "mediaKind"]);
 
 // packages/plugin/src/agent-tavern/agent.ts
 init_cross_bundle();

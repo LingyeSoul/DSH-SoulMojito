@@ -16,24 +16,40 @@ import { tavernDataRoot } from '../src/dsh-home.js'
 import type { PluginContext } from '../src/host-contract.js'
 import { clearOneBotSeatForTest } from '../src/im/onebot/seat.js'
 import type { QQBindCredential, QQConnector, QQConnectorCallbacks, QQConnectorOptions } from '../src/im/qq/bind.js'
-import { QQChannel } from '../src/im/qq/channel.js'
+import { planGroupParts, QQChannel } from '../src/im/qq/channel.js'
 import { loadQqConnector, loadQqSdk, qqRuntimeRoot, qqRuntimeStatus } from '../src/im/qq/sdk.js'
-import type { QqBotLike, QqInboundMessage, QqMessageResponse, QqReplyTarget } from '../src/im/qq/sdk.js'
+import type {
+  QqBotLike,
+  QqInboundMessage,
+  QqMediaSendOptions,
+  QqMediaSendResult,
+  QqMediaSource,
+  QqMessageResponse,
+  QqReplyTarget,
+} from '../src/im/qq/sdk.js'
 import type { ImRuntime } from '../src/im/runtime.js'
 import { createImRuntime } from '../src/im/runtime.js'
 import { ImStore } from '../src/im/store.js'
-import { imDedupeKey, type ImAccountRef, type ImBindStatus, type ImInbound, type ImTarget, type OutboundPart } from '../src/im/types.js'
+import { imDedupeKey, type ImAccountRef, type ImBindStatus, type ImInbound, type ImTarget, type OutboundMediaPart, type OutboundPart } from '../src/im/types.js'
 
 const NOW = 1_760_000_000_000
 const ACCOUNT_ID = '10000001'
 const SYNTHETIC_SECRET = 'synthetic-app-secret'
 
 type SendMethod = 'sendText' | 'sendMarkdown'
+type MediaMethod = 'sendImage' | 'sendVideo' | 'sendVoice' | 'sendFile'
 
 interface SentRecord {
   method: SendMethod
   target: QqReplyTarget
   content: string
+}
+
+interface MediaRecord {
+  method: MediaMethod
+  target: QqReplyTarget
+  source: QqMediaSource
+  opts: QqMediaSendOptions | undefined
 }
 
 interface FakeBotOptions {
@@ -43,15 +59,22 @@ interface FakeBotOptions {
   startError?: Error
   /** 每次发送前的延迟：没有出站串行时并发轮次会交错。 */
   sendDelayMs?: number
+  /** 不暴露媒体方法：验证 build 缺 sendImage 等成员时的清晰报错。 */
+  noMediaMethods?: boolean
 }
 
 interface FakeBot {
   readonly sent: SentRecord[]
+  readonly media: MediaRecord[]
   on(event: string, handler: (...args: unknown[]) => unknown): FakeBot
   start(): Promise<void>
   stop(): void
   sendText(target: QqReplyTarget, content: string): Promise<QqMessageResponse>
   sendMarkdown(target: QqReplyTarget, content: string): Promise<QqMessageResponse>
+  sendImage?(target: QqReplyTarget, source: QqMediaSource, opts?: QqMediaSendOptions): Promise<QqMediaSendResult>
+  sendVideo?(target: QqReplyTarget, source: QqMediaSource, opts?: QqMediaSendOptions): Promise<QqMediaSendResult>
+  sendVoice?(target: QqReplyTarget, source: QqMediaSource, opts?: QqMediaSendOptions): Promise<QqMediaSendResult>
+  sendFile?(target: QqReplyTarget, source: QqMediaSource, opts?: QqMediaSendOptions): Promise<QqMediaSendResult>
   emit(event: string, ...args: unknown[]): Promise<void>
 }
 
@@ -63,8 +86,10 @@ function settleDelay(ms: number | undefined): Promise<void> {
 function fakeBot(options: FakeBotOptions): FakeBot {
   const handlers = new Map<string, Array<(...args: unknown[]) => unknown>>()
   const sent: SentRecord[] = []
+  const media: MediaRecord[] = []
   const bot: FakeBot = {
     sent,
+    media,
     on(event, handler) {
       const list = handlers.get(event) ?? []
       list.push(handler)
@@ -86,6 +111,13 @@ function fakeBot(options: FakeBotOptions): FakeBot {
       for (const handler of handlers.get(event) ?? []) await handler(...args)
     },
   }
+  if (options.noMediaMethods !== true) {
+    // 媒体方法的形状照官方 d.ts：target + source + opts，回执只关心 message.id。
+    bot.sendImage = (target, source, opts) => sendMedia('sendImage', target, source, opts)
+    bot.sendVideo = (target, source, opts) => sendMedia('sendVideo', target, source, opts)
+    bot.sendVoice = (target, source, opts) => sendMedia('sendVoice', target, source, opts)
+    bot.sendFile = (target, source, opts) => sendMedia('sendFile', target, source, opts)
+  }
   async function send(method: SendMethod, target: QqReplyTarget, content: string): Promise<QqMessageResponse> {
     await settleDelay(options.sendDelayMs)
     if (options.failOnContent !== undefined && content === options.failOnContent) {
@@ -93,6 +125,16 @@ function fakeBot(options: FakeBotOptions): FakeBot {
     }
     sent.push({ method, target, content })
     return { id: `out-${sent.length}` }
+  }
+  async function sendMedia(
+    method: MediaMethod,
+    target: QqReplyTarget,
+    source: QqMediaSource,
+    opts: QqMediaSendOptions | undefined,
+  ): Promise<QqMediaSendResult> {
+    await settleDelay(options.sendDelayMs)
+    media.push({ method, target, source, opts })
+    return { message: { id: `media-${media.length}` } }
   }
   return bot
 }
@@ -129,12 +171,30 @@ function textPart(text: string, index: number, total: number): OutboundPart {
   return { kind: 'text', text, index, total }
 }
 
+function mediaPart(part: Omit<OutboundMediaPart, 'index' | 'total'>, index: number, total: number): OutboundPart {
+  return { ...part, index, total }
+}
+
+function imagePart(index: number, total: number): OutboundPart {
+  return mediaPart({ kind: 'image', localPath: `C:/tmp/img-${index + 1}.png` }, index, total)
+}
+
 function privateTarget(replyTo: string | undefined): ImTarget {
   return {
     channel: 'qq',
     accountId: ACCOUNT_ID,
     scope: 'private',
     peerId: 'openid-owner-1',
+    ...(replyTo === undefined ? {} : { replyTo }),
+  }
+}
+
+function groupTarget(replyTo: string | undefined): ImTarget {
+  return {
+    channel: 'qq',
+    accountId: ACCOUNT_ID,
+    scope: 'group',
+    peerId: 'group-openid-9',
     ...(replyTo === undefined ? {} : { replyTo }),
   }
 }
@@ -224,6 +284,52 @@ describe('qq channel inbound', () => {
       expect(first?.replyTo).toBeUndefined()
       expect(first?.dedupeKey).toMatch(/^qq:10000001:private:openid-owner-2:[0-9a-f-]{36}$/)
       expect(second?.dedupeKey).not.toBe(first?.dedupeKey)
+    } finally {
+      await harness.channel.stop()
+    }
+  })
+
+  it('turns platform attachments into media refs without downloading anything', async () => {
+    const harness = channelHarness({ bot: {}, requireMention: false, markdownSupport: false })
+    await harness.channel.start(harness.signal)
+    try {
+      const imageUrl = 'https://multimedia.nt.qq.com.cn/download?fileid=image-1'
+      const voiceUrl = 'https://multimedia.nt.qq.com.cn/download?fileid=voice-1'
+      // 官方 d.ts 的 InboundAttachment：content_type/url/filename/size，语音另有
+      // voice_wav_url 与 asr_refer_text。
+      await harness.bot.emit('message', {}, c2cMessage({
+        content: '看图',
+        messageId: 'c2c-media-1',
+        attachments: [
+          { content_type: 'image/png', url: imageUrl, filename: 'cat.png', size: 2048 },
+          { content_type: 'voice', url: voiceUrl, asr_refer_text: '你好' },
+          // 没有直链的附件直接丢弃：QQ 通道不下载、不转存。
+          { content_type: 'file', url: '' },
+        ],
+      }))
+      // 语音的识别文本进正文：语音唯一可读的内容就是它。
+      expect(harness.delivered[0]?.text).toBe('看图\n你好')
+      expect(harness.delivered[0]?.media).toEqual([
+        { kind: 'image', url: imageUrl, name: 'cat.png', size: 2048 },
+        { kind: 'voice', url: voiceUrl, transcript: '你好' },
+      ])
+
+      // 平台原始事件（GroupMessageEvent）只在 raw.attachments 上带附件：手写载荷
+      // 与旧 build 走这条，通道同样能读到。
+      const videoUrl = 'https://multimedia.nt.qq.com.cn/download?fileid=video-1'
+      await harness.bot.emit('message', {}, groupMessage({
+        messageId: 'group-media-1',
+        content: '',
+        raw: {
+          id: 'group-media-1',
+          content: '',
+          timestamp: String(NOW),
+          author: { member_openid: 'member-openid-1' },
+          group_openid: 'group-openid-9',
+          attachments: [{ content_type: 'video/mp4', url: videoUrl, size: 4096 }],
+        },
+      }))
+      expect(harness.delivered[1]?.media).toEqual([{ kind: 'video', url: videoUrl, size: 4096 }])
     } finally {
       await harness.channel.stop()
     }
@@ -399,7 +505,167 @@ describe('qq channel outbound', () => {
       await harness.channel.stop()
     }
   })
+
+  it('sends an image from localPath and puts the caption in front of it', async () => {
+    const harness = channelHarness({ bot: {}, requireMention: false, markdownSupport: false })
+    await harness.channel.start(harness.signal)
+    try {
+      const receipt = await harness.channel.send(privateTarget('in-media'), [
+        mediaPart({ kind: 'image', localPath: 'C:/tmp/a.png', caption: '看这张图' }, 0, 1),
+      ])
+      // caption 先走文本通道，媒体随后；两次都是被动回复（各占一格额度）。
+      expect(harness.bot.sent).toEqual([
+        { method: 'sendText', target: { scope: 'c2c', targetId: 'openid-owner-1', msgId: 'in-media' }, content: '看这张图' },
+      ])
+      expect(harness.bot.media).toEqual([
+        {
+          method: 'sendImage',
+          target: { scope: 'c2c', targetId: 'openid-owner-1', msgId: 'in-media' },
+          source: { localPath: 'C:/tmp/a.png' },
+          opts: undefined,
+        },
+      ])
+      expect(receipt).toEqual({ parts: 1, at: NOW, messageId: 'media-1' })
+    } finally {
+      await harness.channel.stop()
+    }
+  })
+
+  it('keeps the openid out of a media failure message', async () => {
+    const harness = channelHarness({ bot: {}, requireMention: false, markdownSupport: false })
+    await harness.channel.start(harness.signal)
+    try {
+      harness.bot.sendImage = async () => { throw new Error('platform rejected the image') }
+      const failure = await harness.channel.send(privateTarget('in-media-fail'), [
+        mediaPart({ kind: 'image', localPath: 'C:/tmp/a.png' }, 0, 1),
+      ]).catch((error: unknown) => error as Error)
+      // 平台身份只能以 alias 出现在错误里：它会进日志环与模型上下文。
+      expect(failure.message).toContain('peer-')
+      expect(failure.message).not.toContain('openid-owner-1')
+      expect(failure.message).toContain('platform rejected the image')
+    } finally {
+      await harness.channel.stop()
+    }
+  })
+
+  it('counts every media send against the four passive reply slots', async () => {
+    const harness = channelHarness({ bot: {}, requireMention: false, markdownSupport: false })
+    await harness.channel.start(harness.signal)
+    try {
+      const parts = Array.from({ length: 5 }, (_unused, index) => imagePart(index, 5))
+      await harness.channel.send(privateTarget('in-media-cap'), parts)
+      const targets = harness.bot.media.map((record) => record.target)
+      expect(targets.slice(0, 4).map((target) => target.msgId)).toEqual([
+        'in-media-cap', 'in-media-cap', 'in-media-cap', 'in-media-cap',
+      ])
+      // 第 5 条超出额度：降级主动推送，不能挂在被动回复上。
+      expect(targets[4]).toEqual({ scope: 'c2c', targetId: 'openid-owner-1' })
+      expect(harness.bot.media.map((record) => record.source.localPath)).toEqual([
+        'C:/tmp/img-1.png', 'C:/tmp/img-2.png', 'C:/tmp/img-3.png', 'C:/tmp/img-4.png', 'C:/tmp/img-5.png',
+      ])
+    } finally {
+      await harness.channel.stop()
+    }
+  })
+
+  it('rejects a url source for kinds the adapter refuses to download', async () => {
+    const harness = channelHarness({ bot: {}, requireMention: false, markdownSupport: false })
+    await harness.channel.start(harness.signal)
+    try {
+      await expect(harness.channel.send(privateTarget('in-voice'), [
+        mediaPart({ kind: 'voice', url: 'https://example.invalid/v.silk' }, 0, 1),
+      ])).rejects.toMatchObject({
+        code: 'QQ_SEND_FAILED',
+        message: expect.stringContaining('must be sent from a local file'),
+      })
+      expect(harness.bot.media).toEqual([])
+    } finally {
+      await harness.channel.stop()
+    }
+  })
+
+  it('names the missing SDK method when the build exposes no media sender', async () => {
+    const harness = channelHarness({ bot: { noMediaMethods: true }, requireMention: false, markdownSupport: false })
+    await harness.channel.start(harness.signal)
+    try {
+      await expect(harness.channel.send(privateTarget('in-1'), [imagePart(0, 1)])).rejects.toMatchObject({
+        code: 'QQ_SEND_FAILED',
+        message: expect.stringContaining('exposes no sendImage()'),
+      })
+      // 报错要指向面板重装，而不是让用户猜哪来的旧 build。
+      await expect(harness.channel.send(privateTarget('in-1'), [imagePart(0, 1)]))
+        .rejects.toThrow(/reinstall the runtime from the IM panel/)
+    } finally {
+      await harness.channel.stop()
+    }
+  })
+
+  it('repacks an over-long group reply into four passive parts without losing text', async () => {
+    const harness = channelHarness({ bot: {}, requireMention: false, markdownSupport: false })
+    await harness.channel.start(harness.signal)
+    try {
+      // 6 片 × 10 字 = 60 字，远小于 4 × 4500：重切成 4 片即可全部被动回复。
+      const texts = Array.from({ length: 6 }, (_unused, index) => `第${index}段0123456`)
+      await harness.channel.send(groupTarget('group-msg-1'), texts.map((text, index) => textPart(text, index, texts.length)))
+
+      expect(harness.bot.sent).toHaveLength(4)
+      expect(harness.bot.sent.every((record) => record.target.msgId === 'group-msg-1')).toBe(true)
+      // 重切只改切片位置：段落分隔（空行）也要跟着内容一起还原，一个字都不能丢。
+      expect(harness.bot.sent.map((record) => record.content).join('')).toBe(texts.join('\n\n'))
+      expect(harness.bot.sent.map((record) => record.content).join('')).toContain('\n\n')
+      // 私聊不参与重切：同样的 6 片仍是「4 被动 + 2 主动」。
+      await harness.channel.send(privateTarget('in-private-6'), texts.map((text, index) => textPart(text, index, texts.length)))
+      expect(harness.bot.sent).toHaveLength(10)
+      expect(harness.bot.sent.slice(4, 8).every((record) => record.target.msgId === 'in-private-6')).toBe(true)
+      expect(harness.bot.sent.slice(8).map((record) => record.target.msgId)).toEqual([undefined, undefined])
+    } finally {
+      await harness.channel.stop()
+    }
+  })
 })
+
+describe('qq group part planning', () => {
+  it('leaves four or fewer parts untouched', () => {
+    expect(planGroupParts(['一', '二', '三', '四'], 10)).toEqual({
+      parts: ['一', '二', '三', '四'],
+      overflow: false,
+    })
+    expect(planGroupParts([], 10)).toEqual({ parts: [], overflow: false })
+  })
+
+  it('repacks more than four parts into at most four without splitting surrogate pairs', () => {
+    const texts = ['ab😀', 'cd😀', 'ef😀', 'gh😀', 'ij😀']
+    // 原片是逐段 trim 过的：重切前必须用空行重新粘起来，不能把段落边界吃掉。
+    const joined = texts.join('\n\n')
+    const plan = planGroupParts(texts, 100)
+    expect(plan.overflow).toBe(false)
+    expect(plan.parts.length).toBeLessThanOrEqual(4)
+    expect(plan.parts.join('')).toBe(joined)
+    // 代理对必须完整落在同一片里：切开会渲染成替换符。
+    for (const part of plan.parts) {
+      expect(isLowSurrogate(part.charCodeAt(0))).toBe(false)
+      expect(isHighSurrogate(part.charCodeAt(part.length - 1))).toBe(false)
+    }
+  })
+
+  it('flags overflow when the text cannot fit into four parts and keeps the front four full', () => {
+    const texts = Array.from({ length: 5 }, (_unused, index) => `第${index}段`.padEnd(10, 'x'))
+    const joined = texts.join('\n\n')
+    const plan = planGroupParts(texts, 10)
+    expect(plan.overflow).toBe(true)
+    expect(plan.parts.length).toBeGreaterThan(4)
+    expect(plan.parts.slice(0, 4).join('')).toBe(joined.slice(0, 40))
+    expect(plan.parts.join('')).toBe(joined)
+  })
+})
+
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff
+}
+
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff
+}
 
 describe('qq channel lifecycle', () => {
   it('moves idle → online → error → online as the gateway reports ready, disconnect and error', async () => {
@@ -456,13 +722,14 @@ afterEach(async () => {
 })
 
 describe('qq runtime packages', () => {
-  it('reports both missing packages with the exact install command and refuses to load them', async () => {
+  it('reports both missing packages with a panel install pointer and refuses to load them', async () => {
     const status = await qqRuntimeStatus()
     expect(status.installed).toBe(false)
-    expect(status.reason).toContain(qqRuntimeRoot())
-    expect(status.reason).toContain(
-      'pnpm add @tencent-connect/qqbot-nodejs@1.0.5 @tencent-connect/qqbot-connector@1.2.0',
-    )
+    // 面板文案不带运行期目录的绝对路径（HTTP 隐私边界）。
+    expect(status.reason).not.toContain(qqRuntimeRoot())
+    // 用户不该被要求开终端：提示指向面板按钮，命令只留在服务端日志/测试里。
+    expect(status.reason).toContain('安装 QQ 依赖')
+    expect(status.reason).not.toContain('pnpm add')
     await expect(loadQqSdk()).rejects.toMatchObject({ code: 'QQ_RUNTIME_MISSING' })
     await expect(loadQqConnector()).rejects.toMatchObject({ code: 'QQ_RUNTIME_MISSING' })
   })
@@ -679,13 +946,13 @@ describe('qq qr binding', () => {
     }
   })
 
-  it('projects a missing connector package as the failed phase with the install command', async () => {
+  it('projects a missing connector package as the failed phase with the panel install pointer', async () => {
     const runtime = createImRuntime(fakeContext(), { db })
     try {
       await expect(startBind(runtime)).rejects.toMatchObject({ code: 'QQ_RUNTIME_MISSING' })
       const status = bindStatus(runtime)
       expect(status.phase).toBe('failed')
-      expect(status.reason).toContain('pnpm add @tencent-connect/qqbot-nodejs@1.0.5')
+      expect(status.reason).toContain('安装 QQ 依赖')
     } finally {
       await runtime.dispose()
     }

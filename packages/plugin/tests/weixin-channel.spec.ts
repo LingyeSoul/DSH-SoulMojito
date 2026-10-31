@@ -239,6 +239,8 @@ interface HarnessOptions {
 interface Harness {
   channel: WeixinChannel
   readonly delivered: ImInbound[]
+  /** 每次 `router.handle` 给的惰性媒体物化器（与 delivered 逐条对齐）。 */
+  readonly loads: Array<() => Promise<readonly ImMediaRef[]>>
   readonly cursorSaves: string[]
   readonly tokenSaves: Array<Record<string, string>>
   readonly signal: AbortSignal
@@ -247,6 +249,7 @@ interface Harness {
 
 function channelHarness(options: HarnessOptions): Harness {
   const delivered: ImInbound[] = []
+  const loads: Array<() => Promise<readonly ImMediaRef[]>> = []
   const cursorSaves: string[] = []
   const tokenSaves: Array<Record<string, string>> = []
   const controller = new AbortController()
@@ -256,8 +259,9 @@ function channelHarness(options: HarnessOptions): Harness {
     token: TOKEN,
     baseUrl: options.baseUrl,
     router: {
-      handle: async (inbound) => {
+      handle: async (inbound, handleOptions) => {
         delivered.push(inbound)
+        if (handleOptions?.loadMedia !== undefined) loads.push(handleOptions.loadMedia)
         events?.push(`deliver:${delivered.length}`)
       },
     },
@@ -275,6 +279,7 @@ function channelHarness(options: HarnessOptions): Harness {
   return {
     channel,
     delivered,
+    loads,
     cursorSaves,
     tokenSaves,
     signal: controller.signal,
@@ -592,7 +597,8 @@ describe('weixin inbound', () => {
           senderId: 'wx-user-1',
           senderName: 'wx-user-',
           text: '第一段\n第二段',
-          media: [{ kind: 'image', url: 'https://example.invalid/p.png' }],
+          // 占位 ref：URL 与落盘都推迟到路由通过访问控制之后（loadMedia）。
+          media: [{ kind: 'image' }],
           dedupeKey: imDedupeKey('weixin', ACCOUNT_ID, 'private', 'wx-user-1', '4101'),
           receivedAt: NOW,
         },
@@ -600,6 +606,7 @@ describe('weixin inbound', () => {
       // 群消息与机器人回显都没有、也不会被补投。
       await delay(30)
       expect(harness.delivered).toHaveLength(1)
+      expect(await harness.loads[0]!()).toEqual([{ kind: 'image', url: 'https://example.invalid/p.png' }])
       expect(harness.tokenSaves.at(-1)).toEqual({ 'wx-user-1': 'ctx-4101' })
     } finally {
       await harness.stop()
@@ -640,8 +647,9 @@ describe('weixin inbound', () => {
       expect(harness.delivered[0]).toMatchObject({ text: '语音转出来的文字', media: [] })
       expect(harness.delivered[1]).toMatchObject({
         text: '',
-        media: [{ kind: 'voice', url: 'https://example.invalid/v.silk' }],
+        media: [{ kind: 'voice' }],
       })
+      expect(await harness.loads[1]!()).toEqual([{ kind: 'voice', url: 'https://example.invalid/v.silk' }])
     } finally {
       await harness.stop()
       await stub.close()

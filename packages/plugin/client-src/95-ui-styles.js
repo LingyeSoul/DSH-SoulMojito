@@ -604,7 +604,21 @@
         .dt-im-allow>label>.dt-hint{margin:0}
         .dt-im-allow textarea{box-sizing:border-box;width:100%;min-height:72px;resize:vertical;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:7px 9px;font:inherit;font-size:12px;line-height:18px}
         .dt-im-notice{margin:0;color:var(--dsw-alias-state-success-primary,var(--dsw-alias-label-secondary));font-size:12px;line-height:18px}
-        @media(max-width:700px){.dt-im-allow{grid-template-columns:1fr}.dt-im-qr>img{width:180px;height:180px}}
+        .dt-im-log{display:flex;flex-direction:column;gap:8px}
+        .dt-im-log-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+        .dt-im-log-levels{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+        .dt-im-log-levels>.dt-label{margin:0;flex:none}
+        .dt-im-log-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+        .dt-im-log-list{display:flex;flex-direction:column;gap:1px;max-height:280px;overflow-y:auto;padding:8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent)}
+        .dt-im-log-row{display:flex;align-items:baseline;gap:8px;min-width:0;padding:2px 4px;border-radius:6px;font-size:11.5px;line-height:17px}
+        .dt-im-log-row:hover{background:color-mix(in srgb,var(--dsw-alias-label-primary) 6%,transparent)}
+        .dt-im-log-time{flex:none;color:var(--dsw-alias-label-tertiary);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+        .dt-im-log-badge{flex:none;min-width:40px;text-transform:uppercase;font-size:10px;line-height:15px;letter-spacing:.04em;color:var(--dsw-alias-label-tertiary)}
+        .dt-im-log-badge-info{color:var(--dsw-alias-state-business-primary)}
+        .dt-im-log-badge-warn{color:var(--dsw-alias-state-warning-primary,var(--dsw-alias-state-business-primary))}
+        .dt-im-log-badge-error{color:var(--dsw-alias-state-error-primary)}
+        .dt-im-log-text{flex:1;min-width:0;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
+        @media(max-width:700px){.dt-im-allow{grid-template-columns:1fr}.dt-im-qr>img{width:180px;height:180px}.dt-im-log-list{max-height:220px}}
         @media(prefers-reduced-motion:reduce){.dt-im-light-scanning{animation:none}}
       `
       document.head.appendChild(tag)

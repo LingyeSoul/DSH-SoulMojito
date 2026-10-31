@@ -60,7 +60,7 @@ $DSH_HOME/soulmojito/im/dedupe.log
 | M2（已完成） | OneBot 11 反向 WS + HTTP POST 打通（codec + 连接层 + 账号路由） |
 | M3（已完成） | QQ 扫码绑定 + 官方网关；两个腾讯包外挂安装、运行期动态导入 |
 | M4（已完成） | 微信扫码（含验证码）、长轮询与游标、context token、`-14` 暂停、出站文本投影 |
-| M5 | 客户端「聊天渠道」面板（已完成）；媒体 + 收口（未做） |
+| M5 | 媒体双向 + 收口（已完成）；客户端面板（已完成） |
 
 ### 4.1 已落地（2026-10-30，五批）
 
@@ -103,10 +103,25 @@ vm 纯函数、渲染冒烟）。改绑下拉直接取 bootstrap 的 `characters
 分片清单必须含 `97-ui-im.js`（服务端路由齐全但分片缺失时，浏览器里只会表现为
 「分区不见了」）。
 
+第六批（2026-10-31，M5 收口）：
+- `im/reply.ts` 的 `userMessageIdsOfTurn` 改为按日志位置归轮——真实宿主的
+  `user/message` 不带 `turn`，原实现导致所有 IM 回复静默丢失。
+- 新增 `im/log.ts`（500 条环形缓冲）+ `GET im/logs` + 面板「IM 运行日志」分片
+  `97b-ui-im-logs.js`；路由在收到/去重/策略拒绝/未绑定/无来源/发送失败处各记一条。
+- 媒体：`im/media-store.ts`（内部工作区、20 MB、扩展名白名单、24h TTL）、
+  `im/weixin/media.ts`（CDN 下载解密与上传加密）、微信入站落盘与出站图片/文件、
+  QQ 入站附件与出站 `sendImage/sendFile`、`router.sendMedia` 与 `im_send` 媒体参数。
+- `im/qq/install.ts` + `POST im/qq/install` + 面板安装按钮（镜像 ONNX 一键安装，
+  面板不再出现任何命令）；`src/spawn.ts` 抽出共用子进程运行器。
+- 微信 `typing_ticket` 缓存（30 分钟 / 500 条，失败淘汰重试一次）；解绑账号清游标
+  与 context tokens；群聊按 4 格被动额度重切（原生 `openStream` 只对 C2C 开放）。
+- 决策记录：[`2026-10-31-im-reply-attribution-and-logs.md`](../../decisions/2026-10-31-im-reply-attribution-and-logs.md)、
+  [`2026-10-31-im-media-qq-install.md`](../../decisions/2026-10-31-im-media-qq-install.md)。
+
 **明确未做（下一轮）**：
-1. 媒体双向：微信 CDN 上传/下载与 QQ 附件；当前入站只记 `ImMediaRef`，出站只发文本。
-2. 真人扫码的端到端验证（微信八状态与 QQ 四相位都只有本地桩），以及面板的桌面/390×844 手测。
-3. QQ 群聊流式输出；微信 typing 的 `typing_ticket` 缓存（当前每条都重新 `getconfig`）。
+1. 真人扫码与真机收发的端到端验证（微信扫码、真实图片、QQ 安装/扫码仍只有本地桩）。
+2. 微信下行语音与 QQ 群原生流式：平台/参考实现不支持，已按明确报错或分段降级。
+3. 面板的桌面/390×844 手测（日志带只做了渲染冒烟与源码检查）。
 
 ## 5. 测试面
 

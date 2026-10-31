@@ -64,6 +64,14 @@ export interface ImSessionDeps {
   ensurePreset: () => Promise<void>
   /** Agent 工作目录；复用插件的内部工作区。 */
   workspace: () => Promise<string>
+  /**
+   * 插件代建 / 恢复 agent 时的模型选择。
+   *
+   * 宿主用 `agent.options.provider/model` 解析提示词变量（`{{model}}`）并做请求
+   * 准入；不带就是空串，整轮在提示词组装阶段就失败（`prompt variable "{{model}}"
+   * has no value`）。宿主自己的会话入口同样从 `agentDefaultModel` 取值传入。
+   */
+  agentOptions: () => { provider: string; model: string }
   /** 写 sessionBindings（`session/binding.ts` 的 bindSession）。 */
   bind: (sessionId: string, character: string, chatId: string) => Promise<unknown>
   /** 写穿 AgentTavern 预设投影（`agent-tavern/preset.ts`）。 */
@@ -288,12 +296,13 @@ export async function ensureImAgent(deps: ImSessionDeps, sessionId: string): Pro
   }
   await deps.ensurePreset()
   const workspace = await deps.workspace()
+  const agentOptions = deps.agentOptions()
   const setup = async (agentContext: unknown): Promise<void> => {
     await presets.mount?.(agentContext, deps.presetId)
   }
   if (typeof deps.agents?.resume === 'function') {
     try {
-      const resumed = await deps.agents.resume({ resumeSessionId: sessionId, setup })
+      const resumed = await deps.agents.resume({ resumeSessionId: sessionId, agentOptions, setup })
       return resumed.agent
     } catch (error) {
       deps.logger?.warn?.(`dsh-soulmojito im: resume ${sessionId} failed, creating a new session: ${messageOf(error)}`)
@@ -304,6 +313,7 @@ export async function ensureImAgent(deps: ImSessionDeps, sessionId: string): Pro
   }
   const created = await deps.agents.create({
     sessionId,
+    agentOptions,
     meta: { cwd: workspace, agentPreset: deps.presetId },
     setup,
   })

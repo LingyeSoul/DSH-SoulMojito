@@ -27,18 +27,26 @@ import { sessionEvents } from '../../../bind/src/index.js'
 import { tavernDataRoot } from '../dsh-home.js'
 import { prepareInternalWorkspace } from '../workspace.js'
 import { imDisabledByEnv, type ImRuntimeHandle } from './handle.js'
+import { openImMediaStore } from './media-store.js'
 import { createOneBotUpgradeHandler, OneBotChannel } from './onebot/server.js'
 import { ensureOneBotUpgradeSeat } from './onebot/seat.js'
 import { createQQBinding, type QQBindCredential, type QQConnector } from './qq/bind.js'
 import { QQChannel, type QQBotFactory } from './qq/channel.js'
 import { loadQqConnector, loadQqSdk, type QqSdk } from './qq/sdk.js'
-import { WEIXIN_DEFAULT_BOT_TYPE, WEIXIN_FIXED_BASE_URL, type WeixinCredential } from './weixin/api.js'
+import {
+  WEIXIN_DEFAULT_BOT_TYPE,
+  WEIXIN_DEFAULT_CDN_BASE_URL,
+  WEIXIN_FIXED_BASE_URL,
+  type WeixinCredential,
+} from './weixin/api.js'
 import { createWeixinBinding } from './weixin/bind.js'
 import { WeixinChannel, WEIXIN_LONG_POLL_TIMEOUT_MS } from './weixin/channel.js'
 import { WEIXIN_REAL_CLOCK } from './weixin/clock.js'
 import { openWeixinContextTokens } from './weixin/context-tokens.js'
+import { WEIXIN_MEDIA_MAX_BYTES } from './weixin/media.js'
 import { createImRouter, type ImRouter } from './router.js'
 import { imAccountIdOf } from './account-id.js'
+import { createImLog, IM_LOG_CAPACITY, wrapImLogger } from './log.js'
 import {
   bindImChat,
   ensureImAgent,
@@ -68,6 +76,8 @@ export interface CreateImRuntimeOptions {
   qqConnector?: QQConnector
   /** 微信扫码入口。缺省官方固定地址；测试指向本地桩服务，自建反代也可覆盖。 */
   weixinQrBaseUrl?: string
+  /** 微信媒体 CDN 入口。缺省官方 c2c 域名；测试指向本地桩服务。 */
+  weixinCdnBaseUrl?: string
 }
 
 /** QR 绑定出来的账号默认标签；用户可在账号路由里改成自己的备注。 */
@@ -103,6 +113,15 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
   const store = ImStore.open(tavernDataRoot('im'))
   // 运行时生命信号：热重载/卸载时连同账号连接一起停，不留下孤儿 socket。
   const lifetime = new AbortController()
+  // 面板可见的运行日志：通道/绑定器/路由共用同一条镜像，独立于宿主终端。
+  const imLog = createImLog({ capacity: IM_LOG_CAPACITY, now: () => Date.now() })
+  const logger = wrapImLogger(options.logger, imLog)
+  // 附件落内部工作区：会话 cwd 就在这里，模型能读到；一个实例给所有通道共用。
+  const mediaStore = openImMediaStore({
+    workspaceRoot: async () => (await prepareInternalWorkspace()).path,
+    now: () => Date.now(),
+    maxBytes: WEIXIN_MEDIA_MAX_BYTES,
+  })
 
   const sessionDeps: ImSessionDeps = {
     db,
@@ -111,10 +130,15 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
     presetId: AGENT_TAVERN_PRESET_ID,
     ensurePreset: async () => { await ensureAgentPresetDeclared(ctx, AGENT_TAVERN_PRESET_ID) },
     workspace: async () => (await prepareInternalWorkspace()).path,
+    // 宿主用 agent.options.model 解析 {{model}} 等提示变量；缺了整轮在组装阶段失败。
+    agentOptions: () => {
+      const { provider, model } = ctx.agentDefaultModel.currentSelection()
+      return { provider, model }
+    },
     bind: async (sessionId, character, chatId) =>
       bindSession(db, sessionId, character, chatId, false, 'agent-tavern', 'dsh-native'),
     presetChanged: async () => { await emitAgentPresetChanged() },
-    ...(options.logger === undefined ? {} : { logger: options.logger }),
+    logger,
   }
 
   const router = createImRouter({
@@ -136,6 +160,7 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       })
     },
     render: async (target, text) => renderForTarget(db, target, text),
+    workspaceRoot: async () => (await prepareInternalWorkspace()).path,
     send: async (target, parts) => {
       const channel = channels.get(channelKey(target.channel, target.accountId))
       if (channel === undefined) {
@@ -143,7 +168,8 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       }
       await channel.send(target, parts)
     },
-    ...(options.logger === undefined ? {} : { logger: options.logger }),
+    log: imLog,
+    logger,
   })
 
   function handleSessionEvent(session: HostSessionLike, event: HostSessionEventLike): void {
@@ -156,7 +182,7 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       if (!bound) return
       return router.finishTurn(sessionId, turn, sessionEvents(session))
     }).catch((error: unknown) => {
-      options.logger?.warn?.(`dsh-soulmojito im: turn ${turn} of ${sessionId} reply failed: ${messageOf(error)}`)
+      logger?.warn?.(`dsh-soulmojito im: turn ${turn} of ${sessionId} reply failed: ${messageOf(error)}`)
     })
   }
 
@@ -169,7 +195,7 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       router: { handle: async (inbound) => router.inbound(inbound) },
       groupRequireMention: async () => ((await db.getState()).imSettings ?? DEFAULT_IM_SETTINGS).groupRequireMention,
       now: () => Date.now(),
-      ...(options.logger === undefined ? {} : { logger: options.logger }),
+      logger,
     })
   }
 
@@ -196,13 +222,14 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
     return new QQChannel({
       accountId: account.accountId,
       secret,
-      router: { handle: async (inbound) => router.inbound(inbound) },
+      router: { handle: async (inbound, inboundOptions) => router.inbound(inbound, inboundOptions) },
       groupRequireMention: async () => ((await db.getState()).imSettings ?? DEFAULT_IM_SETTINGS).groupRequireMention,
       createBot,
       // 账号级能力：官方机器人只有申请到 markdown 权限才能发 msg_type=2。
       markdownSupport: secret['markdownSupport'] === 'true',
+      media: mediaStore,
       now: () => Date.now(),
-      ...(options.logger === undefined ? {} : { logger: options.logger }),
+      logger,
     })
   }
 
@@ -213,7 +240,7 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       // 构造期校验 botToken/baseUrl：坏凭据在落盘前就被拒绝（见 upsertAccount）。
       token: secret['botToken'] ?? '',
       baseUrl: secret['baseUrl'] ?? '',
-      router: { handle: async (inbound) => router.inbound(inbound) },
+      router: { handle: async (inbound, inboundOptions) => router.inbound(inbound, inboundOptions) },
       loadCursor: async () => store.readCursor(account.accountId),
       saveCursor: async (cursor) => store.writeCursor(account.accountId, cursor),
       loadContextTokens: async () => contextTokens.load(),
@@ -221,7 +248,9 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       clock: WEIXIN_REAL_CLOCK,
       longPollTimeoutMs: WEIXIN_LONG_POLL_TIMEOUT_MS,
       typingEnabled: true,
-      ...(options.logger === undefined ? {} : { logger: options.logger }),
+      cdnBaseUrl: options.weixinCdnBaseUrl ?? WEIXIN_DEFAULT_CDN_BASE_URL,
+      media: mediaStore,
+      logger,
     })
   }
 
@@ -239,6 +268,7 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
     channels.set(key, channel)
     try {
       await channel.start(lifetime.signal)
+      logger.info?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} channel installed and polling`)
     } catch (error) {
       channels.delete(key)
       throw error
@@ -259,7 +289,7 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
     pollIntervalMs: WEIXIN_BIND_POLL_INTERVAL_MS,
     clock: WEIXIN_REAL_CLOCK,
     localTokenList: loadWeixinLocalTokens,
-    ...(options.logger === undefined ? {} : { logger: options.logger }),
+    logger,
   })
   /** 最近一次 startQrBind 选中的通道；两个绑定器各自保留自己的相位。 */
   let activeQrBind: 'qq' | 'weixin' | undefined
@@ -332,7 +362,7 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       try {
         secret = await store.readSecret('weixin', account.accountId)
       } catch (error) {
-        options.logger?.warn?.(`dsh-soulmojito im weixin bind: skipped ${account.accountId} local token: ${messageOf(error)}`)
+        logger?.warn?.(`dsh-soulmojito im weixin bind: skipped ${account.accountId} local token: ${messageOf(error)}`)
         continue
       }
       const token = secret?.['botToken']?.trim() ?? ''
@@ -361,11 +391,11 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       return qqBinding.startQrConnect({
         onQrDisplayed: (url) => {
           // 二维码链接带一次性凭据：日志只留 host，解析不了就只写就绪（审查 P2-3）。
-          options.logger?.info?.(`dsh-soulmojito im qq bind: QR code ready${qrHostSuffix(url)}`)
+          logger?.info?.(`dsh-soulmojito im qq bind: QR code ready${qrHostSuffix(url)}`)
         },
         onSuccess: async (credentials) => { await adoptQQCredential(credentials) },
         onFailure: (error) => {
-          options.logger?.warn?.(`dsh-soulmojito im qq bind failed: ${error.message}`)
+          logger?.warn?.(`dsh-soulmojito im qq bind failed: ${error.message}`)
         },
       }, { signal: lifetime.signal, source: 'dsh-soulmojito' })
     }
@@ -373,14 +403,14 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       activeQrBind = 'weixin'
       return weixinBinding.start({
         onQrDisplayed: (url) => {
-          options.logger?.info?.(`dsh-soulmojito im weixin bind: QR code ready${qrHostSuffix(url)}`)
+          logger?.info?.(`dsh-soulmojito im weixin bind: QR code ready${qrHostSuffix(url)}`)
         },
         onSuccess: async (credential) => { await adoptWeixinCredential(credential) },
         onAlreadyBound: () => {
-          options.logger?.info?.('dsh-soulmojito im weixin bind: the bot is already bound; existing credential stays in use')
+          logger?.info?.('dsh-soulmojito im weixin bind: the bot is already bound; existing credential stays in use')
         },
         onFailure: (error) => {
-          options.logger?.warn?.(`dsh-soulmojito im weixin bind failed: ${error.message}`)
+          logger?.warn?.(`dsh-soulmojito im weixin bind failed: ${error.message}`)
         },
       }, { signal: lifetime.signal })
     }
@@ -503,6 +533,23 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       }
       oneBotChannels.delete(key)
       const removed = await store.deleteAccount(channelId, accountId)
+      // 游标按 accountId 命名，跨渠道共用同一个键：另一个渠道还在用同名账号时
+      // 不能替它删游标，否则那个账号重启会从头重收历史。
+      const stillUsed = (await store.accounts()).some((entry) => entry.accountId === accountId)
+      if (!stillUsed) {
+        await store.deleteCursor(accountId).catch((error: unknown) => {
+          logger?.warn?.(`dsh-soulmojito im: deleting the cursor for ${channelId}/${accountId} failed: ${messageOf(error)}`)
+        })
+      }
+      // 附件是 PII：解绑即删这个账号的媒体目录，不等下一次启动的 TTL 清扫。
+      await mediaStore.remove(channelId, accountId).catch((error: unknown) => {
+        logger?.warn?.(`dsh-soulmojito im: deleting the media of ${channelId}/${accountId} failed: ${messageOf(error)}`)
+      })
+      if (channelId === 'weixin') {
+        await openWeixinContextTokens(tavernDataRoot('im'), accountId).clear().catch((error: unknown) => {
+          logger?.warn?.(`dsh-soulmojito im: deleting the weixin context tokens for ${accountId} failed: ${messageOf(error)}`)
+        })
+      }
       return removed || live !== undefined
     })
   }
@@ -510,7 +557,7 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
   // ---- 反向 WS 升级路由（进程内常驻席位，见 im/onebot/seat.ts）----
   const upgradeHandler = createOneBotUpgradeHandler({
     channels: () => [...oneBotChannels.values()],
-    ...(options.logger === undefined ? {} : { logger: options.logger }),
+    logger,
   })
   const seat = ensureOneBotUpgradeSeat(ctx.webServer, `${API}/im/onebot/ws`)
   if (!seat.registered) {
@@ -538,22 +585,23 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       try {
         const secret = await store.readSecret(account.channel, account.accountId)
         if (secret === undefined) {
-          options.logger?.warn?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} has no stored secret; skipped`)
+          logger?.warn?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} has no stored secret; skipped`)
           continue
         }
         await upsertAccount(account, secret)
       } catch (error) {
-        options.logger?.warn?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} failed to start: ${messageOf(error)}`)
+        logger?.warn?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} failed to start: ${messageOf(error)}`)
       }
     }
   }
   void restoreAccounts().catch((error: unknown) => {
-    options.logger?.warn?.(`dsh-soulmojito im: restoring stored accounts failed: ${messageOf(error)}`)
+    logger?.warn?.(`dsh-soulmojito im: restoring stored accounts failed: ${messageOf(error)}`)
   })
 
   return {
     router,
     capabilities,
+    logs: (query) => imLog.read(query),
     upsertAccount,
     removeAccount,
     handleOneBotWebhook,
@@ -578,7 +626,7 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       lifetime.abort()
       for (const channel of channels.values()) {
         await channel.stop().catch((error: unknown) => {
-          options.logger?.warn?.(`dsh-soulmojito im: stopping ${channel.channel}/${channel.accountId} failed: ${messageOf(error)}`)
+          logger?.warn?.(`dsh-soulmojito im: stopping ${channel.channel}/${channel.accountId} failed: ${messageOf(error)}`)
         })
       }
       channels.clear()

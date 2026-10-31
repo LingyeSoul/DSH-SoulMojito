@@ -201,4 +201,13 @@ describe('ImStore cursors', () => {
     await reopened.writeCursor('10001', 'sync-buf-def')
     expect(await store.readCursor('10001')).toBe('sync-buf-def')
   })
+
+  it('deletes a cursor and reports whether it existed', async () => {
+    const { store } = await fixture()
+    await store.writeCursor('10001', 'sync-buf-abc')
+    expect(await store.deleteCursor('10001')).toBe(true)
+    expect(await store.readCursor('10001')).toBeUndefined()
+    // 幂等：第二次没有文件可删，如实回 false。
+    expect(await store.deleteCursor('10001')).toBe(false)
+  })
 })

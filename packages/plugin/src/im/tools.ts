@@ -9,12 +9,12 @@
  * 且与 peerKey 一一对应，模型用它在同一会话内选目标已经足够。
  */
 
-import { createHash } from 'node:crypto'
+import { isAbsolute } from 'node:path'
 import type { TavernStore } from '../../../tavern-store/src/index.js'
 import { objectOutput, tool, type ToolDefinition, type ToolExecution } from '../agent-tavern/tools/shared.js'
 import type { ImRuntimeHandle } from './handle.js'
-import type { ImScope } from './types.js'
-import { imPeerKeyParts } from './types.js'
+import type { ImOutboundMedia, ImScope } from './types.js'
+import { imPeerAlias, imPeerKeyParts } from './types.js'
 
 /** 工具面单条上限：不在这里切分，超长交给模型自己分段（提案 §3.7 的切分属出站投影）。 */
 export const IM_SEND_MAX_CHARS = 4000
@@ -61,11 +61,19 @@ export function createImTools(deps: ImToolsDeps): ToolDefinition[] {
         })),
       }
     }),
-    tool('im_send', 'Send one text message to an IM peer that is bound to this session. Omit peer when exactly one peer is bound; pass the alias from im_identity when several are. Text is trimmed and capped at 4000 characters. Cross-session sending is forbidden: an alias outside this session is rejected.', {
-      text: { type: 'string', required: true, description: 'Message text, 1-4000 characters after trimming.' },
+    tool('im_send', 'Send one message to an IM peer that is bound to this session. Send text, a media item, or a media item with a caption. Omit peer when exactly one peer is bound; pass the alias from im_identity when several are. Text is trimmed and capped at 4000 characters. Media is read from an absolute local path (preferred) or an http(s) URL for image/video. Cross-session sending is forbidden: an alias outside this session is rejected.', {
+      text: { type: 'string', description: 'Message text, 1-4000 characters after trimming. Optional when media is attached; then it becomes the caption.' },
       peer: { type: 'string', description: 'Target peer alias from im_identity; required when this session has more than one binding.' },
+      mediaKind: { type: 'string', enum: ['image', 'voice', 'video', 'file'], description: 'Kind of the media item; required when mediaPath or mediaUrl is given.' },
+      mediaPath: { type: 'string', description: 'Absolute path of a local file to send (preferred: no network fetch).' },
+      mediaUrl: { type: 'string', description: 'Remote http(s) URL to send. Only image and video are supported by every channel.' },
+      mediaName: { type: 'string', description: 'Optional display file name for the media item.' },
     }, sendOutput, async (args, exec) => {
-      const text = sendTextOf(args)
+      const text = optionalTextOf(args)
+      const media = mediaOf(args)
+      if (text === undefined && media === undefined) {
+        throw new Error('im_send needs text, mediaPath or mediaUrl')
+      }
       const requested = aliasOf(args)
       const peers = await boundPeers(deps, requireAgentId(exec))
       let peer: BoundPeer
@@ -74,7 +82,7 @@ export function createImTools(deps: ImToolsDeps): ToolDefinition[] {
         if (found === undefined) throw new Error(`peer '${requested}' is not bound to this session`)
         peer = found
       } else if (peers.length === 0) {
-        throw new Error('this session has no IM peer binding; bind one in the DSH-SoulMojito IM panel first')
+        throw new Error('this session has no IM peer binding; bind one in the dsh-soulmojito IM panel first')
       } else {
         peer = peerWhenSingle(peers)
       }
@@ -82,7 +90,21 @@ export function createImTools(deps: ImToolsDeps): ToolDefinition[] {
       if (runtime === undefined) {
         throw new Error('IM runtime is not available in this host process; im_send cannot deliver messages')
       }
-      const receipt = await runtime.router.sendText(peer.peerKey, text)
+      if (media !== undefined) {
+        if (runtime.router.sendMedia === undefined) {
+          throw new Error('this IM runtime cannot send media; update dsh-soulmojito and restart DSH')
+        }
+        const withCaption: typeof media = text === undefined ? media : { ...media, caption: text }
+        const receipt = await runtime.router.sendMedia(peer.peerKey, withCaption)
+        return {
+          peer: peer.alias,
+          parts: receipt.parts,
+          sentAt: new Date(receipt.at).toISOString(),
+          mediaKind: media.kind,
+          ...(receipt.messageId === undefined ? {} : { messageId: receipt.messageId }),
+        }
+      }
+      const receipt = await runtime.router.sendText(peer.peerKey, text as string)
       return {
         peer: peer.alias,
         parts: receipt.parts,
@@ -145,7 +167,8 @@ const sendOutput = objectOutput({
   parts: { type: 'integer' },
   sentAt: { type: 'string' },
   messageId: { type: 'string' },
-}, ['messageId'])
+  mediaKind: { type: 'string', enum: ['image', 'voice', 'video', 'file'] },
+}, ['messageId', 'mediaKind'])
 
 /** 工具身份只认宿主注入的 agent id；缺它就拒绝执行，绝不回落到会话参数。 */
 function requireAgentId(exec: ToolExecution): string {
@@ -177,28 +200,80 @@ async function boundPeers(deps: ImToolsDeps, sessionId: string): Promise<BoundPe
   return peers.sort((left, right) => left.alias.localeCompare(right.alias))
 }
 
-/**
- * 稳定别名：同一 peer 的 alias 跨重启不变，模型可以在多轮里复用；哈希让 openid
- * 永远不出现在上下文里。channel + scope 进哈希，避免不同渠道同名 id 撞车。
- */
-export function imPeerAlias(channel: string, scope: string, peerKey: string): string {
-  return `peer-${createHash('sha256').update(`${channel}:${scope}:${peerKey}`).digest('hex').slice(0, 10)}`
-}
+export { imPeerAlias } from './types.js'
 
 function peerWhenSingle(peers: readonly BoundPeer[]): BoundPeer {
   if (peers.length === 1) return peers[0] as BoundPeer
   throw new Error(`this session is bound to ${peers.length} IM peers; pass peer to choose one of: ${peers.map((peer) => peer.alias).join(', ')}`)
 }
 
-function sendTextOf(args: Record<string, unknown>): string {
+function optionalTextOf(args: Record<string, unknown>): string | undefined {
   const value = args['text']
+  if (value === undefined) return undefined
   if (typeof value !== 'string') throw new Error('text must be a string')
   const text = value.trim()
-  if (text === '') throw new Error('text must not be blank; im_send sends exactly the text you give it')
+  if (text === '') throw new Error('text must not be blank; omit it when sending only media')
   if (text.length > IM_SEND_MAX_CHARS) {
     throw new Error(`text must be at most ${IM_SEND_MAX_CHARS} characters, received ${text.length}`)
   }
   return text
+}
+
+const MEDIA_KINDS: readonly ImOutboundMedia['kind'][] = ['image', 'voice', 'video', 'file']
+
+/**
+ * 媒体参数 → 结构化描述。只接受一个来源（本地路径或 URL）：两样都给时让调用方
+ * 改，而不是替它猜哪个优先——猜错就是发错文件。
+ */
+function mediaOf(args: Record<string, unknown>): ImOutboundMedia | undefined {
+  const kindValue = args['mediaKind']
+  const pathValue = args['mediaPath']
+  const urlValue = args['mediaUrl']
+  const nameValue = args['mediaName']
+  const hasPath = pathValue !== undefined
+  const hasUrl = urlValue !== undefined
+  if (!hasPath && !hasUrl) {
+    if (kindValue !== undefined || nameValue !== undefined) {
+      throw new Error('mediaKind/mediaName need mediaPath or mediaUrl')
+    }
+    return undefined
+  }
+  if (hasPath && hasUrl) throw new Error('pass either mediaPath or mediaUrl, not both')
+  if (typeof kindValue !== 'string' || !MEDIA_KINDS.includes(kindValue as ImOutboundMedia['kind'])) {
+    throw new Error("mediaKind must be one of 'image' | 'voice' | 'video' | 'file' when sending media")
+  }
+  const kind = kindValue as ImOutboundMedia['kind']
+  let name: string | undefined
+  if (nameValue !== undefined) {
+    if (typeof nameValue !== 'string' || nameValue.trim() === '') {
+      throw new Error('mediaName must be a non-empty string when provided')
+    }
+    name = nameValue.trim()
+  }
+  if (hasPath) {
+    if (typeof pathValue !== 'string' || pathValue.trim() === '') {
+      throw new Error('mediaPath must be a non-empty absolute path')
+    }
+    const localPath = pathValue.trim()
+    if (!isAbsolute(localPath)) {
+      throw new Error(`mediaPath '${localPath}' is not absolute; pass a full path (the attachment summary prints one)`)
+    }
+    return { kind, localPath, ...(name === undefined ? {} : { name }) }
+  }
+  if (typeof urlValue !== 'string' || urlValue.trim() === '') {
+    throw new Error('mediaUrl must be a non-empty http(s) URL')
+  }
+  const raw = urlValue.trim()
+  let parsed: URL
+  try {
+    parsed = new URL(raw)
+  } catch {
+    throw new Error(`mediaUrl '${raw}' is not a valid absolute URL`)
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`mediaUrl '${raw}' uses protocol '${parsed.protocol}'; expected http(s)`)
+  }
+  return { kind, url: raw, ...(name === undefined ? {} : { name }) }
 }
 
 function aliasOf(args: Record<string, unknown>): string | undefined {

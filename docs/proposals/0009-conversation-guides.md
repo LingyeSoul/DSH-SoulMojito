@@ -1,6 +1,6 @@
 # 提案 0009：Conversation Guides（持续指引）— dsh-soulmojito 功能复刻
 
-> 状态：已实现。日期：2026-10-07。参照物：`flizzywine/dsh-soulmojito`（AGPL-3.0）的**公开功能文档**
+> 状态：已实现。日期：2026-10-07。参照物：`flizzywine/dsh-tavern`（AGPL-3.0）的**公开功能文档**
 > （README「Guide：给这一局注入上下文指引」、`docs/feature-inventory.md` B09），按本仓库 clean-room
 > 教义从行为规格重实现，不复制其源码，也不引入新依赖。实施期间禁止阅读该仓库源码。
 

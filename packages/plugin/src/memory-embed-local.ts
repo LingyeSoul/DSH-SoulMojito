@@ -31,13 +31,18 @@
  */
 
 import { createHash } from 'node:crypto'
-import { spawn } from 'node:child_process'
 import { readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { importHostPackage } from '../../bind/src/index.js'
 import type { LocalEmbedPrecision, MemoryEmbeddingLocalSettings } from '../../tavern-store/src/index.js'
+import { defaultSpawnRunner, type SpawnRunner } from './spawn.js'
+
+// 子进程纪律已抽到 `spawn.ts`（QQ 运行时安装复用同一份）；这里 re-export 保持
+// 本模块的公开面与既有导入不变。
+export type { SpawnRunner } from './spawn.js'
+export { defaultSpawnRunner } from './spawn.js'
 
 /** 本地 embed 运行时包名（pnpm add 的目标；其依赖自带 onnxruntime-node）。 */
 export const TRANSFORMERS_PACKAGE = '@huggingface/transformers'
@@ -417,48 +422,6 @@ export function localRuntimeProfileRoot(pluginDir: string): string | undefined {
   const parent = dirname(pluginDir)
   if (basename(parent) !== 'node_modules') return undefined
   return dirname(parent)
-}
-
-/** 子进程运行器形状（测试注入口；生产为 spawn 流式捕获，纪律镜像自更新链路
- *  apply.ts 的 runCapture：windowsHide、逐行收集、超时 kill + unref）。 */
-export type SpawnRunner = (
-  command: string,
-  args: readonly string[],
-  options: { cwd: string; timeoutMs: number },
-) => Promise<{ code: number; output: string }>
-
-export function defaultSpawnRunner(command: string, args: readonly string[], options: { cwd: string; timeoutMs: number }): Promise<{ code: number; output: string }> {
-  return new Promise((resolve, reject) => {
-    // win32 下 pnpm 是 .cmd（Node 安全策略不允许无 shell 直启 .cmd）；参数是
-    // 本模块写死的常量包名、路径经 cwd 传递，shell 化无注入面。
-    const child = spawn(command, [...args], {
-      cwd: options.cwd,
-      shell: process.platform === 'win32',
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: process.env,
-    })
-    let output = ''
-    const feed = (chunk: Buffer): void => {
-      output += chunk.toString('utf8')
-      if (output.length > 1_000_000) output = output.slice(-1_000_000)
-    }
-    child.stdout?.on('data', feed)
-    child.stderr?.on('data', feed)
-    const timer = setTimeout(() => {
-      child.kill()
-      reject(new Error(`pnpm timed out after ${options.timeoutMs}ms`))
-    }, options.timeoutMs)
-    timer.unref?.()
-    child.once('error', (error) => {
-      clearTimeout(timer)
-      reject(error)
-    })
-    child.once('close', (code) => {
-      clearTimeout(timer)
-      resolve({ code: code ?? -1, output })
-    })
-  })
 }
 
 export interface LocalRuntimeInstallOutcome {

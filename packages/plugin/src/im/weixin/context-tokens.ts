@@ -19,6 +19,8 @@ import { dirname, join, resolve } from 'node:path'
 export interface WeixinContextTokenStore {
   load(): Promise<Record<string, string>>
   save(tokens: Readonly<Record<string, string>>): Promise<void>
+  /** 解绑账号时清掉这一份：token 是回复通行证，凭据不该比账号活得更久。 */
+  clear(): Promise<void>
 }
 
 export type WeixinContextTokenErrorCode = 'WEIXIN_TOKEN_STORE_CORRUPT' | 'WEIXIN_TOKEN_STORE_IO'
@@ -50,6 +52,13 @@ export function openWeixinContextTokens(root: string, accountId: string): Weixin
   return {
     load: () => loadTokens(file),
     save: (tokens) => saveTokens(file, tokens),
+    clear: async () => {
+      try {
+        await fs.rm(file, { force: true })
+      } catch (cause) {
+        throw new WeixinContextTokenError('WEIXIN_TOKEN_STORE_IO', `failed to delete ${file}: ${reasonOf(cause)}`, file)
+      }
+    },
   }
 }
 

@@ -10,6 +10,7 @@
  * (`im-state.ts`) and are re-exported here so callers have one import site.
  */
 
+import { createHash } from 'node:crypto'
 import type { ImScope } from '../../../tavern-store/src/index.js'
 
 export type { ImAccessMode, ImBindingMode, ImChatRef, ImPeerBinding, ImScope, ImSettings } from '../../../tavern-store/src/index.js'
@@ -17,11 +18,13 @@ export { DEFAULT_IM_SETTINGS, imPeerKey } from '../../../tavern-store/src/index.
 
 export type ImChannelId = 'qq' | 'weixin' | 'onebot'
 
+export type ImMediaKind = 'image' | 'voice' | 'video' | 'file'
+
 export interface ImMediaRef {
-  kind: 'image' | 'voice' | 'video' | 'file'
+  kind: ImMediaKind
   /** Remote URL as reported by the platform (never fetched by the router). */
   url?: string
-  /** Local path when the adapter already downloaded the asset. */
+  /** Local path when the adapter already downloaded and decrypted the asset. */
   localPath?: string
   name?: string
   /** Bytes, when the platform reports it. */
@@ -63,12 +66,40 @@ export interface ImTarget {
 }
 
 /** One already-split outbound text part. Splitting happens in `project.ts`. */
-export interface OutboundPart {
+export interface OutboundTextPart {
   kind: 'text'
   text: string
   /** 0-based part index and total count, so adapters can add sequence numbers. */
   index: number
   total: number
+}
+
+/**
+ * One outbound media item.
+ *
+ * `localPath` is preferred: the adapter reads a local file instead of trusting a
+ * remote URL (WeChat and QQ upload from bytes anyway). `caption` is sent before
+ * the media when the platform supports it.
+ */
+export interface OutboundMediaPart {
+  kind: ImMediaKind
+  localPath?: string
+  url?: string
+  name?: string
+  caption?: string
+  index: number
+  total: number
+}
+
+export type OutboundPart = OutboundTextPart | OutboundMediaPart
+
+/** 主动发送的媒体描述（工具面 → 路由）；`localPath` 优先于 `url`。 */
+export interface ImOutboundMedia {
+  kind: ImMediaKind
+  localPath?: string
+  url?: string
+  name?: string
+  caption?: string
 }
 
 export interface ImSendReceipt {
@@ -157,4 +188,12 @@ export function imPeerKeyParts(key: string): { channel: string; accountId: strin
   const [channel, accountId, scope, ...rest] = parts
   if (channel === undefined || accountId === undefined || scope === undefined) return undefined
   return { channel, accountId, scope, peerId: rest.join(':') }
+}
+
+/**
+ * 稳定别名：同一 peer 的 alias 跨重启不变，模型可以在多轮里复用；哈希让 openid
+ * 永远不出现在上下文与日志里。channel + scope 进哈希，避免不同渠道同名 id 撞车。
+ */
+export function imPeerAlias(channel: string, scope: string, peerKey: string): string {
+  return `peer-${createHash('sha256').update(`${channel}:${scope}:${peerKey}`).digest('hex').slice(0, 10)}`
 }

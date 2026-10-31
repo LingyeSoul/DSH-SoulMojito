@@ -1,17 +1,20 @@
 /**
- * QQ 官方机器人通道（提案 0024 §2.1 / M3）。
+ * QQ 官方机器人通道（提案 0024 §2.1 / M3 / M5）。
  *
  * 传输走 SDK 的 WebSocket 网关：token、鉴权、心跳与重连都由
  * `@tencent-connect/qqbot-nodejs` 负责，本模块只做三件事——把入站事件归一成
- * `ImInbound`、把出站文本按 peer 发回、把连接相位投影成 `ImChannelStatus`。
+ * `ImInbound`（含平台附件的 https 直链）、把出站文字与媒体按 peer 发回、把连接
+ * 相位投影成 `ImChannelStatus`。
  *
- * 三个必须记住的 SDK 事实：
+ * 几个必须记住的 SDK 事实：
  * 1. `bot.start()` 解到的是「连接结束」而不是「连接成功」，因此**不能** await 它；
  *    启动是否成功看 `ready`/`resumed` 事件，失败看 start 的 reject 与 `error`。
  * 2. 群消息 @ 判定的权威信号是事件名 `GROUP_AT_MESSAGE_CREATE`（QQ 官方只在用户
  *    真的 @ 了机器人时才投递该事件）；带结构化 @ 列表的载荷用
  *    `mentions[].is_you` 表达同一件事，两者任一成立即视为 @。
  * 3. 被动回复（带 `msgId`）对同一条触发消息最多 4 条，超出部分只能当主动推送发。
+ * 4. 原生流式消息（`openStream`/`StreamSession`）只对 C2C 开放；群聊流式由本模块
+ *    自己用「有序多段 + 被动额度重切片」近似（`planGroupParts`），不假装是平台流。
  *
  * SDK 本身不在产物里：构造器由运行时从 `im/qq/sdk.ts` 动态加载后注入，
  * 本模块只依赖那里的结构类型（见 `decisions/2026-10-30-qq-channel.md`）。
@@ -21,28 +24,53 @@
 
 import { randomUUID } from 'node:crypto'
 import type { HostLogger } from '../../host-contract.js'
+import type { ImMediaStore } from '../media-store.js'
+import { PASSIVE_REPLY_LIMIT, planDeliveries, planGroupParts } from './delivery.js'
+import { qqAttachmentsOf, qqMediaOfAttachments, qqTranscriptsOf } from './inbound-media.js'
+import { fetchInboundMedia } from '../media-fetch.js'
 import type {
   ImChannel,
   ImChannelStatus,
   ImInbound,
+  ImMediaKind,
+  ImMediaRef,
   ImScope,
   ImSendReceipt,
   ImTarget,
+  OutboundMediaPart,
   OutboundPart,
+  OutboundTextPart,
 } from '../types.js'
-import { imDedupeKey } from '../types.js'
-import type { QqBotLike, QqBotOptions, QqGatewayDisconnect, QqInboundMessage, QqLogger, QqReplyTarget } from './sdk.js'
+import { imDedupeKey, imPeerAlias, imPeerKey } from '../types.js'
+import type {
+  QqBotLike,
+  QqBotOptions,
+  QqGatewayDisconnect,
+  QqInboundAttachment,
+  QqInboundMessage,
+  QqLogger,
+  QqMediaSendResult,
+  QqMediaSource,
+  QqReplyTarget,
+} from './sdk.js'
 
 /** 启动等待上限：SDK 的握手自带超时，拉 token 没有；不设界会挂死面板请求。 */
 const START_TIMEOUT_MS = 30_000
 
+/** 入站附件上限与单条下载超时：与微信同口径（提案 §4.4 的 20MB）。 */
+const QQ_MEDIA_MAX_BYTES = 20 * 1024 * 1024
+const QQ_MEDIA_TIMEOUT_MS = 20_000
+
 /** 昵称兜底长度：C2C 事件不携带昵称，用 openid 前 8 位给模型一个稳定标签。 */
 const OPENID_LABEL_LENGTH = 8
 
-/** 同一条触发消息的被动回复上限；平台口径是 4 条，第 5 条起降级主动推送。 */
-const PASSIVE_REPLY_LIMIT = 4
 /** 被动额度记账表上限：msg_id 用完即弃，长跑进程不能让它无限增长。 */
 const PASSIVE_USAGE_ENTRIES = 200
+
+/**
+ * 群聊单片字符上限：与 router 的 QQ 默认切分上限同源（`IM_CHUNK_DEFAULTS.qq`，
+ * 平台约 5000）。群聊没有原生流式，只能靠片数控制被动额度，重切宽度按这个口径。
+ */
 
 export type QQChannelErrorCode =
   | 'QQ_BAD_SECRET'
@@ -66,7 +94,10 @@ export class QQChannelError extends Error {
 
 /** 入站落点；运行时把 `router.inbound` 包一层交给通道。 */
 export interface QQRouterSink {
-  handle(inbound: ImInbound): Promise<void>
+  handle(
+    inbound: ImInbound,
+    options?: { loadMedia?: () => Promise<readonly ImMediaRef[]> },
+  ): Promise<void>
 }
 
 /** QQBot 构造工厂：生产路径由运行时的动态加载器提供，测试注入假 SDK，整条链路不碰网络。 */
@@ -83,6 +114,8 @@ export interface QQChannelOptions {
   createBot: QQBotFactory
   /** 账号是否具备 markdown 能力；来自密钥袋 `markdownSupport === 'true'`。 */
   markdownSupport: boolean
+  /** 附件仓库：入站媒体在通过访问控制后下载到这里。 */
+  media?: ImMediaStore
   now: () => number
   logger?: HostLogger
 }
@@ -126,6 +159,7 @@ export class QQChannel implements ImChannel {
   private readonly groupRequireMention: () => Promise<boolean>
   private readonly createBot: QQBotFactory
   private readonly markdownSupport: boolean
+  private readonly media: ImMediaStore | undefined
   private readonly now: () => number
   private readonly logger: HostLogger | undefined
 
@@ -152,6 +186,7 @@ export class QQChannel implements ImChannel {
     this.groupRequireMention = options.groupRequireMention
     this.createBot = options.createBot
     this.markdownSupport = options.markdownSupport
+    this.media = options.media
     this.now = options.now
     this.logger = options.logger
   }
@@ -245,21 +280,38 @@ export class QQChannel implements ImChannel {
     // 出站目标按 peer 重建：入站时缓存的 replyTarget 会把上一轮的 msgId 带进来，
     // 被动回复就挂到了旧消息上。replyTo 只来自本轮触发消息。
     const reply = replyTargetOf(target)
+    // 群聊没有原生流式（SDK 的 stream_messages 只对私聊开放），只能靠多条有序
+    // 消息：超过 4 片的长回复先重切成 ≤4 片，正好落在被动额度内。私聊保持原样。
+    const plan = planDeliveries(target.scope, parts)
+    if (plan.overflow) {
+      this.logger?.warn?.(
+        `dsh-soulmojito im qq/${this.accountId}: group reply exceeds the ${PASSIVE_REPLY_LIMIT} passive replies `
+          + `(${plan.deliveries.length} parts); the tail is sent as proactive push`,
+      )
+    }
     let messageId: string | undefined
     // 被动回复额度按**被触发的消息**计：同一个 msg_id 累计最多 4 条，第 5 条起降级为
     // 主动推送。计数必须跨 send 累计——同一 replyTo 若被两次 send 命中（模型主动
     // 补话、失败重试、通知与正文先后发），只在本次 send 内归零就会超发被平台拒。
     let passiveUsed = reply.msgId === undefined ? PASSIVE_REPLY_LIMIT : (this.passiveUsed.get(reply.msgId) ?? 0)
-    for (const part of parts) {
-      const passive = reply.msgId !== undefined && passiveUsed < PASSIVE_REPLY_LIMIT
-      if (passive) passiveUsed += 1
-      const partTarget: QqReplyTarget = passive
-        ? reply
-        : { scope: reply.scope, targetId: reply.targetId }
-      const id = await this.sendPart(bot, partTarget, target, part)
-      if (id !== undefined) messageId = id
+    try {
+      for (const delivery of plan.deliveries) {
+        const passive = reply.msgId !== undefined && passiveUsed < PASSIVE_REPLY_LIMIT
+        if (passive) passiveUsed += 1
+        const partTarget: QqReplyTarget = passive
+          ? reply
+          : { scope: reply.scope, targetId: reply.targetId }
+        // 媒体也是平台调用：同样占一格被动额度（文字说明先发，也各自占一格）。
+        const id = delivery.kind === 'text'
+          ? await this.sendTextPart(bot, partTarget, target, delivery.text, delivery.index, delivery.total)
+          : await this.sendMediaPart(bot, partTarget, target, delivery.part)
+        if (id !== undefined) messageId = id
+      }
+    } finally {
+      // 中途失败也要记账：前几条已经占用的额度不能因为抛错而被“退回”，
+      // 否则重试时会在同一条触发消息上超发。
+      if (reply.msgId !== undefined) this.rememberPassiveUsage(reply.msgId, passiveUsed)
     }
-    if (reply.msgId !== undefined) this.rememberPassiveUsage(reply.msgId, passiveUsed)
     return { parts: parts.length, at: this.now(), ...(messageId === undefined ? {} : { messageId }) }
   }
 
@@ -279,19 +331,55 @@ export class QQChannel implements ImChannel {
    * markdown 能力是账号级配置：没有该能力的机器人发 msg_type=2 会被平台拒绝，
    * 因此降级到 `sendText` 而不是让整轮回复失败（审查 P1-4）。
    */
-  private async sendPart(bot: QqBotLike, reply: QqReplyTarget, target: ImTarget, part: OutboundPart): Promise<string | undefined> {
+  private async sendTextPart(
+    bot: QqBotLike,
+    reply: QqReplyTarget,
+    target: ImTarget,
+    text: string,
+    index: number,
+    total: number,
+  ): Promise<string | undefined> {
     try {
       const sent = this.markdownSupport
-        ? await bot.sendMarkdown(reply, part.text)
-        : await bot.sendText(reply, part.text)
+        ? await bot.sendMarkdown(reply, text)
+        : await bot.sendText(reply, text)
       return nonEmpty(sent.id)
     } catch (error) {
       throw new QQChannelError(
         'QQ_SEND_FAILED',
-        `qq send part ${part.index + 1}/${part.total} to ${target.scope}/${target.peerId} failed: ${messageOf(error)}`,
+        `qq send part ${index + 1}/${total} to ${this.peerLabel(target)} failed: ${messageOf(error)}`,
         { cause: error },
       )
     }
+  }
+
+  /**
+   * 媒体发送：源与落点先解析，再按 kind 调 SDK 的便捷方法。缺方法/缺源是
+   * 可操作错误（QQChannelError 原样上抛），平台拒绝才是 QQ_SEND_FAILED 包装。
+   */
+  private async sendMediaPart(
+    bot: QqBotLike,
+    reply: QqReplyTarget,
+    target: ImTarget,
+    part: OutboundMediaPart,
+  ): Promise<string | undefined> {
+    const source = mediaSourceOf(part)
+    try {
+      const sent = await qqSendMedia(bot, reply, part, source)
+      return nonEmpty(sent.message?.id)
+    } catch (error) {
+      if (error instanceof QQChannelError) throw error
+      throw new QQChannelError(
+        'QQ_SEND_FAILED',
+        `qq send ${part.kind} part ${part.index + 1}/${part.total} to ${this.peerLabel(target)} failed: ${messageOf(error)}`,
+        { cause: error },
+      )
+    }
+  }
+
+  /** 日志里的对端标签：openid 不进日志环/面板，只出现稳定 alias。 */
+  private peerLabel(target: ImTarget): string {
+    return imPeerAlias('qq', target.scope, imPeerKey('qq', this.accountId, target.scope, target.peerId))
   }
 
   private attach(bot: QqBotLike, gate: StartupGate): void {
@@ -367,7 +455,37 @@ export class QQChannel implements ImChannel {
     const inbound = this.inboundOf(msg)
     // 群 @ 门控读当次设置：面板关掉开关后，下一条群消息立即放行，不需要重连。
     if (inbound.scope === 'group' && await this.groupRequireMention() && !qqWasMentioned(msg)) return
-    await this.router.handle(inbound)
+    // 附件在路由通过去重与访问控制之后才下载：白名单外的人不能靠附件让进程落盘。
+    await this.router.handle(inbound, { loadMedia: () => this.materializeInboundMedia(msg) })
+  }
+
+  /** 逐个下载附件；失败只 warn 并保留不带 localPath 的 ref，不阻断这一轮。 */
+  private async materializeInboundMedia(msg: QqInboundMessage): Promise<readonly ImMediaRef[]> {
+    const refs = qqMediaOfAttachments(qqAttachmentsOf(msg))
+    if (this.media === undefined) return refs
+    const enriched: ImMediaRef[] = []
+    for (const ref of refs) {
+      if (ref.url === undefined) {
+        enriched.push(ref)
+        continue
+      }
+      try {
+        enriched.push(await fetchInboundMedia(ref, {
+          channel: 'qq',
+          accountId: this.accountId,
+          media: this.media,
+          maxBytes: QQ_MEDIA_MAX_BYTES,
+          timeoutMs: QQ_MEDIA_TIMEOUT_MS,
+          ...(this.signal === undefined ? {} : { signal: this.signal }),
+        }))
+      } catch (error) {
+        this.logger?.warn?.(
+          `dsh-soulmojito im qq/${this.accountId}: inbound ${ref.kind} download failed: ${messageOf(error)}`,
+        )
+        enriched.push(ref)
+      }
+    }
+    return enriched
   }
 
   private inboundOf(msg: QqInboundMessage): ImInbound {
@@ -387,6 +505,11 @@ export class QQChannel implements ImChannel {
     // 平台不给 id 时用随机 UUID 降级。取舍：宁可重复投递，不可吞消息——
     // 用 peer+时间做键时，同毫秒的两条消息会撞键，后一条被当成重放丢掉。
     const dedupeId = messageId ?? randomUUID()
+    // 语音自带的识别文本是平台给的正文补充：丢了它，模型只看得到一条「语音」，
+    // 而这正是 QQ 语音唯一可读的内容。
+    const transcript = qqTranscriptsOf(qqAttachmentsOf(msg))
+    const body = typeof msg.content === 'string' ? msg.content.trim() : ''
+    const text = transcript === '' ? body : body === '' ? transcript : `${body}\n${transcript}`
     return {
       channel: 'qq',
       accountId: this.accountId,
@@ -394,9 +517,9 @@ export class QQChannel implements ImChannel {
       peerId,
       senderId,
       senderName,
-      text: typeof msg.content === 'string' ? msg.content : '',
-      // 媒体（图片/语音/文件）留到 M5：本轮不下载、不上传，附件消息只按文本投递。
-      media: [],
+      text,
+      // 附件先只带远端信息；路由通过访问控制后才由 loadMedia 下载并补 localPath。
+      media: qqMediaOfAttachments(qqAttachmentsOf(msg)),
       // 被动回复锚点是本轮触发消息本身，不是它引用的消息。
       ...(messageId === undefined ? {} : { replyTo: messageId }),
       dedupeKey: imDedupeKey('qq', this.accountId, scope, peerId, dedupeId),
@@ -417,6 +540,9 @@ export function qqWasMentioned(msg: QqInboundMessage): boolean {
   return Array.isArray(msg.mentions) && msg.mentions.some((entry) => entry?.is_you === true)
 }
 
+export { planGroupParts } from './delivery.js'
+export type { GroupPartPlan } from './delivery.js'
+
 /** 出站目标 → SDK 的 replyTarget；带 msgId 即被动回复，不带即主动推送。 */
 export function replyTargetOf(target: ImTarget): QqReplyTarget {
   return {
@@ -424,6 +550,62 @@ export function replyTargetOf(target: ImTarget): QqReplyTarget {
     targetId: target.peerId,
     ...(target.replyTo === undefined ? {} : { msgId: target.replyTo }),
   }
+}
+
+/* ------------------------------- 出站媒体 ------------------------------- */
+
+/** 媒体源：localPath 优先；url 只给图片/视频，由平台自己抓取，本插件不下载。 */
+function mediaSourceOf(part: OutboundMediaPart): QqMediaSource {
+  const localPath = nonEmpty(part.localPath)
+  if (localPath !== undefined) return { localPath }
+  const url = nonEmpty(part.url)
+  if (url === undefined) {
+    throw new QQChannelError(
+      'QQ_SEND_FAILED',
+      `qq ${part.kind} part ${part.index + 1}/${part.total} carries neither localPath nor url`,
+    )
+  }
+  if (part.kind !== 'image' && part.kind !== 'video') {
+    throw new QQChannelError(
+      'QQ_SEND_FAILED',
+      `qq ${part.kind} parts must be sent from a local file; this adapter never downloads remote urls`,
+    )
+  }
+  return { url }
+}
+
+/** 按 kind 调对应的便捷方法；方法缺失是 build 差异，报文直接点名并指向面板。 */
+async function qqSendMedia(
+  bot: QqBotLike,
+  reply: QqReplyTarget,
+  part: OutboundMediaPart,
+  source: QqMediaSource,
+): Promise<QqMediaSendResult> {
+  switch (part.kind) {
+    case 'image':
+      if (bot.sendImage === undefined) throw qqMissingMediaMethod('sendImage')
+      return await bot.sendImage(reply, source)
+    case 'video':
+      if (bot.sendVideo === undefined) throw qqMissingMediaMethod('sendVideo')
+      return await bot.sendVideo(reply, source)
+    case 'voice':
+      // 官方 d.ts 的 sendVoice 只认 onProgress，没有 content 参数；说明文字
+      // 由 planDeliveries 单独发一条。
+      if (bot.sendVoice === undefined) throw qqMissingMediaMethod('sendVoice')
+      return await bot.sendVoice(reply, source)
+    case 'file': {
+      if (bot.sendFile === undefined) throw qqMissingMediaMethod('sendFile')
+      const name = nonEmpty(part.name)
+      return await bot.sendFile(reply, source, name === undefined ? {} : { fileName: name })
+    }
+  }
+}
+
+function qqMissingMediaMethod(method: string): QQChannelError {
+  return new QQChannelError(
+    'QQ_SEND_FAILED',
+    `this qqbot-nodejs build exposes no ${method}(); reinstall the runtime from the IM panel`,
+  )
 }
 
 function requireSecret(secret: Readonly<Record<string, string>>, key: string, accountId: string): string {

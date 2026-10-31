@@ -1,12 +1,12 @@
 /**
- * 「聊天渠道」面板源检查（提案 0024 §6.1 / §6.3，M5）：三张通道卡与状态灯、扫码
- * 相位轮询与微信验证码、OneBot 端点地址、绑定表（共享会话徽标/改绑/解绑）、自动
- * 绑定设置与两份白名单。
+ * 「聊天渠道」面板源检查（提案 0024 §6.1 / §6.3 / §6.4，M5）：三张通道卡与状态灯、
+ * 扫码相位轮询与微信验证码、OneBot 端点地址、绑定表（共享会话徽标/改绑/解绑）、自动
+ * 绑定设置与两份白名单、运行日志带与腾讯包一键安装。
  *
- * 读 `client-src/97-ui-im.js` 而不是 `client/main.js`：后者是构建产物，而
- * `pnpm run check` 里 vitest 跑在 `scripts/build-plugin.mjs` 之前（与
+ * 读 `client-src/97-ui-im.js` / `97b-ui-im-logs.js` 而不是 `client/main.js`：后者是
+ * 构建产物，而 `pnpm run check` 里 vitest 跑在 `scripts/build-plugin.mjs` 之前（与
  * agent-tavern-body-client.spec.ts 同一条理由）。纯函数（共享徽标判定、白名单
- * 解析、安装命令提取、状态灯）用 vm 真实执行，其余是字符串/正则结构断言。
+ * 解析、日志合并、状态灯）用 vm 真实执行，其余是字符串/正则结构断言。
  */
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -17,6 +17,9 @@ import { describe, expect, it } from 'vitest'
 const here = dirname(fileURLToPath(import.meta.url))
 const sourceDir = join(here, '../client-src')
 const imSource = readFileSync(join(sourceDir, '97-ui-im.js'), 'utf8')
+const logsSource = readFileSync(join(sourceDir, '97b-ui-im-logs.js'), 'utf8')
+/** 分片在同一 factory 作用域里按清单顺序拼接：vm 里也照这个顺序拼。 */
+const imPanelSource = `${imSource}\n${logsSource}`
 const coreSource = readFileSync(join(sourceDir, '90-panels-core.js'), 'utf8')
 const stylesSource = readFileSync(join(sourceDir, '95-ui-styles.js'), 'utf8')
 const zh = readFileSync(join(sourceDir, '41-i18n-zh.js'), 'utf8')
@@ -111,7 +114,21 @@ const IM_I18N_KEYS = [
   'im.settings.groupAllow',
   'im.settings.allowHint',
   'im.settings.saved',
+  'im.log.title',
+  'im.log.empty',
+  'im.log.refresh',
+  'im.log.clear',
+  'im.log.level',
+  'im.log.levelAll',
+  'im.log.installing',
+  'im.qqInstall',
+  'im.qqInstallDone',
+  'im.qqInstallAlready',
+  'im.qqInstallBusy',
+  'im.qqInstallFailed',
 ]
+
+type LogEntry = { seq: number; at: string; level: string; text: string }
 
 type PanelPure = {
   imChannelTone: (accounts: Array<{ status?: { state?: string } }>, scanning: boolean) => string
@@ -119,11 +136,13 @@ type PanelPure = {
   imPeerParts: (key: string) => { channel: string; accountId: string; scope: string; peerId: string } | null
   imSharedSessionIds: (peers: Array<{ sessionId?: string }>) => Set<string>
   imIdList: (text: string) => string[]
-  imQqInstallCommand: (reason: string) => string
   imChatKey: (character: string, chatId: string) => string
   imChatRefFromKey: (key: string) => { character: string; chatId: string } | null
   imChatOptions: (characters: string[], chatLists: Record<string, string[]>) => Array<{ key: string; label: string }>
   imWithChatOption: (options: Array<{ key: string }>, ref: { character: string; chatId: string } | null) => Array<{ key: string }>
+  imMergeLogEntries: (existing: LogEntry[], incoming: LogEntry[], cap: number) => LogEntry[]
+  imLogFilter: (entries: LogEntry[], level: string) => LogEntry[]
+  imLogTime: (at: string) => string
 }
 
 /** 在 vm 里执行分片并取回纯函数：顶层只有常量与函数声明，不依赖 React。 */
@@ -133,10 +152,11 @@ function loadPanelPure(): PanelPure {
     location: { origin: 'http://localhost:3000' },
   })
   vm.runInContext(
-    `${imSource}
+    `${imPanelSource}
 ;globalThis.__imPanel = {
   imChannelTone, imChannelReason, imPeerParts, imSharedSessionIds, imIdList,
-  imQqInstallCommand, imChatKey, imChatRefFromKey, imChatOptions, imWithChatOption,
+  imChatKey, imChatRefFromKey, imChatOptions, imWithChatOption,
+  imMergeLogEntries, imLogFilter, imLogTime,
 }`,
     context,
     { filename: '97-ui-im.js' },
@@ -162,6 +182,7 @@ function createPanelRender(options: { characters?: string[]; chatLists?: Record<
     h: (type: unknown, props: Record<string, unknown> | null, ...children: unknown[]): RenderNode => ({ type, props: props ?? {}, children }),
     useState: (init: unknown) => [typeof init === 'function' ? (init as () => unknown)() : init, () => {}],
     useEffect: () => {},
+    useRef: (init: unknown) => ({ current: init }),
     useTranslate: () => (key: string, params?: Record<string, unknown>) => (
       params === undefined ? key : `${key}(${Object.entries(params).map(([name, value]) => `${name}=${String(value)}`).join(';')})`
     ),
@@ -172,6 +193,8 @@ function createPanelRender(options: { characters?: string[]; chatLists?: Record<
     Input: 'Input',
     Modal: 'Modal',
     api: () => Promise.resolve({}),
+    setInterval: () => 0,
+    clearInterval: () => {},
     jsonHeaders: () => ({ 'content-type': 'application/json' }),
     loadChatList: () => Promise.resolve([]),
     window: { confirm: () => true },
@@ -180,8 +203,8 @@ function createPanelRender(options: { characters?: string[]; chatLists?: Record<
     API: '/api/dsh-soulmojito',
   })
   vm.runInContext(
-    `${imSource}
-;globalThis.__imRender = { PanelIm, ImChannelCard, ImBindPanel, ImPeerRow, ImPeersBand, ImSettingsBand, ImOneBotBand }`,
+    `${imPanelSource}
+;globalThis.__imRender = { PanelIm, ImChannelCard, ImBindPanel, ImPeerRow, ImPeersBand, ImSettingsBand, ImOneBotBand, ImLogBand, ImLogRows }`,
     context,
     { filename: '97-ui-im.js' },
   )
@@ -208,7 +231,7 @@ function collectNode(tree: unknown): { texts: string[]; attrs: string[]; classNa
     types.push(typeof entry.type === 'function' ? entry.type.name : entry.type)
     if (typeof entry.props.className === 'string') classNames.push(entry.props.className)
     for (const [key, value] of Object.entries(entry.props)) {
-      if (key.startsWith('data-im') || key === 'src' || key === 'href' || key === 'disabled') {
+      if (key.startsWith('data-im') || key === 'src' || key === 'href' || key === 'disabled' || key === 'data-tone') {
         attrs.push(`${key}=${String(value)}`)
       }
     }
@@ -218,18 +241,42 @@ function collectNode(tree: unknown): { texts: string[]; attrs: string[]; classNa
   return { texts, attrs, classNames, types }
 }
 
+/** 按钮的可见文案 + props：按绑定判定按钮时不能依赖 DOM 顺序。 */
+function findButtons(tree: unknown): Array<{ label: string; props: Record<string, unknown> }> {
+  const found: Array<{ label: string; props: Record<string, unknown> }> = []
+  const visit = (node: unknown): void => {
+    if (node === null || node === undefined || typeof node === 'boolean') return
+    if (typeof node === 'string' || typeof node === 'number') return
+    if (Array.isArray(node)) {
+      for (const child of node) visit(child)
+      return
+    }
+    const entry = node as RenderNode
+    if (entry.type === 'Button') {
+      const label = entry.children.filter((child) => typeof child === 'string').join('')
+      found.push({ label, props: entry.props })
+    }
+    for (const child of entry.children) visit(child)
+  }
+  visit(tree)
+  return found
+}
+
 function definitionCount(source: string, key: string): number {
   return source.split(`'${key}':`).length - 1
 }
 
 describe('IM channels panel (client-src source check)', () => {
-  it('ships the 97-ui-im fragment between the presets and apply fragments', () => {
+  it('ships the 97-ui-im fragment and its log companion between the presets and apply fragments', () => {
     const presetsAt = manifest.fragments.indexOf('96-panels-presets.js')
     const imAt = manifest.fragments.indexOf('97-ui-im.js')
+    const logsAt = manifest.fragments.indexOf('97b-ui-im-logs.js')
     const applyAt = manifest.fragments.indexOf('98-apply.js')
     expect(presetsAt).toBeGreaterThanOrEqual(0)
     expect(imAt).toBe(presetsAt + 1)
-    expect(applyAt).toBe(imAt + 1)
+    // 日志带与面板共用作用域（imErrorMessage / Button 等）：必须紧跟其后拼接。
+    expect(logsAt).toBe(imAt + 1)
+    expect(applyAt).toBe(logsAt + 1)
   })
 
   it('registers the im section in the system group with a locale thunk', () => {
@@ -251,7 +298,7 @@ describe('IM channels panel (client-src source check)', () => {
   it('only references locale keys it declares', () => {
     const declared = new Set(IM_I18N_KEYS)
     const referenced = new Set(
-      [...imSource.matchAll(/t\('(im\.[A-Za-z][\w.]*)'/g)].map((match) => match[1]),
+      [...imPanelSource.matchAll(/t\('(im\.[A-Za-z][\w.]*)'/g)].map((match) => match[1]),
     )
     // 三元里的私聊/群聊键不紧跟 t(' 形态，单独补两条。
     referenced.add('im.scope.private')
@@ -280,6 +327,19 @@ describe('IM channels panel (client-src source check)', () => {
     expect(imSource).toContain('void reloadView()')
   })
 
+  it('loads the runtime log once, then polls every 3s and stops on the first error', () => {
+    expect(logsSource).toContain('const IM_LOG_POLL_MS = 3000')
+    expect(logsSource).toContain('const IM_LOG_CAP = 300')
+    expect(logsSource).toContain("api('im/logs')")
+    expect(logsSource).toContain('im/logs?after=')
+    expect(logsSource).toContain('setInterval(poll, IM_LOG_POLL_MS)')
+    expect(logsSource).toContain('clearInterval(timer)')
+    // 出错只报一次并停表：`stopped` 置位后 effect 不再装定时器，只有手动刷新才重启。
+    expect(logsSource).toContain('if (disabled || stopped) return undefined')
+    expect(logsSource).toContain('setStopped(true)')
+    expect(logsSource).not.toContain('setTimeout')
+  })
+
   it('calls every IM management route the server exposes', () => {
     for (const marker of [
       "api('im')",
@@ -291,9 +351,13 @@ describe('IM channels panel (client-src source check)', () => {
       "'im/bind/start'",
       "'im/bind/verify'",
       "'im/bind/cancel'",
+      "'im/qq/install'",
     ]) {
       expect(imSource).toContain(marker)
     }
+    // 日志路由在 97b 分片：只认代码里的实参，不看面板渲染位置。
+    expect(logsSource).toContain("'im/logs'")
+    expect(logsSource).toContain('im/logs?after=')
   })
 
   it('shows the server message on every failed write instead of swallowing it', () => {
@@ -314,13 +378,58 @@ describe('IM channels panel (client-src source check)', () => {
     expect(imSource).toContain("t('im.bindRetry')")
   })
 
-  it('disables QR binding with the runtime reason and install command when the QQ packages are missing', () => {
+  it('offers a one-click QQ runtime install instead of a shell command', () => {
     expect(imSource).toContain('qqRuntime.installed === false')
-    expect(imSource).toContain('imQqInstallCommand(qqRuntime.reason)')
     expect(imSource).toContain("t('im.qqRuntimeMissing')")
+    expect(imSource).toContain("api('im/qq/install'")
+    expect(imSource).toContain("setBusy('install:qq')")
+    expect(imSource).toContain("t('im.qqInstall')")
+    expect(imSource).toContain("t('im.qqInstallDone')")
+    expect(imSource).toContain("t('im.qqInstallAlready')")
+    // 409 = 已有一次安装在进行；400 的原文必须嵌进失败提示，不许吞。
+    expect(imSource).toContain("cause?.status === 409")
+    expect(imSource).toContain("t('im.qqInstallBusy')")
+    expect(imSource).toContain("t('im.qqInstallFailed', { reason: imErrorMessage(cause) })")
+    // 面板永不展示 shell 命令：旧命令块与提取函数都必须消失。
+    expect(imSource).not.toContain('imQqInstallCommand')
+    expect(imSource).not.toContain('pnpm add')
+    expect(logsSource).not.toContain('pnpm add')
     // 禁用条件必须同时覆盖「宿主不可用」与「缺运行期包」，缺一条就会把 503 显示成可点按钮。
-    expect(imSource).toContain('disabled: disabled || runtimeMissing || busy !==')
-    expect(imSource).toContain('onClick: copy')
+    expect(imSource).toContain('disabled: disabled || runtimeMissing || imBindBusy(busy)')
+  })
+
+  it('keeps one busy key per action so a bind never disables the install button', () => {
+    expect(imSource).toContain('function imBindBusy(busy)')
+    expect(imSource).toContain('function imPeerBusy(busy)')
+    // 旧的全局判定必须彻底消失：留着它任一动作都会锁住整块面板。
+    expect(imSource).not.toContain("busy !== ''")
+    expect(imSource).toContain("busy === 'install:qq'")
+    expect(imSource).toContain("busy === 'account:onebot'")
+    expect(imSource).toContain("busy === 'settings'")
+    expect(imSource).toContain('busy === `remove:${channel}:${row.accountId}`')
+
+    const components = createPanelRender({})
+    const card = (busy: string, runtimeMissing: boolean): unknown => components.ImChannelCard({
+      channel: 'qq',
+      accounts: [],
+      scanning: false,
+      runtimeMissing,
+      disabled: false,
+      busy,
+      onBind: () => {},
+      onInstall: () => {},
+      onRemove: () => {},
+    })
+    // 扫码在跑：安装按钮照常可点（缺包时唯一能推进的动作就是它）。
+    const binding = findButtons(card('bind:qq', true))
+    expect(binding.find((entry) => entry.label === 'im.qqInstall')?.props.disabled).toBe(false)
+    // 安装在跑：标签变「安装中…」且只有它自己被禁用。
+    const installing = findButtons(card('install:qq', true))
+    expect(installing.find((entry) => entry.label === 'im.log.installing')?.props.disabled).toBe(true)
+    expect(installing.some((entry) => entry.label === 'im.qqInstall')).toBe(false)
+    // 扫码动作自身在绑定组里仍然互斥。
+    const bindButton = findButtons(card('bind:qq', false)).find((entry) => entry.label === 'im.bindStartQq')
+    expect(bindButton?.props.disabled).toBe(true)
   })
 
   it('shows the reverse WebSocket address after an OneBot account is created', () => {
@@ -365,6 +474,9 @@ describe('IM channels panel (client-src source check)', () => {
     expect(rules).toContain('var(--dsw-alias-label-tertiary)')
     expect(rules).toContain('.dt-im-light-error{background:var(--dsw-alias-state-error-primary)')
     expect(rules).toContain('.dt-im-allow{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))')
+    // 运行日志带只复用既有 token：列表滚动、级别徽标与正文折行都在同一套色板里。
+    expect(rules).toContain('.dt-im-log-list{display:flex')
+    expect(rules).toContain('.dt-im-log-badge-error{color:var(--dsw-alias-state-error-primary)}')
     // 新色板一律不许出现：状态灯只复用既有 state token。
     expect(rules).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
   })
@@ -405,12 +517,37 @@ describe('IM channels panel (client-src source check)', () => {
     expect(panel.imIdList('   ,\n  ')).toEqual([])
   })
 
-  it('extracts the QQ install command out of the runtime reason', () => {
+  it('merges log deltas by seq, keeps arrival order and caps the list', () => {
     const panel = loadPanelPure()
-    const reason = 'QQ runtime packages are missing from /data/im/runtime: a@1.0.5, b@1.2.0. Install them with: cd "/data/im/runtime" && pnpm add a@1.0.5 b@1.2.0'
-    expect(panel.imQqInstallCommand(reason)).toBe('cd "/data/im/runtime" && pnpm add a@1.0.5 b@1.2.0')
-    expect(panel.imQqInstallCommand('nothing to install')).toBe('')
-    expect(panel.imQqInstallCommand('')).toBe('')
+    const entry = (seq: number, text: string): LogEntry => ({ seq, at: '2026-10-31T09:05:07.000Z', level: 'info', text })
+    const merged = panel.imMergeLogEntries([entry(1, 'a'), entry(2, 'b')], [entry(2, 'b'), entry(3, 'c')], 300)
+    expect(merged.map((row) => row.seq)).toEqual([1, 2, 3])
+    // 重复 seq 保留先到的那条（轮询重叠窗口不该把旧行换成新对象）。
+    expect(merged[1]?.text).toBe('b')
+    const capped = panel.imMergeLogEntries([entry(1, 'a'), entry(2, 'b'), entry(3, 'c')], [entry(4, 'd')], 2)
+    expect(capped.map((row) => row.seq)).toEqual([3, 4])
+    // 纯函数：入参数组不变。
+    const existing = [entry(1, 'a')]
+    panel.imMergeLogEntries(existing, [entry(2, 'b')], 300)
+    expect(existing).toHaveLength(1)
+    expect(panel.imMergeLogEntries([], [], 300)).toEqual([])
+  })
+
+  it('filters log rows by minimum level and formats the local clock', () => {
+    const panel = loadPanelPure()
+    const entries: LogEntry[] = [
+      { seq: 1, at: '2026-10-31T09:05:07.000Z', level: 'debug', text: 'dedupe dropped' },
+      { seq: 2, at: '2026-10-31T09:05:08.000Z', level: 'info', text: 'accepted' },
+      { seq: 3, at: '2026-10-31T09:05:09.000Z', level: 'warn', text: 'no reply' },
+      { seq: 4, at: '2026-10-31T09:05:10.000Z', level: 'error', text: 'send failed' },
+    ]
+    expect(panel.imLogFilter(entries, 'all').map((row) => row.seq)).toEqual([1, 2, 3, 4])
+    // 默认 info：debug 噪音挡住，warn/error 立刻可见。
+    expect(panel.imLogFilter(entries, 'info').map((row) => row.seq)).toEqual([2, 3, 4])
+    expect(panel.imLogFilter(entries, 'warn').map((row) => row.seq)).toEqual([3, 4])
+    expect(panel.imLogFilter(entries, 'error').map((row) => row.seq)).toEqual([4])
+    expect(panel.imLogTime(new Date(2026, 9, 31, 9, 5, 7).toISOString())).toBe('09:05:07')
+    expect(panel.imLogTime('not-a-date')).toBe('--:--:--')
   })
 
   it('round-trips chat refs through the null-separated select key', () => {
@@ -431,30 +568,34 @@ describe('IM channels panel (client-src source check)', () => {
     expect(panel.imWithChatOption(options, null)).toBe(options)
   })
 
-  it('renders the panel shell with all three channel cards and every band (render smoke)', () => {
+  it('renders the panel shell with all three channel cards, every band and the runtime log (render smoke)', () => {
     const components = createPanelRender({ characters: ['Alice'], chatLists: { Alice: ['one.jsonl'] } })
     const tree = collectNode(components.PanelIm())
     expect(tree.texts).toContain('nav.loading')
     expect(tree.texts).toContain('im.hint.title')
     expect(tree.texts).toContain('im.channels')
     expect(tree.types.filter((type) => type === 'ImChannelCard')).toHaveLength(3)
-    // 三个数据带是函数组件，渲染冒烟只验挂点；带内结构由下面两条用例逐个执行。
+    // 三个数据带是函数组件，渲染冒烟只验挂点；带内结构由下面几条用例逐个执行。
     expect(tree.types).toContain('ImOneBotBand')
     expect(tree.types).toContain('ImPeersBand')
     expect(tree.types).toContain('ImSettingsBand')
+    // 运行日志带挂在绑定表之后：诊断就在它诊断的东西旁边，且不打断配置流程。
+    expect(tree.types).toContain('ImLogBand')
+    const order = tree.types.filter((type) => type === 'ImPeersBand' || type === 'ImLogBand' || type === 'ImSettingsBand')
+    expect(order).toEqual(['ImPeersBand', 'ImLogBand', 'ImSettingsBand'])
   })
 
-  it('renders channel state, the install command and every bind phase (render smoke)', () => {
+  it('renders channel state, the install button and every bind phase (render smoke)', () => {
     const components = createPanelRender({})
     const card = collectNode(components.ImChannelCard({
       channel: 'qq',
       accounts: [{ channel: 'qq', accountId: '1024', label: 'QQ bot', status: { state: 'error', message: 'gateway dropped' }, peers: 2 }],
       scanning: false,
       runtimeMissing: true,
-      installCommand: 'cd "/data" && pnpm add a@1.0.5',
       disabled: false,
       busy: '',
       onBind: () => {},
+      onInstall: () => {},
       onRemove: () => {},
     }))
     expect(card.attrs).toContain('data-im-channel=qq')
@@ -464,8 +605,9 @@ describe('IM channels panel (client-src source check)', () => {
     // 「最近状态 · N 个对端」是同一行文本，按子串断言。
     expect(card.texts.some((text) => text.includes('im.accountPeers(count=2)'))).toBe(true)
     expect(card.texts).toContain('im.qqRuntimeMissing')
-    expect(card.texts).toContain('cd "/data" && pnpm add a@1.0.5')
-    // 缺包时扫码按钮必须禁用（copy 按钮仍可点）。
+    // 缺运行期包时给的是安装按钮，不是可复制的 shell 命令。
+    expect(card.texts).toContain('im.qqInstall')
+    // 缺包时扫码按钮必须禁用（安装按钮仍可点）。
     expect(card.attrs).toContain('disabled=true')
 
     const verify = collectNode(components.ImBindPanel({
@@ -500,6 +642,43 @@ describe('IM channels panel (client-src source check)', () => {
     expect(failed.attrs).toContain('data-im-bind-phase=failed')
     expect(failed.texts).toContain('im.bindFailed(reason=connector exploded)')
     expect(failed.texts).toContain('im.bindRetry')
+  })
+
+  it('renders log rows with the local clock and the level badge, and the empty state (render smoke)', () => {
+    const components = createPanelRender({})
+    const rows = collectNode(components.ImLogRows({
+      entries: [
+        { seq: 7, at: new Date(2026, 9, 31, 9, 5, 7).toISOString(), level: 'info', text: 'accepted an inbound message' },
+        { seq: 8, at: new Date(2026, 9, 31, 9, 5, 9).toISOString(), level: 'warn', text: 'no reply was produced' },
+        { seq: 9, at: new Date(2026, 9, 31, 9, 5, 11).toISOString(), level: 'error', text: 'sending the reply failed' },
+        { seq: 10, at: new Date(2026, 9, 31, 9, 5, 12).toISOString(), level: 'debug', text: 'duplicate dropped' },
+      ],
+    }))
+    expect(rows.attrs).toContain('data-im-log-count=4')
+    expect(rows.attrs).toContain('data-im-log-level=warn')
+    expect(rows.attrs).toContain('data-im-log-level=error')
+    // 级别徽标：warn/error/info 借既有 state 色板，debug 没有对应状态色。
+    expect(rows.attrs).toContain('data-tone=warning')
+    expect(rows.attrs).toContain('data-tone=error')
+    expect(rows.attrs).toContain('data-tone=info')
+    expect(rows.attrs).not.toContain('data-tone=undefined')
+    expect(rows.texts).toContain('09:05:07')
+    expect(rows.texts).toContain('09:05:11')
+    expect(rows.texts).toContain('warn')
+    expect(rows.texts).toContain('sending the reply failed')
+    expect(rows.types.filter((type) => type === 'div')).toHaveLength(5)
+
+    // 默认 info + 空列表：只剩空态文案，级别切换与刷新/清空入口都在。
+    const band = collectNode(components.ImLogBand({ disabled: false, onError: () => {} }))
+    expect(band.texts).toContain('im.log.title')
+    expect(band.texts).toContain('im.log.level')
+    expect(band.texts).toContain('im.log.levelAll')
+    expect(band.texts).toContain('im.log.empty')
+    expect(band.texts).toContain('im.log.refresh')
+    expect(band.texts).toContain('im.log.clear')
+    // 空列表不渲染行容器，只有工具栏与空态。
+    expect(band.types).not.toContain('ImLogRows')
+    expect(band.types.filter((type) => type === 'button')).toHaveLength(5)
   })
 
   it('renders the shared-session badge and the full settings form (render smoke)', () => {
@@ -539,8 +718,10 @@ describe('IM channels panel (client-src source check)', () => {
   it('marker does not match near-miss samples (negative sample)', () => {
     expect("{ id: 'imX',".includes("{ id: 'im',")).toBe(false)
     expect('const IM_BIND_POLL_MSX = 1500'.includes('const IM_BIND_POLL_MS = 1500')).toBe(false)
+    expect('const IM_LOG_POLL_MSX = 3000'.includes('const IM_LOG_POLL_MS = 3000')).toBe(false)
     expect("'panel.section.imX':".includes("'panel.section.im':")).toBe(false)
     expect('90'.includes('1500')).toBe(false)
     expect('.dt-im-light-errorX{background'.includes('.dt-im-light-error{background')).toBe(false)
+    expect('.dt-im-log-listX{display'.includes('.dt-im-log-list{display')).toBe(false)
   })
 })

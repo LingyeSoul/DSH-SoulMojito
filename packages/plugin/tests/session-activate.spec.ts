@@ -218,6 +218,7 @@ describe('IM independent session opening import', () => {
       presetId: 'agent-tavern',
       ensurePreset: async () => {},
       workspace: async () => root,
+      agentOptions: () => ({ provider: 'test-provider', model: 'test-model' }),
       bind: async (sessionId, character, chatId) => {
         binds.push({ sessionId, character, chatId })
       },

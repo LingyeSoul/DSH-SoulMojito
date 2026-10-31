@@ -157,6 +157,9 @@ export function oneBotMentioned(event: unknown, selfId: string): boolean {
 /** 一段文本的出站调用；私聊走 send_private_msg，群聊走 send_group_msg。 */
 export function oneBotSendCall(target: ImTarget, part: OutboundPart): OneBotCall {
   const peerId = parsePeerId(target.peerId)
+  if (part.kind !== 'text') {
+    throw new OneBotCodecError('BAD_TARGET', `onebot cannot send a ${part.kind} part: media parts are not implemented in this build`)
+  }
   const message = [{ type: 'text', data: { text: part.text } }]
   if (target.scope === 'private') {
     return { action: 'send_private_msg', params: { user_id: peerId, message, auto_escape: false } }

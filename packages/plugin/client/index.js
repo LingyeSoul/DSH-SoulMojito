@@ -7800,7 +7800,7 @@ window.__ModuleLoader__.load({
       'im.onebotCardHint': 'OneBot endpoints are created below with an account id and a token.',
       'im.bindStartQq': 'Scan to bind QQ',
       'im.bindStartWeixin': 'Scan to bind WeChat',
-      'im.qqRuntimeMissing': 'The QQ runtime packages are not installed, so QR binding and the gateway are unavailable. Install them in the data directory, then reload this panel:',
+      'im.qqRuntimeMissing': 'The QQ runtime packages are not installed, so QR binding and the gateway are unavailable. Install them with the button below; this panel reloads when the install finishes.',
       'im.copy': 'Copy',
       'im.copied': 'Copied',
       'im.bindTitle': 'Scan to bind · {channel}',
@@ -7863,6 +7863,19 @@ window.__ModuleLoader__.load({
       'im.settings.groupAllow': 'Group allowlist',
       'im.settings.allowHint': 'Comma or line separated ids; saved when the field loses focus. An empty list denies everyone.',
       'im.settings.saved': 'Settings saved.',
+      // IM runtime log + one-click QQ runtime install (proposal 0024 §6.4).
+      'im.log.title': 'IM runtime log',
+      'im.log.empty': 'No IM runtime log yet',
+      'im.log.refresh': 'Refresh',
+      'im.log.clear': 'Clear view',
+      'im.log.level': 'Level',
+      'im.log.levelAll': 'All',
+      'im.log.installing': 'Installing…',
+      'im.qqInstall': 'Install QQ runtime',
+      'im.qqInstallDone': 'QQ runtime installed; the channel list is reloaded.',
+      'im.qqInstallAlready': 'The QQ runtime was already installed.',
+      'im.qqInstallBusy': 'Another QQ runtime install is already running; wait for it to finish.',
+      'im.qqInstallFailed': 'QQ runtime install failed: {reason}',
     }
     const MESSAGES_ZH = {
       'settings.subtitle': '角色卡、世界书与预设管理',
@@ -8819,7 +8832,7 @@ window.__ModuleLoader__.load({
       'im.onebotCardHint': 'OneBot 端点在下方面板用账号 id 与 token 创建。',
       'im.bindStartQq': '扫码绑定 QQ',
       'im.bindStartWeixin': '扫码绑定微信',
-      'im.qqRuntimeMissing': 'QQ 运行时包未安装，扫码绑定与网关都不可用。请先在数据目录安装，然后重新加载本面板：',
+      'im.qqRuntimeMissing': 'QQ 运行时包未安装，扫码绑定与网关都不可用。用下面的按钮安装，装完会自动刷新本面板。',
       'im.copy': '复制',
       'im.copied': '已复制',
       'im.bindTitle': '扫码绑定 · {channel}',
@@ -8882,6 +8895,19 @@ window.__ModuleLoader__.load({
       'im.settings.groupAllow': '群聊白名单',
       'im.settings.allowHint': '逗号或换行分隔的 id；失焦即保存。空名单等于拒绝所有人。',
       'im.settings.saved': '设置已保存。',
+      // IM 运行日志 + 腾讯包一键安装（提案 0024 §6.4）。
+      'im.log.title': 'IM 运行日志',
+      'im.log.empty': '暂无运行日志',
+      'im.log.refresh': '刷新',
+      'im.log.clear': '清空视图',
+      'im.log.level': '级别',
+      'im.log.levelAll': '全部',
+      'im.log.installing': '安装中…',
+      'im.qqInstall': '安装 QQ 依赖',
+      'im.qqInstallDone': 'QQ 运行时已安装，通道清单已刷新。',
+      'im.qqInstallAlready': 'QQ 运行时本来就装好了。',
+      'im.qqInstallBusy': '已有一次 QQ 运行时安装在进行，等它结束再试。',
+      'im.qqInstallFailed': 'QQ 运行时安装失败：{reason}',
     }
     // translate follows the host locale service once apply() binds it; the
     // identity fallback mirrors LocaleRuntime.translate (missing key -> key,
@@ -19966,7 +19992,21 @@ window.__ModuleLoader__.load({
         .dt-im-allow>label>.dt-hint{margin:0}
         .dt-im-allow textarea{box-sizing:border-box;width:100%;min-height:72px;resize:vertical;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:7px 9px;font:inherit;font-size:12px;line-height:18px}
         .dt-im-notice{margin:0;color:var(--dsw-alias-state-success-primary,var(--dsw-alias-label-secondary));font-size:12px;line-height:18px}
-        @media(max-width:700px){.dt-im-allow{grid-template-columns:1fr}.dt-im-qr>img{width:180px;height:180px}}
+        .dt-im-log{display:flex;flex-direction:column;gap:8px}
+        .dt-im-log-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+        .dt-im-log-levels{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+        .dt-im-log-levels>.dt-label{margin:0;flex:none}
+        .dt-im-log-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+        .dt-im-log-list{display:flex;flex-direction:column;gap:1px;max-height:280px;overflow-y:auto;padding:8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent)}
+        .dt-im-log-row{display:flex;align-items:baseline;gap:8px;min-width:0;padding:2px 4px;border-radius:6px;font-size:11.5px;line-height:17px}
+        .dt-im-log-row:hover{background:color-mix(in srgb,var(--dsw-alias-label-primary) 6%,transparent)}
+        .dt-im-log-time{flex:none;color:var(--dsw-alias-label-tertiary);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+        .dt-im-log-badge{flex:none;min-width:40px;text-transform:uppercase;font-size:10px;line-height:15px;letter-spacing:.04em;color:var(--dsw-alias-label-tertiary)}
+        .dt-im-log-badge-info{color:var(--dsw-alias-state-business-primary)}
+        .dt-im-log-badge-warn{color:var(--dsw-alias-state-warning-primary,var(--dsw-alias-state-business-primary))}
+        .dt-im-log-badge-error{color:var(--dsw-alias-state-error-primary)}
+        .dt-im-log-text{flex:1;min-width:0;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
+        @media(max-width:700px){.dt-im-allow{grid-template-columns:1fr}.dt-im-qr>img{width:180px;height:180px}.dt-im-log-list{max-height:220px}}
         @media(prefers-reduced-motion:reduce){.dt-im-light-scanning{animation:none}}
       `
       document.head.appendChild(tag)
@@ -20272,13 +20312,17 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 从 `qqRuntime.reason` 里抠出安装命令：服务端把同一条命令拼在句子末尾
-     * （「Install them with: cd "…" && pnpm add …」），面板要能单独复制它。
+     * 动作级忙碌判定（提案 0024 §6.4）：每组动作只锁自己，扫码在跑不该顺手禁用
+     * 安装按钮。绑定组是 `bind:<channel>` + 验证码的 `verify`——验证码与扫码共用
+     * 一条绑定会话，必须互斥。
      */
-    function imQqInstallCommand(reason) {
-      const text = String(reason ?? '')
-      const at = text.indexOf('cd "')
-      return at < 0 ? '' : text.slice(at).trim()
+    function imBindBusy(busy) {
+      return busy.startsWith('bind:') || busy === 'verify'
+    }
+
+    /** 绑定表行的忙碌判定：改绑/解绑共用 `peer:<key>`，一条在跑就锁住整列。 */
+    function imPeerBusy(busy) {
+      return busy.startsWith('peer:')
     }
 
     /** 聊天引用 → 下拉值；character 可能含分隔符，用 \u0000 拼键最稳。 */
@@ -20350,9 +20394,6 @@ window.__ModuleLoader__.load({
       const available = view?.available === true
       const sharedSessions = imSharedSessionIds(peers)
       const chatOptions = imChatOptions(characters, state.chatLists)
-      const qqInstall = qqRuntime !== null && qqRuntime.installed === false
-        ? imQqInstallCommand(qqRuntime.reason)
-        : ''
 
       // 改绑/来源聊天下拉要用已有聊天清单：与总览同款一次性拉取（按角色缓存）。
       // 读不出来如实报错——下拉里少了聊天等于让用户以为「没有可绑的聊天」。
@@ -20398,6 +20439,12 @@ window.__ModuleLoader__.load({
         }
       }, [bindRunning, bindChannel])
 
+      /**
+       * 只清自己那把锁：两个动作并行时（例如安装 + 扫码），先结束的那个不能替
+       * 后一个解锁，否则按钮会在轮询仍在跑时重新可点。
+       */
+      const releaseBusy = (key) => setBusy((current) => (current === key ? '' : current))
+
       const startBind = (channel) => {
         setError('')
         setNotice('')
@@ -20413,7 +20460,7 @@ window.__ModuleLoader__.load({
             setBind({ channel, ...status })
           })
           .catch((cause) => setError(imErrorMessage(cause)))
-          .finally(() => setBusy(''))
+          .finally(() => releaseBusy(`bind:${channel}`))
       }
 
       const submitVerify = () => {
@@ -20433,7 +20480,7 @@ window.__ModuleLoader__.load({
             applyBindStatus(status)
           })
           .catch((cause) => setError(imErrorMessage(cause)))
-          .finally(() => setBusy(''))
+          .finally(() => releaseBusy('verify'))
       }
 
       const cancelBind = () => {
@@ -20447,7 +20494,7 @@ window.__ModuleLoader__.load({
             setNotice('')
           })
           .catch((cause) => setError(imErrorMessage(cause)))
-          .finally(() => setBusy(''))
+          .finally(() => releaseBusy('bind:cancel'))
       }
 
       const createOneBot = (accountId, token) => {
@@ -20469,18 +20516,40 @@ window.__ModuleLoader__.load({
             setError(imErrorMessage(cause))
             return false
           })
-          .finally(() => setBusy(''))
+          .finally(() => releaseBusy('account:onebot'))
       }
 
       const removeAccount = (channel, accountId) => {
         if (!window.confirm(t('im.accountRemoveConfirm', { id: accountId }))) return
         setError('')
         setNotice('')
-        setBusy(`account:delete:${channel}:${accountId}`)
+        setBusy(`remove:${channel}:${accountId}`)
         void api(`im/accounts?channel=${encodeURIComponent(channel)}&accountId=${encodeURIComponent(accountId)}`, { method: 'DELETE' })
           .then(() => reloadView())
           .catch((cause) => setError(imErrorMessage(cause)))
-          .finally(() => setBusy(''))
+          .finally(() => releaseBusy(`remove:${channel}:${accountId}`))
+      }
+
+      // 腾讯包一键安装：面板永不展示 shell 命令，按钮就是唯一入口。409 是「已有
+      // 一次安装在进行」（并发点击/另一个标签页），400 带服务端的失败原文——两条都
+      // 必须原样落到面上，吞掉就等于让用户对着一个没反应的按钮发呆。
+      const installQqRuntime = () => {
+        setError('')
+        setNotice('')
+        setBusy('install:qq')
+        void api('im/qq/install', { method: 'POST', headers: jsonHeaders(), body: '{}' })
+          .then((result) => {
+            setNotice(result.alreadyInstalled === true ? t('im.qqInstallAlready') : t('im.qqInstallDone'))
+            return reloadView()
+          })
+          .catch((cause) => {
+            if (cause?.status === 409) {
+              setError(t('im.qqInstallBusy'))
+              return
+            }
+            setError(t('im.qqInstallFailed', { reason: imErrorMessage(cause) }))
+          })
+          .finally(() => releaseBusy('install:qq'))
       }
 
       const saveSettings = (patch) => {
@@ -20501,7 +20570,7 @@ window.__ModuleLoader__.load({
             setError(imErrorMessage(cause))
             return false
           })
-          .finally(() => setBusy(''))
+          .finally(() => releaseBusy('settings'))
       }
 
       const commitAllow = (scope) => {
@@ -20544,7 +20613,7 @@ window.__ModuleLoader__.load({
         })
           .then(() => reloadView())
           .catch((cause) => setError(imErrorMessage(cause)))
-          .finally(() => setBusy(''))
+          .finally(() => releaseBusy(`peer:${peer.key}`))
       }
 
       const unbindPeer = (peer) => {
@@ -20555,7 +20624,7 @@ window.__ModuleLoader__.load({
         void api(`im/peers?key=${encodeURIComponent(peer.key)}`, { method: 'DELETE' })
           .then(() => reloadView())
           .catch((cause) => setError(imErrorMessage(cause)))
-          .finally(() => setBusy(''))
+          .finally(() => releaseBusy(`peer:${peer.key}`))
       }
 
       const scanningChannel = bind !== null && bind.phase !== 'failed' ? bind.channel : ''
@@ -20565,10 +20634,10 @@ window.__ModuleLoader__.load({
         accounts: channels.filter((row) => row.channel === channel),
         scanning: scanningChannel === channel,
         runtimeMissing: channel === 'qq' && qqRuntime !== null && qqRuntime.installed === false,
-        installCommand: channel === 'qq' ? qqInstall : '',
         disabled: !available,
         busy,
         onBind: () => startBind(channel),
+        onInstall: installQqRuntime,
         onRemove: (accountId) => removeAccount(channel, accountId),
       }))
 
@@ -20610,6 +20679,7 @@ window.__ModuleLoader__.load({
           onRebind: rebindPeer,
           onUnbind: unbindPeer,
         }),
+        h(ImLogBand, { disabled: !available, onError: setError }),
         h(ImSettingsBand, {
           settings,
           chatOptions,
@@ -20624,20 +20694,11 @@ window.__ModuleLoader__.load({
     }
 
     /** 一张通道卡片：状态灯 + 一行原因 + 账号清单 + 通道动作。 */
-    function ImChannelCard({ channel, accounts, scanning, runtimeMissing, installCommand, disabled, busy, onBind, onRemove }) {
+    function ImChannelCard({ channel, accounts, scanning, runtimeMissing, disabled, busy, onBind, onInstall, onRemove }) {
       const t = useTranslate()
-      const [copied, setCopied] = useState(false)
-      const [copyError, setCopyError] = useState('')
       const tone = imChannelTone(accounts, scanning)
       const reason = imChannelReason(accounts)
       const bindLabel = channel === 'qq' ? t('im.bindStartQq') : t('im.bindStartWeixin')
-      const copy = () => {
-        if (installCommand === '') return
-        setCopyError('')
-        void imCopyText(installCommand)
-          .then(() => setCopied(true))
-          .catch((cause) => setCopyError(imErrorMessage(cause)))
-      }
       return h('div', { className: `dt-im-card dt-im-card-${tone}`, 'data-im-channel': channel, 'data-im-tone': tone },
         h('div', { className: 'dt-im-card-head' },
           h('span', { className: `dt-im-light dt-im-light-${tone}`, 'aria-hidden': 'true' }),
@@ -20657,7 +20718,7 @@ window.__ModuleLoader__.load({
                 size: 'sm',
                 variant: 'ghost',
                 icon: h(IconTrashOutline16),
-                disabled: disabled || busy !== '',
+                disabled: disabled || busy === `remove:${channel}:${row.accountId}`,
                 'aria-label': t('im.accountRemove', { id: row.accountId }),
                 title: t('im.accountRemove', { id: row.accountId }),
                 onClick: () => onRemove(row.accountId),
@@ -20668,16 +20729,18 @@ window.__ModuleLoader__.load({
             h(Button, {
               size: 'sm',
               variant: 'outline',
-              disabled: disabled || runtimeMissing || busy !== '',
+              disabled: disabled || runtimeMissing || imBindBusy(busy),
               onClick: onBind,
             }, bindLabel)),
         runtimeMissing
           ? h('div', { className: 'dt-im-install' },
             h('p', { className: 'dt-hint' }, t('im.qqRuntimeMissing')),
-            installCommand === '' ? null : h('div', { className: 'dt-im-url' },
-              h('code', { className: 'dt-im-monospace' }, installCommand),
-              h(Button, { size: 'sm', variant: 'ghost', disabled: copied, onClick: copy }, copied ? t('im.copied') : t('im.copy'))),
-            copyError !== '' ? h('p', { className: 'dt-error' }, copyError) : null)
+            h(Button, {
+              size: 'sm',
+              variant: 'primary',
+              disabled: disabled || busy === 'install:qq',
+              onClick: onInstall,
+            }, busy === 'install:qq' ? t('im.log.installing') : t('im.qqInstall')))
           : null)
     }
 
@@ -20722,7 +20785,7 @@ window.__ModuleLoader__.load({
             h(Button, {
               size: 'sm',
               variant: 'primary',
-              disabled: busy !== '' || verifyCode.trim() === '',
+              disabled: imBindBusy(busy) || verifyCode.trim() === '',
               onClick: onSubmit,
             }, busy === 'verify' ? t('im.bindSubmitting') : t('im.bindVerifySubmit')),
             h('p', { className: 'dt-hint dt-hint-wide' }, bind.prompt || t('im.bindVerifyHint')))
@@ -20747,9 +20810,9 @@ window.__ModuleLoader__.load({
           : null,
         h('div', { className: 'dt-im-bind-actions' },
           phase === 'failed'
-            ? h(Button, { size: 'sm', variant: 'outline', disabled: busy !== '', onClick: onRetry }, t('im.bindRetry'))
+            ? h(Button, { size: 'sm', variant: 'outline', disabled: imBindBusy(busy), onClick: onRetry }, t('im.bindRetry'))
             : null,
-          h(Button, { size: 'sm', variant: 'ghost', disabled: busy !== '', onClick: onCancel }, t('im.bindCancel'))))
+          h(Button, { size: 'sm', variant: 'ghost', disabled: imBindBusy(busy), onClick: onCancel }, t('im.bindCancel'))))
     }
 
     /**
@@ -20804,7 +20867,7 @@ window.__ModuleLoader__.load({
           h(Button, {
             size: 'sm',
             variant: 'primary',
-            disabled: disabled || busy !== '' || accountId.trim() === '' || token.trim() === '',
+            disabled: disabled || busy === 'account:onebot' || accountId.trim() === '' || token.trim() === '',
             onClick: submit,
           }, busy === 'account:onebot' ? t('im.onebot.creating') : t('im.onebot.create'))),
         endpoint === ''
@@ -20836,7 +20899,7 @@ window.__ModuleLoader__.load({
           peer,
           shared: sharedSessions.has(peer.sessionId),
           chatOptions,
-          disabled: busy !== '',
+          disabled: imPeerBusy(busy),
           onRebind,
           onUnbind,
         }))))
@@ -20900,7 +20963,7 @@ window.__ModuleLoader__.load({
             h('span', { className: 'dt-label' }, t('im.settings.bindingMode')),
             h('select', {
               value: settings.bindingMode,
-              disabled: busy !== '',
+              disabled: busy === 'settings',
               onChange: (event) => onPatch({ bindingMode: event.target.value }),
             }, IM_BINDING_MODES.map((mode) => h('option', { key: mode, value: mode }, t(`im.settings.mode.${mode}`))))),
           h('p', { className: 'dt-hint' }, t(`im.settings.mode.${settings.bindingMode}Hint`)),
@@ -20908,7 +20971,7 @@ window.__ModuleLoader__.load({
             h('span', { className: 'dt-label' }, t('im.settings.sourceChat')),
             h('select', {
               value: sourceKey,
-              disabled: busy !== '',
+              disabled: busy === 'settings',
               onChange: (event) => onPatch({ sourceChat: imChatRefFromKey(event.target.value) }),
             },
             h('option', { value: '' }, t('im.settings.sourceChatNone')),
@@ -20918,7 +20981,7 @@ window.__ModuleLoader__.load({
             h('span', { className: 'dt-label' }, t('im.settings.sharedChat')),
             h('select', {
               value: sharedKey,
-              disabled: busy !== '',
+              disabled: busy === 'settings',
               onChange: (event) => onPatch({ sharedChat: imChatRefFromKey(event.target.value) }),
             },
             h('option', { value: '' }, t('im.settings.sharedChatNone')),
@@ -20929,7 +20992,7 @@ window.__ModuleLoader__.load({
             h('input', {
               type: 'checkbox',
               checked: settings.groupRequireMention === true,
-              disabled: busy !== '',
+              disabled: busy === 'settings',
               onChange: (event) => onPatch({ groupRequireMention: event.target.checked }),
             }),
             h('span', null, t('im.settings.groupRequireMention'))),
@@ -20953,6 +21016,156 @@ window.__ModuleLoader__.load({
                 onBlur: () => onAllowCommit('group'),
               }),
               h('span', { className: 'dt-hint' }, t('im.settings.allowHint'))))))
+    }
+
+    // 「IM 运行日志」带（提案 0024 §6.4）：服务端 500 条环形缓冲在面板上的只读视图。
+    //
+    // 挂载时拉一次快照（服务端默认 200 条），之后每 3s 用 `after=<nextSeq>` 拉增量：
+    // 服务端 seq 单调递增，客户端只做「按 seq 去重 + 上限裁剪」。轮询失败只报一次并
+    // 停表——宿主没挂 IM 运行时时每 3s 抛同一句 503，重试风暴只会把错误刷成噪音。
+    // 级别过滤是纯客户端的：服务端只按 seq 增量给，切到 debug 时历史里已有的行仍在。
+    const IM_LOG_POLL_MS = 3000
+    const IM_LOG_CAP = 300
+    const IM_LOG_LEVELS = ['all', 'debug', 'info', 'warn', 'error']
+    /** 过滤按「至少这个级别」解释：选 info 时 warn/error 照样显示。 */
+    const IM_LOG_RANKS = { debug: 0, info: 1, warn: 2, error: 3 }
+    /** 徽标色调只借用既有 state token；debug 没有对应状态色，保持中性。 */
+    const IM_LOG_TONES = { info: 'info', warn: 'warning', error: 'error' }
+
+    /**
+     * 增量合并：按 seq 去重、保持到达顺序、只留最近 `cap` 条（丢最旧的）。
+     * 纯函数——返回新数组，绝不改入参（调用方靠引用变化触发重渲染）。
+     */
+    function imMergeLogEntries(existing, incoming, cap) {
+      const merged = []
+      const seen = new Set()
+      for (const entry of [...existing, ...incoming]) {
+        const seq = Number(entry?.seq)
+        if (!Number.isFinite(seq) || seen.has(seq)) continue
+        seen.add(seq)
+        merged.push(entry)
+      }
+      return merged.length > cap ? merged.slice(merged.length - cap) : merged
+    }
+
+    /** 级别过滤：`all` 全给，其余按最低级别过滤；未知级别不隐藏任何行。 */
+    function imLogFilter(entries, level) {
+      if (level === 'all') return entries
+      const min = IM_LOG_RANKS[level]
+      if (min === undefined) return entries
+      return entries.filter((entry) => (IM_LOG_RANKS[entry.level] ?? -1) >= min)
+    }
+
+    /** 本地时间 HH:MM:SS；解析不了的 ISO 串给占位符，不显示 NaN。 */
+    function imLogTime(at) {
+      const date = new Date(at)
+      if (Number.isNaN(date.getTime())) return '--:--:--'
+      const pad = (value) => String(value).padStart(2, '0')
+      return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+    }
+
+    /** 下一个游标：服务端 nextSeq 不可信时退回旧值，绝不把 after 写成 NaN。 */
+    function imLogNextSeq(result, fallback) {
+      const next = Number(result?.nextSeq)
+      return Number.isFinite(next) && next >= 0 ? next : fallback
+    }
+
+    /** 日志行：本地时间 + 级别徽标 + 正文。过滤已由 ImLogBand 做完，这里只排版。 */
+    function ImLogRows({ entries }) {
+      return h('div', { className: 'dt-im-log-list', 'data-im-log-count': entries.length },
+        entries.map((entry) => {
+          const tone = IM_LOG_TONES[entry.level]
+          return h('div', {
+            key: `log:${entry.seq}`,
+            className: `dt-im-log-row dt-im-log-row-${entry.level}`,
+            'data-im-log-level': entry.level,
+          },
+          h('span', { className: 'dt-im-log-time' }, imLogTime(entry.at)),
+          h('span', {
+            className: `dt-im-log-badge dt-im-log-badge-${entry.level}`,
+            ...(tone === undefined ? {} : { 'data-tone': tone }),
+          }, entry.level),
+          h('span', { className: 'dt-im-log-text' }, entry.text))
+        }))
+    }
+
+    /**
+     * 日志带本体：快照 + 3s 增量轮询 + 级别过滤 + 手动刷新/清空视图。
+     * `disabled` 是宿主侧不可用（不是错误，别拿一次 503 当故障横幅）；轮询出错走
+     * `onError` 交给面板统一的错误行，并把 stopped 置位——只有用户点「刷新」才重启。
+     */
+    function ImLogBand({ disabled, onError }) {
+      const t = useTranslate()
+      const [entries, setEntries] = useState([])
+      const [level, setLevel] = useState('all')
+      const [stopped, setStopped] = useState(false)
+      const [revision, setRevision] = useState(0)
+      // 游标放 ref：轮询定时器读它，但它的变化不能重建 effect（否则每次增量都重置计时）。
+      const nextSeqRef = useRef(0)
+
+      useEffect(() => {
+        if (disabled || stopped) return undefined
+        let cancelled = false
+        let timer = null
+        const append = (result) => {
+          nextSeqRef.current = imLogNextSeq(result, nextSeqRef.current)
+          const incoming = Array.isArray(result.entries) ? result.entries : []
+          setEntries((current) => imMergeLogEntries(current, incoming, IM_LOG_CAP))
+        }
+        const fail = (cause) => {
+          if (cancelled) return
+          setStopped(true)
+          onError(imErrorMessage(cause))
+        }
+        const poll = () => {
+          void api(`im/logs?after=${nextSeqRef.current}`)
+            .then((result) => { if (!cancelled) append(result) })
+            .catch(fail)
+        }
+        void api('im/logs')
+          .then((result) => {
+            if (cancelled) return
+            nextSeqRef.current = imLogNextSeq(result, 0)
+            setEntries(imMergeLogEntries([], Array.isArray(result.entries) ? result.entries : [], IM_LOG_CAP))
+            timer = setInterval(poll, IM_LOG_POLL_MS)
+          })
+          .catch(fail)
+        return () => {
+          cancelled = true
+          if (timer !== null) clearInterval(timer)
+        }
+      }, [disabled, stopped, revision])
+
+      // 手动刷新＝重新拉快照并重启轮询：用户显式动作，不是自动重试。
+      const refresh = () => {
+        setStopped(false)
+        setRevision((current) => current + 1)
+      }
+      const visible = imLogFilter(entries, level)
+      return h('section', { className: 'dt-settings-band dt-im-log' },
+        h('h3', null, t('im.log.title')),
+        h('div', { className: 'dt-im-log-toolbar' },
+          h('div', { className: 'dt-im-log-levels' },
+            h('span', { className: 'dt-label' }, t('im.log.level')),
+            h('div', { className: 'dt-segmented', role: 'group', 'aria-label': t('im.log.level') },
+              IM_LOG_LEVELS.map((name) => h('button', {
+                key: name,
+                type: 'button',
+                className: level === name ? 'dt-segmented-active' : '',
+                'aria-pressed': level === name,
+                onClick: () => setLevel(name),
+              }, name === 'all' ? t('im.log.levelAll') : name)))),
+          h('div', { className: 'dt-im-log-actions' },
+            h(Button, { size: 'sm', variant: 'outline', disabled, onClick: refresh }, t('im.log.refresh')),
+            h(Button, {
+              size: 'sm',
+              variant: 'ghost',
+              disabled: entries.length === 0,
+              onClick: () => setEntries([]),
+            }, t('im.log.clear')))),
+        visible.length === 0
+          ? h('p', { className: 'dt-muted' }, t('im.log.empty'))
+          : h(ImLogRows, { entries: visible }))
     }
 
     function apply(ctx) {

@@ -8,7 +8,7 @@ import type { PluginContext } from '../src/host-contract.js'
 import { handleImApi } from '../src/http/im.js'
 import type { HttpRequest, HttpResponse } from '../src/http/io.js'
 import { createImRuntime } from '../src/im/runtime.js'
-import { ImStore } from '../src/im/store.js'
+import { ImStore, ImStoreError } from '../src/im/store.js'
 import type { ImRuntime } from '../src/im/runtime.js'
 import { WeixinBindError } from '../src/im/weixin/bind.js'
 import { WeixinChannelError } from '../src/im/weixin/channel.js'
@@ -124,11 +124,12 @@ describe('im account routes', () => {
     expect(listed.body['channels']).toMatchObject([
       { channel: 'onebot', accountId: '10001', label: 'primary bot', status: { state: 'idle' }, peers: 0 },
     ])
-    // 腾讯包外挂安装：投影里必须带安装状态，面板据此显示指引（不是通道故障）。
+    // 腾讯包外挂安装：投影里必须带安装状态，面板据此显示安装按钮（不是通道故障）。
     expect(listed.body['qqRuntime']).toMatchObject({ installed: false })
-    expect(String((listed.body['qqRuntime'] as { reason?: string }).reason)).toContain(
-      'pnpm add @tencent-connect/qqbot-nodejs@1.0.5',
-    )
+    const reason = String((listed.body['qqRuntime'] as { reason?: string }).reason)
+    // 自动安装：面板一键触发，绝不把 shell 命令甩给用户（2026-10-31 用户要求）。
+    expect(reason).toContain('IM panel')
+    expect(reason).not.toContain('pnpm add')
 
     const removed = await call(undefined, `${path}?channel=onebot&accountId=10001`, 'im/accounts', 'DELETE', runtime)
     expect(removed.statusCode).toBe(200)
@@ -248,5 +249,70 @@ describe('im account routes', () => {
       accountId: 'wx-bot-1',
       secret: { botToken: 'synthetic-bot-token', baseUrl: 'https://example.invalid' },
     }, path, 'im/accounts', 'POST', closed)).rejects.toMatchObject({ status: 503 })
+  })
+})
+
+
+describe('im runtime log route', () => {
+  it('projects the ring with ISO timestamps and forwards the query', async () => {
+    const at = 1_700_000_000_000
+    const runtime: ImRuntime = {
+      ...runtimeOf(),
+      logs: (query) => {
+        expect(query).toEqual({ limit: 2, afterSeq: 7, minLevel: 'warn' })
+        return { entries: [{ seq: 8, at, level: 'warn', text: 'dropped a weixin message' }], nextSeq: 8 }
+      },
+    }
+    const result = await call(
+      undefined,
+      'http://localhost/api/dsh-soulmojito/im/logs?limit=2&after=7&level=warn',
+      'im/logs',
+      'GET',
+      runtime,
+    )
+    expect(result.statusCode).toBe(200)
+    expect(result.body).toEqual({
+      ok: true,
+      nextSeq: 8,
+      entries: [{ seq: 8, at: new Date(at).toISOString(), level: 'warn', text: 'dropped a weixin message' }],
+    })
+  })
+
+  it('rejects a bad limit instead of silently clamping it', async () => {
+    const runtime: ImRuntime = { ...runtimeOf(), logs: () => ({ entries: [], nextSeq: 0 }) }
+    await expect(call(undefined, 'http://localhost/api/dsh-soulmojito/im/logs?limit=0', 'im/logs', 'GET', runtime))
+      .rejects.toThrow(/limit/)
+  })
+
+  it('rejects an unknown level', async () => {
+    const runtime: ImRuntime = { ...runtimeOf(), logs: () => ({ entries: [], nextSeq: 0 }) }
+    await expect(call(undefined, 'http://localhost/api/dsh-soulmojito/im/logs?level=loud', 'im/logs', 'GET', runtime))
+      .rejects.toThrow(/level/)
+  })
+
+  it('returns an empty page when the runtime exposes no log surface', async () => {
+    const result = await call(undefined, 'http://localhost/api/dsh-soulmojito/im/logs', 'im/logs', 'GET', runtimeOf())
+    expect(result.body).toEqual({ ok: true, nextSeq: 0, entries: [] })
+  })
+})
+
+describe('im error surface', () => {
+  it('withholds a filesystem path from a store failure', async () => {
+    const runtime: ImRuntime = {
+      ...runtimeOf(),
+      upsertAccount: async () => {
+        throw new ImStoreError('IO', 'corrupt cursor: C:\\Users\\alice\\.dsh\\soulmojito\\im\\cursors\\x.json')
+      },
+    }
+    const failure = await call(
+      { channel: 'onebot', accountId: '10001', secret: { token: 'token-1' } },
+      '/api/dsh-soulmojito/im/accounts',
+      'im/accounts',
+      'POST',
+      runtime,
+    ).catch((error: unknown) => error as { status: number; message: string })
+    expect(failure.status).toBe(400)
+    expect(failure.message).toContain('IM store rejected')
+    expect(failure.message).not.toContain('C:\\Users')
   })
 })
