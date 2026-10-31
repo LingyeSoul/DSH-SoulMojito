@@ -951,6 +951,10 @@
       'im.hint': 'Messages from QQ, WeChat and OneBot 11 are inserted into the DSH session you bind; the agent replies with im_send. Use the AgentTavernIM preset for the bound session so the model follows the IM rules (short, multi-message replies).',
       'im.disabled': 'IM is disabled on this host (DSH_SOULMOJITO_DISABLE_IM). No channel or route is registered; unset it and restart to use this panel.',
       'im.unavailable': 'IM cannot run on this host: {reasons}',
+      'im.tabs.label': 'IM management views',
+      'im.tabs.channels': 'Channels',
+      'im.tabs.bindings': 'Bindings',
+      'im.tabs.logs': 'Logs',
       'im.channels': 'Channels',
       'im.channel.qq': 'QQ',
       'im.channel.weixin': 'WeChat',
@@ -1028,6 +1032,7 @@
       'im.settings.saved': 'Settings saved.',
       // IM runtime log + one-click QQ runtime install (proposal 0024 §6.4).
       'im.log.title': 'IM runtime log',
+      'im.log.entries': '{count} entries shown',
       'im.log.empty': 'No IM runtime log yet',
       'im.log.refresh': 'Refresh',
       'im.log.clear': 'Clear view',

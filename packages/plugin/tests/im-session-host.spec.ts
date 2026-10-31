@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest'
 import type { HostAgentLike } from '../src/host-contract.js'
 import {
   ImSessionNotLiveError,
-  buildImFollowupMessage,
+  buildImInboxMessage,
   inspectImSessionCapabilities,
+  insertImMessage,
   listLiveAgents,
   liveAgentOf,
   requireLiveAgent,
@@ -48,13 +49,18 @@ describe('requireLiveAgent', () => {
     }
   })
 
-  it('refuses an agent that cannot accept followup messages', () => {
+  it('refuses an agent that exposes neither inbox seam', () => {
     const broken: HostAgentLike = { id: 'session-a', session: { id: 'session-a' } }
-    expect(() => requireLiveAgent({ get: () => broken }, 'session-a')).toThrow(/exposes no followup/)
+    expect(() => requireLiveAgent({ get: () => broken }, 'session-a')).toThrow(/exposes neither followup\(\) nor steer\(\)/)
   })
 
   it('returns the agent when it can accept messages', () => {
     const live = agent('session-a')
+    expect(requireLiveAgent({ get: () => live }, 'session-a')).toBe(live)
+  })
+
+  it('accepts a host that only exposes steer', () => {
+    const live: HostAgentLike = { id: 'session-a', session: { id: 'session-a' }, steer: () => {} }
     expect(requireLiveAgent({ get: () => live }, 'session-a')).toBe(live)
   })
 })
@@ -69,11 +75,11 @@ describe('listLiveAgents', () => {
   })
 })
 
-describe('buildImFollowupMessage', () => {
+describe('buildImInboxMessage', () => {
   const message = { id: 'im-1', text: '[IM qq/私聊]\n在吗', summary: 'IM qq/private message from peer-x' }
 
   it('builds a plugin-source relay message for a v4 session', () => {
-    const built = buildImFollowupMessage({ header: { version: 4 } }, message)
+    const built = buildImInboxMessage({ header: { version: 4 } }, message)
     expect(built).toMatchObject({
       id: 'im-1',
       role: 'user',
@@ -83,7 +89,59 @@ describe('buildImFollowupMessage', () => {
   })
 
   it('falls back to the v0 source shape for old sessions', () => {
-    const built = buildImFollowupMessage({}, message)
+    const built = buildImInboxMessage({}, message)
     expect(built['source']).toEqual({ kind: 'plugin', plugin: 'dsh-soulmojito', form: 'relay', summary: message.summary })
+  })
+})
+
+describe('insertImMessage', () => {
+  const message = { id: 'im-1', text: '[IM weixin/私聊]\n在吗', summary: 'IM weixin/private message from peer-x' }
+
+  it('interjects with steer at the next step boundary of a running agent', async () => {
+    const calls: Array<{ mode: string; id: unknown }> = []
+    const live: HostAgentLike = {
+      id: 'session-a',
+      session: { id: 'session-a' },
+      status: 'running',
+      steer: (built) => { calls.push({ mode: 'steer', id: (built as { id?: unknown }).id }) },
+      followup: async () => { calls.push({ mode: 'followup', id: undefined }) },
+    }
+    await expect(insertImMessage(live, message)).resolves.toBe('steer')
+    expect(calls).toEqual([{ mode: 'steer', id: 'im-1' }])
+  })
+
+  it('opens its own turn through followup when the agent is idle', async () => {
+    const calls: string[] = []
+    const live: HostAgentLike = {
+      id: 'session-a',
+      session: { id: 'session-a' },
+      status: 'idle',
+      steer: () => { calls.push('steer') },
+      followup: async () => { calls.push('followup') },
+    }
+    await expect(insertImMessage(live, message)).resolves.toBe('followup')
+    expect(calls).toEqual(['followup'])
+  })
+
+  it('falls back to followup when the host predates steer', async () => {
+    const calls: string[] = []
+    const live: HostAgentLike = {
+      id: 'session-a',
+      session: { id: 'session-a' },
+      status: 'running',
+      followup: async () => { calls.push('followup') },
+    }
+    await expect(insertImMessage(live, message)).resolves.toBe('followup')
+    expect(calls).toEqual(['followup'])
+  })
+
+  it('surfaces the host error instead of pretending the message was inserted', async () => {
+    const live: HostAgentLike = {
+      id: 'session-a',
+      session: { id: 'session-a' },
+      status: 'running',
+      steer: () => { throw new Error('inbox closed') },
+    }
+    await expect(insertImMessage(live, message)).rejects.toThrow('inbox closed')
   })
 })

@@ -10184,7 +10184,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("d6cafcd") : void 0;
+  const commit = true ? normalizeCommit("0fe7933") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -49960,6 +49960,80 @@ function messageOf10(error) {
 // packages/plugin/src/im/weixin/channel.ts
 import { randomUUID as randomUUID16 } from "node:crypto";
 
+// packages/plugin/src/im/weixin/errors.ts
+var WeixinChannelError = class extends Error {
+  code;
+  constructor(code, message, options) {
+    super(message, options);
+    this.name = "WeixinChannelError";
+    this.code = code;
+  }
+};
+
+// packages/plugin/src/im/weixin/send-guard.ts
+var SEND_WINDOW_MS = 3e4;
+var SEND_WINDOW_MAX = 5;
+var SEND_THROTTLE_COOLDOWN_MS = 5 * 6e4;
+var ILINK_RETCODE_ERROR = -2;
+var WeixinSendGuard = class {
+  accountId;
+  clock;
+  sendWindow = [];
+  throttledUntil;
+  constructor(options) {
+    this.accountId = options.accountId;
+    this.clock = options.clock;
+  }
+  /** 账号启动/停止时清空：窗口与冷却是连接期内的事实。 */
+  reset() {
+    this.sendWindow = [];
+    this.throttledUntil = void 0;
+  }
+  /** 冷却期直接拒绝，不发请求。 */
+  rejectIfCoolingDown() {
+    const remaining = this.throttleRemaining();
+    if (remaining > 0) throw throttledError(this.accountId, remaining, this.clock.now());
+  }
+  /** 占一个窗口名额；超限立刻拒绝，不排队、不等待。 */
+  reserveSlot() {
+    const now = this.clock.now();
+    this.sendWindow = this.sendWindow.filter((at) => now - at < SEND_WINDOW_MS);
+    if (this.sendWindow.length >= SEND_WINDOW_MAX) {
+      const retryAt = (this.sendWindow[0] ?? now) + SEND_WINDOW_MS;
+      throw new WeixinChannelError(
+        "WEIXIN_SEND_BUDGET_EXHAUSTED",
+        `weixin account '${this.accountId}' refused to send: ${SEND_WINDOW_MAX} messages already went out within ${SEND_WINDOW_MS / 1e3}s, and iLink throttles a bot after a burst of separate messages (ret/errcode ${ILINK_RETCODE_ERROR} prepare failed). The message was NOT delivered; do not retry it in this turn. Sending is allowed again at ${new Date(retryAt).toISOString()}.`
+      );
+    }
+    this.sendWindow.push(now);
+  }
+  /** 记录一次 `-2` 惩罚，返回带恢复时间的错误。 */
+  throttle(peerLabel, cause) {
+    const until = this.clock.now() + SEND_THROTTLE_COOLDOWN_MS;
+    this.throttledUntil = until;
+    return new WeixinChannelError(
+      "WEIXIN_THROTTLED",
+      `weixin send to ${peerLabel} was rejected by iLink with ret/errcode ${ILINK_RETCODE_ERROR} (prepare failed); the bot sent too many separate messages in a short window, so sending is paused until ${new Date(until).toISOString()}. The message was NOT delivered; do not retry it in this turn because retrying extends the penalty`,
+      { cause }
+    );
+  }
+  throttleRemaining() {
+    if (this.throttledUntil === void 0) return 0;
+    const remaining = this.throttledUntil - this.clock.now();
+    return remaining > 0 ? remaining : 0;
+  }
+};
+function isIlinkThrottle(error) {
+  return error instanceof WeixinApiError && error.retcode === ILINK_RETCODE_ERROR;
+}
+function throttledError(accountId, remainingMs, now) {
+  const resumeAt = new Date(now + remainingMs).toISOString();
+  return new WeixinChannelError(
+    "WEIXIN_THROTTLED",
+    `weixin account '${accountId}' is cooling down until ${resumeAt} after iLink rejected a send with ret/errcode ${ILINK_RETCODE_ERROR} (prepare failed); nothing was delivered, and retrying now only extends the penalty`
+  );
+}
+
 // packages/plugin/src/im/weixin/typing-cache.ts
 var TYPING_TICKET_TTL_MS = 30 * 60 * 1e3;
 var MAX_TYPING_TICKETS = 500;
@@ -50567,14 +50641,6 @@ var FAILURES_BEFORE_BACKOFF = 3;
 var START_PROBE_TIMEOUT_MS = 3e3;
 var PEER_LABEL_LENGTH = 8;
 var MAX_CONTEXT_TOKENS = 500;
-var WeixinChannelError = class extends Error {
-  code;
-  constructor(code, message, options) {
-    super(message, options);
-    this.name = "WeixinChannelError";
-    this.code = code;
-  }
-};
 function createStartGate() {
   let resolveGate;
   let rejectGate;
@@ -50625,6 +50691,8 @@ var WeixinChannel = class {
   lastError;
   pausedUntil;
   pauseReason;
+  /** 出站突发预算与 `-2` 冷却（`send-guard.ts`）。 */
+  sendGuard;
   /** 同一账号的出站按整轮串行：两轮回复并发时不得出现 A1,B1,A2,B2 的碎片。 */
   sendChain = Promise.resolve();
   constructor(options) {
@@ -50637,6 +50705,7 @@ var WeixinChannel = class {
     this.loadContextTokens = options.loadContextTokens;
     this.saveContextTokens = options.saveContextTokens;
     this.clock = options.clock;
+    this.sendGuard = new WeixinSendGuard({ accountId: options.accountId, clock: options.clock });
     this.longPollTimeoutMs = clampLongPoll(options.longPollTimeoutMs);
     this.typingEnabled = options.typingEnabled;
     this.cdnBaseUrl = normalizeCdnBaseUrl(options.cdnBaseUrl ?? WEIXIN_DEFAULT_CDN_BASE_URL);
@@ -50652,6 +50721,7 @@ var WeixinChannel = class {
     this.lastError = void 0;
     this.pausedUntil = void 0;
     this.pauseReason = void 0;
+    this.sendGuard.reset();
     if (this.media !== void 0) void sweepExpiredMedia(this.media, MEDIA_TTL_MS, this.mediaLog());
     try {
       const [cursor, tokens] = await Promise.all([this.loadCursor(), this.loadContextTokens()]);
@@ -50724,6 +50794,7 @@ var WeixinChannel = class {
     this.lastError = void 0;
     this.pausedUntil = void 0;
     this.pauseReason = void 0;
+    this.sendGuard.reset();
   }
   status() {
     if (this.pausedUntil !== void 0 && this.clock.now() < this.pausedUntil) {
@@ -50753,6 +50824,7 @@ var WeixinChannel = class {
     }
     const pausedFor = this.pauseRemaining();
     if (pausedFor > 0) throw pausedError(this.accountId, pausedFor, this.clock.now());
+    this.sendGuard.rejectIfCoolingDown();
     if (parts.length === 0) return { parts: 0, at: this.clock.now() };
     const queued = this.sendChain.then(() => this.sendParts(target, parts));
     this.sendChain = queued.then(noop, noop);
@@ -50835,6 +50907,7 @@ var WeixinChannel = class {
     }
     const pausedFor = this.pauseRemaining();
     if (pausedFor > 0) throw pausedError(this.accountId, pausedFor, this.clock.now());
+    this.sendGuard.rejectIfCoolingDown();
     const contextToken = this.contextTokens[target.peerId];
     if (contextToken === void 0) {
       this.logger?.warn?.(
@@ -50845,6 +50918,7 @@ var WeixinChannel = class {
     let messageId;
     for (const part of parts) {
       try {
+        this.sendGuard.reserveSlot();
         const sentId = part.kind === "text" ? (await sendMessage(this.apiContext(SEND_TIMEOUT_MS), {
           toUserId: target.peerId,
           text: part.text,
@@ -50853,6 +50927,17 @@ var WeixinChannel = class {
         if (sentId !== void 0) messageId = sentId;
       } catch (error) {
         if (error instanceof WeixinChannelError) throw error;
+        if (isIlinkThrottle(error)) {
+          const throttled = this.sendGuard.throttle(this.peerLabel(target.peerId), error);
+          this.logger?.warn?.(`dsh-soulmojito im weixin/${this.accountId}: ${throttled.message}`);
+          throw throttled;
+        }
+        if (isStaleToken(error)) {
+          const until = this.clock.now() + STALE_TOKEN_PAUSE_MS;
+          this.pausedUntil = until;
+          this.pauseReason = `the WeChat bot token for '${this.accountId}' was rejected with ret/errcode ${WEIXIN_STALE_TOKEN_RETCODE}; paused until ${new Date(until).toISOString()}`;
+          throw new WeixinChannelError("WEIXIN_PAUSED", this.pauseReason, { cause: error });
+        }
         throw new WeixinChannelError(
           "WEIXIN_SEND_FAILED",
           `weixin send part ${part.index + 1}/${part.total} to ${this.peerLabel(target.peerId)} failed: ${messageOf11(error)}`,
@@ -57007,7 +57092,7 @@ function createImRouter(deps) {
     );
     const messageId = `im-${randomUUID19()}`;
     try {
-      await deps.followup(binding.sessionId, {
+      await deps.insert(binding.sessionId, {
         id: messageId,
         text,
         summary: `IM ${message.channel}/${message.scope} message from ${alias}`
@@ -57342,12 +57427,18 @@ function liveAgentOf(agents, sessionId) {
 function requireLiveAgent(agents, sessionId) {
   const agent = liveAgentOf(agents, sessionId);
   if (agent === void 0) throw new ImSessionNotLiveError(sessionId);
-  if (typeof agent.followup !== "function") {
-    const error = new Error(`the host agent for session '${sessionId}' exposes no followup(); IM cannot insert a message`);
-    error.code = "IM_SESSION_NO_FOLLOWUP";
-    throw error;
-  }
+  if (!hasInboxSeam(agent)) throw noInboxError(sessionId);
   return agent;
+}
+function hasInboxSeam(agent) {
+  return typeof agent.followup === "function" || typeof agent.steer === "function";
+}
+function noInboxError(sessionId) {
+  const error = new Error(
+    `the host agent for session '${sessionId}' exposes neither followup() nor steer(); IM cannot insert a message`
+  );
+  error.code = "IM_SESSION_NO_INBOX";
+  return error;
 }
 function listLiveAgents2(agents) {
   if (agents?.list === void 0) return [];
@@ -57357,13 +57448,25 @@ function listLiveAgents2(agents) {
     return [];
   }
 }
-function buildImFollowupMessage(session, message) {
+function buildImInboxMessage(session, message) {
   return {
     id: message.id,
     role: "user",
     content: [{ type: "text", text: message.text }],
     source: hostPluginMessageSource(session, { form: "relay", summary: message.summary })
   };
+}
+async function insertImMessage(agent, message) {
+  const built = buildImInboxMessage(agent.session, message);
+  if (agent.status === "running" && typeof agent.steer === "function") {
+    agent.steer(built);
+    return "steer";
+  }
+  if (typeof agent.followup !== "function") {
+    throw noInboxError(agent.session?.id ?? agent.id ?? "unknown");
+  }
+  await agent.followup(built);
+  return "followup";
 }
 
 // packages/plugin/src/im/runtime.ts
@@ -57484,9 +57587,10 @@ function createImRuntime(ctx, options) {
     db,
     now: () => Date.now(),
     seenDedupe: (dedupeKey, now) => store5.seenDedupe(dedupeKey, now),
-    followup: async (sessionId, message) => {
+    insert: async (sessionId, message) => {
       const agent = requireLiveAgent(agents, sessionId);
-      await agent.followup?.(buildImFollowupMessage(agent.session, message));
+      const mode = await insertImMessage(agent, message);
+      imLog.note("debug", `im insert: ${mode} into ${sessionId}`);
     },
     workspaceRoot: async () => (await prepareInternalWorkspace()).path,
     send: async (target, parts) => {

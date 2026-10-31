@@ -34,6 +34,8 @@ import {
   type WeixinMessage,
 } from './api.js'
 import type { WeixinClock } from './clock.js'
+import { WeixinChannelError } from './errors.js'
+import { isIlinkThrottle, WeixinSendGuard } from './send-guard.js'
 import { createTypingTicketCache, MAX_TYPING_TICKETS, TYPING_TICKET_TTL_MS } from './typing-cache.js'
 import {
   materializeInboundMedia,
@@ -76,25 +78,7 @@ const PEER_LABEL_LENGTH = 8
 /** context_token 记账表上限：长跑进程不能让每个对端都永久驻留。 */
 const MAX_CONTEXT_TOKENS = 500
 
-export type WeixinChannelErrorCode =
-  | 'WEIXIN_BAD_SECRET'
-  | 'WEIXIN_BAD_TARGET'
-  | 'WEIXIN_BAD_MESSAGE'
-  | 'WEIXIN_CLOSED'
-  | 'WEIXIN_STATE'
-  | 'WEIXIN_PAUSED'
-  | 'WEIXIN_SEND_FAILED'
-
-/** 通道级错误：code 区分「凭据坏了」「目标错了」「没在跑」与「发送失败」。 */
-export class WeixinChannelError extends Error {
-  readonly code: WeixinChannelErrorCode
-
-  constructor(code: WeixinChannelErrorCode, message: string, options?: { cause?: unknown }) {
-    super(message, options)
-    this.name = 'WeixinChannelError'
-    this.code = code
-  }
-}
+export { WeixinChannelError, type WeixinChannelErrorCode } from './errors.js'
 
 /**
  * 时钟注入面（`-14` 的 1 小时暂停与退避要能在测试里推进）在 `clock.ts`，
@@ -197,6 +181,8 @@ export class WeixinChannel implements ImChannel {
   private lastError: string | undefined
   private pausedUntil: number | undefined
   private pauseReason: string | undefined
+  /** 出站突发预算与 `-2` 冷却（`send-guard.ts`）。 */
+  private readonly sendGuard: WeixinSendGuard
 
   /** 同一账号的出站按整轮串行：两轮回复并发时不得出现 A1,B1,A2,B2 的碎片。 */
   private sendChain: Promise<void> = Promise.resolve()
@@ -212,6 +198,7 @@ export class WeixinChannel implements ImChannel {
     this.loadContextTokens = options.loadContextTokens
     this.saveContextTokens = options.saveContextTokens
     this.clock = options.clock
+    this.sendGuard = new WeixinSendGuard({ accountId: options.accountId, clock: options.clock })
     this.longPollTimeoutMs = clampLongPoll(options.longPollTimeoutMs)
     this.typingEnabled = options.typingEnabled
     this.cdnBaseUrl = normalizeCdnBaseUrl(options.cdnBaseUrl ?? WEIXIN_DEFAULT_CDN_BASE_URL)
@@ -228,6 +215,7 @@ export class WeixinChannel implements ImChannel {
     this.lastError = undefined
     this.pausedUntil = undefined
     this.pauseReason = undefined
+    this.sendGuard.reset()
     // 附件是一次性数据：启动时顺手清掉 24h 前的落盘件，失败只 warn。
     if (this.media !== undefined) void sweepExpiredMedia(this.media, MEDIA_TTL_MS, this.mediaLog())
     // 游标与 context token 在首轮请求前装载：先发请求再读盘会让首轮用错游标。
@@ -305,6 +293,7 @@ export class WeixinChannel implements ImChannel {
     this.lastError = undefined
     this.pausedUntil = undefined
     this.pauseReason = undefined
+    this.sendGuard.reset()
   }
 
   status(): ImChannelStatus {
@@ -337,6 +326,8 @@ export class WeixinChannel implements ImChannel {
     // 暂停期间不出站：攒着等恢复会发出过期的回复，也会让调用方以为已经送达。
     const pausedFor = this.pauseRemaining()
     if (pausedFor > 0) throw pausedError(this.accountId, pausedFor, this.clock.now())
+    // iLink 的 -2 惩罚期间也不出站：每次重试都会延长惩罚，交给冷却计时器。
+    this.sendGuard.rejectIfCoolingDown()
     if (parts.length === 0) return { parts: 0, at: this.clock.now() }
     // 整轮串行：投递顺序是用户能看见的事实，交错发送比慢一点更糟。
     const queued = this.sendChain.then(() => this.sendParts(target, parts))
@@ -422,9 +413,10 @@ export class WeixinChannel implements ImChannel {
         `weixin account '${this.accountId}' is not running; replies can only be delivered while polling is active`,
       )
     }
-    // 排队期间可能刚收到 `-14`：真正出站前再判一次暂停。
+    // 排队期间可能刚收到 `-14` 或 `-2`：真正出站前再判一次暂停/冷却。
     const pausedFor = this.pauseRemaining()
     if (pausedFor > 0) throw pausedError(this.accountId, pausedFor, this.clock.now())
+    this.sendGuard.rejectIfCoolingDown()
     const contextToken = this.contextTokens[target.peerId]
     if (contextToken === undefined) {
       // 协议没写「缺 context_token 会被拒」，但参考实现会给出 warning；照做，
@@ -438,6 +430,8 @@ export class WeixinChannel implements ImChannel {
     let messageId: string | undefined
     for (const part of parts) {
       try {
+        // 每条独立 sendmessage 都占一个窗口名额；超出直接拒绝，不打到服务端。
+        this.sendGuard.reserveSlot()
         const sentId =
           part.kind === 'text'
             ? (
@@ -450,8 +444,19 @@ export class WeixinChannel implements ImChannel {
             : await this.sendMediaPart(target, part, contextToken)
         if (sentId !== undefined) messageId = sentId
       } catch (error) {
-        // 通道级错误（坏目标、坏本地文件）原样上抛；其余按发送失败包装。
+        // 通道级错误（坏目标、坏本地文件、预算/冷却）原样上抛。
         if (error instanceof WeixinChannelError) throw error
+        if (isIlinkThrottle(error)) {
+          const throttled = this.sendGuard.throttle(this.peerLabel(target.peerId), error)
+          this.logger?.warn?.(`dsh-soulmojito im weixin/${this.accountId}: ${throttled.message}`)
+          throw throttled
+        }
+        if (isStaleToken(error)) {
+          const until = this.clock.now() + STALE_TOKEN_PAUSE_MS
+          this.pausedUntil = until
+          this.pauseReason = `the WeChat bot token for '${this.accountId}' was rejected with ret/errcode ${WEIXIN_STALE_TOKEN_RETCODE}; paused until ${new Date(until).toISOString()}`
+          throw new WeixinChannelError('WEIXIN_PAUSED', this.pauseReason, { cause: error })
+        }
         throw new WeixinChannelError(
           'WEIXIN_SEND_FAILED',
           `weixin send part ${part.index + 1}/${part.total} to ${this.peerLabel(target.peerId)} failed: ${messageOf(error)}`,

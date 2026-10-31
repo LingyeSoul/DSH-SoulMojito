@@ -6199,6 +6199,27 @@ window.__ModuleLoader__.load({
       h('circle', { cx: 8, cy: 4.9, r: 0.8, fill: 'currentColor', stroke: 'none' }))
     }
 
+    // IM navigation icon: overlapping conversation bubbles stay legible at 16px
+    // and avoid overloading the composer's single send arrow.
+    function IconMessagesOutline16({ size, className }) {
+      const dimension = size ?? 16
+      return h('svg', {
+        width: dimension,
+        height: dimension,
+        className,
+        viewBox: '0 0 16 16',
+        fill: 'none',
+        xmlns: 'http://www.w3.org/2000/svg',
+        'aria-hidden': 'true',
+        strokeWidth: 1,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+      },
+      h('path', { d: 'M9.5 3.1H13a1.5 1.5 0 0 1 1.5 1.5v4.2a1.5 1.5 0 0 1-1.5 1.5h-1.2v2.4l-2.7-2.4H9.5', stroke: 'currentColor' }),
+      h('path', { d: 'M8.8 5.2a1.5 1.5 0 0 0-1.5-1.5H3a1.5 1.5 0 0 0-1.5 1.5v4.2a1.5 1.5 0 0 0 1.5 1.5h.7v2.5l2.8-2.5h1.8a1.5 1.5 0 0 0 1.5-1.5V7.1', stroke: 'currentColor' }),
+      h('path', { d: 'M4 6.4h3.2M4 8.3h2.1', stroke: 'currentColor' }))
+    }
+
     function IconExpand16({ size = 16, className }) {
       return h('svg', {
         width: size,
@@ -7782,6 +7803,10 @@ window.__ModuleLoader__.load({
       'im.hint': 'Messages from QQ, WeChat and OneBot 11 are inserted into the DSH session you bind; the agent replies with im_send. Use the AgentTavernIM preset for the bound session so the model follows the IM rules (short, multi-message replies).',
       'im.disabled': 'IM is disabled on this host (DSH_SOULMOJITO_DISABLE_IM). No channel or route is registered; unset it and restart to use this panel.',
       'im.unavailable': 'IM cannot run on this host: {reasons}',
+      'im.tabs.label': 'IM management views',
+      'im.tabs.channels': 'Channels',
+      'im.tabs.bindings': 'Bindings',
+      'im.tabs.logs': 'Logs',
       'im.channels': 'Channels',
       'im.channel.qq': 'QQ',
       'im.channel.weixin': 'WeChat',
@@ -7859,6 +7884,7 @@ window.__ModuleLoader__.load({
       'im.settings.saved': 'Settings saved.',
       // IM runtime log + one-click QQ runtime install (proposal 0024 §6.4).
       'im.log.title': 'IM runtime log',
+      'im.log.entries': '{count} entries shown',
       'im.log.empty': 'No IM runtime log yet',
       'im.log.refresh': 'Refresh',
       'im.log.clear': 'Clear view',
@@ -8808,6 +8834,10 @@ window.__ModuleLoader__.load({
       'im.hint': 'QQ、微信与 OneBot 11 的消息会插进你绑定的 DSH 会话，由模型调用 im_send 回复。绑定会话建议使用 AgentTavernIM 预设，模型才会按 IM 规则用短句、多条消息回复。',
       'im.disabled': '本宿主已关闭 IM（DSH_SOULMOJITO_DISABLE_IM）。通道与路由都没有注册；取消该环境变量并重启后才能使用本面板。',
       'im.unavailable': '本宿主无法运行 IM：{reasons}',
+      'im.tabs.label': 'IM 管理视图',
+      'im.tabs.channels': '渠道',
+      'im.tabs.bindings': '绑定',
+      'im.tabs.logs': '日志',
       'im.channels': '通道',
       'im.channel.qq': 'QQ',
       'im.channel.weixin': '微信',
@@ -8885,6 +8915,7 @@ window.__ModuleLoader__.load({
       'im.settings.saved': '设置已保存。',
       // IM 运行日志 + 腾讯包一键安装（提案 0024 §6.4）。
       'im.log.title': 'IM 运行日志',
+      'im.log.entries': '当前显示 {count} 条',
       'im.log.empty': '暂无运行日志',
       'im.log.refresh': '刷新',
       'im.log.clear': '清空视图',
@@ -16127,9 +16158,9 @@ window.__ModuleLoader__.load({
       { id: 'presets', group: 'system', icon: IconAgentPresetOutline16, label: (t) => t('panel.section.presets'), component: () => h(PanelPresets) },
       // 第 20 个分区「聊天渠道」（提案 0024 §6.1，M5）：QQ / 微信 / OneBot 三条
       // 通道的账号、扫码绑定、peer 绑定表与自动绑定设置。system 组——它决定
-      // 消息从哪进来，属于系统级配置而非资产。纸飞机图标与「发消息」语义最贴近，
-      // 且不与既有分区图标复用。
-      { id: 'im', group: 'system', icon: IconSendOutline16, label: (t) => t('panel.section.im'), component: (host) => h(PanelIm, { useSessions: host.useSessions }) },
+      // Inbound message routing is system configuration; conversation bubbles
+      // distinguish IM sessions from the composer's send action.
+      { id: 'im', group: 'system', icon: IconMessagesOutline16, label: (t) => t('panel.section.im'), component: (host) => h(PanelIm, { useSessions: host.useSessions }) },
       { id: 'scripts', group: 'content', icon: IconBookOutline16, label: (t) => t('panel.section.scripts'), component: () => h(PanelScripts) },
       { id: 'regex', group: 'system', icon: IconSearchOutline16, label: (t) => t('panel.section.regex'), component: (host) => h(RegexBand, { useSessions: host.useSessions }) },
       { id: 'variables', group: 'session', icon: IconDataOutline16, label: (t) => t('panel.section.variables'), component: (host) => h(PanelVariables, { useSessions: host.useSessions }) },
@@ -19928,9 +19959,17 @@ window.__ModuleLoader__.load({
         .dt-body-dialog .dt-editor-modal-body>.dt-editor{flex:1;min-height:0}
         .dt-editor-field.dt-body-textarea{flex:1;min-height:0}
         .dt-editor-field.dt-body-textarea textarea{flex:1;height:auto;min-height:120px;max-height:none;resize:none;overflow-y:auto}
-        /* 聊天渠道（提案 0024 §6.1）：三张通道卡 + 扫码带 + 绑定表 + 设置。
-           状态灯走既有 state token（成功/警示/错误/业务主色），不引入新色板。 */
-        .dt-im-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}
+        /* IM views: compact channel cards, side-by-side QR setup, structured peers and dense logs. */
+        .dt-im-intro{padding-bottom:16px}
+        .dt-im-intro>.dt-hint{margin-bottom:0}
+        .dt-im-tabs{display:flex;align-items:center;gap:20px;padding:0 24px;border-bottom:1px solid var(--dsw-alias-border-l2);overflow-x:auto}
+        .dt-im-tabs>button{position:relative;flex:none;padding:13px 0 12px;border:0;color:var(--dsw-alias-label-tertiary);background:transparent;font:inherit;font-size:13px;line-height:20px;cursor:pointer}
+        .dt-im-tabs>button:hover{color:var(--dsw-alias-label-primary)}
+        .dt-im-tabs>button:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}
+        .dt-im-tabs>button.dt-im-tab-active{color:var(--dsw-alias-label-primary);font-weight:600}
+        .dt-im-tabs>button.dt-im-tab-active::after{content:"";position:absolute;right:0;bottom:-1px;left:0;height:2px;border-radius:2px;background:var(--dsw-alias-state-business-primary)}
+        .dt-im-tabpanel{min-width:0}
+        .dt-im-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
         .dt-im-card{display:flex;flex-direction:column;gap:9px;min-width:0;padding:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px}
         .dt-im-card-head{display:flex;align-items:center;gap:9px;min-width:0}
         .dt-im-light{flex:none;width:9px;height:9px;border-radius:50%;background:var(--dsw-alias-label-tertiary);opacity:.55}
@@ -19944,66 +19983,77 @@ window.__ModuleLoader__.load({
         .dt-im-card-title strong{font-size:13px;line-height:19px}
         .dt-im-card-title span{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
         .dt-im-card-reason{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:17px;overflow-wrap:anywhere}
+        .dt-im-card>.dt-muted,.dt-im-card>.dt-hint{margin:0}
         .dt-im-accounts{display:flex;flex-direction:column;gap:6px}
         .dt-im-account{display:flex;align-items:center;gap:8px;min-width:0;padding:6px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
         .dt-im-account-copy{display:flex;flex-direction:column;min-width:0;flex:1;gap:1px}
         .dt-im-account-copy strong{font-size:12.5px;line-height:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .dt-im-account-copy span{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;overflow-wrap:anywhere}
         .dt-im-account-actions{display:flex;gap:2px;flex:none}
-        .dt-im-card-actions{display:flex;gap:8px;flex-wrap:wrap}
+        .dt-im-card-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:auto}
         .dt-im-install{display:flex;flex-direction:column;gap:6px;padding-top:8px;border-top:1px solid var(--dsw-alias-border-l2)}
+        .dt-im-install>.dt-hint{margin:0}
         .dt-im-monospace{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px;line-height:17px;overflow-wrap:anywhere;user-select:text}
         .dt-im-url{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent)}
         .dt-im-url>code{flex:1;min-width:120px}
-        .dt-im-bind{display:flex;flex-direction:column;gap:10px}
-        .dt-im-bind-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-        .dt-im-qr{display:flex;flex-direction:column;align-items:center;gap:8px;padding:10px}
-        .dt-im-qr>img{width:220px;height:220px;max-width:100%;object-fit:contain;border-radius:8px;background:var(--dsw-alias-bg-base);box-shadow:inset 0 0 0 1px var(--dsw-alias-border-l2)}
+        .dt-im-bind{display:flex;flex-direction:column;gap:12px}
+        .dt-im-bind-layout{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;align-items:center}
+        .dt-im-bind-layout-with-qr{grid-template-columns:minmax(0,1fr) auto}
+        .dt-im-bind-copy{display:flex;flex-direction:column;justify-content:center;align-self:stretch;gap:10px;min-width:0}
+        .dt-im-bind-copy>h3,.dt-im-bind-copy>.dt-hint,.dt-im-bind-copy>.dt-error{margin:0}
+        .dt-im-bind-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-top:10px;border-top:1px solid var(--dsw-alias-border-l2)}
+        .dt-im-qr{display:flex;flex-direction:column;align-items:center;gap:8px;min-width:200px}
+        .dt-im-qr>img{width:200px;height:200px;max-width:100%;object-fit:contain;border-radius:8px;background:var(--dsw-alias-bg-base);box-shadow:inset 0 0 0 1px var(--dsw-alias-border-l2)}
         .dt-im-qr-link{color:var(--dsw-alias-state-business-primary);font-size:12px;line-height:18px;overflow-wrap:anywhere;text-align:center}
         .dt-im-qr-link:hover,.dt-im-qr-link:focus-visible{text-decoration:underline}
         .dt-im-verify{display:flex;align-items:flex-end;gap:8px;flex-wrap:wrap}
         .dt-im-verify>.dt-hint{flex-basis:100%;margin:0}
-        .dt-im-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));align-items:end;gap:10px;max-width:620px}
-        .dt-im-form>button{justify-self:start}
-        .dt-im-endpoint{display:flex;flex-direction:column;gap:6px;margin-top:12px}
+        .dt-im-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:end;gap:10px;max-width:none}
+        .dt-im-form>button{grid-column:1/-1;justify-self:start}
+        .dt-im-endpoint{display:flex;flex-direction:column;gap:6px;margin-top:16px;padding-top:14px;border-top:1px solid var(--dsw-alias-border-l2)}
         .dt-im-endpoint>.dt-label{margin:0}
         .dt-im-endpoint>.dt-hint{margin:0}
         .dt-im-ws{user-select:text}
         .dt-im-peers{display:flex;flex-direction:column;gap:8px}
-        .dt-im-pending{display:flex;flex-direction:column;gap:8px;margin:0 0 12px;padding:9px 10px;border:1px dashed var(--dsw-alias-border-l2);border-radius:8px}
+        .dt-im-pending{display:flex;flex-direction:column;gap:8px;margin:0 0 12px;padding:10px 12px;border:1px dashed var(--dsw-alias-border-l2);border-radius:8px}
         .dt-im-pending h4{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-primary)}
         .dt-im-pending>.dt-hint{margin:0}
-        .dt-im-pending-row{display:flex;align-items:flex-start;gap:8px;justify-content:space-between;flex-wrap:wrap}
+        .dt-im-pending-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px}
         .dt-im-pending-copy{display:flex;flex-direction:column;gap:3px;min-width:0}
-        .dt-im-peer{display:flex;flex-direction:column;gap:5px;min-width:0;padding:9px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
+        .dt-im-peer{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px;min-width:0;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
+        .dt-im-peer-main{display:flex;flex-direction:column;gap:5px;min-width:0}
         .dt-im-peer-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
         .dt-im-peer-key{flex:1;min-width:140px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px;line-height:17px;overflow-wrap:anywhere}
         .dt-im-peer-chat{margin:0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;overflow-wrap:anywhere}
-        .dt-im-peer>.dt-hint{margin:0}
-        .dt-im-peer-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+        .dt-im-peer-main>.dt-hint{margin:0}
+        .dt-im-peer-actions{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap}
         .dt-im-peer-actions select{box-sizing:border-box;height:30px;max-width:min(320px,100%);border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:0 8px;font:inherit;font-size:12px}
-        .dt-im-settings{display:flex;flex-direction:column;gap:8px;max-width:560px}
-        .dt-im-settings>.dt-hint{margin:0}
-        .dt-im-settings>.dt-toggle{min-height:0}
+        .dt-im-settings{display:flex;flex-direction:column;gap:12px;max-width:none}
+        .dt-im-mention{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
+        .dt-im-mention>.dt-toggle{min-height:0}
+        .dt-im-mention>.dt-hint{margin:0}
         .dt-im-allow{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
         .dt-im-allow>label>.dt-hint{margin:0}
-        .dt-im-allow textarea{box-sizing:border-box;width:100%;min-height:72px;resize:vertical;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:7px 9px;font:inherit;font-size:12px;line-height:18px}
+        .dt-im-allow textarea{box-sizing:border-box;width:100%;min-height:88px;resize:vertical;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);padding:7px 9px;font:inherit;font-size:12px;line-height:18px}
         .dt-im-notice{margin:0;color:var(--dsw-alias-state-success-primary,var(--dsw-alias-label-secondary));font-size:12px;line-height:18px}
-        .dt-im-log{display:flex;flex-direction:column;gap:8px}
+        .dt-im-log{display:flex;flex-direction:column;gap:10px}
+        .dt-im-log-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+        .dt-im-log-head>.dt-im-log-title{margin:0}
+        .dt-im-log-count{flex:none;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
         .dt-im-log-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
         .dt-im-log-levels{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
         .dt-im-log-levels>.dt-label{margin:0;flex:none}
         .dt-im-log-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-        .dt-im-log-list{display:flex;flex-direction:column;gap:1px;max-height:280px;overflow-y:auto;padding:8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent)}
-        .dt-im-log-row{display:flex;align-items:baseline;gap:8px;min-width:0;padding:2px 4px;border-radius:6px;font-size:11.5px;line-height:17px}
+        .dt-im-log-list{display:flex;flex-direction:column;gap:1px;max-height:360px;overflow-y:auto;padding:8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent)}
+        .dt-im-log-row{display:grid;grid-template-columns:64px 44px minmax(0,1fr);align-items:baseline;gap:8px;min-width:0;padding:2px 4px;border-radius:6px;font-size:11.5px;line-height:17px}
         .dt-im-log-row:hover{background:color-mix(in srgb,var(--dsw-alias-label-primary) 6%,transparent)}
-        .dt-im-log-time{flex:none;color:var(--dsw-alias-label-tertiary);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-        .dt-im-log-badge{flex:none;min-width:40px;text-transform:uppercase;font-size:10px;line-height:15px;letter-spacing:.04em;color:var(--dsw-alias-label-tertiary)}
+        .dt-im-log-time{color:var(--dsw-alias-label-tertiary);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+        .dt-im-log-badge{min-width:0;text-transform:uppercase;font-size:10px;line-height:15px;letter-spacing:.04em;color:var(--dsw-alias-label-tertiary)}
         .dt-im-log-badge-info{color:var(--dsw-alias-state-business-primary)}
         .dt-im-log-badge-warn{color:var(--dsw-alias-state-warning-primary,var(--dsw-alias-state-business-primary))}
         .dt-im-log-badge-error{color:var(--dsw-alias-state-error-primary)}
-        .dt-im-log-text{flex:1;min-width:0;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
-        @media(max-width:700px){.dt-im-allow{grid-template-columns:1fr}.dt-im-qr>img{width:180px;height:180px}.dt-im-log-list{max-height:220px}}
+        .dt-im-log-text{min-width:0;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
+        @media(max-width:700px){.dt-im-tabs{gap:16px;padding:0 16px}.dt-im-cards{grid-template-columns:1fr}.dt-im-bind-layout-with-qr{grid-template-columns:1fr}.dt-im-qr{min-width:0}.dt-im-qr>img{width:180px;height:180px}.dt-im-form{grid-template-columns:1fr}.dt-im-form>button{grid-column:auto}.dt-im-pending-row,.dt-im-peer{grid-template-columns:1fr}.dt-im-peer-actions{justify-content:flex-start}.dt-im-allow{grid-template-columns:1fr}.dt-im-log-list{max-height:280px}.dt-im-log-row{grid-template-columns:58px 40px minmax(0,1fr);gap:6px}}
         @media(prefers-reduced-motion:reduce){.dt-im-light-scanning{animation:none}}
       `
       document.head.appendChild(tag)
@@ -20235,6 +20285,7 @@ window.__ModuleLoader__.load({
     /** 面板数据刷新间隔：未绑定对端与通道状态在面板打开时要能自己出现。 */
     const IM_VIEW_POLL_MS = 5000
     const IM_CHANNELS = ['qq', 'weixin', 'onebot']
+    const IM_TABS = ['channels', 'bindings', 'logs']
 
     /** 错误一律取 Error.message：api() 已经把服务端 message 塞进去了。 */
     function imErrorMessage(cause) {
@@ -20351,12 +20402,24 @@ window.__ModuleLoader__.load({
       return clipboard.writeText(text)
     }
 
+    function ImTabs({ active, onChange }) {
+      const t = useTranslate()
+      return h('div', { className: 'dt-im-tabs', role: 'tablist', 'aria-label': t('im.tabs.label') },
+        IM_TABS.map((tab) => h('button', {
+          key: tab, id: `dt-im-tab-${tab}`, type: 'button',
+          className: active === tab ? 'dt-im-tab-active' : '', role: 'tab',
+          'aria-selected': active === tab, 'aria-controls': `dt-im-panel-${tab}`,
+          'data-im-tab': tab, onClick: () => onChange(tab),
+        }, t(`im.tabs.${tab}`))))
+    }
+
     function PanelIm({ useSessions } = {}) {
       const state = useTavernStore()
       const t = useTranslate()
       const currentSession = useCurrentSessionId(useSessions)
       const sessionsById = useSessions((value) => value.byId)
       const [view, setView] = useState(null)
+      const [activeTab, setActiveTab] = useState('channels')
       const [error, setError] = useState('')
       const [notice, setNotice] = useState('')
       const [busy, setBusy] = useState('')
@@ -20672,8 +20735,31 @@ window.__ModuleLoader__.load({
         })
         : null
 
+      let tabContent
+      if (activeTab === 'bindings') {
+        tabContent = h(React.Fragment, null,
+          h(ImPeersBand, {
+            peers, pendingPeers, sharedSessions, currentSession, sessionLabel, busy,
+            onRebind: bindPeerToSession, onBindPending: bindPeerToSession, onUnbind: unbindPeer,
+          }),
+          h(ImSettingsBand, {
+            settings, allowDraft, busy, onAllowCommit: commitAllow,
+            onPatch: (patch) => { void saveSettings(patch) },
+            onAllowDraft: (scope, value) => setAllowDraft((current) => ({ ...current, [scope]: value })),
+          }))
+      } else if (activeTab === 'logs') {
+        tabContent = h(ImLogBand, { disabled: !available, onError: setError })
+      } else {
+        tabContent = h(React.Fragment, null,
+          h('section', { className: 'dt-settings-band dt-im-channels' },
+            h('h3', null, t('im.channels')),
+            h('div', { className: 'dt-im-cards' }, cards)),
+          bindCard,
+          h(ImOneBotBand, { endpoint, busy, disabled: !available, onCreate: createOneBot }))
+      }
+
       return h(React.Fragment, null,
-        h('section', { className: 'dt-settings-band' },
+        h('section', { className: 'dt-settings-band dt-im-intro' },
           h('h3', null, t('im.hint.title')),
           h('p', { className: 'dt-hint' }, t('im.hint')),
           view === null
@@ -20683,33 +20769,14 @@ window.__ModuleLoader__.load({
               : view.available === false
                 ? h('p', { className: 'dt-error' }, t('im.unavailable', { reasons: (view.reasons ?? []).join('; ') || '—' }))
                 : null),
-        h('section', { className: 'dt-settings-band' },
-          h('h3', null, t('im.channels')),
-          h('div', { className: 'dt-im-cards' }, cards)),
-        bindCard,
-        h(ImOneBotBand, { endpoint, busy, disabled: !available, onCreate: createOneBot }),
-        h(ImPeersBand, {
-          peers,
-          pendingPeers,
-          sharedSessions,
-          currentSession,
-          sessionLabel,
-          busy,
-          onRebind: bindPeerToSession,
-          onBindPending: bindPeerToSession,
-          onUnbind: unbindPeer,
-        }),
-        h(ImLogBand, { disabled: !available, onError: setError }),
-        h(ImSettingsBand, {
-          settings,
-          allowDraft,
-          busy,
-          onPatch: (patch) => { void saveSettings(patch) },
-          onAllowDraft: (scope, value) => setAllowDraft((current) => ({ ...current, [scope]: value })),
-          onAllowCommit: commitAllow,
-        }),
-        notice !== '' ? h('section', { className: 'dt-settings-band' }, h('p', { className: 'dt-im-notice' }, notice)) : null,
-        error !== '' ? h('section', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
+        h(ImTabs, { active: activeTab, onChange: setActiveTab }),
+        h('div', {
+          id: `dt-im-panel-${activeTab}`, className: 'dt-im-tabpanel', role: 'tabpanel',
+          'aria-labelledby': `dt-im-tab-${activeTab}`, 'data-im-tab-panel': activeTab,
+        },
+        notice !== '' ? h('section', { className: 'dt-settings-band dt-im-feedback', role: 'status' }, h('p', { className: 'dt-im-notice' }, notice)) : null,
+        error !== '' ? h('section', { className: 'dt-settings-band dt-im-feedback', role: 'alert' }, h('p', { className: 'dt-error' }, error)) : null,
+        tabContent))
     }
 
     /** 一张通道卡片：状态灯 + 一行原因 + 账号清单 + 通道动作。 */
@@ -20785,52 +20852,41 @@ window.__ModuleLoader__.load({
       const src = imQrSrc(bind)
       const url = typeof bind.url === 'string' ? bind.url : ''
       const phase = bind.phase
+      const showQr = phase === 'waiting' || phase === 'saving'
+      const hasQr = showQr && src !== ''
       return h('section', { className: 'dt-settings-band dt-im-bind', 'data-im-bind-phase': phase },
-        h('h3', null, t('im.bindTitle', { channel: t(`im.channel.${bind.channel}`) })),
-        phase === 'failed'
-          ? h('p', { className: 'dt-error' }, t('im.bindFailed', { reason: bind.reason || '—' }))
-          : null,
-        phase === 'verify'
-          ? h('div', { className: 'dt-im-verify' },
-            h('label', { className: 'dt-field' },
-              h('span', { className: 'dt-label' }, t('im.bindVerify')),
-              h('input', {
-                type: 'text',
-                inputMode: 'numeric',
-                value: verifyCode,
-                'aria-label': t('im.bindVerify'),
-                onChange: (event) => onVerifyCode(event.target.value),
-              })),
-            h(Button, {
-              size: 'sm',
-              variant: 'primary',
-              disabled: imBindBusy(busy) || verifyCode.trim() === '',
-              onClick: onSubmit,
-            }, busy === 'verify' ? t('im.bindSubmitting') : t('im.bindVerifySubmit')),
-            h('p', { className: 'dt-hint dt-hint-wide' }, bind.prompt || t('im.bindVerifyHint')))
-          : null,
-        phase === 'waiting' || phase === 'saving'
-          ? h('div', { className: 'dt-im-qr' },
-            src !== '' && qrFailedFor !== src
-              ? h('img', { src, alt: t('im.bindQrAlt'), onError: () => onQrFailed(src) })
+        h('div', { className: `dt-im-bind-layout${hasQr ? ' dt-im-bind-layout-with-qr' : ''}` },
+          h('div', { className: 'dt-im-bind-copy' },
+            h('h3', null, t('im.bindTitle', { channel: t(`im.channel.${bind.channel}`) })),
+            phase === 'failed' ? h('p', { className: 'dt-error' }, t('im.bindFailed', { reason: bind.reason || '—' })) : null,
+            phase === 'verify'
+              ? h('div', { className: 'dt-im-verify' },
+                h('label', { className: 'dt-field' },
+                  h('span', { className: 'dt-label' }, t('im.bindVerify')),
+                  h('input', {
+                    type: 'text', inputMode: 'numeric', value: verifyCode,
+                    'aria-label': t('im.bindVerify'), onChange: (event) => onVerifyCode(event.target.value),
+                  })),
+                h(Button, {
+                  size: 'sm', variant: 'primary', onClick: onSubmit,
+                  disabled: imBindBusy(busy) || verifyCode.trim() === '',
+                }, busy === 'verify' ? t('im.bindSubmitting') : t('im.bindVerifySubmit')),
+                h('p', { className: 'dt-hint dt-hint-wide' }, bind.prompt || t('im.bindVerifyHint')))
               : null,
-            src === ''
-              ? h('p', { className: 'dt-muted' }, t('im.bindQrPending'))
-              : h('a', {
-                className: 'dt-im-qr-link',
-                // 备用链接指向平台给的内容地址：图挂了还能点开它，而不是打开一张 data URL。
-                href: url !== '' ? url : src,
-                target: '_blank',
-                rel: 'noreferrer',
-              }, t('im.bindQrLink')),
-            phase === 'saving'
-              ? h('p', { className: 'dt-hint' }, t('im.bindSaving'))
-              : h('p', { className: 'dt-hint' }, t('im.bindWaiting')))
-          : null,
+            showQr ? h('p', { className: 'dt-hint' }, phase === 'saving' ? t('im.bindSaving') : t('im.bindWaiting')) : null),
+          showQr
+            ? h('div', { className: 'dt-im-qr' },
+              src !== '' && qrFailedFor !== src ? h('img', { src, alt: t('im.bindQrAlt'), onError: () => onQrFailed(src) }) : null,
+              src === ''
+                ? h('p', { className: 'dt-muted' }, t('im.bindQrPending'))
+                : h('a', {
+                  className: 'dt-im-qr-link',
+                  // 备用链接指向平台给的内容地址：图挂了还能点开它，而不是打开一张 data URL。
+                  href: url !== '' ? url : src, target: '_blank', rel: 'noreferrer',
+                }, t('im.bindQrLink')))
+            : null),
         h('div', { className: 'dt-im-bind-actions' },
-          phase === 'failed'
-            ? h(Button, { size: 'sm', variant: 'outline', disabled: imBindBusy(busy), onClick: onRetry }, t('im.bindRetry'))
-            : null,
+          phase === 'failed' ? h(Button, { size: 'sm', variant: 'outline', disabled: imBindBusy(busy), onClick: onRetry }, t('im.bindRetry')) : null,
           h(Button, { size: 'sm', variant: 'ghost', disabled: imBindBusy(busy), onClick: onCancel }, t('im.bindCancel'))))
     }
 
@@ -20863,7 +20919,7 @@ window.__ModuleLoader__.load({
           .then(() => setCopied(true))
           .catch((cause) => setCopyError(imErrorMessage(cause)))
       }
-      return h('section', { className: 'dt-settings-band' },
+      return h('section', { className: 'dt-settings-band dt-im-onebot' },
         h('h3', null, t('im.onebot.title')),
         h('p', { className: 'dt-hint' }, t('im.onebot.hint')),
         h('div', { className: 'dt-im-form' },
@@ -20945,15 +21001,16 @@ window.__ModuleLoader__.load({
       const t = useTranslate()
       const same = currentSession !== '' && peer.sessionId === currentSession
       return h('div', { className: 'dt-im-peer', 'data-im-peer': peer.key },
-        h('div', { className: 'dt-im-peer-head' },
-          h('code', { className: 'dt-im-peer-key' }, peer.key),
-          h(Pill, null, t(peer.scope === 'group' ? 'im.scope.group' : 'im.scope.private')),
-          shared ? h(Pill, { active: true }, t('im.peers.shared')) : null),
-        h('p', { className: 'dt-im-peer-chat' },
-          t('im.peers.session', { session: sessionLabel(peer.sessionId) }),
-          shared ? ` · ${t('im.peers.sharedHint')}` : ''),
-        peer.live === false ? h('p', { className: 'dt-hint dt-im-peer-closed' }, t('im.peers.closed')) : null,
-        h('p', { className: 'dt-hint' }, t('im.peers.boundAt', { at: new Date(peer.createdAt).toLocaleString() })),
+        h('div', { className: 'dt-im-peer-main' },
+          h('div', { className: 'dt-im-peer-head' },
+            h('code', { className: 'dt-im-peer-key' }, peer.key),
+            h(Pill, null, t(peer.scope === 'group' ? 'im.scope.group' : 'im.scope.private')),
+            shared ? h(Pill, { active: true }, t('im.peers.shared')) : null),
+          h('p', { className: 'dt-im-peer-chat' },
+            t('im.peers.session', { session: sessionLabel(peer.sessionId) }),
+            shared ? ` · ${t('im.peers.sharedHint')}` : ''),
+          peer.live === false ? h('p', { className: 'dt-hint dt-im-peer-closed' }, t('im.peers.closed')) : null,
+          h('p', { className: 'dt-hint' }, t('im.peers.boundAt', { at: new Date(peer.createdAt).toLocaleString() }))),
         h('div', { className: 'dt-im-peer-actions' },
           h(Button, {
             size: 'sm',
@@ -20981,15 +21038,16 @@ window.__ModuleLoader__.load({
         h('h3', null, t('im.settings.title')),
         h('p', { className: 'dt-hint' }, t('im.settings.hint')),
         h('div', { className: 'dt-im-settings' },
-          h('label', { className: 'dt-toggle' },
-            h('input', {
-              type: 'checkbox',
-              checked: settings.groupRequireMention === true,
-              disabled: busy === 'settings',
-              onChange: (event) => onPatch({ groupRequireMention: event.target.checked }),
-            }),
-            h('span', null, t('im.settings.groupRequireMention'))),
-          h('p', { className: 'dt-hint' }, t('im.settings.groupRequireMentionHint')),
+          h('div', { className: 'dt-im-mention' },
+            h('label', { className: 'dt-toggle' },
+              h('input', {
+                type: 'checkbox',
+                checked: settings.groupRequireMention === true,
+                disabled: busy === 'settings',
+                onChange: (event) => onPatch({ groupRequireMention: event.target.checked }),
+              }),
+              h('span', null, t('im.settings.groupRequireMention'))),
+            h('p', { className: 'dt-hint' }, t('im.settings.groupRequireMentionHint'))),
           h('div', { className: 'dt-im-allow' },
             h('label', { className: 'dt-field' },
               h('span', { className: 'dt-label' }, t('im.settings.privateAllow')),
@@ -21136,7 +21194,9 @@ window.__ModuleLoader__.load({
       }
       const visible = imLogFilter(entries, level)
       return h('section', { className: 'dt-settings-band dt-im-log' },
-        h('h3', null, t('im.log.title')),
+        h('div', { className: 'dt-im-log-head' },
+          h('h3', { className: 'dt-im-log-title' }, t('im.log.title')),
+          h('span', { className: 'dt-im-log-count' }, t('im.log.entries', { count: visible.length }))),
         h('div', { className: 'dt-im-log-toolbar' },
           h('div', { className: 'dt-im-log-levels' },
             h('span', { className: 'dt-label' }, t('im.log.level')),

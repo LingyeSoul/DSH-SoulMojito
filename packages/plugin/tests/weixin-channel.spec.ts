@@ -187,6 +187,20 @@ function fixedClock(at: number): WeixinClock {
   }
 }
 
+/** Fixed "now" that a test can jump forward without waiting for real timers. */
+function settableClock(at: number): { clock: WeixinClock; set(next: number): void } {
+  let now = at
+  return {
+    clock: {
+      now: () => now,
+      sleep: (ms, signal) => WEIXIN_REAL_CLOCK.sleep(ms, signal),
+    },
+    set(next) {
+      now = next
+    },
+  }
+}
+
 interface ManualClock {
   clock: WeixinClock
   /** 推进「现在」，并放行当前挂起的 sleep。 */
@@ -909,6 +923,73 @@ describe('weixin outbound', () => {
       })
       await expect(harness.channel.send(privateTarget(), [textPart('业务失败', 0, 1)]))
         .rejects.toMatchObject({ code: 'WEIXIN_SEND_FAILED', message: expect.stringContaining('ret/errcode -1') })
+    } finally {
+      await harness.stop()
+      await stub.close()
+    }
+  })
+
+  it('refuses a sixth separate send inside 30s instead of letting iLink throttle the bot', async () => {
+    const stub = await startStub(defaultReply)
+    const clock = settableClock(NOW)
+    const harness = channelHarness({ baseUrl: stub.baseUrl, clock: clock.clock })
+    try {
+      await harness.channel.start(harness.signal)
+      for (let index = 0; index < 5; index += 1) {
+        await harness.channel.send(privateTarget(), [textPart(`第${index + 1}条`, 0, 1)])
+      }
+      const sends = (): number => stub.requests.filter((request) => request.path === '/ilink/bot/sendmessage').length
+      expect(sends()).toBe(5)
+
+      await expect(harness.channel.send(privateTarget(), [textPart('第六条', 0, 1)]))
+        .rejects.toMatchObject({
+          code: 'WEIXIN_SEND_BUDGET_EXHAUSTED',
+          message: expect.stringContaining('within 30s'),
+        })
+      // The rejected part never reaches the server: the burst must not escalate.
+      expect(sends()).toBe(5)
+
+      clock.set(NOW + 30_000)
+      await expect(harness.channel.send(privateTarget(), [textPart('窗口后再发', 0, 1)]))
+        .resolves.toMatchObject({ parts: 1 })
+      expect(sends()).toBe(6)
+    } finally {
+      await harness.stop()
+      await stub.close()
+    }
+  })
+
+  it('classifies ret -2 as a throttle, stops sending during the cooldown and recovers after it', async () => {
+    const stub = await startStub(defaultReply)
+    stub.setHandler((request) => {
+      if (request.path === '/ilink/bot/getupdates') {
+        return { json: { ret: 0, msgs: [], get_updates_buf: '', longpolling_timeout_ms: 1_000 } }
+      }
+      if (request.path === '/ilink/bot/sendmessage') return { json: { ret: -2, errmsg: 'prepare failed' } }
+      return defaultReply(request)
+    })
+    const clock = settableClock(NOW)
+    const harness = channelHarness({ baseUrl: stub.baseUrl, clock: clock.clock })
+    const sends = (): number => stub.requests.filter((request) => request.path === '/ilink/bot/sendmessage').length
+    try {
+      await harness.channel.start(harness.signal)
+      await expect(harness.channel.send(privateTarget(), [textPart('被节流', 0, 1)]))
+        .rejects.toMatchObject({
+          code: 'WEIXIN_THROTTLED',
+          message: expect.stringContaining('prepare failed'),
+        })
+      expect(sends()).toBe(1)
+
+      // Cooling down: a second attempt fails locally, without touching iLink.
+      await expect(harness.channel.send(privateTarget(), [textPart('不要重试', 0, 1)]))
+        .rejects.toMatchObject({ code: 'WEIXIN_THROTTLED' })
+      expect(sends()).toBe(1)
+
+      clock.set(NOW + 5 * 60_000)
+      stub.setHandler(defaultReply)
+      await expect(harness.channel.send(privateTarget(), [textPart('冷却结束后', 0, 1)]))
+        .resolves.toMatchObject({ parts: 1 })
+      expect(sends()).toBe(2)
     } finally {
       await harness.stop()
       await stub.close()

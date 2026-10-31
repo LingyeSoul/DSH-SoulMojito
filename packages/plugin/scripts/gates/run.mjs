@@ -2456,12 +2456,12 @@ function checkImChannelInvariants(sample) {
   if (!panel.includes('sessionId')) {
     problems.push('the IM panel must bind a sender to a native sessionId; character/chatId bindings are the old AgentTavern provisioning path')
   }
-  // 决策 2026-10-31-im-native-session-binding：IM 只绑已存在的原生会话，入站消息经
-  // followup 插进该会话，回复由模型调用 im_send。代建/恢复 AgentTavern 会话的代码
-  // 不许回到 im/ 目录（否则又会变成「插件另开一个会话」）。
+  // 决策 2026-10-31-im-native-session-binding / im-steer-inbound：IM 只绑已存在的
+  // 原生会话，入站消息经 steer（running）或 followup（idle）插进该会话，回复由模型
+  // 调用 im_send。代建/恢复 AgentTavern 会话的代码不许回到 im/ 目录。
   const imSources = sample.sources.map(([, text]) => stripCodeComments(text)).join('\n')
   if (/\b(?:ensureImSession|bindImChat|ensureImAgent)\b/.test(imSources)) {
-    problems.push('im/ must not provision or resume AgentTavern sessions; bind an existing native session and insert with agent.followup')
+    problems.push('im/ must not provision or resume AgentTavern sessions; bind an existing native session and insert with agent.steer/agent.followup')
   }
   // 只认代码行：esbuild 会给每个入口留 `// path/to/file.ts` 注释，注释不算路由。
   const bundleCode = sample.bundle

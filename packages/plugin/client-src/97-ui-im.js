@@ -13,6 +13,7 @@
     /** 面板数据刷新间隔：未绑定对端与通道状态在面板打开时要能自己出现。 */
     const IM_VIEW_POLL_MS = 5000
     const IM_CHANNELS = ['qq', 'weixin', 'onebot']
+    const IM_TABS = ['channels', 'bindings', 'logs']
 
     /** 错误一律取 Error.message：api() 已经把服务端 message 塞进去了。 */
     function imErrorMessage(cause) {
@@ -129,12 +130,24 @@
       return clipboard.writeText(text)
     }
 
+    function ImTabs({ active, onChange }) {
+      const t = useTranslate()
+      return h('div', { className: 'dt-im-tabs', role: 'tablist', 'aria-label': t('im.tabs.label') },
+        IM_TABS.map((tab) => h('button', {
+          key: tab, id: `dt-im-tab-${tab}`, type: 'button',
+          className: active === tab ? 'dt-im-tab-active' : '', role: 'tab',
+          'aria-selected': active === tab, 'aria-controls': `dt-im-panel-${tab}`,
+          'data-im-tab': tab, onClick: () => onChange(tab),
+        }, t(`im.tabs.${tab}`))))
+    }
+
     function PanelIm({ useSessions } = {}) {
       const state = useTavernStore()
       const t = useTranslate()
       const currentSession = useCurrentSessionId(useSessions)
       const sessionsById = useSessions((value) => value.byId)
       const [view, setView] = useState(null)
+      const [activeTab, setActiveTab] = useState('channels')
       const [error, setError] = useState('')
       const [notice, setNotice] = useState('')
       const [busy, setBusy] = useState('')
@@ -450,8 +463,31 @@
         })
         : null
 
+      let tabContent
+      if (activeTab === 'bindings') {
+        tabContent = h(React.Fragment, null,
+          h(ImPeersBand, {
+            peers, pendingPeers, sharedSessions, currentSession, sessionLabel, busy,
+            onRebind: bindPeerToSession, onBindPending: bindPeerToSession, onUnbind: unbindPeer,
+          }),
+          h(ImSettingsBand, {
+            settings, allowDraft, busy, onAllowCommit: commitAllow,
+            onPatch: (patch) => { void saveSettings(patch) },
+            onAllowDraft: (scope, value) => setAllowDraft((current) => ({ ...current, [scope]: value })),
+          }))
+      } else if (activeTab === 'logs') {
+        tabContent = h(ImLogBand, { disabled: !available, onError: setError })
+      } else {
+        tabContent = h(React.Fragment, null,
+          h('section', { className: 'dt-settings-band dt-im-channels' },
+            h('h3', null, t('im.channels')),
+            h('div', { className: 'dt-im-cards' }, cards)),
+          bindCard,
+          h(ImOneBotBand, { endpoint, busy, disabled: !available, onCreate: createOneBot }))
+      }
+
       return h(React.Fragment, null,
-        h('section', { className: 'dt-settings-band' },
+        h('section', { className: 'dt-settings-band dt-im-intro' },
           h('h3', null, t('im.hint.title')),
           h('p', { className: 'dt-hint' }, t('im.hint')),
           view === null
@@ -461,33 +497,14 @@
               : view.available === false
                 ? h('p', { className: 'dt-error' }, t('im.unavailable', { reasons: (view.reasons ?? []).join('; ') || '—' }))
                 : null),
-        h('section', { className: 'dt-settings-band' },
-          h('h3', null, t('im.channels')),
-          h('div', { className: 'dt-im-cards' }, cards)),
-        bindCard,
-        h(ImOneBotBand, { endpoint, busy, disabled: !available, onCreate: createOneBot }),
-        h(ImPeersBand, {
-          peers,
-          pendingPeers,
-          sharedSessions,
-          currentSession,
-          sessionLabel,
-          busy,
-          onRebind: bindPeerToSession,
-          onBindPending: bindPeerToSession,
-          onUnbind: unbindPeer,
-        }),
-        h(ImLogBand, { disabled: !available, onError: setError }),
-        h(ImSettingsBand, {
-          settings,
-          allowDraft,
-          busy,
-          onPatch: (patch) => { void saveSettings(patch) },
-          onAllowDraft: (scope, value) => setAllowDraft((current) => ({ ...current, [scope]: value })),
-          onAllowCommit: commitAllow,
-        }),
-        notice !== '' ? h('section', { className: 'dt-settings-band' }, h('p', { className: 'dt-im-notice' }, notice)) : null,
-        error !== '' ? h('section', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
+        h(ImTabs, { active: activeTab, onChange: setActiveTab }),
+        h('div', {
+          id: `dt-im-panel-${activeTab}`, className: 'dt-im-tabpanel', role: 'tabpanel',
+          'aria-labelledby': `dt-im-tab-${activeTab}`, 'data-im-tab-panel': activeTab,
+        },
+        notice !== '' ? h('section', { className: 'dt-settings-band dt-im-feedback', role: 'status' }, h('p', { className: 'dt-im-notice' }, notice)) : null,
+        error !== '' ? h('section', { className: 'dt-settings-band dt-im-feedback', role: 'alert' }, h('p', { className: 'dt-error' }, error)) : null,
+        tabContent))
     }
 
     /** 一张通道卡片：状态灯 + 一行原因 + 账号清单 + 通道动作。 */
@@ -563,52 +580,41 @@
       const src = imQrSrc(bind)
       const url = typeof bind.url === 'string' ? bind.url : ''
       const phase = bind.phase
+      const showQr = phase === 'waiting' || phase === 'saving'
+      const hasQr = showQr && src !== ''
       return h('section', { className: 'dt-settings-band dt-im-bind', 'data-im-bind-phase': phase },
-        h('h3', null, t('im.bindTitle', { channel: t(`im.channel.${bind.channel}`) })),
-        phase === 'failed'
-          ? h('p', { className: 'dt-error' }, t('im.bindFailed', { reason: bind.reason || '—' }))
-          : null,
-        phase === 'verify'
-          ? h('div', { className: 'dt-im-verify' },
-            h('label', { className: 'dt-field' },
-              h('span', { className: 'dt-label' }, t('im.bindVerify')),
-              h('input', {
-                type: 'text',
-                inputMode: 'numeric',
-                value: verifyCode,
-                'aria-label': t('im.bindVerify'),
-                onChange: (event) => onVerifyCode(event.target.value),
-              })),
-            h(Button, {
-              size: 'sm',
-              variant: 'primary',
-              disabled: imBindBusy(busy) || verifyCode.trim() === '',
-              onClick: onSubmit,
-            }, busy === 'verify' ? t('im.bindSubmitting') : t('im.bindVerifySubmit')),
-            h('p', { className: 'dt-hint dt-hint-wide' }, bind.prompt || t('im.bindVerifyHint')))
-          : null,
-        phase === 'waiting' || phase === 'saving'
-          ? h('div', { className: 'dt-im-qr' },
-            src !== '' && qrFailedFor !== src
-              ? h('img', { src, alt: t('im.bindQrAlt'), onError: () => onQrFailed(src) })
+        h('div', { className: `dt-im-bind-layout${hasQr ? ' dt-im-bind-layout-with-qr' : ''}` },
+          h('div', { className: 'dt-im-bind-copy' },
+            h('h3', null, t('im.bindTitle', { channel: t(`im.channel.${bind.channel}`) })),
+            phase === 'failed' ? h('p', { className: 'dt-error' }, t('im.bindFailed', { reason: bind.reason || '—' })) : null,
+            phase === 'verify'
+              ? h('div', { className: 'dt-im-verify' },
+                h('label', { className: 'dt-field' },
+                  h('span', { className: 'dt-label' }, t('im.bindVerify')),
+                  h('input', {
+                    type: 'text', inputMode: 'numeric', value: verifyCode,
+                    'aria-label': t('im.bindVerify'), onChange: (event) => onVerifyCode(event.target.value),
+                  })),
+                h(Button, {
+                  size: 'sm', variant: 'primary', onClick: onSubmit,
+                  disabled: imBindBusy(busy) || verifyCode.trim() === '',
+                }, busy === 'verify' ? t('im.bindSubmitting') : t('im.bindVerifySubmit')),
+                h('p', { className: 'dt-hint dt-hint-wide' }, bind.prompt || t('im.bindVerifyHint')))
               : null,
-            src === ''
-              ? h('p', { className: 'dt-muted' }, t('im.bindQrPending'))
-              : h('a', {
-                className: 'dt-im-qr-link',
-                // 备用链接指向平台给的内容地址：图挂了还能点开它，而不是打开一张 data URL。
-                href: url !== '' ? url : src,
-                target: '_blank',
-                rel: 'noreferrer',
-              }, t('im.bindQrLink')),
-            phase === 'saving'
-              ? h('p', { className: 'dt-hint' }, t('im.bindSaving'))
-              : h('p', { className: 'dt-hint' }, t('im.bindWaiting')))
-          : null,
+            showQr ? h('p', { className: 'dt-hint' }, phase === 'saving' ? t('im.bindSaving') : t('im.bindWaiting')) : null),
+          showQr
+            ? h('div', { className: 'dt-im-qr' },
+              src !== '' && qrFailedFor !== src ? h('img', { src, alt: t('im.bindQrAlt'), onError: () => onQrFailed(src) }) : null,
+              src === ''
+                ? h('p', { className: 'dt-muted' }, t('im.bindQrPending'))
+                : h('a', {
+                  className: 'dt-im-qr-link',
+                  // 备用链接指向平台给的内容地址：图挂了还能点开它，而不是打开一张 data URL。
+                  href: url !== '' ? url : src, target: '_blank', rel: 'noreferrer',
+                }, t('im.bindQrLink')))
+            : null),
         h('div', { className: 'dt-im-bind-actions' },
-          phase === 'failed'
-            ? h(Button, { size: 'sm', variant: 'outline', disabled: imBindBusy(busy), onClick: onRetry }, t('im.bindRetry'))
-            : null,
+          phase === 'failed' ? h(Button, { size: 'sm', variant: 'outline', disabled: imBindBusy(busy), onClick: onRetry }, t('im.bindRetry')) : null,
           h(Button, { size: 'sm', variant: 'ghost', disabled: imBindBusy(busy), onClick: onCancel }, t('im.bindCancel'))))
     }
 
@@ -641,7 +647,7 @@
           .then(() => setCopied(true))
           .catch((cause) => setCopyError(imErrorMessage(cause)))
       }
-      return h('section', { className: 'dt-settings-band' },
+      return h('section', { className: 'dt-settings-band dt-im-onebot' },
         h('h3', null, t('im.onebot.title')),
         h('p', { className: 'dt-hint' }, t('im.onebot.hint')),
         h('div', { className: 'dt-im-form' },
@@ -723,15 +729,16 @@
       const t = useTranslate()
       const same = currentSession !== '' && peer.sessionId === currentSession
       return h('div', { className: 'dt-im-peer', 'data-im-peer': peer.key },
-        h('div', { className: 'dt-im-peer-head' },
-          h('code', { className: 'dt-im-peer-key' }, peer.key),
-          h(Pill, null, t(peer.scope === 'group' ? 'im.scope.group' : 'im.scope.private')),
-          shared ? h(Pill, { active: true }, t('im.peers.shared')) : null),
-        h('p', { className: 'dt-im-peer-chat' },
-          t('im.peers.session', { session: sessionLabel(peer.sessionId) }),
-          shared ? ` · ${t('im.peers.sharedHint')}` : ''),
-        peer.live === false ? h('p', { className: 'dt-hint dt-im-peer-closed' }, t('im.peers.closed')) : null,
-        h('p', { className: 'dt-hint' }, t('im.peers.boundAt', { at: new Date(peer.createdAt).toLocaleString() })),
+        h('div', { className: 'dt-im-peer-main' },
+          h('div', { className: 'dt-im-peer-head' },
+            h('code', { className: 'dt-im-peer-key' }, peer.key),
+            h(Pill, null, t(peer.scope === 'group' ? 'im.scope.group' : 'im.scope.private')),
+            shared ? h(Pill, { active: true }, t('im.peers.shared')) : null),
+          h('p', { className: 'dt-im-peer-chat' },
+            t('im.peers.session', { session: sessionLabel(peer.sessionId) }),
+            shared ? ` · ${t('im.peers.sharedHint')}` : ''),
+          peer.live === false ? h('p', { className: 'dt-hint dt-im-peer-closed' }, t('im.peers.closed')) : null,
+          h('p', { className: 'dt-hint' }, t('im.peers.boundAt', { at: new Date(peer.createdAt).toLocaleString() }))),
         h('div', { className: 'dt-im-peer-actions' },
           h(Button, {
             size: 'sm',
@@ -759,15 +766,16 @@
         h('h3', null, t('im.settings.title')),
         h('p', { className: 'dt-hint' }, t('im.settings.hint')),
         h('div', { className: 'dt-im-settings' },
-          h('label', { className: 'dt-toggle' },
-            h('input', {
-              type: 'checkbox',
-              checked: settings.groupRequireMention === true,
-              disabled: busy === 'settings',
-              onChange: (event) => onPatch({ groupRequireMention: event.target.checked }),
-            }),
-            h('span', null, t('im.settings.groupRequireMention'))),
-          h('p', { className: 'dt-hint' }, t('im.settings.groupRequireMentionHint')),
+          h('div', { className: 'dt-im-mention' },
+            h('label', { className: 'dt-toggle' },
+              h('input', {
+                type: 'checkbox',
+                checked: settings.groupRequireMention === true,
+                disabled: busy === 'settings',
+                onChange: (event) => onPatch({ groupRequireMention: event.target.checked }),
+              }),
+              h('span', null, t('im.settings.groupRequireMention'))),
+            h('p', { className: 'dt-hint' }, t('im.settings.groupRequireMentionHint'))),
           h('div', { className: 'dt-im-allow' },
             h('label', { className: 'dt-field' },
               h('span', { className: 'dt-label' }, t('im.settings.privateAllow')),

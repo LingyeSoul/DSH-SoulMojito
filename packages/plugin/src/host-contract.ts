@@ -96,6 +96,12 @@ export interface HostAgentLike {
   status?: unknown
   /** Inbox append used by IM and game wake; the host loop owns turn scheduling. */
   followup?(message: unknown): Promise<unknown> | unknown
+  /**
+   * Next-step interjection (the official UI's "steer"/插话发送). A running agent
+   * reads it at its next step boundary; an idle agent starts a turn with it.
+   * Optional on hosts that predate the seam.
+   */
+  steer?(message: unknown): void
   whenIdle?(): Promise<unknown>
   [key: string]: unknown
 }

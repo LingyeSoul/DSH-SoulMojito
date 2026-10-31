@@ -42,8 +42,8 @@ import { createImRouter, type ImRouter } from './router.js'
 import { imAccountIdOf } from './account-id.js'
 import { createImLog, IM_LOG_CAPACITY, wrapImLogger } from './log.js'
 import {
-  buildImFollowupMessage,
   inspectImSessionCapabilities,
+  insertImMessage,
   liveAgentOf,
   listLiveAgents,
   requireLiveAgent,
@@ -227,10 +227,11 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
     db,
     now: () => Date.now(),
     seenDedupe: (dedupeKey, now) => store.seenDedupe(dedupeKey, now),
-    followup: async (sessionId, message) => {
+    insert: async (sessionId, message) => {
       // 绑定的是原生会话：只投给活着的 agent，绝不创建/resume 会话。
       const agent = requireLiveAgent(agents, sessionId)
-      await agent.followup?.(buildImFollowupMessage(agent.session, message))
+      const mode = await insertImMessage(agent, message)
+      imLog.note('debug', `im insert: ${mode} into ${sessionId}`)
     },
     workspaceRoot: async () => (await prepareInternalWorkspace()).path,
     send: async (target, parts) => {

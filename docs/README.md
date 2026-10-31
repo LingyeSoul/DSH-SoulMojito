@@ -65,6 +65,9 @@
 - [`2026-10-30-weixin-channel.md`](../decisions/2026-10-30-weixin-channel.md) — 微信官方 iLink 通道（提案 0024 M4：六端点与鉴权头、游标先投递后落盘、`context_token` 按对端、`-14` 暂停一小时且暂停期不出站、扫码八状态与 `verify` 相位、`binded_redirect` 语义、`verify_code_blocked` 判死）
 - [`2026-10-31-im-reply-attribution-and-logs.md`](../decisions/2026-10-31-im-reply-attribution-and-logs.md) — IM 回复丢失根因：真实 `user/message` 不带 `turn`，改为按日志位置归轮；新增运行日志环形缓冲与面板日志带
 - [`2026-10-31-im-media-qq-install.md`](../decisions/2026-10-31-im-media-qq-install.md) — IM 媒体双向（微信 CDN 上传/下载解密、QQ 附件）、QQ 运行时一键安装、群聊四段被动重切、typing 缓存与解绑清理
+- [`2026-10-31-im-native-session-binding.md`](../decisions/2026-10-31-im-native-session-binding.md) — IM 绑定原生 DSH 会话：入站即插入、模型用 `im_send` 回复、IM 工具挂进每个 agent
+- [`2026-10-31-im-steer-inbound.md`](../decisions/2026-10-31-im-steer-inbound.md) — IM 入站「插话发送」：运行中的会话用 `agent.steer`，空闲用 `followup`
+- [`2026-10-31-weixin-send-throttle.md`](../decisions/2026-10-31-weixin-send-throttle.md) — 微信出站突发预算（5 条/30 秒）与 `ret=-2 prepare failed` 的 5 分钟冷却
 
 ### 宿主兼容与 DSH 版本适配
 

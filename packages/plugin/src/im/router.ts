@@ -76,10 +76,11 @@ export interface ImRouterDeps {
   /** true = 这条消息已经投递过（平台重连会补发同一条）。 */
   seenDedupe: (dedupeKey: string, now: number) => Promise<boolean>
   /**
-   * 把一条插件来源的消息立即插进绑定会话的 inbox。会话不在线时必须抛错
+   * 把一条插件来源的消息立即插进绑定会话的 inbox：运行中的会话用插话
+   * （`agent.steer`），空闲会话用 `followup`。会话不在线时必须抛错
    * （路由据此回 `IM_SESSION_NOT_LIVE`，不假装成功）。
    */
-  followup: (sessionId: string, message: ImAgentMessage) => Promise<void>
+  insert: (sessionId: string, message: ImAgentMessage) => Promise<void>
   send: (target: ImTarget, parts: readonly OutboundPart[]) => Promise<void>
   /**
    * 媒体文件的合法根（内部工作区）。给定时 `sendMedia` 拒绝根目录之外的文件：
@@ -201,8 +202,8 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
     )
     const messageId = `im-${randomUUID()}`
     try {
-      // 与小说驱动器同一种插入方式：插件来源消息 + followup，宿主 loop 自己排轮。
-      await deps.followup(binding.sessionId, {
+      // 插件来源消息投进宿主 inbox：运行中插话、空闲开新轮，宿主 loop 自己排轮。
+      await deps.insert(binding.sessionId, {
         id: messageId,
         text,
         summary: `IM ${message.channel}/${message.scope} message from ${alias}`,

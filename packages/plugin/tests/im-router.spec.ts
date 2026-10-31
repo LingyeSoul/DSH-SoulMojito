@@ -22,7 +22,7 @@ afterEach(async () => {
 
 interface Harness {
   router: ReturnType<typeof createImRouter>
-  followups: Array<{ sessionId: string; text: string; id: string; summary: string }>
+  inserts: Array<{ sessionId: string; text: string; id: string; summary: string }>
   sent: Array<{ peerId: string; texts: string[]; replyTo?: string }>
   sentKinds: string[][]
   sentMedia: Array<Array<{ kind: string; localPath?: string; url?: string }>>
@@ -32,10 +32,10 @@ interface Harness {
 }
 
 function harness(options: {
-  followup?: (sessionId: string, message: { id: string; text: string; summary: string }) => Promise<void>
+  insert?: (sessionId: string, message: { id: string; text: string; summary: string }) => Promise<void>
   workspaceRoot?: () => Promise<string>
 } = {}): Harness {
-  const followups: Harness['followups'] = []
+  const inserts: Harness['inserts'] = []
   const sent: Harness['sent'] = []
   const sentKinds: Harness['sentKinds'] = []
   const sentMedia: Harness['sentMedia'] = []
@@ -49,12 +49,12 @@ function harness(options: {
       seen.add(key)
       return false
     },
-    followup: async (sessionId, message) => {
-      if (options.followup !== undefined) {
-        await options.followup(sessionId, message)
+    insert: async (sessionId, message) => {
+      if (options.insert !== undefined) {
+        await options.insert(sessionId, message)
         return
       }
-      followups.push({ sessionId, text: message.text, id: message.id, summary: message.summary })
+      inserts.push({ sessionId, text: message.text, id: message.id, summary: message.summary })
     },
     ...(options.workspaceRoot === undefined ? {} : { workspaceRoot: options.workspaceRoot }),
     send: async (target, parts) => {
@@ -73,7 +73,7 @@ function harness(options: {
   })
   return {
     router,
-    followups,
+    inserts,
     sent,
     sentKinds,
     sentMedia,
@@ -128,8 +128,8 @@ describe('im router inbound', () => {
     await bindPeer()
     const h = harness()
     await h.router.inbound(inbound())
-    expect(h.followups).toHaveLength(1)
-    const delivered = h.followups[0]!
+    expect(h.inserts).toHaveLength(1)
+    const delivered = h.inserts[0]!
     expect(delivered.sessionId).toBe('session-a')
     expect(delivered.id).toMatch(/^im-/)
     // 头部给模型来源与回复目标；正文原样保留。
@@ -146,7 +146,7 @@ describe('im router inbound', () => {
     const h = harness()
     await h.router.inbound(inbound({ dedupeKey: 'qq:acct:m1' }))
     await h.router.inbound(inbound({ dedupeKey: 'qq:acct:m2' }))
-    expect(h.followups).toHaveLength(0)
+    expect(h.inserts).toHaveLength(0)
     expect(h.sent).toHaveLength(1)
     expect(h.sent[0]?.texts[0]).toBe(IM_UNBOUND_NOTICE)
     const pending = (await db.getState()).imPendingPeers?.[PEER_KEY]
@@ -189,19 +189,19 @@ describe('im router inbound', () => {
     await h.router.inbound(inbound(), { loadMedia })
     expect(loads).toBe(0)
     expect(h.sent).toHaveLength(0)
-    expect(h.followups).toHaveLength(0)
+    expect(h.inserts).toHaveLength(0)
 
     // 未绑定对端也不能触发下载：先记待办/回提示，媒体根本不需要物化。
     await allowAll()
     await h.router.inbound(inbound({ dedupeKey: 'qq:acct:unbound', media: [{ kind: 'image' }] }), { loadMedia })
     expect(loads).toBe(0)
     expect(h.sent).toHaveLength(1)
-    expect(h.followups).toHaveLength(0)
+    expect(h.inserts).toHaveLength(0)
 
     await bindPeer()
     await h.router.inbound(inbound({ dedupeKey: 'qq:acct:m2', media: [{ kind: 'image' }] }), { loadMedia })
     expect(loads).toBe(1)
-    expect(h.followups).toHaveLength(1)
+    expect(h.inserts).toHaveLength(1)
   })
 
   it('delivers the text when materializing media throws', async () => {
@@ -211,10 +211,10 @@ describe('im router inbound', () => {
     await h.router.inbound(inbound({ media: [{ kind: 'image' }] }), {
       loadMedia: async () => { throw new Error('the attachment host resolved to a private address') },
     })
-    expect(h.followups).toHaveLength(1)
-    expect(h.followups[0]?.text).toContain('在吗')
+    expect(h.inserts).toHaveLength(1)
+    expect(h.inserts[0]?.text).toContain('在吗')
     // 占位 ref 仍然让正文带上「有附件」这一事实。
-    expect(h.followups[0]?.text).toContain('附件')
+    expect(h.inserts[0]?.text).toContain('附件')
   })
 
   it('ignores a duplicate platform message', async () => {
@@ -223,14 +223,14 @@ describe('im router inbound', () => {
     const h = harness()
     await h.router.inbound(inbound({ dedupeKey: 'same' }))
     await h.router.inbound(inbound({ dedupeKey: 'same' }))
-    expect(h.followups).toHaveLength(1)
+    expect(h.inserts).toHaveLength(1)
     expect(h.sent).toHaveLength(0)
   })
 
   it('tells the peer when the bound session is not open', async () => {
     await allowAll()
     await bindPeer()
-    const h = harness({ followup: async () => { throw new ImSessionNotLiveError('session-a') } })
+    const h = harness({ insert: async () => { throw new ImSessionNotLiveError('session-a') } })
     await h.router.inbound(inbound())
     expect(h.sent).toHaveLength(1)
     expect(h.sent[0]?.texts[0]).toBe(IM_SESSION_NOT_LIVE)
@@ -239,7 +239,7 @@ describe('im router inbound', () => {
   it('uses a generic retry notice for other insertion failures', async () => {
     await allowAll()
     await bindPeer()
-    const h = harness({ followup: async () => { throw new Error('inbox append failed') } })
+    const h = harness({ insert: async () => { throw new Error('inbox append failed') } })
     await h.router.inbound(inbound())
     expect(h.sent).toHaveLength(1)
     expect(h.sent[0]?.texts[0]).toBe(IM_DELIVERY_FAILED)
@@ -250,7 +250,7 @@ describe('im router inbound', () => {
     await bindPeer()
     const h = harness()
     await h.router.inbound(inbound({ text: '   ' }))
-    expect(h.followups).toHaveLength(0)
+    expect(h.inserts).toHaveLength(0)
     expect(h.sent).toHaveLength(0)
   })
 })
@@ -320,7 +320,7 @@ describe('im router sendText', () => {
       db,
       now: () => 1_000,
       seenDedupe: async () => false,
-      followup: async () => {},
+      insert: async () => {},
       send: async () => { throw new Error('socket closed') },
     })
     await expect(failing.sendText(PEER_KEY, 'hi'))

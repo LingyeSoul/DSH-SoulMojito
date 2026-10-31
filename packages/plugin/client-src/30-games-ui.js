@@ -61,6 +61,27 @@
       h('circle', { cx: 8, cy: 4.9, r: 0.8, fill: 'currentColor', stroke: 'none' }))
     }
 
+    // IM navigation icon: overlapping conversation bubbles stay legible at 16px
+    // and avoid overloading the composer's single send arrow.
+    function IconMessagesOutline16({ size, className }) {
+      const dimension = size ?? 16
+      return h('svg', {
+        width: dimension,
+        height: dimension,
+        className,
+        viewBox: '0 0 16 16',
+        fill: 'none',
+        xmlns: 'http://www.w3.org/2000/svg',
+        'aria-hidden': 'true',
+        strokeWidth: 1,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+      },
+      h('path', { d: 'M9.5 3.1H13a1.5 1.5 0 0 1 1.5 1.5v4.2a1.5 1.5 0 0 1-1.5 1.5h-1.2v2.4l-2.7-2.4H9.5', stroke: 'currentColor' }),
+      h('path', { d: 'M8.8 5.2a1.5 1.5 0 0 0-1.5-1.5H3a1.5 1.5 0 0 0-1.5 1.5v4.2a1.5 1.5 0 0 0 1.5 1.5h.7v2.5l2.8-2.5h1.8a1.5 1.5 0 0 0 1.5-1.5V7.1', stroke: 'currentColor' }),
+      h('path', { d: 'M4 6.4h3.2M4 8.3h2.1', stroke: 'currentColor' }))
+    }
+
     function IconExpand16({ size = 16, className }) {
       return h('svg', {
         width: size,

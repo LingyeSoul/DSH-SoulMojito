@@ -108,7 +108,8 @@ session，消息插入后用 IM 工具回复（决策 2026-10-31-im-native-sessi
 ### 2.4 本仓库已有的「插件 → Agent」投递链路
 
 写卡工作台交接后用户看到的那条消息，本质上就是宿主 session 里的一条 `user/message`。
-插件侧要复刻它，现成的 seam 就是 `agent.followup(message)`：
+插件侧要复刻它，现成的 seam 是 `agent.followup(message)`（空闲开新轮）与
+`agent.steer(message)`（运行中插话，对应官方 UI 的「插话发送」）：
 
 | 位置 | 用途 | 消息形状 |
 |---|---|---|
@@ -132,7 +133,7 @@ OneBot WS/HTTP ─┘                                 │
                                                     │
                                peer → 原生会话绑定（sessionId）
                                                     │
-                            agent.followup(plugin relay message)
+                    agent.steer (running) / followup (idle)
                                                     │
                               宿主 AgentLoop（会话自己的 preset）
                                                     │
@@ -206,8 +207,10 @@ interface ImPeerBinding {
 下绑到**当前会话**（面板经宿主 `useSessions` 取当前 session id）。没有自动绑定模式：
 不替用户新建会话，也不猜目标。
 
-**投递**：通过去重与访问控制后，路由立即调用 `agent.followup(plugin relay message)`
-——与 agent-novel 驱动器同一种机制，不排队、不 debounce：
+**投递**：通过去重与访问控制后，路由立即把 plugin relay message 插进绑定会话的
+inbox：运行中的 agent 用 `agent.steer`（插话，下一个 step 读到），空闲的用
+`agent.followup`（开新轮）。不排队、不 debounce（决策
+[2026-10-31-im-steer-inbound](../../decisions/2026-10-31-im-steer-inbound.md)）：
 
 ```ts
 {
@@ -262,7 +265,7 @@ session meta 与 preset 组合）留作后续，不能用「插件代建会话�
 
 ### 3.5 生成循环：由绑定会话自己跑
 
-- **入站即插入**：`agent.followup(plugin relay message)`，不 `await whenIdle()`、
+- **入站即插入**：运行中用 `agent.steer`、空闲用 `agent.followup`，不 `await whenIdle()`、
   不去抖、不合并、不等上一轮结束（宿主 inbox 自己排队）。消息来源是
   `plugin:dsh-soulmojito` + `form: 'relay'`，与本地用户输入可区分。
 - **回复由模型发**：插件不在 `turn/end` 抓正文、不自动发送；模型看到 IM 消息后
@@ -315,8 +318,12 @@ im/peers` 会对 live 空闲会话自动 `recompose` 到该 preset（未打开/�
 
 ### 3.8 立即投递、并发与节流
 
-- **立即投递是硬不变量**：收到即 `followup`，没有 debounce、没有 batch、没有「等人说完」。
+- **立即投递是硬不变量**：收到即插进 inbox（running `steer` / idle `followup`），没有
+  debounce、没有 batch、没有「等人说完」。
 - **串行由宿主负责**：同会话多轮由 AgentLoop 排队；插件不另建队列。
+- **平台突发预算**：微信通道按账号 30 秒最多 5 条 `sendmessage`；`ret=-2` 进入 5 分钟
+  冷却，期间不发请求（决策
+  [2026-10-31-weixin-send-throttle](../../decisions/2026-10-31-weixin-send-throttle.md)）。
 - **节流只防刷屏**：每 peer 令牌桶（默认突发 5、稳态 1 条/秒），超限回一条提示并记数，
   不缓存积压。
 - **幂等**：`dedupeKey` 命中即丢弃，不回话。
@@ -412,7 +419,7 @@ API 破一次隔离纪律，代价大于收益。
 | 依赖 | 现状 | 处置 |
 |---|---|---|
 | `webServer.registerUpgrade({path, handler})` | 宿主 `dsh-host-webserver` 已提供（`lib/types/index.d.ts:41-46`），本插件未声明 | `host-contract.ts` 加可选 `registerUpgrade?`；缺失时 OneBot 只开 HTTP POST |
-| `agents.create/resume` + `agent.followup` + `whenIdle` | `HostAgentsService` 只声明了 `get/list/create?`，`HostAgentLike` 未声明 `followup` | 扩展为可选成员并集中探测；缺失即 IM 不可用（面板说明原因） |
+| `agents.create/resume` + `agent.followup/steer` + `whenIdle` | `HostAgentsService` 只声明了 `get/list/create?`，`HostAgentLike` 未声明 `followup`/`steer` | 扩展为可选成员并集中探测；两者都缺失即 IM 不可用（面板说明原因） |
 | `agentPresets.mount` | `dsh-adapter.ts` 已用 | 复用，不新增 seam |
 | `ws` | 插件当前零运行时依赖 | 不再内联：OneBot 用自研最小服务端（`im/onebot/ws.ts`），QQ 客户端由外挂的官方 SDK 自带 |
 | `@tencent-connect/qqbot-nodejs` | 官方 SDK，纯 ESM；带 `ws` 与可选原生依赖 | **外挂安装**（MIT）：装在 `$DSH_HOME/<tavern>/im/runtime/`，运行期 `import()`；不进产物、不进 dependencies |
@@ -481,7 +488,7 @@ gate 同步更新。
 | 2 | 唯一事实来源 | 凭据 = `im/secrets/*`；绑定 = `state.imPeers`（值只有原生 `sessionId`）；未绑定待办 = `state.imPendingPeers`；会话/聊天事实 = 宿主 session log 与 `state.sessionBindings`；回复 = 模型调用 `im_send` |
 | 3 | 持久态及理由 | 凭据（重启重连）、游标（不重收历史）、context token（微信回复必需）、去重键（防重复投喂）、peer→session 绑定（重启保持同一会话） |
 | 4 | 临时态 | 连接、扫码相位、令牌桶、未绑定提示抑制窗口——重启即失；绑定与会话由用户与宿主恢复 |
-| 5 | 外部依赖 | `webServer.registerUpgrade`（可选）、`agents.get/list` 与 `agent.followup`（可选，缺失即 IM 投递不可用）、`agent.ctx.tools.register`（工具挂载）、`api.bot.qq.com`、`ilinkai.weixin.qq.com`、上游 OneBot、`ws` |
+| 5 | 外部依赖 | `webServer.registerUpgrade`（可选）、`agents.get/list` 与 `agent.steer/followup`（可选，两者都缺失时 IM 投递不可用）、`agent.ctx.tools.register`（工具挂载）、`api.bot.qq.com`、`ilinkai.weixin.qq.com`、上游 OneBot、`ws` |
 | 6 | 注册入口 | `apply()` 里创建 IM 运行时与 `agent/created`/`agent/status` 工具挂载；`webServer.register` / `registerUpgrade`；面板分区 |
 | 7 | 删除路径 | 见 §4.5；disposer 覆盖 socket、轮询、upgrade、定时器、live agent 句柄 |
 | 8 | 兼容对象 | 旧装 `tavern/` 数据根、旧 `character/chatId` 绑定（归一化为 `sessionId`）、无 `registerUpgrade` 的宿主（只开 HTTP POST）、无 `agents.get` 的宿主（IM 整体不可用并说明）、`pnpm run check` 基线 |
@@ -494,7 +501,7 @@ gate 同步更新。
 | 里程碑 | 内容 | 出口条件 |
 |---|---|---|
 | **M0 契约与骨架** | `ImChannel`/`ImInbound`、`ImRouter` 骨架、`projectImText`、凭据与绑定存储、面板占位、`registerUpgrade` 与 `agents.*` 探测、`im-channels` gate | 假通道 + 假 Agent 能跑通「入站→绑定→投递→回复」，`pnpm run check` 绿 |
-| **M1 原生会话绑定 + IM 工具** | `sessionId` 绑定、未绑定对端待办、`agent.followup(plugin relay message)` 立即插入、`im/agent-mount.ts` 把 `im_identity`/`im_channels`/`im_send` 挂进每个 agent 域 | 绑定到原生会话后收到消息立即插入；模型用 im_send 回复；工具身份不可伪造 |
+| **M1 原生会话绑定 + IM 工具** | `sessionId` 绑定、未绑定对端待办、`agent.steer`/`agent.followup` 立即插入、`im/agent-mount.ts` 把 `im_identity`/`im_channels`/`im_send` 挂进每个 agent 域 | 绑定到原生会话后收到消息立即插入；模型用 im_send 回复；工具身份不可伪造 |
 | **M2 OneBot 11** | 反向 WS（Universal）+ HTTP POST + 出站 API、token 鉴权、单聊/群 @、去重 | 用户自备实现连入，私聊与群 @ 双通 |
 | **M3 QQ** | 扫码绑定、网关接入、被动回复限流、Markdown 分块、私聊流式、群 @ 门控、自动绑定 | 扫码后私聊/群聊双通，超长与超次回复正确降级 |
 | **M4 微信** | 扫码（含验证码）、长轮询与游标、context token、typing、markdown 过滤、-14 暂停 | 扫码后私聊双通，连续多轮不丢上下文 |
@@ -504,8 +511,8 @@ gate 同步更新。
 
 | 测试 | 形态 | 断言 |
 |---|---|---|
-| `im-session-host.spec.ts` | 假 agents 注册表 | 缺 get/list 的能力原因；活 agent 查找与「会话未打开」结构化错误；followup 消息的 v4/v0 source 形状 |
-| `im-router.spec.ts` | 真 store + 假通道/假 Agent（记录 followup） | 入站立即插入绑定会话、无 debounce；未绑定对端进待办并回提示；媒体物化排在访问控制之后 |
+| `im-session-host.spec.ts` | 假 agents 注册表 | 缺 get/list 的能力原因；活 agent 查找与「会话未打开」结构化错误；inbox 消息的 v4/v0 source 形状；running→steer、idle→followup、缺 steer→followup |
+| `im-router.spec.ts` | 真 store + 假通道/假 Agent（记录 inbox 插入） | 入站立即插入绑定会话、无 debounce；未绑定对端进待办并回提示；媒体物化排在访问控制之后 |
 | `im-tools.spec.ts` | 真工具面 | `im_send` 默认只能发当前 peer；跨 peer 关闭时拒绝；身份不可由参数伪造 |
 | `onebot-protocol.spec.ts` | 真 `ws` 服务端与客户端环回 | universal 握手头、`post_type` 解析、`echo` 配对、错误 token 401 |
 | `onebot-webhook.spec.ts` | 真 HTTP 环回 | 事件接收、快速操作 `reply`、超大 body 拒绝 |
@@ -528,7 +535,7 @@ gate 同步更新。
    代码，也不需要 esbuild 的 external/垫片。
 3. **被动回复窗口**：QQ `msg_id` 有时效与条数限制，长回复第 5 条起必须降级主动推送。
 4. **微信文档自述不完整**：只做「文档写了的」，灰度 + 可观测，不猜字段。
-5. **宿主 seam 漂移**：`registerUpgrade`、`agents.followup` 都是可选 seam，探测 + 失败
+5. **宿主 seam 漂移**：`registerUpgrade`、`agents.steer/followup` 都是可选 seam，探测 + 失败
    关闭，OneBot 保留 HTTP POST 兜底。
 6. **群消息密度**：群里多人闲聊会持续触发生成 → @ 门控（默认开、可关）+ 令牌桶 +
    面板可见计数；但**不做攒批**（与「立即投递」互斥）。

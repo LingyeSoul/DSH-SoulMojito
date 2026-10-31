@@ -21,6 +21,7 @@ const logsSource = readFileSync(join(sourceDir, '97b-ui-im-logs.js'), 'utf8')
 /** 分片在同一 factory 作用域里按清单顺序拼接：vm 里也照这个顺序拼。 */
 const imPanelSource = `${imSource}\n${logsSource}`
 const coreSource = readFileSync(join(sourceDir, '90-panels-core.js'), 'utf8')
+const iconSource = readFileSync(join(sourceDir, '30-games-ui.js'), 'utf8')
 const stylesSource = readFileSync(join(sourceDir, '95-ui-styles.js'), 'utf8')
 const zh = readFileSync(join(sourceDir, '41-i18n-zh.js'), 'utf8')
 const en = readFileSync(join(sourceDir, '40-i18n-en.js'), 'utf8')
@@ -33,6 +34,10 @@ const IM_I18N_KEYS = [
   'im.hint',
   'im.disabled',
   'im.unavailable',
+  'im.tabs.label',
+  'im.tabs.channels',
+  'im.tabs.bindings',
+  'im.tabs.logs',
   'im.channels',
   'im.channel.qq',
   'im.channel.weixin',
@@ -114,6 +119,7 @@ const IM_I18N_KEYS = [
   'im.log.clear',
   'im.log.level',
   'im.log.levelAll',
+  'im.log.entries',
   'im.log.installing',
   'im.qqInstall',
   'im.qqInstallDone',
@@ -165,7 +171,7 @@ type PanelComponents = Record<string, (props?: Record<string, unknown>) => unkno
  * 元素树记成普通对象。目的是让组件体真正跑一遍——拼错的标识符、写错的分支、
  * 未定义的 t 键都会在这里炸，而不是等用户打开面板。
  */
-function createPanelRender(options: { characters?: string[]; chatLists?: Record<string, string[]> }): PanelComponents {
+function createPanelRender(options: { characters?: string[]; chatLists?: Record<string, string[]>; initialTab?: string }): PanelComponents {
   const store = {
     bootstrap: { characters: options.characters ?? [], state: { sessionBindings: {} } },
     chatLists: options.chatLists ?? {},
@@ -174,7 +180,10 @@ function createPanelRender(options: { characters?: string[]; chatLists?: Record<
   const context = vm.createContext({
     React: { Fragment: 'Fragment' },
     h: (type: unknown, props: Record<string, unknown> | null, ...children: unknown[]): RenderNode => ({ type, props: props ?? {}, children }),
-    useState: (init: unknown) => [typeof init === 'function' ? (init as () => unknown)() : init, () => {}],
+    useState: (init: unknown) => {
+      const initial = typeof init === 'function' ? (init as () => unknown)() : init
+      return [options.initialTab !== undefined && initial === 'channels' ? options.initialTab : initial, () => {}]
+    },
     useEffect: () => {},
     useRef: (init: unknown) => ({ current: init }),
     useTranslate: () => (key: string, params?: Record<string, unknown>) => (
@@ -199,7 +208,7 @@ function createPanelRender(options: { characters?: string[]; chatLists?: Record<
   })
   vm.runInContext(
     `${imPanelSource}
-;globalThis.__imRender = { PanelIm, ImChannelCard, ImBindPanel, ImPeerRow, ImPeersBand, ImSettingsBand, ImOneBotBand, ImLogBand, ImLogRows }`,
+;globalThis.__imRender = { PanelIm, ImTabs, ImChannelCard, ImBindPanel, ImPeerRow, ImPeersBand, ImSettingsBand, ImOneBotBand, ImLogBand, ImLogRows }`,
     context,
     { filename: '97-ui-im.js' },
   )
@@ -226,7 +235,7 @@ function collectNode(tree: unknown): { texts: string[]; attrs: string[]; classNa
     types.push(typeof entry.type === 'function' ? entry.type.name : entry.type)
     if (typeof entry.props.className === 'string') classNames.push(entry.props.className)
     for (const [key, value] of Object.entries(entry.props)) {
-      if (key.startsWith('data-im') || key === 'src' || key === 'href' || key === 'disabled' || key === 'data-tone') {
+      if (key.startsWith('data-im') || key === 'src' || key === 'href' || key === 'disabled' || key === 'data-tone' || key === 'role' || key === 'aria-selected' || key === 'aria-controls') {
         attrs.push(`${key}=${String(value)}`)
       }
     }
@@ -257,6 +266,22 @@ function findButtons(tree: unknown): Array<{ label: string; props: Record<string
   return found
 }
 
+function findTabButtons(tree: unknown): RenderNode[] {
+  const found: RenderNode[] = []
+  const visit = (node: unknown): void => {
+    if (node === null || node === undefined || typeof node === 'boolean' || typeof node === 'string' || typeof node === 'number') return
+    if (Array.isArray(node)) {
+      for (const child of node) visit(child)
+      return
+    }
+    const entry = node as RenderNode
+    if (entry.type === 'button' && entry.props.role === 'tab') found.push(entry)
+    for (const child of entry.children) visit(child)
+  }
+  visit(tree)
+  return found
+}
+
 function definitionCount(source: string, key: string): number {
   return source.split(`'${key}':`).length - 1
 }
@@ -280,7 +305,8 @@ describe('IM channels panel (client-src source check)', () => {
     const scriptsAt = coreSource.indexOf("{ id: 'scripts',")
     expect(imAt).toBeGreaterThan(presetsAt)
     expect(imAt).toBeLessThan(scriptsAt)
-    expect(coreSource).toContain("{ id: 'im', group: 'system', icon: IconSendOutline16, label: (t) => t('panel.section.im'), component: (host) => h(PanelIm, { useSessions: host.useSessions }) }")
+    expect(coreSource).toContain("{ id: 'im', group: 'system', icon: IconMessagesOutline16, label: (t) => t('panel.section.im'), component: (host) => h(PanelIm, { useSessions: host.useSessions }) }")
+    expect(iconSource).toContain('function IconMessagesOutline16({ size, className })')
   })
 
   it('carries every panel locale key once in each table', () => {
@@ -478,6 +504,11 @@ describe('IM channels panel (client-src source check)', () => {
     expect(rules).toContain('var(--dsw-alias-label-tertiary)')
     expect(rules).toContain('.dt-im-light-error{background:var(--dsw-alias-state-error-primary)')
     expect(rules).toContain('.dt-im-allow{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))')
+    expect(rules).toContain('.dt-im-tabs{display:flex')
+    expect(rules).toContain('.dt-im-bind-layout{display:grid')
+    expect(rules).toContain('.dt-im-peer{display:grid')
+    expect(rules).toContain('.dt-im-log-head{display:flex')
+    expect(rules).toContain('.dt-im-log-row{display:grid')
     // 运行日志带只复用既有 token：列表滚动、级别徽标与正文折行都在同一套色板里。
     expect(rules).toContain('.dt-im-log-list{display:flex')
     expect(rules).toContain('.dt-im-log-badge-error{color:var(--dsw-alias-state-error-primary)}')
@@ -570,22 +601,57 @@ describe('IM channels panel (client-src source check)', () => {
     expect(label('')).toBe('')
   })
 
-  it('renders the panel shell with all three channel cards, every band and the runtime log (render smoke)', () => {
+  it('renders only channel setup in the default tab (render smoke)', () => {
     const components = createPanelRender({ characters: ['Alice'], chatLists: { Alice: ['one.jsonl'] } })
     const useSessions = (selector: (value: { ids: string[]; byId: Record<string, unknown>; phase: string }) => unknown) => selector({ ids: [], byId: {}, phase: 'ready' })
     const tree = collectNode(components.PanelIm({ useSessions }))
     expect(tree.texts).toContain('nav.loading')
     expect(tree.texts).toContain('im.hint.title')
+    expect(tree.types).toContain('ImTabs')
     expect(tree.texts).toContain('im.channels')
     expect(tree.types.filter((type) => type === 'ImChannelCard')).toHaveLength(3)
-    // 三个数据带是函数组件，渲染冒烟只验挂点；带内结构由下面几条用例逐个执行。
     expect(tree.types).toContain('ImOneBotBand')
-    expect(tree.types).toContain('ImPeersBand')
-    expect(tree.types).toContain('ImSettingsBand')
-    // 运行日志带挂在绑定表之后：诊断就在它诊断的东西旁边，且不打断配置流程。
-    expect(tree.types).toContain('ImLogBand')
-    const order = tree.types.filter((type) => type === 'ImPeersBand' || type === 'ImLogBand' || type === 'ImSettingsBand')
-    expect(order).toEqual(['ImPeersBand', 'ImLogBand', 'ImSettingsBand'])
+    expect(tree.types).not.toContain('ImPeersBand')
+    expect(tree.types).not.toContain('ImSettingsBand')
+    expect(tree.types).not.toContain('ImLogBand')
+    expect(tree.attrs).toContain('data-im-tab-panel=channels')
+  })
+
+  it('isolates bindings and logs in their own tab panels (render smoke)', () => {
+    const useSessions = (selector: (value: { ids: string[]; byId: Record<string, unknown>; phase: string }) => unknown) => selector({ ids: [], byId: {}, phase: 'ready' })
+    const bindings = collectNode(createPanelRender({ initialTab: 'bindings' }).PanelIm({ useSessions }))
+    expect(bindings.types).toContain('ImPeersBand')
+    expect(bindings.types).toContain('ImSettingsBand')
+    expect(bindings.types).not.toContain('ImChannelCard')
+    expect(bindings.types).not.toContain('ImOneBotBand')
+    expect(bindings.types).not.toContain('ImLogBand')
+    expect(bindings.attrs).toContain('data-im-tab-panel=bindings')
+
+    const logs = collectNode(createPanelRender({ initialTab: 'logs' }).PanelIm({ useSessions }))
+    expect(logs.types).toContain('ImLogBand')
+    expect(logs.types).not.toContain('ImChannelCard')
+    expect(logs.types).not.toContain('ImOneBotBand')
+    expect(logs.types).not.toContain('ImPeersBand')
+    expect(logs.types).not.toContain('ImSettingsBand')
+    expect(logs.attrs).toContain('data-im-tab-panel=logs')
+  })
+
+  it('emits the selected tab from the accessible tab navigation (render smoke)', () => {
+    const components = createPanelRender({})
+    let selected = ''
+    const tree = components.ImTabs({ active: 'bindings', onChange: (tab: string) => { selected = tab } }) as RenderNode
+    const tabs = findTabButtons(tree)
+    const collected = collectNode(tree)
+    expect(collected.texts).toContain('im.tabs.channels')
+    expect(collected.texts).toContain('im.tabs.bindings')
+    expect(collected.texts).toContain('im.tabs.logs')
+    expect(tabs.map((tab) => tab.props['data-im-tab'])).toEqual(['channels', 'bindings', 'logs'])
+    expect(tabs.map((tab) => tab.props['aria-selected'])).toEqual([false, true, false])
+    expect(tabs.every((tab) => tab.props.type === 'button' && typeof tab.props['aria-controls'] === 'string')).toBe(true)
+    const logs = tabs.find((tab) => tab.props['data-im-tab'] === 'logs')
+    expect(logs).toBeDefined()
+    ;(logs?.props.onClick as () => void)()
+    expect(selected).toBe('logs')
   })
 
   it('renders channel state, the install button and every bind phase (render smoke)', () => {
@@ -613,6 +679,9 @@ describe('IM channels panel (client-src source check)', () => {
     // 缺包时扫码按钮必须禁用（安装按钮仍可点）。
     expect(card.attrs).toContain('disabled=true')
 
+    const onebot = collectNode(components.ImOneBotBand({ endpoint: '', busy: '', disabled: false, onCreate: () => {} }))
+    expect(onebot.classNames).toContain('dt-settings-band dt-im-onebot')
+
     const verify = collectNode(components.ImBindPanel({
       bind: { channel: 'weixin', phase: 'verify', prompt: 'digits please' },
       qrFailedFor: '', verifyCode: '', busy: '', onQrFailed: () => {}, onVerifyCode: () => {}, onSubmit: () => {}, onRetry: () => {}, onCancel: () => {},
@@ -629,6 +698,8 @@ describe('IM channels panel (client-src source check)', () => {
     expect(waiting.attrs).toContain('src=https://example.test/qr.png')
     expect(waiting.attrs).toContain('href=https://example.test/qr.png')
     expect(waiting.texts).toContain('im.bindQrLink')
+    expect(waiting.classNames).toContain('dt-im-bind-layout dt-im-bind-layout-with-qr')
+    expect(waiting.classNames).toContain('dt-im-bind-copy')
 
     // 平台给内容串：用服务端渲染好的 SVG（实机破图就是这条没走通）。
     const rendered = collectNode(components.ImBindPanel({
@@ -679,6 +750,10 @@ describe('IM channels panel (client-src source check)', () => {
     expect(band.texts).toContain('im.log.empty')
     expect(band.texts).toContain('im.log.refresh')
     expect(band.texts).toContain('im.log.clear')
+    expect(band.texts).toContain('im.log.entries(count=0)')
+    expect(band.classNames).toContain('dt-im-log-head')
+    expect(band.classNames).toContain('dt-im-log-title')
+    expect(band.classNames).toContain('dt-im-log-count')
     // 空列表不渲染行容器，只有工具栏与空态。
     expect(band.types).not.toContain('ImLogRows')
     expect(band.types.filter((type) => type === 'button')).toHaveLength(5)
@@ -702,6 +777,7 @@ describe('IM channels panel (client-src source check)', () => {
     expect(row.texts).toContain('im.peers.session(session=Alice · ten)')
     expect(row.texts).toContain('im.peers.closed')
     expect(row.texts).toContain('im.peers.rebindCurrent')
+    expect(row.classNames).toContain('dt-im-peer-main')
 
     const settings = collectNode(components.ImSettingsBand({
       settings: { groupRequireMention: true, privateAllow: ['u1'], groupAllow: [] },
@@ -715,6 +791,7 @@ describe('IM channels panel (client-src source check)', () => {
     expect(settings.texts).toContain('im.settings.privateAllow')
     expect(settings.texts).toContain('im.settings.groupAllow')
     expect(settings.types.filter((type) => type === 'textarea')).toHaveLength(2)
+    expect(settings.classNames).toContain('dt-im-mention')
     // 自动绑定模式字段已删除。
     expect(settings.texts).not.toContain('im.settings.bindingMode')
   })

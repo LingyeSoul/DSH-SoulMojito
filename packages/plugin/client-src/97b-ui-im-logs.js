@@ -123,7 +123,9 @@
       }
       const visible = imLogFilter(entries, level)
       return h('section', { className: 'dt-settings-band dt-im-log' },
-        h('h3', null, t('im.log.title')),
+        h('div', { className: 'dt-im-log-head' },
+          h('h3', { className: 'dt-im-log-title' }, t('im.log.title')),
+          h('span', { className: 'dt-im-log-count' }, t('im.log.entries', { count: visible.length }))),
         h('div', { className: 'dt-im-log-toolbar' },
           h('div', { className: 'dt-im-log-levels' },
             h('span', { className: 'dt-label' }, t('im.log.level')),
