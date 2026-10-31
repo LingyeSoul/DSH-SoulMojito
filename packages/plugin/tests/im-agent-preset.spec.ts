@@ -49,4 +49,10 @@ describe('AgentTavernIM prompt', () => {
     expect(text).toContain('有多个对端时必须显式传消息头里的 alias')
     expect(text).toContain('只有一个对端时可以省略')
   })
+
+  it('documents the header msg ref and the im_send replyTo escape hatch', () => {
+    const text = imModePromptText()
+    expect(text).toContain('msg=')
+    expect(text).toContain('replyTo')
+  })
 })

@@ -1,6 +1,6 @@
 /**
  * 入站路由（提案 0024 §3.8 / 决策 2026-10-31-im-native-session-binding /
- * 决策 2026-10-31-im-inbound-coalescing）：
+ * 决策 2026-10-31-im-inbound-coalescing / 决策 2026-10-31-im-message-refs）：
  * 短窗合流 → 去重 → 白名单 → 绑定 → 媒体物化 → 插进绑定的原生 DSH 会话。
  *
  * 每个 peer 一条 600ms 的短窗（`im/coalesce.ts`）：窗口内的文本连发合并成一条
@@ -8,6 +8,10 @@
  * 缓冲有硬上限（条数与字符数），超过立即冲刷；含媒体的批次不合并，逐条投递。
  * 这逆转了 2026-10-31-im-native-session-binding 里「插件不排队」的取舍：连发碎句
  * 会把宿主会话刷成一串独立轮，窗口把一次对话收成一条；代价与边界见决策文档。
+ *
+ * 每条成功投递的消息在 `im/refs.ts` 的进程内表里记一个 `msg-<hash>` 引用：relay
+ * 头部带 `msg=`/`time=`，合流正文逐行带自己的 `[msg-…]`。模型可用 `im_send` 的
+ * `replyTo` 指回某一条，路由据此锚定触发消息（QQ 被动回复）与对端。
  *
  * 绑定缺失时：把 peer 记进 `imPendingPeers`（面板「未绑定对端」待办）并回一条
  * 提示，**不代建会话**。回复也不由插件自动发——入站消息以插件来源插入会话后，
@@ -22,6 +26,7 @@ import { isAbsolute, relative } from 'node:path'
 import type { TavernStore } from '../../../tavern-store/src/index.js'
 import type { HostLogger } from '../host-contract.js'
 import { IM_COALESCE_MAX_CHARS, IM_COALESCE_MAX_MESSAGES, IM_COALESCE_WINDOW_MS, mergedRelayTextOf, orderInboundEntries, type ImCoalesceEntry } from './coalesce.js'
+import { IM_MESSAGE_REF_MAX_ENTRIES, IM_MESSAGE_REF_TTL_MS, createImMessageRefStore, imMessageRef, type ImMessageRefEntry } from './refs.js'
 import { projectImText } from './project.js'
 import { imAccessAllows, imChunkLimit } from './settings.js'
 import type { ImLogSink } from './log.js'
@@ -137,10 +142,16 @@ export interface ImRouter {
   /**
    * 主动发一条文本给已绑定的 peer（`im_send` 的落点）。绑定存在性在这里再验
    * 一次：工具面只保证「绑到本会话」，路由保证「peer 真的有绑定」。
+   * `options.passiveReplyTo` 给定时用它替代该 peer 的自动锚点（消息引用回复）。
    */
-  sendText(peerKey: string, text: string): Promise<ImSendReceipt>
+  sendText(peerKey: string, text: string, options?: { passiveReplyTo?: string }): Promise<ImSendReceipt>
   /** 主动发一条媒体（可选配文）；目标校验与 `sendText` 同一套。 */
-  sendMedia(peerKey: string, media: ImOutboundMedia): Promise<ImSendReceipt>
+  sendMedia(peerKey: string, media: ImOutboundMedia, options?: { passiveReplyTo?: string }): Promise<ImSendReceipt>
+  /**
+   * 解析 relay 头部的 `msg=` 引用 → 该消息投递时的 peer、会话与被动锚点。
+   * 只认本进程已投递且未过期的条目；未知/过期返回 undefined，绝不猜。
+   */
+  resolveMessageRef(ref: string): ImMessageRefEntry | undefined
 }
 
 export function createImRouter(deps: ImRouterDeps): ImRouter {
@@ -151,6 +162,15 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
    * 消息 id；路由在入站时记下最近一条，`im_send` 出站时自动带上。
    */
   const replyAnchors = new Map<string, { replyTo: string; at: number }>()
+  /**
+   * 已投递消息的引用表（`im/refs.ts`）：`im_send` 的 `replyTo` 据此解析触发消息的
+   * peer 与被动锚点。TTL/容量是常量，进程内失效，不落盘。
+   */
+  const messageRefs = createImMessageRefStore({
+    now: deps.now,
+    ttlMs: IM_MESSAGE_REF_TTL_MS,
+    maxEntries: IM_MESSAGE_REF_MAX_ENTRIES,
+  })
 
   const coalesceWindowMs = deps.coalesceWindowMs ?? IM_COALESCE_WINDOW_MS
   /** 窗口定时器接缝；缺省真定时器，测试注入手动调度器。 */
@@ -387,10 +407,11 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
     return { message, body }
   }
 
-  /** 单条投递：正文与日志与合流上线前逐字节一致。 */
+  /** 单条投递：正文与日志与合流上线前逐字节一致；摘要与引用表带 `msg=`。 */
   async function deliverOne(alias: string, sessionId: string, item: DeliverableInbound): Promise<void> {
     const message = item.message
     const body = item.body
+    const ref = imMessageRef(message.dedupeKey)
     const text = relayTextOf(message, body, alias)
     deps.log?.note('info', `accepted a ${message.channel}/${message.scope} message from ${alias} (${body.length} chars) for session ${sessionId}`)
     const messageId = `im-${randomUUID()}`
@@ -399,7 +420,7 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
       await deps.insert(sessionId, {
         id: messageId,
         text,
-        summary: `IM ${message.channel}/${message.scope} message from ${alias}`,
+        summary: `IM ${message.channel}/${message.scope} message msg=${ref} from ${alias}`,
       })
     } catch (error) {
       const code = (error as { code?: unknown } | null)?.code
@@ -408,12 +429,14 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
       await sendNotice(imTargetOf(message), code === 'IM_SESSION_NOT_LIVE' ? IM_SESSION_NOT_LIVE : IM_DELIVERY_FAILED, alias)
       return
     }
+    rememberDeliveredMessage(ref, sessionId, message)
     deps.log?.note('debug', `inserted an IM message from ${alias} into session ${sessionId} (${messageId})`)
   }
 
   /**
-   * 合流投递：整批拼成一条 `im-` 消息，头部标注连续条数，正文逐条换行。摘要与
-   * 失败提示取批次最后一条（排序后），与「最后收到的那句话」一致。
+   * 合流投递：整批拼成一条 `im-` 消息，头部标注连续条数，正文逐条换行——每条
+   * 前缀自己的 `[msg-…]` 引用（头是复数，不挂单个 msg）。摘要与失败提示取批次
+   * 最后一条（排序后），与「最后收到的那句话」一致；引用逐条记进引用表。
    */
   async function deliverMerged(alias: string, sessionId: string, items: readonly DeliverableInbound[]): Promise<void> {
     const first = items[0]
@@ -421,16 +444,20 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
     if (first === undefined || last === undefined) return
     const channel = first.message.channel
     const scope = first.message.scope
-    const bodies = items.map((item) => item.body)
-    const text = mergedRelayTextOf(bodies, alias, channel, scope)
-    const chars = bodies.reduce((total, body) => total + body.length, 0)
-    deps.log?.note('info', `accepted ${bodies.length} ${channel}/${scope} messages from ${alias} (${chars} chars) for session ${sessionId}`)
+    const relayItems = items.map((item) => ({
+      message: item.message,
+      body: item.body,
+      ref: imMessageRef(item.message.dedupeKey),
+    }))
+    const text = mergedRelayTextOf(relayItems, alias, channel, scope)
+    const chars = relayItems.reduce((total, entry) => total + entry.body.length, 0)
+    deps.log?.note('info', `accepted ${relayItems.length} ${channel}/${scope} messages from ${alias} (${chars} chars) for session ${sessionId}`)
     const messageId = `im-${randomUUID()}`
     try {
       await deps.insert(sessionId, {
         id: messageId,
         text,
-        summary: `IM ${channel}/${scope} ${bodies.length} messages from ${alias}`,
+        summary: `IM ${channel}/${scope} ${relayItems.length} messages from ${alias}`,
       })
     } catch (error) {
       const code = (error as { code?: unknown } | null)?.code
@@ -439,7 +466,21 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
       await sendNotice(imTargetOf(last.message), code === 'IM_SESSION_NOT_LIVE' ? IM_SESSION_NOT_LIVE : IM_DELIVERY_FAILED, alias)
       return
     }
+    for (const relayItem of relayItems) rememberDeliveredMessage(relayItem.ref, sessionId, relayItem.message)
     deps.log?.note('debug', `inserted a merged IM message from ${alias} into session ${sessionId} (${messageId})`)
+  }
+
+  /**
+   * 记录一条已投递消息的引用：`im_send` 的 `replyTo` 用它在事后解析出 peer、
+   * 会话与被动锚点。插入失败不记——没进上下文的消息不该被 replyTo 指回。
+   */
+  function rememberDeliveredMessage(ref: string, sessionId: string, inboundMessage: ImInbound): void {
+    messageRefs.record(ref, {
+      peerKey: imPeerKey(inboundMessage.channel, inboundMessage.accountId, inboundMessage.scope, inboundMessage.peerId),
+      sessionId,
+      ...(inboundMessage.replyTo === undefined ? {} : { replyTo: inboundMessage.replyTo }),
+      at: deps.now(),
+    })
   }
 
   function imTargetOf(inbound: ImInbound): ImTarget {
@@ -494,12 +535,12 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
     deps.log?.note('info', `no binding for ${alias}; recorded it in the IM panel pending peers`)
   }
 
-  async function sendText(peerKey: string, text: string): Promise<ImSendReceipt> {
+  async function sendText(peerKey: string, text: string, options?: { passiveReplyTo?: string }): Promise<ImSendReceipt> {
     const body = text.trim()
     if (body === '') {
       throw new ImSendError('IM_SEND_INVALID', 'IM text is empty after trimming whitespace')
     }
-    const { target, channel, scope, settings } = await sendTargetOf(peerKey)
+    const { target, channel, scope, settings } = await sendTargetOf(peerKey, options?.passiveReplyTo)
     const chunks = projectImText(body, channel, imChunkLimit(channel, settings))
     try {
       await deps.send(target, chunks.map((chunk, index) => ({
@@ -517,7 +558,7 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
     return { parts: chunks.length, at: deps.now() }
   }
 
-  async function sendMedia(peerKey: string, media: ImOutboundMedia): Promise<ImSendReceipt> {
+  async function sendMedia(peerKey: string, media: ImOutboundMedia, options?: { passiveReplyTo?: string }): Promise<ImSendReceipt> {
     if (media.localPath === undefined && media.url === undefined) {
       throw new ImSendError('IM_SEND_INVALID', 'media needs a localPath (preferred) or a url')
     }
@@ -525,7 +566,7 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
       throw new ImSendError('IM_SEND_INVALID', 'media.localPath is blank; pass an absolute file path or omit it')
     }
     if (media.localPath !== undefined) await assertInsideWorkspace(media.localPath)
-    const { target, channel, scope, settings } = await sendTargetOf(peerKey)
+    const { target, channel, scope, settings } = await sendTargetOf(peerKey, options?.passiveReplyTo)
     const caption = media.caption?.trim() ?? ''
     // 配文也走按渠道的切分：微信 1800 的上限对 4000 字配文同样成立。
     const captionChunks = caption === ''
@@ -560,8 +601,11 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
   /**
    * 调用方给的 peerKey → 出站目标。绑定存在性每次都验：工具面只保证「绑到本
    * 会话」，路由保证「peer 真的有绑定」。
+   *
+   * `passiveReplyTo` 是消息引用回复的显式锚点：给定时直接用它，替代该 peer 的
+   * 自动锚点（模型指名了要回哪一条）；缺省时沿用「最近一条」自动锚点。
    */
-  async function sendTargetOf(peerKey: string): Promise<{
+  async function sendTargetOf(peerKey: string, passiveReplyTo?: string): Promise<{
     target: ImTarget
     channel: ImChannelId
     scope: ImScope
@@ -586,13 +630,15 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
     const anchor = replyAnchors.get(peerKey)
     const fresh = anchor !== undefined && deps.now() - anchor.at <= REPLY_ANCHOR_TTL_MS
     if (anchor !== undefined && !fresh) replyAnchors.delete(peerKey)
+    const autoReplyTo = anchor !== undefined && fresh ? anchor.replyTo : undefined
+    const replyTo = passiveReplyTo ?? autoReplyTo
     return {
       target: {
         channel,
         accountId: parts.accountId,
         scope,
         peerId: parts.peerId,
-        ...(fresh ? { replyTo: anchor.replyTo } : {}),
+        ...(replyTo === undefined ? {} : { replyTo }),
       },
       channel,
       scope,
@@ -648,19 +694,22 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
     flushPending,
     sendText,
     sendMedia,
+    resolveMessageRef: (ref: string) => messageRefs.resolve(ref),
   }
 }
 
 /**
  * 入站正文 → 插进会话的插件来源消息正文。
  *
- * 头部给模型三件事：这是 IM 消息不是 DSH 用户输入、来源渠道与范围、回复要用
- * 哪个 peer alias。群聊的发言人前缀由 `imUserTextOf` 提供。
+ * 头部给模型四件事：这是 IM 消息不是 DSH 用户输入、来源渠道与范围、回复要用
+ * 哪个 peer alias、这条消息的稳定引用与接收时间（`im_send` 的 `replyTo` 可用
+ * `msg=` 指回它）。引用是哈希，不带平台身份。群聊的发言人前缀由 `imUserTextOf`
+ * 提供。
  */
 export function relayTextOf(inbound: ImInbound, body: string, alias: string): string {
   const scope = inbound.scope === 'group' ? '群聊' : '私聊'
   return [
-    `[IM ${inbound.channel}/${scope} peer=${alias}]`,
+    `[IM ${inbound.channel}/${scope} peer=${alias} msg=${imMessageRef(inbound.dedupeKey)} time=${new Date(inbound.receivedAt).toISOString()}]`,
     body,
     `（这是从 IM 转发给你的消息，不是 DSH 用户输入。回复请调用 im_send，peer 参数用 ${alias}。）`,
   ].join('\n')

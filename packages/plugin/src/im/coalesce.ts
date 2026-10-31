@@ -48,16 +48,23 @@ export function orderInboundEntries(entries: readonly ImCoalesceEntry[]): ImCoal
   })
 }
 
+/** 合流批次里的一条正文：ref 是它的 `msg-` 引用，正文行前缀用它锚定单条消息。 */
+export interface ImMergedRelayItem {
+  body: string
+  ref: string
+}
+
 /**
- * 合流批次的转发正文：头部标注「连续 N 条消息」，正文按排序后的顺序逐条列出，
- * 尾部仍是 im_send 提示。群聊/私聊措辞与单条 `relayTextOf` 一致；群聊正文由
- * `imUserTextOf` 预先带上 `[昵称]` 前缀，这里不再加工。
+ * 合流批次的转发正文：头部标注「连续 N 条消息」（不带 msg/time——一条头对多条，
+ * 挂谁的都不对），正文每条前缀自己的 `[msg-…] ` 引用，尾部仍是 im_send 提示。
+ * 群聊/私聊措辞与单条 `relayTextOf` 一致；群聊正文由 `imUserTextOf` 预先带上
+ * `[昵称]` 前缀，这里不再加工。
  */
-export function mergedRelayTextOf(bodies: readonly string[], alias: string, channel: string, scope: string): string {
+export function mergedRelayTextOf(items: readonly ImMergedRelayItem[], alias: string, channel: string, scope: string): string {
   const scopeLabel = scope === 'group' ? '群聊' : '私聊'
   return [
-    `[IM ${channel}/${scopeLabel} peer=${alias}]（连续 ${bodies.length} 条消息）`,
-    ...bodies,
+    `[IM ${channel}/${scopeLabel} peer=${alias}]（连续 ${items.length} 条消息）`,
+    ...items.map((item) => `[${item.ref}] ${item.body}`),
     `（这是从 IM 转发给你的消息，不是 DSH 用户输入。回复请调用 im_send，peer 参数用 ${alias}。）`,
   ].join('\n')
 }

@@ -62,9 +62,10 @@ export function createImTools(deps: ImToolsDeps): ToolDefinition[] {
         })),
       }
     }),
-    tool('im_send', 'Send one message to an IM peer that is bound to this session. Use it to reply when an IM message has been relayed into this session. Send text, a media item, or a media item with a caption. Omit peer only when exactly one peer is bound; when several peers are bound, pass the alias from im_identity because there is no deterministic target otherwise. Text is trimmed and capped at 4000 characters. Media is read from an absolute local path (preferred) or an http(s) URL for image/video. Cross-session sending is forbidden: an alias outside this session is rejected.', {
+    tool('im_send', 'Send one message to an IM peer that is bound to this session. Use it to reply when an IM message has been relayed into this session. Send text, a media item, or a media item with a caption. Each relay header carries msg=<ref> (with the receive time); replyTo is optional, usually omitted, and citing that ref anchors the reply to that exact message (and its peer). Omit peer only when exactly one peer is bound; when several peers are bound, pass the alias from im_identity because there is no deterministic target otherwise — replyTo is the only exception, since the ref already names its peer. Text is trimmed and capped at 4000 characters. Media is read from an absolute local path (preferred) or an http(s) URL for image/video. Cross-session sending is forbidden: an alias or replyTo outside this session is rejected.', {
       text: { type: 'string', description: 'Message text, 1-4000 characters after trimming. Optional when media is attached; then it becomes the caption.' },
       peer: { type: 'string', description: 'Target peer alias from im_identity; required when this session has more than one binding.' },
+      replyTo: { type: 'string', description: 'Optional message ref from a relay header (msg=...): anchors this reply to that exact message and its peer. The ref alone may pick the peer; normally omit.' },
       mediaKind: { type: 'string', enum: ['image', 'voice', 'video', 'file'], description: 'Kind of the media item; required when mediaPath or mediaUrl is given.' },
       mediaPath: { type: 'string', description: 'Absolute path of a local file to send (preferred: no network fetch).' },
       mediaUrl: { type: 'string', description: 'Remote http(s) URL to send. Only image and video are supported by every channel.' },
@@ -76,10 +77,32 @@ export function createImTools(deps: ImToolsDeps): ToolDefinition[] {
         throw new Error('im_send needs text, mediaPath or mediaUrl')
       }
       const requested = aliasOf(args)
+      const requestedRef = replyToOf(args)
       const agentId = requireAgentId(exec)
       const peers = await boundPeers(deps, agentId)
       let peer: BoundPeer
-      if (requested !== undefined) {
+      /** replyTo 解析出的被动锚点：只覆盖这一条出站消息的自动锚点。 */
+      let passiveReplyTo: string | undefined
+      if (requestedRef !== undefined) {
+        // 引用是「多绑定必须显式 peer」的唯一例外：ref 自己指明目标与锚点。
+        const runtime = deps.runtime()
+        if (runtime === undefined) {
+          throw new Error('IM runtime is not available in this host process; im_send cannot deliver messages')
+        }
+        const resolved = runtime.router.resolveMessageRef?.(requestedRef)
+        if (resolved === undefined) {
+          throw new Error(`message ref '${requestedRef}' is unknown or expired for this session`)
+        }
+        const bound = peers.find((entry) => entry.peerKey === resolved.peerKey)
+        if (bound === undefined) {
+          throw new Error(`message ref '${requestedRef}' does not belong to this session`)
+        }
+        if (requested !== undefined && requested !== bound.alias) {
+          throw new Error(`replyTo targets a different peer than peer='${requested}'`)
+        }
+        peer = bound
+        passiveReplyTo = resolved.replyTo
+      } else if (requested !== undefined) {
         const found = peers.find((entry) => entry.alias === requested)
         if (found === undefined) throw new Error(`peer '${requested}' is not bound to this session`)
         peer = found
@@ -93,12 +116,13 @@ export function createImTools(deps: ImToolsDeps): ToolDefinition[] {
       if (runtime === undefined) {
         throw new Error('IM runtime is not available in this host process; im_send cannot deliver messages')
       }
+      const sendOptions = passiveReplyTo === undefined ? undefined : { passiveReplyTo }
       if (media !== undefined) {
         if (runtime.router.sendMedia === undefined) {
           throw new Error('this IM runtime cannot send media; update dsh-soulmojito and restart DSH')
         }
         const withCaption: typeof media = text === undefined ? media : { ...media, caption: text }
-        const receipt = await runtime.router.sendMedia(peer.peerKey, withCaption)
+        const receipt = await runtime.router.sendMedia(peer.peerKey, withCaption, sendOptions)
         return {
           peer: peer.alias,
           parts: receipt.parts,
@@ -107,7 +131,7 @@ export function createImTools(deps: ImToolsDeps): ToolDefinition[] {
           ...(receipt.messageId === undefined ? {} : { messageId: receipt.messageId }),
         }
       }
-      const receipt = await runtime.router.sendText(peer.peerKey, text as string)
+      const receipt = await runtime.router.sendText(peer.peerKey, text as string, sendOptions)
       return {
         peer: peer.alias,
         parts: receipt.parts,
@@ -281,4 +305,14 @@ function aliasOf(args: Record<string, unknown>): string | undefined {
   const alias = value.trim()
   if (alias === '') throw new Error('peer must not be blank when provided')
   return alias
+}
+
+/** relay 头部的 `msg=` 引用：原样传给路由解析，工具面不校验也绝不改写它。 */
+function replyToOf(args: Record<string, unknown>): string | undefined {
+  const value = args['replyTo']
+  if (value === undefined) return undefined
+  if (typeof value !== 'string') throw new Error('replyTo must be a string when provided')
+  const ref = value.trim()
+  if (ref === '') throw new Error('replyTo must not be blank when provided')
+  return ref
 }

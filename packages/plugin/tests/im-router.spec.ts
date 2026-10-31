@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { TavernStore } from '../../tavern-store/src/index.js'
 import { IM_COALESCE_MAX_MESSAGES } from '../src/im/coalesce.js'
+import { IM_MESSAGE_REF_TTL_MS, createImMessageRefStore, imMessageRef } from '../src/im/refs.js'
 import { createImRouter, IM_DELIVERY_FAILED, IM_FLUSH_PENDING_MAX_PASSES, IM_SESSION_NOT_LIVE, IM_UNBOUND_NOTICE, ImSendError, relayTextOf } from '../src/im/router.js'
 import { ImSessionNotLiveError } from '../src/im/session-host.js'
 import { DEFAULT_IM_SETTINGS, imPeerAlias, imPeerKey } from '../src/im/types.js'
@@ -189,7 +190,7 @@ describe('im router inbound', () => {
     expect(delivered.text).toContain(`peer=${PEER_ALIAS}`)
     expect(delivered.text).toContain('在吗')
     expect(delivered.text).toContain('im_send')
-    expect(delivered.summary).toBe(`IM qq/private message from ${PEER_ALIAS}`)
+    expect(delivered.summary).toBe(`IM qq/private message msg=${imMessageRef('qq:acct:m1')} from ${PEER_ALIAS}`)
     // 插件不自动回复：回复由模型调用 im_send。
     expect(h.sent).toHaveLength(0)
   })
@@ -527,9 +528,11 @@ describe('im router inbound coalescing', () => {
 })
 
 describe('im relay text', () => {
-  it('carries the alias and tells the model to answer with im_send', () => {
+  it('carries the alias, msg ref, receive time and the im_send hint', () => {
     const text = relayTextOf(inbound({ text: '你好' }), '你好', PEER_ALIAS)
-    expect(text.startsWith(`[IM qq/私聊 peer=${PEER_ALIAS}]`)).toBe(true)
+    expect(text.startsWith(`[IM qq/私聊 peer=${PEER_ALIAS} msg=msg-`)).toBe(true)
+    expect(text).toContain('time=1970-01-01T00:00:01.000Z]')
+    expect(text).toContain(imMessageRef('qq:acct:m1'))
     expect(text).toContain('你好')
     expect(text).toContain(`peer 参数用 ${PEER_ALIAS}`)
   })
@@ -542,6 +545,153 @@ describe('im relay text', () => {
     )
     expect(text).toContain('qq/群聊')
     expect(text).toContain('[小明] 大家好')
+  })
+})
+
+describe('im message refs', () => {
+  it('labels a single relay message with its ref, receive time and matching summary', async () => {
+    await allowAll()
+    await bindPeer()
+    const h = harness()
+    await h.deliver(inbound({ dedupeKey: 'qq:acct:labeled' }))
+    expect(h.inserts).toHaveLength(1)
+    const delivered = h.inserts[0]!
+    const ref = imMessageRef('qq:acct:labeled')
+    expect(delivered.text.startsWith(`[IM qq/私聊 peer=${PEER_ALIAS} msg=${ref} time=1970-01-01T00:00:01.000Z]`)).toBe(true)
+    expect(delivered.summary).toBe(`IM qq/private message msg=${ref} from ${PEER_ALIAS}`)
+  })
+
+  it('derives the same ref from the same dedupe key across replayed deliveries', async () => {
+    await allowAll()
+    await bindPeer()
+    const first = harness()
+    await first.deliver(inbound({ dedupeKey: 'qq:acct:replay' }))
+    // 平台重连/插件重启后的补发：同一平台消息必须得到同一引用，replyTo 才跨重连可用。
+    const second = harness()
+    await second.deliver(inbound({ dedupeKey: 'qq:acct:replay' }))
+    const refOf = (text: string): string | undefined => /msg=(msg-[0-9a-f]{10})/.exec(text)?.[1]
+    expect(refOf(first.inserts[0]!.text)).toBe(imMessageRef('qq:acct:replay'))
+    expect(refOf(second.inserts[0]!.text)).toBe(refOf(first.inserts[0]!.text))
+  })
+
+  it('derives the ref from the dedupe key alone, not from the peer id', async () => {
+    await allowAll()
+    const otherPeerId = 'peer-b'
+    const otherKey = imPeerKey('qq', 'acct', 'private', otherPeerId)
+    // 两个对端都绑着：同一条平台消息（同 dedupeKey）投给不同 peer 也要同一个 ref，
+    // 哈希输入里只有 dedupeKey——平台身份不进引用。
+    await db.patchState({
+      imPeers: {
+        [PEER_KEY]: { sessionId: 'session-a', scope: 'private', boundBy: 'manual', createdAt: new Date(0).toISOString() },
+        [otherKey]: { sessionId: 'session-b', scope: 'private', boundBy: 'manual', createdAt: new Date(0).toISOString() },
+      },
+    })
+    const first = harness()
+    await first.deliver(inbound({ dedupeKey: 'qq:acct:shared' }))
+    const second = harness()
+    await second.deliver(inbound({ peerId: otherPeerId, senderId: otherPeerId, dedupeKey: 'qq:acct:shared' }))
+    const refOf = (text: string): string | undefined => /msg=(msg-[0-9a-f]{10})/.exec(text)?.[1]
+    expect(refOf(first.inserts[0]!.text)).toBe(imMessageRef('qq:acct:shared'))
+    expect(refOf(second.inserts[0]!.text)).toBe(refOf(first.inserts[0]!.text))
+  })
+
+  it('prefixes every merged body line with its own ref and keeps the header free of msg=', async () => {
+    await allowAll()
+    await bindPeer()
+    const scheduler = manualScheduler()
+    const h = harness({ scheduleFlush: scheduler.schedule })
+    await h.router.inbound(inbound({ dedupeKey: 'qq:acct:m1', text: '第一句' }))
+    await h.router.inbound(inbound({ dedupeKey: 'qq:acct:m2', text: '第二句' }))
+    scheduler.fireAll()
+    await h.router.flushPending()
+    expect(h.inserts).toHaveLength(1)
+    const delivered = h.inserts[0]!
+    expect(delivered.text.split('\n')[0]).toBe(`[IM qq/私聊 peer=${PEER_ALIAS}]（连续 2 条消息）`)
+    expect(delivered.text).toContain(`[${imMessageRef('qq:acct:m1')}] 第一句`)
+    expect(delivered.text).toContain(`[${imMessageRef('qq:acct:m2')}] 第二句`)
+    expect(delivered.summary).toBe(`IM qq/private 2 messages from ${PEER_ALIAS}`)
+  })
+
+  it('resolves a delivered ref to its peer and passive anchor until the ttl', async () => {
+    await allowAll()
+    await bindPeer()
+    const h = harness()
+    await h.deliver(inbound({ dedupeKey: 'qq:acct:ref', replyTo: 'platform-msg-1' }))
+    const ref = imMessageRef('qq:acct:ref')
+    expect(h.router.resolveMessageRef(ref)).toEqual({
+      peerKey: PEER_KEY,
+      sessionId: 'session-a',
+      replyTo: 'platform-msg-1',
+      at: 1_000,
+    })
+    expect(h.router.resolveMessageRef('msg-0000000000')).toBeUndefined()
+    // 10 分钟 TTL：过期即解析不到，绝不拿旧锚点猜。
+    h.tick(IM_MESSAGE_REF_TTL_MS + 1)
+    expect(h.router.resolveMessageRef(ref)).toBeUndefined()
+  })
+
+  it('never exposes the raw peer id or platform message id in the relay text or summary', async () => {
+    await allowAll()
+    const rawPeerId = 'raw-openid-zzz'
+    await bindPeer({ key: imPeerKey('qq', 'acct', 'private', rawPeerId) })
+    const h = harness()
+    await h.deliver(inbound({
+      peerId: rawPeerId,
+      senderId: rawPeerId,
+      dedupeKey: 'qq:acct:privacy',
+      replyTo: 'raw-platform-id-zzz',
+    }))
+    expect(h.inserts).toHaveLength(1)
+    const delivered = h.inserts[0]!
+    expect(delivered.text).toContain('msg=msg-')
+    // 引用是哈希：原始 openid 与平台消息 id 都不进模型可见的文本。
+    expect(delivered.text).not.toContain(rawPeerId)
+    expect(delivered.text).not.toContain('raw-platform-id-zzz')
+    expect(delivered.summary).not.toContain(rawPeerId)
+    // 锚点在内部引用表里保留，供 im_send replyTo 使用。
+    expect(h.router.resolveMessageRef(imMessageRef('qq:acct:privacy'))?.replyTo).toBe('raw-platform-id-zzz')
+  })
+
+  it('evicts the oldest ref at capacity and prunes expired entries on record', () => {
+    let now = 1_000
+    const store = createImMessageRefStore({ now: () => now, ttlMs: 100, maxEntries: 2 })
+    // 直接用可读 ref 钉住表的容量语义（哈希形状由 imMessageRef 自己负责）。
+    store.record('ref-a', { peerKey: 'k', sessionId: 's', at: now })
+    now += 10
+    store.record('ref-b', { peerKey: 'k', sessionId: 's', at: now })
+    now += 10
+    store.record('ref-c', { peerKey: 'k', sessionId: 's', at: now })
+    expect(store.size()).toBe(2)
+    expect(store.resolve('ref-a')).toBeUndefined()
+    expect(store.resolve('ref-b')).toBeDefined()
+    expect(store.resolve('ref-c')).toBeDefined()
+    // 过期条目在 record 时先被清掉，不会占着容量把新条目挤出去。
+    now += 101
+    store.record('ref-d', { peerKey: 'k', sessionId: 's', at: now })
+    expect(store.size()).toBe(1)
+    expect(store.resolve('ref-d')).toBeDefined()
+  })
+
+  it('moves a re-recorded ref to the newest slot before evicting at capacity', () => {
+    let now = 5_000
+    const store = createImMessageRefStore({ now: () => now, ttlMs: 60_000, maxEntries: 3 })
+    store.record('ref-a', { peerKey: 'k', sessionId: 's', at: now })
+    now += 1
+    store.record('ref-b', { peerKey: 'k', sessionId: 's', at: now })
+    now += 1
+    // 重录最旧的 ref-a：必须挪到最新（缺 delete-before-set 的实现就地更新，
+    // a 会留在最旧位；此序列在该实现下于末尾被淘汰，断言因此翻红）。
+    store.record('ref-a', { peerKey: 'k', sessionId: 's', at: now })
+    now += 1
+    store.record('ref-c', { peerKey: 'k', sessionId: 's', at: now })
+    now += 1
+    store.record('ref-d', { peerKey: 'k', sessionId: 's', at: now })
+    expect(store.size()).toBe(3)
+    // 满载淘汰的是真正的旧条目 ref-b，而不是刚重录成最新的 ref-a。
+    expect(store.resolve('ref-a')).toBeDefined()
+    expect(store.resolve('ref-b')).toBeUndefined()
+    expect(store.resolve('ref-c')).toBeDefined()
+    expect(store.resolve('ref-d')).toBeDefined()
   })
 })
 

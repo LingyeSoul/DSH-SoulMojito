@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ImRuntimeHandle } from '../src/im/handle.js'
+import type { ImMessageRefEntry } from '../src/im/refs.js'
 import { createImTools, IM_SEND_MAX_CHARS, imPeerAlias, type ImToolsDeps } from '../src/im/tools.js'
 import { TavernStore } from '../../tavern-store/src/index.js'
 
@@ -61,8 +62,8 @@ afterEach(async () => {
 
 interface RuntimeHarness {
   runtime: ImRuntimeHandle
-  sent: Array<{ peerKey: string; text: string }>
-  media: Array<{ peerKey: string; media: unknown }>
+  sent: Array<{ peerKey: string; text: string; options?: { passiveReplyTo?: string } }>
+  media: Array<{ peerKey: string; media: unknown; options?: { passiveReplyTo?: string } }>
 }
 
 /**
@@ -74,9 +75,10 @@ type FakeImRouterHandle = ImRuntimeHandle['router'] & {
   lastPeerOf: (sessionId: string) => string | undefined
 }
 
-function runtimeHarness(options: { available?: boolean; reasons?: string[]; fail?: string; lastPeer?: string } = {}): RuntimeHarness {
+function runtimeHarness(options: { available?: boolean; reasons?: string[]; fail?: string; lastPeer?: string; messageRefs?: Record<string, ImMessageRefEntry> } = {}): RuntimeHarness {
   const sent: RuntimeHarness['sent'] = []
   const media: RuntimeHarness['media'] = []
+  const refs = new Map(Object.entries(options.messageRefs ?? {}))
   return {
     sent,
     media,
@@ -96,16 +98,17 @@ function runtimeHarness(options: { available?: boolean; reasons?: string[]; fail
       handleOneBotWebhook: async () => false,
       dispose: async () => {},
       router: {
-        sendText: async (peerKey, text) => {
+        sendText: async (peerKey, text, sendOptions) => {
           if (options.fail !== undefined) throw new Error(options.fail)
-          sent.push({ peerKey, text })
+          sent.push({ peerKey, text, ...(sendOptions === undefined ? {} : { options: sendOptions }) })
           return { parts: 1, at: 1_700_000_000_000 }
         },
-        sendMedia: async (peerKey, payload) => {
+        sendMedia: async (peerKey, payload, sendOptions) => {
           if (options.fail !== undefined) throw new Error(options.fail)
-          media.push({ peerKey, media: payload })
+          media.push({ peerKey, media: payload, ...(sendOptions === undefined ? {} : { options: sendOptions }) })
           return { parts: 1, at: 1_700_000_000_000 }
         },
+        resolveMessageRef: (ref) => refs.get(ref),
         // 故意保留 lastPeerOf：见 FakeImRouterHandle 的说明，用于证明工具忽略它。
         lastPeerOf: (sessionId) => (sessionId === 'session-a' ? options.lastPeer : undefined),
       } as FakeImRouterHandle,
@@ -240,6 +243,72 @@ describe('im_send', () => {
     await expect(call('im_send', { text: '收到' }))
       .rejects.toThrow(`this session is bound to 2 IM peers; pass peer to choose one of: ${groupAlias}, ${aliceAlias}`)
     expect(sent).toEqual([])
+  })
+
+  it('anchors a reply to a message ref and passes the passive anchor to the send', async () => {
+    const ref = 'msg-1a2b3c4d5e'
+    const { runtime, sent, media } = runtimeHarness({ messageRefs: {
+      [ref]: { peerKey: ALICE, sessionId: 'session-a', replyTo: 'platform-msg-1', at: 1_000 },
+    } })
+    const { call } = toolsOf(runtime)
+    const result = await call('im_send', { text: '收到', replyTo: ref }) as { peer: string; parts: number }
+    expect(result).toMatchObject({ peer: aliceAlias, parts: 1 })
+    expect(sent).toEqual([{ peerKey: ALICE, text: '收到', options: { passiveReplyTo: 'platform-msg-1' } }])
+    // 媒体发送也带同一个被动锚点（文本与媒体同一条消息引用）。
+    await call('im_send', { mediaKind: 'file', mediaPath: 'C:\\tmp\\a.pdf', replyTo: ref })
+    expect(media).toEqual([{
+      peerKey: ALICE,
+      media: { kind: 'file', localPath: 'C:\\tmp\\a.pdf' },
+      options: { passiveReplyTo: 'platform-msg-1' },
+    }])
+  })
+
+  it('rejects an unknown ref and a ref whose peer is not bound to this session', async () => {
+    const foreign = 'msg-9876543210'
+    const { runtime, sent } = runtimeHarness({ messageRefs: {
+      [foreign]: { peerKey: BOB, sessionId: 'session-b', at: 1_000 },
+    } })
+    const { call } = toolsOf(runtime)
+    await expect(call('im_send', { text: 'hi', replyTo: 'msg-deadbeef00' }))
+      .rejects.toThrow("message ref 'msg-deadbeef00' is unknown or expired for this session")
+    await expect(call('im_send', { text: 'hi', replyTo: foreign }))
+      .rejects.toThrow(`message ref '${foreign}' does not belong to this session`)
+    expect(sent).toEqual([])
+  })
+
+  it('rejects a peer argument that disagrees with the replyTo ref', async () => {
+    const ref = 'msg-1a2b3c4d5e'
+    const { runtime, sent } = runtimeHarness({ messageRefs: {
+      [ref]: { peerKey: ALICE, sessionId: 'session-a', at: 1_000 },
+    } })
+    const { call } = toolsOf(runtime)
+    await expect(call('im_send', { text: 'hi', replyTo: ref, peer: groupAlias }))
+      .rejects.toThrow(`replyTo targets a different peer than peer='${groupAlias}'`)
+    expect(sent).toEqual([])
+    // 与 ref 一致的 peer 照常通过：ref 没有被动锚点时回退自动锚点。
+    await call('im_send', { text: 'hi', replyTo: ref, peer: aliceAlias })
+    expect(sent).toEqual([{ peerKey: ALICE, text: 'hi' }])
+  })
+
+  it('lets replyTo alone pick the peer when several peers are bound', async () => {
+    const ref = 'msg-1a2b3c4d5e'
+    const { runtime, sent } = runtimeHarness({ messageRefs: {
+      [ref]: { peerKey: ALICE, sessionId: 'session-a', at: 1_000 },
+    } })
+    const { call } = toolsOf(runtime)
+    // session-a 同时绑了 alice + group：正常省略 peer 会被拒绝；ref 自己指明目标，
+    // 这是「多绑定必须显式传 peer」的唯一例外。
+    const result = await call('im_send', { text: '收到', replyTo: ref }) as { peer: string }
+    expect(result.peer).toBe(aliceAlias)
+    expect(sent).toEqual([{ peerKey: ALICE, text: '收到' }])
+  })
+
+  it('documents the msg ref and the optional replyTo in the tool description', () => {
+    const { runtime } = runtimeHarness()
+    const { list } = toolsOf(runtime)
+    const send = list.find((entry) => entry.name === 'im_send')
+    expect(send?.description).toContain('msg=')
+    expect(send?.description).toContain('replyTo')
   })
 
   it('rejects an omitted peer with the zero-binding error and an unknown alias with its own error', async () => {

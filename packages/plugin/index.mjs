@@ -10184,7 +10184,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("2969c1f") : void 0;
+  const commit = true ? normalizeCommit("13248ed") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -56969,13 +56969,49 @@ function orderInboundEntries(entries) {
     return left.seq - right.seq;
   });
 }
-function mergedRelayTextOf(bodies, alias, channel, scope) {
+function mergedRelayTextOf(items, alias, channel, scope) {
   const scopeLabel = scope === "group" ? "\u7FA4\u804A" : "\u79C1\u804A";
   return [
-    `[IM ${channel}/${scopeLabel} peer=${alias}]\uFF08\u8FDE\u7EED ${bodies.length} \u6761\u6D88\u606F\uFF09`,
-    ...bodies,
+    `[IM ${channel}/${scopeLabel} peer=${alias}]\uFF08\u8FDE\u7EED ${items.length} \u6761\u6D88\u606F\uFF09`,
+    ...items.map((item) => `[${item.ref}] ${item.body}`),
     `\uFF08\u8FD9\u662F\u4ECE IM \u8F6C\u53D1\u7ED9\u4F60\u7684\u6D88\u606F\uFF0C\u4E0D\u662F DSH \u7528\u6237\u8F93\u5165\u3002\u56DE\u590D\u8BF7\u8C03\u7528 im_send\uFF0Cpeer \u53C2\u6570\u7528 ${alias}\u3002\uFF09`
   ].join("\n");
+}
+
+// packages/plugin/src/im/refs.ts
+import { createHash as createHash18 } from "node:crypto";
+var IM_MESSAGE_REF_TTL_MS = 10 * 6e4;
+var IM_MESSAGE_REF_MAX_ENTRIES = 1e3;
+function imMessageRef(dedupeKey) {
+  return `msg-${createHash18("sha256").update(dedupeKey).digest("hex").slice(0, 10)}`;
+}
+function createImMessageRefStore(options) {
+  const entries = /* @__PURE__ */ new Map();
+  function pruneExpired2() {
+    const now = options.now();
+    for (const [ref, entry] of entries) {
+      if (now - entry.at > options.ttlMs) entries.delete(ref);
+    }
+  }
+  return {
+    record(ref, entry) {
+      pruneExpired2();
+      entries.delete(ref);
+      while (entries.size >= options.maxEntries) {
+        const oldest = entries.keys().next();
+        if (oldest.done === true) break;
+        entries.delete(oldest.value);
+      }
+      entries.set(ref, entry);
+    },
+    resolve(ref) {
+      pruneExpired2();
+      return entries.get(ref);
+    },
+    size() {
+      return entries.size;
+    }
+  };
 }
 
 // packages/plugin/src/im/project.ts
@@ -57132,6 +57168,11 @@ var IM_FLUSH_PENDING_MAX_MS = 2e3;
 function createImRouter(deps) {
   const noticed = /* @__PURE__ */ new Map();
   const replyAnchors = /* @__PURE__ */ new Map();
+  const messageRefs = createImMessageRefStore({
+    now: deps.now,
+    ttlMs: IM_MESSAGE_REF_TTL_MS,
+    maxEntries: IM_MESSAGE_REF_MAX_ENTRIES
+  });
   const coalesceWindowMs = deps.coalesceWindowMs ?? IM_COALESCE_WINDOW_MS;
   const scheduleFlush = deps.scheduleFlush ?? ((delayMs, run) => {
     const timer = setTimeout(run, delayMs);
@@ -57310,6 +57351,7 @@ function createImRouter(deps) {
   async function deliverOne(alias, sessionId, item) {
     const message = item.message;
     const body = item.body;
+    const ref = imMessageRef(message.dedupeKey);
     const text = relayTextOf(message, body, alias);
     deps.log?.note("info", `accepted a ${message.channel}/${message.scope} message from ${alias} (${body.length} chars) for session ${sessionId}`);
     const messageId = `im-${randomUUID17()}`;
@@ -57317,7 +57359,7 @@ function createImRouter(deps) {
       await deps.insert(sessionId, {
         id: messageId,
         text,
-        summary: `IM ${message.channel}/${message.scope} message from ${alias}`
+        summary: `IM ${message.channel}/${message.scope} message msg=${ref} from ${alias}`
       });
     } catch (error) {
       const code = error?.code;
@@ -57326,6 +57368,7 @@ function createImRouter(deps) {
       await sendNotice(imTargetOf(message), code === "IM_SESSION_NOT_LIVE" ? IM_SESSION_NOT_LIVE : IM_DELIVERY_FAILED, alias);
       return;
     }
+    rememberDeliveredMessage(ref, sessionId, message);
     deps.log?.note("debug", `inserted an IM message from ${alias} into session ${sessionId} (${messageId})`);
   }
   async function deliverMerged(alias, sessionId, items) {
@@ -57334,16 +57377,20 @@ function createImRouter(deps) {
     if (first === void 0 || last === void 0) return;
     const channel = first.message.channel;
     const scope = first.message.scope;
-    const bodies = items.map((item) => item.body);
-    const text = mergedRelayTextOf(bodies, alias, channel, scope);
-    const chars = bodies.reduce((total, body) => total + body.length, 0);
-    deps.log?.note("info", `accepted ${bodies.length} ${channel}/${scope} messages from ${alias} (${chars} chars) for session ${sessionId}`);
+    const relayItems = items.map((item) => ({
+      message: item.message,
+      body: item.body,
+      ref: imMessageRef(item.message.dedupeKey)
+    }));
+    const text = mergedRelayTextOf(relayItems, alias, channel, scope);
+    const chars = relayItems.reduce((total, entry) => total + entry.body.length, 0);
+    deps.log?.note("info", `accepted ${relayItems.length} ${channel}/${scope} messages from ${alias} (${chars} chars) for session ${sessionId}`);
     const messageId = `im-${randomUUID17()}`;
     try {
       await deps.insert(sessionId, {
         id: messageId,
         text,
-        summary: `IM ${channel}/${scope} ${bodies.length} messages from ${alias}`
+        summary: `IM ${channel}/${scope} ${relayItems.length} messages from ${alias}`
       });
     } catch (error) {
       const code = error?.code;
@@ -57352,7 +57399,16 @@ function createImRouter(deps) {
       await sendNotice(imTargetOf(last.message), code === "IM_SESSION_NOT_LIVE" ? IM_SESSION_NOT_LIVE : IM_DELIVERY_FAILED, alias);
       return;
     }
+    for (const relayItem of relayItems) rememberDeliveredMessage(relayItem.ref, sessionId, relayItem.message);
     deps.log?.note("debug", `inserted a merged IM message from ${alias} into session ${sessionId} (${messageId})`);
+  }
+  function rememberDeliveredMessage(ref, sessionId, inboundMessage) {
+    messageRefs.record(ref, {
+      peerKey: imPeerKey(inboundMessage.channel, inboundMessage.accountId, inboundMessage.scope, inboundMessage.peerId),
+      sessionId,
+      ...inboundMessage.replyTo === void 0 ? {} : { replyTo: inboundMessage.replyTo },
+      at: deps.now()
+    });
   }
   function imTargetOf(inbound2) {
     return {
@@ -57386,12 +57442,12 @@ function createImRouter(deps) {
     }
     deps.log?.note("info", `no binding for ${alias}; recorded it in the IM panel pending peers`);
   }
-  async function sendText(peerKey, text) {
+  async function sendText(peerKey, text, options) {
     const body = text.trim();
     if (body === "") {
       throw new ImSendError("IM_SEND_INVALID", "IM text is empty after trimming whitespace");
     }
-    const { target, channel, scope, settings } = await sendTargetOf(peerKey);
+    const { target, channel, scope, settings } = await sendTargetOf(peerKey, options?.passiveReplyTo);
     const chunks = projectImText(body, channel, imChunkLimit(channel, settings));
     try {
       await deps.send(target, chunks.map((chunk, index) => ({
@@ -57407,7 +57463,7 @@ function createImRouter(deps) {
     deps.log?.note("info", `im_send delivered ${chunks.length} part(s) to ${imPeerAlias(channel, scope, peerKey)}`);
     return { parts: chunks.length, at: deps.now() };
   }
-  async function sendMedia(peerKey, media) {
+  async function sendMedia(peerKey, media, options) {
     if (media.localPath === void 0 && media.url === void 0) {
       throw new ImSendError("IM_SEND_INVALID", "media needs a localPath (preferred) or a url");
     }
@@ -57415,7 +57471,7 @@ function createImRouter(deps) {
       throw new ImSendError("IM_SEND_INVALID", "media.localPath is blank; pass an absolute file path or omit it");
     }
     if (media.localPath !== void 0) await assertInsideWorkspace(media.localPath);
-    const { target, channel, scope, settings } = await sendTargetOf(peerKey);
+    const { target, channel, scope, settings } = await sendTargetOf(peerKey, options?.passiveReplyTo);
     const caption = media.caption?.trim() ?? "";
     const captionChunks = caption === "" ? [] : projectImText(caption, channel, imChunkLimit(channel, settings));
     const parts = captionChunks.map((text, index) => ({
@@ -57442,7 +57498,7 @@ function createImRouter(deps) {
     deps.log?.note("info", `im_send delivered a ${media.kind} to ${imPeerAlias(channel, scope, peerKey)}`);
     return { parts: parts.length, at: deps.now() };
   }
-  async function sendTargetOf(peerKey) {
+  async function sendTargetOf(peerKey, passiveReplyTo) {
     const parts = imPeerKeyParts(peerKey);
     if (parts === void 0) {
       throw new ImSendError("IM_SEND_INVALID_TARGET", `malformed IM peer key '${peerKey}'; expected '<channel>:<accountId>:<scope>:<peerId>'`);
@@ -57462,13 +57518,15 @@ function createImRouter(deps) {
     const anchor = replyAnchors.get(peerKey);
     const fresh = anchor !== void 0 && deps.now() - anchor.at <= REPLY_ANCHOR_TTL_MS;
     if (anchor !== void 0 && !fresh) replyAnchors.delete(peerKey);
+    const autoReplyTo = anchor !== void 0 && fresh ? anchor.replyTo : void 0;
+    const replyTo = passiveReplyTo ?? autoReplyTo;
     return {
       target: {
         channel,
         accountId: parts.accountId,
         scope,
         peerId: parts.peerId,
-        ...fresh ? { replyTo: anchor.replyTo } : {}
+        ...replyTo === void 0 ? {} : { replyTo }
       },
       channel,
       scope,
@@ -57514,13 +57572,14 @@ function createImRouter(deps) {
     inbound,
     flushPending,
     sendText,
-    sendMedia
+    sendMedia,
+    resolveMessageRef: (ref) => messageRefs.resolve(ref)
   };
 }
 function relayTextOf(inbound, body, alias) {
   const scope = inbound.scope === "group" ? "\u7FA4\u804A" : "\u79C1\u804A";
   return [
-    `[IM ${inbound.channel}/${scope} peer=${alias}]`,
+    `[IM ${inbound.channel}/${scope} peer=${alias} msg=${imMessageRef(inbound.dedupeKey)} time=${new Date(inbound.receivedAt).toISOString()}]`,
     body,
     `\uFF08\u8FD9\u662F\u4ECE IM \u8F6C\u53D1\u7ED9\u4F60\u7684\u6D88\u606F\uFF0C\u4E0D\u662F DSH \u7528\u6237\u8F93\u5165\u3002\u56DE\u590D\u8BF7\u8C03\u7528 im_send\uFF0Cpeer \u53C2\u6570\u7528 ${alias}\u3002\uFF09`
   ].join("\n");
@@ -57558,7 +57617,7 @@ function channelOf(value) {
 }
 
 // packages/plugin/src/im/account-id.ts
-import { createHash as createHash18 } from "node:crypto";
+import { createHash as createHash19 } from "node:crypto";
 var SAFE_ACCOUNT_ID = /^[A-Za-z0-9._-]+$/;
 function imAccountIdOf(channel, raw) {
   const trimmed = raw.trim();
@@ -57567,7 +57626,7 @@ function imAccountIdOf(channel, raw) {
     throw new Error(`cannot derive an IM account id: '${trimmed}' is a path traversal name`);
   }
   if (SAFE_ACCOUNT_ID.test(trimmed)) return trimmed;
-  const digest = createHash18("sha256").update(trimmed, "utf8").digest("hex").slice(0, 12);
+  const digest = createHash19("sha256").update(trimmed, "utf8").digest("hex").slice(0, 12);
   return `${channel}-${digest}`;
 }
 
@@ -58294,9 +58353,10 @@ function createImTools(deps) {
         }))
       };
     }),
-    tool("im_send", "Send one message to an IM peer that is bound to this session. Use it to reply when an IM message has been relayed into this session. Send text, a media item, or a media item with a caption. Omit peer only when exactly one peer is bound; when several peers are bound, pass the alias from im_identity because there is no deterministic target otherwise. Text is trimmed and capped at 4000 characters. Media is read from an absolute local path (preferred) or an http(s) URL for image/video. Cross-session sending is forbidden: an alias outside this session is rejected.", {
+    tool("im_send", "Send one message to an IM peer that is bound to this session. Use it to reply when an IM message has been relayed into this session. Send text, a media item, or a media item with a caption. Each relay header carries msg=<ref> (with the receive time); replyTo is optional, usually omitted, and citing that ref anchors the reply to that exact message (and its peer). Omit peer only when exactly one peer is bound; when several peers are bound, pass the alias from im_identity because there is no deterministic target otherwise \u2014 replyTo is the only exception, since the ref already names its peer. Text is trimmed and capped at 4000 characters. Media is read from an absolute local path (preferred) or an http(s) URL for image/video. Cross-session sending is forbidden: an alias or replyTo outside this session is rejected.", {
       text: { type: "string", description: "Message text, 1-4000 characters after trimming. Optional when media is attached; then it becomes the caption." },
       peer: { type: "string", description: "Target peer alias from im_identity; required when this session has more than one binding." },
+      replyTo: { type: "string", description: "Optional message ref from a relay header (msg=...): anchors this reply to that exact message and its peer. The ref alone may pick the peer; normally omit." },
       mediaKind: { type: "string", enum: ["image", "voice", "video", "file"], description: "Kind of the media item; required when mediaPath or mediaUrl is given." },
       mediaPath: { type: "string", description: "Absolute path of a local file to send (preferred: no network fetch)." },
       mediaUrl: { type: "string", description: "Remote http(s) URL to send. Only image and video are supported by every channel." },
@@ -58308,10 +58368,30 @@ function createImTools(deps) {
         throw new Error("im_send needs text, mediaPath or mediaUrl");
       }
       const requested = aliasOf(args);
+      const requestedRef = replyToOf(args);
       const agentId = requireAgentId2(exec);
       const peers = await boundPeers(deps, agentId);
       let peer;
-      if (requested !== void 0) {
+      let passiveReplyTo;
+      if (requestedRef !== void 0) {
+        const runtime2 = deps.runtime();
+        if (runtime2 === void 0) {
+          throw new Error("IM runtime is not available in this host process; im_send cannot deliver messages");
+        }
+        const resolved = runtime2.router.resolveMessageRef?.(requestedRef);
+        if (resolved === void 0) {
+          throw new Error(`message ref '${requestedRef}' is unknown or expired for this session`);
+        }
+        const bound = peers.find((entry) => entry.peerKey === resolved.peerKey);
+        if (bound === void 0) {
+          throw new Error(`message ref '${requestedRef}' does not belong to this session`);
+        }
+        if (requested !== void 0 && requested !== bound.alias) {
+          throw new Error(`replyTo targets a different peer than peer='${requested}'`);
+        }
+        peer = bound;
+        passiveReplyTo = resolved.replyTo;
+      } else if (requested !== void 0) {
         const found = peers.find((entry) => entry.alias === requested);
         if (found === void 0) throw new Error(`peer '${requested}' is not bound to this session`);
         peer = found;
@@ -58324,12 +58404,13 @@ function createImTools(deps) {
       if (runtime === void 0) {
         throw new Error("IM runtime is not available in this host process; im_send cannot deliver messages");
       }
+      const sendOptions = passiveReplyTo === void 0 ? void 0 : { passiveReplyTo };
       if (media !== void 0) {
         if (runtime.router.sendMedia === void 0) {
           throw new Error("this IM runtime cannot send media; update dsh-soulmojito and restart DSH");
         }
         const withCaption = text === void 0 ? media : { ...media, caption: text };
-        const receipt2 = await runtime.router.sendMedia(peer.peerKey, withCaption);
+        const receipt2 = await runtime.router.sendMedia(peer.peerKey, withCaption, sendOptions);
         return {
           peer: peer.alias,
           parts: receipt2.parts,
@@ -58338,7 +58419,7 @@ function createImTools(deps) {
           ...receipt2.messageId === void 0 ? {} : { messageId: receipt2.messageId }
         };
       }
-      const receipt = await runtime.router.sendText(peer.peerKey, text);
+      const receipt = await runtime.router.sendText(peer.peerKey, text, sendOptions);
       return {
         peer: peer.alias,
         parts: receipt.parts,
@@ -58491,6 +58572,14 @@ function aliasOf(args) {
   const alias = value.trim();
   if (alias === "") throw new Error("peer must not be blank when provided");
   return alias;
+}
+function replyToOf(args) {
+  const value = args["replyTo"];
+  if (value === void 0) return void 0;
+  if (typeof value !== "string") throw new Error("replyTo must be a string when provided");
+  const ref = value.trim();
+  if (ref === "") throw new Error("replyTo must not be blank when provided");
+  return ref;
 }
 
 // packages/plugin/src/im/agent-mount.ts
