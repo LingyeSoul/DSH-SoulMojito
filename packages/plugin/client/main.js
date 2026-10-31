@@ -3411,6 +3411,8 @@ window.__ModuleLoader__.load({
       'body.detailGroupMismatch': 'This reply is bound to more than one chat floor, so the shown reply and the edit target disagree; editing is disabled.',
       'body.detailFloorUnreadable': 'The chat floor for this reply cannot be read right now, so only the ledger reply is shown; it retries automatically.',
       'body.detailUnknown': 'The current state does not allow this body operation.',
+      'body.mutationsDisabled': 'IM session is read-only',
+      'body.mutationsDisabledHint': 'IM replies are delivered through im_send; editing, regenerating and candidate switching are disabled.',
       // IM channels (proposal 0024 §6.1, M5). Keys mirror 41-i18n-zh.js exactly.
       'im.hint.title': 'Instant messaging',
       'im.hint': 'Messages from QQ, WeChat and OneBot 11 are inserted into the DSH session you bind; the agent replies with im_send. Use the AgentTavernIM preset for the bound session so the model follows the IM rules (short, multi-message replies).',
@@ -3509,6 +3511,22 @@ window.__ModuleLoader__.load({
       'im.qqInstallAlready': 'The QQ runtime was already installed.',
       'im.qqInstallBusy': 'Another QQ runtime install is already running; wait for it to finish.',
       'im.qqInstallFailed': 'QQ runtime install failed: {reason}',
+      // WeChat send pacing (decision 2026-10-31-weixin-send-queue): the Behavior tab.
+      'im.tabs.behavior': 'Behavior',
+      'im.behavior.title': 'Send pacing',
+      'im.behavior.hint': 'WeChat outbound messages go through this queue. The 30s/5-message window and the 5-minute -2 cooldown are platform hard caps; the panel only slows sending down, it can never exceed them.',
+      'im.behavior.interval': 'Send interval (ms)',
+      'im.behavior.intervalHint': 'An integer between {min} and {max}; saving an empty field restores the default (3000 ms).',
+      'im.behavior.save': 'Save interval',
+      'im.behavior.reset': 'Restore default',
+      'im.behavior.statusTitle': 'Current send pacing',
+      'im.behavior.statusEmpty': 'No WeChat account is running yet; the queue and cooldown appear here once an account is online.',
+      'im.behavior.allowedNow': 'Allowed now',
+      'im.behavior.waiting': 'Waiting',
+      'im.behavior.nextSendAt': 'Next send {at}',
+      'im.behavior.throttleUntil': 'Cooling down until {at}',
+      'im.behavior.queueDepth': '{count} queued',
+      'im.behavior.invalidInterval': 'The interval must be an integer between {min} and {max} ms',
     }
     const MESSAGES_ZH = {
       'settings.subtitle': '角色卡、世界书与预设管理',
@@ -4442,6 +4460,8 @@ window.__ModuleLoader__.load({
       'body.detailGroupMismatch': '这组正文同时绑定了多个聊天楼层，显示与编辑目标不一致，已禁止编辑。',
       'body.detailFloorUnreadable': '这条正文的聊天楼层暂时读不到，当前只显示台账正文；稍后会自动重试。',
       'body.detailUnknown': '当前状态不允许这项正文操作。',
+      'body.mutationsDisabled': 'IM 会话只读',
+      'body.mutationsDisabledHint': 'IM 会话的回复通过 im_send 送达，不能编辑、重新生成或切换候选。',
       // IM 通道（提案 0024 §6.1，M5）：键集与 40-i18n-en.js 严格镜像。
       'im.hint.title': '即时通讯',
       'im.hint': 'QQ、微信与 OneBot 11 的消息会插进你绑定的 DSH 会话，由模型调用 im_send 回复。绑定会话建议使用 AgentTavernIM 预设，模型才会按 IM 规则用短句、多条消息回复。',
@@ -4540,6 +4560,22 @@ window.__ModuleLoader__.load({
       'im.qqInstallAlready': 'QQ 运行时本来就装好了。',
       'im.qqInstallBusy': '已有一次 QQ 运行时安装在进行，等它结束再试。',
       'im.qqInstallFailed': 'QQ 运行时安装失败：{reason}',
+      // 微信发送节奏（决策 2026-10-31-weixin-send-queue）：「行为」页。
+      'im.tabs.behavior': '行为',
+      'im.behavior.title': '发送节奏',
+      'im.behavior.hint': '微信出站经由这条队列。30 秒窗口最多 5 条与 -2 冷却 5 分钟是平台硬上限；面板只能把发送放慢，不能突破它们。',
+      'im.behavior.interval': '出站间隔（毫秒）',
+      'im.behavior.intervalHint': '{min}–{max} 之间的整数；留空保存即恢复默认（3000 毫秒）。',
+      'im.behavior.save': '保存间隔',
+      'im.behavior.reset': '恢复默认',
+      'im.behavior.statusTitle': '当前发送节奏',
+      'im.behavior.statusEmpty': '还没有在线的微信账号；账号连上后这里会显示队列与冷却。',
+      'im.behavior.allowedNow': '现在可发',
+      'im.behavior.waiting': '等待中',
+      'im.behavior.nextSendAt': '下次可发 {at}',
+      'im.behavior.throttleUntil': '冷却至 {at}',
+      'im.behavior.queueDepth': '队列 {count} 条',
+      'im.behavior.invalidInterval': '间隔必须是 {min}–{max} 之间的整数毫秒',
     }
     // translate follows the host locale service once apply() binds it; the
     // identity fallback mirrors LocaleRuntime.translate (missing key -> key,
@@ -11447,6 +11483,7 @@ window.__ModuleLoader__.load({
       if (code === 'invalid-arguments') return t('body.invalidRequest')
       if (code === 'projection-pending') return t('body.projectionPending')
       if (code === 'host-unsupported') return t('body.hostUnsupported')
+      if (code === 'im-body-mutation-disabled') return t('body.mutationsDisabledHint')
       // State refusals carry a stable detail (receipt damage, ledger damage).
       // Map it to local copy; never surface the server's English sentence.
       if (code === 'body-state-unsafe') {
@@ -11532,9 +11569,25 @@ window.__ModuleLoader__.load({
 
       const count = typeof body.count === 'number' && Number.isInteger(body.count) && body.count > 0 ? body.count : 0
       const selectedIndex = typeof body.selectedIndex === 'number' && Number.isInteger(body.selectedIndex) ? body.selectedIndex : 0
-      const canEdit = body.canEdit === true
-      const canRegenerate = body.canRegenerate === true
-      const canSelect = body.canSelect === true
+      // An IM-bound session keeps the read-only body but closes every
+      // mutation. The server omits the field for normal sessions, so only an
+      // explicit false disables the actions.
+      const mutationsEnabled = body.mutationsEnabled !== false
+      // The UI shows local copy, never the server's English sentence: the
+      // dictionary wins, and the server explanation is only the fallback for a
+      // dictionary that cannot resolve the key at all (translate returns the
+      // key itself then).
+      const localDisabledHint = t('body.mutationsDisabledHint')
+      const mutationsDisabledTitle = mutationsEnabled
+        ? ''
+        : localDisabledHint !== '' && localDisabledHint !== 'body.mutationsDisabledHint'
+          ? localDisabledHint
+          : typeof body.disabledReason === 'string' && body.disabledReason !== ''
+            ? body.disabledReason
+            : ''
+      const canEdit = mutationsEnabled && body.canEdit === true
+      const canRegenerate = mutationsEnabled && body.canRegenerate === true
+      const canSelect = mutationsEnabled && body.canSelect === true
       const busy = pending !== '' || watching !== null || bodyResult.loading
       const expectedIndex = selectedIndex
       const expectedAnchorId = typeof body.anchorMessageId === 'string' ? body.anchorMessageId : messageId
@@ -11544,7 +11597,7 @@ window.__ModuleLoader__.load({
       const detailText = tavernBodyDetailText(t, body.detail)
 
       const runBodyAction = (kind, request, onDone) => {
-        if (busy) return
+        if (busy || !mutationsEnabled) return
         setPending(kind)
         setError('')
         void withBodyProjectionRetry(request)
@@ -11608,7 +11661,7 @@ window.__ModuleLoader__.load({
       }
 
       const selectCandidate = (index) => {
-        if (!canSelect || busy || index < 0 || index >= count || index === selectedIndex) return
+        if (!mutationsEnabled || !canSelect || busy || index < 0 || index >= count || index === selectedIndex) return
         runBodyAction('select', () => api('body/select', {
           method: 'POST',
           headers: jsonHeaders(),
@@ -11634,31 +11687,36 @@ window.__ModuleLoader__.load({
 
       return h(React.Fragment, null,
         h('span', { className: 'dt-body-actions', 'data-testid': 'tavern-body-actions' },
-          canEdit ? h(Button, {
+          canEdit || !mutationsEnabled ? h(Button, {
             size: 'sm',
             variant: 'ghost',
             type: 'button',
             icon: h(IconEditOutline16),
-            disabled: busy,
+            disabled: busy || !mutationsEnabled,
+            title: mutationsEnabled ? undefined : mutationsDisabledTitle,
             'data-testid': 'tavern-body-edit',
             onClick: openEditor,
           }, t('body.edit')) : null,
-          canRegenerate ? h(Button, {
+          canRegenerate || !mutationsEnabled ? h(Button, {
             size: 'sm',
             variant: 'ghost',
             type: 'button',
             icon: h(IconRefreshOutline16),
-            disabled: busy,
+            disabled: busy || !mutationsEnabled,
+            title: mutationsEnabled ? undefined : mutationsDisabledTitle,
             'data-testid': 'tavern-body-regenerate',
             onClick: openRegenerate,
           }, t('body.regenerate')) : null,
-          canSelect ? h('span', { className: 'dt-body-swipe' },
+          canSelect || !mutationsEnabled ? h('span', {
+            className: 'dt-body-swipe',
+            ...(mutationsEnabled ? {} : { title: mutationsDisabledTitle }),
+          },
             h(Button, {
               size: 'sm',
               variant: 'ghost',
               type: 'button',
               'aria-label': t('body.swipe', { index: Math.max(selectedIndex, 0), count }),
-              disabled: busy || selectedIndex <= 0,
+              disabled: busy || !mutationsEnabled || selectedIndex <= 0,
               'data-testid': 'tavern-body-swipe-prev',
               onClick: () => selectCandidate(selectedIndex - 1),
             }, h(IconChevronLeftOutline14)),
@@ -11673,10 +11731,15 @@ window.__ModuleLoader__.load({
               variant: 'ghost',
               type: 'button',
               'aria-label': t('body.swipe', { index: Math.min(selectedIndex + 2, count + 1), count }),
-              disabled: busy || count === 0 || selectedIndex >= count - 1,
+              disabled: busy || !mutationsEnabled || count === 0 || selectedIndex >= count - 1,
               'data-testid': 'tavern-body-swipe-next',
               onClick: () => selectCandidate(selectedIndex + 1),
             }, h(IconChevronRightOutline14))) : null,
+          !mutationsEnabled ? h('span', {
+            className: 'dt-muted',
+            title: mutationsDisabledTitle,
+            'data-testid': 'tavern-body-mutations-disabled',
+          }, t('body.mutationsDisabled')) : null,
           watching !== null ? h('span', { className: 'dt-muted' }, t('body.generating')) : null,
           reasonText !== '' ? h('span', { className: 'dt-muted' }, reasonText) : null,
           detailText !== '' ? h('span', {
@@ -15898,8 +15961,7 @@ window.__ModuleLoader__.load({
     /** 面板数据刷新间隔：未绑定对端与通道状态在面板打开时要能自己出现。 */
     const IM_VIEW_POLL_MS = 5000
     const IM_CHANNELS = ['qq', 'weixin', 'onebot']
-    const IM_TABS = ['channels', 'bindings', 'logs']
-
+    const IM_TABS = ['channels', 'bindings', 'behavior', 'logs']
     /** 错误一律取 Error.message：api() 已经把服务端 message 塞进去了。 */
     function imErrorMessage(cause) {
       return cause instanceof Error ? cause.message : String(cause)
@@ -16360,6 +16422,8 @@ window.__ModuleLoader__.load({
             onPatch: (patch) => { void saveSettings(patch) },
             onAllowDraft: (scope, value) => setAllowDraft((current) => ({ ...current, [scope]: value })),
           }))
+      } else if (activeTab === 'behavior') {
+        tabContent = h(ImBehaviorBand, { settings, statuses: view?.sendStatuses ?? [], busy, onSave: saveSettings, onError: setError })
       } else if (activeTab === 'logs') {
         tabContent = h(ImLogBand, { disabled: !available, onError: setError })
       } else {
@@ -16441,66 +16505,6 @@ window.__ModuleLoader__.load({
               onClick: onInstall,
             }, busy === 'install:qq' ? t('im.log.installing') : t('im.qqInstall')))
           : null)
-    }
-
-    /**
-     * 二维码的图片来源：平台有时给内容串（要编码），有时直接给图片地址。
-     * 图片地址优先透传，其余用服务端渲染好的 `qrSvg`；两者都没有就退回链接。
-     */
-    function imLooksLikeImageUrl(value) {
-      if (value === '') return false
-      return /^data:image\//i.test(value) || /\.(png|jpe?g|gif|webp|svg)(\?|#|$)/i.test(value)
-    }
-
-    function imQrSrc(bind) {
-      const url = typeof bind.url === 'string' ? bind.url : ''
-      if (imLooksLikeImageUrl(url)) return url
-      const qrSvg = typeof bind.qrSvg === 'string' ? bind.qrSvg : ''
-      return qrSvg !== '' ? qrSvg : url
-    }
-
-    /** 扫码面板：二维码 / 微信验证码 / 失败原因 + 重试。单会话共用。 */
-    function ImBindPanel({ bind, qrFailedFor, verifyCode, busy, onQrFailed, onVerifyCode, onSubmit, onRetry, onCancel }) {
-      const t = useTranslate()
-      const src = imQrSrc(bind)
-      const url = typeof bind.url === 'string' ? bind.url : ''
-      const phase = bind.phase
-      const showQr = phase === 'waiting' || phase === 'saving'
-      const hasQr = showQr && src !== ''
-      return h('section', { className: 'dt-settings-band dt-im-bind', 'data-im-bind-phase': phase },
-        h('div', { className: `dt-im-bind-layout${hasQr ? ' dt-im-bind-layout-with-qr' : ''}` },
-          h('div', { className: 'dt-im-bind-copy' },
-            h('h3', null, t('im.bindTitle', { channel: t(`im.channel.${bind.channel}`) })),
-            phase === 'failed' ? h('p', { className: 'dt-error' }, t('im.bindFailed', { reason: bind.reason || '—' })) : null,
-            phase === 'verify'
-              ? h('div', { className: 'dt-im-verify' },
-                h('label', { className: 'dt-field' },
-                  h('span', { className: 'dt-label' }, t('im.bindVerify')),
-                  h('input', {
-                    type: 'text', inputMode: 'numeric', value: verifyCode,
-                    'aria-label': t('im.bindVerify'), onChange: (event) => onVerifyCode(event.target.value),
-                  })),
-                h(Button, {
-                  size: 'sm', variant: 'primary', onClick: onSubmit,
-                  disabled: imBindBusy(busy) || verifyCode.trim() === '',
-                }, busy === 'verify' ? t('im.bindSubmitting') : t('im.bindVerifySubmit')),
-                h('p', { className: 'dt-hint dt-hint-wide' }, bind.prompt || t('im.bindVerifyHint')))
-              : null,
-            showQr ? h('p', { className: 'dt-hint' }, phase === 'saving' ? t('im.bindSaving') : t('im.bindWaiting')) : null),
-          showQr
-            ? h('div', { className: 'dt-im-qr' },
-              src !== '' && qrFailedFor !== src ? h('img', { src, alt: t('im.bindQrAlt'), onError: () => onQrFailed(src) }) : null,
-              src === ''
-                ? h('p', { className: 'dt-muted' }, t('im.bindQrPending'))
-                : h('a', {
-                  className: 'dt-im-qr-link',
-                  // 备用链接指向平台给的内容地址：图挂了还能点开它，而不是打开一张 data URL。
-                  href: url !== '' ? url : src, target: '_blank', rel: 'noreferrer',
-                }, t('im.bindQrLink')))
-            : null),
-        h('div', { className: 'dt-im-bind-actions' },
-          phase === 'failed' ? h(Button, { size: 'sm', variant: 'outline', disabled: imBindBusy(busy), onClick: onRetry }, t('im.bindRetry')) : null,
-          h(Button, { size: 'sm', variant: 'ghost', disabled: imBindBusy(busy), onClick: onCancel }, t('im.bindCancel'))))
     }
 
     /**
@@ -16832,6 +16836,164 @@ window.__ModuleLoader__.load({
         visible.length === 0
           ? h('p', { className: 'dt-muted' }, t('im.log.empty'))
           : h(ImLogRows, { entries: visible }))
+    }
+
+// 「行为」页（决策 2026-10-31-weixin-send-queue）：微信出站间隔（500..60000ms，
+    // 保存走 im/settings）+ 只读发送节奏投影（GET im 的 sendStatuses）。
+    //
+    // 状态行只显示服务端事实（allowedNow / nextSendAt / throttleUntil / queueDepth）；
+    // 面板打开期间由既有 5s 轮询自己刷新，队列深度不会停在旧值上。
+    const IM_SEND_INTERVAL_MIN_MS = 500
+    const IM_SEND_INTERVAL_MAX_MS = 60000
+
+    /** 设置里的间隔：缺省（null/undefined）回显为空，保存空串 = 清除回默认。 */
+    function imSendIntervalValue(settings) {
+      const raw = settings?.weixinSendIntervalMs
+      return typeof raw === 'number' ? raw : null
+    }
+
+    /** 状态行的时间：解析不了的 ISO 给占位符，不显示 Invalid Date。 */
+    function imStatusTime(at) {
+      const date = new Date(at)
+      if (Number.isNaN(date.getTime())) return '—'
+      return date.toLocaleString()
+    }
+
+    function ImBehaviorBand({ settings, statuses, busy, onSave, onError }) {
+      const t = useTranslate()
+      const [draft, setDraft] = useState(null)
+      if (settings === null) {
+        return h('section', { className: 'dt-settings-band dt-im-behavior', 'data-im-behavior': 'band' },
+          h('h3', null, t('im.behavior.title')),
+          h('p', { className: 'dt-muted' }, t('nav.loading')))
+      }
+      const interval = imSendIntervalValue(settings)
+      const value = draft !== null ? draft : (interval === null ? '' : String(interval))
+      const persist = (payload) => {
+        void onSave(payload).then((saved) => { if (saved) setDraft(null) })
+      }
+      const save = () => {
+        const raw = String(value).trim()
+        if (raw === '') {
+          persist({ weixinSendIntervalMs: null })
+          return
+        }
+        const parsed = Number(raw)
+        if (!Number.isInteger(parsed) || parsed < IM_SEND_INTERVAL_MIN_MS || parsed > IM_SEND_INTERVAL_MAX_MS) {
+          onError(t('im.behavior.invalidInterval', { min: IM_SEND_INTERVAL_MIN_MS, max: IM_SEND_INTERVAL_MAX_MS }))
+          return
+        }
+        persist({ weixinSendIntervalMs: parsed })
+      }
+      return h('section', { className: 'dt-settings-band dt-im-behavior', 'data-im-behavior': 'band' },
+        h('h3', null, t('im.behavior.title')),
+        h('p', { className: 'dt-hint' }, t('im.behavior.hint')),
+        h('div', { className: 'dt-im-behavior-form' },
+          h('label', { className: 'dt-field' },
+            h('span', { className: 'dt-label' }, t('im.behavior.interval')),
+            h('input', {
+              type: 'number',
+              min: IM_SEND_INTERVAL_MIN_MS,
+              max: IM_SEND_INTERVAL_MAX_MS,
+              step: 100,
+              value,
+              'aria-label': t('im.behavior.interval'),
+              disabled: busy === 'settings',
+              onChange: (event) => setDraft(event.target.value),
+            }),
+            h('span', { className: 'dt-hint' }, t('im.behavior.intervalHint', { min: IM_SEND_INTERVAL_MIN_MS, max: IM_SEND_INTERVAL_MAX_MS }))),
+          h(Button, {
+            size: 'sm',
+            variant: 'primary',
+            disabled: busy === 'settings',
+            onClick: save,
+          }, t('im.behavior.save')),
+          h(Button, {
+            size: 'sm',
+            variant: 'ghost',
+            disabled: busy === 'settings' || interval === null,
+            onClick: () => persist({ weixinSendIntervalMs: null }),
+          }, t('im.behavior.reset'))),
+        h('h4', null, t('im.behavior.statusTitle')),
+        statuses.length === 0
+          ? h('p', { className: 'dt-muted' }, t('im.behavior.statusEmpty'))
+          : h('div', { className: 'dt-im-behavior-status' }, statuses.map((row) => h('div', {
+            key: `${row.channel}:${row.accountId}`,
+            className: 'dt-im-behavior-row',
+            'data-im-send-status': `${row.channel}:${row.accountId}`,
+          },
+          h('div', { className: 'dt-im-behavior-row-head' },
+            h('strong', null, row.accountId),
+            h('span', { className: 'dt-im-monospace' }, String(row.channel)),
+            h(Pill, { active: row.allowedNow === true }, row.allowedNow === true ? t('im.behavior.allowedNow') : t('im.behavior.waiting'))),
+          h('p', { className: 'dt-hint' },
+            [
+              row.nextSendAt === undefined ? null : t('im.behavior.nextSendAt', { at: imStatusTime(row.nextSendAt) }),
+              row.throttleUntil === undefined ? null : t('im.behavior.throttleUntil', { at: imStatusTime(row.throttleUntil) }),
+              t('im.behavior.queueDepth', { count: row.queueDepth ?? 0 }),
+            ].filter((piece) => piece !== null).join(' · '))))))
+    }
+
+    // 扫码面板（决策 2026-10-31-im-native-session-binding / 提案 0024 §6.3）：
+    // 二维码 / 微信验证码 / 失败原因 + 重试。与主面板共用同一作用域（manifest 里
+    // 紧跟 97cc 行为页拼接），扫码相位轮询在 97-ui-im.js 的 PanelIm 里。
+    //
+    // 二维码的图片来源：平台有时给内容串（要编码），有时直接给图片地址。
+    // 图片地址优先透传，其余用服务端渲染好的 `qrSvg`；两者都没有就退回链接。
+    function imLooksLikeImageUrl(value) {
+      if (value === '') return false
+      return /^data:image\//i.test(value) || /\.(png|jpe?g|gif|webp|svg)(\?|#|$)/i.test(value)
+    }
+
+    function imQrSrc(bind) {
+      const url = typeof bind.url === 'string' ? bind.url : ''
+      if (imLooksLikeImageUrl(url)) return url
+      const qrSvg = typeof bind.qrSvg === 'string' ? bind.qrSvg : ''
+      return qrSvg !== '' ? qrSvg : url
+    }
+
+    /** 扫码面板：二维码 / 微信验证码 / 失败原因 + 重试。单会话共用。 */
+    function ImBindPanel({ bind, qrFailedFor, verifyCode, busy, onQrFailed, onVerifyCode, onSubmit, onRetry, onCancel }) {
+      const t = useTranslate()
+      const src = imQrSrc(bind)
+      const url = typeof bind.url === 'string' ? bind.url : ''
+      const phase = bind.phase
+      const showQr = phase === 'waiting' || phase === 'saving'
+      const hasQr = showQr && src !== ''
+      return h('section', { className: 'dt-settings-band dt-im-bind', 'data-im-bind-phase': phase },
+        h('div', { className: `dt-im-bind-layout${hasQr ? ' dt-im-bind-layout-with-qr' : ''}` },
+          h('div', { className: 'dt-im-bind-copy' },
+            h('h3', null, t('im.bindTitle', { channel: t(`im.channel.${bind.channel}`) })),
+            phase === 'failed' ? h('p', { className: 'dt-error' }, t('im.bindFailed', { reason: bind.reason || '—' })) : null,
+            phase === 'verify'
+              ? h('div', { className: 'dt-im-verify' },
+                h('label', { className: 'dt-field' },
+                  h('span', { className: 'dt-label' }, t('im.bindVerify')),
+                  h('input', {
+                    type: 'text', inputMode: 'numeric', value: verifyCode,
+                    'aria-label': t('im.bindVerify'), onChange: (event) => onVerifyCode(event.target.value),
+                  })),
+                h(Button, {
+                  size: 'sm', variant: 'primary', onClick: onSubmit,
+                  disabled: imBindBusy(busy) || verifyCode.trim() === '',
+                }, busy === 'verify' ? t('im.bindSubmitting') : t('im.bindVerifySubmit')),
+                h('p', { className: 'dt-hint dt-hint-wide' }, bind.prompt || t('im.bindVerifyHint')))
+              : null,
+            showQr ? h('p', { className: 'dt-hint' }, phase === 'saving' ? t('im.bindSaving') : t('im.bindWaiting')) : null),
+          showQr
+            ? h('div', { className: 'dt-im-qr' },
+              src !== '' && qrFailedFor !== src ? h('img', { src, alt: t('im.bindQrAlt'), onError: () => onQrFailed(src) }) : null,
+              src === ''
+                ? h('p', { className: 'dt-muted' }, t('im.bindQrPending'))
+                : h('a', {
+                  className: 'dt-im-qr-link',
+                  // 备用链接指向平台给的内容地址：图挂了还能点开它，而不是打开一张 data URL。
+                  href: url !== '' ? url : src, target: '_blank', rel: 'noreferrer',
+                }, t('im.bindQrLink')))
+            : null),
+        h('div', { className: 'dt-im-bind-actions' },
+          phase === 'failed' ? h(Button, { size: 'sm', variant: 'outline', disabled: imBindBusy(busy), onClick: onRetry }, t('im.bindRetry')) : null,
+          h(Button, { size: 'sm', variant: 'ghost', disabled: imBindBusy(busy), onClick: onCancel }, t('im.bindCancel'))))
     }
 
     function apply(ctx) {

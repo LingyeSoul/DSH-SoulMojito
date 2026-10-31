@@ -114,6 +114,8 @@ async function renameWithWindowsRetry(from, to, attempts) {
 }
 
 // packages/tavern-store/src/im-state.ts
+var WEIXIN_SEND_INTERVAL_MIN_MS = 500;
+var WEIXIN_SEND_INTERVAL_MAX_MS = 6e4;
 var DEFAULT_IM_SETTINGS = {
   groupRequireMention: true,
   privateMode: "allowlist",
@@ -143,13 +145,16 @@ function normalizeImSettings(value) {
   }
   const record = value;
   const chunkLimit = record["chunkLimit"];
+  const sendInterval = record["weixinSendIntervalMs"];
   return {
     groupRequireMention: record["groupRequireMention"] !== false,
     privateMode: normalizeAccessMode(record["privateMode"], "allowlist"),
     privateAllow: normalizeStringList(record["privateAllow"]),
     groupMode: normalizeAccessMode(record["groupMode"], "allowlist"),
     groupAllow: normalizeStringList(record["groupAllow"]),
-    ...typeof chunkLimit === "number" && Number.isSafeInteger(chunkLimit) && chunkLimit > 0 ? { chunkLimit } : {}
+    ...typeof chunkLimit === "number" && Number.isSafeInteger(chunkLimit) && chunkLimit > 0 ? { chunkLimit } : {},
+    // 手改坏了的间隔（非整数/越界）直接丢弃回落默认，不拖垮整份设置。
+    ...typeof sendInterval === "number" && Number.isSafeInteger(sendInterval) && sendInterval >= WEIXIN_SEND_INTERVAL_MIN_MS && sendInterval <= WEIXIN_SEND_INTERVAL_MAX_MS ? { weixinSendIntervalMs: sendInterval } : {}
   };
 }
 function normalizeImPeers(value) {

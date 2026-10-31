@@ -167,13 +167,16 @@ function normalizeImSettings(value) {
   }
   const record = value;
   const chunkLimit = record["chunkLimit"];
+  const sendInterval = record["weixinSendIntervalMs"];
   return {
     groupRequireMention: record["groupRequireMention"] !== false,
     privateMode: normalizeAccessMode(record["privateMode"], "allowlist"),
     privateAllow: normalizeStringList(record["privateAllow"]),
     groupMode: normalizeAccessMode(record["groupMode"], "allowlist"),
     groupAllow: normalizeStringList(record["groupAllow"]),
-    ...typeof chunkLimit === "number" && Number.isSafeInteger(chunkLimit) && chunkLimit > 0 ? { chunkLimit } : {}
+    ...typeof chunkLimit === "number" && Number.isSafeInteger(chunkLimit) && chunkLimit > 0 ? { chunkLimit } : {},
+    // 手改坏了的间隔（非整数/越界）直接丢弃回落默认，不拖垮整份设置。
+    ...typeof sendInterval === "number" && Number.isSafeInteger(sendInterval) && sendInterval >= WEIXIN_SEND_INTERVAL_MIN_MS && sendInterval <= WEIXIN_SEND_INTERVAL_MAX_MS ? { weixinSendIntervalMs: sendInterval } : {}
   };
 }
 function normalizeImPeers(value) {
@@ -207,10 +210,13 @@ function normalizeImPendingPeers(value) {
   }
   return result;
 }
-var DEFAULT_IM_SETTINGS;
+var WEIXIN_SEND_INTERVAL_DEFAULT_MS, WEIXIN_SEND_INTERVAL_MIN_MS, WEIXIN_SEND_INTERVAL_MAX_MS, DEFAULT_IM_SETTINGS;
 var init_im_state = __esm({
   "packages/tavern-store/src/im-state.ts"() {
     "use strict";
+    WEIXIN_SEND_INTERVAL_DEFAULT_MS = 3e3;
+    WEIXIN_SEND_INTERVAL_MIN_MS = 500;
+    WEIXIN_SEND_INTERVAL_MAX_MS = 6e4;
     DEFAULT_IM_SETTINGS = {
       groupRequireMention: true,
       privateMode: "allowlist",
@@ -10184,7 +10190,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("ed583ea") : void 0;
+  const commit = true ? normalizeCommit("4889a73") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -15089,7 +15095,7 @@ function applyCardOverride(identifier, content, card) {
 
 // packages/plugin/src/agent-tavern/projector.ts
 init_src();
-import { createHash as createHash7, randomUUID as randomUUID4 } from "node:crypto";
+import { createHash as createHash8, randomUUID as randomUUID4 } from "node:crypto";
 import { promises as fs14 } from "node:fs";
 import { join as join14 } from "node:path";
 
@@ -20512,7 +20518,8 @@ function formatFloorIndices(matches) {
 function findBodyFloorIndexByMessageId(chat, messageId) {
   const matches = [];
   for (const [index, message] of chat.messages.entries()) {
-    if (readAgentTavern(message)?.messageId !== messageId) continue;
+    const tavern = readAgentTavern(message);
+    if (tavern === void 0 || isImSendFloor(tavern) || tavern["messageId"] !== messageId) continue;
     matches.push(index);
   }
   if (matches.length > 1) {
@@ -20533,7 +20540,7 @@ function locateBodyFloorForRead(chat, hints) {
   const matches = [];
   for (const [index2, message] of chat.messages.entries()) {
     const tavern = readAgentTavern(message);
-    if (tavern === void 0) continue;
+    if (tavern === void 0 || isImSendFloor(tavern)) continue;
     if (tavern.bodyGroupId !== hints.messageId && tavern.messageId !== hints.messageId && tavern.anchorMessageId !== hints.messageId) continue;
     matches.push(index2);
   }
@@ -20845,6 +20852,9 @@ function readAgentTavern(message) {
   if (!isRecord3(extra)) return void 0;
   const agentTavern = extra.agentTavern;
   return isRecord3(agentTavern) ? agentTavern : void 0;
+}
+function isImSendFloor(tavern) {
+  return tavern?.["via"] === "im-send";
 }
 function isRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -23894,7 +23904,7 @@ function createBodySessionFactsSource(session) {
       throw error;
     }
   };
-  const messageTextOf = (messageId) => {
+  const messageTextOf2 = (messageId) => {
     if (messageTexts === void 0) {
       const built = /* @__PURE__ */ new Map();
       for (const event of events) {
@@ -23949,7 +23959,7 @@ function createBodySessionFactsSource(session) {
     const latestEditSeq = ledger === void 0 ? void 0 : latestEditSeqOf(ledger.groupId);
     const resolved = {
       ledger,
-      messageText: messageTextOf(messageId),
+      messageText: messageTextOf2(messageId),
       inspection: inspectionOf(anchorMessageId),
       ...latestEditSeq === void 0 ? {} : { latestEditSeq },
       ...terminal.value === void 0 ? {} : { lastOperation: terminal.value },
@@ -24520,6 +24530,310 @@ function eventDate(time, seq, type) {
   return new Date(time).toISOString();
 }
 
+// packages/plugin/src/agent-tavern/im-projection.ts
+init_src2();
+
+// packages/plugin/src/im/types.ts
+init_src();
+import { createHash as createHash7 } from "node:crypto";
+var AGENT_TAVERN_IM_PRESET_ID = "agent-tavern-im";
+function imDedupeKey(channel, accountId, scope, peerId, messageId) {
+  return `${channel}:${accountId}:${scope}:${peerId}:${messageId}`;
+}
+function imPeerKeyParts(key) {
+  const parts = key.split(":");
+  if (parts.length < 4) return void 0;
+  const [channel, accountId, scope, ...rest] = parts;
+  if (channel === void 0 || accountId === void 0 || scope === void 0) return void 0;
+  return { channel, accountId, scope, peerId: rest.join(":") };
+}
+function imPeerAlias(channel, scope, peerKey) {
+  return `peer-${createHash7("sha256").update(`${channel}:${scope}:${peerKey}`).digest("hex").slice(0, 10)}`;
+}
+
+// packages/plugin/src/agent-tavern/im-projection.ts
+var MEDIA_LABELS = {
+  image: "\uFF08\u56FE\u7247\uFF09",
+  voice: "\uFF08\u8BED\u97F3\uFF09",
+  video: "\uFF08\u89C6\u9891\uFF09",
+  file: "\uFF08\u6587\u4EF6\uFF09"
+};
+var RELAY_HEADER = /^\[IM ([^/\]]+)\/(私聊|群聊) peer=([^\]\s]+)(?: msg=(msg-[^\s\]]+))?(?: time=[^\]\s]+)?\](?:\s*（连续 \d+ 条消息）)?$/;
+var RELAY_FOOTER = /^（这是从 IM 转发给你的消息，不是 DSH 用户输入。回复请调用 im_send，peer 参数用 .+。）$/;
+var RELAY_REF = /^msg-[0-9a-f]{10}$/;
+var MERGED_LINE_REF = /^\[msg-[0-9a-f]{10}\]\s*/;
+function parseImRelayText(raw, summary, boundAliases) {
+  const lines = raw.split(/\r?\n/);
+  const first = lines[0]?.trim() ?? "";
+  const lastIndex = lastNonBlankIndex(lines);
+  const header = RELAY_HEADER.exec(first);
+  const footer = lastIndex > 0 && RELAY_FOOTER.test(lines[lastIndex]?.trim() ?? "");
+  if (header !== null && footer) {
+    const body = lines.slice(1, lastIndex).map((line) => line.replace(MERGED_LINE_REF, "")).join("\n").trim();
+    if (body !== "") {
+      const ref = header[4];
+      return {
+        text: body,
+        peerAlias: header[3] ?? "",
+        ...ref !== void 0 && RELAY_REF.test(ref) ? { ref } : {},
+        fallback: false
+      };
+    }
+  }
+  return {
+    text: raw.trim(),
+    peerAlias: aliasHintOf(raw, summary, boundAliases),
+    fallback: true
+  };
+}
+function boundImPeerAliases(state, sessionId) {
+  const peers = recordOf(recordOf(state)?.["imPeers"]);
+  if (peers === void 0) return [];
+  const aliases = /* @__PURE__ */ new Set();
+  for (const [peerKey, value] of Object.entries(peers)) {
+    const binding = recordOf(value);
+    if (binding?.["sessionId"] !== sessionId) continue;
+    const parts = imPeerKeyParts(peerKey);
+    if (parts === void 0) continue;
+    if (parts.scope !== "private" && parts.scope !== "group") continue;
+    aliases.add(imPeerAlias(parts.channel, parts.scope, peerKey));
+  }
+  return [...aliases].sort();
+}
+function imPeerPrefix(peerAlias, boundAliases) {
+  if (peerAlias === "" || boundAliases.length <= 1) return "";
+  return `[${peerAlias}] `;
+}
+function isImRelaySource(source) {
+  const record = recordOf(source);
+  return record?.["form"] === "relay" && isHostPluginMessageSource(record);
+}
+function imSendCallsOf(content) {
+  if (!Array.isArray(content)) return [];
+  const calls = [];
+  for (const block of content) {
+    const record = recordOf(block);
+    if (record === void 0 || record["type"] !== "tool-call" || record["name"] !== "im_send") continue;
+    const callId = textOf(record["id"]) ?? textOf(record["callId"]);
+    if (callId === void 0) continue;
+    const args = argumentsOf(record["arguments"]);
+    if (args === void 0) continue;
+    const text = typeof args["text"] === "string" ? args["text"].trim() : "";
+    const mediaKind = mediaKindOf(args);
+    if (text === "" && mediaKind === void 0) continue;
+    calls.push({
+      callId,
+      text,
+      peerAlias: typeof args["peer"] === "string" ? args["peer"].trim() : "",
+      ...mediaKind === void 0 ? {} : { mediaKind }
+    });
+  }
+  return calls;
+}
+function imSendFloorText(call) {
+  const marker = call.mediaKind === void 0 ? "" : MEDIA_LABELS[call.mediaKind];
+  if (marker === "") return call.text;
+  return call.text === "" ? marker : `${call.text}
+${marker}`;
+}
+function imToolResultOf(data) {
+  const record = recordOf(data);
+  if (record === void 0) return void 0;
+  const message = recordOf(record["message"]);
+  const source = recordOf(message?.["source"]);
+  const callId = textOf(message?.["toolCallId"]) ?? textOf(source?.["callId"]) ?? textOf(record["callId"]) ?? textOf(record["toolCallId"]);
+  const isError = message?.["isError"] === true || record["isError"] === true;
+  const payload = message?.["content"] ?? record["content"] ?? record["result"];
+  return {
+    ...callId === void 0 ? {} : { callId },
+    ok: !isError && !errorPayloadOf(payload)
+  };
+}
+function projectionExtra(input) {
+  return {
+    agentTavern: {
+      architecture: "agent-tavern",
+      contextMode: input.contextMode,
+      sessionId: input.sessionId,
+      eventSeq: input.eventSeq,
+      projectionKey: input.projectionKey,
+      ...input.messageId === void 0 ? {} : { messageId: input.messageId },
+      ...typeof input.turn === "number" && Number.isSafeInteger(input.turn) ? { turn: input.turn } : {},
+      ...typeof input.step === "number" && Number.isSafeInteger(input.step) ? { step: input.step } : {},
+      ...input.via === void 0 ? {} : { via: input.via },
+      ...input.parse === void 0 ? {} : { parse: input.parse },
+      ...input.im === void 0 ? {} : { im: input.im }
+    }
+  };
+}
+function projectionIdentity(candidate, incoming, identity) {
+  const stored = recordOf(candidate.extra?.["agentTavern"]);
+  const next = recordOf(incoming.extra?.["agentTavern"]);
+  if (stored === void 0 || next === void 0) return false;
+  const storedKey = textOf(stored["projectionKey"]);
+  const nextKey = textOf(next["projectionKey"]);
+  if (storedKey !== void 0 && storedKey === nextKey) return true;
+  if (storedKey === void 0 && stored["sessionId"] === identity.sessionId && stored["eventSeq"] === identity.eventSeq) return true;
+  const storedIm = recordOf(stored["im"]);
+  const nextIm = recordOf(next["im"]);
+  if (next["via"] === "im-relay" && stored["via"] === "im-relay" && textOf(stored["messageId"]) !== void 0 && stored["messageId"] === next["messageId"]) return true;
+  if (next["via"] === "im-send" && stored["via"] === "im-send" && textOf(storedIm?.["callId"]) !== void 0 && storedIm?.["callId"] === nextIm?.["callId"]) return true;
+  return false;
+}
+function imFloorContextOf(sessionId, contextMode, character, event) {
+  return { sessionId, contextMode, character, eventSeq: event.seq, eventTime: event.time, eventType: event.type };
+}
+function messageTextOf(content) {
+  return (textContentOf(content) ?? "").trim();
+}
+function imSendEntriesOf(session, event) {
+  if (event.type !== "assistant/message" || isTavernSessionMarker(event.data?.message?.source) || isBodyMergedAssistant(session, event)) return [];
+  return imSendCallsOf(event.data?.message?.content).map((call) => ({
+    call,
+    ...typeof event.data?.turn === "number" ? { turn: event.data.turn } : {},
+    ...typeof event.data?.step === "number" ? { step: event.data.step } : {},
+    ...typeof event.data?.message?.id === "string" ? { messageId: event.data.message.id } : {}
+  }));
+}
+function projectImRelayFloors(context, inserted, scripts, peerAliases) {
+  const floors = [];
+  for (const [index, value] of inserted.entries()) {
+    const message = recordOf(value);
+    if (message === void 0 || !isImRelaySource(message["source"])) continue;
+    const text = messageTextOf(message["content"]);
+    if (text === "") continue;
+    const messageId = message["id"];
+    const parsed = parseImRelayText(text, recordOf(message["source"])?.["summary"], peerAliases);
+    floors.push({
+      name: "User",
+      is_user: true,
+      is_system: false,
+      send_date: sessionEventDate(context.eventTime, context.eventSeq, context.eventType),
+      mes: `${imPeerPrefix(parsed.peerAlias, peerAliases)}${applyRegexScripts(parsed.text, scripts, RegexPlacement2.USER_INPUT)}`,
+      extra: projectionExtra({
+        sessionId: context.sessionId,
+        eventSeq: context.eventSeq,
+        contextMode: context.contextMode,
+        projectionKey: `${context.sessionId}:${context.eventSeq}:im:${typeof messageId === "string" && messageId !== "" ? messageId : String(index)}`,
+        messageId,
+        via: "im-relay",
+        ...parsed.fallback ? { parse: "fallback" } : {},
+        im: {
+          direction: "in",
+          peerAlias: parsed.peerAlias,
+          ...parsed.ref === void 0 ? {} : { ref: parsed.ref }
+        }
+      })
+    });
+  }
+  return floors;
+}
+function projectImSendFloors(context, resultData, pending, scripts, peerAliases) {
+  if (pending === void 0) return [];
+  const outcome = imToolResultOf(resultData);
+  if (outcome === void 0 || !outcome.ok) return [];
+  const call = pending.call;
+  const text = imSendFloorText(call);
+  if (text === "") return [];
+  const peerAlias = call.peerAlias !== "" ? call.peerAlias : peerAliases.length === 1 ? peerAliases[0] ?? "" : "";
+  const saveScripts = scripts.filter((script) => !script.promptOnly && !script.markdownOnly);
+  const transformed = saveScripts.length > 0 ? applyRegexScripts(text, saveScripts, RegexPlacement2.AI_OUTPUT) : text;
+  return [{
+    name: context.character,
+    is_user: false,
+    is_system: false,
+    send_date: sessionEventDate(context.eventTime, context.eventSeq, context.eventType),
+    mes: `${imPeerPrefix(peerAlias, peerAliases)}${transformed}`,
+    extra: projectionExtra({
+      sessionId: context.sessionId,
+      eventSeq: context.eventSeq,
+      contextMode: context.contextMode,
+      projectionKey: `${context.sessionId}:${context.eventSeq}:im:${call.callId}`,
+      messageId: pending.messageId,
+      turn: pending.turn,
+      step: pending.step,
+      via: "im-send",
+      im: {
+        direction: "out",
+        peerAlias,
+        callId: call.callId,
+        ...call.mediaKind === void 0 ? {} : { mediaKind: call.mediaKind }
+      }
+    })
+  }];
+}
+var MAX_DATE_MILLISECONDS2 = 864e13;
+function sessionEventDate(time, seq, type) {
+  if (!Number.isSafeInteger(time) || time < 0 || time > MAX_DATE_MILLISECONDS2) {
+    throw new Error(
+      `session event '${type}' at seq ${seq} has unusable time ${String(time)}; expected a non-negative safe integer within the Date range`
+    );
+  }
+  return new Date(time).toISOString();
+}
+function lastNonBlankIndex(lines) {
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if ((lines[index] ?? "").trim() !== "") return index;
+  }
+  return -1;
+}
+function aliasHintOf(raw, summary, boundAliases) {
+  const header = /\bpeer=([^\]\s]+)/.exec(raw);
+  if (header?.[1] !== void 0) return header[1];
+  const summaryText = typeof summary === "string" ? summary.trim() : "";
+  const tail = /(?:^|\s)from (\S+)$/.exec(summaryText);
+  if (tail?.[1] !== void 0) return tail[1];
+  return boundAliases.length === 1 ? boundAliases[0] ?? "" : "";
+}
+function argumentsOf(value) {
+  if (typeof value === "string") {
+    try {
+      return recordOf(JSON.parse(value));
+    } catch {
+      return void 0;
+    }
+  }
+  return recordOf(value);
+}
+function mediaKindOf(args) {
+  const kind = args["mediaKind"];
+  if (kind !== "image" && kind !== "voice" && kind !== "video" && kind !== "file") return void 0;
+  const hasPath = typeof args["mediaPath"] === "string" && args["mediaPath"].trim() !== "";
+  const hasUrl = typeof args["mediaUrl"] === "string" && args["mediaUrl"].trim() !== "";
+  return hasPath || hasUrl ? kind : void 0;
+}
+function errorPayloadOf(payload) {
+  const text = textContentOf(payload)?.trim() ?? "";
+  if (text === "") return false;
+  try {
+    const record = recordOf(JSON.parse(text));
+    if (record === void 0) return false;
+    const error = record["error"];
+    return typeof error === "string" ? error.trim() !== "" : error !== void 0 && error !== null && error !== false;
+  } catch {
+    return false;
+  }
+}
+function textContentOf(value) {
+  if (typeof value === "string") return value;
+  if (!Array.isArray(value)) return void 0;
+  const parts = [];
+  for (const block of value) {
+    const record = recordOf(block);
+    if (record?.["type"] === "text" && typeof record["text"] === "string") parts.push(record["text"]);
+  }
+  return parts.join("");
+}
+function textOf(value) {
+  if (typeof value !== "string") return void 0;
+  const text = value.trim();
+  return text === "" ? void 0 : text;
+}
+function recordOf(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
+  return value;
+}
+
 // packages/plugin/src/agent-tavern/projector.ts
 var AgentTavernProjector = class _AgentTavernProjector {
   constructor(root, store5) {
@@ -24528,6 +24842,14 @@ var AgentTavernProjector = class _AgentTavernProjector {
   }
   tails = new KeyedMutationTails(true);
   checkpoints = /* @__PURE__ */ new Map();
+  /**
+   * 每个会话的待回执 `im_send` 调用：assistant 事件记录 callId → 参数/坐标，
+   * `tool/result` 取用。只服务投影，不写回宿主事件；结果只读不删——楼层写入
+   * 失败重放时要能再次取到，callId 在会话内唯一。
+   */
+  imSends = /* @__PURE__ */ new Map();
+  /** 每个会话回填扫描到的 `sessionEvents` 下标（日志只追加，游标只前进）。 */
+  imSendCursors = /* @__PURE__ */ new Map();
   static async open(tavernRoot, store5) {
     const root = join14(tavernRoot, "projections");
     await fs14.mkdir(root, { recursive: true });
@@ -24558,10 +24880,13 @@ var AgentTavernProjector = class _AgentTavernProjector {
         if (isBodyLogEvent(event.type)) {
           await projectBodyEvent(this.store, session, state, binding, event);
         } else {
+          const imPeerAliases = boundImPeerAliases(state, session.id);
+          if (event.type === "assistant/message" && imPeerAliases.length > 0) this.rememberImSends(session, event);
           const character = await this.store.getCharacter(binding.character);
           const scripts = await collectSessionRegexScripts(this.store, state, binding.character, binding.chatId, character);
-          const message = projectMessage(session, event, binding, scripts);
-          if (message !== void 0) await this.appendMessage(binding, session.id, event.seq, message, character?.card);
+          const pendingImSend = event.type === "tool/result" && imPeerAliases.length > 0 ? this.pendingImSend(session, event) : void 0;
+          const messages = projectMessages(session, event, binding, scripts, imPeerAliases, pendingImSend);
+          for (const message of messages) await this.appendMessage(binding, session.id, event.seq, message, character?.card);
         }
       }
       await this.writeCheckpoint(advanceCheckpoint(checkpoint, event.seq));
@@ -24569,6 +24894,38 @@ var AgentTavernProjector = class _AgentTavernProjector {
       await this.writeCheckpoint(pendingCheckpoint(checkpoint, event.seq, error));
       throw error;
     }
+  }
+  /** 记录 assistant 消息里的 `im_send` 调用，供随后的 tool/result 取参数。 */
+  rememberImSends(session, event) {
+    const entries = imSendEntriesOf(session, event);
+    if (entries.length === 0) return;
+    const index = this.imSends.get(session.id) ?? /* @__PURE__ */ new Map();
+    for (const entry of entries) index.set(entry.call.callId, entry);
+    this.imSends.set(session.id, index);
+  }
+  /**
+   * 取某次 `im_send` 的调用参数；进程在 assistant 与 tool/result 之间重启时，
+   * assistant 事件已越过检查点不会再投影，按日志游标回填一次索引。
+   *
+   * 游标只前进：首次 miss 从 0 扫到当前事件，之后的 miss 只补扫新窗口，不会
+   * 为每个工具回执重新全量扫描日志。
+   */
+  pendingImSend(session, event) {
+    const callId = imToolResultOf(event.data)?.callId;
+    if (callId === void 0) return void 0;
+    const index = this.imSends.get(session.id) ?? /* @__PURE__ */ new Map();
+    this.imSends.set(session.id, index);
+    const cached = index.get(callId);
+    if (cached !== void 0) return cached;
+    const events = sessionEvents(session);
+    let cursor = this.imSendCursors.get(session.id) ?? 0;
+    for (; cursor < events.length; cursor += 1) {
+      const prior = events[cursor];
+      if (prior.seq >= event.seq) break;
+      for (const entry of imSendEntriesOf(session, prior)) index.set(entry.call.callId, entry);
+    }
+    this.imSendCursors.set(session.id, cursor);
+    return index.get(callId);
   }
   async appendMessage(binding, sessionId, eventSeq, message, card) {
     for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -24578,7 +24935,7 @@ var AgentTavernProjector = class _AgentTavernProjector {
           `AgentTavern projection target chat not found: chat '${binding.chatId}' of '${binding.character}' while appending the message of session '${sessionId}' event seq ${eventSeq}`
         );
       }
-      if (snapshot2.chat.messages.some((candidate) => projectionIdentity(candidate, sessionId, eventSeq))) return;
+      if (snapshot2.chat.messages.some((candidate) => projectionIdentity(candidate, message, { sessionId, eventSeq }))) return;
       const next = structuredClone(snapshot2.chat);
       let projected = message;
       if (card !== void 0) {
@@ -24592,8 +24949,8 @@ var AgentTavernProjector = class _AgentTavernProjector {
             ...applied.statData !== void 0 ? { variables: { ...plainObjectRecord2(message.variables) ?? {}, stat_data: applied.statData } } : {}
           };
           if (applied.found) {
-            const messageId = projectedMessageId(message);
-            if (messageId === void 0) {
+            const messageId = plainObjectRecord2(message.extra?.["agentTavern"])?.["messageId"];
+            if (typeof messageId !== "string" || messageId === "") {
               throw new Error(
                 `AgentTavern projector cannot record the body MVU receipt: assistant message at event seq ${eventSeq} has no projection message id`
               );
@@ -24663,64 +25020,69 @@ var AgentTavernProjector = class _AgentTavernProjector {
     this.checkpoints.set(sessionId, next === void 0 ? { version: 2, sessionId, lastCursor: checkpoint.lastCursor, status: "ok", updatedAt: (/* @__PURE__ */ new Date()).toISOString() } : { ...checkpoint, pendingCursor: next.seq });
   }
   checkpointPath(sessionId) {
-    const name2 = createHash7("sha256").update(sessionId).digest("hex");
+    const name2 = createHash8("sha256").update(sessionId).digest("hex");
     return join14(this.root, `${name2}.json`);
   }
 };
-function projectMessage(session, event, binding, scripts) {
+function projectMessages(session, event, binding, scripts, imPeerAliases, pendingImSend) {
+  const imContext = imFloorContextOf(session.id, binding.contextMode, binding.character, event);
+  if (event.type === "agent/inbox/spliced") {
+    const inserted = event.data?.inserted;
+    if (imPeerAliases.length === 0 || !Array.isArray(inserted)) return [];
+    return projectImRelayFloors(imContext, inserted, scripts, imPeerAliases);
+  }
   if (event.type === "user/message") {
     const source = event.data?.source;
-    if (typeof source !== "object" || source === null || Array.isArray(source) || source["kind"] !== "user") return void 0;
-    const text2 = messageText3(event.data?.content);
-    if (text2 === "") return void 0;
-    return {
+    if (isImRelaySource(source)) {
+      return imPeerAliases.length === 0 ? [] : projectImRelayFloors(imContext, [event.data], scripts, imPeerAliases);
+    }
+    if (plainObjectRecord2(source)?.["kind"] !== "user") return [];
+    const text2 = messageTextOf(event.data?.content);
+    if (text2 === "") return [];
+    return [{
       name: "User",
       is_user: true,
       is_system: false,
-      send_date: eventDate2(event.time, event.seq, event.type),
+      send_date: sessionEventDate(event.time, event.seq, event.type),
       // ST 语义：USER_INPUT 正则在消息落库前生效（ST 管线同样保存变换后文本）。
       mes: applyRegexScripts(text2, scripts, RegexPlacement2.USER_INPUT),
-      extra: projectionExtra(session, event, binding.contextMode, turnAt(session, event.seq))
-    };
+      extra: projectionExtra({
+        sessionId: session.id,
+        eventSeq: event.seq,
+        contextMode: binding.contextMode,
+        projectionKey: `${session.id}:${event.seq}`,
+        messageId: event.data?.id,
+        turn: turnAt(session, event.seq)
+      })
+    }];
   }
-  if (event.type !== "assistant/message") return void 0;
-  if (isTavernSessionMarker(event.data?.message?.source)) return void 0;
-  if (isBodyMergedAssistant(session, event)) return void 0;
+  if (event.type === "tool/result") {
+    return imPeerAliases.length === 0 ? [] : projectImSendFloors(imContext, event.data, pendingImSend, scripts, imPeerAliases);
+  }
+  if (event.type !== "assistant/message") return [];
+  if (isTavernSessionMarker(event.data?.message?.source)) return [];
+  if (isBodyMergedAssistant(session, event)) return [];
   const content = event.data?.message?.content;
-  if (!Array.isArray(content) || content.some((block) => block?.type === "tool-call")) return void 0;
-  const text = messageText3(content);
-  if (text === "") return void 0;
+  if (!Array.isArray(content) || content.some((block) => block?.type === "tool-call")) return [];
+  const text = messageTextOf(content);
+  if (text === "") return [];
   const saveScripts = scripts.filter((script) => !script.promptOnly && !script.markdownOnly);
-  return {
+  return [{
     name: binding.character,
     is_user: false,
     is_system: false,
-    send_date: eventDate2(event.time, event.seq, event.type),
+    send_date: sessionEventDate(event.time, event.seq, event.type),
     mes: saveScripts.length > 0 ? applyRegexScripts(text, saveScripts, RegexPlacement2.AI_OUTPUT) : text,
-    extra: projectionExtra(session, event, binding.contextMode, event.data?.turn, event.data?.step)
-  };
-}
-function projectionExtra(session, event, contextMode, turn, step) {
-  return {
-    agentTavern: {
-      architecture: "agent-tavern",
-      contextMode,
+    extra: projectionExtra({
       sessionId: session.id,
       eventSeq: event.seq,
-      messageId: event.type === "assistant/message" ? event.data?.message?.id : event.data?.id,
-      ...typeof turn === "number" && Number.isSafeInteger(turn) ? { turn } : {},
-      ...typeof step === "number" && Number.isSafeInteger(step) ? { step } : {}
-    }
-  };
-}
-function projectionIdentity(message, sessionId, eventSeq) {
-  const source = message.extra?.agentTavern;
-  return source?.sessionId === sessionId && source.eventSeq === eventSeq;
-}
-function projectedMessageId(message) {
-  const agentTavern = plainObjectRecord2(message.extra?.["agentTavern"]);
-  const messageId = agentTavern?.["messageId"];
-  return typeof messageId === "string" && messageId !== "" ? messageId : void 0;
+      contextMode: binding.contextMode,
+      projectionKey: `${session.id}:${event.seq}`,
+      messageId: event.data?.message?.id,
+      turn: event.data?.turn,
+      step: event.data?.step
+    })
+  }];
 }
 var TAVERN_MIRROR_MODEL_SOURCE = { provider: PLUGIN_NAME, model: "agent-tavern-import" };
 function historyImportAppends(chat, sessionId, scripts, expand, session) {
@@ -24836,10 +25198,6 @@ function plainObjectRecord2(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
   return value;
 }
-function messageText3(content) {
-  if (!Array.isArray(content)) return "";
-  return content.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => block.text).join("").trim();
-}
 function turnAt(session, cursor) {
   let turn;
   for (const event of sessionEvents(session)) {
@@ -24847,15 +25205,6 @@ function turnAt(session, cursor) {
     if (event.type === "turn/start" && typeof event.data?.turn === "number" && Number.isSafeInteger(event.data.turn)) turn = event.data.turn;
   }
   return turn;
-}
-var MAX_DATE_MILLISECONDS2 = 864e13;
-function eventDate2(time, seq, type) {
-  if (!Number.isSafeInteger(time) || time < 0 || time > MAX_DATE_MILLISECONDS2) {
-    throw new Error(
-      `session event '${type}' at seq ${seq} has unusable time ${String(time)}; expected a non-negative safe integer within the Date range`
-    );
-  }
-  return new Date(time).toISOString();
 }
 function validateCheckpoint(value, sessionId) {
   if (value.version !== 1 && value.version !== 2 || value.sessionId !== sessionId || !Number.isSafeInteger(value.lastCursor) || !["ok", "pending"].includes(value.status)) {
@@ -24955,7 +25304,7 @@ import { promises as fs15 } from "node:fs";
 import * as path9 from "node:path";
 
 // packages/plugin/src/memory-embed-local.ts
-import { createHash as createHash8 } from "node:crypto";
+import { createHash as createHash9 } from "node:crypto";
 import { readdirSync as readdirSync3, readFileSync as readFileSync5, realpathSync as realpathSync2, statSync as statSync2 } from "node:fs";
 import { createRequire as createRequire3 } from "node:module";
 import { basename as basename2, dirname as dirname10, join as join15 } from "node:path";
@@ -25029,7 +25378,7 @@ function localModelFingerprint(modelDir) {
       }
     }
     if (parts.length === 0) return "unreadable";
-    return createHash8("sha256").update(parts.join("|")).digest("hex").slice(0, 16);
+    return createHash9("sha256").update(parts.join("|")).digest("hex").slice(0, 16);
   } catch {
     return "unreadable";
   }
@@ -28126,6 +28475,7 @@ function locateBodyFloor2(chat, messageId) {
     const extra = message.extra;
     const tavern = isRecord7(extra) ? extra["agentTavern"] : void 0;
     if (!isRecord7(tavern)) continue;
+    if (tavern["via"] === "im-send") continue;
     if (tavern["messageId"] === messageId || tavern["anchorMessageId"] === messageId || tavern["bodyGroupId"] === messageId) {
       return index;
     }
@@ -28617,6 +28967,13 @@ function applySettlementEvidence(op, settlement, seq) {
 
 // packages/plugin/src/agent-tavern/body-view.ts
 init_public_error();
+var IM_BODY_MUTATION_DISABLED_CODE = "im-body-mutation-disabled";
+var IM_BODY_MUTATION_DISABLED_MESSAGE = "IM-bound AgentTavern sessions deliver replies through im_send; body edit, regenerate and candidate switch are disabled";
+function imBodyMutationDisabledOf(binding, sessionId, peers) {
+  if (binding === void 0 || binding.architecture !== "agent-tavern") return void 0;
+  const bound = Object.values(peers ?? {}).some((peer) => peer.sessionId === sessionId);
+  return bound ? IM_BODY_MUTATION_DISABLED_MESSAGE : void 0;
+}
 function bodyStateSafetyOf(character, chat) {
   if (character === void 0) return unsafeBodyState("card-unreadable");
   if (chat === void 0) return unsafeBodyState("chat-unreadable");
@@ -28727,10 +29084,11 @@ function buildBodyView(input) {
   const rollbackReason = baseReason === void 0 && !hidden && input.historicalMvuState && !input.writeRollbackAvailable ? "write-journal-unavailable" : void 0;
   const reason = baseReason ?? rollbackReason;
   const editGate = input.readDetail ?? input.canEditDetail ?? input.editDetail;
+  const mutationsDisabled = input.mutationsDisabledReason !== void 0;
   const baseEditable = baseReason === void 0 && !hidden && count > 0;
-  const canEdit = baseEditable && editGate === void 0;
-  const canRegenerate = baseReason === void 0 && !hidden && count > 0 && input.readDetail === void 0 && input.agent !== void 0 && canAdvanceHostTurnBase(input.agent) && (!input.historicalMvuState || input.writeRollbackAvailable);
-  const canSelect = canEdit && count > 1 && !input.historicalMvuState;
+  const canEdit = !mutationsDisabled && baseEditable && editGate === void 0;
+  const canRegenerate = !mutationsDisabled && baseReason === void 0 && !hidden && count > 0 && input.readDetail === void 0 && input.agent !== void 0 && canAdvanceHostTurnBase(input.agent) && (!input.historicalMvuState || input.writeRollbackAvailable);
+  const canSelect = !mutationsDisabled && canEdit && count > 1 && !input.historicalMvuState;
   const detail = baseEditable ? editGate ?? (input.historicalMvuState ? "candidate-switch-disabled" : void 0) : input.readDetail;
   return {
     ok: true,
@@ -28746,6 +29104,7 @@ function buildBodyView(input) {
     ...input.projectionCurrent === false ? { projectionPending: true } : {},
     ...reason === void 0 ? {} : { reason },
     ...detail === void 0 ? {} : { detail },
+    ...mutationsDisabled ? { mutationsEnabled: false, disabledReason: input.mutationsDisabledReason } : {},
     ...input.lastOperation === void 0 ? {} : { lastOperation: publicLastOperation(input.lastOperation) }
   };
 }
@@ -30034,7 +30393,7 @@ function registerAgentTavernAnchor(ctx, options = {}) {
 }
 
 // packages/plugin/src/agent-tavern/card-state.ts
-import { createHash as createHash9, randomUUID as randomUUID7 } from "node:crypto";
+import { createHash as createHash10, randomUUID as randomUUID7 } from "node:crypto";
 
 // packages/plugin/src/prompt-safety.ts
 init_src3();
@@ -30125,7 +30484,7 @@ function jsonObjectOf2(value) {
   return JSON.parse(JSON.stringify(value));
 }
 function sectionHash(text) {
-  return createHash9("sha256").update(text).digest("hex").slice(0, 16);
+  return createHash10("sha256").update(text).digest("hex").slice(0, 16);
 }
 function cardStateEntryKey(book, entry) {
   return `${book}#${entry.uid}`;
@@ -38466,7 +38825,7 @@ function unwrapSingleRootDirectory(files) {
 
 // packages/plugin/src/games/sessions.ts
 init_apply();
-import { createHash as createHash10, randomBytes as randomBytes4 } from "node:crypto";
+import { createHash as createHash11, randomBytes as randomBytes4 } from "node:crypto";
 import { promises as fs18 } from "node:fs";
 import { join as join19 } from "node:path";
 var GAME_HISTORY_DEFAULT_LIMIT = 20;
@@ -38497,7 +38856,7 @@ var GameSessionStore = class _GameSessionStore {
   /* ------------------------------ 查询面 ------------------------------ */
   /** 会话目录 name+size+mtimeMs 的 sha256（镜像 tavern-store storeRevision 的便宜纪律：只 stat 不读内容）。 */
   async revision() {
-    const hash = createHash10("sha256");
+    const hash = createHash11("sha256");
     const names = (await fs18.readdir(this.sessionsRoot).catch(() => [])).filter((name2) => name2.endsWith(".json")).sort();
     for (const name2 of names) {
       const stat3 = await fs18.stat(join19(this.sessionsRoot, name2)).catch(() => void 0);
@@ -39211,7 +39570,7 @@ var NovelOptimizeRunError = class extends Error {
     if (diagnostic !== void 0) this.diagnostic = diagnostic;
   }
 };
-function textOf(output) {
+function textOf2(output) {
   return output.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => block.text ?? "").join("\n").trim();
 }
 function stripCodeFence(text) {
@@ -39282,7 +39641,7 @@ async function optimizeChapterViaSubagent(deps) {
         ...result.diagnostic !== void 0 ? { diagnostic: result.diagnostic } : {}
       });
     }
-    const text = textOf(result.output);
+    const text = textOf2(result.output);
     if (text === "") {
       throw new NovelOptimizeRunError({ novelId: deps.novelId, chapterId: deps.chapterId, stopReason: "empty-output" });
     }
@@ -40838,9 +41197,9 @@ init_capabilities2();
 
 // packages/plugin/src/agent-novel/requirements.ts
 init_src();
-import { createHash as createHash11 } from "node:crypto";
+import { createHash as createHash12 } from "node:crypto";
 function stableMessageKey(sessionId, messageKey) {
-  return createHash11("sha256").update(`${sessionId}\0${messageKey}`).digest("hex");
+  return createHash12("sha256").update(`${sessionId}\0${messageKey}`).digest("hex");
 }
 function isNovelAuthorMessage(event) {
   return extractAuthorMessage(event) !== null;
@@ -41753,14 +42112,14 @@ import { join as join26 } from "node:path";
 import { pipeline } from "node:stream/promises";
 
 // packages/tavern-frontend-storage/src/idb-store.ts
-import { createHash as createHash12 } from "node:crypto";
+import { createHash as createHash13 } from "node:crypto";
 import { copyFile, mkdir as mkdir4, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname as dirname13, join as join20 } from "node:path";
 var IDB_MAX_RECORD_BYTES = 1024 * 1024 * 1024;
 var IDB_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
 var databaseLocks = /* @__PURE__ */ new Map();
 function sha256(value) {
-  return createHash12("sha256").update(value).digest("hex");
+  return createHash13("sha256").update(value).digest("hex");
 }
 function databaseDir(root, character, name2) {
   return join20(root, "frontend-idb", sha256(character), sha256(name2));
@@ -46008,24 +46367,6 @@ init_dsh_home();
 // packages/plugin/src/im/onebot/server.ts
 import { randomUUID as randomUUID11, timingSafeEqual } from "node:crypto";
 
-// packages/plugin/src/im/types.ts
-init_src();
-import { createHash as createHash13 } from "node:crypto";
-var AGENT_TAVERN_IM_PRESET_ID = "agent-tavern-im";
-function imDedupeKey(channel, accountId, scope, peerId, messageId) {
-  return `${channel}:${accountId}:${scope}:${peerId}:${messageId}`;
-}
-function imPeerKeyParts(key) {
-  const parts = key.split(":");
-  if (parts.length < 4) return void 0;
-  const [channel, accountId, scope, ...rest] = parts;
-  if (channel === void 0 || accountId === void 0 || scope === void 0) return void 0;
-  return { channel, accountId, scope, peerId: rest.join(":") };
-}
-function imPeerAlias(channel, scope, peerKey) {
-  return `peer-${createHash13("sha256").update(`${channel}:${scope}:${peerKey}`).digest("hex").slice(0, 10)}`;
-}
-
 // packages/plugin/src/im/onebot/codec.ts
 var OneBotCodecError = class extends Error {
   code;
@@ -47678,6 +48019,9 @@ var ImSettingsError = class extends Error {
 function imChunkLimit(channel, settings) {
   return settings.chunkLimit ?? IM_CHUNK_DEFAULTS[channel];
 }
+function weixinSendIntervalOf(settings) {
+  return settings.weixinSendIntervalMs ?? WEIXIN_SEND_INTERVAL_DEFAULT_MS;
+}
 function imAccessAllows(settings, scope, peerId) {
   const mode = scope === "group" ? settings.groupMode : settings.privateMode;
   if (mode === "disabled") return false;
@@ -47730,6 +48074,17 @@ function applyImSettingsPatch(current, patch) {
     if (value === null) delete next.chunkLimit;
     else if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) next.chunkLimit = value;
     else throw new ImSettingsError("chunkLimit must be a positive integer or null");
+  }
+  if ("weixinSendIntervalMs" in record) {
+    const value = record["weixinSendIntervalMs"];
+    if (value === null) delete next.weixinSendIntervalMs;
+    else if (typeof value === "number" && Number.isSafeInteger(value) && value >= WEIXIN_SEND_INTERVAL_MIN_MS && value <= WEIXIN_SEND_INTERVAL_MAX_MS) {
+      next.weixinSendIntervalMs = value;
+    } else {
+      throw new ImSettingsError(
+        `weixinSendIntervalMs must be an integer between ${WEIXIN_SEND_INTERVAL_MIN_MS} and ${WEIXIN_SEND_INTERVAL_MAX_MS} or null`
+      );
+    }
   }
   assertImSettingsUsable(next);
   return next;
@@ -50181,23 +50536,35 @@ var ILINK_RETCODE_ERROR = -2;
 var WeixinSendGuard = class {
   accountId;
   clock;
+  cooldownMs;
   sendWindow = [];
   throttledUntil;
   constructor(options) {
     this.accountId = options.accountId;
     this.clock = options.clock;
+    this.cooldownMs = options.cooldownMs ?? SEND_THROTTLE_COOLDOWN_MS;
   }
   /** 账号启动/停止时清空：窗口与冷却是连接期内的事实。 */
   reset() {
     this.sendWindow = [];
     this.throttledUntil = void 0;
   }
-  /** 冷却期直接拒绝，不发请求。 */
-  rejectIfCoolingDown() {
-    const remaining = this.throttleRemaining();
-    if (remaining > 0) throw throttledError(this.accountId, remaining, this.clock.now());
+  /**
+   * 最早的「窗口有空位」时刻：`notBefore` 之前没有额就等到第五老的一条过期，
+   * 并逐条内推（窗口里已有 6 条时要把 2 条等出窗口）。只读，不占位。
+   */
+  nextWindowSlotAt(notBefore) {
+    const now = this.clock.now();
+    this.sendWindow = this.sendWindow.filter((at) => now - at < SEND_WINDOW_MS);
+    if (this.sendWindow.length < SEND_WINDOW_MAX) return notBefore;
+    const overflow = this.sendWindow.length - SEND_WINDOW_MAX;
+    return Math.max(notBefore, (this.sendWindow[overflow] ?? now) + SEND_WINDOW_MS);
   }
-  /** 占一个窗口名额；超限立刻拒绝，不排队、不等待。 */
+  /** 冷却截止时刻；未冷却时为 undefined。状态投影只读它，不改任何事实。 */
+  throttleUntil() {
+    return this.throttledUntil;
+  }
+  /** 占一个窗口名额；超限立刻抛错，由队列接住等待后重试。 */
   reserveSlot() {
     const now = this.clock.now();
     this.sendWindow = this.sendWindow.filter((at) => now - at < SEND_WINDOW_MS);
@@ -50205,14 +50572,14 @@ var WeixinSendGuard = class {
       const retryAt = (this.sendWindow[0] ?? now) + SEND_WINDOW_MS;
       throw new WeixinChannelError(
         "WEIXIN_SEND_BUDGET_EXHAUSTED",
-        `weixin account '${this.accountId}' refused to send: ${SEND_WINDOW_MAX} messages already went out within ${SEND_WINDOW_MS / 1e3}s, and iLink throttles a bot after a burst of separate messages (ret/errcode ${ILINK_RETCODE_ERROR} prepare failed). The message was NOT delivered; do not retry it in this turn. Sending is allowed again at ${new Date(retryAt).toISOString()}.`
+        `weixin account '${this.accountId}' refused to send: ${SEND_WINDOW_MAX} messages already went out within ${SEND_WINDOW_MS / 1e3}s, and iLink throttles a bot after a burst of separate messages (ret/errcode ${ILINK_RETCODE_ERROR} prepare failed). Sending is allowed again at ${new Date(retryAt).toISOString()}.`
       );
     }
     this.sendWindow.push(now);
   }
   /** 记录一次 `-2` 惩罚，返回带恢复时间的错误。 */
   throttle(peerLabel, cause) {
-    const until = this.clock.now() + SEND_THROTTLE_COOLDOWN_MS;
+    const until = this.clock.now() + this.cooldownMs;
     this.throttledUntil = until;
     return new WeixinChannelError(
       "WEIXIN_THROTTLED",
@@ -50220,21 +50587,353 @@ var WeixinSendGuard = class {
       { cause }
     );
   }
-  throttleRemaining() {
-    if (this.throttledUntil === void 0) return 0;
-    const remaining = this.throttledUntil - this.clock.now();
-    return remaining > 0 ? remaining : 0;
-  }
 };
 function isIlinkThrottle(error) {
   return error instanceof WeixinApiError && error.retcode === ILINK_RETCODE_ERROR;
 }
-function throttledError(accountId, remainingMs, now) {
-  const resumeAt = new Date(now + remainingMs).toISOString();
-  return new WeixinChannelError(
-    "WEIXIN_THROTTLED",
-    `weixin account '${accountId}' is cooling down until ${resumeAt} after iLink rejected a send with ret/errcode ${ILINK_RETCODE_ERROR} (prepare failed); nothing was delivered, and retrying now only extends the penalty`
-  );
+
+// packages/plugin/src/im/weixin/send-queue.ts
+var IM_SEND_FAST_WAIT_MS = 1e4;
+var WEIXIN_SEND_MAX_RETRIES = 1;
+var WeixinSendQueue = class {
+  accountId;
+  clock;
+  guard;
+  fastWaitMs;
+  maxRetries;
+  sendPart;
+  onJobStart;
+  logger;
+  interval;
+  jobs = [];
+  /** 所有待执行 part 的计划开始时间（升序），用于算窗口与 nextSendAt。 */
+  projectedStarts = [];
+  lastSendAt;
+  stopped = false;
+  stopController = new AbortController();
+  loopPromise;
+  constructor(options) {
+    this.accountId = options.accountId;
+    this.clock = options.clock;
+    this.guard = options.guard;
+    this.interval = options.intervalMs;
+    this.fastWaitMs = options.fastWaitMs;
+    this.maxRetries = options.maxRetries;
+    this.sendPart = options.sendPart;
+    this.onJobStart = options.onJobStart;
+    this.logger = options.logger;
+  }
+  /** 通道 start：stop 过的队列可以重新启用（账号重连走同一实例时）。 */
+  start() {
+    if (!this.stopped) return;
+    this.stopped = false;
+    this.stopController = new AbortController();
+  }
+  /** 面板改了间隔：后续入队与下一次等待按新值；已在等的任务保留原计划时间。 */
+  setIntervalMs(value) {
+    this.interval = value;
+  }
+  /**
+   * 入队一个逻辑发送。返回的 promise 要么给真实回执，要么给排队回执；
+   * 已排队任务在后台继续，不会因为调用方离开而停。
+   */
+  enqueue(target, parts) {
+    const now = this.clock.now();
+    if (this.stopped) {
+      return Promise.reject(new WeixinChannelError(
+        "WEIXIN_CLOSED",
+        `weixin account '${this.accountId}' is not running; replies can only be delivered while polling is active`
+      ));
+    }
+    if (parts.length === 0) return Promise.resolve({ parts: 0, at: now });
+    const job = this.createJob(target, parts, now);
+    this.jobs.push(job);
+    this.wake();
+    if (job.scheduledAt - now > this.fastWaitMs) this.settleQueued(job, job.scheduledAt);
+    return job.promise;
+  }
+  /** 取消挂起的等待并拒绝所有未结算任务；幂等。 */
+  async stop() {
+    if (this.stopped) return;
+    this.stopped = true;
+    this.stopController.abort();
+    const error = new WeixinChannelError(
+      "WEIXIN_CLOSED",
+      `weixin account '${this.accountId}' stopped; queued messages were not delivered`
+    );
+    for (const job of this.jobs.splice(0)) {
+      this.releaseJobProjection(job);
+      if (job.callerSettled) {
+        this.logger?.warn?.(
+          `dsh-soulmojito im weixin/${this.accountId}: a queued send was dropped because the channel stopped before it could retry (the caller already had a queued receipt)`
+        );
+        continue;
+      }
+      job.callerSettled = true;
+      job.reject(error);
+    }
+    this.projectedStarts = [];
+    await this.loopPromise?.catch(() => {
+    });
+  }
+  /** 出站节奏投影；从注入的时钟取「现在」，测试与面板看到的是同一事实。 */
+  status() {
+    const now = this.clock.now();
+    const throttleUntil = this.guard.throttleUntil();
+    if (this.stopped) return { allowedNow: false, queueDepth: 0 };
+    const queueHead = this.projectedStarts.length === 0 ? now : Math.max(now, this.projectedStarts[0] ?? now);
+    const lastSendFloor = this.lastSendAt === void 0 ? now : this.lastSendAt + this.interval;
+    let at = Math.max(now, queueHead, lastSendFloor, throttleUntil ?? 0);
+    at = Math.max(at, this.guard.nextWindowSlotAt(at));
+    at = this.nextWindowAwareAt(at, this.projectedStarts);
+    const allowedNow = this.jobs.length === 0 && at <= now;
+    return {
+      allowedNow,
+      ...allowedNow ? {} : { nextSendAt: at },
+      ...throttleUntil !== void 0 && throttleUntil > now ? { throttleUntil } : {},
+      queueDepth: this.jobs.length
+    };
+  }
+  createJob(target, parts, now) {
+    const planned = this.planParts(parts.length, now);
+    let resolveJob = () => {
+    };
+    let rejectJob = () => {
+    };
+    const promise = new Promise((resolve9, reject) => {
+      resolveJob = resolve9;
+      rejectJob = reject;
+    });
+    return {
+      target,
+      parts,
+      enqueuedAt: now,
+      scheduledAt: planned[0] ?? now,
+      nextPart: 0,
+      lastMessageId: void 0,
+      throttleRetries: 0,
+      callerSettled: false,
+      started: false,
+      projectedStarts: planned,
+      resolve: resolveJob,
+      reject: rejectJob,
+      promise
+    };
+  }
+  /** 规划 `count` 个 part 的开始时间：间隔 + 窗口额度，逐条投影。 */
+  planParts(count, now) {
+    let at = Math.max(
+      now,
+      this.lastSendAt === void 0 ? now : this.lastSendAt + this.interval,
+      this.projectedStarts.length === 0 ? now : (this.projectedStarts.at(-1) ?? now) + this.interval,
+      this.guard.throttleUntil() ?? 0
+    );
+    const planned = [];
+    for (let index = 0; index < count; index += 1) {
+      at = Math.max(at, this.guard.nextWindowSlotAt(at));
+      at = this.nextWindowAwareAt(at, this.projectedStarts);
+      planned.push(at);
+      this.projectedStarts.push(at);
+      this.projectedStarts.sort((left, right) => left - right);
+      at += this.interval;
+    }
+    return planned;
+  }
+  /**
+   * 在 `at` 之后找第一个「30s 窗口里不足 5 条」的时刻。candidates 是已排定但
+   * 还没发出的 part 开始时间；窗口里的第 5 条必须过期才有空位（严格 `<`，
+   * 与 guard 的 `now - at < SEND_WINDOW_MS` 同口径）。
+   */
+  nextWindowAwareAt(at, candidates) {
+    let candidate = at;
+    for (; ; ) {
+      const inWindow = [];
+      for (const start of candidates) {
+        if (start <= candidate && candidate - start < SEND_WINDOW_MS) inWindow.push(start);
+      }
+      if (inWindow.length < SEND_WINDOW_MAX) return candidate;
+      inWindow.sort((left, right) => left - right);
+      candidate = Math.max(candidate, (inWindow[0] ?? candidate) + SEND_WINDOW_MS);
+    }
+  }
+  wake() {
+    if (this.stopped || this.loopPromise !== void 0 || this.jobs.length === 0) return;
+    this.loopPromise = this.runLoop().catch((error) => {
+      this.logger?.warn?.(
+        `dsh-soulmojito im weixin/${this.accountId}: the outbound queue loop stopped: ${messageOf11(error)}`
+      );
+    }).finally(() => {
+      this.loopPromise = void 0;
+      if (!this.stopped && this.jobs.length > 0) this.wake();
+    });
+  }
+  async runLoop() {
+    while (!this.stopped) {
+      const job = this.jobs[0];
+      if (job === void 0) return;
+      await this.runJob(job);
+    }
+  }
+  /** 跑完一个逻辑发送（含等待、占位、`-2` 重试）；结束时该任务必然已出队。 */
+  async runJob(job) {
+    while (job.nextPart < job.parts.length) {
+      if (this.stopped) return;
+      const at = this.nextPartStart(job);
+      this.settleIfFastWaitExceeded(job, at);
+      await this.sleepUntil(at);
+      if (this.stopped) return;
+      try {
+        this.guard.reserveSlot();
+      } catch (error) {
+        if (error instanceof WeixinChannelError && error.code === "WEIXIN_SEND_BUDGET_EXHAUSTED") {
+          await this.sleepUntil(this.guard.nextWindowSlotAt(this.clock.now()));
+          continue;
+        }
+        this.dropJob(job, error);
+        return;
+      }
+      const startedAt = this.clock.now();
+      this.lastSendAt = startedAt;
+      this.consumeProjected(job);
+      if (!job.started) {
+        job.started = true;
+        try {
+          this.onJobStart?.(job.target);
+        } catch (error) {
+          this.logger?.warn?.(`dsh-soulmojito im weixin/${this.accountId}: onJobStart failed: ${messageOf11(error)}`);
+        }
+      }
+      try {
+        const messageId = await this.sendPart(job.target, job.parts[job.nextPart]);
+        if (messageId !== void 0) job.lastMessageId = messageId;
+        job.nextPart += 1;
+      } catch (error) {
+        if (this.stopped) {
+          return;
+        }
+        if (!isThrottleError(error)) {
+          this.dropJob(job, error);
+          return;
+        }
+        if (job.throttleRetries >= this.maxRetries) {
+          this.dropJob(job, error);
+          return;
+        }
+        job.throttleRetries += 1;
+        const until = this.guard.throttleUntil() ?? this.clock.now() + SEND_THROTTLE_COOLDOWN_MS;
+        this.logger?.warn?.(
+          `dsh-soulmojito im weixin/${this.accountId}: send was throttled with ret/errcode -2; retry ${job.throttleRetries}/${this.maxRetries} at ${new Date(until).toISOString()}`
+        );
+        if (until > job.enqueuedAt + this.fastWaitMs) this.settleQueued(job, until);
+        await this.sleepUntil(until);
+      }
+    }
+    this.finishJob(job);
+  }
+  /**
+   * 快速等待的滚动收口：入队已超过 `fastWaitMs`，或本轮计划开始晚于
+   * `enqueuedAt + fastWaitMs`，就把调用方先放行为排队回执（后台继续发送），
+   * 不让前序任务的请求超时或长间隔把工具调用拖过等待上界。
+   */
+  settleIfFastWaitExceeded(job, at) {
+    if (job.callerSettled) return;
+    const deadline = job.enqueuedAt + this.fastWaitMs;
+    if (this.clock.now() < deadline && at <= deadline) return;
+    this.settleQueued(job, Math.max(at, this.clock.now()));
+  }
+  /** 下一 part 的最早开始：间隔、计划表、冷却与窗口一起取最大。 */
+  nextPartStart(job) {
+    const now = this.clock.now();
+    const planned = job.projectedStarts[job.nextPart];
+    let at = Math.max(
+      now,
+      this.lastSendAt === void 0 ? now : this.lastSendAt + this.interval,
+      planned ?? now,
+      this.guard.throttleUntil() ?? 0
+    );
+    at = Math.max(at, this.guard.nextWindowSlotAt(at));
+    at = this.nextWindowAwareAt(at, this.projectedWithout(job));
+    return at;
+  }
+  /** 全局投影减去本任务剩下的计划点（同一时间值按出现次数扣除）。 */
+  projectedWithout(job) {
+    const remaining = job.projectedStarts.slice(job.nextPart);
+    const result = [];
+    for (const start of this.projectedStarts) {
+      const index = remaining.indexOf(start);
+      if (index >= 0) remaining.splice(index, 1);
+      else result.push(start);
+    }
+    return result;
+  }
+  consumeProjected(job) {
+    const planned = job.projectedStarts[job.nextPart];
+    if (planned === void 0) return;
+    const index = this.projectedStarts.indexOf(planned);
+    if (index >= 0) this.projectedStarts.splice(index, 1);
+  }
+  releaseJobProjection(job) {
+    for (const planned of job.projectedStarts.slice(job.nextPart)) {
+      const index = this.projectedStarts.indexOf(planned);
+      if (index >= 0) this.projectedStarts.splice(index, 1);
+    }
+  }
+  finishJob(job) {
+    const index = this.jobs.indexOf(job);
+    if (index >= 0) this.jobs.splice(index, 1);
+    this.releaseJobProjection(job);
+    if (job.callerSettled) {
+      this.logger?.debug?.(
+        `dsh-soulmojito im weixin/${this.accountId}: a queued send finished after the caller had a queued receipt`
+      );
+      return;
+    }
+    job.callerSettled = true;
+    const receipt = {
+      parts: job.parts.length,
+      at: this.clock.now(),
+      ...job.lastMessageId === void 0 ? {} : { messageId: job.lastMessageId }
+    };
+    job.resolve(receipt);
+  }
+  dropJob(job, error) {
+    const index = this.jobs.indexOf(job);
+    if (index >= 0) this.jobs.splice(index, 1);
+    this.releaseJobProjection(job);
+    if (job.callerSettled) {
+      this.logger?.warn?.(
+        `dsh-soulmojito im weixin/${this.accountId}: a queued send failed after the caller had a queued receipt and was NOT delivered: ${messageOf11(error)}`
+      );
+      return;
+    }
+    job.callerSettled = true;
+    job.reject(error);
+  }
+  settleQueued(job, scheduledAt) {
+    if (job.callerSettled) return;
+    job.callerSettled = true;
+    const receipt = {
+      status: "queued",
+      parts: job.parts.length,
+      scheduledAt
+    };
+    job.resolve(receipt);
+    this.logger?.debug?.(
+      `dsh-soulmojito im weixin/${this.accountId}: a send was queued for ${new Date(scheduledAt).toISOString()} (${job.parts.length} part(s))`
+    );
+  }
+  /** 睡到 `at`；stop 会中止睡眠并让循环自行退出。 */
+  async sleepUntil(at) {
+    const delay3 = at - this.clock.now();
+    if (delay3 <= 0) return;
+    await this.clock.sleep(delay3, this.stopController.signal);
+  }
+};
+function isThrottleError(error) {
+  return error instanceof WeixinChannelError && error.code === "WEIXIN_THROTTLED";
+}
+function messageOf11(error) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 // packages/plugin/src/im/weixin/typing-cache.ts
@@ -50895,8 +51594,8 @@ var WeixinChannel = class {
   pauseReason;
   /** 出站突发预算与 `-2` 冷却（`send-guard.ts`）。 */
   sendGuard;
-  /** 同一账号的出站按整轮串行：两轮回复并发时不得出现 A1,B1,A2,B2 的碎片。 */
-  sendChain = Promise.resolve();
+  /** 出站队列（`send-queue.ts`）：账号级 FIFO、间隔节奏、`-2` 冷却重试。 */
+  sendQueue;
   constructor(options) {
     this.token = requireToken(options.token, options.accountId);
     this.baseUrl = requireBaseUrl(options.baseUrl, options.accountId);
@@ -50908,6 +51607,19 @@ var WeixinChannel = class {
     this.saveContextTokens = options.saveContextTokens;
     this.clock = options.clock;
     this.sendGuard = new WeixinSendGuard({ accountId: options.accountId, clock: options.clock });
+    this.sendQueue = new WeixinSendQueue({
+      accountId: options.accountId,
+      clock: options.clock,
+      guard: this.sendGuard,
+      intervalMs: options.sendIntervalMs ?? WEIXIN_SEND_INTERVAL_DEFAULT_MS,
+      fastWaitMs: IM_SEND_FAST_WAIT_MS,
+      maxRetries: WEIXIN_SEND_MAX_RETRIES,
+      sendPart: async (target, part) => this.sendPart(target, part),
+      onJobStart: (target) => {
+        void this.setTyping(target.peerId, 2);
+      },
+      ...options.logger === void 0 ? {} : { logger: options.logger }
+    });
     this.longPollTimeoutMs = clampLongPoll(options.longPollTimeoutMs);
     this.typingEnabled = options.typingEnabled;
     this.cdnBaseUrl = normalizeCdnBaseUrl(options.cdnBaseUrl ?? WEIXIN_DEFAULT_CDN_BASE_URL);
@@ -50924,6 +51636,7 @@ var WeixinChannel = class {
     this.pausedUntil = void 0;
     this.pauseReason = void 0;
     this.sendGuard.reset();
+    this.sendQueue.start();
     if (this.media !== void 0) void sweepExpiredMedia(this.media, MEDIA_TTL_MS, this.mediaLog());
     try {
       const [cursor, tokens] = await Promise.all([this.loadCursor(), this.loadContextTokens()]);
@@ -50933,7 +51646,7 @@ var WeixinChannel = class {
       this.starting = false;
       throw new WeixinChannelError(
         "WEIXIN_STATE",
-        `weixin account '${this.accountId}' could not load its persisted cursor/context tokens: ${messageOf11(error)}`,
+        `weixin account '${this.accountId}' could not load its persisted cursor/context tokens: ${messageOf12(error)}`,
         { cause: error }
       );
     }
@@ -50964,7 +51677,7 @@ var WeixinChannel = class {
       if (error instanceof WeixinChannelError) throw error;
       throw new WeixinChannelError(
         "WEIXIN_CLOSED",
-        `weixin account '${this.accountId}' failed to start: ${messageOf11(error)}`,
+        `weixin account '${this.accountId}' failed to start: ${messageOf12(error)}`,
         { cause: error }
       );
     } finally {
@@ -50975,7 +51688,7 @@ var WeixinChannel = class {
       if (this.onlineSince === void 0) this.onlineSince = this.clock.now();
     }
     void loop.catch((error) => {
-      this.logger?.warn?.(`dsh-soulmojito im weixin/${this.accountId}: poll loop ended: ${messageOf11(error)}`);
+      this.logger?.warn?.(`dsh-soulmojito im weixin/${this.accountId}: poll loop ended: ${messageOf12(error)}`);
     });
   }
   async stop() {
@@ -50988,7 +51701,7 @@ var WeixinChannel = class {
     this.detachAbort();
     if (loop !== void 0) {
       await loop.catch((error) => {
-        this.logger?.warn?.(`dsh-soulmojito im weixin/${this.accountId}: poll loop ended: ${messageOf11(error)}`);
+        this.logger?.warn?.(`dsh-soulmojito im weixin/${this.accountId}: poll loop ended: ${messageOf12(error)}`);
       });
     }
     this.starting = false;
@@ -50996,6 +51709,7 @@ var WeixinChannel = class {
     this.lastError = void 0;
     this.pausedUntil = void 0;
     this.pauseReason = void 0;
+    await this.sendQueue.stop();
     this.sendGuard.reset();
   }
   status() {
@@ -51026,11 +51740,22 @@ var WeixinChannel = class {
     }
     const pausedFor = this.pauseRemaining();
     if (pausedFor > 0) throw pausedError(this.accountId, pausedFor, this.clock.now());
-    this.sendGuard.rejectIfCoolingDown();
     if (parts.length === 0) return { parts: 0, at: this.clock.now() };
-    const queued = this.sendChain.then(() => this.sendParts(target, parts));
-    this.sendChain = queued.then(noop, noop);
-    return queued;
+    if (this.controller === void 0) {
+      throw new WeixinChannelError(
+        "WEIXIN_CLOSED",
+        `weixin account '${this.accountId}' is not running; replies can only be delivered while polling is active`
+      );
+    }
+    return this.sendQueue.enqueue(target, parts);
+  }
+  /** 出站节奏投影：面板「行为」页与 `im_time` 的数据源。 */
+  sendStatus() {
+    return this.sendQueue.status();
+  }
+  /** 设置页改动微信间隔；下一轮计划即时按新值排。 */
+  setSendIntervalMs(value) {
+    this.sendQueue.setIntervalMs(value);
   }
   /**
    * 输入状态（可选）：ticket 按对端缓存 30 分钟（上限 500），命中就不问
@@ -51060,7 +51785,7 @@ var WeixinChannel = class {
       }
     } catch (error) {
       this.logger?.warn?.(
-        `dsh-soulmojito im weixin/${this.accountId}: typing ${status2} for ${this.peerLabel(peerId)} failed: ${messageOf11(error)}`
+        `dsh-soulmojito im weixin/${this.accountId}: typing ${status2} for ${this.peerLabel(peerId)} failed: ${messageOf12(error)}`
       );
     }
   }
@@ -51100,7 +51825,12 @@ var WeixinChannel = class {
       ...this.controller === void 0 ? {} : { signal: this.controller.signal }
     };
   }
-  async sendParts(target, parts) {
+  /**
+   * 单个 part 的真实发送（队列每次只放一个进来）。失败分类在这里收口：
+   * `-2` → 记冷却并抛 `WEIXIN_THROTTLED`（队列据此等待重试）；`-14` → 暂停；
+   * 其余 → `WEIXIN_SEND_FAILED`（带上 part 序号，队列直接交还调用方）。
+   */
+  async sendPart(target, part) {
     if (this.controller === void 0) {
       throw new WeixinChannelError(
         "WEIXIN_CLOSED",
@@ -51109,49 +51839,40 @@ var WeixinChannel = class {
     }
     const pausedFor = this.pauseRemaining();
     if (pausedFor > 0) throw pausedError(this.accountId, pausedFor, this.clock.now());
-    this.sendGuard.rejectIfCoolingDown();
     const contextToken = this.contextTokens[target.peerId];
-    if (contextToken === void 0) {
+    if (contextToken === void 0 && part.index === 0) {
       this.logger?.warn?.(
         `dsh-soulmojito im weixin/${this.accountId}: no context_token for ${this.peerLabel(target.peerId)}; sending without context`
       );
     }
-    void this.setTyping(target.peerId, 2);
-    let messageId;
-    for (const part of parts) {
-      try {
-        this.sendGuard.reserveSlot();
-        const sentId = part.kind === "text" ? (await sendMessage(this.apiContext(SEND_TIMEOUT_MS), {
+    try {
+      if (part.kind === "text") {
+        return (await sendMessage(this.apiContext(SEND_TIMEOUT_MS), {
           toUserId: target.peerId,
           text: part.text,
           ...contextToken === void 0 ? {} : { contextToken }
-        })).messageId : await this.sendMediaPart(target, part, contextToken);
-        if (sentId !== void 0) messageId = sentId;
-      } catch (error) {
-        if (error instanceof WeixinChannelError) throw error;
-        if (isIlinkThrottle(error)) {
-          const throttled = this.sendGuard.throttle(this.peerLabel(target.peerId), error);
-          this.logger?.warn?.(`dsh-soulmojito im weixin/${this.accountId}: ${throttled.message}`);
-          throw throttled;
-        }
-        if (isStaleToken(error)) {
-          const until = this.clock.now() + STALE_TOKEN_PAUSE_MS;
-          this.pausedUntil = until;
-          this.pauseReason = `the WeChat bot token for '${this.accountId}' was rejected with ret/errcode ${WEIXIN_STALE_TOKEN_RETCODE}; paused until ${new Date(until).toISOString()}`;
-          throw new WeixinChannelError("WEIXIN_PAUSED", this.pauseReason, { cause: error });
-        }
-        throw new WeixinChannelError(
-          "WEIXIN_SEND_FAILED",
-          `weixin send part ${part.index + 1}/${part.total} to ${this.peerLabel(target.peerId)} failed: ${messageOf11(error)}`,
-          { cause: error }
-        );
+        })).messageId;
       }
+      return await this.sendMediaPart(target, part, contextToken);
+    } catch (error) {
+      if (error instanceof WeixinChannelError) throw error;
+      if (isIlinkThrottle(error)) {
+        const throttled = this.sendGuard.throttle(this.peerLabel(target.peerId), error);
+        this.logger?.warn?.(`dsh-soulmojito im weixin/${this.accountId}: ${throttled.message}`);
+        throw throttled;
+      }
+      if (isStaleToken(error)) {
+        const until = this.clock.now() + STALE_TOKEN_PAUSE_MS;
+        this.pausedUntil = until;
+        this.pauseReason = `the WeChat bot token for '${this.accountId}' was rejected with ret/errcode ${WEIXIN_STALE_TOKEN_RETCODE}; paused until ${new Date(until).toISOString()}`;
+        throw new WeixinChannelError("WEIXIN_PAUSED", this.pauseReason, { cause: error });
+      }
+      throw new WeixinChannelError(
+        "WEIXIN_SEND_FAILED",
+        `weixin send part ${part.index + 1}/${part.total} to ${this.peerLabel(target.peerId)} failed: ${messageOf12(error)}`,
+        { cause: error }
+      );
     }
-    return {
-      parts: parts.length,
-      at: this.clock.now(),
-      ...messageId === void 0 ? {} : { messageId }
-    };
   }
   async sendMediaPart(target, part, contextToken) {
     if (part.kind === "voice") {
@@ -51214,7 +51935,7 @@ var WeixinChannel = class {
             await this.deliver(message);
           } catch (error) {
             this.logger?.warn?.(
-              `dsh-soulmojito im weixin/${this.accountId}: inbound message failed: ${messageOf11(error)}`
+              `dsh-soulmojito im weixin/${this.accountId}: inbound message failed: ${messageOf12(error)}`
             );
           }
         }
@@ -51237,12 +51958,12 @@ var WeixinChannel = class {
           continue;
         }
         failures += 1;
-        const reason = `weixin getupdates for '${this.accountId}' failed (${failures} consecutive): ${messageOf11(error)}`;
+        const reason = `weixin getupdates for '${this.accountId}' failed (${failures} consecutive): ${messageOf12(error)}`;
         this.lastError = reason;
         this.logger?.warn?.(`dsh-soulmojito im weixin/${this.accountId}: ${reason}`);
         if (!gate.settled) {
           gate.settle(
-            new WeixinChannelError("WEIXIN_CLOSED", `weixin account '${this.accountId}' failed to start: ${messageOf11(error)}`, { cause: error })
+            new WeixinChannelError("WEIXIN_CLOSED", `weixin account '${this.accountId}' failed to start: ${messageOf12(error)}`, { cause: error })
           );
           return;
         }
@@ -51261,7 +51982,7 @@ var WeixinChannel = class {
       await this.saveCursor(cursor);
     } catch (error) {
       this.logger?.warn?.(
-        `dsh-soulmojito im weixin/${this.accountId}: saving get_updates_buf failed: ${messageOf11(error)}`
+        `dsh-soulmojito im weixin/${this.accountId}: saving get_updates_buf failed: ${messageOf12(error)}`
       );
     }
   }
@@ -51324,7 +52045,7 @@ var WeixinChannel = class {
       await this.saveContextTokens({ ...this.contextTokens });
     } catch (error) {
       this.logger?.warn?.(
-        `dsh-soulmojito im weixin/${this.accountId}: saving context token failed: ${messageOf11(error)}`
+        `dsh-soulmojito im weixin/${this.accountId}: saving context token failed: ${messageOf12(error)}`
       );
     }
   }
@@ -51386,10 +52107,8 @@ function requireBaseUrl(value, accountId) {
   }
   return baseUrl.replace(/\/+$/, "");
 }
-function messageOf11(error) {
+function messageOf12(error) {
   return error instanceof Error ? error.message : String(error);
-}
-function noop() {
 }
 
 // packages/plugin/src/http/im.ts
@@ -51419,6 +52138,8 @@ async function handleImApi(req, res, url, route, method, db, runtime) {
       // 账号清单是 store 的事实、状态是运行时的投影：只列内存通道会让重启前的
       // 账号在面板上凭空消失，也会让「已配置但未连上」显示成不存在。
       channels: await channelViews(runtime, state.imPeers),
+      // 出站节奏（决策 2026-10-31-weixin-send-queue）：面板「行为」页的只读数据源。
+      sendStatuses: runtime?.sendStatuses?.() ?? [],
       // 两个腾讯包外挂安装：面板据此显示安装指引，而不是把「没装 SDK」显示成通道故障。
       qqRuntime: await qqRuntimeStatus()
     });
@@ -51573,6 +52294,7 @@ ${outputTail}`
       throw error;
     }
     await db.patchState({ imSettings: next });
+    runtime?.applySettings?.(next);
     return sendJson(res, 200, { ok: true, settings: next });
   }
   if (method === "POST" && route === "im/peers") {
@@ -56559,6 +57281,7 @@ async function handleAgentTavernBodyApi(ctx, db, req, res, url, route, method) {
     const selector = parseBodyGetSelector(url.searchParams);
     const state = await db.getState();
     const binding2 = state.sessionBindings[sessionId2];
+    const mutationsDisabledReason2 = imBodyMutationDisabledOf(binding2, sessionId2, state.imPeers);
     let characterName2;
     let chatId2;
     let character2 = void 0;
@@ -56597,7 +57320,8 @@ async function handleAgentTavernBodyApi(ctx, db, req, res, url, route, method) {
       projected: void 0,
       projectionCurrent: false,
       projectionTextCurrent: false,
-      inspection: void 0
+      inspection: void 0,
+      ...mutationsDisabledReason2 === void 0 ? {} : { mutationsDisabledReason: mutationsDisabledReason2 }
     });
     const readBodyItem = async (messageId) => {
       try {
@@ -56609,7 +57333,7 @@ async function handleAgentTavernBodyApi(ctx, db, req, res, url, route, method) {
         const reread = selectionMoved ? await readFloorOf(messageId, ledger.groupId, ledger.selectedIndex) : void 0;
         const projected = reread === void 0 ? floorByMessage : reread.ok ? reread.floor : void 0;
         const floorDegradation = reread !== void 0 ? reread.ok ? void 0 : reread.degradation : floorRead !== void 0 && !floorRead.ok ? floorRead.degradation : void 0;
-        const messageText4 = facts?.messageText;
+        const messageText3 = facts?.messageText;
         const inspection = facts?.inspection;
         const latestEditSeq = facts?.latestEditSeq;
         if (facts?.ledgerError !== void 0) {
@@ -56638,7 +57362,7 @@ async function handleAgentTavernBodyApi(ctx, db, req, res, url, route, method) {
           historicalMvuState,
           writeRollbackAvailable: deps2?.writeRollback !== void 0,
           ledger,
-          messageText: messageText4,
+          messageText: messageText3,
           projected,
           projectionCurrent: projection.current,
           projectionTextCurrent: projection.textCurrent,
@@ -56647,7 +57371,8 @@ async function handleAgentTavernBodyApi(ctx, db, req, res, url, route, method) {
           // A damaged floor binding closes edit with its own detail and keeps
           // publishing it even when a reason already gates the row.
           ...floorDegradation === void 0 ? {} : { readDetail: floorDegradation.detail },
-          ...facts?.lastOperation === void 0 ? {} : { lastOperation: facts.lastOperation }
+          ...facts?.lastOperation === void 0 ? {} : { lastOperation: facts.lastOperation },
+          ...mutationsDisabledReason2 === void 0 ? {} : { mutationsDisabledReason: mutationsDisabledReason2 }
         });
         return { ok: true, view };
       } catch (error) {
@@ -56681,6 +57406,14 @@ async function handleAgentTavernBodyApi(ctx, db, req, res, url, route, method) {
       status: 409,
       code: "architecture-mismatch",
       message: "body operations require an AgentTavern single-character binding"
+    });
+  }
+  const mutationsDisabledReason = imBodyMutationDisabledOf(binding, sessionId, (await db.getState()).imPeers);
+  if (mutationsDisabledReason !== void 0) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: IM_BODY_MUTATION_DISABLED_CODE,
+      message: mutationsDisabledReason
     });
   }
   const characterName = binding.character;
@@ -57326,7 +58059,7 @@ function createImRouter(deps) {
     try {
       await deliverBatch(peerKey, alias, orderInboundEntries(buffered));
     } catch (error) {
-      deps.log?.note("error", `flushing the buffered messages from ${alias} failed: ${messageOf12(error)}`);
+      deps.log?.note("error", `flushing the buffered messages from ${alias} failed: ${messageOf13(error)}`);
     }
   }
   async function flushPending() {
@@ -57362,7 +58095,7 @@ function createImRouter(deps) {
         const deliverable = await consumeEntry(peerKey, alias, entry, settings, binding);
         if (deliverable !== void 0) deliverables.push(deliverable);
       } catch (error) {
-        deps.log?.note("error", `processing a buffered message from ${alias} failed: ${messageOf12(error)}`);
+        deps.log?.note("error", `processing a buffered message from ${alias} failed: ${messageOf13(error)}`);
       }
     }
     if (binding === void 0 || deliverables.length === 0) return;
@@ -57402,7 +58135,7 @@ function createImRouter(deps) {
       } catch (error) {
         deps.log?.note(
           "warn",
-          `media for a ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias} failed to load; delivering it without local copies: ${messageOf12(error)}`
+          `media for a ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias} failed to load; delivering it without local copies: ${messageOf13(error)}`
         );
       }
     }
@@ -57430,8 +58163,8 @@ function createImRouter(deps) {
       });
     } catch (error) {
       const code = error?.code;
-      deps.log?.note("error", `could not insert a message from ${alias} into session ${sessionId}: ${messageOf12(error)}`);
-      deps.logger?.warn?.(`dsh-soulmojito im: inserting into ${sessionId} failed: ${messageOf12(error)}`);
+      deps.log?.note("error", `could not insert a message from ${alias} into session ${sessionId}: ${messageOf13(error)}`);
+      deps.logger?.warn?.(`dsh-soulmojito im: inserting into ${sessionId} failed: ${messageOf13(error)}`);
       await sendNotice(imTargetOf(message), code === "IM_SESSION_NOT_LIVE" ? IM_SESSION_NOT_LIVE : IM_DELIVERY_FAILED, alias);
       return;
     }
@@ -57461,8 +58194,8 @@ function createImRouter(deps) {
       });
     } catch (error) {
       const code = error?.code;
-      deps.log?.note("error", `could not insert a merged message from ${alias} into session ${sessionId}: ${messageOf12(error)}`);
-      deps.logger?.warn?.(`dsh-soulmojito im: inserting into ${sessionId} failed: ${messageOf12(error)}`);
+      deps.log?.note("error", `could not insert a merged message from ${alias} into session ${sessionId}: ${messageOf13(error)}`);
+      deps.logger?.warn?.(`dsh-soulmojito im: inserting into ${sessionId} failed: ${messageOf13(error)}`);
       await sendNotice(imTargetOf(last.message), code === "IM_SESSION_NOT_LIVE" ? IM_SESSION_NOT_LIVE : IM_DELIVERY_FAILED, alias);
       return;
     }
@@ -57516,19 +58249,23 @@ function createImRouter(deps) {
     }
     const { target, channel, scope, settings } = await sendTargetOf(peerKey, options?.passiveReplyTo);
     const chunks = projectImText(body, channel, imChunkLimit(channel, settings));
+    let outcome;
     try {
-      await deps.send(target, chunks.map((chunk, index) => ({
+      outcome = await deps.send(target, chunks.map((chunk, index) => ({
         kind: "text",
         text: chunk,
         index,
         total: chunks.length
       })));
     } catch (error) {
-      deps.log?.note("error", `im_send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf12(error)}`);
-      throw new ImSendError("IM_SEND_FAILED", `IM send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf12(error)}`, { cause: error });
+      deps.log?.note("error", `im_send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf13(error)}`);
+      throw new ImSendError("IM_SEND_FAILED", `IM send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf13(error)}`, { cause: error });
     }
-    deps.log?.note("info", `im_send delivered ${chunks.length} part(s) to ${imPeerAlias(channel, scope, peerKey)}`);
-    return { parts: chunks.length, at: deps.now() };
+    deps.log?.note(
+      "info",
+      isQueuedOutcome(outcome) ? `im_send queued ${chunks.length} part(s) for ${imPeerAlias(channel, scope, peerKey)} until ${new Date(outcome.scheduledAt).toISOString()}` : `im_send delivered ${chunks.length} part(s) to ${imPeerAlias(channel, scope, peerKey)}`
+    );
+    return outcome;
   }
   async function sendMedia(peerKey, media, options) {
     if (media.localPath === void 0 && media.url === void 0) {
@@ -57556,14 +58293,18 @@ function createImRouter(deps) {
       total: 1
     });
     for (const part of parts) part.total = parts.length;
+    let outcome;
     try {
-      await deps.send(target, parts);
+      outcome = await deps.send(target, parts);
     } catch (error) {
-      deps.log?.note("error", `im_send media to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf12(error)}`);
-      throw new ImSendError("IM_SEND_FAILED", `IM media send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf12(error)}`, { cause: error });
+      deps.log?.note("error", `im_send media to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf13(error)}`);
+      throw new ImSendError("IM_SEND_FAILED", `IM media send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf13(error)}`, { cause: error });
     }
-    deps.log?.note("info", `im_send delivered a ${media.kind} to ${imPeerAlias(channel, scope, peerKey)}`);
-    return { parts: parts.length, at: deps.now() };
+    deps.log?.note(
+      "info",
+      isQueuedOutcome(outcome) ? `im_send queued a ${media.kind} for ${imPeerAlias(channel, scope, peerKey)} until ${new Date(outcome.scheduledAt).toISOString()}` : `im_send delivered a ${media.kind} to ${imPeerAlias(channel, scope, peerKey)}`
+    );
+    return outcome;
   }
   async function sendTargetOf(peerKey, passiveReplyTo) {
     const parts = imPeerKeyParts(peerKey);
@@ -57608,7 +58349,7 @@ function createImRouter(deps) {
       root = await realpath(await deps.workspaceRoot());
       target = await realpath(localPath);
     } catch (cause) {
-      throw new ImSendError("IM_SEND_INVALID", `media path '${localPath}' cannot be resolved: ${messageOf12(cause)}`);
+      throw new ImSendError("IM_SEND_INVALID", `media path '${localPath}' cannot be resolved: ${messageOf13(cause)}`);
     }
     const rel = relative3(root, target);
     if (rel === "" || rel.startsWith("..") || isAbsolute2(rel)) {
@@ -57632,7 +58373,7 @@ function createImRouter(deps) {
     try {
       await deps.send(target, [{ kind: "text", text, index: 0, total: 1 }]);
     } catch (error) {
-      deps.log?.note("error", `sending a notice to ${alias} failed: ${messageOf12(error)}`);
+      deps.log?.note("error", `sending a notice to ${alias} failed: ${messageOf13(error)}`);
     }
   }
   return {
@@ -57676,8 +58417,11 @@ function attachmentSummaryOf(inbound) {
   const rest = inbound.media.length > labels.length ? `\u7B49 ${inbound.media.length} \u4E2A` : "";
   return `\uFF08\u9644\u4EF6\uFF1A${labels.join("\u3001")}${rest}\uFF09`;
 }
-function messageOf12(error) {
+function messageOf13(error) {
   return error instanceof Error ? error.message : String(error);
+}
+function isQueuedOutcome(outcome) {
+  return "status" in outcome && outcome.status === "queued";
 }
 function channelOf(value) {
   return value === "qq" || value === "weixin" || value === "onebot" ? value : void 0;
@@ -57917,7 +58661,7 @@ function createImRuntime(ctx, options) {
       imLog.note("info", `im bind: switched ${sessionId} to ${AGENT_TAVERN_IM_PRESET_ID}`);
       return { applied: true };
     } catch (error) {
-      return { applied: false, reason: messageOf13(error) };
+      return { applied: false, reason: messageOf14(error) };
     }
   }
   async function applyImPreset(sessionId) {
@@ -57946,7 +58690,7 @@ function createImRuntime(ctx, options) {
       const sessionId = agent.session?.id ?? agent.id;
       if (typeof sessionId !== "string" || !bound.has(sessionId)) continue;
       await applyPresetToAgent(agent).then((result) => notePresetResult(sessionId, result)).catch((error) => {
-        logger?.warn?.(`dsh-soulmojito im: switching ${sessionId} to AgentTavernIM failed: ${messageOf13(error)}`);
+        logger?.warn?.(`dsh-soulmojito im: switching ${sessionId} to AgentTavernIM failed: ${messageOf14(error)}`);
       });
     }
   }
@@ -57972,7 +58716,7 @@ function createImRuntime(ctx, options) {
       if (channel === void 0) {
         throw new Error(`IM channel ${target.channel}/${target.accountId} is not running`);
       }
-      await channel.send(target, parts);
+      return channel.send(target, parts);
     },
     log: imLog,
     logger
@@ -58020,7 +58764,7 @@ function createImRuntime(ctx, options) {
       ...options.qqStartRetrySleep === void 0 ? {} : { retrySleep: options.qqStartRetrySleep }
     });
   }
-  function openWeixin(account, secret) {
+  function openWeixin(account, secret, sendIntervalMs) {
     const contextTokens = openWeixinContextTokens(tavernDataRoot("im"), account.accountId);
     return new WeixinChannel({
       accountId: account.accountId,
@@ -58037,6 +58781,7 @@ function createImRuntime(ctx, options) {
       typingEnabled: true,
       cdnBaseUrl: options.weixinCdnBaseUrl ?? WEIXIN_DEFAULT_CDN_BASE_URL,
       media: mediaStore,
+      sendIntervalMs,
       logger
     });
   }
@@ -58123,7 +58868,7 @@ function createImRuntime(ctx, options) {
       try {
         secret = await store5.readSecret("weixin", account.accountId);
       } catch (error) {
-        logger?.warn?.(`dsh-soulmojito im weixin bind: skipped ${account.accountId} local token: ${messageOf13(error)}`);
+        logger?.warn?.(`dsh-soulmojito im weixin bind: skipped ${account.accountId} local token: ${messageOf14(error)}`);
         continue;
       }
       const token = secret?.["botToken"]?.trim() ?? "";
@@ -58201,7 +58946,7 @@ function createImRuntime(ctx, options) {
   let accountTail = Promise.resolve();
   function serialAccounts(task) {
     const run = accountTail.then(task, task);
-    accountTail = run.then(noop2, noop2);
+    accountTail = run.then(noop, noop);
     return run;
   }
   async function upsertAccount(account, secret) {
@@ -58226,7 +58971,8 @@ function createImRuntime(ctx, options) {
         return;
       }
       if (account.channel === "weixin") {
-        const channel = openWeixin(account, secret);
+        const settings = (await db.getState()).imSettings ?? DEFAULT_IM_SETTINGS;
+        const channel = openWeixin(account, secret, weixinSendIntervalOf(settings));
         const previous = await store5.readSecret("weixin", account.accountId);
         await store5.putAccount(account, { ...secret });
         try {
@@ -58246,7 +58992,7 @@ function createImRuntime(ctx, options) {
       else await store5.putAccount(account, previous);
     } catch (rollbackError) {
       throw new Error(
-        `${account.channel} account '${account.accountId}' failed to install and its credential rollback also failed: ${messageOf13(rollbackError)}`,
+        `${account.channel} account '${account.accountId}' failed to install and its credential rollback also failed: ${messageOf14(rollbackError)}`,
         { cause: error }
       );
     }
@@ -58264,11 +59010,11 @@ function createImRuntime(ctx, options) {
       const stillUsed = (await store5.accounts()).some((entry) => entry.accountId === accountId);
       if (!stillUsed) {
         await store5.deleteCursor(accountId).catch((error) => {
-          logger?.warn?.(`dsh-soulmojito im: deleting the cursor for ${channelId}/${accountId} failed: ${messageOf13(error)}`);
+          logger?.warn?.(`dsh-soulmojito im: deleting the cursor for ${channelId}/${accountId} failed: ${messageOf14(error)}`);
         });
       }
       await mediaStore.remove(channelId, accountId).catch((error) => {
-        logger?.warn?.(`dsh-soulmojito im: deleting the media of ${channelId}/${accountId} failed: ${messageOf13(error)}`);
+        logger?.warn?.(`dsh-soulmojito im: deleting the media of ${channelId}/${accountId} failed: ${messageOf14(error)}`);
       });
       await db.updateState((current) => {
         const peers = { ...current.imPeers ?? {} };
@@ -58283,11 +59029,11 @@ function createImRuntime(ctx, options) {
         }
         return { imPeers: peers, imPendingPeers: pending };
       }).catch((error) => {
-        logger?.warn?.(`dsh-soulmojito im: deleting the bindings of ${channelId}/${accountId} failed: ${messageOf13(error)}`);
+        logger?.warn?.(`dsh-soulmojito im: deleting the bindings of ${channelId}/${accountId} failed: ${messageOf14(error)}`);
       });
       if (channelId === "weixin") {
         await openWeixinContextTokens(tavernDataRoot("im"), accountId).clear().catch((error) => {
-          logger?.warn?.(`dsh-soulmojito im: deleting the weixin context tokens for ${accountId} failed: ${messageOf13(error)}`);
+          logger?.warn?.(`dsh-soulmojito im: deleting the weixin context tokens for ${accountId} failed: ${messageOf14(error)}`);
         });
       }
       return removed || live !== void 0;
@@ -58324,12 +59070,12 @@ function createImRuntime(ctx, options) {
         }
         await upsertAccount(account, secret);
       } catch (error) {
-        logger?.warn?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} failed to start: ${messageOf13(error)}`);
+        logger?.warn?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} failed to start: ${messageOf14(error)}`);
       }
     }
   }
   void restoreAccounts().catch((error) => {
-    logger?.warn?.(`dsh-soulmojito im: restoring stored accounts failed: ${messageOf13(error)}`);
+    logger?.warn?.(`dsh-soulmojito im: restoring stored accounts failed: ${messageOf14(error)}`);
   });
   return {
     router,
@@ -58344,6 +59090,22 @@ function createImRuntime(ctx, options) {
       status: channel.status(),
       peers: 0
     })),
+    // 出站节奏投影（决策 2026-10-31-weixin-send-queue）：只有实现了队列的通道
+    // （当前是微信）有 sendStatus；QQ/OneBot 没有排队语义，投影里不出现。
+    sendStatuses: () => {
+      const rows = [];
+      for (const channel of channels.values()) {
+        const status2 = channel.sendStatus?.();
+        if (status2 === void 0) continue;
+        rows.push({ channel: channel.channel, accountId: channel.accountId, ...status2 });
+      }
+      return rows;
+    },
+    // 设置页改动间隔：运行中的微信通道即时换挡，未接上的账号下次 upsert 读新值。
+    applySettings: (settings) => {
+      const interval = weixinSendIntervalOf(settings);
+      for (const channel of channels.values()) channel.setSendIntervalMs?.(interval);
+    },
     isSessionLive: (sessionId) => liveAgentOf(agents, sessionId) !== void 0,
     applyImPreset,
     ensurePresetForAgent,
@@ -58358,12 +59120,12 @@ function createImRuntime(ctx, options) {
       weixinBinding.cancel();
       activeQrBind = void 0;
       await router.flushPending().catch((error) => {
-        logger?.warn?.(`dsh-soulmojito im: flushing buffered inbound messages failed: ${messageOf13(error)}`);
+        logger?.warn?.(`dsh-soulmojito im: flushing buffered inbound messages failed: ${messageOf14(error)}`);
       });
       lifetime.abort();
       for (const channel of channels.values()) {
         await channel.stop().catch((error) => {
-          logger?.warn?.(`dsh-soulmojito im: stopping ${channel.channel}/${channel.accountId} failed: ${messageOf13(error)}`);
+          logger?.warn?.(`dsh-soulmojito im: stopping ${channel.channel}/${channel.accountId} failed: ${messageOf14(error)}`);
         });
       }
       channels.clear();
@@ -58388,9 +59150,9 @@ function qrHostSuffix(url) {
 function isRunningBindPhase(phase) {
   return phase === "waiting" || phase === "verify" || phase === "saving";
 }
-function noop2() {
+function noop() {
 }
-function messageOf13(error) {
+function messageOf14(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -58421,7 +59183,7 @@ function createImTools(deps) {
         }))
       };
     }),
-    tool("im_send", "Send one message to an IM peer that is bound to this session. Use it to reply when an IM message has been relayed into this session. Send text, a media item, or a media item with a caption. Each relay header carries msg=<ref> (with the receive time); replyTo is optional, usually omitted, and citing that ref anchors the reply to that exact message (and its peer). Omit peer only when exactly one peer is bound; when several peers are bound, pass the alias from im_identity because there is no deterministic target otherwise \u2014 replyTo is the only exception, since the ref already names its peer. Text is trimmed and capped at 4000 characters. Media is read from an absolute local path (preferred) or an http(s) URL for image/video. Cross-session sending is forbidden: an alias or replyTo outside this session is rejected.", {
+    tool("im_send", 'Send one message to an IM peer that is bound to this session. Use it to reply when an IM message has been relayed into this session. Send text, a media item, or a media item with a caption. Each relay header carries msg=<ref> (with the receive time); replyTo is optional, usually omitted, and citing that ref anchors the reply to that exact message (and its peer). Omit peer only when exactly one peer is bound; when several peers are bound, pass the alias from im_identity because there is no deterministic target otherwise \u2014 replyTo is the only exception, since the ref already names its peer. Text is trimmed and capped at 4000 characters. Media is read from an absolute local path (preferred) or an http(s) URL for image/video. Cross-session sending is forbidden: an alias or replyTo outside this session is rejected. The result can be a queued receipt (status "queued" with scheduledAt) when the channel paces a burst (WeChat): report that scheduled time as not yet delivered instead of claiming success, and check im_time for the next allowed send, any cooldown and the queue depth; a thrown WEIXIN_THROTTLED means the plugin already retried once after the cooldown and gave up, so do not retry in the same turn.', {
       text: { type: "string", description: "Message text, 1-4000 characters after trimming. Optional when media is attached; then it becomes the caption." },
       peer: { type: "string", description: "Target peer alias from im_identity; required when this session has more than one binding." },
       replyTo: { type: "string", description: "Optional message ref from a relay header (msg=...): anchors this reply to that exact message and its peer. The ref alone may pick the peer; normally omit." },
@@ -58479,20 +59241,36 @@ function createImTools(deps) {
         }
         const withCaption = text === void 0 ? media : { ...media, caption: text };
         const receipt2 = await runtime.router.sendMedia(peer.peerKey, withCaption, sendOptions);
-        return {
-          peer: peer.alias,
-          parts: receipt2.parts,
-          sentAt: new Date(receipt2.at).toISOString(),
-          mediaKind: media.kind,
-          ...receipt2.messageId === void 0 ? {} : { messageId: receipt2.messageId }
-        };
+        return sentResultOf(peer.alias, receipt2, media.kind);
       }
       const receipt = await runtime.router.sendText(peer.peerKey, text, sendOptions);
+      return sentResultOf(peer.alias, receipt);
+    }),
+    tool("im_time", "Report the current server time (ISO 8601 with the IANA time zone) and the outbound pacing of every configured IM account: whether a message can start now, the next allowed send time, any WeChat -2 cooldown end, and how many sends are queued. Use it before assuming a delayed send was lost: a queued im_send result carries scheduledAt, and this tool confirms the queue and the next window. Read-only; never returns credentials or peer ids.", {}, timeOutput, async () => {
+      const runtime = deps.runtime();
+      const now = /* @__PURE__ */ new Date();
+      if (runtime === void 0) {
+        return {
+          available: false,
+          reasons: ["IM runtime is not mounted in this host process"],
+          now: now.toISOString(),
+          timeZone: resolveTimeZone(),
+          channels: []
+        };
+      }
       return {
-        peer: peer.alias,
-        parts: receipt.parts,
-        sentAt: new Date(receipt.at).toISOString(),
-        ...receipt.messageId === void 0 ? {} : { messageId: receipt.messageId }
+        available: runtime.capabilities.available,
+        reasons: [...runtime.capabilities.reasons],
+        now: now.toISOString(),
+        timeZone: resolveTimeZone(),
+        channels: (runtime.sendStatuses?.() ?? []).map((row) => ({
+          channel: row.channel,
+          accountId: row.accountId,
+          allowedNow: row.allowedNow,
+          ...row.nextSendAt === void 0 ? {} : { nextSendAt: new Date(row.nextSendAt).toISOString() },
+          ...row.throttleUntil === void 0 ? {} : { throttleUntil: new Date(row.throttleUntil).toISOString() },
+          queueDepth: row.queueDepth
+        }))
       };
     })
   ];
@@ -58503,6 +59281,33 @@ function publicPeer(peer) {
     channel: peer.channel,
     scope: peer.scope
   };
+}
+function sentResultOf(alias, outcome, mediaKind) {
+  const base = {
+    peer: alias,
+    parts: outcome.parts,
+    ...mediaKind === void 0 ? {} : { mediaKind }
+  };
+  if (isQueuedReceipt(outcome)) {
+    return { ...base, status: "queued", scheduledAt: new Date(outcome.scheduledAt).toISOString() };
+  }
+  return {
+    ...base,
+    status: "sent",
+    sentAt: new Date(outcome.at).toISOString(),
+    ...outcome.messageId === void 0 ? {} : { messageId: outcome.messageId }
+  };
+}
+function isQueuedReceipt(outcome) {
+  return "status" in outcome && outcome.status === "queued";
+}
+function resolveTimeZone() {
+  try {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return typeof zone === "string" && zone !== "" ? zone : "UTC";
+  } catch {
+    return "UTC";
+  }
 }
 var identityOutput = objectOutput({
   peers: {
@@ -58539,10 +59344,34 @@ var channelsOutput = objectOutput({
 var sendOutput = objectOutput({
   peer: { type: "string" },
   parts: { type: "integer" },
+  status: { type: "string", enum: ["sent", "queued"] },
   sentAt: { type: "string" },
+  scheduledAt: { type: "string" },
   messageId: { type: "string" },
   mediaKind: { type: "string", enum: ["image", "voice", "video", "file"] }
-}, ["messageId", "mediaKind"]);
+}, ["sentAt", "scheduledAt", "messageId", "mediaKind"]);
+var timeOutput = objectOutput({
+  available: { type: "boolean" },
+  reasons: { type: "array", items: { type: "string" } },
+  now: { type: "string" },
+  timeZone: { type: "string" },
+  channels: {
+    type: "array",
+    items: {
+      type: "object",
+      properties: {
+        channel: { type: "string" },
+        accountId: { type: "string" },
+        allowedNow: { type: "boolean" },
+        nextSendAt: { type: "string" },
+        throttleUntil: { type: "string" },
+        queueDepth: { type: "integer" }
+      },
+      required: ["channel", "accountId", "allowedNow", "queueDepth"],
+      additionalProperties: false
+    }
+  }
+}, []);
 function requireAgentId2(exec) {
   const agentId = exec.agent?.id;
   if (typeof agentId !== "string" || agentId.trim() === "") {
@@ -58653,7 +59482,7 @@ function replyToOf(args) {
 // packages/plugin/src/im/agent-mount.ts
 var disposersByAgent = /* @__PURE__ */ new Map();
 var warnedAgents = /* @__PURE__ */ new Set();
-function messageOf14(error) {
+function messageOf15(error) {
   return error instanceof Error ? error.message : String(error);
 }
 function agentIdOf2(agent) {
@@ -58684,7 +59513,7 @@ function mountImToolsOnAgent(deps, agent) {
       const disposer = register.call(tools, tool4);
       if (typeof disposer === "function") disposers.push(disposer);
     } catch (error) {
-      deps.logger?.warn?.(`dsh-soulmojito im: registering ${tool4.name} on agent ${agentId} failed: ${messageOf14(error)}`);
+      deps.logger?.warn?.(`dsh-soulmojito im: registering ${tool4.name} on agent ${agentId} failed: ${messageOf15(error)}`);
       for (const dispose of disposers) dispose();
       return false;
     }

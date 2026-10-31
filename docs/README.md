@@ -69,6 +69,11 @@
 - [`2026-10-31-im-steer-inbound.md`](../decisions/2026-10-31-im-steer-inbound.md) — IM 入站「插话发送」：运行中的会话用 `agent.steer`，空闲用 `followup`
 - [`2026-10-31-weixin-send-throttle.md`](../decisions/2026-10-31-weixin-send-throttle.md) — 微信出站突发预算（5 条/30 秒）与 `ret=-2 prepare failed` 的 5 分钟冷却
 - [`2026-10-31-qq-start-token-retry.md`](../decisions/2026-10-31-qq-start-token-retry.md) — QQ 启动被 access_token 的 10s 固定超时打断：网络类启动重试（3 次 / 1s+2s / 只认网络错误，每次留痕）
+- [`2026-10-31-im-inbound-coalescing.md`](../decisions/2026-10-31-im-inbound-coalescing.md) — IM 入站同 peer 短窗口合流与平台时间重排（600ms、仅文本合并、含媒体逐条）
+- [`2026-10-31-im-message-refs.md`](../decisions/2026-10-31-im-message-refs.md) — 消息级来源引用：`msg-<hash>` 标注与 `im_send replyTo` 精确回复锚点
+- [`2026-10-31-im-chat-projection.md`](../decisions/2026-10-31-im-chat-projection.md) — IM 对话投影进 Tavern 楼层：入站 relay 与成功 `im_send` 成为可检索聊天历史与记忆证据
+- [`2026-10-31-im-body-mutations-disabled.md`](../decisions/2026-10-31-im-body-mutations-disabled.md) — IM 绑定会话禁用正文编辑/重生成/候选切换（只读查看保留）
+- [`2026-10-31-weixin-send-queue.md`](../decisions/2026-10-31-weixin-send-queue.md) — 微信出站队列：面板可配发送间隔、窗口/冷却主动等待并重试一次、排队回执带排期
 
 ### 宿主兼容与 DSH 版本适配
 

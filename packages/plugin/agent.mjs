@@ -1880,13 +1880,16 @@ function normalizeImSettings(value) {
   }
   const record = value;
   const chunkLimit = record["chunkLimit"];
+  const sendInterval = record["weixinSendIntervalMs"];
   return {
     groupRequireMention: record["groupRequireMention"] !== false,
     privateMode: normalizeAccessMode(record["privateMode"], "allowlist"),
     privateAllow: normalizeStringList(record["privateAllow"]),
     groupMode: normalizeAccessMode(record["groupMode"], "allowlist"),
     groupAllow: normalizeStringList(record["groupAllow"]),
-    ...typeof chunkLimit === "number" && Number.isSafeInteger(chunkLimit) && chunkLimit > 0 ? { chunkLimit } : {}
+    ...typeof chunkLimit === "number" && Number.isSafeInteger(chunkLimit) && chunkLimit > 0 ? { chunkLimit } : {},
+    // 手改坏了的间隔（非整数/越界）直接丢弃回落默认，不拖垮整份设置。
+    ...typeof sendInterval === "number" && Number.isSafeInteger(sendInterval) && sendInterval >= WEIXIN_SEND_INTERVAL_MIN_MS && sendInterval <= WEIXIN_SEND_INTERVAL_MAX_MS ? { weixinSendIntervalMs: sendInterval } : {}
   };
 }
 function normalizeImPeers(value) {
@@ -1920,10 +1923,12 @@ function normalizeImPendingPeers(value) {
   }
   return result;
 }
-var DEFAULT_IM_SETTINGS;
+var WEIXIN_SEND_INTERVAL_MIN_MS, WEIXIN_SEND_INTERVAL_MAX_MS, DEFAULT_IM_SETTINGS;
 var init_im_state = __esm({
   "packages/tavern-store/src/im-state.ts"() {
     "use strict";
+    WEIXIN_SEND_INTERVAL_MIN_MS = 500;
+    WEIXIN_SEND_INTERVAL_MAX_MS = 6e4;
     DEFAULT_IM_SETTINGS = {
       groupRequireMention: true,
       privateMode: "allowlist",
@@ -6309,7 +6314,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("ed583ea") : void 0;
+  const commit = true ? normalizeCommit("4889a73") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -11093,6 +11098,12 @@ init_runtime();
 // packages/plugin/src/agent-tavern/body-runtime-core.ts
 init_src2();
 var bodyTails = new KeyedMutationTails(true);
+
+// packages/plugin/src/agent-tavern/im-projection.ts
+init_src3();
+
+// packages/plugin/src/im/types.ts
+init_src2();
 
 // packages/plugin/src/agent-tavern/projector.ts
 var mvuAuditTail = new MutationTail();
