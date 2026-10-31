@@ -43,4 +43,10 @@ describe('AgentTavernIM prompt', () => {
     expect(text).toContain('peer')
     expect(text).toContain('im_identity')
   })
+
+  it('requires an explicit peer alias when several peers are bound and allows omission for a single peer', () => {
+    const text = imModePromptText()
+    expect(text).toContain('有多个对端时必须显式传消息头里的 alias')
+    expect(text).toContain('只有一个对端时可以省略')
+  })
 })

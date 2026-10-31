@@ -505,6 +505,8 @@ export class QQChannel implements ImChannel {
     const senderName = nonEmpty(msg.senderName) ?? openidLabel(senderId)
     const messageId = nonEmpty(msg.messageId)
     const receivedAt = this.now()
+    // 平台时间戳只用于同 peer 批次内的排序；缺失/非法时不带 platformAt。
+    const platformAt = platformAtOf(msg.timestamp)
     // 语音自带的识别文本是平台给的正文补充：丢了它，模型只看得到一条「语音」，
     // 而这正是 QQ 语音唯一可读的内容。
     const attachments = qqAttachmentsOf(msg)
@@ -534,6 +536,7 @@ export class QQChannel implements ImChannel {
       ...(messageId === undefined ? {} : { replyTo: messageId }),
       dedupeKey: imDedupeKey('qq', this.accountId, scope, peerId, dedupeId),
       receivedAt,
+      ...(platformAt === undefined ? {} : { platformAt }),
     }
   }
 }
@@ -631,6 +634,18 @@ function requireSecret(secret: Readonly<Record<string, string>>, key: string, ac
 
 function openidLabel(openid: string): string {
   return openid.slice(0, OPENID_LABEL_LENGTH)
+}
+
+/**
+ * 平台事件时间 → 毫秒。QQ 载荷的 `timestamp` 是字符串：数值 `n > 0 && n < 1e11`
+ * 视为 UNIX 秒并乘 1000（毫秒时间戳要到 5138 年才突破 1e11，秒级不会），其余
+ * 正数按已是毫秒原样用。非有限值或 <= 0 一律省略，不发明时间。
+ */
+function platformAtOf(timestamp: string): number | undefined {
+  const value = Number(timestamp)
+  if (!Number.isFinite(value) || value <= 0) return undefined
+  if (value < 1e11) return Math.round(value * 1000)
+  return value
 }
 
 function nonEmpty(value: string | undefined): string | undefined {

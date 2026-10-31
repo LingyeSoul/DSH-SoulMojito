@@ -354,6 +354,25 @@ describe('parseOneBotMessage', () => {
       'message[0]',
     )
   })
+
+  it('事件 time 按秒归一到毫秒，已毫秒原样保留，缺失则省略 platformAt', () => {
+    const base = {
+      post_type: 'message',
+      message_type: 'private',
+      message_id: 4020,
+      user_id: 10020,
+      sender: { nickname: '甲' },
+      message: [{ type: 'text', data: { text: 'hi' } }],
+    }
+    // OneBot 11 的 time 是 UNIX 秒 → 毫秒。
+    expect(parseOneBotMessage({ ...base, time: 1_730_000_000 }, ACCOUNT, RECEIVED_AT)?.platformAt)
+      .toBe(1_730_000_000_000)
+    // 已经是毫秒的值按同一套规则原样保留。
+    expect(parseOneBotMessage({ ...base, message_id: 4021, time: RECEIVED_AT }, ACCOUNT, RECEIVED_AT)?.platformAt)
+      .toBe(RECEIVED_AT)
+    // 没有 time：省略 platformAt，不发明平台时间。
+    expect(parseOneBotMessage(base, ACCOUNT, RECEIVED_AT)?.platformAt).toBeUndefined()
+  })
 })
 
 describe('oneBotMentioned', () => {

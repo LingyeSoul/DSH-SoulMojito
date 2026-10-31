@@ -62,7 +62,7 @@ export function createImTools(deps: ImToolsDeps): ToolDefinition[] {
         })),
       }
     }),
-    tool('im_send', 'Send one message to an IM peer that is bound to this session. Use it to reply when an IM message has been relayed into this session. Send text, a media item, or a media item with a caption. Omit peer when exactly one peer is bound, or to reply to the most recent inbound message of this session; otherwise pass the alias from im_identity. Text is trimmed and capped at 4000 characters. Media is read from an absolute local path (preferred) or an http(s) URL for image/video. Cross-session sending is forbidden: an alias outside this session is rejected.', {
+    tool('im_send', 'Send one message to an IM peer that is bound to this session. Use it to reply when an IM message has been relayed into this session. Send text, a media item, or a media item with a caption. Omit peer only when exactly one peer is bound; when several peers are bound, pass the alias from im_identity because there is no deterministic target otherwise. Text is trimmed and capped at 4000 characters. Media is read from an absolute local path (preferred) or an http(s) URL for image/video. Cross-session sending is forbidden: an alias outside this session is rejected.', {
       text: { type: 'string', description: 'Message text, 1-4000 characters after trimming. Optional when media is attached; then it becomes the caption.' },
       peer: { type: 'string', description: 'Target peer alias from im_identity; required when this session has more than one binding.' },
       mediaKind: { type: 'string', enum: ['image', 'voice', 'video', 'file'], description: 'Kind of the media item; required when mediaPath or mediaUrl is given.' },
@@ -86,10 +86,8 @@ export function createImTools(deps: ImToolsDeps): ToolDefinition[] {
       } else if (peers.length === 0) {
         throw new Error('this session has no IM peer binding; bind one in the dsh-soulmojito IM panel first')
       } else {
-        // 微信一条绑定只有一个聊天；多通道共用会话时，回给最近一条入站消息的对端。
-        const lastKey = deps.runtime()?.router.lastPeerOf?.(agentId)
-        const recent = lastKey === undefined ? undefined : peers.find((entry) => entry.peerKey === lastKey)
-        peer = recent ?? peerWhenSingle(peers)
+        // 多绑定会话没有确定的「回给谁」：必须让模型显式传 alias，绝不按最近入站猜。
+        peer = peerWhenSingle(peers)
       }
       const runtime = deps.runtime()
       if (runtime === undefined) {

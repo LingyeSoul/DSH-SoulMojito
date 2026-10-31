@@ -251,6 +251,7 @@ describe('qq channel inbound', () => {
         replyTo: 'c2c-msg-1',
         dedupeKey: imDedupeKey('qq', ACCOUNT_ID, 'private', 'openid-owner-1', 'c2c-msg-1'),
         receivedAt: NOW,
+        platformAt: NOW,
       })
       expect(harness.delivered[1]).toMatchObject({
         scope: 'group',
@@ -407,6 +408,25 @@ describe('qq channel inbound', () => {
         },
       }))
       expect(harness.delivered[1]?.media).toEqual([{ kind: 'video', url: videoUrl, size: 4096 }])
+    } finally {
+      await harness.channel.stop()
+    }
+  })
+
+  it('normalizes the platform timestamp to milliseconds when the payload carries one', async () => {
+    const harness = channelHarness({ bot: {}, requireMention: false, markdownSupport: false })
+    await harness.channel.start(harness.signal)
+    try {
+      // 秒级时间戳（旧载荷）→ 毫秒。
+      await harness.bot.emit('message', {}, c2cMessage({ timestamp: '1760000000' }))
+      // 已经是毫秒的时间戳原样保留。
+      await harness.bot.emit('message', {}, c2cMessage({ messageId: 'c2c-msg-2', timestamp: String(NOW) }))
+      // 缺时间戳：省略 platformAt，不发明一个。
+      await harness.bot.emit('message', {}, c2cMessage({ messageId: 'c2c-msg-3', timestamp: '' }))
+      const [seconds, milliseconds, missing] = harness.delivered
+      expect(seconds?.platformAt).toBe(1_760_000_000_000)
+      expect(milliseconds?.platformAt).toBe(NOW)
+      expect(missing?.platformAt).toBeUndefined()
     } finally {
       await harness.channel.stop()
     }

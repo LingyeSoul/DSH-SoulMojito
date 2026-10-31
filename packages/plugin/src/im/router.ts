@@ -1,14 +1,17 @@
 /**
- * 入站路由（提案 0024 §3.8 / 决策 2026-10-31-im-native-session-binding）：
- * 去重 → 白名单 → 绑定 → **立即**插进绑定的原生 DSH 会话。
+ * 入站路由（提案 0024 §3.8 / 决策 2026-10-31-im-native-session-binding /
+ * 决策 2026-10-31-im-inbound-coalescing）：
+ * 短窗合流 → 去重 → 白名单 → 绑定 → 媒体物化 → 插进绑定的原生 DSH 会话。
  *
- * 这里刻意没有队列、没有 debounce、没有「等人说完」：宿主 AgentLoop 自己收
- * inbox，插件再攒一层只会让「立即投递」变成一句空话。唯一的时间维度是去重与
- * 未绑定提示的抑制窗口。
+ * 每个 peer 一条 600ms 的短窗（`im/coalesce.ts`）：窗口内的文本连发合并成一条
+ * 消息插入，同 peer 的平台时间乱序消息在合并前按 `platformAt ?? receivedAt` 重排。
+ * 缓冲有硬上限（条数与字符数），超过立即冲刷；含媒体的批次不合并，逐条投递。
+ * 这逆转了 2026-10-31-im-native-session-binding 里「插件不排队」的取舍：连发碎句
+ * 会把宿主会话刷成一串独立轮，窗口把一次对话收成一条；代价与边界见决策文档。
  *
  * 绑定缺失时：把 peer 记进 `imPendingPeers`（面板「未绑定对端」待办）并回一条
  * 提示，**不代建会话**。回复也不由插件自动发——入站消息以插件来源插入会话后，
- * 由模型调用 `im_send` 自己回复（决策 2026-10-31-im-native-session-binding）。
+ * 由模型调用 `im_send` 自己回复。
  *
  * 所有宿主能力都从 deps 进来，路由本身不认识 ctx、不认识协议。
  */
@@ -18,6 +21,7 @@ import { realpath } from 'node:fs/promises'
 import { isAbsolute, relative } from 'node:path'
 import type { TavernStore } from '../../../tavern-store/src/index.js'
 import type { HostLogger } from '../host-contract.js'
+import { IM_COALESCE_MAX_CHARS, IM_COALESCE_MAX_MESSAGES, IM_COALESCE_WINDOW_MS, mergedRelayTextOf, orderInboundEntries, type ImCoalesceEntry } from './coalesce.js'
 import { projectImText } from './project.js'
 import { imAccessAllows, imChunkLimit } from './settings.js'
 import type { ImLogSink } from './log.js'
@@ -57,17 +61,28 @@ const UNBOUND_NOTICE_TTL_MS = 10 * 60_000
 /** 被动回复锚点的有效期：平台消息的被动回复窗口远短于此，过期就不带。 */
 const REPLY_ANCHOR_TTL_MS = 5 * 60_000
 
-/** 「最近一条入站 peer」的有效期：模型在同一轮/下一轮回复都够用。 */
-const LAST_PEER_TTL_MS = 10 * 60_000
-
 /** 面板待办上限：只留最近 50 个未绑定对端，防止陌生人群刷爆 state。 */
 const MAX_PENDING_PEERS = 50
+
+/**
+ * `flushPending()` 的保护上限：冲刷期间持续入站会让「冲到没有待处理项」永不
+ * 满足，dispose 因此可能被无限拖延。最多 50 轮或 2 秒（先到者）就放弃，
+ * 剩余缓冲交给各自的窗口定时器继续冲刷。
+ */
+export const IM_FLUSH_PENDING_MAX_PASSES = 50
+export const IM_FLUSH_PENDING_MAX_MS = 2_000
 
 export interface ImAgentMessage {
   id: string
   text: string
   /** 宿主消息来源的一行摘要（`source.summary`），不含正文与平台身份。 */
   summary: string
+}
+
+/** 冲刷时确认可投递的一条入站消息：正文已按群聊/附件规则拼好。 */
+interface DeliverableInbound {
+  message: ImInbound
+  body: string
 }
 
 export interface ImRouterDeps {
@@ -90,16 +105,35 @@ export interface ImRouterDeps {
   logger?: HostLogger
   /** 面板「IM 运行日志」的落点；缺省时只写宿主日志。 */
   log?: ImLogSink
+  /**
+   * 同一 peer 的合流窗口（毫秒）；缺省 `IM_COALESCE_WINDOW_MS`。测试注入假调度器
+   * 保持确定性，生产不做面板配置。
+   */
+  coalesceWindowMs?: number
+  /**
+   * 窗口定时器接缝：`scheduleFlush(delayMs, run)` 返回取消函数。缺省
+   * setTimeout/clearTimeout；测试注入手动调度器，不真等 600ms。
+   */
+  scheduleFlush?: (delayMs: number, run: () => void) => () => void
 }
 
 export interface ImRouter {
   /**
-   * 一条入站消息：不阻塞调用方，通道的事件循环可以继续收消息。
+   * 一条入站消息：正常路径只入缓冲，不阻塞调用方——通道的事件循环可以继续
+   * 收消息；缓冲触到硬上限（条数/字符数）时当场冲刷并等待插入完成。
    *
-   * `loadMedia` 是惰性媒体物化：路由先完成去重与访问控制，只有通过之后才调用
-   * 它下载/解密。被拒绝的 peer 与重复投递因此不会触发任何落盘或网络请求。
+   * 去重、访问控制、绑定与插入都在合流窗口结束后的冲刷里按序执行。
+   * `loadMedia` 是惰性媒体物化：只有通过去重与访问控制、已绑定，且批次里确实
+   * 要投递时才调用它下载/解密；被拒绝的 peer 与重复投递不会触发任何落盘或网络请求。
    */
   inbound(inbound: ImInbound, options?: { loadMedia?: () => Promise<readonly ImMediaRef[]> }): Promise<void>
+  /**
+   * 强制冲刷所有 peer 的缓冲批次并等待插入完成。测试用它替代真等窗口；
+   * `runtime.dispose()` 用它落盘最后一窗消息。冲刷期间新到的消息会重新入缓冲，
+   * 反复冲刷到没有待处理项为止；持续入站超过上限时记 warn 并返回，剩余缓冲
+   * 由各自的窗口定时器兜底（保护 dispose 不被无限拖延）。
+   */
+  flushPending(): Promise<void>
   /**
    * 主动发一条文本给已绑定的 peer（`im_send` 的落点）。绑定存在性在这里再验
    * 一次：工具面只保证「绑到本会话」，路由保证「peer 真的有绑定」。
@@ -107,11 +141,6 @@ export interface ImRouter {
   sendText(peerKey: string, text: string): Promise<ImSendReceipt>
   /** 主动发一条媒体（可选配文）；目标校验与 `sendText` 同一套。 */
   sendMedia(peerKey: string, media: ImOutboundMedia): Promise<ImSendReceipt>
-  /**
-   * 最近一条成功入站消息的 peerKey（同会话，10 分钟窗口）。`im_send` 省略
-   * `peer` 且会话绑了多个对端时用它回退；过期返回 undefined。
-   */
-  lastPeerOf(sessionId: string): string | undefined
 }
 
 export function createImRouter(deps: ImRouterDeps): ImRouter {
@@ -122,63 +151,223 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
    * 消息 id；路由在入站时记下最近一条，`im_send` 出站时自动带上。
    */
   const replyAnchors = new Map<string, { replyTo: string; at: number }>()
+
+  const coalesceWindowMs = deps.coalesceWindowMs ?? IM_COALESCE_WINDOW_MS
+  /** 窗口定时器接缝；缺省真定时器，测试注入手动调度器。 */
+  const scheduleFlush = deps.scheduleFlush ?? ((delayMs: number, run: () => void): (() => void) => {
+    const timer = setTimeout(run, delayMs)
+    return () => { clearTimeout(timer) }
+  })
+  /** 每个 peer 的待冲刷批次：`inbound` 只追加，冲刷时整批按平台时间排序处理。 */
+  const buffers = new Map<string, ImCoalesceEntry[]>()
+  /** 每个 peer 至多一个待触发的窗口定时器：值是取消函数。 */
+  const flushTimers = new Map<string, () => void>()
   /**
-   * 最近一条入站消息的 peer（按会话）。`im_send` 省略 `peer` 时先看它：
-   * 微信一条绑定只有一个聊天，QQ/多通道共用会话时也能回给刚说话的人。
+   * 每个 peer 的冲刷链尾。`flushPending` 等的是「插入真的完成」，不是「缓冲被取走」：
+   * 冲刷进行中新到的消息会另起一轮，链式接在后面。
    */
-  const lastPeerBySession = new Map<string, { peerKey: string; at: number }>()
+  const flushing = new Map<string, Promise<void>>()
+  /** 本地到达序号：平台时间缺失或相同时的稳定排序键。 */
+  let nextSeq = 0
 
   async function settingsOf(): Promise<ImSettings> {
     const state = await deps.db.getState()
     return state.imSettings ?? DEFAULT_IM_SETTINGS
   }
 
+  /**
+   * 一条入站消息：正常路径只追加进该 peer 的合流批次并立即返回；触到条数/字符
+   * 硬上限时不等窗口，当场 `await` 完整冲刷（这一次调用会等到插入完成）。
+   * 去重/访问控制/绑定/插入都推迟到冲刷里做——这正是「一条连发 = 一条消息」的
+   * 前提，窗口内的重放也会在冲刷时被去重表挡住。
+   */
   async function inbound(
     inboundMessage: ImInbound,
     options?: { loadMedia?: () => Promise<readonly ImMediaRef[]> },
   ): Promise<void> {
-    const now = deps.now()
     const peerKey = imPeerKey(inboundMessage.channel, inboundMessage.accountId, inboundMessage.scope, inboundMessage.peerId)
-    const alias = imPeerAlias(inboundMessage.channel, inboundMessage.scope, peerKey)
-    if (await deps.seenDedupe(inboundMessage.dedupeKey, now)) {
-      deps.log?.note('debug', `ignored a duplicate ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias} (dedupe)`)
+    const entry: ImCoalesceEntry = {
+      inbound: inboundMessage,
+      ...(options?.loadMedia === undefined ? {} : { loadMedia: options.loadMedia }),
+      seq: nextSeq,
+      at: deps.now(),
+    }
+    nextSeq += 1
+    const buffered = buffers.get(peerKey)
+    if (buffered === undefined) buffers.set(peerKey, [entry])
+    else buffered.push(entry)
+    const batch = buffered ?? [entry]
+    if (bufferExceedsLimits(batch)) {
+      // 触到条数/字符上限：不等窗口，立即冲刷这一批；窗口上限保持是硬的。
+      cancelFlushTimer(peerKey)
+      await startFlush(peerKey)
       return
     }
+    scheduleFlushFor(peerKey)
+  }
+
+  /** 缓冲触限判定：条数达到上限或正文合计超过字符上限。 */
+  function bufferExceedsLimits(entries: readonly ImCoalesceEntry[]): boolean {
+    if (entries.length >= IM_COALESCE_MAX_MESSAGES) return true
+    let chars = 0
+    for (const entry of entries) chars += entry.inbound.text.length
+    return chars > IM_COALESCE_MAX_CHARS
+  }
+
+  function cancelFlushTimer(peerKey: string): void {
+    const cancel = flushTimers.get(peerKey)
+    if (cancel === undefined) return
+    flushTimers.delete(peerKey)
+    cancel()
+  }
+
+  /** 起一轮冲刷；已有在飞的批次时接在它后面，保证缓冲里当前的批次也被覆盖。 */
+  function startFlush(peerKey: string): Promise<void> {
+    const previous = flushing.get(peerKey)
+    const run = previous === undefined ? flushPeer(peerKey) : previous.then(() => flushPeer(peerKey))
+    flushing.set(peerKey, run)
+    const done = (): void => {
+      if (flushing.get(peerKey) === run) flushing.delete(peerKey)
+    }
+    void run.then(done, done)
+    return run
+  }
+
+  function scheduleFlushFor(peerKey: string): void {
+    if (flushTimers.has(peerKey)) return
+    let fired = false
+    let registering = true
+    const cancel = scheduleFlush(coalesceWindowMs, () => {
+      fired = true
+      // 同步调度器（测试）会在登记完成前调回：交给 scheduleFlushFor 收尾。
+      if (registering) return
+      flushTimers.delete(peerKey)
+      void startFlush(peerKey)
+    })
+    registering = false
+    if (fired) {
+      // 回调已经同步跑过：这个定时器永远不会触发，取消并立即冲刷。
+      cancel()
+      void startFlush(peerKey)
+      return
+    }
+    flushTimers.set(peerKey, cancel)
+  }
+
+  /** 冲刷一个 peer 的批次；按契约永远不 reject（单条失败已在批次内隔离）。 */
+  async function flushPeer(peerKey: string): Promise<void> {
+    cancelFlushTimer(peerKey)
+    const buffered = buffers.get(peerKey)
+    if (buffered === undefined) return
+    buffers.delete(peerKey)
+    const first = buffered[0]
+    if (first === undefined) return
+    const alias = imPeerAlias(first.inbound.channel, first.inbound.scope, peerKey)
+    try {
+      await deliverBatch(peerKey, alias, orderInboundEntries(buffered))
+    } catch (error) {
+      deps.log?.note('error', `flushing the buffered messages from ${alias} failed: ${messageOf(error)}`)
+    }
+  }
+
+  async function flushPending(): Promise<void> {
+    // 反复检查：冲刷是异步的，期间新到的消息会重新入缓冲，直到缓冲、定时器、
+    // 在飞批次三者都空为止。持续入站时这个循环不会自然结束，因此用轮数/时长
+    // 上限兜底：超限只 warn 并返回，剩余缓冲仍有各自的窗口定时器。
+    const startedAt = deps.now()
+    let passes = 0
+    for (;;) {
+      if (passes >= IM_FLUSH_PENDING_MAX_PASSES || deps.now() - startedAt >= IM_FLUSH_PENDING_MAX_MS) {
+        // 退出前只统计「还有事的 peer」：buffers 与 flushTimers 常常指同一个 peer，
+        // 直接相加会把一个批次算成两份。剩余批次仍有各自的窗口定时器兜底。
+        const pendingPeers = new Set([...buffers.keys(), ...flushTimers.keys(), ...flushing.keys()])
+        if (pendingPeers.size === 0) return
+        deps.log?.note(
+          'warn',
+          `flushPending stopped after ${passes} pass(es): ${pendingPeers.size} peer batch(es) are still pending; the per-peer window timers keep flushing them`,
+        )
+        return
+      }
+      passes += 1
+      for (const peerKey of [...flushTimers.keys()]) {
+        cancelFlushTimer(peerKey)
+        startFlush(peerKey)
+      }
+      for (const peerKey of [...buffers.keys()]) startFlush(peerKey)
+      const pending = [...flushing.values()]
+      if (pending.length === 0) return
+      await Promise.all(pending)
+    }
+  }
+
+  /**
+   * 冲刷一批（同 peer）入站消息：整批共用一次设置读取与绑定查询，逐条走
+   * 去重 → 访问控制 → 未绑定待办 → 媒体物化，把可投递的收进 `deliverables`。
+   * 单条失败只跳过该条（已记错误日志），不拖垮批次里其它消息。
+   */
+  async function deliverBatch(peerKey: string, alias: string, entries: readonly ImCoalesceEntry[]): Promise<void> {
     const settings = await settingsOf()
+    const binding = await boundSessionOf(peerKey)
+    const deliverables: DeliverableInbound[] = []
+    for (const entry of entries) {
+      try {
+        const deliverable = await consumeEntry(peerKey, alias, entry, settings, binding)
+        if (deliverable !== undefined) deliverables.push(deliverable)
+      } catch (error) {
+        deps.log?.note('error', `processing a buffered message from ${alias} failed: ${messageOf(error)}`)
+      }
+    }
+    if (binding === undefined || deliverables.length === 0) return
+    if (deliverables.length > 1 && deliverables.every((item) => item.message.media.length === 0)) {
+      await deliverMerged(alias, binding.sessionId, deliverables)
+      return
+    }
+    // 单条批次与含媒体的批次都不合并：逐条投递，单条正文与日志保持原样。
+    for (const item of deliverables) await deliverOne(alias, binding.sessionId, item)
+  }
+
+  /**
+   * 批次里的一条：去重与访问控制先行，绑定缺失时记待办 + 提示；通过后才物化媒体。
+   * 返回可投递项（正文已拼好）；被过滤的返回 undefined。
+   */
+  async function consumeEntry(
+    peerKey: string,
+    alias: string,
+    entry: ImCoalesceEntry,
+    settings: ImSettings,
+    binding: { sessionId: string } | undefined,
+  ): Promise<DeliverableInbound | undefined> {
+    const inboundMessage = entry.inbound
+    if (await deps.seenDedupe(inboundMessage.dedupeKey, entry.at)) {
+      deps.log?.note('debug', `ignored a duplicate ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias} (dedupe)`)
+      return undefined
+    }
     if (!imAccessAllows(settings, inboundMessage.scope, inboundMessage.peerId)) {
       deps.log?.note(
         'warn',
         `dropped a ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias}: the access policy does not allow this peer (mode is allowlist and the peer is not listed, or the scope is disabled)`,
       )
-      return
+      return undefined
     }
-    const target: ImTarget = {
-      channel: inboundMessage.channel,
-      accountId: inboundMessage.accountId,
-      scope: inboundMessage.scope,
-      peerId: inboundMessage.peerId,
-      ...(inboundMessage.replyTo === undefined ? {} : { replyTo: inboundMessage.replyTo }),
-    }
-    const binding = await boundSessionOf(peerKey)
     if (binding === undefined) {
       // 未绑定：不代建会话，也不为陌生人下载/解密/落盘附件。用占位 ref 生成摘要，
       // 记进面板待办并回一条固定提示；正文不落 state。
       const unboundBody = imUserTextOf(inboundMessage)
       if (unboundBody === undefined) {
         deps.log?.note('debug', `ignored a ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias}: no text and no attachments`)
-        return
+        return undefined
       }
-      await rememberPendingPeer(peerKey, inboundMessage, alias, now)
-      await notifyUnbound(target, peerKey, alias, now)
-      return
+      await rememberPendingPeer(peerKey, inboundMessage, alias, entry.at)
+      await notifyUnbound(imTargetOf(inboundMessage), peerKey, alias, entry.at)
+      return undefined
     }
     // 媒体只在通过访问控制**且已绑定**之后才物化：白名单外的人与未绑定对端
     // 都不能靠附件让进程下载/解密/写盘。物化失败不拖垮正文——去重条目已经记下，
     // 抛错等于让这条消息永远不再重投。
     let media: readonly ImMediaRef[] = inboundMessage.media
-    if (options?.loadMedia !== undefined) {
+    if (entry.loadMedia !== undefined) {
       try {
-        media = await options.loadMedia()
+        media = await entry.loadMedia()
       } catch (error) {
         deps.log?.note(
           'warn',
@@ -188,34 +377,79 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
     }
     const message: ImInbound = media === inboundMessage.media ? inboundMessage : { ...inboundMessage, media }
     // 记下被动回复锚点：模型随后调用 im_send 时，QQ 才能把回复挂到这条消息上。
-    if (message.replyTo !== undefined) replyAnchors.set(peerKey, { replyTo: message.replyTo, at: now })
+    // 批次按序处理，排序后最后一条投递的消息自然覆盖前面的锚点。
+    if (message.replyTo !== undefined) replyAnchors.set(peerKey, { replyTo: message.replyTo, at: entry.at })
     const body = imUserTextOf(message)
     if (body === undefined) {
       deps.log?.note('debug', `ignored a ${message.channel}/${message.scope} message from ${alias}: no text and no attachments`)
-      return
+      return undefined
     }
+    return { message, body }
+  }
+
+  /** 单条投递：正文与日志与合流上线前逐字节一致。 */
+  async function deliverOne(alias: string, sessionId: string, item: DeliverableInbound): Promise<void> {
+    const message = item.message
+    const body = item.body
     const text = relayTextOf(message, body, alias)
-    lastPeerBySession.set(binding.sessionId, { peerKey, at: now })
-    deps.log?.note(
-      'info',
-      `accepted a ${message.channel}/${message.scope} message from ${alias} (${body.length} chars) for session ${binding.sessionId}`,
-    )
+    deps.log?.note('info', `accepted a ${message.channel}/${message.scope} message from ${alias} (${body.length} chars) for session ${sessionId}`)
     const messageId = `im-${randomUUID()}`
     try {
       // 插件来源消息投进宿主 inbox：运行中插话、空闲开新轮，宿主 loop 自己排轮。
-      await deps.insert(binding.sessionId, {
+      await deps.insert(sessionId, {
         id: messageId,
         text,
         summary: `IM ${message.channel}/${message.scope} message from ${alias}`,
       })
     } catch (error) {
       const code = (error as { code?: unknown } | null)?.code
-      deps.log?.note('error', `could not insert a message from ${alias} into session ${binding.sessionId}: ${messageOf(error)}`)
-      deps.logger?.warn?.(`dsh-soulmojito im: inserting into ${binding.sessionId} failed: ${messageOf(error)}`)
-      await sendNotice(target, code === 'IM_SESSION_NOT_LIVE' ? IM_SESSION_NOT_LIVE : IM_DELIVERY_FAILED, alias)
+      deps.log?.note('error', `could not insert a message from ${alias} into session ${sessionId}: ${messageOf(error)}`)
+      deps.logger?.warn?.(`dsh-soulmojito im: inserting into ${sessionId} failed: ${messageOf(error)}`)
+      await sendNotice(imTargetOf(message), code === 'IM_SESSION_NOT_LIVE' ? IM_SESSION_NOT_LIVE : IM_DELIVERY_FAILED, alias)
       return
     }
-    deps.log?.note('debug', `inserted an IM message from ${alias} into session ${binding.sessionId} (${messageId})`)
+    deps.log?.note('debug', `inserted an IM message from ${alias} into session ${sessionId} (${messageId})`)
+  }
+
+  /**
+   * 合流投递：整批拼成一条 `im-` 消息，头部标注连续条数，正文逐条换行。摘要与
+   * 失败提示取批次最后一条（排序后），与「最后收到的那句话」一致。
+   */
+  async function deliverMerged(alias: string, sessionId: string, items: readonly DeliverableInbound[]): Promise<void> {
+    const first = items[0]
+    const last = items[items.length - 1]
+    if (first === undefined || last === undefined) return
+    const channel = first.message.channel
+    const scope = first.message.scope
+    const bodies = items.map((item) => item.body)
+    const text = mergedRelayTextOf(bodies, alias, channel, scope)
+    const chars = bodies.reduce((total, body) => total + body.length, 0)
+    deps.log?.note('info', `accepted ${bodies.length} ${channel}/${scope} messages from ${alias} (${chars} chars) for session ${sessionId}`)
+    const messageId = `im-${randomUUID()}`
+    try {
+      await deps.insert(sessionId, {
+        id: messageId,
+        text,
+        summary: `IM ${channel}/${scope} ${bodies.length} messages from ${alias}`,
+      })
+    } catch (error) {
+      const code = (error as { code?: unknown } | null)?.code
+      deps.log?.note('error', `could not insert a merged message from ${alias} into session ${sessionId}: ${messageOf(error)}`)
+      deps.logger?.warn?.(`dsh-soulmojito im: inserting into ${sessionId} failed: ${messageOf(error)}`)
+      await sendNotice(imTargetOf(last.message), code === 'IM_SESSION_NOT_LIVE' ? IM_SESSION_NOT_LIVE : IM_DELIVERY_FAILED, alias)
+      return
+    }
+    deps.log?.note('debug', `inserted a merged IM message from ${alias} into session ${sessionId} (${messageId})`)
+  }
+
+  function imTargetOf(inbound: ImInbound): ImTarget {
+    return {
+      channel: inbound.channel,
+      accountId: inbound.accountId,
+      scope: inbound.scope,
+      peerId: inbound.peerId,
+      ...(inbound.replyTo === undefined ? {} : { replyTo: inbound.replyTo }),
+    }
   }
 
   /**
@@ -409,21 +643,11 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
     }
   }
 
-  function lastPeerOf(sessionId: string): string | undefined {
-    const entry = lastPeerBySession.get(sessionId)
-    if (entry === undefined) return undefined
-    if (deps.now() - entry.at > LAST_PEER_TTL_MS) {
-      lastPeerBySession.delete(sessionId)
-      return undefined
-    }
-    return entry.peerKey
-  }
-
   return {
     inbound,
+    flushPending,
     sendText,
     sendMedia,
-    lastPeerOf,
   }
 }
 

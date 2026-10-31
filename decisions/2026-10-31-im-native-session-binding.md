@@ -27,9 +27,8 @@ AgentTavern 会话」，入站 `followup` 后监听 `turn/end` 把 assistant 正
 2. **未绑定对端列在面板**：入站先记 `state.imPendingPeers[peerKey] = { lastAt,
    senderName? }`（只留最近 50 条；私聊不存 openid 前缀），同时回一条固定提示。
    用户在面板点「绑定到当前会话」，服务端写绑定并从待办里删除。没有自动绑定模式。
-   `im_send` 省略 `peer` 时先按「只有一个绑定」解析，否则回退到该会话最近一条入站
-   消息的对端（10 分钟窗口）——微信一条绑定只有一个聊天，所以回复刚发来消息的微信
-   对端通常可以省略 `peer`。
+   `im_send` 省略 `peer` 只在会话恰好只有一条绑定时可用；同一会话有多条绑定时必须
+   显式传 alias，省略直接报错——多对端交错时没有确定的回复目标，不能按最近入站猜。
 3. **入站即插入**：通过去重与访问控制后，路由立即调用
    `agent.followup(plugin relay message)`：
 

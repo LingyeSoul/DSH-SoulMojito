@@ -700,6 +700,11 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       qqBinding.cancel()
       weixinBinding.cancel()
       activeQrBind = undefined
+      // 合流窗口里还压着消息：停通道之前冲刷掉，卸载不吞掉最后一窗。
+      // best effort，冲刷失败只 warn，不挡住 teardown。
+      await router.flushPending().catch((error: unknown) => {
+        logger?.warn?.(`dsh-soulmojito im: flushing buffered inbound messages failed: ${messageOf(error)}`)
+      })
       lifetime.abort()
       for (const channel of channels.values()) {
         await channel.stop().catch((error: unknown) => {

@@ -10184,7 +10184,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("52fee8d") : void 0;
+  const commit = true ? normalizeCommit("2969c1f") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -46090,6 +46090,7 @@ function parseOneBotMessage(event, accountId, receivedAt) {
     }
   }
   if (text.trim() === "" && media.length === 0) return void 0;
+  const platformAt = platformAtOf(event.time);
   return {
     channel: "onebot",
     accountId,
@@ -46101,7 +46102,8 @@ function parseOneBotMessage(event, accountId, receivedAt) {
     media,
     ...replyTo === void 0 ? {} : { replyTo },
     dedupeKey: imDedupeKey("onebot", accountId, messageType, peerId, String(messageId)),
-    receivedAt
+    receivedAt,
+    ...platformAt === void 0 ? {} : { platformAt }
   };
 }
 function oneBotMentioned(event, selfId) {
@@ -46276,6 +46278,11 @@ function requireInteger(event, field2) {
       `onebot event field '${field2}' must be an integer, got ${describeValue(value)}`
     );
   }
+  return value;
+}
+function platformAtOf(value) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return void 0;
+  if (value < 1e11) return Math.round(value * 1e3);
   return value;
 }
 function parsePeerId(peerId) {
@@ -48482,6 +48489,7 @@ var QQChannel = class {
     const senderName = nonEmpty3(msg.senderName) ?? openidLabel(senderId);
     const messageId = nonEmpty3(msg.messageId);
     const receivedAt = this.now();
+    const platformAt = platformAtOf2(msg.timestamp);
     const attachments = qqAttachmentsOf(msg);
     const transcript = qqTranscriptsOf(attachments);
     const body = typeof msg.content === "string" ? msg.content.trim() : "";
@@ -48507,7 +48515,8 @@ ${transcript}`;
       // 被动回复锚点是本轮触发消息本身，不是它引用的消息。
       ...messageId === void 0 ? {} : { replyTo: messageId },
       dedupeKey: imDedupeKey("qq", this.accountId, scope, peerId, dedupeId),
-      receivedAt
+      receivedAt,
+      ...platformAt === void 0 ? {} : { platformAt }
     };
   }
 };
@@ -48576,6 +48585,12 @@ function requireSecret(secret, key, accountId) {
 }
 function openidLabel(openid) {
   return openid.slice(0, OPENID_LABEL_LENGTH);
+}
+function platformAtOf2(timestamp2) {
+  const value = Number(timestamp2);
+  if (!Number.isFinite(value) || value <= 0) return void 0;
+  if (value < 1e11) return Math.round(value * 1e3);
+  return value;
 }
 function nonEmpty3(value) {
   if (typeof value !== "string") return void 0;
@@ -49999,9 +50014,6 @@ function messageOf10(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
-// packages/plugin/src/im/weixin/channel.ts
-import { createHash as createHash17 } from "node:crypto";
-
 // packages/plugin/src/im/weixin/errors.ts
 var WeixinChannelError = class extends Error {
   code;
@@ -50011,6 +50023,88 @@ var WeixinChannelError = class extends Error {
     this.code = code;
   }
 };
+
+// packages/plugin/src/im/weixin/inbound.ts
+import { createHash as createHash16 } from "node:crypto";
+var PEER_LABEL_LENGTH = 8;
+var WEIXIN_FALLBACK_DEDUPE_BUCKET_MS = 10 * 60 * 1e3;
+function weixinInboundOf(message, accountId, now) {
+  if (message.messageType === 2) return { kind: "ignored", reason: "message-type" };
+  if (message.groupId !== void 0) return { kind: "ignored", reason: "group" };
+  const peerId = message.fromUserId?.trim() ?? "";
+  if (peerId === "") {
+    throw new WeixinChannelError(
+      "WEIXIN_BAD_MESSAGE",
+      `weixin account '${accountId}' got a message without from_user_id; it cannot be routed to any peer`
+    );
+  }
+  const textParts = [];
+  const voiceParts = [];
+  const mediaSources = [];
+  for (const item of message.items) {
+    if (item.type === 1 && item.text !== void 0) {
+      textParts.push(item.text);
+      continue;
+    }
+    if (item.type === 3) {
+      if (item.voiceText !== void 0) {
+        voiceParts.push(item.voiceText);
+        continue;
+      }
+      mediaSources.push({ kind: "voice", item });
+      continue;
+    }
+    if (item.type === 2 || item.type === 4 || item.type === 5) {
+      mediaSources.push({ kind: item.type === 2 ? "image" : item.type === 4 ? "file" : "video", item });
+    }
+  }
+  const text = textParts.length > 0 ? textParts.join("\n") : voiceParts.join("\n");
+  const messageId = message.messageId;
+  const receivedAt = now;
+  return {
+    kind: "delivered",
+    inbound: {
+      channel: "weixin",
+      accountId,
+      scope: "private",
+      peerId,
+      senderId: peerId,
+      senderName: peerId.slice(0, PEER_LABEL_LENGTH),
+      text,
+      // 占位 ref 保留在摘要里；物化成功后由 loadMedia 换成带 localPath 的版本。
+      media: mediaSources.map((source) => ({ kind: source.kind })),
+      // 平台不给 message_id 时改用内容指纹：随机 UUID 每次重放都换键，24h 去重日志
+      // 永远挡不住重放。代价：平台既不给 id 也不给时间戳，同一 10 分钟桶内的相同内容
+      // 会被当成重放丢弃（后到的那条被吞）；跨桶到来的重放仍可能重复投递。
+      dedupeKey: imDedupeKey("weixin", accountId, "private", peerId, messageId ?? fallbackMessageId(message, receivedAt)),
+      receivedAt
+    },
+    sources: mediaSources
+  };
+}
+function fallbackMessageId(message, receivedAt) {
+  const bucket = Math.floor(receivedAt / WEIXIN_FALLBACK_DEDUPE_BUCKET_MS);
+  const canonical = JSON.stringify([
+    message.fromUserId ?? null,
+    message.messageType ?? null,
+    message.groupId ?? null,
+    message.items.map((item) => [
+      item.type,
+      item.text ?? null,
+      item.voiceText ?? null,
+      item.mediaUrl ?? null,
+      item.fullUrl ?? null,
+      item.encryptQueryParam ?? null,
+      item.thumbUrl ?? null,
+      item.aesKeyHex ?? null,
+      item.aesKey ?? null,
+      item.fileName ?? null,
+      item.size ?? null
+    ]),
+    bucket
+  ]);
+  return `fallback-${createHash16("sha256").update(canonical).digest("hex").slice(0, 16)}`;
+}
 
 // packages/plugin/src/im/weixin/send-guard.ts
 var SEND_WINDOW_MS = 3e4;
@@ -50113,7 +50207,7 @@ function createTypingTicketCache(options) {
 }
 
 // packages/plugin/src/im/weixin/media.ts
-import { createCipheriv, createDecipheriv, createHash as createHash16, randomBytes as randomBytes6 } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash as createHash17, randomBytes as randomBytes6 } from "node:crypto";
 import { promises as fs21 } from "node:fs";
 import { basename as basename3, extname } from "node:path";
 var WEIXIN_MEDIA_MAX_BYTES = 20 * 1024 * 1024;
@@ -50489,7 +50583,7 @@ async function sendWeixinMedia(context, request) {
   return sent.messageId;
 }
 function md5Hex(bytes) {
-  return createHash16("md5").update(bytes).digest("hex");
+  return createHash17("md5").update(bytes).digest("hex");
 }
 async function readLocalMedia(path12, kind) {
   try {
@@ -50681,9 +50775,7 @@ var RETRY_DELAY_MS = 2e3;
 var BACKOFF_DELAY_MS = 3e4;
 var FAILURES_BEFORE_BACKOFF = 3;
 var START_PROBE_TIMEOUT_MS = 3e3;
-var PEER_LABEL_LENGTH = 8;
 var MAX_CONTEXT_TOKENS = 500;
-var WEIXIN_FALLBACK_DEDUPE_BUCKET_MS = 10 * 60 * 1e3;
 function createStartGate() {
   let resolveGate;
   let rejectGate;
@@ -51126,70 +51218,16 @@ var WeixinChannel = class {
     });
   }
   /**
-   * 单条消息 → `ImInbound` + 待物化的媒体源。`message_type === 2` 与带
-   * `group_id` 的群消息按协议主动忽略；正文取 text_item，没有正文时用语音转录。
-   * 这里**不下载**附件：下载由路由在通过访问控制后触发。
+   * `weixinInboundOf` 的通道层包装：纯映射在 `inbound.js`（见该文件的拆分边界
+   * 说明），这里只补账号前缀的 debug 日志——宿主 logger 与账号身份属于通道侧。
    */
   inboundOf(message) {
-    if (message.messageType === 2) {
-      this.logger?.debug?.(
-        `dsh-soulmojito im weixin/${this.accountId}: ignored message_type ${String(message.messageType)}`
-      );
-      return void 0;
-    }
-    if (message.groupId !== void 0) {
-      this.logger?.debug?.(`dsh-soulmojito im weixin/${this.accountId}: ignored a group message`);
-      return void 0;
-    }
-    const peerId = message.fromUserId?.trim() ?? "";
-    if (peerId === "") {
-      throw new WeixinChannelError(
-        "WEIXIN_BAD_MESSAGE",
-        `weixin account '${this.accountId}' got a message without from_user_id; it cannot be routed to any peer`
-      );
-    }
-    const textParts = [];
-    const voiceParts = [];
-    const mediaSources = [];
-    for (const item of message.items) {
-      if (item.type === 1 && item.text !== void 0) {
-        textParts.push(item.text);
-        continue;
-      }
-      if (item.type === 3) {
-        if (item.voiceText !== void 0) {
-          voiceParts.push(item.voiceText);
-          continue;
-        }
-        mediaSources.push({ kind: "voice", item });
-        continue;
-      }
-      if (item.type === 2 || item.type === 4 || item.type === 5) {
-        mediaSources.push({ kind: item.type === 2 ? "image" : item.type === 4 ? "file" : "video", item });
-      }
-    }
-    const text = textParts.length > 0 ? textParts.join("\n") : voiceParts.join("\n");
-    const messageId = message.messageId;
-    const receivedAt = this.clock.now();
-    return {
-      inbound: {
-        channel: "weixin",
-        accountId: this.accountId,
-        scope: "private",
-        peerId,
-        senderId: peerId,
-        senderName: peerId.slice(0, PEER_LABEL_LENGTH),
-        text,
-        // 占位 ref 保留在摘要里；物化成功后由 loadMedia 换成带 localPath 的版本。
-        media: mediaSources.map((source) => ({ kind: source.kind })),
-        // 平台不给 message_id 时改用内容指纹：随机 UUID 每次重放都换键，24h 去重日志
-        // 永远挡不住重放。代价：平台既不给 id 也不给时间戳，同一 10 分钟桶内的相同内容
-        // 会被当成重放丢弃（后到的那条被吞）；跨桶到来的重放仍可能重复投递。
-        dedupeKey: imDedupeKey("weixin", this.accountId, "private", peerId, messageId ?? fallbackMessageId(message, receivedAt)),
-        receivedAt
-      },
-      sources: mediaSources
-    };
+    const outcome = weixinInboundOf(message, this.accountId, this.clock.now());
+    if (outcome.kind === "delivered") return outcome;
+    this.logger?.debug?.(
+      outcome.reason === "message-type" ? `dsh-soulmojito im weixin/${this.accountId}: ignored message_type ${String(message.messageType)}` : `dsh-soulmojito im weixin/${this.accountId}: ignored a group message`
+    );
+    return void 0;
   }
   /** 逐个落盘；顺序与消息里的 item 一致，失败不改变 ref 的数量与顺序。 */
   async materializeMedia(sources) {
@@ -51231,29 +51269,6 @@ var WeixinChannel = class {
     this.abortListener = void 0;
   }
 };
-function fallbackMessageId(message, receivedAt) {
-  const bucket = Math.floor(receivedAt / WEIXIN_FALLBACK_DEDUPE_BUCKET_MS);
-  const canonical = JSON.stringify([
-    message.fromUserId ?? null,
-    message.messageType ?? null,
-    message.groupId ?? null,
-    message.items.map((item) => [
-      item.type,
-      item.text ?? null,
-      item.voiceText ?? null,
-      item.mediaUrl ?? null,
-      item.fullUrl ?? null,
-      item.encryptQueryParam ?? null,
-      item.thumbUrl ?? null,
-      item.aesKeyHex ?? null,
-      item.aesKey ?? null,
-      item.fileName ?? null,
-      item.size ?? null
-    ]),
-    bucket
-  ]);
-  return `fallback-${createHash17("sha256").update(canonical).digest("hex").slice(0, 16)}`;
-}
 function isStaleToken(error) {
   return error instanceof WeixinApiError && error.retcode === WEIXIN_STALE_TOKEN_RETCODE;
 }
@@ -56942,6 +56957,27 @@ import { randomUUID as randomUUID17 } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute as isAbsolute2, relative as relative3 } from "node:path";
 
+// packages/plugin/src/im/coalesce.ts
+var IM_COALESCE_WINDOW_MS = 600;
+var IM_COALESCE_MAX_MESSAGES = 8;
+var IM_COALESCE_MAX_CHARS = 4e3;
+function orderInboundEntries(entries) {
+  return [...entries].sort((left, right) => {
+    const leftAt = left.inbound.platformAt ?? left.inbound.receivedAt;
+    const rightAt = right.inbound.platformAt ?? right.inbound.receivedAt;
+    if (leftAt !== rightAt) return leftAt - rightAt;
+    return left.seq - right.seq;
+  });
+}
+function mergedRelayTextOf(bodies, alias, channel, scope) {
+  const scopeLabel = scope === "group" ? "\u7FA4\u804A" : "\u79C1\u804A";
+  return [
+    `[IM ${channel}/${scopeLabel} peer=${alias}]\uFF08\u8FDE\u7EED ${bodies.length} \u6761\u6D88\u606F\uFF09`,
+    ...bodies,
+    `\uFF08\u8FD9\u662F\u4ECE IM \u8F6C\u53D1\u7ED9\u4F60\u7684\u6D88\u606F\uFF0C\u4E0D\u662F DSH \u7528\u6237\u8F93\u5165\u3002\u56DE\u590D\u8BF7\u8C03\u7528 im_send\uFF0Cpeer \u53C2\u6570\u7528 ${alias}\u3002\uFF09`
+  ].join("\n");
+}
+
 // packages/plugin/src/im/project.ts
 var IM_EMPTY_REPLY = "\uFF08\u65E0\u6587\u672C\u56DE\u590D\uFF09";
 var ImProjectError = class extends Error {
@@ -57090,54 +57126,171 @@ var ImSendError = class extends Error {
 };
 var UNBOUND_NOTICE_TTL_MS = 10 * 6e4;
 var REPLY_ANCHOR_TTL_MS = 5 * 6e4;
-var LAST_PEER_TTL_MS = 10 * 6e4;
 var MAX_PENDING_PEERS = 50;
+var IM_FLUSH_PENDING_MAX_PASSES = 50;
+var IM_FLUSH_PENDING_MAX_MS = 2e3;
 function createImRouter(deps) {
   const noticed = /* @__PURE__ */ new Map();
   const replyAnchors = /* @__PURE__ */ new Map();
-  const lastPeerBySession = /* @__PURE__ */ new Map();
+  const coalesceWindowMs = deps.coalesceWindowMs ?? IM_COALESCE_WINDOW_MS;
+  const scheduleFlush = deps.scheduleFlush ?? ((delayMs, run) => {
+    const timer = setTimeout(run, delayMs);
+    return () => {
+      clearTimeout(timer);
+    };
+  });
+  const buffers = /* @__PURE__ */ new Map();
+  const flushTimers = /* @__PURE__ */ new Map();
+  const flushing = /* @__PURE__ */ new Map();
+  let nextSeq = 0;
   async function settingsOf() {
     const state = await deps.db.getState();
     return state.imSettings ?? DEFAULT_IM_SETTINGS;
   }
   async function inbound(inboundMessage, options) {
-    const now = deps.now();
     const peerKey = imPeerKey(inboundMessage.channel, inboundMessage.accountId, inboundMessage.scope, inboundMessage.peerId);
-    const alias = imPeerAlias(inboundMessage.channel, inboundMessage.scope, peerKey);
-    if (await deps.seenDedupe(inboundMessage.dedupeKey, now)) {
-      deps.log?.note("debug", `ignored a duplicate ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias} (dedupe)`);
+    const entry = {
+      inbound: inboundMessage,
+      ...options?.loadMedia === void 0 ? {} : { loadMedia: options.loadMedia },
+      seq: nextSeq,
+      at: deps.now()
+    };
+    nextSeq += 1;
+    const buffered = buffers.get(peerKey);
+    if (buffered === void 0) buffers.set(peerKey, [entry]);
+    else buffered.push(entry);
+    const batch = buffered ?? [entry];
+    if (bufferExceedsLimits(batch)) {
+      cancelFlushTimer(peerKey);
+      await startFlush(peerKey);
       return;
     }
+    scheduleFlushFor(peerKey);
+  }
+  function bufferExceedsLimits(entries) {
+    if (entries.length >= IM_COALESCE_MAX_MESSAGES) return true;
+    let chars = 0;
+    for (const entry of entries) chars += entry.inbound.text.length;
+    return chars > IM_COALESCE_MAX_CHARS;
+  }
+  function cancelFlushTimer(peerKey) {
+    const cancel = flushTimers.get(peerKey);
+    if (cancel === void 0) return;
+    flushTimers.delete(peerKey);
+    cancel();
+  }
+  function startFlush(peerKey) {
+    const previous = flushing.get(peerKey);
+    const run = previous === void 0 ? flushPeer(peerKey) : previous.then(() => flushPeer(peerKey));
+    flushing.set(peerKey, run);
+    const done = () => {
+      if (flushing.get(peerKey) === run) flushing.delete(peerKey);
+    };
+    void run.then(done, done);
+    return run;
+  }
+  function scheduleFlushFor(peerKey) {
+    if (flushTimers.has(peerKey)) return;
+    let fired = false;
+    let registering = true;
+    const cancel = scheduleFlush(coalesceWindowMs, () => {
+      fired = true;
+      if (registering) return;
+      flushTimers.delete(peerKey);
+      void startFlush(peerKey);
+    });
+    registering = false;
+    if (fired) {
+      cancel();
+      void startFlush(peerKey);
+      return;
+    }
+    flushTimers.set(peerKey, cancel);
+  }
+  async function flushPeer(peerKey) {
+    cancelFlushTimer(peerKey);
+    const buffered = buffers.get(peerKey);
+    if (buffered === void 0) return;
+    buffers.delete(peerKey);
+    const first = buffered[0];
+    if (first === void 0) return;
+    const alias = imPeerAlias(first.inbound.channel, first.inbound.scope, peerKey);
+    try {
+      await deliverBatch(peerKey, alias, orderInboundEntries(buffered));
+    } catch (error) {
+      deps.log?.note("error", `flushing the buffered messages from ${alias} failed: ${messageOf12(error)}`);
+    }
+  }
+  async function flushPending() {
+    const startedAt = deps.now();
+    let passes = 0;
+    for (; ; ) {
+      if (passes >= IM_FLUSH_PENDING_MAX_PASSES || deps.now() - startedAt >= IM_FLUSH_PENDING_MAX_MS) {
+        const pendingPeers = /* @__PURE__ */ new Set([...buffers.keys(), ...flushTimers.keys(), ...flushing.keys()]);
+        if (pendingPeers.size === 0) return;
+        deps.log?.note(
+          "warn",
+          `flushPending stopped after ${passes} pass(es): ${pendingPeers.size} peer batch(es) are still pending; the per-peer window timers keep flushing them`
+        );
+        return;
+      }
+      passes += 1;
+      for (const peerKey of [...flushTimers.keys()]) {
+        cancelFlushTimer(peerKey);
+        startFlush(peerKey);
+      }
+      for (const peerKey of [...buffers.keys()]) startFlush(peerKey);
+      const pending = [...flushing.values()];
+      if (pending.length === 0) return;
+      await Promise.all(pending);
+    }
+  }
+  async function deliverBatch(peerKey, alias, entries) {
     const settings = await settingsOf();
+    const binding = await boundSessionOf(peerKey);
+    const deliverables = [];
+    for (const entry of entries) {
+      try {
+        const deliverable = await consumeEntry(peerKey, alias, entry, settings, binding);
+        if (deliverable !== void 0) deliverables.push(deliverable);
+      } catch (error) {
+        deps.log?.note("error", `processing a buffered message from ${alias} failed: ${messageOf12(error)}`);
+      }
+    }
+    if (binding === void 0 || deliverables.length === 0) return;
+    if (deliverables.length > 1 && deliverables.every((item) => item.message.media.length === 0)) {
+      await deliverMerged(alias, binding.sessionId, deliverables);
+      return;
+    }
+    for (const item of deliverables) await deliverOne(alias, binding.sessionId, item);
+  }
+  async function consumeEntry(peerKey, alias, entry, settings, binding) {
+    const inboundMessage = entry.inbound;
+    if (await deps.seenDedupe(inboundMessage.dedupeKey, entry.at)) {
+      deps.log?.note("debug", `ignored a duplicate ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias} (dedupe)`);
+      return void 0;
+    }
     if (!imAccessAllows(settings, inboundMessage.scope, inboundMessage.peerId)) {
       deps.log?.note(
         "warn",
         `dropped a ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias}: the access policy does not allow this peer (mode is allowlist and the peer is not listed, or the scope is disabled)`
       );
-      return;
+      return void 0;
     }
-    const target = {
-      channel: inboundMessage.channel,
-      accountId: inboundMessage.accountId,
-      scope: inboundMessage.scope,
-      peerId: inboundMessage.peerId,
-      ...inboundMessage.replyTo === void 0 ? {} : { replyTo: inboundMessage.replyTo }
-    };
-    const binding = await boundSessionOf(peerKey);
     if (binding === void 0) {
       const unboundBody = imUserTextOf(inboundMessage);
       if (unboundBody === void 0) {
         deps.log?.note("debug", `ignored a ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias}: no text and no attachments`);
-        return;
+        return void 0;
       }
-      await rememberPendingPeer(peerKey, inboundMessage, alias, now);
-      await notifyUnbound(target, peerKey, alias, now);
-      return;
+      await rememberPendingPeer(peerKey, inboundMessage, alias, entry.at);
+      await notifyUnbound(imTargetOf(inboundMessage), peerKey, alias, entry.at);
+      return void 0;
     }
     let media = inboundMessage.media;
-    if (options?.loadMedia !== void 0) {
+    if (entry.loadMedia !== void 0) {
       try {
-        media = await options.loadMedia();
+        media = await entry.loadMedia();
       } catch (error) {
         deps.log?.note(
           "warn",
@@ -57146,33 +57299,69 @@ function createImRouter(deps) {
       }
     }
     const message = media === inboundMessage.media ? inboundMessage : { ...inboundMessage, media };
-    if (message.replyTo !== void 0) replyAnchors.set(peerKey, { replyTo: message.replyTo, at: now });
+    if (message.replyTo !== void 0) replyAnchors.set(peerKey, { replyTo: message.replyTo, at: entry.at });
     const body = imUserTextOf(message);
     if (body === void 0) {
       deps.log?.note("debug", `ignored a ${message.channel}/${message.scope} message from ${alias}: no text and no attachments`);
-      return;
+      return void 0;
     }
+    return { message, body };
+  }
+  async function deliverOne(alias, sessionId, item) {
+    const message = item.message;
+    const body = item.body;
     const text = relayTextOf(message, body, alias);
-    lastPeerBySession.set(binding.sessionId, { peerKey, at: now });
-    deps.log?.note(
-      "info",
-      `accepted a ${message.channel}/${message.scope} message from ${alias} (${body.length} chars) for session ${binding.sessionId}`
-    );
+    deps.log?.note("info", `accepted a ${message.channel}/${message.scope} message from ${alias} (${body.length} chars) for session ${sessionId}`);
     const messageId = `im-${randomUUID17()}`;
     try {
-      await deps.insert(binding.sessionId, {
+      await deps.insert(sessionId, {
         id: messageId,
         text,
         summary: `IM ${message.channel}/${message.scope} message from ${alias}`
       });
     } catch (error) {
       const code = error?.code;
-      deps.log?.note("error", `could not insert a message from ${alias} into session ${binding.sessionId}: ${messageOf12(error)}`);
-      deps.logger?.warn?.(`dsh-soulmojito im: inserting into ${binding.sessionId} failed: ${messageOf12(error)}`);
-      await sendNotice(target, code === "IM_SESSION_NOT_LIVE" ? IM_SESSION_NOT_LIVE : IM_DELIVERY_FAILED, alias);
+      deps.log?.note("error", `could not insert a message from ${alias} into session ${sessionId}: ${messageOf12(error)}`);
+      deps.logger?.warn?.(`dsh-soulmojito im: inserting into ${sessionId} failed: ${messageOf12(error)}`);
+      await sendNotice(imTargetOf(message), code === "IM_SESSION_NOT_LIVE" ? IM_SESSION_NOT_LIVE : IM_DELIVERY_FAILED, alias);
       return;
     }
-    deps.log?.note("debug", `inserted an IM message from ${alias} into session ${binding.sessionId} (${messageId})`);
+    deps.log?.note("debug", `inserted an IM message from ${alias} into session ${sessionId} (${messageId})`);
+  }
+  async function deliverMerged(alias, sessionId, items) {
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (first === void 0 || last === void 0) return;
+    const channel = first.message.channel;
+    const scope = first.message.scope;
+    const bodies = items.map((item) => item.body);
+    const text = mergedRelayTextOf(bodies, alias, channel, scope);
+    const chars = bodies.reduce((total, body) => total + body.length, 0);
+    deps.log?.note("info", `accepted ${bodies.length} ${channel}/${scope} messages from ${alias} (${chars} chars) for session ${sessionId}`);
+    const messageId = `im-${randomUUID17()}`;
+    try {
+      await deps.insert(sessionId, {
+        id: messageId,
+        text,
+        summary: `IM ${channel}/${scope} ${bodies.length} messages from ${alias}`
+      });
+    } catch (error) {
+      const code = error?.code;
+      deps.log?.note("error", `could not insert a merged message from ${alias} into session ${sessionId}: ${messageOf12(error)}`);
+      deps.logger?.warn?.(`dsh-soulmojito im: inserting into ${sessionId} failed: ${messageOf12(error)}`);
+      await sendNotice(imTargetOf(last.message), code === "IM_SESSION_NOT_LIVE" ? IM_SESSION_NOT_LIVE : IM_DELIVERY_FAILED, alias);
+      return;
+    }
+    deps.log?.note("debug", `inserted a merged IM message from ${alias} into session ${sessionId} (${messageId})`);
+  }
+  function imTargetOf(inbound2) {
+    return {
+      channel: inbound2.channel,
+      accountId: inbound2.accountId,
+      scope: inbound2.scope,
+      peerId: inbound2.peerId,
+      ...inbound2.replyTo === void 0 ? {} : { replyTo: inbound2.replyTo }
+    };
   }
   async function boundSessionOf(peerKey) {
     const state = await deps.db.getState();
@@ -57321,20 +57510,11 @@ function createImRouter(deps) {
       deps.log?.note("error", `sending a notice to ${alias} failed: ${messageOf12(error)}`);
     }
   }
-  function lastPeerOf(sessionId) {
-    const entry = lastPeerBySession.get(sessionId);
-    if (entry === void 0) return void 0;
-    if (deps.now() - entry.at > LAST_PEER_TTL_MS) {
-      lastPeerBySession.delete(sessionId);
-      return void 0;
-    }
-    return entry.peerKey;
-  }
   return {
     inbound,
+    flushPending,
     sendText,
-    sendMedia,
-    lastPeerOf
+    sendMedia
   };
 }
 function relayTextOf(inbound, body, alias) {
@@ -58050,6 +58230,9 @@ function createImRuntime(ctx, options) {
       qqBinding.cancel();
       weixinBinding.cancel();
       activeQrBind = void 0;
+      await router.flushPending().catch((error) => {
+        logger?.warn?.(`dsh-soulmojito im: flushing buffered inbound messages failed: ${messageOf13(error)}`);
+      });
       lifetime.abort();
       for (const channel of channels.values()) {
         await channel.stop().catch((error) => {
@@ -58111,7 +58294,7 @@ function createImTools(deps) {
         }))
       };
     }),
-    tool("im_send", "Send one message to an IM peer that is bound to this session. Use it to reply when an IM message has been relayed into this session. Send text, a media item, or a media item with a caption. Omit peer when exactly one peer is bound, or to reply to the most recent inbound message of this session; otherwise pass the alias from im_identity. Text is trimmed and capped at 4000 characters. Media is read from an absolute local path (preferred) or an http(s) URL for image/video. Cross-session sending is forbidden: an alias outside this session is rejected.", {
+    tool("im_send", "Send one message to an IM peer that is bound to this session. Use it to reply when an IM message has been relayed into this session. Send text, a media item, or a media item with a caption. Omit peer only when exactly one peer is bound; when several peers are bound, pass the alias from im_identity because there is no deterministic target otherwise. Text is trimmed and capped at 4000 characters. Media is read from an absolute local path (preferred) or an http(s) URL for image/video. Cross-session sending is forbidden: an alias outside this session is rejected.", {
       text: { type: "string", description: "Message text, 1-4000 characters after trimming. Optional when media is attached; then it becomes the caption." },
       peer: { type: "string", description: "Target peer alias from im_identity; required when this session has more than one binding." },
       mediaKind: { type: "string", enum: ["image", "voice", "video", "file"], description: "Kind of the media item; required when mediaPath or mediaUrl is given." },
@@ -58135,9 +58318,7 @@ function createImTools(deps) {
       } else if (peers.length === 0) {
         throw new Error("this session has no IM peer binding; bind one in the dsh-soulmojito IM panel first");
       } else {
-        const lastKey = deps.runtime()?.router.lastPeerOf?.(agentId);
-        const recent = lastKey === void 0 ? void 0 : peers.find((entry) => entry.peerKey === lastKey);
-        peer = recent ?? peerWhenSingle(peers);
+        peer = peerWhenSingle(peers);
       }
       const runtime = deps.runtime();
       if (runtime === void 0) {

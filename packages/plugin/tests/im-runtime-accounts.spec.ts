@@ -1,16 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { TavernStore } from '../../tavern-store/src/index.js'
 import { tavernDataRoot } from '../src/dsh-home.js'
-import type { PluginContext } from '../src/host-contract.js'
+import type { HostAgentLike, PluginContext } from '../src/host-contract.js'
 import { API } from '../src/http/router.js'
+import type { ImRouter } from '../src/im/router.js'
 import { createImRuntime } from '../src/im/runtime.js'
+import type { ImRuntime } from '../src/im/runtime.js'
 import { clearOneBotSeatForTest } from '../src/im/onebot/seat.js'
 import { ImStore } from '../src/im/store.js'
 import type { ImAccountRef } from '../src/im/types.js'
-import { imPeerKey } from '../src/im/types.js'
+import { DEFAULT_IM_SETTINGS, imPeerKey } from '../src/im/types.js'
 
 const ACCOUNT: ImAccountRef = {
   channel: 'onebot',
@@ -41,6 +43,13 @@ function fakeContext(registerUpgrade?: (route: { path: string }) => () => void):
     ...(registerUpgrade === undefined ? {} : { registerUpgrade }),
   }
   return { webServer } as unknown as PluginContext
+}
+
+/** 带一个活着 agent 的宿主：绑定会话的入站能真正插进 agent.followup。 */
+function fakeContextWithAgent(agent: HostAgentLike): PluginContext {
+  const sessionId = agent.session?.id ?? agent.id
+  const agents = { get: (id: string) => (id === sessionId ? agent : undefined) }
+  return { webServer: { register: () => () => {} }, agents } as unknown as PluginContext
 }
 
 function store(): ImStore {
@@ -142,6 +151,67 @@ describe('im runtime account lifecycle', () => {
       expect(runtime.capabilities.reasons.join(' ')).toContain('webServer.registerUpgrade')
     } finally {
       await runtime.dispose()
+    }
+  })
+
+  it('flushes buffered inbound messages before stopping channels on dispose', async () => {
+    // 假定时器让 600ms 窗口不自己触发：只有 dispose 的冲刷能投递这条消息。
+    vi.useFakeTimers()
+    const seen = { viewsAtInsert: -1, messages: [] as unknown[] }
+    const runtimeRef: { current?: ImRuntime } = {}
+    const agent: HostAgentLike = {
+      id: 'session-a',
+      session: { id: 'session-a' },
+      status: 'idle',
+      followup: async (message: unknown) => {
+        // 插入发生时通道应仍在册：dispose 先冲刷缓冲，再停通道。
+        seen.viewsAtInsert = runtimeRef.current?.views().length ?? -1
+        seen.messages.push(message)
+      },
+    }
+    const runtime = createImRuntime(fakeContextWithAgent(agent), { db })
+    runtimeRef.current = runtime
+    let disposed = false
+    try {
+      await runtime.upsertAccount(ACCOUNT, { token: '{{SECRET_zorzlc7t}}' })
+      expect(runtime.views()).toHaveLength(1)
+      const peerKey = imPeerKey('onebot', '10001', 'private', 'u1')
+      await db.patchState({
+        imSettings: { ...DEFAULT_IM_SETTINGS, privateMode: 'open', groupMode: 'open' },
+        imPeers: {
+          [peerKey]: {
+            sessionId: 'session-a',
+            scope: 'private',
+            boundBy: 'manual',
+            createdAt: new Date(0).toISOString(),
+          },
+        },
+      })
+      const router = runtime.router as unknown as ImRouter
+      await router.inbound({
+        channel: 'onebot',
+        accountId: '10001',
+        scope: 'private',
+        peerId: 'u1',
+        senderId: 'u1',
+        senderName: '甲',
+        text: '窗口里压着的一条',
+        media: [],
+        dedupeKey: 'onebot:10001:private:u1:1',
+        receivedAt: Date.now(),
+      })
+      // 窗口未到：消息还压在合流缓冲里，没有任何投递。
+      expect(seen.messages).toHaveLength(0)
+
+      await runtime.dispose()
+      disposed = true
+      // dispose 冲刷投递了一条；插入时账号还在册，dispose 返回后通道已清空。
+      expect(seen.messages).toHaveLength(1)
+      expect(seen.viewsAtInsert).toBe(1)
+      expect(runtime.views()).toEqual([])
+    } finally {
+      if (!disposed) await runtime.dispose()
+      vi.useRealTimers()
     }
   })
 })

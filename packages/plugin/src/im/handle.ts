@@ -26,8 +26,6 @@ export interface ImRouterHandle {
   sendText(peerKey: string, text: string): Promise<ImSendReceipt>
   /** 可选：旧假件没有媒体面时，工具按「该运行时不能发媒体」报错。 */
   sendMedia?(peerKey: string, media: ImOutboundMedia): Promise<ImSendReceipt>
-  /** 最近一条入站 peer；`im_send` 省略 peer 时回退到它。 */
-  lastPeerOf?(sessionId: string): string | undefined
 }
 
 /** 绑定后切换 AgentTavernIM 预设的结果（面板据此显示已切换/待切换/失败）。 */

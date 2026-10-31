@@ -65,6 +65,15 @@ interface RuntimeHarness {
   media: Array<{ peerKey: string; media: unknown }>
 }
 
+/**
+ * 假 router 故意比公开接口多一个 `lastPeerOf`：`im_send` 已经不再咨询它，保留
+ * 这个属性是为了证明「多个绑定并存时工具不回退到最近入站 peer」（见对应用例）。
+ * 公开接口删掉该成员后，用这里的交叉类型断言让「故意多带」继续编译。
+ */
+type FakeImRouterHandle = ImRuntimeHandle['router'] & {
+  lastPeerOf: (sessionId: string) => string | undefined
+}
+
 function runtimeHarness(options: { available?: boolean; reasons?: string[]; fail?: string; lastPeer?: string } = {}): RuntimeHarness {
   const sent: RuntimeHarness['sent'] = []
   const media: RuntimeHarness['media'] = []
@@ -97,8 +106,9 @@ function runtimeHarness(options: { available?: boolean; reasons?: string[]; fail
           media.push({ peerKey, media: payload })
           return { parts: 1, at: 1_700_000_000_000 }
         },
+        // 故意保留 lastPeerOf：见 FakeImRouterHandle 的说明，用于证明工具忽略它。
         lastPeerOf: (sessionId) => (sessionId === 'session-a' ? options.lastPeer : undefined),
-      },
+      } as FakeImRouterHandle,
     },
   }
 }
@@ -222,12 +232,32 @@ describe('im_send', () => {
     expect(sent).toEqual([{ peerKey: ALICE, text: 'hi' }])
   })
 
-  it('falls back to the most recent inbound peer when several are bound', async () => {
+  it('does not fall back to the most recent inbound peer when several are bound', async () => {
+    // 运行时仍报得出「最近入站对端」，但多对端交错时那不是确定目标：
+    // 省略 peer 必须直接拒绝，绝不替模型猜。
     const { runtime, sent } = runtimeHarness({ lastPeer: ALICE })
     const { call } = toolsOf(runtime)
-    const result = await call('im_send', { text: '收到' }) as { peer: string }
-    expect(result.peer).toBe(aliceAlias)
-    expect(sent).toEqual([{ peerKey: ALICE, text: '收到' }])
+    await expect(call('im_send', { text: '收到' }))
+      .rejects.toThrow(`this session is bound to 2 IM peers; pass peer to choose one of: ${groupAlias}, ${aliceAlias}`)
+    expect(sent).toEqual([])
+  })
+
+  it('rejects an omitted peer with the zero-binding error and an unknown alias with its own error', async () => {
+    const { runtime, sent } = runtimeHarness()
+    const { call } = toolsOf(runtime)
+    await db.updateState((state) => {
+      const peers = { ...(state.imPeers ?? {}) }
+      delete peers[ALICE]
+      delete peers[GROUP]
+      return { imPeers: peers }
+    })
+    // 零绑定 + 省略 peer：必须是「本会话没有绑定」这条，不能落到别名消息上。
+    await expect(call('im_send', { text: 'hi' }))
+      .rejects.toThrow('this session has no IM peer binding; bind one in the dsh-soulmojito IM panel first')
+    // 零绑定 + 显式不存在的 alias：仍走别名分支，两条错误各归各。
+    await expect(call('im_send', { text: 'hi', peer: 'peer-missing' }))
+      .rejects.toThrow("peer 'peer-missing' is not bound to this session")
+    expect(sent).toEqual([])
   })
 
   it('refuses blank and over-long text before touching the runtime', async () => {

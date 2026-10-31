@@ -57,6 +57,8 @@ export interface ImInbound {
   /** `channel:account:messageId`; the dedupe log keeps it for 24h. */
   dedupeKey: string
   receivedAt: number
+  /** 平台事件时间（毫秒），协议提供时才带上；只用于同一 peer 批次内的排序（决策 2026-10-31-im-inbound-coalescing）。 */
+  platformAt?: number
 }
 
 /** Where an outbound message goes. `replyTo` is the passive-reply anchor. */

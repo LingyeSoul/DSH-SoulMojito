@@ -124,6 +124,7 @@ export function parseOneBotMessage(
   // 纯空白和纯未知段一样等于没说话；空转一次会话没有意义
   if (text.trim() === '' && media.length === 0) return undefined
 
+  const platformAt = platformAtOf(event.time)
   return {
     channel: 'onebot',
     accountId,
@@ -136,6 +137,7 @@ export function parseOneBotMessage(
     ...(replyTo === undefined ? {} : { replyTo }),
     dedupeKey: imDedupeKey('onebot', accountId, messageType, peerId, String(messageId)),
     receivedAt,
+    ...(platformAt === undefined ? {} : { platformAt }),
   }
 }
 
@@ -356,6 +358,17 @@ function requireInteger(event: JsonObject, field: string): number {
       `onebot event field '${field}' must be an integer, got ${describeValue(value)}`,
     )
   }
+  return value
+}
+
+/**
+ * OneBot 事件的 `time` 是 UNIX 秒；与 QQ 侧同一口径归一成毫秒：数值
+ * `n > 0 && n < 1e11` 视为秒并乘 1000，否则按已是毫秒原样用。缺失、非有限或
+ * <= 0 时省略。`platformAt` 只用于同一 peer 批次内的排序，不参与去重键。
+ */
+function platformAtOf(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return undefined
+  if (value < 1e11) return Math.round(value * 1000)
   return value
 }
 

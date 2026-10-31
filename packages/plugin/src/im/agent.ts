@@ -6,8 +6,8 @@
  * `agent-tavern-im` preset:
  * - every reply goes through `im_send` (plain assistant text never reaches the peer);
  * - reply like a human on a phone: short lines, several messages, no long monologue;
- * - use the peer alias from the relay header (or let the router fall back to the
- *   latest inbound peer when only one conversation is plausible).
+ * - use the peer alias from the relay header; it may be omitted only when exactly
+ *   one peer is bound, while several bindings require an explicit alias.
  *
  * The text is static and passed through `hostPromptSafe`: a `{{...}}` sequence
  * would make the host prompt assembly throw for the whole turn.
@@ -39,7 +39,7 @@ const IM_MODE_PROMPT = [
   '## 回复规则',
   '',
   '1. **所有回复必须通过 `im_send` 工具发出。** 普通的 assistant 正文不会送达对端，等于没有回复；不要只在正文里说“已回复”。',
-  '2. 消息头里的 `peer=peer-xxxx` 就是 `im_send` 的 `peer` 参数。只有一个对端时可以省略；有多个对端时优先显式传消息头里的 alias（省略时路由会回退到最近一条入站消息的对端，但显式传更稳）。微信一条绑定只有一个聊天，回复刚发来消息的微信对端时通常可以直接省略 `peer`；不确定有哪些对端时先调用 `im_identity`。',
+  '2. 消息头里的 `peer=peer-xxxx` 就是 `im_send` 的 `peer` 参数。只有一个对端时可以省略；有多个对端时必须显式传消息头里的 alias，省略会被拒绝并报错（多对端交错时无法确定该回复谁）。不确定有哪些对端时先调用 `im_identity`。',
   '3. 收到消息的同一轮就回复，不要等下一轮，也不要把多条消息攒成一条长文。',
   '',
   '## 像真人在手机上聊天',
