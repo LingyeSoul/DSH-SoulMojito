@@ -70,6 +70,7 @@ const {
   resolveBodyRecordWriter,
 } = await import('../src/agent-tavern/body-wiring.js')
 const { pendingByAgent } = await import('../src/agent-tavern/body-runtime-core.js')
+const { imBodyMutationDisabledOf } = await import('../src/agent-tavern/body-view.js')
 const { createBodySessionFactsSource } = await import('../src/agent-tavern/body-session.js')
 const { handleAgentTavernBodyApi } = await import('../src/http/router.js')
 type BodyRuntimeModule = typeof import('../src/agent-tavern/body-runtime.js')
@@ -690,6 +691,24 @@ function mutationDbFor(sessionId: string, character: CharacterCardIR, chat: Chat
   } as unknown as TavernStore
 }
 
+/** Same store as {@link mutationDbFor}, with one IM peer bound to a session id. */
+function imBoundMutationDbFor(
+  sessionId: string,
+  character: CharacterCardIR,
+  chat: ChatLogIR,
+  peerKey: string,
+  peerSessionId: string,
+): TavernStore {
+  const base = mutationDbFor(sessionId, character, chat)
+  return {
+    ...base,
+    getState: async () => ({
+      ...(await base.getState() as unknown as Record<string, unknown>),
+      imPeers: { [peerKey]: { sessionId: peerSessionId } },
+    }),
+  } as unknown as TavernStore
+}
+
 /* ------------------------- regeneration rollback harness ------------------- */
 
 interface RegenerateEvent {
@@ -876,12 +895,22 @@ async function callBodyRoute(
   method: string,
   payload: Record<string, unknown>,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
+  return callBodyRouteWithDb(mutationDb(character, chat), 'session-mvu', route, method, payload)
+}
+
+async function callBodyRouteWithDb(
+  db: TavernStore,
+  sessionId: string,
+  route: string,
+  method: string,
+  payload: Record<string, unknown>,
+): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = makeResponse()
   await handleAgentTavernBodyApi(
     {} as unknown as Parameters<typeof handleAgentTavernBodyApi>[0],
-    mutationDb(character, chat),
+    db,
     makeRequest({
-      sessionId: 'session-mvu',
+      sessionId,
       messageId: 'message-1',
       groupId: 'message-1',
       expectedAnchorId: 'message-1',
@@ -1661,6 +1690,88 @@ describe('body state safety (proposal 0022 §7)', () => {
     })
     expect(harness.events.some((event) => event.type === BODY_EVENT_TYPE)).toBe(false)
     expect(harness.followups).toHaveLength(0)
+  })
+})
+
+describe('IM body mutation gate', () => {
+  const peerKey = 'qq:account:private:peer-1'
+
+  it('gates only AgentTavern bindings with a matching IM peer', () => {
+    const peers = { [peerKey]: { sessionId: 'session-mvu' } }
+
+    expect(imBodyMutationDisabledOf({ architecture: 'agent-tavern' }, 'session-mvu', peers)).toContain('im_send')
+    expect(imBodyMutationDisabledOf({ architecture: 'st' }, 'session-mvu', peers)).toBeUndefined()
+    expect(imBodyMutationDisabledOf({ architecture: 'agent-tavern' }, 'session-other', peers)).toBeUndefined()
+    expect(imBodyMutationDisabledOf({ architecture: 'agent-tavern' }, 'session-mvu', undefined)).toBeUndefined()
+  })
+
+  it('rejects edit, regenerate and select with 409 im-body-mutation-disabled', async () => {
+    const routes = [
+      { route: 'body', method: 'PUT', payload: { index: 0, text: 'edited body' } },
+      { route: 'body/regenerate', method: 'POST', payload: { expectedIndex: 0 } },
+      { route: 'body/select', method: 'POST', payload: { index: 0 } },
+    ] as const
+    for (const entry of routes) {
+      const db = imBoundMutationDbFor('session-mvu', plainCharacter(), projectedChat('stored body'), peerKey, 'session-mvu')
+      const result = await callBodyRouteWithDb(db, 'session-mvu', entry.route, entry.method, entry.payload)
+
+      expect(result.status).toBe(409)
+      expect(result.body).toMatchObject({ ok: false, code: 'im-body-mutation-disabled' })
+      expect(String(result.body['message'])).toContain('im_send')
+      // The refusal names neither the peer key nor any peer id.
+      expect(JSON.stringify(result.body)).not.toContain(peerKey)
+      expect(JSON.stringify(result.body)).not.toContain('peer-1')
+    }
+  })
+
+  it('keeps the body readable and reports mutationsEnabled:false with the reason', async () => {
+    const text = 'IM reply body'
+    const db = imBoundMutationDbFor('session-mvu', plainCharacter(), projectedChat(text), peerKey, 'session-mvu')
+
+    const result = await callBodyGetQuery(
+      fakeAgent(sessionWithAssistant('message-1', text)),
+      'session-mvu',
+      'messageId=message-1',
+      db,
+      undefined,
+    )
+
+    expect(result.status).toBe(200)
+    expect(result.body).toMatchObject({
+      ok: true,
+      text,
+      canEdit: false,
+      canRegenerate: false,
+      canSelect: false,
+      mutationsEnabled: false,
+      disabledReason: expect.stringContaining('im_send'),
+    })
+  })
+
+  it('does not gate a session whose IM peer binds another session id', async () => {
+    const db = imBoundMutationDbFor('session-mvu', plainCharacter(), projectedChat('stored body'), peerKey, 'session-other')
+    const routes = [
+      { route: 'body', method: 'PUT', payload: { index: 0, text: 'edited body' } },
+      { route: 'body/regenerate', method: 'POST', payload: { expectedIndex: 0 } },
+      { route: 'body/select', method: 'POST', payload: { index: 0 } },
+    ] as const
+    for (const entry of routes) {
+      const result = await callBodyRouteWithDb(db, 'session-mvu', entry.route, entry.method, entry.payload)
+
+      // The route reaches its normal validation path (no live agent), never the IM gate.
+      expect(result.status).toBe(409)
+      expect(result.body).toMatchObject({ ok: false, code: 'session-busy' })
+    }
+  })
+
+  it('keeps the normal body shape for a session without an IM peer', async () => {
+    const text = 'stored body'
+    const result = await callBodyGet(plainCharacter(), projectedChat(text), fakeAgent(sessionWithAssistant('message-1', text)), 'session-mvu', 'message-1')
+
+    expect(result.status).toBe(200)
+    expect(result.body).toMatchObject({ ok: true, canEdit: true })
+    expect(result.body['mutationsEnabled']).toBeUndefined()
+    expect(result.body['disabledReason']).toBeUndefined()
   })
 })
 

@@ -27,6 +27,37 @@ export type BodyStateSafetyResolver = (
   binding: BodyBindingView,
 ) => BodyStateSafety | undefined | Promise<BodyStateSafety | undefined>
 
+/* --------------------------- IM-bound sessions ----------------------------- */
+
+/** Stable rejection code for body surgery on an IM-bound AgentTavern session. */
+export const IM_BODY_MUTATION_DISABLED_CODE = 'im-body-mutation-disabled'
+
+/** Stable explanation published by the mutation route and `GET body`. */
+export const IM_BODY_MUTATION_DISABLED_MESSAGE = 'IM-bound AgentTavern sessions deliver replies through im_send; body edit, regenerate and candidate switch are disabled'
+
+/** Structural slice of one `state.imPeers` entry. */
+export interface ImPeerBindingView {
+  readonly sessionId?: string
+}
+
+/**
+ * Whether body mutations must stay closed for this session.
+ *
+ * IM replies are delivered through `im_send` and never carry a body ledger, so
+ * edit, regenerate and candidate switch have no body to operate on. The verdict
+ * is binding-based, not preset-based: switching the preset back to a normal one
+ * does not remove the IM peer that still receives this session's replies.
+ */
+export function imBodyMutationDisabledOf(
+  binding: BodyBindingView | undefined,
+  sessionId: string,
+  peers: Readonly<Record<string, ImPeerBindingView>> | undefined,
+): string | undefined {
+  if (binding === undefined || binding.architecture !== 'agent-tavern') return undefined
+  const bound = Object.values(peers ?? {}).some((peer) => peer.sessionId === sessionId)
+  return bound ? IM_BODY_MUTATION_DISABLED_MESSAGE : undefined
+}
+
 /* ----------------------------- state safety -------------------------------- */
 
 /** Concrete signal behind a `body-state-unsafe` refusal. */
@@ -285,6 +316,11 @@ export interface BodyViewInput {
    * Display-only: it never changes a gate or the stable empty-body default.
    */
   readonly lastOperation?: BodyLastOperation
+  /**
+   * Set when this session is bound to an IM peer. Body mutations are closed and
+   * the read-only view stays available; the string is the public explanation.
+   */
+  readonly mutationsDisabledReason?: string
 }
 
 /** Proposal §7.3 response plus the stable rejection code when gated. */
@@ -308,6 +344,14 @@ export interface BodyView {
   readonly reason?: string
   /** Concrete gate detail when one action is blocked but the body is readable. */
   readonly detail?: BodyStateUnsafeDetail
+  /**
+   * Present only when this session is IM-bound: `false` closes every body
+   * mutation while the body stays readable. Absent for normal sessions so old
+   * clients keep their current interpretation.
+   */
+  readonly mutationsEnabled?: false
+  /** Public explanation for `mutationsEnabled: false`; absent otherwise. */
+  readonly disabledReason?: string
   /** Latest aborted, failed or cancelled operation; absent when none is recorded. */
   readonly lastOperation?: BodyLastOperation
 }
@@ -322,7 +366,9 @@ export interface BodyView {
  *
  * `canEdit` requires both the base gate and an open `editDetail` /
  * `canEditDetail`; `canSelect` still derives from `canEdit` and the historical
- * MVU refusal, and `canRegenerate` keeps its rollback-port rule.
+ * MVU refusal, and `canRegenerate` keeps its rollback-port rule. An IM-bound
+ * session closes all three while leaving the body text readable and publishes
+ * `mutationsEnabled: false` with the reason.
  */
 export function buildBodyView(input: BodyViewInput): BodyView {
   const ledger = input.ledger
@@ -367,21 +413,26 @@ export function buildBodyView(input: BodyViewInput): BodyView {
   // degraded read outranks it and is published even when another reason gates
   // the body.
   const editGate = input.readDetail ?? input.canEditDetail ?? input.editDetail
+  // An IM-bound session has no body ledger behind its replies; the read stays
+  // useful, but every mutation is closed regardless of the other gates. The
+  // extra fields let a client render the read-only state.
+  const mutationsDisabled = input.mutationsDisabledReason !== undefined
   const baseEditable = baseReason === undefined && !hidden && count > 0
-  const canEdit = baseEditable && editGate === undefined
+  const canEdit = !mutationsDisabled && baseEditable && editGate === undefined
   // A degraded read (ambiguous or unreadable floor binding) closes
   // regeneration too: the target the runtime would regenerate against is a
   // guess, and a failure mid-flight would leave its restore pending. Receipt
   // verdicts (`editDetail`) stay regenerate-compatible — the runtime's own
   // regenerate preflight enforces them and reports its own 409.
-  const canRegenerate = baseReason === undefined
+  const canRegenerate = !mutationsDisabled
+    && baseReason === undefined
     && !hidden
     && count > 0
     && input.readDetail === undefined
     && input.agent !== undefined
     && canAdvanceHostTurnBase(input.agent)
     && (!input.historicalMvuState || input.writeRollbackAvailable)
-  const canSelect = canEdit && count > 1 && !input.historicalMvuState
+  const canSelect = !mutationsDisabled && canEdit && count > 1 && !input.historicalMvuState
   const detail = baseEditable
     ? editGate ?? (input.historicalMvuState ? 'candidate-switch-disabled' : undefined)
     : input.readDetail
@@ -400,6 +451,9 @@ export function buildBodyView(input: BodyViewInput): BodyView {
     ...(input.projectionCurrent === false ? { projectionPending: true } : {}),
     ...(reason === undefined ? {} : { reason }),
     ...(detail === undefined ? {} : { detail }),
+    ...(mutationsDisabled
+      ? { mutationsEnabled: false as const, disabledReason: input.mutationsDisabledReason }
+      : {}),
     ...(input.lastOperation === undefined ? {} : { lastOperation: publicLastOperation(input.lastOperation) }),
   }
 }

@@ -328,6 +328,7 @@
       if (code === 'invalid-arguments') return t('body.invalidRequest')
       if (code === 'projection-pending') return t('body.projectionPending')
       if (code === 'host-unsupported') return t('body.hostUnsupported')
+      if (code === 'im-body-mutation-disabled') return t('body.mutationsDisabledHint')
       // State refusals carry a stable detail (receipt damage, ledger damage).
       // Map it to local copy; never surface the server's English sentence.
       if (code === 'body-state-unsafe') {
@@ -413,9 +414,25 @@
 
       const count = typeof body.count === 'number' && Number.isInteger(body.count) && body.count > 0 ? body.count : 0
       const selectedIndex = typeof body.selectedIndex === 'number' && Number.isInteger(body.selectedIndex) ? body.selectedIndex : 0
-      const canEdit = body.canEdit === true
-      const canRegenerate = body.canRegenerate === true
-      const canSelect = body.canSelect === true
+      // An IM-bound session keeps the read-only body but closes every
+      // mutation. The server omits the field for normal sessions, so only an
+      // explicit false disables the actions.
+      const mutationsEnabled = body.mutationsEnabled !== false
+      // The UI shows local copy, never the server's English sentence: the
+      // dictionary wins, and the server explanation is only the fallback for a
+      // dictionary that cannot resolve the key at all (translate returns the
+      // key itself then).
+      const localDisabledHint = t('body.mutationsDisabledHint')
+      const mutationsDisabledTitle = mutationsEnabled
+        ? ''
+        : localDisabledHint !== '' && localDisabledHint !== 'body.mutationsDisabledHint'
+          ? localDisabledHint
+          : typeof body.disabledReason === 'string' && body.disabledReason !== ''
+            ? body.disabledReason
+            : ''
+      const canEdit = mutationsEnabled && body.canEdit === true
+      const canRegenerate = mutationsEnabled && body.canRegenerate === true
+      const canSelect = mutationsEnabled && body.canSelect === true
       const busy = pending !== '' || watching !== null || bodyResult.loading
       const expectedIndex = selectedIndex
       const expectedAnchorId = typeof body.anchorMessageId === 'string' ? body.anchorMessageId : messageId
@@ -425,7 +442,7 @@
       const detailText = tavernBodyDetailText(t, body.detail)
 
       const runBodyAction = (kind, request, onDone) => {
-        if (busy) return
+        if (busy || !mutationsEnabled) return
         setPending(kind)
         setError('')
         void withBodyProjectionRetry(request)
@@ -489,7 +506,7 @@
       }
 
       const selectCandidate = (index) => {
-        if (!canSelect || busy || index < 0 || index >= count || index === selectedIndex) return
+        if (!mutationsEnabled || !canSelect || busy || index < 0 || index >= count || index === selectedIndex) return
         runBodyAction('select', () => api('body/select', {
           method: 'POST',
           headers: jsonHeaders(),
@@ -515,31 +532,36 @@
 
       return h(React.Fragment, null,
         h('span', { className: 'dt-body-actions', 'data-testid': 'tavern-body-actions' },
-          canEdit ? h(Button, {
+          canEdit || !mutationsEnabled ? h(Button, {
             size: 'sm',
             variant: 'ghost',
             type: 'button',
             icon: h(IconEditOutline16),
-            disabled: busy,
+            disabled: busy || !mutationsEnabled,
+            title: mutationsEnabled ? undefined : mutationsDisabledTitle,
             'data-testid': 'tavern-body-edit',
             onClick: openEditor,
           }, t('body.edit')) : null,
-          canRegenerate ? h(Button, {
+          canRegenerate || !mutationsEnabled ? h(Button, {
             size: 'sm',
             variant: 'ghost',
             type: 'button',
             icon: h(IconRefreshOutline16),
-            disabled: busy,
+            disabled: busy || !mutationsEnabled,
+            title: mutationsEnabled ? undefined : mutationsDisabledTitle,
             'data-testid': 'tavern-body-regenerate',
             onClick: openRegenerate,
           }, t('body.regenerate')) : null,
-          canSelect ? h('span', { className: 'dt-body-swipe' },
+          canSelect || !mutationsEnabled ? h('span', {
+            className: 'dt-body-swipe',
+            ...(mutationsEnabled ? {} : { title: mutationsDisabledTitle }),
+          },
             h(Button, {
               size: 'sm',
               variant: 'ghost',
               type: 'button',
               'aria-label': t('body.swipe', { index: Math.max(selectedIndex, 0), count }),
-              disabled: busy || selectedIndex <= 0,
+              disabled: busy || !mutationsEnabled || selectedIndex <= 0,
               'data-testid': 'tavern-body-swipe-prev',
               onClick: () => selectCandidate(selectedIndex - 1),
             }, h(IconChevronLeftOutline14)),
@@ -554,10 +576,15 @@
               variant: 'ghost',
               type: 'button',
               'aria-label': t('body.swipe', { index: Math.min(selectedIndex + 2, count + 1), count }),
-              disabled: busy || count === 0 || selectedIndex >= count - 1,
+              disabled: busy || !mutationsEnabled || count === 0 || selectedIndex >= count - 1,
               'data-testid': 'tavern-body-swipe-next',
               onClick: () => selectCandidate(selectedIndex + 1),
             }, h(IconChevronRightOutline14))) : null,
+          !mutationsEnabled ? h('span', {
+            className: 'dt-muted',
+            title: mutationsDisabledTitle,
+            'data-testid': 'tavern-body-mutations-disabled',
+          }, t('body.mutationsDisabled')) : null,
           watching !== null ? h('span', { className: 'dt-muted' }, t('body.generating')) : null,
           reasonText !== '' ? h('span', { className: 'dt-muted' }, reasonText) : null,
           detailText !== '' ? h('span', {

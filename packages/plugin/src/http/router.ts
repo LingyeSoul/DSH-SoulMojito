@@ -38,7 +38,7 @@ import {
   type BodyView,
 } from '../agent-tavern/body-wiring.js'
 import { createBodySessionFactsSource, errorMessage } from '../agent-tavern/body-session.js'
-import { bodyEditDetailOf } from '../agent-tavern/body-view.js'
+import { IM_BODY_MUTATION_DISABLED_CODE, bodyEditDetailOf, imBodyMutationDisabledOf } from '../agent-tavern/body-view.js'
 import {
   BodyJsonlProjectionError,
   locateBodyFloorForRead,
@@ -1487,6 +1487,10 @@ export async function handleAgentTavernBodyApi(
 
     const state = await db.getState()
     const binding = state.sessionBindings[sessionId]
+    // Binding-based, not preset-based: an IM peer keeps receiving this
+    // session's replies even after the user switches the preset back to a
+    // non-IM one, so body surgery stays closed while the peer binding exists.
+    const mutationsDisabledReason = imBodyMutationDisabledOf(binding, sessionId, state.imPeers)
     let characterName: string | undefined
     let chatId: string | undefined
     let character: Awaited<ReturnType<TavernStore['getCharacter']>> = undefined
@@ -1541,6 +1545,7 @@ export async function handleAgentTavernBodyApi(
       projectionCurrent: false,
       projectionTextCurrent: false,
       inspection: undefined,
+      ...(mutationsDisabledReason === undefined ? {} : { mutationsDisabledReason }),
     })
 
     /**
@@ -1631,6 +1636,7 @@ export async function handleAgentTavernBodyApi(
           // publishing it even when a reason already gates the row.
           ...(floorDegradation === undefined ? {} : { readDetail: floorDegradation.detail }),
           ...(facts?.lastOperation === undefined ? {} : { lastOperation: facts.lastOperation }),
+          ...(mutationsDisabledReason === undefined ? {} : { mutationsDisabledReason }),
         })
         return { ok: true, view }
       } catch (error) {
@@ -1670,6 +1676,17 @@ export async function handleAgentTavernBodyApi(
       status: 409,
       code: 'architecture-mismatch',
       message: 'body operations require an AgentTavern single-character binding',
+    })
+  }
+  // IM-bound sessions deliver replies through `im_send`, so there is no body
+  // ledger to edit, regenerate or switch. Reject before reading the card or
+  // touching the runtime; the peer id stays server-side.
+  const mutationsDisabledReason = imBodyMutationDisabledOf(binding, sessionId, (await db.getState()).imPeers)
+  if (mutationsDisabledReason !== undefined) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: IM_BODY_MUTATION_DISABLED_CODE,
+      message: mutationsDisabledReason,
     })
   }
   const characterName = binding.character

@@ -172,9 +172,36 @@ describe('AgentTavern body client source checks', () => {
       'body.text',
       'body.projectionPending',
       'body.detail',
+      'body.mutationsEnabled',
+      'body.disabledReason',
     ]) {
       expect(bodySource).toContain(field)
     }
+  })
+
+  it('disables every body action for an IM-bound session and shows local copy', () => {
+    expect(bodySource).toContain('body.mutationsEnabled !== false')
+    expect(bodySource).toContain("t('body.mutationsDisabledHint')")
+    expect(bodySource).toContain('const localDisabledHint')
+    expect(bodySource).toContain('const mutationsDisabledTitle')
+    expect(bodySource).toContain('busy || !mutationsEnabled')
+    expect(bodySource).toContain('title: mutationsEnabled ? undefined : mutationsDisabledTitle')
+    expect(bodySource).toContain("'data-testid': 'tavern-body-mutations-disabled'")
+    expect(bodySource).toContain("t('body.mutationsDisabled')")
+    expect(bodySource).toContain("if (code === 'im-body-mutation-disabled') return t('body.mutationsDisabledHint')")
+    expect(bodySource).toContain('if (!mutationsEnabled || !canSelect')
+    // The title never renders the server's English sentence while the
+    // dictionary resolves the key: `disabledReason` is a fallback only.
+    expect(bodySource).not.toContain('title: mutationsEnabled ? undefined : body.disabledReason')
+    expect(bodySource).toContain("localDisabledHint !== 'body.mutationsDisabledHint'")
+    expect(bodySource).toContain("typeof body.disabledReason === 'string'")
+    for (const key of ['body.mutationsDisabled', 'body.mutationsDisabledHint']) {
+      expect(zh).toContain(`'${key}'`)
+      expect(en).toContain(`'${key}'`)
+    }
+    // The displayed title is the localized sentence, not the server constant.
+    expect(zh).toContain("'body.mutationsDisabledHint': 'IM 会话的回复通过 im_send 送达，不能编辑、重新生成或切换候选。'")
+    expect(en).toContain("'body.mutationsDisabledHint': 'IM replies are delivered through im_send; editing, regenerating and candidate switching are disabled.'")
   })
 
   it('maps body detail codes to local copy and drops the unused revision sync', () => {
@@ -244,6 +271,7 @@ describe('AgentTavern body client source checks', () => {
       'body.invalidRequest', 'body.detailReceiptMissing', 'body.detailReceiptDuplicate',
       'body.detailCandidateSwitchDisabled', 'body.detailStaleAnchor',
       'body.detailGroupMismatch', 'body.detailFloorUnreadable', 'body.detailUnknown',
+      'body.mutationsDisabled', 'body.mutationsDisabledHint',
     ]
     for (const key of keys) {
       expect(zh).toContain(`'${key}'`)
