@@ -43,6 +43,7 @@ describe('behavior settings section (main.js source check)', () => {
       'applyPatch({ defaultContextMode: \'agent-managed\' })',
       'applyPatch({ agentTavernPreloadAssets: event.target.checked })',
       'applyPatch({ nativeAgentPersona: event.target.checked })',
+      'applyPatch({ nativeAgentPreset: event.target.checked })',
       'applyPatch({ worldFollowsCharacter: event.target.checked })',
       'applyPatch({ agentTavernAllowGlobalWrites: event.target.checked })',
       'applyPatch({ frontendAutoOpen: event.target.checked })',

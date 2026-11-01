@@ -25,8 +25,10 @@ export interface LazyProjectionOptions<V> {
   /** 读取 state（含 sessionBindings）的通道；各宿主用自己的 store 懒单例。 */
   getState: () => Promise<TavernState>
   /** 装载一个 agent 的投影值。门控不过/资产缺失时可以不 settle（留旧值）或
-   *  settle 空值，由通道语义决定；settle 自带票号检查，过期装载静默丢弃。 */
-  load: (agentId: string, settle: (value: V) => void) => Promise<void>
+   *  settle 空值，由通道语义决定；settle 自带票号检查，过期装载静默丢弃。
+   *  `state` 是写穿遍历预先读到的快照（见 refreshAll）：`getState` 每次都读盘，
+   *  一次写穿里的 N 个 agent 共用同一份快照，装载体不必再各读一遍。 */
+  load: (agentId: string, settle: (value: V) => void, state?: TavernState) => Promise<void>
 }
 
 export interface LazyProjection<V> {
@@ -35,8 +37,16 @@ export interface LazyProjection<V> {
   /** 写穿遍历：对 sessionBindings 里满足谓词的绑定标记已装载并重载。
    *  best-effort，整体失败静默。 */
   refreshWhere(match: (binding: TavernSessionBinding) => boolean): Promise<void>
+  /** 写穿遍历：重载**所有已装载过**的 agent（不依赖 sessionBindings——标准 DSH
+   *  Agent 会话没有绑定，绑定遍历看不到它们）。state 只读一次并作为快照传给每个
+   *  装载（`store.getState` 每次读盘，逐 agent 读会让一次开关翻转退化成 N 次读盘）。
+   *  best-effort，整体失败静默。 */
+  refreshAll(): Promise<void>
   /** 幂等预热：首次调用执行一遍 refreshWhere，之后 no-op（apply 可能被宿主重复调用）。 */
   preheatWhere(match: (binding: TavernSessionBinding) => boolean): Promise<void>
+  /** 预热一组**用户给定的** agent（重启后活着的会话）：把它们标记为已装载，然后
+   *  走 refreshAll 的语义（state 只读一次）。用于没有绑定可遍历的会话面。 */
+  preheatAll(agentIds: readonly string[]): Promise<void>
 }
 
 export function createLazyProjection<V>(options: LazyProjectionOptions<V>): LazyProjection<V> {
@@ -45,18 +55,29 @@ export function createLazyProjection<V>(options: LazyProjectionOptions<V>): Lazy
   const tickets = new Map<string, number>()
   let preheatDone = false
 
-  async function load(agentId: string): Promise<void> {
+  async function load(agentId: string, state?: TavernState): Promise<void> {
     const ticket = (tickets.get(agentId) ?? 0) + 1
     tickets.set(agentId, ticket)
     const settle = (value: V): void => {
       if (tickets.get(agentId) === ticket) cache.set(agentId, value)
     }
     try {
-      await options.load(agentId, settle)
+      await options.load(agentId, settle, state)
     } catch {
       // A missing store must not prevent the host agent from starting：装载失败
       // 静默，缓存留旧值；写穿/预热路径会再试。
     }
+  }
+
+  async function refreshAll(): Promise<void> {
+    let state: TavernState | undefined
+    try {
+      state = await options.getState()
+    } catch {
+      // 快照读失败不阻断：各装载退化为自行读 state（与逐 agent 路径同语义）。
+      state = undefined
+    }
+    for (const agentId of [...started]) await enqueueLoad(agentId, state)
   }
 
   async function refreshWhere(match: (binding: TavernSessionBinding) => boolean): Promise<void> {
@@ -80,8 +101,8 @@ export function createLazyProjection<V>(options: LazyProjectionOptions<V>): Lazy
   // 排在最后的装载必然最后落值且重读最新状态，await 的语义恢复为真。
   const loadChains = new Map<string, Promise<void>>()
 
-  function enqueueLoad(agentId: string): Promise<void> {
-    const next = (loadChains.get(agentId) ?? Promise.resolve()).then(() => load(agentId), () => load(agentId))
+  function enqueueLoad(agentId: string, state?: TavernState): Promise<void> {
+    const next = (loadChains.get(agentId) ?? Promise.resolve()).then(() => load(agentId, state), () => load(agentId, state))
     loadChains.set(agentId, next.catch(() => undefined))
     return next
   }
@@ -96,10 +117,15 @@ export function createLazyProjection<V>(options: LazyProjectionOptions<V>): Lazy
       return cache.get(agentId)
     },
     refreshWhere,
+    refreshAll,
     preheatWhere(match) {
       if (preheatDone) return Promise.resolve()
       preheatDone = true
       return refreshWhere(match)
+    },
+    preheatAll(agentIds) {
+      for (const agentId of agentIds) started.add(agentId)
+      return refreshAll()
     },
   }
 }

@@ -22,6 +22,7 @@ import { tavernDataRoot } from './dsh-home.js'
 import { openGamesService } from './games/service.js'
 import { wakeAgentOnHumanMove } from './games/wake.js'
 import { getActiveAgentPrompt, refreshActivePrompt } from './model-catalog.js'
+import { nativeAgentPresetSection, preheatNativeAgentPreset } from './native-preset.js'
 import {
   getAgentTavernProjectorPromise,
   getGamesServicePromise,
@@ -199,6 +200,16 @@ export function apply(ctx: PluginContext, config: { anchorEveryTurns?: unknown, 
     order: 25,
     text: () => getActiveAgentPrompt(),
   })
+  // 标准 DSH Agent 会话的激活预设投影（2026-11-01 用户需求）：index bundle 是
+  // profile 级挂载，section 对全部会话的装配可见，装载期按「无 Tavern 绑定」门控
+  // ——绑定会话各有专属预设通道（agent-tavern/agent.ts、preset-mount.ts）。
+  ctx.systemPrompt.section(nativeAgentPresetSection())
+  // 重启预热（native-preset.ts）：活着的标准会话先装载一次，消除首轮空串 →
+  // 整块出现。fire-and-forget，懒装载兜底。
+  const liveAgentIds = listLiveAgents(ctx.agents)
+    .map((agent) => agent.id)
+    .filter((id): id is string => typeof id === 'string' && id !== '')
+  void preheatNativeAgentPreset(liveAgentIds)
 
   registerTavernSessionCommand(ctx)
 

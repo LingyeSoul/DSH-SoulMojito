@@ -272,6 +272,15 @@
               onChange: (event) => applyPatch({ nativeAgentPersona: event.target.checked }),
             }),
             h('span', null, t('settings.nativePersona'))),
+          // 标准 DSH Agent 会话的激活预设投影（服务端 native-preset.ts：只在没有
+          // Tavern 绑定的会话上生效；绑定会话各有专属预设通道）。
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: bootstrap.state.nativeAgentPreset === true,
+              onChange: (event) => applyPatch({ nativeAgentPreset: event.target.checked }),
+            }),
+            h('span', null, t('settings.nativePreset'))),
         ]),
         behaviorGroup('settings.behavior.worldInfo', [
           h('label', { className: 'dt-toggle' },

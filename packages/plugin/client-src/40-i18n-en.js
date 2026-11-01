@@ -9,6 +9,7 @@
       'settings.persona': 'Persona',
       'settings.personaEmpty': 'Default user',
       'settings.nativePersona': 'Use active character in standard DSH Agent chats',
+      'settings.nativePreset': 'Use active preset in standard DSH Agent chats',
       'settings.compactionModel': 'Compaction summarizer',
       'settings.compactionModelFollow': 'Follow deployment config',
       'settings.compactionModelHint': 'Model that condenses story sessions (AgentTavern / AgentNovel) when context is compacted. Prefer a large-context model; empty falls back to the deployment config, then the session model.',

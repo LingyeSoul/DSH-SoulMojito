@@ -507,6 +507,9 @@ export async function handleApi(ctx: PluginContext, req: HttpRequest, res: HttpR
       ...(typeof body.activePreset === 'string' || body.activePreset === null ? { activePreset: body.activePreset || undefined } : {}),
       ...(typeof body.activePersona === 'string' || body.activePersona === null ? { activePersona: body.activePersona || undefined } : {}),
       ...(typeof body.nativeAgentPersona === 'boolean' ? { nativeAgentPersona: body.nativeAgentPersona } : {}),
+      // 标准 DSH Agent 会话的预设投影开关（native-preset.ts）：翻转即写穿投影
+      // 缓存，下一次装配即时生效。
+      ...(typeof body.nativeAgentPreset === 'boolean' ? { nativeAgentPreset: body.nativeAgentPreset } : {}),
       ...(requestedDefaultArchitecture !== undefined ? { defaultArchitecture: requestedDefaultArchitecture } : {}),
       ...(requestedDefaultContextMode !== undefined ? { defaultContextMode: requestedDefaultContextMode } : {}),
       ...(typeof body.agentTavernPreloadAssets === 'boolean'
@@ -553,7 +556,8 @@ export async function handleApi(ctx: PluginContext, req: HttpRequest, res: HttpR
     // {{user}} 宏与预设选择变化后写穿各会话的投影缓存，下一次装配即时生效。
     // 两个投影开关同批写穿（preset-mount.ts 的监听在同一注册表里）。
     if ('activePreset' in patch || 'activePersona' in patch
-      || 'cardWorkbenchPresetEnabled' in patch || 'agentNovelPresetEnabled' in patch) await emitAgentPresetChanged()
+      || 'cardWorkbenchPresetEnabled' in patch || 'agentNovelPresetEnabled' in patch
+      || 'nativeAgentPreset' in patch) await emitAgentPresetChanged()
     await refreshActivePrompt()
     return sendJson(res, 200, { ok: true, state })
   }

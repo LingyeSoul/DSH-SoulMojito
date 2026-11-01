@@ -39,11 +39,11 @@ import { createHostPromptExpander, hostPromptSafe, seededRandom } from './prompt
 /** 与 agent-tavern/agent.ts 的 DEFAULT_USER 同值：{{user}} 未设置人设时的回落。 */
 const DEFAULT_USER = 'User'
 /**
- * {{char}} 无具体所指时的展开值（自由工作台未绑来源聊天、小说不绑卡）：
- * RP 预设高频出现 "{{char}} 的下一条回复" 一类语句，展开成空串会产出
- * "Write 's next reply" 这类残句；展开成占位语义保持语句完整。
+ * {{char}} 无具体所指时的展开值（自由工作台未绑来源聊天、小说与标准 DSH Agent
+ * 会话不绑卡）：RP 预设高频出现 "{{char}} 的下一条回复" 一类语句，展开成空串会
+ * 产出 "Write 's next reply" 这类残句；展开成占位语义保持语句完整。
  */
-const CHAR_FALLBACK = 'the character'
+export const CHAR_FALLBACK = 'the character'
 
 export interface PresetMountOptions {
   /** 注册的 section 名（每个 bundle 唯一；order 固定 -75，kernel 之后）。 */

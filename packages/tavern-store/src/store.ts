@@ -110,6 +110,12 @@ export interface TavernState {
   activePersona?: string
   /** 将当前角色人格注入普通 DSH Agent 会话；默认关闭。 */
   nativeAgentPersona?: boolean
+  /**
+   * 将激活聊天预设（提示词栈）注入标准 DSH Agent 会话；默认关闭。只作用于没有
+   * Tavern 绑定的会话——AgentTavern / 工作台 / 小说的预设投影各有专属通道
+   * （plugin src/native-preset.ts）。
+   */
+  nativeAgentPreset?: boolean
   /** DSH session 到 Tavern 角色/聊天的持久绑定。 */
   sessionBindings: Record<string, TavernSessionBinding>
   /** 新建会话的架构默认值；不影响已有 binding。 */
