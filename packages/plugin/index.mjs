@@ -153,6 +153,9 @@ function isImSenderHash(value) {
 function imPeerKey(channel, accountId, scope, peerId) {
   return `${channel}:${accountId}:${scope}:${peerId}`;
 }
+function imAccountKey(channel, accountId) {
+  return `${channel}:${accountId}`;
+}
 function normalizeAccessMode(value, fallback) {
   return value === "open" || value === "allowlist" || value === "disabled" ? value : fallback;
 }
@@ -196,7 +199,7 @@ function normalizeImPeers(value) {
     const sessionId = record["sessionId"];
     if (typeof sessionId !== "string" || sessionId.trim() === "") continue;
     const scope = record["scope"] === "group" ? "group" : "private";
-    const boundBy = record["boundBy"] === "manual" ? "manual" : "auto";
+    const boundBy = record["boundBy"] === "manual" ? "manual" : record["boundBy"] === "command" ? "command" : "auto";
     const createdAt = typeof record["createdAt"] === "string" ? record["createdAt"] : (/* @__PURE__ */ new Date(0)).toISOString();
     result[key] = { sessionId, scope, boundBy, createdAt };
   }
@@ -250,19 +253,37 @@ function normalizeImOwners(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
   const result = {};
   for (const [key, entry] of Object.entries(value)) {
-    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
-    const record = entry;
-    const id = record["id"];
-    if (typeof id !== "string" || !isImSenderHash(id.trim())) continue;
-    const name2 = record["name"];
-    const setAt = record["setAt"];
-    result[key] = {
-      id: id.trim(),
-      name: typeof name2 === "string" ? name2.trim() : "",
-      setAt: typeof setAt === "string" && setAt.trim() !== "" ? setAt : (/* @__PURE__ */ new Date(0)).toISOString()
-    };
+    const owner = normalizeImOwnerEntry(entry);
+    if (owner !== void 0) result[key] = owner;
   }
   return result;
+}
+function normalizeImAccountOwners(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const result = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (!isImAccountKey(key)) continue;
+    const owner = normalizeImOwnerEntry(entry);
+    if (owner !== void 0) result[key] = owner;
+  }
+  return result;
+}
+function normalizeImOwnerEntry(entry) {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return void 0;
+  const record = entry;
+  const id = record["id"];
+  if (typeof id !== "string" || !isImSenderHash(id.trim())) return void 0;
+  const name2 = record["name"];
+  const setAt = record["setAt"];
+  return {
+    id: id.trim(),
+    name: typeof name2 === "string" ? name2.trim() : "",
+    setAt: typeof setAt === "string" && setAt.trim() !== "" ? setAt : (/* @__PURE__ */ new Date(0)).toISOString()
+  };
+}
+function isImAccountKey(key) {
+  const parts = key.split(":");
+  return parts.length === 2 && (parts[0] ?? "") !== "" && (parts[1] ?? "") !== "";
 }
 var IM_SENDER_HASH_PREFIX, IM_SENDER_HASH_HEX_LENGTH, IM_MAX_TIMESTAMP_MS, IM_SENDER_HASH_PATTERN, WEIXIN_SEND_INTERVAL_DEFAULT_MS, WEIXIN_SEND_INTERVAL_MIN_MS, WEIXIN_SEND_INTERVAL_MAX_MS, IM_SENDERS_MAX_PER_PEER, IM_SENDER_REFRESH_WINDOW_MS, DEFAULT_IM_SETTINGS;
 var init_im_state = __esm({
@@ -2864,7 +2885,8 @@ var init_store = __esm({
       imPeers: {},
       imPendingPeers: {},
       imSenders: {},
-      imOwners: {}
+      imOwners: {},
+      imAccountOwners: {}
     };
     MEMORY_EMBED_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,255}$/;
     TavernStore = class _TavernStore {
@@ -3865,7 +3887,8 @@ var init_store = __esm({
           imPeers: normalizeImPeers(parsed.imPeers),
           imPendingPeers: normalizeImPendingPeers(parsed.imPendingPeers),
           imSenders: normalizeImSenders(parsed.imSenders),
-          imOwners: normalizeImOwners(parsed.imOwners)
+          imOwners: normalizeImOwners(parsed.imOwners),
+          imAccountOwners: normalizeImAccountOwners(parsed.imAccountOwners)
         };
       }
       async assertChatRevision(file, expectedRevision) {
@@ -10254,7 +10277,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("bf2890c") : void 0;
+  const commit = true ? normalizeCommit("110b95c") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -49329,6 +49352,12 @@ async function ensureRuntimePackageJson(root) {
 }
 
 // packages/plugin/src/im/owner.ts
+function resolveImOwnerId(channel, accountId, peerKey, tables) {
+  if (channel === "weixin") return void 0;
+  const perPeer = peerKey === void 0 ? void 0 : tables.owners?.[peerKey]?.id;
+  if (perPeer !== void 0) return perPeer;
+  return tables.accountOwners?.[imAccountKey(channel, accountId)]?.id;
+}
 function mergeImSenderEntries(existing, updates, options) {
   if (updates.length === 0) return void 0;
   const latest = /* @__PURE__ */ new Map();
@@ -52222,6 +52251,10 @@ async function handleImApi(req, res, url, route, method, db, runtime) {
       // peerKey 约定（键里含 peerId，本次不迁移）。
       owners: ownerRows(state.imOwners, state.imPeers),
       senders: senderRows(state.imSenders, state.imPeers),
+      // 账号级主人与账号级发言人聚合（决策 2026-11-01-im-global-owner-and-commands）：
+      // 「行为」页的全局主人选择器只认这两块；微信账号不进投影（不接受指定）。
+      accountOwners: accountOwnerRows(state.imAccountOwners),
+      accountSenders: accountSenderRows(state.imSenders, state.imPeers),
       // 未绑定对端：面板「待绑定」表的数据源。对端发过消息但还没绑会话时出现，
       // 绑定成功后从这张表移除。
       pendingPeers: pendingPeerRows(state.imPendingPeers),
@@ -52420,6 +52453,7 @@ ${outputTail}`
   if (method === "POST" && route === "im/owner") {
     const body = await readJson(req);
     const channel = parseChannel(body.channel);
+    if (channel === "weixin") throw new HttpError(400, "\u5FAE\u4FE1\u6E20\u9053\u4E0D\u4F7F\u7528\u4E3B\u4EBA");
     const scope = parseScope(body.scope);
     const accountId = requireId(body.accountId, "accountId");
     const peerId = requireId(body.peerId, "peerId");
@@ -52449,6 +52483,35 @@ ${outputTail}`
       return { imOwners: owners };
     });
     return sendJson(res, 200, { ok: true, key, owner, owners: ownerRows(next.imOwners, next.imPeers) });
+  }
+  if (method === "POST" && route === "im/owner/global") {
+    const body = await readJson(req);
+    const channel = parseChannel(body.channel);
+    const accountId = requireId(body.accountId, "accountId");
+    if (channel === "weixin") throw new HttpError(400, "\u5FAE\u4FE1\u6E20\u9053\u4E0D\u4F7F\u7528\u5168\u5C40\u4E3B\u4EBA");
+    const accounts = await ImStore.open(tavernDataRoot("im")).accounts();
+    if (!accounts.some((entry) => entry.channel === channel && entry.accountId === accountId)) {
+      return sendJson(res, 404, { ok: false, message: `no IM account ${channel}/${accountId}; register the account before designating its global owner` });
+    }
+    const accountKey = imAccountKey(channel, accountId);
+    const senderId = parseSenderRef(body.senderId);
+    if (senderId === null) {
+      const next2 = await db.updateState((current) => {
+        const accountOwners = { ...current.imAccountOwners ?? {} };
+        delete accountOwners[accountKey];
+        return { imAccountOwners: accountOwners };
+      });
+      return sendJson(res, 200, { ok: true, accountKey, owner: null, accountOwners: accountOwnerRows(next2.imAccountOwners) });
+    }
+    const state = await db.getState();
+    const known = (accountSenderRows(state.imSenders, state.imPeers)[accountKey] ?? []).find((entry) => entry.id === senderId);
+    const owner = { id: senderId, name: known?.name ?? "", setAt: (/* @__PURE__ */ new Date()).toISOString() };
+    const next = await db.updateState((current) => {
+      const accountOwners = { ...current.imAccountOwners ?? {} };
+      accountOwners[accountKey] = owner;
+      return { imAccountOwners: accountOwners };
+    });
+    return sendJson(res, 200, { ok: true, accountKey, owner, accountOwners: accountOwnerRows(next.imAccountOwners) });
   }
   if (method === "DELETE" && route === "im/peers") {
     const key = url.searchParams.get("key");
@@ -52492,6 +52555,38 @@ function senderRows(senders, peers) {
       return [{ id: entry.id, name: entry.name, lastAt: new Date(entry.lastAt).toISOString() }];
     });
     if (rows.length > 0) result[key] = rows;
+  }
+  return result;
+}
+function accountOwnerRows(owners) {
+  const result = {};
+  for (const [key, owner] of Object.entries(owners ?? {})) {
+    const parts = key.split(":");
+    if (parts.length !== 2 || (parts[0] ?? "") === "" || (parts[1] ?? "") === "") continue;
+    if (parts[0] === "weixin") continue;
+    result[key] = owner;
+  }
+  return result;
+}
+function accountSenderRows(senders, peers) {
+  const buckets = /* @__PURE__ */ new Map();
+  for (const peerKey of Object.keys(peers ?? {})) {
+    const parts = imPeerKeyParts(peerKey);
+    if (parts === void 0 || parts.channel === "weixin") continue;
+    const accountKey = imAccountKey(parts.channel, parts.accountId);
+    const bucket = buckets.get(accountKey) ?? /* @__PURE__ */ new Map();
+    for (const entry of senders?.[peerKey] ?? []) {
+      if (!Number.isFinite(entry.lastAt) || entry.lastAt < 0 || entry.lastAt > IM_MAX_TIMESTAMP_MS) continue;
+      const previous = bucket.get(entry.id);
+      if (previous !== void 0 && previous.lastAt >= entry.lastAt) continue;
+      bucket.set(entry.id, entry);
+    }
+    buckets.set(accountKey, bucket);
+  }
+  const result = {};
+  for (const [accountKey, bucket] of buckets) {
+    if (bucket.size === 0) continue;
+    result[accountKey] = [...bucket.values()].sort((left, right) => right.lastAt - left.lastAt).slice(0, IM_SENDERS_MAX_PER_PEER).map((entry) => ({ id: entry.id, name: entry.name, lastAt: new Date(entry.lastAt).toISOString() }));
   }
   return result;
 }
@@ -52542,9 +52637,6 @@ function peerCount(peers, channel, accountId) {
     if (parts !== void 0 && parts.channel === channel && parts.accountId === accountId) count += 1;
   }
   return count;
-}
-function imAccountKey(channel, accountId) {
-  return `${channel}:${accountId}`;
 }
 function safeHttpMessage(error, fallback) {
   const message = error instanceof Error ? error.message : String(error);
@@ -58026,8 +58118,13 @@ function attachmentSummaryOf(inbound) {
 // packages/plugin/src/im/owner-ledger.ts
 function createImOwnerLedger(deps) {
   async function ownerIdOf(peerKey) {
+    const parts = imPeerKeyParts(peerKey);
+    if (parts === void 0) return void 0;
     const state = await deps.db.getState();
-    return state.imOwners?.[peerKey]?.id;
+    return resolveImOwnerId(parts.channel, parts.accountId, peerKey, {
+      owners: state.imOwners,
+      accountOwners: state.imAccountOwners
+    });
   }
   function isOwnerMessage(message, ownerId) {
     if (ownerId === void 0) return false;
@@ -58059,6 +58156,203 @@ function createImOwnerLedger(deps) {
   return { ownerIdOf, isOwnerMessage, rememberSenders };
 }
 function messageOf13(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+// packages/plugin/src/im/commands.ts
+var IM_COMMAND_DENIED = "\u53EA\u6709\u5168\u5C40\u4E3B\u4EBA\u53EF\u4EE5\u4F7F\u7528\u6307\u4EE4";
+var IM_COMMAND_CHANNEL_UNSUPPORTED = "\u5FAE\u4FE1\u6E20\u9053\u4E0D\u652F\u6301\u6307\u4EE4\uFF08\u5FAE\u4FE1\u4E0D\u9700\u8981\u8BBE\u7F6E\u4E3B\u4EBA\uFF09";
+var IM_COMMAND_USAGE = "\u53EF\u7528\u6307\u4EE4\uFF1A/status\u3001/bind <sessionId>\u3001/unbind\u3001/help";
+var IM_COMMAND_BIND_USAGE = "\u7528\u6CD5\uFF1A/bind <sessionId>";
+var IM_COMMAND_HELP = [
+  "\u53EF\u7528\u6307\u4EE4\uFF08\u53EA\u6709\u8D26\u53F7\u7684\u5168\u5C40\u4E3B\u4EBA\u53EF\u4EE5\u4F7F\u7528\uFF09\uFF1A",
+  "/status \u67E5\u770B\u5F53\u524D\u72B6\u6001",
+  "/bind <sessionId> \u628A\u672C\u5BF9\u8BDD\u7ED1\u5230\u6307\u5B9A\u4F1A\u8BDD",
+  "/unbind \u89E3\u9664\u672C\u5BF9\u8BDD\u7684\u7ED1\u5B9A",
+  "/help \u67E5\u770B\u8FD9\u4EFD\u5E2E\u52A9"
+].join("\n");
+var IM_COMMAND_UNBOUND_OK = "\u5DF2\u89E3\u9664\u672C\u5BF9\u8BDD\u7684\u7ED1\u5B9A";
+var IM_COMMAND_UNBOUND_NONE = "\u672C\u5BF9\u8BDD\u5F53\u524D\u672A\u7ED1\u5B9A";
+var IM_MENTION_PREFIX = /^(?:<@!?[A-Za-z0-9_.:-]+>|@[A-Za-z0-9_.:-]+)/;
+function imCommandTextOf(text) {
+  let candidate = text.trim();
+  for (; ; ) {
+    const mention = IM_MENTION_PREFIX.exec(candidate);
+    if (mention === null) break;
+    candidate = candidate.slice(mention[0].length).trimStart();
+  }
+  return candidate.startsWith("/") ? candidate : void 0;
+}
+function isImCommandText(text) {
+  return imCommandTextOf(text) !== void 0;
+}
+function parseImCommand(text) {
+  const candidate = imCommandTextOf(text);
+  if (candidate === void 0) return void 0;
+  const body = candidate.slice(1);
+  const spaceAt = body.search(/\s/);
+  if (spaceAt < 0) return { name: body.toLowerCase(), argument: "" };
+  return {
+    name: body.slice(0, spaceAt).toLowerCase(),
+    argument: body.slice(spaceAt + 1).trim()
+  };
+}
+function imMaskSessionId(sessionId) {
+  const trimmed = sessionId.trim();
+  return trimmed.length > 12 ? `${trimmed.slice(0, 8)}\u2026` : trimmed;
+}
+async function handleImCommandIfAny(wiring, inbound, peerKey, sendNotice) {
+  if (!isImCommandText(inbound.text)) return false;
+  await handleImCommand({
+    db: wiring.db,
+    now: wiring.now,
+    seenDedupe: wiring.seenDedupe,
+    sendNotice,
+    ...wiring.sendStatuses === void 0 ? {} : { sendStatuses: wiring.sendStatuses },
+    ...wiring.applyImPreset === void 0 ? {} : { applyImPreset: wiring.applyImPreset },
+    ...wiring.log === void 0 ? {} : { log: wiring.log }
+  }, {
+    inbound,
+    peerKey,
+    alias: imPeerAlias(inbound.channel, inbound.scope, peerKey)
+  });
+  return true;
+}
+async function handleImCommand(deps, input) {
+  const { inbound, alias, peerKey } = input;
+  if (await deps.seenDedupe(inbound.dedupeKey, deps.now())) {
+    deps.log?.note("debug", `ignored a duplicate IM command from ${alias} (dedupe)`);
+    return;
+  }
+  const settings = (await deps.db.getState()).imSettings ?? DEFAULT_IM_SETTINGS;
+  if (!imAccessAllows(settings, inbound.scope, inbound.peerId)) {
+    deps.log?.note(
+      "warn",
+      `dropped an IM command from ${alias}: the access policy does not allow this peer (mode is allowlist and the peer is not listed, or the scope is disabled)`
+    );
+    return;
+  }
+  const reply = await runImCommand(deps, { inbound, peerKey, alias });
+  if (reply === void 0) return;
+  void deps.sendNotice(targetOf(inbound), reply, alias).catch((error) => {
+    deps.log?.note("warn", `sending an IM command reply to ${alias} failed: ${messageOf14(error)}`);
+  });
+}
+async function runImCommand(deps, input) {
+  const command = parseImCommand(input.inbound.text);
+  if (command === void 0) return void 0;
+  if (input.inbound.channel === "weixin") return IM_COMMAND_CHANNEL_UNSUPPORTED;
+  const state = await deps.db.getState();
+  const owner = state.imAccountOwners?.[imAccountKey(input.inbound.channel, input.inbound.accountId)];
+  const senderHash = imSenderHash(input.inbound.channel, input.inbound.accountId, input.inbound.senderId);
+  if (owner === void 0 || owner.id !== senderHash) {
+    deps.log?.note("warn", `denied IM command /${command.name} from ${input.alias}: the sender is not the account-global owner`);
+    return IM_COMMAND_DENIED;
+  }
+  deps.log?.note("info", `executed IM command /${command.name} from ${input.alias}`);
+  switch (command.name) {
+    case "status":
+      return statusReply(deps, input, state.imPeers, owner);
+    case "bind":
+      return bindReply(deps, input, command.argument);
+    case "unbind":
+      return unbindReply(deps, input);
+    case "help":
+      return IM_COMMAND_HELP;
+    default:
+      return IM_COMMAND_USAGE;
+  }
+}
+async function bindReply(deps, input, argument) {
+  const sessionId = argument.trim();
+  if (sessionId === "") return IM_COMMAND_BIND_USAGE;
+  const binding = {
+    sessionId,
+    scope: input.inbound.scope,
+    boundBy: "command",
+    createdAt: new Date(deps.now()).toISOString()
+  };
+  await deps.db.updateState((current) => {
+    const pending = { ...current.imPendingPeers ?? {} };
+    delete pending[input.peerKey];
+    return {
+      imPeers: { ...current.imPeers ?? {}, [input.peerKey]: binding },
+      imPendingPeers: pending
+    };
+  });
+  deps.log?.note("info", `bound ${input.alias} to a session by /bind (boundBy=command)`);
+  const preset = await presetNoteOf(deps, sessionId, input.alias);
+  return `\u5DF2\u7ED1\u5B9A\u5230\u4F1A\u8BDD ${imMaskSessionId(sessionId)}\uFF1B${preset}`;
+}
+var IM_COMMAND_PRESET_FAILED = "\u9884\u8BBE\u5207\u6362\u5931\u8D25\uFF08\u8BE6\u89C1\u8FD0\u884C\u65E5\u5FD7\uFF09";
+async function presetNoteOf(deps, sessionId, alias) {
+  if (deps.applyImPreset === void 0) return "\u9884\u8BBE\u672A\u5207\u6362\uFF08\u8FD0\u884C\u65F6\u672A\u63D0\u4F9B\u5207\u6362\u80FD\u529B\uFF09";
+  try {
+    const result = await deps.applyImPreset(sessionId);
+    if (result.applied) return "\u5DF2\u5207\u6362\u5230 AgentTavernIM";
+    const reason = result.reason ?? "unknown reason";
+    if (/running|not open/i.test(reason)) return "\u9884\u8BBE\u5F85\u5207\u6362\uFF08\u4F1A\u8BDD\u672A\u6253\u5F00\u6216\u6B63\u5728\u8FD0\u884C\uFF09";
+    deps.log?.note("warn", `switching the bound session to AgentTavernIM for ${alias} failed: ${reason}`);
+    return IM_COMMAND_PRESET_FAILED;
+  } catch (error) {
+    deps.log?.note("warn", `switching the bound session to AgentTavernIM for ${alias} failed: ${messageOf14(error)}`);
+    return IM_COMMAND_PRESET_FAILED;
+  }
+}
+async function unbindReply(deps, input) {
+  const state = await deps.db.getState();
+  if (state.imPeers?.[input.peerKey] === void 0 && state.imPendingPeers?.[input.peerKey] === void 0) {
+    return IM_COMMAND_UNBOUND_NONE;
+  }
+  await deps.db.updateState((current) => {
+    const peers = { ...current.imPeers ?? {} };
+    const pending = { ...current.imPendingPeers ?? {} };
+    delete peers[input.peerKey];
+    delete pending[input.peerKey];
+    return { imPeers: peers, imPendingPeers: pending };
+  });
+  deps.log?.note("info", `unbound ${input.alias} by /unbind`);
+  return IM_COMMAND_UNBOUND_OK;
+}
+function statusReply(deps, input, peers, owner) {
+  const inbound = input.inbound;
+  const binding = peers?.[input.peerKey];
+  const lines = [
+    "\u72B6\u6001",
+    `\u6E20\u9053\uFF1A${inbound.channel} \xB7 ${inbound.scope === "group" ? "\u7FA4\u804A" : "\u79C1\u804A"}`,
+    `\u5BF9\u7AEF\uFF1A${input.alias}`,
+    `\u4F1A\u8BDD\uFF1A${binding === void 0 ? "\u672A\u7ED1\u5B9A" : imMaskSessionId(binding.sessionId)}`,
+    `\u5168\u5C40\u4E3B\u4EBA\uFF1A${owner.name.trim() === "" ? owner.id : owner.name.trim()}`,
+    `\u65F6\u95F4\uFF1A${new Date(deps.now()).toLocaleString()}`
+  ];
+  const send = sendSummaryOf(deps, inbound);
+  if (send !== void 0) lines.push(send);
+  return lines.join("\n");
+}
+function sendSummaryOf(deps, inbound) {
+  const status2 = (deps.sendStatuses?.() ?? []).find(
+    (row) => row.channel === inbound.channel && row.accountId === inbound.accountId
+  );
+  if (status2 === void 0) return void 0;
+  const parts = [status2.allowedNow ? "\u73B0\u5728\u53EF\u53D1" : "\u9700\u8981\u7B49\u5F85"];
+  if (!status2.allowedNow && status2.nextSendAt !== void 0) parts.push(`\u4E0B\u6B21 ${timeOf(status2.nextSendAt)}`);
+  if (status2.throttleUntil !== void 0) parts.push(`\u51B7\u5374\u81F3 ${timeOf(status2.throttleUntil)}`);
+  parts.push(`\u961F\u5217 ${status2.queueDepth} \u6761`);
+  return `\u53D1\u9001\uFF1A${parts.join(" \xB7 ")}`;
+}
+function timeOf(at) {
+  return new Date(at).toLocaleString();
+}
+function targetOf(inbound) {
+  return {
+    channel: inbound.channel,
+    accountId: inbound.accountId,
+    scope: inbound.scope,
+    peerId: inbound.peerId,
+    ...inbound.replyTo === void 0 ? {} : { replyTo: inbound.replyTo }
+  };
+}
+function messageOf14(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -58243,6 +58537,7 @@ function createImRouter(deps) {
   }
   async function inbound(inboundMessage, options) {
     const peerKey = imPeerKey(inboundMessage.channel, inboundMessage.accountId, inboundMessage.scope, inboundMessage.peerId);
+    if (await handleImCommandIfAny(deps, inboundMessage, peerKey, sendNotice)) return;
     const entry = {
       inbound: inboundMessage,
       ...options?.loadMedia === void 0 ? {} : { loadMedia: options.loadMedia },
@@ -58312,7 +58607,7 @@ function createImRouter(deps) {
     try {
       await deliverBatch(peerKey, alias, orderInboundEntries(buffered));
     } catch (error) {
-      deps.log?.note("error", `flushing the buffered messages from ${alias} failed: ${messageOf14(error)}`);
+      deps.log?.note("error", `flushing the buffered messages from ${alias} failed: ${messageOf15(error)}`);
     }
   }
   async function flushPending() {
@@ -58348,7 +58643,7 @@ function createImRouter(deps) {
         const deliverable = await consumeEntry(peerKey, alias, entry, settings, binding);
         if (deliverable !== void 0) deliverables.push(deliverable);
       } catch (error) {
-        deps.log?.note("error", `processing a buffered message from ${alias} failed: ${messageOf14(error)}`);
+        deps.log?.note("error", `processing a buffered message from ${alias} failed: ${messageOf15(error)}`);
       }
     }
     if (binding === void 0 || deliverables.length === 0) return;
@@ -58389,7 +58684,7 @@ function createImRouter(deps) {
       } catch (error) {
         deps.log?.note(
           "warn",
-          `media for a ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias} failed to load; delivering it without local copies: ${messageOf14(error)}`
+          `media for a ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias} failed to load; delivering it without local copies: ${messageOf15(error)}`
         );
       }
     }
@@ -58418,8 +58713,8 @@ function createImRouter(deps) {
       });
     } catch (error) {
       const code = error?.code;
-      deps.log?.note("error", `could not insert a message from ${alias} into session ${sessionId}: ${messageOf14(error)}`);
-      deps.logger?.warn?.(`dsh-soulmojito im: inserting into ${sessionId} failed: ${messageOf14(error)}`);
+      deps.log?.note("error", `could not insert a message from ${alias} into session ${sessionId}: ${messageOf15(error)}`);
+      deps.logger?.warn?.(`dsh-soulmojito im: inserting into ${sessionId} failed: ${messageOf15(error)}`);
       await sendNotice(imTargetOf(message), code === "IM_SESSION_NOT_LIVE" ? IM_SESSION_NOT_LIVE : IM_DELIVERY_FAILED, alias);
       return;
     }
@@ -58452,8 +58747,8 @@ function createImRouter(deps) {
       });
     } catch (error) {
       const code = error?.code;
-      deps.log?.note("error", `could not insert a merged message from ${alias} into session ${sessionId}: ${messageOf14(error)}`);
-      deps.logger?.warn?.(`dsh-soulmojito im: inserting into ${sessionId} failed: ${messageOf14(error)}`);
+      deps.log?.note("error", `could not insert a merged message from ${alias} into session ${sessionId}: ${messageOf15(error)}`);
+      deps.logger?.warn?.(`dsh-soulmojito im: inserting into ${sessionId} failed: ${messageOf15(error)}`);
       await sendNotice(imTargetOf(last.message), code === "IM_SESSION_NOT_LIVE" ? IM_SESSION_NOT_LIVE : IM_DELIVERY_FAILED, alias);
       return;
     }
@@ -58517,8 +58812,8 @@ function createImRouter(deps) {
         total: chunks.length
       })));
     } catch (error) {
-      deps.log?.note("error", `im_send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf14(error)}`);
-      throw new ImSendError("IM_SEND_FAILED", `IM send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf14(error)}`, { cause: error });
+      deps.log?.note("error", `im_send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf15(error)}`);
+      throw new ImSendError("IM_SEND_FAILED", `IM send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf15(error)}`, { cause: error });
     }
     deps.log?.note(
       "info",
@@ -58556,8 +58851,8 @@ function createImRouter(deps) {
     try {
       outcome = await deps.send(target, parts);
     } catch (error) {
-      deps.log?.note("error", `im_send media to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf14(error)}`);
-      throw new ImSendError("IM_SEND_FAILED", `IM media send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf14(error)}`, { cause: error });
+      deps.log?.note("error", `im_send media to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf15(error)}`);
+      throw new ImSendError("IM_SEND_FAILED", `IM media send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf15(error)}`, { cause: error });
     }
     deps.log?.note(
       "info",
@@ -58608,7 +58903,7 @@ function createImRouter(deps) {
       root = await realpath(await deps.workspaceRoot());
       target = await realpath(localPath);
     } catch (cause) {
-      throw new ImSendError("IM_SEND_INVALID", `media path '${localPath}' cannot be resolved: ${messageOf14(cause)}`);
+      throw new ImSendError("IM_SEND_INVALID", `media path '${localPath}' cannot be resolved: ${messageOf15(cause)}`);
     }
     const rel = relative3(root, target);
     if (rel === "" || rel.startsWith("..") || isAbsolute2(rel)) {
@@ -58632,7 +58927,7 @@ function createImRouter(deps) {
     try {
       await deps.send(target, [{ kind: "text", text, index: 0, total: 1 }]);
     } catch (error) {
-      deps.log?.note("error", `sending a notice to ${alias} failed: ${messageOf14(error)}`);
+      deps.log?.note("error", `sending a notice to ${alias} failed: ${messageOf15(error)}`);
     }
   }
   return {
@@ -58643,7 +58938,7 @@ function createImRouter(deps) {
     resolveMessageRef: (ref) => messageRefs.resolve(ref)
   };
 }
-function messageOf14(error) {
+function messageOf15(error) {
   return error instanceof Error ? error.message : String(error);
 }
 function isQueuedOutcome(outcome) {
@@ -58651,6 +58946,17 @@ function isQueuedOutcome(outcome) {
 }
 function channelOf(value) {
   return value === "qq" || value === "weixin" || value === "onebot" ? value : void 0;
+}
+
+// packages/plugin/src/im/send-status.ts
+function sendStatusesOf(channels) {
+  const rows = [];
+  for (const channel of channels) {
+    const status2 = channel.sendStatus?.();
+    if (status2 === void 0) continue;
+    rows.push({ channel: channel.channel, accountId: channel.accountId, ...status2 });
+  }
+  return rows;
 }
 
 // packages/plugin/src/im/account-id.ts
@@ -58887,7 +59193,7 @@ function createImRuntime(ctx, options) {
       imLog.note("info", `im bind: switched ${sessionId} to ${AGENT_TAVERN_IM_PRESET_ID}`);
       return { applied: true };
     } catch (error) {
-      return { applied: false, reason: messageOf15(error) };
+      return { applied: false, reason: messageOf16(error) };
     }
   }
   async function applyImPreset(sessionId) {
@@ -58916,7 +59222,7 @@ function createImRuntime(ctx, options) {
       const sessionId = agent.session?.id ?? agent.id;
       if (typeof sessionId !== "string" || !bound.has(sessionId)) continue;
       await applyPresetToAgent(agent).then((result) => notePresetResult(sessionId, result)).catch((error) => {
-        logger?.warn?.(`dsh-soulmojito im: switching ${sessionId} to AgentTavernIM failed: ${messageOf15(error)}`);
+        logger?.warn?.(`dsh-soulmojito im: switching ${sessionId} to AgentTavernIM failed: ${messageOf16(error)}`);
       });
     }
   }
@@ -58945,7 +59251,9 @@ function createImRuntime(ctx, options) {
       return channel.send(target, parts);
     },
     log: imLog,
-    logger
+    logger,
+    sendStatuses: () => sendStatusesOf(channels.values()),
+    applyImPreset
   });
   function openOneBot(account, secret) {
     return new OneBotChannel({
@@ -59094,7 +59402,7 @@ function createImRuntime(ctx, options) {
       try {
         secret = await store5.readSecret("weixin", account.accountId);
       } catch (error) {
-        logger?.warn?.(`dsh-soulmojito im weixin bind: skipped ${account.accountId} local token: ${messageOf15(error)}`);
+        logger?.warn?.(`dsh-soulmojito im weixin bind: skipped ${account.accountId} local token: ${messageOf16(error)}`);
         continue;
       }
       const token = secret?.["botToken"]?.trim() ?? "";
@@ -59218,7 +59526,7 @@ function createImRuntime(ctx, options) {
       else await store5.putAccount(account, previous);
     } catch (rollbackError) {
       throw new Error(
-        `${account.channel} account '${account.accountId}' failed to install and its credential rollback also failed: ${messageOf15(rollbackError)}`,
+        `${account.channel} account '${account.accountId}' failed to install and its credential rollback also failed: ${messageOf16(rollbackError)}`,
         { cause: error }
       );
     }
@@ -59236,15 +59544,16 @@ function createImRuntime(ctx, options) {
       const stillUsed = (await store5.accounts()).some((entry) => entry.accountId === accountId);
       if (!stillUsed) {
         await store5.deleteCursor(accountId).catch((error) => {
-          logger?.warn?.(`dsh-soulmojito im: deleting the cursor for ${channelId}/${accountId} failed: ${messageOf15(error)}`);
+          logger?.warn?.(`dsh-soulmojito im: deleting the cursor for ${channelId}/${accountId} failed: ${messageOf16(error)}`);
         });
       }
       await mediaStore.remove(channelId, accountId).catch((error) => {
-        logger?.warn?.(`dsh-soulmojito im: deleting the media of ${channelId}/${accountId} failed: ${messageOf15(error)}`);
+        logger?.warn?.(`dsh-soulmojito im: deleting the media of ${channelId}/${accountId} failed: ${messageOf16(error)}`);
       });
       await db.updateState((current) => {
         const peers = { ...current.imPeers ?? {} };
         const pending = { ...current.imPendingPeers ?? {} };
+        const accountOwners = { ...current.imAccountOwners ?? {} };
         for (const key2 of Object.keys(peers)) {
           const parts = imPeerKeyParts(key2);
           if (parts?.channel === channelId && parts.accountId === accountId) delete peers[key2];
@@ -59253,13 +59562,14 @@ function createImRuntime(ctx, options) {
           const parts = imPeerKeyParts(key2);
           if (parts?.channel === channelId && parts.accountId === accountId) delete pending[key2];
         }
-        return { imPeers: peers, imPendingPeers: pending };
+        delete accountOwners[imAccountKey(channelId, accountId)];
+        return { imPeers: peers, imPendingPeers: pending, imAccountOwners: accountOwners };
       }).catch((error) => {
-        logger?.warn?.(`dsh-soulmojito im: deleting the bindings of ${channelId}/${accountId} failed: ${messageOf15(error)}`);
+        logger?.warn?.(`dsh-soulmojito im: deleting the bindings of ${channelId}/${accountId} failed: ${messageOf16(error)}`);
       });
       if (channelId === "weixin") {
         await openWeixinContextTokens(tavernDataRoot("im"), accountId).clear().catch((error) => {
-          logger?.warn?.(`dsh-soulmojito im: deleting the weixin context tokens for ${accountId} failed: ${messageOf15(error)}`);
+          logger?.warn?.(`dsh-soulmojito im: deleting the weixin context tokens for ${accountId} failed: ${messageOf16(error)}`);
         });
       }
       return removed || live !== void 0;
@@ -59296,12 +59606,12 @@ function createImRuntime(ctx, options) {
         }
         await upsertAccount(account, secret);
       } catch (error) {
-        logger?.warn?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} failed to start: ${messageOf15(error)}`);
+        logger?.warn?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} failed to start: ${messageOf16(error)}`);
       }
     }
   }
   void restoreAccounts().catch((error) => {
-    logger?.warn?.(`dsh-soulmojito im: restoring stored accounts failed: ${messageOf15(error)}`);
+    logger?.warn?.(`dsh-soulmojito im: restoring stored accounts failed: ${messageOf16(error)}`);
   });
   return {
     router,
@@ -59318,15 +59628,7 @@ function createImRuntime(ctx, options) {
     })),
     // 出站节奏投影（决策 2026-10-31-weixin-send-queue）：只有实现了队列的通道
     // （当前是微信）有 sendStatus；QQ/OneBot 没有排队语义，投影里不出现。
-    sendStatuses: () => {
-      const rows = [];
-      for (const channel of channels.values()) {
-        const status2 = channel.sendStatus?.();
-        if (status2 === void 0) continue;
-        rows.push({ channel: channel.channel, accountId: channel.accountId, ...status2 });
-      }
-      return rows;
-    },
+    sendStatuses: () => sendStatusesOf(channels.values()),
     // 设置页改动间隔：运行中的微信通道即时换挡，未接上的账号下次 upsert 读新值。
     applySettings: (settings) => {
       const interval = weixinSendIntervalOf(settings);
@@ -59346,12 +59648,12 @@ function createImRuntime(ctx, options) {
       weixinBinding.cancel();
       activeQrBind = void 0;
       await router.flushPending().catch((error) => {
-        logger?.warn?.(`dsh-soulmojito im: flushing buffered inbound messages failed: ${messageOf15(error)}`);
+        logger?.warn?.(`dsh-soulmojito im: flushing buffered inbound messages failed: ${messageOf16(error)}`);
       });
       lifetime.abort();
       for (const channel of channels.values()) {
         await channel.stop().catch((error) => {
-          logger?.warn?.(`dsh-soulmojito im: stopping ${channel.channel}/${channel.accountId} failed: ${messageOf15(error)}`);
+          logger?.warn?.(`dsh-soulmojito im: stopping ${channel.channel}/${channel.accountId} failed: ${messageOf16(error)}`);
         });
       }
       channels.clear();
@@ -59378,7 +59680,7 @@ function isRunningBindPhase(phase) {
 }
 function noop() {
 }
-function messageOf15(error) {
+function messageOf16(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -59708,7 +60010,7 @@ function replyToOf(args) {
 // packages/plugin/src/im/agent-mount.ts
 var disposersByAgent = /* @__PURE__ */ new Map();
 var warnedAgents = /* @__PURE__ */ new Set();
-function messageOf16(error) {
+function messageOf17(error) {
   return error instanceof Error ? error.message : String(error);
 }
 function agentIdOf2(agent) {
@@ -59739,7 +60041,7 @@ function mountImToolsOnAgent(deps, agent) {
       const disposer = register.call(tools, tool4);
       if (typeof disposer === "function") disposers.push(disposer);
     } catch (error) {
-      deps.logger?.warn?.(`dsh-soulmojito im: registering ${tool4.name} on agent ${agentId} failed: ${messageOf16(error)}`);
+      deps.logger?.warn?.(`dsh-soulmojito im: registering ${tool4.name} on agent ${agentId} failed: ${messageOf17(error)}`);
       for (const dispose of disposers) dispose();
       return false;
     }

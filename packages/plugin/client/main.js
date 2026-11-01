@@ -3495,6 +3495,17 @@ window.__ModuleLoader__.load({
       'im.owner.setSelf': 'Set the peer as owner',
       'im.owner.selfName': 'the peer',
       'im.owner.saved': 'Owner saved.',
+      // Account-wide owner and slash commands (decision 2026-11-01-im-global-owner-and-commands).
+      'im.owner.globalTitle': 'Account-wide owner',
+      'im.owner.globalHint': 'Designate one owner per QQ / OneBot account; it applies to every conversation of that account. A conversation owner is still an override. WeChat never uses owners.',
+      'im.owner.globalNone': 'not set',
+      'im.owner.globalPick': 'Pick the account-wide owner…',
+      'im.owner.globalClear': 'Clear account-wide owner',
+      'im.owner.globalSaved': 'Account-wide owner saved.',
+      'im.owner.globalEmpty': 'No QQ / OneBot account yet; bind one in the channel cards above.',
+      'im.commands.title': 'Slash commands',
+      'im.commands.hint': 'Only the account-wide owner can use these; the plugin runs them directly and the command text never reaches the session.',
+      'im.commands.list': '/status status · /bind <sessionId> bind a session · /unbind remove the binding · /help help',
       'im.scope.private': 'Private',
       'im.scope.group': 'Group',
       'im.settings.title': 'Access',
@@ -4552,6 +4563,17 @@ window.__ModuleLoader__.load({
       'im.owner.setSelf': '设为对端为主人',
       'im.owner.selfName': '对端',
       'im.owner.saved': '主人设置已保存。',
+      // 账号级（全局）主人与斜杠指令（决策 2026-11-01-im-global-owner-and-commands）。
+      'im.owner.globalTitle': '全局主人',
+      'im.owner.globalHint': '按 QQ / OneBot 账号指定一位主人，对该账号下所有对话生效；单个对话的主人仍是覆盖项。微信不使用主人。',
+      'im.owner.globalNone': '未设置',
+      'im.owner.globalPick': '选择全局主人…',
+      'im.owner.globalClear': '清除全局主人',
+      'im.owner.globalSaved': '全局主人已保存。',
+      'im.owner.globalEmpty': '还没有 QQ / OneBot 账号；先在上面的通道卡片里绑定。',
+      'im.commands.title': '指令',
+      'im.commands.hint': '只有全局主人可以使用这些指令；插件直接执行，指令文本不会进入会话。',
+      'im.commands.list': '/status 查看状态 · /bind <sessionId> 绑定会话 · /unbind 解除绑定 · /help 帮助',
       'im.scope.private': '私聊',
       'im.scope.group': '群聊',
       'im.settings.title': '访问控制',
@@ -16131,6 +16153,10 @@ window.__ModuleLoader__.load({
       // 按绑定过滤，值是 `snd-<hash>` + 昵称；面板从不接触原始 id。
       const owners = view?.owners ?? {}
       const senders = view?.senders ?? {}
+      // 账号级（全局）主人与账号发言人聚合（决策 2026-11-01-im-global-owner-and-commands）：
+      // 「行为」页的全局主人选择器只用这两块；微信账号不在投影里。
+      const accountOwners = view?.accountOwners ?? {}
+      const accountSenders = view?.accountSenders ?? {}
       const settings = view?.settings ?? null
       const qqRuntime = view?.qqRuntime ?? null
       const available = view?.available === true
@@ -16434,6 +16460,35 @@ window.__ModuleLoader__.load({
           .finally(() => releaseBusy(`owner:${peer.key}`))
       }
 
+      /**
+       * 账号级（全局）主人（决策 2026-11-01-im-global-owner-and-commands）：提交
+       * 服务端投影里的 `snd-<hash>` 或 null；微信账号在面板上不出现。账号键按
+       * 第一个 `:` 拆回 channel/accountId（accountId 禁止含 `:`，见 IM store）。
+       */
+      const setAccountOwner = (accountKey, value) => {
+        const at = String(accountKey).indexOf(':')
+        if (at <= 0) {
+          setError(`cannot parse the account key '${accountKey}'`)
+          return
+        }
+        const channel = String(accountKey).slice(0, at)
+        const accountId = String(accountKey).slice(at + 1)
+        setError('')
+        setNotice('')
+        setBusy(`globalOwner:${accountKey}`)
+        void api('im/owner/global', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ channel, accountId, senderId: value }),
+        })
+          .then(() => {
+            setNotice(t('im.owner.globalSaved'))
+            return reloadView()
+          })
+          .catch((cause) => setError(imErrorMessage(cause)))
+          .finally(() => releaseBusy(`globalOwner:${accountKey}`))
+      }
+
       const scanningChannel = bind !== null && bind.phase !== 'failed' ? bind.channel : ''
       const cards = IM_CHANNELS.map((channel) => h(ImChannelCard, {
         key: channel,
@@ -16475,7 +16530,17 @@ window.__ModuleLoader__.load({
             onAllowDraft: (scope, value) => setAllowDraft((current) => ({ ...current, [scope]: value })),
           }))
       } else if (activeTab === 'behavior') {
-        tabContent = h(ImBehaviorBand, { settings, statuses: view?.sendStatuses ?? [], busy, onSave: saveSettings, onError: setError })
+        tabContent = h(ImBehaviorBand, {
+          settings,
+          statuses: view?.sendStatuses ?? [],
+          accounts: channels,
+          accountOwners,
+          accountSenders,
+          busy,
+          onSave: saveSettings,
+          onError: setError,
+          onSetAccountOwner: setAccountOwner,
+        })
       } else if (activeTab === 'logs') {
         tabContent = h(ImLogBand, { disabled: !available, onError: setError })
       } else {
@@ -16847,7 +16912,7 @@ window.__ModuleLoader__.load({
       return date.toLocaleString()
     }
 
-    function ImBehaviorBand({ settings, statuses, busy, onSave, onError }) {
+    function ImBehaviorBand({ settings, statuses, accounts, accountOwners, accountSenders, busy, onSave, onError, onSetAccountOwner }) {
       const t = useTranslate()
       const [draft, setDraft] = useState(null)
       if (settings === null) {
@@ -16873,53 +16938,136 @@ window.__ModuleLoader__.load({
         }
         persist({ weixinSendIntervalMs: parsed })
       }
-      return h('section', { className: 'dt-settings-band dt-im-behavior', 'data-im-behavior': 'band' },
-        h('h3', null, t('im.behavior.title')),
-        h('p', { className: 'dt-hint' }, t('im.behavior.hint')),
-        h('div', { className: 'dt-im-behavior-form' },
-          h('label', { className: 'dt-field' },
-            h('span', { className: 'dt-label' }, t('im.behavior.interval')),
-            h('input', {
-              type: 'number',
-              min: IM_SEND_INTERVAL_MIN_MS,
-              max: IM_SEND_INTERVAL_MAX_MS,
-              step: 100,
-              value,
-              'aria-label': t('im.behavior.interval'),
+      return h(React.Fragment, null,
+        h('section', { className: 'dt-settings-band dt-im-behavior', 'data-im-behavior': 'band' },
+          h('h3', null, t('im.behavior.title')),
+          h('p', { className: 'dt-hint' }, t('im.behavior.hint')),
+          h('div', { className: 'dt-im-behavior-form' },
+            h('label', { className: 'dt-field' },
+              h('span', { className: 'dt-label' }, t('im.behavior.interval')),
+              h('input', {
+                type: 'number',
+                min: IM_SEND_INTERVAL_MIN_MS,
+                max: IM_SEND_INTERVAL_MAX_MS,
+                step: 100,
+                value,
+                'aria-label': t('im.behavior.interval'),
+                disabled: busy === 'settings',
+                onChange: (event) => setDraft(event.target.value),
+              }),
+              h('span', { className: 'dt-hint' }, t('im.behavior.intervalHint', { min: IM_SEND_INTERVAL_MIN_MS, max: IM_SEND_INTERVAL_MAX_MS }))),
+            h(Button, {
+              size: 'sm',
+              variant: 'primary',
               disabled: busy === 'settings',
-              onChange: (event) => setDraft(event.target.value),
-            }),
-            h('span', { className: 'dt-hint' }, t('im.behavior.intervalHint', { min: IM_SEND_INTERVAL_MIN_MS, max: IM_SEND_INTERVAL_MAX_MS }))),
-          h(Button, {
-            size: 'sm',
-            variant: 'primary',
-            disabled: busy === 'settings',
-            onClick: save,
-          }, t('im.behavior.save')),
-          h(Button, {
-            size: 'sm',
-            variant: 'ghost',
-            disabled: busy === 'settings' || interval === null,
-            onClick: () => persist({ weixinSendIntervalMs: null }),
-          }, t('im.behavior.reset'))),
-        h('h4', null, t('im.behavior.statusTitle')),
-        statuses.length === 0
-          ? h('p', { className: 'dt-muted' }, t('im.behavior.statusEmpty'))
-          : h('div', { className: 'dt-im-behavior-status' }, statuses.map((row) => h('div', {
-            key: `${row.channel}:${row.accountId}`,
-            className: 'dt-im-behavior-row',
-            'data-im-send-status': `${row.channel}:${row.accountId}`,
-          },
-          h('div', { className: 'dt-im-behavior-row-head' },
-            h('strong', null, row.accountId),
-            h('span', { className: 'dt-im-monospace' }, String(row.channel)),
-            h(Pill, { active: row.allowedNow === true }, row.allowedNow === true ? t('im.behavior.allowedNow') : t('im.behavior.waiting'))),
-          h('p', { className: 'dt-hint' },
-            [
-              row.nextSendAt === undefined ? null : t('im.behavior.nextSendAt', { at: imStatusTime(row.nextSendAt) }),
-              row.throttleUntil === undefined ? null : t('im.behavior.throttleUntil', { at: imStatusTime(row.throttleUntil) }),
-              t('im.behavior.queueDepth', { count: row.queueDepth ?? 0 }),
-            ].filter((piece) => piece !== null).join(' · '))))))
+              onClick: save,
+            }, t('im.behavior.save')),
+            h(Button, {
+              size: 'sm',
+              variant: 'ghost',
+              disabled: busy === 'settings' || interval === null,
+              onClick: () => persist({ weixinSendIntervalMs: null }),
+            }, t('im.behavior.reset'))),
+          h('h4', null, t('im.behavior.statusTitle')),
+          statuses.length === 0
+            ? h('p', { className: 'dt-muted' }, t('im.behavior.statusEmpty'))
+            : h('div', { className: 'dt-im-behavior-status' }, statuses.map((row) => h('div', {
+              key: `${row.channel}:${row.accountId}`,
+              className: 'dt-im-behavior-row',
+              'data-im-send-status': `${row.channel}:${row.accountId}`,
+            },
+            h('div', { className: 'dt-im-behavior-row-head' },
+              h('strong', null, row.accountId),
+              h('span', { className: 'dt-im-monospace' }, String(row.channel)),
+              h(Pill, { active: row.allowedNow === true }, row.allowedNow === true ? t('im.behavior.allowedNow') : t('im.behavior.waiting'))),
+            h('p', { className: 'dt-hint' },
+              [
+                row.nextSendAt === undefined ? null : t('im.behavior.nextSendAt', { at: imStatusTime(row.nextSendAt) }),
+                row.throttleUntil === undefined ? null : t('im.behavior.throttleUntil', { at: imStatusTime(row.throttleUntil) }),
+                t('im.behavior.queueDepth', { count: row.queueDepth ?? 0 }),
+              ].filter((piece) => piece !== null).join(' · ')))))),
+        h(ImAccountOwnerBand, {
+          accounts: accounts ?? [],
+          accountOwners: accountOwners ?? {},
+          accountSenders: accountSenders ?? {},
+          busy,
+          onSetOwner: onSetAccountOwner,
+        }))
+    }
+
+    /** 账号级主人键：与服务端 `imAccountKey` 同口径（`${channel}:${accountId}`）。 */
+    function imAccountKeyOf(channel, accountId) {
+      return `${channel}:${accountId}`
+    }
+
+    /** 全局主人展示名：昵称优先，空名回退哈希（与 per-peer 主人同口径）。 */
+    function imAccountOwnerNameOf(owner, t) {
+      if (owner === null || owner === undefined) return t('im.owner.globalNone')
+      const name = typeof owner?.name === 'string' ? owner.name.trim() : ''
+      return name !== '' ? name : String(owner?.id ?? '')
+    }
+
+    /** 账号选择器选项：该账号下所有 peer 的发言人聚合（已哈希、按时间倒序）。 */
+    function imAccountOwnerOptionsOf(senders) {
+      const options = []
+      const seen = new Set()
+      for (const entry of senders ?? []) {
+        const id = typeof entry?.id === 'string' ? entry.id : ''
+        if (id === '' || seen.has(id)) continue
+        seen.add(id)
+        const name = typeof entry?.name === 'string' ? entry.name.trim() : ''
+        options.push({ id, label: name !== '' ? name : id })
+      }
+      return options
+    }
+
+    /**
+     * 「行为」页的全局主人区（决策 2026-11-01-im-global-owner-and-commands）：
+     * 每个 QQ / OneBot 账号一块——当前全局主人 + 从账号发言人里选 + 清除；微信
+     * 账号整块不渲染（渠道不使用主人）。下方是四个斜杠指令的只读帮助。
+     */
+    function ImAccountOwnerBand({ accounts, accountOwners, accountSenders, busy, onSetOwner }) {
+      const t = useTranslate()
+      const rows = (accounts ?? []).filter((account) => account.channel !== 'weixin')
+      return h('section', { className: 'dt-settings-band dt-im-global-owner', 'data-im-global-owner': 'band' },
+        h('h3', null, t('im.owner.globalTitle')),
+        h('p', { className: 'dt-hint' }, t('im.owner.globalHint')),
+        rows.length === 0
+          ? h('p', { className: 'dt-muted' }, t('im.owner.globalEmpty'))
+          : h('div', { className: 'dt-im-behavior-status' }, rows.map((account) => {
+            const key = imAccountKeyOf(account.channel, account.accountId)
+            const owner = accountOwners?.[key] ?? null
+            const disabled = busy === `globalOwner:${key}`
+            const options = imAccountOwnerOptionsOf(accountSenders?.[key])
+            return h('div', { key, className: 'dt-im-behavior-row', 'data-im-global-owner': key },
+              h('div', { className: 'dt-im-behavior-row-head' },
+                h('strong', null, account.label || account.accountId),
+                h('span', { className: 'dt-im-monospace' }, String(account.channel)),
+                h(Pill, { active: owner !== null }, imAccountOwnerNameOf(owner, t))),
+              options.length === 0 && owner === null
+                ? null
+                : h('div', { className: 'dt-im-peer-actions dt-im-owner' },
+                  options.length === 0
+                    ? null
+                    : h('select', {
+                      value: '',
+                      disabled,
+                      'aria-label': t('im.owner.globalPick'),
+                      onChange: (event) => {
+                        const value = String(event.target.value ?? '')
+                        if (value === '') return
+                        onSetOwner(key, value)
+                      },
+                    },
+                      h('option', { value: '' }, t('im.owner.globalPick')),
+                      options.map((option) => h('option', { key: option.id, value: option.id }, option.label))),
+                  owner !== null
+                    ? h(Button, { size: 'sm', variant: 'ghost', disabled, onClick: () => onSetOwner(key, null) }, t('im.owner.globalClear'))
+                    : null))
+          })),
+        h('h4', null, t('im.commands.title')),
+        h('p', { className: 'dt-hint' }, t('im.commands.hint')),
+        h('p', { className: 'dt-hint dt-im-monospace' }, t('im.commands.list')))
     }
 
     // 扫码面板（决策 2026-10-31-im-native-session-binding / 提案 0024 §6.3）：
@@ -17093,6 +17241,9 @@ window.__ModuleLoader__.load({
     function ImPeerRow({ peer, shared, owner, senders, currentSession, sessionLabel, disabled, ownerDisabled, onRebind, onUnbind, onSetOwner }) {
       const t = useTranslate()
       const same = currentSession !== '' && peer.sessionId === currentSession
+      // 微信是私聊专用通道，不参与主人指定（决策 2026-11-01-im-global-owner-and-commands）：
+      // 整个主人区块不渲染，避免用户对着一个必定被服务端拒绝的控件。
+      const ownerVisible = imPeerParts(peer.key)?.channel !== 'weixin'
       return h('div', { className: 'dt-im-peer', 'data-im-peer': peer.key },
         h('div', { className: 'dt-im-peer-main' },
           h('div', { className: 'dt-im-peer-head' },
@@ -17103,14 +17254,18 @@ window.__ModuleLoader__.load({
             t('im.peers.session', { session: sessionLabel(peer.sessionId) }),
             shared ? ` · ${t('im.peers.sharedHint')}` : ''),
           peer.live === false ? h('p', { className: 'dt-hint dt-im-peer-closed' }, t('im.peers.closed')) : null,
-          h('p', { className: 'dt-hint dt-im-owner-line' }, t('im.owner.label', { name: imOwnerNameOf(peer, owner ?? null, t) })),
-          h(ImOwnerControls, {
-            peer,
-            owner: owner ?? null,
-            senders: senders ?? [],
-            disabled: ownerDisabled === true,
-            onSetOwner,
-          }),
+          ownerVisible
+            ? h('p', { className: 'dt-hint dt-im-owner-line' }, t('im.owner.label', { name: imOwnerNameOf(peer, owner ?? null, t) }))
+            : null,
+          ownerVisible
+            ? h(ImOwnerControls, {
+              peer,
+              owner: owner ?? null,
+              senders: senders ?? [],
+              disabled: ownerDisabled === true,
+              onSetOwner,
+            })
+            : null,
           h('p', { className: 'dt-hint' }, t('im.peers.boundAt', { at: new Date(peer.createdAt).toLocaleString() }))),
         h('div', { className: 'dt-im-peer-actions' },
           h(Button, {

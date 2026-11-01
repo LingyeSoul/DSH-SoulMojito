@@ -175,7 +175,7 @@ function normalizeImPeers(value) {
     const sessionId = record["sessionId"];
     if (typeof sessionId !== "string" || sessionId.trim() === "") continue;
     const scope = record["scope"] === "group" ? "group" : "private";
-    const boundBy = record["boundBy"] === "manual" ? "manual" : "auto";
+    const boundBy = record["boundBy"] === "manual" ? "manual" : record["boundBy"] === "command" ? "command" : "auto";
     const createdAt = typeof record["createdAt"] === "string" ? record["createdAt"] : (/* @__PURE__ */ new Date(0)).toISOString();
     result[key] = { sessionId, scope, boundBy, createdAt };
   }
@@ -229,19 +229,37 @@ function normalizeImOwners(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
   const result = {};
   for (const [key, entry] of Object.entries(value)) {
-    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
-    const record = entry;
-    const id = record["id"];
-    if (typeof id !== "string" || !isImSenderHash(id.trim())) continue;
-    const name2 = record["name"];
-    const setAt = record["setAt"];
-    result[key] = {
-      id: id.trim(),
-      name: typeof name2 === "string" ? name2.trim() : "",
-      setAt: typeof setAt === "string" && setAt.trim() !== "" ? setAt : (/* @__PURE__ */ new Date(0)).toISOString()
-    };
+    const owner = normalizeImOwnerEntry(entry);
+    if (owner !== void 0) result[key] = owner;
   }
   return result;
+}
+function normalizeImAccountOwners(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const result = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (!isImAccountKey(key)) continue;
+    const owner = normalizeImOwnerEntry(entry);
+    if (owner !== void 0) result[key] = owner;
+  }
+  return result;
+}
+function normalizeImOwnerEntry(entry) {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return void 0;
+  const record = entry;
+  const id = record["id"];
+  if (typeof id !== "string" || !isImSenderHash(id.trim())) return void 0;
+  const name2 = record["name"];
+  const setAt = record["setAt"];
+  return {
+    id: id.trim(),
+    name: typeof name2 === "string" ? name2.trim() : "",
+    setAt: typeof setAt === "string" && setAt.trim() !== "" ? setAt : (/* @__PURE__ */ new Date(0)).toISOString()
+  };
+}
+function isImAccountKey(key) {
+  const parts = key.split(":");
+  return parts.length === 2 && (parts[0] ?? "") !== "" && (parts[1] ?? "") !== "";
 }
 
 // packages/tavern-store/src/mutation-tail.ts
@@ -2182,7 +2200,8 @@ var DEFAULT_STATE = {
   imPeers: {},
   imPendingPeers: {},
   imSenders: {},
-  imOwners: {}
+  imOwners: {},
+  imAccountOwners: {}
 };
 function normalizeCharacterVariables(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
@@ -3261,7 +3280,8 @@ var TavernStore = class _TavernStore {
       imPeers: normalizeImPeers(parsed.imPeers),
       imPendingPeers: normalizeImPendingPeers(parsed.imPendingPeers),
       imSenders: normalizeImSenders(parsed.imSenders),
-      imOwners: normalizeImOwners(parsed.imOwners)
+      imOwners: normalizeImOwners(parsed.imOwners),
+      imAccountOwners: normalizeImAccountOwners(parsed.imAccountOwners)
     };
   }
   async assertChatRevision(file, expectedRevision) {

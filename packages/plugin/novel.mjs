@@ -1826,7 +1826,7 @@ function normalizeImPeers(value) {
     const sessionId = record["sessionId"];
     if (typeof sessionId !== "string" || sessionId.trim() === "") continue;
     const scope = record["scope"] === "group" ? "group" : "private";
-    const boundBy = record["boundBy"] === "manual" ? "manual" : "auto";
+    const boundBy = record["boundBy"] === "manual" ? "manual" : record["boundBy"] === "command" ? "command" : "auto";
     const createdAt = typeof record["createdAt"] === "string" ? record["createdAt"] : (/* @__PURE__ */ new Date(0)).toISOString();
     result[key] = { sessionId, scope, boundBy, createdAt };
   }
@@ -1880,19 +1880,37 @@ function normalizeImOwners(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
   const result = {};
   for (const [key, entry] of Object.entries(value)) {
-    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
-    const record = entry;
-    const id = record["id"];
-    if (typeof id !== "string" || !isImSenderHash(id.trim())) continue;
-    const name2 = record["name"];
-    const setAt = record["setAt"];
-    result[key] = {
-      id: id.trim(),
-      name: typeof name2 === "string" ? name2.trim() : "",
-      setAt: typeof setAt === "string" && setAt.trim() !== "" ? setAt : (/* @__PURE__ */ new Date(0)).toISOString()
-    };
+    const owner = normalizeImOwnerEntry(entry);
+    if (owner !== void 0) result[key] = owner;
   }
   return result;
+}
+function normalizeImAccountOwners(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const result = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (!isImAccountKey(key)) continue;
+    const owner = normalizeImOwnerEntry(entry);
+    if (owner !== void 0) result[key] = owner;
+  }
+  return result;
+}
+function normalizeImOwnerEntry(entry) {
+  if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return void 0;
+  const record = entry;
+  const id = record["id"];
+  if (typeof id !== "string" || !isImSenderHash(id.trim())) return void 0;
+  const name2 = record["name"];
+  const setAt = record["setAt"];
+  return {
+    id: id.trim(),
+    name: typeof name2 === "string" ? name2.trim() : "",
+    setAt: typeof setAt === "string" && setAt.trim() !== "" ? setAt : (/* @__PURE__ */ new Date(0)).toISOString()
+  };
+}
+function isImAccountKey(key) {
+  const parts = key.split(":");
+  return parts.length === 2 && (parts[0] ?? "") !== "" && (parts[1] ?? "") !== "";
 }
 var IM_SENDER_HASH_PREFIX, IM_SENDER_HASH_HEX_LENGTH, IM_MAX_TIMESTAMP_MS, IM_SENDER_HASH_PATTERN, WEIXIN_SEND_INTERVAL_MIN_MS, WEIXIN_SEND_INTERVAL_MAX_MS, IM_SENDERS_MAX_PER_PEER, IM_SENDER_REFRESH_WINDOW_MS, DEFAULT_IM_SETTINGS;
 var init_im_state = __esm({
@@ -3509,7 +3527,8 @@ var init_store = __esm({
       imPeers: {},
       imPendingPeers: {},
       imSenders: {},
-      imOwners: {}
+      imOwners: {},
+      imAccountOwners: {}
     };
     MEMORY_EMBED_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,255}$/;
     TavernStore = class _TavernStore {
@@ -4510,7 +4529,8 @@ var init_store = __esm({
           imPeers: normalizeImPeers(parsed.imPeers),
           imPendingPeers: normalizeImPendingPeers(parsed.imPendingPeers),
           imSenders: normalizeImSenders(parsed.imSenders),
-          imOwners: normalizeImOwners(parsed.imOwners)
+          imOwners: normalizeImOwners(parsed.imOwners),
+          imAccountOwners: normalizeImAccountOwners(parsed.imAccountOwners)
         };
       }
       async assertChatRevision(file, expectedRevision) {
@@ -9377,7 +9397,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("bf2890c") : void 0;
+  const commit = true ? normalizeCommit("110b95c") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
