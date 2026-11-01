@@ -1,10 +1,10 @@
-import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { AgentTavernProjector, historyImportAppends, isTavernSessionMarker, lastImportedTurn, type NativeSession, type NativeSessionEvent } from '../src/agent-tavern/projector.js'
+import { CHECKPOINT_WRITE_LAG, checkpointPathOf } from '../src/agent-tavern/checkpoint-batch.js'
 import { imMessageRef } from '../src/im/refs.js'
 import { imPeerAlias, imPeerKeyParts } from '../src/im/types.js'
 import { ChatRevisionConflictError, TavernStore } from '../../tavern-store/src/index.js'
@@ -18,10 +18,9 @@ afterEach(() => {
 
 /** Hand-write a checkpoint file in the projector's on-disk location. */
 function writeCheckpointFile(root: string, sessionId: string, checkpoint: Record<string, unknown>): void {
-  const dir = join(root, 'projections')
-  mkdirSync(dir, { recursive: true })
-  const name = createHash('sha256').update(sessionId).digest('hex')
-  writeFileSync(join(dir, `${name}.json`), `${JSON.stringify(checkpoint)}\n`, 'utf8')
+  const path = checkpointPathOf(join(root, 'projections'), sessionId)
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, `${JSON.stringify(checkpoint)}\n`, 'utf8')
 }
 
 const cardData = (extensions: Record<string, unknown> = {}) => ({
@@ -491,6 +490,267 @@ describe('AgentTavern native event projector', () => {
       ['Live reply.', 6],
     ])
     expect(await projector.status(sessionId)).toMatchObject({ status: 'ok', lastCursor: 6 })
+  })
+
+  /** A turn boundary followed by `count` user/message floors (seqs 1..count). */
+  function messageBurst(id: string, count: number): NativeSession {
+    return {
+      id,
+      events: [
+        { type: 'turn/start', seq: 0, time: 1000, data: { turn: 1 } },
+        ...Array.from({ length: count }, (_, index): NativeSessionEvent => ({
+          type: 'user/message', seq: index + 1, time: 1100 + index,
+          data: { id: `burst-user-${index + 1}`, role: 'user', content: [{ type: 'text', text: `Burst ${index + 1}.` }], source: { kind: 'user' } },
+        })),
+      ],
+    }
+  }
+
+  /** The projector's on-disk checkpoint for a session, read without going through `status()`. */
+  function readCheckpointFile(root: string, sessionId: string): Record<string, unknown> | undefined {
+    const path = checkpointPathOf(join(root, 'projections'), sessionId)
+    try {
+      return JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      return undefined
+    }
+  }
+
+  /** Poll the on-disk checkpoint until its watermark reaches `lastCursor`. */
+  async function waitForCheckpoint(root: string, sessionId: string, lastCursor: number): Promise<Record<string, unknown>> {
+    const deadline = Date.now() + 2000
+    for (;;) {
+      const checkpoint = readCheckpointFile(root, sessionId)
+      if (checkpoint?.['lastCursor'] === lastCursor) return checkpoint
+      if (Date.now() > deadline) {
+        throw new Error(`checkpoint for '${sessionId}' never reached ${lastCursor}: ${JSON.stringify(checkpoint)}`)
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+  }
+
+  /** Poll until the durable write seam has been entered `target` times. */
+  async function waitForCheckpointWrites(writes: { writes: number }, target: number): Promise<void> {
+    const deadline = Date.now() + 2000
+    while (writes.writes < target) {
+      if (Date.now() > deadline) throw new Error(`checkpoint writes never reached ${target} (saw ${writes.writes})`)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+  }
+
+  /**
+   * Count durable checkpoint writes and fail the first `failures` of them.
+   *
+   * This patches the projector's private write seam because a write count has no
+   * observable side effect (the file only shows the last watermark). The
+   * coalescing contract itself is asserted at the module boundary in
+   * `checkpoint-batch.spec.ts`, against an injected write; here the patch only
+   * measures. Every assertion below the count is behavioural (file watermark,
+   * floors, the idle window closing on its own).
+   */
+  function countCheckpointWrites(projector: AgentTavernProjector, failures: number): { writes: number } {
+    const target = projector as unknown as { writeCheckpoint(checkpoint: { sessionId: string }): Promise<void> }
+    const original = target.writeCheckpoint.bind(target)
+    const counter = { writes: 0 }
+    target.writeCheckpoint = async (checkpoint: { sessionId: string }) => {
+      counter.writes += 1
+      if (counter.writes <= failures) throw new Error(`checkpoint write refused for session '${checkpoint.sessionId}'`)
+      await original(checkpoint)
+    }
+    return counter
+  }
+
+  it('coalesces a burst into a couple of checkpoint writes and persists its last event', async () => {
+    const { root, store, chatId, sessionId } = await fixture('coalesce-writes')
+    const burst = 10
+    const native = messageBurst(sessionId, burst)
+    const projector = await AgentTavernProjector.open(root, store)
+    const writes = countCheckpointWrites(projector, 0)
+    await projector.project(native, native.events[0]!)
+    const beforeBurst = writes.writes
+
+    // One burst: all ten events are on the tail before the first one runs.
+    await Promise.all(native.events.slice(1).map((event) => projector.project(native, event)))
+
+    // The batch bound plus the closing idle window: one write closes the batch
+    // at `CHECKPOINT_WRITE_LAG`, the window persists the tail after it.
+    const writeCeiling = Math.ceil(burst / CHECKPOINT_WRITE_LAG)
+    expect(writes.writes - beforeBurst).toBeLessThanOrEqual(writeCeiling)
+    expect(writes.writes - beforeBurst).toBeLessThan(native.events.length - 1)
+    const snapshot = await store.getChatSnapshot('Projector Character', chatId)
+    expect(snapshot!.chat.messages).toHaveLength(burst)
+
+    // The idle window closes on its own: no `status()` and no next event needed.
+    await waitForCheckpoint(root, sessionId, burst)
+    expect(writes.writes - beforeBurst).toBeLessThanOrEqual(writeCeiling)
+  })
+
+  it('answers status() with the durable watermark of an in-flight batch', async () => {
+    const { root, store, sessionId } = await fixture('status-flush')
+    const native = messageBurst(sessionId, 3)
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let saves = 0
+    const projector = await AgentTavernProjector.open(root, {
+      getState: () => store.getState(),
+      getCharacter: (name) => store.getCharacter(name),
+      getChatSnapshot: (character, id) => store.getChatSnapshot(character, id),
+      getChatJsrOverlay: (character, id) => store.getChatJsrOverlay(character, id),
+      saveChat: async (character, id, chat, revision) => {
+        saves += 1
+        if (saves === 2) await gate
+        return store.saveChat(character, id, chat, revision)
+      },
+    })
+    const pending = native.events.slice(1).map((event) => projector.project(native, event))
+    while (saves < 2) await new Promise((resolve) => setTimeout(resolve, 1))
+
+    // Only seq 1 is staged while the second floor append is parked, and the
+    // idle window cannot have closed yet, so the file still says seq 0.
+    const status = projector.status(sessionId)
+    release()
+
+    await Promise.all(pending)
+    await expect(status).resolves.toMatchObject({ status: 'ok', lastCursor: 3 })
+    expect(readCheckpointFile(root, sessionId)).toMatchObject({ status: 'ok', lastCursor: 3 })
+  })
+
+  it('replays the window lost by a crash and never duplicates a floor', async () => {
+    const { root, store, chatId, sessionId } = await fixture('crash-window')
+    const crashRoot = mkdtempSync(join(tmpdir(), 'agent-tavern-projector-crash-'))
+    roots.push(crashRoot)
+    const native = messageBurst(sessionId, 10)
+    let crashImage: Record<string, unknown> | undefined
+    let floorsAtCrash = -1
+    let snapshots = 0
+    const projector = await AgentTavernProjector.open(root, {
+      getState: () => store.getState(),
+      getCharacter: (name) => store.getCharacter(name),
+      getChatSnapshot: async (character, id) => {
+        snapshots += 1
+        // The 4th read is the fourth event of the burst: seqs 1-3 are projected
+        // but the file still carries the pre-burst watermark. Copy that file —
+        // it is what a process killed here would leave on disk.
+        if (snapshots === 4 && crashImage === undefined) {
+          floorsAtCrash = (await store.getChatSnapshot(character, id))!.chat.messages.length
+          crashImage = readCheckpointFile(root, sessionId)
+          if (crashImage === undefined) throw new Error('the pre-burst checkpoint was never written')
+          writeCheckpointFile(crashRoot, sessionId, crashImage)
+        }
+        return store.getChatSnapshot(character, id)
+      },
+      getChatJsrOverlay: (character, id) => store.getChatJsrOverlay(character, id),
+      saveChat: (character, id, chat, revision) => store.saveChat(character, id, chat, revision),
+    })
+    await projector.project(native, native.events[0]!)
+    // Make the pre-burst watermark durable, so the crash window is the burst.
+    expect(await projector.status(sessionId)).toMatchObject({ status: 'ok', lastCursor: 0 })
+    await Promise.all(native.events.slice(1).map((event) => projector.project(native, event)))
+
+    // Three floors were already written when the file still said seq 0: that is
+    // the whole loss window, below the 8-event batch bound.
+    expect(floorsAtCrash).toBe(3)
+    expect(crashImage).toMatchObject({ version: 2, status: 'ok', lastCursor: 0 })
+    await waitForCheckpoint(root, sessionId, 10)
+    const before = await store.getChatSnapshot('Projector Character', chatId)
+    expect(before!.chat.messages).toHaveLength(10)
+
+    const resumed = await AgentTavernProjector.open(crashRoot, store)
+    await resumed.replay(native)
+
+    const after = await store.getChatSnapshot('Projector Character', chatId)
+    expect(after!.chat.messages.map((message) => (message.extra!.agentTavern as any).eventSeq))
+      .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+    expect(await resumed.status(sessionId)).toMatchObject({ status: 'ok', lastCursor: 10 })
+    await resumed.replay(native)
+    expect((await store.getChatSnapshot('Projector Character', chatId))!.chat.messages).toHaveLength(10)
+  })
+
+  it('rejects the batch-closing project() when the coalesced write fails and keeps a pending checkpoint', async () => {
+    const { root, store, chatId, sessionId } = await fixture('flush-failure-pending')
+    const native = messageBurst(sessionId, 8)
+    const projector = await AgentTavernProjector.open(root, store)
+    countCheckpointWrites(projector, 1)
+
+    const results = await Promise.allSettled(native.events.slice(1).map((event) => projector.project(native, event)))
+
+    const rejected = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+    expect(rejected).toHaveLength(1)
+    expect((rejected[0]!.reason as Error).message).toContain("checkpoint write refused for session 'flush-failure-pending'")
+    expect(readCheckpointFile(root, sessionId)).toMatchObject({ status: 'pending', lastCursor: 7, pendingCursor: 8 })
+
+    // The pending hole replays exactly one event and the floor is deduped.
+    await projector.replay(native)
+    expect(await projector.status(sessionId)).toMatchObject({ status: 'ok', lastCursor: 8 })
+    const snapshot = await store.getChatSnapshot('Projector Character', chatId)
+    expect(snapshot!.chat.messages).toHaveLength(8)
+  })
+
+  it('reports a timer flush that keeps failing instead of answering with a watermark the file lacks', async () => {
+    const { root, store, sessionId } = await fixture('idle-flush-failure')
+    const native = messageBurst(sessionId, 2)
+    const projector = await AgentTavernProjector.open(root, store)
+    const writes = countCheckpointWrites(projector, 1000)
+
+    await Promise.all(native.events.slice(1).map((event) => projector.project(native, event)))
+    expect(writes.writes).toBe(0)
+    // The idle window fires a flush with no caller; it must not report success.
+    await expect(projector.status(sessionId)).rejects.toThrow('checkpoint write refused')
+    expect(writes.writes).toBeGreaterThan(0)
+    expect(readCheckpointFile(root, sessionId)).toBeUndefined()
+  })
+
+  it('retries a batch the timer flush could not write', async () => {
+    const { root, store, sessionId } = await fixture('idle-flush-retry')
+    const native = messageBurst(sessionId, 2)
+    const projector = await AgentTavernProjector.open(root, store)
+    const writes = countCheckpointWrites(projector, 1)
+
+    await Promise.all(native.events.slice(1).map((event) => projector.project(native, event)))
+    await waitForCheckpointWrites(writes, 1)
+    expect(readCheckpointFile(root, sessionId)).toBeUndefined()
+
+    // The first timer flush failed; the next reader retries the same batch.
+    await expect(projector.status(sessionId)).resolves.toMatchObject({ status: 'ok', lastCursor: 2 })
+    expect(readCheckpointFile(root, sessionId)).toMatchObject({ status: 'ok', lastCursor: 2 })
+  })
+
+  it('lets the bounded retry land a failed timer flush without surfacing it', async () => {
+    const { root, store, sessionId } = await fixture('idle-flush-retry-clears')
+    const native = messageBurst(sessionId, 2)
+    const projector = await AgentTavernProjector.open(root, store)
+    // The window flush is refused; the retry behind it is allowed through.
+    const writes = countCheckpointWrites(projector, 1)
+
+    await Promise.all(native.events.slice(1).map((event) => projector.project(native, event)))
+    // Nothing calls in: the retry alone must make the batch durable, which is
+    // what retires the retained failure instead of leaking it to `status()`.
+    await waitForCheckpoint(root, sessionId, 2)
+    expect(writes.writes).toBe(2)
+    await expect(projector.status(sessionId)).resolves.toMatchObject({ status: 'ok', lastCursor: 2 })
+  })
+
+  it('raises a twice-failed timer flush on the next projection and clears it once a write lands', async () => {
+    const { root, store, chatId, sessionId } = await fixture('idle-flush-double-failure')
+    const native = messageBurst(sessionId, 2)
+    const projector = await AgentTavernProjector.open(root, store)
+    // The window flush and its one bounded retry are both refused.
+    const writes = countCheckpointWrites(projector, 2)
+
+    await Promise.all(native.events.slice(1).map((event) => projector.project(native, event)))
+    await waitForCheckpointWrites(writes, 2)
+    expect(readCheckpointFile(root, sessionId)).toBeUndefined()
+
+    // The failure is retained, not swallowed: the session's next projection
+    // raises it even though the event itself is already projected.
+    await expect(projector.project(native, native.events[1]!)).rejects.toThrow('checkpoint write refused')
+
+    // A landed write retires it; the same projection resolves from then on.
+    await expect(projector.status(sessionId)).resolves.toMatchObject({ status: 'ok', lastCursor: 2 })
+    expect(readCheckpointFile(root, sessionId)).toMatchObject({ status: 'ok', lastCursor: 2 })
+    await expect(projector.project(native, native.events[2]!)).resolves.toBeUndefined()
+    expect((await store.getChatSnapshot('Projector Character', chatId))!.chat.messages).toHaveLength(2)
   })
 
   it('keeps every PROJECTED_EVENT_TYPES entry wired to a projectMessages branch', async () => {

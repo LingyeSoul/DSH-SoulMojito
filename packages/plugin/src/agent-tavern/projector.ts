@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { ChatRevisionConflictError, KeyedMutationTails, MutationTail, type TavernSessionBinding } from '../../../tavern-store/src/index.js'
@@ -6,6 +6,17 @@ import { RegexPlacement, type CharacterCardIR, type ChatLogIR, type ChatMessage,
 import { applyRegexScripts } from '../../../tavern-script/src/index.js'
 import { hostPluginMessageSource, hostSessionFormatVersion, sessionEvents, PLUGIN_NAME, type HostSessionEventData, type HostSessionLog } from '../../../bind/src/index.js'
 import { applyUpdateVariableToChat, ensureChatVariables, messageStatVariables, seedJsrMvuVariables } from './mvu-compat.js'
+import {
+  advanceCheckpoint,
+  checkpointPathOf,
+  createCheckpointBatch,
+  isProjectedCursor,
+  normalizeCheckpoint,
+  pendingCheckpoint,
+  validateCheckpoint,
+  type CheckpointBatch,
+  type ProjectionCheckpoint,
+} from './checkpoint-batch.js'
 import { isBodyLogEvent, isBodyMergedAssistant, projectBodyEvent, type BodyProjectionStore } from './body-projector.js'
 import { isTavernSessionMarker } from './body-session.js'
 import { collectSessionRegexScripts } from '../regex-session.js'
@@ -45,23 +56,12 @@ export interface NativeSession extends HostSessionLog {
 
 export interface ProjectorStore extends BodyProjectionStore {}
 
-export interface ProjectionCheckpoint {
-  /** On-disk format. v1 watermarks are untrusted and migrate to v2 on read. */
-  version: 1 | 2
-  sessionId: string
-  /** Contiguous watermark: every seq at or below it is projected (or absent). */
-  lastCursor: number
-  status: 'ok' | 'pending'
-  /**
-   * Lowest seq that failed and still needs replay. Present while a hole exists;
-   * v2 writers keep it strictly above `lastCursor`, so a v2 checkpoint cannot
-   * hide an unprojected seq below its watermark. v1 files never carry a
-   * trustworthy one (see {@link normalizeCheckpoint}) and are reset wholesale.
-   */
-  pendingCursor?: number
-  error?: string
-  updatedAt: string
-}
+/**
+ * The checkpoint file contract — its shape, file path, validation, migration
+ * and batched writes — lives in `checkpoint-batch.ts`; re-exported here so the
+ * projector keeps its public surface.
+ */
+export type { ProjectionCheckpoint } from './checkpoint-batch.js'
 
 /**
  * Event types whose projection can append a floor: the branches of
@@ -83,6 +83,8 @@ function canProjectEvent(eventType: string): boolean {
 export class AgentTavernProjector {
   private readonly tails = new KeyedMutationTails<string>(true)
   private readonly checkpoints = new Map<string, ProjectionCheckpoint>()
+  /** Coalesced checkpoint writes: see `checkpoint-batch.ts` for the schedule. */
+  private readonly batch: CheckpointBatch
   /**
    * 每个会话的待回执 `im_send` 调用：assistant 事件记录 callId → 参数/坐标，
    * `tool/result` 取用。只服务投影，不写回宿主事件；结果只读不删——楼层写入
@@ -95,7 +97,13 @@ export class AgentTavernProjector {
   private constructor(
     private readonly root: string,
     private readonly store: ProjectorStore,
-  ) {}
+  ) {
+    this.batch = createCheckpointBatch({
+      read: (sessionId) => this.checkpoints.get(sessionId),
+      write: (checkpoint) => this.writeCheckpoint(checkpoint),
+      enqueue: (sessionId, task) => this.tails.enqueue(sessionId, task),
+    })
+  }
 
   static async open(tavernRoot: string, store: ProjectorStore): Promise<AgentTavernProjector> {
     const root = join(tavernRoot, 'projections')
@@ -104,7 +112,15 @@ export class AgentTavernProjector {
   }
 
   project(session: NativeSession, event: NativeSessionEvent): Promise<void> {
-    return this.tails.enqueue(session.id, () => this.projectOne(session, event))
+    return this.tails.enqueue(session.id, async () => {
+      // A timer flush has no caller to reject, so its failure rides on this
+      // session's next operation. The projection below still runs — that is what
+      // gives the failed batch another chance to land — and only a failure no
+      // write managed to clear is raised to the caller.
+      const deferred = this.batch.deferredError(session.id)
+      await this.projectOne(session, event)
+      this.raiseDeferred(session.id, deferred)
+    })
   }
 
   async replay(session: NativeSession): Promise<void> {
@@ -118,15 +134,44 @@ export class AgentTavernProjector {
       // The on-disk checkpoint is authoritative: another instance (or a repair
       // run) may have advanced it past this instance's cache, so a stale cache
       // must never hide a pending hole during replay.
+      const deferred = this.batch.deferredError(session.id)
       this.checkpoints.delete(session.id)
+      this.batch.reset(session.id)
       const events = [...sessionEvents(session) as readonly NativeSessionEvent[]].sort((left, right) => left.seq - right.seq)
       await this.clampPendingCursor(session.id, events)
       for (const event of events) await this.projectOne(session, event)
+      // The scan handed its cache back to the file's authority; a coalesced
+      // batch must not outlive it, or the caller's next `status()` would read a
+      // file behind memory.
+      await this.batch.flush(session.id)
+      // `reset()` kept the deferred failure, so a scan whose write landed has
+      // already cleared it; what is left is a write that never happened and the
+      // caller gets to hear about it.
+      this.raiseDeferred(session.id, deferred)
     })
   }
 
   async status(sessionId: string): Promise<ProjectionCheckpoint> {
+    // A staged batch has to land before the answer, otherwise status would
+    // describe a file that does not carry it yet. The flush queues behind any
+    // in-flight projection of the session.
+    const deferred = this.batch.deferredError(sessionId)
+    if (this.batch.dirty(sessionId)) {
+      await this.tails.enqueue(sessionId, () => this.batch.flush(sessionId))
+    }
+    // A timer flush has no caller to reject: surface its failure here instead of
+    // answering with a watermark the file does not carry.
+    this.raiseDeferred(sessionId, deferred)
+    // Everything above is still memory: `readCheckpoint` answers from the cache
+    // and `clampPendingCursor` clamps in the cache only, so a clamped
+    // `pendingCursor` can sit one write behind the file.
     return structuredClone(await this.readCheckpoint(sessionId))
+  }
+
+  /** Raise a timer-flush failure unless a write finished by this operation cleared it. */
+  private raiseDeferred(sessionId: string, deferred: unknown): void {
+    if (deferred === undefined) return
+    if (this.batch.deferredError(sessionId) === deferred) throw deferred
   }
 
   private async projectOne(session: NativeSession, event: NativeSessionEvent): Promise<void> {
@@ -140,7 +185,7 @@ export class AgentTavernProjector {
       // stays inside this try so a failed checkpoint write records a pending
       // checkpoint and rethrows exactly like a failed projection.
       if (!canProjectEvent(event.type)) {
-        await this.writeCheckpoint(advanceCheckpoint(checkpoint, event.seq))
+        await this.stageCheckpoint(advanceCheckpoint(checkpoint, event.seq))
         return
       }
       const state = await this.store.getState()
@@ -158,9 +203,12 @@ export class AgentTavernProjector {
           for (const message of messages) await this.appendMessage(binding, session.id, event.seq, message, character?.card)
         }
       }
-      await this.writeCheckpoint(advanceCheckpoint(checkpoint, event.seq))
+      await this.stageCheckpoint(advanceCheckpoint(checkpoint, event.seq))
     } catch (error) {
-      await this.writeCheckpoint(pendingCheckpoint(checkpoint, event.seq, error))
+      // The pending hole must be durable even when the batch is otherwise clean:
+      // `commit` writes it unconditionally, like the per-event write did before.
+      this.checkpoints.set(session.id, pendingCheckpoint(checkpoint, event.seq, error))
+      await this.batch.commit(session.id)
       throw error
     }
   }
@@ -258,7 +306,7 @@ export class AgentTavernProjector {
     const cached = this.checkpoints.get(sessionId)
     if (cached) return cached
     try {
-      const parsed = JSON.parse(await fs.readFile(this.checkpointPath(sessionId), 'utf8')) as ProjectionCheckpoint
+      const parsed = JSON.parse(await fs.readFile(checkpointPathOf(this.root, sessionId), 'utf8')) as ProjectionCheckpoint
       validateCheckpoint(parsed, sessionId)
       const checkpoint = normalizeCheckpoint(parsed)
       this.checkpoints.set(sessionId, checkpoint)
@@ -277,12 +325,25 @@ export class AgentTavernProjector {
     }
   }
 
+  /** The injected durable write: atomic replace, then the cache follows the file. */
   private async writeCheckpoint(checkpoint: ProjectionCheckpoint): Promise<void> {
-    const target = this.checkpointPath(checkpoint.sessionId)
+    const target = checkpointPathOf(this.root, checkpoint.sessionId)
     const temporary = `${target}.${process.pid}.${Date.now()}.tmp`
     await fs.writeFile(temporary, `${JSON.stringify(checkpoint)}\n`, 'utf8')
     await fs.rename(temporary, target)
     this.checkpoints.set(checkpoint.sessionId, checkpoint)
+  }
+
+  /**
+   * Record a projected event in memory and hand it to the batch window.
+   *
+   * Reads keep using the cache, which is authoritative and always newest; only
+   * the crash watermark lags. The batch owns when that watermark lands (see
+   * `checkpoint-batch.ts`); the projector only decides what the checkpoint is.
+   */
+  private async stageCheckpoint(checkpoint: ProjectionCheckpoint): Promise<void> {
+    this.checkpoints.set(checkpoint.sessionId, checkpoint)
+    await this.batch.stage(checkpoint.sessionId)
   }
 
   /**
@@ -306,11 +367,6 @@ export class AgentTavernProjector {
     this.checkpoints.set(sessionId, next === undefined
       ? { version: 2, sessionId, lastCursor: checkpoint.lastCursor, status: 'ok', updatedAt: new Date().toISOString() }
       : { ...checkpoint, pendingCursor: next.seq })
-  }
-
-  private checkpointPath(sessionId: string): string {
-    const name = createHash('sha256').update(sessionId).digest('hex')
-    return join(this.root, `${name}.json`)
   }
 }
 
@@ -617,115 +673,6 @@ function turnAt(session: NativeSession, cursor: number): number | undefined {
     if (event.type === 'turn/start' && typeof event.data?.turn === 'number' && Number.isSafeInteger(event.data.turn)) turn = event.data.turn
   }
   return turn
-}
-
-function validateCheckpoint(value: ProjectionCheckpoint, sessionId: string): void {
-  if ((value.version !== 1 && value.version !== 2) || value.sessionId !== sessionId || !Number.isSafeInteger(value.lastCursor)
-    || !['ok', 'pending'].includes(value.status)) {
-    throw new Error(`invalid AgentTavern projection checkpoint for '${sessionId}'`)
-  }
-  // v1 files are migrated wholesale by `normalizeCheckpoint`, and a hand-edited
-  // v2 file may still carry `pendingCursor` below `lastCursor`; either way only
-  // the shape is validated here.
-  if (value.pendingCursor !== undefined
-    && (!Number.isSafeInteger(value.pendingCursor) || value.pendingCursor < 0)) {
-    throw new Error(`invalid AgentTavern projection checkpoint for '${sessionId}'`)
-  }
-}
-
-/**
- * Keep a checkpoint repairable when its watermark cannot be trusted.
- *
- * v1 watermarks are untrusted wholesale: the pre-v2 success branch overwrote
- * the whole checkpoint with `{ lastCursor: seq, status: 'ok' }`, so a v1 `ok`
- * file can hide a failed seq anywhere below its watermark (and a v1 `pending`
- * file can hide one below its `pendingCursor`). Guessing `lastCursor + 1`
- * cannot repair a hole below the watermark, so a v1 checkpoint resets to an
- * unverified pending state whose first unproven cursor is 0: the next replay
- * re-projects every event idempotently (identity-checked floor appends,
- * slot-overwriting body writes) and rewrites a trustworthy v2 watermark, and a
- * live event before that replay can no longer stamp a false `ok` watermark.
- * The reset lives in the cache only, so an unreplayed file is re-migrated —
- * harmlessly — after every restart.
- *
- * v2 pending checkpoints that lost `pendingCursor` (hand-edited file or a
- * producer that only knew the scalar watermark) keep the decision-2026-10-29
- * normalization: the first unproven cursor is the next one after `lastCursor`.
- */
-function normalizeCheckpoint(checkpoint: ProjectionCheckpoint): ProjectionCheckpoint {
-  if (checkpoint.version === 1) {
-    return {
-      version: 2,
-      sessionId: checkpoint.sessionId,
-      lastCursor: -1,
-      status: 'pending',
-      pendingCursor: 0,
-      updatedAt: checkpoint.updatedAt,
-    }
-  }
-  if (checkpoint.status !== 'pending' || checkpoint.pendingCursor !== undefined) return checkpoint
-  if (checkpoint.lastCursor >= Number.MAX_SAFE_INTEGER) return checkpoint
-  return { ...checkpoint, pendingCursor: checkpoint.lastCursor + 1 }
-}
-
-/**
- * Whether `seq` already has a durable projection.
- *
- * `lastCursor` is the contiguous completed watermark; `pendingCursor` is the
- * lowest seq that still failed, so nothing at or above the hole is skipped.
- */
-function isProjectedCursor(checkpoint: ProjectionCheckpoint, seq: number): boolean {
-  if (seq > checkpoint.lastCursor) return false
-  return checkpoint.pendingCursor === undefined || seq < checkpoint.pendingCursor
-}
-
-/**
- * Advance the checkpoint after `seq` projected successfully.
- *
- * The pending hole closes only when `seq` is exactly `pendingCursor`. Any other
- * success behind a hole must not move the watermark past it: the seq is replayed
- * idempotently once the hole is repaired, so a second failed cursor cannot be
- * skipped by a later success.
- */
-function advanceCheckpoint(checkpoint: ProjectionCheckpoint, seq: number): ProjectionCheckpoint {
-  const updatedAt = new Date().toISOString()
-  const pendingCursor = checkpoint.pendingCursor
-  if (pendingCursor === undefined) {
-    return {
-      version: 2,
-      sessionId: checkpoint.sessionId,
-      lastCursor: Math.max(checkpoint.lastCursor, seq),
-      status: 'ok',
-      updatedAt,
-    }
-  }
-  if (pendingCursor !== seq) {
-    return {
-      version: 2,
-      sessionId: checkpoint.sessionId,
-      lastCursor: checkpoint.lastCursor,
-      status: 'pending',
-      pendingCursor,
-      ...(checkpoint.error === undefined ? {} : { error: checkpoint.error }),
-      updatedAt,
-    }
-  }
-  return { version: 2, sessionId: checkpoint.sessionId, lastCursor: seq, status: 'ok', updatedAt }
-}
-
-/** Record a failed `seq` while keeping the lowest unfinished cursor. */
-function pendingCheckpoint(checkpoint: ProjectionCheckpoint, seq: number, error: unknown): ProjectionCheckpoint {
-  return {
-    version: 2,
-    sessionId: checkpoint.sessionId,
-    lastCursor: checkpoint.lastCursor,
-    status: 'pending',
-    pendingCursor: checkpoint.pendingCursor === undefined
-      ? seq
-      : Math.min(checkpoint.pendingCursor, seq),
-    error: error instanceof Error ? error.message : String(error),
-    updatedAt: new Date().toISOString(),
-  }
 }
 
 /* --------------------- MVU 结算审计（提案 0012 P2） --------------------- */

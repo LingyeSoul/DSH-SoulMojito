@@ -417,8 +417,13 @@ function checkServerText(text) {
   if (!/\bcommit:\s*[A-Za-z_$][\w$]*/.test(text)) {
     problems.push('bootstrap payload must carry a runtime-resolved commit stamp')
   }
-  if (!text.includes('rev-parse') || !text.includes('--show-toplevel')) {
-    problems.push('server bundle must resolve the commit from its own Git checkout at runtime')
+  // The commit must come from reading this checkout's own `.git` files at
+  // import time: `gitdir:` resolves a linked worktree's `.git` pointer and
+  // `packed-refs` covers packed refs, both of which only exist in the direct
+  // metadata reader. Losing them means the bundle went back to spawning `git`
+  // on load, which dominated the import before (2026-11-01 measurement).
+  if (!text.includes('gitdir:') || !text.includes('packed-refs') || !text.includes('rev-parse')) {
+    problems.push('server bundle must resolve the commit from local .git files instead of a runtime subprocess')
   }
   if (!text.includes('version.json')) {
     problems.push('server bundle must read generated version.json')
@@ -2623,7 +2628,10 @@ const gates = [
     selfTest: () => {
       const routeMarkers = REQUIRED_SERVER_ROUTES.map((route) => `"${route}"`).join('\n')
       const versionReader = 'readFileSync("version.json", "utf8"); var BUILD_INFO = { version: "0.0.0", commit: "stub" };'
-      const commitResolver = 'function resolveCommit() { execFileSync("git", ["rev-parse", "--show-toplevel"]); return "stub"; } var TAVERN_COMMIT = resolveCommit();'
+      // Stand-in for the direct `.git` reader in build-info.ts: the `.git`
+      // pointer regex (`gitdir:`), the packed refs file name and the single
+      // `rev-parse` fallback the bundle is allowed to keep.
+      const commitResolver = 'var gitPointer = /^gitdir:[ \\t]*(.*)$/m; var packed = readFileSync(resolve(dir, "packed-refs"), "utf8"); function readCommitViaGit() { execFileSync("git", ["rev-parse", "--short=7", "HEAD"]); return "stub"; } var TAVERN_COMMIT = readCommit();'
       const localEmbed = '"local-onnx:"\n\'@huggingface/transformers\'\nvar localStatus = { runtimeInstalled: true };\nfunction inferLocalModelSettings() {}\n"memory/embed/local/install"\nfunction detectLocalQuantizations() {}\n"memory/embed/local/quantizations"\nfunction resolveLocalDtype() {}'
       const gamesBridge = '"dsh-soulmojito:games-service"\nfunction smokeTestGameEngine() {}\nvar orphanSession = { orphaned: true };\nvar viewSeg = segments[2] === \'view\';\nvar builtinGomoku = "dsh-soulmojito.gomoku";\nvar builtinXiangqi = "dsh-soulmojito.xiangqi";\nvar builtinJunqi = "dsh-soulmojito.junqi";\nvar builtinBlackjack = "dsh-soulmojito.blackjack";\nvar builtinMemory = "dsh-soulmojito.memory-match";\nvar builtinMonopoly = "dsh-soulmojito.monopoly";\nvar builtinDungeonCrawl = "dsh-soulmojito.dungeon-crawl";\nvar builtinChineseCheckers = "dsh-soulmojito.chinese-checkers";\nvar dcToastStack = "dc-toast-stack";\nvar dcFloatNum = "dc-float-num";\nvar xiangqiCheckBanner = "#banner.check";\nvar xiangqiCheckHalo = "check-halo";\nvar waitersKey = "dsh-soulmojito:games-waiters";\nvar noticeId = "game-notice-" + sessionId;\nvar resignKey = "gamesDisableResign";\nfunction assertResignAllowed(action) {}\nfunction turnReachedAgent(session) {}\nfunction agentTurnRunning(agent) {}\nfunction installFromZip() {}\nfunction unzipArchive() {}\nvar zipInstallKey = "zipBase64";'
       // 改名兼容（2026-10-16）fixture 段：旧持久化名 / 旧 env 前缀 / 旧游戏
@@ -2633,6 +2641,12 @@ const gates = [
       const badRoute = good.replace('"generate"', '"missing"')
       const badStamp = good.replace('version: BUILD_INFO.version, ', '')
       const hardcodedCommit = good.replace('commit: TAVERN_COMMIT', 'commit: "stub"')
+      // Commit resolution anchors: each replacement drops one marker without
+      // leaving the original substring behind ('git-pointer-gone' /
+      // 'packed-gone' / 'resolve-gone' contain none of them).
+      const badGitPointer = good.replace('gitdir:', 'git-pointer-gone')
+      const badPackedRefs = good.replace('packed-refs', 'packed-gone')
+      const badRevParse = good.replace('rev-parse', 'resolve-gone')
       const badLocalEmbed = good.replace("'@huggingface/transformers'", "'embed-runtime-gone'")
       const badLocalInfer = good.replace('function inferLocalModelSettings() {}', 'function inferNothing() {}')
       const badLocalInstallRoute = good.replace('"memory/embed/local/install"', '"memory/embed/local/gone"')
@@ -2683,6 +2697,9 @@ const gates = [
         && checkServerText(badRoute).length > 0
         && checkServerText(badStamp).length > 0
         && checkServerText(hardcodedCommit).length > 0
+        && checkServerText(badGitPointer).length > 0
+        && checkServerText(badPackedRefs).length > 0
+        && checkServerText(badRevParse).length > 0
         && checkServerText(badLocalEmbed).length > 0
         && checkServerText(badLocalInfer).length > 0
         && checkServerText(badLocalInstallRoute).length > 0

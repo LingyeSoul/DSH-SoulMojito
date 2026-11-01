@@ -63,28 +63,157 @@ export function buildTimeStamp(): { version: string; commit: string } {
   return { version, commit: commit ?? '' }
 }
 
+/**
+ * Commit this build should advertise. This runs while the bundle is imported on
+ * host start-up, so normal checkouts must not start a child process: two
+ * `execFileSync` calls used to cost most of the import (2026-11-01
+ * measurement). Everything is a direct read of the repository metadata instead,
+ * and only a checkout whose refs cannot be read that way (reftable ref storage)
+ * falls back to one `git` process, then to the environment override or the
+ * build stamp.
+ */
 export function resolveTavernCommit(buildFallback: string): string {
-  const fallback = normalizeCommit(envCompat('COMMIT') ?? buildFallback) ?? 'unknown'
+  // Only a source checkout laid out as `packages/plugin` has its repository
+  // around it; an installed copy (a directory named after the package) must not
+  // report the commit of whatever checkout encloses it.
   const repositoryRoot = resolve(import.meta.dirname, '..', '..')
   const packagePath = relative(repositoryRoot, import.meta.dirname).replaceAll('\\', '/')
-  if (packagePath !== 'packages/plugin') return fallback
+  if (packagePath !== 'packages/plugin') return commitFallback(buildFallback)
+  return resolveRepositoryCommit(repositoryRoot, buildFallback, readCommitViaGit)
+}
 
-  const git = (args: string[]) => execFileSync('git', args, {
-    cwd: repositoryRoot,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'ignore'],
-    timeout: 2000,
-    windowsHide: true,
-  }).trim()
+/** Reader consulted only when the direct metadata reads cannot resolve HEAD. */
+export type GitCommitReader = (repositoryRoot: string) => string | undefined
 
+/**
+ * Commit of the Git checkout rooted at `repositoryRoot`, or the fallback when
+ * the checkout is missing or its metadata is unusable. `readFallbackCommit` is
+ * consulted only for a repository whose `.git` exists but whose HEAD cannot be
+ * resolved from a loose ref, `packed-refs` or a linked worktree's `commondir`;
+ * a checkout without `.git` at all (installed copy, nested checkout) never
+ * reaches it.
+ */
+export function resolveRepositoryCommit(
+  repositoryRoot: string,
+  buildFallback: string,
+  readFallbackCommit: GitCommitReader,
+): string {
+  const checkout = readGitCheckout(repositoryRoot)
+  if (checkout === undefined) return commitFallback(buildFallback)
+  return readCheckoutCommit(checkout) ?? readFallbackCommit(repositoryRoot) ?? commitFallback(buildFallback)
+}
+
+interface GitCheckout {
+  gitDir: string
+  commonDir: string
+  head: string
+}
+
+/**
+ * Locates the Git metadata behind `repositoryRoot`. `.git` is either the Git
+ * directory itself or a `gitdir: <path>` pointer written by linked worktrees
+ * and submodules. A checkout nested inside an outer repository has no `.git` at
+ * all and is rejected here, which keeps the old `rev-parse --show-toplevel`
+ * guard against reporting the host application's commit.
+ */
+function readGitCheckout(repositoryRoot: string): GitCheckout | undefined {
+  const dotGit = resolve(repositoryRoot, '.git')
+  const pointer = readTextFile(dotGit)
+  if (pointer === undefined) return checkoutAt(dotGit)
+  const pointedAt = /^gitdir:[ \t]*(.*)$/m.exec(pointer)?.[1]?.trim()
+  if (pointedAt === undefined || pointedAt === '') return undefined
+  return checkoutAt(resolve(repositoryRoot, pointedAt))
+}
+
+function checkoutAt(gitDir: string): GitCheckout | undefined {
+  const head = readTextFile(resolve(gitDir, 'HEAD'))?.trim()
+  if (head === undefined || head === '') return undefined
+  return { gitDir, commonDir: commonDirectory(gitDir), head }
+}
+
+/**
+ * A linked worktree keeps per-worktree state (HEAD) in its own Git directory
+ * and the shared refs in the common one, named by the `commondir` pointer.
+ */
+function commonDirectory(gitDir: string): string {
+  const pointer = readTextFile(resolve(gitDir, 'commondir'))?.trim()
+  if (pointer === undefined || pointer === '') return gitDir
+  return resolve(gitDir, pointer)
+}
+
+/** HEAD is either a detached object id or `ref: <name>` pointing at a ref. */
+function readCheckoutCommit(checkout: GitCheckout): string | undefined {
+  if (!checkout.head.startsWith('ref:')) return readObjectId(checkout.head)
+  const ref = checkout.head.slice('ref:'.length).trim()
+  if (ref === '') return undefined
+  return readLooseRef(checkout.gitDir, ref)
+    ?? readLooseRef(checkout.commonDir, ref)
+    ?? readPackedRef(checkout.commonDir, ref)
+}
+
+/**
+ * Fallback for a repository shape the direct reads cannot resolve: reftable ref
+ * storage keeps refs in binary `.git/reftable` tables instead of loose refs and
+ * `packed-refs`, so every path above misses. This is the only branch that may
+ * still start a child process, and it is reached only when `.git` exists; a
+ * normal loose/packed/worktree checkout stays process-free.
+ */
+export function readCommitViaGit(repositoryRoot: string): string | undefined {
   try {
-    // Avoid reporting the host application's commit when this package lives in
-    // node_modules under an unrelated Git checkout.
-    const gitRoot = resolve(git(['rev-parse', '--show-toplevel']))
-    if (relative(repositoryRoot, gitRoot) !== '') return fallback
-    return normalizeCommit(git(['rev-parse', '--short=7', 'HEAD'])) ?? fallback
+    const output = execFileSync('git', ['rev-parse', '--short=7', 'HEAD'], {
+      cwd: repositoryRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 2000,
+      windowsHide: true,
+    })
+    return normalizeCommit(output)
   } catch {
-    return fallback
+    return undefined
+  }
+}
+
+function readLooseRef(gitDir: string, ref: string): string | undefined {
+  const value = readTextFile(resolve(gitDir, ref))
+  return value === undefined ? undefined : readObjectId(value)
+}
+
+/**
+ * `packed-refs` holds one `<object id> <ref name>` line per packed ref; `#`
+ * headers and `^<peeled tag id>` continuation lines carry no commit of ours.
+ */
+function readPackedRef(commonDir: string, ref: string): string | undefined {
+  const packed = readTextFile(resolve(commonDir, 'packed-refs'))
+  if (packed === undefined) return undefined
+  for (const line of packed.split('\n')) {
+    if (line.startsWith('#') || line.startsWith('^')) continue
+    const [id, name] = line.trim().split(/\s+/)
+    if (id === undefined || name !== ref) continue
+    const commit = readObjectId(id)
+    if (commit !== undefined) return commit
+  }
+  return undefined
+}
+
+/**
+ * Full object id to the 7-character short commit Git would print. SHA-1 (40
+ * characters) and SHA-256 (64 characters) repositories are both accepted;
+ * anything else means the metadata cannot be trusted.
+ */
+function readObjectId(value: string): string | undefined {
+  const id = value.trim()
+  return /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i.test(id) ? id.slice(0, 7).toLowerCase() : undefined
+}
+
+function commitFallback(buildFallback: string): string {
+  return normalizeCommit(envCompat('COMMIT') ?? buildFallback) ?? 'unknown'
+}
+
+function readTextFile(path: string): string | undefined {
+  try {
+    return readFileSync(path, 'utf8')
+  } catch {
+    return undefined
   }
 }
 
