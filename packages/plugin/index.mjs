@@ -10631,7 +10631,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("3660975") : void 0;
+  const commit = true ? normalizeCommit("e5918bb") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -57396,10 +57396,18 @@ async function handleApi(ctx, req, res) {
     }
     const worlds = await db.listWorlds();
     const worldEntryCounts = await collectWorldEntryCounts(db, db.rootPath);
+    const {
+      regexScripts: _bootstrapRegexScripts,
+      regexScriptOwners: _bootstrapRegexScriptOwners,
+      regexScriptPresetOwners: _bootstrapRegexScriptPresetOwners,
+      frontendStorage: _bootstrapFrontendStorage,
+      ...lightState
+    } = state;
     return sendJson(res, 200, {
       ok: true,
       storeRevision,
-      state,
+      state: lightState,
+      stateSlices: ["regexScripts"],
       characters: await db.listCharacters(),
       worlds,
       worldEntryCounts,
@@ -57429,6 +57437,15 @@ async function handleApi(ctx, req, res) {
   }
   if (method === "GET" && route === "store-revision") {
     return sendJson(res, 200, { ok: true, revision: await db.storeRevision() });
+  }
+  if (method === "GET" && route === "state-slices") {
+    const state = await db.getState();
+    return sendJson(res, 200, {
+      ok: true,
+      regexScripts: state.regexScripts,
+      ...state.regexScriptOwners === void 0 ? {} : { regexScriptOwners: state.regexScriptOwners },
+      ...state.regexScriptPresetOwners === void 0 ? {} : { regexScriptPresetOwners: state.regexScriptPresetOwners }
+    });
   }
   if (method === "GET" && route.startsWith("avatar/")) {
     const name2 = decodeURIComponent(route.slice("avatar/".length));
