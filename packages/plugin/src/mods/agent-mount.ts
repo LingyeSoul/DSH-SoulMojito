@@ -44,6 +44,19 @@ export interface ModAgentMountContext {
   effect?: (factory: () => unknown, label?: string) => unknown
 }
 
+export interface ModAgentMountOptions {
+  /** 本 bundle 的内置工具名（运行时认领进查重保留集）。 */
+  claimTools: readonly string[]
+  /**
+   * Mod prompt section 的落地通道：
+   * - `host`（novel / card-workbench）：直接注册宿主 section，与其它 section 并列；
+   * - `agent-prompt`（AgentTavern）：注册宿主 section 会被唯一的 complete 段整体
+   *   丢弃（决策 2026-11-02-agent-prompt-takeover），因此不注册——complete 段的
+   *   装配文本自己在求值时并入 `modSectionSnapshot()`。
+   */
+  promptSections: 'host' | 'agent-prompt'
+}
+
 /** 静态指纹：description/parameters/schema 变化才需要重注册；execute/render
  *  经包装在调用时活查注册表（mod reload 换行为不必重注册）。 */
 function toolFingerprint(entry: Pick<ModToolEntry, 'modId' | 'definition'>): string {
@@ -53,11 +66,13 @@ function toolFingerprint(entry: Pick<ModToolEntry, 'modId' | 'definition'>): str
 
 /**
  * 挂载 mod 扩展面（agent/novel bundle 的 apply 调用）。
- * - claimTools：本 bundle 的内置工具名（运行时认领进查重保留集，防静态种子漂移）。
+ * - options.claimTools：本 bundle 的内置工具名（运行时认领进查重保留集，防静态种子漂移）。
+ * - options.promptSections：prompt section 的落地通道（见接口注释）。
  * - 返回清理函数（无 ctx.effect 的宿主/测试自行调用；有 effect 时自动挂接）。
  */
-export function mountModExtensions(ctx: ModAgentMountContext, options: { claimTools: readonly string[] }): () => void {
+export function mountModExtensions(ctx: ModAgentMountContext, options: ModAgentMountOptions): () => void {
   claimHostToolNames(options.claimTools)
+  const ownsHostSections = options.promptSections === 'host'
 
   const registeredTools = new Map<string, { dispose: (() => void) | undefined; fingerprintNext: string }>()
   const registeredSections = new Map<string, { dispose: (() => void) | undefined; textNext: string; orderNext: number }>()
@@ -113,6 +128,7 @@ export function mountModExtensions(ctx: ModAgentMountContext, options: { claimTo
   }
 
   function syncSections(): void {
+    if (!ownsHostSections) return
     const wanted = new Map<string, { name: string; order: number; text: string }>()
     for (const entry of modSectionSnapshot()) {
       const fullName = `dsh-soulmojito:mod:${entry.modId}:${entry.definition.name}`

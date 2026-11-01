@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { apply as applyPlugin } from '../src/index.js'
 import { apply as applyAgentTavern, type AgentContextLike } from '../src/agent-tavern/agent.js'
+import { registeredAgentPromptParts } from '../src/agent-tavern/prompt-parts.js'
 import { createHostPromptExpander, hostPromptSafe } from '../src/prompt-safety.js'
 import { GUIDES_BLOCK_HEADER } from '../src/guides.js'
 import {
@@ -265,7 +266,7 @@ describe('systemPrompt channels stay host-safe with macro-laden assets (integrat
   })
 
   it('kernels pass through the guard unchanged (no braces today, no corruption by the wrap)', () => {
-    const kernel = contexts.get('dsh-soulmojito:agent-kernel')?.text as string
+    const kernel = registeredAgentPromptParts().find((part) => part.name === 'dsh-soulmojito:agent-kernel')!.text(undefined)
     expect(kernel).toContain('AgentTavern running inside the DSH native AgentLoop')
     expectHostSafe(kernel)
   })

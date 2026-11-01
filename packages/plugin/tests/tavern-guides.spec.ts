@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { apply } from '../src/index.js'
 import { apply as applyAgentTavern, type AgentContextLike } from '../src/agent-tavern/agent.js'
+import { registeredAgentPromptParts } from '../src/agent-tavern/prompt-parts.js'
 import { addGuide, formatGuidesBlock, GUIDES_BLOCK_HEADER, normalizeGuides, removeGuide } from '../src/guides.js'
 import { TavernStore } from '../../tavern-store/src/index.js'
 
@@ -365,7 +366,7 @@ describe('Conversation Guides (proposal 0009)', () => {
     expect(agentContexts.get('dsh-soulmojito:agent-guides')?.order).toBe(-65)
     // 回归：facts 段仍注册在 guides 之前
     expect(agentContexts.get('dsh-soulmojito:agent-facts')?.order).toBe(-70)
-    expect(agentContexts.get('dsh-soulmojito:agent-kernel')?.order).toBe(-80)
+    expect(registeredAgentPromptParts().find((part) => part.name === 'dsh-soulmojito:agent-kernel')?.order).toBe(-80)
 
     // 绑定的 chat 此前无 guide：首次装配返回空串并触发异步装载
     expect(guidesTextOf('native-guides')).toBe('')

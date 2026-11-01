@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { apply } from '../src/index.js'
 import { apply as applyAgentTavern, type AgentContextLike } from '../src/agent-tavern/agent.js'
+import { registeredAgentPromptParts } from '../src/agent-tavern/prompt-parts.js'
 import {
   AGENT_PRESET_BLOCK_HEADER,
   effectiveAgentPresetPrompts,
@@ -128,11 +129,11 @@ describe('AgentTavern preset projection', () => {
   let eventListeners: Map<string, (payload: any, next: () => Promise<any>) => Promise<any>>
   let chatId: string
 
+  // preset 段现在住在 complete 段的部件注册表里（决策 2026-11-02-agent-prompt-takeover）：
+  // 读取面与宿主装配回调取同一个部件（同源即所见）。
   const presetTextOf = (agentId: string | undefined): string => {
-    const def = agentSections.get('dsh-soulmojito:agent-preset') as
-      | { text: (assembly?: { agent?: { id?: string } }) => string }
-      | undefined
-    return def!.text(agentId === undefined ? undefined : { agent: { id: agentId } })
+    const part = registeredAgentPromptParts().find((entry) => entry.name === 'dsh-soulmojito:agent-preset')
+    return part!.text(agentId)
   }
 
   beforeAll(async () => {
@@ -276,8 +277,8 @@ describe('AgentTavern preset projection', () => {
     expect(withCard.find((prompt) => prompt.identifier === 'jailbreak')?.content).toBe('Stay in character.')
   })
 
-  it('registers the -75 preset section and serves the preset block with macros expanded', async () => {
-    expect(agentSections.get('dsh-soulmojito:agent-preset')?.order).toBe(-75)
+  it('registers the -75 preset part and serves the preset block with macros expanded', async () => {
+    expect(registeredAgentPromptParts().find((part) => part.name === 'dsh-soulmojito:agent-preset')?.order).toBe(-75)
     // apply() 启动预热或首次装配的懒装载都会触发装载；waitFor 落定（预热消除
     // 重启后首轮空串→整块出现的 system 头突变，见 preheatAgentPresetProjections）。
     await vi.waitFor(() => {

@@ -16,6 +16,7 @@
  */
 
 import type { AgentContextLike } from '../agent-tavern/agent.js'
+import { registerAgentPromptPart } from '../agent-tavern/prompt-parts.js'
 import { hostPromptSafe } from '../prompt-safety.js'
 import { AGENT_TAVERN_IM_PRESET_ID } from './types.js'
 
@@ -23,8 +24,9 @@ export const name = 'dsh-soulmojito/im-agent'
 
 /**
  * The preset composition mounts this module in an isolated group, so every
- * service it touches must be declared. Without this, Cordis rejects the whole
- * `agent-tavern-im` preset as broken and `agentPresets.recompose()` fails.
+ * service it touches must be declared. The IM prompt section itself belongs to
+ * the agent bundle's complete section (decision 2026-11-02-agent-prompt-takeover);
+ * this module only contributes its text through the cross-bundle part registry.
  */
 export const inject = ['systemPrompt']
 
@@ -73,12 +75,19 @@ export function imModePromptText(): string {
   return IM_MODE_PROMPT
 }
 
-export function apply(ctx: AgentContextLike): void {
-  ctx.systemPrompt?.section?.({
+export function apply(_ctx: AgentContextLike): void {
+  // 段文本进入 AgentTavern 唯一的 complete system 段（决策
+  // 2026-11-02-agent-prompt-takeover）：段本身由 agent bundle 注册（preset
+  // agent-tavern-im 同时挂载两行），本模块只贡献文本——跨 bundle 经
+  // prompt-parts 的 globalThis 注册表互见，不能再自己注册 section（complete
+  // 段会把其余 section 一并丢弃，IM 规则会静默消失）。
+  registerAgentPromptPart({
     name: IM_MODE_SECTION,
     // 比 AgentTavern kernel（-80）更早：IM 模式先于角色扮演正文约束，避免模型
     // 先按“普通对话”习惯写一大段再忘记工具回复。
     order: -90,
-    text: hostPromptSafe(IM_MODE_PROMPT),
+    scope: 'system',
+    // hostPromptSafe：静态提示词里不能出现宿主 {{...}} 宏，否则整轮装配会中止。
+    text: () => hostPromptSafe(IM_MODE_PROMPT),
   })
 }

@@ -23,6 +23,7 @@
  */
 
 import type { ActivationResult } from '../../tavern-lore/src/index.js'
+import type { AgentPromptScope } from './agent-tavern/prompt-parts.js'
 
 /** 每聊天保留的最近记录数。 */
 export const PROMPT_VIEWER_PER_CHAT = 10
@@ -98,10 +99,12 @@ export interface PromptViewerRecord {
 
 /** Agent 模式预注入面的单个 systemPrompt section/context 装配快照。 */
 export interface PromptViewerAgentSection {
-  /** section 名（内置五段 dsh-soulmojito:agent-* / mod 段 dsh-soulmojito:mod:*）。 */
+  /** section 名（complete 段部件 / 内置 context 通道 / mod 段）。 */
   name: string
   /** 注册 order（宿主拼装序）。 */
   order: number
+  /** 去向：system 头（complete 段）还是每步的 runtime snapshot context。 */
+  scope: AgentPromptScope
   /** 装配文本（空文本段已摘除——与宿主对空 context 的摘除语义一致）。 */
   text: string
 }

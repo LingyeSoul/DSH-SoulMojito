@@ -30,6 +30,7 @@
     "89-ui-assistant.js",
     "89b-ui-body.js",
     "90-panels-core.js",
+    "90b-panel-views.js",
     "91-panels-data.js",
     "92-ui-novel.js",
     "93-ui-workbench.js",

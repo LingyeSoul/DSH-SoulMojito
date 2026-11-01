@@ -55,7 +55,9 @@
               h('p', { className: 'dt-label' }, t('settings.promptsAgentSections', { count: agent.sections.length })),
               agent.sections.map((section, index) => h(PromptMessageView, {
                 key: index,
-                message: { role: `${section.name} · ${section.order}`, content: section.text },
+                // scope=context 的部件走宿主 runtime snapshot（每步一条 user 消息），
+                // 不在 system 头里——标出来，免得把预注入面当成完整 system prompt。
+                message: { role: `${section.name} · ${section.order}${section.scope === 'context' ? ' · context' : ''}`, content: section.text },
                 t,
               })))
           : record.system !== undefined

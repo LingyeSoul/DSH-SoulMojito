@@ -1,12 +1,13 @@
 /**
- * 提示词查看器 Agent 模式（决策 2026-10-11-agent-prompt-viewer）：
+ * 提示词查看器 Agent 模式（决策 2026-10-11-agent-prompt-viewer /
+ * 2026-11-02-agent-prompt-takeover）：
  * - prompt-capture 的 pre-step 捕获面：只收本插件注入的消息（source 识别），
  *   decision 原样透传、异常吞掉（宿主 waterfall 链上零改写零抛错）；
  * - agent/request 链尾合成：绑定校验（未绑定/群聊跳过——含 tavern_deduce
- *   子代理）、预注入 section 快照（内置五段 + mod 段，与 apply 注册面对齐）、
- *   链尾最终配置为实发 params（含预设温度覆盖 + 密钥样键净化）；
- * - 覆盖面锁：apply 注册的内置 section 与 agentPromptSectionsFor 的读取面
- *   双向对账（新增注册忘了读面/反之都在这里炸）；
+ *   子代理）、预注入面快照（complete 段部件 + context 部件 + mod 段，均带
+ *   scope）、链尾最终配置为实发 params（含预设温度覆盖 + 密钥样键净化）；
+ * - 覆盖面锁：apply 注册的唯一 complete 段 + 四个 context 与
+ *   agentPromptSectionsFor 的读取面双向对账（新增注册忘了读面/反之都在这里炸）；
  * - 客户端 marker：Agent 模式渲染键在 zh/en 两张表各出现一次。
  */
 import { readFileSync } from 'node:fs'
@@ -21,6 +22,7 @@ import {
   registerAgentTavernPromptCapture,
   resetAgentStepCaptures,
 } from '../src/agent-tavern/prompt-capture.js'
+import { registeredAgentPromptParts } from '../src/agent-tavern/prompt-parts.js'
 import { listPromptViews, resetPromptViews } from '../src/prompt-viewer.js'
 import { TavernStore } from '../../tavern-store/src/index.js'
 import { clearModRegistryForTest, modSectionSnapshot, registerModSection } from '../src/mods/cross-bundle.js'
@@ -214,11 +216,16 @@ describe('agent prompt-viewer records (agent/request tail)', () => {
     expect(record.agent?.sections.map((section) => section.name)).toEqual([
       'dsh-soulmojito:agent-kernel', 'dsh-soulmojito:agent-preset', 'dsh-soulmojito:agent-facts',
     ])
+    // 去向如实：kernel/preset 进 complete 段的 system 头，facts 是 runtime snapshot 的 context。
+    expect(record.agent?.sections.map((section) => section.scope)).toEqual(['system', 'system', 'context'])
     const presetSection = record.agent!.sections.find((section) => section.name === 'dsh-soulmojito:agent-preset')!
     expect(presetSection.text).toContain('Agent preset body')
     expect(presetSection.order).toBe(-75)
-    // system = 分面文本拼接（供 token 估算与快速浏览）。
-    expect(record.system).toBe(record.agent!.sections.map((section) => section.text).join('\n\n'))
+    // system = 只拼 system 头的部件（context 由宿主渲染进 runtime snapshot，不在 system 里）。
+    expect(record.system).toBe(record.agent!.sections
+      .filter((section) => section.scope === 'system')
+      .map((section) => section.text)
+      .join('\n\n'))
     expect(record.promptTokens).toBeGreaterThan(0)
     expect(record.loreTrace).toBeUndefined()
     expect(warnings).toEqual([])
@@ -263,36 +270,42 @@ describe('agent prompt-viewer records (agent/request tail)', () => {
 /* ------------------------------ 覆盖面锁 + mod 段 ------------------------------ */
 
 describe('agentPromptSectionsFor coverage lock', () => {
-  it('mirrors the apply() builtin registrations in both directions', async () => {
-    const registered: Array<{ name: string; order: number; kind: string }> = []
+  it('mirrors the apply() registrations and the part registry in both directions', async () => {
+    const registered: Array<{ name: string; order: number; kind: string; complete?: boolean }> = []
     applyAgentTavern({
       systemPrompt: {
-        section: (def: { name: string; order: number }) => { registered.push({ name: def.name, order: def.order, kind: 'section' }) },
+        section: (def: { name: string; order: number; complete?: boolean }) => {
+          registered.push({ name: def.name, order: def.order, kind: 'section', complete: def.complete })
+        },
         context: (def: { name: string; order: number }) => { registered.push({ name: def.name, order: def.order, kind: 'context' }) },
       },
       tools: { register: () => {} },
       on: () => undefined,
       effect: (fn: () => unknown) => { fn(); return () => {} },
     } as unknown as AgentContextLike)
-    // 新增内置 section 必须同时改 apply 注册与 agentPromptSectionsFor 读取表：
-    // 任一侧漂移都会在这里炸（名字或 order 不齐）。
+    // 决策 2026-11-02-agent-prompt-takeover：宿主侧只剩一个 complete 段；kernel /
+    // preset 改为部件注册表（读取面），四个动态通道仍是宿主 context。
     const builtin = [
-      { name: 'dsh-soulmojito:agent-kernel', order: -80, kind: 'section' },
-      { name: 'dsh-soulmojito:agent-preset', order: -75, kind: 'section' },
+      { name: 'dsh-soulmojito:agent-prompt', order: -80, kind: 'section', complete: true },
       { name: 'dsh-soulmojito:agent-facts', order: -70, kind: 'context' },
       { name: 'dsh-soulmojito:agent-guides', order: -65, kind: 'context' },
       { name: 'dsh-soulmojito:agent-script', order: -64, kind: 'context' },
       { name: 'dsh-soulmojito:agent-games', order: -63, kind: 'context' },
     ]
     expect(registered).toEqual(builtin)
-    // 读面方向：unbound agent 懒装载恒空，只验证「读面不产生注册面之外的段」；
-    // 「注册面五段都进记录」的方向由上面的端到端记录测试锁（装载后逐段断言）。
+    // 读面方向：context 部件与宿主 context 注册一一对应（名字/order 漂移即翻红）。
+    // 取注册面而不是求值结果——unbound agent 的四个动态通道恒空，会被摘除。
+    expect(registeredAgentPromptParts().filter((part) => part.scope === 'context').map((part) => ({ name: part.name, order: part.order, kind: 'context' })))
+      .toEqual(builtin.filter((entry) => entry.kind === 'context'))
+    const pieces = agentPromptSectionsFor('coverage-agent')
+    // system 头只有 complete 段部件 + mod 段；unbound agent 的 preset/facts 恒空摘除。
     const allowed = new Set([
-      ...builtin.map((section) => section.name),
+      'dsh-soulmojito:agent-kernel',
+      'dsh-soulmojito:agent-preset',
       ...modSectionSnapshot().map((entry) => `dsh-soulmojito:mod:${entry.modId}:${entry.definition.name}`),
     ])
-    for (const name of agentPromptSectionsFor('coverage-agent').map((section) => section.name)) {
-      expect(allowed.has(name)).toBe(true)
+    for (const piece of pieces.filter((entry) => entry.scope === 'system')) {
+      expect(allowed.has(piece.name)).toBe(true)
     }
   })
 

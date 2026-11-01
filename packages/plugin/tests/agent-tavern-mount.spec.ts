@@ -13,6 +13,7 @@ interface RegisteredSection {
   name: string
   order: number
   text: unknown
+  complete?: boolean
 }
 
 interface RegisteredPromptContext {
@@ -96,8 +97,10 @@ describe('AgentTavern native module mount', () => {
   })
 
   it('mounts on a host context that refuses undeclared property access', () => {
-    expect(sections.map((section) => section.name)).toContain('dsh-soulmojito:agent-kernel')
-    expect(sections.map((section) => section.name)).toContain('dsh-soulmojito:agent-preset')
+    // 决策 2026-11-02-agent-prompt-takeover：只剩一个 complete 段，其余 section
+    // （含旧的 kernel/preset 独立注册）一律不再出现。
+    expect(sections.map((section) => section.name)).toEqual(['dsh-soulmojito:agent-prompt'])
+    expect(sections[0]!.complete).toBe(true)
     expect(contexts.map((context) => context.name)).toContain('dsh-soulmojito:agent-facts')
     expect([...tools.keys()]).toContain('tavern_character_get')
     // 18 原有 + 游戏桥七件（提案 0018 §4.2；game_wait 为 2026-10-14 修订，

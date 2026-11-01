@@ -2659,14 +2659,14 @@ window.__ModuleLoader__.load({
       'panel.about.author': 'Author',
       'panel.about.repo': 'Source repository',
       'settings.promptsTitle': 'Prompt viewer — final requests & world info activation',
-      'settings.promptsHint': 'The final request actually sent to the LLM each ST generation turn (after pre-llm rewrites — what you see is what was sent) plus the world info activation trace. Agent-mode turns record the plugin pre-injection face: injected system sections, messages injected this step, and the final call params — the host-assembled history/tool context is not visible. In-process ring buffer: last 10 records per chat, 50 total, lost on restart.',
+      'settings.promptsHint': 'The final request actually sent to the LLM each ST generation turn (after pre-llm rewrites — what you see is what was sent) plus the world info activation trace. Agent-mode turns record the plugin pre-injection face: the pieces of the complete system prompt, the runtime-context pieces (marked context), messages injected this step, and the final call params — the host-projected history is not visible. In-process ring buffer: last 10 records per chat, 50 total, lost on restart.',
       'settings.promptsEmpty': 'No records yet — run an ST generation turn and refresh.',
       'settings.promptsRefresh': 'Refresh',
       'settings.promptsAll': 'All characters',
       'settings.promptsSystem': 'System block',
       'settings.promptsNoSystem': '(no system block this turn)',
       'settings.promptsMessages': 'Messages ({count})',
-      'settings.promptsAgentSections': 'Injected system sections ({count})',
+      'settings.promptsAgentSections': 'Injected prompt pieces ({count})',
       'settings.promptsAgentMessages': 'Messages injected this step ({count})',
       'settings.promptsLore': 'World info activation ({count} entries · {rounds} recursion rounds · budget {used}/{limit} tok)',
       'settings.promptsLoreEmpty': 'No world info entries activated this turn.',
@@ -2779,7 +2779,10 @@ window.__ModuleLoader__.load({
       'panel.filterEmpty': 'No matching items',
       'panel.characters.empty': 'No character cards imported',
       'panel.characters.viewCard': 'View card',
-      'panel.characters.hideCard': 'Hide card',
+      'panel.characters.viewTitle': 'View character: {name}',
+      'panel.characters.viewHint': 'Read-only preview. Choose Edit to make changes.',
+      'panel.characters.version': 'Card version: {version}',
+      'panel.characters.alternateGreetingsLabel': 'Alternate greetings',
       'panel.characters.setActive': 'Set active',
       'panel.characters.active': 'Active',
       'panel.characters.export': 'Export {name}',
@@ -2793,7 +2796,9 @@ window.__ModuleLoader__.load({
       'panel.characters.creatorNotes': 'Creator notes',
       'panel.characters.creator': 'By {name}',
       'panel.characters.loadFailed': 'Failed to load card: {message}',
+      'panel.view': 'View',
       'panel.edit': 'Edit',
+      'panel.closeDialog': 'Close',
       'panel.save': 'Save changes',
       'panel.saved': 'Saved',
       'panel.unsaved': 'Unsaved changes',
@@ -2826,12 +2831,17 @@ window.__ModuleLoader__.load({
       'panel.characters.duplicate': 'Character "{name}" already exists; creating it again would overwrite that card. Pick another name or delete the existing card first.',
       'panel.characters.createFailed': 'Failed to create card: {message}',
       'panel.worlds.entries': '{count} entries',
+      'panel.worlds.view': 'View world book: {name}',
+      'panel.worlds.viewTitle': 'View world book: {name}',
+      'panel.worlds.viewHint': 'Read-only preview. Choose Edit to make changes.',
+      'panel.worlds.disabled': 'Disabled',
       // Card scoped world activation (2026-10-22; 2026-10-23 shows the effective state):
       // the linked book is checked automatically and unchecking records a suppression.
       'panel.worlds.autoFollow': 'auto',
       'panel.worlds.autoFollowOff': 'off',
       'panel.worlds.autoFollowHint': 'The world book linked to the current character card is auto-enabled in that card\'s sessions and shows as checked. Unchecking disables it (shown as off); checking it manually enables it globally.',
       'panel.worlds.search': 'Search entries',
+      'panel.worlds.empty': 'This world book has no entries yet.',
       'panel.worlds.noEntries': 'No entries match the search.',
       'panel.worlds.delete': 'Delete {name}',
       'panel.worlds.deleteConfirm': 'Delete world book "{name}"?',
@@ -2864,6 +2874,11 @@ window.__ModuleLoader__.load({
       'panel.presets.delete': 'Delete {name}',
       'panel.presets.deleteConfirm': 'Delete preset "{name}"?',
       'panel.presets.edit': 'Edit preset',
+      'panel.presets.viewTitle': 'View preset: {name}',
+      'panel.presets.viewHint': 'Read-only preview. Choose Edit to make changes.',
+      'panel.presets.noPrompts': 'This preset has no prompt entries.',
+      'panel.presets.disabled': 'Disabled',
+      'panel.presets.samplerEmpty': 'No extra sampler fields.',
       'panel.presets.prompts': 'Prompt stack',
       'panel.presets.promptName': 'Prompt name',
       'panel.presets.identifier': 'Identifier',
@@ -3737,14 +3752,14 @@ window.__ModuleLoader__.load({
       'panel.about.author': '作者',
       'panel.about.repo': '源码仓库',
       'settings.promptsTitle': '提示词查看器 — 实发请求与世界书激活',
-      'settings.promptsHint': 'ST 生成循环每轮实际发给 LLM 的最终请求（pre-llm 改写之后，看到即实发）与世界书激活轨迹。Agent 模式回合记录插件预注入面：预注入 system 片段、本步注入消息与实发调用参数——宿主拼装的历史/工具上下文不可见。进程内环形缓冲：每聊天最近 10 条、总量 50 条，重启即失。',
+      'settings.promptsHint': 'ST 生成循环每轮实际发给 LLM 的最终请求（pre-llm 改写之后，看到即实发）与世界书激活轨迹。Agent 模式回合记录插件预注入面：complete 段的部件、标 context 的 runtime snapshot 部件、本步注入消息与实发调用参数——宿主投影的历史不可见。进程内环形缓冲：每聊天最近 10 条、总量 50 条，重启即失。',
       'settings.promptsEmpty': '暂无记录——发一轮 ST 生成后刷新。',
       'settings.promptsRefresh': '刷新',
       'settings.promptsAll': '全部角色',
       'settings.promptsSystem': 'System 段',
       'settings.promptsNoSystem': '（本轮无 system 段）',
       'settings.promptsMessages': '消息序列（{count} 条）',
-      'settings.promptsAgentSections': '预注入 system 片段（{count} 段）',
+      'settings.promptsAgentSections': '预注入片段（{count} 段）',
       'settings.promptsAgentMessages': '本步注入消息（{count} 条）',
       'settings.promptsLore': '世界书激活（{count} 条 · 递归 {rounds} 轮 · 预算 {used}/{limit} tok）',
       'settings.promptsLoreEmpty': '本轮无世界书条目激活。',
@@ -3857,7 +3872,10 @@ window.__ModuleLoader__.load({
       'panel.filterEmpty': '没有匹配项',
       'panel.characters.empty': '尚未导入角色卡',
       'panel.characters.viewCard': '查看卡面',
-      'panel.characters.hideCard': '收起卡面',
+      'panel.characters.viewTitle': '查看角色卡：{name}',
+      'panel.characters.viewHint': '只读预览；需要修改时点「编辑」。',
+      'panel.characters.version': '角色卡版本：{version}',
+      'panel.characters.alternateGreetingsLabel': '备用开场白',
       'panel.characters.setActive': '设为当前',
       'panel.characters.active': '使用中',
       'panel.characters.export': '导出 {name}',
@@ -3871,7 +3889,9 @@ window.__ModuleLoader__.load({
       'panel.characters.creatorNotes': '作者注',
       'panel.characters.creator': '作者：{name}',
       'panel.characters.loadFailed': '卡面加载失败：{message}',
+      'panel.view': '查看',
       'panel.edit': '编辑',
+      'panel.closeDialog': '关闭',
       'panel.save': '保存修改',
       'panel.saved': '已保存',
       'panel.unsaved': '有未保存修改',
@@ -3904,12 +3924,17 @@ window.__ModuleLoader__.load({
       'panel.characters.duplicate': '已存在同名角色「{name}」，再次创建会覆盖原卡。请换个名字，或先删除已有角色。',
       'panel.characters.createFailed': '新建角色卡失败：{message}',
       'panel.worlds.entries': '{count} 条目',
+      'panel.worlds.view': '查看世界书：{name}',
+      'panel.worlds.viewTitle': '查看世界书：{name}',
+      'panel.worlds.viewHint': '只读预览；需要修改时点「编辑」。',
+      'panel.worlds.disabled': '已停用',
       // 世界书跟随角色卡（2026-10-22 用户需求；2026-10-23 改为显示实际生效状态）：
       // 链接书自动勾选，取消勾选记入停用表，不会伪造手动选择。
       'panel.worlds.autoFollow': '自动',
       'panel.worlds.autoFollowOff': '已停用',
       'panel.worlds.autoFollowHint': '绑定到当前角色卡的世界书会随该卡的会话自动启用并显示为勾选；取消勾选会停用它（标记「已停用」），手动勾选则作为全局启用。',
       'panel.worlds.search': '搜索条目',
+      'panel.worlds.empty': '这本世界书还没有条目。',
       'panel.worlds.noEntries': '没有匹配的条目。',
       'panel.worlds.delete': '删除 {name}',
       'panel.worlds.deleteConfirm': '删除世界书“{name}”？',
@@ -3942,6 +3967,11 @@ window.__ModuleLoader__.load({
       'panel.presets.delete': '删除 {name}',
       'panel.presets.deleteConfirm': '删除预设“{name}”？',
       'panel.presets.edit': '编辑预设',
+      'panel.presets.viewTitle': '查看预设：{name}',
+      'panel.presets.viewHint': '只读预览；需要修改时点「编辑」。',
+      'panel.presets.noPrompts': '这个预设没有提示词条目。',
+      'panel.presets.disabled': '已停用',
+      'panel.presets.samplerEmpty': '没有额外的采样字段。',
       'panel.presets.prompts': '提示词堆栈',
       'panel.presets.promptName': '提示词名称',
       'panel.presets.identifier': '标识符',
@@ -7539,7 +7569,9 @@ window.__ModuleLoader__.load({
               h('p', { className: 'dt-label' }, t('settings.promptsAgentSections', { count: agent.sections.length })),
               agent.sections.map((section, index) => h(PromptMessageView, {
                 key: index,
-                message: { role: `${section.name} · ${section.order}`, content: section.text },
+                // scope=context 的部件走宿主 runtime snapshot（每步一条 user 消息），
+                // 不在 system 头里——标出来，免得把预注入面当成完整 system prompt。
+                message: { role: `${section.name} · ${section.order}${section.scope === 'context' ? ' · context' : ''}`, content: section.text },
                 t,
               })))
           : record.system !== undefined
@@ -12131,34 +12163,6 @@ window.__ModuleLoader__.load({
         error ? h('p', { className: 'dt-error' }, error) : null))
     }
 
-    function CharacterCardFields({ card }) {
-      const t = useTranslate()
-      const [expanded, setExpanded] = useState({})
-      if (!card) return h('div', { className: 'dt-card-fields' }, h('span', { className: 'dt-muted' }, t('nav.loading')))
-      const data = card.data || {}
-      const field = (key, label) => {
-        const text = typeof data[key] === 'string' ? data[key].trim() : ''
-        if (text === '') return null
-        return h('div', { key, className: 'dt-card-field' },
-          h('button', {
-            type: 'button',
-            className: 'dt-card-field-head',
-            'aria-expanded': expanded[key] === true,
-            onClick: () => setExpanded({ ...expanded, [key]: !expanded[key] }),
-          },
-          h('span', null, label),
-          h(IconChevronDownOutline14, { className: expanded[key] ? 'dt-chevron-open' : '' })),
-          expanded[key] ? h('div', { className: 'dt-card-copy' }, h(MarkdownText, { text })) : null)
-      }
-      return h('div', { className: 'dt-card-fields' },
-        field('description', t('panel.characters.description')),
-        field('personality', t('panel.characters.personality')),
-        field('scenario', t('panel.characters.scenario')),
-         field('firstMes', t('panel.characters.firstMes')),
-         field('mesExample', t('panel.characters.mesExample')),
-         field('creatorNotes', t('panel.characters.creatorNotes')))
-    }
-
     // 手动新建的空白卡模板（提案 0013）：字段口径对齐 card_create 工具——
     // spec_version 蛇形是 decode 端（tavern-format card.ts）的读取口径。
     const BLANK_CHARACTER_CARD = {
@@ -12202,7 +12206,6 @@ window.__ModuleLoader__.load({
       const run = (promise) => { setError(''); void promise.catch((cause) => setError(cause.message)) }
       const viewCard = (name) => {
         if (editing === name) return
-        if (viewing === name) { setViewing(''); return }
         setViewing(name)
         if (!(name in cards)) {
           setCards((current) => ({ ...current, [name]: null }))
@@ -12220,14 +12223,18 @@ window.__ModuleLoader__.load({
         }
       }
       const editCard = (name) => {
-        if (editing === name) { setEditing(''); return }
         setCreating(false)
+        setViewing('')
         setEditing(name)
-        setViewing(name)
         if (!(name in cards)) {
           setCards((current) => ({ ...current, [name]: null }))
           void fetchCharacterCard(name).then((card) => setCards((current) => ({ ...current, [name]: card })))
             .catch((cause) => {
+              setCards((current) => {
+                const next = { ...current }
+                delete next[name]
+                return next
+              })
               setEditing('')
               setError(cause instanceof Error ? cause.message : String(cause))
             })
@@ -12287,6 +12294,43 @@ window.__ModuleLoader__.load({
       const visibleCharacters = characterQuery === ''
         ? characters
         : characters.filter((name) => name.toLowerCase().includes(characterQuery))
+      const characterGrid = h('div', { className: 'dt-card-grid' },
+        visibleCharacters.map((name) => {
+          const active = activeCharacter === name
+            || (activeCharacter !== '' && normalizeTavernName(activeCharacter) === normalizeTavernName(name))
+          const card = cards[name]
+          return h('div', { key: name, className: 'dt-card' },
+            h('div', { className: 'dt-card-head' },
+              h('img', { src: `${API}/avatar/${encodeURIComponent(name)}`, alt: '' }),
+              h('div', { className: 'dt-card-title' },
+                h('strong', null, name),
+                card?.data?.creator ? h('span', null, t('panel.characters.creator', { name: card.data.creator })) : null)),
+            h('div', { className: 'dt-card-actions' },
+              active
+                ? h(Pill, { active: true }, t('panel.characters.active'))
+                : h(Button, { size: 'sm', variant: 'outline', onClick: () => run(patchState({ activeCharacter: name })) }, t('panel.characters.setActive')),
+              h(Button, { size: 'sm', variant: 'ghost', 'aria-haspopup': 'dialog', onClick: () => viewCard(name) }, t('panel.characters.viewCard')),
+              h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editCard(name) }, t('panel.edit')),
+              h(Button, {
+                size: 'sm',
+                variant: 'ghost',
+                icon: h(IconDownloadOutline16),
+                'aria-label': t('panel.characters.export', { name }),
+                title: t('panel.characters.export', { name }),
+                onClick: () => downloadAsset(`export/character/${encodeURIComponent(name)}`, `${name}.png`),
+              }),
+              h(Button, {
+                size: 'sm',
+                variant: 'ghost',
+                icon: h(IconTrashOutline16),
+                'aria-label': t('panel.characters.delete', { name }),
+                title: t('panel.characters.delete', { name }),
+                onClick: () => {
+                  if (window.confirm(t('panel.characters.deleteConfirm', { name }))) run(deleteCharacterAsset(name))
+                },
+              }))
+          )
+        }))
       return h(React.Fragment, null,
         h('section', { className: 'dt-settings-band' },
           h('h3', null, t('settings.import')),
@@ -12300,43 +12344,17 @@ window.__ModuleLoader__.load({
             ? h('p', { className: 'dt-muted' }, t('panel.characters.empty'))
             : visibleCharacters.length === 0
               ? h('p', { className: 'dt-muted' }, t('panel.filterEmpty'))
-              : h('div', { className: 'dt-card-grid' },
-              visibleCharacters.map((name) => {
-              const active = activeCharacter === name
-                || (activeCharacter !== '' && normalizeTavernName(activeCharacter) === normalizeTavernName(name))
-              const card = cards[name]
-              return h('div', { key: name, className: 'dt-card' },
-                h('div', { className: 'dt-card-head' },
-                  h('img', { src: `${API}/avatar/${encodeURIComponent(name)}`, alt: '' }),
-                  h('div', { className: 'dt-card-title' },
-                    h('strong', null, name),
-                    card?.data?.creator ? h('span', null, t('panel.characters.creator', { name: card.data.creator })) : null)),
-                h('div', { className: 'dt-card-actions' },
-                  active
-                    ? h(Pill, { active: true }, t('panel.characters.active'))
-                    : h(Button, { size: 'sm', variant: 'outline', onClick: () => run(patchState({ activeCharacter: name })) }, t('panel.characters.setActive')),
-                  h(Button, { size: 'sm', variant: 'ghost', onClick: () => viewCard(name) }, t(viewing === name ? 'panel.characters.hideCard' : 'panel.characters.viewCard')),
-                  h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editCard(name) }, t('panel.edit')),
-                  h(Button, {
-                    size: 'sm',
-                    variant: 'ghost',
-                    icon: h(IconDownloadOutline16),
-                    'aria-label': t('panel.characters.export', { name }),
-                    title: t('panel.characters.export', { name }),
-                    onClick: () => downloadAsset(`export/character/${encodeURIComponent(name)}`, `${name}.png`),
-                  }),
-                  h(Button, {
-                    size: 'sm',
-                    variant: 'ghost',
-                    icon: h(IconTrashOutline16),
-                    'aria-label': t('panel.characters.delete', { name }),
-                    title: t('panel.characters.delete', { name }),
-                    onClick: () => {
-                      if (window.confirm(t('panel.characters.deleteConfirm', { name }))) run(deleteCharacterAsset(name))
-                    },
-                  })),
-                viewing === name ? h(CharacterCardFields, { card }) : null)
-            }))),
+              : characterGrid),
+        viewing !== ''
+          ? h(CharacterCardView, {
+            name: viewing,
+            card: cards[viewing] ?? null,
+            active: activeCharacter === viewing
+              || (activeCharacter !== '' && normalizeTavernName(activeCharacter) === normalizeTavernName(viewing)),
+            onClose: () => setViewing(''),
+            onEdit: () => editCard(viewing),
+          })
+          : null,
         creating
           ? h(CardEditor, { card: BLANK_CHARACTER_CARD, name: '', hint: t('panel.characters.createEditorHint'), onSave: createCharacter, onCancel: () => setCreating(false) })
           : null,
@@ -12364,12 +12382,6 @@ window.__ModuleLoader__.load({
           error ? h('p', { className: 'dt-error' }, error) : null)
           : null,
         error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
-    }
-
-    function loreKeys(entry) {
-      const primary = Array.isArray(entry.key) ? entry.key : []
-      const secondary = Array.isArray(entry.keysecondary) ? entry.keysecondary : []
-      return [...primary, ...secondary].filter((value) => value !== '').join(', ')
     }
 
     function ToggleField({ label, checked, onChange }) {
@@ -12441,11 +12453,10 @@ window.__ModuleLoader__.load({
       const state = useTavernStore()
       const t = useTranslate()
       const [error, setError] = useState('')
-      const [browse, setBrowse] = useState('')
+      const [viewing, setViewing] = useState('')
       const [editing, setEditing] = useState('')
       const [creating, setCreating] = useState(false)
       const [books, setBooks] = useState({})
-      const [filter, setFilter] = useState('')
       // 当前卡以当前宿主会话的 Tavern 绑定为准；bootstrap.activeCard 只对应全局
       // activeCharacter，切回旧会话时可能仍是上一张卡，按需拉取当前卡的对象。
       const activeCharacter = useActiveTavernCharacter(useSessions)
@@ -12477,26 +12488,35 @@ window.__ModuleLoader__.load({
         else manual.delete(name)
         run(patchState({ activeWorlds: [...manual] }))
       }
-      const toggleBrowse = (name) => {
-        if (browse === name) { setBrowse(''); return }
-        setBrowse(name)
+      const viewBook = (name) => {
+        setViewing(name)
         if (!(name in books)) {
           setBooks((current) => ({ ...current, [name]: null }))
           void fetchWorldBook(name)
             .then((book) => setBooks((current) => ({ ...current, [name]: book })))
             .catch((cause) => {
-              setBrowse('')
+              setBooks((current) => {
+                const next = { ...current }
+                delete next[name]
+                return next
+              })
+              setViewing('')
               setError(cause instanceof Error ? cause.message : String(cause))
             })
         }
       }
       const editBook = (name) => {
-        setEditing(editing === name ? '' : name)
-        setBrowse(name)
+        setViewing('')
+        setEditing(name)
         if (!(name in books)) {
           setBooks((current) => ({ ...current, [name]: null }))
           void fetchWorldBook(name).then((book) => setBooks((current) => ({ ...current, [name]: book })))
             .catch((cause) => {
+              setBooks((current) => {
+                const next = { ...current }
+                delete next[name]
+                return next
+              })
               setEditing('')
               setError(cause instanceof Error ? cause.message : String(cause))
             })
@@ -12509,7 +12529,7 @@ window.__ModuleLoader__.load({
           if (next !== name) delete result[name]
           return result
         })
-        setBrowse(next)
+        setViewing(next)
         setEditing('')
       })
       // 手动新建走与编辑同一条 PUT world 路径（oldName === 新名，importWorldFile
@@ -12526,7 +12546,7 @@ window.__ModuleLoader__.load({
           .then((saved) => {
             setBooks((current) => ({ ...current, [name]: saved }))
             setCreating(false)
-            setBrowse(name)
+            setViewing(name)
             return saved
           })
           .catch((cause) => {
@@ -12534,16 +12554,12 @@ window.__ModuleLoader__.load({
           })
       }
       const worlds = state.bootstrap.worlds
-      const book = browse !== '' ? books[browse] : undefined
-      const entries = book?.entries
-        ? book.entries.filter((entry) => filter === '' || `${entry.comment}\n${entry.content}\n${loreKeys(entry)}`.toLowerCase().includes(filter.toLowerCase()))
-        : []
       return h(React.Fragment, null,
         h('section', { className: 'dt-settings-band' },
           h('h3', null, t('settings.import')),
           h('div', { className: 'dt-imports' },
             h(UploadButton, { kind: 'world', label: t('settings.importWorld'), accept: '.json,application/json' }),
-            h('button', { type: 'button', className: 'dt-upload', onClick: () => { setEditing(''); setBrowse(''); setCreating(true) } }, `+ ${t('panel.worlds.new')}`))),
+            h('button', { type: 'button', className: 'dt-upload', onClick: () => { setEditing(''); setViewing(''); setCreating(true) } }, `+ ${t('panel.worlds.new')}`))),
         h('section', { className: 'dt-settings-band' },
           h('p', { className: 'dt-hint' }, t('panel.worlds.autoFollowHint')),
           worlds.length === 0 && !creating
@@ -12571,9 +12587,16 @@ window.__ModuleLoader__.load({
                     : null,
                 ]
               })(),
-              h(Button, { size: 'sm', variant: 'ghost', onClick: () => toggleBrowse(name) },
-                browse === name ? t('panel.characters.hideCard') : t('panel.worlds.entries', { count: books[name]?.entries?.length ?? state.bootstrap.worldEntryCounts?.[name] ?? 0 })),
-              h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editBook(name) }, t(editing === name ? 'panel.cancel' : 'panel.edit')),
+              h(Button, {
+                size: 'sm',
+                variant: 'ghost',
+                icon: h(IconBrowseOutline16),
+                'aria-label': t('panel.worlds.view', { name }),
+                'aria-haspopup': 'dialog',
+                title: t('panel.worlds.view', { name }),
+                onClick: () => viewBook(name),
+              }, t('panel.worlds.entries', { count: books[name]?.entries?.length ?? state.bootstrap.worldEntryCounts?.[name] ?? 0 })),
+              h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editBook(name) }, t('panel.edit')),
               h(Button, { size: 'sm', variant: 'ghost', icon: h(IconDownloadOutline16), 'aria-label': t('panel.exportJson'), title: t('panel.exportJson'), onClick: () => downloadAsset(`export/world/${encodeURIComponent(name)}`, `${name}.json`) }),
               h(Button, {
                 size: 'sm',
@@ -12585,21 +12608,16 @@ window.__ModuleLoader__.load({
                   if (window.confirm(t('panel.worlds.deleteConfirm', { name }))) run(deleteWorldBook(name))
                 },
               }))))),
-         browse !== '' ? h('section', { className: 'dt-settings-band' },
-           h('h3', null, browse),
-           h('div', { className: 'dt-imports' },
-             h(Input, { icon: h(IconSearchOutline16), placeholder: t('panel.worlds.search'), value: filter, onChange: (event) => setFilter(event.target.value) })),
-           !book
-             ? h('p', { className: 'dt-muted' }, t('nav.loading'))
-             : entries.length === 0
-               ? h('p', { className: 'dt-muted' }, t('panel.worlds.noEntries'))
-               : h('div', { className: 'dt-entry-list' }, entries.map((entry, index) => h('div', { key: entry.uid ?? index, className: `dt-entry ${entry.disable ? 'dt-entry-off' : ''}` },
-                 h('div', { className: 'dt-entry-head' },
-                   h('strong', null, entry.comment || `#${entry.uid ?? index + 1}`),
-                   h('span', { className: 'dt-entry-keys' }, t('panel.worlds.keys', { keys: loreKeys(entry) }))),
-                 h('div', { className: 'dt-entry-content' }, entry.content))))) : null,
-         editing !== '' && book
-           ? h(WorldBookEditor, { book, onSave: (next) => save(editing, next), onCancel: () => setEditing('') })
+         viewing !== ''
+           ? h(WorldBookView, {
+             name: viewing,
+             book: books[viewing] ?? null,
+             onClose: () => setViewing(''),
+             onEdit: () => editBook(viewing),
+           })
+           : null,
+         editing !== '' && books[editing]
+           ? h(WorldBookEditor, { book: books[editing], onSave: (next) => save(editing, next), onCancel: () => setEditing('') })
            : editing !== ''
              ? h(EditorDialog, { title: t('panel.worlds.editTitle', { name: editing }), onClose: () => setEditing(''), closeLabel: t('panel.close') },
                h('p', { className: 'dt-muted' }, t('nav.loading')))
@@ -12608,6 +12626,186 @@ window.__ModuleLoader__.load({
            ? h(WorldBookEditor, { book: BLANK_WORLD_BOOK, onSave: createWorld, onCancel: () => setCreating(false) })
            : null,
          error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
+    }
+
+    // Read-only asset viewers (2026-11-01 user request): viewing a character
+    // card, world book or preset opens the same dialog shell as editing, so a
+    // read-only pane can never push the asset list around. Each viewer keeps a
+    // single "Edit" action that hands the already-loaded asset to its editor.
+    function AssetViewFooter({ onClose, onEdit }) {
+      const t = useTranslate()
+      return h('div', { className: 'dt-asset-actions' },
+        h(Button, { size: 'sm', variant: 'ghost', onClick: onClose }, t('panel.closeDialog')),
+        h(Button, { size: 'sm', variant: 'primary', icon: h(IconEditOutline16), onClick: onEdit }, t('panel.edit')))
+    }
+
+    function AssetViewField({ label, text }) {
+      const value = typeof text === 'string' ? text.trim() : ''
+      if (value === '') return null
+      return h('section', { className: 'dt-asset-field' },
+        h('h4', null, label),
+        h('div', { className: 'dt-asset-copy' }, h(MarkdownText, { text: value })))
+    }
+
+    function loreKeys(entry) {
+      const primary = Array.isArray(entry.key) ? entry.key : []
+      const secondary = Array.isArray(entry.keysecondary) ? entry.keysecondary : []
+      return [...primary, ...secondary].filter((value) => value !== '').join(', ')
+    }
+
+    function CharacterCardView({ name, card, active, onClose, onEdit }) {
+      const t = useTranslate()
+      const data = card?.data || {}
+      const displayName = String(data.name || name)
+      const summary = typeof data.extensions?.agentTavern?.identitySummary === 'string'
+        ? data.extensions.agentTavern.identitySummary
+        : ''
+      const tags = Array.isArray(data.tags)
+        ? data.tags.filter((tag) => typeof tag === 'string' && tag.trim() !== '')
+        : []
+      const greetings = Array.isArray(data.alternateGreetings)
+        ? data.alternateGreetings.filter((greeting) => typeof greeting === 'string' && greeting.trim() !== '')
+        : []
+      return h(EditorDialog, {
+        title: t('panel.characters.viewTitle', { name: displayName }),
+        onClose,
+        closeLabel: t('panel.closeDialog'),
+        className: 'dt-asset-modal',
+        footer: h(AssetViewFooter, { onClose, onEdit }),
+      },
+      !card
+        ? h('p', { className: 'dt-muted' }, t('nav.loading'))
+        : h('div', { className: 'dt-asset-view' },
+          h('div', { className: 'dt-asset-head' },
+            h('img', { src: `${API}/avatar/${encodeURIComponent(name)}`, alt: '' }),
+            h('div', { className: 'dt-asset-head-copy' },
+              h('div', { className: 'dt-asset-title-row' },
+                h('strong', null, displayName),
+                active ? h(Pill, { active: true }, t('panel.characters.active')) : null),
+              data.nickname ? h('span', { className: 'dt-asset-meta' }, data.nickname) : null,
+              data.creator ? h('span', { className: 'dt-asset-meta' }, t('panel.characters.creator', { name: data.creator })) : null,
+              data.characterVersion
+                ? h('span', { className: 'dt-asset-meta' }, t('panel.characters.version', { version: data.characterVersion }))
+                : null)),
+          tags.length > 0
+            ? h('div', { className: 'dt-asset-tags' }, tags.map((tag) => h(Pill, { key: tag }, tag)))
+            : null,
+          h('p', { className: 'dt-hint' }, t('panel.characters.viewHint')),
+          h(AssetViewField, { label: t('panel.characters.identitySummary'), text: summary }),
+          h(AssetViewField, { label: t('panel.characters.description'), text: data.description }),
+          h(AssetViewField, { label: t('panel.characters.personality'), text: data.personality }),
+          h(AssetViewField, { label: t('panel.characters.scenario'), text: data.scenario }),
+          h(AssetViewField, { label: t('panel.characters.firstMes'), text: data.firstMes }),
+          h(AssetViewField, { label: t('panel.characters.mesExample'), text: data.mesExample }),
+          h(AssetViewField, { label: t('panel.characters.systemPrompt'), text: data.systemPrompt }),
+          h(AssetViewField, { label: t('panel.characters.postHistory'), text: data.postHistoryInstructions }),
+          h(AssetViewField, { label: t('panel.characters.creatorNotes'), text: data.creatorNotes }),
+          greetings.length > 0
+            ? h('section', { className: 'dt-asset-field' },
+              h('h4', null, t('panel.characters.alternateGreetingsLabel')),
+              h('div', { className: 'dt-asset-list' }, greetings.map((greeting, index) => h('div', {
+                key: `${index}:${greeting.slice(0, 24)}`,
+                className: 'dt-asset-copy dt-asset-greeting',
+              }, h(MarkdownText, { text: greeting })))))
+            : null))
+    }
+
+    function WorldBookView({ name, book, onClose, onEdit }) {
+      const t = useTranslate()
+      const [filter, setFilter] = useState('')
+      const entries = Array.isArray(book?.entries) ? book.entries : []
+      const query = filter.trim().toLowerCase()
+      const visibleEntries = query === ''
+        ? entries
+        : entries.filter((entry) => `${entry.comment}\n${entry.content}\n${loreKeys(entry)}`.toLowerCase().includes(query))
+      return h(EditorDialog, {
+        title: t('panel.worlds.viewTitle', { name }),
+        onClose,
+        closeLabel: t('panel.closeDialog'),
+        className: 'dt-asset-modal',
+        footer: h(AssetViewFooter, { onClose, onEdit }),
+      },
+      !book
+        ? h('p', { className: 'dt-muted' }, t('nav.loading'))
+        : h('div', { className: 'dt-asset-view' },
+          h('p', { className: 'dt-hint' }, t('panel.worlds.viewHint')),
+          h('div', { className: 'dt-asset-stat-row' },
+            h('span', null, t('panel.worlds.entries', { count: entries.length }))),
+          entries.length > 0
+            ? h('div', { className: 'dt-filter-row' },
+              h(Input, {
+                icon: h(IconSearchOutline16),
+                placeholder: t('panel.worlds.search'),
+                'aria-label': t('panel.worlds.search'),
+                value: filter,
+                onChange: (event) => setFilter(event.target.value),
+              }))
+            : null,
+          entries.length === 0
+            ? h('p', { className: 'dt-muted' }, t('panel.worlds.empty'))
+            : visibleEntries.length === 0
+              ? h('p', { className: 'dt-muted' }, t('panel.worlds.noEntries'))
+              : h('div', { className: 'dt-entry-list' }, visibleEntries.map((entry, index) => h('div', {
+              key: entry.uid ?? index,
+              className: `dt-entry ${entry.disable ? 'dt-entry-off' : ''}`,
+            },
+            h('div', { className: 'dt-entry-head' },
+              h('div', { className: 'dt-asset-entry-title' },
+                h('strong', null, entry.comment || `#${entry.uid ?? index + 1}`),
+                entry.constant ? h(Pill, null, t('panel.worlds.constant')) : null,
+                entry.disable ? h(Pill, null, t('panel.worlds.disabled')) : null),
+              h('span', { className: 'dt-asset-entry-meta' },
+                `${t('panel.worlds.order')} ${Number(entry.order) || 0} · ${t('panel.worlds.depth')} ${Number(entry.depth) || 0}`),
+              h('span', { className: 'dt-entry-keys' }, t('panel.worlds.keys', { keys: loreKeys(entry) }))),
+            h('div', { className: 'dt-entry-content' }, entry.content))))))
+    }
+
+    function PresetView({ name, kind, data, onClose, onEdit }) {
+      const t = useTranslate()
+      const chatPreset = kind === 'chat-completion' || Array.isArray(data?.prompts)
+      const prompts = chatPreset && Array.isArray(data?.prompts) ? data.prompts : []
+      const sampler = chatPreset
+        ? Object.fromEntries(Object.entries(data || {}).filter(([key]) => key !== 'prompts' && key !== 'prompt_order'))
+        : (data || {})
+      const samplerKeys = Object.keys(sampler)
+      return h(EditorDialog, {
+        title: t('panel.presets.viewTitle', { name }),
+        onClose,
+        closeLabel: t('panel.closeDialog'),
+        className: 'dt-asset-modal',
+        footer: h(AssetViewFooter, { onClose, onEdit }),
+      },
+      !data
+        ? h('p', { className: 'dt-muted' }, t('nav.loading'))
+        : h('div', { className: 'dt-asset-view' },
+          h('div', { className: 'dt-asset-title-row' },
+            h('strong', null, name),
+            h(Pill, null, kind || 'preset')),
+          h('p', { className: 'dt-hint' }, t('panel.presets.viewHint')),
+          chatPreset
+            ? h('section', { className: 'dt-asset-field' },
+              h('h4', null, t('panel.presets.prompts')),
+              prompts.length === 0
+                ? h('p', { className: 'dt-muted' }, t('panel.presets.noPrompts'))
+                : h('div', { className: 'dt-asset-list' }, prompts.map((prompt, index) => h('article', {
+                  key: `${prompt.identifier || 'prompt'}-${index}`,
+                  className: 'dt-asset-prompt',
+                },
+                h('div', { className: 'dt-asset-prompt-head' },
+                  h('strong', null, prompt.name || prompt.identifier || `#${index + 1}`),
+                  h('span', { className: 'dt-asset-prompt-id' }, prompt.identifier || ''),
+                  h('span', { className: 'dt-asset-prompt-role' }, prompt.role || 'system'),
+                  prompt.marker === true ? h(Pill, null, t('panel.presets.marker')) : null,
+                  prompt.system_prompt === false ? h(Pill, null, t('panel.presets.disabled')) : null),
+                typeof prompt.content === 'string' && prompt.content.trim() !== ''
+                  ? h('div', { className: 'dt-asset-copy' }, h(MarkdownText, { text: prompt.content }))
+                  : null))))
+            : null,
+          h('section', { className: 'dt-asset-field' },
+            h('h4', null, t('panel.presets.sampler')),
+            samplerKeys.length === 0
+              ? h('p', { className: 'dt-muted' }, t('panel.presets.samplerEmpty'))
+              : h('pre', { className: 'dt-asset-json' }, JSON.stringify(sampler, null, 2)))))
     }
 
     function AuditMemoryRow({ memory, t }) {
@@ -15276,12 +15474,6 @@ window.__ModuleLoader__.load({
         .dt-card-title strong{font-size:14px;line-height:19px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .dt-card-title span{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .dt-card-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-        .dt-card-fields{display:flex;flex-direction:column;gap:2px;border-top:1px solid var(--dsw-alias-border-l2);padding-top:6px}
-        .dt-card-field-head{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-height:28px;border:0;padding:0 2px;color:var(--dsw-alias-label-secondary);background:transparent;cursor:pointer;font-size:12px;text-align:left}
-        .dt-card-field-head:hover{color:var(--dsw-alias-label-primary)}
-        .dt-card-field-head svg{transform:rotate(-90deg);transition:transform .15s}
-        .dt-card-field-head .dt-chevron-open{transform:rotate(0)}
-        .dt-card-copy{max-height:220px;overflow-y:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.6;padding:2px 2px 8px;border-radius:6px}
         .dt-world-list{display:flex;flex-direction:column;gap:6px}
         .dt-world-row{display:flex;align-items:center;gap:8px;min-height:36px;padding:2px 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
         .dt-world-follow{flex:none;padding:0 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
@@ -15396,7 +15588,32 @@ window.__ModuleLoader__.load({
         .dt-editor-modal-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 16px;border-top:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-base)}
         .dt-persona-editor{width:min(640px,calc(100vw - 48px));height:auto;max-height:min(720px,calc(100vh - 64px))}
         .dt-persona-editor .dt-editor-modal-body{flex:0 1 auto;min-height:0;overflow-y:auto}
-        @media(max-width:700px){.dt-editor-modal{width:calc(100vw - 24px);height:calc(100vh - 24px)}.dt-editor-modal-body{padding:12px}.dt-persona-editor{height:auto;max-height:calc(100vh - 24px)}}
+        .dt-asset-modal{width:min(760px,calc(100vw - 48px));height:auto;max-height:calc(100vh - 64px)}
+        .dt-asset-modal .dt-editor-modal-body{flex:0 1 auto;min-height:0;overflow-y:auto}
+        .dt-asset-view{display:flex;flex-direction:column;gap:12px;min-width:0}
+        .dt-asset-head{display:flex;align-items:center;gap:12px;min-width:0}
+        .dt-asset-head>img{width:56px;height:56px;border-radius:10px;object-fit:cover;flex:none}
+        .dt-asset-head-copy{display:flex;flex-direction:column;gap:2px;min-width:0}
+        .dt-asset-title-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+        .dt-asset-title-row>strong{font-size:15px;line-height:21px;overflow-wrap:anywhere}
+        .dt-asset-meta{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:17px;overflow-wrap:anywhere}
+        .dt-asset-tags{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+        .dt-asset-field{display:flex;flex-direction:column;gap:4px;min-width:0}
+        .dt-asset-field h4{margin:0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;font-weight:600}
+        .dt-asset-copy{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.65;color:var(--dsw-alias-label-primary)}
+        .dt-asset-greeting{padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
+        .dt-asset-list{display:flex;flex-direction:column;gap:8px}
+        .dt-asset-stat-row{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
+        .dt-asset-entry-title{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0}
+        .dt-asset-entry-meta{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:15px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+        .dt-asset-prompt{display:flex;flex-direction:column;gap:5px;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
+        .dt-asset-prompt-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0}
+        .dt-asset-prompt-head>strong{font-size:13px;line-height:18px;overflow-wrap:anywhere}
+        .dt-asset-prompt-id,.dt-asset-prompt-role{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:15px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+        .dt-asset-json{margin:0;max-height:320px;overflow:auto;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-bg-base));color:var(--dsw-alias-label-primary);font:12px/18px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
+        .dt-asset-modal .dt-entry-content{max-height:none;overflow:visible}
+        .dt-asset-actions{display:flex;align-items:center;gap:6px;margin-left:auto}
+        @media(max-width:700px){.dt-editor-modal{width:calc(100vw - 24px);height:calc(100vh - 24px)}.dt-editor-modal-body{padding:12px}.dt-persona-editor{height:auto;max-height:calc(100vh - 24px)}.dt-asset-modal{height:auto;max-height:calc(100vh - 24px)}}
         .dt-novel-modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:52px;padding:8px 16px;border-bottom:1px solid var(--dsw-alias-border-l2)}
         .dt-novel-modal-head h2{margin:0;font-size:16px;line-height:22px;font-weight:600}
         .dt-novel-modal-body{flex:1;min-height:0;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:12px}
@@ -15915,17 +16132,40 @@ window.__ModuleLoader__.load({
       const state = useTavernStore()
       const t = useTranslate()
       const [error, setError] = useState('')
+      const [viewing, setViewing] = useState('')
       const [editing, setEditing] = useState('')
       const [creating, setCreating] = useState(false)
       const [presets, setPresets] = useState({})
       const run = (promise) => { setError(''); void promise.catch((cause) => setError(cause.message)) }
       const kinds = state.bootstrap.presetKinds || {}
-      const editPreset = (name) => {
-        setEditing(editing === name ? '' : name)
+      const viewPreset = (name) => {
+        setViewing(name)
         if (!(name in presets)) {
           setPresets((current) => ({ ...current, [name]: null }))
           void fetchPreset(name).then((data) => setPresets((current) => ({ ...current, [name]: data })))
             .catch((cause) => {
+              setPresets((current) => {
+                const next = { ...current }
+                delete next[name]
+                return next
+              })
+              setViewing('')
+              setError(cause instanceof Error ? cause.message : String(cause))
+            })
+        }
+      }
+      const editPreset = (name) => {
+        setViewing('')
+        setEditing(name)
+        if (!(name in presets)) {
+          setPresets((current) => ({ ...current, [name]: null }))
+          void fetchPreset(name).then((data) => setPresets((current) => ({ ...current, [name]: data })))
+            .catch((cause) => {
+              setPresets((current) => {
+                const next = { ...current }
+                delete next[name]
+                return next
+              })
               setEditing('')
               setError(cause instanceof Error ? cause.message : String(cause))
             })
@@ -15974,7 +16214,7 @@ window.__ModuleLoader__.load({
           h('h3', null, t('settings.import')),
           h('div', { className: 'dt-imports' },
             h(UploadButton, { kind: 'preset', label: t('settings.importPreset'), accept: '.json,application/json' }),
-            h('button', { type: 'button', className: 'dt-upload', onClick: () => { setEditing(''); setCreating(true) } }, `+ ${t('panel.presets.new')}`))),
+            h('button', { type: 'button', className: 'dt-upload', onClick: () => { setEditing(''); setViewing(''); setCreating(true) } }, `+ ${t('panel.presets.new')}`))),
         // 预设生效范围（preset-mount.ts）：AgentTavern 恒投影；工作台/小说按
         // 这两个开关接入（默认关），翻转经 state 路由写穿投影缓存。
         h('section', { className: 'dt-settings-band' },
@@ -16005,6 +16245,7 @@ window.__ModuleLoader__.load({
               : h('div', { className: 'dt-preset-list' }, visiblePresets.map((name) => h('div', { key: name, className: 'dt-preset-row' },
                 h('strong', { className: 'dt-preset-name' }, name),
                 h(Pill, null, kinds[name] || 'preset'),
+                h(Button, { size: 'sm', variant: 'ghost', icon: h(IconBrowseOutline16), 'aria-haspopup': 'dialog', onClick: () => viewPreset(name) }, t('panel.view')),
                 h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editPreset(name) }, t('panel.edit')),
                 h(Button, { size: 'sm', variant: 'ghost', icon: h(IconDownloadOutline16), 'aria-label': t('panel.exportJson'), title: t('panel.exportJson'), onClick: () => downloadAsset(`export/preset/${encodeURIComponent(name)}`, `${name}.json`) }),
                 state.bootstrap.state.activePreset === name
@@ -16020,6 +16261,15 @@ window.__ModuleLoader__.load({
                     if (window.confirm(t('panel.presets.deleteConfirm', { name }))) run(deletePresetAsset(name))
                   },
                 }))))),
+        viewing !== ''
+          ? h(PresetView, {
+            name: viewing,
+            kind: kinds[viewing],
+            data: presets[viewing] ?? null,
+            onClose: () => setViewing(''),
+            onEdit: () => editPreset(viewing),
+          })
+          : null,
         editing !== '' && presets[editing]
           ? h(PresetEditor, { name: editing, kind: kinds[editing], data: presets[editing], onSave: (data, nextName) => save(editing, data, nextName), onCancel: () => setEditing('') })
           : editing !== ''

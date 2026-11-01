@@ -6823,7 +6823,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("e5918bb") : void 0;
+  const commit = true ? normalizeCommit("9434b08") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -7349,6 +7349,7 @@ function toolFingerprint(entry) {
 }
 function mountModExtensions(ctx, options) {
   claimHostToolNames(options.claimTools);
+  const ownsHostSections = options.promptSections === "host";
   const registeredTools = /* @__PURE__ */ new Map();
   const registeredSections = /* @__PURE__ */ new Map();
   const liveTool = (modId, name2) => modToolSnapshot().find((entry) => entry.modId === modId && entry.definition.name === name2)?.definition;
@@ -7400,6 +7401,7 @@ function mountModExtensions(ctx, options) {
     }
   }
   function syncSections() {
+    if (!ownsHostSections) return;
     const wanted = /* @__PURE__ */ new Map();
     for (const entry of modSectionSnapshot()) {
       const fullName = `dsh-soulmojito:mod:${entry.modId}:${entry.definition.name}`;
@@ -7857,6 +7859,26 @@ var agentStepCaptures = /* @__PURE__ */ new Map();
 function agentStepCaptureOf(agentId) {
   if (typeof agentId !== "string") return void 0;
   return agentStepCaptures.get(agentId);
+}
+
+// packages/plugin/src/agent-tavern/prompt-parts.ts
+var partsSymbol = Symbol.for("dsh-soulmojito:agent-prompt-parts");
+function partStore() {
+  const holder = globalThis;
+  return holder[partsSymbol] ??= /* @__PURE__ */ new Map();
+}
+function registerAgentPromptPart(part) {
+  const parts = partStore();
+  parts.set(part.name, part);
+  return () => {
+    if (parts.get(part.name) === part) parts.delete(part.name);
+  };
+}
+function registeredAgentPromptParts() {
+  return [...partStore().values()].sort((a, b) => a.order - b.order);
+}
+function agentPromptPieces(agentId) {
+  return registeredAgentPromptParts().map((part) => ({ name: part.name, order: part.order, scope: part.scope, text: part.text(agentId) })).filter((piece) => piece.text !== "");
 }
 
 // packages/tavern-pipeline/src/pipeline.ts
@@ -13315,18 +13337,35 @@ var KERNEL = [
   "Mirrored history: at activation the greeting and any existing chat messages are imported from the Tavern save into this session. That mirrored story is stage context, not established knowledge \u2014 the card details and world-info entries behind it are not in your context, so its proper nouns are NOT exempt from tavern_lore_search. On the first user turn after activation, ground the scene with tavern_character_get, tavern_lore_search, and memory_search before replying."
 ].join("\n");
 var AGENT_KERNEL_TEXT = hostPromptSafe(KERNEL);
+var AGENT_PROMPT_SECTION = "dsh-soulmojito:agent-prompt";
+registerAgentPromptPart({
+  name: "dsh-soulmojito:agent-kernel",
+  order: -80,
+  scope: "system",
+  text: () => AGENT_KERNEL_TEXT
+});
+registerAgentPromptPart({
+  name: "dsh-soulmojito:agent-preset",
+  order: -75,
+  scope: "system",
+  // 内容型提示词按 prompt_order 注入，main/jailbreak 沿用卡覆盖语义；marker
+  // （卡字段/世界书/示例/历史）仍走工具与原生历史（见 preset.ts 的映射说明）。
+  // 装载与 facts/guides 同款 best-effort 异步；预设增删改与激活预热经 preset.ts
+  // 的跨 bundle 监听表写穿缓存，下一次装配即时生效。字节稳定是本段的生命线：
+  // 动态宏按绑定的冻结记录求值（presetFreeze），重启经 preheat 预热——两条路
+  // 都是防 system 头突变烧掉前缀缓存（决策 2026-10-09-agent-preset-cache-stability）。
+  text: (agentId) => agentPresetText(agentId)
+});
+registerAgentPromptPart({ name: "dsh-soulmojito:agent-facts", order: -70, scope: "context", text: (agentId) => agentFactsText(agentId) });
+registerAgentPromptPart({ name: "dsh-soulmojito:agent-guides", order: -65, scope: "context", text: (agentId) => agentGuidesText(agentId) });
+registerAgentPromptPart({ name: "dsh-soulmojito:agent-script", order: -64, scope: "context", text: (agentId) => agentScriptText(agentId) });
+registerAgentPromptPart({ name: "dsh-soulmojito:agent-games", order: -63, scope: "context", text: (agentId) => agentGamesText(agentId) });
 function apply(ctx) {
   ctx.systemPrompt?.section?.({
-    name: "dsh-soulmojito:agent-kernel",
+    name: AGENT_PROMPT_SECTION,
     order: -80,
-    // 守卫：内核为静态文本，但一旦有人写入 {{...}}（宿主变量语法），装配
-    // 会直接抛错中止运行——过 hostPromptSafe 让内核编辑错不起（prompt-safety.ts）。
-    text: AGENT_KERNEL_TEXT
-  });
-  ctx.systemPrompt?.section?.({
-    name: "dsh-soulmojito:agent-preset",
-    order: -75,
-    text: (assembly) => agentPresetText(assembly?.agent?.id)
+    complete: true,
+    text: (assembly) => agentSystemPromptTextOf(assembly?.agent?.id)
   });
   void preheatAgentPresetProjections();
   ctx.systemPrompt?.context?.({
@@ -13361,7 +13400,7 @@ function apply(ctx) {
     if (ctx.effect) ctx.effect(() => ctx.tools?.register?.(tool2), `dsh-soulmojito:agent:${tool2.name}`);
     else ctx.tools?.register?.(tool2);
   }
-  mountModExtensions(ctx, { claimTools: tools.map((tool2) => tool2.name) });
+  mountModExtensions(ctx, { claimTools: tools.map((tool2) => tool2.name), promptSections: "agent-prompt" });
 }
 function createTools() {
   const tools = [
@@ -13451,19 +13490,18 @@ function agentPresetTemperatureOf(agentId) {
 }
 function agentPromptSectionsFor(agentId) {
   const sections = [
-    { name: "dsh-soulmojito:agent-kernel", order: -80, text: AGENT_KERNEL_TEXT },
-    { name: "dsh-soulmojito:agent-preset", order: -75, text: agentPresetText(agentId) },
-    { name: "dsh-soulmojito:agent-facts", order: -70, text: agentFactsText(agentId) },
-    { name: "dsh-soulmojito:agent-guides", order: -65, text: agentGuidesText(agentId) },
-    { name: "dsh-soulmojito:agent-script", order: -64, text: agentScriptText(agentId) },
-    { name: "dsh-soulmojito:agent-games", order: -63, text: agentGamesText(agentId) },
+    ...agentPromptPieces(agentId),
     ...modSectionSnapshot().map((entry) => ({
       name: `dsh-soulmojito:mod:${entry.modId}:${entry.definition.name}`,
       order: clampModSectionOrder(entry.definition.order),
+      scope: "system",
       text: hostPromptSafe(entry.definition.text)
     }))
   ];
   return sections.filter((section) => section.text !== "").sort((a, b) => a.order - b.order);
+}
+function agentSystemPromptTextOf(agentId) {
+  return agentPromptSectionsFor(agentId).filter((section) => section.scope === "system").map((section) => section.text).join("\n\n");
 }
 async function recordAgentTavernPromptViewFor(agentId, config, logger) {
   try {
@@ -13472,7 +13510,7 @@ async function recordAgentTavernPromptViewFor(agentId, config, logger) {
     const binding = (await (await tavernStore()).getState()).sessionBindings[agentId];
     if (!binding || binding.architecture !== "agent-tavern" || binding.group === true) return;
     const sections = agentPromptSectionsFor(agentId);
-    const system = sections.map((section) => section.text).join("\n\n");
+    const system = agentSystemPromptTextOf(agentId);
     recordPromptView({
       character: binding.character,
       chatId: binding.chatId,
@@ -13498,6 +13536,7 @@ function preheatAgentPresetProjections() {
   return presetProjection.preheatWhere((binding) => binding.architecture === "agent-tavern");
 }
 export {
+  AGENT_PROMPT_SECTION,
   agentPromptSectionsFor,
   apply,
   identitySummaryOf,

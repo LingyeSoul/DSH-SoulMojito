@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { apply, type AgentContextLike } from '../src/agent-tavern/agent.js'
+import { registeredAgentPromptParts } from '../src/agent-tavern/prompt-parts.js'
 import { recoverBodyOperationWith, type BodyRecoveryOutcome } from '../src/agent-tavern/body-recovery.js'
 import type { BodyRuntimeDeps } from '../src/agent-tavern/body-runtime.js'
 import { appendMvuAudit, mvuAuditPath, readMvuAudit } from '../src/agent-tavern/projector.js'
@@ -361,9 +362,10 @@ describe('AgentTavern MVU settlement tool (proposal 0012 P2)', () => {
     const changes = tool.parameters.properties.changes as { type: string; items: { required: string[] } }
     expect(changes.type).toBe('array')
     expect(changes.items.required).toEqual(['name', 'value'])
-    const kernel = sections.find((section) => section.name === 'dsh-soulmojito:agent-kernel')!
-    expect(kernel.text).toContain('tavern_variable_settle')
-    expect(kernel.text).toContain('Standing duties')
+    const kernel = registeredAgentPromptParts().find((part) => part.name === 'dsh-soulmojito:agent-kernel')!
+    const kernelText = kernel.text(undefined)
+    expect(kernelText).toContain('tavern_variable_settle')
+    expect(kernelText).toContain('Standing duties')
   })
 
   it('settles a batch with before/after receipts and an audit line per call', async () => {

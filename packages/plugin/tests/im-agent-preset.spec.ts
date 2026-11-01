@@ -1,12 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentContextLike } from '../src/agent-tavern/agent.js'
+import { agentPromptPieces } from '../src/agent-tavern/prompt-parts.js'
 import { apply, IM_MODE_SECTION, imModePromptText, inject } from '../src/im/agent.js'
-
-interface Section {
-  name: string
-  order: number
-  text: string
-}
 
 describe('AgentTavernIM prompt', () => {
   it('declares the systemPrompt service its preset composition mounts', () => {
@@ -16,20 +11,28 @@ describe('AgentTavernIM prompt', () => {
     expect(inject).toContain('systemPrompt')
   })
 
-  it('registers one static IM-mode section before the AgentTavern kernel', () => {
-    const sections: Section[] = []
-    apply({
-      systemPrompt: { section: (section: Section) => { sections.push(section) } },
-    } as AgentContextLike)
-    expect(sections).toHaveLength(1)
-    const section = sections[0]!
-    expect(section.name).toBe(IM_MODE_SECTION)
+  it('registers one static IM-mode part before the AgentTavern kernel', () => {
+    apply({} as AgentContextLike)
+    const pieces = agentPromptPieces(undefined)
+    const part = pieces.find((piece) => piece.name === IM_MODE_SECTION)
+    expect(part).toBeDefined()
     // kernel 是 -80；IM 模式必须先于普通角色扮演对话习惯。
-    expect(section.order).toBeLessThan(-80)
-    expect(section.text).toBe(imModePromptText())
+    expect(part!.order).toBeLessThan(-80)
+    expect(part!.scope).toBe('system')
+    expect(part!.text).toBe(imModePromptText())
     // hostPromptSafe：静态提示词里不能出现宿主 {{...}} 宏，否则整轮装配会中止。
-    expect(section.text).not.toContain('{{')
-    expect(section.text).not.toContain('}}')
+    expect(part!.text).not.toContain('{{')
+    expect(part!.text).not.toContain('}}')
+  })
+
+  it('never registers its own host section (the complete section would drop it)', () => {
+    // 决策 2026-11-02-agent-prompt-takeover：complete 段只保留自己，IM 段若自己
+    // 注册宿主 section 会静默消失——文本必须经 prompt-parts 注册表进入 complete 段。
+    let sectionTouched = false
+    apply({
+      systemPrompt: { section: () => { sectionTouched = true } },
+    } as unknown as AgentContextLike)
+    expect(sectionTouched).toBe(false)
   })
 
   it('states the tool-only reply rule and the human-like short-message style', () => {

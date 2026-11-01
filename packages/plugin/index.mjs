@@ -10631,7 +10631,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("e5918bb") : void 0;
+  const commit = true ? normalizeCommit("9434b08") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -40721,6 +40721,20 @@ function sanitizeParams(params) {
   return out;
 }
 
+// packages/plugin/src/agent-tavern/prompt-parts.ts
+var partsSymbol = Symbol.for("dsh-soulmojito:agent-prompt-parts");
+function partStore() {
+  const holder = globalThis;
+  return holder[partsSymbol] ??= /* @__PURE__ */ new Map();
+}
+function registerAgentPromptPart(part) {
+  const parts = partStore();
+  parts.set(part.name, part);
+  return () => {
+    if (parts.get(part.name) === part) parts.delete(part.name);
+  };
+}
+
 // packages/plugin/src/agent-tavern/tools/character.ts
 init_src();
 
@@ -41683,6 +41697,9 @@ var gamesSummaryProjection = createLazyProjection({
     settle(hostPromptSafe(text, expand));
   }
 });
+function agentGamesText(agentId) {
+  return gamesSummaryProjection.valueOf(agentId) ?? "";
+}
 function refreshAllAgentGamesSummaries() {
   void gamesSummaryProjection.refreshWhere((binding) => binding.architecture === "agent-tavern");
 }
@@ -41752,6 +41769,9 @@ var scriptSummaryProjection = createLazyProjection({
     settle(hostPromptSafe(text, expand));
   }
 });
+function agentScriptText(agentId) {
+  return scriptSummaryProjection.valueOf(agentId) ?? "";
+}
 async function scriptSummaryForChat(db, character, chatId) {
   const found = await db.getCharacter(character);
   const scriptName = boundScriptOf(found?.card);
@@ -41805,6 +41825,28 @@ var KERNEL = [
   "Mirrored history: at activation the greeting and any existing chat messages are imported from the Tavern save into this session. That mirrored story is stage context, not established knowledge \u2014 the card details and world-info entries behind it are not in your context, so its proper nouns are NOT exempt from tavern_lore_search. On the first user turn after activation, ground the scene with tavern_character_get, tavern_lore_search, and memory_search before replying."
 ].join("\n");
 var AGENT_KERNEL_TEXT = hostPromptSafe(KERNEL);
+registerAgentPromptPart({
+  name: "dsh-soulmojito:agent-kernel",
+  order: -80,
+  scope: "system",
+  text: () => AGENT_KERNEL_TEXT
+});
+registerAgentPromptPart({
+  name: "dsh-soulmojito:agent-preset",
+  order: -75,
+  scope: "system",
+  // 内容型提示词按 prompt_order 注入，main/jailbreak 沿用卡覆盖语义；marker
+  // （卡字段/世界书/示例/历史）仍走工具与原生历史（见 preset.ts 的映射说明）。
+  // 装载与 facts/guides 同款 best-effort 异步；预设增删改与激活预热经 preset.ts
+  // 的跨 bundle 监听表写穿缓存，下一次装配即时生效。字节稳定是本段的生命线：
+  // 动态宏按绑定的冻结记录求值（presetFreeze），重启经 preheat 预热——两条路
+  // 都是防 system 头突变烧掉前缀缓存（决策 2026-10-09-agent-preset-cache-stability）。
+  text: (agentId) => agentPresetText(agentId)
+});
+registerAgentPromptPart({ name: "dsh-soulmojito:agent-facts", order: -70, scope: "context", text: (agentId) => agentFactsText(agentId) });
+registerAgentPromptPart({ name: "dsh-soulmojito:agent-guides", order: -65, scope: "context", text: (agentId) => agentGuidesText(agentId) });
+registerAgentPromptPart({ name: "dsh-soulmojito:agent-script", order: -64, scope: "context", text: (agentId) => agentScriptText(agentId) });
+registerAgentPromptPart({ name: "dsh-soulmojito:agent-games", order: -63, scope: "context", text: (agentId) => agentGamesText(agentId) });
 var factsProjection = createLazyProjection({
   getState: async () => (await tavernStore()).getState(),
   load: async (agentId, settle) => {
@@ -41826,6 +41868,9 @@ var factsProjection = createLazyProjection({
     ].filter(Boolean).join("\n"), expand));
   }
 });
+function agentFactsText(agentId) {
+  return factsProjection.valueOf(agentId) ?? "";
+}
 var guidesProjection = createLazyProjection({
   getState: async () => (await tavernStore()).getState(),
   load: async (agentId, settle) => {
@@ -41838,6 +41883,9 @@ var guidesProjection = createLazyProjection({
     settle(hostPromptSafe(formatGuidesBlock(chat?.header.chat_metadata?.guides) ?? "", expand));
   }
 });
+function agentGuidesText(agentId) {
+  return guidesProjection.valueOf(agentId) ?? "";
+}
 onGuidesChanged((character, chatId) => guidesProjection.refreshWhere((binding) => binding.architecture === "agent-tavern" && binding.character === character && binding.chatId === chatId));
 onGamesChanged(() => {
   refreshAllAgentGamesSummaries();
@@ -41868,6 +41916,9 @@ var presetProjection = createLazyProjection({
     });
   }
 });
+function agentPresetText(agentId) {
+  return presetProjection.valueOf(agentId)?.text ?? "";
+}
 onAgentPresetChanged(() => presetProjection.refreshWhere((binding) => binding.architecture === "agent-tavern"));
 
 // packages/plugin/src/agent-novel/writer.ts

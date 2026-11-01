@@ -251,34 +251,6 @@
         error ? h('p', { className: 'dt-error' }, error) : null))
     }
 
-    function CharacterCardFields({ card }) {
-      const t = useTranslate()
-      const [expanded, setExpanded] = useState({})
-      if (!card) return h('div', { className: 'dt-card-fields' }, h('span', { className: 'dt-muted' }, t('nav.loading')))
-      const data = card.data || {}
-      const field = (key, label) => {
-        const text = typeof data[key] === 'string' ? data[key].trim() : ''
-        if (text === '') return null
-        return h('div', { key, className: 'dt-card-field' },
-          h('button', {
-            type: 'button',
-            className: 'dt-card-field-head',
-            'aria-expanded': expanded[key] === true,
-            onClick: () => setExpanded({ ...expanded, [key]: !expanded[key] }),
-          },
-          h('span', null, label),
-          h(IconChevronDownOutline14, { className: expanded[key] ? 'dt-chevron-open' : '' })),
-          expanded[key] ? h('div', { className: 'dt-card-copy' }, h(MarkdownText, { text })) : null)
-      }
-      return h('div', { className: 'dt-card-fields' },
-        field('description', t('panel.characters.description')),
-        field('personality', t('panel.characters.personality')),
-        field('scenario', t('panel.characters.scenario')),
-         field('firstMes', t('panel.characters.firstMes')),
-         field('mesExample', t('panel.characters.mesExample')),
-         field('creatorNotes', t('panel.characters.creatorNotes')))
-    }
-
     // 手动新建的空白卡模板（提案 0013）：字段口径对齐 card_create 工具——
     // spec_version 蛇形是 decode 端（tavern-format card.ts）的读取口径。
     const BLANK_CHARACTER_CARD = {
@@ -322,7 +294,6 @@
       const run = (promise) => { setError(''); void promise.catch((cause) => setError(cause.message)) }
       const viewCard = (name) => {
         if (editing === name) return
-        if (viewing === name) { setViewing(''); return }
         setViewing(name)
         if (!(name in cards)) {
           setCards((current) => ({ ...current, [name]: null }))
@@ -340,14 +311,18 @@
         }
       }
       const editCard = (name) => {
-        if (editing === name) { setEditing(''); return }
         setCreating(false)
+        setViewing('')
         setEditing(name)
-        setViewing(name)
         if (!(name in cards)) {
           setCards((current) => ({ ...current, [name]: null }))
           void fetchCharacterCard(name).then((card) => setCards((current) => ({ ...current, [name]: card })))
             .catch((cause) => {
+              setCards((current) => {
+                const next = { ...current }
+                delete next[name]
+                return next
+              })
               setEditing('')
               setError(cause instanceof Error ? cause.message : String(cause))
             })
@@ -407,6 +382,43 @@
       const visibleCharacters = characterQuery === ''
         ? characters
         : characters.filter((name) => name.toLowerCase().includes(characterQuery))
+      const characterGrid = h('div', { className: 'dt-card-grid' },
+        visibleCharacters.map((name) => {
+          const active = activeCharacter === name
+            || (activeCharacter !== '' && normalizeTavernName(activeCharacter) === normalizeTavernName(name))
+          const card = cards[name]
+          return h('div', { key: name, className: 'dt-card' },
+            h('div', { className: 'dt-card-head' },
+              h('img', { src: `${API}/avatar/${encodeURIComponent(name)}`, alt: '' }),
+              h('div', { className: 'dt-card-title' },
+                h('strong', null, name),
+                card?.data?.creator ? h('span', null, t('panel.characters.creator', { name: card.data.creator })) : null)),
+            h('div', { className: 'dt-card-actions' },
+              active
+                ? h(Pill, { active: true }, t('panel.characters.active'))
+                : h(Button, { size: 'sm', variant: 'outline', onClick: () => run(patchState({ activeCharacter: name })) }, t('panel.characters.setActive')),
+              h(Button, { size: 'sm', variant: 'ghost', 'aria-haspopup': 'dialog', onClick: () => viewCard(name) }, t('panel.characters.viewCard')),
+              h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editCard(name) }, t('panel.edit')),
+              h(Button, {
+                size: 'sm',
+                variant: 'ghost',
+                icon: h(IconDownloadOutline16),
+                'aria-label': t('panel.characters.export', { name }),
+                title: t('panel.characters.export', { name }),
+                onClick: () => downloadAsset(`export/character/${encodeURIComponent(name)}`, `${name}.png`),
+              }),
+              h(Button, {
+                size: 'sm',
+                variant: 'ghost',
+                icon: h(IconTrashOutline16),
+                'aria-label': t('panel.characters.delete', { name }),
+                title: t('panel.characters.delete', { name }),
+                onClick: () => {
+                  if (window.confirm(t('panel.characters.deleteConfirm', { name }))) run(deleteCharacterAsset(name))
+                },
+              }))
+          )
+        }))
       return h(React.Fragment, null,
         h('section', { className: 'dt-settings-band' },
           h('h3', null, t('settings.import')),
@@ -420,43 +432,17 @@
             ? h('p', { className: 'dt-muted' }, t('panel.characters.empty'))
             : visibleCharacters.length === 0
               ? h('p', { className: 'dt-muted' }, t('panel.filterEmpty'))
-              : h('div', { className: 'dt-card-grid' },
-              visibleCharacters.map((name) => {
-              const active = activeCharacter === name
-                || (activeCharacter !== '' && normalizeTavernName(activeCharacter) === normalizeTavernName(name))
-              const card = cards[name]
-              return h('div', { key: name, className: 'dt-card' },
-                h('div', { className: 'dt-card-head' },
-                  h('img', { src: `${API}/avatar/${encodeURIComponent(name)}`, alt: '' }),
-                  h('div', { className: 'dt-card-title' },
-                    h('strong', null, name),
-                    card?.data?.creator ? h('span', null, t('panel.characters.creator', { name: card.data.creator })) : null)),
-                h('div', { className: 'dt-card-actions' },
-                  active
-                    ? h(Pill, { active: true }, t('panel.characters.active'))
-                    : h(Button, { size: 'sm', variant: 'outline', onClick: () => run(patchState({ activeCharacter: name })) }, t('panel.characters.setActive')),
-                  h(Button, { size: 'sm', variant: 'ghost', onClick: () => viewCard(name) }, t(viewing === name ? 'panel.characters.hideCard' : 'panel.characters.viewCard')),
-                  h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editCard(name) }, t('panel.edit')),
-                  h(Button, {
-                    size: 'sm',
-                    variant: 'ghost',
-                    icon: h(IconDownloadOutline16),
-                    'aria-label': t('panel.characters.export', { name }),
-                    title: t('panel.characters.export', { name }),
-                    onClick: () => downloadAsset(`export/character/${encodeURIComponent(name)}`, `${name}.png`),
-                  }),
-                  h(Button, {
-                    size: 'sm',
-                    variant: 'ghost',
-                    icon: h(IconTrashOutline16),
-                    'aria-label': t('panel.characters.delete', { name }),
-                    title: t('panel.characters.delete', { name }),
-                    onClick: () => {
-                      if (window.confirm(t('panel.characters.deleteConfirm', { name }))) run(deleteCharacterAsset(name))
-                    },
-                  })),
-                viewing === name ? h(CharacterCardFields, { card }) : null)
-            }))),
+              : characterGrid),
+        viewing !== ''
+          ? h(CharacterCardView, {
+            name: viewing,
+            card: cards[viewing] ?? null,
+            active: activeCharacter === viewing
+              || (activeCharacter !== '' && normalizeTavernName(activeCharacter) === normalizeTavernName(viewing)),
+            onClose: () => setViewing(''),
+            onEdit: () => editCard(viewing),
+          })
+          : null,
         creating
           ? h(CardEditor, { card: BLANK_CHARACTER_CARD, name: '', hint: t('panel.characters.createEditorHint'), onSave: createCharacter, onCancel: () => setCreating(false) })
           : null,
@@ -484,12 +470,6 @@
           error ? h('p', { className: 'dt-error' }, error) : null)
           : null,
         error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
-    }
-
-    function loreKeys(entry) {
-      const primary = Array.isArray(entry.key) ? entry.key : []
-      const secondary = Array.isArray(entry.keysecondary) ? entry.keysecondary : []
-      return [...primary, ...secondary].filter((value) => value !== '').join(', ')
     }
 
     function ToggleField({ label, checked, onChange }) {
@@ -561,11 +541,10 @@
       const state = useTavernStore()
       const t = useTranslate()
       const [error, setError] = useState('')
-      const [browse, setBrowse] = useState('')
+      const [viewing, setViewing] = useState('')
       const [editing, setEditing] = useState('')
       const [creating, setCreating] = useState(false)
       const [books, setBooks] = useState({})
-      const [filter, setFilter] = useState('')
       // 当前卡以当前宿主会话的 Tavern 绑定为准；bootstrap.activeCard 只对应全局
       // activeCharacter，切回旧会话时可能仍是上一张卡，按需拉取当前卡的对象。
       const activeCharacter = useActiveTavernCharacter(useSessions)
@@ -597,26 +576,35 @@
         else manual.delete(name)
         run(patchState({ activeWorlds: [...manual] }))
       }
-      const toggleBrowse = (name) => {
-        if (browse === name) { setBrowse(''); return }
-        setBrowse(name)
+      const viewBook = (name) => {
+        setViewing(name)
         if (!(name in books)) {
           setBooks((current) => ({ ...current, [name]: null }))
           void fetchWorldBook(name)
             .then((book) => setBooks((current) => ({ ...current, [name]: book })))
             .catch((cause) => {
-              setBrowse('')
+              setBooks((current) => {
+                const next = { ...current }
+                delete next[name]
+                return next
+              })
+              setViewing('')
               setError(cause instanceof Error ? cause.message : String(cause))
             })
         }
       }
       const editBook = (name) => {
-        setEditing(editing === name ? '' : name)
-        setBrowse(name)
+        setViewing('')
+        setEditing(name)
         if (!(name in books)) {
           setBooks((current) => ({ ...current, [name]: null }))
           void fetchWorldBook(name).then((book) => setBooks((current) => ({ ...current, [name]: book })))
             .catch((cause) => {
+              setBooks((current) => {
+                const next = { ...current }
+                delete next[name]
+                return next
+              })
               setEditing('')
               setError(cause instanceof Error ? cause.message : String(cause))
             })
@@ -629,7 +617,7 @@
           if (next !== name) delete result[name]
           return result
         })
-        setBrowse(next)
+        setViewing(next)
         setEditing('')
       })
       // 手动新建走与编辑同一条 PUT world 路径（oldName === 新名，importWorldFile
@@ -646,7 +634,7 @@
           .then((saved) => {
             setBooks((current) => ({ ...current, [name]: saved }))
             setCreating(false)
-            setBrowse(name)
+            setViewing(name)
             return saved
           })
           .catch((cause) => {
@@ -654,16 +642,12 @@
           })
       }
       const worlds = state.bootstrap.worlds
-      const book = browse !== '' ? books[browse] : undefined
-      const entries = book?.entries
-        ? book.entries.filter((entry) => filter === '' || `${entry.comment}\n${entry.content}\n${loreKeys(entry)}`.toLowerCase().includes(filter.toLowerCase()))
-        : []
       return h(React.Fragment, null,
         h('section', { className: 'dt-settings-band' },
           h('h3', null, t('settings.import')),
           h('div', { className: 'dt-imports' },
             h(UploadButton, { kind: 'world', label: t('settings.importWorld'), accept: '.json,application/json' }),
-            h('button', { type: 'button', className: 'dt-upload', onClick: () => { setEditing(''); setBrowse(''); setCreating(true) } }, `+ ${t('panel.worlds.new')}`))),
+            h('button', { type: 'button', className: 'dt-upload', onClick: () => { setEditing(''); setViewing(''); setCreating(true) } }, `+ ${t('panel.worlds.new')}`))),
         h('section', { className: 'dt-settings-band' },
           h('p', { className: 'dt-hint' }, t('panel.worlds.autoFollowHint')),
           worlds.length === 0 && !creating
@@ -691,9 +675,16 @@
                     : null,
                 ]
               })(),
-              h(Button, { size: 'sm', variant: 'ghost', onClick: () => toggleBrowse(name) },
-                browse === name ? t('panel.characters.hideCard') : t('panel.worlds.entries', { count: books[name]?.entries?.length ?? state.bootstrap.worldEntryCounts?.[name] ?? 0 })),
-              h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editBook(name) }, t(editing === name ? 'panel.cancel' : 'panel.edit')),
+              h(Button, {
+                size: 'sm',
+                variant: 'ghost',
+                icon: h(IconBrowseOutline16),
+                'aria-label': t('panel.worlds.view', { name }),
+                'aria-haspopup': 'dialog',
+                title: t('panel.worlds.view', { name }),
+                onClick: () => viewBook(name),
+              }, t('panel.worlds.entries', { count: books[name]?.entries?.length ?? state.bootstrap.worldEntryCounts?.[name] ?? 0 })),
+              h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editBook(name) }, t('panel.edit')),
               h(Button, { size: 'sm', variant: 'ghost', icon: h(IconDownloadOutline16), 'aria-label': t('panel.exportJson'), title: t('panel.exportJson'), onClick: () => downloadAsset(`export/world/${encodeURIComponent(name)}`, `${name}.json`) }),
               h(Button, {
                 size: 'sm',
@@ -705,21 +696,16 @@
                   if (window.confirm(t('panel.worlds.deleteConfirm', { name }))) run(deleteWorldBook(name))
                 },
               }))))),
-         browse !== '' ? h('section', { className: 'dt-settings-band' },
-           h('h3', null, browse),
-           h('div', { className: 'dt-imports' },
-             h(Input, { icon: h(IconSearchOutline16), placeholder: t('panel.worlds.search'), value: filter, onChange: (event) => setFilter(event.target.value) })),
-           !book
-             ? h('p', { className: 'dt-muted' }, t('nav.loading'))
-             : entries.length === 0
-               ? h('p', { className: 'dt-muted' }, t('panel.worlds.noEntries'))
-               : h('div', { className: 'dt-entry-list' }, entries.map((entry, index) => h('div', { key: entry.uid ?? index, className: `dt-entry ${entry.disable ? 'dt-entry-off' : ''}` },
-                 h('div', { className: 'dt-entry-head' },
-                   h('strong', null, entry.comment || `#${entry.uid ?? index + 1}`),
-                   h('span', { className: 'dt-entry-keys' }, t('panel.worlds.keys', { keys: loreKeys(entry) }))),
-                 h('div', { className: 'dt-entry-content' }, entry.content))))) : null,
-         editing !== '' && book
-           ? h(WorldBookEditor, { book, onSave: (next) => save(editing, next), onCancel: () => setEditing('') })
+         viewing !== ''
+           ? h(WorldBookView, {
+             name: viewing,
+             book: books[viewing] ?? null,
+             onClose: () => setViewing(''),
+             onEdit: () => editBook(viewing),
+           })
+           : null,
+         editing !== '' && books[editing]
+           ? h(WorldBookEditor, { book: books[editing], onSave: (next) => save(editing, next), onCancel: () => setEditing('') })
            : editing !== ''
              ? h(EditorDialog, { title: t('panel.worlds.editTitle', { name: editing }), onClose: () => setEditing(''), closeLabel: t('panel.close') },
                h('p', { className: 'dt-muted' }, t('nav.loading')))

@@ -8,6 +8,7 @@ import { recordPromptView } from '../prompt-viewer.js'
 import { parsePreset } from '../../../tavern-format/src/index.js'
 import { limitText } from '../tool-args.js'
 import { agentStepCaptureOf } from './prompt-capture.js'
+import { agentPromptPieces, registerAgentPromptPart, type AgentPromptPiece } from './prompt-parts.js'
 import {
   defaultPreset,
   onAgentPresetChanged,
@@ -52,25 +53,54 @@ const KERNEL = [
  *  注册期与记录期取同一常量，字节恒同）。 */
 const AGENT_KERNEL_TEXT = hostPromptSafe(KERNEL)
 
-export function apply(ctx: AgentContextLike): void {
-  ctx.systemPrompt?.section?.({
-    name: 'dsh-soulmojito:agent-kernel',
-    order: -80,
-    // 守卫：内核为静态文本，但一旦有人写入 {{...}}（宿主变量语法），装配
-    // 会直接抛错中止运行——过 hostPromptSafe 让内核编辑错不起（prompt-safety.ts）。
-    text: AGENT_KERNEL_TEXT,
-  })
-  // 激活预设（ST 聊天补全预设）投影（order -75：kernel 之后、facts 之前）：
+/** 唯一 complete system 段的注册名（决策 2026-11-02-agent-prompt-takeover）。 */
+export const AGENT_PROMPT_SECTION = 'dsh-soulmojito:agent-prompt'
+
+/**
+ * 部件注册（模块加载期一次：apply 会因 recompose 反复执行，部件不该跟着重复
+ * 注册）。order 口径与旧的独立注册面一致：
+ * - system：IM 段 -90（im-agent bundle 注册）→ kernel -80 → preset -75 →
+ *   mod 段 -50..0（agentPromptSectionsFor 从跨 bundle 快照并入）；
+ * - context：facts -70 / guides -65 / script -64 / games -63 仍走宿主
+ *   `systemPrompt.context()` 的 runtime snapshot（每步一条 user 消息，位于上下文
+ *   末尾），不进 complete 段——它们本来就是动态上下文，不是 system 头。
+ */
+registerAgentPromptPart({
+  name: 'dsh-soulmojito:agent-kernel',
+  order: -80,
+  scope: 'system',
+  text: () => AGENT_KERNEL_TEXT,
+})
+registerAgentPromptPart({
+  name: 'dsh-soulmojito:agent-preset',
+  order: -75,
+  scope: 'system',
   // 内容型提示词按 prompt_order 注入，main/jailbreak 沿用卡覆盖语义；marker
   // （卡字段/世界书/示例/历史）仍走工具与原生历史（见 preset.ts 的映射说明）。
   // 装载与 facts/guides 同款 best-effort 异步；预设增删改与激活预热经 preset.ts
   // 的跨 bundle 监听表写穿缓存，下一次装配即时生效。字节稳定是本段的生命线：
   // 动态宏按绑定的冻结记录求值（presetFreeze），重启经 preheat 预热——两条路
   // 都是防 system 头突变烧掉前缀缓存（决策 2026-10-09-agent-preset-cache-stability）。
+  text: (agentId) => agentPresetText(agentId),
+})
+registerAgentPromptPart({ name: 'dsh-soulmojito:agent-facts', order: -70, scope: 'context', text: (agentId) => agentFactsText(agentId) })
+registerAgentPromptPart({ name: 'dsh-soulmojito:agent-guides', order: -65, scope: 'context', text: (agentId) => agentGuidesText(agentId) })
+registerAgentPromptPart({ name: 'dsh-soulmojito:agent-script', order: -64, scope: 'context', text: (agentId) => agentScriptText(agentId) })
+registerAgentPromptPart({ name: 'dsh-soulmojito:agent-games', order: -63, scope: 'context', text: (agentId) => agentGamesText(agentId) })
+
+export function apply(ctx: AgentContextLike): void {
+  // 唯一 complete 段（决策 2026-11-02-agent-prompt-takeover）：宿主 assemble()
+  // 对 complete 段只保留它自己，AgentTavern 会话因此不再携带宿主的 identity /
+  // deployment persona / 工具与界面指引。段文本按 prompt-parts 注册表拼装
+  // （IM 段 + kernel + preset + mod 段），空文本摘除。
+  //
+  // 文本仍走 hostPromptSafe（部件注册期）：部件文本一旦残留 {{...}}（宿主变量
+  // 语法），装配会直接抛错中止运行——让内容编辑错不起（prompt-safety.ts）。
   ctx.systemPrompt?.section?.({
-    name: 'dsh-soulmojito:agent-preset',
-    order: -75,
-    text: (assembly) => agentPresetText(assembly?.agent?.id),
+    name: AGENT_PROMPT_SECTION,
+    order: -80,
+    complete: true,
+    text: (assembly) => agentSystemPromptTextOf(assembly?.agent?.id),
   })
   // 启动预热（见 preheatAgentPresetProjections 注释）：消除插件重启后既有绑定
   // 的首轮空串竞态。fire-and-forget——装载完成前懒装载路径照常兜底。
@@ -133,7 +163,7 @@ export function apply(ctx: AgentContextLike): void {
   // 唯一正确路线，见 mods/agent-mount.ts 文档）；内置工具名运行时认领进查重
   // 保留集。apply 可能被宿主重复调用（每次 recompose），每次挂载独立同步、
   // effect 清理时反注册。
-  mountModExtensions(ctx, { claimTools: tools.map((tool) => tool.name) })
+  mountModExtensions(ctx, { claimTools: tools.map((tool) => tool.name), promptSections: 'agent-prompt' })
 }
 
 export interface AgentContextLike {
@@ -143,6 +173,8 @@ export interface AgentContextLike {
       order: number
       /** 与 context 同款装配回调：宿主 assemble() 携带 { agent, scope, signal }。 */
       text: string | ((assembly?: AgentAssemblyLike) => string)
+      /** 宿主语义：complete 段单独成为最终 system prompt（其余 section 丢弃）。 */
+      complete?: boolean
     }) => unknown
     context?: (context: {
       name: string
@@ -317,23 +349,21 @@ function agentPresetTemperatureOf(agentId: string | undefined): number | undefin
 }
 
 /**
- * 预注入 section 装配快照（提示词查看器 Agent 模式）：内置六段（与 apply()
- * 的注册一一对应——新增注册必须同步这里，测试用 apply 注册面锁覆盖）+ mod
- * section 快照（cross-bundle 注册表，读时与 agent-mount 挂载面同式钳制 +
- * hostPromptSafe）。空文本段摘除（宿主装配对空 context 同样摘除——装载中/
- * 无资产通道返回空串），按 order 升序。
+ * 预注入面快照（提示词查看器 Agent 模式，决策 2026-11-02-agent-prompt-takeover）：
+ * 注册表部件（IM 段 / kernel / preset / 四个 context 通道）+ mod 段快照
+ * （cross-bundle 注册表，读时与旧挂载面同式钳制 + hostPromptSafe）。
+ *
+ * scope 直接取自注册面：`system` 是最终 system prompt 的组成（complete 段），
+ * `context` 是宿主 runtime snapshot 的组成（每步一条 user 消息）。空文本摘除，
+ * 按 order 升序（同 order 保持注册序——取快照即所见）。
  */
-export function agentPromptSectionsFor(agentId: string): Array<{ name: string; order: number; text: string }> {
-  const sections = [
-    { name: 'dsh-soulmojito:agent-kernel', order: -80, text: AGENT_KERNEL_TEXT },
-    { name: 'dsh-soulmojito:agent-preset', order: -75, text: agentPresetText(agentId) },
-    { name: 'dsh-soulmojito:agent-facts', order: -70, text: agentFactsText(agentId) },
-    { name: 'dsh-soulmojito:agent-guides', order: -65, text: agentGuidesText(agentId) },
-    { name: 'dsh-soulmojito:agent-script', order: -64, text: agentScriptText(agentId) },
-    { name: 'dsh-soulmojito:agent-games', order: -63, text: agentGamesText(agentId) },
+export function agentPromptSectionsFor(agentId: string | undefined): AgentPromptPiece[] {
+  const sections: AgentPromptPiece[] = [
+    ...agentPromptPieces(agentId),
     ...modSectionSnapshot().map((entry) => ({
       name: `dsh-soulmojito:mod:${entry.modId}:${entry.definition.name}`,
       order: clampModSectionOrder(entry.definition.order),
+      scope: 'system' as const,
       text: hostPromptSafe(entry.definition.text),
     })),
   ]
@@ -342,13 +372,23 @@ export function agentPromptSectionsFor(agentId: string): Array<{ name: string; o
     .sort((a, b) => a.order - b.order)
 }
 
+/** complete 段的装配文本：只拼 `scope: 'system'` 的部件（与宿主返回的
+ *  `sections` 同口径）——context 部件由宿主在 runtime snapshot 里自行渲染。 */
+function agentSystemPromptTextOf(agentId: string | undefined): string {
+  return agentPromptSectionsFor(agentId)
+    .filter((section) => section.scope === 'system')
+    .map((section) => section.text)
+    .join('\n\n')
+}
+
 /**
- * 提示词查看器（Agent 模式，决策 2026-10-11-agent-prompt-viewer）：agent/request
- * 链尾合成后的记录。AgentTavern 的 LLM 请求由宿主 AgentLoop 发出，插件看不到
- * 宿主拼装的完整请求（system 头由宿主 assemble 物化、历史是宿主 projection）——
- * 记录面是插件自己的**预注入面**：① 五个 systemPrompt section/context 的装配
- * 文本（agentPromptSectionsFor，与注册同源）；② 本 step pre-step 由插件注入的
- * user 消息（prompt-capture 捕获）；③ waterfall 链尾最终调用配置（实发 params）。
+ * 提示词查看器（Agent 模式，决策 2026-10-11-agent-prompt-viewer /
+ * 2026-11-02-agent-prompt-takeover）：agent/request 链尾合成后的记录。
+ * AgentTavern 的 LLM 请求由宿主 AgentLoop 发出，插件看不到宿主的完整请求
+ * （历史是宿主 projection）——记录面是插件自己的**预注入面**：① 注册表部件的
+ * 装配文本（agentPromptSectionsFor，与 complete 段同源；`scope` 区分 system 头
+ * 与 runtime snapshot 的 context）；② 本 step pre-step 由插件注入的 user 消息
+ * （prompt-capture 捕获）；③ waterfall 链尾最终调用配置（实发 params）。
  * 未绑定 / 非 agent-tavern / group 会话（含 tavern_deduce 子代理）静默跳过。
  * 整体吞错 + 宿主日志一行——记录面绝不反噬请求路径。
  */
@@ -364,7 +404,7 @@ async function recordAgentTavernPromptViewFor(
     const binding = (await (await tavernStore()).getState()).sessionBindings[agentId]
     if (!binding || binding.architecture !== 'agent-tavern' || binding.group === true) return
     const sections = agentPromptSectionsFor(agentId)
-    const system = sections.map((section) => section.text).join('\n\n')
+    const system = agentSystemPromptTextOf(agentId)
     recordPromptView({
       character: binding.character,
       chatId: binding.chatId,

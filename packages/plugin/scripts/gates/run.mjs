@@ -1982,7 +1982,7 @@ if (agentEntry) {
   const agentModule = await import(agentEntry)
   agentModule.apply({
     systemPrompt: {
-      section: (section) => { agentSections.push({ name: section.name, order: section.order, text: typeof section.text === 'string' ? section.text : '' }); return () => {} },
+      section: (section) => { agentSections.push(section); return () => {} },
       context: () => {},
     },
     tools: { register: (tool) => { agentTools.push(tool.name); return () => {} } },
@@ -1990,10 +1990,15 @@ if (agentEntry) {
   })
   probe.agentHasMoodTool = agentTools.includes('dsh-soulmojito.mood-tracker_get_mood')
   probe.agentHasBuiltin = agentTools.includes('tavern_character_get')
-  const probeSection = agentSections.find((section) => section.name === 'dsh-soulmojito:mod:p2-probe:probe')
-  probe.agentSectionPresent = probeSection !== undefined
-  probe.agentSectionTextNeutralized = probeSection !== undefined && !probeSection.text.includes('{{')
-  probe.agentSectionOrderClamped = probeSection !== undefined && probeSection.order >= -50 && probeSection.order <= 0
+  // 2026-11-02 接管：宿主侧只剩一个 complete 段，mod 段折进它的装配文本；
+  // order 钳制改查 prompt-parts 读取面（与渲染取同一快照）。
+  const promptSection = agentSections[0]
+  probe.agentCompleteSection = agentSections.length === 1 && promptSection?.complete === true
+  const renderedPrompt = typeof promptSection?.text === 'function' ? promptSection.text({ agent: { id: 'gate-agent' } }) : ''
+  const probePiece = agentModule.agentPromptSectionsFor('gate-agent').find((piece) => piece.name === 'dsh-soulmojito:mod:p2-probe:probe')
+  probe.agentSectionPresent = probePiece !== undefined && renderedPrompt.includes(probePiece.text)
+  probe.agentSectionTextNeutralized = probePiece !== undefined && !probePiece.text.includes('{{')
+  probe.agentSectionOrderClamped = probePiece !== undefined && probePiece.order >= -50 && probePiece.order <= 0
 }
 console.log('DSH_SOULMOJITO_GATE_RESULT=' + JSON.stringify(probe))
 `
@@ -2085,7 +2090,10 @@ function checkModLoaderResult(result, { requireEnvOff = true } = {}) {
     problems.push('the agent bundle mount must absorb mod tools from the cross-bundle registry next to its builtin tools')
   }
   if (result?.agentSectionPresent !== true || result?.agentSectionOrderClamped !== true) {
-    problems.push('the agent bundle mount must absorb mod prompt sections with order clamped to [-50, 0]')
+    problems.push('the agent bundle mount must publish mod prompt sections through the complete section with order clamped to [-50, 0]')
+  }
+  if (result?.agentCompleteSection !== true) {
+    problems.push('the agent bundle must register exactly one complete system prompt section')
   }
   if (result?.agentSectionTextNeutralized !== true) {
     problems.push('mod prompt section text must be neutralized (no raw {{...}} host-variable syntax)')
@@ -3533,6 +3541,7 @@ const gates = [
         p2PlainNoLlmKey: true,
         agentHasMoodTool: true,
         agentHasBuiltin: true,
+        agentCompleteSection: true,
         agentSectionPresent: true,
         agentSectionOrderClamped: true,
         agentSectionTextNeutralized: true,
@@ -3558,6 +3567,7 @@ const gates = [
         { ...good, p2LlmKey: false },
         { ...good, p2PlainNoLlmKey: false },
         { ...good, agentHasMoodTool: false },
+        { ...good, agentCompleteSection: false },
         { ...good, agentSectionOrderClamped: false },
         { ...good, agentSectionTextNeutralized: false },
         { ...good, envOff: { ...good.envOff, envStatsAfterEnabling: 200 } },

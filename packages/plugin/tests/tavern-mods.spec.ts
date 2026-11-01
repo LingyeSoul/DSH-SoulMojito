@@ -1479,9 +1479,9 @@ describe('agent bundle absorption of mod extensions (proposal 0015 §3.6)', () =
     const off = registerModTool('m.x', def('m.x_probe', 'v1'), 100)
     try {
       const mountA = makeAgentCtx()
-      const disposeA = mountModExtensions(mountA.ctx, { claimTools: ['tavern_character_get'] })
+      const disposeA = mountModExtensions(mountA.ctx, { claimTools: ['tavern_character_get'], promptSections: 'host' })
       const mountB = makeAgentCtx()
-      const disposeB = mountModExtensions(mountB.ctx, { claimTools: [] })
+      const disposeB = mountModExtensions(mountB.ctx, { claimTools: [], promptSections: 'host' })
       expect([...mountA.tools.keys()]).toEqual(['m.x_probe'])
       expect([...mountB.tools.keys()]).toEqual(['m.x_probe'])
       disposeA()
@@ -1495,7 +1495,7 @@ describe('agent bundle absorption of mod extensions (proposal 0015 §3.6)', () =
 
   it('tools registered after a mount arrive via the mods-changed write-through and unregister on removal', async () => {
     const mount = makeAgentCtx()
-    const dispose = mountModExtensions(mount.ctx, { claimTools: [] })
+    const dispose = mountModExtensions(mount.ctx, { claimTools: [], promptSections: 'host' })
     expect(mount.tools.size).toBe(0)
     const off = registerModTool('m.late', def('m.late_tool', 'late'), 100)
     await sleep(10) // 写穿通知是异步 emit
@@ -1509,7 +1509,7 @@ describe('agent bundle absorption of mod extensions (proposal 0015 §3.6)', () =
   it('wrapper execute forwards to the live registry entry and rejects once the mod is gone', async () => {
     const off = registerModTool('m.live', def('m.live_tool', 'old'), 100)
     const mount = makeAgentCtx()
-    const dispose = mountModExtensions(mount.ctx, { claimTools: [] })
+    const dispose = mountModExtensions(mount.ctx, { claimTools: [], promptSections: 'host' })
     const wrapper = mount.tools.get('m.live_tool')!
     expect(((await wrapper.execute({}, {})) as { by: string }).by).toBe('old')
     off()
@@ -1528,7 +1528,7 @@ describe('agent bundle absorption of mod extensions (proposal 0015 §3.6)', () =
     const off = registerModSection('m.s', { name: 'notes', text: 'keep {{char}} consistent', order: 9999 }, 100)
     try {
       const mount = makeAgentCtx()
-      const dispose = mountModExtensions(mount.ctx, { claimTools: [] })
+      const dispose = mountModExtensions(mount.ctx, { claimTools: [], promptSections: 'host' })
       // 开括号组被中性化为 { {（宿主变量语法不再成立）；order 钳到 0；名字带 mod 域前缀。
       expect(mount.sections).toEqual([{ name: 'dsh-soulmojito:mod:m.s:notes', order: 0, text: 'keep { {char}} consistent' }])
       dispose()
@@ -1540,7 +1540,7 @@ describe('agent bundle absorption of mod extensions (proposal 0015 §3.6)', () =
 
   it('claimHostToolNames feeds the reserved set used by the mod host', () => {
     const mount = makeAgentCtx()
-    const dispose = mountModExtensions(mount.ctx, { claimTools: ['custom_host_tool'] })
+    const dispose = mountModExtensions(mount.ctx, { claimTools: ['custom_host_tool'], promptSections: 'host' })
     expect(claimedToolNames().has('custom_host_tool')).toBe(true)
     dispose()
   })
@@ -1548,7 +1548,7 @@ describe('agent bundle absorption of mod extensions (proposal 0015 §3.6)', () =
   it('fingerprint changes (description/schema) re-register the wrapper through the host channel', async () => {
     const off = registerModTool('m.drift', def('m.drift_tool', 'v1'), 100)
     const mount = makeAgentCtx()
-    const dispose = mountModExtensions(mount.ctx, { claimTools: [] })
+    const dispose = mountModExtensions(mount.ctx, { claimTools: [], promptSections: 'host' })
     const first = mount.tools.get('m.drift_tool')!
     off()
     const off2 = registerModTool('m.drift', { ...def('m.drift_tool', 'v2'), description: 'changed description' }, 100)

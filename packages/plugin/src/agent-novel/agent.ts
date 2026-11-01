@@ -81,7 +81,7 @@ export function apply(ctx: AgentContextLike): void {
   }
   // Mod 扩展面（提案 0015 §3.4「Mod 工具同理进入 AgentTavern/AgentNovel 工具
   // 面」+ §3.6 P2）：与 agent.ts 同款吸收器，经本 bundle 的 ctx 注册。
-  mountModExtensions(ctx, { claimTools: tools.map((tool) => tool.name) })
+  mountModExtensions(ctx, { claimTools: tools.map((tool) => tool.name), promptSections: 'host' })
 }
 
 export interface AgentContextLike {

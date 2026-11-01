@@ -92,17 +92,40 @@
       const state = useTavernStore()
       const t = useTranslate()
       const [error, setError] = useState('')
+      const [viewing, setViewing] = useState('')
       const [editing, setEditing] = useState('')
       const [creating, setCreating] = useState(false)
       const [presets, setPresets] = useState({})
       const run = (promise) => { setError(''); void promise.catch((cause) => setError(cause.message)) }
       const kinds = state.bootstrap.presetKinds || {}
-      const editPreset = (name) => {
-        setEditing(editing === name ? '' : name)
+      const viewPreset = (name) => {
+        setViewing(name)
         if (!(name in presets)) {
           setPresets((current) => ({ ...current, [name]: null }))
           void fetchPreset(name).then((data) => setPresets((current) => ({ ...current, [name]: data })))
             .catch((cause) => {
+              setPresets((current) => {
+                const next = { ...current }
+                delete next[name]
+                return next
+              })
+              setViewing('')
+              setError(cause instanceof Error ? cause.message : String(cause))
+            })
+        }
+      }
+      const editPreset = (name) => {
+        setViewing('')
+        setEditing(name)
+        if (!(name in presets)) {
+          setPresets((current) => ({ ...current, [name]: null }))
+          void fetchPreset(name).then((data) => setPresets((current) => ({ ...current, [name]: data })))
+            .catch((cause) => {
+              setPresets((current) => {
+                const next = { ...current }
+                delete next[name]
+                return next
+              })
               setEditing('')
               setError(cause instanceof Error ? cause.message : String(cause))
             })
@@ -151,7 +174,7 @@
           h('h3', null, t('settings.import')),
           h('div', { className: 'dt-imports' },
             h(UploadButton, { kind: 'preset', label: t('settings.importPreset'), accept: '.json,application/json' }),
-            h('button', { type: 'button', className: 'dt-upload', onClick: () => { setEditing(''); setCreating(true) } }, `+ ${t('panel.presets.new')}`))),
+            h('button', { type: 'button', className: 'dt-upload', onClick: () => { setEditing(''); setViewing(''); setCreating(true) } }, `+ ${t('panel.presets.new')}`))),
         // 预设生效范围（preset-mount.ts）：AgentTavern 恒投影；工作台/小说按
         // 这两个开关接入（默认关），翻转经 state 路由写穿投影缓存。
         h('section', { className: 'dt-settings-band' },
@@ -182,6 +205,7 @@
               : h('div', { className: 'dt-preset-list' }, visiblePresets.map((name) => h('div', { key: name, className: 'dt-preset-row' },
                 h('strong', { className: 'dt-preset-name' }, name),
                 h(Pill, null, kinds[name] || 'preset'),
+                h(Button, { size: 'sm', variant: 'ghost', icon: h(IconBrowseOutline16), 'aria-haspopup': 'dialog', onClick: () => viewPreset(name) }, t('panel.view')),
                 h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editPreset(name) }, t('panel.edit')),
                 h(Button, { size: 'sm', variant: 'ghost', icon: h(IconDownloadOutline16), 'aria-label': t('panel.exportJson'), title: t('panel.exportJson'), onClick: () => downloadAsset(`export/preset/${encodeURIComponent(name)}`, `${name}.json`) }),
                 state.bootstrap.state.activePreset === name
@@ -197,6 +221,15 @@
                     if (window.confirm(t('panel.presets.deleteConfirm', { name }))) run(deletePresetAsset(name))
                   },
                 }))))),
+        viewing !== ''
+          ? h(PresetView, {
+            name: viewing,
+            kind: kinds[viewing],
+            data: presets[viewing] ?? null,
+            onClose: () => setViewing(''),
+            onEdit: () => editPreset(viewing),
+          })
+          : null,
         editing !== '' && presets[editing]
           ? h(PresetEditor, { name: editing, kind: kinds[editing], data: presets[editing], onSave: (data, nextName) => save(editing, data, nextName), onCancel: () => setEditing('') })
           : editing !== ''

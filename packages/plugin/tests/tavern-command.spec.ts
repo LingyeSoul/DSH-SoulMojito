@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { apply } from '../src/index.js'
 import { apply as applyAgentTavern, type AgentContextLike } from '../src/agent-tavern/agent.js'
+import { registeredAgentPromptParts } from '../src/agent-tavern/prompt-parts.js'
 import { MemoryStore, TavernStore } from '../../tavern-store/src/index.js'
 import { parseRegexScripts } from '../../tavern-format/src/index.js'
 import { resetWorldEntryCountCache } from '../src/http/world-entry-counts.js'
@@ -741,7 +742,7 @@ describe('internal Tavern session bridge occupation', () => {
       effect: (fn: () => unknown) => { fn(); return () => {} },
     } as unknown as AgentContextLike)
     const presetTextOf = (agentId: string): string =>
-      (sections.get('dsh-soulmojito:agent-preset')!.text as (assembly?: { agent?: { id?: string } }) => string)({ agent: { id: agentId } })
+      registeredAgentPromptParts().find((part) => part.name === 'dsh-soulmojito:agent-preset')!.text(agentId)
 
     const agent = makeAgent('session-agent-preset')
     const result = await handler({
