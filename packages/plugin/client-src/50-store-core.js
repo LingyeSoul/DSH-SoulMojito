@@ -129,6 +129,34 @@
       }
     }
 
+    // 大表按需拉取（2026-11-02 实测：正则表约占 bootstrap 的七成）：bootstrap
+    // 只带轻状态，正则分区首次挂载时再取这一份。失败原样抛出，由分区自己的
+    // 错误面呈现；成功后写回 bootstrap.state，供所有读该键的组件共用。
+    let regexSlicePromise = null
+
+    function ensureRegexScripts() {
+      const state = snapshot.bootstrap.state || {}
+      if (Array.isArray(state.regexScripts)) return Promise.resolve(state.regexScripts)
+      if (regexSlicePromise) return regexSlicePromise
+      regexSlicePromise = api('state-slices')
+        .then((slices) => {
+          update({
+            bootstrap: {
+              ...snapshot.bootstrap,
+              state: {
+                ...snapshot.bootstrap.state,
+                regexScripts: Array.isArray(slices.regexScripts) ? slices.regexScripts : [],
+                ...(slices.regexScriptOwners === undefined ? {} : { regexScriptOwners: slices.regexScriptOwners }),
+                ...(slices.regexScriptPresetOwners === undefined ? {} : { regexScriptPresetOwners: slices.regexScriptPresetOwners }),
+              },
+            },
+          })
+          return snapshot.bootstrap.state.regexScripts
+        })
+        .finally(() => { regexSlicePromise = null })
+      return regexSlicePromise
+    }
+
     // 资产变更水位（store-revision）：写卡 Agent 等后台写入直接在服务端落盘、
     // 没有推送通道，客户端轮询它与 bootstrap 携带的 storeRevision 比对，变化
     // 即重取 bootstrap。与自更新安装进度（1.5s 轮询 `/update`）同款轮询策略，

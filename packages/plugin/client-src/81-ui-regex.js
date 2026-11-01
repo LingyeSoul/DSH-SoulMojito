@@ -111,6 +111,12 @@
     function RegexBand({ useSessions }) {
       const state = useTavernStore()
       const t = useTranslate()
+      const [sliceError, setSliceError] = useState('')
+      const regexLoaded = Array.isArray(state.bootstrap.state.regexScripts)
+      useEffect(() => {
+        if (regexLoaded) return
+        ensureRegexScripts().catch((cause) => setSliceError(cause instanceof Error ? cause.message : String(cause)))
+      }, [regexLoaded])
       const [error, setError] = useState('')
       const [notice, setNotice] = useState('')
       const [syncing, setSyncing] = useState('')
@@ -355,6 +361,9 @@
                 run(saveRegexScripts(scripts.filter((item) => item.id !== script.id)))
               },
             }, h(IconTrashOutline16)))))
+      if (sliceError !== '') return h('p', { className: 'dt-error' }, sliceError)
+      // 正则表按需拉取：表还没到时整块不渲染，避免先闪一次「暂无脚本」。
+      if (!regexLoaded) return null
       return h('section', { className: 'dt-settings-band' },
         h('div', { className: 'dt-band-actions' },
           h(Button, { size: 'sm', variant: 'primary', icon: h(IconPlusOutline16), disabled: editing !== '', onClick: () => { setNewScript(newRegexScript()); setEditing('new') } }, t('settings.regexCreate')),

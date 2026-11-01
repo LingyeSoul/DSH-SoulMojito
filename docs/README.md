@@ -243,6 +243,7 @@
 - [`2026-11-01-tavern-read-caches.md`](../decisions/2026-11-01-tavern-read-caches.md) — Tavern 热读面指纹缓存、只读冻结契约与投影事件快路径（含 `updateState` 持平的实测偏差）
 - [`2026-11-01-tavern-state-asset-split.md`](../decisions/2026-11-01-tavern-state-asset-split.md) — state.json 大资产切片化：写路径只写目标切片（3.34 MB → 14.9 KB 的提交点）
 - [`2026-11-02-stale-session-binding-reclaim.md`](../decisions/2026-11-02-stale-session-binding-reclaim.md) — 失效会话绑定回收：默认关闭、双信号否定、一次写盘
+- [`2026-11-02-bootstrap-state-slices.md`](../decisions/2026-11-02-bootstrap-state-slices.md) — bootstrap 只带轻状态：正则表按分区挂载拉取（2.2 MB → 3.4 KB）
 
 ## 探索（`exploration/`）
 

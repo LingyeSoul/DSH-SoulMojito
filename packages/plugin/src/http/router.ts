@@ -162,10 +162,24 @@ export async function handleApi(ctx: PluginContext, req: HttpRequest, res: HttpR
     // 进程内缓存按（数据根, 书名）和文件 size/mtime 命中，刷新只重读改过的书。
     const worlds = await db.listWorlds()
     const worldEntryCounts = await collectWorldEntryCounts(db, db.rootPath)
+    // Heavy state slices never ride bootstrap (measured 2026-11-02: a 2.2 MB
+    // regex table was 71% of a 2.55 MB response, and the panel opened far more
+    // often than the regex editor did). `frontendStorage` is not read from
+    // bootstrap at all — the client fetches it per character through
+    // `frontend/storage`. The client pulls the regex table from `state-slices`
+    // when that section first mounts.
+    const {
+      regexScripts: _bootstrapRegexScripts,
+      regexScriptOwners: _bootstrapRegexScriptOwners,
+      regexScriptPresetOwners: _bootstrapRegexScriptPresetOwners,
+      frontendStorage: _bootstrapFrontendStorage,
+      ...lightState
+    } = state
     return sendJson(res, 200, {
       ok: true,
       storeRevision,
-      state,
+      state: lightState,
+      stateSlices: ['regexScripts'],
       characters: await db.listCharacters(),
       worlds,
       worldEntryCounts,
@@ -199,6 +213,19 @@ export async function handleApi(ctx: PluginContext, req: HttpRequest, res: HttpR
   // bootstrap，刷新角色卡/世界书/预设等列表。
   if (method === 'GET' && route === 'store-revision') {
     return sendJson(res, 200, { ok: true, revision: await db.storeRevision() })
+  }
+
+  // Heavy state slices the panel loads on demand (see the bootstrap comment):
+  // the regex table and its ownership maps. Kept separate so opening the panel
+  // does not parse a multi-megabyte script library nobody is looking at.
+  if (method === 'GET' && route === 'state-slices') {
+    const state = await db.getState()
+    return sendJson(res, 200, {
+      ok: true,
+      regexScripts: state.regexScripts,
+      ...(state.regexScriptOwners === undefined ? {} : { regexScriptOwners: state.regexScriptOwners }),
+      ...(state.regexScriptPresetOwners === undefined ? {} : { regexScriptPresetOwners: state.regexScriptPresetOwners }),
+    })
   }
 
   if (method === 'GET' && route.startsWith('avatar/')) {
