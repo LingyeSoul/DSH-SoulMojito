@@ -10277,7 +10277,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("110b95c") : void 0;
+  const commit = true ? normalizeCommit("78d71c1") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -39528,6 +39528,190 @@ function clampIdentitySummary(card) {
   fields["identitySummary"] = summary.slice(0, 2e3);
 }
 
+// packages/plugin/src/lazy-projection.ts
+function createLazyProjection(options) {
+  const cache2 = /* @__PURE__ */ new Map();
+  const started = /* @__PURE__ */ new Set();
+  const tickets = /* @__PURE__ */ new Map();
+  let preheatDone = false;
+  async function load(agentId, state) {
+    const ticket = (tickets.get(agentId) ?? 0) + 1;
+    tickets.set(agentId, ticket);
+    const settle = (value) => {
+      if (tickets.get(agentId) === ticket) cache2.set(agentId, value);
+    };
+    try {
+      await options.load(agentId, settle, state);
+    } catch {
+    }
+  }
+  async function refreshAll() {
+    let state;
+    try {
+      state = await options.getState();
+    } catch {
+      state = void 0;
+    }
+    for (const agentId of [...started]) await enqueueLoad(agentId, state);
+  }
+  async function refreshWhere(match) {
+    try {
+      const state = await options.getState();
+      for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
+        if (!match(binding)) continue;
+        started.add(agentId);
+        await enqueueLoad(agentId);
+      }
+    } catch {
+    }
+  }
+  const loadChains = /* @__PURE__ */ new Map();
+  function enqueueLoad(agentId, state) {
+    const next = (loadChains.get(agentId) ?? Promise.resolve()).then(() => load(agentId, state), () => load(agentId, state));
+    loadChains.set(agentId, next.catch(() => void 0));
+    return next;
+  }
+  return {
+    valueOf(agentId) {
+      if (typeof agentId !== "string" || agentId.trim() === "") return void 0;
+      if (!started.has(agentId)) {
+        started.add(agentId);
+        void enqueueLoad(agentId);
+      }
+      return cache2.get(agentId);
+    },
+    refreshWhere,
+    refreshAll,
+    preheatWhere(match) {
+      if (preheatDone) return Promise.resolve();
+      preheatDone = true;
+      return refreshWhere(match);
+    },
+    preheatAll(agentIds) {
+      for (const agentId of agentIds) started.add(agentId);
+      return refreshAll();
+    }
+  };
+}
+
+// packages/plugin/src/preset-mount.ts
+init_src();
+init_dsh_home();
+var DEFAULT_USER3 = "User";
+var CHAR_FALLBACK = "the character";
+var storePromise2;
+function store4() {
+  return storePromise2 ??= TavernStore.open(tavernDataRoot());
+}
+function mountPresetProjection(options) {
+  const freeze2 = /* @__PURE__ */ new Map();
+  const projection2 = createLazyProjection({
+    getState: async () => (await store4()).getState(),
+    load: async (agentId, settle) => {
+      const db = await store4();
+      const state = await db.getState();
+      const binding = state.sessionBindings[agentId];
+      if (state[options.stateFlag] !== true || !binding || binding.architecture !== options.architecture) {
+        settle("");
+        return;
+      }
+      if (typeof state.activePreset !== "string" || state.activePreset === "") {
+        settle("");
+        return;
+      }
+      const raw = await db.getPreset(state.activePreset);
+      if (raw === void 0) {
+        settle("");
+        return;
+      }
+      const block = renderAgentPresetBlock(parsePreset(raw), void 0, options.header);
+      if (block === void 0) {
+        settle("");
+        return;
+      }
+      const record = freeze2.get(agentId) ?? { frozenAt: Date.now(), seed: Math.random() * 4294967296 >>> 0 };
+      freeze2.set(agentId, record);
+      const expand = createHostPromptExpander(
+        charNameOf(options, binding),
+        state.activePersona ?? DEFAULT_USER3,
+        { now: () => new Date(record.frozenAt), rng: seededRandom(record.seed) }
+      );
+      settle(hostPromptSafe(block, expand));
+    }
+  });
+  onAgentPresetChanged(() => projection2.refreshWhere((binding) => binding.architecture === options.architecture));
+  return {
+    section: { name: options.sectionName, order: -75, text: (assembly) => projection2.valueOf(assembly?.agent?.id) ?? "" },
+    textOf: (agentId) => projection2.valueOf(agentId) ?? "",
+    preheat: () => projection2.preheatWhere((binding) => binding.architecture === options.architecture)
+  };
+}
+function charNameOf(options, binding) {
+  const name2 = options.charOf(binding).trim();
+  return name2 === "" ? CHAR_FALLBACK : name2;
+}
+
+// packages/plugin/src/native-preset.ts
+init_runtime();
+var NATIVE_PRESET_SECTION = "dsh-soulmojito:native-preset";
+var NATIVE_PRESET_HEADER = "Active chat completion preset (user-configured prompt stack; follow these instructions together with the DSH agent preset):";
+var freeze = { frozenAt: Date.now(), seed: Math.random() * 4294967296 >>> 0 };
+var renderMemo;
+var renderGeneration = 0;
+var projection = createLazyProjection({
+  getState: async () => (await store3()).getState(),
+  load: async (agentId, settle, snapshot2) => {
+    const db = await store3();
+    const state = snapshot2 ?? await db.getState();
+    if (state.nativeAgentPreset !== true || state.sessionBindings[agentId] !== void 0) {
+      settle("");
+      return;
+    }
+    settle(await unboundBlock(db, state));
+  }
+});
+async function unboundBlock(db, state) {
+  const key = [renderGeneration, state.activePreset ?? "", state.activeCharacter ?? "", state.activePersona ?? ""].join("\0");
+  if (renderMemo?.key === key) return renderMemo.text;
+  const text = await renderUnboundBlock(db, state);
+  renderMemo = { key, text };
+  return text;
+}
+async function renderUnboundBlock(db, state) {
+  if (typeof state.activePreset !== "string" || state.activePreset === "") return "";
+  const raw = await db.getPreset(state.activePreset);
+  if (raw === void 0) return "";
+  const block = renderAgentPresetBlock(parsePreset(raw), void 0, NATIVE_PRESET_HEADER);
+  if (block === void 0) return "";
+  const expand = createHostPromptExpander(
+    state.activeCharacter || CHAR_FALLBACK,
+    state.activePersona ?? DEFAULT_USER2,
+    { now: () => new Date(freeze.frozenAt), rng: seededRandom(freeze.seed) }
+  );
+  return hostPromptSafe(block, expand);
+}
+onAgentPresetChanged(() => {
+  renderGeneration += 1;
+  return projection.refreshAll();
+});
+function nativeAgentPresetSection() {
+  return {
+    name: NATIVE_PRESET_SECTION,
+    order: -75,
+    text: (context) => projection.valueOf(agentIdOf2(context)) ?? ""
+  };
+}
+function agentIdOf2(context) {
+  if (typeof context !== "object" || context === null) return void 0;
+  const agent = context.agent;
+  if (typeof agent !== "object" || agent === null) return void 0;
+  const id = agent.id;
+  return typeof id === "string" && id !== "" ? id : void 0;
+}
+function preheatNativeAgentPreset(agentIds) {
+  return projection.preheatAll(agentIds);
+}
+
 // packages/plugin/src/index.ts
 init_runtime();
 
@@ -39758,60 +39942,6 @@ init_deduce();
 // packages/plugin/src/agent-tavern/agent.ts
 init_guides();
 init_handle();
-
-// packages/plugin/src/lazy-projection.ts
-function createLazyProjection(options) {
-  const cache2 = /* @__PURE__ */ new Map();
-  const started = /* @__PURE__ */ new Set();
-  const tickets = /* @__PURE__ */ new Map();
-  let preheatDone = false;
-  async function load(agentId) {
-    const ticket = (tickets.get(agentId) ?? 0) + 1;
-    tickets.set(agentId, ticket);
-    const settle = (value) => {
-      if (tickets.get(agentId) === ticket) cache2.set(agentId, value);
-    };
-    try {
-      await options.load(agentId, settle);
-    } catch {
-    }
-  }
-  async function refreshWhere(match) {
-    try {
-      const state = await options.getState();
-      for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
-        if (!match(binding)) continue;
-        started.add(agentId);
-        await enqueueLoad(agentId);
-      }
-    } catch {
-    }
-  }
-  const loadChains = /* @__PURE__ */ new Map();
-  function enqueueLoad(agentId) {
-    const next = (loadChains.get(agentId) ?? Promise.resolve()).then(() => load(agentId), () => load(agentId));
-    loadChains.set(agentId, next.catch(() => void 0));
-    return next;
-  }
-  return {
-    valueOf(agentId) {
-      if (typeof agentId !== "string" || agentId.trim() === "") return void 0;
-      if (!started.has(agentId)) {
-        started.add(agentId);
-        void enqueueLoad(agentId);
-      }
-      return cache2.get(agentId);
-    },
-    refreshWhere,
-    preheatWhere(match) {
-      if (preheatDone) return Promise.resolve();
-      preheatDone = true;
-      return refreshWhere(match);
-    }
-  };
-}
-
-// packages/plugin/src/agent-tavern/agent.ts
 init_cross_bundle();
 
 // packages/plugin/src/mods/agent-mount.ts
@@ -40710,7 +40840,7 @@ function assembleResult(allActivated, diagnostics, timedState) {
 }
 
 // packages/plugin/src/agent-tavern/tools/shared.ts
-var DEFAULT_USER3 = "User";
+var DEFAULT_USER4 = "User";
 function tool(name2, description, properties, schema, execute) {
   return {
     name: name2,
@@ -40900,7 +41030,7 @@ var gamesSummaryProjection = createLazyProjection({
       ...lines,
       "\u8F6E\u5230\u4F60\u65F6\u5148 game_state \u8BFB\u5C40\u9762\u3001\u518D\u7528 game_move \u843D\u5B50\uFF1B\u843D\u5230\u4EBA\u7C7B\u56DE\u5408\u7ACB\u5373\u8C03\u7528 game_wait \u963B\u585E\u7B49\u5F85\u5BF9\u65B9\u5728\u68CB\u76D8\u4E0A\u843D\u5B50\uFF08\u5BF9\u65B9\u65E0\u9700\u53D1\u9001\u804A\u5929\u6D88\u606F\uFF1Bwait \u53EA\u8FD4\u56DE\u7B49\u5F85\u671F\u589E\u91CF\u2014\u2014\u8BE5\u624B\u4E0E\u8F6E\u6B21\uFF09\u3002\u5C40\u9762\u590D\u6742\u3001\u9700\u8981\u770B\u7740\u68CB\u76D8\u51B3\u7B56\u7684\u5BF9\u5C40\u6539\u7528 game_wait_full\uFF1A\u540C\u6B3E\u7B49\u5F85\uFF0C\u8FD4\u56DE\u9644\u5E26\u68CB\u76D8\u5C40\u9762\uFF08state + legal\uFF09\uFF0C\u65E0\u9700\u518D\u8DDF\u53D1 game_state\u3002\u5DE5\u5177\u8FD4\u56DE\u540E\u81EA\u52A8\u7EE7\u7EED\uFF1Bdescribe/summary \u6587\u6848\u53EF\u76F4\u63A5\u7528\u4E8E\u5BF9\u8BDD\u53D9\u8FF0\u8FD9\u4E00\u624B\uFF0C\u5F80\u624B\u7528 game_history \u67E5\u8BE2\u3002"
     ].join("\n");
-    const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER3);
+    const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER4);
     settle(hostPromptSafe(text, expand));
   }
 });
@@ -40969,7 +41099,7 @@ var scriptSummaryProjection = createLazyProjection({
     const binding = state.sessionBindings[agentId];
     if (!binding || binding.architecture !== "agent-tavern") return;
     const text = await scriptSummaryForChat(db, binding.character, binding.chatId);
-    const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER3);
+    const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER4);
     settle(hostPromptSafe(text, expand));
   }
 });
@@ -41036,7 +41166,7 @@ var factsProjection = createLazyProjection({
     if (!found) return;
     const data = found.card.data;
     const storedSummary = identitySummaryOf(found.card.data);
-    const expand = createHostPromptExpander(data.nickname || data.name, state.activePersona ?? DEFAULT_USER3);
+    const expand = createHostPromptExpander(data.nickname || data.name, state.activePersona ?? DEFAULT_USER4);
     settle(hostPromptSafe([
       `Current Tavern character: ${data.nickname || data.name}`,
       // The editable identity summary wins; without one only a very short
@@ -41055,7 +41185,7 @@ var guidesProjection = createLazyProjection({
     const binding = state.sessionBindings[agentId];
     if (!binding || binding.architecture !== "agent-tavern") return;
     const chat = await db.getChat(binding.character, binding.chatId);
-    const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER3);
+    const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER4);
     settle(hostPromptSafe(formatGuidesBlock(chat?.header.chat_metadata?.guides) ?? "", expand));
   }
 });
@@ -41075,12 +41205,12 @@ var presetProjection = createLazyProjection({
     const activePreset = state.activePreset ? await db.getPreset(state.activePreset) : void 0;
     const preset = parsePreset(activePreset ?? defaultPreset());
     const block = renderAgentPresetBlock(preset, character?.card);
-    const freeze = presetFreeze.get(agentId) ?? { frozenAt: Date.now(), seed: Math.random() * 4294967296 >>> 0 };
-    presetFreeze.set(agentId, freeze);
+    const freeze2 = presetFreeze.get(agentId) ?? { frozenAt: Date.now(), seed: Math.random() * 4294967296 >>> 0 };
+    presetFreeze.set(agentId, freeze2);
     const expand = createHostPromptExpander(
       character?.card.data.nickname || character?.card.data.name || binding.character,
-      state.activePersona ?? DEFAULT_USER3,
-      { now: () => new Date(freeze.frozenAt), rng: seededRandom(freeze.seed) }
+      state.activePersona ?? DEFAULT_USER4,
+      { now: () => new Date(freeze2.frozenAt), rng: seededRandom(freeze2.seed) }
     );
     const temperature = presetTemperature(preset);
     settle({
@@ -42700,7 +42830,7 @@ var CANDIDATE_HISTORY_WINDOW = 10;
 var CANDIDATE_MAX_COUNT = 6;
 var CANDIDATE_MAX_TEXT_LENGTH = 200;
 var CANDIDATE_CARD_EXCERPT = 1500;
-var DEFAULT_USER4 = "User";
+var DEFAULT_USER5 = "User";
 function excerpt(text, max2) {
   if (typeof text !== "string") return void 0;
   const trimmed = text.trim();
@@ -42889,7 +43019,7 @@ async function runCandidateGeneration(ctx, db, options) {
       personality: character.card.data.personality,
       scenario: character.card.data.scenario
     },
-    userName: state.activePersona ?? DEFAULT_USER4,
+    userName: state.activePersona ?? DEFAULT_USER5,
     history: chat.messages.filter((m) => !m.is_system).map((m) => ({ name: m.name, isUser: m.is_user, text: m.mes })),
     guides: readGuides(chat),
     ...feedback !== void 0 ? { feedback } : {},
@@ -53581,63 +53711,6 @@ init_io();
 // packages/plugin/src/http/panel.ts
 init_src();
 
-// packages/plugin/src/preset-mount.ts
-init_src();
-init_dsh_home();
-var DEFAULT_USER5 = "User";
-var CHAR_FALLBACK = "the character";
-var storePromise2;
-function store4() {
-  return storePromise2 ??= TavernStore.open(tavernDataRoot());
-}
-function mountPresetProjection(options) {
-  const freeze = /* @__PURE__ */ new Map();
-  const projection = createLazyProjection({
-    getState: async () => (await store4()).getState(),
-    load: async (agentId, settle) => {
-      const db = await store4();
-      const state = await db.getState();
-      const binding = state.sessionBindings[agentId];
-      if (state[options.stateFlag] !== true || !binding || binding.architecture !== options.architecture) {
-        settle("");
-        return;
-      }
-      if (typeof state.activePreset !== "string" || state.activePreset === "") {
-        settle("");
-        return;
-      }
-      const raw = await db.getPreset(state.activePreset);
-      if (raw === void 0) {
-        settle("");
-        return;
-      }
-      const block = renderAgentPresetBlock(parsePreset(raw), void 0, options.header);
-      if (block === void 0) {
-        settle("");
-        return;
-      }
-      const record = freeze.get(agentId) ?? { frozenAt: Date.now(), seed: Math.random() * 4294967296 >>> 0 };
-      freeze.set(agentId, record);
-      const expand = createHostPromptExpander(
-        charNameOf(options, binding),
-        state.activePersona ?? DEFAULT_USER5,
-        { now: () => new Date(record.frozenAt), rng: seededRandom(record.seed) }
-      );
-      settle(hostPromptSafe(block, expand));
-    }
-  });
-  onAgentPresetChanged(() => projection.refreshWhere((binding) => binding.architecture === options.architecture));
-  return {
-    section: { name: options.sectionName, order: -75, text: (assembly) => projection.valueOf(assembly?.agent?.id) ?? "" },
-    textOf: (agentId) => projection.valueOf(agentId) ?? "",
-    preheat: () => projection.preheatWhere((binding) => binding.architecture === options.architecture)
-  };
-}
-function charNameOf(options, binding) {
-  const name2 = options.charOf(binding).trim();
-  return name2 === "" ? CHAR_FALLBACK : name2;
-}
-
 // packages/plugin/src/card-workbench/tools-card.ts
 init_src();
 init_dsh_home();
@@ -56758,6 +56831,9 @@ async function handleApi(ctx, req, res) {
       ...typeof body.activePreset === "string" || body.activePreset === null ? { activePreset: body.activePreset || void 0 } : {},
       ...typeof body.activePersona === "string" || body.activePersona === null ? { activePersona: body.activePersona || void 0 } : {},
       ...typeof body.nativeAgentPersona === "boolean" ? { nativeAgentPersona: body.nativeAgentPersona } : {},
+      // 标准 DSH Agent 会话的预设投影开关（native-preset.ts）：翻转即写穿投影
+      // 缓存，下一次装配即时生效。
+      ...typeof body.nativeAgentPreset === "boolean" ? { nativeAgentPreset: body.nativeAgentPreset } : {},
       ...requestedDefaultArchitecture !== void 0 ? { defaultArchitecture: requestedDefaultArchitecture } : {},
       ...requestedDefaultContextMode !== void 0 ? { defaultContextMode: requestedDefaultContextMode } : {},
       ...typeof body.agentTavernPreloadAssets === "boolean" ? { agentTavernPreloadAssets: body.agentTavernPreloadAssets } : {},
@@ -56782,7 +56858,7 @@ async function handleApi(ctx, req, res) {
       ...body.compaction !== void 0 ? { compaction: compactionOverrideOf(body.compaction) } : {}
     };
     const state = await db.patchState(patch);
-    if ("activePreset" in patch || "activePersona" in patch || "cardWorkbenchPresetEnabled" in patch || "agentNovelPresetEnabled" in patch) await emitAgentPresetChanged();
+    if ("activePreset" in patch || "activePersona" in patch || "cardWorkbenchPresetEnabled" in patch || "agentNovelPresetEnabled" in patch || "nativeAgentPreset" in patch) await emitAgentPresetChanged();
     await refreshActivePrompt();
     return sendJson(res, 200, { ok: true, state });
   }
@@ -57606,7 +57682,7 @@ async function handleAgentTavernBodyApi(ctx, db, req, res, url, route, method) {
             error: floorDegradation.message
           });
         }
-        const projection = floorDegradation === void 0 ? bodyProjectionState(projected, ledger, latestEditSeq) : { current: false, textCurrent: false };
+        const projection2 = floorDegradation === void 0 ? bodyProjectionState(projected, ledger, latestEditSeq) : { current: false, textCurrent: false };
         const editDetail = character2 === void 0 || chat === void 0 || ledger === void 0 ? void 0 : bodyEditDetailOf(character2.card, chat, ledger);
         const view = buildBodyView({
           messageId,
@@ -57619,8 +57695,8 @@ async function handleAgentTavernBodyApi(ctx, db, req, res, url, route, method) {
           ledger,
           messageText: messageText3,
           projected,
-          projectionCurrent: projection.current,
-          projectionTextCurrent: projection.textCurrent,
+          projectionCurrent: projection2.current,
+          projectionTextCurrent: projection2.textCurrent,
           inspection,
           editDetail,
           // A damaged floor binding closes edit with its own detail and keeps
@@ -60013,14 +60089,14 @@ var warnedAgents = /* @__PURE__ */ new Set();
 function messageOf17(error) {
   return error instanceof Error ? error.message : String(error);
 }
-function agentIdOf2(agent) {
+function agentIdOf3(agent) {
   const id = agent.id;
   if (typeof id === "string" && id.trim() !== "") return id;
   const sessionId = agent.session?.id;
   return typeof sessionId === "string" && sessionId.trim() !== "" ? sessionId : void 0;
 }
 function mountImToolsOnAgent(deps, agent) {
-  const agentId = agentIdOf2(agent);
+  const agentId = agentIdOf3(agent);
   if (agentId === void 0 || disposersByAgent.has(agentId)) return false;
   const header = agent.session?.header;
   if (header?.origin === "subagent" || typeof header?.delegationDepth === "number" && header.delegationDepth > 0) return false;
@@ -60329,6 +60405,9 @@ function apply(ctx, config = {}) {
     order: 25,
     text: () => getActiveAgentPrompt()
   });
+  ctx.systemPrompt.section(nativeAgentPresetSection());
+  const liveAgentIds = listLiveAgents2(ctx.agents).map((agent) => agent.id).filter((id) => typeof id === "string" && id !== "");
+  void preheatNativeAgentPreset(liveAgentIds);
   registerTavernSessionCommand(ctx);
   ctx.effect(() => tavernUpdate(ctx).start(), "dsh-soulmojito: update auto-check");
   const gamesServicePromise2 = openGamesService({

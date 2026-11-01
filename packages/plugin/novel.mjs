@@ -9397,7 +9397,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("110b95c") : void 0;
+  const commit = true ? normalizeCommit("78d71c1") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -10031,16 +10031,25 @@ function createLazyProjection(options) {
   const started = /* @__PURE__ */ new Set();
   const tickets = /* @__PURE__ */ new Map();
   let preheatDone = false;
-  async function load(agentId) {
+  async function load(agentId, state) {
     const ticket = (tickets.get(agentId) ?? 0) + 1;
     tickets.set(agentId, ticket);
     const settle = (value) => {
       if (tickets.get(agentId) === ticket) cache.set(agentId, value);
     };
     try {
-      await options.load(agentId, settle);
+      await options.load(agentId, settle, state);
     } catch {
     }
+  }
+  async function refreshAll() {
+    let state;
+    try {
+      state = await options.getState();
+    } catch {
+      state = void 0;
+    }
+    for (const agentId of [...started]) await enqueueLoad(agentId, state);
   }
   async function refreshWhere(match) {
     try {
@@ -10054,8 +10063,8 @@ function createLazyProjection(options) {
     }
   }
   const loadChains = /* @__PURE__ */ new Map();
-  function enqueueLoad(agentId) {
-    const next = (loadChains.get(agentId) ?? Promise.resolve()).then(() => load(agentId), () => load(agentId));
+  function enqueueLoad(agentId, state) {
+    const next = (loadChains.get(agentId) ?? Promise.resolve()).then(() => load(agentId, state), () => load(agentId, state));
     loadChains.set(agentId, next.catch(() => void 0));
     return next;
   }
@@ -10069,10 +10078,15 @@ function createLazyProjection(options) {
       return cache.get(agentId);
     },
     refreshWhere,
+    refreshAll,
     preheatWhere(match) {
       if (preheatDone) return Promise.resolve();
       preheatDone = true;
       return refreshWhere(match);
+    },
+    preheatAll(agentIds) {
+      for (const agentId of agentIds) started.add(agentId);
+      return refreshAll();
     }
   };
 }
