@@ -5,7 +5,7 @@
 <p align="center">把 DSH（deepseek-harness）扩展成兼容 SillyTavern 生态的原生角色扮演工作区。</p>
 
 <p align="center">
-  <strong>v0.7.1</strong> · 面向 DSH <code>0.2.1-rc.2</code>（兼容 <code>0.2.0-rc.2</code>） · GPL-3.0
+  <strong>v0.7.5</strong> · 面向 DSH <code>0.2.1-rc.2</code>（兼容 <code>0.2.0-rc.2</code>） · GPL-3.0
 </p>
 
 ## 这是什么
@@ -319,17 +319,17 @@ Node half 是六个自包含 bundle：`index.mjs` 主入口，加 `agent` / `com
 pnpm run check
 ```
 
-当前基线（2026-10-30 实测）：
+当前基线（2026-11-01 实测）：
 
 ```
-Test Files  160 passed (160)
-Tests       2689 passed | 1 skipped (2690)
-18 gates    全部 PASS
-built       v0.7.1 (92d806d)
+Test Files  197 passed (197)
+Tests       3268 passed | 2 skipped (3270)
+20 gates    全部 PASS
+built       v0.7.5 (919a698)
 ```
 
-- 1 项跳过是 `skipIf` 环境条件项：Windows 检出上的 `host-package.spec.ts` POSIX-only 用例。
-- 18 个 gates 覆盖 update-routes、package-contract、patch-reference、server-bundle、client-bundle、frontend-runtime、native-header-adapter、mvu-surface、frontend-surface、client-architecture-split、internal-workspace、agent-tavern-isolation、client-vm-mount、node-half-mount、v4-session-admission、mod-loader、content-lexicon 与 source-file-budget。
+- 2 项跳过都是 `skipIf` 环境条件项：Windows 检出上的 `host-package.spec.ts` POSIX-only 用例，以及 `im-store.spec.ts` 的 0600 权限位用例（Win32 无 POSIX mode）。
+- 20 个 gates 覆盖 update-routes、package-contract、patch-reference、im-agent-inject、server-bundle、client-bundle、frontend-runtime、native-header-adapter、mvu-surface、frontend-surface、client-architecture-split、internal-workspace、agent-tavern-isolation、client-vm-mount、node-half-mount、v4-session-admission、mod-loader、im-channels、source-file-budget 与 content-lexicon。
 - 完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。
 - 会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。
 - 示例 Mod 的 engines 与随仓库发布的宿主版本由防漂移守卫锁定（先例：[`decisions/2026-10-12-story-clock-engines-drift.md`](decisions/2026-10-12-story-clock-engines-drift.md)）；面板布局、品牌 logo 与内置游戏规则面同样各有 spec + gate marker 锁定。
