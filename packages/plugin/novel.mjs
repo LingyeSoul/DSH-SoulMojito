@@ -8966,39 +8966,52 @@ var init_dsh_home = __esm({
 });
 
 // packages/plugin/src/store-handle.ts
-function storeRegistry() {
-  const holder = globalThis;
-  let registry = holder[registrySymbol3];
-  if (registry === void 0) {
-    registry = /* @__PURE__ */ new Map();
-    holder[registrySymbol3] = registry;
-  }
-  return registry;
-}
-function publishTavernStore(root, promise) {
-  const registry = storeRegistry();
-  const entry = { promise };
-  registry.set(root, entry);
+function createStoreFamily(key, open) {
+  const symbol = Symbol.for(key);
+  const registry = () => {
+    const holder = globalThis;
+    let entries = holder[symbol];
+    if (entries === void 0) {
+      entries = /* @__PURE__ */ new Map();
+      holder[symbol] = entries;
+    }
+    return entries;
+  };
+  const publish = (root, promise) => {
+    const entry = { promise };
+    registry().set(root, entry);
+    return {
+      promise,
+      revoke: () => {
+        if (registry().get(root) === entry) registry().delete(root);
+      }
+    };
+  };
   return {
-    promise,
-    revoke: () => {
-      if (registry.get(root) === entry) registry.delete(root);
+    publish,
+    shared: (root) => {
+      const existing = registry().get(root);
+      if (existing !== void 0) return existing.promise;
+      return publish(root, open(root)).promise;
+    },
+    // Test isolation: globalThis state is shared by every spec in a worker.
+    clearForTest: () => {
+      delete globalThis[symbol];
     }
   };
 }
 function sharedTavernStore(root) {
-  const registry = storeRegistry();
-  const existing = registry.get(root);
-  if (existing !== void 0) return existing.promise;
-  return publishTavernStore(root, TavernStore.open(root)).promise;
+  return tavernStores.shared(root);
 }
-var TAVERN_STORE_HANDLE_KEY, registrySymbol3;
+var TAVERN_STORE_HANDLE_KEY, MEMORY_STORE_HANDLE_KEY, NOVEL_STORE_HANDLE_KEY, tavernStores;
 var init_store_handle = __esm({
   "packages/plugin/src/store-handle.ts"() {
     "use strict";
     init_src2();
     TAVERN_STORE_HANDLE_KEY = "dsh-soulmojito:tavern-store";
-    registrySymbol3 = Symbol.for(TAVERN_STORE_HANDLE_KEY);
+    MEMORY_STORE_HANDLE_KEY = "dsh-soulmojito:memory-store";
+    NOVEL_STORE_HANDLE_KEY = "dsh-soulmojito:novel-store";
+    tavernStores = createStoreFamily(TAVERN_STORE_HANDLE_KEY, (root) => TavernStore.open(root));
   }
 });
 
@@ -9221,6 +9234,28 @@ var init_handle = __esm({
     GAMES_SERVICE_KEY = "dsh-soulmojito:games-service";
     serviceSymbol = Symbol.for(GAMES_SERVICE_KEY);
     gamesChangedListeners = createGlobalListenerRegistry("dsh-soulmojito:games-changed-listeners");
+  }
+});
+
+// packages/plugin/src/shared-stores.ts
+function memoryFamily() {
+  return memoryStores ??= createStoreFamily(MEMORY_STORE_HANDLE_KEY, (root) => MemoryStore.open(root));
+}
+function novelFamily() {
+  return novelStores ??= createStoreFamily(NOVEL_STORE_HANDLE_KEY, (root) => NovelStore.open(root));
+}
+function sharedMemoryStore(root) {
+  return memoryFamily().shared(root);
+}
+function sharedNovelStore(root) {
+  return novelFamily().shared(root);
+}
+var memoryStores, novelStores;
+var init_shared_stores = __esm({
+  "packages/plugin/src/shared-stores.ts"() {
+    "use strict";
+    init_src2();
+    init_store_handle();
   }
 });
 
@@ -9785,7 +9820,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("634c427") : void 0;
+  const commit = true ? normalizeCommit("3660975") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -10194,6 +10229,7 @@ var init_runtime = __esm({
     init_env_compat();
     init_host();
     init_handle2();
+    init_shared_stores();
     init_store_handle();
     init_service();
     init_src2();
@@ -10659,6 +10695,7 @@ var TRANSFORMERS_INSTALL_HINT = `local ONNX embed requires '${TRANSFORMERS_PACKA
 var LOCAL_RUNTIME_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
 
 // packages/plugin/src/agent-tavern/tools/stores.ts
+init_shared_stores();
 init_store_handle();
 var tavernStorePromise;
 function tavernStore() {
@@ -12302,8 +12339,8 @@ init_src2();
 init_usage();
 
 // packages/plugin/src/agent-novel/tools/stores.ts
-init_src2();
 init_dsh_home();
+init_shared_stores();
 init_store_handle();
 var tavernStorePromise2;
 var novelStorePromise;
@@ -12312,10 +12349,10 @@ function tavernStore2() {
   return tavernStorePromise2 ??= sharedTavernStore(tavernDataRoot());
 }
 function novelStore() {
-  return novelStorePromise ??= NovelStore.open(tavernDataRoot());
+  return novelStorePromise ??= sharedNovelStore(tavernDataRoot());
 }
 function memoryStore2() {
-  return memoryStorePromise ??= MemoryStore.open(tavernDataRoot());
+  return memoryStorePromise ??= sharedMemoryStore(tavernDataRoot());
 }
 
 // packages/plugin/src/agent-novel/tools/shared.ts

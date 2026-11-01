@@ -5164,32 +5164,43 @@ function createLazyProjection(options) {
 
 // packages/plugin/src/store-handle.ts
 var TAVERN_STORE_HANDLE_KEY = "dsh-soulmojito:tavern-store";
-var registrySymbol2 = Symbol.for(TAVERN_STORE_HANDLE_KEY);
-function storeRegistry() {
-  const holder = globalThis;
-  let registry = holder[registrySymbol2];
-  if (registry === void 0) {
-    registry = /* @__PURE__ */ new Map();
-    holder[registrySymbol2] = registry;
-  }
-  return registry;
-}
-function publishTavernStore(root, promise) {
-  const registry = storeRegistry();
-  const entry = { promise };
-  registry.set(root, entry);
+function createStoreFamily(key, open) {
+  const symbol = Symbol.for(key);
+  const registry = () => {
+    const holder = globalThis;
+    let entries = holder[symbol];
+    if (entries === void 0) {
+      entries = /* @__PURE__ */ new Map();
+      holder[symbol] = entries;
+    }
+    return entries;
+  };
+  const publish = (root, promise) => {
+    const entry = { promise };
+    registry().set(root, entry);
+    return {
+      promise,
+      revoke: () => {
+        if (registry().get(root) === entry) registry().delete(root);
+      }
+    };
+  };
   return {
-    promise,
-    revoke: () => {
-      if (registry.get(root) === entry) registry.delete(root);
+    publish,
+    shared: (root) => {
+      const existing = registry().get(root);
+      if (existing !== void 0) return existing.promise;
+      return publish(root, open(root)).promise;
+    },
+    // Test isolation: globalThis state is shared by every spec in a worker.
+    clearForTest: () => {
+      delete globalThis[symbol];
     }
   };
 }
+var tavernStores = createStoreFamily(TAVERN_STORE_HANDLE_KEY, (root) => TavernStore.open(root));
 function sharedTavernStore(root) {
-  const registry = storeRegistry();
-  const existing = registry.get(root);
-  if (existing !== void 0) return existing.promise;
-  return publishTavernStore(root, TavernStore.open(root)).promise;
+  return tavernStores.shared(root);
 }
 
 // packages/plugin/src/preset-mount.ts
