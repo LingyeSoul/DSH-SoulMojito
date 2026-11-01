@@ -3127,6 +3127,35 @@ var TavernStore = class _TavernStore {
     });
   }
   /**
+   * Removes the session bindings named in `remove`, in ONE write.
+   *
+   * `remove` is the caller's decision and is never re-derived here: only ids in
+   * `observed ∩ remove` are dropped. Re-deriving them from a fresh snapshot
+   * inside this call is what deleted a binding another path wrote between the
+   * caller's decision and this write; deleting the intersection keeps a write
+   * this call did not decide about alive. A table with nothing to drop is left
+   * untouched — no write, same file — which is what keeps a report-only run
+   * inert.
+   *
+   * This method proves nothing about the sessions themselves: `remove` must come
+   * from signals the caller can justify (decision
+   * 2026-11-02-stale-session-binding-reclaim). Only `sessionBindings` is
+   * filtered; the light state.json split (2026-11-01-tavern-state-asset-split)
+   * is unchanged because the patch carries no slice key.
+   */
+  async pruneSessionBindings(remove) {
+    const observed = Object.keys((await this.getState()).sessionBindings);
+    const doomed = observed.filter((sessionId) => remove.has(sessionId));
+    if (doomed.length === 0) return { removed: [], retained: observed.length };
+    const doomedIds = new Set(doomed);
+    const next = await this.updateState((state) => ({
+      sessionBindings: Object.fromEntries(
+        Object.entries(state.sessionBindings).filter(([sessionId]) => !doomedIds.has(sessionId))
+      )
+    }));
+    return { removed: doomed, retained: Object.keys(next.sessionBindings).length };
+  }
+  /**
    * Writes `next` in the split layout and reports the state a reader builds.
    *
    * This is also the migration trigger: a state.json that still embeds a large
@@ -4144,6 +4173,36 @@ var EPUB_ZIP_LIMITS = {
   maxTotalBytes: 128 * 1024 * 1024
 };
 
+// packages/plugin/src/store-handle.ts
+var TAVERN_STORE_HANDLE_KEY = "dsh-soulmojito:tavern-store";
+var registrySymbol = Symbol.for(TAVERN_STORE_HANDLE_KEY);
+function storeRegistry() {
+  const holder = globalThis;
+  let registry = holder[registrySymbol];
+  if (registry === void 0) {
+    registry = /* @__PURE__ */ new Map();
+    holder[registrySymbol] = registry;
+  }
+  return registry;
+}
+function publishTavernStore(root, promise) {
+  const registry = storeRegistry();
+  const entry = { promise };
+  registry.set(root, entry);
+  return {
+    promise,
+    revoke: () => {
+      if (registry.get(root) === entry) registry.delete(root);
+    }
+  };
+}
+function sharedTavernStore(root) {
+  const registry = storeRegistry();
+  const existing = registry.get(root);
+  if (existing !== void 0) return existing.promise;
+  return publishTavernStore(root, TavernStore.open(root)).promise;
+}
+
 // packages/plugin/src/compaction/shared.ts
 var SUMMARY_OPEN_TAG = "<compacted-summary>";
 var RP_COMPACTION_INSTRUCTION = [
@@ -4430,7 +4489,7 @@ function finishError(finish) {
 }
 var tavernStorePromise;
 function tavernStore() {
-  return tavernStorePromise ??= TavernStore.open(tavernDataRoot());
+  return tavernStorePromise ??= sharedTavernStore(tavernDataRoot());
 }
 async function isStorySession(sessionId) {
   try {

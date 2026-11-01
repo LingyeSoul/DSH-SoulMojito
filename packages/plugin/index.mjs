@@ -2323,6 +2323,9 @@ var init_lib = __esm({
 import { createHash as createHash2 } from "node:crypto";
 import { promises as fs2 } from "node:fs";
 import * as path from "node:path";
+function isChatRevisionConflict(error) {
+  return typeof error === "object" && error !== null && error.code === "CHAT_REVISION_CONFLICT";
+}
 function normalizeCharacterVariables(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
   const result = {};
@@ -3846,6 +3849,35 @@ var init_store = __esm({
           const next = { ...current.state, ...update(structuredClone(current.state)) };
           return await this.writeState(next, current);
         });
+      }
+      /**
+       * Removes the session bindings named in `remove`, in ONE write.
+       *
+       * `remove` is the caller's decision and is never re-derived here: only ids in
+       * `observed ∩ remove` are dropped. Re-deriving them from a fresh snapshot
+       * inside this call is what deleted a binding another path wrote between the
+       * caller's decision and this write; deleting the intersection keeps a write
+       * this call did not decide about alive. A table with nothing to drop is left
+       * untouched — no write, same file — which is what keeps a report-only run
+       * inert.
+       *
+       * This method proves nothing about the sessions themselves: `remove` must come
+       * from signals the caller can justify (decision
+       * 2026-11-02-stale-session-binding-reclaim). Only `sessionBindings` is
+       * filtered; the light state.json split (2026-11-01-tavern-state-asset-split)
+       * is unchanged because the patch carries no slice key.
+       */
+      async pruneSessionBindings(remove) {
+        const observed = Object.keys((await this.getState()).sessionBindings);
+        const doomed = observed.filter((sessionId) => remove.has(sessionId));
+        if (doomed.length === 0) return { removed: [], retained: observed.length };
+        const doomedIds = new Set(doomed);
+        const next = await this.updateState((state) => ({
+          sessionBindings: Object.fromEntries(
+            Object.entries(state.sessionBindings).filter(([sessionId]) => !doomedIds.has(sessionId))
+          )
+        }));
+        return { removed: doomed, retained: Object.keys(next.sessionBindings).length };
       }
       /**
        * Writes `next` in the split layout and reports the state a reader builds.
@@ -10599,7 +10631,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("2319ac2") : void 0;
+  const commit = true ? normalizeCommit("634c427") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -14007,6 +14039,43 @@ var init_handle2 = __esm({
   }
 });
 
+// packages/plugin/src/store-handle.ts
+function storeRegistry() {
+  const holder = globalThis;
+  let registry = holder[registrySymbol3];
+  if (registry === void 0) {
+    registry = /* @__PURE__ */ new Map();
+    holder[registrySymbol3] = registry;
+  }
+  return registry;
+}
+function publishTavernStore(root, promise) {
+  const registry = storeRegistry();
+  const entry = { promise };
+  registry.set(root, entry);
+  return {
+    promise,
+    revoke: () => {
+      if (registry.get(root) === entry) registry.delete(root);
+    }
+  };
+}
+function sharedTavernStore(root) {
+  const registry = storeRegistry();
+  const existing = registry.get(root);
+  if (existing !== void 0) return existing.promise;
+  return publishTavernStore(root, TavernStore.open(root)).promise;
+}
+var TAVERN_STORE_HANDLE_KEY, registrySymbol3;
+var init_store_handle = __esm({
+  "packages/plugin/src/store-handle.ts"() {
+    "use strict";
+    init_src();
+    TAVERN_STORE_HANDLE_KEY = "dsh-soulmojito:tavern-store";
+    registrySymbol3 = Symbol.for(TAVERN_STORE_HANDLE_KEY);
+  }
+});
+
 // packages/plugin/src/update/apply.ts
 import { spawn } from "node:child_process";
 import { copyFileSync, existsSync as existsSync2, mkdirSync, mkdtempSync as mkdtempSync2, readdirSync as readdirSync2, readFileSync as readFileSync3, renameSync, rmSync as rmSync2, statSync, writeFileSync } from "node:fs";
@@ -14859,7 +14928,7 @@ function setImRuntime(value) {
 function noopRuntimeDisposer() {
 }
 function store3() {
-  return storePromise ??= TavernStore.open(tavernDataRoot());
+  return storePromise ??= sharedTavernStore(tavernDataRoot());
 }
 function memories() {
   return memoryStorePromise ??= MemoryStore.open(tavernDataRoot());
@@ -14995,6 +15064,7 @@ var init_runtime = __esm({
     init_env_compat();
     init_host();
     init_handle2();
+    init_store_handle();
     init_service();
     init_src();
     agentTavernCapabilities = inspectAgentTavernCapabilities({});
@@ -19128,6 +19198,17 @@ import { join as join9 } from "node:path";
 var CHECKPOINT_WRITE_LAG = 8;
 var CHECKPOINT_WRITE_DELAY_MS = 250;
 var CHECKPOINT_WRITE_RETRY_MS = 250;
+var ProjectionCheckpointLagError = class extends Error {
+  sessionId;
+  constructor(sessionId, cause) {
+    super(
+      `projection floors were already appended, but the checkpoint watermark (and any pending hole it carried) did not reach disk in this write for session '${sessionId}' (batch window: ${CHECKPOINT_WRITE_LAG} events / ${CHECKPOINT_WRITE_DELAY_MS} ms); a replay re-projects that window idempotently`,
+      { cause }
+    );
+    this.name = "ProjectionCheckpointLagError";
+    this.sessionId = sessionId;
+  }
+};
 function checkpointPathOf(root, sessionId) {
   const name2 = createHash8("sha256").update(sessionId).digest("hex");
   return join9(root, `${name2}.json`);
@@ -24921,7 +25002,7 @@ async function mutateBodyChat(store5, binding, site, mutate) {
       await store5.saveChat(binding.character, binding.chatId, next, snapshot2.revision);
       return;
     } catch (error) {
-      if (!(error instanceof ChatRevisionConflictError) || attempt === 3) throw error;
+      if (!isChatRevisionConflict(error) || attempt === 3) throw error;
     }
   }
 }
@@ -25506,10 +25587,19 @@ var AgentTavernProjector = class _AgentTavernProjector {
     this.raiseDeferred(sessionId, deferred);
     return structuredClone(await this.readCheckpoint(sessionId));
   }
-  /** Raise a timer-flush failure unless a write finished by this operation cleared it. */
+  /**
+   * Raise a timer-flush failure unless a write finished by this operation cleared it.
+   *
+   * Every floor of the failed batch was appended before the checkpoint was
+   * staged, so the rejection is a {@link ProjectionCheckpointLagError}: the
+   * floors are durable and the checkpoint (watermark, plus any pending hole it
+   * carried) lags. Its message states both, and the raw write error stays
+   * reachable through `cause`.
+   */
   raiseDeferred(sessionId, deferred) {
     if (deferred === void 0) return;
-    if (this.batch.deferredError(sessionId) === deferred) throw deferred;
+    if (this.batch.deferredError(sessionId) !== deferred) return;
+    throw new ProjectionCheckpointLagError(sessionId, deferred);
   }
   async projectOne(session, event) {
     if (!Number.isSafeInteger(event.seq) || event.seq < 0) throw new Error("invalid DSH event cursor");
@@ -25612,7 +25702,7 @@ var AgentTavernProjector = class _AgentTavernProjector {
         await this.store.saveChat(binding.character, binding.chatId, next, snapshot2.revision);
         return;
       } catch (error) {
-        if (!(error instanceof ChatRevisionConflictError) || attempt === 3) throw error;
+        if (!isChatRevisionConflict(error) || attempt === 3) throw error;
       }
     }
   }
@@ -26532,10 +26622,11 @@ async function embedMemoryRecord(input) {
 // packages/plugin/src/agent-tavern/tools/stores.ts
 init_src();
 init_dsh_home();
+init_store_handle();
 var tavernStorePromise;
 var memoryVectorStorePromise2;
 function tavernStore() {
-  return tavernStorePromise ??= TavernStore.open(tavernDataRoot());
+  return tavernStorePromise ??= sharedTavernStore(tavernDataRoot());
 }
 function memoryVectorStore() {
   return memoryVectorStorePromise2 ??= MemoryVectorStore.open(tavernDataRoot());
@@ -28656,7 +28747,7 @@ async function rollbackTurnSettleReceipts(deps, agentId, turn, failures) {
     await deps.store.saveChat(binding.character, binding.chatId, chat, snapshot2.revision);
   } catch (error) {
     const compensation = await compensateSettleReceipts(deps, chat, receipts, undone, binding);
-    const code = !compensation.ok ? "body-rollback-partial" : error instanceof ChatRevisionConflictError ? "body-rollback-conflict" : "body-rollback-save-failed";
+    const code = !compensation.ok ? "body-rollback-partial" : isChatRevisionConflict(error) ? "body-rollback-conflict" : "body-rollback-save-failed";
     recordSettleFailure(deps, failures, agentId, turn, receipts, new BodyRollbackError(
       code,
       `body rollback for session '${agentId}' turn ${turn} could not save the chat after undoing its settle receipts: ${errorMessage4(error)}${compensation.note}`,
@@ -28710,7 +28801,7 @@ function messageTurnNumber(message) {
 function settleRollbackError(error, agentId, turn) {
   if (error instanceof BodyRollbackError) return error;
   return new BodyRollbackError(
-    error instanceof ChatRevisionConflictError ? "body-rollback-conflict" : "body-rollback-failed",
+    isChatRevisionConflict(error) ? "body-rollback-conflict" : "body-rollback-failed",
     `body rollback for session '${agentId}' turn ${turn} cannot undo its settle receipts: ${errorMessage4(error)}`,
     { stage: "mvu-undo", sessionId: agentId, turn, cause: error }
   );
@@ -28862,7 +28953,7 @@ async function applyBodyRollback(deps, plan) {
         await compensateJournal(deps, plan.journal, "replay"),
         await compensateReceiptRollback(deps, chat, plan.mvuReceipts, "redo", plan.binding, rolledBack)
       );
-      const code = compensation.ok ? error instanceof ChatRevisionConflictError ? "body-rollback-conflict" : "body-rollback-save-failed" : "body-rollback-partial";
+      const code = compensation.ok ? isChatRevisionConflict(error) ? "body-rollback-conflict" : "body-rollback-save-failed" : "body-rollback-partial";
       throw new BodyRollbackError(
         code,
         `body rollback for session '${plan.sessionId}' turn ${plan.turn} could not save the rolled-back chat: ${errorMessage4(error)}${compensation.note}`,
@@ -28957,7 +29048,7 @@ function restoreError(error, stage, plan, compensation) {
       }
     );
   }
-  const code = compensation.ok ? error instanceof ChatRevisionConflictError ? "body-rollback-conflict" : "body-rollback-failed" : "body-rollback-partial";
+  const code = compensation.ok ? isChatRevisionConflict(error) ? "body-rollback-conflict" : "body-rollback-failed" : "body-rollback-partial";
   return new BodyRollbackError(
     code,
     `body rollback restore for session '${plan.sessionId}' turn ${plan.turn} failed at ${stage}: ${errorMessage4(error)}${compensation.note}`,
@@ -30871,6 +30962,7 @@ function numberField3(value) {
 init_src();
 import { randomUUID as randomUUID6 } from "node:crypto";
 init_dsh_home();
+init_store_handle();
 var ANCHOR_EVERY_TURNS_DEFAULT = 5;
 var ANCHOR_TEXT = [
   "<tavern-anchor>",
@@ -30950,7 +31042,7 @@ function resolveAnchorEveryTurns(value) {
 }
 var anchorTavernStorePromise;
 function anchorTavernStore() {
-  return anchorTavernStorePromise ??= TavernStore.open(tavernDataRoot());
+  return anchorTavernStorePromise ??= sharedTavernStore(tavernDataRoot());
 }
 async function isAgentTavernSession(sessionId) {
   try {
@@ -40102,11 +40194,12 @@ function createLazyProjection(options) {
 // packages/plugin/src/preset-mount.ts
 init_src();
 init_dsh_home();
+init_store_handle();
 var DEFAULT_USER3 = "User";
 var CHAR_FALLBACK = "the character";
 var storePromise2;
 function store4() {
-  return storePromise2 ??= TavernStore.open(tavernDataRoot());
+  return storePromise2 ??= sharedTavernStore(tavernDataRoot());
 }
 function mountPresetProjection(options) {
   const freeze2 = /* @__PURE__ */ new Map();
@@ -41755,6 +41848,7 @@ var writerDelegations = globalThis[WRITER_DELEGATIONS_KEY] ??= /* @__PURE__ */ n
 // packages/plugin/src/agent-novel/tools/stores.ts
 init_src();
 init_dsh_home();
+init_store_handle();
 var novelStorePromise2;
 function novelStore2() {
   return novelStorePromise2 ??= NovelStore.open(tavernDataRoot());
@@ -42820,6 +42914,194 @@ function registerTavernSessionCommand(ctx) {
       return { kind: "success", text: `Tavern: ${parsed.character}` };
     }
   });
+}
+
+// packages/plugin/src/session/reclaim.ts
+var REMOVED_ID_SAMPLE_LIMIT = 20;
+function resolveSessionBindingReclaimConfig(configured) {
+  if (configured === void 0 || configured === null) return { mode: "off", supported: true };
+  if (configured === "report" || configured === "prune") return { mode: configured, supported: true };
+  return { mode: "off", supported: false };
+}
+async function reclaimStaleSessionBindings(input) {
+  const log2 = logSink(input.logger);
+  if (input.mode === "off") return { status: "off" };
+  const live = liveSessionIds(input.agents, input.sessions);
+  if (live === void 0) {
+    log2.warn("dsh-soulmojito session-bindings: reclaim skipped", { operation: "reclaim-session-bindings", reason: "host-live-signal", configuredMode: input.mode });
+    return { status: "skipped", reason: "host-live-signal" };
+  }
+  const stored = await storedSessionIds(input.persistence);
+  if (stored.status !== "ok") {
+    const reason = storedSkipReason(stored.status);
+    log2.warn("dsh-soulmojito session-bindings: reclaim skipped", {
+      operation: "reclaim-session-bindings",
+      reason,
+      configuredMode: input.mode,
+      ...stored.errorCode === void 0 ? {} : { errorCode: stored.errorCode }
+    });
+    return { status: "skipped", reason };
+  }
+  const db = await input.store();
+  const bindings2 = (await db.getState()).sessionBindings;
+  const sessionIds = Object.keys(bindings2);
+  let keptLive = 0;
+  let keptStored = 0;
+  const remove = /* @__PURE__ */ new Set();
+  try {
+    for (const sessionId of sessionIds) {
+      if (live.has(sessionId)) {
+        keptLive += 1;
+      } else if (stored.ids.has(sessionId)) {
+        keptStored += 1;
+      } else if (await persistedSessionExists(input.persistence, sessionId)) {
+        keptStored += 1;
+      } else {
+        remove.add(sessionId);
+      }
+    }
+  } catch (error) {
+    log2.warn("dsh-soulmojito session-bindings: reclaim skipped", {
+      operation: "reclaim-session-bindings",
+      reason: "session-storage-error",
+      configuredMode: input.mode,
+      errorCode: errorCodeText2(error)
+    });
+    return { status: "skipped", reason: "session-storage-error" };
+  }
+  const pruned = input.mode === "prune" ? await db.pruneSessionBindings(remove) : void 0;
+  const removed = pruned === void 0 ? [] : pruned.removed;
+  const report = {
+    mode: input.mode,
+    scanned: sessionIds.length,
+    keptLive,
+    keptStored,
+    stale: remove.size,
+    removed: removed.length,
+    // `retained` 只来自删除后的真实表长（store 返回），不能用「扫描数 − 删除数」
+    // 反推：两者来自不同快照，并发写入会让差值失真（甚至为负）。
+    retained: pruned === void 0 ? sessionIds.length : pruned.retained
+  };
+  log2.info("dsh-soulmojito session-bindings: reclaim summary", {
+    ...report,
+    operation: "reclaim-session-bindings",
+    // 删除动作要能事后审计：`prune` 带被删 id（截断样本，总数看 `removed`）；
+    // `report` 保持只计数。
+    ...pruned === void 0 ? {} : { removedIdSample: removedIdSample(removed) }
+  });
+  return { status: "done", report };
+}
+async function registerSessionBindingReclaim(ctx, deps) {
+  const log2 = logSink(ctx.logger);
+  const resolved = resolveSessionBindingReclaimConfig(deps.configured);
+  if (resolved.mode === "off") {
+    if (!resolved.supported) {
+      log2.warn("dsh-soulmojito session-bindings: unsupported pruneStaleBindings value; reclaim stays off", {
+        operation: "reclaim-session-bindings",
+        reason: "unsupported-config",
+        configType: typeof deps.configured
+      });
+    }
+    return;
+  }
+  try {
+    await reclaimStaleSessionBindings({
+      mode: resolved.mode,
+      store: deps.store,
+      agents: ctx.agents,
+      sessions: ctx.sessions,
+      persistence: persistenceSeam(ctx),
+      logger: ctx.logger
+    });
+  } catch (error) {
+    log2.warn("dsh-soulmojito session-bindings: reclaim failed", {
+      operation: "reclaim-session-bindings",
+      configuredMode: resolved.mode,
+      errorCode: errorCodeText2(error)
+    });
+  }
+}
+function liveSessionIds(agents, sessions) {
+  if (typeof agents?.list !== "function" || typeof sessions?.list !== "function") return void 0;
+  const ids = /* @__PURE__ */ new Set();
+  for (const agent of agents.list()) {
+    const agentId = agent?.id;
+    const agentSessionId = agent?.session?.id;
+    let readable = false;
+    if (typeof agentId === "string" && agentId !== "") {
+      ids.add(agentId);
+      readable = true;
+    }
+    if (typeof agentSessionId === "string" && agentSessionId !== "") {
+      ids.add(agentSessionId);
+      readable = true;
+    }
+    if (!readable) return void 0;
+  }
+  for (const session of sessions.list()) {
+    const sessionId = session?.id;
+    if (typeof sessionId !== "string" || sessionId === "") return void 0;
+    ids.add(sessionId);
+  }
+  return ids;
+}
+function storedSkipReason(status2) {
+  if (status2 === "unavailable") return "session-storage-unavailable";
+  if (status2 === "incomplete") return "session-storage-incomplete";
+  return "session-storage-error";
+}
+async function storedSessionIds(persistence) {
+  if (persistence === void 0) return { status: "unavailable", ids: /* @__PURE__ */ new Set() };
+  let entries;
+  try {
+    entries = await persistence.list();
+  } catch (error) {
+    return { status: "error", ids: /* @__PURE__ */ new Set(), errorCode: errorCodeText2(error) };
+  }
+  const ids = /* @__PURE__ */ new Set();
+  for (const entry of entries) {
+    const sessionId = entry?.header?.id;
+    if (typeof sessionId !== "string" || sessionId === "") return { status: "incomplete", ids: /* @__PURE__ */ new Set() };
+    ids.add(sessionId);
+  }
+  return { status: "ok", ids };
+}
+async function persistedSessionExists(persistence, sessionId) {
+  if (persistence === void 0) throw new Error("session persistence seam is missing");
+  return await persistence.stat(sessionId) !== void 0;
+}
+function persistenceSeam(ctx) {
+  const candidate = ctx.get?.("sessionPersistence");
+  if (typeof candidate !== "object" || candidate === null) return void 0;
+  const seam = candidate;
+  if (typeof seam.list !== "function" || typeof seam.stat !== "function") return void 0;
+  return candidate;
+}
+function logSink(logger) {
+  return {
+    info: (message, fields) => {
+      try {
+        logger?.info?.(message, fields);
+      } catch {
+      }
+    },
+    warn: (message, fields) => {
+      try {
+        logger?.warn?.(message, fields);
+      } catch {
+      }
+    }
+  };
+}
+function errorCodeText2(error) {
+  if (typeof error === "object" && error !== null && "code" in error) {
+    const code = error.code;
+    if (typeof code === "string" && code !== "") return code;
+  }
+  return error instanceof Error ? error.name : String(error);
+}
+function removedIdSample(removed) {
+  return removed.slice(0, REMOVED_ID_SAMPLE_LIMIT);
 }
 
 // packages/plugin/src/im/runtime.ts
@@ -44838,7 +45120,7 @@ async function generate(ctx, req, res, db) {
   } catch (error) {
     if (!res.writableEnded) {
       const message = error instanceof Error ? error.message : String(error);
-      const code = error instanceof ChatRevisionConflictError ? error.code : void 0;
+      const code = isChatRevisionConflict(error) ? error.code : void 0;
       write({ type: "error", message, code });
       res.end();
     }
@@ -46247,7 +46529,7 @@ async function retryChatWrite(operation) {
     try {
       return await operation();
     } catch (error) {
-      if (!(error instanceof ChatRevisionConflictError)) throw error;
+      if (!isChatRevisionConflict(error)) throw error;
       lastError = error;
       await new Promise((resolve9) => setTimeout(resolve9, 10 * (attempt + 1)));
     }
@@ -54495,9 +54777,10 @@ async function applyPlan(dir, planId) {
 // packages/plugin/src/card-workbench/shared.ts
 init_src();
 init_dsh_home();
+init_store_handle();
 var tavernStorePromise2;
 function tavernStore3() {
-  return tavernStorePromise2 ??= TavernStore.open(tavernDataRoot());
+  return tavernStorePromise2 ??= sharedTavernStore(tavernDataRoot());
 }
 async function requireCharacter(name2) {
   const found = await (await tavernStore3()).getCharacter(name2);
@@ -60862,7 +61145,10 @@ function apply(ctx, config = {}) {
   });
   setNovelDriverPromise(novelDriverPromise2);
   ctx.on?.("session/event", (session, event) => {
-    void getAgentTavernProjectorPromise().then((projector) => projector.project(session, event)).catch((error) => ctx.logger?.warn?.(`AgentTavern projection failed: ${error instanceof Error ? error.message : String(error)}`));
+    void getAgentTavernProjectorPromise().then((projector) => projector.project(session, event)).catch((error) => {
+      const label = error instanceof ProjectionCheckpointLagError ? "AgentTavern projection checkpoint lag" : "AgentTavern projection failed";
+      ctx.logger?.warn?.(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+    });
     if (event?.type === "turn/end" && typeof session?.id === "string") {
       void variables().then((store5) => store5.clear("turn", session.id)).catch(() => {
       });
@@ -60917,6 +61203,7 @@ function apply(ctx, config = {}) {
   const liveAgentIds = listLiveAgents2(ctx.agents).map((agent) => agent.id).filter((id) => typeof id === "string" && id !== "");
   void preheatNativeAgentPreset(liveAgentIds);
   registerTavernSessionCommand(ctx);
+  void registerSessionBindingReclaim(ctx, { configured: config.pruneStaleBindings, store: store3 });
   ctx.effect(() => tavernUpdate(ctx).start(), "dsh-soulmojito: update auto-check");
   const gamesServicePromise2 = openGamesService({
     root: tavernDataRoot(),
