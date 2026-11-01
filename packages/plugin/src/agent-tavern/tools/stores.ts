@@ -1,17 +1,20 @@
 /** Memoized AgentTavern store singletons shared by agent.ts and every tool module.
- *  Single-instance discipline: never open a second copy of these stores. */
+ *  Single-instance discipline: never open a second copy of these stores — the
+ *  handles in `src/shared-stores.ts` give every bundle the same instance (and
+ *  the same mutation tail) for one data root. */
 
 import {
-  MemoryStore,
-  MemoryVectorStore,
-  TavernStore,
-  VariableStore,
   normalizeMemoryEmbedding,
   type MemoryEmbeddingSettings,
   type MemoryRecord,
+  type MemoryStore,
+  type MemoryVectorStore,
+  type TavernStore,
+  type VariableStore,
 } from '../../../../tavern-store/src/index.js'
 import { tavernDataRoot } from '../../dsh-home.js'
 import { embedMemoryRecord } from '../../memory-hybrid.js'
+import { sharedMemoryStore, sharedMemoryVectorStore, sharedVariableStore } from '../../shared-stores.js'
 import { sharedTavernStore } from '../../store-handle.js'
 
 let tavernStorePromise: Promise<TavernStore> | undefined
@@ -24,11 +27,11 @@ export function tavernStore(): Promise<TavernStore> {
 }
 
 export function memoryStore(): Promise<MemoryStore> {
-  return (memoryStorePromise ??= MemoryStore.open(tavernDataRoot()))
+  return (memoryStorePromise ??= sharedMemoryStore(tavernDataRoot()))
 }
 
 export function memoryVectorStore(): Promise<MemoryVectorStore> {
-  return (memoryVectorStorePromise ??= MemoryVectorStore.open(tavernDataRoot()))
+  return (memoryVectorStorePromise ??= sharedMemoryVectorStore(tavernDataRoot()))
 }
 
 /** 混合检索配置（提案 0016）：state.memoryEmbedding 经 normalize 后有效才算开启；
@@ -50,5 +53,5 @@ export async function embedWrittenMemory(record: MemoryRecord): Promise<void> {
 }
 
 export function variableStore(): Promise<VariableStore> {
-  return (variableStorePromise ??= VariableStore.open(tavernDataRoot()))
+  return (variableStorePromise ??= sharedVariableStore(tavernDataRoot()))
 }

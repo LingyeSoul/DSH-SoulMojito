@@ -11,6 +11,7 @@ import type { PluginContext } from './host-contract.js'
 import { ModHost, type ModHostContext, type ModHostSnapshot } from './mods/host.js'
 import { publishImRuntime, resolveImRuntime } from './im/handle.js'
 import type { ImRuntime } from './im/runtime.js'
+import { sharedMemoryStore, sharedMemoryVectorStore, sharedNovelStore, sharedVariableStore } from './shared-stores.js'
 import { sharedTavernStore } from './store-handle.js'
 import { TavernUpdateService } from './update/service.js'
 import { MemoryStore, MemoryVectorStore, NovelStore, TavernStore, VariableStore } from '../../tavern-store/src/index.js'
@@ -85,19 +86,23 @@ export function store(): Promise<TavernStore> {
 }
 
 export function memories(): Promise<MemoryStore> {
-  return (memoryStorePromise ??= MemoryStore.open(tavernDataRoot()))
+  // Same contract as `store()`: the instance (and its mutation tail) is shared
+  // through the globalThis handle, so a patch from this bundle and one from the
+  // agent bundle serialize instead of racing on the same record.
+  return (memoryStorePromise ??= sharedMemoryStore(tavernDataRoot()))
 }
 
 export function variables(): Promise<VariableStore> {
-  return (variableStorePromise ??= VariableStore.open(tavernDataRoot()))
+  return (variableStorePromise ??= sharedVariableStore(tavernDataRoot()))
 }
 
-// 记忆向量缓存（提案 0016）：index.mjs 侧的 memoized 实例（维护 run 重嵌用；
-// agent.mjs bundle 各自持有同款 memo，实例隔离但 CAS + digest 保证一致）。
+// Memory vector cache (proposal 0016): the memoized index-side entry point.
+// The instance is unified across bundles by the shared handle, so the agent
+// bundle's own memo resolves to the same MemoryVectorStore.
 let memoryVectorStorePromise: Promise<MemoryVectorStore> | undefined
 
 export function memoryVectors() {
-  return (memoryVectorStorePromise ??= MemoryVectorStore.open(tavernDataRoot()))
+  return (memoryVectorStorePromise ??= sharedMemoryVectorStore(tavernDataRoot()))
 }
 
 /**
@@ -142,7 +147,7 @@ export async function modHostProjection(ctx: PluginContext): Promise<unknown[]> 
 }
 
 export function novelStore(): Promise<NovelStore> {
-  return (novelStorePromise ??= NovelStore.open(tavernDataRoot()))
+  return (novelStorePromise ??= sharedNovelStore(tavernDataRoot()))
 }
 
 /**
