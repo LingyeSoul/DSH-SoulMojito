@@ -2800,6 +2800,16 @@ async function statChatFile(file) {
 function sameChatFingerprint(left, right) {
   return left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs && left.ino === right.ino;
 }
+function sameOptionalFingerprint(left, right) {
+  if (left === void 0 || right === void 0) return left === right;
+  return sameChatFingerprint(left, right);
+}
+function deepFreeze(value) {
+  if (typeof value !== "object" || value === null) return value;
+  Object.freeze(value);
+  for (const key of Object.keys(value)) deepFreeze(value[key]);
+  return value;
+}
 async function readChatFile(file) {
   let last;
   for (let attempt = 0; attempt < CHAT_SNAPSHOT_READ_ATTEMPTS; attempt += 1) {
@@ -2825,7 +2835,7 @@ async function readChatFile(file) {
 function jsonBytes(obj) {
   return new Uint8Array(Buffer.from(JSON.stringify(obj, null, 2), "utf8"));
 }
-var LOCAL_EMBED_PRECISIONS, MAX_CHAT_SNAPSHOT_CACHE_ENTRIES, CHAT_SNAPSHOT_READ_ATTEMPTS, ChatRevisionConflictError, DEFAULT_STATE, MEMORY_EMBED_ENV_NAME, TavernStore;
+var LOCAL_EMBED_PRECISIONS, MAX_CHAT_SNAPSHOT_CACHE_ENTRIES, MAX_CHARACTER_CACHE_ENTRIES, CHAT_SNAPSHOT_READ_ATTEMPTS, ChatRevisionConflictError, DEFAULT_STATE, MEMORY_EMBED_ENV_NAME, TavernStore;
 var init_store = __esm({
   "packages/tavern-store/src/store.ts"() {
     "use strict";
@@ -2848,6 +2858,7 @@ var init_store = __esm({
       "q1f16"
     ];
     MAX_CHAT_SNAPSHOT_CACHE_ENTRIES = 64;
+    MAX_CHARACTER_CACHE_ENTRIES = 32;
     CHAT_SNAPSHOT_READ_ATTEMPTS = 3;
     ChatRevisionConflictError = class extends Error {
       constructor(expectedRevision, actualRevision) {
@@ -2899,6 +2910,16 @@ var init_store = __esm({
       chatSnapshotCache = /* @__PURE__ */ new Map();
       chatSnapshotCacheHits = 0;
       chatSnapshotCacheMisses = 0;
+      /**
+       * Parsed character cards keyed by card file absolute path; see getCharacter.
+       * Every entry is deep-frozen and shared by all callers.
+       */
+      characterCache = /* @__PURE__ */ new Map();
+      /**
+       * Last parsed state.json; see readState. The entry is deep-frozen and shared:
+       * callers must treat the state they receive as read-only, and mutation throws.
+       */
+      stateCache;
       static async open(root) {
         for (const dir of ["characters", "worlds", "presets", "chats", "personas", "groups", "personas/avatars"]) {
           await fs2.mkdir(path.join(root, dir), { recursive: true });
@@ -2969,6 +2990,7 @@ var init_store = __esm({
         const fileName = `${stem}.${kind}`;
         await this.writeAtomic(path.join(this.root, "characters", fileName), bytes);
         await Promise.all(["png", "json", "charx"].filter((other6) => other6 !== kind).map((other6) => fs2.rm(path.join(this.root, "characters", `${stem}.${other6}`), { force: true })));
+        this.characterCache.clear();
         return { fileName, card, importedWorld, importedRegex };
       }
       /**
@@ -3120,6 +3142,7 @@ var init_store = __esm({
         for (const other6 of ["png", "json", "charx"].filter((other7) => other7 !== kind)) {
           await fs2.rm(path.join(this.root, "characters", `${nextStem}.${other6}`), { force: true });
         }
+        this.characterCache.clear();
         const saved = await this.getCharacter(card.data.name);
         if (saved === void 0) throw new Error(`character '${card.data.name}' could not be reloaded`);
         if (card.data.name !== name2) {
@@ -3136,16 +3159,37 @@ var init_store = __esm({
         const files = await this.listDir("characters");
         return [...new Set(files.filter((f) => /\.(png|json|charx)$/.test(f)).map((f) => f.replace(/\.(png|json|charx)$/, "")))].sort();
       }
+      /**
+       * Reads one character card; png → charx → json, first present file wins.
+       *
+       * The result is shared and deep-frozen: callers must treat it as read-only;
+       * mutation throws. Parses are cached per file and validated by the same
+       * size+mtimeMs+ctimeMs+ino fingerprint the chat snapshot cache uses, so an
+       * external rewrite is detected by the stat alone; every card write inside
+       * this store additionally clears the cache. Return type and probe order are
+       * unchanged.
+       */
       async getCharacter(name2) {
         for (const kind of ["png", "charx", "json"]) {
           const fileName = `${safeFileName(name2)}.${kind}`;
-          try {
-            const bytes = new Uint8Array(await fs2.readFile(path.join(this.root, "characters", fileName)));
-            const card = kind === "png" ? decodeCharacterCard(bytes) : kind === "charx" ? decodeCharx(bytes).card : decodeCharacterCard(JSON.parse(Buffer.from(bytes).toString("utf8")));
-            return { fileName, kind, card };
-          } catch (cause) {
-            if (cause.code !== "ENOENT") throw cause;
+          const file = path.join(this.root, "characters", fileName);
+          const cached = this.characterCache.get(file);
+          if (cached !== void 0) {
+            const current = await statChatFile(file);
+            if (current !== void 0 && sameChatFingerprint(cached, current)) {
+              this.characterCache.delete(file);
+              this.characterCache.set(file, cached);
+              return cached.file;
+            }
+            this.characterCache.delete(file);
           }
+          const read = await readChatFile(file);
+          if (read === void 0) continue;
+          const bytes = read.bytes;
+          const card = kind === "png" ? decodeCharacterCard(bytes) : kind === "charx" ? decodeCharx(bytes).card : decodeCharacterCard(JSON.parse(Buffer.from(bytes).toString("utf8")));
+          const found = deepFreeze({ fileName, kind, card });
+          if (read.fingerprint !== void 0) this.cacheCharacter(file, read.fingerprint, found);
+          return found;
         }
         return void 0;
       }
@@ -3160,6 +3204,7 @@ var init_store = __esm({
             if (cause.code !== "ENOENT") throw cause;
           }
         }
+        this.characterCache.clear();
         if (deleted) {
           const chatDir = path.join(this.root, "chats", safeFileName(name2));
           await fs2.rm(chatDir, { recursive: true, force: true });
@@ -3621,19 +3666,54 @@ var init_store = __esm({
         });
       }
       /* ------------------------------ 状态 ------------------------------ */
+      /**
+       * Reads the current Tavern state.
+       *
+       * The result is shared and deep-frozen: callers must treat it as read-only;
+       * mutation throws. Every session event, pre-step and panel request reads this
+       * state, so a cached parse is served while the state.json fingerprint is
+       * unchanged and only a changed file pays the 3.3 MB read + parse.
+       */
       async getState() {
         await this.stateMutationTail.drain();
         return this.readState();
       }
+      /**
+       * Same contract as updateState: the returned state is a frozen copy and must be
+       * treated as read-only (mutation throws).
+       *
+       * Ownership: the patch is serialized, never retained. Every object and array in
+       * it is copied into the stored bytes, so the caller keeps its tree and may keep
+       * mutating it; those edits do not reach the stored state.
+       */
       async patchState(patch) {
         return this.updateState(() => patch);
       }
+      /**
+       * Applies one state patch and reports the persisted state.
+       *
+       * Ownership: the tree returned by `update` is serialized, not retained. Nested
+       * objects and arrays are copied into the stored bytes, so the caller keeps
+       * ownership of that tree and mutating it afterwards cannot reach the state.
+       *
+       * The returned object describes the bytes on disk, is a fresh copy, and is
+       * deep-frozen: callers must treat it as read-only; mutation throws.
+       *
+       * The state cache is left empty instead of seeded with `next`. A cache entry
+       * built from a stat taken after the write would let a concurrent writer land
+       * between the two awaits, pinning this instance's older state under the newer
+       * fingerprint — and every later stat would then serve it. Writes are rare and
+       * already rewrite the whole file, so the next getState pays one read + parse.
+       */
       async updateState(update) {
         return this.mutateState(async () => {
           const current = await this.readState();
           const next = { ...current, ...update(structuredClone(current)) };
-          await this.writeAtomic(path.join(this.root, "state.json"), jsonBytes(next));
-          return next;
+          const bytes = jsonBytes(next);
+          await this.writeAtomic(path.join(this.root, "state.json"), bytes);
+          const persisted = deepFreeze(this.normalizeState(JSON.parse(Buffer.from(bytes).toString("utf8"))));
+          this.stateCache = void 0;
+          return persisted;
         });
       }
       /**
@@ -3845,10 +3925,42 @@ var init_store = __esm({
         });
       }
       /* ------------------------------ 内部 ------------------------------ */
+      /**
+       * Reads state.json, or DEFAULT_STATE when it is missing.
+       *
+       * A warm entry is served after a single stat and is returned by reference:
+       * the returned state is shared and deep-frozen, so callers must treat it as
+       * read-only; mutation throws instead of corrupting every later read. The
+       * fingerprint is the same size+mtimeMs+ctimeMs+ino quartet the chat snapshot
+       * cache uses, so a write from another process or a hand edit invalidates the
+       * entry without any in-process invalidation hook.
+       */
       async readState() {
-        const bytes = await this.tryRead(path.join(this.root, "state.json"));
-        if (bytes === void 0) return structuredClone(DEFAULT_STATE);
-        const parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
+        const file = path.join(this.root, "state.json");
+        const fingerprint = await statChatFile(file);
+        const cached = this.stateCache;
+        if (cached !== void 0 && sameOptionalFingerprint(cached.fingerprint, fingerprint)) return cached.state;
+        const read = await readChatFile(file);
+        if (read === void 0) {
+          const state2 = deepFreeze(structuredClone(DEFAULT_STATE));
+          this.stateCache = { state: state2 };
+          return state2;
+        }
+        const state = deepFreeze(this.normalizeState(
+          JSON.parse(Buffer.from(read.bytes).toString("utf8"))
+        ));
+        this.stateCache = read.fingerprint === void 0 ? void 0 : { fingerprint: read.fingerprint, state };
+        return state;
+      }
+      /**
+       * Applies persisted-state defaults and normalizers to one parsed payload.
+       *
+       * This is the single definition of what a state read looks like: readState
+       * feeds it the parsed file, and updateState feeds it the bytes it just wrote
+       * so the value it reports is the one a later read would build (a raw patch can
+       * carry legacy binding shapes that only this pass normalizes).
+       */
+      normalizeState(parsed) {
         const { pipelineMode: _legacyPipelineMode, textCompletion: _legacyTextCompletion, ...rest } = parsed;
         const regexScriptOwners = normalizeRegexScriptOwners(parsed.regexScriptOwners);
         const regexScriptPresetOwners = normalizeRegexScriptOwners(parsed.regexScriptPresetOwners);
@@ -3927,6 +4039,20 @@ var init_store = __esm({
         const prefix = `${dir}${path.sep}`;
         for (const key of this.chatSnapshotCache.keys()) {
           if (key.startsWith(prefix)) this.chatSnapshotCache.delete(key);
+        }
+      }
+      /**
+       * Stores one parsed card under its fingerprint and evicts least-recently-used
+       * entries beyond the cap (same policy as the chat snapshot cache). Only a
+       * complete parse reaches this point: a corrupt card throws before caching.
+       */
+      cacheCharacter(file, fingerprint, card) {
+        this.characterCache.delete(file);
+        this.characterCache.set(file, { ...fingerprint, file: card });
+        while (this.characterCache.size > MAX_CHARACTER_CACHE_ENTRIES) {
+          const oldest = this.characterCache.keys().next().value;
+          if (oldest === void 0) break;
+          this.characterCache.delete(oldest);
         }
       }
       chatWorldsFile(characterName, chatId) {
@@ -10277,7 +10403,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("78d71c1") : void 0;
+  const commit = true ? normalizeCommit("9a9fd58") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -19921,7 +20047,8 @@ async function retryMvuSettlement(db, options) {
   const failures = [];
   const localVars = plainObject3(metadata.variables) ?? {};
   metadata.variables = localVars;
-  const globalsBefore = JSON.stringify(state.scriptGlobals);
+  const globalVars = { ...state.scriptGlobals };
+  const globalsBefore = JSON.stringify(globalVars);
   const books = await collectWorldInfoBooks(db, state, characterName, character, chatId);
   const runtime = createMvuRuntime(
     { state, characterName, character, chat, chatId, books, onWarning: (message) => {
@@ -19931,7 +20058,7 @@ async function retryMvuSettlement(db, options) {
       // initial 绑活引用（存在时）；无 initial 树时绑临时对象，initial 作用域写穿
       // 不持久化——initial 本就由每次生成的 InitialVariables 重算，非用户状态
       local: localVars,
-      global: state.scriptGlobals,
+      global: globalVars,
       initial: plainObject3(metadata[INITIAL_VARIABLES_KEY3]) ?? {}
     }
   );
@@ -19941,8 +20068,8 @@ async function retryMvuSettlement(db, options) {
     failures.push(`mvu retry render failed: ${err2 instanceof Error ? err2.message : String(err2)}`);
   }
   if (Object.keys(localVars).length === 0) delete metadata.variables;
-  if (JSON.stringify(state.scriptGlobals) !== globalsBefore) {
-    await db.updateState((current) => ({ scriptGlobals: { ...current.scriptGlobals, ...state.scriptGlobals } }));
+  if (JSON.stringify(globalVars) !== globalsBefore) {
+    await db.updateState((current) => ({ scriptGlobals: { ...current.scriptGlobals, ...globalVars } }));
   }
   const guard = applyMvuSettlementGuard(chat, character.card, before);
   const rulesPass = await applyMvuSettlementRules(chat, character.card, before);
@@ -21422,9 +21549,9 @@ import { randomUUID as randomUUID3 } from "node:crypto";
 
 // packages/plugin/src/message.ts
 function createMessage(input) {
-  return deepFreeze(structuredClone({ ...input, id: crypto.randomUUID() }));
+  return deepFreeze2(structuredClone({ ...input, id: crypto.randomUUID() }));
 }
-function deepFreeze(value) {
+function deepFreeze2(value) {
   const seen = /* @__PURE__ */ new WeakSet();
   const pending = [value];
   while (pending.length > 0) {
@@ -24922,6 +25049,15 @@ function recordOf(value) {
 }
 
 // packages/plugin/src/agent-tavern/projector.ts
+var PROJECTED_EVENT_TYPES = /* @__PURE__ */ new Set([
+  "user/message",
+  "assistant/message",
+  "tool/result",
+  "agent/inbox/spliced"
+]);
+function canProjectEvent(eventType) {
+  return PROJECTED_EVENT_TYPES.has(eventType) || isBodyLogEvent(eventType);
+}
 var AgentTavernProjector = class _AgentTavernProjector {
   constructor(root, store5) {
     this.root = root;
@@ -24961,6 +25097,10 @@ var AgentTavernProjector = class _AgentTavernProjector {
     const checkpoint = await this.readCheckpoint(session.id);
     if (isProjectedCursor(checkpoint, event.seq)) return;
     try {
+      if (!canProjectEvent(event.type)) {
+        await this.writeCheckpoint(advanceCheckpoint(checkpoint, event.seq));
+        return;
+      }
       const state = await this.store.getState();
       const binding = state.sessionBindings[session.id];
       if (binding?.architecture === "agent-tavern" && binding.group !== true) {
@@ -44506,10 +44646,11 @@ async function buildGenerationLlmRequest(ctx, db, options) {
   });
   chat.header.chat_metadata.timedWorldInfo = lore.timedState;
   const templatesActive = templatesEnabledFlagValue() && templatesEnvEnabled();
-  const templateGlobalsBefore = templatesActive ? JSON.stringify(state.scriptGlobals) : void 0;
+  const templateGlobals = templatesActive ? { ...state.scriptGlobals } : void 0;
+  const templateGlobalsBefore = templateGlobals === void 0 ? void 0 : JSON.stringify(templateGlobals);
   const tpl = templatesActive ? await createGenerationTemplates({
     chat,
-    state,
+    state: { ...state, scriptGlobals: templateGlobals },
     books,
     lore,
     card: character.card,
@@ -44666,6 +44807,7 @@ async function buildGenerationLlmRequest(ctx, db, options) {
     tpl,
     macros,
     templateGlobalsBefore,
+    templateGlobals,
     // SSE 'start' 事件的载荷（runGeneration 消费；试写预览忽略）。provider/model
     // 是选择器结论（pre-hook）——hook 改写后的实参以 request.params 为准。
     start: {
@@ -44739,6 +44881,7 @@ async function runGeneration(ctx, db, options) {
     const tpl = assembly.tpl;
     const macros = assembly.macros;
     const templateGlobalsBefore = assembly.templateGlobalsBefore;
+    const templateGlobals = assembly.templateGlobals;
     const hookedLlmRequest = assembly.request;
     const expand = (text2) => macros.expand(text2);
     write({ type: "start", ...assembly.start });
@@ -44810,8 +44953,8 @@ async function runGeneration(ctx, db, options) {
     const varSnapshot = macros.snapshotVars().local;
     if (tpl) {
       mergeTemplateLocalVars(chat, varSnapshot);
-      if (JSON.stringify(state.scriptGlobals) !== templateGlobalsBefore) {
-        await db.updateState((current) => ({ scriptGlobals: { ...current.scriptGlobals, ...state.scriptGlobals } }));
+      if (templateGlobals !== void 0 && JSON.stringify(templateGlobals) !== templateGlobalsBefore) {
+        await db.updateState((current) => ({ scriptGlobals: { ...current.scriptGlobals, ...templateGlobals } }));
       }
     } else if (Object.keys(varSnapshot).length > 0) {
       chat.header.chat_metadata.variables = varSnapshot;
@@ -45884,7 +46027,7 @@ async function renderFrontendTemplate(db, state, character, chatId, body) {
   const chat = chatId === "" ? void 0 : (await requireChat(db, character, chatId)).chat;
   const messages = chat?.messages ?? [];
   const chatVariables2 = chat === void 0 ? {} : readChatVariables(chat);
-  const globalVariables = plainObject6(state.scriptGlobals) ?? {};
+  const globalVariables = cloneJson(plainObject6(state.scriptGlobals) ?? {});
   let variablesDirty = false;
   const readVar = (scope, path12) => {
     const tree = scope === "chat" ? chatVariables2 : globalVariables;
