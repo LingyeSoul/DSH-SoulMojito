@@ -240,6 +240,7 @@
 ### 工程实践
 
 - [`2026-10-09-dedup-refactor.md`](../decisions/2026-10-09-dedup-refactor.md) — 审查修复的七项去重/拆分重构
+- [`2026-11-01-tavern-read-caches.md`](../decisions/2026-11-01-tavern-read-caches.md) — Tavern 热读面指纹缓存、只读冻结契约与投影事件快路径（含 `updateState` 持平的实测偏差）
 
 ## 探索（`exploration/`）
 

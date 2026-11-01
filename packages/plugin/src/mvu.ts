@@ -732,7 +732,10 @@ export async function retryMvuSettlement(
   // local 绑活引用：setvar 写穿直接落 chat_metadata.variables；空树保持摘键
   const localVars = plainObject(metadata.variables) ?? {}
   metadata.variables = localVars
-  const globalsBefore = JSON.stringify(state.scriptGlobals)
+  // global 写穿的是模板变量树：getState() 返回的是共享只读对象（改动会抛错），
+  // 这里拷一份工作副本，渲染后按它对比并落盘。
+  const globalVars = { ...state.scriptGlobals }
+  const globalsBefore = JSON.stringify(globalVars)
 
   const books = await collectWorldInfoBooks(db, state, characterName, character, chatId)
   const runtime = createMvuRuntime(
@@ -741,7 +744,7 @@ export async function retryMvuSettlement(
       // initial 绑活引用（存在时）；无 initial 树时绑临时对象，initial 作用域写穿
       // 不持久化——initial 本就由每次生成的 InitialVariables 重算，非用户状态
       local: localVars as JsonObject,
-      global: state.scriptGlobals,
+      global: globalVars,
       initial: (plainObject(metadata[INITIAL_VARIABLES_KEY]) ?? {}) as JsonObject,
     },
   )
@@ -754,8 +757,8 @@ export async function retryMvuSettlement(
 
   if (Object.keys(localVars).length === 0) delete metadata.variables
   // global 写穿与 runGeneration 同款：有变化才落 state
-  if (JSON.stringify(state.scriptGlobals) !== globalsBefore) {
-    await db.updateState((current) => ({ scriptGlobals: { ...current.scriptGlobals, ...state.scriptGlobals } }))
+  if (JSON.stringify(globalVars) !== globalsBefore) {
+    await db.updateState((current) => ({ scriptGlobals: { ...current.scriptGlobals, ...globalVars } }))
   }
 
   // $schema 写入守卫 pass（C-1，与 runGeneration 共用）：clamp 写回、reject 回滚，

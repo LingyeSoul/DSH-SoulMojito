@@ -379,6 +379,23 @@ interface ChatSnapshotCacheEntry extends ChatFileFingerprint {
   snapshot: ChatSnapshot
 }
 
+/**
+ * The parsed state.json plus the fingerprint it was parsed from.
+ *
+ * `fingerprint` is absent only when state.json did not exist and `state` is the
+ * frozen DEFAULT_STATE; a stat that later finds the file fails the match and
+ * triggers a fresh read.
+ */
+interface StateCacheEntry {
+  fingerprint?: ChatFileFingerprint
+  state: TavernState
+}
+
+/** One cached character card plus the fingerprint it was parsed from. */
+interface CharacterCacheEntry extends ChatFileFingerprint {
+  file: CharacterFile
+}
+
 /** Process-local chat snapshot cache counters (tests and diagnostics). */
 export interface ChatSnapshotCacheStats {
   /** Reads served from memory without stat-ing or parsing the file. */
@@ -400,6 +417,22 @@ export interface ChatSnapshotCacheStats {
  * the ceiling at "dozens of long chats" instead of the whole library.
  */
 export const MAX_CHAT_SNAPSHOT_CACHE_ENTRIES = 64
+
+/**
+ * Upper bound on cached character cards (least recently used entries go first).
+ *
+ * A session re-reads one card on every event, and library/workbench scans walk
+ * every card once. 32 keeps "the cards in play plus a scan" parsed while a card
+ * with a large embedded book stays megabytes in memory, so the cache cannot
+ * grow with the whole library.
+ *
+ * The bound is per store instance: the cache is process-local and is not shared
+ * between instances. The plugin opens up to seven TavernStore instances on one
+ * data root (runtime, preset-mount, compaction/curator, card-workbench/shared,
+ * agent-tavern/anchor, agent-tavern/tools, agent-novel/tools), so the worst case
+ * is 7 × 32 cards resident at once.
+ */
+export const MAX_CHARACTER_CACHE_ENTRIES = 32
 
 /**
  * Reads per miss before giving up on a stable fingerprint. A writer replacing
@@ -563,6 +596,16 @@ export class TavernStore {
   private readonly chatSnapshotCache = new Map<string, ChatSnapshotCacheEntry>()
   private chatSnapshotCacheHits = 0
   private chatSnapshotCacheMisses = 0
+  /**
+   * Parsed character cards keyed by card file absolute path; see getCharacter.
+   * Every entry is deep-frozen and shared by all callers.
+   */
+  private readonly characterCache = new Map<string, CharacterCacheEntry>()
+  /**
+   * Last parsed state.json; see readState. The entry is deep-frozen and shared:
+   * callers must treat the state they receive as read-only, and mutation throws.
+   */
+  private stateCache: StateCacheEntry | undefined
 
   private constructor(private readonly root: string) {}
 
@@ -646,6 +689,11 @@ export class TavernStore {
     await Promise.all((['png', 'json', 'charx'] as const)
       .filter((other) => other !== kind)
       .map((other) => fs.rm(path.join(this.root, 'characters', `${stem}.${other}`), { force: true })))
+    // Card reads are cached by path+fingerprint. The fingerprint already covers
+    // external rewrites, but a same-size in-place write in the same millisecond
+    // can match it; card writes are low-frequency, so clearing beats precise
+    // eviction (same reasoning as the chat snapshot cache).
+    this.characterCache.clear()
     return { fileName, card, importedWorld, importedRegex }
   }
 
@@ -817,6 +865,10 @@ export class TavernStore {
     for (const other of (['png', 'json', 'charx'] as const).filter((other) => other !== kind)) {
       await fs.rm(path.join(this.root, 'characters', `${nextStem}.${other}`), { force: true })
     }
+    // The card file was just rewritten (possibly renamed): every cached parse is
+    // stale from this store's point of view. Cleared before the reload below so
+    // the returned card comes from the bytes on disk.
+    this.characterCache.clear()
     const saved = await this.getCharacter(card.data.name)
     if (saved === undefined) throw new Error(`character '${card.data.name}' could not be reloaded`)
     if (card.data.name !== name) {
@@ -840,20 +892,44 @@ export class TavernStore {
       .sort()
   }
 
+  /**
+   * Reads one character card; png → charx → json, first present file wins.
+   *
+   * The result is shared and deep-frozen: callers must treat it as read-only;
+   * mutation throws. Parses are cached per file and validated by the same
+   * size+mtimeMs+ctimeMs+ino fingerprint the chat snapshot cache uses, so an
+   * external rewrite is detected by the stat alone; every card write inside
+   * this store additionally clears the cache. Return type and probe order are
+   * unchanged.
+   */
   async getCharacter(name: string): Promise<CharacterFile | undefined> {
     for (const kind of ['png', 'charx', 'json'] as const) {
       const fileName = `${safeFileName(name)}.${kind}`
-      try {
-        const bytes = new Uint8Array(await fs.readFile(path.join(this.root, 'characters', fileName)))
-        const card = kind === 'png'
-          ? decodeCharacterCard(bytes)
-          : kind === 'charx'
-            ? decodeCharx(bytes).card
-            : decodeCharacterCard(JSON.parse(Buffer.from(bytes).toString('utf8')))
-        return { fileName, kind, card }
-      } catch (cause) {
-        if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause
+      const file = path.join(this.root, 'characters', fileName)
+      const cached = this.characterCache.get(file)
+      if (cached !== undefined) {
+        const current = await statChatFile(file)
+        if (current !== undefined && sameChatFingerprint(cached, current)) {
+          // Re-insert to move the entry to the Map's most-recently-used end.
+          this.characterCache.delete(file)
+          this.characterCache.set(file, cached)
+          return cached.file
+        }
+        this.characterCache.delete(file)
       }
+      const read = await readChatFile(file)
+      if (read === undefined) continue
+      const bytes = read.bytes
+      const card = kind === 'png'
+        ? decodeCharacterCard(bytes)
+        : kind === 'charx'
+          ? decodeCharx(bytes).card
+          : decodeCharacterCard(JSON.parse(Buffer.from(bytes).toString('utf8')))
+      const found = deepFreeze({ fileName, kind, card })
+      // A read whose bytes could not be pinned to one fingerprint is served but
+      // not cached, matching getChatSnapshot.
+      if (read.fingerprint !== undefined) this.cacheCharacter(file, read.fingerprint, found)
+      return found
     }
     return undefined
   }
@@ -869,6 +945,9 @@ export class TavernStore {
         if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause
       }
     }
+    // A deleted file must never be served from memory; clearing all entries is
+    // cheaper to keep correct than tracking which paths were unlinked.
+    this.characterCache.clear()
     // 对齐 ST 语义：删角色连同其聊天记录（chats/<name>/ 一并移除）。
     if (deleted) {
       const chatDir = path.join(this.root, 'chats', safeFileName(name))
@@ -1424,21 +1503,61 @@ export class TavernStore {
 
   /* ------------------------------ 状态 ------------------------------ */
 
+  /**
+   * Reads the current Tavern state.
+   *
+   * The result is shared and deep-frozen: callers must treat it as read-only;
+   * mutation throws. Every session event, pre-step and panel request reads this
+   * state, so a cached parse is served while the state.json fingerprint is
+   * unchanged and only a changed file pays the 3.3 MB read + parse.
+   */
   async getState(): Promise<TavernState> {
     await this.stateMutationTail.drain()
     return this.readState()
   }
 
+  /**
+   * Same contract as updateState: the returned state is a frozen copy and must be
+   * treated as read-only (mutation throws).
+   *
+   * Ownership: the patch is serialized, never retained. Every object and array in
+   * it is copied into the stored bytes, so the caller keeps its tree and may keep
+   * mutating it; those edits do not reach the stored state.
+   */
   async patchState(patch: Partial<TavernState>): Promise<TavernState> {
     return this.updateState(() => patch)
   }
 
+  /**
+   * Applies one state patch and reports the persisted state.
+   *
+   * Ownership: the tree returned by `update` is serialized, not retained. Nested
+   * objects and arrays are copied into the stored bytes, so the caller keeps
+   * ownership of that tree and mutating it afterwards cannot reach the state.
+   *
+   * The returned object describes the bytes on disk, is a fresh copy, and is
+   * deep-frozen: callers must treat it as read-only; mutation throws.
+   *
+   * The state cache is left empty instead of seeded with `next`. A cache entry
+   * built from a stat taken after the write would let a concurrent writer land
+   * between the two awaits, pinning this instance's older state under the newer
+   * fingerprint — and every later stat would then serve it. Writes are rare and
+   * already rewrite the whole file, so the next getState pays one read + parse.
+   */
   async updateState(update: (state: TavernState) => Partial<TavernState>): Promise<TavernState> {
     return this.mutateState(async () => {
       const current = await this.readState()
-      const next = { ...current, ...update(structuredClone(current)) }
-      await this.writeAtomic(path.join(this.root, 'state.json'), jsonBytes(next))
-      return next
+      // `update` receives its own clone so it can mutate freely; freezing starts
+      // only after the write payload exists.
+      const next: TavernState = { ...current, ...update(structuredClone(current)) }
+      const bytes = jsonBytes(next)
+      await this.writeAtomic(path.join(this.root, 'state.json'), bytes)
+      // Report the shape a fresh loader parses out of these bytes, not `next`:
+      // JSON drops undefined-valued keys, so `next` can carry own keys that no
+      // reader of this file will ever see.
+      const persisted = deepFreeze(this.normalizeState(JSON.parse(Buffer.from(bytes).toString('utf8'))))
+      this.stateCache = undefined
+      return persisted
     })
   }
 
@@ -1673,15 +1792,54 @@ export class TavernStore {
 
   /* ------------------------------ 内部 ------------------------------ */
 
+  /**
+   * Reads state.json, or DEFAULT_STATE when it is missing.
+   *
+   * A warm entry is served after a single stat and is returned by reference:
+   * the returned state is shared and deep-frozen, so callers must treat it as
+   * read-only; mutation throws instead of corrupting every later read. The
+   * fingerprint is the same size+mtimeMs+ctimeMs+ino quartet the chat snapshot
+   * cache uses, so a write from another process or a hand edit invalidates the
+   * entry without any in-process invalidation hook.
+   */
   private async readState(): Promise<TavernState> {
-    const bytes = await this.tryRead(path.join(this.root, 'state.json'))
-    if (bytes === undefined) return structuredClone(DEFAULT_STATE)
+    const file = path.join(this.root, 'state.json')
+    const fingerprint = await statChatFile(file)
+    const cached = this.stateCache
+    if (cached !== undefined && sameOptionalFingerprint(cached.fingerprint, fingerprint)) return cached.state
+    const read = await readChatFile(file)
+    if (read === undefined) {
+      // Missing file: cache DEFAULT_STATE against "absent" so the next stat that
+      // finds a file fails the match and reads it.
+      const state: TavernState = deepFreeze(structuredClone(DEFAULT_STATE))
+      this.stateCache = { state }
+      return state
+    }
     // 旧 state.json 可能残留已下线的 text-completion 管线字段（pipelineMode/
     // textCompletion，含 Kobold 端点与密钥），读取时丢弃，下次写盘即清除。
-    const parsed = JSON.parse(Buffer.from(bytes).toString('utf8')) as Partial<TavernState> & {
-      pipelineMode?: unknown
-      textCompletion?: unknown
-    }
+    const state = deepFreeze(this.normalizeState(
+      JSON.parse(Buffer.from(read.bytes).toString('utf8')) as Partial<TavernState> & {
+        pipelineMode?: unknown
+        textCompletion?: unknown
+      },
+    ))
+    // An unverifiable read (the file kept moving between stat and read) is
+    // served but not cached, matching the chat snapshot cache.
+    this.stateCache = read.fingerprint === undefined ? undefined : { fingerprint: read.fingerprint, state }
+    return state
+  }
+
+  /**
+   * Applies persisted-state defaults and normalizers to one parsed payload.
+   *
+   * This is the single definition of what a state read looks like: readState
+   * feeds it the parsed file, and updateState feeds it the bytes it just wrote
+   * so the value it reports is the one a later read would build (a raw patch can
+   * carry legacy binding shapes that only this pass normalizes).
+   */
+  private normalizeState(
+    parsed: Partial<TavernState> & { pipelineMode?: unknown; textCompletion?: unknown },
+  ): TavernState {
     const { pipelineMode: _legacyPipelineMode, textCompletion: _legacyTextCompletion, ...rest } = parsed
     const regexScriptOwners = normalizeRegexScriptOwners(parsed.regexScriptOwners)
     const regexScriptPresetOwners = normalizeRegexScriptOwners(parsed.regexScriptPresetOwners)
@@ -1771,6 +1929,21 @@ export class TavernStore {
     const prefix = `${dir}${path.sep}`
     for (const key of this.chatSnapshotCache.keys()) {
       if (key.startsWith(prefix)) this.chatSnapshotCache.delete(key)
+    }
+  }
+
+  /**
+   * Stores one parsed card under its fingerprint and evicts least-recently-used
+   * entries beyond the cap (same policy as the chat snapshot cache). Only a
+   * complete parse reaches this point: a corrupt card throws before caching.
+   */
+  private cacheCharacter(file: string, fingerprint: ChatFileFingerprint, card: CharacterFile): void {
+    this.characterCache.delete(file)
+    this.characterCache.set(file, { ...fingerprint, file: card })
+    while (this.characterCache.size > MAX_CHARACTER_CACHE_ENTRIES) {
+      const oldest = this.characterCache.keys().next().value
+      if (oldest === undefined) break
+      this.characterCache.delete(oldest)
     }
   }
 
@@ -2470,6 +2643,37 @@ function sameChatFingerprint(left: ChatFileFingerprint, right: ChatFileFingerpri
     && left.mtimeMs === right.mtimeMs
     && left.ctimeMs === right.ctimeMs
     && left.ino === right.ino
+}
+
+/**
+ * Matches a cached state fingerprint against the current one.
+ *
+ * Both absent means "state.json did not exist when the cache was filled"; one
+ * absent and one present (file created or removed) is always a change.
+ */
+function sameOptionalFingerprint(
+  left: ChatFileFingerprint | undefined,
+  right: ChatFileFingerprint | undefined,
+): boolean {
+  if (left === undefined || right === undefined) return left === right
+  return sameChatFingerprint(left, right)
+}
+
+/**
+ * Freezes a value graph in place.
+ *
+ * The store hands every caller one shared object per file version instead of a
+ * per-call copy: structuredClone on the 3.3 MB state costs ~3.5 ms, which is
+ * the read this cache exists to remove. Freezing turns a caller that mutates a
+ * result into a loud TypeError in strict mode instead of silently corrupting
+ * every later read. Values reaching here are JSON-parsed (acyclic plain objects
+ * and arrays), so the walk is bounded by the document depth.
+ */
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== 'object' || value === null) return value
+  Object.freeze(value)
+  for (const key of Object.keys(value)) deepFreeze((value as Record<string, unknown>)[key])
+  return value
 }
 
 /**

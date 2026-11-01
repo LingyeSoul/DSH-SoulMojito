@@ -1153,7 +1153,10 @@ async function renderFrontendTemplate(
   const chat = chatId === '' ? undefined : (await requireChat(db, character, chatId)).chat
   const messages = chat?.messages ?? []
   const chatVariables = chat === undefined ? {} : readChatVariables(chat)
-  const globalVariables = plainObject(state.scriptGlobals) ?? {}
+  // Writable copy: setglobalvar writes land in this tree, and the state returned
+  // by getState() is shared read-only (mutation throws). The copy is persisted
+  // through updateState below, exactly like before.
+  const globalVariables = cloneJson(plainObject(state.scriptGlobals) ?? {})
   let variablesDirty = false
   const readVar = (scope: 'chat' | 'global', path: string): unknown => {
     const tree = scope === 'chat' ? chatVariables : globalVariables

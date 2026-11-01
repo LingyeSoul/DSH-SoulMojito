@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { AgentTavernProjector, historyImportAppends, isTavernSessionMarker, lastImportedTurn, type NativeSession, type NativeSessionEvent } from '../src/agent-tavern/projector.js'
 import { imMessageRef } from '../src/im/refs.js'
@@ -490,6 +491,88 @@ describe('AgentTavern native event projector', () => {
       ['Live reply.', 6],
     ])
     expect(await projector.status(sessionId)).toMatchObject({ status: 'ok', lastCursor: 6 })
+  })
+
+  it('keeps every PROJECTED_EVENT_TYPES entry wired to a projectMessages branch', async () => {
+    const source = readFileSync(fileURLToPath(new URL('../src/agent-tavern/projector.ts', import.meta.url)), 'utf8')
+    const setLiteral = /const PROJECTED_EVENT_TYPES[^=]*= new Set\(\[([\s\S]*?)\]\)/.exec(source)
+    const projectMessagesStart = source.indexOf('function projectMessages(')
+    if (setLiteral === null || projectMessagesStart < 0) {
+      throw new Error('projector source no longer carries the PROJECTED_EVENT_TYPES literal or the projectMessages definition')
+    }
+    const setTypes = [...setLiteral[1]!.matchAll(/'([^']+)'/g)].map((match) => match[1]!)
+    // projectMessages routes each type through an `event.type` comparison; the
+    // set must list exactly those types. A branch added without a set entry is
+    // the dangerous direction: projectOne's fast path then skips the event and
+    // the floor is silently never projected. A set entry without a branch pays
+    // for the projection reads and answers [] forever.
+    const branchTypes = [...source
+      .slice(projectMessagesStart, source.indexOf('\n}', projectMessagesStart))
+      .matchAll(/event\.type\s*(?:===|!==)\s*'([^']+)'/g)]
+      .map((match) => match[1]!)
+    expect([...new Set(branchTypes)].sort()).toEqual([...new Set(setTypes)].sort())
+
+    // Behavioural half: every listed type must reach the projection path of the
+    // real projector. An event the fast path skips never reads the store, so
+    // the state read separates "handled, produced no floor" from "silently
+    // skipped". Only the message types have to append a floor here; the two IM
+    // exits are allowed to answer [] without a bound peer alias.
+    const { root, store, chatId, sessionId } = await fixture('projected-types')
+    let stateReads = 0
+    const projector = await AgentTavernProjector.open(root, {
+      getState: () => {
+        stateReads += 1
+        return store.getState()
+      },
+      getCharacter: (name) => store.getCharacter(name),
+      getChatSnapshot: (character, id) => store.getChatSnapshot(character, id),
+      getChatJsrOverlay: (character, id) => store.getChatJsrOverlay(character, id),
+      saveChat: (character, id, chat, revision) => store.saveChat(character, id, chat, revision),
+    })
+    const probeAlias = peerAliasOf('weixin:account:private:probe')
+    const probes: ReadonlyArray<{ type: string; event: NativeSessionEvent; floors: number }> = [
+      {
+        type: 'user/message',
+        event: {
+          type: 'user/message', seq: 0, time: 1000,
+          data: { id: 'probe-user', role: 'user', content: [{ type: 'text', text: 'Probe user.' }], source: { kind: 'user' } },
+        },
+        floors: 1,
+      },
+      {
+        type: 'assistant/message',
+        event: {
+          type: 'assistant/message', seq: 0, time: 1001,
+          data: {
+            turn: 1, step: 1,
+            message: {
+              id: 'probe-assistant', role: 'assistant', content: [{ type: 'text', text: 'Probe assistant.' }],
+              source: { kind: 'model', provider: 'test', model: 'test' },
+            },
+          },
+        },
+        floors: 1,
+      },
+      {
+        type: 'tool/result',
+        event: imSendResultOf(0, 'probe-call', true, 1, 1),
+        floors: 0,
+      },
+      {
+        type: 'agent/inbox/spliced',
+        event: imSpliceOf(0, [imRelayMessageOf('probe-im', imRelayTextOf('探针消息', probeAlias, imMessageRef('probe-im')), probeAlias)]),
+        floors: 0,
+      },
+    ]
+    let floors = 0
+    for (const [seq, probe] of probes.entries()) {
+      const readsBefore = stateReads
+      await projector.project({ id: sessionId, events: [] }, { ...probe.event, seq })
+      expect(stateReads, `'${probe.type}' must reach the projection path`).toBe(readsBefore + 1)
+      floors += probe.floors
+      const snapshot = await store.getChatSnapshot('Projector Character', chatId)
+      expect(snapshot!.chat.messages, `'${probe.type}' floor count`).toHaveLength(floors)
+    }
   })
 
   it('applies USER_INPUT and non-layered AI_OUTPUT regex when projecting live messages', async () => {

@@ -63,6 +63,23 @@ export interface ProjectionCheckpoint {
   updatedAt: string
 }
 
+/**
+ * Event types whose projection can append a floor: the branches of
+ * `projectMessages` (which answers `[]` outside them) plus the body log entry.
+ * Everything else the host logs (`turn/*`, `step/*`, `tool/call`, ...) would pay
+ * for the state, character and regex-overlay reads only to be handed `[]`.
+ */
+const PROJECTED_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'user/message',
+  'assistant/message',
+  'tool/result',
+  'agent/inbox/spliced',
+])
+
+function canProjectEvent(eventType: string): boolean {
+  return PROJECTED_EVENT_TYPES.has(eventType) || isBodyLogEvent(eventType)
+}
+
 export class AgentTavernProjector {
   private readonly tails = new KeyedMutationTails<string>(true)
   private readonly checkpoints = new Map<string, ProjectionCheckpoint>()
@@ -118,6 +135,14 @@ export class AgentTavernProjector {
     if (isProjectedCursor(checkpoint, event.seq)) return
 
     try {
+      // No projection exit can turn this event into a message: persist the
+      // checkpoint and skip the state, character and overlay reads. The write
+      // stays inside this try so a failed checkpoint write records a pending
+      // checkpoint and rethrows exactly like a failed projection.
+      if (!canProjectEvent(event.type)) {
+        await this.writeCheckpoint(advanceCheckpoint(checkpoint, event.seq))
+        return
+      }
       const state = await this.store.getState()
       const binding = state.sessionBindings[session.id]
       if (binding?.architecture === 'agent-tavern' && binding.group !== true) {

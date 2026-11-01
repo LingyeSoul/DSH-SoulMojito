@@ -378,6 +378,12 @@ export async function buildGenerationLlmRequest(
   tpl: GenerationTemplates | null
   macros: ReturnType<typeof createMacroEngine>
   templateGlobalsBefore: string | undefined
+  /**
+   * Template-owned copy of state.scriptGlobals (the template runtime writes it
+   * in place); runGeneration compares it with `templateGlobalsBefore` and
+   * persists the diff.
+   */
+  templateGlobals: Record<string, string | number | boolean> | undefined
   start: {
     provider: string
     model: string
@@ -418,10 +424,17 @@ export async function buildGenerationLlmRequest(
   // ---- Prompt Template 预备（提案 0008）：激活分区 + InitialVariables + 运行时 ----
   // templatesEnabledFlag 承载 profile 的显式 opt-in；templatesEnvEnabled() 实时读 env 覆盖
   const templatesActive = templatesEnabledFlagValue() && templatesEnvEnabled()
-  const templateGlobalsBefore = templatesActive ? JSON.stringify(state.scriptGlobals) : undefined
+  // The template runtime writes `global` variables in place. The state returned
+  // by getState() is shared read-only, so templates get their own copy and the
+  // before/after compare below runs on that copy (values are primitives, so a
+  // shallow copy is enough).
+  const templateGlobals: Record<string, string | number | boolean> | undefined = templatesActive
+    ? { ...state.scriptGlobals }
+    : undefined
+  const templateGlobalsBefore = templateGlobals === undefined ? undefined : JSON.stringify(templateGlobals)
   const tpl: GenerationTemplates | null = templatesActive
     ? await createGenerationTemplates({
-        chat, state, books, lore,
+        chat, state: { ...state, scriptGlobals: templateGlobals! }, books, lore,
         card: character.card, preset,
         turnMessages,
         userName, characterName: speakerName, chatId,
@@ -649,6 +662,7 @@ export async function buildGenerationLlmRequest(
     tpl,
     macros,
     templateGlobalsBefore,
+    templateGlobals,
     // SSE 'start' 事件的载荷（runGeneration 消费；试写预览忽略）。provider/model
     // 是选择器结论（pre-hook）——hook 改写后的实参以 request.params 为准。
     start: {
@@ -746,6 +760,7 @@ export async function runGeneration(ctx: PluginContext, db: TavernStore, options
   const tpl = assembly.tpl
   const macros = assembly.macros
   const templateGlobalsBefore = assembly.templateGlobalsBefore
+  const templateGlobals = assembly.templateGlobals
   const hookedLlmRequest = assembly.request
   const expand = (text: string): string => macros.expand(text)
   write({ type: 'start', ...assembly.start })
@@ -840,8 +855,8 @@ export async function runGeneration(ctx: PluginContext, db: TavernStore, options
   const varSnapshot = macros.snapshotVars().local
   if (tpl) {
     mergeTemplateLocalVars(chat, varSnapshot)
-    if (JSON.stringify(state.scriptGlobals) !== templateGlobalsBefore) {
-      await db.updateState((current) => ({ scriptGlobals: { ...current.scriptGlobals, ...state.scriptGlobals } }))
+    if (templateGlobals !== undefined && JSON.stringify(templateGlobals) !== templateGlobalsBefore) {
+      await db.updateState((current) => ({ scriptGlobals: { ...current.scriptGlobals, ...templateGlobals } }))
     }
   } else if (Object.keys(varSnapshot).length > 0) {
     chat.header.chat_metadata.variables = varSnapshot
