@@ -23,7 +23,7 @@ import { renderSandboxed } from '../../tavern-template/src/index.js'
 import { applyRegexScript, applyRegexScripts, runScript } from '../../tavern-script/src/index.js'
 import type { ChatScriptsFile, TavernState, TavernStore } from '../../tavern-store/src/index.js'
 import type { JsonValue } from '../../tavern-store/src/index.js'
-import { ChatRevisionConflictError, KeyedMutationTails } from '../../tavern-store/src/index.js'
+import { KeyedMutationTails, isChatRevisionConflict } from '../../tavern-store/src/index.js'
 import {
   collectSessionRegexScripts,
   parseSessionRegexList,
@@ -933,7 +933,7 @@ async function retryChatWrite<T>(operation: () => Promise<T>): Promise<T> {
     try {
       return await operation()
     } catch (error) {
-      if (!(error instanceof ChatRevisionConflictError)) throw error
+      if (!isChatRevisionConflict(error)) throw error
       lastError = error
       await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)))
     }

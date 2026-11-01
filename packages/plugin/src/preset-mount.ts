@@ -35,6 +35,7 @@ import { onAgentPresetChanged, renderAgentPresetBlock } from './agent-tavern/pre
 import { tavernDataRoot } from './dsh-home.js'
 import { createLazyProjection } from './lazy-projection.js'
 import { createHostPromptExpander, hostPromptSafe, seededRandom } from './prompt-safety.js'
+import { sharedTavernStore } from './store-handle.js'
 
 /** 与 agent-tavern/agent.ts 的 DEFAULT_USER 同值：{{user}} 未设置人设时的回落。 */
 const DEFAULT_USER = 'User'
@@ -71,7 +72,7 @@ export interface PresetMount {
 let storePromise: Promise<TavernStore> | undefined
 
 function store(): Promise<TavernStore> {
-  return (storePromise ??= TavernStore.open(tavernDataRoot()))
+  return (storePromise ??= sharedTavernStore(tavernDataRoot()))
 }
 
 /**

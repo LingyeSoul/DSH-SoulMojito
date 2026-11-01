@@ -16,7 +16,7 @@
  * writer.
  */
 
-import { ChatRevisionConflictError, type ChatScriptsFile, type TavernSessionBinding, type TavernState } from '../../../tavern-store/src/index.js'
+import { isChatRevisionConflict, type ChatScriptsFile, type TavernSessionBinding, type TavernState } from '../../../tavern-store/src/index.js'
 import { RegexPlacement, type CharacterCardIR, type ChatLogIR } from '../../../tavern-format/src/index.js'
 import { applyRegexScripts } from '../../../tavern-script/src/index.js'
 import { sessionEvents, type HostSessionLog } from '../../../bind/src/index.js'
@@ -437,7 +437,7 @@ async function mutateBodyChat(
       await store.saveChat(binding.character, binding.chatId, next, snapshot.revision)
       return
     } catch (error) {
-      if (!(error instanceof ChatRevisionConflictError) || attempt === 3) throw error
+      if (!isChatRevisionConflict(error) || attempt === 3) throw error
     }
   }
 }

@@ -22,6 +22,7 @@ import { randomUUID } from 'node:crypto'
 import { TavernStore } from '../../../tavern-store/src/index.js'
 import { hostPluginMessageSource, sessionEvents, type HostSessionLog } from '../../../bind/src/index.js'
 import { tavernDataRoot } from '../dsh-home.js'
+import { sharedTavernStore } from '../store-handle.js'
 
 /** 宿主会话形状经 host-session 兼容层读取（0.1.2 无 events 数组属性）。 */
 type AnchorSessionLike = HostSessionLog & { id?: string }
@@ -159,7 +160,7 @@ export function resolveAnchorEveryTurns(value: unknown): number {
 let anchorTavernStorePromise: Promise<TavernStore> | undefined
 
 function anchorTavernStore(): Promise<TavernStore> {
-  return (anchorTavernStorePromise ??= TavernStore.open(tavernDataRoot()))
+  return (anchorTavernStorePromise ??= sharedTavernStore(tavernDataRoot()))
 }
 
 /** 存储缺失或读取失败时按非 Tavern 会话处理，不注入。 */

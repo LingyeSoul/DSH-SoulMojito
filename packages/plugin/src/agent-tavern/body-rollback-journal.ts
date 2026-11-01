@@ -11,7 +11,7 @@
  */
 
 import type { ChatLogIR } from '../../../tavern-format/src/index.js'
-import { ChatRevisionConflictError } from '../../../tavern-store/src/index.js'
+import { isChatRevisionConflict } from '../../../tavern-store/src/index.js'
 import { readMvuReceipts, type MvuReceipt } from '../mvu.js'
 import {
   MEMORY_WRITE_JOURNAL_TOOLS,
@@ -609,7 +609,7 @@ async function rollbackTurnSettleReceipts(
     const compensation = await compensateSettleReceipts(deps, chat, receipts, undone, binding)
     const code: BodyRollbackErrorCode = !compensation.ok
       ? 'body-rollback-partial'
-      : error instanceof ChatRevisionConflictError
+      : isChatRevisionConflict(error)
         ? 'body-rollback-conflict'
         : 'body-rollback-save-failed'
     recordSettleFailure(deps, failures, agentId, turn, receipts, new BodyRollbackError(
@@ -687,7 +687,7 @@ function messageTurnNumber(message: ChatLogIR['messages'][number] | undefined): 
 function settleRollbackError(error: unknown, agentId: string, turn: number): BodyRollbackError {
   if (error instanceof BodyRollbackError) return error
   return new BodyRollbackError(
-    error instanceof ChatRevisionConflictError ? 'body-rollback-conflict' : 'body-rollback-failed',
+    isChatRevisionConflict(error) ? 'body-rollback-conflict' : 'body-rollback-failed',
     `body rollback for session '${agentId}' turn ${turn} cannot undo its settle receipts: ${errorMessage(error)}`,
     { stage: 'mvu-undo', sessionId: agentId, turn, cause: error },
   )

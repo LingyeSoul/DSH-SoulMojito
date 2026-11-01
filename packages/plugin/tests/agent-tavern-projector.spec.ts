@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { AgentTavernProjector, historyImportAppends, isTavernSessionMarker, lastImportedTurn, type NativeSession, type NativeSessionEvent } from '../src/agent-tavern/projector.js'
-import { CHECKPOINT_WRITE_LAG, checkpointPathOf } from '../src/agent-tavern/checkpoint-batch.js'
+import { CHECKPOINT_WRITE_DELAY_MS, CHECKPOINT_WRITE_LAG, checkpointPathOf, ProjectionCheckpointLagError } from '../src/agent-tavern/checkpoint-batch.js'
 import { imMessageRef } from '../src/im/refs.js'
 import { imPeerAlias, imPeerKeyParts } from '../src/im/types.js'
 import { ChatRevisionConflictError, TavernStore } from '../../tavern-store/src/index.js'
@@ -540,25 +540,34 @@ describe('AgentTavern native event projector', () => {
   }
 
   /**
-   * Count durable checkpoint writes and fail the first `failures` of them.
+   * Patch the projector's private write seam: count every attempt and refuse
+   * the ones `refuse` names.
    *
-   * This patches the projector's private write seam because a write count has no
-   * observable side effect (the file only shows the last watermark). The
-   * coalescing contract itself is asserted at the module boundary in
-   * `checkpoint-batch.spec.ts`, against an injected write; here the patch only
-   * measures. Every assertion below the count is behavioural (file watermark,
-   * floors, the idle window closing on its own).
+   * This patches the seam because a write count has no observable side effect
+   * (the file only shows the last watermark). The coalescing contract itself is
+   * asserted at the module boundary in `checkpoint-batch.spec.ts`, against an
+   * injected write; here the patch only measures. Every assertion below the
+   * count is behavioural (file watermark, floors, the idle window closing on its
+   * own).
    */
-  function countCheckpointWrites(projector: AgentTavernProjector, failures: number): { writes: number } {
+  function patchCheckpointWrites(
+    projector: AgentTavernProjector,
+    refuse: (attempt: number) => boolean,
+  ): { writes: number } {
     const target = projector as unknown as { writeCheckpoint(checkpoint: { sessionId: string }): Promise<void> }
     const original = target.writeCheckpoint.bind(target)
     const counter = { writes: 0 }
     target.writeCheckpoint = async (checkpoint: { sessionId: string }) => {
       counter.writes += 1
-      if (counter.writes <= failures) throw new Error(`checkpoint write refused for session '${checkpoint.sessionId}'`)
+      if (refuse(counter.writes)) throw new Error(`checkpoint write refused for session '${checkpoint.sessionId}'`)
       await original(checkpoint)
     }
     return counter
+  }
+
+  /** Count durable checkpoint writes and fail the first `failures` of them. */
+  function countCheckpointWrites(projector: AgentTavernProjector, failures: number): { writes: number } {
+    return patchCheckpointWrites(projector, (attempt) => attempt <= failures)
   }
 
   it('coalesces a burst into a couple of checkpoint writes and persists its last event', async () => {
@@ -678,6 +687,9 @@ describe('AgentTavern native event projector', () => {
     const rejected = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
     expect(rejected).toHaveLength(1)
     expect((rejected[0]!.reason as Error).message).toContain("checkpoint write refused for session 'flush-failure-pending'")
+    // This caller awaited its own write, so it hears the write failure itself:
+    // the lag wording belongs to the retained timer flush only.
+    expect(rejected[0]!.reason).not.toBeInstanceOf(ProjectionCheckpointLagError)
     expect(readCheckpointFile(root, sessionId)).toMatchObject({ status: 'pending', lastCursor: 7, pendingCursor: 8 })
 
     // The pending hole replays exactly one event and the floor is deduped.
@@ -731,7 +743,7 @@ describe('AgentTavern native event projector', () => {
     await expect(projector.status(sessionId)).resolves.toMatchObject({ status: 'ok', lastCursor: 2 })
   })
 
-  it('raises a twice-failed timer flush on the next projection and clears it once a write lands', async () => {
+  it('raises a twice-failed timer flush as a checkpoint lag error and clears it once a write lands', async () => {
     const { root, store, chatId, sessionId } = await fixture('idle-flush-double-failure')
     const native = messageBurst(sessionId, 2)
     const projector = await AgentTavernProjector.open(root, store)
@@ -743,14 +755,94 @@ describe('AgentTavern native event projector', () => {
     expect(readCheckpointFile(root, sessionId)).toBeUndefined()
 
     // The failure is retained, not swallowed: the session's next projection
-    // raises it even though the event itself is already projected.
-    await expect(projector.project(native, native.events[1]!)).rejects.toThrow('checkpoint write refused')
+    // raises it after that projection is done, even though the event itself is
+    // already projected.
+    const raised: unknown = await projector.project(native, native.events[1]!)
+      .then((): undefined => undefined, (error: unknown) => error)
+    if (!(raised instanceof ProjectionCheckpointLagError)) {
+      throw new Error(`expected a ProjectionCheckpointLagError, got ${String(raised)}`)
+    }
+    expect(raised.sessionId).toBe(sessionId)
+    // One self-explaining line: the floors landed, the watermark did not. A
+    // caller's generic "<operation> failed: <message>" prefix cannot invert it,
+    // and it leaks neither the write path nor the character nor the chat text.
+    expect(raised.message).toContain('projection floors were already appended')
+    expect(raised.message).toContain('the checkpoint watermark (and any pending hole it carried) did not reach disk in this write')
+    expect(raised.message).toContain(`session '${sessionId}'`)
+    expect(raised.message).toContain(`batch window: ${CHECKPOINT_WRITE_LAG} events / ${CHECKPOINT_WRITE_DELAY_MS} ms`)
+    expect(raised.message).not.toContain(root)
+    expect(raised.message).not.toContain('Projector Character')
+    expect(raised.message).not.toContain('Burst 1.')
+    // The path-carrying write error is one `cause` away, not lost.
+    expect(raised.cause).toBeInstanceOf(Error)
+    expect((raised.cause as Error).message).toContain("checkpoint write refused for session 'idle-flush-double-failure'")
+
+    // The claim is the on-disk fact: both floors are already in the chat.
+    expect((await store.getChatSnapshot('Projector Character', chatId))!.chat.messages).toHaveLength(2)
 
     // A landed write retires it; the same projection resolves from then on.
     await expect(projector.status(sessionId)).resolves.toMatchObject({ status: 'ok', lastCursor: 2 })
     expect(readCheckpointFile(root, sessionId)).toMatchObject({ status: 'ok', lastCursor: 2 })
     await expect(projector.project(native, native.events[2]!)).resolves.toBeUndefined()
     expect((await store.getChatSnapshot('Projector Character', chatId))!.chat.messages).toHaveLength(2)
+  })
+
+  it('does not claim only the watermark lagged when the checkpoint carried a pending hole', async () => {
+    const { root, store, chatId, sessionId } = await fixture('idle-flush-pending-hole')
+    const native = messageBurst(sessionId, 3)
+    let refuseSnapshot = false
+    const projector = await AgentTavernProjector.open(root, {
+      getState: () => store.getState(),
+      getCharacter: (name) => store.getCharacter(name),
+      getChatSnapshot: async (character, id) => {
+        if (refuseSnapshot) {
+          refuseSnapshot = false
+          throw new Error('projection read refused')
+        }
+        return store.getChatSnapshot(character, id)
+      },
+      getChatJsrOverlay: (character, id) => store.getChatJsrOverlay(character, id),
+      saveChat: (character, id, chat, revision) => store.saveChat(character, id, chat, revision),
+    })
+    // Write 1 is the pending hole's own commit and must land: it is the
+    // checkpoint shape under test. The window flush behind seqs 2-3 and its one
+    // bounded retry are the two refusals.
+    const writes = patchCheckpointWrites(projector, (attempt) => attempt === 2 || attempt === 3)
+
+    // Seq 1's projection fails, so the checkpoint that gets committed records
+    // the hole instead of a clean watermark.
+    refuseSnapshot = true
+    await expect(projector.project(native, native.events[1]!)).rejects.toThrow('projection read refused')
+    expect(readCheckpointFile(root, sessionId)).toMatchObject({ status: 'pending', lastCursor: -1, pendingCursor: 1 })
+
+    // Seqs 2-3 append their floors above the hole; the checkpoint stays pending.
+    await projector.project(native, native.events[2]!)
+    await projector.project(native, native.events[3]!)
+    await waitForCheckpointWrites(writes, 3)
+    expect(readCheckpointFile(root, sessionId)).toMatchObject({ status: 'pending', pendingCursor: 1 })
+
+    const raised: unknown = await projector.project(native, native.events[3]!)
+      .then((): undefined => undefined, (error: unknown) => error)
+    if (!(raised instanceof ProjectionCheckpointLagError)) {
+      throw new Error(`expected a ProjectionCheckpointLagError, got ${String(raised)}`)
+    }
+    // The old wording claimed the floors landed and ONLY the watermark did not,
+    // which is false here: seq 1 has no floor and the failed write knew it.
+    expect(raised.message).toContain('projection floors were already appended')
+    expect(raised.message).toContain('the checkpoint watermark (and any pending hole it carried) did not reach disk in this write')
+    expect(raised.message).not.toContain('only the checkpoint')
+    expect(raised.message).toContain(`session '${sessionId}'`)
+    expect(raised.message).not.toContain(root)
+    expect((raised.cause as Error).message).toContain("checkpoint write refused for session 'idle-flush-pending-hole'")
+
+    // The hole is real, not a wording detail: exactly seq 1 has no floor.
+    const snapshot = await store.getChatSnapshot('Projector Character', chatId)
+    expect(snapshot!.chat.messages.map((message) => (message.extra!.agentTavern as any).eventSeq)).toEqual([2, 3])
+
+    // A landed write retires the failure and the hole survives it, so the
+    // message's "a replay re-projects that window" is still the repair path.
+    await expect(projector.status(sessionId)).resolves.toMatchObject({ status: 'pending', pendingCursor: 1 })
+    expect(readCheckpointFile(root, sessionId)).toMatchObject({ status: 'pending', pendingCursor: 1 })
   })
 
   it('keeps every PROJECTED_EVENT_TYPES entry wired to a projectMessages branch', async () => {

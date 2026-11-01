@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
   advanceCheckpoint,
+  CHECKPOINT_WRITE_DELAY_MS,
   CHECKPOINT_WRITE_LAG,
   checkpointPathOf,
   createCheckpointBatch,
   isProjectedCursor,
   normalizeCheckpoint,
   pendingCheckpoint,
+  ProjectionCheckpointLagError,
   validateCheckpoint,
   type CheckpointBatch,
   type CheckpointBatchHost,
@@ -204,5 +206,66 @@ describe('checkpoint batch', () => {
     batch.reset(SESSION)
     expect(batch.dirty(SESSION)).toBe(false)
     expect(batch.deferredError(SESSION)).toBeDefined()
+  })
+
+  it('rejects an awaited batch-closing flush with the write error, not the lag type', async () => {
+    const { batch, cache, refuse } = harness()
+    refuse(1)
+    let rejection: unknown
+    for (let cursor = 0; cursor < CHECKPOINT_WRITE_LAG; cursor += 1) {
+      cache.set(SESSION, checkpointOf(cursor))
+      try {
+        await batch.stage(SESSION)
+      } catch (error) {
+        rejection = error
+      }
+    }
+    batch.reset(SESSION)
+
+    // The caller awaited this write, so it hears the write failure as-is: the
+    // floors of this event are NOT known to be appended.
+    expect(rejection).toBeInstanceOf(Error)
+    expect(rejection).not.toBeInstanceOf(ProjectionCheckpointLagError)
+    expect((rejection as Error).message).toContain('checkpoint write refused')
+  })
+
+  it('holds the raw write error for a timer flush instead of the lag type', async () => {
+    const { batch, cache, refuse } = harness()
+    refuse(2)
+    cache.set(SESSION, checkpointOf(1))
+    await batch.stage(SESSION)
+    await eventually(() => batch.deferredError(SESSION) !== undefined, 'the retained failure')
+    batch.reset(SESSION)
+
+    // Which fact a deferred failure means (floors landed, watermark did not)
+    // belongs to the caller that appended them; the batch reports the write.
+    const deferred = batch.deferredError(SESSION)
+    expect(deferred).toBeInstanceOf(Error)
+    expect(deferred).not.toBeInstanceOf(ProjectionCheckpointLagError)
+    expect((deferred as Error).message).toContain('checkpoint write refused')
+  })
+})
+
+describe('projection checkpoint lag error', () => {
+  it('states the landed floors, the session and the window, and keeps the write error as cause', () => {
+    const cause = new Error("ENOENT: no such file or directory, rename 'C:\\fake\\projections\\9f3a.json'")
+    const error = new ProjectionCheckpointLagError(SESSION, cause)
+
+    expect(error).toBeInstanceOf(Error)
+    expect(error.name).toBe('ProjectionCheckpointLagError')
+    expect(error.sessionId).toBe(SESSION)
+    expect(error.stack).toContain('ProjectionCheckpointLagError')
+    // The whole fact on one line: what landed, what did not, which session and
+    // which batch window — a caller's generic prefix cannot invert it.
+    expect(error.message).toContain('projection floors were already appended')
+    // Not "only the watermark": the same failed checkpoint may carry a pending
+    // hole whose floor never landed, so the line must admit it.
+    expect(error.message).toContain('the checkpoint watermark (and any pending hole it carried) did not reach disk in this write')
+    expect(error.message).not.toContain('only the checkpoint')
+    expect(error.message).toContain(`session '${SESSION}'`)
+    expect(error.message).toContain(`batch window: ${CHECKPOINT_WRITE_LAG} events / ${CHECKPOINT_WRITE_DELAY_MS} ms`)
+    // The write error names its path; the lag line must not repeat it.
+    expect(error.message).not.toContain('C:\\fake')
+    expect(error.cause).toBe(cause)
   })
 })

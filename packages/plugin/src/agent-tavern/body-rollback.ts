@@ -10,7 +10,7 @@
  */
 
 import type { CharacterCardIR, ChatLogIR } from '../../../tavern-format/src/index.js'
-import { ChatRevisionConflictError } from '../../../tavern-store/src/index.js'
+import { isChatRevisionConflict } from '../../../tavern-store/src/index.js'
 import {
   BodyRollbackError,
   errorMessage,
@@ -258,7 +258,7 @@ async function applyBodyRollback(deps: BodyWriteRollbackDeps, plan: BodyRollback
         await compensateReceiptRollback(deps, chat, plan.mvuReceipts, 'redo', plan.binding, rolledBack),
       )
       const code: BodyRollbackErrorCode = compensation.ok
-        ? error instanceof ChatRevisionConflictError
+        ? isChatRevisionConflict(error)
           ? 'body-rollback-conflict'
           : 'body-rollback-save-failed'
         : 'body-rollback-partial'
@@ -379,7 +379,7 @@ function restoreError(
     )
   }
   const code: BodyRollbackErrorCode = compensation.ok
-    ? error instanceof ChatRevisionConflictError
+    ? isChatRevisionConflict(error)
       ? 'body-rollback-conflict'
       : 'body-rollback-failed'
     : 'body-rollback-partial'

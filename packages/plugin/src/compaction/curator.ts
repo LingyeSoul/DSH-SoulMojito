@@ -23,6 +23,7 @@
 import { hostPluginMessageSource, importHostPackage } from '../../../bind/src/index.js'
 import type { HostLlmChunk, HostLlmRequest } from '../host-contract.js'
 import { tavernDataRoot } from '../dsh-home.js'
+import { sharedTavernStore } from '../store-handle.js'
 import { TavernStore } from '../../../tavern-store/src/index.js'
 import {
   DEFAULT_USAGE_THRESHOLD_RATIO,
@@ -357,7 +358,7 @@ function finishError(finish: { kind: string; failure?: { message: string; code: 
 let tavernStorePromise: Promise<TavernStore> | undefined
 
 function tavernStore(): Promise<TavernStore> {
-  return (tavernStorePromise ??= TavernStore.open(tavernDataRoot()))
+  return (tavernStorePromise ??= sharedTavernStore(tavernDataRoot()))
 }
 
 /** 存储缺失、读取失败或绑定不完整时按非剧情会话处理，摘要退回宿主默认行为。 */

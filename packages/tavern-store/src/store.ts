@@ -493,6 +493,14 @@ export const MAX_CHARACTER_CACHE_ENTRIES = 32
  */
 const CHAT_SNAPSHOT_READ_ATTEMPTS = 3
 
+/** One stale-binding sweep: which ids left the table, and what remained. */
+export interface SessionBindingPruneResult {
+  /** Session ids this sweep dropped; empty when no observed row was in `remove`. */
+  removed: string[]
+  /** Bindings still present after the sweep (read back from the written state). */
+  retained: number
+}
+
 export class ChatRevisionConflictError extends Error {
   readonly code = 'CHAT_REVISION_CONFLICT'
 
@@ -503,6 +511,20 @@ export class ChatRevisionConflictError extends Error {
     super('Chat changed in another tab. Reloaded the latest version; review it before retrying.')
     this.name = 'ChatRevisionConflictError'
   }
+}
+
+/**
+ * Cross-bundle test for a chat revision (CAS) conflict.
+ *
+ * `instanceof` cannot answer this across bundles: every esbuild product inlines
+ * its own copy of this module, so the class object that threw in one bundle is
+ * not the class object another bundle compares against, and the same shared
+ * store instance can fail the check in the bundle that did not open it. The
+ * `code` string is the stable, serializable discriminator; it survives copies
+ * and processes.
+ */
+export function isChatRevisionConflict(error: unknown): error is ChatRevisionConflictError {
+  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'CHAT_REVISION_CONFLICT'
 }
 
 const DEFAULT_STATE: TavernState = {
@@ -1645,6 +1667,36 @@ export class TavernStore {
       const next: TavernState = { ...current.state, ...update(structuredClone(current.state)) }
       return await this.writeState(next, current)
     })
+  }
+
+  /**
+   * Removes the session bindings named in `remove`, in ONE write.
+   *
+   * `remove` is the caller's decision and is never re-derived here: only ids in
+   * `observed ∩ remove` are dropped. Re-deriving them from a fresh snapshot
+   * inside this call is what deleted a binding another path wrote between the
+   * caller's decision and this write; deleting the intersection keeps a write
+   * this call did not decide about alive. A table with nothing to drop is left
+   * untouched — no write, same file — which is what keeps a report-only run
+   * inert.
+   *
+   * This method proves nothing about the sessions themselves: `remove` must come
+   * from signals the caller can justify (decision
+   * 2026-11-02-stale-session-binding-reclaim). Only `sessionBindings` is
+   * filtered; the light state.json split (2026-11-01-tavern-state-asset-split)
+   * is unchanged because the patch carries no slice key.
+   */
+  async pruneSessionBindings(remove: ReadonlySet<string>): Promise<SessionBindingPruneResult> {
+    const observed = Object.keys((await this.getState()).sessionBindings)
+    const doomed = observed.filter((sessionId) => remove.has(sessionId))
+    if (doomed.length === 0) return { removed: [], retained: observed.length }
+    const doomedIds = new Set(doomed)
+    const next = await this.updateState((state) => ({
+      sessionBindings: Object.fromEntries(
+        Object.entries(state.sessionBindings).filter(([sessionId]) => !doomedIds.has(sessionId)),
+      ),
+    }))
+    return { removed: doomed, retained: Object.keys(next.sessionBindings).length }
   }
 
   /**

@@ -12,6 +12,7 @@ import {
 } from '../../../../tavern-store/src/index.js'
 import { tavernDataRoot } from '../../dsh-home.js'
 import { embedMemoryRecord } from '../../memory-hybrid.js'
+import { sharedTavernStore } from '../../store-handle.js'
 
 let tavernStorePromise: Promise<TavernStore> | undefined
 let memoryStorePromise: Promise<MemoryStore> | undefined
@@ -19,7 +20,7 @@ let memoryVectorStorePromise: Promise<MemoryVectorStore> | undefined
 let variableStorePromise: Promise<VariableStore> | undefined
 
 export function tavernStore(): Promise<TavernStore> {
-  return (tavernStorePromise ??= TavernStore.open(tavernDataRoot()))
+  return (tavernStorePromise ??= sharedTavernStore(tavernDataRoot()))
 }
 
 export function memoryStore(): Promise<MemoryStore> {

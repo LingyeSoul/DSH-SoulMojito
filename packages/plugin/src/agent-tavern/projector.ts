@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
-import { ChatRevisionConflictError, KeyedMutationTails, MutationTail, type TavernSessionBinding } from '../../../tavern-store/src/index.js'
+import { KeyedMutationTails, MutationTail, isChatRevisionConflict, type TavernSessionBinding } from '../../../tavern-store/src/index.js'
 import { RegexPlacement, type CharacterCardIR, type ChatLogIR, type ChatMessage, type RegexScriptIR } from '../../../tavern-format/src/index.js'
 import { applyRegexScripts } from '../../../tavern-script/src/index.js'
 import { hostPluginMessageSource, hostSessionFormatVersion, sessionEvents, PLUGIN_NAME, type HostSessionEventData, type HostSessionLog } from '../../../bind/src/index.js'
@@ -13,6 +13,7 @@ import {
   isProjectedCursor,
   normalizeCheckpoint,
   pendingCheckpoint,
+  ProjectionCheckpointLagError,
   validateCheckpoint,
   type CheckpointBatch,
   type ProjectionCheckpoint,
@@ -168,10 +169,19 @@ export class AgentTavernProjector {
     return structuredClone(await this.readCheckpoint(sessionId))
   }
 
-  /** Raise a timer-flush failure unless a write finished by this operation cleared it. */
+  /**
+   * Raise a timer-flush failure unless a write finished by this operation cleared it.
+   *
+   * Every floor of the failed batch was appended before the checkpoint was
+   * staged, so the rejection is a {@link ProjectionCheckpointLagError}: the
+   * floors are durable and the checkpoint (watermark, plus any pending hole it
+   * carried) lags. Its message states both, and the raw write error stays
+   * reachable through `cause`.
+   */
   private raiseDeferred(sessionId: string, deferred: unknown): void {
     if (deferred === undefined) return
-    if (this.batch.deferredError(sessionId) === deferred) throw deferred
+    if (this.batch.deferredError(sessionId) !== deferred) return
+    throw new ProjectionCheckpointLagError(sessionId, deferred)
   }
 
   private async projectOne(session: NativeSession, event: NativeSessionEvent): Promise<void> {
@@ -297,7 +307,7 @@ export class AgentTavernProjector {
         await this.store.saveChat(binding.character, binding.chatId, next, snapshot.revision)
         return
       } catch (error) {
-        if (!(error instanceof ChatRevisionConflictError) || attempt === 3) throw error
+        if (!isChatRevisionConflict(error) || attempt === 3) throw error
       }
     }
   }

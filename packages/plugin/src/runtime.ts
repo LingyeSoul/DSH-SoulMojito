@@ -11,6 +11,7 @@ import type { PluginContext } from './host-contract.js'
 import { ModHost, type ModHostContext, type ModHostSnapshot } from './mods/host.js'
 import { publishImRuntime, resolveImRuntime } from './im/handle.js'
 import type { ImRuntime } from './im/runtime.js'
+import { sharedTavernStore } from './store-handle.js'
 import { TavernUpdateService } from './update/service.js'
 import { MemoryStore, MemoryVectorStore, NovelStore, TavernStore, VariableStore } from '../../tavern-store/src/index.js'
 
@@ -77,7 +78,10 @@ function noopRuntimeDisposer(): void {}
 let templatesEnabledFlag = false
 
 export function store(): Promise<TavernStore> {
-  return (storePromise ??= TavernStore.open(tavernDataRoot()))
+  // The canonical index-side entry point: every other bundle reaches the same
+  // instance through the globalThis handle (src/store-handle.ts), so the state
+  // mutation tail is shared instead of forked per bundle.
+  return (storePromise ??= sharedTavernStore(tavernDataRoot()))
 }
 
 export function memories(): Promise<MemoryStore> {

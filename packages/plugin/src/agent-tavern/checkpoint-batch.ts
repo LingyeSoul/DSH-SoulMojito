@@ -61,6 +61,40 @@ export const CHECKPOINT_WRITE_DELAY_MS = 250
  */
 export const CHECKPOINT_WRITE_RETRY_MS = 250
 
+/**
+ * A timer flush never wrote its checkpoint, but the events it covers are
+ * already projected: every floor it staged is in the chat. What stayed in
+ * memory is the checkpoint — the watermark that tells a replay how far it got,
+ * and any pending hole that watermark still records.
+ *
+ * The pending hole matters for the wording: the failed checkpoint is not
+ * always a clean `ok` watermark, so "only the watermark" would be a lie about a
+ * seq whose floor never landed. The message names both possibilities instead.
+ *
+ * It exists as its own type because those two facts must not be confused:
+ * a caller's generic `<operation> failed: ${error.message}` line would read
+ * like a lost message, while nothing the batch staged is lost. The message
+ * therefore carries the whole fact — what landed, what did not (the watermark,
+ * and any pending hole it carried), which session, how wide the window — so one
+ * log line is self-explanatory without the caller knowing this type. The
+ * underlying write error rides on `cause`; its message can carry an absolute
+ * path, so it is deliberately never spliced into this one.
+ */
+export class ProjectionCheckpointLagError extends Error {
+  readonly sessionId: string
+
+  constructor(sessionId: string, cause: unknown) {
+    super(
+      `projection floors were already appended, but the checkpoint watermark (and any pending hole it carried) did not reach disk in this write for session '${sessionId}' `
+      + `(batch window: ${CHECKPOINT_WRITE_LAG} events / ${CHECKPOINT_WRITE_DELAY_MS} ms); `
+      + 'a replay re-projects that window idempotently',
+      { cause },
+    )
+    this.name = 'ProjectionCheckpointLagError'
+    this.sessionId = sessionId
+  }
+}
+
 /** The checkpoint file of one session inside a projections root. */
 export function checkpointPathOf(root: string, sessionId: string): string {
   const name = createHash('sha256').update(sessionId).digest('hex')

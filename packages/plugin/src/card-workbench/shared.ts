@@ -12,11 +12,12 @@
 
 import { TavernStore, type CharacterFile } from '../../../tavern-store/src/index.js'
 import { tavernDataRoot } from '../dsh-home.js'
+import { sharedTavernStore } from '../store-handle.js'
 
 let tavernStorePromise: Promise<TavernStore> | undefined
 
 export function tavernStore(): Promise<TavernStore> {
-  return (tavernStorePromise ??= TavernStore.open(tavernDataRoot()))
+  return (tavernStorePromise ??= sharedTavernStore(tavernDataRoot()))
 }
 
 export async function requireCharacter(name: string): Promise<CharacterFile> {

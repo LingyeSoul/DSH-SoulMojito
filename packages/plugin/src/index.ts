@@ -16,6 +16,7 @@ import { registerAgentTavernPromptCapture } from './agent-tavern/prompt-capture.
 import { inspectAgentNovelCapabilities } from './agent-novel/capabilities.js'
 import { NovelDriver } from './agent-novel/driver.js'
 import { NovelProjector } from './agent-novel/projector.js'
+import { ProjectionCheckpointLagError } from './agent-tavern/checkpoint-batch.js'
 import { describeHostShape } from '../../bind/src/index.js'
 import { BUILD_INFO } from './build-info.js'
 import { tavernDataRoot } from './dsh-home.js'
@@ -50,6 +51,7 @@ import {
 } from './runtime.js'
 import { bindSession } from './session/binding.js'
 import { registerTavernSessionCommand } from './session/command.js'
+import { registerSessionBindingReclaim } from './session/reclaim.js'
 import { createImRuntime, imDisabledByEnv, type ImRuntime } from './im/runtime.js'
 import { mountImToolsOnAgent, unmountAllImTools, unmountImToolsForAgent } from './im/agent-mount.js'
 import { listLiveAgents } from './im/session-host.js'
@@ -62,7 +64,7 @@ import { ensureAgentPresetDeclared, handleNovelSessionEvent, novelHttpFailure, r
 
 export const name = 'dsh-soulmojito'
 export const inject = ['llm', 'agentDefaultModel', 'webServer', 'systemPrompt', 'commands', 'agents', 'agentPresets', 'tools', 'compaction', 'sessions']
-export function apply(ctx: PluginContext, config: { anchorEveryTurns?: unknown, checkForUpdates?: unknown, templateEnabled?: unknown, allowedHosts?: unknown } = {}): void {
+export function apply(ctx: PluginContext, config: { anchorEveryTurns?: unknown, checkForUpdates?: unknown, templateEnabled?: unknown, allowedHosts?: unknown, pruneStaleBindings?: unknown } = {}): void {
   // Fail fast before mounting any surface: a malformed allowlist must not
   // silently fall back to loopback-only (or, worse, reflect Host values).
   const allowedHosts = normalizeAllowedHosts(config.allowedHosts)
@@ -133,7 +135,15 @@ export function apply(ctx: PluginContext, config: { anchorEveryTurns?: unknown, 
   setNovelDriverPromise(novelDriverPromise)
   ctx.on?.('session/event', (session, event) => {
     void getAgentTavernProjectorPromise()!.then((projector) => projector.project(session, event))
-      .catch((error) => ctx.logger?.warn?.(`AgentTavern projection failed: ${error instanceof Error ? error.message : String(error)}`))
+      .catch((error) => {
+        // A checkpoint lag means the floor is already on disk and only the
+        // checkpoint write failed; labelling that "projection failed" sends
+        // whoever reads the log after the wrong problem.
+        const label = error instanceof ProjectionCheckpointLagError
+          ? 'AgentTavern projection checkpoint lag'
+          : 'AgentTavern projection failed'
+        ctx.logger?.warn?.(`${label}: ${error instanceof Error ? error.message : String(error)}`)
+      })
     // turn 作用域变量是单轮 scratch 状态，turn 结束即过期。
     if (event?.type === 'turn/end' && typeof session?.id === 'string') {
       void variables().then((store) => store.clear('turn', session.id)).catch(() => {})
@@ -212,6 +222,8 @@ export function apply(ctx: PluginContext, config: { anchorEveryTurns?: unknown, 
   void preheatNativeAgentPreset(liveAgentIds)
 
   registerTavernSessionCommand(ctx)
+  // 失效会话绑定回收：默认关闭，`pruneStaleBindings: report|prune` 显式开启（决策 2026-11-02-stale-session-binding-reclaim）。
+  void registerSessionBindingReclaim(ctx, { configured: config.pruneStaleBindings, store })
 
   ctx.effect(() => tavernUpdate(ctx).start(), 'dsh-soulmojito: update auto-check')
 

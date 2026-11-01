@@ -5,7 +5,7 @@ import { promises as fsPromises } from 'node:fs'
 import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { MemoryStore, TavernStore, VariableStore, normalizeImPeers, normalizeMemoryEmbedding, writeAtomicText } from '../src/index.js'
+import { ChatRevisionConflictError, MemoryStore, TavernStore, VariableStore, isChatRevisionConflict, normalizeImPeers, normalizeMemoryEmbedding, writeAtomicText } from '../src/index.js'
 import { decodeCharacterCard, encodeCharx, encodeCharacterCardPng, normalizeEntry, parseRegexScripts, stableDeepEqual } from '@dsh-soulmojito/format'
 import type { WorldBookIR } from '@dsh-soulmojito/format'
 import { syntheticCardPng, syntheticWorldRaw } from '../../tavern-format/tests/helpers/synthetic.js'
@@ -1354,5 +1354,19 @@ describe('IM peer binding migration to native sessions', () => {
         createdAt: '2026-10-31T00:00:00.000Z',
       },
     })
+  })
+})
+
+describe('cross-bundle revision conflict detection', () => {
+  it('recognizes the conflict by code, not by class identity', () => {
+    // Every esbuild product inlines its own copy of tavern-store, so an error
+    // thrown by a shared store instance does not satisfy this module's
+    // `instanceof`; the code field is the stable signal across bundles.
+    expect(isChatRevisionConflict(new ChatRevisionConflictError('rev-a', 'rev-b'))).toBe(true)
+    expect(isChatRevisionConflict({ code: 'CHAT_REVISION_CONFLICT' })).toBe(true)
+    expect(isChatRevisionConflict({ code: 'MEMORY_REVISION_CONFLICT' })).toBe(false)
+    expect(isChatRevisionConflict(new Error('plain'))).toBe(false)
+    expect(isChatRevisionConflict(null)).toBe(false)
+    expect(isChatRevisionConflict(undefined)).toBe(false)
   })
 })

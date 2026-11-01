@@ -3,13 +3,14 @@
 
 import { MemoryStore, NovelStore, TavernStore } from '../../../../tavern-store/src/index.js'
 import { tavernDataRoot } from '../../dsh-home.js'
+import { sharedTavernStore } from '../../store-handle.js'
 
 let tavernStorePromise: Promise<TavernStore> | undefined
 let novelStorePromise: Promise<NovelStore> | undefined
 let memoryStorePromise: Promise<MemoryStore> | undefined
 
 export function tavernStore(): Promise<TavernStore> {
-  return (tavernStorePromise ??= TavernStore.open(tavernDataRoot()))
+  return (tavernStorePromise ??= sharedTavernStore(tavernDataRoot()))
 }
 
 export function novelStore(): Promise<NovelStore> {

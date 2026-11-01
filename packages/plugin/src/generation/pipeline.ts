@@ -6,7 +6,7 @@ import { createMacroEngine } from '../../../tavern-macros/src/index.js'
 import { assemblePrompt, buildGroupTurn, pickGroupMember } from '../../../tavern-pipeline/src/index.js'
 import type { AssembleInput, DepthInjection, LlmMessage } from '../../../tavern-pipeline/src/index.js'
 import { applyRegexScript, applyRegexScripts, runScript } from '../../../tavern-script/src/index.js'
-import { ChatRevisionConflictError, boundScriptOf, formatScriptBlock, getScript, normalizeScriptProgress, shouldAdvance } from '../../../tavern-store/src/index.js'
+import { ChatRevisionConflictError, boundScriptOf, formatScriptBlock, getScript, isChatRevisionConflict, normalizeScriptProgress, shouldAdvance } from '../../../tavern-store/src/index.js'
 import type { CharacterFile, ChatSnapshot, Persona, TavernState, TavernStore } from '../../../tavern-store/src/index.js'
 import { defaultPreset } from '../agent-tavern/preset.js'
 import { isGroupChat } from '../assets.js'
@@ -101,7 +101,7 @@ export async function generate(ctx: PluginContext, req: HttpRequest, res: HttpRe
   } catch (error) {
     if (!res.writableEnded) {
       const message = error instanceof Error ? error.message : String(error)
-      const code = error instanceof ChatRevisionConflictError ? error.code : undefined
+      const code = isChatRevisionConflict(error) ? error.code : undefined
       write({ type: 'error', message, code })
       res.end()
     }
