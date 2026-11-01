@@ -16,6 +16,7 @@ import type { ImScope } from '../../../tavern-store/src/index.js'
 export type { ImAccessMode, ImOwnerEntry, ImPeerBinding, ImPendingPeer, ImScope, ImSenderEntry, ImSettings } from '../../../tavern-store/src/index.js'
 export {
   DEFAULT_IM_SETTINGS,
+  imAccountKey,
   imPeerKey,
   imSenderHash,
   IM_MAX_TIMESTAMP_MS,

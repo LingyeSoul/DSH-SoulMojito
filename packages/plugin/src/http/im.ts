@@ -23,7 +23,7 @@ import { WeixinApiError } from '../im/weixin/api.js'
 import { WeixinBindError, type WeixinBindErrorCode } from '../im/weixin/bind.js'
 import { WeixinChannelError, type WeixinChannelErrorCode } from '../im/weixin/channel.js'
 import type { ImAccountRef, ImChannelId, ImChannelView, ImOwnerEntry, ImPeerBinding, ImPendingPeer, ImScope, ImSenderEntry } from '../im/types.js'
-import { DEFAULT_IM_SETTINGS, IM_MAX_TIMESTAMP_MS, imPeerAlias, imPeerKey, imPeerKeyParts } from '../im/types.js'
+import { DEFAULT_IM_SETTINGS, IM_MAX_TIMESTAMP_MS, IM_SENDERS_MAX_PER_PEER, imAccountKey, imPeerAlias, imPeerKey, imPeerKeyParts } from '../im/types.js'
 import { HttpError } from './errors.js'
 import { readJson, sendJson, type HttpRequest, type HttpResponse } from './io.js'
 import { INTERNAL_ERROR_MESSAGE, publicErrorMessage } from './public-error.js'
@@ -64,6 +64,10 @@ export async function handleImApi(
       // peerKey 约定（键里含 peerId，本次不迁移）。
       owners: ownerRows(state.imOwners, state.imPeers),
       senders: senderRows(state.imSenders, state.imPeers),
+      // 账号级主人与账号级发言人聚合（决策 2026-11-01-im-global-owner-and-commands）：
+      // 「行为」页的全局主人选择器只认这两块；微信账号不进投影（不接受指定）。
+      accountOwners: accountOwnerRows(state.imAccountOwners),
+      accountSenders: accountSenderRows(state.imSenders, state.imPeers),
       // 未绑定对端：面板「待绑定」表的数据源。对端发过消息但还没绑会话时出现，
       // 绑定成功后从这张表移除。
       pendingPeers: pendingPeerRows(state.imPendingPeers),
@@ -307,6 +311,8 @@ export async function handleImApi(
   if (method === 'POST' && route === 'im/owner') {
     const body = await readJson(req)
     const channel = parseChannel(body.channel)
+    // 微信是私聊专用通道，不参与主人指定（决策 2026-11-01-im-global-owner-and-commands）。
+    if (channel === 'weixin') throw new HttpError(400, '微信渠道不使用主人')
     const scope = parseScope(body.scope)
     const accountId = requireId(body.accountId, 'accountId')
     const peerId = requireId(body.peerId, 'peerId')
@@ -336,6 +342,42 @@ export async function handleImApi(
       return { imOwners: owners }
     })
     return sendJson(res, 200, { ok: true, key, owner, owners: ownerRows(next.imOwners, next.imPeers) })
+  }
+
+  /**
+   * 账号级（全局）主人（决策 2026-11-01-im-global-owner-and-commands）：
+   * `{ channel, accountId, senderId: <snd-hash> | null }`。对该账号下所有对话
+   * 生效；peer 级 `imOwners` 仍是覆盖项。微信没有主人概念，一律 400。
+   * 账号必须已登记（否则全局主人会变成一条永不生效的死配置）。
+   */
+  if (method === 'POST' && route === 'im/owner/global') {
+    const body = await readJson(req)
+    const channel = parseChannel(body.channel)
+    const accountId = requireId(body.accountId, 'accountId')
+    if (channel === 'weixin') throw new HttpError(400, '微信渠道不使用全局主人')
+    const accounts = await ImStore.open(tavernDataRoot('im')).accounts()
+    if (!accounts.some((entry) => entry.channel === channel && entry.accountId === accountId)) {
+      return sendJson(res, 404, { ok: false, message: `no IM account ${channel}/${accountId}; register the account before designating its global owner` })
+    }
+    const accountKey = imAccountKey(channel, accountId)
+    const senderId = parseSenderRef(body.senderId)
+    if (senderId === null) {
+      const next = await db.updateState((current) => {
+        const accountOwners = { ...(current.imAccountOwners ?? {}) }
+        delete accountOwners[accountKey]
+        return { imAccountOwners: accountOwners }
+      })
+      return sendJson(res, 200, { ok: true, accountKey, owner: null, accountOwners: accountOwnerRows(next.imAccountOwners) })
+    }
+    const state = await db.getState()
+    const known = (accountSenderRows(state.imSenders, state.imPeers)[accountKey] ?? []).find((entry) => entry.id === senderId)
+    const owner: ImOwnerEntry = { id: senderId, name: known?.name ?? '', setAt: new Date().toISOString() }
+    const next = await db.updateState((current) => {
+      const accountOwners = { ...(current.imAccountOwners ?? {}) }
+      accountOwners[accountKey] = owner
+      return { imAccountOwners: accountOwners }
+    })
+    return sendJson(res, 200, { ok: true, accountKey, owner, accountOwners: accountOwnerRows(next.imAccountOwners) })
   }
 
   if (method === 'DELETE' && route === 'im/peers') {
@@ -409,6 +451,55 @@ function senderRows(
       return [{ id: entry.id, name: entry.name, lastAt: new Date(entry.lastAt).toISOString() }]
     })
     if (rows.length > 0) result[key] = rows
+  }
+  return result
+}
+
+/**
+ * 账号级主人投影（决策 2026-11-01-im-global-owner-and-commands）：只列形状
+ * 正确且非微信的条目。微信不接受主人指定，旧 state 里遗留的 weixin 行也不投影。
+ */
+function accountOwnerRows(owners: Record<string, ImOwnerEntry> | undefined): Record<string, ImOwnerEntry> {
+  const result: Record<string, ImOwnerEntry> = {}
+  for (const [key, owner] of Object.entries(owners ?? {})) {
+    const parts = key.split(':')
+    if (parts.length !== 2 || (parts[0] ?? '') === '' || (parts[1] ?? '') === '') continue
+    if (parts[0] === 'weixin') continue
+    result[key] = owner
+  }
+  return result
+}
+
+/**
+ * 账号级发言人聚合（全局主人选择器的数据源）：把一个账号下所有**已绑定** peer
+ * 的最近发言人按哈希去重、按时间倒序、截到既有上限。微信账号不聚合——它的
+ * 面板没有主人入口。越界时间戳跳过，不让一行坏数据打崩 `GET im`。
+ */
+function accountSenderRows(
+  senders: Record<string, ImSenderEntry[]> | undefined,
+  peers: Record<string, ImPeerBinding> | undefined,
+): Record<string, Array<{ id: string; name: string; lastAt: string }>> {
+  const buckets = new Map<string, Map<string, ImSenderEntry>>()
+  for (const peerKey of Object.keys(peers ?? {})) {
+    const parts = imPeerKeyParts(peerKey)
+    if (parts === undefined || parts.channel === 'weixin') continue
+    const accountKey = imAccountKey(parts.channel, parts.accountId)
+    const bucket = buckets.get(accountKey) ?? new Map<string, ImSenderEntry>()
+    for (const entry of senders?.[peerKey] ?? []) {
+      if (!Number.isFinite(entry.lastAt) || entry.lastAt < 0 || entry.lastAt > IM_MAX_TIMESTAMP_MS) continue
+      const previous = bucket.get(entry.id)
+      if (previous !== undefined && previous.lastAt >= entry.lastAt) continue
+      bucket.set(entry.id, entry)
+    }
+    buckets.set(accountKey, bucket)
+  }
+  const result: Record<string, Array<{ id: string; name: string; lastAt: string }>> = {}
+  for (const [accountKey, bucket] of buckets) {
+    if (bucket.size === 0) continue
+    result[accountKey] = [...bucket.values()]
+      .sort((left, right) => right.lastAt - left.lastAt)
+      .slice(0, IM_SENDERS_MAX_PER_PEER)
+      .map((entry) => ({ id: entry.id, name: entry.name, lastAt: new Date(entry.lastAt).toISOString() }))
   }
   return result
 }
@@ -495,11 +586,6 @@ function peerCount(
   }
   return count
 }
-
-function imAccountKey(channel: ImChannelId, accountId: string): string {
-  return `${channel}:${accountId}`
-}
-
 
 /**
  * HTTP 错误面收口：内部错误消息可能带绝对路径（store 游标文件、媒体本地路径），

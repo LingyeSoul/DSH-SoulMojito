@@ -16,6 +16,7 @@ import {
   parseOneBotMessage,
   type OneBotSegment,
 } from '../src/im/onebot/codec.js'
+import { isImCommandText } from '../src/im/commands.js'
 import type { ImInbound, ImTarget, OutboundPart } from '../src/im/types.js'
 
 const ACCOUNT = 'qq-main'
@@ -191,6 +192,29 @@ describe('parseOneBotMessage', () => {
     expect(parseOneBotMessage(arrayForm, ACCOUNT, RECEIVED_AT)).toEqual(
       parseOneBotMessage(stringFormatEvent, ACCOUNT, RECEIVED_AT),
     )
+  })
+
+  it('群聊 at 段归一成 `@<qq>` 前缀，指令识别要能剥掉它', () => {
+    const inbound = parseOneBotMessage(
+      {
+        post_type: 'message',
+        message_type: 'group',
+        sub_type: 'normal',
+        message_id: 4011,
+        group_id: 20011,
+        user_id: 10011,
+        sender: { card: '群成员甲' },
+        message: [
+          { type: 'at', data: { qq: '999' } },
+          { type: 'text', data: { text: ' /status' } },
+        ],
+      },
+      ACCOUNT,
+      RECEIVED_AT,
+    )
+    expect(inbound?.text).toBe('@999 /status')
+    // 默认 groupRequireMention 的群聊指令必须能穿过 at 前缀，否则会被当普通消息。
+    expect(isImCommandText(inbound?.text ?? '')).toBe(true)
   })
 
   it('账号身份只取调用方给的 accountId，不被 self_id 覆盖', () => {

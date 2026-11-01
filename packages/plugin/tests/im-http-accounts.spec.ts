@@ -391,11 +391,20 @@ describe('im runtime log route', () => {
 
 describe('im owner routes', () => {
   const ownerPath = '/api/dsh-soulmojito/im/owner'
+  const globalOwnerPath = '/api/dsh-soulmojito/im/owner/global'
   const privateKey = imPeerKey('onebot', '10001', 'private', 'u1')
   const groupKey = imPeerKey('onebot', '10001', 'group', 'g1')
   const unboundKey = imPeerKey('onebot', '10001', 'group', 'g2')
   const memberHash = imSenderHash('onebot', '10001', 'member-1')
   const peerSelf = imSenderHash('onebot', '10001', 'u1')
+
+  async function registerAccount(): Promise<void> {
+    await ImStore.open(tavernDataRoot('im')).putAccount({
+      channel: 'onebot',
+      accountId: '10001',
+      createdAt: new Date(0).toISOString(),
+    }, { token: 'test-token' })
+  }
 
   async function seed(): Promise<void> {
     await db.patchState({
@@ -441,6 +450,95 @@ describe('im owner routes', () => {
     expect(projection).not.toContain('member-1')
     expect(projection).not.toContain('ghost-sender')
     expect(projection).toMatch(/snd-[0-9a-f]{10}/)
+  })
+
+  it('projects account owners and aggregated account senders for the global picker', async () => {
+    await seed()
+    await registerAccount()
+    await db.patchState({
+      imAccountOwners: {
+        'onebot:10001': { id: memberHash, name: '小红', setAt: '2026-11-01T00:00:00.000Z' },
+        // 微信不接受主人指定：旧 state 里遗留的行也不进投影。
+        'weixin:wx-bot': { id: imSenderHash('weixin', 'wx-bot', 'u1'), name: 'stale', setAt: '2026-11-01T00:00:00.000Z' },
+        'not-an-account': { id: memberHash, name: 'bad key', setAt: '2026-11-01T00:00:00.000Z' },
+      },
+    })
+    const listed = await call(undefined, '/api/dsh-soulmojito/im', 'im', 'GET', runtimeOf())
+    expect(listed.statusCode).toBe(200)
+    expect(listed.body['accountOwners']).toEqual({
+      'onebot:10001': { id: memberHash, name: '小红', setAt: '2026-11-01T00:00:00.000Z' },
+    })
+    // 账号发言人 = 该账号全部已绑定 peer 的发言人聚合：按时间倒序、去重、只有哈希。
+    expect(listed.body['accountSenders']).toEqual({
+      'onebot:10001': [
+        { id: peerSelf, name: '', lastAt: new Date(1_700_000_001_000).toISOString() },
+        { id: memberHash, name: '小红', lastAt: new Date(1_700_000_000_000).toISOString() },
+      ],
+    })
+    const projection = JSON.stringify({
+      accountOwners: listed.body['accountOwners'],
+      accountSenders: listed.body['accountSenders'],
+    })
+    expect(projection).not.toContain('member-1')
+    expect(projection).not.toContain('stale')
+    expect(projection).not.toContain('not-an-account')
+  })
+
+  it('sets and clears the account-global owner with hashes only', async () => {
+    await seed()
+    await registerAccount()
+    const set = await call({
+      channel: 'onebot', accountId: '10001', senderId: memberHash,
+    }, globalOwnerPath, 'im/owner/global', 'POST', runtimeOf())
+    expect(set.statusCode).toBe(200)
+    expect(set.body['owner']).toMatchObject({ id: memberHash, name: '小红' })
+    expect(set.body['accountKey']).toBe('onebot:10001')
+    expect((await db.getState()).imAccountOwners?.['onebot:10001']?.id).toBe(memberHash)
+    expect(JSON.stringify((await db.getState()).imAccountOwners)).not.toContain('member-1')
+
+    const cleared = await call({
+      channel: 'onebot', accountId: '10001', senderId: null,
+    }, globalOwnerPath, 'im/owner/global', 'POST', runtimeOf())
+    expect(cleared.statusCode).toBe(200)
+    expect(cleared.body['owner']).toBeNull()
+    expect((await db.getState()).imAccountOwners?.['onebot:10001']).toBeUndefined()
+  })
+
+  it('rejects WeChat, unknown accounts and raw ids on the global owner route', async () => {
+    await seed()
+    await registerAccount()
+    const failure = async (path: string, body: Record<string, unknown>): Promise<{ status: number; message: string }> => (
+      call(body, path, path.replace('/api/dsh-soulmojito/', ''), 'POST', runtimeOf())
+        .catch((error: unknown) => error as { status: number; message: string })
+    )
+
+    const weixin = await failure(globalOwnerPath, {
+      channel: 'weixin', accountId: 'wx-bot', senderId: memberHash,
+    })
+    expect(weixin.status).toBe(400)
+    expect(weixin.message).toContain('微信渠道不使用全局主人')
+
+    const unknown = await call({
+      channel: 'onebot', accountId: '99999', senderId: memberHash,
+    }, globalOwnerPath, 'im/owner/global', 'POST', runtimeOf())
+    expect(unknown.statusCode).toBe(404)
+    expect(String(unknown.body['message'])).toContain('no IM account')
+
+    const raw = await failure(globalOwnerPath, {
+      channel: 'onebot', accountId: '10001', senderId: 'member-1',
+    })
+    expect(raw.status).toBe(400)
+    expect(raw.message).toContain('snd-')
+    expect(raw.message).not.toContain('member-1')
+
+    // 会话级主人路由同样拒绝微信（面板对微信不显示主人控件，服务端再挡一层）。
+    const perPeer = await failure(ownerPath, {
+      channel: 'weixin', accountId: 'wx-bot', scope: 'private', peerId: 'u1', senderId: memberHash,
+    })
+    expect(perPeer.status).toBe(400)
+    expect(perPeer.message).toContain('微信渠道不使用主人')
+
+    expect((await db.getState()).imAccountOwners).toEqual({})
   })
 
   it('skips an out-of-range sender timestamp instead of 500ing GET im', async () => {

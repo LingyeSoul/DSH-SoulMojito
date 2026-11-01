@@ -29,10 +29,12 @@ import { IM_COALESCE_MAX_CHARS, IM_COALESCE_MAX_MESSAGES, IM_COALESCE_WINDOW_MS,
 import { IM_MESSAGE_REF_MAX_ENTRIES, IM_MESSAGE_REF_TTL_MS, createImMessageRefStore, imMessageRef, type ImMessageRefEntry } from './refs.js'
 import { IM_OWNER_LINE_PREFIX, displaySenderNameOf, imUserTextOf, relayTextOf } from './relay.js'
 import { createImOwnerLedger } from './owner-ledger.js'
+import { handleImCommandIfAny } from './commands.js'
+import type { ImPresetSwitchResult } from './handle.js'
 import { projectImText } from './project.js'
 import { imAccessAllows, imChunkLimit } from './settings.js'
 import type { ImLogSink } from './log.js'
-import type { ImChannelId, ImInbound, ImMediaRef, ImOutboundMedia, ImQueuedSendReceipt, ImScope, ImSendOutcome, ImSettings, ImTarget, OutboundPart } from './types.js'
+import type { ImChannelId, ImInbound, ImMediaRef, ImOutboundMedia, ImQueuedSendReceipt, ImScope, ImSendOutcome, ImSendStatusView, ImSettings, ImTarget, OutboundPart } from './types.js'
 import { DEFAULT_IM_SETTINGS, imPeerAlias, imPeerKey, imPeerKeyParts } from './types.js'
 
 /** 未绑定提示：对端只知道「没绑上」，具体绑定发生在 DSH 面板。 */
@@ -122,6 +124,13 @@ export interface ImRouterDeps {
    * setTimeout/clearTimeout；测试注入手动调度器，不真等 600ms。
    */
   scheduleFlush?: (delayMs: number, run: () => void) => () => void
+  /**
+   * 出站节奏投影（决策 2026-11-01-im-global-owner-and-commands）：`/status`
+   * 用它区分「现在可发 / 等待 / 冷却 / 队列深度」；缺省时 `/status` 省略这一行。
+   */
+  sendStatuses?: () => readonly ImSendStatusView[]
+  /** `/bind` 之后的预设切换（由 runtime 注入）；缺省时回执说明预设未切换。 */
+  applyImPreset?: (sessionId: string) => Promise<ImPresetSwitchResult>
 }
 
 export interface ImRouter {
@@ -214,6 +223,8 @@ export function createImRouter(deps: ImRouterDeps): ImRouter {
     options?: { loadMedia?: () => Promise<readonly ImMediaRef[]> },
   ): Promise<void> {
     const peerKey = imPeerKey(inboundMessage.channel, inboundMessage.accountId, inboundMessage.scope, inboundMessage.peerId)
+    // 斜杠指令在合流/绑定之前就地执行，文本永不入会话（含 @机器人 前缀）。
+    if (await handleImCommandIfAny(deps, inboundMessage, peerKey, sendNotice)) return
     const entry: ImCoalesceEntry = {
       inbound: inboundMessage,
       ...(options?.loadMedia === undefined ? {} : { loadMedia: options.loadMedia }),

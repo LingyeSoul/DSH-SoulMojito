@@ -664,6 +664,60 @@ describe('im router owner designation', () => {
     expect(header).toContain(' owner=1]')
   })
 
+  it('marks the account-wide owner when the peer has no owner of its own', async () => {
+    await allowAll()
+    await bindGroup()
+    await db.patchState({
+      imAccountOwners: { 'qq:acct': { id: MEMBER_1, name: '小明', setAt: new Date(0).toISOString() } },
+    })
+    const h = harness()
+    await h.deliver(groupInbound())
+    const header = h.inserts[0]!.text.split('\n')[0]!
+    expect(header).toContain(' owner=1]')
+    expect(h.inserts[0]?.text).toContain('[主人][小明] 大家好')
+  })
+
+  it('keeps the per-peer owner over the account-wide owner', async () => {
+    await allowAll()
+    await bindGroup()
+    await db.patchState({
+      imAccountOwners: {
+        'qq:acct': { id: imSenderHash('qq', 'acct', 'member-2'), name: '小红', setAt: new Date(0).toISOString() },
+      },
+    })
+    await setOwner(GROUP_KEY, MEMBER_1, '小明')
+    const h = harness()
+    await h.deliver(groupInbound())
+    await h.deliver(groupInbound({ senderId: 'member-2', senderName: '小红', text: '晚上好', dedupeKey: 'qq:acct:g2' }))
+    expect(h.inserts[0]!.text.split('\n')[0]).toContain(' owner=1]')
+    expect(h.inserts[1]!.text.split('\n')[0]).not.toContain('owner=1')
+  })
+
+  it('never marks a WeChat peer, even with stale owner rows', async () => {
+    await allowAll()
+    const key = imPeerKey('weixin', 'wx-bot', 'private', 'user-1')
+    const selfHash = imSenderHash('weixin', 'wx-bot', 'user-1')
+    await db.patchState({
+      imPeers: {
+        [key]: { sessionId: 'session-wx', scope: 'private', boundBy: 'manual', createdAt: new Date(0).toISOString() },
+      },
+      imOwners: { [key]: { id: selfHash, name: '', setAt: new Date(0).toISOString() } },
+      imAccountOwners: { 'weixin:wx-bot': { id: selfHash, name: '', setAt: new Date(0).toISOString() } },
+    })
+    const h = harness()
+    await h.deliver(inbound({
+      channel: 'weixin',
+      accountId: 'wx-bot',
+      scope: 'private',
+      peerId: 'user-1',
+      senderId: 'user-1',
+      dedupeKey: 'weixin:wx-bot:m1',
+    }))
+    const lines = h.inserts[0]!.text.split('\n')
+    expect(lines[0]).not.toContain('owner=1')
+    expect(h.inserts[0]?.text).not.toContain('[主人]')
+  })
+
   it('marks owner items in a mixed merged batch and escapes forged lines', async () => {
     await allowAll()
     await bindGroup()

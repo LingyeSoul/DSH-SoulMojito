@@ -116,6 +116,16 @@ const IM_I18N_KEYS = [
   'im.owner.setSelf',
   'im.owner.selfName',
   'im.owner.saved',
+  'im.owner.globalTitle',
+  'im.owner.globalHint',
+  'im.owner.globalNone',
+  'im.owner.globalPick',
+  'im.owner.globalClear',
+  'im.owner.globalSaved',
+  'im.owner.globalEmpty',
+  'im.commands.title',
+  'im.commands.hint',
+  'im.commands.list',
   'im.scope.private',
   'im.scope.group',
   'im.settings.title',
@@ -248,7 +258,7 @@ function createPanelRender(options: { characters?: string[]; chatLists?: Record<
   })
   vm.runInContext(
     `${imPanelSource}
-;globalThis.__imRender = { PanelIm, ImTabs, ImChannelCard, ImBindPanel, ImPeerRow, ImPeersBand, ImSettingsBand, ImOneBotBand, ImLogBand, ImLogRows, ImBehaviorBand, ImOwnerControls }`,
+;globalThis.__imRender = { PanelIm, ImTabs, ImChannelCard, ImBindPanel, ImPeerRow, ImPeersBand, ImSettingsBand, ImOneBotBand, ImLogBand, ImLogRows, ImBehaviorBand, ImAccountOwnerBand, ImOwnerControls }`,
     context,
     { filename: '97-ui-im.js' },
   )
@@ -457,6 +467,7 @@ describe('IM channels panel (client-src source check)', () => {
       "'im/bind/cancel'",
       "'im/qq/install'",
       "'im/owner'",
+      "'im/owner/global'",
     ]) {
       expect(imSource).toContain(marker)
     }
@@ -1089,6 +1100,110 @@ describe('IM channels panel (client-src source check)', () => {
     }))
     expect(groupView.texts).not.toContain('im.owner.setSelf')
     expect(groupView.texts).not.toContain('im.owner.clear')
+  })
+
+  it('wires the account-wide owner route and keeps WeChat out of owner UI', () => {
+    expect(imSource).toContain("'im/owner/global'")
+    expect(imSource).toContain('const accountOwners = view?.accountOwners ?? {}')
+    expect(imSource).toContain('const accountSenders = view?.accountSenders ?? {}')
+    expect(imSource).toContain('onSetAccountOwner: setAccountOwner')
+    expect(behaviorSource).toContain('function ImAccountOwnerBand(')
+    expect(behaviorSource).toContain("'data-im-global-owner': 'band'")
+    expect(behaviorSource).toContain("filter((account) => account.channel !== 'weixin')")
+    expect(behaviorSource).toContain("t('im.commands.list')")
+    expect(peersSource).toContain("imPeerParts(peer.key)?.channel !== 'weixin'")
+  })
+
+  it('renders the account-wide owner picker and the command help (render smoke)', () => {
+    const components = createPanelRender({})
+    const picked: Array<[string, string | null]> = []
+    const band = components.ImAccountOwnerBand({
+      accounts: [
+        { channel: 'qq', accountId: '9999', label: 'QQ 机器人' },
+        { channel: 'onebot', accountId: '10001' },
+        { channel: 'weixin', accountId: 'wx-bot' },
+      ],
+      accountOwners: { 'onebot:10001': { id: 'snd-owner0001', name: '管理员' } },
+      accountSenders: {
+        'onebot:10001': [
+          { id: 'snd-owner0001', name: '管理员' },
+          { id: 'snd-member0001', name: '' },
+        ],
+      },
+      busy: '',
+      onSetOwner: (key: string, value: string | null) => { picked.push([key, value]) },
+    })
+    const view = collectNode(band)
+    expect(view.attrs).toContain('data-im-global-owner=band')
+    expect(view.attrs).toContain('data-im-global-owner=qq:9999')
+    expect(view.attrs).toContain('data-im-global-owner=onebot:10001')
+    // 微信账号不出现（既不渲染行，也不暴露账号 id）。
+    expect(view.attrs).not.toContain('data-im-global-owner=weixin:wx-bot')
+    expect(view.texts.join('\n')).not.toContain('wx-bot')
+    expect(view.texts).toContain('im.owner.globalTitle')
+    expect(view.texts).toContain('im.owner.globalHint')
+    expect(view.texts).toContain('管理员')
+    expect(view.texts).toContain('im.commands.title')
+    expect(view.texts).toContain('im.commands.list')
+
+    const select = findNodes(band, 'select').find((node) => node.props['aria-label'] === 'im.owner.globalPick')
+    expect(select).toBeDefined()
+    ;(select?.props.onChange as (event: { target: { value: string } }) => void)({ target: { value: 'snd-member0001' } })
+    expect(picked).toEqual([['onebot:10001', 'snd-member0001']])
+    const clear = findButtons(band).find((button) => button.label === 'im.owner.globalClear')
+    expect(clear).toBeDefined()
+    ;(clear?.props.onClick as () => void)()
+    expect(picked).toEqual([
+      ['onebot:10001', 'snd-member0001'],
+      ['onebot:10001', null],
+    ])
+
+    // 没有 QQ / OneBot 账号：只说明事实，不渲染任何选择器。
+    const emptyBand = components.ImAccountOwnerBand({
+      accounts: [{ channel: 'weixin', accountId: 'wx-bot' }],
+      accountOwners: {},
+      accountSenders: {},
+      busy: '',
+      onSetOwner: () => {},
+    })
+    const empty = collectNode(emptyBand)
+    expect(empty.texts).toContain('im.owner.globalEmpty')
+    expect(findNodes(emptyBand, 'select')).toHaveLength(0)
+  })
+
+  it('hides per-peer owner controls for WeChat rows (render smoke)', () => {
+    const components = createPanelRender({})
+    const peer = {
+      key: 'weixin:wx-bot:private:u1',
+      sessionId: 'session-wx',
+      scope: 'private',
+      boundBy: 'manual',
+      createdAt: '2026-11-01T00:00:00.000Z',
+      peerSelfId: 'snd-self000001',
+    }
+    const row = {
+      peer,
+      shared: false,
+      owner: { id: 'snd-self000001', name: '' },
+      senders: [{ id: 'snd-self000001', name: '', lastAt: 1_700_000_000_000 }],
+      currentSession: 'session-current',
+      sessionLabel: () => 'wx',
+      disabled: false,
+      ownerDisabled: false,
+      onRebind: () => {},
+      onUnbind: () => {},
+      onSetOwner: () => {},
+    }
+    const weixin = collectNode(components.ImPeerRow(row))
+    expect(weixin.types).not.toContain('ImOwnerControls')
+    expect(weixin.texts.some((text) => text.startsWith('im.owner.label'))).toBe(false)
+
+    const qq = collectNode(components.ImPeerRow({
+      ...row,
+      peer: { ...peer, key: 'qq:1024:private:u1' },
+    }))
+    expect(qq.types).toContain('ImOwnerControls')
+    expect(qq.texts).toContain('im.owner.label(name=im.owner.selfName)')
   })
 
   it('marker does not match near-miss samples (negative sample)', () => {

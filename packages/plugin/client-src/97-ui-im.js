@@ -167,6 +167,10 @@
       // 按绑定过滤，值是 `snd-<hash>` + 昵称；面板从不接触原始 id。
       const owners = view?.owners ?? {}
       const senders = view?.senders ?? {}
+      // 账号级（全局）主人与账号发言人聚合（决策 2026-11-01-im-global-owner-and-commands）：
+      // 「行为」页的全局主人选择器只用这两块；微信账号不在投影里。
+      const accountOwners = view?.accountOwners ?? {}
+      const accountSenders = view?.accountSenders ?? {}
       const settings = view?.settings ?? null
       const qqRuntime = view?.qqRuntime ?? null
       const available = view?.available === true
@@ -470,6 +474,35 @@
           .finally(() => releaseBusy(`owner:${peer.key}`))
       }
 
+      /**
+       * 账号级（全局）主人（决策 2026-11-01-im-global-owner-and-commands）：提交
+       * 服务端投影里的 `snd-<hash>` 或 null；微信账号在面板上不出现。账号键按
+       * 第一个 `:` 拆回 channel/accountId（accountId 禁止含 `:`，见 IM store）。
+       */
+      const setAccountOwner = (accountKey, value) => {
+        const at = String(accountKey).indexOf(':')
+        if (at <= 0) {
+          setError(`cannot parse the account key '${accountKey}'`)
+          return
+        }
+        const channel = String(accountKey).slice(0, at)
+        const accountId = String(accountKey).slice(at + 1)
+        setError('')
+        setNotice('')
+        setBusy(`globalOwner:${accountKey}`)
+        void api('im/owner/global', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ channel, accountId, senderId: value }),
+        })
+          .then(() => {
+            setNotice(t('im.owner.globalSaved'))
+            return reloadView()
+          })
+          .catch((cause) => setError(imErrorMessage(cause)))
+          .finally(() => releaseBusy(`globalOwner:${accountKey}`))
+      }
+
       const scanningChannel = bind !== null && bind.phase !== 'failed' ? bind.channel : ''
       const cards = IM_CHANNELS.map((channel) => h(ImChannelCard, {
         key: channel,
@@ -511,7 +544,17 @@
             onAllowDraft: (scope, value) => setAllowDraft((current) => ({ ...current, [scope]: value })),
           }))
       } else if (activeTab === 'behavior') {
-        tabContent = h(ImBehaviorBand, { settings, statuses: view?.sendStatuses ?? [], busy, onSave: saveSettings, onError: setError })
+        tabContent = h(ImBehaviorBand, {
+          settings,
+          statuses: view?.sendStatuses ?? [],
+          accounts: channels,
+          accountOwners,
+          accountSenders,
+          busy,
+          onSave: saveSettings,
+          onError: setError,
+          onSetAccountOwner: setAccountOwner,
+        })
       } else if (activeTab === 'logs') {
         tabContent = h(ImLogBand, { disabled: !available, onError: setError })
       } else {

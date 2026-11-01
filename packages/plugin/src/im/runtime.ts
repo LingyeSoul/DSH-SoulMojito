@@ -39,6 +39,7 @@ import { WEIXIN_REAL_CLOCK } from './weixin/clock.js'
 import { openWeixinContextTokens } from './weixin/context-tokens.js'
 import { WEIXIN_MEDIA_MAX_BYTES } from './weixin/media.js'
 import { createImRouter, type ImRouter } from './router.js'
+import { sendStatusesOf } from './send-status.js'
 import { imAccountIdOf } from './account-id.js'
 import { createImLog, IM_LOG_CAPACITY, wrapImLogger } from './log.js'
 import { weixinSendIntervalOf } from './settings.js'
@@ -51,8 +52,8 @@ import {
   type ImAgentsSeam,
   type ImSessionCapabilities,
 } from './session-host.js'
-import type { ImAccountRef, ImBindStatus, ImChannel, ImChannelId, ImChannelView, ImSendStatusView, ImTarget } from './types.js'
-import { AGENT_TAVERN_IM_PRESET_ID, DEFAULT_IM_SETTINGS, imPeerKey, imPeerKeyParts } from './types.js'
+import type { ImAccountRef, ImBindStatus, ImChannel, ImChannelId, ImChannelView, ImTarget } from './types.js'
+import { AGENT_TAVERN_IM_PRESET_ID, DEFAULT_IM_SETTINGS, imAccountKey, imPeerKey, imPeerKeyParts } from './types.js'
 import { ImStore } from './store.js'
 
 export type ImRuntime = ImRuntimeHandle
@@ -249,6 +250,8 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
     },
     log: imLog,
     logger,
+    sendStatuses: () => sendStatusesOf(channels.values()),
+    applyImPreset,
   })
 
   // ---- 账号生命周期 ----
@@ -618,6 +621,8 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       await db.updateState((current) => {
         const peers = { ...(current.imPeers ?? {}) }
         const pending = { ...(current.imPendingPeers ?? {}) }
+        // 账号没了，它的全局主人也是死记录：面板不能再列一个不存在的账号。
+        const accountOwners = { ...(current.imAccountOwners ?? {}) }
         for (const key of Object.keys(peers)) {
           const parts = imPeerKeyParts(key)
           if (parts?.channel === channelId && parts.accountId === accountId) delete peers[key]
@@ -626,7 +631,8 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
           const parts = imPeerKeyParts(key)
           if (parts?.channel === channelId && parts.accountId === accountId) delete pending[key]
         }
-        return { imPeers: peers, imPendingPeers: pending }
+        delete accountOwners[imAccountKey(channelId, accountId)]
+        return { imPeers: peers, imPendingPeers: pending, imAccountOwners: accountOwners }
       }).catch((error: unknown) => {
         logger?.warn?.(`dsh-soulmojito im: deleting the bindings of ${channelId}/${accountId} failed: ${messageOf(error)}`)
       })
@@ -698,15 +704,7 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
     })),
     // 出站节奏投影（决策 2026-10-31-weixin-send-queue）：只有实现了队列的通道
     // （当前是微信）有 sendStatus；QQ/OneBot 没有排队语义，投影里不出现。
-    sendStatuses: (): ImSendStatusView[] => {
-      const rows: ImSendStatusView[] = []
-      for (const channel of channels.values()) {
-        const status = channel.sendStatus?.()
-        if (status === undefined) continue
-        rows.push({ channel: channel.channel, accountId: channel.accountId, ...status })
-      }
-      return rows
-    },
+    sendStatuses: () => sendStatusesOf(channels.values()),
     // 设置页改动间隔：运行中的微信通道即时换挡，未接上的账号下次 upsert 读新值。
     applySettings: (settings) => {
       const interval = weixinSendIntervalOf(settings)

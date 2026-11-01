@@ -788,6 +788,8 @@ describe('TavernStore', () => {
       // 会话主人与最近发言人（决策 2026-10-31-im-owner-designation）：默认空表。
       imSenders: {},
       imOwners: {},
+      // 账号级主人（决策 2026-11-01-im-global-owner-and-commands）：默认空表。
+      imAccountOwners: {},
     })
     await store.patchState({
       activeCharacter: 'ExampleCard',

@@ -84,7 +84,12 @@ export interface ImPeerBinding {
   /** 宿主原生会话 id（`session.id`），入站消息插进这个会话。 */
   sessionId: string
   scope: ImScope
-  boundBy: 'auto' | 'manual'
+  /**
+   * 绑定来源：面板改绑（`manual`）、历史自动绑定（`auto`，只用于读旧 state），
+   * 或对端用 `/bind <sessionId>` 指令自绑（`command`，决策
+   * 2026-11-01-im-global-owner-and-commands）。
+   */
+  boundBy: 'auto' | 'manual' | 'command'
   createdAt: string
 }
 
@@ -152,6 +157,14 @@ export function imPeerKey(channel: string, accountId: string, scope: ImScope, pe
   return `${channel}:${accountId}:${scope}:${peerId}`
 }
 
+/**
+ * 账号级键：`${channel}:${accountId}`（决策 2026-11-01-im-global-owner-and-commands）。
+ * accountId 由 IM store 限制为 `[A-Za-z0-9._-]`，因此按第一个 `:` 切分即可还原。
+ */
+export function imAccountKey(channel: string, accountId: string): string {
+  return `${channel}:${accountId}`
+}
+
 function normalizeAccessMode(value: unknown, fallback: ImAccessMode): ImAccessMode {
   return value === 'open' || value === 'allowlist' || value === 'disabled' ? value : fallback
 }
@@ -214,7 +227,9 @@ export function normalizeImPeers(value: unknown): Record<string, ImPeerBinding> 
     const sessionId = record['sessionId']
     if (typeof sessionId !== 'string' || sessionId.trim() === '') continue
     const scope: ImScope = record['scope'] === 'group' ? 'group' : 'private'
-    const boundBy: 'auto' | 'manual' = record['boundBy'] === 'manual' ? 'manual' : 'auto'
+    const boundBy: ImPeerBinding['boundBy'] = record['boundBy'] === 'manual'
+      ? 'manual'
+      : record['boundBy'] === 'command' ? 'command' : 'auto'
     const createdAt = typeof record['createdAt'] === 'string' ? record['createdAt'] : new Date(0).toISOString()
     result[key] = { sessionId, scope, boundBy, createdAt }
   }
@@ -289,17 +304,45 @@ export function normalizeImOwners(value: unknown): Record<string, ImOwnerEntry> 
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
   const result: Record<string, ImOwnerEntry> = {}
   for (const [key, entry] of Object.entries(value)) {
-    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue
-    const record = entry as Record<string, unknown>
-    const id = record['id']
-    if (typeof id !== 'string' || !isImSenderHash(id.trim())) continue
-    const name = record['name']
-    const setAt = record['setAt']
-    result[key] = {
-      id: id.trim(),
-      name: typeof name === 'string' ? name.trim() : '',
-      setAt: typeof setAt === 'string' && setAt.trim() !== '' ? setAt : new Date(0).toISOString(),
-    }
+    const owner = normalizeImOwnerEntry(entry)
+    if (owner !== undefined) result[key] = owner
   }
   return result
+}
+
+/**
+ * 账号级主人表容错读取（决策 2026-11-01-im-global-owner-and-commands）：键 =
+ * `channel:accountId`，值形状与 `imOwners` 相同。键不是两段、缺 id 或非
+ * `snd-<10 hex>` 哈希的记录丢弃；旧 state.json 没有这张表时返回空表。
+ */
+export function normalizeImAccountOwners(value: unknown): Record<string, ImOwnerEntry> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+  const result: Record<string, ImOwnerEntry> = {}
+  for (const [key, entry] of Object.entries(value)) {
+    if (!isImAccountKey(key)) continue
+    const owner = normalizeImOwnerEntry(entry)
+    if (owner !== undefined) result[key] = owner
+  }
+  return result
+}
+
+/** 一张主人表的单行容错：两张表（peer 级/账号级）共用同一份形状。 */
+function normalizeImOwnerEntry(entry: unknown): ImOwnerEntry | undefined {
+  if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return undefined
+  const record = entry as Record<string, unknown>
+  const id = record['id']
+  if (typeof id !== 'string' || !isImSenderHash(id.trim())) return undefined
+  const name = record['name']
+  const setAt = record['setAt']
+  return {
+    id: id.trim(),
+    name: typeof name === 'string' ? name.trim() : '',
+    setAt: typeof setAt === 'string' && setAt.trim() !== '' ? setAt : new Date(0).toISOString(),
+  }
+}
+
+/** `channel:accountId` 且两段都非空：账号级主人表的键形状。 */
+function isImAccountKey(key: string): boolean {
+  const parts = key.split(':')
+  return parts.length === 2 && (parts[0] ?? '') !== '' && (parts[1] ?? '') !== ''
 }

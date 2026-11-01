@@ -13,9 +13,9 @@
 
 import type { TavernStore } from '../../../tavern-store/src/index.js'
 import type { ImLogSink } from './log.js'
-import { imSenderHash, mergeImSenderEntries, type ImSenderUpdate } from './owner.js'
+import { imSenderHash, mergeImSenderEntries, resolveImOwnerId, type ImSenderUpdate } from './owner.js'
 import { displaySenderNameOf } from './relay.js'
-import { IM_SENDERS_MAX_PER_PEER, IM_SENDER_REFRESH_WINDOW_MS, type ImInbound } from './types.js'
+import { IM_SENDERS_MAX_PER_PEER, IM_SENDER_REFRESH_WINDOW_MS, imPeerKeyParts, type ImInbound } from './types.js'
 
 export interface ImOwnerLedgerDeps {
   db: Pick<TavernStore, 'getState' | 'updateState'>
@@ -25,7 +25,7 @@ export interface ImOwnerLedgerDeps {
 }
 
 export interface ImOwnerLedger {
-  /** 本 peer 的主人哈希；未指定时 undefined。 */
+  /** 本 peer 解析出的主人哈希（peer 级优先、账号级兜底、微信不解析）；未指定时 undefined。 */
   ownerIdOf(peerKey: string): Promise<string | undefined>
   /** 一条入站消息的发言人是否就是本会话主人。 */
   isOwnerMessage(message: ImInbound, ownerId: string | undefined): boolean
@@ -39,8 +39,16 @@ export interface ImOwnerLedger {
 
 export function createImOwnerLedger(deps: ImOwnerLedgerDeps): ImOwnerLedger {
   async function ownerIdOf(peerKey: string): Promise<string | undefined> {
+    // 账本只有 peerKey 一个入口：拆不出 channel/accountId 就无法定位账号级主人，
+    // 只能不标记。纯函数 `resolveImOwnerId` 在调用方已持有 channel/accountId 时
+    // 仍会回落到账号级主人（见 owner.ts）。
+    const parts = imPeerKeyParts(peerKey)
+    if (parts === undefined) return undefined
     const state = await deps.db.getState()
-    return state.imOwners?.[peerKey]?.id
+    return resolveImOwnerId(parts.channel, parts.accountId, peerKey, {
+      owners: state.imOwners,
+      accountOwners: state.imAccountOwners,
+    })
   }
 
   function isOwnerMessage(message: ImInbound, ownerId: string | undefined): boolean {

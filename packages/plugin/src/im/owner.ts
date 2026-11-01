@@ -9,10 +9,27 @@
  * 模块不碰 IO、不认识 db。
  */
 
-import type { ImSenderEntry } from './types.js'
-import { IM_SENDER_HASH_HEX_LENGTH, IM_SENDER_HASH_PREFIX, imSenderHash, isImSenderHash } from './types.js'
+import type { ImOwnerEntry, ImSenderEntry } from './types.js'
+import { IM_SENDER_HASH_HEX_LENGTH, IM_SENDER_HASH_PREFIX, imAccountKey, imSenderHash, isImSenderHash } from './types.js'
 
 export { IM_SENDER_HASH_HEX_LENGTH, IM_SENDER_HASH_PREFIX, imSenderHash, isImSenderHash }
+
+/**
+ * 主人标记的解析顺序（决策 2026-11-01-im-global-owner-and-commands）：
+ * 微信永不解析主人（私聊专用，不参与指定）；peer 级 `imOwners[peerKey]` 优先，
+ * 缺省回落到账号级 `imAccountOwners[channel:accountId]`。返回值只是哈希。
+ */
+export function resolveImOwnerId(
+  channel: string,
+  accountId: string,
+  peerKey: string | undefined,
+  tables: { owners?: Record<string, ImOwnerEntry>; accountOwners?: Record<string, ImOwnerEntry> },
+): string | undefined {
+  if (channel === 'weixin') return undefined
+  const perPeer = peerKey === undefined ? undefined : tables.owners?.[peerKey]?.id
+  if (perPeer !== undefined) return perPeer
+  return tables.accountOwners?.[imAccountKey(channel, accountId)]?.id
+}
 
 /** 一次投递里某个发言人的最新事实（哈希、显示名、投递时间）。 */
 export interface ImSenderUpdate {

@@ -11,7 +11,9 @@ import { join } from 'node:path'
 import {
   IM_SENDERS_MAX_PER_PEER,
   TavernStore,
+  normalizeImAccountOwners,
   normalizeImOwners,
+  normalizeImPeers,
   normalizeImSenders,
 } from '../../tavern-store/src/index.js'
 import {
@@ -20,6 +22,7 @@ import {
   imSenderHash,
   isImSenderHash,
   mergeImSenderEntries,
+  resolveImOwnerId,
 } from '../src/im/owner.js'
 import type { ImSenderEntry } from '../src/im/types.js'
 
@@ -95,12 +98,46 @@ describe('mergeImSenderEntries', () => {
   })
 })
 
+describe('resolveImOwnerId', () => {
+  const perPeer = { id: 'snd-aaaaaaaaaa', name: '会话主人', setAt: '2026-10-31T00:00:00.000Z' }
+  const accountWide = { id: 'snd-bbbbbbbbbb', name: '全局主人', setAt: '2026-11-01T00:00:00.000Z' }
+
+  it('prefers the per-peer owner over the account-wide owner', () => {
+    expect(resolveImOwnerId('qq', 'acct', 'qq:acct:group:g1', {
+      owners: { 'qq:acct:group:g1': perPeer },
+      accountOwners: { 'qq:acct': accountWide },
+    })).toBe(perPeer.id)
+  })
+
+  it('falls back to the account-wide owner when the peer has none', () => {
+    expect(resolveImOwnerId('qq', 'acct', 'qq:acct:group:g2', {
+      owners: {},
+      accountOwners: { 'qq:acct': accountWide },
+    })).toBe(accountWide.id)
+  })
+
+  it('falls back to the account-wide owner when only the per-peer key is unusable (pure function)', () => {
+    // 纯函数拿到显式 channel/accountId，bad peerKey 只让 per-peer 覆盖失效。
+    // （ownerLedger.ownerIdOf 没有独立来源，拆不出 channel/accountId 时直接不标记，
+    //  见下方 owner-ledger 的说明——两者语义一致，只是入口信息量不同。）
+    expect(resolveImOwnerId('qq', 'acct', 'broken', { accountOwners: { 'qq:acct': accountWide } })).toBe(accountWide.id)
+  })
+
+  it('never resolves an owner for WeChat, even with stale tables', () => {
+    expect(resolveImOwnerId('weixin', 'acct', 'weixin:acct:private:u1', {
+      owners: { 'weixin:acct:private:u1': perPeer },
+      accountOwners: { 'weixin:acct': accountWide },
+    })).toBeUndefined()
+  })
+})
+
 describe('IM owner and sender state normalization', () => {
   it('treats a legacy state file without the maps as empty tables', async () => {
     await writeFile(join(root, 'state.json'), JSON.stringify({ activeWorlds: ['ExampleWorld'] }))
     const state = await (await TavernStore.open(root)).getState()
     expect(state.imSenders).toEqual({})
     expect(state.imOwners).toEqual({})
+    expect(state.imAccountOwners).toEqual({})
     expect(state.activeWorlds).toEqual(['ExampleWorld'])
   })
 
@@ -146,6 +183,31 @@ describe('IM owner and sender state normalization', () => {
       'qq:acct:group:g1': { id: 'snd-aaaaaaaaaa', name: '小明', setAt: '2026-10-31T00:00:00.000Z' },
       'qq:acct:group:g3': { id: 'snd-bbbbbbbbbb', name: '', setAt: new Date(0).toISOString() },
     })
+  })
+
+  it('normalizes account-wide owner rows and drops malformed keys', () => {
+    const rows = normalizeImAccountOwners({
+      'qq:acct': { id: ' snd-aaaaaaaaaa ', name: ' 全局主人 ', setAt: '2026-11-01T00:00:00.000Z' },
+      'weixin:wx-bot': { id: 'snd-bbbbbbbbbb', name: '', setAt: '2026-11-01T00:00:00.000Z' },
+      'not-an-account-key': { id: 'snd-cccccccccc', name: 'bad' },
+      'qq:': { id: 'snd-dddddddddd' },
+      raw: { id: 'openid-alice', name: 'Alice', setAt: '2026-11-01T00:00:00.000Z' },
+      'onebot:10001': { id: 'snd-eeeeeeeeee', name: 7 },
+    })
+    expect(rows).toEqual({
+      'qq:acct': { id: 'snd-aaaaaaaaaa', name: '全局主人', setAt: '2026-11-01T00:00:00.000Z' },
+      'weixin:wx-bot': { id: 'snd-bbbbbbbbbb', name: '', setAt: '2026-11-01T00:00:00.000Z' },
+      'onebot:10001': { id: 'snd-eeeeeeeeee', name: '', setAt: new Date(0).toISOString() },
+    })
+  })
+
+  it('keeps the command binding source and degrades unknown values to auto', () => {
+    const rows = normalizeImPeers({
+      'qq:acct:private:u1': { sessionId: 'session-a', scope: 'private', boundBy: 'command', createdAt: '2026-11-01T00:00:00.000Z' },
+      'qq:acct:private:u2': { sessionId: 'session-b', scope: 'private', boundBy: 'legacy', createdAt: '2026-11-01T00:00:00.000Z' },
+    })
+    expect(rows['qq:acct:private:u1']?.boundBy).toBe('command')
+    expect(rows['qq:acct:private:u2']?.boundBy).toBe('auto')
   })
 
   it('drops raw platform ids and timestamps beyond the Date range', () => {

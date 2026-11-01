@@ -125,6 +125,10 @@ describe('im runtime account lifecycle', () => {
           [peerKey]: { lastAt: 1 },
           [otherKey]: { lastAt: 2 },
         },
+        imAccountOwners: {
+          'onebot:10001': { id: 'snd-aaaaaaaaaa', name: '', setAt: new Date(0).toISOString() },
+          'onebot:20002': { id: 'snd-bbbbbbbbbb', name: '', setAt: new Date(0).toISOString() },
+        },
       }))
       expect(await runtime.removeAccount('onebot', '10001')).toBe(true)
       expect(runtime.views()).toEqual([])
@@ -135,6 +139,9 @@ describe('im runtime account lifecycle', () => {
       expect(state.imPendingPeers?.[peerKey]).toBeUndefined()
       expect(state.imPeers?.[otherKey]).toBeDefined()
       expect(state.imPendingPeers?.[otherKey]).toBeDefined()
+      // 账号级主人同样是死配置：被删账号的消失，另一个账号的保留。
+      expect(state.imAccountOwners?.['onebot:10001']).toBeUndefined()
+      expect(state.imAccountOwners?.['onebot:20002']?.id).toBe('snd-bbbbbbbbbb')
       expect(await runtime.removeAccount('onebot', '10001')).toBe(false)
     } finally {
       await runtime.dispose()
