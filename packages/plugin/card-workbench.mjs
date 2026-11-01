@@ -2880,6 +2880,11 @@ var DEFAULT_STATE = {
   imOwners: {},
   imAccountOwners: {}
 };
+var STATE_FILE_NAME = "state.json";
+var REGEX_SLICE_FILE_NAME = "regex-scripts.json";
+var FRONTEND_SLICE_FILE_NAME = "frontend-storage.json";
+var STATE_SLICE_VERSION = 1;
+var REGEX_SLICE_KEYS = ["regexScripts", "regexScriptOwners", "regexScriptPresetOwners"];
 function normalizeCharacterVariables(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
   const result = {};
@@ -2975,8 +2980,9 @@ var TavernStore = class _TavernStore {
    */
   characterCache = /* @__PURE__ */ new Map();
   /**
-   * Last parsed state.json; see readState. The entry is deep-frozen and shared:
-   * callers must treat the state they receive as read-only, and mutation throws.
+   * Last assembled state (state.json + its two slices); see readStateSnapshot.
+   * The entry is deep-frozen and shared: callers must treat the state they
+   * receive as read-only, and mutation throws.
    */
   stateCache;
   static async open(root) {
@@ -3730,12 +3736,19 @@ var TavernStore = class _TavernStore {
    *
    * The result is shared and deep-frozen: callers must treat it as read-only;
    * mutation throws. Every session event, pre-step and panel request reads this
-   * state, so a cached parse is served while the state.json fingerprint is
-   * unchanged and only a changed file pays the 3.3 MB read + parse.
+   * state, so a cached assembly is served while all three state files keep
+   * their fingerprints, and only a changed file pays a read + parse.
+   *
+   * The read path never writes: no write, no mkdir, no mtime change. A legacy
+   * state.json (one that still embeds a large table) is assembled in memory
+   * from the values it carries — they are the source of truth until a write
+   * moves them — so a read-only data root keeps serving reads. The layout only
+   * moves on the first write (updateState/patchState), which is rewriting
+   * state.json anyway.
    */
   async getState() {
     await this.stateMutationTail.drain();
-    return this.readState();
+    return (await this.readStateSnapshot()).state;
   }
   /**
    * Same contract as updateState: the returned state is a frozen copy and must be
@@ -3744,9 +3757,28 @@ var TavernStore = class _TavernStore {
    * Ownership: the patch is serialized, never retained. Every object and array in
    * it is copied into the stored bytes, so the caller keeps its tree and may keep
    * mutating it; those edits do not reach the stored state.
+   *
+   * No state clone is taken, and that stays safe only while three invariants
+   * hold:
+   * 1. `base` (current.state) is a deep-frozen snapshot shared with every other
+   *    reader, so spreading it cannot alias anything a caller may still mutate.
+   * 2. `updateState` hands its callback a `structuredClone`, so what the callback
+   *    mutates is never `base` and every in-place edit lands on a fresh
+   *    reference — which is exactly what writeState's `!==` comparison detects.
+   * 3. Every state that leaves this store is deep-frozen again before it is
+   *    returned (writeState), so a caller cannot mutate the shared copy either.
+   * Drop the `structuredClone` and the callback gets `base` itself, so an
+   * in-place edit returned as-is (`s.activeWorlds.push(x); return s`) keeps the
+   * same array reference the write path compares against: it judges the slice
+   * unchanged and silently writes nothing (and with invariant 1 gone it does not
+   * even throw). `patchState` never sees the state, so it needs none of that
+   * protection (a structuredClone of the 2.5 MB state costs ~3.5 ms).
    */
   async patchState(patch) {
-    return this.updateState(() => patch);
+    return this.mutateState(async () => {
+      const current = await this.readStateSnapshot();
+      return await this.writeState({ ...current.state, ...patch }, current);
+    });
   }
   /**
    * Applies one state patch and reports the persisted state.
@@ -3758,22 +3790,64 @@ var TavernStore = class _TavernStore {
    * The returned object describes the bytes on disk, is a fresh copy, and is
    * deep-frozen: callers must treat it as read-only; mutation throws.
    *
-   * The state cache is left empty instead of seeded with `next`. A cache entry
-   * built from a stat taken after the write would let a concurrent writer land
-   * between the two awaits, pinning this instance's older state under the newer
-   * fingerprint — and every later stat would then serve it. Writes are rare and
-   * already rewrite the whole file, so the next getState pays one read + parse.
+   * Write amplification: only the slices whose values changed are rewritten
+   * (reference comparison against the state just read — `update` returns a new
+   * object for anything it replaces), plus either table that a legacy state.json
+   * still embeds. state.json keeps the light keys and is always rewritten.
    */
   async updateState(update) {
     return this.mutateState(async () => {
-      const current = await this.readState();
-      const next = { ...current, ...update(structuredClone(current)) };
-      const bytes = jsonBytes(next);
-      await this.writeAtomic(path.join(this.root, "state.json"), bytes);
-      const persisted = deepFreeze(this.normalizeState(JSON.parse(Buffer.from(bytes).toString("utf8"))));
-      this.stateCache = void 0;
-      return persisted;
+      const current = await this.readStateSnapshot();
+      const next = { ...current.state, ...update(structuredClone(current.state)) };
+      return await this.writeState(next, current);
     });
+  }
+  /**
+   * Writes `next` in the split layout and reports the state a reader builds.
+   *
+   * This is also the migration trigger: a state.json that still embeds a large
+   * table (or a slice orphaned by a first write that died before its commit)
+   * makes the next write materialize that slice, so the layout moves exactly
+   * once per data root, on the first write — never on a read.
+   *
+   * Order is fixed: every touched slice first, state.json last as the commit
+   * point. A slice that landed without its state.json is still the newer copy
+   * on the next read (assembleStatePayload prefers a slice over the same key
+   * still embedded in state.json), so an interrupted write never loses the
+   * patch and never resurrects the old value; a slice write that fails leaves
+   * state.json untouched, so the failure leaves the old state readable.
+   */
+  async writeState(next, current) {
+    const base = current.state;
+    const writeRegex = current.legacy.regex || next.regexScripts !== base.regexScripts || next.regexScriptOwners !== base.regexScriptOwners || next.regexScriptPresetOwners !== base.regexScriptPresetOwners;
+    const writeFrontend = current.legacy.frontend || next.frontendStorage !== base.frontendStorage;
+    const regexFile = path.join(this.root, REGEX_SLICE_FILE_NAME);
+    const frontendFile = path.join(this.root, FRONTEND_SLICE_FILE_NAME);
+    const lightFile = path.join(this.root, STATE_FILE_NAME);
+    const regexBytes = writeRegex ? jsonBytes(toRegexScriptsSlice(next)) : void 0;
+    const frontendBytes = writeFrontend ? jsonBytes(toFrontendStorageSlice(next)) : void 0;
+    if (regexBytes !== void 0) await this.writeAtomic(regexFile, regexBytes);
+    if (frontendBytes !== void 0) await this.writeAtomic(frontendFile, frontendBytes);
+    const lightBytes = jsonBytes(withoutStateSlices(next));
+    await this.writeAtomic(lightFile, lightBytes);
+    const light = parseStateLightFile(lightFile, lightBytes);
+    const regex = regexBytes === void 0 ? toRegexScriptsSlice(next) : parseRegexScriptsSlice(regexFile, regexBytes);
+    const frontend = frontendBytes === void 0 ? toFrontendStorageSlice(next) : parseFrontendStorageSlice(frontendFile, frontendBytes);
+    this.markStateCacheStale();
+    return deepFreeze(this.normalizeState(assembleStatePayload(light, regex, frontend)));
+  }
+  /**
+   * Marks the cached assembly as written past instead of dropping it.
+   *
+   * Dropping the whole entry would re-parse the 2.2 MB regex slice on the next
+   * read; marking only the light half stale re-reads exactly the file this
+   * instance rewrote. The marker is intentionally not replaced by a fresh
+   * cache filled from a post-write stat: another writer can land in between,
+   * and the entry would then pin this instance's state under that writer's
+   * fingerprint for every later read.
+   */
+  markStateCacheStale() {
+    if (this.stateCache !== void 0) this.stateCache = { ...this.stateCache, stale: true };
   }
   /**
    * 解析 regex 脚本并合并进全局状态（scriptName 相同即覆盖）；返回导入的脚本数。
@@ -3985,39 +4059,57 @@ var TavernStore = class _TavernStore {
   }
   /* ------------------------------ 内部 ------------------------------ */
   /**
-   * Reads state.json, or DEFAULT_STATE when it is missing.
+   * Reads state.json with its two slices, or DEFAULT_STATE when none exists.
    *
-   * A warm entry is served after a single stat and is returned by reference:
-   * the returned state is shared and deep-frozen, so callers must treat it as
-   * read-only; mutation throws instead of corrupting every later read. The
-   * fingerprint is the same size+mtimeMs+ctimeMs+ino quartet the chat snapshot
-   * cache uses, so a write from another process or a hand edit invalidates the
-   * entry without any in-process invalidation hook.
+   * Read-only by construction: it stats, reads and parses, and that is all — a
+   * legacy state.json is assembled here but never rewritten, so a read-only
+   * data root keeps working (the migration lands on the next write).
+   *
+   * A warm entry is served after one stat per file and is returned by reference:
+   * the state is shared and deep-frozen, so callers must treat it as read-only;
+   * mutation throws instead of corrupting every later read. Every file carries
+   * the same size+mtimeMs+ctimeMs+ino quartet the chat snapshot cache uses, so a
+   * write from another process, or a hand edit of either state.json or a slice,
+   * invalidates without any in-process invalidation hook.
    */
-  async readState() {
-    const file = path.join(this.root, "state.json");
-    const fingerprint = await statChatFile(file);
-    const cached = this.stateCache;
-    if (cached !== void 0 && sameOptionalFingerprint(cached.fingerprint, fingerprint)) return cached.state;
-    const read = await readChatFile(file);
-    if (read === void 0) {
-      const state2 = deepFreeze(structuredClone(DEFAULT_STATE));
-      this.stateCache = { state: state2 };
-      return state2;
+  async readStateSnapshot() {
+    const lightFile = path.join(this.root, STATE_FILE_NAME);
+    const regexFile = path.join(this.root, REGEX_SLICE_FILE_NAME);
+    const frontendFile = path.join(this.root, FRONTEND_SLICE_FILE_NAME);
+    const [lightFingerprint, regexFingerprint, frontendFingerprint] = await Promise.all([
+      statChatFile(lightFile),
+      statChatFile(regexFile),
+      statChatFile(frontendFile)
+    ]);
+    const reusable = this.stateCache !== void 0 && !this.stateCache.stale ? this.stateCache : void 0;
+    if (reusable !== void 0 && sameOptionalFingerprint(reusable.light.fingerprint, lightFingerprint) && sameOptionalFingerprint(reusable.regex.fingerprint, regexFingerprint) && sameOptionalFingerprint(reusable.frontend.fingerprint, frontendFingerprint)) {
+      return { state: reusable.state, legacy: reusable.legacy };
     }
-    const state = deepFreeze(this.normalizeState(
-      JSON.parse(Buffer.from(read.bytes).toString("utf8"))
+    const cached = this.stateCache;
+    const [light, regex, frontend] = await Promise.all([
+      loadStateFile(lightFile, lightFingerprint, reusable?.light, parseStateLightFile),
+      loadStateFile(regexFile, regexFingerprint, cached?.regex, parseRegexScriptsSlice),
+      loadStateFile(frontendFile, frontendFingerprint, cached?.frontend, parseFrontendStorageSlice)
+    ]);
+    const legacy = slicesToMaterialize(
+      light.entry.payload,
+      regex.entry.payload !== void 0,
+      frontend.entry.payload !== void 0
+    );
+    const state = light.entry.payload === void 0 ? deepFreeze(structuredClone(DEFAULT_STATE)) : deepFreeze(this.normalizeState(
+      assembleStatePayload(light.entry.payload, regex.entry.payload, frontend.entry.payload)
     ));
-    this.stateCache = read.fingerprint === void 0 ? void 0 : { fingerprint: read.fingerprint, state };
-    return state;
+    this.stateCache = light.verified && regex.verified && frontend.verified ? { stale: false, state, legacy, light: light.entry, regex: regex.entry, frontend: frontend.entry } : void 0;
+    return { state, legacy };
   }
   /**
    * Applies persisted-state defaults and normalizers to one parsed payload.
    *
-   * This is the single definition of what a state read looks like: readState
-   * feeds it the parsed file, and updateState feeds it the bytes it just wrote
-   * so the value it reports is the one a later read would build (a raw patch can
-   * carry legacy binding shapes that only this pass normalizes).
+   * This is the single definition of what a state read looks like: the read
+   * path feeds it state.json merged with its slices, and writeState feeds it the
+   * bytes just written so the value it reports is the one a later read would
+   * build (a raw patch can carry legacy binding shapes that only this pass
+   * normalizes).
    */
   normalizeState(parsed) {
     const { pipelineMode: _legacyPipelineMode, textCompletion: _legacyTextCompletion, ...rest } = parsed;
@@ -4588,6 +4680,110 @@ async function readChatFile(file) {
     last = bytes;
   }
   return last === void 0 ? void 0 : { bytes: last };
+}
+async function loadStateFile(file, fingerprint, cached, parse) {
+  if (cached !== void 0 && sameOptionalFingerprint(cached.fingerprint, fingerprint)) {
+    return { entry: cached, verified: true };
+  }
+  const read = await readChatFile(file);
+  if (read === void 0) return { entry: {}, verified: true };
+  return {
+    entry: { fingerprint: read.fingerprint, payload: parse(file, read.bytes) },
+    verified: read.fingerprint !== void 0
+  };
+}
+function hasOwnStateKey(value, key) {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+function parseStateFileJson(file, bytes, label) {
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
+  } catch (cause) {
+    throw new Error(`${label} is not valid JSON: ${file}`, { cause });
+  }
+  if (!isPlainRecord(parsed)) {
+    throw new Error(`${label} has an invalid shape (expected a JSON object): ${file}`);
+  }
+  return parsed;
+}
+function parseStateLightFile(file, bytes) {
+  return parseStateFileJson(file, bytes, "tavern state file");
+}
+function parseRegexScriptsSlice(file, bytes) {
+  const parsed = parseStateFileJson(file, bytes, "tavern regex slice");
+  const version = parsed["version"];
+  if (version !== STATE_SLICE_VERSION) {
+    throw new Error(
+      `tavern regex slice has unsupported version ${String(version)} (expected ${STATE_SLICE_VERSION}): ${file}`
+    );
+  }
+  return {
+    version: STATE_SLICE_VERSION,
+    ...hasOwnStateKey(parsed, "regexScripts") ? { regexScripts: parsed["regexScripts"] } : {},
+    ...hasOwnStateKey(parsed, "regexScriptOwners") ? { regexScriptOwners: parsed["regexScriptOwners"] } : {},
+    ...hasOwnStateKey(parsed, "regexScriptPresetOwners") ? { regexScriptPresetOwners: parsed["regexScriptPresetOwners"] } : {}
+  };
+}
+function parseFrontendStorageSlice(file, bytes) {
+  const parsed = parseStateFileJson(file, bytes, "tavern frontend storage slice");
+  const version = parsed["version"];
+  if (version !== STATE_SLICE_VERSION) {
+    throw new Error(
+      `tavern frontend storage slice has unsupported version ${String(version)} (expected ${STATE_SLICE_VERSION}): ${file}`
+    );
+  }
+  return {
+    version: STATE_SLICE_VERSION,
+    ...hasOwnStateKey(parsed, "frontendStorage") ? { frontendStorage: parsed["frontendStorage"] } : {}
+  };
+}
+function assembleStatePayload(light, regex, frontend) {
+  const merged = { ...light ?? {} };
+  if (regex !== void 0) {
+    for (const key of REGEX_SLICE_KEYS) delete merged[key];
+    if (hasOwnStateKey(regex, "regexScripts")) merged["regexScripts"] = regex.regexScripts;
+    if (hasOwnStateKey(regex, "regexScriptOwners")) merged["regexScriptOwners"] = regex.regexScriptOwners;
+    if (hasOwnStateKey(regex, "regexScriptPresetOwners")) {
+      merged["regexScriptPresetOwners"] = regex.regexScriptPresetOwners;
+    }
+  }
+  if (frontend !== void 0) {
+    delete merged["frontendStorage"];
+    if (hasOwnStateKey(frontend, "frontendStorage")) merged["frontendStorage"] = frontend.frontendStorage;
+  }
+  return merged;
+}
+function legacyStateKeys(light) {
+  if (light === void 0) return { regex: false, frontend: false };
+  return {
+    regex: REGEX_SLICE_KEYS.some((key) => hasOwnStateKey(light, key)),
+    frontend: hasOwnStateKey(light, "frontendStorage")
+  };
+}
+function slicesToMaterialize(light, regexSliceFound, frontendSliceFound) {
+  if (light !== void 0) return legacyStateKeys(light);
+  return { regex: regexSliceFound, frontend: frontendSliceFound };
+}
+function withoutStateSlices(state) {
+  const light = { ...state };
+  for (const key of REGEX_SLICE_KEYS) delete light[key];
+  delete light["frontendStorage"];
+  return light;
+}
+function toRegexScriptsSlice(state) {
+  return {
+    version: STATE_SLICE_VERSION,
+    regexScripts: state.regexScripts,
+    ...state.regexScriptOwners === void 0 ? {} : { regexScriptOwners: state.regexScriptOwners },
+    ...state.regexScriptPresetOwners === void 0 ? {} : { regexScriptPresetOwners: state.regexScriptPresetOwners }
+  };
+}
+function toFrontendStorageSlice(state) {
+  return {
+    version: STATE_SLICE_VERSION,
+    ...state.frontendStorage === void 0 ? {} : { frontendStorage: state.frontendStorage }
+  };
 }
 function jsonBytes(obj) {
   return new Uint8Array(Buffer.from(JSON.stringify(obj, null, 2), "utf8"));

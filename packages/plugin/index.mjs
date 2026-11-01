@@ -2832,10 +2832,114 @@ async function readChatFile(file) {
   }
   return last === void 0 ? void 0 : { bytes: last };
 }
+async function loadStateFile(file, fingerprint, cached, parse) {
+  if (cached !== void 0 && sameOptionalFingerprint(cached.fingerprint, fingerprint)) {
+    return { entry: cached, verified: true };
+  }
+  const read = await readChatFile(file);
+  if (read === void 0) return { entry: {}, verified: true };
+  return {
+    entry: { fingerprint: read.fingerprint, payload: parse(file, read.bytes) },
+    verified: read.fingerprint !== void 0
+  };
+}
+function hasOwnStateKey(value, key) {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+function parseStateFileJson(file, bytes, label) {
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
+  } catch (cause) {
+    throw new Error(`${label} is not valid JSON: ${file}`, { cause });
+  }
+  if (!isPlainRecord(parsed)) {
+    throw new Error(`${label} has an invalid shape (expected a JSON object): ${file}`);
+  }
+  return parsed;
+}
+function parseStateLightFile(file, bytes) {
+  return parseStateFileJson(file, bytes, "tavern state file");
+}
+function parseRegexScriptsSlice(file, bytes) {
+  const parsed = parseStateFileJson(file, bytes, "tavern regex slice");
+  const version = parsed["version"];
+  if (version !== STATE_SLICE_VERSION) {
+    throw new Error(
+      `tavern regex slice has unsupported version ${String(version)} (expected ${STATE_SLICE_VERSION}): ${file}`
+    );
+  }
+  return {
+    version: STATE_SLICE_VERSION,
+    ...hasOwnStateKey(parsed, "regexScripts") ? { regexScripts: parsed["regexScripts"] } : {},
+    ...hasOwnStateKey(parsed, "regexScriptOwners") ? { regexScriptOwners: parsed["regexScriptOwners"] } : {},
+    ...hasOwnStateKey(parsed, "regexScriptPresetOwners") ? { regexScriptPresetOwners: parsed["regexScriptPresetOwners"] } : {}
+  };
+}
+function parseFrontendStorageSlice(file, bytes) {
+  const parsed = parseStateFileJson(file, bytes, "tavern frontend storage slice");
+  const version = parsed["version"];
+  if (version !== STATE_SLICE_VERSION) {
+    throw new Error(
+      `tavern frontend storage slice has unsupported version ${String(version)} (expected ${STATE_SLICE_VERSION}): ${file}`
+    );
+  }
+  return {
+    version: STATE_SLICE_VERSION,
+    ...hasOwnStateKey(parsed, "frontendStorage") ? { frontendStorage: parsed["frontendStorage"] } : {}
+  };
+}
+function assembleStatePayload(light, regex, frontend) {
+  const merged = { ...light ?? {} };
+  if (regex !== void 0) {
+    for (const key of REGEX_SLICE_KEYS) delete merged[key];
+    if (hasOwnStateKey(regex, "regexScripts")) merged["regexScripts"] = regex.regexScripts;
+    if (hasOwnStateKey(regex, "regexScriptOwners")) merged["regexScriptOwners"] = regex.regexScriptOwners;
+    if (hasOwnStateKey(regex, "regexScriptPresetOwners")) {
+      merged["regexScriptPresetOwners"] = regex.regexScriptPresetOwners;
+    }
+  }
+  if (frontend !== void 0) {
+    delete merged["frontendStorage"];
+    if (hasOwnStateKey(frontend, "frontendStorage")) merged["frontendStorage"] = frontend.frontendStorage;
+  }
+  return merged;
+}
+function legacyStateKeys(light) {
+  if (light === void 0) return { regex: false, frontend: false };
+  return {
+    regex: REGEX_SLICE_KEYS.some((key) => hasOwnStateKey(light, key)),
+    frontend: hasOwnStateKey(light, "frontendStorage")
+  };
+}
+function slicesToMaterialize(light, regexSliceFound, frontendSliceFound) {
+  if (light !== void 0) return legacyStateKeys(light);
+  return { regex: regexSliceFound, frontend: frontendSliceFound };
+}
+function withoutStateSlices(state) {
+  const light = { ...state };
+  for (const key of REGEX_SLICE_KEYS) delete light[key];
+  delete light["frontendStorage"];
+  return light;
+}
+function toRegexScriptsSlice(state) {
+  return {
+    version: STATE_SLICE_VERSION,
+    regexScripts: state.regexScripts,
+    ...state.regexScriptOwners === void 0 ? {} : { regexScriptOwners: state.regexScriptOwners },
+    ...state.regexScriptPresetOwners === void 0 ? {} : { regexScriptPresetOwners: state.regexScriptPresetOwners }
+  };
+}
+function toFrontendStorageSlice(state) {
+  return {
+    version: STATE_SLICE_VERSION,
+    ...state.frontendStorage === void 0 ? {} : { frontendStorage: state.frontendStorage }
+  };
+}
 function jsonBytes(obj) {
   return new Uint8Array(Buffer.from(JSON.stringify(obj, null, 2), "utf8"));
 }
-var LOCAL_EMBED_PRECISIONS, MAX_CHAT_SNAPSHOT_CACHE_ENTRIES, MAX_CHARACTER_CACHE_ENTRIES, CHAT_SNAPSHOT_READ_ATTEMPTS, ChatRevisionConflictError, DEFAULT_STATE, MEMORY_EMBED_ENV_NAME, TavernStore;
+var LOCAL_EMBED_PRECISIONS, MAX_CHAT_SNAPSHOT_CACHE_ENTRIES, MAX_CHARACTER_CACHE_ENTRIES, CHAT_SNAPSHOT_READ_ATTEMPTS, ChatRevisionConflictError, DEFAULT_STATE, STATE_FILE_NAME, REGEX_SLICE_FILE_NAME, FRONTEND_SLICE_FILE_NAME, STATE_SLICE_VERSION, REGEX_SLICE_KEYS, MEMORY_EMBED_ENV_NAME, TavernStore;
 var init_store = __esm({
   "packages/tavern-store/src/store.ts"() {
     "use strict";
@@ -2899,6 +3003,11 @@ var init_store = __esm({
       imOwners: {},
       imAccountOwners: {}
     };
+    STATE_FILE_NAME = "state.json";
+    REGEX_SLICE_FILE_NAME = "regex-scripts.json";
+    FRONTEND_SLICE_FILE_NAME = "frontend-storage.json";
+    STATE_SLICE_VERSION = 1;
+    REGEX_SLICE_KEYS = ["regexScripts", "regexScriptOwners", "regexScriptPresetOwners"];
     MEMORY_EMBED_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,255}$/;
     TavernStore = class _TavernStore {
       constructor(root) {
@@ -2916,8 +3025,9 @@ var init_store = __esm({
        */
       characterCache = /* @__PURE__ */ new Map();
       /**
-       * Last parsed state.json; see readState. The entry is deep-frozen and shared:
-       * callers must treat the state they receive as read-only, and mutation throws.
+       * Last assembled state (state.json + its two slices); see readStateSnapshot.
+       * The entry is deep-frozen and shared: callers must treat the state they
+       * receive as read-only, and mutation throws.
        */
       stateCache;
       static async open(root) {
@@ -3671,12 +3781,19 @@ var init_store = __esm({
        *
        * The result is shared and deep-frozen: callers must treat it as read-only;
        * mutation throws. Every session event, pre-step and panel request reads this
-       * state, so a cached parse is served while the state.json fingerprint is
-       * unchanged and only a changed file pays the 3.3 MB read + parse.
+       * state, so a cached assembly is served while all three state files keep
+       * their fingerprints, and only a changed file pays a read + parse.
+       *
+       * The read path never writes: no write, no mkdir, no mtime change. A legacy
+       * state.json (one that still embeds a large table) is assembled in memory
+       * from the values it carries — they are the source of truth until a write
+       * moves them — so a read-only data root keeps serving reads. The layout only
+       * moves on the first write (updateState/patchState), which is rewriting
+       * state.json anyway.
        */
       async getState() {
         await this.stateMutationTail.drain();
-        return this.readState();
+        return (await this.readStateSnapshot()).state;
       }
       /**
        * Same contract as updateState: the returned state is a frozen copy and must be
@@ -3685,9 +3802,28 @@ var init_store = __esm({
        * Ownership: the patch is serialized, never retained. Every object and array in
        * it is copied into the stored bytes, so the caller keeps its tree and may keep
        * mutating it; those edits do not reach the stored state.
+       *
+       * No state clone is taken, and that stays safe only while three invariants
+       * hold:
+       * 1. `base` (current.state) is a deep-frozen snapshot shared with every other
+       *    reader, so spreading it cannot alias anything a caller may still mutate.
+       * 2. `updateState` hands its callback a `structuredClone`, so what the callback
+       *    mutates is never `base` and every in-place edit lands on a fresh
+       *    reference — which is exactly what writeState's `!==` comparison detects.
+       * 3. Every state that leaves this store is deep-frozen again before it is
+       *    returned (writeState), so a caller cannot mutate the shared copy either.
+       * Drop the `structuredClone` and the callback gets `base` itself, so an
+       * in-place edit returned as-is (`s.activeWorlds.push(x); return s`) keeps the
+       * same array reference the write path compares against: it judges the slice
+       * unchanged and silently writes nothing (and with invariant 1 gone it does not
+       * even throw). `patchState` never sees the state, so it needs none of that
+       * protection (a structuredClone of the 2.5 MB state costs ~3.5 ms).
        */
       async patchState(patch) {
-        return this.updateState(() => patch);
+        return this.mutateState(async () => {
+          const current = await this.readStateSnapshot();
+          return await this.writeState({ ...current.state, ...patch }, current);
+        });
       }
       /**
        * Applies one state patch and reports the persisted state.
@@ -3699,22 +3835,64 @@ var init_store = __esm({
        * The returned object describes the bytes on disk, is a fresh copy, and is
        * deep-frozen: callers must treat it as read-only; mutation throws.
        *
-       * The state cache is left empty instead of seeded with `next`. A cache entry
-       * built from a stat taken after the write would let a concurrent writer land
-       * between the two awaits, pinning this instance's older state under the newer
-       * fingerprint — and every later stat would then serve it. Writes are rare and
-       * already rewrite the whole file, so the next getState pays one read + parse.
+       * Write amplification: only the slices whose values changed are rewritten
+       * (reference comparison against the state just read — `update` returns a new
+       * object for anything it replaces), plus either table that a legacy state.json
+       * still embeds. state.json keeps the light keys and is always rewritten.
        */
       async updateState(update) {
         return this.mutateState(async () => {
-          const current = await this.readState();
-          const next = { ...current, ...update(structuredClone(current)) };
-          const bytes = jsonBytes(next);
-          await this.writeAtomic(path.join(this.root, "state.json"), bytes);
-          const persisted = deepFreeze(this.normalizeState(JSON.parse(Buffer.from(bytes).toString("utf8"))));
-          this.stateCache = void 0;
-          return persisted;
+          const current = await this.readStateSnapshot();
+          const next = { ...current.state, ...update(structuredClone(current.state)) };
+          return await this.writeState(next, current);
         });
+      }
+      /**
+       * Writes `next` in the split layout and reports the state a reader builds.
+       *
+       * This is also the migration trigger: a state.json that still embeds a large
+       * table (or a slice orphaned by a first write that died before its commit)
+       * makes the next write materialize that slice, so the layout moves exactly
+       * once per data root, on the first write — never on a read.
+       *
+       * Order is fixed: every touched slice first, state.json last as the commit
+       * point. A slice that landed without its state.json is still the newer copy
+       * on the next read (assembleStatePayload prefers a slice over the same key
+       * still embedded in state.json), so an interrupted write never loses the
+       * patch and never resurrects the old value; a slice write that fails leaves
+       * state.json untouched, so the failure leaves the old state readable.
+       */
+      async writeState(next, current) {
+        const base = current.state;
+        const writeRegex = current.legacy.regex || next.regexScripts !== base.regexScripts || next.regexScriptOwners !== base.regexScriptOwners || next.regexScriptPresetOwners !== base.regexScriptPresetOwners;
+        const writeFrontend = current.legacy.frontend || next.frontendStorage !== base.frontendStorage;
+        const regexFile = path.join(this.root, REGEX_SLICE_FILE_NAME);
+        const frontendFile = path.join(this.root, FRONTEND_SLICE_FILE_NAME);
+        const lightFile = path.join(this.root, STATE_FILE_NAME);
+        const regexBytes = writeRegex ? jsonBytes(toRegexScriptsSlice(next)) : void 0;
+        const frontendBytes = writeFrontend ? jsonBytes(toFrontendStorageSlice(next)) : void 0;
+        if (regexBytes !== void 0) await this.writeAtomic(regexFile, regexBytes);
+        if (frontendBytes !== void 0) await this.writeAtomic(frontendFile, frontendBytes);
+        const lightBytes = jsonBytes(withoutStateSlices(next));
+        await this.writeAtomic(lightFile, lightBytes);
+        const light = parseStateLightFile(lightFile, lightBytes);
+        const regex = regexBytes === void 0 ? toRegexScriptsSlice(next) : parseRegexScriptsSlice(regexFile, regexBytes);
+        const frontend = frontendBytes === void 0 ? toFrontendStorageSlice(next) : parseFrontendStorageSlice(frontendFile, frontendBytes);
+        this.markStateCacheStale();
+        return deepFreeze(this.normalizeState(assembleStatePayload(light, regex, frontend)));
+      }
+      /**
+       * Marks the cached assembly as written past instead of dropping it.
+       *
+       * Dropping the whole entry would re-parse the 2.2 MB regex slice on the next
+       * read; marking only the light half stale re-reads exactly the file this
+       * instance rewrote. The marker is intentionally not replaced by a fresh
+       * cache filled from a post-write stat: another writer can land in between,
+       * and the entry would then pin this instance's state under that writer's
+       * fingerprint for every later read.
+       */
+      markStateCacheStale() {
+        if (this.stateCache !== void 0) this.stateCache = { ...this.stateCache, stale: true };
       }
       /**
        * 解析 regex 脚本并合并进全局状态（scriptName 相同即覆盖）；返回导入的脚本数。
@@ -3926,39 +4104,57 @@ var init_store = __esm({
       }
       /* ------------------------------ 内部 ------------------------------ */
       /**
-       * Reads state.json, or DEFAULT_STATE when it is missing.
+       * Reads state.json with its two slices, or DEFAULT_STATE when none exists.
        *
-       * A warm entry is served after a single stat and is returned by reference:
-       * the returned state is shared and deep-frozen, so callers must treat it as
-       * read-only; mutation throws instead of corrupting every later read. The
-       * fingerprint is the same size+mtimeMs+ctimeMs+ino quartet the chat snapshot
-       * cache uses, so a write from another process or a hand edit invalidates the
-       * entry without any in-process invalidation hook.
+       * Read-only by construction: it stats, reads and parses, and that is all — a
+       * legacy state.json is assembled here but never rewritten, so a read-only
+       * data root keeps working (the migration lands on the next write).
+       *
+       * A warm entry is served after one stat per file and is returned by reference:
+       * the state is shared and deep-frozen, so callers must treat it as read-only;
+       * mutation throws instead of corrupting every later read. Every file carries
+       * the same size+mtimeMs+ctimeMs+ino quartet the chat snapshot cache uses, so a
+       * write from another process, or a hand edit of either state.json or a slice,
+       * invalidates without any in-process invalidation hook.
        */
-      async readState() {
-        const file = path.join(this.root, "state.json");
-        const fingerprint = await statChatFile(file);
-        const cached = this.stateCache;
-        if (cached !== void 0 && sameOptionalFingerprint(cached.fingerprint, fingerprint)) return cached.state;
-        const read = await readChatFile(file);
-        if (read === void 0) {
-          const state2 = deepFreeze(structuredClone(DEFAULT_STATE));
-          this.stateCache = { state: state2 };
-          return state2;
+      async readStateSnapshot() {
+        const lightFile = path.join(this.root, STATE_FILE_NAME);
+        const regexFile = path.join(this.root, REGEX_SLICE_FILE_NAME);
+        const frontendFile = path.join(this.root, FRONTEND_SLICE_FILE_NAME);
+        const [lightFingerprint, regexFingerprint, frontendFingerprint] = await Promise.all([
+          statChatFile(lightFile),
+          statChatFile(regexFile),
+          statChatFile(frontendFile)
+        ]);
+        const reusable = this.stateCache !== void 0 && !this.stateCache.stale ? this.stateCache : void 0;
+        if (reusable !== void 0 && sameOptionalFingerprint(reusable.light.fingerprint, lightFingerprint) && sameOptionalFingerprint(reusable.regex.fingerprint, regexFingerprint) && sameOptionalFingerprint(reusable.frontend.fingerprint, frontendFingerprint)) {
+          return { state: reusable.state, legacy: reusable.legacy };
         }
-        const state = deepFreeze(this.normalizeState(
-          JSON.parse(Buffer.from(read.bytes).toString("utf8"))
+        const cached = this.stateCache;
+        const [light, regex, frontend] = await Promise.all([
+          loadStateFile(lightFile, lightFingerprint, reusable?.light, parseStateLightFile),
+          loadStateFile(regexFile, regexFingerprint, cached?.regex, parseRegexScriptsSlice),
+          loadStateFile(frontendFile, frontendFingerprint, cached?.frontend, parseFrontendStorageSlice)
+        ]);
+        const legacy = slicesToMaterialize(
+          light.entry.payload,
+          regex.entry.payload !== void 0,
+          frontend.entry.payload !== void 0
+        );
+        const state = light.entry.payload === void 0 ? deepFreeze(structuredClone(DEFAULT_STATE)) : deepFreeze(this.normalizeState(
+          assembleStatePayload(light.entry.payload, regex.entry.payload, frontend.entry.payload)
         ));
-        this.stateCache = read.fingerprint === void 0 ? void 0 : { fingerprint: read.fingerprint, state };
-        return state;
+        this.stateCache = light.verified && regex.verified && frontend.verified ? { stale: false, state, legacy, light: light.entry, regex: regex.entry, frontend: frontend.entry } : void 0;
+        return { state, legacy };
       }
       /**
        * Applies persisted-state defaults and normalizers to one parsed payload.
        *
-       * This is the single definition of what a state read looks like: readState
-       * feeds it the parsed file, and updateState feeds it the bytes it just wrote
-       * so the value it reports is the one a later read would build (a raw patch can
-       * carry legacy binding shapes that only this pass normalizes).
+       * This is the single definition of what a state read looks like: the read
+       * path feeds it state.json merged with its slices, and writeState feeds it the
+       * bytes just written so the value it reports is the one a later read would
+       * build (a raw patch can carry legacy binding shapes that only this pass
+       * normalizes).
        */
       normalizeState(parsed) {
         const { pipelineMode: _legacyPipelineMode, textCompletion: _legacyTextCompletion, ...rest } = parsed;
@@ -10403,27 +10599,86 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("9a9fd58") : void 0;
+  const commit = true ? normalizeCommit("2319ac2") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
-  const fallback = normalizeCommit(envCompat("COMMIT") ?? buildFallback) ?? "unknown";
   const repositoryRoot = resolve(import.meta.dirname, "..", "..");
   const packagePath = relative(repositoryRoot, import.meta.dirname).replaceAll("\\", "/");
-  if (packagePath !== "packages/plugin") return fallback;
-  const git = (args) => execFileSync("git", args, {
-    cwd: repositoryRoot,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: 2e3,
-    windowsHide: true
-  }).trim();
+  if (packagePath !== "packages/plugin") return commitFallback(buildFallback);
+  return resolveRepositoryCommit(repositoryRoot, buildFallback, readCommitViaGit);
+}
+function resolveRepositoryCommit(repositoryRoot, buildFallback, readFallbackCommit) {
+  const checkout = readGitCheckout(repositoryRoot);
+  if (checkout === void 0) return commitFallback(buildFallback);
+  return readCheckoutCommit(checkout) ?? readFallbackCommit(repositoryRoot) ?? commitFallback(buildFallback);
+}
+function readGitCheckout(repositoryRoot) {
+  const dotGit = resolve(repositoryRoot, ".git");
+  const pointer = readTextFile(dotGit);
+  if (pointer === void 0) return checkoutAt(dotGit);
+  const pointedAt = /^gitdir:[ \t]*(.*)$/m.exec(pointer)?.[1]?.trim();
+  if (pointedAt === void 0 || pointedAt === "") return void 0;
+  return checkoutAt(resolve(repositoryRoot, pointedAt));
+}
+function checkoutAt(gitDir) {
+  const head = readTextFile(resolve(gitDir, "HEAD"))?.trim();
+  if (head === void 0 || head === "") return void 0;
+  return { gitDir, commonDir: commonDirectory(gitDir), head };
+}
+function commonDirectory(gitDir) {
+  const pointer = readTextFile(resolve(gitDir, "commondir"))?.trim();
+  if (pointer === void 0 || pointer === "") return gitDir;
+  return resolve(gitDir, pointer);
+}
+function readCheckoutCommit(checkout) {
+  if (!checkout.head.startsWith("ref:")) return readObjectId(checkout.head);
+  const ref = checkout.head.slice("ref:".length).trim();
+  if (ref === "") return void 0;
+  return readLooseRef(checkout.gitDir, ref) ?? readLooseRef(checkout.commonDir, ref) ?? readPackedRef(checkout.commonDir, ref);
+}
+function readCommitViaGit(repositoryRoot) {
   try {
-    const gitRoot = resolve(git(["rev-parse", "--show-toplevel"]));
-    if (relative(repositoryRoot, gitRoot) !== "") return fallback;
-    return normalizeCommit(git(["rev-parse", "--short=7", "HEAD"])) ?? fallback;
+    const output = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 2e3,
+      windowsHide: true
+    });
+    return normalizeCommit(output);
   } catch {
-    return fallback;
+    return void 0;
+  }
+}
+function readLooseRef(gitDir, ref) {
+  const value = readTextFile(resolve(gitDir, ref));
+  return value === void 0 ? void 0 : readObjectId(value);
+}
+function readPackedRef(commonDir, ref) {
+  const packed = readTextFile(resolve(commonDir, "packed-refs"));
+  if (packed === void 0) return void 0;
+  for (const line of packed.split("\n")) {
+    if (line.startsWith("#") || line.startsWith("^")) continue;
+    const [id, name2] = line.trim().split(/\s+/);
+    if (id === void 0 || name2 !== ref) continue;
+    const commit = readObjectId(id);
+    if (commit !== void 0) return commit;
+  }
+  return void 0;
+}
+function readObjectId(value) {
+  const id = value.trim();
+  return /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i.test(id) ? id.slice(0, 7).toLowerCase() : void 0;
+}
+function commitFallback(buildFallback) {
+  return normalizeCommit(envCompat("COMMIT") ?? buildFallback) ?? "unknown";
+}
+function readTextFile(path12) {
+  try {
+    return readFileSync(path12, "utf8");
+  } catch {
+    return void 0;
   }
 }
 function normalizeCommit(value) {
@@ -10443,17 +10698,17 @@ var init_build_info = __esm({
 // packages/plugin/src/dsh-home.ts
 import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join as join9, resolve as resolve2 } from "node:path";
+import { join as join10, resolve as resolve2 } from "node:path";
 function dshHomePath(...segments) {
   const configured = process.env.DSH_HOME?.trim();
-  return join9(resolve2(configured || join9(homedir(), ".dsh")), ...segments);
+  return join10(resolve2(configured || join10(homedir(), ".dsh")), ...segments);
 }
 function tavernDataRoot(...segments) {
   const next = dshHomePath(TAVERN_DATA_DIR);
-  if (holdsTavernData(next)) return join9(next, ...segments);
+  if (holdsTavernData(next)) return join10(next, ...segments);
   const legacy = dshHomePath(LEGACY_TAVERN_DATA_DIR);
-  if (holdsTavernData(legacy)) return join9(legacy, ...segments);
-  return join9(next, ...segments);
+  if (holdsTavernData(legacy)) return join10(legacy, ...segments);
+  return join10(next, ...segments);
 }
 function holdsTavernData(root) {
   try {
@@ -12779,7 +13034,7 @@ var init_sources = __esm({
 // packages/plugin/src/mods/install.ts
 import { execFile as execFile3 } from "node:child_process";
 import { cpSync, existsSync, mkdtempSync, readFileSync as readFileSync2, rmSync } from "node:fs";
-import { join as join10 } from "node:path";
+import { join as join11 } from "node:path";
 import { tmpdir } from "node:os";
 function parseGitSource(input) {
   const text = typeof input === "string" ? input.trim() : "";
@@ -12854,13 +13109,13 @@ async function installModFromGit(options) {
       throw new Error(`repository has no readable mod.json at its root (${source.repository}): ${cause instanceof Error ? cause.message : String(cause)}`);
     }
   }
-  const workRoot = mkdtempSync(join10(tmpdir(), "dsh-soulmojito-modinstall-"));
+  const workRoot = mkdtempSync(join11(tmpdir(), "dsh-soulmojito-modinstall-"));
   try {
-    const cloneDir = join10(workRoot, "clone");
+    const cloneDir = join11(workRoot, "clone");
     await (options.cloneImpl ?? gitClone)(source.cloneUrl, cloneDir, source.ref, timeoutMs);
     let manifestRaw;
     try {
-      manifestRaw = JSON.parse(readFileSync2(join10(cloneDir, "mod.json"), "utf8"));
+      manifestRaw = JSON.parse(readFileSync2(join11(cloneDir, "mod.json"), "utf8"));
     } catch (cause) {
       throw new Error(`repository has no readable mod.json at its root: ${cause instanceof Error ? cause.message : String(cause)}`);
     }
@@ -12868,7 +13123,7 @@ async function installModFromGit(options) {
     const check = checkModManifest(manifestRaw, { directory: idField });
     if (!check.ok) throw new Error(`invalid mod.json: ${check.errors.join("; ")}`);
     const modId = check.manifest.id;
-    const target = join10(options.root, "mods", modId);
+    const target = join11(options.root, "mods", modId);
     const replaced = existsSync(target);
     if (replaced && options.force !== true) {
       throw new Error(`mod '${modId}' is already installed (POST again with force to replace it)`);
@@ -12891,7 +13146,7 @@ var init_install = __esm({
 // packages/plugin/src/mods/host.ts
 import { promises as fs13 } from "node:fs";
 import { mkdir as mkdir3 } from "node:fs/promises";
-import { isAbsolute, join as join11, relative as relative2, resolve as resolve3 } from "node:path";
+import { isAbsolute, join as join12, relative as relative2, resolve as resolve3 } from "node:path";
 import { pathToFileURL as pathToFileURL2 } from "node:url";
 function declaredSurfacesOf(manifest10) {
   return {
@@ -13094,8 +13349,8 @@ var init_host = __esm({
     ModHost = class _ModHost {
       constructor(options) {
         this.options = options;
-        this.modsRoot = join11(options.root, "mods");
-        this.audit = new ModAuditLog(join11(this.modsRoot, "audit.jsonl"));
+        this.modsRoot = join12(options.root, "mods");
+        this.audit = new ModAuditLog(join12(this.modsRoot, "audit.jsonl"));
         this.logger = options.ctx?.logger;
         this.audit.setLogger((message) => this.logger?.warn?.(message));
       }
@@ -13330,7 +13585,7 @@ var init_host = __esm({
           const id = directory;
           let raw;
           try {
-            raw = JSON.parse(await fs13.readFile(join11(this.modsRoot, directory, "mod.json"), "utf8"));
+            raw = JSON.parse(await fs13.readFile(join12(this.modsRoot, directory, "mod.json"), "utf8"));
           } catch (cause) {
             const message = `mod.json is missing or unreadable: ${cause instanceof Error ? cause.message : String(cause)}`;
             nextBroken.set(id, { message, ...salvageManifestFields(void 0) });
@@ -13369,7 +13624,7 @@ var init_host = __esm({
             await this.audit.record(id, "skip", message);
             continue;
           }
-          nextDiscovered.set(id, { manifest: manifest10, directory: join11(this.modsRoot, directory), entryPath });
+          nextDiscovered.set(id, { manifest: manifest10, directory: join12(this.modsRoot, directory), entryPath });
         }
         this.discovered.clear();
         this.broken.clear();
@@ -13393,14 +13648,14 @@ var init_host = __esm({
           offRegistrations: [],
           surfaces: { hooks: /* @__PURE__ */ new Set(), tools: /* @__PURE__ */ new Set(), http: /* @__PURE__ */ new Set() },
           buttons: /* @__PURE__ */ new Map(),
-          storage: new ModStorage(join11(disc.directory, "data", "state.json"), {
+          storage: new ModStorage(join12(disc.directory, "data", "state.json"), {
             onQuota: (message) => {
               void this.audit.record(id, "storage-quota", message);
             }
           })
         };
         try {
-          await mkdir3(join11(disc.directory, "data"), { recursive: true });
+          await mkdir3(join12(disc.directory, "data"), { recursive: true });
           const url = pathToFileURL2(disc.entryPath).href + (cacheBust ? `?t=${Date.now()}` : "");
           const module = await import(url);
           if (typeof module?.setup !== "function") {
@@ -13756,9 +14011,9 @@ var init_handle2 = __esm({
 import { spawn } from "node:child_process";
 import { copyFileSync, existsSync as existsSync2, mkdirSync, mkdtempSync as mkdtempSync2, readdirSync as readdirSync2, readFileSync as readFileSync3, renameSync, rmSync as rmSync2, statSync, writeFileSync } from "node:fs";
 import { tmpdir as tmpdir2 } from "node:os";
-import { dirname as dirname8, join as join12 } from "node:path";
+import { dirname as dirname8, join as join13 } from "node:path";
 function shippedEntries(sourceDir) {
-  const manifest10 = join12(sourceDir, "package.json");
+  const manifest10 = join13(sourceDir, "package.json");
   if (!existsSync2(manifest10)) throw new Error("packages/plugin/package.json is missing from the checkout");
   const files = JSON.parse(readFileSync3(manifest10, "utf8"))?.files;
   if (!Array.isArray(files) || files.length === 0 || !files.every((entry) => typeof entry === "string")) {
@@ -13913,7 +14168,7 @@ function resolveDesktopCli(argv = process.argv, execPath = process.execPath, exi
   }
   const runtimeDir = typeof argv[2] === "string" ? argv[2].trim() : "";
   if (runtimeDir === "") return null;
-  const cli = join12(runtimeDir, "node_modules", "@deepseek-ai", "dsh-desktop-host", "lib", "cli.js");
+  const cli = join13(runtimeDir, "node_modules", "@deepseek-ai", "dsh-desktop-host", "lib", "cli.js");
   if (!exists(cli)) return null;
   return { command: execPath, args: ["--expose-internals", cli], env: { ELECTRON_RUN_AS_NODE: "1" } };
 }
@@ -14039,7 +14294,7 @@ async function installViaCheckout(request) {
   const spec = pluginInstallSpec(request.repository, request.ref, request.commit);
   const repository = repositorySlug(request.repository);
   const profile = resolveProfileName(request.ctx);
-  const checkout = mkdtempSync2(join12(tmpdir2(), "dsh-soulmojito-checkout-"));
+  const checkout = mkdtempSync2(join13(tmpdir2(), "dsh-soulmojito-checkout-"));
   try {
     request.log(`fallback: git clone --depth 1 https://github.com/${repository}.git`);
     await mustRun("git", ["clone", "--depth", "1", "--branch", request.ref, `https://github.com/${repository}.git`, checkout], request);
@@ -14051,7 +14306,7 @@ async function installViaCheckout(request) {
         await mustRun("git", ["-C", checkout, "checkout", "--quiet", request.commit], request);
       }
     }
-    const source = join12(checkout, "packages", "plugin");
+    const source = join13(checkout, "packages", "plugin");
     if (!existsSync2(source)) throw new Error("packages/plugin is missing from the checkout");
     const copied = copyShippedFiles(source, request.pluginDir);
     request.log(`copied ${copied.length} shipped entries into ${request.pluginDir}`);
@@ -14089,18 +14344,18 @@ async function mustRun(command, args, request) {
 function copyShippedFiles(sourceDir, targetDir) {
   const copied = [];
   for (const entry of shippedEntries(sourceDir)) {
-    const from = join12(sourceDir, entry);
+    const from = join13(sourceDir, entry);
     if (!existsSync2(from)) continue;
     const stat3 = statSyncSafe(from);
     if (stat3 === null) continue;
     if (!stat3.isDirectory()) {
-      replaceFileAtomic(from, join12(targetDir, entry));
+      replaceFileAtomic(from, join13(targetDir, entry));
       copied.push(entry);
       continue;
     }
     for (const file of listFiles(from)) {
       const relative4 = file.slice(from.length + 1);
-      const to = join12(targetDir, entry, relative4);
+      const to = join13(targetDir, entry, relative4);
       mkdirSync(dirname8(to), { recursive: true });
       writeFileAtomic(to, readFileSync3(file));
       copied.push(`${entry}/${relative4.replaceAll("\\", "/")}`);
@@ -14111,7 +14366,7 @@ function copyShippedFiles(sourceDir, targetDir) {
 function stampInstalledBuild(pluginDir, version, commit) {
   if (!isKnownVersion(version) || !isCommit(commit)) return false;
   try {
-    writeFileAtomic(join12(pluginDir, "version.json"), `${JSON.stringify({ version: version.trim(), commit: shortCommit(commit) }, null, 2)}
+    writeFileAtomic(join13(pluginDir, "version.json"), `${JSON.stringify({ version: version.trim(), commit: shortCommit(commit) }, null, 2)}
 `);
     return true;
   } catch {
@@ -14124,7 +14379,7 @@ function listFiles(root) {
   while (pending.length > 0) {
     const current = pending.pop();
     for (const entry of readdirSyncSafe(current)) {
-      const full = join12(current, entry);
+      const full = join13(current, entry);
       const stat3 = statSyncSafe(full);
       if (stat3 === null) continue;
       if (stat3.isDirectory()) pending.push(full);
@@ -14151,14 +14406,14 @@ function readInstalledStamp(pluginDir, spec = "") {
   let version = UNKNOWN_FIELD;
   let commit = UNKNOWN_FIELD;
   try {
-    const generated = JSON.parse(readFileSync3(join12(pluginDir, "version.json"), "utf8"));
+    const generated = JSON.parse(readFileSync3(join13(pluginDir, "version.json"), "utf8"));
     if (typeof generated?.version === "string" && generated.version.trim() !== "") version = generated.version.trim();
     if (isCommit(generated?.commit)) commit = shortCommit(generated.commit);
   } catch {
   }
   if (version === UNKNOWN_FIELD) {
     try {
-      const manifest10 = JSON.parse(readFileSync3(join12(pluginDir, "package.json"), "utf8"));
+      const manifest10 = JSON.parse(readFileSync3(join13(pluginDir, "package.json"), "utf8"));
       if (typeof manifest10?.version === "string" && manifest10.version.trim() !== "") version = manifest10.version.trim();
     } catch {
     }
@@ -14217,7 +14472,7 @@ var init_apply = __esm({
 
 // packages/plugin/src/update/service.ts
 import { mkdirSync as mkdirSync2, readFileSync as readFileSync4 } from "node:fs";
-import { dirname as dirname9, join as join13 } from "node:path";
+import { dirname as dirname9, join as join14 } from "node:path";
 function emptyInstallState() {
   return {
     running: false,
@@ -14493,7 +14748,7 @@ var init_service = __esm({
         }
       }
       cachePath() {
-        return join13(this.options.home, UPDATE_CACHE_FILE);
+        return join14(this.options.home, UPDATE_CACHE_FILE);
       }
       loadCache() {
         try {
@@ -15308,9 +15563,9 @@ function applyCardOverride(identifier, content, card) {
 
 // packages/plugin/src/agent-tavern/projector.ts
 init_src();
-import { createHash as createHash9, randomUUID as randomUUID4 } from "node:crypto";
+import { randomUUID as randomUUID4 } from "node:crypto";
 import { promises as fs14 } from "node:fs";
-import { join as join14 } from "node:path";
+import { join as join15 } from "node:path";
 
 // packages/tavern-format/src/png.ts
 var PNG_SIGNATURE2 = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
@@ -18865,6 +19120,145 @@ function applyLenientPatch(root, ops) {
     failures.push(`unsupported op ${op.op}`);
   }
   return { value, applied, failures };
+}
+
+// packages/plugin/src/agent-tavern/checkpoint-batch.ts
+import { createHash as createHash8 } from "node:crypto";
+import { join as join9 } from "node:path";
+var CHECKPOINT_WRITE_LAG = 8;
+var CHECKPOINT_WRITE_DELAY_MS = 250;
+var CHECKPOINT_WRITE_RETRY_MS = 250;
+function checkpointPathOf(root, sessionId) {
+  const name2 = createHash8("sha256").update(sessionId).digest("hex");
+  return join9(root, `${name2}.json`);
+}
+function validateCheckpoint(value, sessionId) {
+  if (value.version !== 1 && value.version !== 2 || value.sessionId !== sessionId || !Number.isSafeInteger(value.lastCursor) || !["ok", "pending"].includes(value.status)) {
+    throw new Error(`invalid AgentTavern projection checkpoint for '${sessionId}'`);
+  }
+  if (value.pendingCursor !== void 0 && (!Number.isSafeInteger(value.pendingCursor) || value.pendingCursor < 0)) {
+    throw new Error(`invalid AgentTavern projection checkpoint for '${sessionId}'`);
+  }
+}
+function normalizeCheckpoint(checkpoint) {
+  if (checkpoint.version === 1) {
+    return {
+      version: 2,
+      sessionId: checkpoint.sessionId,
+      lastCursor: -1,
+      status: "pending",
+      pendingCursor: 0,
+      updatedAt: checkpoint.updatedAt
+    };
+  }
+  if (checkpoint.status !== "pending" || checkpoint.pendingCursor !== void 0) return checkpoint;
+  if (checkpoint.lastCursor >= Number.MAX_SAFE_INTEGER) return checkpoint;
+  return { ...checkpoint, pendingCursor: checkpoint.lastCursor + 1 };
+}
+function createCheckpointBatch(host) {
+  const dirtySessions = /* @__PURE__ */ new Set();
+  const stagedEvents = /* @__PURE__ */ new Map();
+  const flushTimers = /* @__PURE__ */ new Map();
+  const flushErrors = /* @__PURE__ */ new Map();
+  const disarm = (sessionId) => {
+    const timer = flushTimers.get(sessionId);
+    if (timer === void 0) return;
+    clearTimeout(timer);
+    flushTimers.delete(sessionId);
+  };
+  const write = async (sessionId) => {
+    const checkpoint = host.read(sessionId);
+    if (checkpoint === void 0) {
+      dirtySessions.delete(sessionId);
+      stagedEvents.delete(sessionId);
+      return;
+    }
+    await host.write(checkpoint);
+    dirtySessions.delete(sessionId);
+    stagedEvents.delete(sessionId);
+    flushErrors.delete(sessionId);
+  };
+  const flush = async (sessionId) => {
+    disarm(sessionId);
+    if (!dirtySessions.has(sessionId)) return;
+    await write(sessionId);
+  };
+  const arm = (sessionId, delayMs, retry) => {
+    if (flushTimers.has(sessionId)) return;
+    const timer = setTimeout(() => {
+      flushTimers.delete(sessionId);
+      void host.enqueue(sessionId, () => flush(sessionId)).catch((error) => {
+        flushErrors.set(sessionId, error);
+        if (!retry) arm(sessionId, CHECKPOINT_WRITE_RETRY_MS, true);
+      });
+    }, delayMs);
+    timer.unref();
+    flushTimers.set(sessionId, timer);
+  };
+  return {
+    async stage(sessionId) {
+      dirtySessions.add(sessionId);
+      const staged = (stagedEvents.get(sessionId) ?? 0) + 1;
+      stagedEvents.set(sessionId, staged);
+      if (staged >= CHECKPOINT_WRITE_LAG) {
+        await flush(sessionId);
+        return;
+      }
+      arm(sessionId, CHECKPOINT_WRITE_DELAY_MS, false);
+    },
+    async commit(sessionId) {
+      disarm(sessionId);
+      await write(sessionId);
+    },
+    flush,
+    reset(sessionId) {
+      disarm(sessionId);
+      dirtySessions.delete(sessionId);
+      stagedEvents.delete(sessionId);
+    },
+    dirty: (sessionId) => dirtySessions.has(sessionId),
+    deferredError: (sessionId) => flushErrors.get(sessionId)
+  };
+}
+function isProjectedCursor(checkpoint, seq) {
+  if (seq > checkpoint.lastCursor) return false;
+  return checkpoint.pendingCursor === void 0 || seq < checkpoint.pendingCursor;
+}
+function advanceCheckpoint(checkpoint, seq) {
+  const updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+  const pendingCursor = checkpoint.pendingCursor;
+  if (pendingCursor === void 0) {
+    return {
+      version: 2,
+      sessionId: checkpoint.sessionId,
+      lastCursor: Math.max(checkpoint.lastCursor, seq),
+      status: "ok",
+      updatedAt
+    };
+  }
+  if (pendingCursor !== seq) {
+    return {
+      version: 2,
+      sessionId: checkpoint.sessionId,
+      lastCursor: checkpoint.lastCursor,
+      status: "pending",
+      pendingCursor,
+      ...checkpoint.error === void 0 ? {} : { error: checkpoint.error },
+      updatedAt
+    };
+  }
+  return { version: 2, sessionId: checkpoint.sessionId, lastCursor: seq, status: "ok", updatedAt };
+}
+function pendingCheckpoint(checkpoint, seq, error) {
+  return {
+    version: 2,
+    sessionId: checkpoint.sessionId,
+    lastCursor: checkpoint.lastCursor,
+    status: "pending",
+    pendingCursor: checkpoint.pendingCursor === void 0 ? seq : Math.min(checkpoint.pendingCursor, seq),
+    error: error instanceof Error ? error.message : String(error),
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
 }
 
 // packages/plugin/src/agent-tavern/body-projector.ts
@@ -24749,7 +25143,7 @@ init_src2();
 
 // packages/plugin/src/im/types.ts
 init_src();
-import { createHash as createHash8 } from "node:crypto";
+import { createHash as createHash9 } from "node:crypto";
 var AGENT_TAVERN_IM_PRESET_ID = "agent-tavern-im";
 function imDedupeKey(channel, accountId, scope, peerId, messageId) {
   return `${channel}:${accountId}:${scope}:${peerId}:${messageId}`;
@@ -24762,7 +25156,7 @@ function imPeerKeyParts(key) {
   return { channel, accountId, scope, peerId: rest.join(":") };
 }
 function imPeerAlias(channel, scope, peerKey) {
-  return `peer-${createHash8("sha256").update(`${channel}:${scope}:${peerKey}`).digest("hex").slice(0, 10)}`;
+  return `peer-${createHash9("sha256").update(`${channel}:${scope}:${peerKey}`).digest("hex").slice(0, 10)}`;
 }
 
 // packages/plugin/src/agent-tavern/im-projection.ts
@@ -25062,9 +25456,16 @@ var AgentTavernProjector = class _AgentTavernProjector {
   constructor(root, store5) {
     this.root = root;
     this.store = store5;
+    this.batch = createCheckpointBatch({
+      read: (sessionId) => this.checkpoints.get(sessionId),
+      write: (checkpoint) => this.writeCheckpoint(checkpoint),
+      enqueue: (sessionId, task) => this.tails.enqueue(sessionId, task)
+    });
   }
   tails = new KeyedMutationTails(true);
   checkpoints = /* @__PURE__ */ new Map();
+  /** Coalesced checkpoint writes: see `checkpoint-batch.ts` for the schedule. */
+  batch;
   /**
    * 每个会话的待回执 `im_send` 调用：assistant 事件记录 callId → 参数/坐标，
    * `tool/result` 取用。只服务投影，不写回宿主事件；结果只读不删——楼层写入
@@ -25074,23 +25475,41 @@ var AgentTavernProjector = class _AgentTavernProjector {
   /** 每个会话回填扫描到的 `sessionEvents` 下标（日志只追加，游标只前进）。 */
   imSendCursors = /* @__PURE__ */ new Map();
   static async open(tavernRoot, store5) {
-    const root = join14(tavernRoot, "projections");
+    const root = join15(tavernRoot, "projections");
     await fs14.mkdir(root, { recursive: true });
     return new _AgentTavernProjector(root, store5);
   }
   project(session, event) {
-    return this.tails.enqueue(session.id, () => this.projectOne(session, event));
+    return this.tails.enqueue(session.id, async () => {
+      const deferred = this.batch.deferredError(session.id);
+      await this.projectOne(session, event);
+      this.raiseDeferred(session.id, deferred);
+    });
   }
   async replay(session) {
     await this.tails.enqueue(session.id, async () => {
+      const deferred = this.batch.deferredError(session.id);
       this.checkpoints.delete(session.id);
+      this.batch.reset(session.id);
       const events = [...sessionEvents(session)].sort((left, right) => left.seq - right.seq);
       await this.clampPendingCursor(session.id, events);
       for (const event of events) await this.projectOne(session, event);
+      await this.batch.flush(session.id);
+      this.raiseDeferred(session.id, deferred);
     });
   }
   async status(sessionId) {
+    const deferred = this.batch.deferredError(sessionId);
+    if (this.batch.dirty(sessionId)) {
+      await this.tails.enqueue(sessionId, () => this.batch.flush(sessionId));
+    }
+    this.raiseDeferred(sessionId, deferred);
     return structuredClone(await this.readCheckpoint(sessionId));
+  }
+  /** Raise a timer-flush failure unless a write finished by this operation cleared it. */
+  raiseDeferred(sessionId, deferred) {
+    if (deferred === void 0) return;
+    if (this.batch.deferredError(sessionId) === deferred) throw deferred;
   }
   async projectOne(session, event) {
     if (!Number.isSafeInteger(event.seq) || event.seq < 0) throw new Error("invalid DSH event cursor");
@@ -25098,7 +25517,7 @@ var AgentTavernProjector = class _AgentTavernProjector {
     if (isProjectedCursor(checkpoint, event.seq)) return;
     try {
       if (!canProjectEvent(event.type)) {
-        await this.writeCheckpoint(advanceCheckpoint(checkpoint, event.seq));
+        await this.stageCheckpoint(advanceCheckpoint(checkpoint, event.seq));
         return;
       }
       const state = await this.store.getState();
@@ -25116,9 +25535,10 @@ var AgentTavernProjector = class _AgentTavernProjector {
           for (const message of messages) await this.appendMessage(binding, session.id, event.seq, message, character?.card);
         }
       }
-      await this.writeCheckpoint(advanceCheckpoint(checkpoint, event.seq));
+      await this.stageCheckpoint(advanceCheckpoint(checkpoint, event.seq));
     } catch (error) {
-      await this.writeCheckpoint(pendingCheckpoint(checkpoint, event.seq, error));
+      this.checkpoints.set(session.id, pendingCheckpoint(checkpoint, event.seq, error));
+      await this.batch.commit(session.id);
       throw error;
     }
   }
@@ -25200,7 +25620,7 @@ var AgentTavernProjector = class _AgentTavernProjector {
     const cached = this.checkpoints.get(sessionId);
     if (cached) return cached;
     try {
-      const parsed = JSON.parse(await fs14.readFile(this.checkpointPath(sessionId), "utf8"));
+      const parsed = JSON.parse(await fs14.readFile(checkpointPathOf(this.root, sessionId), "utf8"));
       validateCheckpoint(parsed, sessionId);
       const checkpoint = normalizeCheckpoint(parsed);
       this.checkpoints.set(sessionId, checkpoint);
@@ -25218,13 +25638,25 @@ var AgentTavernProjector = class _AgentTavernProjector {
       return empty;
     }
   }
+  /** The injected durable write: atomic replace, then the cache follows the file. */
   async writeCheckpoint(checkpoint) {
-    const target = this.checkpointPath(checkpoint.sessionId);
+    const target = checkpointPathOf(this.root, checkpoint.sessionId);
     const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
     await fs14.writeFile(temporary, `${JSON.stringify(checkpoint)}
 `, "utf8");
     await fs14.rename(temporary, target);
     this.checkpoints.set(checkpoint.sessionId, checkpoint);
+  }
+  /**
+   * Record a projected event in memory and hand it to the batch window.
+   *
+   * Reads keep using the cache, which is authoritative and always newest; only
+   * the crash watermark lags. The batch owns when that watermark lands (see
+   * `checkpoint-batch.ts`); the projector only decides what the checkpoint is.
+   */
+  async stageCheckpoint(checkpoint) {
+    this.checkpoints.set(checkpoint.sessionId, checkpoint);
+    await this.batch.stage(checkpoint.sessionId);
   }
   /**
    * Clamp a `pendingCursor` the session log does not carry.
@@ -25245,10 +25677,6 @@ var AgentTavernProjector = class _AgentTavernProjector {
     if (events.some((event) => event.seq === pendingCursor)) return;
     const next = events.find((event) => event.seq >= pendingCursor);
     this.checkpoints.set(sessionId, next === void 0 ? { version: 2, sessionId, lastCursor: checkpoint.lastCursor, status: "ok", updatedAt: (/* @__PURE__ */ new Date()).toISOString() } : { ...checkpoint, pendingCursor: next.seq });
-  }
-  checkpointPath(sessionId) {
-    const name2 = createHash9("sha256").update(sessionId).digest("hex");
-    return join14(this.root, `${name2}.json`);
   }
 };
 function projectMessages(session, event, binding, scripts, imPeerAliases, pendingImSend) {
@@ -25433,76 +25861,13 @@ function turnAt(session, cursor) {
   }
   return turn;
 }
-function validateCheckpoint(value, sessionId) {
-  if (value.version !== 1 && value.version !== 2 || value.sessionId !== sessionId || !Number.isSafeInteger(value.lastCursor) || !["ok", "pending"].includes(value.status)) {
-    throw new Error(`invalid AgentTavern projection checkpoint for '${sessionId}'`);
-  }
-  if (value.pendingCursor !== void 0 && (!Number.isSafeInteger(value.pendingCursor) || value.pendingCursor < 0)) {
-    throw new Error(`invalid AgentTavern projection checkpoint for '${sessionId}'`);
-  }
-}
-function normalizeCheckpoint(checkpoint) {
-  if (checkpoint.version === 1) {
-    return {
-      version: 2,
-      sessionId: checkpoint.sessionId,
-      lastCursor: -1,
-      status: "pending",
-      pendingCursor: 0,
-      updatedAt: checkpoint.updatedAt
-    };
-  }
-  if (checkpoint.status !== "pending" || checkpoint.pendingCursor !== void 0) return checkpoint;
-  if (checkpoint.lastCursor >= Number.MAX_SAFE_INTEGER) return checkpoint;
-  return { ...checkpoint, pendingCursor: checkpoint.lastCursor + 1 };
-}
-function isProjectedCursor(checkpoint, seq) {
-  if (seq > checkpoint.lastCursor) return false;
-  return checkpoint.pendingCursor === void 0 || seq < checkpoint.pendingCursor;
-}
-function advanceCheckpoint(checkpoint, seq) {
-  const updatedAt = (/* @__PURE__ */ new Date()).toISOString();
-  const pendingCursor = checkpoint.pendingCursor;
-  if (pendingCursor === void 0) {
-    return {
-      version: 2,
-      sessionId: checkpoint.sessionId,
-      lastCursor: Math.max(checkpoint.lastCursor, seq),
-      status: "ok",
-      updatedAt
-    };
-  }
-  if (pendingCursor !== seq) {
-    return {
-      version: 2,
-      sessionId: checkpoint.sessionId,
-      lastCursor: checkpoint.lastCursor,
-      status: "pending",
-      pendingCursor,
-      ...checkpoint.error === void 0 ? {} : { error: checkpoint.error },
-      updatedAt
-    };
-  }
-  return { version: 2, sessionId: checkpoint.sessionId, lastCursor: seq, status: "ok", updatedAt };
-}
-function pendingCheckpoint(checkpoint, seq, error) {
-  return {
-    version: 2,
-    sessionId: checkpoint.sessionId,
-    lastCursor: checkpoint.lastCursor,
-    status: "pending",
-    pendingCursor: checkpoint.pendingCursor === void 0 ? seq : Math.min(checkpoint.pendingCursor, seq),
-    error: error instanceof Error ? error.message : String(error),
-    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-  };
-}
 var mvuAuditTail = new MutationTail();
 function mvuAuditPath(tavernRoot) {
-  return join14(tavernRoot, "mvu", "audit.jsonl");
+  return join15(tavernRoot, "mvu", "audit.jsonl");
 }
 async function appendMvuAudit(tavernRoot, record) {
   await mvuAuditTail.enqueue(async () => {
-    await fs14.mkdir(join14(tavernRoot, "mvu"), { recursive: true });
+    await fs14.mkdir(join15(tavernRoot, "mvu"), { recursive: true });
     await fs14.appendFile(mvuAuditPath(tavernRoot), `${JSON.stringify(record)}
 `, "utf8");
   });
@@ -25534,7 +25899,7 @@ import * as path9 from "node:path";
 import { createHash as createHash10 } from "node:crypto";
 import { readdirSync as readdirSync3, readFileSync as readFileSync5, realpathSync as realpathSync2, statSync as statSync2 } from "node:fs";
 import { createRequire as createRequire3 } from "node:module";
-import { basename as basename2, dirname as dirname10, join as join15 } from "node:path";
+import { basename as basename2, dirname as dirname10, join as join16 } from "node:path";
 import { fileURLToPath, pathToFileURL as pathToFileURL3 } from "node:url";
 
 // packages/plugin/src/spawn.ts
@@ -25593,13 +25958,13 @@ function localModelFingerprint(modelDir) {
   try {
     const parts = [];
     for (const entry of readdirSync3(modelDir).sort()) {
-      const full = join15(modelDir, entry);
+      const full = join16(modelDir, entry);
       const info3 = statSync2(full);
       if (info3.isFile()) {
         parts.push(`${entry}:${info3.size}:${Math.round(info3.mtimeMs)}`);
       } else if (info3.isDirectory()) {
         for (const child of readdirSync3(full).sort()) {
-          const childInfo = statSync2(join15(full, child));
+          const childInfo = statSync2(join16(full, child));
           if (childInfo.isFile()) parts.push(`${entry}/${child}:${childInfo.size}:${Math.round(childInfo.mtimeMs)}`);
         }
       }
@@ -25630,7 +25995,7 @@ var AUTO_DTYPE_PRIORITY = ["fp16", "q8", "q4", "q4f16", "int8", "uint8", "q2", "
 function detectLocalQuantizations(modelDir) {
   let names;
   try {
-    names = readdirSync3(join15(modelDir, "onnx"));
+    names = readdirSync3(join16(modelDir, "onnx"));
   } catch {
     return [];
   }
@@ -25638,7 +26003,7 @@ function detectLocalQuantizations(modelDir) {
   for (const [dtype, suffix] of DTYPE_FILE_SUFFIXES) {
     const file = `onnx/model${suffix}.onnx`;
     try {
-      const info3 = statSync2(join15(modelDir, file));
+      const info3 = statSync2(join16(modelDir, file));
       if (info3.isFile()) found.push({ precision: dtype, file, sizeBytes: info3.size });
     } catch {
     }
@@ -25658,14 +26023,14 @@ function readJsonFile(file) {
 }
 function inferLocalModelSettings(modelDir) {
   const result = { sources: {} };
-  const config = readJsonFile(join15(modelDir, "config.json"));
+  const config = readJsonFile(join16(modelDir, "config.json"));
   const configRecord = config !== null && typeof config === "object" && !Array.isArray(config) ? config : void 0;
   const hiddenSize = configRecord?.hidden_size;
   if (typeof hiddenSize === "number" && Number.isFinite(hiddenSize)) {
     result.dims = Math.max(1, Math.min(8192, Math.round(hiddenSize)));
     result.sources.dims = "config.json hidden_size";
   }
-  const modules = readJsonFile(join15(modelDir, "modules.json"));
+  const modules = readJsonFile(join16(modelDir, "modules.json"));
   if (Array.isArray(modules)) {
     for (const entry of modules) {
       if (!Array.isArray(entry) || entry[0] !== "sentence-transformers" || entry[1] !== "Pooling") continue;
@@ -25713,7 +26078,7 @@ function validateLocalModelDir(modelDir) {
   }
   let onnxNames = [];
   try {
-    onnxNames = statSync2(join15(modelDir, "onnx")).isDirectory() ? readdirSync3(join15(modelDir, "onnx")) : [];
+    onnxNames = statSync2(join16(modelDir, "onnx")).isDirectory() ? readdirSync3(join16(modelDir, "onnx")) : [];
   } catch {
   }
   const hasOnnx = onnxNames.some((name2) => name2.endsWith(".onnx"));
@@ -32219,7 +32584,7 @@ init_handle();
 import { promises as fs17 } from "node:fs";
 import { cpSync as cpSync2, existsSync as existsSync3, mkdirSync as mkdirSync3, mkdtempSync as mkdtempSync3, rmSync as rmSync3, writeFileSync as writeFileSync2 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
-import { dirname as dirname12, join as join18, resolve as resolve4 } from "node:path";
+import { dirname as dirname12, join as join19, resolve as resolve4 } from "node:path";
 import { pathToFileURL as pathToFileURL4 } from "node:url";
 init_manifest();
 init_install();
@@ -38703,7 +39068,7 @@ var GameRegistry = class _GameRegistry {
     return registry;
   }
   get installedRoot() {
-    return join18(this.options.root, "games", "installed");
+    return join19(this.options.root, "games", "installed");
   }
   /** 注册表快照（按 id 稳定排序；三源合一——builtin/imported/mod）。 */
   summaries() {
@@ -38773,9 +39138,9 @@ var GameRegistry = class _GameRegistry {
     });
     const directories = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
     for (const directory of directories) {
-      const entry = await this.loadInstalled(join18(this.installedRoot, directory)).catch((cause) => {
+      const entry = await this.loadInstalled(join19(this.installedRoot, directory)).catch((cause) => {
         const message = cause instanceof Error ? cause.message : String(cause);
-        return { source: "imported", manifest: brokenFallbackManifest(directory), engine: null, viewHtml: null, status: "broken", reason: message, directory: join18(this.installedRoot, directory) };
+        return { source: "imported", manifest: brokenFallbackManifest(directory), engine: null, viewHtml: null, status: "broken", reason: message, directory: join19(this.installedRoot, directory) };
       });
       const shadowed = this.games.get(entry.manifest.id);
       if (shadowed?.source === "builtin") {
@@ -38791,7 +39156,7 @@ var GameRegistry = class _GameRegistry {
     const broken = (manifest10, reason) => ({ source: "imported", manifest: manifest10, engine: null, viewHtml: null, status: "broken", reason, directory });
     let raw;
     try {
-      raw = JSON.parse(await fs17.readFile(join18(directory, "game.json"), "utf8"));
+      raw = JSON.parse(await fs17.readFile(join19(directory, "game.json"), "utf8"));
     } catch (cause) {
       return broken(brokenFallbackManifest(directoryNameOf(directory)), `game.json \u7F3A\u5931\u6216\u4E0D\u53EF\u8BFB: ${cause instanceof Error ? cause.message : String(cause)}`);
     }
@@ -38805,13 +39170,13 @@ var GameRegistry = class _GameRegistry {
     }
     let viewHtml10;
     try {
-      viewHtml10 = await fs17.readFile(join18(directory, "view.html"), "utf8");
+      viewHtml10 = await fs17.readFile(join19(directory, "view.html"), "utf8");
     } catch {
       return broken(check.manifest, "view.html \u7F3A\u5931\uFF08\u6807\u51C6\u6E38\u620F\u5305\u5FC5\u987B\u4E09\u4EF6\u5957\u9F50\u5168\uFF09");
     }
     const viewProblem = staticViewCheck(viewHtml10);
     if (viewProblem !== void 0) return broken(check.manifest, `view.html ${viewProblem}`);
-    const enginePath = join18(directory, "engine.mjs");
+    const enginePath = join19(directory, "engine.mjs");
     const stat3 = await fs17.stat(enginePath).catch(() => void 0);
     if (stat3?.isFile() !== true) return broken(check.manifest, "engine.mjs \u7F3A\u5931\uFF08\u6807\u51C6\u6E38\u620F\u5305\u5FC5\u987B\u4E09\u4EF6\u5957\u9F50\u5168\uFF09");
     let imported;
@@ -38843,14 +39208,14 @@ var GameRegistry = class _GameRegistry {
     if (!stat3.isDirectory()) throw new Error(`\u6E38\u620F\u5305\u8DEF\u5F84\u5FC5\u987B\u662F\u76EE\u5F55: ${sourcePath}`);
     let raw;
     try {
-      raw = JSON.parse(await fs17.readFile(join18(source, "game.json"), "utf8"));
+      raw = JSON.parse(await fs17.readFile(join19(source, "game.json"), "utf8"));
     } catch (cause) {
       throw new Error(`\u6E90\u76EE\u5F55\u7F3A\u5C11\u53EF\u8BFB\u7684 game.json: ${cause instanceof Error ? cause.message : String(cause)}`);
     }
     const id = typeof raw?.["id"] === "string" ? raw["id"] : "";
     const check = checkGameManifest(raw, { directory: id || void 0 });
     if (!check.ok || !check.manifest) throw new Error(`\u6E38\u620F\u6E05\u5355\u6821\u9A8C\u5931\u8D25: ${check.errors.join("; ")}`);
-    const target = join18(this.installedRoot, check.manifest.id);
+    const target = join19(this.installedRoot, check.manifest.id);
     await fs17.mkdir(this.installedRoot, { recursive: true });
     if (existsSync3(target)) {
       if (force !== true) throw new Error(`\u6E38\u620F '${check.manifest.id}' \u5DF2\u5B89\u88C5\uFF08force=true \u53EF\u8986\u76D6\uFF09`);
@@ -38871,9 +39236,9 @@ var GameRegistry = class _GameRegistry {
   async installFromGit(url, force = false, options = {}) {
     const timeoutMs = options.timeoutMs ?? 6e4;
     const source = parseGitSource(url);
-    const workRoot = mkdtempSync3(join18(tmpdir3(), "dsh-soulmojito-gameinstall-"));
+    const workRoot = mkdtempSync3(join19(tmpdir3(), "dsh-soulmojito-gameinstall-"));
     try {
-      const cloneDir = join18(workRoot, "clone");
+      const cloneDir = join19(workRoot, "clone");
       await (options.cloneImpl ?? gitClone)(source.cloneUrl, cloneDir, source.ref, timeoutMs);
       return await this.installFromPath(cloneDir, force);
     } finally {
@@ -38890,10 +39255,10 @@ var GameRegistry = class _GameRegistry {
    */
   async installFromZip(zipBase64, force = false) {
     const files = selectGamePackageFiles(unzipGamePackage(decodeZipBase64(zipBase64)));
-    const workRoot = mkdtempSync3(join18(tmpdir3(), "dsh-soulmojito-gamezip-"));
+    const workRoot = mkdtempSync3(join19(tmpdir3(), "dsh-soulmojito-gamezip-"));
     try {
       for (const [name2, data] of files) {
-        const target = join18(workRoot, ...name2.split("/"));
+        const target = join19(workRoot, ...name2.split("/"));
         mkdirSync3(dirname12(target), { recursive: true });
         writeFileSync2(target, data);
       }
@@ -39054,7 +39419,7 @@ function unwrapSingleRootDirectory(files) {
 init_apply();
 import { createHash as createHash12, randomBytes as randomBytes4 } from "node:crypto";
 import { promises as fs18 } from "node:fs";
-import { join as join19 } from "node:path";
+import { join as join20 } from "node:path";
 var GAME_HISTORY_DEFAULT_LIMIT = 20;
 var GAME_HISTORY_MAX_LIMIT = 200;
 var GameBridgeError = class extends Error {
@@ -39074,11 +39439,11 @@ var GameSessionStore = class _GameSessionStore {
   }
   tail = Promise.resolve();
   static async open(options) {
-    await fs18.mkdir(join19(options.root, "games", "sessions"), { recursive: true });
+    await fs18.mkdir(join20(options.root, "games", "sessions"), { recursive: true });
     return new _GameSessionStore(options);
   }
   get sessionsRoot() {
-    return join19(this.options.root, "games", "sessions");
+    return join20(this.options.root, "games", "sessions");
   }
   /* ------------------------------ 查询面 ------------------------------ */
   /** 会话目录 name+size+mtimeMs 的 sha256（镜像 tavern-store storeRevision 的便宜纪律：只 stat 不读内容）。 */
@@ -39086,7 +39451,7 @@ var GameSessionStore = class _GameSessionStore {
     const hash = createHash12("sha256");
     const names = (await fs18.readdir(this.sessionsRoot).catch(() => [])).filter((name2) => name2.endsWith(".json")).sort();
     for (const name2 of names) {
-      const stat3 = await fs18.stat(join19(this.sessionsRoot, name2)).catch(() => void 0);
+      const stat3 = await fs18.stat(join20(this.sessionsRoot, name2)).catch(() => void 0);
       hash.update(`${name2}\0${stat3 === void 0 ? "missing" : `${stat3.size}\0${stat3.mtimeMs}`}
 `);
     }
@@ -39270,7 +39635,7 @@ var GameSessionStore = class _GameSessionStore {
   /* ------------------------------ 内部 ------------------------------ */
   async persist(session) {
     await fs18.mkdir(this.sessionsRoot, { recursive: true });
-    writeFileAtomic(join19(this.sessionsRoot, `${session.id}.json`), `${JSON.stringify(session, null, 2)}
+    writeFileAtomic(join20(this.sessionsRoot, `${session.id}.json`), `${JSON.stringify(session, null, 2)}
 `);
   }
   async load(sessionId) {
@@ -39279,7 +39644,7 @@ var GameSessionStore = class _GameSessionStore {
     }
     let raw;
     try {
-      raw = await fs18.readFile(join19(this.sessionsRoot, `${sessionId}.json`), "utf8");
+      raw = await fs18.readFile(join20(this.sessionsRoot, `${sessionId}.json`), "utf8");
     } catch {
       throw new GameBridgeError("not-found", `\u4F1A\u8BDD '${sessionId}' \u4E0D\u5B58\u5728`);
     }
@@ -42465,13 +42830,13 @@ init_src();
 import { createReadStream, createWriteStream } from "node:fs";
 import { mkdtemp, rm as rm2 } from "node:fs/promises";
 import { tmpdir as tmpdir4 } from "node:os";
-import { join as join26 } from "node:path";
+import { join as join27 } from "node:path";
 import { pipeline } from "node:stream/promises";
 
 // packages/tavern-frontend-storage/src/idb-store.ts
 import { createHash as createHash14 } from "node:crypto";
 import { copyFile, mkdir as mkdir4, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { dirname as dirname13, join as join20 } from "node:path";
+import { dirname as dirname13, join as join21 } from "node:path";
 var IDB_MAX_RECORD_BYTES = 1024 * 1024 * 1024;
 var IDB_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
 var databaseLocks = /* @__PURE__ */ new Map();
@@ -42479,16 +42844,16 @@ function sha256(value) {
   return createHash14("sha256").update(value).digest("hex");
 }
 function databaseDir(root, character, name2) {
-  return join20(root, "frontend-idb", sha256(character), sha256(name2));
+  return join21(root, "frontend-idb", sha256(character), sha256(name2));
 }
 function recordKeyHash(store5, key) {
   return sha256(`${store5}\0${key}`);
 }
 function recordPath(root, character, name2, store5, key) {
-  return join20(databaseDir(root, character, name2), "records", `${recordKeyHash(store5, key)}.bin`);
+  return join21(databaseDir(root, character, name2), "records", `${recordKeyHash(store5, key)}.bin`);
 }
 function metaPath(dir) {
-  return join20(dir, "meta.json");
+  return join21(dir, "meta.json");
 }
 function emptyDatabase(name2) {
   return { name: name2, version: 0, stores: {}, records: {}, updatedAt: 0 };
@@ -48589,7 +48954,7 @@ function nonEmpty2(value) {
 // packages/plugin/src/im/media-store.ts
 import { randomUUID as randomUUID12 } from "node:crypto";
 import { promises as fs19 } from "node:fs";
-import { join as join21, resolve as resolve5 } from "node:path";
+import { join as join22, resolve as resolve5 } from "node:path";
 var IM_MEDIA_ROOT_DIR = "im-media";
 var IM_MEDIA_EXTENSIONS = [
   "png",
@@ -48639,7 +49004,7 @@ function openImMediaStore(options) {
   async function root() {
     const workspace = (await options.workspaceRoot()).trim();
     if (workspace === "") throw new ImMediaStoreError("IM_MEDIA_IO", "the internal workspace root is empty; media cannot be stored");
-    return join21(resolve5(workspace), IM_MEDIA_ROOT_DIR);
+    return join22(resolve5(workspace), IM_MEDIA_ROOT_DIR);
   }
   return {
     async save(request) {
@@ -48653,8 +49018,8 @@ function openImMediaStore(options) {
         );
       }
       const extension = requireExtension(request.extension);
-      const directory = join21(await root(), `${channel}-${accountId}`);
-      const file = join21(directory, `${randomUUID12()}.${extension}`);
+      const directory = join22(await root(), `${channel}-${accountId}`);
+      const file = join22(directory, `${randomUUID12()}.${extension}`);
       try {
         await fs19.mkdir(directory, { recursive: true });
         await fs19.writeFile(file, request.bytes, { mode: FILE_MODE });
@@ -48675,7 +49040,7 @@ function openImMediaStore(options) {
     async remove(channel, accountId) {
       const ownerChannel = requireOwnerPart(channel, "channel");
       const ownerAccount = requireOwnerPart(accountId, "accountId");
-      const directory = join21(await root(), `${ownerChannel}-${ownerAccount}`);
+      const directory = join22(await root(), `${ownerChannel}-${ownerAccount}`);
       try {
         const stats = await fs19.stat(directory);
         if (!stats.isDirectory()) return false;
@@ -48724,7 +49089,7 @@ async function sweep(directory, cutoff) {
   }
   let removed = 0;
   for (const entry of entries) {
-    const path12 = join21(directory, entry.name);
+    const path12 = join22(directory, entry.name);
     if (entry.isDirectory()) {
       removed += await sweep(path12, cutoff);
       continue;
@@ -49444,12 +49809,12 @@ function messageOf8(error) {
 
 // packages/plugin/src/im/qq/install.ts
 import { mkdir as mkdir6, writeFile as writeFile2 } from "node:fs/promises";
-import { join as join23 } from "node:path";
+import { join as join24 } from "node:path";
 
 // packages/plugin/src/im/qq/sdk.ts
 init_dsh_home();
 import { stat as stat2 } from "node:fs/promises";
-import { join as join22 } from "node:path";
+import { join as join23 } from "node:path";
 import { pathToFileURL as pathToFileURL5 } from "node:url";
 var QQ_SDK_PACKAGE = "@tencent-connect/qqbot-nodejs";
 var QQ_CONNECTOR_PACKAGE = "@tencent-connect/qqbot-connector";
@@ -49478,7 +49843,7 @@ async function qqRuntimeStatus() {
   const root = qqRuntimeRoot();
   const missing = [];
   for (const dependency of QQ_RUNTIME_PACKAGES) {
-    if (!await qqFileExists(join22(root, "node_modules", dependency.name, dependency.entry), root)) {
+    if (!await qqFileExists(join23(root, "node_modules", dependency.name, dependency.entry), root)) {
       missing.push(`${dependency.name}@${dependency.version}`);
     }
   }
@@ -49490,7 +49855,7 @@ async function qqRuntimeStatus() {
 }
 async function loadQqSdk() {
   const root = qqRuntimeRoot();
-  const entry = join22(root, "node_modules", QQ_SDK_PACKAGE, QQ_SDK_ENTRY);
+  const entry = join23(root, "node_modules", QQ_SDK_PACKAGE, QQ_SDK_ENTRY);
   const module = await qqImportRuntime(entry, QQ_SDK_PACKAGE, root);
   const bot = module["QQBot"];
   if (typeof bot !== "function") {
@@ -49522,7 +49887,7 @@ async function loadQqSdk() {
 }
 async function loadQqConnector() {
   const root = qqRuntimeRoot();
-  const entry = join22(root, "node_modules", QQ_CONNECTOR_PACKAGE, QQ_CONNECTOR_ENTRY);
+  const entry = join23(root, "node_modules", QQ_CONNECTOR_PACKAGE, QQ_CONNECTOR_ENTRY);
   const module = await qqImportRuntime(entry, QQ_CONNECTOR_PACKAGE, root);
   const startQrConnect = module["startQrConnect"];
   if (typeof startQrConnect !== "function") {
@@ -49616,7 +49981,7 @@ async function installQqRuntime(input) {
 }
 async function ensureRuntimePackageJson(root) {
   try {
-    await writeFile2(join23(root, "package.json"), RUNTIME_PACKAGE_JSON, { encoding: "utf8", flag: "wx" });
+    await writeFile2(join24(root, "package.json"), RUNTIME_PACKAGE_JSON, { encoding: "utf8", flag: "wx" });
   } catch (cause) {
     const errno = typeof cause === "object" && cause !== null ? cause.code : void 0;
     if (errno === "EEXIST") return;
@@ -49654,7 +50019,7 @@ function mergeImSenderEntries(existing, updates, options) {
 // packages/plugin/src/im/store.ts
 import { randomUUID as randomUUID13 } from "node:crypto";
 import { promises as fs20 } from "node:fs";
-import { dirname as dirname14, join as join24, resolve as resolve6 } from "node:path";
+import { dirname as dirname14, join as join25, resolve as resolve6 } from "node:path";
 var ImStoreError = class extends Error {
   code;
   /** 出问题的文件或目录；纯校验错误还没有落盘路径时为 undefined。 */
@@ -49801,16 +50166,16 @@ var ImStore = class _ImStore {
   }
   // ---- 内部：路径 ----
   accountsPath() {
-    return join24(this.root, "accounts.json");
+    return join25(this.root, "accounts.json");
   }
   secretPath(channel, accountId) {
-    return join24(this.root, "secrets", `${channel}-${accountId}.json`);
+    return join25(this.root, "secrets", `${channel}-${accountId}.json`);
   }
   dedupePath() {
-    return join24(this.root, "dedupe.log");
+    return join25(this.root, "dedupe.log");
   }
   cursorPath(accountId) {
-    return join24(this.root, "cursors", `${accountId}.json`);
+    return join25(this.root, "cursors", `${accountId}.json`);
   }
   // ---- 内部：串行化 ----
   serialAccounts(task) {
@@ -57614,8 +57979,8 @@ async function handleApi(ctx, req, res) {
       req.destroy?.();
       throw new Error(`idb record is too large (${declared} > ${IDB_MAX_RECORD_BYTES} bytes)`);
     }
-    const temporaryDir = await mkdtemp(join26(tmpdir4(), "dsh-soulmojito-idb-"));
-    const temporaryPath = join26(temporaryDir, "record.bin");
+    const temporaryDir = await mkdtemp(join27(tmpdir4(), "dsh-soulmojito-idb-"));
+    const temporaryPath = join27(temporaryDir, "record.bin");
     try {
       await pipeline(req, createWriteStream(temporaryPath));
       const metaHeader = typeof req.headers?.["x-dsh-idb-meta"] === "string" ? req.headers["x-dsh-idb-meta"] : "";
@@ -58134,7 +58499,7 @@ ${reason}`);
 // packages/plugin/src/im/weixin/context-tokens.ts
 import { randomUUID as randomUUID16 } from "node:crypto";
 import { promises as fs23 } from "node:fs";
-import { dirname as dirname15, join as join27, resolve as resolve8 } from "node:path";
+import { dirname as dirname15, join as join28, resolve as resolve8 } from "node:path";
 var WeixinContextTokenError = class extends Error {
   code;
   path;
@@ -58153,7 +58518,7 @@ function openWeixinContextTokens(root, accountId) {
       `weixin context token store got an illegal accountId ${JSON.stringify(accountId)}: only [A-Za-z0-9._-] is allowed`
     );
   }
-  const file = join27(resolve8(root), "weixin", accountId, "context-tokens.json");
+  const file = join28(resolve8(root), "weixin", accountId, "context-tokens.json");
   return {
     load: () => loadTokens(file),
     save: (tokens) => saveTokens(file, tokens),
