@@ -46,7 +46,7 @@
 
 - **跨 bundle 部件注册表**：agent.mjs 与 im-agent.mjs 是 esbuild 各自打包的死产物，模块级 Map 不互见。部件经 `globalThis[Symbol.for('dsh-soulmojito:agent-prompt-parts')]` 注册（与 mod-registry 同学科），agent bundle 的 complete 段在装配时按 order 拼装。IM 段（-90）因此仍在 kernel（-80）之前。
 - **只保留一个 complete 段**：`agent-tavern-im` preset 同时挂载 agent 与 im-agent 两行，但只有 agent bundle 注册段；IM bundle 只贡献文本，否则它的 section 会被 complete 丢弃、IM 规则静默消失。
-- **context 通道不动**：facts / guides / script / games 本来就是 `systemPrompt.context()`——宿主把它们渲染进每步的 runtime snapshot（一条 user 消息），不属于 system 头。complete 接管只影响 section；`suppressRuntimeContext()` 会连带删掉这四个动态通道，因此不用。
+- **context 通道**：facts / guides / script / games 当时都是 `systemPrompt.context()`——宿主把它们渲染进每步的 runtime snapshot（一条 user 消息），不属于 system 头。complete 接管只影响 section；`suppressRuntimeContext()` 会连带删掉这四个动态通道，因此不用。**后续修订（2026-11-02）**：`facts`（用户人设 + 角色摘要）已改为 complete 段内的 system 部件，理由见 [`2026-11-02-agent-identity-system-prompt.md`](2026-11-02-agent-identity-system-prompt.md)；guides / script / games 仍在 context。
 - **mod 段**：agent bundle 不再把 mod section 注册成宿主 section（会被 complete 丢弃），改为在装配时并入 `modSectionSnapshot()`（同一份 order 钳制 + `hostPromptSafe`）；novel bundle 仍走宿主 section。
 - **查看器如实标注**：部件新增 `scope`（`system` / `context`），面板在 context 部件的行尾标 `· context`；记录的 `system` 只拼 system 头部件。
 - **前缀缓存**：complete 段仍是 system 头，preset 的冻结时钟/种子纪律不变；宿主提示词消失只会缩小头部，不引入新的字节抖动。

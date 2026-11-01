@@ -122,6 +122,14 @@ describe('systemPrompt channels stay host-safe with macro-laden assets (integrat
     return def!.text({ agent: { id: agentId } })
   }
 
+  /** complete 段的装配文本（identity 是 system 部件，不再有独立 context）。 */
+  const completeText = (agentId: string): string => {
+    const def = (contexts.get('dsh-soulmojito:agent-prompt') ?? sections.get('dsh-soulmojito:agent-prompt')) as
+      | { text: (assembly?: { agent?: { id?: string } }) => string }
+      | undefined
+    return def === undefined ? '' : def.text({ agent: { id: agentId } })
+  }
+
   const sectionText = (name: string): string => {
     const def = sections.get(name) as { text: string | (() => string) } | undefined
     if (def === undefined) return ''
@@ -222,18 +230,18 @@ describe('systemPrompt channels stay host-safe with macro-laden assets (integrat
   })
 
   it('agent-facts: card macros expand to persona/character names, leftovers are neutralized', async () => {
-    expect(contextText('dsh-soulmojito:agent-facts', AGENT_FACTS)).toBe('')
     await vi.waitFor(() => {
-      expect(contextText('dsh-soulmojito:agent-facts', AGENT_FACTS)).toContain(PERSONA)
+      expect(completeText(AGENT_FACTS)).toContain(PERSONA)
     })
-    const text = contextText('dsh-soulmojito:agent-facts', AGENT_FACTS)
+    const text = completeText(AGENT_FACTS)
     expect(text).toContain(`Current Tavern character: ${CHARACTER}`)
     expect(text).toContain(`Devoted to ${PERSONA}; wary of ${CHARACTER} cult`)
     expect(text).toContain('marks { {mystery-rune}} doors')
     expect(text).toContain(`Personality summary: Keeps ${PERSONA}'s secrets`)
+    expect(text).toContain(`Current user persona: ${PERSONA}`)
     expectHostSafe(text)
-    // 未绑定 agent 仍为空串（既有语义不回归）
-    expect(contextText('dsh-soulmojito:agent-facts', 'unbound-agent')).toBe('')
+    // 未绑定 agent 仍不含身份段（既有语义不回归）
+    expect(completeText('unbound-agent')).not.toContain('Current Tavern character')
   })
 
   it('agent-guides: user-authored guides survive the host engine too', async () => {

@@ -115,6 +115,7 @@
 - [`2026-10-29-body-read-freshness-and-group-cache.md`](../decisions/2026-10-29-body-read-freshness-and-group-cache.md) — 正文读侧：候选切换按组失效缓存 + 楼层落后时 ledger 文本优先
 - [`2026-10-29-deferred-settle-hide.md`](../decisions/2026-10-29-deferred-settle-hide.md) — 结算 hide 延后到 post-turn bridge：恢复本轮用量与正文默认展开
 - [`2026-11-01-native-agent-preset.md`](../decisions/2026-11-01-native-agent-preset.md) — 标准 DSH Agent 会话接入激活预设投影（行为设置开关）
+- [`2026-11-02-agent-identity-system-prompt.md`](../decisions/2026-11-02-agent-identity-system-prompt.md) — 用户人设与角色摘要改为 complete 段的 system 部件（不再作为 runtime-context user 消息）
 
 ### AgentNovel
 

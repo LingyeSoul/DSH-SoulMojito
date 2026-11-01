@@ -362,10 +362,13 @@ describe('Conversation Guides (proposal 0009)', () => {
     expect(llmRequests.at(-1)?.system ?? '').not.toContain('Conversation guides')
   })
 
-  it('registers the agent-guides context beside agent-facts and refreshes its cache through the write path', async () => {
+  it('registers the agent-guides context beside the agent identity part and refreshes its cache through the write path', async () => {
     expect(agentContexts.get('dsh-soulmojito:agent-guides')?.order).toBe(-65)
-    // 回归：facts 段仍注册在 guides 之前
-    expect(agentContexts.get('dsh-soulmojito:agent-facts')?.order).toBe(-70)
+    // 回归：identity（用户人设 + 角色摘要）是 system 部件，order 仍在 guides 之前；
+    // 它不再注册成宿主 runtime context。
+    expect(agentContexts.get('dsh-soulmojito:agent-facts')).toBeUndefined()
+    expect(registeredAgentPromptParts().find((part) => part.name === 'dsh-soulmojito:agent-facts'))
+      .toMatchObject({ order: -70, scope: 'system' })
     expect(registeredAgentPromptParts().find((part) => part.name === 'dsh-soulmojito:agent-kernel')?.order).toBe(-80)
 
     // 绑定的 chat 此前无 guide：首次装配返回空串并触发异步装载

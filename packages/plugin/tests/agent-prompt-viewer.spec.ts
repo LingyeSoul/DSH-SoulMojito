@@ -146,6 +146,7 @@ describe('agent prompt-viewer records (agent/request tail)', () => {
       chat_metadata: { createdAt: new Date().toISOString(), timedWorldInfo: {} },
     }, [])
     await store.putPreset('Agent Preset', structuredClone(PRESET))
+    await store.putPersona({ name: 'Rin', description: 'A prompt-viewer test persona.', position: 0 })
     await store.updateState(() => ({
       activePreset: 'Agent Preset',
       activePersona: 'Rin',
@@ -216,11 +217,17 @@ describe('agent prompt-viewer records (agent/request tail)', () => {
     expect(record.agent?.sections.map((section) => section.name)).toEqual([
       'dsh-soulmojito:agent-kernel', 'dsh-soulmojito:agent-preset', 'dsh-soulmojito:agent-facts',
     ])
-    // 去向如实：kernel/preset 进 complete 段的 system 头，facts 是 runtime snapshot 的 context。
-    expect(record.agent?.sections.map((section) => section.scope)).toEqual(['system', 'system', 'context'])
+    // 去向如实：kernel/preset/identity 都是 complete 段的 system 头；facts 不再是
+    // runtime snapshot 的 context（用户/角色信息不再以 user 消息追加到批次末尾）。
+    expect(record.agent?.sections.map((section) => section.scope)).toEqual(['system', 'system', 'system'])
     const presetSection = record.agent!.sections.find((section) => section.name === 'dsh-soulmojito:agent-preset')!
     expect(presetSection.text).toContain('Agent preset body')
     expect(presetSection.order).toBe(-75)
+    // 用户人设与角色摘要同属固定身份段（system），不再作为 runtime context 注入。
+    const identitySection = record.agent!.sections.find((section) => section.name === 'dsh-soulmojito:agent-facts')!
+    expect(identitySection.order).toBe(-70)
+    expect(identitySection.text).toContain('Current user persona: Rin')
+    expect(identitySection.text).toContain('A prompt-viewer test persona.')
     // system = 只拼 system 头的部件（context 由宿主渲染进 runtime snapshot，不在 system 里）。
     expect(record.system).toBe(record.agent!.sections
       .filter((section) => section.scope === 'system')
@@ -284,10 +291,10 @@ describe('agentPromptSectionsFor coverage lock', () => {
       effect: (fn: () => unknown) => { fn(); return () => {} },
     } as unknown as AgentContextLike)
     // 决策 2026-11-02-agent-prompt-takeover：宿主侧只剩一个 complete 段；kernel /
-    // preset 改为部件注册表（读取面），四个动态通道仍是宿主 context。
+    // preset / identity 是 system 部件（注册表读取面），guides / script / games 仍是
+    // 宿主 context。
     const builtin = [
       { name: 'dsh-soulmojito:agent-prompt', order: -80, kind: 'section', complete: true },
-      { name: 'dsh-soulmojito:agent-facts', order: -70, kind: 'context' },
       { name: 'dsh-soulmojito:agent-guides', order: -65, kind: 'context' },
       { name: 'dsh-soulmojito:agent-script', order: -64, kind: 'context' },
       { name: 'dsh-soulmojito:agent-games', order: -63, kind: 'context' },
@@ -297,11 +304,15 @@ describe('agentPromptSectionsFor coverage lock', () => {
     // 取注册面而不是求值结果——unbound agent 的四个动态通道恒空，会被摘除。
     expect(registeredAgentPromptParts().filter((part) => part.scope === 'context').map((part) => ({ name: part.name, order: part.order, kind: 'context' })))
       .toEqual(builtin.filter((entry) => entry.kind === 'context'))
+    // system 读面包含 identity（用户人设 + 角色摘要），且不再走 context。
+    expect(registeredAgentPromptParts().filter((part) => part.scope === 'system').map((part) => part.name))
+      .toContain('dsh-soulmojito:agent-facts')
     const pieces = agentPromptSectionsFor('coverage-agent')
     // system 头只有 complete 段部件 + mod 段；unbound agent 的 preset/facts 恒空摘除。
     const allowed = new Set([
       'dsh-soulmojito:agent-kernel',
       'dsh-soulmojito:agent-preset',
+      'dsh-soulmojito:agent-facts',
       ...modSectionSnapshot().map((entry) => `dsh-soulmojito:mod:${entry.modId}:${entry.definition.name}`),
     ])
     for (const piece of pieces.filter((entry) => entry.scope === 'system')) {

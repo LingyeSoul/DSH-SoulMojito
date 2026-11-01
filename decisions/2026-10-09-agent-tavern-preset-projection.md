@@ -29,7 +29,7 @@ AgentTavern 复用宿主 AgentLoop，ST 生成路径仍持有插件自己的 pro
 |---|---|
 | 内容型提示词（`main`、自定义、`jailbreak`） | 注入 agent 作用域 systemPrompt section `dsh-tavern:agent-preset`（order -75：kernel 之后、facts 之前），按 `prompt_order`（优先 global dummy 100001，回落 100000/首组）顺序拼接 |
 | 卡覆盖语义 | 与 ST 管线一致：`main` ← 卡 `system_prompt`、`jailbreak` ← 卡 `post_history_instructions`；空串回落预设内容，`{{original}}` 引用预设原文 |
-| marker（charDescription / charPersonality / scenario / personaDescription / dialogueExamples / worldInfoBefore/After / chatHistory） | 不进固定 prompt：由会话级工具、原生历史与可选预载承接（提案 0004 §5 的既有边界） |
+| marker（charDescription / charPersonality / scenario / personaDescription / dialogueExamples / worldInfoBefore/After / chatHistory） | 不进固定 prompt：由会话级工具、原生历史与可选预载承接（提案 0004 §5 的既有边界）。**后续修订（2026-11-02）**：`personaDescription` 的用户人设与角色短摘要改由 `agent-facts` 身份段固定注入 system（见 [`2026-11-02-agent-identity-system-prompt.md`](2026-11-02-agent-identity-system-prompt.md)）；其余 marker 映射不变 |
 | `temperature` | `agent/request` waterfall 覆盖（宿主 model seat 不暴露温度，预设是用户唯一的调温入口） |
 | `openai_max_context` / `openai_max_tokens` | 宿主所有：请求容量由实际 provider/model route 与 DSH pressure policy 决定（提案 0004 §8）；在工具循环里按 ST「响应长度」硬切输出上限会截断 tool-call，得不偿失 |
 | 角色为 `user`/`assistant` 的内容提示词 | 折叠进同一 system 块（AgentLoop 没有逐条消息注入的 seam；保留内容，不保留角色通道） |

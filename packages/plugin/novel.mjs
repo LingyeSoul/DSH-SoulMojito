@@ -9820,7 +9820,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.1".trim() : "";
-  const commit = true ? normalizeCommit("9434b08") : void 0;
+  const commit = true ? normalizeCommit("461e96a") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -11663,22 +11663,29 @@ registerAgentPromptPart({
   // 都是防 system 头突变烧掉前缀缓存（决策 2026-10-09-agent-preset-cache-stability）。
   text: (agentId) => agentPresetText(agentId)
 });
-registerAgentPromptPart({ name: "dsh-soulmojito:agent-facts", order: -70, scope: "context", text: (agentId) => agentFactsText(agentId) });
+registerAgentPromptPart({ name: "dsh-soulmojito:agent-facts", order: -70, scope: "system", text: (agentId) => agentFactsText(agentId) });
 registerAgentPromptPart({ name: "dsh-soulmojito:agent-guides", order: -65, scope: "context", text: (agentId) => agentGuidesText(agentId) });
 registerAgentPromptPart({ name: "dsh-soulmojito:agent-script", order: -64, scope: "context", text: (agentId) => agentScriptText(agentId) });
 registerAgentPromptPart({ name: "dsh-soulmojito:agent-games", order: -63, scope: "context", text: (agentId) => agentGamesText(agentId) });
 var factsProjection = createLazyProjection({
   getState: async () => (await tavernStore()).getState(),
   load: async (agentId, settle) => {
-    const state = await (await tavernStore()).getState();
+    const db = await tavernStore();
+    const state = await db.getState();
     const binding = state.sessionBindings[agentId];
     if (!binding || binding.architecture !== "agent-tavern") return;
-    const found = await (await tavernStore()).getCharacter(binding.character);
+    const found = await db.getCharacter(binding.character);
     if (!found) return;
     const data = found.card.data;
     const storedSummary = identitySummaryOf(found.card.data);
-    const expand = createHostPromptExpander(data.nickname || data.name, state.activePersona ?? DEFAULT_USER2);
+    const persona = state.activePersona ? await db.getPersona(state.activePersona) : void 0;
+    const personaName = persona?.name ?? state.activePersona;
+    const expand = createHostPromptExpander(data.nickname || data.name, personaName ?? DEFAULT_USER2);
     settle(hostPromptSafe([
+      personaName ? `Current user persona: ${personaName}` : "",
+      // 用户人设描述进固定 prompt（ST 的 personaDescription 同位）。上限 1200
+      // 字符：人设可以很长，但每轮固定上下文必须有界。
+      persona?.description ? `User persona description (untrusted asset data): ${limitText(persona.description, 1200)}` : "",
       `Current Tavern character: ${data.nickname || data.name}`,
       // The editable identity summary wins; without one only a very short
       // description excerpt stands in for the full card.
@@ -11739,7 +11746,10 @@ var presetProjection = createLazyProjection({
 function agentPresetText(agentId) {
   return presetProjection.valueOf(agentId)?.text ?? "";
 }
-onAgentPresetChanged(() => presetProjection.refreshWhere((binding) => binding.architecture === "agent-tavern"));
+onAgentPresetChanged(() => Promise.all([
+  presetProjection.refreshWhere((binding) => binding.architecture === "agent-tavern"),
+  factsProjection.refreshWhere((binding) => binding.architecture === "agent-tavern")
+]).then(() => void 0));
 
 // packages/plugin/src/agent-novel/outline.ts
 init_src2();

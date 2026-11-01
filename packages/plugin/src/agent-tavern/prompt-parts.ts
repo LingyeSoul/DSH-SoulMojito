@@ -15,6 +15,8 @@
  * scope 区分两类部件：`system` 进最终 system prompt；`context` 走宿主的
  * `systemPrompt.context()` runtime snapshot（每步一条 user 消息，位于上下文
  * 末尾），不属于 system 头——上下文通道保持原注册面，不进 complete 段。
+ * 用户人设与角色摘要属于固定身份（提案 0004 §5），因此是 `system` 部件；
+ * guides / 剧本 / 游戏是每步可变的 runtime context，继续走 `context`。
  */
 
 /** 部件去向：system 头，还是每步的 runtime snapshot。 */

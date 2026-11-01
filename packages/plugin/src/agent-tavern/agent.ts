@@ -60,8 +60,9 @@ export const AGENT_PROMPT_SECTION = 'dsh-soulmojito:agent-prompt'
  * 部件注册（模块加载期一次：apply 会因 recompose 反复执行，部件不该跟着重复
  * 注册）。order 口径与旧的独立注册面一致：
  * - system：IM 段 -90（im-agent bundle 注册）→ kernel -80 → preset -75 →
- *   mod 段 -50..0（agentPromptSectionsFor 从跨 bundle 快照并入）；
- * - context：facts -70 / guides -65 / script -64 / games -63 仍走宿主
+ *   identity/facts -70 → mod 段 -50..0（agentPromptSectionsFor 从跨 bundle 快照
+ *   并入）；
+ * - context：guides -65 / script -64 / games -63 仍走宿主
  *   `systemPrompt.context()` 的 runtime snapshot（每步一条 user 消息，位于上下文
  *   末尾），不进 complete 段——它们本来就是动态上下文，不是 system 头。
  */
@@ -83,7 +84,7 @@ registerAgentPromptPart({
   // 都是防 system 头突变烧掉前缀缓存（决策 2026-10-09-agent-preset-cache-stability）。
   text: (agentId) => agentPresetText(agentId),
 })
-registerAgentPromptPart({ name: 'dsh-soulmojito:agent-facts', order: -70, scope: 'context', text: (agentId) => agentFactsText(agentId) })
+registerAgentPromptPart({ name: 'dsh-soulmojito:agent-facts', order: -70, scope: 'system', text: (agentId) => agentFactsText(agentId) })
 registerAgentPromptPart({ name: 'dsh-soulmojito:agent-guides', order: -65, scope: 'context', text: (agentId) => agentGuidesText(agentId) })
 registerAgentPromptPart({ name: 'dsh-soulmojito:agent-script', order: -64, scope: 'context', text: (agentId) => agentScriptText(agentId) })
 registerAgentPromptPart({ name: 'dsh-soulmojito:agent-games', order: -63, scope: 'context', text: (agentId) => agentGamesText(agentId) })
@@ -92,7 +93,7 @@ export function apply(ctx: AgentContextLike): void {
   // 唯一 complete 段（决策 2026-11-02-agent-prompt-takeover）：宿主 assemble()
   // 对 complete 段只保留它自己，AgentTavern 会话因此不再携带宿主的 identity /
   // deployment persona / 工具与界面指引。段文本按 prompt-parts 注册表拼装
-  // （IM 段 + kernel + preset + mod 段），空文本摘除。
+  // （IM 段 + kernel + preset + identity + mod 段），空文本摘除。
   //
   // 文本仍走 hostPromptSafe（部件注册期）：部件文本一旦残留 {{...}}（宿主变量
   // 语法），装配会直接抛错中止运行——让内容编辑错不起（prompt-safety.ts）。
@@ -102,22 +103,21 @@ export function apply(ctx: AgentContextLike): void {
     complete: true,
     text: (assembly) => agentSystemPromptTextOf(assembly?.agent?.id),
   })
-  // 启动预热（见 preheatAgentPresetProjections 注释）：消除插件重启后既有绑定
+  // 启动预热（见 preheatAgentProjections 注释）：消除插件重启后既有绑定
   // 的首轮空串竞态。fire-and-forget——装载完成前懒装载路径照常兜底。
-  void preheatAgentPresetProjections()
+  void preheatAgentProjections()
   // 当前 agent 身份只从装配上下文取：宿主 assemble() 的上下文携带
   // { agent, scope, signal }（@deepseek-ai/dsh-agent 的 assembleContextFor），
   // 与本插件 ctx 上没有任何 agent 服务这一事实无关。反之，未 inject 的属性
   // 访问会被宿主代理同步抛 `cannot get property "agent" without inject`，在
   // apply() 期直接让整个模块挂载失败（0.2.0-rc.2 实测），所以这里不做任何
   // ctx.agent 探测——身份通道与 dsh-user-approval / dsh-sandbox-policy 一致。
-  ctx.systemPrompt?.context?.({
-    name: 'dsh-soulmojito:agent-facts',
-    order: -70,
-    text: (assembly) => agentFactsText(assembly?.agent?.id),
-  })
-  // 持续指引（提案 0009）：与 facts 同款 best-effort 异步装载；guide 写入经
-  // guides.ts 的 emitGuidesChanged 写穿缓存，下一次装配即时生效（见文件底部）。
+  // 角色摘要与用户人设（agent-facts）是 complete 段里的 system 部件：它们在
+  // 装配回调里按 agent id 求值，位置固定在预设栈之后、历史之前（不再作为每步
+  // 末尾的 runtime-context user 消息混进对话）。
+  //
+  // 持续指引（提案 0009）：best-effort 异步装载；guide 写入经 guides.ts 的
+  // emitGuidesChanged 写穿缓存，下一次装配即时生效（见文件底部）。
   ctx.systemPrompt?.context?.({
     name: 'dsh-soulmojito:agent-guides',
     order: -65,
@@ -180,7 +180,7 @@ export interface AgentContextLike {
       name: string
       order: number
       /** 装配回调的入参是宿主的装配上下文（{ agent, scope, signal }），
-       *  与 section 的无参回调不同——facts 的 agent 身份由此而来。 */
+       *  与 section 的无参回调不同——context 部件的 agent 身份由此而来。 */
       text: string | ((assembly?: AgentAssemblyLike) => string)
     }) => unknown
   }
@@ -225,24 +225,35 @@ function createTools(): ToolDefinition[] {
   return tools
 }
 
-/** facts 文本通道：首次为某 agent 装配时异步装载一次，装载完成前返回空串。
- *  与挂载期装载（apply 里同步取 ctx.agent）等价：best-effort、不阻塞装配、
- *  失败即静默留空；不同点只是身份从装配上下文来。 */
+/** 身份文本通道（complete 段的 system 部件）：首次为某 agent 装配时异步装载
+ *  一次，装载完成前返回空串。与挂载期装载（apply 里同步取 ctx.agent）等价：
+ *  best-effort、不阻塞装配、失败即静默留空；不同点只是身份从装配上下文来。
+ *
+ *  角色摘要与用户人设同处一段：提案 0004 §5 把「当前角色身份、用户身份、
+ *  角色短身份摘要」列为固定 prompt 的组成；它们不是每步变化的 runtime
+ *  context，作为 user 消息追加到批次末尾会让模型把设定当成用户发言。 */
 const factsProjection = createLazyProjection<string>({
   getState: async () => (await tavernStore()).getState(),
   load: async (agentId, settle) => {
-    const state = await (await tavernStore()).getState()
+    const db = await tavernStore()
+    const state = await db.getState()
     const binding = state.sessionBindings[agentId]
     if (!binding || binding.architecture !== 'agent-tavern') return
-    const found = await (await tavernStore()).getCharacter(binding.character)
+    const found = await db.getCharacter(binding.character)
     if (!found) return
     const data = found.card.data
     const storedSummary = identitySummaryOf(found.card.data)
-    // 卡数据是 ST 宏（{{user}}/{{char}}/...）的高频来源；宿主 interpolate 会把
-    // 残留 {{...}} 当宿主变量渲染并抛错中止装配——先按 ST 语义展开，再中性化
-    // 未知宏（prompt-safety.ts，0.4.1 unknown prompt variable 故障）。
-    const expand = createHostPromptExpander(data.nickname || data.name, state.activePersona ?? DEFAULT_USER)
+    const persona = state.activePersona ? await db.getPersona(state.activePersona) : undefined
+    const personaName = persona?.name ?? state.activePersona
+    // 卡/人设数据是 ST 宏（{{user}}/{{char}}/...）的高频来源；宿主 interpolate
+    // 会把残留 {{...}} 当宿主变量渲染并抛错中止装配——先按 ST 语义展开，再
+    // 中性化未知宏（prompt-safety.ts，0.4.1 unknown prompt variable 故障）。
+    const expand = createHostPromptExpander(data.nickname || data.name, personaName ?? DEFAULT_USER)
     settle(hostPromptSafe([
+      personaName ? `Current user persona: ${personaName}` : '',
+      // 用户人设描述进固定 prompt（ST 的 personaDescription 同位）。上限 1200
+      // 字符：人设可以很长，但每轮固定上下文必须有界。
+      persona?.description ? `User persona description (untrusted asset data): ${limitText(persona.description, 1200)}` : '',
       `Current Tavern character: ${data.nickname || data.name}`,
       // The editable identity summary wins; without one only a very short
       // description excerpt stands in for the full card.
@@ -350,7 +361,7 @@ function agentPresetTemperatureOf(agentId: string | undefined): number | undefin
 
 /**
  * 预注入面快照（提示词查看器 Agent 模式，决策 2026-11-02-agent-prompt-takeover）：
- * 注册表部件（IM 段 / kernel / preset / 四个 context 通道）+ mod 段快照
+ * 注册表部件（IM 段 / kernel / preset / identity + 三个 context 通道）+ mod 段快照
  * （cross-bundle 注册表，读时与旧挂载面同式钳制 + hostPromptSafe）。
  *
  * scope 直接取自注册面：`system` 是最终 system prompt 的组成（complete 段），
@@ -428,15 +439,22 @@ async function recordAgentTavernPromptViewFor(
 
 // 模块加载即注册写穿回调：预设写路径（index.ts 的 settings/preset 路由、写卡
 // 工作台 preset_put、会话激活预热）成功后重新装载所有 AgentTavern 绑定；
-// 无绑定时是 no-op。
-onAgentPresetChanged(() => presetProjection.refreshWhere((binding) => binding.architecture === 'agent-tavern'))
+// 身份段依赖激活人设与角色卡覆盖，跟着同一信号刷新。无绑定时是 no-op。
+onAgentPresetChanged(() => Promise.all([
+  presetProjection.refreshWhere((binding) => binding.architecture === 'agent-tavern'),
+  factsProjection.refreshWhere((binding) => binding.architecture === 'agent-tavern'),
+]).then(() => undefined))
 
 /**
  * 启动预热（apply() 调用）：插件重启后 store 里既有绑定（持续中的会话）不再
  * 走 index.ts 的激活预热，懒装载竞态会让首轮装配拿到空串、装载完成后整块出现
  * ——system 头一次突变，其后全部前缀缓存作废。挂载时主动装载一遍全部
- * agent-tavern 绑定；模块级幂等（apply 可能被宿主重复调用），失败由懒装载兜底。
+ * agent-tavern 绑定（预设栈与身份段）；模块级幂等（apply 可能被宿主重复调用），
+ * 失败由懒装载兜底。
  */
-function preheatAgentPresetProjections(): Promise<void> {
-  return presetProjection.preheatWhere((binding) => binding.architecture === 'agent-tavern')
+function preheatAgentProjections(): Promise<void> {
+  return Promise.all([
+    presetProjection.preheatWhere((binding) => binding.architecture === 'agent-tavern'),
+    factsProjection.preheatWhere((binding) => binding.architecture === 'agent-tavern'),
+  ]).then(() => undefined)
 }

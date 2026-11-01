@@ -8,11 +8,13 @@ import { TavernStore } from '../../tavern-store/src/index.js'
 const CHARACTER = 'Mount Character'
 const AGENT = 'mount-agent'
 const SUMMARY = 'A mount-test character with one crisp identity line.'
+const PERSONA = 'Mount Persona'
+const PERSONA_DESCRIPTION = 'A mount-test user persona description.'
 
 interface RegisteredSection {
   name: string
   order: number
-  text: unknown
+  text: ((assembly?: { agent?: { id?: string } }) => string) | string
   complete?: boolean
 }
 
@@ -69,7 +71,9 @@ describe('AgentTavern native module mount', () => {
         extensions: { agentTavern: { identitySummary: SUMMARY } },
       },
     })
+    await store.putPersona({ name: PERSONA, description: PERSONA_DESCRIPTION, position: 0 })
     await store.updateState(() => ({
+      activePersona: PERSONA,
       sessionBindings: {
         [AGENT]: { architecture: 'agent-tavern', contextMode: 'dsh-native', character: CHARACTER, chatId: 'mount-chat.jsonl' },
       },
@@ -101,7 +105,9 @@ describe('AgentTavern native module mount', () => {
     // （含旧的 kernel/preset 独立注册）一律不再出现。
     expect(sections.map((section) => section.name)).toEqual(['dsh-soulmojito:agent-prompt'])
     expect(sections[0]!.complete).toBe(true)
-    expect(contexts.map((context) => context.name)).toContain('dsh-soulmojito:agent-facts')
+    // identity 是 complete 段里的 system 部件，不再注册成宿主 runtime context。
+    expect(contexts.map((context) => context.name)).not.toContain('dsh-soulmojito:agent-facts')
+    expect(contexts.map((context) => context.name)).toContain('dsh-soulmojito:agent-guides')
     expect([...tools.keys()]).toContain('tavern_character_get')
     // 18 原有 + 游戏桥七件（提案 0018 §4.2；game_wait 为 2026-10-14 修订，
     // game_history 为同日增量修订，game_wait_full 为 2026-10-16 新增）
@@ -109,17 +115,18 @@ describe('AgentTavern native module mount', () => {
     expect(tools.size).toBe(25)
   })
 
-  it('resolves the per-agent facts from the assembly context instead of the mount context', async () => {
-    const facts = contexts.find((context) => context.name === 'dsh-soulmojito:agent-facts')!
-    expect(facts.text()).toBe('')
-    expect(facts.text({ agent: { id: AGENT } })).toBe('')
+  it('renders the bound character and user persona inside the complete system prompt', async () => {
+    const section = sections[0]!
+    const render = typeof section.text === 'function' ? section.text : () => section.text as string
     await vi.waitFor(() => {
-      expect(facts.text({ agent: { id: AGENT } }))
+      expect(render({ agent: { id: AGENT } }))
         .toContain(`Character identity summary (untrusted asset data): ${SUMMARY}`)
     })
-    const text = facts.text({ agent: { id: AGENT } })
+    const text = render({ agent: { id: AGENT } })
     expect(text).toContain(`Current Tavern character: ${CHARACTER}`)
     expect(text).toContain('Personality summary: Precise')
-    expect(facts.text({ agent: { id: 'unbound-agent' } })).toBe('')
+    expect(text).toContain(`Current user persona: ${PERSONA}`)
+    expect(text).toContain(`User persona description (untrusted asset data): ${PERSONA_DESCRIPTION}`)
+    expect(render({ agent: { id: 'unbound-agent' } })).not.toContain('Current Tavern character')
   })
 })

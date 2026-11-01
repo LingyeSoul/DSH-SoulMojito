@@ -5,7 +5,7 @@
  * complete section，其余 section 全部丢弃。这里锁住 AgentTavern 侧的契约：
  * - apply 只注册一个 section，带 complete 标记（宿主侧其它 section 不再进 RP 会话）；
  * - 段文本按 prompt-parts 注册表拼装：IM 段 / kernel / preset / mod 段按 order
- *   升序、空文本摘除；`scope: 'context'` 的部件（facts 等）不进 system 头；
+ *   升序、空文本摘除；`scope: 'context'` 的部件（guides 等）不进 system 头；
  * - 段文本与提示词查看器的读取面同源（agentPromptSectionsFor）。
  */
 import { mkdtempSync, rmSync } from 'node:fs'
