@@ -15598,7 +15598,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.5".trim() : "";
-  const commit = true ? normalizeCommit("54e74ff") : void 0;
+  const commit = true ? normalizeCommit("26d20e9") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -51344,6 +51344,80 @@ function bodyProjectionState(projected, ledger, latestEditSeq) {
   return { current: textCurrent && selectionCurrent, textCurrent };
 }
 
+// packages/plugin/src/http/asset-import-routes.ts
+init_src2();
+init_src();
+init_dsh_home();
+init_events();
+init_io();
+async function handleCharacterImportRoute(db, req, res) {
+  const body = await readJson(req, 25 * 1024 * 1024);
+  let source;
+  if (typeof body.pngBase64 === "string") source = new Uint8Array(Buffer.from(body.pngBase64, "base64"));
+  else if (typeof body.charxBase64 === "string") source = new Uint8Array(Buffer.from(body.charxBase64, "base64"));
+  else if (body.card && typeof body.card === "object") source = body.card;
+  else throw new Error("expected { pngBase64 }, { charxBase64 } or { card }");
+  const result = await db.importCharacter(source);
+  await emitAssetsSaved("character", result.card.data.name);
+  try {
+    await saveOriginalSnapshot(tavernDataRoot(), result.card.data.name, result.card);
+  } catch (error) {
+    console.warn(`dsh-soulmojito: original snapshot for '${result.card.data.name}' failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const current = await db.getState();
+  if (!current.activeCharacter) {
+    await db.patchState({ activeCharacter: result.card.data.name });
+  }
+  await refreshActivePrompt();
+  return sendJson(res, 200, { ok: true, name: result.card.data.name, card: publicCard(result.card), world: result.importedWorld ?? null, importedRegex: result.importedRegex });
+}
+async function handleWorldImportRoute(db, req, res) {
+  const body = await readJson(req);
+  const data = asRecord5(body.data);
+  if (typeof body.name !== "string" || data === void 0) throw new Error("expected { name, data }");
+  const book = await db.importWorldFile(body.name, data);
+  await emitAssetsSaved("world", book.name);
+  return sendJson(res, 200, { ok: true, name: book.name, entries: book.entries.length });
+}
+async function handlePresetImportRoute(db, req, res) {
+  const body = await readJson(req);
+  const data = asRecord5(body.data);
+  if (typeof body.name !== "string" || data === void 0) throw new Error("expected { name, data }");
+  parsePresetOrThrow(data);
+  const result = await db.importPreset(body.name, data);
+  await emitAssetsSaved("preset", body.name);
+  await emitAgentPresetChanged();
+  return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(data), importedRegex: result.importedRegex });
+}
+async function handlePresetReadRoute(db, res, route) {
+  const name2 = decodeURIComponent(route.slice("preset/".length));
+  const data = await db.getPreset(name2);
+  if (!data) return sendJson(res, 404, { ok: false, message: "preset not found" });
+  return sendJson(res, 200, { ok: true, name: name2, kind: detectPresetKind(data), data });
+}
+async function handlePresetUpdateRoute(db, req, res, route) {
+  const oldName = decodeURIComponent(route.slice("preset/".length));
+  const body = await readJson(req, 10 * 1024 * 1024);
+  const data = asRecord5(body.data);
+  if (typeof body.name !== "string" || body.name.trim() === "" || data === void 0) {
+    throw new Error("expected { name, data }");
+  }
+  const name2 = body.name;
+  parsePresetOrThrow(data);
+  await db.putPreset(name2, data);
+  await emitAssetsSaved("preset", name2);
+  if (name2 !== oldName) await db.deletePreset(oldName);
+  const state = await db.updateState((current) => ({
+    activePreset: current.activePreset === oldName ? name2 : current.activePreset,
+    ...name2 !== oldName && current.regexScriptPresetOwners !== void 0 ? {
+      regexScriptPresetOwners: Object.fromEntries(Object.entries(current.regexScriptPresetOwners).map(([id, owner]) => [id, owner === oldName ? name2 : owner]))
+    } : {}
+  }));
+  await emitAgentPresetChanged();
+  await refreshActivePrompt();
+  return sendJson(res, 200, { ok: true, name: name2, kind: detectPresetKind(data), data, state });
+}
+
 // packages/plugin/src/http/character-routes.ts
 init_src();
 init_dsh_home();
@@ -60213,6 +60287,32 @@ var STORE_ROUTES = [
     name: "group-delete",
     matches: (route, method) => method === "DELETE" && route === "group",
     handle: ({ db, res, url }) => handleGroupDeleteRoute(db, res, url)
+  },
+  // Asset imports and preset writes; order mirrors the old if-chain.
+  {
+    name: "character-import",
+    matches: (route, method) => method === "POST" && route === "import/character",
+    handle: ({ db, req, res }) => handleCharacterImportRoute(db, req, res)
+  },
+  {
+    name: "world-import",
+    matches: (route, method) => method === "POST" && route === "import/world",
+    handle: ({ db, req, res }) => handleWorldImportRoute(db, req, res)
+  },
+  {
+    name: "preset-import",
+    matches: (route, method) => method === "POST" && route === "import/preset",
+    handle: ({ db, req, res }) => handlePresetImportRoute(db, req, res)
+  },
+  {
+    name: "preset-read",
+    matches: (route, method) => method === "GET" && route.startsWith("preset/"),
+    handle: ({ db, res, route }) => handlePresetReadRoute(db, res, route)
+  },
+  {
+    name: "preset-update",
+    matches: (route, method) => method === "PUT" && route.startsWith("preset/"),
+    handle: ({ db, req, res, route }) => handlePresetUpdateRoute(db, req, res, route)
   }
 ];
 
@@ -60320,73 +60420,6 @@ async function handleApi(ctx, req, res) {
     if ("activePreset" in patch || "activePersona" in patch || "cardWorkbenchPresetEnabled" in patch || "agentNovelPresetEnabled" in patch || "nativeAgentPreset" in patch) await emitAgentPresetChanged();
     await refreshActivePrompt();
     return sendJson(res, 200, { ok: true, state });
-  }
-  if (method === "POST" && route === "import/character") {
-    const body = await readJson(req, 25 * 1024 * 1024);
-    let source;
-    if (typeof body.pngBase64 === "string") source = new Uint8Array(Buffer.from(body.pngBase64, "base64"));
-    else if (typeof body.charxBase64 === "string") source = new Uint8Array(Buffer.from(body.charxBase64, "base64"));
-    else if (body.card && typeof body.card === "object") source = body.card;
-    else throw new Error("expected { pngBase64 }, { charxBase64 } or { card }");
-    const result = await db.importCharacter(source);
-    await emitAssetsSaved("character", result.card.data.name);
-    try {
-      await saveOriginalSnapshot(tavernDataRoot(), result.card.data.name, result.card);
-    } catch (error) {
-      console.warn(`dsh-soulmojito: original snapshot for '${result.card.data.name}' failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
-    const current = await db.getState();
-    if (!current.activeCharacter) {
-      await db.patchState({ activeCharacter: result.card.data.name });
-    }
-    await refreshActivePrompt();
-    return sendJson(res, 200, { ok: true, name: result.card.data.name, card: publicCard(result.card), world: result.importedWorld ?? null, importedRegex: result.importedRegex });
-  }
-  if (method === "POST" && route === "import/world") {
-    const body = await readJson(req);
-    const data = asRecord5(body.data);
-    if (typeof body.name !== "string" || data === void 0) throw new Error("expected { name, data }");
-    const book = await db.importWorldFile(body.name, data);
-    await emitAssetsSaved("world", book.name);
-    return sendJson(res, 200, { ok: true, name: book.name, entries: book.entries.length });
-  }
-  if (method === "POST" && route === "import/preset") {
-    const body = await readJson(req);
-    const data = asRecord5(body.data);
-    if (typeof body.name !== "string" || data === void 0) throw new Error("expected { name, data }");
-    parsePresetOrThrow(data);
-    const result = await db.importPreset(body.name, data);
-    await emitAssetsSaved("preset", body.name);
-    await emitAgentPresetChanged();
-    return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(data), importedRegex: result.importedRegex });
-  }
-  if (method === "GET" && route.startsWith("preset/")) {
-    const name2 = decodeURIComponent(route.slice("preset/".length));
-    const data = await db.getPreset(name2);
-    if (!data) return sendJson(res, 404, { ok: false, message: "preset not found" });
-    return sendJson(res, 200, { ok: true, name: name2, kind: detectPresetKind(data), data });
-  }
-  if (method === "PUT" && route.startsWith("preset/")) {
-    const oldName = decodeURIComponent(route.slice("preset/".length));
-    const body = await readJson(req, 10 * 1024 * 1024);
-    const data = asRecord5(body.data);
-    if (typeof body.name !== "string" || body.name.trim() === "" || data === void 0) {
-      throw new Error("expected { name, data }");
-    }
-    const name2 = body.name;
-    parsePresetOrThrow(data);
-    await db.putPreset(name2, data);
-    await emitAssetsSaved("preset", name2);
-    if (name2 !== oldName) await db.deletePreset(oldName);
-    const state = await db.updateState((current) => ({
-      activePreset: current.activePreset === oldName ? name2 : current.activePreset,
-      ...name2 !== oldName && current.regexScriptPresetOwners !== void 0 ? {
-        regexScriptPresetOwners: Object.fromEntries(Object.entries(current.regexScriptPresetOwners).map(([id, owner]) => [id, owner === oldName ? name2 : owner]))
-      } : {}
-    }));
-    await emitAgentPresetChanged();
-    await refreshActivePrompt();
-    return sendJson(res, 200, { ok: true, name: name2, kind: detectPresetKind(data), data, state });
   }
   if (method === "POST" && route === "binding") {
     const body = await readJson(req);

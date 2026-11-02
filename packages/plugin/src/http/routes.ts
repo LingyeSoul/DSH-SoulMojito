@@ -10,6 +10,13 @@ import type { PluginContext } from '../host-contract.js'
 import { getGamesServicePromise, getImRuntime } from '../runtime.js'
 import { handleAgentTavernBodyApi } from './body-api.js'
 import {
+  handleCharacterImportRoute,
+  handlePresetImportRoute,
+  handlePresetReadRoute,
+  handlePresetUpdateRoute,
+  handleWorldImportRoute,
+} from './asset-import-routes.js'
+import {
   handleCharacterDeleteRoute,
   handleCharacterExportRoute,
   handleCharacterUpdateRoute,
@@ -247,5 +254,31 @@ export const STORE_ROUTES: readonly RouteEntry<StoreRouteContext>[] = [
     name: 'group-delete',
     matches: (route, method) => method === 'DELETE' && route === 'group',
     handle: ({ db, res, url }) => handleGroupDeleteRoute(db, res, url),
+  },
+  // Asset imports and preset writes; order mirrors the old if-chain.
+  {
+    name: 'character-import',
+    matches: (route, method) => method === 'POST' && route === 'import/character',
+    handle: ({ db, req, res }) => handleCharacterImportRoute(db, req, res),
+  },
+  {
+    name: 'world-import',
+    matches: (route, method) => method === 'POST' && route === 'import/world',
+    handle: ({ db, req, res }) => handleWorldImportRoute(db, req, res),
+  },
+  {
+    name: 'preset-import',
+    matches: (route, method) => method === 'POST' && route === 'import/preset',
+    handle: ({ db, req, res }) => handlePresetImportRoute(db, req, res),
+  },
+  {
+    name: 'preset-read',
+    matches: (route, method) => method === 'GET' && route.startsWith('preset/'),
+    handle: ({ db, res, route }) => handlePresetReadRoute(db, res, route),
+  },
+  {
+    name: 'preset-update',
+    matches: (route, method) => method === 'PUT' && route.startsWith('preset/'),
+    handle: ({ db, req, res, route }) => handlePresetUpdateRoute(db, req, res, route),
   },
 ]
