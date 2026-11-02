@@ -2,7 +2,7 @@
 
 monorepo 中的**可安装单元**：DSH 官方 Web bundle。产品概览、三种会话架构、能力地图与安装流程见仓库根 [`README.md`](../../README.md) 与 [`docs/README.md`](../../docs/README.md)，本文件只写包级内容。
 
-`pnpm run build:plugin` 把八个 `@dsh-soulmojito/*` 工作区库与 Node half 打进六个自包含 bundle（`index.mjs` + `agent` / `compaction` / `novel` / `card-workbench` / `reasoning`），client closure 由 DSH profile 注入，不要求用户另行安装公共 `@deepseek-ai/*` 依赖。
+`pnpm run build:plugin` 把十个 `@dsh-soulmojito/*` 工作区库与 Node half 打进七个自包含 bundle（`index.mjs` + `agent` / `im-agent` / `compaction` / `novel` / `card-workbench` / `reasoning`），client closure 由 DSH profile 注入，不要求用户另行安装公共 `@deepseek-ai/*` 依赖。
 
 ## 安装
 
@@ -86,7 +86,7 @@ pnpm run build:plugin
 node packages/plugin/scripts/gates/run.mjs
 ```
 
-15 个 gate 覆盖包元数据、Cordis patch、Node/client bundle、构建期 stamp、自更新路由、frontend runtime、client VM mount、Node half mount、AgentTavern 隔离、native header adapter、内部工作区、revision、stale binding、V4 会话准入与设置页边界。全量测试基线与门禁口径以根 [`README.md`](../../README.md) 的「测试与质量基线」为唯一来源，不在本文件另记一份（免得两份口径漂移）。
+20 个 gate 覆盖包元数据、Cordis patch、Node/client bundle、构建期 stamp、自更新路由、frontend runtime、client VM mount、Node half mount、AgentTavern 隔离、native header adapter、内部工作区、revision、stale binding、V4 会话准入与设置页边界。全量测试基线与门禁口径以根 [`README.md`](../../README.md) 的「测试与质量基线」为唯一来源，不在本文件另记一份（免得两份口径漂移）。
 
 ## 存量会话修复
 

@@ -1,6 +1,6 @@
 # 施工计划：IM 通道（提案 0024）
 
-> 日期：2026-10-30。状态：M0–M4 与 M5 客户端面板已落地（媒体与收口未做）。
+> 日期：2026-10-30。状态：M0–M5 已落地（媒体双向、运行日志、QQ 运行时一键安装、群分片与收口完成）。
 > 设计契约：[`docs/proposals/0024-im-channels.md`](../proposals/0024-im-channels.md)。
 > 验证口径：`pnpm run check`（tsc + vitest + build + gates）。
 

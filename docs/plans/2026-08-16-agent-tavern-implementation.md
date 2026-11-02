@@ -1,6 +1,6 @@
 # 施工计划：AgentTavern 原生 AgentLoop
 
-> 日期：2026-08-16。状态：实施中（M0-M3 已完成，M4-M5 待执行；M6 受宿主能力阻塞）。
+> 日期：2026-08-16。状态：M0–M5 已完成（AgentTavern 原生会话已是默认架构）；M6（agent-managed）仍受宿主能力阻塞。
 > 架构来源：提交 `0f2dc4cc2cb0fc7f8534f6d00d911b10e34c0bca` 中的
 > `docs/proposals/0004-agent-tavern-architecture.md` 与
 > `docs/exploration/2026-08-16-dsh-agentloop-native-audit.md`。

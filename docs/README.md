@@ -32,7 +32,7 @@
 | [`0021`](proposals/0021-agent-tavern-body-ops.md) | AgentTavern 正文编辑、重生成与正文候选（DSH 原生 seam，不 fork） |
 | [`0022`](proposals/0022-agent-tavern-write-rollback.md) | AgentTavern 正文重生成的写入回滚（MVU 变量、记忆/变量工具 journal） |
 | [`0023`](proposals/0023-agent-tavern-mvu-body-switching.md) | AgentTavern MVU 正文编辑与候选切换（候选级 receipt） |
-| [`0024`](proposals/0024-im-channels.md) | IM 通道（QQ / 微信 / OneBot 11）：peer→AgentTavern 会话绑定、立即投递、IM 工具族、扫码绑定与安全边界（M0–M4 已实现：OneBot 11 + QQ + 微信；M5 未开始） |
+| [`0024`](proposals/0024-im-channels.md) | IM 通道（QQ / 微信 / OneBot 11）：peer→AgentTavern 会话绑定、立即投递、IM 工具族、扫码绑定与安全边界（M0–M5 已实现：OneBot 11 + QQ + 微信；媒体双向、运行日志、QQ 运行时一键安装与群分片已落地） |
 
 ## 开发者文档（`mods/`、`games/`、`frontend/`）
 
@@ -102,6 +102,7 @@
 - [`2026-10-09-agent-preset-cache-stability.md`](../decisions/2026-10-09-agent-preset-cache-stability.md) — 预设投影的前缀缓存稳定性（冻结投影）
 - [`2026-10-09-agent-tavern-preset-projection.md`](../decisions/2026-10-09-agent-tavern-preset-projection.md) — AgentTavern 预设投影（提示词块 + `temperature`）
 - [`2026-10-11-agent-tavern-host-fork.md`](../decisions/2026-10-11-agent-tavern-host-fork.md) — AgentTavern 收养宿主原生会话分叉（fork adoption）
+- [`2026-10-20-agent-tavern-native-display-and-greeting.md`](../decisions/2026-10-20-agent-tavern-native-display-and-greeting.md) — AgentTavern 原生会话的正则显示与新建开场白选择
 - [`2026-10-28-agent-tavern-body-plugin-records.md`](../decisions/2026-10-28-agent-tavern-body-plugin-records.md) — 正文状态持久化采用实验 plugin record（版本门控 + 政策披露）
 - [`2026-10-28-agent-tavern-body-write-rollback.md`](../decisions/2026-10-28-agent-tavern-body-write-rollback.md) — 正文重生成的写入回滚：MVU receipt、记忆/变量 journal 与失败恢复时序
 - [`2026-10-28-agent-tavern-mvu-body-edit.md`](../decisions/2026-10-28-agent-tavern-mvu-body-edit.md) — MVU 正文编辑 P0：候选级 receipt、惰性迁移与插件侧预检
@@ -114,7 +115,10 @@
 - [`2026-10-29-agent-tavern-regenerate-hides-draft.md`](../decisions/2026-10-29-agent-tavern-regenerate-hides-draft.md) — 重生成开始即隐藏旧正文：重掷不再看到草稿，失败恢复改为追加副本
 - [`2026-10-29-body-read-freshness-and-group-cache.md`](../decisions/2026-10-29-body-read-freshness-and-group-cache.md) — 正文读侧：候选切换按组失效缓存 + 楼层落后时 ledger 文本优先
 - [`2026-10-29-deferred-settle-hide.md`](../decisions/2026-10-29-deferred-settle-hide.md) — 结算 hide 延后到 post-turn bridge：恢复本轮用量与正文默认展开
+- [`2026-10-29-body-review-fix-round.md`](../decisions/2026-10-29-body-review-fix-round.md) — AgentTavern 正文审查收口：游标、journal 探测、op-abort 与读侧 lastOperation
+- [`2026-10-30-body-review-fix-round-2.md`](../decisions/2026-10-30-body-review-fix-round-2.md) — AgentTavern 正文审查第二轮修复：并发写归因、恢复时序、checkpoint 版本与出网净化
 - [`2026-11-01-native-agent-preset.md`](../decisions/2026-11-01-native-agent-preset.md) — 标准 DSH Agent 会话接入激活预设投影（行为设置开关）
+- [`2026-11-02-agent-prompt-takeover.md`](../decisions/2026-11-02-agent-prompt-takeover.md) — AgentTavern 接管整份 system prompt（complete 段）
 - [`2026-11-02-agent-identity-system-prompt.md`](../decisions/2026-11-02-agent-identity-system-prompt.md) — 用户人设与角色摘要改为 complete 段的 system 部件（不再作为 runtime-context user 消息）
 
 ### AgentNovel
@@ -164,6 +168,7 @@
 - [`2026-10-21-frontend-host-background.md`](../decisions/2026-10-21-frontend-host-background.md) — 美化前端未设置背景时用 DSH 原生背景色填充画布（深色模式无白圈）
 - [`2026-10-21-card-scripts-host.md`](../decisions/2026-10-21-card-scripts-host.md) — 卡脚本右栏（手动运行、不自动执行）、会话世界书副本、GM 面板 document facade 与行动栏画布/按钮修复
 - [`2026-10-22-jsr-storage-packages.md`](../decisions/2026-10-22-jsr-storage-packages.md) — JSR 兼容运行时与沙箱虚拟存储拆分为独立库包（`tavern-jsr` / `tavern-frontend-storage`）
+- [`2026-10-22-frontend-jsr-runtime-and-generation.md`](../decisions/2026-10-22-frontend-jsr-runtime-and-generation.md) — 美化前端 JSR 运行时补齐与生成桥
 - [`2026-10-22-card-scoped-regex-and-worlds.md`](../decisions/2026-10-22-card-scoped-regex-and-worlds.md) — 卡级/预设级正则与世界书跟随来源自动启用/停用（手动勾选不被插件改写）
 - [`2026-10-23-scoped-regex-identity-and-world-toggle.md`](../decisions/2026-10-23-scoped-regex-identity-and-world-toggle.md) — 同名正则按来源拆分实体（识别修复）、面板开关可切换并可转全局、链接世界书显示实际启停
 - [`2026-10-23-scoped-regex-content-repair.md`](../decisions/2026-10-23-scoped-regex-content-repair.md) — 同名正则内容归属错位：按名认领要求内容一致 + v3 迁移修复已错位实体
@@ -173,7 +178,9 @@
 - [`2026-10-23-regex-card-order.md`](../decisions/2026-10-23-regex-card-order.md) — 卡级正则按卡内数组顺序应用，修复导入顺序打乱后警告脚本抢跑、状态栏误报「遗漏变量更新」
 - [`2026-10-23-jsr-surface-parity.md`](../decisions/2026-10-23-jsr-surface-parity.md) — JSR 4.11 兼容面补齐：179 个公共名、同步变量/正则契约、脚本容器、预设/人设/世界书条目会话级覆盖
 - [`2026-10-24-jsr-p0-p1-generation-events-storage.md`](../decisions/2026-10-24-jsr-p0-p1-generation-events-storage.md) — JSR P0/P1：流式生成与停止、事件补齐、`/regenerate`/`/stop`、跨 iframe 事件、IndexedDB index/cursor、设置/音频持久化
+- [`2026-10-24-jsr-session-regex-writes.md`](../decisions/2026-10-24-jsr-session-regex-writes.md) — JSR 正则会话写面：`replaceTavernRegexes` / `updateTavernRegexesWith` 写入会话覆盖层
 - [`2026-10-25-deleted-card-regex-cleanup.md`](../decisions/2026-10-25-deleted-card-regex-cleanup.md) — 删除角色卡时清理其卡级正则，并自愈历史孤儿归属脚本（同名新卡不再继承旧脚本）
+- [`2026-10-25-regex-redos-mitigation.md`](../decisions/2026-10-25-regex-redos-mitigation.md) — 正则 ReDoS 缓解：执行前安全门 + 输入上限
 
 ### 面板与视图
 
@@ -192,7 +199,10 @@
 - [`2026-10-16-sidebar-region-scroll-and-workbench-collapsed.md`](../decisions/2026-10-16-sidebar-region-scroll-and-workbench-collapsed.md) — 侧栏两分区固定高度 + 独占滚动，写卡工作台默认收起
 - [`2026-10-16-soulmojito-brand-mark.md`](../decisions/2026-10-16-soulmojito-brand-mark.md) — 品牌 logo 落四面：面板标题区 + 侧栏按钮 + 设置页入口 + 面板「关于」分区
 - [`2026-10-21-behavior-settings-section.md`](../decisions/2026-10-21-behavior-settings-section.md) — 面板「行为设置」分区：散养行为开关收编，按行为对应关系分组
+- [`2026-10-21-panel-navigation-ux-rework.md`](../decisions/2026-10-21-panel-navigation-ux-rework.md) — 管理面板导航重做（用户反馈「特别难用」）
 - [`2026-10-23-panel-mobile-group-strip.md`](../decisions/2026-10-23-panel-mobile-group-strip.md) — 移动端标题区挤压：分组容器在 700px 断点里退场 + 活动分区 chip 入视
+- [`2026-10-25-panel-editors-as-modals.md`](../decisions/2026-10-25-panel-editors-as-modals.md) — 管理面板编辑器改为弹窗
+- [`2026-11-01-panel-asset-viewers-as-modals.md`](../decisions/2026-11-01-panel-asset-viewers-as-modals.md) — 管理面板资产查看改为弹窗
 
 ### Mod 扩展
 
@@ -232,6 +242,7 @@
 - [`2026-10-14-update-checkout-shipped-files-drift.md`](../decisions/2026-10-14-update-checkout-shipped-files-drift.md) — 自更新 checkout 兜底：发布清单单一事实来源化（SHIPPED 漂移修复）
 - [`2026-10-16-project-rename-dsh-soulmojito.md`](../decisions/2026-10-16-project-rename-dsh-soulmojito.md) — 项目改名：dsh-tavern → DSH-SoulMojito（全仓标识符映射与读取双认兼容层）
 - [`2026-10-21-storage-dir-soulmojito.md`](../decisions/2026-10-21-storage-dir-soulmojito.md) — 存储目录迁移：`$DSH_HOME/tavern` → `soulmojito`（旧目录原地兼容，不自动搬迁）
+- [`2026-10-22-history-rewrite-and-repo-rebuild.md`](../decisions/2026-10-22-history-rewrite-and-repo-rebuild.md) — 历史重写与仓库重建（移除第三方卡夹具，旧 SHA 与链接失效）
 
 ### 资产与格式
 
@@ -254,11 +265,14 @@
 - [`2026-08-14-fabric-architecture.md`](exploration/2026-08-14-fabric-architecture.md) — Fabric 调研与后备定位（不在第一版运行路径中）
 - [`2026-08-16-dsh-agentloop-native-audit.md`](exploration/2026-08-16-dsh-agentloop-native-audit.md) — DSH AgentLoop 原生注入、compaction 与 Fabric fallback 审计（`agent-managed` 保持关闭的依据）
 - [`2026-10-11-jsr-lwb-reference.md`](exploration/2026-10-11-jsr-lwb-reference.md) — JS-Slash-Runner 与 LittleWhiteBox 竞品参考与不复刻清单
+- [`2026-10-25-plugin-typecheck-baseline.md`](exploration/2026-10-25-plugin-typecheck-baseline.md) — 插件全量类型检查现状（全量 strict 接入 `pnpm check`）
 
 ## 计划与记录
 
 - [`plans/2026-08-15-tavern-panel-implementation.md`](plans/2026-08-15-tavern-panel-implementation.md) — Tavern 面板施工计划
 - [`plans/2026-08-16-agent-tavern-implementation.md`](plans/2026-08-16-agent-tavern-implementation.md) — AgentTavern 分阶段施工计划、宿主门禁、迁移规则与验证矩阵
+- [`plans/2026-10-17-source-file-split.md`](plans/2026-10-17-source-file-split.md) — 源码大文件拆分（按领域拆小，行为零变化）
+- [`plans/2026-10-30-im-channels-implementation.md`](plans/2026-10-30-im-channels-implementation.md) — IM 通道施工计划（M0–M5 已落地）
 - [`adr/0001-agenttavern-native-agentloop.md`](adr/0001-agenttavern-native-agentloop.md) — ADR：AgentTavern 复用原生 AgentLoop
 
 ## 开发者文档

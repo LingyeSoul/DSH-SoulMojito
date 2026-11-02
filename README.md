@@ -5,7 +5,7 @@
 <p align="center">把 DSH（deepseek-harness）扩展成兼容 SillyTavern 生态的原生角色扮演工作区。</p>
 
 <p align="center">
-  <strong>v0.7.5</strong> · 面向 DSH <code>0.2.1-rc.2</code>（兼容 <code>0.2.0-rc.2</code>） · GPL-3.0
+  <strong>v0.7.5</strong> · 面向 DSH <code>0.2.1-rc.5</code>（兼容 <code>0.2.0-rc.2</code>） · GPL-3.0
 </p>
 
 ## 这是什么
@@ -56,7 +56,7 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 
 ### 原生 Agent 模式（AgentTavern）
 
-- **工具面 25 件 + IM 3 件**：角色/世界书/历史/场景读面 4 件、记忆 5 件、变量 5 件、剧本 2 件、多 Agent 推演 1 件、MVU 结算 1 件、游戏 7 件；IM 3 件（`im_identity` / `im_channels` / `im_send`）由 index bundle 挂进**每个原生会话**（`im/agent-mount.ts`，`DSH_SOULMOJITO_DISABLE_IM` 硬关时整组消失）。身份一律来自真实 session binding，模型无法通过参数伪造 `sessionId`、`scopeId`、角色或聊天身份。
+- **工具面 25 件 + IM 4 件**：角色/世界书/历史/场景读面 4 件、记忆 5 件、变量 5 件、剧本 2 件、多 Agent 推演 1 件、MVU 结算 1 件、游戏 7 件；IM 4 件（`im_identity` / `im_channels` / `im_send` / `im_time`）由 index bundle 挂进**每个原生会话**（`im/agent-mount.ts`，`DSH_SOULMOJITO_DISABLE_IM` 硬关时整组消失）。身份一律来自真实 session binding，模型无法通过参数伪造 `sessionId`、`scopeId`、角色或聊天身份。
 - **AgentTavernIM 预设**：IM 绑定会话建议使用 `AgentTavernIM`（`agent-tavern-im`）；绑定对端时插件会自动把 live 且空闲的会话切到该预设（未打开/运行中则在会话打开或空闲后补切，novel/workbench/ST 架构不强行切换）。它在 AgentTavern 之上直接写明 IM 模式：所有回复必须用 `im_send`，不要用普通正文；回复要像真人在手机上聊天，短句、一次一两句、长内容拆成多条连续发送；群聊按消息头/发言人区分，附件用 `im_send` 的媒体参数。插件不代建会话，绑定与插入仍按原生 session 语义执行。
 - **记忆** — 词法检索为基线；配置 embed 来源后升级为词法 + 语义混合检索（RRF 融合）。两种来源：OpenAI 兼容远程端点（[提案 0016](docs/proposals/0016-hybrid-memory-retrieval.md)）或本地 ONNX 模型目录（[提案 0017](docs/proposals/0017-local-onnx-embed.md)，离线零网络，面板一键安装运行时）。
 - **记忆维护** — 面板可对单个聊天手动发起维护 run：按原文依据合并重复事件、纠正冲突陈述、删除被证伪记录；收据记录楼面指纹与版本快照，原文再变即退役重扫。
@@ -95,7 +95,7 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 
 ### Tavern 管理面板
 
-两栏布局（左侧导航 + 右侧内容），窄屏折叠为横向滚动栏；导航品牌块常驻不滚，分区清单独占滚动。19 个分区：
+两栏布局（左侧导航 + 右侧内容），窄屏折叠为横向滚动栏；导航品牌块常驻不滚，分区清单独占滚动。20 个分区：
 
 | 分区 | 内容 |
 |---|---|
@@ -105,6 +105,7 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 | 小说 / 剧本 | AgentNovel 小说库；剧本资产的分块、绑定与进度 |
 | 工作台 | 方案确认入口（逐字段 diff → 批准并应用 / 拒绝）与试写 |
 | 行为设置 | 全部系统行为开关，按行为对应关系分组（会话 / 世界书 / 工具写入 / 前端与卡脚本 / 游戏）；设置页同步展示同一面 |
+| 聊天渠道 | QQ / 微信 / OneBot 11 账号、扫码绑定、peer 绑定表与自动绑定设置 |
 | 游戏 / Mod | 游戏清单与对局面、游戏包导入（zip 上传 / git 安装）；Mod 清单、能力声明 Pill、两层开关、git 安装与审计计数 |
 | 记忆检索 | embed 来源三态（关闭 / 远程 / 本地）与探针 |
 | 提示词 | 实发请求 + 世界书激活轨迹的只读查看器 |
@@ -132,7 +133,7 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 - **Composer 模型选择** — 复刻 DSH 原生 model seat 的 provider 分组目录与 Effort 二级菜单，按 session 持久化，未选择时回落 DSH 默认模型。
 - **内部工作区** — ST 与 AgentTavern 新聊天共用数据根下 `workspace/`（新装 `$DSH_HOME/soulmojito/workspace/`，旧装 `$DSH_HOME/tavern/workspace/`）的 `Tavern (internal)` 工作区，插件按 workspace 路径/ID 从原生侧边栏隐藏该分组。宿主 `rc.6` 没有可追加到原生 session tree 的正式 list slot，侧栏因此使用一个集中、版本敏感但**失败关闭**的 DOM adapter（只匹配可见左侧 `[role="tree"]`，解绑或卸载时可逆恢复）；面板入口本身走官方 slot，不依赖 adapter 是否挂载成功。
 - **语言** — 插件 UI 跟随 DSH 的语言设置（zh/en），切换后无需刷新即时生效。
-- **当前配置与行为设置** — 「当前配置」只留角色 / 预设 / 人设 / 压缩总结模型的快速切换；全部行为开关收进面板「行为设置」分区（system 组置顶，原生设置页同步展示同一个 band），按行为对应关系分组：会话行为（`defaultArchitecture` 新聊天架构、`defaultContextMode` AgentTavern 上下文、`preloadAssets` 新 AgentTavern 会话开始时一次性预载角色信息与常驻世界书条目（默认关闭且不追溯已有会话）、`nativePersona` 在标准 DSH Agent 会话中使用当前角色（默认关闭））、世界书行为（`worldFollowsCharacter` 世界书跟随角色卡激活——绑定的书只在所属角色卡的会话里自动生效，不写入手动 `activeWorlds`）、工具写入（`allowGlobalWrites` 允许工具写 global 作用域，默认关闭）、前端与卡脚本（`frontendAutoOpen` 美化前端出现时自动打开右侧栏（默认关闭，每聊天一次）、`frontendAllowExternalResources` 允许美化前端加载外部资源（默认关闭）、`cardScriptsAutoRun` 进入聊天自动运行卡内全部启用脚本（默认关闭））、游戏行为（`gamesDisableResign` 禁用投降）。全部开关服务端逐次读取、即时生效。设置页标题下显示当前构建的版本与 commit。
+- **当前配置与行为设置** — 「当前配置」只留角色 / 预设 / 人设 / 压缩总结模型的快速切换；全部行为开关收进面板「行为设置」分区（system 组置顶，原生设置页同步展示同一个 band），按行为对应关系分组：会话行为（`defaultArchitecture` 新聊天架构、`defaultContextMode` AgentTavern 上下文、`agentTavernPreloadAssets` 新 AgentTavern 会话开始时一次性预载角色信息与常驻世界书条目（默认关闭且不追溯已有会话）、`nativeAgentPersona` 在标准 DSH Agent 会话中使用当前角色（默认关闭）、`nativeAgentPreset` 在标准 DSH Agent 会话中投影当前激活预设（默认关闭））、世界书行为（`worldFollowsCharacter` 世界书跟随角色卡激活——绑定的书只在所属角色卡的会话里自动生效，不写入手动 `activeWorlds`）、工具写入（`agentTavernAllowGlobalWrites` 允许工具写 global 作用域，默认关闭）、前端与卡脚本（`frontendAutoOpen` 美化前端出现时自动打开右侧栏（默认关闭，每聊天一次）、`frontendAllowExternalResources` 允许美化前端加载外部资源（默认关闭）、`cardScriptsAutoRun` 进入聊天自动运行卡内全部启用脚本（默认关闭））、游戏行为（`gamesDisableResign` 禁用投降）。全部开关服务端逐次读取、即时生效。设置页标题下显示当前构建的版本与 commit。
 
 ### 美化前端（消息内 HTML/JS）
 
@@ -142,7 +143,7 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 - HTML 片段：包含 `<head>` 或 `<body>`；缺外壳时运行时自动补齐 `doctype`、viewport 与基础样式。
 - Markdown 代码块：语言标记写 `html`。
 
-每个前端使用 `sandbox="allow-scripts"` 且**不授予 `allow-same-origin`**：脚本不能读写宿主 DOM、Cookie、`window.parent` 或 DSH API（高度回传与助手兼容层都只走受校验的 `postMessage`）。CSP 允许内联 CSS/JavaScript 与这些静态源：`cdn.jsdelivr.net`、`testingcf.jsdelivr.net`、`cdn.tailwindcss.com`、`cdnjs.cloudflare.com`、`unpkg.com`、`esm.sh`、`fonts.googleapis.com`、`fonts.gstatic.com`；图片、字体与媒体可用 `https:`、`data:` 或 `blob:`。设置页「允许美化前端加载外部资源」默认关闭；开启后 iframe 额外放行任意 HTTPS 脚本/样式，并把 `connect-src` 放宽到 `https: blob:`（`fetch`/XHR、CDN sourcemap 与卡自己生成的 blob URL 可用）——外部脚本因此能读取前端可见的聊天内容并外发，只对信任的卡开启。卡没有设置背景时，iframe 画布用 DSH 原生背景色（`--dsw-alias-bg-base` 的解析值）填充，并在主题切换时即时更新——深色模式不会出现一圈白边；卡内自己的 `html`/`body` `background` 仍然按 cascade 覆盖。**不支持**：嵌套 iframe、`object`/插件、表单提交。自动高度由 `ResizeObserver` 回传并限制在 80-4000px；也可以拖动前端底部的把手手动调整（120-4000px，双击或按 Home 回到自动高度，手动高度优先于卡的 `frame.prefs`）；TUI/headless 显示原始消息文本，不执行脚本。
+每个前端使用 `sandbox="allow-scripts allow-modals allow-forms"` 且**不授予 `allow-same-origin`**：脚本不能读写宿主 DOM、Cookie、`window.parent` 或 DSH API（高度回传与助手兼容层都只走受校验的 `postMessage`）。CSP 允许内联 CSS/JavaScript 与这些静态源：`cdn.jsdelivr.net`、`testingcf.jsdelivr.net`、`cdn.tailwindcss.com`、`cdnjs.cloudflare.com`、`unpkg.com`、`esm.sh`、`fonts.googleapis.com`、`fonts.gstatic.com`；图片、字体与媒体可用 `https:`、`data:` 或 `blob:`。设置页「允许美化前端加载外部资源」默认关闭；开启后 iframe 额外放行任意 HTTPS 脚本/样式，并把 `connect-src` 放宽到 `https: blob:`（`fetch`/XHR、CDN sourcemap 与卡自己生成的 blob URL 可用）——外部脚本因此能读取前端可见的聊天内容并外发，只对信任的卡开启。卡没有设置背景时，iframe 画布用 DSH 原生背景色（`--dsw-alias-bg-base` 的解析值）填充，并在主题切换时即时更新——深色模式不会出现一圈白边；卡内自己的 `html`/`body` `background` 仍然按 cascade 覆盖。**不支持**：嵌套 iframe、`object`/插件、外部表单提交（文档内表单可用，`form-action` 只放行 `'self'` / `about:` / `blob:`）。自动高度由 `ResizeObserver` 回传并限制在 80-4000px；也可以拖动前端底部的把手手动调整（120-4000px，双击或按 Home 回到自动高度，手动高度优先于卡的 `frame.prefs`）；TUI/headless 显示原始消息文本，不执行脚本。
 
 AgentTavern 架构的对话是宿主原生表面，插件没有消息正文 slot：同一份美化前端改由 DSH **原生右侧栏**的「美化前端」tab 承载——取本聊天**最新一条**带完整 HTML 的楼层（标题行显示楼层号），随聊天 5s 可见性轮询更新；标题栏按钮与右栏「+」guide 都能打开。右栏标题行的展开按钮把面板铺成视口大小的浮层（再点或按 Esc 收起），刷新按钮重新拉取并重挂 iframe，卡前端的内存状态会随之重置。设置页可开启「美化前端出现时自动打开右侧栏」（默认关闭，每聊天只自动展开一次）。ST 架构仍在消息里内联渲染，侧栏只显示说明空态，不重复执行脚本。开启 `cardScriptsAutoRun` 后，AgentTavern 的卡脚本自动运行也落在这一份 iframe 里：全部启用脚本按脚本树顺序注入最新楼层里**文档长度最大的**那个完整 HTML（同长度取最后一个；行动栏这类小框不抢脚本宿主；该楼层没有 HTML 时给脚本一个独立画布），悬浮按钮 / GM 面板直接叠在美化前端上，并与前端共享 DOM、主题和 helper 通道；每段脚本注入 per-script scope，`getScriptId`/`getScriptName`/`getScriptInfo` 与按钮 API 按所属脚本归属，按钮条显示在美化前端 tab；出现新的美化楼层时整份文档重建，脚本随之重启。[决策](decisions/2026-10-20-frontend-sidebar.md)
 
@@ -206,7 +207,7 @@ dsh --profile desktop
 pnpm run check
 ```
 
-该命令依次跑 `tsc -b`、vitest 全量、`build:plugin` 与 15 个插件 gates，是提交前的唯一权威口径。
+该命令依次跑 `tsc -b`、vitest 全量、`build:plugin` 与 20 个插件 gates，是提交前的唯一权威口径。
 
 ## 更新
 
@@ -303,7 +304,7 @@ dsh plugin --profile web add ./packages/plugin
 
 ### 构建产物
 
-Node half 是六个自包含 bundle：`index.mjs` 主入口，加 `agent` / `compaction` / `novel` / `card-workbench` / `reasoning` 五个子代理入口（见 `packages/plugin/package.json` 的 `exports`；`reasoning` 是内部无工具推理组合，DSH 0.2.1+ 的 spawn 子代理隔离面）。所有 `@dsh-soulmojito/*` 工作区库全部内联，**无运行时依赖**，不需要用户额外安装公共 `@deepseek-ai/*` 运行时依赖；client closure 由 DSH profile 注入。
+Node half 是七个自包含 bundle：`index.mjs` 主入口，加 `agent` / `im-agent` / `compaction` / `novel` / `card-workbench` / `reasoning` 六个附属入口（见 `packages/plugin/package.json` 的 `exports`；`reasoning` 是内部无工具推理组合，DSH 0.2.1+ 的 spawn 子代理隔离面）。所有 `@dsh-soulmojito/*` 工作区库全部内联，**无运行时依赖**，不需要用户额外安装公共 `@deepseek-ai/*` 运行时依赖；client closure 由 DSH profile 注入。
 
 这些产物**有意入库**：仓库不发 release/tag，git spec 安装与自更新 checkout 兜底都以分支头为发布通道，产物不入库即装完即坏。唯一例外是 `version.json`（带本地 commit 戳，每次构建不同，不入库）。
 
@@ -319,18 +320,18 @@ Node half 是六个自包含 bundle：`index.mjs` 主入口，加 `agent` / `com
 pnpm run check
 ```
 
-当前基线（2026-11-01 实测）：
+当前基线（2026-11-02 实测，宿主 DSH `0.2.1-rc.5`）：
 
 ```
 Test Files  197 passed (197)
 Tests       3268 passed | 2 skipped (3270)
 20 gates    全部 PASS
-built       v0.7.5 (919a698)
+built       v0.7.5 (f9526b5)
 ```
 
 - 2 项跳过都是 `skipIf` 环境条件项：Windows 检出上的 `host-package.spec.ts` POSIX-only 用例，以及 `im-store.spec.ts` 的 0600 权限位用例（Win32 无 POSIX mode）。
 - 20 个 gates 覆盖 update-routes、package-contract、patch-reference、im-agent-inject、server-bundle、client-bundle、frontend-runtime、native-header-adapter、mvu-surface、frontend-surface、client-architecture-split、internal-workspace、agent-tavern-isolation、client-vm-mount、node-half-mount、v4-session-admission、mod-loader、im-channels、source-file-budget 与 content-lexicon。
-- 完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用隔离 runtime（`.npm-cache/dsh-runtime`，受限环境依次回落 `NODE_PATH` 与全局安装）。
+- 完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用隔离 runtime（`.npm-cache/dsh-runtime`，当前镜像宿主 `0.2.1-rc.5`，受限环境依次回落 `NODE_PATH` 与全局安装）。
 - 会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。
 - 示例 Mod 的 engines 与随仓库发布的宿主版本由防漂移守卫锁定（先例：[`decisions/2026-10-12-story-clock-engines-drift.md`](decisions/2026-10-12-story-clock-engines-drift.md)）；面板布局、品牌 logo 与内置游戏规则面同样各有 spec + gate marker 锁定。
 
@@ -342,8 +343,8 @@ GUI 已在桌面与 390x844 移动视口验证，覆盖原生 sidebar、管理�
 
 | 目录 | 内容 |
 |---|---|
-| [`docs/proposals/`](docs/proposals/) | 18 篇架构级设计契约（提案 0001-0018），实现后在此登记 |
-| [`decisions/`](decisions/) | 107 篇单次落地决策：问题、方案、否决项、与规格的偏差 |
+| [`docs/proposals/`](docs/proposals/) | 23 篇架构级设计契约（提案 0001-0024，0019 未使用），实现后在此登记 |
+| [`decisions/`](decisions/) | 161 篇单次落地决策：问题、方案、否决项、与规格的偏差 |
 | [`docs/exploration/`](docs/exploration/) | 调研归档，结论必须带证据坐标（文件:行号） |
 | [`docs/plans/`](docs/plans/) · [`docs/adr/`](docs/adr/) · [`docs/mods/`](docs/mods/) · [`docs/games/`](docs/games/) | 施工计划 · 架构决策记录 · Mod 开发者文档 · 标准游戏包制作指南 |
 

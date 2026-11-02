@@ -1,7 +1,7 @@
 # QQ 官方机器人通道（提案 0024 M3）
 
 > 日期：2026-10-30。状态：已落地。前置：提案 0024、施工计划
-> [`docs/plans/2026-10-30-im-channels-implementation.md`](../plans/2026-10-30-im-channels-implementation.md)。
+> [`docs/plans/2026-10-30-im-channels-implementation.md`](../docs/plans/2026-10-30-im-channels-implementation.md)。
 
 ## 问题
 

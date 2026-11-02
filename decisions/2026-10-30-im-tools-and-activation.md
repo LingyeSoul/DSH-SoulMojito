@@ -1,7 +1,7 @@
 # IM 工具族与历史导入抽取（提案 0024 第二批）
 
-> 日期：2026-10-30。状态：已落地。上一批见 [`098db83`](../../) 的提交说明与
-> [`docs/plans/2026-10-30-im-channels-implementation.md`](../plans/2026-10-30-im-channels-implementation.md)。
+> 日期：2026-10-30。状态：已落地。上一批见 `098db83` 的提交说明与
+> [`docs/plans/2026-10-30-im-channels-implementation.md`](../docs/plans/2026-10-30-im-channels-implementation.md)。
 
 ## 问题
 

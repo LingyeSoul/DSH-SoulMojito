@@ -385,7 +385,7 @@ api.tools.register({
 ```
 
 - **三层查重冲突即拒**（setup 期抛错 → 状态错误位，不静默）：本 Mod 重复名、内置工具
-  （约 60 个，`tavern_*`/`memory_*`/`variable_*`/`novel_*`/`card_*`/`world_*`/`preset_*`/
+  （约 80 个，`tavern_*`/`memory_*`/`variable_*`/`novel_*`/`card_*`/`world_*`/`preset_*`/
   `material_*`/`chat_log_read` 等）、其他 Mod 的工具。
 - `execute`/`render` 在调用时活查注册表：reload 换行为不必等重注册。
 - Mod 被禁用后 execute 拒绝并明确报「工具已不可用」。
@@ -462,7 +462,7 @@ api.prompt.section({
 })
 ```
 
-- **order 钳制 -50..0**：核心分区占 -80..-64（kernel/preset/facts/guides/script），Mod 分区
+- **order 钳制 -50..0**：核心分区占 -80..-63（kernel/preset/facts/guides/script/games），Mod 分区
   永远冲不掉核心头（前缀缓存生命线）；非法/缺省取下界 -50。
 - 消费名空间化：`dsh-soulmojito:mod:<modId>:<name>`；文本过 `hostPromptSafe`——**不要写
   `{{...}}`**（残留宏会被宿主当变量渲染，消费侧先中性化）。
@@ -692,7 +692,7 @@ buttons}`。
 
 注册一个**标准游戏**进入游戏桥（[提案 0018](../proposals/0018-agent-game-bridge.md)）——游戏
 出现在面板「游戏」分区（可开局可对弈），Agent 经 `game_list` / `game_start` / `game_state` /
-`game_history` / `game_move` / `game_wait` 六个内置工具与你的人类玩家对局（2026-10-14 增量
+`game_history` / `game_move` / `game_wait` / `game_wait_full` 七个内置工具与你的人类玩家对局（2026-10-14 增量
 修订：wait/move 只回增量，局面与日志分别经 `game_state` / `game_history` 读取）。这是游戏
 三条来源（内置 / 导入包 / **Mod**）中 Mod 专属的一条：引擎以**进程内对象**注册（不需要
 `engine.mjs` 文件），视图是**内联 HTML 字符串**（维持 Mod 无静态文件服务的纪律）。

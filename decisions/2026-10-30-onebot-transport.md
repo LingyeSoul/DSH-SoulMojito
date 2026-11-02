@@ -1,7 +1,7 @@
 # OneBot 11 连接层（提案 0024 第三批）
 
 > 日期：2026-10-30。状态：已落地。前置：提案 0024、施工计划
-> [`docs/plans/2026-10-30-im-channels-implementation.md`](../plans/2026-10-30-im-channels-implementation.md)。
+> [`docs/plans/2026-10-30-im-channels-implementation.md`](../docs/plans/2026-10-30-im-channels-implementation.md)。
 
 ## 问题
 

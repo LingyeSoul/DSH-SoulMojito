@@ -5,7 +5,7 @@
 > 设计契约与先行件：[提案 0018](../docs/proposals/0018-agent-game-bridge.md)
 > （§3.2/§3.3 引擎与视图契约、§4.1 双内置愿景、§9 五子棋参照实现）、
 > [决策 2026-10-13](2026-10-13-agent-game-bridge.md) 偏差 1（内置裁为井字棋）与
-> [参照包](../packages/plugin/examples/games/dsh-tavern.gomoku/)。本文记录内置回归
+> [参照包](../packages/plugin/examples/games/dsh-soulmojito.gomoku/)。本文记录内置回归
 > 的落法、对偏差 1 的重新裁定、遮蔽语义与边界。
 
 ## 开工前八项表（CONTEXT.md 纪律）
