@@ -396,20 +396,23 @@ describe('state.json 切片布局', () => {
       error.code = 'EACCES'
       throw error
     })
+    // Other tests in the same worker share fsPromises; only this store's dir is
+    // part of the read-only contract under test.
+    const attemptsForThisStore = (): string[] => attempts.filter((target) => target.startsWith(dir))
     try {
       const cold = await store.getState()
       const warm = await store.getState()
       expect(cold.regexScripts).toHaveLength(SCRIPT_COUNT)
       expect(warm).toBe(cold)
       // 读路径一次写都没试过（连重试都没有），字节与 mtime 都没动。
-      expect(attempts).toEqual([])
+      expect(attemptsForThisStore()).toEqual([])
       expect(await readFile(stateFile(dir))).toEqual(before)
       expect(await mtimeOf(stateFile(dir))).toBe(PINNED_MTIME.getTime())
 
       // 写路径照旧失败：只读盘上不能静默返回一个没落盘的「成功」。
       await expect(store.updateState((state) => ({ scriptGlobals: { ...state.scriptGlobals, mood: 'denied' } })))
         .rejects.toThrow(/read-only filesystem/)
-      expect(attempts.length).toBeGreaterThan(0)
+      expect(attemptsForThisStore().length).toBeGreaterThan(0)
       // 写失败没有留下半个迁移：state.json 字节不变，旧值仍可读。
       expect(await readFile(stateFile(dir))).toEqual(before)
       expect((await store.getState()).scriptGlobals).toEqual({ mood: 'calm' })

@@ -416,9 +416,11 @@ describe('candidate edit transaction', () => {
     expect(next.messages).toHaveLength(2)
     expect(next.messages[0]).toEqual(userMessage)
     expect(next.messages.map((message) => message.mes)).toEqual(['Hello', newText])
-    // The caller-owned clone is mutated in place, not replaced by a detached copy.
-    expect(chat.messages.map((message) => message.mes)).toEqual(['Hello', newText])
-    expect(chat.messages[1]?.swipes).toEqual([newText])
+    // The live-receipt undo and the new patch are staged: the input chat keeps
+    // its old body and variables, and the returned chat carries the rewrite.
+    expect(chat.messages.map((message) => message.mes)).toEqual(['Hello', oldText])
+    expect(statFavor(chat)).toBe(15)
+    expect(next.messages[1]?.swipes).toEqual([newText])
 
     const floor = floorOf(next)
     expect(floor.swipe_id).toBe(0)
@@ -747,12 +749,12 @@ describe('candidate edit transaction', () => {
     expect(next.messages.filter((message) => !message.is_user)).toHaveLength(1)
   })
 
-  it('records the edit watermark on the floor in the same clone', () => {
+  it('records the edit watermark on the returned floor', () => {
     const oldText = updateText('Old body', 5)
     const chat = mvuChat(oldText, baseVariables(15))
     attachReceipts(chat, [receiptOf(`body:${MESSAGE_ID}`, AT_ONE, [favorChange(10, 15)])])
 
-    applyCandidateEditToChat(chat, mvuCard, {
+    const next = applyCandidateEditToChat(chat, mvuCard, {
       ledger: ledgerOf(oldText),
       groupId: GROUP_ID,
       index: 0,
@@ -763,7 +765,7 @@ describe('candidate edit transaction', () => {
       eventSeq: 22,
     })
 
-    expect(agentTavernOf(chat)).toMatchObject({
+    expect(agentTavernOf(next)).toMatchObject({
       bodyGroupId: GROUP_ID,
       anchorMessageId: MESSAGE_ID,
       lastBodyEventSeq: 22,
@@ -788,18 +790,18 @@ describe('candidate edit transaction', () => {
     }
 
     const next = applyCandidateEditToChat(chat, mvuCard, input)
-    expect(next).toBe(chat)
-    expect(statFavor(chat)).toBe(13)
-    const afterFirst = readMvuReceipts(chat)
+    expect(next).not.toBe(chat)
+    expect(statFavor(next)).toBe(13)
+    const afterFirst = readMvuReceipts(next)
     expect(afterFirst).toHaveLength(1)
 
-    const again = applyCandidateEditToChat(chat, mvuCard, input)
-    expect(again).toBe(chat)
+    const again = applyCandidateEditToChat(next, mvuCard, input)
+    expect(again).toBe(next)
     // A second undo/patch round would land on 10 -> 10 + 5 + 3 semantics.
-    expect(statFavor(chat)).toBe(13)
-    expect(readMvuReceipts(chat)).toEqual(afterFirst)
-    expect(readMvuReceipts(chat).map((receipt) => receipt.turnKey)).toEqual([`body:${MESSAGE_ID}#0`])
-    expect(agentTavernOf(chat)['lastBodyEventSeq']).toBe(23)
+    expect(statFavor(next)).toBe(13)
+    expect(readMvuReceipts(next)).toEqual(afterFirst)
+    expect(readMvuReceipts(next).map((receipt) => receipt.turnKey)).toEqual([`body:${MESSAGE_ID}#0`])
+    expect(agentTavernOf(next)['lastBodyEventSeq']).toBe(23)
   })
 
   it('finds a migrated candidate receipt by message id and satisfies rollback coverage', () => {
@@ -808,7 +810,7 @@ describe('candidate edit transaction', () => {
     const chat = mvuChat(oldText, baseVariables(15))
     attachReceipts(chat, [receiptOf(`body:${MESSAGE_ID}`, AT_ONE, [favorChange(10, 15)])])
 
-    applyCandidateEditToChat(chat, mvuCard, {
+    const next = applyCandidateEditToChat(chat, mvuCard, {
       ledger: ledgerOf(oldText),
       groupId: GROUP_ID,
       index: 0,
@@ -819,10 +821,10 @@ describe('candidate edit transaction', () => {
       eventSeq: 24,
     })
 
-    const byMessage = mvuReceiptsForBody(chat, { messageId: MESSAGE_ID })
+    const byMessage = mvuReceiptsForBody(next, { messageId: MESSAGE_ID })
     expect(byMessage.map((receipt) => receipt.turnKey)).toEqual([`body:${MESSAGE_ID}#0`])
-    expect(mvuReceiptsForBody(chat, { messageId: MESSAGE_ID, floorIndex: 1 })).toEqual(byMessage)
-    expect(mvuReceiptsForBody(chat, { floorIndex: 1 })).toEqual([])
+    expect(mvuReceiptsForBody(next, { messageId: MESSAGE_ID, floorIndex: 1 })).toEqual(byMessage)
+    expect(mvuReceiptsForBody(next, { floorIndex: 1 })).toEqual([])
 
     expect(() => assertReceiptCoverage(oldText, [], byMessage, MESSAGE_ID, 1, 'agent-1', 1)).not.toThrow()
     expect(() => assertReceiptCoverage(oldText, [], byMessage, 'other-message', 1, 'agent-1', 1))
@@ -852,7 +854,7 @@ describe('candidate receipt retention under ring pressure', () => {
       ...Array.from({ length: 25 }, (_, floor) => settleReceiptOf(100 + floor, `2026-10-28T01:00:00.${String(floor).padStart(3, '0')}Z`)),
     ])
 
-    applyCandidateEditToChat(chat, mvuCard, {
+    const next = applyCandidateEditToChat(chat, mvuCard, {
       ledger,
       groupId: GROUP_ID,
       index: 0,
@@ -863,7 +865,7 @@ describe('candidate receipt retention under ring pressure', () => {
       eventSeq: 40,
     })
 
-    const keys = readMvuReceipts(chat).map((receipt) => receipt.turnKey)
+    const keys = readMvuReceipts(next).map((receipt) => receipt.turnKey)
     // Both active-group candidates survive; the foreign group and the oldest
     // settle receipts stay ordinary ring victims.
     expect(keys).toHaveLength(MVU_RECEIPTS_LIMIT)
@@ -873,9 +875,9 @@ describe('candidate receipt retention under ring pressure', () => {
     expect(keys).toContain('124')
     expect(keys).not.toContain('106')
     // The edit still addressed the candidate by key and applied the patch once.
-    expect(mvuReceiptsForBody(chat, { messageId: MESSAGE_ID }).map((receipt) => receipt.turnKey))
+    expect(mvuReceiptsForBody(next, { messageId: MESSAGE_ID }).map((receipt) => receipt.turnKey))
       .toEqual([`body:${MESSAGE_ID}#0`])
-    expect(statFavor(chat)).toBe(13)
+    expect(statFavor(next)).toBe(13)
   })
 
   it('keeps every candidate receipt when the group alone exceeds the ring', () => {
@@ -889,7 +891,7 @@ describe('candidate receipt retention under ring pressure', () => {
       index === 0 ? undefined : AT_ONE,
     )))
 
-    applyCandidateEditToChat(chat, mvuCard, {
+    const next = applyCandidateEditToChat(chat, mvuCard, {
       ledger,
       groupId: GROUP_ID,
       index: 0,
@@ -900,14 +902,14 @@ describe('candidate receipt retention under ring pressure', () => {
       eventSeq: 41,
     })
 
-    const keys = readMvuReceipts(chat).map((receipt) => receipt.turnKey)
+    const keys = readMvuReceipts(next).map((receipt) => receipt.turnKey)
     // 21 receipts is over MVU_RECEIPTS_LIMIT on purpose: an active candidate's
     // only replayable proof outranks the ring size.
     expect(keys).toHaveLength(21)
     expect([...keys].sort()).toEqual(
       ledger.candidates.map((candidate) => candidateReceiptKey(candidate.messageId, candidate.index)).sort(),
     )
-    expect(statFavor(chat)).toBe(13)
+    expect(statFavor(next)).toBe(13)
   })
 
   it('undoes and redoes a candidate receipt stored in an over-limit array', () => {

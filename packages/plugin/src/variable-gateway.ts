@@ -1,12 +1,22 @@
 /**
- * Variable Gateway: the single policy owner for variable read/merge/write
+ * Variable Gateway: the single policy owner for variable read/merge/write/undo
  * semantics (decision 2026-11-02-variable-gateway). It is not a fourth store;
  * `chat_metadata.variables`, the flat chat-scope `VariableStore` and
- * `state.json` remain the adapters. Undo lands in Phase 2.
+ * `state.json` remain the adapters.
  */
+import type { ChatLogIR } from '../../tavern-format/src/index.js'
 import type { JsonValue, TavernSessionBinding, TavernStore, VariableStore } from '../../tavern-store/src/index.js'
 import { isChatRevisionConflict } from '../../tavern-store/src/index.js'
-import { overlayChatScopedVariables, readChatVariables } from './mvu.js'
+import {
+  overlayChatScopedVariables,
+  readChatVariables,
+  undoMvuAgentSettlement,
+  undoMvuReceipts,
+  undoMvuStSettlement,
+  type MvuReceipt,
+  type MvuUndoRestore,
+  type UndoGuard,
+} from './mvu.js'
 import {
   normalizeVariableTree,
   variableEntriesForMirror,
@@ -33,6 +43,20 @@ export interface VariableWriteReceipt {
   readonly mirror: MirrorOutcome
 }
 
+/** A body undo staged on a clone; the caller owns the CAS save of `chat`. */
+export interface StagedUndo {
+  readonly chat: ChatLogIR
+  readonly receipts: readonly MvuReceipt[]
+  readonly restores: readonly MvuUndoRestore[]
+}
+
+/** A persisted undo: the marked receipt, the new chat revision and the restore plan. */
+export interface UndoResult {
+  readonly receipt: MvuReceipt
+  readonly revision: string
+  readonly restores: readonly MvuUndoRestore[]
+}
+
 export interface VariableGatewayLogger {
   readonly warn: (message: string, fields: Record<string, JsonValue>) => void
 }
@@ -48,6 +72,8 @@ export interface VariableGateway {
   read(ref: VariableRef): Promise<VariableTree>
   replace(ref: VariableRef, tree: VariableTree): Promise<VariableWriteReceipt>
   mirror(ref: Extract<VariableRef, { readonly kind: 'chat' }>, tree: VariableTree): Promise<MirrorOutcome>
+  applyUndo(chat: ChatLogIR, receipts: readonly MvuReceipt[], guard: UndoGuard): StagedUndo
+  undo(ref: Extract<VariableRef, { readonly kind: 'chat' }>): Promise<UndoResult>
 }
 
 export function createVariableGateway(deps: VariableGatewayDeps): VariableGateway {
@@ -74,7 +100,47 @@ export function createVariableGateway(deps: VariableGatewayDeps): VariableGatewa
         return { status: 'degraded', reason }
       }
     },
+    applyUndo(chat: ChatLogIR, receipts: readonly MvuReceipt[], guard: UndoGuard): StagedUndo {
+      return applyVariableUndo(chat, receipts, guard)
+    },
+    async undo(ref: Extract<VariableRef, { readonly kind: 'chat' }>): Promise<UndoResult> {
+      return undoChat(deps, ref.character, ref.chatId)
+    },
   }
+}
+
+/**
+ * Stage a receipt undo on a clone (body editing): the screen runs inside
+ * `undoMvuReceipts`, so a rejected guard leaves both the input chat and the
+ * caller's CAS state untouched.
+ */
+export function applyVariableUndo(
+  chat: ChatLogIR,
+  receipts: readonly MvuReceipt[],
+  guard: UndoGuard,
+): StagedUndo {
+  const cloned = structuredClone(chat)
+  const result = undoMvuReceipts(cloned, receipts, guard)
+  return { chat: cloned, receipts: result.receipts, restores: result.restores }
+}
+
+/**
+ * Persisted undo for the panel. The existing cores own guard construction from
+ * the chat and card; the gateway only picks the store by the binding. The
+ * snapshot is re-read here because the caller's precheck must not be trusted as
+ * the write base.
+ */
+async function undoChat(deps: VariableGatewayDeps, character: string, chatId: string): Promise<UndoResult> {
+  const store = await deps.store()
+  const snapshot = await store.getChatSnapshot(character, chatId)
+  if (snapshot === undefined) {
+    throw new Error(`chat '${chatId}' of character '${character}' not found; undoing variables requires a persisted chat snapshot`)
+  }
+  const options = { characterName: character, chatId, snapshot, at: new Date().toISOString() }
+  const result = await isAgentTavernBound(deps, character, chatId)
+    ? await undoMvuAgentSettlement(await deps.variables(), store, options)
+    : await undoMvuStSettlement(store, options)
+  return { receipt: result.receipt, revision: result.revision, restores: result.restores }
 }
 
 /**

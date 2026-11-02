@@ -17,8 +17,9 @@
 
 import { randomUUID } from 'node:crypto'
 import { advanceHostTurnBase, lastLoggedTurn } from '../session/trace.js'
-import { mvuReceiptsForBody, readChatVariables, undoMvuReceipts } from '../mvu.js'
+import { mvuReceiptsForBody, readChatVariables } from '../mvu.js'
 import { getMvuTreePath, readMvuSchema } from '../mvu-guard.js'
+import { applyVariableUndo } from '../variable-gateway.js'
 import {
   appendBodyEvent,
   appendOpFinish,
@@ -1194,13 +1195,14 @@ async function undoNewCandidateBodyReceipt(
     const live = receipts.filter((receipt) => receipt.undoneAt === undefined)
     if (live.length === 0) return
     // Candidate body undo writes the JSONL tree; screen it like the panel path.
+    // The gateway stages the undo on a clone, saved with the snapshot revision.
     const card = (await tavern.getCharacter(plan.binding.character))?.card
     const variables = readChatVariables(snapshot.chat)
-    undoMvuReceipts(snapshot.chat, live, {
+    const staged = applyVariableUndo(snapshot.chat, live, {
       schema: readMvuSchema(snapshot.chat, card),
       currentOf: (path) => getMvuTreePath(variables, path),
-    }, { at: new Date().toISOString() })
-    await tavern.saveChat(plan.binding.character, plan.binding.chatId, snapshot.chat, snapshot.revision)
+    })
+    await tavern.saveChat(plan.binding.character, plan.binding.chatId, staged.chat, snapshot.revision)
   } catch (error) {
     throw failureFor(
       error,

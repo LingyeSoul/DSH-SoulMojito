@@ -8754,6 +8754,23 @@ var init_src5 = __esm({
   }
 });
 
+// packages/plugin/src/variable-merge.ts
+var init_variable_merge = __esm({
+  "packages/plugin/src/variable-merge.ts"() {
+    "use strict";
+  }
+});
+
+// packages/plugin/src/variable-gateway.ts
+var init_variable_gateway = __esm({
+  "packages/plugin/src/variable-gateway.ts"() {
+    "use strict";
+    init_src3();
+    init_mvu();
+    init_variable_merge();
+  }
+});
+
 // packages/plugin/src/agent-novel/usage.ts
 var USAGE_SAMPLER_KEY, samplerTable, PROBE_AGENT_ID_KEY, probeAgentSlot, WRITER_RUN_USAGE_KEY, writerRunUsageSlot;
 var init_usage = __esm({
@@ -8901,7 +8918,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.5".trim() : "";
-  const commit = true ? normalizeCommit("015fe0b") : void 0;
+  const commit = true ? normalizeCommit("2d6b705") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -9295,23 +9312,6 @@ var init_service = __esm({
     init_apply();
     UPDATE_CHECK_TTL_MS = 6 * 60 * 60 * 1e3;
     UPDATE_FIRST_CHECK_DELAY_MS = 12 * 1e3;
-  }
-});
-
-// packages/plugin/src/variable-merge.ts
-var init_variable_merge = __esm({
-  "packages/plugin/src/variable-merge.ts"() {
-    "use strict";
-  }
-});
-
-// packages/plugin/src/variable-gateway.ts
-var init_variable_gateway = __esm({
-  "packages/plugin/src/variable-gateway.ts"() {
-    "use strict";
-    init_src3();
-    init_mvu();
-    init_variable_merge();
   }
 });
 
@@ -11953,6 +11953,7 @@ init_mvu();
 // packages/plugin/src/agent-tavern/body-candidate-receipts.ts
 init_mvu();
 init_mvu_guard();
+init_variable_gateway();
 
 // packages/plugin/src/session/binding.ts
 init_runtime2();
@@ -11960,6 +11961,7 @@ init_runtime2();
 // packages/plugin/src/agent-tavern/body-runtime-settlement.ts
 init_mvu();
 init_mvu_guard();
+init_variable_gateway();
 
 // packages/plugin/src/agent-tavern/body-runtime-core.ts
 init_src3();

@@ -25,10 +25,10 @@ import {
   readMvuReceipts,
   recordMvuTurnReceipt,
   snapshotChatVariables,
-  undoMvuReceipts,
   type MvuReceipt,
 } from '../mvu.js'
 import { getMvuTreePath, readMvuSchema } from '../mvu-guard.js'
+import { applyVariableUndo } from '../variable-gateway.js'
 import type { BodyLedger } from './body.js'
 import {
   BodyJsonlProjectionError,
@@ -335,14 +335,19 @@ function detailError(
  * patch, replace the candidate receipt, rewrite `swipes` / `mes`, then attach
  * `stat_data`.
  *
+ * The live receipt undo is staged on a clone by the Variable Gateway: when a
+ * receipt is undone, the caller must use the returned chat, and the undo itself
+ * never writes back into the argument. Legacy key migration still lands on the
+ * argument before staging. Without a live receipt the remaining edits still land
+ * in the argument, matching the caller-owned clone contract.
+ *
  * The ledger key grammar is validated only on the receipt path. An edit that
  * neither reads nor writes a receipt (plain card, or a body without a patch and
  * no candidate receipt) must not fail because its native message id contains
  * `#` or whitespace: that id never becomes a receipt key.
  *
- * The argument is mutated in place and returned. On a thrown
- * {@link CandidateReceiptError} the clone may already contain migration edits;
- * discard it.
+ * On a thrown {@link CandidateReceiptError} the clone may already contain
+ * migration edits; discard it.
  */
 export function applyCandidateEditToChat(
   chat: ChatLogIR,
@@ -377,11 +382,13 @@ export function applyCandidateEditToChat(
   if (inspection.live.length > 0) {
     // Undo is a write: screen the recorded before values against the schema in
     // force now, so an edited schema can never be bypassed through body editing.
+    // The gateway stages the undo on a clone; every later write uses that chat.
     const variables = readChatVariables(chat)
-    undoMvuReceipts(chat, inspection.live, {
+    const staged = applyVariableUndo(chat, inspection.live, {
       schema: readMvuSchema(chat, card),
       currentOf: (path) => getMvuTreePath(variables, path),
-    }, { at: input.at })
+    })
+    chat = staged.chat
   }
 
   const before = snapshotChatVariables(chat)

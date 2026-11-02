@@ -20,11 +20,9 @@ import {
   renderMvuStatusTemplate,
   retryMvuSettlement,
   statusTemplateOf,
-  undoMvuAgentSettlement,
-  undoMvuStSettlement,
 } from '../mvu.js'
 import { stripMvuControl } from '../mvu-guard.js'
-import { templatesEnabledFlagValue, templatesEnvEnabled, variableGateway, variables } from '../runtime.js'
+import { templatesEnabledFlagValue, templatesEnvEnabled, variableGateway } from '../runtime.js'
 import { assertStGenerationBinding } from '../session/binding.js'
 import { readJson, sendJson } from './io.js'
 import { INTERNAL_ERROR_MESSAGE, publicErrorMessage } from './public-error.js'
@@ -266,12 +264,12 @@ export async function handleMvuApi(
   }
 
   // MVU 回执撤销（B-6a，2026-10-11）：只能撤销该聊天最新一条有效回执
-  // （newest-first 链），把该轮每项变更恢复到回执记录的 before 值。变量源按
-  // 绑定架构取（与 GET mvu/status 同判据）：AgentTavern 绑定写 chat 作用域
-  // VariableStore，其余写 chat_metadata.variables——两个执行核共享 mvu.ts 的
-  // 纯函数核。语义性拒绝（无回执/全已撤销/数据不完整/守卫拒绝）→ 400 分类
-  // 报因；并发走聊天 revision CAS（与 retry 同款，body.revision 可选预检）。
-  // 成功后发 chat-saved（floorCount 传当前楼数——撤销不动楼层）。
+  // （newest-first 链），把该轮每项变更恢复到回执记录的 before 值。变量源与
+  // guard 由 Variable Gateway 按绑定架构统一选择：AgentTavern 写 chat 作用域
+  // VariableStore，其余写 chat_metadata.variables。语义性拒绝（无回执/全已撤销/
+  // 数据不完整/守卫拒绝）→ 400 分类报因；并发走聊天 revision CAS（与 retry 同款，
+  // body.revision 可选预检）。成功后发 chat-saved（floorCount 传当前楼数——撤销
+  // 不动楼层）。
   if (method === 'POST' && route === 'mvu/receipts/undo') {
     const body = await readJson(req)
     const state = await db.getState()
@@ -291,14 +289,9 @@ export async function handleMvuApi(
     if (typeof body.revision === 'string' && body.revision !== snapshot.revision) {
       throw new ChatRevisionConflictError(body.revision, snapshot.revision)
     }
-    const agentTavernBound = Object.values(state.sessionBindings).some((binding) =>
-      binding.architecture === 'agent-tavern' && binding.chatId === chatId && binding.character === characterName)
-    const options = { characterName, chatId, snapshot, at: new Date().toISOString() }
     let result
     try {
-      result = agentTavernBound
-        ? await undoMvuAgentSettlement(await variables(), db, options)
-        : await undoMvuStSettlement(db, options)
+      result = await variableGateway().undo({ kind: 'chat', character: characterName, chatId })
     } catch (error) {
       if (error instanceof MvuUndoRefusalError) {
         return sendJson(res, 400, { ok: false, message: error.message, code: `MVU_UNDO_${error.undoCode}` })

@@ -323,10 +323,10 @@ pnpm run check
 当前基线（2026-11-02 实测，宿主 DSH `0.2.1-rc.5`）：
 
 ```
-Test Files  198 passed (198)
-Tests       3283 passed | 2 skipped (3285)
+Test Files  199 passed (199)
+Tests       3288 passed | 2 skipped (3290)
 20 gates    全部 PASS
-built       v0.7.5 (015fe0b)
+built       v0.7.5 (2d6b705)
 ```
 
 - 2 项跳过都是 `skipIf` 环境条件项：Windows 检出上的 `host-package.spec.ts` POSIX-only 用例，以及 `im-store.spec.ts` 的 0600 权限位用例（Win32 无 POSIX mode）。

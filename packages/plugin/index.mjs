@@ -15062,6 +15062,253 @@ var init_mvu = __esm({
   }
 });
 
+// packages/plugin/src/variable-merge.ts
+function assertSafeKey(key, path12) {
+  if (FORBIDDEN_KEYS.has(key)) throw new Error(`${path12} is not allowed`);
+}
+function normalizeVariableTree(value, label) {
+  if (!isPlainRecord2(value)) throw new Error(`${label} must be a JSON object`);
+  const tree = /* @__PURE__ */ Object.create(null);
+  for (const [key, entry] of Object.entries(value)) {
+    assertSafeKey(key, `${label}.${key}`);
+    tree[key] = normalizeJsonValue(entry, `${label}.${key}`);
+  }
+  return tree;
+}
+function normalizeJsonValue(value, path12) {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error(`${path12} must be a finite number`);
+    return value;
+  }
+  if (Array.isArray(value)) return value.map((entry, index) => normalizeJsonValue(entry, `${path12}[${index}]`));
+  if (isPlainRecord2(value)) {
+    const record = /* @__PURE__ */ Object.create(null);
+    for (const [key, entry] of Object.entries(value)) {
+      assertSafeKey(key, `${path12}.${key}`);
+      record[key] = normalizeJsonValue(entry, `${path12}.${key}`);
+    }
+    return record;
+  }
+  throw new Error(`${path12} is not a JSON value (got ${value === void 0 ? "undefined" : typeof value})`);
+}
+function isPlainRecord2(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+function isJsonRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function variableEntriesForMirror(tree) {
+  const entries = [];
+  collectVariableEntries(tree, "", entries);
+  return entries;
+}
+function collectVariableEntries(tree, prefix, out) {
+  for (const [key, entry] of Object.entries(tree)) {
+    if (key.startsWith("$") || FORBIDDEN_KEYS.has(key)) continue;
+    const name2 = prefix === "" ? key : `${prefix}.${key}`;
+    if (prefix === "" && (key === "stat_data" || key === "previous_stat_data") && isJsonRecord(entry)) {
+      out.push({ name: name2, value: entry });
+      continue;
+    }
+    if (isJsonRecord(entry)) collectVariableEntries(entry, name2, out);
+    else if (VARIABLE_NAME.test(name2)) out.push({ name: name2, value: entry });
+  }
+}
+var VARIABLE_NAME, FORBIDDEN_KEYS;
+var init_variable_merge = __esm({
+  "packages/plugin/src/variable-merge.ts"() {
+    "use strict";
+    VARIABLE_NAME = /^[\p{L}_][\p{L}\p{N}_.-]{0,63}$/u;
+    FORBIDDEN_KEYS = /* @__PURE__ */ new Set(["__proto__", "prototype", "constructor"]);
+  }
+});
+
+// packages/plugin/src/variable-gateway.ts
+function createVariableGateway(deps) {
+  return {
+    async read(ref) {
+      if (ref.kind === "chat") return readChat(deps, ref.character, ref.chatId);
+      if (ref.kind === "character") return readCharacter(deps, ref.character);
+      return readGlobal(deps);
+    },
+    async replace(ref, tree) {
+      if (ref.kind === "chat") return replaceChat(deps, ref.character, ref.chatId, tree);
+      if (ref.kind === "character") return replaceCharacter(deps, ref.character, tree);
+      return replaceGlobal(deps, tree);
+    },
+    async mirror(ref, tree) {
+      const normalized = normalizeVariableTree(tree, `mirror variables for '${ref.character}/${ref.chatId}'`);
+      try {
+        const snapshot2 = await (await deps.store()).getChatSnapshot(ref.character, ref.chatId);
+        if (snapshot2 === void 0) return { status: "degraded", reason: `chat '${ref.chatId}' not found` };
+        return await mirrorChat(deps, ref.character, ref.chatId, normalized, upsertMirrorWrite);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        deps.logger.warn("variable gateway chat probe failed", { character: ref.character, chatId: ref.chatId, reason });
+        return { status: "degraded", reason };
+      }
+    },
+    applyUndo(chat, receipts, guard) {
+      return applyVariableUndo(chat, receipts, guard);
+    },
+    async undo(ref) {
+      return undoChat(deps, ref.character, ref.chatId);
+    }
+  };
+}
+function applyVariableUndo(chat, receipts, guard) {
+  const cloned = structuredClone(chat);
+  const result = undoMvuReceipts(cloned, receipts, guard);
+  return { chat: cloned, receipts: result.receipts, restores: result.restores };
+}
+async function undoChat(deps, character, chatId) {
+  const store5 = await deps.store();
+  const snapshot2 = await store5.getChatSnapshot(character, chatId);
+  if (snapshot2 === void 0) {
+    throw new Error(`chat '${chatId}' of character '${character}' not found; undoing variables requires a persisted chat snapshot`);
+  }
+  const options = { characterName: character, chatId, snapshot: snapshot2, at: (/* @__PURE__ */ new Date()).toISOString() };
+  const result = await isAgentTavernBound(deps, character, chatId) ? await undoMvuAgentSettlement(await deps.variables(), store5, options) : await undoMvuStSettlement(store5, options);
+  return { receipt: result.receipt, revision: result.revision, restores: result.restores };
+}
+async function isAgentTavernBound(deps, character, chatId) {
+  const binding = await deps.bindingOf(character, chatId);
+  return binding !== void 0 && binding.architecture === "agent-tavern" && binding.character === character && binding.chatId === chatId;
+}
+async function readChat(deps, character, chatId) {
+  const snapshot2 = await (await deps.store()).getChatSnapshot(character, chatId);
+  if (snapshot2 === void 0) throw new Error(`chat '${chatId}' not found`);
+  const base = normalizeVariableTree(readChatVariables(snapshot2.chat), `chat_metadata.variables for '${character}/${chatId}'`);
+  if (!await isAgentTavernBound(deps, character, chatId)) return base;
+  const scoped = await (await deps.variables()).listAll("chat", chatId);
+  return normalizeVariableTree(
+    overlayChatScopedVariables(base, scoped.map((entry) => ({ name: entry.name, value: entry.value }))),
+    `overlaid chat variables for '${character}/${chatId}'`
+  );
+}
+async function readCharacter(deps, character) {
+  const store5 = await deps.store();
+  const state = await store5.getState();
+  const overlays = state.characterVariables ?? {};
+  if (Object.prototype.hasOwnProperty.call(overlays, character)) {
+    return normalizeVariableTree(overlays[character], `characterVariables['${character}']`);
+  }
+  const file = await store5.getCharacter(character);
+  if (file === void 0) return {};
+  const cardVariables = file.card.data.extensions?.["variables"];
+  if (cardVariables === void 0 || cardVariables === null) return {};
+  return normalizeVariableTree(cardVariables, `card extensions.variables for '${character}'`);
+}
+async function readGlobal(deps) {
+  const state = await (await deps.store()).getState();
+  return normalizeVariableTree(state.scriptGlobals, "state.scriptGlobals");
+}
+async function replaceChat(deps, character, chatId, tree) {
+  const normalized = normalizeVariableTree(tree, `variables for '${character}/${chatId}'`);
+  const saved = await saveChatWithRetry(await deps.store(), character, chatId, normalized);
+  const mirror = await mirrorChat(deps, character, chatId, normalized, replaceMirrorWrite);
+  return { revision: saved.revision, floorCount: saved.floorCount, mirror };
+}
+async function saveChatWithRetry(store5, character, chatId, tree) {
+  let lastError;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const snapshot2 = await store5.getChatSnapshot(character, chatId);
+    if (snapshot2 === void 0) throw new Error(`chat '${chatId}' not found`);
+    if (Object.keys(tree).length > 0) snapshot2.chat.header.chat_metadata.variables = tree;
+    else delete snapshot2.chat.header.chat_metadata.variables;
+    try {
+      const revision = await store5.saveChat(character, chatId, snapshot2.chat, snapshot2.revision);
+      return { revision, floorCount: snapshot2.chat.messages.length };
+    } catch (error) {
+      if (!isChatRevisionConflict(error)) throw error;
+      lastError = error;
+      await delay(10 * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
+async function replaceCharacter(deps, character, tree) {
+  const normalized = normalizeVariableTree(tree, `character variables for '${character}'`);
+  const store5 = await deps.store();
+  await store5.updateState((current) => ({
+    characterVariables: {
+      ...current.characterVariables ?? {},
+      [character]: normalized
+    }
+  }));
+  return { mirror: { status: "not-applicable" } };
+}
+async function replaceGlobal(deps, tree) {
+  const normalized = normalizeVariableTree(tree, "global variables");
+  const store5 = await deps.store();
+  await store5.updateState(() => ({
+    scriptGlobals: normalized
+  }));
+  return { mirror: { status: "not-applicable" } };
+}
+async function mirrorChat(deps, character, chatId, tree, write) {
+  let bound;
+  try {
+    bound = await isAgentTavernBound(deps, character, chatId);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    deps.logger.warn("variable gateway binding probe failed", { character, chatId, reason });
+    return { status: "degraded", reason };
+  }
+  if (!bound) return { status: "not-applicable" };
+  return mirrorChatWithRetry(deps, character, chatId, tree, write);
+}
+async function mirrorChatWithRetry(deps, character, chatId, tree, write) {
+  let reason = "";
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await write(await deps.variables(), chatId, tree);
+      return { status: "ok" };
+    } catch (error) {
+      reason = error instanceof Error ? error.message : String(error);
+      await delay(10 * (attempt + 1));
+    }
+  }
+  deps.logger.warn("variable gateway chat mirror degraded", {
+    character,
+    chatId,
+    attempts: 3,
+    reason
+  });
+  return { status: "degraded", reason };
+}
+async function replaceMirrorWrite(store5, chatId, tree) {
+  const entries = variableEntriesForMirror(tree);
+  const nextNames = new Set(entries.map((entry) => entry.name));
+  for (const entry of await store5.listAll("chat", chatId)) {
+    if (nextNames.has(entry.name) || entry.name.startsWith("$")) continue;
+    await store5.delete("chat", chatId, entry.name, entry.revision);
+  }
+  if (entries.length > 0) {
+    await store5.patch("chat", chatId, entries.map((entry) => ({ name: entry.name, value: entry.value })));
+  }
+}
+async function upsertMirrorWrite(store5, chatId, tree) {
+  const entries = variableEntriesForMirror(tree);
+  if (entries.length > 0) {
+    await store5.patch("chat", chatId, entries.map((entry) => ({ name: entry.name, value: entry.value })));
+  }
+}
+function delay(ms) {
+  return new Promise((resolve9) => setTimeout(resolve9, ms));
+}
+var init_variable_gateway = __esm({
+  "packages/plugin/src/variable-gateway.ts"() {
+    "use strict";
+    init_src();
+    init_mvu();
+    init_variable_merge();
+  }
+});
+
 // packages/plugin/src/agent-tavern/deduce.ts
 function subagentRuntimeOf(parent) {
   const ctx = parent?.ctx;
@@ -15351,7 +15598,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.5".trim() : "";
-  const commit = true ? normalizeCommit("015fe0b") : void 0;
+  const commit = true ? normalizeCommit("2d6b705") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -17678,7 +17925,7 @@ async function httpGet(options, url, accept) {
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
       if (attempt >= HTTP_ATTEMPTS || !isTransientHttpFailure(lastError)) break;
-      await delay(HTTP_RETRY_DELAY_MS * attempt);
+      await delay2(HTTP_RETRY_DELAY_MS * attempt);
     }
   }
   throw lastError ?? new Error(`GET ${url} failed without a captured error`);
@@ -17728,7 +17975,7 @@ function isTransientHttpFailure(error) {
   if (/HTTP\s*(?:5\d\d|429)/i.test(message)) return true;
   return /ECONNRESET|EPIPE|EAI_AGAIN|socket hang up|network is unreachable/i.test(message);
 }
-function delay(ms) {
+function delay2(ms) {
   return new Promise((resolve9) => setTimeout(resolve9, ms));
 }
 function describeError(error) {
@@ -19643,232 +19890,6 @@ var init_service = __esm({
         }
       }
     };
-  }
-});
-
-// packages/plugin/src/variable-merge.ts
-function assertSafeKey(key, path12) {
-  if (FORBIDDEN_KEYS.has(key)) throw new Error(`${path12} is not allowed`);
-}
-function normalizeVariableTree(value, label) {
-  if (!isPlainRecord2(value)) throw new Error(`${label} must be a JSON object`);
-  const tree = /* @__PURE__ */ Object.create(null);
-  for (const [key, entry] of Object.entries(value)) {
-    assertSafeKey(key, `${label}.${key}`);
-    tree[key] = normalizeJsonValue(entry, `${label}.${key}`);
-  }
-  return tree;
-}
-function normalizeJsonValue(value, path12) {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new Error(`${path12} must be a finite number`);
-    return value;
-  }
-  if (Array.isArray(value)) return value.map((entry, index) => normalizeJsonValue(entry, `${path12}[${index}]`));
-  if (isPlainRecord2(value)) {
-    const record = /* @__PURE__ */ Object.create(null);
-    for (const [key, entry] of Object.entries(value)) {
-      assertSafeKey(key, `${path12}.${key}`);
-      record[key] = normalizeJsonValue(entry, `${path12}.${key}`);
-    }
-    return record;
-  }
-  throw new Error(`${path12} is not a JSON value (got ${value === void 0 ? "undefined" : typeof value})`);
-}
-function isPlainRecord2(value) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
-function isJsonRecord(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-function variableEntriesForMirror(tree) {
-  const entries = [];
-  collectVariableEntries(tree, "", entries);
-  return entries;
-}
-function collectVariableEntries(tree, prefix, out) {
-  for (const [key, entry] of Object.entries(tree)) {
-    if (key.startsWith("$") || FORBIDDEN_KEYS.has(key)) continue;
-    const name2 = prefix === "" ? key : `${prefix}.${key}`;
-    if (prefix === "" && (key === "stat_data" || key === "previous_stat_data") && isJsonRecord(entry)) {
-      out.push({ name: name2, value: entry });
-      continue;
-    }
-    if (isJsonRecord(entry)) collectVariableEntries(entry, name2, out);
-    else if (VARIABLE_NAME.test(name2)) out.push({ name: name2, value: entry });
-  }
-}
-var VARIABLE_NAME, FORBIDDEN_KEYS;
-var init_variable_merge = __esm({
-  "packages/plugin/src/variable-merge.ts"() {
-    "use strict";
-    VARIABLE_NAME = /^[\p{L}_][\p{L}\p{N}_.-]{0,63}$/u;
-    FORBIDDEN_KEYS = /* @__PURE__ */ new Set(["__proto__", "prototype", "constructor"]);
-  }
-});
-
-// packages/plugin/src/variable-gateway.ts
-function createVariableGateway(deps) {
-  return {
-    async read(ref) {
-      if (ref.kind === "chat") return readChat(deps, ref.character, ref.chatId);
-      if (ref.kind === "character") return readCharacter(deps, ref.character);
-      return readGlobal(deps);
-    },
-    async replace(ref, tree) {
-      if (ref.kind === "chat") return replaceChat(deps, ref.character, ref.chatId, tree);
-      if (ref.kind === "character") return replaceCharacter(deps, ref.character, tree);
-      return replaceGlobal(deps, tree);
-    },
-    async mirror(ref, tree) {
-      const normalized = normalizeVariableTree(tree, `mirror variables for '${ref.character}/${ref.chatId}'`);
-      try {
-        const snapshot2 = await (await deps.store()).getChatSnapshot(ref.character, ref.chatId);
-        if (snapshot2 === void 0) return { status: "degraded", reason: `chat '${ref.chatId}' not found` };
-        return await mirrorChat(deps, ref.character, ref.chatId, normalized, upsertMirrorWrite);
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        deps.logger.warn("variable gateway chat probe failed", { character: ref.character, chatId: ref.chatId, reason });
-        return { status: "degraded", reason };
-      }
-    }
-  };
-}
-async function isAgentTavernBound(deps, character, chatId) {
-  const binding = await deps.bindingOf(character, chatId);
-  return binding !== void 0 && binding.architecture === "agent-tavern" && binding.character === character && binding.chatId === chatId;
-}
-async function readChat(deps, character, chatId) {
-  const snapshot2 = await (await deps.store()).getChatSnapshot(character, chatId);
-  if (snapshot2 === void 0) throw new Error(`chat '${chatId}' not found`);
-  const base = normalizeVariableTree(readChatVariables(snapshot2.chat), `chat_metadata.variables for '${character}/${chatId}'`);
-  if (!await isAgentTavernBound(deps, character, chatId)) return base;
-  const scoped = await (await deps.variables()).listAll("chat", chatId);
-  return normalizeVariableTree(
-    overlayChatScopedVariables(base, scoped.map((entry) => ({ name: entry.name, value: entry.value }))),
-    `overlaid chat variables for '${character}/${chatId}'`
-  );
-}
-async function readCharacter(deps, character) {
-  const store5 = await deps.store();
-  const state = await store5.getState();
-  const overlays = state.characterVariables ?? {};
-  if (Object.prototype.hasOwnProperty.call(overlays, character)) {
-    return normalizeVariableTree(overlays[character], `characterVariables['${character}']`);
-  }
-  const file = await store5.getCharacter(character);
-  if (file === void 0) return {};
-  const cardVariables = file.card.data.extensions?.["variables"];
-  if (cardVariables === void 0 || cardVariables === null) return {};
-  return normalizeVariableTree(cardVariables, `card extensions.variables for '${character}'`);
-}
-async function readGlobal(deps) {
-  const state = await (await deps.store()).getState();
-  return normalizeVariableTree(state.scriptGlobals, "state.scriptGlobals");
-}
-async function replaceChat(deps, character, chatId, tree) {
-  const normalized = normalizeVariableTree(tree, `variables for '${character}/${chatId}'`);
-  const saved = await saveChatWithRetry(await deps.store(), character, chatId, normalized);
-  const mirror = await mirrorChat(deps, character, chatId, normalized, replaceMirrorWrite);
-  return { revision: saved.revision, floorCount: saved.floorCount, mirror };
-}
-async function saveChatWithRetry(store5, character, chatId, tree) {
-  let lastError;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const snapshot2 = await store5.getChatSnapshot(character, chatId);
-    if (snapshot2 === void 0) throw new Error(`chat '${chatId}' not found`);
-    if (Object.keys(tree).length > 0) snapshot2.chat.header.chat_metadata.variables = tree;
-    else delete snapshot2.chat.header.chat_metadata.variables;
-    try {
-      const revision = await store5.saveChat(character, chatId, snapshot2.chat, snapshot2.revision);
-      return { revision, floorCount: snapshot2.chat.messages.length };
-    } catch (error) {
-      if (!isChatRevisionConflict(error)) throw error;
-      lastError = error;
-      await delay2(10 * (attempt + 1));
-    }
-  }
-  throw lastError;
-}
-async function replaceCharacter(deps, character, tree) {
-  const normalized = normalizeVariableTree(tree, `character variables for '${character}'`);
-  const store5 = await deps.store();
-  await store5.updateState((current) => ({
-    characterVariables: {
-      ...current.characterVariables ?? {},
-      [character]: normalized
-    }
-  }));
-  return { mirror: { status: "not-applicable" } };
-}
-async function replaceGlobal(deps, tree) {
-  const normalized = normalizeVariableTree(tree, "global variables");
-  const store5 = await deps.store();
-  await store5.updateState(() => ({
-    scriptGlobals: normalized
-  }));
-  return { mirror: { status: "not-applicable" } };
-}
-async function mirrorChat(deps, character, chatId, tree, write) {
-  let bound;
-  try {
-    bound = await isAgentTavernBound(deps, character, chatId);
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    deps.logger.warn("variable gateway binding probe failed", { character, chatId, reason });
-    return { status: "degraded", reason };
-  }
-  if (!bound) return { status: "not-applicable" };
-  return mirrorChatWithRetry(deps, character, chatId, tree, write);
-}
-async function mirrorChatWithRetry(deps, character, chatId, tree, write) {
-  let reason = "";
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      await write(await deps.variables(), chatId, tree);
-      return { status: "ok" };
-    } catch (error) {
-      reason = error instanceof Error ? error.message : String(error);
-      await delay2(10 * (attempt + 1));
-    }
-  }
-  deps.logger.warn("variable gateway chat mirror degraded", {
-    character,
-    chatId,
-    attempts: 3,
-    reason
-  });
-  return { status: "degraded", reason };
-}
-async function replaceMirrorWrite(store5, chatId, tree) {
-  const entries = variableEntriesForMirror(tree);
-  const nextNames = new Set(entries.map((entry) => entry.name));
-  for (const entry of await store5.listAll("chat", chatId)) {
-    if (nextNames.has(entry.name) || entry.name.startsWith("$")) continue;
-    await store5.delete("chat", chatId, entry.name, entry.revision);
-  }
-  if (entries.length > 0) {
-    await store5.patch("chat", chatId, entries.map((entry) => ({ name: entry.name, value: entry.value })));
-  }
-}
-async function upsertMirrorWrite(store5, chatId, tree) {
-  const entries = variableEntriesForMirror(tree);
-  if (entries.length > 0) {
-    await store5.patch("chat", chatId, entries.map((entry) => ({ name: entry.name, value: entry.value })));
-  }
-}
-function delay2(ms) {
-  return new Promise((resolve9) => setTimeout(resolve9, ms));
-}
-var init_variable_gateway = __esm({
-  "packages/plugin/src/variable-gateway.ts"() {
-    "use strict";
-    init_src();
-    init_mvu();
-    init_variable_merge();
   }
 });
 
@@ -22056,6 +22077,7 @@ function isRecord3(value) {
 // packages/plugin/src/agent-tavern/body-candidate-receipts.ts
 init_mvu();
 init_mvu_guard();
+init_variable_gateway();
 
 // packages/plugin/src/agent-tavern/body-candidate-keys.ts
 var CandidateReceiptError = class extends Error {
@@ -22318,10 +22340,11 @@ function applyCandidateEditToChat(chat, card, input) {
   if (inspection.detail !== void 0) throw detailError(inspection.detail, ref, inspection);
   if (inspection.live.length > 0) {
     const variables2 = readChatVariables(chat);
-    undoMvuReceipts(chat, inspection.live, {
+    const staged = applyVariableUndo(chat, inspection.live, {
       schema: readMvuSchema(chat, card),
       currentOf: (path12) => getMvuTreePath(variables2, path12)
-    }, { at: input.at });
+    });
+    chat = staged.chat;
   }
   const before = snapshotChatVariables(chat);
   const applied = applyUpdateVariableToChat(card, chat, input.text);
@@ -22873,6 +22896,7 @@ function parseTavernSessionCommand(rawInput) {
 // packages/plugin/src/agent-tavern/body-runtime-settlement.ts
 init_mvu();
 init_mvu_guard();
+init_variable_gateway();
 
 // packages/plugin/src/agent-tavern/body-runtime-core.ts
 init_src();
@@ -24813,11 +24837,11 @@ async function undoNewCandidateBodyReceipt(deps, op, events, failedTurn) {
     if (live.length === 0) return;
     const card = (await tavern.getCharacter(plan.binding.character))?.card;
     const variables2 = readChatVariables(snapshot2.chat);
-    undoMvuReceipts(snapshot2.chat, live, {
+    const staged = applyVariableUndo(snapshot2.chat, live, {
       schema: readMvuSchema(snapshot2.chat, card),
       currentOf: (path12) => getMvuTreePath(variables2, path12)
-    }, { at: (/* @__PURE__ */ new Date()).toISOString() });
-    await tavern.saveChat(plan.binding.character, plan.binding.chatId, snapshot2.chat, snapshot2.revision);
+    });
+    await tavern.saveChat(plan.binding.character, plan.binding.chatId, staged.chat, snapshot2.revision);
   } catch (error) {
     throw failureFor(
       error,
@@ -57350,11 +57374,9 @@ async function handleMvuApi(req, res, route, method, db) {
     if (typeof body.revision === "string" && body.revision !== snapshot2.revision) {
       throw new ChatRevisionConflictError(body.revision, snapshot2.revision);
     }
-    const agentTavernBound = Object.values(state.sessionBindings).some((binding) => binding.architecture === "agent-tavern" && binding.chatId === chatId && binding.character === characterName);
-    const options = { characterName, chatId, snapshot: snapshot2, at: (/* @__PURE__ */ new Date()).toISOString() };
     let result;
     try {
-      result = agentTavernBound ? await undoMvuAgentSettlement(await variables(), db, options) : await undoMvuStSettlement(db, options);
+      result = await variableGateway().undo({ kind: "chat", character: characterName, chatId });
     } catch (error) {
       if (error instanceof MvuUndoRefusalError) {
         return sendJson(res, 400, { ok: false, message: error.message, code: `MVU_UNDO_${error.undoCode}` });

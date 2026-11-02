@@ -135,7 +135,7 @@
 - [`2026-10-11-mvu-rules.md`](../decisions/2026-10-11-mvu-rules.md) — MVU `$rules` 条件规则引擎（C-2）
 - [`2026-10-11-mvu-schema-guard.md`](../decisions/2026-10-11-mvu-schema-guard.md) — MVU `$schema` 变量写入守卫
 - [`2026-10-11-retrieval-eval-matrix.md`](../decisions/2026-10-11-retrieval-eval-matrix.md) — B-5a 受控中文记忆检索评测矩阵（确定性基线与回归门槛）
-- [`2026-11-02-variable-gateway.md`](../decisions/2026-11-02-variable-gateway.md) — 变量语义单一 owner：Variable Gateway 的边界、镜像降级与 undo guard 统一（Phase 1 已实施：read/replace/mirror + C1 guard；Phase 2 待实施）
+- [`2026-11-02-variable-gateway.md`](../decisions/2026-11-02-variable-gateway.md) — 变量语义单一 owner：Variable Gateway 的边界、镜像降级与 undo 收口（Phase 1–2 已实施：read/replace/mirror + applyUndo/undo；`body-rollback-receipts.ts` 直连执行核留作后续）
 
 ### 卡片工作台
 
