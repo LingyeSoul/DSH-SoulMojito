@@ -6,7 +6,6 @@
  */
 import type { ChatLogIR } from '../../tavern-format/src/index.js'
 import type { JsonValue, TavernSessionBinding, TavernStore, VariableStore } from '../../tavern-store/src/index.js'
-import { isChatRevisionConflict } from '../../tavern-store/src/index.js'
 import {
   overlayChatScopedVariables,
   readChatVariables,
@@ -200,33 +199,12 @@ async function replaceChat(
   tree: VariableTree,
 ): Promise<VariableWriteReceipt> {
   const normalized = normalizeVariableTree(tree, `variables for '${character}/${chatId}'`)
-  const saved = await saveChatWithRetry(await deps.store(), character, chatId, normalized)
+  const saved = await (await deps.store()).withChat(character, chatId, (chat) => {
+    if (Object.keys(normalized).length > 0) chat.header.chat_metadata.variables = normalized
+    else delete chat.header.chat_metadata.variables
+  }, { attempts: 3, delayMs: (attempt) => 10 * (attempt + 1) })
   const mirror = await mirrorChat(deps, character, chatId, normalized, replaceMirrorWrite)
-  return { revision: saved.revision, floorCount: saved.floorCount, mirror }
-}
-
-async function saveChatWithRetry(
-  store: TavernStore,
-  character: string,
-  chatId: string,
-  tree: VariableTree,
-): Promise<{ readonly revision: string; readonly floorCount: number }> {
-  let lastError: unknown
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const snapshot = await store.getChatSnapshot(character, chatId)
-    if (snapshot === undefined) throw new Error(`chat '${chatId}' not found`)
-    if (Object.keys(tree).length > 0) snapshot.chat.header.chat_metadata.variables = tree
-    else delete snapshot.chat.header.chat_metadata.variables
-    try {
-      const revision = await store.saveChat(character, chatId, snapshot.chat, snapshot.revision)
-      return { revision, floorCount: snapshot.chat.messages.length }
-    } catch (error) {
-      if (!isChatRevisionConflict(error)) throw error
-      lastError = error
-      await delay(10 * (attempt + 1))
-    }
-  }
-  throw lastError
+  return { revision: saved.revision, floorCount: saved.chat.messages.length, mirror }
 }
 
 async function replaceCharacter(

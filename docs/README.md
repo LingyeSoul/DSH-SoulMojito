@@ -136,6 +136,7 @@
 - [`2026-10-11-mvu-schema-guard.md`](../decisions/2026-10-11-mvu-schema-guard.md) — MVU `$schema` 变量写入守卫
 - [`2026-10-11-retrieval-eval-matrix.md`](../decisions/2026-10-11-retrieval-eval-matrix.md) — B-5a 受控中文记忆检索评测矩阵（确定性基线与回归门槛）
 - [`2026-11-02-variable-gateway.md`](../decisions/2026-11-02-variable-gateway.md) — 变量语义单一 owner：Variable Gateway 的边界、镜像降级与 undo 收口（Phase 1–2 已实施：read/replace/mirror + applyUndo/undo；`body-rollback-receipts.ts` 直连执行核留作后续）
+- [`2026-11-02-chat-write-transaction.md`](../decisions/2026-11-02-chat-write-transaction.md) — 聊天写入事务缝：`TavernStore.withChat` 的 clone → mutate → CAS 重试，helper 五条写路径迁移（已实施）
 
 ### 卡片工作台
 

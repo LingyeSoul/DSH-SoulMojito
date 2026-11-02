@@ -359,6 +359,23 @@ export interface ChatSnapshot {
 }
 
 /**
+ * Retry policy for `withChat`. `attempt` is 0-based, so the first retry waits
+ * `delayMs(0)`. Both fields are explicit: callers own the policy and there is
+ * no hidden default.
+ */
+export interface ChatWriteOptions {
+  readonly attempts: number
+  readonly delayMs: (attempt: number) => number
+}
+
+/** The persisted result of a `withChat` transaction. */
+export interface ChatWriteResult {
+  /** The saved working copy; mutations stay contained in this object. */
+  readonly chat: ChatLogIR
+  readonly revision: string
+}
+
+/**
  * File fingerprint that validates a cached chat snapshot.
  *
  * `size` + `mtimeMs` is the same pair `collectWorldEntryCounts` relies on; a
@@ -676,6 +693,15 @@ function normalizeLocalMemoryEmbedding(record: Record<string, unknown>): MemoryE
 function clampOptionalInt(value: unknown, min: number, max: number): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
   return Math.max(min, Math.min(max, Math.round(value)))
+}
+
+/** Runtime check for a caller-supplied retry delay; a bad value must not fall back to 0. */
+function chatWriteDelayMs(delayMs: (attempt: number) => number, attempt: number): number {
+  const delay = delayMs(attempt)
+  if (typeof delay !== 'number' || !Number.isFinite(delay) || delay < 0) {
+    throw new Error(`withChat delayMs(${attempt}) must be a finite non-negative number; received ${String(delay)}`)
+  }
+  return delay
 }
 
 export class TavernStore {
@@ -1137,6 +1163,52 @@ export class TavernStore {
       this.invalidateChatSnapshot(file)
       return chatRevision(bytes)
     })
+  }
+
+  /**
+   * Read-modify-write one chat under CAS.
+   *
+   * Each attempt re-reads the latest snapshot and re-applies `mutate` to a
+   * `structuredClone`, so a failed save — including a conflict that exhausts
+   * the retries — never changes the store's cached parse. Only CAS conflicts
+   * retry; a mutation error or any other save failure propagates on the first
+   * attempt. The store does not emit `chat-saved`; callers own their events.
+   */
+  async withChat(
+    characterName: string,
+    chatId: string,
+    mutate: (chat: ChatLogIR) => void,
+    options: ChatWriteOptions,
+  ): Promise<ChatWriteResult> {
+    const attempts = options.attempts
+    if (typeof attempts !== 'number' || !Number.isSafeInteger(attempts) || attempts <= 0) {
+      throw new Error(`withChat attempts must be a positive safe integer; received ${String(attempts)}`)
+    }
+    const firstDelay = chatWriteDelayMs(options.delayMs, 0)
+    let lastConflict: ChatRevisionConflictError | undefined
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const snapshot = await this.getChatSnapshot(characterName, chatId)
+      if (snapshot === undefined) {
+        throw new Error(`chat '${chatId}' of character '${characterName}' not found; withChat requires a persisted chat snapshot`)
+      }
+      const clone = structuredClone(snapshot.chat)
+      mutate(clone)
+      try {
+        const revision = await this.saveChat(characterName, chatId, clone, snapshot.revision)
+        return { chat: clone, revision }
+      } catch (error) {
+        if (!isChatRevisionConflict(error)) throw error
+        lastConflict = error
+      }
+      if (attempt + 1 < attempts) {
+        const delay = attempt === 0 ? firstDelay : chatWriteDelayMs(options.delayMs, attempt)
+        await new Promise<void>((resolve) => setTimeout(resolve, delay))
+      }
+    }
+    if (lastConflict === undefined) {
+      throw new Error(`withChat exhausted ${attempts} attempt(s) without recording a revision conflict`)
+    }
+    throw lastConflict
   }
 
   async getChat(characterName: string, chatId: string): Promise<ChatLogIR | undefined> {

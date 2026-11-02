@@ -149,7 +149,7 @@ Gateway 的 `bindingOf(character, chatId)` 必须同时匹配两个字段。这�
 1. 读最新聊天快照；
 2. 写 `chat_metadata.variables`（空树删除该键，沿用 `helper.ts:710-711` 与 `mvu.ts:955-956` 的约定）；
 3. `saveChat` CAS；
-4. 若 AgentTavern 绑定，调用 flat mirror；3 次有界重试（10/20/30ms，与 `helper.ts:930-941` 的 `retryChatWrite` 同节奏）。`replace(chat)` 是全量替换；公共 `mirror(ref, tree)` 是 **upsert**，只写传入条目、不删除缺失项。`replaceMvuData` 只传 `stat_data`，因此不会删掉 flat 里的其它 AgentTavern 变量；
+4. 若 AgentTavern 绑定，调用 flat mirror；3 次有界重试（10/20/30ms）。`replace(chat)` 是全量替换；公共 `mirror(ref, tree)` 是 **upsert**，只写传入条目、不删除缺失项。`replaceMvuData` 只传 `stat_data`，因此不会删掉 flat 里的其它 AgentTavern 变量；
 5. 镜像最终失败时返回 `{ status: 'degraded', reason }`，不抛错、不回滚第 3 步。
 
 可观察面：helper 的 `variables.replace` / `mvu.replace` 响应携带 `mirror` 字段；pipeline 保持单次提交，暂不接（见偏差）。同时记一条结构化 warn（`chatId`、`reason`、`attempts`）。不把降级状态写进聊天文件，也不新增持久标记。
@@ -251,13 +251,13 @@ Gateway 的 `bindingOf(character, chatId)` 必须同时匹配两个字段。这�
 
 ## 验证
 
-`pnpm run check`（2026-11-02，Phase 2 后，commit `2d6b705`）：
+`pnpm run check`（2026-11-02，Phase 2 + 候选 02 后，commit `0a995e4`）：
 
 ```text
-Test Files  199 passed (199)
-Tests       3288 passed | 2 skipped (3290)
+Test Files  200 passed (200)
+Tests       3297 passed | 2 skipped (3299)
 20 gates    PASS
-built       v0.7.5 (2d6b705)
+built       v0.7.5 (0a995e4)
 ```
 
 - Phase 1 targeted（最终）：`helper-route` 39 + `tavern-mvu` 32 + `variable-merge` 13 = 84 用例通过。
@@ -276,7 +276,7 @@ built       v0.7.5 (2d6b705)
 - **pipeline 暂不接 `gateway.replace`**：`generation/pipeline.ts` 的消息、回执与变量必须在同一次 `saveChat` 提交；当前 gateway 只能单独保存变量，接进去会把一次提交拆成两次并扩大变量覆盖窗口。因此 pipeline 保持原单次提交，等候选 02 `store.withChat` 落地后再接。首版实现曾接入，集成复核发现双提交后已撤回。
 - **Phase 2 已实现 `applyUndo` / `undo`**：面板与 candidate/runtime body 已收口；`body-rollback-receipts.ts` 仍直接调用 `undoMvuReceipts`，因为它把同一个 chat 穿过两个 store（变量与回执/日志），需要单独拆事务边界后再接 gateway。`applyVariableUndo` 不接收 `at`，body candidate 的 `undoneAt` 改为当前时刻（旧实现使用 body event 时间）；回执顺序与恢复结果不变。
 - **`replaceCharacter` / `replaceGlobal` 没有独立 revision**：receipt 只带 `mirror`，不带 `revision`；state 写入没有独立 revision，调用方不得把它当 CAS 信号。
-- **`replaceMvuData` 的聊天树写入仍直接调用 `persistChat`**：它已改用 `normalizeVariableTree` 与 gateway 的 `mirror`（upsert 只写 `stat_data`），但消息 + 变量仍由 helper 单次提交；完整的写入编排等候选 02 `store.withChat`。
+- **`replaceMvuData` 已走 `withChat`**：消息 + 变量在同一次事务内提交；mirror 在事务后按 `stat_data` upsert。候选 02 已实施，见 `decisions/2026-11-02-chat-write-transaction.md`。
 - **`replace(chat)` 的 full mirror 先删后 patch**：patch 永久失败时可能留下部分删除并只返回 `degraded`；后续可加补偿或改成单次原子 patch。
 - **read-after-degraded**：mirror 降级后，同一 chat 的 `read` 仍可能被旧 flat 值 overlay（AgentTavern flat 优先语义）；下一次成功 mirror 收敛。后续可加 read-repair。
 - **helper / panel 的额外 snapshot 读取**：helper 先取 chat 再调 `gateway.read`，gateway 内部再取一次；面板 undo 同理：路由先取 snapshot 做 404 / revision 预检，`gateway.undo` 再取一次作为写基准。预检与写基准之间若有并发写，以写基准的 CAS 为准，预检只用于快速失败。Phase 2 未让 gateway 接受已取 snapshot。
@@ -287,6 +287,6 @@ built       v0.7.5 (2d6b705)
 
 - Phase 2 已完成面板与 candidate/runtime body 的收口；剩余 `body-rollback-receipts.ts`：它把同一个 chat 穿过两个 store，需先拆事务边界再改为 `gateway.applyUndo`。
 - `redoMvuReceipts` 仍跳过 screen；如果 body 失败恢复也需要 guard，另立决策/任务。
-- 候选 02（`store.withChat`）落地后，把 pipeline 的 chat 写路径接回 gateway，消除“一次提交拆两次”的缺口；本决策不提前实现 02。
+- 候选 02（`store.withChat`）已落地到 helper 的五条 chat 写路径（message 作用域变量、`mvu.replace`、`chat.world.set`、`messages.rotate`、messages 增删改）；`chat-saved` 统一在事务成功后发射。pipeline 仍保持单次 `saveChat`，等它自己的集成，见 `decisions/2026-11-02-chat-write-transaction.md`。
 - 如果 `message` / `turn` / `agent` 出现同类分叉，再单独扩 `VariableRef`，不在本决策里预留。
-- 文档已同步：`CONTEXT.md` 的「Variable Gateway」词条与 `docs/README.md` 的「记忆与变量」条目更新为 Phase 2 状态；根 `README.md` 的测试基线同步为 199 文件 / 3288 passed / 2 skipped。
+- 文档已同步：`CONTEXT.md` 的「Variable Gateway」词条与 `docs/README.md` 的「记忆与变量」条目更新为 Phase 2 状态；根 `README.md` 的测试基线同步为 200 文件 / 3297 passed / 2 skipped。

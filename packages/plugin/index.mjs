@@ -2404,6 +2404,13 @@ function clampOptionalInt(value, min, max2) {
   if (typeof value !== "number" || !Number.isFinite(value)) return void 0;
   return Math.max(min, Math.min(max2, Math.round(value)));
 }
+function chatWriteDelayMs(delayMs, attempt) {
+  const delay4 = delayMs(attempt);
+  if (typeof delay4 !== "number" || !Number.isFinite(delay4) || delay4 < 0) {
+    throw new Error(`withChat delayMs(${attempt}) must be a finite non-negative number; received ${String(delay4)}`);
+  }
+  return delay4;
+}
 function normalizeTavernSessionBinding(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
   const candidate = value;
@@ -3396,6 +3403,46 @@ var init_store = __esm({
           this.invalidateChatSnapshot(file);
           return chatRevision(bytes);
         });
+      }
+      /**
+       * Read-modify-write one chat under CAS.
+       *
+       * Each attempt re-reads the latest snapshot and re-applies `mutate` to a
+       * `structuredClone`, so a failed save — including a conflict that exhausts
+       * the retries — never changes the store's cached parse. Only CAS conflicts
+       * retry; a mutation error or any other save failure propagates on the first
+       * attempt. The store does not emit `chat-saved`; callers own their events.
+       */
+      async withChat(characterName, chatId, mutate, options) {
+        const attempts = options.attempts;
+        if (typeof attempts !== "number" || !Number.isSafeInteger(attempts) || attempts <= 0) {
+          throw new Error(`withChat attempts must be a positive safe integer; received ${String(attempts)}`);
+        }
+        const firstDelay = chatWriteDelayMs(options.delayMs, 0);
+        let lastConflict;
+        for (let attempt = 0; attempt < attempts; attempt += 1) {
+          const snapshot2 = await this.getChatSnapshot(characterName, chatId);
+          if (snapshot2 === void 0) {
+            throw new Error(`chat '${chatId}' of character '${characterName}' not found; withChat requires a persisted chat snapshot`);
+          }
+          const clone2 = structuredClone(snapshot2.chat);
+          mutate(clone2);
+          try {
+            const revision = await this.saveChat(characterName, chatId, clone2, snapshot2.revision);
+            return { chat: clone2, revision };
+          } catch (error) {
+            if (!isChatRevisionConflict(error)) throw error;
+            lastConflict = error;
+          }
+          if (attempt + 1 < attempts) {
+            const delay4 = attempt === 0 ? firstDelay : chatWriteDelayMs(options.delayMs, attempt);
+            await new Promise((resolve9) => setTimeout(resolve9, delay4));
+          }
+        }
+        if (lastConflict === void 0) {
+          throw new Error(`withChat exhausted ${attempts} attempt(s) without recording a revision conflict`);
+        }
+        throw lastConflict;
       }
       async getChat(characterName, chatId) {
         return (await this.getChatSnapshot(characterName, chatId))?.chat;
@@ -15208,27 +15255,12 @@ async function readGlobal(deps) {
 }
 async function replaceChat(deps, character, chatId, tree) {
   const normalized = normalizeVariableTree(tree, `variables for '${character}/${chatId}'`);
-  const saved = await saveChatWithRetry(await deps.store(), character, chatId, normalized);
+  const saved = await (await deps.store()).withChat(character, chatId, (chat) => {
+    if (Object.keys(normalized).length > 0) chat.header.chat_metadata.variables = normalized;
+    else delete chat.header.chat_metadata.variables;
+  }, { attempts: 3, delayMs: (attempt) => 10 * (attempt + 1) });
   const mirror = await mirrorChat(deps, character, chatId, normalized, replaceMirrorWrite);
-  return { revision: saved.revision, floorCount: saved.floorCount, mirror };
-}
-async function saveChatWithRetry(store5, character, chatId, tree) {
-  let lastError;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const snapshot2 = await store5.getChatSnapshot(character, chatId);
-    if (snapshot2 === void 0) throw new Error(`chat '${chatId}' not found`);
-    if (Object.keys(tree).length > 0) snapshot2.chat.header.chat_metadata.variables = tree;
-    else delete snapshot2.chat.header.chat_metadata.variables;
-    try {
-      const revision = await store5.saveChat(character, chatId, snapshot2.chat, snapshot2.revision);
-      return { revision, floorCount: snapshot2.chat.messages.length };
-    } catch (error) {
-      if (!isChatRevisionConflict(error)) throw error;
-      lastError = error;
-      await delay(10 * (attempt + 1));
-    }
-  }
-  throw lastError;
+  return { revision: saved.revision, floorCount: saved.chat.messages.length, mirror };
 }
 async function replaceCharacter(deps, character, tree) {
   const normalized = normalizeVariableTree(tree, `character variables for '${character}'`);
@@ -15303,7 +15335,6 @@ function delay(ms) {
 var init_variable_gateway = __esm({
   "packages/plugin/src/variable-gateway.ts"() {
     "use strict";
-    init_src();
     init_mvu();
     init_variable_merge();
   }
@@ -15598,7 +15629,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.5".trim() : "";
-  const commit = true ? normalizeCommit("2d6b705") : void 0;
+  const commit = true ? normalizeCommit("0a995e4") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -47032,41 +47063,43 @@ async function replaceVariables(db, character, chatId, body) {
       return { tree: { ...tree }, mirror: receipt.mirror };
     });
   }
-  return serializeSessionWrite(chatWriteKey(character, chatId), () => retryChatWrite(async () => {
-    const snapshot2 = await requireChat(db, character, chatId);
-    const index = resolveMessageId(snapshot2.chat.messages, body?.messageId);
-    const message = snapshot2.chat.messages[index];
-    if (message === void 0) throw new Error(`message_id ${index} is out of range`);
-    message.variables = tree;
-    await persistChat(db, character, chatId, snapshot2.chat, snapshot2.revision);
+  return serializeSessionWrite(chatWriteKey(character, chatId), async () => {
+    const saved = await db.withChat(character, chatId, (chat) => {
+      const index = resolveMessageId(chat.messages, body?.messageId);
+      const message = chat.messages[index];
+      if (message === void 0) throw new Error(`message_id ${index} is out of range`);
+      message.variables = tree;
+    }, CHAT_WRITE_POLICY);
+    await emitChatSaved(character, chatId, saved.revision, saved.chat.messages.length);
     return { tree: { ...tree }, mirror: { status: "not-applicable" } };
-  }));
+  });
 }
 async function replaceMvuData(db, character, chatId, body) {
-  return serializeSessionWrite(chatWriteKey(character, chatId), () => retryChatWrite(async () => {
-    const snapshot2 = await requireChat(db, character, chatId);
-    const chat = snapshot2.chat;
+  return serializeSessionWrite(chatWriteKey(character, chatId), async () => {
     const stat3 = requireObject2(body?.statData, "statData");
-    const chatVariables2 = ensureChatVariables(chat);
-    chatVariables2["stat_data"] = stat3;
-    chatVariables2["initialized_lorebooks"] = true;
     let messageId = -1;
-    if (chat.messages.length > 0) {
-      messageId = body?.messageId === void 0 ? chat.messages.length - 1 : resolveMessageId(chat.messages, body.messageId);
-      const message = chat.messages[messageId];
-      if (message === void 0) throw new Error(`message_id ${messageId} is out of range`);
-      message.variables = {
-        ...plainObject6(message.variables) ?? {},
-        stat_data: cloneJson(stat3)
-      };
-    }
-    const normalizedChatVariables = normalizeVariableTree(chatVariables2, `chat variables for '${character}/${chatId}'`);
-    chat.header.chat_metadata.variables = normalizedChatVariables;
-    const revision = await persistChat(db, character, chatId, chat, snapshot2.revision);
+    const saved = await db.withChat(character, chatId, (chat) => {
+      messageId = -1;
+      const chatVariables2 = ensureChatVariables(chat);
+      chatVariables2["stat_data"] = stat3;
+      chatVariables2["initialized_lorebooks"] = true;
+      if (chat.messages.length > 0) {
+        messageId = body?.messageId === void 0 ? chat.messages.length - 1 : resolveMessageId(chat.messages, body.messageId);
+        const message = chat.messages[messageId];
+        if (message === void 0) throw new Error(`message_id ${messageId} is out of range`);
+        message.variables = {
+          ...plainObject6(message.variables) ?? {},
+          stat_data: cloneJson(stat3)
+        };
+      }
+      const normalizedChatVariables = normalizeVariableTree(chatVariables2, `chat variables for '${character}/${chatId}'`);
+      chat.header.chat_metadata.variables = normalizedChatVariables;
+    }, CHAT_WRITE_POLICY);
+    await emitChatSaved(character, chatId, saved.revision, saved.chat.messages.length);
     const mirrorTree = normalizeVariableTree({ stat_data: stat3 }, `stat_data for '${character}/${chatId}'`);
     const mirror = await variableGateway().mirror({ kind: "chat", character, chatId }, mirrorTree);
-    return { value: { stat_data: cloneJson(stat3), messageId, revision }, mirror };
-  }));
+    return { value: { stat_data: cloneJson(stat3), messageId, revision: saved.revision }, mirror };
+  });
 }
 function worldbookReaderEntry(entry, world) {
   return {
@@ -47141,19 +47174,7 @@ function chatWriteKey(character, chatId) {
 function serializeSessionWrite(key, operation) {
   return sessionWriteChains.enqueue(key, operation);
 }
-async function retryChatWrite(operation) {
-  let lastError;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      return await operation();
-    } catch (error) {
-      if (!isChatRevisionConflict(error)) throw error;
-      lastError = error;
-      await new Promise((resolve9) => setTimeout(resolve9, 10 * (attempt + 1)));
-    }
-  }
-  throw lastError;
-}
+var CHAT_WRITE_POLICY = { attempts: 3, delayMs: (attempt) => 10 * (attempt + 1) };
 async function putLorebook(db, character, chatId, body) {
   const name2 = requireString2(body?.name, "name").trim();
   if (chatId === "") throw new Error("chatId is required for lorebook.put (scripts write the session copy)");
@@ -47251,15 +47272,15 @@ async function setChatWorld(db, character, chatId, body) {
   requireSessionChatId(chatId, "chat.world.set");
   const raw = body?.name;
   const name2 = raw === null || raw === void 0 || raw === "" ? null : requireString2(raw, "name").trim();
-  return serializeSessionWrite(chatWriteKey(character, chatId), () => retryChatWrite(async () => {
-    const snapshot2 = await requireChat(db, character, chatId);
-    const chat = snapshot2.chat;
-    chat.header.chat_metadata = chat.header.chat_metadata ?? {};
-    if (name2 === null) delete chat.header.chat_metadata["world"];
-    else chat.header.chat_metadata["world"] = name2;
-    await persistChat(db, character, chatId, chat, snapshot2.revision);
+  return serializeSessionWrite(chatWriteKey(character, chatId), async () => {
+    const saved = await db.withChat(character, chatId, (chat) => {
+      chat.header.chat_metadata = chat.header.chat_metadata ?? {};
+      if (name2 === null) delete chat.header.chat_metadata["world"];
+      else chat.header.chat_metadata["world"] = name2;
+    }, CHAT_WRITE_POLICY);
+    await emitChatSaved(character, chatId, saved.revision, saved.chat.messages.length);
     return { name: name2 };
-  }));
+  });
 }
 async function putSessionPreset(db, character, chatId, body) {
   requireSessionChatId(chatId, "presets.put");
@@ -47394,24 +47415,28 @@ function writeTreePath(tree, path12, value) {
   cursor[leaf] = cloneJson(jsonValueOf2(value));
 }
 async function rotateMessages(db, character, chatId, body) {
-  return serializeSessionWrite(chatWriteKey(character, chatId), () => retryChatWrite(async () => {
-    const snapshot2 = await requireChat(db, character, chatId);
-    const chat = snapshot2.chat;
-    const total = chat.messages.length;
-    const begin = requireIndex3(body?.begin, "begin", total);
-    const middle = requireIndex3(body?.middle, "middle", total);
-    const end = requireIndex3(body?.end, "end", total);
-    if (!(begin <= middle && middle <= end)) {
-      throw new Error(`rotateChatMessages requires begin <= middle <= end (got ${begin}, ${middle}, ${end})`);
-    }
-    const head = chat.messages.slice(0, begin);
-    const first = chat.messages.slice(begin, middle);
-    const second = chat.messages.slice(middle, end);
-    const tail = chat.messages.slice(end);
-    chat.messages = [...head, ...second, ...first, ...tail];
-    const revision = await persistChat(db, character, chatId, chat, snapshot2.revision);
-    return { revision, messageCount: chat.messages.length, lastMessageId: chat.messages.length - 1 };
-  }));
+  return serializeSessionWrite(chatWriteKey(character, chatId), async () => {
+    const saved = await db.withChat(character, chatId, (chat) => {
+      const total = chat.messages.length;
+      const begin = requireIndex3(body?.begin, "begin", total);
+      const middle = requireIndex3(body?.middle, "middle", total);
+      const end = requireIndex3(body?.end, "end", total);
+      if (!(begin <= middle && middle <= end)) {
+        throw new Error(`rotateChatMessages requires begin <= middle <= end (got ${begin}, ${middle}, ${end})`);
+      }
+      const head = chat.messages.slice(0, begin);
+      const first = chat.messages.slice(begin, middle);
+      const second = chat.messages.slice(middle, end);
+      const tail = chat.messages.slice(end);
+      chat.messages = [...head, ...second, ...first, ...tail];
+    }, CHAT_WRITE_POLICY);
+    await emitChatSaved(character, chatId, saved.revision, saved.chat.messages.length);
+    return {
+      revision: saved.revision,
+      messageCount: saved.chat.messages.length,
+      lastMessageId: saved.chat.messages.length - 1
+    };
+  });
 }
 function requireIndex3(value, label, total) {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > total) {
@@ -47638,38 +47663,38 @@ async function getMessages(db, character, chatId, body) {
   return messages;
 }
 async function mutateMessages(db, character, chatId, action, body) {
-  return serializeSessionWrite(chatWriteKey(character, chatId), () => retryChatWrite(async () => {
-    const snapshot2 = await requireChat(db, character, chatId);
-    const chat = snapshot2.chat;
+  return serializeSessionWrite(chatWriteKey(character, chatId), async () => {
     const state = await db.getState();
-    if (action === "set") {
-      const updates = requireArray2(body?.messages, "messages");
-      for (const raw of updates) {
-        const update = requireObject2(raw, "messages[]");
-        const index = resolveMessageId(chat.messages, update.message_id);
-        const message = chat.messages[index];
-        if (message === void 0) throw new Error(`message_id ${index} is out of range`);
-        applyMessageUpdate(message, update);
+    const saved = await db.withChat(character, chatId, (chat) => {
+      if (action === "set") {
+        const updates = requireArray2(body?.messages, "messages");
+        for (const raw of updates) {
+          const update = requireObject2(raw, "messages[]");
+          const index = resolveMessageId(chat.messages, update.message_id);
+          const message = chat.messages[index];
+          if (message === void 0) throw new Error(`message_id ${index} is out of range`);
+          applyMessageUpdate(message, update);
+        }
+      } else if (action === "create") {
+        const entries = requireArray2(body?.messages, "messages");
+        const at = body?.insertBefore === "end" || body.insertBefore === void 0 ? chat.messages.length : normalizeInsertIndex(chat.messages.length, body.insertBefore);
+        const created = entries.map((raw) => toCreatedMessage(requireObject2(raw, "messages[]"), state.activePersona ?? DEFAULT_USER2, character));
+        chat.messages.splice(at, 0, ...created);
+      } else {
+        const ids = requireArray2(body?.messageIds, "messageIds");
+        const indexes = [...new Set(ids.map((id) => resolveMessageId(chat.messages, id)))].sort((a, b) => b - a);
+        for (const index of indexes) chat.messages.splice(index, 1);
       }
-    } else if (action === "create") {
-      const entries = requireArray2(body?.messages, "messages");
-      const at = body?.insertBefore === "end" || body.insertBefore === void 0 ? chat.messages.length : normalizeInsertIndex(chat.messages.length, body.insertBefore);
-      const created = entries.map((raw) => toCreatedMessage(requireObject2(raw, "messages[]"), state.activePersona ?? DEFAULT_USER2, character));
-      chat.messages.splice(at, 0, ...created);
-    } else {
-      const ids = requireArray2(body?.messageIds, "messageIds");
-      const indexes = [...new Set(ids.map((id) => resolveMessageId(chat.messages, id)))].sort((a, b) => b - a);
-      for (const index of indexes) chat.messages.splice(index, 1);
-    }
-    const revision = await persistChat(db, character, chatId, chat, snapshot2.revision);
+    }, CHAT_WRITE_POLICY);
+    await emitChatSaved(character, chatId, saved.revision, saved.chat.messages.length);
     return {
-      revision,
-      messageCount: chat.messages.length,
-      lastMessageId: chat.messages.length - 1,
-      messages: chat.messages.map((message, index) => toJsrMessage(message, index)),
-      variables: { chat: cloneJson(readChatVariables(chat)) }
+      revision: saved.revision,
+      messageCount: saved.chat.messages.length,
+      lastMessageId: saved.chat.messages.length - 1,
+      messages: saved.chat.messages.map((message, index) => toJsrMessage(message, index)),
+      variables: { chat: cloneJson(readChatVariables(saved.chat)) }
     };
-  }));
+  });
 }
 async function persistChat(db, character, chatId, chat, revision) {
   const next = await db.saveChat(character, chatId, chat, revision);

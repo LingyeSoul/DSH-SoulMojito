@@ -11,6 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { HELPER_TOKEN_HEADER, createHelperBinding, expireHelperBindingsForTests, resetHelperBindingsForTests } from '../src/helper-bindings.js'
 import { apply } from '../src/index.js'
 import { setTemplatesEnabledFlag } from '../src/runtime.js'
+import { modEvents } from '../src/mods/events.js'
 import { TavernStore } from '../../tavern-store/src/index.js'
 
 const CHARACTER = 'Helper Probe'
@@ -336,6 +337,39 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
     expect(deleted.status).toBe(200)
     const afterDelete = await call({ op: 'snapshot', character: CHARACTER, chatId })
     expect((afterDelete.body?.value as Record<string, unknown>).lastMessageId).toBe(2)
+  })
+
+  it('emits chat-saved once with the persisted revision after a helper write', async () => {
+    const eventChatId = await store.createChat(CHARACTER, HEADER, [
+      { name: CHARACTER, is_user: false, is_system: false, send_date: '', mes: 'event floor' },
+    ])
+    const seen: Array<{ revision: string; floorCount: number }> = []
+    const off = modEvents.on('chat-saved', (payload) => {
+      if (payload.chatId === eventChatId) seen.push({ revision: payload.revision, floorCount: payload.floorCount })
+    })
+    try {
+      const created = await callFor(eventChatId, {
+        op: 'messages.create',
+        character: CHARACTER,
+        chatId: eventChatId,
+        messages: [{ role: 'user', message: 'added' }],
+      })
+      expect(created.status).toBe(200)
+      const value = created.body?.value as { revision: string; messageCount: number }
+      expect(seen).toEqual([{ revision: value.revision, floorCount: value.messageCount }])
+      expect((await store.getChatSnapshot(CHARACTER, eventChatId))?.revision).toBe(value.revision)
+
+      const failed = await callFor(eventChatId, {
+        op: 'messages.set',
+        character: CHARACTER,
+        chatId: eventChatId,
+        messages: [{ message_id: 99, message: 'out of range' }],
+      })
+      expect(failed.status).toBe(500)
+      expect(seen).toHaveLength(1)
+    } finally {
+      off()
+    }
   })
 
   it('selects a swipe and writes the replacement text into that slot', async () => {

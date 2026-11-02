@@ -23,7 +23,7 @@ import { renderSandboxed } from '../../tavern-template/src/index.js'
 import { applyRegexScript, applyRegexScripts, runScript } from '../../tavern-script/src/index.js'
 import type { ChatScriptsFile, TavernState, TavernStore } from '../../tavern-store/src/index.js'
 import type { JsonValue } from '../../tavern-store/src/index.js'
-import { KeyedMutationTails, isChatRevisionConflict } from '../../tavern-store/src/index.js'
+import { KeyedMutationTails } from '../../tavern-store/src/index.js'
 import {
   collectSessionRegexScripts,
   parseSessionRegexList,
@@ -712,15 +712,16 @@ async function replaceVariables(
       return { tree: { ...tree }, mirror: receipt.mirror }
     })
   }
-  return serializeSessionWrite(chatWriteKey(character, chatId), () => retryChatWrite(async () => {
-    const snapshot = await requireChat(db, character, chatId)
-    const index = resolveMessageId(snapshot.chat.messages, body?.messageId)
-    const message = snapshot.chat.messages[index]
-    if (message === undefined) throw new Error(`message_id ${index} is out of range`)
-    message.variables = tree
-    await persistChat(db, character, chatId, snapshot.chat, snapshot.revision)
+  return serializeSessionWrite(chatWriteKey(character, chatId), async () => {
+    const saved = await db.withChat(character, chatId, (chat) => {
+      const index = resolveMessageId(chat.messages, body?.messageId)
+      const message = chat.messages[index]
+      if (message === undefined) throw new Error(`message_id ${index} is out of range`)
+      message.variables = tree
+    }, CHAT_WRITE_POLICY)
+    await emitChatSaved(character, chatId, saved.revision, saved.chat.messages.length)
     return { tree: { ...tree }, mirror: { status: 'not-applicable' } }
-  }))
+  })
 }
 
 /**
@@ -733,33 +734,34 @@ async function replaceMvuData(
   chatId: string,
   body: JsonObject,
 ): Promise<{ value: JsonObject; mirror: MirrorOutcome }> {
-  return serializeSessionWrite(chatWriteKey(character, chatId), () => retryChatWrite(async () => {
-    const snapshot = await requireChat(db, character, chatId)
-    const chat = snapshot.chat
+  return serializeSessionWrite(chatWriteKey(character, chatId), async () => {
     const stat = requireObject(body?.statData, 'statData')
-    const chatVariables = ensureChatVariables(chat)
-    chatVariables['stat_data'] = stat
-    chatVariables['initialized_lorebooks'] = true
     let messageId = -1
-    if (chat.messages.length > 0) {
-      messageId = body?.messageId === undefined ? chat.messages.length - 1 : resolveMessageId(chat.messages, body.messageId)
-      const message = chat.messages[messageId]
-      if (message === undefined) throw new Error(`message_id ${messageId} is out of range`)
-      message.variables = {
-        ...(plainObject(message.variables) ?? {}),
-        stat_data: cloneJson(stat),
+    const saved = await db.withChat(character, chatId, (chat) => {
+      messageId = -1
+      const chatVariables = ensureChatVariables(chat)
+      chatVariables['stat_data'] = stat
+      chatVariables['initialized_lorebooks'] = true
+      if (chat.messages.length > 0) {
+        messageId = body?.messageId === undefined ? chat.messages.length - 1 : resolveMessageId(chat.messages, body.messageId)
+        const message = chat.messages[messageId]
+        if (message === undefined) throw new Error(`message_id ${messageId} is out of range`)
+        message.variables = {
+          ...(plainObject(message.variables) ?? {}),
+          stat_data: cloneJson(stat),
+        }
       }
-    }
-    const normalizedChatVariables = normalizeVariableTree(chatVariables, `chat variables for '${character}/${chatId}'`)
-    chat.header.chat_metadata.variables = normalizedChatVariables
-    const revision = await persistChat(db, character, chatId, chat, snapshot.revision)
+      const normalizedChatVariables = normalizeVariableTree(chatVariables, `chat variables for '${character}/${chatId}'`)
+      chat.header.chat_metadata.variables = normalizedChatVariables
+    }, CHAT_WRITE_POLICY)
+    await emitChatSaved(character, chatId, saved.revision, saved.chat.messages.length)
     // `Mvu.replaceMvuData` owns only `stat_data`; upsert it instead of the
     // whole chat tree so flat AgentTavern variables not present in the chat
     // tree (for example `mvu.favor`) are never deleted.
     const mirrorTree = normalizeVariableTree({ stat_data: stat }, `stat_data for '${character}/${chatId}'`)
     const mirror = await variableGateway().mirror({ kind: 'chat', character, chatId }, mirrorTree)
-    return { value: { stat_data: cloneJson(stat), messageId, revision }, mirror }
-  }))
+    return { value: { stat_data: cloneJson(stat), messageId, revision: saved.revision }, mirror }
+  })
 }
 
 /**
@@ -867,23 +869,11 @@ function serializeSessionWrite<T>(key: string, operation: () => Promise<T>): Pro
 }
 
 /**
- * Host generation and helper writes can still race outside the serialization
- * chain. A CAS failure is retryable because every operation here re-reads the
- * latest chat before applying its whole-tree update; never retry a blind write.
+ * Host generation and helper writes can race outside the serialization chain.
+ * `TavernStore.withChat` re-reads the latest snapshot and replays the mutation
+ * on every attempt, so only CAS conflicts retry; other failures stay fail-fast.
  */
-async function retryChatWrite<T>(operation: () => Promise<T>): Promise<T> {
-  let lastError: unknown
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      return await operation()
-    } catch (error) {
-      if (!isChatRevisionConflict(error)) throw error
-      lastError = error
-      await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)))
-    }
-  }
-  throw lastError
-}
+const CHAT_WRITE_POLICY = { attempts: 3, delayMs: (attempt: number) => 10 * (attempt + 1) } as const
 
 async function putLorebook(
   db: TavernStore,
@@ -1029,15 +1019,15 @@ async function setChatWorld(
   requireSessionChatId(chatId, 'chat.world.set')
   const raw = body?.name
   const name = raw === null || raw === undefined || raw === '' ? null : requireString(raw, 'name').trim()
-  return serializeSessionWrite(chatWriteKey(character, chatId), () => retryChatWrite(async () => {
-    const snapshot = await requireChat(db, character, chatId)
-    const chat = snapshot.chat
-    chat.header.chat_metadata = chat.header.chat_metadata ?? {}
-    if (name === null) delete (chat.header.chat_metadata as JsonObject)['world']
-    else (chat.header.chat_metadata as JsonObject)['world'] = name
-    await persistChat(db, character, chatId, chat, snapshot.revision)
+  return serializeSessionWrite(chatWriteKey(character, chatId), async () => {
+    const saved = await db.withChat(character, chatId, (chat) => {
+      chat.header.chat_metadata = chat.header.chat_metadata ?? {}
+      if (name === null) delete (chat.header.chat_metadata as JsonObject)['world']
+      else (chat.header.chat_metadata as JsonObject)['world'] = name
+    }, CHAT_WRITE_POLICY)
+    await emitChatSaved(character, chatId, saved.revision, saved.chat.messages.length)
     return { name }
-  }))
+  })
 }
 
 /** Session-scoped preset copy (JSR preset writes never touch the shared file). */
@@ -1211,24 +1201,28 @@ async function rotateMessages(
   chatId: string,
   body: JsonObject,
 ): Promise<{ revision: string; messageCount: number; lastMessageId: number }> {
-  return serializeSessionWrite(chatWriteKey(character, chatId), () => retryChatWrite(async () => {
-    const snapshot = await requireChat(db, character, chatId)
-    const chat = snapshot.chat
-    const total = chat.messages.length
-    const begin = requireIndex(body?.begin, 'begin', total)
-    const middle = requireIndex(body?.middle, 'middle', total)
-    const end = requireIndex(body?.end, 'end', total)
-    if (!(begin <= middle && middle <= end)) {
-      throw new Error(`rotateChatMessages requires begin <= middle <= end (got ${begin}, ${middle}, ${end})`)
+  return serializeSessionWrite(chatWriteKey(character, chatId), async () => {
+    const saved = await db.withChat(character, chatId, (chat) => {
+      const total = chat.messages.length
+      const begin = requireIndex(body?.begin, 'begin', total)
+      const middle = requireIndex(body?.middle, 'middle', total)
+      const end = requireIndex(body?.end, 'end', total)
+      if (!(begin <= middle && middle <= end)) {
+        throw new Error(`rotateChatMessages requires begin <= middle <= end (got ${begin}, ${middle}, ${end})`)
+      }
+      const head = chat.messages.slice(0, begin)
+      const first = chat.messages.slice(begin, middle)
+      const second = chat.messages.slice(middle, end)
+      const tail = chat.messages.slice(end)
+      chat.messages = [...head, ...second, ...first, ...tail]
+    }, CHAT_WRITE_POLICY)
+    await emitChatSaved(character, chatId, saved.revision, saved.chat.messages.length)
+    return {
+      revision: saved.revision,
+      messageCount: saved.chat.messages.length,
+      lastMessageId: saved.chat.messages.length - 1,
     }
-    const head = chat.messages.slice(0, begin)
-    const first = chat.messages.slice(begin, middle)
-    const second = chat.messages.slice(middle, end)
-    const tail = chat.messages.slice(end)
-    chat.messages = [...head, ...second, ...first, ...tail]
-    const revision = await persistChat(db, character, chatId, chat, snapshot.revision)
-    return { revision, messageCount: chat.messages.length, lastMessageId: chat.messages.length - 1 }
-  }))
+  })
 }
 
 function requireIndex(value: unknown, label: string, total: number): number {
@@ -1558,41 +1552,41 @@ async function mutateMessages(
   action: 'set' | 'create' | 'delete',
   body: JsonObject,
 ): Promise<JsonObject> {
-  return serializeSessionWrite(chatWriteKey(character, chatId), () => retryChatWrite(async () => {
-    const snapshot = await requireChat(db, character, chatId)
-    const chat = snapshot.chat
+  return serializeSessionWrite(chatWriteKey(character, chatId), async () => {
     const state = await db.getState()
-    if (action === 'set') {
-      const updates = requireArray(body?.messages, 'messages')
-      for (const raw of updates) {
-        const update = requireObject(raw, 'messages[]')
-        const index = resolveMessageId(chat.messages, update.message_id)
-        const message = chat.messages[index]
-        if (message === undefined) throw new Error(`message_id ${index} is out of range`)
-        applyMessageUpdate(message, update)
+    const saved = await db.withChat(character, chatId, (chat) => {
+      if (action === 'set') {
+        const updates = requireArray(body?.messages, 'messages')
+        for (const raw of updates) {
+          const update = requireObject(raw, 'messages[]')
+          const index = resolveMessageId(chat.messages, update.message_id)
+          const message = chat.messages[index]
+          if (message === undefined) throw new Error(`message_id ${index} is out of range`)
+          applyMessageUpdate(message, update)
+        }
+      } else if (action === 'create') {
+        const entries = requireArray(body?.messages, 'messages')
+        const at = body?.insertBefore === 'end' || body.insertBefore === undefined
+          ? chat.messages.length
+          : normalizeInsertIndex(chat.messages.length, body.insertBefore)
+        const created = entries.map((raw) =>
+          toCreatedMessage(requireObject(raw, 'messages[]'), state.activePersona ?? DEFAULT_USER, character))
+        chat.messages.splice(at, 0, ...created)
+      } else {
+        const ids = requireArray(body?.messageIds, 'messageIds')
+        const indexes = [...new Set(ids.map((id) => resolveMessageId(chat.messages, id)))].sort((a, b) => b - a)
+        for (const index of indexes) chat.messages.splice(index, 1)
       }
-    } else if (action === 'create') {
-      const entries = requireArray(body?.messages, 'messages')
-      const at = body?.insertBefore === 'end' || body.insertBefore === undefined
-        ? chat.messages.length
-        : normalizeInsertIndex(chat.messages.length, body.insertBefore)
-      const created = entries.map((raw) =>
-        toCreatedMessage(requireObject(raw, 'messages[]'), state.activePersona ?? DEFAULT_USER, character))
-      chat.messages.splice(at, 0, ...created)
-    } else {
-      const ids = requireArray(body?.messageIds, 'messageIds')
-      const indexes = [...new Set(ids.map((id) => resolveMessageId(chat.messages, id)))].sort((a, b) => b - a)
-      for (const index of indexes) chat.messages.splice(index, 1)
-    }
-    const revision = await persistChat(db, character, chatId, chat, snapshot.revision)
+    }, CHAT_WRITE_POLICY)
+    await emitChatSaved(character, chatId, saved.revision, saved.chat.messages.length)
     return {
-      revision,
-      messageCount: chat.messages.length,
-      lastMessageId: chat.messages.length - 1,
-      messages: chat.messages.map((message, index) => toJsrMessage(message, index)),
-      variables: { chat: cloneJson(readChatVariables(chat)) },
+      revision: saved.revision,
+      messageCount: saved.chat.messages.length,
+      lastMessageId: saved.chat.messages.length - 1,
+      messages: saved.chat.messages.map((message, index) => toJsrMessage(message, index)),
+      variables: { chat: cloneJson(readChatVariables(saved.chat)) },
     }
-  }))
+  })
 }
 
 async function persistChat(db: TavernStore, character: string, chatId: string, chat: ChatLogIR, revision: string): Promise<string> {

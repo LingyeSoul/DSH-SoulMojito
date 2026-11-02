@@ -2850,6 +2850,9 @@ var ChatRevisionConflictError = class extends Error {
   }
   code = "CHAT_REVISION_CONFLICT";
 };
+function isChatRevisionConflict(error) {
+  return typeof error === "object" && error !== null && error.code === "CHAT_REVISION_CONFLICT";
+}
 var DEFAULT_STATE = {
   activeWorlds: [],
   sessionBindings: {},
@@ -2963,6 +2966,13 @@ function normalizeLocalMemoryEmbedding(record) {
 function clampOptionalInt(value, min, max2) {
   if (typeof value !== "number" || !Number.isFinite(value)) return void 0;
   return Math.max(min, Math.min(max2, Math.round(value)));
+}
+function chatWriteDelayMs(delayMs, attempt) {
+  const delay = delayMs(attempt);
+  if (typeof delay !== "number" || !Number.isFinite(delay) || delay < 0) {
+    throw new Error(`withChat delayMs(${attempt}) must be a finite non-negative number; received ${String(delay)}`);
+  }
+  return delay;
 }
 var TavernStore = class _TavernStore {
   constructor(root) {
@@ -3348,6 +3358,46 @@ var TavernStore = class _TavernStore {
       this.invalidateChatSnapshot(file);
       return chatRevision(bytes);
     });
+  }
+  /**
+   * Read-modify-write one chat under CAS.
+   *
+   * Each attempt re-reads the latest snapshot and re-applies `mutate` to a
+   * `structuredClone`, so a failed save — including a conflict that exhausts
+   * the retries — never changes the store's cached parse. Only CAS conflicts
+   * retry; a mutation error or any other save failure propagates on the first
+   * attempt. The store does not emit `chat-saved`; callers own their events.
+   */
+  async withChat(characterName, chatId, mutate, options) {
+    const attempts = options.attempts;
+    if (typeof attempts !== "number" || !Number.isSafeInteger(attempts) || attempts <= 0) {
+      throw new Error(`withChat attempts must be a positive safe integer; received ${String(attempts)}`);
+    }
+    const firstDelay = chatWriteDelayMs(options.delayMs, 0);
+    let lastConflict;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const snapshot = await this.getChatSnapshot(characterName, chatId);
+      if (snapshot === void 0) {
+        throw new Error(`chat '${chatId}' of character '${characterName}' not found; withChat requires a persisted chat snapshot`);
+      }
+      const clone = structuredClone(snapshot.chat);
+      mutate(clone);
+      try {
+        const revision = await this.saveChat(characterName, chatId, clone, snapshot.revision);
+        return { chat: clone, revision };
+      } catch (error) {
+        if (!isChatRevisionConflict(error)) throw error;
+        lastConflict = error;
+      }
+      if (attempt + 1 < attempts) {
+        const delay = attempt === 0 ? firstDelay : chatWriteDelayMs(options.delayMs, attempt);
+        await new Promise((resolve2) => setTimeout(resolve2, delay));
+      }
+    }
+    if (lastConflict === void 0) {
+      throw new Error(`withChat exhausted ${attempts} attempt(s) without recording a revision conflict`);
+    }
+    throw lastConflict;
   }
   async getChat(characterName, chatId) {
     return (await this.getChatSnapshot(characterName, chatId))?.chat;
