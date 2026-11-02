@@ -36,7 +36,7 @@ _Avoid_: 历史、变量
 **变量**：Agent 通过工具读写的结构化、可寻址状态。变量适合计数、标志、关系状态和精确值；自然语言事实应写入记忆。
 _Avoid_: 记忆变量、脚本变量（在 AgentTavern 语境中）
 
-**Variable Gateway**：插件内变量读取、合并、规范化、镜像与撤销策略的收口点。三份存储（聊天 JSONL、chat 作用域 `VariableStore`、`state.json` 的 character/global 覆盖层）是它的 adapter；gateway 不合并存储，也不拥有回执账本。`applyUndo` 给 body 暂存回滚，`undo` 给面板持久化回滚；ST/Agent 执行核负责从聊天与卡片构造 guard。`body-rollback-receipts.ts` 仍直连执行核，是剩余迁移点。
+**Variable Gateway**：插件内变量读取、合并、规范化、镜像与撤销策略的收口点。三份存储（聊天 JSONL、chat 作用域 `VariableStore`、`state.json` 的 character/global 覆盖层）是它的 adapter；gateway 不合并存储，也不拥有回执账本。`applyUndo` 给 body 暂存回滚，`undo` 给面板持久化回滚；ST/Agent 执行核负责从聊天与卡片构造 guard。所有 undo 路径（面板、candidate/runtime body、`body-rollback-receipts.ts`）都经过 gateway。
 _Avoid_: 变量服务、统一变量库、第四份变量存储
 
 **Chat 写入事务**：`TavernStore.withChat` 拥有的 read → mutate → CAS save → bounded retry 序列。每次尝试从最新快照 clone，只有 CAS 冲突重试；`chat-saved` 事件由插件调用方在事务成功后发射，store 不拥有事件。

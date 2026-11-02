@@ -15598,7 +15598,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.5".trim() : "";
-  const commit = true ? normalizeCommit("6cb3284") : void 0;
+  const commit = true ? normalizeCommit("b27f4dd") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -28135,6 +28135,7 @@ function closeSettleIntent(writer, session, intent, phase, reason) {
 init_src();
 init_mvu();
 init_mvu_guard();
+init_variable_gateway();
 function readBodyReceipts(chat, previousMessageId, floorIndex, agentId, turn) {
   try {
     return mvuReceiptsForBody(chat, { messageId: previousMessageId, floorIndex });
@@ -28189,11 +28190,13 @@ async function applyReceiptRollback(deps, chat, receipts, direction, binding) {
     if (direction === "undo") {
       const card = (await deps.store.getCharacter(binding.character))?.card;
       const variables3 = readChatVariables(chat);
-      const result = undoMvuReceipts(chat, bodyReceipts, {
+      const staged = applyVariableUndo(chat, bodyReceipts, {
         schema: readMvuSchema(chat, card),
         currentOf: (path12) => getMvuTreePath(variables3, path12)
-      }, { at });
-      bodyCount = result.receipts.length;
+      });
+      bodyCount = staged.receipts.length;
+      chat.header = staged.chat.header;
+      chat.messages = staged.chat.messages;
     } else {
       bodyCount = redoMvuReceipts(chat, bodyReceipts).receipts.length;
     }

@@ -1,10 +1,7 @@
 /**
  * AgentTavern body write rollback: MVU receipt split and settle flat restore.
- *
- * Body receipts (`body:<messageId>`) own the JSONL `chat_metadata.variables`
- * tree. Settle receipts (numeric floor keys) own the chat-scope `VariableStore`
- * and are marked `undoneAt` directly in `mvu.receipts` without calling
- * `undoMvuReceipts`, which would copy their changes into the JSONL tree.
+ * `body:<messageId>` receipts are staged through `applyVariableUndo`; numeric
+ * floor receipts own the chat-scope `VariableStore` and are marked directly.
  */
 
 import type { ChatLogIR } from '../../../tavern-format/src/index.js'
@@ -18,12 +15,12 @@ import {
   planMvuUndoRestores,
   readChatVariables,
   redoMvuReceipts,
-  undoMvuReceipts,
   type MvuReceipt,
   type MvuUndoRestore,
   type MvuVariableChange,
 } from '../mvu.js'
 import { getMvuTreePath, readMvuSchema } from '../mvu-guard.js'
+import { applyVariableUndo } from '../variable-gateway.js'
 import {
   BodyRollbackError,
   errorMessage,
@@ -145,16 +142,18 @@ export async function applyReceiptRollback(
   let bodyCount = 0
   if (bodyReceipts.length > 0) {
     if (direction === 'undo') {
-      // Body undo writes the JSONL tree, so it must pass the same `$schema`
-      // screen as the panel path. A missing card means no card-level schema;
-      // the chat tree can still carry one.
+      // Body undo writes the JSONL tree and passes the same `$schema` screen
+      // as the panel path. The gateway stages it; adopt the tree so the
+      // caller's in-place contract and settle marks still see one chat.
       const card = (await deps.store.getCharacter(binding.character))?.card
       const variables = readChatVariables(chat)
-      const result = undoMvuReceipts(chat, bodyReceipts, {
+      const staged = applyVariableUndo(chat, bodyReceipts, {
         schema: readMvuSchema(chat, card),
         currentOf: (path) => getMvuTreePath(variables, path),
-      }, { at })
-      bodyCount = result.receipts.length
+      })
+      bodyCount = staged.receipts.length
+      chat.header = staged.chat.header
+      chat.messages = staged.chat.messages
     } else {
       bodyCount = redoMvuReceipts(chat, bodyReceipts).receipts.length
     }
