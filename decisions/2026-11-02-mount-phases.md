@@ -53,6 +53,8 @@ export function mountTransport(ctx: PluginContext, deps: MountDeps): void
 - Round 5 stage 1 定向：`im-router` 55 + `tavern-update` 55 + `games-service` 28 + `http-trust` 23 + `http-public-error` 7 = 168 用例通过；同一条 tsc 命令无输出。
 - 全量 `pnpm run check`（2026-11-02，Round 4）：200 files / 3297 passed / 2 skipped / 20 gates PASS / build v0.7.5 (b095620)。
 - Round 5 全量：宿主默认并行两次触发 `VirtualAlloc failed` / JS heap OOM（失败点与 route table 无关）；改用等价串行 `vitest run --no-file-parallelism` 后 **200 files / 3297 passed / 2 skipped**，类型检查、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (2d53ff0)。
+- Round 6 stage 1 定向：`bootstrap-state-slices` 2 + `store-revision` 1 + `panel-regex-large-body` 1 + `helper-route` 40 + `http-trust` 23 + `http-public-error` 7 = 74 用例通过；额外 `tavern-mods` 78 通过（真实 `GET store-revision` 消费方）；同一条 tsc 命令无输出。
+- Round 6 全量：`pnpm exec vitest run --no-file-parallelism` → **200 files / 3297 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (88c1fca)。
 
 ## 删除路径
 
@@ -60,12 +62,13 @@ export function mountTransport(ctx: PluginContext, deps: MountDeps): void
 
 ## 未完成
 
-- route table 首片已落（update / games / im）；其余 if-chain（bootstrap、store-revision、state-slices、avatar、character、projection、guides/script、novel、body、mods 等）仍是后续。
+- route table 两片已落（update / games / im；bootstrap / store-revision / state-slices）；其余 if-chain（avatar、character、projection、guides/script、novel、body、mods 等）仍是后续。
 - games / IM / Mods / update 仍留在 `index.ts`；它们各自有生命周期与 disposer，抽相位时要先定义清理顺序。
 - `MountDeps` 只是阶段句柄，不是新的 service locator；静态协作者继续直接 import。
 
 ## 后续
 
 - 路由表第一刀已完成（Round 5 stage 1）：`packages/plugin/src/http/routes.ts` 的 `PRE_STORE_ROUTES` 依次为 `update`（`route === 'update' || route.startsWith('update/')`）、`games`（`isGamesRoute`），在 `store()` 之前求值；`EARLY_STORE_ROUTES` 只有 `im`（`route === 'im' || route.startsWith('im/')`），在 `store()` 之后紧接求值。未命中任何表项的路由继续走 `handleApi` 原 if-chain，顺序与响应不变。
-- 剩余 if-chain 域（本刀未搬）：`bootstrap`、`store-revision`、`state-slices`、`avatar/*`、`character/*`、`projection` / `projection/replay`、`compact`、`guides/*`、`script*`、`agent-tavern/audit`、`body` / `body/regenerate` / `body/select`、`novels/*`、`mods/*`，以及 state/import/preset/persona/group/binding/chats/branch/candidates/generate/helper 等后续分支；下一刀按 `store()` 依赖与顺序约束继续迁入表。
+- 路由表第二刀（Round 6 stage 1）：三个 GET 读路由搬进 `packages/plugin/src/http/read-routes.ts`（`handleBootstrapApi` / `handleStoreRevisionApi` / `handleStateSlicesApi`），并在 `EARLY_STORE_ROUTES` 的 `im` 之后按 `bootstrap` → `store-revision` → `state-slices` 顺序挂表。`RouteEntry.matches` 改为 `(route, method)`，三条表项各自做 `method === 'GET'` 门控；非 GET 仍落回原 if-chain 的 404。`db = await store()` 位置不变。
+- 剩余 if-chain 域（本刀未搬）：`avatar/*`、`character/*`、`projection` / `projection/replay`、`compact`、`guides/*`、`script*`、`agent-tavern/audit`、`body` / `body/regenerate` / `body/select`、`novels/*`、`mods/*`，以及 state/import/preset/persona/group/binding/chats/branch/candidates/generate/helper 等后续分支；下一刀按 `store()` 依赖与顺序约束继续迁入表。
 - 每增加一个 mount phase，必须在决策或代码注释里写明它相对于 body/anchor/prompt 的顺序约束；顺序不能只靠阅读调用栈。

@@ -15598,7 +15598,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.5".trim() : "";
-  const commit = true ? normalizeCommit("2d53ff0") : void 0;
+  const commit = true ? normalizeCommit("88c1fca") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -43686,9 +43686,6 @@ function imageContentType(ext) {
   return normalized === "jpg" || normalized === "jpeg" ? "image/jpeg" : normalized === "webp" ? "image/webp" : normalized === "gif" ? "image/gif" : "image/png";
 }
 
-// packages/plugin/src/http/router.ts
-init_build_info();
-
 // packages/plugin/src/card-scripts.ts
 function collectCardScriptBundle(card, scriptTrees, includeDisabled = false) {
   const nodes = Array.isArray(scriptTrees) ? scriptTrees : cardScriptNodes(card);
@@ -47322,26 +47319,7 @@ function jsonValueOf2(value) {
 
 // packages/plugin/src/http/router.ts
 init_events();
-init_host();
 init_runtime2();
-
-// packages/plugin/src/workspace.ts
-init_dsh_home();
-import { mkdir as mkdir5 } from "node:fs/promises";
-var TAVERN_WORKSPACE_TITLE = "Tavern (internal)";
-var TAVERN_WORKBENCH_WORKSPACE_TITLE = "Tavern Workbench (internal)";
-async function prepareInternalWorkspace() {
-  const path12 = tavernDataRoot("workspace");
-  await mkdir5(path12, { recursive: true });
-  return { path: path12, title: TAVERN_WORKSPACE_TITLE };
-}
-async function prepareWorkbenchWorkspace() {
-  const path12 = tavernDataRoot("workbench");
-  await mkdir5(path12, { recursive: true });
-  return { path: path12, title: TAVERN_WORKBENCH_WORKSPACE_TITLE };
-}
-
-// packages/plugin/src/http/router.ts
 init_errors();
 init_io();
 
@@ -53834,7 +53812,7 @@ function messageOf8(error) {
 }
 
 // packages/plugin/src/im/qq/install.ts
-import { mkdir as mkdir6, writeFile as writeFile2 } from "node:fs/promises";
+import { mkdir as mkdir5, writeFile as writeFile2 } from "node:fs/promises";
 import { join as join25 } from "node:path";
 
 // packages/plugin/src/im/qq/sdk.ts
@@ -53973,7 +53951,7 @@ async function installQqRuntime(input) {
     return { ok: true, alreadyInstalled: true, outputTail: "" };
   }
   const root = qqRuntimeRoot();
-  await mkdir6(root, { recursive: true });
+  await mkdir5(root, { recursive: true });
   await ensureRuntimePackageJson(root);
   const run = input.spawnRunner ?? defaultSpawnRunner;
   try {
@@ -54453,6 +54431,24 @@ async function imStoreWriteSecret(file, record) {
 // packages/plugin/src/im/runtime.ts
 init_env_compat();
 init_dsh_home();
+
+// packages/plugin/src/workspace.ts
+init_dsh_home();
+import { mkdir as mkdir6 } from "node:fs/promises";
+var TAVERN_WORKSPACE_TITLE = "Tavern (internal)";
+var TAVERN_WORKBENCH_WORKSPACE_TITLE = "Tavern Workbench (internal)";
+async function prepareInternalWorkspace() {
+  const path12 = tavernDataRoot("workspace");
+  await mkdir6(path12, { recursive: true });
+  return { path: path12, title: TAVERN_WORKSPACE_TITLE };
+}
+async function prepareWorkbenchWorkspace() {
+  const path12 = tavernDataRoot("workbench");
+  await mkdir6(path12, { recursive: true });
+  return { path: path12, title: TAVERN_WORKBENCH_WORKSPACE_TITLE };
+}
+
+// packages/plugin/src/im/runtime.ts
 init_handle2();
 
 // packages/plugin/src/im/onebot/seat.ts
@@ -59220,70 +59216,12 @@ function qqRuntimeUnavailableMessage(error) {
   return `the QQ runtime ${detail}; open the IM panel and press \u5B89\u88C5 QQ \u4F9D\u8D56 to install or repair it`;
 }
 
-// packages/plugin/src/http/update.ts
+// packages/plugin/src/http/read-routes.ts
+init_src2();
+init_build_info();
+init_host();
 init_runtime2();
-init_service();
 init_io();
-async function handleUpdateApi(ctx, req, res, url, route, method) {
-  const service = tavernUpdate(ctx);
-  if (method === "GET" && route === "update") {
-    const refresh = url.searchParams.get("refresh");
-    const fresh = refresh === "1" || refresh === "true";
-    const snapshot2 = fresh ? await service.check({ force: true }) : service.snapshot();
-    return sendJson(res, 200, { ok: true, update: snapshot2, changelog: updateChangelog(snapshot2) });
-  }
-  if (method === "POST" && route === "update/check") {
-    const snapshot2 = await service.check({ force: true });
-    return sendJson(res, 200, { ok: true, update: snapshot2, changelog: updateChangelog(snapshot2) });
-  }
-  if (method === "POST" && route === "update/install") {
-    const body = await readJson(req).catch(() => ({}));
-    const force = body.force === true;
-    if (body.wait === false) {
-      void service.install({ force }).catch(() => {
-      });
-      const snapshot3 = service.snapshot();
-      return sendJson(res, 200, { ok: true, started: true, update: snapshot3, changelog: updateChangelog(snapshot3) });
-    }
-    const snapshot2 = await service.install({ force });
-    return sendJson(res, 200, { ok: true, update: snapshot2, changelog: updateChangelog(snapshot2) });
-  }
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
-}
-
-// packages/plugin/src/http/routes.ts
-var PRE_STORE_ROUTES = [
-  // Self-update answers even when the store cannot open; upgrading is the way
-  // out of a broken data or compatibility state.
-  {
-    name: "update",
-    matches: (route) => route === "update" || route.startsWith("update/"),
-    handle: ({ ctx, req, res, url, route, method }) => handleUpdateApi(ctx, req, res, url, route, method)
-  },
-  // The games bridge keeps its own games/ directory and session storage, so it
-  // must not wait for the Tavern store either.
-  {
-    name: "games",
-    matches: isGamesRoute,
-    handle: ({ req, res, url, route, method }) => handleGamesApi({
-      resolveService: () => getGamesServicePromise(),
-      req,
-      res,
-      url,
-      route,
-      method
-    })
-  }
-];
-var EARLY_STORE_ROUTES = [
-  // IM management stays reachable while channels are offline; a disabled or
-  // unmounted runtime reports its reasons instead of failing the panel.
-  {
-    name: "im",
-    matches: (route) => route === "im" || route.startsWith("im/"),
-    handle: ({ req, res, url, route, method, db }) => handleImApi(req, res, url, route, method, db, getImRuntime())
-  }
-];
 
 // packages/plugin/src/http/world-entry-counts.ts
 var MAX_CACHE_ENTRIES = 4096;
@@ -59325,6 +59263,168 @@ function evictOverflow() {
   }
 }
 
+// packages/plugin/src/http/read-routes.ts
+async function handleBootstrapApi(ctx, res, db) {
+  await getAgentTavernCapabilitiesPromise();
+  const internalWorkspace = await prepareInternalWorkspace();
+  const workbenchWorkspace = await prepareWorkbenchWorkspace();
+  const storeRevision = await db.storeRevision();
+  await db.ensureRegexScriptOwners();
+  const state = await db.getState();
+  const active = state.activeCharacter ? await db.getCharacter(state.activeCharacter) : void 0;
+  const groups = [];
+  for (const name2 of await db.listGroups()) {
+    const group2 = await db.getGroup(name2);
+    if (group2) groups.push(publicGroup(group2));
+  }
+  const personas = [];
+  for (const name2 of await db.listPersonas()) {
+    const persona = await db.getPersona(name2);
+    if (persona) personas.push(persona);
+  }
+  const presetKinds = {};
+  for (const name2 of await db.listPresets()) {
+    const preset = await db.getPreset(name2);
+    if (preset) presetKinds[name2] = detectPresetKind(preset);
+  }
+  const worlds = await db.listWorlds();
+  const worldEntryCounts = await collectWorldEntryCounts(db, db.rootPath);
+  const {
+    regexScripts: _bootstrapRegexScripts,
+    regexScriptOwners: _bootstrapRegexScriptOwners,
+    regexScriptPresetOwners: _bootstrapRegexScriptPresetOwners,
+    frontendStorage: _bootstrapFrontendStorage,
+    ...lightState
+  } = state;
+  return sendJson(res, 200, {
+    ok: true,
+    storeRevision,
+    state: lightState,
+    stateSlices: ["regexScripts"],
+    characters: await db.listCharacters(),
+    worlds,
+    worldEntryCounts,
+    presets: await db.listPresets(),
+    presetKinds,
+    personas,
+    groups,
+    activeCard: active ? publicCard(active.card) : null,
+    model: ctx.agentDefaultModel.currentSelection(),
+    version: BUILD_INFO.version,
+    commit: TAVERN_COMMIT,
+    internalWorkspace,
+    workbenchWorkspace,
+    agentTavern: getAgentTavernCapabilities(),
+    agentNovel: getAgentNovelCapabilities(),
+    // 自更新快照：只读缓存结论，检查/安装分别走 update/check 与 update/install，
+    // 保证 bootstrap 永远不因网络失败而变慢或报错。
+    // Mod 轻量投影（提案 0015 §3.5，P1 真实化）：与 worldEntryCounts 同款服务端
+    // 轻量投影，{id, name, version, author, description, capabilities, panel,
+    // status, enabled, error, auditCount} 清单；宿主失败/无 Mod 时为空数组，
+    // bootstrap 不因坏 Mod 500。旧客户端不读该键。
+    mods: await modHostProjection(ctx),
+    // env 硬关时客户端把管理面的开关锁死并展示原因（mods 投影另有 per-Mod 状态）。
+    modsAvailable: !modsDisabledByEnv(),
+    update: tavernUpdate(ctx).snapshot()
+  });
+}
+async function handleStoreRevisionApi(res, db) {
+  return sendJson(res, 200, { ok: true, revision: await db.storeRevision() });
+}
+async function handleStateSlicesApi(res, db) {
+  const state = await db.getState();
+  return sendJson(res, 200, {
+    ok: true,
+    regexScripts: state.regexScripts,
+    ...state.regexScriptOwners === void 0 ? {} : { regexScriptOwners: state.regexScriptOwners },
+    ...state.regexScriptPresetOwners === void 0 ? {} : { regexScriptPresetOwners: state.regexScriptPresetOwners }
+  });
+}
+
+// packages/plugin/src/http/update.ts
+init_runtime2();
+init_service();
+init_io();
+async function handleUpdateApi(ctx, req, res, url, route, method) {
+  const service = tavernUpdate(ctx);
+  if (method === "GET" && route === "update") {
+    const refresh = url.searchParams.get("refresh");
+    const fresh = refresh === "1" || refresh === "true";
+    const snapshot2 = fresh ? await service.check({ force: true }) : service.snapshot();
+    return sendJson(res, 200, { ok: true, update: snapshot2, changelog: updateChangelog(snapshot2) });
+  }
+  if (method === "POST" && route === "update/check") {
+    const snapshot2 = await service.check({ force: true });
+    return sendJson(res, 200, { ok: true, update: snapshot2, changelog: updateChangelog(snapshot2) });
+  }
+  if (method === "POST" && route === "update/install") {
+    const body = await readJson(req).catch(() => ({}));
+    const force = body.force === true;
+    if (body.wait === false) {
+      void service.install({ force }).catch(() => {
+      });
+      const snapshot3 = service.snapshot();
+      return sendJson(res, 200, { ok: true, started: true, update: snapshot3, changelog: updateChangelog(snapshot3) });
+    }
+    const snapshot2 = await service.install({ force });
+    return sendJson(res, 200, { ok: true, update: snapshot2, changelog: updateChangelog(snapshot2) });
+  }
+  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+}
+
+// packages/plugin/src/http/routes.ts
+var PRE_STORE_ROUTES = [
+  // Self-update answers even when the store cannot open; upgrading is the way
+  // out of a broken data or compatibility state.
+  {
+    name: "update",
+    matches: (route, _method) => route === "update" || route.startsWith("update/"),
+    handle: ({ ctx, req, res, url, route, method }) => handleUpdateApi(ctx, req, res, url, route, method)
+  },
+  // The games bridge keeps its own games/ directory and session storage, so it
+  // must not wait for the Tavern store either.
+  {
+    name: "games",
+    matches: (route, _method) => isGamesRoute(route),
+    handle: ({ req, res, url, route, method }) => handleGamesApi({
+      resolveService: () => getGamesServicePromise(),
+      req,
+      res,
+      url,
+      route,
+      method
+    })
+  }
+];
+var EARLY_STORE_ROUTES = [
+  // IM management stays reachable while channels are offline; a disabled or
+  // unmounted runtime reports its reasons instead of failing the panel.
+  {
+    name: "im",
+    matches: (route, _method) => route === "im" || route.startsWith("im/"),
+    handle: ({ req, res, url, route, method, db }) => handleImApi(req, res, url, route, method, db, getImRuntime())
+  },
+  // Panel reads: bootstrap is the light first read, store-revision the change
+  // watermark polled while the page is visible, and state-slices the heavy
+  // regex table fetched when its section first mounts. Method gating stays in
+  // `matches`, so a non-GET request falls through to the unchanged if-chain.
+  {
+    name: "bootstrap",
+    matches: (route, method) => method === "GET" && route === "bootstrap",
+    handle: ({ ctx, res, db }) => handleBootstrapApi(ctx, res, db)
+  },
+  {
+    name: "store-revision",
+    matches: (route, method) => method === "GET" && route === "store-revision",
+    handle: ({ res, db }) => handleStoreRevisionApi(res, db)
+  },
+  {
+    name: "state-slices",
+    matches: (route, method) => method === "GET" && route === "state-slices",
+    handle: ({ res, db }) => handleStateSlicesApi(res, db)
+  }
+];
+
 // packages/plugin/src/http/router.ts
 var API = "/api/dsh-soulmojito";
 async function handleApi(ctx, req, res) {
@@ -59332,91 +59432,15 @@ async function handleApi(ctx, req, res) {
   const route = url.pathname.slice(API.length).replace(/^\//, "");
   const method = req.method ?? "GET";
   for (const entry of PRE_STORE_ROUTES) {
-    if (!entry.matches(route)) continue;
+    if (!entry.matches(route, method)) continue;
     await entry.handle({ ctx, req, res, url, route, method });
     return;
   }
   const db = await store3();
   for (const entry of EARLY_STORE_ROUTES) {
-    if (!entry.matches(route)) continue;
+    if (!entry.matches(route, method)) continue;
     await entry.handle({ ctx, req, res, url, route, method, db });
     return;
-  }
-  if (method === "GET" && route === "bootstrap") {
-    await getAgentTavernCapabilitiesPromise();
-    const internalWorkspace = await prepareInternalWorkspace();
-    const workbenchWorkspace = await prepareWorkbenchWorkspace();
-    const storeRevision = await db.storeRevision();
-    await db.ensureRegexScriptOwners();
-    const state = await db.getState();
-    const active = state.activeCharacter ? await db.getCharacter(state.activeCharacter) : void 0;
-    const groups = [];
-    for (const name2 of await db.listGroups()) {
-      const group2 = await db.getGroup(name2);
-      if (group2) groups.push(publicGroup(group2));
-    }
-    const personas = [];
-    for (const name2 of await db.listPersonas()) {
-      const persona = await db.getPersona(name2);
-      if (persona) personas.push(persona);
-    }
-    const presetKinds = {};
-    for (const name2 of await db.listPresets()) {
-      const preset = await db.getPreset(name2);
-      if (preset) presetKinds[name2] = detectPresetKind(preset);
-    }
-    const worlds = await db.listWorlds();
-    const worldEntryCounts = await collectWorldEntryCounts(db, db.rootPath);
-    const {
-      regexScripts: _bootstrapRegexScripts,
-      regexScriptOwners: _bootstrapRegexScriptOwners,
-      regexScriptPresetOwners: _bootstrapRegexScriptPresetOwners,
-      frontendStorage: _bootstrapFrontendStorage,
-      ...lightState
-    } = state;
-    return sendJson(res, 200, {
-      ok: true,
-      storeRevision,
-      state: lightState,
-      stateSlices: ["regexScripts"],
-      characters: await db.listCharacters(),
-      worlds,
-      worldEntryCounts,
-      presets: await db.listPresets(),
-      presetKinds,
-      personas,
-      groups,
-      activeCard: active ? publicCard(active.card) : null,
-      model: ctx.agentDefaultModel.currentSelection(),
-      version: BUILD_INFO.version,
-      commit: TAVERN_COMMIT,
-      internalWorkspace,
-      workbenchWorkspace,
-      agentTavern: getAgentTavernCapabilities(),
-      agentNovel: getAgentNovelCapabilities(),
-      // 自更新快照：只读缓存结论，检查/安装分别走 update/check 与 update/install，
-      // 保证 bootstrap 永远不因网络失败而变慢或报错。
-      // Mod 轻量投影（提案 0015 §3.5，P1 真实化）：与 worldEntryCounts 同款服务端
-      // 轻量投影，{id, name, version, author, description, capabilities, panel,
-      // status, enabled, error, auditCount} 清单；宿主失败/无 Mod 时为空数组，
-      // bootstrap 不因坏 Mod 500。旧客户端不读该键。
-      mods: await modHostProjection(ctx),
-      // env 硬关时客户端把管理面的开关锁死并展示原因（mods 投影另有 per-Mod 状态）。
-      modsAvailable: !modsDisabledByEnv(),
-      update: tavernUpdate(ctx).snapshot()
-    });
-  }
-  if (method === "GET" && route === "store-revision") {
-    return sendJson(res, 200, { ok: true, revision: await db.storeRevision() });
-  }
-  if (method === "GET" && route === "state-slices") {
-    const state = await db.getState();
-    return sendJson(res, 200, {
-      ok: true,
-      regexScripts: state.regexScripts,
-      ...state.regexScriptOwners === void 0 ? {} : { regexScriptOwners: state.regexScriptOwners },
-      ...state.regexScriptPresetOwners === void 0 ? {} : { regexScriptPresetOwners: state.regexScriptPresetOwners }
-    });
   }
   if (method === "GET" && route.startsWith("avatar/")) {
     const name2 = decodeURIComponent(route.slice("avatar/".length));
