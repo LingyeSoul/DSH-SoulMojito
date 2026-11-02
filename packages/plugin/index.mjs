@@ -70,37 +70,6 @@ var init_capabilities = __esm({
   }
 });
 
-// packages/plugin/src/cross-bundle-events.ts
-function createGlobalListenerRegistry(key) {
-  const symbol = Symbol.for(key);
-  function listeners() {
-    const holder = globalThis;
-    return holder[symbol] ??= /* @__PURE__ */ new Set();
-  }
-  return {
-    on(listener) {
-      const set = listeners();
-      set.add(listener);
-      return () => {
-        set.delete(listener);
-      };
-    },
-    async emit(...args) {
-      for (const listener of [...listeners()]) {
-        try {
-          await listener(...args);
-        } catch {
-        }
-      }
-    }
-  };
-}
-var init_cross_bundle_events = __esm({
-  "packages/plugin/src/cross-bundle-events.ts"() {
-    "use strict";
-  }
-});
-
 // packages/tavern-store/src/fs-atomic.ts
 import { promises as fs } from "node:fs";
 async function moveAtomic(from, to) {
@@ -826,7 +795,7 @@ function parseCharacterBook(book) {
 }
 function bookEntryToLoreEntry(raw, index) {
   const ext = raw.extensions ?? {};
-  const uid = numOr2(raw.id, ext["uid"], index);
+  const uid = numOr(raw.id, ext["uid"], index);
   const entry = normalizeEntry({
     uid,
     key: raw.keys ?? [],
@@ -835,20 +804,20 @@ function bookEntryToLoreEntry(raw, index) {
     content: raw.content ?? "",
     constant: boolOr(raw.constant, ext["constant"], false),
     disable: raw.enabled === false,
-    order: numOr2(ext["order"], raw.insertion_order, 100),
+    order: numOr(ext["order"], raw.insertion_order, 100),
     position: bookPositionToSt(raw.position, ext["position"]),
     selective: boolOr(raw.selective, ext["selective"], true),
     selectiveLogic: num(ext["selectiveLogic"], 0),
     caseSensitive: nullableBoolOr(raw.case_sensitive, ext["case_sensitive"]),
-    probability: numOr2(ext["probability"], 100, 100),
+    probability: numOr(ext["probability"], 100, 100),
     useProbability: boolOr(ext["useProbability"], true, true),
-    depth: numOr2(ext["depth"], 4, 4),
+    depth: numOr(ext["depth"], 4, 4),
     group: str2(ext["group"]),
     groupOverride: bool(ext["group_override"], false),
-    groupWeight: numOr2(ext["group_weight"], 100, 100),
+    groupWeight: numOr(ext["group_weight"], 100, 100),
     excludeRecursion: boolOr(ext["exclude_recursion"], false, false),
     preventRecursion: boolOr(ext["prevent_recursion"], false, false),
-    delayUntilRecursion: numOr2(ext["delay_until_recursion"], 0, 0),
+    delayUntilRecursion: numOr(ext["delay_until_recursion"], 0, 0),
     scanDepth: nullableNum(ext["scan_depth"]),
     matchWholeWords: nullableBool(ext["match_whole_words"]),
     useGroupScoring: nullableBool(ext["use_group_scoring"]),
@@ -883,7 +852,7 @@ function str2(v) {
 function num(v, fallback) {
   return typeof v === "number" && Number.isFinite(v) ? v : fallback;
 }
-function numOr2(v, v2, fallback) {
+function numOr(v, v2, fallback) {
   return typeof v === "number" && Number.isFinite(v) ? v : num(v2, fallback);
 }
 function nullableNum(v) {
@@ -1011,7 +980,7 @@ var init_chat = __esm({
 });
 
 // node_modules/.pnpm/fflate@0.8.3/node_modules/fflate/esm/index.mjs
-import { createRequire as createRequire2 } from "module";
+import { createRequire } from "module";
 function deflateSync(data, opts) {
   return dopt(data, opts || {}, 0, 0);
 }
@@ -1153,7 +1122,7 @@ function unzipSync(data, opts) {
 var require2, _a, Worker, isMarkedAsUntransferable, u8, u16, i32, fleb, fdeb, clim, freb, _a, fl, revfl, _b, fd, revfd, rev, x, i, hMap, flt, i, i, i, i, fdt, i, flm, flrm, fdm, fdrm, max, bits, bits16, shft, slc, ec, err, inflt, wbits, wbits16, hTree, ln, lc, clen, wfblk, wblk, deo, et, dflt, crct, crc, dopt, mrg, b2, b4, b8, wbytes, fltn, te, td, tds, dutf8, slzh, zh, z64hs, exfl, wzh, wzf;
 var init_esm = __esm({
   "node_modules/.pnpm/fflate@0.8.3/node_modules/fflate/esm/index.mjs"() {
-    require2 = createRequire2("/");
+    require2 = createRequire("/");
     try {
       _a = require2("worker_threads"), Worker = _a.Worker, isMarkedAsUntransferable = _a.isMarkedAsUntransferable;
     } catch (e) {
@@ -9254,7 +9223,7 @@ function parseCharacterBook2(book) {
 }
 function bookEntryToLoreEntry2(raw, index) {
   const ext = raw.extensions ?? {};
-  const uid = numOr3(raw.id, ext["uid"], index);
+  const uid = numOr2(raw.id, ext["uid"], index);
   const entry = normalizeEntry2({
     uid,
     key: raw.keys ?? [],
@@ -9263,20 +9232,20 @@ function bookEntryToLoreEntry2(raw, index) {
     content: raw.content ?? "",
     constant: boolOr2(raw.constant, ext["constant"], false),
     disable: raw.enabled === false,
-    order: numOr3(ext["order"], raw.insertion_order, 100),
+    order: numOr2(ext["order"], raw.insertion_order, 100),
     position: bookPositionToSt2(raw.position, ext["position"]),
     selective: boolOr2(raw.selective, ext["selective"], true),
     selectiveLogic: num3(ext["selectiveLogic"], 0),
     caseSensitive: nullableBoolOr2(raw.case_sensitive, ext["case_sensitive"]),
-    probability: numOr3(ext["probability"], 100, 100),
+    probability: numOr2(ext["probability"], 100, 100),
     useProbability: boolOr2(ext["useProbability"], true, true),
-    depth: numOr3(ext["depth"], 4, 4),
+    depth: numOr2(ext["depth"], 4, 4),
     group: str5(ext["group"]),
     groupOverride: bool4(ext["group_override"], false),
-    groupWeight: numOr3(ext["group_weight"], 100, 100),
+    groupWeight: numOr2(ext["group_weight"], 100, 100),
     excludeRecursion: boolOr2(ext["exclude_recursion"], false, false),
     preventRecursion: boolOr2(ext["prevent_recursion"], false, false),
-    delayUntilRecursion: numOr3(ext["delay_until_recursion"], 0, 0),
+    delayUntilRecursion: numOr2(ext["delay_until_recursion"], 0, 0),
     scanDepth: nullableNum2(ext["scan_depth"]),
     matchWholeWords: nullableBool2(ext["match_whole_words"]),
     useGroupScoring: nullableBool2(ext["use_group_scoring"]),
@@ -9305,7 +9274,7 @@ function str5(v) {
 function num3(v, fallback) {
   return typeof v === "number" && Number.isFinite(v) ? v : fallback;
 }
-function numOr3(v, v2, fallback) {
+function numOr2(v, v2, fallback) {
   return typeof v === "number" && Number.isFinite(v) ? v : num3(v2, fallback);
 }
 function nullableNum2(v) {
@@ -15629,7 +15598,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.5".trim() : "";
-  const commit = true ? normalizeCommit("0a995e4") : void 0;
+  const commit = true ? normalizeCommit("b095620") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -15753,6 +15722,37 @@ var init_dsh_home = __esm({
     "use strict";
     TAVERN_DATA_DIR = "soulmojito";
     LEGACY_TAVERN_DATA_DIR = "tavern";
+  }
+});
+
+// packages/plugin/src/cross-bundle-events.ts
+function createGlobalListenerRegistry(key) {
+  const symbol = Symbol.for(key);
+  function listeners() {
+    const holder = globalThis;
+    return holder[symbol] ??= /* @__PURE__ */ new Set();
+  }
+  return {
+    on(listener) {
+      const set = listeners();
+      set.add(listener);
+      return () => {
+        set.delete(listener);
+      };
+    },
+    async emit(...args) {
+      for (const listener of [...listeners()]) {
+        try {
+          await listener(...args);
+        } catch {
+        }
+      }
+    }
+  };
+}
+var init_cross_bundle_events = __esm({
+  "packages/plugin/src/cross-bundle-events.ts"() {
+    "use strict";
   }
 });
 
@@ -20158,6 +20158,14 @@ function createDshAgentTavernAdapter(ctx) {
   };
 }
 
+// packages/plugin/src/agent-tavern/projector.ts
+init_src();
+init_src2();
+init_src3();
+import { randomUUID as randomUUID4 } from "node:crypto";
+import { promises as fs14 } from "node:fs";
+import { join as join15 } from "node:path";
+
 // packages/bind/src/host-session.ts
 function readSessionEvents(session) {
   if (!session) return void 0;
@@ -20211,12 +20219,12 @@ function isHostPluginMessageSource(source) {
 
 // packages/bind/src/host-package.ts
 import { realpathSync } from "node:fs";
-import { createRequire } from "node:module";
+import { createRequire as createRequire2 } from "node:module";
 import { pathToFileURL } from "node:url";
 async function importHostPackage(name2, anchor = process.argv[1]) {
   for (const candidate of anchorCandidates(anchor)) {
     try {
-      const hostRequire = createRequire(candidate);
+      const hostRequire = createRequire2(candidate);
       return await import(pathToFileURL(hostRequire.resolve(name2)).href);
     } catch {
     }
@@ -20291,418 +20299,6 @@ function landedPlanAppends(session, plan, baseLength) {
   }
   return landed;
 }
-
-// packages/plugin/src/agent-tavern/fork.ts
-var forkAdoptionTails = /* @__PURE__ */ new Map();
-function adoptAgentTavernFork(session, deps) {
-  const sessionId = typeof session?.id === "string" ? session.id : void 0;
-  if (sessionId === void 0 || sessionId === "") return Promise.resolve("skipped");
-  if (session === null || session === void 0) return Promise.resolve("skipped");
-  const previous = forkAdoptionTails.get(sessionId);
-  if (previous) return previous;
-  const current = adoptOne(sessionId, session, deps).finally(() => {
-    if (forkAdoptionTails.get(sessionId) === current) forkAdoptionTails.delete(sessionId);
-  });
-  forkAdoptionTails.set(sessionId, current);
-  return current;
-}
-async function adoptOne(sessionId, session, deps) {
-  const info3 = hostSessionForkInfo(session);
-  if (info3 === void 0) return "skipped";
-  const state = await deps.store.getState();
-  if (state.sessionBindings[sessionId] !== void 0) return "bound";
-  const parent = state.sessionBindings[info3.parentSession];
-  if (parent === void 0 || parent.architecture !== "agent-tavern" || parent.group === true) {
-    deps.logger?.info?.(`dsh-soulmojito: host session fork '${sessionId}' skipped (parent '${info3.parentSession}' is not an AgentTavern binding)`);
-    return "skipped";
-  }
-  const character = parent.character;
-  const parentSnapshot = await deps.store.getChatSnapshot(character, parent.chatId);
-  if (parentSnapshot === void 0) {
-    deps.logger?.warn?.(`dsh-soulmojito: host session fork '${sessionId}' not adopted (parent chat '${character}/${parent.chatId}' is missing)`);
-    return "skipped";
-  }
-  let chatId = await findExistingForkChat(deps.store, character, sessionId);
-  if (chatId === void 0) {
-    const boundarySeq = info3.inheritedEventCount === void 0 ? void 0 : info3.inheritedEventCount - 1;
-    chatId = (await deps.store.forkChat(character, parent.chatId, {
-      sessionId,
-      parentSessionId: info3.parentSession,
-      bookmarkMessageId: forkBookmarkMessageId(parentSnapshot.chat, info3.parentSession, boundarySeq)
-    })).chatId;
-  }
-  await copyChatVariables(deps.variables, parent.chatId, chatId);
-  await copyChatMemories(deps, parent.chatId, chatId);
-  await deps.bind(sessionId, character, chatId, parent.contextMode);
-  deps.logger?.info?.(`dsh-soulmojito: adopted host session fork '${sessionId}' from '${info3.parentSession}' into chat '${character}/${chatId}'`);
-  return "adopted";
-}
-var FORK_CHAT_SUFFIX = / - fork \d+\.jsonl$/;
-async function findExistingForkChat(store5, character, sessionId) {
-  let candidates;
-  try {
-    candidates = (await store5.listChats(character)).filter((chatId) => FORK_CHAT_SUFFIX.test(chatId));
-  } catch {
-    return void 0;
-  }
-  for (const chatId of candidates) {
-    const snapshot2 = await store5.getChatSnapshot(character, chatId).catch(() => void 0);
-    const fork = snapshot2?.chat.header?.chat_metadata?.agentTavernFork;
-    if (fork?.sessionId === sessionId) return chatId;
-  }
-  return void 0;
-}
-function forkBookmarkMessageId(chat, parentSessionId, boundarySeq) {
-  const messages = chat.messages;
-  if (messages.length === 0) return void 0;
-  if (boundarySeq === void 0) return messages.length - 1;
-  let last = -1;
-  for (const [index, message] of messages.entries()) {
-    const origin = message.extra?.agentTavern;
-    if (origin?.sessionId !== parentSessionId) continue;
-    const seq = origin.eventSeq;
-    if (typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 0 && seq <= boundarySeq) last = index;
-  }
-  return last === -1 ? void 0 : last;
-}
-async function copyChatVariables(variables2, parentChatId, chatId) {
-  const snapshots = await variables2.listAll("chat", parentChatId);
-  if (snapshots.length === 0) return;
-  await variables2.patch("chat", chatId, snapshots.map((snapshot2) => ({ name: snapshot2.name, value: snapshot2.value })));
-}
-async function copyChatMemories(deps, parentChatId, chatId) {
-  if (deps.memories === void 0) return;
-  let records;
-  try {
-    records = await deps.memories.list("chat", parentChatId);
-  } catch (error) {
-    deps.logger?.warn?.(`dsh-soulmojito: fork memory copy skipped for '${chatId}' (${error instanceof Error ? error.message : String(error)})`);
-    return;
-  }
-  for (const record of records) {
-    if (await deps.memories.read(record.id, "chat", chatId, true) !== void 0) continue;
-    await deps.memories.put({
-      id: record.id,
-      scope: "chat",
-      scopeId: chatId,
-      kind: record.kind,
-      content: record.content,
-      tags: record.tags,
-      importance: record.importance,
-      confidence: record.confidence,
-      source: record.source,
-      ...record.expiresAt === void 0 ? {} : { expiresAt: record.expiresAt }
-    });
-  }
-  if (deps.vectors === void 0) return;
-  try {
-    const entries = await deps.vectors.list("chat", parentChatId);
-    if (entries.length > 0) {
-      await deps.vectors.put(entries.map((entry) => ({ ...entry, scopeId: chatId })));
-    }
-  } catch (error) {
-    deps.logger?.warn?.(`dsh-soulmojito: fork vector copy skipped for '${chatId}' (${error instanceof Error ? error.message : String(error)})`);
-  }
-}
-
-// packages/tavern-pipeline/src/pipeline.ts
-var GLOBAL_ORDER_DUMMY_ID = 100001;
-var LEGACY_ORDER_DUMMY_ID = 1e5;
-function resolvePromptOrder(preset) {
-  const set = preset.promptOrder.find((o) => Number(o.character_id) === GLOBAL_ORDER_DUMMY_ID) ?? preset.promptOrder.find((o) => Number(o.character_id) === LEGACY_ORDER_DUMMY_ID) ?? preset.promptOrder[0];
-  return Array.isArray(set?.order) ? set.order : [];
-}
-function entryEnabled(slot, prompt) {
-  if (typeof slot.enabled === "boolean") return slot.enabled;
-  const record = prompt;
-  return record["enabled"] !== false;
-}
-function assemblePrompt(input, deps) {
-  const { expand, countTokens } = deps;
-  const warnings = [];
-  const sampler = input.preset.sampler;
-  const wiFormat = typeof sampler["wi_format"] === "string" ? sampler["wi_format"] : "{0}";
-  const scenarioFormat = typeof sampler["scenario_format"] === "string" ? sampler["scenario_format"] : "{{scenario}}";
-  const personalityFormat = typeof sampler["personality_format"] === "string" ? sampler["personality_format"] : "{{personality}}";
-  const squash = sampler["squash_system_messages"] === true;
-  const maxContext = input.maxContextTokens ?? numOr(sampler["openai_max_context"], 4096);
-  const maxResponse = input.maxResponseTokens ?? numOr(sampler["openai_max_tokens"], 400);
-  const order = resolvePromptOrder(input.preset);
-  const byId = new Map(input.preset.prompts.map((p) => [p.identifier, p]));
-  const preHistory = [];
-  const postHistory = [];
-  let historyInjected = false;
-  for (const slot of order) {
-    const prompt = byId.get(slot.identifier);
-    if (prompt === void 0) continue;
-    if (!entryEnabled(slot, prompt)) continue;
-    const target = historyInjected ? postHistory : preHistory;
-    if ("marker" in prompt && prompt.marker) {
-      switch (prompt.identifier) {
-        case "chatHistory": {
-          historyInjected = true;
-          break;
-        }
-        case "worldInfoBefore":
-          pushText(target, "system", wrapAll(wiFormat, input.worldInfoBefore, expand), squash);
-          break;
-        case "worldInfoAfter":
-          pushText(target, "system", wrapAll(wiFormat, input.worldInfoAfter, expand), squash);
-          break;
-        case "charDescription":
-          pushText(target, "system", expand(input.card.data.description).trim(), squash);
-          break;
-        case "charPersonality":
-          pushText(target, "system", expand(personalityFormat.replace("{{personality}}", input.card.data.personality)).trim(), squash);
-          break;
-        case "scenario":
-          pushText(target, "system", expand(scenarioFormat.replace("{{scenario}}", input.card.data.scenario)).trim(), squash);
-          break;
-        case "personaDescription":
-          if (input.personaDescription) pushText(target, "system", expand(input.personaDescription).trim(), squash);
-          break;
-        case "dialogueExamples":
-          pushText(target, "system", wrapAll("{0}", input.beforeExamples ?? [], expand), squash);
-          pushText(target, "system", formatExamples(input, expand), squash);
-          pushText(target, "system", wrapAll("{0}", input.afterExamples ?? [], expand), squash);
-          break;
-        default:
-          break;
-      }
-      continue;
-    }
-    const contentPrompt = prompt;
-    let content = contentPrompt.content ?? "";
-    switch (contentPrompt.identifier) {
-      case "main": {
-        const override = input.card.data.systemPrompt.trim();
-        if (override.length > 0) content = override.replace(/\{\{original\}\}/gi, content);
-        break;
-      }
-      case "jailbreak": {
-        const override = input.card.data.postHistoryInstructions.trim();
-        if (override.length > 0) content = override.replace(/\{\{original\}\}/gi, content);
-        break;
-      }
-      default:
-        break;
-    }
-    if (content.trim().length === 0) continue;
-    pushText(target, contentPrompt.role ?? "system", expand(content), squash);
-  }
-  const preTokens = preHistory.reduce((n, m) => n + countTokens(m.content), 0);
-  const postTokens = postHistory.reduce((n, m) => n + countTokens(m.content), 0);
-  const budget = maxContext - maxResponse - preTokens - postTokens;
-  const usable = input.messages.filter((m) => !m.is_system && typeof m.mes === "string" && m.mes.length > 0);
-  const kept = [];
-  let used = 0;
-  let dropped = 0;
-  for (let i = usable.length - 1; i >= 0; i--) {
-    const msg = usable[i];
-    const tokens = countTokens(msg.mes);
-    if (used + tokens > budget && kept.length > 0) {
-      dropped = i + 1;
-      break;
-    }
-    used += tokens;
-    kept.unshift({ role: msg.is_user ? "user" : "assistant", content: msg.mes });
-  }
-  if (dropped > 0) warnings.push(`context budget exceeded: dropped ${dropped} oldest message(s)`);
-  const history = [...kept];
-  for (const injection of [...input.depthInjections ?? []].sort((a, b) => b.depth - a.depth)) {
-    const idx = Math.max(0, history.length - injection.depth);
-    history.splice(idx, 0, { role: injection.role, content: expand(injection.text) });
-  }
-  const messages = squashMessages([...preHistory, ...history, ...postHistory], squash);
-  return {
-    messages,
-    stats: {
-      promptTokens: messages.reduce((n, m) => n + countTokens(m.content), 0),
-      historyKept: kept.length,
-      historyDropped: dropped
-    },
-    warnings
-  };
-}
-function wrapAll(wiFormat, texts, expand) {
-  return texts.filter((t) => t.trim().length > 0).map((t) => wiFormat.replace("{0}", expand(t))).join("\n");
-}
-function formatExamples(input, expand) {
-  const example = input.card.data.mesExample.trim();
-  if (example.length === 0) return "";
-  const separator = typeof input.preset.sampler["new_example_chat_prompt"] === "string" ? input.preset.sampler["new_example_chat_prompt"] : "";
-  return `${separator}${expand(example)}`.trim();
-}
-function pushText(target, role, text, squash) {
-  if (text.length === 0) return;
-  if (squash) {
-    const last = target[target.length - 1];
-    if (last !== void 0 && last.role === "system" && role === "system") {
-      last.content += `
-
-${text}`;
-      return;
-    }
-  }
-  target.push({ role, content: text });
-}
-function squashMessages(messages, squash) {
-  if (!squash) return messages;
-  const out = [];
-  for (const m of messages) {
-    const last = out[out.length - 1];
-    if (last !== void 0 && last.role === m.role) {
-      last.content += `
-
-${m.content}`;
-    } else {
-      out.push({ ...m });
-    }
-  }
-  return out;
-}
-function numOr(v, fallback) {
-  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
-}
-
-// packages/tavern-pipeline/src/group.ts
-function buildGroupTurn(input) {
-  const messages = [];
-  for (const message of input.messages) {
-    if (message.is_system) continue;
-    if (message.is_user) {
-      messages.push(message);
-      continue;
-    }
-    const name2 = message.name || input.speaker;
-    if (name2 === input.speaker) {
-      messages.push(message);
-    } else {
-      messages.push({
-        ...message,
-        is_user: true,
-        mes: `${name2}: ${message.mes}`
-      });
-    }
-  }
-  const nudgeText = input.groupNudgePrompt !== void 0 && input.groupNudgePrompt !== "" ? input.groupNudgePrompt : void 0;
-  return {
-    messages,
-    ...nudgeText !== void 0 ? { nudge: { role: "user", content: nudgeText.replace(/\{\{char\}\}/gi, input.speaker) } } : {}
-  };
-}
-function pickGroupMember(options) {
-  const enabled = options.members.filter((member) => !options.disabled.includes(member));
-  if (enabled.length === 0) return void 0;
-  if (options.explicit !== void 0) {
-    return enabled.includes(options.explicit) ? options.explicit : void 0;
-  }
-  if (options.strategy === 2) {
-    if (enabled.length === 1) return enabled[0];
-    const last = options.lastSpeaker !== void 0 ? enabled.indexOf(options.lastSpeaker) : -1;
-    return enabled[(last + 1) % enabled.length];
-  }
-  const rng = options.rng ?? Math.random;
-  const pool = options.allowSelfResponses || options.lastSpeaker === void 0 ? enabled : enabled.filter((member) => member !== options.lastSpeaker);
-  const candidates = pool.length > 0 ? pool : enabled;
-  if (candidates.length === 1) return candidates[0];
-  const weights = candidates.map((member) => {
-    const value = options.talkativeness(member);
-    return Number.isFinite(value) && value > 0 ? value : 0.5;
-  });
-  const total = weights.reduce((sum, weight) => sum + weight, 0);
-  let roll = rng() * total;
-  for (let i = 0; i < candidates.length; i++) {
-    roll -= weights[i];
-    if (roll <= 0) return candidates[i];
-  }
-  return candidates[candidates.length - 1];
-}
-
-// packages/plugin/src/agent-tavern/preset.ts
-init_cross_bundle_events();
-var AGENT_PRESET_BLOCK_HEADER = "Chat completion preset (user-configured prompt stack; follow these instructions together with the kernel):";
-function effectiveAgentPresetPrompts(preset, card) {
-  const order = resolvePromptOrder(preset);
-  const byId = new Map(preset.prompts.map((prompt) => [prompt.identifier, prompt]));
-  const effective = [];
-  for (const slot of order) {
-    const prompt = byId.get(slot.identifier);
-    if (prompt === void 0 || prompt.marker === true) continue;
-    if (!entryEnabled(slot, prompt)) continue;
-    const content = applyCardOverride(prompt.identifier, promptContent(prompt), card);
-    const trimmed = content.trim();
-    if (trimmed === "") continue;
-    effective.push({
-      identifier: prompt.identifier,
-      name: typeof prompt.name === "string" ? prompt.name : prompt.identifier,
-      role: promptRole(prompt),
-      content: trimmed
-    });
-  }
-  return effective;
-}
-function renderAgentPresetBlock(preset, card, header = AGENT_PRESET_BLOCK_HEADER) {
-  const prompts = effectiveAgentPresetPrompts(preset, card);
-  if (prompts.length === 0) return void 0;
-  return [header, ...prompts.map((prompt) => prompt.content)].join("\n\n");
-}
-function presetTemperature(preset) {
-  const value = preset.sampler["temperature"];
-  return typeof value === "number" && Number.isFinite(value) ? value : void 0;
-}
-function defaultPreset() {
-  const prompts = [
-    { name: "Main Prompt", system_prompt: true, role: "system", content: "Write {{char}}'s next reply in a fictional roleplay chat between {{char}} and {{user}}. Stay in character and never write dialogue or actions for {{user}}.", identifier: "main" },
-    { identifier: "worldInfoBefore", name: "World Info (before)", system_prompt: true, marker: true },
-    { identifier: "personaDescription", name: "Persona", system_prompt: true, marker: true },
-    { identifier: "charDescription", name: "Character Description", system_prompt: true, marker: true },
-    { identifier: "charPersonality", name: "Character Personality", system_prompt: true, marker: true },
-    { identifier: "scenario", name: "Scenario", system_prompt: true, marker: true },
-    { identifier: "worldInfoAfter", name: "World Info (after)", system_prompt: true, marker: true },
-    { identifier: "dialogueExamples", name: "Dialogue Examples", system_prompt: true, marker: true },
-    { identifier: "chatHistory", name: "Chat History", system_prompt: true, marker: true },
-    { name: "Post-History Instructions", system_prompt: true, role: "system", content: "", identifier: "jailbreak" }
-  ];
-  return {
-    temperature: 1,
-    openai_max_context: 32768,
-    openai_max_tokens: 800,
-    wi_format: "{0}",
-    scenario_format: "{{scenario}}",
-    personality_format: "{{personality}}",
-    prompts,
-    prompt_order: [{ character_id: GLOBAL_ORDER_DUMMY_ID, order: prompts.map((prompt) => ({ identifier: prompt.identifier, enabled: true })) }]
-  };
-}
-var agentPresetChanged = createGlobalListenerRegistry("dsh-soulmojito:agent-preset-changed-listeners");
-function onAgentPresetChanged(listener) {
-  return agentPresetChanged.on(listener);
-}
-function emitAgentPresetChanged() {
-  return agentPresetChanged.emit();
-}
-function promptContent(prompt) {
-  const content = prompt["content"];
-  return typeof content === "string" ? content : "";
-}
-function promptRole(prompt) {
-  const role = prompt["role"];
-  return role === "user" || role === "assistant" ? role : "system";
-}
-function applyCardOverride(identifier, content, card) {
-  const override = identifier === "main" ? card?.data.systemPrompt.trim() : identifier === "jailbreak" ? card?.data.postHistoryInstructions.trim() : "";
-  if (override === void 0 || override === "") return content;
-  return override.replace(/\{\{original\}\}/gi, content);
-}
-
-// packages/plugin/src/agent-tavern/projector.ts
-init_src();
-init_src2();
-init_src3();
-import { randomUUID as randomUUID4 } from "node:crypto";
-import { promises as fs14 } from "node:fs";
-import { join as join15 } from "node:path";
 
 // packages/plugin/src/agent-tavern/mvu-compat.ts
 init_src4();
@@ -40728,272 +40324,409 @@ function clampIdentitySummary(card) {
   fields["identitySummary"] = summary.slice(0, 2e3);
 }
 
-// packages/plugin/src/native-preset.ts
-init_src2();
-
-// packages/plugin/src/lazy-projection.ts
-function createLazyProjection(options) {
-  const cache2 = /* @__PURE__ */ new Map();
-  const started = /* @__PURE__ */ new Set();
-  const tickets = /* @__PURE__ */ new Map();
-  let preheatDone = false;
-  async function load(agentId, state) {
-    const ticket = (tickets.get(agentId) ?? 0) + 1;
-    tickets.set(agentId, ticket);
-    const settle = (value) => {
-      if (tickets.get(agentId) === ticket) cache2.set(agentId, value);
-    };
-    try {
-      await options.load(agentId, settle, state);
-    } catch {
-    }
-  }
-  async function refreshAll() {
-    let state;
-    try {
-      state = await options.getState();
-    } catch {
-      state = void 0;
-    }
-    for (const agentId of [...started]) await enqueueLoad(agentId, state);
-  }
-  async function refreshWhere(match) {
-    try {
-      const state = await options.getState();
-      for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
-        if (!match(binding)) continue;
-        started.add(agentId);
-        await enqueueLoad(agentId);
-      }
-    } catch {
-    }
-  }
-  const loadChains = /* @__PURE__ */ new Map();
-  function enqueueLoad(agentId, state) {
-    const next = (loadChains.get(agentId) ?? Promise.resolve()).then(() => load(agentId, state), () => load(agentId, state));
-    loadChains.set(agentId, next.catch(() => void 0));
-    return next;
-  }
-  return {
-    valueOf(agentId) {
-      if (typeof agentId !== "string" || agentId.trim() === "") return void 0;
-      if (!started.has(agentId)) {
-        started.add(agentId);
-        void enqueueLoad(agentId);
-      }
-      return cache2.get(agentId);
-    },
-    refreshWhere,
-    refreshAll,
-    preheatWhere(match) {
-      if (preheatDone) return Promise.resolve();
-      preheatDone = true;
-      return refreshWhere(match);
-    },
-    preheatAll(agentIds) {
-      for (const agentId of agentIds) started.add(agentId);
-      return refreshAll();
-    }
-  };
-}
-
-// packages/plugin/src/preset-mount.ts
-init_src2();
-init_src();
-init_dsh_home();
-init_store_handle();
-var DEFAULT_USER3 = "User";
-var CHAR_FALLBACK = "the character";
-var storePromise2;
-function store4() {
-  return storePromise2 ??= sharedTavernStore(tavernDataRoot());
-}
-function mountPresetProjection(options) {
-  const freeze2 = /* @__PURE__ */ new Map();
-  const projection2 = createLazyProjection({
-    getState: async () => (await store4()).getState(),
-    load: async (agentId, settle) => {
-      const db = await store4();
-      const state = await db.getState();
-      const binding = state.sessionBindings[agentId];
-      if (state[options.stateFlag] !== true || !binding || binding.architecture !== options.architecture) {
-        settle("");
-        return;
-      }
-      if (typeof state.activePreset !== "string" || state.activePreset === "") {
-        settle("");
-        return;
-      }
-      const raw = await db.getPreset(state.activePreset);
-      if (raw === void 0) {
-        settle("");
-        return;
-      }
-      const block = renderAgentPresetBlock(parsePreset(raw), void 0, options.header);
-      if (block === void 0) {
-        settle("");
-        return;
-      }
-      const record = freeze2.get(agentId) ?? { frozenAt: Date.now(), seed: Math.random() * 4294967296 >>> 0 };
-      freeze2.set(agentId, record);
-      const expand = createHostPromptExpander(
-        charNameOf(options, binding),
-        state.activePersona ?? DEFAULT_USER3,
-        { now: () => new Date(record.frozenAt), rng: seededRandom(record.seed) }
-      );
-      settle(hostPromptSafe(block, expand));
-    }
+// packages/plugin/src/agent-tavern/fork.ts
+var forkAdoptionTails = /* @__PURE__ */ new Map();
+function adoptAgentTavernFork(session, deps) {
+  const sessionId = typeof session?.id === "string" ? session.id : void 0;
+  if (sessionId === void 0 || sessionId === "") return Promise.resolve("skipped");
+  if (session === null || session === void 0) return Promise.resolve("skipped");
+  const previous = forkAdoptionTails.get(sessionId);
+  if (previous) return previous;
+  const current = adoptOne(sessionId, session, deps).finally(() => {
+    if (forkAdoptionTails.get(sessionId) === current) forkAdoptionTails.delete(sessionId);
   });
-  onAgentPresetChanged(() => projection2.refreshWhere((binding) => binding.architecture === options.architecture));
-  return {
-    section: { name: options.sectionName, order: -75, text: (assembly) => projection2.valueOf(assembly?.agent?.id) ?? "" },
-    textOf: (agentId) => projection2.valueOf(agentId) ?? "",
-    preheat: () => projection2.preheatWhere((binding) => binding.architecture === options.architecture)
-  };
+  forkAdoptionTails.set(sessionId, current);
+  return current;
 }
-function charNameOf(options, binding) {
-  const name2 = options.charOf(binding).trim();
-  return name2 === "" ? CHAR_FALLBACK : name2;
-}
-
-// packages/plugin/src/native-preset.ts
-init_runtime2();
-var NATIVE_PRESET_SECTION = "dsh-soulmojito:native-preset";
-var NATIVE_PRESET_HEADER = "Active chat completion preset (user-configured prompt stack; follow these instructions together with the DSH agent preset):";
-var freeze = { frozenAt: Date.now(), seed: Math.random() * 4294967296 >>> 0 };
-var renderMemo;
-var renderGeneration = 0;
-var projection = createLazyProjection({
-  getState: async () => (await store3()).getState(),
-  load: async (agentId, settle, snapshot2) => {
-    const db = await store3();
-    const state = snapshot2 ?? await db.getState();
-    if (state.nativeAgentPreset !== true || state.sessionBindings[agentId] !== void 0) {
-      settle("");
-      return;
-    }
-    settle(await unboundBlock(db, state));
+async function adoptOne(sessionId, session, deps) {
+  const info3 = hostSessionForkInfo(session);
+  if (info3 === void 0) return "skipped";
+  const state = await deps.store.getState();
+  if (state.sessionBindings[sessionId] !== void 0) return "bound";
+  const parent = state.sessionBindings[info3.parentSession];
+  if (parent === void 0 || parent.architecture !== "agent-tavern" || parent.group === true) {
+    deps.logger?.info?.(`dsh-soulmojito: host session fork '${sessionId}' skipped (parent '${info3.parentSession}' is not an AgentTavern binding)`);
+    return "skipped";
   }
-});
-async function unboundBlock(db, state) {
-  const key = [renderGeneration, state.activePreset ?? "", state.activeCharacter ?? "", state.activePersona ?? ""].join("\0");
-  if (renderMemo?.key === key) return renderMemo.text;
-  const text = await renderUnboundBlock(db, state);
-  renderMemo = { key, text };
-  return text;
-}
-async function renderUnboundBlock(db, state) {
-  if (typeof state.activePreset !== "string" || state.activePreset === "") return "";
-  const raw = await db.getPreset(state.activePreset);
-  if (raw === void 0) return "";
-  const block = renderAgentPresetBlock(parsePreset(raw), void 0, NATIVE_PRESET_HEADER);
-  if (block === void 0) return "";
-  const expand = createHostPromptExpander(
-    state.activeCharacter || CHAR_FALLBACK,
-    state.activePersona ?? DEFAULT_USER2,
-    { now: () => new Date(freeze.frozenAt), rng: seededRandom(freeze.seed) }
-  );
-  return hostPromptSafe(block, expand);
-}
-onAgentPresetChanged(() => {
-  renderGeneration += 1;
-  return projection.refreshAll();
-});
-function nativeAgentPresetSection() {
-  return {
-    name: NATIVE_PRESET_SECTION,
-    order: -75,
-    text: (context) => projection.valueOf(agentIdOf2(context)) ?? ""
-  };
-}
-function agentIdOf2(context) {
-  if (typeof context !== "object" || context === null) return void 0;
-  const agent = context.agent;
-  if (typeof agent !== "object" || agent === null) return void 0;
-  const id = agent.id;
-  return typeof id === "string" && id !== "" ? id : void 0;
-}
-function preheatNativeAgentPreset(agentIds) {
-  return projection.preheatAll(agentIds);
-}
-
-// packages/plugin/src/index.ts
-init_runtime2();
-
-// packages/plugin/src/session/command.ts
-init_capabilities();
-init_runtime2();
-
-// packages/plugin/src/session/activate.ts
-function applyAgentTavernHistoryImport(options) {
-  const { agent, plan } = options;
-  const total = plan.length;
-  const session = agent.session;
-  if (session === void 0 || typeof session.append !== "function") {
-    options.logger?.warn?.("AgentTavern history import skipped: the host agent exposes no appendable session, so the greeting stays in the Tavern JSONL only.");
-    return { status: "skipped", landed: 0, total };
+  const character = parent.character;
+  const parentSnapshot = await deps.store.getChatSnapshot(character, parent.chatId);
+  if (parentSnapshot === void 0) {
+    deps.logger?.warn?.(`dsh-soulmojito: host session fork '${sessionId}' not adopted (parent chat '${character}/${parent.chatId}' is missing)`);
+    return "skipped";
   }
-  const importedTurn = lastImportedTurn(plan);
-  if (importedTurn !== void 0 && !canAdvanceHostTurnBase(agent)) {
-    options.logger?.warn?.("AgentTavern history import skipped: the host session exposes no advanceable turn base, so imported turn boundaries would desynchronise the live loop.");
-    return { status: "skipped", landed: 0, total };
+  let chatId = await findExistingForkChat(deps.store, character, sessionId);
+  if (chatId === void 0) {
+    const boundarySeq = info3.inheritedEventCount === void 0 ? void 0 : info3.inheritedEventCount - 1;
+    chatId = (await deps.store.forkChat(character, parent.chatId, {
+      sessionId,
+      parentSessionId: info3.parentSession,
+      bookmarkMessageId: forkBookmarkMessageId(parentSnapshot.chat, info3.parentSession, boundarySeq)
+    })).chatId;
   }
-  const logger = options.logger;
-  const appendable = session;
-  const baseLength = sessionEvents(session).length;
-  const appendItem = (item) => {
-    appendable.append(item.type, item.data, item.surfaceOp === void 0 ? void 0 : { surfaceOp: item.surfaceOp });
-  };
-  let attemptError;
+  await copyChatVariables(deps.variables, parent.chatId, chatId);
+  await copyChatMemories(deps, parent.chatId, chatId);
+  await deps.bind(sessionId, character, chatId, parent.contextMode);
+  deps.logger?.info?.(`dsh-soulmojito: adopted host session fork '${sessionId}' from '${info3.parentSession}' into chat '${character}/${chatId}'`);
+  return "adopted";
+}
+var FORK_CHAT_SUFFIX = / - fork \d+\.jsonl$/;
+async function findExistingForkChat(store5, character, sessionId) {
+  let candidates;
   try {
-    for (const item of plan) appendItem(item);
-  } catch (error) {
-    attemptError = error;
+    candidates = (await store5.listChats(character)).filter((chatId) => FORK_CHAT_SUFFIX.test(chatId));
+  } catch {
+    return void 0;
   }
-  let landed = landedPlanAppends(session, plan, baseLength);
-  const firstLanded = landed;
-  let retryRefused = false;
-  if (landed < total && attemptError === void 0 && sessionEvents(session).length === baseLength + landed) {
-    try {
-      for (const item of plan.slice(landed)) appendItem(item);
-    } catch (error) {
-      attemptError = error;
-    }
-    landed = Math.max(landed, landedPlanAppends(session, plan, baseLength));
-  } else if (landed < total && attemptError === void 0) {
-    retryRefused = true;
-  }
-  if (attemptError !== void 0) {
-    logger?.warn?.(`AgentTavern history import failed: ${attemptError instanceof Error ? attemptError.message : String(attemptError)}`);
-  } else if (landed < total) {
-    const attempts = retryRefused ? `attempt 1: ${firstLanded}/${total} appends visible; suffix retry refused \u2014 the log tail holds unplanned events, replaying would duplicate turn boundaries` : `attempt 1: ${firstLanded}/${total} appends visible, attempt 2: ${landed}/${total}`;
-    logger?.error?.(`AgentTavern history import could not be confirmed by read-back (${attempts}); degrading to the verified prefix \u2014 the missing history stays in the Tavern JSONL and remains replayable`);
-  }
-  if (landed < total) {
-    closeImportBracket(agent, {
-      kind: "error",
-      error: { message: "AgentTavern history import failed", code: "TAVERN_IMPORT" }
-    });
-  }
-  const verifiedTurn = lastLoggedTurn(agent);
-  if (verifiedTurn !== void 0) advanceHostTurnBase(agent, verifiedTurn);
-  return { status: landed < total ? "partial" : "applied", landed, total };
-}
-
-// packages/plugin/src/session/preset-marker.ts
-function lastSelectedPresetId(session) {
-  const events = sessionEvents(session);
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
-    if (event?.type !== "agent-preset/selected") continue;
-    const preset = event.data?.agentPreset;
-    if (typeof preset === "string") return preset;
+  for (const chatId of candidates) {
+    const snapshot2 = await store5.getChatSnapshot(character, chatId).catch(() => void 0);
+    const fork = snapshot2?.chat.header?.chat_metadata?.agentTavernFork;
+    if (fork?.sessionId === sessionId) return chatId;
   }
   return void 0;
 }
+function forkBookmarkMessageId(chat, parentSessionId, boundarySeq) {
+  const messages = chat.messages;
+  if (messages.length === 0) return void 0;
+  if (boundarySeq === void 0) return messages.length - 1;
+  let last = -1;
+  for (const [index, message] of messages.entries()) {
+    const origin = message.extra?.agentTavern;
+    if (origin?.sessionId !== parentSessionId) continue;
+    const seq = origin.eventSeq;
+    if (typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 0 && seq <= boundarySeq) last = index;
+  }
+  return last === -1 ? void 0 : last;
+}
+async function copyChatVariables(variables2, parentChatId, chatId) {
+  const snapshots = await variables2.listAll("chat", parentChatId);
+  if (snapshots.length === 0) return;
+  await variables2.patch("chat", chatId, snapshots.map((snapshot2) => ({ name: snapshot2.name, value: snapshot2.value })));
+}
+async function copyChatMemories(deps, parentChatId, chatId) {
+  if (deps.memories === void 0) return;
+  let records;
+  try {
+    records = await deps.memories.list("chat", parentChatId);
+  } catch (error) {
+    deps.logger?.warn?.(`dsh-soulmojito: fork memory copy skipped for '${chatId}' (${error instanceof Error ? error.message : String(error)})`);
+    return;
+  }
+  for (const record of records) {
+    if (await deps.memories.read(record.id, "chat", chatId, true) !== void 0) continue;
+    await deps.memories.put({
+      id: record.id,
+      scope: "chat",
+      scopeId: chatId,
+      kind: record.kind,
+      content: record.content,
+      tags: record.tags,
+      importance: record.importance,
+      confidence: record.confidence,
+      source: record.source,
+      ...record.expiresAt === void 0 ? {} : { expiresAt: record.expiresAt }
+    });
+  }
+  if (deps.vectors === void 0) return;
+  try {
+    const entries = await deps.vectors.list("chat", parentChatId);
+    if (entries.length > 0) {
+      await deps.vectors.put(entries.map((entry) => ({ ...entry, scopeId: chatId })));
+    }
+  } catch (error) {
+    deps.logger?.warn?.(`dsh-soulmojito: fork vector copy skipped for '${chatId}' (${error instanceof Error ? error.message : String(error)})`);
+  }
+}
 
-// packages/plugin/src/session/command.ts
-init_tavern_assets();
+// packages/tavern-pipeline/src/pipeline.ts
+var GLOBAL_ORDER_DUMMY_ID = 100001;
+var LEGACY_ORDER_DUMMY_ID = 1e5;
+function resolvePromptOrder(preset) {
+  const set = preset.promptOrder.find((o) => Number(o.character_id) === GLOBAL_ORDER_DUMMY_ID) ?? preset.promptOrder.find((o) => Number(o.character_id) === LEGACY_ORDER_DUMMY_ID) ?? preset.promptOrder[0];
+  return Array.isArray(set?.order) ? set.order : [];
+}
+function entryEnabled(slot, prompt) {
+  if (typeof slot.enabled === "boolean") return slot.enabled;
+  const record = prompt;
+  return record["enabled"] !== false;
+}
+function assemblePrompt(input, deps) {
+  const { expand, countTokens } = deps;
+  const warnings = [];
+  const sampler = input.preset.sampler;
+  const wiFormat = typeof sampler["wi_format"] === "string" ? sampler["wi_format"] : "{0}";
+  const scenarioFormat = typeof sampler["scenario_format"] === "string" ? sampler["scenario_format"] : "{{scenario}}";
+  const personalityFormat = typeof sampler["personality_format"] === "string" ? sampler["personality_format"] : "{{personality}}";
+  const squash = sampler["squash_system_messages"] === true;
+  const maxContext = input.maxContextTokens ?? numOr3(sampler["openai_max_context"], 4096);
+  const maxResponse = input.maxResponseTokens ?? numOr3(sampler["openai_max_tokens"], 400);
+  const order = resolvePromptOrder(input.preset);
+  const byId = new Map(input.preset.prompts.map((p) => [p.identifier, p]));
+  const preHistory = [];
+  const postHistory = [];
+  let historyInjected = false;
+  for (const slot of order) {
+    const prompt = byId.get(slot.identifier);
+    if (prompt === void 0) continue;
+    if (!entryEnabled(slot, prompt)) continue;
+    const target = historyInjected ? postHistory : preHistory;
+    if ("marker" in prompt && prompt.marker) {
+      switch (prompt.identifier) {
+        case "chatHistory": {
+          historyInjected = true;
+          break;
+        }
+        case "worldInfoBefore":
+          pushText(target, "system", wrapAll(wiFormat, input.worldInfoBefore, expand), squash);
+          break;
+        case "worldInfoAfter":
+          pushText(target, "system", wrapAll(wiFormat, input.worldInfoAfter, expand), squash);
+          break;
+        case "charDescription":
+          pushText(target, "system", expand(input.card.data.description).trim(), squash);
+          break;
+        case "charPersonality":
+          pushText(target, "system", expand(personalityFormat.replace("{{personality}}", input.card.data.personality)).trim(), squash);
+          break;
+        case "scenario":
+          pushText(target, "system", expand(scenarioFormat.replace("{{scenario}}", input.card.data.scenario)).trim(), squash);
+          break;
+        case "personaDescription":
+          if (input.personaDescription) pushText(target, "system", expand(input.personaDescription).trim(), squash);
+          break;
+        case "dialogueExamples":
+          pushText(target, "system", wrapAll("{0}", input.beforeExamples ?? [], expand), squash);
+          pushText(target, "system", formatExamples(input, expand), squash);
+          pushText(target, "system", wrapAll("{0}", input.afterExamples ?? [], expand), squash);
+          break;
+        default:
+          break;
+      }
+      continue;
+    }
+    const contentPrompt = prompt;
+    let content = contentPrompt.content ?? "";
+    switch (contentPrompt.identifier) {
+      case "main": {
+        const override = input.card.data.systemPrompt.trim();
+        if (override.length > 0) content = override.replace(/\{\{original\}\}/gi, content);
+        break;
+      }
+      case "jailbreak": {
+        const override = input.card.data.postHistoryInstructions.trim();
+        if (override.length > 0) content = override.replace(/\{\{original\}\}/gi, content);
+        break;
+      }
+      default:
+        break;
+    }
+    if (content.trim().length === 0) continue;
+    pushText(target, contentPrompt.role ?? "system", expand(content), squash);
+  }
+  const preTokens = preHistory.reduce((n, m) => n + countTokens(m.content), 0);
+  const postTokens = postHistory.reduce((n, m) => n + countTokens(m.content), 0);
+  const budget = maxContext - maxResponse - preTokens - postTokens;
+  const usable = input.messages.filter((m) => !m.is_system && typeof m.mes === "string" && m.mes.length > 0);
+  const kept = [];
+  let used = 0;
+  let dropped = 0;
+  for (let i = usable.length - 1; i >= 0; i--) {
+    const msg = usable[i];
+    const tokens = countTokens(msg.mes);
+    if (used + tokens > budget && kept.length > 0) {
+      dropped = i + 1;
+      break;
+    }
+    used += tokens;
+    kept.unshift({ role: msg.is_user ? "user" : "assistant", content: msg.mes });
+  }
+  if (dropped > 0) warnings.push(`context budget exceeded: dropped ${dropped} oldest message(s)`);
+  const history = [...kept];
+  for (const injection of [...input.depthInjections ?? []].sort((a, b) => b.depth - a.depth)) {
+    const idx = Math.max(0, history.length - injection.depth);
+    history.splice(idx, 0, { role: injection.role, content: expand(injection.text) });
+  }
+  const messages = squashMessages([...preHistory, ...history, ...postHistory], squash);
+  return {
+    messages,
+    stats: {
+      promptTokens: messages.reduce((n, m) => n + countTokens(m.content), 0),
+      historyKept: kept.length,
+      historyDropped: dropped
+    },
+    warnings
+  };
+}
+function wrapAll(wiFormat, texts, expand) {
+  return texts.filter((t) => t.trim().length > 0).map((t) => wiFormat.replace("{0}", expand(t))).join("\n");
+}
+function formatExamples(input, expand) {
+  const example = input.card.data.mesExample.trim();
+  if (example.length === 0) return "";
+  const separator = typeof input.preset.sampler["new_example_chat_prompt"] === "string" ? input.preset.sampler["new_example_chat_prompt"] : "";
+  return `${separator}${expand(example)}`.trim();
+}
+function pushText(target, role, text, squash) {
+  if (text.length === 0) return;
+  if (squash) {
+    const last = target[target.length - 1];
+    if (last !== void 0 && last.role === "system" && role === "system") {
+      last.content += `
+
+${text}`;
+      return;
+    }
+  }
+  target.push({ role, content: text });
+}
+function squashMessages(messages, squash) {
+  if (!squash) return messages;
+  const out = [];
+  for (const m of messages) {
+    const last = out[out.length - 1];
+    if (last !== void 0 && last.role === m.role) {
+      last.content += `
+
+${m.content}`;
+    } else {
+      out.push({ ...m });
+    }
+  }
+  return out;
+}
+function numOr3(v, fallback) {
+  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
+}
+
+// packages/tavern-pipeline/src/group.ts
+function buildGroupTurn(input) {
+  const messages = [];
+  for (const message of input.messages) {
+    if (message.is_system) continue;
+    if (message.is_user) {
+      messages.push(message);
+      continue;
+    }
+    const name2 = message.name || input.speaker;
+    if (name2 === input.speaker) {
+      messages.push(message);
+    } else {
+      messages.push({
+        ...message,
+        is_user: true,
+        mes: `${name2}: ${message.mes}`
+      });
+    }
+  }
+  const nudgeText = input.groupNudgePrompt !== void 0 && input.groupNudgePrompt !== "" ? input.groupNudgePrompt : void 0;
+  return {
+    messages,
+    ...nudgeText !== void 0 ? { nudge: { role: "user", content: nudgeText.replace(/\{\{char\}\}/gi, input.speaker) } } : {}
+  };
+}
+function pickGroupMember(options) {
+  const enabled = options.members.filter((member) => !options.disabled.includes(member));
+  if (enabled.length === 0) return void 0;
+  if (options.explicit !== void 0) {
+    return enabled.includes(options.explicit) ? options.explicit : void 0;
+  }
+  if (options.strategy === 2) {
+    if (enabled.length === 1) return enabled[0];
+    const last = options.lastSpeaker !== void 0 ? enabled.indexOf(options.lastSpeaker) : -1;
+    return enabled[(last + 1) % enabled.length];
+  }
+  const rng = options.rng ?? Math.random;
+  const pool = options.allowSelfResponses || options.lastSpeaker === void 0 ? enabled : enabled.filter((member) => member !== options.lastSpeaker);
+  const candidates = pool.length > 0 ? pool : enabled;
+  if (candidates.length === 1) return candidates[0];
+  const weights = candidates.map((member) => {
+    const value = options.talkativeness(member);
+    return Number.isFinite(value) && value > 0 ? value : 0.5;
+  });
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+  let roll = rng() * total;
+  for (let i = 0; i < candidates.length; i++) {
+    roll -= weights[i];
+    if (roll <= 0) return candidates[i];
+  }
+  return candidates[candidates.length - 1];
+}
+
+// packages/plugin/src/agent-tavern/preset.ts
+init_cross_bundle_events();
+var AGENT_PRESET_BLOCK_HEADER = "Chat completion preset (user-configured prompt stack; follow these instructions together with the kernel):";
+function effectiveAgentPresetPrompts(preset, card) {
+  const order = resolvePromptOrder(preset);
+  const byId = new Map(preset.prompts.map((prompt) => [prompt.identifier, prompt]));
+  const effective = [];
+  for (const slot of order) {
+    const prompt = byId.get(slot.identifier);
+    if (prompt === void 0 || prompt.marker === true) continue;
+    if (!entryEnabled(slot, prompt)) continue;
+    const content = applyCardOverride(prompt.identifier, promptContent(prompt), card);
+    const trimmed = content.trim();
+    if (trimmed === "") continue;
+    effective.push({
+      identifier: prompt.identifier,
+      name: typeof prompt.name === "string" ? prompt.name : prompt.identifier,
+      role: promptRole(prompt),
+      content: trimmed
+    });
+  }
+  return effective;
+}
+function renderAgentPresetBlock(preset, card, header = AGENT_PRESET_BLOCK_HEADER) {
+  const prompts = effectiveAgentPresetPrompts(preset, card);
+  if (prompts.length === 0) return void 0;
+  return [header, ...prompts.map((prompt) => prompt.content)].join("\n\n");
+}
+function presetTemperature(preset) {
+  const value = preset.sampler["temperature"];
+  return typeof value === "number" && Number.isFinite(value) ? value : void 0;
+}
+function defaultPreset() {
+  const prompts = [
+    { name: "Main Prompt", system_prompt: true, role: "system", content: "Write {{char}}'s next reply in a fictional roleplay chat between {{char}} and {{user}}. Stay in character and never write dialogue or actions for {{user}}.", identifier: "main" },
+    { identifier: "worldInfoBefore", name: "World Info (before)", system_prompt: true, marker: true },
+    { identifier: "personaDescription", name: "Persona", system_prompt: true, marker: true },
+    { identifier: "charDescription", name: "Character Description", system_prompt: true, marker: true },
+    { identifier: "charPersonality", name: "Character Personality", system_prompt: true, marker: true },
+    { identifier: "scenario", name: "Scenario", system_prompt: true, marker: true },
+    { identifier: "worldInfoAfter", name: "World Info (after)", system_prompt: true, marker: true },
+    { identifier: "dialogueExamples", name: "Dialogue Examples", system_prompt: true, marker: true },
+    { identifier: "chatHistory", name: "Chat History", system_prompt: true, marker: true },
+    { name: "Post-History Instructions", system_prompt: true, role: "system", content: "", identifier: "jailbreak" }
+  ];
+  return {
+    temperature: 1,
+    openai_max_context: 32768,
+    openai_max_tokens: 800,
+    wi_format: "{0}",
+    scenario_format: "{{scenario}}",
+    personality_format: "{{personality}}",
+    prompts,
+    prompt_order: [{ character_id: GLOBAL_ORDER_DUMMY_ID, order: prompts.map((prompt) => ({ identifier: prompt.identifier, enabled: true })) }]
+  };
+}
+var agentPresetChanged = createGlobalListenerRegistry("dsh-soulmojito:agent-preset-changed-listeners");
+function onAgentPresetChanged(listener) {
+  return agentPresetChanged.on(listener);
+}
+function emitAgentPresetChanged() {
+  return agentPresetChanged.emit();
+}
+function promptContent(prompt) {
+  const content = prompt["content"];
+  return typeof content === "string" ? content : "";
+}
+function promptRole(prompt) {
+  const role = prompt["role"];
+  return role === "user" || role === "assistant" ? role : "system";
+}
+function applyCardOverride(identifier, content, card) {
+  const override = identifier === "main" ? card?.data.systemPrompt.trim() : identifier === "jailbreak" ? card?.data.postHistoryInstructions.trim() : "";
+  if (override === void 0 || override === "") return content;
+  return override.replace(/\{\{original\}\}/gi, content);
+}
 
 // packages/plugin/src/http/novel.ts
 init_src();
@@ -41150,6 +40883,74 @@ init_deduce();
 // packages/plugin/src/agent-tavern/agent.ts
 init_guides();
 init_handle();
+
+// packages/plugin/src/lazy-projection.ts
+function createLazyProjection(options) {
+  const cache2 = /* @__PURE__ */ new Map();
+  const started = /* @__PURE__ */ new Set();
+  const tickets = /* @__PURE__ */ new Map();
+  let preheatDone = false;
+  async function load(agentId, state) {
+    const ticket = (tickets.get(agentId) ?? 0) + 1;
+    tickets.set(agentId, ticket);
+    const settle = (value) => {
+      if (tickets.get(agentId) === ticket) cache2.set(agentId, value);
+    };
+    try {
+      await options.load(agentId, settle, state);
+    } catch {
+    }
+  }
+  async function refreshAll() {
+    let state;
+    try {
+      state = await options.getState();
+    } catch {
+      state = void 0;
+    }
+    for (const agentId of [...started]) await enqueueLoad(agentId, state);
+  }
+  async function refreshWhere(match) {
+    try {
+      const state = await options.getState();
+      for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
+        if (!match(binding)) continue;
+        started.add(agentId);
+        await enqueueLoad(agentId);
+      }
+    } catch {
+    }
+  }
+  const loadChains = /* @__PURE__ */ new Map();
+  function enqueueLoad(agentId, state) {
+    const next = (loadChains.get(agentId) ?? Promise.resolve()).then(() => load(agentId, state), () => load(agentId, state));
+    loadChains.set(agentId, next.catch(() => void 0));
+    return next;
+  }
+  return {
+    valueOf(agentId) {
+      if (typeof agentId !== "string" || agentId.trim() === "") return void 0;
+      if (!started.has(agentId)) {
+        started.add(agentId);
+        void enqueueLoad(agentId);
+      }
+      return cache2.get(agentId);
+    },
+    refreshWhere,
+    refreshAll,
+    preheatWhere(match) {
+      if (preheatDone) return Promise.resolve();
+      preheatDone = true;
+      return refreshWhere(match);
+    },
+    preheatAll(agentIds) {
+      for (const agentId of agentIds) started.add(agentId);
+      return refreshAll();
+    }
+  };
+}
+
+// packages/plugin/src/agent-tavern/agent.ts
 init_cross_bundle();
 
 // packages/plugin/src/mods/agent-mount.ts
@@ -42068,7 +41869,7 @@ function assembleResult(allActivated, diagnostics, timedState) {
 init_tavern_assets();
 
 // packages/plugin/src/agent-tavern/tools/shared.ts
-var DEFAULT_USER4 = "User";
+var DEFAULT_USER3 = "User";
 function tool(name2, description, properties, schema, execute) {
   return {
     name: name2,
@@ -42261,7 +42062,7 @@ var gamesSummaryProjection = createLazyProjection({
       ...lines,
       "\u8F6E\u5230\u4F60\u65F6\u5148 game_state \u8BFB\u5C40\u9762\u3001\u518D\u7528 game_move \u843D\u5B50\uFF1B\u843D\u5230\u4EBA\u7C7B\u56DE\u5408\u7ACB\u5373\u8C03\u7528 game_wait \u963B\u585E\u7B49\u5F85\u5BF9\u65B9\u5728\u68CB\u76D8\u4E0A\u843D\u5B50\uFF08\u5BF9\u65B9\u65E0\u9700\u53D1\u9001\u804A\u5929\u6D88\u606F\uFF1Bwait \u53EA\u8FD4\u56DE\u7B49\u5F85\u671F\u589E\u91CF\u2014\u2014\u8BE5\u624B\u4E0E\u8F6E\u6B21\uFF09\u3002\u5C40\u9762\u590D\u6742\u3001\u9700\u8981\u770B\u7740\u68CB\u76D8\u51B3\u7B56\u7684\u5BF9\u5C40\u6539\u7528 game_wait_full\uFF1A\u540C\u6B3E\u7B49\u5F85\uFF0C\u8FD4\u56DE\u9644\u5E26\u68CB\u76D8\u5C40\u9762\uFF08state + legal\uFF09\uFF0C\u65E0\u9700\u518D\u8DDF\u53D1 game_state\u3002\u5DE5\u5177\u8FD4\u56DE\u540E\u81EA\u52A8\u7EE7\u7EED\uFF1Bdescribe/summary \u6587\u6848\u53EF\u76F4\u63A5\u7528\u4E8E\u5BF9\u8BDD\u53D9\u8FF0\u8FD9\u4E00\u624B\uFF0C\u5F80\u624B\u7528 game_history \u67E5\u8BE2\u3002"
     ].join("\n");
-    const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER4);
+    const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER3);
     settle(hostPromptSafe(text, expand));
   }
 });
@@ -42333,7 +42134,7 @@ var scriptSummaryProjection = createLazyProjection({
     const binding = state.sessionBindings[agentId];
     if (!binding || binding.architecture !== "agent-tavern") return;
     const text = await scriptSummaryForChat(db, binding.character, binding.chatId);
-    const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER4);
+    const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER3);
     settle(hostPromptSafe(text, expand));
   }
 });
@@ -42428,7 +42229,7 @@ var factsProjection = createLazyProjection({
     const storedSummary = identitySummaryOf(found.card.data);
     const persona = state.activePersona ? await db.getPersona(state.activePersona) : void 0;
     const personaName = persona?.name ?? state.activePersona;
-    const expand = createHostPromptExpander(data.nickname || data.name, personaName ?? DEFAULT_USER4);
+    const expand = createHostPromptExpander(data.nickname || data.name, personaName ?? DEFAULT_USER3);
     settle(hostPromptSafe([
       personaName ? `Current user persona: ${personaName}` : "",
       // 用户人设描述进固定 prompt（ST 的 personaDescription 同位）。上限 1200
@@ -42454,7 +42255,7 @@ var guidesProjection = createLazyProjection({
     const binding = state.sessionBindings[agentId];
     if (!binding || binding.architecture !== "agent-tavern") return;
     const chat = await db.getChat(binding.character, binding.chatId);
-    const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER4);
+    const expand = createHostPromptExpander(binding.character, state.activePersona ?? DEFAULT_USER3);
     settle(hostPromptSafe(formatGuidesBlock(chat?.header.chat_metadata?.guides) ?? "", expand));
   }
 });
@@ -42481,7 +42282,7 @@ var presetProjection = createLazyProjection({
     presetFreeze.set(agentId, freeze2);
     const expand = createHostPromptExpander(
       character?.card.data.nickname || character?.card.data.name || binding.character,
-      state.activePersona ?? DEFAULT_USER4,
+      state.activePersona ?? DEFAULT_USER3,
       { now: () => new Date(freeze2.frozenAt), rng: seededRandom(freeze2.seed) }
     );
     const temperature = presetTemperature(preset);
@@ -42741,6 +42542,20 @@ function textBlocks(content) {
 // packages/plugin/src/http/novel.ts
 init_deduce();
 init_runtime2();
+
+// packages/plugin/src/session/preset-marker.ts
+function lastSelectedPresetId(session) {
+  const events = sessionEvents(session);
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event?.type !== "agent-preset/selected") continue;
+    const preset = event.data?.agentPreset;
+    if (typeof preset === "string") return preset;
+  }
+  return void 0;
+}
+
+// packages/plugin/src/http/novel.ts
 init_io();
 var CARD_WORKBENCH_PRESET_ID = "card-workbench";
 var NOVEL_SUBPATHS = [
@@ -43435,365 +43250,13 @@ async function ensureAgentPresetDeclared(ctx, presetId) {
   }
 }
 
-// packages/plugin/src/session/command.ts
-function registerTavernSessionCommand(ctx) {
-  ctx.commands.register({
-    // Internal bridge for the client binding API. It is intentionally separate
-    // from the public slash-command surface.
-    name: "dsh-soulmojito-session",
-    description: "internal dsh-soulmojito session bridge",
-    input: { hint: "<character> <chat-id>" },
-    recordInput: false,
-    handler: async ({ agent, rawInput }) => {
-      const parsed = parseTavernSessionCommand(rawInput);
-      if (!parsed) return { kind: "error", text: "Invalid Tavern activation payload." };
-      const db = await store3();
-      if (parsed.action === "close") {
-        await db.updateState((state) => {
-          const sessionBindings = { ...state.sessionBindings };
-          delete sessionBindings[agent.id];
-          return { sessionBindings };
-        });
-        const closed = confirmSessionAppend({
-          session: agent.session,
-          logger: ctx.logger,
-          label: `Tavern close marker (${agent.id})`,
-          append: () => agent.session.append("user/message", createMessage({
-            role: "user",
-            content: [{ type: "text", text: "Tavern roleplay mode closed." }],
-            source: hostPluginMessageSource(agent.session, {
-              form: "notice",
-              summary: "Tavern closed"
-            })
-          }), { surfaceOp: "append" }),
-          present: (events) => events.some((event) => event.type === "user/message" && isTavernSessionMarker(event.data?.source) && event.data?.source?.summary === "Tavern closed")
-        });
-        if (!closed) {
-          throw new Error(`dsh-soulmojito: the Tavern close marker could not be confirmed in session '${agent.id}' after a rewrite; the host accepted the append but the read-back found no trace`);
-        }
-        return { kind: "success", text: "Tavern closed" };
-      }
-      if (parsed.action === "novel-open") {
-        return handleNovelOpenCommand(ctx, agent, parsed.novelId);
-      }
-      if (parsed.action === "workbench-open") {
-        return handleWorkbenchOpenCommand(ctx, agent, parsed);
-      }
-      const chatSnapshot = await db.getChatSnapshot(parsed.character, parsed.chatId);
-      if (!chatSnapshot) return { kind: "error", text: "Tavern chat not found." };
-      const chat = chatSnapshot.chat;
-      const currentState = await db.getState();
-      const previous = currentState.sessionBindings[agent.id];
-      const initializeAgentTavern = parsed.architecture === "agent-tavern" && (previous?.architecture !== "agent-tavern" || previous.initializationPending === true);
-      const shouldPreloadAssets = initializeAgentTavern && parsed.group !== true && currentState.agentTavernPreloadAssets === true;
-      let preloadSnapshot;
-      let historyImport;
-      await assertAgentTavernAvailable(parsed.architecture, parsed.contextMode);
-      if (parsed.architecture === "agent-tavern") {
-        const sameTavernBinding = previous?.architecture === "agent-tavern" && previous.character === parsed.character && previous.chatId === parsed.chatId;
-        const activationEvents = sessionEvents(agent.session);
-        const sessionStarted = activationEvents.some((event) => event.type === "turn/start");
-        const historyImported = activationEvents.some((event) => {
-          if (event.type !== "user/message" && event.type !== "assistant/message") return false;
-          const source = event.type === "user/message" ? event.data?.source : event.data?.message?.source;
-          return isTavernSessionMarker(source);
-        });
-        if ((sessionStarted || historyImported) && !sameTavernBinding) {
-          throw new TavernArchitectureConflictError("This host session already started; AgentTavern preset selection is locked.");
-        }
-        if (typeof ctx.agentPresets?.recompose !== "function") {
-          throw new TavernArchitectureConflictError("The host cannot recompose a blank session with the AgentTavern preset.");
-        }
-        const character = parsed.group !== true && (initializeAgentTavern || shouldPreloadAssets) ? await db.getCharacter(parsed.character) : void 0;
-        if (initializeAgentTavern && character !== void 0 && seedJsrMvuVariables(character.card, ensureChatVariables(chat))) {
-          await db.saveChat(parsed.character, parsed.chatId, chat, chatSnapshot.revision);
-        }
-        if (initializeAgentTavern && parsed.group !== true) {
-          historyImport = sessionStarted || historyImported ? void 0 : historyImportAppends(chat, agent.id, character ? await collectSessionRegexScripts(db, currentState, parsed.character, parsed.chatId, character) : [], tavernMacroExpand(currentState, parsed.character, character), agent.session);
-        }
-        if (shouldPreloadAssets) {
-          if (typeof agent.inject !== "function") {
-            throw new TavernArchitectureConflictError("This host cannot preload AgentTavern session context.");
-          }
-          if (!character) throw new Error("Tavern character not found.");
-          preloadSnapshot = await buildAgentTavernPreloadSnapshot(db, currentState, parsed.character, character, tavernMacroExpand(currentState, parsed.character, character));
-        }
-        const lastSelected = lastSelectedPresetId(agent.session);
-        if (lastSelected !== AGENT_TAVERN_PRESET_ID) {
-          if (sessionStarted && lastSelected !== void 0) {
-            throw new TavernArchitectureConflictError(`This host session already started under preset '${lastSelected}'; AgentTavern cannot be re-selected.`);
-          }
-          const preset = await ctx.agentPresets.recompose(agent.ctx, AGENT_TAVERN_PRESET_ID);
-          const selected = confirmSessionAppend({
-            session: agent.session,
-            logger: ctx.logger,
-            label: `AgentTavern preset marker (${agent.id})`,
-            append: () => agent.session.append("agent-preset/selected", { agentPreset: preset.id }),
-            present: () => lastSelectedPresetId(agent.session) === preset.id
-          });
-          if (!selected) {
-            throw new Error(`dsh-soulmojito: the AgentTavern preset marker could not be confirmed in session '${agent.id}' after a rewrite; the session would silently lose its preset identity on reload`);
-          }
-        }
-      }
-      await bindSession(
-        db,
-        agent.id,
-        parsed.character,
-        parsed.chatId,
-        parsed.group === true,
-        parsed.architecture,
-        parsed.contextMode
-      );
-      if (parsed.architecture === "agent-tavern") {
-        await emitAgentPresetChanged();
-      }
-      if (preloadSnapshot !== void 0) {
-        if (agent.inject === void 0) {
-          throw new TavernArchitectureConflictError("This host cannot preload AgentTavern session context.");
-        }
-        agent.inject(createMessage({
-          role: "user",
-          content: [{ type: "text", text: preloadSnapshot }],
-          source: hostPluginMessageSource(agent.session, {
-            form: "notice",
-            summary: `AgentTavern preload: ${parsed.character}`
-          })
-        }));
-      }
-      if (historyImport !== void 0) {
-        applyAgentTavernHistoryImport({
-          agent,
-          plan: historyImport,
-          ...ctx.logger === void 0 ? {} : { logger: ctx.logger }
-        });
-      }
-      await refreshActivePrompt();
-      if (parsed.architecture === "st") {
-        occupyHostSession(agent, ctx);
-        const markerSummary = `Tavern: ${parsed.character}`;
-        const markerPresent = (events) => events.some((event) => event.type === "user/message" && isTavernSessionMarker(event.data?.source) && event.data?.source?.summary === markerSummary);
-        const bindingChanged = previous?.character !== parsed.character || previous.chatId !== parsed.chatId;
-        if (bindingChanged || !markerPresent(sessionEvents(agent.session))) {
-          const activated = confirmSessionAppend({
-            session: agent.session,
-            logger: ctx.logger,
-            label: `Tavern activation marker (${parsed.character})`,
-            append: () => agent.session.append("user/message", createMessage({
-              role: "user",
-              content: [{ type: "text", text: `Tavern roleplay chat for ${parsed.character}.` }],
-              source: hostPluginMessageSource(agent.session, { form: "notice", summary: markerSummary })
-            }), { surfaceOp: "append" }),
-            present: markerPresent
-          });
-          if (!activated) {
-            throw new Error(`dsh-soulmojito: the Tavern activation marker could not be confirmed in session '${agent.id}' after a rewrite; the client composer would never take over an unmarked session`);
-          }
-        }
-      }
-      return { kind: "success", text: `Tavern: ${parsed.character}` };
-    }
-  });
-}
-
-// packages/plugin/src/session/reclaim.ts
-var REMOVED_ID_SAMPLE_LIMIT = 20;
-function resolveSessionBindingReclaimConfig(configured) {
-  if (configured === void 0 || configured === null) return { mode: "off", supported: true };
-  if (configured === "report" || configured === "prune") return { mode: configured, supported: true };
-  return { mode: "off", supported: false };
-}
-async function reclaimStaleSessionBindings(input) {
-  const log2 = logSink(input.logger);
-  if (input.mode === "off") return { status: "off" };
-  const live = liveSessionIds(input.agents, input.sessions);
-  if (live === void 0) {
-    log2.warn("dsh-soulmojito session-bindings: reclaim skipped", { operation: "reclaim-session-bindings", reason: "host-live-signal", configuredMode: input.mode });
-    return { status: "skipped", reason: "host-live-signal" };
-  }
-  const stored = await storedSessionIds(input.persistence);
-  if (stored.status !== "ok") {
-    const reason = storedSkipReason(stored.status);
-    log2.warn("dsh-soulmojito session-bindings: reclaim skipped", {
-      operation: "reclaim-session-bindings",
-      reason,
-      configuredMode: input.mode,
-      ...stored.errorCode === void 0 ? {} : { errorCode: stored.errorCode }
-    });
-    return { status: "skipped", reason };
-  }
-  const db = await input.store();
-  const bindings2 = (await db.getState()).sessionBindings;
-  const sessionIds = Object.keys(bindings2);
-  let keptLive = 0;
-  let keptStored = 0;
-  const remove = /* @__PURE__ */ new Set();
-  try {
-    for (const sessionId of sessionIds) {
-      if (live.has(sessionId)) {
-        keptLive += 1;
-      } else if (stored.ids.has(sessionId)) {
-        keptStored += 1;
-      } else if (await persistedSessionExists(input.persistence, sessionId)) {
-        keptStored += 1;
-      } else {
-        remove.add(sessionId);
-      }
-    }
-  } catch (error) {
-    log2.warn("dsh-soulmojito session-bindings: reclaim skipped", {
-      operation: "reclaim-session-bindings",
-      reason: "session-storage-error",
-      configuredMode: input.mode,
-      errorCode: errorCodeText2(error)
-    });
-    return { status: "skipped", reason: "session-storage-error" };
-  }
-  const pruned = input.mode === "prune" ? await db.pruneSessionBindings(remove) : void 0;
-  const removed = pruned === void 0 ? [] : pruned.removed;
-  const report = {
-    mode: input.mode,
-    scanned: sessionIds.length,
-    keptLive,
-    keptStored,
-    stale: remove.size,
-    removed: removed.length,
-    // `retained` 只来自删除后的真实表长（store 返回），不能用「扫描数 − 删除数」
-    // 反推：两者来自不同快照，并发写入会让差值失真（甚至为负）。
-    retained: pruned === void 0 ? sessionIds.length : pruned.retained
-  };
-  log2.info("dsh-soulmojito session-bindings: reclaim summary", {
-    ...report,
-    operation: "reclaim-session-bindings",
-    // 删除动作要能事后审计：`prune` 带被删 id（截断样本，总数看 `removed`）；
-    // `report` 保持只计数。
-    ...pruned === void 0 ? {} : { removedIdSample: removedIdSample(removed) }
-  });
-  return { status: "done", report };
-}
-async function registerSessionBindingReclaim(ctx, deps) {
-  const log2 = logSink(ctx.logger);
-  const resolved = resolveSessionBindingReclaimConfig(deps.configured);
-  if (resolved.mode === "off") {
-    if (!resolved.supported) {
-      log2.warn("dsh-soulmojito session-bindings: unsupported pruneStaleBindings value; reclaim stays off", {
-        operation: "reclaim-session-bindings",
-        reason: "unsupported-config",
-        configType: typeof deps.configured
-      });
-    }
-    return;
-  }
-  try {
-    await reclaimStaleSessionBindings({
-      mode: resolved.mode,
-      store: deps.store,
-      agents: ctx.agents,
-      sessions: ctx.sessions,
-      persistence: persistenceSeam(ctx),
-      logger: ctx.logger
-    });
-  } catch (error) {
-    log2.warn("dsh-soulmojito session-bindings: reclaim failed", {
-      operation: "reclaim-session-bindings",
-      configuredMode: resolved.mode,
-      errorCode: errorCodeText2(error)
-    });
-  }
-}
-function liveSessionIds(agents, sessions) {
-  if (typeof agents?.list !== "function" || typeof sessions?.list !== "function") return void 0;
-  const ids = /* @__PURE__ */ new Set();
-  for (const agent of agents.list()) {
-    const agentId = agent?.id;
-    const agentSessionId = agent?.session?.id;
-    let readable = false;
-    if (typeof agentId === "string" && agentId !== "") {
-      ids.add(agentId);
-      readable = true;
-    }
-    if (typeof agentSessionId === "string" && agentSessionId !== "") {
-      ids.add(agentSessionId);
-      readable = true;
-    }
-    if (!readable) return void 0;
-  }
-  for (const session of sessions.list()) {
-    const sessionId = session?.id;
-    if (typeof sessionId !== "string" || sessionId === "") return void 0;
-    ids.add(sessionId);
-  }
-  return ids;
-}
-function storedSkipReason(status2) {
-  if (status2 === "unavailable") return "session-storage-unavailable";
-  if (status2 === "incomplete") return "session-storage-incomplete";
-  return "session-storage-error";
-}
-async function storedSessionIds(persistence) {
-  if (persistence === void 0) return { status: "unavailable", ids: /* @__PURE__ */ new Set() };
-  let entries;
-  try {
-    entries = await persistence.list();
-  } catch (error) {
-    return { status: "error", ids: /* @__PURE__ */ new Set(), errorCode: errorCodeText2(error) };
-  }
-  const ids = /* @__PURE__ */ new Set();
-  for (const entry of entries) {
-    const sessionId = entry?.header?.id;
-    if (typeof sessionId !== "string" || sessionId === "") return { status: "incomplete", ids: /* @__PURE__ */ new Set() };
-    ids.add(sessionId);
-  }
-  return { status: "ok", ids };
-}
-async function persistedSessionExists(persistence, sessionId) {
-  if (persistence === void 0) throw new Error("session persistence seam is missing");
-  return await persistence.stat(sessionId) !== void 0;
-}
-function persistenceSeam(ctx) {
-  const candidate = ctx.get?.("sessionPersistence");
-  if (typeof candidate !== "object" || candidate === null) return void 0;
-  const seam = candidate;
-  if (typeof seam.list !== "function" || typeof seam.stat !== "function") return void 0;
-  return candidate;
-}
-function logSink(logger) {
-  return {
-    info: (message, fields) => {
-      try {
-        logger?.info?.(message, fields);
-      } catch {
-      }
-    },
-    warn: (message, fields) => {
-      try {
-        logger?.warn?.(message, fields);
-      } catch {
-      }
-    }
-  };
-}
-function errorCodeText2(error) {
-  if (typeof error === "object" && error !== null && "code" in error) {
-    const code = error.code;
-    if (typeof code === "string" && code !== "") return code;
-  }
-  return error instanceof Error ? error.name : String(error);
-}
-function removedIdSample(removed) {
-  return removed.slice(0, REMOVED_ID_SAMPLE_LIMIT);
-}
-
-// packages/plugin/src/im/runtime.ts
-init_env_compat();
-
 // packages/plugin/src/http/router.ts
 init_src2();
 init_src();
 import { createReadStream, createWriteStream } from "node:fs";
 import { mkdtemp, rm as rm2 } from "node:fs/promises";
 import { tmpdir as tmpdir4 } from "node:os";
-import { join as join27 } from "node:path";
+import { join as join28 } from "node:path";
 import { pipeline } from "node:stream/promises";
 
 // packages/tavern-frontend-storage/src/idb-store.ts
@@ -44299,7 +43762,7 @@ var CANDIDATE_HISTORY_WINDOW = 10;
 var CANDIDATE_MAX_COUNT = 6;
 var CANDIDATE_MAX_TEXT_LENGTH = 200;
 var CANDIDATE_CARD_EXCERPT = 1500;
-var DEFAULT_USER5 = "User";
+var DEFAULT_USER4 = "User";
 function excerpt(text, max2) {
   if (typeof text !== "string") return void 0;
   const trimmed = text.trim();
@@ -44488,7 +43951,7 @@ async function runCandidateGeneration(ctx, db, options) {
       personality: character.card.data.personality,
       scenario: character.card.data.scenario
     },
-    userName: state.activePersona ?? DEFAULT_USER5,
+    userName: state.activePersona ?? DEFAULT_USER4,
     history: chat.messages.filter((m) => !m.is_system).map((m) => ({ name: m.name, isUser: m.is_user, text: m.mes })),
     guides: readGuides(chat),
     ...feedback !== void 0 ? { feedback } : {},
@@ -51349,6 +50812,63 @@ async function imStoreWriteSecret(file, record) {
   }
 }
 
+// packages/plugin/src/im/runtime.ts
+init_env_compat();
+init_dsh_home();
+init_handle2();
+
+// packages/plugin/src/im/onebot/seat.ts
+init_handle2();
+var ONEBOT_SEAT_KEY = "dsh-soulmojito:im-onebot-upgrade-seat";
+var seatSymbol = Symbol.for(ONEBOT_SEAT_KEY);
+function ensureOneBotUpgradeSeat(host, path12) {
+  if (host === void 0 || typeof host.registerUpgrade !== "function") {
+    return {
+      registered: false,
+      reason: "the host exposes no webServer.registerUpgrade; OneBot reverse WebSocket is unavailable (HTTP POST webhook still works)"
+    };
+  }
+  const holder = globalThis;
+  if (holder[seatSymbol]?.path === path12) return { registered: true };
+  try {
+    host.registerUpgrade.call(host, {
+      path: path12,
+      handler: (req, socket, head) => dispatchUpgrade(req, socket, head)
+    });
+  } catch (error) {
+    return {
+      registered: false,
+      reason: `registering the OneBot upgrade route at ${path12} failed: ${error instanceof Error ? error.message : String(error)}`
+    };
+  }
+  holder[seatSymbol] = { path: path12 };
+  return { registered: true };
+}
+function dispatchUpgrade(req, socket, head) {
+  const runtime = resolveImRuntime();
+  const handler = runtime?.handleOneBotUpgrade;
+  if (handler === void 0) {
+    rejectUpgrade2(socket, "IM runtime is not available; the OneBot endpoint is closed");
+    return;
+  }
+  void Promise.resolve(handler(req, socket, head)).catch(() => {
+    rejectUpgrade2(socket, "OneBot upgrade handling failed");
+  });
+}
+function rejectUpgrade2(socket, reason) {
+  const duplex = socket;
+  if (duplex.destroyed) return;
+  try {
+    duplex.write(`HTTP/1.1 503 Service Unavailable\r
+Connection: close\r
+Content-Length: ${Buffer.byteLength(reason)}\r
+\r
+${reason}`);
+  } finally {
+    duplex.destroy();
+  }
+}
+
 // packages/plugin/src/im/weixin/api.ts
 init_build_info();
 import { randomBytes as randomBytes5, randomUUID as randomUUID14 } from "node:crypto";
@@ -53788,6 +53308,1778 @@ function messageOf12(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+// packages/plugin/src/im/weixin/context-tokens.ts
+import { randomUUID as randomUUID15 } from "node:crypto";
+import { promises as fs22 } from "node:fs";
+import { dirname as dirname15, join as join26, resolve as resolve7 } from "node:path";
+var WeixinContextTokenError = class extends Error {
+  code;
+  path;
+  constructor(code, message, path12) {
+    super(message);
+    this.name = "WeixinContextTokenError";
+    this.code = code;
+    this.path = path12;
+  }
+};
+var ACCOUNT_ID_PATTERN2 = /^[A-Za-z0-9._-]+$/;
+var FILE_MODE2 = 384;
+function openWeixinContextTokens(root, accountId) {
+  if (!ACCOUNT_ID_PATTERN2.test(accountId) || accountId === "." || accountId === "..") {
+    throw new TypeError(
+      `weixin context token store got an illegal accountId ${JSON.stringify(accountId)}: only [A-Za-z0-9._-] is allowed`
+    );
+  }
+  const file = join26(resolve7(root), "weixin", accountId, "context-tokens.json");
+  return {
+    load: () => loadTokens(file),
+    save: (tokens) => saveTokens(file, tokens),
+    clear: async () => {
+      try {
+        await fs22.rm(file, { force: true });
+      } catch (cause) {
+        throw new WeixinContextTokenError("WEIXIN_TOKEN_STORE_IO", `failed to delete ${file}: ${reasonOf3(cause)}`, file);
+      }
+    }
+  };
+}
+async function loadTokens(file) {
+  let text;
+  try {
+    text = await fs22.readFile(file, "utf8");
+  } catch (cause) {
+    if (isErrno3(cause, "ENOENT")) return {};
+    throw new WeixinContextTokenError("WEIXIN_TOKEN_STORE_IO", `failed to read ${file}: ${reasonOf3(cause)}`, file);
+  }
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch (cause) {
+    throw new WeixinContextTokenError(
+      "WEIXIN_TOKEN_STORE_CORRUPT",
+      `corrupt token file ${file}: not valid JSON: ${reasonOf3(cause)}`,
+      file
+    );
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new WeixinContextTokenError("WEIXIN_TOKEN_STORE_CORRUPT", `corrupt token file ${file}: the top level is not an object`, file);
+  }
+  const tokens = {};
+  for (const [peerId, token] of Object.entries(value)) {
+    if (peerId.trim() === "" || typeof token !== "string" || token === "") {
+      throw new WeixinContextTokenError(
+        "WEIXIN_TOKEN_STORE_CORRUPT",
+        `corrupt token file ${file}: the token for ${JSON.stringify(peerId)} is not a non-empty string`,
+        file
+      );
+    }
+    tokens[peerId] = token;
+  }
+  return tokens;
+}
+async function saveTokens(file, tokens) {
+  const snapshot2 = {};
+  for (const [peerId, token] of Object.entries(tokens)) {
+    if (typeof token !== "string" || token === "") {
+      throw new TypeError(`weixin context token for ${JSON.stringify(peerId)} must be a non-empty string`);
+    }
+    snapshot2[peerId] = token;
+  }
+  const tmp = `${file}.tmp-${randomUUID15()}`;
+  try {
+    await fs22.mkdir(dirname15(file), { recursive: true });
+    await fs22.writeFile(tmp, `${JSON.stringify(snapshot2, null, 2)}
+`, { encoding: "utf8", mode: FILE_MODE2 });
+    await fs22.rename(tmp, file);
+  } catch (cause) {
+    await fs22.rm(tmp, { force: true }).catch(() => void 0);
+    throw new WeixinContextTokenError("WEIXIN_TOKEN_STORE_IO", `failed to write ${file}: ${reasonOf3(cause)}`, file);
+  }
+}
+function isErrno3(cause, code) {
+  return typeof cause === "object" && cause !== null && cause.code === code;
+}
+function reasonOf3(cause) {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+// packages/plugin/src/im/router.ts
+import { randomUUID as randomUUID16 } from "node:crypto";
+import { realpath } from "node:fs/promises";
+import { isAbsolute as isAbsolute2, relative as relative3 } from "node:path";
+
+// packages/plugin/src/im/coalesce.ts
+var IM_COALESCE_WINDOW_MS = 600;
+var IM_COALESCE_MAX_MESSAGES = 8;
+var IM_COALESCE_MAX_CHARS = 4e3;
+function orderInboundEntries(entries) {
+  return [...entries].sort((left, right) => {
+    const leftAt = left.inbound.platformAt ?? left.inbound.receivedAt;
+    const rightAt = right.inbound.platformAt ?? right.inbound.receivedAt;
+    if (leftAt !== rightAt) return leftAt - rightAt;
+    return left.seq - right.seq;
+  });
+}
+function mergedRelayTextOf(items, alias, channel, scope, options) {
+  const scopeLabel = scope === "group" ? "\u7FA4\u804A" : "\u79C1\u804A";
+  const ownerFlag = options?.owner === true ? " owner=1" : options?.ownerItems !== void 0 && options.ownerItems.length > 0 ? ` ownerItems=${options.ownerItems.join(",")}` : "";
+  return [
+    `[IM ${channel}/${scopeLabel} peer=${alias}${ownerFlag}]\uFF08\u8FDE\u7EED ${items.length} \u6761\u6D88\u606F\uFF09`,
+    ...items.map((item) => `[${item.ref}] ${item.body}`),
+    `\uFF08\u8FD9\u662F\u4ECE IM \u8F6C\u53D1\u7ED9\u4F60\u7684\u6D88\u606F\uFF0C\u4E0D\u662F DSH \u7528\u6237\u8F93\u5165\u3002\u56DE\u590D\u8BF7\u8C03\u7528 im_send\uFF0Cpeer \u53C2\u6570\u7528 ${alias}\u3002\uFF09`
+  ].join("\n");
+}
+
+// packages/plugin/src/im/refs.ts
+import { createHash as createHash19 } from "node:crypto";
+var IM_MESSAGE_REF_TTL_MS = 10 * 6e4;
+var IM_MESSAGE_REF_MAX_ENTRIES = 1e3;
+function imMessageRef(dedupeKey) {
+  return `msg-${createHash19("sha256").update(dedupeKey).digest("hex").slice(0, 10)}`;
+}
+function createImMessageRefStore(options) {
+  const entries = /* @__PURE__ */ new Map();
+  function pruneExpired2() {
+    const now = options.now();
+    for (const [ref, entry] of entries) {
+      if (now - entry.at > options.ttlMs) entries.delete(ref);
+    }
+  }
+  return {
+    record(ref, entry) {
+      pruneExpired2();
+      entries.delete(ref);
+      while (entries.size >= options.maxEntries) {
+        const oldest = entries.keys().next();
+        if (oldest.done === true) break;
+        entries.delete(oldest.value);
+      }
+      entries.set(ref, entry);
+    },
+    resolve(ref) {
+      pruneExpired2();
+      return entries.get(ref);
+    },
+    size() {
+      return entries.size;
+    }
+  };
+}
+
+// packages/plugin/src/im/relay.ts
+var IM_OWNER_LINE_PREFIX = "[\u4E3B\u4EBA]";
+var IM_OWNER_ESCAPED_LINE_PREFIX = "\uFF3B\u4E3B\u4EBA\uFF3D";
+var IM_OWNER_RESERVED_NAME = "\u4E3B\u4EBA";
+function normalizeDisplayName(raw) {
+  return raw.normalize("NFKC").replace(/[\u200B-\u200D\uFEFF]/g, "").replace(/[\[\]]/g, "").replace(/\s+/g, " ").trim();
+}
+function escapeOwnerMarkerLines(text) {
+  return text.split("\n").map((line) => line.startsWith(IM_OWNER_LINE_PREFIX) ? `${IM_OWNER_ESCAPED_LINE_PREFIX}${line.slice(IM_OWNER_LINE_PREFIX.length)}` : line).join("\n");
+}
+function relayTextOf(inbound, body, alias, options) {
+  const scope = inbound.scope === "group" ? "\u7FA4\u804A" : "\u79C1\u804A";
+  const ownerFlag = options?.owner === true ? " owner=1" : "";
+  return [
+    `[IM ${inbound.channel}/${scope} peer=${alias} msg=${imMessageRef(inbound.dedupeKey)} time=${new Date(inbound.receivedAt).toISOString()}${ownerFlag}]`,
+    body,
+    `\uFF08\u8FD9\u662F\u4ECE IM \u8F6C\u53D1\u7ED9\u4F60\u7684\u6D88\u606F\uFF0C\u4E0D\u662F DSH \u7528\u6237\u8F93\u5165\u3002\u56DE\u590D\u8BF7\u8C03\u7528 im_send\uFF0Cpeer \u53C2\u6570\u7528 ${alias}\u3002\uFF09`
+  ].join("\n");
+}
+function imUserTextOf(inbound) {
+  const body = inbound.text.trim();
+  const attachments = attachmentSummaryOf(inbound);
+  const composed = inbound.scope === "group" ? `[${displaySenderNameOf(inbound) ?? "\u7FA4\u6210\u5458"}] ${body}`.trim() : body;
+  const withAttachments = attachments === void 0 ? composed : `${composed}${composed === "" ? "" : "\n"}${attachments}`.trim();
+  return withAttachments === "" ? void 0 : escapeOwnerMarkerLines(withAttachments);
+}
+function displaySenderNameOf(inbound) {
+  const name2 = normalizeDisplayName(inbound.senderName);
+  if (name2 === "" || name2 === IM_OWNER_RESERVED_NAME) return void 0;
+  const id = inbound.senderId.trim();
+  if (id.startsWith(name2)) return void 0;
+  return name2;
+}
+function attachmentSummaryOf(inbound) {
+  if (inbound.media.length === 0) return void 0;
+  const labels = inbound.media.slice(0, 6).map((media) => {
+    const label = media.kind === "image" ? "\u56FE\u7247" : media.kind === "voice" ? "\u8BED\u97F3" : media.kind === "video" ? "\u89C6\u9891" : "\u6587\u4EF6";
+    if (media.localPath !== void 0) return `${label}\uFF08${media.localPath}\uFF09`;
+    if (media.url !== void 0) return `${label}\uFF08\u672A\u4E0B\u8F7D\uFF09`;
+    return label;
+  });
+  const rest = inbound.media.length > labels.length ? `\u7B49 ${inbound.media.length} \u4E2A` : "";
+  return `\uFF08\u9644\u4EF6\uFF1A${labels.join("\u3001")}${rest}\uFF09`;
+}
+
+// packages/plugin/src/im/owner-ledger.ts
+function createImOwnerLedger(deps) {
+  async function ownerIdOf(peerKey) {
+    const parts = imPeerKeyParts(peerKey);
+    if (parts === void 0) return void 0;
+    const state = await deps.db.getState();
+    return resolveImOwnerId(parts.channel, parts.accountId, peerKey, {
+      owners: state.imOwners,
+      accountOwners: state.imAccountOwners
+    });
+  }
+  function isOwnerMessage(message, ownerId) {
+    if (ownerId === void 0) return false;
+    return imSenderHash(message.channel, message.accountId, message.senderId) === ownerId;
+  }
+  async function rememberSenders(peerKey, alias, messages) {
+    try {
+      const now = deps.now();
+      const updates = messages.map((message) => ({
+        id: imSenderHash(message.channel, message.accountId, message.senderId),
+        name: message.scope === "group" ? displaySenderNameOf(message) ?? "" : "",
+        lastAt: now
+      }));
+      const options = { maxEntries: IM_SENDERS_MAX_PER_PEER, refreshWindowMs: IM_SENDER_REFRESH_WINDOW_MS };
+      const state = await deps.db.getState();
+      if (mergeImSenderEntries(state.imSenders?.[peerKey] ?? [], updates, options) === void 0) {
+        deps.log?.note("debug", `sender refresh for ${alias} is within the ${IM_SENDER_REFRESH_WINDOW_MS}ms write window; state not rewritten`);
+        return;
+      }
+      await deps.db.updateState((current) => {
+        const merged = mergeImSenderEntries(current.imSenders?.[peerKey] ?? [], updates, options);
+        if (merged === void 0) return {};
+        return { imSenders: { ...current.imSenders ?? {}, [peerKey]: merged } };
+      });
+    } catch (error) {
+      deps.log?.note("warn", `could not record recent senders for ${alias}; the message was delivered: ${messageOf13(error)}`);
+    }
+  }
+  return { ownerIdOf, isOwnerMessage, rememberSenders };
+}
+function messageOf13(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+// packages/plugin/src/im/commands.ts
+var IM_COMMAND_DENIED = "\u53EA\u6709\u5168\u5C40\u4E3B\u4EBA\u53EF\u4EE5\u4F7F\u7528\u6307\u4EE4";
+var IM_COMMAND_CHANNEL_UNSUPPORTED = "\u5FAE\u4FE1\u6E20\u9053\u4E0D\u652F\u6301\u6307\u4EE4\uFF08\u5FAE\u4FE1\u4E0D\u9700\u8981\u8BBE\u7F6E\u4E3B\u4EBA\uFF09";
+var IM_COMMAND_USAGE = "\u53EF\u7528\u6307\u4EE4\uFF1A/status\u3001/bind <sessionId>\u3001/unbind\u3001/help";
+var IM_COMMAND_BIND_USAGE = "\u7528\u6CD5\uFF1A/bind <sessionId>";
+var IM_COMMAND_HELP = [
+  "\u53EF\u7528\u6307\u4EE4\uFF08\u53EA\u6709\u8D26\u53F7\u7684\u5168\u5C40\u4E3B\u4EBA\u53EF\u4EE5\u4F7F\u7528\uFF09\uFF1A",
+  "/status \u67E5\u770B\u5F53\u524D\u72B6\u6001",
+  "/bind <sessionId> \u628A\u672C\u5BF9\u8BDD\u7ED1\u5230\u6307\u5B9A\u4F1A\u8BDD",
+  "/unbind \u89E3\u9664\u672C\u5BF9\u8BDD\u7684\u7ED1\u5B9A",
+  "/help \u67E5\u770B\u8FD9\u4EFD\u5E2E\u52A9"
+].join("\n");
+var IM_COMMAND_UNBOUND_OK = "\u5DF2\u89E3\u9664\u672C\u5BF9\u8BDD\u7684\u7ED1\u5B9A";
+var IM_COMMAND_UNBOUND_NONE = "\u672C\u5BF9\u8BDD\u5F53\u524D\u672A\u7ED1\u5B9A";
+var IM_MENTION_PREFIX = /^(?:<@!?[A-Za-z0-9_.:-]+>|@[A-Za-z0-9_.:-]+)/;
+function imCommandTextOf(text) {
+  let candidate = text.trim();
+  for (; ; ) {
+    const mention = IM_MENTION_PREFIX.exec(candidate);
+    if (mention === null) break;
+    candidate = candidate.slice(mention[0].length).trimStart();
+  }
+  return candidate.startsWith("/") ? candidate : void 0;
+}
+function isImCommandText(text) {
+  return imCommandTextOf(text) !== void 0;
+}
+function parseImCommand(text) {
+  const candidate = imCommandTextOf(text);
+  if (candidate === void 0) return void 0;
+  const body = candidate.slice(1);
+  const spaceAt = body.search(/\s/);
+  if (spaceAt < 0) return { name: body.toLowerCase(), argument: "" };
+  return {
+    name: body.slice(0, spaceAt).toLowerCase(),
+    argument: body.slice(spaceAt + 1).trim()
+  };
+}
+function imMaskSessionId(sessionId) {
+  const trimmed = sessionId.trim();
+  return trimmed.length > 12 ? `${trimmed.slice(0, 8)}\u2026` : trimmed;
+}
+async function handleImCommandIfAny(wiring, inbound, peerKey, sendNotice) {
+  if (!isImCommandText(inbound.text)) return false;
+  await handleImCommand({
+    db: wiring.db,
+    now: wiring.now,
+    seenDedupe: wiring.seenDedupe,
+    sendNotice,
+    ...wiring.sendStatuses === void 0 ? {} : { sendStatuses: wiring.sendStatuses },
+    ...wiring.applyImPreset === void 0 ? {} : { applyImPreset: wiring.applyImPreset },
+    ...wiring.log === void 0 ? {} : { log: wiring.log }
+  }, {
+    inbound,
+    peerKey,
+    alias: imPeerAlias(inbound.channel, inbound.scope, peerKey)
+  });
+  return true;
+}
+async function handleImCommand(deps, input) {
+  const { inbound, alias, peerKey } = input;
+  if (await deps.seenDedupe(inbound.dedupeKey, deps.now())) {
+    deps.log?.note("debug", `ignored a duplicate IM command from ${alias} (dedupe)`);
+    return;
+  }
+  const settings = (await deps.db.getState()).imSettings ?? DEFAULT_IM_SETTINGS;
+  if (!imAccessAllows(settings, inbound.scope, inbound.peerId)) {
+    deps.log?.note(
+      "warn",
+      `dropped an IM command from ${alias}: the access policy does not allow this peer (mode is allowlist and the peer is not listed, or the scope is disabled)`
+    );
+    return;
+  }
+  const reply = await runImCommand(deps, { inbound, peerKey, alias });
+  if (reply === void 0) return;
+  void deps.sendNotice(targetOf(inbound), reply, alias).catch((error) => {
+    deps.log?.note("warn", `sending an IM command reply to ${alias} failed: ${messageOf14(error)}`);
+  });
+}
+async function runImCommand(deps, input) {
+  const command = parseImCommand(input.inbound.text);
+  if (command === void 0) return void 0;
+  if (input.inbound.channel === "weixin") return IM_COMMAND_CHANNEL_UNSUPPORTED;
+  const state = await deps.db.getState();
+  const owner = state.imAccountOwners?.[imAccountKey(input.inbound.channel, input.inbound.accountId)];
+  const senderHash = imSenderHash(input.inbound.channel, input.inbound.accountId, input.inbound.senderId);
+  if (owner === void 0 || owner.id !== senderHash) {
+    deps.log?.note("warn", `denied IM command /${command.name} from ${input.alias}: the sender is not the account-global owner`);
+    return IM_COMMAND_DENIED;
+  }
+  deps.log?.note("info", `executed IM command /${command.name} from ${input.alias}`);
+  switch (command.name) {
+    case "status":
+      return statusReply(deps, input, state.imPeers, owner);
+    case "bind":
+      return bindReply(deps, input, command.argument);
+    case "unbind":
+      return unbindReply(deps, input);
+    case "help":
+      return IM_COMMAND_HELP;
+    default:
+      return IM_COMMAND_USAGE;
+  }
+}
+async function bindReply(deps, input, argument) {
+  const sessionId = argument.trim();
+  if (sessionId === "") return IM_COMMAND_BIND_USAGE;
+  const binding = {
+    sessionId,
+    scope: input.inbound.scope,
+    boundBy: "command",
+    createdAt: new Date(deps.now()).toISOString()
+  };
+  await deps.db.updateState((current) => {
+    const pending = { ...current.imPendingPeers ?? {} };
+    delete pending[input.peerKey];
+    return {
+      imPeers: { ...current.imPeers ?? {}, [input.peerKey]: binding },
+      imPendingPeers: pending
+    };
+  });
+  deps.log?.note("info", `bound ${input.alias} to a session by /bind (boundBy=command)`);
+  const preset = await presetNoteOf(deps, sessionId, input.alias);
+  return `\u5DF2\u7ED1\u5B9A\u5230\u4F1A\u8BDD ${imMaskSessionId(sessionId)}\uFF1B${preset}`;
+}
+var IM_COMMAND_PRESET_FAILED = "\u9884\u8BBE\u5207\u6362\u5931\u8D25\uFF08\u8BE6\u89C1\u8FD0\u884C\u65E5\u5FD7\uFF09";
+async function presetNoteOf(deps, sessionId, alias) {
+  if (deps.applyImPreset === void 0) return "\u9884\u8BBE\u672A\u5207\u6362\uFF08\u8FD0\u884C\u65F6\u672A\u63D0\u4F9B\u5207\u6362\u80FD\u529B\uFF09";
+  try {
+    const result = await deps.applyImPreset(sessionId);
+    if (result.applied) return "\u5DF2\u5207\u6362\u5230 AgentTavernIM";
+    const reason = result.reason ?? "unknown reason";
+    if (/running|not open/i.test(reason)) return "\u9884\u8BBE\u5F85\u5207\u6362\uFF08\u4F1A\u8BDD\u672A\u6253\u5F00\u6216\u6B63\u5728\u8FD0\u884C\uFF09";
+    deps.log?.note("warn", `switching the bound session to AgentTavernIM for ${alias} failed: ${reason}`);
+    return IM_COMMAND_PRESET_FAILED;
+  } catch (error) {
+    deps.log?.note("warn", `switching the bound session to AgentTavernIM for ${alias} failed: ${messageOf14(error)}`);
+    return IM_COMMAND_PRESET_FAILED;
+  }
+}
+async function unbindReply(deps, input) {
+  const state = await deps.db.getState();
+  if (state.imPeers?.[input.peerKey] === void 0 && state.imPendingPeers?.[input.peerKey] === void 0) {
+    return IM_COMMAND_UNBOUND_NONE;
+  }
+  await deps.db.updateState((current) => {
+    const peers = { ...current.imPeers ?? {} };
+    const pending = { ...current.imPendingPeers ?? {} };
+    delete peers[input.peerKey];
+    delete pending[input.peerKey];
+    return { imPeers: peers, imPendingPeers: pending };
+  });
+  deps.log?.note("info", `unbound ${input.alias} by /unbind`);
+  return IM_COMMAND_UNBOUND_OK;
+}
+function statusReply(deps, input, peers, owner) {
+  const inbound = input.inbound;
+  const binding = peers?.[input.peerKey];
+  const lines = [
+    "\u72B6\u6001",
+    `\u6E20\u9053\uFF1A${inbound.channel} \xB7 ${inbound.scope === "group" ? "\u7FA4\u804A" : "\u79C1\u804A"}`,
+    `\u5BF9\u7AEF\uFF1A${input.alias}`,
+    `\u4F1A\u8BDD\uFF1A${binding === void 0 ? "\u672A\u7ED1\u5B9A" : imMaskSessionId(binding.sessionId)}`,
+    `\u5168\u5C40\u4E3B\u4EBA\uFF1A${owner.name.trim() === "" ? owner.id : owner.name.trim()}`,
+    `\u65F6\u95F4\uFF1A${new Date(deps.now()).toLocaleString()}`
+  ];
+  const send = sendSummaryOf(deps, inbound);
+  if (send !== void 0) lines.push(send);
+  return lines.join("\n");
+}
+function sendSummaryOf(deps, inbound) {
+  const status2 = (deps.sendStatuses?.() ?? []).find(
+    (row) => row.channel === inbound.channel && row.accountId === inbound.accountId
+  );
+  if (status2 === void 0) return void 0;
+  const parts = [status2.allowedNow ? "\u73B0\u5728\u53EF\u53D1" : "\u9700\u8981\u7B49\u5F85"];
+  if (!status2.allowedNow && status2.nextSendAt !== void 0) parts.push(`\u4E0B\u6B21 ${timeOf(status2.nextSendAt)}`);
+  if (status2.throttleUntil !== void 0) parts.push(`\u51B7\u5374\u81F3 ${timeOf(status2.throttleUntil)}`);
+  parts.push(`\u961F\u5217 ${status2.queueDepth} \u6761`);
+  return `\u53D1\u9001\uFF1A${parts.join(" \xB7 ")}`;
+}
+function timeOf(at) {
+  return new Date(at).toLocaleString();
+}
+function targetOf(inbound) {
+  return {
+    channel: inbound.channel,
+    accountId: inbound.accountId,
+    scope: inbound.scope,
+    peerId: inbound.peerId,
+    ...inbound.replyTo === void 0 ? {} : { replyTo: inbound.replyTo }
+  };
+}
+function messageOf14(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+// packages/plugin/src/im/project.ts
+var IM_EMPTY_REPLY = "\uFF08\u65E0\u6587\u672C\u56DE\u590D\uFF09";
+var ImProjectError = class extends Error {
+  code = "IM_PROJECT_INVALID";
+  constructor(message) {
+    super(message);
+    this.name = "ImProjectError";
+  }
+};
+function projectImText(displayText, channel, limit) {
+  assertLimit(limit);
+  const collapsed = stripFrontendDocuments(displayText);
+  const normalized = channel === "weixin" ? stripWeixinMarkdown(collapsed) : collapsed;
+  const text = normalizeBlankLines(normalized);
+  if (text === "") return [IM_EMPTY_REPLY];
+  const parts = channel === "qq" ? chunkMarkdown(text, limit) : chunkParagraphs(text, limit);
+  return parts.length === 0 ? [IM_EMPTY_REPLY] : parts;
+}
+function assertLimit(limit) {
+  if (!Number.isSafeInteger(limit) || limit <= 0) {
+    throw new ImProjectError(`chunk limit must be a positive integer, received ${String(limit)}`);
+  }
+}
+function normalizeBlankLines(text) {
+  return text.replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n").trim();
+}
+function stripWeixinMarkdown(text) {
+  const lines = text.split("\n");
+  let fence = false;
+  const out = [];
+  for (const line of lines) {
+    if (/^\s*```/.test(line)) {
+      fence = !fence;
+      out.push(line);
+      continue;
+    }
+    if (fence) {
+      out.push(line);
+      continue;
+    }
+    let next = line.replace(/!\[[^\]]*\]\([^)]*\)/g, "").replace(/^\s{0,3}#{1,6}\s+/, "").replace(/~~([^~]+)~~/g, "$1").replace(/\*\*\*([^*]+)\*\*\*/g, "$1").replace(/\*\*([^*]+)\*\*/g, "$1").replace(/\*([^*\n]+)\*/g, "$1").replace(/___([^_]+)___/g, "$1").replace(/__([^_]+)__/g, "$1").replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,!?]|$)/g, "$1$2").replace(/`([^`\n]+)`/g, "$1").replace(/^\s{0,3}>\s?/, "");
+    next = next.replace(/[ \t]+$/, "");
+    out.push(next);
+  }
+  return out.join("\n");
+}
+function chunkMarkdown(text, limit) {
+  assertLimit(limit);
+  const lines = text.split("\n");
+  const parts = [];
+  let buffer = [];
+  let bufferLength = 0;
+  let fenceInfo;
+  const flush = (reopen) => {
+    if (buffer.length === 0) return;
+    const body = buffer.join("\n");
+    if (reopen && fenceInfo !== void 0) {
+      parts.push(`${body}
+\`\`\``);
+      buffer = [`\`\`\`${fenceInfo}`];
+      bufferLength = 3 + fenceInfo.length;
+      return;
+    }
+    parts.push(body);
+    buffer = [];
+    bufferLength = 0;
+  };
+  for (const line of lines) {
+    const fenceMatch = /^\s*```(.*)$/.exec(line);
+    const isFence = fenceMatch !== null;
+    const cost = line.length + (buffer.length === 0 ? 0 : 1);
+    if (bufferLength + cost > limit && buffer.length > 0) {
+      const keepFence = fenceInfo !== void 0;
+      flush(keepFence);
+    }
+    if (line.length > limit && buffer.length === 0) {
+      for (const piece of hardSplit(line, limit)) parts.push(piece);
+      bufferLength = 0;
+      continue;
+    }
+    buffer.push(line);
+    bufferLength += cost;
+    if (isFence) {
+      if (fenceInfo === void 0) fenceInfo = fenceMatch[1] ?? "";
+      else fenceInfo = void 0;
+    }
+  }
+  flush(false);
+  return parts.map((part) => part.trim()).filter((part) => part !== "");
+}
+function chunkParagraphs(text, limit) {
+  assertLimit(limit);
+  const paragraphs = text.split(/\n{2,}/);
+  const parts = [];
+  let buffer = "";
+  for (const paragraph of paragraphs) {
+    const trimmed = paragraph.trim();
+    if (trimmed === "") continue;
+    const candidate = buffer === "" ? trimmed : `${buffer}
+
+${trimmed}`;
+    if (candidate.length <= limit) {
+      buffer = candidate;
+      continue;
+    }
+    if (buffer !== "") {
+      parts.push(buffer);
+      buffer = "";
+    }
+    if (trimmed.length <= limit) {
+      buffer = trimmed;
+      continue;
+    }
+    const pieces = hardSplit(trimmed, limit);
+    for (const piece of pieces.slice(0, -1)) parts.push(piece);
+    buffer = pieces[pieces.length - 1] ?? "";
+  }
+  if (buffer !== "") parts.push(buffer);
+  return parts;
+}
+function hardSplit(text, limit) {
+  const pieces = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    let end = Math.min(cursor + limit, text.length);
+    const code = text.charCodeAt(end - 1);
+    if (end < text.length && code >= 55296 && code <= 56319) end -= 1;
+    if (end <= cursor) end = Math.min(cursor + limit, text.length);
+    pieces.push(text.slice(cursor, end));
+    cursor = end;
+  }
+  return pieces;
+}
+
+// packages/plugin/src/im/router.ts
+var IM_UNBOUND_NOTICE = "\uFF08\u6D88\u606F\u5DF2\u6536\u5230\uFF0C\u4F46\u8FD9\u4E2A\u5BF9\u7AEF\u8FD8\u6CA1\u6709\u7ED1\u5B9A DSH \u4F1A\u8BDD\uFF1B\u8BF7\u5728 dsh-soulmojito \u7684 IM \u9762\u677F\u628A\u5B83\u7ED1\u5230\u4E00\u4E2A\u4F1A\u8BDD\uFF09";
+var IM_SESSION_NOT_LIVE = "\uFF08\u6D88\u606F\u5DF2\u6536\u5230\uFF0C\u4F46\u7ED1\u5B9A\u7684 DSH \u4F1A\u8BDD\u5F53\u524D\u4E0D\u53EF\u6295\u9012\uFF08\u672A\u6253\u5F00\u6216\u4E0D\u662F AgentLoop \u4F1A\u8BDD\uFF09\uFF1B\u8BF7\u6253\u5F00\u5B83\u6216\u6539\u7ED1\u540E\u518D\u53D1\u4E00\u6B21\uFF09";
+var IM_DELIVERY_FAILED = "\uFF08\u6D88\u606F\u5DF2\u6536\u5230\uFF0C\u4F46\u63D2\u5165\u7ED1\u5B9A\u7684 DSH \u4F1A\u8BDD\u5931\u8D25\uFF1B\u8BF7\u7A0D\u540E\u518D\u53D1\u4E00\u6B21\uFF09";
+var ImSendError = class extends Error {
+  code;
+  constructor(code, message, options) {
+    super(message, options);
+    this.name = "ImSendError";
+    this.code = code;
+  }
+};
+var UNBOUND_NOTICE_TTL_MS = 10 * 6e4;
+var REPLY_ANCHOR_TTL_MS = 5 * 6e4;
+var MAX_PENDING_PEERS = 50;
+var IM_FLUSH_PENDING_MAX_PASSES = 50;
+var IM_FLUSH_PENDING_MAX_MS = 2e3;
+function createImRouter(deps) {
+  const noticed = /* @__PURE__ */ new Map();
+  const replyAnchors = /* @__PURE__ */ new Map();
+  const messageRefs = createImMessageRefStore({
+    now: deps.now,
+    ttlMs: IM_MESSAGE_REF_TTL_MS,
+    maxEntries: IM_MESSAGE_REF_MAX_ENTRIES
+  });
+  const ownerLedger = createImOwnerLedger({
+    db: deps.db,
+    now: deps.now,
+    ...deps.log === void 0 ? {} : { log: deps.log }
+  });
+  const coalesceWindowMs = deps.coalesceWindowMs ?? IM_COALESCE_WINDOW_MS;
+  const scheduleFlush = deps.scheduleFlush ?? ((delayMs, run) => {
+    const timer = setTimeout(run, delayMs);
+    return () => {
+      clearTimeout(timer);
+    };
+  });
+  const buffers = /* @__PURE__ */ new Map();
+  const flushTimers = /* @__PURE__ */ new Map();
+  const flushing = /* @__PURE__ */ new Map();
+  let nextSeq = 0;
+  async function settingsOf() {
+    const state = await deps.db.getState();
+    return state.imSettings ?? DEFAULT_IM_SETTINGS;
+  }
+  async function inbound(inboundMessage, options) {
+    const peerKey = imPeerKey(inboundMessage.channel, inboundMessage.accountId, inboundMessage.scope, inboundMessage.peerId);
+    if (await handleImCommandIfAny(deps, inboundMessage, peerKey, sendNotice)) return;
+    const entry = {
+      inbound: inboundMessage,
+      ...options?.loadMedia === void 0 ? {} : { loadMedia: options.loadMedia },
+      seq: nextSeq,
+      at: deps.now()
+    };
+    nextSeq += 1;
+    const buffered = buffers.get(peerKey);
+    if (buffered === void 0) buffers.set(peerKey, [entry]);
+    else buffered.push(entry);
+    const batch = buffered ?? [entry];
+    if (bufferExceedsLimits(batch)) {
+      cancelFlushTimer(peerKey);
+      await startFlush(peerKey);
+      return;
+    }
+    scheduleFlushFor(peerKey);
+  }
+  function bufferExceedsLimits(entries) {
+    if (entries.length >= IM_COALESCE_MAX_MESSAGES) return true;
+    let chars = 0;
+    for (const entry of entries) chars += entry.inbound.text.length;
+    return chars > IM_COALESCE_MAX_CHARS;
+  }
+  function cancelFlushTimer(peerKey) {
+    const cancel = flushTimers.get(peerKey);
+    if (cancel === void 0) return;
+    flushTimers.delete(peerKey);
+    cancel();
+  }
+  function startFlush(peerKey) {
+    const previous = flushing.get(peerKey);
+    const run = previous === void 0 ? flushPeer(peerKey) : previous.then(() => flushPeer(peerKey));
+    flushing.set(peerKey, run);
+    const done = () => {
+      if (flushing.get(peerKey) === run) flushing.delete(peerKey);
+    };
+    void run.then(done, done);
+    return run;
+  }
+  function scheduleFlushFor(peerKey) {
+    if (flushTimers.has(peerKey)) return;
+    let fired = false;
+    let registering = true;
+    const cancel = scheduleFlush(coalesceWindowMs, () => {
+      fired = true;
+      if (registering) return;
+      flushTimers.delete(peerKey);
+      void startFlush(peerKey);
+    });
+    registering = false;
+    if (fired) {
+      cancel();
+      void startFlush(peerKey);
+      return;
+    }
+    flushTimers.set(peerKey, cancel);
+  }
+  async function flushPeer(peerKey) {
+    cancelFlushTimer(peerKey);
+    const buffered = buffers.get(peerKey);
+    if (buffered === void 0) return;
+    buffers.delete(peerKey);
+    const first = buffered[0];
+    if (first === void 0) return;
+    const alias = imPeerAlias(first.inbound.channel, first.inbound.scope, peerKey);
+    try {
+      await deliverBatch(peerKey, alias, orderInboundEntries(buffered));
+    } catch (error) {
+      deps.log?.note("error", `flushing the buffered messages from ${alias} failed: ${messageOf15(error)}`);
+    }
+  }
+  async function flushPending() {
+    const startedAt = deps.now();
+    let passes = 0;
+    for (; ; ) {
+      if (passes >= IM_FLUSH_PENDING_MAX_PASSES || deps.now() - startedAt >= IM_FLUSH_PENDING_MAX_MS) {
+        const pendingPeers = /* @__PURE__ */ new Set([...buffers.keys(), ...flushTimers.keys(), ...flushing.keys()]);
+        if (pendingPeers.size === 0) return;
+        deps.log?.note(
+          "warn",
+          `flushPending stopped after ${passes} pass(es): ${pendingPeers.size} peer batch(es) are still pending; the per-peer window timers keep flushing them`
+        );
+        return;
+      }
+      passes += 1;
+      for (const peerKey of [...flushTimers.keys()]) {
+        cancelFlushTimer(peerKey);
+        startFlush(peerKey);
+      }
+      for (const peerKey of [...buffers.keys()]) startFlush(peerKey);
+      const pending = [...flushing.values()];
+      if (pending.length === 0) return;
+      await Promise.all(pending);
+    }
+  }
+  async function deliverBatch(peerKey, alias, entries) {
+    const settings = await settingsOf();
+    const binding = await boundSessionOf(peerKey);
+    const deliverables = [];
+    for (const entry of entries) {
+      try {
+        const deliverable = await consumeEntry(peerKey, alias, entry, settings, binding);
+        if (deliverable !== void 0) deliverables.push(deliverable);
+      } catch (error) {
+        deps.log?.note("error", `processing a buffered message from ${alias} failed: ${messageOf15(error)}`);
+      }
+    }
+    if (binding === void 0 || deliverables.length === 0) return;
+    const ownerId = await ownerLedger.ownerIdOf(peerKey);
+    if (deliverables.length > 1 && deliverables.every((item) => item.message.media.length === 0)) {
+      await deliverMerged(peerKey, alias, binding.sessionId, deliverables, ownerId);
+      return;
+    }
+    for (const item of deliverables) await deliverOne(peerKey, alias, binding.sessionId, item, ownerId);
+  }
+  async function consumeEntry(peerKey, alias, entry, settings, binding) {
+    const inboundMessage = entry.inbound;
+    if (await deps.seenDedupe(inboundMessage.dedupeKey, entry.at)) {
+      deps.log?.note("debug", `ignored a duplicate ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias} (dedupe)`);
+      return void 0;
+    }
+    if (!imAccessAllows(settings, inboundMessage.scope, inboundMessage.peerId)) {
+      deps.log?.note(
+        "warn",
+        `dropped a ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias}: the access policy does not allow this peer (mode is allowlist and the peer is not listed, or the scope is disabled)`
+      );
+      return void 0;
+    }
+    if (binding === void 0) {
+      const unboundBody = imUserTextOf(inboundMessage);
+      if (unboundBody === void 0) {
+        deps.log?.note("debug", `ignored a ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias}: no text and no attachments`);
+        return void 0;
+      }
+      await rememberPendingPeer(peerKey, inboundMessage, alias, entry.at);
+      await notifyUnbound(imTargetOf(inboundMessage), peerKey, alias, entry.at);
+      return void 0;
+    }
+    let media = inboundMessage.media;
+    if (entry.loadMedia !== void 0) {
+      try {
+        media = await entry.loadMedia();
+      } catch (error) {
+        deps.log?.note(
+          "warn",
+          `media for a ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias} failed to load; delivering it without local copies: ${messageOf15(error)}`
+        );
+      }
+    }
+    const message = media === inboundMessage.media ? inboundMessage : { ...inboundMessage, media };
+    if (message.replyTo !== void 0) replyAnchors.set(peerKey, { replyTo: message.replyTo, at: entry.at });
+    const body = imUserTextOf(message);
+    if (body === void 0) {
+      deps.log?.note("debug", `ignored a ${message.channel}/${message.scope} message from ${alias}: no text and no attachments`);
+      return void 0;
+    }
+    return { message, body };
+  }
+  async function deliverOne(peerKey, alias, sessionId, item, ownerId) {
+    const message = item.message;
+    const isOwner = ownerLedger.isOwnerMessage(message, ownerId);
+    const body = isOwner && message.scope === "group" ? `${IM_OWNER_LINE_PREFIX}${item.body}` : item.body;
+    const ref = imMessageRef(message.dedupeKey);
+    const text = relayTextOf(message, body, alias, { owner: isOwner });
+    deps.log?.note("info", `accepted a ${message.channel}/${message.scope} message from ${alias} (${body.length} chars) for session ${sessionId}`);
+    const messageId = `im-${randomUUID16()}`;
+    try {
+      await deps.insert(sessionId, {
+        id: messageId,
+        text,
+        summary: `IM ${message.channel}/${message.scope} message msg=${ref} from ${alias}`
+      });
+    } catch (error) {
+      const code = error?.code;
+      deps.log?.note("error", `could not insert a message from ${alias} into session ${sessionId}: ${messageOf15(error)}`);
+      deps.logger?.warn?.(`dsh-soulmojito im: inserting into ${sessionId} failed: ${messageOf15(error)}`);
+      await sendNotice(imTargetOf(message), code === "IM_SESSION_NOT_LIVE" ? IM_SESSION_NOT_LIVE : IM_DELIVERY_FAILED, alias);
+      return;
+    }
+    rememberDeliveredMessage(ref, sessionId, message);
+    await ownerLedger.rememberSenders(peerKey, alias, [message]);
+    deps.log?.note("debug", `inserted an IM message from ${alias} into session ${sessionId} (${messageId})`);
+  }
+  async function deliverMerged(peerKey, alias, sessionId, items, ownerId) {
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (first === void 0 || last === void 0) return;
+    const channel = first.message.channel;
+    const scope = first.message.scope;
+    const ownerFlags = items.map((item) => ownerLedger.isOwnerMessage(item.message, ownerId));
+    const ownerItems = ownerFlags.flatMap((flag, index) => flag ? [index + 1] : []);
+    const relayItems = items.map((item, index) => ({
+      message: item.message,
+      body: ownerFlags[index] === true && item.message.scope === "group" ? `${IM_OWNER_LINE_PREFIX}${item.body}` : item.body,
+      ref: imMessageRef(item.message.dedupeKey)
+    }));
+    const text = mergedRelayTextOf(relayItems, alias, channel, scope, ownerItems.length === ownerFlags.length ? { owner: true } : ownerItems.length > 0 ? { ownerItems } : void 0);
+    const chars = relayItems.reduce((total, entry) => total + entry.body.length, 0);
+    deps.log?.note("info", `accepted ${relayItems.length} ${channel}/${scope} messages from ${alias} (${chars} chars) for session ${sessionId}`);
+    const messageId = `im-${randomUUID16()}`;
+    try {
+      await deps.insert(sessionId, {
+        id: messageId,
+        text,
+        summary: `IM ${channel}/${scope} ${relayItems.length} messages from ${alias}`
+      });
+    } catch (error) {
+      const code = error?.code;
+      deps.log?.note("error", `could not insert a merged message from ${alias} into session ${sessionId}: ${messageOf15(error)}`);
+      deps.logger?.warn?.(`dsh-soulmojito im: inserting into ${sessionId} failed: ${messageOf15(error)}`);
+      await sendNotice(imTargetOf(last.message), code === "IM_SESSION_NOT_LIVE" ? IM_SESSION_NOT_LIVE : IM_DELIVERY_FAILED, alias);
+      return;
+    }
+    for (const relayItem of relayItems) rememberDeliveredMessage(relayItem.ref, sessionId, relayItem.message);
+    await ownerLedger.rememberSenders(peerKey, alias, items.map((item) => item.message));
+    deps.log?.note("debug", `inserted a merged IM message from ${alias} into session ${sessionId} (${messageId})`);
+  }
+  function rememberDeliveredMessage(ref, sessionId, inboundMessage) {
+    messageRefs.record(ref, {
+      peerKey: imPeerKey(inboundMessage.channel, inboundMessage.accountId, inboundMessage.scope, inboundMessage.peerId),
+      sessionId,
+      ...inboundMessage.replyTo === void 0 ? {} : { replyTo: inboundMessage.replyTo },
+      at: deps.now()
+    });
+  }
+  function imTargetOf(inbound2) {
+    return {
+      channel: inbound2.channel,
+      accountId: inbound2.accountId,
+      scope: inbound2.scope,
+      peerId: inbound2.peerId,
+      ...inbound2.replyTo === void 0 ? {} : { replyTo: inbound2.replyTo }
+    };
+  }
+  async function boundSessionOf(peerKey) {
+    const state = await deps.db.getState();
+    const binding = state.imPeers?.[peerKey];
+    return binding === void 0 ? void 0 : { sessionId: binding.sessionId };
+  }
+  async function rememberPendingPeer(peerKey, message, alias, now) {
+    const senderName = message.scope === "group" ? displaySenderNameOf(message) : void 0;
+    const next = await deps.db.updateState((current) => {
+      if (current.imPeers?.[peerKey] !== void 0) return {};
+      const pending = { ...current.imPendingPeers ?? {} };
+      pending[peerKey] = {
+        lastAt: now,
+        ...senderName === void 0 ? {} : { senderName }
+      };
+      const recent = Object.entries(pending).sort((left, right) => right[1].lastAt - left[1].lastAt).slice(0, MAX_PENDING_PEERS);
+      return { imPendingPeers: Object.fromEntries(recent) };
+    });
+    if (next.imPeers?.[peerKey] !== void 0) {
+      deps.log?.note("debug", `binding for ${alias} appeared before the pending write; pending not recorded`);
+      return;
+    }
+    deps.log?.note("info", `no binding for ${alias}; recorded it in the IM panel pending peers`);
+  }
+  async function sendText(peerKey, text, options) {
+    const body = text.trim();
+    if (body === "") {
+      throw new ImSendError("IM_SEND_INVALID", "IM text is empty after trimming whitespace");
+    }
+    const { target, channel, scope, settings } = await sendTargetOf(peerKey, options?.passiveReplyTo);
+    const chunks = projectImText(body, channel, imChunkLimit(channel, settings));
+    let outcome;
+    try {
+      outcome = await deps.send(target, chunks.map((chunk, index) => ({
+        kind: "text",
+        text: chunk,
+        index,
+        total: chunks.length
+      })));
+    } catch (error) {
+      deps.log?.note("error", `im_send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf15(error)}`);
+      throw new ImSendError("IM_SEND_FAILED", `IM send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf15(error)}`, { cause: error });
+    }
+    deps.log?.note(
+      "info",
+      isQueuedOutcome(outcome) ? `im_send queued ${chunks.length} part(s) for ${imPeerAlias(channel, scope, peerKey)} until ${new Date(outcome.scheduledAt).toISOString()}` : `im_send delivered ${chunks.length} part(s) to ${imPeerAlias(channel, scope, peerKey)}`
+    );
+    return outcome;
+  }
+  async function sendMedia(peerKey, media, options) {
+    if (media.localPath === void 0 && media.url === void 0) {
+      throw new ImSendError("IM_SEND_INVALID", "media needs a localPath (preferred) or a url");
+    }
+    if (media.localPath !== void 0 && media.localPath.trim() === "") {
+      throw new ImSendError("IM_SEND_INVALID", "media.localPath is blank; pass an absolute file path or omit it");
+    }
+    if (media.localPath !== void 0) await assertInsideWorkspace(media.localPath);
+    const { target, channel, scope, settings } = await sendTargetOf(peerKey, options?.passiveReplyTo);
+    const caption = media.caption?.trim() ?? "";
+    const captionChunks = caption === "" ? [] : projectImText(caption, channel, imChunkLimit(channel, settings));
+    const parts = captionChunks.map((text, index) => ({
+      kind: "text",
+      text,
+      index,
+      total: 1
+    }));
+    parts.push({
+      kind: media.kind,
+      ...media.localPath === void 0 ? {} : { localPath: media.localPath },
+      ...media.url === void 0 ? {} : { url: media.url },
+      ...media.name === void 0 ? {} : { name: media.name },
+      index: parts.length,
+      total: 1
+    });
+    for (const part of parts) part.total = parts.length;
+    let outcome;
+    try {
+      outcome = await deps.send(target, parts);
+    } catch (error) {
+      deps.log?.note("error", `im_send media to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf15(error)}`);
+      throw new ImSendError("IM_SEND_FAILED", `IM media send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf15(error)}`, { cause: error });
+    }
+    deps.log?.note(
+      "info",
+      isQueuedOutcome(outcome) ? `im_send queued a ${media.kind} for ${imPeerAlias(channel, scope, peerKey)} until ${new Date(outcome.scheduledAt).toISOString()}` : `im_send delivered a ${media.kind} to ${imPeerAlias(channel, scope, peerKey)}`
+    );
+    return outcome;
+  }
+  async function sendTargetOf(peerKey, passiveReplyTo) {
+    const parts = imPeerKeyParts(peerKey);
+    if (parts === void 0) {
+      throw new ImSendError("IM_SEND_INVALID_TARGET", `malformed IM peer key '${peerKey}'; expected '<channel>:<accountId>:<scope>:<peerId>'`);
+    }
+    const channel = channelOf(parts.channel);
+    if (channel === void 0) {
+      throw new ImSendError("IM_SEND_INVALID_TARGET", `IM peer key '${peerKey}' names unknown channel '${parts.channel}'`);
+    }
+    const scope = parts.scope === "private" || parts.scope === "group" ? parts.scope : void 0;
+    if (scope === void 0) {
+      throw new ImSendError("IM_SEND_INVALID_TARGET", `IM peer key '${peerKey}' names unknown scope '${parts.scope}'`);
+    }
+    const state = await deps.db.getState();
+    if (state.imPeers?.[peerKey] === void 0) {
+      throw new ImSendError("IM_SEND_UNBOUND", `IM peer '${peerKey}' has no binding; bind it in the dsh-soulmojito IM panel first`);
+    }
+    const anchor = replyAnchors.get(peerKey);
+    const fresh = anchor !== void 0 && deps.now() - anchor.at <= REPLY_ANCHOR_TTL_MS;
+    if (anchor !== void 0 && !fresh) replyAnchors.delete(peerKey);
+    const autoReplyTo = anchor !== void 0 && fresh ? anchor.replyTo : void 0;
+    const replyTo = passiveReplyTo ?? autoReplyTo;
+    return {
+      target: {
+        channel,
+        accountId: parts.accountId,
+        scope,
+        peerId: parts.peerId,
+        ...replyTo === void 0 ? {} : { replyTo }
+      },
+      channel,
+      scope,
+      settings: state.imSettings ?? DEFAULT_IM_SETTINGS
+    };
+  }
+  async function assertInsideWorkspace(localPath) {
+    if (deps.workspaceRoot === void 0) return;
+    let root;
+    let target;
+    try {
+      root = await realpath(await deps.workspaceRoot());
+      target = await realpath(localPath);
+    } catch (cause) {
+      throw new ImSendError("IM_SEND_INVALID", `media path '${localPath}' cannot be resolved: ${messageOf15(cause)}`);
+    }
+    const rel = relative3(root, target);
+    if (rel === "" || rel.startsWith("..") || isAbsolute2(rel)) {
+      throw new ImSendError(
+        "IM_SEND_INVALID",
+        `media path '${localPath}' is outside the session workspace; only files under the workspace (for example downloaded attachments) can be sent`
+      );
+    }
+  }
+  async function notifyUnbound(target, peerKey, alias, now) {
+    const last = noticed.get(peerKey);
+    if (last !== void 0 && now - last < UNBOUND_NOTICE_TTL_MS) {
+      deps.log?.note("debug", `no binding for ${alias}; the bind notice is still suppressed`);
+      return;
+    }
+    noticed.set(peerKey, now);
+    deps.log?.note("info", `no binding for ${alias}; replied with the bind notice`);
+    await sendNotice(target, IM_UNBOUND_NOTICE, alias);
+  }
+  async function sendNotice(target, text, alias) {
+    try {
+      await deps.send(target, [{ kind: "text", text, index: 0, total: 1 }]);
+    } catch (error) {
+      deps.log?.note("error", `sending a notice to ${alias} failed: ${messageOf15(error)}`);
+    }
+  }
+  return {
+    inbound,
+    flushPending,
+    sendText,
+    sendMedia,
+    resolveMessageRef: (ref) => messageRefs.resolve(ref)
+  };
+}
+function messageOf15(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function isQueuedOutcome(outcome) {
+  return "status" in outcome && outcome.status === "queued";
+}
+function channelOf(value) {
+  return value === "qq" || value === "weixin" || value === "onebot" ? value : void 0;
+}
+
+// packages/plugin/src/im/send-status.ts
+function sendStatusesOf(channels) {
+  const rows = [];
+  for (const channel of channels) {
+    const status2 = channel.sendStatus?.();
+    if (status2 === void 0) continue;
+    rows.push({ channel: channel.channel, accountId: channel.accountId, ...status2 });
+  }
+  return rows;
+}
+
+// packages/plugin/src/im/account-id.ts
+import { createHash as createHash20 } from "node:crypto";
+var SAFE_ACCOUNT_ID = /^[A-Za-z0-9._-]+$/;
+function imAccountIdOf(channel, raw) {
+  const trimmed = raw.trim();
+  if (trimmed === "") throw new Error(`cannot derive an IM account id: the ${channel} platform returned an empty id`);
+  if (trimmed === "." || trimmed === "..") {
+    throw new Error(`cannot derive an IM account id: '${trimmed}' is a path traversal name`);
+  }
+  if (SAFE_ACCOUNT_ID.test(trimmed)) return trimmed;
+  const digest = createHash20("sha256").update(trimmed, "utf8").digest("hex").slice(0, 12);
+  return `${channel}-${digest}`;
+}
+
+// packages/plugin/src/im/log.ts
+var IM_LOG_CAPACITY = 500;
+var ENTRY_TEXT_LIMIT = 2e3;
+var LEVEL_WEIGHT = {
+  debug: 10,
+  info: 20,
+  warn: 30,
+  error: 40
+};
+function createImLog(options) {
+  if (!Number.isSafeInteger(options.capacity) || options.capacity < 1) {
+    throw new Error(`IM log capacity must be a positive integer, received ${String(options.capacity)}`);
+  }
+  const entries = [];
+  let seq = 0;
+  function note(level, text) {
+    const trimmed = text.trim();
+    if (trimmed === "") return;
+    seq += 1;
+    const safe = redactLogText(trimmed);
+    entries.push({
+      seq,
+      at: options.now(),
+      level,
+      text: safe.length > ENTRY_TEXT_LIMIT ? `${safe.slice(0, ENTRY_TEXT_LIMIT)}\u2026` : safe
+    });
+    if (entries.length > options.capacity) entries.splice(0, entries.length - options.capacity);
+  }
+  function read(query) {
+    const limit = Number.isSafeInteger(query.limit) && query.limit > 0 ? Math.min(query.limit, options.capacity) : options.capacity;
+    const minWeight = LEVEL_WEIGHT[query.minLevel ?? "debug"];
+    const after = query.afterSeq ?? 0;
+    const selected = [];
+    for (const entry of entries) {
+      if (entry.seq <= after) continue;
+      if (LEVEL_WEIGHT[entry.level] < minWeight) continue;
+      selected.push(entry);
+    }
+    const slice = selected.length > limit ? selected.slice(selected.length - limit) : selected;
+    return { entries: slice, nextSeq: seq };
+  }
+  return { note, read };
+}
+function wrapImLogger(base, sink) {
+  const record = (level, args) => {
+    sink.note(level, textOfLogArgs(args));
+  };
+  return {
+    debug: (...args) => {
+      record("debug", args);
+      base?.debug?.(...args);
+    },
+    info: (...args) => {
+      record("info", args);
+      base?.info?.(...args);
+    },
+    warn: (...args) => {
+      record("warn", args);
+      base?.warn?.(...args);
+    },
+    error: (...args) => {
+      record("error", args);
+      base?.error?.(...args);
+    }
+  };
+}
+function textOfLogArgs(args) {
+  const first = args[0];
+  return typeof first === "string" ? first : String(first ?? "");
+}
+function redactLogText(text) {
+  return text.replace(/(['"`])((?:[A-Za-z]:[\\/]|\\\\|\/\/|\/(?!\/))[^'"`]*)\1/g, (_match, quote) => `${quote}<path>${quote}`).replace(/\b[A-Za-z]:[\\/][^\s'"`,;)]*/g, "<path>").replace(/\\\\[^\s'"`,;)]+/g, "<path>").replace(/(^|[\s"'`(=~])\/\/[^\s'"`,;)]+/g, (_match, prefix) => `${prefix}<path>`).replace(/(^|[\s"'`(=~])\/(?:[^\s/'"`,;)]+\/)+[^\s/'"`,;)]*/g, (_match, prefix) => `${prefix}<path>`);
+}
+
+// packages/plugin/src/im/session-host.ts
+var ImSessionNotLiveError = class extends Error {
+  code = "IM_SESSION_NOT_LIVE";
+  sessionId;
+  constructor(sessionId) {
+    super(`the bound DSH session '${sessionId}' has no live AgentLoop agent; open it in DSH and send again`);
+    this.name = "ImSessionNotLiveError";
+    this.sessionId = sessionId;
+  }
+};
+function inspectImSessionCapabilities(agents) {
+  const reasons = [];
+  if (agents === void 0) {
+    reasons.push("the host exposes no agents service; IM cannot insert messages into a session");
+  } else if (typeof agents.get !== "function") {
+    reasons.push("the host agents service exposes no get(id); IM cannot find the bound session agent");
+  }
+  return { available: reasons.length === 0, reasons };
+}
+function liveAgentOf(agents, sessionId) {
+  if (agents?.get === void 0) return void 0;
+  try {
+    return agents.get(sessionId) ?? void 0;
+  } catch {
+    return void 0;
+  }
+}
+function requireLiveAgent(agents, sessionId) {
+  const agent = liveAgentOf(agents, sessionId);
+  if (agent === void 0) throw new ImSessionNotLiveError(sessionId);
+  if (!hasInboxSeam(agent)) throw noInboxError(sessionId);
+  return agent;
+}
+function hasInboxSeam(agent) {
+  return typeof agent.followup === "function" || typeof agent.steer === "function";
+}
+function noInboxError(sessionId) {
+  const error = new Error(
+    `the host agent for session '${sessionId}' exposes neither followup() nor steer(); IM cannot insert a message`
+  );
+  error.code = "IM_SESSION_NO_INBOX";
+  return error;
+}
+function listLiveAgents2(agents) {
+  if (agents?.list === void 0) return [];
+  try {
+    return agents.list() ?? [];
+  } catch {
+    return [];
+  }
+}
+function buildImInboxMessage(session, message) {
+  return {
+    id: message.id,
+    role: "user",
+    content: [{ type: "text", text: message.text }],
+    source: hostPluginMessageSource(session, { form: "relay", summary: message.summary })
+  };
+}
+async function insertImMessage(agent, message) {
+  const built = buildImInboxMessage(agent.session, message);
+  if (agent.status === "running" && typeof agent.steer === "function") {
+    agent.steer(built);
+    return "steer";
+  }
+  if (typeof agent.followup !== "function") {
+    throw noInboxError(agent.session?.id ?? agent.id ?? "unknown");
+  }
+  await agent.followup(built);
+  return "followup";
+}
+
+// packages/plugin/src/im/runtime.ts
+var QQ_BOUND_ACCOUNT_LABEL = "QQ \u673A\u5668\u4EBA";
+var WEIXIN_BOUND_ACCOUNT_LABEL = "\u5FAE\u4FE1\u673A\u5668\u4EBA";
+var WEIXIN_BIND_POLL_INTERVAL_MS = 1e3;
+var ImChannelUnsupportedError = class extends Error {
+  code = "IM_CHANNEL_UNSUPPORTED";
+  channel;
+  constructor(channel) {
+    super(`IM channel '${channel}' has no adapter in this build; 'onebot', 'qq' and 'weixin' are the supported channels`);
+    this.name = "ImChannelUnsupportedError";
+    this.channel = channel;
+  }
+};
+function createImRuntime(ctx, options) {
+  const { db } = options;
+  const agents = ctx.agents;
+  const capabilities = inspectImSessionCapabilities(agents);
+  const channels = /* @__PURE__ */ new Map();
+  const oneBotChannels = /* @__PURE__ */ new Map();
+  const injectedBot = options.qqBot;
+  const store5 = ImStore.open(tavernDataRoot("im"));
+  const lifetime = new AbortController();
+  const imLog = createImLog({ capacity: IM_LOG_CAPACITY, now: () => Date.now() });
+  const logger = wrapImLogger(options.logger, imLog);
+  const mediaStore = openImMediaStore({
+    workspaceRoot: async () => (await prepareInternalWorkspace()).path,
+    now: () => Date.now(),
+    maxBytes: WEIXIN_MEDIA_MAX_BYTES
+  });
+  async function applyPresetToAgent(agent) {
+    const presets = ctx.agentPresets;
+    if (typeof presets?.recompose !== "function") {
+      return { applied: false, reason: "the host cannot recompose agent presets" };
+    }
+    const sessionId = agent.session?.id ?? agent.id;
+    if (typeof sessionId !== "string" || sessionId === "") {
+      return { applied: false, reason: "the agent has no session id" };
+    }
+    try {
+      const header = agent.session?.header;
+      if (header?.origin === "subagent" || typeof header?.delegationDepth === "number" && header.delegationDepth > 0) {
+        return { applied: false, reason: "subagent sessions cannot be switched to AgentTavernIM" };
+      }
+      const state = await db.getState();
+      const architecture = state.sessionBindings[sessionId]?.architecture;
+      if (architecture === "agent-novel" || architecture === "card-workbench" || architecture === "st") {
+        return {
+          applied: false,
+          reason: `session architecture '${architecture}' cannot be switched to AgentTavernIM`
+        };
+      }
+      if (agent.status === "running") {
+        return { applied: false, reason: "the session is running; the preset will switch when it becomes idle" };
+      }
+      if (lastSelectedPresetId(agent.session) === AGENT_TAVERN_IM_PRESET_ID) return { applied: true };
+      const preset = await presets.recompose(agent.ctx, AGENT_TAVERN_IM_PRESET_ID);
+      if (preset.id !== AGENT_TAVERN_IM_PRESET_ID) {
+        return { applied: false, reason: `the host selected preset '${preset.id}' instead of AgentTavernIM` };
+      }
+      const session = agent.session;
+      if (typeof session.append !== "function") {
+        return { applied: false, reason: "the session does not expose append(); the preset cannot be made durable" };
+      }
+      const confirmed = confirmSessionAppend({
+        session: agent.session,
+        logger,
+        label: `AgentTavernIM preset marker (${sessionId})`,
+        append: () => session.append?.("agent-preset/selected", { agentPreset: preset.id }),
+        present: () => lastSelectedPresetId(agent.session) === preset.id
+      });
+      if (!confirmed) return { applied: false, reason: "the AgentTavernIM preset marker could not be confirmed" };
+      imLog.note("info", `im bind: switched ${sessionId} to ${AGENT_TAVERN_IM_PRESET_ID}`);
+      return { applied: true };
+    } catch (error) {
+      return { applied: false, reason: messageOf16(error) };
+    }
+  }
+  async function applyImPreset(sessionId) {
+    const agent = liveAgentOf(agents, sessionId);
+    if (agent === void 0) return { applied: false, reason: "the session is not open" };
+    const result = await applyPresetToAgent(agent);
+    notePresetResult(sessionId, result);
+    return result;
+  }
+  async function ensurePresetForAgent(agent) {
+    if (typeof agent !== "object" || agent === null) return { applied: false, reason: "invalid agent" };
+    const candidate = agent;
+    const sessionId = candidate.session?.id ?? candidate.id;
+    if (typeof sessionId !== "string" || sessionId === "") return { applied: false, reason: "the agent has no session id" };
+    const state = await db.getState();
+    const bound = Object.values(state.imPeers ?? {}).some((binding) => binding.sessionId === sessionId);
+    if (!bound) return { applied: false, reason: "the session has no IM binding" };
+    const result = await applyPresetToAgent(candidate);
+    notePresetResult(sessionId, result);
+    return result;
+  }
+  async function ensurePresets() {
+    const state = await db.getState();
+    const bound = new Set(Object.values(state.imPeers ?? {}).map((binding) => binding.sessionId));
+    for (const agent of listLiveAgents2(agents)) {
+      const sessionId = agent.session?.id ?? agent.id;
+      if (typeof sessionId !== "string" || !bound.has(sessionId)) continue;
+      await applyPresetToAgent(agent).then((result) => notePresetResult(sessionId, result)).catch((error) => {
+        logger?.warn?.(`dsh-soulmojito im: switching ${sessionId} to AgentTavernIM failed: ${messageOf16(error)}`);
+      });
+    }
+  }
+  function notePresetResult(sessionId, result) {
+    if (result.applied) return;
+    const reason = result.reason ?? "unknown reason";
+    const text = `im preset: ${sessionId} was not switched to ${AGENT_TAVERN_IM_PRESET_ID}: ${reason}`;
+    const deferred = reason.includes("running") || reason.includes("not open");
+    imLog.note(deferred ? "debug" : "warn", text);
+  }
+  const router = createImRouter({
+    db,
+    now: () => Date.now(),
+    seenDedupe: (dedupeKey, now) => store5.seenDedupe(dedupeKey, now),
+    insert: async (sessionId, message) => {
+      const agent = requireLiveAgent(agents, sessionId);
+      const mode = await insertImMessage(agent, message);
+      imLog.note("debug", `im insert: ${mode} into ${sessionId}`);
+    },
+    workspaceRoot: async () => (await prepareInternalWorkspace()).path,
+    send: async (target, parts) => {
+      const channel = channels.get(channelKey(target.channel, target.accountId));
+      if (channel === void 0) {
+        throw new Error(`IM channel ${target.channel}/${target.accountId} is not running`);
+      }
+      return channel.send(target, parts);
+    },
+    log: imLog,
+    logger,
+    sendStatuses: () => sendStatusesOf(channels.values()),
+    applyImPreset
+  });
+  function openOneBot(account, secret) {
+    return new OneBotChannel({
+      accountId: account.accountId,
+      secret,
+      router: { handle: async (inbound) => router.inbound(inbound) },
+      groupRequireMention: async () => ((await db.getState()).imSettings ?? DEFAULT_IM_SETTINGS).groupRequireMention,
+      now: () => Date.now(),
+      logger
+    });
+  }
+  async function installOneBot(account, channel) {
+    const key = channelKey(account.channel, account.accountId);
+    const previous = channels.get(key);
+    if (previous !== void 0) {
+      await previous.stop();
+      channels.delete(key);
+      oneBotChannels.delete(key);
+    }
+    channels.set(key, channel);
+    oneBotChannels.set(key, channel);
+    try {
+      await channel.start(lifetime.signal);
+    } catch (error) {
+      channels.delete(key);
+      oneBotChannels.delete(key);
+      throw error;
+    }
+  }
+  function openQQ(account, secret, createBot) {
+    return new QQChannel({
+      accountId: account.accountId,
+      secret,
+      router: { handle: async (inbound, inboundOptions) => router.inbound(inbound, inboundOptions) },
+      groupRequireMention: async () => ((await db.getState()).imSettings ?? DEFAULT_IM_SETTINGS).groupRequireMention,
+      createBot,
+      // 账号级能力：官方机器人只有申请到 markdown 权限才能发 msg_type=2。
+      markdownSupport: secret["markdownSupport"] === "true",
+      media: mediaStore,
+      now: () => Date.now(),
+      logger,
+      ...options.qqStartRetrySleep === void 0 ? {} : { retrySleep: options.qqStartRetrySleep }
+    });
+  }
+  function openWeixin(account, secret, sendIntervalMs) {
+    const contextTokens = openWeixinContextTokens(tavernDataRoot("im"), account.accountId);
+    return new WeixinChannel({
+      accountId: account.accountId,
+      // 构造期校验 botToken/baseUrl：坏凭据在落盘前就被拒绝（见 upsertAccount）。
+      token: secret["botToken"] ?? "",
+      baseUrl: secret["baseUrl"] ?? "",
+      router: { handle: async (inbound, inboundOptions) => router.inbound(inbound, inboundOptions) },
+      loadCursor: async () => store5.readCursor(account.accountId),
+      saveCursor: async (cursor) => store5.writeCursor(account.accountId, cursor),
+      loadContextTokens: async () => contextTokens.load(),
+      saveContextTokens: async (tokens) => contextTokens.save(tokens),
+      clock: WEIXIN_REAL_CLOCK,
+      longPollTimeoutMs: WEIXIN_LONG_POLL_TIMEOUT_MS,
+      typingEnabled: true,
+      cdnBaseUrl: options.weixinCdnBaseUrl ?? WEIXIN_DEFAULT_CDN_BASE_URL,
+      media: mediaStore,
+      sendIntervalMs,
+      logger
+    });
+  }
+  async function installSingleChannel(account, channel) {
+    const key = channelKey(account.channel, account.accountId);
+    const previous = channels.get(key);
+    if (previous !== void 0) {
+      await previous.stop();
+      channels.delete(key);
+    }
+    channels.set(key, channel);
+    try {
+      await channel.start(lifetime.signal);
+      logger.info?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} channel installed and polling`);
+    } catch (error) {
+      channels.delete(key);
+      throw error;
+    }
+  }
+  const injectedConnector = options.qqConnector;
+  const qqBinding = createQQBinding({
+    connect: injectedConnector === void 0 ? () => loadQqConnector() : () => Promise.resolve(injectedConnector)
+  });
+  const weixinBinding = createWeixinBinding({
+    qrBaseUrl: options.weixinQrBaseUrl ?? WEIXIN_FIXED_BASE_URL,
+    botType: WEIXIN_DEFAULT_BOT_TYPE,
+    pollIntervalMs: WEIXIN_BIND_POLL_INTERVAL_MS,
+    clock: WEIXIN_REAL_CLOCK,
+    localTokenList: loadWeixinLocalTokens,
+    logger
+  });
+  let activeQrBind;
+  async function adoptQQCredential(credentials) {
+    const credential = credentials[0];
+    if (credential === void 0) {
+      throw new Error("the QQ connector reported a successful scan without any credential; nothing was saved");
+    }
+    const appId = credential.appId.trim();
+    const appSecret = credential.appSecret.trim();
+    if (appId === "" || appSecret === "") {
+      throw new Error("the QQ connector returned an empty appId or appSecret; nothing was saved");
+    }
+    const accounts = await store5.accounts();
+    const existing = accounts.find((entry) => entry.channel === "qq" && entry.accountId === appId);
+    await upsertAccount({
+      channel: "qq",
+      accountId: appId,
+      label: QQ_BOUND_ACCOUNT_LABEL,
+      createdAt: existing?.createdAt ?? (/* @__PURE__ */ new Date()).toISOString()
+    }, { appId, appSecret });
+    const openid = typeof credential.userOpenid === "string" ? credential.userOpenid.trim() : "";
+    if (openid !== "") await addImPrivateAllow(openid);
+  }
+  async function adoptWeixinCredential(credential) {
+    const botToken = credential.botToken.trim();
+    const baseUrl = credential.baseUrl.trim();
+    const ilinkBotId = credential.ilinkBotId.trim();
+    if (botToken === "" || baseUrl === "" || ilinkBotId === "") {
+      throw new Error("the WeChat backend confirmed the scan without bot_token/baseurl/ilink_bot_id; nothing was saved");
+    }
+    const ilinkUserId = credential.ilinkUserId?.trim() ?? "";
+    const accountId = imAccountIdOf("weixin", ilinkBotId);
+    const accounts = await store5.accounts();
+    const existing = accounts.find((entry) => entry.channel === "weixin" && entry.accountId === accountId);
+    await upsertAccount({
+      channel: "weixin",
+      accountId,
+      label: WEIXIN_BOUND_ACCOUNT_LABEL,
+      createdAt: existing?.createdAt ?? (/* @__PURE__ */ new Date()).toISOString()
+    }, {
+      botToken,
+      baseUrl,
+      ilinkBotId,
+      ...ilinkUserId === "" ? {} : { ilinkUserId }
+    });
+    if (ilinkUserId !== "") await addImPrivateAllow(ilinkUserId);
+  }
+  async function loadWeixinLocalTokens() {
+    const accounts = await store5.accounts();
+    const tokens = [];
+    for (const account of [...accounts].reverse()) {
+      if (account.channel !== "weixin") continue;
+      let secret;
+      try {
+        secret = await store5.readSecret("weixin", account.accountId);
+      } catch (error) {
+        logger?.warn?.(`dsh-soulmojito im weixin bind: skipped ${account.accountId} local token: ${messageOf16(error)}`);
+        continue;
+      }
+      const token = secret?.["botToken"]?.trim() ?? "";
+      if (token === "") continue;
+      tokens.push(token);
+      if (tokens.length >= 10) break;
+    }
+    return tokens;
+  }
+  async function addImPrivateAllow(openid) {
+    const state = await db.getState();
+    if ((state.imSettings ?? DEFAULT_IM_SETTINGS).privateAllow.includes(openid)) return;
+    await db.updateState((current) => {
+      const settings = current.imSettings ?? DEFAULT_IM_SETTINGS;
+      if (settings.privateAllow.includes(openid)) return {};
+      return { imSettings: { ...settings, privateAllow: [...settings.privateAllow, openid] } };
+    });
+  }
+  async function startQrBind(channelId) {
+    if (channelId === "qq") {
+      activeQrBind = "qq";
+      return qqBinding.startQrConnect({
+        onQrDisplayed: (url) => {
+          logger?.info?.(`dsh-soulmojito im qq bind: QR code ready${qrHostSuffix(url)}`);
+        },
+        onSuccess: async (credentials) => {
+          await adoptQQCredential(credentials);
+        },
+        onFailure: (error) => {
+          logger?.warn?.(`dsh-soulmojito im qq bind failed: ${error.message}`);
+        }
+      }, { signal: lifetime.signal, source: "dsh-soulmojito" });
+    }
+    if (channelId === "weixin") {
+      activeQrBind = "weixin";
+      return weixinBinding.start({
+        onQrDisplayed: (url) => {
+          logger?.info?.(`dsh-soulmojito im weixin bind: QR code ready${qrHostSuffix(url)}`);
+        },
+        onSuccess: async (credential) => {
+          await adoptWeixinCredential(credential);
+        },
+        onAlreadyBound: () => {
+          logger?.info?.("dsh-soulmojito im weixin bind: the bot is already bound; existing credential stays in use");
+        },
+        onFailure: (error) => {
+          logger?.warn?.(`dsh-soulmojito im weixin bind failed: ${error.message}`);
+        }
+      }, { signal: lifetime.signal });
+    }
+    throw new ImChannelUnsupportedError(channelId);
+  }
+  function qrBindStatus() {
+    const qqStatus = qqBinding.status();
+    const weixinStatus = weixinBinding.status();
+    if (activeQrBind === "qq" && qqStatus.phase !== "idle") return qqStatus;
+    if (activeQrBind === "weixin" && weixinStatus.phase !== "idle") return weixinStatus;
+    if (activeQrBind !== void 0) activeQrBind = void 0;
+    if (isRunningBindPhase(weixinStatus.phase)) return weixinStatus;
+    if (isRunningBindPhase(qqStatus.phase)) return qqStatus;
+    return { phase: "idle" };
+  }
+  function submitQrVerifyCode(code) {
+    return weixinBinding.submitVerifyCode(code);
+  }
+  function cancelQrBind() {
+    const active = activeQrBind;
+    activeQrBind = void 0;
+    if (active === "qq") return qqBinding.cancel();
+    if (active === "weixin") return weixinBinding.cancel();
+    qqBinding.cancel();
+    weixinBinding.cancel();
+    return { phase: "idle" };
+  }
+  let accountTail = Promise.resolve();
+  function serialAccounts(task) {
+    const run = accountTail.then(task, task);
+    accountTail = run.then(noop, noop);
+    return run;
+  }
+  async function upsertAccount(account, secret) {
+    return serialAccounts(async () => {
+      if (account.channel === "onebot") {
+        const channel = openOneBot(account, secret);
+        await store5.putAccount(account, { ...secret });
+        await installOneBot(account, channel);
+        return;
+      }
+      if (account.channel === "qq") {
+        const createBot = injectedBot ?? createQqBotFactory(await loadQqSdk());
+        const channel = openQQ(account, secret, createBot);
+        const previous = await store5.readSecret("qq", account.accountId);
+        await store5.putAccount(account, { ...secret });
+        try {
+          await installSingleChannel(account, channel);
+        } catch (error) {
+          await rollbackAccountSecret(account, previous, error);
+          throw error;
+        }
+        return;
+      }
+      if (account.channel === "weixin") {
+        const settings = (await db.getState()).imSettings ?? DEFAULT_IM_SETTINGS;
+        const channel = openWeixin(account, secret, weixinSendIntervalOf(settings));
+        const previous = await store5.readSecret("weixin", account.accountId);
+        await store5.putAccount(account, { ...secret });
+        try {
+          await installSingleChannel(account, channel);
+        } catch (error) {
+          await rollbackAccountSecret(account, previous, error);
+          throw error;
+        }
+        return;
+      }
+      throw new ImChannelUnsupportedError(account.channel);
+    });
+  }
+  async function rollbackAccountSecret(account, previous, error) {
+    try {
+      if (previous === void 0) await store5.deleteAccount(account.channel, account.accountId);
+      else await store5.putAccount(account, previous);
+    } catch (rollbackError) {
+      throw new Error(
+        `${account.channel} account '${account.accountId}' failed to install and its credential rollback also failed: ${messageOf16(rollbackError)}`,
+        { cause: error }
+      );
+    }
+  }
+  async function removeAccount(channelId, accountId) {
+    return serialAccounts(async () => {
+      const key = channelKey(channelId, accountId);
+      const live = channels.get(key);
+      if (live !== void 0) {
+        await live.stop();
+        channels.delete(key);
+      }
+      oneBotChannels.delete(key);
+      const removed = await store5.deleteAccount(channelId, accountId);
+      const stillUsed = (await store5.accounts()).some((entry) => entry.accountId === accountId);
+      if (!stillUsed) {
+        await store5.deleteCursor(accountId).catch((error) => {
+          logger?.warn?.(`dsh-soulmojito im: deleting the cursor for ${channelId}/${accountId} failed: ${messageOf16(error)}`);
+        });
+      }
+      await mediaStore.remove(channelId, accountId).catch((error) => {
+        logger?.warn?.(`dsh-soulmojito im: deleting the media of ${channelId}/${accountId} failed: ${messageOf16(error)}`);
+      });
+      await db.updateState((current) => {
+        const peers = { ...current.imPeers ?? {} };
+        const pending = { ...current.imPendingPeers ?? {} };
+        const accountOwners = { ...current.imAccountOwners ?? {} };
+        for (const key2 of Object.keys(peers)) {
+          const parts = imPeerKeyParts(key2);
+          if (parts?.channel === channelId && parts.accountId === accountId) delete peers[key2];
+        }
+        for (const key2 of Object.keys(pending)) {
+          const parts = imPeerKeyParts(key2);
+          if (parts?.channel === channelId && parts.accountId === accountId) delete pending[key2];
+        }
+        delete accountOwners[imAccountKey(channelId, accountId)];
+        return { imPeers: peers, imPendingPeers: pending, imAccountOwners: accountOwners };
+      }).catch((error) => {
+        logger?.warn?.(`dsh-soulmojito im: deleting the bindings of ${channelId}/${accountId} failed: ${messageOf16(error)}`);
+      });
+      if (channelId === "weixin") {
+        await openWeixinContextTokens(tavernDataRoot("im"), accountId).clear().catch((error) => {
+          logger?.warn?.(`dsh-soulmojito im: deleting the weixin context tokens for ${accountId} failed: ${messageOf16(error)}`);
+        });
+      }
+      return removed || live !== void 0;
+    });
+  }
+  const upgradeHandler = createOneBotUpgradeHandler({
+    channels: () => [...oneBotChannels.values()],
+    logger
+  });
+  const seat = ensureOneBotUpgradeSeat(ctx.webServer, `${API}/im/onebot/ws`);
+  if (!seat.registered) {
+    const reason = seat.reason ?? "the OneBot reverse WebSocket endpoint could not be registered";
+    capabilities.reasons.push(reason);
+  }
+  async function handleOneBotUpgrade(req, socket, head) {
+    await upgradeHandler(req, socket, head);
+  }
+  async function handleOneBotWebhook(req, res) {
+    for (const channel of oneBotChannels.values()) {
+      if (!channel.acceptsWebhook(req)) continue;
+      await channel.handleWebhook(req, res);
+      return true;
+    }
+    return false;
+  }
+  async function restoreAccounts() {
+    const accounts = await store5.accounts();
+    for (const account of accounts) {
+      try {
+        const secret = await store5.readSecret(account.channel, account.accountId);
+        if (secret === void 0) {
+          logger?.warn?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} has no stored secret; skipped`);
+          continue;
+        }
+        await upsertAccount(account, secret);
+      } catch (error) {
+        logger?.warn?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} failed to start: ${messageOf16(error)}`);
+      }
+    }
+  }
+  void restoreAccounts().catch((error) => {
+    logger?.warn?.(`dsh-soulmojito im: restoring stored accounts failed: ${messageOf16(error)}`);
+  });
+  return {
+    router,
+    capabilities,
+    logs: (query) => imLog.read(query),
+    upsertAccount,
+    removeAccount,
+    handleOneBotWebhook,
+    views: () => [...channels.values()].map((channel) => ({
+      channel: channel.channel,
+      accountId: channel.accountId,
+      status: channel.status(),
+      peers: 0
+    })),
+    // 出站节奏投影（决策 2026-10-31-weixin-send-queue）：只有实现了队列的通道
+    // （当前是微信）有 sendStatus；QQ/OneBot 没有排队语义，投影里不出现。
+    sendStatuses: () => sendStatusesOf(channels.values()),
+    // 设置页改动间隔：运行中的微信通道即时换挡，未接上的账号下次 upsert 读新值。
+    applySettings: (settings) => {
+      const interval = weixinSendIntervalOf(settings);
+      for (const channel of channels.values()) channel.setSendIntervalMs?.(interval);
+    },
+    isSessionLive: (sessionId) => liveAgentOf(agents, sessionId) !== void 0,
+    applyImPreset,
+    ensurePresetForAgent,
+    ensurePresets,
+    handleOneBotUpgrade,
+    startQrBind,
+    qrBindStatus,
+    submitQrVerifyCode,
+    cancelQrBind,
+    dispose: async () => {
+      qqBinding.cancel();
+      weixinBinding.cancel();
+      activeQrBind = void 0;
+      await router.flushPending().catch((error) => {
+        logger?.warn?.(`dsh-soulmojito im: flushing buffered inbound messages failed: ${messageOf16(error)}`);
+      });
+      lifetime.abort();
+      for (const channel of channels.values()) {
+        await channel.stop().catch((error) => {
+          logger?.warn?.(`dsh-soulmojito im: stopping ${channel.channel}/${channel.accountId} failed: ${messageOf16(error)}`);
+        });
+      }
+      channels.clear();
+      oneBotChannels.clear();
+    }
+  };
+}
+function channelKey(channel, accountId) {
+  return `${channel}:${accountId}`;
+}
+function createQqBotFactory(sdk) {
+  return (botOptions) => new sdk.QQBot(botOptions);
+}
+function qrHostSuffix(url) {
+  try {
+    const host = new URL(url).host;
+    return host === "" ? "" : ` (${host})`;
+  } catch {
+    return "";
+  }
+}
+function isRunningBindPhase(phase) {
+  return phase === "waiting" || phase === "verify" || phase === "saving";
+}
+function noop() {
+}
+function messageOf16(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 // packages/plugin/src/http/im.ts
 init_errors();
 init_io();
@@ -54296,11 +55588,11 @@ init_io();
 // packages/plugin/src/http/memory.ts
 init_src();
 init_dsh_home();
-import { resolve as resolve7 } from "node:path";
+import { resolve as resolve8 } from "node:path";
 
 // packages/plugin/src/memory-maintenance.ts
 init_src();
-import { randomUUID as randomUUID15 } from "node:crypto";
+import { randomUUID as randomUUID17 } from "node:crypto";
 var MAINTENANCE_MAX_LLM_REQUESTS = 24;
 var MAINTENANCE_OPENING_MAX_CHARS = 1e5;
 var MAINTENANCE_PAGE_RECORDS = 32;
@@ -54328,7 +55620,7 @@ async function startMemoryMaintenance(ctx, deps, scope) {
   const existing = activeRuns.get(key);
   if (existing !== void 0) throw new MaintenanceRunConflictError(scope.character, scope.chatId, existing.runId);
   const active = {
-    runId: randomUUID15(),
+    runId: randomUUID17(),
     character: scope.character,
     chatId: scope.chatId,
     startedAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -54529,7 +55821,7 @@ async function executeRun(ctx, deps, scope, active) {
       opening = buildOpeningMessage(run, listing);
     }
     const messages = [
-      { role: "user", id: randomUUID15(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
+      { role: "user", id: randomUUID17(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
     ];
     let outcome = "completed";
     let errorMessage7;
@@ -54586,7 +55878,7 @@ async function executeRun(ctx, deps, scope, active) {
         blocks.push({ type: "text", text: textBuffer });
       }
       const toolCalls = blocks.filter((block) => block.type === "tool-call");
-      messages.push({ role: "assistant", id: randomUUID15(), content: blocks, source: { kind: "model", provider: run.provider, model: run.model } });
+      messages.push({ role: "assistant", id: randomUUID17(), content: blocks, source: { kind: "model", provider: run.provider, model: run.model } });
       if (toolCalls.length === 0) {
         report = textBuffer !== "" ? textBuffer : blocks.filter((block) => block.type === "text").map((block) => String(block.text ?? "")).join("");
         break;
@@ -54600,7 +55892,7 @@ async function executeRun(ctx, deps, scope, active) {
         const result = await executeToolCall(run, call);
         messages.push({
           role: "tool",
-          id: randomUUID15(),
+          id: randomUUID17(),
           content: [{ type: "text", text: safeJson(result.payload) }],
           source: { kind: "tool", callId: call.id },
           toolCallId: call.id,
@@ -55144,13 +56436,72 @@ init_io();
 // packages/plugin/src/http/panel.ts
 init_src();
 
+// packages/plugin/src/preset-mount.ts
+init_src2();
+init_src();
+init_dsh_home();
+init_store_handle();
+var DEFAULT_USER5 = "User";
+var CHAR_FALLBACK = "the character";
+var storePromise2;
+function store4() {
+  return storePromise2 ??= sharedTavernStore(tavernDataRoot());
+}
+function mountPresetProjection(options) {
+  const freeze2 = /* @__PURE__ */ new Map();
+  const projection2 = createLazyProjection({
+    getState: async () => (await store4()).getState(),
+    load: async (agentId, settle) => {
+      const db = await store4();
+      const state = await db.getState();
+      const binding = state.sessionBindings[agentId];
+      if (state[options.stateFlag] !== true || !binding || binding.architecture !== options.architecture) {
+        settle("");
+        return;
+      }
+      if (typeof state.activePreset !== "string" || state.activePreset === "") {
+        settle("");
+        return;
+      }
+      const raw = await db.getPreset(state.activePreset);
+      if (raw === void 0) {
+        settle("");
+        return;
+      }
+      const block = renderAgentPresetBlock(parsePreset(raw), void 0, options.header);
+      if (block === void 0) {
+        settle("");
+        return;
+      }
+      const record = freeze2.get(agentId) ?? { frozenAt: Date.now(), seed: Math.random() * 4294967296 >>> 0 };
+      freeze2.set(agentId, record);
+      const expand = createHostPromptExpander(
+        charNameOf(options, binding),
+        state.activePersona ?? DEFAULT_USER5,
+        { now: () => new Date(record.frozenAt), rng: seededRandom(record.seed) }
+      );
+      settle(hostPromptSafe(block, expand));
+    }
+  });
+  onAgentPresetChanged(() => projection2.refreshWhere((binding) => binding.architecture === options.architecture));
+  return {
+    section: { name: options.sectionName, order: -75, text: (assembly) => projection2.valueOf(assembly?.agent?.id) ?? "" },
+    textOf: (agentId) => projection2.valueOf(agentId) ?? "",
+    preheat: () => projection2.preheatWhere((binding) => binding.architecture === options.architecture)
+  };
+}
+function charNameOf(options, binding) {
+  const name2 = options.charOf(binding).trim();
+  return name2 === "" ? CHAR_FALLBACK : name2;
+}
+
 // packages/plugin/src/card-workbench/tools-card.ts
 init_src();
 init_dsh_home();
 
 // packages/plugin/src/card-workbench/plans.ts
 init_fs_atomic();
-import { promises as fs22 } from "node:fs";
+import { promises as fs23 } from "node:fs";
 import * as path11 from "node:path";
 var MAX_PLAN_CHANGES = 16;
 var MAX_PLAN_ENTRIES = 32;
@@ -55331,7 +56682,7 @@ async function proposeCardPlan(dir, character, input) {
     createdAt: (/* @__PURE__ */ new Date()).toISOString(),
     status: "pending"
   };
-  await fs22.mkdir(plansDir(dir), { recursive: true });
+  await fs23.mkdir(plansDir(dir), { recursive: true });
   await writeAtomicText(planFile(dir, plan.id), `${JSON.stringify(plan, null, 2)}
 `);
   return plan;
@@ -55361,7 +56712,7 @@ async function proposeWorldPlan(dir, world, input) {
     createdAt: (/* @__PURE__ */ new Date()).toISOString(),
     status: "pending"
   };
-  await fs22.mkdir(plansDir(dir), { recursive: true });
+  await fs23.mkdir(plansDir(dir), { recursive: true });
   await writeAtomicText(planFile(dir, plan.id), `${JSON.stringify(plan, null, 2)}
 `);
   return plan;
@@ -55370,7 +56721,7 @@ async function getPlan(dir, planId) {
   if (typeof planId !== "string" || !PLAN_ID_PATTERN.test(planId)) return void 0;
   let text;
   try {
-    text = (await fs22.readFile(planFile(dir, planId))).toString("utf8");
+    text = (await fs23.readFile(planFile(dir, planId))).toString("utf8");
   } catch (cause) {
     if (cause.code === "ENOENT") return void 0;
     throw cause;
@@ -55380,7 +56731,7 @@ async function getPlan(dir, planId) {
 async function listPlans(dir, filter = {}) {
   let files;
   try {
-    files = await fs22.readdir(plansDir(dir));
+    files = await fs23.readdir(plansDir(dir));
   } catch (cause) {
     if (cause.code === "ENOENT") return [];
     throw cause;
@@ -55389,7 +56740,7 @@ async function listPlans(dir, filter = {}) {
   for (const file of files) {
     if (!file.endsWith(".json")) continue;
     try {
-      const plan = normalizePlan(JSON.parse((await fs22.readFile(path11.join(plansDir(dir), file))).toString("utf8")));
+      const plan = normalizePlan(JSON.parse((await fs23.readFile(path11.join(plansDir(dir), file))).toString("utf8")));
       if (plan !== void 0) plans.push(plan);
     } catch {
     }
@@ -57589,7 +58940,7 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
         await clearEmbedStatus(root);
         return sendJson(res, 200, { ok: true, config: null });
       }
-      const modelDir = resolve7(modelDirRaw);
+      const modelDir = resolve8(modelDirRaw);
       const dirProblem = validateLocalModelDir(modelDir);
       if (dirProblem !== null) {
         return sendJson(res, 400, { ok: false, message: dirProblem });
@@ -57710,7 +59061,7 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
     if (modelDirRaw === "") {
       return sendJson(res, 400, { ok: false, message: "expected { modelDir }" });
     }
-    const modelDir = resolve7(modelDirRaw);
+    const modelDir = resolve8(modelDirRaw);
     const dirProblem = validateLocalModelDir(modelDir);
     if (dirProblem !== null) {
       return sendJson(res, 400, { ok: false, message: dirProblem });
@@ -58921,8 +60272,8 @@ async function handleApi(ctx, req, res) {
       req.destroy?.();
       throw new Error(`idb record is too large (${declared} > ${IDB_MAX_RECORD_BYTES} bytes)`);
     }
-    const temporaryDir = await mkdtemp(join27(tmpdir4(), "dsh-soulmojito-idb-"));
-    const temporaryPath = join27(temporaryDir, "record.bin");
+    const temporaryDir = await mkdtemp(join28(tmpdir4(), "dsh-soulmojito-idb-"));
+    const temporaryPath = join28(temporaryDir, "record.bin");
     try {
       await pipeline(req, createWriteStream(temporaryPath));
       const metaHeader = typeof req.headers?.["x-dsh-idb-meta"] === "string" ? req.headers["x-dsh-idb-meta"] : "";
@@ -59382,1832 +60733,733 @@ function asChatLog(value) {
   return value;
 }
 
-// packages/plugin/src/im/runtime.ts
-init_dsh_home();
-init_handle2();
+// packages/plugin/src/mount.ts
+init_io();
+init_public_error();
 
-// packages/plugin/src/im/onebot/seat.ts
-init_handle2();
-var ONEBOT_SEAT_KEY = "dsh-soulmojito:im-onebot-upgrade-seat";
-var seatSymbol = Symbol.for(ONEBOT_SEAT_KEY);
-function ensureOneBotUpgradeSeat(host, path12) {
-  if (host === void 0 || typeof host.registerUpgrade !== "function") {
-    return {
-      registered: false,
-      reason: "the host exposes no webServer.registerUpgrade; OneBot reverse WebSocket is unavailable (HTTP POST webhook still works)"
-    };
+// packages/plugin/src/http/trust.ts
+var MUTATING_METHODS = /* @__PURE__ */ new Set(["POST", "PUT", "PATCH", "DELETE"]);
+var UNSAFE_FETCH_SITES = /* @__PURE__ */ new Set(["cross-site", "same-site"]);
+var LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "::1", "0:0:0:0:0:0:0:1"];
+function normalizeAllowedHosts(value) {
+  if (value === void 0) return [];
+  if (!Array.isArray(value)) throw new Error("allowedHosts must be an array of host names");
+  return value.map((entry, index) => {
+    if (typeof entry !== "string") throw new Error(`allowedHosts[${index}] must be a string`);
+    const trimmed = entry.trim();
+    if (trimmed === "") throw new Error(`allowedHosts[${index}] must not be empty`);
+    if (trimmed.includes("*")) throw new Error(`allowedHosts[${index}] must not contain a wildcard`);
+    const address = parseAllowedHost(trimmed);
+    if (address === void 0) {
+      throw new Error(`allowedHosts[${index}] must be a host name or host:port without a scheme, path or credentials`);
+    }
+    return formatAddress(address);
+  });
+}
+function requestTrustFailure(req, options) {
+  const headers = normalizeHeaders(req.headers);
+  const method = typeof req.method === "string" ? req.method.toUpperCase() : "GET";
+  const hostHeader = firstHeader(headers, "host");
+  const address = hostHeader === void 0 ? void 0 : parseHost(hostHeader);
+  if (hostHeader !== void 0 && address === void 0) {
+    return { status: 403, message: `malformed Host header '${hostHeader}'` };
   }
-  const holder = globalThis;
-  if (holder[seatSymbol]?.path === path12) return { registered: true };
+  if (address !== void 0 && !hostAllowed(address, options)) {
+    return { status: 403, message: `Host '${hostHeader ?? ""}' is not allowed` };
+  }
+  if (!MUTATING_METHODS.has(method)) return void 0;
+  const fetchSite = firstHeader(headers, "sec-fetch-site")?.toLowerCase();
+  if (fetchSite !== void 0 && UNSAFE_FETCH_SITES.has(fetchSite)) {
+    return { status: 403, message: `cross-site request rejected (sec-fetch-site: ${fetchSite})` };
+  }
+  const originHeader = firstHeader(headers, "origin");
+  if (originHeader !== void 0) {
+    const origin = parseOrigin(originHeader);
+    if (origin === void 0) {
+      return { status: 403, message: `Origin '${originHeader}' is not a valid http(s) origin` };
+    }
+    if (address === void 0) {
+      return { status: 403, message: "Origin header without a Host header is not allowed" };
+    }
+    if (!sameOrigin(origin, address)) {
+      return { status: 403, message: `cross-origin request rejected (Origin ${originHeader}, Host ${hostHeader})` };
+    }
+  }
+  if (options.allowNonJsonBody === true) return void 0;
+  const contentType = firstHeader(headers, "content-type");
+  if (contentType !== void 0 && !isJsonContentType(contentType)) {
+    return { status: 415, message: `unsupported content-type '${contentType}'; expected application/json` };
+  }
+  return void 0;
+}
+function normalizeHeaders(headers) {
+  const normalized = {};
+  if (headers === void 0) return normalized;
+  for (const [name2, value] of Object.entries(headers)) normalized[name2.toLowerCase()] = value;
+  return normalized;
+}
+function firstHeader(headers, name2) {
+  const value = headers[name2];
+  const first = Array.isArray(value) ? value[0] : value;
+  return typeof first === "string" && first.trim() !== "" ? first.trim() : void 0;
+}
+function hostAllowed(address, options) {
+  for (const allowed of allowedAddresses(options)) {
+    if (allowed.hostname !== address.hostname) continue;
+    if (allowed.port === void 0 || allowed.port === address.port) return true;
+  }
+  return false;
+}
+function allowedAddresses(options) {
+  const allowed = LOOPBACK_HOSTS.map((hostname) => ({ hostname, port: void 0 }));
+  const configuredHost = normalizedHostname(options.host);
+  if (configuredHost !== void 0) {
+    const port = validPort(options.port);
+    allowed.push({ hostname: configuredHost, port });
+  }
+  if (options.origin !== void 0) {
+    const origin = parseOrigin(options.origin);
+    if (origin !== void 0) allowed.push(origin);
+  }
+  for (const value of options.allowedHosts ?? []) {
+    const address = parseAllowedHost(value);
+    if (address !== void 0) allowed.push(address);
+  }
+  return allowed;
+}
+function parseAllowedHost(value) {
+  const trimmed = value.trim();
+  if (trimmed === "") return void 0;
+  if (/[\s/\\?#@%*]/.test(trimmed)) return void 0;
+  return parseHost(trimmed);
+}
+function formatAddress(address) {
+  const hostname = address.hostname.includes(":") ? `[${address.hostname}]` : address.hostname;
+  return address.port === void 0 ? hostname : `${hostname}:${address.port}`;
+}
+function sameOrigin(origin, host) {
+  if (origin.hostname !== host.hostname) return false;
+  if (host.port !== void 0) return origin.port === host.port;
+  return origin.port === 80 || origin.port === 443;
+}
+function parseHost(value) {
+  const trimmed = value.trim();
+  if (trimmed === "") return void 0;
+  let hostnamePart;
+  let portPart;
+  if (trimmed.startsWith("[")) {
+    const end = trimmed.indexOf("]");
+    if (end < 0) return void 0;
+    hostnamePart = trimmed.slice(1, end);
+    const rest = trimmed.slice(end + 1);
+    if (rest !== "") {
+      if (!rest.startsWith(":")) return void 0;
+      portPart = rest.slice(1);
+    }
+  } else {
+    const firstColon = trimmed.indexOf(":");
+    if (firstColon >= 0 && firstColon === trimmed.lastIndexOf(":")) {
+      hostnamePart = trimmed.slice(0, firstColon);
+      portPart = trimmed.slice(firstColon + 1);
+    } else {
+      hostnamePart = trimmed;
+    }
+  }
+  const hostname = normalizedHostname(hostnamePart);
+  if (hostname === void 0) return void 0;
+  if (portPart === void 0) return { hostname, port: void 0 };
+  const port = validPort(Number(portPart));
+  if (port === void 0) return void 0;
+  return { hostname, port };
+}
+function parseOrigin(value) {
+  let url;
   try {
-    host.registerUpgrade.call(host, {
-      path: path12,
-      handler: (req, socket, head) => dispatchUpgrade(req, socket, head)
-    });
-  } catch (error) {
-    return {
-      registered: false,
-      reason: `registering the OneBot upgrade route at ${path12} failed: ${error instanceof Error ? error.message : String(error)}`
-    };
-  }
-  holder[seatSymbol] = { path: path12 };
-  return { registered: true };
-}
-function dispatchUpgrade(req, socket, head) {
-  const runtime = resolveImRuntime();
-  const handler = runtime?.handleOneBotUpgrade;
-  if (handler === void 0) {
-    rejectUpgrade2(socket, "IM runtime is not available; the OneBot endpoint is closed");
-    return;
-  }
-  void Promise.resolve(handler(req, socket, head)).catch(() => {
-    rejectUpgrade2(socket, "OneBot upgrade handling failed");
-  });
-}
-function rejectUpgrade2(socket, reason) {
-  const duplex = socket;
-  if (duplex.destroyed) return;
-  try {
-    duplex.write(`HTTP/1.1 503 Service Unavailable\r
-Connection: close\r
-Content-Length: ${Buffer.byteLength(reason)}\r
-\r
-${reason}`);
-  } finally {
-    duplex.destroy();
-  }
-}
-
-// packages/plugin/src/im/weixin/context-tokens.ts
-import { randomUUID as randomUUID16 } from "node:crypto";
-import { promises as fs23 } from "node:fs";
-import { dirname as dirname15, join as join28, resolve as resolve8 } from "node:path";
-var WeixinContextTokenError = class extends Error {
-  code;
-  path;
-  constructor(code, message, path12) {
-    super(message);
-    this.name = "WeixinContextTokenError";
-    this.code = code;
-    this.path = path12;
-  }
-};
-var ACCOUNT_ID_PATTERN2 = /^[A-Za-z0-9._-]+$/;
-var FILE_MODE2 = 384;
-function openWeixinContextTokens(root, accountId) {
-  if (!ACCOUNT_ID_PATTERN2.test(accountId) || accountId === "." || accountId === "..") {
-    throw new TypeError(
-      `weixin context token store got an illegal accountId ${JSON.stringify(accountId)}: only [A-Za-z0-9._-] is allowed`
-    );
-  }
-  const file = join28(resolve8(root), "weixin", accountId, "context-tokens.json");
-  return {
-    load: () => loadTokens(file),
-    save: (tokens) => saveTokens(file, tokens),
-    clear: async () => {
-      try {
-        await fs23.rm(file, { force: true });
-      } catch (cause) {
-        throw new WeixinContextTokenError("WEIXIN_TOKEN_STORE_IO", `failed to delete ${file}: ${reasonOf3(cause)}`, file);
-      }
-    }
-  };
-}
-async function loadTokens(file) {
-  let text;
-  try {
-    text = await fs23.readFile(file, "utf8");
-  } catch (cause) {
-    if (isErrno3(cause, "ENOENT")) return {};
-    throw new WeixinContextTokenError("WEIXIN_TOKEN_STORE_IO", `failed to read ${file}: ${reasonOf3(cause)}`, file);
-  }
-  let value;
-  try {
-    value = JSON.parse(text);
-  } catch (cause) {
-    throw new WeixinContextTokenError(
-      "WEIXIN_TOKEN_STORE_CORRUPT",
-      `corrupt token file ${file}: not valid JSON: ${reasonOf3(cause)}`,
-      file
-    );
-  }
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new WeixinContextTokenError("WEIXIN_TOKEN_STORE_CORRUPT", `corrupt token file ${file}: the top level is not an object`, file);
-  }
-  const tokens = {};
-  for (const [peerId, token] of Object.entries(value)) {
-    if (peerId.trim() === "" || typeof token !== "string" || token === "") {
-      throw new WeixinContextTokenError(
-        "WEIXIN_TOKEN_STORE_CORRUPT",
-        `corrupt token file ${file}: the token for ${JSON.stringify(peerId)} is not a non-empty string`,
-        file
-      );
-    }
-    tokens[peerId] = token;
-  }
-  return tokens;
-}
-async function saveTokens(file, tokens) {
-  const snapshot2 = {};
-  for (const [peerId, token] of Object.entries(tokens)) {
-    if (typeof token !== "string" || token === "") {
-      throw new TypeError(`weixin context token for ${JSON.stringify(peerId)} must be a non-empty string`);
-    }
-    snapshot2[peerId] = token;
-  }
-  const tmp = `${file}.tmp-${randomUUID16()}`;
-  try {
-    await fs23.mkdir(dirname15(file), { recursive: true });
-    await fs23.writeFile(tmp, `${JSON.stringify(snapshot2, null, 2)}
-`, { encoding: "utf8", mode: FILE_MODE2 });
-    await fs23.rename(tmp, file);
-  } catch (cause) {
-    await fs23.rm(tmp, { force: true }).catch(() => void 0);
-    throw new WeixinContextTokenError("WEIXIN_TOKEN_STORE_IO", `failed to write ${file}: ${reasonOf3(cause)}`, file);
-  }
-}
-function isErrno3(cause, code) {
-  return typeof cause === "object" && cause !== null && cause.code === code;
-}
-function reasonOf3(cause) {
-  return cause instanceof Error ? cause.message : String(cause);
-}
-
-// packages/plugin/src/im/router.ts
-import { randomUUID as randomUUID17 } from "node:crypto";
-import { realpath } from "node:fs/promises";
-import { isAbsolute as isAbsolute2, relative as relative3 } from "node:path";
-
-// packages/plugin/src/im/coalesce.ts
-var IM_COALESCE_WINDOW_MS = 600;
-var IM_COALESCE_MAX_MESSAGES = 8;
-var IM_COALESCE_MAX_CHARS = 4e3;
-function orderInboundEntries(entries) {
-  return [...entries].sort((left, right) => {
-    const leftAt = left.inbound.platformAt ?? left.inbound.receivedAt;
-    const rightAt = right.inbound.platformAt ?? right.inbound.receivedAt;
-    if (leftAt !== rightAt) return leftAt - rightAt;
-    return left.seq - right.seq;
-  });
-}
-function mergedRelayTextOf(items, alias, channel, scope, options) {
-  const scopeLabel = scope === "group" ? "\u7FA4\u804A" : "\u79C1\u804A";
-  const ownerFlag = options?.owner === true ? " owner=1" : options?.ownerItems !== void 0 && options.ownerItems.length > 0 ? ` ownerItems=${options.ownerItems.join(",")}` : "";
-  return [
-    `[IM ${channel}/${scopeLabel} peer=${alias}${ownerFlag}]\uFF08\u8FDE\u7EED ${items.length} \u6761\u6D88\u606F\uFF09`,
-    ...items.map((item) => `[${item.ref}] ${item.body}`),
-    `\uFF08\u8FD9\u662F\u4ECE IM \u8F6C\u53D1\u7ED9\u4F60\u7684\u6D88\u606F\uFF0C\u4E0D\u662F DSH \u7528\u6237\u8F93\u5165\u3002\u56DE\u590D\u8BF7\u8C03\u7528 im_send\uFF0Cpeer \u53C2\u6570\u7528 ${alias}\u3002\uFF09`
-  ].join("\n");
-}
-
-// packages/plugin/src/im/refs.ts
-import { createHash as createHash19 } from "node:crypto";
-var IM_MESSAGE_REF_TTL_MS = 10 * 6e4;
-var IM_MESSAGE_REF_MAX_ENTRIES = 1e3;
-function imMessageRef(dedupeKey) {
-  return `msg-${createHash19("sha256").update(dedupeKey).digest("hex").slice(0, 10)}`;
-}
-function createImMessageRefStore(options) {
-  const entries = /* @__PURE__ */ new Map();
-  function pruneExpired2() {
-    const now = options.now();
-    for (const [ref, entry] of entries) {
-      if (now - entry.at > options.ttlMs) entries.delete(ref);
-    }
-  }
-  return {
-    record(ref, entry) {
-      pruneExpired2();
-      entries.delete(ref);
-      while (entries.size >= options.maxEntries) {
-        const oldest = entries.keys().next();
-        if (oldest.done === true) break;
-        entries.delete(oldest.value);
-      }
-      entries.set(ref, entry);
-    },
-    resolve(ref) {
-      pruneExpired2();
-      return entries.get(ref);
-    },
-    size() {
-      return entries.size;
-    }
-  };
-}
-
-// packages/plugin/src/im/relay.ts
-var IM_OWNER_LINE_PREFIX = "[\u4E3B\u4EBA]";
-var IM_OWNER_ESCAPED_LINE_PREFIX = "\uFF3B\u4E3B\u4EBA\uFF3D";
-var IM_OWNER_RESERVED_NAME = "\u4E3B\u4EBA";
-function normalizeDisplayName(raw) {
-  return raw.normalize("NFKC").replace(/[\u200B-\u200D\uFEFF]/g, "").replace(/[\[\]]/g, "").replace(/\s+/g, " ").trim();
-}
-function escapeOwnerMarkerLines(text) {
-  return text.split("\n").map((line) => line.startsWith(IM_OWNER_LINE_PREFIX) ? `${IM_OWNER_ESCAPED_LINE_PREFIX}${line.slice(IM_OWNER_LINE_PREFIX.length)}` : line).join("\n");
-}
-function relayTextOf(inbound, body, alias, options) {
-  const scope = inbound.scope === "group" ? "\u7FA4\u804A" : "\u79C1\u804A";
-  const ownerFlag = options?.owner === true ? " owner=1" : "";
-  return [
-    `[IM ${inbound.channel}/${scope} peer=${alias} msg=${imMessageRef(inbound.dedupeKey)} time=${new Date(inbound.receivedAt).toISOString()}${ownerFlag}]`,
-    body,
-    `\uFF08\u8FD9\u662F\u4ECE IM \u8F6C\u53D1\u7ED9\u4F60\u7684\u6D88\u606F\uFF0C\u4E0D\u662F DSH \u7528\u6237\u8F93\u5165\u3002\u56DE\u590D\u8BF7\u8C03\u7528 im_send\uFF0Cpeer \u53C2\u6570\u7528 ${alias}\u3002\uFF09`
-  ].join("\n");
-}
-function imUserTextOf(inbound) {
-  const body = inbound.text.trim();
-  const attachments = attachmentSummaryOf(inbound);
-  const composed = inbound.scope === "group" ? `[${displaySenderNameOf(inbound) ?? "\u7FA4\u6210\u5458"}] ${body}`.trim() : body;
-  const withAttachments = attachments === void 0 ? composed : `${composed}${composed === "" ? "" : "\n"}${attachments}`.trim();
-  return withAttachments === "" ? void 0 : escapeOwnerMarkerLines(withAttachments);
-}
-function displaySenderNameOf(inbound) {
-  const name2 = normalizeDisplayName(inbound.senderName);
-  if (name2 === "" || name2 === IM_OWNER_RESERVED_NAME) return void 0;
-  const id = inbound.senderId.trim();
-  if (id.startsWith(name2)) return void 0;
-  return name2;
-}
-function attachmentSummaryOf(inbound) {
-  if (inbound.media.length === 0) return void 0;
-  const labels = inbound.media.slice(0, 6).map((media) => {
-    const label = media.kind === "image" ? "\u56FE\u7247" : media.kind === "voice" ? "\u8BED\u97F3" : media.kind === "video" ? "\u89C6\u9891" : "\u6587\u4EF6";
-    if (media.localPath !== void 0) return `${label}\uFF08${media.localPath}\uFF09`;
-    if (media.url !== void 0) return `${label}\uFF08\u672A\u4E0B\u8F7D\uFF09`;
-    return label;
-  });
-  const rest = inbound.media.length > labels.length ? `\u7B49 ${inbound.media.length} \u4E2A` : "";
-  return `\uFF08\u9644\u4EF6\uFF1A${labels.join("\u3001")}${rest}\uFF09`;
-}
-
-// packages/plugin/src/im/owner-ledger.ts
-function createImOwnerLedger(deps) {
-  async function ownerIdOf(peerKey) {
-    const parts = imPeerKeyParts(peerKey);
-    if (parts === void 0) return void 0;
-    const state = await deps.db.getState();
-    return resolveImOwnerId(parts.channel, parts.accountId, peerKey, {
-      owners: state.imOwners,
-      accountOwners: state.imAccountOwners
-    });
-  }
-  function isOwnerMessage(message, ownerId) {
-    if (ownerId === void 0) return false;
-    return imSenderHash(message.channel, message.accountId, message.senderId) === ownerId;
-  }
-  async function rememberSenders(peerKey, alias, messages) {
-    try {
-      const now = deps.now();
-      const updates = messages.map((message) => ({
-        id: imSenderHash(message.channel, message.accountId, message.senderId),
-        name: message.scope === "group" ? displaySenderNameOf(message) ?? "" : "",
-        lastAt: now
-      }));
-      const options = { maxEntries: IM_SENDERS_MAX_PER_PEER, refreshWindowMs: IM_SENDER_REFRESH_WINDOW_MS };
-      const state = await deps.db.getState();
-      if (mergeImSenderEntries(state.imSenders?.[peerKey] ?? [], updates, options) === void 0) {
-        deps.log?.note("debug", `sender refresh for ${alias} is within the ${IM_SENDER_REFRESH_WINDOW_MS}ms write window; state not rewritten`);
-        return;
-      }
-      await deps.db.updateState((current) => {
-        const merged = mergeImSenderEntries(current.imSenders?.[peerKey] ?? [], updates, options);
-        if (merged === void 0) return {};
-        return { imSenders: { ...current.imSenders ?? {}, [peerKey]: merged } };
-      });
-    } catch (error) {
-      deps.log?.note("warn", `could not record recent senders for ${alias}; the message was delivered: ${messageOf13(error)}`);
-    }
-  }
-  return { ownerIdOf, isOwnerMessage, rememberSenders };
-}
-function messageOf13(error) {
-  return error instanceof Error ? error.message : String(error);
-}
-
-// packages/plugin/src/im/commands.ts
-var IM_COMMAND_DENIED = "\u53EA\u6709\u5168\u5C40\u4E3B\u4EBA\u53EF\u4EE5\u4F7F\u7528\u6307\u4EE4";
-var IM_COMMAND_CHANNEL_UNSUPPORTED = "\u5FAE\u4FE1\u6E20\u9053\u4E0D\u652F\u6301\u6307\u4EE4\uFF08\u5FAE\u4FE1\u4E0D\u9700\u8981\u8BBE\u7F6E\u4E3B\u4EBA\uFF09";
-var IM_COMMAND_USAGE = "\u53EF\u7528\u6307\u4EE4\uFF1A/status\u3001/bind <sessionId>\u3001/unbind\u3001/help";
-var IM_COMMAND_BIND_USAGE = "\u7528\u6CD5\uFF1A/bind <sessionId>";
-var IM_COMMAND_HELP = [
-  "\u53EF\u7528\u6307\u4EE4\uFF08\u53EA\u6709\u8D26\u53F7\u7684\u5168\u5C40\u4E3B\u4EBA\u53EF\u4EE5\u4F7F\u7528\uFF09\uFF1A",
-  "/status \u67E5\u770B\u5F53\u524D\u72B6\u6001",
-  "/bind <sessionId> \u628A\u672C\u5BF9\u8BDD\u7ED1\u5230\u6307\u5B9A\u4F1A\u8BDD",
-  "/unbind \u89E3\u9664\u672C\u5BF9\u8BDD\u7684\u7ED1\u5B9A",
-  "/help \u67E5\u770B\u8FD9\u4EFD\u5E2E\u52A9"
-].join("\n");
-var IM_COMMAND_UNBOUND_OK = "\u5DF2\u89E3\u9664\u672C\u5BF9\u8BDD\u7684\u7ED1\u5B9A";
-var IM_COMMAND_UNBOUND_NONE = "\u672C\u5BF9\u8BDD\u5F53\u524D\u672A\u7ED1\u5B9A";
-var IM_MENTION_PREFIX = /^(?:<@!?[A-Za-z0-9_.:-]+>|@[A-Za-z0-9_.:-]+)/;
-function imCommandTextOf(text) {
-  let candidate = text.trim();
-  for (; ; ) {
-    const mention = IM_MENTION_PREFIX.exec(candidate);
-    if (mention === null) break;
-    candidate = candidate.slice(mention[0].length).trimStart();
-  }
-  return candidate.startsWith("/") ? candidate : void 0;
-}
-function isImCommandText(text) {
-  return imCommandTextOf(text) !== void 0;
-}
-function parseImCommand(text) {
-  const candidate = imCommandTextOf(text);
-  if (candidate === void 0) return void 0;
-  const body = candidate.slice(1);
-  const spaceAt = body.search(/\s/);
-  if (spaceAt < 0) return { name: body.toLowerCase(), argument: "" };
-  return {
-    name: body.slice(0, spaceAt).toLowerCase(),
-    argument: body.slice(spaceAt + 1).trim()
-  };
-}
-function imMaskSessionId(sessionId) {
-  const trimmed = sessionId.trim();
-  return trimmed.length > 12 ? `${trimmed.slice(0, 8)}\u2026` : trimmed;
-}
-async function handleImCommandIfAny(wiring, inbound, peerKey, sendNotice) {
-  if (!isImCommandText(inbound.text)) return false;
-  await handleImCommand({
-    db: wiring.db,
-    now: wiring.now,
-    seenDedupe: wiring.seenDedupe,
-    sendNotice,
-    ...wiring.sendStatuses === void 0 ? {} : { sendStatuses: wiring.sendStatuses },
-    ...wiring.applyImPreset === void 0 ? {} : { applyImPreset: wiring.applyImPreset },
-    ...wiring.log === void 0 ? {} : { log: wiring.log }
-  }, {
-    inbound,
-    peerKey,
-    alias: imPeerAlias(inbound.channel, inbound.scope, peerKey)
-  });
-  return true;
-}
-async function handleImCommand(deps, input) {
-  const { inbound, alias, peerKey } = input;
-  if (await deps.seenDedupe(inbound.dedupeKey, deps.now())) {
-    deps.log?.note("debug", `ignored a duplicate IM command from ${alias} (dedupe)`);
-    return;
-  }
-  const settings = (await deps.db.getState()).imSettings ?? DEFAULT_IM_SETTINGS;
-  if (!imAccessAllows(settings, inbound.scope, inbound.peerId)) {
-    deps.log?.note(
-      "warn",
-      `dropped an IM command from ${alias}: the access policy does not allow this peer (mode is allowlist and the peer is not listed, or the scope is disabled)`
-    );
-    return;
-  }
-  const reply = await runImCommand(deps, { inbound, peerKey, alias });
-  if (reply === void 0) return;
-  void deps.sendNotice(targetOf(inbound), reply, alias).catch((error) => {
-    deps.log?.note("warn", `sending an IM command reply to ${alias} failed: ${messageOf14(error)}`);
-  });
-}
-async function runImCommand(deps, input) {
-  const command = parseImCommand(input.inbound.text);
-  if (command === void 0) return void 0;
-  if (input.inbound.channel === "weixin") return IM_COMMAND_CHANNEL_UNSUPPORTED;
-  const state = await deps.db.getState();
-  const owner = state.imAccountOwners?.[imAccountKey(input.inbound.channel, input.inbound.accountId)];
-  const senderHash = imSenderHash(input.inbound.channel, input.inbound.accountId, input.inbound.senderId);
-  if (owner === void 0 || owner.id !== senderHash) {
-    deps.log?.note("warn", `denied IM command /${command.name} from ${input.alias}: the sender is not the account-global owner`);
-    return IM_COMMAND_DENIED;
-  }
-  deps.log?.note("info", `executed IM command /${command.name} from ${input.alias}`);
-  switch (command.name) {
-    case "status":
-      return statusReply(deps, input, state.imPeers, owner);
-    case "bind":
-      return bindReply(deps, input, command.argument);
-    case "unbind":
-      return unbindReply(deps, input);
-    case "help":
-      return IM_COMMAND_HELP;
-    default:
-      return IM_COMMAND_USAGE;
-  }
-}
-async function bindReply(deps, input, argument) {
-  const sessionId = argument.trim();
-  if (sessionId === "") return IM_COMMAND_BIND_USAGE;
-  const binding = {
-    sessionId,
-    scope: input.inbound.scope,
-    boundBy: "command",
-    createdAt: new Date(deps.now()).toISOString()
-  };
-  await deps.db.updateState((current) => {
-    const pending = { ...current.imPendingPeers ?? {} };
-    delete pending[input.peerKey];
-    return {
-      imPeers: { ...current.imPeers ?? {}, [input.peerKey]: binding },
-      imPendingPeers: pending
-    };
-  });
-  deps.log?.note("info", `bound ${input.alias} to a session by /bind (boundBy=command)`);
-  const preset = await presetNoteOf(deps, sessionId, input.alias);
-  return `\u5DF2\u7ED1\u5B9A\u5230\u4F1A\u8BDD ${imMaskSessionId(sessionId)}\uFF1B${preset}`;
-}
-var IM_COMMAND_PRESET_FAILED = "\u9884\u8BBE\u5207\u6362\u5931\u8D25\uFF08\u8BE6\u89C1\u8FD0\u884C\u65E5\u5FD7\uFF09";
-async function presetNoteOf(deps, sessionId, alias) {
-  if (deps.applyImPreset === void 0) return "\u9884\u8BBE\u672A\u5207\u6362\uFF08\u8FD0\u884C\u65F6\u672A\u63D0\u4F9B\u5207\u6362\u80FD\u529B\uFF09";
-  try {
-    const result = await deps.applyImPreset(sessionId);
-    if (result.applied) return "\u5DF2\u5207\u6362\u5230 AgentTavernIM";
-    const reason = result.reason ?? "unknown reason";
-    if (/running|not open/i.test(reason)) return "\u9884\u8BBE\u5F85\u5207\u6362\uFF08\u4F1A\u8BDD\u672A\u6253\u5F00\u6216\u6B63\u5728\u8FD0\u884C\uFF09";
-    deps.log?.note("warn", `switching the bound session to AgentTavernIM for ${alias} failed: ${reason}`);
-    return IM_COMMAND_PRESET_FAILED;
-  } catch (error) {
-    deps.log?.note("warn", `switching the bound session to AgentTavernIM for ${alias} failed: ${messageOf14(error)}`);
-    return IM_COMMAND_PRESET_FAILED;
-  }
-}
-async function unbindReply(deps, input) {
-  const state = await deps.db.getState();
-  if (state.imPeers?.[input.peerKey] === void 0 && state.imPendingPeers?.[input.peerKey] === void 0) {
-    return IM_COMMAND_UNBOUND_NONE;
-  }
-  await deps.db.updateState((current) => {
-    const peers = { ...current.imPeers ?? {} };
-    const pending = { ...current.imPendingPeers ?? {} };
-    delete peers[input.peerKey];
-    delete pending[input.peerKey];
-    return { imPeers: peers, imPendingPeers: pending };
-  });
-  deps.log?.note("info", `unbound ${input.alias} by /unbind`);
-  return IM_COMMAND_UNBOUND_OK;
-}
-function statusReply(deps, input, peers, owner) {
-  const inbound = input.inbound;
-  const binding = peers?.[input.peerKey];
-  const lines = [
-    "\u72B6\u6001",
-    `\u6E20\u9053\uFF1A${inbound.channel} \xB7 ${inbound.scope === "group" ? "\u7FA4\u804A" : "\u79C1\u804A"}`,
-    `\u5BF9\u7AEF\uFF1A${input.alias}`,
-    `\u4F1A\u8BDD\uFF1A${binding === void 0 ? "\u672A\u7ED1\u5B9A" : imMaskSessionId(binding.sessionId)}`,
-    `\u5168\u5C40\u4E3B\u4EBA\uFF1A${owner.name.trim() === "" ? owner.id : owner.name.trim()}`,
-    `\u65F6\u95F4\uFF1A${new Date(deps.now()).toLocaleString()}`
-  ];
-  const send = sendSummaryOf(deps, inbound);
-  if (send !== void 0) lines.push(send);
-  return lines.join("\n");
-}
-function sendSummaryOf(deps, inbound) {
-  const status2 = (deps.sendStatuses?.() ?? []).find(
-    (row) => row.channel === inbound.channel && row.accountId === inbound.accountId
-  );
-  if (status2 === void 0) return void 0;
-  const parts = [status2.allowedNow ? "\u73B0\u5728\u53EF\u53D1" : "\u9700\u8981\u7B49\u5F85"];
-  if (!status2.allowedNow && status2.nextSendAt !== void 0) parts.push(`\u4E0B\u6B21 ${timeOf(status2.nextSendAt)}`);
-  if (status2.throttleUntil !== void 0) parts.push(`\u51B7\u5374\u81F3 ${timeOf(status2.throttleUntil)}`);
-  parts.push(`\u961F\u5217 ${status2.queueDepth} \u6761`);
-  return `\u53D1\u9001\uFF1A${parts.join(" \xB7 ")}`;
-}
-function timeOf(at) {
-  return new Date(at).toLocaleString();
-}
-function targetOf(inbound) {
-  return {
-    channel: inbound.channel,
-    accountId: inbound.accountId,
-    scope: inbound.scope,
-    peerId: inbound.peerId,
-    ...inbound.replyTo === void 0 ? {} : { replyTo: inbound.replyTo }
-  };
-}
-function messageOf14(error) {
-  return error instanceof Error ? error.message : String(error);
-}
-
-// packages/plugin/src/im/project.ts
-var IM_EMPTY_REPLY = "\uFF08\u65E0\u6587\u672C\u56DE\u590D\uFF09";
-var ImProjectError = class extends Error {
-  code = "IM_PROJECT_INVALID";
-  constructor(message) {
-    super(message);
-    this.name = "ImProjectError";
-  }
-};
-function projectImText(displayText, channel, limit) {
-  assertLimit(limit);
-  const collapsed = stripFrontendDocuments(displayText);
-  const normalized = channel === "weixin" ? stripWeixinMarkdown(collapsed) : collapsed;
-  const text = normalizeBlankLines(normalized);
-  if (text === "") return [IM_EMPTY_REPLY];
-  const parts = channel === "qq" ? chunkMarkdown(text, limit) : chunkParagraphs(text, limit);
-  return parts.length === 0 ? [IM_EMPTY_REPLY] : parts;
-}
-function assertLimit(limit) {
-  if (!Number.isSafeInteger(limit) || limit <= 0) {
-    throw new ImProjectError(`chunk limit must be a positive integer, received ${String(limit)}`);
-  }
-}
-function normalizeBlankLines(text) {
-  return text.replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n").trim();
-}
-function stripWeixinMarkdown(text) {
-  const lines = text.split("\n");
-  let fence = false;
-  const out = [];
-  for (const line of lines) {
-    if (/^\s*```/.test(line)) {
-      fence = !fence;
-      out.push(line);
-      continue;
-    }
-    if (fence) {
-      out.push(line);
-      continue;
-    }
-    let next = line.replace(/!\[[^\]]*\]\([^)]*\)/g, "").replace(/^\s{0,3}#{1,6}\s+/, "").replace(/~~([^~]+)~~/g, "$1").replace(/\*\*\*([^*]+)\*\*\*/g, "$1").replace(/\*\*([^*]+)\*\*/g, "$1").replace(/\*([^*\n]+)\*/g, "$1").replace(/___([^_]+)___/g, "$1").replace(/__([^_]+)__/g, "$1").replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,!?]|$)/g, "$1$2").replace(/`([^`\n]+)`/g, "$1").replace(/^\s{0,3}>\s?/, "");
-    next = next.replace(/[ \t]+$/, "");
-    out.push(next);
-  }
-  return out.join("\n");
-}
-function chunkMarkdown(text, limit) {
-  assertLimit(limit);
-  const lines = text.split("\n");
-  const parts = [];
-  let buffer = [];
-  let bufferLength = 0;
-  let fenceInfo;
-  const flush = (reopen) => {
-    if (buffer.length === 0) return;
-    const body = buffer.join("\n");
-    if (reopen && fenceInfo !== void 0) {
-      parts.push(`${body}
-\`\`\``);
-      buffer = [`\`\`\`${fenceInfo}`];
-      bufferLength = 3 + fenceInfo.length;
-      return;
-    }
-    parts.push(body);
-    buffer = [];
-    bufferLength = 0;
-  };
-  for (const line of lines) {
-    const fenceMatch = /^\s*```(.*)$/.exec(line);
-    const isFence = fenceMatch !== null;
-    const cost = line.length + (buffer.length === 0 ? 0 : 1);
-    if (bufferLength + cost > limit && buffer.length > 0) {
-      const keepFence = fenceInfo !== void 0;
-      flush(keepFence);
-    }
-    if (line.length > limit && buffer.length === 0) {
-      for (const piece of hardSplit(line, limit)) parts.push(piece);
-      bufferLength = 0;
-      continue;
-    }
-    buffer.push(line);
-    bufferLength += cost;
-    if (isFence) {
-      if (fenceInfo === void 0) fenceInfo = fenceMatch[1] ?? "";
-      else fenceInfo = void 0;
-    }
-  }
-  flush(false);
-  return parts.map((part) => part.trim()).filter((part) => part !== "");
-}
-function chunkParagraphs(text, limit) {
-  assertLimit(limit);
-  const paragraphs = text.split(/\n{2,}/);
-  const parts = [];
-  let buffer = "";
-  for (const paragraph of paragraphs) {
-    const trimmed = paragraph.trim();
-    if (trimmed === "") continue;
-    const candidate = buffer === "" ? trimmed : `${buffer}
-
-${trimmed}`;
-    if (candidate.length <= limit) {
-      buffer = candidate;
-      continue;
-    }
-    if (buffer !== "") {
-      parts.push(buffer);
-      buffer = "";
-    }
-    if (trimmed.length <= limit) {
-      buffer = trimmed;
-      continue;
-    }
-    const pieces = hardSplit(trimmed, limit);
-    for (const piece of pieces.slice(0, -1)) parts.push(piece);
-    buffer = pieces[pieces.length - 1] ?? "";
-  }
-  if (buffer !== "") parts.push(buffer);
-  return parts;
-}
-function hardSplit(text, limit) {
-  const pieces = [];
-  let cursor = 0;
-  while (cursor < text.length) {
-    let end = Math.min(cursor + limit, text.length);
-    const code = text.charCodeAt(end - 1);
-    if (end < text.length && code >= 55296 && code <= 56319) end -= 1;
-    if (end <= cursor) end = Math.min(cursor + limit, text.length);
-    pieces.push(text.slice(cursor, end));
-    cursor = end;
-  }
-  return pieces;
-}
-
-// packages/plugin/src/im/router.ts
-var IM_UNBOUND_NOTICE = "\uFF08\u6D88\u606F\u5DF2\u6536\u5230\uFF0C\u4F46\u8FD9\u4E2A\u5BF9\u7AEF\u8FD8\u6CA1\u6709\u7ED1\u5B9A DSH \u4F1A\u8BDD\uFF1B\u8BF7\u5728 dsh-soulmojito \u7684 IM \u9762\u677F\u628A\u5B83\u7ED1\u5230\u4E00\u4E2A\u4F1A\u8BDD\uFF09";
-var IM_SESSION_NOT_LIVE = "\uFF08\u6D88\u606F\u5DF2\u6536\u5230\uFF0C\u4F46\u7ED1\u5B9A\u7684 DSH \u4F1A\u8BDD\u5F53\u524D\u4E0D\u53EF\u6295\u9012\uFF08\u672A\u6253\u5F00\u6216\u4E0D\u662F AgentLoop \u4F1A\u8BDD\uFF09\uFF1B\u8BF7\u6253\u5F00\u5B83\u6216\u6539\u7ED1\u540E\u518D\u53D1\u4E00\u6B21\uFF09";
-var IM_DELIVERY_FAILED = "\uFF08\u6D88\u606F\u5DF2\u6536\u5230\uFF0C\u4F46\u63D2\u5165\u7ED1\u5B9A\u7684 DSH \u4F1A\u8BDD\u5931\u8D25\uFF1B\u8BF7\u7A0D\u540E\u518D\u53D1\u4E00\u6B21\uFF09";
-var ImSendError = class extends Error {
-  code;
-  constructor(code, message, options) {
-    super(message, options);
-    this.name = "ImSendError";
-    this.code = code;
-  }
-};
-var UNBOUND_NOTICE_TTL_MS = 10 * 6e4;
-var REPLY_ANCHOR_TTL_MS = 5 * 6e4;
-var MAX_PENDING_PEERS = 50;
-var IM_FLUSH_PENDING_MAX_PASSES = 50;
-var IM_FLUSH_PENDING_MAX_MS = 2e3;
-function createImRouter(deps) {
-  const noticed = /* @__PURE__ */ new Map();
-  const replyAnchors = /* @__PURE__ */ new Map();
-  const messageRefs = createImMessageRefStore({
-    now: deps.now,
-    ttlMs: IM_MESSAGE_REF_TTL_MS,
-    maxEntries: IM_MESSAGE_REF_MAX_ENTRIES
-  });
-  const ownerLedger = createImOwnerLedger({
-    db: deps.db,
-    now: deps.now,
-    ...deps.log === void 0 ? {} : { log: deps.log }
-  });
-  const coalesceWindowMs = deps.coalesceWindowMs ?? IM_COALESCE_WINDOW_MS;
-  const scheduleFlush = deps.scheduleFlush ?? ((delayMs, run) => {
-    const timer = setTimeout(run, delayMs);
-    return () => {
-      clearTimeout(timer);
-    };
-  });
-  const buffers = /* @__PURE__ */ new Map();
-  const flushTimers = /* @__PURE__ */ new Map();
-  const flushing = /* @__PURE__ */ new Map();
-  let nextSeq = 0;
-  async function settingsOf() {
-    const state = await deps.db.getState();
-    return state.imSettings ?? DEFAULT_IM_SETTINGS;
-  }
-  async function inbound(inboundMessage, options) {
-    const peerKey = imPeerKey(inboundMessage.channel, inboundMessage.accountId, inboundMessage.scope, inboundMessage.peerId);
-    if (await handleImCommandIfAny(deps, inboundMessage, peerKey, sendNotice)) return;
-    const entry = {
-      inbound: inboundMessage,
-      ...options?.loadMedia === void 0 ? {} : { loadMedia: options.loadMedia },
-      seq: nextSeq,
-      at: deps.now()
-    };
-    nextSeq += 1;
-    const buffered = buffers.get(peerKey);
-    if (buffered === void 0) buffers.set(peerKey, [entry]);
-    else buffered.push(entry);
-    const batch = buffered ?? [entry];
-    if (bufferExceedsLimits(batch)) {
-      cancelFlushTimer(peerKey);
-      await startFlush(peerKey);
-      return;
-    }
-    scheduleFlushFor(peerKey);
-  }
-  function bufferExceedsLimits(entries) {
-    if (entries.length >= IM_COALESCE_MAX_MESSAGES) return true;
-    let chars = 0;
-    for (const entry of entries) chars += entry.inbound.text.length;
-    return chars > IM_COALESCE_MAX_CHARS;
-  }
-  function cancelFlushTimer(peerKey) {
-    const cancel = flushTimers.get(peerKey);
-    if (cancel === void 0) return;
-    flushTimers.delete(peerKey);
-    cancel();
-  }
-  function startFlush(peerKey) {
-    const previous = flushing.get(peerKey);
-    const run = previous === void 0 ? flushPeer(peerKey) : previous.then(() => flushPeer(peerKey));
-    flushing.set(peerKey, run);
-    const done = () => {
-      if (flushing.get(peerKey) === run) flushing.delete(peerKey);
-    };
-    void run.then(done, done);
-    return run;
-  }
-  function scheduleFlushFor(peerKey) {
-    if (flushTimers.has(peerKey)) return;
-    let fired = false;
-    let registering = true;
-    const cancel = scheduleFlush(coalesceWindowMs, () => {
-      fired = true;
-      if (registering) return;
-      flushTimers.delete(peerKey);
-      void startFlush(peerKey);
-    });
-    registering = false;
-    if (fired) {
-      cancel();
-      void startFlush(peerKey);
-      return;
-    }
-    flushTimers.set(peerKey, cancel);
-  }
-  async function flushPeer(peerKey) {
-    cancelFlushTimer(peerKey);
-    const buffered = buffers.get(peerKey);
-    if (buffered === void 0) return;
-    buffers.delete(peerKey);
-    const first = buffered[0];
-    if (first === void 0) return;
-    const alias = imPeerAlias(first.inbound.channel, first.inbound.scope, peerKey);
-    try {
-      await deliverBatch(peerKey, alias, orderInboundEntries(buffered));
-    } catch (error) {
-      deps.log?.note("error", `flushing the buffered messages from ${alias} failed: ${messageOf15(error)}`);
-    }
-  }
-  async function flushPending() {
-    const startedAt = deps.now();
-    let passes = 0;
-    for (; ; ) {
-      if (passes >= IM_FLUSH_PENDING_MAX_PASSES || deps.now() - startedAt >= IM_FLUSH_PENDING_MAX_MS) {
-        const pendingPeers = /* @__PURE__ */ new Set([...buffers.keys(), ...flushTimers.keys(), ...flushing.keys()]);
-        if (pendingPeers.size === 0) return;
-        deps.log?.note(
-          "warn",
-          `flushPending stopped after ${passes} pass(es): ${pendingPeers.size} peer batch(es) are still pending; the per-peer window timers keep flushing them`
-        );
-        return;
-      }
-      passes += 1;
-      for (const peerKey of [...flushTimers.keys()]) {
-        cancelFlushTimer(peerKey);
-        startFlush(peerKey);
-      }
-      for (const peerKey of [...buffers.keys()]) startFlush(peerKey);
-      const pending = [...flushing.values()];
-      if (pending.length === 0) return;
-      await Promise.all(pending);
-    }
-  }
-  async function deliverBatch(peerKey, alias, entries) {
-    const settings = await settingsOf();
-    const binding = await boundSessionOf(peerKey);
-    const deliverables = [];
-    for (const entry of entries) {
-      try {
-        const deliverable = await consumeEntry(peerKey, alias, entry, settings, binding);
-        if (deliverable !== void 0) deliverables.push(deliverable);
-      } catch (error) {
-        deps.log?.note("error", `processing a buffered message from ${alias} failed: ${messageOf15(error)}`);
-      }
-    }
-    if (binding === void 0 || deliverables.length === 0) return;
-    const ownerId = await ownerLedger.ownerIdOf(peerKey);
-    if (deliverables.length > 1 && deliverables.every((item) => item.message.media.length === 0)) {
-      await deliverMerged(peerKey, alias, binding.sessionId, deliverables, ownerId);
-      return;
-    }
-    for (const item of deliverables) await deliverOne(peerKey, alias, binding.sessionId, item, ownerId);
-  }
-  async function consumeEntry(peerKey, alias, entry, settings, binding) {
-    const inboundMessage = entry.inbound;
-    if (await deps.seenDedupe(inboundMessage.dedupeKey, entry.at)) {
-      deps.log?.note("debug", `ignored a duplicate ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias} (dedupe)`);
-      return void 0;
-    }
-    if (!imAccessAllows(settings, inboundMessage.scope, inboundMessage.peerId)) {
-      deps.log?.note(
-        "warn",
-        `dropped a ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias}: the access policy does not allow this peer (mode is allowlist and the peer is not listed, or the scope is disabled)`
-      );
-      return void 0;
-    }
-    if (binding === void 0) {
-      const unboundBody = imUserTextOf(inboundMessage);
-      if (unboundBody === void 0) {
-        deps.log?.note("debug", `ignored a ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias}: no text and no attachments`);
-        return void 0;
-      }
-      await rememberPendingPeer(peerKey, inboundMessage, alias, entry.at);
-      await notifyUnbound(imTargetOf(inboundMessage), peerKey, alias, entry.at);
-      return void 0;
-    }
-    let media = inboundMessage.media;
-    if (entry.loadMedia !== void 0) {
-      try {
-        media = await entry.loadMedia();
-      } catch (error) {
-        deps.log?.note(
-          "warn",
-          `media for a ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias} failed to load; delivering it without local copies: ${messageOf15(error)}`
-        );
-      }
-    }
-    const message = media === inboundMessage.media ? inboundMessage : { ...inboundMessage, media };
-    if (message.replyTo !== void 0) replyAnchors.set(peerKey, { replyTo: message.replyTo, at: entry.at });
-    const body = imUserTextOf(message);
-    if (body === void 0) {
-      deps.log?.note("debug", `ignored a ${message.channel}/${message.scope} message from ${alias}: no text and no attachments`);
-      return void 0;
-    }
-    return { message, body };
-  }
-  async function deliverOne(peerKey, alias, sessionId, item, ownerId) {
-    const message = item.message;
-    const isOwner = ownerLedger.isOwnerMessage(message, ownerId);
-    const body = isOwner && message.scope === "group" ? `${IM_OWNER_LINE_PREFIX}${item.body}` : item.body;
-    const ref = imMessageRef(message.dedupeKey);
-    const text = relayTextOf(message, body, alias, { owner: isOwner });
-    deps.log?.note("info", `accepted a ${message.channel}/${message.scope} message from ${alias} (${body.length} chars) for session ${sessionId}`);
-    const messageId = `im-${randomUUID17()}`;
-    try {
-      await deps.insert(sessionId, {
-        id: messageId,
-        text,
-        summary: `IM ${message.channel}/${message.scope} message msg=${ref} from ${alias}`
-      });
-    } catch (error) {
-      const code = error?.code;
-      deps.log?.note("error", `could not insert a message from ${alias} into session ${sessionId}: ${messageOf15(error)}`);
-      deps.logger?.warn?.(`dsh-soulmojito im: inserting into ${sessionId} failed: ${messageOf15(error)}`);
-      await sendNotice(imTargetOf(message), code === "IM_SESSION_NOT_LIVE" ? IM_SESSION_NOT_LIVE : IM_DELIVERY_FAILED, alias);
-      return;
-    }
-    rememberDeliveredMessage(ref, sessionId, message);
-    await ownerLedger.rememberSenders(peerKey, alias, [message]);
-    deps.log?.note("debug", `inserted an IM message from ${alias} into session ${sessionId} (${messageId})`);
-  }
-  async function deliverMerged(peerKey, alias, sessionId, items, ownerId) {
-    const first = items[0];
-    const last = items[items.length - 1];
-    if (first === void 0 || last === void 0) return;
-    const channel = first.message.channel;
-    const scope = first.message.scope;
-    const ownerFlags = items.map((item) => ownerLedger.isOwnerMessage(item.message, ownerId));
-    const ownerItems = ownerFlags.flatMap((flag, index) => flag ? [index + 1] : []);
-    const relayItems = items.map((item, index) => ({
-      message: item.message,
-      body: ownerFlags[index] === true && item.message.scope === "group" ? `${IM_OWNER_LINE_PREFIX}${item.body}` : item.body,
-      ref: imMessageRef(item.message.dedupeKey)
-    }));
-    const text = mergedRelayTextOf(relayItems, alias, channel, scope, ownerItems.length === ownerFlags.length ? { owner: true } : ownerItems.length > 0 ? { ownerItems } : void 0);
-    const chars = relayItems.reduce((total, entry) => total + entry.body.length, 0);
-    deps.log?.note("info", `accepted ${relayItems.length} ${channel}/${scope} messages from ${alias} (${chars} chars) for session ${sessionId}`);
-    const messageId = `im-${randomUUID17()}`;
-    try {
-      await deps.insert(sessionId, {
-        id: messageId,
-        text,
-        summary: `IM ${channel}/${scope} ${relayItems.length} messages from ${alias}`
-      });
-    } catch (error) {
-      const code = error?.code;
-      deps.log?.note("error", `could not insert a merged message from ${alias} into session ${sessionId}: ${messageOf15(error)}`);
-      deps.logger?.warn?.(`dsh-soulmojito im: inserting into ${sessionId} failed: ${messageOf15(error)}`);
-      await sendNotice(imTargetOf(last.message), code === "IM_SESSION_NOT_LIVE" ? IM_SESSION_NOT_LIVE : IM_DELIVERY_FAILED, alias);
-      return;
-    }
-    for (const relayItem of relayItems) rememberDeliveredMessage(relayItem.ref, sessionId, relayItem.message);
-    await ownerLedger.rememberSenders(peerKey, alias, items.map((item) => item.message));
-    deps.log?.note("debug", `inserted a merged IM message from ${alias} into session ${sessionId} (${messageId})`);
-  }
-  function rememberDeliveredMessage(ref, sessionId, inboundMessage) {
-    messageRefs.record(ref, {
-      peerKey: imPeerKey(inboundMessage.channel, inboundMessage.accountId, inboundMessage.scope, inboundMessage.peerId),
-      sessionId,
-      ...inboundMessage.replyTo === void 0 ? {} : { replyTo: inboundMessage.replyTo },
-      at: deps.now()
-    });
-  }
-  function imTargetOf(inbound2) {
-    return {
-      channel: inbound2.channel,
-      accountId: inbound2.accountId,
-      scope: inbound2.scope,
-      peerId: inbound2.peerId,
-      ...inbound2.replyTo === void 0 ? {} : { replyTo: inbound2.replyTo }
-    };
-  }
-  async function boundSessionOf(peerKey) {
-    const state = await deps.db.getState();
-    const binding = state.imPeers?.[peerKey];
-    return binding === void 0 ? void 0 : { sessionId: binding.sessionId };
-  }
-  async function rememberPendingPeer(peerKey, message, alias, now) {
-    const senderName = message.scope === "group" ? displaySenderNameOf(message) : void 0;
-    const next = await deps.db.updateState((current) => {
-      if (current.imPeers?.[peerKey] !== void 0) return {};
-      const pending = { ...current.imPendingPeers ?? {} };
-      pending[peerKey] = {
-        lastAt: now,
-        ...senderName === void 0 ? {} : { senderName }
-      };
-      const recent = Object.entries(pending).sort((left, right) => right[1].lastAt - left[1].lastAt).slice(0, MAX_PENDING_PEERS);
-      return { imPendingPeers: Object.fromEntries(recent) };
-    });
-    if (next.imPeers?.[peerKey] !== void 0) {
-      deps.log?.note("debug", `binding for ${alias} appeared before the pending write; pending not recorded`);
-      return;
-    }
-    deps.log?.note("info", `no binding for ${alias}; recorded it in the IM panel pending peers`);
-  }
-  async function sendText(peerKey, text, options) {
-    const body = text.trim();
-    if (body === "") {
-      throw new ImSendError("IM_SEND_INVALID", "IM text is empty after trimming whitespace");
-    }
-    const { target, channel, scope, settings } = await sendTargetOf(peerKey, options?.passiveReplyTo);
-    const chunks = projectImText(body, channel, imChunkLimit(channel, settings));
-    let outcome;
-    try {
-      outcome = await deps.send(target, chunks.map((chunk, index) => ({
-        kind: "text",
-        text: chunk,
-        index,
-        total: chunks.length
-      })));
-    } catch (error) {
-      deps.log?.note("error", `im_send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf15(error)}`);
-      throw new ImSendError("IM_SEND_FAILED", `IM send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf15(error)}`, { cause: error });
-    }
-    deps.log?.note(
-      "info",
-      isQueuedOutcome(outcome) ? `im_send queued ${chunks.length} part(s) for ${imPeerAlias(channel, scope, peerKey)} until ${new Date(outcome.scheduledAt).toISOString()}` : `im_send delivered ${chunks.length} part(s) to ${imPeerAlias(channel, scope, peerKey)}`
-    );
-    return outcome;
-  }
-  async function sendMedia(peerKey, media, options) {
-    if (media.localPath === void 0 && media.url === void 0) {
-      throw new ImSendError("IM_SEND_INVALID", "media needs a localPath (preferred) or a url");
-    }
-    if (media.localPath !== void 0 && media.localPath.trim() === "") {
-      throw new ImSendError("IM_SEND_INVALID", "media.localPath is blank; pass an absolute file path or omit it");
-    }
-    if (media.localPath !== void 0) await assertInsideWorkspace(media.localPath);
-    const { target, channel, scope, settings } = await sendTargetOf(peerKey, options?.passiveReplyTo);
-    const caption = media.caption?.trim() ?? "";
-    const captionChunks = caption === "" ? [] : projectImText(caption, channel, imChunkLimit(channel, settings));
-    const parts = captionChunks.map((text, index) => ({
-      kind: "text",
-      text,
-      index,
-      total: 1
-    }));
-    parts.push({
-      kind: media.kind,
-      ...media.localPath === void 0 ? {} : { localPath: media.localPath },
-      ...media.url === void 0 ? {} : { url: media.url },
-      ...media.name === void 0 ? {} : { name: media.name },
-      index: parts.length,
-      total: 1
-    });
-    for (const part of parts) part.total = parts.length;
-    let outcome;
-    try {
-      outcome = await deps.send(target, parts);
-    } catch (error) {
-      deps.log?.note("error", `im_send media to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf15(error)}`);
-      throw new ImSendError("IM_SEND_FAILED", `IM media send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf15(error)}`, { cause: error });
-    }
-    deps.log?.note(
-      "info",
-      isQueuedOutcome(outcome) ? `im_send queued a ${media.kind} for ${imPeerAlias(channel, scope, peerKey)} until ${new Date(outcome.scheduledAt).toISOString()}` : `im_send delivered a ${media.kind} to ${imPeerAlias(channel, scope, peerKey)}`
-    );
-    return outcome;
-  }
-  async function sendTargetOf(peerKey, passiveReplyTo) {
-    const parts = imPeerKeyParts(peerKey);
-    if (parts === void 0) {
-      throw new ImSendError("IM_SEND_INVALID_TARGET", `malformed IM peer key '${peerKey}'; expected '<channel>:<accountId>:<scope>:<peerId>'`);
-    }
-    const channel = channelOf(parts.channel);
-    if (channel === void 0) {
-      throw new ImSendError("IM_SEND_INVALID_TARGET", `IM peer key '${peerKey}' names unknown channel '${parts.channel}'`);
-    }
-    const scope = parts.scope === "private" || parts.scope === "group" ? parts.scope : void 0;
-    if (scope === void 0) {
-      throw new ImSendError("IM_SEND_INVALID_TARGET", `IM peer key '${peerKey}' names unknown scope '${parts.scope}'`);
-    }
-    const state = await deps.db.getState();
-    if (state.imPeers?.[peerKey] === void 0) {
-      throw new ImSendError("IM_SEND_UNBOUND", `IM peer '${peerKey}' has no binding; bind it in the dsh-soulmojito IM panel first`);
-    }
-    const anchor = replyAnchors.get(peerKey);
-    const fresh = anchor !== void 0 && deps.now() - anchor.at <= REPLY_ANCHOR_TTL_MS;
-    if (anchor !== void 0 && !fresh) replyAnchors.delete(peerKey);
-    const autoReplyTo = anchor !== void 0 && fresh ? anchor.replyTo : void 0;
-    const replyTo = passiveReplyTo ?? autoReplyTo;
-    return {
-      target: {
-        channel,
-        accountId: parts.accountId,
-        scope,
-        peerId: parts.peerId,
-        ...replyTo === void 0 ? {} : { replyTo }
-      },
-      channel,
-      scope,
-      settings: state.imSettings ?? DEFAULT_IM_SETTINGS
-    };
-  }
-  async function assertInsideWorkspace(localPath) {
-    if (deps.workspaceRoot === void 0) return;
-    let root;
-    let target;
-    try {
-      root = await realpath(await deps.workspaceRoot());
-      target = await realpath(localPath);
-    } catch (cause) {
-      throw new ImSendError("IM_SEND_INVALID", `media path '${localPath}' cannot be resolved: ${messageOf15(cause)}`);
-    }
-    const rel = relative3(root, target);
-    if (rel === "" || rel.startsWith("..") || isAbsolute2(rel)) {
-      throw new ImSendError(
-        "IM_SEND_INVALID",
-        `media path '${localPath}' is outside the session workspace; only files under the workspace (for example downloaded attachments) can be sent`
-      );
-    }
-  }
-  async function notifyUnbound(target, peerKey, alias, now) {
-    const last = noticed.get(peerKey);
-    if (last !== void 0 && now - last < UNBOUND_NOTICE_TTL_MS) {
-      deps.log?.note("debug", `no binding for ${alias}; the bind notice is still suppressed`);
-      return;
-    }
-    noticed.set(peerKey, now);
-    deps.log?.note("info", `no binding for ${alias}; replied with the bind notice`);
-    await sendNotice(target, IM_UNBOUND_NOTICE, alias);
-  }
-  async function sendNotice(target, text, alias) {
-    try {
-      await deps.send(target, [{ kind: "text", text, index: 0, total: 1 }]);
-    } catch (error) {
-      deps.log?.note("error", `sending a notice to ${alias} failed: ${messageOf15(error)}`);
-    }
-  }
-  return {
-    inbound,
-    flushPending,
-    sendText,
-    sendMedia,
-    resolveMessageRef: (ref) => messageRefs.resolve(ref)
-  };
-}
-function messageOf15(error) {
-  return error instanceof Error ? error.message : String(error);
-}
-function isQueuedOutcome(outcome) {
-  return "status" in outcome && outcome.status === "queued";
-}
-function channelOf(value) {
-  return value === "qq" || value === "weixin" || value === "onebot" ? value : void 0;
-}
-
-// packages/plugin/src/im/send-status.ts
-function sendStatusesOf(channels) {
-  const rows = [];
-  for (const channel of channels) {
-    const status2 = channel.sendStatus?.();
-    if (status2 === void 0) continue;
-    rows.push({ channel: channel.channel, accountId: channel.accountId, ...status2 });
-  }
-  return rows;
-}
-
-// packages/plugin/src/im/account-id.ts
-import { createHash as createHash20 } from "node:crypto";
-var SAFE_ACCOUNT_ID = /^[A-Za-z0-9._-]+$/;
-function imAccountIdOf(channel, raw) {
-  const trimmed = raw.trim();
-  if (trimmed === "") throw new Error(`cannot derive an IM account id: the ${channel} platform returned an empty id`);
-  if (trimmed === "." || trimmed === "..") {
-    throw new Error(`cannot derive an IM account id: '${trimmed}' is a path traversal name`);
-  }
-  if (SAFE_ACCOUNT_ID.test(trimmed)) return trimmed;
-  const digest = createHash20("sha256").update(trimmed, "utf8").digest("hex").slice(0, 12);
-  return `${channel}-${digest}`;
-}
-
-// packages/plugin/src/im/log.ts
-var IM_LOG_CAPACITY = 500;
-var ENTRY_TEXT_LIMIT = 2e3;
-var LEVEL_WEIGHT = {
-  debug: 10,
-  info: 20,
-  warn: 30,
-  error: 40
-};
-function createImLog(options) {
-  if (!Number.isSafeInteger(options.capacity) || options.capacity < 1) {
-    throw new Error(`IM log capacity must be a positive integer, received ${String(options.capacity)}`);
-  }
-  const entries = [];
-  let seq = 0;
-  function note(level, text) {
-    const trimmed = text.trim();
-    if (trimmed === "") return;
-    seq += 1;
-    const safe = redactLogText(trimmed);
-    entries.push({
-      seq,
-      at: options.now(),
-      level,
-      text: safe.length > ENTRY_TEXT_LIMIT ? `${safe.slice(0, ENTRY_TEXT_LIMIT)}\u2026` : safe
-    });
-    if (entries.length > options.capacity) entries.splice(0, entries.length - options.capacity);
-  }
-  function read(query) {
-    const limit = Number.isSafeInteger(query.limit) && query.limit > 0 ? Math.min(query.limit, options.capacity) : options.capacity;
-    const minWeight = LEVEL_WEIGHT[query.minLevel ?? "debug"];
-    const after = query.afterSeq ?? 0;
-    const selected = [];
-    for (const entry of entries) {
-      if (entry.seq <= after) continue;
-      if (LEVEL_WEIGHT[entry.level] < minWeight) continue;
-      selected.push(entry);
-    }
-    const slice = selected.length > limit ? selected.slice(selected.length - limit) : selected;
-    return { entries: slice, nextSeq: seq };
-  }
-  return { note, read };
-}
-function wrapImLogger(base, sink) {
-  const record = (level, args) => {
-    sink.note(level, textOfLogArgs(args));
-  };
-  return {
-    debug: (...args) => {
-      record("debug", args);
-      base?.debug?.(...args);
-    },
-    info: (...args) => {
-      record("info", args);
-      base?.info?.(...args);
-    },
-    warn: (...args) => {
-      record("warn", args);
-      base?.warn?.(...args);
-    },
-    error: (...args) => {
-      record("error", args);
-      base?.error?.(...args);
-    }
-  };
-}
-function textOfLogArgs(args) {
-  const first = args[0];
-  return typeof first === "string" ? first : String(first ?? "");
-}
-function redactLogText(text) {
-  return text.replace(/(['"`])((?:[A-Za-z]:[\\/]|\\\\|\/\/|\/(?!\/))[^'"`]*)\1/g, (_match, quote) => `${quote}<path>${quote}`).replace(/\b[A-Za-z]:[\\/][^\s'"`,;)]*/g, "<path>").replace(/\\\\[^\s'"`,;)]+/g, "<path>").replace(/(^|[\s"'`(=~])\/\/[^\s'"`,;)]+/g, (_match, prefix) => `${prefix}<path>`).replace(/(^|[\s"'`(=~])\/(?:[^\s/'"`,;)]+\/)+[^\s/'"`,;)]*/g, (_match, prefix) => `${prefix}<path>`);
-}
-
-// packages/plugin/src/im/session-host.ts
-var ImSessionNotLiveError = class extends Error {
-  code = "IM_SESSION_NOT_LIVE";
-  sessionId;
-  constructor(sessionId) {
-    super(`the bound DSH session '${sessionId}' has no live AgentLoop agent; open it in DSH and send again`);
-    this.name = "ImSessionNotLiveError";
-    this.sessionId = sessionId;
-  }
-};
-function inspectImSessionCapabilities(agents) {
-  const reasons = [];
-  if (agents === void 0) {
-    reasons.push("the host exposes no agents service; IM cannot insert messages into a session");
-  } else if (typeof agents.get !== "function") {
-    reasons.push("the host agents service exposes no get(id); IM cannot find the bound session agent");
-  }
-  return { available: reasons.length === 0, reasons };
-}
-function liveAgentOf(agents, sessionId) {
-  if (agents?.get === void 0) return void 0;
-  try {
-    return agents.get(sessionId) ?? void 0;
+    url = new URL(value.trim());
   } catch {
     return void 0;
   }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return void 0;
+  const hostname = normalizedHostname(url.hostname);
+  if (hostname === void 0) return void 0;
+  const port = url.port === "" ? url.protocol === "https:" ? 443 : 80 : Number(url.port);
+  return { hostname, port };
 }
-function requireLiveAgent(agents, sessionId) {
-  const agent = liveAgentOf(agents, sessionId);
-  if (agent === void 0) throw new ImSessionNotLiveError(sessionId);
-  if (!hasInboxSeam(agent)) throw noInboxError(sessionId);
-  return agent;
+function normalizedHostname(value) {
+  if (typeof value !== "string") return void 0;
+  const normalized = value.trim().toLowerCase().replace(/^\[(.*)\]$/, "$1").replace(/\.$/, "");
+  return normalized === "" ? void 0 : normalized;
 }
-function hasInboxSeam(agent) {
-  return typeof agent.followup === "function" || typeof agent.steer === "function";
+function validPort(value) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 65535 ? value : void 0;
 }
-function noInboxError(sessionId) {
-  const error = new Error(
-    `the host agent for session '${sessionId}' exposes neither followup() nor steer(); IM cannot insert a message`
-  );
-  error.code = "IM_SESSION_NO_INBOX";
-  return error;
-}
-function listLiveAgents2(agents) {
-  if (agents?.list === void 0) return [];
-  try {
-    return agents.list() ?? [];
-  } catch {
-    return [];
-  }
-}
-function buildImInboxMessage(session, message) {
-  return {
-    id: message.id,
-    role: "user",
-    content: [{ type: "text", text: message.text }],
-    source: hostPluginMessageSource(session, { form: "relay", summary: message.summary })
-  };
-}
-async function insertImMessage(agent, message) {
-  const built = buildImInboxMessage(agent.session, message);
-  if (agent.status === "running" && typeof agent.steer === "function") {
-    agent.steer(built);
-    return "steer";
-  }
-  if (typeof agent.followup !== "function") {
-    throw noInboxError(agent.session?.id ?? agent.id ?? "unknown");
-  }
-  await agent.followup(built);
-  return "followup";
+function isJsonContentType(value) {
+  return value.trim().toLowerCase().startsWith("application/json");
 }
 
-// packages/plugin/src/im/runtime.ts
-var QQ_BOUND_ACCOUNT_LABEL = "QQ \u673A\u5668\u4EBA";
-var WEIXIN_BOUND_ACCOUNT_LABEL = "\u5FAE\u4FE1\u673A\u5668\u4EBA";
-var WEIXIN_BIND_POLL_INTERVAL_MS = 1e3;
-var ImChannelUnsupportedError = class extends Error {
-  code = "IM_CHANNEL_UNSUPPORTED";
-  channel;
-  constructor(channel) {
-    super(`IM channel '${channel}' has no adapter in this build; 'onebot', 'qq' and 'weixin' are the supported channels`);
-    this.name = "ImChannelUnsupportedError";
-    this.channel = channel;
-  }
-};
-function createImRuntime(ctx, options) {
-  const { db } = options;
-  const agents = ctx.agents;
-  const capabilities = inspectImSessionCapabilities(agents);
-  const channels = /* @__PURE__ */ new Map();
-  const oneBotChannels = /* @__PURE__ */ new Map();
-  const injectedBot = options.qqBot;
-  const store5 = ImStore.open(tavernDataRoot("im"));
-  const lifetime = new AbortController();
-  const imLog = createImLog({ capacity: IM_LOG_CAPACITY, now: () => Date.now() });
-  const logger = wrapImLogger(options.logger, imLog);
-  const mediaStore = openImMediaStore({
-    workspaceRoot: async () => (await prepareInternalWorkspace()).path,
-    now: () => Date.now(),
-    maxBytes: WEIXIN_MEDIA_MAX_BYTES
-  });
-  async function applyPresetToAgent(agent) {
-    const presets = ctx.agentPresets;
-    if (typeof presets?.recompose !== "function") {
-      return { applied: false, reason: "the host cannot recompose agent presets" };
-    }
-    const sessionId = agent.session?.id ?? agent.id;
-    if (typeof sessionId !== "string" || sessionId === "") {
-      return { applied: false, reason: "the agent has no session id" };
-    }
-    try {
-      const header = agent.session?.header;
-      if (header?.origin === "subagent" || typeof header?.delegationDepth === "number" && header.delegationDepth > 0) {
-        return { applied: false, reason: "subagent sessions cannot be switched to AgentTavernIM" };
-      }
-      const state = await db.getState();
-      const architecture = state.sessionBindings[sessionId]?.architecture;
-      if (architecture === "agent-novel" || architecture === "card-workbench" || architecture === "st") {
-        return {
-          applied: false,
-          reason: `session architecture '${architecture}' cannot be switched to AgentTavernIM`
-        };
-      }
-      if (agent.status === "running") {
-        return { applied: false, reason: "the session is running; the preset will switch when it becomes idle" };
-      }
-      if (lastSelectedPresetId(agent.session) === AGENT_TAVERN_IM_PRESET_ID) return { applied: true };
-      const preset = await presets.recompose(agent.ctx, AGENT_TAVERN_IM_PRESET_ID);
-      if (preset.id !== AGENT_TAVERN_IM_PRESET_ID) {
-        return { applied: false, reason: `the host selected preset '${preset.id}' instead of AgentTavernIM` };
-      }
-      const session = agent.session;
-      if (typeof session.append !== "function") {
-        return { applied: false, reason: "the session does not expose append(); the preset cannot be made durable" };
-      }
-      const confirmed = confirmSessionAppend({
-        session: agent.session,
-        logger,
-        label: `AgentTavernIM preset marker (${sessionId})`,
-        append: () => session.append?.("agent-preset/selected", { agentPreset: preset.id }),
-        present: () => lastSelectedPresetId(agent.session) === preset.id
-      });
-      if (!confirmed) return { applied: false, reason: "the AgentTavernIM preset marker could not be confirmed" };
-      imLog.note("info", `im bind: switched ${sessionId} to ${AGENT_TAVERN_IM_PRESET_ID}`);
-      return { applied: true };
-    } catch (error) {
-      return { applied: false, reason: messageOf16(error) };
-    }
-  }
-  async function applyImPreset(sessionId) {
-    const agent = liveAgentOf(agents, sessionId);
-    if (agent === void 0) return { applied: false, reason: "the session is not open" };
-    const result = await applyPresetToAgent(agent);
-    notePresetResult(sessionId, result);
-    return result;
-  }
-  async function ensurePresetForAgent(agent) {
-    if (typeof agent !== "object" || agent === null) return { applied: false, reason: "invalid agent" };
-    const candidate = agent;
-    const sessionId = candidate.session?.id ?? candidate.id;
-    if (typeof sessionId !== "string" || sessionId === "") return { applied: false, reason: "the agent has no session id" };
-    const state = await db.getState();
-    const bound = Object.values(state.imPeers ?? {}).some((binding) => binding.sessionId === sessionId);
-    if (!bound) return { applied: false, reason: "the session has no IM binding" };
-    const result = await applyPresetToAgent(candidate);
-    notePresetResult(sessionId, result);
-    return result;
-  }
-  async function ensurePresets() {
-    const state = await db.getState();
-    const bound = new Set(Object.values(state.imPeers ?? {}).map((binding) => binding.sessionId));
-    for (const agent of listLiveAgents2(agents)) {
-      const sessionId = agent.session?.id ?? agent.id;
-      if (typeof sessionId !== "string" || !bound.has(sessionId)) continue;
-      await applyPresetToAgent(agent).then((result) => notePresetResult(sessionId, result)).catch((error) => {
-        logger?.warn?.(`dsh-soulmojito im: switching ${sessionId} to AgentTavernIM failed: ${messageOf16(error)}`);
+// packages/plugin/src/mount.ts
+function mountSessionEvent(ctx, deps) {
+  ctx.on?.("session/event", (session, event) => {
+    void deps.getAgentTavernProjectorPromise().then((projector) => projector.project(session, event)).catch((error) => {
+      const label = error instanceof ProjectionCheckpointLagError ? "AgentTavern projection checkpoint lag" : "AgentTavern projection failed";
+      ctx.logger?.warn?.(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    if (event?.type === "turn/end" && typeof session?.id === "string") {
+      void deps.variables().then((store5) => store5.clear("turn", session.id)).catch(() => {
       });
     }
-  }
-  function notePresetResult(sessionId, result) {
-    if (result.applied) return;
-    const reason = result.reason ?? "unknown reason";
-    const text = `im preset: ${sessionId} was not switched to ${AGENT_TAVERN_IM_PRESET_ID}: ${reason}`;
-    const deferred = reason.includes("running") || reason.includes("not open");
-    imLog.note(deferred ? "debug" : "warn", text);
-  }
-  const router = createImRouter({
-    db,
-    now: () => Date.now(),
-    seenDedupe: (dedupeKey, now) => store5.seenDedupe(dedupeKey, now),
-    insert: async (sessionId, message) => {
-      const agent = requireLiveAgent(agents, sessionId);
-      const mode = await insertImMessage(agent, message);
-      imLog.note("debug", `im insert: ${mode} into ${sessionId}`);
-    },
-    workspaceRoot: async () => (await prepareInternalWorkspace()).path,
-    send: async (target, parts) => {
-      const channel = channels.get(channelKey(target.channel, target.accountId));
-      if (channel === void 0) {
-        throw new Error(`IM channel ${target.channel}/${target.accountId} is not running`);
-      }
-      return channel.send(target, parts);
-    },
-    log: imLog,
-    logger,
-    sendStatuses: () => sendStatusesOf(channels.values()),
-    applyImPreset
+    void handleNovelSessionEvent(ctx, session, event);
   });
-  function openOneBot(account, secret) {
-    return new OneBotChannel({
-      accountId: account.accountId,
-      secret,
-      router: { handle: async (inbound) => router.inbound(inbound) },
-      groupRequireMention: async () => ((await db.getState()).imSettings ?? DEFAULT_IM_SETTINGS).groupRequireMention,
-      now: () => Date.now(),
-      logger
-    });
-  }
-  async function installOneBot(account, channel) {
-    const key = channelKey(account.channel, account.accountId);
-    const previous = channels.get(key);
-    if (previous !== void 0) {
-      await previous.stop();
-      channels.delete(key);
-      oneBotChannels.delete(key);
-    }
-    channels.set(key, channel);
-    oneBotChannels.set(key, channel);
+}
+function mountAgentCreated(ctx, deps) {
+  ctx.on?.("agent/created", async ({ agent }) => {
+    let adopted = "skipped";
     try {
-      await channel.start(lifetime.signal);
+      const db = await deps.store();
+      adopted = await adoptAgentTavernFork(agent?.session, {
+        store: db,
+        bind: (sessionId, character, chatId, contextMode) => bindSession(db, sessionId, character, chatId, false, "agent-tavern", contextMode),
+        variables: await deps.variables(),
+        memories: await deps.memories(),
+        vectors: await deps.memoryVectors(),
+        logger: ctx.logger
+      });
     } catch (error) {
-      channels.delete(key);
-      oneBotChannels.delete(key);
-      throw error;
+      ctx.logger?.warn?.(`AgentTavern fork adoption failed: ${error instanceof Error ? error.message : String(error)}`);
     }
-  }
-  function openQQ(account, secret, createBot) {
-    return new QQChannel({
-      accountId: account.accountId,
-      secret,
-      router: { handle: async (inbound, inboundOptions) => router.inbound(inbound, inboundOptions) },
-      groupRequireMention: async () => ((await db.getState()).imSettings ?? DEFAULT_IM_SETTINGS).groupRequireMention,
-      createBot,
-      // 账号级能力：官方机器人只有申请到 markdown 权限才能发 msg_type=2。
-      markdownSupport: secret["markdownSupport"] === "true",
-      media: mediaStore,
-      now: () => Date.now(),
-      logger,
-      ...options.qqStartRetrySleep === void 0 ? {} : { retrySleep: options.qqStartRetrySleep }
-    });
-  }
-  function openWeixin(account, secret, sendIntervalMs) {
-    const contextTokens = openWeixinContextTokens(tavernDataRoot("im"), account.accountId);
-    return new WeixinChannel({
-      accountId: account.accountId,
-      // 构造期校验 botToken/baseUrl：坏凭据在落盘前就被拒绝（见 upsertAccount）。
-      token: secret["botToken"] ?? "",
-      baseUrl: secret["baseUrl"] ?? "",
-      router: { handle: async (inbound, inboundOptions) => router.inbound(inbound, inboundOptions) },
-      loadCursor: async () => store5.readCursor(account.accountId),
-      saveCursor: async (cursor) => store5.writeCursor(account.accountId, cursor),
-      loadContextTokens: async () => contextTokens.load(),
-      saveContextTokens: async (tokens) => contextTokens.save(tokens),
-      clock: WEIXIN_REAL_CLOCK,
-      longPollTimeoutMs: WEIXIN_LONG_POLL_TIMEOUT_MS,
-      typingEnabled: true,
-      cdnBaseUrl: options.weixinCdnBaseUrl ?? WEIXIN_DEFAULT_CDN_BASE_URL,
-      media: mediaStore,
-      sendIntervalMs,
-      logger
-    });
-  }
-  async function installSingleChannel(account, channel) {
-    const key = channelKey(account.channel, account.accountId);
-    const previous = channels.get(key);
-    if (previous !== void 0) {
-      await previous.stop();
-      channels.delete(key);
+    if (adopted === "adopted") {
+      void emitAgentPresetChanged().then(() => refreshActivePrompt()).catch(() => {
+      });
     }
-    channels.set(key, channel);
+    const session = agent.session;
+    if (session !== void 0) {
+      void deps.getAgentTavernProjectorPromise().then((projector) => projector.replay(session)).catch((error) => ctx.logger?.warn?.(`AgentTavern projection replay failed: ${error instanceof Error ? error.message : String(error)}`));
+    }
     try {
-      await channel.start(lifetime.signal);
-      logger.info?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} channel installed and polling`);
+      await recoverBodyOperation(deps.bodyWiring, agent);
     } catch (error) {
-      channels.delete(key);
-      throw error;
+      ctx.logger?.warn?.(`dsh-soulmojito body: agent recovery failed: ${error instanceof Error ? error.message : String(error)}`);
     }
-  }
-  const injectedConnector = options.qqConnector;
-  const qqBinding = createQQBinding({
-    connect: injectedConnector === void 0 ? () => loadQqConnector() : () => Promise.resolve(injectedConnector)
-  });
-  const weixinBinding = createWeixinBinding({
-    qrBaseUrl: options.weixinQrBaseUrl ?? WEIXIN_FIXED_BASE_URL,
-    botType: WEIXIN_DEFAULT_BOT_TYPE,
-    pollIntervalMs: WEIXIN_BIND_POLL_INTERVAL_MS,
-    clock: WEIXIN_REAL_CLOCK,
-    localTokenList: loadWeixinLocalTokens,
-    logger
-  });
-  let activeQrBind;
-  async function adoptQQCredential(credentials) {
-    const credential = credentials[0];
-    if (credential === void 0) {
-      throw new Error("the QQ connector reported a successful scan without any credential; nothing was saved");
-    }
-    const appId = credential.appId.trim();
-    const appSecret = credential.appSecret.trim();
-    if (appId === "" || appSecret === "") {
-      throw new Error("the QQ connector returned an empty appId or appSecret; nothing was saved");
-    }
-    const accounts = await store5.accounts();
-    const existing = accounts.find((entry) => entry.channel === "qq" && entry.accountId === appId);
-    await upsertAccount({
-      channel: "qq",
-      accountId: appId,
-      label: QQ_BOUND_ACCOUNT_LABEL,
-      createdAt: existing?.createdAt ?? (/* @__PURE__ */ new Date()).toISOString()
-    }, { appId, appSecret });
-    const openid = typeof credential.userOpenid === "string" ? credential.userOpenid.trim() : "";
-    if (openid !== "") await addImPrivateAllow(openid);
-  }
-  async function adoptWeixinCredential(credential) {
-    const botToken = credential.botToken.trim();
-    const baseUrl = credential.baseUrl.trim();
-    const ilinkBotId = credential.ilinkBotId.trim();
-    if (botToken === "" || baseUrl === "" || ilinkBotId === "") {
-      throw new Error("the WeChat backend confirmed the scan without bot_token/baseurl/ilink_bot_id; nothing was saved");
-    }
-    const ilinkUserId = credential.ilinkUserId?.trim() ?? "";
-    const accountId = imAccountIdOf("weixin", ilinkBotId);
-    const accounts = await store5.accounts();
-    const existing = accounts.find((entry) => entry.channel === "weixin" && entry.accountId === accountId);
-    await upsertAccount({
-      channel: "weixin",
-      accountId,
-      label: WEIXIN_BOUND_ACCOUNT_LABEL,
-      createdAt: existing?.createdAt ?? (/* @__PURE__ */ new Date()).toISOString()
-    }, {
-      botToken,
-      baseUrl,
-      ilinkBotId,
-      ...ilinkUserId === "" ? {} : { ilinkUserId }
-    });
-    if (ilinkUserId !== "") await addImPrivateAllow(ilinkUserId);
-  }
-  async function loadWeixinLocalTokens() {
-    const accounts = await store5.accounts();
-    const tokens = [];
-    for (const account of [...accounts].reverse()) {
-      if (account.channel !== "weixin") continue;
-      let secret;
+    const imRuntime = deps.getImRuntime();
+    if (imRuntime?.ensurePresetForAgent !== void 0) {
       try {
-        secret = await store5.readSecret("weixin", account.accountId);
+        await imRuntime.ensurePresetForAgent(agent);
       } catch (error) {
-        logger?.warn?.(`dsh-soulmojito im weixin bind: skipped ${account.accountId} local token: ${messageOf16(error)}`);
-        continue;
+        ctx.logger?.warn?.(`dsh-soulmojito im: AgentTavernIM preset switch failed: ${error instanceof Error ? error.message : String(error)}`);
       }
-      const token = secret?.["botToken"]?.trim() ?? "";
-      if (token === "") continue;
-      tokens.push(token);
-      if (tokens.length >= 10) break;
     }
-    return tokens;
-  }
-  async function addImPrivateAllow(openid) {
-    const state = await db.getState();
-    if ((state.imSettings ?? DEFAULT_IM_SETTINGS).privateAllow.includes(openid)) return;
-    await db.updateState((current) => {
-      const settings = current.imSettings ?? DEFAULT_IM_SETTINGS;
-      if (settings.privateAllow.includes(openid)) return {};
-      return { imSettings: { ...settings, privateAllow: [...settings.privateAllow, openid] } };
-    });
-  }
-  async function startQrBind(channelId) {
-    if (channelId === "qq") {
-      activeQrBind = "qq";
-      return qqBinding.startQrConnect({
-        onQrDisplayed: (url) => {
-          logger?.info?.(`dsh-soulmojito im qq bind: QR code ready${qrHostSuffix(url)}`);
-        },
-        onSuccess: async (credentials) => {
-          await adoptQQCredential(credentials);
-        },
-        onFailure: (error) => {
-          logger?.warn?.(`dsh-soulmojito im qq bind failed: ${error.message}`);
-        }
-      }, { signal: lifetime.signal, source: "dsh-soulmojito" });
-    }
-    if (channelId === "weixin") {
-      activeQrBind = "weixin";
-      return weixinBinding.start({
-        onQrDisplayed: (url) => {
-          logger?.info?.(`dsh-soulmojito im weixin bind: QR code ready${qrHostSuffix(url)}`);
-        },
-        onSuccess: async (credential) => {
-          await adoptWeixinCredential(credential);
-        },
-        onAlreadyBound: () => {
-          logger?.info?.("dsh-soulmojito im weixin bind: the bot is already bound; existing credential stays in use");
-        },
-        onFailure: (error) => {
-          logger?.warn?.(`dsh-soulmojito im weixin bind failed: ${error.message}`);
-        }
-      }, { signal: lifetime.signal });
-    }
-    throw new ImChannelUnsupportedError(channelId);
-  }
-  function qrBindStatus() {
-    const qqStatus = qqBinding.status();
-    const weixinStatus = weixinBinding.status();
-    if (activeQrBind === "qq" && qqStatus.phase !== "idle") return qqStatus;
-    if (activeQrBind === "weixin" && weixinStatus.phase !== "idle") return weixinStatus;
-    if (activeQrBind !== void 0) activeQrBind = void 0;
-    if (isRunningBindPhase(weixinStatus.phase)) return weixinStatus;
-    if (isRunningBindPhase(qqStatus.phase)) return qqStatus;
-    return { phase: "idle" };
-  }
-  function submitQrVerifyCode(code) {
-    return weixinBinding.submitVerifyCode(code);
-  }
-  function cancelQrBind() {
-    const active = activeQrBind;
-    activeQrBind = void 0;
-    if (active === "qq") return qqBinding.cancel();
-    if (active === "weixin") return weixinBinding.cancel();
-    qqBinding.cancel();
-    weixinBinding.cancel();
-    return { phase: "idle" };
-  }
-  let accountTail = Promise.resolve();
-  function serialAccounts(task) {
-    const run = accountTail.then(task, task);
-    accountTail = run.then(noop, noop);
-    return run;
-  }
-  async function upsertAccount(account, secret) {
-    return serialAccounts(async () => {
-      if (account.channel === "onebot") {
-        const channel = openOneBot(account, secret);
-        await store5.putAccount(account, { ...secret });
-        await installOneBot(account, channel);
+  });
+}
+function mountTransport(ctx, deps) {
+  ctx.effect(() => ctx.webServer.register({
+    kind: "prefix",
+    path: API,
+    handler: async (req, res) => {
+      const webServer = ctx.webServer;
+      let reportedOrigin;
+      try {
+        const value = typeof webServer?.getOrigin === "function" ? webServer.getOrigin() : void 0;
+        if (typeof value === "string" && value !== "") reportedOrigin = value;
+      } catch {
+      }
+      const trustFailure = requestTrustFailure(req, {
+        host: typeof webServer?.host === "string" ? webServer.host : void 0,
+        port: typeof webServer?.port === "number" ? webServer.port : void 0,
+        origin: reportedOrigin,
+        allowedHosts: deps.allowedHosts,
+        // The virtual IndexedDB upload is the one route whose body is raw bytes.
+        allowNonJsonBody: (req.url ?? "").split("?")[0] === `${API}/frontend/idb/put`
+      });
+      if (trustFailure !== void 0) {
+        sendJson(res, trustFailure.status, { ok: false, message: trustFailure.message });
         return;
       }
-      if (account.channel === "qq") {
-        const createBot = injectedBot ?? createQqBotFactory(await loadQqSdk());
-        const channel = openQQ(account, secret, createBot);
-        const previous = await store5.readSecret("qq", account.accountId);
-        await store5.putAccount(account, { ...secret });
-        try {
-          await installSingleChannel(account, channel);
-        } catch (error) {
-          await rollbackAccountSecret(account, previous, error);
-          throw error;
-        }
-        return;
-      }
-      if (account.channel === "weixin") {
-        const settings = (await db.getState()).imSettings ?? DEFAULT_IM_SETTINGS;
-        const channel = openWeixin(account, secret, weixinSendIntervalOf(settings));
-        const previous = await store5.readSecret("weixin", account.accountId);
-        await store5.putAccount(account, { ...secret });
-        try {
-          await installSingleChannel(account, channel);
-        } catch (error) {
-          await rollbackAccountSecret(account, previous, error);
-          throw error;
-        }
-        return;
-      }
-      throw new ImChannelUnsupportedError(account.channel);
-    });
-  }
-  async function rollbackAccountSecret(account, previous, error) {
-    try {
-      if (previous === void 0) await store5.deleteAccount(account.channel, account.accountId);
-      else await store5.putAccount(account, previous);
-    } catch (rollbackError) {
-      throw new Error(
-        `${account.channel} account '${account.accountId}' failed to install and its credential rollback also failed: ${messageOf16(rollbackError)}`,
-        { cause: error }
-      );
-    }
-  }
-  async function removeAccount(channelId, accountId) {
-    return serialAccounts(async () => {
-      const key = channelKey(channelId, accountId);
-      const live = channels.get(key);
-      if (live !== void 0) {
-        await live.stop();
-        channels.delete(key);
-      }
-      oneBotChannels.delete(key);
-      const removed = await store5.deleteAccount(channelId, accountId);
-      const stillUsed = (await store5.accounts()).some((entry) => entry.accountId === accountId);
-      if (!stillUsed) {
-        await store5.deleteCursor(accountId).catch((error) => {
-          logger?.warn?.(`dsh-soulmojito im: deleting the cursor for ${channelId}/${accountId} failed: ${messageOf16(error)}`);
+      try {
+        await handleApi(ctx, req, res);
+      } catch (error) {
+        sendApiError(res, error, {
+          operation: "http-api",
+          logger: ctx.logger,
+          novelFailure: novelHttpFailure(error)
         });
       }
-      await mediaStore.remove(channelId, accountId).catch((error) => {
-        logger?.warn?.(`dsh-soulmojito im: deleting the media of ${channelId}/${accountId} failed: ${messageOf16(error)}`);
-      });
-      await db.updateState((current) => {
-        const peers = { ...current.imPeers ?? {} };
-        const pending = { ...current.imPendingPeers ?? {} };
-        const accountOwners = { ...current.imAccountOwners ?? {} };
-        for (const key2 of Object.keys(peers)) {
-          const parts = imPeerKeyParts(key2);
-          if (parts?.channel === channelId && parts.accountId === accountId) delete peers[key2];
-        }
-        for (const key2 of Object.keys(pending)) {
-          const parts = imPeerKeyParts(key2);
-          if (parts?.channel === channelId && parts.accountId === accountId) delete pending[key2];
-        }
-        delete accountOwners[imAccountKey(channelId, accountId)];
-        return { imPeers: peers, imPendingPeers: pending, imAccountOwners: accountOwners };
-      }).catch((error) => {
-        logger?.warn?.(`dsh-soulmojito im: deleting the bindings of ${channelId}/${accountId} failed: ${messageOf16(error)}`);
-      });
-      if (channelId === "weixin") {
-        await openWeixinContextTokens(tavernDataRoot("im"), accountId).clear().catch((error) => {
-          logger?.warn?.(`dsh-soulmojito im: deleting the weixin context tokens for ${accountId} failed: ${messageOf16(error)}`);
-        });
-      }
-      return removed || live !== void 0;
-    });
-  }
-  const upgradeHandler = createOneBotUpgradeHandler({
-    channels: () => [...oneBotChannels.values()],
-    logger
-  });
-  const seat = ensureOneBotUpgradeSeat(ctx.webServer, `${API}/im/onebot/ws`);
-  if (!seat.registered) {
-    const reason = seat.reason ?? "the OneBot reverse WebSocket endpoint could not be registered";
-    capabilities.reasons.push(reason);
-  }
-  async function handleOneBotUpgrade(req, socket, head) {
-    await upgradeHandler(req, socket, head);
-  }
-  async function handleOneBotWebhook(req, res) {
-    for (const channel of oneBotChannels.values()) {
-      if (!channel.acceptsWebhook(req)) continue;
-      await channel.handleWebhook(req, res);
-      return true;
     }
-    return false;
-  }
-  async function restoreAccounts() {
-    const accounts = await store5.accounts();
-    for (const account of accounts) {
-      try {
-        const secret = await store5.readSecret(account.channel, account.accountId);
-        if (secret === void 0) {
-          logger?.warn?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} has no stored secret; skipped`);
-          continue;
-        }
-        await upsertAccount(account, secret);
-      } catch (error) {
-        logger?.warn?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} failed to start: ${messageOf16(error)}`);
-      }
+  }), "dsh-soulmojito: API");
+}
+
+// packages/plugin/src/native-preset.ts
+init_src2();
+init_runtime2();
+var NATIVE_PRESET_SECTION = "dsh-soulmojito:native-preset";
+var NATIVE_PRESET_HEADER = "Active chat completion preset (user-configured prompt stack; follow these instructions together with the DSH agent preset):";
+var freeze = { frozenAt: Date.now(), seed: Math.random() * 4294967296 >>> 0 };
+var renderMemo;
+var renderGeneration = 0;
+var projection = createLazyProjection({
+  getState: async () => (await store3()).getState(),
+  load: async (agentId, settle, snapshot2) => {
+    const db = await store3();
+    const state = snapshot2 ?? await db.getState();
+    if (state.nativeAgentPreset !== true || state.sessionBindings[agentId] !== void 0) {
+      settle("");
+      return;
     }
+    settle(await unboundBlock(db, state));
   }
-  void restoreAccounts().catch((error) => {
-    logger?.warn?.(`dsh-soulmojito im: restoring stored accounts failed: ${messageOf16(error)}`);
-  });
+});
+async function unboundBlock(db, state) {
+  const key = [renderGeneration, state.activePreset ?? "", state.activeCharacter ?? "", state.activePersona ?? ""].join("\0");
+  if (renderMemo?.key === key) return renderMemo.text;
+  const text = await renderUnboundBlock(db, state);
+  renderMemo = { key, text };
+  return text;
+}
+async function renderUnboundBlock(db, state) {
+  if (typeof state.activePreset !== "string" || state.activePreset === "") return "";
+  const raw = await db.getPreset(state.activePreset);
+  if (raw === void 0) return "";
+  const block = renderAgentPresetBlock(parsePreset(raw), void 0, NATIVE_PRESET_HEADER);
+  if (block === void 0) return "";
+  const expand = createHostPromptExpander(
+    state.activeCharacter || CHAR_FALLBACK,
+    state.activePersona ?? DEFAULT_USER2,
+    { now: () => new Date(freeze.frozenAt), rng: seededRandom(freeze.seed) }
+  );
+  return hostPromptSafe(block, expand);
+}
+onAgentPresetChanged(() => {
+  renderGeneration += 1;
+  return projection.refreshAll();
+});
+function nativeAgentPresetSection() {
   return {
-    router,
-    capabilities,
-    logs: (query) => imLog.read(query),
-    upsertAccount,
-    removeAccount,
-    handleOneBotWebhook,
-    views: () => [...channels.values()].map((channel) => ({
-      channel: channel.channel,
-      accountId: channel.accountId,
-      status: channel.status(),
-      peers: 0
-    })),
-    // 出站节奏投影（决策 2026-10-31-weixin-send-queue）：只有实现了队列的通道
-    // （当前是微信）有 sendStatus；QQ/OneBot 没有排队语义，投影里不出现。
-    sendStatuses: () => sendStatusesOf(channels.values()),
-    // 设置页改动间隔：运行中的微信通道即时换挡，未接上的账号下次 upsert 读新值。
-    applySettings: (settings) => {
-      const interval = weixinSendIntervalOf(settings);
-      for (const channel of channels.values()) channel.setSendIntervalMs?.(interval);
-    },
-    isSessionLive: (sessionId) => liveAgentOf(agents, sessionId) !== void 0,
-    applyImPreset,
-    ensurePresetForAgent,
-    ensurePresets,
-    handleOneBotUpgrade,
-    startQrBind,
-    qrBindStatus,
-    submitQrVerifyCode,
-    cancelQrBind,
-    dispose: async () => {
-      qqBinding.cancel();
-      weixinBinding.cancel();
-      activeQrBind = void 0;
-      await router.flushPending().catch((error) => {
-        logger?.warn?.(`dsh-soulmojito im: flushing buffered inbound messages failed: ${messageOf16(error)}`);
-      });
-      lifetime.abort();
-      for (const channel of channels.values()) {
-        await channel.stop().catch((error) => {
-          logger?.warn?.(`dsh-soulmojito im: stopping ${channel.channel}/${channel.accountId} failed: ${messageOf16(error)}`);
+    name: NATIVE_PRESET_SECTION,
+    order: -75,
+    text: (context) => projection.valueOf(agentIdOf2(context)) ?? ""
+  };
+}
+function agentIdOf2(context) {
+  if (typeof context !== "object" || context === null) return void 0;
+  const agent = context.agent;
+  if (typeof agent !== "object" || agent === null) return void 0;
+  const id = agent.id;
+  return typeof id === "string" && id !== "" ? id : void 0;
+}
+function preheatNativeAgentPreset(agentIds) {
+  return projection.preheatAll(agentIds);
+}
+
+// packages/plugin/src/index.ts
+init_runtime2();
+
+// packages/plugin/src/session/command.ts
+init_capabilities();
+init_runtime2();
+
+// packages/plugin/src/session/activate.ts
+function applyAgentTavernHistoryImport(options) {
+  const { agent, plan } = options;
+  const total = plan.length;
+  const session = agent.session;
+  if (session === void 0 || typeof session.append !== "function") {
+    options.logger?.warn?.("AgentTavern history import skipped: the host agent exposes no appendable session, so the greeting stays in the Tavern JSONL only.");
+    return { status: "skipped", landed: 0, total };
+  }
+  const importedTurn = lastImportedTurn(plan);
+  if (importedTurn !== void 0 && !canAdvanceHostTurnBase(agent)) {
+    options.logger?.warn?.("AgentTavern history import skipped: the host session exposes no advanceable turn base, so imported turn boundaries would desynchronise the live loop.");
+    return { status: "skipped", landed: 0, total };
+  }
+  const logger = options.logger;
+  const appendable = session;
+  const baseLength = sessionEvents(session).length;
+  const appendItem = (item) => {
+    appendable.append(item.type, item.data, item.surfaceOp === void 0 ? void 0 : { surfaceOp: item.surfaceOp });
+  };
+  let attemptError;
+  try {
+    for (const item of plan) appendItem(item);
+  } catch (error) {
+    attemptError = error;
+  }
+  let landed = landedPlanAppends(session, plan, baseLength);
+  const firstLanded = landed;
+  let retryRefused = false;
+  if (landed < total && attemptError === void 0 && sessionEvents(session).length === baseLength + landed) {
+    try {
+      for (const item of plan.slice(landed)) appendItem(item);
+    } catch (error) {
+      attemptError = error;
+    }
+    landed = Math.max(landed, landedPlanAppends(session, plan, baseLength));
+  } else if (landed < total && attemptError === void 0) {
+    retryRefused = true;
+  }
+  if (attemptError !== void 0) {
+    logger?.warn?.(`AgentTavern history import failed: ${attemptError instanceof Error ? attemptError.message : String(attemptError)}`);
+  } else if (landed < total) {
+    const attempts = retryRefused ? `attempt 1: ${firstLanded}/${total} appends visible; suffix retry refused \u2014 the log tail holds unplanned events, replaying would duplicate turn boundaries` : `attempt 1: ${firstLanded}/${total} appends visible, attempt 2: ${landed}/${total}`;
+    logger?.error?.(`AgentTavern history import could not be confirmed by read-back (${attempts}); degrading to the verified prefix \u2014 the missing history stays in the Tavern JSONL and remains replayable`);
+  }
+  if (landed < total) {
+    closeImportBracket(agent, {
+      kind: "error",
+      error: { message: "AgentTavern history import failed", code: "TAVERN_IMPORT" }
+    });
+  }
+  const verifiedTurn = lastLoggedTurn(agent);
+  if (verifiedTurn !== void 0) advanceHostTurnBase(agent, verifiedTurn);
+  return { status: landed < total ? "partial" : "applied", landed, total };
+}
+
+// packages/plugin/src/session/command.ts
+init_tavern_assets();
+function registerTavernSessionCommand(ctx) {
+  ctx.commands.register({
+    // Internal bridge for the client binding API. It is intentionally separate
+    // from the public slash-command surface.
+    name: "dsh-soulmojito-session",
+    description: "internal dsh-soulmojito session bridge",
+    input: { hint: "<character> <chat-id>" },
+    recordInput: false,
+    handler: async ({ agent, rawInput }) => {
+      const parsed = parseTavernSessionCommand(rawInput);
+      if (!parsed) return { kind: "error", text: "Invalid Tavern activation payload." };
+      const db = await store3();
+      if (parsed.action === "close") {
+        await db.updateState((state) => {
+          const sessionBindings = { ...state.sessionBindings };
+          delete sessionBindings[agent.id];
+          return { sessionBindings };
+        });
+        const closed = confirmSessionAppend({
+          session: agent.session,
+          logger: ctx.logger,
+          label: `Tavern close marker (${agent.id})`,
+          append: () => agent.session.append("user/message", createMessage({
+            role: "user",
+            content: [{ type: "text", text: "Tavern roleplay mode closed." }],
+            source: hostPluginMessageSource(agent.session, {
+              form: "notice",
+              summary: "Tavern closed"
+            })
+          }), { surfaceOp: "append" }),
+          present: (events) => events.some((event) => event.type === "user/message" && isTavernSessionMarker(event.data?.source) && event.data?.source?.summary === "Tavern closed")
+        });
+        if (!closed) {
+          throw new Error(`dsh-soulmojito: the Tavern close marker could not be confirmed in session '${agent.id}' after a rewrite; the host accepted the append but the read-back found no trace`);
+        }
+        return { kind: "success", text: "Tavern closed" };
+      }
+      if (parsed.action === "novel-open") {
+        return handleNovelOpenCommand(ctx, agent, parsed.novelId);
+      }
+      if (parsed.action === "workbench-open") {
+        return handleWorkbenchOpenCommand(ctx, agent, parsed);
+      }
+      const chatSnapshot = await db.getChatSnapshot(parsed.character, parsed.chatId);
+      if (!chatSnapshot) return { kind: "error", text: "Tavern chat not found." };
+      const chat = chatSnapshot.chat;
+      const currentState = await db.getState();
+      const previous = currentState.sessionBindings[agent.id];
+      const initializeAgentTavern = parsed.architecture === "agent-tavern" && (previous?.architecture !== "agent-tavern" || previous.initializationPending === true);
+      const shouldPreloadAssets = initializeAgentTavern && parsed.group !== true && currentState.agentTavernPreloadAssets === true;
+      let preloadSnapshot;
+      let historyImport;
+      await assertAgentTavernAvailable(parsed.architecture, parsed.contextMode);
+      if (parsed.architecture === "agent-tavern") {
+        const sameTavernBinding = previous?.architecture === "agent-tavern" && previous.character === parsed.character && previous.chatId === parsed.chatId;
+        const activationEvents = sessionEvents(agent.session);
+        const sessionStarted = activationEvents.some((event) => event.type === "turn/start");
+        const historyImported = activationEvents.some((event) => {
+          if (event.type !== "user/message" && event.type !== "assistant/message") return false;
+          const source = event.type === "user/message" ? event.data?.source : event.data?.message?.source;
+          return isTavernSessionMarker(source);
+        });
+        if ((sessionStarted || historyImported) && !sameTavernBinding) {
+          throw new TavernArchitectureConflictError("This host session already started; AgentTavern preset selection is locked.");
+        }
+        if (typeof ctx.agentPresets?.recompose !== "function") {
+          throw new TavernArchitectureConflictError("The host cannot recompose a blank session with the AgentTavern preset.");
+        }
+        const character = parsed.group !== true && (initializeAgentTavern || shouldPreloadAssets) ? await db.getCharacter(parsed.character) : void 0;
+        if (initializeAgentTavern && character !== void 0 && seedJsrMvuVariables(character.card, ensureChatVariables(chat))) {
+          await db.saveChat(parsed.character, parsed.chatId, chat, chatSnapshot.revision);
+        }
+        if (initializeAgentTavern && parsed.group !== true) {
+          historyImport = sessionStarted || historyImported ? void 0 : historyImportAppends(chat, agent.id, character ? await collectSessionRegexScripts(db, currentState, parsed.character, parsed.chatId, character) : [], tavernMacroExpand(currentState, parsed.character, character), agent.session);
+        }
+        if (shouldPreloadAssets) {
+          if (typeof agent.inject !== "function") {
+            throw new TavernArchitectureConflictError("This host cannot preload AgentTavern session context.");
+          }
+          if (!character) throw new Error("Tavern character not found.");
+          preloadSnapshot = await buildAgentTavernPreloadSnapshot(db, currentState, parsed.character, character, tavernMacroExpand(currentState, parsed.character, character));
+        }
+        const lastSelected = lastSelectedPresetId(agent.session);
+        if (lastSelected !== AGENT_TAVERN_PRESET_ID) {
+          if (sessionStarted && lastSelected !== void 0) {
+            throw new TavernArchitectureConflictError(`This host session already started under preset '${lastSelected}'; AgentTavern cannot be re-selected.`);
+          }
+          const preset = await ctx.agentPresets.recompose(agent.ctx, AGENT_TAVERN_PRESET_ID);
+          const selected = confirmSessionAppend({
+            session: agent.session,
+            logger: ctx.logger,
+            label: `AgentTavern preset marker (${agent.id})`,
+            append: () => agent.session.append("agent-preset/selected", { agentPreset: preset.id }),
+            present: () => lastSelectedPresetId(agent.session) === preset.id
+          });
+          if (!selected) {
+            throw new Error(`dsh-soulmojito: the AgentTavern preset marker could not be confirmed in session '${agent.id}' after a rewrite; the session would silently lose its preset identity on reload`);
+          }
+        }
+      }
+      await bindSession(
+        db,
+        agent.id,
+        parsed.character,
+        parsed.chatId,
+        parsed.group === true,
+        parsed.architecture,
+        parsed.contextMode
+      );
+      if (parsed.architecture === "agent-tavern") {
+        await emitAgentPresetChanged();
+      }
+      if (preloadSnapshot !== void 0) {
+        if (agent.inject === void 0) {
+          throw new TavernArchitectureConflictError("This host cannot preload AgentTavern session context.");
+        }
+        agent.inject(createMessage({
+          role: "user",
+          content: [{ type: "text", text: preloadSnapshot }],
+          source: hostPluginMessageSource(agent.session, {
+            form: "notice",
+            summary: `AgentTavern preload: ${parsed.character}`
+          })
+        }));
+      }
+      if (historyImport !== void 0) {
+        applyAgentTavernHistoryImport({
+          agent,
+          plan: historyImport,
+          ...ctx.logger === void 0 ? {} : { logger: ctx.logger }
         });
       }
-      channels.clear();
-      oneBotChannels.clear();
+      await refreshActivePrompt();
+      if (parsed.architecture === "st") {
+        occupyHostSession(agent, ctx);
+        const markerSummary = `Tavern: ${parsed.character}`;
+        const markerPresent = (events) => events.some((event) => event.type === "user/message" && isTavernSessionMarker(event.data?.source) && event.data?.source?.summary === markerSummary);
+        const bindingChanged = previous?.character !== parsed.character || previous.chatId !== parsed.chatId;
+        if (bindingChanged || !markerPresent(sessionEvents(agent.session))) {
+          const activated = confirmSessionAppend({
+            session: agent.session,
+            logger: ctx.logger,
+            label: `Tavern activation marker (${parsed.character})`,
+            append: () => agent.session.append("user/message", createMessage({
+              role: "user",
+              content: [{ type: "text", text: `Tavern roleplay chat for ${parsed.character}.` }],
+              source: hostPluginMessageSource(agent.session, { form: "notice", summary: markerSummary })
+            }), { surfaceOp: "append" }),
+            present: markerPresent
+          });
+          if (!activated) {
+            throw new Error(`dsh-soulmojito: the Tavern activation marker could not be confirmed in session '${agent.id}' after a rewrite; the client composer would never take over an unmarked session`);
+          }
+        }
+      }
+      return { kind: "success", text: `Tavern: ${parsed.character}` };
+    }
+  });
+}
+
+// packages/plugin/src/session/reclaim.ts
+var REMOVED_ID_SAMPLE_LIMIT = 20;
+function resolveSessionBindingReclaimConfig(configured) {
+  if (configured === void 0 || configured === null) return { mode: "off", supported: true };
+  if (configured === "report" || configured === "prune") return { mode: configured, supported: true };
+  return { mode: "off", supported: false };
+}
+async function reclaimStaleSessionBindings(input) {
+  const log2 = logSink(input.logger);
+  if (input.mode === "off") return { status: "off" };
+  const live = liveSessionIds(input.agents, input.sessions);
+  if (live === void 0) {
+    log2.warn("dsh-soulmojito session-bindings: reclaim skipped", { operation: "reclaim-session-bindings", reason: "host-live-signal", configuredMode: input.mode });
+    return { status: "skipped", reason: "host-live-signal" };
+  }
+  const stored = await storedSessionIds(input.persistence);
+  if (stored.status !== "ok") {
+    const reason = storedSkipReason(stored.status);
+    log2.warn("dsh-soulmojito session-bindings: reclaim skipped", {
+      operation: "reclaim-session-bindings",
+      reason,
+      configuredMode: input.mode,
+      ...stored.errorCode === void 0 ? {} : { errorCode: stored.errorCode }
+    });
+    return { status: "skipped", reason };
+  }
+  const db = await input.store();
+  const bindings2 = (await db.getState()).sessionBindings;
+  const sessionIds = Object.keys(bindings2);
+  let keptLive = 0;
+  let keptStored = 0;
+  const remove = /* @__PURE__ */ new Set();
+  try {
+    for (const sessionId of sessionIds) {
+      if (live.has(sessionId)) {
+        keptLive += 1;
+      } else if (stored.ids.has(sessionId)) {
+        keptStored += 1;
+      } else if (await persistedSessionExists(input.persistence, sessionId)) {
+        keptStored += 1;
+      } else {
+        remove.add(sessionId);
+      }
+    }
+  } catch (error) {
+    log2.warn("dsh-soulmojito session-bindings: reclaim skipped", {
+      operation: "reclaim-session-bindings",
+      reason: "session-storage-error",
+      configuredMode: input.mode,
+      errorCode: errorCodeText2(error)
+    });
+    return { status: "skipped", reason: "session-storage-error" };
+  }
+  const pruned = input.mode === "prune" ? await db.pruneSessionBindings(remove) : void 0;
+  const removed = pruned === void 0 ? [] : pruned.removed;
+  const report = {
+    mode: input.mode,
+    scanned: sessionIds.length,
+    keptLive,
+    keptStored,
+    stale: remove.size,
+    removed: removed.length,
+    // `retained` 只来自删除后的真实表长（store 返回），不能用「扫描数 − 删除数」
+    // 反推：两者来自不同快照，并发写入会让差值失真（甚至为负）。
+    retained: pruned === void 0 ? sessionIds.length : pruned.retained
+  };
+  log2.info("dsh-soulmojito session-bindings: reclaim summary", {
+    ...report,
+    operation: "reclaim-session-bindings",
+    // 删除动作要能事后审计：`prune` 带被删 id（截断样本，总数看 `removed`）；
+    // `report` 保持只计数。
+    ...pruned === void 0 ? {} : { removedIdSample: removedIdSample(removed) }
+  });
+  return { status: "done", report };
+}
+async function registerSessionBindingReclaim(ctx, deps) {
+  const log2 = logSink(ctx.logger);
+  const resolved = resolveSessionBindingReclaimConfig(deps.configured);
+  if (resolved.mode === "off") {
+    if (!resolved.supported) {
+      log2.warn("dsh-soulmojito session-bindings: unsupported pruneStaleBindings value; reclaim stays off", {
+        operation: "reclaim-session-bindings",
+        reason: "unsupported-config",
+        configType: typeof deps.configured
+      });
+    }
+    return;
+  }
+  try {
+    await reclaimStaleSessionBindings({
+      mode: resolved.mode,
+      store: deps.store,
+      agents: ctx.agents,
+      sessions: ctx.sessions,
+      persistence: persistenceSeam(ctx),
+      logger: ctx.logger
+    });
+  } catch (error) {
+    log2.warn("dsh-soulmojito session-bindings: reclaim failed", {
+      operation: "reclaim-session-bindings",
+      configuredMode: resolved.mode,
+      errorCode: errorCodeText2(error)
+    });
+  }
+}
+function liveSessionIds(agents, sessions) {
+  if (typeof agents?.list !== "function" || typeof sessions?.list !== "function") return void 0;
+  const ids = /* @__PURE__ */ new Set();
+  for (const agent of agents.list()) {
+    const agentId = agent?.id;
+    const agentSessionId = agent?.session?.id;
+    let readable = false;
+    if (typeof agentId === "string" && agentId !== "") {
+      ids.add(agentId);
+      readable = true;
+    }
+    if (typeof agentSessionId === "string" && agentSessionId !== "") {
+      ids.add(agentSessionId);
+      readable = true;
+    }
+    if (!readable) return void 0;
+  }
+  for (const session of sessions.list()) {
+    const sessionId = session?.id;
+    if (typeof sessionId !== "string" || sessionId === "") return void 0;
+    ids.add(sessionId);
+  }
+  return ids;
+}
+function storedSkipReason(status2) {
+  if (status2 === "unavailable") return "session-storage-unavailable";
+  if (status2 === "incomplete") return "session-storage-incomplete";
+  return "session-storage-error";
+}
+async function storedSessionIds(persistence) {
+  if (persistence === void 0) return { status: "unavailable", ids: /* @__PURE__ */ new Set() };
+  let entries;
+  try {
+    entries = await persistence.list();
+  } catch (error) {
+    return { status: "error", ids: /* @__PURE__ */ new Set(), errorCode: errorCodeText2(error) };
+  }
+  const ids = /* @__PURE__ */ new Set();
+  for (const entry of entries) {
+    const sessionId = entry?.header?.id;
+    if (typeof sessionId !== "string" || sessionId === "") return { status: "incomplete", ids: /* @__PURE__ */ new Set() };
+    ids.add(sessionId);
+  }
+  return { status: "ok", ids };
+}
+async function persistedSessionExists(persistence, sessionId) {
+  if (persistence === void 0) throw new Error("session persistence seam is missing");
+  return await persistence.stat(sessionId) !== void 0;
+}
+function persistenceSeam(ctx) {
+  const candidate = ctx.get?.("sessionPersistence");
+  if (typeof candidate !== "object" || candidate === null) return void 0;
+  const seam = candidate;
+  if (typeof seam.list !== "function" || typeof seam.stat !== "function") return void 0;
+  return candidate;
+}
+function logSink(logger) {
+  return {
+    info: (message, fields) => {
+      try {
+        logger?.info?.(message, fields);
+      } catch {
+      }
+    },
+    warn: (message, fields) => {
+      try {
+        logger?.warn?.(message, fields);
+      } catch {
+      }
     }
   };
 }
-function channelKey(channel, accountId) {
-  return `${channel}:${accountId}`;
-}
-function createQqBotFactory(sdk) {
-  return (botOptions) => new sdk.QQBot(botOptions);
-}
-function qrHostSuffix(url) {
-  try {
-    const host = new URL(url).host;
-    return host === "" ? "" : ` (${host})`;
-  } catch {
-    return "";
+function errorCodeText2(error) {
+  if (typeof error === "object" && error !== null && "code" in error) {
+    const code = error.code;
+    if (typeof code === "string" && code !== "") return code;
   }
+  return error instanceof Error ? error.name : String(error);
 }
-function isRunningBindPhase(phase) {
-  return phase === "waiting" || phase === "verify" || phase === "saving";
-}
-function noop() {
-}
-function messageOf16(error) {
-  return error instanceof Error ? error.message : String(error);
+function removedIdSample(removed) {
+  return removed.slice(0, REMOVED_ID_SAMPLE_LIMIT);
 }
 
 // packages/plugin/src/im/tools.ts
@@ -61593,170 +61845,6 @@ function unmountAllImTools() {
 }
 
 // packages/plugin/src/index.ts
-init_io();
-init_public_error();
-
-// packages/plugin/src/http/trust.ts
-var MUTATING_METHODS = /* @__PURE__ */ new Set(["POST", "PUT", "PATCH", "DELETE"]);
-var UNSAFE_FETCH_SITES = /* @__PURE__ */ new Set(["cross-site", "same-site"]);
-var LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "::1", "0:0:0:0:0:0:0:1"];
-function normalizeAllowedHosts(value) {
-  if (value === void 0) return [];
-  if (!Array.isArray(value)) throw new Error("allowedHosts must be an array of host names");
-  return value.map((entry, index) => {
-    if (typeof entry !== "string") throw new Error(`allowedHosts[${index}] must be a string`);
-    const trimmed = entry.trim();
-    if (trimmed === "") throw new Error(`allowedHosts[${index}] must not be empty`);
-    if (trimmed.includes("*")) throw new Error(`allowedHosts[${index}] must not contain a wildcard`);
-    const address = parseAllowedHost(trimmed);
-    if (address === void 0) {
-      throw new Error(`allowedHosts[${index}] must be a host name or host:port without a scheme, path or credentials`);
-    }
-    return formatAddress(address);
-  });
-}
-function requestTrustFailure(req, options) {
-  const headers = normalizeHeaders(req.headers);
-  const method = typeof req.method === "string" ? req.method.toUpperCase() : "GET";
-  const hostHeader = firstHeader(headers, "host");
-  const address = hostHeader === void 0 ? void 0 : parseHost(hostHeader);
-  if (hostHeader !== void 0 && address === void 0) {
-    return { status: 403, message: `malformed Host header '${hostHeader}'` };
-  }
-  if (address !== void 0 && !hostAllowed(address, options)) {
-    return { status: 403, message: `Host '${hostHeader ?? ""}' is not allowed` };
-  }
-  if (!MUTATING_METHODS.has(method)) return void 0;
-  const fetchSite = firstHeader(headers, "sec-fetch-site")?.toLowerCase();
-  if (fetchSite !== void 0 && UNSAFE_FETCH_SITES.has(fetchSite)) {
-    return { status: 403, message: `cross-site request rejected (sec-fetch-site: ${fetchSite})` };
-  }
-  const originHeader = firstHeader(headers, "origin");
-  if (originHeader !== void 0) {
-    const origin = parseOrigin(originHeader);
-    if (origin === void 0) {
-      return { status: 403, message: `Origin '${originHeader}' is not a valid http(s) origin` };
-    }
-    if (address === void 0) {
-      return { status: 403, message: "Origin header without a Host header is not allowed" };
-    }
-    if (!sameOrigin(origin, address)) {
-      return { status: 403, message: `cross-origin request rejected (Origin ${originHeader}, Host ${hostHeader})` };
-    }
-  }
-  if (options.allowNonJsonBody === true) return void 0;
-  const contentType = firstHeader(headers, "content-type");
-  if (contentType !== void 0 && !isJsonContentType(contentType)) {
-    return { status: 415, message: `unsupported content-type '${contentType}'; expected application/json` };
-  }
-  return void 0;
-}
-function normalizeHeaders(headers) {
-  const normalized = {};
-  if (headers === void 0) return normalized;
-  for (const [name2, value] of Object.entries(headers)) normalized[name2.toLowerCase()] = value;
-  return normalized;
-}
-function firstHeader(headers, name2) {
-  const value = headers[name2];
-  const first = Array.isArray(value) ? value[0] : value;
-  return typeof first === "string" && first.trim() !== "" ? first.trim() : void 0;
-}
-function hostAllowed(address, options) {
-  for (const allowed of allowedAddresses(options)) {
-    if (allowed.hostname !== address.hostname) continue;
-    if (allowed.port === void 0 || allowed.port === address.port) return true;
-  }
-  return false;
-}
-function allowedAddresses(options) {
-  const allowed = LOOPBACK_HOSTS.map((hostname) => ({ hostname, port: void 0 }));
-  const configuredHost = normalizedHostname(options.host);
-  if (configuredHost !== void 0) {
-    const port = validPort(options.port);
-    allowed.push({ hostname: configuredHost, port });
-  }
-  if (options.origin !== void 0) {
-    const origin = parseOrigin(options.origin);
-    if (origin !== void 0) allowed.push(origin);
-  }
-  for (const value of options.allowedHosts ?? []) {
-    const address = parseAllowedHost(value);
-    if (address !== void 0) allowed.push(address);
-  }
-  return allowed;
-}
-function parseAllowedHost(value) {
-  const trimmed = value.trim();
-  if (trimmed === "") return void 0;
-  if (/[\s/\\?#@%*]/.test(trimmed)) return void 0;
-  return parseHost(trimmed);
-}
-function formatAddress(address) {
-  const hostname = address.hostname.includes(":") ? `[${address.hostname}]` : address.hostname;
-  return address.port === void 0 ? hostname : `${hostname}:${address.port}`;
-}
-function sameOrigin(origin, host) {
-  if (origin.hostname !== host.hostname) return false;
-  if (host.port !== void 0) return origin.port === host.port;
-  return origin.port === 80 || origin.port === 443;
-}
-function parseHost(value) {
-  const trimmed = value.trim();
-  if (trimmed === "") return void 0;
-  let hostnamePart;
-  let portPart;
-  if (trimmed.startsWith("[")) {
-    const end = trimmed.indexOf("]");
-    if (end < 0) return void 0;
-    hostnamePart = trimmed.slice(1, end);
-    const rest = trimmed.slice(end + 1);
-    if (rest !== "") {
-      if (!rest.startsWith(":")) return void 0;
-      portPart = rest.slice(1);
-    }
-  } else {
-    const firstColon = trimmed.indexOf(":");
-    if (firstColon >= 0 && firstColon === trimmed.lastIndexOf(":")) {
-      hostnamePart = trimmed.slice(0, firstColon);
-      portPart = trimmed.slice(firstColon + 1);
-    } else {
-      hostnamePart = trimmed;
-    }
-  }
-  const hostname = normalizedHostname(hostnamePart);
-  if (hostname === void 0) return void 0;
-  if (portPart === void 0) return { hostname, port: void 0 };
-  const port = validPort(Number(portPart));
-  if (port === void 0) return void 0;
-  return { hostname, port };
-}
-function parseOrigin(value) {
-  let url;
-  try {
-    url = new URL(value.trim());
-  } catch {
-    return void 0;
-  }
-  if (url.protocol !== "http:" && url.protocol !== "https:") return void 0;
-  const hostname = normalizedHostname(url.hostname);
-  if (hostname === void 0) return void 0;
-  const port = url.port === "" ? url.protocol === "https:" ? 443 : 80 : Number(url.port);
-  return { hostname, port };
-}
-function normalizedHostname(value) {
-  if (typeof value !== "string") return void 0;
-  const normalized = value.trim().toLowerCase().replace(/^\[(.*)\]$/, "$1").replace(/\.$/, "");
-  return normalized === "" ? void 0 : normalized;
-}
-function validPort(value) {
-  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 65535 ? value : void 0;
-}
-function isJsonContentType(value) {
-  return value.trim().toLowerCase().startsWith("application/json");
-}
-
-// packages/plugin/src/index.ts
 var name = "dsh-soulmojito";
 var inject = ["llm", "agentDefaultModel", "webServer", "systemPrompt", "commands", "agents", "agentPresets", "tools", "compaction", "sessions"];
 function apply(ctx, config = {}) {
@@ -61803,54 +61891,18 @@ function apply(ctx, config = {}) {
     return void 0;
   });
   setNovelDriverPromise(novelDriverPromise2);
-  ctx.on?.("session/event", (session, event) => {
-    void getAgentTavernProjectorPromise().then((projector) => projector.project(session, event)).catch((error) => {
-      const label = error instanceof ProjectionCheckpointLagError ? "AgentTavern projection checkpoint lag" : "AgentTavern projection failed";
-      ctx.logger?.warn?.(`${label}: ${error instanceof Error ? error.message : String(error)}`);
-    });
-    if (event?.type === "turn/end" && typeof session?.id === "string") {
-      void variables().then((store5) => store5.clear("turn", session.id)).catch(() => {
-      });
-    }
-    void handleNovelSessionEvent(ctx, session, event);
-  });
-  ctx.on?.("agent/created", async ({ agent }) => {
-    let adopted = "skipped";
-    try {
-      const db = await store3();
-      adopted = await adoptAgentTavernFork(agent?.session, {
-        store: db,
-        bind: (sessionId, character, chatId, contextMode) => bindSession(db, sessionId, character, chatId, false, "agent-tavern", contextMode),
-        variables: await variables(),
-        memories: await memories(),
-        vectors: await memoryVectors(),
-        logger: ctx.logger
-      });
-    } catch (error) {
-      ctx.logger?.warn?.(`AgentTavern fork adoption failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
-    if (adopted === "adopted") {
-      void emitAgentPresetChanged().then(() => refreshActivePrompt()).catch(() => {
-      });
-    }
-    const session = agent.session;
-    if (session !== void 0) {
-      void getAgentTavernProjectorPromise().then((projector) => projector.replay(session)).catch((error) => ctx.logger?.warn?.(`AgentTavern projection replay failed: ${error instanceof Error ? error.message : String(error)}`));
-    }
-    try {
-      await recoverBodyOperation(bodyWiring, agent);
-    } catch (error) {
-      ctx.logger?.warn?.(`dsh-soulmojito body: agent recovery failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
-    const imRuntime = getImRuntime();
-    if (imRuntime?.ensurePresetForAgent !== void 0) {
-      try {
-        await imRuntime.ensurePresetForAgent(agent);
-      } catch (error) {
-        ctx.logger?.warn?.(`dsh-soulmojito im: AgentTavernIM preset switch failed: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-  });
+  const mountDeps = {
+    store: store3,
+    variables,
+    memories,
+    memoryVectors,
+    bodyWiring,
+    getAgentTavernProjectorPromise,
+    getImRuntime,
+    allowedHosts
+  };
+  mountSessionEvent(ctx, mountDeps);
+  mountAgentCreated(ctx, mountDeps);
   void refreshActivePrompt();
   void recoverMountedNovels(ctx);
   ctx.systemPrompt.section({
@@ -61984,40 +62036,7 @@ function apply(ctx, config = {}) {
     }, "dsh-soulmojito: mods unload");
   } catch {
   }
-  ctx.effect(() => ctx.webServer.register({
-    kind: "prefix",
-    path: API,
-    handler: async (req, res) => {
-      const webServer = ctx.webServer;
-      let reportedOrigin;
-      try {
-        const value = typeof webServer?.getOrigin === "function" ? webServer.getOrigin() : void 0;
-        if (typeof value === "string" && value !== "") reportedOrigin = value;
-      } catch {
-      }
-      const trustFailure = requestTrustFailure(req, {
-        host: typeof webServer?.host === "string" ? webServer.host : void 0,
-        port: typeof webServer?.port === "number" ? webServer.port : void 0,
-        origin: reportedOrigin,
-        allowedHosts,
-        // The virtual IndexedDB upload is the one route whose body is raw bytes.
-        allowNonJsonBody: (req.url ?? "").split("?")[0] === `${API}/frontend/idb/put`
-      });
-      if (trustFailure !== void 0) {
-        sendJson(res, trustFailure.status, { ok: false, message: trustFailure.message });
-        return;
-      }
-      try {
-        await handleApi(ctx, req, res);
-      } catch (error) {
-        sendApiError(res, error, {
-          operation: "http-api",
-          logger: ctx.logger,
-          novelFailure: novelHttpFailure(error)
-        });
-      }
-    }
-  }), "dsh-soulmojito: API");
+  mountTransport(ctx, mountDeps);
 }
 export {
   apply,

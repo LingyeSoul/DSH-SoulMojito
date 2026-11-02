@@ -15,6 +15,7 @@ import { normalizeAllowedHosts, requestTrustFailure, type TrustRequest } from '.
 const here = dirname(fileURLToPath(import.meta.url))
 const frameSource = readFileSync(join(here, '../client-src/10-frontend-frame.js'), 'utf8')
 const indexSource = readFileSync(join(here, '../src/index.ts'), 'utf8')
+const mountSource = readFileSync(join(here, '../src/mount.ts'), 'utf8')
 const LOOPBACK_BIND = { host: '127.0.0.1', port: 3456 }
 
 function request(method: string, headers: Record<string, string | string[] | undefined>): TrustRequest {
@@ -272,12 +273,12 @@ describe('JSON body reader status mapping', () => {
 
 describe('index wiring (source check)', () => {
   it('runs the trust guard before routing and exempts the binary IDB upload', () => {
-    const guardIndex = indexSource.indexOf('requestTrustFailure(req, {')
-    const routeIndex = indexSource.indexOf('await handleApi(ctx, req, res)')
+    const guardIndex = mountSource.indexOf('requestTrustFailure(req, {')
+    const routeIndex = mountSource.indexOf('await handleApi(ctx, req, res)')
     expect(guardIndex).toBeGreaterThanOrEqual(0)
     expect(routeIndex).toBeGreaterThan(guardIndex)
-    expect(indexSource.slice(guardIndex, routeIndex)).toContain('`${API}/frontend/idb/put`')
-    expect(indexSource.slice(guardIndex, routeIndex)).toContain('allowedHosts')
+    expect(mountSource.slice(guardIndex, routeIndex)).toContain('`${API}/frontend/idb/put`')
+    expect(mountSource.slice(guardIndex, routeIndex)).toContain('allowedHosts')
     expect(indexSource).toContain('normalizeAllowedHosts(config.allowedHosts)')
   })
 })

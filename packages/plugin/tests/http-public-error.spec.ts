@@ -22,7 +22,7 @@ import {
 const WINDOWS_PLACEHOLDER_PATH = 'C:\\SyntheticWorkspace\\ExampleUser\\soulmojito\\state.json'
 const POSIX_PLACEHOLDER_PATH = '/synthetic/home/example-user/.dsh/soulmojito/state.json'
 const here = dirname(fileURLToPath(import.meta.url))
-const indexSource = readFileSync(join(here, '../src/index.ts'), 'utf8')
+const mountSource = readFileSync(join(here, '../src/mount.ts'), 'utf8')
 
 function internalFailure(): Error {
   return new Error(
@@ -141,10 +141,10 @@ describe('public API error sanitization', () => {
   })
 
   it('wires the outer handler through sendApiError for both response shapes', () => {
-    expect(indexSource).toContain('sendApiError(res, error, {')
-    expect(indexSource).toContain('novelFailure: novelHttpFailure(error)')
-    expect(indexSource).not.toContain('error instanceof ChatRevisionConflictError')
-    expect(indexSource).not.toContain('? error.status')
+    expect(mountSource).toContain('sendApiError(res, error, {')
+    expect(mountSource).toContain('novelFailure: novelHttpFailure(error)')
+    expect(mountSource).not.toContain('error instanceof ChatRevisionConflictError')
+    expect(mountSource).not.toContain('? error.status')
   })
 
   it('keeps novel domain mapping and sanitizes storage corruption paths', () => {

@@ -16,6 +16,9 @@ _Avoid_: Tavern loop、生成循环
 **Agent preset**：DSH `dsh-agent-preset` / `dsh-agent-preset-registry`（DSH `0.2.0-rc.2` 起 `dsh-agent-presets` 拆分而来，`agentPresets` 服务面不变）提供的可持久组合。preset 在 agent 发布前挂载 scoped 工具、prompt、变量和其他 projection 插件，并以可重建的 preset id 绑定会话。
 _Avoid_: 在 DSH-SoulMojito 内另造一套 profile registry
 
+**Mount phase**：插件 `apply()` 的命名装配阶段（session event / agent created / transport 等）。阶段函数只做注册与编排，调用顺序就是装配顺序；阶段之间不共享可变状态。
+_Avoid_: mount 模块、启动步骤
+
 ## 状态语言
 
 **上下文**：某一次 AgentLoop 模型请求实际看到的消息、工具结果和最小运行时指令。上下文是临时投影，不是完整历史。
