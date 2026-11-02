@@ -15598,7 +15598,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.5".trim() : "";
-  const commit = true ? normalizeCommit("23da5cf") : void 0;
+  const commit = true ? normalizeCommit("a008bad") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -47323,6 +47323,20 @@ init_runtime2();
 init_errors();
 init_io();
 
+// packages/plugin/src/http/json-records.ts
+function asRecord5(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
+}
+function asChatLog(value) {
+  const record = asRecord5(value);
+  if (record === void 0) return void 0;
+  const header = asRecord5(record["header"]);
+  if (header === void 0) return void 0;
+  if (typeof header["user_name"] !== "string" || typeof header["character_name"] !== "string") return void 0;
+  if (!Array.isArray(record["messages"])) return void 0;
+  return value;
+}
+
 // packages/plugin/src/http/memory.ts
 init_src();
 init_dsh_home();
@@ -51004,6 +51018,327 @@ async function handleGamesApi(options) {
 // packages/plugin/src/http/routes.ts
 init_runtime2();
 
+// packages/plugin/src/http/body-api.ts
+init_errors();
+init_io();
+async function handleAgentTavernBodyApi(ctx, db, req, res, url, route, method) {
+  const wiring = bodyWiringContext(ctx, async (sessionId2) => (await db.getState()).sessionBindings[sessionId2]);
+  if (method === "GET") {
+    const sessionId2 = url.searchParams.get("sessionId");
+    if (sessionId2 === null || sessionId2 === "") {
+      throw new HttpError(400, "sessionId and messageId (or messageIds) are required");
+    }
+    const selector = parseBodyGetSelector(url.searchParams);
+    const state = await db.getState();
+    const binding2 = state.sessionBindings[sessionId2];
+    const mutationsDisabledReason2 = imBodyMutationDisabledOf(binding2, sessionId2, state.imPeers);
+    let characterName2;
+    let chatId2;
+    let character2 = void 0;
+    let chat;
+    if (binding2 !== void 0 && bodyBindingEligible(binding2)) {
+      characterName2 = binding2.character;
+      chatId2 = binding2.chatId;
+      character2 = await db.getCharacter(binding2.character);
+      chat = (await db.getChatSnapshot(binding2.character, binding2.chatId))?.chat;
+    }
+    const stateSafety2 = binding2 === void 0 || !bodyBindingEligible(binding2) ? void 0 : bodyStateSafetyOf(character2, chat);
+    const historicalMvuState = character2 !== void 0 && chat !== void 0 && bodyHistoricalMvuStateOf(character2, chat);
+    const agent2 = resolveLiveAgent(wiring, sessionId2);
+    const deps2 = agent2 === void 0 ? void 0 : await createBodyDeps(wiring, agent2);
+    const session = agent2?.session;
+    const factsSource = session === void 0 ? void 0 : createBodySessionFactsSource(session);
+    let scriptsRead;
+    const readScripts = () => {
+      if (characterName2 === void 0 || chatId2 === void 0) {
+        throw new Error("body floor display scripts require a character and chat id");
+      }
+      scriptsRead ??= collectSessionRegexScripts(db, state, characterName2, chatId2, character2);
+      return scriptsRead;
+    };
+    const readFloorOf = async (messageId, groupIdHint, selectedIndexHint) => characterName2 === void 0 || chatId2 === void 0 || chat === void 0 ? void 0 : projectedBodyFloor(chat, messageId, groupIdHint, selectedIndexHint, readScripts);
+    const stableViewOf = (messageId) => buildBodyView({
+      messageId,
+      binding: binding2,
+      agent: agent2,
+      hostSupported: deps2 !== void 0,
+      stateSafety: stateSafety2,
+      historicalMvuState,
+      writeRollbackAvailable: deps2?.writeRollback !== void 0,
+      ledger: void 0,
+      messageText: void 0,
+      projected: void 0,
+      projectionCurrent: false,
+      projectionTextCurrent: false,
+      inspection: void 0,
+      ...mutationsDisabledReason2 === void 0 ? {} : { mutationsDisabledReason: mutationsDisabledReason2 }
+    });
+    const readBodyItem = async (messageId) => {
+      try {
+        const floorRead = await readFloorOf(messageId, void 0, void 0);
+        const floorByMessage = floorRead?.ok === true ? floorRead.floor : void 0;
+        const facts = factsSource?.factsOf(messageId, floorByMessage?.groupId);
+        const ledger = facts?.ledger;
+        const selectionMoved = ledger !== void 0 && (floorByMessage === void 0 || floorByMessage.anchorMessageId !== ledger.anchorMessageId || floorByMessage.selectedIndex !== ledger.selectedIndex);
+        const reread = selectionMoved ? await readFloorOf(messageId, ledger.groupId, ledger.selectedIndex) : void 0;
+        const projected = reread === void 0 ? floorByMessage : reread.ok ? reread.floor : void 0;
+        const floorDegradation = reread !== void 0 ? reread.ok ? void 0 : reread.degradation : floorRead !== void 0 && !floorRead.ok ? floorRead.degradation : void 0;
+        const messageText3 = facts?.messageText;
+        const inspection = facts?.inspection;
+        const latestEditSeq = facts?.latestEditSeq;
+        if (facts?.ledgerError !== void 0) {
+          ctx.logger?.warn?.("dsh-soulmojito body: ledger fold failed for GET body", {
+            sessionId: sessionId2,
+            messageId,
+            error: facts.ledgerError
+          });
+        }
+        if (floorDegradation !== void 0) {
+          ctx.logger?.warn?.("dsh-soulmojito body: body floor binding is ambiguous for GET body", {
+            sessionId: sessionId2,
+            messageId,
+            code: floorDegradation.detail,
+            error: floorDegradation.message
+          });
+        }
+        const projection2 = floorDegradation === void 0 ? bodyProjectionState(projected, ledger, latestEditSeq) : { current: false, textCurrent: false };
+        const editDetail = character2 === void 0 || chat === void 0 || ledger === void 0 ? void 0 : bodyEditDetailOf(character2.card, chat, ledger);
+        const view = buildBodyView({
+          messageId,
+          binding: binding2,
+          agent: agent2,
+          hostSupported: deps2 !== void 0,
+          stateSafety: stateSafety2,
+          historicalMvuState,
+          writeRollbackAvailable: deps2?.writeRollback !== void 0,
+          ledger,
+          messageText: messageText3,
+          projected,
+          projectionCurrent: projection2.current,
+          projectionTextCurrent: projection2.textCurrent,
+          inspection,
+          editDetail,
+          // A damaged floor binding closes edit with its own detail and keeps
+          // publishing it even when a reason already gates the row.
+          ...floorDegradation === void 0 ? {} : { readDetail: floorDegradation.detail },
+          ...facts?.lastOperation === void 0 ? {} : { lastOperation: facts.lastOperation },
+          ...mutationsDisabledReason2 === void 0 ? {} : { mutationsDisabledReason: mutationsDisabledReason2 }
+        });
+        return { ok: true, view };
+      } catch (error) {
+        ctx.logger?.warn?.("dsh-soulmojito body: GET body item failed", {
+          sessionId: sessionId2,
+          messageId,
+          error: errorMessage3(error)
+        });
+        return { ok: false, view: stableViewOf(messageId), error };
+      }
+    };
+    if (selector.kind === "batch") {
+      const items = /* @__PURE__ */ new Map();
+      for (const messageId of selector.messageIds) {
+        items.set(messageId, (await readBodyItem(messageId)).view);
+      }
+      return sendJson(res, 200, { ok: true, items: Object.fromEntries(items) });
+    }
+    const item = await readBodyItem(selector.messageId);
+    if (!item.ok) throw item.error;
+    return sendJson(res, 200, item.view);
+  }
+  const body = await readJson(req);
+  const sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
+  if (sessionId === "") {
+    return sendBodyFailure(res, { status: 400, code: "invalid-arguments", message: "sessionId is required" });
+  }
+  const binding = await resolveBodyBinding(wiring, sessionId);
+  if (binding === void 0 || !bodyBindingEligible(binding)) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: "architecture-mismatch",
+      message: "body operations require an AgentTavern single-character binding"
+    });
+  }
+  const mutationsDisabledReason = imBodyMutationDisabledOf(binding, sessionId, (await db.getState()).imPeers);
+  if (mutationsDisabledReason !== void 0) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: IM_BODY_MUTATION_DISABLED_CODE,
+      message: mutationsDisabledReason
+    });
+  }
+  const characterName = binding.character;
+  const chatId = binding.chatId;
+  if (characterName === void 0 || chatId === void 0) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: "body-state-unsafe",
+      message: bodyStateUnsafeMessage("chat-unreadable"),
+      detail: "chat-unreadable"
+    });
+  }
+  const action = route === "body" ? "edit" : route === "body/select" ? "select" : "regenerate";
+  const character = await db.getCharacter(characterName);
+  const snapshot2 = await db.getChatSnapshot(characterName, chatId);
+  const stateSafety = bodyMutationSafetyOf(action, character, snapshot2?.chat);
+  if (!stateSafety.safe) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: stateSafety.reason,
+      message: bodyStateUnsafeMessage(stateSafety.detail),
+      detail: stateSafety.detail
+    });
+  }
+  const agent = resolveLiveAgent(wiring, sessionId);
+  if (agent === void 0) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: "session-busy",
+      message: `session '${sessionId}' has no live agent in this host process; open the chat and retry`
+    });
+  }
+  const deps = await createBodyDeps(wiring, agent);
+  if (deps === void 0) {
+    return sendBodyFailure(res, {
+      status: 501,
+      code: "host-unsupported",
+      message: "this host does not expose appendPluginRecord/pluginRecordOf (DSH 0.2.1-rc.2+)"
+    });
+  }
+  if (action === "regenerate" && deps.writeRollback === void 0 && snapshot2 !== void 0 && bodyHistoricalMvuStateOf(character, snapshot2.chat)) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: "body-state-unsafe",
+      message: bodyStateUnsafeMessage("write-journal-unavailable"),
+      detail: "write-journal-unavailable"
+    });
+  }
+  try {
+    const groupId = bodyString(body, "groupId") ?? bodyString(body, "messageId");
+    if (groupId === void 0) throw bodyRuntimeError("invalid-arguments", "groupId or messageId is required");
+    const expectedAnchorId = bodyString(body, "expectedAnchorId") ?? groupId;
+    if (route === "body") {
+      const index2 = bodyIndex(body, "index");
+      if (typeof body.text !== "string") {
+        throw bodyRuntimeError("invalid-body-text", "body edit requires a string text");
+      }
+      const state2 = await applyBodyEdit(deps, { groupId, index: index2, text: body.text, expectedAnchorId });
+      return sendJson(res, 200, { ok: true, state: state2 });
+    }
+    if (route === "body/regenerate") {
+      const expectedIndex = bodyIndex(body, "expectedIndex");
+      const feedback = typeof body.feedback === "string" ? body.feedback : void 0;
+      const result = await startRegenerate(deps, {
+        groupId,
+        expectedAnchorId,
+        expectedIndex,
+        ...feedback === void 0 ? {} : { feedback }
+      });
+      return sendJson(res, 202, { ok: true, opId: result.opId, status: "pending" });
+    }
+    const index = bodyIndex(body, "index");
+    const state = await selectBodyCandidate(deps, { groupId, index, expectedAnchorId });
+    return sendJson(res, 200, { ok: true, state });
+  } catch (error) {
+    const pending = pendingOperationOf(error);
+    const recovered = pending === void 0 || await retryPendingBodyRecovery(wiring, agent, pending);
+    return sendBodyFailure(
+      res,
+      bodyFailureOf(error),
+      recovered || pending === void 0 ? void 0 : { opId: pending.opId, status: "pending" }
+    );
+  }
+}
+function sendBodyFailure(res, failure, pendingOperation) {
+  sendJson(res, failure.status, {
+    ok: false,
+    code: failure.code,
+    message: failure.message,
+    ...failure.detail === void 0 ? {} : { detail: failure.detail },
+    ...pendingOperation === void 0 ? {} : { pendingOperation }
+  });
+}
+function bodyString(body, field2) {
+  const value = body[field2];
+  return typeof value === "string" && value.trim() !== "" ? value : void 0;
+}
+function bodyIndex(body, field2) {
+  const value = body[field2];
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw bodyRuntimeError("invalid-arguments", `${field2} must be a non-negative safe integer`);
+  }
+  return value;
+}
+async function projectedBodyFloor(chat, messageId, groupIdHint, selectedIndexHint, readScripts) {
+  let index;
+  try {
+    index = locateBodyFloorForRead(chat, {
+      messageId,
+      ...groupIdHint === void 0 ? {} : { groupId: groupIdHint }
+    });
+  } catch (error) {
+    return { ok: false, degradation: bodyFloorDegradationOf(error) };
+  }
+  if (index === void 0) return { ok: true, floor: void 0 };
+  const floor = chat.messages[index];
+  const tavern = asRecord5(asRecord5(floor.extra)?.["agentTavern"]);
+  const scripts = await readScripts();
+  const selectedSwipe = selectedIndexHint === void 0 ? floor : Array.isArray(floor.swipes) && typeof floor.swipes[selectedIndexHint] === "string" ? { ...floor, mes: floor.swipes[selectedIndexHint] } : void 0;
+  const text = selectedSwipe === void 0 ? void 0 : stripFrontendDocuments(displayTextForMessage(scripts, selectedSwipe, chat.messages.length - 1 - index));
+  const selectedIndex = floor.swipe_id;
+  const count = Array.isArray(floor.swipes) && floor.swipes.length > 0 ? floor.swipes.length : 1;
+  const resolved = {
+    ...typeof tavern?.["bodyGroupId"] === "string" ? { groupId: tavern["bodyGroupId"] } : {},
+    ...typeof tavern?.["anchorMessageId"] === "string" ? { anchorMessageId: tavern["anchorMessageId"] } : {},
+    ...typeof selectedIndex === "number" && Number.isSafeInteger(selectedIndex) ? { selectedIndex } : {},
+    ...typeof tavern?.["lastBodyEventSeq"] === "number" && Number.isSafeInteger(tavern["lastBodyEventSeq"]) && tavern["lastBodyEventSeq"] >= 0 ? { lastBodyEventSeq: tavern["lastBodyEventSeq"] } : {},
+    count,
+    ...text === void 0 ? {} : { text }
+  };
+  return { ok: true, floor: resolved };
+}
+function bodyFloorDegradationOf(error) {
+  if (error instanceof BodyJsonlProjectionError && error.code === "body-group-mismatch") {
+    return { detail: error.code, message: error.message };
+  }
+  return {
+    detail: "body-floor-unreadable",
+    message: `body floor lookup failed: ${errorMessage3(error)}`
+  };
+}
+var BODY_GET_BATCH_LIMIT = 50;
+function parseBodyGetSelector(params) {
+  const single = params.get("messageId");
+  const batch = params.get("messageIds");
+  const hasSingle = single !== null && single !== "";
+  const hasBatch = batch !== null && batch !== "";
+  if (hasSingle && hasBatch) {
+    throw new HttpError(400, "pass either messageId or messageIds, not both");
+  }
+  if (hasSingle) return { kind: "single", messageId: single };
+  if (!hasBatch) {
+    throw new HttpError(400, "sessionId and messageId (or messageIds) are required");
+  }
+  const messageIds = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const raw of batch.split(",")) {
+    const messageId = raw.trim();
+    if (messageId === "") throw new HttpError(400, "messageIds must not contain empty entries");
+    if (seen.has(messageId)) continue;
+    seen.add(messageId);
+    messageIds.push(messageId);
+  }
+  if (messageIds.length > BODY_GET_BATCH_LIMIT) {
+    throw new HttpError(400, `messageIds accepts at most ${BODY_GET_BATCH_LIMIT} ids (got ${messageIds.length})`);
+  }
+  return { kind: "batch", messageIds };
+}
+function bodyProjectionState(projected, ledger, latestEditSeq) {
+  if (projected === void 0 || ledger === void 0) return { current: true, textCurrent: true };
+  const textCurrent = latestEditSeq === void 0 || projected.lastBodyEventSeq !== void 0 && projected.lastBodyEventSeq >= latestEditSeq;
+  const selectionCurrent = (projected.anchorMessageId === void 0 || projected.anchorMessageId === ledger.anchorMessageId) && (projected.selectedIndex === void 0 || projected.selectedIndex === ledger.selectedIndex);
+  return { current: textCurrent && selectionCurrent, textCurrent };
+}
+
 // packages/plugin/src/http/domain-routes.ts
 init_runtime2();
 init_io();
@@ -52774,7 +53109,7 @@ function imAccessAllows(settings, scope, peerId) {
   const allow = scope === "group" ? settings.groupAllow : settings.privateAllow;
   return allow.includes(peerId);
 }
-function asRecord5(value, label) {
+function asRecord6(value, label) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new ImSettingsError(`${label} must be an object`);
   }
@@ -52798,7 +53133,7 @@ function parseStringList(value, label) {
   return result;
 }
 function applyImSettingsPatch(current, patch) {
-  const record = asRecord5(patch, "im settings patch");
+  const record = asRecord6(patch, "im settings patch");
   const next = {
     ...current,
     privateAllow: [...current.privateAllow],
@@ -54560,7 +54895,7 @@ async function getBotQrcode(context, options) {
     label: "get_bot_qrcode",
     body: { local_token_list: [...options.localTokenList] }
   });
-  const record = asRecord6(raw, "get_bot_qrcode response");
+  const record = asRecord7(raw, "get_bot_qrcode response");
   const qrcode = requireText3(record, "qrcode", "get_bot_qrcode response");
   const url = requireText3(record, "qrcode_img_content", "get_bot_qrcode response");
   return { qrcode, url };
@@ -54576,7 +54911,7 @@ async function getQrcodeStatus(context, options) {
     path: `ilink/bot/get_qrcode_status?${query.toString()}`,
     label: "get_qrcode_status"
   });
-  const record = asRecord6(raw, "get_qrcode_status response");
+  const record = asRecord7(raw, "get_qrcode_status response");
   const status2 = record["status"];
   if (!isQrcodeStatus(status2)) {
     throw badBody(`get_qrcode_status response.status is not a known state: ${JSON.stringify(status2)}`);
@@ -54606,7 +54941,7 @@ async function getUpdates(context, options) {
     }
     throw error;
   }
-  const record = asRecord6(raw, "getupdates response");
+  const record = asRecord7(raw, "getupdates response");
   const retcode = nonzeroOf(record, "getupdates response");
   if (retcode !== void 0) throw apiError("getupdates", retcode, record);
   const messages = parseMessages(record["msgs"]);
@@ -54652,7 +54987,7 @@ async function sendMessageItems(context, options) {
     label: "sendmessage",
     body: { msg, base_info: baseInfo() }
   });
-  const record = asRecord6(raw, "sendmessage response");
+  const record = asRecord7(raw, "sendmessage response");
   const retcode = nonzeroOf(record, "sendmessage response");
   if (retcode !== void 0) throw apiError("sendmessage", retcode, record);
   const messageId = optionalId(record["message_id"]);
@@ -54678,7 +55013,7 @@ async function getUploadUrl(context, options) {
       base_info: baseInfo()
     }
   });
-  const record = asRecord6(raw, "getuploadurl response");
+  const record = asRecord7(raw, "getuploadurl response");
   const retcode = nonzeroOf(record, "getuploadurl response");
   if (retcode !== void 0) throw apiError("getuploadurl", retcode, record);
   const uploadFullUrl = strictOptionalText(record, "upload_full_url", "getuploadurl response");
@@ -54703,7 +55038,7 @@ async function getConfig(context, options) {
     label: "getconfig",
     body
   });
-  const record = asRecord6(raw, "getconfig response");
+  const record = asRecord7(raw, "getconfig response");
   const retcode = nonzeroOf(record, "getconfig response");
   if (retcode !== void 0) throw apiError("getconfig", retcode, record);
   const typingTicket = optionalText3(record["typing_ticket"]);
@@ -54724,7 +55059,7 @@ async function sendTyping(context, options) {
     allowEmptyBody: true
   });
   if (raw === void 0) return;
-  const record = asRecord6(raw, "sendtyping response");
+  const record = asRecord7(raw, "sendtyping response");
   const retcode = nonzeroOf(record, "sendtyping response");
   if (retcode !== void 0) throw apiError("sendtyping", retcode, record);
 }
@@ -54833,7 +55168,7 @@ function parseMessages(value) {
 }
 function parseMessage(value, index) {
   const label = `getupdates response.msgs[${index}]`;
-  const record = asRecord6(value, label);
+  const record = asRecord7(value, label);
   const itemList = record["item_list"];
   const items = itemList === void 0 ? [] : parseItems(itemList, label);
   const messageId = optionalId(record["message_id"]);
@@ -54854,7 +55189,7 @@ function parseItems(value, label) {
   if (!Array.isArray(value)) throw badBody(`${label}.item_list must be an array`);
   return value.map((entry, index) => {
     const itemLabel = `${label}.item_list[${index}]`;
-    const record = asRecord6(entry, itemLabel);
+    const record = asRecord7(entry, itemLabel);
     const type = optionalFiniteNumber(record["type"]);
     if (type === void 0) throw badBody(`${itemLabel}.type must be a number`);
     return parseItem(type, record);
@@ -54921,7 +55256,7 @@ function field(value, key) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return void 0;
   return value[key];
 }
-function asRecord6(value, label) {
+function asRecord7(value, label) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw badBody(`${label} must be a JSON object, received ${describe(value)}`);
   }
@@ -59576,6 +59911,15 @@ var STORE_ROUTES = [
     matches: (route, method) => method === "GET" && route === "agent-tavern/audit",
     handle: ({ db, res, url }) => handleAuditRoute(db, res, url)
   },
+  // ---- AgentTavern body operations (proposal 0021 §7.3) ----
+  // GET is a display lookup with a stable empty body (never 500 for a cold or
+  // unprojected session); mutations are serialized inside the runtime's
+  // per-session `withBodyLock`, so no outer lock is taken here.
+  {
+    name: "body",
+    matches: (route, method) => (method === "GET" || method === "PUT") && route === "body" || method === "POST" && (route === "body/regenerate" || route === "body/select"),
+    handle: ({ ctx, db, req, res, url, route, method }) => handleAgentTavernBodyApi(ctx, db, req, res, url, route, method)
+  },
   // Novel and mod surfaces own their subpaths; the outer table only decides
   // that the family belongs to them.
   {
@@ -59615,9 +59959,6 @@ async function handleApi(ctx, req, res) {
     if (!entry.matches(route, method)) continue;
     await entry.handle({ ctx, req, res, url, route, method, db });
     return;
-  }
-  if (method === "GET" && route === "body" || method === "PUT" && route === "body" || method === "POST" && (route === "body/regenerate" || route === "body/select")) {
-    return handleAgentTavernBodyApi(ctx, db, req, res, url, route, method);
   }
   if (method === "PUT" && route.startsWith("character/")) {
     const oldName = decodeURIComponent(route.slice("character/".length));
@@ -59705,7 +60046,7 @@ async function handleApi(ctx, req, res) {
     if (typeof body.sessionId !== "string") throw new Error("expected { sessionId, selection }");
     const sessionId = body.sessionId;
     let selection = null;
-    const selectionBody = asRecord7(body.selection);
+    const selectionBody = asRecord5(body.selection);
     if (selectionBody !== void 0) {
       if (typeof selectionBody["provider"] !== "string" || typeof selectionBody["model"] !== "string") {
         throw new Error("selection must be { provider, model, reasoningEffort? }");
@@ -59803,7 +60144,7 @@ async function handleApi(ctx, req, res) {
   }
   if (method === "POST" && route === "import/world") {
     const body = await readJson(req);
-    const data = asRecord7(body.data);
+    const data = asRecord5(body.data);
     if (typeof body.name !== "string" || data === void 0) throw new Error("expected { name, data }");
     const book = await db.importWorldFile(body.name, data);
     await emitAssetsSaved("world", book.name);
@@ -59811,7 +60152,7 @@ async function handleApi(ctx, req, res) {
   }
   if (method === "POST" && route === "import/preset") {
     const body = await readJson(req);
-    const data = asRecord7(body.data);
+    const data = asRecord5(body.data);
     if (typeof body.name !== "string" || data === void 0) throw new Error("expected { name, data }");
     parsePresetOrThrow(data);
     const result = await db.importPreset(body.name, data);
@@ -59828,7 +60169,7 @@ async function handleApi(ctx, req, res) {
   if (method === "PUT" && route.startsWith("preset/")) {
     const oldName = decodeURIComponent(route.slice("preset/".length));
     const body = await readJson(req, 10 * 1024 * 1024);
-    const data = asRecord7(body.data);
+    const data = asRecord5(body.data);
     if (typeof body.name !== "string" || body.name.trim() === "" || data === void 0) {
       throw new Error("expected { name, data }");
     }
@@ -60057,8 +60398,8 @@ async function handleApi(ctx, req, res) {
     const found = await db.getCharacter(character);
     if (!found) throw new Error(`character '${character}' not found`);
     const seedVariables = (() => {
-      const holder = asRecord7(found.card.data.extensions.agentTavern);
-      const initial = asRecord7(holder?.["initialVariables"]);
+      const holder = asRecord5(found.card.data.extensions.agentTavern);
+      const initial = asRecord5(holder?.["initialVariables"]);
       if (initial === void 0 || Object.keys(initial).length === 0) return void 0;
       return structuredClone(initial);
     })();
@@ -60174,7 +60515,7 @@ async function handleApi(ctx, req, res) {
   if (method === "PUT" && route.startsWith("world/")) {
     const oldName = decodeURIComponent(route.slice("world/".length));
     const body = await readJson(req, 10 * 1024 * 1024);
-    const data = asRecord7(body.data);
+    const data = asRecord5(body.data);
     if (typeof body.name !== "string" || body.name.trim() === "" || data === void 0) {
       throw new Error("expected { name, data }");
     }
@@ -60519,335 +60860,6 @@ async function handleApi(ctx, req, res) {
     return runTavernScript(ctx, req, res, db);
   }
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
-}
-async function handleAgentTavernBodyApi(ctx, db, req, res, url, route, method) {
-  const wiring = bodyWiringContext(ctx, async (sessionId2) => (await db.getState()).sessionBindings[sessionId2]);
-  if (method === "GET") {
-    const sessionId2 = url.searchParams.get("sessionId");
-    if (sessionId2 === null || sessionId2 === "") {
-      throw new HttpError(400, "sessionId and messageId (or messageIds) are required");
-    }
-    const selector = parseBodyGetSelector(url.searchParams);
-    const state = await db.getState();
-    const binding2 = state.sessionBindings[sessionId2];
-    const mutationsDisabledReason2 = imBodyMutationDisabledOf(binding2, sessionId2, state.imPeers);
-    let characterName2;
-    let chatId2;
-    let character2 = void 0;
-    let chat;
-    if (binding2 !== void 0 && bodyBindingEligible(binding2)) {
-      characterName2 = binding2.character;
-      chatId2 = binding2.chatId;
-      character2 = await db.getCharacter(binding2.character);
-      chat = (await db.getChatSnapshot(binding2.character, binding2.chatId))?.chat;
-    }
-    const stateSafety2 = binding2 === void 0 || !bodyBindingEligible(binding2) ? void 0 : bodyStateSafetyOf(character2, chat);
-    const historicalMvuState = character2 !== void 0 && chat !== void 0 && bodyHistoricalMvuStateOf(character2, chat);
-    const agent2 = resolveLiveAgent(wiring, sessionId2);
-    const deps2 = agent2 === void 0 ? void 0 : await createBodyDeps(wiring, agent2);
-    const session = agent2?.session;
-    const factsSource = session === void 0 ? void 0 : createBodySessionFactsSource(session);
-    let scriptsRead;
-    const readScripts = () => {
-      if (characterName2 === void 0 || chatId2 === void 0) {
-        throw new Error("body floor display scripts require a character and chat id");
-      }
-      scriptsRead ??= collectSessionRegexScripts(db, state, characterName2, chatId2, character2);
-      return scriptsRead;
-    };
-    const readFloorOf = async (messageId, groupIdHint, selectedIndexHint) => characterName2 === void 0 || chatId2 === void 0 || chat === void 0 ? void 0 : projectedBodyFloor(chat, messageId, groupIdHint, selectedIndexHint, readScripts);
-    const stableViewOf = (messageId) => buildBodyView({
-      messageId,
-      binding: binding2,
-      agent: agent2,
-      hostSupported: deps2 !== void 0,
-      stateSafety: stateSafety2,
-      historicalMvuState,
-      writeRollbackAvailable: deps2?.writeRollback !== void 0,
-      ledger: void 0,
-      messageText: void 0,
-      projected: void 0,
-      projectionCurrent: false,
-      projectionTextCurrent: false,
-      inspection: void 0,
-      ...mutationsDisabledReason2 === void 0 ? {} : { mutationsDisabledReason: mutationsDisabledReason2 }
-    });
-    const readBodyItem = async (messageId) => {
-      try {
-        const floorRead = await readFloorOf(messageId, void 0, void 0);
-        const floorByMessage = floorRead?.ok === true ? floorRead.floor : void 0;
-        const facts = factsSource?.factsOf(messageId, floorByMessage?.groupId);
-        const ledger = facts?.ledger;
-        const selectionMoved = ledger !== void 0 && (floorByMessage === void 0 || floorByMessage.anchorMessageId !== ledger.anchorMessageId || floorByMessage.selectedIndex !== ledger.selectedIndex);
-        const reread = selectionMoved ? await readFloorOf(messageId, ledger.groupId, ledger.selectedIndex) : void 0;
-        const projected = reread === void 0 ? floorByMessage : reread.ok ? reread.floor : void 0;
-        const floorDegradation = reread !== void 0 ? reread.ok ? void 0 : reread.degradation : floorRead !== void 0 && !floorRead.ok ? floorRead.degradation : void 0;
-        const messageText3 = facts?.messageText;
-        const inspection = facts?.inspection;
-        const latestEditSeq = facts?.latestEditSeq;
-        if (facts?.ledgerError !== void 0) {
-          ctx.logger?.warn?.("dsh-soulmojito body: ledger fold failed for GET body", {
-            sessionId: sessionId2,
-            messageId,
-            error: facts.ledgerError
-          });
-        }
-        if (floorDegradation !== void 0) {
-          ctx.logger?.warn?.("dsh-soulmojito body: body floor binding is ambiguous for GET body", {
-            sessionId: sessionId2,
-            messageId,
-            code: floorDegradation.detail,
-            error: floorDegradation.message
-          });
-        }
-        const projection2 = floorDegradation === void 0 ? bodyProjectionState(projected, ledger, latestEditSeq) : { current: false, textCurrent: false };
-        const editDetail = character2 === void 0 || chat === void 0 || ledger === void 0 ? void 0 : bodyEditDetailOf(character2.card, chat, ledger);
-        const view = buildBodyView({
-          messageId,
-          binding: binding2,
-          agent: agent2,
-          hostSupported: deps2 !== void 0,
-          stateSafety: stateSafety2,
-          historicalMvuState,
-          writeRollbackAvailable: deps2?.writeRollback !== void 0,
-          ledger,
-          messageText: messageText3,
-          projected,
-          projectionCurrent: projection2.current,
-          projectionTextCurrent: projection2.textCurrent,
-          inspection,
-          editDetail,
-          // A damaged floor binding closes edit with its own detail and keeps
-          // publishing it even when a reason already gates the row.
-          ...floorDegradation === void 0 ? {} : { readDetail: floorDegradation.detail },
-          ...facts?.lastOperation === void 0 ? {} : { lastOperation: facts.lastOperation },
-          ...mutationsDisabledReason2 === void 0 ? {} : { mutationsDisabledReason: mutationsDisabledReason2 }
-        });
-        return { ok: true, view };
-      } catch (error) {
-        ctx.logger?.warn?.("dsh-soulmojito body: GET body item failed", {
-          sessionId: sessionId2,
-          messageId,
-          error: errorMessage3(error)
-        });
-        return { ok: false, view: stableViewOf(messageId), error };
-      }
-    };
-    if (selector.kind === "batch") {
-      const items = /* @__PURE__ */ new Map();
-      for (const messageId of selector.messageIds) {
-        items.set(messageId, (await readBodyItem(messageId)).view);
-      }
-      return sendJson(res, 200, { ok: true, items: Object.fromEntries(items) });
-    }
-    const item = await readBodyItem(selector.messageId);
-    if (!item.ok) throw item.error;
-    return sendJson(res, 200, item.view);
-  }
-  const body = await readJson(req);
-  const sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
-  if (sessionId === "") {
-    return sendBodyFailure(res, { status: 400, code: "invalid-arguments", message: "sessionId is required" });
-  }
-  const binding = await resolveBodyBinding(wiring, sessionId);
-  if (binding === void 0 || !bodyBindingEligible(binding)) {
-    return sendBodyFailure(res, {
-      status: 409,
-      code: "architecture-mismatch",
-      message: "body operations require an AgentTavern single-character binding"
-    });
-  }
-  const mutationsDisabledReason = imBodyMutationDisabledOf(binding, sessionId, (await db.getState()).imPeers);
-  if (mutationsDisabledReason !== void 0) {
-    return sendBodyFailure(res, {
-      status: 409,
-      code: IM_BODY_MUTATION_DISABLED_CODE,
-      message: mutationsDisabledReason
-    });
-  }
-  const characterName = binding.character;
-  const chatId = binding.chatId;
-  if (characterName === void 0 || chatId === void 0) {
-    return sendBodyFailure(res, {
-      status: 409,
-      code: "body-state-unsafe",
-      message: bodyStateUnsafeMessage("chat-unreadable"),
-      detail: "chat-unreadable"
-    });
-  }
-  const action = route === "body" ? "edit" : route === "body/select" ? "select" : "regenerate";
-  const character = await db.getCharacter(characterName);
-  const snapshot2 = await db.getChatSnapshot(characterName, chatId);
-  const stateSafety = bodyMutationSafetyOf(action, character, snapshot2?.chat);
-  if (!stateSafety.safe) {
-    return sendBodyFailure(res, {
-      status: 409,
-      code: stateSafety.reason,
-      message: bodyStateUnsafeMessage(stateSafety.detail),
-      detail: stateSafety.detail
-    });
-  }
-  const agent = resolveLiveAgent(wiring, sessionId);
-  if (agent === void 0) {
-    return sendBodyFailure(res, {
-      status: 409,
-      code: "session-busy",
-      message: `session '${sessionId}' has no live agent in this host process; open the chat and retry`
-    });
-  }
-  const deps = await createBodyDeps(wiring, agent);
-  if (deps === void 0) {
-    return sendBodyFailure(res, {
-      status: 501,
-      code: "host-unsupported",
-      message: "this host does not expose appendPluginRecord/pluginRecordOf (DSH 0.2.1-rc.2+)"
-    });
-  }
-  if (action === "regenerate" && deps.writeRollback === void 0 && snapshot2 !== void 0 && bodyHistoricalMvuStateOf(character, snapshot2.chat)) {
-    return sendBodyFailure(res, {
-      status: 409,
-      code: "body-state-unsafe",
-      message: bodyStateUnsafeMessage("write-journal-unavailable"),
-      detail: "write-journal-unavailable"
-    });
-  }
-  try {
-    const groupId = bodyString(body, "groupId") ?? bodyString(body, "messageId");
-    if (groupId === void 0) throw bodyRuntimeError("invalid-arguments", "groupId or messageId is required");
-    const expectedAnchorId = bodyString(body, "expectedAnchorId") ?? groupId;
-    if (route === "body") {
-      const index2 = bodyIndex(body, "index");
-      if (typeof body.text !== "string") {
-        throw bodyRuntimeError("invalid-body-text", "body edit requires a string text");
-      }
-      const state2 = await applyBodyEdit(deps, { groupId, index: index2, text: body.text, expectedAnchorId });
-      return sendJson(res, 200, { ok: true, state: state2 });
-    }
-    if (route === "body/regenerate") {
-      const expectedIndex = bodyIndex(body, "expectedIndex");
-      const feedback = typeof body.feedback === "string" ? body.feedback : void 0;
-      const result = await startRegenerate(deps, {
-        groupId,
-        expectedAnchorId,
-        expectedIndex,
-        ...feedback === void 0 ? {} : { feedback }
-      });
-      return sendJson(res, 202, { ok: true, opId: result.opId, status: "pending" });
-    }
-    const index = bodyIndex(body, "index");
-    const state = await selectBodyCandidate(deps, { groupId, index, expectedAnchorId });
-    return sendJson(res, 200, { ok: true, state });
-  } catch (error) {
-    const pending = pendingOperationOf(error);
-    const recovered = pending === void 0 || await retryPendingBodyRecovery(wiring, agent, pending);
-    return sendBodyFailure(
-      res,
-      bodyFailureOf(error),
-      recovered || pending === void 0 ? void 0 : { opId: pending.opId, status: "pending" }
-    );
-  }
-}
-function sendBodyFailure(res, failure, pendingOperation) {
-  sendJson(res, failure.status, {
-    ok: false,
-    code: failure.code,
-    message: failure.message,
-    ...failure.detail === void 0 ? {} : { detail: failure.detail },
-    ...pendingOperation === void 0 ? {} : { pendingOperation }
-  });
-}
-function bodyString(body, field2) {
-  const value = body[field2];
-  return typeof value === "string" && value.trim() !== "" ? value : void 0;
-}
-function bodyIndex(body, field2) {
-  const value = body[field2];
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-    throw bodyRuntimeError("invalid-arguments", `${field2} must be a non-negative safe integer`);
-  }
-  return value;
-}
-async function projectedBodyFloor(chat, messageId, groupIdHint, selectedIndexHint, readScripts) {
-  let index;
-  try {
-    index = locateBodyFloorForRead(chat, {
-      messageId,
-      ...groupIdHint === void 0 ? {} : { groupId: groupIdHint }
-    });
-  } catch (error) {
-    return { ok: false, degradation: bodyFloorDegradationOf(error) };
-  }
-  if (index === void 0) return { ok: true, floor: void 0 };
-  const floor = chat.messages[index];
-  const tavern = asRecord7(asRecord7(floor.extra)?.["agentTavern"]);
-  const scripts = await readScripts();
-  const selectedSwipe = selectedIndexHint === void 0 ? floor : Array.isArray(floor.swipes) && typeof floor.swipes[selectedIndexHint] === "string" ? { ...floor, mes: floor.swipes[selectedIndexHint] } : void 0;
-  const text = selectedSwipe === void 0 ? void 0 : stripFrontendDocuments(displayTextForMessage(scripts, selectedSwipe, chat.messages.length - 1 - index));
-  const selectedIndex = floor.swipe_id;
-  const count = Array.isArray(floor.swipes) && floor.swipes.length > 0 ? floor.swipes.length : 1;
-  const resolved = {
-    ...typeof tavern?.["bodyGroupId"] === "string" ? { groupId: tavern["bodyGroupId"] } : {},
-    ...typeof tavern?.["anchorMessageId"] === "string" ? { anchorMessageId: tavern["anchorMessageId"] } : {},
-    ...typeof selectedIndex === "number" && Number.isSafeInteger(selectedIndex) ? { selectedIndex } : {},
-    ...typeof tavern?.["lastBodyEventSeq"] === "number" && Number.isSafeInteger(tavern["lastBodyEventSeq"]) && tavern["lastBodyEventSeq"] >= 0 ? { lastBodyEventSeq: tavern["lastBodyEventSeq"] } : {},
-    count,
-    ...text === void 0 ? {} : { text }
-  };
-  return { ok: true, floor: resolved };
-}
-function bodyFloorDegradationOf(error) {
-  if (error instanceof BodyJsonlProjectionError && error.code === "body-group-mismatch") {
-    return { detail: error.code, message: error.message };
-  }
-  return {
-    detail: "body-floor-unreadable",
-    message: `body floor lookup failed: ${errorMessage3(error)}`
-  };
-}
-var BODY_GET_BATCH_LIMIT = 50;
-function parseBodyGetSelector(params) {
-  const single = params.get("messageId");
-  const batch = params.get("messageIds");
-  const hasSingle = single !== null && single !== "";
-  const hasBatch = batch !== null && batch !== "";
-  if (hasSingle && hasBatch) {
-    throw new HttpError(400, "pass either messageId or messageIds, not both");
-  }
-  if (hasSingle) return { kind: "single", messageId: single };
-  if (!hasBatch) {
-    throw new HttpError(400, "sessionId and messageId (or messageIds) are required");
-  }
-  const messageIds = [];
-  const seen = /* @__PURE__ */ new Set();
-  for (const raw of batch.split(",")) {
-    const messageId = raw.trim();
-    if (messageId === "") throw new HttpError(400, "messageIds must not contain empty entries");
-    if (seen.has(messageId)) continue;
-    seen.add(messageId);
-    messageIds.push(messageId);
-  }
-  if (messageIds.length > BODY_GET_BATCH_LIMIT) {
-    throw new HttpError(400, `messageIds accepts at most ${BODY_GET_BATCH_LIMIT} ids (got ${messageIds.length})`);
-  }
-  return { kind: "batch", messageIds };
-}
-function bodyProjectionState(projected, ledger, latestEditSeq) {
-  if (projected === void 0 || ledger === void 0) return { current: true, textCurrent: true };
-  const textCurrent = latestEditSeq === void 0 || projected.lastBodyEventSeq !== void 0 && projected.lastBodyEventSeq >= latestEditSeq;
-  const selectionCurrent = (projected.anchorMessageId === void 0 || projected.anchorMessageId === ledger.anchorMessageId) && (projected.selectedIndex === void 0 || projected.selectedIndex === ledger.selectedIndex);
-  return { current: textCurrent && selectionCurrent, textCurrent };
-}
-function asRecord7(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
-}
-function asChatLog(value) {
-  const record = asRecord7(value);
-  if (record === void 0) return void 0;
-  const header = asRecord7(record["header"]);
-  if (header === void 0) return void 0;
-  if (typeof header["user_name"] !== "string" || typeof header["character_name"] !== "string") return void 0;
-  if (!Array.isArray(record["messages"])) return void 0;
-  return value;
 }
 
 // packages/plugin/src/mount.ts

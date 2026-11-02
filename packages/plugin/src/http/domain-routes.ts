@@ -1,8 +1,7 @@
 // Post-store domain routes lifted out of `handleApi`: avatar/character reads,
-// projection status/replay, one-shot compaction, guides/scripts, the
-// AgentTavern audit read and the novel/mod surfaces. Table position mirrors the
-// old if-chain; `body` stays in router.ts until its handler moves out of that
-// module.
+// projection status/replay, one-shot compaction, guides/scripts and the
+// AgentTavern audit read. The body and novel/mod surfaces live in their own
+// modules; `routes.ts` owns the evaluation order.
 
 import { readSessionEvents, type HostSessionLog } from '../../../bind/src/index.js'
 import type { TavernStore } from '../../../tavern-store/src/index.js'

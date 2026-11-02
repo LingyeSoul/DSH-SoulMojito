@@ -76,7 +76,7 @@
 - [`2026-10-31-weixin-send-queue.md`](../decisions/2026-10-31-weixin-send-queue.md) — 微信出站队列：面板可配发送间隔、窗口/冷却主动等待并重试一次、排队回执带排期
 - [`2026-10-31-im-owner-designation.md`](../decisions/2026-10-31-im-owner-designation.md) — IM 会话主人：每 peer 至多一位、主人/发言人值只存 `snd-` 哈希、头部 `owner=1`/`ownerItems` 权威标记与正文防伪造
 - [`2026-11-01-im-global-owner-and-commands.md`](../decisions/2026-11-01-im-global-owner-and-commands.md) — IM 账号级全局主人（微信排除）与仅全局主人可用的 `/status` `/bind` `/unbind` `/help` 指令；指令由插件执行、不进入模型会话
-- [`2026-11-02-mount-phases.md`](../decisions/2026-11-02-mount-phases.md) — `apply()` 装配阶段抽取：session/agent/transport 三相位与 `MountDeps`；route table 三片（update/games/im + 读路由模块 + 后置域路由表），其余 if-chain 待续
+- [`2026-11-02-mount-phases.md`](../decisions/2026-11-02-mount-phases.md) — `apply()` 装配阶段抽取：session/agent/transport 三相位与 `MountDeps`；route table 四片（update/games/im + 读路由模块 + 后置域路由 + body 模块），其余 if-chain 待续
 
 ### 宿主兼容与 DSH 版本适配
 

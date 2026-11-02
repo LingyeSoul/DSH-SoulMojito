@@ -8,6 +8,7 @@ import type { TavernStore } from '../../../tavern-store/src/index.js'
 import { handleGamesApi, isGamesRoute } from '../games/http.js'
 import type { PluginContext } from '../host-contract.js'
 import { getGamesServicePromise, getImRuntime } from '../runtime.js'
+import { handleAgentTavernBodyApi } from './body-api.js'
 import {
   handleAuditRoute,
   handleAvatarRoute,
@@ -146,6 +147,16 @@ export const STORE_ROUTES: readonly RouteEntry<StoreRouteContext>[] = [
     name: 'agent-tavern-audit',
     matches: (route, method) => method === 'GET' && route === 'agent-tavern/audit',
     handle: ({ db, res, url }) => handleAuditRoute(db, res, url),
+  },
+  // ---- AgentTavern body operations (proposal 0021 §7.3) ----
+  // GET is a display lookup with a stable empty body (never 500 for a cold or
+  // unprojected session); mutations are serialized inside the runtime's
+  // per-session `withBodyLock`, so no outer lock is taken here.
+  {
+    name: 'body',
+    matches: (route, method) => ((method === 'GET' || method === 'PUT') && route === 'body')
+      || (method === 'POST' && (route === 'body/regenerate' || route === 'body/select')),
+    handle: ({ ctx, db, req, res, url, route, method }) => handleAgentTavernBodyApi(ctx, db, req, res, url, route, method),
   },
   // Novel and mod surfaces own their subpaths; the outer table only decides
   // that the family belongs to them.
