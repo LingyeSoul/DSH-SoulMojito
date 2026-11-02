@@ -15598,7 +15598,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.5".trim() : "";
-  const commit = true ? normalizeCommit("a008bad") : void 0;
+  const commit = true ? normalizeCommit("6cb3284") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -51339,6 +51339,90 @@ function bodyProjectionState(projected, ledger, latestEditSeq) {
   return { current: textCurrent && selectionCurrent, textCurrent };
 }
 
+// packages/plugin/src/http/character-routes.ts
+init_src();
+init_dsh_home();
+init_events();
+init_io();
+async function handleCharacterUpdateRoute(db, req, res, route) {
+  const oldName = decodeURIComponent(route.slice("character/".length));
+  const body = await readJson(req, 25 * 1024 * 1024);
+  if (!body.card || typeof body.card !== "object" || Array.isArray(body.card)) {
+    throw new Error("expected { card }");
+  }
+  clampIdentitySummary(body.card);
+  const saved = await db.updateCharacter(oldName, body.card);
+  const nextName = saved.card.data.name;
+  await emitAssetsSaved("character", nextName);
+  if (nextName !== oldName) {
+    await moveOriginalSnapshot(tavernDataRoot(), oldName, nextName);
+  }
+  const state = await db.updateState((current) => {
+    const activeCharacter = current.activeCharacter === oldName ? nextName : current.activeCharacter;
+    const sessionBindings = Object.fromEntries(Object.entries(current.sessionBindings).map(([sessionId, binding]) => [
+      sessionId,
+      binding.character === oldName && binding.group !== true ? { ...binding, character: nextName } : binding
+    ]));
+    const prefix = `${oldName}\0`;
+    const chats = nextName === oldName ? current.chats : Object.fromEntries(Object.entries(current.chats).map(([key, value]) => [
+      key.startsWith(prefix) ? `${nextName}\0${key.slice(prefix.length)}` : key,
+      value
+    ]));
+    return { activeCharacter, sessionBindings, chats };
+  });
+  if (nextName !== oldName) {
+    for (const groupName of await db.listGroups()) {
+      const group2 = await db.getGroup(groupName);
+      if (group2?.members.includes(oldName)) {
+        await db.putGroup({
+          ...group2,
+          members: group2.members.map((member) => member === oldName ? nextName : member),
+          disabledMembers: group2.disabledMembers.map((member) => member === oldName ? nextName : member)
+        });
+      }
+    }
+  }
+  await refreshActivePrompt();
+  return sendJson(res, 200, { ok: true, kind: saved.kind, card: publicCard(saved.card), state });
+}
+async function handleCharacterDeleteRoute(db, res, url) {
+  const name2 = url.searchParams.get("name");
+  if (!name2) throw new Error("name query is required");
+  const found = await db.getCharacter(name2);
+  if (!found) return sendJson(res, 404, { ok: false, message: "character not found" });
+  await db.deleteCharacter(name2);
+  for (const groupName of await db.listGroups()) {
+    const group2 = await db.getGroup(groupName);
+    if (group2?.members.includes(name2)) {
+      await db.putGroup({
+        ...group2,
+        members: group2.members.filter((member) => member !== name2),
+        disabledMembers: group2.disabledMembers.filter((member) => member !== name2)
+      });
+    }
+  }
+  const state = await db.updateState((current) => ({
+    activeCharacter: current.activeCharacter === name2 ? void 0 : current.activeCharacter,
+    sessionBindings: Object.fromEntries(Object.entries(current.sessionBindings).filter(([, binding]) => !(binding.character === name2 && binding.group !== true)))
+  }));
+  await deleteOriginalSnapshot(tavernDataRoot(), name2);
+  await refreshActivePrompt();
+  return sendJson(res, 200, { ok: true, state });
+}
+async function handleCharacterExportRoute(db, res, route) {
+  const name2 = decodeURIComponent(route.slice("export/character/".length));
+  const found = await db.getCharacter(name2);
+  if (!found) return sendJson(res, 404, { ok: false, message: "character not found" });
+  const bytes = await db.exportCharacter(name2);
+  const media = found.kind === "charx" ? "application/zip" : found.kind === "json" ? "application/json" : "image/png";
+  res.statusCode = 200;
+  res.setHeader("content-type", media);
+  const ext = found.kind === "charx" ? "charx" : found.kind === "json" ? "json" : "png";
+  res.setHeader("content-disposition", `attachment; filename="${encodeURIComponent(`${name2}.${ext}`)}"`);
+  res.end(Buffer.from(bytes));
+  return;
+}
+
 // packages/plugin/src/http/domain-routes.ts
 init_runtime2();
 init_io();
@@ -59935,6 +60019,23 @@ var STORE_ROUTES = [
     name: "mods",
     matches: (route, _method) => route === "mods" || route.startsWith("mods/"),
     handle: ({ ctx, req, res, url, route, method }) => handleModsApi(ctx, req, res, url, route, method)
+  },
+  // Character writes and exports are post-store; method gating stays in
+  // `matches`, so a non-matching request falls through to the unchanged chain.
+  {
+    name: "character-write",
+    matches: (route, method) => method === "PUT" && route.startsWith("character/"),
+    handle: ({ db, req, res, route }) => handleCharacterUpdateRoute(db, req, res, route)
+  },
+  {
+    name: "character-delete",
+    matches: (route, method) => method === "DELETE" && route === "character",
+    handle: ({ db, res, url }) => handleCharacterDeleteRoute(db, res, url)
+  },
+  {
+    name: "character-export",
+    matches: (route, method) => method === "GET" && route.startsWith("export/character/"),
+    handle: ({ db, res, route }) => handleCharacterExportRoute(db, res, route)
   }
 ];
 
@@ -59958,84 +60059,6 @@ async function handleApi(ctx, req, res) {
   for (const entry of STORE_ROUTES) {
     if (!entry.matches(route, method)) continue;
     await entry.handle({ ctx, req, res, url, route, method, db });
-    return;
-  }
-  if (method === "PUT" && route.startsWith("character/")) {
-    const oldName = decodeURIComponent(route.slice("character/".length));
-    const body = await readJson(req, 25 * 1024 * 1024);
-    if (!body.card || typeof body.card !== "object" || Array.isArray(body.card)) {
-      throw new Error("expected { card }");
-    }
-    clampIdentitySummary(body.card);
-    const saved = await db.updateCharacter(oldName, body.card);
-    const nextName = saved.card.data.name;
-    await emitAssetsSaved("character", nextName);
-    if (nextName !== oldName) {
-      await moveOriginalSnapshot(tavernDataRoot(), oldName, nextName);
-    }
-    const state = await db.updateState((current) => {
-      const activeCharacter = current.activeCharacter === oldName ? nextName : current.activeCharacter;
-      const sessionBindings = Object.fromEntries(Object.entries(current.sessionBindings).map(([sessionId, binding]) => [
-        sessionId,
-        binding.character === oldName && binding.group !== true ? { ...binding, character: nextName } : binding
-      ]));
-      const prefix = `${oldName}\0`;
-      const chats = nextName === oldName ? current.chats : Object.fromEntries(Object.entries(current.chats).map(([key, value]) => [
-        key.startsWith(prefix) ? `${nextName}\0${key.slice(prefix.length)}` : key,
-        value
-      ]));
-      return { activeCharacter, sessionBindings, chats };
-    });
-    if (nextName !== oldName) {
-      for (const groupName of await db.listGroups()) {
-        const group2 = await db.getGroup(groupName);
-        if (group2?.members.includes(oldName)) {
-          await db.putGroup({
-            ...group2,
-            members: group2.members.map((member) => member === oldName ? nextName : member),
-            disabledMembers: group2.disabledMembers.map((member) => member === oldName ? nextName : member)
-          });
-        }
-      }
-    }
-    await refreshActivePrompt();
-    return sendJson(res, 200, { ok: true, kind: saved.kind, card: publicCard(saved.card), state });
-  }
-  if (method === "DELETE" && route === "character") {
-    const name2 = url.searchParams.get("name");
-    if (!name2) throw new Error("name query is required");
-    const found = await db.getCharacter(name2);
-    if (!found) return sendJson(res, 404, { ok: false, message: "character not found" });
-    await db.deleteCharacter(name2);
-    for (const groupName of await db.listGroups()) {
-      const group2 = await db.getGroup(groupName);
-      if (group2?.members.includes(name2)) {
-        await db.putGroup({
-          ...group2,
-          members: group2.members.filter((member) => member !== name2),
-          disabledMembers: group2.disabledMembers.filter((member) => member !== name2)
-        });
-      }
-    }
-    const state = await db.updateState((current) => ({
-      activeCharacter: current.activeCharacter === name2 ? void 0 : current.activeCharacter,
-      sessionBindings: Object.fromEntries(Object.entries(current.sessionBindings).filter(([, binding]) => !(binding.character === name2 && binding.group !== true)))
-    }));
-    await deleteOriginalSnapshot(tavernDataRoot(), name2);
-    await refreshActivePrompt();
-    return sendJson(res, 200, { ok: true, state });
-  }
-  if (method === "GET" && route.startsWith("export/character/")) {
-    const name2 = decodeURIComponent(route.slice("export/character/".length));
-    const found = await db.getCharacter(name2);
-    if (!found) return sendJson(res, 404, { ok: false, message: "character not found" });
-    const bytes = await db.exportCharacter(name2);
-    const media = found.kind === "charx" ? "application/zip" : found.kind === "json" ? "application/json" : "image/png";
-    res.statusCode = 200;
-    res.setHeader("content-type", media);
-    const ext = found.kind === "charx" ? "charx" : found.kind === "json" ? "json" : "png";
-    res.setHeader("content-disposition", `attachment; filename="${encodeURIComponent(`${name2}.${ext}`)}"`);
-    res.end(Buffer.from(bytes));
     return;
   }
   if (method === "GET" && route === "models") {

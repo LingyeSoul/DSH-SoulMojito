@@ -10,6 +10,11 @@ import type { PluginContext } from '../host-contract.js'
 import { getGamesServicePromise, getImRuntime } from '../runtime.js'
 import { handleAgentTavernBodyApi } from './body-api.js'
 import {
+  handleCharacterDeleteRoute,
+  handleCharacterExportRoute,
+  handleCharacterUpdateRoute,
+} from './character-routes.js'
+import {
   handleAuditRoute,
   handleAvatarRoute,
   handleCharacterReadRoute,
@@ -173,5 +178,22 @@ export const STORE_ROUTES: readonly RouteEntry<StoreRouteContext>[] = [
     name: 'mods',
     matches: (route, _method) => route === 'mods' || route.startsWith('mods/'),
     handle: ({ ctx, req, res, url, route, method }) => handleModsApi(ctx, req, res, url, route, method),
+  },
+  // Character writes and exports are post-store; method gating stays in
+  // `matches`, so a non-matching request falls through to the unchanged chain.
+  {
+    name: 'character-write',
+    matches: (route, method) => method === 'PUT' && route.startsWith('character/'),
+    handle: ({ db, req, res, route }) => handleCharacterUpdateRoute(db, req, res, route),
+  },
+  {
+    name: 'character-delete',
+    matches: (route, method) => method === 'DELETE' && route === 'character',
+    handle: ({ db, res, url }) => handleCharacterDeleteRoute(db, res, url),
+  },
+  {
+    name: 'character-export',
+    matches: (route, method) => method === 'GET' && route.startsWith('export/character/'),
+    handle: ({ db, res, route }) => handleCharacterExportRoute(db, res, route),
   },
 ]
