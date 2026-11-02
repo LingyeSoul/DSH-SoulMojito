@@ -758,6 +758,89 @@ var init_src = __esm({
   }
 });
 
+// packages/tavern-format/src/types.ts
+var init_types2 = __esm({
+  "packages/tavern-format/src/types.ts"() {
+    "use strict";
+  }
+});
+
+// packages/tavern-format/src/png.ts
+var PNG_SIGNATURE, CRC_TABLE;
+var init_png = __esm({
+  "packages/tavern-format/src/png.ts"() {
+    "use strict";
+    PNG_SIGNATURE = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
+    CRC_TABLE = (() => {
+      const table = new Uint32Array(256);
+      for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) {
+          c = c & 1 ? 3988292384 ^ c >>> 1 : c >>> 1;
+        }
+        table[n] = c >>> 0;
+      }
+      return table;
+    })();
+  }
+});
+
+// packages/tavern-format/src/card.ts
+var init_card = __esm({
+  "packages/tavern-format/src/card.ts"() {
+    "use strict";
+    init_png();
+  }
+});
+
+// packages/tavern-format/src/worldbook.ts
+var init_worldbook = __esm({
+  "packages/tavern-format/src/worldbook.ts"() {
+    "use strict";
+  }
+});
+
+// packages/tavern-format/src/preset.ts
+function parsePreset(obj) {
+  const promptsRaw = obj["prompts"];
+  if (!Array.isArray(promptsRaw)) throw new PresetFormatError("preset has no 'prompts' array");
+  const prompts = promptsRaw.map((p, i) => {
+    if (typeof p !== "object" || p === null) throw new PresetFormatError(`prompts[${i}] is not an object`);
+    return p;
+  });
+  const orderRaw = obj["prompt_order"];
+  const promptOrder = Array.isArray(orderRaw) ? orderRaw.map((o, i) => {
+    if (typeof o !== "object" || o === null || !Array.isArray(o.order)) {
+      throw new PresetFormatError(`prompt_order[${i}] is malformed`);
+    }
+    return o;
+  }) : [];
+  const sampler = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (k !== "prompts" && k !== "prompt_order") sampler[k] = v;
+  }
+  return { prompts, promptOrder, sampler };
+}
+var PresetFormatError;
+var init_preset = __esm({
+  "packages/tavern-format/src/preset.ts"() {
+    "use strict";
+    PresetFormatError = class extends Error {
+      constructor(message) {
+        super(message);
+        this.name = "PresetFormatError";
+      }
+    };
+  }
+});
+
+// packages/tavern-format/src/chat.ts
+var init_chat = __esm({
+  "packages/tavern-format/src/chat.ts"() {
+    "use strict";
+  }
+});
+
 // node_modules/.pnpm/fflate@0.8.3/node_modules/fflate/esm/index.mjs
 import { createRequire } from "module";
 function deflateSync(data, opts) {
@@ -1739,6 +1822,75 @@ var init_esm = __esm({
   }
 });
 
+// packages/tavern-format/src/zip.ts
+var DEFAULT_ZIP_LIMITS;
+var init_zip = __esm({
+  "packages/tavern-format/src/zip.ts"() {
+    "use strict";
+    DEFAULT_ZIP_LIMITS = {
+      maxEntries: 256,
+      maxFileBytes: 64 * 1024 * 1024,
+      maxTotalBytes: 128 * 1024 * 1024
+    };
+  }
+});
+
+// packages/tavern-format/src/charx.ts
+var init_charx = __esm({
+  "packages/tavern-format/src/charx.ts"() {
+    "use strict";
+    init_card();
+    init_zip();
+  }
+});
+
+// packages/tavern-format/src/roundtrip.ts
+var init_roundtrip = __esm({
+  "packages/tavern-format/src/roundtrip.ts"() {
+    "use strict";
+  }
+});
+
+// packages/tavern-format/src/group.ts
+var init_group = __esm({
+  "packages/tavern-format/src/group.ts"() {
+    "use strict";
+  }
+});
+
+// packages/tavern-format/src/regex-script.ts
+var init_regex_script = __esm({
+  "packages/tavern-format/src/regex-script.ts"() {
+    "use strict";
+  }
+});
+
+// packages/tavern-format/src/textcompletion.ts
+var init_textcompletion = __esm({
+  "packages/tavern-format/src/textcompletion.ts"() {
+    "use strict";
+  }
+});
+
+// packages/tavern-format/src/index.ts
+var init_src2 = __esm({
+  "packages/tavern-format/src/index.ts"() {
+    "use strict";
+    init_types2();
+    init_png();
+    init_card();
+    init_worldbook();
+    init_preset();
+    init_chat();
+    init_charx();
+    init_zip();
+    init_roundtrip();
+    init_group();
+    init_regex_script();
+    init_textcompletion();
+  }
+});
+
 // packages/tavern-store/src/fs-atomic.ts
 import { promises as fs } from "node:fs";
 async function moveAtomic(from, to) {
@@ -1991,7 +2143,7 @@ var init_mutation_tail = __esm({
 });
 
 // packages/tavern-format/lib/types.js
-var init_types2 = __esm({
+var init_types3 = __esm({
   "packages/tavern-format/lib/types.js"() {
     "use strict";
   }
@@ -2147,7 +2299,7 @@ function utf8ToBase642(text) {
   return Buffer.from(text, "utf8").toString("base64");
 }
 var PNG_SIGNATURE2, PngFormatError, CRC_TABLE2, CARD_CHUNK_V22, CARD_CHUNK_V32;
-var init_png = __esm({
+var init_png2 = __esm({
   "packages/tavern-format/lib/png.js"() {
     "use strict";
     PNG_SIGNATURE2 = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
@@ -2347,10 +2499,10 @@ function toV2Json(ir) {
   };
 }
 var CardFormatError, V3_FIELDS;
-var init_card = __esm({
+var init_card2 = __esm({
   "packages/tavern-format/lib/card.js"() {
     "use strict";
-    init_png();
+    init_png2();
     CardFormatError = class extends Error {
       constructor(message) {
         super(message);
@@ -2531,7 +2683,7 @@ function strArray2(v) {
   return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
 }
 var WorldBookFormatError, KNOWN_FIELDS;
-var init_worldbook = __esm({
+var init_worldbook2 = __esm({
   "packages/tavern-format/lib/worldbook.js"() {
     "use strict";
     WorldBookFormatError = class extends Error {
@@ -2587,7 +2739,7 @@ var init_worldbook = __esm({
 });
 
 // packages/tavern-format/lib/preset.js
-var init_preset = __esm({
+var init_preset2 = __esm({
   "packages/tavern-format/lib/preset.js"() {
     "use strict";
   }
@@ -2624,7 +2776,7 @@ function serializeChatLog(ir) {
   return lines.join("\n") + "\n";
 }
 var ChatFormatError;
-var init_chat = __esm({
+var init_chat2 = __esm({
   "packages/tavern-format/lib/chat.js"() {
     "use strict";
     ChatFormatError = class extends Error {
@@ -2674,7 +2826,7 @@ function unzipArchive2(bytes, limits) {
   }
 }
 var ZipArchiveError, ZipLimitError, DEFAULT_ZIP_LIMITS2;
-var init_zip = __esm({
+var init_zip2 = __esm({
   "packages/tavern-format/lib/zip.js"() {
     "use strict";
     init_esm();
@@ -2735,12 +2887,12 @@ function encodeCharx(ir, assets) {
   return zipSync(files);
 }
 var CharxFormatError;
-var init_charx = __esm({
+var init_charx2 = __esm({
   "packages/tavern-format/lib/charx.js"() {
     "use strict";
     init_esm();
-    init_card();
-    init_zip();
+    init_card2();
+    init_zip2();
     CharxFormatError = class extends Error {
       constructor(message) {
         super(message);
@@ -2751,7 +2903,7 @@ var init_charx = __esm({
 });
 
 // packages/tavern-format/lib/roundtrip.js
-var init_roundtrip = __esm({
+var init_roundtrip2 = __esm({
   "packages/tavern-format/lib/roundtrip.js"() {
     "use strict";
   }
@@ -2830,7 +2982,7 @@ function bool2(value, fallback) {
   return typeof value === "boolean" ? value : fallback;
 }
 var GroupFormatError;
-var init_group = __esm({
+var init_group2 = __esm({
   "packages/tavern-format/lib/group.js"() {
     "use strict";
     GroupFormatError = class extends Error {
@@ -2900,7 +3052,7 @@ function numOrNull(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 var RegexPlacement, RegexScriptFormatError, KNOWN_FIELDS2, PLACEMENT_VALUES;
-var init_regex_script = __esm({
+var init_regex_script2 = __esm({
   "packages/tavern-format/lib/regex-script.js"() {
     "use strict";
     RegexPlacement = {
@@ -2936,7 +3088,7 @@ var init_regex_script = __esm({
 });
 
 // packages/tavern-format/lib/textcompletion.js
-var init_textcompletion = __esm({
+var init_textcompletion2 = __esm({
   "packages/tavern-format/lib/textcompletion.js"() {
     "use strict";
   }
@@ -2946,18 +3098,18 @@ var init_textcompletion = __esm({
 var init_lib = __esm({
   "packages/tavern-format/lib/index.js"() {
     "use strict";
-    init_types2();
-    init_png();
-    init_card();
-    init_worldbook();
-    init_preset();
-    init_chat();
-    init_charx();
-    init_zip();
-    init_roundtrip();
-    init_group();
-    init_regex_script();
-    init_textcompletion();
+    init_types3();
+    init_png2();
+    init_card2();
+    init_worldbook2();
+    init_preset2();
+    init_chat2();
+    init_charx2();
+    init_zip2();
+    init_roundtrip2();
+    init_group2();
+    init_regex_script2();
+    init_textcompletion2();
   }
 });
 
@@ -8914,7 +9066,7 @@ var init_scripts = __esm({
 });
 
 // packages/tavern-store/src/index.ts
-var init_src2 = __esm({
+var init_src3 = __esm({
   "packages/tavern-store/src/index.ts"() {
     "use strict";
     init_store();
@@ -9007,7 +9159,7 @@ var TAVERN_STORE_HANDLE_KEY, MEMORY_STORE_HANDLE_KEY, NOVEL_STORE_HANDLE_KEY, ta
 var init_store_handle = __esm({
   "packages/plugin/src/store-handle.ts"() {
     "use strict";
-    init_src2();
+    init_src3();
     TAVERN_STORE_HANDLE_KEY = "dsh-soulmojito:tavern-store";
     MEMORY_STORE_HANDLE_KEY = "dsh-soulmojito:memory-store";
     NOVEL_STORE_HANDLE_KEY = "dsh-soulmojito:novel-store";
@@ -9237,6 +9389,14 @@ var init_handle = __esm({
   }
 });
 
+// packages/plugin/src/tavern-assets.ts
+var init_tavern_assets = __esm({
+  "packages/plugin/src/tavern-assets.ts"() {
+    "use strict";
+    init_src2();
+  }
+});
+
 // packages/plugin/src/shared-stores.ts
 function memoryFamily() {
   return memoryStores ??= createStoreFamily(MEMORY_STORE_HANDLE_KEY, (root) => MemoryStore.open(root));
@@ -9254,1538 +9414,55 @@ var memoryStores, novelStores;
 var init_shared_stores = __esm({
   "packages/plugin/src/shared-stores.ts"() {
     "use strict";
-    init_src2();
-    init_store_handle();
-  }
-});
-
-// packages/tavern-lore/lib/types.js
-var MESSAGE_BOUNDARY2;
-var init_types3 = __esm({
-  "packages/tavern-lore/lib/types.js"() {
-    "use strict";
-    MESSAGE_BOUNDARY2 = "";
-  }
-});
-
-// packages/tavern-lore/lib/regex.js
-var init_regex = __esm({
-  "packages/tavern-lore/lib/regex.js"() {
-    "use strict";
-  }
-});
-
-// packages/tavern-lore/lib/buffer.js
-var JOINER2;
-var init_buffer = __esm({
-  "packages/tavern-lore/lib/buffer.js"() {
-    "use strict";
-    init_types3();
-    init_regex();
-    JOINER2 = "\n" + MESSAGE_BOUNDARY2;
-  }
-});
-
-// packages/tavern-lore/lib/decorators.js
-var init_decorators = __esm({
-  "packages/tavern-lore/lib/decorators.js"() {
-    "use strict";
-  }
-});
-
-// packages/tavern-lore/lib/entry.js
-var init_entry = __esm({
-  "packages/tavern-lore/lib/entry.js"() {
-    "use strict";
-    init_decorators();
-  }
-});
-
-// packages/tavern-lore/lib/groups.js
-var init_groups = __esm({
-  "packages/tavern-lore/lib/groups.js"() {
-    "use strict";
-    init_entry();
-  }
-});
-
-// packages/tavern-lore/lib/timed.js
-var init_timed = __esm({
-  "packages/tavern-lore/lib/timed.js"() {
-    "use strict";
-  }
-});
-
-// packages/tavern-lore/lib/engine.js
-var init_engine2 = __esm({
-  "packages/tavern-lore/lib/engine.js"() {
-    "use strict";
-    init_buffer();
-    init_entry();
-    init_groups();
-    init_timed();
-    init_types3();
-  }
-});
-
-// packages/tavern-lore/lib/index.js
-var init_lib2 = __esm({
-  "packages/tavern-lore/lib/index.js"() {
-    "use strict";
-    init_types3();
-    init_engine2();
-    init_buffer();
-    init_entry();
-    init_regex();
-  }
-});
-
-// packages/tavern-script/src/regex-safety.ts
-var init_regex_safety = __esm({
-  "packages/tavern-script/src/regex-safety.ts"() {
-    "use strict";
-  }
-});
-
-// packages/tavern-script/src/regex.ts
-var init_regex2 = __esm({
-  "packages/tavern-script/src/regex.ts"() {
-    "use strict";
-    init_lib2();
-    init_lib();
-    init_regex_safety();
-    init_regex_safety();
-  }
-});
-
-// packages/tavern-script/src/stscript.ts
-function truthyString(value) {
-  return value === "true" || value === "1" ? "true" : "false";
-}
-function toNumber(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-function parseRoll2(spec, rng) {
-  const match = /^(\d*)d(\d+)$/i.exec(spec.trim());
-  if (match === null) {
-    const single = toNumber(spec.trim());
-    if (single !== null) return single;
-    throw new ScriptError(`invalid roll spec: ${spec}`);
-  }
-  const count = Math.min(Math.max(Number(match[1] || "1"), 1), 100);
-  const sides = Math.max(Number(match[2]), 1);
-  let total = 0;
-  for (let i = 0; i < count; i++) total += Math.floor(rng() * sides) + 1;
-  return total;
-}
-function pickRandom(list, rng) {
-  if (list.length === 0) return "";
-  return list[Math.floor(rng() * list.length)] ?? "";
-}
-function splitChoices(raw) {
-  if (raw.includes("::")) return raw.split("::").map((item) => item.trim()).filter((item) => item !== "");
-  return raw.split(",").map((item) => item.trim()).filter((item) => item !== "");
-}
-function varTarget(cmd) {
-  const first = Object.entries(cmd.named)[0];
-  if (first !== void 0 && cmd.args.length === 0) return { name: first[0], value: first[1] };
-  return { name: cmd.args[0] ?? "", value: cmd.args.length > 1 ? cmd.args.slice(1).join(" ") : "" };
-}
-async function requireAction(env, command) {
-  if (env === void 0) throw new ScriptError(`/${command} is not available in this context`);
-  return env;
-}
-function registerStscriptCommand(spec) {
-  commandTable.set(spec.name, spec);
-  for (const alias of spec.aliases ?? []) commandTable.set(alias, spec);
-  return () => {
-    if (commandTable.get(spec.name) === spec) commandTable.delete(spec.name);
-    for (const alias of spec.aliases ?? []) {
-      if (commandTable.get(alias) === spec) commandTable.delete(alias);
-    }
-  };
-}
-var ScriptError, NUMERIC_OPS, commandTable, changedResult, echoCommand, setvarCommand, getvarCommand, addvarCommand, incvarCommand, hasvarCommand, delvarCommand, ifCommand, randomCommand, rollCommand, pickCommand, sendCommand, sysCommand, triggerCommand, regenerateCommand, stopCommand, cutCommand, regexCommand;
-var init_stscript = __esm({
-  "packages/tavern-script/src/stscript.ts"() {
-    "use strict";
-    ScriptError = class extends Error {
-      constructor(message) {
-        super(message);
-        this.name = "ScriptError";
-      }
-    };
-    NUMERIC_OPS = {
-      "=": (a, b) => a === b,
-      "==": (a, b) => a === b,
-      "!=": (a, b) => a !== b,
-      ">": (a, b) => a > b,
-      "<": (a, b) => a < b,
-      ">=": (a, b) => a >= b,
-      "<=": (a, b) => a <= b
-    };
-    commandTable = /* @__PURE__ */ new Map();
-    changedResult = () => ({ output: "", chatChanged: true });
-    echoCommand = {
-      name: "echo",
-      aliases: ["comment"],
-      run: (cmd, env) => {
-        const text = cmd.raw;
-        if (cmd.name === "echo") env.echo?.(text);
-        return { output: text, chatChanged: false };
-      }
-    };
-    setvarCommand = {
-      name: "setvar",
-      aliases: ["setglobalvar"],
-      run: (cmd, env) => {
-        const setter = cmd.name === "setvar" ? env.setVar : env.setGlobalVar;
-        const target = varTarget(cmd);
-        if (target.name === "") throw new ScriptError(`/${cmd.name} requires a variable name`);
-        setter(target.name, target.value);
-        return changedResult();
-      }
-    };
-    getvarCommand = {
-      name: "getvar",
-      aliases: ["getglobalvar"],
-      run: (cmd, env) => {
-        const getter = cmd.name === "getvar" ? env.getVar : env.getGlobalVar;
-        const name2 = cmd.args[0] ?? "";
-        if (name2 === "") throw new ScriptError(`/${cmd.name} requires a variable name`);
-        return { output: String(getter(name2) ?? ""), chatChanged: false };
-      }
-    };
-    addvarCommand = {
-      name: "addvar",
-      run: (cmd, env) => {
-        const target = varTarget(cmd);
-        if (target.name === "") throw new ScriptError("/addvar requires a variable name");
-        const delta = target.value === "" ? "1" : target.value;
-        const current = env.getVar(target.name);
-        const currentNum = typeof current === "boolean" ? null : toNumber(String(current ?? ""));
-        const deltaNum = toNumber(delta);
-        if (current === void 0) {
-          env.setVar(target.name, delta);
-        } else if (currentNum !== null && deltaNum !== null) {
-          env.setVar(target.name, currentNum + deltaNum);
-        } else {
-          env.setVar(target.name, `${String(current)}${delta}`);
-        }
-        return changedResult();
-      }
-    };
-    incvarCommand = {
-      name: "incvar",
-      aliases: ["decvar"],
-      run: (cmd, env) => {
-        const name2 = cmd.args[0] ?? "";
-        const current = toNumber(String(env.getVar(name2) ?? "0")) ?? 0;
-        env.setVar(name2, current + (cmd.name === "incvar" ? 1 : -1));
-        return changedResult();
-      }
-    };
-    hasvarCommand = {
-      name: "hasvar",
-      aliases: ["hasglobalvar"],
-      run: (cmd, env) => {
-        const checker = cmd.name === "hasvar" ? env.getVar : env.getGlobalVar;
-        return { output: truthyString(String(checker(cmd.args[0] ?? "") !== void 0)), chatChanged: false };
-      }
-    };
-    delvarCommand = {
-      name: "delvar",
-      aliases: ["delglobalvar"],
-      run: (cmd, env) => {
-        const remover = cmd.name === "delvar" ? env.deleteVar : env.deleteGlobalVar;
-        remover(cmd.args[0] ?? "");
-        return changedResult();
-      }
-    };
-    ifCommand = {
-      name: "if",
-      run: async (cmd, env, tools) => {
-        const left = cmd.named["left"] ?? cmd.args[0] ?? "";
-        const right = cmd.named["right"] ?? cmd.args[1] ?? "";
-        const op = (cmd.named["op"] ?? cmd.args[2] ?? "=").trim();
-        let passes;
-        if (op === "contains" || op === "!contains") {
-          const contains = left.includes(right);
-          passes = op === "contains" ? contains : !contains;
-        } else {
-          const numericOp = NUMERIC_OPS[op];
-          if (numericOp === void 0) throw new ScriptError(`unsupported /if op: ${op}`);
-          const leftNum = toNumber(left);
-          const rightNum = toNumber(right);
-          if (leftNum !== null && rightNum !== null) passes = numericOp(leftNum, rightNum);
-          else if (op === "=" || op === "==") passes = left === right;
-          else if (op === "!=") passes = left !== right;
-          else passes = false;
-        }
-        const branch = passes ? cmd.named["then"] : cmd.named["else"] ?? "";
-        if (branch === void 0 || branch.trim() === "") return { output: "", chatChanged: false };
-        return tools.runNested(branch, env);
-      }
-    };
-    randomCommand = {
-      name: "random",
-      run: (cmd, _env, tools) => {
-        const raw = cmd.raw.trim();
-        const range = /^(-?\d+)\s*-\s*(-?\d+)$/.exec(raw);
-        if (range !== null) {
-          const low = Number(range[1]);
-          const high = Number(range[2]);
-          const min = Math.min(low, high);
-          return { output: String(min + Math.floor(tools.rng() * (Math.max(low, high) - min + 1))), chatChanged: false };
-        }
-        return { output: pickRandom(splitChoices(raw), tools.rng), chatChanged: false };
-      }
-    };
-    rollCommand = {
-      name: "roll",
-      run: (cmd, _env, tools) => ({ output: String(parseRoll2(cmd.raw.trim() || "1d6", tools.rng)), chatChanged: false })
-    };
-    pickCommand = {
-      name: "pick",
-      run: (cmd, _env, tools) => ({ output: pickRandom(splitChoices(cmd.raw), tools.rng), chatChanged: false })
-    };
-    sendCommand = {
-      name: "send",
-      run: async (cmd, env) => {
-        const action = await requireAction(env.send, "send");
-        await action(cmd.raw);
-        return changedResult();
-      }
-    };
-    sysCommand = {
-      name: "sys",
-      run: async (cmd, env) => {
-        const action = await requireAction(env.system, "sys");
-        await action(cmd.raw);
-        return changedResult();
-      }
-    };
-    triggerCommand = {
-      name: "trigger",
-      run: async (cmd, env) => {
-        const action = await requireAction(env.trigger, "trigger");
-        await action(cmd.args[0]);
-        return changedResult();
-      }
-    };
-    regenerateCommand = {
-      name: "regenerate",
-      run: async (_cmd, env) => {
-        const action = await requireAction(env.regenerate, "regenerate");
-        await action();
-        return changedResult();
-      }
-    };
-    stopCommand = {
-      name: "stop",
-      run: async (_cmd, env) => {
-        const action = await requireAction(env.stop, "stop");
-        action();
-        return changedResult();
-      }
-    };
-    cutCommand = {
-      name: "cut",
-      run: async (cmd, env) => {
-        const action = await requireAction(env.cut, "cut");
-        const range = /^(-?\d+)(?:\s*-\s*(-?\d+))?$/.exec(cmd.raw.trim());
-        if (range === null) throw new ScriptError(`/cut expects a range like 0-2, got: ${cmd.raw.trim()}`);
-        const from = Number(range[1]);
-        const to = range[2] === void 0 ? from : Number(range[2]);
-        await action(Math.min(from, to), Math.max(from, to));
-        return changedResult();
-      }
-    };
-    regexCommand = {
-      name: "regex",
-      run: async (cmd, env) => {
-        const action = await requireAction(env.applyRegex, "regex");
-        const name2 = cmd.named["name"] ?? cmd.args[0] ?? "";
-        if (name2 === "") throw new ScriptError("/regex requires a script name (name=\u2026)");
-        const positional = cmd.named["name"] !== void 0 ? cmd.args : cmd.args.slice(1);
-        return { output: await action(name2, positional.join(" ")), chatChanged: false };
-      }
-    };
-    for (const spec of [
-      echoCommand,
-      setvarCommand,
-      getvarCommand,
-      addvarCommand,
-      incvarCommand,
-      hasvarCommand,
-      delvarCommand,
-      ifCommand,
-      randomCommand,
-      rollCommand,
-      pickCommand,
-      sendCommand,
-      sysCommand,
-      triggerCommand,
-      regenerateCommand,
-      stopCommand,
-      cutCommand,
-      regexCommand
-    ]) {
-      registerStscriptCommand(spec);
-    }
-  }
-});
-
-// packages/tavern-script/src/index.ts
-var init_src3 = __esm({
-  "packages/tavern-script/src/index.ts"() {
-    "use strict";
-    init_regex2();
-    init_stscript();
-  }
-});
-
-// packages/plugin/src/agent-novel/usage.ts
-function noteToolOutputBytes(toolName, bytes) {
-  if (typeof toolName !== "string" || toolName === "") return;
-  if (!Number.isFinite(bytes) || bytes < 0) return;
-  samplerTable.set(toolName, (samplerTable.get(toolName) ?? 0) + bytes);
-}
-function recordProbeAgentId(id) {
-  try {
-    if (typeof id !== "string" || id === "") return;
-    probeAgentSlot.id = id;
-  } catch {
-  }
-}
-function recordWriterRunUsage(entry) {
-  try {
-    if (typeof entry.outputChars === "number" && Number.isFinite(entry.outputChars) && entry.outputChars >= 0) {
-      writerRunUsageSlot.outputChars = entry.outputChars;
-    }
-    if (typeof entry.usage === "object" && entry.usage !== null && !Array.isArray(entry.usage)) {
-      const usage = {};
-      for (const [key, value] of Object.entries(entry.usage)) {
-        if (typeof value === "number" && Number.isFinite(value) && value >= 0) usage[key] = value;
-      }
-      if (Object.keys(usage).length > 0) writerRunUsageSlot.usage = usage;
-    }
-  } catch {
-  }
-}
-var USAGE_SAMPLER_KEY, samplerTable, PROBE_AGENT_ID_KEY, probeAgentSlot, WRITER_RUN_USAGE_KEY, writerRunUsageSlot;
-var init_usage = __esm({
-  "packages/plugin/src/agent-novel/usage.ts"() {
-    "use strict";
-    USAGE_SAMPLER_KEY = Symbol.for("dsh-soulmojito:novel-usage-sampler");
-    samplerTable = globalThis[USAGE_SAMPLER_KEY] ??= /* @__PURE__ */ new Map();
-    PROBE_AGENT_ID_KEY = Symbol.for("dsh-soulmojito:novel-writer-probe-agent-id");
-    probeAgentSlot = globalThis[PROBE_AGENT_ID_KEY] ??= {};
-    WRITER_RUN_USAGE_KEY = Symbol.for("dsh-soulmojito:novel-writer-run-usage");
-    writerRunUsageSlot = globalThis[WRITER_RUN_USAGE_KEY] ??= { outputChars: null, usage: null };
-  }
-});
-
-// packages/plugin/src/agent-novel/capabilities.ts
-function isObject(value) {
-  return typeof value === "object" && value !== null;
-}
-function isFunction(value) {
-  return typeof value === "function";
-}
-function inspectAgentNovelCapabilities(ctx) {
-  const missing = [];
-  const reasons = [];
-  const need = (id, ok, reason) => {
-    if (ok) return;
-    missing.push(id);
-    reasons.push(reason);
-  };
-  const agents = isObject(ctx?.agents) ? ctx?.agents : void 0;
-  need("agents", agents !== void 0, "host context exposes no 'agents' service object (\xA716 followup scheduling)");
-  need("agents.withoutInitiator", isFunction(agents?.withoutInitiator), "agents.withoutInitiator is not callable; agent-initiated followups without a user initiator cannot be driven (\xA716)");
-  const presets = isObject(ctx?.agentPresets) ? ctx?.agentPresets : void 0;
-  need("agentPresets.mount", isFunction(presets?.mount), "agentPresets.mount is not callable; the novel preset cannot be mounted (\xA716)");
-  need("agentPresets.recompose", isFunction(presets?.recompose), "agentPresets.recompose is not callable; preset recomposition for the novel architecture is unavailable (\xA716)");
-  const systemPrompt = isObject(ctx?.systemPrompt) ? ctx?.systemPrompt : void 0;
-  need("systemPrompt.section", isFunction(systemPrompt?.section), "systemPrompt.section is not callable; the novel kernel cannot be registered (\xA711)");
-  need("tools.register", isFunction(isObject(ctx?.tools) ? (ctx?.tools).register : void 0), "tools.register is not callable; the novel tool surface cannot be registered (\xA711)");
-  for (const eventType of REQUIRED_EVENT_TYPES) {
-    need(
-      `on:${eventType}`,
-      isFunction(ctx?.on),
-      `event subscription for '${eventType}' is unavailable: the host exposes no 'on' hook, and actual emission of the event type cannot be probed statically (\xA716)`
-    );
-  }
-  return {
-    available: missing.length === 0,
-    missing,
-    reasons,
-    checkedAt: (/* @__PURE__ */ new Date()).toISOString()
-  };
-}
-var REQUIRED_EVENT_TYPES;
-var init_capabilities = __esm({
-  "packages/plugin/src/agent-novel/capabilities.ts"() {
-    "use strict";
-    init_deduce();
-    init_usage();
-    REQUIRED_EVENT_TYPES = ["session/event", "agent/created", "agent/status"];
-  }
-});
-
-// packages/plugin/src/agent-tavern/capabilities.ts
-function inspectAgentTavernCapabilities(adapter, presetId = AGENT_TAVERN_PRESET_ID) {
-  const nativeMissing = [];
-  if (typeof adapter.preset?.mount !== "function") nativeMissing.push("preset");
-  if (adapter.scopedPrompt !== true) nativeMissing.push("scoped-prompt");
-  if (adapter.tools !== true) nativeMissing.push("tools");
-  if (adapter.durableEvents !== true) nativeMissing.push("durable-events");
-  const managedMissing = [...nativeMissing];
-  if (adapter.contextProjection !== true) managedMissing.push("agent/context");
-  if (adapter.projectionAwareCompaction !== true) managedMissing.push("projection-aware-compaction");
-  return {
-    presetId,
-    native: status(nativeMissing),
-    managed: status(managedMissing),
-    checkedAt: (/* @__PURE__ */ new Date()).toISOString()
-  };
-}
-function status(missing) {
-  return {
-    available: missing.length === 0,
-    missing: [...missing],
-    reasons: missing.map((name2) => REASONS[name2])
-  };
-}
-var AGENT_TAVERN_PRESET_ID, REASONS;
-var init_capabilities2 = __esm({
-  "packages/plugin/src/agent-tavern/capabilities.ts"() {
-    "use strict";
-    AGENT_TAVERN_PRESET_ID = "agent-tavern";
-    REASONS = {
-      preset: "DSH agent preset mounting is unavailable.",
-      "scoped-prompt": "DSH agent-scoped system prompt registration is unavailable.",
-      tools: "DSH native tool registration is unavailable.",
-      "durable-events": "DSH durable agent session events are unavailable.",
-      "agent/context": "The host does not expose the agent/context history projection seam.",
-      "projection-aware-compaction": "The host cannot measure compaction against the effective AgentTavern projection."
-    };
-  }
-});
-
-// packages/plugin/src/env-compat.ts
-function envCompat(suffix) {
-  return process.env[`DSH_SOULMOJITO_${suffix}`] ?? process.env[`DSH_TAVERN_${suffix}`];
-}
-var init_env_compat = __esm({
-  "packages/plugin/src/env-compat.ts"() {
-    "use strict";
-  }
-});
-
-// packages/plugin/src/build-info.ts
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { relative, resolve as resolve2 } from "node:path";
-function readBuildInfo() {
-  let version = "unknown";
-  let commit = "unknown";
-  const stamped = buildTimeStamp();
-  if (stamped.commit !== "") commit = stamped.commit;
-  for (const packagePath of [
-    resolve2(import.meta.dirname, "package.json"),
-    resolve2(import.meta.dirname, "..", "package.json")
-  ]) {
-    try {
-      const packageData = JSON.parse(readFileSync(packagePath, "utf8"));
-      if (typeof packageData?.version === "string" && packageData.version.trim() !== "") {
-        version = packageData.version.trim();
-        break;
-      }
-    } catch {
-    }
-  }
-  try {
-    const generated = JSON.parse(readFileSync(resolve2(import.meta.dirname, "version.json"), "utf8"));
-    if (typeof generated?.version === "string" && generated.version.trim() !== "") {
-      version = generated.version.trim();
-    }
-    const sidecarCommit = typeof generated?.commit === "string" ? normalizeCommit(generated.commit) : void 0;
-    if (sidecarCommit !== void 0) commit = sidecarCommit;
-  } catch {
-  }
-  return { version, commit };
-}
-function buildTimeStamp() {
-  const version = true ? "0.7.5".trim() : "";
-  const commit = true ? normalizeCommit("f9526b5") : void 0;
-  return { version, commit: commit ?? "" };
-}
-function resolveTavernCommit(buildFallback) {
-  const repositoryRoot = resolve2(import.meta.dirname, "..", "..");
-  const packagePath = relative(repositoryRoot, import.meta.dirname).replaceAll("\\", "/");
-  if (packagePath !== "packages/plugin") return commitFallback(buildFallback);
-  return resolveRepositoryCommit(repositoryRoot, buildFallback, readCommitViaGit);
-}
-function resolveRepositoryCommit(repositoryRoot, buildFallback, readFallbackCommit) {
-  const checkout = readGitCheckout(repositoryRoot);
-  if (checkout === void 0) return commitFallback(buildFallback);
-  return readCheckoutCommit(checkout) ?? readFallbackCommit(repositoryRoot) ?? commitFallback(buildFallback);
-}
-function readGitCheckout(repositoryRoot) {
-  const dotGit = resolve2(repositoryRoot, ".git");
-  const pointer = readTextFile(dotGit);
-  if (pointer === void 0) return checkoutAt(dotGit);
-  const pointedAt = /^gitdir:[ \t]*(.*)$/m.exec(pointer)?.[1]?.trim();
-  if (pointedAt === void 0 || pointedAt === "") return void 0;
-  return checkoutAt(resolve2(repositoryRoot, pointedAt));
-}
-function checkoutAt(gitDir) {
-  const head = readTextFile(resolve2(gitDir, "HEAD"))?.trim();
-  if (head === void 0 || head === "") return void 0;
-  return { gitDir, commonDir: commonDirectory(gitDir), head };
-}
-function commonDirectory(gitDir) {
-  const pointer = readTextFile(resolve2(gitDir, "commondir"))?.trim();
-  if (pointer === void 0 || pointer === "") return gitDir;
-  return resolve2(gitDir, pointer);
-}
-function readCheckoutCommit(checkout) {
-  if (!checkout.head.startsWith("ref:")) return readObjectId(checkout.head);
-  const ref = checkout.head.slice("ref:".length).trim();
-  if (ref === "") return void 0;
-  return readLooseRef(checkout.gitDir, ref) ?? readLooseRef(checkout.commonDir, ref) ?? readPackedRef(checkout.commonDir, ref);
-}
-function readCommitViaGit(repositoryRoot) {
-  try {
-    const output = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
-      cwd: repositoryRoot,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 2e3,
-      windowsHide: true
-    });
-    return normalizeCommit(output);
-  } catch {
-    return void 0;
-  }
-}
-function readLooseRef(gitDir, ref) {
-  const value = readTextFile(resolve2(gitDir, ref));
-  return value === void 0 ? void 0 : readObjectId(value);
-}
-function readPackedRef(commonDir, ref) {
-  const packed = readTextFile(resolve2(commonDir, "packed-refs"));
-  if (packed === void 0) return void 0;
-  for (const line of packed.split("\n")) {
-    if (line.startsWith("#") || line.startsWith("^")) continue;
-    const [id, name2] = line.trim().split(/\s+/);
-    if (id === void 0 || name2 !== ref) continue;
-    const commit = readObjectId(id);
-    if (commit !== void 0) return commit;
-  }
-  return void 0;
-}
-function readObjectId(value) {
-  const id = value.trim();
-  return /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i.test(id) ? id.slice(0, 7).toLowerCase() : void 0;
-}
-function commitFallback(buildFallback) {
-  return normalizeCommit(envCompat("COMMIT") ?? buildFallback) ?? "unknown";
-}
-function readTextFile(path5) {
-  try {
-    return readFileSync(path5, "utf8");
-  } catch {
-    return void 0;
-  }
-}
-function normalizeCommit(value) {
-  const commit = value.trim();
-  return /^[0-9a-f]{7,40}$/i.test(commit) ? commit.slice(0, 7).toLowerCase() : void 0;
-}
-var BUILD_INFO, TAVERN_COMMIT;
-var init_build_info = __esm({
-  "packages/plugin/src/build-info.ts"() {
-    "use strict";
-    init_env_compat();
-    BUILD_INFO = readBuildInfo();
-    TAVERN_COMMIT = resolveTavernCommit(BUILD_INFO.commit);
-  }
-});
-
-// packages/plugin/src/generation-hooks.ts
-function withTimeout(promise, ms) {
-  return new Promise((resolve3, reject) => {
-    const timer = setTimeout(() => {
-      const timeoutError = new Error(`generation hook timed out after ${ms}ms`);
-      timeoutError.hookTimeout = true;
-      reject(timeoutError);
-    }, ms);
-    Promise.resolve(promise).then(
-      (value) => {
-        clearTimeout(timer);
-        resolve3(value);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      }
-    );
-  });
-}
-function createGenerationHookBus(options = {}) {
-  const timeoutMs = options.timeoutMs ?? GENERATION_HOOK_TIMEOUT_MS;
-  const table = {
-    "user-input": [],
-    "pre-assemble": [],
-    "pre-llm": [],
-    "post-output": [],
-    "post-save": []
-  };
-  const degradationListeners = /* @__PURE__ */ new Set();
-  let nextId = 1;
-  let degradations = 0;
-  function register(phase, handler, order = 100, owner) {
-    const id = nextId++;
-    const list = table[phase];
-    list.push({ id, order, handler, ...owner !== void 0 ? { owner } : {} });
-    list.sort((a, b) => a.order - b.order || a.id - b.id);
-    return () => {
-      const index = list.findIndex((registration) => registration.id === id);
-      if (index >= 0) list.splice(index, 1);
-    };
-  }
-  async function dispatch(phase, payload, context) {
-    const list = table[phase];
-    if (list.length === 0) return payload;
-    const fullContext = { ...context, phase };
-    let current = payload;
-    for (const registration of [...list]) {
-      const degrade = (reason, detail) => {
-        degradations += 1;
-        const degradation = {
-          phase,
-          order: registration.order,
-          reason,
-          ...detail !== void 0 ? { detail } : {},
-          ...registration.owner !== void 0 ? { owner: registration.owner } : {}
-        };
-        options.onDegradation?.(degradation);
-        for (const listener of [...degradationListeners]) {
-          try {
-            listener(degradation);
-          } catch {
-          }
-        }
-      };
-      try {
-        const outcome = await withTimeout(
-          Promise.resolve(registration.handler(current, fullContext)),
-          timeoutMs
-        );
-        if (outcome === void 0) {
-          degrade("no-return");
-        } else {
-          current = outcome;
-        }
-      } catch (error) {
-        const timedOut = error instanceof Error && error.hookTimeout === true;
-        degrade(timedOut ? "timeout" : "error", error instanceof Error ? error.message : String(error));
-      }
-    }
-    return current;
-  }
-  return {
-    register,
-    dispatch,
-    degradationCount: () => degradations,
-    onDegradation(listener) {
-      degradationListeners.add(listener);
-      return () => {
-        degradationListeners.delete(listener);
-      };
-    }
-  };
-}
-var GENERATION_HOOK_TIMEOUT_MS, generationHooks;
-var init_generation_hooks = __esm({
-  "packages/plugin/src/generation-hooks.ts"() {
-    "use strict";
-    GENERATION_HOOK_TIMEOUT_MS = 1e4;
-    generationHooks = createGenerationHookBus();
-  }
-});
-
-// packages/plugin/src/mods/audit.ts
-var init_audit = __esm({
-  "packages/plugin/src/mods/audit.ts"() {
-    "use strict";
-  }
-});
-
-// packages/plugin/src/mods/events.ts
-var MOD_EVENT_KINDS, ModEventBus, modEvents, streamDeltaTail;
-var init_events = __esm({
-  "packages/plugin/src/mods/events.ts"() {
-    "use strict";
-    MOD_EVENT_KINDS = /* @__PURE__ */ new Set(["chat-saved", "assets-saved", "guides-changed", "stream-delta"]);
-    ModEventBus = class {
-      listeners = /* @__PURE__ */ new Map();
-      isKind(value) {
-        return typeof value === "string" && MOD_EVENT_KINDS.has(value);
-      }
-      hasListeners(kind) {
-        const set = this.listeners.get(kind);
-        return set !== void 0 && set.size > 0;
-      }
-      on(kind, handler) {
-        const set = this.listeners.get(kind) ?? /* @__PURE__ */ new Set();
-        set.add(handler);
-        this.listeners.set(kind, set);
-        return () => {
-          set.delete(handler);
-        };
-      }
-      async emit(kind, payload) {
-        const set = this.listeners.get(kind);
-        if (set === void 0 || set.size === 0) return;
-        for (const handler of [...set]) {
-          try {
-            await handler(payload);
-          } catch {
-          }
-        }
-      }
-    };
-    modEvents = new ModEventBus();
-    streamDeltaTail = Promise.resolve();
-  }
-});
-
-// packages/plugin/src/http/errors.ts
-var init_errors = __esm({
-  "packages/plugin/src/http/errors.ts"() {
-    "use strict";
-  }
-});
-
-// packages/plugin/src/http/io.ts
-var DEFAULT_MAX_BYTES;
-var init_io = __esm({
-  "packages/plugin/src/http/io.ts"() {
-    "use strict";
-    init_errors();
-    DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
-  }
-});
-
-// packages/plugin/src/http/public-error.ts
-var init_public_error = __esm({
-  "packages/plugin/src/http/public-error.ts"() {
-    "use strict";
-    init_io();
-    init_errors();
-  }
-});
-
-// packages/plugin/src/mods/http.ts
-var MOD_HTML_DEFAULT_CSP, MOD_VIEWPORT_CSS_VAR, VIEWPORT_VAR_REFERENCE;
-var init_http = __esm({
-  "packages/plugin/src/mods/http.ts"() {
-    "use strict";
-    MOD_HTML_DEFAULT_CSP = [
-      "default-src 'none'",
-      "script-src 'unsafe-inline'",
-      "style-src 'unsafe-inline'",
-      "img-src data: blob:",
-      "font-src data:",
-      "media-src data: blob:",
-      "connect-src 'none'",
-      "frame-src 'none'",
-      "object-src 'none'",
-      "base-uri 'none'",
-      "form-action 'none'"
-    ].join("; ");
-    MOD_VIEWPORT_CSS_VAR = "--dt-viewport-height";
-    VIEWPORT_VAR_REFERENCE = `var(${MOD_VIEWPORT_CSS_VAR}, 100vh)`;
-  }
-});
-
-// packages/plugin/src/mods/manifest.ts
-var init_manifest = __esm({
-  "packages/plugin/src/mods/manifest.ts"() {
-    "use strict";
-  }
-});
-
-// packages/plugin/src/mods/storage.ts
-var MOD_STORAGE_VALUE_LIMIT, MOD_STORAGE_TOTAL_LIMIT, fileTails;
-var init_storage = __esm({
-  "packages/plugin/src/mods/storage.ts"() {
-    "use strict";
-    init_fs_atomic();
-    init_mutation_tail();
-    MOD_STORAGE_VALUE_LIMIT = 256 * 1024;
-    MOD_STORAGE_TOTAL_LIMIT = 1024 * 1024;
-    fileTails = new KeyedMutationTails();
-  }
-});
-
-// packages/plugin/src/update/github.ts
-var init_github = __esm({
-  "packages/plugin/src/update/github.ts"() {
-    "use strict";
-  }
-});
-
-// packages/plugin/src/update/sources.ts
-var init_sources = __esm({
-  "packages/plugin/src/update/sources.ts"() {
-    "use strict";
-    init_github();
-    init_env_compat();
-  }
-});
-
-// packages/plugin/src/mods/install.ts
-var init_install = __esm({
-  "packages/plugin/src/mods/install.ts"() {
-    "use strict";
-    init_sources();
-    init_manifest();
-  }
-});
-
-// packages/plugin/src/mods/host.ts
-var init_host = __esm({
-  "packages/plugin/src/mods/host.ts"() {
-    "use strict";
-    init_guides();
-    init_handle();
-    init_env_compat();
-    init_generation_hooks();
-    init_src();
-    init_src();
     init_src3();
-    init_src2();
-    init_audit();
-    init_events();
-    init_cross_bundle();
-    init_public_error();
-    init_http();
-    init_manifest();
-    init_storage();
-    init_install();
-  }
-});
-
-// packages/plugin/src/im/handle.ts
-var IM_RUNTIME_KEY, runtimeSymbol;
-var init_handle2 = __esm({
-  "packages/plugin/src/im/handle.ts"() {
-    "use strict";
-    init_env_compat();
-    IM_RUNTIME_KEY = "dsh-soulmojito:im-runtime";
-    runtimeSymbol = Symbol.for(IM_RUNTIME_KEY);
-  }
-});
-
-// packages/plugin/src/update/apply.ts
-var DEFAULT_INSTALL_TIMEOUT_MS;
-var init_apply = __esm({
-  "packages/plugin/src/update/apply.ts"() {
-    "use strict";
-    init_github();
-    init_env_compat();
-    DEFAULT_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
-  }
-});
-
-// packages/plugin/src/update/service.ts
-var UPDATE_CHECK_TTL_MS, UPDATE_FIRST_CHECK_DELAY_MS;
-var init_service = __esm({
-  "packages/plugin/src/update/service.ts"() {
-    "use strict";
-    init_github();
-    init_sources();
-    init_apply();
-    UPDATE_CHECK_TTL_MS = 6 * 60 * 60 * 1e3;
-    UPDATE_FIRST_CHECK_DELAY_MS = 12 * 1e3;
-  }
-});
-
-// packages/plugin/src/runtime.ts
-var agentTavernCapabilities, agentNovelCapabilities;
-var init_runtime = __esm({
-  "packages/plugin/src/runtime.ts"() {
-    "use strict";
-    init_capabilities();
-    init_capabilities2();
-    init_build_info();
-    init_dsh_home();
-    init_env_compat();
-    init_host();
-    init_handle2();
-    init_shared_stores();
     init_store_handle();
-    init_service();
-    init_src2();
-    agentTavernCapabilities = inspectAgentTavernCapabilities({});
-    agentNovelCapabilities = inspectAgentNovelCapabilities({});
   }
 });
 
-// packages/tavern-pipeline/src/pipeline.ts
-var GLOBAL_ORDER_DUMMY_ID = 100001;
-var LEGACY_ORDER_DUMMY_ID = 1e5;
-function resolvePromptOrder(preset) {
-  const set = preset.promptOrder.find((o) => Number(o.character_id) === GLOBAL_ORDER_DUMMY_ID) ?? preset.promptOrder.find((o) => Number(o.character_id) === LEGACY_ORDER_DUMMY_ID) ?? preset.promptOrder[0];
-  return Array.isArray(set?.order) ? set.order : [];
-}
-function entryEnabled(slot, prompt) {
-  if (typeof slot.enabled === "boolean") return slot.enabled;
-  const record = prompt;
-  return record["enabled"] !== false;
-}
-
-// packages/plugin/src/agent-tavern/preset.ts
-init_cross_bundle_events();
-var AGENT_PRESET_BLOCK_HEADER = "Chat completion preset (user-configured prompt stack; follow these instructions together with the kernel):";
-function effectiveAgentPresetPrompts(preset, card) {
-  const order = resolvePromptOrder(preset);
-  const byId = new Map(preset.prompts.map((prompt) => [prompt.identifier, prompt]));
-  const effective = [];
-  for (const slot of order) {
-    const prompt = byId.get(slot.identifier);
-    if (prompt === void 0 || prompt.marker === true) continue;
-    if (!entryEnabled(slot, prompt)) continue;
-    const content = applyCardOverride(prompt.identifier, promptContent(prompt), card);
-    const trimmed = content.trim();
-    if (trimmed === "") continue;
-    effective.push({
-      identifier: prompt.identifier,
-      name: typeof prompt.name === "string" ? prompt.name : prompt.identifier,
-      role: promptRole(prompt),
-      content: trimmed
-    });
+// packages/tavern-template/src/paths.ts
+var init_paths = __esm({
+  "packages/tavern-template/src/paths.ts"() {
+    "use strict";
   }
-  return effective;
-}
-function renderAgentPresetBlock(preset, card, header = AGENT_PRESET_BLOCK_HEADER) {
-  const prompts = effectiveAgentPresetPrompts(preset, card);
-  if (prompts.length === 0) return void 0;
-  return [header, ...prompts.map((prompt) => prompt.content)].join("\n\n");
-}
-function presetTemperature(preset) {
-  const value = preset.sampler["temperature"];
-  return typeof value === "number" && Number.isFinite(value) ? value : void 0;
-}
-function defaultPreset() {
-  const prompts = [
-    { name: "Main Prompt", system_prompt: true, role: "system", content: "Write {{char}}'s next reply in a fictional roleplay chat between {{char}} and {{user}}. Stay in character and never write dialogue or actions for {{user}}.", identifier: "main" },
-    { identifier: "worldInfoBefore", name: "World Info (before)", system_prompt: true, marker: true },
-    { identifier: "personaDescription", name: "Persona", system_prompt: true, marker: true },
-    { identifier: "charDescription", name: "Character Description", system_prompt: true, marker: true },
-    { identifier: "charPersonality", name: "Character Personality", system_prompt: true, marker: true },
-    { identifier: "scenario", name: "Scenario", system_prompt: true, marker: true },
-    { identifier: "worldInfoAfter", name: "World Info (after)", system_prompt: true, marker: true },
-    { identifier: "dialogueExamples", name: "Dialogue Examples", system_prompt: true, marker: true },
-    { identifier: "chatHistory", name: "Chat History", system_prompt: true, marker: true },
-    { name: "Post-History Instructions", system_prompt: true, role: "system", content: "", identifier: "jailbreak" }
-  ];
-  return {
-    temperature: 1,
-    openai_max_context: 32768,
-    openai_max_tokens: 800,
-    wi_format: "{0}",
-    scenario_format: "{{scenario}}",
-    personality_format: "{{personality}}",
-    prompts,
-    prompt_order: [{ character_id: GLOBAL_ORDER_DUMMY_ID, order: prompts.map((prompt) => ({ identifier: prompt.identifier, enabled: true })) }]
-  };
-}
-var agentPresetChanged = createGlobalListenerRegistry("dsh-soulmojito:agent-preset-changed-listeners");
-function onAgentPresetChanged(listener) {
-  return agentPresetChanged.on(listener);
-}
-function promptContent(prompt) {
-  const content = prompt["content"];
-  return typeof content === "string" ? content : "";
-}
-function promptRole(prompt) {
-  const role = prompt["role"];
-  return role === "user" || role === "assistant" ? role : "system";
-}
-function applyCardOverride(identifier, content, card) {
-  const override = identifier === "main" ? card?.data.systemPrompt.trim() : identifier === "jailbreak" ? card?.data.postHistoryInstructions.trim() : "";
-  if (override === void 0 || override === "") return content;
-  return override.replace(/\{\{original\}\}/gi, content);
-}
-
-// packages/plugin/src/mods/agent-mount.ts
-init_cross_bundle();
-
-// packages/plugin/src/prompt-safety.ts
-init_src();
-function createHostPromptExpander(char, user, frozen) {
-  const macros = createMacroEngine({
-    char,
-    user,
-    ...frozen?.now === void 0 ? {} : { now: frozen.now },
-    ...frozen?.rng === void 0 ? {} : { rng: frozen.rng }
-  });
-  return (text) => macros.expand(text);
-}
-function seededRandom(seed) {
-  let state = seed >>> 0;
-  return () => {
-    state = state + 1831565813 >>> 0;
-    let t = state;
-    t = Math.imul(t ^ t >>> 15, t | 1);
-    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
-    return ((t ^ t >>> 14) >>> 0) / 4294967296;
-  };
-}
-function hostPromptSafe(text, expand = (value) => value) {
-  return expand(text).replace(/\{+/g, (run) => run.split("").join(" "));
-}
-
-// packages/plugin/src/mods/agent-mount.ts
-function toolFingerprint(entry) {
-  const { definition } = entry;
-  return JSON.stringify([entry.modId, definition.name, definition.description, definition.parameters, definition.output?.schema]);
-}
-function mountModExtensions(ctx, options) {
-  claimHostToolNames(options.claimTools);
-  const ownsHostSections = options.promptSections === "host";
-  const registeredTools = /* @__PURE__ */ new Map();
-  const registeredSections = /* @__PURE__ */ new Map();
-  const liveTool = (modId, name2) => modToolSnapshot().find((entry) => entry.modId === modId && entry.definition.name === name2)?.definition;
-  const asDispose = (handle) => typeof handle === "function" ? () => {
-    try {
-      handle();
-    } catch {
-    }
-  } : void 0;
-  function syncTools() {
-    const wanted = /* @__PURE__ */ new Map();
-    for (const entry of modToolSnapshot()) {
-      wanted.set(entry.definition.name, { modId: entry.modId, definition: entry.definition, fingerprint: toolFingerprint(entry) });
-    }
-    for (const [name2, current] of [...registeredTools]) {
-      const next = wanted.get(name2);
-      if (next === void 0 || next.fingerprint !== current.fingerprintNext) {
-        current.dispose?.();
-        registeredTools.delete(name2);
-      }
-    }
-    for (const [name2, next] of wanted) {
-      if (registeredTools.has(name2)) continue;
-      const wrapper = {
-        name: name2,
-        description: next.definition.description,
-        parameters: next.definition.parameters,
-        output: {
-          schema: next.definition.output.schema,
-          render: (args, value) => {
-            const live = liveTool(next.modId, name2);
-            if (live === void 0) return [{ type: "text", text: JSON.stringify(value) }];
-            return live.output.render(args, value);
-          }
-        },
-        execute: (args, exec) => {
-          const live = liveTool(next.modId, name2);
-          if (live === void 0) {
-            return Promise.reject(new Error(`mod tool '${name2}' is no longer available (its mod was disabled or unloaded)`));
-          }
-          return live.execute(args, exec);
-        }
-      };
-      try {
-        const handle = ctx.tools?.register?.(wrapper);
-        registeredTools.set(name2, { dispose: asDispose(handle), fingerprintNext: next.fingerprint });
-      } catch {
-      }
-    }
-  }
-  function syncSections() {
-    if (!ownsHostSections) return;
-    const wanted = /* @__PURE__ */ new Map();
-    for (const entry of modSectionSnapshot()) {
-      const fullName = `dsh-soulmojito:mod:${entry.modId}:${entry.definition.name}`;
-      wanted.set(fullName, { name: fullName, order: clampModSectionOrder(entry.definition.order), text: hostPromptSafe(entry.definition.text) });
-    }
-    for (const [fullName, current] of [...registeredSections]) {
-      const next = wanted.get(fullName);
-      if (next === void 0 || next.text !== current.textNext || next.order !== current.orderNext) {
-        current.dispose?.();
-        registeredSections.delete(fullName);
-      }
-    }
-    for (const [fullName, next] of wanted) {
-      if (registeredSections.has(fullName)) continue;
-      try {
-        const handle = ctx.systemPrompt?.section?.({ name: fullName, order: next.order, text: next.text });
-        registeredSections.set(fullName, { dispose: asDispose(handle), textNext: next.text, orderNext: next.order });
-      } catch {
-      }
-    }
-  }
-  const sync = () => {
-    syncTools();
-    syncSections();
-  };
-  sync();
-  const offListener = onModsChanged(sync);
-  const dispose = () => {
-    offListener();
-    for (const [, current] of [...registeredTools]) current.dispose?.();
-    registeredTools.clear();
-    for (const [, current] of [...registeredSections]) current.dispose?.();
-    registeredSections.clear();
-  };
-  if (ctx.effect) {
-    try {
-      ctx.effect(() => () => {
-        dispose();
-      }, "dsh-soulmojito: mod extensions");
-    } catch {
-    }
-  }
-  return dispose;
-}
-
-// packages/tavern-format/src/png.ts
-var PNG_SIGNATURE = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
-var CRC_TABLE = (() => {
-  const table = new Uint32Array(256);
-  for (let n = 0; n < 256; n++) {
-    let c = n;
-    for (let k = 0; k < 8; k++) {
-      c = c & 1 ? 3988292384 ^ c >>> 1 : c >>> 1;
-    }
-    table[n] = c >>> 0;
-  }
-  return table;
-})();
-
-// packages/tavern-format/src/preset.ts
-var PresetFormatError = class extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "PresetFormatError";
-  }
-};
-function parsePreset(obj) {
-  const promptsRaw = obj["prompts"];
-  if (!Array.isArray(promptsRaw)) throw new PresetFormatError("preset has no 'prompts' array");
-  const prompts = promptsRaw.map((p, i) => {
-    if (typeof p !== "object" || p === null) throw new PresetFormatError(`prompts[${i}] is not an object`);
-    return p;
-  });
-  const orderRaw = obj["prompt_order"];
-  const promptOrder = Array.isArray(orderRaw) ? orderRaw.map((o, i) => {
-    if (typeof o !== "object" || o === null || !Array.isArray(o.order)) {
-      throw new PresetFormatError(`prompt_order[${i}] is malformed`);
-    }
-    return o;
-  }) : [];
-  const sampler = {};
-  for (const [k, v] of Object.entries(obj)) {
-    if (k !== "prompts" && k !== "prompt_order") sampler[k] = v;
-  }
-  return { prompts, promptOrder, sampler };
-}
-
-// packages/tavern-format/src/zip.ts
-var DEFAULT_ZIP_LIMITS = {
-  maxEntries: 256,
-  maxFileBytes: 64 * 1024 * 1024,
-  maxTotalBytes: 128 * 1024 * 1024
-};
-
-// packages/plugin/src/preset-mount.ts
-init_src2();
-init_dsh_home();
-
-// packages/plugin/src/lazy-projection.ts
-function createLazyProjection(options) {
-  const cache = /* @__PURE__ */ new Map();
-  const started = /* @__PURE__ */ new Set();
-  const tickets = /* @__PURE__ */ new Map();
-  let preheatDone = false;
-  async function load(agentId, state) {
-    const ticket = (tickets.get(agentId) ?? 0) + 1;
-    tickets.set(agentId, ticket);
-    const settle = (value) => {
-      if (tickets.get(agentId) === ticket) cache.set(agentId, value);
-    };
-    try {
-      await options.load(agentId, settle, state);
-    } catch {
-    }
-  }
-  async function refreshAll() {
-    let state;
-    try {
-      state = await options.getState();
-    } catch {
-      state = void 0;
-    }
-    for (const agentId of [...started]) await enqueueLoad(agentId, state);
-  }
-  async function refreshWhere(match) {
-    try {
-      const state = await options.getState();
-      for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
-        if (!match(binding)) continue;
-        started.add(agentId);
-        await enqueueLoad(agentId);
-      }
-    } catch {
-    }
-  }
-  const loadChains = /* @__PURE__ */ new Map();
-  function enqueueLoad(agentId, state) {
-    const next = (loadChains.get(agentId) ?? Promise.resolve()).then(() => load(agentId, state), () => load(agentId, state));
-    loadChains.set(agentId, next.catch(() => void 0));
-    return next;
-  }
-  return {
-    valueOf(agentId) {
-      if (typeof agentId !== "string" || agentId.trim() === "") return void 0;
-      if (!started.has(agentId)) {
-        started.add(agentId);
-        void enqueueLoad(agentId);
-      }
-      return cache.get(agentId);
-    },
-    refreshWhere,
-    refreshAll,
-    preheatWhere(match) {
-      if (preheatDone) return Promise.resolve();
-      preheatDone = true;
-      return refreshWhere(match);
-    },
-    preheatAll(agentIds) {
-      for (const agentId of agentIds) started.add(agentId);
-      return refreshAll();
-    }
-  };
-}
-
-// packages/plugin/src/preset-mount.ts
-init_store_handle();
-var DEFAULT_USER = "User";
-var CHAR_FALLBACK = "the character";
-var storePromise;
-function store3() {
-  return storePromise ??= sharedTavernStore(tavernDataRoot());
-}
-function mountPresetProjection(options) {
-  const freeze = /* @__PURE__ */ new Map();
-  const projection = createLazyProjection({
-    getState: async () => (await store3()).getState(),
-    load: async (agentId, settle) => {
-      const db = await store3();
-      const state = await db.getState();
-      const binding = state.sessionBindings[agentId];
-      if (state[options.stateFlag] !== true || !binding || binding.architecture !== options.architecture) {
-        settle("");
-        return;
-      }
-      if (typeof state.activePreset !== "string" || state.activePreset === "") {
-        settle("");
-        return;
-      }
-      const raw = await db.getPreset(state.activePreset);
-      if (raw === void 0) {
-        settle("");
-        return;
-      }
-      const block = renderAgentPresetBlock(parsePreset(raw), void 0, options.header);
-      if (block === void 0) {
-        settle("");
-        return;
-      }
-      const record = freeze.get(agentId) ?? { frozenAt: Date.now(), seed: Math.random() * 4294967296 >>> 0 };
-      freeze.set(agentId, record);
-      const expand = createHostPromptExpander(
-        charNameOf(options, binding),
-        state.activePersona ?? DEFAULT_USER,
-        { now: () => new Date(record.frozenAt), rng: seededRandom(record.seed) }
-      );
-      settle(hostPromptSafe(block, expand));
-    }
-  });
-  onAgentPresetChanged(() => projection.refreshWhere((binding) => binding.architecture === options.architecture));
-  return {
-    section: { name: options.sectionName, order: -75, text: (assembly) => projection.valueOf(assembly?.agent?.id) ?? "" },
-    textOf: (agentId) => projection.valueOf(agentId) ?? "",
-    preheat: () => projection.preheatWhere((binding) => binding.architecture === options.architecture)
-  };
-}
-function charNameOf(options, binding) {
-  const name2 = options.charOf(binding).trim();
-  return name2 === "" ? CHAR_FALLBACK : name2;
-}
-
-// packages/plugin/src/agent-novel/tools/body.ts
-init_src2();
-
-// packages/plugin/src/tool-args.ts
-function stringArg(value) {
-  if (typeof value !== "string" || value.trim() === "") throw new Error("string argument is required");
-  return value;
-}
-function boundedStringArg(value, maxLength) {
-  return stringArg(value).slice(0, maxLength);
-}
-function clampInt(value, min, max2, fallback) {
-  if (!Number.isInteger(value)) return fallback;
-  return Math.max(min, Math.min(max2, value));
-}
-function limitText(value, max2) {
-  return typeof value === "string" ? value.slice(0, max2) : "";
-}
-
-// packages/plugin/src/agent-novel/tools/body.ts
-init_deduce();
-
-// packages/plugin/src/agent-novel/writer.ts
-init_deduce();
-
-// packages/plugin/src/agent-tavern/agent.ts
-init_guides();
-init_handle();
-init_cross_bundle();
-
-// packages/plugin/src/prompt-viewer.ts
-var PROMPT_VIEWER_STATE_KEY = Symbol.for("dsh-soulmojito:prompt-viewer");
-
-// packages/bind/src/host-session.ts
-var PLUGIN_NAME = "dsh-soulmojito";
-var LEGACY_PLUGIN_NAME = "dsh-tavern";
-var TAVERN_PLUGIN_SOURCE_KIND = `plugin:${PLUGIN_NAME}`;
-var LEGACY_TAVERN_PLUGIN_SOURCE_KIND = `plugin:${LEGACY_PLUGIN_NAME}`;
-
-// packages/plugin/src/agent-tavern/prompt-parts.ts
-var partsSymbol = Symbol.for("dsh-soulmojito:agent-prompt-parts");
-function partStore() {
-  const holder = globalThis;
-  return holder[partsSymbol] ??= /* @__PURE__ */ new Map();
-}
-function registerAgentPromptPart(part) {
-  const parts = partStore();
-  parts.set(part.name, part);
-  return () => {
-    if (parts.get(part.name) === part) parts.delete(part.name);
-  };
-}
-
-// packages/plugin/src/agent-tavern/tools/character.ts
-init_src2();
-
-// packages/tavern-lore/src/types.ts
-var MESSAGE_BOUNDARY = "";
-
-// packages/tavern-lore/src/buffer.ts
-var JOINER = "\n" + MESSAGE_BOUNDARY;
-
-// packages/plugin/src/agent-tavern/tools/stores.ts
-init_src2();
-init_dsh_home();
-
-// packages/plugin/src/memory-hybrid.ts
-init_src2();
-
-// packages/plugin/src/memory-embed.ts
-init_src2();
-
-// packages/plugin/src/memory-embed-local.ts
-var TRANSFORMERS_PACKAGE = "@huggingface/transformers";
-var TRANSFORMERS_INSTALL_HINT = `local ONNX embed requires '${TRANSFORMERS_PACKAGE}' (not bundled with the plugin): run "pnpm add ${TRANSFORMERS_PACKAGE}" in the DSH profile root (the directory whose node_modules contains the installed dsh-soulmojito, NOT the dsh-soulmojito source repository), then restart DSH`;
-var LOCAL_RUNTIME_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
-
-// packages/plugin/src/agent-tavern/tools/stores.ts
-init_shared_stores();
-init_store_handle();
-var tavernStorePromise;
-function tavernStore() {
-  return tavernStorePromise ??= sharedTavernStore(tavernDataRoot());
-}
-
-// packages/plugin/src/agent-tavern/tools/shared.ts
-var DEFAULT_USER2 = "User";
-function objectOutput(properties, optionalKeys = ["value", "revision", "updatedAt"]) {
-  return { type: "object", properties, required: Object.keys(properties).filter((key) => !optionalKeys.includes(key)), additionalProperties: false };
-}
-function identitySummaryOf(data) {
-  const agentTavern = data.extensions?.agentTavern;
-  const summary = agentTavern?.identitySummary;
-  return typeof summary === "string" && summary.trim() !== "" ? summary : void 0;
-}
-
-// packages/plugin/src/agent-tavern/tools/character.ts
-var characterOutput = objectOutput({
-  character: { type: "string" },
-  name: { type: "string" },
-  nickname: { type: "string" },
-  identitySummary: { type: "string" },
-  description: { type: "string" },
-  personality: { type: "string" },
-  scenario: { type: "string" },
-  source: { type: "object", additionalProperties: true },
-  truncated: { type: "boolean" }
 });
-var loreSearchOutput = objectOutput({
-  hits: { type: "array", items: { type: "object", additionalProperties: true } },
-  sourceCount: { type: "integer" },
-  truncated: { type: "boolean" }
-});
-var sceneOutput = objectOutput({
-  character: { type: "string" },
-  chatId: { type: "string" },
-  scenario: { type: "string" },
-  messageCount: { type: "integer" },
-  metadata: { type: "object", additionalProperties: true },
-  source: { type: "object", additionalProperties: true },
-  truncated: { type: "boolean" }
-});
-var historySearchOutput = objectOutput({
-  hits: { type: "array", items: { type: "object", additionalProperties: true } },
-  sourceCount: { type: "integer" },
-  truncated: { type: "boolean" }
-});
-
-// packages/plugin/src/agent-tavern/tools/deduction.ts
-init_dsh_home();
 
 // packages/tavern-template/src/api.ts
-var DEFAULT_CHAR_DEFINE = [
-  "<% if (name) { %>",
-  "<<%- name %>>",
-  "<% if (system_prompt) { %>System: <%- system_prompt %><% } %>",
-  "name: <%- name %>",
-  "<% if (personality) { %>personality: <%- personality %><% } %>",
-  "<% if (description) { %>description: <%- description %><% } %>",
-  "<% if (message_example) { %>",
-  "example:",
-  "<%- message_example %>",
-  "<% } %>",
-  "<% if (depth_prompt) { %>System: <%- depth_prompt %><% } %>",
-  "</<%- name %>>",
-  "<% } %>"
-].join("\n");
+var DEFAULT_CHAR_DEFINE;
+var init_api = __esm({
+  "packages/tavern-template/src/api.ts"() {
+    "use strict";
+    init_paths();
+    DEFAULT_CHAR_DEFINE = [
+      "<% if (name) { %>",
+      "<<%- name %>>",
+      "<% if (system_prompt) { %>System: <%- system_prompt %><% } %>",
+      "name: <%- name %>",
+      "<% if (personality) { %>personality: <%- personality %><% } %>",
+      "<% if (description) { %>description: <%- description %><% } %>",
+      "<% if (message_example) { %>",
+      "example:",
+      "<%- message_example %>",
+      "<% } %>",
+      "<% if (depth_prompt) { %>System: <%- depth_prompt %><% } %>",
+      "</<%- name %>>",
+      "<% } %>"
+    ].join("\n");
+  }
+});
 
-// packages/tavern-template/src/runtime.ts
-import vm from "node:vm";
+// packages/tavern-template/src/syntax.ts
+var init_syntax = __esm({
+  "packages/tavern-template/src/syntax.ts"() {
+    "use strict";
+  }
+});
 
 // packages/tavern-template/src/sandbox-bootstrap.ts
-var BOOTSTRAP_SOURCE = `(function (__descriptorJson, __dispatch) {
+var BOOTSTRAP_SOURCE;
+var init_sandbox_bootstrap = __esm({
+  "packages/tavern-template/src/sandbox-bootstrap.ts"() {
+    "use strict";
+    BOOTSTRAP_SOURCE = `(function (__descriptorJson, __dispatch) {
   'use strict'
   var __ObjectCreate = Object.create
   var __ObjectKeys = Object.keys
@@ -11310,84 +9987,1671 @@ var BOOTSTRAP_SOURCE = `(function (__descriptorJson, __dispatch) {
 
   return env
 })`;
+  }
+});
 
 // packages/tavern-template/src/runtime.ts
-var BOOTSTRAP_SCRIPT = new vm.Script(BOOTSTRAP_SOURCE, { filename: "tavern-template-bootstrap.js" });
+import vm from "node:vm";
+var BOOTSTRAP_SCRIPT;
+var init_runtime = __esm({
+  "packages/tavern-template/src/runtime.ts"() {
+    "use strict";
+    init_syntax();
+    init_sandbox_bootstrap();
+    BOOTSTRAP_SCRIPT = new vm.Script(BOOTSTRAP_SOURCE, { filename: "tavern-template-bootstrap.js" });
+  }
+});
 
-// packages/plugin/src/mvu.ts
-init_src2();
+// packages/tavern-template/src/yaml.ts
+var init_yaml = __esm({
+  "packages/tavern-template/src/yaml.ts"() {
+    "use strict";
+  }
+});
+
+// packages/tavern-template/src/inject.ts
+var init_inject = __esm({
+  "packages/tavern-template/src/inject.ts"() {
+    "use strict";
+    init_paths();
+    init_yaml();
+    init_runtime();
+  }
+});
+
+// packages/tavern-template/src/variables.ts
+var init_variables = __esm({
+  "packages/tavern-template/src/variables.ts"() {
+    "use strict";
+    init_paths();
+  }
+});
+
+// packages/tavern-template/src/index.ts
+var init_src4 = __esm({
+  "packages/tavern-template/src/index.ts"() {
+    "use strict";
+    init_api();
+    init_runtime();
+    init_inject();
+    init_variables();
+    init_paths();
+    init_variables();
+    init_api();
+    init_inject();
+    init_runtime();
+    init_syntax();
+    init_yaml();
+  }
+});
+
+// packages/plugin/src/mvu-guard.ts
+var init_mvu_guard = __esm({
+  "packages/plugin/src/mvu-guard.ts"() {
+    "use strict";
+  }
+});
 
 // packages/plugin/src/mvu-rules.ts
-var SAFE_MATH_KEYS = [
-  "E",
-  "LN2",
-  "LN10",
-  "LOG2E",
-  "LOG10E",
-  "PI",
-  "SQRT1_2",
-  "SQRT2",
-  "abs",
-  "acos",
-  "acosh",
-  "asin",
-  "asinh",
-  "atan",
-  "atan2",
-  "atanh",
-  "cbrt",
-  "ceil",
-  "cos",
-  "cosh",
-  "exp",
-  "expm1",
-  "floor",
-  "fround",
-  "hypot",
-  "imul",
-  "log",
-  "log1p",
-  "log2",
-  "log10",
-  "max",
-  "min",
-  "pow",
-  "round",
-  "sign",
-  "sin",
-  "sinh",
-  "sqrt",
-  "tan",
-  "tanh",
-  "trunc"
-];
-var SAFE_MATH = Object.freeze(
-  Object.fromEntries(SAFE_MATH_KEYS.map((key) => [key, Math[key]]))
-);
+var SAFE_MATH_KEYS, SAFE_MATH;
+var init_mvu_rules = __esm({
+  "packages/plugin/src/mvu-rules.ts"() {
+    "use strict";
+    init_src4();
+    init_mvu_guard();
+    SAFE_MATH_KEYS = [
+      "E",
+      "LN2",
+      "LN10",
+      "LOG2E",
+      "LOG10E",
+      "PI",
+      "SQRT1_2",
+      "SQRT2",
+      "abs",
+      "acos",
+      "acosh",
+      "asin",
+      "asinh",
+      "atan",
+      "atan2",
+      "atanh",
+      "cbrt",
+      "ceil",
+      "cos",
+      "cosh",
+      "exp",
+      "expm1",
+      "floor",
+      "fround",
+      "hypot",
+      "imul",
+      "log",
+      "log1p",
+      "log2",
+      "log10",
+      "max",
+      "min",
+      "pow",
+      "round",
+      "sign",
+      "sin",
+      "sinh",
+      "sqrt",
+      "tan",
+      "tanh",
+      "trunc"
+    ];
+    SAFE_MATH = Object.freeze(
+      Object.fromEntries(SAFE_MATH_KEYS.map((key) => [key, Math[key]]))
+    );
+  }
+});
 
-// packages/plugin/src/agent-tavern/tools/deduction.ts
+// packages/plugin/src/mvu.ts
+var init_mvu = __esm({
+  "packages/plugin/src/mvu.ts"() {
+    "use strict";
+    init_src4();
+    init_src3();
+    init_tavern_assets();
+    init_mvu_guard();
+    init_mvu_rules();
+  }
+});
+
+// packages/tavern-lore/lib/types.js
+var MESSAGE_BOUNDARY2;
+var init_types4 = __esm({
+  "packages/tavern-lore/lib/types.js"() {
+    "use strict";
+    MESSAGE_BOUNDARY2 = "";
+  }
+});
+
+// packages/tavern-lore/lib/regex.js
+var init_regex = __esm({
+  "packages/tavern-lore/lib/regex.js"() {
+    "use strict";
+  }
+});
+
+// packages/tavern-lore/lib/buffer.js
+var JOINER2;
+var init_buffer = __esm({
+  "packages/tavern-lore/lib/buffer.js"() {
+    "use strict";
+    init_types4();
+    init_regex();
+    JOINER2 = "\n" + MESSAGE_BOUNDARY2;
+  }
+});
+
+// packages/tavern-lore/lib/decorators.js
+var init_decorators = __esm({
+  "packages/tavern-lore/lib/decorators.js"() {
+    "use strict";
+  }
+});
+
+// packages/tavern-lore/lib/entry.js
+var init_entry = __esm({
+  "packages/tavern-lore/lib/entry.js"() {
+    "use strict";
+    init_decorators();
+  }
+});
+
+// packages/tavern-lore/lib/groups.js
+var init_groups = __esm({
+  "packages/tavern-lore/lib/groups.js"() {
+    "use strict";
+    init_entry();
+  }
+});
+
+// packages/tavern-lore/lib/timed.js
+var init_timed = __esm({
+  "packages/tavern-lore/lib/timed.js"() {
+    "use strict";
+  }
+});
+
+// packages/tavern-lore/lib/engine.js
+var init_engine2 = __esm({
+  "packages/tavern-lore/lib/engine.js"() {
+    "use strict";
+    init_buffer();
+    init_entry();
+    init_groups();
+    init_timed();
+    init_types4();
+  }
+});
+
+// packages/tavern-lore/lib/index.js
+var init_lib2 = __esm({
+  "packages/tavern-lore/lib/index.js"() {
+    "use strict";
+    init_types4();
+    init_engine2();
+    init_buffer();
+    init_entry();
+    init_regex();
+  }
+});
+
+// packages/tavern-script/src/regex-safety.ts
+var init_regex_safety = __esm({
+  "packages/tavern-script/src/regex-safety.ts"() {
+    "use strict";
+  }
+});
+
+// packages/tavern-script/src/regex.ts
+var init_regex2 = __esm({
+  "packages/tavern-script/src/regex.ts"() {
+    "use strict";
+    init_lib2();
+    init_lib();
+    init_regex_safety();
+    init_regex_safety();
+  }
+});
+
+// packages/tavern-script/src/stscript.ts
+function truthyString(value) {
+  return value === "true" || value === "1" ? "true" : "false";
+}
+function toNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+function parseRoll2(spec, rng) {
+  const match = /^(\d*)d(\d+)$/i.exec(spec.trim());
+  if (match === null) {
+    const single = toNumber(spec.trim());
+    if (single !== null) return single;
+    throw new ScriptError(`invalid roll spec: ${spec}`);
+  }
+  const count = Math.min(Math.max(Number(match[1] || "1"), 1), 100);
+  const sides = Math.max(Number(match[2]), 1);
+  let total = 0;
+  for (let i = 0; i < count; i++) total += Math.floor(rng() * sides) + 1;
+  return total;
+}
+function pickRandom(list, rng) {
+  if (list.length === 0) return "";
+  return list[Math.floor(rng() * list.length)] ?? "";
+}
+function splitChoices(raw) {
+  if (raw.includes("::")) return raw.split("::").map((item) => item.trim()).filter((item) => item !== "");
+  return raw.split(",").map((item) => item.trim()).filter((item) => item !== "");
+}
+function varTarget(cmd) {
+  const first = Object.entries(cmd.named)[0];
+  if (first !== void 0 && cmd.args.length === 0) return { name: first[0], value: first[1] };
+  return { name: cmd.args[0] ?? "", value: cmd.args.length > 1 ? cmd.args.slice(1).join(" ") : "" };
+}
+async function requireAction(env, command) {
+  if (env === void 0) throw new ScriptError(`/${command} is not available in this context`);
+  return env;
+}
+function registerStscriptCommand(spec) {
+  commandTable.set(spec.name, spec);
+  for (const alias of spec.aliases ?? []) commandTable.set(alias, spec);
+  return () => {
+    if (commandTable.get(spec.name) === spec) commandTable.delete(spec.name);
+    for (const alias of spec.aliases ?? []) {
+      if (commandTable.get(alias) === spec) commandTable.delete(alias);
+    }
+  };
+}
+var ScriptError, NUMERIC_OPS, commandTable, changedResult, echoCommand, setvarCommand, getvarCommand, addvarCommand, incvarCommand, hasvarCommand, delvarCommand, ifCommand, randomCommand, rollCommand, pickCommand, sendCommand, sysCommand, triggerCommand, regenerateCommand, stopCommand, cutCommand, regexCommand;
+var init_stscript = __esm({
+  "packages/tavern-script/src/stscript.ts"() {
+    "use strict";
+    ScriptError = class extends Error {
+      constructor(message) {
+        super(message);
+        this.name = "ScriptError";
+      }
+    };
+    NUMERIC_OPS = {
+      "=": (a, b) => a === b,
+      "==": (a, b) => a === b,
+      "!=": (a, b) => a !== b,
+      ">": (a, b) => a > b,
+      "<": (a, b) => a < b,
+      ">=": (a, b) => a >= b,
+      "<=": (a, b) => a <= b
+    };
+    commandTable = /* @__PURE__ */ new Map();
+    changedResult = () => ({ output: "", chatChanged: true });
+    echoCommand = {
+      name: "echo",
+      aliases: ["comment"],
+      run: (cmd, env) => {
+        const text = cmd.raw;
+        if (cmd.name === "echo") env.echo?.(text);
+        return { output: text, chatChanged: false };
+      }
+    };
+    setvarCommand = {
+      name: "setvar",
+      aliases: ["setglobalvar"],
+      run: (cmd, env) => {
+        const setter = cmd.name === "setvar" ? env.setVar : env.setGlobalVar;
+        const target = varTarget(cmd);
+        if (target.name === "") throw new ScriptError(`/${cmd.name} requires a variable name`);
+        setter(target.name, target.value);
+        return changedResult();
+      }
+    };
+    getvarCommand = {
+      name: "getvar",
+      aliases: ["getglobalvar"],
+      run: (cmd, env) => {
+        const getter = cmd.name === "getvar" ? env.getVar : env.getGlobalVar;
+        const name2 = cmd.args[0] ?? "";
+        if (name2 === "") throw new ScriptError(`/${cmd.name} requires a variable name`);
+        return { output: String(getter(name2) ?? ""), chatChanged: false };
+      }
+    };
+    addvarCommand = {
+      name: "addvar",
+      run: (cmd, env) => {
+        const target = varTarget(cmd);
+        if (target.name === "") throw new ScriptError("/addvar requires a variable name");
+        const delta = target.value === "" ? "1" : target.value;
+        const current = env.getVar(target.name);
+        const currentNum = typeof current === "boolean" ? null : toNumber(String(current ?? ""));
+        const deltaNum = toNumber(delta);
+        if (current === void 0) {
+          env.setVar(target.name, delta);
+        } else if (currentNum !== null && deltaNum !== null) {
+          env.setVar(target.name, currentNum + deltaNum);
+        } else {
+          env.setVar(target.name, `${String(current)}${delta}`);
+        }
+        return changedResult();
+      }
+    };
+    incvarCommand = {
+      name: "incvar",
+      aliases: ["decvar"],
+      run: (cmd, env) => {
+        const name2 = cmd.args[0] ?? "";
+        const current = toNumber(String(env.getVar(name2) ?? "0")) ?? 0;
+        env.setVar(name2, current + (cmd.name === "incvar" ? 1 : -1));
+        return changedResult();
+      }
+    };
+    hasvarCommand = {
+      name: "hasvar",
+      aliases: ["hasglobalvar"],
+      run: (cmd, env) => {
+        const checker = cmd.name === "hasvar" ? env.getVar : env.getGlobalVar;
+        return { output: truthyString(String(checker(cmd.args[0] ?? "") !== void 0)), chatChanged: false };
+      }
+    };
+    delvarCommand = {
+      name: "delvar",
+      aliases: ["delglobalvar"],
+      run: (cmd, env) => {
+        const remover = cmd.name === "delvar" ? env.deleteVar : env.deleteGlobalVar;
+        remover(cmd.args[0] ?? "");
+        return changedResult();
+      }
+    };
+    ifCommand = {
+      name: "if",
+      run: async (cmd, env, tools) => {
+        const left = cmd.named["left"] ?? cmd.args[0] ?? "";
+        const right = cmd.named["right"] ?? cmd.args[1] ?? "";
+        const op = (cmd.named["op"] ?? cmd.args[2] ?? "=").trim();
+        let passes;
+        if (op === "contains" || op === "!contains") {
+          const contains = left.includes(right);
+          passes = op === "contains" ? contains : !contains;
+        } else {
+          const numericOp = NUMERIC_OPS[op];
+          if (numericOp === void 0) throw new ScriptError(`unsupported /if op: ${op}`);
+          const leftNum = toNumber(left);
+          const rightNum = toNumber(right);
+          if (leftNum !== null && rightNum !== null) passes = numericOp(leftNum, rightNum);
+          else if (op === "=" || op === "==") passes = left === right;
+          else if (op === "!=") passes = left !== right;
+          else passes = false;
+        }
+        const branch = passes ? cmd.named["then"] : cmd.named["else"] ?? "";
+        if (branch === void 0 || branch.trim() === "") return { output: "", chatChanged: false };
+        return tools.runNested(branch, env);
+      }
+    };
+    randomCommand = {
+      name: "random",
+      run: (cmd, _env, tools) => {
+        const raw = cmd.raw.trim();
+        const range = /^(-?\d+)\s*-\s*(-?\d+)$/.exec(raw);
+        if (range !== null) {
+          const low = Number(range[1]);
+          const high = Number(range[2]);
+          const min = Math.min(low, high);
+          return { output: String(min + Math.floor(tools.rng() * (Math.max(low, high) - min + 1))), chatChanged: false };
+        }
+        return { output: pickRandom(splitChoices(raw), tools.rng), chatChanged: false };
+      }
+    };
+    rollCommand = {
+      name: "roll",
+      run: (cmd, _env, tools) => ({ output: String(parseRoll2(cmd.raw.trim() || "1d6", tools.rng)), chatChanged: false })
+    };
+    pickCommand = {
+      name: "pick",
+      run: (cmd, _env, tools) => ({ output: pickRandom(splitChoices(cmd.raw), tools.rng), chatChanged: false })
+    };
+    sendCommand = {
+      name: "send",
+      run: async (cmd, env) => {
+        const action = await requireAction(env.send, "send");
+        await action(cmd.raw);
+        return changedResult();
+      }
+    };
+    sysCommand = {
+      name: "sys",
+      run: async (cmd, env) => {
+        const action = await requireAction(env.system, "sys");
+        await action(cmd.raw);
+        return changedResult();
+      }
+    };
+    triggerCommand = {
+      name: "trigger",
+      run: async (cmd, env) => {
+        const action = await requireAction(env.trigger, "trigger");
+        await action(cmd.args[0]);
+        return changedResult();
+      }
+    };
+    regenerateCommand = {
+      name: "regenerate",
+      run: async (_cmd, env) => {
+        const action = await requireAction(env.regenerate, "regenerate");
+        await action();
+        return changedResult();
+      }
+    };
+    stopCommand = {
+      name: "stop",
+      run: async (_cmd, env) => {
+        const action = await requireAction(env.stop, "stop");
+        action();
+        return changedResult();
+      }
+    };
+    cutCommand = {
+      name: "cut",
+      run: async (cmd, env) => {
+        const action = await requireAction(env.cut, "cut");
+        const range = /^(-?\d+)(?:\s*-\s*(-?\d+))?$/.exec(cmd.raw.trim());
+        if (range === null) throw new ScriptError(`/cut expects a range like 0-2, got: ${cmd.raw.trim()}`);
+        const from = Number(range[1]);
+        const to = range[2] === void 0 ? from : Number(range[2]);
+        await action(Math.min(from, to), Math.max(from, to));
+        return changedResult();
+      }
+    };
+    regexCommand = {
+      name: "regex",
+      run: async (cmd, env) => {
+        const action = await requireAction(env.applyRegex, "regex");
+        const name2 = cmd.named["name"] ?? cmd.args[0] ?? "";
+        if (name2 === "") throw new ScriptError("/regex requires a script name (name=\u2026)");
+        const positional = cmd.named["name"] !== void 0 ? cmd.args : cmd.args.slice(1);
+        return { output: await action(name2, positional.join(" ")), chatChanged: false };
+      }
+    };
+    for (const spec of [
+      echoCommand,
+      setvarCommand,
+      getvarCommand,
+      addvarCommand,
+      incvarCommand,
+      hasvarCommand,
+      delvarCommand,
+      ifCommand,
+      randomCommand,
+      rollCommand,
+      pickCommand,
+      sendCommand,
+      sysCommand,
+      triggerCommand,
+      regenerateCommand,
+      stopCommand,
+      cutCommand,
+      regexCommand
+    ]) {
+      registerStscriptCommand(spec);
+    }
+  }
+});
+
+// packages/tavern-script/src/index.ts
+var init_src5 = __esm({
+  "packages/tavern-script/src/index.ts"() {
+    "use strict";
+    init_regex2();
+    init_stscript();
+  }
+});
+
+// packages/plugin/src/agent-novel/usage.ts
+function noteToolOutputBytes(toolName, bytes) {
+  if (typeof toolName !== "string" || toolName === "") return;
+  if (!Number.isFinite(bytes) || bytes < 0) return;
+  samplerTable.set(toolName, (samplerTable.get(toolName) ?? 0) + bytes);
+}
+function recordProbeAgentId(id) {
+  try {
+    if (typeof id !== "string" || id === "") return;
+    probeAgentSlot.id = id;
+  } catch {
+  }
+}
+function recordWriterRunUsage(entry) {
+  try {
+    if (typeof entry.outputChars === "number" && Number.isFinite(entry.outputChars) && entry.outputChars >= 0) {
+      writerRunUsageSlot.outputChars = entry.outputChars;
+    }
+    if (typeof entry.usage === "object" && entry.usage !== null && !Array.isArray(entry.usage)) {
+      const usage = {};
+      for (const [key, value] of Object.entries(entry.usage)) {
+        if (typeof value === "number" && Number.isFinite(value) && value >= 0) usage[key] = value;
+      }
+      if (Object.keys(usage).length > 0) writerRunUsageSlot.usage = usage;
+    }
+  } catch {
+  }
+}
+var USAGE_SAMPLER_KEY, samplerTable, PROBE_AGENT_ID_KEY, probeAgentSlot, WRITER_RUN_USAGE_KEY, writerRunUsageSlot;
+var init_usage = __esm({
+  "packages/plugin/src/agent-novel/usage.ts"() {
+    "use strict";
+    USAGE_SAMPLER_KEY = Symbol.for("dsh-soulmojito:novel-usage-sampler");
+    samplerTable = globalThis[USAGE_SAMPLER_KEY] ??= /* @__PURE__ */ new Map();
+    PROBE_AGENT_ID_KEY = Symbol.for("dsh-soulmojito:novel-writer-probe-agent-id");
+    probeAgentSlot = globalThis[PROBE_AGENT_ID_KEY] ??= {};
+    WRITER_RUN_USAGE_KEY = Symbol.for("dsh-soulmojito:novel-writer-run-usage");
+    writerRunUsageSlot = globalThis[WRITER_RUN_USAGE_KEY] ??= { outputChars: null, usage: null };
+  }
+});
+
+// packages/plugin/src/agent-novel/capabilities.ts
+function isObject(value) {
+  return typeof value === "object" && value !== null;
+}
+function isFunction(value) {
+  return typeof value === "function";
+}
+function inspectAgentNovelCapabilities(ctx) {
+  const missing = [];
+  const reasons = [];
+  const need = (id, ok, reason) => {
+    if (ok) return;
+    missing.push(id);
+    reasons.push(reason);
+  };
+  const agents = isObject(ctx?.agents) ? ctx?.agents : void 0;
+  need("agents", agents !== void 0, "host context exposes no 'agents' service object (\xA716 followup scheduling)");
+  need("agents.withoutInitiator", isFunction(agents?.withoutInitiator), "agents.withoutInitiator is not callable; agent-initiated followups without a user initiator cannot be driven (\xA716)");
+  const presets = isObject(ctx?.agentPresets) ? ctx?.agentPresets : void 0;
+  need("agentPresets.mount", isFunction(presets?.mount), "agentPresets.mount is not callable; the novel preset cannot be mounted (\xA716)");
+  need("agentPresets.recompose", isFunction(presets?.recompose), "agentPresets.recompose is not callable; preset recomposition for the novel architecture is unavailable (\xA716)");
+  const systemPrompt = isObject(ctx?.systemPrompt) ? ctx?.systemPrompt : void 0;
+  need("systemPrompt.section", isFunction(systemPrompt?.section), "systemPrompt.section is not callable; the novel kernel cannot be registered (\xA711)");
+  need("tools.register", isFunction(isObject(ctx?.tools) ? (ctx?.tools).register : void 0), "tools.register is not callable; the novel tool surface cannot be registered (\xA711)");
+  for (const eventType of REQUIRED_EVENT_TYPES) {
+    need(
+      `on:${eventType}`,
+      isFunction(ctx?.on),
+      `event subscription for '${eventType}' is unavailable: the host exposes no 'on' hook, and actual emission of the event type cannot be probed statically (\xA716)`
+    );
+  }
+  return {
+    available: missing.length === 0,
+    missing,
+    reasons,
+    checkedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+}
+var REQUIRED_EVENT_TYPES;
+var init_capabilities = __esm({
+  "packages/plugin/src/agent-novel/capabilities.ts"() {
+    "use strict";
+    init_deduce();
+    init_usage();
+    REQUIRED_EVENT_TYPES = ["session/event", "agent/created", "agent/status"];
+  }
+});
+
+// packages/plugin/src/agent-tavern/capabilities.ts
+function inspectAgentTavernCapabilities(adapter, presetId = AGENT_TAVERN_PRESET_ID) {
+  const nativeMissing = [];
+  if (typeof adapter.preset?.mount !== "function") nativeMissing.push("preset");
+  if (adapter.scopedPrompt !== true) nativeMissing.push("scoped-prompt");
+  if (adapter.tools !== true) nativeMissing.push("tools");
+  if (adapter.durableEvents !== true) nativeMissing.push("durable-events");
+  const managedMissing = [...nativeMissing];
+  if (adapter.contextProjection !== true) managedMissing.push("agent/context");
+  if (adapter.projectionAwareCompaction !== true) managedMissing.push("projection-aware-compaction");
+  return {
+    presetId,
+    native: status(nativeMissing),
+    managed: status(managedMissing),
+    checkedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+}
+function status(missing) {
+  return {
+    available: missing.length === 0,
+    missing: [...missing],
+    reasons: missing.map((name2) => REASONS[name2])
+  };
+}
+var AGENT_TAVERN_PRESET_ID, REASONS;
+var init_capabilities2 = __esm({
+  "packages/plugin/src/agent-tavern/capabilities.ts"() {
+    "use strict";
+    AGENT_TAVERN_PRESET_ID = "agent-tavern";
+    REASONS = {
+      preset: "DSH agent preset mounting is unavailable.",
+      "scoped-prompt": "DSH agent-scoped system prompt registration is unavailable.",
+      tools: "DSH native tool registration is unavailable.",
+      "durable-events": "DSH durable agent session events are unavailable.",
+      "agent/context": "The host does not expose the agent/context history projection seam.",
+      "projection-aware-compaction": "The host cannot measure compaction against the effective AgentTavern projection."
+    };
+  }
+});
+
+// packages/plugin/src/env-compat.ts
+function envCompat(suffix) {
+  return process.env[`DSH_SOULMOJITO_${suffix}`] ?? process.env[`DSH_TAVERN_${suffix}`];
+}
+var init_env_compat = __esm({
+  "packages/plugin/src/env-compat.ts"() {
+    "use strict";
+  }
+});
+
+// packages/plugin/src/build-info.ts
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { relative, resolve as resolve2 } from "node:path";
+function readBuildInfo() {
+  let version = "unknown";
+  let commit = "unknown";
+  const stamped = buildTimeStamp();
+  if (stamped.commit !== "") commit = stamped.commit;
+  for (const packagePath of [
+    resolve2(import.meta.dirname, "package.json"),
+    resolve2(import.meta.dirname, "..", "package.json")
+  ]) {
+    try {
+      const packageData = JSON.parse(readFileSync(packagePath, "utf8"));
+      if (typeof packageData?.version === "string" && packageData.version.trim() !== "") {
+        version = packageData.version.trim();
+        break;
+      }
+    } catch {
+    }
+  }
+  try {
+    const generated = JSON.parse(readFileSync(resolve2(import.meta.dirname, "version.json"), "utf8"));
+    if (typeof generated?.version === "string" && generated.version.trim() !== "") {
+      version = generated.version.trim();
+    }
+    const sidecarCommit = typeof generated?.commit === "string" ? normalizeCommit(generated.commit) : void 0;
+    if (sidecarCommit !== void 0) commit = sidecarCommit;
+  } catch {
+  }
+  return { version, commit };
+}
+function buildTimeStamp() {
+  const version = true ? "0.7.5".trim() : "";
+  const commit = true ? normalizeCommit("015fe0b") : void 0;
+  return { version, commit: commit ?? "" };
+}
+function resolveTavernCommit(buildFallback) {
+  const repositoryRoot = resolve2(import.meta.dirname, "..", "..");
+  const packagePath = relative(repositoryRoot, import.meta.dirname).replaceAll("\\", "/");
+  if (packagePath !== "packages/plugin") return commitFallback(buildFallback);
+  return resolveRepositoryCommit(repositoryRoot, buildFallback, readCommitViaGit);
+}
+function resolveRepositoryCommit(repositoryRoot, buildFallback, readFallbackCommit) {
+  const checkout = readGitCheckout(repositoryRoot);
+  if (checkout === void 0) return commitFallback(buildFallback);
+  return readCheckoutCommit(checkout) ?? readFallbackCommit(repositoryRoot) ?? commitFallback(buildFallback);
+}
+function readGitCheckout(repositoryRoot) {
+  const dotGit = resolve2(repositoryRoot, ".git");
+  const pointer = readTextFile(dotGit);
+  if (pointer === void 0) return checkoutAt(dotGit);
+  const pointedAt = /^gitdir:[ \t]*(.*)$/m.exec(pointer)?.[1]?.trim();
+  if (pointedAt === void 0 || pointedAt === "") return void 0;
+  return checkoutAt(resolve2(repositoryRoot, pointedAt));
+}
+function checkoutAt(gitDir) {
+  const head = readTextFile(resolve2(gitDir, "HEAD"))?.trim();
+  if (head === void 0 || head === "") return void 0;
+  return { gitDir, commonDir: commonDirectory(gitDir), head };
+}
+function commonDirectory(gitDir) {
+  const pointer = readTextFile(resolve2(gitDir, "commondir"))?.trim();
+  if (pointer === void 0 || pointer === "") return gitDir;
+  return resolve2(gitDir, pointer);
+}
+function readCheckoutCommit(checkout) {
+  if (!checkout.head.startsWith("ref:")) return readObjectId(checkout.head);
+  const ref = checkout.head.slice("ref:".length).trim();
+  if (ref === "") return void 0;
+  return readLooseRef(checkout.gitDir, ref) ?? readLooseRef(checkout.commonDir, ref) ?? readPackedRef(checkout.commonDir, ref);
+}
+function readCommitViaGit(repositoryRoot) {
+  try {
+    const output = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 2e3,
+      windowsHide: true
+    });
+    return normalizeCommit(output);
+  } catch {
+    return void 0;
+  }
+}
+function readLooseRef(gitDir, ref) {
+  const value = readTextFile(resolve2(gitDir, ref));
+  return value === void 0 ? void 0 : readObjectId(value);
+}
+function readPackedRef(commonDir, ref) {
+  const packed = readTextFile(resolve2(commonDir, "packed-refs"));
+  if (packed === void 0) return void 0;
+  for (const line of packed.split("\n")) {
+    if (line.startsWith("#") || line.startsWith("^")) continue;
+    const [id, name2] = line.trim().split(/\s+/);
+    if (id === void 0 || name2 !== ref) continue;
+    const commit = readObjectId(id);
+    if (commit !== void 0) return commit;
+  }
+  return void 0;
+}
+function readObjectId(value) {
+  const id = value.trim();
+  return /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i.test(id) ? id.slice(0, 7).toLowerCase() : void 0;
+}
+function commitFallback(buildFallback) {
+  return normalizeCommit(envCompat("COMMIT") ?? buildFallback) ?? "unknown";
+}
+function readTextFile(path5) {
+  try {
+    return readFileSync(path5, "utf8");
+  } catch {
+    return void 0;
+  }
+}
+function normalizeCommit(value) {
+  const commit = value.trim();
+  return /^[0-9a-f]{7,40}$/i.test(commit) ? commit.slice(0, 7).toLowerCase() : void 0;
+}
+var BUILD_INFO, TAVERN_COMMIT;
+var init_build_info = __esm({
+  "packages/plugin/src/build-info.ts"() {
+    "use strict";
+    init_env_compat();
+    BUILD_INFO = readBuildInfo();
+    TAVERN_COMMIT = resolveTavernCommit(BUILD_INFO.commit);
+  }
+});
+
+// packages/plugin/src/generation-hooks.ts
+function withTimeout(promise, ms) {
+  return new Promise((resolve3, reject) => {
+    const timer = setTimeout(() => {
+      const timeoutError = new Error(`generation hook timed out after ${ms}ms`);
+      timeoutError.hookTimeout = true;
+      reject(timeoutError);
+    }, ms);
+    Promise.resolve(promise).then(
+      (value) => {
+        clearTimeout(timer);
+        resolve3(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+function createGenerationHookBus(options = {}) {
+  const timeoutMs = options.timeoutMs ?? GENERATION_HOOK_TIMEOUT_MS;
+  const table = {
+    "user-input": [],
+    "pre-assemble": [],
+    "pre-llm": [],
+    "post-output": [],
+    "post-save": []
+  };
+  const degradationListeners = /* @__PURE__ */ new Set();
+  let nextId = 1;
+  let degradations = 0;
+  function register(phase, handler, order = 100, owner) {
+    const id = nextId++;
+    const list = table[phase];
+    list.push({ id, order, handler, ...owner !== void 0 ? { owner } : {} });
+    list.sort((a, b) => a.order - b.order || a.id - b.id);
+    return () => {
+      const index = list.findIndex((registration) => registration.id === id);
+      if (index >= 0) list.splice(index, 1);
+    };
+  }
+  async function dispatch(phase, payload, context) {
+    const list = table[phase];
+    if (list.length === 0) return payload;
+    const fullContext = { ...context, phase };
+    let current = payload;
+    for (const registration of [...list]) {
+      const degrade = (reason, detail) => {
+        degradations += 1;
+        const degradation = {
+          phase,
+          order: registration.order,
+          reason,
+          ...detail !== void 0 ? { detail } : {},
+          ...registration.owner !== void 0 ? { owner: registration.owner } : {}
+        };
+        options.onDegradation?.(degradation);
+        for (const listener of [...degradationListeners]) {
+          try {
+            listener(degradation);
+          } catch {
+          }
+        }
+      };
+      try {
+        const outcome = await withTimeout(
+          Promise.resolve(registration.handler(current, fullContext)),
+          timeoutMs
+        );
+        if (outcome === void 0) {
+          degrade("no-return");
+        } else {
+          current = outcome;
+        }
+      } catch (error) {
+        const timedOut = error instanceof Error && error.hookTimeout === true;
+        degrade(timedOut ? "timeout" : "error", error instanceof Error ? error.message : String(error));
+      }
+    }
+    return current;
+  }
+  return {
+    register,
+    dispatch,
+    degradationCount: () => degradations,
+    onDegradation(listener) {
+      degradationListeners.add(listener);
+      return () => {
+        degradationListeners.delete(listener);
+      };
+    }
+  };
+}
+var GENERATION_HOOK_TIMEOUT_MS, generationHooks;
+var init_generation_hooks = __esm({
+  "packages/plugin/src/generation-hooks.ts"() {
+    "use strict";
+    GENERATION_HOOK_TIMEOUT_MS = 1e4;
+    generationHooks = createGenerationHookBus();
+  }
+});
+
+// packages/plugin/src/mods/audit.ts
+var init_audit = __esm({
+  "packages/plugin/src/mods/audit.ts"() {
+    "use strict";
+  }
+});
+
+// packages/plugin/src/mods/events.ts
+var MOD_EVENT_KINDS, ModEventBus, modEvents, streamDeltaTail;
+var init_events = __esm({
+  "packages/plugin/src/mods/events.ts"() {
+    "use strict";
+    MOD_EVENT_KINDS = /* @__PURE__ */ new Set(["chat-saved", "assets-saved", "guides-changed", "stream-delta"]);
+    ModEventBus = class {
+      listeners = /* @__PURE__ */ new Map();
+      isKind(value) {
+        return typeof value === "string" && MOD_EVENT_KINDS.has(value);
+      }
+      hasListeners(kind) {
+        const set = this.listeners.get(kind);
+        return set !== void 0 && set.size > 0;
+      }
+      on(kind, handler) {
+        const set = this.listeners.get(kind) ?? /* @__PURE__ */ new Set();
+        set.add(handler);
+        this.listeners.set(kind, set);
+        return () => {
+          set.delete(handler);
+        };
+      }
+      async emit(kind, payload) {
+        const set = this.listeners.get(kind);
+        if (set === void 0 || set.size === 0) return;
+        for (const handler of [...set]) {
+          try {
+            await handler(payload);
+          } catch {
+          }
+        }
+      }
+    };
+    modEvents = new ModEventBus();
+    streamDeltaTail = Promise.resolve();
+  }
+});
+
+// packages/plugin/src/http/errors.ts
+var init_errors = __esm({
+  "packages/plugin/src/http/errors.ts"() {
+    "use strict";
+  }
+});
+
+// packages/plugin/src/http/io.ts
+var DEFAULT_MAX_BYTES;
+var init_io = __esm({
+  "packages/plugin/src/http/io.ts"() {
+    "use strict";
+    init_errors();
+    DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
+  }
+});
+
+// packages/plugin/src/http/public-error.ts
+var init_public_error = __esm({
+  "packages/plugin/src/http/public-error.ts"() {
+    "use strict";
+    init_io();
+    init_errors();
+  }
+});
+
+// packages/plugin/src/mods/http.ts
+var MOD_HTML_DEFAULT_CSP, MOD_VIEWPORT_CSS_VAR, VIEWPORT_VAR_REFERENCE;
+var init_http = __esm({
+  "packages/plugin/src/mods/http.ts"() {
+    "use strict";
+    MOD_HTML_DEFAULT_CSP = [
+      "default-src 'none'",
+      "script-src 'unsafe-inline'",
+      "style-src 'unsafe-inline'",
+      "img-src data: blob:",
+      "font-src data:",
+      "media-src data: blob:",
+      "connect-src 'none'",
+      "frame-src 'none'",
+      "object-src 'none'",
+      "base-uri 'none'",
+      "form-action 'none'"
+    ].join("; ");
+    MOD_VIEWPORT_CSS_VAR = "--dt-viewport-height";
+    VIEWPORT_VAR_REFERENCE = `var(${MOD_VIEWPORT_CSS_VAR}, 100vh)`;
+  }
+});
+
+// packages/plugin/src/mods/manifest.ts
+var init_manifest = __esm({
+  "packages/plugin/src/mods/manifest.ts"() {
+    "use strict";
+  }
+});
+
+// packages/plugin/src/mods/storage.ts
+var MOD_STORAGE_VALUE_LIMIT, MOD_STORAGE_TOTAL_LIMIT, fileTails;
+var init_storage = __esm({
+  "packages/plugin/src/mods/storage.ts"() {
+    "use strict";
+    init_fs_atomic();
+    init_mutation_tail();
+    MOD_STORAGE_VALUE_LIMIT = 256 * 1024;
+    MOD_STORAGE_TOTAL_LIMIT = 1024 * 1024;
+    fileTails = new KeyedMutationTails();
+  }
+});
+
+// packages/plugin/src/update/github.ts
+var init_github = __esm({
+  "packages/plugin/src/update/github.ts"() {
+    "use strict";
+  }
+});
+
+// packages/plugin/src/update/sources.ts
+var init_sources = __esm({
+  "packages/plugin/src/update/sources.ts"() {
+    "use strict";
+    init_github();
+    init_env_compat();
+  }
+});
+
+// packages/plugin/src/mods/install.ts
+var init_install = __esm({
+  "packages/plugin/src/mods/install.ts"() {
+    "use strict";
+    init_sources();
+    init_manifest();
+  }
+});
+
+// packages/plugin/src/mods/host.ts
+var init_host = __esm({
+  "packages/plugin/src/mods/host.ts"() {
+    "use strict";
+    init_guides();
+    init_handle();
+    init_env_compat();
+    init_generation_hooks();
+    init_src();
+    init_src();
+    init_src5();
+    init_src3();
+    init_audit();
+    init_events();
+    init_cross_bundle();
+    init_public_error();
+    init_http();
+    init_manifest();
+    init_storage();
+    init_install();
+  }
+});
+
+// packages/plugin/src/im/handle.ts
+var IM_RUNTIME_KEY, runtimeSymbol;
+var init_handle2 = __esm({
+  "packages/plugin/src/im/handle.ts"() {
+    "use strict";
+    init_env_compat();
+    IM_RUNTIME_KEY = "dsh-soulmojito:im-runtime";
+    runtimeSymbol = Symbol.for(IM_RUNTIME_KEY);
+  }
+});
+
+// packages/plugin/src/update/apply.ts
+var DEFAULT_INSTALL_TIMEOUT_MS;
+var init_apply = __esm({
+  "packages/plugin/src/update/apply.ts"() {
+    "use strict";
+    init_github();
+    init_env_compat();
+    DEFAULT_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
+  }
+});
+
+// packages/plugin/src/update/service.ts
+var UPDATE_CHECK_TTL_MS, UPDATE_FIRST_CHECK_DELAY_MS;
+var init_service = __esm({
+  "packages/plugin/src/update/service.ts"() {
+    "use strict";
+    init_github();
+    init_sources();
+    init_apply();
+    UPDATE_CHECK_TTL_MS = 6 * 60 * 60 * 1e3;
+    UPDATE_FIRST_CHECK_DELAY_MS = 12 * 1e3;
+  }
+});
+
+// packages/plugin/src/variable-merge.ts
+var init_variable_merge = __esm({
+  "packages/plugin/src/variable-merge.ts"() {
+    "use strict";
+  }
+});
+
+// packages/plugin/src/variable-gateway.ts
+var init_variable_gateway = __esm({
+  "packages/plugin/src/variable-gateway.ts"() {
+    "use strict";
+    init_src3();
+    init_mvu();
+    init_variable_merge();
+  }
+});
+
+// packages/plugin/src/runtime.ts
+var agentTavernCapabilities, agentNovelCapabilities;
+var init_runtime2 = __esm({
+  "packages/plugin/src/runtime.ts"() {
+    "use strict";
+    init_capabilities();
+    init_capabilities2();
+    init_build_info();
+    init_dsh_home();
+    init_env_compat();
+    init_host();
+    init_handle2();
+    init_shared_stores();
+    init_store_handle();
+    init_service();
+    init_variable_gateway();
+    init_src3();
+    agentTavernCapabilities = inspectAgentTavernCapabilities({});
+    agentNovelCapabilities = inspectAgentNovelCapabilities({});
+  }
+});
+
+// packages/tavern-pipeline/src/pipeline.ts
+var GLOBAL_ORDER_DUMMY_ID = 100001;
+var LEGACY_ORDER_DUMMY_ID = 1e5;
+function resolvePromptOrder(preset) {
+  const set = preset.promptOrder.find((o) => Number(o.character_id) === GLOBAL_ORDER_DUMMY_ID) ?? preset.promptOrder.find((o) => Number(o.character_id) === LEGACY_ORDER_DUMMY_ID) ?? preset.promptOrder[0];
+  return Array.isArray(set?.order) ? set.order : [];
+}
+function entryEnabled(slot, prompt) {
+  if (typeof slot.enabled === "boolean") return slot.enabled;
+  const record = prompt;
+  return record["enabled"] !== false;
+}
+
+// packages/plugin/src/agent-tavern/preset.ts
+init_cross_bundle_events();
+var AGENT_PRESET_BLOCK_HEADER = "Chat completion preset (user-configured prompt stack; follow these instructions together with the kernel):";
+function effectiveAgentPresetPrompts(preset, card) {
+  const order = resolvePromptOrder(preset);
+  const byId = new Map(preset.prompts.map((prompt) => [prompt.identifier, prompt]));
+  const effective = [];
+  for (const slot of order) {
+    const prompt = byId.get(slot.identifier);
+    if (prompt === void 0 || prompt.marker === true) continue;
+    if (!entryEnabled(slot, prompt)) continue;
+    const content = applyCardOverride(prompt.identifier, promptContent(prompt), card);
+    const trimmed = content.trim();
+    if (trimmed === "") continue;
+    effective.push({
+      identifier: prompt.identifier,
+      name: typeof prompt.name === "string" ? prompt.name : prompt.identifier,
+      role: promptRole(prompt),
+      content: trimmed
+    });
+  }
+  return effective;
+}
+function renderAgentPresetBlock(preset, card, header = AGENT_PRESET_BLOCK_HEADER) {
+  const prompts = effectiveAgentPresetPrompts(preset, card);
+  if (prompts.length === 0) return void 0;
+  return [header, ...prompts.map((prompt) => prompt.content)].join("\n\n");
+}
+function presetTemperature(preset) {
+  const value = preset.sampler["temperature"];
+  return typeof value === "number" && Number.isFinite(value) ? value : void 0;
+}
+function defaultPreset() {
+  const prompts = [
+    { name: "Main Prompt", system_prompt: true, role: "system", content: "Write {{char}}'s next reply in a fictional roleplay chat between {{char}} and {{user}}. Stay in character and never write dialogue or actions for {{user}}.", identifier: "main" },
+    { identifier: "worldInfoBefore", name: "World Info (before)", system_prompt: true, marker: true },
+    { identifier: "personaDescription", name: "Persona", system_prompt: true, marker: true },
+    { identifier: "charDescription", name: "Character Description", system_prompt: true, marker: true },
+    { identifier: "charPersonality", name: "Character Personality", system_prompt: true, marker: true },
+    { identifier: "scenario", name: "Scenario", system_prompt: true, marker: true },
+    { identifier: "worldInfoAfter", name: "World Info (after)", system_prompt: true, marker: true },
+    { identifier: "dialogueExamples", name: "Dialogue Examples", system_prompt: true, marker: true },
+    { identifier: "chatHistory", name: "Chat History", system_prompt: true, marker: true },
+    { name: "Post-History Instructions", system_prompt: true, role: "system", content: "", identifier: "jailbreak" }
+  ];
+  return {
+    temperature: 1,
+    openai_max_context: 32768,
+    openai_max_tokens: 800,
+    wi_format: "{0}",
+    scenario_format: "{{scenario}}",
+    personality_format: "{{personality}}",
+    prompts,
+    prompt_order: [{ character_id: GLOBAL_ORDER_DUMMY_ID, order: prompts.map((prompt) => ({ identifier: prompt.identifier, enabled: true })) }]
+  };
+}
+var agentPresetChanged = createGlobalListenerRegistry("dsh-soulmojito:agent-preset-changed-listeners");
+function onAgentPresetChanged(listener) {
+  return agentPresetChanged.on(listener);
+}
+function promptContent(prompt) {
+  const content = prompt["content"];
+  return typeof content === "string" ? content : "";
+}
+function promptRole(prompt) {
+  const role = prompt["role"];
+  return role === "user" || role === "assistant" ? role : "system";
+}
+function applyCardOverride(identifier, content, card) {
+  const override = identifier === "main" ? card?.data.systemPrompt.trim() : identifier === "jailbreak" ? card?.data.postHistoryInstructions.trim() : "";
+  if (override === void 0 || override === "") return content;
+  return override.replace(/\{\{original\}\}/gi, content);
+}
+
+// packages/plugin/src/mods/agent-mount.ts
+init_cross_bundle();
+
+// packages/plugin/src/prompt-safety.ts
+init_src();
+function createHostPromptExpander(char, user, frozen) {
+  const macros = createMacroEngine({
+    char,
+    user,
+    ...frozen?.now === void 0 ? {} : { now: frozen.now },
+    ...frozen?.rng === void 0 ? {} : { rng: frozen.rng }
+  });
+  return (text) => macros.expand(text);
+}
+function seededRandom(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = state + 1831565813 >>> 0;
+    let t = state;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function hostPromptSafe(text, expand = (value) => value) {
+  return expand(text).replace(/\{+/g, (run) => run.split("").join(" "));
+}
+
+// packages/plugin/src/mods/agent-mount.ts
+function toolFingerprint(entry) {
+  const { definition } = entry;
+  return JSON.stringify([entry.modId, definition.name, definition.description, definition.parameters, definition.output?.schema]);
+}
+function mountModExtensions(ctx, options) {
+  claimHostToolNames(options.claimTools);
+  const ownsHostSections = options.promptSections === "host";
+  const registeredTools = /* @__PURE__ */ new Map();
+  const registeredSections = /* @__PURE__ */ new Map();
+  const liveTool = (modId, name2) => modToolSnapshot().find((entry) => entry.modId === modId && entry.definition.name === name2)?.definition;
+  const asDispose = (handle) => typeof handle === "function" ? () => {
+    try {
+      handle();
+    } catch {
+    }
+  } : void 0;
+  function syncTools() {
+    const wanted = /* @__PURE__ */ new Map();
+    for (const entry of modToolSnapshot()) {
+      wanted.set(entry.definition.name, { modId: entry.modId, definition: entry.definition, fingerprint: toolFingerprint(entry) });
+    }
+    for (const [name2, current] of [...registeredTools]) {
+      const next = wanted.get(name2);
+      if (next === void 0 || next.fingerprint !== current.fingerprintNext) {
+        current.dispose?.();
+        registeredTools.delete(name2);
+      }
+    }
+    for (const [name2, next] of wanted) {
+      if (registeredTools.has(name2)) continue;
+      const wrapper = {
+        name: name2,
+        description: next.definition.description,
+        parameters: next.definition.parameters,
+        output: {
+          schema: next.definition.output.schema,
+          render: (args, value) => {
+            const live = liveTool(next.modId, name2);
+            if (live === void 0) return [{ type: "text", text: JSON.stringify(value) }];
+            return live.output.render(args, value);
+          }
+        },
+        execute: (args, exec) => {
+          const live = liveTool(next.modId, name2);
+          if (live === void 0) {
+            return Promise.reject(new Error(`mod tool '${name2}' is no longer available (its mod was disabled or unloaded)`));
+          }
+          return live.execute(args, exec);
+        }
+      };
+      try {
+        const handle = ctx.tools?.register?.(wrapper);
+        registeredTools.set(name2, { dispose: asDispose(handle), fingerprintNext: next.fingerprint });
+      } catch {
+      }
+    }
+  }
+  function syncSections() {
+    if (!ownsHostSections) return;
+    const wanted = /* @__PURE__ */ new Map();
+    for (const entry of modSectionSnapshot()) {
+      const fullName = `dsh-soulmojito:mod:${entry.modId}:${entry.definition.name}`;
+      wanted.set(fullName, { name: fullName, order: clampModSectionOrder(entry.definition.order), text: hostPromptSafe(entry.definition.text) });
+    }
+    for (const [fullName, current] of [...registeredSections]) {
+      const next = wanted.get(fullName);
+      if (next === void 0 || next.text !== current.textNext || next.order !== current.orderNext) {
+        current.dispose?.();
+        registeredSections.delete(fullName);
+      }
+    }
+    for (const [fullName, next] of wanted) {
+      if (registeredSections.has(fullName)) continue;
+      try {
+        const handle = ctx.systemPrompt?.section?.({ name: fullName, order: next.order, text: next.text });
+        registeredSections.set(fullName, { dispose: asDispose(handle), textNext: next.text, orderNext: next.order });
+      } catch {
+      }
+    }
+  }
+  const sync = () => {
+    syncTools();
+    syncSections();
+  };
+  sync();
+  const offListener = onModsChanged(sync);
+  const dispose = () => {
+    offListener();
+    for (const [, current] of [...registeredTools]) current.dispose?.();
+    registeredTools.clear();
+    for (const [, current] of [...registeredSections]) current.dispose?.();
+    registeredSections.clear();
+  };
+  if (ctx.effect) {
+    try {
+      ctx.effect(() => () => {
+        dispose();
+      }, "dsh-soulmojito: mod extensions");
+    } catch {
+    }
+  }
+  return dispose;
+}
+
+// packages/plugin/src/preset-mount.ts
+init_src2();
+init_src3();
+init_dsh_home();
+
+// packages/plugin/src/lazy-projection.ts
+function createLazyProjection(options) {
+  const cache = /* @__PURE__ */ new Map();
+  const started = /* @__PURE__ */ new Set();
+  const tickets = /* @__PURE__ */ new Map();
+  let preheatDone = false;
+  async function load(agentId, state) {
+    const ticket = (tickets.get(agentId) ?? 0) + 1;
+    tickets.set(agentId, ticket);
+    const settle = (value) => {
+      if (tickets.get(agentId) === ticket) cache.set(agentId, value);
+    };
+    try {
+      await options.load(agentId, settle, state);
+    } catch {
+    }
+  }
+  async function refreshAll() {
+    let state;
+    try {
+      state = await options.getState();
+    } catch {
+      state = void 0;
+    }
+    for (const agentId of [...started]) await enqueueLoad(agentId, state);
+  }
+  async function refreshWhere(match) {
+    try {
+      const state = await options.getState();
+      for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
+        if (!match(binding)) continue;
+        started.add(agentId);
+        await enqueueLoad(agentId);
+      }
+    } catch {
+    }
+  }
+  const loadChains = /* @__PURE__ */ new Map();
+  function enqueueLoad(agentId, state) {
+    const next = (loadChains.get(agentId) ?? Promise.resolve()).then(() => load(agentId, state), () => load(agentId, state));
+    loadChains.set(agentId, next.catch(() => void 0));
+    return next;
+  }
+  return {
+    valueOf(agentId) {
+      if (typeof agentId !== "string" || agentId.trim() === "") return void 0;
+      if (!started.has(agentId)) {
+        started.add(agentId);
+        void enqueueLoad(agentId);
+      }
+      return cache.get(agentId);
+    },
+    refreshWhere,
+    refreshAll,
+    preheatWhere(match) {
+      if (preheatDone) return Promise.resolve();
+      preheatDone = true;
+      return refreshWhere(match);
+    },
+    preheatAll(agentIds) {
+      for (const agentId of agentIds) started.add(agentId);
+      return refreshAll();
+    }
+  };
+}
+
+// packages/plugin/src/preset-mount.ts
+init_store_handle();
+var DEFAULT_USER = "User";
+var CHAR_FALLBACK = "the character";
+var storePromise;
+function store3() {
+  return storePromise ??= sharedTavernStore(tavernDataRoot());
+}
+function mountPresetProjection(options) {
+  const freeze = /* @__PURE__ */ new Map();
+  const projection = createLazyProjection({
+    getState: async () => (await store3()).getState(),
+    load: async (agentId, settle) => {
+      const db = await store3();
+      const state = await db.getState();
+      const binding = state.sessionBindings[agentId];
+      if (state[options.stateFlag] !== true || !binding || binding.architecture !== options.architecture) {
+        settle("");
+        return;
+      }
+      if (typeof state.activePreset !== "string" || state.activePreset === "") {
+        settle("");
+        return;
+      }
+      const raw = await db.getPreset(state.activePreset);
+      if (raw === void 0) {
+        settle("");
+        return;
+      }
+      const block = renderAgentPresetBlock(parsePreset(raw), void 0, options.header);
+      if (block === void 0) {
+        settle("");
+        return;
+      }
+      const record = freeze.get(agentId) ?? { frozenAt: Date.now(), seed: Math.random() * 4294967296 >>> 0 };
+      freeze.set(agentId, record);
+      const expand = createHostPromptExpander(
+        charNameOf(options, binding),
+        state.activePersona ?? DEFAULT_USER,
+        { now: () => new Date(record.frozenAt), rng: seededRandom(record.seed) }
+      );
+      settle(hostPromptSafe(block, expand));
+    }
+  });
+  onAgentPresetChanged(() => projection.refreshWhere((binding) => binding.architecture === options.architecture));
+  return {
+    section: { name: options.sectionName, order: -75, text: (assembly) => projection.valueOf(assembly?.agent?.id) ?? "" },
+    textOf: (agentId) => projection.valueOf(agentId) ?? "",
+    preheat: () => projection.preheatWhere((binding) => binding.architecture === options.architecture)
+  };
+}
+function charNameOf(options, binding) {
+  const name2 = options.charOf(binding).trim();
+  return name2 === "" ? CHAR_FALLBACK : name2;
+}
+
+// packages/plugin/src/agent-novel/tools/body.ts
+init_src3();
+
+// packages/plugin/src/tool-args.ts
+function stringArg(value) {
+  if (typeof value !== "string" || value.trim() === "") throw new Error("string argument is required");
+  return value;
+}
+function boundedStringArg(value, maxLength) {
+  return stringArg(value).slice(0, maxLength);
+}
+function clampInt(value, min, max2, fallback) {
+  if (!Number.isInteger(value)) return fallback;
+  return Math.max(min, Math.min(max2, value));
+}
+function limitText(value, max2) {
+  return typeof value === "string" ? value.slice(0, max2) : "";
+}
+
+// packages/plugin/src/agent-novel/tools/body.ts
 init_deduce();
 
-// packages/plugin/src/agent-tavern/projector.ts
+// packages/plugin/src/agent-novel/writer.ts
+init_deduce();
+
+// packages/plugin/src/agent-tavern/agent.ts
+init_guides();
+init_handle();
+init_cross_bundle();
+
+// packages/plugin/src/prompt-viewer.ts
+var PROMPT_VIEWER_STATE_KEY = Symbol.for("dsh-soulmojito:prompt-viewer");
+
+// packages/plugin/src/agent-tavern/agent.ts
 init_src2();
+
+// packages/bind/src/host-session.ts
+var PLUGIN_NAME = "dsh-soulmojito";
+var LEGACY_PLUGIN_NAME = "dsh-tavern";
+var TAVERN_PLUGIN_SOURCE_KIND = `plugin:${PLUGIN_NAME}`;
+var LEGACY_TAVERN_PLUGIN_SOURCE_KIND = `plugin:${LEGACY_PLUGIN_NAME}`;
+
+// packages/plugin/src/agent-tavern/prompt-parts.ts
+var partsSymbol = Symbol.for("dsh-soulmojito:agent-prompt-parts");
+function partStore() {
+  const holder = globalThis;
+  return holder[partsSymbol] ??= /* @__PURE__ */ new Map();
+}
+function registerAgentPromptPart(part) {
+  const parts = partStore();
+  parts.set(part.name, part);
+  return () => {
+    if (parts.get(part.name) === part) parts.delete(part.name);
+  };
+}
+
+// packages/plugin/src/agent-tavern/tools/character.ts
 init_src3();
+
+// packages/tavern-lore/src/types.ts
+var MESSAGE_BOUNDARY = "";
+
+// packages/tavern-lore/src/buffer.ts
+var JOINER = "\n" + MESSAGE_BOUNDARY;
+
+// packages/plugin/src/agent-tavern/tools/character.ts
+init_tavern_assets();
+
+// packages/plugin/src/agent-tavern/tools/stores.ts
+init_src3();
+init_dsh_home();
+
+// packages/plugin/src/memory-hybrid.ts
+init_src3();
+
+// packages/plugin/src/memory-embed.ts
+init_src3();
+
+// packages/plugin/src/memory-embed-local.ts
+var TRANSFORMERS_PACKAGE = "@huggingface/transformers";
+var TRANSFORMERS_INSTALL_HINT = `local ONNX embed requires '${TRANSFORMERS_PACKAGE}' (not bundled with the plugin): run "pnpm add ${TRANSFORMERS_PACKAGE}" in the DSH profile root (the directory whose node_modules contains the installed dsh-soulmojito, NOT the dsh-soulmojito source repository), then restart DSH`;
+var LOCAL_RUNTIME_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
+
+// packages/plugin/src/agent-tavern/tools/stores.ts
+init_shared_stores();
+init_store_handle();
+var tavernStorePromise;
+function tavernStore() {
+  return tavernStorePromise ??= sharedTavernStore(tavernDataRoot());
+}
+
+// packages/plugin/src/agent-tavern/tools/shared.ts
+var DEFAULT_USER2 = "User";
+function objectOutput(properties, optionalKeys = ["value", "revision", "updatedAt"]) {
+  return { type: "object", properties, required: Object.keys(properties).filter((key) => !optionalKeys.includes(key)), additionalProperties: false };
+}
+function identitySummaryOf(data) {
+  const agentTavern = data.extensions?.agentTavern;
+  const summary = agentTavern?.identitySummary;
+  return typeof summary === "string" && summary.trim() !== "" ? summary : void 0;
+}
+
+// packages/plugin/src/agent-tavern/tools/character.ts
+var characterOutput = objectOutput({
+  character: { type: "string" },
+  name: { type: "string" },
+  nickname: { type: "string" },
+  identitySummary: { type: "string" },
+  description: { type: "string" },
+  personality: { type: "string" },
+  scenario: { type: "string" },
+  source: { type: "object", additionalProperties: true },
+  truncated: { type: "boolean" }
+});
+var loreSearchOutput = objectOutput({
+  hits: { type: "array", items: { type: "object", additionalProperties: true } },
+  sourceCount: { type: "integer" },
+  truncated: { type: "boolean" }
+});
+var sceneOutput = objectOutput({
+  character: { type: "string" },
+  chatId: { type: "string" },
+  scenario: { type: "string" },
+  messageCount: { type: "integer" },
+  metadata: { type: "object", additionalProperties: true },
+  source: { type: "object", additionalProperties: true },
+  truncated: { type: "boolean" }
+});
+var historySearchOutput = objectOutput({
+  hits: { type: "array", items: { type: "object", additionalProperties: true } },
+  sourceCount: { type: "integer" },
+  truncated: { type: "boolean" }
+});
+
+// packages/plugin/src/agent-tavern/tools/deduction.ts
+init_dsh_home();
+init_mvu();
+init_mvu_guard();
+init_mvu_rules();
+init_deduce();
+
+// packages/plugin/src/agent-tavern/body-settle-intent.ts
+init_mvu();
+
+// packages/plugin/src/agent-tavern/projector.ts
+init_src3();
+init_src2();
+init_src5();
+
+// packages/plugin/src/agent-tavern/mvu-compat.ts
+init_src4();
 
 // packages/plugin/src/agent-tavern/body-projector.ts
-init_src2();
 init_src3();
+init_src2();
+init_src5();
+
+// packages/plugin/src/regex-session.ts
+init_src2();
+init_tavern_assets();
+
+// packages/plugin/src/agent-tavern/body-projector.ts
+init_mvu();
+
+// packages/plugin/src/agent-tavern/body-candidate-receipts.ts
+init_mvu();
+init_mvu_guard();
 
 // packages/plugin/src/session/binding.ts
-init_runtime();
+init_runtime2();
+
+// packages/plugin/src/agent-tavern/body-runtime-settlement.ts
+init_mvu();
+init_mvu_guard();
 
 // packages/plugin/src/agent-tavern/body-runtime-core.ts
-init_src2();
+init_src3();
 var bodyTails = new KeyedMutationTails(true);
 
+// packages/plugin/src/agent-tavern/projector.ts
+init_mvu();
+
 // packages/plugin/src/agent-tavern/im-projection.ts
-init_src3();
+init_src2();
+init_src5();
 
 // packages/plugin/src/im/types.ts
-init_src2();
+init_src3();
 
 // packages/plugin/src/agent-tavern/projector.ts
 var mvuAuditTail = new MutationTail();
@@ -11552,7 +11816,7 @@ var memoryForgetOutput = objectOutput(
 );
 
 // packages/plugin/src/agent-tavern/tools/script.ts
-init_src2();
+init_src3();
 init_dsh_home();
 var scriptReadOutput = objectOutput(
   {
@@ -11752,7 +12016,7 @@ onAgentPresetChanged(() => Promise.all([
 ]).then(() => void 0));
 
 // packages/plugin/src/agent-novel/outline.ts
-init_src2();
+init_src3();
 function unitTargetRange(config, committed) {
   const budget = config.lengthBudget;
   if (budget.kind === "unbounded") return { min: 0, max: Number.MAX_SAFE_INTEGER };
@@ -11781,7 +12045,7 @@ function allParticipantsOf(outline) {
 
 // packages/plugin/src/agent-novel/writer.ts
 init_usage();
-init_src2();
+init_src3();
 var WRITER_PROTOCOL_FULL = [
   "You are the writer subagent of an AgentNovel project: draft the body prose of exactly one writing unit from the material below, then stop.",
   'Pure prose discipline: paragraphs are narration only \u2014 no Markdown, no chapter or scene headings, no unit ids or structural labels, no wrap-up or completion notes ("\u6536\u675F", "\u5B8C\u7ED3", "\u5168\u6587\u5B8C"), no explanations, progress reports or apologies. Explanatory text never enters paragraphs.',
@@ -12398,7 +12662,7 @@ async function runDelegatedWriter(deps, delegation) {
 }
 
 // packages/plugin/src/agent-novel/tools/shared.ts
-init_src2();
+init_src3();
 init_usage();
 
 // packages/plugin/src/agent-novel/tools/stores.ts
@@ -12879,12 +13143,12 @@ var loreSearchOutput2 = objectOutput2({
 });
 
 // packages/plugin/src/agent-novel/tools/import.ts
-init_src2();
+init_src3();
 init_deduce();
 
 // packages/plugin/src/agent-novel/importer.ts
 init_deduce();
-init_src2();
+init_src3();
 var IMPORT_PROTOCOL = [
   "You are the source-extraction subagent of an AgentNovel continuation project. You receive exactly one part of an imported novel and must return exactly one JSON object.",
   "Evidence discipline: report only what this part states. Do not invent names, events or setting details; when the text is ambiguous, prefer a lower confidence and leave fields empty rather than filling them with guesses.",
@@ -13512,7 +13776,7 @@ var revisionDiscardOutput = objectOutput2({
 });
 
 // packages/plugin/src/agent-novel/tools/outline.ts
-init_src2();
+init_src3();
 init_usage();
 function outlineTools() {
   return [
@@ -13947,7 +14211,7 @@ function isJsonObject(value) {
 }
 
 // packages/plugin/src/agent-novel/tools/retrieval.ts
-init_src2();
+init_src3();
 init_deduce();
 
 // packages/plugin/src/agent-novel/scope.ts
@@ -14205,7 +14469,7 @@ var deductionOutput2 = objectOutput2({
 var CANON_KINDS2 = /* @__PURE__ */ new Set(["event", "character-state", "relation", "foreshadowing", "variable"]);
 
 // packages/plugin/src/agent-novel/tools/units.ts
-init_src2();
+init_src3();
 function unitTools() {
   return [
     tool2("novel_unit_claim", "Claim a prepared writing unit (\xA76.2/\xA712.1): validates the outline revision and requirement watermark, then returns the execution token, the unit goal, the continuation anchor and the unit length target range. Turn accounting happens on the session turn/end events in the scheduler; the host turn identity is NOT recorded on the claim itself (deferred backlog, proposal 0007 \xA76.3 \u2014 the tool execution context exposes no session/turn identity).", {

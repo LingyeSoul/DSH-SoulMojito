@@ -17,7 +17,8 @@
 
 import { randomUUID } from 'node:crypto'
 import { advanceHostTurnBase, lastLoggedTurn } from '../session/trace.js'
-import { mvuReceiptsForBody, undoMvuReceipts } from '../mvu.js'
+import { mvuReceiptsForBody, readChatVariables, undoMvuReceipts } from '../mvu.js'
+import { getMvuTreePath, readMvuSchema } from '../mvu-guard.js'
 import {
   appendBodyEvent,
   appendOpFinish,
@@ -1192,7 +1193,13 @@ async function undoNewCandidateBodyReceipt(
     const receipts = mvuReceiptsForBody(snapshot.chat, { messageId: candidate.messageId })
     const live = receipts.filter((receipt) => receipt.undoneAt === undefined)
     if (live.length === 0) return
-    undoMvuReceipts(snapshot.chat, live, { at: new Date().toISOString() })
+    // Candidate body undo writes the JSONL tree; screen it like the panel path.
+    const card = (await tavern.getCharacter(plan.binding.character))?.card
+    const variables = readChatVariables(snapshot.chat)
+    undoMvuReceipts(snapshot.chat, live, {
+      schema: readMvuSchema(snapshot.chat, card),
+      currentOf: (path) => getMvuTreePath(variables, path),
+    }, { at: new Date().toISOString() })
     await tavern.saveChat(plan.binding.character, plan.binding.chatId, snapshot.chat, snapshot.revision)
   } catch (error) {
     throw failureFor(

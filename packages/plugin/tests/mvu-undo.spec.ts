@@ -98,6 +98,12 @@ describe('MVU undo pure core', () => {
     // 无 schema：恒等放行
     expect(() => screenMvuUndoRestores(undefined, [{ path: 'anything', value: {} }], () => undefined)).not.toThrow()
   })
+
+  it('rejects prototype-writing receipt paths before applying restores', () => {
+    expect(() => screenMvuUndoRestores(undefined, [{ path: '__proto__.polluted', value: true }], () => undefined))
+      .toThrowError(/forbidden segment/)
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined()
+  })
 })
 
 /* ------------------------- 端到端：ST 撤销 / AgentTavern 撤销 ------------------------- */

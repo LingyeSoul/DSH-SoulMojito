@@ -15,11 +15,13 @@ import {
 import {
   MVU_RECEIPTS_LIMIT,
   mvuReceiptsForBody,
+  readChatVariables,
   readMvuReceipts,
   redoMvuReceipts,
   undoMvuReceipts,
   type MvuReceipt,
 } from '../src/mvu.js'
+import { getMvuTreePath } from '../src/mvu-guard.js'
 import { assertReceiptCoverage } from '../src/agent-tavern/body-rollback-receipts.js'
 
 const CARD = 'Candidate Receipt Character'
@@ -920,7 +922,10 @@ describe('candidate receipt retention under ring pressure', () => {
     const [candidate] = mvuReceiptsForBody(chat, { messageId: MESSAGE_ID })
     expect(candidate?.turnKey).toBe(`body:${MESSAGE_ID}#0`)
 
-    const undone = undoMvuReceipts(chat, [candidate!], { at: AT_TWO })
+    const undone = undoMvuReceipts(chat, [candidate!], {
+      schema: undefined,
+      currentOf: (path) => getMvuTreePath(readChatVariables(chat), path),
+    }, { at: AT_TWO })
     expect(undone.receipts).toHaveLength(1)
     expect(undone.restores).toContainEqual({ path: 'stat_data.mvu.favor', value: 10 })
     expect(statFavor(chat)).toBe(10)

@@ -836,6 +836,260 @@ var init_src = __esm({
   }
 });
 
+// packages/tavern-format/src/types.ts
+var init_types2 = __esm({
+  "packages/tavern-format/src/types.ts"() {
+    "use strict";
+  }
+});
+
+// packages/tavern-format/src/png.ts
+var PNG_SIGNATURE, CRC_TABLE;
+var init_png = __esm({
+  "packages/tavern-format/src/png.ts"() {
+    "use strict";
+    PNG_SIGNATURE = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
+    CRC_TABLE = (() => {
+      const table = new Uint32Array(256);
+      for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) {
+          c = c & 1 ? 3988292384 ^ c >>> 1 : c >>> 1;
+        }
+        table[n] = c >>> 0;
+      }
+      return table;
+    })();
+  }
+});
+
+// packages/tavern-format/src/card.ts
+var init_card = __esm({
+  "packages/tavern-format/src/card.ts"() {
+    "use strict";
+    init_png();
+  }
+});
+
+// packages/tavern-format/src/worldbook.ts
+function normalizeEntry(raw) {
+  const extra = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (!KNOWN_FIELDS.has(k)) extra[k] = v;
+  }
+  return {
+    uid: num(raw["uid"], 0),
+    key: strArray(raw["key"]),
+    keysecondary: strArray(raw["keysecondary"]),
+    comment: str(raw["comment"]),
+    content: str(raw["content"]),
+    constant: bool(raw["constant"], false),
+    vectorized: bool(raw["vectorized"], false),
+    selective: bool(raw["selective"], true),
+    selectiveLogic: num(raw["selectiveLogic"], 0),
+    addMemo: bool(raw["addMemo"], false),
+    order: num(raw["order"], 100),
+    position: num(raw["position"], 0),
+    disable: bool(raw["disable"], false),
+    ignoreBudget: bool(raw["ignoreBudget"], false),
+    excludeRecursion: bool(raw["excludeRecursion"], false),
+    preventRecursion: bool(raw["preventRecursion"], false),
+    delayUntilRecursion: num(raw["delayUntilRecursion"], 0),
+    probability: num(raw["probability"], 100),
+    useProbability: bool(raw["useProbability"], true),
+    depth: num(raw["depth"], 4),
+    outletName: str(raw["outletName"]),
+    group: str(raw["group"]),
+    groupOverride: bool(raw["groupOverride"], false),
+    groupWeight: num(raw["groupWeight"], 100),
+    scanDepth: nullableNum(raw["scanDepth"]),
+    caseSensitive: nullableBool(raw["caseSensitive"]),
+    matchWholeWords: nullableBool(raw["matchWholeWords"]),
+    useGroupScoring: nullableBool(raw["useGroupScoring"]),
+    automationId: str(raw["automationId"]),
+    role: num(raw["role"], 0),
+    sticky: nullableNum(raw["sticky"]),
+    cooldown: nullableNum(raw["cooldown"]),
+    delay: nullableNum(raw["delay"]),
+    triggers: strArray(raw["triggers"]),
+    matchPersonaDescription: bool(raw["matchPersonaDescription"], false),
+    matchCharacterDescription: bool(raw["matchCharacterDescription"], false),
+    matchCharacterPersonality: bool(raw["matchCharacterPersonality"], false),
+    matchCharacterDepthPrompt: bool(raw["matchCharacterDepthPrompt"], false),
+    matchScenario: bool(raw["matchScenario"], false),
+    matchCreatorNotes: bool(raw["matchCreatorNotes"], false),
+    extra: Object.keys(extra).length > 0 ? extra : void 0
+  };
+}
+function parseCharacterBook(book) {
+  const entries = (book.entries ?? []).map((raw, index) => bookEntryToLoreEntry(raw, index));
+  return { name: book.name ?? "", entries };
+}
+function bookEntryToLoreEntry(raw, index) {
+  const ext = raw.extensions ?? {};
+  const uid = numOr(raw.id, ext["uid"], index);
+  const entry = normalizeEntry({
+    uid,
+    key: raw.keys ?? [],
+    keysecondary: raw.secondary_keys ?? [],
+    comment: raw.comment ?? raw.name ?? "",
+    content: raw.content ?? "",
+    constant: boolOr(raw.constant, ext["constant"], false),
+    disable: raw.enabled === false,
+    order: numOr(ext["order"], raw.insertion_order, 100),
+    position: bookPositionToSt(raw.position, ext["position"]),
+    selective: boolOr(raw.selective, ext["selective"], true),
+    selectiveLogic: num(ext["selectiveLogic"], 0),
+    caseSensitive: nullableBoolOr(raw.case_sensitive, ext["case_sensitive"]),
+    probability: numOr(ext["probability"], 100, 100),
+    useProbability: boolOr(ext["useProbability"], true, true),
+    depth: numOr(ext["depth"], 4, 4),
+    group: str(ext["group"]),
+    groupOverride: bool(ext["group_override"], false),
+    groupWeight: numOr(ext["group_weight"], 100, 100),
+    excludeRecursion: boolOr(ext["exclude_recursion"], false, false),
+    preventRecursion: boolOr(ext["prevent_recursion"], false, false),
+    delayUntilRecursion: numOr(ext["delay_until_recursion"], 0, 0),
+    scanDepth: nullableNum(ext["scan_depth"]),
+    matchWholeWords: nullableBool(ext["match_whole_words"]),
+    useGroupScoring: nullableBool(ext["use_group_scoring"]),
+    role: num(ext["role"], 0),
+    vectorized: bool(ext["vectorized"], false),
+    sticky: nullableNum(ext["sticky"]),
+    cooldown: nullableNum(ext["cooldown"]),
+    delay: nullableNum(ext["delay"]),
+    triggers: strArray(ext["triggers"])
+  });
+  const carried = {};
+  if (raw.priority !== void 0) carried["book.priority"] = raw.priority;
+  if (raw.use_regex !== void 0) carried["book.use_regex"] = raw.use_regex;
+  if (raw.name !== void 0) carried["book.name"] = raw.name;
+  if (Object.keys(carried).length > 0) entry.extra = { ...entry.extra ?? {}, ...carried };
+  return entry;
+}
+function bookPositionToSt(bookPos, extPos) {
+  if (typeof extPos === "number") return extPos;
+  if (bookPos === "after_char") return 1;
+  return 0;
+}
+function str(v) {
+  return typeof v === "string" ? v : "";
+}
+function num(v, fallback) {
+  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
+}
+function numOr(v, v2, fallback) {
+  return typeof v === "number" && Number.isFinite(v) ? v : num(v2, fallback);
+}
+function nullableNum(v) {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+function bool(v, fallback) {
+  return typeof v === "boolean" ? v : fallback;
+}
+function boolOr(v, v2, fallback) {
+  return typeof v === "boolean" ? v : bool(v2, fallback);
+}
+function nullableBool(v) {
+  return typeof v === "boolean" ? v : null;
+}
+function nullableBoolOr(v, v2) {
+  return typeof v === "boolean" ? v : nullableBool(v2);
+}
+function strArray(v) {
+  return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+}
+var KNOWN_FIELDS;
+var init_worldbook = __esm({
+  "packages/tavern-format/src/worldbook.ts"() {
+    "use strict";
+    KNOWN_FIELDS = /* @__PURE__ */ new Set([
+      "uid",
+      "key",
+      "keysecondary",
+      "comment",
+      "content",
+      "constant",
+      "vectorized",
+      "selective",
+      "selectiveLogic",
+      "addMemo",
+      "order",
+      "position",
+      "disable",
+      "ignoreBudget",
+      "excludeRecursion",
+      "preventRecursion",
+      "delayUntilRecursion",
+      "probability",
+      "useProbability",
+      "depth",
+      "outletName",
+      "group",
+      "groupOverride",
+      "groupWeight",
+      "scanDepth",
+      "caseSensitive",
+      "matchWholeWords",
+      "useGroupScoring",
+      "automationId",
+      "role",
+      "sticky",
+      "cooldown",
+      "delay",
+      "triggers",
+      "matchPersonaDescription",
+      "matchCharacterDescription",
+      "matchCharacterPersonality",
+      "matchCharacterDepthPrompt",
+      "matchScenario",
+      "matchCreatorNotes",
+      "extra"
+    ]);
+  }
+});
+
+// packages/tavern-format/src/preset.ts
+function parsePreset(obj) {
+  const promptsRaw = obj["prompts"];
+  if (!Array.isArray(promptsRaw)) throw new PresetFormatError("preset has no 'prompts' array");
+  const prompts = promptsRaw.map((p, i) => {
+    if (typeof p !== "object" || p === null) throw new PresetFormatError(`prompts[${i}] is not an object`);
+    return p;
+  });
+  const orderRaw = obj["prompt_order"];
+  const promptOrder = Array.isArray(orderRaw) ? orderRaw.map((o, i) => {
+    if (typeof o !== "object" || o === null || !Array.isArray(o.order)) {
+      throw new PresetFormatError(`prompt_order[${i}] is malformed`);
+    }
+    return o;
+  }) : [];
+  const sampler = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (k !== "prompts" && k !== "prompt_order") sampler[k] = v;
+  }
+  return { prompts, promptOrder, sampler };
+}
+var PresetFormatError;
+var init_preset = __esm({
+  "packages/tavern-format/src/preset.ts"() {
+    "use strict";
+    PresetFormatError = class extends Error {
+      constructor(message) {
+        super(message);
+        this.name = "PresetFormatError";
+      }
+    };
+  }
+});
+
+// packages/tavern-format/src/chat.ts
+var init_chat = __esm({
+  "packages/tavern-format/src/chat.ts"() {
+    "use strict";
+  }
+});
+
 // node_modules/.pnpm/fflate@0.8.3/node_modules/fflate/esm/index.mjs
 import { createRequire } from "module";
 function deflateSync(data, opts) {
@@ -1817,6 +2071,75 @@ var init_esm = __esm({
   }
 });
 
+// packages/tavern-format/src/zip.ts
+var DEFAULT_ZIP_LIMITS;
+var init_zip = __esm({
+  "packages/tavern-format/src/zip.ts"() {
+    "use strict";
+    DEFAULT_ZIP_LIMITS = {
+      maxEntries: 256,
+      maxFileBytes: 64 * 1024 * 1024,
+      maxTotalBytes: 128 * 1024 * 1024
+    };
+  }
+});
+
+// packages/tavern-format/src/charx.ts
+var init_charx = __esm({
+  "packages/tavern-format/src/charx.ts"() {
+    "use strict";
+    init_card();
+    init_zip();
+  }
+});
+
+// packages/tavern-format/src/roundtrip.ts
+var init_roundtrip = __esm({
+  "packages/tavern-format/src/roundtrip.ts"() {
+    "use strict";
+  }
+});
+
+// packages/tavern-format/src/group.ts
+var init_group = __esm({
+  "packages/tavern-format/src/group.ts"() {
+    "use strict";
+  }
+});
+
+// packages/tavern-format/src/regex-script.ts
+var init_regex_script = __esm({
+  "packages/tavern-format/src/regex-script.ts"() {
+    "use strict";
+  }
+});
+
+// packages/tavern-format/src/textcompletion.ts
+var init_textcompletion = __esm({
+  "packages/tavern-format/src/textcompletion.ts"() {
+    "use strict";
+  }
+});
+
+// packages/tavern-format/src/index.ts
+var init_src2 = __esm({
+  "packages/tavern-format/src/index.ts"() {
+    "use strict";
+    init_types2();
+    init_png();
+    init_card();
+    init_worldbook();
+    init_preset();
+    init_chat();
+    init_charx();
+    init_zip();
+    init_roundtrip();
+    init_group();
+    init_regex_script();
+    init_textcompletion();
+  }
+});
+
 // packages/tavern-store/src/fs-atomic.ts
 import { promises as fs } from "node:fs";
 async function moveAtomic(from, to) {
@@ -2069,7 +2392,7 @@ var init_mutation_tail = __esm({
 });
 
 // packages/tavern-format/lib/types.js
-var init_types2 = __esm({
+var init_types3 = __esm({
   "packages/tavern-format/lib/types.js"() {
     "use strict";
   }
@@ -2225,7 +2548,7 @@ function utf8ToBase642(text) {
   return Buffer.from(text, "utf8").toString("base64");
 }
 var PNG_SIGNATURE2, PngFormatError, CRC_TABLE2, CARD_CHUNK_V22, CARD_CHUNK_V32;
-var init_png = __esm({
+var init_png2 = __esm({
   "packages/tavern-format/lib/png.js"() {
     "use strict";
     PNG_SIGNATURE2 = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
@@ -2425,10 +2748,10 @@ function toV2Json(ir) {
   };
 }
 var CardFormatError, V3_FIELDS;
-var init_card = __esm({
+var init_card2 = __esm({
   "packages/tavern-format/lib/card.js"() {
     "use strict";
-    init_png();
+    init_png2();
     CardFormatError = class extends Error {
       constructor(message) {
         super(message);
@@ -2609,7 +2932,7 @@ function strArray3(v) {
   return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
 }
 var WorldBookFormatError, KNOWN_FIELDS2;
-var init_worldbook = __esm({
+var init_worldbook2 = __esm({
   "packages/tavern-format/lib/worldbook.js"() {
     "use strict";
     WorldBookFormatError = class extends Error {
@@ -2665,7 +2988,7 @@ var init_worldbook = __esm({
 });
 
 // packages/tavern-format/lib/preset.js
-var init_preset = __esm({
+var init_preset2 = __esm({
   "packages/tavern-format/lib/preset.js"() {
     "use strict";
   }
@@ -2702,7 +3025,7 @@ function serializeChatLog(ir) {
   return lines.join("\n") + "\n";
 }
 var ChatFormatError;
-var init_chat = __esm({
+var init_chat2 = __esm({
   "packages/tavern-format/lib/chat.js"() {
     "use strict";
     ChatFormatError = class extends Error {
@@ -2752,7 +3075,7 @@ function unzipArchive2(bytes, limits) {
   }
 }
 var ZipArchiveError, ZipLimitError, DEFAULT_ZIP_LIMITS2;
-var init_zip = __esm({
+var init_zip2 = __esm({
   "packages/tavern-format/lib/zip.js"() {
     "use strict";
     init_esm();
@@ -2813,12 +3136,12 @@ function encodeCharx(ir, assets) {
   return zipSync(files);
 }
 var CharxFormatError;
-var init_charx = __esm({
+var init_charx2 = __esm({
   "packages/tavern-format/lib/charx.js"() {
     "use strict";
     init_esm();
-    init_card();
-    init_zip();
+    init_card2();
+    init_zip2();
     CharxFormatError = class extends Error {
       constructor(message) {
         super(message);
@@ -2829,7 +3152,7 @@ var init_charx = __esm({
 });
 
 // packages/tavern-format/lib/roundtrip.js
-var init_roundtrip = __esm({
+var init_roundtrip2 = __esm({
   "packages/tavern-format/lib/roundtrip.js"() {
     "use strict";
   }
@@ -2908,7 +3231,7 @@ function bool3(value, fallback) {
   return typeof value === "boolean" ? value : fallback;
 }
 var GroupFormatError;
-var init_group = __esm({
+var init_group2 = __esm({
   "packages/tavern-format/lib/group.js"() {
     "use strict";
     GroupFormatError = class extends Error {
@@ -2978,7 +3301,7 @@ function numOrNull(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 var RegexPlacement, RegexScriptFormatError, KNOWN_FIELDS3, PLACEMENT_VALUES;
-var init_regex_script = __esm({
+var init_regex_script2 = __esm({
   "packages/tavern-format/lib/regex-script.js"() {
     "use strict";
     RegexPlacement = {
@@ -3014,7 +3337,7 @@ var init_regex_script = __esm({
 });
 
 // packages/tavern-format/lib/textcompletion.js
-var init_textcompletion = __esm({
+var init_textcompletion2 = __esm({
   "packages/tavern-format/lib/textcompletion.js"() {
     "use strict";
   }
@@ -3024,18 +3347,18 @@ var init_textcompletion = __esm({
 var init_lib = __esm({
   "packages/tavern-format/lib/index.js"() {
     "use strict";
-    init_types2();
-    init_png();
-    init_card();
-    init_worldbook();
-    init_preset();
-    init_chat();
-    init_charx();
-    init_zip();
-    init_roundtrip();
-    init_group();
-    init_regex_script();
-    init_textcompletion();
+    init_types3();
+    init_png2();
+    init_card2();
+    init_worldbook2();
+    init_preset2();
+    init_chat2();
+    init_charx2();
+    init_zip2();
+    init_roundtrip2();
+    init_group2();
+    init_regex_script2();
+    init_textcompletion2();
   }
 });
 
@@ -5991,7 +6314,7 @@ var init_scripts = __esm({
 });
 
 // packages/tavern-store/src/index.ts
-var init_src2 = __esm({
+var init_src3 = __esm({
   "packages/tavern-store/src/index.ts"() {
     "use strict";
     init_store();
@@ -6008,6 +6331,55 @@ var init_src2 = __esm({
     init_originals();
     init_scripts();
     init_tokenize();
+  }
+});
+
+// packages/plugin/src/tavern-assets.ts
+function formatEntriesToLore(entries) {
+  return entries.map((entry) => ({
+    ...entry,
+    position: entry.position,
+    selectiveLogic: entry.selectiveLogic,
+    role: entry.role,
+    triggers: entry.triggers
+  }));
+}
+async function collectWorldInfoBooks(db, state, characterName, character, chatId) {
+  const worldNames = new Set(state.activeWorlds);
+  const follow = state.worldFollowsCharacter !== false;
+  const linkedWorld = character.card.data.extensions["world"];
+  const linkedName = follow && typeof linkedWorld === "string" && linkedWorld.trim() !== "" ? linkedWorld.trim() : void 0;
+  const disabledAuto = new Set(state.disabledAutoWorlds ?? []);
+  if (linkedName !== void 0 && !disabledAuto.has(linkedName)) worldNames.add(linkedName);
+  const books = [];
+  let linkedImported = false;
+  const chatScope = chatId !== void 0 && chatId !== "" ? chatId : void 0;
+  for (const worldName of worldNames) {
+    const copy = chatScope !== void 0 && typeof db.getChatWorld === "function" ? await db.getChatWorld(characterName, chatScope, worldName) : void 0;
+    const world = copy === void 0 ? await db.getWorld(worldName) : copy;
+    if (world) {
+      books.push({ name: copy === void 0 ? world.name : worldName, entries: formatEntriesToLore(world.entries) });
+      if (worldName === linkedName) linkedImported = true;
+    }
+  }
+  const characterBook = follow ? character.card.data.characterBook : void 0;
+  const linkedSuppressed = linkedName !== void 0 && disabledAuto.has(linkedName);
+  if (characterBook && !linkedImported && !linkedSuppressed) {
+    const embedded = parseCharacterBook(characterBook);
+    books.unshift({
+      name: `${characterName}:embedded`,
+      entries: formatEntriesToLore(embedded.entries),
+      scanDepth: characterBook.scan_depth,
+      tokenBudget: characterBook.token_budget,
+      recursiveScanning: characterBook.recursive_scanning
+    });
+  }
+  return books;
+}
+var init_tavern_assets = __esm({
+  "packages/plugin/src/tavern-assets.ts"() {
+    "use strict";
+    init_src2();
   }
 });
 
@@ -6084,7 +6456,7 @@ var TAVERN_STORE_HANDLE_KEY, MEMORY_STORE_HANDLE_KEY, MEMORY_VECTOR_STORE_HANDLE
 var init_store_handle = __esm({
   "packages/plugin/src/store-handle.ts"() {
     "use strict";
-    init_src2();
+    init_src3();
     TAVERN_STORE_HANDLE_KEY = "dsh-soulmojito:tavern-store";
     MEMORY_STORE_HANDLE_KEY = "dsh-soulmojito:memory-store";
     MEMORY_VECTOR_STORE_HANDLE_KEY = "dsh-soulmojito:memory-vector-store";
@@ -6116,8 +6488,1714 @@ var memoryStores, memoryVectorStores, variableStores;
 var init_shared_stores = __esm({
   "packages/plugin/src/shared-stores.ts"() {
     "use strict";
-    init_src2();
+    init_src3();
     init_store_handle();
+  }
+});
+
+// packages/tavern-template/src/paths.ts
+function isObjectLike(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function deepClone(value) {
+  if (Array.isArray(value)) return value.map((item) => deepClone(item));
+  if (isObjectLike(value)) {
+    const out = {};
+    for (const [key, item] of Object.entries(value)) {
+      if (key === "__proto__") continue;
+      Object.defineProperty(out, key, {
+        value: deepClone(item),
+        writable: true,
+        enumerable: true,
+        configurable: true
+      });
+    }
+    return out;
+  }
+  return value;
+}
+var init_paths = __esm({
+  "packages/tavern-template/src/paths.ts"() {
+    "use strict";
+  }
+});
+
+// packages/tavern-template/src/api.ts
+var DEFAULT_CHAR_DEFINE;
+var init_api = __esm({
+  "packages/tavern-template/src/api.ts"() {
+    "use strict";
+    init_paths();
+    DEFAULT_CHAR_DEFINE = [
+      "<% if (name) { %>",
+      "<<%- name %>>",
+      "<% if (system_prompt) { %>System: <%- system_prompt %><% } %>",
+      "name: <%- name %>",
+      "<% if (personality) { %>personality: <%- personality %><% } %>",
+      "<% if (description) { %>description: <%- description %><% } %>",
+      "<% if (message_example) { %>",
+      "example:",
+      "<%- message_example %>",
+      "<% } %>",
+      "<% if (depth_prompt) { %>System: <%- depth_prompt %><% } %>",
+      "</<%- name %>>",
+      "<% } %>"
+    ].join("\n");
+  }
+});
+
+// packages/tavern-template/src/syntax.ts
+var init_syntax = __esm({
+  "packages/tavern-template/src/syntax.ts"() {
+    "use strict";
+  }
+});
+
+// packages/tavern-template/src/sandbox-bootstrap.ts
+var BOOTSTRAP_SOURCE;
+var init_sandbox_bootstrap = __esm({
+  "packages/tavern-template/src/sandbox-bootstrap.ts"() {
+    "use strict";
+    BOOTSTRAP_SOURCE = `(function (__descriptorJson, __dispatch) {
+  'use strict'
+  var __ObjectCreate = Object.create
+  var __ObjectKeys = Object.keys
+  var __ObjectFreeze = Object.freeze
+  var __ObjectDefineProperty = Object.defineProperty
+  var __ObjectHasOwn = Object.prototype.hasOwnProperty
+  var __ObjectToString = Object.prototype.toString
+  var __ObjectIs = Object.is
+  var __Array = Array
+  var __ArrayIsArray = Array.isArray
+  var __String = String
+  var __Number = Number
+  var __NumberIsNaN = Number.isNaN
+  var __NumberIsInteger = Number.isInteger
+  var __JSONParse = JSON.parse
+  var __JSONStringify = JSON.stringify
+  var __Map = Map
+  var __MapGet = Map.prototype.get
+  var __MapSet = Map.prototype.set
+  var __Promise = Promise
+  var __RegExp = RegExp
+  var __Date = Date
+  var __Error = Error
+  var __BigInt = BigInt
+  var __ReflectApply = Reflect.apply
+  var __StringReplace = String.prototype.replace
+
+  var pending = __ObjectCreate(null)
+  var wrappers = __ObjectCreate(null)
+  var bridgeThis = __ObjectFreeze(__ObjectCreate(null))
+  var nextToken = 0
+
+  function hasOwn(target, key) {
+    return __ReflectApply(__ObjectHasOwn, target, [key])
+  }
+
+  function isRecord(value) {
+    return value !== null && typeof value === 'object' && !__ArrayIsArray(value)
+  }
+
+  function malformed(detail) {
+    return new __Error('malformed sandbox bridge payload: ' + detail)
+  }
+
+  function requireRecord(value, label) {
+    if (!isRecord(value)) throw malformed(label + ' is not an object')
+    return value
+  }
+
+  function requireArray(value, label) {
+    if (!__ArrayIsArray(value)) throw malformed(label + ' is not an array')
+    return value
+  }
+
+  function requireString(value, label) {
+    if (typeof value !== 'string') throw malformed(label + ' is not a string')
+    return value
+  }
+
+  function requireInteger(value, label) {
+    if (typeof value !== 'number' || !__NumberIsInteger(value) || value < 0) {
+      throw malformed(label + ' is not a non-negative integer')
+    }
+    return value
+  }
+
+  function requireIndex(value, limit, label) {
+    var index = requireInteger(value, label)
+    if (limit !== undefined && index >= limit) throw malformed(label + ' is out of range')
+    return index
+  }
+
+  function requireLength(value, label) {
+    var length = requireInteger(value, label)
+    if (length > 4294967295) throw malformed(label + ' is too large')
+    return length
+  }
+
+  function lastIndexValue(value) {
+    return typeof value === 'number' && __NumberIsInteger(value) && value >= 0 ? value : 0
+  }
+
+  function decodeNumber(raw) {
+    if (typeof raw === 'number' && !__NumberIsNaN(raw) && raw !== Infinity && raw !== -Infinity) return raw
+    if (raw === 'NaN') return NaN
+    if (raw === 'Infinity') return Infinity
+    if (raw === '-Infinity') return -Infinity
+    if (raw === '-0') return -0
+    throw malformed('invalid number')
+  }
+
+  function decodeEnc(enc, built) {
+    var value = requireRecord(enc, 'wire value')
+    switch (value.t) {
+      case 'null': return null
+      case 'u': return undefined
+      case 's': return requireString(value.v, 'string value')
+      case 'b':
+        if (typeof value.v !== 'boolean') throw malformed('invalid boolean')
+        return value.v
+      case 'n': return decodeNumber(value.v)
+      case 'big': return __BigInt(requireString(value.v, 'bigint value'))
+      case 'ref': {
+        var index = requireIndex(value.v, built.length, 'wire reference')
+        return built[index]
+      }
+      default: throw malformed('unknown value tag ' + __String(value.t))
+    }
+  }
+
+  function errorFrom(value) {
+    var name = 'Error'
+    var message
+    try {
+      if (value !== null && typeof value === 'object') {
+        if (typeof value.name === 'string' && value.name !== '') name = value.name
+        message = typeof value.message === 'string' ? value.message : __String(value)
+      } else {
+        message = __String(value)
+      }
+    } catch (error) {
+      message = 'the template sandbox bridge returned an unprintable error'
+    }
+    var result = new __Error(message)
+    result.name = name
+    return result
+  }
+
+  function makeWrapper(id) {
+    var key = 'f' + id
+    if (hasOwn(wrappers, key)) return wrappers[key]
+    var wrapper = function () {
+      var args = []
+      for (var i = 0; i < arguments.length; i++) args[i] = arguments[i]
+      return invoke(id, args)
+    }
+    __ObjectDefineProperty(wrappers, key, { value: wrapper, writable: false, enumerable: false, configurable: false })
+    return wrapper
+  }
+
+  function materialize(wire) {
+    var root = requireRecord(wire, 'wire')
+    var nodes = requireArray(root.nodes, 'wire nodes')
+    var built = new __Array(nodes.length)
+    var i
+    for (i = 0; i < nodes.length; i++) {
+      var node = requireRecord(nodes[i], 'wire node')
+      switch (node.t) {
+        case 'o': built[i] = {}; break
+        case 'a': built[i] = new __Array(requireLength(node.n, 'array length')); break
+        case 'f': built[i] = makeWrapper(requireIndex(node.v, undefined, 'function id')); break
+        case 'r': {
+          var regexp = new __RegExp(requireString(node.s, 'regexp source'), requireString(node.f, 'regexp flags'))
+          regexp.lastIndex = requireInteger(node.l, 'regexp lastIndex')
+          built[i] = regexp
+          break
+        }
+        case 'd': {
+          var rawDate = requireString(node.v, 'date value')
+          built[i] = rawDate === 'Invalid' ? new __Date(NaN) : new __Date(rawDate)
+          break
+        }
+        default: throw malformed('unknown node tag ' + __String(node.t))
+      }
+    }
+    for (i = 0; i < nodes.length; i++) {
+      var entry = requireRecord(nodes[i], 'wire node')
+      if (entry.t === 'o') {
+        var objectEntries = requireArray(entry.e, 'object entries')
+        for (var j = 0; j < objectEntries.length; j++) {
+          var pair = requireArray(objectEntries[j], 'object entry')
+          if (pair.length !== 2) throw malformed('object entry is not a pair')
+          var key = requireString(pair[0], 'object key')
+          __ObjectDefineProperty(built[i], key, {
+            value: decodeEnc(pair[1], built),
+            writable: true,
+            enumerable: true,
+            configurable: true,
+          })
+        }
+      } else if (entry.t === 'a') {
+        var arrayEntries = requireArray(entry.e, 'array entries')
+        var arrayLength = requireLength(entry.n, 'array length')
+        for (var k = 0; k < arrayEntries.length; k++) {
+          var item = requireArray(arrayEntries[k], 'array entry')
+          if (item.length !== 2) throw malformed('array entry is not a pair')
+          built[i][requireIndex(item[0], arrayLength, 'array index')] = decodeEnc(item[1], built)
+        }
+      }
+    }
+    return decodeEnc(root.root, built)
+  }
+
+  function encodeArgs(args) {
+    var nodes = []
+    var seen = new __Map()
+    var fns = []
+
+    function enc(value) {
+      if (value === null) return { t: 'null' }
+      var type = typeof value
+      if (type === 'undefined') return { t: 'u' }
+      if (type === 'string') return { t: 's', v: value }
+      if (type === 'boolean') return { t: 'b', v: value }
+      if (type === 'number') {
+        var raw = __NumberIsNaN(value) ? 'NaN' : value === Infinity ? 'Infinity' : value === -Infinity ? '-Infinity' : __ObjectIs(value, -0) ? '-0' : value
+        return { t: 'n', v: raw }
+      }
+      if (type === 'bigint') return { t: 'big', v: value.toString() }
+      if (type === 'symbol') throw new __Error('cannot pass a symbol to a host function')
+      if (type === 'function') {
+        var fnIndex = fns.length
+        fns[fnIndex] = value
+        nodes[nodes.length] = { t: 'f', v: fnIndex }
+        return { t: 'ref', v: nodes.length - 1 }
+      }
+
+      var seenIndex = __ReflectApply(__MapGet, seen, [value])
+      if (seenIndex !== undefined) return { t: 'ref', v: seenIndex }
+
+      var tag = __ReflectApply(__ObjectToString, value, [])
+      if (tag === '[object Promise]') throw new __Error('cannot pass a Promise to a host function')
+      if (tag === '[object Map]' || tag === '[object Set]' || tag === '[object WeakMap]' || tag === '[object WeakSet]') {
+        throw new __Error('cannot pass a ' + tag.slice(8, -1) + ' to a host function')
+      }
+      if (/^\\[object (?:Uint|Int|Float|BigUint|BigInt)\\w*Array\\]$/.test(tag) || tag === '[object ArrayBuffer]' || tag === '[object SharedArrayBuffer]' || tag === '[object DataView]') {
+        throw new __Error('cannot pass a ' + tag.slice(8, -1) + ' to a host function')
+      }
+
+      if (__ArrayIsArray(value)) {
+        var arrayIndex = nodes.length
+        nodes[arrayIndex] = null
+        __ReflectApply(__MapSet, seen, [value, arrayIndex])
+        var arrayEntries = []
+        var arrayKeys = __ObjectKeys(value)
+        for (var ai = 0; ai < arrayKeys.length; ai++) {
+          var arrayKey = arrayKeys[ai]
+          var numeric = __Number(arrayKey)
+          if (__String(numeric) === arrayKey && numeric >= 0 && numeric < value.length) {
+            arrayEntries[arrayEntries.length] = [numeric, enc(value[numeric])]
+          }
+        }
+        nodes[arrayIndex] = { t: 'a', n: value.length, e: arrayEntries }
+        return { t: 'ref', v: arrayIndex }
+      }
+
+      if (tag === '[object RegExp]') {
+        var regexpIndex = nodes.length
+        nodes[regexpIndex] = null
+        __ReflectApply(__MapSet, seen, [value, regexpIndex])
+        nodes[regexpIndex] = {
+          t: 'r',
+          s: __String(value.source),
+          f: __String(value.flags),
+          l: lastIndexValue(value.lastIndex),
+        }
+        return { t: 'ref', v: regexpIndex }
+      }
+
+      if (tag === '[object Date]') {
+        var dateIndex = nodes.length
+        nodes[dateIndex] = null
+        __ReflectApply(__MapSet, seen, [value, dateIndex])
+        var time = __ReflectApply(__Date.prototype.getTime, value, [])
+        nodes[dateIndex] = { t: 'd', v: __NumberIsNaN(time) ? 'Invalid' : new __Date(time).toISOString() }
+        return { t: 'ref', v: dateIndex }
+      }
+
+      var objectIndex = nodes.length
+      nodes[objectIndex] = null
+      __ReflectApply(__MapSet, seen, [value, objectIndex])
+      var objectKeys = __ObjectKeys(value)
+      var objectEntries = []
+      for (var oi = 0; oi < objectKeys.length; oi++) {
+        objectEntries[objectEntries.length] = [objectKeys[oi], enc(value[objectKeys[oi]])]
+      }
+      nodes[objectIndex] = { t: 'o', e: objectEntries }
+      return { t: 'ref', v: objectIndex }
+    }
+
+    return { wire: { root: enc(args), nodes: nodes }, fns: fns }
+  }
+
+  function reconcile(existing, enc, nodes, memo) {
+    var value = requireRecord(enc, 'mutation value')
+    if (value.t !== 'ref') return decodeEnc(value, [])
+    var nodeIndex = requireIndex(value.v, nodes.length, 'wire reference')
+    var node = requireRecord(nodes[nodeIndex], 'wire node')
+
+    if (node.t === 'keep') return existing
+    if (node.t === 'f') return typeof existing === 'function' ? existing : makeWrapper(requireIndex(node.v, undefined, 'function id'))
+
+    if (node.t === 'r') {
+      if (__ReflectApply(__ObjectToString, existing, []) === '[object RegExp]'
+        && existing.source === node.s && existing.flags === node.f) {
+        existing.lastIndex = requireInteger(node.l, 'regexp lastIndex')
+        return existing
+      }
+      var regexp = new __RegExp(requireString(node.s, 'regexp source'), requireString(node.f, 'regexp flags'))
+      regexp.lastIndex = requireInteger(node.l, 'regexp lastIndex')
+      return regexp
+    }
+
+    if (node.t === 'd') {
+      var rawDate = requireString(node.v, 'date value')
+      if (__ReflectApply(__ObjectToString, existing, []) === '[object Date]') {
+        __ReflectApply(__Date.prototype.setTime, existing, [rawDate === 'Invalid' ? NaN : new __Date(rawDate).getTime()])
+        return existing
+      }
+      return rawDate === 'Invalid' ? new __Date(NaN) : new __Date(rawDate)
+    }
+
+    var memoized = __ReflectApply(__MapGet, memo, [nodeIndex])
+    if (memoized !== undefined) return memoized
+
+    if (node.t === 'o') {
+      var existingTag = existing !== null && typeof existing === 'object' ? __ReflectApply(__ObjectToString, existing, []) : ''
+      var target = existingTag === '[object Object]' ? existing : {}
+      __ReflectApply(__MapSet, memo, [nodeIndex, target])
+      var entries = requireArray(node.e, 'object entries')
+      var previous = __ObjectKeys(target)
+      var keep = __ObjectCreate(null)
+      for (var pi = 0; pi < previous.length; pi++) keep[previous[pi]] = true
+      for (var ei = 0; ei < entries.length; ei++) {
+        var pair = requireArray(entries[ei], 'object entry')
+        if (pair.length !== 2) throw malformed('object entry is not a pair')
+        var key = requireString(pair[0], 'object key')
+        delete keep[key]
+        __ObjectDefineProperty(target, key, {
+          value: reconcile(target[key], pair[1], nodes, memo),
+          writable: true,
+          enumerable: true,
+          configurable: true,
+        })
+      }
+      var stale = __ObjectKeys(keep)
+      for (var si = 0; si < stale.length; si++) delete target[stale[si]]
+      return target
+    }
+
+    if (node.t === 'a') {
+      var array = __ArrayIsArray(existing) ? existing : []
+      __ReflectApply(__MapSet, memo, [nodeIndex, array])
+      var length = requireLength(node.n, 'array length')
+      var oldKeys = __ObjectKeys(array)
+      array.length = length
+      var present = __ObjectCreate(null)
+      var arrayEntries = requireArray(node.e, 'array entries')
+      for (var ai = 0; ai < arrayEntries.length; ai++) {
+        var item = requireArray(arrayEntries[ai], 'array entry')
+        if (item.length !== 2) throw malformed('array entry is not a pair')
+        var index = requireIndex(item[0], length, 'array index')
+        present[index] = true
+        array[index] = reconcile(array[index], item[1], nodes, memo)
+      }
+      for (var oi = 0; oi < oldKeys.length; oi++) {
+        if (!hasOwn(present, oldKeys[oi])) delete array[oldKeys[oi]]
+      }
+      return array
+    }
+
+    throw malformed('unknown node tag ' + __String(node.t))
+  }
+
+  function reconcileRoot(args, wire) {
+    if (wire === undefined || wire === null) return
+    var root = requireRecord(wire, 'mutation wire')
+    var nodes = requireArray(root.nodes, 'mutation nodes')
+    reconcile(args, root.root, nodes, new __Map())
+  }
+
+  function settle(token, ok, payloadJson) {
+    var key = 't' + token
+    var entry = hasOwn(pending, key) ? pending[key] : undefined
+    if (entry === undefined) return
+    delete pending[key]
+    var payload
+    try {
+      payload = __JSONParse(payloadJson)
+    } catch (error) {
+      entry.reject(errorFrom(error))
+      return
+    }
+    if (!isRecord(payload)) {
+      entry.reject(new __Error('template sandbox bridge returned a malformed payload'))
+      return
+    }
+    try {
+      reconcileRoot(entry.args, payload.p)
+    } catch (error) {
+      entry.reject(errorFrom(error))
+      return
+    }
+    if (ok === 1 && payload.ok === 1) {
+      var value
+      try {
+        value = materialize(payload.v)
+      } catch (error) {
+        entry.reject(errorFrom(error))
+        return
+      }
+      entry.resolve(value)
+      return
+    }
+    entry.reject(errorFrom(payload.e))
+  }
+
+  function invoke(id, args) {
+    var encoded
+    try {
+      encoded = encodeArgs(args)
+    } catch (error) {
+      throw errorFrom(error)
+    }
+
+    var token = ++nextToken
+    var key = 't' + token
+    var promise = new __Promise(function (resolve, reject) {
+      pending[key] = { resolve: resolve, reject: reject, args: args }
+    })
+    var raw
+    try {
+      raw = __dispatch(id, __JSONStringify(encoded.wire), encoded.fns, args, token, settle, bridgeThis)
+    } catch (error) {
+      delete pending[key]
+      throw errorFrom(error)
+    }
+
+    var reply
+    try {
+      reply = __JSONParse(raw)
+    } catch (error) {
+      delete pending[key]
+      throw new __Error('template sandbox bridge returned a malformed reply')
+    }
+    if (!isRecord(reply) || (reply.a !== 0 && reply.a !== 1)) {
+      delete pending[key]
+      throw new __Error('template sandbox bridge returned a malformed reply')
+    }
+    if (reply.a === 1) return promise
+
+    delete pending[key]
+    try {
+      reconcileRoot(args, reply.p)
+    } catch (error) {
+      throw errorFrom(error)
+    }
+    if (reply.ok === 1) {
+      try {
+        return materialize(reply.v)
+      } catch (error) {
+        throw errorFrom(error)
+      }
+    }
+    throw errorFrom(reply.e)
+  }
+
+  function escapeHtml(text) {
+    var value = __ReflectApply(__StringReplace, text, [/&/g, '&amp;'])
+    value = __ReflectApply(__StringReplace, value, [/</g, '&lt;'])
+    value = __ReflectApply(__StringReplace, value, [/>/g, '&gt;'])
+    value = __ReflectApply(__StringReplace, value, [/"/g, '&quot;'])
+    value = __ReflectApply(__StringReplace, value, [/'/g, '&#39;'])
+    return value
+  }
+
+  var descriptor = requireRecord(__JSONParse(__descriptorJson), 'descriptor')
+  var source = materialize(descriptor)
+  var env = __ObjectCreate(null)
+  var keys = __ObjectKeys(source)
+  for (var i = 0; i < keys.length; i++) {
+    __ObjectDefineProperty(env, keys[i], {
+      value: source[keys[i]],
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    })
+  }
+
+  var out = ''
+  __ObjectDefineProperty(env, '__out', {
+    get: function () { return out },
+    set: function (value) { out = value === null || value === undefined ? '' : __String(value) },
+    enumerable: false,
+    configurable: true,
+  })
+  __ObjectDefineProperty(env, '__append', {
+    value: function (value) { out += value === null || value === undefined ? '' : __String(value) },
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  })
+  __ObjectDefineProperty(env, '__escape', {
+    value: escapeHtml,
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  })
+  __ObjectDefineProperty(env, 'print', {
+    value: function () {
+      for (var i = 0; i < arguments.length; i++) {
+        if (i > 0) out += ' '
+        var value = arguments[i]
+        out += value === null || value === undefined ? '' : __String(value)
+      }
+    },
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  })
+  __ObjectDefineProperty(env, 'await', {
+    value: function (value) {
+      if (value !== null && typeof value === 'object' && typeof value.then === 'function') {
+        throw new __Error('async template expression used inside a synchronous callback is not supported')
+      }
+      return value
+    },
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  })
+
+  return env
+})`;
+  }
+});
+
+// packages/tavern-template/src/runtime.ts
+import vm from "node:vm";
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function encodeNumber(value) {
+  if (Number.isNaN(value)) return "NaN";
+  if (value === Infinity) return "Infinity";
+  if (value === -Infinity) return "-Infinity";
+  if (Object.is(value, -0)) return "-0";
+  return value;
+}
+function normalizeLastIndex(value) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0;
+}
+function isUnsupportedObjectTag(tag) {
+  if (UNSUPPORTED_OBJECT_TAGS.has(tag)) return true;
+  return /^\[object (?:Uint|Int|Float|BigUint|BigInt)\w*Array\]$/.test(tag);
+}
+function hostFunctionId(state, fn) {
+  const contextOrigin = CONTEXT_FUNCTIONS.has(fn);
+  const existing = state.ids.get(fn);
+  if (existing !== void 0) {
+    const entry = state.functions[existing];
+    if (entry !== void 0 && contextOrigin && entry.origin === "host") entry.origin = "context";
+    return existing;
+  }
+  const id = state.functions.length;
+  state.functions.push({ fn, origin: contextOrigin ? "context" : "host" });
+  state.ids.set(fn, id);
+  return id;
+}
+function markContextFunction(value) {
+  if (typeof value === "function") CONTEXT_FUNCTIONS.add(value);
+}
+function markContextFunctionsDeep(value, seen) {
+  if (typeof value === "function") {
+    CONTEXT_FUNCTIONS.add(value);
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+  if (seen.has(value)) return;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const item of value) markContextFunctionsDeep(item, seen);
+    return;
+  }
+  const tag = Object.prototype.toString.call(value);
+  if (tag === "[object Date]" || tag === "[object RegExp]") return;
+  const record = value;
+  for (const key of Object.keys(record)) markContextFunctionsDeep(record[key], seen);
+}
+function encodeWire(value, state, mode) {
+  const nodes = [];
+  const seen = /* @__PURE__ */ new Map();
+  const encode = (input) => {
+    if (input === null) return { t: "null" };
+    switch (typeof input) {
+      case "undefined":
+        return { t: "u" };
+      case "string":
+        return { t: "s", v: input };
+      case "boolean":
+        return { t: "b", v: input };
+      case "number":
+        return { t: "n", v: encodeNumber(input) };
+      case "bigint":
+        return { t: "big", v: input.toString() };
+      case "symbol":
+        throw new TypeError("cannot cross a symbol through the template sandbox boundary");
+      case "function": {
+        if (mode === "keep") {
+          nodes.push({ t: "keep" });
+        } else {
+          if (state === void 0) throw new Error("host function registry is missing");
+          nodes.push({ t: "f", v: hostFunctionId(state, input) });
+        }
+        return { t: "ref", v: nodes.length - 1 };
+      }
+      case "object":
+        break;
+      default:
+        throw new TypeError(`cannot cross a ${typeof input} through the template sandbox boundary`);
+    }
+    const objectValue = input;
+    const existing = seen.get(objectValue);
+    if (existing !== void 0) return { t: "ref", v: existing };
+    if (Array.isArray(input)) {
+      const index2 = nodes.length;
+      nodes.push({ t: "a", n: input.length, e: [] });
+      seen.set(objectValue, index2);
+      const entries2 = [];
+      for (const key of Object.keys(input)) {
+        const numeric = Number(key);
+        if (String(numeric) === key && numeric >= 0 && numeric < input.length) {
+          entries2.push([numeric, encode(input[numeric])]);
+        }
+      }
+      nodes[index2] = { t: "a", n: input.length, e: entries2 };
+      return { t: "ref", v: index2 };
+    }
+    const tag = Object.prototype.toString.call(input);
+    if (tag === "[object RegExp]") {
+      const index2 = nodes.length;
+      nodes.push({ t: "r", s: "", f: "", l: 0 });
+      seen.set(objectValue, index2);
+      const regexp = input;
+      nodes[index2] = { t: "r", s: String(regexp.source), f: String(regexp.flags), l: normalizeLastIndex(regexp.lastIndex) };
+      return { t: "ref", v: index2 };
+    }
+    if (tag === "[object Date]") {
+      const index2 = nodes.length;
+      nodes.push({ t: "d", v: "Invalid" });
+      seen.set(objectValue, index2);
+      const time = Date.prototype.getTime.call(input);
+      nodes[index2] = { t: "d", v: Number.isNaN(time) ? "Invalid" : new Date(time).toISOString() };
+      return { t: "ref", v: index2 };
+    }
+    if (isUnsupportedObjectTag(tag)) {
+      throw new TypeError(`cannot cross a ${tag.slice(8, -1)} through the template sandbox boundary`);
+    }
+    const index = nodes.length;
+    nodes.push({ t: "o", e: [] });
+    seen.set(objectValue, index);
+    const record = input;
+    const entries = [];
+    for (const key of Object.keys(record)) entries.push([key, encode(record[key])]);
+    nodes[index] = { t: "o", e: entries };
+    return { t: "ref", v: index };
+  };
+  return { root: encode(value), nodes };
+}
+function wireInteger(value, label) {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new TypeError(`malformed sandbox bridge payload: ${label} is not a non-negative integer`);
+  }
+  return value;
+}
+function wireLength(value, label) {
+  const length = wireInteger(value, label);
+  if (length > 4294967295) throw new TypeError(`malformed sandbox bridge payload: ${label} is too large`);
+  return length;
+}
+function wireString(value, label) {
+  if (typeof value !== "string") throw new TypeError(`malformed sandbox bridge payload: ${label} is not a string`);
+  return value;
+}
+function wireNumber(value) {
+  if (typeof value === "number" && !Number.isNaN(value) && value !== Infinity && value !== -Infinity) return value;
+  if (value === "NaN") return NaN;
+  if (value === "Infinity") return Infinity;
+  if (value === "-Infinity") return -Infinity;
+  if (value === "-0") return -0;
+  throw new TypeError("malformed sandbox bridge payload: invalid number");
+}
+function wrapNestedContextFunction(fn) {
+  return (...args) => {
+    for (const arg of args) {
+      if (arg !== null && (typeof arg === "object" || typeof arg === "function")) {
+        throw new TypeError("host callback arguments must be primitive when invoking a template function from host code");
+      }
+    }
+    const result = Reflect.apply(fn, void 0, args);
+    if (isThenableValue(result)) {
+      throw new TypeError("template callbacks invoked from host code must be synchronous");
+    }
+    return result;
+  };
+}
+function decodeWire(wire, resolveFunction, dropPrototypeKey) {
+  if (!isRecord(wire) || !Array.isArray(wire.nodes)) {
+    throw new TypeError("malformed sandbox bridge payload: nodes missing");
+  }
+  const nodes = wire.nodes;
+  const built = new Array(nodes.length);
+  const rootArrayIndex = isRecord(wire.root) && wire.root.t === "ref" ? wireInteger(wire.root.v, "root reference") : -1;
+  const nestedCallbacks = /* @__PURE__ */ new Map();
+  const callbackFor = (fn) => {
+    const cached = nestedCallbacks.get(fn);
+    if (cached !== void 0) return cached;
+    const wrapped = wrapNestedContextFunction(fn);
+    nestedCallbacks.set(fn, wrapped);
+    return wrapped;
+  };
+  const decode = (enc, wrapFunction) => {
+    if (!isRecord(enc)) throw new TypeError("malformed sandbox bridge payload: value missing");
+    switch (enc.t) {
+      case "null":
+        return null;
+      case "u":
+        return void 0;
+      case "s":
+        return wireString(enc.v, "string value");
+      case "b":
+        if (typeof enc.v !== "boolean") throw new TypeError("malformed sandbox bridge payload: invalid boolean");
+        return enc.v;
+      case "n":
+        return wireNumber(enc.v);
+      case "big":
+        return BigInt(wireString(enc.v, "bigint value"));
+      case "ref": {
+        const index = wireInteger(enc.v, "reference");
+        if (index >= built.length) throw new TypeError("malformed sandbox bridge payload: reference out of range");
+        const value = built[index];
+        if (wrapFunction && typeof value === "function") {
+          const node = nodes[index];
+          if (isRecord(node) && node.t === "f") return callbackFor(value);
+        }
+        return value;
+      }
+      default:
+        throw new TypeError(`malformed sandbox bridge payload: unknown value tag ${String(enc.t)}`);
+    }
+  };
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    if (!isRecord(node)) throw new TypeError("malformed sandbox bridge payload: node missing");
+    switch (node.t) {
+      case "o":
+        built[i] = {};
+        break;
+      case "a":
+        built[i] = new Array(wireLength(node.n, "array length"));
+        break;
+      case "f":
+        built[i] = resolveFunction(wireInteger(node.v, "function id"));
+        break;
+      case "r": {
+        const regexp = new RegExp(wireString(node.s, "regexp source"), wireString(node.f, "regexp flags"));
+        regexp.lastIndex = wireInteger(node.l, "regexp lastIndex");
+        built[i] = regexp;
+        break;
+      }
+      case "d": {
+        const raw = wireString(node.v, "date value");
+        built[i] = raw === "Invalid" ? /* @__PURE__ */ new Date(NaN) : new Date(raw);
+        break;
+      }
+      default:
+        throw new TypeError(`malformed sandbox bridge payload: unknown node tag ${String(node.t)}`);
+    }
+  }
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    if (!isRecord(node)) continue;
+    if (node.t === "o") {
+      if (!Array.isArray(node.e)) throw new TypeError("malformed sandbox bridge payload: object entries missing");
+      for (const rawEntry of node.e) {
+        if (!Array.isArray(rawEntry) || rawEntry.length !== 2) throw new TypeError("malformed sandbox bridge payload: object entry missing");
+        const key = wireString(rawEntry[0], "object key");
+        if (dropPrototypeKey && key === "__proto__") continue;
+        const value = decode(rawEntry[1], true);
+        if ((key === "valueOf" || key === "toString" || key === "toJSON") && typeof value === "function") continue;
+        Object.defineProperty(built[i], key, {
+          value,
+          writable: true,
+          enumerable: true,
+          configurable: true
+        });
+      }
+    } else if (node.t === "a") {
+      if (!Array.isArray(node.e)) throw new TypeError("malformed sandbox bridge payload: array entries missing");
+      const length = wireLength(node.n, "array length");
+      for (const rawEntry of node.e) {
+        if (!Array.isArray(rawEntry) || rawEntry.length !== 2) throw new TypeError("malformed sandbox bridge payload: array entry missing");
+        const index = wireInteger(rawEntry[0], "array index");
+        if (index >= length) throw new TypeError("malformed sandbox bridge payload: array index out of range");
+        built[i][index] = decode(rawEntry[1], i !== rootArrayIndex);
+      }
+    }
+  }
+  return decode(wire.root, false);
+}
+function readErrorInfo(error) {
+  try {
+    if (error !== null && typeof error === "object") {
+      const record = error;
+      const name2 = typeof record.name === "string" && record.name !== "" ? record.name : "Error";
+      const message = typeof record.message === "string" ? record.message : String(error);
+      return { name: name2, message };
+    }
+    return { name: "Error", message: String(error) };
+  } catch {
+    return { name: "Error", message: "host function threw an unprintable value" };
+  }
+}
+function decodeArgumentWire(argsJson, contextFunctions) {
+  if (typeof argsJson !== "string" || !Array.isArray(contextFunctions)) {
+    throw new TypeError("malformed sandbox bridge call");
+  }
+  for (const fn of contextFunctions) markContextFunction(fn);
+  const wire = JSON.parse(argsJson);
+  const value = decodeWire(wire, (id) => {
+    if (id >= contextFunctions.length) throw new TypeError(`template sandbox function id ${id} is out of range`);
+    const fn = contextFunctions[id];
+    if (typeof fn !== "function") throw new TypeError(`template sandbox function id ${id} is not callable`);
+    return fn;
+  }, true);
+  if (!Array.isArray(value)) throw new TypeError("malformed sandbox bridge call: arguments are not an array");
+  return value;
+}
+function encodePostState(args) {
+  if (!args.some((arg) => arg !== null && typeof arg === "object")) return void 0;
+  try {
+    return encodeWire(args, void 0, "keep");
+  } catch {
+    return void 0;
+  }
+}
+function isThenableValue(value) {
+  return value !== null && (typeof value === "object" || typeof value === "function") && typeof value.then === "function";
+}
+function createHostDispatch(state) {
+  return (id, argsJson, contextFunctions, contextArgs, token, settle, contextThis) => {
+    try {
+      if (contextThis === null || typeof contextThis !== "object") {
+        throw new Error("malformed sandbox bridge call: missing context this binding");
+      }
+      const entry = state.functions[id];
+      if (entry === void 0) throw new Error(`unknown host function id ${id}`);
+      if (Array.isArray(contextFunctions)) for (const fn of contextFunctions) markContextFunction(fn);
+      if (Array.isArray(contextArgs)) for (const value of contextArgs) markContextFunction(value);
+      if (entry.origin === "context") {
+        if (!Array.isArray(contextArgs)) throw new TypeError("malformed sandbox bridge call: context arguments are not an array");
+        let result2;
+        try {
+          result2 = Reflect.apply(entry.fn, contextThis, contextArgs);
+        } catch (error) {
+          return JSON.stringify({ a: 0, ok: 0, e: readErrorInfo(error) });
+        }
+        markContextFunctionsDeep(result2, /* @__PURE__ */ new Set());
+        if (isThenableValue(result2)) {
+          return JSON.stringify({
+            a: 0,
+            ok: 0,
+            e: {
+              name: "TypeError",
+              message: "context function returned a thenable; only host-native Promises can cross the template sandbox boundary"
+            }
+          });
+        }
+        return JSON.stringify({ a: 0, ok: 1, v: encodeWire(result2, state, "wrap") });
+      }
+      const args = decodeArgumentWire(argsJson, contextFunctions);
+      let result;
+      try {
+        result = Reflect.apply(entry.fn, contextThis, args);
+      } catch (error) {
+        return JSON.stringify({ a: 0, ok: 0, e: readErrorInfo(error), p: encodePostState(args) });
+      }
+      if (isThenableValue(result)) {
+        if (!(result instanceof Promise)) {
+          return JSON.stringify({
+            a: 0,
+            ok: 0,
+            e: {
+              name: "TypeError",
+              message: "host function returned a non-native thenable; only host-native Promises can cross the template sandbox boundary"
+            }
+          });
+        }
+        void Promise.resolve(result).then(
+          (value) => {
+            let payload;
+            try {
+              payload = { ok: 1, v: encodeWire(value, state, "wrap"), p: encodePostState(args) };
+            } catch (error) {
+              payload = { ok: 0, e: readErrorInfo(error) };
+            }
+            try {
+              settle(token, 1, JSON.stringify(payload));
+            } catch {
+            }
+          },
+          (error) => {
+            try {
+              settle(token, 0, JSON.stringify({ ok: 0, e: readErrorInfo(error), p: encodePostState(args) }));
+            } catch {
+            }
+          }
+        );
+        return JSON.stringify({ a: 1 });
+      }
+      return JSON.stringify({ a: 0, ok: 1, v: encodeWire(result, state, "wrap"), p: encodePostState(args) });
+    } catch (error) {
+      return JSON.stringify({ a: 0, ok: 0, e: readErrorInfo(error) });
+    }
+  };
+}
+function createHostEnvelope(env) {
+  const state = { functions: [], ids: /* @__PURE__ */ new Map() };
+  const wire = encodeWire(env, state, "wrap");
+  return { descriptorJson: JSON.stringify(wire), state };
+}
+function createSandboxRealm(env) {
+  const context = vm.createContext(/* @__PURE__ */ Object.create(null));
+  const bootstrap = BOOTSTRAP_SCRIPT.runInContext(context);
+  const envelope = createHostEnvelope(env);
+  const dispatch = createHostDispatch(envelope.state);
+  const sandboxEnv = bootstrap(envelope.descriptorJson, dispatch);
+  if (sandboxEnv === null || typeof sandboxEnv !== "object") {
+    throw new Error("sandbox bootstrap did not return a context environment");
+  }
+  return { context, env: sandboxEnv };
+}
+function describeThrown(err2) {
+  try {
+    if (err2 !== null && typeof err2 === "object") {
+      const record = err2;
+      const name2 = typeof record.name === "string" && record.name !== "" ? record.name : void 0;
+      const message = typeof record.message === "string" ? record.message : void 0;
+      if (name2 !== void 0 && message !== void 0) return `${name2}: ${message}`;
+      if (message !== void 0) return message;
+    }
+    return String(err2);
+  } catch {
+    return "unprintable error value";
+  }
+}
+async function evalExpressionSandboxed(expression, env) {
+  if (typeof expression !== "string") throw new TypeError("template expression must be a string");
+  const wrapper = `(async function (__env) { with (__env) { return await (${expression}); } })`;
+  const script = new vm.Script(wrapper, { filename: "tavern-template-expr.ejs" });
+  const realm = createSandboxRealm(env);
+  const factory = script.runInContext(realm.context);
+  const result = await factory(realm.env);
+  if (typeof result === "function") {
+    throw new TypeError("template expression returned a function; functions cannot cross the template sandbox boundary");
+  }
+  if (typeof result === "symbol") {
+    throw new TypeError("template expression returned a symbol; symbols cannot cross the template sandbox boundary");
+  }
+  try {
+    return structuredClone(result);
+  } catch (error) {
+    throw new TypeError(`template expression result cannot be cloned across the template sandbox boundary: ${describeThrown(error)}`);
+  }
+}
+var CONTEXT_FUNCTIONS, UNSUPPORTED_OBJECT_TAGS, BOOTSTRAP_SCRIPT;
+var init_runtime = __esm({
+  "packages/tavern-template/src/runtime.ts"() {
+    "use strict";
+    init_syntax();
+    init_sandbox_bootstrap();
+    CONTEXT_FUNCTIONS = /* @__PURE__ */ new WeakSet();
+    UNSUPPORTED_OBJECT_TAGS = /* @__PURE__ */ new Set([
+      "[object Promise]",
+      "[object Map]",
+      "[object Set]",
+      "[object WeakMap]",
+      "[object WeakSet]",
+      "[object ArrayBuffer]",
+      "[object SharedArrayBuffer]",
+      "[object DataView]"
+    ]);
+    BOOTSTRAP_SCRIPT = new vm.Script(BOOTSTRAP_SOURCE, { filename: "tavern-template-bootstrap.js" });
+  }
+});
+
+// packages/tavern-template/src/yaml.ts
+var init_yaml = __esm({
+  "packages/tavern-template/src/yaml.ts"() {
+    "use strict";
+  }
+});
+
+// packages/tavern-template/src/inject.ts
+var init_inject = __esm({
+  "packages/tavern-template/src/inject.ts"() {
+    "use strict";
+    init_paths();
+    init_yaml();
+    init_runtime();
+  }
+});
+
+// packages/tavern-template/src/variables.ts
+var init_variables = __esm({
+  "packages/tavern-template/src/variables.ts"() {
+    "use strict";
+    init_paths();
+  }
+});
+
+// packages/tavern-template/src/index.ts
+var init_src4 = __esm({
+  "packages/tavern-template/src/index.ts"() {
+    "use strict";
+    init_api();
+    init_runtime();
+    init_inject();
+    init_variables();
+    init_paths();
+    init_variables();
+    init_api();
+    init_inject();
+    init_runtime();
+    init_syntax();
+    init_yaml();
+  }
+});
+
+// packages/plugin/src/mvu-guard.ts
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function parseRange(raw) {
+  if (!Array.isArray(raw) || raw.length < 2) return void 0;
+  const min = raw[0];
+  const max2 = raw[1];
+  if (typeof min !== "number" || !Number.isFinite(min) || typeof max2 !== "number" || !Number.isFinite(max2)) return void 0;
+  return { min: Math.min(min, max2), max: Math.max(min, max2) };
+}
+function resolveTemplateNode(raw) {
+  if (typeof raw === "number" && Number.isFinite(raw)) return { typeLock: "number" };
+  if (typeof raw === "string") return { typeLock: "string" };
+  if (typeof raw === "boolean") return { typeLock: "boolean" };
+  if (Array.isArray(raw)) {
+    return { typeLock: "array", ...raw.length > 0 ? { item: resolveTemplateNode(raw[0]) } : {} };
+  }
+  if (!isPlainObject(raw)) return void 0;
+  const range = parseRange(raw.$range);
+  const step = typeof raw.$step === "number" && Number.isFinite(raw.$step) && raw.$step > 0 ? raw.$step : void 0;
+  const enumValues = Array.isArray(raw.$enum) && raw.$enum.length > 0 ? raw.$enum : void 0;
+  const ro = raw.$ro === true ? true : void 0;
+  const typeLockDirect = typeof raw.$type === "string" && TYPE_LOCKS.includes(raw.$type) ? raw.$type : void 0;
+  const directives = {
+    ...range !== void 0 ? { min: range.min, max: range.max } : {},
+    ...step !== void 0 ? { step } : {},
+    ...enumValues !== void 0 ? { enumValues } : {},
+    ...ro !== void 0 ? { ro } : {}
+  };
+  const childKeys = Object.keys(raw).filter((key) => !DIRECTIVE_KEYS.includes(key));
+  if (childKeys.length === 0) {
+    const typeLock = typeLockDirect ?? (range !== void 0 || step !== void 0 ? "number" : enumValues !== void 0 ? "string" : void 0);
+    if (typeLock === void 0 && Object.keys(directives).length === 0) {
+      return { typeLock: "object", objectMode: "open" };
+    }
+    if (typeLock === "object") return { typeLock, objectMode: "open", ...directives };
+    if (typeLock === "array") return { typeLock, ...directives };
+    return { ...typeLock !== void 0 ? { typeLock } : {}, ...directives };
+  }
+  const wildcardRaw = childKeys.includes("*") ? raw["*"] : void 0;
+  const namedKeys = childKeys.filter((key) => key !== "*");
+  const children = /* @__PURE__ */ new Map();
+  for (const key of namedKeys) {
+    const child = resolveTemplateNode(raw[key]);
+    if (child !== void 0) children.set(key, child);
+  }
+  const objectMode = wildcardRaw !== void 0 ? "wildcard" : "locked";
+  const wildcard = wildcardRaw !== void 0 ? resolveTemplateNode(wildcardRaw) : void 0;
+  return {
+    typeLock: "object",
+    objectMode,
+    ...children.size > 0 ? { children } : {},
+    ...wildcard !== void 0 ? { wildcard } : {},
+    ...directives
+  };
+}
+function resolveMvuSchema(raw) {
+  if (!isPlainObject(raw)) return void 0;
+  const cached = schemaCache.get(raw);
+  if (cached !== void 0 || schemaCache.has(raw)) return cached;
+  const resolved = resolveTemplateNode(raw);
+  const root = resolved !== void 0 && resolved.objectMode === "locked" ? { ...resolved, objectMode: "open" } : resolved;
+  schemaCache.set(raw, root);
+  return root;
+}
+function stripMvuControl(tree) {
+  if (!("$schema" in tree || "$rules" in tree)) return tree;
+  const out = {};
+  for (const [key, value] of Object.entries(tree)) {
+    if (key === "$schema" && isPlainObject(value)) continue;
+    if (key === "$rules" && Array.isArray(value)) continue;
+    out[key] = value;
+  }
+  return out;
+}
+function cardSchema(card) {
+  const holder = card?.data?.extensions?.["agentTavern"];
+  if (!isPlainObject(holder)) return void 0;
+  const initial = holder.initialVariables;
+  return isPlainObject(initial) ? initial.$schema : void 0;
+}
+function treeSchema(tree) {
+  return isPlainObject(tree) ? tree.$schema : void 0;
+}
+function readMvuSchema(chat, card, variablesOverride) {
+  const candidates = [
+    treeSchema(variablesOverride ?? chat?.header?.chat_metadata?.variables),
+    cardSchema(card),
+    treeSchema(chat?.header?.chat_metadata?.[INITIAL_VARIABLES_KEY])
+  ];
+  for (const candidate of candidates) {
+    if (isPlainObject(candidate) && Object.keys(candidate).length > 0) return candidate;
+  }
+  return void 0;
+}
+function typeName(value) {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+function mvuValuesEqual(left, right) {
+  if (left === right) return true;
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return left.length === right.length && left.every((item, index) => mvuValuesEqual(item, right[index]));
+  }
+  if (isPlainObject(left) && isPlainObject(right)) {
+    const keys = /* @__PURE__ */ new Set([...Object.keys(left), ...Object.keys(right)]);
+    for (const key of keys) {
+      if (!mvuValuesEqual(left[key], right[key])) return false;
+    }
+    return true;
+  }
+  return false;
+}
+function clampNumber(value, min, max2) {
+  let out = value;
+  if (min !== void 0 && out < min) out = min;
+  if (max2 !== void 0 && out > max2) out = max2;
+  return out;
+}
+function validateValue2(node, value, current, path7, notes) {
+  if (node.ro === true && !mvuValuesEqual(value, current)) {
+    return { ok: false, kind: "readonly", reason: "read-only field" };
+  }
+  if (Array.isArray(value)) {
+    if (node.typeLock !== void 0 && node.typeLock !== "array") {
+      return { ok: false, kind: "type-mismatch", reason: `expected ${node.typeLock}, got array` };
+    }
+    if (node.item === void 0) return { ok: true, value, notes };
+    const currentItems = Array.isArray(current) ? current : [];
+    const out = [];
+    for (let i = 0; i < value.length; i++) {
+      const result = validateValue2(node.item, value[i], currentItems[i], `${path7}[${i}]`, notes);
+      if (!result.ok) return result;
+      out.push(result.value);
+    }
+    return { ok: true, value: out, notes };
+  }
+  if (isPlainObject(value)) {
+    if (node.typeLock !== void 0 && node.typeLock !== "object") {
+      return { ok: false, kind: "type-mismatch", reason: `expected ${node.typeLock}, got object` };
+    }
+    if (node.objectMode !== "locked" && node.objectMode !== "wildcard") return { ok: true, value, notes };
+    const currentObject = isPlainObject(current) ? current : {};
+    const next = {};
+    for (const key of Object.keys(value)) {
+      const child = node.children?.get(key) ?? node.wildcard;
+      if (child === void 0) {
+        return { ok: false, kind: "structure", reason: `key '${key}' is not in the schema template` };
+      }
+      const result = validateValue2(child, value[key], currentObject[key], path7 === "" ? key : `${path7}.${key}`, notes);
+      if (!result.ok) return result;
+      next[key] = result.value;
+    }
+    if (node.objectMode === "locked") {
+      for (const key of node.children?.keys() ?? []) {
+        if (!(key in value) && key in currentObject) {
+          return { ok: false, kind: "structure", reason: `template field '${key}' would be deleted by this write` };
+        }
+      }
+    }
+    return { ok: true, value: next, notes };
+  }
+  if (node.typeLock !== void 0 && typeName(value) !== node.typeLock) {
+    return { ok: false, kind: "type-mismatch", reason: `expected ${node.typeLock}, got ${typeName(value)}` };
+  }
+  if (node.enumValues !== void 0 && !node.enumValues.some((allowed) => mvuValuesEqual(allowed, value))) {
+    return { ok: false, kind: "enum-violation", reason: `value ${JSON.stringify(value)} is not one of [${node.enumValues.map((entry) => JSON.stringify(entry)).join(", ")}]` };
+  }
+  if (typeof value === "number" && Number.isFinite(value) && (node.min !== void 0 || node.max !== void 0 || node.step !== void 0)) {
+    let out = value;
+    if (node.step !== void 0 && typeof current === "number" && Number.isFinite(current)) {
+      const delta = out - current;
+      const capped = Math.max(-node.step, Math.min(node.step, delta));
+      if (capped !== delta) {
+        notes.push(`${path7}: guard step: delta ${delta > 0 ? "+" : ""}${delta} capped to ${capped > 0 ? "+" : ""}${capped}`);
+        out = current + capped;
+      }
+    }
+    const clamped = clampNumber(out, node.min, node.max);
+    if (clamped !== out) {
+      notes.push(`${path7}: guard clamp: ${out} -> ${clamped}`);
+      out = clamped;
+    }
+    return { ok: true, value: out, notes };
+  }
+  return { ok: true, value, notes };
+}
+function guardMvuWrite(schema, path7, value, current) {
+  const segments = path7.split(".").filter((segment) => segment !== "");
+  if (segments.length === 0) return { ok: true, value };
+  if (segments[0] === "$schema") {
+    return { ok: false, kind: "readonly", reason: "the $schema subtree is the declared guard contract and cannot be settled" };
+  }
+  const root = resolveMvuSchema(schema);
+  if (root === void 0) return { ok: true, value };
+  let cursor = root;
+  let parent;
+  let roChain = root.ro === true;
+  let violation;
+  for (let i = 0; i < segments.length && cursor !== void 0; i++) {
+    const segment = segments[i];
+    if (cursor.typeLock === "array") {
+      parent = cursor;
+      if (!/^\d+$/.test(segment)) {
+        violation ??= `'${segments.slice(0, i + 1).join(".")}' expects an array index, not '${segment}'`;
+        cursor = void 0;
+      } else {
+        cursor = cursor.item;
+      }
+    } else if (cursor.objectMode !== void 0) {
+      parent = cursor;
+      const named = cursor.children?.get(segment);
+      if (named !== void 0) cursor = named;
+      else if (cursor.objectMode === "wildcard" && cursor.wildcard !== void 0) cursor = cursor.wildcard;
+      else if (cursor.objectMode === "locked") {
+        violation ??= `'${segments.slice(0, i + 1).join(".")}' is not in the schema template`;
+        cursor = void 0;
+      } else cursor = void 0;
+    } else {
+      if (cursor.typeLock !== void 0 && cursor.objectMode === void 0) {
+        violation ??= `'${segments.slice(0, i + 1).join(".")}' expects ${cursor.typeLock}, not a nested path`;
+      }
+      parent = cursor;
+      cursor = void 0;
+    }
+    if (cursor !== void 0 && cursor.ro === true) roChain = true;
+  }
+  if (violation !== void 0) return { ok: false, kind: "structure", reason: violation };
+  const lastSegment = segments[segments.length - 1];
+  if (value === void 0) {
+    if (roChain) return { ok: false, kind: "readonly", reason: "read-only field" };
+    if (parent?.objectMode === "locked" && parent.children?.has(lastSegment)) {
+      return { ok: false, kind: "structure", reason: `template field '${lastSegment}' cannot be deleted` };
+    }
+    return { ok: true, value: void 0 };
+  }
+  if (roChain && !mvuValuesEqual(value, current)) {
+    return { ok: false, kind: "readonly", reason: "read-only field" };
+  }
+  if (cursor === void 0) return { ok: true, value };
+  const result = validateValue2(cursor, value, current, segments.join("."), []);
+  if (!result.ok) return result;
+  return { ok: true, value: result.value, ...result.notes.length > 0 ? { note: result.notes.join("; ") } : {} };
+}
+function getMvuTreePath(tree, path7) {
+  let cursor = tree;
+  for (const segment of path7.split(".")) {
+    if (!isPlainObject(cursor)) return void 0;
+    cursor = cursor[segment];
+  }
+  return cursor;
+}
+var DIRECTIVE_KEYS, TYPE_LOCKS, schemaCache, INITIAL_VARIABLES_KEY;
+var init_mvu_guard = __esm({
+  "packages/plugin/src/mvu-guard.ts"() {
+    "use strict";
+    DIRECTIVE_KEYS = ["$range", "$step", "$enum", "$ro", "$type"];
+    TYPE_LOCKS = ["number", "string", "boolean", "object", "array"];
+    schemaCache = /* @__PURE__ */ new WeakMap();
+    INITIAL_VARIABLES_KEY = "initial_variables";
+  }
+});
+
+// packages/plugin/src/mvu-rules.ts
+function isPlainObject2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function cardRules(card) {
+  const holder = card?.data?.extensions?.["agentTavern"];
+  if (!isPlainObject2(holder)) return void 0;
+  const initial = holder["initialVariables"];
+  return isPlainObject2(initial) ? initial["$rules"] : void 0;
+}
+function treeRules(tree) {
+  return isPlainObject2(tree) ? tree.$rules : void 0;
+}
+function validateMvuRules(raw) {
+  if (!Array.isArray(raw)) throw new Error("$rules must be an array of rule objects");
+  if (raw.length === 0) return [];
+  if (raw.length > MVU_RULES_LIMIT) {
+    throw new Error(`$rules declares ${raw.length} rules, over the cap of ${MVU_RULES_LIMIT}`);
+  }
+  return raw.map((entry, index) => {
+    if (!isPlainObject2(entry)) throw new Error(`rule #${index} is not an object`);
+    const { name: name2, when, then } = entry;
+    if (typeof name2 !== "string" || name2.trim() === "" || name2.length > 64) {
+      throw new Error(`rule #${index} requires a non-empty name of at most 64 characters`);
+    }
+    if (typeof when !== "string" || when.trim() === "") {
+      throw new Error(`rule '${name2}' requires a non-empty when expression`);
+    }
+    if (!isPlainObject2(then) || Object.keys(then).length === 0) {
+      throw new Error(`rule '${name2}' requires a non-empty then map`);
+    }
+    if (Object.keys(then).length > MVU_RULE_THEN_LIMIT) {
+      throw new Error(`rule '${name2}' declares ${Object.keys(then).length} then writes, over the cap of ${MVU_RULE_THEN_LIMIT}`);
+    }
+    for (const [path7, value] of Object.entries(then)) {
+      if (path7.trim() === "") throw new Error(`rule '${name2}' has an empty then path`);
+      if (typeof value === "string") {
+        if (value.trim() === "") throw new Error(`rule '${name2}' has an empty then expression for '${path7}'`);
+      } else if (value === void 0 || typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") {
+        throw new Error(`rule '${name2}' then value for '${path7}' is not a JSON literal`);
+      }
+    }
+    return { name: name2, when, then };
+  });
+}
+function readMvuRules(chat, card, variablesOverride) {
+  const candidates = [
+    treeRules(variablesOverride ?? chat?.header?.chat_metadata?.variables),
+    cardRules(card),
+    treeRules(chat?.header?.chat_metadata?.[INITIAL_VARIABLES_KEY2])
+  ];
+  for (const candidate of candidates) {
+    if (candidate === void 0) continue;
+    try {
+      const rules = validateMvuRules(candidate);
+      if (rules.length === 0) continue;
+      return { rules };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { invalid: `$rules: ${message}; all card rules are disabled for this settlement` };
+    }
+  }
+  return void 0;
+}
+function buildRuleEnv(tree) {
+  const vars = deepClone(stripMvuControl(tree));
+  return {
+    vars,
+    getvar: (path7) => typeof path7 === "string" ? getMvuTreePath(vars, path7) : void 0,
+    ...RULE_SANDBOX_SHADES
+  };
+}
+function errorText(error) {
+  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+}
+function setTreePath(tree, path7, value) {
+  const segments = path7.split(".");
+  const leaf = segments.pop();
+  let cursor = tree;
+  for (const segment of segments) {
+    const next = cursor[segment];
+    if (next === null || typeof next !== "object" || Array.isArray(next)) cursor[segment] = {};
+    cursor = cursor[segment];
+  }
+  cursor[leaf] = value;
+}
+async function runMvuRules(rules, options) {
+  const failures = /* @__PURE__ */ new Set();
+  const writes = [];
+  const noteParts = /* @__PURE__ */ new Map();
+  const tree = options.tree;
+  for (let round = 1; round <= MVU_RULE_ROUNDS; round++) {
+    let progressed = false;
+    for (const rule of rules) {
+      let active = false;
+      try {
+        active = Boolean(await evalExpressionSandboxed(rule.when, buildRuleEnv(tree)));
+      } catch (error) {
+        failures.add(`rule '${rule.name}': when evaluation failed: ${errorText(error)}`);
+        continue;
+      }
+      if (!active) continue;
+      const pending = [];
+      let failed = false;
+      for (const [path7, raw] of Object.entries(rule.then)) {
+        try {
+          const value = typeof raw === "string" ? await evalExpressionSandboxed(raw, buildRuleEnv(tree)) : deepClone(raw);
+          if (value === void 0) throw new Error("the expression evaluated to undefined");
+          pending.push({ path: path7, value });
+        } catch (error) {
+          failures.add(`rule '${rule.name}': then evaluation failed for '${path7}': ${errorText(error)}`);
+          failed = true;
+          break;
+        }
+      }
+      if (failed) continue;
+      for (const { path: path7, value } of pending) {
+        const head = path7.split(".")[0];
+        if (head === "$schema" || head === "$rules") {
+          failures.add(`${path7}: rule '${rule.name}': guard readonly: the ${head} subtree is card-declared and cannot be settled`);
+          continue;
+        }
+        const current = getMvuTreePath(tree, path7);
+        const guarded = options.schema === void 0 ? void 0 : guardMvuWrite(options.schema, path7, value, current);
+        if (guarded !== void 0 && !guarded.ok) {
+          failures.add(`${path7}: rule '${rule.name}': guard ${guarded.kind}: ${guarded.reason}`);
+          continue;
+        }
+        const finalValue = guarded === void 0 ? value : guarded.value;
+        if (mvuValuesEqual(finalValue, current)) continue;
+        setTreePath(tree, path7, deepClone(finalValue));
+        progressed = true;
+        const note = ["rule:" + rule.name, guarded?.note].filter((part) => part !== void 0).join("; ");
+        const parts = noteParts.get(path7) ?? [];
+        if (!parts.includes(note)) parts.push(note);
+        noteParts.set(path7, parts);
+        writes.push({ path: path7, value: deepClone(finalValue), rule: rule.name, ...guarded?.note !== void 0 ? { guardNote: guarded.note } : {} });
+      }
+    }
+    if (!progressed) break;
+    if (round === MVU_RULE_ROUNDS) {
+      failures.add(`$rules: fixed-point iteration hit the ${MVU_RULE_ROUNDS}-round cap; rules were still producing changes in the last round (narrow the when conditions or reorder the rules)`);
+    }
+  }
+  const notes = Object.fromEntries([...noteParts].map(([path7, parts]) => [path7, parts.join("; ")]));
+  return { failures: [...failures], writes, notes };
+}
+var MVU_RULE_ROUNDS, MVU_RULES_LIMIT, MVU_RULE_THEN_LIMIT, INITIAL_VARIABLES_KEY2, SAFE_MATH_KEYS, SAFE_MATH, RULE_SANDBOX_SHADES;
+var init_mvu_rules = __esm({
+  "packages/plugin/src/mvu-rules.ts"() {
+    "use strict";
+    init_src4();
+    init_mvu_guard();
+    MVU_RULE_ROUNDS = 3;
+    MVU_RULES_LIMIT = 32;
+    MVU_RULE_THEN_LIMIT = 16;
+    INITIAL_VARIABLES_KEY2 = "initial_variables";
+    SAFE_MATH_KEYS = [
+      "E",
+      "LN2",
+      "LN10",
+      "LOG2E",
+      "LOG10E",
+      "PI",
+      "SQRT1_2",
+      "SQRT2",
+      "abs",
+      "acos",
+      "acosh",
+      "asin",
+      "asinh",
+      "atan",
+      "atan2",
+      "atanh",
+      "cbrt",
+      "ceil",
+      "cos",
+      "cosh",
+      "exp",
+      "expm1",
+      "floor",
+      "fround",
+      "hypot",
+      "imul",
+      "log",
+      "log1p",
+      "log2",
+      "log10",
+      "max",
+      "min",
+      "pow",
+      "round",
+      "sign",
+      "sin",
+      "sinh",
+      "sqrt",
+      "tan",
+      "tanh",
+      "trunc"
+    ];
+    SAFE_MATH = Object.freeze(
+      Object.fromEntries(SAFE_MATH_KEYS.map((key) => [key, Math[key]]))
+    );
+    RULE_SANDBOX_SHADES = {
+      Math: SAFE_MATH,
+      Date: void 0,
+      setTimeout: void 0,
+      setInterval: void 0,
+      setImmediate: void 0,
+      queueMicrotask: void 0
+    };
+  }
+});
+
+// packages/plugin/src/mvu.ts
+function plainObject(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
+  return value;
+}
+function readChatVariables(chat) {
+  return plainObject(chat?.header?.chat_metadata?.variables) ?? {};
+}
+function overlayScopedVariables(base, entries) {
+  const tree = deepClone(base);
+  for (const entry of entries) {
+    const segments = entry.name.split(".");
+    const leaf = segments.pop();
+    if (segments.some((segment) => isForbiddenVariableSegment(segment)) || isForbiddenVariableSegment(leaf)) {
+      continue;
+    }
+    let cursor = tree;
+    for (const segment of segments) {
+      const next = cursor[segment];
+      if (next === null || typeof next !== "object" || Array.isArray(next)) cursor[segment] = {};
+      cursor = cursor[segment];
+    }
+    cursor[leaf] = entry.value;
+  }
+  return tree;
+}
+function isForbiddenVariableSegment(segment) {
+  return segment === "__proto__" || segment === "prototype" || segment === "constructor";
+}
+function readMvuReceipt(record) {
+  const { at, turnKey, status: status2, changes, failures, opId } = record;
+  if (typeof at !== "string" || typeof turnKey !== "string") return void 0;
+  if (status2 !== "updated" && status2 !== "unchanged" && status2 !== "failed") return void 0;
+  return {
+    at,
+    turnKey,
+    status: status2,
+    changes: Array.isArray(changes) ? changes.flatMap((item) => {
+      const change = plainObject(item);
+      if (change === void 0 || typeof change.name !== "string") return [];
+      const out = { name: change.name };
+      if ("before" in change) out.before = change.before;
+      if ("after" in change) out.after = change.after;
+      if (typeof change.reason === "string") out.reason = change.reason;
+      return [out];
+    }) : [],
+    failures: Array.isArray(failures) ? failures.filter((item) => typeof item === "string") : [],
+    ...typeof opId === "string" && opId.trim() !== "" ? { opId } : {},
+    ...typeof record.undoneAt === "string" ? { undoneAt: record.undoneAt } : {}
+  };
+}
+function readMvuReceipts(chat) {
+  const raw = plainObject(chat?.header?.chat_metadata?.mvu)?.receipts;
+  if (!Array.isArray(raw)) return [];
+  const receipts = [];
+  for (const entry of raw) {
+    const record = plainObject(entry);
+    if (record === void 0) continue;
+    const receipt = readMvuReceipt(record);
+    if (receipt !== void 0) receipts.push(receipt);
+  }
+  return receipts;
+}
+function isSettleReceiptKey(turnKey) {
+  return CANONICAL_FLOOR_KEY.test(turnKey) && Number.isSafeInteger(Number(turnKey));
+}
+function defaultRetainedReceiptIndexes(receipts, settleReserved) {
+  const bodyIndexes = [];
+  const settleIndexes = [];
+  for (let index = 0; index < receipts.length; index += 1) {
+    const turnKey = receipts[index].turnKey;
+    if (turnKey.startsWith(BODY_RECEIPT_PREFIX)) bodyIndexes.push(index);
+    else if (isSettleReceiptKey(turnKey)) settleIndexes.push(index);
+  }
+  const reservedSettle = Math.min(settleIndexes.length, settleReserved);
+  const bodyBudget = Math.min(bodyIndexes.length, MVU_RECEIPTS_LIMIT - reservedSettle);
+  const kept = new Set(bodyIndexes.slice(bodyIndexes.length - bodyBudget));
+  for (const index of settleIndexes.slice(settleIndexes.length - reservedSettle)) kept.add(index);
+  let remaining = MVU_RECEIPTS_LIMIT - kept.size;
+  for (let index = receipts.length - 1; index >= 0 && remaining > 0; index -= 1) {
+    if (kept.has(index)) continue;
+    kept.add(index);
+    remaining -= 1;
+  }
+  return kept;
+}
+function explicitRetainedReceiptIndexes(receipts, preserveTurnKeys) {
+  const kept = /* @__PURE__ */ new Set();
+  const others = [];
+  for (let index = 0; index < receipts.length; index += 1) {
+    if (preserveTurnKeys.has(receipts[index].turnKey)) kept.add(index);
+    else others.push(index);
+  }
+  const budget = Math.max(0, MVU_RECEIPTS_LIMIT - kept.size);
+  for (const index of others.slice(others.length - Math.min(budget, others.length))) kept.add(index);
+  return kept;
+}
+function retainMvuReceipts(receipts, preserveTurnKeys, settleReserved) {
+  const kept = preserveTurnKeys.size === 0 ? defaultRetainedReceiptIndexes(receipts, settleReserved) : explicitRetainedReceiptIndexes(receipts, preserveTurnKeys);
+  return receipts.filter((_, index) => kept.has(index));
+}
+function requireSettleReserved(value) {
+  if (!Number.isSafeInteger(value) || value < 0 || value > MVU_RECEIPTS_LIMIT) {
+    throw new Error(
+      `MVU settle reservation must be a safe integer between 0 and ${MVU_RECEIPTS_LIMIT}, received ${String(value)}`
+    );
+  }
+  return value;
+}
+function appendMvuReceipt(chat, receipt, preserveTurnKeys, settleReceiptsReserved) {
+  const appended = [...readMvuReceipts(chat), receipt];
+  const receipts = retainMvuReceipts(
+    appended,
+    preserveTurnKeys ?? /* @__PURE__ */ new Set(),
+    requireSettleReserved(settleReceiptsReserved ?? MVU_SETTLE_RECEIPTS_RESERVED)
+  );
+  chat.header.chat_metadata.mvu = { receipts };
+}
+var MVU_RECEIPTS_LIMIT, BODY_RECEIPT_PREFIX, CANONICAL_FLOOR_KEY, MVU_SETTLE_RECEIPTS_RESERVED;
+var init_mvu = __esm({
+  "packages/plugin/src/mvu.ts"() {
+    "use strict";
+    init_src4();
+    init_src3();
+    init_tavern_assets();
+    init_mvu_guard();
+    init_mvu_rules();
+    MVU_RECEIPTS_LIMIT = 20;
+    BODY_RECEIPT_PREFIX = "body:";
+    CANONICAL_FLOOR_KEY = /^(0|[1-9][0-9]*)$/;
+    MVU_SETTLE_RECEIPTS_RESERVED = 3;
   }
 });
 
@@ -6291,7 +8369,7 @@ var init_deduce = __esm({
 
 // packages/tavern-lore/lib/types.js
 var MESSAGE_BOUNDARY2;
-var init_types3 = __esm({
+var init_types4 = __esm({
   "packages/tavern-lore/lib/types.js"() {
     "use strict";
     MESSAGE_BOUNDARY2 = "";
@@ -6310,7 +8388,7 @@ var JOINER2;
 var init_buffer = __esm({
   "packages/tavern-lore/lib/buffer.js"() {
     "use strict";
-    init_types3();
+    init_types4();
     init_regex();
     JOINER2 = "\n" + MESSAGE_BOUNDARY2;
   }
@@ -6354,7 +8432,7 @@ var init_engine2 = __esm({
     init_entry();
     init_groups();
     init_timed();
-    init_types3();
+    init_types4();
   }
 });
 
@@ -6362,7 +8440,7 @@ var init_engine2 = __esm({
 var init_lib2 = __esm({
   "packages/tavern-lore/lib/index.js"() {
     "use strict";
-    init_types3();
+    init_types4();
     init_engine2();
     init_buffer();
     init_entry();
@@ -6668,7 +8746,7 @@ var init_stscript = __esm({
 });
 
 // packages/tavern-script/src/index.ts
-var init_src3 = __esm({
+var init_src5 = __esm({
   "packages/tavern-script/src/index.ts"() {
     "use strict";
     init_regex2();
@@ -6823,7 +8901,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.5".trim() : "";
-  const commit = true ? normalizeCommit("f9526b5") : void 0;
+  const commit = true ? normalizeCommit("015fe0b") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -7172,8 +9250,8 @@ var init_host = __esm({
     init_generation_hooks();
     init_src();
     init_src();
+    init_src5();
     init_src3();
-    init_src2();
     init_audit();
     init_events();
     init_cross_bundle();
@@ -7220,9 +9298,26 @@ var init_service = __esm({
   }
 });
 
+// packages/plugin/src/variable-merge.ts
+var init_variable_merge = __esm({
+  "packages/plugin/src/variable-merge.ts"() {
+    "use strict";
+  }
+});
+
+// packages/plugin/src/variable-gateway.ts
+var init_variable_gateway = __esm({
+  "packages/plugin/src/variable-gateway.ts"() {
+    "use strict";
+    init_src3();
+    init_mvu();
+    init_variable_merge();
+  }
+});
+
 // packages/plugin/src/runtime.ts
 var agentTavernCapabilities, agentNovelCapabilities;
-var init_runtime = __esm({
+var init_runtime2 = __esm({
   "packages/plugin/src/runtime.ts"() {
     "use strict";
     init_capabilities();
@@ -7235,7 +9330,8 @@ var init_runtime = __esm({
     init_shared_stores();
     init_store_handle();
     init_service();
-    init_src2();
+    init_variable_gateway();
+    init_src3();
     agentTavernCapabilities = inspectAgentTavernCapabilities({});
     agentNovelCapabilities = inspectAgentNovelCapabilities({});
   }
@@ -7569,226 +9665,8 @@ function sanitizeParams(params) {
   return out;
 }
 
-// packages/tavern-format/src/png.ts
-var PNG_SIGNATURE = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]);
-var CRC_TABLE = (() => {
-  const table = new Uint32Array(256);
-  for (let n = 0; n < 256; n++) {
-    let c = n;
-    for (let k = 0; k < 8; k++) {
-      c = c & 1 ? 3988292384 ^ c >>> 1 : c >>> 1;
-    }
-    table[n] = c >>> 0;
-  }
-  return table;
-})();
-
-// packages/tavern-format/src/worldbook.ts
-var KNOWN_FIELDS = /* @__PURE__ */ new Set([
-  "uid",
-  "key",
-  "keysecondary",
-  "comment",
-  "content",
-  "constant",
-  "vectorized",
-  "selective",
-  "selectiveLogic",
-  "addMemo",
-  "order",
-  "position",
-  "disable",
-  "ignoreBudget",
-  "excludeRecursion",
-  "preventRecursion",
-  "delayUntilRecursion",
-  "probability",
-  "useProbability",
-  "depth",
-  "outletName",
-  "group",
-  "groupOverride",
-  "groupWeight",
-  "scanDepth",
-  "caseSensitive",
-  "matchWholeWords",
-  "useGroupScoring",
-  "automationId",
-  "role",
-  "sticky",
-  "cooldown",
-  "delay",
-  "triggers",
-  "matchPersonaDescription",
-  "matchCharacterDescription",
-  "matchCharacterPersonality",
-  "matchCharacterDepthPrompt",
-  "matchScenario",
-  "matchCreatorNotes",
-  "extra"
-]);
-function normalizeEntry(raw) {
-  const extra = {};
-  for (const [k, v] of Object.entries(raw)) {
-    if (!KNOWN_FIELDS.has(k)) extra[k] = v;
-  }
-  return {
-    uid: num(raw["uid"], 0),
-    key: strArray(raw["key"]),
-    keysecondary: strArray(raw["keysecondary"]),
-    comment: str(raw["comment"]),
-    content: str(raw["content"]),
-    constant: bool(raw["constant"], false),
-    vectorized: bool(raw["vectorized"], false),
-    selective: bool(raw["selective"], true),
-    selectiveLogic: num(raw["selectiveLogic"], 0),
-    addMemo: bool(raw["addMemo"], false),
-    order: num(raw["order"], 100),
-    position: num(raw["position"], 0),
-    disable: bool(raw["disable"], false),
-    ignoreBudget: bool(raw["ignoreBudget"], false),
-    excludeRecursion: bool(raw["excludeRecursion"], false),
-    preventRecursion: bool(raw["preventRecursion"], false),
-    delayUntilRecursion: num(raw["delayUntilRecursion"], 0),
-    probability: num(raw["probability"], 100),
-    useProbability: bool(raw["useProbability"], true),
-    depth: num(raw["depth"], 4),
-    outletName: str(raw["outletName"]),
-    group: str(raw["group"]),
-    groupOverride: bool(raw["groupOverride"], false),
-    groupWeight: num(raw["groupWeight"], 100),
-    scanDepth: nullableNum(raw["scanDepth"]),
-    caseSensitive: nullableBool(raw["caseSensitive"]),
-    matchWholeWords: nullableBool(raw["matchWholeWords"]),
-    useGroupScoring: nullableBool(raw["useGroupScoring"]),
-    automationId: str(raw["automationId"]),
-    role: num(raw["role"], 0),
-    sticky: nullableNum(raw["sticky"]),
-    cooldown: nullableNum(raw["cooldown"]),
-    delay: nullableNum(raw["delay"]),
-    triggers: strArray(raw["triggers"]),
-    matchPersonaDescription: bool(raw["matchPersonaDescription"], false),
-    matchCharacterDescription: bool(raw["matchCharacterDescription"], false),
-    matchCharacterPersonality: bool(raw["matchCharacterPersonality"], false),
-    matchCharacterDepthPrompt: bool(raw["matchCharacterDepthPrompt"], false),
-    matchScenario: bool(raw["matchScenario"], false),
-    matchCreatorNotes: bool(raw["matchCreatorNotes"], false),
-    extra: Object.keys(extra).length > 0 ? extra : void 0
-  };
-}
-function parseCharacterBook(book) {
-  const entries = (book.entries ?? []).map((raw, index) => bookEntryToLoreEntry(raw, index));
-  return { name: book.name ?? "", entries };
-}
-function bookEntryToLoreEntry(raw, index) {
-  const ext = raw.extensions ?? {};
-  const uid = numOr(raw.id, ext["uid"], index);
-  const entry = normalizeEntry({
-    uid,
-    key: raw.keys ?? [],
-    keysecondary: raw.secondary_keys ?? [],
-    comment: raw.comment ?? raw.name ?? "",
-    content: raw.content ?? "",
-    constant: boolOr(raw.constant, ext["constant"], false),
-    disable: raw.enabled === false,
-    order: numOr(ext["order"], raw.insertion_order, 100),
-    position: bookPositionToSt(raw.position, ext["position"]),
-    selective: boolOr(raw.selective, ext["selective"], true),
-    selectiveLogic: num(ext["selectiveLogic"], 0),
-    caseSensitive: nullableBoolOr(raw.case_sensitive, ext["case_sensitive"]),
-    probability: numOr(ext["probability"], 100, 100),
-    useProbability: boolOr(ext["useProbability"], true, true),
-    depth: numOr(ext["depth"], 4, 4),
-    group: str(ext["group"]),
-    groupOverride: bool(ext["group_override"], false),
-    groupWeight: numOr(ext["group_weight"], 100, 100),
-    excludeRecursion: boolOr(ext["exclude_recursion"], false, false),
-    preventRecursion: boolOr(ext["prevent_recursion"], false, false),
-    delayUntilRecursion: numOr(ext["delay_until_recursion"], 0, 0),
-    scanDepth: nullableNum(ext["scan_depth"]),
-    matchWholeWords: nullableBool(ext["match_whole_words"]),
-    useGroupScoring: nullableBool(ext["use_group_scoring"]),
-    role: num(ext["role"], 0),
-    vectorized: bool(ext["vectorized"], false),
-    sticky: nullableNum(ext["sticky"]),
-    cooldown: nullableNum(ext["cooldown"]),
-    delay: nullableNum(ext["delay"]),
-    triggers: strArray(ext["triggers"])
-  });
-  const carried = {};
-  if (raw.priority !== void 0) carried["book.priority"] = raw.priority;
-  if (raw.use_regex !== void 0) carried["book.use_regex"] = raw.use_regex;
-  if (raw.name !== void 0) carried["book.name"] = raw.name;
-  if (Object.keys(carried).length > 0) entry.extra = { ...entry.extra ?? {}, ...carried };
-  return entry;
-}
-function bookPositionToSt(bookPos, extPos) {
-  if (typeof extPos === "number") return extPos;
-  if (bookPos === "after_char") return 1;
-  return 0;
-}
-function str(v) {
-  return typeof v === "string" ? v : "";
-}
-function num(v, fallback) {
-  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
-}
-function numOr(v, v2, fallback) {
-  return typeof v === "number" && Number.isFinite(v) ? v : num(v2, fallback);
-}
-function nullableNum(v) {
-  return typeof v === "number" && Number.isFinite(v) ? v : null;
-}
-function bool(v, fallback) {
-  return typeof v === "boolean" ? v : fallback;
-}
-function boolOr(v, v2, fallback) {
-  return typeof v === "boolean" ? v : bool(v2, fallback);
-}
-function nullableBool(v) {
-  return typeof v === "boolean" ? v : null;
-}
-function nullableBoolOr(v, v2) {
-  return typeof v === "boolean" ? v : nullableBool(v2);
-}
-function strArray(v) {
-  return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
-}
-
-// packages/tavern-format/src/preset.ts
-var PresetFormatError = class extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "PresetFormatError";
-  }
-};
-function parsePreset(obj) {
-  const promptsRaw = obj["prompts"];
-  if (!Array.isArray(promptsRaw)) throw new PresetFormatError("preset has no 'prompts' array");
-  const prompts = promptsRaw.map((p, i) => {
-    if (typeof p !== "object" || p === null) throw new PresetFormatError(`prompts[${i}] is not an object`);
-    return p;
-  });
-  const orderRaw = obj["prompt_order"];
-  const promptOrder = Array.isArray(orderRaw) ? orderRaw.map((o, i) => {
-    if (typeof o !== "object" || o === null || !Array.isArray(o.order)) {
-      throw new PresetFormatError(`prompt_order[${i}] is malformed`);
-    }
-    return o;
-  }) : [];
-  const sampler = {};
-  for (const [k, v] of Object.entries(obj)) {
-    if (k !== "prompts" && k !== "prompt_order") sampler[k] = v;
-  }
-  return { prompts, promptOrder, sampler };
-}
-
-// packages/tavern-format/src/zip.ts
-var DEFAULT_ZIP_LIMITS = {
-  maxEntries: 256,
-  maxFileBytes: 64 * 1024 * 1024,
-  maxTotalBytes: 128 * 1024 * 1024
-};
+// packages/plugin/src/agent-tavern/agent.ts
+init_src2();
 
 // packages/plugin/src/tool-args.ts
 function stringArg(value) {
@@ -7969,7 +9847,7 @@ function applyCardOverride(identifier, content, card) {
 }
 
 // packages/plugin/src/agent-tavern/tools/character.ts
-init_src2();
+init_src3();
 
 // packages/tavern-lore/src/types.ts
 var WI_POSITION = {
@@ -8735,58 +10613,18 @@ function assembleResult(allActivated, diagnostics, timedState) {
   };
 }
 
-// packages/plugin/src/tavern-assets.ts
-function formatEntriesToLore(entries) {
-  return entries.map((entry) => ({
-    ...entry,
-    position: entry.position,
-    selectiveLogic: entry.selectiveLogic,
-    role: entry.role,
-    triggers: entry.triggers
-  }));
-}
-async function collectWorldInfoBooks(db, state, characterName, character, chatId) {
-  const worldNames = new Set(state.activeWorlds);
-  const follow = state.worldFollowsCharacter !== false;
-  const linkedWorld = character.card.data.extensions["world"];
-  const linkedName = follow && typeof linkedWorld === "string" && linkedWorld.trim() !== "" ? linkedWorld.trim() : void 0;
-  const disabledAuto = new Set(state.disabledAutoWorlds ?? []);
-  if (linkedName !== void 0 && !disabledAuto.has(linkedName)) worldNames.add(linkedName);
-  const books = [];
-  let linkedImported = false;
-  const chatScope = chatId !== void 0 && chatId !== "" ? chatId : void 0;
-  for (const worldName of worldNames) {
-    const copy = chatScope !== void 0 && typeof db.getChatWorld === "function" ? await db.getChatWorld(characterName, chatScope, worldName) : void 0;
-    const world = copy === void 0 ? await db.getWorld(worldName) : copy;
-    if (world) {
-      books.push({ name: copy === void 0 ? world.name : worldName, entries: formatEntriesToLore(world.entries) });
-      if (worldName === linkedName) linkedImported = true;
-    }
-  }
-  const characterBook = follow ? character.card.data.characterBook : void 0;
-  const linkedSuppressed = linkedName !== void 0 && disabledAuto.has(linkedName);
-  if (characterBook && !linkedImported && !linkedSuppressed) {
-    const embedded = parseCharacterBook(characterBook);
-    books.unshift({
-      name: `${characterName}:embedded`,
-      entries: formatEntriesToLore(embedded.entries),
-      scanDepth: characterBook.scan_depth,
-      tokenBudget: characterBook.token_budget,
-      recursiveScanning: characterBook.recursive_scanning
-    });
-  }
-  return books;
-}
+// packages/plugin/src/agent-tavern/tools/character.ts
+init_tavern_assets();
 
 // packages/plugin/src/agent-tavern/tools/stores.ts
-init_src2();
+init_src3();
 init_dsh_home();
 
 // packages/plugin/src/memory-hybrid.ts
-init_src2();
+init_src3();
 
 // packages/plugin/src/memory-embed.ts
-init_src2();
+init_src3();
 import { promises as fs7 } from "node:fs";
 import * as path6 from "node:path";
 
@@ -9647,1613 +11485,13 @@ function approximateTokens2(value) {
 
 // packages/plugin/src/agent-tavern/tools/deduction.ts
 init_dsh_home();
-
-// packages/tavern-template/src/paths.ts
-function isObjectLike(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function deepClone(value) {
-  if (Array.isArray(value)) return value.map((item) => deepClone(item));
-  if (isObjectLike(value)) {
-    const out = {};
-    for (const [key, item] of Object.entries(value)) {
-      if (key === "__proto__") continue;
-      Object.defineProperty(out, key, {
-        value: deepClone(item),
-        writable: true,
-        enumerable: true,
-        configurable: true
-      });
-    }
-    return out;
-  }
-  return value;
-}
-
-// packages/tavern-template/src/api.ts
-var DEFAULT_CHAR_DEFINE = [
-  "<% if (name) { %>",
-  "<<%- name %>>",
-  "<% if (system_prompt) { %>System: <%- system_prompt %><% } %>",
-  "name: <%- name %>",
-  "<% if (personality) { %>personality: <%- personality %><% } %>",
-  "<% if (description) { %>description: <%- description %><% } %>",
-  "<% if (message_example) { %>",
-  "example:",
-  "<%- message_example %>",
-  "<% } %>",
-  "<% if (depth_prompt) { %>System: <%- depth_prompt %><% } %>",
-  "</<%- name %>>",
-  "<% } %>"
-].join("\n");
-
-// packages/tavern-template/src/runtime.ts
-import vm from "node:vm";
-
-// packages/tavern-template/src/sandbox-bootstrap.ts
-var BOOTSTRAP_SOURCE = `(function (__descriptorJson, __dispatch) {
-  'use strict'
-  var __ObjectCreate = Object.create
-  var __ObjectKeys = Object.keys
-  var __ObjectFreeze = Object.freeze
-  var __ObjectDefineProperty = Object.defineProperty
-  var __ObjectHasOwn = Object.prototype.hasOwnProperty
-  var __ObjectToString = Object.prototype.toString
-  var __ObjectIs = Object.is
-  var __Array = Array
-  var __ArrayIsArray = Array.isArray
-  var __String = String
-  var __Number = Number
-  var __NumberIsNaN = Number.isNaN
-  var __NumberIsInteger = Number.isInteger
-  var __JSONParse = JSON.parse
-  var __JSONStringify = JSON.stringify
-  var __Map = Map
-  var __MapGet = Map.prototype.get
-  var __MapSet = Map.prototype.set
-  var __Promise = Promise
-  var __RegExp = RegExp
-  var __Date = Date
-  var __Error = Error
-  var __BigInt = BigInt
-  var __ReflectApply = Reflect.apply
-  var __StringReplace = String.prototype.replace
-
-  var pending = __ObjectCreate(null)
-  var wrappers = __ObjectCreate(null)
-  var bridgeThis = __ObjectFreeze(__ObjectCreate(null))
-  var nextToken = 0
-
-  function hasOwn(target, key) {
-    return __ReflectApply(__ObjectHasOwn, target, [key])
-  }
-
-  function isRecord(value) {
-    return value !== null && typeof value === 'object' && !__ArrayIsArray(value)
-  }
-
-  function malformed(detail) {
-    return new __Error('malformed sandbox bridge payload: ' + detail)
-  }
-
-  function requireRecord(value, label) {
-    if (!isRecord(value)) throw malformed(label + ' is not an object')
-    return value
-  }
-
-  function requireArray(value, label) {
-    if (!__ArrayIsArray(value)) throw malformed(label + ' is not an array')
-    return value
-  }
-
-  function requireString(value, label) {
-    if (typeof value !== 'string') throw malformed(label + ' is not a string')
-    return value
-  }
-
-  function requireInteger(value, label) {
-    if (typeof value !== 'number' || !__NumberIsInteger(value) || value < 0) {
-      throw malformed(label + ' is not a non-negative integer')
-    }
-    return value
-  }
-
-  function requireIndex(value, limit, label) {
-    var index = requireInteger(value, label)
-    if (limit !== undefined && index >= limit) throw malformed(label + ' is out of range')
-    return index
-  }
-
-  function requireLength(value, label) {
-    var length = requireInteger(value, label)
-    if (length > 4294967295) throw malformed(label + ' is too large')
-    return length
-  }
-
-  function lastIndexValue(value) {
-    return typeof value === 'number' && __NumberIsInteger(value) && value >= 0 ? value : 0
-  }
-
-  function decodeNumber(raw) {
-    if (typeof raw === 'number' && !__NumberIsNaN(raw) && raw !== Infinity && raw !== -Infinity) return raw
-    if (raw === 'NaN') return NaN
-    if (raw === 'Infinity') return Infinity
-    if (raw === '-Infinity') return -Infinity
-    if (raw === '-0') return -0
-    throw malformed('invalid number')
-  }
-
-  function decodeEnc(enc, built) {
-    var value = requireRecord(enc, 'wire value')
-    switch (value.t) {
-      case 'null': return null
-      case 'u': return undefined
-      case 's': return requireString(value.v, 'string value')
-      case 'b':
-        if (typeof value.v !== 'boolean') throw malformed('invalid boolean')
-        return value.v
-      case 'n': return decodeNumber(value.v)
-      case 'big': return __BigInt(requireString(value.v, 'bigint value'))
-      case 'ref': {
-        var index = requireIndex(value.v, built.length, 'wire reference')
-        return built[index]
-      }
-      default: throw malformed('unknown value tag ' + __String(value.t))
-    }
-  }
-
-  function errorFrom(value) {
-    var name = 'Error'
-    var message
-    try {
-      if (value !== null && typeof value === 'object') {
-        if (typeof value.name === 'string' && value.name !== '') name = value.name
-        message = typeof value.message === 'string' ? value.message : __String(value)
-      } else {
-        message = __String(value)
-      }
-    } catch (error) {
-      message = 'the template sandbox bridge returned an unprintable error'
-    }
-    var result = new __Error(message)
-    result.name = name
-    return result
-  }
-
-  function makeWrapper(id) {
-    var key = 'f' + id
-    if (hasOwn(wrappers, key)) return wrappers[key]
-    var wrapper = function () {
-      var args = []
-      for (var i = 0; i < arguments.length; i++) args[i] = arguments[i]
-      return invoke(id, args)
-    }
-    __ObjectDefineProperty(wrappers, key, { value: wrapper, writable: false, enumerable: false, configurable: false })
-    return wrapper
-  }
-
-  function materialize(wire) {
-    var root = requireRecord(wire, 'wire')
-    var nodes = requireArray(root.nodes, 'wire nodes')
-    var built = new __Array(nodes.length)
-    var i
-    for (i = 0; i < nodes.length; i++) {
-      var node = requireRecord(nodes[i], 'wire node')
-      switch (node.t) {
-        case 'o': built[i] = {}; break
-        case 'a': built[i] = new __Array(requireLength(node.n, 'array length')); break
-        case 'f': built[i] = makeWrapper(requireIndex(node.v, undefined, 'function id')); break
-        case 'r': {
-          var regexp = new __RegExp(requireString(node.s, 'regexp source'), requireString(node.f, 'regexp flags'))
-          regexp.lastIndex = requireInteger(node.l, 'regexp lastIndex')
-          built[i] = regexp
-          break
-        }
-        case 'd': {
-          var rawDate = requireString(node.v, 'date value')
-          built[i] = rawDate === 'Invalid' ? new __Date(NaN) : new __Date(rawDate)
-          break
-        }
-        default: throw malformed('unknown node tag ' + __String(node.t))
-      }
-    }
-    for (i = 0; i < nodes.length; i++) {
-      var entry = requireRecord(nodes[i], 'wire node')
-      if (entry.t === 'o') {
-        var objectEntries = requireArray(entry.e, 'object entries')
-        for (var j = 0; j < objectEntries.length; j++) {
-          var pair = requireArray(objectEntries[j], 'object entry')
-          if (pair.length !== 2) throw malformed('object entry is not a pair')
-          var key = requireString(pair[0], 'object key')
-          __ObjectDefineProperty(built[i], key, {
-            value: decodeEnc(pair[1], built),
-            writable: true,
-            enumerable: true,
-            configurable: true,
-          })
-        }
-      } else if (entry.t === 'a') {
-        var arrayEntries = requireArray(entry.e, 'array entries')
-        var arrayLength = requireLength(entry.n, 'array length')
-        for (var k = 0; k < arrayEntries.length; k++) {
-          var item = requireArray(arrayEntries[k], 'array entry')
-          if (item.length !== 2) throw malformed('array entry is not a pair')
-          built[i][requireIndex(item[0], arrayLength, 'array index')] = decodeEnc(item[1], built)
-        }
-      }
-    }
-    return decodeEnc(root.root, built)
-  }
-
-  function encodeArgs(args) {
-    var nodes = []
-    var seen = new __Map()
-    var fns = []
-
-    function enc(value) {
-      if (value === null) return { t: 'null' }
-      var type = typeof value
-      if (type === 'undefined') return { t: 'u' }
-      if (type === 'string') return { t: 's', v: value }
-      if (type === 'boolean') return { t: 'b', v: value }
-      if (type === 'number') {
-        var raw = __NumberIsNaN(value) ? 'NaN' : value === Infinity ? 'Infinity' : value === -Infinity ? '-Infinity' : __ObjectIs(value, -0) ? '-0' : value
-        return { t: 'n', v: raw }
-      }
-      if (type === 'bigint') return { t: 'big', v: value.toString() }
-      if (type === 'symbol') throw new __Error('cannot pass a symbol to a host function')
-      if (type === 'function') {
-        var fnIndex = fns.length
-        fns[fnIndex] = value
-        nodes[nodes.length] = { t: 'f', v: fnIndex }
-        return { t: 'ref', v: nodes.length - 1 }
-      }
-
-      var seenIndex = __ReflectApply(__MapGet, seen, [value])
-      if (seenIndex !== undefined) return { t: 'ref', v: seenIndex }
-
-      var tag = __ReflectApply(__ObjectToString, value, [])
-      if (tag === '[object Promise]') throw new __Error('cannot pass a Promise to a host function')
-      if (tag === '[object Map]' || tag === '[object Set]' || tag === '[object WeakMap]' || tag === '[object WeakSet]') {
-        throw new __Error('cannot pass a ' + tag.slice(8, -1) + ' to a host function')
-      }
-      if (/^\\[object (?:Uint|Int|Float|BigUint|BigInt)\\w*Array\\]$/.test(tag) || tag === '[object ArrayBuffer]' || tag === '[object SharedArrayBuffer]' || tag === '[object DataView]') {
-        throw new __Error('cannot pass a ' + tag.slice(8, -1) + ' to a host function')
-      }
-
-      if (__ArrayIsArray(value)) {
-        var arrayIndex = nodes.length
-        nodes[arrayIndex] = null
-        __ReflectApply(__MapSet, seen, [value, arrayIndex])
-        var arrayEntries = []
-        var arrayKeys = __ObjectKeys(value)
-        for (var ai = 0; ai < arrayKeys.length; ai++) {
-          var arrayKey = arrayKeys[ai]
-          var numeric = __Number(arrayKey)
-          if (__String(numeric) === arrayKey && numeric >= 0 && numeric < value.length) {
-            arrayEntries[arrayEntries.length] = [numeric, enc(value[numeric])]
-          }
-        }
-        nodes[arrayIndex] = { t: 'a', n: value.length, e: arrayEntries }
-        return { t: 'ref', v: arrayIndex }
-      }
-
-      if (tag === '[object RegExp]') {
-        var regexpIndex = nodes.length
-        nodes[regexpIndex] = null
-        __ReflectApply(__MapSet, seen, [value, regexpIndex])
-        nodes[regexpIndex] = {
-          t: 'r',
-          s: __String(value.source),
-          f: __String(value.flags),
-          l: lastIndexValue(value.lastIndex),
-        }
-        return { t: 'ref', v: regexpIndex }
-      }
-
-      if (tag === '[object Date]') {
-        var dateIndex = nodes.length
-        nodes[dateIndex] = null
-        __ReflectApply(__MapSet, seen, [value, dateIndex])
-        var time = __ReflectApply(__Date.prototype.getTime, value, [])
-        nodes[dateIndex] = { t: 'd', v: __NumberIsNaN(time) ? 'Invalid' : new __Date(time).toISOString() }
-        return { t: 'ref', v: dateIndex }
-      }
-
-      var objectIndex = nodes.length
-      nodes[objectIndex] = null
-      __ReflectApply(__MapSet, seen, [value, objectIndex])
-      var objectKeys = __ObjectKeys(value)
-      var objectEntries = []
-      for (var oi = 0; oi < objectKeys.length; oi++) {
-        objectEntries[objectEntries.length] = [objectKeys[oi], enc(value[objectKeys[oi]])]
-      }
-      nodes[objectIndex] = { t: 'o', e: objectEntries }
-      return { t: 'ref', v: objectIndex }
-    }
-
-    return { wire: { root: enc(args), nodes: nodes }, fns: fns }
-  }
-
-  function reconcile(existing, enc, nodes, memo) {
-    var value = requireRecord(enc, 'mutation value')
-    if (value.t !== 'ref') return decodeEnc(value, [])
-    var nodeIndex = requireIndex(value.v, nodes.length, 'wire reference')
-    var node = requireRecord(nodes[nodeIndex], 'wire node')
-
-    if (node.t === 'keep') return existing
-    if (node.t === 'f') return typeof existing === 'function' ? existing : makeWrapper(requireIndex(node.v, undefined, 'function id'))
-
-    if (node.t === 'r') {
-      if (__ReflectApply(__ObjectToString, existing, []) === '[object RegExp]'
-        && existing.source === node.s && existing.flags === node.f) {
-        existing.lastIndex = requireInteger(node.l, 'regexp lastIndex')
-        return existing
-      }
-      var regexp = new __RegExp(requireString(node.s, 'regexp source'), requireString(node.f, 'regexp flags'))
-      regexp.lastIndex = requireInteger(node.l, 'regexp lastIndex')
-      return regexp
-    }
-
-    if (node.t === 'd') {
-      var rawDate = requireString(node.v, 'date value')
-      if (__ReflectApply(__ObjectToString, existing, []) === '[object Date]') {
-        __ReflectApply(__Date.prototype.setTime, existing, [rawDate === 'Invalid' ? NaN : new __Date(rawDate).getTime()])
-        return existing
-      }
-      return rawDate === 'Invalid' ? new __Date(NaN) : new __Date(rawDate)
-    }
-
-    var memoized = __ReflectApply(__MapGet, memo, [nodeIndex])
-    if (memoized !== undefined) return memoized
-
-    if (node.t === 'o') {
-      var existingTag = existing !== null && typeof existing === 'object' ? __ReflectApply(__ObjectToString, existing, []) : ''
-      var target = existingTag === '[object Object]' ? existing : {}
-      __ReflectApply(__MapSet, memo, [nodeIndex, target])
-      var entries = requireArray(node.e, 'object entries')
-      var previous = __ObjectKeys(target)
-      var keep = __ObjectCreate(null)
-      for (var pi = 0; pi < previous.length; pi++) keep[previous[pi]] = true
-      for (var ei = 0; ei < entries.length; ei++) {
-        var pair = requireArray(entries[ei], 'object entry')
-        if (pair.length !== 2) throw malformed('object entry is not a pair')
-        var key = requireString(pair[0], 'object key')
-        delete keep[key]
-        __ObjectDefineProperty(target, key, {
-          value: reconcile(target[key], pair[1], nodes, memo),
-          writable: true,
-          enumerable: true,
-          configurable: true,
-        })
-      }
-      var stale = __ObjectKeys(keep)
-      for (var si = 0; si < stale.length; si++) delete target[stale[si]]
-      return target
-    }
-
-    if (node.t === 'a') {
-      var array = __ArrayIsArray(existing) ? existing : []
-      __ReflectApply(__MapSet, memo, [nodeIndex, array])
-      var length = requireLength(node.n, 'array length')
-      var oldKeys = __ObjectKeys(array)
-      array.length = length
-      var present = __ObjectCreate(null)
-      var arrayEntries = requireArray(node.e, 'array entries')
-      for (var ai = 0; ai < arrayEntries.length; ai++) {
-        var item = requireArray(arrayEntries[ai], 'array entry')
-        if (item.length !== 2) throw malformed('array entry is not a pair')
-        var index = requireIndex(item[0], length, 'array index')
-        present[index] = true
-        array[index] = reconcile(array[index], item[1], nodes, memo)
-      }
-      for (var oi = 0; oi < oldKeys.length; oi++) {
-        if (!hasOwn(present, oldKeys[oi])) delete array[oldKeys[oi]]
-      }
-      return array
-    }
-
-    throw malformed('unknown node tag ' + __String(node.t))
-  }
-
-  function reconcileRoot(args, wire) {
-    if (wire === undefined || wire === null) return
-    var root = requireRecord(wire, 'mutation wire')
-    var nodes = requireArray(root.nodes, 'mutation nodes')
-    reconcile(args, root.root, nodes, new __Map())
-  }
-
-  function settle(token, ok, payloadJson) {
-    var key = 't' + token
-    var entry = hasOwn(pending, key) ? pending[key] : undefined
-    if (entry === undefined) return
-    delete pending[key]
-    var payload
-    try {
-      payload = __JSONParse(payloadJson)
-    } catch (error) {
-      entry.reject(errorFrom(error))
-      return
-    }
-    if (!isRecord(payload)) {
-      entry.reject(new __Error('template sandbox bridge returned a malformed payload'))
-      return
-    }
-    try {
-      reconcileRoot(entry.args, payload.p)
-    } catch (error) {
-      entry.reject(errorFrom(error))
-      return
-    }
-    if (ok === 1 && payload.ok === 1) {
-      var value
-      try {
-        value = materialize(payload.v)
-      } catch (error) {
-        entry.reject(errorFrom(error))
-        return
-      }
-      entry.resolve(value)
-      return
-    }
-    entry.reject(errorFrom(payload.e))
-  }
-
-  function invoke(id, args) {
-    var encoded
-    try {
-      encoded = encodeArgs(args)
-    } catch (error) {
-      throw errorFrom(error)
-    }
-
-    var token = ++nextToken
-    var key = 't' + token
-    var promise = new __Promise(function (resolve, reject) {
-      pending[key] = { resolve: resolve, reject: reject, args: args }
-    })
-    var raw
-    try {
-      raw = __dispatch(id, __JSONStringify(encoded.wire), encoded.fns, args, token, settle, bridgeThis)
-    } catch (error) {
-      delete pending[key]
-      throw errorFrom(error)
-    }
-
-    var reply
-    try {
-      reply = __JSONParse(raw)
-    } catch (error) {
-      delete pending[key]
-      throw new __Error('template sandbox bridge returned a malformed reply')
-    }
-    if (!isRecord(reply) || (reply.a !== 0 && reply.a !== 1)) {
-      delete pending[key]
-      throw new __Error('template sandbox bridge returned a malformed reply')
-    }
-    if (reply.a === 1) return promise
-
-    delete pending[key]
-    try {
-      reconcileRoot(args, reply.p)
-    } catch (error) {
-      throw errorFrom(error)
-    }
-    if (reply.ok === 1) {
-      try {
-        return materialize(reply.v)
-      } catch (error) {
-        throw errorFrom(error)
-      }
-    }
-    throw errorFrom(reply.e)
-  }
-
-  function escapeHtml(text) {
-    var value = __ReflectApply(__StringReplace, text, [/&/g, '&amp;'])
-    value = __ReflectApply(__StringReplace, value, [/</g, '&lt;'])
-    value = __ReflectApply(__StringReplace, value, [/>/g, '&gt;'])
-    value = __ReflectApply(__StringReplace, value, [/"/g, '&quot;'])
-    value = __ReflectApply(__StringReplace, value, [/'/g, '&#39;'])
-    return value
-  }
-
-  var descriptor = requireRecord(__JSONParse(__descriptorJson), 'descriptor')
-  var source = materialize(descriptor)
-  var env = __ObjectCreate(null)
-  var keys = __ObjectKeys(source)
-  for (var i = 0; i < keys.length; i++) {
-    __ObjectDefineProperty(env, keys[i], {
-      value: source[keys[i]],
-      writable: true,
-      enumerable: true,
-      configurable: true,
-    })
-  }
-
-  var out = ''
-  __ObjectDefineProperty(env, '__out', {
-    get: function () { return out },
-    set: function (value) { out = value === null || value === undefined ? '' : __String(value) },
-    enumerable: false,
-    configurable: true,
-  })
-  __ObjectDefineProperty(env, '__append', {
-    value: function (value) { out += value === null || value === undefined ? '' : __String(value) },
-    enumerable: false,
-    configurable: true,
-    writable: true,
-  })
-  __ObjectDefineProperty(env, '__escape', {
-    value: escapeHtml,
-    enumerable: false,
-    configurable: true,
-    writable: true,
-  })
-  __ObjectDefineProperty(env, 'print', {
-    value: function () {
-      for (var i = 0; i < arguments.length; i++) {
-        if (i > 0) out += ' '
-        var value = arguments[i]
-        out += value === null || value === undefined ? '' : __String(value)
-      }
-    },
-    enumerable: false,
-    configurable: true,
-    writable: true,
-  })
-  __ObjectDefineProperty(env, 'await', {
-    value: function (value) {
-      if (value !== null && typeof value === 'object' && typeof value.then === 'function') {
-        throw new __Error('async template expression used inside a synchronous callback is not supported')
-      }
-      return value
-    },
-    enumerable: false,
-    configurable: true,
-    writable: true,
-  })
-
-  return env
-})`;
-
-// packages/tavern-template/src/runtime.ts
-var CONTEXT_FUNCTIONS = /* @__PURE__ */ new WeakSet();
-var UNSUPPORTED_OBJECT_TAGS = /* @__PURE__ */ new Set([
-  "[object Promise]",
-  "[object Map]",
-  "[object Set]",
-  "[object WeakMap]",
-  "[object WeakSet]",
-  "[object ArrayBuffer]",
-  "[object SharedArrayBuffer]",
-  "[object DataView]"
-]);
-function isRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function encodeNumber(value) {
-  if (Number.isNaN(value)) return "NaN";
-  if (value === Infinity) return "Infinity";
-  if (value === -Infinity) return "-Infinity";
-  if (Object.is(value, -0)) return "-0";
-  return value;
-}
-function normalizeLastIndex(value) {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0;
-}
-function isUnsupportedObjectTag(tag) {
-  if (UNSUPPORTED_OBJECT_TAGS.has(tag)) return true;
-  return /^\[object (?:Uint|Int|Float|BigUint|BigInt)\w*Array\]$/.test(tag);
-}
-function hostFunctionId(state, fn) {
-  const contextOrigin = CONTEXT_FUNCTIONS.has(fn);
-  const existing = state.ids.get(fn);
-  if (existing !== void 0) {
-    const entry = state.functions[existing];
-    if (entry !== void 0 && contextOrigin && entry.origin === "host") entry.origin = "context";
-    return existing;
-  }
-  const id = state.functions.length;
-  state.functions.push({ fn, origin: contextOrigin ? "context" : "host" });
-  state.ids.set(fn, id);
-  return id;
-}
-function markContextFunction(value) {
-  if (typeof value === "function") CONTEXT_FUNCTIONS.add(value);
-}
-function markContextFunctionsDeep(value, seen) {
-  if (typeof value === "function") {
-    CONTEXT_FUNCTIONS.add(value);
-    return;
-  }
-  if (value === null || typeof value !== "object") return;
-  if (seen.has(value)) return;
-  seen.add(value);
-  if (Array.isArray(value)) {
-    for (const item of value) markContextFunctionsDeep(item, seen);
-    return;
-  }
-  const tag = Object.prototype.toString.call(value);
-  if (tag === "[object Date]" || tag === "[object RegExp]") return;
-  const record = value;
-  for (const key of Object.keys(record)) markContextFunctionsDeep(record[key], seen);
-}
-function encodeWire(value, state, mode) {
-  const nodes = [];
-  const seen = /* @__PURE__ */ new Map();
-  const encode = (input) => {
-    if (input === null) return { t: "null" };
-    switch (typeof input) {
-      case "undefined":
-        return { t: "u" };
-      case "string":
-        return { t: "s", v: input };
-      case "boolean":
-        return { t: "b", v: input };
-      case "number":
-        return { t: "n", v: encodeNumber(input) };
-      case "bigint":
-        return { t: "big", v: input.toString() };
-      case "symbol":
-        throw new TypeError("cannot cross a symbol through the template sandbox boundary");
-      case "function": {
-        if (mode === "keep") {
-          nodes.push({ t: "keep" });
-        } else {
-          if (state === void 0) throw new Error("host function registry is missing");
-          nodes.push({ t: "f", v: hostFunctionId(state, input) });
-        }
-        return { t: "ref", v: nodes.length - 1 };
-      }
-      case "object":
-        break;
-      default:
-        throw new TypeError(`cannot cross a ${typeof input} through the template sandbox boundary`);
-    }
-    const objectValue = input;
-    const existing = seen.get(objectValue);
-    if (existing !== void 0) return { t: "ref", v: existing };
-    if (Array.isArray(input)) {
-      const index2 = nodes.length;
-      nodes.push({ t: "a", n: input.length, e: [] });
-      seen.set(objectValue, index2);
-      const entries2 = [];
-      for (const key of Object.keys(input)) {
-        const numeric = Number(key);
-        if (String(numeric) === key && numeric >= 0 && numeric < input.length) {
-          entries2.push([numeric, encode(input[numeric])]);
-        }
-      }
-      nodes[index2] = { t: "a", n: input.length, e: entries2 };
-      return { t: "ref", v: index2 };
-    }
-    const tag = Object.prototype.toString.call(input);
-    if (tag === "[object RegExp]") {
-      const index2 = nodes.length;
-      nodes.push({ t: "r", s: "", f: "", l: 0 });
-      seen.set(objectValue, index2);
-      const regexp = input;
-      nodes[index2] = { t: "r", s: String(regexp.source), f: String(regexp.flags), l: normalizeLastIndex(regexp.lastIndex) };
-      return { t: "ref", v: index2 };
-    }
-    if (tag === "[object Date]") {
-      const index2 = nodes.length;
-      nodes.push({ t: "d", v: "Invalid" });
-      seen.set(objectValue, index2);
-      const time = Date.prototype.getTime.call(input);
-      nodes[index2] = { t: "d", v: Number.isNaN(time) ? "Invalid" : new Date(time).toISOString() };
-      return { t: "ref", v: index2 };
-    }
-    if (isUnsupportedObjectTag(tag)) {
-      throw new TypeError(`cannot cross a ${tag.slice(8, -1)} through the template sandbox boundary`);
-    }
-    const index = nodes.length;
-    nodes.push({ t: "o", e: [] });
-    seen.set(objectValue, index);
-    const record = input;
-    const entries = [];
-    for (const key of Object.keys(record)) entries.push([key, encode(record[key])]);
-    nodes[index] = { t: "o", e: entries };
-    return { t: "ref", v: index };
-  };
-  return { root: encode(value), nodes };
-}
-function wireInteger(value, label) {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-    throw new TypeError(`malformed sandbox bridge payload: ${label} is not a non-negative integer`);
-  }
-  return value;
-}
-function wireLength(value, label) {
-  const length = wireInteger(value, label);
-  if (length > 4294967295) throw new TypeError(`malformed sandbox bridge payload: ${label} is too large`);
-  return length;
-}
-function wireString(value, label) {
-  if (typeof value !== "string") throw new TypeError(`malformed sandbox bridge payload: ${label} is not a string`);
-  return value;
-}
-function wireNumber(value) {
-  if (typeof value === "number" && !Number.isNaN(value) && value !== Infinity && value !== -Infinity) return value;
-  if (value === "NaN") return NaN;
-  if (value === "Infinity") return Infinity;
-  if (value === "-Infinity") return -Infinity;
-  if (value === "-0") return -0;
-  throw new TypeError("malformed sandbox bridge payload: invalid number");
-}
-function wrapNestedContextFunction(fn) {
-  return (...args) => {
-    for (const arg of args) {
-      if (arg !== null && (typeof arg === "object" || typeof arg === "function")) {
-        throw new TypeError("host callback arguments must be primitive when invoking a template function from host code");
-      }
-    }
-    const result = Reflect.apply(fn, void 0, args);
-    if (isThenableValue(result)) {
-      throw new TypeError("template callbacks invoked from host code must be synchronous");
-    }
-    return result;
-  };
-}
-function decodeWire(wire, resolveFunction, dropPrototypeKey) {
-  if (!isRecord(wire) || !Array.isArray(wire.nodes)) {
-    throw new TypeError("malformed sandbox bridge payload: nodes missing");
-  }
-  const nodes = wire.nodes;
-  const built = new Array(nodes.length);
-  const rootArrayIndex = isRecord(wire.root) && wire.root.t === "ref" ? wireInteger(wire.root.v, "root reference") : -1;
-  const nestedCallbacks = /* @__PURE__ */ new Map();
-  const callbackFor = (fn) => {
-    const cached = nestedCallbacks.get(fn);
-    if (cached !== void 0) return cached;
-    const wrapped = wrapNestedContextFunction(fn);
-    nestedCallbacks.set(fn, wrapped);
-    return wrapped;
-  };
-  const decode = (enc, wrapFunction) => {
-    if (!isRecord(enc)) throw new TypeError("malformed sandbox bridge payload: value missing");
-    switch (enc.t) {
-      case "null":
-        return null;
-      case "u":
-        return void 0;
-      case "s":
-        return wireString(enc.v, "string value");
-      case "b":
-        if (typeof enc.v !== "boolean") throw new TypeError("malformed sandbox bridge payload: invalid boolean");
-        return enc.v;
-      case "n":
-        return wireNumber(enc.v);
-      case "big":
-        return BigInt(wireString(enc.v, "bigint value"));
-      case "ref": {
-        const index = wireInteger(enc.v, "reference");
-        if (index >= built.length) throw new TypeError("malformed sandbox bridge payload: reference out of range");
-        const value = built[index];
-        if (wrapFunction && typeof value === "function") {
-          const node = nodes[index];
-          if (isRecord(node) && node.t === "f") return callbackFor(value);
-        }
-        return value;
-      }
-      default:
-        throw new TypeError(`malformed sandbox bridge payload: unknown value tag ${String(enc.t)}`);
-    }
-  };
-  for (let i = 0; i < nodes.length; i++) {
-    const node = nodes[i];
-    if (!isRecord(node)) throw new TypeError("malformed sandbox bridge payload: node missing");
-    switch (node.t) {
-      case "o":
-        built[i] = {};
-        break;
-      case "a":
-        built[i] = new Array(wireLength(node.n, "array length"));
-        break;
-      case "f":
-        built[i] = resolveFunction(wireInteger(node.v, "function id"));
-        break;
-      case "r": {
-        const regexp = new RegExp(wireString(node.s, "regexp source"), wireString(node.f, "regexp flags"));
-        regexp.lastIndex = wireInteger(node.l, "regexp lastIndex");
-        built[i] = regexp;
-        break;
-      }
-      case "d": {
-        const raw = wireString(node.v, "date value");
-        built[i] = raw === "Invalid" ? /* @__PURE__ */ new Date(NaN) : new Date(raw);
-        break;
-      }
-      default:
-        throw new TypeError(`malformed sandbox bridge payload: unknown node tag ${String(node.t)}`);
-    }
-  }
-  for (let i = 0; i < nodes.length; i++) {
-    const node = nodes[i];
-    if (!isRecord(node)) continue;
-    if (node.t === "o") {
-      if (!Array.isArray(node.e)) throw new TypeError("malformed sandbox bridge payload: object entries missing");
-      for (const rawEntry of node.e) {
-        if (!Array.isArray(rawEntry) || rawEntry.length !== 2) throw new TypeError("malformed sandbox bridge payload: object entry missing");
-        const key = wireString(rawEntry[0], "object key");
-        if (dropPrototypeKey && key === "__proto__") continue;
-        const value = decode(rawEntry[1], true);
-        if ((key === "valueOf" || key === "toString" || key === "toJSON") && typeof value === "function") continue;
-        Object.defineProperty(built[i], key, {
-          value,
-          writable: true,
-          enumerable: true,
-          configurable: true
-        });
-      }
-    } else if (node.t === "a") {
-      if (!Array.isArray(node.e)) throw new TypeError("malformed sandbox bridge payload: array entries missing");
-      const length = wireLength(node.n, "array length");
-      for (const rawEntry of node.e) {
-        if (!Array.isArray(rawEntry) || rawEntry.length !== 2) throw new TypeError("malformed sandbox bridge payload: array entry missing");
-        const index = wireInteger(rawEntry[0], "array index");
-        if (index >= length) throw new TypeError("malformed sandbox bridge payload: array index out of range");
-        built[i][index] = decode(rawEntry[1], i !== rootArrayIndex);
-      }
-    }
-  }
-  return decode(wire.root, false);
-}
-function readErrorInfo(error) {
-  try {
-    if (error !== null && typeof error === "object") {
-      const record = error;
-      const name2 = typeof record.name === "string" && record.name !== "" ? record.name : "Error";
-      const message = typeof record.message === "string" ? record.message : String(error);
-      return { name: name2, message };
-    }
-    return { name: "Error", message: String(error) };
-  } catch {
-    return { name: "Error", message: "host function threw an unprintable value" };
-  }
-}
-function decodeArgumentWire(argsJson, contextFunctions) {
-  if (typeof argsJson !== "string" || !Array.isArray(contextFunctions)) {
-    throw new TypeError("malformed sandbox bridge call");
-  }
-  for (const fn of contextFunctions) markContextFunction(fn);
-  const wire = JSON.parse(argsJson);
-  const value = decodeWire(wire, (id) => {
-    if (id >= contextFunctions.length) throw new TypeError(`template sandbox function id ${id} is out of range`);
-    const fn = contextFunctions[id];
-    if (typeof fn !== "function") throw new TypeError(`template sandbox function id ${id} is not callable`);
-    return fn;
-  }, true);
-  if (!Array.isArray(value)) throw new TypeError("malformed sandbox bridge call: arguments are not an array");
-  return value;
-}
-function encodePostState(args) {
-  if (!args.some((arg) => arg !== null && typeof arg === "object")) return void 0;
-  try {
-    return encodeWire(args, void 0, "keep");
-  } catch {
-    return void 0;
-  }
-}
-function isThenableValue(value) {
-  return value !== null && (typeof value === "object" || typeof value === "function") && typeof value.then === "function";
-}
-function createHostDispatch(state) {
-  return (id, argsJson, contextFunctions, contextArgs, token, settle, contextThis) => {
-    try {
-      if (contextThis === null || typeof contextThis !== "object") {
-        throw new Error("malformed sandbox bridge call: missing context this binding");
-      }
-      const entry = state.functions[id];
-      if (entry === void 0) throw new Error(`unknown host function id ${id}`);
-      if (Array.isArray(contextFunctions)) for (const fn of contextFunctions) markContextFunction(fn);
-      if (Array.isArray(contextArgs)) for (const value of contextArgs) markContextFunction(value);
-      if (entry.origin === "context") {
-        if (!Array.isArray(contextArgs)) throw new TypeError("malformed sandbox bridge call: context arguments are not an array");
-        let result2;
-        try {
-          result2 = Reflect.apply(entry.fn, contextThis, contextArgs);
-        } catch (error) {
-          return JSON.stringify({ a: 0, ok: 0, e: readErrorInfo(error) });
-        }
-        markContextFunctionsDeep(result2, /* @__PURE__ */ new Set());
-        if (isThenableValue(result2)) {
-          return JSON.stringify({
-            a: 0,
-            ok: 0,
-            e: {
-              name: "TypeError",
-              message: "context function returned a thenable; only host-native Promises can cross the template sandbox boundary"
-            }
-          });
-        }
-        return JSON.stringify({ a: 0, ok: 1, v: encodeWire(result2, state, "wrap") });
-      }
-      const args = decodeArgumentWire(argsJson, contextFunctions);
-      let result;
-      try {
-        result = Reflect.apply(entry.fn, contextThis, args);
-      } catch (error) {
-        return JSON.stringify({ a: 0, ok: 0, e: readErrorInfo(error), p: encodePostState(args) });
-      }
-      if (isThenableValue(result)) {
-        if (!(result instanceof Promise)) {
-          return JSON.stringify({
-            a: 0,
-            ok: 0,
-            e: {
-              name: "TypeError",
-              message: "host function returned a non-native thenable; only host-native Promises can cross the template sandbox boundary"
-            }
-          });
-        }
-        void Promise.resolve(result).then(
-          (value) => {
-            let payload;
-            try {
-              payload = { ok: 1, v: encodeWire(value, state, "wrap"), p: encodePostState(args) };
-            } catch (error) {
-              payload = { ok: 0, e: readErrorInfo(error) };
-            }
-            try {
-              settle(token, 1, JSON.stringify(payload));
-            } catch {
-            }
-          },
-          (error) => {
-            try {
-              settle(token, 0, JSON.stringify({ ok: 0, e: readErrorInfo(error), p: encodePostState(args) }));
-            } catch {
-            }
-          }
-        );
-        return JSON.stringify({ a: 1 });
-      }
-      return JSON.stringify({ a: 0, ok: 1, v: encodeWire(result, state, "wrap"), p: encodePostState(args) });
-    } catch (error) {
-      return JSON.stringify({ a: 0, ok: 0, e: readErrorInfo(error) });
-    }
-  };
-}
-function createHostEnvelope(env) {
-  const state = { functions: [], ids: /* @__PURE__ */ new Map() };
-  const wire = encodeWire(env, state, "wrap");
-  return { descriptorJson: JSON.stringify(wire), state };
-}
-var BOOTSTRAP_SCRIPT = new vm.Script(BOOTSTRAP_SOURCE, { filename: "tavern-template-bootstrap.js" });
-function createSandboxRealm(env) {
-  const context = vm.createContext(/* @__PURE__ */ Object.create(null));
-  const bootstrap = BOOTSTRAP_SCRIPT.runInContext(context);
-  const envelope = createHostEnvelope(env);
-  const dispatch = createHostDispatch(envelope.state);
-  const sandboxEnv = bootstrap(envelope.descriptorJson, dispatch);
-  if (sandboxEnv === null || typeof sandboxEnv !== "object") {
-    throw new Error("sandbox bootstrap did not return a context environment");
-  }
-  return { context, env: sandboxEnv };
-}
-function describeThrown(err2) {
-  try {
-    if (err2 !== null && typeof err2 === "object") {
-      const record = err2;
-      const name2 = typeof record.name === "string" && record.name !== "" ? record.name : void 0;
-      const message = typeof record.message === "string" ? record.message : void 0;
-      if (name2 !== void 0 && message !== void 0) return `${name2}: ${message}`;
-      if (message !== void 0) return message;
-    }
-    return String(err2);
-  } catch {
-    return "unprintable error value";
-  }
-}
-async function evalExpressionSandboxed(expression, env) {
-  if (typeof expression !== "string") throw new TypeError("template expression must be a string");
-  const wrapper = `(async function (__env) { with (__env) { return await (${expression}); } })`;
-  const script = new vm.Script(wrapper, { filename: "tavern-template-expr.ejs" });
-  const realm = createSandboxRealm(env);
-  const factory = script.runInContext(realm.context);
-  const result = await factory(realm.env);
-  if (typeof result === "function") {
-    throw new TypeError("template expression returned a function; functions cannot cross the template sandbox boundary");
-  }
-  if (typeof result === "symbol") {
-    throw new TypeError("template expression returned a symbol; symbols cannot cross the template sandbox boundary");
-  }
-  try {
-    return structuredClone(result);
-  } catch (error) {
-    throw new TypeError(`template expression result cannot be cloned across the template sandbox boundary: ${describeThrown(error)}`);
-  }
-}
-
-// packages/plugin/src/mvu.ts
-init_src2();
-
-// packages/plugin/src/mvu-guard.ts
-var DIRECTIVE_KEYS = ["$range", "$step", "$enum", "$ro", "$type"];
-var TYPE_LOCKS = ["number", "string", "boolean", "object", "array"];
-function isPlainObject(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function parseRange(raw) {
-  if (!Array.isArray(raw) || raw.length < 2) return void 0;
-  const min = raw[0];
-  const max2 = raw[1];
-  if (typeof min !== "number" || !Number.isFinite(min) || typeof max2 !== "number" || !Number.isFinite(max2)) return void 0;
-  return { min: Math.min(min, max2), max: Math.max(min, max2) };
-}
-function resolveTemplateNode(raw) {
-  if (typeof raw === "number" && Number.isFinite(raw)) return { typeLock: "number" };
-  if (typeof raw === "string") return { typeLock: "string" };
-  if (typeof raw === "boolean") return { typeLock: "boolean" };
-  if (Array.isArray(raw)) {
-    return { typeLock: "array", ...raw.length > 0 ? { item: resolveTemplateNode(raw[0]) } : {} };
-  }
-  if (!isPlainObject(raw)) return void 0;
-  const range = parseRange(raw.$range);
-  const step = typeof raw.$step === "number" && Number.isFinite(raw.$step) && raw.$step > 0 ? raw.$step : void 0;
-  const enumValues = Array.isArray(raw.$enum) && raw.$enum.length > 0 ? raw.$enum : void 0;
-  const ro = raw.$ro === true ? true : void 0;
-  const typeLockDirect = typeof raw.$type === "string" && TYPE_LOCKS.includes(raw.$type) ? raw.$type : void 0;
-  const directives = {
-    ...range !== void 0 ? { min: range.min, max: range.max } : {},
-    ...step !== void 0 ? { step } : {},
-    ...enumValues !== void 0 ? { enumValues } : {},
-    ...ro !== void 0 ? { ro } : {}
-  };
-  const childKeys = Object.keys(raw).filter((key) => !DIRECTIVE_KEYS.includes(key));
-  if (childKeys.length === 0) {
-    const typeLock = typeLockDirect ?? (range !== void 0 || step !== void 0 ? "number" : enumValues !== void 0 ? "string" : void 0);
-    if (typeLock === void 0 && Object.keys(directives).length === 0) {
-      return { typeLock: "object", objectMode: "open" };
-    }
-    if (typeLock === "object") return { typeLock, objectMode: "open", ...directives };
-    if (typeLock === "array") return { typeLock, ...directives };
-    return { ...typeLock !== void 0 ? { typeLock } : {}, ...directives };
-  }
-  const wildcardRaw = childKeys.includes("*") ? raw["*"] : void 0;
-  const namedKeys = childKeys.filter((key) => key !== "*");
-  const children = /* @__PURE__ */ new Map();
-  for (const key of namedKeys) {
-    const child = resolveTemplateNode(raw[key]);
-    if (child !== void 0) children.set(key, child);
-  }
-  const objectMode = wildcardRaw !== void 0 ? "wildcard" : "locked";
-  const wildcard = wildcardRaw !== void 0 ? resolveTemplateNode(wildcardRaw) : void 0;
-  return {
-    typeLock: "object",
-    objectMode,
-    ...children.size > 0 ? { children } : {},
-    ...wildcard !== void 0 ? { wildcard } : {},
-    ...directives
-  };
-}
-var schemaCache = /* @__PURE__ */ new WeakMap();
-function resolveMvuSchema(raw) {
-  if (!isPlainObject(raw)) return void 0;
-  const cached = schemaCache.get(raw);
-  if (cached !== void 0 || schemaCache.has(raw)) return cached;
-  const resolved = resolveTemplateNode(raw);
-  const root = resolved !== void 0 && resolved.objectMode === "locked" ? { ...resolved, objectMode: "open" } : resolved;
-  schemaCache.set(raw, root);
-  return root;
-}
-function stripMvuControl(tree) {
-  if (!("$schema" in tree || "$rules" in tree)) return tree;
-  const out = {};
-  for (const [key, value] of Object.entries(tree)) {
-    if (key === "$schema" && isPlainObject(value)) continue;
-    if (key === "$rules" && Array.isArray(value)) continue;
-    out[key] = value;
-  }
-  return out;
-}
-var INITIAL_VARIABLES_KEY = "initial_variables";
-function cardSchema(card) {
-  const holder = card?.data?.extensions?.["agentTavern"];
-  if (!isPlainObject(holder)) return void 0;
-  const initial = holder.initialVariables;
-  return isPlainObject(initial) ? initial.$schema : void 0;
-}
-function treeSchema(tree) {
-  return isPlainObject(tree) ? tree.$schema : void 0;
-}
-function readMvuSchema(chat, card, variablesOverride) {
-  const candidates = [
-    treeSchema(variablesOverride ?? chat?.header?.chat_metadata?.variables),
-    cardSchema(card),
-    treeSchema(chat?.header?.chat_metadata?.[INITIAL_VARIABLES_KEY])
-  ];
-  for (const candidate of candidates) {
-    if (isPlainObject(candidate) && Object.keys(candidate).length > 0) return candidate;
-  }
-  return void 0;
-}
-function typeName(value) {
-  if (value === null) return "null";
-  if (Array.isArray(value)) return "array";
-  return typeof value;
-}
-function mvuValuesEqual(left, right) {
-  if (left === right) return true;
-  if (Array.isArray(left) && Array.isArray(right)) {
-    return left.length === right.length && left.every((item, index) => mvuValuesEqual(item, right[index]));
-  }
-  if (isPlainObject(left) && isPlainObject(right)) {
-    const keys = /* @__PURE__ */ new Set([...Object.keys(left), ...Object.keys(right)]);
-    for (const key of keys) {
-      if (!mvuValuesEqual(left[key], right[key])) return false;
-    }
-    return true;
-  }
-  return false;
-}
-function clampNumber(value, min, max2) {
-  let out = value;
-  if (min !== void 0 && out < min) out = min;
-  if (max2 !== void 0 && out > max2) out = max2;
-  return out;
-}
-function validateValue2(node, value, current, path7, notes) {
-  if (node.ro === true && !mvuValuesEqual(value, current)) {
-    return { ok: false, kind: "readonly", reason: "read-only field" };
-  }
-  if (Array.isArray(value)) {
-    if (node.typeLock !== void 0 && node.typeLock !== "array") {
-      return { ok: false, kind: "type-mismatch", reason: `expected ${node.typeLock}, got array` };
-    }
-    if (node.item === void 0) return { ok: true, value, notes };
-    const currentItems = Array.isArray(current) ? current : [];
-    const out = [];
-    for (let i = 0; i < value.length; i++) {
-      const result = validateValue2(node.item, value[i], currentItems[i], `${path7}[${i}]`, notes);
-      if (!result.ok) return result;
-      out.push(result.value);
-    }
-    return { ok: true, value: out, notes };
-  }
-  if (isPlainObject(value)) {
-    if (node.typeLock !== void 0 && node.typeLock !== "object") {
-      return { ok: false, kind: "type-mismatch", reason: `expected ${node.typeLock}, got object` };
-    }
-    if (node.objectMode !== "locked" && node.objectMode !== "wildcard") return { ok: true, value, notes };
-    const currentObject = isPlainObject(current) ? current : {};
-    const next = {};
-    for (const key of Object.keys(value)) {
-      const child = node.children?.get(key) ?? node.wildcard;
-      if (child === void 0) {
-        return { ok: false, kind: "structure", reason: `key '${key}' is not in the schema template` };
-      }
-      const result = validateValue2(child, value[key], currentObject[key], path7 === "" ? key : `${path7}.${key}`, notes);
-      if (!result.ok) return result;
-      next[key] = result.value;
-    }
-    if (node.objectMode === "locked") {
-      for (const key of node.children?.keys() ?? []) {
-        if (!(key in value) && key in currentObject) {
-          return { ok: false, kind: "structure", reason: `template field '${key}' would be deleted by this write` };
-        }
-      }
-    }
-    return { ok: true, value: next, notes };
-  }
-  if (node.typeLock !== void 0 && typeName(value) !== node.typeLock) {
-    return { ok: false, kind: "type-mismatch", reason: `expected ${node.typeLock}, got ${typeName(value)}` };
-  }
-  if (node.enumValues !== void 0 && !node.enumValues.some((allowed) => mvuValuesEqual(allowed, value))) {
-    return { ok: false, kind: "enum-violation", reason: `value ${JSON.stringify(value)} is not one of [${node.enumValues.map((entry) => JSON.stringify(entry)).join(", ")}]` };
-  }
-  if (typeof value === "number" && Number.isFinite(value) && (node.min !== void 0 || node.max !== void 0 || node.step !== void 0)) {
-    let out = value;
-    if (node.step !== void 0 && typeof current === "number" && Number.isFinite(current)) {
-      const delta = out - current;
-      const capped = Math.max(-node.step, Math.min(node.step, delta));
-      if (capped !== delta) {
-        notes.push(`${path7}: guard step: delta ${delta > 0 ? "+" : ""}${delta} capped to ${capped > 0 ? "+" : ""}${capped}`);
-        out = current + capped;
-      }
-    }
-    const clamped = clampNumber(out, node.min, node.max);
-    if (clamped !== out) {
-      notes.push(`${path7}: guard clamp: ${out} -> ${clamped}`);
-      out = clamped;
-    }
-    return { ok: true, value: out, notes };
-  }
-  return { ok: true, value, notes };
-}
-function guardMvuWrite(schema, path7, value, current) {
-  const segments = path7.split(".").filter((segment) => segment !== "");
-  if (segments.length === 0) return { ok: true, value };
-  if (segments[0] === "$schema") {
-    return { ok: false, kind: "readonly", reason: "the $schema subtree is the declared guard contract and cannot be settled" };
-  }
-  const root = resolveMvuSchema(schema);
-  if (root === void 0) return { ok: true, value };
-  let cursor = root;
-  let parent;
-  let roChain = root.ro === true;
-  let violation;
-  for (let i = 0; i < segments.length && cursor !== void 0; i++) {
-    const segment = segments[i];
-    if (cursor.typeLock === "array") {
-      parent = cursor;
-      if (!/^\d+$/.test(segment)) {
-        violation ??= `'${segments.slice(0, i + 1).join(".")}' expects an array index, not '${segment}'`;
-        cursor = void 0;
-      } else {
-        cursor = cursor.item;
-      }
-    } else if (cursor.objectMode !== void 0) {
-      parent = cursor;
-      const named = cursor.children?.get(segment);
-      if (named !== void 0) cursor = named;
-      else if (cursor.objectMode === "wildcard" && cursor.wildcard !== void 0) cursor = cursor.wildcard;
-      else if (cursor.objectMode === "locked") {
-        violation ??= `'${segments.slice(0, i + 1).join(".")}' is not in the schema template`;
-        cursor = void 0;
-      } else cursor = void 0;
-    } else {
-      if (cursor.typeLock !== void 0 && cursor.objectMode === void 0) {
-        violation ??= `'${segments.slice(0, i + 1).join(".")}' expects ${cursor.typeLock}, not a nested path`;
-      }
-      parent = cursor;
-      cursor = void 0;
-    }
-    if (cursor !== void 0 && cursor.ro === true) roChain = true;
-  }
-  if (violation !== void 0) return { ok: false, kind: "structure", reason: violation };
-  const lastSegment = segments[segments.length - 1];
-  if (value === void 0) {
-    if (roChain) return { ok: false, kind: "readonly", reason: "read-only field" };
-    if (parent?.objectMode === "locked" && parent.children?.has(lastSegment)) {
-      return { ok: false, kind: "structure", reason: `template field '${lastSegment}' cannot be deleted` };
-    }
-    return { ok: true, value: void 0 };
-  }
-  if (roChain && !mvuValuesEqual(value, current)) {
-    return { ok: false, kind: "readonly", reason: "read-only field" };
-  }
-  if (cursor === void 0) return { ok: true, value };
-  const result = validateValue2(cursor, value, current, segments.join("."), []);
-  if (!result.ok) return result;
-  return { ok: true, value: result.value, ...result.notes.length > 0 ? { note: result.notes.join("; ") } : {} };
-}
-function getMvuTreePath(tree, path7) {
-  let cursor = tree;
-  for (const segment of path7.split(".")) {
-    if (!isPlainObject(cursor)) return void 0;
-    cursor = cursor[segment];
-  }
-  return cursor;
-}
-
-// packages/plugin/src/mvu-rules.ts
-var MVU_RULE_ROUNDS = 3;
-var MVU_RULES_LIMIT = 32;
-var MVU_RULE_THEN_LIMIT = 16;
-function isPlainObject2(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-var INITIAL_VARIABLES_KEY2 = "initial_variables";
-function cardRules(card) {
-  const holder = card?.data?.extensions?.["agentTavern"];
-  if (!isPlainObject2(holder)) return void 0;
-  const initial = holder["initialVariables"];
-  return isPlainObject2(initial) ? initial["$rules"] : void 0;
-}
-function treeRules(tree) {
-  return isPlainObject2(tree) ? tree.$rules : void 0;
-}
-function validateMvuRules(raw) {
-  if (!Array.isArray(raw)) throw new Error("$rules must be an array of rule objects");
-  if (raw.length === 0) return [];
-  if (raw.length > MVU_RULES_LIMIT) {
-    throw new Error(`$rules declares ${raw.length} rules, over the cap of ${MVU_RULES_LIMIT}`);
-  }
-  return raw.map((entry, index) => {
-    if (!isPlainObject2(entry)) throw new Error(`rule #${index} is not an object`);
-    const { name: name2, when, then } = entry;
-    if (typeof name2 !== "string" || name2.trim() === "" || name2.length > 64) {
-      throw new Error(`rule #${index} requires a non-empty name of at most 64 characters`);
-    }
-    if (typeof when !== "string" || when.trim() === "") {
-      throw new Error(`rule '${name2}' requires a non-empty when expression`);
-    }
-    if (!isPlainObject2(then) || Object.keys(then).length === 0) {
-      throw new Error(`rule '${name2}' requires a non-empty then map`);
-    }
-    if (Object.keys(then).length > MVU_RULE_THEN_LIMIT) {
-      throw new Error(`rule '${name2}' declares ${Object.keys(then).length} then writes, over the cap of ${MVU_RULE_THEN_LIMIT}`);
-    }
-    for (const [path7, value] of Object.entries(then)) {
-      if (path7.trim() === "") throw new Error(`rule '${name2}' has an empty then path`);
-      if (typeof value === "string") {
-        if (value.trim() === "") throw new Error(`rule '${name2}' has an empty then expression for '${path7}'`);
-      } else if (value === void 0 || typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") {
-        throw new Error(`rule '${name2}' then value for '${path7}' is not a JSON literal`);
-      }
-    }
-    return { name: name2, when, then };
-  });
-}
-function readMvuRules(chat, card, variablesOverride) {
-  const candidates = [
-    treeRules(variablesOverride ?? chat?.header?.chat_metadata?.variables),
-    cardRules(card),
-    treeRules(chat?.header?.chat_metadata?.[INITIAL_VARIABLES_KEY2])
-  ];
-  for (const candidate of candidates) {
-    if (candidate === void 0) continue;
-    try {
-      const rules = validateMvuRules(candidate);
-      if (rules.length === 0) continue;
-      return { rules };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return { invalid: `$rules: ${message}; all card rules are disabled for this settlement` };
-    }
-  }
-  return void 0;
-}
-var SAFE_MATH_KEYS = [
-  "E",
-  "LN2",
-  "LN10",
-  "LOG2E",
-  "LOG10E",
-  "PI",
-  "SQRT1_2",
-  "SQRT2",
-  "abs",
-  "acos",
-  "acosh",
-  "asin",
-  "asinh",
-  "atan",
-  "atan2",
-  "atanh",
-  "cbrt",
-  "ceil",
-  "cos",
-  "cosh",
-  "exp",
-  "expm1",
-  "floor",
-  "fround",
-  "hypot",
-  "imul",
-  "log",
-  "log1p",
-  "log2",
-  "log10",
-  "max",
-  "min",
-  "pow",
-  "round",
-  "sign",
-  "sin",
-  "sinh",
-  "sqrt",
-  "tan",
-  "tanh",
-  "trunc"
-];
-var SAFE_MATH = Object.freeze(
-  Object.fromEntries(SAFE_MATH_KEYS.map((key) => [key, Math[key]]))
-);
-var RULE_SANDBOX_SHADES = {
-  Math: SAFE_MATH,
-  Date: void 0,
-  setTimeout: void 0,
-  setInterval: void 0,
-  setImmediate: void 0,
-  queueMicrotask: void 0
-};
-function buildRuleEnv(tree) {
-  const vars = deepClone(stripMvuControl(tree));
-  return {
-    vars,
-    getvar: (path7) => typeof path7 === "string" ? getMvuTreePath(vars, path7) : void 0,
-    ...RULE_SANDBOX_SHADES
-  };
-}
-function errorText(error) {
-  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-}
-function setTreePath(tree, path7, value) {
-  const segments = path7.split(".");
-  const leaf = segments.pop();
-  let cursor = tree;
-  for (const segment of segments) {
-    const next = cursor[segment];
-    if (next === null || typeof next !== "object" || Array.isArray(next)) cursor[segment] = {};
-    cursor = cursor[segment];
-  }
-  cursor[leaf] = value;
-}
-async function runMvuRules(rules, options) {
-  const failures = /* @__PURE__ */ new Set();
-  const writes = [];
-  const noteParts = /* @__PURE__ */ new Map();
-  const tree = options.tree;
-  for (let round = 1; round <= MVU_RULE_ROUNDS; round++) {
-    let progressed = false;
-    for (const rule of rules) {
-      let active = false;
-      try {
-        active = Boolean(await evalExpressionSandboxed(rule.when, buildRuleEnv(tree)));
-      } catch (error) {
-        failures.add(`rule '${rule.name}': when evaluation failed: ${errorText(error)}`);
-        continue;
-      }
-      if (!active) continue;
-      const pending = [];
-      let failed = false;
-      for (const [path7, raw] of Object.entries(rule.then)) {
-        try {
-          const value = typeof raw === "string" ? await evalExpressionSandboxed(raw, buildRuleEnv(tree)) : deepClone(raw);
-          if (value === void 0) throw new Error("the expression evaluated to undefined");
-          pending.push({ path: path7, value });
-        } catch (error) {
-          failures.add(`rule '${rule.name}': then evaluation failed for '${path7}': ${errorText(error)}`);
-          failed = true;
-          break;
-        }
-      }
-      if (failed) continue;
-      for (const { path: path7, value } of pending) {
-        const head = path7.split(".")[0];
-        if (head === "$schema" || head === "$rules") {
-          failures.add(`${path7}: rule '${rule.name}': guard readonly: the ${head} subtree is card-declared and cannot be settled`);
-          continue;
-        }
-        const current = getMvuTreePath(tree, path7);
-        const guarded = options.schema === void 0 ? void 0 : guardMvuWrite(options.schema, path7, value, current);
-        if (guarded !== void 0 && !guarded.ok) {
-          failures.add(`${path7}: rule '${rule.name}': guard ${guarded.kind}: ${guarded.reason}`);
-          continue;
-        }
-        const finalValue = guarded === void 0 ? value : guarded.value;
-        if (mvuValuesEqual(finalValue, current)) continue;
-        setTreePath(tree, path7, deepClone(finalValue));
-        progressed = true;
-        const note = ["rule:" + rule.name, guarded?.note].filter((part) => part !== void 0).join("; ");
-        const parts = noteParts.get(path7) ?? [];
-        if (!parts.includes(note)) parts.push(note);
-        noteParts.set(path7, parts);
-        writes.push({ path: path7, value: deepClone(finalValue), rule: rule.name, ...guarded?.note !== void 0 ? { guardNote: guarded.note } : {} });
-      }
-    }
-    if (!progressed) break;
-    if (round === MVU_RULE_ROUNDS) {
-      failures.add(`$rules: fixed-point iteration hit the ${MVU_RULE_ROUNDS}-round cap; rules were still producing changes in the last round (narrow the when conditions or reorder the rules)`);
-    }
-  }
-  const notes = Object.fromEntries([...noteParts].map(([path7, parts]) => [path7, parts.join("; ")]));
-  return { failures: [...failures], writes, notes };
-}
-
-// packages/plugin/src/mvu.ts
-var MVU_RECEIPTS_LIMIT = 20;
-function plainObject(value) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return void 0;
-  return value;
-}
-function readChatVariables(chat) {
-  return plainObject(chat?.header?.chat_metadata?.variables) ?? {};
-}
-function overlayScopedVariables(base, entries) {
-  const tree = deepClone(base);
-  for (const entry of entries) {
-    const segments = entry.name.split(".");
-    const leaf = segments.pop();
-    let cursor = tree;
-    for (const segment of segments) {
-      const next = cursor[segment];
-      if (next === null || typeof next !== "object" || Array.isArray(next)) cursor[segment] = {};
-      cursor = cursor[segment];
-    }
-    cursor[leaf] = entry.value;
-  }
-  return tree;
-}
-function readMvuReceipt(record) {
-  const { at, turnKey, status: status2, changes, failures, opId } = record;
-  if (typeof at !== "string" || typeof turnKey !== "string") return void 0;
-  if (status2 !== "updated" && status2 !== "unchanged" && status2 !== "failed") return void 0;
-  return {
-    at,
-    turnKey,
-    status: status2,
-    changes: Array.isArray(changes) ? changes.flatMap((item) => {
-      const change = plainObject(item);
-      if (change === void 0 || typeof change.name !== "string") return [];
-      const out = { name: change.name };
-      if ("before" in change) out.before = change.before;
-      if ("after" in change) out.after = change.after;
-      if (typeof change.reason === "string") out.reason = change.reason;
-      return [out];
-    }) : [],
-    failures: Array.isArray(failures) ? failures.filter((item) => typeof item === "string") : [],
-    ...typeof opId === "string" && opId.trim() !== "" ? { opId } : {},
-    ...typeof record.undoneAt === "string" ? { undoneAt: record.undoneAt } : {}
-  };
-}
-function readMvuReceipts(chat) {
-  const raw = plainObject(chat?.header?.chat_metadata?.mvu)?.receipts;
-  if (!Array.isArray(raw)) return [];
-  const receipts = [];
-  for (const entry of raw) {
-    const record = plainObject(entry);
-    if (record === void 0) continue;
-    const receipt = readMvuReceipt(record);
-    if (receipt !== void 0) receipts.push(receipt);
-  }
-  return receipts;
-}
-var BODY_RECEIPT_PREFIX = "body:";
-var CANONICAL_FLOOR_KEY = /^(0|[1-9][0-9]*)$/;
-var MVU_SETTLE_RECEIPTS_RESERVED = 3;
-function isSettleReceiptKey(turnKey) {
-  return CANONICAL_FLOOR_KEY.test(turnKey) && Number.isSafeInteger(Number(turnKey));
-}
-function defaultRetainedReceiptIndexes(receipts, settleReserved) {
-  const bodyIndexes = [];
-  const settleIndexes = [];
-  for (let index = 0; index < receipts.length; index += 1) {
-    const turnKey = receipts[index].turnKey;
-    if (turnKey.startsWith(BODY_RECEIPT_PREFIX)) bodyIndexes.push(index);
-    else if (isSettleReceiptKey(turnKey)) settleIndexes.push(index);
-  }
-  const reservedSettle = Math.min(settleIndexes.length, settleReserved);
-  const bodyBudget = Math.min(bodyIndexes.length, MVU_RECEIPTS_LIMIT - reservedSettle);
-  const kept = new Set(bodyIndexes.slice(bodyIndexes.length - bodyBudget));
-  for (const index of settleIndexes.slice(settleIndexes.length - reservedSettle)) kept.add(index);
-  let remaining = MVU_RECEIPTS_LIMIT - kept.size;
-  for (let index = receipts.length - 1; index >= 0 && remaining > 0; index -= 1) {
-    if (kept.has(index)) continue;
-    kept.add(index);
-    remaining -= 1;
-  }
-  return kept;
-}
-function explicitRetainedReceiptIndexes(receipts, preserveTurnKeys) {
-  const kept = /* @__PURE__ */ new Set();
-  const others = [];
-  for (let index = 0; index < receipts.length; index += 1) {
-    if (preserveTurnKeys.has(receipts[index].turnKey)) kept.add(index);
-    else others.push(index);
-  }
-  const budget = Math.max(0, MVU_RECEIPTS_LIMIT - kept.size);
-  for (const index of others.slice(others.length - Math.min(budget, others.length))) kept.add(index);
-  return kept;
-}
-function retainMvuReceipts(receipts, preserveTurnKeys, settleReserved) {
-  const kept = preserveTurnKeys.size === 0 ? defaultRetainedReceiptIndexes(receipts, settleReserved) : explicitRetainedReceiptIndexes(receipts, preserveTurnKeys);
-  return receipts.filter((_, index) => kept.has(index));
-}
-function requireSettleReserved(value) {
-  if (!Number.isSafeInteger(value) || value < 0 || value > MVU_RECEIPTS_LIMIT) {
-    throw new Error(
-      `MVU settle reservation must be a safe integer between 0 and ${MVU_RECEIPTS_LIMIT}, received ${String(value)}`
-    );
-  }
-  return value;
-}
-function appendMvuReceipt(chat, receipt, preserveTurnKeys, settleReceiptsReserved) {
-  const appended = [...readMvuReceipts(chat), receipt];
-  const receipts = retainMvuReceipts(
-    appended,
-    preserveTurnKeys ?? /* @__PURE__ */ new Set(),
-    requireSettleReserved(settleReceiptsReserved ?? MVU_SETTLE_RECEIPTS_RESERVED)
-  );
-  chat.header.chat_metadata.mvu = { receipts };
-}
-
-// packages/plugin/src/agent-tavern/tools/deduction.ts
+init_mvu();
+init_mvu_guard();
+init_mvu_rules();
 init_deduce();
+
+// packages/plugin/src/agent-tavern/body-settle-intent.ts
+init_mvu();
 
 // packages/plugin/src/agent-tavern/body-rollback-support.ts
 function errorMessage(error) {
@@ -11691,27 +11929,51 @@ function turnOfEvent(event, index) {
 }
 
 // packages/plugin/src/agent-tavern/projector.ts
+init_src3();
 init_src2();
+init_src5();
 import { promises as fs8 } from "node:fs";
 import { join as join9 } from "node:path";
-init_src3();
+
+// packages/plugin/src/agent-tavern/mvu-compat.ts
+init_src4();
 
 // packages/plugin/src/agent-tavern/body-projector.ts
-init_src2();
 init_src3();
+init_src2();
+init_src5();
+
+// packages/plugin/src/regex-session.ts
+init_src2();
+init_tavern_assets();
+
+// packages/plugin/src/agent-tavern/body-projector.ts
+init_mvu();
+
+// packages/plugin/src/agent-tavern/body-candidate-receipts.ts
+init_mvu();
+init_mvu_guard();
 
 // packages/plugin/src/session/binding.ts
-init_runtime();
+init_runtime2();
+
+// packages/plugin/src/agent-tavern/body-runtime-settlement.ts
+init_mvu();
+init_mvu_guard();
 
 // packages/plugin/src/agent-tavern/body-runtime-core.ts
-init_src2();
+init_src3();
 var bodyTails = new KeyedMutationTails(true);
 
+// packages/plugin/src/agent-tavern/projector.ts
+init_mvu();
+
 // packages/plugin/src/agent-tavern/im-projection.ts
-init_src3();
+init_src2();
+init_src5();
 
 // packages/plugin/src/im/types.ts
-init_src2();
+init_src3();
 
 // packages/plugin/src/agent-tavern/projector.ts
 var mvuAuditTail = new MutationTail();
@@ -12932,7 +13194,7 @@ function optionalExpiry(value) {
 }
 
 // packages/plugin/src/agent-tavern/tools/script.ts
-init_src2();
+init_src3();
 init_dsh_home();
 function scriptTools() {
   return [

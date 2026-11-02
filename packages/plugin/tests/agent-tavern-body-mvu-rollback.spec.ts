@@ -8,11 +8,14 @@ import { AgentTavernProjector, type NativeSession } from '../src/agent-tavern/pr
 import {
   appendMvuReceipt,
   mvuReceiptsForBody,
+  readChatVariables,
   readMvuReceipts,
   redoMvuReceipts,
   undoMvuReceipts,
   type MvuReceipt,
+  type UndoGuard,
 } from '../src/mvu.js'
+import { getMvuTreePath, readMvuSchema } from '../src/mvu-guard.js'
 
 // Proposal 0022 §4: body `<UpdateVariable>` writes become rollback-addressable
 // receipts keyed by `body:<messageId>`, and the same floor's settle receipts use
@@ -113,6 +116,14 @@ function nativeSession(messageId: string, text: string): NativeSession {
 
 function receipt(turnKey: string, at: string, changes: MvuReceipt['changes']): MvuReceipt {
   return { at, turnKey, status: 'updated', changes, failures: [] }
+}
+
+/** Guard for synthetic chats without a `$schema`; current values come from the live tree. */
+function plainUndoGuard(chat: ChatLogIR): UndoGuard {
+  return {
+    schema: undefined,
+    currentOf: (path) => getMvuTreePath(readChatVariables(chat), path),
+  }
 }
 
 function syntheticChat(variables: Record<string, unknown>, receipts: MvuReceipt[]): ChatLogIR {
@@ -233,7 +244,7 @@ describe('AgentTavern body MVU receipt (proposal 0022 §4)', () => {
     const receipts = mvuReceiptsForBody(chat, { messageId: 'assistant-3' })
     expect(receipts).toHaveLength(1)
 
-    const undone = undoMvuReceipts(chat, receipts, { at: '2026-10-28T02:00:00.000Z' })
+    const undone = undoMvuReceipts(chat, receipts, plainUndoGuard(chat), { at: '2026-10-28T02:00:00.000Z' })
     expect(undone.restores).toEqual([
       { path: 'previous_stat_data.mvu.favor' },
       { path: 'stat_data.mvu.favor', value: 10 },
@@ -245,7 +256,7 @@ describe('AgentTavern body MVU receipt (proposal 0022 §4)', () => {
     expect(readMvuReceipts(chat)[0]!.undoneAt).toBe('2026-10-28T02:00:00.000Z')
 
     // Re-undoing an undone receipt is idempotent (stale live copies included).
-    expect(undoMvuReceipts(chat, receipts)).toEqual({ receipts: [], restores: [] })
+    expect(undoMvuReceipts(chat, receipts, plainUndoGuard(chat))).toEqual({ receipts: [], restores: [] })
 
     const redone = redoMvuReceipts(chat, receipts)
     expect(redone.restores).toEqual([
@@ -273,11 +284,32 @@ describe('AgentTavern body MVU receipt (proposal 0022 §4)', () => {
     const found = mvuReceiptsForBody(chat, { messageId: 'assistant-4', floorIndex: 1 })
     expect(found.map((entry) => entry.turnKey)).toEqual(['1', 'body:assistant-4'])
 
-    undoMvuReceipts(chat, found)
+    undoMvuReceipts(chat, found, plainUndoGuard(chat))
     expect(chat.header.chat_metadata.variables).toEqual({ mvu: { favor: 10 } })
 
     redoMvuReceipts(chat, found)
     expect(chat.header.chat_metadata.variables).toEqual({ mvu: { favor: 35, location: 'cellar', scene: '夜' } })
+  })
+
+  it('refuses to undo when the schema changed since settlement, leaving variables and receipts untouched', () => {
+    // The receipt's before value is no longer accepted by the edited schema.
+    const settle = receipt('body:assistant-schema', '2026-10-28T02:30:00.000Z', [
+      { name: 'mvu.mood', before: 'calm', after: 'angry' },
+    ])
+    const chat = syntheticChat(
+      { $schema: { mvu: { mood: { $enum: ['angry'] } } }, mvu: { mood: 'angry' } },
+      [settle],
+    )
+    const before = structuredClone(chat)
+    const guard: UndoGuard = {
+      schema: readMvuSchema(chat),
+      currentOf: (path) => getMvuTreePath(readChatVariables(chat), path),
+    }
+
+    expect(() => undoMvuReceipts(chat, [settle], guard, { at: '2026-10-28T02:31:00.000Z' }))
+      .toThrowError(/mvu\.mood: guard enum-violation/)
+    expect(chat).toEqual(before)
+    expect(readMvuReceipts(chat)[0]!.undoneAt).toBeUndefined()
   })
 
   it('refuses incomplete or foreign receipts without writing anything', () => {
@@ -285,13 +317,13 @@ describe('AgentTavern body MVU receipt (proposal 0022 §4)', () => {
     const chat = syntheticChat({ mvu: { favor: 1 } }, [incomplete])
     const before = structuredClone(chat)
 
-    expect(() => undoMvuReceipts(chat, readMvuReceipts(chat))).toThrowError(/incomplete/i)
+    expect(() => undoMvuReceipts(chat, readMvuReceipts(chat), plainUndoGuard(chat))).toThrowError(/incomplete/i)
     expect(chat).toEqual(before)
 
     const foreign = receipt('body:assistant-6', '2026-10-28T00:00:04.000Z', [
       { name: 'mvu.favor', before: 1, after: 2 },
     ])
-    expect(() => undoMvuReceipts(chat, [foreign])).toThrowError(/not stored/)
+    expect(() => undoMvuReceipts(chat, [foreign], plainUndoGuard(chat))).toThrowError(/not stored/)
     expect(chat).toEqual(before)
   })
 

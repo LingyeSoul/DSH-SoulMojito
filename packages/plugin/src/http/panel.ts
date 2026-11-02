@@ -16,8 +16,6 @@ import { addGuide, emitGuidesChanged, normalizeGuides, removeGuide } from '../gu
 import { emitChatSaved } from '../mods/events.js'
 import {
   MvuUndoRefusalError,
-  overlayChatScopedVariables,
-  readChatVariables,
   readMvuReceipts,
   renderMvuStatusTemplate,
   retryMvuSettlement,
@@ -26,7 +24,7 @@ import {
   undoMvuStSettlement,
 } from '../mvu.js'
 import { stripMvuControl } from '../mvu-guard.js'
-import { templatesEnabledFlagValue, templatesEnvEnabled, variables } from '../runtime.js'
+import { templatesEnabledFlagValue, templatesEnvEnabled, variableGateway, variables } from '../runtime.js'
 import { assertStGenerationBinding } from '../session/binding.js'
 import { readJson, sendJson } from './io.js'
 import { INTERNAL_ERROR_MESSAGE, publicErrorMessage } from './public-error.js'
@@ -340,14 +338,9 @@ export async function handleMvuApi(
     const chat = snapshot.chat
     const state = await db.getState()
     const receipts = readMvuReceipts(chat)
-    const agentTavernBound = Object.values(state.sessionBindings).some((binding) =>
-      binding.architecture === 'agent-tavern' && binding.chatId === chatId && binding.character === characterName)
-    const scopedVariables = agentTavernBound ? await (await variables()).listAll('chat', chatId) : []
     // 显示树剥离根 $schema（C-1）/$rules（C-2）：守卫/规则契约不是变量，不进
-    // 状态栏载荷/渲染。
-    const displayVariables = stripMvuControl(scopedVariables.length > 0
-      ? overlayChatScopedVariables(readChatVariables(chat), scopedVariables)
-      : readChatVariables(chat))
+    // 状态栏载荷/渲染。绑定矩阵与合并策略由 Variable Gateway 统一拥有。
+    const displayVariables = stripMvuControl(await variableGateway().read({ kind: 'chat', character: characterName, chatId }))
     const character = await db.getCharacter(characterName)
     const statusTemplate = character ? statusTemplateOf(character.card) : undefined
     let renderedHtml: string | undefined

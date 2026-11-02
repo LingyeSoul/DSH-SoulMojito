@@ -28,6 +28,7 @@ import {
   undoMvuReceipts,
   type MvuReceipt,
 } from '../mvu.js'
+import { getMvuTreePath, readMvuSchema } from '../mvu-guard.js'
 import type { BodyLedger } from './body.js'
 import {
   BodyJsonlProjectionError,
@@ -373,7 +374,15 @@ export function applyCandidateEditToChat(
   const inspection = inspectCandidateReceipts(chat, ref, input.ledger, input.previousText, card)
   if (inspection.detail !== undefined) throw detailError(inspection.detail, ref, inspection)
 
-  if (inspection.live.length > 0) undoMvuReceipts(chat, inspection.live, { at: input.at })
+  if (inspection.live.length > 0) {
+    // Undo is a write: screen the recorded before values against the schema in
+    // force now, so an edited schema can never be bypassed through body editing.
+    const variables = readChatVariables(chat)
+    undoMvuReceipts(chat, inspection.live, {
+      schema: readMvuSchema(chat, card),
+      currentOf: (path) => getMvuTreePath(variables, path),
+    }, { at: input.at })
+  }
 
   const before = snapshotChatVariables(chat)
   const applied = applyUpdateVariableToChat(card, chat, input.text)

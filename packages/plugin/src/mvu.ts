@@ -164,6 +164,11 @@ export function overlayScopedVariables(
   for (const entry of entries) {
     const segments = entry.name.split('.')
     const leaf = segments.pop()!
+    if (segments.some((segment) => isForbiddenVariableSegment(segment)) || isForbiddenVariableSegment(leaf)) {
+      // Existing flat data may predate the write-side guard; skip it instead of
+      // failing the whole read (the write boundary rejects new occurrences).
+      continue
+    }
     let cursor = tree
     for (const segment of segments) {
       const next = cursor[segment]
@@ -173,6 +178,10 @@ export function overlayScopedVariables(
     cursor[leaf] = entry.value
   }
   return tree
+}
+
+function isForbiddenVariableSegment(segment: string): boolean {
+  return segment === '__proto__' || segment === 'prototype' || segment === 'constructor'
 }
 
 /**
@@ -878,6 +887,10 @@ export function screenMvuUndoRestores(
 ): void {
   const failures: string[] = []
   for (const restore of restores) {
+    if (restore.path.split('.').some(isForbiddenVariableSegment)) {
+      failures.push(`${restore.path}: forbidden segment`)
+      continue
+    }
     if (restore.path.split('.')[0] === '$schema') {
       failures.push(`$schema: guard readonly: the schema subtree is the declared guard contract and cannot be undone into`)
       continue
@@ -1207,15 +1220,31 @@ function planMvuRedoRestores(receipt: MvuReceipt): MvuUndoRestore[] {
 }
 
 /**
+ * Current guard state for one undo. `schema` is the `$schema` in force now
+ * (undefined when the chat/card has none); `currentOf` reads the live value of
+ * a dotted path at undo time.
+ */
+export interface UndoGuard {
+  schema: Record<string, unknown> | undefined
+  currentOf: (path: string) => unknown
+}
+
+/**
  * Roll back a set of receipts (proposal 0022 section 4 step 3): restore every
  * change to its before value, newest receipt first, then mark `undoneAt`.
  * Already-undone receipts are skipped, so repeated calls are idempotent. Any
  * incomplete or foreign receipt refuses the whole call: neither variables nor
  * receipts are touched, and nothing is saved.
+ *
+ * The guard screen always runs between planning and applying (C1): the restore
+ * values must still satisfy the current `$schema`. When the schema changed
+ * since the settlement the whole call is refused and nothing is touched. The
+ * guard is a required argument; there is no bypass.
  */
 export function undoMvuReceipts(
   chat: ChatLogIR,
   receipts: readonly MvuReceipt[],
+  guard: UndoGuard,
   options?: MvuReceiptsMutationOptions,
 ): MvuReceiptsMutationResult {
   if (receipts.length === 0) return { receipts: [], restores: [] }
@@ -1230,6 +1259,9 @@ export function undoMvuReceipts(
   for (let index = targets.length - 1; index >= 0; index -= 1) {
     restores.push(...planMvuUndoRestores(targets[index]!.receipt))
   }
+  // Screen before touching either store: a rejected guard leaves variables and
+  // receipt marks exactly as they were.
+  screenMvuUndoRestores(guard.schema, restores, guard.currentOf)
   const variables = cloneChatVariablesForReceipts(chat)
   applyMvuUndoRestores(variables, restores)
   const at = options?.at ?? new Date().toISOString()

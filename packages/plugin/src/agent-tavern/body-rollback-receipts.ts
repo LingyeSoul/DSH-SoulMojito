@@ -16,12 +16,14 @@ import {
 import {
   mvuReceiptsForBody,
   planMvuUndoRestores,
+  readChatVariables,
   redoMvuReceipts,
   undoMvuReceipts,
   type MvuReceipt,
   type MvuUndoRestore,
   type MvuVariableChange,
 } from '../mvu.js'
+import { getMvuTreePath, readMvuSchema } from '../mvu-guard.js'
 import {
   BodyRollbackError,
   errorMessage,
@@ -142,10 +144,20 @@ export async function applyReceiptRollback(
 
   let bodyCount = 0
   if (bodyReceipts.length > 0) {
-    const result = direction === 'undo'
-      ? undoMvuReceipts(chat, bodyReceipts, { at })
-      : redoMvuReceipts(chat, bodyReceipts)
-    bodyCount = result.receipts.length
+    if (direction === 'undo') {
+      // Body undo writes the JSONL tree, so it must pass the same `$schema`
+      // screen as the panel path. A missing card means no card-level schema;
+      // the chat tree can still carry one.
+      const card = (await deps.store.getCharacter(binding.character))?.card
+      const variables = readChatVariables(chat)
+      const result = undoMvuReceipts(chat, bodyReceipts, {
+        schema: readMvuSchema(chat, card),
+        currentOf: (path) => getMvuTreePath(variables, path),
+      }, { at })
+      bodyCount = result.receipts.length
+    } else {
+      bodyCount = redoMvuReceipts(chat, bodyReceipts).receipts.length
+    }
   }
   const settleCount = await mutateSettleReceiptVariables(deps, chat, settleReceipts, direction, at, binding)
   return { bodyReceipts: bodyCount, settleReceipts: settleCount }

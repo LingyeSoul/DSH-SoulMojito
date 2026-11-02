@@ -10,12 +10,14 @@ import {
   MVU_RECEIPTS_LIMIT,
   MVU_SETTLE_RECEIPTS_RESERVED,
   overlayScopedVariables,
+  readChatVariables,
   readMvuReceipts,
   recordMvuTurnReceipt,
   redoMvuReceipts,
   undoMvuReceipts,
   type MvuReceipt,
 } from '../src/mvu.js'
+import { getMvuTreePath } from '../src/mvu-guard.js'
 
 const CHARACTER = '艾琳'
 const PLAIN_CHARACTER = '北风'
@@ -140,7 +142,10 @@ describe('receipt recording (pure)', () => {
     expect(receipts[0]).toMatchObject({ turnKey: '0', opId: 'settle-op-1' })
     expect(receipts[1]!.opId).toBeUndefined()
 
-    undoMvuReceipts(chat, [receipts[0]!], { at: 'undo-at' })
+    undoMvuReceipts(chat, [receipts[0]!], {
+      schema: undefined,
+      currentOf: (path) => getMvuTreePath(readChatVariables(chat), path),
+    }, { at: 'undo-at' })
     expect(readMvuReceipts(chat)[0]).toMatchObject({ opId: 'settle-op-1', undoneAt: 'undo-at' })
     redoMvuReceipts(chat, [receipts[0]!])
     expect(readMvuReceipts(chat)[0]).toMatchObject({ opId: 'settle-op-1' })
@@ -260,7 +265,10 @@ describe('receipt recording (pure)', () => {
     appendMvuReceipt(chat, { at: 's25', turnKey: '25', status: 'updated', changes: [], failures: [] })
     const stored = readMvuReceipts(chat).find((receipt) => receipt.turnKey === 'body:m9#1')!
 
-    const undone = undoMvuReceipts(chat, [stored], { at: 'undo-at' })
+    const undone = undoMvuReceipts(chat, [stored], {
+      schema: undefined,
+      currentOf: (path) => getMvuTreePath(readChatVariables(chat), path),
+    }, { at: 'undo-at' })
     expect(undone.receipts).toHaveLength(1)
     expect(undone.restores).toEqual([{ path: 'a', value: 1 }])
     expect(chat.header.chat_metadata.variables).toEqual({ a: 1 })

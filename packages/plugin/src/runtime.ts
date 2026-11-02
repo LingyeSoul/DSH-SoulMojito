@@ -14,6 +14,7 @@ import type { ImRuntime } from './im/runtime.js'
 import { sharedMemoryStore, sharedMemoryVectorStore, sharedNovelStore, sharedVariableStore } from './shared-stores.js'
 import { sharedTavernStore } from './store-handle.js'
 import { TavernUpdateService } from './update/service.js'
+import { createVariableGateway, type VariableGateway } from './variable-gateway.js'
 import { MemoryStore, MemoryVectorStore, NovelStore, TavernStore, VariableStore } from '../../tavern-store/src/index.js'
 
 let storePromise: Promise<TavernStore> | undefined
@@ -94,6 +95,29 @@ export function memories(): Promise<MemoryStore> {
 
 export function variables(): Promise<VariableStore> {
   return (variableStorePromise ??= sharedVariableStore(tavernDataRoot()))
+}
+
+/**
+ * One gateway per runtime, built from the shared store handles. The gateway is
+ * stateless; only this factory handle is memoized, never a binding or a tree.
+ */
+let variableGatewayInstance: VariableGateway | undefined
+
+export function variableGateway(): VariableGateway {
+  return (variableGatewayInstance ??= createVariableGateway({
+    store: () => store(),
+    variables: () => variables(),
+    bindingOf: async (character, chatId) => {
+      const state = await (await store()).getState()
+      return Object.values(state.sessionBindings).find((binding) =>
+        binding.architecture === 'agent-tavern'
+        && binding.character === character
+        && binding.chatId === chatId)
+    },
+    logger: {
+      warn: (message, fields) => { console.warn(message, fields) },
+    },
+  }))
 }
 
 // Memory vector cache (proposal 0016): the memoized index-side entry point.
