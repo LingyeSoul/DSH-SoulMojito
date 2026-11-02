@@ -15598,7 +15598,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.5".trim() : "";
-  const commit = true ? normalizeCommit("b27f4dd") : void 0;
+  const commit = true ? normalizeCommit("54e74ff") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -43643,52 +43643,6 @@ async function resetFrontendStorage(db, character) {
   return { storage: frontendStorageFor(next, character), reset: true };
 }
 
-// packages/plugin/src/assets.ts
-init_src2();
-async function serveCharacterAvatar(res, db, name2, found) {
-  let bytes;
-  let contentType = "image/png";
-  if (found.kind === "png") {
-    bytes = await db.exportCharacter(name2);
-  } else if (found.kind === "charx") {
-    const container = await db.exportCharacter(name2);
-    const asset = found.card.data.assets?.find((item) => item.type === "icon" && item.uri.startsWith("embeded://")) ?? found.card.data.assets?.find((item) => item.uri.startsWith("embeded://") && item.ext === "png");
-    if (!asset) return sendAvatarFallback(res, name2);
-    bytes = decodeCharxAsset2(container, asset.uri.slice("embeded://".length));
-    contentType = imageContentType(asset.ext);
-  } else {
-    return sendAvatarFallback(res, name2);
-  }
-  res.statusCode = 200;
-  res.setHeader("content-type", contentType);
-  res.setHeader("cache-control", "private, max-age=300");
-  res.end(Buffer.from(bytes));
-}
-function sendAvatarFallback(res, name2) {
-  let hash = 2166136261;
-  for (let index = 0; index < name2.length; index++) {
-    hash ^= name2.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  const hue = (hash >>> 0) % 360;
-  const first = Array.from(name2.trim())[0];
-  const initial = first ? first.toUpperCase() : "?";
-  const safeInitial = initial.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"><rect width="128" height="128" fill="hsl(${hue},42%,46%)"/><text x="64" y="66" fill="#ffffff" opacity="0.95" font-family="-apple-system,'Segoe UI','Microsoft YaHei',system-ui,sans-serif" font-size="60" font-weight="600" text-anchor="middle" dominant-baseline="central">${safeInitial}</text></svg>`;
-  res.statusCode = 200;
-  res.setHeader("content-type", "image/svg+xml");
-  res.setHeader("cache-control", "private, max-age=300");
-  res.end(svg);
-}
-async function isGroupChat(db, characterName, chatId) {
-  const chat = await db.getChat(characterName, chatId);
-  return chat?.header?.chat_metadata?.group !== void 0;
-}
-function imageContentType(ext) {
-  const normalized = String(ext || "").toLowerCase();
-  return normalized === "jpg" || normalized === "jpeg" ? "image/jpeg" : normalized === "webp" ? "image/webp" : normalized === "gif" ? "image/gif" : "image/png";
-}
-
 // packages/plugin/src/card-scripts.ts
 function collectCardScriptBundle(card, scriptTrees, includeDisabled = false) {
   const nodes = Array.isArray(scriptTrees) ? scriptTrees : cardScriptNodes(card);
@@ -44782,6 +44736,54 @@ init_src2();
 init_src5();
 init_src3();
 init_src();
+
+// packages/plugin/src/assets.ts
+init_src2();
+async function serveCharacterAvatar(res, db, name2, found) {
+  let bytes;
+  let contentType = "image/png";
+  if (found.kind === "png") {
+    bytes = await db.exportCharacter(name2);
+  } else if (found.kind === "charx") {
+    const container = await db.exportCharacter(name2);
+    const asset = found.card.data.assets?.find((item) => item.type === "icon" && item.uri.startsWith("embeded://")) ?? found.card.data.assets?.find((item) => item.uri.startsWith("embeded://") && item.ext === "png");
+    if (!asset) return sendAvatarFallback(res, name2);
+    bytes = decodeCharxAsset2(container, asset.uri.slice("embeded://".length));
+    contentType = imageContentType(asset.ext);
+  } else {
+    return sendAvatarFallback(res, name2);
+  }
+  res.statusCode = 200;
+  res.setHeader("content-type", contentType);
+  res.setHeader("cache-control", "private, max-age=300");
+  res.end(Buffer.from(bytes));
+}
+function sendAvatarFallback(res, name2) {
+  let hash = 2166136261;
+  for (let index = 0; index < name2.length; index++) {
+    hash ^= name2.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  const hue = (hash >>> 0) % 360;
+  const first = Array.from(name2.trim())[0];
+  const initial = first ? first.toUpperCase() : "?";
+  const safeInitial = initial.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"><rect width="128" height="128" fill="hsl(${hue},42%,46%)"/><text x="64" y="66" fill="#ffffff" opacity="0.95" font-family="-apple-system,'Segoe UI','Microsoft YaHei',system-ui,sans-serif" font-size="60" font-weight="600" text-anchor="middle" dominant-baseline="central">${safeInitial}</text></svg>`;
+  res.statusCode = 200;
+  res.setHeader("content-type", "image/svg+xml");
+  res.setHeader("cache-control", "private, max-age=300");
+  res.end(svg);
+}
+async function isGroupChat(db, characterName, chatId) {
+  const chat = await db.getChat(characterName, chatId);
+  return chat?.header?.chat_metadata?.group !== void 0;
+}
+function imageContentType(ext) {
+  const normalized = String(ext || "").toLowerCase();
+  return normalized === "jpg" || normalized === "jpeg" ? "image/jpeg" : normalized === "webp" ? "image/webp" : normalized === "gif" ? "image/gif" : "image/png";
+}
+
+// packages/plugin/src/generation/pipeline.ts
 init_dsh_home();
 init_generation_hooks();
 init_guides();
@@ -59740,6 +59742,136 @@ async function handleModsApi(ctx, req, res, url, route, method) {
   return notFound();
 }
 
+// packages/plugin/src/http/persona-group-routes.ts
+init_events();
+init_io();
+async function handlePersonaImportRoute(db, req, res) {
+  const body = await readJson(req, 25 * 1024 * 1024);
+  if (typeof body.pngBase64 === "string" && typeof body.name === "string") {
+    const persona = await db.importPersonaPng(new Uint8Array(Buffer.from(body.pngBase64, "base64")), body.name);
+    await emitAssetsSaved("persona", persona.name);
+    return sendJson(res, 200, { ok: true, persona });
+  }
+  if (typeof body.name === "string") {
+    const persona = {
+      name: body.name,
+      description: typeof body.description === "string" ? body.description : "",
+      ...typeof body.position === "number" ? { position: body.position } : {},
+      ...typeof body.depth === "number" ? { depth: body.depth } : {},
+      ...typeof body.role === "number" ? { role: body.role } : {},
+      ...body.hasAvatar === true ? { hasAvatar: true } : {}
+    };
+    await db.putPersona(persona);
+    await emitAssetsSaved("persona", persona.name);
+    return sendJson(res, 200, { ok: true, persona });
+  }
+  throw new Error("expected { pngBase64, name } or { name, description }");
+}
+async function handlePersonaUpdateRoute(db, req, res) {
+  const body = await readJson(req);
+  if (typeof body.name !== "string" || typeof body.description !== "string") throw new Error("expected { name, description }");
+  const existing = await db.getPersona(body.name);
+  if (!existing) throw new Error(`persona '${body.name}' not found`);
+  const persona = {
+    ...existing,
+    description: body.description,
+    ...typeof body.position === "number" ? { position: body.position } : {},
+    ...typeof body.depth === "number" ? { depth: body.depth } : {},
+    ...typeof body.role === "number" ? { role: body.role } : {}
+  };
+  await db.putPersona(persona);
+  await emitAssetsSaved("persona", body.name);
+  return sendJson(res, 200, { ok: true, persona });
+}
+async function handlePersonaDeleteRoute(db, res, url) {
+  const name2 = url.searchParams.get("name");
+  if (!name2) throw new Error("name query is required");
+  const deleted = await db.deletePersona(name2);
+  const state = await db.updateState((current) => ({
+    activePersona: current.activePersona === name2 ? void 0 : current.activePersona
+  }));
+  if (!deleted) return sendJson(res, 404, { ok: false, message: "persona not found" });
+  return sendJson(res, 200, { ok: true, state });
+}
+async function handlePersonaAvatarRoute(db, res, route) {
+  const name2 = decodeURIComponent(route.slice("persona-avatar/".length));
+  const avatar = await db.getPersonaAvatar(name2);
+  if (avatar === void 0) {
+    const persona = await db.getPersona(name2);
+    if (persona) return sendAvatarFallback(res, name2);
+    return sendJson(res, 404, { ok: false, message: "persona avatar not found" });
+  }
+  res.statusCode = 200;
+  res.setHeader("content-type", "image/png");
+  res.setHeader("cache-control", "private, max-age=300");
+  res.end(Buffer.from(avatar));
+  return;
+}
+async function handleGroupsListRoute(db, res) {
+  const groups = [];
+  for (const name2 of await db.listGroups()) {
+    const group2 = await db.getGroup(name2);
+    if (group2) groups.push(publicGroup(group2));
+  }
+  return sendJson(res, 200, { ok: true, groups });
+}
+async function handleGroupCreateRoute(db, req, res) {
+  const body = await readJson(req);
+  if (typeof body.name !== "string" || !Array.isArray(body.members)) throw new Error("expected { name, members }");
+  for (const member of body.members) {
+    if (typeof member !== "string" || !await db.getCharacter(member)) {
+      throw new Error(`group member '${String(member)}' is not an imported character`);
+    }
+  }
+  await db.putGroup({
+    id: `group-${body.name}`,
+    name: body.name,
+    members: body.members,
+    allowSelfResponses: body.allowSelfResponses === true,
+    activationStrategy: body.activationStrategy === 2 ? 2 : 1,
+    disabledMembers: Array.isArray(body.disabledMembers) ? body.disabledMembers.filter((x) => typeof x === "string") : [],
+    chatId: "",
+    chats: [],
+    autoModeDelay: 3
+  });
+  await emitAssetsSaved("group", body.name);
+  const group2 = await db.getGroup(body.name);
+  if (group2 === void 0) throw new Error(`group '${body.name}' was not saved`);
+  return sendJson(res, 200, { ok: true, group: publicGroup(group2) });
+}
+async function handleGroupUpdateRoute(db, req, res) {
+  const body = await readJson(req);
+  if (typeof body.name !== "string") throw new Error("expected { name, ... }");
+  const group2 = await db.getGroup(body.name);
+  if (!group2) throw new Error(`group '${body.name}' not found`);
+  const members = Array.isArray(body.members) ? body.members.filter((x) => typeof x === "string") : group2.members;
+  for (const member of members) {
+    if (!await db.getCharacter(member)) throw new Error(`group member '${member}' is not an imported character`);
+  }
+  await db.putGroup({
+    ...group2,
+    members,
+    ...Array.isArray(body.disabledMembers) ? { disabledMembers: body.disabledMembers.filter((x) => typeof x === "string" && members.includes(x)) } : {},
+    ...typeof body.activationStrategy === "number" ? { activationStrategy: body.activationStrategy === 2 ? 2 : 1 } : {},
+    ...typeof body.allowSelfResponses === "boolean" ? { allowSelfResponses: body.allowSelfResponses } : {}
+  });
+  await emitAssetsSaved("group", body.name);
+  const savedGroup = await db.getGroup(body.name);
+  if (savedGroup === void 0) throw new Error(`group '${body.name}' was not saved`);
+  return sendJson(res, 200, { ok: true, group: publicGroup(savedGroup) });
+}
+async function handleGroupDeleteRoute(db, res, url) {
+  const name2 = url.searchParams.get("name");
+  if (!name2) throw new Error("name query is required");
+  const group2 = await db.getGroup(name2);
+  if (!group2) return sendJson(res, 404, { ok: false, message: "group not found" });
+  await db.deleteGroup(name2);
+  const state = await db.updateState((current) => ({
+    sessionBindings: Object.fromEntries(Object.entries(current.sessionBindings).filter(([, binding]) => !(binding.character === name2 && binding.group === true)))
+  }));
+  return sendJson(res, 200, { ok: true, state });
+}
+
 // packages/plugin/src/http/read-routes.ts
 init_src2();
 init_build_info();
@@ -60039,6 +60171,48 @@ var STORE_ROUTES = [
     name: "character-export",
     matches: (route, method) => method === "GET" && route.startsWith("export/character/"),
     handle: ({ db, res, route }) => handleCharacterExportRoute(db, res, route)
+  },
+  // Persona and group routes are post-store; the table keeps the original
+  // if-chain order. Only the write handlers emit asset-saved events.
+  {
+    name: "persona-import",
+    matches: (route, method) => method === "POST" && route === "import/persona",
+    handle: ({ db, req, res }) => handlePersonaImportRoute(db, req, res)
+  },
+  {
+    name: "persona-update",
+    matches: (route, method) => method === "PUT" && route === "persona",
+    handle: ({ db, req, res }) => handlePersonaUpdateRoute(db, req, res)
+  },
+  {
+    name: "persona-delete",
+    matches: (route, method) => method === "DELETE" && route === "persona",
+    handle: ({ db, res, url }) => handlePersonaDeleteRoute(db, res, url)
+  },
+  {
+    name: "persona-avatar",
+    matches: (route, method) => method === "GET" && route.startsWith("persona-avatar/"),
+    handle: ({ db, res, route }) => handlePersonaAvatarRoute(db, res, route)
+  },
+  {
+    name: "groups-list",
+    matches: (route, method) => method === "GET" && route === "groups",
+    handle: ({ db, res }) => handleGroupsListRoute(db, res)
+  },
+  {
+    name: "group-create",
+    matches: (route, method) => method === "POST" && route === "groups",
+    handle: ({ db, req, res }) => handleGroupCreateRoute(db, req, res)
+  },
+  {
+    name: "group-update",
+    matches: (route, method) => method === "PUT" && route === "group",
+    handle: ({ db, req, res }) => handleGroupUpdateRoute(db, req, res)
+  },
+  {
+    name: "group-delete",
+    matches: (route, method) => method === "DELETE" && route === "group",
+    handle: ({ db, res, url }) => handleGroupDeleteRoute(db, res, url)
   }
 ];
 
@@ -60213,132 +60387,6 @@ async function handleApi(ctx, req, res) {
     await emitAgentPresetChanged();
     await refreshActivePrompt();
     return sendJson(res, 200, { ok: true, name: name2, kind: detectPresetKind(data), data, state });
-  }
-  if (method === "POST" && route === "import/persona") {
-    const body = await readJson(req, 25 * 1024 * 1024);
-    if (typeof body.pngBase64 === "string" && typeof body.name === "string") {
-      const persona = await db.importPersonaPng(new Uint8Array(Buffer.from(body.pngBase64, "base64")), body.name);
-      await emitAssetsSaved("persona", persona.name);
-      return sendJson(res, 200, { ok: true, persona });
-    }
-    if (typeof body.name === "string") {
-      const persona = {
-        name: body.name,
-        description: typeof body.description === "string" ? body.description : "",
-        ...typeof body.position === "number" ? { position: body.position } : {},
-        ...typeof body.depth === "number" ? { depth: body.depth } : {},
-        ...typeof body.role === "number" ? { role: body.role } : {},
-        ...body.hasAvatar === true ? { hasAvatar: true } : {}
-      };
-      await db.putPersona(persona);
-      await emitAssetsSaved("persona", persona.name);
-      return sendJson(res, 200, { ok: true, persona });
-    }
-    throw new Error("expected { pngBase64, name } or { name, description }");
-  }
-  if (method === "PUT" && route === "persona") {
-    const body = await readJson(req);
-    if (typeof body.name !== "string" || typeof body.description !== "string") throw new Error("expected { name, description }");
-    const existing = await db.getPersona(body.name);
-    if (!existing) throw new Error(`persona '${body.name}' not found`);
-    const persona = {
-      ...existing,
-      description: body.description,
-      ...typeof body.position === "number" ? { position: body.position } : {},
-      ...typeof body.depth === "number" ? { depth: body.depth } : {},
-      ...typeof body.role === "number" ? { role: body.role } : {}
-    };
-    await db.putPersona(persona);
-    await emitAssetsSaved("persona", body.name);
-    return sendJson(res, 200, { ok: true, persona });
-  }
-  if (method === "DELETE" && route === "persona") {
-    const name2 = url.searchParams.get("name");
-    if (!name2) throw new Error("name query is required");
-    const deleted = await db.deletePersona(name2);
-    const state = await db.updateState((current) => ({
-      activePersona: current.activePersona === name2 ? void 0 : current.activePersona
-    }));
-    if (!deleted) return sendJson(res, 404, { ok: false, message: "persona not found" });
-    return sendJson(res, 200, { ok: true, state });
-  }
-  if (method === "GET" && route.startsWith("persona-avatar/")) {
-    const name2 = decodeURIComponent(route.slice("persona-avatar/".length));
-    const avatar = await db.getPersonaAvatar(name2);
-    if (avatar === void 0) {
-      const persona = await db.getPersona(name2);
-      if (persona) return sendAvatarFallback(res, name2);
-      return sendJson(res, 404, { ok: false, message: "persona avatar not found" });
-    }
-    res.statusCode = 200;
-    res.setHeader("content-type", "image/png");
-    res.setHeader("cache-control", "private, max-age=300");
-    res.end(Buffer.from(avatar));
-    return;
-  }
-  if (method === "GET" && route === "groups") {
-    const groups = [];
-    for (const name2 of await db.listGroups()) {
-      const group2 = await db.getGroup(name2);
-      if (group2) groups.push(publicGroup(group2));
-    }
-    return sendJson(res, 200, { ok: true, groups });
-  }
-  if (method === "POST" && route === "groups") {
-    const body = await readJson(req);
-    if (typeof body.name !== "string" || !Array.isArray(body.members)) throw new Error("expected { name, members }");
-    for (const member of body.members) {
-      if (typeof member !== "string" || !await db.getCharacter(member)) {
-        throw new Error(`group member '${String(member)}' is not an imported character`);
-      }
-    }
-    await db.putGroup({
-      id: `group-${body.name}`,
-      name: body.name,
-      members: body.members,
-      allowSelfResponses: body.allowSelfResponses === true,
-      activationStrategy: body.activationStrategy === 2 ? 2 : 1,
-      disabledMembers: Array.isArray(body.disabledMembers) ? body.disabledMembers.filter((x) => typeof x === "string") : [],
-      chatId: "",
-      chats: [],
-      autoModeDelay: 3
-    });
-    await emitAssetsSaved("group", body.name);
-    const group2 = await db.getGroup(body.name);
-    if (group2 === void 0) throw new Error(`group '${body.name}' was not saved`);
-    return sendJson(res, 200, { ok: true, group: publicGroup(group2) });
-  }
-  if (method === "PUT" && route === "group") {
-    const body = await readJson(req);
-    if (typeof body.name !== "string") throw new Error("expected { name, ... }");
-    const group2 = await db.getGroup(body.name);
-    if (!group2) throw new Error(`group '${body.name}' not found`);
-    const members = Array.isArray(body.members) ? body.members.filter((x) => typeof x === "string") : group2.members;
-    for (const member of members) {
-      if (!await db.getCharacter(member)) throw new Error(`group member '${member}' is not an imported character`);
-    }
-    await db.putGroup({
-      ...group2,
-      members,
-      ...Array.isArray(body.disabledMembers) ? { disabledMembers: body.disabledMembers.filter((x) => typeof x === "string" && members.includes(x)) } : {},
-      ...typeof body.activationStrategy === "number" ? { activationStrategy: body.activationStrategy === 2 ? 2 : 1 } : {},
-      ...typeof body.allowSelfResponses === "boolean" ? { allowSelfResponses: body.allowSelfResponses } : {}
-    });
-    await emitAssetsSaved("group", body.name);
-    const savedGroup = await db.getGroup(body.name);
-    if (savedGroup === void 0) throw new Error(`group '${body.name}' was not saved`);
-    return sendJson(res, 200, { ok: true, group: publicGroup(savedGroup) });
-  }
-  if (method === "DELETE" && route === "group") {
-    const name2 = url.searchParams.get("name");
-    if (!name2) throw new Error("name query is required");
-    const group2 = await db.getGroup(name2);
-    if (!group2) return sendJson(res, 404, { ok: false, message: "group not found" });
-    await db.deleteGroup(name2);
-    const state = await db.updateState((current) => ({
-      sessionBindings: Object.fromEntries(Object.entries(current.sessionBindings).filter(([, binding]) => !(binding.character === name2 && binding.group === true)))
-    }));
-    return sendJson(res, 200, { ok: true, state });
   }
   if (method === "POST" && route === "binding") {
     const body = await readJson(req);

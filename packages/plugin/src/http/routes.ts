@@ -27,6 +27,16 @@ import type { HttpRequest, HttpResponse } from './io.js'
 import { handleModsApi } from './mods.js'
 import { handleNovelsApi } from './novel.js'
 import { handleGuidesApi, handleScriptApi } from './panel.js'
+import {
+  handleGroupCreateRoute,
+  handleGroupDeleteRoute,
+  handleGroupsListRoute,
+  handleGroupUpdateRoute,
+  handlePersonaAvatarRoute,
+  handlePersonaDeleteRoute,
+  handlePersonaImportRoute,
+  handlePersonaUpdateRoute,
+} from './persona-group-routes.js'
 import { handleBootstrapApi, handleStateSlicesApi, handleStoreRevisionApi } from './read-routes.js'
 import { handleUpdateApi } from './update.js'
 
@@ -195,5 +205,47 @@ export const STORE_ROUTES: readonly RouteEntry<StoreRouteContext>[] = [
     name: 'character-export',
     matches: (route, method) => method === 'GET' && route.startsWith('export/character/'),
     handle: ({ db, res, route }) => handleCharacterExportRoute(db, res, route),
+  },
+  // Persona and group routes are post-store; the table keeps the original
+  // if-chain order. Only the write handlers emit asset-saved events.
+  {
+    name: 'persona-import',
+    matches: (route, method) => method === 'POST' && route === 'import/persona',
+    handle: ({ db, req, res }) => handlePersonaImportRoute(db, req, res),
+  },
+  {
+    name: 'persona-update',
+    matches: (route, method) => method === 'PUT' && route === 'persona',
+    handle: ({ db, req, res }) => handlePersonaUpdateRoute(db, req, res),
+  },
+  {
+    name: 'persona-delete',
+    matches: (route, method) => method === 'DELETE' && route === 'persona',
+    handle: ({ db, res, url }) => handlePersonaDeleteRoute(db, res, url),
+  },
+  {
+    name: 'persona-avatar',
+    matches: (route, method) => method === 'GET' && route.startsWith('persona-avatar/'),
+    handle: ({ db, res, route }) => handlePersonaAvatarRoute(db, res, route),
+  },
+  {
+    name: 'groups-list',
+    matches: (route, method) => method === 'GET' && route === 'groups',
+    handle: ({ db, res }) => handleGroupsListRoute(db, res),
+  },
+  {
+    name: 'group-create',
+    matches: (route, method) => method === 'POST' && route === 'groups',
+    handle: ({ db, req, res }) => handleGroupCreateRoute(db, req, res),
+  },
+  {
+    name: 'group-update',
+    matches: (route, method) => method === 'PUT' && route === 'group',
+    handle: ({ db, req, res }) => handleGroupUpdateRoute(db, req, res),
+  },
+  {
+    name: 'group-delete',
+    matches: (route, method) => method === 'DELETE' && route === 'group',
+    handle: ({ db, res, url }) => handleGroupDeleteRoute(db, res, url),
   },
 ]
