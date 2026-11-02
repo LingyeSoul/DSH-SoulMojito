@@ -13,7 +13,6 @@ import {
   type TavernState,
   type TavernStore,
 } from '../../../tavern-store/src/index.js'
-import { readSessionEvents, type HostSessionLog } from '../../../bind/src/index.js'
 import { getIdbRecord, IDB_MAX_RECORD_BYTES, putIdbRecordFromFile } from '../../../tavern-frontend-storage/src/index.js'
 import { emitAgentPresetChanged } from '../agent-tavern/preset.js'
 import { applyBodyEdit, bodyRuntimeError, selectBodyCandidate, startRegenerate } from '../agent-tavern/body-runtime.js'
@@ -44,7 +43,7 @@ import {
   locateBodyFloorForRead,
 } from '../agent-tavern/body-jsonl.js'
 import { seedJsrMvuVariables } from '../agent-tavern/mvu-compat.js'
-import { serveCharacterAvatar, sendAvatarFallback } from '../assets.js'
+import { sendAvatarFallback } from '../assets.js'
 import { collectCardScriptBundle } from '../card-scripts.js'
 import { runCandidateGeneration } from '../candidates.js'
 import { tavernDataRoot } from '../dsh-home.js'
@@ -59,8 +58,6 @@ import { listPromptViews } from '../prompt-viewer.js'
 import { optionalFeedback } from '../rewrite.js'
 import { collectSessionRegexScripts } from '../regex-session.js'
 import {
-  getAgentTavernProjectorPromise,
-  memories,
   store,
   variables,
 } from '../runtime.js'
@@ -78,10 +75,8 @@ import { HttpError } from './errors.js'
 import type { PluginContext } from '../host-contract.js'
 import { readJson, sendJson, type HttpRequest, type HttpResponse } from './io.js'
 import { handleMemoryEmbedApi, handleMemoryMaintenanceApi } from './memory.js'
-import { handleModsApi } from './mods.js'
-import { handleNovelsApi } from './novel.js'
-import { handleGuidesApi, handleMvuApi, handleScriptApi, handleWorkbenchApi } from './panel.js'
-import { EARLY_STORE_ROUTES, PRE_STORE_ROUTES } from './routes.js'
+import { handleMvuApi, handleWorkbenchApi } from './panel.js'
+import { EARLY_STORE_ROUTES, PRE_STORE_ROUTES, STORE_ROUTES } from './routes.js'
 
 export const API = '/api/dsh-soulmojito'
 export async function handleApi(ctx: PluginContext, req: HttpRequest, res: HttpResponse): Promise<void> {
@@ -103,128 +98,10 @@ export async function handleApi(ctx: PluginContext, req: HttpRequest, res: HttpR
     return
   }
 
-  if (method === 'GET' && route.startsWith('avatar/')) {
-    const name = decodeURIComponent(route.slice('avatar/'.length))
-    const found = await db.getCharacter(name)
-    if (found) {
-      return serveCharacterAvatar(res, db, name, found)
-    }
-    // 群组：回落第一个启用成员的头像；成员都没有头像时给默认替代头像
-    const group = await db.getGroup(name)
-    if (group) {
-      const enabled = group.members.filter((member) => !group.disabledMembers.includes(member))
-      for (const member of enabled.length > 0 ? enabled : group.members) {
-        const memberFile = await db.getCharacter(member)
-        if (memberFile) return serveCharacterAvatar(res, db, member, memberFile)
-      }
-      return sendAvatarFallback(res, name)
-    }
-    return sendJson(res, 404, { ok: false, message: 'character avatar not found' })
-  }
-
-  if (method === 'GET' && route.startsWith('character/')) {
-    const name = decodeURIComponent(route.slice('character/'.length))
-    const found = await db.getCharacter(name)
-    if (!found) return sendJson(res, 404, { ok: false, message: 'character not found' })
-    return sendJson(res, 200, { ok: true, kind: found.kind, card: publicCard(found.card) })
-  }
-
-  if (method === 'GET' && route === 'projection') {
-    const sessionId = url.searchParams.get('sessionId')
-    if (!sessionId) throw new Error('sessionId query is required')
-    const projector = await getAgentTavernProjectorPromise()
-    if (!projector) throw new Error('AgentTavern projector is unavailable')
-    return sendJson(res, 200, { ok: true, projection: await projector.status(sessionId) })
-  }
-
-  if (method === 'POST' && route === 'projection/replay') {
-    const body = await readJson(req).catch(() => ({}) as Record<string, unknown>)
-    const sessionId = typeof body.sessionId === 'string' ? body.sessionId : url.searchParams.get('sessionId')
-    if (!sessionId) throw new Error('sessionId is required')
-    const state = await db.getState()
-    const binding = state.sessionBindings[sessionId]
-    if (!binding || binding.architecture !== 'agent-tavern' || binding.group === true) {
-      throw new TavernArchitectureConflictError('Projection replay requires an AgentTavern single-character binding.')
-    }
-    const agent = ctx.agents?.get?.(sessionId) as { session?: HostSessionLog } | undefined
-    const session = agent?.session
-    if (!session || typeof session.id !== 'string' || readSessionEvents(session) === undefined) {
-      throw new Error('AgentTavern session is not loaded in this host process; open the chat first and retry.')
-    }
-    const projector = await getAgentTavernProjectorPromise()
-    if (!projector) throw new Error('AgentTavern projector is unavailable')
-    await projector.replay({ ...session, id: session.id })
-    return sendJson(res, 200, { ok: true, projection: await projector.status(sessionId) })
-  }
-
-  if (method === 'POST' && route === 'compact') {
-    // /compact 只在宿主 TUI 命令注册表，dsh web 的 HTTP 层不暴露；已超限
-    // 会话（真实 usage 超窗）每个请求都溢出，宿主 pre-step 压力压缩与
-    // agent/request-error 恢复都救不回，必须显式触发一次压缩。本端点在同
-    // 进程内调 curator 的 compactNow，总结走剧情会话的 curatorProvider/Model。
-    // 注意：Cordis 的 Context.get(name) 本身支持字符串服务名（cordis 4 的
-    // reflect 声明），但插件未 inject 的服务经属性/get 读取会因门控抛错——
-    // compaction 已在 inject 列表，这里用 ctx.compaction 属性通道最直接。
-    const body = await readJson(req).catch(() => ({}) as Record<string, unknown>)
-    const sessionId = typeof body.sessionId === 'string' ? body.sessionId : url.searchParams.get('sessionId')
-    if (!sessionId) throw new Error('sessionId is required')
-    const agent = ctx.agents?.get?.(sessionId) as { status?: unknown } | undefined
-    if (!agent || agent.status !== 'idle') {
-      throw new Error(`session ${sessionId} has no idle agent in this host process; pause the novel and retry.`)
-    }
-    const compaction = ctx.compaction as { compactNow?: (a: unknown, s: AbortSignal, id?: string) => Promise<unknown> } | undefined
-    if (!compaction || typeof compaction.compactNow !== 'function') {
-      throw new Error('compaction service is unavailable in this host process')
-    }
-    const result = await compaction.compactNow(agent, new AbortController().signal)
-    return sendJson(res, 200, { ok: true, result: result ?? null })
-  }
-
-  // 持续指引（提案 0009）：guide 属于单局聊天，随 chat_metadata 持久化；
-  // 读写走 getChatSnapshot + saveChat 的 revision CAS，与聊天写路径一致。
-  // 路径段解码与 character/ 前缀路由同款 decodeURIComponent（角色名可含空格/中文）。
-  if ((method === 'GET' || method === 'POST' || method === 'DELETE') && route.startsWith('guides/')) {
-    return handleGuidesApi(req, res, route, method, db)
-  }
-
-  // ---- 剧本游玩（提案 0014 P1）----
-  // 剧本库：TXT/MD 素材分块存 <tavern>/scripts/<name>/script.json；绑定在卡
-  // data.extensions.agentTavern.scriptId（一对一）；进度在 chat_metadata.scriptProgress，
-  // 由生成链路的对齐推进写。进度是展示不是跳章（§4）：没有写进度的路由。
-  if ((method === 'GET' || method === 'POST') && (route === 'scripts' || route === 'script/import' || route === 'script/bind' || route === 'script/unbind' || route.startsWith('script/'))) {
-    return handleScriptApi(req, res, route, method, db)
-  }
-
-  if (method === 'GET' && route === 'agent-tavern/audit') {
-    const sessionId = url.searchParams.get('sessionId')
-    if (!sessionId) throw new Error('sessionId query is required')
-    const state = await db.getState()
-    const binding = state.sessionBindings[sessionId]
-    if (!binding || binding.architecture !== 'agent-tavern' || binding.group === true) {
-      throw new TavernArchitectureConflictError('AgentTavern audit requires a native single-character binding.')
-    }
-    const scopes = [
-      { scope: 'chat' as const, scopeId: binding.chatId },
-      { scope: 'character' as const, scopeId: binding.character },
-      { scope: 'agent' as const, scopeId: sessionId },
-    ]
-    const [memoryGroups, variableGroups, globalMemories, globalVariables, projector] = await Promise.all([
-      Promise.all(scopes.map(({ scope, scopeId }) => memories().then((store) => store.search({
-        scope, scopeId, includeDeleted: true, limit: 50,
-      })))),
-      Promise.all(scopes.map(({ scope, scopeId }) => variables().then((store) => store.listAll(scope, scopeId)))),
-      memories().then((store) => store.search({ scope: 'global', includeDeleted: true, limit: 50 })),
-      variables().then((store) => store.listAll('global', 'global')),
-      getAgentTavernProjectorPromise(),
-    ])
-    return sendJson(res, 200, {
-      ok: true,
-      architecture: binding.architecture,
-      contextMode: binding.contextMode,
-      projection: projector ? await projector.status(sessionId) : null,
-      memories: [...memoryGroups.flat().map((hit) => hit.record), ...globalMemories.map((hit) => hit.record)],
-      variables: [...variableGroups.flat(), ...globalVariables],
-    })
+  for (const entry of STORE_ROUTES) {
+    if (!entry.matches(route, method)) continue
+    await entry.handle({ ctx, req, res, url, route, method, db })
+    return
   }
 
   // ---- AgentTavern body operations (proposal 0021 §7.3) ----
@@ -237,18 +114,6 @@ export async function handleApi(ctx: PluginContext, req: HttpRequest, res: HttpR
     || (method === 'POST' && (route === 'body/regenerate' || route === 'body/select'))
   ) {
     return handleAgentTavernBodyApi(ctx, db, req, res, url, route, method)
-  }
-
-  if (route === 'novels' || route.startsWith('novels/')) {
-    return handleNovelsApi(ctx, req, res, url, route, method)
-  }
-
-  // ---- Mod 管理面与子路由（提案 0015 §3.2/§3.3 P1）----
-  // 管理面（GET mods / POST mods/state / enable|disable|reload）在任一层关闭时
-  // 仍可用（否则用户无法再打开）；Mod 子路由（mods/<id>/<path>）在任一层关闭、
-  // 未装载或无此路由时一律 404，与未知路由不可区分。
-  if (route === 'mods' || route.startsWith('mods/')) {
-    return handleModsApi(ctx, req, res, url, route, method)
   }
 
   if (method === 'PUT' && route.startsWith('character/')) {

@@ -13627,12 +13627,12 @@ function createTemplateRuntime(options) {
   const { host, stores, onWarning } = options;
   const warn4 = onWarning ?? (() => {
   });
-  const variables2 = new TemplateVariableSystem(stores);
+  const variables3 = new TemplateVariableSystem(stores);
   const defines = {};
   const getwiDepth = { current: 0 };
   host.onWarning = warn4;
   const buildEnv = (extra) => {
-    const env = createTemplateEnv({ vars: variables2, host, defines, getwiDepth });
+    const env = createTemplateEnv({ vars: variables3, host, defines, getwiDepth });
     if (extra !== void 0) Object.assign(env, extra);
     return env;
   };
@@ -13651,7 +13651,7 @@ function createTemplateRuntime(options) {
   const evaluate = (condition) => evaluateCondition(condition);
   const render = (text, extraEnv) => renderText(text, extraEnv);
   return {
-    variables: variables2,
+    variables: variables3,
     defines,
     renderText,
     evaluateCondition,
@@ -13661,7 +13661,7 @@ function createTemplateRuntime(options) {
     applyRenderInjections: (text, entries) => applyRenderInjections(text, entries, render, buildEnv(), evaluate, warn4),
     parseInitialVariables: (content) => parseInitialVariables(content, warn4),
     setInitialVariables: (data) => {
-      variables2.setInitialVariables(data);
+      variables3.setInitialVariables(data);
     }
   };
 }
@@ -14270,21 +14270,21 @@ async function applyMvuSettlementRules(chat, card, before) {
   if (source === void 0 && before.$rules === void 0 && live?.$rules === void 0) {
     return { failures: [], notes: {} };
   }
-  const variables2 = live ?? {};
+  const variables3 = live ?? {};
   const failures = [];
-  if (!mvuValuesEqual(variables2.$rules, before.$rules)) {
-    if (before.$rules !== void 0) variables2.$rules = deepClone(before.$rules);
-    else delete variables2.$rules;
+  if (!mvuValuesEqual(variables3.$rules, before.$rules)) {
+    if (before.$rules !== void 0) variables3.$rules = deepClone(before.$rules);
+    else delete variables3.$rules;
     failures.push("$rules: guard readonly: the rules subtree is card-declared and cannot be settled");
   }
   if (source === void 0) {
-    if (live === void 0 && Object.keys(variables2).length > 0) metadata.variables = variables2;
+    if (live === void 0 && Object.keys(variables3).length > 0) metadata.variables = variables3;
     return { failures, notes: {} };
   }
   if ("invalid" in source) return { failures: [...failures, source.invalid], notes: {} };
   const schema = readMvuSchema(chat, card, before);
-  const run = await runMvuRules(source.rules, { ...schema !== void 0 ? { schema } : {}, tree: variables2 });
-  if (live === void 0 && Object.keys(variables2).length > 0) metadata.variables = variables2;
+  const run = await runMvuRules(source.rules, { ...schema !== void 0 ? { schema } : {}, tree: variables3 });
+  if (live === void 0 && Object.keys(variables3).length > 0) metadata.variables = variables3;
   return { failures: [...failures, ...run.failures], notes: run.notes };
 }
 function mergeMvuRuleNotes(guardNotes, ruleNotes) {
@@ -14583,29 +14583,29 @@ function applyMvuSettlementGuard(chat, card, before) {
   const failures = [];
   const notes = {};
   const metadata = chat.header.chat_metadata;
-  const variables2 = plainObject3(metadata.variables);
+  const variables3 = plainObject3(metadata.variables);
   const schema = readMvuSchema(chat, card, before);
-  if (schema === void 0 || variables2 === void 0) return { failures, notes };
+  if (schema === void 0 || variables3 === void 0) return { failures, notes };
   const schemaBefore = plainObject3(before.$schema);
-  const schemaLive = plainObject3(variables2.$schema);
+  const schemaLive = plainObject3(variables3.$schema);
   if (!valuesEqual(schemaBefore, schemaLive)) {
-    if (schemaBefore !== void 0) variables2.$schema = deepClone(schemaBefore);
-    else delete variables2.$schema;
+    if (schemaBefore !== void 0) variables3.$schema = deepClone(schemaBefore);
+    else delete variables3.$schema;
     failures.push(`$schema: guard readonly: the schema subtree is card-declared and cannot be settled`);
   }
-  for (const change of diffVariables(before, variables2)) {
+  for (const change of diffVariables(before, variables3)) {
     const current = getMvuTreePath(before, change.name);
     const value = "after" in change ? change.after : void 0;
     const result = guardMvuWrite(schema, change.name, value, current);
     if (!result.ok) {
-      revertMvuTreePath(variables2, change.name, before);
+      revertMvuTreePath(variables3, change.name, before);
       failures.push(`${change.name}: guard ${result.kind}: ${result.reason}`);
       continue;
     }
     if (result.note !== void 0) notes[change.name] = result.note;
-    if (value !== void 0 && !valuesEqual(result.value, value)) setMvuTreePath(variables2, change.name, result.value);
+    if (value !== void 0 && !valuesEqual(result.value, value)) setMvuTreePath(variables3, change.name, result.value);
   }
-  if (Object.keys(variables2).length === 0 && Object.keys(before).length === 0) delete metadata.variables;
+  if (Object.keys(variables3).length === 0 && Object.keys(before).length === 0) delete metadata.variables;
   return { failures, notes };
 }
 function createMvuRuntime(input, stores) {
@@ -14860,16 +14860,16 @@ async function undoMvuStSettlement(db, options) {
   const target = refuseUndo(latestValidMvuReceipt(receipts), receipts);
   const restores = planMvuUndoRestores(target.receipt);
   const metadata = chat.header.chat_metadata;
-  const variables2 = plainObject3(metadata.variables) ?? {};
-  screenMvuUndoRestores(readMvuSchema(chat, (await db.getCharacter(characterName))?.card, variables2), restores, (path12) => getMvuTreePath(variables2, path12));
-  applyMvuUndoRestores(variables2, restores);
-  if (Object.keys(variables2).length === 0) delete metadata.variables;
-  else metadata.variables = variables2;
+  const variables3 = plainObject3(metadata.variables) ?? {};
+  screenMvuUndoRestores(readMvuSchema(chat, (await db.getCharacter(characterName))?.card, variables3), restores, (path12) => getMvuTreePath(variables3, path12));
+  applyMvuUndoRestores(variables3, restores);
+  if (Object.keys(variables3).length === 0) delete metadata.variables;
+  else metadata.variables = variables3;
   const marked = markMvuReceiptUndone(chat, target.index, options.at);
   const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
   return { receipt: marked, revision, restores };
 }
-async function undoMvuAgentSettlement(variables2, db, options) {
+async function undoMvuAgentSettlement(variables3, db, options) {
   const { characterName, chatId, snapshot: snapshot2 } = options;
   const chat = snapshot2.chat;
   const receipts = readMvuReceipts(chat);
@@ -14880,7 +14880,7 @@ async function undoMvuAgentSettlement(variables2, db, options) {
   const entries = /* @__PURE__ */ new Map();
   for (const restore of restores) {
     try {
-      entries.set(restore.path, await variables2.get("chat", chatId, restore.path));
+      entries.set(restore.path, await variables3.get("chat", chatId, restore.path));
     } catch (error) {
       storeFailures.push(`${restore.path}: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -14897,7 +14897,7 @@ async function undoMvuAgentSettlement(variables2, db, options) {
   for (const restore of restores) {
     if ("value" in restore) continue;
     const entry = entries.get(restore.path);
-    if (entry !== void 0) await variables2.delete("chat", chatId, restore.path, entry.revision);
+    if (entry !== void 0) await variables3.delete("chat", chatId, restore.path, entry.revision);
   }
   const updates = [];
   for (const restore of restores) {
@@ -14907,7 +14907,7 @@ async function undoMvuAgentSettlement(variables2, db, options) {
     if (current !== void 0 && mvuValuesEqual(current, restore.value)) continue;
     updates.push({ name: restore.path, value: deepClone(restore.value), ...entry !== void 0 ? { expectedRevision: entry.revision } : {} });
   }
-  if (updates.length > 0) await variables2.patch("chat", chatId, updates);
+  if (updates.length > 0) await variables3.patch("chat", chatId, updates);
   const marked = markMvuReceiptUndone(chat, target.index, options.at);
   const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
   return { receipt: marked, revision, restores };
@@ -15003,10 +15003,10 @@ function setStoredReceiptsUndoneAt(chat, indexes, undoneAt) {
 function cloneChatVariablesForReceipts(chat) {
   return deepClone(plainObject3(chat.header.chat_metadata.variables) ?? {});
 }
-function commitChatVariablesAfterReceipts(chat, variables2) {
+function commitChatVariablesAfterReceipts(chat, variables3) {
   const metadata = chat.header.chat_metadata;
-  if (Object.keys(variables2).length === 0) delete metadata.variables;
-  else metadata.variables = variables2;
+  if (Object.keys(variables3).length === 0) delete metadata.variables;
+  else metadata.variables = variables3;
 }
 function planMvuRedoRestores(receipt) {
   if (receipt.status === "updated" && receipt.changes.length === 0) {
@@ -15031,11 +15031,11 @@ function undoMvuReceipts(chat, receipts, guard, options) {
     restores.push(...planMvuUndoRestores(targets[index].receipt));
   }
   screenMvuUndoRestores(guard.schema, restores, guard.currentOf);
-  const variables2 = cloneChatVariablesForReceipts(chat);
-  applyMvuUndoRestores(variables2, restores);
+  const variables3 = cloneChatVariablesForReceipts(chat);
+  applyMvuUndoRestores(variables3, restores);
   const at = options?.at ?? (/* @__PURE__ */ new Date()).toISOString();
   const marked = setStoredReceiptsUndoneAt(chat, targets.map((entry) => entry.index), at);
-  commitChatVariablesAfterReceipts(chat, variables2);
+  commitChatVariablesAfterReceipts(chat, variables3);
   return { receipts: marked, restores };
 }
 function redoMvuReceipts(chat, receipts) {
@@ -15045,10 +15045,10 @@ function redoMvuReceipts(chat, receipts) {
   if (targets.length === 0) return { receipts: [], restores: [] };
   const restores = [];
   for (const entry of targets) restores.push(...planMvuRedoRestores(entry.receipt));
-  const variables2 = cloneChatVariablesForReceipts(chat);
-  applyMvuUndoRestores(variables2, restores);
+  const variables3 = cloneChatVariablesForReceipts(chat);
+  applyMvuUndoRestores(variables3, restores);
   const marked = setStoredReceiptsUndoneAt(chat, targets.map((entry) => entry.index), void 0);
-  commitChatVariablesAfterReceipts(chat, variables2);
+  commitChatVariablesAfterReceipts(chat, variables3);
   return { receipts: marked, restores };
 }
 var DEFAULT_USER, INITIAL_VARIABLES_KEY3, MVU_RECEIPTS_LIMIT, BODY_RECEIPT_PREFIX, CANONICAL_FLOOR_KEY, MVU_SETTLE_RECEIPTS_RESERVED, MvuUndoRefusalError, CANDIDATE_BODY_INDEX;
@@ -15598,7 +15598,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.5".trim() : "";
-  const commit = true ? normalizeCommit("88c1fca") : void 0;
+  const commit = true ? normalizeCommit("23da5cf") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -20345,20 +20345,20 @@ function ensureChatVariables(chat) {
   metadata.variables = created;
   return created;
 }
-function seedJsrMvuVariables(card, variables2) {
+function seedJsrMvuVariables(card, variables3) {
   if (!cardUsesJsrMvu(card)) return false;
   let changed = false;
-  if (!Object.prototype.hasOwnProperty.call(variables2, "initialized_lorebooks")) {
-    variables2["initialized_lorebooks"] = true;
+  if (!Object.prototype.hasOwnProperty.call(variables3, "initialized_lorebooks")) {
+    variables3["initialized_lorebooks"] = true;
     changed = true;
   }
-  const stat3 = plainObject(variables2["stat_data"]);
+  const stat3 = plainObject(variables3["stat_data"]);
   if (stat3 === void 0) {
-    variables2["stat_data"] = { \u7CFB\u7EDF\u72B6\u6001: { \u4E3B\u89D2\u521B\u5EFA\u5B8C\u6BD5: false } };
+    variables3["stat_data"] = { \u7CFB\u7EDF\u72B6\u6001: { \u4E3B\u89D2\u521B\u5EFA\u5B8C\u6BD5: false } };
     changed = true;
   } else if (Object.keys(stat3).length === 0) {
     stat3["\u7CFB\u7EDF\u72B6\u6001"] = { \u4E3B\u89D2\u521B\u5EFA\u5B8C\u6BD5: false };
-    variables2["stat_data"] = stat3;
+    variables3["stat_data"] = stat3;
     changed = true;
   }
   return changed;
@@ -20368,15 +20368,15 @@ function readStatData(chat) {
 }
 function applyUpdateVariableToChat(card, chat, text) {
   if (!cardUsesJsrMvu(card)) return { text, found: false, applied: 0, failures: [] };
-  const variables2 = ensureChatVariables(chat);
-  seedJsrMvuVariables(card, variables2);
+  const variables3 = ensureChatVariables(chat);
+  seedJsrMvuVariables(card, variables3);
   const block = parseUpdateBlock(text);
   const failures = [];
   let applied = 0;
-  let stat3 = plainObject(variables2["stat_data"]) ?? {};
+  let stat3 = plainObject(variables3["stat_data"]) ?? {};
   const previousStat = structuredClone(stat3);
   if (block !== void 0) {
-    variables2["previous_stat_data"] = previousStat;
+    variables3["previous_stat_data"] = previousStat;
     if (block.error !== void 0) {
       failures.push(block.error);
     } else if (block.ops !== void 0) {
@@ -20386,8 +20386,8 @@ function applyUpdateVariableToChat(card, chat, text) {
       failures.push(...result.failures);
     }
   }
-  variables2["stat_data"] = stat3;
-  variables2["initialized_lorebooks"] = true;
+  variables3["stat_data"] = stat3;
+  variables3["initialized_lorebooks"] = true;
   let nextText = text;
   if (cardUsesStatusPlaceholder(card) && !nextText.includes(STATUS_PLACEHOLDER)) {
     nextText = `${nextText.replace(/\s+$/, "")}
@@ -21966,10 +21966,10 @@ function applyCandidateEditToChat(chat, card, input) {
   const inspection = inspectCandidateReceipts(chat, ref, input.ledger, input.previousText, card);
   if (inspection.detail !== void 0) throw detailError(inspection.detail, ref, inspection);
   if (inspection.live.length > 0) {
-    const variables2 = readChatVariables(chat);
+    const variables3 = readChatVariables(chat);
     const staged = applyVariableUndo(chat, inspection.live, {
       schema: readMvuSchema(chat, card),
-      currentOf: (path12) => getMvuTreePath(variables2, path12)
+      currentOf: (path12) => getMvuTreePath(variables3, path12)
     });
     chat = staged.chat;
   }
@@ -22043,12 +22043,12 @@ function syncFloorStatData(chat, floorIndex) {
     chat.messages[floorIndex] = updated;
     return;
   }
-  const variables2 = isRecord4(updated.variables) ? updated.variables : void 0;
-  if (variables2 === void 0 || !Object.prototype.hasOwnProperty.call(variables2, "stat_data")) {
+  const variables3 = isRecord4(updated.variables) ? updated.variables : void 0;
+  if (variables3 === void 0 || !Object.prototype.hasOwnProperty.call(variables3, "stat_data")) {
     chat.messages[floorIndex] = updated;
     return;
   }
-  const nextVariables = { ...variables2 };
+  const nextVariables = { ...variables3 };
   delete nextVariables["stat_data"];
   if (Object.keys(nextVariables).length === 0) {
     const nextMessage = { ...updated };
@@ -24463,10 +24463,10 @@ async function undoNewCandidateBodyReceipt(deps, op, events, failedTurn) {
     const live = receipts.filter((receipt) => receipt.undoneAt === void 0);
     if (live.length === 0) return;
     const card = (await tavern.getCharacter(plan.binding.character))?.card;
-    const variables2 = readChatVariables(snapshot2.chat);
+    const variables3 = readChatVariables(snapshot2.chat);
     const staged = applyVariableUndo(snapshot2.chat, live, {
       schema: readMvuSchema(snapshot2.chat, card),
-      currentOf: (path12) => getMvuTreePath(variables2, path12)
+      currentOf: (path12) => getMvuTreePath(variables3, path12)
     });
     await tavern.saveChat(plan.binding.character, plan.binding.chatId, staged.chat, snapshot2.revision);
   } catch (error) {
@@ -28188,10 +28188,10 @@ async function applyReceiptRollback(deps, chat, receipts, direction, binding) {
   if (bodyReceipts.length > 0) {
     if (direction === "undo") {
       const card = (await deps.store.getCharacter(binding.character))?.card;
-      const variables2 = readChatVariables(chat);
+      const variables3 = readChatVariables(chat);
       const result = undoMvuReceipts(chat, bodyReceipts, {
         schema: readMvuSchema(chat, card),
-        currentOf: (path12) => getMvuTreePath(variables2, path12)
+        currentOf: (path12) => getMvuTreePath(variables3, path12)
       }, { at });
       bodyCount = result.receipts.length;
     } else {
@@ -29867,8 +29867,8 @@ function bodyHistoricalMvuStateOf(character, chat) {
     return true;
   }
   const metadata = chat.header.chat_metadata;
-  const variables2 = isRecord6(metadata["variables"]) ? metadata["variables"] : void 0;
-  if (variables2 !== void 0 && Object.prototype.hasOwnProperty.call(variables2, "stat_data")) {
+  const variables3 = isRecord6(metadata["variables"]) ? metadata["variables"] : void 0;
+  if (variables3 !== void 0 && Object.prototype.hasOwnProperty.call(variables3, "stat_data")) {
     return true;
   }
   const mvu = isRecord6(metadata["mvu"]) ? metadata["mvu"] : void 0;
@@ -40397,10 +40397,10 @@ function forkBookmarkMessageId(chat, parentSessionId, boundarySeq) {
   }
   return last === -1 ? void 0 : last;
 }
-async function copyChatVariables(variables2, parentChatId, chatId) {
-  const snapshots = await variables2.listAll("chat", parentChatId);
+async function copyChatVariables(variables3, parentChatId, chatId) {
+  const snapshots = await variables3.listAll("chat", parentChatId);
   if (snapshots.length === 0) return;
-  await variables2.patch("chat", chatId, snapshots.map((snapshot2) => ({ name: snapshot2.name, value: snapshot2.value })));
+  await variables3.patch("chat", chatId, snapshots.map((snapshot2) => ({ name: snapshot2.name, value: snapshot2.value })));
 }
 async function copyChatMemories(deps, parentChatId, chatId) {
   if (deps.memories === void 0) return;
@@ -46930,16 +46930,16 @@ function patchNodeById(nodes, scriptId, mutate) {
 }
 async function replaceScriptVariables(db, character, chatId, body) {
   const scriptId = requireString2(body?.scriptId, "scriptId");
-  const variables2 = requireObject2(body?.variables, "variables");
+  const variables3 = requireObject2(body?.variables, "variables");
   return serializeSessionWrite(`scripts:${character}\0${chatId}`, async () => {
     await db.putChatJsrOverlay(character, chatId, (current) => {
       const base = current ?? { version: 1, scriptTrees: [] };
       return {
         ...base,
-        scriptVariables: { ...base.scriptVariables ?? {}, [scriptId]: variables2 }
+        scriptVariables: { ...base.scriptVariables ?? {}, [scriptId]: variables3 }
       };
     });
-    return { scriptId, variables: variables2 };
+    return { scriptId, variables: variables3 };
   });
 }
 async function resetScriptTrees(db, character, chatId, type) {
@@ -48893,7 +48893,7 @@ var cardApplyMvuTool = tool3("card_apply_mvu", "Convert a character card to the 
   if (args.confirmed !== true) throw new Error(CONFIRMATION_ERROR);
   const character = stringArg(args.character);
   const template = statusTemplateArg(args.statusTemplate);
-  const variables2 = args.initialVariables === void 0 ? void 0 : initialVariablesArg(args.initialVariables);
+  const variables3 = args.initialVariables === void 0 ? void 0 : initialVariablesArg(args.initialVariables);
   exec?.signal?.throwIfAborted();
   const root = tavernDataRoot();
   const db = await tavernStore3();
@@ -48906,7 +48906,7 @@ var cardApplyMvuTool = tool3("card_apply_mvu", "Convert a character card to the 
   const previous = extensions.agentTavern;
   const agentTavern = typeof previous === "object" && previous !== null && !Array.isArray(previous) ? { ...previous } : {};
   agentTavern.statusTemplate = template;
-  if (variables2 !== void 0) agentTavern.initialVariables = structuredClone(variables2);
+  if (variables3 !== void 0) agentTavern.initialVariables = structuredClone(variables3);
   extensions.agentTavern = agentTavern;
   const saved = await db.updateCharacter(character, {
     spec: found.card.spec,
@@ -50871,92 +50871,6 @@ async function maintenanceDeps(db) {
   };
 }
 
-// packages/plugin/src/http/mods.ts
-init_runtime2();
-init_io();
-init_public_error();
-async function handleModsApi(ctx, req, res, url, route, method) {
-  const notFound = () => sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
-  const segments = route === "mods" ? [] : route.slice("mods/".length).split("/");
-  const modId = segments[0] ?? "";
-  const subpath = segments.length > 1 ? segments.slice(1).join("/") : "";
-  let host;
-  try {
-    host = await modHost();
-  } catch (cause) {
-    ctx.logger?.warn?.(`dsh-soulmojito: mod host unavailable: ${cause instanceof Error ? cause.message : String(cause)}`);
-    if (method === "GET" && route === "mods") {
-      return sendJson(res, 200, { ok: true, available: false, reason: "mod host unavailable", globalEnabled: false, mods: [] });
-    }
-    const isManagementWrite = route === "mods/state" || segments.length === 2 && (subpath === "enable" || subpath === "disable" || subpath === "reload");
-    if (!isManagementWrite) return notFound();
-    throw new Error("mod host unavailable");
-  }
-  if (method === "GET" && route === "mods") {
-    return sendJson(res, 200, { ok: true, ...host.snapshot() });
-  }
-  if (method === "POST" && route === "mods/install") {
-    const body = await readJson(req);
-    if (typeof body.url !== "string" || body.url.trim() === "") throw new Error("expected { url }");
-    const result = await host.installFromGit(body.url, body.force === true);
-    return sendJson(res, 200, { ok: true, ...host.snapshot(), installed: result });
-  }
-  if (method === "POST" && route === "mods/state") {
-    const body = await readJson(req);
-    if (typeof body.globalEnabled !== "boolean") throw new Error("expected { globalEnabled }");
-    await host.setGlobalEnabled(body.globalEnabled);
-    return sendJson(res, 200, { ok: true, ...host.snapshot() });
-  }
-  if (method === "POST" && segments.length === 2 && (subpath === "enable" || subpath === "disable")) {
-    await host.setModEnabled(decodeURIComponent(modId), subpath === "enable");
-    return sendJson(res, 200, { ok: true, ...host.snapshot() });
-  }
-  if (method === "POST" && segments.length === 2 && subpath === "reload") {
-    await host.reload(decodeURIComponent(modId));
-    return sendJson(res, 200, { ok: true, ...host.snapshot() });
-  }
-  if (method === "POST" && segments.length === 3 && segments[1] === "button") {
-    let id = modId;
-    let name2 = segments[2] ?? "";
-    try {
-      id = decodeURIComponent(modId);
-      name2 = decodeURIComponent(segments[2] ?? "");
-    } catch {
-      return notFound();
-    }
-    const body = await readJson(req).catch(() => ({}));
-    const context = {};
-    if (typeof body.character === "string" && body.character !== "") context.character = body.character;
-    if (typeof body.chatId === "string" && body.chatId !== "") context.chatId = body.chatId;
-    try {
-      const outcome = await host.dispatchButton(id, name2, context);
-      if (outcome === "not-found") return notFound();
-      return sendJson(res, 200, { ok: true, handled: outcome === "handled" });
-    } catch (cause) {
-      const failure = publicError(cause, { operation: "mod-button-dispatch", logger: ctx.logger });
-      return sendJson(res, failure.status, {
-        ok: false,
-        message: failure.message,
-        ...failure.code === void 0 ? {} : { code: failure.code }
-      });
-    }
-  }
-  if (segments.length >= 1 && modId !== "") {
-    let id = modId;
-    let path12 = subpath;
-    try {
-      id = decodeURIComponent(modId);
-      path12 = subpath === "" ? "" : decodeURIComponent(subpath);
-    } catch {
-      return notFound();
-    }
-    const handled = await host.handleRoute(req, res, method, url, id, path12);
-    if (handled) return;
-    return notFound();
-  }
-  return notFound();
-}
-
 // packages/plugin/src/games/http.ts
 init_public_error();
 init_http();
@@ -51089,6 +51003,108 @@ async function handleGamesApi(options) {
 
 // packages/plugin/src/http/routes.ts
 init_runtime2();
+
+// packages/plugin/src/http/domain-routes.ts
+init_runtime2();
+init_io();
+async function handleAvatarRoute(db, res, route) {
+  const name2 = decodeURIComponent(route.slice("avatar/".length));
+  const found = await db.getCharacter(name2);
+  if (found) {
+    return serveCharacterAvatar(res, db, name2, found);
+  }
+  const group2 = await db.getGroup(name2);
+  if (group2) {
+    const enabled = group2.members.filter((member) => !group2.disabledMembers.includes(member));
+    for (const member of enabled.length > 0 ? enabled : group2.members) {
+      const memberFile = await db.getCharacter(member);
+      if (memberFile) return serveCharacterAvatar(res, db, member, memberFile);
+    }
+    return sendAvatarFallback(res, name2);
+  }
+  return sendJson(res, 404, { ok: false, message: "character avatar not found" });
+}
+async function handleCharacterReadRoute(db, res, route) {
+  const name2 = decodeURIComponent(route.slice("character/".length));
+  const found = await db.getCharacter(name2);
+  if (!found) return sendJson(res, 404, { ok: false, message: "character not found" });
+  return sendJson(res, 200, { ok: true, kind: found.kind, card: publicCard(found.card) });
+}
+async function handleProjectionRoute(res, url) {
+  const sessionId = url.searchParams.get("sessionId");
+  if (!sessionId) throw new Error("sessionId query is required");
+  const projector = await getAgentTavernProjectorPromise();
+  if (!projector) throw new Error("AgentTavern projector is unavailable");
+  return sendJson(res, 200, { ok: true, projection: await projector.status(sessionId) });
+}
+async function handleProjectionReplayRoute(ctx, db, req, res, url) {
+  const body = await readJson(req).catch(() => ({}));
+  const sessionId = typeof body.sessionId === "string" ? body.sessionId : url.searchParams.get("sessionId");
+  if (!sessionId) throw new Error("sessionId is required");
+  const state = await db.getState();
+  const binding = state.sessionBindings[sessionId];
+  if (!binding || binding.architecture !== "agent-tavern" || binding.group === true) {
+    throw new TavernArchitectureConflictError("Projection replay requires an AgentTavern single-character binding.");
+  }
+  const agent = ctx.agents?.get?.(sessionId);
+  const session = agent?.session;
+  if (!session || typeof session.id !== "string" || readSessionEvents(session) === void 0) {
+    throw new Error("AgentTavern session is not loaded in this host process; open the chat first and retry.");
+  }
+  const projector = await getAgentTavernProjectorPromise();
+  if (!projector) throw new Error("AgentTavern projector is unavailable");
+  await projector.replay({ ...session, id: session.id });
+  return sendJson(res, 200, { ok: true, projection: await projector.status(sessionId) });
+}
+async function handleCompactRoute(ctx, req, res, url) {
+  const body = await readJson(req).catch(() => ({}));
+  const sessionId = typeof body.sessionId === "string" ? body.sessionId : url.searchParams.get("sessionId");
+  if (!sessionId) throw new Error("sessionId is required");
+  const agent = ctx.agents?.get?.(sessionId);
+  if (!agent || agent.status !== "idle") {
+    throw new Error(`session ${sessionId} has no idle agent in this host process; pause the novel and retry.`);
+  }
+  const compaction = ctx.compaction;
+  if (!compaction || typeof compaction.compactNow !== "function") {
+    throw new Error("compaction service is unavailable in this host process");
+  }
+  const result = await compaction.compactNow(agent, new AbortController().signal);
+  return sendJson(res, 200, { ok: true, result: result ?? null });
+}
+async function handleAuditRoute(db, res, url) {
+  const sessionId = url.searchParams.get("sessionId");
+  if (!sessionId) throw new Error("sessionId query is required");
+  const state = await db.getState();
+  const binding = state.sessionBindings[sessionId];
+  if (!binding || binding.architecture !== "agent-tavern" || binding.group === true) {
+    throw new TavernArchitectureConflictError("AgentTavern audit requires a native single-character binding.");
+  }
+  const scopes = [
+    { scope: "chat", scopeId: binding.chatId },
+    { scope: "character", scopeId: binding.character },
+    { scope: "agent", scopeId: sessionId }
+  ];
+  const [memoryGroups, variableGroups, globalMemories, globalVariables, projector] = await Promise.all([
+    Promise.all(scopes.map(({ scope, scopeId }) => memories().then((store5) => store5.search({
+      scope,
+      scopeId,
+      includeDeleted: true,
+      limit: 50
+    })))),
+    Promise.all(scopes.map(({ scope, scopeId }) => variables().then((store5) => store5.listAll(scope, scopeId)))),
+    memories().then((store5) => store5.search({ scope: "global", includeDeleted: true, limit: 50 })),
+    variables().then((store5) => store5.listAll("global", "global")),
+    getAgentTavernProjectorPromise()
+  ]);
+  return sendJson(res, 200, {
+    ok: true,
+    architecture: binding.architecture,
+    contextMode: binding.contextMode,
+    projection: projector ? await projector.status(sessionId) : null,
+    memories: [...memoryGroups.flat().map((hit) => hit.record), ...globalMemories.map((hit) => hit.record)],
+    variables: [...variableGroups.flat(), ...globalVariables]
+  });
+}
 
 // packages/plugin/src/http/im.ts
 init_dsh_home();
@@ -59216,6 +59232,92 @@ function qqRuntimeUnavailableMessage(error) {
   return `the QQ runtime ${detail}; open the IM panel and press \u5B89\u88C5 QQ \u4F9D\u8D56 to install or repair it`;
 }
 
+// packages/plugin/src/http/mods.ts
+init_runtime2();
+init_io();
+init_public_error();
+async function handleModsApi(ctx, req, res, url, route, method) {
+  const notFound = () => sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  const segments = route === "mods" ? [] : route.slice("mods/".length).split("/");
+  const modId = segments[0] ?? "";
+  const subpath = segments.length > 1 ? segments.slice(1).join("/") : "";
+  let host;
+  try {
+    host = await modHost();
+  } catch (cause) {
+    ctx.logger?.warn?.(`dsh-soulmojito: mod host unavailable: ${cause instanceof Error ? cause.message : String(cause)}`);
+    if (method === "GET" && route === "mods") {
+      return sendJson(res, 200, { ok: true, available: false, reason: "mod host unavailable", globalEnabled: false, mods: [] });
+    }
+    const isManagementWrite = route === "mods/state" || segments.length === 2 && (subpath === "enable" || subpath === "disable" || subpath === "reload");
+    if (!isManagementWrite) return notFound();
+    throw new Error("mod host unavailable");
+  }
+  if (method === "GET" && route === "mods") {
+    return sendJson(res, 200, { ok: true, ...host.snapshot() });
+  }
+  if (method === "POST" && route === "mods/install") {
+    const body = await readJson(req);
+    if (typeof body.url !== "string" || body.url.trim() === "") throw new Error("expected { url }");
+    const result = await host.installFromGit(body.url, body.force === true);
+    return sendJson(res, 200, { ok: true, ...host.snapshot(), installed: result });
+  }
+  if (method === "POST" && route === "mods/state") {
+    const body = await readJson(req);
+    if (typeof body.globalEnabled !== "boolean") throw new Error("expected { globalEnabled }");
+    await host.setGlobalEnabled(body.globalEnabled);
+    return sendJson(res, 200, { ok: true, ...host.snapshot() });
+  }
+  if (method === "POST" && segments.length === 2 && (subpath === "enable" || subpath === "disable")) {
+    await host.setModEnabled(decodeURIComponent(modId), subpath === "enable");
+    return sendJson(res, 200, { ok: true, ...host.snapshot() });
+  }
+  if (method === "POST" && segments.length === 2 && subpath === "reload") {
+    await host.reload(decodeURIComponent(modId));
+    return sendJson(res, 200, { ok: true, ...host.snapshot() });
+  }
+  if (method === "POST" && segments.length === 3 && segments[1] === "button") {
+    let id = modId;
+    let name2 = segments[2] ?? "";
+    try {
+      id = decodeURIComponent(modId);
+      name2 = decodeURIComponent(segments[2] ?? "");
+    } catch {
+      return notFound();
+    }
+    const body = await readJson(req).catch(() => ({}));
+    const context = {};
+    if (typeof body.character === "string" && body.character !== "") context.character = body.character;
+    if (typeof body.chatId === "string" && body.chatId !== "") context.chatId = body.chatId;
+    try {
+      const outcome = await host.dispatchButton(id, name2, context);
+      if (outcome === "not-found") return notFound();
+      return sendJson(res, 200, { ok: true, handled: outcome === "handled" });
+    } catch (cause) {
+      const failure = publicError(cause, { operation: "mod-button-dispatch", logger: ctx.logger });
+      return sendJson(res, failure.status, {
+        ok: false,
+        message: failure.message,
+        ...failure.code === void 0 ? {} : { code: failure.code }
+      });
+    }
+  }
+  if (segments.length >= 1 && modId !== "") {
+    let id = modId;
+    let path12 = subpath;
+    try {
+      id = decodeURIComponent(modId);
+      path12 = subpath === "" ? "" : decodeURIComponent(subpath);
+    } catch {
+      return notFound();
+    }
+    const handled = await host.handleRoute(req, res, method, url, id, path12);
+    if (handled) return;
+    return notFound();
+  }
+  return notFound();
+}
+
 // packages/plugin/src/http/read-routes.ts
 init_src2();
 init_build_info();
@@ -59424,6 +59526,73 @@ var EARLY_STORE_ROUTES = [
     handle: ({ res, db }) => handleStateSlicesApi(res, db)
   }
 ];
+var STORE_ROUTES = [
+  // Read-only projections and one-shot host commands. Method gating stays in
+  // `matches`, so a wrong-method request keeps falling through to the chain.
+  {
+    name: "avatar",
+    matches: (route, method) => method === "GET" && route.startsWith("avatar/"),
+    handle: ({ db, res, route }) => handleAvatarRoute(db, res, route)
+  },
+  {
+    name: "character-read",
+    matches: (route, method) => method === "GET" && route.startsWith("character/"),
+    handle: ({ db, res, route }) => handleCharacterReadRoute(db, res, route)
+  },
+  {
+    name: "projection",
+    matches: (route, method) => method === "GET" && route === "projection",
+    handle: ({ res, url }) => handleProjectionRoute(res, url)
+  },
+  {
+    name: "projection-replay",
+    matches: (route, method) => method === "POST" && route === "projection/replay",
+    handle: ({ ctx, db, req, res, url }) => handleProjectionReplayRoute(ctx, db, req, res, url)
+  },
+  {
+    name: "compact",
+    matches: (route, method) => method === "POST" && route === "compact",
+    handle: ({ ctx, req, res, url }) => handleCompactRoute(ctx, req, res, url)
+  },
+  // 持续指引（提案 0009）：guide 属于单局聊天，随 chat_metadata 持久化；
+  // 读写走 getChatSnapshot + saveChat 的 revision CAS，与聊天写路径一致。
+  // 路径段解码与 character/ 前缀路由同款 decodeURIComponent（角色名可含空格/中文）。
+  {
+    name: "guides",
+    matches: (route, method) => (method === "GET" || method === "POST" || method === "DELETE") && route.startsWith("guides/"),
+    handle: ({ req, res, route, method, db }) => handleGuidesApi(req, res, route, method, db)
+  },
+  // ---- 剧本游玩（提案 0014 P1）----
+  // 剧本库：TXT/MD 素材分块存 <tavern>/scripts/<name>/script.json；绑定在卡
+  // data.extensions.agentTavern.scriptId（一对一）；进度在 chat_metadata.scriptProgress，
+  // 由生成链路的对齐推进写。进度是展示不是跳章（§4）：没有写进度的路由。
+  {
+    name: "script",
+    matches: (route, method) => (method === "GET" || method === "POST") && (route === "scripts" || route === "script/import" || route === "script/bind" || route === "script/unbind" || route.startsWith("script/")),
+    handle: ({ req, res, route, method, db }) => handleScriptApi(req, res, route, method, db)
+  },
+  {
+    name: "agent-tavern-audit",
+    matches: (route, method) => method === "GET" && route === "agent-tavern/audit",
+    handle: ({ db, res, url }) => handleAuditRoute(db, res, url)
+  },
+  // Novel and mod surfaces own their subpaths; the outer table only decides
+  // that the family belongs to them.
+  {
+    name: "novels",
+    matches: (route, _method) => route === "novels" || route.startsWith("novels/"),
+    handle: ({ ctx, req, res, url, route, method }) => handleNovelsApi(ctx, req, res, url, route, method)
+  },
+  // ---- Mod 管理面与子路由（提案 0015 §3.2/§3.3 P1）----
+  // 管理面（GET mods / POST mods/state / enable|disable|reload）在任一层关闭时
+  // 仍可用（否则用户无法再打开）；Mod 子路由（mods/<id>/<path>）在任一层关闭、
+  // 未装载或无此路由时一律 404，与未知路由不可区分。
+  {
+    name: "mods",
+    matches: (route, _method) => route === "mods" || route.startsWith("mods/"),
+    handle: ({ ctx, req, res, url, route, method }) => handleModsApi(ctx, req, res, url, route, method)
+  }
+];
 
 // packages/plugin/src/http/router.ts
 var API = "/api/dsh-soulmojito";
@@ -59442,118 +59611,13 @@ async function handleApi(ctx, req, res) {
     await entry.handle({ ctx, req, res, url, route, method, db });
     return;
   }
-  if (method === "GET" && route.startsWith("avatar/")) {
-    const name2 = decodeURIComponent(route.slice("avatar/".length));
-    const found = await db.getCharacter(name2);
-    if (found) {
-      return serveCharacterAvatar(res, db, name2, found);
-    }
-    const group2 = await db.getGroup(name2);
-    if (group2) {
-      const enabled = group2.members.filter((member) => !group2.disabledMembers.includes(member));
-      for (const member of enabled.length > 0 ? enabled : group2.members) {
-        const memberFile = await db.getCharacter(member);
-        if (memberFile) return serveCharacterAvatar(res, db, member, memberFile);
-      }
-      return sendAvatarFallback(res, name2);
-    }
-    return sendJson(res, 404, { ok: false, message: "character avatar not found" });
-  }
-  if (method === "GET" && route.startsWith("character/")) {
-    const name2 = decodeURIComponent(route.slice("character/".length));
-    const found = await db.getCharacter(name2);
-    if (!found) return sendJson(res, 404, { ok: false, message: "character not found" });
-    return sendJson(res, 200, { ok: true, kind: found.kind, card: publicCard(found.card) });
-  }
-  if (method === "GET" && route === "projection") {
-    const sessionId = url.searchParams.get("sessionId");
-    if (!sessionId) throw new Error("sessionId query is required");
-    const projector = await getAgentTavernProjectorPromise();
-    if (!projector) throw new Error("AgentTavern projector is unavailable");
-    return sendJson(res, 200, { ok: true, projection: await projector.status(sessionId) });
-  }
-  if (method === "POST" && route === "projection/replay") {
-    const body = await readJson(req).catch(() => ({}));
-    const sessionId = typeof body.sessionId === "string" ? body.sessionId : url.searchParams.get("sessionId");
-    if (!sessionId) throw new Error("sessionId is required");
-    const state = await db.getState();
-    const binding = state.sessionBindings[sessionId];
-    if (!binding || binding.architecture !== "agent-tavern" || binding.group === true) {
-      throw new TavernArchitectureConflictError("Projection replay requires an AgentTavern single-character binding.");
-    }
-    const agent = ctx.agents?.get?.(sessionId);
-    const session = agent?.session;
-    if (!session || typeof session.id !== "string" || readSessionEvents(session) === void 0) {
-      throw new Error("AgentTavern session is not loaded in this host process; open the chat first and retry.");
-    }
-    const projector = await getAgentTavernProjectorPromise();
-    if (!projector) throw new Error("AgentTavern projector is unavailable");
-    await projector.replay({ ...session, id: session.id });
-    return sendJson(res, 200, { ok: true, projection: await projector.status(sessionId) });
-  }
-  if (method === "POST" && route === "compact") {
-    const body = await readJson(req).catch(() => ({}));
-    const sessionId = typeof body.sessionId === "string" ? body.sessionId : url.searchParams.get("sessionId");
-    if (!sessionId) throw new Error("sessionId is required");
-    const agent = ctx.agents?.get?.(sessionId);
-    if (!agent || agent.status !== "idle") {
-      throw new Error(`session ${sessionId} has no idle agent in this host process; pause the novel and retry.`);
-    }
-    const compaction = ctx.compaction;
-    if (!compaction || typeof compaction.compactNow !== "function") {
-      throw new Error("compaction service is unavailable in this host process");
-    }
-    const result = await compaction.compactNow(agent, new AbortController().signal);
-    return sendJson(res, 200, { ok: true, result: result ?? null });
-  }
-  if ((method === "GET" || method === "POST" || method === "DELETE") && route.startsWith("guides/")) {
-    return handleGuidesApi(req, res, route, method, db);
-  }
-  if ((method === "GET" || method === "POST") && (route === "scripts" || route === "script/import" || route === "script/bind" || route === "script/unbind" || route.startsWith("script/"))) {
-    return handleScriptApi(req, res, route, method, db);
-  }
-  if (method === "GET" && route === "agent-tavern/audit") {
-    const sessionId = url.searchParams.get("sessionId");
-    if (!sessionId) throw new Error("sessionId query is required");
-    const state = await db.getState();
-    const binding = state.sessionBindings[sessionId];
-    if (!binding || binding.architecture !== "agent-tavern" || binding.group === true) {
-      throw new TavernArchitectureConflictError("AgentTavern audit requires a native single-character binding.");
-    }
-    const scopes = [
-      { scope: "chat", scopeId: binding.chatId },
-      { scope: "character", scopeId: binding.character },
-      { scope: "agent", scopeId: sessionId }
-    ];
-    const [memoryGroups, variableGroups, globalMemories, globalVariables, projector] = await Promise.all([
-      Promise.all(scopes.map(({ scope, scopeId }) => memories().then((store5) => store5.search({
-        scope,
-        scopeId,
-        includeDeleted: true,
-        limit: 50
-      })))),
-      Promise.all(scopes.map(({ scope, scopeId }) => variables().then((store5) => store5.listAll(scope, scopeId)))),
-      memories().then((store5) => store5.search({ scope: "global", includeDeleted: true, limit: 50 })),
-      variables().then((store5) => store5.listAll("global", "global")),
-      getAgentTavernProjectorPromise()
-    ]);
-    return sendJson(res, 200, {
-      ok: true,
-      architecture: binding.architecture,
-      contextMode: binding.contextMode,
-      projection: projector ? await projector.status(sessionId) : null,
-      memories: [...memoryGroups.flat().map((hit) => hit.record), ...globalMemories.map((hit) => hit.record)],
-      variables: [...variableGroups.flat(), ...globalVariables]
-    });
+  for (const entry of STORE_ROUTES) {
+    if (!entry.matches(route, method)) continue;
+    await entry.handle({ ctx, req, res, url, route, method, db });
+    return;
   }
   if (method === "GET" && route === "body" || method === "PUT" && route === "body" || method === "POST" && (route === "body/regenerate" || route === "body/select")) {
     return handleAgentTavernBodyApi(ctx, db, req, res, url, route, method);
-  }
-  if (route === "novels" || route.startsWith("novels/")) {
-    return handleNovelsApi(ctx, req, res, url, route, method);
-  }
-  if (route === "mods" || route.startsWith("mods/")) {
-    return handleModsApi(ctx, req, res, url, route, method);
   }
   if (method === "PUT" && route.startsWith("character/")) {
     const oldName = decodeURIComponent(route.slice("character/".length));
