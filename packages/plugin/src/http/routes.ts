@@ -35,6 +35,11 @@ import { handleModsApi } from './mods.js'
 import { handleNovelsApi } from './novel.js'
 import { handleGuidesApi, handleScriptApi } from './panel.js'
 import {
+  handleModelsRoute,
+  handleModelSelectionRoute,
+  handleStateUpdateRoute,
+} from './panel-state-routes.js'
+import {
   handleGroupCreateRoute,
   handleGroupDeleteRoute,
   handleGroupsListRoute,
@@ -213,6 +218,50 @@ export const STORE_ROUTES: readonly RouteEntry<StoreRouteContext>[] = [
     matches: (route, method) => method === 'GET' && route.startsWith('export/character/'),
     handle: ({ db, res, route }) => handleCharacterExportRoute(db, res, route),
   },
+  // Model catalog and the bulk state patch; these sat before persona/group in
+  // the old if-chain, so they keep that position here.
+  {
+    name: 'models',
+    matches: (route, method) => method === 'GET' && route === 'models',
+    handle: ({ ctx, res }) => handleModelsRoute(ctx, res),
+  },
+  {
+    name: 'model',
+    matches: (route, method) => method === 'POST' && route === 'model',
+    handle: ({ db, req, res }) => handleModelSelectionRoute(db, req, res),
+  },
+  {
+    name: 'state',
+    matches: (route, method) => method === 'POST' && route === 'state',
+    handle: ({ db, req, res }) => handleStateUpdateRoute(db, req, res),
+  },
+  // Asset imports and preset writes; the old if-chain placed them before
+  // persona/group, so they keep that position here.
+  {
+    name: 'character-import',
+    matches: (route, method) => method === 'POST' && route === 'import/character',
+    handle: ({ db, req, res }) => handleCharacterImportRoute(db, req, res),
+  },
+  {
+    name: 'world-import',
+    matches: (route, method) => method === 'POST' && route === 'import/world',
+    handle: ({ db, req, res }) => handleWorldImportRoute(db, req, res),
+  },
+  {
+    name: 'preset-import',
+    matches: (route, method) => method === 'POST' && route === 'import/preset',
+    handle: ({ db, req, res }) => handlePresetImportRoute(db, req, res),
+  },
+  {
+    name: 'preset-read',
+    matches: (route, method) => method === 'GET' && route.startsWith('preset/'),
+    handle: ({ db, res, route }) => handlePresetReadRoute(db, res, route),
+  },
+  {
+    name: 'preset-update',
+    matches: (route, method) => method === 'PUT' && route.startsWith('preset/'),
+    handle: ({ db, req, res, route }) => handlePresetUpdateRoute(db, req, res, route),
+  },
   // Persona and group routes are post-store; the table keeps the original
   // if-chain order. Only the write handlers emit asset-saved events.
   {
@@ -254,31 +303,5 @@ export const STORE_ROUTES: readonly RouteEntry<StoreRouteContext>[] = [
     name: 'group-delete',
     matches: (route, method) => method === 'DELETE' && route === 'group',
     handle: ({ db, res, url }) => handleGroupDeleteRoute(db, res, url),
-  },
-  // Asset imports and preset writes; order mirrors the old if-chain.
-  {
-    name: 'character-import',
-    matches: (route, method) => method === 'POST' && route === 'import/character',
-    handle: ({ db, req, res }) => handleCharacterImportRoute(db, req, res),
-  },
-  {
-    name: 'world-import',
-    matches: (route, method) => method === 'POST' && route === 'import/world',
-    handle: ({ db, req, res }) => handleWorldImportRoute(db, req, res),
-  },
-  {
-    name: 'preset-import',
-    matches: (route, method) => method === 'POST' && route === 'import/preset',
-    handle: ({ db, req, res }) => handlePresetImportRoute(db, req, res),
-  },
-  {
-    name: 'preset-read',
-    matches: (route, method) => method === 'GET' && route.startsWith('preset/'),
-    handle: ({ db, res, route }) => handlePresetReadRoute(db, res, route),
-  },
-  {
-    name: 'preset-update',
-    matches: (route, method) => method === 'PUT' && route.startsWith('preset/'),
-    handle: ({ db, req, res, route }) => handlePresetUpdateRoute(db, req, res, route),
   },
 ]
