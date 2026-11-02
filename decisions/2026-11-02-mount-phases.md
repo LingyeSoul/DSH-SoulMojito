@@ -31,7 +31,7 @@ export function mountTransport(ctx: PluginContext, deps: MountDeps): void
 
 - `mountSessionEvent`：`session/event` 单订阅——projector 投影、`turn/end` 清 turn 作用域、AgentNovel receive barrier。
 - `mountAgentCreated`：`agent/created` 单订阅——宿主分叉收养、projection replay、body recovery、IM preset 切换。
-- `mountTransport`：`ctx.effect` 注册 web server 前缀路由——trust/origin、`frontend/idb/put` 裸体例外、`handleApi`、结构化错误映射。
+- `mountTransport`：`ctx.effect` 注册 web server 前缀路由——trust/origin、`frontend/idb/put` 的 raw body 例外、`handleApi`、结构化错误映射。
 
 `MountDeps` 只收有状态句柄；纯协作者（`adoptAgentTavernFork`、`bindSession`、`handleNovelSessionEvent`、`handleApi`、`requestTrustFailure` 等）由 `mount.ts` 直接 import。没有 `any`、没有默认参数。
 
@@ -50,7 +50,9 @@ export function mountTransport(ctx: PluginContext, deps: MountDeps): void
 
 - 定向：`http-trust` 23 + `http-public-error` 7 + `agent-tavern-mount` 2 + `agent-tavern-fork` 15 + `agent-tavern-projector` 47 + `agent-novel-command` 20 = 114 用例通过。
 - 类型检查：`node node_modules/typescript/bin/tsc -p packages/plugin/tsconfig.json --noEmit --composite false` 无输出。
+- Round 5 stage 1 定向：`im-router` 55 + `tavern-update` 55 + `games-service` 28 + `http-trust` 23 + `http-public-error` 7 = 168 用例通过；同一条 tsc 命令无输出。
 - 全量 `pnpm run check`（2026-11-02，Round 4）：200 files / 3297 passed / 2 skipped / 20 gates PASS / build v0.7.5 (b095620)。
+- Round 5 全量：宿主默认并行两次触发 `VirtualAlloc failed` / JS heap OOM（失败点与 route table 无关）；改用等价串行 `vitest run --no-file-parallelism` 后 **200 files / 3297 passed / 2 skipped**，类型检查、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (2d53ff0)。
 
 ## 删除路径
 
@@ -58,11 +60,12 @@ export function mountTransport(ctx: PluginContext, deps: MountDeps): void
 
 ## 未完成
 
-- `handleApi` 的 85 个 route 判断仍是 if-chain；route modules / route table 是候选 03 的下一刀。
+- route table 首片已落（update / games / im）；其余 if-chain（bootstrap、store-revision、state-slices、avatar、character、projection、guides/script、novel、body、mods 等）仍是后续。
 - games / IM / Mods / update 仍留在 `index.ts`；它们各自有生命周期与 disposer，抽相位时要先定义清理顺序。
 - `MountDeps` 只是阶段句柄，不是新的 service locator；静态协作者继续直接 import。
 
 ## 后续
 
-- 下一刀优先做 route table：把 `handleApi` 的域分支（update / games / im / panel / novel）注册成小表，再逐域搬 handler；transport 已独立，不再和路由混在一个函数里。
+- 路由表第一刀已完成（Round 5 stage 1）：`packages/plugin/src/http/routes.ts` 的 `PRE_STORE_ROUTES` 依次为 `update`（`route === 'update' || route.startsWith('update/')`）、`games`（`isGamesRoute`），在 `store()` 之前求值；`EARLY_STORE_ROUTES` 只有 `im`（`route === 'im' || route.startsWith('im/')`），在 `store()` 之后紧接求值。未命中任何表项的路由继续走 `handleApi` 原 if-chain，顺序与响应不变。
+- 剩余 if-chain 域（本刀未搬）：`bootstrap`、`store-revision`、`state-slices`、`avatar/*`、`character/*`、`projection` / `projection/replay`、`compact`、`guides/*`、`script*`、`agent-tavern/audit`、`body` / `body/regenerate` / `body/select`、`novels/*`、`mods/*`，以及 state/import/preset/persona/group/binding/chats/branch/candidates/generate/helper 等后续分支；下一刀按 `store()` 依赖与顺序约束继续迁入表。
 - 每增加一个 mount phase，必须在决策或代码注释里写明它相对于 body/anchor/prompt 的顺序约束；顺序不能只靠阅读调用栈。

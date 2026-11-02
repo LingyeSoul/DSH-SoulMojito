@@ -19,6 +19,9 @@ _Avoid_: 在 DSH-SoulMojito 内另造一套 profile registry
 **Mount phase**：插件 `apply()` 的命名装配阶段（session event / agent created / transport 等）。阶段函数只做注册与编排，调用顺序就是装配顺序；阶段之间不共享可变状态。
 _Avoid_: mount 模块、启动步骤
 
+**Route table**：`packages/plugin/src/http/routes.ts` 的显式域路由表；表位置就是求值顺序（pre-store / early-store），命中即返回，未命中落回既有 if-chain。
+_Avoid_: 路由注册表、动态路由
+
 ## 状态语言
 
 **上下文**：某一次 AgentLoop 模型请求实际看到的消息、工具结果和最小运行时指令。上下文是临时投影，不是完整历史。

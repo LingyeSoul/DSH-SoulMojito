@@ -50,7 +50,6 @@ import { collectCardScriptBundle } from '../card-scripts.js'
 import { runCandidateGeneration } from '../candidates.js'
 import { tavernDataRoot } from '../dsh-home.js'
 import { latestFrontendMessage, stripFrontendDocuments } from '../frontend-documents.js'
-import { handleGamesApi, isGamesRoute } from '../games/http.js'
 import { handleFrontendGenerationStream, handleHelperApi } from '../helper.js'
 import { createHelperBinding, deleteHelperBinding, helperTokenFromRequest } from '../helper-bindings.js'
 import { generate, previewGeneration, runTavernScript } from '../generation/pipeline.js'
@@ -66,8 +65,6 @@ import {
   getAgentTavernCapabilities,
   getAgentTavernCapabilitiesPromise,
   getAgentTavernProjectorPromise,
-  getGamesServicePromise,
-  getImRuntime,
   memories,
   modHostProjection,
   store,
@@ -86,14 +83,13 @@ import { activeCharacterPatch } from '../session/active-character.js'
 import { normalizeChatId } from '../session/trace.js'
 import { prepareInternalWorkspace, prepareWorkbenchWorkspace } from '../workspace.js'
 import { HttpError } from './errors.js'
-import { handleImApi } from './im.js'
 import type { PluginContext } from '../host-contract.js'
 import { readJson, sendJson, type HttpRequest, type HttpResponse } from './io.js'
 import { handleMemoryEmbedApi, handleMemoryMaintenanceApi } from './memory.js'
 import { handleModsApi } from './mods.js'
 import { handleNovelsApi } from './novel.js'
 import { handleGuidesApi, handleMvuApi, handleScriptApi, handleWorkbenchApi } from './panel.js'
-import { handleUpdateApi } from './update.js'
+import { EARLY_STORE_ROUTES, PRE_STORE_ROUTES } from './routes.js'
 import { collectWorldEntryCounts } from './world-entry-counts.js'
 
 export const API = '/api/dsh-soulmojito'
@@ -102,31 +98,18 @@ export async function handleApi(ctx: PluginContext, req: HttpRequest, res: HttpR
   const route = url.pathname.slice(API.length).replace(/^\//, '')
   const method = req.method ?? 'GET'
 
-  // 自更新走独立处理器：它不依赖 Tavern store，且在 store 打不开时仍要能回答
-  // 「有新版本吗」——升级本身正是修数据/兼容问题的入口。
-  if (route === 'update' || route.startsWith('update/')) {
-    return handleUpdateApi(ctx, req, res, url, route, method)
-  }
-
-  // 游戏桥路由（提案 0018 §4.1 http.ts）：同样不依赖 Tavern store（自带
-  // games/ 目录与会话存储），结构化错误（409/400/404/503）在面内应答。
-  if (isGamesRoute(route)) {
-    return handleGamesApi({
-      resolveService: () => getGamesServicePromise(),
-      req,
-      res,
-      url,
-      route,
-      method,
-    })
+  for (const entry of PRE_STORE_ROUTES) {
+    if (!entry.matches(route)) continue
+    await entry.handle({ ctx, req, res, url, route, method })
+    return
   }
 
   const db = await store()
 
-  // IM 通道管理面（提案 0024 §6.2）：不依赖通道是否在线；禁用/未装配时如实报原因，
-  // 面板据此显示「不可用」而不是把绑定按钮点成 500。
-  if (route === 'im' || route.startsWith('im/')) {
-    return handleImApi(req, res, url, route, method, db, getImRuntime())
+  for (const entry of EARLY_STORE_ROUTES) {
+    if (!entry.matches(route)) continue
+    await entry.handle({ ctx, req, res, url, route, method, db })
+    return
   }
 
   if (method === 'GET' && route === 'bootstrap') {
