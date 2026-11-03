@@ -296,6 +296,12 @@ describe('HTTP route table (moved routes)', () => {
       'memory-embed',
       'memory-maintenance',
       'prompts',
+      'world-read',
+      'world-update',
+      'world-export',
+      'world-delete',
+      'preset-delete',
+      'preset-export',
     ])
   })
 
@@ -326,6 +332,46 @@ describe('HTTP route table (moved routes)', () => {
     expect((await store.getState()).modelSelections['route-selection']).toBeUndefined()
   })
 
+  it('reads, exports and deletes a world book', async () => {
+    const read = await call('GET', '/api/dsh-soulmojito/world/Route%20World')
+    expect(read.status).toBe(200)
+    expect(json(read)).toMatchObject({ ok: true, book: { name: 'Route World' } })
+
+    const exported = await call('GET', '/api/dsh-soulmojito/export/world/Route%20World')
+    expect(exported.status).toBe(200)
+    expect(exported.headers['content-type']).toBe('application/json; charset=utf-8')
+    expect(exported.headers['content-disposition']).toContain('Route%20World.json')
+
+    const deleted = await call('DELETE', '/api/dsh-soulmojito/world?name=Route%20World')
+    expect(deleted.status).toBe(200)
+    expect(json(deleted)['ok']).toBe(true)
+
+    const missing = await call('GET', '/api/dsh-soulmojito/world/Route%20World')
+    expect(missing.status).toBe(404)
+    expect(json(missing)).toEqual({ ok: false, message: 'world not found' })
+  })
+
+  it('exports and deletes a preset', async () => {
+    const put = await call('PUT', '/api/dsh-soulmojito/preset/Route%20ExportPreset', {
+      name: 'Route ExportPreset',
+      data: { prompts: [], prompt_order: [] },
+    })
+    expect(put.status).toBe(200)
+
+    const exported = await call('GET', '/api/dsh-soulmojito/export/preset/Route%20ExportPreset')
+    expect(exported.status).toBe(200)
+    expect(exported.headers['content-type']).toBe('application/json; charset=utf-8')
+    expect(exported.headers['content-disposition']).toContain('Route%20ExportPreset.json')
+
+    const deleted = await call('DELETE', '/api/dsh-soulmojito/preset?name=Route%20ExportPreset')
+    expect(deleted.status).toBe(200)
+    expect(json(deleted)['ok']).toBe(true)
+
+    const missing = await call('GET', '/api/dsh-soulmojito/preset/Route%20ExportPreset')
+    expect(missing.status).toBe(404)
+    expect(json(missing)).toEqual({ ok: false, message: 'preset not found' })
+  })
+
   it('keeps wrong-method requests on the unchanged 404 path', async () => {
     const getBinding = await call('GET', '/api/dsh-soulmojito/binding')
     expect(getBinding.status).toBe(404)
@@ -350,5 +396,13 @@ describe('HTTP route table (moved routes)', () => {
     const getModel = await call('GET', '/api/dsh-soulmojito/model')
     expect(getModel.status).toBe(404)
     expect(json(getModel)['message']).toBe('route not found: GET model')
+
+    const getWorld = await call('GET', '/api/dsh-soulmojito/world')
+    expect(getWorld.status).toBe(404)
+    expect(json(getWorld)['message']).toBe('route not found: GET world')
+
+    const postPresetRoot = await call('POST', '/api/dsh-soulmojito/preset')
+    expect(postPresetRoot.status).toBe(404)
+    expect(json(postPresetRoot)['message']).toBe('route not found: POST preset')
   })
 })

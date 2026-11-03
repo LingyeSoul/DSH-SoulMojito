@@ -69,6 +69,14 @@ import {
   handleChatCreateRoute,
   handleChatsListRoute,
 } from './session-routes.js'
+import {
+  handlePresetDeleteRoute,
+  handlePresetExportRoute,
+  handleWorldDeleteRoute,
+  handleWorldExportRoute,
+  handleWorldReadRoute,
+  handleWorldUpdateRoute,
+} from './world-preset-routes.js'
 import { handleUpdateApi } from './update.js'
 
 export interface RouteContext {
@@ -397,5 +405,36 @@ export const STORE_ROUTES: readonly RouteEntry<StoreRouteContext>[] = [
     name: 'prompts',
     matches: (route, method) => method === 'GET' && route === 'prompts',
     handle: ({ res, url }) => handlePromptsRoute(res, url),
+  },
+  // World-book and preset asset operations; order mirrors the old if-chain.
+  {
+    name: 'world-read',
+    matches: (route, method) => method === 'GET' && route.startsWith('world/'),
+    handle: ({ db, res, route }) => handleWorldReadRoute(db, res, route),
+  },
+  {
+    name: 'world-update',
+    matches: (route, method) => method === 'PUT' && route.startsWith('world/'),
+    handle: ({ db, req, res, route }) => handleWorldUpdateRoute(db, req, res, route),
+  },
+  {
+    name: 'world-export',
+    matches: (route, method) => method === 'GET' && route.startsWith('export/world/'),
+    handle: ({ db, res, route }) => handleWorldExportRoute(db, res, route),
+  },
+  {
+    name: 'world-delete',
+    matches: (route, method) => method === 'DELETE' && route === 'world',
+    handle: ({ db, res, url }) => handleWorldDeleteRoute(db, res, url),
+  },
+  {
+    name: 'preset-delete',
+    matches: (route, method) => method === 'DELETE' && route === 'preset',
+    handle: ({ db, res, url }) => handlePresetDeleteRoute(db, res, url),
+  },
+  {
+    name: 'preset-export',
+    matches: (route, method) => method === 'GET' && route.startsWith('export/preset/'),
+    handle: ({ db, res, route }) => handlePresetExportRoute(db, res, route),
   },
 ]

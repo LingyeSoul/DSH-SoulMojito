@@ -15598,7 +15598,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.5".trim() : "";
-  const commit = true ? normalizeCommit("5db309f") : void 0;
+  const commit = true ? normalizeCommit("94dbc15") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -60346,6 +60346,77 @@ async function handleBranchRoute(db, req, res) {
   return sendJson(res, 200, { ok: true, id: result.chatId, chat: snapshot2?.chat ?? result.chat, revision: snapshot2?.revision });
 }
 
+// packages/plugin/src/http/world-preset-routes.ts
+init_events();
+init_io();
+async function handleWorldReadRoute(db, res, route) {
+  const name2 = decodeURIComponent(route.slice("world/".length));
+  const book = await db.getWorld(name2);
+  if (!book) return sendJson(res, 404, { ok: false, message: "world not found" });
+  return sendJson(res, 200, { ok: true, book });
+}
+async function handleWorldUpdateRoute(db, req, res, route) {
+  const oldName = decodeURIComponent(route.slice("world/".length));
+  const body = await readJson(req, 10 * 1024 * 1024);
+  const data = asRecord5(body.data);
+  if (typeof body.name !== "string" || body.name.trim() === "" || data === void 0) {
+    throw new Error("expected { name, data }");
+  }
+  const name2 = body.name;
+  const book = await db.importWorldFile(name2, data);
+  await emitAssetsSaved("world", book.name);
+  if (name2 !== oldName) {
+    await db.deleteWorld(oldName);
+    await db.updateState((current) => ({ activeWorlds: current.activeWorlds.map((item) => item === oldName ? name2 : item) }));
+  }
+  return sendJson(res, 200, { ok: true, name: book.name, book });
+}
+async function handleWorldExportRoute(db, res, route) {
+  const name2 = decodeURIComponent(route.slice("export/world/".length));
+  const book = await db.getWorld(name2);
+  if (!book) return sendJson(res, 404, { ok: false, message: "world not found" });
+  const bytes = await db.exportWorld(name2);
+  res.statusCode = 200;
+  res.setHeader("content-type", "application/json; charset=utf-8");
+  res.setHeader("content-disposition", `attachment; filename="${encodeURIComponent(`${name2}.json`)}"`);
+  res.end(Buffer.from(bytes));
+  return;
+}
+async function handleWorldDeleteRoute(db, res, url) {
+  const name2 = url.searchParams.get("name");
+  if (!name2) throw new Error("name query is required");
+  const book = await db.getWorld(name2);
+  if (!book) return sendJson(res, 404, { ok: false, message: "world not found" });
+  await db.deleteWorld(name2);
+  const state = await db.updateState((current) => ({
+    activeWorlds: current.activeWorlds.filter((world) => world !== name2)
+  }));
+  return sendJson(res, 200, { ok: true, state });
+}
+async function handlePresetDeleteRoute(db, res, url) {
+  const name2 = url.searchParams.get("name");
+  if (!name2) throw new Error("name query is required");
+  const preset = await db.getPreset(name2);
+  if (!preset) return sendJson(res, 404, { ok: false, message: "preset not found" });
+  await db.deletePreset(name2);
+  const state = await db.updateState((current) => ({
+    activePreset: current.activePreset === name2 ? void 0 : current.activePreset
+  }));
+  await emitAgentPresetChanged();
+  return sendJson(res, 200, { ok: true, state });
+}
+async function handlePresetExportRoute(db, res, route) {
+  const name2 = decodeURIComponent(route.slice("export/preset/".length));
+  const preset = await db.getPreset(name2);
+  if (!preset) return sendJson(res, 404, { ok: false, message: "preset not found" });
+  const bytes = await db.exportPreset(name2);
+  res.statusCode = 200;
+  res.setHeader("content-type", "application/json; charset=utf-8");
+  res.setHeader("content-disposition", `attachment; filename="${encodeURIComponent(`${name2}.json`)}"`);
+  res.end(Buffer.from(bytes));
+  return;
+}
+
 // packages/plugin/src/http/update.ts
 init_runtime2();
 init_service();
@@ -60675,6 +60746,37 @@ var STORE_ROUTES = [
     name: "prompts",
     matches: (route, method) => method === "GET" && route === "prompts",
     handle: ({ res, url }) => handlePromptsRoute(res, url)
+  },
+  // World-book and preset asset operations; order mirrors the old if-chain.
+  {
+    name: "world-read",
+    matches: (route, method) => method === "GET" && route.startsWith("world/"),
+    handle: ({ db, res, route }) => handleWorldReadRoute(db, res, route)
+  },
+  {
+    name: "world-update",
+    matches: (route, method) => method === "PUT" && route.startsWith("world/"),
+    handle: ({ db, req, res, route }) => handleWorldUpdateRoute(db, req, res, route)
+  },
+  {
+    name: "world-export",
+    matches: (route, method) => method === "GET" && route.startsWith("export/world/"),
+    handle: ({ db, res, route }) => handleWorldExportRoute(db, res, route)
+  },
+  {
+    name: "world-delete",
+    matches: (route, method) => method === "DELETE" && route === "world",
+    handle: ({ db, res, url }) => handleWorldDeleteRoute(db, res, url)
+  },
+  {
+    name: "preset-delete",
+    matches: (route, method) => method === "DELETE" && route === "preset",
+    handle: ({ db, res, url }) => handlePresetDeleteRoute(db, res, url)
+  },
+  {
+    name: "preset-export",
+    matches: (route, method) => method === "GET" && route.startsWith("export/preset/"),
+    handle: ({ db, res, route }) => handlePresetExportRoute(db, res, route)
   }
 ];
 
@@ -60698,73 +60800,6 @@ async function handleApi(ctx, req, res) {
   for (const entry of STORE_ROUTES) {
     if (!entry.matches(route, method)) continue;
     await entry.handle({ ctx, req, res, url, route, method, db });
-    return;
-  }
-  if (method === "GET" && route.startsWith("world/")) {
-    const name2 = decodeURIComponent(route.slice("world/".length));
-    const book = await db.getWorld(name2);
-    if (!book) return sendJson(res, 404, { ok: false, message: "world not found" });
-    return sendJson(res, 200, { ok: true, book });
-  }
-  if (method === "PUT" && route.startsWith("world/")) {
-    const oldName = decodeURIComponent(route.slice("world/".length));
-    const body = await readJson(req, 10 * 1024 * 1024);
-    const data = asRecord5(body.data);
-    if (typeof body.name !== "string" || body.name.trim() === "" || data === void 0) {
-      throw new Error("expected { name, data }");
-    }
-    const name2 = body.name;
-    const book = await db.importWorldFile(name2, data);
-    await emitAssetsSaved("world", book.name);
-    if (name2 !== oldName) {
-      await db.deleteWorld(oldName);
-      await db.updateState((current) => ({ activeWorlds: current.activeWorlds.map((item) => item === oldName ? name2 : item) }));
-    }
-    return sendJson(res, 200, { ok: true, name: book.name, book });
-  }
-  if (method === "GET" && route.startsWith("export/world/")) {
-    const name2 = decodeURIComponent(route.slice("export/world/".length));
-    const book = await db.getWorld(name2);
-    if (!book) return sendJson(res, 404, { ok: false, message: "world not found" });
-    const bytes = await db.exportWorld(name2);
-    res.statusCode = 200;
-    res.setHeader("content-type", "application/json; charset=utf-8");
-    res.setHeader("content-disposition", `attachment; filename="${encodeURIComponent(`${name2}.json`)}"`);
-    res.end(Buffer.from(bytes));
-    return;
-  }
-  if (method === "DELETE" && route === "world") {
-    const name2 = url.searchParams.get("name");
-    if (!name2) throw new Error("name query is required");
-    const book = await db.getWorld(name2);
-    if (!book) return sendJson(res, 404, { ok: false, message: "world not found" });
-    await db.deleteWorld(name2);
-    const state = await db.updateState((current) => ({
-      activeWorlds: current.activeWorlds.filter((world) => world !== name2)
-    }));
-    return sendJson(res, 200, { ok: true, state });
-  }
-  if (method === "DELETE" && route === "preset") {
-    const name2 = url.searchParams.get("name");
-    if (!name2) throw new Error("name query is required");
-    const preset = await db.getPreset(name2);
-    if (!preset) return sendJson(res, 404, { ok: false, message: "preset not found" });
-    await db.deletePreset(name2);
-    const state = await db.updateState((current) => ({
-      activePreset: current.activePreset === name2 ? void 0 : current.activePreset
-    }));
-    await emitAgentPresetChanged();
-    return sendJson(res, 200, { ok: true, state });
-  }
-  if (method === "GET" && route.startsWith("export/preset/")) {
-    const name2 = decodeURIComponent(route.slice("export/preset/".length));
-    const preset = await db.getPreset(name2);
-    if (!preset) return sendJson(res, 404, { ok: false, message: "preset not found" });
-    const bytes = await db.exportPreset(name2);
-    res.statusCode = 200;
-    res.setHeader("content-type", "application/json; charset=utf-8");
-    res.setHeader("content-disposition", `attachment; filename="${encodeURIComponent(`${name2}.json`)}"`);
-    res.end(Buffer.from(bytes));
     return;
   }
   if (method === "GET" && route === "variables") {

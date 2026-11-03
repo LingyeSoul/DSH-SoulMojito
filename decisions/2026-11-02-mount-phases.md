@@ -77,6 +77,8 @@ export function mountTransport(ctx: PluginContext, deps: MountDeps): void
 - Round 17 全量：`pnpm exec vitest run --no-file-parallelism` → **201 files / 3306 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (f2cb618)。
 - Round 18 stage 1：`card-workbench/*`、`memory/embed*`、`memory/maintenance`、`prompts` 搬进 `packages/plugin/src/http/panel-management-routes.ts`；四个表项按旧 if-chain 顺序追加在 `mvu` 之后。复核发现 `http-route-table.spec.ts` 的顺序快照未同步，已补四个表项名后 9/9 通过。
 - Round 18 全量：`pnpm exec vitest run --no-file-parallelism` → **201 files / 3306 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (5db309f)。
+- Round 19 stage 1：`world/*` 读/改/导出/删除与 preset delete/export 搬进 `packages/plugin/src/http/world-preset-routes.ts`；六个表项按旧 if-chain 顺序追加在 `prompts` 之后。复核补充了 world 读/导出/删除、preset 导出/删除与 `GET world` / `POST preset` 错误方法的 HTTP 用例；`http-route-table.spec.ts` 增到 11 条。
+- Round 19 全量：`pnpm exec vitest run --no-file-parallelism` → **201 files / 3308 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (94dbc15)。
 
 ## 删除路径
 
@@ -84,7 +86,7 @@ export function mountTransport(ctx: PluginContext, deps: MountDeps): void
 
 ## 未完成
 
-- route table 十一刀已落（update / games / im；bootstrap / store-revision / state-slices；avatar / character 读 / projection / compact / guides / script / audit / novels / mods；body；character 写/删/导出；persona/group；asset import/preset；models/model/state；binding/chats/branch；candidates/preview/mvu；card-workbench/memory/prompts）；其余 if-chain（world/regex/helper/frontend 等）仍是后续。
+- route table 十二刀已落（update / games / im；bootstrap / store-revision / state-slices；avatar / character 读 / projection / compact / guides / script / audit / novels / mods；body；character 写/删/导出；persona/group；asset import/preset；models/model/state；binding/chats/branch；candidates/preview/mvu；card-workbench/memory/prompts；world/preset delete/export）；其余 if-chain（variables/regex/helper/frontend 等）仍是后续。
 - games / IM / Mods / update 仍留在 `index.ts`；它们各自有生命周期与 disposer，抽相位时要先定义清理顺序。
 - `MountDeps` 只是阶段句柄，不是新的 service locator；静态协作者继续直接 import。
 

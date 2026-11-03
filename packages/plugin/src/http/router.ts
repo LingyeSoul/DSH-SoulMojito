@@ -5,14 +5,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { getIdbRecord, IDB_MAX_RECORD_BYTES, putIdbRecordFromFile } from '../../../tavern-frontend-storage/src/index.js'
-import { emitAgentPresetChanged } from '../agent-tavern/preset.js'
 import { collectCardScriptBundle } from '../card-scripts.js'
 import { tavernDataRoot } from '../dsh-home.js'
 import { latestFrontendMessage, stripFrontendDocuments } from '../frontend-documents.js'
 import { handleFrontendGenerationStream, handleHelperApi } from '../helper.js'
 import { createHelperBinding, deleteHelperBinding, helperTokenFromRequest } from '../helper-bindings.js'
 import { generate, runTavernScript } from '../generation/pipeline.js'
-import { emitAssetsSaved, emitChatSaved } from '../mods/events.js'
+import { emitChatSaved } from '../mods/events.js'
 import { displayTextForMessage, displayTexts } from '../prompt-context.js'
 import { collectSessionRegexScripts } from '../regex-session.js'
 import {
@@ -23,7 +22,7 @@ import { normalizeChatId } from '../session/trace.js'
 import { HttpError } from './errors.js'
 import type { PluginContext } from '../host-contract.js'
 import { readJson, sendJson, type HttpRequest, type HttpResponse } from './io.js'
-import { asChatLog, asRecord } from './json-records.js'
+import { asChatLog } from './json-records.js'
 import { EARLY_STORE_ROUTES, PRE_STORE_ROUTES, STORE_ROUTES } from './routes.js'
 
 // The body handler moved to `body-api.ts`; the router module keeps re-exporting
@@ -53,80 +52,6 @@ export async function handleApi(ctx: PluginContext, req: HttpRequest, res: HttpR
   for (const entry of STORE_ROUTES) {
     if (!entry.matches(route, method)) continue
     await entry.handle({ ctx, req, res, url, route, method, db })
-    return
-  }
-
-  if (method === 'GET' && route.startsWith('world/')) {
-    const name = decodeURIComponent(route.slice('world/'.length))
-    const book = await db.getWorld(name)
-    if (!book) return sendJson(res, 404, { ok: false, message: 'world not found' })
-    return sendJson(res, 200, { ok: true, book })
-  }
-
-  if (method === 'PUT' && route.startsWith('world/')) {
-    const oldName = decodeURIComponent(route.slice('world/'.length))
-    const body = await readJson(req, 10 * 1024 * 1024)
-    const data = asRecord(body.data)
-    if (typeof body.name !== 'string' || body.name.trim() === '' || data === undefined) {
-      throw new Error('expected { name, data }')
-    }
-    const name = body.name
-    const book = await db.importWorldFile(name, data)
-    await emitAssetsSaved('world', book.name)
-    if (name !== oldName) {
-      await db.deleteWorld(oldName)
-      await db.updateState((current) => ({ activeWorlds: current.activeWorlds.map((item) => item === oldName ? name : item) }))
-    }
-    return sendJson(res, 200, { ok: true, name: book.name, book })
-  }
-
-  if (method === 'GET' && route.startsWith('export/world/')) {
-    const name = decodeURIComponent(route.slice('export/world/'.length))
-    const book = await db.getWorld(name)
-    if (!book) return sendJson(res, 404, { ok: false, message: 'world not found' })
-    const bytes = await db.exportWorld(name)
-    res.statusCode = 200
-    res.setHeader('content-type', 'application/json; charset=utf-8')
-    res.setHeader('content-disposition', `attachment; filename="${encodeURIComponent(`${name}.json`)}"`)
-    res.end(Buffer.from(bytes))
-    return
-  }
-
-  if (method === 'DELETE' && route === 'world') {
-    const name = url.searchParams.get('name')
-    if (!name) throw new Error('name query is required')
-    const book = await db.getWorld(name)
-    if (!book) return sendJson(res, 404, { ok: false, message: 'world not found' })
-    await db.deleteWorld(name)
-    const state = await db.updateState((current) => ({
-      activeWorlds: current.activeWorlds.filter((world) => world !== name),
-    }))
-    return sendJson(res, 200, { ok: true, state })
-  }
-
-  if (method === 'DELETE' && route === 'preset') {
-    const name = url.searchParams.get('name')
-    if (!name) throw new Error('name query is required')
-    const preset = await db.getPreset(name)
-    if (!preset) return sendJson(res, 404, { ok: false, message: 'preset not found' })
-    await db.deletePreset(name)
-    const state = await db.updateState((current) => ({
-      activePreset: current.activePreset === name ? undefined : current.activePreset,
-    }))
-    // 删除激活预设会回落内置默认预设：AgentTavern 投影同样要写穿。
-    await emitAgentPresetChanged()
-    return sendJson(res, 200, { ok: true, state })
-  }
-
-  if (method === 'GET' && route.startsWith('export/preset/')) {
-    const name = decodeURIComponent(route.slice('export/preset/'.length))
-    const preset = await db.getPreset(name)
-    if (!preset) return sendJson(res, 404, { ok: false, message: 'preset not found' })
-    const bytes = await db.exportPreset(name)
-    res.statusCode = 200
-    res.setHeader('content-type', 'application/json; charset=utf-8')
-    res.setHeader('content-disposition', `attachment; filename="${encodeURIComponent(`${name}.json`)}"`)
-    res.end(Buffer.from(bytes))
     return
   }
 
