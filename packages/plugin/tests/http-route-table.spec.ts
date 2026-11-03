@@ -302,6 +302,13 @@ describe('HTTP route table (moved routes)', () => {
       'world-delete',
       'preset-delete',
       'preset-export',
+      'variables-read',
+      'variables-update',
+      'regex-read',
+      'regex-update',
+      'regex-import',
+      'regex-sync-cards',
+      'regex-sync-presets',
     ])
   })
 
@@ -372,6 +379,34 @@ describe('HTTP route table (moved routes)', () => {
     expect(json(missing)).toEqual({ ok: false, message: 'preset not found' })
   })
 
+  it('reads and replaces global variables and regex scripts', async () => {
+    const initialGlobals = await call('GET', '/api/dsh-soulmojito/variables')
+    expect(initialGlobals.status).toBe(200)
+    expect(json(initialGlobals)).toMatchObject({ ok: true, globals: {} })
+
+    const putGlobals = await call('PUT', '/api/dsh-soulmojito/variables', {
+      globals: { routeCounter: 1, routeFlag: true },
+    })
+    expect(putGlobals.status).toBe(200)
+    expect(json(putGlobals)).toMatchObject({ ok: true, globals: { routeCounter: 1, routeFlag: true } })
+
+    const initialRegex = await call('GET', '/api/dsh-soulmojito/regex')
+    expect(initialRegex.status).toBe(200)
+    expect(Array.isArray(json(initialRegex)['scripts'])).toBe(true)
+
+    const putRegex = await call('PUT', '/api/dsh-soulmojito/regex', {
+      scripts: [{ scriptName: 'route-filter', findRegex: 'foo', replaceString: 'bar', placement: [5] }],
+    })
+    expect(putRegex.status).toBe(200)
+    expect((json(putRegex)['scripts'] as Array<{ scriptName: string }>).map((script) => script.scriptName)).toEqual(['route-filter'])
+
+    const imported = await call('POST', '/api/dsh-soulmojito/import/regex', {
+      data: [{ scriptName: 'route-import', findRegex: 'baz', replaceString: 'qux', placement: [5] }],
+    })
+    expect(imported.status).toBe(200)
+    expect(json(imported)['imported']).toBe(1)
+  })
+
   it('keeps wrong-method requests on the unchanged 404 path', async () => {
     const getBinding = await call('GET', '/api/dsh-soulmojito/binding')
     expect(getBinding.status).toBe(404)
@@ -404,5 +439,13 @@ describe('HTTP route table (moved routes)', () => {
     const postPresetRoot = await call('POST', '/api/dsh-soulmojito/preset')
     expect(postPresetRoot.status).toBe(404)
     expect(json(postPresetRoot)['message']).toBe('route not found: POST preset')
+
+    const deleteVariables = await call('DELETE', '/api/dsh-soulmojito/variables')
+    expect(deleteVariables.status).toBe(404)
+    expect(json(deleteVariables)['message']).toBe('route not found: DELETE variables')
+
+    const postRegex = await call('POST', '/api/dsh-soulmojito/regex')
+    expect(postRegex.status).toBe(404)
+    expect(json(postRegex)['message']).toBe('route not found: POST regex')
   })
 })

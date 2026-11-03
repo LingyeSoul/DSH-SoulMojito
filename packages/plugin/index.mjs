@@ -15598,7 +15598,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.5".trim() : "";
-  const commit = true ? normalizeCommit("94dbc15") : void 0;
+  const commit = true ? normalizeCommit("0f8ac5d") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -43254,7 +43254,6 @@ async function ensureAgentPresetDeclared(ctx, presetId) {
 }
 
 // packages/plugin/src/http/router.ts
-init_src2();
 import { createReadStream, createWriteStream } from "node:fs";
 import { mkdtemp, rm as rm2 } from "node:fs/promises";
 import { tmpdir as tmpdir4 } from "node:os";
@@ -60417,6 +60416,90 @@ async function handlePresetExportRoute(db, res, route) {
   return;
 }
 
+// packages/plugin/src/http/variables-regex-routes.ts
+init_src2();
+init_io();
+async function handleVariablesReadRoute(db, res) {
+  const state = await db.getState();
+  return sendJson(res, 200, { ok: true, globals: state.scriptGlobals });
+}
+async function handleVariablesUpdateRoute(db, req, res) {
+  const body = await readJson(req);
+  if (body.globals === null || typeof body.globals !== "object" || Array.isArray(body.globals)) {
+    throw new Error("expected { globals }");
+  }
+  const globals = {};
+  for (const [key, value] of Object.entries(body.globals)) {
+    if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
+      throw new Error(`global '${key}' must be a string, number or boolean`);
+    }
+    globals[key] = value;
+  }
+  const state = await db.updateState(() => ({ scriptGlobals: globals }));
+  return sendJson(res, 200, { ok: true, globals: state.scriptGlobals });
+}
+async function handleRegexReadRoute(db, res) {
+  await db.ensureRegexScriptOwners();
+  const state = await db.getState();
+  return sendJson(res, 200, {
+    ok: true,
+    scripts: state.regexScripts,
+    regexScriptOwners: state.regexScriptOwners ?? {},
+    regexScriptPresetOwners: state.regexScriptPresetOwners ?? {}
+  });
+}
+async function handleRegexUpdateRoute(db, req, res) {
+  await db.ensureRegexScriptOwners();
+  const body = await readJson(req, 25 * 1024 * 1024);
+  const scripts = Array.isArray(body.scripts) ? parseRegexScripts2(body.scripts) : void 0;
+  if (scripts === void 0) throw new Error("expected { scripts }");
+  const state = await db.replaceRegexScripts(scripts);
+  return sendJson(res, 200, {
+    ok: true,
+    scripts: state.regexScripts,
+    regexScriptOwners: state.regexScriptOwners ?? {},
+    regexScriptPresetOwners: state.regexScriptPresetOwners ?? {}
+  });
+}
+async function handleRegexImportRoute(db, req, res) {
+  await db.ensureRegexScriptOwners();
+  const body = await readJson(req, 25 * 1024 * 1024);
+  if (!Array.isArray(body.data) && typeof body.data !== "object") throw new Error("expected { data }");
+  const imported = await db.importRegexScripts(body.data);
+  const state = await db.getState();
+  return sendJson(res, 200, {
+    ok: true,
+    imported,
+    scripts: state.regexScripts,
+    regexScriptOwners: state.regexScriptOwners ?? {},
+    regexScriptPresetOwners: state.regexScriptPresetOwners ?? {}
+  });
+}
+async function handleRegexSyncCardsRoute(db, res) {
+  await db.ensureRegexScriptOwners();
+  const result = await db.backfillRegexScriptsFromCharacters();
+  const state = await db.getState();
+  return sendJson(res, 200, {
+    ok: true,
+    ...result,
+    scripts: state.regexScripts,
+    regexScriptOwners: state.regexScriptOwners ?? {},
+    regexScriptPresetOwners: state.regexScriptPresetOwners ?? {}
+  });
+}
+async function handleRegexSyncPresetsRoute(db, res) {
+  await db.ensureRegexScriptOwners();
+  const result = await db.backfillRegexScriptsFromPresets();
+  const state = await db.getState();
+  return sendJson(res, 200, {
+    ok: true,
+    ...result,
+    scripts: state.regexScripts,
+    regexScriptOwners: state.regexScriptOwners ?? {},
+    regexScriptPresetOwners: state.regexScriptPresetOwners ?? {}
+  });
+}
+
 // packages/plugin/src/http/update.ts
 init_runtime2();
 init_service();
@@ -60777,6 +60860,42 @@ var STORE_ROUTES = [
     name: "preset-export",
     matches: (route, method) => method === "GET" && route.startsWith("export/preset/"),
     handle: ({ db, res, route }) => handlePresetExportRoute(db, res, route)
+  },
+  // Global variables and regex scripts; order mirrors the old if-chain.
+  {
+    name: "variables-read",
+    matches: (route, method) => method === "GET" && route === "variables",
+    handle: ({ db, res }) => handleVariablesReadRoute(db, res)
+  },
+  {
+    name: "variables-update",
+    matches: (route, method) => method === "PUT" && route === "variables",
+    handle: ({ db, req, res }) => handleVariablesUpdateRoute(db, req, res)
+  },
+  {
+    name: "regex-read",
+    matches: (route, method) => method === "GET" && route === "regex",
+    handle: ({ db, res }) => handleRegexReadRoute(db, res)
+  },
+  {
+    name: "regex-update",
+    matches: (route, method) => method === "PUT" && route === "regex",
+    handle: ({ db, req, res }) => handleRegexUpdateRoute(db, req, res)
+  },
+  {
+    name: "regex-import",
+    matches: (route, method) => method === "POST" && route === "import/regex",
+    handle: ({ db, req, res }) => handleRegexImportRoute(db, req, res)
+  },
+  {
+    name: "regex-sync-cards",
+    matches: (route, method) => method === "POST" && route === "regex/sync-cards",
+    handle: ({ db, res }) => handleRegexSyncCardsRoute(db, res)
+  },
+  {
+    name: "regex-sync-presets",
+    matches: (route, method) => method === "POST" && route === "regex/sync-presets",
+    handle: ({ db, res }) => handleRegexSyncPresetsRoute(db, res)
   }
 ];
 
@@ -60801,86 +60920,6 @@ async function handleApi(ctx, req, res) {
     if (!entry.matches(route, method)) continue;
     await entry.handle({ ctx, req, res, url, route, method, db });
     return;
-  }
-  if (method === "GET" && route === "variables") {
-    const state = await db.getState();
-    return sendJson(res, 200, { ok: true, globals: state.scriptGlobals });
-  }
-  if (method === "PUT" && route === "variables") {
-    const body = await readJson(req);
-    if (body.globals === null || typeof body.globals !== "object" || Array.isArray(body.globals)) {
-      throw new Error("expected { globals }");
-    }
-    const globals = {};
-    for (const [key, value] of Object.entries(body.globals)) {
-      if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
-        throw new Error(`global '${key}' must be a string, number or boolean`);
-      }
-      globals[key] = value;
-    }
-    const state = await db.updateState(() => ({ scriptGlobals: globals }));
-    return sendJson(res, 200, { ok: true, globals: state.scriptGlobals });
-  }
-  if (method === "GET" && route === "regex") {
-    await db.ensureRegexScriptOwners();
-    const state = await db.getState();
-    return sendJson(res, 200, {
-      ok: true,
-      scripts: state.regexScripts,
-      regexScriptOwners: state.regexScriptOwners ?? {},
-      regexScriptPresetOwners: state.regexScriptPresetOwners ?? {}
-    });
-  }
-  if (method === "PUT" && route === "regex") {
-    await db.ensureRegexScriptOwners();
-    const body = await readJson(req, 25 * 1024 * 1024);
-    const scripts = Array.isArray(body.scripts) ? parseRegexScripts2(body.scripts) : void 0;
-    if (scripts === void 0) throw new Error("expected { scripts }");
-    const state = await db.replaceRegexScripts(scripts);
-    return sendJson(res, 200, {
-      ok: true,
-      scripts: state.regexScripts,
-      regexScriptOwners: state.regexScriptOwners ?? {},
-      regexScriptPresetOwners: state.regexScriptPresetOwners ?? {}
-    });
-  }
-  if (method === "POST" && route === "import/regex") {
-    await db.ensureRegexScriptOwners();
-    const body = await readJson(req, 25 * 1024 * 1024);
-    if (!Array.isArray(body.data) && typeof body.data !== "object") throw new Error("expected { data }");
-    const imported = await db.importRegexScripts(body.data);
-    const state = await db.getState();
-    return sendJson(res, 200, {
-      ok: true,
-      imported,
-      scripts: state.regexScripts,
-      regexScriptOwners: state.regexScriptOwners ?? {},
-      regexScriptPresetOwners: state.regexScriptPresetOwners ?? {}
-    });
-  }
-  if (method === "POST" && route === "regex/sync-cards") {
-    await db.ensureRegexScriptOwners();
-    const result = await db.backfillRegexScriptsFromCharacters();
-    const state = await db.getState();
-    return sendJson(res, 200, {
-      ok: true,
-      ...result,
-      scripts: state.regexScripts,
-      regexScriptOwners: state.regexScriptOwners ?? {},
-      regexScriptPresetOwners: state.regexScriptPresetOwners ?? {}
-    });
-  }
-  if (method === "POST" && route === "regex/sync-presets") {
-    await db.ensureRegexScriptOwners();
-    const result = await db.backfillRegexScriptsFromPresets();
-    const state = await db.getState();
-    return sendJson(res, 200, {
-      ok: true,
-      ...result,
-      scripts: state.regexScripts,
-      regexScriptOwners: state.regexScriptOwners ?? {},
-      regexScriptPresetOwners: state.regexScriptPresetOwners ?? {}
-    });
   }
   if (method === "POST" && route === "helper/bind") {
     const body = await readJson(req);

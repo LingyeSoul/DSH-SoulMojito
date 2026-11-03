@@ -77,6 +77,15 @@ import {
   handleWorldReadRoute,
   handleWorldUpdateRoute,
 } from './world-preset-routes.js'
+import {
+  handleRegexImportRoute,
+  handleRegexReadRoute,
+  handleRegexSyncCardsRoute,
+  handleRegexSyncPresetsRoute,
+  handleRegexUpdateRoute,
+  handleVariablesReadRoute,
+  handleVariablesUpdateRoute,
+} from './variables-regex-routes.js'
 import { handleUpdateApi } from './update.js'
 
 export interface RouteContext {
@@ -436,5 +445,41 @@ export const STORE_ROUTES: readonly RouteEntry<StoreRouteContext>[] = [
     name: 'preset-export',
     matches: (route, method) => method === 'GET' && route.startsWith('export/preset/'),
     handle: ({ db, res, route }) => handlePresetExportRoute(db, res, route),
+  },
+  // Global variables and regex scripts; order mirrors the old if-chain.
+  {
+    name: 'variables-read',
+    matches: (route, method) => method === 'GET' && route === 'variables',
+    handle: ({ db, res }) => handleVariablesReadRoute(db, res),
+  },
+  {
+    name: 'variables-update',
+    matches: (route, method) => method === 'PUT' && route === 'variables',
+    handle: ({ db, req, res }) => handleVariablesUpdateRoute(db, req, res),
+  },
+  {
+    name: 'regex-read',
+    matches: (route, method) => method === 'GET' && route === 'regex',
+    handle: ({ db, res }) => handleRegexReadRoute(db, res),
+  },
+  {
+    name: 'regex-update',
+    matches: (route, method) => method === 'PUT' && route === 'regex',
+    handle: ({ db, req, res }) => handleRegexUpdateRoute(db, req, res),
+  },
+  {
+    name: 'regex-import',
+    matches: (route, method) => method === 'POST' && route === 'import/regex',
+    handle: ({ db, req, res }) => handleRegexImportRoute(db, req, res),
+  },
+  {
+    name: 'regex-sync-cards',
+    matches: (route, method) => method === 'POST' && route === 'regex/sync-cards',
+    handle: ({ db, res }) => handleRegexSyncCardsRoute(db, res),
+  },
+  {
+    name: 'regex-sync-presets',
+    matches: (route, method) => method === 'POST' && route === 'regex/sync-presets',
+    handle: ({ db, res }) => handleRegexSyncPresetsRoute(db, res),
   },
 ]

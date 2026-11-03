@@ -79,6 +79,8 @@ export function mountTransport(ctx: PluginContext, deps: MountDeps): void
 - Round 18 全量：`pnpm exec vitest run --no-file-parallelism` → **201 files / 3306 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (5db309f)。
 - Round 19 stage 1：`world/*` 读/改/导出/删除与 preset delete/export 搬进 `packages/plugin/src/http/world-preset-routes.ts`；六个表项按旧 if-chain 顺序追加在 `prompts` 之后。复核补充了 world 读/导出/删除、preset 导出/删除与 `GET world` / `POST preset` 错误方法的 HTTP 用例；`http-route-table.spec.ts` 增到 11 条。
 - Round 19 全量：`pnpm exec vitest run --no-file-parallelism` → **201 files / 3308 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (94dbc15)。
+- Round 20 stage 1：`variables` GET/PUT、`regex` GET/PUT、`import/regex`、`regex/sync-cards`、`regex/sync-presets` 搬进 `packages/plugin/src/http/variables-regex-routes.ts`；七个表项按旧 if-chain 顺序追加在 `preset-export` 之后。复核补充了 variables 读写、regex 读写、`import/regex` 与 `DELETE variables` / `POST regex` 错误方法的 HTTP 用例；`http-route-table.spec.ts` 增到 12 条。
+- Round 20 全量：`pnpm exec vitest run --no-file-parallelism` → **201 files / 3309 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (0f8ac5d)。
 
 ## 删除路径
 
@@ -86,7 +88,7 @@ export function mountTransport(ctx: PluginContext, deps: MountDeps): void
 
 ## 未完成
 
-- route table 十二刀已落（update / games / im；bootstrap / store-revision / state-slices；avatar / character 读 / projection / compact / guides / script / audit / novels / mods；body；character 写/删/导出；persona/group；asset import/preset；models/model/state；binding/chats/branch；candidates/preview/mvu；card-workbench/memory/prompts；world/preset delete/export）；其余 if-chain（variables/regex/helper/frontend 等）仍是后续。
+- route table 十三刀已落（update / games / im；bootstrap / store-revision / state-slices；avatar / character 读 / projection / compact / guides / script / audit / novels / mods；body；character 写/删/导出；persona/group；asset import/preset；models/model/state；binding/chats/branch；candidates/preview/mvu；card-workbench/memory/prompts；world/preset delete/export；variables/regex）；其余 if-chain（helper/frontend/chat/generate 等）仍是后续。
 - games / IM / Mods / update 仍留在 `index.ts`；它们各自有生命周期与 disposer，抽相位时要先定义清理顺序。
 - `MountDeps` 只是阶段句柄，不是新的 service locator；静态协作者继续直接 import。
 
