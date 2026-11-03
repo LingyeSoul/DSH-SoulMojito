@@ -114,7 +114,12 @@ describe('HTTP route table (moved routes)', () => {
         compositionInventory: async () => [{ id: 'standard' }, { id: 'agent-tavern' }],
       },
       tools: { register: () => {} },
-      llm: { stream: async function* () {} },
+      llm: {
+        listProviders: () => [{ id: 'test-provider', name: 'Test Provider' }],
+        listModels: () => [{ id: 'test-model', name: 'Test Model' }],
+        resolveModelInfo: async () => ({}),
+        stream: async function* () {},
+      },
       agentDefaultModel: { currentSelection: () => ({ provider: 'test-provider', model: 'test-model' }) },
       agents: { get: () => undefined },
       get: () => undefined,
@@ -290,6 +295,33 @@ describe('HTTP route table (moved routes)', () => {
     ])
   })
 
+  it('lists models and stores then clears a session selection', async () => {
+    const models = await call('GET', '/api/dsh-soulmojito/models')
+    expect(models.status).toBe(200)
+    expect(json(models)).toMatchObject({
+      ok: true,
+      groups: [{ id: 'test-provider', name: 'Test Provider', models: [{ id: 'test-model', name: 'Test Model' }] }],
+      failures: [],
+    })
+
+    const set = await call('POST', '/api/dsh-soulmojito/model', {
+      sessionId: 'route-selection',
+      selection: { provider: 'test-provider', model: 'test-model' },
+    })
+    expect(set.status).toBe(200)
+    expect((await store.getState()).modelSelections['route-selection']).toEqual({
+      provider: 'test-provider',
+      model: 'test-model',
+    })
+
+    const cleared = await call('POST', '/api/dsh-soulmojito/model', {
+      sessionId: 'route-selection',
+      selection: null,
+    })
+    expect(cleared.status).toBe(200)
+    expect((await store.getState()).modelSelections['route-selection']).toBeUndefined()
+  })
+
   it('keeps wrong-method requests on the unchanged 404 path', async () => {
     const getBinding = await call('GET', '/api/dsh-soulmojito/binding')
     expect(getBinding.status).toBe(404)
@@ -306,5 +338,13 @@ describe('HTTP route table (moved routes)', () => {
     const postPreset = await call('POST', '/api/dsh-soulmojito/preset/Route%20Preset', { name: 'Route Preset' })
     expect(postPreset.status).toBe(404)
     expect(json(postPreset)['message']).toBe('route not found: POST preset/Route%20Preset')
+
+    const putModels = await call('PUT', '/api/dsh-soulmojito/models')
+    expect(putModels.status).toBe(404)
+    expect(json(putModels)['message']).toBe('route not found: PUT models')
+
+    const getModel = await call('GET', '/api/dsh-soulmojito/model')
+    expect(getModel.status).toBe(404)
+    expect(json(getModel)['message']).toBe('route not found: GET model')
   })
 })

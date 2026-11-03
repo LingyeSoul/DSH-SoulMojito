@@ -73,6 +73,8 @@ export function mountTransport(ctx: PluginContext, deps: MountDeps): void
 - Round 15 全量：`pnpm exec vitest run --no-file-parallelism` → **200 files / 3297 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (8c4c3e8)。
 - Round 16 风险修补：新增 `packages/plugin/tests/http-route-table.spec.ts` 8 条真实 `apply()` HTTP 用例——world import、persona/group CRUD、preset 写读、bindings/prune、branch、character export、`STORE_ROUTES` 顺序快照、错误方法回落 404。此前 persona/group 写路径、`import/world`、`GET preset/*`、`bindings/prune`、`branch`、`export/character` 的测试空白已补上。
 - Round 16 全量：`pnpm exec vitest run --no-file-parallelism` → **201 files / 3305 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (b79d8c1)。
+- Round 17 风险修补：`http-route-table.spec.ts` 增加 `GET models` 目录、`POST model` 选择写入/清除，以及 `PUT models` / `GET model` 错误方法 404；models/model 的 HTTP 空白补齐。
+- Round 17 全量：`pnpm exec vitest run --no-file-parallelism` → **201 files / 3306 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (f2cb618)。
 
 ## 删除路径
 
