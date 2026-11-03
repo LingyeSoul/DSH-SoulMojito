@@ -29,6 +29,11 @@ import {
   handleProjectionReplayRoute,
   handleProjectionRoute,
 } from './domain-routes.js'
+import {
+  handleCandidatesRoute,
+  handleMvuRoute,
+  handlePreviewRoute,
+} from './generation-variable-routes.js'
 import { handleImApi } from './im.js'
 import type { HttpRequest, HttpResponse } from './io.js'
 import { handleModsApi } from './mods.js'
@@ -343,5 +348,22 @@ export const STORE_ROUTES: readonly RouteEntry<StoreRouteContext>[] = [
     name: 'branch',
     matches: (route, method) => method === 'POST' && route === 'branch',
     handle: ({ db, req, res }) => handleBranchRoute(db, req, res),
+  },
+  // Generation and MVU surface: candidates, preview, retry/undo/status.
+  {
+    name: 'candidates',
+    matches: (route, method) => method === 'POST' && route === 'candidates',
+    handle: ({ ctx, db, req, res }) => handleCandidatesRoute(ctx, db, req, res),
+  },
+  {
+    name: 'preview',
+    matches: (route, method) => method === 'POST' && route === 'preview',
+    handle: ({ ctx, db, req, res }) => handlePreviewRoute(ctx, db, req, res),
+  },
+  {
+    name: 'mvu',
+    matches: (route, method) => (method === 'POST' && (route === 'mvu/retry' || route === 'mvu/receipts/undo'))
+      || (method === 'GET' && route.startsWith('mvu/status/')),
+    handle: ({ db, req, res, route, method }) => handleMvuRoute(db, req, res, route, method),
   },
 ]

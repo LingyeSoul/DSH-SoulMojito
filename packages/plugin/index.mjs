@@ -15598,7 +15598,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.5".trim() : "";
-  const commit = true ? normalizeCommit("409f62b") : void 0;
+  const commit = true ? normalizeCommit("8c4c3e8") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -43689,266 +43689,6 @@ function plainObject5(value) {
   return isPlainObject3(value) ? value : void 0;
 }
 
-// packages/plugin/src/candidates.ts
-init_src();
-init_guides();
-
-// packages/plugin/src/rewrite.ts
-var FEEDBACK_MAX_LENGTH = 1e3;
-function optionalFeedback(value) {
-  if (value === void 0) return void 0;
-  if (typeof value !== "string") throw new Error("feedback must be a string");
-  const trimmed = value.trim();
-  if (trimmed === "") return void 0;
-  if (trimmed.length > FEEDBACK_MAX_LENGTH) {
-    throw new Error(`feedback must be at most ${FEEDBACK_MAX_LENGTH} characters`);
-  }
-  return trimmed;
-}
-function formatRewriteBlock(feedback) {
-  if (feedback === void 0 || feedback === "") return void 0;
-  return `Rewrite directive for this reply (user feedback; the previous reply is being rewritten): ${feedback}`;
-}
-
-// packages/plugin/src/candidates.ts
-var CANDIDATE_HISTORY_WINDOW = 10;
-var CANDIDATE_MAX_COUNT = 6;
-var CANDIDATE_MAX_TEXT_LENGTH = 200;
-var CANDIDATE_CARD_EXCERPT = 1500;
-var DEFAULT_USER4 = "User";
-function excerpt(text, max2) {
-  if (typeof text !== "string") return void 0;
-  const trimmed = text.trim();
-  if (trimmed === "") return void 0;
-  return trimmed.length > max2 ? `${trimmed.slice(0, max2)}\u2026` : trimmed;
-}
-function formatGuidesBlock2(guides) {
-  if (guides.length === 0) return void 0;
-  const lines = guides.slice().sort((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? "")).map((guide) => `- ${guide.text}`);
-  return [GUIDES_BLOCK_HEADER, ...lines].join("\n");
-}
-function buildCandidateRequest(input) {
-  const systemParts = [
-    [
-      "You propose candidate inputs for an ongoing roleplay chat.",
-      "Based on the character, the user persona, the recent chat history and any conversation guides, propose 3 to 6 candidates for what the user could send next.",
-      "Rules:",
-      `- Each candidate is at most ${CANDIDATE_MAX_TEXT_LENGTH} characters and is written as the user's next message.`,
-      `- kind "action" proposes something the user's character does or says; kind "scene" proposes a scene change or a narrative shift.`,
-      "- Ground every candidate in the provided history and character; do not advance the plot yourself and do not narrate outcomes \u2014 only propose.",
-      '- Reply with ONLY a strict JSON array of objects, e.g. [{"kind":"action","text":"..."},{"kind":"scene","text":"..."}]. No prose, no code fences.'
-    ].join("\n")
-  ];
-  const card = [`Character: ${input.character.name}`];
-  const description = excerpt(input.character.description, CANDIDATE_CARD_EXCERPT);
-  if (description !== void 0) card.push(`Description: ${description}`);
-  const personality = excerpt(input.character.personality, CANDIDATE_CARD_EXCERPT);
-  if (personality !== void 0) card.push(`Personality: ${personality}`);
-  const scenario = excerpt(input.character.scenario, CANDIDATE_CARD_EXCERPT);
-  if (scenario !== void 0) card.push(`Scenario: ${scenario}`);
-  card.push(`User persona name: ${input.userName}`);
-  systemParts.push(card.join("\n"));
-  const guidesBlock = formatGuidesBlock2(input.guides ?? []);
-  if (guidesBlock !== void 0) systemParts.push(guidesBlock);
-  if (input.feedback !== void 0) {
-    const revision = [];
-    if (input.previousCandidates !== void 0 && input.previousCandidates.length > 0) {
-      revision.push("Previous candidates (the user reviewed them and asked for a revision):");
-      for (const item of input.previousCandidates) {
-        revision.push(`- [${item.kind}] ${item.text}`);
-      }
-    }
-    revision.push(`User feedback on the candidates: ${input.feedback}`);
-    revision.push("Revise the candidates according to the feedback: keep what the feedback does not object to, and replace or adjust what it asks to change. Follow the same output rules.");
-    systemParts.push(revision.join("\n"));
-  }
-  const history = input.history.slice(-CANDIDATE_HISTORY_WINDOW);
-  const messages = history.map((m) => ({
-    role: m.isUser ? "user" : "assistant",
-    content: `[${m.name}] ${m.text}`
-  }));
-  messages.push({
-    role: "user",
-    content: input.feedback !== void 0 ? "Propose 3 to 6 candidate inputs for the user's next message, revising the previous candidates according to the user feedback. Reply with ONLY the JSON array." : "Propose 3 to 6 candidate inputs for the user's next message. Reply with ONLY the JSON array."
-  });
-  return { system: systemParts.join("\n\n"), messages };
-}
-function tryParseJson(text) {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return void 0;
-  }
-}
-function extractFirstJsonArray(text) {
-  const trimmed = text.trim();
-  const direct = tryParseJson(trimmed);
-  if (Array.isArray(direct)) return direct;
-  const start = trimmed.indexOf("[");
-  if (start === -1) throw new Error("candidate output contains no JSON array");
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = start; i < trimmed.length; i++) {
-    const ch = trimmed[i];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (inString && ch === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (ch === '"') inString = !inString;
-    else if (!inString && ch === "[") depth++;
-    else if (!inString && ch === "]") {
-      depth--;
-      if (depth === 0) {
-        const parsed = tryParseJson(trimmed.slice(start, i + 1));
-        if (parsed === void 0) throw new Error("candidate output is not valid JSON");
-        if (!Array.isArray(parsed)) throw new Error("candidate output is not a JSON array");
-        return parsed;
-      }
-    }
-  }
-  throw new Error("candidate output contains no JSON array");
-}
-function normalizeCandidateText(value) {
-  return typeof value === "string" ? value.trim().slice(0, CANDIDATE_MAX_TEXT_LENGTH) : "";
-}
-function parseCandidates(text) {
-  const raw = extractFirstJsonArray(text);
-  const items = [];
-  for (const entry of raw) {
-    if (items.length >= CANDIDATE_MAX_COUNT) break;
-    if (typeof entry === "string") {
-      const candidate2 = normalizeCandidateText(entry);
-      if (candidate2 !== "") items.push({ kind: "action", text: candidate2 });
-      continue;
-    }
-    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const record = entry;
-    const candidate = normalizeCandidateText(record.text);
-    if (candidate === "") continue;
-    items.push({ kind: record.kind === "scene" ? "scene" : "action", text: candidate });
-  }
-  if (items.length === 0) throw new Error("candidate output contained no usable candidates");
-  return items;
-}
-function readStoredCandidates(chat) {
-  const raw = chat?.header?.chat_metadata?.candidates;
-  if (raw === void 0 || raw === null || typeof raw !== "object" || Array.isArray(raw)) return void 0;
-  const record = raw;
-  if (!Array.isArray(record.items)) return void 0;
-  const items = [];
-  for (const entry of record.items) {
-    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const candidate = normalizeCandidateText(entry.text);
-    if (candidate === "") continue;
-    items.push({
-      kind: entry.kind === "scene" ? "scene" : "action",
-      text: candidate
-    });
-  }
-  if (items.length === 0) return void 0;
-  return {
-    items,
-    generatedAt: typeof record.generatedAt === "string" ? record.generatedAt : "",
-    ...typeof record.feedback === "string" && record.feedback !== "" ? { feedback: record.feedback } : {}
-  };
-}
-function writeStoredCandidates(chat, payload) {
-  chat.header.chat_metadata.candidates = {
-    items: payload.items,
-    generatedAt: payload.generatedAt,
-    ...payload.feedback !== void 0 && payload.feedback !== "" ? { feedback: payload.feedback } : {}
-  };
-}
-function readGuides(chat) {
-  const raw = chat?.header?.chat_metadata?.guides;
-  if (!Array.isArray(raw)) return [];
-  const guides = [];
-  for (const entry of raw) {
-    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const record = entry;
-    if (typeof record.text !== "string" || record.text.trim() === "") continue;
-    guides.push({
-      id: typeof record.id === "string" ? record.id : "",
-      text: record.text,
-      ...typeof record.createdAt === "string" ? { createdAt: record.createdAt } : {}
-    });
-  }
-  return guides;
-}
-function assertStCandidateBinding(state, sessionId) {
-  if (typeof sessionId !== "string") return;
-  if (state.sessionBindings?.[sessionId]?.architecture === "agent-tavern") {
-    throw new Error("AgentTavern sessions use the DSH native AgentLoop; candidates are unavailable.");
-  }
-}
-async function runCandidateGeneration(ctx, db, options) {
-  const { state, characterName, chatId, snapshot: snapshot2 } = options;
-  assertStCandidateBinding(state, options.sessionId);
-  if (options.revision !== snapshot2.revision) {
-    throw new ChatRevisionConflictError(options.revision, snapshot2.revision);
-  }
-  const chat = snapshot2.chat;
-  const character = await db.getCharacter(characterName);
-  if (!character) throw new Error(`character '${characterName}' not found`);
-  const feedback = optionalFeedback(options.feedback);
-  const previous = feedback !== void 0 ? readStoredCandidates(chat) : void 0;
-  const request = buildCandidateRequest({
-    character: {
-      name: character.card.data.name || characterName,
-      description: character.card.data.description,
-      personality: character.card.data.personality,
-      scenario: character.card.data.scenario
-    },
-    userName: state.activePersona ?? DEFAULT_USER4,
-    history: chat.messages.filter((m) => !m.is_system).map((m) => ({ name: m.name, isUser: m.is_user, text: m.mes })),
-    guides: readGuides(chat),
-    ...feedback !== void 0 ? { feedback } : {},
-    ...previous !== void 0 ? { previousCandidates: previous.items } : {}
-  });
-  const fallback = ctx.agentDefaultModel.currentSelection();
-  const saved = options.sessionId !== void 0 ? state.modelSelections?.[options.sessionId] : void 0;
-  const explicit = options.provider !== void 0 && options.model !== void 0 ? {
-    provider: options.provider,
-    model: options.model,
-    ...options.reasoningEffort !== void 0 ? { reasoningEffort: options.reasoningEffort } : {}
-  } : void 0;
-  const choice = explicit ?? saved ?? fallback;
-  const provider = choice.provider;
-  const model = choice.model;
-  const reasoningEffort = explicit?.reasoningEffort ?? saved?.reasoningEffort ?? (provider === fallback.provider && model === fallback.model ? fallback.reasoningEffort : void 0);
-  let text = "";
-  for await (const chunk of ctx.llm.stream({
-    provider,
-    model,
-    messages: request.messages.map((m) => ({
-      id: crypto.randomUUID(),
-      role: m.role,
-      content: [{ type: "text", text: m.content }],
-      // 候选请求不带 sessionId：source 仅标注来源，dsh-llm 不校验（同 runGeneration）。
-      source: m.role === "assistant" ? { kind: "model", provider, model } : { kind: "user" }
-    })),
-    system: request.system,
-    ...reasoningEffort !== void 0 ? { reasoningEffort } : {},
-    ...options.signal !== void 0 ? { signal: options.signal } : {}
-  })) {
-    if (chunk.type === "text-delta") text += chunk.text;
-    else if (chunk.type === "finish" && (chunk.reason.kind === "error" || chunk.reason.kind === "aborted")) {
-      throw new Error(chunk.reason.failure?.message ?? "candidate generation failed");
-    }
-  }
-  if (text.trim() === "") throw new Error("model returned no candidates");
-  const items = parseCandidates(text);
-  const generatedAt = (/* @__PURE__ */ new Date()).toISOString();
-  writeStoredCandidates(chat, { items, generatedAt, ...feedback !== void 0 ? { feedback } : {} });
-  const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
-  return { items, generatedAt, revision };
-}
-
 // packages/plugin/src/http/router.ts
 init_dsh_home();
 
@@ -44791,6 +44531,25 @@ init_public_error();
 init_events();
 init_mvu();
 init_mvu_rules();
+
+// packages/plugin/src/rewrite.ts
+var FEEDBACK_MAX_LENGTH = 1e3;
+function optionalFeedback(value) {
+  if (value === void 0) return void 0;
+  if (typeof value !== "string") throw new Error("feedback must be a string");
+  const trimmed = value.trim();
+  if (trimmed === "") return void 0;
+  if (trimmed.length > FEEDBACK_MAX_LENGTH) {
+    throw new Error(`feedback must be at most ${FEEDBACK_MAX_LENGTH} characters`);
+  }
+  return trimmed;
+}
+function formatRewriteBlock(feedback) {
+  if (feedback === void 0 || feedback === "") return void 0;
+  return `Rewrite directive for this reply (user feedback; the previous reply is being rewritten): ${feedback}`;
+}
+
+// packages/plugin/src/generation/pipeline.ts
 init_runtime2();
 init_tavern_assets();
 
@@ -48197,7 +47956,7 @@ init_src2();
 init_src();
 init_dsh_home();
 init_store_handle();
-var DEFAULT_USER5 = "User";
+var DEFAULT_USER4 = "User";
 var CHAR_FALLBACK = "the character";
 var storePromise2;
 function store4() {
@@ -48233,7 +47992,7 @@ function mountPresetProjection(options) {
       freeze2.set(agentId, record);
       const expand = createHostPromptExpander(
         charNameOf(options, binding),
-        state.activePersona ?? DEFAULT_USER5,
+        state.activePersona ?? DEFAULT_USER4,
         { now: () => new Date(record.frozenAt), rng: seededRandom(record.seed) }
       );
       settle(hostPromptSafe(block, expand));
@@ -51601,6 +51360,281 @@ async function handleAuditRoute(db, res, url) {
     memories: [...memoryGroups.flat().map((hit) => hit.record), ...globalMemories.map((hit) => hit.record)],
     variables: [...variableGroups.flat(), ...globalVariables]
   });
+}
+
+// packages/plugin/src/candidates.ts
+init_src();
+init_guides();
+var CANDIDATE_HISTORY_WINDOW = 10;
+var CANDIDATE_MAX_COUNT = 6;
+var CANDIDATE_MAX_TEXT_LENGTH = 200;
+var CANDIDATE_CARD_EXCERPT = 1500;
+var DEFAULT_USER5 = "User";
+function excerpt(text, max2) {
+  if (typeof text !== "string") return void 0;
+  const trimmed = text.trim();
+  if (trimmed === "") return void 0;
+  return trimmed.length > max2 ? `${trimmed.slice(0, max2)}\u2026` : trimmed;
+}
+function formatGuidesBlock2(guides) {
+  if (guides.length === 0) return void 0;
+  const lines = guides.slice().sort((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? "")).map((guide) => `- ${guide.text}`);
+  return [GUIDES_BLOCK_HEADER, ...lines].join("\n");
+}
+function buildCandidateRequest(input) {
+  const systemParts = [
+    [
+      "You propose candidate inputs for an ongoing roleplay chat.",
+      "Based on the character, the user persona, the recent chat history and any conversation guides, propose 3 to 6 candidates for what the user could send next.",
+      "Rules:",
+      `- Each candidate is at most ${CANDIDATE_MAX_TEXT_LENGTH} characters and is written as the user's next message.`,
+      `- kind "action" proposes something the user's character does or says; kind "scene" proposes a scene change or a narrative shift.`,
+      "- Ground every candidate in the provided history and character; do not advance the plot yourself and do not narrate outcomes \u2014 only propose.",
+      '- Reply with ONLY a strict JSON array of objects, e.g. [{"kind":"action","text":"..."},{"kind":"scene","text":"..."}]. No prose, no code fences.'
+    ].join("\n")
+  ];
+  const card = [`Character: ${input.character.name}`];
+  const description = excerpt(input.character.description, CANDIDATE_CARD_EXCERPT);
+  if (description !== void 0) card.push(`Description: ${description}`);
+  const personality = excerpt(input.character.personality, CANDIDATE_CARD_EXCERPT);
+  if (personality !== void 0) card.push(`Personality: ${personality}`);
+  const scenario = excerpt(input.character.scenario, CANDIDATE_CARD_EXCERPT);
+  if (scenario !== void 0) card.push(`Scenario: ${scenario}`);
+  card.push(`User persona name: ${input.userName}`);
+  systemParts.push(card.join("\n"));
+  const guidesBlock = formatGuidesBlock2(input.guides ?? []);
+  if (guidesBlock !== void 0) systemParts.push(guidesBlock);
+  if (input.feedback !== void 0) {
+    const revision = [];
+    if (input.previousCandidates !== void 0 && input.previousCandidates.length > 0) {
+      revision.push("Previous candidates (the user reviewed them and asked for a revision):");
+      for (const item of input.previousCandidates) {
+        revision.push(`- [${item.kind}] ${item.text}`);
+      }
+    }
+    revision.push(`User feedback on the candidates: ${input.feedback}`);
+    revision.push("Revise the candidates according to the feedback: keep what the feedback does not object to, and replace or adjust what it asks to change. Follow the same output rules.");
+    systemParts.push(revision.join("\n"));
+  }
+  const history = input.history.slice(-CANDIDATE_HISTORY_WINDOW);
+  const messages = history.map((m) => ({
+    role: m.isUser ? "user" : "assistant",
+    content: `[${m.name}] ${m.text}`
+  }));
+  messages.push({
+    role: "user",
+    content: input.feedback !== void 0 ? "Propose 3 to 6 candidate inputs for the user's next message, revising the previous candidates according to the user feedback. Reply with ONLY the JSON array." : "Propose 3 to 6 candidate inputs for the user's next message. Reply with ONLY the JSON array."
+  });
+  return { system: systemParts.join("\n\n"), messages };
+}
+function tryParseJson(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return void 0;
+  }
+}
+function extractFirstJsonArray(text) {
+  const trimmed = text.trim();
+  const direct = tryParseJson(trimmed);
+  if (Array.isArray(direct)) return direct;
+  const start = trimmed.indexOf("[");
+  if (start === -1) throw new Error("candidate output contains no JSON array");
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < trimmed.length; i++) {
+    const ch = trimmed[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (inString && ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') inString = !inString;
+    else if (!inString && ch === "[") depth++;
+    else if (!inString && ch === "]") {
+      depth--;
+      if (depth === 0) {
+        const parsed = tryParseJson(trimmed.slice(start, i + 1));
+        if (parsed === void 0) throw new Error("candidate output is not valid JSON");
+        if (!Array.isArray(parsed)) throw new Error("candidate output is not a JSON array");
+        return parsed;
+      }
+    }
+  }
+  throw new Error("candidate output contains no JSON array");
+}
+function normalizeCandidateText(value) {
+  return typeof value === "string" ? value.trim().slice(0, CANDIDATE_MAX_TEXT_LENGTH) : "";
+}
+function parseCandidates(text) {
+  const raw = extractFirstJsonArray(text);
+  const items = [];
+  for (const entry of raw) {
+    if (items.length >= CANDIDATE_MAX_COUNT) break;
+    if (typeof entry === "string") {
+      const candidate2 = normalizeCandidateText(entry);
+      if (candidate2 !== "") items.push({ kind: "action", text: candidate2 });
+      continue;
+    }
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const record = entry;
+    const candidate = normalizeCandidateText(record.text);
+    if (candidate === "") continue;
+    items.push({ kind: record.kind === "scene" ? "scene" : "action", text: candidate });
+  }
+  if (items.length === 0) throw new Error("candidate output contained no usable candidates");
+  return items;
+}
+function readStoredCandidates(chat) {
+  const raw = chat?.header?.chat_metadata?.candidates;
+  if (raw === void 0 || raw === null || typeof raw !== "object" || Array.isArray(raw)) return void 0;
+  const record = raw;
+  if (!Array.isArray(record.items)) return void 0;
+  const items = [];
+  for (const entry of record.items) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const candidate = normalizeCandidateText(entry.text);
+    if (candidate === "") continue;
+    items.push({
+      kind: entry.kind === "scene" ? "scene" : "action",
+      text: candidate
+    });
+  }
+  if (items.length === 0) return void 0;
+  return {
+    items,
+    generatedAt: typeof record.generatedAt === "string" ? record.generatedAt : "",
+    ...typeof record.feedback === "string" && record.feedback !== "" ? { feedback: record.feedback } : {}
+  };
+}
+function writeStoredCandidates(chat, payload) {
+  chat.header.chat_metadata.candidates = {
+    items: payload.items,
+    generatedAt: payload.generatedAt,
+    ...payload.feedback !== void 0 && payload.feedback !== "" ? { feedback: payload.feedback } : {}
+  };
+}
+function readGuides(chat) {
+  const raw = chat?.header?.chat_metadata?.guides;
+  if (!Array.isArray(raw)) return [];
+  const guides = [];
+  for (const entry of raw) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const record = entry;
+    if (typeof record.text !== "string" || record.text.trim() === "") continue;
+    guides.push({
+      id: typeof record.id === "string" ? record.id : "",
+      text: record.text,
+      ...typeof record.createdAt === "string" ? { createdAt: record.createdAt } : {}
+    });
+  }
+  return guides;
+}
+function assertStCandidateBinding(state, sessionId) {
+  if (typeof sessionId !== "string") return;
+  if (state.sessionBindings?.[sessionId]?.architecture === "agent-tavern") {
+    throw new Error("AgentTavern sessions use the DSH native AgentLoop; candidates are unavailable.");
+  }
+}
+async function runCandidateGeneration(ctx, db, options) {
+  const { state, characterName, chatId, snapshot: snapshot2 } = options;
+  assertStCandidateBinding(state, options.sessionId);
+  if (options.revision !== snapshot2.revision) {
+    throw new ChatRevisionConflictError(options.revision, snapshot2.revision);
+  }
+  const chat = snapshot2.chat;
+  const character = await db.getCharacter(characterName);
+  if (!character) throw new Error(`character '${characterName}' not found`);
+  const feedback = optionalFeedback(options.feedback);
+  const previous = feedback !== void 0 ? readStoredCandidates(chat) : void 0;
+  const request = buildCandidateRequest({
+    character: {
+      name: character.card.data.name || characterName,
+      description: character.card.data.description,
+      personality: character.card.data.personality,
+      scenario: character.card.data.scenario
+    },
+    userName: state.activePersona ?? DEFAULT_USER5,
+    history: chat.messages.filter((m) => !m.is_system).map((m) => ({ name: m.name, isUser: m.is_user, text: m.mes })),
+    guides: readGuides(chat),
+    ...feedback !== void 0 ? { feedback } : {},
+    ...previous !== void 0 ? { previousCandidates: previous.items } : {}
+  });
+  const fallback = ctx.agentDefaultModel.currentSelection();
+  const saved = options.sessionId !== void 0 ? state.modelSelections?.[options.sessionId] : void 0;
+  const explicit = options.provider !== void 0 && options.model !== void 0 ? {
+    provider: options.provider,
+    model: options.model,
+    ...options.reasoningEffort !== void 0 ? { reasoningEffort: options.reasoningEffort } : {}
+  } : void 0;
+  const choice = explicit ?? saved ?? fallback;
+  const provider = choice.provider;
+  const model = choice.model;
+  const reasoningEffort = explicit?.reasoningEffort ?? saved?.reasoningEffort ?? (provider === fallback.provider && model === fallback.model ? fallback.reasoningEffort : void 0);
+  let text = "";
+  for await (const chunk of ctx.llm.stream({
+    provider,
+    model,
+    messages: request.messages.map((m) => ({
+      id: crypto.randomUUID(),
+      role: m.role,
+      content: [{ type: "text", text: m.content }],
+      // 候选请求不带 sessionId：source 仅标注来源，dsh-llm 不校验（同 runGeneration）。
+      source: m.role === "assistant" ? { kind: "model", provider, model } : { kind: "user" }
+    })),
+    system: request.system,
+    ...reasoningEffort !== void 0 ? { reasoningEffort } : {},
+    ...options.signal !== void 0 ? { signal: options.signal } : {}
+  })) {
+    if (chunk.type === "text-delta") text += chunk.text;
+    else if (chunk.type === "finish" && (chunk.reason.kind === "error" || chunk.reason.kind === "aborted")) {
+      throw new Error(chunk.reason.failure?.message ?? "candidate generation failed");
+    }
+  }
+  if (text.trim() === "") throw new Error("model returned no candidates");
+  const items = parseCandidates(text);
+  const generatedAt = (/* @__PURE__ */ new Date()).toISOString();
+  writeStoredCandidates(chat, { items, generatedAt, ...feedback !== void 0 ? { feedback } : {} });
+  const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
+  return { items, generatedAt, revision };
+}
+
+// packages/plugin/src/http/generation-variable-routes.ts
+init_io();
+async function handleCandidatesRoute(ctx, db, req, res) {
+  const body = await readJson(req);
+  const state = await db.getState();
+  assertStGenerationBinding(state, body.sessionId);
+  const characterName = typeof body.character === "string" ? body.character : state.activeCharacter;
+  const chatId = body.chatId;
+  if (!characterName || typeof chatId !== "string") throw new Error("character and chatId are required");
+  if (typeof body.revision !== "string") throw new Error("revision is required");
+  const snapshot2 = await db.getChatSnapshot(characterName, chatId);
+  if (!snapshot2) throw new Error("character or chat not found");
+  const feedback = optionalFeedback(body.feedback);
+  const result = await runCandidateGeneration(ctx, db, {
+    state,
+    characterName,
+    chatId,
+    snapshot: snapshot2,
+    feedback,
+    revision: body.revision,
+    sessionId: typeof body.sessionId === "string" ? body.sessionId : void 0,
+    provider: typeof body.provider === "string" ? body.provider : void 0,
+    model: typeof body.model === "string" ? body.model : void 0,
+    reasoningEffort: typeof body.reasoningEffort === "string" ? body.reasoningEffort : void 0
+  });
+  return sendJson(res, 200, { ok: true, items: result.items, generatedAt: result.generatedAt, revision: result.revision });
+}
+async function handlePreviewRoute(ctx, db, req, res) {
+  return previewGeneration(ctx, req, res, db);
+}
+async function handleMvuRoute(db, req, res, route, method) {
+  return handleMvuApi(req, res, route, method, db);
 }
 
 // packages/plugin/src/http/im.ts
@@ -60583,6 +60617,22 @@ var STORE_ROUTES = [
     name: "branch",
     matches: (route, method) => method === "POST" && route === "branch",
     handle: ({ db, req, res }) => handleBranchRoute(db, req, res)
+  },
+  // Generation and MVU surface: candidates, preview, retry/undo/status.
+  {
+    name: "candidates",
+    matches: (route, method) => method === "POST" && route === "candidates",
+    handle: ({ ctx, db, req, res }) => handleCandidatesRoute(ctx, db, req, res)
+  },
+  {
+    name: "preview",
+    matches: (route, method) => method === "POST" && route === "preview",
+    handle: ({ ctx, db, req, res }) => handlePreviewRoute(ctx, db, req, res)
+  },
+  {
+    name: "mvu",
+    matches: (route, method) => method === "POST" && (route === "mvu/retry" || route === "mvu/receipts/undo") || method === "GET" && route.startsWith("mvu/status/"),
+    handle: ({ db, req, res, route, method }) => handleMvuRoute(db, req, res, route, method)
   }
 ];
 
@@ -60607,37 +60657,6 @@ async function handleApi(ctx, req, res) {
     if (!entry.matches(route, method)) continue;
     await entry.handle({ ctx, req, res, url, route, method, db });
     return;
-  }
-  if (method === "POST" && route === "candidates") {
-    const body = await readJson(req);
-    const state = await db.getState();
-    assertStGenerationBinding(state, body.sessionId);
-    const characterName = typeof body.character === "string" ? body.character : state.activeCharacter;
-    const chatId = body.chatId;
-    if (!characterName || typeof chatId !== "string") throw new Error("character and chatId are required");
-    if (typeof body.revision !== "string") throw new Error("revision is required");
-    const snapshot2 = await db.getChatSnapshot(characterName, chatId);
-    if (!snapshot2) throw new Error("character or chat not found");
-    const feedback = optionalFeedback(body.feedback);
-    const result = await runCandidateGeneration(ctx, db, {
-      state,
-      characterName,
-      chatId,
-      snapshot: snapshot2,
-      feedback,
-      revision: body.revision,
-      sessionId: typeof body.sessionId === "string" ? body.sessionId : void 0,
-      provider: typeof body.provider === "string" ? body.provider : void 0,
-      model: typeof body.model === "string" ? body.model : void 0,
-      reasoningEffort: typeof body.reasoningEffort === "string" ? body.reasoningEffort : void 0
-    });
-    return sendJson(res, 200, { ok: true, items: result.items, generatedAt: result.generatedAt, revision: result.revision });
-  }
-  if (method === "POST" && route === "preview") {
-    return previewGeneration(ctx, req, res, db);
-  }
-  if (method === "POST" && (route === "mvu/retry" || route === "mvu/receipts/undo") || method === "GET" && route.startsWith("mvu/status/")) {
-    return handleMvuApi(req, res, route, method, db);
   }
   if (method === "POST" && route === "card-workbench/rename" || method === "GET" && route === "card-workbench/plans" || method === "POST" && route.startsWith("card-workbench/plans/") && route.endsWith("/decision")) {
     return handleWorkbenchApi(req, res, url, route, method, db);
