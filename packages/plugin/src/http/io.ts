@@ -43,8 +43,8 @@ export function sendJson(res: JsonResponse, status: number, body: unknown): void
 }
 
 /**
- * One 404 shape for the final router fallback and for handlers that own a
- * wrong-method branch (`chat/` has no later matching route).
+ * The shared 404 body for route families: table fallthrough, sub-route
+ * handlers and wrong-method branches all answer with this shape.
  */
 export function sendRouteNotFound(res: JsonResponse, method: string, route: string): void {
   sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })

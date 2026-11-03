@@ -1,7 +1,7 @@
 import type { ModHost } from '../mods/host.js'
 import { modHost } from '../runtime.js'
 import type { PluginContext } from '../host-contract.js'
-import { readJson, sendJson, type HttpRequest, type HttpResponse } from './io.js'
+import { readJson, sendJson, sendRouteNotFound, type HttpRequest, type HttpResponse } from './io.js'
 import { publicError } from './public-error.js'
 
 /**
@@ -25,7 +25,7 @@ export async function handleModsApi(
   route: string,
   method: string,
 ): Promise<void> {
-  const notFound = () => sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+  const notFound = () => sendRouteNotFound(res, method, route)
   const segments = route === 'mods' ? [] : route.slice('mods/'.length).split('/')
   const modId = segments[0] ?? ''
   const subpath = segments.length > 1 ? segments.slice(1).join('/') : ''

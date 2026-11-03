@@ -41,7 +41,7 @@ import type { PluginContext } from '../host-contract.js'
 import { TavernArchitectureConflictError } from '../session/binding.js'
 import { lastSelectedPresetId } from '../session/preset-marker.js'
 import { occupyHostSession } from '../session/trace.js'
-import { readJson, sendJson, type HttpRequest, type HttpResponse } from './io.js'
+import { readJson, sendJson, sendRouteNotFound, type HttpRequest, type HttpResponse } from './io.js'
 
 const CARD_WORKBENCH_PRESET_ID = 'card-workbench'
 
@@ -467,7 +467,7 @@ export async function handleNovelsApi(
   }
 
   const parts = parseNovelRoute(route)
-  if (parts === null) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+  if (parts === null) return sendRouteNotFound(res, method, route)
   const { novelId, subpath } = parts
 
   if (method === 'GET' && subpath === null) {
@@ -673,7 +673,7 @@ export async function handleNovelsApi(
     return
   }
 
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+  return sendRouteNotFound(res, method, route)
 }
 
 /* ------------------------- AgentNovel lifecycle ------------------------- */

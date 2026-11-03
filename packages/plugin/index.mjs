@@ -15604,7 +15604,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.5".trim() : "";
-  const commit = true ? normalizeCommit("82dd597") : void 0;
+  const commit = true ? normalizeCommit("09aae2b") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -49275,10 +49275,10 @@ async function readGuidesSnapshot(db, character, chatId) {
 async function handleGuidesApi(req, res, route, method, db) {
   if ((method === "GET" || method === "POST") && route.startsWith("guides/")) {
     const segments = route.slice("guides/".length).split("/");
-    if (segments.length !== 2) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+    if (segments.length !== 2) return sendRouteNotFound(res, method, route);
     const [characterSegment, chatIdSegment] = segments;
     if (characterSegment === void 0 || chatIdSegment === void 0) {
-      return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+      return sendRouteNotFound(res, method, route);
     }
     const character = decodeURIComponent(characterSegment);
     const chatId = decodeURIComponent(chatIdSegment);
@@ -49305,10 +49305,10 @@ async function handleGuidesApi(req, res, route, method, db) {
   }
   if (method === "DELETE" && route.startsWith("guides/")) {
     const segments = route.slice("guides/".length).split("/");
-    if (segments.length !== 3) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+    if (segments.length !== 3) return sendRouteNotFound(res, method, route);
     const [characterSegment, chatIdSegment, idSegment] = segments;
     if (characterSegment === void 0 || chatIdSegment === void 0 || idSegment === void 0) {
-      return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+      return sendRouteNotFound(res, method, route);
     }
     const character = decodeURIComponent(characterSegment);
     const chatId = decodeURIComponent(chatIdSegment);
@@ -49328,7 +49328,7 @@ async function handleGuidesApi(req, res, route, method, db) {
     await emitChatSaved(character, chatId, revision, snapshot2.chat.messages.length);
     return sendJson(res, 200, { ok: true, guides: removed.guides, revision });
   }
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  return sendRouteNotFound(res, method, route);
 }
 async function handleScriptApi(req, res, route, method, db) {
   if (method === "POST" && route === "script/import") {
@@ -49370,10 +49370,10 @@ async function handleScriptApi(req, res, route, method, db) {
   }
   if (method === "GET" && route.startsWith("script/progress/")) {
     const segments = route.slice("script/progress/".length).split("/");
-    if (segments.length !== 2) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+    if (segments.length !== 2) return sendRouteNotFound(res, method, route);
     const [characterSegment, chatIdSegment] = segments;
     if (characterSegment === void 0 || chatIdSegment === void 0) {
-      return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+      return sendRouteNotFound(res, method, route);
     }
     const character = decodeURIComponent(characterSegment);
     const chatId = decodeURIComponent(chatIdSegment);
@@ -49400,7 +49400,7 @@ async function handleScriptApi(req, res, route, method, db) {
   }
   if (method === "GET" && route.startsWith("script/")) {
     const name2 = decodeURIComponent(route.slice("script/".length));
-    if (name2 === "" || name2.includes("/")) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+    if (name2 === "" || name2.includes("/")) return sendRouteNotFound(res, method, route);
     const script = await getScript(tavernDataRoot(), name2);
     if (!script) return sendJson(res, 404, { ok: false, message: `script '${name2}' not found` });
     return sendJson(res, 200, { ok: true, script: { name: script.name, source: script.source, chunks: script.chunks } });
@@ -49426,7 +49426,7 @@ async function handleScriptApi(req, res, route, method, db) {
     }
     return sendJson(res, 200, { ok: true, character: characterName, scriptName: binding ?? null });
   }
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  return sendRouteNotFound(res, method, route);
 }
 async function handleMvuApi(req, res, route, method, db) {
   if (method === "POST" && route === "mvu/retry") {
@@ -49527,7 +49527,7 @@ async function handleMvuApi(req, res, route, method, db) {
       ...renderedHtml !== void 0 ? { renderedHtml } : {}
     });
   }
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  return sendRouteNotFound(res, method, route);
 }
 async function handleWorkbenchApi(req, res, url, route, method, db) {
   if (method === "POST" && route === "card-workbench/rename") {
@@ -49594,7 +49594,7 @@ async function handleWorkbenchApi(req, res, url, route, method, db) {
       return sendJson(res, 400, { ok: false, message, code: "TAVERN_WORKBENCH" });
     }
   }
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  return sendRouteNotFound(res, method, route);
 }
 function scriptFormatOf(value) {
   if (value === void 0) return void 0;
@@ -55424,7 +55424,7 @@ init_public_error();
 var CHANNELS = ["qq", "weixin", "onebot"];
 var qqInstallInFlight;
 async function handleImApi(req, res, url, route, method, db, runtime) {
-  if (!route.startsWith("im")) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  if (!route.startsWith("im")) return sendRouteNotFound(res, method, route);
   if (method === "GET" && route === "im") {
     const state = await db.getState();
     const disabled = imDisabledByEnv();
@@ -55717,7 +55717,7 @@ ${outputTail}`
     });
     return sendJson(res, 200, { ok: true, peers: peerRows(next.imPeers) });
   }
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  return sendRouteNotFound(res, method, route);
 }
 function peerRows(peers) {
   return Object.entries(peers ?? {}).map(([key, binding]) => {
@@ -55924,7 +55924,7 @@ init_runtime2();
 init_io();
 init_public_error();
 async function handleModsApi(ctx, req, res, url, route, method) {
-  const notFound = () => sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  const notFound = () => sendRouteNotFound(res, method, route);
   const segments = route === "mods" ? [] : route.slice("mods/".length).split("/");
   const modId = segments[0] ?? "";
   const subpath = segments.length > 1 ? segments.slice(1).join("/") : "";
@@ -57167,7 +57167,7 @@ async function handleNovelsApi(ctx, req, res, url, route, method) {
     return sendJson(res, 200, { ok: true, probe, channel: channel?.channel ?? "none" });
   }
   const parts = parseNovelRoute(route);
-  if (parts === null) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  if (parts === null) return sendRouteNotFound(res, method, route);
   const { novelId, subpath } = parts;
   if (method === "GET" && subpath === null) {
     const snapshot2 = await requireNovel(novels, novelId);
@@ -57339,7 +57339,7 @@ async function handleNovelsApi(ctx, req, res, url, route, method) {
     res.end(Buffer.from(exported.bytes));
     return;
   }
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  return sendRouteNotFound(res, method, route);
 }
 function errorCodeText(error) {
   if (typeof error === "object" && error !== null && "code" in error) {
@@ -58564,7 +58564,7 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
       return sendJson(res, 400, { ok: false, message });
     }
   }
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  return sendRouteNotFound(res, method, route);
 }
 async function handleMemoryMaintenanceApi(ctx, req, res, url, route, method, db) {
   if (method === "POST") {
@@ -58598,7 +58598,7 @@ async function handleMemoryMaintenanceApi(ctx, req, res, url, route, method, db)
     const view = await memoryMaintenanceStatus(await maintenanceDeps(db), { character, chatId });
     return sendJson(res, 200, { ok: true, ...view });
   }
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  return sendRouteNotFound(res, method, route);
 }
 async function maintenanceDeps(db) {
   return {
@@ -59309,7 +59309,7 @@ async function handleUpdateApi(ctx, req, res, url, route, method) {
     const snapshot2 = await service.install({ force });
     return sendJson(res, 200, { ok: true, update: snapshot2, changelog: updateChangelog(snapshot2) });
   }
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  return sendRouteNotFound(res, method, route);
 }
 
 // packages/plugin/src/http/routes.ts

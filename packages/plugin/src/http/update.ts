@@ -1,7 +1,7 @@
 import { tavernUpdate } from '../runtime.js'
 import { updateChangelog } from '../update/service.js'
 import type { PluginContext } from '../host-contract.js'
-import { readJson, sendJson, type HttpRequest, type HttpResponse } from './io.js'
+import { readJson, sendJson, sendRouteNotFound, type HttpRequest, type HttpResponse } from './io.js'
 
 /**
  * `/api/dsh-soulmojito/update` 路由族：
@@ -41,5 +41,5 @@ export async function handleUpdateApi(
     const snapshot = await service.install({ force })
     return sendJson(res, 200, { ok: true, update: snapshot, changelog: updateChangelog(snapshot) })
   }
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+  return sendRouteNotFound(res, method, route)
 }

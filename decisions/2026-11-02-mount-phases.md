@@ -87,6 +87,8 @@ export function mountTransport(ctx: PluginContext, deps: MountDeps): void
 - Round 22 全量：`pnpm exec vitest run --no-file-parallelism` → **201 files / 3312 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (435725f)。
 - Round 25：route table 收尾清理——`handleScriptRoute` 更名 `handleTavernScriptRoute`，`handleApi` 最终 404 与 `chat/` 内部错误方法 404 收口到 `sendRouteNotFound`，并移除 `router.ts` 的 `source-file-budget` allowlist（37 行，不再需要例外）。定向 `http-route-table` 15 + `http-public-error` 7 + `http-trust` 23 + `tavern-script-play` 14 + `tavern-command` 54 + `helper-route` 40 + `im-router` 55 = 208 用例通过；`source-file-budget` gate 单跑 PASS。
 - Round 25 全量：`pnpm exec vitest run --no-file-parallelism` → **201 files / 3313 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (82dd597)。
+- Round 26：404 文案统一——`im` / `memory` / `mods` / `novel` / `panel` / `update` 的 19 处 `route not found` 字面量改用 `sendRouteNotFound`；`games/http.ts` 保留本地出口（`cache-control: no-store` 与 `writableEnded` 守卫是游戏面专属）。定向 14 文件 428 用例通过。
+- Round 26 全量：`pnpm exec vitest run --no-file-parallelism` → **201 files / 3313 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (09aae2b)。
 
 ## 删除路径
 

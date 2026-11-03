@@ -25,7 +25,7 @@ import { WeixinChannelError, type WeixinChannelErrorCode } from '../im/weixin/ch
 import type { ImAccountRef, ImChannelId, ImChannelView, ImOwnerEntry, ImPeerBinding, ImPendingPeer, ImScope, ImSenderEntry } from '../im/types.js'
 import { DEFAULT_IM_SETTINGS, IM_MAX_TIMESTAMP_MS, IM_SENDERS_MAX_PER_PEER, imAccountKey, imPeerAlias, imPeerKey, imPeerKeyParts } from '../im/types.js'
 import { HttpError } from './errors.js'
-import { readJson, sendJson, type HttpRequest, type HttpResponse } from './io.js'
+import { readJson, sendJson, sendRouteNotFound, type HttpRequest, type HttpResponse } from './io.js'
 import { INTERNAL_ERROR_MESSAGE, publicErrorMessage } from './public-error.js'
 
 const CHANNELS: readonly ImChannelId[] = ['qq', 'weixin', 'onebot']
@@ -42,7 +42,7 @@ export async function handleImApi(
   db: TavernStore,
   runtime: ImRuntime | undefined,
 ): Promise<void> {
-  if (!route.startsWith('im')) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+  if (!route.startsWith('im')) return sendRouteNotFound(res, method, route)
 
   if (method === 'GET' && route === 'im') {
     const state = await db.getState()
@@ -394,7 +394,7 @@ export async function handleImApi(
     return sendJson(res, 200, { ok: true, peers: peerRows(next.imPeers) })
   }
 
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+  return sendRouteNotFound(res, method, route)
 }
 
 /**

@@ -12,7 +12,7 @@ import { detectLocalQuantizations, inferLocalModelSettings, installLocalEmbedRun
 import { MaintenanceRunConflictError, memoryMaintenanceStatus, startMemoryMaintenance, type MemoryMaintenanceDeps } from '../memory-maintenance.js'
 import type { MaintenanceLlmContext } from '../memory-maintenance.js'
 import { memories, memoryVectors } from '../runtime.js'
-import { readJson, sendJson } from './io.js'
+import { readJson, sendJson, sendRouteNotFound } from './io.js'
 import { readGuidesSnapshot } from './panel.js'
 import { INTERNAL_ERROR_MESSAGE, publicErrorMessage } from './public-error.js'
 import type { NovelApiRequest, NovelApiResponse } from './novel.js'
@@ -279,7 +279,7 @@ export async function handleMemoryEmbedApi(
     }
   }
 
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+  return sendRouteNotFound(res, method, route)
 }
 
 /* ---------- B-3 记忆维护 run 管理面（LWB maintenance 的 dsh 化） ---------- */
@@ -336,7 +336,7 @@ export async function handleMemoryMaintenanceApi(
     return sendJson(res, 200, { ok: true, ...view })
   }
 
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+  return sendRouteNotFound(res, method, route)
 }
 
 /** 维护 run 依赖面：全部走 memoized 实例（单写者纪律）。 */

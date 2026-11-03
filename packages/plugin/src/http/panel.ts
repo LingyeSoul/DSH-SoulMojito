@@ -24,7 +24,7 @@ import {
 import { stripMvuControl } from '../mvu-guard.js'
 import { templatesEnabledFlagValue, templatesEnvEnabled, variableGateway } from '../runtime.js'
 import { assertStGenerationBinding } from '../session/binding.js'
-import { readJson, sendJson } from './io.js'
+import { readJson, sendJson, sendRouteNotFound } from './io.js'
 import { INTERNAL_ERROR_MESSAGE, publicErrorMessage } from './public-error.js'
 import type { NovelApiRequest, NovelApiResponse } from './novel.js'
 
@@ -57,10 +57,10 @@ export async function handleGuidesApi(
 ): Promise<void> {
   if ((method === 'GET' || method === 'POST') && route.startsWith('guides/')) {
     const segments = route.slice('guides/'.length).split('/')
-    if (segments.length !== 2) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+    if (segments.length !== 2) return sendRouteNotFound(res, method, route)
     const [characterSegment, chatIdSegment] = segments
     if (characterSegment === undefined || chatIdSegment === undefined) {
-      return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+      return sendRouteNotFound(res, method, route)
     }
     const character = decodeURIComponent(characterSegment)
     const chatId = decodeURIComponent(chatIdSegment)
@@ -88,10 +88,10 @@ export async function handleGuidesApi(
 
   if (method === 'DELETE' && route.startsWith('guides/')) {
     const segments = route.slice('guides/'.length).split('/')
-    if (segments.length !== 3) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+    if (segments.length !== 3) return sendRouteNotFound(res, method, route)
     const [characterSegment, chatIdSegment, idSegment] = segments
     if (characterSegment === undefined || chatIdSegment === undefined || idSegment === undefined) {
-      return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+      return sendRouteNotFound(res, method, route)
     }
     const character = decodeURIComponent(characterSegment)
     const chatId = decodeURIComponent(chatIdSegment)
@@ -113,7 +113,7 @@ export async function handleGuidesApi(
     return sendJson(res, 200, { ok: true, guides: removed.guides, revision })
   }
 
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+  return sendRouteNotFound(res, method, route)
 }
 
 export async function handleScriptApi(
@@ -170,10 +170,10 @@ export async function handleScriptApi(
   // progress 路由必须先于通用 script/<name> 匹配（同为 script/ 前缀）
   if (method === 'GET' && route.startsWith('script/progress/')) {
     const segments = route.slice('script/progress/'.length).split('/')
-    if (segments.length !== 2) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+    if (segments.length !== 2) return sendRouteNotFound(res, method, route)
     const [characterSegment, chatIdSegment] = segments
     if (characterSegment === undefined || chatIdSegment === undefined) {
-      return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+      return sendRouteNotFound(res, method, route)
     }
     const character = decodeURIComponent(characterSegment)
     const chatId = decodeURIComponent(chatIdSegment)
@@ -201,7 +201,7 @@ export async function handleScriptApi(
 
   if (method === 'GET' && route.startsWith('script/')) {
     const name = decodeURIComponent(route.slice('script/'.length))
-    if (name === '' || name.includes('/')) return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+    if (name === '' || name.includes('/')) return sendRouteNotFound(res, method, route)
     const script = await getScript(tavernDataRoot(), name)
     if (!script) return sendJson(res, 404, { ok: false, message: `script '${name}' not found` })
     return sendJson(res, 200, { ok: true, script: { name: script.name, source: script.source, chunks: script.chunks } })
@@ -229,7 +229,7 @@ export async function handleScriptApi(
     return sendJson(res, 200, { ok: true, character: characterName, scriptName: binding ?? null })
   }
 
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+  return sendRouteNotFound(res, method, route)
 }
 
 export async function handleMvuApi(
@@ -357,7 +357,7 @@ export async function handleMvuApi(
     })
   }
 
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+  return sendRouteNotFound(res, method, route)
 }
 export async function handleWorkbenchApi(
   req: NovelApiRequest,
@@ -445,7 +445,7 @@ export async function handleWorkbenchApi(
     }
   }
 
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+  return sendRouteNotFound(res, method, route)
 }
 
 function scriptFormatOf(value: unknown): 'txt' | 'md' | 'epub' | undefined {
