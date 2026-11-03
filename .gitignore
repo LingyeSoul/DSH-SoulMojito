@@ -16,3 +16,4 @@ dist/
 /.zcode
 # 工具元数据（taste/本地设置），不入库
 /.commandcode
+/.taste-skill

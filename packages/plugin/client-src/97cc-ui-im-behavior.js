@@ -23,9 +23,10 @@
       const t = useTranslate()
       const [draft, setDraft] = useState(null)
       if (settings === null) {
-        return h('section', { className: 'dt-settings-band dt-im-behavior', 'data-im-behavior': 'band' },
-          h('h3', null, t('im.behavior.title')),
-          h('p', { className: 'dt-muted' }, t('nav.loading')))
+        return h('div', { className: 'dt-im-behavior-workspace' },
+          h('section', { className: 'dt-settings-band dt-im-behavior', 'data-im-behavior': 'band' },
+            h('h3', null, t('im.behavior.title')),
+            h('p', { className: 'dt-muted' }, t('nav.loading'))))
       }
       const interval = imSendIntervalValue(settings)
       const value = draft !== null ? draft : (interval === null ? '' : String(interval))
@@ -45,7 +46,7 @@
         }
         persist({ weixinSendIntervalMs: parsed })
       }
-      return h(React.Fragment, null,
+      return h('div', { className: 'dt-im-behavior-workspace' },
         h('section', { className: 'dt-settings-band dt-im-behavior', 'data-im-behavior': 'band' },
           h('h3', null, t('im.behavior.title')),
           h('p', { className: 'dt-hint' }, t('im.behavior.hint')),

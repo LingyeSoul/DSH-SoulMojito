@@ -598,8 +598,9 @@ describe('IM channels panel (client-src source check)', () => {
     expect(rules).toContain('var(--dsw-alias-label-tertiary)')
     expect(rules).toContain('.dt-im-light-error{background:var(--dsw-alias-state-error-primary)')
     expect(rules).toContain('.dt-im-allow{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))')
-    expect(rules).toContain('.dt-im-tabs{display:flex')
+    expect(rules).toContain('.dt-im-tabs{position:sticky;top:0;z-index:2;display:flex')
     expect(rules).toContain('.dt-im-bind-layout{display:grid')
+    expect(rules).toContain('.dt-im-bind-copy{display:flex;flex-direction:column;justify-content:flex-start')
     expect(rules).toContain('.dt-im-peer{display:grid')
     expect(rules).toContain('.dt-im-log-head{display:flex')
     expect(rules).toContain('.dt-im-log-row{display:grid')
@@ -608,6 +609,23 @@ describe('IM channels panel (client-src source check)', () => {
     expect(rules).toContain('.dt-im-log-badge-error{color:var(--dsw-alias-state-error-primary)}')
     // 新色板一律不许出现：状态灯只复用既有 state token。
     expect(rules).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
+  })
+
+  it('keeps IM controls and dense rows usable at tablet and phone widths', () => {
+    const tablet = stylesSource.split('@media(max-width:1100px)')[1]?.split('@media(max-width:700px)')[0] ?? ''
+    const phone = stylesSource.split('@media(max-width:700px)').at(-1) ?? ''
+    expect(tablet).toContain('.dt-im-cards{grid-template-columns:1fr}')
+    expect(tablet).toContain('.dt-im-form{grid-template-columns:repeat(2,minmax(0,1fr))}')
+    expect(phone).toContain('.dt-im-workspace button,.dt-im-workspace select,.dt-im-workspace input:not([type=checkbox]){min-height:44px}')
+    expect(phone).toContain('.dt-im-workspace button{min-inline-size:44px}')
+    expect(stylesSource).toMatch(/\.dt-im-tabs\{[^}]*overflow-x:auto/)
+    expect(phone).toContain('.dt-im-log-levels{overflow-x:auto')
+    expect(phone).toContain('.dt-im-log-row{grid-template-columns:58px 40px minmax(0,1fr)')
+    expect(phone).toContain('.dt-im-log-text{grid-column:1/-1}')
+    expect(stylesSource).toContain('.dt-im-log-badge{min-width:0;text-transform:uppercase;font-size:11px')
+    expect(stylesSource).toContain('.dt-im-behavior-form>button{margin-bottom:24px}')
+    expect(phone).toContain('.dt-im-tabs{gap:16px;padding:0 16px')
+    expect(stylesSource).toContain('@media(prefers-reduced-motion:reduce)')
   })
 
   it('derives the channel light from account state, scanning first', () => {
@@ -693,6 +711,20 @@ describe('IM channels panel (client-src source check)', () => {
     expect(label('session-host')).toBe('Host title')
     expect(label('session-1234567890abcdef')).toBe('session-…')
     expect(label('')).toBe('')
+  })
+
+  it('composes the task workspace without changing channel content (render smoke)', () => {
+    const components = createPanelRender({ characters: ['Alice'], chatLists: { Alice: ['one.jsonl'] } })
+    const useSessions = (selector: (value: { ids: string[]; byId: Record<string, unknown>; phase: string }) => unknown) => selector({ ids: [], byId: {}, phase: 'ready' })
+    const tree = collectNode(components.PanelIm({ useSessions }))
+    expect(tree.classNames).toContain('dt-im-workspace')
+    expect(tree.types.filter((type) => type === 'ImChannelCard')).toHaveLength(3)
+    expect(tree.types).toContain('ImOneBotBand')
+    expect(tree.types).toContain('ImTabs')
+    expect(tree.attrs).toContain('data-im-tab-panel=channels')
+    expect(stylesSource).toContain('.dt-im-workspace{')
+    expect(stylesSource).toContain('.dt-im-tabs{position:sticky')
+    expect(stylesSource).toContain('.dt-im-form{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto')
   })
 
   it('renders only channel setup in the default tab (render smoke)', () => {
@@ -895,6 +927,7 @@ describe('IM channels panel (client-src source check)', () => {
       onError: () => {},
     })
     const behavior = collectNode(behaviorTree)
+    expect(behavior.classNames).toContain('dt-im-behavior-workspace')
     expect(behavior.attrs).toContain('data-im-behavior=band')
     expect(behavior.attrs).toContain('data-im-send-status=weixin:wechat-a')
     expect(behavior.attrs).toContain('data-im-send-status=weixin:wechat-b')
@@ -973,6 +1006,43 @@ describe('IM channels panel (client-src source check)', () => {
       { id: 'snd-member0001', label: '小明' },
       { id: 'snd-member0002', label: 'snd-member0002' },
     ])
+  })
+
+  it('separates routing facts, owner controls, and access settings (render smoke)', () => {
+    const components = createPanelRender({})
+    const peerKey = 'qq:1024:private:synthetic-peer-with-a-deliberately-long-account-identifier'
+    const row = components.ImPeerRow({
+      peer: { key: peerKey, sessionId: 'session-a', scope: 'private', boundBy: 'manual', createdAt: '2026-10-30T10:00:00.000Z', live: true },
+      shared: false,
+      owner: null,
+      senders: [],
+      currentSession: 'session-current',
+      sessionLabel: () => 'Alice',
+      disabled: false,
+      ownerDisabled: false,
+      onRebind: () => {},
+      onUnbind: () => {},
+      onSetOwner: () => {},
+    }) as RenderNode
+    const regions = findNodes(row, 'div')
+    const ownerRegion = regions.find((node) => node.props.className === 'dt-im-peer-owner')
+    expect(ownerRegion).toBeDefined()
+    expect(collectNode(ownerRegion).texts).toContain('im.owner.label(name=im.owner.none)')
+    expect(collectNode(ownerRegion).types).toContain('ImOwnerControls')
+    const mainRegion = regions.find((node) => node.props.className === 'dt-im-peer-main')
+    expect(collectNode(mainRegion).texts).toContain(peerKey)
+    expect(collectNode(mainRegion).texts).not.toContain('im.owner.label(name=im.owner.none)')
+
+    const peers = collectNode(components.ImPeersBand({
+      peers: [], pendingPeers: [], owners: {}, senders: {}, sharedSessions: new Set(), currentSession: 'session-current', sessionLabel: () => '', busy: '',
+      onRebind: () => {}, onBindPending: () => {}, onUnbind: () => {}, onSetOwner: () => {},
+    }))
+    expect(peers.classNames).toContain('dt-settings-band dt-im-bindings')
+    const settings = collectNode(components.ImSettingsBand({
+      settings: { groupRequireMention: true, privateAllow: [], groupAllow: [] },
+      allowDraft: { private: null, group: null }, busy: '', onPatch: () => {}, onAllowDraft: () => {}, onAllowCommit: () => {},
+    }))
+    expect(settings.classNames).toContain('dt-settings-band dt-im-access')
   })
 
   it('renders the shared-session badge and the access form (render smoke)', () => {
@@ -1197,6 +1267,8 @@ describe('IM channels panel (client-src source check)', () => {
     const weixin = collectNode(components.ImPeerRow(row))
     expect(weixin.types).not.toContain('ImOwnerControls')
     expect(weixin.texts.some((text) => text.startsWith('im.owner.label'))).toBe(false)
+    expect(weixin.classNames).toContain('dt-im-peer dt-im-peer-ownerless')
+    expect(stylesSource).toContain('.dt-im-peer.dt-im-peer-ownerless{grid-template-columns:minmax(0,1fr) auto}')
 
     const qq = collectNode(components.ImPeerRow({
       ...row,
@@ -1204,6 +1276,7 @@ describe('IM channels panel (client-src source check)', () => {
     }))
     expect(qq.types).toContain('ImOwnerControls')
     expect(qq.texts).toContain('im.owner.label(name=im.owner.selfName)')
+    expect(qq.classNames).not.toContain('dt-im-peer dt-im-peer-ownerless')
   })
 
   it('marker does not match near-miss samples (negative sample)', () => {

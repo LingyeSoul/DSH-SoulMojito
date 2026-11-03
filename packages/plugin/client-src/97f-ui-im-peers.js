@@ -7,7 +7,7 @@
       const t = useTranslate()
       const current = typeof currentSession === 'string' ? currentSession : ''
       const empty = peers.length === 0 && pendingPeers.length === 0
-      return h('section', { className: 'dt-settings-band' },
+      return h('section', { className: 'dt-settings-band dt-im-bindings' },
         h('h3', null, t('im.peers.title')),
         h('p', { className: 'dt-hint' }, t('im.peers.hint')),
         pendingPeers.length > 0
@@ -52,7 +52,7 @@
       // 微信是私聊专用通道，不参与主人指定（决策 2026-11-01-im-global-owner-and-commands）：
       // 整个主人区块不渲染，避免用户对着一个必定被服务端拒绝的控件。
       const ownerVisible = imPeerParts(peer.key)?.channel !== 'weixin'
-      return h('div', { className: 'dt-im-peer', 'data-im-peer': peer.key },
+      return h('div', { className: `dt-im-peer${ownerVisible ? '' : ' dt-im-peer-ownerless'}`, 'data-im-peer': peer.key },
         h('div', { className: 'dt-im-peer-main' },
           h('div', { className: 'dt-im-peer-head' },
             h('code', { className: 'dt-im-peer-key' }, peer.key),
@@ -62,19 +62,18 @@
             t('im.peers.session', { session: sessionLabel(peer.sessionId) }),
             shared ? ` · ${t('im.peers.sharedHint')}` : ''),
           peer.live === false ? h('p', { className: 'dt-hint dt-im-peer-closed' }, t('im.peers.closed')) : null,
-          ownerVisible
-            ? h('p', { className: 'dt-hint dt-im-owner-line' }, t('im.owner.label', { name: imOwnerNameOf(peer, owner ?? null, t) }))
-            : null,
-          ownerVisible
-            ? h(ImOwnerControls, {
+          h('p', { className: 'dt-hint' }, t('im.peers.boundAt', { at: new Date(peer.createdAt).toLocaleString() }))),
+        ownerVisible
+          ? h('div', { className: 'dt-im-peer-owner' },
+            h('p', { className: 'dt-hint dt-im-owner-line' }, t('im.owner.label', { name: imOwnerNameOf(peer, owner ?? null, t) })),
+            h(ImOwnerControls, {
               peer,
               owner: owner ?? null,
               senders: senders ?? [],
               disabled: ownerDisabled === true,
               onSetOwner,
-            })
-            : null,
-          h('p', { className: 'dt-hint' }, t('im.peers.boundAt', { at: new Date(peer.createdAt).toLocaleString() }))),
+            }))
+          : null,
         h('div', { className: 'dt-im-peer-actions' },
           h(Button, {
             size: 'sm',

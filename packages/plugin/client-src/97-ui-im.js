@@ -566,7 +566,7 @@
           h(ImOneBotBand, { endpoint, busy, disabled: !available, onCreate: createOneBot }))
       }
 
-      return h(React.Fragment, null,
+      return h('div', { className: 'dt-im-workspace' },
         h('section', { className: 'dt-settings-band dt-im-intro' },
           h('h3', null, t('im.hint.title')),
           h('p', { className: 'dt-hint' }, t('im.hint')),
@@ -709,7 +709,7 @@
     function ImSettingsBand({ settings, allowDraft, busy, onPatch, onAllowDraft, onAllowCommit }) {
       const t = useTranslate()
       if (settings === null) {
-        return h('section', { className: 'dt-settings-band' },
+        return h('section', { className: 'dt-settings-band dt-im-access' },
           h('h3', null, t('im.settings.title')),
           h('p', { className: 'dt-muted' }, t('nav.loading')))
       }
@@ -718,7 +718,7 @@
         if (draft !== null) return draft
         return (scope === 'private' ? settings.privateAllow : settings.groupAllow).join(', ')
       }
-      return h('section', { className: 'dt-settings-band' },
+      return h('section', { className: 'dt-settings-band dt-im-access' },
         h('h3', null, t('im.settings.title')),
         h('p', { className: 'dt-hint' }, t('im.settings.hint')),
         h('div', { className: 'dt-im-settings' },
