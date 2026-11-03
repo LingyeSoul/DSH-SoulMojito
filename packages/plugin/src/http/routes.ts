@@ -24,7 +24,7 @@ import {
 import {
   handleChatRoute,
   handleGenerateRoute,
-  handleScriptRoute,
+  handleTavernScriptRoute,
 } from './chat-generation-routes.js'
 import {
   handleAuditRoute,
@@ -566,6 +566,6 @@ export const STORE_ROUTES: readonly RouteEntry<StoreRouteContext>[] = [
   {
     name: 'script-run',
     matches: (route, method) => method === 'POST' && route === 'script',
-    handle: ({ ctx, db, req, res }) => handleScriptRoute(ctx, req, res, db),
+    handle: ({ ctx, db, req, res }) => handleTavernScriptRoute(ctx, req, res, db),
   },
 ]

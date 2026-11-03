@@ -15604,7 +15604,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.5".trim() : "";
-  const commit = true ? normalizeCommit("1d405e4") : void 0;
+  const commit = true ? normalizeCommit("82dd597") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -16856,6 +16856,9 @@ function sendJson(res, status2, body) {
   res.statusCode = status2;
   res.setHeader("content-type", "application/json; charset=utf-8");
   res.end(JSON.stringify(body));
+}
+function sendRouteNotFound(res, method, route) {
+  sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
 }
 function readJson(req, maxBytes) {
   const limit = maxBytes ?? DEFAULT_MAX_BYTES;
@@ -43885,12 +43888,12 @@ async function handleChatRoute(db, req, res, url, route, method) {
     }
     return sendJson(res, deleted ? 200 : 404, deleted ? { ok: true } : { ok: false, message: "chat not found" });
   }
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  return sendRouteNotFound(res, method, route);
 }
 async function handleGenerateRoute(ctx, req, res, db) {
   return generate(ctx, req, res, db);
 }
-async function handleScriptRoute(ctx, req, res, db) {
+async function handleTavernScriptRoute(ctx, req, res, db) {
   return runTavernScript(ctx, req, res, db);
 }
 
@@ -59742,7 +59745,7 @@ var STORE_ROUTES = [
   {
     name: "script-run",
     matches: (route, method) => method === "POST" && route === "script",
-    handle: ({ ctx, db, req, res }) => handleScriptRoute(ctx, req, res, db)
+    handle: ({ ctx, db, req, res }) => handleTavernScriptRoute(ctx, req, res, db)
   }
 ];
 
@@ -59768,7 +59771,7 @@ async function handleApi(ctx, req, res) {
     await entry.handle({ ctx, req, res, url, route, method, db });
     return;
   }
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  return sendRouteNotFound(res, method, route);
 }
 
 // packages/plugin/src/im/runtime.ts

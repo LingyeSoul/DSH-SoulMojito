@@ -42,6 +42,14 @@ export function sendJson(res: JsonResponse, status: number, body: unknown): void
   res.end(JSON.stringify(body))
 }
 
+/**
+ * One 404 shape for the final router fallback and for handlers that own a
+ * wrong-method branch (`chat/` has no later matching route).
+ */
+export function sendRouteNotFound(res: JsonResponse, method: string, route: string): void {
+  sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+}
+
 export function readJson(req: JsonRequest, maxBytes?: number): Promise<Record<string, unknown>> {
   const limit = maxBytes ?? DEFAULT_MAX_BYTES
   const contentType = headerValue(req.headers?.['content-type'])

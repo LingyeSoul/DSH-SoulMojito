@@ -1,6 +1,6 @@
 import type { PluginContext } from '../host-contract.js'
 import { store } from '../runtime.js'
-import { sendJson, type HttpRequest, type HttpResponse } from './io.js'
+import { sendRouteNotFound, type HttpRequest, type HttpResponse } from './io.js'
 import { EARLY_STORE_ROUTES, PRE_STORE_ROUTES, STORE_ROUTES } from './routes.js'
 
 // The body handler moved to `body-api.ts`; the router module keeps re-exporting
@@ -33,5 +33,5 @@ export async function handleApi(ctx: PluginContext, req: HttpRequest, res: HttpR
     return
   }
 
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+  return sendRouteNotFound(res, method, route)
 }

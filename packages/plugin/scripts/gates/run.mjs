@@ -68,7 +68,6 @@ const SOURCE_BUDGET_ALLOWLIST = [
   { path: 'packages/plugin/src/agent-tavern/body-runtime-settlement.ts', reason: 'settlement, crash recovery and the deferred post-turn completion share one durable two-phase marker state machine; a split would duplicate the settle/finish decision' },
   { path: 'packages/plugin/src/agent-tavern/body-wiring.ts', reason: 'single host body wiring surface: deps, projection, turn-stopping and turn/end chains share one lifecycle; the deferred settle chain must stay beside the restore chain' },
   { path: 'packages/plugin/src/games/builtin/', prefix: true, reason: 'one built-in game engine per file' },
-  { path: 'packages/plugin/src/http/router.ts', reason: 'single HTTP dispatch surface; split when route groups move' },
   { path: 'packages/plugin/src/http/novel.ts', reason: 'single AgentNovel HTTP surface; import/revision routes share the same creation gate and error mapping' },
   { path: 'packages/plugin/src/memory-maintenance.ts', reason: 'maintenance run loop and tool surface kept together' },
   { path: 'packages/plugin/src/mods/host.ts', reason: 'mod host lifecycle and API adapter kept together' },

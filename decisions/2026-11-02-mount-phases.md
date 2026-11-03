@@ -85,6 +85,8 @@ export function mountTransport(ctx: PluginContext, deps: MountDeps): void
 - Round 21 全量：`pnpm exec vitest run --no-file-parallelism` → **201 files / 3312 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (5e91926)。
 - Round 22 stage 1：update 自检、games 桥、IM 通道与 Mod 宿主从 `apply()` 搬进 `mount.ts` 的 `mountUpdateCheck` / `mountGames` / `mountIm` / `mountMods`。仅把句柄读取改为 `deps.store` / `deps.getImRuntime`，其余日志、effect 标签、注释、async 时序与 disposer 注册顺序原样；`apply()` 以 update → games → IM → mods → transport 的顺序调用，`index.ts` 从 309 行降到 169 行。复核 126/126 行逐字一致，定向 274 用例通过。
 - Round 22 全量：`pnpm exec vitest run --no-file-parallelism` → **201 files / 3312 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (435725f)。
+- Round 25：route table 收尾清理——`handleScriptRoute` 更名 `handleTavernScriptRoute`，`handleApi` 最终 404 与 `chat/` 内部错误方法 404 收口到 `sendRouteNotFound`，并移除 `router.ts` 的 `source-file-budget` allowlist（37 行，不再需要例外）。定向 `http-route-table` 15 + `http-public-error` 7 + `http-trust` 23 + `tavern-script-play` 14 + `tavern-command` 54 + `helper-route` 40 + `im-router` 55 = 208 用例通过；`source-file-budget` gate 单跑 PASS。
+- Round 25 全量：`pnpm exec vitest run --no-file-parallelism` → **201 files / 3313 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (82dd597)。
 
 ## 删除路径
 

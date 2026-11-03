@@ -8,7 +8,7 @@ import type { PluginContext } from '../host-contract.js'
 import { emitChatSaved } from '../mods/events.js'
 import { displayTexts } from '../prompt-context.js'
 import { normalizeChatId } from '../session/trace.js'
-import { readJson, sendJson, type HttpRequest, type HttpResponse } from './io.js'
+import { readJson, sendJson, sendRouteNotFound, type HttpRequest, type HttpResponse } from './io.js'
 import { asChatLog } from './json-records.js'
 
 export async function handleChatRoute(
@@ -81,7 +81,7 @@ export async function handleChatRoute(
   }
   // No later branch matches a `chat/` route, so the renderer's 404 is the same
   // one the old if-chain reached after falling out of the block.
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` })
+  return sendRouteNotFound(res, method, route)
 }
 
 export async function handleGenerateRoute(
@@ -93,7 +93,7 @@ export async function handleGenerateRoute(
   return generate(ctx, req, res, db)
 }
 
-export async function handleScriptRoute(
+export async function handleTavernScriptRoute(
   ctx: PluginContext,
   req: HttpRequest,
   res: HttpResponse,
