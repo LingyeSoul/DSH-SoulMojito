@@ -71,6 +71,8 @@ export function mountTransport(ctx: PluginContext, deps: MountDeps): void
 - Round 14 全量：`pnpm exec vitest run --no-file-parallelism` → **200 files / 3297 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (409f62b)。
 - Round 15 stage 1 定向：`tavern-candidates` 22 + `tavern-mvu` 32 + `preview-generation` 6 + `mvu-undo` 17 + `card-workbench-plans` 31 + `tavern-mods` 78 + `im-router` 55 = 241 用例通过；独立复核另跑 77 + 52 用例并做 24/24 + 1/1 + 1/1 行逐字比对；同一条 tsc 命令无输出。
 - Round 15 全量：`pnpm exec vitest run --no-file-parallelism` → **200 files / 3297 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (8c4c3e8)。
+- Round 16 风险修补：新增 `packages/plugin/tests/http-route-table.spec.ts` 8 条真实 `apply()` HTTP 用例——world import、persona/group CRUD、preset 写读、bindings/prune、branch、character export、`STORE_ROUTES` 顺序快照、错误方法回落 404。此前 persona/group 写路径、`import/world`、`GET preset/*`、`bindings/prune`、`branch`、`export/character` 的测试空白已补上。
+- Round 16 全量：`pnpm exec vitest run --no-file-parallelism` → **201 files / 3305 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (b79d8c1)。
 
 ## 删除路径
 
