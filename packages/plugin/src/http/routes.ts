@@ -22,6 +22,11 @@ import {
   handleCharacterUpdateRoute,
 } from './character-routes.js'
 import {
+  handleChatRoute,
+  handleGenerateRoute,
+  handleScriptRoute,
+} from './chat-generation-routes.js'
+import {
   handleAuditRoute,
   handleAvatarRoute,
   handleCharacterReadRoute,
@@ -29,6 +34,18 @@ import {
   handleProjectionReplayRoute,
   handleProjectionRoute,
 } from './domain-routes.js'
+import {
+  handleCardScriptsRoute,
+  handleDisplayRoute,
+  handleFrontendGenerateRoute,
+  handleFrontendLatestRoute,
+  handleFrontendStorageRoute,
+  handleHelperBindRoute,
+  handleHelperRoute,
+  handleHelperUnbindRoute,
+  handleIdbGetRoute,
+  handleIdbPutRoute,
+} from './frontend-routes.js'
 import {
   handleCandidatesRoute,
   handleMvuRoute,
@@ -481,5 +498,74 @@ export const STORE_ROUTES: readonly RouteEntry<StoreRouteContext>[] = [
     name: 'regex-sync-presets',
     matches: (route, method) => method === 'POST' && route === 'regex/sync-presets',
     handle: ({ db, res }) => handleRegexSyncPresetsRoute(db, res),
+  },
+  // Helper binding handshake and the sandboxed frontend reading surface; order
+  // mirrors the old if-chain.
+  {
+    name: 'helper-bind',
+    matches: (route, method) => method === 'POST' && route === 'helper/bind',
+    handle: ({ db, req, res }) => handleHelperBindRoute(db, req, res),
+  },
+  {
+    name: 'helper-unbind',
+    matches: (route, method) => method === 'POST' && route === 'helper/unbind',
+    handle: ({ req, res }) => handleHelperUnbindRoute(req, res),
+  },
+  {
+    name: 'helper',
+    matches: (route, method) => method === 'POST' && route === 'helper',
+    handle: ({ db, req, res }) => handleHelperRoute(req, res, db),
+  },
+  {
+    name: 'frontend-generate',
+    matches: (route, method) => method === 'POST' && route === 'frontend/generate',
+    handle: ({ db, req, res }) => handleFrontendGenerateRoute(req, res, db),
+  },
+  {
+    name: 'card-scripts',
+    matches: (route, method) => method === 'GET' && route === 'card/scripts',
+    handle: ({ db, res, url }) => handleCardScriptsRoute(db, res, url),
+  },
+  {
+    name: 'frontend-idb-get',
+    matches: (route, method) => method === 'GET' && route === 'frontend/idb/get',
+    handle: ({ res, url }) => handleIdbGetRoute(res, url),
+  },
+  {
+    name: 'frontend-idb-put',
+    matches: (route, method) => method === 'POST' && route === 'frontend/idb/put',
+    handle: ({ req, res, url }) => handleIdbPutRoute(req, res, url),
+  },
+  {
+    name: 'frontend-storage',
+    matches: (route, method) => method === 'GET' && route === 'frontend/storage',
+    handle: ({ db, res, url }) => handleFrontendStorageRoute(db, res, url),
+  },
+  {
+    name: 'frontend-latest',
+    matches: (route, method) => method === 'GET' && route === 'frontend/latest',
+    handle: ({ db, res, url }) => handleFrontendLatestRoute(db, res, url),
+  },
+  {
+    name: 'display',
+    matches: (route, method) => method === 'GET' && route === 'display',
+    handle: ({ db, res, url }) => handleDisplayRoute(db, res, url),
+  },
+  // `chat/<id>` dispatches GET/PUT/PATCH/DELETE itself; no later branch matches
+  // the prefix, so the handler owns the wrong-method 404 as well.
+  {
+    name: 'chat',
+    matches: (route, _method) => route.startsWith('chat/'),
+    handle: ({ db, req, res, url, route, method }) => handleChatRoute(db, req, res, url, route, method),
+  },
+  {
+    name: 'generate',
+    matches: (route, method) => method === 'POST' && route === 'generate',
+    handle: ({ ctx, db, req, res }) => handleGenerateRoute(ctx, req, res, db),
+  },
+  {
+    name: 'script-run',
+    matches: (route, method) => method === 'POST' && route === 'script',
+    handle: ({ ctx, db, req, res }) => handleScriptRoute(ctx, req, res, db),
   },
 ]

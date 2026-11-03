@@ -81,6 +81,8 @@ export function mountTransport(ctx: PluginContext, deps: MountDeps): void
 - Round 19 全量：`pnpm exec vitest run --no-file-parallelism` → **201 files / 3308 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (94dbc15)。
 - Round 20 stage 1：`variables` GET/PUT、`regex` GET/PUT、`import/regex`、`regex/sync-cards`、`regex/sync-presets` 搬进 `packages/plugin/src/http/variables-regex-routes.ts`；七个表项按旧 if-chain 顺序追加在 `preset-export` 之后。复核补充了 variables 读写、regex 读写、`import/regex` 与 `DELETE variables` / `POST regex` 错误方法的 HTTP 用例；`http-route-table.spec.ts` 增到 12 条。
 - Round 20 全量：`pnpm exec vitest run --no-file-parallelism` → **201 files / 3309 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (0f8ac5d)。
+- Round 21 stage 1：`helper/bind`、`helper/unbind`、`helper`、`frontend/generate`、`card/scripts`、`frontend/idb/get`、`frontend/idb/put`、`frontend/storage`、`frontend/latest`、`display` 搬进 `packages/plugin/src/http/frontend-routes.ts`；`chat/<id>`、`generate`、`script` 搬进 `packages/plugin/src/http/chat-generation-routes.ts`。十三个表项按旧 if-chain 顺序追加在 `regex-sync-presets` 之后；`chat` 表项匹配全部方法，由处理器保留旧 fallthrough 的同款 404。复核补充了 frontend 读面、helper 绑定/解绑、chat 读与 `GET helper` / `POST display` / `POST chat/<id>` / `GET generate` 的 HTTP 用例；`http-route-table.spec.ts` 增到 15 条。
+- Round 21 全量：`pnpm exec vitest run --no-file-parallelism` → **201 files / 3312 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (5e91926)。
 
 ## 删除路径
 
@@ -88,7 +90,7 @@ export function mountTransport(ctx: PluginContext, deps: MountDeps): void
 
 ## 未完成
 
-- route table 十三刀已落（update / games / im；bootstrap / store-revision / state-slices；avatar / character 读 / projection / compact / guides / script / audit / novels / mods；body；character 写/删/导出；persona/group；asset import/preset；models/model/state；binding/chats/branch；candidates/preview/mvu；card-workbench/memory/prompts；world/preset delete/export；variables/regex）；其余 if-chain（helper/frontend/chat/generate 等）仍是后续。
+- route table 十四刀已落（update / games / im；bootstrap / store-revision / state-slices；avatar / character 读 / projection / compact / guides / script / audit / novels / mods；body；character 写/删/导出；persona/group；asset import/preset；models/model/state；binding/chats/branch；candidates/preview/mvu；card-workbench/memory/prompts；world/preset delete/export；variables/regex；helper/frontend/card-scripts/display/chat/generate/script）。`handleApi` 只剩最终 404，不再有域 if-chain。
 - games / IM / Mods / update 仍留在 `index.ts`；它们各自有生命周期与 disposer，抽相位时要先定义清理顺序。
 - `MountDeps` 只是阶段句柄，不是新的 service locator；静态协作者继续直接 import。
 
@@ -104,5 +106,5 @@ export function mountTransport(ctx: PluginContext, deps: MountDeps): void
 - 路由表第八刀（Round 13 stage 1）：`GET models`、`POST model`、`POST state` 搬进 `packages/plugin/src/http/panel-state-routes.ts`；三个表项插回 `character-export` 之后、`persona-import` 之前，并把 Round 12 的 asset import 表项移到 persona/group 之前，使整张 `STORE_ROUTES` 恢复旧 if-chain 顺序。逐字比对 1/1、21/21、94/94 行一致。
 - 路由表第九刀（Round 14 stage 1）：`POST/DELETE binding`、`POST bindings/prune`、`GET/POST chats`、`POST branch` 搬进 `packages/plugin/src/http/session-routes.ts`；六个表项按旧 if-chain 顺序追加在 `group-delete` 之后。逐字比对 127/127 行一致；`bindings/prune` 与 `branch` 仍没有 HTTP 级用例。
 - 路由表第十刀（Round 15 stage 1）：`POST candidates`、`POST preview`、`MVU retry/undo/status` 搬进 `packages/plugin/src/http/generation-variable-routes.ts`；三个表项按旧 if-chain 顺序追加在 `branch` 之后，MVU 条件保留 `POST retry|undo + GET status/` 复合形态。逐字比对 24/24、1/1、1/1 行一致，原有中文注释随函数迁入。
-- 剩余 if-chain 域（本刀未搬）：`card-workbench/*` / `memory/*` / `prompts` / `world/*` / `export/world` / `preset` delete/export / `variables` / `regex` / `helper*` / `generate` / `frontend/*` / `chat/*` / `display` 等；下一刀按 `store()` 依赖与顺序约束继续迁入表。
+- 剩余 if-chain 域：无。`handleApi` 末尾只保留统一的 `route not found` 404；`chat/` 的错误方法由 `handleChatRoute` 在表内返回同款文案，因为其后没有能匹配该前缀的分支。
 - 每增加一个 mount phase，必须在决策或代码注释里写明它相对于 body/anchor/prompt 的顺序约束；顺序不能只靠阅读调用栈。

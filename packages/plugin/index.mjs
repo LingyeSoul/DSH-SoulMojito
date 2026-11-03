@@ -13627,12 +13627,12 @@ function createTemplateRuntime(options) {
   const { host, stores, onWarning } = options;
   const warn4 = onWarning ?? (() => {
   });
-  const variables3 = new TemplateVariableSystem(stores);
+  const variables2 = new TemplateVariableSystem(stores);
   const defines = {};
   const getwiDepth = { current: 0 };
   host.onWarning = warn4;
   const buildEnv = (extra) => {
-    const env = createTemplateEnv({ vars: variables3, host, defines, getwiDepth });
+    const env = createTemplateEnv({ vars: variables2, host, defines, getwiDepth });
     if (extra !== void 0) Object.assign(env, extra);
     return env;
   };
@@ -13651,7 +13651,7 @@ function createTemplateRuntime(options) {
   const evaluate = (condition) => evaluateCondition(condition);
   const render = (text, extraEnv) => renderText(text, extraEnv);
   return {
-    variables: variables3,
+    variables: variables2,
     defines,
     renderText,
     evaluateCondition,
@@ -13661,7 +13661,7 @@ function createTemplateRuntime(options) {
     applyRenderInjections: (text, entries) => applyRenderInjections(text, entries, render, buildEnv(), evaluate, warn4),
     parseInitialVariables: (content) => parseInitialVariables(content, warn4),
     setInitialVariables: (data) => {
-      variables3.setInitialVariables(data);
+      variables2.setInitialVariables(data);
     }
   };
 }
@@ -14270,21 +14270,21 @@ async function applyMvuSettlementRules(chat, card, before) {
   if (source === void 0 && before.$rules === void 0 && live?.$rules === void 0) {
     return { failures: [], notes: {} };
   }
-  const variables3 = live ?? {};
+  const variables2 = live ?? {};
   const failures = [];
-  if (!mvuValuesEqual(variables3.$rules, before.$rules)) {
-    if (before.$rules !== void 0) variables3.$rules = deepClone(before.$rules);
-    else delete variables3.$rules;
+  if (!mvuValuesEqual(variables2.$rules, before.$rules)) {
+    if (before.$rules !== void 0) variables2.$rules = deepClone(before.$rules);
+    else delete variables2.$rules;
     failures.push("$rules: guard readonly: the rules subtree is card-declared and cannot be settled");
   }
   if (source === void 0) {
-    if (live === void 0 && Object.keys(variables3).length > 0) metadata.variables = variables3;
+    if (live === void 0 && Object.keys(variables2).length > 0) metadata.variables = variables2;
     return { failures, notes: {} };
   }
   if ("invalid" in source) return { failures: [...failures, source.invalid], notes: {} };
   const schema = readMvuSchema(chat, card, before);
-  const run = await runMvuRules(source.rules, { ...schema !== void 0 ? { schema } : {}, tree: variables3 });
-  if (live === void 0 && Object.keys(variables3).length > 0) metadata.variables = variables3;
+  const run = await runMvuRules(source.rules, { ...schema !== void 0 ? { schema } : {}, tree: variables2 });
+  if (live === void 0 && Object.keys(variables2).length > 0) metadata.variables = variables2;
   return { failures: [...failures, ...run.failures], notes: run.notes };
 }
 function mergeMvuRuleNotes(guardNotes, ruleNotes) {
@@ -14583,29 +14583,29 @@ function applyMvuSettlementGuard(chat, card, before) {
   const failures = [];
   const notes = {};
   const metadata = chat.header.chat_metadata;
-  const variables3 = plainObject3(metadata.variables);
+  const variables2 = plainObject3(metadata.variables);
   const schema = readMvuSchema(chat, card, before);
-  if (schema === void 0 || variables3 === void 0) return { failures, notes };
+  if (schema === void 0 || variables2 === void 0) return { failures, notes };
   const schemaBefore = plainObject3(before.$schema);
-  const schemaLive = plainObject3(variables3.$schema);
+  const schemaLive = plainObject3(variables2.$schema);
   if (!valuesEqual(schemaBefore, schemaLive)) {
-    if (schemaBefore !== void 0) variables3.$schema = deepClone(schemaBefore);
-    else delete variables3.$schema;
+    if (schemaBefore !== void 0) variables2.$schema = deepClone(schemaBefore);
+    else delete variables2.$schema;
     failures.push(`$schema: guard readonly: the schema subtree is card-declared and cannot be settled`);
   }
-  for (const change of diffVariables(before, variables3)) {
+  for (const change of diffVariables(before, variables2)) {
     const current = getMvuTreePath(before, change.name);
     const value = "after" in change ? change.after : void 0;
     const result = guardMvuWrite(schema, change.name, value, current);
     if (!result.ok) {
-      revertMvuTreePath(variables3, change.name, before);
+      revertMvuTreePath(variables2, change.name, before);
       failures.push(`${change.name}: guard ${result.kind}: ${result.reason}`);
       continue;
     }
     if (result.note !== void 0) notes[change.name] = result.note;
-    if (value !== void 0 && !valuesEqual(result.value, value)) setMvuTreePath(variables3, change.name, result.value);
+    if (value !== void 0 && !valuesEqual(result.value, value)) setMvuTreePath(variables2, change.name, result.value);
   }
-  if (Object.keys(variables3).length === 0 && Object.keys(before).length === 0) delete metadata.variables;
+  if (Object.keys(variables2).length === 0 && Object.keys(before).length === 0) delete metadata.variables;
   return { failures, notes };
 }
 function createMvuRuntime(input, stores) {
@@ -14860,16 +14860,16 @@ async function undoMvuStSettlement(db, options) {
   const target = refuseUndo(latestValidMvuReceipt(receipts), receipts);
   const restores = planMvuUndoRestores(target.receipt);
   const metadata = chat.header.chat_metadata;
-  const variables3 = plainObject3(metadata.variables) ?? {};
-  screenMvuUndoRestores(readMvuSchema(chat, (await db.getCharacter(characterName))?.card, variables3), restores, (path12) => getMvuTreePath(variables3, path12));
-  applyMvuUndoRestores(variables3, restores);
-  if (Object.keys(variables3).length === 0) delete metadata.variables;
-  else metadata.variables = variables3;
+  const variables2 = plainObject3(metadata.variables) ?? {};
+  screenMvuUndoRestores(readMvuSchema(chat, (await db.getCharacter(characterName))?.card, variables2), restores, (path12) => getMvuTreePath(variables2, path12));
+  applyMvuUndoRestores(variables2, restores);
+  if (Object.keys(variables2).length === 0) delete metadata.variables;
+  else metadata.variables = variables2;
   const marked = markMvuReceiptUndone(chat, target.index, options.at);
   const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
   return { receipt: marked, revision, restores };
 }
-async function undoMvuAgentSettlement(variables3, db, options) {
+async function undoMvuAgentSettlement(variables2, db, options) {
   const { characterName, chatId, snapshot: snapshot2 } = options;
   const chat = snapshot2.chat;
   const receipts = readMvuReceipts(chat);
@@ -14880,7 +14880,7 @@ async function undoMvuAgentSettlement(variables3, db, options) {
   const entries = /* @__PURE__ */ new Map();
   for (const restore of restores) {
     try {
-      entries.set(restore.path, await variables3.get("chat", chatId, restore.path));
+      entries.set(restore.path, await variables2.get("chat", chatId, restore.path));
     } catch (error) {
       storeFailures.push(`${restore.path}: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -14897,7 +14897,7 @@ async function undoMvuAgentSettlement(variables3, db, options) {
   for (const restore of restores) {
     if ("value" in restore) continue;
     const entry = entries.get(restore.path);
-    if (entry !== void 0) await variables3.delete("chat", chatId, restore.path, entry.revision);
+    if (entry !== void 0) await variables2.delete("chat", chatId, restore.path, entry.revision);
   }
   const updates = [];
   for (const restore of restores) {
@@ -14907,7 +14907,7 @@ async function undoMvuAgentSettlement(variables3, db, options) {
     if (current !== void 0 && mvuValuesEqual(current, restore.value)) continue;
     updates.push({ name: restore.path, value: deepClone(restore.value), ...entry !== void 0 ? { expectedRevision: entry.revision } : {} });
   }
-  if (updates.length > 0) await variables3.patch("chat", chatId, updates);
+  if (updates.length > 0) await variables2.patch("chat", chatId, updates);
   const marked = markMvuReceiptUndone(chat, target.index, options.at);
   const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
   return { receipt: marked, revision, restores };
@@ -15003,10 +15003,10 @@ function setStoredReceiptsUndoneAt(chat, indexes, undoneAt) {
 function cloneChatVariablesForReceipts(chat) {
   return deepClone(plainObject3(chat.header.chat_metadata.variables) ?? {});
 }
-function commitChatVariablesAfterReceipts(chat, variables3) {
+function commitChatVariablesAfterReceipts(chat, variables2) {
   const metadata = chat.header.chat_metadata;
-  if (Object.keys(variables3).length === 0) delete metadata.variables;
-  else metadata.variables = variables3;
+  if (Object.keys(variables2).length === 0) delete metadata.variables;
+  else metadata.variables = variables2;
 }
 function planMvuRedoRestores(receipt) {
   if (receipt.status === "updated" && receipt.changes.length === 0) {
@@ -15031,11 +15031,11 @@ function undoMvuReceipts(chat, receipts, guard, options) {
     restores.push(...planMvuUndoRestores(targets[index].receipt));
   }
   screenMvuUndoRestores(guard.schema, restores, guard.currentOf);
-  const variables3 = cloneChatVariablesForReceipts(chat);
-  applyMvuUndoRestores(variables3, restores);
+  const variables2 = cloneChatVariablesForReceipts(chat);
+  applyMvuUndoRestores(variables2, restores);
   const at = options?.at ?? (/* @__PURE__ */ new Date()).toISOString();
   const marked = setStoredReceiptsUndoneAt(chat, targets.map((entry) => entry.index), at);
-  commitChatVariablesAfterReceipts(chat, variables3);
+  commitChatVariablesAfterReceipts(chat, variables2);
   return { receipts: marked, restores };
 }
 function redoMvuReceipts(chat, receipts) {
@@ -15045,10 +15045,10 @@ function redoMvuReceipts(chat, receipts) {
   if (targets.length === 0) return { receipts: [], restores: [] };
   const restores = [];
   for (const entry of targets) restores.push(...planMvuRedoRestores(entry.receipt));
-  const variables3 = cloneChatVariablesForReceipts(chat);
-  applyMvuUndoRestores(variables3, restores);
+  const variables2 = cloneChatVariablesForReceipts(chat);
+  applyMvuUndoRestores(variables2, restores);
   const marked = setStoredReceiptsUndoneAt(chat, targets.map((entry) => entry.index), void 0);
-  commitChatVariablesAfterReceipts(chat, variables3);
+  commitChatVariablesAfterReceipts(chat, variables2);
   return { receipts: marked, restores };
 }
 var DEFAULT_USER, INITIAL_VARIABLES_KEY3, MVU_RECEIPTS_LIMIT, BODY_RECEIPT_PREFIX, CANONICAL_FLOOR_KEY, MVU_SETTLE_RECEIPTS_RESERVED, MvuUndoRefusalError, CANDIDATE_BODY_INDEX;
@@ -15598,7 +15598,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.5".trim() : "";
-  const commit = true ? normalizeCommit("0f8ac5d") : void 0;
+  const commit = true ? normalizeCommit("5e91926") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -20345,20 +20345,20 @@ function ensureChatVariables(chat) {
   metadata.variables = created;
   return created;
 }
-function seedJsrMvuVariables(card, variables3) {
+function seedJsrMvuVariables(card, variables2) {
   if (!cardUsesJsrMvu(card)) return false;
   let changed = false;
-  if (!Object.prototype.hasOwnProperty.call(variables3, "initialized_lorebooks")) {
-    variables3["initialized_lorebooks"] = true;
+  if (!Object.prototype.hasOwnProperty.call(variables2, "initialized_lorebooks")) {
+    variables2["initialized_lorebooks"] = true;
     changed = true;
   }
-  const stat3 = plainObject(variables3["stat_data"]);
+  const stat3 = plainObject(variables2["stat_data"]);
   if (stat3 === void 0) {
-    variables3["stat_data"] = { \u7CFB\u7EDF\u72B6\u6001: { \u4E3B\u89D2\u521B\u5EFA\u5B8C\u6BD5: false } };
+    variables2["stat_data"] = { \u7CFB\u7EDF\u72B6\u6001: { \u4E3B\u89D2\u521B\u5EFA\u5B8C\u6BD5: false } };
     changed = true;
   } else if (Object.keys(stat3).length === 0) {
     stat3["\u7CFB\u7EDF\u72B6\u6001"] = { \u4E3B\u89D2\u521B\u5EFA\u5B8C\u6BD5: false };
-    variables3["stat_data"] = stat3;
+    variables2["stat_data"] = stat3;
     changed = true;
   }
   return changed;
@@ -20368,15 +20368,15 @@ function readStatData(chat) {
 }
 function applyUpdateVariableToChat(card, chat, text) {
   if (!cardUsesJsrMvu(card)) return { text, found: false, applied: 0, failures: [] };
-  const variables3 = ensureChatVariables(chat);
-  seedJsrMvuVariables(card, variables3);
+  const variables2 = ensureChatVariables(chat);
+  seedJsrMvuVariables(card, variables2);
   const block = parseUpdateBlock(text);
   const failures = [];
   let applied = 0;
-  let stat3 = plainObject(variables3["stat_data"]) ?? {};
+  let stat3 = plainObject(variables2["stat_data"]) ?? {};
   const previousStat = structuredClone(stat3);
   if (block !== void 0) {
-    variables3["previous_stat_data"] = previousStat;
+    variables2["previous_stat_data"] = previousStat;
     if (block.error !== void 0) {
       failures.push(block.error);
     } else if (block.ops !== void 0) {
@@ -20386,8 +20386,8 @@ function applyUpdateVariableToChat(card, chat, text) {
       failures.push(...result.failures);
     }
   }
-  variables3["stat_data"] = stat3;
-  variables3["initialized_lorebooks"] = true;
+  variables2["stat_data"] = stat3;
+  variables2["initialized_lorebooks"] = true;
   let nextText = text;
   if (cardUsesStatusPlaceholder(card) && !nextText.includes(STATUS_PLACEHOLDER)) {
     nextText = `${nextText.replace(/\s+$/, "")}
@@ -21966,10 +21966,10 @@ function applyCandidateEditToChat(chat, card, input) {
   const inspection = inspectCandidateReceipts(chat, ref, input.ledger, input.previousText, card);
   if (inspection.detail !== void 0) throw detailError(inspection.detail, ref, inspection);
   if (inspection.live.length > 0) {
-    const variables3 = readChatVariables(chat);
+    const variables2 = readChatVariables(chat);
     const staged = applyVariableUndo(chat, inspection.live, {
       schema: readMvuSchema(chat, card),
-      currentOf: (path12) => getMvuTreePath(variables3, path12)
+      currentOf: (path12) => getMvuTreePath(variables2, path12)
     });
     chat = staged.chat;
   }
@@ -22043,12 +22043,12 @@ function syncFloorStatData(chat, floorIndex) {
     chat.messages[floorIndex] = updated;
     return;
   }
-  const variables3 = isRecord4(updated.variables) ? updated.variables : void 0;
-  if (variables3 === void 0 || !Object.prototype.hasOwnProperty.call(variables3, "stat_data")) {
+  const variables2 = isRecord4(updated.variables) ? updated.variables : void 0;
+  if (variables2 === void 0 || !Object.prototype.hasOwnProperty.call(variables2, "stat_data")) {
     chat.messages[floorIndex] = updated;
     return;
   }
-  const nextVariables = { ...variables3 };
+  const nextVariables = { ...variables2 };
   delete nextVariables["stat_data"];
   if (Object.keys(nextVariables).length === 0) {
     const nextMessage = { ...updated };
@@ -24463,10 +24463,10 @@ async function undoNewCandidateBodyReceipt(deps, op, events, failedTurn) {
     const live = receipts.filter((receipt) => receipt.undoneAt === void 0);
     if (live.length === 0) return;
     const card = (await tavern.getCharacter(plan.binding.character))?.card;
-    const variables3 = readChatVariables(snapshot2.chat);
+    const variables2 = readChatVariables(snapshot2.chat);
     const staged = applyVariableUndo(snapshot2.chat, live, {
       schema: readMvuSchema(snapshot2.chat, card),
-      currentOf: (path12) => getMvuTreePath(variables3, path12)
+      currentOf: (path12) => getMvuTreePath(variables2, path12)
     });
     await tavern.saveChat(plan.binding.character, plan.binding.chatId, staged.chat, snapshot2.revision);
   } catch (error) {
@@ -28189,10 +28189,10 @@ async function applyReceiptRollback(deps, chat, receipts, direction, binding) {
   if (bodyReceipts.length > 0) {
     if (direction === "undo") {
       const card = (await deps.store.getCharacter(binding.character))?.card;
-      const variables3 = readChatVariables(chat);
+      const variables2 = readChatVariables(chat);
       const staged = applyVariableUndo(chat, bodyReceipts, {
         schema: readMvuSchema(chat, card),
-        currentOf: (path12) => getMvuTreePath(variables3, path12)
+        currentOf: (path12) => getMvuTreePath(variables2, path12)
       });
       bodyCount = staged.receipts.length;
       chat.header = staged.chat.header;
@@ -29870,8 +29870,8 @@ function bodyHistoricalMvuStateOf(character, chat) {
     return true;
   }
   const metadata = chat.header.chat_metadata;
-  const variables3 = isRecord6(metadata["variables"]) ? metadata["variables"] : void 0;
-  if (variables3 !== void 0 && Object.prototype.hasOwnProperty.call(variables3, "stat_data")) {
+  const variables2 = isRecord6(metadata["variables"]) ? metadata["variables"] : void 0;
+  if (variables2 !== void 0 && Object.prototype.hasOwnProperty.call(variables2, "stat_data")) {
     return true;
   }
   const mvu = isRecord6(metadata["mvu"]) ? metadata["mvu"] : void 0;
@@ -40400,10 +40400,10 @@ function forkBookmarkMessageId(chat, parentSessionId, boundarySeq) {
   }
   return last === -1 ? void 0 : last;
 }
-async function copyChatVariables(variables3, parentChatId, chatId) {
-  const snapshots = await variables3.listAll("chat", parentChatId);
+async function copyChatVariables(variables2, parentChatId, chatId) {
+  const snapshots = await variables2.listAll("chat", parentChatId);
   if (snapshots.length === 0) return;
-  await variables3.patch("chat", chatId, snapshots.map((snapshot2) => ({ name: snapshot2.name, value: snapshot2.value })));
+  await variables2.patch("chat", chatId, snapshots.map((snapshot2) => ({ name: snapshot2.name, value: snapshot2.value })));
 }
 async function copyChatMemories(deps, parentChatId, chatId) {
   if (deps.memories === void 0) return;
@@ -43254,442 +43254,141 @@ async function ensureAgentPresetDeclared(ctx, presetId) {
 }
 
 // packages/plugin/src/http/router.ts
-import { createReadStream, createWriteStream } from "node:fs";
-import { mkdtemp, rm as rm2 } from "node:fs/promises";
-import { tmpdir as tmpdir4 } from "node:os";
-import { join as join28 } from "node:path";
-import { pipeline } from "node:stream/promises";
+init_runtime2();
+init_io();
 
-// packages/tavern-frontend-storage/src/idb-store.ts
-import { createHash as createHash14 } from "node:crypto";
-import { copyFile, mkdir as mkdir4, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { dirname as dirname13, join as join21 } from "node:path";
-var IDB_MAX_RECORD_BYTES = 1024 * 1024 * 1024;
-var IDB_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
-var databaseLocks = /* @__PURE__ */ new Map();
-function sha256(value) {
-  return createHash14("sha256").update(value).digest("hex");
+// packages/plugin/src/games/http.ts
+init_public_error();
+init_http();
+var GAMES_INSTALL_BODY_MAX_BYTES = 8 * 1024 * 1024;
+function isGamesRoute(route) {
+  return route === "games" || route.startsWith("games/");
 }
-function databaseDir(root, character, name2) {
-  return join21(root, "frontend-idb", sha256(character), sha256(name2));
+function statusOf(code) {
+  if (code === "not-found") return 404;
+  if (code === "turn") return 409;
+  if (code === "unavailable") return 503;
+  return 400;
 }
-function recordKeyHash(store5, key) {
-  return sha256(`${store5}\0${key}`);
+function sendJson2(res, status2, body) {
+  if (res.writableEnded) return;
+  res.statusCode = status2;
+  res.setHeader("content-type", "application/json; charset=utf-8");
+  res.setHeader("cache-control", "no-store");
+  res.end(JSON.stringify(body));
 }
-function recordPath(root, character, name2, store5, key) {
-  return join21(databaseDir(root, character, name2), "records", `${recordKeyHash(store5, key)}.bin`);
+function sendHtml(res, document) {
+  if (res.writableEnded) return;
+  res.statusCode = 200;
+  res.setHeader("content-type", "text/html; charset=utf-8");
+  res.setHeader("cache-control", "no-store");
+  res.setHeader("x-content-type-options", "nosniff");
+  res.end(document);
 }
-function metaPath(dir) {
-  return join21(dir, "meta.json");
-}
-function emptyDatabase(name2) {
-  return { name: name2, version: 0, stores: {}, records: {}, updatedAt: 0 };
-}
-function asRecord2(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
-}
-function normalizeIndexes(value) {
-  const indexes = {};
-  const record = asRecord2(value);
-  if (record === void 0) return indexes;
-  for (const [indexName, descriptor] of Object.entries(record)) {
-    const entry = asRecord2(descriptor);
-    if (entry === void 0 || typeof entry.keyPath !== "string" || entry.keyPath.trim() === "") continue;
-    indexes[indexName] = {
-      keyPath: entry.keyPath,
-      unique: entry.unique === true,
-      multiEntry: entry.multiEntry === true
-    };
-  }
-  return indexes;
-}
-function normalizeDatabase(value, name2) {
-  const record = asRecord2(value);
-  if (record === void 0) return emptyDatabase(name2);
-  const stores = {};
-  const rawStores = asRecord2(record.stores);
-  if (rawStores !== void 0) {
-    for (const [storeName, descriptor] of Object.entries(rawStores)) {
-      const entry = asRecord2(descriptor);
-      if (entry === void 0) continue;
-      stores[storeName] = {
-        keyPath: typeof entry.keyPath === "string" ? entry.keyPath : "",
-        indexes: normalizeIndexes(entry.indexes)
-      };
-    }
-  }
-  const records = {};
-  const rawRecords = asRecord2(record.records);
-  if (rawRecords !== void 0) {
-    for (const [keyHash, descriptor] of Object.entries(rawRecords)) {
-      const entry = asRecord2(descriptor);
-      if (entry === void 0) continue;
-      if (typeof entry.key !== "string" || typeof entry.size !== "number" || !Number.isFinite(entry.size) || entry.size < 0) continue;
-      records[keyHash] = {
-        store: typeof entry.store === "string" ? entry.store : "",
-        key: entry.key,
-        size: entry.size,
-        updatedAt: typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt) ? entry.updatedAt : 0,
-        meta: asRecord2(entry.meta) ?? {}
-      };
-    }
-  }
-  return {
-    name: name2,
-    version: typeof record.version === "number" && Number.isInteger(record.version) && record.version >= 0 ? record.version : 0,
-    stores,
-    records,
-    updatedAt: typeof record.updatedAt === "number" && Number.isFinite(record.updatedAt) ? record.updatedAt : 0
-  };
-}
-async function readDatabase(root, character, name2) {
-  const dir = databaseDir(root, character, name2);
-  try {
-    const text = await readFile(metaPath(dir), "utf8");
-    return normalizeDatabase(JSON.parse(text), name2);
-  } catch (error) {
-    if (error.code === "ENOENT") return emptyDatabase(name2);
-    throw new Error(`idb metadata for '${name2}' is unreadable: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-var temporarySeq = 0;
-function temporarySibling(target) {
-  temporarySeq += 1;
-  return `${target}.${process.pid}.${Date.now()}.${temporarySeq}.tmp`;
-}
-async function syncFile(path12) {
-  const handle = await open(path12, "r+");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
-async function renameReplacing(source, target) {
-  try {
-    await rename(source, target);
-  } catch (error) {
-    const code = error.code;
-    if (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY" && code !== "EEXIST") throw error;
-    await rm(target, { force: true });
-    await rename(source, target);
-  }
-}
-function describeFsError(error) {
-  if (error instanceof Error) {
-    const code = error.code;
-    return code === void 0 ? error.message : `${code}: ${error.message}`;
-  }
-  return String(error);
-}
-async function writeDatabase(root, character, database) {
-  const dir = databaseDir(root, character, database.name);
-  await mkdir4(dir, { recursive: true });
-  const target = metaPath(dir);
-  const temporary = temporarySibling(target);
-  try {
-    await writeFile(temporary, `${JSON.stringify(database)}`, "utf8");
-    await syncFile(temporary);
-    await renameReplacing(temporary, target);
-  } catch (error) {
-    await rm(temporary, { force: true });
-    throw error;
-  }
-}
-function withDatabaseLock(root, character, name2, operation) {
-  const key = `${root}\0${character}\0${name2}`;
-  const previous = databaseLocks.get(key) ?? Promise.resolve();
-  const next = previous.catch(() => void 0).then(operation);
-  databaseLocks.set(key, next);
-  return next.finally(() => {
-    if (databaseLocks.get(key) === next) databaseLocks.delete(key);
-  });
-}
-function requireDatabaseName(value) {
-  if (typeof value !== "string" || value.trim() === "") throw new Error("idb database name must be a non-empty string");
-  if (value.length > 256) throw new Error("idb database name is too long (max 256)");
-  return value;
-}
-function requireStoreName(value) {
-  if (typeof value !== "string" || value.trim() === "") throw new Error("idb store name must be a non-empty string");
-  if (value.length > 256) throw new Error("idb store name is too long (max 256)");
-  return value;
-}
-function requireKey(value) {
-  if (typeof value !== "string" && typeof value !== "number") throw new Error("idb record key must be a string or number");
-  const key = String(value);
-  if (key.length === 0) throw new Error("idb record key must not be empty");
-  if (key.length > 1024) throw new Error("idb record key is too long (max 1024)");
-  return key;
-}
-function normalizeRecordMeta(value) {
-  const record = asRecord2(value) ?? {};
-  const text = JSON.stringify(record);
-  if (text.length > 64 * 1024) throw new Error("idb record metadata is too large (max 64KB)");
-  return record;
-}
-function recordTotal(database, excludingKeyHash) {
-  return Object.entries(database.records).filter(([keyHash]) => keyHash !== excludingKeyHash).reduce((sum, [, record]) => sum + record.size, 0);
-}
-async function openIdbDatabase(root, character, value, versionValue) {
-  const name2 = requireDatabaseName(value);
-  const requested = typeof versionValue === "number" && Number.isInteger(versionValue) && versionValue > 0 ? versionValue : 1;
-  return withDatabaseLock(root, character, name2, async () => {
-    const database = await readDatabase(root, character, name2);
-    const previousVersion = database.version;
-    if (database.version === 0) database.version = requested;
-    else if (requested > database.version) database.version = requested;
-    database.updatedAt = Date.now();
-    await writeDatabase(root, character, database);
-    return {
-      version: database.version,
-      previousVersion,
-      stores: Object.keys(database.stores),
-      storeKeyPaths: Object.fromEntries(Object.entries(database.stores).map(([name3, descriptor]) => [name3, descriptor.keyPath])),
-      storeIndexes: Object.fromEntries(Object.entries(database.stores).map(([name3, descriptor]) => [name3, descriptor.indexes]))
-    };
-  });
-}
-async function createIdbStore(root, character, nameValue, storeValue, keyPathValue, indexesValue) {
-  const name2 = requireDatabaseName(nameValue);
-  const store5 = requireStoreName(storeValue);
-  const keyPath = typeof keyPathValue === "string" ? keyPathValue : "";
-  const indexes = normalizeIndexes(indexesValue);
-  return withDatabaseLock(root, character, name2, async () => {
-    const database = await readDatabase(root, character, name2);
-    database.stores[store5] = { keyPath, indexes };
-    database.updatedAt = Date.now();
-    await writeDatabase(root, character, database);
-    return { stores: Object.keys(database.stores), indexes };
-  });
-}
-async function moveRecordFile(source, destination) {
-  try {
-    await rename(source, destination);
+function sendError(res, cause) {
+  if (cause instanceof GameBridgeError) {
+    const message = publicErrorMessage(cause);
+    if (message === INTERNAL_ERROR_MESSAGE) throw cause;
+    sendJson2(res, statusOf(cause.code), { ok: false, message, code: cause.code });
     return;
-  } catch (error) {
-    const code = error.code;
-    if (code === "EXDEV") {
-      await copyRecordAcrossDevices(source, destination);
-      return;
-    }
-    if (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY" && code !== "EEXIST") {
-      throw new Error(`idb record could not be moved to '${destination}': ${describeFsError(error)}`);
-    }
   }
-  try {
-    await renameReplacing(source, destination);
-  } catch (error) {
-    throw new Error(`idb record could not be moved to '${destination}': ${describeFsError(error)}`);
-  }
+  throw cause;
 }
-async function copyRecordAcrossDevices(source, destination) {
-  const staged = temporarySibling(destination);
-  try {
-    await copyFile(source, staged);
-    await syncFile(staged);
-    await renameReplacing(staged, destination);
-  } catch (error) {
-    await rm(staged, { force: true });
-    throw new Error(
-      `idb record could not be copied from '${source}' to '${destination}' after a cross-device rename failed (EXDEV): ${describeFsError(error)}`
-    );
-  }
-  await rm(source, { force: true });
-}
-async function putIdbRecordFromFile(root, character, nameValue, storeValue, keyValue, temporaryPath, metaValue) {
-  const name2 = requireDatabaseName(nameValue);
-  const store5 = requireStoreName(storeValue);
-  const key = requireKey(keyValue);
-  const meta = normalizeRecordMeta(metaValue);
-  const keyHash = recordKeyHash(store5, key);
-  const destination = recordPath(root, character, name2, store5, key);
-  return withDatabaseLock(root, character, name2, async () => {
-    const database = await readDatabase(root, character, name2);
-    if (database.stores[store5] === void 0) throw new Error(`idb store '${store5}' does not exist in database '${name2}'`);
-    const size = (await stat(temporaryPath)).size;
-    if (size > IDB_MAX_RECORD_BYTES) {
-      throw new Error(`idb record is too large (${size} > ${IDB_MAX_RECORD_BYTES} bytes)`);
-    }
-    const total = recordTotal(database, keyHash) + size;
-    if (total > IDB_MAX_TOTAL_BYTES) {
-      throw new Error(`idb storage for '${character}' exceeds ${IDB_MAX_TOTAL_BYTES} bytes`);
-    }
-    await mkdir4(dirname13(destination), { recursive: true });
-    await moveRecordFile(temporaryPath, destination);
-    database.records[keyHash] = { store: store5, key, size, updatedAt: Date.now(), meta };
-    database.updatedAt = Date.now();
-    try {
-      await writeDatabase(root, character, database);
-    } catch (error) {
-      await rm(destination, { force: true });
-      throw error;
-    }
-    return { key, size };
+async function handleGamesApi(options) {
+  const { req, res, url, route, method } = options;
+  const notFound = () => sendJson2(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  const service = await Promise.resolve(options.resolveService()).catch((cause) => {
+    throw new Error(`\u6E38\u620F\u8FD0\u884C\u65F6\u4E0D\u53EF\u7528: ${cause instanceof Error ? cause.message : String(cause)}`);
   });
-}
-async function listIdbKeys(root, character, nameValue, storeValue) {
-  const name2 = requireDatabaseName(nameValue);
-  const store5 = requireStoreName(storeValue);
-  const database = await readDatabase(root, character, name2);
-  if (database.stores[store5] === void 0) return { keys: [] };
-  return {
-    keys: Object.values(database.records).filter((record) => record.store === store5).map((record) => record.key)
-  };
-}
-async function getIdbRecord(root, character, nameValue, storeValue, keyValue) {
-  const name2 = requireDatabaseName(nameValue);
-  const store5 = requireStoreName(storeValue);
-  const key = requireKey(keyValue);
-  const database = await readDatabase(root, character, name2);
-  if (database.stores[store5] === void 0) return void 0;
-  const record = database.records[recordKeyHash(store5, key)];
-  if (record === void 0 || record.store !== store5) return void 0;
-  const path12 = recordPath(root, character, name2, store5, key);
-  try {
-    const info3 = await stat(path12);
-    if (!info3.isFile()) return void 0;
-    return { path: path12, size: info3.size, meta: record.meta };
-  } catch (error) {
-    if (error.code === "ENOENT") return void 0;
-    throw error;
+  if (service === void 0) {
+    sendJson2(res, 503, { ok: false, message: "\u6E38\u620F\u8FD0\u884C\u65F6\u4E0D\u53EF\u7528\uFF08\u63D2\u4EF6\u672A\u88C5\u8F7D\u6E38\u620F\u670D\u52A1\uFF09", code: "unavailable" });
+    return;
   }
-}
-async function deleteIdbRecord(root, character, nameValue, storeValue, keyValue) {
-  const name2 = requireDatabaseName(nameValue);
-  const store5 = requireStoreName(storeValue);
-  const key = requireKey(keyValue);
-  const keyHash = recordKeyHash(store5, key);
-  return withDatabaseLock(root, character, name2, async () => {
-    const database = await readDatabase(root, character, name2);
-    if (database.stores[store5] === void 0) return { deleted: false };
-    const record = database.records[keyHash];
-    const existed = record !== void 0 && record.store === store5;
-    delete database.records[keyHash];
-    database.updatedAt = Date.now();
-    await writeDatabase(root, character, database);
-    await rm(recordPath(root, character, name2, store5, key), { force: true });
-    return { deleted: existed };
-  });
-}
-async function clearIdbStore(root, character, nameValue, storeValue) {
-  const name2 = requireDatabaseName(nameValue);
-  const store5 = requireStoreName(storeValue);
-  return withDatabaseLock(root, character, name2, async () => {
-    const database = await readDatabase(root, character, name2);
-    if (database.stores[store5] === void 0) return { cleared: 0 };
-    const entries = Object.entries(database.records).filter(([, record]) => record.store === store5);
-    for (const [keyHash] of entries) delete database.records[keyHash];
-    database.updatedAt = Date.now();
-    await writeDatabase(root, character, database);
-    await Promise.all(entries.map(([, record]) => rm(recordPath(root, character, name2, store5, record.key), { force: true })));
-    return { cleared: entries.length };
-  });
-}
-async function deleteIdbDatabase(root, character, nameValue) {
-  const name2 = requireDatabaseName(nameValue);
-  const directory = databaseDir(root, character, name2);
-  let existed = false;
   try {
-    existed = (await stat(directory)).isDirectory();
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
+    if (method === "GET" && route === "games/list") {
+      const character = url.searchParams.get("character") ?? "";
+      const chatId = url.searchParams.get("chatId") ?? "";
+      const filter = character !== "" && chatId !== "" ? { character, chatId } : {};
+      const { games, sessions } = await service.list(filter);
+      return sendJson2(res, 200, { ok: true, games, sessions });
+    }
+    if (method === "GET" && route === "games/revision") {
+      return sendJson2(res, 200, { ok: true, revision: await service.revision() });
+    }
+    if (method === "POST" && route === "games/start") {
+      const body = await readModRequestBody(req);
+      if (typeof body.gameId !== "string" || body.gameId.trim() === "") throw new GameBridgeError("invalid", "expected { gameId }");
+      if (typeof body.character !== "string" || body.character.trim() === "" || typeof body.chatId !== "string" || body.chatId.trim() === "") {
+        throw new GameBridgeError("invalid", "expected non-empty { character, chatId }");
+      }
+      const humanRole = typeof body.humanRole === "string" && body.humanRole !== "" ? body.humanRole : void 0;
+      const { session, view } = await service.start({ gameId: body.gameId, character: body.character, chatId: body.chatId, humanRole });
+      return sendJson2(res, 200, { ok: true, session, view });
+    }
+    if (method === "GET" && route.startsWith("games/state/")) {
+      const sessionId = decodeURIComponent(route.slice("games/state/".length));
+      const { session, view } = await service.state(sessionId);
+      return sendJson2(res, 200, { ok: true, session, view });
+    }
+    if (method === "POST" && route.startsWith("games/action/")) {
+      const sessionId = decodeURIComponent(route.slice("games/action/".length));
+      const body = await readModRequestBody(req);
+      const action = body.action;
+      if (action === null || typeof action !== "object" || Array.isArray(action)) {
+        throw new GameBridgeError("invalid", "expected { action }");
+      }
+      const actionRecord = action;
+      const actionType = actionRecord["type"];
+      if (typeof actionType !== "string" || actionType === "") {
+        throw new GameBridgeError("invalid", "action.type is required");
+      }
+      const gameAction = { ...actionRecord, type: actionType };
+      const { session, view } = await service.humanAction(sessionId, gameAction);
+      return sendJson2(res, 200, { ok: true, session, view });
+    }
+    if (method === "GET" && route.startsWith("games/") && route.includes("/view/")) {
+      const segments = route.split("/");
+      if (segments.length === 4 && segments[2] === "view") {
+        let gameId = segments[1];
+        let sessionId = segments[3];
+        try {
+          gameId = decodeURIComponent(gameId);
+          sessionId = decodeURIComponent(sessionId);
+        } catch {
+          return notFound();
+        }
+        const html = await service.view(gameId, sessionId);
+        return sendHtml(res, html);
+      }
+      return notFound();
+    }
+    if (method === "POST" && route === "games/install") {
+      let body;
+      try {
+        body = await readModRequestBody(req, GAMES_INSTALL_BODY_MAX_BYTES);
+      } catch (cause) {
+        throw new GameBridgeError("invalid", `install \u8BF7\u6C42\u4F53\u8BFB\u53D6\u5931\u8D25\uFF08\u4E0A\u9650 ${GAMES_INSTALL_BODY_MAX_BYTES} \u5B57\u8282\uFF09: ${cause instanceof Error ? cause.message : String(cause)}`);
+      }
+      const source = {};
+      if (typeof body.path === "string" && body.path.trim() !== "") source.path = body.path;
+      else if (typeof body.url === "string" && body.url.trim() !== "") source.url = body.url;
+      else if (typeof body.zipBase64 === "string" && body.zipBase64.trim() !== "") source.zipBase64 = body.zipBase64;
+      else throw new GameBridgeError("invalid", "expected { path }\uFF08\u672C\u5730\u6E38\u620F\u5305\u76EE\u5F55\uFF09\u3001{ url }\uFF08git \u6E90\uFF09\u6216 { zipBase64 }\uFF08\u6E38\u620F\u5305 zip\uFF09");
+      const { game } = await service.install(source, body.force === true);
+      return sendJson2(res, 200, { ok: true, game });
+    }
+    if (method === "POST" && route === "games/reload") {
+      const { games } = await service.reload();
+      return sendJson2(res, 200, { ok: true, games });
+    }
+    return notFound();
+  } catch (cause) {
+    sendError(res, cause);
   }
-  await rm(directory, { recursive: true, force: true });
-  return { deleted: existed };
 }
 
-// packages/tavern-frontend-storage/src/persistence.ts
-var FRONTEND_STORAGE_TOTAL_LIMIT = 512 * 1024;
-var FRONTEND_STORAGE_KEY_LIMIT = 512;
-function frontendStorageFor(state, character) {
-  const storage = state.frontendStorage?.[character];
-  return storage === void 0 ? {} : { ...storage };
-}
-function parseFrontendStorageValue(character, value) {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("storage must be an object of string values");
-  }
-  const storage = {};
-  let total = 0;
-  for (const [key, entry] of Object.entries(value)) {
-    if (typeof entry !== "string") throw new Error(`storage["${key}"] must be a string`);
-    if (key === "" || key.length > FRONTEND_STORAGE_KEY_LIMIT) {
-      throw new Error(`storage keys must be 1-${FRONTEND_STORAGE_KEY_LIMIT} characters (got ${key.length})`);
-    }
-    total += key.length + entry.length;
-    if (total > FRONTEND_STORAGE_TOTAL_LIMIT) {
-      throw new Error(`frontend storage for '${character}' exceeds ${FRONTEND_STORAGE_TOTAL_LIMIT} characters`);
-    }
-    storage[key] = entry;
-  }
-  return storage;
-}
-async function putFrontendStorage(db, character, value) {
-  const storage = parseFrontendStorageValue(character, value);
-  const next = await db.updateState((state) => ({
-    frontendStorage: { ...state.frontendStorage ?? {}, [character]: storage }
-  }));
-  return { storage: frontendStorageFor(next, character) };
-}
-async function resetFrontendStorage(db, character) {
-  const next = await db.updateState((state) => {
-    const all = { ...state.frontendStorage ?? {} };
-    delete all[character];
-    return { frontendStorage: all };
-  });
-  return { storage: frontendStorageFor(next, character), reset: true };
-}
-
-// packages/plugin/src/card-scripts.ts
-function collectCardScriptBundle(card, scriptTrees, includeDisabled = false) {
-  const nodes = Array.isArray(scriptTrees) ? scriptTrees : cardScriptNodes(card);
-  return { world: cardWorldName(card), scripts: collectScriptsFromNodes(nodes, includeDisabled) };
-}
-function collectScriptsFromNodes(nodes, includeDisabled = false) {
-  const scripts = [];
-  walkScriptNodes(nodes, scripts, includeDisabled);
-  return scripts;
-}
-function walkScriptNodes(nodes, scripts, includeDisabled) {
-  for (const node of nodes) {
-    if (!isPlainObject3(node)) continue;
-    if (node["type"] === "folder") {
-      if (Array.isArray(node["scripts"])) walkScriptNodes(node["scripts"], scripts, includeDisabled);
-      continue;
-    }
-    if (node["type"] !== "script") continue;
-    const enabled = node["enabled"] !== false;
-    if (!enabled && !includeDisabled) continue;
-    const content = node["content"];
-    if (typeof content !== "string" || content.trim() === "") continue;
-    const fallback = `script-${scripts.length}`;
-    const id = nonEmptyString3(node["id"]) ?? fallback;
-    const name2 = nonEmptyString3(node["name"]) ?? fallback;
-    scripts.push({ id, name: name2, content, info: nonEmptyString3(node["info"]) ?? "", enabled });
-  }
-}
-function cardScriptNodes(card) {
-  const helper = plainObject5(card.data.extensions["tavern_helper"]);
-  return Array.isArray(helper?.["scripts"]) ? helper["scripts"] : [];
-}
-function cardWorldName(card) {
-  const linked = nonEmptyString3(card.data.extensions["world"]);
-  if (linked !== void 0) return linked;
-  return nonEmptyString3(card.data.characterBook?.name) ?? null;
-}
-function nonEmptyString3(value) {
-  return typeof value === "string" && value.trim() !== "" ? value.trim() : void 0;
-}
-function isPlainObject3(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function plainObject5(value) {
-  return isPlainObject3(value) ? value : void 0;
-}
-
-// packages/plugin/src/http/router.ts
-init_dsh_home();
+// packages/plugin/src/http/routes.ts
+init_runtime2();
 
 // packages/plugin/src/frontend-documents.ts
 var FENCED_DOCUMENT = /```[^\n]*\n([\s\S]*?)```/gi;
@@ -43734,740 +43433,500 @@ function latestFrontendMessage(messages, render) {
   return void 0;
 }
 
-// packages/plugin/src/helper.ts
-init_src2();
-init_src5();
-init_src4();
-init_src3();
-init_src();
-import { randomUUID as randomUUID9 } from "node:crypto";
+// packages/plugin/src/http/body-api.ts
+init_errors();
 init_io();
-init_public_error();
 
-// packages/plugin/src/frontend-target-policy.ts
-import { isIP } from "node:net";
-var METADATA_HOSTNAMES = /* @__PURE__ */ new Set([
-  "metadata",
-  "metadata.google.internal",
-  "metadata.goog",
-  "metadata.azure.com",
-  "metadata.packet.net",
-  "metadata.tencentyun.com",
-  "metadata.tencent-cloud.com",
-  "instance-data"
-]);
-var PRIVATE_HOSTNAME_SUFFIXES = [
-  ".localhost",
-  ".local",
-  ".internal",
-  ".home.arpa",
-  ".lan",
-  ".localdomain",
-  ".intranet",
-  ".corp",
-  ".private"
-];
-function decideCustomApiTarget(url) {
-  const hostname = normalizeHostname(url.hostname);
-  if (isLoopbackHostname(hostname)) {
-    return { allowed: true, hostname, loopback: true };
-  }
-  if (url.protocol === "http:") {
-    return blocked(
-      hostname,
-      "https-required",
-      "use https:// for non-loopback hosts; http:// is allowed only for loopback proxies"
-    );
-  }
-  if (METADATA_HOSTNAMES.has(hostname)) {
-    return blocked(hostname, "metadata-host", "cloud metadata endpoints are blocked");
-  }
-  const address = addressVerdict(hostname);
-  if (address !== void 0) {
-    return address.blocked ? blocked(hostname, "private-address", address.reason) : { allowed: true, hostname, loopback: false };
-  }
-  if (isPrivateHostname(hostname)) {
-    return blocked(
-      hostname,
-      "private-hostname",
-      "single-label and private-use hostnames are blocked; use a public HTTPS host or a loopback proxy"
-    );
-  }
-  return { allowed: true, hostname, loopback: false };
-}
-function blocked(hostname, reason, detail) {
-  return { allowed: false, hostname, reason, detail };
-}
-function normalizeHostname(hostname) {
-  return hostname.toLowerCase().replace(/\.+$/, "");
-}
-function stripBrackets(hostname) {
-  return hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
-}
-function isLoopbackHostname(hostname) {
-  if (hostname === "localhost") return true;
-  const literal = stripBrackets(hostname);
-  const version = isIP(literal);
-  if (version === 4) return literal === "127.0.0.1";
-  if (version !== 6) return false;
-  const hextets = ipv6Hextets(literal);
-  if (hextets === void 0) return false;
-  if (isIpv6Loopback(hextets)) return true;
-  const mapped = mappedIpv4(hextets);
-  return mapped !== void 0 && isIpv4Loopback(mapped);
-}
-function isPrivateHostname(hostname) {
-  if (!hostname.includes(".")) return true;
-  return PRIVATE_HOSTNAME_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
-}
-function addressVerdict(hostname) {
-  const literal = stripBrackets(hostname);
-  const version = isIP(literal);
-  if (version !== 4 && version !== 6) return void 0;
-  if (version === 4) {
-    const octets = ipv4Octets(literal);
-    if (octets === void 0) return { blocked: true, reason: "invalid IPv4 literal" };
-    const reason2 = ipv4BlockReason(octets);
-    return reason2 === void 0 ? { blocked: false } : { blocked: true, reason: reason2 };
-  }
-  const hextets = ipv6Hextets(literal);
-  if (hextets === void 0) return { blocked: true, reason: "invalid IPv6 literal" };
-  const reason = ipv6BlockReason(hextets);
-  return reason === void 0 ? { blocked: false } : { blocked: true, reason };
-}
-function ipv6BlockReason(hextets) {
-  if (isIpv6Unspecified(hextets)) return ":: (unspecified address)";
-  if (isIpv6LinkLocal(hextets)) return "fe80::/10 (link-local)";
-  if (isIpv6UniqueLocal(hextets)) return "fc00::/7 (unique local)";
-  if (isIpv6Multicast(hextets)) return "ff00::/8 (multicast)";
-  if (isIpv6Documentation(hextets)) return "2001:db8::/32 (documentation)";
-  if (isIpv6SixToFour(hextets)) return "6to4 range (embeds an arbitrary IPv4 address)";
-  if (isIpv6Teredo(hextets)) return "Teredo range (embeds an arbitrary IPv4 address)";
-  const mapped = mappedIpv4(hextets);
-  if (mapped !== void 0) return mappedBlockReason(mapped, "IPv4-mapped IPv6");
-  const nat64 = nat64Ipv4(hextets);
-  if (nat64 !== void 0) return mappedBlockReason(nat64, "NAT64");
-  if (isDeprecatedIpv4Compatible(hextets)) return "deprecated IPv4-compatible IPv6 address";
-  if (hextets[0] === 100 && hextets[1] === 65435 && hextets[2] === 1) {
-    return "64:ff9b:1::/48 (local-use NAT64 prefix)";
-  }
-  return void 0;
-}
-function mappedBlockReason(octets, label) {
-  const reason = ipv4BlockReason(octets);
-  return reason === void 0 ? void 0 : `${label} address ${octets.join(".")}: ${reason}`;
-}
-function ipv4BlockReason([a, b, c]) {
-  if (a === 0) return "0.0.0.0/8 (this network / unspecified)";
-  if (a === 10) return "10.0.0.0/8 (RFC1918)";
-  if (a === 100 && b >= 64 && b <= 127) {
-    return "100.64.0.0/10 (carrier-grade NAT; includes cloud metadata ranges)";
-  }
-  if (a === 127) return "127.0.0.0/8 (loopback; only 127.0.0.1 is accepted)";
-  if (a === 169 && b === 254) return "169.254.0.0/16 (link-local / cloud metadata)";
-  if (a === 172 && b >= 16 && b <= 31) return "172.16.0.0/12 (RFC1918)";
-  if (a === 192 && b === 168) return "192.168.0.0/16 (RFC1918)";
-  if (a === 192 && b === 0 && (c === 0 || c === 2)) return "192.0.0.0/24 or 192.0.2.0/24 (IETF/documentation)";
-  if (a === 192 && b === 88 && c === 99) return "6to4 relay anycast range";
-  if (a === 198 && (b === 18 || b === 19)) return "198.18.0.0/15 (benchmarking)";
-  if (a === 198 && b === 51 && c === 100) return "198.51.100.0/24 (documentation)";
-  if (a === 203 && b === 0 && c === 113) return "203.0.113.0/24 (documentation)";
-  if (a >= 224) return "224.0.0.0/4 or above (multicast / reserved)";
-  return void 0;
-}
-function isIpv4Loopback([a, b, c, d]) {
-  return a === 127 && b === 0 && c === 0 && d === 1;
-}
-function ipv4Octets(text) {
-  const parts = text.split(".");
-  if (parts.length !== 4) return void 0;
-  const values = [];
-  for (const part of parts) {
-    if (!/^\d{1,3}$/.test(part)) return void 0;
-    const value = Number(part);
-    if (value > 255) return void 0;
-    values.push(value);
-  }
-  return toIpv4(values);
-}
-function toIpv4(values) {
-  if (values.length !== 4) return void 0;
-  const [a, b, c, d] = values;
-  if (a === void 0 || b === void 0 || c === void 0 || d === void 0) return void 0;
-  return [a, b, c, d];
-}
-function ipv6Hextets(input) {
-  const text = stripBrackets(input);
-  if (text === "" || text.includes("%")) return void 0;
-  const halves = text.split("::");
-  if (halves.length > 2) return void 0;
-  const head = parseHextets(halves[0] ?? "");
-  const tail = halves.length === 2 ? parseHextets(halves[1] ?? "") : [];
-  if (head === void 0 || tail === void 0) return void 0;
-  if (halves.length === 1) {
-    if (head.length !== 8) return void 0;
-    return toIpv6(head);
-  }
-  const missing = 8 - head.length - tail.length;
-  if (missing < 1) return void 0;
-  return toIpv6([...head, ...Array.from({ length: missing }, () => 0), ...tail]);
-}
-function parseHextets(side) {
-  if (side === "") return [];
-  const values = [];
-  for (const part of side.split(":")) {
-    if (!/^[0-9a-f]{1,4}$/i.test(part)) return void 0;
-    values.push(Number.parseInt(part, 16));
-  }
-  return values;
-}
-function toIpv6(values) {
-  if (values.length !== 8) return void 0;
-  const [a, b, c, d, e, f, g, h] = values;
-  if (a === void 0 || b === void 0 || c === void 0 || d === void 0 || e === void 0 || f === void 0 || g === void 0 || h === void 0) {
-    return void 0;
-  }
-  return [a, b, c, d, e, f, g, h];
-}
-function isIpv6Loopback(hextets) {
-  return hextets.every((value, index) => index === 7 ? value === 1 : value === 0);
-}
-function isIpv6Unspecified(hextets) {
-  return hextets.every((value) => value === 0);
-}
-function isIpv6LinkLocal(hextets) {
-  return (hextets[0] & 65472) === 65152;
-}
-function isIpv6UniqueLocal(hextets) {
-  return (hextets[0] & 65024) === 64512;
-}
-function isIpv6Multicast(hextets) {
-  return (hextets[0] & 65280) === 65280;
-}
-function isIpv6Documentation(hextets) {
-  return hextets[0] === 8193 && hextets[1] === 3512;
-}
-function isIpv6SixToFour(hextets) {
-  return hextets[0] === 8194;
-}
-function isIpv6Teredo(hextets) {
-  return hextets[0] === 8193 && hextets[1] === 0;
-}
-function mappedIpv4(hextets) {
-  const [a, b, c, d, e, f, g, h] = hextets;
-  if (a === 0 && b === 0 && c === 0 && d === 0 && e === 0 && f === 65535) {
-    return [g >> 8 & 255, g & 255, h >> 8 & 255, h & 255];
-  }
-  return void 0;
-}
-function nat64Ipv4(hextets) {
-  const [a, b, c, d, e, f, g, h] = hextets;
-  if (a === 100 && b === 65435 && c === 0 && d === 0 && e === 0 && f === 0) {
-    return [g >> 8 & 255, g & 255, h >> 8 & 255, h & 255];
-  }
-  return void 0;
-}
-function isDeprecatedIpv4Compatible(hextets) {
-  return hextets[0] === 0 && hextets[1] === 0 && hextets[2] === 0 && hextets[3] === 0 && hextets[4] === 0 && hextets[5] === 0;
-}
-
-// packages/plugin/src/frontend-generation.ts
-var REQUEST_TIMEOUT_MS = 18e4;
-var MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
-var MAX_PROMPT_CHARS = 2e6;
-var MAX_MESSAGES = 256;
-var MAX_API_KEY_CHARS = 8192;
-var activeGenerationControllers = /* @__PURE__ */ new Map();
-function frontendGenerationKey(character, chatId, generationId) {
-  return `${character}\0${chatId}\0${generationId}`;
-}
-function registerFrontendGeneration(character, chatId, generationId, controller) {
-  activeGenerationControllers.set(frontendGenerationKey(character, chatId, generationId), controller);
-}
-function finishFrontendGeneration(character, chatId, generationId, controller) {
-  const key = frontendGenerationKey(character, chatId, generationId);
-  if (activeGenerationControllers.get(key) === controller) activeGenerationControllers.delete(key);
-}
-function abortFrontendGeneration(character, chatId, generationId) {
-  const key = frontendGenerationKey(character, chatId, generationId);
-  const controller = activeGenerationControllers.get(key);
-  if (controller === void 0) return false;
-  activeGenerationControllers.delete(key);
-  controller.abort();
-  return true;
-}
-function abortAllFrontendGenerations(character, chatId) {
-  const prefix = `${character}\0${chatId}\0`;
-  let stopped = 0;
-  for (const [key, controller] of activeGenerationControllers) {
-    if (!key.startsWith(prefix)) continue;
-    activeGenerationControllers.delete(key);
-    controller.abort();
-    stopped += 1;
-  }
-  return stopped;
-}
-var FrontendGenerationError = class extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "FrontendGenerationError";
-  }
-};
-var FrontendTargetBlockedError = class extends FrontendGenerationError {
-  code = "TAVERN_FRONTEND_TARGET_BLOCKED";
-  reason;
-  host;
-  constructor(reason, host, detail) {
-    super(`custom API target ${host} is blocked: ${reason} [TAVERN_FRONTEND_TARGET_BLOCKED] (${detail})`);
-    this.name = "FrontendTargetBlockedError";
-    this.reason = reason;
-    this.host = host;
-  }
-};
-function asRecord3(value) {
+// packages/plugin/src/http/json-records.ts
+function asRecord2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
 }
-function requireText2(value, field2, maxChars) {
-  if (typeof value !== "string") throw new FrontendGenerationError(`${field2} must be a string`);
-  const text = value.trim();
-  if (text === "") throw new FrontendGenerationError(`${field2} must not be empty`);
-  if (text.length > maxChars) throw new FrontendGenerationError(`${field2} is too long (${text.length} > ${maxChars})`);
-  return text;
+function asChatLog(value) {
+  const record = asRecord2(value);
+  if (record === void 0) return void 0;
+  const header = asRecord2(record["header"]);
+  if (header === void 0) return void 0;
+  if (typeof header["user_name"] !== "string" || typeof header["character_name"] !== "string") return void 0;
+  if (!Array.isArray(record["messages"])) return void 0;
+  return value;
 }
-function normalizeBaseUrl(url) {
-  if (url.search !== "" || url.hash !== "") {
-    throw new FrontendGenerationError("custom_api.apiurl must be a base URL without query or hash parameters");
-  }
-  let base = url.toString().replace(/\/+$/, "");
-  base = base.replace(/\/chat\/completions$/i, "");
-  base = base.replace(/\/models$/i, "");
-  if (base === "") throw new FrontendGenerationError("custom_api.apiurl must include a host");
-  return base;
-}
-function parseApiTarget(value, requireModel) {
-  const record = asRecord3(value);
-  if (record === void 0) throw new FrontendGenerationError("custom_api must be an object");
-  const rawUrl = requireText2(record.apiurl, "custom_api.apiurl", 2048);
-  let url;
-  try {
-    url = new URL(rawUrl);
-  } catch {
-    throw new FrontendGenerationError(`custom_api.apiurl is not a valid URL: ${rawUrl}`);
-  }
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new FrontendGenerationError("custom_api.apiurl must use https:// (http:// is allowed only for loopback proxies)");
-  }
-  if (url.username !== "" || url.password !== "") {
-    throw new FrontendGenerationError("custom_api.apiurl must not contain credentials; put the key in the API key field");
-  }
-  const destination = decideCustomApiTarget(url);
-  if (!destination.allowed) {
-    throw new FrontendTargetBlockedError(destination.reason, destination.hostname, destination.detail);
-  }
-  if (record.key !== void 0 && typeof record.key !== "string") {
-    throw new FrontendGenerationError("custom_api.key must be a string when present");
-  }
-  const key = typeof record.key === "string" ? record.key : "";
-  if (key.length > MAX_API_KEY_CHARS) {
-    throw new FrontendGenerationError(`custom_api.key is too long (${key.length} > ${MAX_API_KEY_CHARS})`);
-  }
-  if (/[\r\n\u0000]/.test(key)) {
-    throw new FrontendGenerationError("custom_api.key must not contain line breaks or NUL characters");
-  }
-  const model = requireModel ? requireText2(record.model, "custom_api.model", 256) : typeof record.model === "string" ? record.model.trim() : "";
-  return { baseUrl: normalizeBaseUrl(url), key, model };
-}
-function authHeaders(target) {
-  const headers = { "content-type": "application/json" };
-  if (target.key !== "") headers.authorization = `Bearer ${target.key}`;
-  return headers;
-}
-function redactSecret(value, secret) {
-  return secret === "" ? value : value.split(secret).join("[redacted]");
-}
-function bodySnippet(value, secret) {
-  const text = redactSecret(value, secret).replace(/\s+/g, " ").trim();
-  return text.length > 500 ? `${text.slice(0, 500)}\u2026` : text;
-}
-async function requestJson(endpoint, init, label, secret) {
-  let response;
-  const externalSignal = init.signal instanceof AbortSignal ? init.signal : void 0;
-  const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
-  try {
-    response = await fetch(endpoint, {
-      ...init,
-      redirect: "error",
-      signal: externalSignal === void 0 ? timeoutSignal : AbortSignal.any([externalSignal, timeoutSignal])
+
+// packages/plugin/src/http/body-api.ts
+async function handleAgentTavernBodyApi(ctx, db, req, res, url, route, method) {
+  const wiring = bodyWiringContext(ctx, async (sessionId2) => (await db.getState()).sessionBindings[sessionId2]);
+  if (method === "GET") {
+    const sessionId2 = url.searchParams.get("sessionId");
+    if (sessionId2 === null || sessionId2 === "") {
+      throw new HttpError(400, "sessionId and messageId (or messageIds) are required");
+    }
+    const selector = parseBodyGetSelector(url.searchParams);
+    const state = await db.getState();
+    const binding2 = state.sessionBindings[sessionId2];
+    const mutationsDisabledReason2 = imBodyMutationDisabledOf(binding2, sessionId2, state.imPeers);
+    let characterName2;
+    let chatId2;
+    let character2 = void 0;
+    let chat;
+    if (binding2 !== void 0 && bodyBindingEligible(binding2)) {
+      characterName2 = binding2.character;
+      chatId2 = binding2.chatId;
+      character2 = await db.getCharacter(binding2.character);
+      chat = (await db.getChatSnapshot(binding2.character, binding2.chatId))?.chat;
+    }
+    const stateSafety2 = binding2 === void 0 || !bodyBindingEligible(binding2) ? void 0 : bodyStateSafetyOf(character2, chat);
+    const historicalMvuState = character2 !== void 0 && chat !== void 0 && bodyHistoricalMvuStateOf(character2, chat);
+    const agent2 = resolveLiveAgent(wiring, sessionId2);
+    const deps2 = agent2 === void 0 ? void 0 : await createBodyDeps(wiring, agent2);
+    const session = agent2?.session;
+    const factsSource = session === void 0 ? void 0 : createBodySessionFactsSource(session);
+    let scriptsRead;
+    const readScripts = () => {
+      if (characterName2 === void 0 || chatId2 === void 0) {
+        throw new Error("body floor display scripts require a character and chat id");
+      }
+      scriptsRead ??= collectSessionRegexScripts(db, state, characterName2, chatId2, character2);
+      return scriptsRead;
+    };
+    const readFloorOf = async (messageId, groupIdHint, selectedIndexHint) => characterName2 === void 0 || chatId2 === void 0 || chat === void 0 ? void 0 : projectedBodyFloor(chat, messageId, groupIdHint, selectedIndexHint, readScripts);
+    const stableViewOf = (messageId) => buildBodyView({
+      messageId,
+      binding: binding2,
+      agent: agent2,
+      hostSupported: deps2 !== void 0,
+      stateSafety: stateSafety2,
+      historicalMvuState,
+      writeRollbackAvailable: deps2?.writeRollback !== void 0,
+      ledger: void 0,
+      messageText: void 0,
+      projected: void 0,
+      projectionCurrent: false,
+      projectionTextCurrent: false,
+      inspection: void 0,
+      ...mutationsDisabledReason2 === void 0 ? {} : { mutationsDisabledReason: mutationsDisabledReason2 }
     });
-  } catch (cause) {
-    const reason = cause instanceof Error ? cause.message : String(cause);
-    throw new FrontendGenerationError(`custom API ${label} request failed: ${redactSecret(reason, secret)}`);
-  }
-  const declaredLength = Number(response.headers.get("content-length") ?? "");
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
-    if (response.body !== null) await response.body.cancel().catch(() => void 0);
-    throw new FrontendGenerationError(`custom API ${label} response is too large (${declaredLength} bytes)`);
-  }
-  const text = await response.text();
-  if (text.length > MAX_RESPONSE_BYTES) {
-    throw new FrontendGenerationError(`custom API ${label} response is too large (${text.length} characters)`);
-  }
-  if (!response.ok) {
-    throw new FrontendGenerationError(
-      `custom API ${label} failed: HTTP ${response.status} ${response.statusText}: ${bodySnippet(text, secret)}`
-    );
-  }
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new FrontendGenerationError(`custom API ${label} returned invalid JSON: ${bodySnippet(text, secret)}`);
-  }
-}
-function modelIds(payload) {
-  const record = asRecord3(payload);
-  const list = record === void 0 ? [] : Array.isArray(record.data) ? record.data : Array.isArray(record.models) ? record.models : [];
-  const ids = [];
-  for (const entry of list) {
-    if (typeof entry === "string") {
-      const id2 = entry.trim();
-      if (id2 !== "") ids.push(id2);
-      continue;
-    }
-    const item = asRecord3(entry);
-    if (item === void 0) continue;
-    const id = typeof item.id === "string" ? item.id.trim() : typeof item.name === "string" ? item.name.trim() : "";
-    if (id !== "") ids.push(id);
-  }
-  return [...new Set(ids)].sort();
-}
-async function listCustomApiModels(value) {
-  const target = parseApiTarget(value, false);
-  const payload = await requestJson(
-    `${target.baseUrl}/models`,
-    { method: "GET", headers: authHeaders(target) },
-    "models",
-    target.key
-  );
-  const models = modelIds(payload);
-  if (models.length === 0) {
-    throw new FrontendGenerationError("custom API /models returned no model ids; check the API URL and key");
-  }
-  return models.slice(0, 500);
-}
-function parseRole(value, fallback) {
-  return value === "system" || value === "user" || value === "assistant" ? value : fallback;
-}
-function buildMessages(config) {
-  const messages = [];
-  const injects = Array.isArray(config.injects) ? config.injects : [];
-  for (const entry of injects) {
-    const inject2 = asRecord3(entry);
-    if (inject2 === void 0) continue;
-    if (inject2.position === "none") continue;
-    if (typeof inject2.content !== "string" || inject2.content.trim() === "") continue;
-    messages.push({ role: parseRole(inject2.role, "system"), content: inject2.content });
-  }
-  const overrides = asRecord3(config.overrides);
-  const history = asRecord3(overrides?.chat_history);
-  const prompts = history !== void 0 && Array.isArray(history.prompts) ? history.prompts : [];
-  for (const entry of prompts) {
-    const prompt = asRecord3(entry);
-    if (prompt === void 0) continue;
-    if (typeof prompt.content !== "string") {
-      throw new FrontendGenerationError("overrides.chat_history.prompts[].content must be a string");
-    }
-    messages.push({ role: parseRole(prompt.role, "user"), content: prompt.content });
-  }
-  const userInput = typeof config.user_input === "string" ? config.user_input : "";
-  if (userInput.trim() !== "") messages.push({ role: "user", content: userInput });
-  if (messages.length === 0) {
-    throw new FrontendGenerationError("TavernHelper.generate needs user_input or chat history prompts");
-  }
-  if (messages.length > MAX_MESSAGES) {
-    throw new FrontendGenerationError(`too many prompt messages (${messages.length} > ${MAX_MESSAGES})`);
-  }
-  const totalChars = messages.reduce((sum, message) => sum + message.content.length, 0);
-  if (totalChars > MAX_PROMPT_CHARS) {
-    throw new FrontendGenerationError(`prompt is too large (${totalChars} > ${MAX_PROMPT_CHARS} characters)`);
-  }
-  return messages;
-}
-function toolCallArgumentsText(message) {
-  if (message === void 0) return "";
-  const parts = [];
-  const collect = (value) => {
-    const call = asRecord3(value);
-    if (call === void 0) return;
-    const fn = asRecord3(call.function);
-    const raw = fn?.arguments ?? call.arguments;
-    if (typeof raw === "string") {
-      if (raw.trim() !== "") parts.push(raw);
-      return;
-    }
-    if (raw !== void 0 && raw !== null) {
+    const readBodyItem = async (messageId) => {
       try {
-        const text = JSON.stringify(raw);
-        if (text !== void 0) parts.push(text);
-      } catch {
+        const floorRead = await readFloorOf(messageId, void 0, void 0);
+        const floorByMessage = floorRead?.ok === true ? floorRead.floor : void 0;
+        const facts = factsSource?.factsOf(messageId, floorByMessage?.groupId);
+        const ledger = facts?.ledger;
+        const selectionMoved = ledger !== void 0 && (floorByMessage === void 0 || floorByMessage.anchorMessageId !== ledger.anchorMessageId || floorByMessage.selectedIndex !== ledger.selectedIndex);
+        const reread = selectionMoved ? await readFloorOf(messageId, ledger.groupId, ledger.selectedIndex) : void 0;
+        const projected = reread === void 0 ? floorByMessage : reread.ok ? reread.floor : void 0;
+        const floorDegradation = reread !== void 0 ? reread.ok ? void 0 : reread.degradation : floorRead !== void 0 && !floorRead.ok ? floorRead.degradation : void 0;
+        const messageText3 = facts?.messageText;
+        const inspection = facts?.inspection;
+        const latestEditSeq = facts?.latestEditSeq;
+        if (facts?.ledgerError !== void 0) {
+          ctx.logger?.warn?.("dsh-soulmojito body: ledger fold failed for GET body", {
+            sessionId: sessionId2,
+            messageId,
+            error: facts.ledgerError
+          });
+        }
+        if (floorDegradation !== void 0) {
+          ctx.logger?.warn?.("dsh-soulmojito body: body floor binding is ambiguous for GET body", {
+            sessionId: sessionId2,
+            messageId,
+            code: floorDegradation.detail,
+            error: floorDegradation.message
+          });
+        }
+        const projection2 = floorDegradation === void 0 ? bodyProjectionState(projected, ledger, latestEditSeq) : { current: false, textCurrent: false };
+        const editDetail = character2 === void 0 || chat === void 0 || ledger === void 0 ? void 0 : bodyEditDetailOf(character2.card, chat, ledger);
+        const view = buildBodyView({
+          messageId,
+          binding: binding2,
+          agent: agent2,
+          hostSupported: deps2 !== void 0,
+          stateSafety: stateSafety2,
+          historicalMvuState,
+          writeRollbackAvailable: deps2?.writeRollback !== void 0,
+          ledger,
+          messageText: messageText3,
+          projected,
+          projectionCurrent: projection2.current,
+          projectionTextCurrent: projection2.textCurrent,
+          inspection,
+          editDetail,
+          // A damaged floor binding closes edit with its own detail and keeps
+          // publishing it even when a reason already gates the row.
+          ...floorDegradation === void 0 ? {} : { readDetail: floorDegradation.detail },
+          ...facts?.lastOperation === void 0 ? {} : { lastOperation: facts.lastOperation },
+          ...mutationsDisabledReason2 === void 0 ? {} : { mutationsDisabledReason: mutationsDisabledReason2 }
+        });
+        return { ok: true, view };
+      } catch (error) {
+        ctx.logger?.warn?.("dsh-soulmojito body: GET body item failed", {
+          sessionId: sessionId2,
+          messageId,
+          error: errorMessage3(error)
+        });
+        return { ok: false, view: stableViewOf(messageId), error };
       }
+    };
+    if (selector.kind === "batch") {
+      const items = /* @__PURE__ */ new Map();
+      for (const messageId of selector.messageIds) {
+        items.set(messageId, (await readBodyItem(messageId)).view);
+      }
+      return sendJson(res, 200, { ok: true, items: Object.fromEntries(items) });
     }
-  };
-  const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
-  for (const call of calls) collect(call);
-  collect(message.function_call);
-  return parts.join("\n");
-}
-function completionText(payload) {
-  const record = asRecord3(payload);
-  const choices = record !== void 0 && Array.isArray(record.choices) ? record.choices : [];
-  const first = choices.length > 0 ? asRecord3(choices[0]) : void 0;
-  if (first === void 0) {
-    throw new FrontendGenerationError("custom API /chat/completions returned no choices");
+    const item = await readBodyItem(selector.messageId);
+    if (!item.ok) throw item.error;
+    return sendJson(res, 200, item.view);
   }
-  const message = asRecord3(first.message);
-  const content = message?.content;
-  if (typeof content === "string" && content.trim() !== "") return content;
-  if (Array.isArray(content)) {
-    const joined = content.map((part) => {
-      if (typeof part === "string") return part;
-      const item = asRecord3(part);
-      return item !== void 0 && typeof item.text === "string" ? item.text : "";
-    }).join("");
-    if (joined.trim() !== "") return joined;
+  const body = await readJson(req);
+  const sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
+  if (sessionId === "") {
+    return sendBodyFailure(res, { status: 400, code: "invalid-arguments", message: "sessionId is required" });
   }
-  if (typeof first.text === "string" && first.text.trim() !== "") return first.text;
-  const toolText = toolCallArgumentsText(message);
-  if (toolText.trim() !== "") return toolText;
-  const finishReason = typeof first.finish_reason === "string" ? first.finish_reason : "unknown";
-  throw new FrontendGenerationError(`custom API /chat/completions returned no text or tool arguments (finish_reason=${finishReason})`);
-}
-async function generateWithCustomApi(value, signal) {
-  const config = asRecord3(value);
-  if (config === void 0) throw new FrontendGenerationError("generate config must be an object");
-  const target = parseApiTarget(config.custom_api, true);
-  const messages = buildMessages(config);
-  const payload = await requestJson(
-    `${target.baseUrl}/chat/completions`,
-    {
-      method: "POST",
-      headers: authHeaders(target),
-      body: JSON.stringify({ model: target.model, messages, stream: false }),
-      ...signal === void 0 ? {} : { signal }
-    },
-    "chat/completions",
-    target.key
-  );
-  const text = completionText(payload);
-  if (text.trim() === "") {
-    throw new FrontendGenerationError("custom API /chat/completions returned an empty response");
-  }
-  return text;
-}
-function textFromContent(value) {
-  if (typeof value === "string") return value;
-  if (!Array.isArray(value)) return "";
-  return value.map((part) => {
-    if (typeof part === "string") return part;
-    const item = asRecord3(part);
-    return item !== void 0 && typeof item.text === "string" ? item.text : "";
-  }).join("");
-}
-function deltaText(payload) {
-  const record = asRecord3(payload);
-  const choices = record !== void 0 && Array.isArray(record.choices) ? record.choices : [];
-  if (choices.length === 0) return "";
-  const first = asRecord3(choices[0]);
-  if (first === void 0) return "";
-  const delta = asRecord3(first.delta);
-  if (delta !== void 0) {
-    const content = textFromContent(delta.content);
-    if (content !== "") return content;
-  }
-  const message = asRecord3(first.message);
-  if (message !== void 0) {
-    const content = textFromContent(message.content);
-    if (content !== "") return content;
-  }
-  return typeof first.text === "string" ? first.text : "";
-}
-function streamChunkText(line, secret) {
-  const trimmed = line.trim();
-  if (trimmed === "" || trimmed === "[DONE]") return "";
-  if (trimmed.startsWith(":") || trimmed.startsWith("event:") || trimmed.startsWith("id:") || trimmed.startsWith("retry:")) return "";
-  const raw = trimmed.startsWith("data:") ? trimmed.slice("data:".length).trim() : trimmed;
-  if (raw === "" || raw === "[DONE]") return "";
-  let payload;
-  try {
-    payload = JSON.parse(raw);
-  } catch {
-    throw new FrontendGenerationError(`custom API stream returned invalid JSON: ${bodySnippet(raw, secret)}`);
-  }
-  return deltaText(payload);
-}
-async function generateWithCustomApiStream(value, onDelta, signal) {
-  const config = asRecord3(value);
-  if (config === void 0) throw new FrontendGenerationError("generate config must be an object");
-  const target = parseApiTarget(config.custom_api, true);
-  const messages = buildMessages(config);
-  let response;
-  try {
-    response = await fetch(`${target.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: authHeaders(target),
-      body: JSON.stringify({ model: target.model, messages, stream: true }),
-      redirect: "error",
-      signal: AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])
+  const binding = await resolveBodyBinding(wiring, sessionId);
+  if (binding === void 0 || !bodyBindingEligible(binding)) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: "architecture-mismatch",
+      message: "body operations require an AgentTavern single-character binding"
     });
-  } catch (cause) {
-    if (signal.aborted) throw new FrontendGenerationError("custom API generation was aborted");
-    const reason = cause instanceof Error ? cause.message : String(cause);
-    throw new FrontendGenerationError(`custom API chat/completions request failed: ${redactSecret(reason, target.key)}`);
   }
-  const contentType = response.headers.get("content-type") ?? "";
-  if (!response.ok) {
-    const text2 = await response.text().catch(() => "");
-    throw new FrontendGenerationError(
-      `custom API chat/completions failed: HTTP ${response.status} ${response.statusText}: ${bodySnippet(text2, target.key)}`
+  const mutationsDisabledReason = imBodyMutationDisabledOf(binding, sessionId, (await db.getState()).imPeers);
+  if (mutationsDisabledReason !== void 0) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: IM_BODY_MUTATION_DISABLED_CODE,
+      message: mutationsDisabledReason
+    });
+  }
+  const characterName = binding.character;
+  const chatId = binding.chatId;
+  if (characterName === void 0 || chatId === void 0) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: "body-state-unsafe",
+      message: bodyStateUnsafeMessage("chat-unreadable"),
+      detail: "chat-unreadable"
+    });
+  }
+  const action = route === "body" ? "edit" : route === "body/select" ? "select" : "regenerate";
+  const character = await db.getCharacter(characterName);
+  const snapshot2 = await db.getChatSnapshot(characterName, chatId);
+  const stateSafety = bodyMutationSafetyOf(action, character, snapshot2?.chat);
+  if (!stateSafety.safe) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: stateSafety.reason,
+      message: bodyStateUnsafeMessage(stateSafety.detail),
+      detail: stateSafety.detail
+    });
+  }
+  const agent = resolveLiveAgent(wiring, sessionId);
+  if (agent === void 0) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: "session-busy",
+      message: `session '${sessionId}' has no live agent in this host process; open the chat and retry`
+    });
+  }
+  const deps = await createBodyDeps(wiring, agent);
+  if (deps === void 0) {
+    return sendBodyFailure(res, {
+      status: 501,
+      code: "host-unsupported",
+      message: "this host does not expose appendPluginRecord/pluginRecordOf (DSH 0.2.1-rc.2+)"
+    });
+  }
+  if (action === "regenerate" && deps.writeRollback === void 0 && snapshot2 !== void 0 && bodyHistoricalMvuStateOf(character, snapshot2.chat)) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: "body-state-unsafe",
+      message: bodyStateUnsafeMessage("write-journal-unavailable"),
+      detail: "write-journal-unavailable"
+    });
+  }
+  try {
+    const groupId = bodyString(body, "groupId") ?? bodyString(body, "messageId");
+    if (groupId === void 0) throw bodyRuntimeError("invalid-arguments", "groupId or messageId is required");
+    const expectedAnchorId = bodyString(body, "expectedAnchorId") ?? groupId;
+    if (route === "body") {
+      const index2 = bodyIndex(body, "index");
+      if (typeof body.text !== "string") {
+        throw bodyRuntimeError("invalid-body-text", "body edit requires a string text");
+      }
+      const state2 = await applyBodyEdit(deps, { groupId, index: index2, text: body.text, expectedAnchorId });
+      return sendJson(res, 200, { ok: true, state: state2 });
+    }
+    if (route === "body/regenerate") {
+      const expectedIndex = bodyIndex(body, "expectedIndex");
+      const feedback = typeof body.feedback === "string" ? body.feedback : void 0;
+      const result = await startRegenerate(deps, {
+        groupId,
+        expectedAnchorId,
+        expectedIndex,
+        ...feedback === void 0 ? {} : { feedback }
+      });
+      return sendJson(res, 202, { ok: true, opId: result.opId, status: "pending" });
+    }
+    const index = bodyIndex(body, "index");
+    const state = await selectBodyCandidate(deps, { groupId, index, expectedAnchorId });
+    return sendJson(res, 200, { ok: true, state });
+  } catch (error) {
+    const pending = pendingOperationOf(error);
+    const recovered = pending === void 0 || await retryPendingBodyRecovery(wiring, agent, pending);
+    return sendBodyFailure(
+      res,
+      bodyFailureOf(error),
+      recovered || pending === void 0 ? void 0 : { opId: pending.opId, status: "pending" }
     );
   }
-  if (!contentType.includes("text/event-stream")) {
-    const text2 = await response.text();
-    if (text2.length > MAX_RESPONSE_BYTES) {
-      throw new FrontendGenerationError(`custom API chat/completions response is too large (${text2.length} characters)`);
-    }
-    let payload;
-    try {
-      payload = JSON.parse(text2);
-    } catch {
-      throw new FrontendGenerationError(`custom API chat/completions returned invalid JSON: ${bodySnippet(text2, target.key)}`);
-    }
-    const finalText = completionText(payload);
-    if (finalText.trim() === "") {
-      throw new FrontendGenerationError("custom API /chat/completions returned an empty response");
-    }
-    onDelta(finalText);
-    return finalText;
-  }
-  if (response.body === null) {
-    throw new FrontendGenerationError("custom API stream has no response body");
-  }
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let text = "";
-  try {
-    for (; ; ) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      buffer += decoder.decode(chunk.value, { stream: true });
-      let newline = buffer.indexOf("\n");
-      while (newline >= 0) {
-        const line = buffer.slice(0, newline);
-        buffer = buffer.slice(newline + 1);
-        const delta = streamChunkText(line, target.key);
-        if (delta !== "") {
-          text += delta;
-          if (text.length > MAX_RESPONSE_BYTES) {
-            throw new FrontendGenerationError(`custom API stream is too large (${text.length} characters)`);
-          }
-          onDelta(delta);
-        }
-        newline = buffer.indexOf("\n");
-      }
-    }
-    if (buffer.trim() !== "") {
-      const delta = streamChunkText(buffer, target.key);
-      if (delta !== "") {
-        text += delta;
-        onDelta(delta);
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  if (signal.aborted) throw new FrontendGenerationError("custom API generation was aborted");
-  if (text.trim() === "") {
-    throw new FrontendGenerationError("custom API /chat/completions stream returned no text");
-  }
-  return text;
 }
-
-// packages/plugin/src/frontend-generation-context.ts
-init_tavern_assets();
-function asObject(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
-}
-function stringsOf(value) {
-  if (typeof value === "string") return [value];
-  if (!Array.isArray(value)) return [];
-  return value.filter((item) => typeof item === "string");
-}
-function scanTextOf(config) {
-  const parts = stringsOf(config["scanKeywords"]);
-  const injects = Array.isArray(config["injects"]) ? config["injects"] : [];
-  for (const raw of injects) {
-    const inject2 = asObject(raw);
-    if (inject2 === void 0 || inject2["should_scan"] !== true) continue;
-    const content = inject2["content"];
-    if (typeof content === "string" && content.trim() !== "") parts.push(content);
-  }
-  return [...new Set(parts.map((part) => part.trim()).filter((part) => part !== ""))].join("\n");
-}
-function isScanOnlyInject(value) {
-  const inject2 = asObject(value);
-  return inject2 !== void 0 && inject2["should_scan"] === true && inject2["position"] === "none";
-}
-function activatedContent(lore) {
-  const seen = /* @__PURE__ */ new Set();
-  const parts = [];
-  for (const entry of lore.allActivated) {
-    if (entry.position === WI_POSITION2.OUTLET) continue;
-    const text = entry.content.trim();
-    if (text === "" || seen.has(text)) continue;
-    seen.add(text);
-    parts.push(text);
-  }
-  return parts;
-}
-async function applyFrontendWorldbookScan(db, state, character, chatId, config) {
-  const record = asObject(config);
-  if (record === void 0) return config;
-  const scanText = scanTextOf(record);
-  if (scanText === "" || chatId === "") return config;
-  const file = await db.getCharacter(character);
-  if (file === void 0) return config;
-  const books = await collectWorldInfoBooks(db, state, character, file, chatId);
-  if (books.length === 0) return config;
-  const persona = state.activePersona === void 0 ? void 0 : await db.getPersona(state.activePersona);
-  const lore = activateWorldInfo({
-    books,
-    chat: [{ name: "user", content: scanText, isUser: true }],
-    contextSize: 4096,
-    trigger: "normal",
-    scanSources: {
-      personaDescription: typeof persona?.["description"] === "string" ? persona["description"] : void 0,
-      characterDescription: file.card.data.description,
-      characterPersonality: file.card.data.personality,
-      scenario: file.card.data.scenario,
-      creatorNotes: file.card.data.creatorNotes
-    },
-    settings: { recursive: true, scanDepth: 2, budgetPercent: 25 },
-    messageCount: 1
+function sendBodyFailure(res, failure, pendingOperation) {
+  sendJson(res, failure.status, {
+    ok: false,
+    code: failure.code,
+    message: failure.message,
+    ...failure.detail === void 0 ? {} : { detail: failure.detail },
+    ...pendingOperation === void 0 ? {} : { pendingOperation }
   });
-  const content = activatedContent(lore).join("\n\n");
-  if (content === "") return config;
-  const injects = Array.isArray(record["injects"]) ? record["injects"] : [];
+}
+function bodyString(body, field2) {
+  const value = body[field2];
+  return typeof value === "string" && value.trim() !== "" ? value : void 0;
+}
+function bodyIndex(body, field2) {
+  const value = body[field2];
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw bodyRuntimeError("invalid-arguments", `${field2} must be a non-negative safe integer`);
+  }
+  return value;
+}
+async function projectedBodyFloor(chat, messageId, groupIdHint, selectedIndexHint, readScripts) {
+  let index;
+  try {
+    index = locateBodyFloorForRead(chat, {
+      messageId,
+      ...groupIdHint === void 0 ? {} : { groupId: groupIdHint }
+    });
+  } catch (error) {
+    return { ok: false, degradation: bodyFloorDegradationOf(error) };
+  }
+  if (index === void 0) return { ok: true, floor: void 0 };
+  const floor = chat.messages[index];
+  const tavern = asRecord2(asRecord2(floor.extra)?.["agentTavern"]);
+  const scripts = await readScripts();
+  const selectedSwipe = selectedIndexHint === void 0 ? floor : Array.isArray(floor.swipes) && typeof floor.swipes[selectedIndexHint] === "string" ? { ...floor, mes: floor.swipes[selectedIndexHint] } : void 0;
+  const text = selectedSwipe === void 0 ? void 0 : stripFrontendDocuments(displayTextForMessage(scripts, selectedSwipe, chat.messages.length - 1 - index));
+  const selectedIndex = floor.swipe_id;
+  const count = Array.isArray(floor.swipes) && floor.swipes.length > 0 ? floor.swipes.length : 1;
+  const resolved = {
+    ...typeof tavern?.["bodyGroupId"] === "string" ? { groupId: tavern["bodyGroupId"] } : {},
+    ...typeof tavern?.["anchorMessageId"] === "string" ? { anchorMessageId: tavern["anchorMessageId"] } : {},
+    ...typeof selectedIndex === "number" && Number.isSafeInteger(selectedIndex) ? { selectedIndex } : {},
+    ...typeof tavern?.["lastBodyEventSeq"] === "number" && Number.isSafeInteger(tavern["lastBodyEventSeq"]) && tavern["lastBodyEventSeq"] >= 0 ? { lastBodyEventSeq: tavern["lastBodyEventSeq"] } : {},
+    count,
+    ...text === void 0 ? {} : { text }
+  };
+  return { ok: true, floor: resolved };
+}
+function bodyFloorDegradationOf(error) {
+  if (error instanceof BodyJsonlProjectionError && error.code === "body-group-mismatch") {
+    return { detail: error.code, message: error.message };
+  }
   return {
-    ...record,
-    injects: [
-      { role: "system", content, position: "in_chat", depth: 0 },
-      ...injects.filter((inject2) => !isScanOnlyInject(inject2))
-    ]
+    detail: "body-floor-unreadable",
+    message: `body floor lookup failed: ${errorMessage3(error)}`
   };
 }
+var BODY_GET_BATCH_LIMIT = 50;
+function parseBodyGetSelector(params) {
+  const single = params.get("messageId");
+  const batch = params.get("messageIds");
+  const hasSingle = single !== null && single !== "";
+  const hasBatch = batch !== null && batch !== "";
+  if (hasSingle && hasBatch) {
+    throw new HttpError(400, "pass either messageId or messageIds, not both");
+  }
+  if (hasSingle) return { kind: "single", messageId: single };
+  if (!hasBatch) {
+    throw new HttpError(400, "sessionId and messageId (or messageIds) are required");
+  }
+  const messageIds = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const raw of batch.split(",")) {
+    const messageId = raw.trim();
+    if (messageId === "") throw new HttpError(400, "messageIds must not contain empty entries");
+    if (seen.has(messageId)) continue;
+    seen.add(messageId);
+    messageIds.push(messageId);
+  }
+  if (messageIds.length > BODY_GET_BATCH_LIMIT) {
+    throw new HttpError(400, `messageIds accepts at most ${BODY_GET_BATCH_LIMIT} ids (got ${messageIds.length})`);
+  }
+  return { kind: "batch", messageIds };
+}
+function bodyProjectionState(projected, ledger, latestEditSeq) {
+  if (projected === void 0 || ledger === void 0) return { current: true, textCurrent: true };
+  const textCurrent = latestEditSeq === void 0 || projected.lastBodyEventSeq !== void 0 && projected.lastBodyEventSeq >= latestEditSeq;
+  const selectionCurrent = (projected.anchorMessageId === void 0 || projected.anchorMessageId === ledger.anchorMessageId) && (projected.selectedIndex === void 0 || projected.selectedIndex === ledger.selectedIndex);
+  return { current: textCurrent && selectionCurrent, textCurrent };
+}
 
-// packages/plugin/src/helper.ts
+// packages/plugin/src/http/asset-import-routes.ts
+init_src2();
+init_src();
 init_dsh_home();
+init_events();
+init_io();
+async function handleCharacterImportRoute(db, req, res) {
+  const body = await readJson(req, 25 * 1024 * 1024);
+  let source;
+  if (typeof body.pngBase64 === "string") source = new Uint8Array(Buffer.from(body.pngBase64, "base64"));
+  else if (typeof body.charxBase64 === "string") source = new Uint8Array(Buffer.from(body.charxBase64, "base64"));
+  else if (body.card && typeof body.card === "object") source = body.card;
+  else throw new Error("expected { pngBase64 }, { charxBase64 } or { card }");
+  const result = await db.importCharacter(source);
+  await emitAssetsSaved("character", result.card.data.name);
+  try {
+    await saveOriginalSnapshot(tavernDataRoot(), result.card.data.name, result.card);
+  } catch (error) {
+    console.warn(`dsh-soulmojito: original snapshot for '${result.card.data.name}' failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const current = await db.getState();
+  if (!current.activeCharacter) {
+    await db.patchState({ activeCharacter: result.card.data.name });
+  }
+  await refreshActivePrompt();
+  return sendJson(res, 200, { ok: true, name: result.card.data.name, card: publicCard(result.card), world: result.importedWorld ?? null, importedRegex: result.importedRegex });
+}
+async function handleWorldImportRoute(db, req, res) {
+  const body = await readJson(req);
+  const data = asRecord2(body.data);
+  if (typeof body.name !== "string" || data === void 0) throw new Error("expected { name, data }");
+  const book = await db.importWorldFile(body.name, data);
+  await emitAssetsSaved("world", book.name);
+  return sendJson(res, 200, { ok: true, name: book.name, entries: book.entries.length });
+}
+async function handlePresetImportRoute(db, req, res) {
+  const body = await readJson(req);
+  const data = asRecord2(body.data);
+  if (typeof body.name !== "string" || data === void 0) throw new Error("expected { name, data }");
+  parsePresetOrThrow(data);
+  const result = await db.importPreset(body.name, data);
+  await emitAssetsSaved("preset", body.name);
+  await emitAgentPresetChanged();
+  return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(data), importedRegex: result.importedRegex });
+}
+async function handlePresetReadRoute(db, res, route) {
+  const name2 = decodeURIComponent(route.slice("preset/".length));
+  const data = await db.getPreset(name2);
+  if (!data) return sendJson(res, 404, { ok: false, message: "preset not found" });
+  return sendJson(res, 200, { ok: true, name: name2, kind: detectPresetKind(data), data });
+}
+async function handlePresetUpdateRoute(db, req, res, route) {
+  const oldName = decodeURIComponent(route.slice("preset/".length));
+  const body = await readJson(req, 10 * 1024 * 1024);
+  const data = asRecord2(body.data);
+  if (typeof body.name !== "string" || body.name.trim() === "" || data === void 0) {
+    throw new Error("expected { name, data }");
+  }
+  const name2 = body.name;
+  parsePresetOrThrow(data);
+  await db.putPreset(name2, data);
+  await emitAssetsSaved("preset", name2);
+  if (name2 !== oldName) await db.deletePreset(oldName);
+  const state = await db.updateState((current) => ({
+    activePreset: current.activePreset === oldName ? name2 : current.activePreset,
+    ...name2 !== oldName && current.regexScriptPresetOwners !== void 0 ? {
+      regexScriptPresetOwners: Object.fromEntries(Object.entries(current.regexScriptPresetOwners).map(([id, owner]) => [id, owner === oldName ? name2 : owner]))
+    } : {}
+  }));
+  await emitAgentPresetChanged();
+  await refreshActivePrompt();
+  return sendJson(res, 200, { ok: true, name: name2, kind: detectPresetKind(data), data, state });
+}
+
+// packages/plugin/src/http/character-routes.ts
+init_src();
+init_dsh_home();
+init_events();
+init_io();
+async function handleCharacterUpdateRoute(db, req, res, route) {
+  const oldName = decodeURIComponent(route.slice("character/".length));
+  const body = await readJson(req, 25 * 1024 * 1024);
+  if (!body.card || typeof body.card !== "object" || Array.isArray(body.card)) {
+    throw new Error("expected { card }");
+  }
+  clampIdentitySummary(body.card);
+  const saved = await db.updateCharacter(oldName, body.card);
+  const nextName = saved.card.data.name;
+  await emitAssetsSaved("character", nextName);
+  if (nextName !== oldName) {
+    await moveOriginalSnapshot(tavernDataRoot(), oldName, nextName);
+  }
+  const state = await db.updateState((current) => {
+    const activeCharacter = current.activeCharacter === oldName ? nextName : current.activeCharacter;
+    const sessionBindings = Object.fromEntries(Object.entries(current.sessionBindings).map(([sessionId, binding]) => [
+      sessionId,
+      binding.character === oldName && binding.group !== true ? { ...binding, character: nextName } : binding
+    ]));
+    const prefix = `${oldName}\0`;
+    const chats = nextName === oldName ? current.chats : Object.fromEntries(Object.entries(current.chats).map(([key, value]) => [
+      key.startsWith(prefix) ? `${nextName}\0${key.slice(prefix.length)}` : key,
+      value
+    ]));
+    return { activeCharacter, sessionBindings, chats };
+  });
+  if (nextName !== oldName) {
+    for (const groupName of await db.listGroups()) {
+      const group2 = await db.getGroup(groupName);
+      if (group2?.members.includes(oldName)) {
+        await db.putGroup({
+          ...group2,
+          members: group2.members.map((member) => member === oldName ? nextName : member),
+          disabledMembers: group2.disabledMembers.map((member) => member === oldName ? nextName : member)
+        });
+      }
+    }
+  }
+  await refreshActivePrompt();
+  return sendJson(res, 200, { ok: true, kind: saved.kind, card: publicCard(saved.card), state });
+}
+async function handleCharacterDeleteRoute(db, res, url) {
+  const name2 = url.searchParams.get("name");
+  if (!name2) throw new Error("name query is required");
+  const found = await db.getCharacter(name2);
+  if (!found) return sendJson(res, 404, { ok: false, message: "character not found" });
+  await db.deleteCharacter(name2);
+  for (const groupName of await db.listGroups()) {
+    const group2 = await db.getGroup(groupName);
+    if (group2?.members.includes(name2)) {
+      await db.putGroup({
+        ...group2,
+        members: group2.members.filter((member) => member !== name2),
+        disabledMembers: group2.disabledMembers.filter((member) => member !== name2)
+      });
+    }
+  }
+  const state = await db.updateState((current) => ({
+    activeCharacter: current.activeCharacter === name2 ? void 0 : current.activeCharacter,
+    sessionBindings: Object.fromEntries(Object.entries(current.sessionBindings).filter(([, binding]) => !(binding.character === name2 && binding.group !== true)))
+  }));
+  await deleteOriginalSnapshot(tavernDataRoot(), name2);
+  await refreshActivePrompt();
+  return sendJson(res, 200, { ok: true, state });
+}
+async function handleCharacterExportRoute(db, res, route) {
+  const name2 = decodeURIComponent(route.slice("export/character/".length));
+  const found = await db.getCharacter(name2);
+  if (!found) return sendJson(res, 404, { ok: false, message: "character not found" });
+  const bytes = await db.exportCharacter(name2);
+  const media = found.kind === "charx" ? "application/zip" : found.kind === "json" ? "application/json" : "image/png";
+  res.statusCode = 200;
+  res.setHeader("content-type", media);
+  const ext = found.kind === "charx" ? "charx" : found.kind === "json" ? "json" : "png";
+  res.setHeader("content-disposition", `attachment; filename="${encodeURIComponent(`${name2}.${ext}`)}"`);
+  res.end(Buffer.from(bytes));
+  return;
+}
 
 // packages/plugin/src/generation/pipeline.ts
 init_src2();
@@ -45010,7 +44469,7 @@ async function resolveGenerationSpeaker(db, state, options) {
   }
   const groupDef = await db.getGroup(characterName);
   if (!groupDef) throw new Error(`group '${characterName}' not found`);
-  const chatGroup = asRecord4(chat.header.chat_metadata?.group);
+  const chatGroup = asRecord3(chat.header.chat_metadata?.group);
   const chatMembers = stringArray2(chatGroup?.["members"]);
   const members = chatMembers !== void 0 && chatMembers.length > 0 ? chatMembers : groupDef.members;
   const disabled = stringArray2(chatGroup?.["disabledMembers"]) ?? groupDef.disabledMembers;
@@ -45018,7 +44477,7 @@ async function resolveGenerationSpeaker(db, state, options) {
   const talkativeness = /* @__PURE__ */ new Map();
   for (const member of members) {
     const file = await db.getCharacter(member);
-    const extensions = asRecord4(file?.card?.data?.extensions);
+    const extensions = asRecord3(file?.card?.data?.extensions);
     const raw = extensions?.["talkativeness"];
     talkativeness.set(member, typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : 0.5);
   }
@@ -45548,7 +45007,7 @@ function roleName(role) {
 function numberOr(value, fallback) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
-function asRecord4(value) {
+function asRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
 }
 function stringArray2(value) {
@@ -45556,8 +45015,1349 @@ function stringArray2(value) {
   return value.filter((item) => typeof item === "string");
 }
 function asTimedEffectsState(value) {
-  return asRecord4(value) === void 0 ? void 0 : value;
+  return asRecord3(value) === void 0 ? void 0 : value;
 }
+
+// packages/plugin/src/http/chat-generation-routes.ts
+init_events();
+init_io();
+async function handleChatRoute(db, req, res, url, route, method) {
+  const chatId = decodeURIComponent(route.slice("chat/".length));
+  const state = await db.getState();
+  const character = url.searchParams.get("character") || state.activeCharacter;
+  if (!character) throw new Error("no active character");
+  if (method === "GET") {
+    const snapshot2 = await db.getChatSnapshot(character, chatId);
+    return snapshot2 ? sendJson(res, 200, { ok: true, chat: snapshot2.chat, revision: snapshot2.revision, displays: await displayTexts(db, state, character, chatId, snapshot2.chat) }) : sendJson(res, 404, { ok: false, message: "chat not found" });
+  }
+  if (method === "PUT") {
+    const body = await readJson(req);
+    const chat = asChatLog(body.chat);
+    if (chat === void 0 || typeof body.revision !== "string") {
+      throw new Error("expected { chat, revision }");
+    }
+    const revision = await db.saveChat(character, chatId, chat, body.revision);
+    await emitChatSaved(character, chatId, revision, chat.messages.length);
+    return sendJson(res, 200, { ok: true, chat, revision });
+  }
+  if (method === "PATCH") {
+    const body = await readJson(req);
+    if (typeof body.name !== "string" || typeof body.revision !== "string") {
+      throw new Error("expected { name, revision }");
+    }
+    const nextChatId = normalizeChatId(body.name);
+    await db.renameChat(character, chatId, nextChatId, body.revision);
+    const state2 = await db.updateState((current) => ({
+      sessionBindings: Object.fromEntries(Object.entries(current.sessionBindings).map(([sessionId, binding]) => [
+        sessionId,
+        binding.character === character && binding.chatId === chatId ? { ...binding, character, chatId: nextChatId } : binding
+      ]))
+    }));
+    const snapshot2 = await db.getChatSnapshot(character, nextChatId);
+    return sendJson(res, 200, {
+      ok: true,
+      id: nextChatId,
+      chat: snapshot2?.chat,
+      revision: snapshot2?.revision,
+      state: state2
+    });
+  }
+  if (method === "DELETE") {
+    const body = await readJson(req);
+    if (typeof body.revision !== "string") throw new Error("expected { revision }");
+    const deleted = await db.deleteChat(character, chatId, body.revision);
+    if (deleted) {
+      await db.updateState((current) => ({
+        sessionBindings: Object.fromEntries(
+          Object.entries(current.sessionBindings).filter(([, binding]) => binding.character !== character || binding.chatId !== chatId)
+        )
+      }));
+    }
+    return sendJson(res, deleted ? 200 : 404, deleted ? { ok: true } : { ok: false, message: "chat not found" });
+  }
+  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+}
+async function handleGenerateRoute(ctx, req, res, db) {
+  return generate(ctx, req, res, db);
+}
+async function handleScriptRoute(ctx, req, res, db) {
+  return runTavernScript(ctx, req, res, db);
+}
+
+// packages/plugin/src/http/domain-routes.ts
+init_runtime2();
+init_io();
+async function handleAvatarRoute(db, res, route) {
+  const name2 = decodeURIComponent(route.slice("avatar/".length));
+  const found = await db.getCharacter(name2);
+  if (found) {
+    return serveCharacterAvatar(res, db, name2, found);
+  }
+  const group2 = await db.getGroup(name2);
+  if (group2) {
+    const enabled = group2.members.filter((member) => !group2.disabledMembers.includes(member));
+    for (const member of enabled.length > 0 ? enabled : group2.members) {
+      const memberFile = await db.getCharacter(member);
+      if (memberFile) return serveCharacterAvatar(res, db, member, memberFile);
+    }
+    return sendAvatarFallback(res, name2);
+  }
+  return sendJson(res, 404, { ok: false, message: "character avatar not found" });
+}
+async function handleCharacterReadRoute(db, res, route) {
+  const name2 = decodeURIComponent(route.slice("character/".length));
+  const found = await db.getCharacter(name2);
+  if (!found) return sendJson(res, 404, { ok: false, message: "character not found" });
+  return sendJson(res, 200, { ok: true, kind: found.kind, card: publicCard(found.card) });
+}
+async function handleProjectionRoute(res, url) {
+  const sessionId = url.searchParams.get("sessionId");
+  if (!sessionId) throw new Error("sessionId query is required");
+  const projector = await getAgentTavernProjectorPromise();
+  if (!projector) throw new Error("AgentTavern projector is unavailable");
+  return sendJson(res, 200, { ok: true, projection: await projector.status(sessionId) });
+}
+async function handleProjectionReplayRoute(ctx, db, req, res, url) {
+  const body = await readJson(req).catch(() => ({}));
+  const sessionId = typeof body.sessionId === "string" ? body.sessionId : url.searchParams.get("sessionId");
+  if (!sessionId) throw new Error("sessionId is required");
+  const state = await db.getState();
+  const binding = state.sessionBindings[sessionId];
+  if (!binding || binding.architecture !== "agent-tavern" || binding.group === true) {
+    throw new TavernArchitectureConflictError("Projection replay requires an AgentTavern single-character binding.");
+  }
+  const agent = ctx.agents?.get?.(sessionId);
+  const session = agent?.session;
+  if (!session || typeof session.id !== "string" || readSessionEvents(session) === void 0) {
+    throw new Error("AgentTavern session is not loaded in this host process; open the chat first and retry.");
+  }
+  const projector = await getAgentTavernProjectorPromise();
+  if (!projector) throw new Error("AgentTavern projector is unavailable");
+  await projector.replay({ ...session, id: session.id });
+  return sendJson(res, 200, { ok: true, projection: await projector.status(sessionId) });
+}
+async function handleCompactRoute(ctx, req, res, url) {
+  const body = await readJson(req).catch(() => ({}));
+  const sessionId = typeof body.sessionId === "string" ? body.sessionId : url.searchParams.get("sessionId");
+  if (!sessionId) throw new Error("sessionId is required");
+  const agent = ctx.agents?.get?.(sessionId);
+  if (!agent || agent.status !== "idle") {
+    throw new Error(`session ${sessionId} has no idle agent in this host process; pause the novel and retry.`);
+  }
+  const compaction = ctx.compaction;
+  if (!compaction || typeof compaction.compactNow !== "function") {
+    throw new Error("compaction service is unavailable in this host process");
+  }
+  const result = await compaction.compactNow(agent, new AbortController().signal);
+  return sendJson(res, 200, { ok: true, result: result ?? null });
+}
+async function handleAuditRoute(db, res, url) {
+  const sessionId = url.searchParams.get("sessionId");
+  if (!sessionId) throw new Error("sessionId query is required");
+  const state = await db.getState();
+  const binding = state.sessionBindings[sessionId];
+  if (!binding || binding.architecture !== "agent-tavern" || binding.group === true) {
+    throw new TavernArchitectureConflictError("AgentTavern audit requires a native single-character binding.");
+  }
+  const scopes = [
+    { scope: "chat", scopeId: binding.chatId },
+    { scope: "character", scopeId: binding.character },
+    { scope: "agent", scopeId: sessionId }
+  ];
+  const [memoryGroups, variableGroups, globalMemories, globalVariables, projector] = await Promise.all([
+    Promise.all(scopes.map(({ scope, scopeId }) => memories().then((store5) => store5.search({
+      scope,
+      scopeId,
+      includeDeleted: true,
+      limit: 50
+    })))),
+    Promise.all(scopes.map(({ scope, scopeId }) => variables().then((store5) => store5.listAll(scope, scopeId)))),
+    memories().then((store5) => store5.search({ scope: "global", includeDeleted: true, limit: 50 })),
+    variables().then((store5) => store5.listAll("global", "global")),
+    getAgentTavernProjectorPromise()
+  ]);
+  return sendJson(res, 200, {
+    ok: true,
+    architecture: binding.architecture,
+    contextMode: binding.contextMode,
+    projection: projector ? await projector.status(sessionId) : null,
+    memories: [...memoryGroups.flat().map((hit) => hit.record), ...globalMemories.map((hit) => hit.record)],
+    variables: [...variableGroups.flat(), ...globalVariables]
+  });
+}
+
+// packages/plugin/src/http/frontend-routes.ts
+import { createReadStream, createWriteStream } from "node:fs";
+import { mkdtemp, rm as rm2 } from "node:fs/promises";
+import { tmpdir as tmpdir4 } from "node:os";
+import { join as join22 } from "node:path";
+import { pipeline } from "node:stream/promises";
+
+// packages/tavern-frontend-storage/src/idb-store.ts
+import { createHash as createHash14 } from "node:crypto";
+import { copyFile, mkdir as mkdir4, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { dirname as dirname13, join as join21 } from "node:path";
+var IDB_MAX_RECORD_BYTES = 1024 * 1024 * 1024;
+var IDB_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
+var databaseLocks = /* @__PURE__ */ new Map();
+function sha256(value) {
+  return createHash14("sha256").update(value).digest("hex");
+}
+function databaseDir(root, character, name2) {
+  return join21(root, "frontend-idb", sha256(character), sha256(name2));
+}
+function recordKeyHash(store5, key) {
+  return sha256(`${store5}\0${key}`);
+}
+function recordPath(root, character, name2, store5, key) {
+  return join21(databaseDir(root, character, name2), "records", `${recordKeyHash(store5, key)}.bin`);
+}
+function metaPath(dir) {
+  return join21(dir, "meta.json");
+}
+function emptyDatabase(name2) {
+  return { name: name2, version: 0, stores: {}, records: {}, updatedAt: 0 };
+}
+function asRecord4(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
+}
+function normalizeIndexes(value) {
+  const indexes = {};
+  const record = asRecord4(value);
+  if (record === void 0) return indexes;
+  for (const [indexName, descriptor] of Object.entries(record)) {
+    const entry = asRecord4(descriptor);
+    if (entry === void 0 || typeof entry.keyPath !== "string" || entry.keyPath.trim() === "") continue;
+    indexes[indexName] = {
+      keyPath: entry.keyPath,
+      unique: entry.unique === true,
+      multiEntry: entry.multiEntry === true
+    };
+  }
+  return indexes;
+}
+function normalizeDatabase(value, name2) {
+  const record = asRecord4(value);
+  if (record === void 0) return emptyDatabase(name2);
+  const stores = {};
+  const rawStores = asRecord4(record.stores);
+  if (rawStores !== void 0) {
+    for (const [storeName, descriptor] of Object.entries(rawStores)) {
+      const entry = asRecord4(descriptor);
+      if (entry === void 0) continue;
+      stores[storeName] = {
+        keyPath: typeof entry.keyPath === "string" ? entry.keyPath : "",
+        indexes: normalizeIndexes(entry.indexes)
+      };
+    }
+  }
+  const records = {};
+  const rawRecords = asRecord4(record.records);
+  if (rawRecords !== void 0) {
+    for (const [keyHash, descriptor] of Object.entries(rawRecords)) {
+      const entry = asRecord4(descriptor);
+      if (entry === void 0) continue;
+      if (typeof entry.key !== "string" || typeof entry.size !== "number" || !Number.isFinite(entry.size) || entry.size < 0) continue;
+      records[keyHash] = {
+        store: typeof entry.store === "string" ? entry.store : "",
+        key: entry.key,
+        size: entry.size,
+        updatedAt: typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt) ? entry.updatedAt : 0,
+        meta: asRecord4(entry.meta) ?? {}
+      };
+    }
+  }
+  return {
+    name: name2,
+    version: typeof record.version === "number" && Number.isInteger(record.version) && record.version >= 0 ? record.version : 0,
+    stores,
+    records,
+    updatedAt: typeof record.updatedAt === "number" && Number.isFinite(record.updatedAt) ? record.updatedAt : 0
+  };
+}
+async function readDatabase(root, character, name2) {
+  const dir = databaseDir(root, character, name2);
+  try {
+    const text = await readFile(metaPath(dir), "utf8");
+    return normalizeDatabase(JSON.parse(text), name2);
+  } catch (error) {
+    if (error.code === "ENOENT") return emptyDatabase(name2);
+    throw new Error(`idb metadata for '${name2}' is unreadable: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+var temporarySeq = 0;
+function temporarySibling(target) {
+  temporarySeq += 1;
+  return `${target}.${process.pid}.${Date.now()}.${temporarySeq}.tmp`;
+}
+async function syncFile(path12) {
+  const handle = await open(path12, "r+");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+async function renameReplacing(source, target) {
+  try {
+    await rename(source, target);
+  } catch (error) {
+    const code = error.code;
+    if (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY" && code !== "EEXIST") throw error;
+    await rm(target, { force: true });
+    await rename(source, target);
+  }
+}
+function describeFsError(error) {
+  if (error instanceof Error) {
+    const code = error.code;
+    return code === void 0 ? error.message : `${code}: ${error.message}`;
+  }
+  return String(error);
+}
+async function writeDatabase(root, character, database) {
+  const dir = databaseDir(root, character, database.name);
+  await mkdir4(dir, { recursive: true });
+  const target = metaPath(dir);
+  const temporary = temporarySibling(target);
+  try {
+    await writeFile(temporary, `${JSON.stringify(database)}`, "utf8");
+    await syncFile(temporary);
+    await renameReplacing(temporary, target);
+  } catch (error) {
+    await rm(temporary, { force: true });
+    throw error;
+  }
+}
+function withDatabaseLock(root, character, name2, operation) {
+  const key = `${root}\0${character}\0${name2}`;
+  const previous = databaseLocks.get(key) ?? Promise.resolve();
+  const next = previous.catch(() => void 0).then(operation);
+  databaseLocks.set(key, next);
+  return next.finally(() => {
+    if (databaseLocks.get(key) === next) databaseLocks.delete(key);
+  });
+}
+function requireDatabaseName(value) {
+  if (typeof value !== "string" || value.trim() === "") throw new Error("idb database name must be a non-empty string");
+  if (value.length > 256) throw new Error("idb database name is too long (max 256)");
+  return value;
+}
+function requireStoreName(value) {
+  if (typeof value !== "string" || value.trim() === "") throw new Error("idb store name must be a non-empty string");
+  if (value.length > 256) throw new Error("idb store name is too long (max 256)");
+  return value;
+}
+function requireKey(value) {
+  if (typeof value !== "string" && typeof value !== "number") throw new Error("idb record key must be a string or number");
+  const key = String(value);
+  if (key.length === 0) throw new Error("idb record key must not be empty");
+  if (key.length > 1024) throw new Error("idb record key is too long (max 1024)");
+  return key;
+}
+function normalizeRecordMeta(value) {
+  const record = asRecord4(value) ?? {};
+  const text = JSON.stringify(record);
+  if (text.length > 64 * 1024) throw new Error("idb record metadata is too large (max 64KB)");
+  return record;
+}
+function recordTotal(database, excludingKeyHash) {
+  return Object.entries(database.records).filter(([keyHash]) => keyHash !== excludingKeyHash).reduce((sum, [, record]) => sum + record.size, 0);
+}
+async function openIdbDatabase(root, character, value, versionValue) {
+  const name2 = requireDatabaseName(value);
+  const requested = typeof versionValue === "number" && Number.isInteger(versionValue) && versionValue > 0 ? versionValue : 1;
+  return withDatabaseLock(root, character, name2, async () => {
+    const database = await readDatabase(root, character, name2);
+    const previousVersion = database.version;
+    if (database.version === 0) database.version = requested;
+    else if (requested > database.version) database.version = requested;
+    database.updatedAt = Date.now();
+    await writeDatabase(root, character, database);
+    return {
+      version: database.version,
+      previousVersion,
+      stores: Object.keys(database.stores),
+      storeKeyPaths: Object.fromEntries(Object.entries(database.stores).map(([name3, descriptor]) => [name3, descriptor.keyPath])),
+      storeIndexes: Object.fromEntries(Object.entries(database.stores).map(([name3, descriptor]) => [name3, descriptor.indexes]))
+    };
+  });
+}
+async function createIdbStore(root, character, nameValue, storeValue, keyPathValue, indexesValue) {
+  const name2 = requireDatabaseName(nameValue);
+  const store5 = requireStoreName(storeValue);
+  const keyPath = typeof keyPathValue === "string" ? keyPathValue : "";
+  const indexes = normalizeIndexes(indexesValue);
+  return withDatabaseLock(root, character, name2, async () => {
+    const database = await readDatabase(root, character, name2);
+    database.stores[store5] = { keyPath, indexes };
+    database.updatedAt = Date.now();
+    await writeDatabase(root, character, database);
+    return { stores: Object.keys(database.stores), indexes };
+  });
+}
+async function moveRecordFile(source, destination) {
+  try {
+    await rename(source, destination);
+    return;
+  } catch (error) {
+    const code = error.code;
+    if (code === "EXDEV") {
+      await copyRecordAcrossDevices(source, destination);
+      return;
+    }
+    if (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY" && code !== "EEXIST") {
+      throw new Error(`idb record could not be moved to '${destination}': ${describeFsError(error)}`);
+    }
+  }
+  try {
+    await renameReplacing(source, destination);
+  } catch (error) {
+    throw new Error(`idb record could not be moved to '${destination}': ${describeFsError(error)}`);
+  }
+}
+async function copyRecordAcrossDevices(source, destination) {
+  const staged = temporarySibling(destination);
+  try {
+    await copyFile(source, staged);
+    await syncFile(staged);
+    await renameReplacing(staged, destination);
+  } catch (error) {
+    await rm(staged, { force: true });
+    throw new Error(
+      `idb record could not be copied from '${source}' to '${destination}' after a cross-device rename failed (EXDEV): ${describeFsError(error)}`
+    );
+  }
+  await rm(source, { force: true });
+}
+async function putIdbRecordFromFile(root, character, nameValue, storeValue, keyValue, temporaryPath, metaValue) {
+  const name2 = requireDatabaseName(nameValue);
+  const store5 = requireStoreName(storeValue);
+  const key = requireKey(keyValue);
+  const meta = normalizeRecordMeta(metaValue);
+  const keyHash = recordKeyHash(store5, key);
+  const destination = recordPath(root, character, name2, store5, key);
+  return withDatabaseLock(root, character, name2, async () => {
+    const database = await readDatabase(root, character, name2);
+    if (database.stores[store5] === void 0) throw new Error(`idb store '${store5}' does not exist in database '${name2}'`);
+    const size = (await stat(temporaryPath)).size;
+    if (size > IDB_MAX_RECORD_BYTES) {
+      throw new Error(`idb record is too large (${size} > ${IDB_MAX_RECORD_BYTES} bytes)`);
+    }
+    const total = recordTotal(database, keyHash) + size;
+    if (total > IDB_MAX_TOTAL_BYTES) {
+      throw new Error(`idb storage for '${character}' exceeds ${IDB_MAX_TOTAL_BYTES} bytes`);
+    }
+    await mkdir4(dirname13(destination), { recursive: true });
+    await moveRecordFile(temporaryPath, destination);
+    database.records[keyHash] = { store: store5, key, size, updatedAt: Date.now(), meta };
+    database.updatedAt = Date.now();
+    try {
+      await writeDatabase(root, character, database);
+    } catch (error) {
+      await rm(destination, { force: true });
+      throw error;
+    }
+    return { key, size };
+  });
+}
+async function listIdbKeys(root, character, nameValue, storeValue) {
+  const name2 = requireDatabaseName(nameValue);
+  const store5 = requireStoreName(storeValue);
+  const database = await readDatabase(root, character, name2);
+  if (database.stores[store5] === void 0) return { keys: [] };
+  return {
+    keys: Object.values(database.records).filter((record) => record.store === store5).map((record) => record.key)
+  };
+}
+async function getIdbRecord(root, character, nameValue, storeValue, keyValue) {
+  const name2 = requireDatabaseName(nameValue);
+  const store5 = requireStoreName(storeValue);
+  const key = requireKey(keyValue);
+  const database = await readDatabase(root, character, name2);
+  if (database.stores[store5] === void 0) return void 0;
+  const record = database.records[recordKeyHash(store5, key)];
+  if (record === void 0 || record.store !== store5) return void 0;
+  const path12 = recordPath(root, character, name2, store5, key);
+  try {
+    const info3 = await stat(path12);
+    if (!info3.isFile()) return void 0;
+    return { path: path12, size: info3.size, meta: record.meta };
+  } catch (error) {
+    if (error.code === "ENOENT") return void 0;
+    throw error;
+  }
+}
+async function deleteIdbRecord(root, character, nameValue, storeValue, keyValue) {
+  const name2 = requireDatabaseName(nameValue);
+  const store5 = requireStoreName(storeValue);
+  const key = requireKey(keyValue);
+  const keyHash = recordKeyHash(store5, key);
+  return withDatabaseLock(root, character, name2, async () => {
+    const database = await readDatabase(root, character, name2);
+    if (database.stores[store5] === void 0) return { deleted: false };
+    const record = database.records[keyHash];
+    const existed = record !== void 0 && record.store === store5;
+    delete database.records[keyHash];
+    database.updatedAt = Date.now();
+    await writeDatabase(root, character, database);
+    await rm(recordPath(root, character, name2, store5, key), { force: true });
+    return { deleted: existed };
+  });
+}
+async function clearIdbStore(root, character, nameValue, storeValue) {
+  const name2 = requireDatabaseName(nameValue);
+  const store5 = requireStoreName(storeValue);
+  return withDatabaseLock(root, character, name2, async () => {
+    const database = await readDatabase(root, character, name2);
+    if (database.stores[store5] === void 0) return { cleared: 0 };
+    const entries = Object.entries(database.records).filter(([, record]) => record.store === store5);
+    for (const [keyHash] of entries) delete database.records[keyHash];
+    database.updatedAt = Date.now();
+    await writeDatabase(root, character, database);
+    await Promise.all(entries.map(([, record]) => rm(recordPath(root, character, name2, store5, record.key), { force: true })));
+    return { cleared: entries.length };
+  });
+}
+async function deleteIdbDatabase(root, character, nameValue) {
+  const name2 = requireDatabaseName(nameValue);
+  const directory = databaseDir(root, character, name2);
+  let existed = false;
+  try {
+    existed = (await stat(directory)).isDirectory();
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  await rm(directory, { recursive: true, force: true });
+  return { deleted: existed };
+}
+
+// packages/tavern-frontend-storage/src/persistence.ts
+var FRONTEND_STORAGE_TOTAL_LIMIT = 512 * 1024;
+var FRONTEND_STORAGE_KEY_LIMIT = 512;
+function frontendStorageFor(state, character) {
+  const storage = state.frontendStorage?.[character];
+  return storage === void 0 ? {} : { ...storage };
+}
+function parseFrontendStorageValue(character, value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("storage must be an object of string values");
+  }
+  const storage = {};
+  let total = 0;
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== "string") throw new Error(`storage["${key}"] must be a string`);
+    if (key === "" || key.length > FRONTEND_STORAGE_KEY_LIMIT) {
+      throw new Error(`storage keys must be 1-${FRONTEND_STORAGE_KEY_LIMIT} characters (got ${key.length})`);
+    }
+    total += key.length + entry.length;
+    if (total > FRONTEND_STORAGE_TOTAL_LIMIT) {
+      throw new Error(`frontend storage for '${character}' exceeds ${FRONTEND_STORAGE_TOTAL_LIMIT} characters`);
+    }
+    storage[key] = entry;
+  }
+  return storage;
+}
+async function putFrontendStorage(db, character, value) {
+  const storage = parseFrontendStorageValue(character, value);
+  const next = await db.updateState((state) => ({
+    frontendStorage: { ...state.frontendStorage ?? {}, [character]: storage }
+  }));
+  return { storage: frontendStorageFor(next, character) };
+}
+async function resetFrontendStorage(db, character) {
+  const next = await db.updateState((state) => {
+    const all = { ...state.frontendStorage ?? {} };
+    delete all[character];
+    return { frontendStorage: all };
+  });
+  return { storage: frontendStorageFor(next, character), reset: true };
+}
+
+// packages/plugin/src/card-scripts.ts
+function collectCardScriptBundle(card, scriptTrees, includeDisabled = false) {
+  const nodes = Array.isArray(scriptTrees) ? scriptTrees : cardScriptNodes(card);
+  return { world: cardWorldName(card), scripts: collectScriptsFromNodes(nodes, includeDisabled) };
+}
+function collectScriptsFromNodes(nodes, includeDisabled = false) {
+  const scripts = [];
+  walkScriptNodes(nodes, scripts, includeDisabled);
+  return scripts;
+}
+function walkScriptNodes(nodes, scripts, includeDisabled) {
+  for (const node of nodes) {
+    if (!isPlainObject3(node)) continue;
+    if (node["type"] === "folder") {
+      if (Array.isArray(node["scripts"])) walkScriptNodes(node["scripts"], scripts, includeDisabled);
+      continue;
+    }
+    if (node["type"] !== "script") continue;
+    const enabled = node["enabled"] !== false;
+    if (!enabled && !includeDisabled) continue;
+    const content = node["content"];
+    if (typeof content !== "string" || content.trim() === "") continue;
+    const fallback = `script-${scripts.length}`;
+    const id = nonEmptyString3(node["id"]) ?? fallback;
+    const name2 = nonEmptyString3(node["name"]) ?? fallback;
+    scripts.push({ id, name: name2, content, info: nonEmptyString3(node["info"]) ?? "", enabled });
+  }
+}
+function cardScriptNodes(card) {
+  const helper = plainObject5(card.data.extensions["tavern_helper"]);
+  return Array.isArray(helper?.["scripts"]) ? helper["scripts"] : [];
+}
+function cardWorldName(card) {
+  const linked = nonEmptyString3(card.data.extensions["world"]);
+  if (linked !== void 0) return linked;
+  return nonEmptyString3(card.data.characterBook?.name) ?? null;
+}
+function nonEmptyString3(value) {
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : void 0;
+}
+function isPlainObject3(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function plainObject5(value) {
+  return isPlainObject3(value) ? value : void 0;
+}
+
+// packages/plugin/src/http/frontend-routes.ts
+init_dsh_home();
+
+// packages/plugin/src/helper.ts
+init_src2();
+init_src5();
+init_src4();
+init_src3();
+init_src();
+import { randomUUID as randomUUID9 } from "node:crypto";
+init_io();
+init_public_error();
+
+// packages/plugin/src/frontend-target-policy.ts
+import { isIP } from "node:net";
+var METADATA_HOSTNAMES = /* @__PURE__ */ new Set([
+  "metadata",
+  "metadata.google.internal",
+  "metadata.goog",
+  "metadata.azure.com",
+  "metadata.packet.net",
+  "metadata.tencentyun.com",
+  "metadata.tencent-cloud.com",
+  "instance-data"
+]);
+var PRIVATE_HOSTNAME_SUFFIXES = [
+  ".localhost",
+  ".local",
+  ".internal",
+  ".home.arpa",
+  ".lan",
+  ".localdomain",
+  ".intranet",
+  ".corp",
+  ".private"
+];
+function decideCustomApiTarget(url) {
+  const hostname = normalizeHostname(url.hostname);
+  if (isLoopbackHostname(hostname)) {
+    return { allowed: true, hostname, loopback: true };
+  }
+  if (url.protocol === "http:") {
+    return blocked(
+      hostname,
+      "https-required",
+      "use https:// for non-loopback hosts; http:// is allowed only for loopback proxies"
+    );
+  }
+  if (METADATA_HOSTNAMES.has(hostname)) {
+    return blocked(hostname, "metadata-host", "cloud metadata endpoints are blocked");
+  }
+  const address = addressVerdict(hostname);
+  if (address !== void 0) {
+    return address.blocked ? blocked(hostname, "private-address", address.reason) : { allowed: true, hostname, loopback: false };
+  }
+  if (isPrivateHostname(hostname)) {
+    return blocked(
+      hostname,
+      "private-hostname",
+      "single-label and private-use hostnames are blocked; use a public HTTPS host or a loopback proxy"
+    );
+  }
+  return { allowed: true, hostname, loopback: false };
+}
+function blocked(hostname, reason, detail) {
+  return { allowed: false, hostname, reason, detail };
+}
+function normalizeHostname(hostname) {
+  return hostname.toLowerCase().replace(/\.+$/, "");
+}
+function stripBrackets(hostname) {
+  return hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+}
+function isLoopbackHostname(hostname) {
+  if (hostname === "localhost") return true;
+  const literal = stripBrackets(hostname);
+  const version = isIP(literal);
+  if (version === 4) return literal === "127.0.0.1";
+  if (version !== 6) return false;
+  const hextets = ipv6Hextets(literal);
+  if (hextets === void 0) return false;
+  if (isIpv6Loopback(hextets)) return true;
+  const mapped = mappedIpv4(hextets);
+  return mapped !== void 0 && isIpv4Loopback(mapped);
+}
+function isPrivateHostname(hostname) {
+  if (!hostname.includes(".")) return true;
+  return PRIVATE_HOSTNAME_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
+}
+function addressVerdict(hostname) {
+  const literal = stripBrackets(hostname);
+  const version = isIP(literal);
+  if (version !== 4 && version !== 6) return void 0;
+  if (version === 4) {
+    const octets = ipv4Octets(literal);
+    if (octets === void 0) return { blocked: true, reason: "invalid IPv4 literal" };
+    const reason2 = ipv4BlockReason(octets);
+    return reason2 === void 0 ? { blocked: false } : { blocked: true, reason: reason2 };
+  }
+  const hextets = ipv6Hextets(literal);
+  if (hextets === void 0) return { blocked: true, reason: "invalid IPv6 literal" };
+  const reason = ipv6BlockReason(hextets);
+  return reason === void 0 ? { blocked: false } : { blocked: true, reason };
+}
+function ipv6BlockReason(hextets) {
+  if (isIpv6Unspecified(hextets)) return ":: (unspecified address)";
+  if (isIpv6LinkLocal(hextets)) return "fe80::/10 (link-local)";
+  if (isIpv6UniqueLocal(hextets)) return "fc00::/7 (unique local)";
+  if (isIpv6Multicast(hextets)) return "ff00::/8 (multicast)";
+  if (isIpv6Documentation(hextets)) return "2001:db8::/32 (documentation)";
+  if (isIpv6SixToFour(hextets)) return "6to4 range (embeds an arbitrary IPv4 address)";
+  if (isIpv6Teredo(hextets)) return "Teredo range (embeds an arbitrary IPv4 address)";
+  const mapped = mappedIpv4(hextets);
+  if (mapped !== void 0) return mappedBlockReason(mapped, "IPv4-mapped IPv6");
+  const nat64 = nat64Ipv4(hextets);
+  if (nat64 !== void 0) return mappedBlockReason(nat64, "NAT64");
+  if (isDeprecatedIpv4Compatible(hextets)) return "deprecated IPv4-compatible IPv6 address";
+  if (hextets[0] === 100 && hextets[1] === 65435 && hextets[2] === 1) {
+    return "64:ff9b:1::/48 (local-use NAT64 prefix)";
+  }
+  return void 0;
+}
+function mappedBlockReason(octets, label) {
+  const reason = ipv4BlockReason(octets);
+  return reason === void 0 ? void 0 : `${label} address ${octets.join(".")}: ${reason}`;
+}
+function ipv4BlockReason([a, b, c]) {
+  if (a === 0) return "0.0.0.0/8 (this network / unspecified)";
+  if (a === 10) return "10.0.0.0/8 (RFC1918)";
+  if (a === 100 && b >= 64 && b <= 127) {
+    return "100.64.0.0/10 (carrier-grade NAT; includes cloud metadata ranges)";
+  }
+  if (a === 127) return "127.0.0.0/8 (loopback; only 127.0.0.1 is accepted)";
+  if (a === 169 && b === 254) return "169.254.0.0/16 (link-local / cloud metadata)";
+  if (a === 172 && b >= 16 && b <= 31) return "172.16.0.0/12 (RFC1918)";
+  if (a === 192 && b === 168) return "192.168.0.0/16 (RFC1918)";
+  if (a === 192 && b === 0 && (c === 0 || c === 2)) return "192.0.0.0/24 or 192.0.2.0/24 (IETF/documentation)";
+  if (a === 192 && b === 88 && c === 99) return "6to4 relay anycast range";
+  if (a === 198 && (b === 18 || b === 19)) return "198.18.0.0/15 (benchmarking)";
+  if (a === 198 && b === 51 && c === 100) return "198.51.100.0/24 (documentation)";
+  if (a === 203 && b === 0 && c === 113) return "203.0.113.0/24 (documentation)";
+  if (a >= 224) return "224.0.0.0/4 or above (multicast / reserved)";
+  return void 0;
+}
+function isIpv4Loopback([a, b, c, d]) {
+  return a === 127 && b === 0 && c === 0 && d === 1;
+}
+function ipv4Octets(text) {
+  const parts = text.split(".");
+  if (parts.length !== 4) return void 0;
+  const values = [];
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return void 0;
+    const value = Number(part);
+    if (value > 255) return void 0;
+    values.push(value);
+  }
+  return toIpv4(values);
+}
+function toIpv4(values) {
+  if (values.length !== 4) return void 0;
+  const [a, b, c, d] = values;
+  if (a === void 0 || b === void 0 || c === void 0 || d === void 0) return void 0;
+  return [a, b, c, d];
+}
+function ipv6Hextets(input) {
+  const text = stripBrackets(input);
+  if (text === "" || text.includes("%")) return void 0;
+  const halves = text.split("::");
+  if (halves.length > 2) return void 0;
+  const head = parseHextets(halves[0] ?? "");
+  const tail = halves.length === 2 ? parseHextets(halves[1] ?? "") : [];
+  if (head === void 0 || tail === void 0) return void 0;
+  if (halves.length === 1) {
+    if (head.length !== 8) return void 0;
+    return toIpv6(head);
+  }
+  const missing = 8 - head.length - tail.length;
+  if (missing < 1) return void 0;
+  return toIpv6([...head, ...Array.from({ length: missing }, () => 0), ...tail]);
+}
+function parseHextets(side) {
+  if (side === "") return [];
+  const values = [];
+  for (const part of side.split(":")) {
+    if (!/^[0-9a-f]{1,4}$/i.test(part)) return void 0;
+    values.push(Number.parseInt(part, 16));
+  }
+  return values;
+}
+function toIpv6(values) {
+  if (values.length !== 8) return void 0;
+  const [a, b, c, d, e, f, g, h] = values;
+  if (a === void 0 || b === void 0 || c === void 0 || d === void 0 || e === void 0 || f === void 0 || g === void 0 || h === void 0) {
+    return void 0;
+  }
+  return [a, b, c, d, e, f, g, h];
+}
+function isIpv6Loopback(hextets) {
+  return hextets.every((value, index) => index === 7 ? value === 1 : value === 0);
+}
+function isIpv6Unspecified(hextets) {
+  return hextets.every((value) => value === 0);
+}
+function isIpv6LinkLocal(hextets) {
+  return (hextets[0] & 65472) === 65152;
+}
+function isIpv6UniqueLocal(hextets) {
+  return (hextets[0] & 65024) === 64512;
+}
+function isIpv6Multicast(hextets) {
+  return (hextets[0] & 65280) === 65280;
+}
+function isIpv6Documentation(hextets) {
+  return hextets[0] === 8193 && hextets[1] === 3512;
+}
+function isIpv6SixToFour(hextets) {
+  return hextets[0] === 8194;
+}
+function isIpv6Teredo(hextets) {
+  return hextets[0] === 8193 && hextets[1] === 0;
+}
+function mappedIpv4(hextets) {
+  const [a, b, c, d, e, f, g, h] = hextets;
+  if (a === 0 && b === 0 && c === 0 && d === 0 && e === 0 && f === 65535) {
+    return [g >> 8 & 255, g & 255, h >> 8 & 255, h & 255];
+  }
+  return void 0;
+}
+function nat64Ipv4(hextets) {
+  const [a, b, c, d, e, f, g, h] = hextets;
+  if (a === 100 && b === 65435 && c === 0 && d === 0 && e === 0 && f === 0) {
+    return [g >> 8 & 255, g & 255, h >> 8 & 255, h & 255];
+  }
+  return void 0;
+}
+function isDeprecatedIpv4Compatible(hextets) {
+  return hextets[0] === 0 && hextets[1] === 0 && hextets[2] === 0 && hextets[3] === 0 && hextets[4] === 0 && hextets[5] === 0;
+}
+
+// packages/plugin/src/frontend-generation.ts
+var REQUEST_TIMEOUT_MS = 18e4;
+var MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+var MAX_PROMPT_CHARS = 2e6;
+var MAX_MESSAGES = 256;
+var MAX_API_KEY_CHARS = 8192;
+var activeGenerationControllers = /* @__PURE__ */ new Map();
+function frontendGenerationKey(character, chatId, generationId) {
+  return `${character}\0${chatId}\0${generationId}`;
+}
+function registerFrontendGeneration(character, chatId, generationId, controller) {
+  activeGenerationControllers.set(frontendGenerationKey(character, chatId, generationId), controller);
+}
+function finishFrontendGeneration(character, chatId, generationId, controller) {
+  const key = frontendGenerationKey(character, chatId, generationId);
+  if (activeGenerationControllers.get(key) === controller) activeGenerationControllers.delete(key);
+}
+function abortFrontendGeneration(character, chatId, generationId) {
+  const key = frontendGenerationKey(character, chatId, generationId);
+  const controller = activeGenerationControllers.get(key);
+  if (controller === void 0) return false;
+  activeGenerationControllers.delete(key);
+  controller.abort();
+  return true;
+}
+function abortAllFrontendGenerations(character, chatId) {
+  const prefix = `${character}\0${chatId}\0`;
+  let stopped = 0;
+  for (const [key, controller] of activeGenerationControllers) {
+    if (!key.startsWith(prefix)) continue;
+    activeGenerationControllers.delete(key);
+    controller.abort();
+    stopped += 1;
+  }
+  return stopped;
+}
+var FrontendGenerationError = class extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "FrontendGenerationError";
+  }
+};
+var FrontendTargetBlockedError = class extends FrontendGenerationError {
+  code = "TAVERN_FRONTEND_TARGET_BLOCKED";
+  reason;
+  host;
+  constructor(reason, host, detail) {
+    super(`custom API target ${host} is blocked: ${reason} [TAVERN_FRONTEND_TARGET_BLOCKED] (${detail})`);
+    this.name = "FrontendTargetBlockedError";
+    this.reason = reason;
+    this.host = host;
+  }
+};
+function asRecord5(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
+}
+function requireText2(value, field2, maxChars) {
+  if (typeof value !== "string") throw new FrontendGenerationError(`${field2} must be a string`);
+  const text = value.trim();
+  if (text === "") throw new FrontendGenerationError(`${field2} must not be empty`);
+  if (text.length > maxChars) throw new FrontendGenerationError(`${field2} is too long (${text.length} > ${maxChars})`);
+  return text;
+}
+function normalizeBaseUrl(url) {
+  if (url.search !== "" || url.hash !== "") {
+    throw new FrontendGenerationError("custom_api.apiurl must be a base URL without query or hash parameters");
+  }
+  let base = url.toString().replace(/\/+$/, "");
+  base = base.replace(/\/chat\/completions$/i, "");
+  base = base.replace(/\/models$/i, "");
+  if (base === "") throw new FrontendGenerationError("custom_api.apiurl must include a host");
+  return base;
+}
+function parseApiTarget(value, requireModel) {
+  const record = asRecord5(value);
+  if (record === void 0) throw new FrontendGenerationError("custom_api must be an object");
+  const rawUrl = requireText2(record.apiurl, "custom_api.apiurl", 2048);
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new FrontendGenerationError(`custom_api.apiurl is not a valid URL: ${rawUrl}`);
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new FrontendGenerationError("custom_api.apiurl must use https:// (http:// is allowed only for loopback proxies)");
+  }
+  if (url.username !== "" || url.password !== "") {
+    throw new FrontendGenerationError("custom_api.apiurl must not contain credentials; put the key in the API key field");
+  }
+  const destination = decideCustomApiTarget(url);
+  if (!destination.allowed) {
+    throw new FrontendTargetBlockedError(destination.reason, destination.hostname, destination.detail);
+  }
+  if (record.key !== void 0 && typeof record.key !== "string") {
+    throw new FrontendGenerationError("custom_api.key must be a string when present");
+  }
+  const key = typeof record.key === "string" ? record.key : "";
+  if (key.length > MAX_API_KEY_CHARS) {
+    throw new FrontendGenerationError(`custom_api.key is too long (${key.length} > ${MAX_API_KEY_CHARS})`);
+  }
+  if (/[\r\n\u0000]/.test(key)) {
+    throw new FrontendGenerationError("custom_api.key must not contain line breaks or NUL characters");
+  }
+  const model = requireModel ? requireText2(record.model, "custom_api.model", 256) : typeof record.model === "string" ? record.model.trim() : "";
+  return { baseUrl: normalizeBaseUrl(url), key, model };
+}
+function authHeaders(target) {
+  const headers = { "content-type": "application/json" };
+  if (target.key !== "") headers.authorization = `Bearer ${target.key}`;
+  return headers;
+}
+function redactSecret(value, secret) {
+  return secret === "" ? value : value.split(secret).join("[redacted]");
+}
+function bodySnippet(value, secret) {
+  const text = redactSecret(value, secret).replace(/\s+/g, " ").trim();
+  return text.length > 500 ? `${text.slice(0, 500)}\u2026` : text;
+}
+async function requestJson(endpoint, init, label, secret) {
+  let response;
+  const externalSignal = init.signal instanceof AbortSignal ? init.signal : void 0;
+  const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  try {
+    response = await fetch(endpoint, {
+      ...init,
+      redirect: "error",
+      signal: externalSignal === void 0 ? timeoutSignal : AbortSignal.any([externalSignal, timeoutSignal])
+    });
+  } catch (cause) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    throw new FrontendGenerationError(`custom API ${label} request failed: ${redactSecret(reason, secret)}`);
+  }
+  const declaredLength = Number(response.headers.get("content-length") ?? "");
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
+    if (response.body !== null) await response.body.cancel().catch(() => void 0);
+    throw new FrontendGenerationError(`custom API ${label} response is too large (${declaredLength} bytes)`);
+  }
+  const text = await response.text();
+  if (text.length > MAX_RESPONSE_BYTES) {
+    throw new FrontendGenerationError(`custom API ${label} response is too large (${text.length} characters)`);
+  }
+  if (!response.ok) {
+    throw new FrontendGenerationError(
+      `custom API ${label} failed: HTTP ${response.status} ${response.statusText}: ${bodySnippet(text, secret)}`
+    );
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new FrontendGenerationError(`custom API ${label} returned invalid JSON: ${bodySnippet(text, secret)}`);
+  }
+}
+function modelIds(payload) {
+  const record = asRecord5(payload);
+  const list = record === void 0 ? [] : Array.isArray(record.data) ? record.data : Array.isArray(record.models) ? record.models : [];
+  const ids = [];
+  for (const entry of list) {
+    if (typeof entry === "string") {
+      const id2 = entry.trim();
+      if (id2 !== "") ids.push(id2);
+      continue;
+    }
+    const item = asRecord5(entry);
+    if (item === void 0) continue;
+    const id = typeof item.id === "string" ? item.id.trim() : typeof item.name === "string" ? item.name.trim() : "";
+    if (id !== "") ids.push(id);
+  }
+  return [...new Set(ids)].sort();
+}
+async function listCustomApiModels(value) {
+  const target = parseApiTarget(value, false);
+  const payload = await requestJson(
+    `${target.baseUrl}/models`,
+    { method: "GET", headers: authHeaders(target) },
+    "models",
+    target.key
+  );
+  const models = modelIds(payload);
+  if (models.length === 0) {
+    throw new FrontendGenerationError("custom API /models returned no model ids; check the API URL and key");
+  }
+  return models.slice(0, 500);
+}
+function parseRole(value, fallback) {
+  return value === "system" || value === "user" || value === "assistant" ? value : fallback;
+}
+function buildMessages(config) {
+  const messages = [];
+  const injects = Array.isArray(config.injects) ? config.injects : [];
+  for (const entry of injects) {
+    const inject2 = asRecord5(entry);
+    if (inject2 === void 0) continue;
+    if (inject2.position === "none") continue;
+    if (typeof inject2.content !== "string" || inject2.content.trim() === "") continue;
+    messages.push({ role: parseRole(inject2.role, "system"), content: inject2.content });
+  }
+  const overrides = asRecord5(config.overrides);
+  const history = asRecord5(overrides?.chat_history);
+  const prompts = history !== void 0 && Array.isArray(history.prompts) ? history.prompts : [];
+  for (const entry of prompts) {
+    const prompt = asRecord5(entry);
+    if (prompt === void 0) continue;
+    if (typeof prompt.content !== "string") {
+      throw new FrontendGenerationError("overrides.chat_history.prompts[].content must be a string");
+    }
+    messages.push({ role: parseRole(prompt.role, "user"), content: prompt.content });
+  }
+  const userInput = typeof config.user_input === "string" ? config.user_input : "";
+  if (userInput.trim() !== "") messages.push({ role: "user", content: userInput });
+  if (messages.length === 0) {
+    throw new FrontendGenerationError("TavernHelper.generate needs user_input or chat history prompts");
+  }
+  if (messages.length > MAX_MESSAGES) {
+    throw new FrontendGenerationError(`too many prompt messages (${messages.length} > ${MAX_MESSAGES})`);
+  }
+  const totalChars = messages.reduce((sum, message) => sum + message.content.length, 0);
+  if (totalChars > MAX_PROMPT_CHARS) {
+    throw new FrontendGenerationError(`prompt is too large (${totalChars} > ${MAX_PROMPT_CHARS} characters)`);
+  }
+  return messages;
+}
+function toolCallArgumentsText(message) {
+  if (message === void 0) return "";
+  const parts = [];
+  const collect = (value) => {
+    const call = asRecord5(value);
+    if (call === void 0) return;
+    const fn = asRecord5(call.function);
+    const raw = fn?.arguments ?? call.arguments;
+    if (typeof raw === "string") {
+      if (raw.trim() !== "") parts.push(raw);
+      return;
+    }
+    if (raw !== void 0 && raw !== null) {
+      try {
+        const text = JSON.stringify(raw);
+        if (text !== void 0) parts.push(text);
+      } catch {
+      }
+    }
+  };
+  const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+  for (const call of calls) collect(call);
+  collect(message.function_call);
+  return parts.join("\n");
+}
+function completionText(payload) {
+  const record = asRecord5(payload);
+  const choices = record !== void 0 && Array.isArray(record.choices) ? record.choices : [];
+  const first = choices.length > 0 ? asRecord5(choices[0]) : void 0;
+  if (first === void 0) {
+    throw new FrontendGenerationError("custom API /chat/completions returned no choices");
+  }
+  const message = asRecord5(first.message);
+  const content = message?.content;
+  if (typeof content === "string" && content.trim() !== "") return content;
+  if (Array.isArray(content)) {
+    const joined = content.map((part) => {
+      if (typeof part === "string") return part;
+      const item = asRecord5(part);
+      return item !== void 0 && typeof item.text === "string" ? item.text : "";
+    }).join("");
+    if (joined.trim() !== "") return joined;
+  }
+  if (typeof first.text === "string" && first.text.trim() !== "") return first.text;
+  const toolText = toolCallArgumentsText(message);
+  if (toolText.trim() !== "") return toolText;
+  const finishReason = typeof first.finish_reason === "string" ? first.finish_reason : "unknown";
+  throw new FrontendGenerationError(`custom API /chat/completions returned no text or tool arguments (finish_reason=${finishReason})`);
+}
+async function generateWithCustomApi(value, signal) {
+  const config = asRecord5(value);
+  if (config === void 0) throw new FrontendGenerationError("generate config must be an object");
+  const target = parseApiTarget(config.custom_api, true);
+  const messages = buildMessages(config);
+  const payload = await requestJson(
+    `${target.baseUrl}/chat/completions`,
+    {
+      method: "POST",
+      headers: authHeaders(target),
+      body: JSON.stringify({ model: target.model, messages, stream: false }),
+      ...signal === void 0 ? {} : { signal }
+    },
+    "chat/completions",
+    target.key
+  );
+  const text = completionText(payload);
+  if (text.trim() === "") {
+    throw new FrontendGenerationError("custom API /chat/completions returned an empty response");
+  }
+  return text;
+}
+function textFromContent(value) {
+  if (typeof value === "string") return value;
+  if (!Array.isArray(value)) return "";
+  return value.map((part) => {
+    if (typeof part === "string") return part;
+    const item = asRecord5(part);
+    return item !== void 0 && typeof item.text === "string" ? item.text : "";
+  }).join("");
+}
+function deltaText(payload) {
+  const record = asRecord5(payload);
+  const choices = record !== void 0 && Array.isArray(record.choices) ? record.choices : [];
+  if (choices.length === 0) return "";
+  const first = asRecord5(choices[0]);
+  if (first === void 0) return "";
+  const delta = asRecord5(first.delta);
+  if (delta !== void 0) {
+    const content = textFromContent(delta.content);
+    if (content !== "") return content;
+  }
+  const message = asRecord5(first.message);
+  if (message !== void 0) {
+    const content = textFromContent(message.content);
+    if (content !== "") return content;
+  }
+  return typeof first.text === "string" ? first.text : "";
+}
+function streamChunkText(line, secret) {
+  const trimmed = line.trim();
+  if (trimmed === "" || trimmed === "[DONE]") return "";
+  if (trimmed.startsWith(":") || trimmed.startsWith("event:") || trimmed.startsWith("id:") || trimmed.startsWith("retry:")) return "";
+  const raw = trimmed.startsWith("data:") ? trimmed.slice("data:".length).trim() : trimmed;
+  if (raw === "" || raw === "[DONE]") return "";
+  let payload;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    throw new FrontendGenerationError(`custom API stream returned invalid JSON: ${bodySnippet(raw, secret)}`);
+  }
+  return deltaText(payload);
+}
+async function generateWithCustomApiStream(value, onDelta, signal) {
+  const config = asRecord5(value);
+  if (config === void 0) throw new FrontendGenerationError("generate config must be an object");
+  const target = parseApiTarget(config.custom_api, true);
+  const messages = buildMessages(config);
+  let response;
+  try {
+    response = await fetch(`${target.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: authHeaders(target),
+      body: JSON.stringify({ model: target.model, messages, stream: true }),
+      redirect: "error",
+      signal: AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])
+    });
+  } catch (cause) {
+    if (signal.aborted) throw new FrontendGenerationError("custom API generation was aborted");
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    throw new FrontendGenerationError(`custom API chat/completions request failed: ${redactSecret(reason, target.key)}`);
+  }
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!response.ok) {
+    const text2 = await response.text().catch(() => "");
+    throw new FrontendGenerationError(
+      `custom API chat/completions failed: HTTP ${response.status} ${response.statusText}: ${bodySnippet(text2, target.key)}`
+    );
+  }
+  if (!contentType.includes("text/event-stream")) {
+    const text2 = await response.text();
+    if (text2.length > MAX_RESPONSE_BYTES) {
+      throw new FrontendGenerationError(`custom API chat/completions response is too large (${text2.length} characters)`);
+    }
+    let payload;
+    try {
+      payload = JSON.parse(text2);
+    } catch {
+      throw new FrontendGenerationError(`custom API chat/completions returned invalid JSON: ${bodySnippet(text2, target.key)}`);
+    }
+    const finalText = completionText(payload);
+    if (finalText.trim() === "") {
+      throw new FrontendGenerationError("custom API /chat/completions returned an empty response");
+    }
+    onDelta(finalText);
+    return finalText;
+  }
+  if (response.body === null) {
+    throw new FrontendGenerationError("custom API stream has no response body");
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let text = "";
+  try {
+    for (; ; ) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, { stream: true });
+      let newline = buffer.indexOf("\n");
+      while (newline >= 0) {
+        const line = buffer.slice(0, newline);
+        buffer = buffer.slice(newline + 1);
+        const delta = streamChunkText(line, target.key);
+        if (delta !== "") {
+          text += delta;
+          if (text.length > MAX_RESPONSE_BYTES) {
+            throw new FrontendGenerationError(`custom API stream is too large (${text.length} characters)`);
+          }
+          onDelta(delta);
+        }
+        newline = buffer.indexOf("\n");
+      }
+    }
+    if (buffer.trim() !== "") {
+      const delta = streamChunkText(buffer, target.key);
+      if (delta !== "") {
+        text += delta;
+        onDelta(delta);
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (signal.aborted) throw new FrontendGenerationError("custom API generation was aborted");
+  if (text.trim() === "") {
+    throw new FrontendGenerationError("custom API /chat/completions stream returned no text");
+  }
+  return text;
+}
+
+// packages/plugin/src/frontend-generation-context.ts
+init_tavern_assets();
+function asObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
+}
+function stringsOf(value) {
+  if (typeof value === "string") return [value];
+  if (!Array.isArray(value)) return [];
+  return value.filter((item) => typeof item === "string");
+}
+function scanTextOf(config) {
+  const parts = stringsOf(config["scanKeywords"]);
+  const injects = Array.isArray(config["injects"]) ? config["injects"] : [];
+  for (const raw of injects) {
+    const inject2 = asObject(raw);
+    if (inject2 === void 0 || inject2["should_scan"] !== true) continue;
+    const content = inject2["content"];
+    if (typeof content === "string" && content.trim() !== "") parts.push(content);
+  }
+  return [...new Set(parts.map((part) => part.trim()).filter((part) => part !== ""))].join("\n");
+}
+function isScanOnlyInject(value) {
+  const inject2 = asObject(value);
+  return inject2 !== void 0 && inject2["should_scan"] === true && inject2["position"] === "none";
+}
+function activatedContent(lore) {
+  const seen = /* @__PURE__ */ new Set();
+  const parts = [];
+  for (const entry of lore.allActivated) {
+    if (entry.position === WI_POSITION2.OUTLET) continue;
+    const text = entry.content.trim();
+    if (text === "" || seen.has(text)) continue;
+    seen.add(text);
+    parts.push(text);
+  }
+  return parts;
+}
+async function applyFrontendWorldbookScan(db, state, character, chatId, config) {
+  const record = asObject(config);
+  if (record === void 0) return config;
+  const scanText = scanTextOf(record);
+  if (scanText === "" || chatId === "") return config;
+  const file = await db.getCharacter(character);
+  if (file === void 0) return config;
+  const books = await collectWorldInfoBooks(db, state, character, file, chatId);
+  if (books.length === 0) return config;
+  const persona = state.activePersona === void 0 ? void 0 : await db.getPersona(state.activePersona);
+  const lore = activateWorldInfo({
+    books,
+    chat: [{ name: "user", content: scanText, isUser: true }],
+    contextSize: 4096,
+    trigger: "normal",
+    scanSources: {
+      personaDescription: typeof persona?.["description"] === "string" ? persona["description"] : void 0,
+      characterDescription: file.card.data.description,
+      characterPersonality: file.card.data.personality,
+      scenario: file.card.data.scenario,
+      creatorNotes: file.card.data.creatorNotes
+    },
+    settings: { recursive: true, scanDepth: 2, budgetPercent: 25 },
+    messageCount: 1
+  });
+  const content = activatedContent(lore).join("\n\n");
+  if (content === "") return config;
+  const injects = Array.isArray(record["injects"]) ? record["injects"] : [];
+  return {
+    ...record,
+    injects: [
+      { role: "system", content, position: "in_chat", depth: 0 },
+      ...injects.filter((inject2) => !isScanOnlyInject(inject2))
+    ]
+  };
+}
+
+// packages/plugin/src/helper.ts
+init_dsh_home();
 
 // packages/plugin/src/helper-bindings.ts
 import { randomUUID as randomUUID8 } from "node:crypto";
@@ -46692,16 +47492,16 @@ function patchNodeById(nodes, scriptId, mutate) {
 }
 async function replaceScriptVariables(db, character, chatId, body) {
   const scriptId = requireString2(body?.scriptId, "scriptId");
-  const variables3 = requireObject2(body?.variables, "variables");
+  const variables2 = requireObject2(body?.variables, "variables");
   return serializeSessionWrite(`scripts:${character}\0${chatId}`, async () => {
     await db.putChatJsrOverlay(character, chatId, (current) => {
       const base = current ?? { version: 1, scriptTrees: [] };
       return {
         ...base,
-        scriptVariables: { ...base.scriptVariables ?? {}, [scriptId]: variables3 }
+        scriptVariables: { ...base.scriptVariables ?? {}, [scriptId]: variables2 }
       };
     });
-    return { scriptId, variables: variables3 };
+    return { scriptId, variables: variables2 };
   });
 }
 async function resetScriptTrees(db, character, chatId, type) {
@@ -47079,737 +47879,152 @@ function jsonValueOf2(value) {
   throw new Error("invalid variable value");
 }
 
-// packages/plugin/src/http/router.ts
-init_events();
-init_runtime2();
+// packages/plugin/src/http/frontend-routes.ts
 init_errors();
 init_io();
-
-// packages/plugin/src/http/json-records.ts
-function asRecord5(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
+async function handleHelperBindRoute(db, req, res) {
+  const body = await readJson(req);
+  const character = typeof body?.character === "string" ? body.character : "";
+  const chatId = typeof body?.chatId === "string" ? body.chatId : "";
+  if (character.trim() === "" || chatId.trim() === "") {
+    throw new HttpError(400, "character and chatId are required");
+  }
+  let exists = false;
+  try {
+    exists = await db.getChatSnapshot(character, chatId) !== void 0;
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "invalid chat id") throw error;
+  }
+  if (!exists) {
+    throw new HttpError(404, `chat '${chatId}' not found for character '${character}'`);
+  }
+  return sendJson(res, 200, { ok: true, token: createHelperBinding(character, chatId) });
 }
-function asChatLog(value) {
-  const record = asRecord5(value);
-  if (record === void 0) return void 0;
-  const header = asRecord5(record["header"]);
-  if (header === void 0) return void 0;
-  if (typeof header["user_name"] !== "string" || typeof header["character_name"] !== "string") return void 0;
-  if (!Array.isArray(record["messages"])) return void 0;
-  return value;
+async function handleHelperUnbindRoute(req, res) {
+  const body = await readJson(req);
+  const token = helperTokenFromRequest(req) ?? (typeof body?.token === "string" ? body.token.trim() : "");
+  if (token !== "") deleteHelperBinding(token);
+  return sendJson(res, 200, { ok: true });
 }
-
-// packages/plugin/src/games/http.ts
-init_public_error();
-init_http();
-var GAMES_INSTALL_BODY_MAX_BYTES = 8 * 1024 * 1024;
-function isGamesRoute(route) {
-  return route === "games" || route.startsWith("games/");
+async function handleHelperRoute(req, res, db) {
+  return handleHelperApi(req, res, db);
 }
-function statusOf(code) {
-  if (code === "not-found") return 404;
-  if (code === "turn") return 409;
-  if (code === "unavailable") return 503;
-  return 400;
+async function handleFrontendGenerateRoute(req, res, db) {
+  return handleFrontendGenerationStream(req, res, db);
 }
-function sendJson2(res, status2, body) {
-  if (res.writableEnded) return;
-  res.statusCode = status2;
-  res.setHeader("content-type", "application/json; charset=utf-8");
-  res.setHeader("cache-control", "no-store");
-  res.end(JSON.stringify(body));
+async function handleCardScriptsRoute(db, res, url) {
+  const character = url.searchParams.get("character");
+  if (!character) throw new Error("character query is required");
+  const chatId = url.searchParams.get("chatId");
+  const file = await db.getCharacter(character);
+  if (!file) return sendJson(res, 404, { ok: false, message: `character '${character}' not found` });
+  const scriptTrees = chatId === null ? void 0 : await db.getChatScripts(character, chatId);
+  const includeDisabled = url.searchParams.get("includeDisabled") === "1";
+  const { world, scripts } = collectCardScriptBundle(file.card, scriptTrees, includeDisabled);
+  return sendJson(res, 200, { ok: true, character, world, scripts });
 }
-function sendHtml(res, document) {
-  if (res.writableEnded) return;
-  res.statusCode = 200;
-  res.setHeader("content-type", "text/html; charset=utf-8");
-  res.setHeader("cache-control", "no-store");
-  res.setHeader("x-content-type-options", "nosniff");
-  res.end(document);
-}
-function sendError(res, cause) {
-  if (cause instanceof GameBridgeError) {
-    const message = publicErrorMessage(cause);
-    if (message === INTERNAL_ERROR_MESSAGE) throw cause;
-    sendJson2(res, statusOf(cause.code), { ok: false, message, code: cause.code });
+async function handleIdbGetRoute(res, url) {
+  const character = url.searchParams.get("character");
+  if (!character) throw new Error("character query is required");
+  const record = await getIdbRecord(
+    tavernDataRoot(),
+    character,
+    url.searchParams.get("db"),
+    url.searchParams.get("store"),
+    url.searchParams.get("key")
+  );
+  if (record === void 0) {
+    res.statusCode = 204;
+    res.end();
     return;
   }
-  throw cause;
-}
-async function handleGamesApi(options) {
-  const { req, res, url, route, method } = options;
-  const notFound = () => sendJson2(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
-  const service = await Promise.resolve(options.resolveService()).catch((cause) => {
-    throw new Error(`\u6E38\u620F\u8FD0\u884C\u65F6\u4E0D\u53EF\u7528: ${cause instanceof Error ? cause.message : String(cause)}`);
-  });
-  if (service === void 0) {
-    sendJson2(res, 503, { ok: false, message: "\u6E38\u620F\u8FD0\u884C\u65F6\u4E0D\u53EF\u7528\uFF08\u63D2\u4EF6\u672A\u88C5\u8F7D\u6E38\u620F\u670D\u52A1\uFF09", code: "unavailable" });
-    return;
-  }
-  try {
-    if (method === "GET" && route === "games/list") {
-      const character = url.searchParams.get("character") ?? "";
-      const chatId = url.searchParams.get("chatId") ?? "";
-      const filter = character !== "" && chatId !== "" ? { character, chatId } : {};
-      const { games, sessions } = await service.list(filter);
-      return sendJson2(res, 200, { ok: true, games, sessions });
-    }
-    if (method === "GET" && route === "games/revision") {
-      return sendJson2(res, 200, { ok: true, revision: await service.revision() });
-    }
-    if (method === "POST" && route === "games/start") {
-      const body = await readModRequestBody(req);
-      if (typeof body.gameId !== "string" || body.gameId.trim() === "") throw new GameBridgeError("invalid", "expected { gameId }");
-      if (typeof body.character !== "string" || body.character.trim() === "" || typeof body.chatId !== "string" || body.chatId.trim() === "") {
-        throw new GameBridgeError("invalid", "expected non-empty { character, chatId }");
-      }
-      const humanRole = typeof body.humanRole === "string" && body.humanRole !== "" ? body.humanRole : void 0;
-      const { session, view } = await service.start({ gameId: body.gameId, character: body.character, chatId: body.chatId, humanRole });
-      return sendJson2(res, 200, { ok: true, session, view });
-    }
-    if (method === "GET" && route.startsWith("games/state/")) {
-      const sessionId = decodeURIComponent(route.slice("games/state/".length));
-      const { session, view } = await service.state(sessionId);
-      return sendJson2(res, 200, { ok: true, session, view });
-    }
-    if (method === "POST" && route.startsWith("games/action/")) {
-      const sessionId = decodeURIComponent(route.slice("games/action/".length));
-      const body = await readModRequestBody(req);
-      const action = body.action;
-      if (action === null || typeof action !== "object" || Array.isArray(action)) {
-        throw new GameBridgeError("invalid", "expected { action }");
-      }
-      const actionRecord = action;
-      const actionType = actionRecord["type"];
-      if (typeof actionType !== "string" || actionType === "") {
-        throw new GameBridgeError("invalid", "action.type is required");
-      }
-      const gameAction = { ...actionRecord, type: actionType };
-      const { session, view } = await service.humanAction(sessionId, gameAction);
-      return sendJson2(res, 200, { ok: true, session, view });
-    }
-    if (method === "GET" && route.startsWith("games/") && route.includes("/view/")) {
-      const segments = route.split("/");
-      if (segments.length === 4 && segments[2] === "view") {
-        let gameId = segments[1];
-        let sessionId = segments[3];
-        try {
-          gameId = decodeURIComponent(gameId);
-          sessionId = decodeURIComponent(sessionId);
-        } catch {
-          return notFound();
-        }
-        const html = await service.view(gameId, sessionId);
-        return sendHtml(res, html);
-      }
-      return notFound();
-    }
-    if (method === "POST" && route === "games/install") {
-      let body;
-      try {
-        body = await readModRequestBody(req, GAMES_INSTALL_BODY_MAX_BYTES);
-      } catch (cause) {
-        throw new GameBridgeError("invalid", `install \u8BF7\u6C42\u4F53\u8BFB\u53D6\u5931\u8D25\uFF08\u4E0A\u9650 ${GAMES_INSTALL_BODY_MAX_BYTES} \u5B57\u8282\uFF09: ${cause instanceof Error ? cause.message : String(cause)}`);
-      }
-      const source = {};
-      if (typeof body.path === "string" && body.path.trim() !== "") source.path = body.path;
-      else if (typeof body.url === "string" && body.url.trim() !== "") source.url = body.url;
-      else if (typeof body.zipBase64 === "string" && body.zipBase64.trim() !== "") source.zipBase64 = body.zipBase64;
-      else throw new GameBridgeError("invalid", "expected { path }\uFF08\u672C\u5730\u6E38\u620F\u5305\u76EE\u5F55\uFF09\u3001{ url }\uFF08git \u6E90\uFF09\u6216 { zipBase64 }\uFF08\u6E38\u620F\u5305 zip\uFF09");
-      const { game } = await service.install(source, body.force === true);
-      return sendJson2(res, 200, { ok: true, game });
-    }
-    if (method === "POST" && route === "games/reload") {
-      const { games } = await service.reload();
-      return sendJson2(res, 200, { ok: true, games });
-    }
-    return notFound();
-  } catch (cause) {
-    sendError(res, cause);
-  }
-}
-
-// packages/plugin/src/http/routes.ts
-init_runtime2();
-
-// packages/plugin/src/http/body-api.ts
-init_errors();
-init_io();
-async function handleAgentTavernBodyApi(ctx, db, req, res, url, route, method) {
-  const wiring = bodyWiringContext(ctx, async (sessionId2) => (await db.getState()).sessionBindings[sessionId2]);
-  if (method === "GET") {
-    const sessionId2 = url.searchParams.get("sessionId");
-    if (sessionId2 === null || sessionId2 === "") {
-      throw new HttpError(400, "sessionId and messageId (or messageIds) are required");
-    }
-    const selector = parseBodyGetSelector(url.searchParams);
-    const state = await db.getState();
-    const binding2 = state.sessionBindings[sessionId2];
-    const mutationsDisabledReason2 = imBodyMutationDisabledOf(binding2, sessionId2, state.imPeers);
-    let characterName2;
-    let chatId2;
-    let character2 = void 0;
-    let chat;
-    if (binding2 !== void 0 && bodyBindingEligible(binding2)) {
-      characterName2 = binding2.character;
-      chatId2 = binding2.chatId;
-      character2 = await db.getCharacter(binding2.character);
-      chat = (await db.getChatSnapshot(binding2.character, binding2.chatId))?.chat;
-    }
-    const stateSafety2 = binding2 === void 0 || !bodyBindingEligible(binding2) ? void 0 : bodyStateSafetyOf(character2, chat);
-    const historicalMvuState = character2 !== void 0 && chat !== void 0 && bodyHistoricalMvuStateOf(character2, chat);
-    const agent2 = resolveLiveAgent(wiring, sessionId2);
-    const deps2 = agent2 === void 0 ? void 0 : await createBodyDeps(wiring, agent2);
-    const session = agent2?.session;
-    const factsSource = session === void 0 ? void 0 : createBodySessionFactsSource(session);
-    let scriptsRead;
-    const readScripts = () => {
-      if (characterName2 === void 0 || chatId2 === void 0) {
-        throw new Error("body floor display scripts require a character and chat id");
-      }
-      scriptsRead ??= collectSessionRegexScripts(db, state, characterName2, chatId2, character2);
-      return scriptsRead;
-    };
-    const readFloorOf = async (messageId, groupIdHint, selectedIndexHint) => characterName2 === void 0 || chatId2 === void 0 || chat === void 0 ? void 0 : projectedBodyFloor(chat, messageId, groupIdHint, selectedIndexHint, readScripts);
-    const stableViewOf = (messageId) => buildBodyView({
-      messageId,
-      binding: binding2,
-      agent: agent2,
-      hostSupported: deps2 !== void 0,
-      stateSafety: stateSafety2,
-      historicalMvuState,
-      writeRollbackAvailable: deps2?.writeRollback !== void 0,
-      ledger: void 0,
-      messageText: void 0,
-      projected: void 0,
-      projectionCurrent: false,
-      projectionTextCurrent: false,
-      inspection: void 0,
-      ...mutationsDisabledReason2 === void 0 ? {} : { mutationsDisabledReason: mutationsDisabledReason2 }
-    });
-    const readBodyItem = async (messageId) => {
-      try {
-        const floorRead = await readFloorOf(messageId, void 0, void 0);
-        const floorByMessage = floorRead?.ok === true ? floorRead.floor : void 0;
-        const facts = factsSource?.factsOf(messageId, floorByMessage?.groupId);
-        const ledger = facts?.ledger;
-        const selectionMoved = ledger !== void 0 && (floorByMessage === void 0 || floorByMessage.anchorMessageId !== ledger.anchorMessageId || floorByMessage.selectedIndex !== ledger.selectedIndex);
-        const reread = selectionMoved ? await readFloorOf(messageId, ledger.groupId, ledger.selectedIndex) : void 0;
-        const projected = reread === void 0 ? floorByMessage : reread.ok ? reread.floor : void 0;
-        const floorDegradation = reread !== void 0 ? reread.ok ? void 0 : reread.degradation : floorRead !== void 0 && !floorRead.ok ? floorRead.degradation : void 0;
-        const messageText3 = facts?.messageText;
-        const inspection = facts?.inspection;
-        const latestEditSeq = facts?.latestEditSeq;
-        if (facts?.ledgerError !== void 0) {
-          ctx.logger?.warn?.("dsh-soulmojito body: ledger fold failed for GET body", {
-            sessionId: sessionId2,
-            messageId,
-            error: facts.ledgerError
-          });
-        }
-        if (floorDegradation !== void 0) {
-          ctx.logger?.warn?.("dsh-soulmojito body: body floor binding is ambiguous for GET body", {
-            sessionId: sessionId2,
-            messageId,
-            code: floorDegradation.detail,
-            error: floorDegradation.message
-          });
-        }
-        const projection2 = floorDegradation === void 0 ? bodyProjectionState(projected, ledger, latestEditSeq) : { current: false, textCurrent: false };
-        const editDetail = character2 === void 0 || chat === void 0 || ledger === void 0 ? void 0 : bodyEditDetailOf(character2.card, chat, ledger);
-        const view = buildBodyView({
-          messageId,
-          binding: binding2,
-          agent: agent2,
-          hostSupported: deps2 !== void 0,
-          stateSafety: stateSafety2,
-          historicalMvuState,
-          writeRollbackAvailable: deps2?.writeRollback !== void 0,
-          ledger,
-          messageText: messageText3,
-          projected,
-          projectionCurrent: projection2.current,
-          projectionTextCurrent: projection2.textCurrent,
-          inspection,
-          editDetail,
-          // A damaged floor binding closes edit with its own detail and keeps
-          // publishing it even when a reason already gates the row.
-          ...floorDegradation === void 0 ? {} : { readDetail: floorDegradation.detail },
-          ...facts?.lastOperation === void 0 ? {} : { lastOperation: facts.lastOperation },
-          ...mutationsDisabledReason2 === void 0 ? {} : { mutationsDisabledReason: mutationsDisabledReason2 }
-        });
-        return { ok: true, view };
-      } catch (error) {
-        ctx.logger?.warn?.("dsh-soulmojito body: GET body item failed", {
-          sessionId: sessionId2,
-          messageId,
-          error: errorMessage3(error)
-        });
-        return { ok: false, view: stableViewOf(messageId), error };
-      }
-    };
-    if (selector.kind === "batch") {
-      const items = /* @__PURE__ */ new Map();
-      for (const messageId of selector.messageIds) {
-        items.set(messageId, (await readBodyItem(messageId)).view);
-      }
-      return sendJson(res, 200, { ok: true, items: Object.fromEntries(items) });
-    }
-    const item = await readBodyItem(selector.messageId);
-    if (!item.ok) throw item.error;
-    return sendJson(res, 200, item.view);
-  }
-  const body = await readJson(req);
-  const sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
-  if (sessionId === "") {
-    return sendBodyFailure(res, { status: 400, code: "invalid-arguments", message: "sessionId is required" });
-  }
-  const binding = await resolveBodyBinding(wiring, sessionId);
-  if (binding === void 0 || !bodyBindingEligible(binding)) {
-    return sendBodyFailure(res, {
-      status: 409,
-      code: "architecture-mismatch",
-      message: "body operations require an AgentTavern single-character binding"
-    });
-  }
-  const mutationsDisabledReason = imBodyMutationDisabledOf(binding, sessionId, (await db.getState()).imPeers);
-  if (mutationsDisabledReason !== void 0) {
-    return sendBodyFailure(res, {
-      status: 409,
-      code: IM_BODY_MUTATION_DISABLED_CODE,
-      message: mutationsDisabledReason
-    });
-  }
-  const characterName = binding.character;
-  const chatId = binding.chatId;
-  if (characterName === void 0 || chatId === void 0) {
-    return sendBodyFailure(res, {
-      status: 409,
-      code: "body-state-unsafe",
-      message: bodyStateUnsafeMessage("chat-unreadable"),
-      detail: "chat-unreadable"
-    });
-  }
-  const action = route === "body" ? "edit" : route === "body/select" ? "select" : "regenerate";
-  const character = await db.getCharacter(characterName);
-  const snapshot2 = await db.getChatSnapshot(characterName, chatId);
-  const stateSafety = bodyMutationSafetyOf(action, character, snapshot2?.chat);
-  if (!stateSafety.safe) {
-    return sendBodyFailure(res, {
-      status: 409,
-      code: stateSafety.reason,
-      message: bodyStateUnsafeMessage(stateSafety.detail),
-      detail: stateSafety.detail
-    });
-  }
-  const agent = resolveLiveAgent(wiring, sessionId);
-  if (agent === void 0) {
-    return sendBodyFailure(res, {
-      status: 409,
-      code: "session-busy",
-      message: `session '${sessionId}' has no live agent in this host process; open the chat and retry`
-    });
-  }
-  const deps = await createBodyDeps(wiring, agent);
-  if (deps === void 0) {
-    return sendBodyFailure(res, {
-      status: 501,
-      code: "host-unsupported",
-      message: "this host does not expose appendPluginRecord/pluginRecordOf (DSH 0.2.1-rc.2+)"
-    });
-  }
-  if (action === "regenerate" && deps.writeRollback === void 0 && snapshot2 !== void 0 && bodyHistoricalMvuStateOf(character, snapshot2.chat)) {
-    return sendBodyFailure(res, {
-      status: 409,
-      code: "body-state-unsafe",
-      message: bodyStateUnsafeMessage("write-journal-unavailable"),
-      detail: "write-journal-unavailable"
-    });
-  }
-  try {
-    const groupId = bodyString(body, "groupId") ?? bodyString(body, "messageId");
-    if (groupId === void 0) throw bodyRuntimeError("invalid-arguments", "groupId or messageId is required");
-    const expectedAnchorId = bodyString(body, "expectedAnchorId") ?? groupId;
-    if (route === "body") {
-      const index2 = bodyIndex(body, "index");
-      if (typeof body.text !== "string") {
-        throw bodyRuntimeError("invalid-body-text", "body edit requires a string text");
-      }
-      const state2 = await applyBodyEdit(deps, { groupId, index: index2, text: body.text, expectedAnchorId });
-      return sendJson(res, 200, { ok: true, state: state2 });
-    }
-    if (route === "body/regenerate") {
-      const expectedIndex = bodyIndex(body, "expectedIndex");
-      const feedback = typeof body.feedback === "string" ? body.feedback : void 0;
-      const result = await startRegenerate(deps, {
-        groupId,
-        expectedAnchorId,
-        expectedIndex,
-        ...feedback === void 0 ? {} : { feedback }
-      });
-      return sendJson(res, 202, { ok: true, opId: result.opId, status: "pending" });
-    }
-    const index = bodyIndex(body, "index");
-    const state = await selectBodyCandidate(deps, { groupId, index, expectedAnchorId });
-    return sendJson(res, 200, { ok: true, state });
-  } catch (error) {
-    const pending = pendingOperationOf(error);
-    const recovered = pending === void 0 || await retryPendingBodyRecovery(wiring, agent, pending);
-    return sendBodyFailure(
-      res,
-      bodyFailureOf(error),
-      recovered || pending === void 0 ? void 0 : { opId: pending.opId, status: "pending" }
-    );
-  }
-}
-function sendBodyFailure(res, failure, pendingOperation) {
-  sendJson(res, failure.status, {
-    ok: false,
-    code: failure.code,
-    message: failure.message,
-    ...failure.detail === void 0 ? {} : { detail: failure.detail },
-    ...pendingOperation === void 0 ? {} : { pendingOperation }
-  });
-}
-function bodyString(body, field2) {
-  const value = body[field2];
-  return typeof value === "string" && value.trim() !== "" ? value : void 0;
-}
-function bodyIndex(body, field2) {
-  const value = body[field2];
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-    throw bodyRuntimeError("invalid-arguments", `${field2} must be a non-negative safe integer`);
-  }
-  return value;
-}
-async function projectedBodyFloor(chat, messageId, groupIdHint, selectedIndexHint, readScripts) {
-  let index;
-  try {
-    index = locateBodyFloorForRead(chat, {
-      messageId,
-      ...groupIdHint === void 0 ? {} : { groupId: groupIdHint }
-    });
-  } catch (error) {
-    return { ok: false, degradation: bodyFloorDegradationOf(error) };
-  }
-  if (index === void 0) return { ok: true, floor: void 0 };
-  const floor = chat.messages[index];
-  const tavern = asRecord5(asRecord5(floor.extra)?.["agentTavern"]);
-  const scripts = await readScripts();
-  const selectedSwipe = selectedIndexHint === void 0 ? floor : Array.isArray(floor.swipes) && typeof floor.swipes[selectedIndexHint] === "string" ? { ...floor, mes: floor.swipes[selectedIndexHint] } : void 0;
-  const text = selectedSwipe === void 0 ? void 0 : stripFrontendDocuments(displayTextForMessage(scripts, selectedSwipe, chat.messages.length - 1 - index));
-  const selectedIndex = floor.swipe_id;
-  const count = Array.isArray(floor.swipes) && floor.swipes.length > 0 ? floor.swipes.length : 1;
-  const resolved = {
-    ...typeof tavern?.["bodyGroupId"] === "string" ? { groupId: tavern["bodyGroupId"] } : {},
-    ...typeof tavern?.["anchorMessageId"] === "string" ? { anchorMessageId: tavern["anchorMessageId"] } : {},
-    ...typeof selectedIndex === "number" && Number.isSafeInteger(selectedIndex) ? { selectedIndex } : {},
-    ...typeof tavern?.["lastBodyEventSeq"] === "number" && Number.isSafeInteger(tavern["lastBodyEventSeq"]) && tavern["lastBodyEventSeq"] >= 0 ? { lastBodyEventSeq: tavern["lastBodyEventSeq"] } : {},
-    count,
-    ...text === void 0 ? {} : { text }
-  };
-  return { ok: true, floor: resolved };
-}
-function bodyFloorDegradationOf(error) {
-  if (error instanceof BodyJsonlProjectionError && error.code === "body-group-mismatch") {
-    return { detail: error.code, message: error.message };
-  }
-  return {
-    detail: "body-floor-unreadable",
-    message: `body floor lookup failed: ${errorMessage3(error)}`
-  };
-}
-var BODY_GET_BATCH_LIMIT = 50;
-function parseBodyGetSelector(params) {
-  const single = params.get("messageId");
-  const batch = params.get("messageIds");
-  const hasSingle = single !== null && single !== "";
-  const hasBatch = batch !== null && batch !== "";
-  if (hasSingle && hasBatch) {
-    throw new HttpError(400, "pass either messageId or messageIds, not both");
-  }
-  if (hasSingle) return { kind: "single", messageId: single };
-  if (!hasBatch) {
-    throw new HttpError(400, "sessionId and messageId (or messageIds) are required");
-  }
-  const messageIds = [];
-  const seen = /* @__PURE__ */ new Set();
-  for (const raw of batch.split(",")) {
-    const messageId = raw.trim();
-    if (messageId === "") throw new HttpError(400, "messageIds must not contain empty entries");
-    if (seen.has(messageId)) continue;
-    seen.add(messageId);
-    messageIds.push(messageId);
-  }
-  if (messageIds.length > BODY_GET_BATCH_LIMIT) {
-    throw new HttpError(400, `messageIds accepts at most ${BODY_GET_BATCH_LIMIT} ids (got ${messageIds.length})`);
-  }
-  return { kind: "batch", messageIds };
-}
-function bodyProjectionState(projected, ledger, latestEditSeq) {
-  if (projected === void 0 || ledger === void 0) return { current: true, textCurrent: true };
-  const textCurrent = latestEditSeq === void 0 || projected.lastBodyEventSeq !== void 0 && projected.lastBodyEventSeq >= latestEditSeq;
-  const selectionCurrent = (projected.anchorMessageId === void 0 || projected.anchorMessageId === ledger.anchorMessageId) && (projected.selectedIndex === void 0 || projected.selectedIndex === ledger.selectedIndex);
-  return { current: textCurrent && selectionCurrent, textCurrent };
-}
-
-// packages/plugin/src/http/asset-import-routes.ts
-init_src2();
-init_src();
-init_dsh_home();
-init_events();
-init_io();
-async function handleCharacterImportRoute(db, req, res) {
-  const body = await readJson(req, 25 * 1024 * 1024);
-  let source;
-  if (typeof body.pngBase64 === "string") source = new Uint8Array(Buffer.from(body.pngBase64, "base64"));
-  else if (typeof body.charxBase64 === "string") source = new Uint8Array(Buffer.from(body.charxBase64, "base64"));
-  else if (body.card && typeof body.card === "object") source = body.card;
-  else throw new Error("expected { pngBase64 }, { charxBase64 } or { card }");
-  const result = await db.importCharacter(source);
-  await emitAssetsSaved("character", result.card.data.name);
-  try {
-    await saveOriginalSnapshot(tavernDataRoot(), result.card.data.name, result.card);
-  } catch (error) {
-    console.warn(`dsh-soulmojito: original snapshot for '${result.card.data.name}' failed: ${error instanceof Error ? error.message : String(error)}`);
-  }
-  const current = await db.getState();
-  if (!current.activeCharacter) {
-    await db.patchState({ activeCharacter: result.card.data.name });
-  }
-  await refreshActivePrompt();
-  return sendJson(res, 200, { ok: true, name: result.card.data.name, card: publicCard(result.card), world: result.importedWorld ?? null, importedRegex: result.importedRegex });
-}
-async function handleWorldImportRoute(db, req, res) {
-  const body = await readJson(req);
-  const data = asRecord5(body.data);
-  if (typeof body.name !== "string" || data === void 0) throw new Error("expected { name, data }");
-  const book = await db.importWorldFile(body.name, data);
-  await emitAssetsSaved("world", book.name);
-  return sendJson(res, 200, { ok: true, name: book.name, entries: book.entries.length });
-}
-async function handlePresetImportRoute(db, req, res) {
-  const body = await readJson(req);
-  const data = asRecord5(body.data);
-  if (typeof body.name !== "string" || data === void 0) throw new Error("expected { name, data }");
-  parsePresetOrThrow(data);
-  const result = await db.importPreset(body.name, data);
-  await emitAssetsSaved("preset", body.name);
-  await emitAgentPresetChanged();
-  return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(data), importedRegex: result.importedRegex });
-}
-async function handlePresetReadRoute(db, res, route) {
-  const name2 = decodeURIComponent(route.slice("preset/".length));
-  const data = await db.getPreset(name2);
-  if (!data) return sendJson(res, 404, { ok: false, message: "preset not found" });
-  return sendJson(res, 200, { ok: true, name: name2, kind: detectPresetKind(data), data });
-}
-async function handlePresetUpdateRoute(db, req, res, route) {
-  const oldName = decodeURIComponent(route.slice("preset/".length));
-  const body = await readJson(req, 10 * 1024 * 1024);
-  const data = asRecord5(body.data);
-  if (typeof body.name !== "string" || body.name.trim() === "" || data === void 0) {
-    throw new Error("expected { name, data }");
-  }
-  const name2 = body.name;
-  parsePresetOrThrow(data);
-  await db.putPreset(name2, data);
-  await emitAssetsSaved("preset", name2);
-  if (name2 !== oldName) await db.deletePreset(oldName);
-  const state = await db.updateState((current) => ({
-    activePreset: current.activePreset === oldName ? name2 : current.activePreset,
-    ...name2 !== oldName && current.regexScriptPresetOwners !== void 0 ? {
-      regexScriptPresetOwners: Object.fromEntries(Object.entries(current.regexScriptPresetOwners).map(([id, owner]) => [id, owner === oldName ? name2 : owner]))
-    } : {}
-  }));
-  await emitAgentPresetChanged();
-  await refreshActivePrompt();
-  return sendJson(res, 200, { ok: true, name: name2, kind: detectPresetKind(data), data, state });
-}
-
-// packages/plugin/src/http/character-routes.ts
-init_src();
-init_dsh_home();
-init_events();
-init_io();
-async function handleCharacterUpdateRoute(db, req, res, route) {
-  const oldName = decodeURIComponent(route.slice("character/".length));
-  const body = await readJson(req, 25 * 1024 * 1024);
-  if (!body.card || typeof body.card !== "object" || Array.isArray(body.card)) {
-    throw new Error("expected { card }");
-  }
-  clampIdentitySummary(body.card);
-  const saved = await db.updateCharacter(oldName, body.card);
-  const nextName = saved.card.data.name;
-  await emitAssetsSaved("character", nextName);
-  if (nextName !== oldName) {
-    await moveOriginalSnapshot(tavernDataRoot(), oldName, nextName);
-  }
-  const state = await db.updateState((current) => {
-    const activeCharacter = current.activeCharacter === oldName ? nextName : current.activeCharacter;
-    const sessionBindings = Object.fromEntries(Object.entries(current.sessionBindings).map(([sessionId, binding]) => [
-      sessionId,
-      binding.character === oldName && binding.group !== true ? { ...binding, character: nextName } : binding
-    ]));
-    const prefix = `${oldName}\0`;
-    const chats = nextName === oldName ? current.chats : Object.fromEntries(Object.entries(current.chats).map(([key, value]) => [
-      key.startsWith(prefix) ? `${nextName}\0${key.slice(prefix.length)}` : key,
-      value
-    ]));
-    return { activeCharacter, sessionBindings, chats };
-  });
-  if (nextName !== oldName) {
-    for (const groupName of await db.listGroups()) {
-      const group2 = await db.getGroup(groupName);
-      if (group2?.members.includes(oldName)) {
-        await db.putGroup({
-          ...group2,
-          members: group2.members.map((member) => member === oldName ? nextName : member),
-          disabledMembers: group2.disabledMembers.map((member) => member === oldName ? nextName : member)
-        });
-      }
-    }
-  }
-  await refreshActivePrompt();
-  return sendJson(res, 200, { ok: true, kind: saved.kind, card: publicCard(saved.card), state });
-}
-async function handleCharacterDeleteRoute(db, res, url) {
-  const name2 = url.searchParams.get("name");
-  if (!name2) throw new Error("name query is required");
-  const found = await db.getCharacter(name2);
-  if (!found) return sendJson(res, 404, { ok: false, message: "character not found" });
-  await db.deleteCharacter(name2);
-  for (const groupName of await db.listGroups()) {
-    const group2 = await db.getGroup(groupName);
-    if (group2?.members.includes(name2)) {
-      await db.putGroup({
-        ...group2,
-        members: group2.members.filter((member) => member !== name2),
-        disabledMembers: group2.disabledMembers.filter((member) => member !== name2)
-      });
-    }
-  }
-  const state = await db.updateState((current) => ({
-    activeCharacter: current.activeCharacter === name2 ? void 0 : current.activeCharacter,
-    sessionBindings: Object.fromEntries(Object.entries(current.sessionBindings).filter(([, binding]) => !(binding.character === name2 && binding.group !== true)))
-  }));
-  await deleteOriginalSnapshot(tavernDataRoot(), name2);
-  await refreshActivePrompt();
-  return sendJson(res, 200, { ok: true, state });
-}
-async function handleCharacterExportRoute(db, res, route) {
-  const name2 = decodeURIComponent(route.slice("export/character/".length));
-  const found = await db.getCharacter(name2);
-  if (!found) return sendJson(res, 404, { ok: false, message: "character not found" });
-  const bytes = await db.exportCharacter(name2);
-  const media = found.kind === "charx" ? "application/zip" : found.kind === "json" ? "application/json" : "image/png";
   res.statusCode = 200;
-  res.setHeader("content-type", media);
-  const ext = found.kind === "charx" ? "charx" : found.kind === "json" ? "json" : "png";
-  res.setHeader("content-disposition", `attachment; filename="${encodeURIComponent(`${name2}.${ext}`)}"`);
-  res.end(Buffer.from(bytes));
+  res.setHeader("content-type", "application/octet-stream");
+  res.setHeader("content-length", String(record.size));
+  res.setHeader("x-dsh-idb-meta", Buffer.from(JSON.stringify(record.meta), "utf8").toString("base64url"));
+  await pipeline(createReadStream(record.path), res);
   return;
 }
-
-// packages/plugin/src/http/domain-routes.ts
-init_runtime2();
-init_io();
-async function handleAvatarRoute(db, res, route) {
-  const name2 = decodeURIComponent(route.slice("avatar/".length));
-  const found = await db.getCharacter(name2);
-  if (found) {
-    return serveCharacterAvatar(res, db, name2, found);
+async function handleIdbPutRoute(req, res, url) {
+  const character = url.searchParams.get("character");
+  if (!character) throw new Error("character query is required");
+  const dbName = url.searchParams.get("db");
+  const storeName = url.searchParams.get("store");
+  const key = url.searchParams.get("key");
+  if (dbName === null || storeName === null || key === null) {
+    throw new Error("db, store and key queries are required");
   }
-  const group2 = await db.getGroup(name2);
-  if (group2) {
-    const enabled = group2.members.filter((member) => !group2.disabledMembers.includes(member));
-    for (const member of enabled.length > 0 ? enabled : group2.members) {
-      const memberFile = await db.getCharacter(member);
-      if (memberFile) return serveCharacterAvatar(res, db, member, memberFile);
+  const declared = Number(req.headers?.["content-length"] ?? "");
+  if (Number.isFinite(declared) && declared > IDB_MAX_RECORD_BYTES) {
+    req.destroy?.();
+    throw new Error(`idb record is too large (${declared} > ${IDB_MAX_RECORD_BYTES} bytes)`);
+  }
+  const temporaryDir = await mkdtemp(join22(tmpdir4(), "dsh-soulmojito-idb-"));
+  const temporaryPath = join22(temporaryDir, "record.bin");
+  try {
+    await pipeline(req, createWriteStream(temporaryPath));
+    const metaHeader = typeof req.headers?.["x-dsh-idb-meta"] === "string" ? req.headers["x-dsh-idb-meta"] : "";
+    let meta = {};
+    if (metaHeader !== "") {
+      try {
+        const parsed = JSON.parse(Buffer.from(metaHeader, "base64url").toString("utf8"));
+        if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) meta = parsed;
+        else throw new Error("meta must be an object");
+      } catch (error) {
+        throw new Error(`x-dsh-idb-meta is not valid base64url JSON: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
-    return sendAvatarFallback(res, name2);
+    const result = await putIdbRecordFromFile(tavernDataRoot(), character, dbName, storeName, key, temporaryPath, meta);
+    return sendJson(res, 200, { ok: true, value: result });
+  } finally {
+    await rm2(temporaryDir, { recursive: true, force: true });
   }
-  return sendJson(res, 404, { ok: false, message: "character avatar not found" });
 }
-async function handleCharacterReadRoute(db, res, route) {
-  const name2 = decodeURIComponent(route.slice("character/".length));
-  const found = await db.getCharacter(name2);
-  if (!found) return sendJson(res, 404, { ok: false, message: "character not found" });
-  return sendJson(res, 200, { ok: true, kind: found.kind, card: publicCard(found.card) });
-}
-async function handleProjectionRoute(res, url) {
-  const sessionId = url.searchParams.get("sessionId");
-  if (!sessionId) throw new Error("sessionId query is required");
-  const projector = await getAgentTavernProjectorPromise();
-  if (!projector) throw new Error("AgentTavern projector is unavailable");
-  return sendJson(res, 200, { ok: true, projection: await projector.status(sessionId) });
-}
-async function handleProjectionReplayRoute(ctx, db, req, res, url) {
-  const body = await readJson(req).catch(() => ({}));
-  const sessionId = typeof body.sessionId === "string" ? body.sessionId : url.searchParams.get("sessionId");
-  if (!sessionId) throw new Error("sessionId is required");
+async function handleFrontendStorageRoute(db, res, url) {
+  const character = url.searchParams.get("character");
+  if (!character) throw new Error("character query is required");
   const state = await db.getState();
-  const binding = state.sessionBindings[sessionId];
-  if (!binding || binding.architecture !== "agent-tavern" || binding.group === true) {
-    throw new TavernArchitectureConflictError("Projection replay requires an AgentTavern single-character binding.");
-  }
-  const agent = ctx.agents?.get?.(sessionId);
-  const session = agent?.session;
-  if (!session || typeof session.id !== "string" || readSessionEvents(session) === void 0) {
-    throw new Error("AgentTavern session is not loaded in this host process; open the chat first and retry.");
-  }
-  const projector = await getAgentTavernProjectorPromise();
-  if (!projector) throw new Error("AgentTavern projector is unavailable");
-  await projector.replay({ ...session, id: session.id });
-  return sendJson(res, 200, { ok: true, projection: await projector.status(sessionId) });
-}
-async function handleCompactRoute(ctx, req, res, url) {
-  const body = await readJson(req).catch(() => ({}));
-  const sessionId = typeof body.sessionId === "string" ? body.sessionId : url.searchParams.get("sessionId");
-  if (!sessionId) throw new Error("sessionId is required");
-  const agent = ctx.agents?.get?.(sessionId);
-  if (!agent || agent.status !== "idle") {
-    throw new Error(`session ${sessionId} has no idle agent in this host process; pause the novel and retry.`);
-  }
-  const compaction = ctx.compaction;
-  if (!compaction || typeof compaction.compactNow !== "function") {
-    throw new Error("compaction service is unavailable in this host process");
-  }
-  const result = await compaction.compactNow(agent, new AbortController().signal);
-  return sendJson(res, 200, { ok: true, result: result ?? null });
-}
-async function handleAuditRoute(db, res, url) {
-  const sessionId = url.searchParams.get("sessionId");
-  if (!sessionId) throw new Error("sessionId query is required");
-  const state = await db.getState();
-  const binding = state.sessionBindings[sessionId];
-  if (!binding || binding.architecture !== "agent-tavern" || binding.group === true) {
-    throw new TavernArchitectureConflictError("AgentTavern audit requires a native single-character binding.");
-  }
-  const scopes = [
-    { scope: "chat", scopeId: binding.chatId },
-    { scope: "character", scopeId: binding.character },
-    { scope: "agent", scopeId: sessionId }
-  ];
-  const [memoryGroups, variableGroups, globalMemories, globalVariables, projector] = await Promise.all([
-    Promise.all(scopes.map(({ scope, scopeId }) => memories().then((store5) => store5.search({
-      scope,
-      scopeId,
-      includeDeleted: true,
-      limit: 50
-    })))),
-    Promise.all(scopes.map(({ scope, scopeId }) => variables().then((store5) => store5.listAll(scope, scopeId)))),
-    memories().then((store5) => store5.search({ scope: "global", includeDeleted: true, limit: 50 })),
-    variables().then((store5) => store5.listAll("global", "global")),
-    getAgentTavernProjectorPromise()
-  ]);
   return sendJson(res, 200, {
     ok: true,
-    architecture: binding.architecture,
-    contextMode: binding.contextMode,
-    projection: projector ? await projector.status(sessionId) : null,
-    memories: [...memoryGroups.flat().map((hit) => hit.record), ...globalMemories.map((hit) => hit.record)],
-    variables: [...variableGroups.flat(), ...globalVariables]
+    storage: state.frontendStorage?.[character] ?? {}
+  });
+}
+async function handleFrontendLatestRoute(db, res, url) {
+  const state = await db.getState();
+  const character = url.searchParams.get("character") || state.activeCharacter;
+  const chatId = url.searchParams.get("chatId");
+  if (!character) throw new Error("no active character");
+  if (!chatId) throw new Error("chatId query is required");
+  const snapshot2 = await db.getChatSnapshot(character, chatId);
+  if (!snapshot2) return sendJson(res, 404, { ok: false, message: "chat not found" });
+  const card = await db.getCharacter(character);
+  const scripts = await collectSessionRegexScripts(db, state, character, chatId, card);
+  const message = latestFrontendMessage(snapshot2.chat.messages, (entry, index) => displayTextForMessage(scripts, entry, snapshot2.chat.messages.length - 1 - index));
+  return sendJson(res, 200, {
+    ok: true,
+    revision: snapshot2.revision,
+    messageCount: snapshot2.chat.messages.length,
+    ...message === void 0 ? {} : { message }
+  });
+}
+async function handleDisplayRoute(db, res, url) {
+  const character = url.searchParams.get("character");
+  const chatId = url.searchParams.get("chatId");
+  const messageId = url.searchParams.get("messageId");
+  if (!character || !chatId || !messageId) throw new Error("character, chatId and messageId are required");
+  const snapshot2 = await db.getChatSnapshot(character, chatId);
+  if (!snapshot2) return sendJson(res, 404, { ok: false, message: "chat not found" });
+  const index = snapshot2.chat.messages.findIndex((message) => {
+    const extra = message.extra?.agentTavern;
+    return typeof extra === "object" && extra !== null && extra.messageId === messageId;
+  });
+  if (index < 0) return sendJson(res, 200, { ok: true, text: null });
+  const state = await db.getState();
+  const card = await db.getCharacter(character);
+  const scripts = await collectSessionRegexScripts(db, state, character, chatId, card);
+  return sendJson(res, 200, {
+    ok: true,
+    text: stripFrontendDocuments(displayTextForMessage(scripts, snapshot2.chat.messages[index], snapshot2.chat.messages.length - 1 - index))
   });
 }
 
@@ -48776,7 +48991,7 @@ var cardApplyMvuTool = tool3("card_apply_mvu", "Convert a character card to the 
   if (args.confirmed !== true) throw new Error(CONFIRMATION_ERROR);
   const character = stringArg(args.character);
   const template = statusTemplateArg(args.statusTemplate);
-  const variables3 = args.initialVariables === void 0 ? void 0 : initialVariablesArg(args.initialVariables);
+  const variables2 = args.initialVariables === void 0 ? void 0 : initialVariablesArg(args.initialVariables);
   exec?.signal?.throwIfAborted();
   const root = tavernDataRoot();
   const db = await tavernStore3();
@@ -48789,7 +49004,7 @@ var cardApplyMvuTool = tool3("card_apply_mvu", "Convert a character card to the 
   const previous = extensions.agentTavern;
   const agentTavern = typeof previous === "object" && previous !== null && !Array.isArray(previous) ? { ...previous } : {};
   agentTavern.statusTemplate = template;
-  if (variables3 !== void 0) agentTavern.initialVariables = structuredClone(variables3);
+  if (variables2 !== void 0) agentTavern.initialVariables = structuredClone(variables2);
   extensions.agentTavern = agentTavern;
   const saved = await db.updateCharacter(character, {
     spec: found.card.spec,
@@ -52412,7 +52627,7 @@ function nonEmpty2(value) {
 // packages/plugin/src/im/media-store.ts
 import { randomUUID as randomUUID12 } from "node:crypto";
 import { promises as fs20 } from "node:fs";
-import { join as join23, resolve as resolve5 } from "node:path";
+import { join as join24, resolve as resolve5 } from "node:path";
 var IM_MEDIA_ROOT_DIR = "im-media";
 var IM_MEDIA_EXTENSIONS = [
   "png",
@@ -52462,7 +52677,7 @@ function openImMediaStore(options) {
   async function root() {
     const workspace = (await options.workspaceRoot()).trim();
     if (workspace === "") throw new ImMediaStoreError("IM_MEDIA_IO", "the internal workspace root is empty; media cannot be stored");
-    return join23(resolve5(workspace), IM_MEDIA_ROOT_DIR);
+    return join24(resolve5(workspace), IM_MEDIA_ROOT_DIR);
   }
   return {
     async save(request) {
@@ -52476,8 +52691,8 @@ function openImMediaStore(options) {
         );
       }
       const extension = requireExtension(request.extension);
-      const directory = join23(await root(), `${channel}-${accountId}`);
-      const file = join23(directory, `${randomUUID12()}.${extension}`);
+      const directory = join24(await root(), `${channel}-${accountId}`);
+      const file = join24(directory, `${randomUUID12()}.${extension}`);
       try {
         await fs20.mkdir(directory, { recursive: true });
         await fs20.writeFile(file, request.bytes, { mode: FILE_MODE });
@@ -52498,7 +52713,7 @@ function openImMediaStore(options) {
     async remove(channel, accountId) {
       const ownerChannel = requireOwnerPart(channel, "channel");
       const ownerAccount = requireOwnerPart(accountId, "accountId");
-      const directory = join23(await root(), `${ownerChannel}-${ownerAccount}`);
+      const directory = join24(await root(), `${ownerChannel}-${ownerAccount}`);
       try {
         const stats = await fs20.stat(directory);
         if (!stats.isDirectory()) return false;
@@ -52547,7 +52762,7 @@ async function sweep(directory, cutoff) {
   }
   let removed = 0;
   for (const entry of entries) {
-    const path12 = join23(directory, entry.name);
+    const path12 = join24(directory, entry.name);
     if (entry.isDirectory()) {
       removed += await sweep(path12, cutoff);
       continue;
@@ -53267,12 +53482,12 @@ function messageOf8(error) {
 
 // packages/plugin/src/im/qq/install.ts
 import { mkdir as mkdir5, writeFile as writeFile2 } from "node:fs/promises";
-import { join as join25 } from "node:path";
+import { join as join26 } from "node:path";
 
 // packages/plugin/src/im/qq/sdk.ts
 init_dsh_home();
 import { stat as stat2 } from "node:fs/promises";
-import { join as join24 } from "node:path";
+import { join as join25 } from "node:path";
 import { pathToFileURL as pathToFileURL5 } from "node:url";
 var QQ_SDK_PACKAGE = "@tencent-connect/qqbot-nodejs";
 var QQ_CONNECTOR_PACKAGE = "@tencent-connect/qqbot-connector";
@@ -53301,7 +53516,7 @@ async function qqRuntimeStatus() {
   const root = qqRuntimeRoot();
   const missing = [];
   for (const dependency of QQ_RUNTIME_PACKAGES) {
-    if (!await qqFileExists(join24(root, "node_modules", dependency.name, dependency.entry), root)) {
+    if (!await qqFileExists(join25(root, "node_modules", dependency.name, dependency.entry), root)) {
       missing.push(`${dependency.name}@${dependency.version}`);
     }
   }
@@ -53313,7 +53528,7 @@ async function qqRuntimeStatus() {
 }
 async function loadQqSdk() {
   const root = qqRuntimeRoot();
-  const entry = join24(root, "node_modules", QQ_SDK_PACKAGE, QQ_SDK_ENTRY);
+  const entry = join25(root, "node_modules", QQ_SDK_PACKAGE, QQ_SDK_ENTRY);
   const module = await qqImportRuntime(entry, QQ_SDK_PACKAGE, root);
   const bot = module["QQBot"];
   if (typeof bot !== "function") {
@@ -53345,7 +53560,7 @@ async function loadQqSdk() {
 }
 async function loadQqConnector() {
   const root = qqRuntimeRoot();
-  const entry = join24(root, "node_modules", QQ_CONNECTOR_PACKAGE, QQ_CONNECTOR_ENTRY);
+  const entry = join25(root, "node_modules", QQ_CONNECTOR_PACKAGE, QQ_CONNECTOR_ENTRY);
   const module = await qqImportRuntime(entry, QQ_CONNECTOR_PACKAGE, root);
   const startQrConnect = module["startQrConnect"];
   if (typeof startQrConnect !== "function") {
@@ -53439,7 +53654,7 @@ async function installQqRuntime(input) {
 }
 async function ensureRuntimePackageJson(root) {
   try {
-    await writeFile2(join25(root, "package.json"), RUNTIME_PACKAGE_JSON, { encoding: "utf8", flag: "wx" });
+    await writeFile2(join26(root, "package.json"), RUNTIME_PACKAGE_JSON, { encoding: "utf8", flag: "wx" });
   } catch (cause) {
     const errno = typeof cause === "object" && cause !== null ? cause.code : void 0;
     if (errno === "EEXIST") return;
@@ -53477,7 +53692,7 @@ function mergeImSenderEntries(existing, updates, options) {
 // packages/plugin/src/im/store.ts
 import { randomUUID as randomUUID13 } from "node:crypto";
 import { promises as fs21 } from "node:fs";
-import { dirname as dirname14, join as join26, resolve as resolve6 } from "node:path";
+import { dirname as dirname14, join as join27, resolve as resolve6 } from "node:path";
 var ImStoreError = class extends Error {
   code;
   /** 出问题的文件或目录；纯校验错误还没有落盘路径时为 undefined。 */
@@ -53624,16 +53839,16 @@ var ImStore = class _ImStore {
   }
   // ---- 内部：路径 ----
   accountsPath() {
-    return join26(this.root, "accounts.json");
+    return join27(this.root, "accounts.json");
   }
   secretPath(channel, accountId) {
-    return join26(this.root, "secrets", `${channel}-${accountId}.json`);
+    return join27(this.root, "secrets", `${channel}-${accountId}.json`);
   }
   dedupePath() {
-    return join26(this.root, "dedupe.log");
+    return join27(this.root, "dedupe.log");
   }
   cursorPath(accountId) {
-    return join26(this.root, "cursors", `${accountId}.json`);
+    return join27(this.root, "cursors", `${accountId}.json`);
   }
   // ---- 内部：串行化 ----
   serialAccounts(task) {
@@ -56399,7 +56614,7 @@ function messageOf12(error) {
 // packages/plugin/src/im/weixin/context-tokens.ts
 import { randomUUID as randomUUID15 } from "node:crypto";
 import { promises as fs23 } from "node:fs";
-import { dirname as dirname15, join as join27, resolve as resolve7 } from "node:path";
+import { dirname as dirname15, join as join28, resolve as resolve7 } from "node:path";
 var WeixinContextTokenError = class extends Error {
   code;
   path;
@@ -56418,7 +56633,7 @@ function openWeixinContextTokens(root, accountId) {
       `weixin context token store got an illegal accountId ${JSON.stringify(accountId)}: only [A-Za-z0-9._-] is allowed`
     );
   }
-  const file = join27(resolve7(root), "weixin", accountId, "context-tokens.json");
+  const file = join28(resolve7(root), "weixin", accountId, "context-tokens.json");
   return {
     load: () => loadTokens(file),
     save: (tokens) => saveTokens(file, tokens),
@@ -59879,7 +60094,7 @@ async function handleModelSelectionRoute(db, req, res) {
   if (typeof body.sessionId !== "string") throw new Error("expected { sessionId, selection }");
   const sessionId = body.sessionId;
   let selection = null;
-  const selectionBody = asRecord5(body.selection);
+  const selectionBody = asRecord2(body.selection);
   if (selectionBody !== void 0) {
     if (typeof selectionBody["provider"] !== "string" || typeof selectionBody["model"] !== "string") {
       throw new Error("selection must be { provider, model, reasoningEffort? }");
@@ -60296,8 +60511,8 @@ async function handleChatCreateRoute(db, req, res) {
   const found = await db.getCharacter(character);
   if (!found) throw new Error(`character '${character}' not found`);
   const seedVariables = (() => {
-    const holder = asRecord5(found.card.data.extensions.agentTavern);
-    const initial = asRecord5(holder?.["initialVariables"]);
+    const holder = asRecord2(found.card.data.extensions.agentTavern);
+    const initial = asRecord2(holder?.["initialVariables"]);
     if (initial === void 0 || Object.keys(initial).length === 0) return void 0;
     return structuredClone(initial);
   })();
@@ -60357,7 +60572,7 @@ async function handleWorldReadRoute(db, res, route) {
 async function handleWorldUpdateRoute(db, req, res, route) {
   const oldName = decodeURIComponent(route.slice("world/".length));
   const body = await readJson(req, 10 * 1024 * 1024);
-  const data = asRecord5(body.data);
+  const data = asRecord2(body.data);
   if (typeof body.name !== "string" || body.name.trim() === "" || data === void 0) {
     throw new Error("expected { name, data }");
   }
@@ -60896,6 +61111,75 @@ var STORE_ROUTES = [
     name: "regex-sync-presets",
     matches: (route, method) => method === "POST" && route === "regex/sync-presets",
     handle: ({ db, res }) => handleRegexSyncPresetsRoute(db, res)
+  },
+  // Helper binding handshake and the sandboxed frontend reading surface; order
+  // mirrors the old if-chain.
+  {
+    name: "helper-bind",
+    matches: (route, method) => method === "POST" && route === "helper/bind",
+    handle: ({ db, req, res }) => handleHelperBindRoute(db, req, res)
+  },
+  {
+    name: "helper-unbind",
+    matches: (route, method) => method === "POST" && route === "helper/unbind",
+    handle: ({ req, res }) => handleHelperUnbindRoute(req, res)
+  },
+  {
+    name: "helper",
+    matches: (route, method) => method === "POST" && route === "helper",
+    handle: ({ db, req, res }) => handleHelperRoute(req, res, db)
+  },
+  {
+    name: "frontend-generate",
+    matches: (route, method) => method === "POST" && route === "frontend/generate",
+    handle: ({ db, req, res }) => handleFrontendGenerateRoute(req, res, db)
+  },
+  {
+    name: "card-scripts",
+    matches: (route, method) => method === "GET" && route === "card/scripts",
+    handle: ({ db, res, url }) => handleCardScriptsRoute(db, res, url)
+  },
+  {
+    name: "frontend-idb-get",
+    matches: (route, method) => method === "GET" && route === "frontend/idb/get",
+    handle: ({ res, url }) => handleIdbGetRoute(res, url)
+  },
+  {
+    name: "frontend-idb-put",
+    matches: (route, method) => method === "POST" && route === "frontend/idb/put",
+    handle: ({ req, res, url }) => handleIdbPutRoute(req, res, url)
+  },
+  {
+    name: "frontend-storage",
+    matches: (route, method) => method === "GET" && route === "frontend/storage",
+    handle: ({ db, res, url }) => handleFrontendStorageRoute(db, res, url)
+  },
+  {
+    name: "frontend-latest",
+    matches: (route, method) => method === "GET" && route === "frontend/latest",
+    handle: ({ db, res, url }) => handleFrontendLatestRoute(db, res, url)
+  },
+  {
+    name: "display",
+    matches: (route, method) => method === "GET" && route === "display",
+    handle: ({ db, res, url }) => handleDisplayRoute(db, res, url)
+  },
+  // `chat/<id>` dispatches GET/PUT/PATCH/DELETE itself; no later branch matches
+  // the prefix, so the handler owns the wrong-method 404 as well.
+  {
+    name: "chat",
+    matches: (route, _method) => route.startsWith("chat/"),
+    handle: ({ db, req, res, url, route, method }) => handleChatRoute(db, req, res, url, route, method)
+  },
+  {
+    name: "generate",
+    matches: (route, method) => method === "POST" && route === "generate",
+    handle: ({ ctx, db, req, res }) => handleGenerateRoute(ctx, req, res, db)
+  },
+  {
+    name: "script-run",
+    matches: (route, method) => method === "POST" && route === "script",
+    handle: ({ ctx, db, req, res }) => handleScriptRoute(ctx, req, res, db)
   }
 ];
 
@@ -60920,212 +61204,6 @@ async function handleApi(ctx, req, res) {
     if (!entry.matches(route, method)) continue;
     await entry.handle({ ctx, req, res, url, route, method, db });
     return;
-  }
-  if (method === "POST" && route === "helper/bind") {
-    const body = await readJson(req);
-    const character = typeof body?.character === "string" ? body.character : "";
-    const chatId = typeof body?.chatId === "string" ? body.chatId : "";
-    if (character.trim() === "" || chatId.trim() === "") {
-      throw new HttpError(400, "character and chatId are required");
-    }
-    let exists = false;
-    try {
-      exists = await db.getChatSnapshot(character, chatId) !== void 0;
-    } catch (error) {
-      if (!(error instanceof Error) || error.message !== "invalid chat id") throw error;
-    }
-    if (!exists) {
-      throw new HttpError(404, `chat '${chatId}' not found for character '${character}'`);
-    }
-    return sendJson(res, 200, { ok: true, token: createHelperBinding(character, chatId) });
-  }
-  if (method === "POST" && route === "helper/unbind") {
-    const body = await readJson(req);
-    const token = helperTokenFromRequest(req) ?? (typeof body?.token === "string" ? body.token.trim() : "");
-    if (token !== "") deleteHelperBinding(token);
-    return sendJson(res, 200, { ok: true });
-  }
-  if (method === "POST" && route === "helper") {
-    return handleHelperApi(req, res, db);
-  }
-  if (method === "POST" && route === "frontend/generate") {
-    return handleFrontendGenerationStream(req, res, db);
-  }
-  if (method === "GET" && route === "card/scripts") {
-    const character = url.searchParams.get("character");
-    if (!character) throw new Error("character query is required");
-    const chatId = url.searchParams.get("chatId");
-    const file = await db.getCharacter(character);
-    if (!file) return sendJson(res, 404, { ok: false, message: `character '${character}' not found` });
-    const scriptTrees = chatId === null ? void 0 : await db.getChatScripts(character, chatId);
-    const includeDisabled = url.searchParams.get("includeDisabled") === "1";
-    const { world, scripts } = collectCardScriptBundle(file.card, scriptTrees, includeDisabled);
-    return sendJson(res, 200, { ok: true, character, world, scripts });
-  }
-  if (method === "GET" && route === "frontend/idb/get") {
-    const character = url.searchParams.get("character");
-    if (!character) throw new Error("character query is required");
-    const record = await getIdbRecord(
-      tavernDataRoot(),
-      character,
-      url.searchParams.get("db"),
-      url.searchParams.get("store"),
-      url.searchParams.get("key")
-    );
-    if (record === void 0) {
-      res.statusCode = 204;
-      res.end();
-      return;
-    }
-    res.statusCode = 200;
-    res.setHeader("content-type", "application/octet-stream");
-    res.setHeader("content-length", String(record.size));
-    res.setHeader("x-dsh-idb-meta", Buffer.from(JSON.stringify(record.meta), "utf8").toString("base64url"));
-    await pipeline(createReadStream(record.path), res);
-    return;
-  }
-  if (method === "POST" && route === "frontend/idb/put") {
-    const character = url.searchParams.get("character");
-    if (!character) throw new Error("character query is required");
-    const dbName = url.searchParams.get("db");
-    const storeName = url.searchParams.get("store");
-    const key = url.searchParams.get("key");
-    if (dbName === null || storeName === null || key === null) {
-      throw new Error("db, store and key queries are required");
-    }
-    const declared = Number(req.headers?.["content-length"] ?? "");
-    if (Number.isFinite(declared) && declared > IDB_MAX_RECORD_BYTES) {
-      req.destroy?.();
-      throw new Error(`idb record is too large (${declared} > ${IDB_MAX_RECORD_BYTES} bytes)`);
-    }
-    const temporaryDir = await mkdtemp(join28(tmpdir4(), "dsh-soulmojito-idb-"));
-    const temporaryPath = join28(temporaryDir, "record.bin");
-    try {
-      await pipeline(req, createWriteStream(temporaryPath));
-      const metaHeader = typeof req.headers?.["x-dsh-idb-meta"] === "string" ? req.headers["x-dsh-idb-meta"] : "";
-      let meta = {};
-      if (metaHeader !== "") {
-        try {
-          const parsed = JSON.parse(Buffer.from(metaHeader, "base64url").toString("utf8"));
-          if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) meta = parsed;
-          else throw new Error("meta must be an object");
-        } catch (error) {
-          throw new Error(`x-dsh-idb-meta is not valid base64url JSON: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
-      const result = await putIdbRecordFromFile(tavernDataRoot(), character, dbName, storeName, key, temporaryPath, meta);
-      return sendJson(res, 200, { ok: true, value: result });
-    } finally {
-      await rm2(temporaryDir, { recursive: true, force: true });
-    }
-  }
-  if (method === "GET" && route === "frontend/storage") {
-    const character = url.searchParams.get("character");
-    if (!character) throw new Error("character query is required");
-    const state = await db.getState();
-    return sendJson(res, 200, {
-      ok: true,
-      storage: state.frontendStorage?.[character] ?? {}
-    });
-  }
-  if (method === "GET" && route === "frontend/latest") {
-    const state = await db.getState();
-    const character = url.searchParams.get("character") || state.activeCharacter;
-    const chatId = url.searchParams.get("chatId");
-    if (!character) throw new Error("no active character");
-    if (!chatId) throw new Error("chatId query is required");
-    const snapshot2 = await db.getChatSnapshot(character, chatId);
-    if (!snapshot2) return sendJson(res, 404, { ok: false, message: "chat not found" });
-    const card = await db.getCharacter(character);
-    const scripts = await collectSessionRegexScripts(db, state, character, chatId, card);
-    const message = latestFrontendMessage(snapshot2.chat.messages, (entry, index) => displayTextForMessage(scripts, entry, snapshot2.chat.messages.length - 1 - index));
-    return sendJson(res, 200, {
-      ok: true,
-      revision: snapshot2.revision,
-      messageCount: snapshot2.chat.messages.length,
-      ...message === void 0 ? {} : { message }
-    });
-  }
-  if (method === "GET" && route === "display") {
-    const character = url.searchParams.get("character");
-    const chatId = url.searchParams.get("chatId");
-    const messageId = url.searchParams.get("messageId");
-    if (!character || !chatId || !messageId) throw new Error("character, chatId and messageId are required");
-    const snapshot2 = await db.getChatSnapshot(character, chatId);
-    if (!snapshot2) return sendJson(res, 404, { ok: false, message: "chat not found" });
-    const index = snapshot2.chat.messages.findIndex((message) => {
-      const extra = message.extra?.agentTavern;
-      return typeof extra === "object" && extra !== null && extra.messageId === messageId;
-    });
-    if (index < 0) return sendJson(res, 200, { ok: true, text: null });
-    const state = await db.getState();
-    const card = await db.getCharacter(character);
-    const scripts = await collectSessionRegexScripts(db, state, character, chatId, card);
-    return sendJson(res, 200, {
-      ok: true,
-      text: stripFrontendDocuments(displayTextForMessage(scripts, snapshot2.chat.messages[index], snapshot2.chat.messages.length - 1 - index))
-    });
-  }
-  if (route.startsWith("chat/")) {
-    const chatId = decodeURIComponent(route.slice("chat/".length));
-    const state = await db.getState();
-    const character = url.searchParams.get("character") || state.activeCharacter;
-    if (!character) throw new Error("no active character");
-    if (method === "GET") {
-      const snapshot2 = await db.getChatSnapshot(character, chatId);
-      return snapshot2 ? sendJson(res, 200, { ok: true, chat: snapshot2.chat, revision: snapshot2.revision, displays: await displayTexts(db, state, character, chatId, snapshot2.chat) }) : sendJson(res, 404, { ok: false, message: "chat not found" });
-    }
-    if (method === "PUT") {
-      const body = await readJson(req);
-      const chat = asChatLog(body.chat);
-      if (chat === void 0 || typeof body.revision !== "string") {
-        throw new Error("expected { chat, revision }");
-      }
-      const revision = await db.saveChat(character, chatId, chat, body.revision);
-      await emitChatSaved(character, chatId, revision, chat.messages.length);
-      return sendJson(res, 200, { ok: true, chat, revision });
-    }
-    if (method === "PATCH") {
-      const body = await readJson(req);
-      if (typeof body.name !== "string" || typeof body.revision !== "string") {
-        throw new Error("expected { name, revision }");
-      }
-      const nextChatId = normalizeChatId(body.name);
-      await db.renameChat(character, chatId, nextChatId, body.revision);
-      const state2 = await db.updateState((current) => ({
-        sessionBindings: Object.fromEntries(Object.entries(current.sessionBindings).map(([sessionId, binding]) => [
-          sessionId,
-          binding.character === character && binding.chatId === chatId ? { ...binding, character, chatId: nextChatId } : binding
-        ]))
-      }));
-      const snapshot2 = await db.getChatSnapshot(character, nextChatId);
-      return sendJson(res, 200, {
-        ok: true,
-        id: nextChatId,
-        chat: snapshot2?.chat,
-        revision: snapshot2?.revision,
-        state: state2
-      });
-    }
-    if (method === "DELETE") {
-      const body = await readJson(req);
-      if (typeof body.revision !== "string") throw new Error("expected { revision }");
-      const deleted = await db.deleteChat(character, chatId, body.revision);
-      if (deleted) {
-        await db.updateState((current) => ({
-          sessionBindings: Object.fromEntries(
-            Object.entries(current.sessionBindings).filter(([, binding]) => binding.character !== character || binding.chatId !== chatId)
-          )
-        }));
-      }
-      return sendJson(res, deleted ? 200 : 404, deleted ? { ok: true } : { ok: false, message: "chat not found" });
-    }
-  }
-  if (method === "POST" && route === "generate") {
-    return generate(ctx, req, res, db);
-  }
-  if (method === "POST" && route === "script") {
-    return runTavernScript(ctx, req, res, db);
   }
   return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
 }

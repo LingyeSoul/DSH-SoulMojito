@@ -1,7 +1,7 @@
 /**
- * Route-table hardening: the moved persona/group, asset import, preset, session
- * and export routes are driven through the real `apply()` web handler, and
- * wrong-method requests must fall through to the unchanged 404.
+ * Route-table hardening: the moved persona/group, asset import, preset, export,
+ * frontend-surface and chat routes are driven through the real `apply()` web
+ * handler, and wrong-method requests must fall through to the unchanged 404.
  */
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -309,6 +309,19 @@ describe('HTTP route table (moved routes)', () => {
       'regex-import',
       'regex-sync-cards',
       'regex-sync-presets',
+      'helper-bind',
+      'helper-unbind',
+      'helper',
+      'frontend-generate',
+      'card-scripts',
+      'frontend-idb-get',
+      'frontend-idb-put',
+      'frontend-storage',
+      'frontend-latest',
+      'display',
+      'chat',
+      'generate',
+      'script-run',
     ])
   })
 
@@ -407,6 +420,44 @@ describe('HTTP route table (moved routes)', () => {
     expect(json(imported)['imported']).toBe(1)
   })
 
+  it('serves the frontend reading surface for a persisted chat', async () => {
+    const storage = await call('GET', `/api/dsh-soulmojito/frontend/storage?character=${encodeURIComponent(CHARACTER_A)}`)
+    expect(storage.status).toBe(200)
+    expect(json(storage)).toEqual({ ok: true, storage: {} })
+
+    const scripts = await call('GET', `/api/dsh-soulmojito/card/scripts?character=${encodeURIComponent(CHARACTER_A)}`)
+    expect(scripts.status).toBe(200)
+    expect(json(scripts)).toMatchObject({ ok: true, character: CHARACTER_A })
+
+    const latest = await call('GET', `/api/dsh-soulmojito/frontend/latest?character=${encodeURIComponent(CHARACTER_A)}&chatId=${branchChatId}`)
+    expect(latest.status).toBe(200)
+    expect(json(latest)).toMatchObject({ ok: true, revision: branchRevision, messageCount: 1 })
+
+    const display = await call('GET', `/api/dsh-soulmojito/display?character=${encodeURIComponent(CHARACTER_A)}&chatId=${branchChatId}&messageId=missing`)
+    expect(display.status).toBe(200)
+    expect(json(display)).toEqual({ ok: true, text: null })
+  })
+
+  it('binds and releases a helper token for a persisted chat', async () => {
+    const bound = await call('POST', '/api/dsh-soulmojito/helper/bind', {
+      character: CHARACTER_A,
+      chatId: branchChatId,
+    })
+    expect(bound.status).toBe(200)
+    const token = json(bound)['token']
+    expect(typeof token).toBe('string')
+
+    const unbound = await call('POST', '/api/dsh-soulmojito/helper/unbind', { token })
+    expect(unbound.status).toBe(200)
+    expect(json(unbound)).toEqual({ ok: true })
+  })
+
+  it('reads a chat through the chat prefix route', async () => {
+    const read = await call('GET', `/api/dsh-soulmojito/chat/${branchChatId}?character=${encodeURIComponent(CHARACTER_A)}`)
+    expect(read.status).toBe(200)
+    expect(json(read)).toMatchObject({ ok: true, revision: branchRevision })
+  })
+
   it('keeps wrong-method requests on the unchanged 404 path', async () => {
     const getBinding = await call('GET', '/api/dsh-soulmojito/binding')
     expect(getBinding.status).toBe(404)
@@ -447,5 +498,23 @@ describe('HTTP route table (moved routes)', () => {
     const postRegex = await call('POST', '/api/dsh-soulmojito/regex')
     expect(postRegex.status).toBe(404)
     expect(json(postRegex)['message']).toBe('route not found: POST regex')
+
+    const getHelper = await call('GET', '/api/dsh-soulmojito/helper')
+    expect(getHelper.status).toBe(404)
+    expect(json(getHelper)['message']).toBe('route not found: GET helper')
+
+    const postDisplay = await call('POST', '/api/dsh-soulmojito/display')
+    expect(postDisplay.status).toBe(404)
+    expect(json(postDisplay)['message']).toBe('route not found: POST display')
+
+    const postChatPath = new URL(`/api/dsh-soulmojito/chat/${branchChatId}`, 'http://localhost')
+      .pathname.slice('/api/dsh-soulmojito/'.length)
+    const postChat = await call('POST', `/api/dsh-soulmojito/${postChatPath}?character=${encodeURIComponent(CHARACTER_A)}`)
+    expect(postChat.status).toBe(404)
+    expect(json(postChat)['message']).toBe(`route not found: POST ${postChatPath}`)
+
+    const getGenerate = await call('GET', '/api/dsh-soulmojito/generate')
+    expect(getGenerate.status).toBe(404)
+    expect(json(getGenerate)['message']).toBe('route not found: GET generate')
   })
 })
