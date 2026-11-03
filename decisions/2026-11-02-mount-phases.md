@@ -1,6 +1,6 @@
 # 决策：`apply()` 装配阶段抽取（mount phases 首刀）
 
-> 日期：2026-11-02。状态：已实施（stage 1：session / agent / transport 三相位；路由表与 games/IM/mods 相位待续）。范围：架构审查候选 03。相关：`packages/plugin/src/index.ts`、`packages/plugin/src/mount.ts`、`packages/plugin/tests/http-trust.spec.ts`、`packages/plugin/tests/http-public-error.spec.ts`、`decisions/2026-11-02-variable-gateway.md`。
+> 日期：2026-11-02。状态：已实施（session / agent / transport 三相位；route table 十四刀；update / games / IM / Mods 四相位）。范围：架构审查候选 03。相关：`packages/plugin/src/index.ts`、`packages/plugin/src/mount.ts`、`packages/plugin/tests/http-trust.spec.ts`、`packages/plugin/tests/http-public-error.spec.ts`、`decisions/2026-11-02-variable-gateway.md`。
 
 ## 问题
 
@@ -83,6 +83,8 @@ export function mountTransport(ctx: PluginContext, deps: MountDeps): void
 - Round 20 全量：`pnpm exec vitest run --no-file-parallelism` → **201 files / 3309 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (0f8ac5d)。
 - Round 21 stage 1：`helper/bind`、`helper/unbind`、`helper`、`frontend/generate`、`card/scripts`、`frontend/idb/get`、`frontend/idb/put`、`frontend/storage`、`frontend/latest`、`display` 搬进 `packages/plugin/src/http/frontend-routes.ts`；`chat/<id>`、`generate`、`script` 搬进 `packages/plugin/src/http/chat-generation-routes.ts`。十三个表项按旧 if-chain 顺序追加在 `regex-sync-presets` 之后；`chat` 表项匹配全部方法，由处理器保留旧 fallthrough 的同款 404。复核补充了 frontend 读面、helper 绑定/解绑、chat 读与 `GET helper` / `POST display` / `POST chat/<id>` / `GET generate` 的 HTTP 用例；`http-route-table.spec.ts` 增到 15 条。
 - Round 21 全量：`pnpm exec vitest run --no-file-parallelism` → **201 files / 3312 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (5e91926)。
+- Round 22 stage 1：update 自检、games 桥、IM 通道与 Mod 宿主从 `apply()` 搬进 `mount.ts` 的 `mountUpdateCheck` / `mountGames` / `mountIm` / `mountMods`。仅把句柄读取改为 `deps.store` / `deps.getImRuntime`，其余日志、effect 标签、注释、async 时序与 disposer 注册顺序原样；`apply()` 以 update → games → IM → mods → transport 的顺序调用，`index.ts` 从 309 行降到 169 行。复核 126/126 行逐字一致，定向 274 用例通过。
+- Round 22 全量：`pnpm exec vitest run --no-file-parallelism` → **201 files / 3312 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (435725f)。
 
 ## 删除路径
 
@@ -91,7 +93,7 @@ export function mountTransport(ctx: PluginContext, deps: MountDeps): void
 ## 未完成
 
 - route table 十四刀已落（update / games / im；bootstrap / store-revision / state-slices；avatar / character 读 / projection / compact / guides / script / audit / novels / mods；body；character 写/删/导出；persona/group；asset import/preset；models/model/state；binding/chats/branch；candidates/preview/mvu；card-workbench/memory/prompts；world/preset delete/export；variables/regex；helper/frontend/card-scripts/display/chat/generate/script）。`handleApi` 只剩最终 404，不再有域 if-chain。
-- games / IM / Mods / update 仍留在 `index.ts`；它们各自有生命周期与 disposer，抽相位时要先定义清理顺序。
+- games / IM / Mods / update 已抽成 `mountUpdateCheck` / `mountGames` / `mountIm` / `mountMods`；`apply()` 只保留装配顺序。四个 effect 的注册顺序仍是 update → games → IM tool mount → IM runtime → mods → transport，与抽取前一致；IM 的 `ownedRuntime` / `ownedDispose` 留在 `mountIm` 的每次调用闭包里，重载只 dispose 自己那一次发布。
 - `MountDeps` 只是阶段句柄，不是新的 service locator；静态协作者继续直接 import。
 
 ## 后续

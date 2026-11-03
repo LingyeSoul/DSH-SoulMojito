@@ -14,42 +14,40 @@ import { inspectAgentNovelCapabilities } from './agent-novel/capabilities.js'
 import { NovelDriver } from './agent-novel/driver.js'
 import { NovelProjector } from './agent-novel/projector.js'
 import { describeHostShape } from '../../bind/src/index.js'
-import { BUILD_INFO } from './build-info.js'
 import { tavernDataRoot } from './dsh-home.js'
-import { openGamesService } from './games/service.js'
-import { wakeAgentOnHumanMove } from './games/wake.js'
 import { getActiveAgentPrompt, refreshActivePrompt } from './model-catalog.js'
-import { mountAgentCreated, mountSessionEvent, mountTransport, type MountDeps } from './mount.js'
+import {
+  mountAgentCreated,
+  mountGames,
+  mountIm,
+  mountMods,
+  mountSessionEvent,
+  mountTransport,
+  mountUpdateCheck,
+  type MountDeps,
+} from './mount.js'
 import { nativeAgentPresetSection, preheatNativeAgentPreset } from './native-preset.js'
 import {
   getAgentTavernProjectorPromise,
-  getGamesServicePromise,
   getImRuntime,
   memories,
   memoryVectors,
-  modHost,
   novelStore,
   setAgentNovelCapabilities,
   setAgentTavernCapabilities,
   setAgentTavernCapabilitiesPromise,
   setAgentTavernProjectorPromise,
-  setGamesServicePromise,
-  setImRuntime,
-  setModHostContext,
   setNovelDriverPromise,
   setNovelProjectorPromise,
   setTemplatesEnabledFlag,
   setUpdateChecksEnabledFlag,
   store,
-  tavernUpdate,
   templatesEnabled,
   updateChecksEnabled,
   variables,
 } from './runtime.js'
 import { registerTavernSessionCommand } from './session/command.js'
 import { registerSessionBindingReclaim } from './session/reclaim.js'
-import { createImRuntime, imDisabledByEnv, type ImRuntime } from './im/runtime.js'
-import { mountImToolsOnAgent, unmountAllImTools, unmountImToolsForAgent } from './im/agent-mount.js'
 import { listLiveAgents } from './im/session-host.js'
 import { normalizeAllowedHosts } from './http/trust.js'
 import type { PluginContext } from './host-contract.js'
@@ -161,149 +159,14 @@ export function apply(ctx: PluginContext, config: { anchorEveryTurns?: unknown, 
   // 失效会话绑定回收：默认关闭，`pruneStaleBindings: report|prune` 显式开启（决策 2026-11-02-stale-session-binding-reclaim）。
   void registerSessionBindingReclaim(ctx, { configured: config.pruneStaleBindings, store })
 
-  ctx.effect(() => tavernUpdate(ctx).start(), 'dsh-soulmojito: update auto-check')
+  // Domain mount phases: update → games → IM → mods → transport. The transport
+  // stays last so the API cannot serve before its surfaces exist; mods wait on
+  // the games promise inside mountMods.
+  mountUpdateCheck(ctx)
 
-  // 游戏桥运行时（提案 0018 P0+P2）：扫描注册表（内置 + installed 目录）并
-  // 发布 globalThis 句柄。装载是异步的，不阻塞 apply 返回；坏游戏 broken 入
-  // 册不影响宿主。失败只记日志——工具面与 HTTP 面在句柄缺失时报
-  // 「游戏运行时不可用」，插件其余表面照常。
-  const gamesServicePromise = openGamesService({
-    root: tavernDataRoot(),
-    hostVersion: BUILD_INFO.version,
-    logger: { warn: (message) => ctx.logger?.warn?.(message) },
-    // 投降门（2026-10-14 用户需求「禁用投降」）：逐次读 state（TavernStore 的
-    // getState 是内存态，零文件 IO）——面板翻转即时生效，无需写穿。
-    resignAllowed: async () => (await (await store()).getState()).gamesDisableResign !== true,
-    // 人类落子自动续弈（2026-10-14 用户需求）：Agent 没调 game_wait 就结束
-    // 回合时，用户落子经这里 followup 唤起绑定会话（src/games/wake.ts 负责
-    // 通知文本/来源形状/等待中与冷会话的静默跳过）。绑定反查扫 sessionBindings
-    // ——只认 agent-tavern 且非群聊（与懒段/bindingFor 同一可见面；群聊无游戏
-    // 段，唤醒了也没局面上下文）。同一聊天多绑定时取首个（v1 边界：一个聊天
-    // 一个对局一个会话，与工具面寻址假设一致）。
-    onHumanAction: async (session) => {
-      await wakeAgentOnHumanMove({
-        agents: ctx.agents,
-        bindingOf: async (character, chatId) => {
-          const state = await (await store()).getState()
-          for (const [agentId, binding] of Object.entries(state.sessionBindings)) {
-            if (binding.architecture !== 'agent-tavern' || binding.group === true) continue
-            if (binding.character === character && binding.chatId === chatId) return agentId
-          }
-          return undefined
-        },
-        logger: { warn: (message) => ctx.logger?.warn?.(message) },
-      }, session)
-    },
-  })
-  setGamesServicePromise(gamesServicePromise)
-  gamesServicePromise.catch((error: unknown) => {
-    ctx.logger?.warn?.(`dsh-soulmojito: games service failed to start: ${error instanceof Error ? error.message : String(error)}`)
-  })
-  try {
-    ctx.effect?.(() => () => {
-      void getGamesServicePromise()?.then((service) => service.dispose()).catch(() => {})
-      setGamesServicePromise(undefined)
-    }, 'dsh-soulmojito: games unload')
-  } catch {
-    // 拒绝晚注册 effect 的宿主只失去摘句柄兜底；句柄本身不受影响。
-  }
-
-  // IM 通道（提案 0024）：本轮只装配、不活动——没有真实通道适配器时不发任何
-  // 网络请求，HTTP 面仍可查看绑定与设置。环境硬关（DSH_SOULMOJITO_DISABLE_IM）
-  // 时整块不装配，面板如实显示不可用。
-  if (imDisabledByEnv()) {
-    ctx.logger?.info?.('dsh-soulmojito im: disabled by DSH_SOULMOJITO_DISABLE_IM')
-  } else {
-    // IM 工具挂进**每个原生会话**的 agent 域：绑定会话可能是 standard / novel /
-    // workbench，不能只在 agent-tavern preset 里注册。三个入口（created /
-    // status / 启动时的 live 列表）都试一次，按 agent id 去重。
-    const imToolsDeps = {
-      db: store,
-      runtime: getImRuntime,
-      ...(ctx.logger === undefined ? {} : { logger: ctx.logger }),
-    }
-    const mountImTools = (agent: unknown): void => {
-      try {
-        mountImToolsOnAgent(imToolsDeps, agent as Parameters<typeof mountImToolsOnAgent>[1])
-      } catch (error) {
-        ctx.logger?.warn?.(`dsh-soulmojito im: mounting IM tools failed: ${error instanceof Error ? error.message : String(error)}`)
-      }
-    }
-    ctx.on?.('agent/created', ({ agent }) => { mountImTools(agent) })
-    // 宿主 compose 完成较晚时 agent/created 可能还看不到 tools.register；
-    // status 事件是低成本的重试点（已挂过就是空操作）。
-    ctx.on?.('agent/status' as string, (payload: unknown) => {
-      const agent = (payload as { agent?: unknown } | null | undefined)?.agent
-      if (agent === undefined) return
-      mountImTools(agent)
-      const status = (payload as { status?: unknown }).status
-        ?? (agent as { status?: unknown }).status
-      if (status !== 'idle') return
-      const runtime = getImRuntime()
-      if (runtime?.ensurePresetForAgent === undefined) return
-      void runtime.ensurePresetForAgent(agent).catch((error: unknown) => {
-        ctx.logger?.warn?.(`dsh-soulmojito im: AgentTavernIM preset switch failed: ${error instanceof Error ? error.message : String(error)}`)
-      })
-    })
-    ctx.on?.('agent/disposed' as string, (payload: unknown) => {
-      const agent = (payload as { agent?: { id?: unknown; session?: { id?: unknown } } } | null | undefined)?.agent
-      const id = typeof agent?.id === 'string' ? agent.id : typeof agent?.session?.id === 'string' ? agent.session.id : undefined
-      if (id !== undefined) unmountImToolsForAgent(id)
-    })
-    void store().then(() => {
-      for (const agent of listLiveAgents(ctx.agents)) mountImTools(agent)
-    }).catch((error: unknown) => {
-      ctx.logger?.warn?.(`dsh-soulmojito im: mounting IM tools on live agents failed: ${error instanceof Error ? error.message : String(error)}`)
-    })
-    try {
-      ctx.effect?.(() => () => { unmountAllImTools() }, 'dsh-soulmojito: im tool mount')
-    } catch {
-      // 晚注册被拒只失去卸载反注册；宿主销毁挂载域时注册自然失效。
-    }
-
-    // 实例与它自己的撤销函数都留在本次 apply 的闭包里：重载时旧 fiber 只能摘掉
-    // 自己那一次发布、只 dispose 自己的实例，不会误伤新 fiber（审查 P1-1）。
-    let ownedRuntime: ImRuntime | undefined
-    let ownedDispose: (() => void) | undefined
-    void store().then((db) => {
-      ownedRuntime = createImRuntime(ctx, { db, ...(ctx.logger === undefined ? {} : { logger: ctx.logger }) })
-      ownedDispose = setImRuntime(ownedRuntime)
-      // 启动时补一次：插件重启前已绑定、但会话还没重新打开/空闲的 preset 切换。
-      void ownedRuntime.ensurePresets?.().catch((error: unknown) => {
-        ctx.logger?.warn?.(`dsh-soulmojito im: AgentTavernIM preset sweep failed: ${error instanceof Error ? error.message : String(error)}`)
-      })
-    }).catch((error: unknown) => {
-      ctx.logger?.warn?.(`dsh-soulmojito im: runtime unavailable: ${error instanceof Error ? error.message : String(error)}`)
-    })
-    try {
-      ctx.effect?.(() => () => {
-        ownedDispose?.()
-        ownedDispose = undefined
-        const owned = ownedRuntime
-        ownedRuntime = undefined
-        void owned?.dispose()
-      }, 'dsh-soulmojito: im unload')
-    } catch {
-      // 拒绝晚注册 effect 的宿主只失去卸载兜底；运行时句柄本身不受影响。
-    }
-  }
-
-  // Mod 宿主（提案 0015 P3）：stores 就绪后扫描 <tavern>/mods/ 并按三层
-  // 开关装载（双默认 false + DSH_SOULMOJITO_DISABLE_MODS 硬关）。装载是异步的，
-  // 不阻塞 apply 返回；坏 Mod 只记审计与错误位。宿主卸载时统一 dispose。
-  // P3 起装载在游戏服务**落定之后**串行开始：api.games.register 在 setup 期
-  // 经 globalThis 句柄直调注册表，句柄未发布会 fail-fast 把注册游戏的 Mod 打
-  // 成错误位——先开游戏服务再装 Mod 消除这个竞态。游戏服务打开失败不阻断
-  // Mod 装载（catch 后继续；注册游戏的 Mod 会如实报 games runtime 不可用）。
-  setModHostContext(ctx)
-  void gamesServicePromise.catch(() => {}).then(() => modHost()).catch((error: unknown) => {
-    ctx.logger?.warn?.(`dsh-soulmojito: mod host failed to start: ${error instanceof Error ? error.message : String(error)}`)
-  })
-  try {
-    ctx.effect?.(() => () => { void modHost().then((host) => host.disposeAll()).catch(() => {}) }, 'dsh-soulmojito: mods unload')
-  } catch {
-    // 拒绝晚注册 effect 的宿主只失去卸载兜底；装载本身不受影响。
-  }
+  const gamesServicePromise = mountGames(ctx, mountDeps)
+  mountIm(ctx, mountDeps)
+  mountMods(ctx, gamesServicePromise)
 
   mountTransport(ctx, mountDeps)
 }
