@@ -270,7 +270,8 @@ built       v0.7.5 (b27f4dd)
 - 新增 `variable-gateway.spec.ts` 5 条：`applyVariableUndo` 返回新 chat 且输入不变、schema 漂移拒绝且输入不变、ST `undo` 恢复 `chat_metadata.variables`、AgentTavern `undo` 恢复 flat chat-scope `VariableStore`、missing chat 明确报错。
 - 新增 C1 回归：`agent-tavern-body-mvu-rollback.spec.ts` 的 schema 漂移用例，undo 拒绝且变量/回执不动；`mvu-undo.spec.ts` 新增 forbidden receipt path 拒绝用例。
 - 测试稳定性：`state-slices.spec.ts` 的 readonly rename spy 断言收窄到当前 store 目录，避免并行测试的写入污染 `attempts`；全量 199 文件连续通过。
-- 未实施：`redoMvuReceipts` 的 screen。
+- redo screen 决策（2026-11-03）：`mvu-undo` 17 + `tavern-mvu` 32 + `agent-tavern-body-mvu-rollback` 8 + `variable-gateway` 5 + `agent-tavern-body-rollback` 48 + `agent-tavern-body-rollback-integration` 5 = 115 用例通过；代码仅补注释，无行为变化。
+- 已决策（2026-11-03）：`redoMvuReceipts` 不做 `$schema` screen；理由与调用面见「后续」。
 
 ## 偏差（据实记录）
 
@@ -281,13 +282,13 @@ built       v0.7.5 (b27f4dd)
 - **`replace(chat)` 的 full mirror 先删后 patch**：patch 永久失败时可能留下部分删除并只返回 `degraded`；后续可加补偿或改成单次原子 patch。
 - **read-after-degraded**：mirror 降级后，同一 chat 的 `read` 仍可能被旧 flat 值 overlay（AgentTavern flat 优先语义）；下一次成功 mirror 收敛。后续可加 read-repair。
 - **helper / panel 的额外 snapshot 读取**：helper 先取 chat 再调 `gateway.read`，gateway 内部再取一次；面板 undo 同理：路由先取 snapshot 做 404 / revision 预检，`gateway.undo` 再取一次作为写基准。预检与写基准之间若有并发写，以写基准的 CAS 为准，预检只用于快速失败。Phase 2 未让 gateway 接受已取 snapshot。
-- **C1 的 body 接线集成测试**：candidate edit、runtime settlement 与 `applyReceiptRollback` 均已接 gateway staged undo；完整 rollback 路径由 `agent-tavern-body-rollback.spec.ts` 覆盖，schema 漂移的纯函数用例由 `variable-gateway.spec.ts` 与 `agent-tavern-body-mvu-rollback.spec.ts` 覆盖。`redoMvuReceipts` 仍未 screen。
+- **C1 的 body 接线集成测试**：candidate edit、runtime settlement 与 `applyReceiptRollback` 均已接 gateway staged undo；完整 rollback 路径由 `agent-tavern-body-rollback.spec.ts` 覆盖，schema 漂移的纯函数用例由 `variable-gateway.spec.ts` 与 `agent-tavern-body-mvu-rollback.spec.ts` 覆盖。`redoMvuReceipts` 保持不 screen（2026-11-03 决策）。
 - **测试文件名**：Phase 1 的矩阵测试落在 `variable-merge.spec.ts`（同时覆盖 gateway 的 store 集成）；Phase 2 的接口级 undo 矩阵补在 `variable-gateway.spec.ts`。
 
 ## 后续
 
 - Phase 2 已完成面板、candidate/runtime body 与 `body-rollback-receipts.ts` 的收口；所有 undo 路径都通过 gateway 的 staged restore。
-- `redoMvuReceipts` 仍跳过 screen；如果 body 失败恢复也需要 guard，另立决策/任务。
+- `redoMvuReceipts` 不做 `$schema` screen（2026-11-03 决策，选项 A）：redo 只回放结算时已被守卫接受的 after 值；唯一调用面是 `applyReceiptRollback` 的失败补偿，undo 刚在同一 schema 下成功，事后再次 screen 只会增加抛错点并可能掩盖原始错误。`$schema` 与 forbidden segment 在结算时已被守卫拒绝，redo 信任这份已接受的回执。若将来出现用户可点的独立 redo 命令，另立决策。
 - 候选 02（`store.withChat`）已落地到 helper 的五条 chat 写路径（message 作用域变量、`mvu.replace`、`chat.world.set`、`messages.rotate`、messages 增删改）；`chat-saved` 统一在事务成功后发射。pipeline 仍保持单次 `saveChat`，等它自己的集成，见 `decisions/2026-11-02-chat-write-transaction.md`。
 - 如果 `message` / `turn` / `agent` 出现同类分叉，再单独扩 `VariableRef`，不在本决策里预留。
 - 文档已同步：`CONTEXT.md` 的「Variable Gateway」词条与 `docs/README.md` 的「记忆与变量」条目更新为 Phase 2 状态；根 `README.md` 的测试基线同步为 200 文件 / 3297 passed / 2 skipped。

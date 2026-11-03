@@ -1276,6 +1276,11 @@ export function undoMvuReceipts(
  * clear `undoneAt`. Whether a receipt is undone is decided from the stored
  * receipt, so callers may pass the pre-undo snapshot; live receipts are skipped
  * (idempotent). Incomplete data refuses the whole call; nothing is saved.
+ *
+ * No `$schema` screen runs here (decision 2026-11-03): redo only replays after
+ * values that the settlement guard already accepted, and its only caller is the
+ * body-rollback failure compensation. Screening again would add a throw point
+ * that can mask the original error when the schema changed after the undo.
  */
 export function redoMvuReceipts(
   chat: ChatLogIR,
