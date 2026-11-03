@@ -18,7 +18,7 @@ import { publicError } from '../http/public-error.js'
 import type { HostAgentLike, PluginContext } from '../host-contract.js'
 import { createMessage } from '../message.js'
 import { beginStreamEpoch, emitChatSaved, emitStreamDelta } from '../mods/events.js'
-import { applyMvuSettlementGuard, recordMvuTurnReceipt, snapshotChatVariables } from '../mvu.js'
+import { applyMvuSettlementGuard, readChatVariables, recordMvuTurnReceipt, snapshotChatVariables } from '../mvu.js'
 import { applyMvuSettlementRules, mergeMvuRuleNotes } from '../mvu-rules.js'
 import { DEFAULT_USER, presetSamplerValue } from '../prompt-context.js'
 import { recordPromptView } from '../prompt-viewer.js'
@@ -29,6 +29,7 @@ import { beginTavernSessionTurn, finishTavernSessionTrace, recordTavernSessionAs
 import { collectWorldInfoBooks } from '../tavern-assets.js'
 import { collectSessionRegexScripts } from '../regex-session.js'
 import { createGenerationTemplates, mergeTemplateLocalVars, type GenerationTemplates } from '../template.js'
+import { stageChatVariables } from '../variable-gateway.js'
 
 // ST generation has no client handle to the in-flight LLM stream. The composer
 // can send `/stop` in a separate request while `/generate` is still running, so
@@ -877,6 +878,9 @@ export async function runGeneration(ctx: PluginContext, db: TavernStore, options
     failures: [...(tpl?.warnings ?? []), ...mvuGuard.failures, ...mvuRules.failures],
     changeNotes: mergeMvuRuleNotes(mvuGuard.notes, mvuRules.notes),
   })
+  // Gateway staging: validate/normalize the final tree without a second save.
+  // The message, receipt and variable writes below stay one CAS commit.
+  stageChatVariables(chat, readChatVariables(chat))
   revision = await db.saveChat(characterName, chatId, chat, revision)
   // chat-saved（提案 0015 §3.3 P1）：助手回复落盘点（与 post-save hook 相邻但
   // 语义不同——events 是观察面，hooks 是 P2 的变换面）。
@@ -937,9 +941,7 @@ export async function runTavernScript(ctx: PluginContext, req: HttpRequest, res:
   })
 
   const persist = async () => {
-    const vars = macros.snapshotVars().local
-    if (Object.keys(vars).length > 0) chat.header.chat_metadata.variables = vars
-    else delete chat.header.chat_metadata.variables
+    stageChatVariables(chat, macros.snapshotVars().local)
     revision = await db.saveChat(characterName, chatId, chat, revision)
     await emitChatSaved(characterName, chatId, revision, chat.messages.length)
   }

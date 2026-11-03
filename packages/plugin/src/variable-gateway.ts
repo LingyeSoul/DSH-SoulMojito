@@ -124,6 +124,21 @@ export function applyVariableUndo(
 }
 
 /**
+ * Stage a whole-tree chat variable write on a caller-owned chat clone. No save
+ * and no mirror: the caller owns the single CAS commit, so pipeline messages,
+ * receipts and variables still land in one `saveChat`. Normalization keeps the
+ * key contract — an empty tree removes the key.
+ */
+export function stageChatVariables(chat: ChatLogIR, tree: unknown): void {
+  commitChatTree(chat, normalizeVariableTree(tree, 'staged chat variables'))
+}
+
+function commitChatTree(chat: ChatLogIR, tree: VariableTree): void {
+  if (Object.keys(tree).length > 0) chat.header.chat_metadata.variables = tree
+  else delete chat.header.chat_metadata.variables
+}
+
+/**
  * Persisted undo for the panel. The existing cores own guard construction from
  * the chat and card; the gateway only picks the store by the binding. The
  * snapshot is re-read here because the caller's precheck must not be trusted as
@@ -200,8 +215,7 @@ async function replaceChat(
 ): Promise<VariableWriteReceipt> {
   const normalized = normalizeVariableTree(tree, `variables for '${character}/${chatId}'`)
   const saved = await (await deps.store()).withChat(character, chatId, (chat) => {
-    if (Object.keys(normalized).length > 0) chat.header.chat_metadata.variables = normalized
-    else delete chat.header.chat_metadata.variables
+    commitChatTree(chat, normalized)
   }, { attempts: 3, delayMs: (attempt) => 10 * (attempt + 1) })
   const mirror = await mirrorChat(deps, character, chatId, normalized, replaceMirrorWrite)
   return { revision: saved.revision, floorCount: saved.chat.messages.length, mirror }

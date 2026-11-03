@@ -1,6 +1,6 @@
 # 决策：聊天写入事务缝（`TavernStore.withChat`）
 
-> 日期：2026-11-02。状态：已实施（helper 的五条 chat 写路径；pipeline 仍为单次 `saveChat`）。范围：架构审查候选 02。相关：`packages/tavern-store/src/store.ts`（`withChat` / `ChatWriteOptions` / `ChatWriteResult`）、`packages/plugin/src/helper.ts`、`packages/tavern-store/tests/chat-with.spec.ts`、`packages/plugin/tests/helper-route.spec.ts`、`decisions/2026-11-02-variable-gateway.md`。
+> 日期：2026-11-02。状态：已实施（helper 的五条 chat 写路径；pipeline 仍为单次 `saveChat`，最终变量树经 gateway staging）。范围：架构审查候选 02。相关：`packages/tavern-store/src/store.ts`（`withChat` / `ChatWriteOptions` / `ChatWriteResult`）、`packages/plugin/src/helper.ts`、`packages/tavern-store/tests/chat-with.spec.ts`、`packages/plugin/tests/helper-route.spec.ts`、`decisions/2026-11-02-variable-gateway.md`。
 
 ## 问题
 
@@ -80,5 +80,5 @@ withChat(
 ## 已知边界
 
 - `serializeSessionWrite` 与 `withChat` 是两层：前者管同进程 helper 写入顺序，后者管 CAS 收敛；都不承诺跨进程事务。
-- `pipeline`、body 写入与 slash/template 路径仍走原有 `saveChat`/`persistChat`；本决策只迁移 helper 的五条 chat 写入。
+- `pipeline`、body 写入与 slash/template 路径仍走原有 `saveChat`/`persistChat`；本决策只迁移 helper 的五条 chat 写入。pipeline 的最终变量树经 gateway `stageChatVariables` 归一化，但仍由 pipeline 自己单次 `saveChat` 提交，不进入 `withChat` 重试。
 - 事件在事务外发射，监听器异常由 mod 事件总线逐个吞掉，不会回滚已成功的落盘。

@@ -15180,6 +15180,13 @@ function applyVariableUndo(chat, receipts, guard) {
   const result = undoMvuReceipts(cloned, receipts, guard);
   return { chat: cloned, receipts: result.receipts, restores: result.restores };
 }
+function stageChatVariables(chat, tree) {
+  commitChatTree(chat, normalizeVariableTree(tree, "staged chat variables"));
+}
+function commitChatTree(chat, tree) {
+  if (Object.keys(tree).length > 0) chat.header.chat_metadata.variables = tree;
+  else delete chat.header.chat_metadata.variables;
+}
 async function undoChat(deps, character, chatId) {
   const store5 = await deps.store();
   const snapshot2 = await store5.getChatSnapshot(character, chatId);
@@ -15225,8 +15232,7 @@ async function readGlobal(deps) {
 async function replaceChat(deps, character, chatId, tree) {
   const normalized = normalizeVariableTree(tree, `variables for '${character}/${chatId}'`);
   const saved = await (await deps.store()).withChat(character, chatId, (chat) => {
-    if (Object.keys(normalized).length > 0) chat.header.chat_metadata.variables = normalized;
-    else delete chat.header.chat_metadata.variables;
+    commitChatTree(chat, normalized);
   }, { attempts: 3, delayMs: (attempt) => 10 * (attempt + 1) });
   const mirror = await mirrorChat(deps, character, chatId, normalized, replaceMirrorWrite);
   return { revision: saved.revision, floorCount: saved.chat.messages.length, mirror };
@@ -15598,7 +15604,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.5".trim() : "";
-  const commit = true ? normalizeCommit("da99333") : void 0;
+  const commit = true ? normalizeCommit("1d405e4") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -43099,6 +43105,7 @@ function jsonObjectOf3(value) {
 }
 
 // packages/plugin/src/generation/pipeline.ts
+init_variable_gateway();
 var activeStGeneration = /* @__PURE__ */ new Map();
 function stGenerationKey(character, chatId) {
   return `${character}\0${chatId}`;
@@ -43660,6 +43667,7 @@ async function runGeneration(ctx, db, options) {
       failures: [...tpl?.warnings ?? [], ...mvuGuard.failures, ...mvuRules.failures],
       changeNotes: mergeMvuRuleNotes(mvuGuard.notes, mvuRules.notes)
     });
+    stageChatVariables(chat, readChatVariables(chat));
     revision = await db.saveChat(characterName, chatId, chat, revision);
     await emitChatSaved(characterName, chatId, revision, chat.messages.length);
     await generationHooks.dispatch("post-save", { chat, revision, speaker: speakerName, finalText }, { mode, character: speakerName, chatId, group: group2 });
@@ -43709,9 +43717,7 @@ async function runTavernScript(ctx, req, res, db) {
     global: state.scriptGlobals
   });
   const persist = async () => {
-    const vars = macros.snapshotVars().local;
-    if (Object.keys(vars).length > 0) chat.header.chat_metadata.variables = vars;
-    else delete chat.header.chat_metadata.variables;
+    stageChatVariables(chat, macros.snapshotVars().local);
     revision = await db.saveChat(characterName, chatId, chat, revision);
     await emitChatSaved(characterName, chatId, revision, chat.messages.length);
   };

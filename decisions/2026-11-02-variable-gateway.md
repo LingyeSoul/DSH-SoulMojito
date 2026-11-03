@@ -184,8 +184,8 @@ Gateway 的 `bindingOf(character, chatId)` 必须同时匹配两个字段。这�
 1. **Characterization first**：新增 `variable-gateway.spec.ts`，先锁 ST / AgentTavern × chat / character / global 的读写矩阵、binding 碰撞、mirror 降级、空树删键、`stat_data` 整树、`$` 键跳过；不改生产代码。
 2. **搬纯函数**：把 `variableEntriesForMirror`、`collectVariableEntries` 移到纯模块（暂名 `variable-merge.ts`），原位置保留 re-export；`overlayChatScopedVariables` 暂留 `mvu.ts`（Phase 2 再搬），现有测试不动。
 3. **只读 delegation**：gateway 先实现 `read`，接管 `helper.ts:readChatScope` 与 `http/panel.ts` 的 `mvu/status`；写路径仍走旧函数。
-4. **写路径 delegation**：实现 `replace`，接管 helper 的 chat / character / global 分支；`pipeline.ts` 的整树回写暂不接 gateway——它和消息/回执必须在同一次 `saveChat` 提交，而当前 gateway 只能单独保存变量；等候选 02 `store.withChat` 落地后再接。`message` 分支留在 helper。
-5. **Mirror 升级**：把 `mirrorChatScope` 搬进 gateway，加 3 次有界重试；失败返回 `mirror: degraded`，helper 的 `variables.replace` / `mvu.replace` 响应带上该字段（pipeline 暂不接，见偏差），删除 `helper.ts:713-720` 与 `:750-756` 的 `console.warn` 兜底。
+4. **写路径 delegation**：实现 `replace`，接管 helper 的 chat / character / global 分支；`pipeline.ts` 的整树回写经 `stageChatVariables` 接入 gateway 的归一化策略，但仍由 pipeline 自己 `saveChat`——消息/回执/变量必须在同一次 CAS 提交，`replace` / `withChat` 会拆成两次或把冲突重试改成覆盖，故不接。`message` 分支留在 helper。
+5. **Mirror 升级**：把 `mirrorChatScope` 搬进 gateway，加 3 次有界重试；失败返回 `mirror: degraded`，helper 的 `variables.replace` / `mvu.replace` 响应带上该字段（pipeline 不接 mirror：ST 生成不写 flat 源，见偏差），删除 `helper.ts:713-720` 与 `:750-756` 的 `console.warn` 兜底。
 6. **Undo 收口**：实现 `applyUndo` / `undo`，接管面板 `undoMvuStSettlement` / `undoMvuAgentSettlement` 与 body candidate / runtime settlement；`body-rollback-receipts.ts` 也已改为 `applyVariableUndo` 暂存后就地接回。
 7. **删旧路径**：删除 helper 里的 mirror / binding 判定、mvu 里的重复 undo 执行核；跑 `pnpm run check`，确认 20 个 gate 全绿。
 
@@ -271,11 +271,13 @@ built       v0.7.5 (b27f4dd)
 - 新增 C1 回归：`agent-tavern-body-mvu-rollback.spec.ts` 的 schema 漂移用例，undo 拒绝且变量/回执不动；`mvu-undo.spec.ts` 新增 forbidden receipt path 拒绝用例。
 - 测试稳定性：`state-slices.spec.ts` 的 readonly rename spy 断言收窄到当前 store 目录，避免并行测试的写入污染 `attempts`；全量 199 文件连续通过。
 - redo screen 决策（2026-11-03）：`mvu-undo` 17 + `tavern-mvu` 32 + `agent-tavern-body-mvu-rollback` 8 + `variable-gateway` 5 + `agent-tavern-body-rollback` 48 + `agent-tavern-body-rollback-integration` 5 = 115 用例通过；代码仅补注释，无行为变化。
+- Round 24 targeted（2026-11-03）：`variable-gateway` 6 + `mvu-guard` 24 + `mvu-rules` 28 + `tavern-template` 2 + `tavern-mvu` 32 + `tavern-command` 54 + `tavern-generation-hooks` 16 = 162 用例通过；同一条 tsc 命令无输出。
+- Round 24 全量：`pnpm exec vitest run --no-file-parallelism` → **201 files / 3313 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (1d405e4)。
 - 已决策（2026-11-03）：`redoMvuReceipts` 不做 `$schema` screen；理由与调用面见「后续」。
 
 ## 偏差（据实记录）
 
-- **pipeline 暂不接 `gateway.replace`**：`generation/pipeline.ts` 的消息、回执与变量必须在同一次 `saveChat` 提交；当前 gateway 只能单独保存变量，接进去会把一次提交拆成两次并扩大变量覆盖窗口。因此 pipeline 保持原单次提交，等候选 02 `store.withChat` 落地后再接。首版实现曾接入，集成复核发现双提交后已撤回。
+- **pipeline 不接 `gateway.replace` / `store.withChat`，只接 `stageChatVariables`**（2026-11-03 定稿）：消息、回执与变量必须在同一次 CAS `saveChat` 提交；`replace` 会把一次提交拆成两次，`withChat` 的冲突重试会把「CAS 失败」改成「重读后覆盖」，两者都会扩大变量覆盖窗口。因此 pipeline 继续自己 `saveChat`，只在保存前用 `stageChatVariables` 归一化最终树（空树删键、非 JSON 拒绝）。首版 replace 接入曾因双提交在集成复核中撤回。
 - **Phase 2 已实现 `applyUndo` / `undo`**：面板与 candidate/runtime body 已收口；`body-rollback-receipts.ts` 也已改为 `applyVariableUndo` 暂存后把新树就地接回原 chat，因此输入对象只在 screen 通过后更新，settle receipt 标记仍落在同一棵树上。`applyVariableUndo` 不接收 `at`，body candidate 的 `undoneAt` 改为当前时刻（旧实现使用 body event 时间）；回执顺序与恢复结果不变。
 - **`replaceCharacter` / `replaceGlobal` 没有独立 revision**：receipt 只带 `mirror`，不带 `revision`；state 写入没有独立 revision，调用方不得把它当 CAS 信号。
 - **`replaceMvuData` 已走 `withChat`**：消息 + 变量在同一次事务内提交；mirror 在事务后按 `stat_data` upsert。候选 02 已实施，见 `decisions/2026-11-02-chat-write-transaction.md`。
@@ -289,6 +291,6 @@ built       v0.7.5 (b27f4dd)
 
 - Phase 2 已完成面板、candidate/runtime body 与 `body-rollback-receipts.ts` 的收口；所有 undo 路径都通过 gateway 的 staged restore。
 - `redoMvuReceipts` 不做 `$schema` screen（2026-11-03 决策，选项 A）：redo 只回放结算时已被守卫接受的 after 值；唯一调用面是 `applyReceiptRollback` 的失败补偿，undo 刚在同一 schema 下成功，事后再次 screen 只会增加抛错点并可能掩盖原始错误。`$schema` 与 forbidden segment 在结算时已被守卫拒绝，redo 信任这份已接受的回执。若将来出现用户可点的独立 redo 命令，另立决策。
-- 候选 02（`store.withChat`）已落地到 helper 的五条 chat 写路径（message 作用域变量、`mvu.replace`、`chat.world.set`、`messages.rotate`、messages 增删改）；`chat-saved` 统一在事务成功后发射。pipeline 仍保持单次 `saveChat`，等它自己的集成，见 `decisions/2026-11-02-chat-write-transaction.md`。
+- 候选 02（`store.withChat`）已落地到 helper 的五条 chat 写路径（message 作用域变量、`mvu.replace`、`chat.world.set`、`messages.rotate`、messages 增删改）；`chat-saved` 统一在事务成功后发射。pipeline 仍保持单次 `saveChat`；最终变量树经 `stageChatVariables` 归一化，不触发第二次提交，见 `decisions/2026-11-02-chat-write-transaction.md`。
 - 如果 `message` / `turn` / `agent` 出现同类分叉，再单独扩 `VariableRef`，不在本决策里预留。
 - 文档已同步：`CONTEXT.md` 的「Variable Gateway」词条与 `docs/README.md` 的「记忆与变量」条目更新为 Phase 2 状态；根 `README.md` 的测试基线同步为 200 文件 / 3297 passed / 2 skipped。

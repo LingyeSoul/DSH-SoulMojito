@@ -22,6 +22,7 @@ import {
 import {
   applyVariableUndo,
   createVariableGateway,
+  stageChatVariables,
   type VariableGatewayDeps,
 } from '../src/variable-gateway.js'
 
@@ -139,6 +140,25 @@ describe('Variable Gateway undo (real stores)', () => {
       currentOf: () => 100,
     })).toThrow(MvuUndoRefusalError)
     expect(input).toEqual(before)
+  })
+
+  it('stages a normalized tree and removes the key for an empty tree', async () => {
+    const chatId = await craftChat(undefined, [])
+    const snapshot = await store.getChatSnapshot(CHARACTER, chatId)
+    if (snapshot === undefined) throw new Error('chat missing')
+    const chat = snapshot.chat
+
+    stageChatVariables(chat, { mvu: { favor: 10 }, tags: ['a', 'b'], nested: { ok: true } })
+    expect(chat.header.chat_metadata.variables).toEqual({ mvu: { favor: 10 }, tags: ['a', 'b'], nested: { ok: true } })
+    expect(JSON.parse(JSON.stringify(chat.header.chat_metadata.variables)))
+      .toEqual({ mvu: { favor: 10 }, tags: ['a', 'b'], nested: { ok: true } })
+
+    const before = structuredClone(chat.header.chat_metadata.variables)
+    expect(() => stageChatVariables(chat, { bad: Number.NaN })).toThrow(/finite number/)
+    expect(chat.header.chat_metadata.variables).toEqual(before)
+
+    stageChatVariables(chat, {})
+    expect('variables' in chat.header.chat_metadata).toBe(false)
   })
 
   it('undo delegates to the ST core for an unbound chat and restores the JSONL tree', async () => {
