@@ -40,6 +40,12 @@ import { handleModsApi } from './mods.js'
 import { handleNovelsApi } from './novel.js'
 import { handleGuidesApi, handleScriptApi } from './panel.js'
 import {
+  handleMemoryEmbedRoute,
+  handleMemoryMaintenanceRoute,
+  handlePromptsRoute,
+  handleWorkbenchRoute,
+} from './panel-management-routes.js'
+import {
   handleModelsRoute,
   handleModelSelectionRoute,
   handleStateUpdateRoute,
@@ -365,5 +371,31 @@ export const STORE_ROUTES: readonly RouteEntry<StoreRouteContext>[] = [
     matches: (route, method) => (method === 'POST' && (route === 'mvu/retry' || route === 'mvu/receipts/undo'))
       || (method === 'GET' && route.startsWith('mvu/status/')),
     handle: ({ db, req, res, route, method }) => handleMvuRoute(db, req, res, route, method),
+  },
+  // Workbench plans, memory settings/maintenance and the prompt viewer.
+  {
+    name: 'card-workbench',
+    matches: (route, method) => (method === 'POST' && route === 'card-workbench/rename')
+      || (method === 'GET' && route === 'card-workbench/plans')
+      || (method === 'POST' && route.startsWith('card-workbench/plans/') && route.endsWith('/decision')),
+    handle: ({ db, req, res, url, route, method }) => handleWorkbenchRoute(db, req, res, url, route, method),
+  },
+  {
+    name: 'memory-embed',
+    matches: (route, method) => ((method === 'GET' || method === 'PUT') && route === 'memory/embed')
+      || (method === 'POST' && (route === 'memory/embed/test'
+        || route === 'memory/embed/local/install'
+        || route === 'memory/embed/local/quantizations')),
+    handle: ({ db, req, res, route, method }) => handleMemoryEmbedRoute(db, req, res, route, method),
+  },
+  {
+    name: 'memory-maintenance',
+    matches: (route, method) => (method === 'POST' || method === 'GET') && route === 'memory/maintenance',
+    handle: ({ ctx, db, req, res, url, route, method }) => handleMemoryMaintenanceRoute(ctx, db, req, res, url, route, method),
+  },
+  {
+    name: 'prompts',
+    matches: (route, method) => method === 'GET' && route === 'prompts',
+    handle: ({ res, url }) => handlePromptsRoute(res, url),
   },
 ]

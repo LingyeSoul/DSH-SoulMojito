@@ -14,7 +14,6 @@ import { createHelperBinding, deleteHelperBinding, helperTokenFromRequest } from
 import { generate, runTavernScript } from '../generation/pipeline.js'
 import { emitAssetsSaved, emitChatSaved } from '../mods/events.js'
 import { displayTextForMessage, displayTexts } from '../prompt-context.js'
-import { listPromptViews } from '../prompt-viewer.js'
 import { collectSessionRegexScripts } from '../regex-session.js'
 import {
   store,
@@ -25,8 +24,6 @@ import { HttpError } from './errors.js'
 import type { PluginContext } from '../host-contract.js'
 import { readJson, sendJson, type HttpRequest, type HttpResponse } from './io.js'
 import { asChatLog, asRecord } from './json-records.js'
-import { handleMemoryEmbedApi, handleMemoryMaintenanceApi } from './memory.js'
-import { handleWorkbenchApi } from './panel.js'
 import { EARLY_STORE_ROUTES, PRE_STORE_ROUTES, STORE_ROUTES } from './routes.js'
 
 // The body handler moved to `body-api.ts`; the router module keeps re-exporting
@@ -57,60 +54,6 @@ export async function handleApi(ctx: PluginContext, req: HttpRequest, res: HttpR
     if (!entry.matches(route, method)) continue
     await entry.handle({ ctx, req, res, url, route, method, db })
     return
-  }
-
-  // ---- 工作台方案确认协议（提案 0013 P2；世界书面板化同构扩展）----
-  // 写卡会话改名（对齐酒馆聊天的侧边栏改名能力）：title 写进 card-workbench
-  // 绑定——它是侧边栏分组与复用判定的数据源，客户端改名成功后另经宿主
-  // binding.session.rename 同步会话标题（best-effort）。只收 card-workbench
-  // 绑定，空 title / 非 workbench 会话 fail-closed。错误码 TAVERN_WORKBENCH。
-  // 方案 = card_plan_propose / world_plan_propose 落库的 pending 计划
-  // （<tavern>/card-workbench/plans/，见 card-workbench/plans.ts，kind 判别）。
-  // 面板拉列表看 diff、给决定；approve=true 经执行核（executeCardPlan /
-  // executeWorldPlan）按方案写入并标记 applied（执行不在存储层），false 只改
-  // 状态。错误码 TAVERN_WORKBENCH。
-  if ((method === 'POST' && route === 'card-workbench/rename')
-    || (method === 'GET' && route === 'card-workbench/plans')
-    || (method === 'POST' && route.startsWith('card-workbench/plans/') && route.endsWith('/decision'))) {
-    return handleWorkbenchApi(req, res, url, route, method, db)
-  }
-
-  // 记忆语义检索 embed 端点管理面（提案 0016）：GET/PUT 设置 + 连通性探针。
-  if ((method === 'GET' || method === 'PUT') && route === 'memory/embed') {
-    return handleMemoryEmbedApi(req, res, route, method, db)
-  }
-  if (method === 'POST' && route === 'memory/embed/test') {
-    return handleMemoryEmbedApi(req, res, route, method, db)
-  }
-
-  if (method === 'POST' && route === 'memory/embed/local/install') {
-    return handleMemoryEmbedApi(req, res, route, method, db)
-  }
-
-  // 本地模型量化精度识别（2026-10-13）：面板在 modelDir 输入后调用，返回目录里
-  // 实际可加载的精度档位（含文件与大小）与 auto 推荐档，供下拉框选项。
-  if (method === 'POST' && route === 'memory/embed/local/quantizations') {
-    return handleMemoryEmbedApi(req, res, route, method, db)
-  }
-
-  // B-3 记忆维护 run（wait:false 风格）：POST 启动（同 scope 单飞 409），GET 轮询。
-  if ((method === 'POST' || method === 'GET') && route === 'memory/maintenance') {
-    return handleMemoryMaintenanceApi(ctx, req, res, url, route, method, db)
-  }
-
-  // 提示词查看器（A-6）：ST 生成循环实发请求的只读查询。可选过滤（character /
-  // chatId 任一或组合），缺省全量按时间倒序；记录是进程内环形缓冲（每聊天 10
-  // 条 / 总量 50，重启即失），无记录时空数组——不因缓冲为空 500。
-  if (method === 'GET' && route === 'prompts') {
-    const filterCharacter = url.searchParams.get('character')
-    const filterChat = url.searchParams.get('chatId')
-    return sendJson(res, 200, {
-      ok: true,
-      records: listPromptViews({
-        ...(filterCharacter !== null ? { character: filterCharacter } : {}),
-        ...(filterChat !== null ? { chatId: filterChat } : {}),
-      }),
-    })
   }
 
   if (method === 'GET' && route.startsWith('world/')) {

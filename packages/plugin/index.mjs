@@ -15598,7 +15598,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.5".trim() : "";
-  const commit = true ? normalizeCommit("f2cb618") : void 0;
+  const commit = true ? normalizeCommit("5db309f") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -47100,853 +47100,960 @@ function asChatLog(value) {
   return value;
 }
 
-// packages/plugin/src/http/memory.ts
-init_src();
-init_dsh_home();
-import { resolve as resolve5 } from "node:path";
+// packages/plugin/src/games/http.ts
+init_public_error();
+init_http();
+var GAMES_INSTALL_BODY_MAX_BYTES = 8 * 1024 * 1024;
+function isGamesRoute(route) {
+  return route === "games" || route.startsWith("games/");
+}
+function statusOf(code) {
+  if (code === "not-found") return 404;
+  if (code === "turn") return 409;
+  if (code === "unavailable") return 503;
+  return 400;
+}
+function sendJson2(res, status2, body) {
+  if (res.writableEnded) return;
+  res.statusCode = status2;
+  res.setHeader("content-type", "application/json; charset=utf-8");
+  res.setHeader("cache-control", "no-store");
+  res.end(JSON.stringify(body));
+}
+function sendHtml(res, document) {
+  if (res.writableEnded) return;
+  res.statusCode = 200;
+  res.setHeader("content-type", "text/html; charset=utf-8");
+  res.setHeader("cache-control", "no-store");
+  res.setHeader("x-content-type-options", "nosniff");
+  res.end(document);
+}
+function sendError(res, cause) {
+  if (cause instanceof GameBridgeError) {
+    const message = publicErrorMessage(cause);
+    if (message === INTERNAL_ERROR_MESSAGE) throw cause;
+    sendJson2(res, statusOf(cause.code), { ok: false, message, code: cause.code });
+    return;
+  }
+  throw cause;
+}
+async function handleGamesApi(options) {
+  const { req, res, url, route, method } = options;
+  const notFound = () => sendJson2(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+  const service = await Promise.resolve(options.resolveService()).catch((cause) => {
+    throw new Error(`\u6E38\u620F\u8FD0\u884C\u65F6\u4E0D\u53EF\u7528: ${cause instanceof Error ? cause.message : String(cause)}`);
+  });
+  if (service === void 0) {
+    sendJson2(res, 503, { ok: false, message: "\u6E38\u620F\u8FD0\u884C\u65F6\u4E0D\u53EF\u7528\uFF08\u63D2\u4EF6\u672A\u88C5\u8F7D\u6E38\u620F\u670D\u52A1\uFF09", code: "unavailable" });
+    return;
+  }
+  try {
+    if (method === "GET" && route === "games/list") {
+      const character = url.searchParams.get("character") ?? "";
+      const chatId = url.searchParams.get("chatId") ?? "";
+      const filter = character !== "" && chatId !== "" ? { character, chatId } : {};
+      const { games, sessions } = await service.list(filter);
+      return sendJson2(res, 200, { ok: true, games, sessions });
+    }
+    if (method === "GET" && route === "games/revision") {
+      return sendJson2(res, 200, { ok: true, revision: await service.revision() });
+    }
+    if (method === "POST" && route === "games/start") {
+      const body = await readModRequestBody(req);
+      if (typeof body.gameId !== "string" || body.gameId.trim() === "") throw new GameBridgeError("invalid", "expected { gameId }");
+      if (typeof body.character !== "string" || body.character.trim() === "" || typeof body.chatId !== "string" || body.chatId.trim() === "") {
+        throw new GameBridgeError("invalid", "expected non-empty { character, chatId }");
+      }
+      const humanRole = typeof body.humanRole === "string" && body.humanRole !== "" ? body.humanRole : void 0;
+      const { session, view } = await service.start({ gameId: body.gameId, character: body.character, chatId: body.chatId, humanRole });
+      return sendJson2(res, 200, { ok: true, session, view });
+    }
+    if (method === "GET" && route.startsWith("games/state/")) {
+      const sessionId = decodeURIComponent(route.slice("games/state/".length));
+      const { session, view } = await service.state(sessionId);
+      return sendJson2(res, 200, { ok: true, session, view });
+    }
+    if (method === "POST" && route.startsWith("games/action/")) {
+      const sessionId = decodeURIComponent(route.slice("games/action/".length));
+      const body = await readModRequestBody(req);
+      const action = body.action;
+      if (action === null || typeof action !== "object" || Array.isArray(action)) {
+        throw new GameBridgeError("invalid", "expected { action }");
+      }
+      const actionRecord = action;
+      const actionType = actionRecord["type"];
+      if (typeof actionType !== "string" || actionType === "") {
+        throw new GameBridgeError("invalid", "action.type is required");
+      }
+      const gameAction = { ...actionRecord, type: actionType };
+      const { session, view } = await service.humanAction(sessionId, gameAction);
+      return sendJson2(res, 200, { ok: true, session, view });
+    }
+    if (method === "GET" && route.startsWith("games/") && route.includes("/view/")) {
+      const segments = route.split("/");
+      if (segments.length === 4 && segments[2] === "view") {
+        let gameId = segments[1];
+        let sessionId = segments[3];
+        try {
+          gameId = decodeURIComponent(gameId);
+          sessionId = decodeURIComponent(sessionId);
+        } catch {
+          return notFound();
+        }
+        const html = await service.view(gameId, sessionId);
+        return sendHtml(res, html);
+      }
+      return notFound();
+    }
+    if (method === "POST" && route === "games/install") {
+      let body;
+      try {
+        body = await readModRequestBody(req, GAMES_INSTALL_BODY_MAX_BYTES);
+      } catch (cause) {
+        throw new GameBridgeError("invalid", `install \u8BF7\u6C42\u4F53\u8BFB\u53D6\u5931\u8D25\uFF08\u4E0A\u9650 ${GAMES_INSTALL_BODY_MAX_BYTES} \u5B57\u8282\uFF09: ${cause instanceof Error ? cause.message : String(cause)}`);
+      }
+      const source = {};
+      if (typeof body.path === "string" && body.path.trim() !== "") source.path = body.path;
+      else if (typeof body.url === "string" && body.url.trim() !== "") source.url = body.url;
+      else if (typeof body.zipBase64 === "string" && body.zipBase64.trim() !== "") source.zipBase64 = body.zipBase64;
+      else throw new GameBridgeError("invalid", "expected { path }\uFF08\u672C\u5730\u6E38\u620F\u5305\u76EE\u5F55\uFF09\u3001{ url }\uFF08git \u6E90\uFF09\u6216 { zipBase64 }\uFF08\u6E38\u620F\u5305 zip\uFF09");
+      const { game } = await service.install(source, body.force === true);
+      return sendJson2(res, 200, { ok: true, game });
+    }
+    if (method === "POST" && route === "games/reload") {
+      const { games } = await service.reload();
+      return sendJson2(res, 200, { ok: true, games });
+    }
+    return notFound();
+  } catch (cause) {
+    sendError(res, cause);
+  }
+}
 
-// packages/plugin/src/memory-maintenance.ts
-init_src();
-import { randomUUID as randomUUID10 } from "node:crypto";
-var MAINTENANCE_MAX_LLM_REQUESTS = 24;
-var MAINTENANCE_OPENING_MAX_CHARS = 1e5;
-var MAINTENANCE_PAGE_RECORDS = 32;
-var MAINTENANCE_PAGE_CHARS = 16e3;
-var MAINTENANCE_SOURCE_CHARS = 24e3;
-var MAINTENANCE_SOURCE_SPAN = 400;
-var MAINTENANCE_MAX_TOKENS = 8192;
-var MAINTENANCE_CONVERSATION_MAX_CHARS = 6e5;
-var SEARCH_LIMIT = 20;
-var SEARCH_EXCERPT_CHARS = 400;
-var MaintenanceRunConflictError = class extends Error {
-  constructor(character, chatId, runId) {
-    super(`a memory maintenance run is already active for ${character}/${chatId}`);
-    this.runId = runId;
-    this.name = "MaintenanceRunConflictError";
-  }
-  code = "MAINTENANCE_RUNNING";
-};
-var activeRuns = /* @__PURE__ */ new Map();
-function scopeKey(scope) {
-  return `${scope.character}\0${scope.chatId}`;
-}
-async function startMemoryMaintenance(ctx, deps, scope) {
-  const key = scopeKey(scope);
-  const existing = activeRuns.get(key);
-  if (existing !== void 0) throw new MaintenanceRunConflictError(scope.character, scope.chatId, existing.runId);
-  const active = {
-    runId: randomUUID10(),
-    character: scope.character,
-    chatId: scope.chatId,
-    startedAt: (/* @__PURE__ */ new Date()).toISOString()
-  };
-  activeRuns.set(key, active);
-  void (async () => {
-    try {
-      await executeRun(ctx, deps, scope, active);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      ctx.logger?.warn?.(`dsh-soulmojito: memory maintenance run crashed: ${message}`);
-      try {
-        const stateStore = await MemoryMaintenanceStore.open(deps.root);
-        const state = await stateStore.read(scope.character, scope.chatId);
-        await stateStore.write(scope.character, scope.chatId, {
-          ...state,
-          lastRun: {
-            runId: active.runId,
-            status: "error",
-            outcome: "error",
-            startedAt: active.startedAt,
-            finishedAt: (/* @__PURE__ */ new Date()).toISOString(),
-            summary: { ...state.lastRun?.summary ?? emptySummary(0), error: message }
-          }
-        });
-      } catch {
+// packages/plugin/src/http/routes.ts
+init_runtime2();
+
+// packages/plugin/src/http/body-api.ts
+init_errors();
+init_io();
+async function handleAgentTavernBodyApi(ctx, db, req, res, url, route, method) {
+  const wiring = bodyWiringContext(ctx, async (sessionId2) => (await db.getState()).sessionBindings[sessionId2]);
+  if (method === "GET") {
+    const sessionId2 = url.searchParams.get("sessionId");
+    if (sessionId2 === null || sessionId2 === "") {
+      throw new HttpError(400, "sessionId and messageId (or messageIds) are required");
+    }
+    const selector = parseBodyGetSelector(url.searchParams);
+    const state = await db.getState();
+    const binding2 = state.sessionBindings[sessionId2];
+    const mutationsDisabledReason2 = imBodyMutationDisabledOf(binding2, sessionId2, state.imPeers);
+    let characterName2;
+    let chatId2;
+    let character2 = void 0;
+    let chat;
+    if (binding2 !== void 0 && bodyBindingEligible(binding2)) {
+      characterName2 = binding2.character;
+      chatId2 = binding2.chatId;
+      character2 = await db.getCharacter(binding2.character);
+      chat = (await db.getChatSnapshot(binding2.character, binding2.chatId))?.chat;
+    }
+    const stateSafety2 = binding2 === void 0 || !bodyBindingEligible(binding2) ? void 0 : bodyStateSafetyOf(character2, chat);
+    const historicalMvuState = character2 !== void 0 && chat !== void 0 && bodyHistoricalMvuStateOf(character2, chat);
+    const agent2 = resolveLiveAgent(wiring, sessionId2);
+    const deps2 = agent2 === void 0 ? void 0 : await createBodyDeps(wiring, agent2);
+    const session = agent2?.session;
+    const factsSource = session === void 0 ? void 0 : createBodySessionFactsSource(session);
+    let scriptsRead;
+    const readScripts = () => {
+      if (characterName2 === void 0 || chatId2 === void 0) {
+        throw new Error("body floor display scripts require a character and chat id");
       }
-    } finally {
-      activeRuns.delete(key);
-    }
-  })();
-  return { runId: active.runId };
-}
-async function memoryMaintenanceStatus(deps, scope) {
-  const stateStore = await MemoryMaintenanceStore.open(deps.root);
-  const state = await stateStore.read(scope.character, scope.chatId);
-  const active = activeRuns.get(scopeKey(scope));
-  if (active !== void 0) {
-    return {
-      status: "running",
-      runId: active.runId,
-      startedAt: active.startedAt,
-      pending: { ranges: [], floors: 0 },
-      receipts: state.receipts.length
+      scriptsRead ??= collectSessionRegexScripts(db, state, characterName2, chatId2, character2);
+      return scriptsRead;
     };
-  }
-  let lastRun = state.lastRun;
-  if (lastRun?.status === "running") {
-    lastRun = {
-      ...lastRun,
-      status: "error",
-      outcome: "interrupted",
-      finishedAt: (/* @__PURE__ */ new Date()).toISOString(),
-      summary: { ...lastRun.summary, error: "run interrupted (host process restarted); it did not complete" }
-    };
-    await stateStore.write(scope.character, scope.chatId, { ...state, lastRun });
-  }
-  const computation = await computePending(deps, scope, state.receipts);
-  const view = {
-    status: lastRun?.status ?? "done",
-    pending: { ranges: computation.pending, floors: pendingFloorCount(computation.pending) },
-    receipts: computation.validReceipts.length
-  };
-  if (lastRun !== void 0) {
-    view.runId = lastRun.runId;
-    view.startedAt = lastRun.startedAt;
-    if (lastRun.finishedAt !== void 0) view.finishedAt = lastRun.finishedAt;
-    view.summary = lastRun.summary;
-  }
-  return view;
-}
-function emptySummary(totalFloors) {
-  return {
-    totalFloors,
-    pendingRanges: [],
-    pendingFloors: 0,
-    editGroups: 0,
-    merged: 0,
-    corrected: 0,
-    created: 0,
-    deleted: 0,
-    failedGroups: 0,
-    retiredReceipts: 0,
-    retiredReasons: []
-  };
-}
-function pendingFloorCount(ranges) {
-  return ranges.reduce((total, range) => total + (range.headFloor - range.baseFloor + 1), 0);
-}
-async function computePending(deps, scope, receipts) {
-  let snapshot2;
-  try {
-    snapshot2 = await deps.db.getChatSnapshot(scope.character, scope.chatId);
-  } catch {
-    snapshot2 = void 0;
-  }
-  if (snapshot2 === void 0) {
-    return { pending: [], validReceipts: [...receipts], retiredReasons: ["chat snapshot unavailable; pending ranges unknown"], totalFloors: 0, chatMissing: true };
-  }
-  const floors = snapshot2.chat.messages;
-  const valid = [];
-  const retiredReasons = [];
-  for (const receipt of receipts) {
-    const sig = floorSignature(floors, receipt.baseFloor, receipt.headFloor);
-    if (sig === void 0 || sig !== receipt.floorSig) {
-      retiredReasons.push(`receipt ${receipt.runId} (floors ${receipt.baseFloor}-${receipt.headFloor}) retired: chat text changed`);
-      continue;
-    }
-    let retired;
-    for (const [id, revision] of Object.entries(receipt.recordSnapshots)) {
-      const current = await deps.memory.read(id, "chat", scope.chatId, true).catch(() => void 0);
-      if (current === void 0 || current.revision !== revision) {
-        retired = `receipt ${receipt.runId} retired: covered record '${id}' changed after maintenance`;
-        break;
-      }
-    }
-    if (retired !== void 0) {
-      retiredReasons.push(retired);
-      continue;
-    }
-    valid.push(receipt);
-  }
-  return {
-    pending: pendingRanges(floors.length, valid),
-    validReceipts: valid,
-    retiredReasons,
-    totalFloors: floors.length,
-    chatMissing: false
-  };
-}
-async function executeRun(ctx, deps, scope, active) {
-  const key = scopeKey(scope);
-  try {
-    const stateStore = await MemoryMaintenanceStore.open(deps.root);
-    const prior = await stateStore.read(scope.character, scope.chatId);
-    const computation = await computePending(deps, scope, prior.receipts);
-    const totalFloors = computation.totalFloors;
-    const summary = emptySummary(totalFloors);
-    summary.pendingRanges = computation.pending;
-    summary.pendingFloors = pendingFloorCount(computation.pending);
-    summary.retiredReceipts = computation.retiredReasons.length;
-    summary.retiredReasons = computation.retiredReasons;
-    let run;
-    await stateStore.write(scope.character, scope.chatId, {
-      version: 1,
-      receipts: computation.validReceipts,
-      lastRun: { runId: active.runId, status: "running", startedAt: active.startedAt, summary }
+    const readFloorOf = async (messageId, groupIdHint, selectedIndexHint) => characterName2 === void 0 || chatId2 === void 0 || chat === void 0 ? void 0 : projectedBodyFloor(chat, messageId, groupIdHint, selectedIndexHint, readScripts);
+    const stableViewOf = (messageId) => buildBodyView({
+      messageId,
+      binding: binding2,
+      agent: agent2,
+      hostSupported: deps2 !== void 0,
+      stateSafety: stateSafety2,
+      historicalMvuState,
+      writeRollbackAvailable: deps2?.writeRollback !== void 0,
+      ledger: void 0,
+      messageText: void 0,
+      projected: void 0,
+      projectionCurrent: false,
+      projectionTextCurrent: false,
+      inspection: void 0,
+      ...mutationsDisabledReason2 === void 0 ? {} : { mutationsDisabledReason: mutationsDisabledReason2 }
     });
-    const finish = async (status2, outcome2, message) => {
-      summary.outcome = outcome2;
-      const record = {
-        runId: active.runId,
-        status: status2,
-        outcome: outcome2,
-        startedAt: active.startedAt,
-        finishedAt: (/* @__PURE__ */ new Date()).toISOString(),
-        summary: { ...summary, llmRequests: run?.llmRequests ?? 0, budget: run?.budget ?? MAINTENANCE_MAX_LLM_REQUESTS }
-      };
-      if (message !== void 0) {
-        if (outcome2 === "error") record.summary.error = message;
-        else record.summary.report = message;
-      }
-      const latest = await stateStore.read(scope.character, scope.chatId);
-      if (latest.lastRun?.runId === active.runId || latest.lastRun === void 0) {
-        await stateStore.write(scope.character, scope.chatId, { ...latest, lastRun: record });
-      }
-    };
-    if (computation.chatMissing) {
-      await finish("error", "error", "chat snapshot unavailable; nothing maintained");
-      return;
-    }
-    if (summary.pendingFloors === 0) {
-      await finish("done", "completed", "nothing to maintain: valid receipts cover all floors");
-      return;
-    }
-    const snapshot2 = await deps.db.getChatSnapshot(scope.character, scope.chatId);
-    const selection = ctx.agentDefaultModel.currentSelection();
-    run = {
-      ctx,
-      deps,
-      scope,
-      runId: active.runId,
-      floors: snapshot2.chat.messages,
-      provider: selection.provider,
-      model: selection.model,
-      budget: MAINTENANCE_MAX_LLM_REQUESTS,
-      llmRequests: 0,
-      summary,
-      unresolvedEdits: /* @__PURE__ */ new Set(),
-      embedConfig: null
-    };
-    const records = await deps.memory.list("chat", scope.chatId);
-    let listing = renderMemoryListing(records, MAINTENANCE_OPENING_MAX_CHARS);
-    let opening = buildOpeningMessage(run, listing);
-    if (opening.length > MAINTENANCE_OPENING_MAX_CHARS) {
-      run.budget = Math.ceil(MAINTENANCE_MAX_LLM_REQUESTS / 2);
-      listing = renderMemoryListing(records, 2e4);
-      opening = buildOpeningMessage(run, listing);
-    }
-    const messages = [
-      { role: "user", id: randomUUID10(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
-    ];
-    let outcome = "completed";
-    let errorMessage7;
-    let report;
-    for (; ; ) {
-      if (run.llmRequests >= run.budget) {
-        outcome = "budget-exhausted";
-        errorMessage7 = `reached the run budget of ${run.budget} LLM requests; completed work is kept, unreported ranges stay pending`;
-        break;
-      }
-      const conversationChars = messages.reduce((total, message) => total + JSON.stringify(message.content).length, 0);
-      if (conversationChars > MAINTENANCE_CONVERSATION_MAX_CHARS) {
-        outcome = "budget-exhausted";
-        errorMessage7 = "maintenance conversation exceeded the run context guard; completed work is kept";
-        break;
-      }
-      run.llmRequests += 1;
-      const blocks = [];
-      let textBuffer = "";
-      let finishReason;
+    const readBodyItem = async (messageId) => {
       try {
-        for await (const chunk of ctx.llm.stream({
-          provider: run.provider,
-          model: run.model,
-          system: MAINTENANCE_SYSTEM_PROMPT,
-          messages: messages.map((message) => ({ ...message })),
-          tools: MAINTENANCE_TOOL_SCHEMAS,
-          maxTokens: MAINTENANCE_MAX_TOKENS
-        })) {
-          if (chunk.type === "block-end" && chunk.block !== null && typeof chunk.block === "object") {
-            blocks.push({ ...chunk.block });
-          } else if (chunk.type === "text-delta") {
-            textBuffer += chunk.text;
-          } else if (chunk.type === "finish") {
-            finishReason = chunk.reason;
-          }
+        const floorRead = await readFloorOf(messageId, void 0, void 0);
+        const floorByMessage = floorRead?.ok === true ? floorRead.floor : void 0;
+        const facts = factsSource?.factsOf(messageId, floorByMessage?.groupId);
+        const ledger = facts?.ledger;
+        const selectionMoved = ledger !== void 0 && (floorByMessage === void 0 || floorByMessage.anchorMessageId !== ledger.anchorMessageId || floorByMessage.selectedIndex !== ledger.selectedIndex);
+        const reread = selectionMoved ? await readFloorOf(messageId, ledger.groupId, ledger.selectedIndex) : void 0;
+        const projected = reread === void 0 ? floorByMessage : reread.ok ? reread.floor : void 0;
+        const floorDegradation = reread !== void 0 ? reread.ok ? void 0 : reread.degradation : floorRead !== void 0 && !floorRead.ok ? floorRead.degradation : void 0;
+        const messageText3 = facts?.messageText;
+        const inspection = facts?.inspection;
+        const latestEditSeq = facts?.latestEditSeq;
+        if (facts?.ledgerError !== void 0) {
+          ctx.logger?.warn?.("dsh-soulmojito body: ledger fold failed for GET body", {
+            sessionId: sessionId2,
+            messageId,
+            error: facts.ledgerError
+          });
         }
+        if (floorDegradation !== void 0) {
+          ctx.logger?.warn?.("dsh-soulmojito body: body floor binding is ambiguous for GET body", {
+            sessionId: sessionId2,
+            messageId,
+            code: floorDegradation.detail,
+            error: floorDegradation.message
+          });
+        }
+        const projection2 = floorDegradation === void 0 ? bodyProjectionState(projected, ledger, latestEditSeq) : { current: false, textCurrent: false };
+        const editDetail = character2 === void 0 || chat === void 0 || ledger === void 0 ? void 0 : bodyEditDetailOf(character2.card, chat, ledger);
+        const view = buildBodyView({
+          messageId,
+          binding: binding2,
+          agent: agent2,
+          hostSupported: deps2 !== void 0,
+          stateSafety: stateSafety2,
+          historicalMvuState,
+          writeRollbackAvailable: deps2?.writeRollback !== void 0,
+          ledger,
+          messageText: messageText3,
+          projected,
+          projectionCurrent: projection2.current,
+          projectionTextCurrent: projection2.textCurrent,
+          inspection,
+          editDetail,
+          // A damaged floor binding closes edit with its own detail and keeps
+          // publishing it even when a reason already gates the row.
+          ...floorDegradation === void 0 ? {} : { readDetail: floorDegradation.detail },
+          ...facts?.lastOperation === void 0 ? {} : { lastOperation: facts.lastOperation },
+          ...mutationsDisabledReason2 === void 0 ? {} : { mutationsDisabledReason: mutationsDisabledReason2 }
+        });
+        return { ok: true, view };
       } catch (error) {
-        outcome = "error";
-        errorMessage7 = `LLM request failed: ${error instanceof Error ? error.message : String(error)}`;
-        break;
-      }
-      if (finishReason === void 0) {
-        outcome = "error";
-        errorMessage7 = "LLM stream ended without a finish chunk";
-        break;
-      }
-      if (finishReason.kind === "error" || finishReason.kind === "aborted") {
-        outcome = "error";
-        errorMessage7 = `LLM stream failed (${finishReason.kind}): ${finishReason.failure?.message ?? "unknown failure"}`;
-        break;
-      }
-      if (!blocks.some((block) => block.type === "text") && textBuffer !== "") {
-        blocks.push({ type: "text", text: textBuffer });
-      }
-      const toolCalls = blocks.filter((block) => block.type === "tool-call");
-      messages.push({ role: "assistant", id: randomUUID10(), content: blocks, source: { kind: "model", provider: run.provider, model: run.model } });
-      if (toolCalls.length === 0) {
-        report = textBuffer !== "" ? textBuffer : blocks.filter((block) => block.type === "text").map((block) => String(block.text ?? "")).join("");
-        break;
-      }
-      if (finishReason.kind === "max-tokens") {
-        outcome = "error";
-        errorMessage7 = "maintenance response truncated at the token cap";
-        break;
-      }
-      for (const call of toolCalls) {
-        const result = await executeToolCall(run, call);
-        messages.push({
-          role: "tool",
-          id: randomUUID10(),
-          content: [{ type: "text", text: safeJson(result.payload) }],
-          source: { kind: "tool", callId: call.id },
-          toolCallId: call.id,
-          ...result.isError ? { isError: true } : {}
+        ctx.logger?.warn?.("dsh-soulmojito body: GET body item failed", {
+          sessionId: sessionId2,
+          messageId,
+          error: errorMessage3(error)
         });
+        return { ok: false, view: stableViewOf(messageId), error };
       }
-    }
-    if (outcome === "error") {
-      await finish("error", outcome, errorMessage7);
-      return;
-    }
-    const closing = report !== void 0 ? report.slice(0, 2e3) : errorMessage7;
-    await finish("done", outcome, closing);
-  } finally {
-    activeRuns.delete(key);
-  }
-}
-function safeJson(value) {
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return '{"error":"tool result is not serializable"}';
-  }
-}
-var MAINTENANCE_SYSTEM_PROMPT = [
-  "\u4F60\u662F\u8FD9\u4E2A\u89D2\u8272\u626E\u6F14\u804A\u5929\u7684\u8BB0\u5FC6\u7BA1\u7406\u5458\uFF08memory maintenance agent\uFF09\u3002\u4F60\u4E0D\u53C2\u4E0E\u5267\u60C5\uFF0C\u53EA\u7EF4\u62A4 chat \u4F5C\u7528\u57DF\u7684\u8BB0\u5FC6\u8BB0\u5F55\uFF1A\u7EA0\u6B63\u4E0E\u804A\u5929\u539F\u6587\u51B2\u7A81\u7684\u9648\u8FF0\u3001\u5408\u5E76\u8DE8\u5199\u5165\u6279\u6B21\u4EA7\u751F\u7684\u540C\u4E00\u4E8B\u4EF6\u91CD\u590D\u8BB0\u5F55\u3001\u5220\u9664\u88AB\u539F\u6587\u8BC1\u4F2A\u7684\u8BB0\u5FC6\u3002",
-  "\u7EAA\u5F8B\uFF1A",
-  "- \u6BCF\u4E00\u6B21\u6539\u5199\u90FD\u5FC5\u987B\u6709\u539F\u6587\u4F9D\u636E\uFF1A\u5148\u7528 SearchSource / ReadSource \u67E5\u8BC1\u76F8\u5173\u697C\u5C42\uFF0C\u4E0D\u8BB8\u51ED\u7A7A\u6539\u5199\u3002",
-  "- \u5408\u5E76\u8DE8\u6279\u6B21\u540C\u4E00\u4E8B\u4EF6\u65F6\u4FDD\u7559\u8F83\u65E9\u8BB0\u5F55\u7684\u8EAB\u4EFD\uFF08id \u4E0D\u53D8\uFF09\uFF0C\u628A\u540E\u7EED\u53D1\u5C55\u5E76\u5165\u5176\u5185\u5BB9\u5E76\u8865\u9F50\u6765\u6E90\u697C\u5C42\u8303\u56F4\uFF0C\u5220\u9664\u540E\u6765\u7684\u91CD\u590D\u5360\u4F4D\u8BB0\u5F55\u3002",
-  "- \u5206\u6E05\u5386\u53F2\u4E8B\u5B9E\u4E0E\u5F53\u524D\u72B6\u6001\uFF1B\u63A8\u6D4B\u4E0E\u4F20\u95FB\u4E0D\u5F97\u5347\u7EA7\u4E3A\u786E\u5B9A\u4E8B\u5B9E\uFF1B\u6B63\u5E38\u8BB0\u5F55\u53EF\u4EE5\u4E0D\u6539\uFF0C\u4E0D\u5F97\u4E3A\u4E86\u8868\u73B0\u5DE5\u4F5C\u91CF\u800C\u5236\u9020\u4FEE\u6539\u3002",
-  "- \u8BC1\u636E\u4E0D\u8DB3\u65F6\u4FDD\u7559\u539F\u8BB0\u5F55\uFF0C\u5E76\u5728\u6700\u7EC8\u6C47\u62A5\u4E2D\u8BF4\u660E\u672A\u89E3\u51B3\u7684\u95EE\u9898\u3002",
-  "- EditMemory \u6574\u7EC4\u539F\u5B50\u63D0\u4EA4\uFF1A\u4EFB\u4E00 expectedRevision \u51B2\u7A81\u5219\u6574\u7EC4\u5931\u8D25\uFF0C\u7528 ReadMemory \u91CD\u8BFB\u540E\u91CD\u4EA4\u6574\u7EC4\uFF1B\u653E\u5F03\u4FEE\u6B63\u7684\u6761\u76EE\u5728 CompleteMaintenance \u7684 abandonEdits \u91CC\u58F0\u660E\u3002",
-  "- \u804A\u5929\u539F\u6587\u53EA\u8BFB\uFF0C\u6C38\u4E0D\u6539\u5199\u3002",
-  "- \u5DE5\u4F5C\u5B8C\u6210\u540E\u8C03\u7528 CompleteMaintenance \u58F0\u660E\u672C\u6B21\u8986\u76D6\u7684\u697C\u9762\u8303\u56F4\uFF08\u6D88\u606F\u4E0B\u6807\uFF0C0 \u8D77\u3001headFloor \u542B\u7AEF\u70B9\uFF09\uFF0C\u518D\u7B80\u77ED\u6C47\u62A5\u6536\u5C3E\u3002"
-].join("\n");
-function buildOpeningMessage(run, listing) {
-  const ranges = run.summary.pendingRanges.map((range) => `${range.baseFloor}-${range.headFloor}`).join(", ");
-  return [
-    `\u804A\u5929 ${run.scope.character}/${run.scope.chatId} \u5171 ${run.summary.totalFloors} \u697C\uFF08\u4E0B\u6807 0-${Math.max(0, run.summary.totalFloors - 1)}\uFF09\u3002`,
-    `\u672C\u6B21\u5F85\u7EF4\u62A4\u697C\u9762\u8303\u56F4\uFF1A${ranges}\uFF08\u5171 ${run.summary.pendingFloors} \u697C\uFF09\u3002`,
-    run.summary.retiredReasons.length > 0 ? `\u4E0A\u6B21\u6536\u636E\u9000\u5F79\uFF1A${run.summary.retiredReasons.length} \u6761\uFF08\u539F\u6587/\u8BB0\u5FC6\u5728\u7EF4\u62A4\u540E\u88AB\u6539\u52A8\uFF0C\u5BF9\u5E94\u8303\u56F4\u91CD\u65B0\u5F85\u7EF4\u62A4\uFF09\u3002` : "",
-    "",
-    "\u5F53\u524D chat \u4F5C\u7528\u57DF\u8BB0\u5FC6\u6E05\u5355\uFF08\u6982\u8981\uFF0C\u53EF\u7528 ReadMemory \u7FFB\u9875/\u8FC7\u6EE4\u8BFB\u53D6\u5B8C\u6574\u5185\u5BB9\u4E0E revision\uFF09\uFF1A",
-    listing,
-    "",
-    "\u7EF4\u62A4\u6307\u4EE4\uFF1A\u5BF9\u7167\u539F\u6587\uFF08SearchSource \u5173\u952E\u8BCD\u68C0\u7D22\u3001ReadSource \u6309\u697C\u9762\u8303\u56F4\u9605\u8BFB\uFF09\u68C0\u67E5\u4E0A\u8FF0\u8BB0\u5FC6\u2014\u2014\u5408\u5E76\u8DE8\u6279\u6B21\u91CD\u590D\u4E8B\u4EF6\uFF08\u4FDD\u7559\u8F83\u65E9\u8BB0\u5F55 id\uFF09\u3001\u7EA0\u6B63\u4E0E\u539F\u6587\u51B2\u7A81\u7684\u9648\u8FF0\u3001\u5220\u9664\u88AB\u8BC1\u4F2A\u7684\u8BB0\u5F55\uFF1B\u6539\u5199\u5FC5\u987B\u6709\u539F\u6587\u4F9D\u636E\u3002\u5B8C\u6210\u540E CompleteMaintenance \u58F0\u660E\u8986\u76D6\u8303\u56F4\u5E76\u7B80\u77ED\u6C47\u62A5\u3002"
-  ].filter((part) => part !== "").join("\n");
-}
-function renderMemoryListing(records, maxChars) {
-  const lines = [];
-  let used = 0;
-  let truncated = false;
-  for (const record of records) {
-    const content = record.content.length > 400 ? `${record.content.slice(0, 400)}\u2026` : record.content;
-    const line = `- id=${record.id} kind=${record.kind} rev=${record.revision} imp=${record.importance} conf=${record.confidence}${record.tags.length > 0 ? ` tags=${record.tags.join(",")}` : ""} source=${record.source.kind}
-  ${content.replace(/\n/g, " ")}`;
-    if (used + line.length > maxChars) {
-      truncated = true;
-      break;
-    }
-    used += line.length;
-    lines.push(line);
-  }
-  if (records.length === 0) lines.push("\uFF08chat \u4F5C\u7528\u57DF\u5F53\u524D\u6CA1\u6709\u8BB0\u5FC6\u8BB0\u5F55\uFF09");
-  if (truncated) lines.push(`\u2026\uFF08\u6E05\u5355\u8FC7\u957F\u622A\u65AD\uFF0C\u5DF2\u5217 ${lines.length}/${records.length} \u6761\uFF1B\u7528 ReadMemory \u7FFB\u9875\u8BFB\u53D6\uFF09`);
-  return lines.join("\n");
-}
-var MAINTENANCE_TOOL_SCHEMAS = [
-  {
-    name: "ReadMemory",
-    description: "Page through the chat-scope memory records (32 per page, ~16k chars per page). Optional kind/query filters. Returns id/content/tags/kind/revision/importance/confidence/source for each record.",
-    parameters: {
-      type: "object",
-      properties: {
-        page: { type: "integer", description: "0-based page index" },
-        kind: { type: "string", enum: ["semantic", "episodic"] },
-        query: { type: "string", description: "Optional lexical filter over content and tags" }
-      },
-      additionalProperties: false
-    }
-  },
-  {
-    name: "SearchSource",
-    description: "Lexical search over the chat source messages (read-only). Returns matching floor indexes with excerpts. Search misses do not prove absence \u2014 try the source floors directly with ReadSource.",
-    parameters: {
-      type: "object",
-      properties: {
-        query: { type: "string", description: "Lexical query; up to 3 terms require all, longer queries require ~40% term coverage" },
-        limit: { type: "integer", description: "Maximum hits, capped at 20" }
-      },
-      required: ["query"],
-      additionalProperties: false
-    }
-  },
-  {
-    name: "ReadSource",
-    description: "Read chat source messages by floor range (read-only; the chat is never rewritten). Floors are 0-based message indexes; at most 400 floors and ~24k chars per call.",
-    parameters: {
-      type: "object",
-      properties: {
-        fromFloor: { type: "integer" },
-        toFloor: { type: "integer" }
-      },
-      required: ["fromFloor", "toFloor"],
-      additionalProperties: false
-    }
-  },
-  {
-    name: "EditMemory",
-    description: 'Atomically apply a group of memory edits. Items: {op:"update", id, expectedRevision, content?, tags?, importance?, confidence?, reason?("merge"|"correct")}, {op:"delete", id, expectedRevision}, {op:"create", content, kind, tags?, importance?, confidence?}. Any revision conflict rejects the whole group (nothing is applied); re-read and resubmit the full group.',
-    parameters: {
-      type: "object",
-      properties: {
-        edits: {
-          type: "array",
-          minItems: 1,
-          items: {
-            type: "object",
-            properties: {
-              op: { type: "string", enum: ["update", "delete", "create"] },
-              id: { type: "string" },
-              expectedRevision: { type: "string" },
-              content: { type: "string" },
-              kind: { type: "string", enum: ["semantic", "episodic"] },
-              tags: { type: "array", items: { type: "string" } },
-              importance: { type: "number" },
-              confidence: { type: "number" },
-              reason: { type: "string", enum: ["merge", "correct"] }
-            },
-            required: ["op"],
-            additionalProperties: false
-          }
-        }
-      },
-      required: ["edits"],
-      additionalProperties: false
-    }
-  },
-  {
-    name: "CompleteMaintenance",
-    description: "Declare the maintained floor range (0-based, inclusive). Rejected while failed EditMemory items remain unresolved (resubmit them or list their ids in abandonEdits). Ends the run with your final report.",
-    parameters: {
-      type: "object",
-      properties: {
-        baseFloor: { type: "integer" },
-        headFloor: { type: "integer" },
-        abandonEdits: { type: "array", items: { type: "string" }, description: "Record ids (or create:content-prefix keys) you explicitly give up fixing" }
-      },
-      required: ["baseFloor", "headFloor"],
-      additionalProperties: false
-    }
-  }
-];
-async function executeToolCall(run, call) {
-  let args;
-  try {
-    args = JSON.parse(call.arguments === "" ? "{}" : call.arguments);
-  } catch {
-    return { payload: { error: `invalid JSON arguments for ${call.name}` }, isError: true };
-  }
-  try {
-    switch (call.name) {
-      case "ReadMemory":
-        return { payload: await toolReadMemory(run, args), isError: false };
-      case "SearchSource":
-        return { payload: toolSearchSource(run, args), isError: false };
-      case "ReadSource":
-        return { payload: toolReadSource(run, args), isError: false };
-      case "EditMemory":
-        return await toolEditMemory(run, args);
-      case "CompleteMaintenance":
-        return await toolCompleteMaintenance(run, args);
-      default:
-        return { payload: { error: `unknown tool '${call.name}'` }, isError: true };
-    }
-  } catch (error) {
-    return { payload: { error: error instanceof Error ? error.message : String(error) }, isError: true };
-  }
-}
-function integerArg(value) {
-  return typeof value === "number" && Number.isInteger(value) ? value : void 0;
-}
-async function toolReadMemory(run, args) {
-  const page = integerArg(args.page) ?? 0;
-  if (page < 0 || page > 1e5) throw new Error("page must be a non-negative integer");
-  const kind = args.kind === "semantic" || args.kind === "episodic" ? args.kind : void 0;
-  const query = typeof args.query === "string" ? args.query : "";
-  const tokens = query === "" ? [] : tokenizeQuery(query);
-  if (query !== "" && tokens.length === 0) throw new Error("query produced no searchable tokens");
-  const records = (await run.deps.memory.list("chat", run.scope.chatId)).filter((record) => kind === void 0 || record.kind === kind).filter((record) => tokens.length === 0 || matchedTokenCount(`${record.content}
-${record.tags.join(" ")}`, tokens) >= tokenThreshold(tokens.length));
-  const start = page * MAINTENANCE_PAGE_RECORDS;
-  const pageRecords = [];
-  let used = 0;
-  for (const record of records.slice(start)) {
-    if (pageRecords.length >= MAINTENANCE_PAGE_RECORDS) break;
-    const view = {
-      id: record.id,
-      kind: record.kind,
-      content: record.content,
-      tags: record.tags,
-      revision: record.revision,
-      importance: record.importance,
-      confidence: record.confidence,
-      source: record.source
     };
-    const size = JSON.stringify(view).length;
-    if (pageRecords.length > 0 && used + size > MAINTENANCE_PAGE_CHARS) break;
-    if (size > MAINTENANCE_PAGE_CHARS && pageRecords.length === 0) {
-      pageRecords.push(view);
-      break;
-    }
-    used += size;
-    pageRecords.push(view);
-    if (used >= MAINTENANCE_PAGE_CHARS) break;
-  }
-  const consumed = start + pageRecords.length;
-  return {
-    total: records.length,
-    page,
-    pageSize: MAINTENANCE_PAGE_RECORDS,
-    more: consumed < records.length,
-    records: pageRecords
-  };
-}
-function toolSearchSource(run, args) {
-  const query = typeof args.query === "string" ? args.query : "";
-  const tokens = tokenizeQuery(query.slice(0, 2e3));
-  if (tokens.length === 0) throw new Error("query requires at least one searchable token");
-  const limit = Math.min(Math.max(integerArg(args.limit) ?? 10, 1), SEARCH_LIMIT);
-  const required = tokenThreshold(tokens.length);
-  const qualified = [];
-  for (let index = run.floors.length - 1; index >= 0; index -= 1) {
-    const message = run.floors[index];
-    if (message.is_system === true || typeof message.mes !== "string") continue;
-    const matched = matchedTokenCount(message.mes, tokens);
-    if (matched < required) continue;
-    qualified.push({ floor: index, message, matched });
-  }
-  qualified.sort((left, right) => right.matched - left.matched || right.floor - left.floor);
-  const hits = qualified.slice(0, limit).map(({ floor, message }) => {
-    const excerpt2 = excerptAround(message.mes, tokens, SEARCH_EXCERPT_CHARS);
-    return {
-      floor,
-      name: message.name,
-      isUser: message.is_user === true,
-      excerpt: excerpt2,
-      truncated: excerpt2.length < message.mes.length
-    };
-  });
-  return { hits, hitCount: hits.length, truncated: qualified.length > hits.length, totalFloors: run.floors.length };
-}
-function toolReadSource(run, args) {
-  const from = integerArg(args.fromFloor);
-  const to = integerArg(args.toFloor);
-  if (from === void 0 || to === void 0) throw new Error("fromFloor and toFloor must be integers");
-  if (from < 0 || to < from) throw new Error("expected 0 <= fromFloor <= toFloor");
-  if (to >= run.floors.length) throw new Error(`toFloor ${to} is beyond the last floor ${run.floors.length - 1}`);
-  if (to - from + 1 > MAINTENANCE_SOURCE_SPAN) throw new Error(`floor span is capped at ${MAINTENANCE_SOURCE_SPAN} floors per call`);
-  const messages = [];
-  let used = 0;
-  let truncated = false;
-  for (let floor = from; floor <= to; floor += 1) {
-    const message = run.floors[floor];
-    const content = typeof message.mes === "string" ? message.mes : "";
-    const remaining = MAINTENANCE_SOURCE_CHARS - used;
-    const body = content.length <= remaining ? content : content.slice(0, Math.max(0, remaining));
-    messages.push({
-      floor,
-      name: message.name,
-      isUser: message.is_user === true,
-      isSystem: message.is_system === true,
-      content: body,
-      truncated: body.length < content.length
-    });
-    used += body.length;
-    if (body.length < content.length || used >= MAINTENANCE_SOURCE_CHARS) {
-      truncated = truncated || body.length < content.length || floor < to;
-      break;
-    }
-  }
-  return { messages, spanFrom: from, spanTo: to, truncated, totalFloors: run.floors.length };
-}
-function parseEdits(value) {
-  if (!Array.isArray(value) || value.length === 0) throw new Error("edits must be a non-empty array");
-  const parsed = [];
-  value.forEach((entry, index) => {
-    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) throw new Error(`edits[${index}] must be an object`);
-    const record = entry;
-    if (record.op === "update") {
-      if (typeof record.id !== "string" || record.id === "") throw new Error(`edits[${index}].id is required`);
-      if (typeof record.expectedRevision !== "string" || record.expectedRevision === "") throw new Error(`edits[${index}].expectedRevision is required`);
-      if (record.content !== void 0 && typeof record.content !== "string") throw new Error(`edits[${index}].content must be a string`);
-      if (record.tags !== void 0 && (!Array.isArray(record.tags) || record.tags.some((tag) => typeof tag !== "string"))) throw new Error(`edits[${index}].tags must be a string array`);
-      if (record.importance !== void 0 && (typeof record.importance !== "number" || !Number.isFinite(record.importance))) throw new Error(`edits[${index}].importance must be a number`);
-      if (record.confidence !== void 0 && (typeof record.confidence !== "number" || !Number.isFinite(record.confidence))) throw new Error(`edits[${index}].confidence must be a number`);
-      parsed.push({
-        op: "update",
-        id: record.id,
-        expectedRevision: record.expectedRevision,
-        ...record.content === void 0 ? {} : { content: record.content },
-        ...record.tags === void 0 ? {} : { tags: record.tags },
-        ...record.importance === void 0 ? {} : { importance: Math.max(0, Math.min(1, numberField4(record.importance, "importance"))) },
-        ...record.confidence === void 0 ? {} : { confidence: Math.max(0, Math.min(1, numberField4(record.confidence, "confidence"))) },
-        ...record.reason === "merge" ? { reason: "merge" } : {}
-      });
-      return;
-    }
-    if (record.op === "delete") {
-      if (typeof record.id !== "string" || record.id === "") throw new Error(`edits[${index}].id is required`);
-      if (typeof record.expectedRevision !== "string" || record.expectedRevision === "") throw new Error(`edits[${index}].expectedRevision is required`);
-      parsed.push({ op: "delete", id: record.id, expectedRevision: record.expectedRevision });
-      return;
-    }
-    if (record.op === "create") {
-      if (typeof record.content !== "string" || record.content.trim() === "") throw new Error(`edits[${index}].content is required`);
-      if (record.kind !== "semantic" && record.kind !== "episodic") throw new Error(`edits[${index}].kind must be semantic or episodic`);
-      if (record.tags !== void 0 && (!Array.isArray(record.tags) || record.tags.some((tag) => typeof tag !== "string"))) throw new Error(`edits[${index}].tags must be a string array`);
-      parsed.push({
-        op: "create",
-        content: record.content,
-        kind: record.kind,
-        ...record.tags === void 0 ? {} : { tags: record.tags },
-        ...record.importance === void 0 ? {} : { importance: Math.max(0, Math.min(1, numberField4(record.importance, "importance"))) },
-        ...record.confidence === void 0 ? {} : { confidence: Math.max(0, Math.min(1, numberField4(record.confidence, "confidence"))) }
-      });
-      return;
-    }
-    throw new Error(`edits[${index}].op must be update, delete or create`);
-  });
-  return parsed;
-}
-function editKey(edit) {
-  return edit.op === "create" ? `create:${edit.content.slice(0, 24)}` : edit.id;
-}
-async function toolEditMemory(run, args) {
-  let edits;
-  try {
-    edits = parseEdits(args.edits);
-  } catch (error) {
-    run.summary.failedGroups += 1;
-    return { payload: { error: error instanceof Error ? error.message : String(error), applied: false }, isError: true };
-  }
-  const digest = () => {
-    for (const edit of edits) run.unresolvedEdits.delete(editKey(edit));
-  };
-  const markUnresolved = () => {
-    for (const edit of edits) run.unresolvedEdits.add(editKey(edit));
-  };
-  const conflicts = [];
-  for (const [index, edit] of edits.entries()) {
-    if (edit.op === "create") continue;
-    const current = await run.deps.memory.read(edit.id, "chat", run.scope.chatId, true);
-    if (current === void 0) {
-      conflicts.push({ index, id: edit.id, problem: "record not found in chat scope" });
-      continue;
-    }
-    if (current.revision !== edit.expectedRevision) {
-      conflicts.push({ index, id: edit.id, problem: "revision conflict", expectedRevision: edit.expectedRevision, actualRevision: current.revision });
-    }
-  }
-  if (conflicts.length > 0) {
-    run.summary.failedGroups += 1;
-    markUnresolved();
-    return {
-      payload: {
-        error: "edit group rejected: revision conflicts found; nothing was applied",
-        conflicts,
-        hint: "re-read the records with ReadMemory and resubmit the whole group with fresh revisions"
-      },
-      isError: true
-    };
-  }
-  const rollback = [];
-  const results = [];
-  try {
-    for (const edit of edits) {
-      if (edit.op === "update") {
-        const previous = await run.deps.memory.read(edit.id, "chat", run.scope.chatId, true);
-        const record = await run.deps.memory.put({
-          id: previous.id,
-          scope: "chat",
-          scopeId: run.scope.chatId,
-          kind: previous.kind,
-          content: edit.content ?? previous.content,
-          tags: edit.tags ?? previous.tags,
-          importance: edit.importance ?? previous.importance,
-          confidence: edit.confidence ?? previous.confidence,
-          ...previous.expiresAt === void 0 ? {} : { expiresAt: previous.expiresAt },
-          // 更新保留原记录 source（出处不因维护丢失；维护归属由 revision + 收据快照证明）。
-          source: previous.source
-        }, edit.expectedRevision);
-        rollback.push(() => restoreRecord(run, previous));
-        if (edit.reason === "merge") run.summary.merged += 1;
-        else run.summary.corrected += 1;
-        results.push({ op: "update", id: record.id, revision: record.revision });
-      } else if (edit.op === "delete") {
-        const previous = await run.deps.memory.read(edit.id, "chat", run.scope.chatId, true);
-        await run.deps.memory.forget(edit.id, "chat", run.scope.chatId, edit.expectedRevision);
-        rollback.push(() => restoreRecord(run, previous));
-        run.summary.deleted += 1;
-        results.push({ op: "delete", id: edit.id });
-      } else {
-        const record = await run.deps.memory.put({
-          scope: "chat",
-          scopeId: run.scope.chatId,
-          kind: edit.kind,
-          content: edit.content,
-          ...edit.tags === void 0 ? {} : { tags: edit.tags },
-          ...edit.importance === void 0 ? {} : { importance: edit.importance },
-          ...edit.confidence === void 0 ? {} : { confidence: edit.confidence },
-          source: { kind: "maintenance", runId: run.runId, character: run.scope.character, chatId: run.scope.chatId }
-        });
-        rollback.push(async () => {
-          const current = await run.deps.memory.read(record.id, "chat", run.scope.chatId, true).catch(() => void 0);
-          if (current !== void 0) {
-            await run.deps.memory.forget(record.id, "chat", run.scope.chatId, current.revision).catch(() => {
-            });
-          }
-        });
-        run.summary.created += 1;
-        results.push({ op: "create", id: record.id, revision: record.revision });
+    if (selector.kind === "batch") {
+      const items = /* @__PURE__ */ new Map();
+      for (const messageId of selector.messageIds) {
+        items.set(messageId, (await readBodyItem(messageId)).view);
       }
+      return sendJson(res, 200, { ok: true, items: Object.fromEntries(items) });
     }
-  } catch (error) {
-    for (const undo of rollback.reverse()) await undo().catch(() => {
+    const item = await readBodyItem(selector.messageId);
+    if (!item.ok) throw item.error;
+    return sendJson(res, 200, item.view);
+  }
+  const body = await readJson(req);
+  const sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
+  if (sessionId === "") {
+    return sendBodyFailure(res, { status: 400, code: "invalid-arguments", message: "sessionId is required" });
+  }
+  const binding = await resolveBodyBinding(wiring, sessionId);
+  if (binding === void 0 || !bodyBindingEligible(binding)) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: "architecture-mismatch",
+      message: "body operations require an AgentTavern single-character binding"
     });
-    run.summary.failedGroups += 1;
-    markUnresolved();
-    return {
-      payload: {
-        error: `edit group failed mid-apply and was rolled back: ${error instanceof Error ? error.message : String(error)}`,
-        applied: false
-      },
-      isError: true
-    };
   }
-  digest();
-  run.summary.editGroups += 1;
-  for (const edit of edits) {
-    if (edit.op === "delete") {
-      await run.deps.vectors.delete(edit.id, "chat", run.scope.chatId).catch(() => {
-      });
-    }
+  const mutationsDisabledReason = imBodyMutationDisabledOf(binding, sessionId, (await db.getState()).imPeers);
+  if (mutationsDisabledReason !== void 0) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: IM_BODY_MUTATION_DISABLED_CODE,
+      message: mutationsDisabledReason
+    });
   }
-  for (const [index, edit] of edits.entries()) {
-    if (edit.op === "update") {
-      const record = await run.deps.memory.read(edit.id, "chat", run.scope.chatId);
-      if (record !== void 0) await embedEditedRecord(run, record);
-    } else if (edit.op === "create") {
-      const created = results[index];
-      const record = await run.deps.memory.read(created.id, "chat", run.scope.chatId);
-      if (record !== void 0) await embedEditedRecord(run, record);
-    }
+  const characterName = binding.character;
+  const chatId = binding.chatId;
+  if (characterName === void 0 || chatId === void 0) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: "body-state-unsafe",
+      message: bodyStateUnsafeMessage("chat-unreadable"),
+      detail: "chat-unreadable"
+    });
   }
-  return { payload: { ok: true, applied: edits.length, results }, isError: false };
-}
-async function restoreRecord(run, previous) {
-  const current = await run.deps.memory.read(previous.id, "chat", run.scope.chatId, true);
-  if (current === void 0) return;
-  await run.deps.memory.put({
-    id: previous.id,
-    scope: previous.scope,
-    scopeId: previous.scopeId,
-    kind: previous.kind,
-    content: previous.content,
-    tags: previous.tags,
-    importance: previous.importance,
-    confidence: previous.confidence,
-    ...previous.expiresAt === void 0 ? {} : { expiresAt: previous.expiresAt },
-    source: previous.source
-  }, current.revision);
-}
-async function embedEditedRecord(run, record) {
+  const action = route === "body" ? "edit" : route === "body/select" ? "select" : "regenerate";
+  const character = await db.getCharacter(characterName);
+  const snapshot2 = await db.getChatSnapshot(characterName, chatId);
+  const stateSafety = bodyMutationSafetyOf(action, character, snapshot2?.chat);
+  if (!stateSafety.safe) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: stateSafety.reason,
+      message: bodyStateUnsafeMessage(stateSafety.detail),
+      detail: stateSafety.detail
+    });
+  }
+  const agent = resolveLiveAgent(wiring, sessionId);
+  if (agent === void 0) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: "session-busy",
+      message: `session '${sessionId}' has no live agent in this host process; open the chat and retry`
+    });
+  }
+  const deps = await createBodyDeps(wiring, agent);
+  if (deps === void 0) {
+    return sendBodyFailure(res, {
+      status: 501,
+      code: "host-unsupported",
+      message: "this host does not expose appendPluginRecord/pluginRecordOf (DSH 0.2.1-rc.2+)"
+    });
+  }
+  if (action === "regenerate" && deps.writeRollback === void 0 && snapshot2 !== void 0 && bodyHistoricalMvuStateOf(character, snapshot2.chat)) {
+    return sendBodyFailure(res, {
+      status: 409,
+      code: "body-state-unsafe",
+      message: bodyStateUnsafeMessage("write-journal-unavailable"),
+      detail: "write-journal-unavailable"
+    });
+  }
   try {
-    if (run.embedConfig === null) {
-      const state = await run.deps.db.getState();
-      run.embedConfig = normalizeMemoryEmbedding(state.memoryEmbedding);
+    const groupId = bodyString(body, "groupId") ?? bodyString(body, "messageId");
+    if (groupId === void 0) throw bodyRuntimeError("invalid-arguments", "groupId or messageId is required");
+    const expectedAnchorId = bodyString(body, "expectedAnchorId") ?? groupId;
+    if (route === "body") {
+      const index2 = bodyIndex(body, "index");
+      if (typeof body.text !== "string") {
+        throw bodyRuntimeError("invalid-body-text", "body edit requires a string text");
+      }
+      const state2 = await applyBodyEdit(deps, { groupId, index: index2, text: body.text, expectedAnchorId });
+      return sendJson(res, 200, { ok: true, state: state2 });
     }
-    if (run.embedConfig === void 0) return;
-    await embedMemoryRecord({
-      root: run.deps.root,
-      config: run.embedConfig,
-      vectorStore: run.deps.vectors,
-      record
-    });
-  } catch {
+    if (route === "body/regenerate") {
+      const expectedIndex = bodyIndex(body, "expectedIndex");
+      const feedback = typeof body.feedback === "string" ? body.feedback : void 0;
+      const result = await startRegenerate(deps, {
+        groupId,
+        expectedAnchorId,
+        expectedIndex,
+        ...feedback === void 0 ? {} : { feedback }
+      });
+      return sendJson(res, 202, { ok: true, opId: result.opId, status: "pending" });
+    }
+    const index = bodyIndex(body, "index");
+    const state = await selectBodyCandidate(deps, { groupId, index, expectedAnchorId });
+    return sendJson(res, 200, { ok: true, state });
+  } catch (error) {
+    const pending = pendingOperationOf(error);
+    const recovered = pending === void 0 || await retryPendingBodyRecovery(wiring, agent, pending);
+    return sendBodyFailure(
+      res,
+      bodyFailureOf(error),
+      recovered || pending === void 0 ? void 0 : { opId: pending.opId, status: "pending" }
+    );
   }
 }
-async function toolCompleteMaintenance(run, args) {
-  const base = integerArg(args.baseFloor);
-  const head = integerArg(args.headFloor);
-  if (base === void 0 || head === void 0) throw new Error("baseFloor and headFloor must be integers");
-  if (run.floors.length === 0) throw new Error("the chat has no floors to declare");
-  if (base < 0 || head < base || head >= run.floors.length) {
-    throw new Error(`expected 0 <= baseFloor <= headFloor <= ${run.floors.length - 1}`);
-  }
-  if (Array.isArray(args.abandonEdits)) {
-    for (const key of args.abandonEdits) {
-      if (typeof key === "string") run.unresolvedEdits.delete(key);
-    }
-  }
-  if (run.unresolvedEdits.size > 0) {
-    return {
-      payload: {
-        error: "failed EditMemory items remain unresolved; the completion is not recorded",
-        unresolved: [...run.unresolvedEdits],
-        hint: "resubmit corrected EditMemory groups, or declare the ids you give up in abandonEdits"
-      },
-      isError: true
-    };
-  }
-  const sig = floorSignature(run.floors, base, head);
-  if (sig === void 0) throw new Error("floor range no longer resolvable against the run snapshot");
-  const records = await run.deps.memory.list("chat", run.scope.chatId);
-  const recordSnapshots = {};
-  for (const record of records) recordSnapshots[record.id] = record.revision;
-  const stateStore = await MemoryMaintenanceStore.open(run.deps.root);
-  const state = await stateStore.read(run.scope.character, run.scope.chatId);
-  const receipts = appendReceipt(state.receipts, {
-    runId: run.runId,
-    baseFloor: base,
-    headFloor: head,
-    at: (/* @__PURE__ */ new Date()).toISOString(),
-    floorSig: sig,
-    recordSnapshots
+function sendBodyFailure(res, failure, pendingOperation) {
+  sendJson(res, failure.status, {
+    ok: false,
+    code: failure.code,
+    message: failure.message,
+    ...failure.detail === void 0 ? {} : { detail: failure.detail },
+    ...pendingOperation === void 0 ? {} : { pendingOperation }
   });
-  await stateStore.write(run.scope.character, run.scope.chatId, { ...state, receipts });
-  run.summary.completion = { baseFloor: base, headFloor: head };
-  return { payload: { ok: true, baseFloor: base, headFloor: head, coveredRecords: records.length }, isError: false };
 }
-function numberField4(value, label) {
-  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${label} must be a finite number`);
+function bodyString(body, field2) {
+  const value = body[field2];
+  return typeof value === "string" && value.trim() !== "" ? value : void 0;
+}
+function bodyIndex(body, field2) {
+  const value = body[field2];
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw bodyRuntimeError("invalid-arguments", `${field2} must be a non-negative safe integer`);
+  }
   return value;
 }
+async function projectedBodyFloor(chat, messageId, groupIdHint, selectedIndexHint, readScripts) {
+  let index;
+  try {
+    index = locateBodyFloorForRead(chat, {
+      messageId,
+      ...groupIdHint === void 0 ? {} : { groupId: groupIdHint }
+    });
+  } catch (error) {
+    return { ok: false, degradation: bodyFloorDegradationOf(error) };
+  }
+  if (index === void 0) return { ok: true, floor: void 0 };
+  const floor = chat.messages[index];
+  const tavern = asRecord5(asRecord5(floor.extra)?.["agentTavern"]);
+  const scripts = await readScripts();
+  const selectedSwipe = selectedIndexHint === void 0 ? floor : Array.isArray(floor.swipes) && typeof floor.swipes[selectedIndexHint] === "string" ? { ...floor, mes: floor.swipes[selectedIndexHint] } : void 0;
+  const text = selectedSwipe === void 0 ? void 0 : stripFrontendDocuments(displayTextForMessage(scripts, selectedSwipe, chat.messages.length - 1 - index));
+  const selectedIndex = floor.swipe_id;
+  const count = Array.isArray(floor.swipes) && floor.swipes.length > 0 ? floor.swipes.length : 1;
+  const resolved = {
+    ...typeof tavern?.["bodyGroupId"] === "string" ? { groupId: tavern["bodyGroupId"] } : {},
+    ...typeof tavern?.["anchorMessageId"] === "string" ? { anchorMessageId: tavern["anchorMessageId"] } : {},
+    ...typeof selectedIndex === "number" && Number.isSafeInteger(selectedIndex) ? { selectedIndex } : {},
+    ...typeof tavern?.["lastBodyEventSeq"] === "number" && Number.isSafeInteger(tavern["lastBodyEventSeq"]) && tavern["lastBodyEventSeq"] >= 0 ? { lastBodyEventSeq: tavern["lastBodyEventSeq"] } : {},
+    count,
+    ...text === void 0 ? {} : { text }
+  };
+  return { ok: true, floor: resolved };
+}
+function bodyFloorDegradationOf(error) {
+  if (error instanceof BodyJsonlProjectionError && error.code === "body-group-mismatch") {
+    return { detail: error.code, message: error.message };
+  }
+  return {
+    detail: "body-floor-unreadable",
+    message: `body floor lookup failed: ${errorMessage3(error)}`
+  };
+}
+var BODY_GET_BATCH_LIMIT = 50;
+function parseBodyGetSelector(params) {
+  const single = params.get("messageId");
+  const batch = params.get("messageIds");
+  const hasSingle = single !== null && single !== "";
+  const hasBatch = batch !== null && batch !== "";
+  if (hasSingle && hasBatch) {
+    throw new HttpError(400, "pass either messageId or messageIds, not both");
+  }
+  if (hasSingle) return { kind: "single", messageId: single };
+  if (!hasBatch) {
+    throw new HttpError(400, "sessionId and messageId (or messageIds) are required");
+  }
+  const messageIds = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const raw of batch.split(",")) {
+    const messageId = raw.trim();
+    if (messageId === "") throw new HttpError(400, "messageIds must not contain empty entries");
+    if (seen.has(messageId)) continue;
+    seen.add(messageId);
+    messageIds.push(messageId);
+  }
+  if (messageIds.length > BODY_GET_BATCH_LIMIT) {
+    throw new HttpError(400, `messageIds accepts at most ${BODY_GET_BATCH_LIMIT} ids (got ${messageIds.length})`);
+  }
+  return { kind: "batch", messageIds };
+}
+function bodyProjectionState(projected, ledger, latestEditSeq) {
+  if (projected === void 0 || ledger === void 0) return { current: true, textCurrent: true };
+  const textCurrent = latestEditSeq === void 0 || projected.lastBodyEventSeq !== void 0 && projected.lastBodyEventSeq >= latestEditSeq;
+  const selectionCurrent = (projected.anchorMessageId === void 0 || projected.anchorMessageId === ledger.anchorMessageId) && (projected.selectedIndex === void 0 || projected.selectedIndex === ledger.selectedIndex);
+  return { current: textCurrent && selectionCurrent, textCurrent };
+}
 
-// packages/plugin/src/http/memory.ts
+// packages/plugin/src/http/asset-import-routes.ts
+init_src2();
+init_src();
+init_dsh_home();
+init_events();
+init_io();
+async function handleCharacterImportRoute(db, req, res) {
+  const body = await readJson(req, 25 * 1024 * 1024);
+  let source;
+  if (typeof body.pngBase64 === "string") source = new Uint8Array(Buffer.from(body.pngBase64, "base64"));
+  else if (typeof body.charxBase64 === "string") source = new Uint8Array(Buffer.from(body.charxBase64, "base64"));
+  else if (body.card && typeof body.card === "object") source = body.card;
+  else throw new Error("expected { pngBase64 }, { charxBase64 } or { card }");
+  const result = await db.importCharacter(source);
+  await emitAssetsSaved("character", result.card.data.name);
+  try {
+    await saveOriginalSnapshot(tavernDataRoot(), result.card.data.name, result.card);
+  } catch (error) {
+    console.warn(`dsh-soulmojito: original snapshot for '${result.card.data.name}' failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const current = await db.getState();
+  if (!current.activeCharacter) {
+    await db.patchState({ activeCharacter: result.card.data.name });
+  }
+  await refreshActivePrompt();
+  return sendJson(res, 200, { ok: true, name: result.card.data.name, card: publicCard(result.card), world: result.importedWorld ?? null, importedRegex: result.importedRegex });
+}
+async function handleWorldImportRoute(db, req, res) {
+  const body = await readJson(req);
+  const data = asRecord5(body.data);
+  if (typeof body.name !== "string" || data === void 0) throw new Error("expected { name, data }");
+  const book = await db.importWorldFile(body.name, data);
+  await emitAssetsSaved("world", book.name);
+  return sendJson(res, 200, { ok: true, name: book.name, entries: book.entries.length });
+}
+async function handlePresetImportRoute(db, req, res) {
+  const body = await readJson(req);
+  const data = asRecord5(body.data);
+  if (typeof body.name !== "string" || data === void 0) throw new Error("expected { name, data }");
+  parsePresetOrThrow(data);
+  const result = await db.importPreset(body.name, data);
+  await emitAssetsSaved("preset", body.name);
+  await emitAgentPresetChanged();
+  return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(data), importedRegex: result.importedRegex });
+}
+async function handlePresetReadRoute(db, res, route) {
+  const name2 = decodeURIComponent(route.slice("preset/".length));
+  const data = await db.getPreset(name2);
+  if (!data) return sendJson(res, 404, { ok: false, message: "preset not found" });
+  return sendJson(res, 200, { ok: true, name: name2, kind: detectPresetKind(data), data });
+}
+async function handlePresetUpdateRoute(db, req, res, route) {
+  const oldName = decodeURIComponent(route.slice("preset/".length));
+  const body = await readJson(req, 10 * 1024 * 1024);
+  const data = asRecord5(body.data);
+  if (typeof body.name !== "string" || body.name.trim() === "" || data === void 0) {
+    throw new Error("expected { name, data }");
+  }
+  const name2 = body.name;
+  parsePresetOrThrow(data);
+  await db.putPreset(name2, data);
+  await emitAssetsSaved("preset", name2);
+  if (name2 !== oldName) await db.deletePreset(oldName);
+  const state = await db.updateState((current) => ({
+    activePreset: current.activePreset === oldName ? name2 : current.activePreset,
+    ...name2 !== oldName && current.regexScriptPresetOwners !== void 0 ? {
+      regexScriptPresetOwners: Object.fromEntries(Object.entries(current.regexScriptPresetOwners).map(([id, owner]) => [id, owner === oldName ? name2 : owner]))
+    } : {}
+  }));
+  await emitAgentPresetChanged();
+  await refreshActivePrompt();
+  return sendJson(res, 200, { ok: true, name: name2, kind: detectPresetKind(data), data, state });
+}
+
+// packages/plugin/src/http/character-routes.ts
+init_src();
+init_dsh_home();
+init_events();
+init_io();
+async function handleCharacterUpdateRoute(db, req, res, route) {
+  const oldName = decodeURIComponent(route.slice("character/".length));
+  const body = await readJson(req, 25 * 1024 * 1024);
+  if (!body.card || typeof body.card !== "object" || Array.isArray(body.card)) {
+    throw new Error("expected { card }");
+  }
+  clampIdentitySummary(body.card);
+  const saved = await db.updateCharacter(oldName, body.card);
+  const nextName = saved.card.data.name;
+  await emitAssetsSaved("character", nextName);
+  if (nextName !== oldName) {
+    await moveOriginalSnapshot(tavernDataRoot(), oldName, nextName);
+  }
+  const state = await db.updateState((current) => {
+    const activeCharacter = current.activeCharacter === oldName ? nextName : current.activeCharacter;
+    const sessionBindings = Object.fromEntries(Object.entries(current.sessionBindings).map(([sessionId, binding]) => [
+      sessionId,
+      binding.character === oldName && binding.group !== true ? { ...binding, character: nextName } : binding
+    ]));
+    const prefix = `${oldName}\0`;
+    const chats = nextName === oldName ? current.chats : Object.fromEntries(Object.entries(current.chats).map(([key, value]) => [
+      key.startsWith(prefix) ? `${nextName}\0${key.slice(prefix.length)}` : key,
+      value
+    ]));
+    return { activeCharacter, sessionBindings, chats };
+  });
+  if (nextName !== oldName) {
+    for (const groupName of await db.listGroups()) {
+      const group2 = await db.getGroup(groupName);
+      if (group2?.members.includes(oldName)) {
+        await db.putGroup({
+          ...group2,
+          members: group2.members.map((member) => member === oldName ? nextName : member),
+          disabledMembers: group2.disabledMembers.map((member) => member === oldName ? nextName : member)
+        });
+      }
+    }
+  }
+  await refreshActivePrompt();
+  return sendJson(res, 200, { ok: true, kind: saved.kind, card: publicCard(saved.card), state });
+}
+async function handleCharacterDeleteRoute(db, res, url) {
+  const name2 = url.searchParams.get("name");
+  if (!name2) throw new Error("name query is required");
+  const found = await db.getCharacter(name2);
+  if (!found) return sendJson(res, 404, { ok: false, message: "character not found" });
+  await db.deleteCharacter(name2);
+  for (const groupName of await db.listGroups()) {
+    const group2 = await db.getGroup(groupName);
+    if (group2?.members.includes(name2)) {
+      await db.putGroup({
+        ...group2,
+        members: group2.members.filter((member) => member !== name2),
+        disabledMembers: group2.disabledMembers.filter((member) => member !== name2)
+      });
+    }
+  }
+  const state = await db.updateState((current) => ({
+    activeCharacter: current.activeCharacter === name2 ? void 0 : current.activeCharacter,
+    sessionBindings: Object.fromEntries(Object.entries(current.sessionBindings).filter(([, binding]) => !(binding.character === name2 && binding.group !== true)))
+  }));
+  await deleteOriginalSnapshot(tavernDataRoot(), name2);
+  await refreshActivePrompt();
+  return sendJson(res, 200, { ok: true, state });
+}
+async function handleCharacterExportRoute(db, res, route) {
+  const name2 = decodeURIComponent(route.slice("export/character/".length));
+  const found = await db.getCharacter(name2);
+  if (!found) return sendJson(res, 404, { ok: false, message: "character not found" });
+  const bytes = await db.exportCharacter(name2);
+  const media = found.kind === "charx" ? "application/zip" : found.kind === "json" ? "application/json" : "image/png";
+  res.statusCode = 200;
+  res.setHeader("content-type", media);
+  const ext = found.kind === "charx" ? "charx" : found.kind === "json" ? "json" : "png";
+  res.setHeader("content-disposition", `attachment; filename="${encodeURIComponent(`${name2}.${ext}`)}"`);
+  res.end(Buffer.from(bytes));
+  return;
+}
+
+// packages/plugin/src/http/domain-routes.ts
 init_runtime2();
 init_io();
+async function handleAvatarRoute(db, res, route) {
+  const name2 = decodeURIComponent(route.slice("avatar/".length));
+  const found = await db.getCharacter(name2);
+  if (found) {
+    return serveCharacterAvatar(res, db, name2, found);
+  }
+  const group2 = await db.getGroup(name2);
+  if (group2) {
+    const enabled = group2.members.filter((member) => !group2.disabledMembers.includes(member));
+    for (const member of enabled.length > 0 ? enabled : group2.members) {
+      const memberFile = await db.getCharacter(member);
+      if (memberFile) return serveCharacterAvatar(res, db, member, memberFile);
+    }
+    return sendAvatarFallback(res, name2);
+  }
+  return sendJson(res, 404, { ok: false, message: "character avatar not found" });
+}
+async function handleCharacterReadRoute(db, res, route) {
+  const name2 = decodeURIComponent(route.slice("character/".length));
+  const found = await db.getCharacter(name2);
+  if (!found) return sendJson(res, 404, { ok: false, message: "character not found" });
+  return sendJson(res, 200, { ok: true, kind: found.kind, card: publicCard(found.card) });
+}
+async function handleProjectionRoute(res, url) {
+  const sessionId = url.searchParams.get("sessionId");
+  if (!sessionId) throw new Error("sessionId query is required");
+  const projector = await getAgentTavernProjectorPromise();
+  if (!projector) throw new Error("AgentTavern projector is unavailable");
+  return sendJson(res, 200, { ok: true, projection: await projector.status(sessionId) });
+}
+async function handleProjectionReplayRoute(ctx, db, req, res, url) {
+  const body = await readJson(req).catch(() => ({}));
+  const sessionId = typeof body.sessionId === "string" ? body.sessionId : url.searchParams.get("sessionId");
+  if (!sessionId) throw new Error("sessionId is required");
+  const state = await db.getState();
+  const binding = state.sessionBindings[sessionId];
+  if (!binding || binding.architecture !== "agent-tavern" || binding.group === true) {
+    throw new TavernArchitectureConflictError("Projection replay requires an AgentTavern single-character binding.");
+  }
+  const agent = ctx.agents?.get?.(sessionId);
+  const session = agent?.session;
+  if (!session || typeof session.id !== "string" || readSessionEvents(session) === void 0) {
+    throw new Error("AgentTavern session is not loaded in this host process; open the chat first and retry.");
+  }
+  const projector = await getAgentTavernProjectorPromise();
+  if (!projector) throw new Error("AgentTavern projector is unavailable");
+  await projector.replay({ ...session, id: session.id });
+  return sendJson(res, 200, { ok: true, projection: await projector.status(sessionId) });
+}
+async function handleCompactRoute(ctx, req, res, url) {
+  const body = await readJson(req).catch(() => ({}));
+  const sessionId = typeof body.sessionId === "string" ? body.sessionId : url.searchParams.get("sessionId");
+  if (!sessionId) throw new Error("sessionId is required");
+  const agent = ctx.agents?.get?.(sessionId);
+  if (!agent || agent.status !== "idle") {
+    throw new Error(`session ${sessionId} has no idle agent in this host process; pause the novel and retry.`);
+  }
+  const compaction = ctx.compaction;
+  if (!compaction || typeof compaction.compactNow !== "function") {
+    throw new Error("compaction service is unavailable in this host process");
+  }
+  const result = await compaction.compactNow(agent, new AbortController().signal);
+  return sendJson(res, 200, { ok: true, result: result ?? null });
+}
+async function handleAuditRoute(db, res, url) {
+  const sessionId = url.searchParams.get("sessionId");
+  if (!sessionId) throw new Error("sessionId query is required");
+  const state = await db.getState();
+  const binding = state.sessionBindings[sessionId];
+  if (!binding || binding.architecture !== "agent-tavern" || binding.group === true) {
+    throw new TavernArchitectureConflictError("AgentTavern audit requires a native single-character binding.");
+  }
+  const scopes = [
+    { scope: "chat", scopeId: binding.chatId },
+    { scope: "character", scopeId: binding.character },
+    { scope: "agent", scopeId: sessionId }
+  ];
+  const [memoryGroups, variableGroups, globalMemories, globalVariables, projector] = await Promise.all([
+    Promise.all(scopes.map(({ scope, scopeId }) => memories().then((store5) => store5.search({
+      scope,
+      scopeId,
+      includeDeleted: true,
+      limit: 50
+    })))),
+    Promise.all(scopes.map(({ scope, scopeId }) => variables().then((store5) => store5.listAll(scope, scopeId)))),
+    memories().then((store5) => store5.search({ scope: "global", includeDeleted: true, limit: 50 })),
+    variables().then((store5) => store5.listAll("global", "global")),
+    getAgentTavernProjectorPromise()
+  ]);
+  return sendJson(res, 200, {
+    ok: true,
+    architecture: binding.architecture,
+    contextMode: binding.contextMode,
+    projection: projector ? await projector.status(sessionId) : null,
+    memories: [...memoryGroups.flat().map((hit) => hit.record), ...globalMemories.map((hit) => hit.record)],
+    variables: [...variableGroups.flat(), ...globalVariables]
+  });
+}
+
+// packages/plugin/src/candidates.ts
+init_src();
+init_guides();
+var CANDIDATE_HISTORY_WINDOW = 10;
+var CANDIDATE_MAX_COUNT = 6;
+var CANDIDATE_MAX_TEXT_LENGTH = 200;
+var CANDIDATE_CARD_EXCERPT = 1500;
+var DEFAULT_USER4 = "User";
+function excerpt(text, max2) {
+  if (typeof text !== "string") return void 0;
+  const trimmed = text.trim();
+  if (trimmed === "") return void 0;
+  return trimmed.length > max2 ? `${trimmed.slice(0, max2)}\u2026` : trimmed;
+}
+function formatGuidesBlock2(guides) {
+  if (guides.length === 0) return void 0;
+  const lines = guides.slice().sort((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? "")).map((guide) => `- ${guide.text}`);
+  return [GUIDES_BLOCK_HEADER, ...lines].join("\n");
+}
+function buildCandidateRequest(input) {
+  const systemParts = [
+    [
+      "You propose candidate inputs for an ongoing roleplay chat.",
+      "Based on the character, the user persona, the recent chat history and any conversation guides, propose 3 to 6 candidates for what the user could send next.",
+      "Rules:",
+      `- Each candidate is at most ${CANDIDATE_MAX_TEXT_LENGTH} characters and is written as the user's next message.`,
+      `- kind "action" proposes something the user's character does or says; kind "scene" proposes a scene change or a narrative shift.`,
+      "- Ground every candidate in the provided history and character; do not advance the plot yourself and do not narrate outcomes \u2014 only propose.",
+      '- Reply with ONLY a strict JSON array of objects, e.g. [{"kind":"action","text":"..."},{"kind":"scene","text":"..."}]. No prose, no code fences.'
+    ].join("\n")
+  ];
+  const card = [`Character: ${input.character.name}`];
+  const description = excerpt(input.character.description, CANDIDATE_CARD_EXCERPT);
+  if (description !== void 0) card.push(`Description: ${description}`);
+  const personality = excerpt(input.character.personality, CANDIDATE_CARD_EXCERPT);
+  if (personality !== void 0) card.push(`Personality: ${personality}`);
+  const scenario = excerpt(input.character.scenario, CANDIDATE_CARD_EXCERPT);
+  if (scenario !== void 0) card.push(`Scenario: ${scenario}`);
+  card.push(`User persona name: ${input.userName}`);
+  systemParts.push(card.join("\n"));
+  const guidesBlock = formatGuidesBlock2(input.guides ?? []);
+  if (guidesBlock !== void 0) systemParts.push(guidesBlock);
+  if (input.feedback !== void 0) {
+    const revision = [];
+    if (input.previousCandidates !== void 0 && input.previousCandidates.length > 0) {
+      revision.push("Previous candidates (the user reviewed them and asked for a revision):");
+      for (const item of input.previousCandidates) {
+        revision.push(`- [${item.kind}] ${item.text}`);
+      }
+    }
+    revision.push(`User feedback on the candidates: ${input.feedback}`);
+    revision.push("Revise the candidates according to the feedback: keep what the feedback does not object to, and replace or adjust what it asks to change. Follow the same output rules.");
+    systemParts.push(revision.join("\n"));
+  }
+  const history = input.history.slice(-CANDIDATE_HISTORY_WINDOW);
+  const messages = history.map((m) => ({
+    role: m.isUser ? "user" : "assistant",
+    content: `[${m.name}] ${m.text}`
+  }));
+  messages.push({
+    role: "user",
+    content: input.feedback !== void 0 ? "Propose 3 to 6 candidate inputs for the user's next message, revising the previous candidates according to the user feedback. Reply with ONLY the JSON array." : "Propose 3 to 6 candidate inputs for the user's next message. Reply with ONLY the JSON array."
+  });
+  return { system: systemParts.join("\n\n"), messages };
+}
+function tryParseJson(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return void 0;
+  }
+}
+function extractFirstJsonArray(text) {
+  const trimmed = text.trim();
+  const direct = tryParseJson(trimmed);
+  if (Array.isArray(direct)) return direct;
+  const start = trimmed.indexOf("[");
+  if (start === -1) throw new Error("candidate output contains no JSON array");
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < trimmed.length; i++) {
+    const ch = trimmed[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (inString && ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') inString = !inString;
+    else if (!inString && ch === "[") depth++;
+    else if (!inString && ch === "]") {
+      depth--;
+      if (depth === 0) {
+        const parsed = tryParseJson(trimmed.slice(start, i + 1));
+        if (parsed === void 0) throw new Error("candidate output is not valid JSON");
+        if (!Array.isArray(parsed)) throw new Error("candidate output is not a JSON array");
+        return parsed;
+      }
+    }
+  }
+  throw new Error("candidate output contains no JSON array");
+}
+function normalizeCandidateText(value) {
+  return typeof value === "string" ? value.trim().slice(0, CANDIDATE_MAX_TEXT_LENGTH) : "";
+}
+function parseCandidates(text) {
+  const raw = extractFirstJsonArray(text);
+  const items = [];
+  for (const entry of raw) {
+    if (items.length >= CANDIDATE_MAX_COUNT) break;
+    if (typeof entry === "string") {
+      const candidate2 = normalizeCandidateText(entry);
+      if (candidate2 !== "") items.push({ kind: "action", text: candidate2 });
+      continue;
+    }
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const record = entry;
+    const candidate = normalizeCandidateText(record.text);
+    if (candidate === "") continue;
+    items.push({ kind: record.kind === "scene" ? "scene" : "action", text: candidate });
+  }
+  if (items.length === 0) throw new Error("candidate output contained no usable candidates");
+  return items;
+}
+function readStoredCandidates(chat) {
+  const raw = chat?.header?.chat_metadata?.candidates;
+  if (raw === void 0 || raw === null || typeof raw !== "object" || Array.isArray(raw)) return void 0;
+  const record = raw;
+  if (!Array.isArray(record.items)) return void 0;
+  const items = [];
+  for (const entry of record.items) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const candidate = normalizeCandidateText(entry.text);
+    if (candidate === "") continue;
+    items.push({
+      kind: entry.kind === "scene" ? "scene" : "action",
+      text: candidate
+    });
+  }
+  if (items.length === 0) return void 0;
+  return {
+    items,
+    generatedAt: typeof record.generatedAt === "string" ? record.generatedAt : "",
+    ...typeof record.feedback === "string" && record.feedback !== "" ? { feedback: record.feedback } : {}
+  };
+}
+function writeStoredCandidates(chat, payload) {
+  chat.header.chat_metadata.candidates = {
+    items: payload.items,
+    generatedAt: payload.generatedAt,
+    ...payload.feedback !== void 0 && payload.feedback !== "" ? { feedback: payload.feedback } : {}
+  };
+}
+function readGuides(chat) {
+  const raw = chat?.header?.chat_metadata?.guides;
+  if (!Array.isArray(raw)) return [];
+  const guides = [];
+  for (const entry of raw) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const record = entry;
+    if (typeof record.text !== "string" || record.text.trim() === "") continue;
+    guides.push({
+      id: typeof record.id === "string" ? record.id : "",
+      text: record.text,
+      ...typeof record.createdAt === "string" ? { createdAt: record.createdAt } : {}
+    });
+  }
+  return guides;
+}
+function assertStCandidateBinding(state, sessionId) {
+  if (typeof sessionId !== "string") return;
+  if (state.sessionBindings?.[sessionId]?.architecture === "agent-tavern") {
+    throw new Error("AgentTavern sessions use the DSH native AgentLoop; candidates are unavailable.");
+  }
+}
+async function runCandidateGeneration(ctx, db, options) {
+  const { state, characterName, chatId, snapshot: snapshot2 } = options;
+  assertStCandidateBinding(state, options.sessionId);
+  if (options.revision !== snapshot2.revision) {
+    throw new ChatRevisionConflictError(options.revision, snapshot2.revision);
+  }
+  const chat = snapshot2.chat;
+  const character = await db.getCharacter(characterName);
+  if (!character) throw new Error(`character '${characterName}' not found`);
+  const feedback = optionalFeedback(options.feedback);
+  const previous = feedback !== void 0 ? readStoredCandidates(chat) : void 0;
+  const request = buildCandidateRequest({
+    character: {
+      name: character.card.data.name || characterName,
+      description: character.card.data.description,
+      personality: character.card.data.personality,
+      scenario: character.card.data.scenario
+    },
+    userName: state.activePersona ?? DEFAULT_USER4,
+    history: chat.messages.filter((m) => !m.is_system).map((m) => ({ name: m.name, isUser: m.is_user, text: m.mes })),
+    guides: readGuides(chat),
+    ...feedback !== void 0 ? { feedback } : {},
+    ...previous !== void 0 ? { previousCandidates: previous.items } : {}
+  });
+  const fallback = ctx.agentDefaultModel.currentSelection();
+  const saved = options.sessionId !== void 0 ? state.modelSelections?.[options.sessionId] : void 0;
+  const explicit = options.provider !== void 0 && options.model !== void 0 ? {
+    provider: options.provider,
+    model: options.model,
+    ...options.reasoningEffort !== void 0 ? { reasoningEffort: options.reasoningEffort } : {}
+  } : void 0;
+  const choice = explicit ?? saved ?? fallback;
+  const provider = choice.provider;
+  const model = choice.model;
+  const reasoningEffort = explicit?.reasoningEffort ?? saved?.reasoningEffort ?? (provider === fallback.provider && model === fallback.model ? fallback.reasoningEffort : void 0);
+  let text = "";
+  for await (const chunk of ctx.llm.stream({
+    provider,
+    model,
+    messages: request.messages.map((m) => ({
+      id: crypto.randomUUID(),
+      role: m.role,
+      content: [{ type: "text", text: m.content }],
+      // 候选请求不带 sessionId：source 仅标注来源，dsh-llm 不校验（同 runGeneration）。
+      source: m.role === "assistant" ? { kind: "model", provider, model } : { kind: "user" }
+    })),
+    system: request.system,
+    ...reasoningEffort !== void 0 ? { reasoningEffort } : {},
+    ...options.signal !== void 0 ? { signal: options.signal } : {}
+  })) {
+    if (chunk.type === "text-delta") text += chunk.text;
+    else if (chunk.type === "finish" && (chunk.reason.kind === "error" || chunk.reason.kind === "aborted")) {
+      throw new Error(chunk.reason.failure?.message ?? "candidate generation failed");
+    }
+  }
+  if (text.trim() === "") throw new Error("model returned no candidates");
+  const items = parseCandidates(text);
+  const generatedAt = (/* @__PURE__ */ new Date()).toISOString();
+  writeStoredCandidates(chat, { items, generatedAt, ...feedback !== void 0 ? { feedback } : {} });
+  const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
+  return { items, generatedAt, revision };
+}
 
 // packages/plugin/src/http/panel.ts
 init_src();
@@ -47956,7 +48063,7 @@ init_src2();
 init_src();
 init_dsh_home();
 init_store_handle();
-var DEFAULT_USER4 = "User";
+var DEFAULT_USER5 = "User";
 var CHAR_FALLBACK = "the character";
 var storePromise2;
 function store4() {
@@ -47992,7 +48099,7 @@ function mountPresetProjection(options) {
       freeze2.set(agentId, record);
       const expand = createHostPromptExpander(
         charNameOf(options, binding),
-        state.activePersona ?? DEFAULT_USER4,
+        state.activePersona ?? DEFAULT_USER5,
         { now: () => new Date(record.frozenAt), rng: seededRandom(record.seed) }
       );
       settle(hostPromptSafe(block, expand));
@@ -50404,1205 +50511,6 @@ function scriptContentOf(value) {
   throw new Error("script content must be a string or Uint8Array/Buffer");
 }
 
-// packages/plugin/src/http/memory.ts
-init_public_error();
-function safeInstallOutput(outputTail) {
-  if (outputTail === "") return void 0;
-  if (publicErrorMessage(new Error(outputTail)) !== INTERNAL_ERROR_MESSAGE) return outputTail;
-  console.warn("dsh-soulmojito: local embed runtime install output withheld", {
-    operation: "embed-runtime-install",
-    outputTail
-  });
-  return void 0;
-}
-var localRuntimeInstallInFlight;
-async function handleMemoryEmbedApi(req, res, route, method, db) {
-  const root = tavernDataRoot();
-  if (method === "GET" && route === "memory/embed") {
-    const config = normalizeMemoryEmbedding((await db.getState()).memoryEmbedding);
-    const status2 = await readEmbedStatus(root);
-    const isLocal = config?.provider === "local";
-    const endpoint = config !== void 0 && config.provider !== "local" ? config : void 0;
-    const envValue = endpoint !== void 0 && endpoint.apiKeyEnv !== "" ? process.env[endpoint.apiKeyEnv] : void 0;
-    return sendJson(res, 200, {
-      ok: true,
-      config: config ?? null,
-      status: {
-        configured: config !== void 0,
-        provider: isLocal ? "local" : "openai",
-        // 免密（apiKeyEnv 空串）是显式合法形态：envResolvable 视为满足；本地
-        // provider 无 key 概念，keyless/envResolvable 恒真。
-        keyless: isLocal === true || endpoint !== void 0 && endpoint.apiKeyEnv === "",
-        envResolvable: isLocal === true || endpoint !== void 0 && (endpoint.apiKeyEnv === "" || typeof envValue === "string" && envValue.trim() !== ""),
-        ...isLocal === true ? { runtimeInstalled: isLocalEmbedRuntimeInstalled() } : {},
-        breakerOpen: embedBreakerOpen(status2),
-        ...status2.breakerUntil > 0 ? { breakerUntil: new Date(status2.breakerUntil).toISOString() } : {},
-        ...status2.model !== void 0 ? { model: status2.model } : {},
-        ...status2.dims !== void 0 ? { dims: status2.dims } : {},
-        ...status2.lastError !== void 0 ? { lastError: status2.lastError } : {},
-        ...status2.lastErrorAt !== void 0 ? { lastErrorAt: status2.lastErrorAt } : {},
-        ...status2.lastSuccessAt !== void 0 ? { lastSuccessAt: status2.lastSuccessAt } : {}
-      }
-    });
-  }
-  if (method === "PUT" && route === "memory/embed") {
-    const body = await readJson(req);
-    const raw = body === null || typeof body !== "object" || Array.isArray(body) ? {} : body;
-    if (raw.provider === "local") {
-      const modelDirRaw = typeof raw.modelDir === "string" ? raw.modelDir.trim() : "";
-      if (modelDirRaw === "") {
-        await db.patchState({ memoryEmbedding: void 0 });
-        await clearEmbedStatus(root);
-        return sendJson(res, 200, { ok: true, config: null });
-      }
-      const modelDir = resolve5(modelDirRaw);
-      const dirProblem = validateLocalModelDir(modelDir);
-      if (dirProblem !== null) {
-        return sendJson(res, 400, { ok: false, message: dirProblem });
-      }
-      if (raw.pooling !== void 0 && raw.pooling !== null && raw.pooling !== "cls" && raw.pooling !== "mean") {
-        return sendJson(res, 400, {
-          ok: false,
-          message: `invalid pooling '${String(raw.pooling).slice(0, 30)}': expected 'cls' or 'mean' (cls is the BERT/bge default; sentence-embedding models like MiniLM need 'mean')`
-        });
-      }
-      if (raw.precision !== void 0 && raw.precision !== null && raw.precision !== "" && !LOCAL_EMBED_PRECISIONS.includes(raw.precision)) {
-        return sendJson(res, 400, {
-          ok: false,
-          message: `invalid precision '${String(raw.precision).slice(0, 30)}': expected 'auto' or one of ${LOCAL_EMBED_PRECISIONS.filter((value) => value !== "auto").join(", ")}`
-        });
-      }
-      const inferred = inferLocalModelSettings(modelDir);
-      const explicitPooling = raw.pooling === "cls" || raw.pooling === "mean";
-      const explicitDims = typeof raw.dims === "number" && Number.isFinite(raw.dims);
-      const explicitPrecision = raw.precision !== void 0 && raw.precision !== null && raw.precision !== "";
-      const config2 = normalizeMemoryEmbedding({
-        provider: "local",
-        modelDir,
-        ...(explicitPooling ? raw.pooling : inferred.pooling) !== void 0 ? { pooling: explicitPooling ? raw.pooling : inferred.pooling } : {},
-        ...explicitPrecision ? { precision: raw.precision } : {},
-        ...(explicitDims ? raw.dims : inferred.dims) !== void 0 ? { dims: explicitDims ? raw.dims : inferred.dims } : {},
-        ...raw.batchSize !== void 0 && raw.batchSize !== null ? { batchSize: raw.batchSize } : {}
-      });
-      if (config2 === void 0) {
-        return sendJson(res, 400, {
-          ok: false,
-          message: "expected { provider: 'local', modelDir, pooling? ('cls'|'mean'), precision? ('auto'|'fp32'|'fp16'|'q8'|\u2026), dims?, batchSize? (1-64) }"
-        });
-      }
-      const autoFilled = {};
-      if (config2.provider !== "local") {
-        throw new Error("local memory embedding normalization returned a non-local provider");
-      }
-      if (!explicitPooling && config2.pooling !== void 0) {
-        autoFilled.pooling = { value: config2.pooling, source: inferred.sources.pooling ?? "default (cls)" };
-      }
-      if (!explicitDims && config2.dims !== void 0) {
-        autoFilled.dims = { value: config2.dims, source: inferred.sources.dims ?? "" };
-      }
-      await db.patchState({ memoryEmbedding: config2 });
-      await clearEmbedStatus(root);
-      return sendJson(res, 200, {
-        ok: true,
-        config: config2,
-        ...Object.keys(autoFilled).length > 0 ? { inferred: autoFilled } : {}
-      });
-    }
-    const baseURL = typeof raw.baseURL === "string" ? normalizeEmbedBaseURL(raw.baseURL) : "";
-    const apiKeyEnv = typeof raw.apiKeyEnv === "string" ? raw.apiKeyEnv.trim() : "";
-    const model = typeof raw.model === "string" ? raw.model.trim() : "";
-    if (baseURL === "" && apiKeyEnv === "" && model === "") {
-      await db.patchState({ memoryEmbedding: void 0 });
-      await clearEmbedStatus(root);
-      return sendJson(res, 200, { ok: true, config: null });
-    }
-    if (apiKeyEnv !== "" && !MEMORY_EMBED_ENV_NAME.test(apiKeyEnv)) {
-      return sendJson(res, 400, {
-        ok: false,
-        message: `invalid apiKeyEnv '${apiKeyEnv.slice(0, 60)}': expected a POSIX environment variable name (letters, digits, underscore; not starting with a digit), or an empty string for a keyless endpoint`
-      });
-    }
-    const config = normalizeMemoryEmbedding({
-      baseURL,
-      apiKeyEnv,
-      model,
-      ...raw.dims !== void 0 && raw.dims !== null ? { dims: raw.dims } : {},
-      ...raw.batchSize !== void 0 && raw.batchSize !== null ? { batchSize: raw.batchSize } : {},
-      ...raw.timeoutMs !== void 0 && raw.timeoutMs !== null ? { timeoutMs: raw.timeoutMs } : {}
-    });
-    if (config === void 0) {
-      return sendJson(res, 400, {
-        ok: false,
-        message: "expected { baseURL (http/https URL), model, apiKeyEnv? (env var name or empty), dims?, batchSize? (1-64), timeoutMs? (200-120000) }"
-      });
-    }
-    await db.patchState({ memoryEmbedding: config });
-    await clearEmbedStatus(root);
-    return sendJson(res, 200, { ok: true, config });
-  }
-  if (method === "POST" && route === "memory/embed/local/install") {
-    if (localRuntimeInstallInFlight !== void 0) {
-      return sendJson(res, 409, { ok: false, message: "a local runtime install is already in progress" });
-    }
-    const installPromise = installLocalEmbedRuntime({ pluginDir: import.meta.dirname });
-    localRuntimeInstallInFlight = installPromise;
-    try {
-      const outcome = await installPromise;
-      if (!outcome.ok) {
-        const detail = publicErrorMessage(new Error(outcome.message ?? "install failed"));
-        const outputTail2 = safeInstallOutput(outcome.outputTail);
-        return sendJson(res, 400, {
-          ok: false,
-          // A raw pnpm/cause message can carry a profile or model path; the
-          // original output is logged below instead of echoed.
-          message: detail === INTERNAL_ERROR_MESSAGE ? "local runtime install failed; see the server log for details" : detail,
-          ...outputTail2 === void 0 ? {} : { outputTail: outputTail2 }
-        });
-      }
-      const outputTail = safeInstallOutput(outcome.outputTail);
-      return sendJson(res, 200, {
-        ok: true,
-        alreadyInstalled: outcome.alreadyInstalled,
-        ...outcome.message !== void 0 ? { message: outcome.message } : {},
-        ...outputTail === void 0 ? {} : { outputTail }
-      });
-    } finally {
-      localRuntimeInstallInFlight = void 0;
-    }
-  }
-  if (method === "POST" && route === "memory/embed/local/quantizations") {
-    const body = await readJson(req);
-    const modelDirRaw = body !== null && typeof body === "object" && !Array.isArray(body) && typeof body.modelDir === "string" ? body.modelDir.trim() : "";
-    if (modelDirRaw === "") {
-      return sendJson(res, 400, { ok: false, message: "expected { modelDir }" });
-    }
-    const modelDir = resolve5(modelDirRaw);
-    const dirProblem = validateLocalModelDir(modelDir);
-    if (dirProblem !== null) {
-      return sendJson(res, 400, { ok: false, message: dirProblem });
-    }
-    const quantizations = detectLocalQuantizations(modelDir);
-    return sendJson(res, 200, {
-      ok: true,
-      modelDir,
-      quantizations,
-      // auto 档会实际加载的档位（优先链最高档；目录检不出时缺省——运行时走
-      // 旧 try 链兜底，面板如实显示「自动」不带推荐）。
-      ...quantizations[0] !== void 0 ? { recommended: quantizations[0].precision } : {}
-    });
-  }
-  if (method === "POST" && route === "memory/embed/test") {
-    const config = normalizeMemoryEmbedding((await db.getState()).memoryEmbedding);
-    if (config === void 0) return sendJson(res, 400, { ok: false, message: "embed endpoint is not configured" });
-    try {
-      const result = await embedProbe(root, config);
-      return sendJson(res, 200, { ok: true, ...result });
-    } catch (cause) {
-      const message = publicErrorMessage(cause);
-      if (message === INTERNAL_ERROR_MESSAGE) throw cause;
-      return sendJson(res, 400, { ok: false, message });
-    }
-  }
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
-}
-async function handleMemoryMaintenanceApi(ctx, req, res, url, route, method, db) {
-  if (method === "POST") {
-    const body = await readJson(req);
-    if (typeof body.character !== "string" || typeof body.chatId !== "string" || body.character === "" || body.chatId === "") {
-      return sendJson(res, 400, { ok: false, message: "expected { character, chatId }" });
-    }
-    const snapshot2 = await readGuidesSnapshot(db, body.character, body.chatId);
-    if (snapshot2 === void 0) {
-      return sendJson(res, 404, { ok: false, message: `chat '${body.character}/${body.chatId}' not found` });
-    }
-    try {
-      const { runId } = await startMemoryMaintenance(ctx, await maintenanceDeps(db), {
-        character: body.character,
-        chatId: body.chatId
-      });
-      return sendJson(res, 200, { ok: true, runId });
-    } catch (cause) {
-      if (cause instanceof MaintenanceRunConflictError) {
-        return sendJson(res, 409, { ok: false, message: cause.message, code: cause.code, runId: cause.runId });
-      }
-      throw cause;
-    }
-  }
-  if (method === "GET") {
-    const character = url.searchParams.get("character");
-    const chatId = url.searchParams.get("chatId");
-    if (character === null || chatId === null || character === "" || chatId === "") {
-      return sendJson(res, 400, { ok: false, message: "character and chatId query params are required" });
-    }
-    const view = await memoryMaintenanceStatus(await maintenanceDeps(db), { character, chatId });
-    return sendJson(res, 200, { ok: true, ...view });
-  }
-  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
-}
-async function maintenanceDeps(db) {
-  return {
-    root: tavernDataRoot(),
-    db,
-    memory: await memories(),
-    vectors: await memoryVectors()
-  };
-}
-
-// packages/plugin/src/games/http.ts
-init_public_error();
-init_http();
-var GAMES_INSTALL_BODY_MAX_BYTES = 8 * 1024 * 1024;
-function isGamesRoute(route) {
-  return route === "games" || route.startsWith("games/");
-}
-function statusOf(code) {
-  if (code === "not-found") return 404;
-  if (code === "turn") return 409;
-  if (code === "unavailable") return 503;
-  return 400;
-}
-function sendJson2(res, status2, body) {
-  if (res.writableEnded) return;
-  res.statusCode = status2;
-  res.setHeader("content-type", "application/json; charset=utf-8");
-  res.setHeader("cache-control", "no-store");
-  res.end(JSON.stringify(body));
-}
-function sendHtml(res, document) {
-  if (res.writableEnded) return;
-  res.statusCode = 200;
-  res.setHeader("content-type", "text/html; charset=utf-8");
-  res.setHeader("cache-control", "no-store");
-  res.setHeader("x-content-type-options", "nosniff");
-  res.end(document);
-}
-function sendError(res, cause) {
-  if (cause instanceof GameBridgeError) {
-    const message = publicErrorMessage(cause);
-    if (message === INTERNAL_ERROR_MESSAGE) throw cause;
-    sendJson2(res, statusOf(cause.code), { ok: false, message, code: cause.code });
-    return;
-  }
-  throw cause;
-}
-async function handleGamesApi(options) {
-  const { req, res, url, route, method } = options;
-  const notFound = () => sendJson2(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
-  const service = await Promise.resolve(options.resolveService()).catch((cause) => {
-    throw new Error(`\u6E38\u620F\u8FD0\u884C\u65F6\u4E0D\u53EF\u7528: ${cause instanceof Error ? cause.message : String(cause)}`);
-  });
-  if (service === void 0) {
-    sendJson2(res, 503, { ok: false, message: "\u6E38\u620F\u8FD0\u884C\u65F6\u4E0D\u53EF\u7528\uFF08\u63D2\u4EF6\u672A\u88C5\u8F7D\u6E38\u620F\u670D\u52A1\uFF09", code: "unavailable" });
-    return;
-  }
-  try {
-    if (method === "GET" && route === "games/list") {
-      const character = url.searchParams.get("character") ?? "";
-      const chatId = url.searchParams.get("chatId") ?? "";
-      const filter = character !== "" && chatId !== "" ? { character, chatId } : {};
-      const { games, sessions } = await service.list(filter);
-      return sendJson2(res, 200, { ok: true, games, sessions });
-    }
-    if (method === "GET" && route === "games/revision") {
-      return sendJson2(res, 200, { ok: true, revision: await service.revision() });
-    }
-    if (method === "POST" && route === "games/start") {
-      const body = await readModRequestBody(req);
-      if (typeof body.gameId !== "string" || body.gameId.trim() === "") throw new GameBridgeError("invalid", "expected { gameId }");
-      if (typeof body.character !== "string" || body.character.trim() === "" || typeof body.chatId !== "string" || body.chatId.trim() === "") {
-        throw new GameBridgeError("invalid", "expected non-empty { character, chatId }");
-      }
-      const humanRole = typeof body.humanRole === "string" && body.humanRole !== "" ? body.humanRole : void 0;
-      const { session, view } = await service.start({ gameId: body.gameId, character: body.character, chatId: body.chatId, humanRole });
-      return sendJson2(res, 200, { ok: true, session, view });
-    }
-    if (method === "GET" && route.startsWith("games/state/")) {
-      const sessionId = decodeURIComponent(route.slice("games/state/".length));
-      const { session, view } = await service.state(sessionId);
-      return sendJson2(res, 200, { ok: true, session, view });
-    }
-    if (method === "POST" && route.startsWith("games/action/")) {
-      const sessionId = decodeURIComponent(route.slice("games/action/".length));
-      const body = await readModRequestBody(req);
-      const action = body.action;
-      if (action === null || typeof action !== "object" || Array.isArray(action)) {
-        throw new GameBridgeError("invalid", "expected { action }");
-      }
-      const actionRecord = action;
-      const actionType = actionRecord["type"];
-      if (typeof actionType !== "string" || actionType === "") {
-        throw new GameBridgeError("invalid", "action.type is required");
-      }
-      const gameAction = { ...actionRecord, type: actionType };
-      const { session, view } = await service.humanAction(sessionId, gameAction);
-      return sendJson2(res, 200, { ok: true, session, view });
-    }
-    if (method === "GET" && route.startsWith("games/") && route.includes("/view/")) {
-      const segments = route.split("/");
-      if (segments.length === 4 && segments[2] === "view") {
-        let gameId = segments[1];
-        let sessionId = segments[3];
-        try {
-          gameId = decodeURIComponent(gameId);
-          sessionId = decodeURIComponent(sessionId);
-        } catch {
-          return notFound();
-        }
-        const html = await service.view(gameId, sessionId);
-        return sendHtml(res, html);
-      }
-      return notFound();
-    }
-    if (method === "POST" && route === "games/install") {
-      let body;
-      try {
-        body = await readModRequestBody(req, GAMES_INSTALL_BODY_MAX_BYTES);
-      } catch (cause) {
-        throw new GameBridgeError("invalid", `install \u8BF7\u6C42\u4F53\u8BFB\u53D6\u5931\u8D25\uFF08\u4E0A\u9650 ${GAMES_INSTALL_BODY_MAX_BYTES} \u5B57\u8282\uFF09: ${cause instanceof Error ? cause.message : String(cause)}`);
-      }
-      const source = {};
-      if (typeof body.path === "string" && body.path.trim() !== "") source.path = body.path;
-      else if (typeof body.url === "string" && body.url.trim() !== "") source.url = body.url;
-      else if (typeof body.zipBase64 === "string" && body.zipBase64.trim() !== "") source.zipBase64 = body.zipBase64;
-      else throw new GameBridgeError("invalid", "expected { path }\uFF08\u672C\u5730\u6E38\u620F\u5305\u76EE\u5F55\uFF09\u3001{ url }\uFF08git \u6E90\uFF09\u6216 { zipBase64 }\uFF08\u6E38\u620F\u5305 zip\uFF09");
-      const { game } = await service.install(source, body.force === true);
-      return sendJson2(res, 200, { ok: true, game });
-    }
-    if (method === "POST" && route === "games/reload") {
-      const { games } = await service.reload();
-      return sendJson2(res, 200, { ok: true, games });
-    }
-    return notFound();
-  } catch (cause) {
-    sendError(res, cause);
-  }
-}
-
-// packages/plugin/src/http/routes.ts
-init_runtime2();
-
-// packages/plugin/src/http/body-api.ts
-init_errors();
-init_io();
-async function handleAgentTavernBodyApi(ctx, db, req, res, url, route, method) {
-  const wiring = bodyWiringContext(ctx, async (sessionId2) => (await db.getState()).sessionBindings[sessionId2]);
-  if (method === "GET") {
-    const sessionId2 = url.searchParams.get("sessionId");
-    if (sessionId2 === null || sessionId2 === "") {
-      throw new HttpError(400, "sessionId and messageId (or messageIds) are required");
-    }
-    const selector = parseBodyGetSelector(url.searchParams);
-    const state = await db.getState();
-    const binding2 = state.sessionBindings[sessionId2];
-    const mutationsDisabledReason2 = imBodyMutationDisabledOf(binding2, sessionId2, state.imPeers);
-    let characterName2;
-    let chatId2;
-    let character2 = void 0;
-    let chat;
-    if (binding2 !== void 0 && bodyBindingEligible(binding2)) {
-      characterName2 = binding2.character;
-      chatId2 = binding2.chatId;
-      character2 = await db.getCharacter(binding2.character);
-      chat = (await db.getChatSnapshot(binding2.character, binding2.chatId))?.chat;
-    }
-    const stateSafety2 = binding2 === void 0 || !bodyBindingEligible(binding2) ? void 0 : bodyStateSafetyOf(character2, chat);
-    const historicalMvuState = character2 !== void 0 && chat !== void 0 && bodyHistoricalMvuStateOf(character2, chat);
-    const agent2 = resolveLiveAgent(wiring, sessionId2);
-    const deps2 = agent2 === void 0 ? void 0 : await createBodyDeps(wiring, agent2);
-    const session = agent2?.session;
-    const factsSource = session === void 0 ? void 0 : createBodySessionFactsSource(session);
-    let scriptsRead;
-    const readScripts = () => {
-      if (characterName2 === void 0 || chatId2 === void 0) {
-        throw new Error("body floor display scripts require a character and chat id");
-      }
-      scriptsRead ??= collectSessionRegexScripts(db, state, characterName2, chatId2, character2);
-      return scriptsRead;
-    };
-    const readFloorOf = async (messageId, groupIdHint, selectedIndexHint) => characterName2 === void 0 || chatId2 === void 0 || chat === void 0 ? void 0 : projectedBodyFloor(chat, messageId, groupIdHint, selectedIndexHint, readScripts);
-    const stableViewOf = (messageId) => buildBodyView({
-      messageId,
-      binding: binding2,
-      agent: agent2,
-      hostSupported: deps2 !== void 0,
-      stateSafety: stateSafety2,
-      historicalMvuState,
-      writeRollbackAvailable: deps2?.writeRollback !== void 0,
-      ledger: void 0,
-      messageText: void 0,
-      projected: void 0,
-      projectionCurrent: false,
-      projectionTextCurrent: false,
-      inspection: void 0,
-      ...mutationsDisabledReason2 === void 0 ? {} : { mutationsDisabledReason: mutationsDisabledReason2 }
-    });
-    const readBodyItem = async (messageId) => {
-      try {
-        const floorRead = await readFloorOf(messageId, void 0, void 0);
-        const floorByMessage = floorRead?.ok === true ? floorRead.floor : void 0;
-        const facts = factsSource?.factsOf(messageId, floorByMessage?.groupId);
-        const ledger = facts?.ledger;
-        const selectionMoved = ledger !== void 0 && (floorByMessage === void 0 || floorByMessage.anchorMessageId !== ledger.anchorMessageId || floorByMessage.selectedIndex !== ledger.selectedIndex);
-        const reread = selectionMoved ? await readFloorOf(messageId, ledger.groupId, ledger.selectedIndex) : void 0;
-        const projected = reread === void 0 ? floorByMessage : reread.ok ? reread.floor : void 0;
-        const floorDegradation = reread !== void 0 ? reread.ok ? void 0 : reread.degradation : floorRead !== void 0 && !floorRead.ok ? floorRead.degradation : void 0;
-        const messageText3 = facts?.messageText;
-        const inspection = facts?.inspection;
-        const latestEditSeq = facts?.latestEditSeq;
-        if (facts?.ledgerError !== void 0) {
-          ctx.logger?.warn?.("dsh-soulmojito body: ledger fold failed for GET body", {
-            sessionId: sessionId2,
-            messageId,
-            error: facts.ledgerError
-          });
-        }
-        if (floorDegradation !== void 0) {
-          ctx.logger?.warn?.("dsh-soulmojito body: body floor binding is ambiguous for GET body", {
-            sessionId: sessionId2,
-            messageId,
-            code: floorDegradation.detail,
-            error: floorDegradation.message
-          });
-        }
-        const projection2 = floorDegradation === void 0 ? bodyProjectionState(projected, ledger, latestEditSeq) : { current: false, textCurrent: false };
-        const editDetail = character2 === void 0 || chat === void 0 || ledger === void 0 ? void 0 : bodyEditDetailOf(character2.card, chat, ledger);
-        const view = buildBodyView({
-          messageId,
-          binding: binding2,
-          agent: agent2,
-          hostSupported: deps2 !== void 0,
-          stateSafety: stateSafety2,
-          historicalMvuState,
-          writeRollbackAvailable: deps2?.writeRollback !== void 0,
-          ledger,
-          messageText: messageText3,
-          projected,
-          projectionCurrent: projection2.current,
-          projectionTextCurrent: projection2.textCurrent,
-          inspection,
-          editDetail,
-          // A damaged floor binding closes edit with its own detail and keeps
-          // publishing it even when a reason already gates the row.
-          ...floorDegradation === void 0 ? {} : { readDetail: floorDegradation.detail },
-          ...facts?.lastOperation === void 0 ? {} : { lastOperation: facts.lastOperation },
-          ...mutationsDisabledReason2 === void 0 ? {} : { mutationsDisabledReason: mutationsDisabledReason2 }
-        });
-        return { ok: true, view };
-      } catch (error) {
-        ctx.logger?.warn?.("dsh-soulmojito body: GET body item failed", {
-          sessionId: sessionId2,
-          messageId,
-          error: errorMessage3(error)
-        });
-        return { ok: false, view: stableViewOf(messageId), error };
-      }
-    };
-    if (selector.kind === "batch") {
-      const items = /* @__PURE__ */ new Map();
-      for (const messageId of selector.messageIds) {
-        items.set(messageId, (await readBodyItem(messageId)).view);
-      }
-      return sendJson(res, 200, { ok: true, items: Object.fromEntries(items) });
-    }
-    const item = await readBodyItem(selector.messageId);
-    if (!item.ok) throw item.error;
-    return sendJson(res, 200, item.view);
-  }
-  const body = await readJson(req);
-  const sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
-  if (sessionId === "") {
-    return sendBodyFailure(res, { status: 400, code: "invalid-arguments", message: "sessionId is required" });
-  }
-  const binding = await resolveBodyBinding(wiring, sessionId);
-  if (binding === void 0 || !bodyBindingEligible(binding)) {
-    return sendBodyFailure(res, {
-      status: 409,
-      code: "architecture-mismatch",
-      message: "body operations require an AgentTavern single-character binding"
-    });
-  }
-  const mutationsDisabledReason = imBodyMutationDisabledOf(binding, sessionId, (await db.getState()).imPeers);
-  if (mutationsDisabledReason !== void 0) {
-    return sendBodyFailure(res, {
-      status: 409,
-      code: IM_BODY_MUTATION_DISABLED_CODE,
-      message: mutationsDisabledReason
-    });
-  }
-  const characterName = binding.character;
-  const chatId = binding.chatId;
-  if (characterName === void 0 || chatId === void 0) {
-    return sendBodyFailure(res, {
-      status: 409,
-      code: "body-state-unsafe",
-      message: bodyStateUnsafeMessage("chat-unreadable"),
-      detail: "chat-unreadable"
-    });
-  }
-  const action = route === "body" ? "edit" : route === "body/select" ? "select" : "regenerate";
-  const character = await db.getCharacter(characterName);
-  const snapshot2 = await db.getChatSnapshot(characterName, chatId);
-  const stateSafety = bodyMutationSafetyOf(action, character, snapshot2?.chat);
-  if (!stateSafety.safe) {
-    return sendBodyFailure(res, {
-      status: 409,
-      code: stateSafety.reason,
-      message: bodyStateUnsafeMessage(stateSafety.detail),
-      detail: stateSafety.detail
-    });
-  }
-  const agent = resolveLiveAgent(wiring, sessionId);
-  if (agent === void 0) {
-    return sendBodyFailure(res, {
-      status: 409,
-      code: "session-busy",
-      message: `session '${sessionId}' has no live agent in this host process; open the chat and retry`
-    });
-  }
-  const deps = await createBodyDeps(wiring, agent);
-  if (deps === void 0) {
-    return sendBodyFailure(res, {
-      status: 501,
-      code: "host-unsupported",
-      message: "this host does not expose appendPluginRecord/pluginRecordOf (DSH 0.2.1-rc.2+)"
-    });
-  }
-  if (action === "regenerate" && deps.writeRollback === void 0 && snapshot2 !== void 0 && bodyHistoricalMvuStateOf(character, snapshot2.chat)) {
-    return sendBodyFailure(res, {
-      status: 409,
-      code: "body-state-unsafe",
-      message: bodyStateUnsafeMessage("write-journal-unavailable"),
-      detail: "write-journal-unavailable"
-    });
-  }
-  try {
-    const groupId = bodyString(body, "groupId") ?? bodyString(body, "messageId");
-    if (groupId === void 0) throw bodyRuntimeError("invalid-arguments", "groupId or messageId is required");
-    const expectedAnchorId = bodyString(body, "expectedAnchorId") ?? groupId;
-    if (route === "body") {
-      const index2 = bodyIndex(body, "index");
-      if (typeof body.text !== "string") {
-        throw bodyRuntimeError("invalid-body-text", "body edit requires a string text");
-      }
-      const state2 = await applyBodyEdit(deps, { groupId, index: index2, text: body.text, expectedAnchorId });
-      return sendJson(res, 200, { ok: true, state: state2 });
-    }
-    if (route === "body/regenerate") {
-      const expectedIndex = bodyIndex(body, "expectedIndex");
-      const feedback = typeof body.feedback === "string" ? body.feedback : void 0;
-      const result = await startRegenerate(deps, {
-        groupId,
-        expectedAnchorId,
-        expectedIndex,
-        ...feedback === void 0 ? {} : { feedback }
-      });
-      return sendJson(res, 202, { ok: true, opId: result.opId, status: "pending" });
-    }
-    const index = bodyIndex(body, "index");
-    const state = await selectBodyCandidate(deps, { groupId, index, expectedAnchorId });
-    return sendJson(res, 200, { ok: true, state });
-  } catch (error) {
-    const pending = pendingOperationOf(error);
-    const recovered = pending === void 0 || await retryPendingBodyRecovery(wiring, agent, pending);
-    return sendBodyFailure(
-      res,
-      bodyFailureOf(error),
-      recovered || pending === void 0 ? void 0 : { opId: pending.opId, status: "pending" }
-    );
-  }
-}
-function sendBodyFailure(res, failure, pendingOperation) {
-  sendJson(res, failure.status, {
-    ok: false,
-    code: failure.code,
-    message: failure.message,
-    ...failure.detail === void 0 ? {} : { detail: failure.detail },
-    ...pendingOperation === void 0 ? {} : { pendingOperation }
-  });
-}
-function bodyString(body, field2) {
-  const value = body[field2];
-  return typeof value === "string" && value.trim() !== "" ? value : void 0;
-}
-function bodyIndex(body, field2) {
-  const value = body[field2];
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-    throw bodyRuntimeError("invalid-arguments", `${field2} must be a non-negative safe integer`);
-  }
-  return value;
-}
-async function projectedBodyFloor(chat, messageId, groupIdHint, selectedIndexHint, readScripts) {
-  let index;
-  try {
-    index = locateBodyFloorForRead(chat, {
-      messageId,
-      ...groupIdHint === void 0 ? {} : { groupId: groupIdHint }
-    });
-  } catch (error) {
-    return { ok: false, degradation: bodyFloorDegradationOf(error) };
-  }
-  if (index === void 0) return { ok: true, floor: void 0 };
-  const floor = chat.messages[index];
-  const tavern = asRecord5(asRecord5(floor.extra)?.["agentTavern"]);
-  const scripts = await readScripts();
-  const selectedSwipe = selectedIndexHint === void 0 ? floor : Array.isArray(floor.swipes) && typeof floor.swipes[selectedIndexHint] === "string" ? { ...floor, mes: floor.swipes[selectedIndexHint] } : void 0;
-  const text = selectedSwipe === void 0 ? void 0 : stripFrontendDocuments(displayTextForMessage(scripts, selectedSwipe, chat.messages.length - 1 - index));
-  const selectedIndex = floor.swipe_id;
-  const count = Array.isArray(floor.swipes) && floor.swipes.length > 0 ? floor.swipes.length : 1;
-  const resolved = {
-    ...typeof tavern?.["bodyGroupId"] === "string" ? { groupId: tavern["bodyGroupId"] } : {},
-    ...typeof tavern?.["anchorMessageId"] === "string" ? { anchorMessageId: tavern["anchorMessageId"] } : {},
-    ...typeof selectedIndex === "number" && Number.isSafeInteger(selectedIndex) ? { selectedIndex } : {},
-    ...typeof tavern?.["lastBodyEventSeq"] === "number" && Number.isSafeInteger(tavern["lastBodyEventSeq"]) && tavern["lastBodyEventSeq"] >= 0 ? { lastBodyEventSeq: tavern["lastBodyEventSeq"] } : {},
-    count,
-    ...text === void 0 ? {} : { text }
-  };
-  return { ok: true, floor: resolved };
-}
-function bodyFloorDegradationOf(error) {
-  if (error instanceof BodyJsonlProjectionError && error.code === "body-group-mismatch") {
-    return { detail: error.code, message: error.message };
-  }
-  return {
-    detail: "body-floor-unreadable",
-    message: `body floor lookup failed: ${errorMessage3(error)}`
-  };
-}
-var BODY_GET_BATCH_LIMIT = 50;
-function parseBodyGetSelector(params) {
-  const single = params.get("messageId");
-  const batch = params.get("messageIds");
-  const hasSingle = single !== null && single !== "";
-  const hasBatch = batch !== null && batch !== "";
-  if (hasSingle && hasBatch) {
-    throw new HttpError(400, "pass either messageId or messageIds, not both");
-  }
-  if (hasSingle) return { kind: "single", messageId: single };
-  if (!hasBatch) {
-    throw new HttpError(400, "sessionId and messageId (or messageIds) are required");
-  }
-  const messageIds = [];
-  const seen = /* @__PURE__ */ new Set();
-  for (const raw of batch.split(",")) {
-    const messageId = raw.trim();
-    if (messageId === "") throw new HttpError(400, "messageIds must not contain empty entries");
-    if (seen.has(messageId)) continue;
-    seen.add(messageId);
-    messageIds.push(messageId);
-  }
-  if (messageIds.length > BODY_GET_BATCH_LIMIT) {
-    throw new HttpError(400, `messageIds accepts at most ${BODY_GET_BATCH_LIMIT} ids (got ${messageIds.length})`);
-  }
-  return { kind: "batch", messageIds };
-}
-function bodyProjectionState(projected, ledger, latestEditSeq) {
-  if (projected === void 0 || ledger === void 0) return { current: true, textCurrent: true };
-  const textCurrent = latestEditSeq === void 0 || projected.lastBodyEventSeq !== void 0 && projected.lastBodyEventSeq >= latestEditSeq;
-  const selectionCurrent = (projected.anchorMessageId === void 0 || projected.anchorMessageId === ledger.anchorMessageId) && (projected.selectedIndex === void 0 || projected.selectedIndex === ledger.selectedIndex);
-  return { current: textCurrent && selectionCurrent, textCurrent };
-}
-
-// packages/plugin/src/http/asset-import-routes.ts
-init_src2();
-init_src();
-init_dsh_home();
-init_events();
-init_io();
-async function handleCharacterImportRoute(db, req, res) {
-  const body = await readJson(req, 25 * 1024 * 1024);
-  let source;
-  if (typeof body.pngBase64 === "string") source = new Uint8Array(Buffer.from(body.pngBase64, "base64"));
-  else if (typeof body.charxBase64 === "string") source = new Uint8Array(Buffer.from(body.charxBase64, "base64"));
-  else if (body.card && typeof body.card === "object") source = body.card;
-  else throw new Error("expected { pngBase64 }, { charxBase64 } or { card }");
-  const result = await db.importCharacter(source);
-  await emitAssetsSaved("character", result.card.data.name);
-  try {
-    await saveOriginalSnapshot(tavernDataRoot(), result.card.data.name, result.card);
-  } catch (error) {
-    console.warn(`dsh-soulmojito: original snapshot for '${result.card.data.name}' failed: ${error instanceof Error ? error.message : String(error)}`);
-  }
-  const current = await db.getState();
-  if (!current.activeCharacter) {
-    await db.patchState({ activeCharacter: result.card.data.name });
-  }
-  await refreshActivePrompt();
-  return sendJson(res, 200, { ok: true, name: result.card.data.name, card: publicCard(result.card), world: result.importedWorld ?? null, importedRegex: result.importedRegex });
-}
-async function handleWorldImportRoute(db, req, res) {
-  const body = await readJson(req);
-  const data = asRecord5(body.data);
-  if (typeof body.name !== "string" || data === void 0) throw new Error("expected { name, data }");
-  const book = await db.importWorldFile(body.name, data);
-  await emitAssetsSaved("world", book.name);
-  return sendJson(res, 200, { ok: true, name: book.name, entries: book.entries.length });
-}
-async function handlePresetImportRoute(db, req, res) {
-  const body = await readJson(req);
-  const data = asRecord5(body.data);
-  if (typeof body.name !== "string" || data === void 0) throw new Error("expected { name, data }");
-  parsePresetOrThrow(data);
-  const result = await db.importPreset(body.name, data);
-  await emitAssetsSaved("preset", body.name);
-  await emitAgentPresetChanged();
-  return sendJson(res, 200, { ok: true, name: body.name, kind: detectPresetKind(data), importedRegex: result.importedRegex });
-}
-async function handlePresetReadRoute(db, res, route) {
-  const name2 = decodeURIComponent(route.slice("preset/".length));
-  const data = await db.getPreset(name2);
-  if (!data) return sendJson(res, 404, { ok: false, message: "preset not found" });
-  return sendJson(res, 200, { ok: true, name: name2, kind: detectPresetKind(data), data });
-}
-async function handlePresetUpdateRoute(db, req, res, route) {
-  const oldName = decodeURIComponent(route.slice("preset/".length));
-  const body = await readJson(req, 10 * 1024 * 1024);
-  const data = asRecord5(body.data);
-  if (typeof body.name !== "string" || body.name.trim() === "" || data === void 0) {
-    throw new Error("expected { name, data }");
-  }
-  const name2 = body.name;
-  parsePresetOrThrow(data);
-  await db.putPreset(name2, data);
-  await emitAssetsSaved("preset", name2);
-  if (name2 !== oldName) await db.deletePreset(oldName);
-  const state = await db.updateState((current) => ({
-    activePreset: current.activePreset === oldName ? name2 : current.activePreset,
-    ...name2 !== oldName && current.regexScriptPresetOwners !== void 0 ? {
-      regexScriptPresetOwners: Object.fromEntries(Object.entries(current.regexScriptPresetOwners).map(([id, owner]) => [id, owner === oldName ? name2 : owner]))
-    } : {}
-  }));
-  await emitAgentPresetChanged();
-  await refreshActivePrompt();
-  return sendJson(res, 200, { ok: true, name: name2, kind: detectPresetKind(data), data, state });
-}
-
-// packages/plugin/src/http/character-routes.ts
-init_src();
-init_dsh_home();
-init_events();
-init_io();
-async function handleCharacterUpdateRoute(db, req, res, route) {
-  const oldName = decodeURIComponent(route.slice("character/".length));
-  const body = await readJson(req, 25 * 1024 * 1024);
-  if (!body.card || typeof body.card !== "object" || Array.isArray(body.card)) {
-    throw new Error("expected { card }");
-  }
-  clampIdentitySummary(body.card);
-  const saved = await db.updateCharacter(oldName, body.card);
-  const nextName = saved.card.data.name;
-  await emitAssetsSaved("character", nextName);
-  if (nextName !== oldName) {
-    await moveOriginalSnapshot(tavernDataRoot(), oldName, nextName);
-  }
-  const state = await db.updateState((current) => {
-    const activeCharacter = current.activeCharacter === oldName ? nextName : current.activeCharacter;
-    const sessionBindings = Object.fromEntries(Object.entries(current.sessionBindings).map(([sessionId, binding]) => [
-      sessionId,
-      binding.character === oldName && binding.group !== true ? { ...binding, character: nextName } : binding
-    ]));
-    const prefix = `${oldName}\0`;
-    const chats = nextName === oldName ? current.chats : Object.fromEntries(Object.entries(current.chats).map(([key, value]) => [
-      key.startsWith(prefix) ? `${nextName}\0${key.slice(prefix.length)}` : key,
-      value
-    ]));
-    return { activeCharacter, sessionBindings, chats };
-  });
-  if (nextName !== oldName) {
-    for (const groupName of await db.listGroups()) {
-      const group2 = await db.getGroup(groupName);
-      if (group2?.members.includes(oldName)) {
-        await db.putGroup({
-          ...group2,
-          members: group2.members.map((member) => member === oldName ? nextName : member),
-          disabledMembers: group2.disabledMembers.map((member) => member === oldName ? nextName : member)
-        });
-      }
-    }
-  }
-  await refreshActivePrompt();
-  return sendJson(res, 200, { ok: true, kind: saved.kind, card: publicCard(saved.card), state });
-}
-async function handleCharacterDeleteRoute(db, res, url) {
-  const name2 = url.searchParams.get("name");
-  if (!name2) throw new Error("name query is required");
-  const found = await db.getCharacter(name2);
-  if (!found) return sendJson(res, 404, { ok: false, message: "character not found" });
-  await db.deleteCharacter(name2);
-  for (const groupName of await db.listGroups()) {
-    const group2 = await db.getGroup(groupName);
-    if (group2?.members.includes(name2)) {
-      await db.putGroup({
-        ...group2,
-        members: group2.members.filter((member) => member !== name2),
-        disabledMembers: group2.disabledMembers.filter((member) => member !== name2)
-      });
-    }
-  }
-  const state = await db.updateState((current) => ({
-    activeCharacter: current.activeCharacter === name2 ? void 0 : current.activeCharacter,
-    sessionBindings: Object.fromEntries(Object.entries(current.sessionBindings).filter(([, binding]) => !(binding.character === name2 && binding.group !== true)))
-  }));
-  await deleteOriginalSnapshot(tavernDataRoot(), name2);
-  await refreshActivePrompt();
-  return sendJson(res, 200, { ok: true, state });
-}
-async function handleCharacterExportRoute(db, res, route) {
-  const name2 = decodeURIComponent(route.slice("export/character/".length));
-  const found = await db.getCharacter(name2);
-  if (!found) return sendJson(res, 404, { ok: false, message: "character not found" });
-  const bytes = await db.exportCharacter(name2);
-  const media = found.kind === "charx" ? "application/zip" : found.kind === "json" ? "application/json" : "image/png";
-  res.statusCode = 200;
-  res.setHeader("content-type", media);
-  const ext = found.kind === "charx" ? "charx" : found.kind === "json" ? "json" : "png";
-  res.setHeader("content-disposition", `attachment; filename="${encodeURIComponent(`${name2}.${ext}`)}"`);
-  res.end(Buffer.from(bytes));
-  return;
-}
-
-// packages/plugin/src/http/domain-routes.ts
-init_runtime2();
-init_io();
-async function handleAvatarRoute(db, res, route) {
-  const name2 = decodeURIComponent(route.slice("avatar/".length));
-  const found = await db.getCharacter(name2);
-  if (found) {
-    return serveCharacterAvatar(res, db, name2, found);
-  }
-  const group2 = await db.getGroup(name2);
-  if (group2) {
-    const enabled = group2.members.filter((member) => !group2.disabledMembers.includes(member));
-    for (const member of enabled.length > 0 ? enabled : group2.members) {
-      const memberFile = await db.getCharacter(member);
-      if (memberFile) return serveCharacterAvatar(res, db, member, memberFile);
-    }
-    return sendAvatarFallback(res, name2);
-  }
-  return sendJson(res, 404, { ok: false, message: "character avatar not found" });
-}
-async function handleCharacterReadRoute(db, res, route) {
-  const name2 = decodeURIComponent(route.slice("character/".length));
-  const found = await db.getCharacter(name2);
-  if (!found) return sendJson(res, 404, { ok: false, message: "character not found" });
-  return sendJson(res, 200, { ok: true, kind: found.kind, card: publicCard(found.card) });
-}
-async function handleProjectionRoute(res, url) {
-  const sessionId = url.searchParams.get("sessionId");
-  if (!sessionId) throw new Error("sessionId query is required");
-  const projector = await getAgentTavernProjectorPromise();
-  if (!projector) throw new Error("AgentTavern projector is unavailable");
-  return sendJson(res, 200, { ok: true, projection: await projector.status(sessionId) });
-}
-async function handleProjectionReplayRoute(ctx, db, req, res, url) {
-  const body = await readJson(req).catch(() => ({}));
-  const sessionId = typeof body.sessionId === "string" ? body.sessionId : url.searchParams.get("sessionId");
-  if (!sessionId) throw new Error("sessionId is required");
-  const state = await db.getState();
-  const binding = state.sessionBindings[sessionId];
-  if (!binding || binding.architecture !== "agent-tavern" || binding.group === true) {
-    throw new TavernArchitectureConflictError("Projection replay requires an AgentTavern single-character binding.");
-  }
-  const agent = ctx.agents?.get?.(sessionId);
-  const session = agent?.session;
-  if (!session || typeof session.id !== "string" || readSessionEvents(session) === void 0) {
-    throw new Error("AgentTavern session is not loaded in this host process; open the chat first and retry.");
-  }
-  const projector = await getAgentTavernProjectorPromise();
-  if (!projector) throw new Error("AgentTavern projector is unavailable");
-  await projector.replay({ ...session, id: session.id });
-  return sendJson(res, 200, { ok: true, projection: await projector.status(sessionId) });
-}
-async function handleCompactRoute(ctx, req, res, url) {
-  const body = await readJson(req).catch(() => ({}));
-  const sessionId = typeof body.sessionId === "string" ? body.sessionId : url.searchParams.get("sessionId");
-  if (!sessionId) throw new Error("sessionId is required");
-  const agent = ctx.agents?.get?.(sessionId);
-  if (!agent || agent.status !== "idle") {
-    throw new Error(`session ${sessionId} has no idle agent in this host process; pause the novel and retry.`);
-  }
-  const compaction = ctx.compaction;
-  if (!compaction || typeof compaction.compactNow !== "function") {
-    throw new Error("compaction service is unavailable in this host process");
-  }
-  const result = await compaction.compactNow(agent, new AbortController().signal);
-  return sendJson(res, 200, { ok: true, result: result ?? null });
-}
-async function handleAuditRoute(db, res, url) {
-  const sessionId = url.searchParams.get("sessionId");
-  if (!sessionId) throw new Error("sessionId query is required");
-  const state = await db.getState();
-  const binding = state.sessionBindings[sessionId];
-  if (!binding || binding.architecture !== "agent-tavern" || binding.group === true) {
-    throw new TavernArchitectureConflictError("AgentTavern audit requires a native single-character binding.");
-  }
-  const scopes = [
-    { scope: "chat", scopeId: binding.chatId },
-    { scope: "character", scopeId: binding.character },
-    { scope: "agent", scopeId: sessionId }
-  ];
-  const [memoryGroups, variableGroups, globalMemories, globalVariables, projector] = await Promise.all([
-    Promise.all(scopes.map(({ scope, scopeId }) => memories().then((store5) => store5.search({
-      scope,
-      scopeId,
-      includeDeleted: true,
-      limit: 50
-    })))),
-    Promise.all(scopes.map(({ scope, scopeId }) => variables().then((store5) => store5.listAll(scope, scopeId)))),
-    memories().then((store5) => store5.search({ scope: "global", includeDeleted: true, limit: 50 })),
-    variables().then((store5) => store5.listAll("global", "global")),
-    getAgentTavernProjectorPromise()
-  ]);
-  return sendJson(res, 200, {
-    ok: true,
-    architecture: binding.architecture,
-    contextMode: binding.contextMode,
-    projection: projector ? await projector.status(sessionId) : null,
-    memories: [...memoryGroups.flat().map((hit) => hit.record), ...globalMemories.map((hit) => hit.record)],
-    variables: [...variableGroups.flat(), ...globalVariables]
-  });
-}
-
-// packages/plugin/src/candidates.ts
-init_src();
-init_guides();
-var CANDIDATE_HISTORY_WINDOW = 10;
-var CANDIDATE_MAX_COUNT = 6;
-var CANDIDATE_MAX_TEXT_LENGTH = 200;
-var CANDIDATE_CARD_EXCERPT = 1500;
-var DEFAULT_USER5 = "User";
-function excerpt(text, max2) {
-  if (typeof text !== "string") return void 0;
-  const trimmed = text.trim();
-  if (trimmed === "") return void 0;
-  return trimmed.length > max2 ? `${trimmed.slice(0, max2)}\u2026` : trimmed;
-}
-function formatGuidesBlock2(guides) {
-  if (guides.length === 0) return void 0;
-  const lines = guides.slice().sort((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? "")).map((guide) => `- ${guide.text}`);
-  return [GUIDES_BLOCK_HEADER, ...lines].join("\n");
-}
-function buildCandidateRequest(input) {
-  const systemParts = [
-    [
-      "You propose candidate inputs for an ongoing roleplay chat.",
-      "Based on the character, the user persona, the recent chat history and any conversation guides, propose 3 to 6 candidates for what the user could send next.",
-      "Rules:",
-      `- Each candidate is at most ${CANDIDATE_MAX_TEXT_LENGTH} characters and is written as the user's next message.`,
-      `- kind "action" proposes something the user's character does or says; kind "scene" proposes a scene change or a narrative shift.`,
-      "- Ground every candidate in the provided history and character; do not advance the plot yourself and do not narrate outcomes \u2014 only propose.",
-      '- Reply with ONLY a strict JSON array of objects, e.g. [{"kind":"action","text":"..."},{"kind":"scene","text":"..."}]. No prose, no code fences.'
-    ].join("\n")
-  ];
-  const card = [`Character: ${input.character.name}`];
-  const description = excerpt(input.character.description, CANDIDATE_CARD_EXCERPT);
-  if (description !== void 0) card.push(`Description: ${description}`);
-  const personality = excerpt(input.character.personality, CANDIDATE_CARD_EXCERPT);
-  if (personality !== void 0) card.push(`Personality: ${personality}`);
-  const scenario = excerpt(input.character.scenario, CANDIDATE_CARD_EXCERPT);
-  if (scenario !== void 0) card.push(`Scenario: ${scenario}`);
-  card.push(`User persona name: ${input.userName}`);
-  systemParts.push(card.join("\n"));
-  const guidesBlock = formatGuidesBlock2(input.guides ?? []);
-  if (guidesBlock !== void 0) systemParts.push(guidesBlock);
-  if (input.feedback !== void 0) {
-    const revision = [];
-    if (input.previousCandidates !== void 0 && input.previousCandidates.length > 0) {
-      revision.push("Previous candidates (the user reviewed them and asked for a revision):");
-      for (const item of input.previousCandidates) {
-        revision.push(`- [${item.kind}] ${item.text}`);
-      }
-    }
-    revision.push(`User feedback on the candidates: ${input.feedback}`);
-    revision.push("Revise the candidates according to the feedback: keep what the feedback does not object to, and replace or adjust what it asks to change. Follow the same output rules.");
-    systemParts.push(revision.join("\n"));
-  }
-  const history = input.history.slice(-CANDIDATE_HISTORY_WINDOW);
-  const messages = history.map((m) => ({
-    role: m.isUser ? "user" : "assistant",
-    content: `[${m.name}] ${m.text}`
-  }));
-  messages.push({
-    role: "user",
-    content: input.feedback !== void 0 ? "Propose 3 to 6 candidate inputs for the user's next message, revising the previous candidates according to the user feedback. Reply with ONLY the JSON array." : "Propose 3 to 6 candidate inputs for the user's next message. Reply with ONLY the JSON array."
-  });
-  return { system: systemParts.join("\n\n"), messages };
-}
-function tryParseJson(text) {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return void 0;
-  }
-}
-function extractFirstJsonArray(text) {
-  const trimmed = text.trim();
-  const direct = tryParseJson(trimmed);
-  if (Array.isArray(direct)) return direct;
-  const start = trimmed.indexOf("[");
-  if (start === -1) throw new Error("candidate output contains no JSON array");
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = start; i < trimmed.length; i++) {
-    const ch = trimmed[i];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (inString && ch === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (ch === '"') inString = !inString;
-    else if (!inString && ch === "[") depth++;
-    else if (!inString && ch === "]") {
-      depth--;
-      if (depth === 0) {
-        const parsed = tryParseJson(trimmed.slice(start, i + 1));
-        if (parsed === void 0) throw new Error("candidate output is not valid JSON");
-        if (!Array.isArray(parsed)) throw new Error("candidate output is not a JSON array");
-        return parsed;
-      }
-    }
-  }
-  throw new Error("candidate output contains no JSON array");
-}
-function normalizeCandidateText(value) {
-  return typeof value === "string" ? value.trim().slice(0, CANDIDATE_MAX_TEXT_LENGTH) : "";
-}
-function parseCandidates(text) {
-  const raw = extractFirstJsonArray(text);
-  const items = [];
-  for (const entry of raw) {
-    if (items.length >= CANDIDATE_MAX_COUNT) break;
-    if (typeof entry === "string") {
-      const candidate2 = normalizeCandidateText(entry);
-      if (candidate2 !== "") items.push({ kind: "action", text: candidate2 });
-      continue;
-    }
-    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const record = entry;
-    const candidate = normalizeCandidateText(record.text);
-    if (candidate === "") continue;
-    items.push({ kind: record.kind === "scene" ? "scene" : "action", text: candidate });
-  }
-  if (items.length === 0) throw new Error("candidate output contained no usable candidates");
-  return items;
-}
-function readStoredCandidates(chat) {
-  const raw = chat?.header?.chat_metadata?.candidates;
-  if (raw === void 0 || raw === null || typeof raw !== "object" || Array.isArray(raw)) return void 0;
-  const record = raw;
-  if (!Array.isArray(record.items)) return void 0;
-  const items = [];
-  for (const entry of record.items) {
-    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const candidate = normalizeCandidateText(entry.text);
-    if (candidate === "") continue;
-    items.push({
-      kind: entry.kind === "scene" ? "scene" : "action",
-      text: candidate
-    });
-  }
-  if (items.length === 0) return void 0;
-  return {
-    items,
-    generatedAt: typeof record.generatedAt === "string" ? record.generatedAt : "",
-    ...typeof record.feedback === "string" && record.feedback !== "" ? { feedback: record.feedback } : {}
-  };
-}
-function writeStoredCandidates(chat, payload) {
-  chat.header.chat_metadata.candidates = {
-    items: payload.items,
-    generatedAt: payload.generatedAt,
-    ...payload.feedback !== void 0 && payload.feedback !== "" ? { feedback: payload.feedback } : {}
-  };
-}
-function readGuides(chat) {
-  const raw = chat?.header?.chat_metadata?.guides;
-  if (!Array.isArray(raw)) return [];
-  const guides = [];
-  for (const entry of raw) {
-    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const record = entry;
-    if (typeof record.text !== "string" || record.text.trim() === "") continue;
-    guides.push({
-      id: typeof record.id === "string" ? record.id : "",
-      text: record.text,
-      ...typeof record.createdAt === "string" ? { createdAt: record.createdAt } : {}
-    });
-  }
-  return guides;
-}
-function assertStCandidateBinding(state, sessionId) {
-  if (typeof sessionId !== "string") return;
-  if (state.sessionBindings?.[sessionId]?.architecture === "agent-tavern") {
-    throw new Error("AgentTavern sessions use the DSH native AgentLoop; candidates are unavailable.");
-  }
-}
-async function runCandidateGeneration(ctx, db, options) {
-  const { state, characterName, chatId, snapshot: snapshot2 } = options;
-  assertStCandidateBinding(state, options.sessionId);
-  if (options.revision !== snapshot2.revision) {
-    throw new ChatRevisionConflictError(options.revision, snapshot2.revision);
-  }
-  const chat = snapshot2.chat;
-  const character = await db.getCharacter(characterName);
-  if (!character) throw new Error(`character '${characterName}' not found`);
-  const feedback = optionalFeedback(options.feedback);
-  const previous = feedback !== void 0 ? readStoredCandidates(chat) : void 0;
-  const request = buildCandidateRequest({
-    character: {
-      name: character.card.data.name || characterName,
-      description: character.card.data.description,
-      personality: character.card.data.personality,
-      scenario: character.card.data.scenario
-    },
-    userName: state.activePersona ?? DEFAULT_USER5,
-    history: chat.messages.filter((m) => !m.is_system).map((m) => ({ name: m.name, isUser: m.is_user, text: m.mes })),
-    guides: readGuides(chat),
-    ...feedback !== void 0 ? { feedback } : {},
-    ...previous !== void 0 ? { previousCandidates: previous.items } : {}
-  });
-  const fallback = ctx.agentDefaultModel.currentSelection();
-  const saved = options.sessionId !== void 0 ? state.modelSelections?.[options.sessionId] : void 0;
-  const explicit = options.provider !== void 0 && options.model !== void 0 ? {
-    provider: options.provider,
-    model: options.model,
-    ...options.reasoningEffort !== void 0 ? { reasoningEffort: options.reasoningEffort } : {}
-  } : void 0;
-  const choice = explicit ?? saved ?? fallback;
-  const provider = choice.provider;
-  const model = choice.model;
-  const reasoningEffort = explicit?.reasoningEffort ?? saved?.reasoningEffort ?? (provider === fallback.provider && model === fallback.model ? fallback.reasoningEffort : void 0);
-  let text = "";
-  for await (const chunk of ctx.llm.stream({
-    provider,
-    model,
-    messages: request.messages.map((m) => ({
-      id: crypto.randomUUID(),
-      role: m.role,
-      content: [{ type: "text", text: m.content }],
-      // 候选请求不带 sessionId：source 仅标注来源，dsh-llm 不校验（同 runGeneration）。
-      source: m.role === "assistant" ? { kind: "model", provider, model } : { kind: "user" }
-    })),
-    system: request.system,
-    ...reasoningEffort !== void 0 ? { reasoningEffort } : {},
-    ...options.signal !== void 0 ? { signal: options.signal } : {}
-  })) {
-    if (chunk.type === "text-delta") text += chunk.text;
-    else if (chunk.type === "finish" && (chunk.reason.kind === "error" || chunk.reason.kind === "aborted")) {
-      throw new Error(chunk.reason.failure?.message ?? "candidate generation failed");
-    }
-  }
-  if (text.trim() === "") throw new Error("model returned no candidates");
-  const items = parseCandidates(text);
-  const generatedAt = (/* @__PURE__ */ new Date()).toISOString();
-  writeStoredCandidates(chat, { items, generatedAt, ...feedback !== void 0 ? { feedback } : {} });
-  const revision = await db.saveChat(characterName, chatId, chat, snapshot2.revision);
-  return { items, generatedAt, revision };
-}
-
 // packages/plugin/src/http/generation-variable-routes.ts
 init_io();
 async function handleCandidatesRoute(ctx, db, req, res) {
@@ -51641,7 +50549,7 @@ async function handleMvuRoute(db, req, res, route, method) {
 init_dsh_home();
 
 // packages/plugin/src/im/onebot/server.ts
-import { randomUUID as randomUUID12, timingSafeEqual } from "node:crypto";
+import { randomUUID as randomUUID11, timingSafeEqual } from "node:crypto";
 
 // packages/plugin/src/im/onebot/codec.ts
 var OneBotCodecError = class extends Error {
@@ -51944,7 +50852,7 @@ function describeValue(value) {
 }
 
 // packages/plugin/src/im/onebot/ws.ts
-import { createHash as createHash15, randomUUID as randomUUID11 } from "node:crypto";
+import { createHash as createHash15, randomUUID as randomUUID10 } from "node:crypto";
 var WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 var MAX_MESSAGE_BYTES = 1024 * 1024;
 var CONTROL_PAYLOAD_LIMIT = 125;
@@ -51984,7 +50892,7 @@ function acceptWebSocket(req, socket, head) {
   return openConnection(socket, head);
 }
 function openConnection(socket, head) {
-  const id = randomUUID11();
+  const id = randomUUID10();
   const textListeners = [];
   const closeListeners = [];
   const queuedTexts = [];
@@ -52541,7 +51449,7 @@ var OneBotChannel = class {
     return live.find((entry) => entry.role === "Universal") ?? live.find((entry) => entry.role === "API");
   }
   call(live, action, params) {
-    const echo = randomUUID12();
+    const echo = randomUUID11();
     return new Promise((resolve9, reject) => {
       const timer = setTimeout(() => {
         live.waiters.delete(echo);
@@ -53503,9 +52411,9 @@ function nonEmpty2(value) {
 }
 
 // packages/plugin/src/im/media-store.ts
-import { randomUUID as randomUUID13 } from "node:crypto";
+import { randomUUID as randomUUID12 } from "node:crypto";
 import { promises as fs20 } from "node:fs";
-import { join as join23, resolve as resolve6 } from "node:path";
+import { join as join23, resolve as resolve5 } from "node:path";
 var IM_MEDIA_ROOT_DIR = "im-media";
 var IM_MEDIA_EXTENSIONS = [
   "png",
@@ -53555,7 +52463,7 @@ function openImMediaStore(options) {
   async function root() {
     const workspace = (await options.workspaceRoot()).trim();
     if (workspace === "") throw new ImMediaStoreError("IM_MEDIA_IO", "the internal workspace root is empty; media cannot be stored");
-    return join23(resolve6(workspace), IM_MEDIA_ROOT_DIR);
+    return join23(resolve5(workspace), IM_MEDIA_ROOT_DIR);
   }
   return {
     async save(request) {
@@ -53570,7 +52478,7 @@ function openImMediaStore(options) {
       }
       const extension = requireExtension(request.extension);
       const directory = join23(await root(), `${channel}-${accountId}`);
-      const file = join23(directory, `${randomUUID13()}.${extension}`);
+      const file = join23(directory, `${randomUUID12()}.${extension}`);
       try {
         await fs20.mkdir(directory, { recursive: true });
         await fs20.writeFile(file, request.bytes, { mode: FILE_MODE });
@@ -54568,9 +53476,9 @@ function mergeImSenderEntries(existing, updates, options) {
 }
 
 // packages/plugin/src/im/store.ts
-import { randomUUID as randomUUID14 } from "node:crypto";
+import { randomUUID as randomUUID13 } from "node:crypto";
 import { promises as fs21 } from "node:fs";
-import { dirname as dirname14, join as join26, resolve as resolve7 } from "node:path";
+import { dirname as dirname14, join as join26, resolve as resolve6 } from "node:path";
 var ImStoreError = class extends Error {
   code;
   /** 出问题的文件或目录；纯校验错误还没有落盘路径时为 undefined。 */
@@ -54604,7 +53512,7 @@ var ImStore = class _ImStore {
    */
   dedupeEntries;
   constructor(root) {
-    this.root = resolve7(root);
+    this.root = resolve6(root);
   }
   /** 清单按 channel、accountId 排序；排序稳定，面板顺序不随写入先后跳动。 */
   async accounts() {
@@ -54938,7 +53846,7 @@ async function imStoreRemoveFile(file) {
 }
 async function imStoreWriteFile(file, text, mode) {
   await imStoreEnsureDir(dirname14(file));
-  const tmp = `${file}.tmp-${randomUUID14()}`;
+  const tmp = `${file}.tmp-${randomUUID13()}`;
   try {
     await fs21.writeFile(tmp, text, mode === void 0 ? { encoding: "utf8" } : { encoding: "utf8", mode });
     await fs21.rename(tmp, file);
@@ -55052,7 +53960,7 @@ ${reason}`);
 
 // packages/plugin/src/im/weixin/api.ts
 init_build_info();
-import { randomBytes as randomBytes5, randomUUID as randomUUID15 } from "node:crypto";
+import { randomBytes as randomBytes5, randomUUID as randomUUID14 } from "node:crypto";
 var WEIXIN_FIXED_BASE_URL = "https://ilinkai.weixin.qq.com";
 var WEIXIN_DEFAULT_CDN_BASE_URL = "https://novac2c.cdn.weixin.qq.com/c2c";
 var WEIXIN_DEFAULT_BOT_TYPE = "3";
@@ -55168,7 +54076,7 @@ async function sendMessageItems(context, options) {
   const msg = {
     from_user_id: "",
     to_user_id: toUserId,
-    client_id: randomUUID15(),
+    client_id: randomUUID14(),
     message_type: 2,
     message_state: 2,
     item_list: [...options.items]
@@ -55490,13 +54398,13 @@ function isQrcodeStatus(value) {
   return typeof value === "string" && QRCODE_STATUSES.includes(value);
 }
 function nonzeroOf(record, label) {
-  const ret = numberField5(record, "ret", label);
-  const errcode = numberField5(record, "errcode", label);
+  const ret = numberField4(record, "ret", label);
+  const errcode = numberField4(record, "errcode", label);
   if (ret !== void 0 && ret !== 0) return ret;
   if (errcode !== void 0 && errcode !== 0) return errcode;
   return void 0;
 }
-function numberField5(record, key, label) {
+function numberField4(record, key, label) {
   const value = record[key];
   if (value === void 0) return void 0;
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -57490,9 +56398,9 @@ function messageOf12(error) {
 }
 
 // packages/plugin/src/im/weixin/context-tokens.ts
-import { randomUUID as randomUUID16 } from "node:crypto";
+import { randomUUID as randomUUID15 } from "node:crypto";
 import { promises as fs23 } from "node:fs";
-import { dirname as dirname15, join as join27, resolve as resolve8 } from "node:path";
+import { dirname as dirname15, join as join27, resolve as resolve7 } from "node:path";
 var WeixinContextTokenError = class extends Error {
   code;
   path;
@@ -57511,7 +56419,7 @@ function openWeixinContextTokens(root, accountId) {
       `weixin context token store got an illegal accountId ${JSON.stringify(accountId)}: only [A-Za-z0-9._-] is allowed`
     );
   }
-  const file = join27(resolve8(root), "weixin", accountId, "context-tokens.json");
+  const file = join27(resolve7(root), "weixin", accountId, "context-tokens.json");
   return {
     load: () => loadTokens(file),
     save: (tokens) => saveTokens(file, tokens),
@@ -57566,7 +56474,7 @@ async function saveTokens(file, tokens) {
     }
     snapshot2[peerId] = token;
   }
-  const tmp = `${file}.tmp-${randomUUID16()}`;
+  const tmp = `${file}.tmp-${randomUUID15()}`;
   try {
     await fs23.mkdir(dirname15(file), { recursive: true });
     await fs23.writeFile(tmp, `${JSON.stringify(snapshot2, null, 2)}
@@ -57585,7 +56493,7 @@ function reasonOf3(cause) {
 }
 
 // packages/plugin/src/im/router.ts
-import { randomUUID as randomUUID17 } from "node:crypto";
+import { randomUUID as randomUUID16 } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute as isAbsolute2, relative as relative3 } from "node:path";
 
@@ -58281,7 +57189,7 @@ function createImRouter(deps) {
     const ref = imMessageRef(message.dedupeKey);
     const text = relayTextOf(message, body, alias, { owner: isOwner });
     deps.log?.note("info", `accepted a ${message.channel}/${message.scope} message from ${alias} (${body.length} chars) for session ${sessionId}`);
-    const messageId = `im-${randomUUID17()}`;
+    const messageId = `im-${randomUUID16()}`;
     try {
       await deps.insert(sessionId, {
         id: messageId,
@@ -58315,7 +57223,7 @@ function createImRouter(deps) {
     const text = mergedRelayTextOf(relayItems, alias, channel, scope, ownerItems.length === ownerFlags.length ? { owner: true } : ownerItems.length > 0 ? { ownerItems } : void 0);
     const chars = relayItems.reduce((total, entry) => total + entry.body.length, 0);
     deps.log?.note("info", `accepted ${relayItems.length} ${channel}/${scope} messages from ${alias} (${chars} chars) for session ${sessionId}`);
-    const messageId = `im-${randomUUID17()}`;
+    const messageId = `im-${randomUUID16()}`;
     try {
       await deps.insert(sessionId, {
         id: messageId,
@@ -59311,7 +58219,7 @@ async function handleImApi(req, res, url, route, method, db, runtime) {
     qqInstallInFlight = install;
     try {
       const outcome = await install;
-      const outputTail = safeInstallOutput2(outcome.outputTail);
+      const outputTail = safeInstallOutput(outcome.outputTail);
       if (!outcome.ok) {
         const detail = publicErrorMessage(new Error(outcome.message ?? "the QQ runtime install failed"));
         const base = detail === INTERNAL_ERROR_MESSAGE ? "the QQ runtime install failed; see the IM log for details" : detail;
@@ -59728,7 +58636,7 @@ function parseSenderRef(value) {
   }
   return trimmed;
 }
-function safeInstallOutput2(outputTail) {
+function safeInstallOutput(outputTail) {
   if (outputTail === "") return void 0;
   if (publicErrorMessage(new Error(outputTail)) !== INTERNAL_ERROR_MESSAGE) return outputTail;
   console.warn("dsh-soulmojito qq runtime install output withheld", {
@@ -59847,6 +58755,1119 @@ async function handleModsApi(ctx, req, res, url, route, method) {
     return notFound();
   }
   return notFound();
+}
+
+// packages/plugin/src/http/memory.ts
+init_src();
+init_dsh_home();
+import { resolve as resolve8 } from "node:path";
+
+// packages/plugin/src/memory-maintenance.ts
+init_src();
+import { randomUUID as randomUUID17 } from "node:crypto";
+var MAINTENANCE_MAX_LLM_REQUESTS = 24;
+var MAINTENANCE_OPENING_MAX_CHARS = 1e5;
+var MAINTENANCE_PAGE_RECORDS = 32;
+var MAINTENANCE_PAGE_CHARS = 16e3;
+var MAINTENANCE_SOURCE_CHARS = 24e3;
+var MAINTENANCE_SOURCE_SPAN = 400;
+var MAINTENANCE_MAX_TOKENS = 8192;
+var MAINTENANCE_CONVERSATION_MAX_CHARS = 6e5;
+var SEARCH_LIMIT = 20;
+var SEARCH_EXCERPT_CHARS = 400;
+var MaintenanceRunConflictError = class extends Error {
+  constructor(character, chatId, runId) {
+    super(`a memory maintenance run is already active for ${character}/${chatId}`);
+    this.runId = runId;
+    this.name = "MaintenanceRunConflictError";
+  }
+  code = "MAINTENANCE_RUNNING";
+};
+var activeRuns = /* @__PURE__ */ new Map();
+function scopeKey(scope) {
+  return `${scope.character}\0${scope.chatId}`;
+}
+async function startMemoryMaintenance(ctx, deps, scope) {
+  const key = scopeKey(scope);
+  const existing = activeRuns.get(key);
+  if (existing !== void 0) throw new MaintenanceRunConflictError(scope.character, scope.chatId, existing.runId);
+  const active = {
+    runId: randomUUID17(),
+    character: scope.character,
+    chatId: scope.chatId,
+    startedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  activeRuns.set(key, active);
+  void (async () => {
+    try {
+      await executeRun(ctx, deps, scope, active);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.logger?.warn?.(`dsh-soulmojito: memory maintenance run crashed: ${message}`);
+      try {
+        const stateStore = await MemoryMaintenanceStore.open(deps.root);
+        const state = await stateStore.read(scope.character, scope.chatId);
+        await stateStore.write(scope.character, scope.chatId, {
+          ...state,
+          lastRun: {
+            runId: active.runId,
+            status: "error",
+            outcome: "error",
+            startedAt: active.startedAt,
+            finishedAt: (/* @__PURE__ */ new Date()).toISOString(),
+            summary: { ...state.lastRun?.summary ?? emptySummary(0), error: message }
+          }
+        });
+      } catch {
+      }
+    } finally {
+      activeRuns.delete(key);
+    }
+  })();
+  return { runId: active.runId };
+}
+async function memoryMaintenanceStatus(deps, scope) {
+  const stateStore = await MemoryMaintenanceStore.open(deps.root);
+  const state = await stateStore.read(scope.character, scope.chatId);
+  const active = activeRuns.get(scopeKey(scope));
+  if (active !== void 0) {
+    return {
+      status: "running",
+      runId: active.runId,
+      startedAt: active.startedAt,
+      pending: { ranges: [], floors: 0 },
+      receipts: state.receipts.length
+    };
+  }
+  let lastRun = state.lastRun;
+  if (lastRun?.status === "running") {
+    lastRun = {
+      ...lastRun,
+      status: "error",
+      outcome: "interrupted",
+      finishedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      summary: { ...lastRun.summary, error: "run interrupted (host process restarted); it did not complete" }
+    };
+    await stateStore.write(scope.character, scope.chatId, { ...state, lastRun });
+  }
+  const computation = await computePending(deps, scope, state.receipts);
+  const view = {
+    status: lastRun?.status ?? "done",
+    pending: { ranges: computation.pending, floors: pendingFloorCount(computation.pending) },
+    receipts: computation.validReceipts.length
+  };
+  if (lastRun !== void 0) {
+    view.runId = lastRun.runId;
+    view.startedAt = lastRun.startedAt;
+    if (lastRun.finishedAt !== void 0) view.finishedAt = lastRun.finishedAt;
+    view.summary = lastRun.summary;
+  }
+  return view;
+}
+function emptySummary(totalFloors) {
+  return {
+    totalFloors,
+    pendingRanges: [],
+    pendingFloors: 0,
+    editGroups: 0,
+    merged: 0,
+    corrected: 0,
+    created: 0,
+    deleted: 0,
+    failedGroups: 0,
+    retiredReceipts: 0,
+    retiredReasons: []
+  };
+}
+function pendingFloorCount(ranges) {
+  return ranges.reduce((total, range) => total + (range.headFloor - range.baseFloor + 1), 0);
+}
+async function computePending(deps, scope, receipts) {
+  let snapshot2;
+  try {
+    snapshot2 = await deps.db.getChatSnapshot(scope.character, scope.chatId);
+  } catch {
+    snapshot2 = void 0;
+  }
+  if (snapshot2 === void 0) {
+    return { pending: [], validReceipts: [...receipts], retiredReasons: ["chat snapshot unavailable; pending ranges unknown"], totalFloors: 0, chatMissing: true };
+  }
+  const floors = snapshot2.chat.messages;
+  const valid = [];
+  const retiredReasons = [];
+  for (const receipt of receipts) {
+    const sig = floorSignature(floors, receipt.baseFloor, receipt.headFloor);
+    if (sig === void 0 || sig !== receipt.floorSig) {
+      retiredReasons.push(`receipt ${receipt.runId} (floors ${receipt.baseFloor}-${receipt.headFloor}) retired: chat text changed`);
+      continue;
+    }
+    let retired;
+    for (const [id, revision] of Object.entries(receipt.recordSnapshots)) {
+      const current = await deps.memory.read(id, "chat", scope.chatId, true).catch(() => void 0);
+      if (current === void 0 || current.revision !== revision) {
+        retired = `receipt ${receipt.runId} retired: covered record '${id}' changed after maintenance`;
+        break;
+      }
+    }
+    if (retired !== void 0) {
+      retiredReasons.push(retired);
+      continue;
+    }
+    valid.push(receipt);
+  }
+  return {
+    pending: pendingRanges(floors.length, valid),
+    validReceipts: valid,
+    retiredReasons,
+    totalFloors: floors.length,
+    chatMissing: false
+  };
+}
+async function executeRun(ctx, deps, scope, active) {
+  const key = scopeKey(scope);
+  try {
+    const stateStore = await MemoryMaintenanceStore.open(deps.root);
+    const prior = await stateStore.read(scope.character, scope.chatId);
+    const computation = await computePending(deps, scope, prior.receipts);
+    const totalFloors = computation.totalFloors;
+    const summary = emptySummary(totalFloors);
+    summary.pendingRanges = computation.pending;
+    summary.pendingFloors = pendingFloorCount(computation.pending);
+    summary.retiredReceipts = computation.retiredReasons.length;
+    summary.retiredReasons = computation.retiredReasons;
+    let run;
+    await stateStore.write(scope.character, scope.chatId, {
+      version: 1,
+      receipts: computation.validReceipts,
+      lastRun: { runId: active.runId, status: "running", startedAt: active.startedAt, summary }
+    });
+    const finish = async (status2, outcome2, message) => {
+      summary.outcome = outcome2;
+      const record = {
+        runId: active.runId,
+        status: status2,
+        outcome: outcome2,
+        startedAt: active.startedAt,
+        finishedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        summary: { ...summary, llmRequests: run?.llmRequests ?? 0, budget: run?.budget ?? MAINTENANCE_MAX_LLM_REQUESTS }
+      };
+      if (message !== void 0) {
+        if (outcome2 === "error") record.summary.error = message;
+        else record.summary.report = message;
+      }
+      const latest = await stateStore.read(scope.character, scope.chatId);
+      if (latest.lastRun?.runId === active.runId || latest.lastRun === void 0) {
+        await stateStore.write(scope.character, scope.chatId, { ...latest, lastRun: record });
+      }
+    };
+    if (computation.chatMissing) {
+      await finish("error", "error", "chat snapshot unavailable; nothing maintained");
+      return;
+    }
+    if (summary.pendingFloors === 0) {
+      await finish("done", "completed", "nothing to maintain: valid receipts cover all floors");
+      return;
+    }
+    const snapshot2 = await deps.db.getChatSnapshot(scope.character, scope.chatId);
+    const selection = ctx.agentDefaultModel.currentSelection();
+    run = {
+      ctx,
+      deps,
+      scope,
+      runId: active.runId,
+      floors: snapshot2.chat.messages,
+      provider: selection.provider,
+      model: selection.model,
+      budget: MAINTENANCE_MAX_LLM_REQUESTS,
+      llmRequests: 0,
+      summary,
+      unresolvedEdits: /* @__PURE__ */ new Set(),
+      embedConfig: null
+    };
+    const records = await deps.memory.list("chat", scope.chatId);
+    let listing = renderMemoryListing(records, MAINTENANCE_OPENING_MAX_CHARS);
+    let opening = buildOpeningMessage(run, listing);
+    if (opening.length > MAINTENANCE_OPENING_MAX_CHARS) {
+      run.budget = Math.ceil(MAINTENANCE_MAX_LLM_REQUESTS / 2);
+      listing = renderMemoryListing(records, 2e4);
+      opening = buildOpeningMessage(run, listing);
+    }
+    const messages = [
+      { role: "user", id: randomUUID17(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
+    ];
+    let outcome = "completed";
+    let errorMessage7;
+    let report;
+    for (; ; ) {
+      if (run.llmRequests >= run.budget) {
+        outcome = "budget-exhausted";
+        errorMessage7 = `reached the run budget of ${run.budget} LLM requests; completed work is kept, unreported ranges stay pending`;
+        break;
+      }
+      const conversationChars = messages.reduce((total, message) => total + JSON.stringify(message.content).length, 0);
+      if (conversationChars > MAINTENANCE_CONVERSATION_MAX_CHARS) {
+        outcome = "budget-exhausted";
+        errorMessage7 = "maintenance conversation exceeded the run context guard; completed work is kept";
+        break;
+      }
+      run.llmRequests += 1;
+      const blocks = [];
+      let textBuffer = "";
+      let finishReason;
+      try {
+        for await (const chunk of ctx.llm.stream({
+          provider: run.provider,
+          model: run.model,
+          system: MAINTENANCE_SYSTEM_PROMPT,
+          messages: messages.map((message) => ({ ...message })),
+          tools: MAINTENANCE_TOOL_SCHEMAS,
+          maxTokens: MAINTENANCE_MAX_TOKENS
+        })) {
+          if (chunk.type === "block-end" && chunk.block !== null && typeof chunk.block === "object") {
+            blocks.push({ ...chunk.block });
+          } else if (chunk.type === "text-delta") {
+            textBuffer += chunk.text;
+          } else if (chunk.type === "finish") {
+            finishReason = chunk.reason;
+          }
+        }
+      } catch (error) {
+        outcome = "error";
+        errorMessage7 = `LLM request failed: ${error instanceof Error ? error.message : String(error)}`;
+        break;
+      }
+      if (finishReason === void 0) {
+        outcome = "error";
+        errorMessage7 = "LLM stream ended without a finish chunk";
+        break;
+      }
+      if (finishReason.kind === "error" || finishReason.kind === "aborted") {
+        outcome = "error";
+        errorMessage7 = `LLM stream failed (${finishReason.kind}): ${finishReason.failure?.message ?? "unknown failure"}`;
+        break;
+      }
+      if (!blocks.some((block) => block.type === "text") && textBuffer !== "") {
+        blocks.push({ type: "text", text: textBuffer });
+      }
+      const toolCalls = blocks.filter((block) => block.type === "tool-call");
+      messages.push({ role: "assistant", id: randomUUID17(), content: blocks, source: { kind: "model", provider: run.provider, model: run.model } });
+      if (toolCalls.length === 0) {
+        report = textBuffer !== "" ? textBuffer : blocks.filter((block) => block.type === "text").map((block) => String(block.text ?? "")).join("");
+        break;
+      }
+      if (finishReason.kind === "max-tokens") {
+        outcome = "error";
+        errorMessage7 = "maintenance response truncated at the token cap";
+        break;
+      }
+      for (const call of toolCalls) {
+        const result = await executeToolCall(run, call);
+        messages.push({
+          role: "tool",
+          id: randomUUID17(),
+          content: [{ type: "text", text: safeJson(result.payload) }],
+          source: { kind: "tool", callId: call.id },
+          toolCallId: call.id,
+          ...result.isError ? { isError: true } : {}
+        });
+      }
+    }
+    if (outcome === "error") {
+      await finish("error", outcome, errorMessage7);
+      return;
+    }
+    const closing = report !== void 0 ? report.slice(0, 2e3) : errorMessage7;
+    await finish("done", outcome, closing);
+  } finally {
+    activeRuns.delete(key);
+  }
+}
+function safeJson(value) {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return '{"error":"tool result is not serializable"}';
+  }
+}
+var MAINTENANCE_SYSTEM_PROMPT = [
+  "\u4F60\u662F\u8FD9\u4E2A\u89D2\u8272\u626E\u6F14\u804A\u5929\u7684\u8BB0\u5FC6\u7BA1\u7406\u5458\uFF08memory maintenance agent\uFF09\u3002\u4F60\u4E0D\u53C2\u4E0E\u5267\u60C5\uFF0C\u53EA\u7EF4\u62A4 chat \u4F5C\u7528\u57DF\u7684\u8BB0\u5FC6\u8BB0\u5F55\uFF1A\u7EA0\u6B63\u4E0E\u804A\u5929\u539F\u6587\u51B2\u7A81\u7684\u9648\u8FF0\u3001\u5408\u5E76\u8DE8\u5199\u5165\u6279\u6B21\u4EA7\u751F\u7684\u540C\u4E00\u4E8B\u4EF6\u91CD\u590D\u8BB0\u5F55\u3001\u5220\u9664\u88AB\u539F\u6587\u8BC1\u4F2A\u7684\u8BB0\u5FC6\u3002",
+  "\u7EAA\u5F8B\uFF1A",
+  "- \u6BCF\u4E00\u6B21\u6539\u5199\u90FD\u5FC5\u987B\u6709\u539F\u6587\u4F9D\u636E\uFF1A\u5148\u7528 SearchSource / ReadSource \u67E5\u8BC1\u76F8\u5173\u697C\u5C42\uFF0C\u4E0D\u8BB8\u51ED\u7A7A\u6539\u5199\u3002",
+  "- \u5408\u5E76\u8DE8\u6279\u6B21\u540C\u4E00\u4E8B\u4EF6\u65F6\u4FDD\u7559\u8F83\u65E9\u8BB0\u5F55\u7684\u8EAB\u4EFD\uFF08id \u4E0D\u53D8\uFF09\uFF0C\u628A\u540E\u7EED\u53D1\u5C55\u5E76\u5165\u5176\u5185\u5BB9\u5E76\u8865\u9F50\u6765\u6E90\u697C\u5C42\u8303\u56F4\uFF0C\u5220\u9664\u540E\u6765\u7684\u91CD\u590D\u5360\u4F4D\u8BB0\u5F55\u3002",
+  "- \u5206\u6E05\u5386\u53F2\u4E8B\u5B9E\u4E0E\u5F53\u524D\u72B6\u6001\uFF1B\u63A8\u6D4B\u4E0E\u4F20\u95FB\u4E0D\u5F97\u5347\u7EA7\u4E3A\u786E\u5B9A\u4E8B\u5B9E\uFF1B\u6B63\u5E38\u8BB0\u5F55\u53EF\u4EE5\u4E0D\u6539\uFF0C\u4E0D\u5F97\u4E3A\u4E86\u8868\u73B0\u5DE5\u4F5C\u91CF\u800C\u5236\u9020\u4FEE\u6539\u3002",
+  "- \u8BC1\u636E\u4E0D\u8DB3\u65F6\u4FDD\u7559\u539F\u8BB0\u5F55\uFF0C\u5E76\u5728\u6700\u7EC8\u6C47\u62A5\u4E2D\u8BF4\u660E\u672A\u89E3\u51B3\u7684\u95EE\u9898\u3002",
+  "- EditMemory \u6574\u7EC4\u539F\u5B50\u63D0\u4EA4\uFF1A\u4EFB\u4E00 expectedRevision \u51B2\u7A81\u5219\u6574\u7EC4\u5931\u8D25\uFF0C\u7528 ReadMemory \u91CD\u8BFB\u540E\u91CD\u4EA4\u6574\u7EC4\uFF1B\u653E\u5F03\u4FEE\u6B63\u7684\u6761\u76EE\u5728 CompleteMaintenance \u7684 abandonEdits \u91CC\u58F0\u660E\u3002",
+  "- \u804A\u5929\u539F\u6587\u53EA\u8BFB\uFF0C\u6C38\u4E0D\u6539\u5199\u3002",
+  "- \u5DE5\u4F5C\u5B8C\u6210\u540E\u8C03\u7528 CompleteMaintenance \u58F0\u660E\u672C\u6B21\u8986\u76D6\u7684\u697C\u9762\u8303\u56F4\uFF08\u6D88\u606F\u4E0B\u6807\uFF0C0 \u8D77\u3001headFloor \u542B\u7AEF\u70B9\uFF09\uFF0C\u518D\u7B80\u77ED\u6C47\u62A5\u6536\u5C3E\u3002"
+].join("\n");
+function buildOpeningMessage(run, listing) {
+  const ranges = run.summary.pendingRanges.map((range) => `${range.baseFloor}-${range.headFloor}`).join(", ");
+  return [
+    `\u804A\u5929 ${run.scope.character}/${run.scope.chatId} \u5171 ${run.summary.totalFloors} \u697C\uFF08\u4E0B\u6807 0-${Math.max(0, run.summary.totalFloors - 1)}\uFF09\u3002`,
+    `\u672C\u6B21\u5F85\u7EF4\u62A4\u697C\u9762\u8303\u56F4\uFF1A${ranges}\uFF08\u5171 ${run.summary.pendingFloors} \u697C\uFF09\u3002`,
+    run.summary.retiredReasons.length > 0 ? `\u4E0A\u6B21\u6536\u636E\u9000\u5F79\uFF1A${run.summary.retiredReasons.length} \u6761\uFF08\u539F\u6587/\u8BB0\u5FC6\u5728\u7EF4\u62A4\u540E\u88AB\u6539\u52A8\uFF0C\u5BF9\u5E94\u8303\u56F4\u91CD\u65B0\u5F85\u7EF4\u62A4\uFF09\u3002` : "",
+    "",
+    "\u5F53\u524D chat \u4F5C\u7528\u57DF\u8BB0\u5FC6\u6E05\u5355\uFF08\u6982\u8981\uFF0C\u53EF\u7528 ReadMemory \u7FFB\u9875/\u8FC7\u6EE4\u8BFB\u53D6\u5B8C\u6574\u5185\u5BB9\u4E0E revision\uFF09\uFF1A",
+    listing,
+    "",
+    "\u7EF4\u62A4\u6307\u4EE4\uFF1A\u5BF9\u7167\u539F\u6587\uFF08SearchSource \u5173\u952E\u8BCD\u68C0\u7D22\u3001ReadSource \u6309\u697C\u9762\u8303\u56F4\u9605\u8BFB\uFF09\u68C0\u67E5\u4E0A\u8FF0\u8BB0\u5FC6\u2014\u2014\u5408\u5E76\u8DE8\u6279\u6B21\u91CD\u590D\u4E8B\u4EF6\uFF08\u4FDD\u7559\u8F83\u65E9\u8BB0\u5F55 id\uFF09\u3001\u7EA0\u6B63\u4E0E\u539F\u6587\u51B2\u7A81\u7684\u9648\u8FF0\u3001\u5220\u9664\u88AB\u8BC1\u4F2A\u7684\u8BB0\u5F55\uFF1B\u6539\u5199\u5FC5\u987B\u6709\u539F\u6587\u4F9D\u636E\u3002\u5B8C\u6210\u540E CompleteMaintenance \u58F0\u660E\u8986\u76D6\u8303\u56F4\u5E76\u7B80\u77ED\u6C47\u62A5\u3002"
+  ].filter((part) => part !== "").join("\n");
+}
+function renderMemoryListing(records, maxChars) {
+  const lines = [];
+  let used = 0;
+  let truncated = false;
+  for (const record of records) {
+    const content = record.content.length > 400 ? `${record.content.slice(0, 400)}\u2026` : record.content;
+    const line = `- id=${record.id} kind=${record.kind} rev=${record.revision} imp=${record.importance} conf=${record.confidence}${record.tags.length > 0 ? ` tags=${record.tags.join(",")}` : ""} source=${record.source.kind}
+  ${content.replace(/\n/g, " ")}`;
+    if (used + line.length > maxChars) {
+      truncated = true;
+      break;
+    }
+    used += line.length;
+    lines.push(line);
+  }
+  if (records.length === 0) lines.push("\uFF08chat \u4F5C\u7528\u57DF\u5F53\u524D\u6CA1\u6709\u8BB0\u5FC6\u8BB0\u5F55\uFF09");
+  if (truncated) lines.push(`\u2026\uFF08\u6E05\u5355\u8FC7\u957F\u622A\u65AD\uFF0C\u5DF2\u5217 ${lines.length}/${records.length} \u6761\uFF1B\u7528 ReadMemory \u7FFB\u9875\u8BFB\u53D6\uFF09`);
+  return lines.join("\n");
+}
+var MAINTENANCE_TOOL_SCHEMAS = [
+  {
+    name: "ReadMemory",
+    description: "Page through the chat-scope memory records (32 per page, ~16k chars per page). Optional kind/query filters. Returns id/content/tags/kind/revision/importance/confidence/source for each record.",
+    parameters: {
+      type: "object",
+      properties: {
+        page: { type: "integer", description: "0-based page index" },
+        kind: { type: "string", enum: ["semantic", "episodic"] },
+        query: { type: "string", description: "Optional lexical filter over content and tags" }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "SearchSource",
+    description: "Lexical search over the chat source messages (read-only). Returns matching floor indexes with excerpts. Search misses do not prove absence \u2014 try the source floors directly with ReadSource.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Lexical query; up to 3 terms require all, longer queries require ~40% term coverage" },
+        limit: { type: "integer", description: "Maximum hits, capped at 20" }
+      },
+      required: ["query"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "ReadSource",
+    description: "Read chat source messages by floor range (read-only; the chat is never rewritten). Floors are 0-based message indexes; at most 400 floors and ~24k chars per call.",
+    parameters: {
+      type: "object",
+      properties: {
+        fromFloor: { type: "integer" },
+        toFloor: { type: "integer" }
+      },
+      required: ["fromFloor", "toFloor"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "EditMemory",
+    description: 'Atomically apply a group of memory edits. Items: {op:"update", id, expectedRevision, content?, tags?, importance?, confidence?, reason?("merge"|"correct")}, {op:"delete", id, expectedRevision}, {op:"create", content, kind, tags?, importance?, confidence?}. Any revision conflict rejects the whole group (nothing is applied); re-read and resubmit the full group.',
+    parameters: {
+      type: "object",
+      properties: {
+        edits: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            properties: {
+              op: { type: "string", enum: ["update", "delete", "create"] },
+              id: { type: "string" },
+              expectedRevision: { type: "string" },
+              content: { type: "string" },
+              kind: { type: "string", enum: ["semantic", "episodic"] },
+              tags: { type: "array", items: { type: "string" } },
+              importance: { type: "number" },
+              confidence: { type: "number" },
+              reason: { type: "string", enum: ["merge", "correct"] }
+            },
+            required: ["op"],
+            additionalProperties: false
+          }
+        }
+      },
+      required: ["edits"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "CompleteMaintenance",
+    description: "Declare the maintained floor range (0-based, inclusive). Rejected while failed EditMemory items remain unresolved (resubmit them or list their ids in abandonEdits). Ends the run with your final report.",
+    parameters: {
+      type: "object",
+      properties: {
+        baseFloor: { type: "integer" },
+        headFloor: { type: "integer" },
+        abandonEdits: { type: "array", items: { type: "string" }, description: "Record ids (or create:content-prefix keys) you explicitly give up fixing" }
+      },
+      required: ["baseFloor", "headFloor"],
+      additionalProperties: false
+    }
+  }
+];
+async function executeToolCall(run, call) {
+  let args;
+  try {
+    args = JSON.parse(call.arguments === "" ? "{}" : call.arguments);
+  } catch {
+    return { payload: { error: `invalid JSON arguments for ${call.name}` }, isError: true };
+  }
+  try {
+    switch (call.name) {
+      case "ReadMemory":
+        return { payload: await toolReadMemory(run, args), isError: false };
+      case "SearchSource":
+        return { payload: toolSearchSource(run, args), isError: false };
+      case "ReadSource":
+        return { payload: toolReadSource(run, args), isError: false };
+      case "EditMemory":
+        return await toolEditMemory(run, args);
+      case "CompleteMaintenance":
+        return await toolCompleteMaintenance(run, args);
+      default:
+        return { payload: { error: `unknown tool '${call.name}'` }, isError: true };
+    }
+  } catch (error) {
+    return { payload: { error: error instanceof Error ? error.message : String(error) }, isError: true };
+  }
+}
+function integerArg(value) {
+  return typeof value === "number" && Number.isInteger(value) ? value : void 0;
+}
+async function toolReadMemory(run, args) {
+  const page = integerArg(args.page) ?? 0;
+  if (page < 0 || page > 1e5) throw new Error("page must be a non-negative integer");
+  const kind = args.kind === "semantic" || args.kind === "episodic" ? args.kind : void 0;
+  const query = typeof args.query === "string" ? args.query : "";
+  const tokens = query === "" ? [] : tokenizeQuery(query);
+  if (query !== "" && tokens.length === 0) throw new Error("query produced no searchable tokens");
+  const records = (await run.deps.memory.list("chat", run.scope.chatId)).filter((record) => kind === void 0 || record.kind === kind).filter((record) => tokens.length === 0 || matchedTokenCount(`${record.content}
+${record.tags.join(" ")}`, tokens) >= tokenThreshold(tokens.length));
+  const start = page * MAINTENANCE_PAGE_RECORDS;
+  const pageRecords = [];
+  let used = 0;
+  for (const record of records.slice(start)) {
+    if (pageRecords.length >= MAINTENANCE_PAGE_RECORDS) break;
+    const view = {
+      id: record.id,
+      kind: record.kind,
+      content: record.content,
+      tags: record.tags,
+      revision: record.revision,
+      importance: record.importance,
+      confidence: record.confidence,
+      source: record.source
+    };
+    const size = JSON.stringify(view).length;
+    if (pageRecords.length > 0 && used + size > MAINTENANCE_PAGE_CHARS) break;
+    if (size > MAINTENANCE_PAGE_CHARS && pageRecords.length === 0) {
+      pageRecords.push(view);
+      break;
+    }
+    used += size;
+    pageRecords.push(view);
+    if (used >= MAINTENANCE_PAGE_CHARS) break;
+  }
+  const consumed = start + pageRecords.length;
+  return {
+    total: records.length,
+    page,
+    pageSize: MAINTENANCE_PAGE_RECORDS,
+    more: consumed < records.length,
+    records: pageRecords
+  };
+}
+function toolSearchSource(run, args) {
+  const query = typeof args.query === "string" ? args.query : "";
+  const tokens = tokenizeQuery(query.slice(0, 2e3));
+  if (tokens.length === 0) throw new Error("query requires at least one searchable token");
+  const limit = Math.min(Math.max(integerArg(args.limit) ?? 10, 1), SEARCH_LIMIT);
+  const required = tokenThreshold(tokens.length);
+  const qualified = [];
+  for (let index = run.floors.length - 1; index >= 0; index -= 1) {
+    const message = run.floors[index];
+    if (message.is_system === true || typeof message.mes !== "string") continue;
+    const matched = matchedTokenCount(message.mes, tokens);
+    if (matched < required) continue;
+    qualified.push({ floor: index, message, matched });
+  }
+  qualified.sort((left, right) => right.matched - left.matched || right.floor - left.floor);
+  const hits = qualified.slice(0, limit).map(({ floor, message }) => {
+    const excerpt2 = excerptAround(message.mes, tokens, SEARCH_EXCERPT_CHARS);
+    return {
+      floor,
+      name: message.name,
+      isUser: message.is_user === true,
+      excerpt: excerpt2,
+      truncated: excerpt2.length < message.mes.length
+    };
+  });
+  return { hits, hitCount: hits.length, truncated: qualified.length > hits.length, totalFloors: run.floors.length };
+}
+function toolReadSource(run, args) {
+  const from = integerArg(args.fromFloor);
+  const to = integerArg(args.toFloor);
+  if (from === void 0 || to === void 0) throw new Error("fromFloor and toFloor must be integers");
+  if (from < 0 || to < from) throw new Error("expected 0 <= fromFloor <= toFloor");
+  if (to >= run.floors.length) throw new Error(`toFloor ${to} is beyond the last floor ${run.floors.length - 1}`);
+  if (to - from + 1 > MAINTENANCE_SOURCE_SPAN) throw new Error(`floor span is capped at ${MAINTENANCE_SOURCE_SPAN} floors per call`);
+  const messages = [];
+  let used = 0;
+  let truncated = false;
+  for (let floor = from; floor <= to; floor += 1) {
+    const message = run.floors[floor];
+    const content = typeof message.mes === "string" ? message.mes : "";
+    const remaining = MAINTENANCE_SOURCE_CHARS - used;
+    const body = content.length <= remaining ? content : content.slice(0, Math.max(0, remaining));
+    messages.push({
+      floor,
+      name: message.name,
+      isUser: message.is_user === true,
+      isSystem: message.is_system === true,
+      content: body,
+      truncated: body.length < content.length
+    });
+    used += body.length;
+    if (body.length < content.length || used >= MAINTENANCE_SOURCE_CHARS) {
+      truncated = truncated || body.length < content.length || floor < to;
+      break;
+    }
+  }
+  return { messages, spanFrom: from, spanTo: to, truncated, totalFloors: run.floors.length };
+}
+function parseEdits(value) {
+  if (!Array.isArray(value) || value.length === 0) throw new Error("edits must be a non-empty array");
+  const parsed = [];
+  value.forEach((entry, index) => {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) throw new Error(`edits[${index}] must be an object`);
+    const record = entry;
+    if (record.op === "update") {
+      if (typeof record.id !== "string" || record.id === "") throw new Error(`edits[${index}].id is required`);
+      if (typeof record.expectedRevision !== "string" || record.expectedRevision === "") throw new Error(`edits[${index}].expectedRevision is required`);
+      if (record.content !== void 0 && typeof record.content !== "string") throw new Error(`edits[${index}].content must be a string`);
+      if (record.tags !== void 0 && (!Array.isArray(record.tags) || record.tags.some((tag) => typeof tag !== "string"))) throw new Error(`edits[${index}].tags must be a string array`);
+      if (record.importance !== void 0 && (typeof record.importance !== "number" || !Number.isFinite(record.importance))) throw new Error(`edits[${index}].importance must be a number`);
+      if (record.confidence !== void 0 && (typeof record.confidence !== "number" || !Number.isFinite(record.confidence))) throw new Error(`edits[${index}].confidence must be a number`);
+      parsed.push({
+        op: "update",
+        id: record.id,
+        expectedRevision: record.expectedRevision,
+        ...record.content === void 0 ? {} : { content: record.content },
+        ...record.tags === void 0 ? {} : { tags: record.tags },
+        ...record.importance === void 0 ? {} : { importance: Math.max(0, Math.min(1, numberField5(record.importance, "importance"))) },
+        ...record.confidence === void 0 ? {} : { confidence: Math.max(0, Math.min(1, numberField5(record.confidence, "confidence"))) },
+        ...record.reason === "merge" ? { reason: "merge" } : {}
+      });
+      return;
+    }
+    if (record.op === "delete") {
+      if (typeof record.id !== "string" || record.id === "") throw new Error(`edits[${index}].id is required`);
+      if (typeof record.expectedRevision !== "string" || record.expectedRevision === "") throw new Error(`edits[${index}].expectedRevision is required`);
+      parsed.push({ op: "delete", id: record.id, expectedRevision: record.expectedRevision });
+      return;
+    }
+    if (record.op === "create") {
+      if (typeof record.content !== "string" || record.content.trim() === "") throw new Error(`edits[${index}].content is required`);
+      if (record.kind !== "semantic" && record.kind !== "episodic") throw new Error(`edits[${index}].kind must be semantic or episodic`);
+      if (record.tags !== void 0 && (!Array.isArray(record.tags) || record.tags.some((tag) => typeof tag !== "string"))) throw new Error(`edits[${index}].tags must be a string array`);
+      parsed.push({
+        op: "create",
+        content: record.content,
+        kind: record.kind,
+        ...record.tags === void 0 ? {} : { tags: record.tags },
+        ...record.importance === void 0 ? {} : { importance: Math.max(0, Math.min(1, numberField5(record.importance, "importance"))) },
+        ...record.confidence === void 0 ? {} : { confidence: Math.max(0, Math.min(1, numberField5(record.confidence, "confidence"))) }
+      });
+      return;
+    }
+    throw new Error(`edits[${index}].op must be update, delete or create`);
+  });
+  return parsed;
+}
+function editKey(edit) {
+  return edit.op === "create" ? `create:${edit.content.slice(0, 24)}` : edit.id;
+}
+async function toolEditMemory(run, args) {
+  let edits;
+  try {
+    edits = parseEdits(args.edits);
+  } catch (error) {
+    run.summary.failedGroups += 1;
+    return { payload: { error: error instanceof Error ? error.message : String(error), applied: false }, isError: true };
+  }
+  const digest = () => {
+    for (const edit of edits) run.unresolvedEdits.delete(editKey(edit));
+  };
+  const markUnresolved = () => {
+    for (const edit of edits) run.unresolvedEdits.add(editKey(edit));
+  };
+  const conflicts = [];
+  for (const [index, edit] of edits.entries()) {
+    if (edit.op === "create") continue;
+    const current = await run.deps.memory.read(edit.id, "chat", run.scope.chatId, true);
+    if (current === void 0) {
+      conflicts.push({ index, id: edit.id, problem: "record not found in chat scope" });
+      continue;
+    }
+    if (current.revision !== edit.expectedRevision) {
+      conflicts.push({ index, id: edit.id, problem: "revision conflict", expectedRevision: edit.expectedRevision, actualRevision: current.revision });
+    }
+  }
+  if (conflicts.length > 0) {
+    run.summary.failedGroups += 1;
+    markUnresolved();
+    return {
+      payload: {
+        error: "edit group rejected: revision conflicts found; nothing was applied",
+        conflicts,
+        hint: "re-read the records with ReadMemory and resubmit the whole group with fresh revisions"
+      },
+      isError: true
+    };
+  }
+  const rollback = [];
+  const results = [];
+  try {
+    for (const edit of edits) {
+      if (edit.op === "update") {
+        const previous = await run.deps.memory.read(edit.id, "chat", run.scope.chatId, true);
+        const record = await run.deps.memory.put({
+          id: previous.id,
+          scope: "chat",
+          scopeId: run.scope.chatId,
+          kind: previous.kind,
+          content: edit.content ?? previous.content,
+          tags: edit.tags ?? previous.tags,
+          importance: edit.importance ?? previous.importance,
+          confidence: edit.confidence ?? previous.confidence,
+          ...previous.expiresAt === void 0 ? {} : { expiresAt: previous.expiresAt },
+          // 更新保留原记录 source（出处不因维护丢失；维护归属由 revision + 收据快照证明）。
+          source: previous.source
+        }, edit.expectedRevision);
+        rollback.push(() => restoreRecord(run, previous));
+        if (edit.reason === "merge") run.summary.merged += 1;
+        else run.summary.corrected += 1;
+        results.push({ op: "update", id: record.id, revision: record.revision });
+      } else if (edit.op === "delete") {
+        const previous = await run.deps.memory.read(edit.id, "chat", run.scope.chatId, true);
+        await run.deps.memory.forget(edit.id, "chat", run.scope.chatId, edit.expectedRevision);
+        rollback.push(() => restoreRecord(run, previous));
+        run.summary.deleted += 1;
+        results.push({ op: "delete", id: edit.id });
+      } else {
+        const record = await run.deps.memory.put({
+          scope: "chat",
+          scopeId: run.scope.chatId,
+          kind: edit.kind,
+          content: edit.content,
+          ...edit.tags === void 0 ? {} : { tags: edit.tags },
+          ...edit.importance === void 0 ? {} : { importance: edit.importance },
+          ...edit.confidence === void 0 ? {} : { confidence: edit.confidence },
+          source: { kind: "maintenance", runId: run.runId, character: run.scope.character, chatId: run.scope.chatId }
+        });
+        rollback.push(async () => {
+          const current = await run.deps.memory.read(record.id, "chat", run.scope.chatId, true).catch(() => void 0);
+          if (current !== void 0) {
+            await run.deps.memory.forget(record.id, "chat", run.scope.chatId, current.revision).catch(() => {
+            });
+          }
+        });
+        run.summary.created += 1;
+        results.push({ op: "create", id: record.id, revision: record.revision });
+      }
+    }
+  } catch (error) {
+    for (const undo of rollback.reverse()) await undo().catch(() => {
+    });
+    run.summary.failedGroups += 1;
+    markUnresolved();
+    return {
+      payload: {
+        error: `edit group failed mid-apply and was rolled back: ${error instanceof Error ? error.message : String(error)}`,
+        applied: false
+      },
+      isError: true
+    };
+  }
+  digest();
+  run.summary.editGroups += 1;
+  for (const edit of edits) {
+    if (edit.op === "delete") {
+      await run.deps.vectors.delete(edit.id, "chat", run.scope.chatId).catch(() => {
+      });
+    }
+  }
+  for (const [index, edit] of edits.entries()) {
+    if (edit.op === "update") {
+      const record = await run.deps.memory.read(edit.id, "chat", run.scope.chatId);
+      if (record !== void 0) await embedEditedRecord(run, record);
+    } else if (edit.op === "create") {
+      const created = results[index];
+      const record = await run.deps.memory.read(created.id, "chat", run.scope.chatId);
+      if (record !== void 0) await embedEditedRecord(run, record);
+    }
+  }
+  return { payload: { ok: true, applied: edits.length, results }, isError: false };
+}
+async function restoreRecord(run, previous) {
+  const current = await run.deps.memory.read(previous.id, "chat", run.scope.chatId, true);
+  if (current === void 0) return;
+  await run.deps.memory.put({
+    id: previous.id,
+    scope: previous.scope,
+    scopeId: previous.scopeId,
+    kind: previous.kind,
+    content: previous.content,
+    tags: previous.tags,
+    importance: previous.importance,
+    confidence: previous.confidence,
+    ...previous.expiresAt === void 0 ? {} : { expiresAt: previous.expiresAt },
+    source: previous.source
+  }, current.revision);
+}
+async function embedEditedRecord(run, record) {
+  try {
+    if (run.embedConfig === null) {
+      const state = await run.deps.db.getState();
+      run.embedConfig = normalizeMemoryEmbedding(state.memoryEmbedding);
+    }
+    if (run.embedConfig === void 0) return;
+    await embedMemoryRecord({
+      root: run.deps.root,
+      config: run.embedConfig,
+      vectorStore: run.deps.vectors,
+      record
+    });
+  } catch {
+  }
+}
+async function toolCompleteMaintenance(run, args) {
+  const base = integerArg(args.baseFloor);
+  const head = integerArg(args.headFloor);
+  if (base === void 0 || head === void 0) throw new Error("baseFloor and headFloor must be integers");
+  if (run.floors.length === 0) throw new Error("the chat has no floors to declare");
+  if (base < 0 || head < base || head >= run.floors.length) {
+    throw new Error(`expected 0 <= baseFloor <= headFloor <= ${run.floors.length - 1}`);
+  }
+  if (Array.isArray(args.abandonEdits)) {
+    for (const key of args.abandonEdits) {
+      if (typeof key === "string") run.unresolvedEdits.delete(key);
+    }
+  }
+  if (run.unresolvedEdits.size > 0) {
+    return {
+      payload: {
+        error: "failed EditMemory items remain unresolved; the completion is not recorded",
+        unresolved: [...run.unresolvedEdits],
+        hint: "resubmit corrected EditMemory groups, or declare the ids you give up in abandonEdits"
+      },
+      isError: true
+    };
+  }
+  const sig = floorSignature(run.floors, base, head);
+  if (sig === void 0) throw new Error("floor range no longer resolvable against the run snapshot");
+  const records = await run.deps.memory.list("chat", run.scope.chatId);
+  const recordSnapshots = {};
+  for (const record of records) recordSnapshots[record.id] = record.revision;
+  const stateStore = await MemoryMaintenanceStore.open(run.deps.root);
+  const state = await stateStore.read(run.scope.character, run.scope.chatId);
+  const receipts = appendReceipt(state.receipts, {
+    runId: run.runId,
+    baseFloor: base,
+    headFloor: head,
+    at: (/* @__PURE__ */ new Date()).toISOString(),
+    floorSig: sig,
+    recordSnapshots
+  });
+  await stateStore.write(run.scope.character, run.scope.chatId, { ...state, receipts });
+  run.summary.completion = { baseFloor: base, headFloor: head };
+  return { payload: { ok: true, baseFloor: base, headFloor: head, coveredRecords: records.length }, isError: false };
+}
+function numberField5(value, label) {
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${label} must be a finite number`);
+  return value;
+}
+
+// packages/plugin/src/http/memory.ts
+init_runtime2();
+init_io();
+init_public_error();
+function safeInstallOutput2(outputTail) {
+  if (outputTail === "") return void 0;
+  if (publicErrorMessage(new Error(outputTail)) !== INTERNAL_ERROR_MESSAGE) return outputTail;
+  console.warn("dsh-soulmojito: local embed runtime install output withheld", {
+    operation: "embed-runtime-install",
+    outputTail
+  });
+  return void 0;
+}
+var localRuntimeInstallInFlight;
+async function handleMemoryEmbedApi(req, res, route, method, db) {
+  const root = tavernDataRoot();
+  if (method === "GET" && route === "memory/embed") {
+    const config = normalizeMemoryEmbedding((await db.getState()).memoryEmbedding);
+    const status2 = await readEmbedStatus(root);
+    const isLocal = config?.provider === "local";
+    const endpoint = config !== void 0 && config.provider !== "local" ? config : void 0;
+    const envValue = endpoint !== void 0 && endpoint.apiKeyEnv !== "" ? process.env[endpoint.apiKeyEnv] : void 0;
+    return sendJson(res, 200, {
+      ok: true,
+      config: config ?? null,
+      status: {
+        configured: config !== void 0,
+        provider: isLocal ? "local" : "openai",
+        // 免密（apiKeyEnv 空串）是显式合法形态：envResolvable 视为满足；本地
+        // provider 无 key 概念，keyless/envResolvable 恒真。
+        keyless: isLocal === true || endpoint !== void 0 && endpoint.apiKeyEnv === "",
+        envResolvable: isLocal === true || endpoint !== void 0 && (endpoint.apiKeyEnv === "" || typeof envValue === "string" && envValue.trim() !== ""),
+        ...isLocal === true ? { runtimeInstalled: isLocalEmbedRuntimeInstalled() } : {},
+        breakerOpen: embedBreakerOpen(status2),
+        ...status2.breakerUntil > 0 ? { breakerUntil: new Date(status2.breakerUntil).toISOString() } : {},
+        ...status2.model !== void 0 ? { model: status2.model } : {},
+        ...status2.dims !== void 0 ? { dims: status2.dims } : {},
+        ...status2.lastError !== void 0 ? { lastError: status2.lastError } : {},
+        ...status2.lastErrorAt !== void 0 ? { lastErrorAt: status2.lastErrorAt } : {},
+        ...status2.lastSuccessAt !== void 0 ? { lastSuccessAt: status2.lastSuccessAt } : {}
+      }
+    });
+  }
+  if (method === "PUT" && route === "memory/embed") {
+    const body = await readJson(req);
+    const raw = body === null || typeof body !== "object" || Array.isArray(body) ? {} : body;
+    if (raw.provider === "local") {
+      const modelDirRaw = typeof raw.modelDir === "string" ? raw.modelDir.trim() : "";
+      if (modelDirRaw === "") {
+        await db.patchState({ memoryEmbedding: void 0 });
+        await clearEmbedStatus(root);
+        return sendJson(res, 200, { ok: true, config: null });
+      }
+      const modelDir = resolve8(modelDirRaw);
+      const dirProblem = validateLocalModelDir(modelDir);
+      if (dirProblem !== null) {
+        return sendJson(res, 400, { ok: false, message: dirProblem });
+      }
+      if (raw.pooling !== void 0 && raw.pooling !== null && raw.pooling !== "cls" && raw.pooling !== "mean") {
+        return sendJson(res, 400, {
+          ok: false,
+          message: `invalid pooling '${String(raw.pooling).slice(0, 30)}': expected 'cls' or 'mean' (cls is the BERT/bge default; sentence-embedding models like MiniLM need 'mean')`
+        });
+      }
+      if (raw.precision !== void 0 && raw.precision !== null && raw.precision !== "" && !LOCAL_EMBED_PRECISIONS.includes(raw.precision)) {
+        return sendJson(res, 400, {
+          ok: false,
+          message: `invalid precision '${String(raw.precision).slice(0, 30)}': expected 'auto' or one of ${LOCAL_EMBED_PRECISIONS.filter((value) => value !== "auto").join(", ")}`
+        });
+      }
+      const inferred = inferLocalModelSettings(modelDir);
+      const explicitPooling = raw.pooling === "cls" || raw.pooling === "mean";
+      const explicitDims = typeof raw.dims === "number" && Number.isFinite(raw.dims);
+      const explicitPrecision = raw.precision !== void 0 && raw.precision !== null && raw.precision !== "";
+      const config2 = normalizeMemoryEmbedding({
+        provider: "local",
+        modelDir,
+        ...(explicitPooling ? raw.pooling : inferred.pooling) !== void 0 ? { pooling: explicitPooling ? raw.pooling : inferred.pooling } : {},
+        ...explicitPrecision ? { precision: raw.precision } : {},
+        ...(explicitDims ? raw.dims : inferred.dims) !== void 0 ? { dims: explicitDims ? raw.dims : inferred.dims } : {},
+        ...raw.batchSize !== void 0 && raw.batchSize !== null ? { batchSize: raw.batchSize } : {}
+      });
+      if (config2 === void 0) {
+        return sendJson(res, 400, {
+          ok: false,
+          message: "expected { provider: 'local', modelDir, pooling? ('cls'|'mean'), precision? ('auto'|'fp32'|'fp16'|'q8'|\u2026), dims?, batchSize? (1-64) }"
+        });
+      }
+      const autoFilled = {};
+      if (config2.provider !== "local") {
+        throw new Error("local memory embedding normalization returned a non-local provider");
+      }
+      if (!explicitPooling && config2.pooling !== void 0) {
+        autoFilled.pooling = { value: config2.pooling, source: inferred.sources.pooling ?? "default (cls)" };
+      }
+      if (!explicitDims && config2.dims !== void 0) {
+        autoFilled.dims = { value: config2.dims, source: inferred.sources.dims ?? "" };
+      }
+      await db.patchState({ memoryEmbedding: config2 });
+      await clearEmbedStatus(root);
+      return sendJson(res, 200, {
+        ok: true,
+        config: config2,
+        ...Object.keys(autoFilled).length > 0 ? { inferred: autoFilled } : {}
+      });
+    }
+    const baseURL = typeof raw.baseURL === "string" ? normalizeEmbedBaseURL(raw.baseURL) : "";
+    const apiKeyEnv = typeof raw.apiKeyEnv === "string" ? raw.apiKeyEnv.trim() : "";
+    const model = typeof raw.model === "string" ? raw.model.trim() : "";
+    if (baseURL === "" && apiKeyEnv === "" && model === "") {
+      await db.patchState({ memoryEmbedding: void 0 });
+      await clearEmbedStatus(root);
+      return sendJson(res, 200, { ok: true, config: null });
+    }
+    if (apiKeyEnv !== "" && !MEMORY_EMBED_ENV_NAME.test(apiKeyEnv)) {
+      return sendJson(res, 400, {
+        ok: false,
+        message: `invalid apiKeyEnv '${apiKeyEnv.slice(0, 60)}': expected a POSIX environment variable name (letters, digits, underscore; not starting with a digit), or an empty string for a keyless endpoint`
+      });
+    }
+    const config = normalizeMemoryEmbedding({
+      baseURL,
+      apiKeyEnv,
+      model,
+      ...raw.dims !== void 0 && raw.dims !== null ? { dims: raw.dims } : {},
+      ...raw.batchSize !== void 0 && raw.batchSize !== null ? { batchSize: raw.batchSize } : {},
+      ...raw.timeoutMs !== void 0 && raw.timeoutMs !== null ? { timeoutMs: raw.timeoutMs } : {}
+    });
+    if (config === void 0) {
+      return sendJson(res, 400, {
+        ok: false,
+        message: "expected { baseURL (http/https URL), model, apiKeyEnv? (env var name or empty), dims?, batchSize? (1-64), timeoutMs? (200-120000) }"
+      });
+    }
+    await db.patchState({ memoryEmbedding: config });
+    await clearEmbedStatus(root);
+    return sendJson(res, 200, { ok: true, config });
+  }
+  if (method === "POST" && route === "memory/embed/local/install") {
+    if (localRuntimeInstallInFlight !== void 0) {
+      return sendJson(res, 409, { ok: false, message: "a local runtime install is already in progress" });
+    }
+    const installPromise = installLocalEmbedRuntime({ pluginDir: import.meta.dirname });
+    localRuntimeInstallInFlight = installPromise;
+    try {
+      const outcome = await installPromise;
+      if (!outcome.ok) {
+        const detail = publicErrorMessage(new Error(outcome.message ?? "install failed"));
+        const outputTail2 = safeInstallOutput2(outcome.outputTail);
+        return sendJson(res, 400, {
+          ok: false,
+          // A raw pnpm/cause message can carry a profile or model path; the
+          // original output is logged below instead of echoed.
+          message: detail === INTERNAL_ERROR_MESSAGE ? "local runtime install failed; see the server log for details" : detail,
+          ...outputTail2 === void 0 ? {} : { outputTail: outputTail2 }
+        });
+      }
+      const outputTail = safeInstallOutput2(outcome.outputTail);
+      return sendJson(res, 200, {
+        ok: true,
+        alreadyInstalled: outcome.alreadyInstalled,
+        ...outcome.message !== void 0 ? { message: outcome.message } : {},
+        ...outputTail === void 0 ? {} : { outputTail }
+      });
+    } finally {
+      localRuntimeInstallInFlight = void 0;
+    }
+  }
+  if (method === "POST" && route === "memory/embed/local/quantizations") {
+    const body = await readJson(req);
+    const modelDirRaw = body !== null && typeof body === "object" && !Array.isArray(body) && typeof body.modelDir === "string" ? body.modelDir.trim() : "";
+    if (modelDirRaw === "") {
+      return sendJson(res, 400, { ok: false, message: "expected { modelDir }" });
+    }
+    const modelDir = resolve8(modelDirRaw);
+    const dirProblem = validateLocalModelDir(modelDir);
+    if (dirProblem !== null) {
+      return sendJson(res, 400, { ok: false, message: dirProblem });
+    }
+    const quantizations = detectLocalQuantizations(modelDir);
+    return sendJson(res, 200, {
+      ok: true,
+      modelDir,
+      quantizations,
+      // auto 档会实际加载的档位（优先链最高档；目录检不出时缺省——运行时走
+      // 旧 try 链兜底，面板如实显示「自动」不带推荐）。
+      ...quantizations[0] !== void 0 ? { recommended: quantizations[0].precision } : {}
+    });
+  }
+  if (method === "POST" && route === "memory/embed/test") {
+    const config = normalizeMemoryEmbedding((await db.getState()).memoryEmbedding);
+    if (config === void 0) return sendJson(res, 400, { ok: false, message: "embed endpoint is not configured" });
+    try {
+      const result = await embedProbe(root, config);
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (cause) {
+      const message = publicErrorMessage(cause);
+      if (message === INTERNAL_ERROR_MESSAGE) throw cause;
+      return sendJson(res, 400, { ok: false, message });
+    }
+  }
+  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+}
+async function handleMemoryMaintenanceApi(ctx, req, res, url, route, method, db) {
+  if (method === "POST") {
+    const body = await readJson(req);
+    if (typeof body.character !== "string" || typeof body.chatId !== "string" || body.character === "" || body.chatId === "") {
+      return sendJson(res, 400, { ok: false, message: "expected { character, chatId }" });
+    }
+    const snapshot2 = await readGuidesSnapshot(db, body.character, body.chatId);
+    if (snapshot2 === void 0) {
+      return sendJson(res, 404, { ok: false, message: `chat '${body.character}/${body.chatId}' not found` });
+    }
+    try {
+      const { runId } = await startMemoryMaintenance(ctx, await maintenanceDeps(db), {
+        character: body.character,
+        chatId: body.chatId
+      });
+      return sendJson(res, 200, { ok: true, runId });
+    } catch (cause) {
+      if (cause instanceof MaintenanceRunConflictError) {
+        return sendJson(res, 409, { ok: false, message: cause.message, code: cause.code, runId: cause.runId });
+      }
+      throw cause;
+    }
+  }
+  if (method === "GET") {
+    const character = url.searchParams.get("character");
+    const chatId = url.searchParams.get("chatId");
+    if (character === null || chatId === null || character === "" || chatId === "") {
+      return sendJson(res, 400, { ok: false, message: "character and chatId query params are required" });
+    }
+    const view = await memoryMaintenanceStatus(await maintenanceDeps(db), { character, chatId });
+    return sendJson(res, 200, { ok: true, ...view });
+  }
+  return sendJson(res, 404, { ok: false, message: `route not found: ${method} ${route}` });
+}
+async function maintenanceDeps(db) {
+  return {
+    root: tavernDataRoot(),
+    db,
+    memory: await memories(),
+    vectors: await memoryVectors()
+  };
+}
+
+// packages/plugin/src/http/panel-management-routes.ts
+init_io();
+async function handleWorkbenchRoute(db, req, res, url, route, method) {
+  return handleWorkbenchApi(req, res, url, route, method, db);
+}
+async function handleMemoryEmbedRoute(db, req, res, route, method) {
+  return handleMemoryEmbedApi(req, res, route, method, db);
+}
+async function handleMemoryMaintenanceRoute(ctx, db, req, res, url, route, method) {
+  return handleMemoryMaintenanceApi(ctx, req, res, url, route, method, db);
+}
+async function handlePromptsRoute(res, url) {
+  const filterCharacter = url.searchParams.get("character");
+  const filterChat = url.searchParams.get("chatId");
+  return sendJson(res, 200, {
+    ok: true,
+    records: listPromptViews({
+      ...filterCharacter !== null ? { character: filterCharacter } : {},
+      ...filterChat !== null ? { chatId: filterChat } : {}
+    })
+  });
 }
 
 // packages/plugin/src/http/panel-state-routes.ts
@@ -60633,6 +60654,27 @@ var STORE_ROUTES = [
     name: "mvu",
     matches: (route, method) => method === "POST" && (route === "mvu/retry" || route === "mvu/receipts/undo") || method === "GET" && route.startsWith("mvu/status/"),
     handle: ({ db, req, res, route, method }) => handleMvuRoute(db, req, res, route, method)
+  },
+  // Workbench plans, memory settings/maintenance and the prompt viewer.
+  {
+    name: "card-workbench",
+    matches: (route, method) => method === "POST" && route === "card-workbench/rename" || method === "GET" && route === "card-workbench/plans" || method === "POST" && route.startsWith("card-workbench/plans/") && route.endsWith("/decision"),
+    handle: ({ db, req, res, url, route, method }) => handleWorkbenchRoute(db, req, res, url, route, method)
+  },
+  {
+    name: "memory-embed",
+    matches: (route, method) => (method === "GET" || method === "PUT") && route === "memory/embed" || method === "POST" && (route === "memory/embed/test" || route === "memory/embed/local/install" || route === "memory/embed/local/quantizations"),
+    handle: ({ db, req, res, route, method }) => handleMemoryEmbedRoute(db, req, res, route, method)
+  },
+  {
+    name: "memory-maintenance",
+    matches: (route, method) => (method === "POST" || method === "GET") && route === "memory/maintenance",
+    handle: ({ ctx, db, req, res, url, route, method }) => handleMemoryMaintenanceRoute(ctx, db, req, res, url, route, method)
+  },
+  {
+    name: "prompts",
+    matches: (route, method) => method === "GET" && route === "prompts",
+    handle: ({ res, url }) => handlePromptsRoute(res, url)
   }
 ];
 
@@ -60657,35 +60699,6 @@ async function handleApi(ctx, req, res) {
     if (!entry.matches(route, method)) continue;
     await entry.handle({ ctx, req, res, url, route, method, db });
     return;
-  }
-  if (method === "POST" && route === "card-workbench/rename" || method === "GET" && route === "card-workbench/plans" || method === "POST" && route.startsWith("card-workbench/plans/") && route.endsWith("/decision")) {
-    return handleWorkbenchApi(req, res, url, route, method, db);
-  }
-  if ((method === "GET" || method === "PUT") && route === "memory/embed") {
-    return handleMemoryEmbedApi(req, res, route, method, db);
-  }
-  if (method === "POST" && route === "memory/embed/test") {
-    return handleMemoryEmbedApi(req, res, route, method, db);
-  }
-  if (method === "POST" && route === "memory/embed/local/install") {
-    return handleMemoryEmbedApi(req, res, route, method, db);
-  }
-  if (method === "POST" && route === "memory/embed/local/quantizations") {
-    return handleMemoryEmbedApi(req, res, route, method, db);
-  }
-  if ((method === "POST" || method === "GET") && route === "memory/maintenance") {
-    return handleMemoryMaintenanceApi(ctx, req, res, url, route, method, db);
-  }
-  if (method === "GET" && route === "prompts") {
-    const filterCharacter = url.searchParams.get("character");
-    const filterChat = url.searchParams.get("chatId");
-    return sendJson(res, 200, {
-      ok: true,
-      records: listPromptViews({
-        ...filterCharacter !== null ? { character: filterCharacter } : {},
-        ...filterChat !== null ? { chatId: filterChat } : {}
-      })
-    });
   }
   if (method === "GET" && route.startsWith("world/")) {
     const name2 = decodeURIComponent(route.slice("world/".length));

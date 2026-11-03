@@ -292,6 +292,10 @@ describe('HTTP route table (moved routes)', () => {
       'candidates',
       'preview',
       'mvu',
+      'card-workbench',
+      'memory-embed',
+      'memory-maintenance',
+      'prompts',
     ])
   })
 
