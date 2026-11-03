@@ -15598,7 +15598,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.5".trim() : "";
-  const commit = true ? normalizeCommit("ba61c9b") : void 0;
+  const commit = true ? normalizeCommit("409f62b") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -60156,6 +60156,141 @@ async function handleStateSlicesApi(res, db) {
   });
 }
 
+// packages/plugin/src/http/session-routes.ts
+init_io();
+async function handleBindingCreateRoute(db, req, res) {
+  const body = await readJson(req);
+  if (typeof body.sessionId !== "string" || typeof body.character !== "string" || typeof body.chatId !== "string") {
+    throw new Error("expected { sessionId, character, chatId }");
+  }
+  const chat = await db.getChat(body.character, body.chatId);
+  if (!chat) throw new Error("chat not found");
+  const group2 = body.group === true;
+  const architecture = group2 ? "st" : requestedArchitecture(body.architecture);
+  const contextMode = requestedContextMode(body.contextMode);
+  await assertAgentTavernAvailable(architecture, contextMode);
+  const state = await bindSession(db, body.sessionId, body.character, body.chatId, group2, architecture, contextMode, true);
+  await refreshActivePrompt();
+  return sendJson(res, 200, { ok: true, state, binding: state.sessionBindings[body.sessionId] });
+}
+async function handleBindingDeleteRoute(db, req, res) {
+  const body = await readJson(req);
+  if (typeof body.sessionId !== "string") throw new Error("expected { sessionId }");
+  const sessionId = body.sessionId;
+  const next = await db.updateState((state) => {
+    const sessionBindings = { ...state.sessionBindings };
+    delete sessionBindings[sessionId];
+    return { sessionBindings };
+  });
+  return sendJson(res, 200, { ok: true, state: next });
+}
+async function handleBindingsPruneRoute(db, req, res) {
+  const body = await readJson(req);
+  if (!Array.isArray(body.sessionIds) || body.sessionIds.some((value) => typeof value !== "string")) {
+    throw new Error("expected { sessionIds }");
+  }
+  const live = new Set(body.sessionIds);
+  const state = await db.updateState((current) => ({
+    sessionBindings: Object.fromEntries(
+      Object.entries(current.sessionBindings).filter(([sessionId]) => live.has(sessionId))
+    ),
+    modelSelections: Object.fromEntries(
+      Object.entries(current.modelSelections ?? {}).filter(([sessionId]) => live.has(sessionId))
+    ),
+    // IM 绑定指向原生会话：会话被删掉后绑定就是死记录，和 sessionBindings 一起清。
+    imPeers: Object.fromEntries(
+      Object.entries(current.imPeers ?? {}).filter(([, binding]) => live.has(binding.sessionId))
+    )
+  }));
+  return sendJson(res, 200, { ok: true, state });
+}
+async function handleChatsListRoute(db, res, url) {
+  const character = url.searchParams.get("character");
+  if (!character) throw new Error("character query is required");
+  return sendJson(res, 200, { ok: true, chats: await db.listChats(character) });
+}
+async function handleChatCreateRoute(db, req, res) {
+  const body = await readJson(req);
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  if (typeof body.group === "string") {
+    const group2 = await db.getGroup(body.group);
+    if (!group2) throw new Error(`group '${body.group}' not found`);
+    const enabled = group2.members.filter((member) => !group2.disabledMembers.includes(member));
+    const greetings2 = [];
+    for (const member of enabled) {
+      const file = await db.getCharacter(member);
+      const only = Array.isArray(file?.card.data.groupOnlyGreetings) ? file.card.data.groupOnlyGreetings : [];
+      const text = only[0];
+      if (typeof text === "string" && text.trim() !== "") {
+        greetings2.push({ name: member, is_user: false, is_system: false, send_date: now, mes: text });
+      }
+    }
+    const id2 = await db.createChat(body.group, {
+      user_name: "unused",
+      character_name: "unused",
+      chat_metadata: {
+        group: { members: group2.members, disabledMembers: group2.disabledMembers },
+        createdAt: now,
+        timedWorldInfo: {}
+      }
+    }, greetings2);
+    const snapshot3 = await db.getChatSnapshot(body.group, id2);
+    return sendJson(res, 200, { ok: true, id: id2, group: body.group, chat: snapshot3?.chat, revision: snapshot3?.revision });
+  }
+  const character = typeof body.character === "string" ? body.character : (await db.getState()).activeCharacter;
+  if (!character) throw new Error("no active character");
+  const found = await db.getCharacter(character);
+  if (!found) throw new Error(`character '${character}' not found`);
+  const seedVariables = (() => {
+    const holder = asRecord5(found.card.data.extensions.agentTavern);
+    const initial = asRecord5(holder?.["initialVariables"]);
+    if (initial === void 0 || Object.keys(initial).length === 0) return void 0;
+    return structuredClone(initial);
+  })();
+  const variablesSeed = seedVariables ?? {};
+  const mvuSeeded = seedJsrMvuVariables(found.card, variablesSeed);
+  const greetings = [found.card.data.firstMes, ...found.card.data.alternateGreetings];
+  const greetingIndex = body.greetingIndex === void 0 ? 0 : body.greetingIndex;
+  if (typeof greetingIndex !== "number" || !Number.isSafeInteger(greetingIndex) || greetingIndex < 0 || greetingIndex >= greetings.length) {
+    throw new Error(`greetingIndex must be an integer in [0, ${greetings.length - 1}]`);
+  }
+  const id = await db.createChat(character, {
+    user_name: "unused",
+    character_name: "unused",
+    chat_metadata: { character, createdAt: now, timedWorldInfo: {}, ...seedVariables !== void 0 || mvuSeeded ? { variables: variablesSeed } : {} }
+  }, [{
+    name: found.card.data.nickname || found.card.data.name,
+    is_user: false,
+    is_system: false,
+    send_date: now,
+    mes: greetings[greetingIndex] ?? "",
+    swipe_id: greetingIndex,
+    swipes: greetings,
+    swipe_info: greetings.map(() => ({ send_date: now }))
+  }]);
+  const snapshot2 = await db.getChatSnapshot(character, id);
+  return sendJson(res, 200, { ok: true, id, chat: snapshot2?.chat, revision: snapshot2?.revision });
+}
+async function handleBranchRoute(db, req, res) {
+  const body = await readJson(req);
+  if (typeof body.character !== "string" || typeof body.chatId !== "string" || typeof body.messageId !== "number") {
+    throw new Error("expected { character, chatId, messageId, revision }");
+  }
+  if (typeof body.revision !== "string") throw new Error("revision is required");
+  const branchName = typeof body.name === "string" ? body.name : void 0;
+  const originArchitecture = body.originArchitecture === "agent-tavern" ? "agent-tavern" : "st";
+  const targetArchitecture = body.targetArchitecture === "agent-tavern" ? "agent-tavern" : "st";
+  const result = await db.branchChat(body.character, body.chatId, body.messageId, body.revision, branchName, {
+    agentTavernOrigin: {
+      architecture: originArchitecture,
+      targetArchitecture,
+      ...typeof body.sessionId === "string" ? { sessionId: body.sessionId } : {}
+    }
+  });
+  const snapshot2 = await db.getChatSnapshot(body.character, result.chatId);
+  return sendJson(res, 200, { ok: true, id: result.chatId, chat: snapshot2?.chat ?? result.chat, revision: snapshot2?.revision });
+}
+
 // packages/plugin/src/http/update.ts
 init_runtime2();
 init_service();
@@ -60416,6 +60551,38 @@ var STORE_ROUTES = [
     name: "group-delete",
     matches: (route, method) => method === "DELETE" && route === "group",
     handle: ({ db, res, url }) => handleGroupDeleteRoute(db, res, url)
+  },
+  // Session lifecycle: binding create/delete/prune, chat list/create, branch.
+  // These sat after the group routes in the old if-chain.
+  {
+    name: "binding-create",
+    matches: (route, method) => method === "POST" && route === "binding",
+    handle: ({ db, req, res }) => handleBindingCreateRoute(db, req, res)
+  },
+  {
+    name: "binding-delete",
+    matches: (route, method) => method === "DELETE" && route === "binding",
+    handle: ({ db, req, res }) => handleBindingDeleteRoute(db, req, res)
+  },
+  {
+    name: "bindings-prune",
+    matches: (route, method) => method === "POST" && route === "bindings/prune",
+    handle: ({ db, req, res }) => handleBindingsPruneRoute(db, req, res)
+  },
+  {
+    name: "chats-list",
+    matches: (route, method) => method === "GET" && route === "chats",
+    handle: ({ db, res, url }) => handleChatsListRoute(db, res, url)
+  },
+  {
+    name: "chat-create",
+    matches: (route, method) => method === "POST" && route === "chats",
+    handle: ({ db, req, res }) => handleChatCreateRoute(db, req, res)
+  },
+  {
+    name: "branch",
+    matches: (route, method) => method === "POST" && route === "branch",
+    handle: ({ db, req, res }) => handleBranchRoute(db, req, res)
   }
 ];
 
@@ -60440,138 +60607,6 @@ async function handleApi(ctx, req, res) {
     if (!entry.matches(route, method)) continue;
     await entry.handle({ ctx, req, res, url, route, method, db });
     return;
-  }
-  if (method === "POST" && route === "binding") {
-    const body = await readJson(req);
-    if (typeof body.sessionId !== "string" || typeof body.character !== "string" || typeof body.chatId !== "string") {
-      throw new Error("expected { sessionId, character, chatId }");
-    }
-    const chat = await db.getChat(body.character, body.chatId);
-    if (!chat) throw new Error("chat not found");
-    const group2 = body.group === true;
-    const architecture = group2 ? "st" : requestedArchitecture(body.architecture);
-    const contextMode = requestedContextMode(body.contextMode);
-    await assertAgentTavernAvailable(architecture, contextMode);
-    const state = await bindSession(db, body.sessionId, body.character, body.chatId, group2, architecture, contextMode, true);
-    await refreshActivePrompt();
-    return sendJson(res, 200, { ok: true, state, binding: state.sessionBindings[body.sessionId] });
-  }
-  if (method === "DELETE" && route === "binding") {
-    const body = await readJson(req);
-    if (typeof body.sessionId !== "string") throw new Error("expected { sessionId }");
-    const sessionId = body.sessionId;
-    const next = await db.updateState((state) => {
-      const sessionBindings = { ...state.sessionBindings };
-      delete sessionBindings[sessionId];
-      return { sessionBindings };
-    });
-    return sendJson(res, 200, { ok: true, state: next });
-  }
-  if (method === "POST" && route === "bindings/prune") {
-    const body = await readJson(req);
-    if (!Array.isArray(body.sessionIds) || body.sessionIds.some((value) => typeof value !== "string")) {
-      throw new Error("expected { sessionIds }");
-    }
-    const live = new Set(body.sessionIds);
-    const state = await db.updateState((current) => ({
-      sessionBindings: Object.fromEntries(
-        Object.entries(current.sessionBindings).filter(([sessionId]) => live.has(sessionId))
-      ),
-      modelSelections: Object.fromEntries(
-        Object.entries(current.modelSelections ?? {}).filter(([sessionId]) => live.has(sessionId))
-      ),
-      // IM 绑定指向原生会话：会话被删掉后绑定就是死记录，和 sessionBindings 一起清。
-      imPeers: Object.fromEntries(
-        Object.entries(current.imPeers ?? {}).filter(([, binding]) => live.has(binding.sessionId))
-      )
-    }));
-    return sendJson(res, 200, { ok: true, state });
-  }
-  if (method === "GET" && route === "chats") {
-    const character = url.searchParams.get("character");
-    if (!character) throw new Error("character query is required");
-    return sendJson(res, 200, { ok: true, chats: await db.listChats(character) });
-  }
-  if (method === "POST" && route === "chats") {
-    const body = await readJson(req);
-    const now = (/* @__PURE__ */ new Date()).toISOString();
-    if (typeof body.group === "string") {
-      const group2 = await db.getGroup(body.group);
-      if (!group2) throw new Error(`group '${body.group}' not found`);
-      const enabled = group2.members.filter((member) => !group2.disabledMembers.includes(member));
-      const greetings2 = [];
-      for (const member of enabled) {
-        const file = await db.getCharacter(member);
-        const only = Array.isArray(file?.card.data.groupOnlyGreetings) ? file.card.data.groupOnlyGreetings : [];
-        const text = only[0];
-        if (typeof text === "string" && text.trim() !== "") {
-          greetings2.push({ name: member, is_user: false, is_system: false, send_date: now, mes: text });
-        }
-      }
-      const id2 = await db.createChat(body.group, {
-        user_name: "unused",
-        character_name: "unused",
-        chat_metadata: {
-          group: { members: group2.members, disabledMembers: group2.disabledMembers },
-          createdAt: now,
-          timedWorldInfo: {}
-        }
-      }, greetings2);
-      const snapshot3 = await db.getChatSnapshot(body.group, id2);
-      return sendJson(res, 200, { ok: true, id: id2, group: body.group, chat: snapshot3?.chat, revision: snapshot3?.revision });
-    }
-    const character = typeof body.character === "string" ? body.character : (await db.getState()).activeCharacter;
-    if (!character) throw new Error("no active character");
-    const found = await db.getCharacter(character);
-    if (!found) throw new Error(`character '${character}' not found`);
-    const seedVariables = (() => {
-      const holder = asRecord5(found.card.data.extensions.agentTavern);
-      const initial = asRecord5(holder?.["initialVariables"]);
-      if (initial === void 0 || Object.keys(initial).length === 0) return void 0;
-      return structuredClone(initial);
-    })();
-    const variablesSeed = seedVariables ?? {};
-    const mvuSeeded = seedJsrMvuVariables(found.card, variablesSeed);
-    const greetings = [found.card.data.firstMes, ...found.card.data.alternateGreetings];
-    const greetingIndex = body.greetingIndex === void 0 ? 0 : body.greetingIndex;
-    if (typeof greetingIndex !== "number" || !Number.isSafeInteger(greetingIndex) || greetingIndex < 0 || greetingIndex >= greetings.length) {
-      throw new Error(`greetingIndex must be an integer in [0, ${greetings.length - 1}]`);
-    }
-    const id = await db.createChat(character, {
-      user_name: "unused",
-      character_name: "unused",
-      chat_metadata: { character, createdAt: now, timedWorldInfo: {}, ...seedVariables !== void 0 || mvuSeeded ? { variables: variablesSeed } : {} }
-    }, [{
-      name: found.card.data.nickname || found.card.data.name,
-      is_user: false,
-      is_system: false,
-      send_date: now,
-      mes: greetings[greetingIndex] ?? "",
-      swipe_id: greetingIndex,
-      swipes: greetings,
-      swipe_info: greetings.map(() => ({ send_date: now }))
-    }]);
-    const snapshot2 = await db.getChatSnapshot(character, id);
-    return sendJson(res, 200, { ok: true, id, chat: snapshot2?.chat, revision: snapshot2?.revision });
-  }
-  if (method === "POST" && route === "branch") {
-    const body = await readJson(req);
-    if (typeof body.character !== "string" || typeof body.chatId !== "string" || typeof body.messageId !== "number") {
-      throw new Error("expected { character, chatId, messageId, revision }");
-    }
-    if (typeof body.revision !== "string") throw new Error("revision is required");
-    const branchName = typeof body.name === "string" ? body.name : void 0;
-    const originArchitecture = body.originArchitecture === "agent-tavern" ? "agent-tavern" : "st";
-    const targetArchitecture = body.targetArchitecture === "agent-tavern" ? "agent-tavern" : "st";
-    const result = await db.branchChat(body.character, body.chatId, body.messageId, body.revision, branchName, {
-      agentTavernOrigin: {
-        architecture: originArchitecture,
-        targetArchitecture,
-        ...typeof body.sessionId === "string" ? { sessionId: body.sessionId } : {}
-      }
-    });
-    const snapshot2 = await db.getChatSnapshot(body.character, result.chatId);
-    return sendJson(res, 200, { ok: true, id: result.chatId, chat: snapshot2?.chat ?? result.chat, revision: snapshot2?.revision });
   }
   if (method === "POST" && route === "candidates") {
     const body = await readJson(req);

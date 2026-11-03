@@ -67,6 +67,8 @@ export function mountTransport(ctx: PluginContext, deps: MountDeps): void
 - Round 12 全量：`pnpm exec vitest run --no-file-parallelism` → **200 files / 3297 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (26d20e9)。
 - Round 13 stage 1 定向：`tavern-command` 54 + `agent-tavern-preset` 9 + `preset-mount` 7 + `native-preset` 5 + `card-scripts` 8 + `tavern-mods` 78 + `im-router` 55 = 216 用例通过；独立复核另跑 78 用例并做 1/1 + 21/21 + 94/94 行逐字比对；同一条 tsc 命令无输出。
 - Round 13 全量：`pnpm exec vitest run --no-file-parallelism` → **200 files / 3297 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (ba61c9b)。
+- Round 14 stage 1 定向：`tavern-command` 54 + `agent-tavern-display-route` 8 + `card-workbench-p3` 14 + `session-binding-reclaim` 15 + `tavern-mods` 78 + `im-router` 55 = 224 用例通过；独立复核另跑 91 用例并做 127/127 行逐字比对；同一条 tsc 命令无输出。
+- Round 14 全量：`pnpm exec vitest run --no-file-parallelism` → **200 files / 3297 passed / 2 skipped**；`tsc -b`、security tsc、plugin tsc、`build:plugin` 与 20 gates 全 PASS，build v0.7.5 (409f62b)。
 
 ## 删除路径
 
@@ -74,7 +76,7 @@ export function mountTransport(ctx: PluginContext, deps: MountDeps): void
 
 ## 未完成
 
-- route table 八片已落（update / games / im；bootstrap / store-revision / state-slices；avatar / character 读 / projection / compact / guides / script / audit / novels / mods；body；character 写/删/导出；persona/group；asset import/preset；models/model/state）；其余 if-chain（binding/chats 等）仍是后续。
+- route table 九片已落（update / games / im；bootstrap / store-revision / state-slices；avatar / character 读 / projection / compact / guides / script / audit / novels / mods；body；character 写/删/导出；persona/group；asset import/preset；models/model/state；binding/chats/branch）；其余 if-chain（candidates/preview 等）仍是后续。
 - games / IM / Mods / update 仍留在 `index.ts`；它们各自有生命周期与 disposer，抽相位时要先定义清理顺序。
 - `MountDeps` 只是阶段句柄，不是新的 service locator；静态协作者继续直接 import。
 
@@ -88,5 +90,6 @@ export function mountTransport(ctx: PluginContext, deps: MountDeps): void
 - 路由表第六刀（Round 11 stage 1）：`import/persona`、`PUT/DELETE persona`、`GET persona-avatar/*`、`GET/POST groups`、`PUT/DELETE group` 搬进 `packages/plugin/src/http/persona-group-routes.ts`；八个表项按旧 if-chain 顺序追加在 `character-export` 之后。逐字比对 113/113 行一致；这些 persona/group 写路由此前没有 HTTP 级用例，本轮只做逐字搬迁，回归由全量与静态比对承担。
 - 路由表第七刀（Round 12 stage 1）：`POST import/character`、`POST import/world`、`POST import/preset`、`GET preset/*`、`PUT preset/*` 搬进 `packages/plugin/src/http/asset-import-routes.ts`；五个表项按旧 if-chain 顺序追加在 `group-delete` 之后。逐字比对 64/64 行一致；`import/world` 与 `GET preset/*` 仍无 HTTP 级用例，静态比对承担回归证据。
 - 路由表第八刀（Round 13 stage 1）：`GET models`、`POST model`、`POST state` 搬进 `packages/plugin/src/http/panel-state-routes.ts`；三个表项插回 `character-export` 之后、`persona-import` 之前，并把 Round 12 的 asset import 表项移到 persona/group 之前，使整张 `STORE_ROUTES` 恢复旧 if-chain 顺序。逐字比对 1/1、21/21、94/94 行一致。
-- 剩余 if-chain 域（本刀未搬）：`binding*` / `chats` / `branch` / `candidates` / `preview` / `variables` / `regex` / `world/*` / `helper*` / `generate` / `frontend/*` 等；下一刀按 `store()` 依赖与顺序约束继续迁入表。
+- 路由表第九刀（Round 14 stage 1）：`POST/DELETE binding`、`POST bindings/prune`、`GET/POST chats`、`POST branch` 搬进 `packages/plugin/src/http/session-routes.ts`；六个表项按旧 if-chain 顺序追加在 `group-delete` 之后。逐字比对 127/127 行一致；`bindings/prune` 与 `branch` 仍没有 HTTP 级用例。
+- 剩余 if-chain 域（本刀未搬）：`candidates` / `preview` / `mvu/*` / `card-workbench/*` / `memory/*` / `prompts` / `world/*` / `variables` / `regex` / `helper*` / `generate` / `frontend/*` / `chat/*` 等；下一刀按 `store()` 依赖与顺序约束继续迁入表。
 - 每增加一个 mount phase，必须在决策或代码注释里写明它相对于 body/anchor/prompt 的顺序约束；顺序不能只靠阅读调用栈。

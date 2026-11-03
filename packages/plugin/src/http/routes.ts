@@ -50,6 +50,14 @@ import {
   handlePersonaUpdateRoute,
 } from './persona-group-routes.js'
 import { handleBootstrapApi, handleStateSlicesApi, handleStoreRevisionApi } from './read-routes.js'
+import {
+  handleBindingCreateRoute,
+  handleBindingDeleteRoute,
+  handleBindingsPruneRoute,
+  handleBranchRoute,
+  handleChatCreateRoute,
+  handleChatsListRoute,
+} from './session-routes.js'
 import { handleUpdateApi } from './update.js'
 
 export interface RouteContext {
@@ -303,5 +311,37 @@ export const STORE_ROUTES: readonly RouteEntry<StoreRouteContext>[] = [
     name: 'group-delete',
     matches: (route, method) => method === 'DELETE' && route === 'group',
     handle: ({ db, res, url }) => handleGroupDeleteRoute(db, res, url),
+  },
+  // Session lifecycle: binding create/delete/prune, chat list/create, branch.
+  // These sat after the group routes in the old if-chain.
+  {
+    name: 'binding-create',
+    matches: (route, method) => method === 'POST' && route === 'binding',
+    handle: ({ db, req, res }) => handleBindingCreateRoute(db, req, res),
+  },
+  {
+    name: 'binding-delete',
+    matches: (route, method) => method === 'DELETE' && route === 'binding',
+    handle: ({ db, req, res }) => handleBindingDeleteRoute(db, req, res),
+  },
+  {
+    name: 'bindings-prune',
+    matches: (route, method) => method === 'POST' && route === 'bindings/prune',
+    handle: ({ db, req, res }) => handleBindingsPruneRoute(db, req, res),
+  },
+  {
+    name: 'chats-list',
+    matches: (route, method) => method === 'GET' && route === 'chats',
+    handle: ({ db, res, url }) => handleChatsListRoute(db, res, url),
+  },
+  {
+    name: 'chat-create',
+    matches: (route, method) => method === 'POST' && route === 'chats',
+    handle: ({ db, req, res }) => handleChatCreateRoute(db, req, res),
+  },
+  {
+    name: 'branch',
+    matches: (route, method) => method === 'POST' && route === 'branch',
+    handle: ({ db, req, res }) => handleBranchRoute(db, req, res),
   },
 ]
