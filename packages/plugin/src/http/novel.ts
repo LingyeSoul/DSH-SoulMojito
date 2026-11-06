@@ -35,6 +35,7 @@ import { recoverNovels, type DriverAgentLike } from '../agent-novel/driver.js'
 import { unitTargetRange } from '../agent-novel/outline.js'
 import { isNovelAuthorMessage, receiveAuthorMessage } from '../agent-novel/requirements.js'
 import { subagentRuntimeOf, type DeductionExecAgent, type SubagentRuntimeLike } from '../agent-tavern/deduce.js'
+import { emitAgentPresetChanged } from '../agent-tavern/preset.js'
 import { isTavernSessionMarker } from '../agent-tavern/projector.js'
 import { getAgentNovelCapabilities, getNovelDriverPromise, getNovelProjectorPromise, memories, novelStore, store } from '../runtime.js'
 import type { PluginContext } from '../host-contract.js'
@@ -838,6 +839,9 @@ export async function handleNovelOpenCommand(
     throw new TavernArchitectureConflictError('The host cannot recompose a blank session with the AgentNovel preset.')
   }
   await bindNovelSession(db, agent.id, novelId)
+  // 绑定后立即写穿预设缓存：清掉 agent/created 首轮预热可能装上的
+  // native-preset 投影，并让小说自己的预设通道按新绑定装载。
+  await emitAgentPresetChanged()
   // Idempotent marker: a repeated novel-open on the same binding neither
   // stacks markers nor recomposes twice. Read the LAST selected preset: 0.2.1
   // reuseLive can rewrite a blank session to the host default after the first
@@ -925,6 +929,9 @@ export async function handleWorkbenchOpenCommand(
       },
     },
   }))
+  // 绑定后立即写穿预设缓存：清掉 agent/created 首轮预热可能装上的
+  // native-preset 投影，并让工作台自己的预设通道按新绑定装载。
+  await emitAgentPresetChanged()
   // 幂等 marker：重复 workbench-open 不叠加 marker 也不重复 recompose。
   // 0.2.1 的 reuseLive 可能把 blank 会话改回宿主默认 preset，因此只认最后一条。
   if (lastSelectedPresetId(agent.session) !== CARD_WORKBENCH_PRESET_ID) {

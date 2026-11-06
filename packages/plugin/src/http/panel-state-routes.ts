@@ -138,10 +138,11 @@ export async function handleStateUpdateRoute(
     ...(body.compaction !== undefined ? { compaction: compactionOverrideOf(body.compaction) } : {}),
   }
   const state = await db.patchState(patch)
-  // 激活预设/persona 是 AgentTavern 预设投影的输入（agent-tavern/preset.ts）：
-  // {{user}} 宏与预设选择变化后写穿各会话的投影缓存，下一次装配即时生效。
-  // 两个投影开关同批写穿（preset-mount.ts 的监听在同一注册表里）。
-  if ('activePreset' in patch || 'activePersona' in patch
+  // 激活角色/预设/persona 是预设投影的输入（agent-tavern/preset.ts、
+  // native-preset.ts）：{{char}}/{{user}} 宏与预设选择变化后写穿各会话的
+  // 投影缓存，下一次装配即时生效。两个投影开关同批写穿（preset-mount.ts
+  // 的监听在同一注册表里）。
+  if ('activeCharacter' in patch || 'activePreset' in patch || 'activePersona' in patch
     || 'cardWorkbenchPresetEnabled' in patch || 'agentNovelPresetEnabled' in patch
     || 'nativeAgentPreset' in patch) await emitAgentPresetChanged()
   await refreshActivePrompt()

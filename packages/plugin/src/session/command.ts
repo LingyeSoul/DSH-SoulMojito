@@ -176,12 +176,10 @@ export function registerTavernSessionCommand(ctx: PluginContext): void {
         parsed.architecture,
         parsed.contextMode,
       )
-      if (parsed.architecture === 'agent-tavern') {
-        // 预热激活预设投影（agent-tavern/preset.ts）：投影与 facts/guides 同款
-        // 异步装载，激活时先写穿缓存，首轮请求就带预设——否则首轮装配拿到空串，
-        // 用户看到的现象就是「预设不生效」。绑定已落库，监听按 binding 反查。
-        await emitAgentPresetChanged()
-      }
+      // 绑定落库后写穿全部预设投影：AgentTavern 通道预热首轮预设；同时让
+      // native-preset 按新绑定清掉标准会话投影（2026-11-06 首轮预热加固）。
+      // 投影与 facts/guides 同款异步装载，首轮请求先写穿缓存才不会拿到空串。
+      await emitAgentPresetChanged()
       if (preloadSnapshot !== undefined) {
         if (agent.inject === undefined) {
           throw new TavernArchitectureConflictError('This host cannot preload AgentTavern session context.')

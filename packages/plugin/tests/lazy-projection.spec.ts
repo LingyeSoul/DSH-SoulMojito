@@ -54,4 +54,23 @@ describe('lazy projection write-through', () => {
     // 预热后是已装载状态：懒读取直接拿缓存，不再触发装载
     expect(projection.valueOf('agent-a')).toBe('agent-a')
   })
+
+  it('preheatOne loads only the named agent', async () => {
+    const loaded: string[] = []
+    const projection = createLazyProjection<string>({
+      getState: async () => STATE,
+      load: async (agentId, settle) => {
+        loaded.push(agentId)
+        settle(agentId)
+      },
+    })
+
+    await projection.preheatOne('agent-a')
+    await projection.preheatOne('agent-b')
+
+    // 单 agent 预热不触发 refreshAll：不会把已装载的 agent-a 再重载一遍。
+    expect(loaded).toEqual(['agent-a', 'agent-b'])
+    expect(projection.valueOf('agent-a')).toBe('agent-a')
+    expect(projection.valueOf('agent-b')).toBe('agent-b')
+  })
 })

@@ -15,6 +15,9 @@
  *   emitAgentPresetChanged 写穿缓存；
  * - 懒装载 + 票号 last-write-wins（lazy-projection.ts）；标准会话没有绑定，
  *   refreshWhere 的绑定遍历看不到它们，写穿走 refreshAll（见下方监听）；
+ * - 新会话首轮：mount.ts 的 agent/created 在宿主 loop start 前 await 单 agent
+ *   预热（preheatOne），首次装配即可拿到投影；绑定变更路径写穿 refreshAll，
+ *   防止会话创建后才绑定时沿用标准会话投影；
  * - 动态宏按 agent 的冻结记录（装载时刻时钟 + 种子 RNG）求值：预设块住在宿主
  *   受保护 system 头，字节一变其后全部历史的前缀缓存一并作废；
  * - 不投影 temperature：与工作台/小说同一条理由（标准会话要工具调用精度），
@@ -132,4 +135,13 @@ function agentIdOf(context: unknown): string | undefined {
  */
 export function preheatNativeAgentPreset(agentIds: readonly string[]): Promise<void> {
   return projection.preheatAll(agentIds)
+}
+
+/**
+ * 单个 agent 的首轮预热（agent/created 监听调用）：宿主在 loop start 前 await
+ * 该事件，这里把新会话的投影先装载好，第一次装配就能拿到预设。与 apply 时的
+ * `preheatAll` 分开，避免每建一个会话都把全部已装载 agent 重载一遍。
+ */
+export function preheatNativeAgentPresetOne(agentId: string): Promise<void> {
+  return projection.preheatOne(agentId)
 }

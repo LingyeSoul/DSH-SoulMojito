@@ -10747,7 +10747,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.5".trim() : "";
-  const commit = true ? normalizeCommit("dd8f143") : void 0;
+  const commit = true ? normalizeCommit("64d42ad") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -11453,6 +11453,11 @@ function createLazyProjection(options) {
     preheatAll(agentIds) {
       for (const agentId of agentIds) started.add(agentId);
       return refreshAll();
+    },
+    preheatOne(agentId) {
+      if (typeof agentId !== "string" || agentId.trim() === "") return Promise.resolve();
+      started.add(agentId);
+      return enqueueLoad(agentId);
     }
   };
 }

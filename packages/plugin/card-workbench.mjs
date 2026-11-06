@@ -5208,6 +5208,11 @@ function createLazyProjection(options) {
     preheatAll(agentIds) {
       for (const agentId of agentIds) started.add(agentId);
       return refreshAll();
+    },
+    preheatOne(agentId) {
+      if (typeof agentId !== "string" || agentId.trim() === "") return Promise.resolve();
+      started.add(agentId);
+      return enqueueLoad(agentId);
     }
   };
 }

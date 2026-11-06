@@ -47,6 +47,9 @@ export interface LazyProjection<V> {
   /** 预热一组**用户给定的** agent（重启后活着的会话）：把它们标记为已装载，然后
    *  走 refreshAll 的语义（state 只读一次）。用于没有绑定可遍历的会话面。 */
   preheatAll(agentIds: readonly string[]): Promise<void>
+  /** 预热单个 agent：标记已装载并立即装载（新会话在 agent/created 里调用，
+   *  保证宿主启动 loop 前缓存已就绪，首轮装配不再拿到空串）。 */
+  preheatOne(agentId: string): Promise<void>
 }
 
 export function createLazyProjection<V>(options: LazyProjectionOptions<V>): LazyProjection<V> {
@@ -126,6 +129,11 @@ export function createLazyProjection<V>(options: LazyProjectionOptions<V>): Lazy
     preheatAll(agentIds) {
       for (const agentId of agentIds) started.add(agentId)
       return refreshAll()
+    },
+    preheatOne(agentId) {
+      if (typeof agentId !== 'string' || agentId.trim() === '') return Promise.resolve()
+      started.add(agentId)
+      return enqueueLoad(agentId)
     },
   }
 }

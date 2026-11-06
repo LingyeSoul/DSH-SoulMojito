@@ -4,6 +4,7 @@
 
 import type { TavernStore } from '../../../tavern-store/src/index.js'
 import { seedJsrMvuVariables } from '../agent-tavern/mvu-compat.js'
+import { emitAgentPresetChanged } from '../agent-tavern/preset.js'
 import { refreshActivePrompt } from '../model-catalog.js'
 import {
   assertAgentTavernAvailable,
@@ -31,6 +32,9 @@ export async function handleBindingCreateRoute(
   await assertAgentTavernAvailable(architecture, contextMode)
   const state = await bindSession(db, body.sessionId, body.character, body.chatId, group, architecture, contextMode, true)
   await refreshActivePrompt()
+  // 绑定即离开标准会话面：清掉 agent/created 首轮预热可能装上的 native-preset
+  // 投影；AgentTavern/ST 各自的预设通道随后按新绑定装载。
+  await emitAgentPresetChanged()
   return sendJson(res, 200, { ok: true, state, binding: state.sessionBindings[body.sessionId] })
 }
 
@@ -47,6 +51,8 @@ export async function handleBindingDeleteRoute(
     delete sessionBindings[sessionId]
     return { sessionBindings }
   })
+  // 解绑后会话回到标准面：重新装载 native-preset，不必等下一次预设事件。
+  await emitAgentPresetChanged()
   return sendJson(res, 200, { ok: true, state: next })
 }
 
@@ -72,6 +78,8 @@ export async function handleBindingsPruneRoute(
       Object.entries(current.imPeers ?? {}).filter(([, binding]) => live.has(binding.sessionId)),
     ),
   }))
+  // 批量解绑同样可能把会话还原成标准面，清掉旧投影。
+  await emitAgentPresetChanged()
   return sendJson(res, 200, { ok: true, state })
 }
 

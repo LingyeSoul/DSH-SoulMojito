@@ -14,6 +14,7 @@ import { TavernStore } from '../../tavern-store/src/index.js'
 
 const CHARACTER = 'Native Character'
 const STANDARD_AGENT = 'standard-agent'
+const NEW_STANDARD_AGENT = 'new-standard-agent'
 const RP_AGENT = 'rp-agent'
 const WORKBENCH_AGENT = 'workbench-agent'
 
@@ -80,6 +81,7 @@ describe('standard DSH Agent preset projection', () => {
   let store: TavernStore
   let apiHandler: (req: unknown, res: unknown) => Promise<void>
   let section: { name: string; order: number; text: (context: unknown) => string } | undefined
+  const agentCreatedListeners: Array<(payload: { agent: { id: string } }) => Promise<void> | void> = []
 
   const textOf = (agentId: string | undefined) =>
     section!.text(agentId === undefined ? undefined : { agent: { id: agentId } })
@@ -115,6 +117,9 @@ describe('standard DSH Agent preset projection', () => {
         context: () => {},
       },
       commands: { register: () => {} },
+      on: (event: string, listener: unknown) => {
+        if (event === 'agent/created') agentCreatedListeners.push(listener as (payload: { agent: { id: string } }) => Promise<void> | void)
+      },
       webServer: { register: (def: { handler: (req: unknown, res: unknown) => Promise<void> }) => { apiHandlerRef = def.handler; return () => {} } },
       agentPresets: {
         mount: async () => ({ id: 'agent-tavern' }),
@@ -206,6 +211,36 @@ describe('standard DSH Agent preset projection', () => {
     await vi.waitFor(() => {
       expect(textOf(STANDARD_AGENT)).toContain('Terse prose only.')
     })
+  })
+
+  it('preheats a newly created standard agent before its first assembly', async () => {
+    expect(agentCreatedListeners.length).toBeGreaterThan(0)
+    // agent/created 是宿主在 loop start 前 await 的串行事件：监听返回时投影必须
+    // 已在缓存里，第一次装配不能再拿到空串。测试里按宿主语义跑完全部监听。
+    for (const listener of agentCreatedListeners) await listener({ agent: { id: NEW_STANDARD_AGENT } })
+    expect(textOf(NEW_STANDARD_AGENT)).toContain('Terse prose only.')
+  })
+
+  it('clears the preheated projection when the new session becomes bound', async () => {
+    const chatId = await store.createChat(CHARACTER, {
+      user_name: 'unused', character_name: 'unused',
+      chat_metadata: { createdAt: new Date().toISOString() },
+    }, [])
+    const res = makeResponse()
+    await apiHandler(makeRequest({
+      sessionId: NEW_STANDARD_AGENT,
+      character: CHARACTER,
+      chatId,
+    }, '/api/dsh-soulmojito/binding'), res)
+    expect(res.statusCode).toBe(200)
+    expect(textOf(NEW_STANDARD_AGENT)).toBe('')
+  })
+
+  it('restores the projection when the session is unbound again', async () => {
+    const res = makeResponse()
+    await apiHandler(makeRequest({ sessionId: NEW_STANDARD_AGENT }, '/api/dsh-soulmojito/binding', 'DELETE'), res)
+    expect(res.statusCode).toBe(200)
+    expect(textOf(NEW_STANDARD_AGENT)).toContain('Terse prose only.')
   })
 
   it('clears the projection through the switch-off write-through', async () => {

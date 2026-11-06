@@ -15604,7 +15604,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.5".trim() : "";
-  const commit = true ? normalizeCommit("dd8f143") : void 0;
+  const commit = true ? normalizeCommit("64d42ad") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -47152,6 +47152,11 @@ function createLazyProjection(options) {
     preheatAll(agentIds) {
       for (const agentId of agentIds) started.add(agentId);
       return refreshAll();
+    },
+    preheatOne(agentId) {
+      if (typeof agentId !== "string" || agentId.trim() === "") return Promise.resolve();
+      started.add(agentId);
+      return enqueueLoad(agentId);
     }
   };
 }
@@ -57449,6 +57454,7 @@ async function handleNovelOpenCommand(ctx, agent, novelId) {
     throw new TavernArchitectureConflictError("The host cannot recompose a blank session with the AgentNovel preset.");
   }
   await bindNovelSession(db, agent.id, novelId);
+  await emitAgentPresetChanged();
   if (lastSelectedPresetId(agent.session) !== AGENT_NOVEL_PRESET_ID) {
     const preset = await ctx.agentPresets.recompose(agent.ctx, AGENT_NOVEL_PRESET_ID);
     agent.session.append("agent-preset/selected", { agentPreset: preset.id });
@@ -57503,6 +57509,7 @@ async function handleWorkbenchOpenCommand(ctx, agent, payload) {
       }
     }
   }));
+  await emitAgentPresetChanged();
   if (lastSelectedPresetId(agent.session) !== CARD_WORKBENCH_PRESET_ID) {
     const preset = await ctx.agentPresets.recompose(agent.ctx, CARD_WORKBENCH_PRESET_ID);
     agent.session.append("agent-preset/selected", { agentPreset: preset.id });
@@ -58713,7 +58720,7 @@ async function handleStateUpdateRoute(db, req, res) {
     ...body.compaction !== void 0 ? { compaction: compactionOverrideOf(body.compaction) } : {}
   };
   const state = await db.patchState(patch);
-  if ("activePreset" in patch || "activePersona" in patch || "cardWorkbenchPresetEnabled" in patch || "agentNovelPresetEnabled" in patch || "nativeAgentPreset" in patch) await emitAgentPresetChanged();
+  if ("activeCharacter" in patch || "activePreset" in patch || "activePersona" in patch || "cardWorkbenchPresetEnabled" in patch || "agentNovelPresetEnabled" in patch || "nativeAgentPreset" in patch) await emitAgentPresetChanged();
   await refreshActivePrompt();
   return sendJson(res, 200, { ok: true, state });
 }
@@ -59006,6 +59013,7 @@ async function handleBindingCreateRoute(db, req, res) {
   await assertAgentTavernAvailable(architecture, contextMode);
   const state = await bindSession(db, body.sessionId, body.character, body.chatId, group2, architecture, contextMode, true);
   await refreshActivePrompt();
+  await emitAgentPresetChanged();
   return sendJson(res, 200, { ok: true, state, binding: state.sessionBindings[body.sessionId] });
 }
 async function handleBindingDeleteRoute(db, req, res) {
@@ -59017,6 +59025,7 @@ async function handleBindingDeleteRoute(db, req, res) {
     delete sessionBindings[sessionId];
     return { sessionBindings };
   });
+  await emitAgentPresetChanged();
   return sendJson(res, 200, { ok: true, state: next });
 }
 async function handleBindingsPruneRoute(db, req, res) {
@@ -59037,6 +59046,7 @@ async function handleBindingsPruneRoute(db, req, res) {
       Object.entries(current.imPeers ?? {}).filter(([, binding]) => live.has(binding.sessionId))
     )
   }));
+  await emitAgentPresetChanged();
   return sendJson(res, 200, { ok: true, state });
 }
 async function handleChatsListRoute(db, res, url) {
@@ -61602,6 +61612,71 @@ function messageOf17(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+// packages/plugin/src/native-preset.ts
+init_src2();
+init_runtime2();
+var NATIVE_PRESET_SECTION = "dsh-soulmojito:native-preset";
+var NATIVE_PRESET_HEADER = "Active chat completion preset (user-configured prompt stack; follow these instructions together with the DSH agent preset):";
+var freeze = { frozenAt: Date.now(), seed: Math.random() * 4294967296 >>> 0 };
+var renderMemo;
+var renderGeneration = 0;
+var projection = createLazyProjection({
+  getState: async () => (await store3()).getState(),
+  load: async (agentId, settle, snapshot2) => {
+    const db = await store3();
+    const state = snapshot2 ?? await db.getState();
+    if (state.nativeAgentPreset !== true || state.sessionBindings[agentId] !== void 0) {
+      settle("");
+      return;
+    }
+    settle(await unboundBlock(db, state));
+  }
+});
+async function unboundBlock(db, state) {
+  const key = [renderGeneration, state.activePreset ?? "", state.activeCharacter ?? "", state.activePersona ?? ""].join("\0");
+  if (renderMemo?.key === key) return renderMemo.text;
+  const text = await renderUnboundBlock(db, state);
+  renderMemo = { key, text };
+  return text;
+}
+async function renderUnboundBlock(db, state) {
+  if (typeof state.activePreset !== "string" || state.activePreset === "") return "";
+  const raw = await db.getPreset(state.activePreset);
+  if (raw === void 0) return "";
+  const block = renderAgentPresetBlock(parsePreset(raw), void 0, NATIVE_PRESET_HEADER);
+  if (block === void 0) return "";
+  const expand = createHostPromptExpander(
+    state.activeCharacter || CHAR_FALLBACK,
+    state.activePersona ?? DEFAULT_USER2,
+    { now: () => new Date(freeze.frozenAt), rng: seededRandom(freeze.seed) }
+  );
+  return hostPromptSafe(block, expand);
+}
+onAgentPresetChanged(() => {
+  renderGeneration += 1;
+  return projection.refreshAll();
+});
+function nativeAgentPresetSection() {
+  return {
+    name: NATIVE_PRESET_SECTION,
+    order: -75,
+    text: (context) => projection.valueOf(agentIdOf3(context)) ?? ""
+  };
+}
+function agentIdOf3(context) {
+  if (typeof context !== "object" || context === null) return void 0;
+  const agent = context.agent;
+  if (typeof agent !== "object" || agent === null) return void 0;
+  const id = agent.id;
+  return typeof id === "string" && id !== "" ? id : void 0;
+}
+function preheatNativeAgentPreset(agentIds) {
+  return projection.preheatAll(agentIds);
+}
+function preheatNativeAgentPresetOne(agentId) {
+  return projection.preheatOne(agentId);
+}
+
 // packages/plugin/src/mount.ts
 init_runtime2();
 init_io();
@@ -61801,6 +61876,14 @@ function mountAgentCreated(ctx, deps) {
       void emitAgentPresetChanged().then(() => refreshActivePrompt()).catch(() => {
       });
     }
+    const createdAgentId = typeof agent?.id === "string" && agent.id !== "" ? agent.id : typeof agent?.session?.id === "string" && agent.session.id !== "" ? agent.session.id : void 0;
+    if (createdAgentId !== void 0) {
+      try {
+        await preheatNativeAgentPresetOne(createdAgentId);
+      } catch (error) {
+        ctx.logger?.warn?.(`dsh-soulmojito native preset preheat failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     const session = agent.session;
     if (session !== void 0) {
       void deps.getAgentTavernProjectorPromise().then((projector) => projector.replay(session)).catch((error) => ctx.logger?.warn?.(`AgentTavern projection replay failed: ${error instanceof Error ? error.message : String(error)}`));
@@ -61987,68 +62070,6 @@ function mountTransport(ctx, deps) {
   }), "dsh-soulmojito: API");
 }
 
-// packages/plugin/src/native-preset.ts
-init_src2();
-init_runtime2();
-var NATIVE_PRESET_SECTION = "dsh-soulmojito:native-preset";
-var NATIVE_PRESET_HEADER = "Active chat completion preset (user-configured prompt stack; follow these instructions together with the DSH agent preset):";
-var freeze = { frozenAt: Date.now(), seed: Math.random() * 4294967296 >>> 0 };
-var renderMemo;
-var renderGeneration = 0;
-var projection = createLazyProjection({
-  getState: async () => (await store3()).getState(),
-  load: async (agentId, settle, snapshot2) => {
-    const db = await store3();
-    const state = snapshot2 ?? await db.getState();
-    if (state.nativeAgentPreset !== true || state.sessionBindings[agentId] !== void 0) {
-      settle("");
-      return;
-    }
-    settle(await unboundBlock(db, state));
-  }
-});
-async function unboundBlock(db, state) {
-  const key = [renderGeneration, state.activePreset ?? "", state.activeCharacter ?? "", state.activePersona ?? ""].join("\0");
-  if (renderMemo?.key === key) return renderMemo.text;
-  const text = await renderUnboundBlock(db, state);
-  renderMemo = { key, text };
-  return text;
-}
-async function renderUnboundBlock(db, state) {
-  if (typeof state.activePreset !== "string" || state.activePreset === "") return "";
-  const raw = await db.getPreset(state.activePreset);
-  if (raw === void 0) return "";
-  const block = renderAgentPresetBlock(parsePreset(raw), void 0, NATIVE_PRESET_HEADER);
-  if (block === void 0) return "";
-  const expand = createHostPromptExpander(
-    state.activeCharacter || CHAR_FALLBACK,
-    state.activePersona ?? DEFAULT_USER2,
-    { now: () => new Date(freeze.frozenAt), rng: seededRandom(freeze.seed) }
-  );
-  return hostPromptSafe(block, expand);
-}
-onAgentPresetChanged(() => {
-  renderGeneration += 1;
-  return projection.refreshAll();
-});
-function nativeAgentPresetSection() {
-  return {
-    name: NATIVE_PRESET_SECTION,
-    order: -75,
-    text: (context) => projection.valueOf(agentIdOf3(context)) ?? ""
-  };
-}
-function agentIdOf3(context) {
-  if (typeof context !== "object" || context === null) return void 0;
-  const agent = context.agent;
-  if (typeof agent !== "object" || agent === null) return void 0;
-  const id = agent.id;
-  return typeof id === "string" && id !== "" ? id : void 0;
-}
-function preheatNativeAgentPreset(agentIds) {
-  return projection.preheatAll(agentIds);
-}
-
 // packages/plugin/src/index.ts
 init_runtime2();
 
@@ -62223,9 +62244,7 @@ function registerTavernSessionCommand(ctx) {
         parsed.architecture,
         parsed.contextMode
       );
-      if (parsed.architecture === "agent-tavern") {
-        await emitAgentPresetChanged();
-      }
+      await emitAgentPresetChanged();
       if (preloadSnapshot !== void 0) {
         if (agent.inject === void 0) {
           throw new TavernArchitectureConflictError("This host cannot preload AgentTavern session context.");

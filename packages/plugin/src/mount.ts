@@ -11,6 +11,7 @@ import { mountImToolsOnAgent, unmountAllImTools, unmountImToolsForAgent } from '
 import { createImRuntime, imDisabledByEnv, type ImRuntime } from './im/runtime.js'
 import { listLiveAgents } from './im/session-host.js'
 import { refreshActivePrompt } from './model-catalog.js'
+import { preheatNativeAgentPresetOne } from './native-preset.js'
 import { getGamesServicePromise, modHost, setGamesServicePromise, setImRuntime, setModHostContext, tavernUpdate } from './runtime.js'
 import { bindSession } from './session/binding.js'
 import { handleNovelSessionEvent, novelHttpFailure } from './http/novel.js'
@@ -91,6 +92,21 @@ export function mountAgentCreated(ctx: PluginContext, deps: MountDeps): void {
       // 与正常激活路径同款的投影预热尾步（决策 §2 第 8 步）：fire-and-forget，
       // 不拖串行 dispatch；首轮懒装载路径照常兜底。
       void emitAgentPresetChanged().then(() => refreshActivePrompt()).catch(() => {})
+    }
+    // 新会话的预设首轮就绪（2026-11-06 用户需求「第一轮就生效」）：宿主把
+    // agent/created 做成串行事件并在 loop start 前 await，这里 await 单 agent
+    // 预热，第一次装配即可拿到 native-preset 投影。放在 fork 收养之后，绑定
+    // 已落库的会话由装载门控写空串；绑定变更路径另经 emitAgentPresetChanged
+    // 写穿，避免工作台/小说/ST 在创建后才绑定时沿用标准会话投影。
+    const createdAgentId = typeof agent?.id === 'string' && agent.id !== ''
+      ? agent.id
+      : (typeof agent?.session?.id === 'string' && agent.session.id !== '' ? agent.session.id : undefined)
+    if (createdAgentId !== undefined) {
+      try {
+        await preheatNativeAgentPresetOne(createdAgentId)
+      } catch (error) {
+        ctx.logger?.warn?.(`dsh-soulmojito native preset preheat failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
     }
     const session = agent.session
     if (session !== undefined) {
