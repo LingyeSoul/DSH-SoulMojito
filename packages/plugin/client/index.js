@@ -7065,8 +7065,8 @@ window.__ModuleLoader__.load({
       'settings.promptsProbability': 'Probability',
       'settings.promptsExpand': 'Expand',
       'settings.promptsCollapse': 'Collapse',
-      'settings.memoryTitle': 'Memory retrieval — hybrid search',
-      'settings.memoryHint': 'Optional OpenAI-compatible /embeddings endpoint. When configured, memory_search fuses a semantic channel with lexical ranking (RRF); without a valid config retrieval stays lexical only.',
+      'settings.memoryTitle': 'Memory retrieval',
+      'settings.memoryHint': 'Choose how memory_search ranks results: lexical retrieval matches keywords only; hybrid retrieval also fuses a semantic vector channel (RRF) and needs either a remote OpenAI-compatible endpoint or a local ONNX model.',
       'settings.memoryBaseURL': 'Embeddings base URL',
       'settings.memoryApiKeyEnv': 'API key env var name',
       'settings.memoryApiKeyEnvHint': 'Environment variable holding the key (the name only — the key itself is never stored). Leave empty for keyless endpoints.',
@@ -7075,7 +7075,9 @@ window.__ModuleLoader__.load({
       'settings.memoryBatchSize': 'Batch size (optional)',
       'settings.memoryTimeout': 'Timeout ms (optional)',
       'settings.memoryProvider': 'Retrieval mode',
-      'settings.memoryProviderOff': 'Off (lexical only)',
+      'settings.memoryProviderOff': 'Lexical retrieval',
+      'settings.memoryModeHybrid': 'Hybrid retrieval',
+      'settings.memoryChannel': 'Semantic channel',
       'settings.memoryProviderOpenAI': 'Remote endpoint (OpenAI-compatible)',
       'settings.memoryProviderLocal': 'Local ONNX model',
       'settings.memoryModelDir': 'Local model directory',
@@ -7112,6 +7114,17 @@ window.__ModuleLoader__.load({
       'settings.maintenanceStart': 'Run maintenance',
       'settings.maintenanceStarting': 'Starting…',
       'settings.maintenanceRunning': 'Maintenance run {runId} is running…',
+      'settings.maintenancePhasePreparing': 'Preparing: reading the chat and receipts',
+      'settings.maintenancePhaseThinking': 'Model analysing',
+      'settings.maintenancePhaseFinishing': 'Finishing',
+      'settings.maintenanceTool.ReadMemory': 'Reading memories',
+      'settings.maintenanceTool.SearchSource': 'Searching chat source',
+      'settings.maintenanceTool.ReadSource': 'Reading chat source',
+      'settings.maintenanceTool.EditMemory': 'Applying memory edits',
+      'settings.maintenanceTool.CompleteMaintenance': 'Recording covered range',
+      'settings.maintenanceRequests': 'LLM requests {requests}/{budget}',
+      'settings.maintenanceElapsed': 'elapsed {elapsed}',
+      'settings.maintenanceProgress': 'This run: {pending}/{total} floors · edit groups {groups} · merged {merged} · corrected {corrected} · created {created} · deleted {deleted} · failed {failed}',
       'settings.maintenancePending': 'Floors pending maintenance: {floors}',
       'settings.maintenanceNothingPending': 'Nothing pending — valid receipts cover all floors.',
       'settings.maintenanceDone': 'Finished {at} · outcome {outcome} · covered floors {base}–{head}',
@@ -7908,7 +7921,7 @@ window.__ModuleLoader__.load({
       'im.owner.globalEmpty': 'No QQ / OneBot account yet; bind one in the channel cards above.',
       'im.commands.title': 'Slash commands',
       'im.commands.hint': 'Only the account-wide owner can use these; the plugin runs them directly and the command text never reaches the session.',
-      'im.commands.list': '/status status · /bind <sessionId> bind a session · /unbind remove the binding · /help help',
+      'im.commands.list': '/status status · /bind allowlist this group · /bind <sessionId> bind a session · /unbind remove the binding · /help help',
       'im.scope.private': 'Private',
       'im.scope.group': 'Group',
       'im.settings.title': 'Access',
@@ -8158,8 +8171,8 @@ window.__ModuleLoader__.load({
       'settings.promptsProbability': '概率',
       'settings.promptsExpand': '展开',
       'settings.promptsCollapse': '折叠',
-      'settings.memoryTitle': '记忆检索 — 混合检索',
-      'settings.memoryHint': '可选的 OpenAI 兼容 /embeddings 端点。配置后 memory_search 在词法排序上融合语义通道（RRF）；未配置或配置无效时检索保持纯词法。',
+      'settings.memoryTitle': '记忆检索',
+      'settings.memoryHint': '选择 memory_search 的排序方式：词法检索只按关键词匹配；混合检索在此基础上融合语义向量通道（RRF），需要配置远程 OpenAI 兼容端点或本地 ONNX 模型。',
       'settings.memoryBaseURL': 'Embeddings 端点 base URL',
       'settings.memoryApiKeyEnv': 'API key 环境变量名',
       'settings.memoryApiKeyEnvHint': '存放 key 的环境变量名（只填名字，key 本身永不入库）。免密端点留空。',
@@ -8168,7 +8181,9 @@ window.__ModuleLoader__.load({
       'settings.memoryBatchSize': '批量大小（可选）',
       'settings.memoryTimeout': '超时毫秒（可选）',
       'settings.memoryProvider': '检索模式',
-      'settings.memoryProviderOff': '关闭（纯词法检索）',
+      'settings.memoryProviderOff': '词法检索',
+      'settings.memoryModeHybrid': '混合检索',
+      'settings.memoryChannel': '语义通道',
       'settings.memoryProviderOpenAI': '远程端点（OpenAI 兼容）',
       'settings.memoryProviderLocal': '本地 ONNX 模型',
       'settings.memoryModelDir': '本地模型目录',
@@ -8205,6 +8220,17 @@ window.__ModuleLoader__.load({
       'settings.maintenanceStart': '运行维护',
       'settings.maintenanceStarting': '启动中…',
       'settings.maintenanceRunning': '维护 run {runId} 运行中…',
+      'settings.maintenancePhasePreparing': '准备中：读取聊天与完成收据',
+      'settings.maintenancePhaseThinking': '模型分析中',
+      'settings.maintenancePhaseFinishing': '收尾中',
+      'settings.maintenanceTool.ReadMemory': '读取记忆',
+      'settings.maintenanceTool.SearchSource': '检索聊天原文',
+      'settings.maintenanceTool.ReadSource': '阅读聊天原文',
+      'settings.maintenanceTool.EditMemory': '写入记忆编辑',
+      'settings.maintenanceTool.CompleteMaintenance': '登记完成范围',
+      'settings.maintenanceRequests': 'LLM 请求 {requests}/{budget}',
+      'settings.maintenanceElapsed': '已运行 {elapsed}',
+      'settings.maintenanceProgress': '本次待维护 {pending}/{total} 楼 · 编辑组 {groups} · 合并 {merged} · 修正 {corrected} · 新建 {created} · 删除 {deleted} · 失败 {failed}',
       'settings.maintenancePending': '待维护楼层：{floors}',
       'settings.maintenanceNothingPending': '暂无待维护——有效收据已覆盖全部楼层。',
       'settings.maintenanceDone': '完成于 {at} · 收尾 {outcome} · 覆盖楼层 {base}–{head}',
@@ -8992,7 +9018,7 @@ window.__ModuleLoader__.load({
       'im.owner.globalEmpty': '还没有 QQ / OneBot 账号；先在上面的通道卡片里绑定。',
       'im.commands.title': '指令',
       'im.commands.hint': '只有全局主人可以使用这些指令；插件直接执行，指令文本不会进入会话。',
-      'im.commands.list': '/status 查看状态 · /bind <sessionId> 绑定会话 · /unbind 解除绑定 · /help 帮助',
+      'im.commands.list': '/status 查看状态 · /bind 群聊入白名单 · /bind <sessionId> 绑定会话 · /unbind 解除绑定 · /help 帮助',
       'im.scope.private': '私聊',
       'im.scope.group': '群聊',
       'im.settings.title': '访问控制',
@@ -11604,6 +11630,15 @@ window.__ModuleLoader__.load({
     // 角色/聊天选择 + 手动触发 + 上次运行状态/摘要 + 待维护范围提示。POST
     // memory/maintenance（wait:false 风格）拿 runId 后按 1.5s 轮询 GET 状态
     // （与自更新安装进度同款轮询策略，不引入 SSE）。
+    // 维护进度文案用本地墙钟差值；轮询每 1.5s 触发重渲染，等于顺带刷新计时。
+    function formatMaintenanceElapsed(startedAt) {
+      const started = new Date(startedAt).getTime()
+      if (!Number.isFinite(started)) return ''
+      const totalSeconds = Math.max(0, Math.floor((Date.now() - started) / 1000))
+      const minutes = Math.floor(totalSeconds / 60)
+      return `${minutes}:${String(totalSeconds % 60).padStart(2, '0')}`
+    }
+
     function MemoryMaintenanceRow() {
       const state = useTavernStore()
       const t = useTranslate()
@@ -11648,6 +11683,18 @@ window.__ModuleLoader__.load({
 
       const running = view !== null && view.status === 'running'
       const summary = view && view.summary
+      // 服务端只在 running 时下发 progress；本行据此渲染阶段、请求预算进度条和
+      // 实时编辑计数，run 结束后切回最终 summary。
+      const progress = running && view.progress ? view.progress : null
+      const progressPercent = progress === null
+        ? 0
+        : Math.min(100, Math.round((progress.llmRequests / Math.max(1, progress.budget)) * 100))
+      const phaseLabel = progress === null ? ''
+        : progress.phase === 'preparing' ? t('settings.maintenancePhasePreparing')
+          : progress.phase === 'finishing' ? t('settings.maintenancePhaseFinishing')
+            : progress.phase === 'tools' && progress.activity ? t(`settings.maintenanceTool.${progress.activity}`)
+              : t('settings.maintenancePhaseThinking')
+      const elapsed = progress !== null && view.startedAt ? formatMaintenanceElapsed(view.startedAt) : ''
       const statusLine = view === null ? ''
         : running ? t('settings.maintenanceRunning', { runId: (view.runId || '').slice(0, 8) })
           : view.status === 'error'
@@ -11664,7 +11711,7 @@ window.__ModuleLoader__.load({
                   outcome: (summary && summary.outcome) || 'completed',
                 }))
               : ''
-      return h('div', { className: 'dt-settings-band' },
+      return h('div', { className: 'dt-settings-band dt-settings-subband' },
         h('h3', null, t('settings.maintenanceTitle')),
         h('p', { className: 'dt-hint' }, t('settings.maintenanceHint')),
         h('div', { className: 'dt-editor-grid' },
@@ -11683,6 +11730,35 @@ window.__ModuleLoader__.load({
             onChange: (value) => setChatId(value || ''),
           })),
         statusLine !== '' ? h('p', { className: 'dt-hint' }, statusLine) : null,
+        progress !== null
+          ? h('div', { className: 'dt-maintenance-progress' },
+              h('div', { className: 'dt-maintenance-progress-head' },
+                h('span', null, elapsed === ''
+                  ? phaseLabel
+                  : `${phaseLabel} · ${t('settings.maintenanceElapsed', { elapsed })}`),
+                h('span', null, t('settings.maintenanceRequests', {
+                  requests: progress.llmRequests,
+                  budget: progress.budget,
+                }))),
+              h('div', {
+                className: 'dt-progress',
+                role: 'progressbar',
+                'aria-label': phaseLabel,
+                'aria-valuemin': 0,
+                'aria-valuemax': 100,
+                'aria-valuenow': progressPercent,
+              }, h('div', { className: 'dt-progress-fill', style: { width: `${progressPercent}%` } })),
+              h('p', { className: 'dt-hint' }, t('settings.maintenanceProgress', {
+                pending: progress.pendingFloors,
+                total: progress.totalFloors,
+                groups: progress.editGroups,
+                merged: progress.merged,
+                corrected: progress.corrected,
+                created: progress.created,
+                deleted: progress.deleted,
+                failed: progress.failedGroups,
+              })))
+          : null,
         !running && view !== null && !error
           ? h('p', { className: 'dt-hint' },
               view.pending && view.pending.floors > 0
@@ -11708,7 +11784,7 @@ window.__ModuleLoader__.load({
     function MemoryRetrievalBand() {
       const t = useTranslate()
       const [loaded, setLoaded] = useState(false)
-      const [draft, setDraft] = useState({ provider: 'off', baseURL: '', apiKeyEnv: '', model: '', modelDir: '', pooling: '', precision: '', dims: '', batchSize: '', timeoutMs: '' })
+      const [draft, setDraft] = useState({ mode: 'lexical', provider: 'openai', baseURL: '', apiKeyEnv: '', model: '', modelDir: '', pooling: '', precision: '', dims: '', batchSize: '', timeoutMs: '' })
       const [status, setStatus] = useState(null)
       const [saving, setSaving] = useState(false)
       const [testing, setTesting] = useState(false)
@@ -11724,7 +11800,10 @@ window.__ModuleLoader__.load({
           setStatus(result.status || null)
           setDraft((current) => ({
             ...current,
-            provider: result.config?.provider === 'local' ? 'local' : result.config ? 'openai' : 'off',
+            // mode 与 provider 分离：词法/混合是检索模式，远程/本地只是混合模式下
+            // 的语义通道；切回词法再切回混合时不丢用户上次选的通道。
+            mode: result.config ? 'hybrid' : 'lexical',
+            provider: result.config?.provider === 'local' ? 'local' : 'openai',
             baseURL: result.config?.baseURL || '',
             apiKeyEnv: result.config?.apiKeyEnv || '',
             model: result.config?.model || '',
@@ -11743,14 +11822,14 @@ window.__ModuleLoader__.load({
       // 精度识别的防抖拉取：仅本地 provider 且 modelDir 非空时查询；保存成功后
       // refresh 会把 modelDir 钉成绝对路径再次触发。
       useEffect(() => {
-        if (draft.provider !== 'local' || draft.modelDir.trim() === '') { setQuant(null); return undefined }
+        if (draft.mode !== 'hybrid' || draft.provider !== 'local' || draft.modelDir.trim() === '') { setQuant(null); return undefined }
         const timer = setTimeout(() => {
           api('memory/embed/local/quantizations', { method: 'POST', headers: jsonHeaders(), body: JSON.stringify({ modelDir: draft.modelDir }) })
             .then((result) => setQuant({ list: result.quantizations || [], recommended: result.recommended || '' }))
             .catch(() => setQuant(null))
         }, 500)
         return () => clearTimeout(timer)
-      }, [draft.provider, draft.modelDir])
+      }, [draft.mode, draft.provider, draft.modelDir])
       const setField = (name, value) => setDraft((current) => ({ ...current, [name]: value }))
       const optionalInt = (value) => {
         const trimmed = String(value ?? '').trim()
@@ -11760,19 +11839,18 @@ window.__ModuleLoader__.load({
       }
       const save = () => {
         setSaving(true); setError(''); setNotice('')
-        const body = draft.provider === 'local'
-          ? {
-              provider: 'local',
-              modelDir: draft.modelDir,
-              ...(draft.pooling !== '' ? { pooling: draft.pooling } : {}),
-              ...(draft.precision !== '' ? { precision: draft.precision } : {}),
-              ...(optionalInt(draft.dims) !== undefined ? { dims: optionalInt(draft.dims) } : {}),
-              ...(optionalInt(draft.batchSize) !== undefined ? { batchSize: optionalInt(draft.batchSize) } : {}),
-            }
-          : draft.provider === 'off'
-            // 模式切到「关闭」= 清除配置（混合检索整体回落纯词法）；旧「清除」
-            // 按钮的语义收进模式下拉（2026-10-13）。
-            ? { baseURL: '', apiKeyEnv: '', model: '' }
+        const body = draft.mode === 'lexical'
+          // 模式切到「词法检索」= 清除配置（混合检索整体回落纯词法）。
+          ? { baseURL: '', apiKeyEnv: '', model: '' }
+          : draft.provider === 'local'
+            ? {
+                provider: 'local',
+                modelDir: draft.modelDir,
+                ...(draft.pooling !== '' ? { pooling: draft.pooling } : {}),
+                ...(draft.precision !== '' ? { precision: draft.precision } : {}),
+                ...(optionalInt(draft.dims) !== undefined ? { dims: optionalInt(draft.dims) } : {}),
+                ...(optionalInt(draft.batchSize) !== undefined ? { batchSize: optionalInt(draft.batchSize) } : {}),
+              }
             : {
                 baseURL: draft.baseURL,
                 apiKeyEnv: draft.apiKeyEnv,
@@ -11817,6 +11895,8 @@ window.__ModuleLoader__.load({
           .finally(() => setInstalling(false))
       }
       const isLocal = status !== null && status.provider === 'local'
+      const hybrid = draft.mode === 'hybrid'
+      const localChannel = hybrid && draft.provider === 'local'
       const statusBits = []
       if (status !== null) {
         if (!status.configured) statusBits.push(t('settings.memoryOff'))
@@ -11832,23 +11912,31 @@ window.__ModuleLoader__.load({
         h('h3', null, t('settings.memoryTitle')),
         h('p', { className: 'dt-hint' }, t('settings.memoryHint')),
         loaded ? h('div', { className: 'dt-editor-grid' },
-          // 模式切换下拉（2026-10-13）：关闭 / 远程端点 / 本地 ONNX 三态；「关闭」
-          // 吸收了原「清除配置」按钮的语义（保存即清除，检索回落纯词法）。
+          // 检索模式（2026-11-09 用户需求）：词法 / 混合二态；「词法」保存即清除
+          // embed 配置（回落纯词法），「混合」再二级选择语义通道是远程还是本地。
           h(SettingSelect, {
             label: t('settings.memoryProvider'),
+            value: draft.mode,
+            options: [
+              { value: 'lexical', label: t('settings.memoryProviderOff') },
+              { value: 'hybrid', label: t('settings.memoryModeHybrid') },
+            ],
+            onChange: (value) => setField('mode', value === 'hybrid' ? 'hybrid' : 'lexical'),
+          }),
+          hybrid ? h(SettingSelect, {
+            label: t('settings.memoryChannel'),
             value: draft.provider,
             options: [
-              { value: 'off', label: t('settings.memoryProviderOff') },
               { value: 'openai', label: t('settings.memoryProviderOpenAI') },
               { value: 'local', label: t('settings.memoryProviderLocal') },
             ],
-            onChange: (value) => setField('provider', value === 'local' || value === 'openai' ? value : 'off'),
-          }),
-          draft.provider === 'local' ? h(EditorField, {
+            onChange: (value) => setField('provider', value === 'local' ? 'local' : 'openai'),
+          }) : null,
+          localChannel ? h(EditorField, {
             label: t('settings.memoryModelDir'), value: draft.modelDir, onChange: (value) => setField('modelDir', value),
             className: 'dt-editor-wide', hint: t('settings.memoryModelDirHint'), placeholder: 'D:\\models\\bge-small-zh-v1.5',
           }) : null,
-          draft.provider === 'local' ? h(SettingSelect, {
+          localChannel ? h(SettingSelect, {
             label: t('settings.memoryPooling'),
             value: draft.pooling,
             options: [
@@ -11861,7 +11949,7 @@ window.__ModuleLoader__.load({
           // 量化精度下拉（2026-10-13）：选项按模型目录智能识别（onnx/ 下的
           // model*_*.onnx 档位 + 文件大小）；「自动」带出识别出的推荐档。目录
           // 未检出当前选中档时保留该选项并标注，防 select 值悬空。
-          draft.provider === 'local' ? h(SettingSelect, {
+          localChannel ? h(SettingSelect, {
             label: t('settings.memoryPrecision'),
             value: draft.precision,
             options: [
@@ -11878,12 +11966,12 @@ window.__ModuleLoader__.load({
             ],
             onChange: (value) => setField('precision', value || ''),
           }) : null,
-          draft.provider === 'local' ? null : h(EditorField, { label: t('settings.memoryBaseURL'), value: draft.baseURL, onChange: (value) => setField('baseURL', value), className: 'dt-editor-wide', placeholder: 'https://api.example.com/v1' }),
-          draft.provider === 'local' ? null : h(EditorField, { label: t('settings.memoryModel'), value: draft.model, onChange: (value) => setField('model', value), placeholder: 'text-embedding-3-small' }),
-          draft.provider === 'local' ? null : h(EditorField, { label: t('settings.memoryApiKeyEnv'), value: draft.apiKeyEnv, onChange: (value) => setField('apiKeyEnv', value), hint: t('settings.memoryApiKeyEnvHint'), placeholder: 'MY_EMBED_API_KEY' }),
-          h(EditorField, { label: t('settings.memoryDims'), value: draft.dims, type: 'number', min: 1, onChange: (value) => setField('dims', value) }),
-          h(EditorField, { label: t('settings.memoryBatchSize'), value: draft.batchSize, type: 'number', min: 1, max: 64, onChange: (value) => setField('batchSize', value) }),
-          draft.provider === 'local' ? null : h(EditorField, { label: t('settings.memoryTimeout'), value: draft.timeoutMs, type: 'number', min: 200, onChange: (value) => setField('timeoutMs', value) })) : null,
+          hybrid && !localChannel ? h(EditorField, { label: t('settings.memoryBaseURL'), value: draft.baseURL, onChange: (value) => setField('baseURL', value), className: 'dt-editor-wide', placeholder: 'https://api.example.com/v1' }) : null,
+          hybrid && !localChannel ? h(EditorField, { label: t('settings.memoryModel'), value: draft.model, onChange: (value) => setField('model', value), placeholder: 'text-embedding-3-small' }) : null,
+          hybrid && !localChannel ? h(EditorField, { label: t('settings.memoryApiKeyEnv'), value: draft.apiKeyEnv, onChange: (value) => setField('apiKeyEnv', value), hint: t('settings.memoryApiKeyEnvHint'), placeholder: 'MY_EMBED_API_KEY' }) : null,
+          hybrid ? h(EditorField, { label: t('settings.memoryDims'), value: draft.dims, type: 'number', min: 1, onChange: (value) => setField('dims', value) }) : null,
+          hybrid ? h(EditorField, { label: t('settings.memoryBatchSize'), value: draft.batchSize, type: 'number', min: 1, max: 64, onChange: (value) => setField('batchSize', value) }) : null,
+          hybrid && !localChannel ? h(EditorField, { label: t('settings.memoryTimeout'), value: draft.timeoutMs, type: 'number', min: 200, onChange: (value) => setField('timeoutMs', value) }) : null) : null,
         statusBits.length > 0 ? h('p', { className: 'dt-hint' }, statusBits.join(' · ')) : null,
         h('div', { className: 'dt-editor-actions' },
           isLocal && status.runtimeInstalled === false
@@ -20293,6 +20381,17 @@ window.__ModuleLoader__.load({
         /* 内容带：眉题前置 3px 签条，全分区统一图纸语汇。 */
         .dt-settings-band>h3{display:flex;align-items:center;gap:8px}
         .dt-settings-band>h3::before{content:"";flex:none;width:3px;height:12px;border-radius:2px;background:var(--dsw-alias-brand-primary,var(--dsw-alias-state-business-primary))}
+        /* 分区内嵌子段（记忆维护）：只做上分隔，不再重复父级 24px 内边距，
+           否则整段内容会比同级标题多缩进一层（2026-11-09 用户反馈）。 */
+        .dt-settings-band.dt-settings-subband{padding:20px 0 0;border-bottom:0}
+        .dt-maintenance-progress{display:flex;flex-direction:column;gap:6px;margin:0 0 12px}
+        .dt-maintenance-progress-head{display:flex;align-items:center;justify-content:space-between;gap:10px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}
+        .dt-maintenance-progress-head>span{min-width:0}
+        .dt-maintenance-progress-head>span:last-child{flex:none;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}
+        .dt-maintenance-progress>.dt-hint{margin:0}
+        .dt-progress{height:6px;border-radius:3px;background:var(--dsw-alias-interactive-bg-hover);overflow:hidden}
+        .dt-progress-fill{height:100%;border-radius:3px;background:var(--dsw-alias-state-business-primary);transition:width .2s ease}
+        @media(max-width:700px){.dt-settings-band.dt-settings-subband{padding:16px 0 0}}
         /* 资产卡：发丝环统一悬浮反馈。 */
         .dt-card,.dt-persona-row,.dt-world-row,.dt-entry,.dt-regex-row,.dt-novel-card,.dt-mod-row,.dt-preset-row,.dt-script-row,.dt-guide-row,.dt-workbench-plan,.dt-stat{transition:border-color .15s ease,background .15s ease,transform .15s ease}
         .dt-card:hover,.dt-world-row:hover,.dt-entry:hover,.dt-preset-row:hover,.dt-script-row:hover,.dt-workbench-plan:hover{border-color:var(--dsw-alias-border-l1,var(--dsw-alias-border-l2))}

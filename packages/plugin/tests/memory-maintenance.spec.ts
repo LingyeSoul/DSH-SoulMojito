@@ -539,6 +539,42 @@ describe('run 纪律', () => {
     expect(second.status).toBe('done')
   })
 
+  it('运行中返回实时进度：阶段、LLM 请求预算与待维护楼面；收尾后进度消失', async () => {
+    const chatId = await seedChat(e1Floors())
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const gated: ChunkProducer = async function* () {
+      await gate
+      yield { type: 'text-delta', index: 0, text: 'gated done' }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    }
+    const { ctx } = fakeCtx([gated])
+    const scope = { character: CHARACTER, chatId }
+    await startMemoryMaintenance(ctx, deps(), scope)
+    const started = Date.now()
+    let running: Awaited<ReturnType<typeof memoryMaintenanceStatus>> | undefined
+    for (;;) {
+      running = await memoryMaintenanceStatus(deps(), scope)
+      if (running.progress !== undefined && running.progress.llmRequests >= 1) break
+      if (Date.now() - started > 4000) throw new Error('progress was not reported while the run was gated')
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    expect(running.status).toBe('running')
+    expect(running.progress).toMatchObject({
+      phase: 'thinking',
+      llmRequests: 1,
+      budget: MAINTENANCE_MAX_LLM_REQUESTS,
+      totalFloors: 24,
+      pendingFloors: 24,
+      editGroups: 0,
+    })
+    expect(running.pending.floors).toBe(24)
+    release()
+    const view = await waitUntilIdle(scope)
+    expect(view.status).toBe('done')
+    expect(view.progress).toBeUndefined()
+  })
+
   it('进程重启：状态文件遗留的 running（无在跑注册）被标 error(interrupted)，不假装完成', async () => {
     const chatId = await seedChat(e1Floors())
     const stateStore = await MemoryMaintenanceStore.open(root)

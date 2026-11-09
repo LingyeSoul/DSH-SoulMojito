@@ -76,6 +76,7 @@
 - [`2026-10-31-weixin-send-queue.md`](../decisions/2026-10-31-weixin-send-queue.md) — 微信出站队列：面板可配发送间隔、窗口/冷却主动等待并重试一次、排队回执带排期
 - [`2026-10-31-im-owner-designation.md`](../decisions/2026-10-31-im-owner-designation.md) — IM 会话主人：每 peer 至多一位、主人/发言人值只存 `snd-` 哈希、头部 `owner=1`/`ownerItems` 权威标记与正文防伪造
 - [`2026-11-01-im-global-owner-and-commands.md`](../decisions/2026-11-01-im-global-owner-and-commands.md) — IM 账号级全局主人（微信排除）与仅全局主人可用的 `/status` `/bind` `/unbind` `/help` 指令；指令由插件执行、不进入模型会话
+- [`2026-11-09-im-group-bind-allowlist.md`](../decisions/2026-11-09-im-group-bind-allowlist.md) — IM 群聊白名单自举：全局主人在群聊里发 `/bind` 把当前群加入 `groupAllow`，带 `sessionId` 时同时绑定；其他指令与名单外成员仍静默
 - [`2026-11-02-mount-phases.md`](../decisions/2026-11-02-mount-phases.md) — `apply()` 装配阶段抽取：session/agent/transport 三相位、update/games/IM/Mods 四相位与 `MountDeps`；route table 十四刀（update/games/im + 读路由模块 + 后置域路由 + body 模块 + character 写/导出 + persona/group + asset import/preset + models/model/state + binding/chats/branch + candidates/preview/mvu + card-workbench/memory/prompts + world/preset delete/export + variables/regex + helper/frontend/card-scripts/display/chat/generate/script），另有 `http-route-table.spec.ts` 锁顺序、错误方法回落与已迁移路由
 
 ### 宿主兼容与 DSH 版本适配

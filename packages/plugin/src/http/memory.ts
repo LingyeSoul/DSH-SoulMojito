@@ -288,9 +288,10 @@ export async function handleMemoryEmbedApi(
  * `POST memory/maintenance {character, chatId}` → `{ok, runId}`（wait:false 风格，
  * run 在本进程后台执行，不因浏览器断开中断）；同 scope 已有在跑 run 时 409。
  * `GET memory/maintenance?character&chatId` → `{status: 'running'|'done'|'error',
- * startedAt, finishedAt?, summary, pending, receipts}`（summary 含处理楼面范围、
- * 编辑组数、合并/修正/删除计数、失败计数与退役结果；细粒度收尾 outcome 在
- * summary 里——预算耗尽是纪律内收尾不是 error）。
+ * startedAt, finishedAt?, summary, pending, receipts, progress?}`（summary 含处理
+ * 楼面范围、编辑组数、合并/修正/删除计数、失败计数与退役结果；细粒度收尾 outcome
+ * 在 summary 里——预算耗尽是纪律内收尾不是 error。running 时额外带 progress：
+ * 阶段、当前工具、LLM 请求/预算与实时编辑计数，供面板渲染进度条）。
  */
 export async function handleMemoryMaintenanceApi(
   ctx: MaintenanceLlmContext,

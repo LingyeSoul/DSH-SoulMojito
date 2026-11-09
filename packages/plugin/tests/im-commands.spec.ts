@@ -12,6 +12,9 @@ import {
   IM_COMMAND_BIND_USAGE,
   IM_COMMAND_CHANNEL_UNSUPPORTED,
   IM_COMMAND_DENIED,
+  IM_COMMAND_GROUP_ALLOWED,
+  IM_COMMAND_GROUP_ALLOWED_ALREADY,
+  IM_COMMAND_GROUP_ALLOWED_USAGE,
   IM_COMMAND_HELP,
   IM_COMMAND_PRESET_FAILED,
   IM_COMMAND_UNBOUND_NONE,
@@ -61,13 +64,15 @@ function harness(options: {
   sendGate?: Promise<void>
   /** 运行日志接缝：验证失败原因进日志而不进回执。 */
   log?: ImLogSink
+  /** 交错写测试的 store 接缝：默认直连真实 store。 */
+  db?: TavernStore
 } = {}): Harness {
   const inserts: Harness['inserts'] = []
   const sent: Harness['sent'] = []
   const seen = new Set<string>()
   let clock = 1_000
   const router = createImRouter({
-    db,
+    db: options.db ?? db,
     now: () => clock,
     seenDedupe: async (key) => {
       if (seen.has(key)) return true
@@ -128,6 +133,12 @@ function command(overrides: Partial<ImInbound> = {}): ImInbound {
 async function openAccess(): Promise<void> {
   await db.patchState({
     imSettings: { ...DEFAULT_IM_SETTINGS, privateMode: 'open', groupMode: 'open' },
+  })
+}
+
+async function allowlistGroups(...groupIds: string[]): Promise<void> {
+  await db.patchState({
+    imSettings: { ...DEFAULT_IM_SETTINGS, groupMode: 'allowlist', groupAllow: groupIds },
   })
 }
 
@@ -252,13 +263,14 @@ describe('im slash commands from the account-global owner', () => {
     expect(binding?.scope).toBe('group')
   })
 
-  it('replies with usage for a blank /bind and writes no binding', async () => {
+  it('replies with usage for a blank /bind in a private chat and writes no binding', async () => {
     await openAccess()
     await setGlobalOwner()
     const h = harness()
-    await h.send(command({ text: '/bind   ' }))
+    const privateKey = imPeerKey('qq', 'acct', 'private', 'user-1')
+    await h.send(command({ scope: 'private', peerId: 'user-1', text: '/bind   ' }))
     expect(h.sent[0]?.texts[0]).toBe(IM_COMMAND_BIND_USAGE)
-    expect((await stateOf()).imPeers?.[GROUP_KEY]).toBeUndefined()
+    expect((await stateOf()).imPeers?.[privateKey]).toBeUndefined()
   })
 
   it('removes both the binding and the pending row on /unbind, then reports nothing bound', async () => {
@@ -291,6 +303,9 @@ describe('im slash commands from the account-global owner', () => {
     const h = harness()
     await h.send(command({ text: '/deploy' }))
     expect(h.sent[0]?.texts[0]).toBe(IM_COMMAND_USAGE)
+    // 未知指令的提示也要让群主人看到 bare /bind 的自举入口。
+    expect(IM_COMMAND_USAGE).toContain('/bind（群聊入白名单）')
+    expect(IM_COMMAND_USAGE).toContain('/bind <sessionId>')
   })
 
   it('does not block inbound delivery on a slow command reply', async () => {
@@ -309,6 +324,173 @@ describe('im slash commands from the account-global owner', () => {
     release()
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(h.sent).toHaveLength(1)
+  })
+})
+
+describe('im /bind group allowlist bootstrap', () => {
+  it('lets the global owner add a new group to the allowlist with a bare /bind', async () => {
+    await setGlobalOwner()
+    const h = harness()
+    await h.send(command({ text: '/bind' }))
+    const reply = h.sent[0]?.texts[0] ?? ''
+    expect(reply).toContain(IM_COMMAND_GROUP_ALLOWED)
+    expect(reply).toContain(IM_COMMAND_GROUP_ALLOWED_USAGE)
+    const state = await stateOf()
+    expect(state.imSettings?.groupAllow).toEqual(['group-1'])
+    expect(state.imPeers?.[GROUP_KEY]).toBeUndefined()
+    expect(h.inserts).toHaveLength(0)
+  })
+
+  it('keeps the unbound pending row when a bare /bind only allowlists the group', async () => {
+    await setGlobalOwner()
+    await pendingPeer()
+    const h = harness()
+    await h.send(command({ text: '/bind' }))
+    const state = await stateOf()
+    expect(state.imSettings?.groupAllow).toEqual(['group-1'])
+    expect(state.imPendingPeers?.[GROUP_KEY]).toEqual({ lastAt: 500 })
+  })
+
+  it('binds, clears the pending row and whitelists in one /bind <sessionId>', async () => {
+    await setGlobalOwner()
+    await pendingPeer()
+    const h = harness()
+    await h.send(command({ text: '/bind session-a' }))
+    const state = await stateOf()
+    expect(state.imPeers?.[GROUP_KEY]?.sessionId).toBe('session-a')
+    expect(state.imPeers?.[GROUP_KEY]?.boundBy).toBe('command')
+    expect(state.imPendingPeers?.[GROUP_KEY]).toBeUndefined()
+    expect(state.imSettings?.groupAllow).toEqual(['group-1'])
+    expect(h.sent[0]?.texts[0]).toContain(IM_COMMAND_GROUP_ALLOWED)
+    expect(h.inserts).toHaveLength(0)
+  })
+
+  it('reports an already allowed group without duplicating the entry', async () => {
+    await setGlobalOwner()
+    await allowlistGroups('group-1')
+    const h = harness()
+    await h.send(command({ text: '/bind' }))
+    expect(h.sent[0]?.texts[0]).toContain(IM_COMMAND_GROUP_ALLOWED_ALREADY)
+    expect((await stateOf()).imSettings?.groupAllow).toEqual(['group-1'])
+  })
+
+  it('does not duplicate the entry when binding an already allowed group', async () => {
+    await setGlobalOwner()
+    await allowlistGroups('group-1')
+    const h = harness()
+    await h.send(command({ text: '/bind session-a' }))
+    const state = await stateOf()
+    expect(state.imSettings?.groupAllow).toEqual(['group-1'])
+    expect(state.imPeers?.[GROUP_KEY]?.sessionId).toBe('session-a')
+    // 已经入名单时，绑定回执不该再声称「已将本群加入」。
+    expect(h.sent[0]?.texts[0]).not.toContain(IM_COMMAND_GROUP_ALLOWED)
+  })
+
+  /**
+   * 命令 gate 与写盘之间插入一次面板写：第一次 getState 返回旧快照，随后
+   * 执行 `race`，再让 updateState 落在真实 store 的最新状态上。
+   */
+  async function racingStore(race: () => Promise<void>): Promise<TavernStore> {
+    const stale = await db.getState()
+    let first = true
+    return {
+      getState: async () => {
+        if (!first) return db.getState()
+        first = false
+        await race()
+        return stale
+      },
+      updateState: (update: (current: TavernState) => Partial<TavernState>) => db.updateState(update),
+    } as unknown as TavernStore
+  }
+
+  it('reports already allowed when a concurrent writer wins the allowlist race', async () => {
+    await setGlobalOwner()
+    const racing = await racingStore(async () => { await allowlistGroups('group-1') })
+    const h = harness({ db: racing })
+    await h.send(command({ text: '/bind' }))
+    expect(h.sent[0]?.texts[0]).toContain(IM_COMMAND_GROUP_ALLOWED_ALREADY)
+    expect((await stateOf()).imSettings?.groupAllow).toEqual(['group-1'])
+  })
+
+  it('refuses when the group scope becomes disabled between the gate and the write', async () => {
+    await setGlobalOwner()
+    const racing = await racingStore(async () => {
+      await db.patchState({ imSettings: { ...DEFAULT_IM_SETTINGS, groupMode: 'disabled', groupAllow: [] } })
+    })
+    const h = harness({ db: racing })
+    await h.send(command({ text: '/bind' }))
+    expect(h.sent[0]?.texts[0]).toBe(IM_COMMAND_DENIED)
+    const state = await stateOf()
+    expect(state.imSettings?.groupAllow).toEqual([])
+    expect(state.imPeers?.[GROUP_KEY]).toBeUndefined()
+  })
+
+  it('refuses when the global owner is revoked between the gate and the write', async () => {
+    await setGlobalOwner()
+    const racing = await racingStore(async () => {
+      await db.patchState({ imAccountOwners: {} })
+    })
+    const h = harness({ db: racing })
+    await h.send(command({ text: '/bind session-a' }))
+    expect(h.sent[0]?.texts[0]).toBe(IM_COMMAND_DENIED)
+    const state = await stateOf()
+    expect(state.imSettings?.groupAllow).toEqual([])
+    expect(state.imPeers?.[GROUP_KEY]).toBeUndefined()
+  })
+
+  it('stays silent for a non-owner /bind in a group outside the allowlist', async () => {
+    await setGlobalOwner()
+    const h = harness()
+    await h.send(command({ senderId: 'member-2', senderName: '小红', text: '/bind session-b' }))
+    expect(h.sent).toHaveLength(0)
+    expect(h.inserts).toHaveLength(0)
+    const state = await stateOf()
+    expect(state.imSettings?.groupAllow).toEqual([])
+    expect(state.imPeers?.[GROUP_KEY]).toBeUndefined()
+  })
+
+  it('keeps other commands silent for a group outside the allowlist', async () => {
+    await setGlobalOwner()
+    const h = harness()
+    await h.send(command({ text: '/status' }))
+    expect(h.sent).toHaveLength(0)
+    expect(h.inserts).toHaveLength(0)
+  })
+
+  it('does not bypass a disabled group scope for the global owner', async () => {
+    await setGlobalOwner()
+    await db.patchState({
+      imSettings: { ...DEFAULT_IM_SETTINGS, groupMode: 'disabled', groupAllow: [] },
+    })
+    const h = harness()
+    await h.send(command({ text: '/bind' }))
+    await h.send(command({ text: '/bind session-a' }))
+    expect(h.sent).toHaveLength(0)
+    const state = await stateOf()
+    expect(state.imSettings?.groupAllow).toEqual([])
+    expect(state.imPeers?.[GROUP_KEY]).toBeUndefined()
+  })
+
+  it('does not touch the private allowlist for a blank /bind in a private chat', async () => {
+    await openAccess()
+    await setGlobalOwner()
+    const h = harness()
+    await h.send(command({ scope: 'private', peerId: 'user-1', text: '/bind   ' }))
+    expect(h.sent[0]?.texts[0]).toBe(IM_COMMAND_BIND_USAGE)
+    const state = await stateOf()
+    expect(state.imSettings?.privateAllow).toEqual([])
+    expect(state.imPeers?.[imPeerKey('qq', 'acct', 'private', 'user-1')]).toBeUndefined()
+  })
+
+  it('keeps a private /bind silent while the default private allowlist is empty', async () => {
+    await setGlobalOwner()
+    const h = harness()
+    await h.send(command({ scope: 'private', peerId: 'user-1', text: '/bind' }))
+    expect(h.sent).toHaveLength(0)
+    const state = await stateOf()
+    expect(state.imSettings?.privateAllow).toEqual([])
+    expect(state.imPeers?.[imPeerKey('qq', 'acct', 'private', 'user-1')]).toBeUndefined()
   })
 })
 
@@ -418,6 +600,21 @@ describe('im slash command authorization', () => {
         'weixin:wx-bot': { id: imSenderHash('weixin', 'wx-bot', 'user-1'), name: '', setAt: new Date(0).toISOString() },
       },
     })
+    const h = harness()
+    await h.send(command({
+      channel: 'weixin',
+      accountId: 'wx-bot',
+      scope: 'private',
+      peerId: 'user-1',
+      senderId: 'user-1',
+      text: '/status',
+    }))
+    expect(h.sent[0]?.texts[0]).toBe(IM_COMMAND_CHANNEL_UNSUPPORTED)
+    expect(h.inserts).toHaveLength(0)
+  })
+
+  it('rejects WeChat commands as unsupported even when no owner row exists', async () => {
+    await openAccess()
     const h = harness()
     await h.send(command({
       channel: 'weixin',

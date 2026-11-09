@@ -6,6 +6,15 @@
     // 角色/聊天选择 + 手动触发 + 上次运行状态/摘要 + 待维护范围提示。POST
     // memory/maintenance（wait:false 风格）拿 runId 后按 1.5s 轮询 GET 状态
     // （与自更新安装进度同款轮询策略，不引入 SSE）。
+    // 维护进度文案用本地墙钟差值；轮询每 1.5s 触发重渲染，等于顺带刷新计时。
+    function formatMaintenanceElapsed(startedAt) {
+      const started = new Date(startedAt).getTime()
+      if (!Number.isFinite(started)) return ''
+      const totalSeconds = Math.max(0, Math.floor((Date.now() - started) / 1000))
+      const minutes = Math.floor(totalSeconds / 60)
+      return `${minutes}:${String(totalSeconds % 60).padStart(2, '0')}`
+    }
+
     function MemoryMaintenanceRow() {
       const state = useTavernStore()
       const t = useTranslate()
@@ -50,6 +59,18 @@
 
       const running = view !== null && view.status === 'running'
       const summary = view && view.summary
+      // 服务端只在 running 时下发 progress；本行据此渲染阶段、请求预算进度条和
+      // 实时编辑计数，run 结束后切回最终 summary。
+      const progress = running && view.progress ? view.progress : null
+      const progressPercent = progress === null
+        ? 0
+        : Math.min(100, Math.round((progress.llmRequests / Math.max(1, progress.budget)) * 100))
+      const phaseLabel = progress === null ? ''
+        : progress.phase === 'preparing' ? t('settings.maintenancePhasePreparing')
+          : progress.phase === 'finishing' ? t('settings.maintenancePhaseFinishing')
+            : progress.phase === 'tools' && progress.activity ? t(`settings.maintenanceTool.${progress.activity}`)
+              : t('settings.maintenancePhaseThinking')
+      const elapsed = progress !== null && view.startedAt ? formatMaintenanceElapsed(view.startedAt) : ''
       const statusLine = view === null ? ''
         : running ? t('settings.maintenanceRunning', { runId: (view.runId || '').slice(0, 8) })
           : view.status === 'error'
@@ -66,7 +87,7 @@
                   outcome: (summary && summary.outcome) || 'completed',
                 }))
               : ''
-      return h('div', { className: 'dt-settings-band' },
+      return h('div', { className: 'dt-settings-band dt-settings-subband' },
         h('h3', null, t('settings.maintenanceTitle')),
         h('p', { className: 'dt-hint' }, t('settings.maintenanceHint')),
         h('div', { className: 'dt-editor-grid' },
@@ -85,6 +106,35 @@
             onChange: (value) => setChatId(value || ''),
           })),
         statusLine !== '' ? h('p', { className: 'dt-hint' }, statusLine) : null,
+        progress !== null
+          ? h('div', { className: 'dt-maintenance-progress' },
+              h('div', { className: 'dt-maintenance-progress-head' },
+                h('span', null, elapsed === ''
+                  ? phaseLabel
+                  : `${phaseLabel} · ${t('settings.maintenanceElapsed', { elapsed })}`),
+                h('span', null, t('settings.maintenanceRequests', {
+                  requests: progress.llmRequests,
+                  budget: progress.budget,
+                }))),
+              h('div', {
+                className: 'dt-progress',
+                role: 'progressbar',
+                'aria-label': phaseLabel,
+                'aria-valuemin': 0,
+                'aria-valuemax': 100,
+                'aria-valuenow': progressPercent,
+              }, h('div', { className: 'dt-progress-fill', style: { width: `${progressPercent}%` } })),
+              h('p', { className: 'dt-hint' }, t('settings.maintenanceProgress', {
+                pending: progress.pendingFloors,
+                total: progress.totalFloors,
+                groups: progress.editGroups,
+                merged: progress.merged,
+                corrected: progress.corrected,
+                created: progress.created,
+                deleted: progress.deleted,
+                failed: progress.failedGroups,
+              })))
+          : null,
         !running && view !== null && !error
           ? h('p', { className: 'dt-hint' },
               view.pending && view.pending.floors > 0
@@ -110,7 +160,7 @@
     function MemoryRetrievalBand() {
       const t = useTranslate()
       const [loaded, setLoaded] = useState(false)
-      const [draft, setDraft] = useState({ provider: 'off', baseURL: '', apiKeyEnv: '', model: '', modelDir: '', pooling: '', precision: '', dims: '', batchSize: '', timeoutMs: '' })
+      const [draft, setDraft] = useState({ mode: 'lexical', provider: 'openai', baseURL: '', apiKeyEnv: '', model: '', modelDir: '', pooling: '', precision: '', dims: '', batchSize: '', timeoutMs: '' })
       const [status, setStatus] = useState(null)
       const [saving, setSaving] = useState(false)
       const [testing, setTesting] = useState(false)
@@ -126,7 +176,10 @@
           setStatus(result.status || null)
           setDraft((current) => ({
             ...current,
-            provider: result.config?.provider === 'local' ? 'local' : result.config ? 'openai' : 'off',
+            // mode 与 provider 分离：词法/混合是检索模式，远程/本地只是混合模式下
+            // 的语义通道；切回词法再切回混合时不丢用户上次选的通道。
+            mode: result.config ? 'hybrid' : 'lexical',
+            provider: result.config?.provider === 'local' ? 'local' : 'openai',
             baseURL: result.config?.baseURL || '',
             apiKeyEnv: result.config?.apiKeyEnv || '',
             model: result.config?.model || '',
@@ -145,14 +198,14 @@
       // 精度识别的防抖拉取：仅本地 provider 且 modelDir 非空时查询；保存成功后
       // refresh 会把 modelDir 钉成绝对路径再次触发。
       useEffect(() => {
-        if (draft.provider !== 'local' || draft.modelDir.trim() === '') { setQuant(null); return undefined }
+        if (draft.mode !== 'hybrid' || draft.provider !== 'local' || draft.modelDir.trim() === '') { setQuant(null); return undefined }
         const timer = setTimeout(() => {
           api('memory/embed/local/quantizations', { method: 'POST', headers: jsonHeaders(), body: JSON.stringify({ modelDir: draft.modelDir }) })
             .then((result) => setQuant({ list: result.quantizations || [], recommended: result.recommended || '' }))
             .catch(() => setQuant(null))
         }, 500)
         return () => clearTimeout(timer)
-      }, [draft.provider, draft.modelDir])
+      }, [draft.mode, draft.provider, draft.modelDir])
       const setField = (name, value) => setDraft((current) => ({ ...current, [name]: value }))
       const optionalInt = (value) => {
         const trimmed = String(value ?? '').trim()
@@ -162,19 +215,18 @@
       }
       const save = () => {
         setSaving(true); setError(''); setNotice('')
-        const body = draft.provider === 'local'
-          ? {
-              provider: 'local',
-              modelDir: draft.modelDir,
-              ...(draft.pooling !== '' ? { pooling: draft.pooling } : {}),
-              ...(draft.precision !== '' ? { precision: draft.precision } : {}),
-              ...(optionalInt(draft.dims) !== undefined ? { dims: optionalInt(draft.dims) } : {}),
-              ...(optionalInt(draft.batchSize) !== undefined ? { batchSize: optionalInt(draft.batchSize) } : {}),
-            }
-          : draft.provider === 'off'
-            // 模式切到「关闭」= 清除配置（混合检索整体回落纯词法）；旧「清除」
-            // 按钮的语义收进模式下拉（2026-10-13）。
-            ? { baseURL: '', apiKeyEnv: '', model: '' }
+        const body = draft.mode === 'lexical'
+          // 模式切到「词法检索」= 清除配置（混合检索整体回落纯词法）。
+          ? { baseURL: '', apiKeyEnv: '', model: '' }
+          : draft.provider === 'local'
+            ? {
+                provider: 'local',
+                modelDir: draft.modelDir,
+                ...(draft.pooling !== '' ? { pooling: draft.pooling } : {}),
+                ...(draft.precision !== '' ? { precision: draft.precision } : {}),
+                ...(optionalInt(draft.dims) !== undefined ? { dims: optionalInt(draft.dims) } : {}),
+                ...(optionalInt(draft.batchSize) !== undefined ? { batchSize: optionalInt(draft.batchSize) } : {}),
+              }
             : {
                 baseURL: draft.baseURL,
                 apiKeyEnv: draft.apiKeyEnv,
@@ -219,6 +271,8 @@
           .finally(() => setInstalling(false))
       }
       const isLocal = status !== null && status.provider === 'local'
+      const hybrid = draft.mode === 'hybrid'
+      const localChannel = hybrid && draft.provider === 'local'
       const statusBits = []
       if (status !== null) {
         if (!status.configured) statusBits.push(t('settings.memoryOff'))
@@ -234,23 +288,31 @@
         h('h3', null, t('settings.memoryTitle')),
         h('p', { className: 'dt-hint' }, t('settings.memoryHint')),
         loaded ? h('div', { className: 'dt-editor-grid' },
-          // 模式切换下拉（2026-10-13）：关闭 / 远程端点 / 本地 ONNX 三态；「关闭」
-          // 吸收了原「清除配置」按钮的语义（保存即清除，检索回落纯词法）。
+          // 检索模式（2026-11-09 用户需求）：词法 / 混合二态；「词法」保存即清除
+          // embed 配置（回落纯词法），「混合」再二级选择语义通道是远程还是本地。
           h(SettingSelect, {
             label: t('settings.memoryProvider'),
+            value: draft.mode,
+            options: [
+              { value: 'lexical', label: t('settings.memoryProviderOff') },
+              { value: 'hybrid', label: t('settings.memoryModeHybrid') },
+            ],
+            onChange: (value) => setField('mode', value === 'hybrid' ? 'hybrid' : 'lexical'),
+          }),
+          hybrid ? h(SettingSelect, {
+            label: t('settings.memoryChannel'),
             value: draft.provider,
             options: [
-              { value: 'off', label: t('settings.memoryProviderOff') },
               { value: 'openai', label: t('settings.memoryProviderOpenAI') },
               { value: 'local', label: t('settings.memoryProviderLocal') },
             ],
-            onChange: (value) => setField('provider', value === 'local' || value === 'openai' ? value : 'off'),
-          }),
-          draft.provider === 'local' ? h(EditorField, {
+            onChange: (value) => setField('provider', value === 'local' ? 'local' : 'openai'),
+          }) : null,
+          localChannel ? h(EditorField, {
             label: t('settings.memoryModelDir'), value: draft.modelDir, onChange: (value) => setField('modelDir', value),
             className: 'dt-editor-wide', hint: t('settings.memoryModelDirHint'), placeholder: 'D:\\models\\bge-small-zh-v1.5',
           }) : null,
-          draft.provider === 'local' ? h(SettingSelect, {
+          localChannel ? h(SettingSelect, {
             label: t('settings.memoryPooling'),
             value: draft.pooling,
             options: [
@@ -263,7 +325,7 @@
           // 量化精度下拉（2026-10-13）：选项按模型目录智能识别（onnx/ 下的
           // model*_*.onnx 档位 + 文件大小）；「自动」带出识别出的推荐档。目录
           // 未检出当前选中档时保留该选项并标注，防 select 值悬空。
-          draft.provider === 'local' ? h(SettingSelect, {
+          localChannel ? h(SettingSelect, {
             label: t('settings.memoryPrecision'),
             value: draft.precision,
             options: [
@@ -280,12 +342,12 @@
             ],
             onChange: (value) => setField('precision', value || ''),
           }) : null,
-          draft.provider === 'local' ? null : h(EditorField, { label: t('settings.memoryBaseURL'), value: draft.baseURL, onChange: (value) => setField('baseURL', value), className: 'dt-editor-wide', placeholder: 'https://api.example.com/v1' }),
-          draft.provider === 'local' ? null : h(EditorField, { label: t('settings.memoryModel'), value: draft.model, onChange: (value) => setField('model', value), placeholder: 'text-embedding-3-small' }),
-          draft.provider === 'local' ? null : h(EditorField, { label: t('settings.memoryApiKeyEnv'), value: draft.apiKeyEnv, onChange: (value) => setField('apiKeyEnv', value), hint: t('settings.memoryApiKeyEnvHint'), placeholder: 'MY_EMBED_API_KEY' }),
-          h(EditorField, { label: t('settings.memoryDims'), value: draft.dims, type: 'number', min: 1, onChange: (value) => setField('dims', value) }),
-          h(EditorField, { label: t('settings.memoryBatchSize'), value: draft.batchSize, type: 'number', min: 1, max: 64, onChange: (value) => setField('batchSize', value) }),
-          draft.provider === 'local' ? null : h(EditorField, { label: t('settings.memoryTimeout'), value: draft.timeoutMs, type: 'number', min: 200, onChange: (value) => setField('timeoutMs', value) })) : null,
+          hybrid && !localChannel ? h(EditorField, { label: t('settings.memoryBaseURL'), value: draft.baseURL, onChange: (value) => setField('baseURL', value), className: 'dt-editor-wide', placeholder: 'https://api.example.com/v1' }) : null,
+          hybrid && !localChannel ? h(EditorField, { label: t('settings.memoryModel'), value: draft.model, onChange: (value) => setField('model', value), placeholder: 'text-embedding-3-small' }) : null,
+          hybrid && !localChannel ? h(EditorField, { label: t('settings.memoryApiKeyEnv'), value: draft.apiKeyEnv, onChange: (value) => setField('apiKeyEnv', value), hint: t('settings.memoryApiKeyEnvHint'), placeholder: 'MY_EMBED_API_KEY' }) : null,
+          hybrid ? h(EditorField, { label: t('settings.memoryDims'), value: draft.dims, type: 'number', min: 1, onChange: (value) => setField('dims', value) }) : null,
+          hybrid ? h(EditorField, { label: t('settings.memoryBatchSize'), value: draft.batchSize, type: 'number', min: 1, max: 64, onChange: (value) => setField('batchSize', value) }) : null,
+          hybrid && !localChannel ? h(EditorField, { label: t('settings.memoryTimeout'), value: draft.timeoutMs, type: 'number', min: 200, onChange: (value) => setField('timeoutMs', value) }) : null) : null,
         statusBits.length > 0 ? h('p', { className: 'dt-hint' }, statusBits.join(' · ')) : null,
         h('div', { className: 'dt-editor-actions' },
           isLocal && status.runtimeInstalled === false

@@ -109,6 +109,26 @@ interface MaintenanceLoopMessage {
   isError?: boolean
 }
 
+/**
+ * 运行中实时进度（只在进程内注册表里维护，每轮 GET 返回只读快照）。
+ * phase 是粗粒度阶段；tools 阶段额外带当前工具名，面板据此显示正在做什么。
+ * 计数与 summary 同源，run 结束后由 lastRun.summary 收敛为最终结果。
+ */
+export interface MaintenanceRunProgress {
+  phase: 'preparing' | 'thinking' | 'tools' | 'finishing'
+  activity?: string
+  llmRequests: number
+  budget: number
+  totalFloors: number
+  pendingFloors: number
+  editGroups: number
+  merged: number
+  corrected: number
+  created: number
+  deleted: number
+  failedGroups: number
+}
+
 export interface MemoryMaintenanceStatusView {
   status: 'running' | 'done' | 'error'
   runId?: string
@@ -117,6 +137,8 @@ export interface MemoryMaintenanceStatusView {
   summary?: MaintenanceRunSummary
   pending: { ranges: MaintenanceFloorRange[]; floors: number }
   receipts: number
+  /** 仅 running 时存在；轮询方用它渲染进度条与实时计数。 */
+  progress?: MaintenanceRunProgress
 }
 
 interface ActiveRun {
@@ -124,6 +146,7 @@ interface ActiveRun {
   character: string
   chatId: string
   startedAt: string
+  progress: MaintenanceRunProgress
 }
 
 /** 同 scope 单飞注册表：进程内 Map（进程重启即空 → 状态读取把遗留 running 标 interrupted）。 */
@@ -147,6 +170,19 @@ export async function startMemoryMaintenance(
     character: scope.character,
     chatId: scope.chatId,
     startedAt: new Date().toISOString(),
+    progress: {
+      phase: 'preparing',
+      llmRequests: 0,
+      budget: MAINTENANCE_MAX_LLM_REQUESTS,
+      totalFloors: 0,
+      pendingFloors: 0,
+      editGroups: 0,
+      merged: 0,
+      corrected: 0,
+      created: 0,
+      deleted: 0,
+      failedGroups: 0,
+    },
   }
   activeRuns.set(key, active)
   void (async () => {
@@ -191,8 +227,11 @@ export async function memoryMaintenanceStatus(
       status: 'running',
       runId: active.runId,
       startedAt: active.startedAt,
-      pending: { ranges: [], floors: 0 },
+      // 运行中的 pending 只报楼面数（范围清单要扫聊天快照，轮询开销不值得）；
+      // 实时进度由 progress 承载。
+      pending: { ranges: [], floors: active.progress.pendingFloors },
       receipts: state.receipts.length,
+      progress: snapshotProgress(active.progress),
     }
   }
   let lastRun = state.lastRun
@@ -241,6 +280,25 @@ function emptySummary(totalFloors: number): MaintenanceRunSummary {
 
 function pendingFloorCount(ranges: readonly MaintenanceFloorRange[]): number {
   return ranges.reduce((total, range) => total + (range.headFloor - range.baseFloor + 1), 0)
+}
+
+/** 只读快照：不让 HTTP 序列化期间与后台 run 共享可变引用。 */
+function snapshotProgress(progress: MaintenanceRunProgress): MaintenanceRunProgress {
+  return { ...progress }
+}
+
+/** 把 run 内部计数同步到注册表进度（工具调用后与收尾时各一次）。 */
+function syncRunProgress(progress: MaintenanceRunProgress, run: MaintenanceRunState): void {
+  progress.llmRequests = run.llmRequests
+  progress.budget = run.budget
+  progress.totalFloors = run.summary.totalFloors
+  progress.pendingFloors = run.summary.pendingFloors
+  progress.editGroups = run.summary.editGroups
+  progress.merged = run.summary.merged
+  progress.corrected = run.summary.corrected
+  progress.created = run.summary.created
+  progress.deleted = run.summary.deleted
+  progress.failedGroups = run.summary.failedGroups
 }
 
 /** 退役判定：楼面指纹不符（原文编辑/删除）或覆盖记录 revision 不符（后续写入）。 */
@@ -297,6 +355,8 @@ interface MaintenanceRunState {
   deps: MemoryMaintenanceDeps
   scope: MemoryMaintenanceScope
   runId: string
+  /** 注册表里同一 run 的实时进度对象（GET 轮询读取）。 */
+  progress: MaintenanceRunProgress
   /** 冻结证据边界：run 开始时的消息快照（原文只读，永不改写）。 */
   floors: readonly ChatMessage[]
   provider: string
@@ -326,6 +386,8 @@ async function executeRun(
     summary.pendingFloors = pendingFloorCount(computation.pending)
     summary.retiredReceipts = computation.retiredReasons.length
     summary.retiredReasons = computation.retiredReasons
+    active.progress.totalFloors = totalFloors
+    active.progress.pendingFloors = summary.pendingFloors
 
     // run 状态先声明（finish 闭包引用）：空范围/聊天缺失路径在构造前就会收尾。
     let run: MaintenanceRunState | undefined
@@ -339,6 +401,9 @@ async function executeRun(
 
     const finish = async (status: 'done' | 'error', outcome: MaintenanceRunOutcome, message?: string) => {
       summary.outcome = outcome
+      active.progress.phase = 'finishing'
+      delete active.progress.activity
+      if (run !== undefined) syncRunProgress(active.progress, run)
       const record: MaintenanceRunRecord = {
         runId: active.runId,
         status,
@@ -375,6 +440,7 @@ async function executeRun(
       deps,
       scope,
       runId: active.runId,
+      progress: active.progress,
       floors: snapshot.chat.messages,
       provider: selection.provider,
       model: selection.model,
@@ -394,6 +460,7 @@ async function executeRun(
       listing = renderMemoryListing(records, 20_000)
       opening = buildOpeningMessage(run, listing)
     }
+    syncRunProgress(active.progress, run)
 
     const messages: MaintenanceLoopMessage[] = [
       { role: 'user', id: randomUUID(), content: [{ type: 'text', text: opening }], source: { kind: 'user' } },
@@ -416,6 +483,9 @@ async function executeRun(
         break
       }
       run.llmRequests += 1
+      active.progress.phase = 'thinking'
+      delete active.progress.activity
+      active.progress.llmRequests = run.llmRequests
       const blocks: Array<Record<string, unknown>> = []
       let textBuffer = ''
       let finishReason: { kind: string; failure?: { message?: string; code?: string } } | undefined
@@ -468,7 +538,10 @@ async function executeRun(
         break
       }
       for (const call of toolCalls) {
+        active.progress.phase = 'tools'
+        active.progress.activity = call.name
         const result = await executeToolCall(run, call)
+        syncRunProgress(active.progress, run)
         messages.push({
           role: 'tool',
           id: randomUUID(),

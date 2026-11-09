@@ -11,16 +11,19 @@
  * 区分，保留一条拒绝回复比静默吞掉更容易排障。
  *
  * 顺序与路由的既有路径一致：先平台去重（重放的指令不执行第二次），再访问
- * 控制（白名单外的人拿不到任何回复），最后才是指令解析与主人校验。指令不是
- * 会话消息：不写 `imSenders`/`imOwners`，也不触发绑定会话的预设切换。
+ * 控制（白名单外的人拿不到任何回复），最后才是指令解析与主人校验。唯一的
+ * 例外是群聊白名单自举：`allowlist` 模式下，全局主人的 `/bind` 即使本群尚未
+ * 入名单也放行——否则新群永远没有第一条能被执行的指令。该例外只认 `/bind`，
+ * 其他指令在名单外仍静默丢弃。指令不是会话消息：不写 `imSenders`/`imOwners`，
+ * 也不触发绑定会话的预设切换。
  */
 
-import type { TavernStore } from '../../../tavern-store/src/index.js'
+import type { TavernState, TavernStore } from '../../../tavern-store/src/index.js'
 import type { ImPresetSwitchResult } from './handle.js'
 import type { ImLogSink } from './log.js'
 import { imSenderHash } from './owner.js'
 import { imAccessAllows } from './settings.js'
-import type { ImInbound, ImPeerBinding, ImSendStatusView, ImSettings, ImTarget } from './types.js'
+import type { ImInbound, ImPeerBinding, ImScope, ImSendStatusView, ImSettings, ImTarget } from './types.js'
 import { DEFAULT_IM_SETTINGS, imAccountKey, imPeerAlias } from './types.js'
 
 /** 非全局主人（含未设置全局主人）的拒绝文案；只说明规则，不回显身份。 */
@@ -30,16 +33,24 @@ export const IM_COMMAND_DENIED = '只有全局主人可以使用指令'
 export const IM_COMMAND_CHANNEL_UNSUPPORTED = '微信渠道不支持指令（微信不需要设置主人）'
 
 /** 未知指令的用法提示。 */
-export const IM_COMMAND_USAGE = '可用指令：/status、/bind <sessionId>、/unbind、/help'
+export const IM_COMMAND_USAGE = '可用指令：/status、/bind（群聊入白名单）、/bind <sessionId>、/unbind、/help'
 
-/** `/bind` 缺少参数时的用法提示。 */
-export const IM_COMMAND_BIND_USAGE = '用法：/bind <sessionId>'
+/** `/bind` 缺少参数但不是群聊时的用法提示。 */
+export const IM_COMMAND_BIND_USAGE = '用法：/bind <sessionId>（群聊里直接发送 /bind 可把本群加入白名单）'
+
+/** `/bind` 在群聊里把当前群加入白名单的两种回执。 */
+export const IM_COMMAND_GROUP_ALLOWED = '已将本群加入群聊白名单'
+export const IM_COMMAND_GROUP_ALLOWED_ALREADY = '本群已在群聊白名单中'
+
+/** 群聊入名单后的下一步提示：白名单只放行消息，绑定仍要给出会话 id。 */
+export const IM_COMMAND_GROUP_ALLOWED_USAGE = '绑定会话请发送 /bind <sessionId>'
 
 /** `/help` 的正文：四个指令 + 全局主人规则。 */
 export const IM_COMMAND_HELP = [
   '可用指令（只有账号的全局主人可以使用）：',
   '/status 查看当前状态',
-  '/bind <sessionId> 把本对话绑到指定会话',
+  '/bind 在群聊里把本群加入群聊白名单',
+  '/bind <sessionId> 把本对话绑到指定会话（群聊同时加入白名单）',
   '/unbind 解除本对话的绑定',
   '/help 查看这份帮助',
 ].join('\n')
@@ -173,15 +184,44 @@ export async function handleImCommand(deps: ImCommandDeps, input: ImCommandInput
     deps.log?.note('debug', `ignored a duplicate IM command from ${alias} (dedupe)`)
     return
   }
-  const settings: ImSettings = (await deps.db.getState()).imSettings ?? DEFAULT_IM_SETTINGS
-  if (!imAccessAllows(settings, inbound.scope, inbound.peerId)) {
+  const command = parseImCommand(inbound.text)
+  if (command === undefined) return
+  // 一份快照同时用于访问控制、主人校验与执行：读到一半被改主人不能造成
+  // 「访问按旧名单放行、执行为新主人」的错配。
+  const state = await deps.db.getState()
+  const settings: ImSettings = state.imSettings ?? DEFAULT_IM_SETTINGS
+  const owner = state.imAccountOwners?.[imAccountKey(inbound.channel, inbound.accountId)]
+  const senderHash = imSenderHash(inbound.channel, inbound.accountId, inbound.senderId)
+  const isOwner = owner !== undefined && owner.id === senderHash
+  const accessAllowed = imAccessAllows(settings, inbound.scope, inbound.peerId)
+  // 群聊白名单自举：只有全局主人的 `/bind` 例外，且只在 allowlist 模式。
+  // `disabled` 是明确关闭，不能被一条指令绕过；其他指令与普通成员仍按
+  // 访问控制静默丢弃，不扩大「名单外也能拿回执」的面。
+  const groupBindBootstrap = !accessAllowed
+    && isOwner
+    && command.name === 'bind'
+    && inbound.scope === 'group'
+    && settings.groupMode === 'allowlist'
+  if (!accessAllowed && !groupBindBootstrap) {
     deps.log?.note(
       'warn',
       `dropped an IM command from ${alias}: the access policy does not allow this peer (mode is allowlist and the peer is not listed, or the scope is disabled)`,
     )
     return
   }
-  const reply = await runImCommand(deps, { inbound, peerKey, alias })
+  let reply: string | undefined
+  if (inbound.channel === 'weixin') {
+    // 微信不参与主人指定：先给出渠道不支持，而不是按「非主人」拒绝。访问
+    // 控制仍然在前：名单外的微信对端依旧拿不到任何回执。
+    deps.log?.note('info', `rejected IM command /${command.name} from ${alias}: the weixin channel does not support commands`)
+    reply = IM_COMMAND_CHANNEL_UNSUPPORTED
+  } else if (!isOwner) {
+    deps.log?.note('warn', `denied IM command /${command.name} from ${alias}: the sender is not the account-global owner`)
+    reply = IM_COMMAND_DENIED
+  } else {
+    deps.log?.note('info', `executed IM command /${command.name} from ${alias}`)
+    reply = await runImCommand(deps, input, command, state)
+  }
   if (reply === undefined) return
   // 回执不阻塞入站链：通道发送可能排队/超时，控制面回复不该拖住下一条消息。
   void deps.sendNotice(targetOf(inbound), reply, alias).catch((error: unknown) => {
@@ -189,23 +229,25 @@ export async function handleImCommand(deps: ImCommandDeps, input: ImCommandInput
   })
 }
 
-async function runImCommand(deps: ImCommandDeps, input: ImCommandInput): Promise<string | undefined> {
-  const command = parseImCommand(input.inbound.text)
-  if (command === undefined) return undefined
-  if (input.inbound.channel === 'weixin') return IM_COMMAND_CHANNEL_UNSUPPORTED
-  const state = await deps.db.getState()
+async function runImCommand(
+  deps: ImCommandDeps,
+  input: ImCommandInput,
+  command: ImParsedCommand,
+  state: TavernState,
+): Promise<string | undefined> {
   const owner = state.imAccountOwners?.[imAccountKey(input.inbound.channel, input.inbound.accountId)]
-  const senderHash = imSenderHash(input.inbound.channel, input.inbound.accountId, input.inbound.senderId)
-  if (owner === undefined || owner.id !== senderHash) {
-    deps.log?.note('warn', `denied IM command /${command.name} from ${input.alias}: the sender is not the account-global owner`)
-    return IM_COMMAND_DENIED
-  }
-  deps.log?.note('info', `executed IM command /${command.name} from ${input.alias}`)
+  if (owner === undefined) return IM_COMMAND_DENIED
   switch (command.name) {
     case 'status':
       return statusReply(deps, input, state.imPeers, owner)
     case 'bind':
-      return bindReply(deps, input, command.argument)
+      return bindReply(
+        deps,
+        input,
+        command.argument,
+        imAccountKey(input.inbound.channel, input.inbound.accountId),
+        imSenderHash(input.inbound.channel, input.inbound.accountId, input.inbound.senderId),
+      )
     case 'unbind':
       return unbindReply(deps, input)
     case 'help':
@@ -215,27 +257,109 @@ async function runImCommand(deps: ImCommandDeps, input: ImCommandInput): Promise
   }
 }
 
-/** `/bind`：写绑定与待办，不创建/恢复会话；预设切换是 best-effort，不改绑定结果。 */
-async function bindReply(deps: ImCommandDeps, input: ImCommandInput, argument: string): Promise<string> {
+/**
+ * `/bind`：写绑定与待办，不创建/恢复会话；预设切换是 best-effort，不改绑定结果。
+ *
+ * 群聊里 `/bind` 同时把当前群写入 `groupAllow`：新群在白名单为空时本来会
+ * 被访问控制拦下，主人必须能在 IM 里完成这一步，而不是被踢回面板。无参数
+ * 形式只做入名单（绑定仍需明确的会话 id）；带参数形式入名单与绑定一次写完。
+ */
+async function bindReply(
+  deps: ImCommandDeps,
+  input: ImCommandInput,
+  argument: string,
+  accountKey: string,
+  senderHash: string,
+): Promise<string> {
   const sessionId = argument.trim()
-  if (sessionId === '') return IM_COMMAND_BIND_USAGE
+  const isGroup = input.inbound.scope === 'group'
+  if (sessionId === '') {
+    if (!isGroup) return IM_COMMAND_BIND_USAGE
+    return allowGroupReply(deps, input, accountKey, senderHash)
+  }
   const binding: ImPeerBinding = {
     sessionId,
     scope: input.inbound.scope,
     boundBy: 'command',
     createdAt: new Date(deps.now()).toISOString(),
   }
+  let denied = false
+  let added = false
   await deps.db.updateState((current) => {
+    // 写盘前按最新状态复核：gate 的快照之后面板可能已 disabled 或撤销主人。
+    if (!canBootstrapIn(current, input.inbound.scope, input.inbound.peerId, accountKey, senderHash)) {
+      denied = true
+      return {}
+    }
     const pending = { ...(current.imPendingPeers ?? {}) }
     delete pending[input.peerKey]
+    const currentSettings = current.imSettings ?? DEFAULT_IM_SETTINGS
+    const writeAllow = isGroup && !currentSettings.groupAllow.includes(input.inbound.peerId)
+    if (writeAllow) added = true
     return {
       imPeers: { ...(current.imPeers ?? {}), [input.peerKey]: binding },
       imPendingPeers: pending,
+      // 只在需要时写设置：已经入名单的群不因为一次改绑多写一份 settings。
+      ...(writeAllow
+        ? { imSettings: { ...currentSettings, groupAllow: [...currentSettings.groupAllow, input.inbound.peerId] } }
+        : {}),
     }
   })
+  if (denied) {
+    deps.log?.note('warn', `denied IM command /bind from ${input.alias}: the access policy changed before the write`)
+    return IM_COMMAND_DENIED
+  }
   deps.log?.note('info', `bound ${input.alias} to a session by /bind (boundBy=command)`)
   const preset = await presetNoteOf(deps, sessionId, input.alias)
-  return `已绑定到会话 ${imMaskSessionId(sessionId)}；${preset}`
+  const allowNote = added ? `；${IM_COMMAND_GROUP_ALLOWED}` : ''
+  return `已绑定到会话 ${imMaskSessionId(sessionId)}；${preset}${allowNote}`
+}
+
+/** 群聊无参数 `/bind`：只把当前群写进白名单，不碰绑定与待办。 */
+async function allowGroupReply(
+  deps: ImCommandDeps,
+  input: ImCommandInput,
+  accountKey: string,
+  senderHash: string,
+): Promise<string> {
+  let denied = false
+  let added = false
+  await deps.db.updateState((current) => {
+    if (!canBootstrapIn(current, input.inbound.scope, input.inbound.peerId, accountKey, senderHash)) {
+      denied = true
+      return {}
+    }
+    const settings = current.imSettings ?? DEFAULT_IM_SETTINGS
+    if (settings.groupAllow.includes(input.inbound.peerId)) return {}
+    added = true
+    return { imSettings: { ...settings, groupAllow: [...settings.groupAllow, input.inbound.peerId] } }
+  })
+  if (denied) {
+    deps.log?.note('warn', `denied IM command /bind from ${input.alias}: the access policy changed before the write`)
+    return IM_COMMAND_DENIED
+  }
+  deps.log?.note('info', `allowed ${input.alias} into the group allowlist by /bind`)
+  const head = added ? IM_COMMAND_GROUP_ALLOWED : IM_COMMAND_GROUP_ALLOWED_ALREADY
+  return `${head}；${IM_COMMAND_GROUP_ALLOWED_USAGE}`
+}
+
+/**
+ * 自举写盘前的二次校验：访问放行，或 group + allowlist 的自举例外。
+ * `disabled` 不满足任一分支，因此并发改 disabled 后不会落名单；主人被撤销
+ * 时哈希不再匹配，同样拒绝。判定逻辑与 `handleImCommand` 的 gate 保持一致，
+ * 只是换成 `updateState` 回调里的最新状态。
+ */
+function canBootstrapIn(
+  state: TavernState,
+  scope: ImScope,
+  peerId: string,
+  accountKey: string,
+  senderHash: string,
+): boolean {
+  if (state.imAccountOwners?.[accountKey]?.id !== senderHash) return false
+  const settings = state.imSettings ?? DEFAULT_IM_SETTINGS
+  if (imAccessAllows(settings, scope, peerId)) return true
+  return scope === 'group' && settings.groupMode === 'allowlist'
 }
 
 /** `/bind` 预设切换失败的固定回执：原因只进运行日志，绝不发给对端。 */

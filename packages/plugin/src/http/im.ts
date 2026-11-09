@@ -22,7 +22,7 @@ import { imDisabledByEnv, ImChannelUnsupportedError } from '../im/runtime.js'
 import { WeixinApiError } from '../im/weixin/api.js'
 import { WeixinBindError, type WeixinBindErrorCode } from '../im/weixin/bind.js'
 import { WeixinChannelError, type WeixinChannelErrorCode } from '../im/weixin/channel.js'
-import type { ImAccountRef, ImChannelId, ImChannelView, ImOwnerEntry, ImPeerBinding, ImPendingPeer, ImScope, ImSenderEntry } from '../im/types.js'
+import type { ImAccountRef, ImChannelId, ImChannelView, ImOwnerEntry, ImPeerBinding, ImPendingPeer, ImScope, ImSenderEntry, ImSettings } from '../im/types.js'
 import { DEFAULT_IM_SETTINGS, IM_MAX_TIMESTAMP_MS, IM_SENDERS_MAX_PER_PEER, imAccountKey, imPeerAlias, imPeerKey, imPeerKeyParts } from '../im/types.js'
 import { HttpError } from './errors.js'
 import { readJson, sendJson, sendRouteNotFound, type HttpRequest, type HttpResponse } from './io.js'
@@ -251,15 +251,18 @@ export async function handleImApi(
 
   if (method === 'POST' && route === 'im/settings') {
     const body = await readJson(req)
-    const current = (await db.getState()).imSettings ?? DEFAULT_IM_SETTINGS
-    let next
+    let next: ImSettings
     try {
-      next = applyImSettingsPatch(current, body.settings ?? body)
+      // patch 必须基于 updateState 回调里的最新设置计算：`/bind` 也会写
+      // groupAllow，先 getState 再 patchState 会让面板保存覆盖掉刚加入的群。
+      const state = await db.updateState((current) => ({
+        imSettings: applyImSettingsPatch(current.imSettings ?? DEFAULT_IM_SETTINGS, body.settings ?? body),
+      }))
+      next = state.imSettings ?? DEFAULT_IM_SETTINGS
     } catch (error) {
       if (error instanceof ImSettingsError) throw new HttpError(400, error.message)
       throw error
     }
-    await db.patchState({ imSettings: next })
     // 间隔改动要立刻生效：运行中的微信队列换挡，下次发送按新节奏排。
     runtime?.applySettings?.(next)
     return sendJson(res, 200, { ok: true, settings: next })

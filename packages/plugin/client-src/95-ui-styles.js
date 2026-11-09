@@ -535,6 +535,17 @@
         /* 内容带：眉题前置 3px 签条，全分区统一图纸语汇。 */
         .dt-settings-band>h3{display:flex;align-items:center;gap:8px}
         .dt-settings-band>h3::before{content:"";flex:none;width:3px;height:12px;border-radius:2px;background:var(--dsw-alias-brand-primary,var(--dsw-alias-state-business-primary))}
+        /* 分区内嵌子段（记忆维护）：只做上分隔，不再重复父级 24px 内边距，
+           否则整段内容会比同级标题多缩进一层（2026-11-09 用户反馈）。 */
+        .dt-settings-band.dt-settings-subband{padding:20px 0 0;border-bottom:0}
+        .dt-maintenance-progress{display:flex;flex-direction:column;gap:6px;margin:0 0 12px}
+        .dt-maintenance-progress-head{display:flex;align-items:center;justify-content:space-between;gap:10px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}
+        .dt-maintenance-progress-head>span{min-width:0}
+        .dt-maintenance-progress-head>span:last-child{flex:none;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}
+        .dt-maintenance-progress>.dt-hint{margin:0}
+        .dt-progress{height:6px;border-radius:3px;background:var(--dsw-alias-interactive-bg-hover);overflow:hidden}
+        .dt-progress-fill{height:100%;border-radius:3px;background:var(--dsw-alias-state-business-primary);transition:width .2s ease}
+        @media(max-width:700px){.dt-settings-band.dt-settings-subband{padding:16px 0 0}}
         /* 资产卡：发丝环统一悬浮反馈。 */
         .dt-card,.dt-persona-row,.dt-world-row,.dt-entry,.dt-regex-row,.dt-novel-card,.dt-mod-row,.dt-preset-row,.dt-script-row,.dt-guide-row,.dt-workbench-plan,.dt-stat{transition:border-color .15s ease,background .15s ease,transform .15s ease}
         .dt-card:hover,.dt-world-row:hover,.dt-entry:hover,.dt-preset-row:hover,.dt-script-row:hover,.dt-workbench-plan:hover{border-color:var(--dsw-alias-border-l1,var(--dsw-alias-border-l2))}

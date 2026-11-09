@@ -15604,7 +15604,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.6".trim() : "";
-  const commit = true ? normalizeCommit("ba64a7f") : void 0;
+  const commit = true ? normalizeCommit("bbff5d2") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -55605,15 +55605,16 @@ ${outputTail}`
   }
   if (method === "POST" && route === "im/settings") {
     const body = await readJson(req);
-    const current = (await db.getState()).imSettings ?? DEFAULT_IM_SETTINGS;
     let next;
     try {
-      next = applyImSettingsPatch(current, body.settings ?? body);
+      const state = await db.updateState((current) => ({
+        imSettings: applyImSettingsPatch(current.imSettings ?? DEFAULT_IM_SETTINGS, body.settings ?? body)
+      }));
+      next = state.imSettings ?? DEFAULT_IM_SETTINGS;
     } catch (error) {
       if (error instanceof ImSettingsError) throw new HttpError(400, error.message);
       throw error;
     }
-    await db.patchState({ imSettings: next });
     runtime?.applySettings?.(next);
     return sendJson(res, 200, { ok: true, settings: next });
   }
@@ -57564,7 +57565,20 @@ async function startMemoryMaintenance(ctx, deps, scope) {
     runId: randomUUID15(),
     character: scope.character,
     chatId: scope.chatId,
-    startedAt: (/* @__PURE__ */ new Date()).toISOString()
+    startedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    progress: {
+      phase: "preparing",
+      llmRequests: 0,
+      budget: MAINTENANCE_MAX_LLM_REQUESTS,
+      totalFloors: 0,
+      pendingFloors: 0,
+      editGroups: 0,
+      merged: 0,
+      corrected: 0,
+      created: 0,
+      deleted: 0,
+      failedGroups: 0
+    }
   };
   activeRuns.set(key, active);
   void (async () => {
@@ -57604,8 +57618,11 @@ async function memoryMaintenanceStatus(deps, scope) {
       status: "running",
       runId: active.runId,
       startedAt: active.startedAt,
-      pending: { ranges: [], floors: 0 },
-      receipts: state.receipts.length
+      // 运行中的 pending 只报楼面数（范围清单要扫聊天快照，轮询开销不值得）；
+      // 实时进度由 progress 承载。
+      pending: { ranges: [], floors: active.progress.pendingFloors },
+      receipts: state.receipts.length,
+      progress: snapshotProgress(active.progress)
     };
   }
   let lastRun = state.lastRun;
@@ -57650,6 +57667,21 @@ function emptySummary(totalFloors) {
 }
 function pendingFloorCount(ranges) {
   return ranges.reduce((total, range) => total + (range.headFloor - range.baseFloor + 1), 0);
+}
+function snapshotProgress(progress) {
+  return { ...progress };
+}
+function syncRunProgress(progress, run) {
+  progress.llmRequests = run.llmRequests;
+  progress.budget = run.budget;
+  progress.totalFloors = run.summary.totalFloors;
+  progress.pendingFloors = run.summary.pendingFloors;
+  progress.editGroups = run.summary.editGroups;
+  progress.merged = run.summary.merged;
+  progress.corrected = run.summary.corrected;
+  progress.created = run.summary.created;
+  progress.deleted = run.summary.deleted;
+  progress.failedGroups = run.summary.failedGroups;
 }
 async function computePending(deps, scope, receipts) {
   let snapshot2;
@@ -57704,6 +57736,8 @@ async function executeRun(ctx, deps, scope, active) {
     summary.pendingFloors = pendingFloorCount(computation.pending);
     summary.retiredReceipts = computation.retiredReasons.length;
     summary.retiredReasons = computation.retiredReasons;
+    active.progress.totalFloors = totalFloors;
+    active.progress.pendingFloors = summary.pendingFloors;
     let run;
     await stateStore.write(scope.character, scope.chatId, {
       version: 1,
@@ -57712,6 +57746,9 @@ async function executeRun(ctx, deps, scope, active) {
     });
     const finish = async (status2, outcome2, message) => {
       summary.outcome = outcome2;
+      active.progress.phase = "finishing";
+      delete active.progress.activity;
+      if (run !== void 0) syncRunProgress(active.progress, run);
       const record = {
         runId: active.runId,
         status: status2,
@@ -57744,6 +57781,7 @@ async function executeRun(ctx, deps, scope, active) {
       deps,
       scope,
       runId: active.runId,
+      progress: active.progress,
       floors: snapshot2.chat.messages,
       provider: selection.provider,
       model: selection.model,
@@ -57761,6 +57799,7 @@ async function executeRun(ctx, deps, scope, active) {
       listing = renderMemoryListing(records, 2e4);
       opening = buildOpeningMessage(run, listing);
     }
+    syncRunProgress(active.progress, run);
     const messages = [
       { role: "user", id: randomUUID15(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
     ];
@@ -57780,6 +57819,9 @@ async function executeRun(ctx, deps, scope, active) {
         break;
       }
       run.llmRequests += 1;
+      active.progress.phase = "thinking";
+      delete active.progress.activity;
+      active.progress.llmRequests = run.llmRequests;
       const blocks = [];
       let textBuffer = "";
       let finishReason;
@@ -57830,7 +57872,10 @@ async function executeRun(ctx, deps, scope, active) {
         break;
       }
       for (const call of toolCalls) {
+        active.progress.phase = "tools";
+        active.progress.activity = call.name;
         const result = await executeToolCall(run, call);
+        syncRunProgress(active.progress, run);
         messages.push({
           role: "tool",
           id: randomUUID15(),
@@ -60090,12 +60135,16 @@ function messageOf14(error) {
 // packages/plugin/src/im/commands.ts
 var IM_COMMAND_DENIED = "\u53EA\u6709\u5168\u5C40\u4E3B\u4EBA\u53EF\u4EE5\u4F7F\u7528\u6307\u4EE4";
 var IM_COMMAND_CHANNEL_UNSUPPORTED = "\u5FAE\u4FE1\u6E20\u9053\u4E0D\u652F\u6301\u6307\u4EE4\uFF08\u5FAE\u4FE1\u4E0D\u9700\u8981\u8BBE\u7F6E\u4E3B\u4EBA\uFF09";
-var IM_COMMAND_USAGE = "\u53EF\u7528\u6307\u4EE4\uFF1A/status\u3001/bind <sessionId>\u3001/unbind\u3001/help";
-var IM_COMMAND_BIND_USAGE = "\u7528\u6CD5\uFF1A/bind <sessionId>";
+var IM_COMMAND_USAGE = "\u53EF\u7528\u6307\u4EE4\uFF1A/status\u3001/bind\uFF08\u7FA4\u804A\u5165\u767D\u540D\u5355\uFF09\u3001/bind <sessionId>\u3001/unbind\u3001/help";
+var IM_COMMAND_BIND_USAGE = "\u7528\u6CD5\uFF1A/bind <sessionId>\uFF08\u7FA4\u804A\u91CC\u76F4\u63A5\u53D1\u9001 /bind \u53EF\u628A\u672C\u7FA4\u52A0\u5165\u767D\u540D\u5355\uFF09";
+var IM_COMMAND_GROUP_ALLOWED = "\u5DF2\u5C06\u672C\u7FA4\u52A0\u5165\u7FA4\u804A\u767D\u540D\u5355";
+var IM_COMMAND_GROUP_ALLOWED_ALREADY = "\u672C\u7FA4\u5DF2\u5728\u7FA4\u804A\u767D\u540D\u5355\u4E2D";
+var IM_COMMAND_GROUP_ALLOWED_USAGE = "\u7ED1\u5B9A\u4F1A\u8BDD\u8BF7\u53D1\u9001 /bind <sessionId>";
 var IM_COMMAND_HELP = [
   "\u53EF\u7528\u6307\u4EE4\uFF08\u53EA\u6709\u8D26\u53F7\u7684\u5168\u5C40\u4E3B\u4EBA\u53EF\u4EE5\u4F7F\u7528\uFF09\uFF1A",
   "/status \u67E5\u770B\u5F53\u524D\u72B6\u6001",
-  "/bind <sessionId> \u628A\u672C\u5BF9\u8BDD\u7ED1\u5230\u6307\u5B9A\u4F1A\u8BDD",
+  "/bind \u5728\u7FA4\u804A\u91CC\u628A\u672C\u7FA4\u52A0\u5165\u7FA4\u804A\u767D\u540D\u5355",
+  "/bind <sessionId> \u628A\u672C\u5BF9\u8BDD\u7ED1\u5230\u6307\u5B9A\u4F1A\u8BDD\uFF08\u7FA4\u804A\u540C\u65F6\u52A0\u5165\u767D\u540D\u5355\uFF09",
   "/unbind \u89E3\u9664\u672C\u5BF9\u8BDD\u7684\u7ED1\u5B9A",
   "/help \u67E5\u770B\u8FD9\u4EFD\u5E2E\u52A9"
 ].join("\n");
@@ -60152,37 +60201,52 @@ async function handleImCommand(deps, input) {
     deps.log?.note("debug", `ignored a duplicate IM command from ${alias} (dedupe)`);
     return;
   }
-  const settings = (await deps.db.getState()).imSettings ?? DEFAULT_IM_SETTINGS;
-  if (!imAccessAllows(settings, inbound.scope, inbound.peerId)) {
+  const command = parseImCommand(inbound.text);
+  if (command === void 0) return;
+  const state = await deps.db.getState();
+  const settings = state.imSettings ?? DEFAULT_IM_SETTINGS;
+  const owner = state.imAccountOwners?.[imAccountKey(inbound.channel, inbound.accountId)];
+  const senderHash = imSenderHash(inbound.channel, inbound.accountId, inbound.senderId);
+  const isOwner = owner !== void 0 && owner.id === senderHash;
+  const accessAllowed = imAccessAllows(settings, inbound.scope, inbound.peerId);
+  const groupBindBootstrap = !accessAllowed && isOwner && command.name === "bind" && inbound.scope === "group" && settings.groupMode === "allowlist";
+  if (!accessAllowed && !groupBindBootstrap) {
     deps.log?.note(
       "warn",
       `dropped an IM command from ${alias}: the access policy does not allow this peer (mode is allowlist and the peer is not listed, or the scope is disabled)`
     );
     return;
   }
-  const reply = await runImCommand(deps, { inbound, peerKey, alias });
+  let reply;
+  if (inbound.channel === "weixin") {
+    deps.log?.note("info", `rejected IM command /${command.name} from ${alias}: the weixin channel does not support commands`);
+    reply = IM_COMMAND_CHANNEL_UNSUPPORTED;
+  } else if (!isOwner) {
+    deps.log?.note("warn", `denied IM command /${command.name} from ${alias}: the sender is not the account-global owner`);
+    reply = IM_COMMAND_DENIED;
+  } else {
+    deps.log?.note("info", `executed IM command /${command.name} from ${alias}`);
+    reply = await runImCommand(deps, input, command, state);
+  }
   if (reply === void 0) return;
   void deps.sendNotice(targetOf(inbound), reply, alias).catch((error) => {
     deps.log?.note("warn", `sending an IM command reply to ${alias} failed: ${messageOf15(error)}`);
   });
 }
-async function runImCommand(deps, input) {
-  const command = parseImCommand(input.inbound.text);
-  if (command === void 0) return void 0;
-  if (input.inbound.channel === "weixin") return IM_COMMAND_CHANNEL_UNSUPPORTED;
-  const state = await deps.db.getState();
+async function runImCommand(deps, input, command, state) {
   const owner = state.imAccountOwners?.[imAccountKey(input.inbound.channel, input.inbound.accountId)];
-  const senderHash = imSenderHash(input.inbound.channel, input.inbound.accountId, input.inbound.senderId);
-  if (owner === void 0 || owner.id !== senderHash) {
-    deps.log?.note("warn", `denied IM command /${command.name} from ${input.alias}: the sender is not the account-global owner`);
-    return IM_COMMAND_DENIED;
-  }
-  deps.log?.note("info", `executed IM command /${command.name} from ${input.alias}`);
+  if (owner === void 0) return IM_COMMAND_DENIED;
   switch (command.name) {
     case "status":
       return statusReply(deps, input, state.imPeers, owner);
     case "bind":
-      return bindReply(deps, input, command.argument);
+      return bindReply(
+        deps,
+        input,
+        command.argument,
+        imAccountKey(input.inbound.channel, input.inbound.accountId),
+        imSenderHash(input.inbound.channel, input.inbound.accountId, input.inbound.senderId)
+      );
     case "unbind":
       return unbindReply(deps, input);
     case "help":
@@ -60191,26 +60255,73 @@ async function runImCommand(deps, input) {
       return IM_COMMAND_USAGE;
   }
 }
-async function bindReply(deps, input, argument) {
+async function bindReply(deps, input, argument, accountKey, senderHash) {
   const sessionId = argument.trim();
-  if (sessionId === "") return IM_COMMAND_BIND_USAGE;
+  const isGroup = input.inbound.scope === "group";
+  if (sessionId === "") {
+    if (!isGroup) return IM_COMMAND_BIND_USAGE;
+    return allowGroupReply(deps, input, accountKey, senderHash);
+  }
   const binding = {
     sessionId,
     scope: input.inbound.scope,
     boundBy: "command",
     createdAt: new Date(deps.now()).toISOString()
   };
+  let denied = false;
+  let added = false;
   await deps.db.updateState((current) => {
+    if (!canBootstrapIn(current, input.inbound.scope, input.inbound.peerId, accountKey, senderHash)) {
+      denied = true;
+      return {};
+    }
     const pending = { ...current.imPendingPeers ?? {} };
     delete pending[input.peerKey];
+    const currentSettings = current.imSettings ?? DEFAULT_IM_SETTINGS;
+    const writeAllow = isGroup && !currentSettings.groupAllow.includes(input.inbound.peerId);
+    if (writeAllow) added = true;
     return {
       imPeers: { ...current.imPeers ?? {}, [input.peerKey]: binding },
-      imPendingPeers: pending
+      imPendingPeers: pending,
+      // 只在需要时写设置：已经入名单的群不因为一次改绑多写一份 settings。
+      ...writeAllow ? { imSettings: { ...currentSettings, groupAllow: [...currentSettings.groupAllow, input.inbound.peerId] } } : {}
     };
   });
+  if (denied) {
+    deps.log?.note("warn", `denied IM command /bind from ${input.alias}: the access policy changed before the write`);
+    return IM_COMMAND_DENIED;
+  }
   deps.log?.note("info", `bound ${input.alias} to a session by /bind (boundBy=command)`);
   const preset = await presetNoteOf(deps, sessionId, input.alias);
-  return `\u5DF2\u7ED1\u5B9A\u5230\u4F1A\u8BDD ${imMaskSessionId(sessionId)}\uFF1B${preset}`;
+  const allowNote = added ? `\uFF1B${IM_COMMAND_GROUP_ALLOWED}` : "";
+  return `\u5DF2\u7ED1\u5B9A\u5230\u4F1A\u8BDD ${imMaskSessionId(sessionId)}\uFF1B${preset}${allowNote}`;
+}
+async function allowGroupReply(deps, input, accountKey, senderHash) {
+  let denied = false;
+  let added = false;
+  await deps.db.updateState((current) => {
+    if (!canBootstrapIn(current, input.inbound.scope, input.inbound.peerId, accountKey, senderHash)) {
+      denied = true;
+      return {};
+    }
+    const settings = current.imSettings ?? DEFAULT_IM_SETTINGS;
+    if (settings.groupAllow.includes(input.inbound.peerId)) return {};
+    added = true;
+    return { imSettings: { ...settings, groupAllow: [...settings.groupAllow, input.inbound.peerId] } };
+  });
+  if (denied) {
+    deps.log?.note("warn", `denied IM command /bind from ${input.alias}: the access policy changed before the write`);
+    return IM_COMMAND_DENIED;
+  }
+  deps.log?.note("info", `allowed ${input.alias} into the group allowlist by /bind`);
+  const head = added ? IM_COMMAND_GROUP_ALLOWED : IM_COMMAND_GROUP_ALLOWED_ALREADY;
+  return `${head}\uFF1B${IM_COMMAND_GROUP_ALLOWED_USAGE}`;
+}
+function canBootstrapIn(state, scope, peerId, accountKey, senderHash) {
+  if (state.imAccountOwners?.[accountKey]?.id !== senderHash) return false;
+  const settings = state.imSettings ?? DEFAULT_IM_SETTINGS;
+  if (imAccessAllows(settings, scope, peerId)) return true;
+  return scope === "group" && settings.groupMode === "allowlist";
 }
 var IM_COMMAND_PRESET_FAILED = "\u9884\u8BBE\u5207\u6362\u5931\u8D25\uFF08\u8BE6\u89C1\u8FD0\u884C\u65E5\u5FD7\uFF09";
 async function presetNoteOf(deps, sessionId, alias) {
