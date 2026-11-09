@@ -5,6 +5,7 @@
 
 import { detectPresetKind } from '../../../tavern-format/src/index.js'
 import type { TavernStore } from '../../../tavern-store/src/index.js'
+import { agentPtcCapabilitiesForHost, inspectAgentPtcRuntime } from '../agent-ptc-mode.js'
 import { BUILD_INFO, TAVERN_COMMIT } from '../build-info.js'
 import type { PluginContext } from '../host-contract.js'
 import { publicCard, publicGroup } from '../model-catalog.js'
@@ -86,6 +87,12 @@ export async function handleBootstrapApi(ctx: PluginContext, res: HttpResponse, 
     workbenchWorkspace,
     agentTavern: getAgentTavernCapabilities(),
     agentNovel: getAgentNovelCapabilities(),
+    // Native PTC presentation availability: the behavior switch stays disabled
+    // (with the concrete reason) when the host has no runtime or no SDK seam.
+    agentPtc: await agentPtcCapabilitiesForHost(ctx),
+    // Live per-agent view: distinguishes a capable host from a session scope
+    // that never mounted PTC, and carries the concrete mount error.
+    agentPtcRuntime: inspectAgentPtcRuntime(ctx, state.sessionBindings),
     // 自更新快照：只读缓存结论，检查/安装分别走 update/check 与 update/install，
     // 保证 bootstrap 永远不因网络失败而变慢或报错。
     // Mod 轻量投影（提案 0015 §3.5，P1 真实化）：与 worldEntryCounts 同款服务端

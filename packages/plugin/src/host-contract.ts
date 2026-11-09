@@ -147,7 +147,12 @@ export interface HostSystemPromptService {
 }
 
 export interface HostToolService {
-  register?<T>(tool: T): unknown
+  register?<T>(
+    tool: T,
+    options?: {
+      when?: (context: { agent?: { id?: string; session?: { id?: string } } }) => boolean | Promise<boolean>
+    },
+  ): unknown
   schemas?: () => Array<{ name: string }>
   restrict?(filter: { deny: string[] }): unknown
 }

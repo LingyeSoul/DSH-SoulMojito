@@ -2475,6 +2475,9 @@ window.__ModuleLoader__.load({
       'settings.personaEmpty': 'Default user',
       'settings.nativePersona': 'Use active character in standard DSH Agent chats',
       'settings.nativePreset': 'Use active preset in standard DSH Agent chats',
+      'settings.ptcMode': 'Enable PTC mode (AgentTavern / Card Workbench / AgentNovel)',
+      'settings.ptcModeHint': 'Presents agent tools through the host-native PTC surface: the model sees run_code and the generated tool SDK. The executor mounts when the switch is written; a running turn keeps its current surface until it goes idle.',
+      'settings.ptcModeUnavailable': 'PTC mode is unavailable: {reason}',
       'settings.compactionModel': 'Compaction summarizer',
       'settings.compactionModelFollow': 'Follow deployment config',
       'settings.compactionModelHint': 'Model that condenses story sessions (AgentTavern / AgentNovel) when context is compacted. Prefer a large-context model; empty falls back to the deployment config, then the session model.',
@@ -3594,6 +3597,9 @@ window.__ModuleLoader__.load({
       'settings.personaEmpty': '默认用户',
       'settings.nativePersona': '在标准 DSH Agent 会话中使用当前角色',
       'settings.nativePreset': '在标准 DSH Agent 会话中使用当前预设',
+      'settings.ptcMode': '启用 PTC 模式（AgentTavern / 写卡工作台 / AgentNovel）',
+      'settings.ptcModeHint': 'Agent 工具改用宿主原生 PTC 呈现：模型只看到 run_code 与生成的工具 SDK。开关写入时立即挂载执行器；运行中的回合保持当前工具面，空闲后再切换。',
+      'settings.ptcModeUnavailable': 'PTC 模式不可用：{reason}',
       'settings.compactionModel': '压缩总结模型',
       'settings.compactionModelFollow': '跟随部署配置',
       'settings.compactionModelHint': '剧情会话（AgentTavern / AgentNovel）上下文压缩时生成检查点摘要的模型，建议选大上下文窗口模型；留空回落部署配置，再回落会话模型。',
@@ -7978,6 +7984,21 @@ window.__ModuleLoader__.load({
               onChange: (event) => applyPatch({ nativeAgentPreset: event.target.checked }),
             }),
             h('span', null, t('settings.nativePreset'))),
+          // Native PTC presentation for every bound Tavern agent architecture.
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: bootstrap.state.agentPtcMode === true,
+              disabled: bootstrap.agentPtc?.available !== true,
+              onChange: (event) => applyPatch({ agentPtcMode: event.target.checked }),
+            }),
+            h('span', null, t('settings.ptcMode'))),
+          h('p', { className: 'dt-hint' }, t('settings.ptcModeHint')),
+          bootstrap.agentPtc?.available !== true
+            ? h('p', { className: 'dt-hint dt-frontend-warning' }, t('settings.ptcModeUnavailable', {
+              reason: bootstrap.agentPtc?.reasons?.join(' ') || 'host capability check failed',
+            }))
+            : null,
         ]),
         behaviorGroup('settings.behavior.worldInfo', [
           h('label', { className: 'dt-toggle' },

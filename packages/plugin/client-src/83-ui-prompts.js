@@ -283,6 +283,21 @@
               onChange: (event) => applyPatch({ nativeAgentPreset: event.target.checked }),
             }),
             h('span', null, t('settings.nativePreset'))),
+          // Native PTC presentation for every bound Tavern agent architecture.
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: bootstrap.state.agentPtcMode === true,
+              disabled: bootstrap.agentPtc?.available !== true,
+              onChange: (event) => applyPatch({ agentPtcMode: event.target.checked }),
+            }),
+            h('span', null, t('settings.ptcMode'))),
+          h('p', { className: 'dt-hint' }, t('settings.ptcModeHint')),
+          bootstrap.agentPtc?.available !== true
+            ? h('p', { className: 'dt-hint dt-frontend-warning' }, t('settings.ptcModeUnavailable', {
+              reason: bootstrap.agentPtc?.reasons?.join(' ') || 'host capability check failed',
+            }))
+            : null,
         ]),
         behaviorGroup('settings.behavior.worldInfo', [
           h('label', { className: 'dt-toggle' },

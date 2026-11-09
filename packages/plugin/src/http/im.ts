@@ -8,6 +8,7 @@
 
 import type { TavernStore } from '../../../tavern-store/src/index.js'
 import { tavernDataRoot } from '../dsh-home.js'
+import { invalidateImToolBindingCache } from '../im/agent-mount.js'
 import { OneBotError } from '../im/onebot/server.js'
 import { QQBindError } from '../im/qq/bind.js'
 import { QQChannelError } from '../im/qq/channel.js'
@@ -292,6 +293,9 @@ export async function handleImApi(
         imPendingPeers: pending,
       }
     })
+    // The tool surface caches the bound-session set for a single step; drop it
+    // so the newly bound session exposes im_* on its very next step.
+    invalidateImToolBindingCache()
     // 绑定成功就把会话切到 AgentTavernIM；会话未打开/正在跑时留待
     // agent/created / agent/status(idle) 的自动重试。
     const presetSwitch = runtime?.applyImPreset === undefined
@@ -394,6 +398,7 @@ export async function handleImApi(
       delete peers[key]
       return { imPeers: peers }
     })
+    invalidateImToolBindingCache()
     return sendJson(res, 200, { ok: true, peers: peerRows(next.imPeers) })
   }
 

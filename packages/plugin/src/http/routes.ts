@@ -286,7 +286,7 @@ export const STORE_ROUTES: readonly RouteEntry<StoreRouteContext>[] = [
   {
     name: 'state',
     matches: (route, method) => method === 'POST' && route === 'state',
-    handle: ({ db, req, res }) => handleStateUpdateRoute(db, req, res),
+    handle: ({ ctx, db, req, res }) => handleStateUpdateRoute(ctx, db, req, res),
   },
   // Asset imports and preset writes; the old if-chain placed them before
   // persona/group, so they keep that position here.
@@ -362,17 +362,17 @@ export const STORE_ROUTES: readonly RouteEntry<StoreRouteContext>[] = [
   {
     name: 'binding-create',
     matches: (route, method) => method === 'POST' && route === 'binding',
-    handle: ({ db, req, res }) => handleBindingCreateRoute(db, req, res),
+    handle: ({ ctx, db, req, res }) => handleBindingCreateRoute(ctx, db, req, res),
   },
   {
     name: 'binding-delete',
     matches: (route, method) => method === 'DELETE' && route === 'binding',
-    handle: ({ db, req, res }) => handleBindingDeleteRoute(db, req, res),
+    handle: ({ ctx, db, req, res }) => handleBindingDeleteRoute(ctx, db, req, res),
   },
   {
     name: 'bindings-prune',
     matches: (route, method) => method === 'POST' && route === 'bindings/prune',
-    handle: ({ db, req, res }) => handleBindingsPruneRoute(db, req, res),
+    handle: ({ ctx, db, req, res }) => handleBindingsPruneRoute(ctx, db, req, res),
   },
   {
     name: 'chats-list',

@@ -13,6 +13,7 @@ import { listLiveAgents } from './im/session-host.js'
 import { refreshActivePrompt } from './model-catalog.js'
 import { preheatNativeAgentPresetOne } from './native-preset.js'
 import { getGamesServicePromise, modHost, setGamesServicePromise, setImRuntime, setModHostContext, tavernUpdate } from './runtime.js'
+import { applyAgentPtcMode } from './agent-ptc-mode.js'
 import { bindSession } from './session/binding.js'
 import { handleNovelSessionEvent, novelHttpFailure } from './http/novel.js'
 import { API, handleApi } from './http/router.js'
@@ -131,6 +132,14 @@ export function mountAgentCreated(ctx: PluginContext, deps: MountDeps): void {
       } catch (error) {
         ctx.logger?.warn?.(`dsh-soulmojito im: AgentTavernIM preset switch failed: ${error instanceof Error ? error.message : String(error)}`)
       }
+    }
+    // PTC presentation is declared on the agent scope before the loop starts.
+    // `agent/created` is serial and awaited, so the first request already sees
+    // run_code plus the SDK when the behavior switch is on.
+    try {
+      await applyAgentPtcMode(agent, ctx.logger)
+    } catch (error) {
+      ctx.logger?.warn?.(`dsh-soulmojito ptc: mode apply failed for a new agent: ${error instanceof Error ? error.message : String(error)}`)
     }
   })
 }

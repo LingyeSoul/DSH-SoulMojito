@@ -9,6 +9,7 @@ import { createMessage } from '../message.js'
 import { refreshActivePrompt } from '../model-catalog.js'
 import { tavernMacroExpand } from '../prompt-context.js'
 import { store } from '../runtime.js'
+import { applyAgentPtcMode, clearAgentPtcMode } from '../agent-ptc-mode.js'
 import { assertAgentTavernAvailable, bindSession, TavernArchitectureConflictError } from './binding.js'
 import { applyAgentTavernHistoryImport } from './activate.js'
 import { occupyHostSession, parseTavernSessionCommand } from './trace.js'
@@ -180,6 +181,17 @@ export function registerTavernSessionCommand(ctx: PluginContext): void {
       // native-preset 按新绑定清掉标准会话投影（2026-11-06 首轮预热加固）。
       // 投影与 facts/guides 同款异步装载，首轮请求先写穿缓存才不会拿到空串。
       await emitAgentPresetChanged()
+      // PTC presentation is bound to the agent scope, so a session that was
+      // created before its Tavern binding became durable gains the mode here.
+      // Rebinding to ST or unbound leaves the native surface.
+      if (parsed.architecture === 'st') await clearAgentPtcMode(agent.id, ctx.logger)
+      else {
+        try {
+          await applyAgentPtcMode(agent, ctx.logger)
+        } catch (error) {
+          ctx.logger?.warn?.(`dsh-soulmojito ptc: activation apply failed: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      }
       if (preloadSnapshot !== undefined) {
         if (agent.inject === undefined) {
           throw new TavernArchitectureConflictError('This host cannot preload AgentTavern session context.')

@@ -47,6 +47,9 @@ AgentTavern 会话」，入站 `followup` 后监听 `turn/end` 把 assistant 正
    在 `agent/created`、`agent/status`、启动时的 `agents.list()` 三个入口注册进每个
    agent 的 `ctx.tools`（`im/agent-mount.ts`），因此 standard / novel / workbench 等
    任意原生会话都能用 `im_send`；`im_identity` 只列本会话绑定的 peer alias。
+   > 2026-11-09 更新：注册仍发生在每个 agent scope，但带 `tools.register({ when })`
+   > 的条件可见性；只有当前会话出现在 `state.imPeers` 时四个 `im_*` 工具才进入工具表
+   > 和 PTC SDK。见 `decisions/2026-11-09-im-tools-conditional-visibility.md`。
 5. **会话必须在线**：只投给 `agents.get(sessionId)` 拿得到的活 agent。拿不到时回
    「会话当前不可投递（未打开或不是 AgentLoop 会话）」提示并记日志；不创建/resume
    会话。冷会话恢复需要宿主提供 session meta 与 preset 组合，留作后续。

@@ -3,8 +3,11 @@
 // store surface and the chat snapshot helpers.
 
 import type { TavernStore } from '../../../tavern-store/src/index.js'
+import { refreshAgentPtcMode } from '../agent-ptc-mode.js'
 import { seedJsrMvuVariables } from '../agent-tavern/mvu-compat.js'
 import { emitAgentPresetChanged } from '../agent-tavern/preset.js'
+import type { PluginContext } from '../host-contract.js'
+import { invalidateImToolBindingCache } from '../im/agent-mount.js'
 import { refreshActivePrompt } from '../model-catalog.js'
 import {
   assertAgentTavernAvailable,
@@ -15,7 +18,16 @@ import {
 import { readJson, sendJson, type HttpRequest, type HttpResponse } from './io.js'
 import { asRecord } from './json-records.js'
 
+async function reconcileAgentPtcMode(ctx: PluginContext): Promise<void> {
+  try {
+    await refreshAgentPtcMode(ctx)
+  } catch (error) {
+    ctx.logger?.warn?.(`dsh-soulmojito ptc: binding reconcile failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
 export async function handleBindingCreateRoute(
+  ctx: PluginContext,
   db: TavernStore,
   req: HttpRequest,
   res: HttpResponse,
@@ -35,10 +47,12 @@ export async function handleBindingCreateRoute(
   // 绑定即离开标准会话面：清掉 agent/created 首轮预热可能装上的 native-preset
   // 投影；AgentTavern/ST 各自的预设通道随后按新绑定装载。
   await emitAgentPresetChanged()
+  await reconcileAgentPtcMode(ctx)
   return sendJson(res, 200, { ok: true, state, binding: state.sessionBindings[body.sessionId] })
 }
 
 export async function handleBindingDeleteRoute(
+  ctx: PluginContext,
   db: TavernStore,
   req: HttpRequest,
   res: HttpResponse,
@@ -53,10 +67,12 @@ export async function handleBindingDeleteRoute(
   })
   // 解绑后会话回到标准面：重新装载 native-preset，不必等下一次预设事件。
   await emitAgentPresetChanged()
+  await reconcileAgentPtcMode(ctx)
   return sendJson(res, 200, { ok: true, state: next })
 }
 
 export async function handleBindingsPruneRoute(
+  ctx: PluginContext,
   db: TavernStore,
   req: HttpRequest,
   res: HttpResponse,
@@ -78,8 +94,10 @@ export async function handleBindingsPruneRoute(
       Object.entries(current.imPeers ?? {}).filter(([, binding]) => live.has(binding.sessionId)),
     ),
   }))
+  invalidateImToolBindingCache()
   // 批量解绑同样可能把会话还原成标准面，清掉旧投影。
   await emitAgentPresetChanged()
+  await reconcileAgentPtcMode(ctx)
   return sendJson(res, 200, { ok: true, state })
 }
 

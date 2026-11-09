@@ -3,6 +3,7 @@
 // panel settings surface.
 
 import type { TavernModelSelection, TavernStore } from '../../../tavern-store/src/index.js'
+import { agentPtcCapabilitiesForHost, refreshAgentPtcMode } from '../agent-ptc-mode.js'
 import { emitAgentPresetChanged } from '../agent-tavern/preset.js'
 import type { PluginContext } from '../host-contract.js'
 import { buildModelCatalog, refreshActivePrompt } from '../model-catalog.js'
@@ -48,11 +49,18 @@ export async function handleModelSelectionRoute(
 }
 
 export async function handleStateUpdateRoute(
+  ctx: PluginContext,
   db: TavernStore,
   req: HttpRequest,
   res: HttpResponse,
 ): Promise<void> {
   const body = await readJson(req)
+  if (body.agentPtcMode === true) {
+    const capabilities = await agentPtcCapabilitiesForHost(ctx)
+    if (!capabilities.available) {
+      throw new Error(`PTC mode is unavailable on this host: ${capabilities.reasons.join(' ')}`)
+    }
+  }
   if (body.defaultContextMode === 'agent-managed') {
     await assertAgentTavernAvailable('agent-tavern', 'agent-managed')
   } else if (body.defaultArchitecture === 'agent-tavern') {
@@ -96,6 +104,8 @@ export async function handleStateUpdateRoute(
     // 标准 DSH Agent 会话的预设投影开关（native-preset.ts）：翻转即写穿投影
     // 缓存，下一次装配即时生效。
     ...(typeof body.nativeAgentPreset === 'boolean' ? { nativeAgentPreset: body.nativeAgentPreset } : {}),
+    // Native PTC presentation for bound Tavern agents; reconciled live below.
+    ...(typeof body.agentPtcMode === 'boolean' ? { agentPtcMode: body.agentPtcMode } : {}),
     ...(requestedDefaultArchitecture !== undefined ? { defaultArchitecture: requestedDefaultArchitecture } : {}),
     ...(requestedDefaultContextMode !== undefined ? { defaultContextMode: requestedDefaultContextMode } : {}),
     ...(typeof body.agentTavernPreloadAssets === 'boolean'
@@ -145,6 +155,13 @@ export async function handleStateUpdateRoute(
   if ('activeCharacter' in patch || 'activePreset' in patch || 'activePersona' in patch
     || 'cardWorkbenchPresetEnabled' in patch || 'agentNovelPresetEnabled' in patch
     || 'nativeAgentPreset' in patch) await emitAgentPresetChanged()
+  if ('agentPtcMode' in patch) {
+    try {
+      await refreshAgentPtcMode(ctx)
+    } catch (error) {
+      ctx.logger?.warn?.(`dsh-soulmojito ptc: live reconcile after state patch failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
   await refreshActivePrompt()
   return sendJson(res, 200, { ok: true, state })
 }

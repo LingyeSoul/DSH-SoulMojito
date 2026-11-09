@@ -14,12 +14,14 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { envCompat } from '../env-compat.js'
 import type { HostAgentLike, HostLogger, PluginContext } from '../host-contract.js'
+import { applyAgentPtcMode } from '../agent-ptc-mode.js'
 import { API } from '../http/router.js'
 import { lastSelectedPresetId } from '../session/preset-marker.js'
 import type { TavernStore } from '../../../tavern-store/src/index.js'
 import { confirmSessionAppend } from '../../../bind/src/index.js'
 import { tavernDataRoot } from '../dsh-home.js'
 import { prepareInternalWorkspace } from '../workspace.js'
+import { invalidateImToolBindingCache } from './agent-mount.js'
 import { imDisabledByEnv, type ImPresetSwitchResult, type ImRuntimeHandle } from './handle.js'
 import { openImMediaStore } from './media-store.js'
 import { createOneBotUpgradeHandler, OneBotChannel } from './onebot/server.js'
@@ -132,6 +134,14 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
    * - marker 必须读回确认（confirmSessionAppend）：宿主重启后按最后一条
    *   `agent-preset/selected` 恢复 preset，写丢等于下次又变回原预设。
    */
+  async function applyAgentPtcModeBestEffort(agent: HostAgentLike): Promise<void> {
+    try {
+      await applyAgentPtcMode(agent, logger)
+    } catch (error) {
+      logger.warn?.(`dsh-soulmojito ptc: IM session apply failed: ${messageOf(error)}`)
+    }
+  }
+
   async function applyPresetToAgent(agent: HostAgentLike): Promise<ImPresetSwitchResult> {
     const presets = ctx.agentPresets
     if (typeof presets?.recompose !== 'function') {
@@ -158,7 +168,10 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       if (agent.status === 'running') {
         return { applied: false, reason: 'the session is running; the preset will switch when it becomes idle' }
       }
-      if (lastSelectedPresetId(agent.session) === AGENT_TAVERN_IM_PRESET_ID) return { applied: true }
+      if (lastSelectedPresetId(agent.session) === AGENT_TAVERN_IM_PRESET_ID) {
+        await applyAgentPtcModeBestEffort(agent)
+        return { applied: true }
+      }
       const preset = await presets.recompose(agent.ctx, AGENT_TAVERN_IM_PRESET_ID)
       if (preset.id !== AGENT_TAVERN_IM_PRESET_ID) {
         return { applied: false, reason: `the host selected preset '${preset.id}' instead of AgentTavernIM` }
@@ -175,6 +188,7 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
         present: () => lastSelectedPresetId(agent.session) === preset.id,
       })
       if (!confirmed) return { applied: false, reason: 'the AgentTavernIM preset marker could not be confirmed' }
+      await applyAgentPtcModeBestEffort(agent)
       imLog.note('info', `im bind: switched ${sessionId} to ${AGENT_TAVERN_IM_PRESET_ID}`)
       return { applied: true }
     } catch (error) {
@@ -636,6 +650,7 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       }).catch((error: unknown) => {
         logger?.warn?.(`dsh-soulmojito im: deleting the bindings of ${channelId}/${accountId} failed: ${messageOf(error)}`)
       })
+      invalidateImToolBindingCache()
       if (channelId === 'weixin') {
         await openWeixinContextTokens(tavernDataRoot('im'), accountId).clear().catch((error: unknown) => {
           logger?.warn?.(`dsh-soulmojito im: deleting the weixin context tokens for ${accountId} failed: ${messageOf(error)}`)

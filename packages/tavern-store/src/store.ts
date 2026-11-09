@@ -122,6 +122,13 @@ export interface TavernState {
    * （plugin src/native-preset.ts）。
    */
   nativeAgentPreset?: boolean
+  /**
+   * Present bound Tavern agents' tools through the host-native PTC surface
+   * (`run_code` plus the generated SDK). Applies to AgentTavern /
+   * AgentTavernIM, AgentNovel and the Card Workbench, never to ST chats or the
+   * internal reasoning subagent. Defaults to off; every read uses `=== true`.
+   */
+  agentPtcMode?: boolean
   /** DSH session 到 Tavern 角色/聊天的持久绑定。 */
   sessionBindings: Record<string, TavernSessionBinding>
   /** 新建会话的架构默认值；不影响已有 binding。 */

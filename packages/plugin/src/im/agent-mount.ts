@@ -9,22 +9,34 @@
  * 去重；`agent/disposed` 反注册。
  *
  * 工具执行时的身份仍只来自 `exec.agent.id` + `state.imPeers` 反查，注册位置
- * 不改变「不能跨会话发送」的保证。
+ * 不改变「不能跨会话发送」的保证。注册同时带 `when` 条件：只有当前会话出现
+ * 在 `state.imPeers` 里时，四个 `im_*` 工具才进入工具表（以及 PTC SDK）。
  */
 
 import type { HostAgentLike } from '../host-contract.js'
 import { createImTools, type ImToolsDeps } from './tools.js'
 
 interface AgentToolsServiceLike {
-  register?: (tool: unknown) => unknown
+  register?: (tool: unknown, options?: ToolRegistrationOptionsLike) => unknown
 }
 
 interface AgentContextLike {
   tools?: AgentToolsServiceLike
 }
 
+interface ActivationAgentLike {
+  id?: string
+  session?: { id?: string }
+}
+
+interface ToolRegistrationOptionsLike {
+  when?: (context: { agent?: ActivationAgentLike }) => boolean | Promise<boolean>
+}
+
 const disposersByAgent = new Map<string, Array<() => void>>()
 const warnedAgents = new Set<string>()
+const warnedBindingReads = new Set<string>()
+let bindingCache = new WeakMap<object, { at: number; sessionIds: ReadonlySet<string> }>()
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -37,9 +49,72 @@ function agentIdOf(agent: HostAgentLike): string | undefined {
   return typeof sessionId === 'string' && sessionId.trim() !== '' ? sessionId : undefined
 }
 
+function sessionIdOf(agent: ActivationAgentLike | undefined): string | undefined {
+  const sessionId = agent?.session?.id
+  if (typeof sessionId === 'string' && sessionId.trim() !== '') return sessionId
+  const id = agent?.id
+  return typeof id === 'string' && id.trim() !== '' ? id : undefined
+}
+
+/**
+ * Read the set of IM-bound session ids with a tiny shared cache.
+ *
+ * `tools.register({ when })` evaluates the condition once per registered tool
+ * per step, so four tools would otherwise read the same state four times. The
+ * 100 ms window keeps a single step on one snapshot while a binding change is
+ * visible on the next step.
+ */
+async function boundSessionIds(deps: ImToolsDeps, sessionId: string): Promise<ReadonlySet<string>> {
+  const db = await deps.db()
+  const now = Date.now()
+  const cached = bindingCache.get(db)
+  if (cached !== undefined && now - cached.at < 100) return cached.sessionIds
+  try {
+    const state = await db.getState()
+    const sessionIds = new Set(
+      Object.values(state.imPeers ?? {})
+        .map((binding) => binding.sessionId)
+        .filter((id): id is string => typeof id === 'string' && id !== ''),
+    )
+    bindingCache.set(db, { at: now, sessionIds })
+    warnedBindingReads.delete(sessionId)
+    return sessionIds
+  } catch (error) {
+    // Hiding the IM tools is the safe direction when the binding table cannot
+    // be read; the session must not gain IM reachability by accident.
+    if (!warnedBindingReads.has(sessionId)) {
+      warnedBindingReads.add(sessionId)
+      deps.logger?.warn?.(`dsh-soulmojito im: reading imPeers for session ${sessionId} failed; IM tools stay hidden: ${messageOf(error)}`)
+    }
+    return new Set()
+  }
+}
+
+/** Invalidate the shared binding snapshot after a known imPeers write. */
+export function invalidateImToolBindingCache(): void {
+  // A fresh WeakMap drops every per-store snapshot without touching live data.
+  bindingCache = new WeakMap()
+}
+
 /**
  * 注册一次；同一 agent 已挂过就是空操作。返回是否在本次调用里完成注册。
  * 宿主 ctx 形状不对（没有 tools.register）时返回 false 并留给下一次入口重试。
+ */
+/** Whether the preparing session may see the IM tools at all. */
+async function imToolVisible(
+  deps: ImToolsDeps,
+  registeredAgentId: string,
+  preparingAgent: ActivationAgentLike | undefined,
+): Promise<boolean> {
+  const sessionId = sessionIdOf(preparingAgent) ?? registeredAgentId
+  const ids = await boundSessionIds(deps, sessionId)
+  return ids.has(sessionId)
+}
+
+/**
+ * Register the four IM tools on one agent scope with a step-time visibility
+ * condition. Unbound sessions never see them in the tool catalog or the PTC
+ * SDK; binding a peer makes them appear on the next step without re-registering.
  */
 export function mountImToolsOnAgent(deps: ImToolsDeps, agent: HostAgentLike): boolean {
   const agentId = agentIdOf(agent)
@@ -63,7 +138,9 @@ export function mountImToolsOnAgent(deps: ImToolsDeps, agent: HostAgentLike): bo
   const disposers: Array<() => void> = []
   for (const tool of createImTools(deps)) {
     try {
-      const disposer = register.call(tools, tool)
+      const disposer = register.call(tools, tool, {
+        when: (context: { agent?: ActivationAgentLike }) => imToolVisible(deps, agentId, context.agent),
+      })
       if (typeof disposer === 'function') disposers.push(disposer as () => void)
     } catch (error) {
       deps.logger?.warn?.(`dsh-soulmojito im: registering ${tool.name} on agent ${agentId} failed: ${messageOf(error)}`)
@@ -74,7 +151,7 @@ export function mountImToolsOnAgent(deps: ImToolsDeps, agent: HostAgentLike): bo
   }
   disposersByAgent.set(agentId, disposers)
   warnedAgents.delete(agentId)
-  deps.logger?.debug?.(`dsh-soulmojito im: mounted ${disposers.length} IM tools on agent ${agentId}`)
+  deps.logger?.debug?.(`dsh-soulmojito im: mounted ${disposers.length} conditionally visible IM tools on agent ${agentId}`)
   return true
 }
 

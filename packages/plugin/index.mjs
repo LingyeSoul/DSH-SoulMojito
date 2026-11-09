@@ -15503,7 +15503,7 @@ function inspectAgentNovelCapabilities(ctx) {
     checkedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
 }
-function messageOf(error) {
+function messageOf2(error) {
   return error instanceof Error ? error.message : String(error);
 }
 function outputExcerptOf(output) {
@@ -15527,13 +15527,13 @@ async function probeSpawn(deps, label, prompt, options) {
       ...options.agentPreset === void 0 ? {} : { agentPreset: options.agentPreset }
     });
   } catch (error) {
-    return { ok: false, error: `spawn failed: ${messageOf(error)}` };
+    return { ok: false, error: `spawn failed: ${messageOf2(error)}` };
   }
   try {
     const result = await run.result;
     return { ok: true, runId: run.id, result: { output: [...result.output], stopReason: result.stopReason, ...result.diagnostic === void 0 ? {} : { diagnostic: result.diagnostic } } };
   } catch (error) {
-    return { ok: false, error: `run result rejected: ${messageOf(error)}` };
+    return { ok: false, error: `run result rejected: ${messageOf2(error)}` };
   } finally {
     try {
       await run.dispose();
@@ -15658,7 +15658,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.7".trim() : "";
-  const commit = true ? normalizeCommit("6c3401a") : void 0;
+  const commit = true ? normalizeCommit("0ea21c7") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -20333,6 +20333,187 @@ function describeHostShape(ctx, session) {
   };
 }
 
+// packages/bind/src/ptc.ts
+var SDK_LANGUAGES = ["typescript", "python"];
+var PTC_EXECUTOR_SPECIFIER = "@deepseek-ai/dsh-tool-executor-ptc";
+var PTC_ONLY_SECTION = "tools:ptc-only";
+var TOOLS_SDK_SECTION = "tools:sdk";
+function messageOf(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function toolsOf(ctx) {
+  return ctx?.tools ?? ctx?.get?.("tools");
+}
+function hasPresentationSeam(ctx, seam) {
+  return typeof ctx?.inject === "function" && typeof seam?.presentAs === "function" && typeof seam?.modeFor === "function" && typeof seam?.sdkSection === "function" && typeof seam?.collapseSection === "function";
+}
+function hasExecutorSeam(ctx, seam) {
+  const scoped = seam?.scoped;
+  return typeof ctx?.plugin === "function" && typeof seam?.setExecutor === "function" && typeof seam?.selectExecutor === "function" && typeof seam?.definitions === "function" && typeof scoped?.get === "function" && typeof scoped?.has === "function" && typeof scoped?.delete === "function";
+}
+function inspectPtcCapabilities(ctx) {
+  const tools = toolsOf(ctx);
+  const presentation = tools;
+  const executor = tools;
+  const reasons = [];
+  const presentationSeam = hasPresentationSeam(ctx, presentation);
+  const executorSeam = hasExecutorSeam(ctx, executor);
+  let seam;
+  if (presentationSeam) {
+    seam = "presentation";
+  } else if (executorSeam) {
+    seam = "executor";
+  } else {
+    reasons.push(
+      "the host exposes neither the 0.2.1 tool presentation seam (tools.presentAs) nor the 0.2.2 PTC executor seam (tools.setExecutor plus a loadable @deepseek-ai/dsh-tool-executor-ptc); use a DSH host that ships the PTC tool executor or keep PTC mode off"
+    );
+  }
+  const runtime = ctx?.get?.("ptcRuntime");
+  if (runtime === void 0 || runtime === null) {
+    reasons.push("the host has no ctx.ptcRuntime service; load @deepseek-ai/dsh-ptc-runtime-node or keep PTC mode off");
+  } else if (typeof runtime.language !== "string" || !SDK_LANGUAGES.includes(runtime.language)) {
+    const language = typeof runtime.language === "string" ? runtime.language : String(runtime.language);
+    reasons.push(`the host PTC runtime language '${language}' has no SDK renderer in this build (known: ${SDK_LANGUAGES.join(", ")})`);
+  }
+  return {
+    available: reasons.length === 0,
+    reasons,
+    ...typeof runtime?.language === "string" ? { language: runtime.language } : {},
+    ...seam === void 0 ? {} : { seam }
+  };
+}
+async function inspectPtcCapabilitiesAsync(ctx) {
+  const capabilities = inspectPtcCapabilities(ctx);
+  if (!capabilities.available || capabilities.seam !== "executor") return capabilities;
+  try {
+    await loadPtcExecutorModule();
+    return capabilities;
+  } catch (error) {
+    return {
+      available: false,
+      reasons: [
+        ...capabilities.reasons,
+        `the host package resolver cannot import ${PTC_EXECUTOR_SPECIFIER}: ${messageOf(error)}`
+      ],
+      ...capabilities.language === void 0 ? {} : { language: capabilities.language },
+      seam: "executor"
+    };
+  }
+}
+async function mountPtc(ctx, scopeKey2) {
+  const capabilities = inspectPtcCapabilities(ctx);
+  if (!capabilities.available) {
+    throw new Error(`PTC is unavailable: ${capabilities.reasons.join(" ")}`);
+  }
+  if (capabilities.seam === "presentation") {
+    return mountPresentation(ctx);
+  }
+  if (capabilities.seam === "executor") {
+    return mountExecutor(ctx, scopeKey2);
+  }
+  throw new Error("PTC is unavailable: the host exposes no recognized PTC seam");
+}
+function mountPresentation(ctx) {
+  let injection;
+  try {
+    injection = ctx.inject?.(["tools", "ptcRuntime"], (runtimeCtx) => {
+      const tools = runtimeCtx.tools;
+      const presentAs = tools?.presentAs;
+      if (tools === void 0 || typeof presentAs !== "function") {
+        throw new Error("the scoped tools service exposes no presentAs()");
+      }
+      presentAs.call(tools, "ptc");
+    });
+  } catch (error) {
+    throw new Error(`the 0.2.1 PTC presentation could not be mounted: ${messageOf(error)}`);
+  }
+  if (injection === void 0 || typeof injection.dispose !== "function") {
+    throw new Error("the 0.2.1 PTC presentation returned no disposable injection");
+  }
+  let disposed = false;
+  return {
+    async dispose() {
+      if (disposed) return;
+      disposed = true;
+      await injection?.dispose?.();
+    }
+  };
+}
+async function mountExecutor(ctx, scopeKey2) {
+  const tools = toolsOf(ctx);
+  if (tools === void 0) throw new Error("the host exposes no tools service");
+  const scoped = tools.scoped;
+  if (scoped === void 0) throw new Error("the 0.2.2 tools service exposes no scoped executor store");
+  const existing = scoped.get?.(scopeKey2);
+  if (existing?.executor !== void 0) {
+    throw new Error("a tool executor is already registered in this agent scope; remove the preset-level executor row or keep PTC mode off");
+  }
+  let module;
+  try {
+    module = await loadPtcExecutorModule();
+  } catch (error) {
+    throw new Error(`the PTC executor module could not be loaded: ${messageOf(error)}`);
+  }
+  let injection;
+  try {
+    injection = ctx.plugin?.(module);
+    await Promise.resolve(injection);
+  } catch (error) {
+    throw new Error(`the PTC executor could not be mounted: ${messageOf(error)}`);
+  }
+  if (injection === void 0 || typeof injection.dispose !== "function") {
+    throw new Error("the PTC executor returned no disposable injection");
+  }
+  const record = scoped.get?.(scopeKey2);
+  if (!isPtcExecutorRecord(record)) {
+    try {
+      await injection.dispose?.();
+    } catch {
+    }
+    throw new Error("the PTC executor did not register a scoped tool executor");
+  }
+  let disposed = false;
+  return {
+    async dispose() {
+      if (disposed) return;
+      disposed = true;
+      let failure;
+      try {
+        await injection?.dispose?.();
+      } catch (error) {
+        failure = error;
+      }
+      restoreNativeExecutor(tools, scopeKey2, record);
+      if (failure !== void 0) throw failure;
+    }
+  };
+}
+function loadPtcExecutorModule() {
+  return importHostPackage(PTC_EXECUTOR_SPECIFIER);
+}
+function isPtcExecutorRecord(record) {
+  const sections = record?.executor?.sections;
+  if (!Array.isArray(sections)) return false;
+  return sections.some((section) => section.name === TOOLS_SDK_SECTION);
+}
+function describePtcSelection(ctx, scope) {
+  const tools = toolsOf(ctx);
+  if (typeof tools?.selectExecutor !== "function") return "unknown";
+  try {
+    const selected = tools.selectExecutor(scope);
+    if (!Array.isArray(selected?.sections)) return "native";
+    return selected.sections.some((section) => section.name === PTC_ONLY_SECTION) ? "ptc" : "native";
+  } catch {
+    return "unknown";
+  }
+}
+function restoreNativeExecutor(tools, scopeKey2, record) {
+  const scoped = tools.scoped;
+  if (scoped === void 0) return;
+  if (scoped.get?.(scopeKey2) !== record) return;
+  scoped.delete?.(scopeKey2);
+}
+
 // packages/bind/src/confirmable-write.ts
 function confirmSessionAppend(options) {
   options.append();
@@ -23099,13 +23280,13 @@ function surfaceNodeList(session) {
   }
   return nodes;
 }
-function messageOf2(event) {
+function messageOf3(event) {
   if (event.type === "user/message") return event.data;
   const message = event.data.message;
   return isPlainRecord3(message) ? message : void 0;
 }
 function messageIdOf(event) {
-  const message = messageOf2(event);
+  const message = messageOf3(event);
   const id = message?.id;
   return typeof id === "string" && id !== "" ? id : void 0;
 }
@@ -23204,7 +23385,7 @@ function lastBodyCandidate(events, turn) {
   let found;
   for (const event of events) {
     if (event.type !== "assistant/message" || numberField(event.data.turn) !== turn) continue;
-    const message = messageOf2(event);
+    const message = messageOf3(event);
     const messageId = messageIdOf(event);
     if (message === void 0 || messageId === void 0) continue;
     if (textOfMessage(message).trim() === "" || hasToolCall(message)) continue;
@@ -23290,7 +23471,7 @@ function anchorTarget(events, surface, anchorMessageId) {
   if (event.type !== "assistant/message") {
     throw bodyRuntimeError("stale-anchor", `body operation rejected: anchor '${anchorMessageId}' is '${event.type}', expected assistant/message`);
   }
-  const message = messageOf2(event);
+  const message = messageOf3(event);
   if (message === void 0) {
     throw bodyRuntimeError("stale-anchor", `body operation rejected: anchor '${anchorMessageId}' has no message payload`);
   }
@@ -23317,7 +23498,7 @@ function assertLastBodyTarget(events, surface, anchorSeq, anchorMessage) {
   for (const seq of surface.slice(anchorIndex + 1)) {
     const event = eventAtSeq(events, seq);
     if (event.type === "system/message" || event.type === "developer/message" || event.type === "tool/result") continue;
-    const message = messageOf2(event);
+    const message = messageOf3(event);
     if (message === void 0) continue;
     if (event.type === "user/message") {
       if (sourceOf(message)?.kind === "user") {
@@ -23568,7 +23749,7 @@ function oldBodyTargets(events, surface, target) {
     if (seq === target.seq) continue;
     const event = eventAtSeq(events, seq);
     if (event.type === "system/message") continue;
-    const message = messageOf2(event);
+    const message = messageOf3(event);
     if (event.type === "user/message") {
       const form = message === void 0 ? void 0 : sourceOf(message)?.form;
       if (form === "body-regenerate" || form === "body-restore") targets.add(seq);
@@ -23584,7 +23765,7 @@ function oldAnchorSurfaceTargets(events, surface, previousAnchorId) {
   if (seq === void 0) return /* @__PURE__ */ new Set();
   const event = findEventByMessageId(events, previousAnchorId);
   if (event === void 0) return /* @__PURE__ */ new Set();
-  const message = messageOf2(event);
+  const message = messageOf3(event);
   if (message === void 0) return /* @__PURE__ */ new Set();
   return oldBodyTargets(events, surface, { event, message, seq });
 }
@@ -23601,7 +23782,7 @@ function hideTargets(events, surface, triggerMessageId, turn, candidateMessageId
   for (const seq of surface) {
     const event = eventAtSeq(events, seq);
     if (event.type === "system/message") continue;
-    const message = messageOf2(event);
+    const message = messageOf3(event);
     if (message !== void 0 && messageIdOf(event) === candidateMessageId) continue;
     if (event.type === "user/message") {
       if (messageIdOf(event) === triggerMessageId) {
@@ -23758,7 +23939,7 @@ function settlementRemainingTargets(events, surface, op, evidence) {
 }
 function isBodyHideMarker(event) {
   if (event.type !== "developer/message") return false;
-  const message = messageOf2(event);
+  const message = messageOf3(event);
   return message !== void 0 && sourceOf(message)?.form === "body-hide";
 }
 function finishSettledOperation(deps, context, settled) {
@@ -24369,7 +24550,7 @@ async function restoreBodyAfterFailureLocked(deps, op) {
   if (previous === void 0) {
     throw bodyRuntimeError("restore-unavailable", `body restore ${op.opId} cannot find previous anchor '${op.previousAnchorId}' in the session log`);
   }
-  const previousMessage = messageOf2(previous);
+  const previousMessage = messageOf3(previous);
   if (previousMessage === void 0 || previous.type !== "assistant/message") {
     throw bodyRuntimeError("restore-unavailable", `body restore ${op.opId} previous anchor '${op.previousAnchorId}' is not an assistant message`);
   }
@@ -24764,13 +24945,13 @@ function wiringLogIssueText(issues, strictFailure) {
 function eventAt(events, seq) {
   return events.find((event) => event.seq === seq);
 }
-function messageOf3(event) {
+function messageOf4(event) {
   if (event.type === "user/message") return event.data;
   const message = event.data["message"];
   return isRecord6(message) ? message : void 0;
 }
 function messageIdOf2(event) {
-  const message = messageOf3(event);
+  const message = messageOf4(event);
   const id = message?.["id"];
   return typeof id === "string" && id !== "" ? id : void 0;
 }
@@ -24836,7 +25017,7 @@ function createBodySessionFactsSource(session) {
       for (const event of events) {
         const id = messageIdOf2(event);
         if (id === void 0 || built.has(id)) continue;
-        const message = messageOf3(event);
+        const message = messageOf4(event);
         built.set(id, message === void 0 ? void 0 : textOfMessage2(message));
       }
       messageTexts = built;
@@ -25002,7 +25183,7 @@ function inspectAnchorInEvents(events, surface, anchorMessageId) {
     const event = eventAt(events, seq);
     if (event === void 0) return { onSurface: true, last: false };
     if (event.type === "system/message" || event.type === "developer/message" || event.type === "tool/result") continue;
-    const message = messageOf3(event);
+    const message = messageOf4(event);
     if (message === void 0) continue;
     if (event.type === "user/message") {
       if (sourceOf2(message)?.kind === "user") return { onSurface: true, last: false };
@@ -30568,7 +30749,7 @@ function recoveredCandidateInTurn(events, op, turn) {
   for (const event of events) {
     if (event.type !== "assistant/message" || event.seq <= op.startSeq) continue;
     if (numberField2(event.data["turn"]) !== turn) continue;
-    const message = messageOf3(event);
+    const message = messageOf4(event);
     const messageId = messageIdOf2(event);
     if (message === void 0 || messageId === void 0) continue;
     if (textOfMessage2(message).trim() === "" || hasToolCall2(message)) continue;
@@ -32088,7 +32269,7 @@ var NovelDriver = class _NovelDriver {
           this.logWarn("projection-repair-failed", { novelId, operation: "projection-repair", errorCode: errorCodeOf(error) });
           await this.store.pause(novelId, {
             reason: "projection-pending",
-            detail: `projection repair failed: ${messageOf4(error)}`,
+            detail: `projection repair failed: ${messageOf5(error)}`,
             resumeHint: "repair the reading projections, then resume explicitly (\xA713)"
           });
           return;
@@ -32146,11 +32327,11 @@ var NovelDriver = class _NovelDriver {
         await this.store.resolveWorkIntent(novelId, {
           intentId: intent.intentId,
           outcome: "failed",
-          error: `followup delivery failed: ${messageOf4(error)}`
+          error: `followup delivery failed: ${messageOf5(error)}`
         });
         await this.store.pause(novelId, {
           reason: "stalled",
-          detail: `followup delivery failed after ${briefSnapshot.config.budgets.externalRetry.maxAttempts} attempts: ${messageOf4(error)}`,
+          detail: `followup delivery failed after ${briefSnapshot.config.budgets.externalRetry.maxAttempts} attempts: ${messageOf5(error)}`,
           resumeHint: "resume explicitly after reviewing the delivery failure (\xA713)"
         });
       } catch (handled) {
@@ -32240,7 +32421,7 @@ var NovelDriver = class _NovelDriver {
           try {
             await this.store.pause(summary.novelId, {
               reason: "recovery-required",
-              detail: `projection repair failed during recovery: ${messageOf4(error)}`
+              detail: `projection repair failed during recovery: ${messageOf5(error)}`
             });
           } catch {
           }
@@ -32511,7 +32692,7 @@ function buildNoticeMessage(novelId, intentId, snapshot2, work, unitId, session)
     source: hostPluginMessageSource(session, { form: "notice", summary: `AgentNovel work notice (novel ${novelId}, intent ${intentId})` })
   };
 }
-function messageOf4(error) {
+function messageOf5(error) {
   return error instanceof Error ? error.message : String(error);
 }
 function errorCodeOf(error) {
@@ -40748,7 +40929,7 @@ function agentOf2(agents, id) {
 function noticeText(session) {
   return session.finished ? `\u81EA\u52A8\u6E38\u620F\u901A\u77E5\uFF08\u975E\u7528\u6237\u6D88\u606F\uFF09\uFF1A\u5BF9\u5C40\u300C${session.gameName}\u300D\u5DF2\u7ED3\u675F\u2014\u2014${session.summary}\u3002\u8BF7\u6536\u5C3E\u53D9\u8FF0\u3002sessionId: ${session.id}` : `\u81EA\u52A8\u6E38\u620F\u901A\u77E5\uFF08\u975E\u7528\u6237\u6D88\u606F\uFF09\uFF1A\u5BF9\u624B\u5DF2\u5728\u300C${session.gameName}\u300D\u68CB\u76D8\u843D\u5B50\uFF0C\u7EE7\u7EED\u5BF9\u5C40\u3002sessionId: ${session.id}`;
 }
-function messageOf5(error) {
+function messageOf6(error) {
   return error instanceof Error ? error.message : String(error);
 }
 function turnReachedAgent(session) {
@@ -40772,7 +40953,7 @@ async function wakeAgentOnHumanMove(host, session) {
   try {
     agentId = await host.bindingOf?.(session.chat.character, session.chat.chatId);
   } catch (error) {
-    warn4(`dsh-soulmojito: game wake binding lookup failed (${messageOf5(error)})`);
+    warn4(`dsh-soulmojito: game wake binding lookup failed (${messageOf6(error)})`);
     return false;
   }
   if (agentId === void 0) return false;
@@ -40792,7 +40973,7 @@ async function wakeAgentOnHumanMove(host, session) {
     await agent.followup(message);
     return true;
   } catch (error) {
-    warn4(`dsh-soulmojito: game wake followup failed (${messageOf5(error)})`);
+    warn4(`dsh-soulmojito: game wake followup failed (${messageOf6(error)})`);
     return false;
   }
 }
@@ -41170,7 +41351,9 @@ function replyToOf(args) {
 // packages/plugin/src/im/agent-mount.ts
 var disposersByAgent = /* @__PURE__ */ new Map();
 var warnedAgents = /* @__PURE__ */ new Set();
-function messageOf6(error) {
+var warnedBindingReads = /* @__PURE__ */ new Set();
+var bindingCache = /* @__PURE__ */ new WeakMap();
+function messageOf7(error) {
   return error instanceof Error ? error.message : String(error);
 }
 function agentIdOf2(agent) {
@@ -41178,6 +41361,41 @@ function agentIdOf2(agent) {
   if (typeof id === "string" && id.trim() !== "") return id;
   const sessionId = agent.session?.id;
   return typeof sessionId === "string" && sessionId.trim() !== "" ? sessionId : void 0;
+}
+function sessionIdOf2(agent) {
+  const sessionId = agent?.session?.id;
+  if (typeof sessionId === "string" && sessionId.trim() !== "") return sessionId;
+  const id = agent?.id;
+  return typeof id === "string" && id.trim() !== "" ? id : void 0;
+}
+async function boundSessionIds(deps, sessionId) {
+  const db = await deps.db();
+  const now = Date.now();
+  const cached = bindingCache.get(db);
+  if (cached !== void 0 && now - cached.at < 100) return cached.sessionIds;
+  try {
+    const state = await db.getState();
+    const sessionIds = new Set(
+      Object.values(state.imPeers ?? {}).map((binding) => binding.sessionId).filter((id) => typeof id === "string" && id !== "")
+    );
+    bindingCache.set(db, { at: now, sessionIds });
+    warnedBindingReads.delete(sessionId);
+    return sessionIds;
+  } catch (error) {
+    if (!warnedBindingReads.has(sessionId)) {
+      warnedBindingReads.add(sessionId);
+      deps.logger?.warn?.(`dsh-soulmojito im: reading imPeers for session ${sessionId} failed; IM tools stay hidden: ${messageOf7(error)}`);
+    }
+    return /* @__PURE__ */ new Set();
+  }
+}
+function invalidateImToolBindingCache() {
+  bindingCache = /* @__PURE__ */ new WeakMap();
+}
+async function imToolVisible(deps, registeredAgentId, preparingAgent) {
+  const sessionId = sessionIdOf2(preparingAgent) ?? registeredAgentId;
+  const ids = await boundSessionIds(deps, sessionId);
+  return ids.has(sessionId);
 }
 function mountImToolsOnAgent(deps, agent) {
   const agentId = agentIdOf2(agent);
@@ -41198,17 +41416,19 @@ function mountImToolsOnAgent(deps, agent) {
   const disposers = [];
   for (const tool4 of createImTools(deps)) {
     try {
-      const disposer = register.call(tools, tool4);
+      const disposer = register.call(tools, tool4, {
+        when: (context) => imToolVisible(deps, agentId, context.agent)
+      });
       if (typeof disposer === "function") disposers.push(disposer);
     } catch (error) {
-      deps.logger?.warn?.(`dsh-soulmojito im: registering ${tool4.name} on agent ${agentId} failed: ${messageOf6(error)}`);
+      deps.logger?.warn?.(`dsh-soulmojito im: registering ${tool4.name} on agent ${agentId} failed: ${messageOf7(error)}`);
       for (const dispose of disposers) dispose();
       return false;
     }
   }
   disposersByAgent.set(agentId, disposers);
   warnedAgents.delete(agentId);
-  deps.logger?.debug?.(`dsh-soulmojito im: mounted ${disposers.length} IM tools on agent ${agentId}`);
+  deps.logger?.debug?.(`dsh-soulmojito im: mounted ${disposers.length} conditionally visible IM tools on agent ${agentId}`);
   return true;
 }
 function unmountImToolsForAgent(agentId) {
@@ -41228,6 +41448,266 @@ function unmountAllImTools() {
 
 // packages/plugin/src/im/runtime.ts
 init_env_compat();
+
+// packages/plugin/src/im/session-host.ts
+var ImSessionNotLiveError = class extends Error {
+  code = "IM_SESSION_NOT_LIVE";
+  sessionId;
+  constructor(sessionId) {
+    super(`the bound DSH session '${sessionId}' has no live AgentLoop agent; open it in DSH and send again`);
+    this.name = "ImSessionNotLiveError";
+    this.sessionId = sessionId;
+  }
+};
+function inspectImSessionCapabilities(agents) {
+  const reasons = [];
+  if (agents === void 0) {
+    reasons.push("the host exposes no agents service; IM cannot insert messages into a session");
+  } else if (typeof agents.get !== "function") {
+    reasons.push("the host agents service exposes no get(id); IM cannot find the bound session agent");
+  }
+  return { available: reasons.length === 0, reasons };
+}
+function liveAgentOf(agents, sessionId) {
+  if (agents?.get === void 0) return void 0;
+  try {
+    return agents.get(sessionId) ?? void 0;
+  } catch {
+    return void 0;
+  }
+}
+function requireLiveAgent(agents, sessionId) {
+  const agent = liveAgentOf(agents, sessionId);
+  if (agent === void 0) throw new ImSessionNotLiveError(sessionId);
+  if (!hasInboxSeam(agent)) throw noInboxError(sessionId);
+  return agent;
+}
+function hasInboxSeam(agent) {
+  return typeof agent.followup === "function" || typeof agent.steer === "function";
+}
+function noInboxError(sessionId) {
+  const error = new Error(
+    `the host agent for session '${sessionId}' exposes neither followup() nor steer(); IM cannot insert a message`
+  );
+  error.code = "IM_SESSION_NO_INBOX";
+  return error;
+}
+function listLiveAgents2(agents) {
+  if (agents?.list === void 0) return [];
+  try {
+    return agents.list() ?? [];
+  } catch {
+    return [];
+  }
+}
+function buildImInboxMessage(session, message) {
+  return {
+    id: message.id,
+    role: "user",
+    content: [{ type: "text", text: message.text }],
+    source: hostPluginMessageSource(session, { form: "relay", summary: message.summary })
+  };
+}
+async function insertImMessage(agent, message) {
+  const built = buildImInboxMessage(agent.session, message);
+  if (agent.status === "running" && typeof agent.steer === "function") {
+    agent.steer(built);
+    return "steer";
+  }
+  if (typeof agent.followup !== "function") {
+    throw noInboxError(agent.session?.id ?? agent.id ?? "unknown");
+  }
+  await agent.followup(built);
+  return "followup";
+}
+
+// packages/plugin/src/agent-ptc-mode.ts
+init_runtime2();
+var mountedByAgent = /* @__PURE__ */ new Map();
+var lastApplyErrorByAgent = /* @__PURE__ */ new Map();
+var idleReconciles = /* @__PURE__ */ new Set();
+function messageOf8(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+function agentIdOf3(agent) {
+  const id = agent?.id;
+  if (typeof id === "string" && id.trim() !== "") return id;
+  const sessionId = agent?.session?.id;
+  return typeof sessionId === "string" && sessionId.trim() !== "" ? sessionId : void 0;
+}
+function isTavernAgentArchitecture(architecture) {
+  return architecture === "agent-tavern" || architecture === "agent-novel" || architecture === "card-workbench";
+}
+function hostContextOf(agent) {
+  return agent.ctx;
+}
+function agentPtcCapabilitiesForHost(ctx) {
+  return inspectPtcCapabilitiesAsync(ctx);
+}
+function inspectAgentPtcRuntime(ctx, bindings2) {
+  const entries = [];
+  for (const agent of listLiveAgents2(ctx.agents)) {
+    const agentId = agentIdOf3(agent);
+    if (agentId === void 0) continue;
+    const architecture = bindings2[agentId]?.architecture;
+    if (!isTavernAgentArchitecture(architecture)) continue;
+    const status2 = typeof agent.status === "string" ? agent.status : void 0;
+    const mounted = mountedByAgent.has(agentId);
+    try {
+      const host = hostContextOf(agent);
+      const capabilities = host === void 0 ? { available: false, reasons: ["the live agent exposes no scoped host context"] } : inspectPtcCapabilities(host);
+      const lastError = lastApplyErrorByAgent.get(agentId);
+      const mounted2 = mountedByAgent.has(agentId);
+      const surface = describePtcSelection(host, agent);
+      entries.push({
+        agentId,
+        status: status2,
+        architecture,
+        capable: capabilities.available,
+        capabilityReasons: capabilities.reasons,
+        ...capabilities.seam === void 0 ? {} : { seam: capabilities.seam },
+        surface,
+        source: surface === "ptc" ? mounted2 ? "plugin" : "preset" : surface === "native" ? "native" : "unknown",
+        mounted: mounted2,
+        ...lastError === void 0 ? {} : { lastError }
+      });
+    } catch (error) {
+      entries.push({
+        agentId,
+        status: status2,
+        architecture,
+        capable: false,
+        capabilityReasons: [messageOf8(error)],
+        surface: "unknown",
+        source: "unknown",
+        mounted
+      });
+    }
+  }
+  return entries;
+}
+async function applyAgentPtcMode(agent, logger) {
+  const agentId = agentIdOf3(agent);
+  if (agentId === void 0 || mountedByAgent.has(agentId)) return false;
+  if (agent.status === "running") {
+    scheduleAgentPtcReconcileWhenIdle(agent, logger);
+    return false;
+  }
+  const host = hostContextOf(agent);
+  if (host === void 0) {
+    lastApplyErrorByAgent.set(agentId, "the live agent exposes no scoped host context");
+    return false;
+  }
+  const capabilities = inspectPtcCapabilities(host);
+  if (!capabilities.available) {
+    lastApplyErrorByAgent.set(agentId, capabilities.reasons.join(" "));
+    return false;
+  }
+  const db = await store3();
+  const state = await db.getState();
+  if (state.agentPtcMode !== true) return false;
+  if (!isTavernAgentArchitecture(state.sessionBindings[agentId]?.architecture)) return false;
+  if (describePtcSelection(host, agent) === "ptc") {
+    lastApplyErrorByAgent.delete(agentId);
+    return false;
+  }
+  try {
+    const mount = await mountPtc(host, agent);
+    mountedByAgent.set(agentId, mount);
+    lastApplyErrorByAgent.delete(agentId);
+    return true;
+  } catch (error) {
+    const message = messageOf8(error);
+    lastApplyErrorByAgent.set(agentId, message);
+    logger?.warn?.(`dsh-soulmojito ptc: agent ${agentId} could not mount PTC: ${message}`);
+    return false;
+  }
+}
+async function clearAgentPtcMode(agentId, logger) {
+  if (agentId === void 0) return;
+  lastApplyErrorByAgent.delete(agentId);
+  const mount = mountedByAgent.get(agentId);
+  if (mount === void 0) return;
+  mountedByAgent.delete(agentId);
+  try {
+    await mount.dispose();
+  } catch (error) {
+    logger?.warn?.(`dsh-soulmojito ptc: disposing agent ${agentId} PTC mode failed: ${messageOf8(error)}`);
+  }
+}
+async function clearAllAgentPtcModes(logger) {
+  for (const agentId of [...mountedByAgent.keys()]) await clearAgentPtcMode(agentId, logger);
+}
+async function reconcileAgentPtcMode(agent, logger) {
+  if (agent.status === "running") {
+    scheduleAgentPtcReconcileWhenIdle(agent, logger);
+    return;
+  }
+  const agentId = agentIdOf3(agent);
+  if (agentId === void 0) return;
+  const state = await (await store3()).getState();
+  if (state.agentPtcMode === true && isTavernAgentArchitecture(state.sessionBindings[agentId]?.architecture)) {
+    await applyAgentPtcMode(agent, logger);
+    return;
+  }
+  await clearAgentPtcMode(agentId, logger);
+}
+function scheduleAgentPtcReconcileWhenIdle(agent, logger) {
+  const agentId = agentIdOf3(agent);
+  if (agentId === void 0 || idleReconciles.has(agentId)) return;
+  if (typeof agent.whenIdle !== "function") return;
+  idleReconciles.add(agentId);
+  void Promise.resolve(agent.whenIdle()).then(() => reconcileAgentPtcMode(agent, logger)).catch((error) => {
+    logger?.warn?.(`dsh-soulmojito ptc: waiting for agent ${agentId} idle failed: ${messageOf8(error)}`);
+  }).finally(() => {
+    idleReconciles.delete(agentId);
+  });
+}
+async function refreshAgentPtcMode(ctx) {
+  if (typeof ctx.agents?.list !== "function") {
+    ctx.logger?.warn?.("dsh-soulmojito ptc: the host exposes no agents.list(); the switch applies to new AgentTavern sessions only");
+    return;
+  }
+  const live = listLiveAgents2(ctx.agents);
+  const seen = /* @__PURE__ */ new Set();
+  for (const agent of live) {
+    const agentId = agentIdOf3(agent);
+    if (agentId === void 0) continue;
+    seen.add(agentId);
+    try {
+      await reconcileAgentPtcMode(agent, ctx.logger);
+    } catch (error) {
+      ctx.logger?.warn?.(`dsh-soulmojito ptc: reconciling agent ${agentId} failed: ${messageOf8(error)}`);
+    }
+  }
+  for (const agentId of [...mountedByAgent.keys()]) {
+    if (!seen.has(agentId)) await clearAgentPtcMode(agentId, ctx.logger);
+  }
+}
+function mountAgentPtcMode(ctx) {
+  ctx.on?.("agent/status", (payload) => {
+    const record = payload;
+    const agent = record?.agent;
+    if (agent === void 0) return;
+    const status2 = record?.status ?? agent.status;
+    if (status2 !== "idle") return;
+    void reconcileAgentPtcMode(agent, ctx.logger).catch((error) => {
+      ctx.logger?.warn?.(`dsh-soulmojito ptc: idle reconcile failed: ${messageOf8(error)}`);
+    });
+  });
+  ctx.on?.("agent/disposed", (payload) => {
+    const agent = payload?.agent;
+    void clearAgentPtcMode(agentIdOf3(agent), ctx.logger).catch((error) => {
+      ctx.logger?.warn?.(`dsh-soulmojito ptc: disposal reconcile failed: ${messageOf8(error)}`);
+    });
+  });
+  try {
+    ctx.effect(() => () => {
+      void clearAllAgentPtcModes(ctx.logger);
+    }, "dsh-soulmojito: agent ptc mode");
+  } catch {
+  }
+}
 
 // packages/plugin/src/http/router.ts
 init_runtime2();
@@ -50566,7 +51046,7 @@ var OneBotChannel = class {
     try {
       await this.enqueueInbound(() => this.router.handle(message));
     } catch (error) {
-      this.logger?.warn?.(`dsh-soulmojito im onebot/${this.accountId}: webhook inbound failed: ${messageOf7(error)}`);
+      this.logger?.warn?.(`dsh-soulmojito im onebot/${this.accountId}: webhook inbound failed: ${messageOf9(error)}`);
       respondJson(res, 500, { ok: false, message: "onebot inbound handling failed" });
       return;
     }
@@ -50654,7 +51134,7 @@ var OneBotChannel = class {
     }
     if (live.role === "API") return;
     void this.enqueueInbound(() => this.deliverEvent(live, value)).catch((error) => {
-      this.logger?.warn?.(`dsh-soulmojito im onebot/${this.accountId}: inbound event failed: ${messageOf7(error)}`);
+      this.logger?.warn?.(`dsh-soulmojito im onebot/${this.accountId}: inbound event failed: ${messageOf9(error)}`);
     });
   }
   async deliverEvent(live, event) {
@@ -50706,7 +51186,7 @@ function createOneBotUpgradeHandler(options) {
     try {
       connection = acceptWebSocket(req, socket, head);
     } catch (error) {
-      owner.noteError(messageOf7(error));
+      owner.noteError(messageOf9(error));
       return;
     }
     owner.attach(connection, claims);
@@ -50821,7 +51301,7 @@ function readJsonBody(req, maxBytes) {
 function isJsonObject3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function messageOf7(error) {
+function messageOf9(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -51257,7 +51737,7 @@ function createQQBinding(options) {
     } catch (error) {
       if (session !== current) return status2();
       session = void 0;
-      phase = { phase: "failed", reason: messageOf8(error) };
+      phase = { phase: "failed", reason: messageOf10(error) };
       throw error;
     }
     if (session !== current) return status2();
@@ -51290,7 +51770,7 @@ function createQQBinding(options) {
             (error) => {
               if (session !== current) return;
               session = void 0;
-              const reason = messageOf8(error);
+              const reason = messageOf10(error);
               phase = { phase: "failed", reason };
               callbacks.onFailure?.(error instanceof Error ? error : new Error(reason));
             }
@@ -51310,7 +51790,7 @@ function createQQBinding(options) {
       });
     } catch (error) {
       session = void 0;
-      phase = { phase: "failed", reason: messageOf8(error) };
+      phase = { phase: "failed", reason: messageOf10(error) };
       throw error;
     }
     current.stop = stop;
@@ -51334,7 +51814,7 @@ function createQQBinding(options) {
     }
   };
 }
-function messageOf8(error) {
+function messageOf10(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -51961,7 +52441,7 @@ var QQChannel = class {
           await this.startAttempt(signal);
           return;
         } catch (error) {
-          const failure = error instanceof QQChannelError ? error : new QQChannelError("QQ_START_FAILED", `qq account '${this.accountId}' failed to start: ${messageOf9(error)}`, { cause: error });
+          const failure = error instanceof QQChannelError ? error : new QQChannelError("QQ_START_FAILED", `qq account '${this.accountId}' failed to start: ${messageOf11(error)}`, { cause: error });
           const delayMs = this.retryDelayMs(failure, attempt, signal);
           if (delayMs === void 0) throw failure;
           this.starting = true;
@@ -52008,13 +52488,13 @@ var QQChannel = class {
           this.failStartup(bot, gate, "the QQ gateway closed before the bot became ready");
         },
         (error) => {
-          this.failStartup(bot, gate, `the QQ gateway refused to start: ${messageOf9(error)}`);
-          this.noteFailure(bot, `QQ gateway start failed: ${messageOf9(error)}`);
+          this.failStartup(bot, gate, `the QQ gateway refused to start: ${messageOf11(error)}`);
+          this.noteFailure(bot, `QQ gateway start failed: ${messageOf11(error)}`);
         }
       );
       await withTimeout2(gate.promise, START_TIMEOUT_MS, `qq account '${this.accountId}' was not ready within ${START_TIMEOUT_MS}ms`);
     } catch (error) {
-      const failure = error instanceof QQChannelError ? error : new QQChannelError("QQ_START_FAILED", `qq account '${this.accountId}' failed to start: ${messageOf9(error)}`, { cause: error });
+      const failure = error instanceof QQChannelError ? error : new QQChannelError("QQ_START_FAILED", `qq account '${this.accountId}' failed to start: ${messageOf11(error)}`, { cause: error });
       if (created === void 0) {
         this.starting = false;
         this.lastError = failure.message;
@@ -52113,7 +52593,7 @@ var QQChannel = class {
     } catch (error) {
       throw new QQChannelError(
         "QQ_SEND_FAILED",
-        `qq send part ${index + 1}/${total} to ${this.peerLabel(target)} failed: ${messageOf9(error)}`,
+        `qq send part ${index + 1}/${total} to ${this.peerLabel(target)} failed: ${messageOf11(error)}`,
         { cause: error }
       );
     }
@@ -52131,7 +52611,7 @@ var QQChannel = class {
       if (error instanceof QQChannelError) throw error;
       throw new QQChannelError(
         "QQ_SEND_FAILED",
-        `qq send ${part.kind} part ${part.index + 1}/${part.total} to ${this.peerLabel(target)} failed: ${messageOf9(error)}`,
+        `qq send ${part.kind} part ${part.index + 1}/${part.total} to ${this.peerLabel(target)} failed: ${messageOf11(error)}`,
         { cause: error }
       );
     }
@@ -52152,7 +52632,7 @@ var QQChannel = class {
       this.noteFailure(bot, `QQ gateway disconnected: ${describeDisconnect(event)}`);
     });
     bot.on("error", (error) => {
-      this.noteFailure(bot, `QQ channel error: ${messageOf9(error)}`);
+      this.noteFailure(bot, `QQ channel error: ${messageOf11(error)}`);
     });
     bot.on("message", (_ctx, msg) => this.enqueue(msg));
   }
@@ -52194,7 +52674,7 @@ var QQChannel = class {
   enqueue(msg) {
     const next = this.inboundChain.then(() => this.deliver(msg));
     this.inboundChain = next.catch((error) => {
-      this.logger?.warn?.(`dsh-soulmojito im qq/${this.accountId}: inbound message failed: ${messageOf9(error)}`);
+      this.logger?.warn?.(`dsh-soulmojito im qq/${this.accountId}: inbound message failed: ${messageOf11(error)}`);
     });
     return this.inboundChain;
   }
@@ -52228,7 +52708,7 @@ var QQChannel = class {
         }));
       } catch (error) {
         this.logger?.warn?.(
-          `dsh-soulmojito im qq/${this.accountId}: inbound ${ref.kind} download failed: ${messageOf9(error)}`
+          `dsh-soulmojito im qq/${this.accountId}: inbound ${ref.kind} download failed: ${messageOf11(error)}`
         );
         enriched.push(ref);
       }
@@ -52416,7 +52896,7 @@ function withTimeout2(promise, timeoutMs, message) {
     );
   });
 }
-function messageOf9(error) {
+function messageOf11(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -53276,7 +53756,7 @@ async function requestJson2(request) {
   try {
     return JSON.parse(response.text);
   } catch (cause) {
-    throw new WeixinApiError("WEIXIN_BAD_BODY", `${request.label} returned invalid JSON: ${messageOf10(cause)}`, { cause });
+    throw new WeixinApiError("WEIXIN_BAD_BODY", `${request.label} returned invalid JSON: ${messageOf12(cause)}`, { cause });
   }
 }
 async function requestText(url, init, timeoutMs, signal, label) {
@@ -53308,7 +53788,7 @@ async function requestText(url, init, timeoutMs, signal, label) {
         cause
       });
     }
-    throw new WeixinApiError("WEIXIN_HTTP", `${label} failed: ${messageOf10(cause)}`, { cause });
+    throw new WeixinApiError("WEIXIN_HTTP", `${label} failed: ${messageOf12(cause)}`, { cause });
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", onAbort);
@@ -53512,7 +53992,7 @@ function snippet(text) {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length > 300 ? `${flat.slice(0, 300)}\u2026` : flat;
 }
-function messageOf10(error) {
+function messageOf12(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -53574,7 +54054,7 @@ function createWeixinBinding(options) {
       if (session !== current) return status2();
       session = void 0;
       current.detach();
-      phase = { phase: "failed", reason: messageOf11(error) };
+      phase = { phase: "failed", reason: messageOf13(error) };
       throw error;
     }
     if (session !== current) {
@@ -53621,7 +54101,7 @@ function createWeixinBinding(options) {
       } catch (error) {
         if (session !== current || current.controller.signal.aborted) return;
         if (!(error instanceof WeixinApiError && error.timedOut)) {
-          options.logger?.warn?.(`dsh-soulmojito im weixin bind: QR status poll failed, retrying: ${messageOf11(error)}`);
+          options.logger?.warn?.(`dsh-soulmojito im weixin bind: QR status poll failed, retrying: ${messageOf13(error)}`);
         }
       }
       await options.clock.sleep(options.pollIntervalMs, current.controller.signal);
@@ -53663,7 +54143,7 @@ function createWeixinBinding(options) {
         try {
           await current.callbacks.onSuccess(credential);
         } catch (error) {
-          failSession(current, `saving the WeChat credential failed: ${messageOf11(error)}`);
+          failSession(current, `saving the WeChat credential failed: ${messageOf13(error)}`);
           return true;
         }
         if (session === current) {
@@ -53699,7 +54179,7 @@ function createWeixinBinding(options) {
     try {
       qr = await fetchQrcode(current.controller.signal);
     } catch (error) {
-      failSession(current, `refreshing the WeChat QR code failed: ${messageOf11(error)}`);
+      failSession(current, `refreshing the WeChat QR code failed: ${messageOf13(error)}`);
       return false;
     }
     if (session !== current) return false;
@@ -53797,7 +54277,7 @@ function requireHttpUrl(value) {
   }
   return trimmed.replace(/\/+$/, "");
 }
-function messageOf11(error) {
+function messageOf13(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -54125,7 +54605,7 @@ var WeixinSendQueue = class {
     if (this.stopped || this.loopPromise !== void 0 || this.jobs.length === 0) return;
     this.loopPromise = this.runLoop().catch((error) => {
       this.logger?.warn?.(
-        `dsh-soulmojito im weixin/${this.accountId}: the outbound queue loop stopped: ${messageOf12(error)}`
+        `dsh-soulmojito im weixin/${this.accountId}: the outbound queue loop stopped: ${messageOf14(error)}`
       );
     }).finally(() => {
       this.loopPromise = void 0;
@@ -54165,7 +54645,7 @@ var WeixinSendQueue = class {
         try {
           this.onJobStart?.(job.target);
         } catch (error) {
-          this.logger?.warn?.(`dsh-soulmojito im weixin/${this.accountId}: onJobStart failed: ${messageOf12(error)}`);
+          this.logger?.warn?.(`dsh-soulmojito im weixin/${this.accountId}: onJobStart failed: ${messageOf14(error)}`);
         }
       }
       try {
@@ -54267,7 +54747,7 @@ var WeixinSendQueue = class {
     this.releaseJobProjection(job);
     if (job.callerSettled) {
       this.logger?.warn?.(
-        `dsh-soulmojito im weixin/${this.accountId}: a queued send failed after the caller had a queued receipt and was NOT delivered: ${messageOf12(error)}`
+        `dsh-soulmojito im weixin/${this.accountId}: a queued send failed after the caller had a queued receipt and was NOT delivered: ${messageOf14(error)}`
       );
       return;
     }
@@ -54297,7 +54777,7 @@ var WeixinSendQueue = class {
 function isThrottleError(error) {
   return error instanceof WeixinChannelError && error.code === "WEIXIN_THROTTLED";
 }
-function messageOf12(error) {
+function messageOf14(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -55011,7 +55491,7 @@ var WeixinChannel = class {
       this.starting = false;
       throw new WeixinChannelError(
         "WEIXIN_STATE",
-        `weixin account '${this.accountId}' could not load its persisted cursor/context tokens: ${messageOf13(error)}`,
+        `weixin account '${this.accountId}' could not load its persisted cursor/context tokens: ${messageOf15(error)}`,
         { cause: error }
       );
     }
@@ -55042,7 +55522,7 @@ var WeixinChannel = class {
       if (error instanceof WeixinChannelError) throw error;
       throw new WeixinChannelError(
         "WEIXIN_CLOSED",
-        `weixin account '${this.accountId}' failed to start: ${messageOf13(error)}`,
+        `weixin account '${this.accountId}' failed to start: ${messageOf15(error)}`,
         { cause: error }
       );
     } finally {
@@ -55053,7 +55533,7 @@ var WeixinChannel = class {
       if (this.onlineSince === void 0) this.onlineSince = this.clock.now();
     }
     void loop.catch((error) => {
-      this.logger?.warn?.(`dsh-soulmojito im weixin/${this.accountId}: poll loop ended: ${messageOf13(error)}`);
+      this.logger?.warn?.(`dsh-soulmojito im weixin/${this.accountId}: poll loop ended: ${messageOf15(error)}`);
     });
   }
   async stop() {
@@ -55066,7 +55546,7 @@ var WeixinChannel = class {
     this.detachAbort();
     if (loop !== void 0) {
       await loop.catch((error) => {
-        this.logger?.warn?.(`dsh-soulmojito im weixin/${this.accountId}: poll loop ended: ${messageOf13(error)}`);
+        this.logger?.warn?.(`dsh-soulmojito im weixin/${this.accountId}: poll loop ended: ${messageOf15(error)}`);
       });
     }
     this.starting = false;
@@ -55150,7 +55630,7 @@ var WeixinChannel = class {
       }
     } catch (error) {
       this.logger?.warn?.(
-        `dsh-soulmojito im weixin/${this.accountId}: typing ${status2} for ${this.peerLabel(peerId)} failed: ${messageOf13(error)}`
+        `dsh-soulmojito im weixin/${this.accountId}: typing ${status2} for ${this.peerLabel(peerId)} failed: ${messageOf15(error)}`
       );
     }
   }
@@ -55234,7 +55714,7 @@ var WeixinChannel = class {
       }
       throw new WeixinChannelError(
         "WEIXIN_SEND_FAILED",
-        `weixin send part ${part.index + 1}/${part.total} to ${this.peerLabel(target.peerId)} failed: ${messageOf13(error)}`,
+        `weixin send part ${part.index + 1}/${part.total} to ${this.peerLabel(target.peerId)} failed: ${messageOf15(error)}`,
         { cause: error }
       );
     }
@@ -55300,7 +55780,7 @@ var WeixinChannel = class {
             await this.deliver(message);
           } catch (error) {
             this.logger?.warn?.(
-              `dsh-soulmojito im weixin/${this.accountId}: inbound message failed: ${messageOf13(error)}`
+              `dsh-soulmojito im weixin/${this.accountId}: inbound message failed: ${messageOf15(error)}`
             );
           }
         }
@@ -55323,12 +55803,12 @@ var WeixinChannel = class {
           continue;
         }
         failures += 1;
-        const reason = `weixin getupdates for '${this.accountId}' failed (${failures} consecutive): ${messageOf13(error)}`;
+        const reason = `weixin getupdates for '${this.accountId}' failed (${failures} consecutive): ${messageOf15(error)}`;
         this.lastError = reason;
         this.logger?.warn?.(`dsh-soulmojito im weixin/${this.accountId}: ${reason}`);
         if (!gate.settled) {
           gate.settle(
-            new WeixinChannelError("WEIXIN_CLOSED", `weixin account '${this.accountId}' failed to start: ${messageOf13(error)}`, { cause: error })
+            new WeixinChannelError("WEIXIN_CLOSED", `weixin account '${this.accountId}' failed to start: ${messageOf15(error)}`, { cause: error })
           );
           return;
         }
@@ -55347,7 +55827,7 @@ var WeixinChannel = class {
       await this.saveCursor(cursor);
     } catch (error) {
       this.logger?.warn?.(
-        `dsh-soulmojito im weixin/${this.accountId}: saving get_updates_buf failed: ${messageOf13(error)}`
+        `dsh-soulmojito im weixin/${this.accountId}: saving get_updates_buf failed: ${messageOf15(error)}`
       );
     }
   }
@@ -55410,7 +55890,7 @@ var WeixinChannel = class {
       await this.saveContextTokens({ ...this.contextTokens });
     } catch (error) {
       this.logger?.warn?.(
-        `dsh-soulmojito im weixin/${this.accountId}: saving context token failed: ${messageOf13(error)}`
+        `dsh-soulmojito im weixin/${this.accountId}: saving context token failed: ${messageOf15(error)}`
       );
     }
   }
@@ -55472,7 +55952,7 @@ function requireBaseUrl(value, accountId) {
   }
   return baseUrl.replace(/\/+$/, "");
 }
-function messageOf13(error) {
+function messageOf15(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -55694,6 +56174,7 @@ ${outputTail}`
         imPendingPeers: pending
       };
     });
+    invalidateImToolBindingCache();
     const presetSwitch = runtime?.applyImPreset === void 0 ? void 0 : await runtime.applyImPreset(sessionId);
     return sendJson(res, 200, {
       ok: true,
@@ -55775,6 +56256,7 @@ ${outputTail}`
       delete peers[key];
       return { imPeers: peers };
     });
+    invalidateImToolBindingCache();
     return sendJson(res, 200, { ok: true, peers: peerRows(next.imPeers) });
   }
   return sendRouteNotFound(res, method, route);
@@ -57514,6 +57996,11 @@ async function handleNovelOpenCommand(ctx, agent, novelId) {
     const preset = await ctx.agentPresets.recompose(agent.ctx, AGENT_NOVEL_PRESET_ID);
     agent.session.append("agent-preset/selected", { agentPreset: preset.id });
   }
+  try {
+    await applyAgentPtcMode(agent, ctx.logger);
+  } catch (error) {
+    ctx.logger?.warn?.(`dsh-soulmojito ptc: AgentNovel apply failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
   const driver = await getNovelDriverPromise();
   if (driver !== void 0 && driverCompatibleAgent(agent)) {
     await driver.handleNovelOpen(agent, novelId);
@@ -57568,6 +58055,11 @@ async function handleWorkbenchOpenCommand(ctx, agent, payload) {
   if (lastSelectedPresetId(agent.session) !== CARD_WORKBENCH_PRESET_ID) {
     const preset = await ctx.agentPresets.recompose(agent.ctx, CARD_WORKBENCH_PRESET_ID);
     agent.session.append("agent-preset/selected", { agentPreset: preset.id });
+  }
+  try {
+    await applyAgentPtcMode(agent, ctx.logger);
+  } catch (error) {
+    ctx.logger?.warn?.(`dsh-soulmojito ptc: CardWorkbench apply failed: ${error instanceof Error ? error.message : String(error)}`);
   }
   occupyHostSession(agent, ctx);
   return { kind: "success", text: "CardWorkbench" };
@@ -58826,8 +59318,14 @@ async function handleModelSelectionRoute(db, req, res) {
   }));
   return sendJson(res, 200, { ok: true, state });
 }
-async function handleStateUpdateRoute(db, req, res) {
+async function handleStateUpdateRoute(ctx, db, req, res) {
   const body = await readJson(req);
+  if (body.agentPtcMode === true) {
+    const capabilities = await agentPtcCapabilitiesForHost(ctx);
+    if (!capabilities.available) {
+      throw new Error(`PTC mode is unavailable on this host: ${capabilities.reasons.join(" ")}`);
+    }
+  }
   if (body.defaultContextMode === "agent-managed") {
     await assertAgentTavernAvailable("agent-tavern", "agent-managed");
   } else if (body.defaultArchitecture === "agent-tavern") {
@@ -58857,6 +59355,8 @@ async function handleStateUpdateRoute(db, req, res) {
     // 标准 DSH Agent 会话的预设投影开关（native-preset.ts）：翻转即写穿投影
     // 缓存，下一次装配即时生效。
     ...typeof body.nativeAgentPreset === "boolean" ? { nativeAgentPreset: body.nativeAgentPreset } : {},
+    // Native PTC presentation for bound Tavern agents; reconciled live below.
+    ...typeof body.agentPtcMode === "boolean" ? { agentPtcMode: body.agentPtcMode } : {},
     ...requestedDefaultArchitecture !== void 0 ? { defaultArchitecture: requestedDefaultArchitecture } : {},
     ...requestedDefaultContextMode !== void 0 ? { defaultContextMode: requestedDefaultContextMode } : {},
     ...typeof body.agentTavernPreloadAssets === "boolean" ? { agentTavernPreloadAssets: body.agentTavernPreloadAssets } : {},
@@ -58882,6 +59382,13 @@ async function handleStateUpdateRoute(db, req, res) {
   };
   const state = await db.patchState(patch);
   if ("activeCharacter" in patch || "activePreset" in patch || "activePersona" in patch || "cardWorkbenchPresetEnabled" in patch || "agentNovelPresetEnabled" in patch || "nativeAgentPreset" in patch) await emitAgentPresetChanged();
+  if ("agentPtcMode" in patch) {
+    try {
+      await refreshAgentPtcMode(ctx);
+    } catch (error) {
+      ctx.logger?.warn?.(`dsh-soulmojito ptc: live reconcile after state patch failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   await refreshActivePrompt();
   return sendJson(res, 200, { ok: true, state });
 }
@@ -59134,6 +59641,12 @@ async function handleBootstrapApi(ctx, res, db) {
     workbenchWorkspace,
     agentTavern: getAgentTavernCapabilities(),
     agentNovel: getAgentNovelCapabilities(),
+    // Native PTC presentation availability: the behavior switch stays disabled
+    // (with the concrete reason) when the host has no runtime or no SDK seam.
+    agentPtc: await agentPtcCapabilitiesForHost(ctx),
+    // Live per-agent view: distinguishes a capable host from a session scope
+    // that never mounted PTC, and carries the concrete mount error.
+    agentPtcRuntime: inspectAgentPtcRuntime(ctx, state.sessionBindings),
     // 自更新快照：只读缓存结论，检查/安装分别走 update/check 与 update/install，
     // 保证 bootstrap 永远不因网络失败而变慢或报错。
     // Mod 轻量投影（提案 0015 §3.5，P1 真实化）：与 worldEntryCounts 同款服务端
@@ -59161,7 +59674,14 @@ async function handleStateSlicesApi(res, db) {
 
 // packages/plugin/src/http/session-routes.ts
 init_io();
-async function handleBindingCreateRoute(db, req, res) {
+async function reconcileAgentPtcMode2(ctx) {
+  try {
+    await refreshAgentPtcMode(ctx);
+  } catch (error) {
+    ctx.logger?.warn?.(`dsh-soulmojito ptc: binding reconcile failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+async function handleBindingCreateRoute(ctx, db, req, res) {
   const body = await readJson(req);
   if (typeof body.sessionId !== "string" || typeof body.character !== "string" || typeof body.chatId !== "string") {
     throw new Error("expected { sessionId, character, chatId }");
@@ -59175,9 +59695,10 @@ async function handleBindingCreateRoute(db, req, res) {
   const state = await bindSession(db, body.sessionId, body.character, body.chatId, group2, architecture, contextMode, true);
   await refreshActivePrompt();
   await emitAgentPresetChanged();
+  await reconcileAgentPtcMode2(ctx);
   return sendJson(res, 200, { ok: true, state, binding: state.sessionBindings[body.sessionId] });
 }
-async function handleBindingDeleteRoute(db, req, res) {
+async function handleBindingDeleteRoute(ctx, db, req, res) {
   const body = await readJson(req);
   if (typeof body.sessionId !== "string") throw new Error("expected { sessionId }");
   const sessionId = body.sessionId;
@@ -59187,9 +59708,10 @@ async function handleBindingDeleteRoute(db, req, res) {
     return { sessionBindings };
   });
   await emitAgentPresetChanged();
+  await reconcileAgentPtcMode2(ctx);
   return sendJson(res, 200, { ok: true, state: next });
 }
-async function handleBindingsPruneRoute(db, req, res) {
+async function handleBindingsPruneRoute(ctx, db, req, res) {
   const body = await readJson(req);
   if (!Array.isArray(body.sessionIds) || body.sessionIds.some((value) => typeof value !== "string")) {
     throw new Error("expected { sessionIds }");
@@ -59207,7 +59729,9 @@ async function handleBindingsPruneRoute(db, req, res) {
       Object.entries(current.imPeers ?? {}).filter(([, binding]) => live.has(binding.sessionId))
     )
   }));
+  invalidateImToolBindingCache();
   await emitAgentPresetChanged();
+  await reconcileAgentPtcMode2(ctx);
   return sendJson(res, 200, { ok: true, state });
 }
 async function handleChatsListRoute(db, res, url) {
@@ -59642,7 +60166,7 @@ var STORE_ROUTES = [
   {
     name: "state",
     matches: (route, method) => method === "POST" && route === "state",
-    handle: ({ db, req, res }) => handleStateUpdateRoute(db, req, res)
+    handle: ({ ctx, db, req, res }) => handleStateUpdateRoute(ctx, db, req, res)
   },
   // Asset imports and preset writes; the old if-chain placed them before
   // persona/group, so they keep that position here.
@@ -59718,17 +60242,17 @@ var STORE_ROUTES = [
   {
     name: "binding-create",
     matches: (route, method) => method === "POST" && route === "binding",
-    handle: ({ db, req, res }) => handleBindingCreateRoute(db, req, res)
+    handle: ({ ctx, db, req, res }) => handleBindingCreateRoute(ctx, db, req, res)
   },
   {
     name: "binding-delete",
     matches: (route, method) => method === "DELETE" && route === "binding",
-    handle: ({ db, req, res }) => handleBindingDeleteRoute(db, req, res)
+    handle: ({ ctx, db, req, res }) => handleBindingDeleteRoute(ctx, db, req, res)
   },
   {
     name: "bindings-prune",
     matches: (route, method) => method === "POST" && route === "bindings/prune",
-    handle: ({ db, req, res }) => handleBindingsPruneRoute(db, req, res)
+    handle: ({ ctx, db, req, res }) => handleBindingsPruneRoute(ctx, db, req, res)
   },
   {
     name: "chats-list",
@@ -60239,12 +60763,12 @@ function createImOwnerLedger(deps) {
         return { imSenders: { ...current.imSenders ?? {}, [peerKey]: merged } };
       });
     } catch (error) {
-      deps.log?.note("warn", `could not record recent senders for ${alias}; the message was delivered: ${messageOf14(error)}`);
+      deps.log?.note("warn", `could not record recent senders for ${alias}; the message was delivered: ${messageOf16(error)}`);
     }
   }
   return { ownerIdOf, isOwnerMessage, rememberSenders };
 }
-function messageOf14(error) {
+function messageOf16(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -60346,7 +60870,7 @@ async function handleImCommand(deps, input) {
   }
   if (reply === void 0) return;
   void deps.sendNotice(targetOf(inbound), reply, alias).catch((error) => {
-    deps.log?.note("warn", `sending an IM command reply to ${alias} failed: ${messageOf15(error)}`);
+    deps.log?.note("warn", `sending an IM command reply to ${alias} failed: ${messageOf17(error)}`);
   });
 }
 async function runImCommand(deps, input, command, state) {
@@ -60403,6 +60927,7 @@ async function bindReply(deps, input, argument, accountKey, senderHash) {
       ...writeAllow ? { imSettings: { ...currentSettings, groupAllow: [...currentSettings.groupAllow, input.inbound.peerId] } } : {}
     };
   });
+  invalidateImToolBindingCache();
   if (denied) {
     deps.log?.note("warn", `denied IM command /bind from ${input.alias}: the access policy changed before the write`);
     return IM_COMMAND_DENIED;
@@ -60450,7 +60975,7 @@ async function presetNoteOf(deps, sessionId, alias) {
     deps.log?.note("warn", `switching the bound session to AgentTavernIM for ${alias} failed: ${reason}`);
     return IM_COMMAND_PRESET_FAILED;
   } catch (error) {
-    deps.log?.note("warn", `switching the bound session to AgentTavernIM for ${alias} failed: ${messageOf15(error)}`);
+    deps.log?.note("warn", `switching the bound session to AgentTavernIM for ${alias} failed: ${messageOf17(error)}`);
     return IM_COMMAND_PRESET_FAILED;
   }
 }
@@ -60466,6 +60991,7 @@ async function unbindReply(deps, input) {
     delete pending[input.peerKey];
     return { imPeers: peers, imPendingPeers: pending };
   });
+  invalidateImToolBindingCache();
   deps.log?.note("info", `unbound ${input.alias} by /unbind`);
   return IM_COMMAND_UNBOUND_OK;
 }
@@ -60507,7 +61033,7 @@ function targetOf(inbound) {
     ...inbound.replyTo === void 0 ? {} : { replyTo: inbound.replyTo }
   };
 }
-function messageOf15(error) {
+function messageOf17(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -60762,7 +61288,7 @@ function createImRouter(deps) {
     try {
       await deliverBatch(peerKey, alias, orderInboundEntries(buffered));
     } catch (error) {
-      deps.log?.note("error", `flushing the buffered messages from ${alias} failed: ${messageOf16(error)}`);
+      deps.log?.note("error", `flushing the buffered messages from ${alias} failed: ${messageOf18(error)}`);
     }
   }
   async function flushPending() {
@@ -60798,7 +61324,7 @@ function createImRouter(deps) {
         const deliverable = await consumeEntry(peerKey, alias, entry, settings, binding);
         if (deliverable !== void 0) deliverables.push(deliverable);
       } catch (error) {
-        deps.log?.note("error", `processing a buffered message from ${alias} failed: ${messageOf16(error)}`);
+        deps.log?.note("error", `processing a buffered message from ${alias} failed: ${messageOf18(error)}`);
       }
     }
     if (binding === void 0 || deliverables.length === 0) return;
@@ -60839,7 +61365,7 @@ function createImRouter(deps) {
       } catch (error) {
         deps.log?.note(
           "warn",
-          `media for a ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias} failed to load; delivering it without local copies: ${messageOf16(error)}`
+          `media for a ${inboundMessage.channel}/${inboundMessage.scope} message from ${alias} failed to load; delivering it without local copies: ${messageOf18(error)}`
         );
       }
     }
@@ -60868,8 +61394,8 @@ function createImRouter(deps) {
       });
     } catch (error) {
       const code = error?.code;
-      deps.log?.note("error", `could not insert a message from ${alias} into session ${sessionId}: ${messageOf16(error)}`);
-      deps.logger?.warn?.(`dsh-soulmojito im: inserting into ${sessionId} failed: ${messageOf16(error)}`);
+      deps.log?.note("error", `could not insert a message from ${alias} into session ${sessionId}: ${messageOf18(error)}`);
+      deps.logger?.warn?.(`dsh-soulmojito im: inserting into ${sessionId} failed: ${messageOf18(error)}`);
       await sendNotice(imTargetOf(message), code === "IM_SESSION_NOT_LIVE" ? IM_SESSION_NOT_LIVE : IM_DELIVERY_FAILED, alias);
       return;
     }
@@ -60902,8 +61428,8 @@ function createImRouter(deps) {
       });
     } catch (error) {
       const code = error?.code;
-      deps.log?.note("error", `could not insert a merged message from ${alias} into session ${sessionId}: ${messageOf16(error)}`);
-      deps.logger?.warn?.(`dsh-soulmojito im: inserting into ${sessionId} failed: ${messageOf16(error)}`);
+      deps.log?.note("error", `could not insert a merged message from ${alias} into session ${sessionId}: ${messageOf18(error)}`);
+      deps.logger?.warn?.(`dsh-soulmojito im: inserting into ${sessionId} failed: ${messageOf18(error)}`);
       await sendNotice(imTargetOf(last.message), code === "IM_SESSION_NOT_LIVE" ? IM_SESSION_NOT_LIVE : IM_DELIVERY_FAILED, alias);
       return;
     }
@@ -60967,8 +61493,8 @@ function createImRouter(deps) {
         total: chunks.length
       })));
     } catch (error) {
-      deps.log?.note("error", `im_send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf16(error)}`);
-      throw new ImSendError("IM_SEND_FAILED", `IM send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf16(error)}`, { cause: error });
+      deps.log?.note("error", `im_send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf18(error)}`);
+      throw new ImSendError("IM_SEND_FAILED", `IM send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf18(error)}`, { cause: error });
     }
     deps.log?.note(
       "info",
@@ -61006,8 +61532,8 @@ function createImRouter(deps) {
     try {
       outcome = await deps.send(target, parts);
     } catch (error) {
-      deps.log?.note("error", `im_send media to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf16(error)}`);
-      throw new ImSendError("IM_SEND_FAILED", `IM media send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf16(error)}`, { cause: error });
+      deps.log?.note("error", `im_send media to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf18(error)}`);
+      throw new ImSendError("IM_SEND_FAILED", `IM media send to ${imPeerAlias(channel, scope, peerKey)} failed: ${messageOf18(error)}`, { cause: error });
     }
     deps.log?.note(
       "info",
@@ -61058,7 +61584,7 @@ function createImRouter(deps) {
       root = await realpath(await deps.workspaceRoot());
       target = await realpath(localPath);
     } catch (cause) {
-      throw new ImSendError("IM_SEND_INVALID", `media path '${localPath}' cannot be resolved: ${messageOf16(cause)}`);
+      throw new ImSendError("IM_SEND_INVALID", `media path '${localPath}' cannot be resolved: ${messageOf18(cause)}`);
     }
     const rel = relative3(root, target);
     if (rel === "" || rel.startsWith("..") || isAbsolute3(rel)) {
@@ -61082,7 +61608,7 @@ function createImRouter(deps) {
     try {
       await deps.send(target, [{ kind: "text", text, index: 0, total: 1 }]);
     } catch (error) {
-      deps.log?.note("error", `sending a notice to ${alias} failed: ${messageOf16(error)}`);
+      deps.log?.note("error", `sending a notice to ${alias} failed: ${messageOf18(error)}`);
     }
   }
   return {
@@ -61093,7 +61619,7 @@ function createImRouter(deps) {
     resolveMessageRef: (ref) => messageRefs.resolve(ref)
   };
 }
-function messageOf16(error) {
+function messageOf18(error) {
   return error instanceof Error ? error.message : String(error);
 }
 function isQueuedOutcome(outcome) {
@@ -61202,78 +61728,6 @@ function redactLogText(text) {
   return text.replace(/(['"`])((?:[A-Za-z]:[\\/]|\\\\|\/\/|\/(?!\/))[^'"`]*)\1/g, (_match, quote) => `${quote}<path>${quote}`).replace(/\b[A-Za-z]:[\\/][^\s'"`,;)]*/g, "<path>").replace(/\\\\[^\s'"`,;)]+/g, "<path>").replace(/(^|[\s"'`(=~])\/\/[^\s'"`,;)]+/g, (_match, prefix) => `${prefix}<path>`).replace(/(^|[\s"'`(=~])\/(?:[^\s/'"`,;)]+\/)+[^\s/'"`,;)]*/g, (_match, prefix) => `${prefix}<path>`);
 }
 
-// packages/plugin/src/im/session-host.ts
-var ImSessionNotLiveError = class extends Error {
-  code = "IM_SESSION_NOT_LIVE";
-  sessionId;
-  constructor(sessionId) {
-    super(`the bound DSH session '${sessionId}' has no live AgentLoop agent; open it in DSH and send again`);
-    this.name = "ImSessionNotLiveError";
-    this.sessionId = sessionId;
-  }
-};
-function inspectImSessionCapabilities(agents) {
-  const reasons = [];
-  if (agents === void 0) {
-    reasons.push("the host exposes no agents service; IM cannot insert messages into a session");
-  } else if (typeof agents.get !== "function") {
-    reasons.push("the host agents service exposes no get(id); IM cannot find the bound session agent");
-  }
-  return { available: reasons.length === 0, reasons };
-}
-function liveAgentOf(agents, sessionId) {
-  if (agents?.get === void 0) return void 0;
-  try {
-    return agents.get(sessionId) ?? void 0;
-  } catch {
-    return void 0;
-  }
-}
-function requireLiveAgent(agents, sessionId) {
-  const agent = liveAgentOf(agents, sessionId);
-  if (agent === void 0) throw new ImSessionNotLiveError(sessionId);
-  if (!hasInboxSeam(agent)) throw noInboxError(sessionId);
-  return agent;
-}
-function hasInboxSeam(agent) {
-  return typeof agent.followup === "function" || typeof agent.steer === "function";
-}
-function noInboxError(sessionId) {
-  const error = new Error(
-    `the host agent for session '${sessionId}' exposes neither followup() nor steer(); IM cannot insert a message`
-  );
-  error.code = "IM_SESSION_NO_INBOX";
-  return error;
-}
-function listLiveAgents2(agents) {
-  if (agents?.list === void 0) return [];
-  try {
-    return agents.list() ?? [];
-  } catch {
-    return [];
-  }
-}
-function buildImInboxMessage(session, message) {
-  return {
-    id: message.id,
-    role: "user",
-    content: [{ type: "text", text: message.text }],
-    source: hostPluginMessageSource(session, { form: "relay", summary: message.summary })
-  };
-}
-async function insertImMessage(agent, message) {
-  const built = buildImInboxMessage(agent.session, message);
-  if (agent.status === "running" && typeof agent.steer === "function") {
-    agent.steer(built);
-    return "steer";
-  }
-  if (typeof agent.followup !== "function") {
-    throw noInboxError(agent.session?.id ?? agent.id ?? "unknown");
-  }
-  await agent.followup(built);
-  return "followup";
-}
-
 // packages/plugin/src/im/runtime.ts
 var QQ_BOUND_ACCOUNT_LABEL = "QQ \u673A\u5668\u4EBA";
 var WEIXIN_BOUND_ACCOUNT_LABEL = "\u5FAE\u4FE1\u673A\u5668\u4EBA";
@@ -61303,6 +61757,13 @@ function createImRuntime(ctx, options) {
     now: () => Date.now(),
     maxBytes: WEIXIN_MEDIA_MAX_BYTES
   });
+  async function applyAgentPtcModeBestEffort(agent) {
+    try {
+      await applyAgentPtcMode(agent, logger);
+    } catch (error) {
+      logger.warn?.(`dsh-soulmojito ptc: IM session apply failed: ${messageOf19(error)}`);
+    }
+  }
   async function applyPresetToAgent(agent) {
     const presets = ctx.agentPresets;
     if (typeof presets?.recompose !== "function") {
@@ -61328,7 +61789,10 @@ function createImRuntime(ctx, options) {
       if (agent.status === "running") {
         return { applied: false, reason: "the session is running; the preset will switch when it becomes idle" };
       }
-      if (lastSelectedPresetId(agent.session) === AGENT_TAVERN_IM_PRESET_ID) return { applied: true };
+      if (lastSelectedPresetId(agent.session) === AGENT_TAVERN_IM_PRESET_ID) {
+        await applyAgentPtcModeBestEffort(agent);
+        return { applied: true };
+      }
       const preset = await presets.recompose(agent.ctx, AGENT_TAVERN_IM_PRESET_ID);
       if (preset.id !== AGENT_TAVERN_IM_PRESET_ID) {
         return { applied: false, reason: `the host selected preset '${preset.id}' instead of AgentTavernIM` };
@@ -61345,10 +61809,11 @@ function createImRuntime(ctx, options) {
         present: () => lastSelectedPresetId(agent.session) === preset.id
       });
       if (!confirmed) return { applied: false, reason: "the AgentTavernIM preset marker could not be confirmed" };
+      await applyAgentPtcModeBestEffort(agent);
       imLog.note("info", `im bind: switched ${sessionId} to ${AGENT_TAVERN_IM_PRESET_ID}`);
       return { applied: true };
     } catch (error) {
-      return { applied: false, reason: messageOf17(error) };
+      return { applied: false, reason: messageOf19(error) };
     }
   }
   async function applyImPreset(sessionId) {
@@ -61377,7 +61842,7 @@ function createImRuntime(ctx, options) {
       const sessionId = agent.session?.id ?? agent.id;
       if (typeof sessionId !== "string" || !bound.has(sessionId)) continue;
       await applyPresetToAgent(agent).then((result) => notePresetResult(sessionId, result)).catch((error) => {
-        logger?.warn?.(`dsh-soulmojito im: switching ${sessionId} to AgentTavernIM failed: ${messageOf17(error)}`);
+        logger?.warn?.(`dsh-soulmojito im: switching ${sessionId} to AgentTavernIM failed: ${messageOf19(error)}`);
       });
     }
   }
@@ -61557,7 +62022,7 @@ function createImRuntime(ctx, options) {
       try {
         secret = await store5.readSecret("weixin", account.accountId);
       } catch (error) {
-        logger?.warn?.(`dsh-soulmojito im weixin bind: skipped ${account.accountId} local token: ${messageOf17(error)}`);
+        logger?.warn?.(`dsh-soulmojito im weixin bind: skipped ${account.accountId} local token: ${messageOf19(error)}`);
         continue;
       }
       const token = secret?.["botToken"]?.trim() ?? "";
@@ -61681,7 +62146,7 @@ function createImRuntime(ctx, options) {
       else await store5.putAccount(account, previous);
     } catch (rollbackError) {
       throw new Error(
-        `${account.channel} account '${account.accountId}' failed to install and its credential rollback also failed: ${messageOf17(rollbackError)}`,
+        `${account.channel} account '${account.accountId}' failed to install and its credential rollback also failed: ${messageOf19(rollbackError)}`,
         { cause: error }
       );
     }
@@ -61699,11 +62164,11 @@ function createImRuntime(ctx, options) {
       const stillUsed = (await store5.accounts()).some((entry) => entry.accountId === accountId);
       if (!stillUsed) {
         await store5.deleteCursor(accountId).catch((error) => {
-          logger?.warn?.(`dsh-soulmojito im: deleting the cursor for ${channelId}/${accountId} failed: ${messageOf17(error)}`);
+          logger?.warn?.(`dsh-soulmojito im: deleting the cursor for ${channelId}/${accountId} failed: ${messageOf19(error)}`);
         });
       }
       await mediaStore.remove(channelId, accountId).catch((error) => {
-        logger?.warn?.(`dsh-soulmojito im: deleting the media of ${channelId}/${accountId} failed: ${messageOf17(error)}`);
+        logger?.warn?.(`dsh-soulmojito im: deleting the media of ${channelId}/${accountId} failed: ${messageOf19(error)}`);
       });
       await db.updateState((current) => {
         const peers = { ...current.imPeers ?? {} };
@@ -61720,11 +62185,12 @@ function createImRuntime(ctx, options) {
         delete accountOwners[imAccountKey(channelId, accountId)];
         return { imPeers: peers, imPendingPeers: pending, imAccountOwners: accountOwners };
       }).catch((error) => {
-        logger?.warn?.(`dsh-soulmojito im: deleting the bindings of ${channelId}/${accountId} failed: ${messageOf17(error)}`);
+        logger?.warn?.(`dsh-soulmojito im: deleting the bindings of ${channelId}/${accountId} failed: ${messageOf19(error)}`);
       });
+      invalidateImToolBindingCache();
       if (channelId === "weixin") {
         await openWeixinContextTokens(tavernDataRoot("im"), accountId).clear().catch((error) => {
-          logger?.warn?.(`dsh-soulmojito im: deleting the weixin context tokens for ${accountId} failed: ${messageOf17(error)}`);
+          logger?.warn?.(`dsh-soulmojito im: deleting the weixin context tokens for ${accountId} failed: ${messageOf19(error)}`);
         });
       }
       return removed || live !== void 0;
@@ -61761,12 +62227,12 @@ function createImRuntime(ctx, options) {
         }
         await upsertAccount(account, secret);
       } catch (error) {
-        logger?.warn?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} failed to start: ${messageOf17(error)}`);
+        logger?.warn?.(`dsh-soulmojito im: ${account.channel}/${account.accountId} failed to start: ${messageOf19(error)}`);
       }
     }
   }
   void restoreAccounts().catch((error) => {
-    logger?.warn?.(`dsh-soulmojito im: restoring stored accounts failed: ${messageOf17(error)}`);
+    logger?.warn?.(`dsh-soulmojito im: restoring stored accounts failed: ${messageOf19(error)}`);
   });
   return {
     router,
@@ -61803,12 +62269,12 @@ function createImRuntime(ctx, options) {
       weixinBinding.cancel();
       activeQrBind = void 0;
       await router.flushPending().catch((error) => {
-        logger?.warn?.(`dsh-soulmojito im: flushing buffered inbound messages failed: ${messageOf17(error)}`);
+        logger?.warn?.(`dsh-soulmojito im: flushing buffered inbound messages failed: ${messageOf19(error)}`);
       });
       lifetime.abort();
       for (const channel of channels.values()) {
         await channel.stop().catch((error) => {
-          logger?.warn?.(`dsh-soulmojito im: stopping ${channel.channel}/${channel.accountId} failed: ${messageOf17(error)}`);
+          logger?.warn?.(`dsh-soulmojito im: stopping ${channel.channel}/${channel.accountId} failed: ${messageOf19(error)}`);
         });
       }
       channels.clear();
@@ -61835,7 +62301,7 @@ function isRunningBindPhase(phase) {
 }
 function noop() {
 }
-function messageOf17(error) {
+function messageOf19(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -61887,10 +62353,10 @@ function nativeAgentPresetSection() {
   return {
     name: NATIVE_PRESET_SECTION,
     order: -75,
-    text: (context) => projection.valueOf(agentIdOf3(context)) ?? ""
+    text: (context) => projection.valueOf(agentIdOf4(context)) ?? ""
   };
 }
-function agentIdOf3(context) {
+function agentIdOf4(context) {
   if (typeof context !== "object" || context === null) return void 0;
   const agent = context.agent;
   if (typeof agent !== "object" || agent === null) return void 0;
@@ -62127,6 +62593,11 @@ function mountAgentCreated(ctx, deps) {
       } catch (error) {
         ctx.logger?.warn?.(`dsh-soulmojito im: AgentTavernIM preset switch failed: ${error instanceof Error ? error.message : String(error)}`);
       }
+    }
+    try {
+      await applyAgentPtcMode(agent, ctx.logger);
+    } catch (error) {
+      ctx.logger?.warn?.(`dsh-soulmojito ptc: mode apply failed for a new agent: ${error instanceof Error ? error.message : String(error)}`);
     }
   });
 }
@@ -62472,6 +62943,14 @@ function registerTavernSessionCommand(ctx) {
         parsed.contextMode
       );
       await emitAgentPresetChanged();
+      if (parsed.architecture === "st") await clearAgentPtcMode(agent.id, ctx.logger);
+      else {
+        try {
+          await applyAgentPtcMode(agent, ctx.logger);
+        } catch (error) {
+          ctx.logger?.warn?.(`dsh-soulmojito ptc: activation apply failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
       if (preloadSnapshot !== void 0) {
         if (agent.inject === void 0) {
           throw new TavernArchitectureConflictError("This host cannot preload AgentTavern session context.");
@@ -62767,6 +63246,10 @@ function apply(ctx, config = {}) {
   };
   mountSessionEvent(ctx, mountDeps);
   mountAgentCreated(ctx, mountDeps);
+  mountAgentPtcMode(ctx);
+  void refreshAgentPtcMode(ctx).catch((error) => {
+    ctx.logger?.warn?.(`dsh-soulmojito ptc: startup reconcile failed: ${error instanceof Error ? error.message : String(error)}`);
+  });
   void refreshActivePrompt();
   void recoverMountedNovels(ctx);
   ctx.systemPrompt.section({

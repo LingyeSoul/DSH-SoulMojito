@@ -19,6 +19,7 @@
  */
 
 import type { TavernState, TavernStore } from '../../../tavern-store/src/index.js'
+import { invalidateImToolBindingCache } from './agent-mount.js'
 import type { ImPresetSwitchResult } from './handle.js'
 import type { ImLogSink } from './log.js'
 import { imSenderHash } from './owner.js'
@@ -305,6 +306,7 @@ async function bindReply(
         : {}),
     }
   })
+  invalidateImToolBindingCache()
   if (denied) {
     deps.log?.note('warn', `denied IM command /bind from ${input.alias}: the access policy changed before the write`)
     return IM_COMMAND_DENIED
@@ -400,6 +402,7 @@ async function unbindReply(deps: ImCommandDeps, input: ImCommandInput): Promise<
     delete pending[input.peerKey]
     return { imPeers: peers, imPendingPeers: pending }
   })
+  invalidateImToolBindingCache()
   deps.log?.note('info', `unbound ${input.alias} by /unbind`)
   return IM_COMMAND_UNBOUND_OK
 }

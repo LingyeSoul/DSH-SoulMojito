@@ -22,6 +22,9 @@ const BEHAVIOR_I18N_KEYS = [
   'settings.behavior.toolWrites',
   'settings.behavior.frontend',
   'settings.behavior.games',
+  'settings.ptcMode',
+  'settings.ptcModeHint',
+  'settings.ptcModeUnavailable',
 ]
 
 describe('behavior settings section (main.js source check)', () => {
@@ -44,6 +47,9 @@ describe('behavior settings section (main.js source check)', () => {
       'applyPatch({ agentTavernPreloadAssets: event.target.checked })',
       'applyPatch({ nativeAgentPersona: event.target.checked })',
       'applyPatch({ nativeAgentPreset: event.target.checked })',
+      'applyPatch({ agentPtcMode: event.target.checked })',
+      'bootstrap.agentPtc?.available !== true',
+      "t('settings.ptcModeUnavailable'",
       'applyPatch({ worldFollowsCharacter: event.target.checked })',
       'applyPatch({ agentTavernAllowGlobalWrites: event.target.checked })',
       'applyPatch({ frontendAutoOpen: event.target.checked })',

@@ -1091,7 +1091,7 @@ var init_chat = __esm({
 });
 
 // node_modules/.pnpm/fflate@0.8.3/node_modules/fflate/esm/index.mjs
-import { createRequire } from "module";
+import { createRequire as createRequire2 } from "module";
 function deflateSync(data, opts) {
   return dopt(data, opts || {}, 0, 0);
 }
@@ -1233,7 +1233,7 @@ function unzipSync(data, opts) {
 var require2, _a, Worker, isMarkedAsUntransferable, u8, u16, i32, fleb, fdeb, clim, freb, _a, fl, revfl, _b, fd, revfd, rev, x, i, hMap, flt, i, i, i, i, fdt, i, flm, flrm, fdm, fdrm, max, bits, bits16, shft, slc, ec, err, inflt, wbits, wbits16, hTree, ln, lc, clen, wfblk, wblk, deo, et, dflt, crct, crc, dopt, mrg, b2, b4, b8, wbytes, fltn, te, td, tds, dutf8, slzh, zh, z64hs, exfl, wzh, wzf;
 var init_esm = __esm({
   "node_modules/.pnpm/fflate@0.8.3/node_modules/fflate/esm/index.mjs"() {
-    require2 = createRequire("/");
+    require2 = createRequire2("/");
     try {
       _a = require2("worker_threads"), Worker = _a.Worker, isMarkedAsUntransferable = _a.isMarkedAsUntransferable;
     } catch (e) {
@@ -8967,7 +8967,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.7".trim() : "";
-  const commit = true ? normalizeCommit("6c3401a") : void 0;
+  const commit = true ? normalizeCommit("0ea21c7") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -9386,6 +9386,96 @@ var init_runtime2 = __esm({
   }
 });
 
+// packages/bind/src/host-session.ts
+function readSessionEvents(session) {
+  if (!session) return void 0;
+  if (Array.isArray(session.events)) return session.events;
+  if (typeof session.snapshotEvents === "function") {
+    const snapshot2 = session.snapshotEvents();
+    if (Array.isArray(snapshot2)) return snapshot2;
+  }
+  if (Array.isArray(session.log)) return session.log;
+  return void 0;
+}
+var PLUGIN_NAME = "dsh-soulmojito";
+var LEGACY_PLUGIN_NAME = "dsh-tavern";
+var TAVERN_PLUGIN_SOURCE_KIND = `plugin:${PLUGIN_NAME}`;
+var LEGACY_TAVERN_PLUGIN_SOURCE_KIND = `plugin:${LEGACY_PLUGIN_NAME}`;
+
+// packages/bind/src/host-package.ts
+import { realpathSync } from "node:fs";
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
+async function importHostPackage(name2, anchor = process.argv[1]) {
+  for (const candidate of anchorCandidates(anchor)) {
+    try {
+      const hostRequire = createRequire(candidate);
+      return await import(pathToFileURL(hostRequire.resolve(name2)).href);
+    } catch {
+    }
+  }
+  return await import(name2);
+}
+function anchorCandidates(anchor) {
+  const candidates = [];
+  const seen = /* @__PURE__ */ new Set();
+  const push = (value) => {
+    if (typeof value !== "string" || value === "" || seen.has(value)) return;
+    seen.add(value);
+    candidates.push(value);
+  };
+  push(anchor);
+  if (typeof anchor === "string" && anchor !== "") {
+    try {
+      push(realpathSync(anchor));
+    } catch {
+    }
+  }
+  return candidates;
+}
+
+// packages/bind/src/ptc.ts
+var PTC_ONLY_SECTION = "tools:ptc-only";
+var TOOLS_SDK_SECTION = "tools:sdk";
+function renderPtcCompleteText(tools, scope, toolSet) {
+  const presentation = tools;
+  if (typeof presentation?.modeFor === "function" && presentation.modeFor(scope) === "ptc") {
+    const only = renderPresentationSection(presentation.collapseSection?.(), scope);
+    const sdk = renderPresentationSection(presentation.sdkSection?.(), scope);
+    return [only, sdk].filter((text) => text.length > 0).join("\n\n");
+  }
+  const executor = tools;
+  if (typeof executor?.selectExecutor === "function" && typeof executor.definitions === "function") {
+    let selected;
+    try {
+      selected = executor.selectExecutor(scope);
+    } catch {
+      return "";
+    }
+    const sections = selected?.sections;
+    if (!Array.isArray(sections)) return "";
+    const only = sections.find((section) => section.name === PTC_ONLY_SECTION);
+    const sdk = sections.find((section) => section.name === TOOLS_SDK_SECTION);
+    if (only === void 0 && sdk === void 0) return "";
+    const definitions = executor.definitions(scope, toolSet);
+    return [
+      renderExecutorSection(only, definitions),
+      renderExecutorSection(sdk, definitions)
+    ].filter((text) => text.length > 0).join("\n\n");
+  }
+  return "";
+}
+function renderPresentationSection(section, scope) {
+  const text = section?.text;
+  if (text === void 0) return "";
+  return typeof text === "function" ? text({ scope }) : text;
+}
+function renderExecutorSection(section, definitions) {
+  const text = section?.text;
+  if (text === void 0) return "";
+  return typeof text === "function" ? text(definitions) : text;
+}
+
 // packages/plugin/src/agent-tavern/agent.ts
 init_guides();
 init_handle();
@@ -9736,54 +9826,6 @@ function clampInt(value, min, max2, fallback) {
 }
 function limitText(value, max2) {
   return typeof value === "string" ? value.slice(0, max2) : "";
-}
-
-// packages/bind/src/host-session.ts
-function readSessionEvents(session) {
-  if (!session) return void 0;
-  if (Array.isArray(session.events)) return session.events;
-  if (typeof session.snapshotEvents === "function") {
-    const snapshot2 = session.snapshotEvents();
-    if (Array.isArray(snapshot2)) return snapshot2;
-  }
-  if (Array.isArray(session.log)) return session.log;
-  return void 0;
-}
-var PLUGIN_NAME = "dsh-soulmojito";
-var LEGACY_PLUGIN_NAME = "dsh-tavern";
-var TAVERN_PLUGIN_SOURCE_KIND = `plugin:${PLUGIN_NAME}`;
-var LEGACY_TAVERN_PLUGIN_SOURCE_KIND = `plugin:${LEGACY_PLUGIN_NAME}`;
-
-// packages/bind/src/host-package.ts
-import { realpathSync } from "node:fs";
-import { createRequire as createRequire2 } from "node:module";
-import { pathToFileURL } from "node:url";
-async function importHostPackage(name2, anchor = process.argv[1]) {
-  for (const candidate of anchorCandidates(anchor)) {
-    try {
-      const hostRequire = createRequire2(candidate);
-      return await import(pathToFileURL(hostRequire.resolve(name2)).href);
-    } catch {
-    }
-  }
-  return await import(name2);
-}
-function anchorCandidates(anchor) {
-  const candidates = [];
-  const seen = /* @__PURE__ */ new Set();
-  const push = (value) => {
-    if (typeof value !== "string" || value === "" || seen.has(value)) return;
-    seen.add(value);
-    candidates.push(value);
-  };
-  push(anchor);
-  if (typeof anchor === "string" && anchor !== "") {
-    try {
-      push(realpathSync(anchor));
-    } catch {
-    }
-  }
-  return candidates;
 }
 
 // packages/plugin/src/agent-tavern/prompt-capture.ts
@@ -13683,7 +13725,13 @@ function apply(ctx) {
     name: AGENT_PROMPT_SECTION,
     order: -80,
     complete: true,
-    text: (assembly) => agentSystemPromptTextOf(assembly?.agent?.id)
+    // The complete section drops every other system section, including the
+    // tools:sdk / tools:ptc-only registrations that PTC presentation owns.
+    // Mirror both into the complete text when the effective scope mode is PTC.
+    text: (assembly) => agentSystemPromptTextOf(
+      assembly?.agent?.id,
+      renderPtcCompleteText(ctx.tools, assembly?.scope, assembly?.toolSet)
+    )
   });
   void preheatAgentProjections();
   ctx.systemPrompt?.context?.({
@@ -13705,7 +13753,12 @@ function apply(ctx) {
     const config = await next();
     const temperature = agentPresetTemperatureOf(payload?.agent?.id);
     const resolved = temperature === void 0 ? config : { ...config, temperature };
-    void recordAgentTavernPromptViewFor(payload?.agent?.id, resolved, ctx.logger);
+    void recordAgentTavernPromptViewFor(
+      payload?.agent?.id,
+      resolved,
+      ctx.logger,
+      () => renderPtcCompleteText(ctx.tools, payload?.agent, void 0)
+    );
     return resolved;
   });
   const tools = createTools();
@@ -13820,17 +13873,18 @@ function agentPromptSectionsFor(agentId) {
   ];
   return sections.filter((section) => section.text !== "").sort((a, b) => a.order - b.order);
 }
-function agentSystemPromptTextOf(agentId) {
-  return agentPromptSectionsFor(agentId).filter((section) => section.scope === "system").map((section) => section.text).join("\n\n");
+function agentSystemPromptTextOf(agentId, ptcText) {
+  const system = agentPromptSectionsFor(agentId).filter((section) => section.scope === "system").map((section) => section.text).join("\n\n");
+  return [system, ptcText].filter((text) => text.length > 0).join("\n\n");
 }
-async function recordAgentTavernPromptViewFor(agentId, config, logger) {
+async function recordAgentTavernPromptViewFor(agentId, config, logger, ptcText) {
   try {
     if (typeof agentId !== "string" || agentId.trim() === "") return;
     const capture = agentStepCaptureOf(agentId);
     const binding = (await (await tavernStore()).getState()).sessionBindings[agentId];
     if (!binding || binding.architecture !== "agent-tavern" || binding.group === true) return;
     const sections = agentPromptSectionsFor(agentId);
-    const system = agentSystemPromptTextOf(agentId);
+    const system = agentSystemPromptTextOf(agentId, ptcText());
     recordPromptView({
       character: binding.character,
       chatId: binding.chatId,

@@ -38,6 +38,7 @@ import { subagentRuntimeOf, type DeductionExecAgent, type SubagentRuntimeLike } 
 import { emitAgentPresetChanged } from '../agent-tavern/preset.js'
 import { isTavernSessionMarker } from '../agent-tavern/projector.js'
 import { getAgentNovelCapabilities, getNovelDriverPromise, getNovelProjectorPromise, memories, novelStore, store } from '../runtime.js'
+import { applyAgentPtcMode } from '../agent-ptc-mode.js'
 import type { PluginContext } from '../host-contract.js'
 import { TavernArchitectureConflictError } from '../session/binding.js'
 import { lastSelectedPresetId } from '../session/preset-marker.js'
@@ -850,6 +851,13 @@ export async function handleNovelOpenCommand(
     const preset = await ctx.agentPresets.recompose(agent.ctx, AGENT_NOVEL_PRESET_ID)
     agent.session.append('agent-preset/selected', { agentPreset: preset.id })
   }
+  // The binding exists now, so the persisted PTC switch can land on the agent
+  // scope before the first author turn.
+  try {
+    await applyAgentPtcMode(agent, ctx.logger)
+  } catch (error) {
+    ctx.logger?.warn?.(`dsh-soulmojito ptc: AgentNovel apply failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
   const driver = await getNovelDriverPromise()
   if (driver !== undefined && driverCompatibleAgent(agent)) {
     // driverCompatibleAgent validated the driver surface at runtime; the cast
@@ -937,6 +945,13 @@ export async function handleWorkbenchOpenCommand(
   if (lastSelectedPresetId(agent.session) !== CARD_WORKBENCH_PRESET_ID) {
     const preset = await ctx.agentPresets.recompose(agent.ctx, CARD_WORKBENCH_PRESET_ID)
     agent.session.append('agent-preset/selected', { agentPreset: preset.id })
+  }
+  // The binding exists now, so the persisted PTC switch can land on the agent
+  // scope before the first workbench turn.
+  try {
+    await applyAgentPtcMode(agent, ctx.logger)
+  } catch (error) {
+    ctx.logger?.warn?.(`dsh-soulmojito ptc: CardWorkbench apply failed: ${error instanceof Error ? error.message : String(error)}`)
   }
   // 工作台是纯对话式 preset（无 driver kickoff），用户开口前会话没有 turn/start，
   // 宿主会把它当 blank 草稿复用——下一个 openWorkbenchSession 的 connect 就会

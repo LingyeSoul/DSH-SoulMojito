@@ -10747,7 +10747,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.7".trim() : "";
-  const commit = true ? normalizeCommit("6c3401a") : void 0;
+  const commit = true ? normalizeCommit("0ea21c7") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -11543,6 +11543,12 @@ init_deduce();
 // packages/plugin/src/agent-novel/writer.ts
 init_deduce();
 
+// packages/bind/src/host-session.ts
+var PLUGIN_NAME = "dsh-soulmojito";
+var LEGACY_PLUGIN_NAME = "dsh-tavern";
+var TAVERN_PLUGIN_SOURCE_KIND = `plugin:${PLUGIN_NAME}`;
+var LEGACY_TAVERN_PLUGIN_SOURCE_KIND = `plugin:${LEGACY_PLUGIN_NAME}`;
+
 // packages/plugin/src/agent-tavern/agent.ts
 init_guides();
 init_handle();
@@ -11553,12 +11559,6 @@ var PROMPT_VIEWER_STATE_KEY = Symbol.for("dsh-soulmojito:prompt-viewer");
 
 // packages/plugin/src/agent-tavern/agent.ts
 init_src2();
-
-// packages/bind/src/host-session.ts
-var PLUGIN_NAME = "dsh-soulmojito";
-var LEGACY_PLUGIN_NAME = "dsh-tavern";
-var TAVERN_PLUGIN_SOURCE_KIND = `plugin:${PLUGIN_NAME}`;
-var LEGACY_TAVERN_PLUGIN_SOURCE_KIND = `plugin:${LEGACY_PLUGIN_NAME}`;
 
 // packages/plugin/src/agent-tavern/prompt-parts.ts
 var partsSymbol = Symbol.for("dsh-soulmojito:agent-prompt-parts");

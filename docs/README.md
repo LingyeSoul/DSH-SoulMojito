@@ -120,6 +120,7 @@
 - [`2026-10-29-body-review-fix-round.md`](../decisions/2026-10-29-body-review-fix-round.md) — AgentTavern 正文审查收口：游标、journal 探测、op-abort 与读侧 lastOperation
 - [`2026-10-30-body-review-fix-round-2.md`](../decisions/2026-10-30-body-review-fix-round-2.md) — AgentTavern 正文审查第二轮修复：并发写归因、恢复时序、checkpoint 版本与出网净化
 - [`2026-11-01-native-agent-preset.md`](../decisions/2026-11-01-native-agent-preset.md) — 标准 DSH Agent 会话接入激活预设投影（行为设置开关）
+- [`2026-11-09-agent-ptc-mode.md`](../decisions/2026-11-09-agent-ptc-mode.md) — 行为设置「启用 PTC 模式」：绑定 Tavern Agent 使用宿主原生 `run_code` + SDK 呈现，complete 段镜像 PTC 说明
 - [`2026-11-02-agent-prompt-takeover.md`](../decisions/2026-11-02-agent-prompt-takeover.md) — AgentTavern 接管整份 system prompt（complete 段）
 - [`2026-11-02-agent-identity-system-prompt.md`](../decisions/2026-11-02-agent-identity-system-prompt.md) — 用户人设与角色摘要改为 complete 段的 system 部件（不再作为 runtime-context user 消息）
 

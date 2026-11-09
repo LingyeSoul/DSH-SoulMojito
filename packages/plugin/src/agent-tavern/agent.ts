@@ -1,3 +1,4 @@
+import { renderPtcCompleteText } from '../../../bind/src/index.js'
 import { formatGuidesBlock, onGuidesChanged } from '../guides.js'
 import { onGamesChanged } from '../games/handle.js'
 import { createLazyProjection } from '../lazy-projection.js'
@@ -101,7 +102,13 @@ export function apply(ctx: AgentContextLike): void {
     name: AGENT_PROMPT_SECTION,
     order: -80,
     complete: true,
-    text: (assembly) => agentSystemPromptTextOf(assembly?.agent?.id),
+    // The complete section drops every other system section, including the
+    // tools:sdk / tools:ptc-only registrations that PTC presentation owns.
+    // Mirror both into the complete text when the effective scope mode is PTC.
+    text: (assembly) => agentSystemPromptTextOf(
+      assembly?.agent?.id,
+      renderPtcCompleteText(ctx.tools, assembly?.scope, assembly?.toolSet),
+    ),
   })
   // 启动预热（见 preheatAgentProjections 注释）：消除插件重启后既有绑定
   // 的首轮空串竞态。fire-and-forget——装载完成前懒装载路径照常兜底。
@@ -149,7 +156,12 @@ export function apply(ctx: AgentContextLike): void {
     const resolved = temperature === undefined ? config : { ...config, temperature }
     // 提示词查看器（Agent 模式）：链尾合成后的 resolved 即本插件可见的最终
     // 调用配置。fire-and-forget——合成内部整体吞错，绝不反噬请求路径。
-    void recordAgentTavernPromptViewFor(payload?.agent?.id, resolved, ctx.logger)
+    void recordAgentTavernPromptViewFor(
+      payload?.agent?.id,
+      resolved,
+      ctx.logger,
+      () => renderPtcCompleteText(ctx.tools, payload?.agent, undefined),
+    )
     return resolved
   })
 
@@ -201,6 +213,7 @@ export interface AgentContextLike {
 
 interface AgentAssemblyLike {
   agent?: { id?: string }
+  scope?: unknown
 }
 
 interface LlmCallConfigLike {
@@ -383,13 +396,18 @@ export function agentPromptSectionsFor(agentId: string | undefined): AgentPrompt
     .sort((a, b) => a.order - b.order)
 }
 
-/** complete 段的装配文本：只拼 `scope: 'system'` 的部件（与宿主返回的
- *  `sections` 同口径）——context 部件由宿主在 runtime snapshot 里自行渲染。 */
-function agentSystemPromptTextOf(agentId: string | undefined): string {
-  return agentPromptSectionsFor(agentId)
+/**
+ * Complete-section text: only `scope: 'system'` parts, plus the PTC-only rule
+ * and generated SDK when the agent scope presents PTC. A complete section
+ * drops the separately registered tools:sdk section, so `ptcText` is the only
+ * path that gives the model the callable PTC surface.
+ */
+function agentSystemPromptTextOf(agentId: string | undefined, ptcText: string): string {
+  const system = agentPromptSectionsFor(agentId)
     .filter((section) => section.scope === 'system')
     .map((section) => section.text)
     .join('\n\n')
+  return [system, ptcText].filter((text) => text.length > 0).join('\n\n')
 }
 
 /**
@@ -406,7 +424,8 @@ function agentSystemPromptTextOf(agentId: string | undefined): string {
 async function recordAgentTavernPromptViewFor(
   agentId: string | undefined,
   config: unknown,
-  logger?: { warn?: (message: string) => unknown },
+  logger: { warn?: (message: string) => unknown } | undefined,
+  ptcText: () => string,
 ): Promise<void> {
   try {
     if (typeof agentId !== 'string' || agentId.trim() === '') return
@@ -415,7 +434,7 @@ async function recordAgentTavernPromptViewFor(
     const binding = (await (await tavernStore()).getState()).sessionBindings[agentId]
     if (!binding || binding.architecture !== 'agent-tavern' || binding.group === true) return
     const sections = agentPromptSectionsFor(agentId)
-    const system = agentSystemPromptTextOf(agentId)
+    const system = agentSystemPromptTextOf(agentId, ptcText())
     recordPromptView({
       character: binding.character,
       chatId: binding.chatId,

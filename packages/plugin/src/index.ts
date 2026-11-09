@@ -49,6 +49,7 @@ import {
 import { registerTavernSessionCommand } from './session/command.js'
 import { registerSessionBindingReclaim } from './session/reclaim.js'
 import { listLiveAgents } from './im/session-host.js'
+import { mountAgentPtcMode, refreshAgentPtcMode } from './agent-ptc-mode.js'
 import { normalizeAllowedHosts } from './http/trust.js'
 import type { PluginContext } from './host-contract.js'
 import { ensureAgentPresetDeclared, recoverMountedNovels } from './http/novel.js'
@@ -136,6 +137,13 @@ export function apply(ctx: PluginContext, config: { anchorEveryTurns?: unknown, 
   }
   mountSessionEvent(ctx, mountDeps)
   mountAgentCreated(ctx, mountDeps)
+  mountAgentPtcMode(ctx)
+  // Restored sessions may already have been announced before this plugin
+  // mounted; reconcile the persisted switch once so their next step presents
+  // PTC. Host-seam probing and module loading live in the bind layer.
+  void refreshAgentPtcMode(ctx).catch((error: unknown) => {
+    ctx.logger?.warn?.(`dsh-soulmojito ptc: startup reconcile failed: ${error instanceof Error ? error.message : String(error)}`)
+  })
   void refreshActivePrompt()
   // §12.3 restart recovery runs after apply returns; it never blocks mounting.
   void recoverMountedNovels(ctx)
