@@ -88,6 +88,13 @@ export interface MaintenanceStateFile {
   lastRun?: MaintenanceRunRecord
 }
 
+/** 跨 scope 最近运行扫描结果（面板「最近运行」列表的行）。 */
+export interface MaintenanceRecentEntry {
+  character: string
+  chatId: string
+  lastRun: MaintenanceRunRecord
+}
+
 /** 楼面消息的最小结构面（ChatMessage 的子集，避免反向依赖 tavern-format）。 */
 export interface MaintenanceFloorMessage {
   name: string
@@ -191,6 +198,52 @@ export class MemoryMaintenanceStore {
     await writeAtomicText(file, `${JSON.stringify(state)}\n`)
   }
 
+  /** 扫描所有 scope 的 lastRun，按收尾/开始时间倒序取最近 limit 条。 */
+  async listRecent(limit: number): Promise<MaintenanceRecentEntry[]> {
+    const base = path.join(this.root, 'memory-maintenance')
+    let characterDirs
+    try {
+      characterDirs = await fs.readdir(base, { withFileTypes: true })
+    } catch {
+      return []
+    }
+    // 先用 mtime 粗筛候选再解析：状态文件含收据快照，整目录 JSON 全量读取代价
+    // 远高于 stat；最近列表每 3s 轮询一次，不能把磁盘读放大。
+    const candidates: Array<{ character: string; chatId: string; modifiedMs: number }> = []
+    for (const characterDir of characterDirs) {
+      if (!characterDir.isDirectory()) continue
+      const character = decodeSegment(characterDir.name)
+      if (character === undefined) continue
+      let files
+      try {
+        files = await fs.readdir(path.join(base, characterDir.name), { withFileTypes: true })
+      } catch {
+        continue
+      }
+      for (const file of files) {
+        if (!file.isFile() || !file.name.endsWith('.json')) continue
+        const chatId = decodeSegment(file.name.slice(0, -'.json'.length))
+        if (chatId === undefined) continue
+        try {
+          const stat = await fs.stat(path.join(base, characterDir.name, file.name))
+          candidates.push({ character, chatId, modifiedMs: stat.mtimeMs })
+        } catch {
+          continue
+        }
+      }
+    }
+    candidates.sort((left, right) => right.modifiedMs - left.modifiedMs)
+    const entries: MaintenanceRecentEntry[] = []
+    for (const candidate of candidates.slice(0, Math.max(0, limit * 2))) {
+      const state = await this.read(candidate.character, candidate.chatId)
+      if (state.lastRun !== undefined) {
+        entries.push({ character: candidate.character, chatId: candidate.chatId, lastRun: state.lastRun })
+      }
+    }
+    entries.sort((left, right) => runTimestamp(right.lastRun).localeCompare(runTimestamp(left.lastRun)))
+    return entries.slice(0, Math.max(0, limit))
+  }
+
   private file(character: string, chatId: string): string {
     return path.join(this.root, 'memory-maintenance', safeSegment(character), `${safeSegment(chatId)}.json`)
   }
@@ -226,4 +279,19 @@ function safeSegment(value: string): string {
     throw new Error('invalid memory maintenance path segment')
   }
   return encodeURIComponent(value)
+}
+
+/** 扫描目录时的逆变换；非法百分号转义跳过该条目，不阻断其余扫描。 */
+function decodeSegment(value: string): string | undefined {
+  try {
+    const decoded = decodeURIComponent(value)
+    return decoded === '' ? undefined : decoded
+  } catch {
+    return undefined
+  }
+}
+
+/** 最近运行排序键：完成的看 finishedAt，运行中的看 startedAt。 */
+function runTimestamp(run: MaintenanceRunRecord): string {
+  return run.finishedAt ?? run.startedAt
 }

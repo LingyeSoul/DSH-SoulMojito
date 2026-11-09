@@ -424,7 +424,8 @@ export const STORE_ROUTES: readonly RouteEntry<StoreRouteContext>[] = [
   },
   {
     name: 'memory-maintenance',
-    matches: (route, method) => (method === 'POST' || method === 'GET') && route === 'memory/maintenance',
+    matches: (route, method) => (method === 'POST' && route === 'memory/maintenance')
+      || (method === 'GET' && (route === 'memory/maintenance' || route === 'memory/maintenance/recent')),
     handle: ({ ctx, db, req, res, url, route, method }) => handleMemoryMaintenanceRoute(ctx, db, req, res, url, route, method),
   },
   {

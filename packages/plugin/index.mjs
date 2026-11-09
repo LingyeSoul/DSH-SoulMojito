@@ -4783,6 +4783,17 @@ function safeSegment2(value) {
   }
   return encodeURIComponent(value);
 }
+function decodeSegment(value) {
+  try {
+    const decoded = decodeURIComponent(value);
+    return decoded === "" ? void 0 : decoded;
+  } catch {
+    return void 0;
+  }
+}
+function runTimestamp(run) {
+  return run.finishedAt ?? run.startedAt;
+}
 var MAX_RECEIPTS, MemoryMaintenanceStore;
 var init_memory_maintenance = __esm({
   "packages/tavern-store/src/memory-maintenance.ts"() {
@@ -4816,6 +4827,49 @@ var init_memory_maintenance = __esm({
         await fs4.mkdir(path3.dirname(file), { recursive: true });
         await writeAtomicText(file, `${JSON.stringify(state)}
 `);
+      }
+      /** 扫描所有 scope 的 lastRun，按收尾/开始时间倒序取最近 limit 条。 */
+      async listRecent(limit) {
+        const base = path3.join(this.root, "memory-maintenance");
+        let characterDirs;
+        try {
+          characterDirs = await fs4.readdir(base, { withFileTypes: true });
+        } catch {
+          return [];
+        }
+        const candidates = [];
+        for (const characterDir of characterDirs) {
+          if (!characterDir.isDirectory()) continue;
+          const character = decodeSegment(characterDir.name);
+          if (character === void 0) continue;
+          let files;
+          try {
+            files = await fs4.readdir(path3.join(base, characterDir.name), { withFileTypes: true });
+          } catch {
+            continue;
+          }
+          for (const file of files) {
+            if (!file.isFile() || !file.name.endsWith(".json")) continue;
+            const chatId = decodeSegment(file.name.slice(0, -".json".length));
+            if (chatId === void 0) continue;
+            try {
+              const stat3 = await fs4.stat(path3.join(base, characterDir.name, file.name));
+              candidates.push({ character, chatId, modifiedMs: stat3.mtimeMs });
+            } catch {
+              continue;
+            }
+          }
+        }
+        candidates.sort((left, right) => right.modifiedMs - left.modifiedMs);
+        const entries = [];
+        for (const candidate of candidates.slice(0, Math.max(0, limit * 2))) {
+          const state = await this.read(candidate.character, candidate.chatId);
+          if (state.lastRun !== void 0) {
+            entries.push({ character: candidate.character, chatId: candidate.chatId, lastRun: state.lastRun });
+          }
+        }
+        entries.sort((left, right) => runTimestamp(right.lastRun).localeCompare(runTimestamp(left.lastRun)));
+        return entries.slice(0, Math.max(0, limit));
       }
       file(character, chatId) {
         return path3.join(this.root, "memory-maintenance", safeSegment2(character), `${safeSegment2(chatId)}.json`);
@@ -15604,7 +15658,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.6".trim() : "";
-  const commit = true ? normalizeCommit("bbff5d2") : void 0;
+  const commit = true ? normalizeCommit("ebc8b95") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -57650,6 +57704,62 @@ async function memoryMaintenanceStatus(deps, scope) {
   }
   return view;
 }
+async function recentMemoryMaintenanceRuns(deps, limit) {
+  const stateStore = await MemoryMaintenanceStore.open(deps.root);
+  const entries = await stateStore.listRecent(limit);
+  const views = entries.map((entry) => {
+    const active = activeRuns.get(scopeKey(entry));
+    if (active !== void 0) {
+      return {
+        character: entry.character,
+        chatId: entry.chatId,
+        runId: active.runId,
+        status: "running",
+        startedAt: active.startedAt,
+        summary: entry.lastRun.summary,
+        progress: snapshotProgress(active.progress)
+      };
+    }
+    const run = entry.lastRun;
+    if (run.status === "running") {
+      return {
+        character: entry.character,
+        chatId: entry.chatId,
+        runId: run.runId,
+        status: "error",
+        outcome: "interrupted",
+        startedAt: run.startedAt,
+        ...run.finishedAt === void 0 ? {} : { finishedAt: run.finishedAt },
+        summary: { ...run.summary, error: "run interrupted (host process restarted); it did not complete" }
+      };
+    }
+    return {
+      character: entry.character,
+      chatId: entry.chatId,
+      runId: run.runId,
+      status: run.status,
+      ...run.outcome === void 0 ? {} : { outcome: run.outcome },
+      startedAt: run.startedAt,
+      ...run.finishedAt === void 0 ? {} : { finishedAt: run.finishedAt },
+      summary: run.summary
+    };
+  });
+  const listed = new Set(views.map((view) => `${view.character}\0${view.chatId}`));
+  for (const active of activeRuns.values()) {
+    const key = `${active.character}\0${active.chatId}`;
+    if (listed.has(key)) continue;
+    views.push({
+      character: active.character,
+      chatId: active.chatId,
+      runId: active.runId,
+      status: "running",
+      startedAt: active.startedAt,
+      progress: snapshotProgress(active.progress)
+    });
+  }
+  views.sort((left, right) => (right.finishedAt ?? right.startedAt).localeCompare(left.finishedAt ?? left.startedAt));
+  return views.slice(0, Math.max(0, limit));
+}
 function emptySummary(totalFloors) {
   return {
     totalFloors,
@@ -58619,6 +58729,12 @@ async function handleMemoryEmbedApi(req, res, route, method, db) {
   return sendRouteNotFound(res, method, route);
 }
 async function handleMemoryMaintenanceApi(ctx, req, res, url, route, method, db) {
+  if (method === "GET" && route === "memory/maintenance/recent") {
+    const rawLimit = Number(url.searchParams.get("limit") ?? "10");
+    const limit = Number.isInteger(rawLimit) ? Math.min(Math.max(rawLimit, 1), 50) : 10;
+    const runs = await recentMemoryMaintenanceRuns(await maintenanceDeps(db), limit);
+    return sendJson(res, 200, { ok: true, runs });
+  }
   if (method === "POST") {
     const body = await readJson(req);
     if (typeof body.character !== "string" || typeof body.chatId !== "string" || body.character === "" || body.chatId === "") {
@@ -59658,7 +59774,7 @@ var STORE_ROUTES = [
   },
   {
     name: "memory-maintenance",
-    matches: (route, method) => (method === "POST" || method === "GET") && route === "memory/maintenance",
+    matches: (route, method) => method === "POST" && route === "memory/maintenance" || method === "GET" && (route === "memory/maintenance" || route === "memory/maintenance/recent"),
     handle: ({ ctx, db, req, res, url, route, method }) => handleMemoryMaintenanceRoute(ctx, db, req, res, url, route, method)
   },
   {

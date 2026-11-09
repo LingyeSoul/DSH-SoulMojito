@@ -9,7 +9,7 @@ import {
 import { tavernDataRoot } from '../dsh-home.js'
 import { clearEmbedStatus, embedBreakerOpen, embedProbe, readEmbedStatus } from '../memory-embed.js'
 import { detectLocalQuantizations, inferLocalModelSettings, installLocalEmbedRuntime, isLocalEmbedRuntimeInstalled, validateLocalModelDir } from '../memory-embed-local.js'
-import { MaintenanceRunConflictError, memoryMaintenanceStatus, startMemoryMaintenance, type MemoryMaintenanceDeps } from '../memory-maintenance.js'
+import { MaintenanceRunConflictError, memoryMaintenanceStatus, recentMemoryMaintenanceRuns, startMemoryMaintenance, type MemoryMaintenanceDeps } from '../memory-maintenance.js'
 import type { MaintenanceLlmContext } from '../memory-maintenance.js'
 import { memories, memoryVectors } from '../runtime.js'
 import { readJson, sendJson, sendRouteNotFound } from './io.js'
@@ -292,6 +292,7 @@ export async function handleMemoryEmbedApi(
  * 楼面范围、编辑组数、合并/修正/删除计数、失败计数与退役结果；细粒度收尾 outcome
  * 在 summary 里——预算耗尽是纪律内收尾不是 error。running 时额外带 progress：
  * 阶段、当前工具、LLM 请求/预算与实时编辑计数，供面板渲染进度条）。
+ * `GET memory/maintenance/recent?limit=10` → `{runs}`：跨 scope 最近运行列表。
  */
 export async function handleMemoryMaintenanceApi(
   ctx: MaintenanceLlmContext,
@@ -302,6 +303,14 @@ export async function handleMemoryMaintenanceApi(
   method: string,
   db: TavernStore,
 ): Promise<void> {
+  // 最近运行列表：跨 scope 汇总 lastRun（面板「最近运行」）。
+  if (method === 'GET' && route === 'memory/maintenance/recent') {
+    const rawLimit = Number(url.searchParams.get('limit') ?? '10')
+    const limit = Number.isInteger(rawLimit) ? Math.min(Math.max(rawLimit, 1), 50) : 10
+    const runs = await recentMemoryMaintenanceRuns(await maintenanceDeps(db), limit)
+    return sendJson(res, 200, { ok: true, runs })
+  }
+
   if (method === 'POST') {
     const body = await readJson(req)
     if (typeof body.character !== 'string' || typeof body.chatId !== 'string'

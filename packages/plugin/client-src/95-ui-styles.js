@@ -545,6 +545,18 @@
         .dt-maintenance-progress>.dt-hint{margin:0}
         .dt-progress{height:6px;border-radius:3px;background:var(--dsw-alias-interactive-bg-hover);overflow:hidden}
         .dt-progress-fill{height:100%;border-radius:3px;background:var(--dsw-alias-state-business-primary);transition:width .2s ease}
+        .dt-maintenance-recent{margin-top:16px;padding-top:14px;border-top:1px solid var(--dsw-alias-border-l2)}
+        .dt-maintenance-recent h4{margin:0 0 8px;font-size:12px;line-height:18px;font-weight:600;color:var(--dsw-alias-label-secondary)}
+        .dt-maintenance-recent-list{display:flex;flex-direction:column;gap:6px}
+        .dt-maintenance-recent-row{display:flex;flex-direction:column;gap:3px;min-width:0;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
+        .dt-maintenance-recent-head{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0}
+        .dt-maintenance-recent-scope{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px}
+        .dt-maintenance-recent-row>.dt-hint{margin:0}
+        .dt-maintenance-recent-error{margin:0;font-size:11px;line-height:16px;overflow-wrap:anywhere}
+        .dt-maintenance-status{flex:none;padding:0 7px;border-radius:999px;font-size:10px;line-height:16px;font-weight:600}
+        .dt-maintenance-status-running{color:var(--dsw-alias-state-business-primary);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent)}
+        .dt-maintenance-status-done{color:var(--dsw-alias-state-success-primary,var(--dsw-alias-label-secondary));background:color-mix(in srgb,var(--dsw-alias-state-success-primary,var(--dsw-alias-label-secondary)) 12%,transparent)}
+        .dt-maintenance-status-error{color:var(--dsw-alias-state-error-primary);background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 12%,transparent)}
         @media(max-width:700px){.dt-settings-band.dt-settings-subband{padding:16px 0 0}}
         /* 资产卡：发丝环统一悬浮反馈。 */
         .dt-card,.dt-persona-row,.dt-world-row,.dt-entry,.dt-regex-row,.dt-novel-card,.dt-mod-row,.dt-preset-row,.dt-script-row,.dt-guide-row,.dt-workbench-plan,.dt-stat{transition:border-color .15s ease,background .15s ease,transform .15s ease}

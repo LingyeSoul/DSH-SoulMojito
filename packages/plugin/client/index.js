@@ -7125,6 +7125,13 @@ window.__ModuleLoader__.load({
       'settings.maintenanceRequests': 'LLM requests {requests}/{budget}',
       'settings.maintenanceElapsed': 'elapsed {elapsed}',
       'settings.maintenanceProgress': 'This run: {pending}/{total} floors · edit groups {groups} · merged {merged} · corrected {corrected} · created {created} · deleted {deleted} · failed {failed}',
+      'settings.maintenanceRecentTitle': 'Recent runs',
+      'settings.maintenanceRecentEmpty': 'No maintenance runs yet.',
+      'settings.maintenanceRecentMeta': 'Finished {at} · outcome {outcome} · edit groups {groups} · merged {merged} · corrected {corrected} · deleted {deleted}',
+      'settings.maintenanceRecentInterrupted': 'Started {at} · interrupted before completion',
+      'settings.maintenanceStatusRunning': 'Running',
+      'settings.maintenanceStatusDone': 'Done',
+      'settings.maintenanceStatusError': 'Failed',
       'settings.maintenancePending': 'Floors pending maintenance: {floors}',
       'settings.maintenanceNothingPending': 'Nothing pending — valid receipts cover all floors.',
       'settings.maintenanceDone': 'Finished {at} · outcome {outcome} · covered floors {base}–{head}',
@@ -8231,6 +8238,13 @@ window.__ModuleLoader__.load({
       'settings.maintenanceRequests': 'LLM 请求 {requests}/{budget}',
       'settings.maintenanceElapsed': '已运行 {elapsed}',
       'settings.maintenanceProgress': '本次待维护 {pending}/{total} 楼 · 编辑组 {groups} · 合并 {merged} · 修正 {corrected} · 新建 {created} · 删除 {deleted} · 失败 {failed}',
+      'settings.maintenanceRecentTitle': '最近运行',
+      'settings.maintenanceRecentEmpty': '还没有维护运行记录。',
+      'settings.maintenanceRecentMeta': '完成于 {at} · 收尾 {outcome} · 编辑组 {groups} · 合并 {merged} · 修正 {corrected} · 删除 {deleted}',
+      'settings.maintenanceRecentInterrupted': '开始于 {at} · 运行中断，未完成',
+      'settings.maintenanceStatusRunning': '运行中',
+      'settings.maintenanceStatusDone': '已完成',
+      'settings.maintenanceStatusError': '失败',
       'settings.maintenancePending': '待维护楼层：{floors}',
       'settings.maintenanceNothingPending': '暂无待维护——有效收据已覆盖全部楼层。',
       'settings.maintenanceDone': '完成于 {at} · 收尾 {outcome} · 覆盖楼层 {base}–{head}',
@@ -11639,6 +11653,82 @@ window.__ModuleLoader__.load({
       return `${minutes}:${String(totalSeconds % 60).padStart(2, '0')}`
     }
 
+    function maintenancePhaseLabel(t, progress) {
+      return progress.phase === 'preparing' ? t('settings.maintenancePhasePreparing')
+        : progress.phase === 'finishing' ? t('settings.maintenancePhaseFinishing')
+          : progress.phase === 'tools' && progress.activity ? t(`settings.maintenanceTool.${progress.activity}`)
+            : t('settings.maintenancePhaseThinking')
+    }
+
+    function maintenanceStatusLabel(t, status) {
+      return status === 'running' ? t('settings.maintenanceStatusRunning')
+        : status === 'error' ? t('settings.maintenanceStatusError')
+          : t('settings.maintenanceStatusDone')
+    }
+
+    // 最近运行列表（2026-11-09 用户需求）：跨 scope 汇总 lastRun；有在跑 run 时
+    // 3s 轮询一次，让其他聊天的任务进度也能在列表里推进。
+    function MemoryMaintenanceRecentList({ refreshKey }) {
+      const t = useTranslate()
+      const [runs, setRuns] = useState([])
+      const [error, setError] = useState('')
+      const load = () => api('memory/maintenance/recent?limit=8')
+        .then((result) => {
+          setRuns(Array.isArray(result.runs) ? result.runs : [])
+          setError('')
+        })
+        .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+      useEffect(() => { void load() }, [refreshKey])
+      const hasRunning = runs.some((run) => run.status === 'running')
+      useEffect(() => {
+        if (!hasRunning) return undefined
+        const timer = setInterval(() => { void load() }, 3000)
+        return () => clearInterval(timer)
+      }, [hasRunning])
+      return h('div', { className: 'dt-maintenance-recent' },
+        h('h4', null, t('settings.maintenanceRecentTitle')),
+        error !== '' ? h('p', { className: 'dt-error dt-maintenance-recent-error' }, error) : null,
+        runs.length === 0
+          ? h('p', { className: 'dt-hint' }, t('settings.maintenanceRecentEmpty'))
+          : h('div', { className: 'dt-maintenance-recent-list' },
+              runs.map((run) => {
+                const at = new Date(run.finishedAt || run.startedAt).toLocaleString()
+                const outcome = run.outcome || (run.status === 'error' ? 'error' : 'completed')
+                const meta = run.status === 'running'
+                  ? (run.progress
+                    ? `${maintenancePhaseLabel(t, run.progress)} · ${t('settings.maintenanceRequests', {
+                        requests: run.progress.llmRequests,
+                        budget: run.progress.budget,
+                      })} · ${t('settings.maintenanceElapsed', { elapsed: formatMaintenanceElapsed(run.startedAt) })}`
+                    : t('settings.maintenancePhasePreparing'))
+                  : run.status === 'error' && !run.finishedAt
+                    ? t('settings.maintenanceRecentInterrupted', { at })
+                    : t('settings.maintenanceRecentMeta', {
+                      at,
+                      outcome,
+                      groups: run.summary?.editGroups ?? 0,
+                      merged: run.summary?.merged ?? 0,
+                      corrected: run.summary?.corrected ?? 0,
+                      deleted: run.summary?.deleted ?? 0,
+                    })
+                return h('div', {
+                  key: `${run.character}\u0000${run.chatId}\u0000${run.runId}`,
+                  className: 'dt-maintenance-recent-row',
+                },
+                  h('div', { className: 'dt-maintenance-recent-head' },
+                    h('span', {
+                      className: 'dt-maintenance-recent-scope',
+                      title: `${run.character} / ${run.chatId}`,
+                    }, `${run.character} / ${run.chatId}`),
+                    h('span', { className: `dt-maintenance-status dt-maintenance-status-${run.status}` },
+                      maintenanceStatusLabel(t, run.status))),
+                  h('p', { className: 'dt-hint' }, meta),
+                  run.status === 'error' && run.summary?.error
+                    ? h('p', { className: 'dt-error dt-maintenance-recent-error' }, run.summary.error)
+                    : null)
+              })))
+    }
+
     function MemoryMaintenanceRow() {
       const state = useTavernStore()
       const t = useTranslate()
@@ -11650,6 +11740,7 @@ window.__ModuleLoader__.load({
       const [view, setView] = useState(null)
       const [starting, setStarting] = useState(false)
       const [error, setError] = useState('')
+      const [recentRevision, setRecentRevision] = useState(0)
 
       useEffect(() => {
         setChatId('')
@@ -11668,11 +11759,16 @@ window.__ModuleLoader__.load({
         const timer = setInterval(() => { void refresh() }, 1500)
         return () => clearInterval(timer)
       }, [character, chatId, view && view.status])
+      // 当前 scope 的 run 收尾后刷新最近运行列表（运行中的推进由列表自身轮询）。
+      const finishedAt = view && view.finishedAt
+      useEffect(() => {
+        if (finishedAt) setRecentRevision((value) => value + 1)
+      }, [finishedAt])
 
       const start = () => {
         setStarting(true); setError('')
         api('memory/maintenance', { method: 'POST', headers: jsonHeaders(), body: JSON.stringify({ character, chatId }) })
-          .then(() => refresh())
+          .then(() => { setRecentRevision((value) => value + 1); return refresh() })
           .catch((cause) => {
             // 409 单飞：另一个 run 已在跑——立刻对齐状态而不是只报错。
             if (cause.status === 409) void refresh()
@@ -11689,11 +11785,7 @@ window.__ModuleLoader__.load({
       const progressPercent = progress === null
         ? 0
         : Math.min(100, Math.round((progress.llmRequests / Math.max(1, progress.budget)) * 100))
-      const phaseLabel = progress === null ? ''
-        : progress.phase === 'preparing' ? t('settings.maintenancePhasePreparing')
-          : progress.phase === 'finishing' ? t('settings.maintenancePhaseFinishing')
-            : progress.phase === 'tools' && progress.activity ? t(`settings.maintenanceTool.${progress.activity}`)
-              : t('settings.maintenancePhaseThinking')
+      const phaseLabel = progress === null ? '' : maintenancePhaseLabel(t, progress)
       const elapsed = progress !== null && view.startedAt ? formatMaintenanceElapsed(view.startedAt) : ''
       const statusLine = view === null ? ''
         : running ? t('settings.maintenanceRunning', { runId: (view.runId || '').slice(0, 8) })
@@ -11778,7 +11870,8 @@ window.__ModuleLoader__.load({
             disabled: starting || running || !character || !chatId,
             onClick: start,
           }, starting ? t('settings.maintenanceStarting') : t('settings.maintenanceStart'))),
-        error ? h('p', { className: 'dt-error' }, error) : null)
+        error ? h('p', { className: 'dt-error' }, error) : null,
+        h(MemoryMaintenanceRecentList, { refreshKey: recentRevision }))
     }
 
     function MemoryRetrievalBand() {
@@ -20391,6 +20484,18 @@ window.__ModuleLoader__.load({
         .dt-maintenance-progress>.dt-hint{margin:0}
         .dt-progress{height:6px;border-radius:3px;background:var(--dsw-alias-interactive-bg-hover);overflow:hidden}
         .dt-progress-fill{height:100%;border-radius:3px;background:var(--dsw-alias-state-business-primary);transition:width .2s ease}
+        .dt-maintenance-recent{margin-top:16px;padding-top:14px;border-top:1px solid var(--dsw-alias-border-l2)}
+        .dt-maintenance-recent h4{margin:0 0 8px;font-size:12px;line-height:18px;font-weight:600;color:var(--dsw-alias-label-secondary)}
+        .dt-maintenance-recent-list{display:flex;flex-direction:column;gap:6px}
+        .dt-maintenance-recent-row{display:flex;flex-direction:column;gap:3px;min-width:0;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
+        .dt-maintenance-recent-head{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0}
+        .dt-maintenance-recent-scope{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px}
+        .dt-maintenance-recent-row>.dt-hint{margin:0}
+        .dt-maintenance-recent-error{margin:0;font-size:11px;line-height:16px;overflow-wrap:anywhere}
+        .dt-maintenance-status{flex:none;padding:0 7px;border-radius:999px;font-size:10px;line-height:16px;font-weight:600}
+        .dt-maintenance-status-running{color:var(--dsw-alias-state-business-primary);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent)}
+        .dt-maintenance-status-done{color:var(--dsw-alias-state-success-primary,var(--dsw-alias-label-secondary));background:color-mix(in srgb,var(--dsw-alias-state-success-primary,var(--dsw-alias-label-secondary)) 12%,transparent)}
+        .dt-maintenance-status-error{color:var(--dsw-alias-state-error-primary);background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 12%,transparent)}
         @media(max-width:700px){.dt-settings-band.dt-settings-subband{padding:16px 0 0}}
         /* 资产卡：发丝环统一悬浮反馈。 */
         .dt-card,.dt-persona-row,.dt-world-row,.dt-entry,.dt-regex-row,.dt-novel-card,.dt-mod-row,.dt-preset-row,.dt-script-row,.dt-guide-row,.dt-workbench-plan,.dt-stat{transition:border-color .15s ease,background .15s ease,transform .15s ease}

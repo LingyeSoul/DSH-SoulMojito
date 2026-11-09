@@ -30,6 +30,7 @@ import {
   MAINTENANCE_MAX_LLM_REQUESTS,
   MaintenanceRunConflictError,
   memoryMaintenanceStatus,
+  recentMemoryMaintenanceRuns,
   startMemoryMaintenance,
   type MemoryMaintenanceDeps,
   type MemoryMaintenanceScope,
@@ -595,6 +596,11 @@ describe('run 纪律', () => {
         },
       },
     })
+    const recent = await recentMemoryMaintenanceRuns(deps(), 5)
+    expect(recent.find((run) => run.chatId === chatId)).toMatchObject({
+      status: 'error',
+      outcome: 'interrupted',
+    })
     const view = await memoryMaintenanceStatus(deps(), { character: CHARACTER, chatId })
     expect(view.status).toBe('error')
     expect(view.runId).toBe('crashed-run')
@@ -604,5 +610,46 @@ describe('run 纪律', () => {
     expect(persisted.lastRun!.status).toBe('error')
     expect(persisted.lastRun!.outcome).toBe('interrupted')
     expect(persisted.lastRun!.finishedAt).toBeDefined()
+  })
+})
+
+describe('最近运行列表', () => {
+  it('跨聊天汇总 lastRun 并按时间倒序；在跑 run 带实时进度，结束后收敛为 done', async () => {
+    const firstChat = await seedChat(e1Floors())
+    await runMaintenance({ character: CHARACTER, chatId: firstChat }, [textStop('first done')])
+
+    const secondChat = await seedChat(e1Floors())
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const gated: ChunkProducer = async function* () {
+      await gate
+      yield { type: 'text-delta', index: 0, text: 'second done' }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    }
+    const secondScope = { character: CHARACTER, chatId: secondChat }
+    const { ctx } = fakeCtx([gated])
+    await startMemoryMaintenance(ctx, deps(), secondScope)
+
+    const started = Date.now()
+    let runs = await recentMemoryMaintenanceRuns(deps(), 8)
+    while (runs[0]?.chatId !== secondChat || runs[0]?.status !== 'running' || runs[0]?.progress?.llmRequests !== 1) {
+      if (Date.now() - started > 4000) throw new Error('recent runs did not report the active run')
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      runs = await recentMemoryMaintenanceRuns(deps(), 8)
+    }
+    expect(runs[0]).toMatchObject({
+      character: CHARACTER,
+      chatId: secondChat,
+      status: 'running',
+      progress: { phase: 'thinking', llmRequests: 1, budget: MAINTENANCE_MAX_LLM_REQUESTS },
+    })
+    expect(runs.some((run) => run.chatId === firstChat && run.status === 'done')).toBe(true)
+
+    release()
+    const view = await waitUntilIdle(secondScope)
+    expect(view.status).toBe('done')
+    const after = await recentMemoryMaintenanceRuns(deps(), 8)
+    expect(after[0]).toMatchObject({ character: CHARACTER, chatId: secondChat, status: 'done' })
+    expect(after[0]!.progress).toBeUndefined()
   })
 })

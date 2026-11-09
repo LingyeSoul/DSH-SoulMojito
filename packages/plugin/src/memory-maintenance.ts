@@ -141,6 +141,20 @@ export interface MemoryMaintenanceStatusView {
   progress?: MaintenanceRunProgress
 }
 
+/** 面板「最近运行」列表的一行（跨 scope 汇总）。 */
+export interface RecentMaintenanceRunView {
+  character: string
+  chatId: string
+  runId: string
+  status: 'running' | 'done' | 'error'
+  outcome?: MaintenanceRunOutcome
+  startedAt: string
+  finishedAt?: string
+  summary?: MaintenanceRunSummary
+  /** 仅进程内在跑的 run：实时进度。 */
+  progress?: MaintenanceRunProgress
+}
+
 interface ActiveRun {
   runId: string
   character: string
@@ -260,6 +274,72 @@ export async function memoryMaintenanceStatus(
     view.summary = lastRun.summary
   }
   return view
+}
+
+/**
+ * 跨 scope 最近运行列表（面板「最近运行」）。持久化 lastRun 是事实来源；
+ * 进程内在跑的 run 用注册表覆盖为 running 并附实时 progress；进程重启遗留的
+ * running 在列表里如实标 interrupted（持久化修正留给该 scope 的状态读取）。
+ */
+export async function recentMemoryMaintenanceRuns(
+  deps: MemoryMaintenanceDeps,
+  limit: number,
+): Promise<RecentMaintenanceRunView[]> {
+  const stateStore = await MemoryMaintenanceStore.open(deps.root)
+  const entries = await stateStore.listRecent(limit)
+  const views: RecentMaintenanceRunView[] = entries.map((entry) => {
+    const active = activeRuns.get(scopeKey(entry))
+    if (active !== undefined) {
+      return {
+        character: entry.character,
+        chatId: entry.chatId,
+        runId: active.runId,
+        status: 'running',
+        startedAt: active.startedAt,
+        summary: entry.lastRun.summary,
+        progress: snapshotProgress(active.progress),
+      }
+    }
+    const run = entry.lastRun
+    if (run.status === 'running') {
+      return {
+        character: entry.character,
+        chatId: entry.chatId,
+        runId: run.runId,
+        status: 'error',
+        outcome: 'interrupted',
+        startedAt: run.startedAt,
+        ...(run.finishedAt === undefined ? {} : { finishedAt: run.finishedAt }),
+        summary: { ...run.summary, error: 'run interrupted (host process restarted); it did not complete' },
+      }
+    }
+    return {
+      character: entry.character,
+      chatId: entry.chatId,
+      runId: run.runId,
+      status: run.status,
+      ...(run.outcome === undefined ? {} : { outcome: run.outcome }),
+      startedAt: run.startedAt,
+      ...(run.finishedAt === undefined ? {} : { finishedAt: run.finishedAt }),
+      summary: run.summary,
+    }
+  })
+  // run 刚启动、状态文件尚未落盘的窗口里，注册表仍要出现在列表里。
+  const listed = new Set(views.map((view) => `${view.character}\u0000${view.chatId}`))
+  for (const active of activeRuns.values()) {
+    const key = `${active.character}\u0000${active.chatId}`
+    if (listed.has(key)) continue
+    views.push({
+      character: active.character,
+      chatId: active.chatId,
+      runId: active.runId,
+      status: 'running',
+      startedAt: active.startedAt,
+      progress: snapshotProgress(active.progress),
+    })
+  }
+  views.sort((left, right) => (right.finishedAt ?? right.startedAt).localeCompare(left.finishedAt ?? left.startedAt))
+  return views.slice(0, Math.max(0, limit))
 }
 
 function emptySummary(totalFloors: number): MaintenanceRunSummary {

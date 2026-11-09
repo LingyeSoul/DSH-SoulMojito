@@ -15,6 +15,82 @@
       return `${minutes}:${String(totalSeconds % 60).padStart(2, '0')}`
     }
 
+    function maintenancePhaseLabel(t, progress) {
+      return progress.phase === 'preparing' ? t('settings.maintenancePhasePreparing')
+        : progress.phase === 'finishing' ? t('settings.maintenancePhaseFinishing')
+          : progress.phase === 'tools' && progress.activity ? t(`settings.maintenanceTool.${progress.activity}`)
+            : t('settings.maintenancePhaseThinking')
+    }
+
+    function maintenanceStatusLabel(t, status) {
+      return status === 'running' ? t('settings.maintenanceStatusRunning')
+        : status === 'error' ? t('settings.maintenanceStatusError')
+          : t('settings.maintenanceStatusDone')
+    }
+
+    // 最近运行列表（2026-11-09 用户需求）：跨 scope 汇总 lastRun；有在跑 run 时
+    // 3s 轮询一次，让其他聊天的任务进度也能在列表里推进。
+    function MemoryMaintenanceRecentList({ refreshKey }) {
+      const t = useTranslate()
+      const [runs, setRuns] = useState([])
+      const [error, setError] = useState('')
+      const load = () => api('memory/maintenance/recent?limit=8')
+        .then((result) => {
+          setRuns(Array.isArray(result.runs) ? result.runs : [])
+          setError('')
+        })
+        .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+      useEffect(() => { void load() }, [refreshKey])
+      const hasRunning = runs.some((run) => run.status === 'running')
+      useEffect(() => {
+        if (!hasRunning) return undefined
+        const timer = setInterval(() => { void load() }, 3000)
+        return () => clearInterval(timer)
+      }, [hasRunning])
+      return h('div', { className: 'dt-maintenance-recent' },
+        h('h4', null, t('settings.maintenanceRecentTitle')),
+        error !== '' ? h('p', { className: 'dt-error dt-maintenance-recent-error' }, error) : null,
+        runs.length === 0
+          ? h('p', { className: 'dt-hint' }, t('settings.maintenanceRecentEmpty'))
+          : h('div', { className: 'dt-maintenance-recent-list' },
+              runs.map((run) => {
+                const at = new Date(run.finishedAt || run.startedAt).toLocaleString()
+                const outcome = run.outcome || (run.status === 'error' ? 'error' : 'completed')
+                const meta = run.status === 'running'
+                  ? (run.progress
+                    ? `${maintenancePhaseLabel(t, run.progress)} · ${t('settings.maintenanceRequests', {
+                        requests: run.progress.llmRequests,
+                        budget: run.progress.budget,
+                      })} · ${t('settings.maintenanceElapsed', { elapsed: formatMaintenanceElapsed(run.startedAt) })}`
+                    : t('settings.maintenancePhasePreparing'))
+                  : run.status === 'error' && !run.finishedAt
+                    ? t('settings.maintenanceRecentInterrupted', { at })
+                    : t('settings.maintenanceRecentMeta', {
+                      at,
+                      outcome,
+                      groups: run.summary?.editGroups ?? 0,
+                      merged: run.summary?.merged ?? 0,
+                      corrected: run.summary?.corrected ?? 0,
+                      deleted: run.summary?.deleted ?? 0,
+                    })
+                return h('div', {
+                  key: `${run.character}\u0000${run.chatId}\u0000${run.runId}`,
+                  className: 'dt-maintenance-recent-row',
+                },
+                  h('div', { className: 'dt-maintenance-recent-head' },
+                    h('span', {
+                      className: 'dt-maintenance-recent-scope',
+                      title: `${run.character} / ${run.chatId}`,
+                    }, `${run.character} / ${run.chatId}`),
+                    h('span', { className: `dt-maintenance-status dt-maintenance-status-${run.status}` },
+                      maintenanceStatusLabel(t, run.status))),
+                  h('p', { className: 'dt-hint' }, meta),
+                  run.status === 'error' && run.summary?.error
+                    ? h('p', { className: 'dt-error dt-maintenance-recent-error' }, run.summary.error)
+                    : null)
+              })))
+    }
+
     function MemoryMaintenanceRow() {
       const state = useTavernStore()
       const t = useTranslate()
@@ -26,6 +102,7 @@
       const [view, setView] = useState(null)
       const [starting, setStarting] = useState(false)
       const [error, setError] = useState('')
+      const [recentRevision, setRecentRevision] = useState(0)
 
       useEffect(() => {
         setChatId('')
@@ -44,11 +121,16 @@
         const timer = setInterval(() => { void refresh() }, 1500)
         return () => clearInterval(timer)
       }, [character, chatId, view && view.status])
+      // 当前 scope 的 run 收尾后刷新最近运行列表（运行中的推进由列表自身轮询）。
+      const finishedAt = view && view.finishedAt
+      useEffect(() => {
+        if (finishedAt) setRecentRevision((value) => value + 1)
+      }, [finishedAt])
 
       const start = () => {
         setStarting(true); setError('')
         api('memory/maintenance', { method: 'POST', headers: jsonHeaders(), body: JSON.stringify({ character, chatId }) })
-          .then(() => refresh())
+          .then(() => { setRecentRevision((value) => value + 1); return refresh() })
           .catch((cause) => {
             // 409 单飞：另一个 run 已在跑——立刻对齐状态而不是只报错。
             if (cause.status === 409) void refresh()
@@ -65,11 +147,7 @@
       const progressPercent = progress === null
         ? 0
         : Math.min(100, Math.round((progress.llmRequests / Math.max(1, progress.budget)) * 100))
-      const phaseLabel = progress === null ? ''
-        : progress.phase === 'preparing' ? t('settings.maintenancePhasePreparing')
-          : progress.phase === 'finishing' ? t('settings.maintenancePhaseFinishing')
-            : progress.phase === 'tools' && progress.activity ? t(`settings.maintenanceTool.${progress.activity}`)
-              : t('settings.maintenancePhaseThinking')
+      const phaseLabel = progress === null ? '' : maintenancePhaseLabel(t, progress)
       const elapsed = progress !== null && view.startedAt ? formatMaintenanceElapsed(view.startedAt) : ''
       const statusLine = view === null ? ''
         : running ? t('settings.maintenanceRunning', { runId: (view.runId || '').slice(0, 8) })
@@ -154,7 +232,8 @@
             disabled: starting || running || !character || !chatId,
             onClick: start,
           }, starting ? t('settings.maintenanceStarting') : t('settings.maintenanceStart'))),
-        error ? h('p', { className: 'dt-error' }, error) : null)
+        error ? h('p', { className: 'dt-error' }, error) : null,
+        h(MemoryMaintenanceRecentList, { refreshKey: recentRevision }))
     }
 
     function MemoryRetrievalBand() {
