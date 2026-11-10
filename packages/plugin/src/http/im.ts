@@ -296,7 +296,7 @@ export async function handleImApi(
     // The tool surface caches the bound-session set for a single step; drop it
     // so the newly bound session exposes im_* on its very next step.
     invalidateImToolBindingCache()
-    // 绑定成功就把会话切到 AgentTavernIM；会话未打开/正在跑时留待
+    // 绑定成功就把会话切到当前 IM 预设（行为设置 imNativeAgentMode 选择）；会话未打开/正在跑时留待
     // agent/created / agent/status(idle) 的自动重试。
     const presetSwitch = runtime?.applyImPreset === undefined
       ? undefined

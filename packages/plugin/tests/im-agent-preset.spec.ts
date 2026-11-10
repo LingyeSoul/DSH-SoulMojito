@@ -1,7 +1,47 @@
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import type { AgentContextLike } from '../src/agent-tavern/agent.js'
 import { agentPromptPieces } from '../src/agent-tavern/prompt-parts.js'
 import { apply, IM_MODE_SECTION, imModePromptText, inject } from '../src/im/agent.js'
+
+describe('AgentTavernIM Native preset composition', () => {
+  const patch = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '../cordis.patch.yml'),
+    'utf8',
+  )
+
+  it('declares every standard Agent tool row the native mode promises', () => {
+    const start = patch.indexOf('id: preset-agent-tavern-im-native')
+    const end = patch.indexOf('id: preset-agent-novel', start)
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+    const block = patch.slice(start, end)
+    for (const marker of [
+      'id: agent-tavern-im-native',
+      "'dsh-soulmojito/agent'",
+      "'dsh-soulmojito/im-agent'",
+      "'@deepseek-ai/dsh-tool-bash'",
+      "'@deepseek-ai/dsh-tool-pwsh'",
+      "'@deepseek-ai/dsh-tool-fs'",
+      "'@deepseek-ai/dsh-tool-fs-search'",
+      "'@deepseek-ai/dsh-tool-jobs'",
+      "'@deepseek-ai/dsh-tool-schedule'",
+      "'@deepseek-ai/dsh-skill-filesystem'",
+      "'@deepseek-ai/dsh-tool-skill'",
+      "'@deepseek-ai/dsh-command-goal'",
+      "'@deepseek-ai/dsh-tool-goal'",
+      "'@deepseek-ai/dsh-tool-subagent'",
+      "'@deepseek-ai/dsh-workflow-ptc'",
+      "'@deepseek-ai/dsh-tool-workflow'",
+      "'@deepseek-ai/dsh-tool-ask-user'",
+      "'@deepseek-ai/dsh-tool-todo'",
+      "'@deepseek-ai/dsh-tool-web'",
+      "'@deepseek-ai/dsh-tool-present'",
+    ]) expect(block).toContain(marker)
+  })
+})
 
 describe('AgentTavernIM prompt', () => {
   it('declares the systemPrompt service its preset composition mounts', () => {

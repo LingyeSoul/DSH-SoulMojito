@@ -495,9 +495,9 @@ describe('im /bind group allowlist bootstrap', () => {
 })
 
 describe('im /bind preset switch', () => {
-  const SWITCHED = '已切换到 AgentTavernIM'
+  const SWITCHED = '已切换 IM 预设'
 
-  it('reports an applied AgentTavernIM switch in the /bind receipt', async () => {
+  it('reports an applied IM preset switch in the /bind receipt', async () => {
     await openAccess()
     await setGlobalOwner()
     const switched: string[] = []

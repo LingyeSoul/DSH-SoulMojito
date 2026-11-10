@@ -15657,8 +15657,8 @@ function readBuildInfo() {
   return { version, commit };
 }
 function buildTimeStamp() {
-  const version = true ? "0.7.7".trim() : "";
-  const commit = true ? normalizeCommit("0ea21c7") : void 0;
+  const version = true ? "0.7.8".trim() : "";
+  const commit = true ? normalizeCommit("8739174") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -25648,6 +25648,7 @@ init_src3();
 init_src();
 import { createHash as createHash9 } from "node:crypto";
 var AGENT_TAVERN_IM_PRESET_ID = "agent-tavern-im";
+var AGENT_TAVERN_IM_NATIVE_PRESET_ID = "agent-tavern-im-native";
 function imDedupeKey(channel, accountId, scope, peerId, messageId) {
   return `${channel}:${accountId}:${scope}:${peerId}:${messageId}`;
 }
@@ -41538,19 +41539,27 @@ function agentIdOf3(agent) {
 function isTavernAgentArchitecture(architecture) {
   return architecture === "agent-tavern" || architecture === "agent-novel" || architecture === "card-workbench";
 }
+function isImBoundSession(state, sessionId) {
+  return Object.values(state.imPeers ?? {}).some((binding) => binding?.sessionId === sessionId);
+}
+function isPtcScope(state, agentId) {
+  const architecture = state.sessionBindings[agentId]?.architecture;
+  if (architecture === "st") return false;
+  return isTavernAgentArchitecture(architecture) || isImBoundSession(state, agentId);
+}
 function hostContextOf(agent) {
   return agent.ctx;
 }
 function agentPtcCapabilitiesForHost(ctx) {
   return inspectPtcCapabilitiesAsync(ctx);
 }
-function inspectAgentPtcRuntime(ctx, bindings2) {
+function inspectAgentPtcRuntime(ctx, state) {
   const entries = [];
   for (const agent of listLiveAgents2(ctx.agents)) {
     const agentId = agentIdOf3(agent);
     if (agentId === void 0) continue;
-    const architecture = bindings2[agentId]?.architecture;
-    if (!isTavernAgentArchitecture(architecture)) continue;
+    const architecture = state.sessionBindings[agentId]?.architecture;
+    if (!isPtcScope(state, agentId)) continue;
     const status2 = typeof agent.status === "string" ? agent.status : void 0;
     const mounted = mountedByAgent.has(agentId);
     try {
@@ -41606,7 +41615,7 @@ async function applyAgentPtcMode(agent, logger) {
   const db = await store3();
   const state = await db.getState();
   if (state.agentPtcMode !== true) return false;
-  if (!isTavernAgentArchitecture(state.sessionBindings[agentId]?.architecture)) return false;
+  if (!isPtcScope(state, agentId)) return false;
   if (describePtcSelection(host, agent) === "ptc") {
     lastApplyErrorByAgent.delete(agentId);
     return false;
@@ -41646,7 +41655,7 @@ async function reconcileAgentPtcMode(agent, logger) {
   const agentId = agentIdOf3(agent);
   if (agentId === void 0) return;
   const state = await (await store3()).getState();
-  if (state.agentPtcMode === true && isTavernAgentArchitecture(state.sessionBindings[agentId]?.architecture)) {
+  if (state.agentPtcMode === true && isPtcScope(state, agentId)) {
     await applyAgentPtcMode(agent, logger);
     return;
   }
@@ -59293,6 +59302,7 @@ async function handlePromptsRoute(res, url) {
 }
 
 // packages/plugin/src/http/panel-state-routes.ts
+init_runtime2();
 init_io();
 async function handleModelsRoute(ctx, res) {
   return sendJson(res, 200, { ok: true, ...await buildModelCatalog(ctx) });
@@ -59357,6 +59367,9 @@ async function handleStateUpdateRoute(ctx, db, req, res) {
     ...typeof body.nativeAgentPreset === "boolean" ? { nativeAgentPreset: body.nativeAgentPreset } : {},
     // Native PTC presentation for bound Tavern agents; reconciled live below.
     ...typeof body.agentPtcMode === "boolean" ? { agentPtcMode: body.agentPtcMode } : {},
+    // IM 绑定会话的目标预设（Tavern-only vs 原生全能力）；写后按会话重选预设，
+    // 运行中的会话等 idle 后由既有重试点收敛。
+    ...typeof body.imNativeAgentMode === "boolean" ? { imNativeAgentMode: body.imNativeAgentMode } : {},
     ...requestedDefaultArchitecture !== void 0 ? { defaultArchitecture: requestedDefaultArchitecture } : {},
     ...requestedDefaultContextMode !== void 0 ? { defaultContextMode: requestedDefaultContextMode } : {},
     ...typeof body.agentTavernPreloadAssets === "boolean" ? { agentTavernPreloadAssets: body.agentTavernPreloadAssets } : {},
@@ -59382,6 +59395,18 @@ async function handleStateUpdateRoute(ctx, db, req, res) {
   };
   const state = await db.patchState(patch);
   if ("activeCharacter" in patch || "activePreset" in patch || "activePersona" in patch || "cardWorkbenchPresetEnabled" in patch || "agentNovelPresetEnabled" in patch || "nativeAgentPreset" in patch) await emitAgentPresetChanged();
+  if ("imNativeAgentMode" in patch) {
+    try {
+      await getImRuntime()?.ensurePresets?.();
+    } catch (error) {
+      ctx.logger?.warn?.(`dsh-soulmojito im: preset reconcile after state patch failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    try {
+      await refreshAgentPtcMode(ctx);
+    } catch (error) {
+      ctx.logger?.warn?.(`dsh-soulmojito ptc: live reconcile after IM mode patch failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   if ("agentPtcMode" in patch) {
     try {
       await refreshAgentPtcMode(ctx);
@@ -59646,7 +59671,7 @@ async function handleBootstrapApi(ctx, res, db) {
     agentPtc: await agentPtcCapabilitiesForHost(ctx),
     // Live per-agent view: distinguishes a capable host from a session scope
     // that never mounted PTC, and carries the concrete mount error.
-    agentPtcRuntime: inspectAgentPtcRuntime(ctx, state.sessionBindings),
+    agentPtcRuntime: inspectAgentPtcRuntime(ctx, state),
     // 自更新快照：只读缓存结论，检查/安装分别走 update/check 与 update/install，
     // 保证 bootstrap 永远不因网络失败而变慢或报错。
     // Mod 轻量投影（提案 0015 §3.5，P1 真实化）：与 worldEntryCounts 同款服务端
@@ -60969,13 +60994,13 @@ async function presetNoteOf(deps, sessionId, alias) {
   if (deps.applyImPreset === void 0) return "\u9884\u8BBE\u672A\u5207\u6362\uFF08\u8FD0\u884C\u65F6\u672A\u63D0\u4F9B\u5207\u6362\u80FD\u529B\uFF09";
   try {
     const result = await deps.applyImPreset(sessionId);
-    if (result.applied) return "\u5DF2\u5207\u6362\u5230 AgentTavernIM";
+    if (result.applied) return "\u5DF2\u5207\u6362 IM \u9884\u8BBE";
     const reason = result.reason ?? "unknown reason";
     if (/running|not open/i.test(reason)) return "\u9884\u8BBE\u5F85\u5207\u6362\uFF08\u4F1A\u8BDD\u672A\u6253\u5F00\u6216\u6B63\u5728\u8FD0\u884C\uFF09";
-    deps.log?.note("warn", `switching the bound session to AgentTavernIM for ${alias} failed: ${reason}`);
+    deps.log?.note("warn", `switching the bound session to its IM preset for ${alias} failed: ${reason}`);
     return IM_COMMAND_PRESET_FAILED;
   } catch (error) {
-    deps.log?.note("warn", `switching the bound session to AgentTavernIM for ${alias} failed: ${messageOf17(error)}`);
+    deps.log?.note("warn", `switching the bound session to its IM preset for ${alias} failed: ${messageOf17(error)}`);
     return IM_COMMAND_PRESET_FAILED;
   }
 }
@@ -61776,26 +61801,27 @@ function createImRuntime(ctx, options) {
     try {
       const header = agent.session?.header;
       if (header?.origin === "subagent" || typeof header?.delegationDepth === "number" && header.delegationDepth > 0) {
-        return { applied: false, reason: "subagent sessions cannot be switched to AgentTavernIM" };
+        return { applied: false, reason: "subagent sessions cannot be switched to the IM presets" };
       }
       const state = await db.getState();
+      const targetPresetId = state.imNativeAgentMode === true ? AGENT_TAVERN_IM_NATIVE_PRESET_ID : AGENT_TAVERN_IM_PRESET_ID;
       const architecture = state.sessionBindings[sessionId]?.architecture;
       if (architecture === "agent-novel" || architecture === "card-workbench" || architecture === "st") {
         return {
           applied: false,
-          reason: `session architecture '${architecture}' cannot be switched to AgentTavernIM`
+          reason: `session architecture '${architecture}' cannot be switched to the IM presets`
         };
       }
       if (agent.status === "running") {
         return { applied: false, reason: "the session is running; the preset will switch when it becomes idle" };
       }
-      if (lastSelectedPresetId(agent.session) === AGENT_TAVERN_IM_PRESET_ID) {
+      if (lastSelectedPresetId(agent.session) === targetPresetId) {
         await applyAgentPtcModeBestEffort(agent);
-        return { applied: true };
+        return { applied: true, preset: targetPresetId };
       }
-      const preset = await presets.recompose(agent.ctx, AGENT_TAVERN_IM_PRESET_ID);
-      if (preset.id !== AGENT_TAVERN_IM_PRESET_ID) {
-        return { applied: false, reason: `the host selected preset '${preset.id}' instead of AgentTavernIM` };
+      const preset = await presets.recompose(agent.ctx, targetPresetId);
+      if (preset.id !== targetPresetId) {
+        return { applied: false, reason: `the host selected preset '${preset.id}' instead of '${targetPresetId}'` };
       }
       const session = agent.session;
       if (typeof session.append !== "function") {
@@ -61804,14 +61830,14 @@ function createImRuntime(ctx, options) {
       const confirmed = confirmSessionAppend({
         session: agent.session,
         logger,
-        label: `AgentTavernIM preset marker (${sessionId})`,
+        label: `IM preset marker (${sessionId} -> ${targetPresetId})`,
         append: () => session.append?.("agent-preset/selected", { agentPreset: preset.id }),
         present: () => lastSelectedPresetId(agent.session) === preset.id
       });
-      if (!confirmed) return { applied: false, reason: "the AgentTavernIM preset marker could not be confirmed" };
+      if (!confirmed) return { applied: false, reason: "the IM preset marker could not be confirmed" };
       await applyAgentPtcModeBestEffort(agent);
-      imLog.note("info", `im bind: switched ${sessionId} to ${AGENT_TAVERN_IM_PRESET_ID}`);
-      return { applied: true };
+      imLog.note("info", `im bind: switched ${sessionId} to ${targetPresetId}`);
+      return { applied: true, preset: targetPresetId };
     } catch (error) {
       return { applied: false, reason: messageOf19(error) };
     }
@@ -61842,14 +61868,15 @@ function createImRuntime(ctx, options) {
       const sessionId = agent.session?.id ?? agent.id;
       if (typeof sessionId !== "string" || !bound.has(sessionId)) continue;
       await applyPresetToAgent(agent).then((result) => notePresetResult(sessionId, result)).catch((error) => {
-        logger?.warn?.(`dsh-soulmojito im: switching ${sessionId} to AgentTavernIM failed: ${messageOf19(error)}`);
+        logger?.warn?.(`dsh-soulmojito im: switching ${sessionId} to its IM preset failed: ${messageOf19(error)}`);
       });
     }
   }
   function notePresetResult(sessionId, result) {
     if (result.applied) return;
     const reason = result.reason ?? "unknown reason";
-    const text = `im preset: ${sessionId} was not switched to ${AGENT_TAVERN_IM_PRESET_ID}: ${reason}`;
+    const target = result.preset ?? "its IM preset";
+    const text = `im preset: ${sessionId} was not switched to ${target}: ${reason}`;
     const deferred = reason.includes("running") || reason.includes("not open");
     imLog.note(deferred ? "debug" : "warn", text);
   }
@@ -62591,7 +62618,7 @@ function mountAgentCreated(ctx, deps) {
       try {
         await imRuntime.ensurePresetForAgent(agent);
       } catch (error) {
-        ctx.logger?.warn?.(`dsh-soulmojito im: AgentTavernIM preset switch failed: ${error instanceof Error ? error.message : String(error)}`);
+        ctx.logger?.warn?.(`dsh-soulmojito im: IM preset switch failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
     try {
@@ -62675,7 +62702,7 @@ function mountIm(ctx, deps) {
       const runtime = deps.getImRuntime();
       if (runtime?.ensurePresetForAgent === void 0) return;
       void runtime.ensurePresetForAgent(agent).catch((error) => {
-        ctx.logger?.warn?.(`dsh-soulmojito im: AgentTavernIM preset switch failed: ${error instanceof Error ? error.message : String(error)}`);
+        ctx.logger?.warn?.(`dsh-soulmojito im: IM preset switch failed: ${error instanceof Error ? error.message : String(error)}`);
       });
     });
     ctx.on?.("agent/disposed", (payload) => {
@@ -62700,7 +62727,7 @@ function mountIm(ctx, deps) {
       ownedRuntime = createImRuntime(ctx, { db, ...ctx.logger === void 0 ? {} : { logger: ctx.logger } });
       ownedDispose = setImRuntime(ownedRuntime);
       void ownedRuntime.ensurePresets?.().catch((error) => {
-        ctx.logger?.warn?.(`dsh-soulmojito im: AgentTavernIM preset sweep failed: ${error instanceof Error ? error.message : String(error)}`);
+        ctx.logger?.warn?.(`dsh-soulmojito im: IM preset sweep failed: ${error instanceof Error ? error.message : String(error)}`);
       });
     }).catch((error) => {
       ctx.logger?.warn?.(`dsh-soulmojito im: runtime unavailable: ${error instanceof Error ? error.message : String(error)}`);

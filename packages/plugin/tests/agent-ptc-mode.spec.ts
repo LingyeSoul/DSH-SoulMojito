@@ -14,10 +14,18 @@ import { store } from '../src/runtime.js'
 
 const BOUND_AGENT = 'agent-tavern-1'
 const ST_AGENT = 'st-agent-1'
+const IM_STANDARD_AGENT = 'im-standard-1'
 
 interface FakeInjectionCall {
   readonly agentId: string
   readonly deps: readonly string[]
+}
+
+interface FakeAgent {
+  id: string
+  status: string
+  ctx: unknown
+  whenIdle?: () => Promise<unknown>
 }
 
 function makeAgent(
@@ -26,7 +34,7 @@ function makeAgent(
   disposals: string[],
   calls: FakeInjectionCall[],
   whenIdle?: () => Promise<unknown>,
-): { id: string; status: string; ctx: unknown; whenIdle?: () => Promise<unknown> } {
+): FakeAgent {
   return {
     id: agentId,
     status: 'idle',
@@ -111,8 +119,9 @@ describe('agent PTC mode', () => {
   let presentations: string[]
   let disposals: string[]
   let calls: FakeInjectionCall[]
-  let boundAgent: ReturnType<typeof makeAgent>
-  let stAgent: ReturnType<typeof makeAgent>
+  let boundAgent: FakeAgent
+  let stAgent: FakeAgent
+  let imStandardAgent: FakeAgent
 
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'dsh-soulmojito-ptc-'))
@@ -143,12 +152,27 @@ describe('agent PTC mode', () => {
         },
         [ST_AGENT]: { architecture: 'st', character: 'PTC Character', chatId: 'st-chat' },
       },
+      imPeers: {
+        'qq:acct:private:peer-im': {
+          sessionId: IM_STANDARD_AGENT,
+          scope: 'private',
+          boundBy: 'manual',
+          createdAt: new Date(0).toISOString(),
+        },
+        'qq:acct:private:peer-st': {
+          sessionId: ST_AGENT,
+          scope: 'private',
+          boundBy: 'manual',
+          createdAt: new Date(0).toISOString(),
+        },
+      },
     }))
     presentations = []
     disposals = []
     calls = []
     boundAgent = makeAgent(BOUND_AGENT, presentations, disposals, calls)
     stAgent = makeAgent(ST_AGENT, presentations, disposals, calls)
+    imStandardAgent = makeAgent(IM_STANDARD_AGENT, presentations, disposals, calls)
   })
 
   afterAll(async () => {
@@ -167,9 +191,16 @@ describe('agent PTC mode', () => {
     expect(await applyAgentPtcMode(boundAgent as never, undefined)).toBe(false)
     expect(calls).toHaveLength(1)
 
-    // ST runs outside the native AgentLoop and keeps its native surface.
+    // ST runs outside the native AgentLoop and keeps its native surface even
+    // when an IM peer is bound to it.
     expect(await applyAgentPtcMode(stAgent as never, undefined)).toBe(false)
     expect(calls).toHaveLength(1)
+
+    // IM binding is a first-class agent surface: a standard session with no
+    // Tavern architecture binding still receives PTC.
+    expect(await applyAgentPtcMode(imStandardAgent as never, undefined)).toBe(true)
+    expect(calls).toHaveLength(2)
+    expect(presentations).toContain(`${IM_STANDARD_AGENT}:ptc`)
 
     await clearAgentPtcMode(BOUND_AGENT, undefined)
     expect(disposals).toEqual([BOUND_AGENT])
@@ -292,6 +323,25 @@ describe('agent PTC mode', () => {
       makeResponse() as never,
     )).rejects.toThrow('PTC mode is unavailable')
     expect((await db.getState()).agentPtcMode).toBe(false)
+  })
+
+  it('persists the IM native switch even when the host cannot render PTC', async () => {
+    const db = await store()
+    await db.patchState({ imNativeAgentMode: false, agentPtcMode: false })
+    const ctx = {
+      tools: { register: () => {} },
+      get: () => undefined,
+      agents: { list: () => [] },
+    } as unknown as PluginContext
+    const res = makeResponse()
+    await handleStateUpdateRoute(
+      ctx,
+      db,
+      makeRequest({ imNativeAgentMode: true }) as never,
+      res as never,
+    )
+    expect(res.statusCode).toBe(200)
+    expect((await db.getState()).imNativeAgentMode).toBe(true)
   })
 
   it('persists and reconciles through the HTTP state route', async () => {

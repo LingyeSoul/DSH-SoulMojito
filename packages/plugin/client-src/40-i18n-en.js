@@ -10,6 +10,8 @@
       'settings.personaEmpty': 'Default user',
       'settings.nativePersona': 'Use active character in standard DSH Agent chats',
       'settings.nativePreset': 'Use active preset in standard DSH Agent chats',
+      'settings.imNativeAgentMode': 'Give IM mode the full native Agent tool set (AgentTavernIM Native)',
+      'settings.imNativeAgentModeHint': 'IM-bound sessions use AgentTavernIM Native: the standard DSH tools (shell, files, search, jobs, schedules, skills, goals, subagents, todo, web, present) plus Tavern and im_* tools. Replies still go through im_send. This is independent of PTC mode: PTC only changes how the tools are presented (run_code plus SDK), not which tools exist. Shell, file and network tools are powerful; enable it only for agents you trust.',
       'settings.ptcMode': 'Enable PTC mode (AgentTavern / Card Workbench / AgentNovel)',
       'settings.ptcModeHint': 'Presents agent tools through the host-native PTC surface: the model sees run_code and the generated tool SDK. The executor mounts when the switch is written; a running turn keeps its current surface until it goes idle.',
       'settings.ptcModeUnavailable': 'PTC mode is unavailable: {reason}',
@@ -989,7 +991,7 @@
       'body.mutationsDisabledHint': 'IM replies are delivered through im_send; editing, regenerating and candidate switching are disabled.',
       // IM channels (proposal 0024 §6.1, M5). Keys mirror 41-i18n-zh.js exactly.
       'im.hint.title': 'Instant messaging',
-      'im.hint': 'Messages from QQ, WeChat and OneBot 11 are inserted into the DSH session you bind; the agent replies with im_send. Use the AgentTavernIM preset for the bound session so the model follows the IM rules (short, multi-message replies).',
+      'im.hint': 'Messages from QQ, WeChat and OneBot 11 are inserted into the DSH session you bind; the agent replies with im_send. Use the AgentTavernIM or AgentTavernIM Native preset (chosen by the IM native-capability behavior switch) so the model follows the IM rules (short, multi-message replies).',
       'im.disabled': 'IM is disabled on this host (DSH_SOULMOJITO_DISABLE_IM). No channel or route is registered; unset it and restart to use this panel.',
       'im.unavailable': 'IM cannot run on this host: {reasons}',
       'im.tabs.label': 'IM management views',
@@ -1052,9 +1054,9 @@
       'im.peers.sharedHint': 'senders on this session see the turns of others.',
       'im.peers.rebindCurrent': 'Rebind to current session',
       'im.peers.noCurrentSession': 'Open the DSH session you want first; the panel binds to the current session.',
-      'im.peers.presetApplied': 'The session was switched to the AgentTavernIM preset.',
-      'im.peers.presetPending': 'Bound; the session is closed or busy, so the AgentTavernIM preset will switch when it opens or becomes idle.',
-      'im.peers.presetFailed': 'Bound, but the AgentTavernIM preset switch failed: {reason}. Select AgentTavernIM manually in DSH.',
+      'im.peers.presetApplied': 'The session was switched to its IM preset.',
+      'im.peers.presetPending': 'Bound; the session is closed or busy, so its IM preset will switch when it opens or becomes idle.',
+      'im.peers.presetFailed': 'Bound, but the IM preset switch failed: {reason}. Select AgentTavernIM or AgentTavernIM Native manually in DSH.',
       'im.peers.unbind': 'Unbind',
       'im.peers.unbindConfirm': 'Unbind {peer}? The session is kept.',
       'im.pending.title': 'Unbound senders',
@@ -1120,4 +1122,4 @@
       'im.behavior.throttleUntil': 'Cooling down until {at}',
       'im.behavior.queueDepth': '{count} queued',
       'im.behavior.invalidInterval': 'The interval must be an integer between {min} and {max} ms',
-    }
+    }

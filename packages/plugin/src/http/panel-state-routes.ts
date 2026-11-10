@@ -10,6 +10,7 @@ import { buildModelCatalog, refreshActivePrompt } from '../model-catalog.js'
 import { compactionOverrideOf } from '../prompt-context.js'
 import { activeCharacterPatch } from '../session/active-character.js'
 import { assertAgentTavernAvailable } from '../session/binding.js'
+import { getImRuntime } from '../runtime.js'
 import { readJson, sendJson, type HttpRequest, type HttpResponse } from './io.js'
 import { asRecord } from './json-records.js'
 
@@ -106,6 +107,9 @@ export async function handleStateUpdateRoute(
     ...(typeof body.nativeAgentPreset === 'boolean' ? { nativeAgentPreset: body.nativeAgentPreset } : {}),
     // Native PTC presentation for bound Tavern agents; reconciled live below.
     ...(typeof body.agentPtcMode === 'boolean' ? { agentPtcMode: body.agentPtcMode } : {}),
+    // IM 绑定会话的目标预设（Tavern-only vs 原生全能力）；写后按会话重选预设，
+    // 运行中的会话等 idle 后由既有重试点收敛。
+    ...(typeof body.imNativeAgentMode === 'boolean' ? { imNativeAgentMode: body.imNativeAgentMode } : {}),
     ...(requestedDefaultArchitecture !== undefined ? { defaultArchitecture: requestedDefaultArchitecture } : {}),
     ...(requestedDefaultContextMode !== undefined ? { defaultContextMode: requestedDefaultContextMode } : {}),
     ...(typeof body.agentTavernPreloadAssets === 'boolean'
@@ -155,6 +159,20 @@ export async function handleStateUpdateRoute(
   if ('activeCharacter' in patch || 'activePreset' in patch || 'activePersona' in patch
     || 'cardWorkbenchPresetEnabled' in patch || 'agentNovelPresetEnabled' in patch
     || 'nativeAgentPreset' in patch) await emitAgentPresetChanged()
+  if ('imNativeAgentMode' in patch) {
+    try {
+      await getImRuntime()?.ensurePresets?.()
+    } catch (error) {
+      ctx.logger?.warn?.(`dsh-soulmojito im: preset reconcile after state patch failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    // The new preset may change which tools are visible; PTC stays orthogonal and
+    // must attach to IM-bound standard sessions that previously had no scope.
+    try {
+      await refreshAgentPtcMode(ctx)
+    } catch (error) {
+      ctx.logger?.warn?.(`dsh-soulmojito ptc: live reconcile after IM mode patch failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
   if ('agentPtcMode' in patch) {
     try {
       await refreshAgentPtcMode(ctx)

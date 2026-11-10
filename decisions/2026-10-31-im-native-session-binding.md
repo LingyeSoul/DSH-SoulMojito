@@ -85,7 +85,10 @@ IM 工具本身仍由 index bundle 挂到每个 agent 域，所以这个 preset 
 false`，由 index 的 `agent/created` / `agent/status(idle)` 重试。`agent-novel` /
 `card-workbench` / `st` 架构不强行切换（recompose 会拆掉它们自己的工具面），面板
 会显示失败原因，让用户改用 AgentTavernIM 会话。marker 经 `confirmSessionAppend`
-读回确认，避免宿主重启后丢失 preset 身份。
+读回确认，避免宿主重启后丢失 preset 身份。2026-11-10 起目标 preset 由行为设置
+`imNativeAgentMode` 选择：关闭时 `agent-tavern-im`，开启时
+`agent-tavern-im-native`（标准 DSH 工具面），见
+[`2026-11-10-im-native-agent-mode.md`](2026-11-10-im-native-agent-mode.md)。
 
 preset 模块挂载在隔离组合里，Cordis 要求每个服务显式声明 inject；`im-agent` 只读
 `systemPrompt`，因此必须 `export const inject = ['systemPrompt']`。缺这一行时

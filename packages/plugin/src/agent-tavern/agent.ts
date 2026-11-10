@@ -214,6 +214,8 @@ export interface AgentContextLike {
 interface AgentAssemblyLike {
   agent?: { id?: string }
   scope?: unknown
+  /** Host tool set captured for this assembly; PTC SDK rendering narrows it. */
+  toolSet?: unknown
 }
 
 interface LlmCallConfigLike {

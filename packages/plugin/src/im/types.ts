@@ -35,6 +35,14 @@ export type ImChannelId = 'qq' | 'weixin' | 'onebot'
 /** AgentTavernIM preset id declared by `cordis.patch.yml` (`preset-agent-tavern-im`). */
 export const AGENT_TAVERN_IM_PRESET_ID = 'agent-tavern-im'
 
+/**
+ * Full-native sibling preset (`preset-agent-tavern-im-native`): the same IM
+ * prompt and Tavern tool surface plus the standard DSH tool rows (shell, files,
+ * search, jobs, schedules, skills, goals, subagents, todo, web, present).
+ * Selected when `state.imNativeAgentMode === true`.
+ */
+export const AGENT_TAVERN_IM_NATIVE_PRESET_ID = 'agent-tavern-im-native'
+
 export type ImMediaKind = 'image' | 'voice' | 'video' | 'file'
 
 export interface ImMediaRef {

@@ -283,6 +283,15 @@
               onChange: (event) => applyPatch({ nativeAgentPreset: event.target.checked }),
             }),
             h('span', null, t('settings.nativePreset'))),
+          // IM 绑定会话的完整原生 Agent 工具面：与 PTC 呈现正交，两者可同时开。
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: bootstrap.state.imNativeAgentMode === true,
+              onChange: (event) => applyPatch({ imNativeAgentMode: event.target.checked }),
+            }),
+            h('span', null, t('settings.imNativeAgentMode'))),
+          h('p', { className: 'dt-hint' }, t('settings.imNativeAgentModeHint')),
           // Native PTC presentation for every bound Tavern agent architecture.
           h('label', { className: 'dt-toggle' },
             h('input', {
@@ -497,4 +506,5 @@
         snapshot?.error ? h('p', { className: 'dt-hint' }, t('update.remoteError', { error: snapshot.error })) : null,
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
+
 

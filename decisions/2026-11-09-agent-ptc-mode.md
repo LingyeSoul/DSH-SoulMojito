@@ -11,7 +11,7 @@ PTC 是 DSH 原生工具面，不是另一套模型或预设内容：模型只�
 ## 决策
 
 - **开关键**：`state.json` 的 `agentPtcMode?: boolean`，缺省关闭，读取一律 `=== true`。与 `nativeAgentPersona` / `nativeAgentPreset` 同款可选键，不进 `DEFAULT_STATE`，`...rest` 透传。
-- **作用范围**：绑定的 `agent-tavern`（含 `agent-tavern-im`）、`agent-novel`、`card-workbench` 会话。`st` 不跑原生 AgentLoop；`agent-reasoning` 是内部受限子代理，保持原生工具面。
+- **作用范围**：绑定的 `agent-tavern`（含 `agent-tavern-im`）、`agent-novel`、`card-workbench` 会话，以及任何被 IM peer 绑定的原生会话（标准 DSH 会话没有 `sessionBindings`，但仍是 AgentLoop 面）。`st` 不跑原生 AgentLoop；`agent-reasoning` 是内部受限子代理，保持原生工具面。IM 绑定会话的纳入见 `decisions/2026-11-10-im-native-agent-mode.md`。
 - **落点**：`packages/bind/src/ptc.ts` 拥有宿主 seam 探测、executor 模块装载、按 agent scope 挂载/卸载和 native 回退；`packages/plugin/src/agent-ptc-mode.ts` 只拥有行为开关、绑定架构、idle 调度和日志。
 - **两条宿主线**：0.2.1 走 `ctx.inject(['tools', 'ptcRuntime'])` 后 `tools.presentAs('ptc')`；0.2.2+ 通过 `importHostPackage('@deepseek-ai/dsh-tool-executor-ptc')` 从宿主安装锚点装载同一模块，再由 `ctx.plugin(module)` 在 agent scope 调 `tools.setExecutor()`。executor 的 `setExecutor` disposer 只清空当前记录的 `executor`，不会删除 scope 记录；bind 在卸载后删除本插件拥有的记录，让选择回落到部署默认 native executor，避免 scope 变成 unavailable。
 - **生命周期**：`agent/created`（宿主串行且 loop start 前 await）立即声明；三条绑定命令（AgentTavern / AgentNovel / CardWorkbench）与 IM preset 切换在绑定落盘后补声明；`agent/status(idle)` 与 `agent/disposed` 做对账；插件启动对 live 空闲 agent 做一次 `refreshAgentPtcMode`；状态路由写入后同样对账，并等待空闲 agent 的 `setExecutor` 完成后再返回。运行中的会话不中途翻转工具面：状态路由遇到 `running` 时先 `agent.whenIdle()` 排队，idle 后再对账，避免「状态写入晚于 turn start」时丢掉 idle 事件；关闭开关会卸载 executor/呈现层并恢复 native。`tools.resolve` 在 `agent/pre-step` 之前执行，所以任何插件（包括 preset 切换）都无法改写已经装配中的请求；能保证的是挂载立即完成、下一步骤装配立即反映。

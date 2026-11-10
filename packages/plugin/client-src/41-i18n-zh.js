@@ -9,6 +9,8 @@
       'settings.personaEmpty': '默认用户',
       'settings.nativePersona': '在标准 DSH Agent 会话中使用当前角色',
       'settings.nativePreset': '在标准 DSH Agent 会话中使用当前预设',
+      'settings.imNativeAgentMode': 'IM 模式解锁原生 Agent 全能力（AgentTavernIM Native）',
+      'settings.imNativeAgentModeHint': 'IM 绑定会话改用 AgentTavernIM Native：在酒馆工具与 im_* 工具之外，挂载标准 DSH 工具（shell、文件、搜索、任务、定时、技能、目标、子代理、待办、网页、present）。回复仍必须走 im_send。本开关与 PTC 模式正交：PTC 只改变工具呈现方式（run_code + SDK），不改变工具集合。shell、文件写入与联网能力较强，只对信任的会话开启。',
       'settings.ptcMode': '启用 PTC 模式（AgentTavern / 写卡工作台 / AgentNovel）',
       'settings.ptcModeHint': 'Agent 工具改用宿主原生 PTC 呈现：模型只看到 run_code 与生成的工具 SDK。开关写入时立即挂载执行器；运行中的回合保持当前工具面，空闲后再切换。',
       'settings.ptcModeUnavailable': 'PTC 模式不可用：{reason}',
@@ -973,7 +975,7 @@
       'body.mutationsDisabledHint': 'IM 会话的回复通过 im_send 送达，不能编辑、重新生成或切换候选。',
       // IM 通道（提案 0024 §6.1，M5）：键集与 40-i18n-en.js 严格镜像。
       'im.hint.title': '即时通讯',
-      'im.hint': 'QQ、微信与 OneBot 11 的消息会插进你绑定的 DSH 会话，由模型调用 im_send 回复。绑定会话建议使用 AgentTavernIM 预设，模型才会按 IM 规则用短句、多条消息回复。',
+      'im.hint': 'QQ、微信与 OneBot 11 的消息会插进你绑定的 DSH 会话，由模型调用 im_send 回复。绑定会话使用 AgentTavernIM 或 AgentTavernIM Native 预设（由行为设置「IM 模式解锁原生 Agent 全能力」选择），模型才会按 IM 规则用短句、多条消息回复。',
       'im.disabled': '本宿主已关闭 IM（DSH_SOULMOJITO_DISABLE_IM）。通道与路由都没有注册；取消该环境变量并重启后才能使用本面板。',
       'im.unavailable': '本宿主无法运行 IM：{reasons}',
       'im.tabs.label': 'IM 管理视图',
@@ -1036,9 +1038,9 @@
       'im.peers.sharedHint': '这条会话上的对端互相看得到对方的回合。',
       'im.peers.rebindCurrent': '改绑到当前会话',
       'im.peers.noCurrentSession': '请先打开一个 DSH 会话；面板按「当前会话」绑定。',
-      'im.peers.presetApplied': '已把该会话切换到 AgentTavernIM 预设。',
-      'im.peers.presetPending': '已绑定；会话未打开或正在运行，打开/空闲后会自动切换 AgentTavernIM。',
-      'im.peers.presetFailed': '已绑定，但切换 AgentTavernIM 失败：{reason}。请在 DSH 里手动选择 AgentTavernIM。',
+      'im.peers.presetApplied': '已把该会话切换到 IM 预设。',
+      'im.peers.presetPending': '已绑定；会话未打开或正在运行，打开/空闲后会自动切换 IM 预设。',
+      'im.peers.presetFailed': '已绑定，但切换 IM 预设失败：{reason}。请在 DSH 里手动选择 AgentTavernIM 或 AgentTavernIM Native。',
       'im.peers.unbind': '解绑',
       'im.peers.unbindConfirm': '解绑 {peer}？会话保留。',
       'im.pending.title': '未绑定对端',
@@ -1104,4 +1106,4 @@
       'im.behavior.throttleUntil': '冷却至 {at}',
       'im.behavior.queueDepth': '队列 {count} 条',
       'im.behavior.invalidInterval': '间隔必须是 {min}–{max} 之间的整数毫秒',
-    }
+    }

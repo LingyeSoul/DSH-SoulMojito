@@ -55,7 +55,7 @@ import {
   type ImSessionCapabilities,
 } from './session-host.js'
 import type { ImAccountRef, ImBindStatus, ImChannel, ImChannelId, ImChannelView, ImTarget } from './types.js'
-import { AGENT_TAVERN_IM_PRESET_ID, DEFAULT_IM_SETTINGS, imAccountKey, imPeerKey, imPeerKeyParts } from './types.js'
+import { AGENT_TAVERN_IM_NATIVE_PRESET_ID, AGENT_TAVERN_IM_PRESET_ID, DEFAULT_IM_SETTINGS, imAccountKey, imPeerKey, imPeerKeyParts } from './types.js'
 import { ImStore } from './store.js'
 
 export type ImRuntime = ImRuntimeHandle
@@ -125,7 +125,8 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
   })
 
   /**
-   * 绑定会话时把 preset 切到 AgentTavernIM（决策 2026-10-31-im-native-session-binding）。
+   * 绑定会话时把 preset 切到当前 IM 预设（决策 2026-10-31-im-native-session-binding；
+   * 目标由行为设置 imNativeAgentMode 选择）。
    *
    * - 只切 AgentLoop 会话；`agent-novel` / `card-workbench` / `st` 有各自的架构，
    *   强行 recompose 会把它们的工具面拆掉，直接拒绝并在面板说明。
@@ -155,26 +156,29 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       const header = agent.session?.header as { origin?: unknown; delegationDepth?: unknown } | undefined
       if (header?.origin === 'subagent'
         || (typeof header?.delegationDepth === 'number' && header.delegationDepth > 0)) {
-        return { applied: false, reason: 'subagent sessions cannot be switched to AgentTavernIM' }
+        return { applied: false, reason: 'subagent sessions cannot be switched to the IM presets' }
       }
       const state = await db.getState()
+      const targetPresetId = state.imNativeAgentMode === true
+        ? AGENT_TAVERN_IM_NATIVE_PRESET_ID
+        : AGENT_TAVERN_IM_PRESET_ID
       const architecture = state.sessionBindings[sessionId]?.architecture
       if (architecture === 'agent-novel' || architecture === 'card-workbench' || architecture === 'st') {
         return {
           applied: false,
-          reason: `session architecture '${architecture}' cannot be switched to AgentTavernIM`,
+          reason: `session architecture '${architecture}' cannot be switched to the IM presets`,
         }
       }
       if (agent.status === 'running') {
         return { applied: false, reason: 'the session is running; the preset will switch when it becomes idle' }
       }
-      if (lastSelectedPresetId(agent.session) === AGENT_TAVERN_IM_PRESET_ID) {
+      if (lastSelectedPresetId(agent.session) === targetPresetId) {
         await applyAgentPtcModeBestEffort(agent)
-        return { applied: true }
+        return { applied: true, preset: targetPresetId }
       }
-      const preset = await presets.recompose(agent.ctx, AGENT_TAVERN_IM_PRESET_ID)
-      if (preset.id !== AGENT_TAVERN_IM_PRESET_ID) {
-        return { applied: false, reason: `the host selected preset '${preset.id}' instead of AgentTavernIM` }
+      const preset = await presets.recompose(agent.ctx, targetPresetId)
+      if (preset.id !== targetPresetId) {
+        return { applied: false, reason: `the host selected preset '${preset.id}' instead of '${targetPresetId}'` }
       }
       const session = agent.session as { append?: (type: string, data: unknown, opts?: unknown) => unknown }
       if (typeof session.append !== 'function') {
@@ -183,14 +187,14 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       const confirmed = confirmSessionAppend({
         session: agent.session,
         logger,
-        label: `AgentTavernIM preset marker (${sessionId})`,
+        label: `IM preset marker (${sessionId} -> ${targetPresetId})`,
         append: () => session.append?.('agent-preset/selected', { agentPreset: preset.id }),
         present: () => lastSelectedPresetId(agent.session) === preset.id,
       })
-      if (!confirmed) return { applied: false, reason: 'the AgentTavernIM preset marker could not be confirmed' }
+      if (!confirmed) return { applied: false, reason: 'the IM preset marker could not be confirmed' }
       await applyAgentPtcModeBestEffort(agent)
-      imLog.note('info', `im bind: switched ${sessionId} to ${AGENT_TAVERN_IM_PRESET_ID}`)
-      return { applied: true }
+      imLog.note('info', `im bind: switched ${sessionId} to ${targetPresetId}`)
+      return { applied: true, preset: targetPresetId }
     } catch (error) {
       return { applied: false, reason: messageOf(error) }
     }
@@ -226,7 +230,7 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
       await applyPresetToAgent(agent)
         .then((result) => notePresetResult(sessionId, result))
         .catch((error: unknown) => {
-          logger?.warn?.(`dsh-soulmojito im: switching ${sessionId} to AgentTavernIM failed: ${messageOf(error)}`)
+          logger?.warn?.(`dsh-soulmojito im: switching ${sessionId} to its IM preset failed: ${messageOf(error)}`)
         })
     }
   }
@@ -239,7 +243,8 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
   function notePresetResult(sessionId: string, result: ImPresetSwitchResult): void {
     if (result.applied) return
     const reason = result.reason ?? 'unknown reason'
-    const text = `im preset: ${sessionId} was not switched to ${AGENT_TAVERN_IM_PRESET_ID}: ${reason}`
+    const target = result.preset ?? 'its IM preset'
+    const text = `im preset: ${sessionId} was not switched to ${target}: ${reason}`
     const deferred = reason.includes('running') || reason.includes('not open')
     imLog.note(deferred ? 'debug' : 'warn', text)
   }

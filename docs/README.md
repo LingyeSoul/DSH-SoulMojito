@@ -96,6 +96,7 @@
 - [`2026-10-08-protected-surface-head.md`](../decisions/2026-10-08-protected-surface-head.md) — v4 受保护 surface 头：导入防写 + 存量修复
 - [`2026-10-11-confirmable-session-writes.md`](../decisions/2026-10-11-confirmable-session-writes.md) — D-2 Confirmable Session Writes：宿主侧「必须成立」写入的读回验证
 - [`2026-10-18-dsh-021-rc2-compat.md`](../decisions/2026-10-18-dsh-021-rc2-compat.md) — DSH 0.2.1-rc.2 深度适配：bind 全 seam 审计、子代理双 API、无工具推理 preset、client 原子表与 JSONL 持久化装载
+- [`2026-11-10-dsh-022-rc1-verification-runtime.md`](../decisions/2026-11-10-dsh-022-rc1-verification-runtime.md) — 验证 runtime 升级到 DSH 0.2.2-rc.1：ToolsService/ToolExecutor 重构审计、全量基线复核与版本口径同步
 
 ### AgentTavern 与预设投影
 
@@ -121,6 +122,7 @@
 - [`2026-10-30-body-review-fix-round-2.md`](../decisions/2026-10-30-body-review-fix-round-2.md) — AgentTavern 正文审查第二轮修复：并发写归因、恢复时序、checkpoint 版本与出网净化
 - [`2026-11-01-native-agent-preset.md`](../decisions/2026-11-01-native-agent-preset.md) — 标准 DSH Agent 会话接入激活预设投影（行为设置开关）
 - [`2026-11-09-agent-ptc-mode.md`](../decisions/2026-11-09-agent-ptc-mode.md) — 行为设置「启用 PTC 模式」：绑定 Tavern Agent 使用宿主原生 `run_code` + SDK 呈现，complete 段镜像 PTC 说明
+- [`2026-11-10-im-native-agent-mode.md`](../decisions/2026-11-10-im-native-agent-mode.md) — 行为设置「IM 模式解锁原生 Agent 全能力」：IM 绑定会话切到 `agent-tavern-im-native`，与 PTC 呈现正交
 - [`2026-11-02-agent-prompt-takeover.md`](../decisions/2026-11-02-agent-prompt-takeover.md) — AgentTavern 接管整份 system prompt（complete 段）
 - [`2026-11-02-agent-identity-system-prompt.md`](../decisions/2026-11-02-agent-identity-system-prompt.md) — 用户人设与角色摘要改为 complete 段的 system 部件（不再作为 runtime-context user 消息）
 

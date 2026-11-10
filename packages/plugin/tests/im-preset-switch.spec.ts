@@ -94,7 +94,7 @@ describe('IM binding switches the session to AgentTavernIM', () => {
     const runtime = createImRuntime(contextOf(fake), { db })
     try {
       const result = await runtime.applyImPreset?.('session-a')
-      expect(result).toEqual({ applied: true })
+      expect(result).toEqual({ applied: true, preset: 'agent-tavern-im' })
       expect(fake.recomposed).toEqual(['agent-tavern-im'])
       expect(fake.events).toContainEqual({
         type: 'agent-preset/selected',
@@ -138,8 +138,42 @@ describe('IM binding switches the session to AgentTavernIM', () => {
     const fake = fakeAgent({ initialPreset: 'agent-tavern-im' })
     const runtime = createImRuntime(contextOf(fake), { db })
     try {
-      expect(await runtime.applyImPreset?.('session-a')).toEqual({ applied: true })
+      expect(await runtime.applyImPreset?.('session-a')).toEqual({ applied: true, preset: 'agent-tavern-im' })
       expect(fake.recomposed).toEqual([])
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  it('uses the full-native preset when imNativeAgentMode is on', async () => {
+    await bindPeer()
+    await db.patchState({ imNativeAgentMode: true })
+    const fake = fakeAgent()
+    const runtime = createImRuntime(contextOf(fake), { db })
+    try {
+      expect(await runtime.applyImPreset?.('session-a')).toEqual({ applied: true, preset: 'agent-tavern-im-native' })
+      expect(fake.recomposed).toEqual(['agent-tavern-im-native'])
+      expect(fake.events).toContainEqual({
+        type: 'agent-preset/selected',
+        data: { agentPreset: 'agent-tavern-im-native' },
+      })
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
+  it('switches back to the Tavern-only preset when the native switch is turned off', async () => {
+    await bindPeer()
+    await db.patchState({ imNativeAgentMode: false })
+    const fake = fakeAgent({ initialPreset: 'agent-tavern-im-native' })
+    const runtime = createImRuntime(contextOf(fake), { db })
+    try {
+      expect(await runtime.ensurePresetForAgent?.(fake.agent)).toEqual({ applied: true, preset: 'agent-tavern-im' })
+      expect(fake.recomposed).toEqual(['agent-tavern-im'])
+      expect(fake.events).toContainEqual({
+        type: 'agent-preset/selected',
+        data: { agentPreset: 'agent-tavern-im' },
+      })
     } finally {
       await runtime.dispose()
     }

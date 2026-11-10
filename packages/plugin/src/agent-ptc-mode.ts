@@ -1,6 +1,6 @@
 /**
- * Behavior switch `agentPtcMode`: let bound Tavern agents use the host's native
- * PTC surface.
+ * Behavior switch `agentPtcMode`: let bound Tavern agents and IM-bound native
+ * sessions use the host's native PTC surface.
  *
  * The plugin owns the product decision only: which architectures participate,
  * the persisted switch, bindings, idle-safe scheduling, and logging. All DSH
@@ -10,6 +10,7 @@
  */
 
 import type { HostAgentLike, PluginContext } from './host-contract.js'
+import type { TavernState } from '../../tavern-store/src/index.js'
 import {
   describePtcSelection,
   inspectPtcCapabilities,
@@ -31,6 +32,19 @@ interface AgentStatusPayload {
   status?: unknown
 }
 
+/**
+ * The agent shape PTC actually needs. Command/novel adapters carry a session
+ * whose `id` is optional but always expose a top-level `id`; requiring the full
+ * `HostAgentLike.session.id` here would reject valid agent handles.
+ */
+export interface PtcAgentLike {
+  id?: string
+  session?: { id?: string }
+  ctx?: unknown
+  status?: unknown
+  whenIdle?(): Promise<unknown>
+}
+
 const mountedByAgent = new Map<string, PtcMount>()
 const lastApplyErrorByAgent = new Map<string, string>()
 const idleReconciles = new Set<string>()
@@ -39,7 +53,7 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-function agentIdOf(agent: HostAgentLike | undefined): string | undefined {
+function agentIdOf(agent: PtcAgentLike | undefined): string | undefined {
   const id = agent?.id
   if (typeof id === 'string' && id.trim() !== '') return id
   const sessionId = agent?.session?.id
@@ -52,7 +66,27 @@ function isTavernAgentArchitecture(architecture: unknown): boolean {
     || architecture === 'card-workbench'
 }
 
-function hostContextOf(agent: HostAgentLike): PtcHostContext | undefined {
+type PtcScopeState = Pick<TavernState, 'sessionBindings' | 'imPeers'>
+
+/** True when any IM peer binds the given native session. */
+function isImBoundSession(state: PtcScopeState, sessionId: string): boolean {
+  return Object.values(state.imPeers ?? {}).some((binding) => binding?.sessionId === sessionId)
+}
+
+/**
+ * PTC scope: the three Tavern architectures plus any IM-bound AgentLoop
+ * session. IM binding is a first-class agent surface even when the session has
+ * no Tavern architecture binding (a standard DSH session), so `agentPtcMode`
+ * must not depend on `sessionBindings` alone. ST stays out: it does not run the
+ * native AgentLoop.
+ */
+function isPtcScope(state: PtcScopeState, agentId: string): boolean {
+  const architecture = state.sessionBindings[agentId]?.architecture
+  if (architecture === 'st') return false
+  return isTavernAgentArchitecture(architecture) || isImBoundSession(state, agentId)
+}
+
+function hostContextOf(agent: PtcAgentLike): PtcHostContext | undefined {
   return agent.ctx as PtcHostContext | undefined
 }
 
@@ -65,7 +99,7 @@ export function agentPtcCapabilitiesForHost(ctx: PluginContext): Promise<PtcHost
   return inspectPtcCapabilitiesAsync(ctx as unknown as PtcHostContext)
 }
 
-/** One bound Tavern agent's live PTC state, surfaced by bootstrap diagnostics. */
+/** One in-scope agent's live PTC state, surfaced by bootstrap diagnostics. */
 export interface AgentPtcRuntimeEntry {
   readonly agentId: string
   readonly status: string | undefined
@@ -86,14 +120,14 @@ export interface AgentPtcRuntimeEntry {
  */
 export function inspectAgentPtcRuntime(
   ctx: PluginContext,
-  bindings: Readonly<Record<string, { architecture?: string } | undefined>>,
+  state: PtcScopeState,
 ): readonly AgentPtcRuntimeEntry[] {
   const entries: AgentPtcRuntimeEntry[] = []
   for (const agent of listLiveAgents(ctx.agents)) {
     const agentId = agentIdOf(agent)
     if (agentId === undefined) continue
-    const architecture = bindings[agentId]?.architecture
-    if (!isTavernAgentArchitecture(architecture)) continue
+    const architecture = state.sessionBindings[agentId]?.architecture
+    if (!isPtcScope(state, agentId)) continue
     const status = typeof agent.status === 'string' ? agent.status : undefined
     const mounted = mountedByAgent.has(agentId)
     try {
@@ -138,7 +172,7 @@ export function inspectAgentPtcRuntime(
  * a bound Tavern architecture. Returns whether this call created a mount.
  */
 export async function applyAgentPtcMode(
-  agent: HostAgentLike,
+  agent: PtcAgentLike,
   logger: PtcLogger | undefined,
 ): Promise<boolean> {
   const agentId = agentIdOf(agent)
@@ -162,7 +196,7 @@ export async function applyAgentPtcMode(
   const db = await store()
   const state = await db.getState()
   if (state.agentPtcMode !== true) return false
-  if (!isTavernAgentArchitecture(state.sessionBindings[agentId]?.architecture)) return false
+  if (!isPtcScope(state, agentId)) return false
   // A preset may already provide PTC at its own scope. Never shadow it: its
   // config and lifetime belong to the preset, and disposing our record must not
   // make the preset's executor unavailable. Adopting it also means switch-off
@@ -211,7 +245,7 @@ export async function clearAllAgentPtcModes(logger: PtcLogger | undefined): Prom
  * the wire surface never changes in the middle of a turn; the idle watch calls
  * this again once the turn settles.
  */
-async function reconcileAgentPtcMode(agent: HostAgentLike, logger: PtcLogger | undefined): Promise<void> {
+async function reconcileAgentPtcMode(agent: PtcAgentLike, logger: PtcLogger | undefined): Promise<void> {
   if (agent.status === 'running') {
     scheduleAgentPtcReconcileWhenIdle(agent, logger)
     return
@@ -219,7 +253,7 @@ async function reconcileAgentPtcMode(agent: HostAgentLike, logger: PtcLogger | u
   const agentId = agentIdOf(agent)
   if (agentId === undefined) return
   const state = await (await store()).getState()
-  if (state.agentPtcMode === true && isTavernAgentArchitecture(state.sessionBindings[agentId]?.architecture)) {
+  if (state.agentPtcMode === true && isPtcScope(state, agentId)) {
     await applyAgentPtcMode(agent, logger)
     return
   }
@@ -232,7 +266,7 @@ async function reconcileAgentPtcMode(agent: HostAgentLike, logger: PtcLogger | u
  * (restored sessions, a state write racing session startup, or a host that
  * coalesces status notifications).
  */
-function scheduleAgentPtcReconcileWhenIdle(agent: HostAgentLike, logger: PtcLogger | undefined): void {
+function scheduleAgentPtcReconcileWhenIdle(agent: PtcAgentLike, logger: PtcLogger | undefined): void {
   const agentId = agentIdOf(agent)
   if (agentId === undefined || idleReconciles.has(agentId)) return
   if (typeof agent.whenIdle !== 'function') return

@@ -129,6 +129,13 @@ export interface TavernState {
    * internal reasoning subagent. Defaults to off; every read uses `=== true`.
    */
   agentPtcMode?: boolean
+  /**
+   * IM 模式解锁原生 Agent 全能力：绑定会话改用 `agent-tavern-im-native`
+   * 预设（标准 DSH 工具行 + AgentTavern + IM 回复规则），关闭时维持
+   * `agent-tavern-im` 的 Tavern-only 工具面。默认关闭；读取一律 `=== true`。
+   * 与 `agentPtcMode` 正交：PTC 只决定工具面呈现方式，不改变本开关选择。
+   */
+  imNativeAgentMode?: boolean
   /** DSH session 到 Tavern 角色/聊天的持久绑定。 */
   sessionBindings: Record<string, TavernSessionBinding>
   /** 新建会话的架构默认值；不影响已有 binding。 */

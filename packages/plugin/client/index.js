@@ -6862,6 +6862,8 @@ window.__ModuleLoader__.load({
       'settings.personaEmpty': 'Default user',
       'settings.nativePersona': 'Use active character in standard DSH Agent chats',
       'settings.nativePreset': 'Use active preset in standard DSH Agent chats',
+      'settings.imNativeAgentMode': 'Give IM mode the full native Agent tool set (AgentTavernIM Native)',
+      'settings.imNativeAgentModeHint': 'IM-bound sessions use AgentTavernIM Native: the standard DSH tools (shell, files, search, jobs, schedules, skills, goals, subagents, todo, web, present) plus Tavern and im_* tools. Replies still go through im_send. This is independent of PTC mode: PTC only changes how the tools are presented (run_code plus SDK), not which tools exist. Shell, file and network tools are powerful; enable it only for agents you trust.',
       'settings.ptcMode': 'Enable PTC mode (AgentTavern / Card Workbench / AgentNovel)',
       'settings.ptcModeHint': 'Presents agent tools through the host-native PTC surface: the model sees run_code and the generated tool SDK. The executor mounts when the switch is written; a running turn keeps its current surface until it goes idle.',
       'settings.ptcModeUnavailable': 'PTC mode is unavailable: {reason}',
@@ -7841,7 +7843,7 @@ window.__ModuleLoader__.load({
       'body.mutationsDisabledHint': 'IM replies are delivered through im_send; editing, regenerating and candidate switching are disabled.',
       // IM channels (proposal 0024 §6.1, M5). Keys mirror 41-i18n-zh.js exactly.
       'im.hint.title': 'Instant messaging',
-      'im.hint': 'Messages from QQ, WeChat and OneBot 11 are inserted into the DSH session you bind; the agent replies with im_send. Use the AgentTavernIM preset for the bound session so the model follows the IM rules (short, multi-message replies).',
+      'im.hint': 'Messages from QQ, WeChat and OneBot 11 are inserted into the DSH session you bind; the agent replies with im_send. Use the AgentTavernIM or AgentTavernIM Native preset (chosen by the IM native-capability behavior switch) so the model follows the IM rules (short, multi-message replies).',
       'im.disabled': 'IM is disabled on this host (DSH_SOULMOJITO_DISABLE_IM). No channel or route is registered; unset it and restart to use this panel.',
       'im.unavailable': 'IM cannot run on this host: {reasons}',
       'im.tabs.label': 'IM management views',
@@ -7904,9 +7906,9 @@ window.__ModuleLoader__.load({
       'im.peers.sharedHint': 'senders on this session see the turns of others.',
       'im.peers.rebindCurrent': 'Rebind to current session',
       'im.peers.noCurrentSession': 'Open the DSH session you want first; the panel binds to the current session.',
-      'im.peers.presetApplied': 'The session was switched to the AgentTavernIM preset.',
-      'im.peers.presetPending': 'Bound; the session is closed or busy, so the AgentTavernIM preset will switch when it opens or becomes idle.',
-      'im.peers.presetFailed': 'Bound, but the AgentTavernIM preset switch failed: {reason}. Select AgentTavernIM manually in DSH.',
+      'im.peers.presetApplied': 'The session was switched to its IM preset.',
+      'im.peers.presetPending': 'Bound; the session is closed or busy, so its IM preset will switch when it opens or becomes idle.',
+      'im.peers.presetFailed': 'Bound, but the IM preset switch failed: {reason}. Select AgentTavernIM or AgentTavernIM Native manually in DSH.',
       'im.peers.unbind': 'Unbind',
       'im.peers.unbindConfirm': 'Unbind {peer}? The session is kept.',
       'im.pending.title': 'Unbound senders',
@@ -7973,6 +7975,7 @@ window.__ModuleLoader__.load({
       'im.behavior.queueDepth': '{count} queued',
       'im.behavior.invalidInterval': 'The interval must be an integer between {min} and {max} ms',
     }
+
     const MESSAGES_ZH = {
       'settings.subtitle': '角色卡、世界书与预设管理',
       'settings.activeSetup': '当前配置',
@@ -7984,6 +7987,8 @@ window.__ModuleLoader__.load({
       'settings.personaEmpty': '默认用户',
       'settings.nativePersona': '在标准 DSH Agent 会话中使用当前角色',
       'settings.nativePreset': '在标准 DSH Agent 会话中使用当前预设',
+      'settings.imNativeAgentMode': 'IM 模式解锁原生 Agent 全能力（AgentTavernIM Native）',
+      'settings.imNativeAgentModeHint': 'IM 绑定会话改用 AgentTavernIM Native：在酒馆工具与 im_* 工具之外，挂载标准 DSH 工具（shell、文件、搜索、任务、定时、技能、目标、子代理、待办、网页、present）。回复仍必须走 im_send。本开关与 PTC 模式正交：PTC 只改变工具呈现方式（run_code + SDK），不改变工具集合。shell、文件写入与联网能力较强，只对信任的会话开启。',
       'settings.ptcMode': '启用 PTC 模式（AgentTavern / 写卡工作台 / AgentNovel）',
       'settings.ptcModeHint': 'Agent 工具改用宿主原生 PTC 呈现：模型只看到 run_code 与生成的工具 SDK。开关写入时立即挂载执行器；运行中的回合保持当前工具面，空闲后再切换。',
       'settings.ptcModeUnavailable': 'PTC 模式不可用：{reason}',
@@ -8948,7 +8953,7 @@ window.__ModuleLoader__.load({
       'body.mutationsDisabledHint': 'IM 会话的回复通过 im_send 送达，不能编辑、重新生成或切换候选。',
       // IM 通道（提案 0024 §6.1，M5）：键集与 40-i18n-en.js 严格镜像。
       'im.hint.title': '即时通讯',
-      'im.hint': 'QQ、微信与 OneBot 11 的消息会插进你绑定的 DSH 会话，由模型调用 im_send 回复。绑定会话建议使用 AgentTavernIM 预设，模型才会按 IM 规则用短句、多条消息回复。',
+      'im.hint': 'QQ、微信与 OneBot 11 的消息会插进你绑定的 DSH 会话，由模型调用 im_send 回复。绑定会话使用 AgentTavernIM 或 AgentTavernIM Native 预设（由行为设置「IM 模式解锁原生 Agent 全能力」选择），模型才会按 IM 规则用短句、多条消息回复。',
       'im.disabled': '本宿主已关闭 IM（DSH_SOULMOJITO_DISABLE_IM）。通道与路由都没有注册；取消该环境变量并重启后才能使用本面板。',
       'im.unavailable': '本宿主无法运行 IM：{reasons}',
       'im.tabs.label': 'IM 管理视图',
@@ -9011,9 +9016,9 @@ window.__ModuleLoader__.load({
       'im.peers.sharedHint': '这条会话上的对端互相看得到对方的回合。',
       'im.peers.rebindCurrent': '改绑到当前会话',
       'im.peers.noCurrentSession': '请先打开一个 DSH 会话；面板按「当前会话」绑定。',
-      'im.peers.presetApplied': '已把该会话切换到 AgentTavernIM 预设。',
-      'im.peers.presetPending': '已绑定；会话未打开或正在运行，打开/空闲后会自动切换 AgentTavernIM。',
-      'im.peers.presetFailed': '已绑定，但切换 AgentTavernIM 失败：{reason}。请在 DSH 里手动选择 AgentTavernIM。',
+      'im.peers.presetApplied': '已把该会话切换到 IM 预设。',
+      'im.peers.presetPending': '已绑定；会话未打开或正在运行，打开/空闲后会自动切换 IM 预设。',
+      'im.peers.presetFailed': '已绑定，但切换 IM 预设失败：{reason}。请在 DSH 里手动选择 AgentTavernIM 或 AgentTavernIM Native。',
       'im.peers.unbind': '解绑',
       'im.peers.unbindConfirm': '解绑 {peer}？会话保留。',
       'im.pending.title': '未绑定对端',
@@ -9080,6 +9085,7 @@ window.__ModuleLoader__.load({
       'im.behavior.queueDepth': '队列 {count} 条',
       'im.behavior.invalidInterval': '间隔必须是 {min}–{max} 之间的整数毫秒',
     }
+
     // translate follows the host locale service once apply() binds it; the
     // identity fallback mirrors LocaleRuntime.translate (missing key -> key,
     // {param} interpolation) for pre-apply and stubbed environments.
@@ -12371,6 +12377,15 @@ window.__ModuleLoader__.load({
               onChange: (event) => applyPatch({ nativeAgentPreset: event.target.checked }),
             }),
             h('span', null, t('settings.nativePreset'))),
+          // IM 绑定会话的完整原生 Agent 工具面：与 PTC 呈现正交，两者可同时开。
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: bootstrap.state.imNativeAgentMode === true,
+              onChange: (event) => applyPatch({ imNativeAgentMode: event.target.checked }),
+            }),
+            h('span', null, t('settings.imNativeAgentMode'))),
+          h('p', { className: 'dt-hint' }, t('settings.imNativeAgentModeHint')),
           // Native PTC presentation for every bound Tavern agent architecture.
           h('label', { className: 'dt-toggle' },
             h('input', {
@@ -12585,6 +12600,7 @@ window.__ModuleLoader__.load({
         snapshot?.error ? h('p', { className: 'dt-hint' }, t('update.remoteError', { error: snapshot.error })) : null,
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
+
 
     function TavernSettings() {
       const state = useTavernStore()

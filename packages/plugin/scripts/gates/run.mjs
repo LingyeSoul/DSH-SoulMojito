@@ -353,6 +353,7 @@ function checkPatchText(text) {
   for (const [rowId, presetId] of [
     ['preset-agent-tavern', 'agent-tavern'],
     ['preset-agent-tavern-im', 'agent-tavern-im'],
+    ['preset-agent-tavern-im-native', 'agent-tavern-im-native'],
     ['preset-agent-novel', 'agent-novel'],
     ['preset-agent-reasoning', 'agent-reasoning'],
   ]) {
@@ -2575,6 +2576,7 @@ const gates = [
         + '    - id: dsh-soulmojito\n      name: \'dsh-soulmojito\'\n'
         + '    - id: preset-agent-tavern\n      name: \'@deepseek-ai/dsh-agent-preset\'\n      config:\n        id: agent-tavern\n'
         + '    - id: preset-agent-tavern-im\n      name: \'@deepseek-ai/dsh-agent-preset\'\n      config:\n        id: agent-tavern-im\n'
+        + '    - id: preset-agent-tavern-im-native\n      name: \'@deepseek-ai/dsh-agent-preset\'\n      config:\n        id: agent-tavern-im-native\n'
         + '    - id: preset-agent-novel\n      name: \'@deepseek-ai/dsh-agent-preset\'\n      config:\n        id: agent-novel\n'
         + '    - id: preset-agent-reasoning\n      name: \'@deepseek-ai/dsh-agent-preset\'\n      config:\n        id: agent-reasoning\n'
       const bad = "- insert:\n    - id: other\n      name: 'other'\n"
@@ -2591,6 +2593,7 @@ const gates = [
       if (existsSync(SERVER_PATH)) {
         const server = readFileSync(SERVER_PATH, 'utf8')
         if (!server.includes('agent-tavern')) problems.push('built server bundle lost the agent-tavern preset id constant')
+        if (!server.includes('agent-tavern-im-native')) problems.push('built server bundle lost the agent-tavern-im-native preset id constant')
       }
       for (const [path, presetId] of [
         [AGENT_PATH, 'agent-tavern'],

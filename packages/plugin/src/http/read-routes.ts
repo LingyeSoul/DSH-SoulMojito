@@ -92,7 +92,7 @@ export async function handleBootstrapApi(ctx: PluginContext, res: HttpResponse, 
     agentPtc: await agentPtcCapabilitiesForHost(ctx),
     // Live per-agent view: distinguishes a capable host from a session scope
     // that never mounted PTC, and carries the concrete mount error.
-    agentPtcRuntime: inspectAgentPtcRuntime(ctx, state.sessionBindings),
+    agentPtcRuntime: inspectAgentPtcRuntime(ctx, state),
     // 自更新快照：只读缓存结论，检查/安装分别走 update/check 与 update/install，
     // 保证 bootstrap 永远不因网络失败而变慢或报错。
     // Mod 轻量投影（提案 0015 §3.5，P1 真实化）：与 worldEntryCounts 同款服务端

@@ -126,7 +126,7 @@ export interface ImCommandDeps {
   sendNotice: (target: ImTarget, text: string, alias: string) => Promise<void>
   /** 出站节奏投影；缺省时 `/status` 省略发送行而不是编造状态。 */
   sendStatuses?: () => readonly ImSendStatusView[]
-  /** `/bind` 之后的 AgentTavernIM 预设切换；缺省时回执说明「预设未切换」。 */
+  /** `/bind` 之后的 IM 预设切换；缺省时回执说明「预设未切换」。 */
   applyImPreset?: (sessionId: string) => Promise<ImPresetSwitchResult>
   log?: ImLogSink
 }
@@ -378,13 +378,13 @@ async function presetNoteOf(deps: ImCommandDeps, sessionId: string, alias: strin
   if (deps.applyImPreset === undefined) return '预设未切换（运行时未提供切换能力）'
   try {
     const result = await deps.applyImPreset(sessionId)
-    if (result.applied) return '已切换到 AgentTavernIM'
+    if (result.applied) return '已切换 IM 预设'
     const reason = result.reason ?? 'unknown reason'
     if (/running|not open/i.test(reason)) return '预设待切换（会话未打开或正在运行）'
-    deps.log?.note('warn', `switching the bound session to AgentTavernIM for ${alias} failed: ${reason}`)
+    deps.log?.note('warn', `switching the bound session to its IM preset for ${alias} failed: ${reason}`)
     return IM_COMMAND_PRESET_FAILED
   } catch (error) {
-    deps.log?.note('warn', `switching the bound session to AgentTavernIM for ${alias} failed: ${messageOf(error)}`)
+    deps.log?.note('warn', `switching the bound session to its IM preset for ${alias} failed: ${messageOf(error)}`)
     return IM_COMMAND_PRESET_FAILED
   }
 }

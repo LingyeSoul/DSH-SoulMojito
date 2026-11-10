@@ -25,6 +25,8 @@ const BEHAVIOR_I18N_KEYS = [
   'settings.ptcMode',
   'settings.ptcModeHint',
   'settings.ptcModeUnavailable',
+  'settings.imNativeAgentMode',
+  'settings.imNativeAgentModeHint',
 ]
 
 describe('behavior settings section (main.js source check)', () => {
@@ -47,6 +49,7 @@ describe('behavior settings section (main.js source check)', () => {
       'applyPatch({ agentTavernPreloadAssets: event.target.checked })',
       'applyPatch({ nativeAgentPersona: event.target.checked })',
       'applyPatch({ nativeAgentPreset: event.target.checked })',
+      'applyPatch({ imNativeAgentMode: event.target.checked })',
       'applyPatch({ agentPtcMode: event.target.checked })',
       'bootstrap.agentPtc?.available !== true',
       "t('settings.ptcModeUnavailable'",

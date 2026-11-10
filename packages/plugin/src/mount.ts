@@ -130,7 +130,7 @@ export function mountAgentCreated(ctx: PluginContext, deps: MountDeps): void {
       try {
         await imRuntime.ensurePresetForAgent(agent)
       } catch (error) {
-        ctx.logger?.warn?.(`dsh-soulmojito im: AgentTavernIM preset switch failed: ${error instanceof Error ? error.message : String(error)}`)
+        ctx.logger?.warn?.(`dsh-soulmojito im: IM preset switch failed: ${error instanceof Error ? error.message : String(error)}`)
       }
     }
     // PTC presentation is declared on the agent scope before the loop starts.
@@ -241,7 +241,7 @@ export function mountIm(ctx: PluginContext, deps: MountDeps): void {
       const runtime = deps.getImRuntime()
       if (runtime?.ensurePresetForAgent === undefined) return
       void runtime.ensurePresetForAgent(agent).catch((error: unknown) => {
-        ctx.logger?.warn?.(`dsh-soulmojito im: AgentTavernIM preset switch failed: ${error instanceof Error ? error.message : String(error)}`)
+        ctx.logger?.warn?.(`dsh-soulmojito im: IM preset switch failed: ${error instanceof Error ? error.message : String(error)}`)
       })
     })
     ctx.on?.('agent/disposed' as string, (payload: unknown) => {
@@ -269,7 +269,7 @@ export function mountIm(ctx: PluginContext, deps: MountDeps): void {
       ownedDispose = setImRuntime(ownedRuntime)
       // 启动时补一次：插件重启前已绑定、但会话还没重新打开/空闲的 preset 切换。
       void ownedRuntime.ensurePresets?.().catch((error: unknown) => {
-        ctx.logger?.warn?.(`dsh-soulmojito im: AgentTavernIM preset sweep failed: ${error instanceof Error ? error.message : String(error)}`)
+        ctx.logger?.warn?.(`dsh-soulmojito im: IM preset sweep failed: ${error instanceof Error ? error.message : String(error)}`)
       })
     }).catch((error: unknown) => {
       ctx.logger?.warn?.(`dsh-soulmojito im: runtime unavailable: ${error instanceof Error ? error.message : String(error)}`)

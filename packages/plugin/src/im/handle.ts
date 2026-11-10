@@ -35,10 +35,12 @@ export interface ImRouterHandle {
   resolveMessageRef?(ref: string): ImMessageRefEntry | undefined
 }
 
-/** 绑定后切换 AgentTavernIM 预设的结果（面板据此显示已切换/待切换/失败）。 */
+/** 绑定后切换 IM 预设的结果（面板据此显示已切换/待切换/失败）。 */
 export interface ImPresetSwitchResult {
   applied: boolean
   reason?: string
+  /** Target preset picked by `state.imNativeAgentMode` when the switch applied. */
+  preset?: string
 }
 
 /** 运行时契约：工具面、HTTP 面与装配面共用同一份形状。 */
@@ -76,7 +78,7 @@ export interface ImRuntimeHandle {
    */
   isSessionLive?(sessionId: string): boolean
   /**
-   * 把绑定会话切到 AgentTavernIM 预设。会话不在线/正在运行时返回 applied:false，
+   * 把绑定会话切到当前 IM 预设。会话不在线/正在运行时返回 applied:false，
    * 由 `agent/created` 或 `agent/status(idle)` 的自动重试补上。
    */
   applyImPreset?(sessionId: string): Promise<ImPresetSwitchResult>
