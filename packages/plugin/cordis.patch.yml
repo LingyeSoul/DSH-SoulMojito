@@ -39,11 +39,21 @@
             name: 'dsh-soulmojito/im-agent'
 
     # 行为设置 `imNativeAgentMode` 的目标预设：AgentTavernIM 的完整原生
-    # Agent 工具面。下面的工具行与 dsh-web-app/presets/standard.patch.yml
-    # 同款（DSH 0.2.1 线）；persona / agent-instructions / time-context 是纯
-    # prompt section，会被 AgentTavern 的 complete 段丢弃，故不重复声明；
-    # compaction 继续由 profile 级 tavern-compaction 提供，保留 RP 检查点
-    # 摘要。新增标准工具行时同步这里，否则「原生全能力」会悄悄缺件。
+    # Agent 工具面。下面的工具行取自 dsh-web-app/presets/standard.patch.yml
+    # （DSH 0.2.2 线，2026-11-10 对齐）；persona / agent-instructions /
+    # time-context 是纯 prompt section，会被 AgentTavern 的 complete 段丢弃，
+    # 故不重复声明；compaction 继续由 profile 级 tavern-compaction 提供，保留
+    # RP 检查点摘要。新增标准工具行时同步这里，否则「原生全能力」会悄悄缺件。
+    #
+    # 两个踩过的坑（preset 只在会话激活时展开，普通测试跑不到）：
+    # 1. 每个宿主包只声明主入口。`list_agents` 与 `send_message` /
+    #    `interrupt_agent` 由 `@deepseek-ai/dsh-tool-subagent-control` 的 apply
+    #    一起注册；0.2.2 的 exports 表没有 `./list-agents` 子路径，多声明一行
+    #    会让整份 preset 以 ERR_PACKAGE_PATH_NOT_EXPORTED 激活失败，宿主只报
+    #    「tool-subagent-list-agents … never started」。
+    # 2. 子代理模型选择的配置键是 `modelSelection` / `modelDiscovery`（0.2.2
+    #    改名）；写成别的键不会报错，只是静默关掉选路字段。
+    # `pnpm run check` 的 preset-host-rows gate 锁这两条。
     - id: preset-agent-tavern-im-native
       name: '@deepseek-ai/dsh-agent-preset'
       config:
@@ -88,14 +98,13 @@
             config:
               - id: tool-subagent-control
                 name: '@deepseek-ai/dsh-tool-subagent-control'
-              - id: tool-subagent-list-agents
-                name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
               - id: tool-subagent
                 name: '@deepseek-ai/dsh-tool-subagent'
                 config:
                   provider: spawn
                   toolName: subagent
-                  modelSelectionSettings: true
+                  modelSelection: true
+                  modelDiscovery: true
               - id: tool-subagent-fork
                 name: '@deepseek-ai/dsh-tool-subagent'
                 config:

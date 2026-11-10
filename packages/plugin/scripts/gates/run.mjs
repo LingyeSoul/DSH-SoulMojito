@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { createRequire } from 'node:module'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { basename, delimiter, dirname, join, relative, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -365,6 +365,65 @@ function checkPatchText(text) {
     }
   }
   return problems
+}
+
+/**
+ * Host-package subpaths we knowingly mount. Preset rows name a package's main
+ * entry: a subpath missing from that package's `exports` table fails the whole
+ * preset activation as `ERR_PACKAGE_PATH_NOT_EXPORTED`, and the host only
+ * reports `"… never started"` (2026-11-10 AgentTavernIM Native failure).
+ * Add an entry with the export's evidence instead of writing a bare subpath.
+ */
+const HOST_MODULE_SUBPATH_ALLOWLIST = []
+
+/** Patch rows that mount a host package (`@deepseek-ai/<pkg>`), nested rows included. */
+function declaredHostModules(text) {
+  return parsePatchEntries(text)
+    .filter((entry) => typeof entry.name === 'string' && entry.name.startsWith('@deepseek-ai/'))
+}
+
+/** Every declared host module name is a bare package name unless allowlisted. */
+function checkHostModuleSubpaths(modules) {
+  const problems = []
+  for (const entry of modules) {
+    if (entry.name.split('/').length <= 2) continue
+    if (HOST_MODULE_SUBPATH_ALLOWLIST.some((item) => item.name === entry.name)) continue
+    problems.push(
+      `patch row '${entry.id}' mounts host subpath '${entry.name}': host packages mount by main entry here, and a missing exports key fails the whole preset as "never started"`,
+    )
+  }
+  return problems
+}
+
+/** Each declared host package exists in at least one discovered host root. */
+function checkHostModulePackages(modules, packageExists) {
+  const problems = []
+  const seen = new Set()
+  for (const entry of modules) {
+    const spec = entry.name.split('/').slice(0, 2).join('/')
+    if (seen.has(spec)) continue
+    seen.add(spec)
+    if (packageExists(spec)) continue
+    problems.push(`patch row '${entry.id}' mounts '${spec}', which no discovered host installation provides`)
+  }
+  return problems
+}
+
+/**
+ * Candidate `node_modules` roots of the installed host, most specific first.
+ * A DSH profile loads its bundles from the distribution's own dependency root,
+ * so the nested `@deepseek-ai/dsh/node_modules` is the usual hit; the profile
+ * root and the repository's isolated runtime cover the other layouts.
+ */
+function hostModuleRoots() {
+  const roots = []
+  const explicit = process.env.DSH_HOST_ROOT?.trim()
+  if (explicit !== undefined && explicit !== '') roots.push(resolve(explicit))
+  const dshHome = resolve(process.env.DSH_HOME?.trim() || join(homedir(), '.dsh'))
+  roots.push(join(dshHome, 'profiles', 'node_modules', '@deepseek-ai', 'dsh', 'node_modules'))
+  roots.push(join(dshHome, 'profiles', 'node_modules'))
+  roots.push(join(REPO_ROOT, '.npm-cache', 'dsh-runtime', 'node_modules'))
+  return roots
 }
 
 function exportedNames(text) {
@@ -2614,6 +2673,37 @@ const gates = [
         problems.push(`generated ${REASONING_PATH} does not exist`)
       }
       return problems
+    },
+  },
+  {
+    name: 'preset-host-rows',
+    selfTest: () => {
+      const good = '- insert:\n'
+        + "    - id: preset-x\n      name: '@deepseek-ai/dsh-agent-preset'\n      config:\n        id: x\n"
+        + "    - id: tool-fs\n      name: '@deepseek-ai/dsh-tool-fs'\n"
+      const ownPackage = "- insert:\n    - id: dsh-soulmojito\n      name: 'dsh-soulmojito'\n"
+      const subpath = good + "    - id: tool-list-agents\n      name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'\n"
+      const modules = declaredHostModules(good)
+      const found = (spec) => spec === '@deepseek-ai/dsh-agent-preset' || spec === '@deepseek-ai/dsh-tool-fs'
+      return declaredHostModules(subpath).length === 3
+        && checkHostModuleSubpaths(modules).length === 0
+        && checkHostModuleSubpaths(declaredHostModules(ownPackage)).length === 0
+        && checkHostModuleSubpaths(declaredHostModules(subpath)).length === 1
+        && checkHostModulePackages(modules, found).length === 0
+        && checkHostModulePackages(modules, () => false).length === 2
+        ? []
+        : ['preset host rows bad samples were not distinguished from the valid sample']
+    },
+    check: () => {
+      const modules = declaredHostModules(readFileSync(PATCH_PATH, 'utf8'))
+      const roots = hostModuleRoots()
+      const installed = roots.filter((root) => existsSync(join(root, '@deepseek-ai')))
+      if (installed.length === 0) {
+        console.log(`  (no host installation under ${roots.join(', ')}; package existence skipped)`)
+        return checkHostModuleSubpaths(modules)
+      }
+      const packageExists = (spec) => installed.some((root) => existsSync(join(root, spec, 'package.json')))
+      return [...checkHostModuleSubpaths(modules), ...checkHostModulePackages(modules, packageExists)]
     },
   },
   {

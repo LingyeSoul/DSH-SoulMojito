@@ -123,6 +123,7 @@
 - [`2026-11-01-native-agent-preset.md`](../decisions/2026-11-01-native-agent-preset.md) — 标准 DSH Agent 会话接入激活预设投影（行为设置开关）
 - [`2026-11-09-agent-ptc-mode.md`](../decisions/2026-11-09-agent-ptc-mode.md) — 行为设置「启用 PTC 模式」：绑定 Tavern Agent 使用宿主原生 `run_code` + SDK 呈现，complete 段镜像 PTC 说明
 - [`2026-11-10-im-native-agent-mode.md`](../decisions/2026-11-10-im-native-agent-mode.md) — 行为设置「IM 模式解锁原生 Agent 全能力」：IM 绑定会话切到 `agent-tavern-im-native`，与 PTC 呈现正交
+- [`2026-11-10-im-native-preset-host-row-drift.md`](../decisions/2026-11-10-im-native-preset-host-row-drift.md) — AgentTavernIM Native 加载失败：宿主行按 0.2.2 口径重写（去掉已不存在的 `list-agents` 子路径、选路键改名），`preset-host-rows` gate 锁定声明面
 - [`2026-11-02-agent-prompt-takeover.md`](../decisions/2026-11-02-agent-prompt-takeover.md) — AgentTavern 接管整份 system prompt（complete 段）
 - [`2026-11-02-agent-identity-system-prompt.md`](../decisions/2026-11-02-agent-identity-system-prompt.md) — 用户人设与角色摘要改为 complete 段的 system 部件（不再作为 runtime-context user 消息）
 

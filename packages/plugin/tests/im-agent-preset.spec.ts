@@ -41,6 +41,20 @@ describe('AgentTavernIM Native preset composition', () => {
       "'@deepseek-ai/dsh-tool-present'",
     ]) expect(block).toContain(marker)
   })
+
+  it('declares host rows the installed host line actually exports', () => {
+    const start = patch.indexOf('id: preset-agent-tavern-im-native')
+    const end = patch.indexOf('id: preset-agent-novel', start)
+    const block = patch.slice(start, end)
+    // 宿主包只声明主入口：`list_agents` 由 dsh-tool-subagent-control 的 apply
+    // 一起注册，0.2.2 的 exports 表没有 ./list-agents 子路径；多声明一行会让整份
+    // preset 以 ERR_PACKAGE_PATH_NOT_EXPORTED 激活失败（宿主只报 never started）。
+    expect(block).not.toMatch(/'@deepseek-ai\/[^']+\/[^']+'/)
+    // 子代理选路字段的配置键是 modelSelection / modelDiscovery；写错不报错、只静默关掉。
+    expect(block).toContain('modelSelection: true')
+    expect(block).toContain('modelDiscovery: true')
+    expect(block).not.toContain('modelSelectionSettings')
+  })
 })
 
 describe('AgentTavernIM prompt', () => {

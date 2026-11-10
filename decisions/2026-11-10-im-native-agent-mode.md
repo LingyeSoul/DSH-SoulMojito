@@ -52,7 +52,7 @@ IM 绑定当前会把会话 `recompose` 到 `agent-tavern-im`，该 preset 只�
 
 ## 已知边界
 
-- `agent-tavern-im-native` 的工具行是 DSH 0.2.1 线 standard preset 的静态快照。宿主后续新增标准工具时需要同步该行；缺失的宿主包会让 preset 激活失败，开关可随时关回。
+- `agent-tavern-im-native` 的工具行是 DSH 0.2.2 线 standard preset 的静态快照（2026-11-10 对齐：宿主包只声明主入口，子代理选路键为 `modelSelection` / `modelDiscovery`）。宿主后续新增标准工具时需要同步该行；错误或过期的行会让 preset 激活失败或静默缺件，由 `preset-host-rows` gate 锁定（见 [`2026-11-10-im-native-preset-host-row-drift.md`](2026-11-10-im-native-preset-host-row-drift.md)）。
 - 计划模式（`planning` group）未纳入：它的规则依赖标准 preset 的 system section，而 AgentTavern 的 complete 段会丢弃该 section；半挂载的计划模式比没有更危险。
 - `agent-novel` / `card-workbench` / `st` 仍不自动切换；它们有各自完整的工具与提示面。
 - 开关打开后，IM 会话获得 shell、文件写入与联网权限。这是用户显式授权的信任扩展，UI 已写明风险；默认关闭。

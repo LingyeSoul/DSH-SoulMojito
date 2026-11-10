@@ -208,7 +208,7 @@ dsh --profile desktop
 pnpm run check
 ```
 
-该命令依次跑 `tsc -b`、vitest 全量、`build:plugin` 与 20 个插件 gates，是提交前的唯一权威口径。
+该命令依次跑 `tsc -b`、vitest 全量、`build:plugin` 与 21 个插件 gates，是提交前的唯一权威口径。
 
 ## 更新
 
@@ -325,13 +325,13 @@ pnpm run check
 
 ```
 Test Files  203 passed (203)
-Tests       3362 passed | 2 skipped (3364)
-20 gates    全部 PASS
-built       v0.7.8 (8739174)
+Tests       3363 passed | 2 skipped (3365)
+21 gates    全部 PASS
+built       v0.7.8 (be82ec7)
 ```
 
 - 2 项跳过都是 `skipIf` 环境条件项：Windows 检出上的 `host-package.spec.ts` POSIX-only 用例，以及 `im-store.spec.ts` 的 0600 权限位用例（Win32 无 POSIX mode）。
-- 20 个 gates 覆盖 update-routes、package-contract、patch-reference、im-agent-inject、server-bundle、client-bundle、frontend-runtime、native-header-adapter、mvu-surface、frontend-surface、client-architecture-split、internal-workspace、agent-tavern-isolation、client-vm-mount、node-half-mount、v4-session-admission、mod-loader、im-channels、source-file-budget 与 content-lexicon。
+- 21 个 gates 覆盖 update-routes、package-contract、patch-reference、preset-host-rows、im-agent-inject、server-bundle、client-bundle、frontend-runtime、native-header-adapter、mvu-surface、frontend-surface、client-architecture-split、internal-workspace、agent-tavern-isolation、client-vm-mount、node-half-mount、v4-session-admission、mod-loader、im-channels、source-file-budget 与 content-lexicon。
 - 完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用隔离 runtime（`.npm-cache/dsh-runtime`，当前镜像宿主 `0.2.2-rc.1`，受限环境依次回落 `NODE_PATH` 与全局安装）。
 - 会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。
 - 示例 Mod 的 engines 与随仓库发布的宿主版本由防漂移守卫锁定（先例：[`decisions/2026-10-12-story-clock-engines-drift.md`](decisions/2026-10-12-story-clock-engines-drift.md)）；面板布局、品牌 logo 与内置游戏规则面同样各有 spec + gate marker 锁定。
