@@ -37,6 +37,18 @@
             name: 'dsh-soulmojito/agent'
           - id: dsh-soulmojito-im-agent
             name: 'dsh-soulmojito/im-agent'
+          # IM 入站图片没有原生 image block：路由器只在正文里留一行
+          # `图片（<本地路径>）`，模型没有工具就打不开。挂 read_image 让视觉
+          # 模型真正看见图；文本读、写、编辑、apply_patch 一律不开，IM 会话
+          # 的权限面只增加这一件只读工具。非视觉模型每次调用会被宿主按
+          # `inputModalities` 明确拒绝，不会静默降级。
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+            config:
+              read: false
+              readImage: true
+              write: false
+              edit: false
 
     # 行为设置 `imNativeAgentMode` 的目标预设：AgentTavernIM 的完整原生
     # Agent 工具面。下面的工具行取自 dsh-web-app/presets/standard.patch.yml

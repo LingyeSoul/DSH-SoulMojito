@@ -57,6 +57,7 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 ### 原生 Agent 模式（AgentTavern）
 
 - **工具面 25 件 + IM 4 件**：角色/世界书/历史/场景读面 4 件、记忆 5 件、变量 5 件、剧本 2 件、多 Agent 推演 1 件、MVU 结算 1 件、游戏 7 件；IM 4 件（`im_identity` / `im_channels` / `im_send` / `im_time`）由 index bundle 挂进**每个原生会话**（`im/agent-mount.ts`，`DSH_SOULMOJITO_DISABLE_IM` 硬关时整组消失）。身份一律来自真实 session binding，模型无法通过参数伪造 `sessionId`、`scopeId`、角色或聊天身份。
+- **图片输入两条路** — 默认 `agent-tavern` 不挂文件工具：图片由宿主 composer 作为原生 `image` block 上送，按当前路由的 `inputModalities` 门控（非视觉模型提交即被拒，不静默丢图）。IM 模式没有这条通路（入站图片只落成正文里的本地路径），所以 `agent-tavern-im` 挂宿主 `read_image`（PNG/JPEG/WebP/GIF），`read`/`write`/`edit` 全关；非视觉模型调用得到明确拒绝。
 - **AgentTavernIM 预设**：IM 绑定会话建议使用 `AgentTavernIM`（`agent-tavern-im`）；绑定对端时插件会自动把 live 且空闲的会话切到该预设（未打开/运行中则在会话打开或空闲后补切，novel/workbench/ST 架构不强行切换）。它在 AgentTavern 之上直接写明 IM 模式：所有回复必须用 `im_send`，不要用普通正文；回复要像真人在手机上聊天，短句、一次一两句、长内容拆成多条连续发送；群聊按消息头/发言人区分，附件用 `im_send` 的媒体参数。插件不代建会话，绑定与插入仍按原生 session 语义执行。
 - **AgentTavernIM Native（行为设置 `imNativeAgentMode`）**：开启后 IM 绑定会话改切到 `agent-tavern-im-native`，在 AgentTavern 与 `im_*` 工具之外挂载标准 DSH Agent 工具（shell、文件读写/搜索、后台任务、定时、技能、目标、子代理/工作流、待办、网页、present）。IM 回复规则与 `im_send` 约束不变；与 PTC 模式正交——PTC 只把同一工具集合改由 `run_code` + SDK 呈现，两者可同时开启。默认关闭（shell/文件写入/联网权限较强，只对信任会话开启）；运行中的会话等 idle 后自动切换。
 - **记忆** — 词法检索为基线；配置 embed 来源后升级为词法 + 语义混合检索（RRF 融合）。两种来源：OpenAI 兼容远程端点（[提案 0016](docs/proposals/0016-hybrid-memory-retrieval.md)）或本地 ONNX 模型目录（[提案 0017](docs/proposals/0017-local-onnx-embed.md)，离线零网络，面板一键安装运行时）。
@@ -321,13 +322,13 @@ Node half 是七个自包含 bundle：`index.mjs` 主入口，加 `agent` / `im-
 pnpm run check
 ```
 
-当前基线（2026-11-10 实测，宿主 DSH `0.2.2-rc.1`）：
+当前基线（2026-11-11 实测，宿主 DSH `0.2.2-rc.1`）：
 
 ```
-Test Files  203 passed (203)
-Tests       3363 passed | 2 skipped (3365)
+Test Files  205 passed (205)
+Tests       3367 passed | 2 skipped (3369)
 21 gates    全部 PASS
-built       v0.7.8 (be82ec7)
+built       v0.7.8 (dccc12b)
 ```
 
 - 2 项跳过都是 `skipIf` 环境条件项：Windows 检出上的 `host-package.spec.ts` POSIX-only 用例，以及 `im-store.spec.ts` 的 0600 权限位用例（Win32 无 POSIX mode）。

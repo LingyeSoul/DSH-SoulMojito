@@ -18,7 +18,9 @@ import { randomUUID, timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
 import type { HostLogger } from '../../host-contract.js'
-import type { ImChannel, ImChannelStatus, ImInbound, ImSendReceipt, ImTarget, OutboundPart } from '../types.js'
+import type { ImChannel, ImChannelStatus, ImInbound, ImMediaRef, ImSendReceipt, ImTarget, OutboundPart } from '../types.js'
+import { fetchInboundMedia } from '../media-fetch.js'
+import type { ImMediaStore } from '../media-store.js'
 import { OneBotCodecError, oneBotMentioned, oneBotSendCall, parseOneBotMessage } from './codec.js'
 import { acceptWebSocket, type WsConnection } from './ws.js'
 
@@ -29,6 +31,9 @@ export type OneBotRole = 'API' | 'Event' | 'Universal'
 const REQUEST_TIMEOUT_MS = 10_000
 /** webhook 请求体上限（提案 §4.4）；OneBot 事件本身通常只有几 KB。 */
 const WEBHOOK_BODY_LIMIT = 256 * 1024
+/** 入站图片上限与超时：与 QQ 同口径，图片本体不按通道分档。 */
+const ONEBOT_MEDIA_MAX_BYTES = 20 * 1024 * 1024
+const ONEBOT_MEDIA_TIMEOUT_MS = 20_000
 
 export type OneBotErrorCode =
   | 'ONEBOT_BAD_SECRET'
@@ -52,7 +57,7 @@ export class OneBotError extends Error {
 
 /** 入站落点；运行时把 `router.inbound` 包一层交给通道，通道不认识 Tavern。 */
 export interface OneBotRouterSink {
-  handle(inbound: ImInbound): Promise<void>
+  handle(inbound: ImInbound, options?: { loadMedia?: () => Promise<readonly ImMediaRef[]> }): Promise<void>
 }
 
 export interface OneBotChannelOptions {
@@ -60,6 +65,11 @@ export interface OneBotChannelOptions {
   /** `ImStore.readSecret('onebot', accountId)` 的密钥袋，只认 token。 */
   secret: Readonly<Record<string, string>>
   router: OneBotRouterSink
+  /**
+   * 入站图片落盘仓库（与 QQ/微信共用同一个实例）。缺省时通道不下载任何附件，
+   * 摘要如实写「未下载」——旧调用方与测试不需要为此改造。
+   */
+  media?: ImMediaStore
   /** 群消息是否必须 @ 机器人；来自 state.imSettings.groupRequireMention。 */
   groupRequireMention: () => Promise<boolean>
   now: () => number
@@ -98,6 +108,7 @@ export class OneBotChannel implements ImChannel {
   private readonly groupRequireMention: () => Promise<boolean>
   private readonly now: () => number
   private readonly logger: HostLogger | undefined
+  private readonly media: ImMediaStore | undefined
   private readonly connections = new Map<string, LiveConnection>()
   /** 账号级入站 FIFO 链尾：webhook 与反向 WS 共用一个账号的到达顺序。 */
   private inboundTail: Promise<void> = Promise.resolve()
@@ -121,6 +132,7 @@ export class OneBotChannel implements ImChannel {
     this.groupRequireMention = options.groupRequireMention
     this.now = options.now
     this.logger = options.logger
+    this.media = options.media
   }
 
   /** 反向 WS 只登记「等待连接」，不发任何网络请求；连接由 upgrade 路由送进来。 */
@@ -298,7 +310,9 @@ export class OneBotChannel implements ImChannel {
     }
     const message = inbound
     try {
-      await this.enqueueInbound(() => this.router.handle(message))
+      await this.enqueueInbound(() => this.router.handle(message, {
+        loadMedia: () => this.materializeInboundMedia(message),
+      }))
     } catch (error) {
       this.logger?.warn?.(`dsh-soulmojito im onebot/${this.accountId}: webhook inbound failed: ${messageOf(error)}`)
       respondJson(res, 500, { ok: false, message: 'onebot inbound handling failed' })
@@ -422,7 +436,44 @@ export class OneBotChannel implements ImChannel {
     if (inbound.scope === 'group' && await this.groupRequireMention() && !oneBotMentioned(event, live.selfId)) {
       return
     }
-    await this.router.handle(inbound)
+    await this.router.handle(inbound, { loadMedia: () => this.materializeInboundMedia(inbound) })
+  }
+
+  /**
+   * 逐个下载入站图片；失败只 warn 并保留不带 `localPath` 的 ref，不阻断这一轮。
+   *
+   * 只处理 `image` 且只认 http(s) `url`：模型能读取的附件类型只有图片
+   * （`read_image`），语音/视频/文件在本仓库没有读取方，落盘只是垃圾；OneBot 的
+   * `file` 常是上游本地缓存名或 file id，抓不了也不该抓。下载时机由 router 决定
+   * ——只有通过去重、访问控制且会话已绑定之后才会调用。
+   */
+  private async materializeInboundMedia(inbound: ImInbound): Promise<readonly ImMediaRef[]> {
+    if (this.media === undefined) return inbound.media
+    const enriched: ImMediaRef[] = []
+    for (const ref of inbound.media) {
+      // 只有 http(s) 能直接 GET；`base64://`、上游缓存名与 file id 都不是可抓地址。
+      if (ref.kind !== 'image' || ref.url === undefined
+        || !(ref.url.startsWith('http://') || ref.url.startsWith('https://'))) {
+        enriched.push(ref)
+        continue
+      }
+      try {
+        enriched.push(await fetchInboundMedia(ref, {
+          channel: 'onebot',
+          accountId: this.accountId,
+          media: this.media,
+          maxBytes: ONEBOT_MEDIA_MAX_BYTES,
+          timeoutMs: ONEBOT_MEDIA_TIMEOUT_MS,
+          ...(this.signal === undefined ? {} : { signal: this.signal }),
+        }))
+      } catch (error) {
+        this.logger?.warn?.(
+          `dsh-soulmojito im onebot/${this.accountId}: inbound image download failed: ${messageOf(error)}`,
+        )
+        enriched.push(ref)
+      }
+    }
+    return enriched
   }
 
   private rejectWaiters(live: LiveConnection, reason: string): void {

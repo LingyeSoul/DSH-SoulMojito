@@ -279,7 +279,8 @@ export function createImRuntime(ctx: PluginContext, options: CreateImRuntimeOpti
     return new OneBotChannel({
       accountId: account.accountId,
       secret,
-      router: { handle: async (inbound) => router.inbound(inbound) },
+      router: { handle: async (inbound, inboundOptions) => router.inbound(inbound, inboundOptions) },
+      media: mediaStore,
       groupRequireMention: async () => ((await db.getState()).imSettings ?? DEFAULT_IM_SETTINGS).groupRequireMention,
       now: () => Date.now(),
       logger,

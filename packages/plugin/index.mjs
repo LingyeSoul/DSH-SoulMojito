@@ -15658,7 +15658,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.8".trim() : "";
-  const commit = true ? normalizeCommit("8739174") : void 0;
+  const commit = true ? normalizeCommit("dccc12b") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -50192,7 +50192,312 @@ async function handleMvuRoute(db, req, res, route, method) {
 init_dsh_home();
 
 // packages/plugin/src/im/onebot/server.ts
-import { randomUUID as randomUUID11, timingSafeEqual } from "node:crypto";
+import { randomUUID as randomUUID12, timingSafeEqual } from "node:crypto";
+
+// packages/plugin/src/im/media-store.ts
+import { randomUUID as randomUUID10 } from "node:crypto";
+import { promises as fs20 } from "node:fs";
+import { join as join24, resolve as resolve5 } from "node:path";
+var IM_MEDIA_ROOT_DIR = "im-media";
+var IM_MEDIA_EXTENSIONS = [
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "bmp",
+  "mp4",
+  "mov",
+  "mp3",
+  "wav",
+  "silk",
+  "amr",
+  "ogg",
+  "pdf",
+  "txt",
+  "md",
+  "json",
+  "zip",
+  "doc",
+  "docx",
+  "xls",
+  "xlsx",
+  "ppt",
+  "pptx"
+];
+var ALLOWED_EXTENSIONS = new Set(IM_MEDIA_EXTENSIONS);
+var SAFE_OWNER_PART = /^[A-Za-z0-9._-]+$/;
+var FILE_MODE = 384;
+var ImMediaStoreError = class extends Error {
+  code;
+  constructor(code, message, options) {
+    super(message, options);
+    this.name = "ImMediaStoreError";
+    this.code = code;
+  }
+};
+function isImMediaExtension(value) {
+  return ALLOWED_EXTENSIONS.has(value.trim().replace(/^\.+/, "").toLowerCase());
+}
+function openImMediaStore(options) {
+  if (!Number.isSafeInteger(options.maxBytes) || options.maxBytes <= 0) {
+    throw new TypeError(`openImMediaStore needs a positive integer maxBytes, got ${String(options.maxBytes)}`);
+  }
+  const maxBytes = options.maxBytes;
+  async function root() {
+    const workspace = (await options.workspaceRoot()).trim();
+    if (workspace === "") throw new ImMediaStoreError("IM_MEDIA_IO", "the internal workspace root is empty; media cannot be stored");
+    return join24(resolve5(workspace), IM_MEDIA_ROOT_DIR);
+  }
+  return {
+    async save(request) {
+      const channel = requireOwnerPart(request.channel, "channel");
+      const accountId = requireOwnerPart(request.accountId, "accountId");
+      const size = request.bytes.byteLength;
+      if (size > maxBytes) {
+        throw new ImMediaStoreError(
+          "IM_MEDIA_TOO_LARGE",
+          `${channel}/${accountId} media is ${size} bytes; the cap is ${maxBytes} bytes`
+        );
+      }
+      const extension = requireExtension(request.extension);
+      const directory = join24(await root(), `${channel}-${accountId}`);
+      const file = join24(directory, `${randomUUID10()}.${extension}`);
+      try {
+        await fs20.mkdir(directory, { recursive: true });
+        await fs20.writeFile(file, request.bytes, { mode: FILE_MODE });
+      } catch (cause) {
+        await fs20.rm(file, { force: true }).catch(() => void 0);
+        throw new ImMediaStoreError("IM_MEDIA_IO", `failed to save ${channel}/${accountId} media to ${file}: ${reasonOf(cause)}`, {
+          cause
+        });
+      }
+      return file;
+    },
+    async cleanupOlderThan(ms) {
+      if (!Number.isFinite(ms) || ms < 0) {
+        throw new TypeError(`cleanupOlderThan needs a non-negative finite TTL, got ${String(ms)}`);
+      }
+      return sweep(await root(), options.now() - ms);
+    },
+    async remove(channel, accountId) {
+      const ownerChannel = requireOwnerPart(channel, "channel");
+      const ownerAccount = requireOwnerPart(accountId, "accountId");
+      const directory = join24(await root(), `${ownerChannel}-${ownerAccount}`);
+      try {
+        const stats = await fs20.stat(directory);
+        if (!stats.isDirectory()) return false;
+      } catch (cause) {
+        if (isErrno(cause, "ENOENT")) return false;
+        throw new ImMediaStoreError("IM_MEDIA_IO", `failed to inspect ${directory}: ${reasonOf(cause)}`, { cause });
+      }
+      try {
+        await fs20.rm(directory, { recursive: true, force: true });
+        return true;
+      } catch (cause) {
+        throw new ImMediaStoreError("IM_MEDIA_IO", `failed to delete ${directory}: ${reasonOf(cause)}`, { cause });
+      }
+    }
+  };
+}
+function requireOwnerPart(value, label) {
+  const part = value.trim();
+  if (part === "" || part === "." || part === ".." || part.includes("/") || part.includes("\\") || !SAFE_OWNER_PART.test(part)) {
+    throw new ImMediaStoreError(
+      "IM_MEDIA_BAD_OWNER",
+      `im media store got an illegal ${label} ${JSON.stringify(value)}: only [A-Za-z0-9._-] is allowed and it must name one directory`
+    );
+  }
+  return part;
+}
+function requireExtension(value) {
+  const extension = value.trim().replace(/^\.+/, "").toLowerCase();
+  if (!ALLOWED_EXTENSIONS.has(extension)) {
+    throw new ImMediaStoreError(
+      "IM_MEDIA_BAD_EXTENSION",
+      `im media store refused extension ${JSON.stringify(value)}; allowed extensions: ${IM_MEDIA_EXTENSIONS.join(", ")}`
+    );
+  }
+  return extension;
+}
+async function sweep(directory, cutoff) {
+  let entries;
+  try {
+    entries = await fs20.readdir(directory, { withFileTypes: true });
+  } catch (cause) {
+    if (isErrno(cause, "ENOENT")) return 0;
+    throw new ImMediaStoreError("IM_MEDIA_IO", `failed to list ${directory} while sweeping expired media: ${reasonOf(cause)}`, {
+      cause
+    });
+  }
+  let removed = 0;
+  for (const entry of entries) {
+    const path12 = join24(directory, entry.name);
+    if (entry.isDirectory()) {
+      removed += await sweep(path12, cutoff);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    try {
+      const stats = await fs20.stat(path12);
+      if (stats.mtimeMs >= cutoff) continue;
+      await fs20.unlink(path12);
+      removed += 1;
+    } catch (cause) {
+      if (isErrno(cause, "ENOENT")) continue;
+      throw new ImMediaStoreError("IM_MEDIA_IO", `failed to delete expired media ${path12}: ${reasonOf(cause)}`, { cause });
+    }
+  }
+  return removed;
+}
+function isErrno(cause, code) {
+  return typeof cause === "object" && cause !== null && cause.code === code;
+}
+function reasonOf(cause) {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+// packages/plugin/src/im/media-fetch.ts
+var ImMediaFetchError = class extends Error {
+  code;
+  constructor(code, message, options) {
+    super(message, options);
+    this.name = "ImMediaFetchError";
+    this.code = code;
+  }
+};
+var EXTENSION_BY_TYPE = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/jpg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+  "image/bmp": "bmp",
+  "video/mp4": "mp4",
+  "video/quicktime": "mov",
+  "audio/mpeg": "mp3",
+  "audio/wav": "wav",
+  "audio/x-wav": "wav",
+  "audio/amr": "amr",
+  "audio/ogg": "ogg",
+  "application/pdf": "pdf",
+  "text/plain": "txt",
+  "application/json": "json",
+  "application/zip": "zip"
+};
+var FALLBACK_EXTENSION = {
+  image: "png",
+  video: "mp4",
+  voice: "mp3",
+  file: "txt"
+};
+async function fetchInboundMedia(ref, options) {
+  if (ref.url === void 0) return ref;
+  const url = parseHttpUrl(ref.url);
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, options.timeoutMs);
+  timer.unref?.();
+  const onAbort = () => {
+    controller.abort();
+  };
+  if (options.signal !== void 0) {
+    if (options.signal.aborted) controller.abort();
+    else options.signal.addEventListener("abort", onAbort, { once: true });
+  }
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) {
+      throw new ImMediaFetchError(
+        "IM_MEDIA_FETCH_HTTP",
+        `downloading ${ref.kind} ${url.host} failed with HTTP ${response.status}`
+      );
+    }
+    const declared = Number.parseInt(response.headers.get("content-length") ?? "", 10);
+    if (Number.isSafeInteger(declared) && declared > options.maxBytes) {
+      await response.body?.cancel().catch(() => void 0);
+      throw new ImMediaFetchError(
+        "IM_MEDIA_FETCH_TOO_LARGE",
+        `the remote ${ref.kind} declares ${declared} bytes; the cap is ${options.maxBytes} bytes`
+      );
+    }
+    const bytes = await readBoundedBody(response, options.maxBytes, ref.kind);
+    if (bytes.byteLength === 0) {
+      throw new ImMediaFetchError("IM_MEDIA_FETCH_HTTP", `the remote ${ref.kind} is empty`);
+    }
+    const extension = extensionOf(ref, url, response.headers.get("content-type"));
+    const localPath = await options.media.save({
+      channel: options.channel,
+      accountId: options.accountId,
+      bytes,
+      extension,
+      ...ref.name === void 0 ? {} : { originalName: ref.name }
+    });
+    return { ...ref, localPath };
+  } finally {
+    clearTimeout(timer);
+    options.signal?.removeEventListener("abort", onAbort);
+  }
+}
+async function readBoundedBody(response, cap, kind) {
+  const reader = response.body?.getReader();
+  if (reader === void 0) {
+    const buffer = new Uint8Array(await response.arrayBuffer());
+    if (buffer.byteLength > cap) {
+      throw new ImMediaFetchError("IM_MEDIA_FETCH_TOO_LARGE", `the remote ${kind} is ${buffer.byteLength} bytes; the cap is ${cap} bytes`);
+    }
+    return buffer;
+  }
+  const chunks = [];
+  let total = 0;
+  try {
+    for (; ; ) {
+      const next = await reader.read();
+      if (next.done) break;
+      total += next.value.byteLength;
+      if (total > cap) {
+        await reader.cancel().catch(() => void 0);
+        throw new ImMediaFetchError("IM_MEDIA_FETCH_TOO_LARGE", `the remote ${kind} exceeds ${cap} bytes`);
+      }
+      chunks.push(next.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return merged;
+}
+function parseHttpUrl(raw) {
+  let url;
+  try {
+    url = new URL(raw);
+  } catch (cause) {
+    throw new ImMediaFetchError("IM_MEDIA_FETCH_BAD_URL", `media URL '${raw}' is not a valid absolute URL`, { cause });
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new ImMediaFetchError("IM_MEDIA_FETCH_BAD_URL", `media URL '${raw}' uses protocol '${url.protocol}'; expected http(s)`);
+  }
+  return url;
+}
+function extensionOf(ref, url, contentType) {
+  for (const candidate of [ref.name, decodeURIComponent(url.pathname)]) {
+    if (candidate === void 0 || candidate === "") continue;
+    const match = /\.([A-Za-z0-9]{1,8})$/.exec(candidate);
+    if (match === null) continue;
+    const extension = match[1].toLowerCase();
+    if (isImMediaExtension(extension)) return extension;
+  }
+  const type = contentType?.split(";")[0]?.trim().toLowerCase() ?? "";
+  const byType = EXTENSION_BY_TYPE[type];
+  if (byType !== void 0) return byType;
+  return FALLBACK_EXTENSION[ref.kind];
+}
 
 // packages/plugin/src/im/onebot/codec.ts
 var OneBotCodecError = class extends Error {
@@ -50495,7 +50800,7 @@ function describeValue(value) {
 }
 
 // packages/plugin/src/im/onebot/ws.ts
-import { createHash as createHash14, randomUUID as randomUUID10 } from "node:crypto";
+import { createHash as createHash14, randomUUID as randomUUID11 } from "node:crypto";
 var WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 var MAX_MESSAGE_BYTES = 1024 * 1024;
 var CONTROL_PAYLOAD_LIMIT = 125;
@@ -50535,7 +50840,7 @@ function acceptWebSocket(req, socket, head) {
   return openConnection(socket, head);
 }
 function openConnection(socket, head) {
-  const id = randomUUID10();
+  const id = randomUUID11();
   const textListeners = [];
   const closeListeners = [];
   const queuedTexts = [];
@@ -50851,6 +51156,8 @@ function isValidReceivedCloseCode(code) {
 // packages/plugin/src/im/onebot/server.ts
 var REQUEST_TIMEOUT_MS2 = 1e4;
 var WEBHOOK_BODY_LIMIT = 256 * 1024;
+var ONEBOT_MEDIA_MAX_BYTES = 20 * 1024 * 1024;
+var ONEBOT_MEDIA_TIMEOUT_MS = 2e4;
 var OneBotError = class extends Error {
   code;
   constructor(code, message, options) {
@@ -50867,6 +51174,7 @@ var OneBotChannel = class {
   groupRequireMention;
   now;
   logger;
+  media;
   connections = /* @__PURE__ */ new Map();
   /** 账号级入站 FIFO 链尾：webhook 与反向 WS 共用一个账号的到达顺序。 */
   inboundTail = Promise.resolve();
@@ -50888,6 +51196,7 @@ var OneBotChannel = class {
     this.groupRequireMention = options.groupRequireMention;
     this.now = options.now;
     this.logger = options.logger;
+    this.media = options.media;
   }
   /** 反向 WS 只登记「等待连接」，不发任何网络请求；连接由 upgrade 路由送进来。 */
   async start(signal) {
@@ -51053,7 +51362,9 @@ var OneBotChannel = class {
     }
     const message = inbound;
     try {
-      await this.enqueueInbound(() => this.router.handle(message));
+      await this.enqueueInbound(() => this.router.handle(message, {
+        loadMedia: () => this.materializeInboundMedia(message)
+      }));
     } catch (error) {
       this.logger?.warn?.(`dsh-soulmojito im onebot/${this.accountId}: webhook inbound failed: ${messageOf9(error)}`);
       respondJson(res, 500, { ok: false, message: "onebot inbound handling failed" });
@@ -51092,7 +51403,7 @@ var OneBotChannel = class {
     return live.find((entry) => entry.role === "Universal") ?? live.find((entry) => entry.role === "API");
   }
   call(live, action, params) {
-    const echo = randomUUID11();
+    const echo = randomUUID12();
     return new Promise((resolve9, reject) => {
       const timer = setTimeout(() => {
         live.waiters.delete(echo);
@@ -51161,7 +51472,41 @@ var OneBotChannel = class {
     if (inbound.scope === "group" && await this.groupRequireMention() && !oneBotMentioned(event, live.selfId)) {
       return;
     }
-    await this.router.handle(inbound);
+    await this.router.handle(inbound, { loadMedia: () => this.materializeInboundMedia(inbound) });
+  }
+  /**
+   * 逐个下载入站图片；失败只 warn 并保留不带 `localPath` 的 ref，不阻断这一轮。
+   *
+   * 只处理 `image` 且只认 http(s) `url`：模型能读取的附件类型只有图片
+   * （`read_image`），语音/视频/文件在本仓库没有读取方，落盘只是垃圾；OneBot 的
+   * `file` 常是上游本地缓存名或 file id，抓不了也不该抓。下载时机由 router 决定
+   * ——只有通过去重、访问控制且会话已绑定之后才会调用。
+   */
+  async materializeInboundMedia(inbound) {
+    if (this.media === void 0) return inbound.media;
+    const enriched = [];
+    for (const ref of inbound.media) {
+      if (ref.kind !== "image" || ref.url === void 0 || !(ref.url.startsWith("http://") || ref.url.startsWith("https://"))) {
+        enriched.push(ref);
+        continue;
+      }
+      try {
+        enriched.push(await fetchInboundMedia(ref, {
+          channel: "onebot",
+          accountId: this.accountId,
+          media: this.media,
+          maxBytes: ONEBOT_MEDIA_MAX_BYTES,
+          timeoutMs: ONEBOT_MEDIA_TIMEOUT_MS,
+          ...this.signal === void 0 ? {} : { signal: this.signal }
+        }));
+      } catch (error) {
+        this.logger?.warn?.(
+          `dsh-soulmojito im onebot/${this.accountId}: inbound image download failed: ${messageOf9(error)}`
+        );
+        enriched.push(ref);
+      }
+    }
+    return enriched;
   }
   rejectWaiters(live, reason) {
     for (const waiter of live.waiters.values()) {
@@ -52051,311 +52396,6 @@ function nonEmpty2(value) {
   if (typeof value !== "string") return void 0;
   const trimmed = value.trim();
   return trimmed === "" ? void 0 : trimmed;
-}
-
-// packages/plugin/src/im/media-store.ts
-import { randomUUID as randomUUID12 } from "node:crypto";
-import { promises as fs20 } from "node:fs";
-import { join as join24, resolve as resolve5 } from "node:path";
-var IM_MEDIA_ROOT_DIR = "im-media";
-var IM_MEDIA_EXTENSIONS = [
-  "png",
-  "jpg",
-  "jpeg",
-  "gif",
-  "webp",
-  "bmp",
-  "mp4",
-  "mov",
-  "mp3",
-  "wav",
-  "silk",
-  "amr",
-  "ogg",
-  "pdf",
-  "txt",
-  "md",
-  "json",
-  "zip",
-  "doc",
-  "docx",
-  "xls",
-  "xlsx",
-  "ppt",
-  "pptx"
-];
-var ALLOWED_EXTENSIONS = new Set(IM_MEDIA_EXTENSIONS);
-var SAFE_OWNER_PART = /^[A-Za-z0-9._-]+$/;
-var FILE_MODE = 384;
-var ImMediaStoreError = class extends Error {
-  code;
-  constructor(code, message, options) {
-    super(message, options);
-    this.name = "ImMediaStoreError";
-    this.code = code;
-  }
-};
-function isImMediaExtension(value) {
-  return ALLOWED_EXTENSIONS.has(value.trim().replace(/^\.+/, "").toLowerCase());
-}
-function openImMediaStore(options) {
-  if (!Number.isSafeInteger(options.maxBytes) || options.maxBytes <= 0) {
-    throw new TypeError(`openImMediaStore needs a positive integer maxBytes, got ${String(options.maxBytes)}`);
-  }
-  const maxBytes = options.maxBytes;
-  async function root() {
-    const workspace = (await options.workspaceRoot()).trim();
-    if (workspace === "") throw new ImMediaStoreError("IM_MEDIA_IO", "the internal workspace root is empty; media cannot be stored");
-    return join24(resolve5(workspace), IM_MEDIA_ROOT_DIR);
-  }
-  return {
-    async save(request) {
-      const channel = requireOwnerPart(request.channel, "channel");
-      const accountId = requireOwnerPart(request.accountId, "accountId");
-      const size = request.bytes.byteLength;
-      if (size > maxBytes) {
-        throw new ImMediaStoreError(
-          "IM_MEDIA_TOO_LARGE",
-          `${channel}/${accountId} media is ${size} bytes; the cap is ${maxBytes} bytes`
-        );
-      }
-      const extension = requireExtension(request.extension);
-      const directory = join24(await root(), `${channel}-${accountId}`);
-      const file = join24(directory, `${randomUUID12()}.${extension}`);
-      try {
-        await fs20.mkdir(directory, { recursive: true });
-        await fs20.writeFile(file, request.bytes, { mode: FILE_MODE });
-      } catch (cause) {
-        await fs20.rm(file, { force: true }).catch(() => void 0);
-        throw new ImMediaStoreError("IM_MEDIA_IO", `failed to save ${channel}/${accountId} media to ${file}: ${reasonOf(cause)}`, {
-          cause
-        });
-      }
-      return file;
-    },
-    async cleanupOlderThan(ms) {
-      if (!Number.isFinite(ms) || ms < 0) {
-        throw new TypeError(`cleanupOlderThan needs a non-negative finite TTL, got ${String(ms)}`);
-      }
-      return sweep(await root(), options.now() - ms);
-    },
-    async remove(channel, accountId) {
-      const ownerChannel = requireOwnerPart(channel, "channel");
-      const ownerAccount = requireOwnerPart(accountId, "accountId");
-      const directory = join24(await root(), `${ownerChannel}-${ownerAccount}`);
-      try {
-        const stats = await fs20.stat(directory);
-        if (!stats.isDirectory()) return false;
-      } catch (cause) {
-        if (isErrno(cause, "ENOENT")) return false;
-        throw new ImMediaStoreError("IM_MEDIA_IO", `failed to inspect ${directory}: ${reasonOf(cause)}`, { cause });
-      }
-      try {
-        await fs20.rm(directory, { recursive: true, force: true });
-        return true;
-      } catch (cause) {
-        throw new ImMediaStoreError("IM_MEDIA_IO", `failed to delete ${directory}: ${reasonOf(cause)}`, { cause });
-      }
-    }
-  };
-}
-function requireOwnerPart(value, label) {
-  const part = value.trim();
-  if (part === "" || part === "." || part === ".." || part.includes("/") || part.includes("\\") || !SAFE_OWNER_PART.test(part)) {
-    throw new ImMediaStoreError(
-      "IM_MEDIA_BAD_OWNER",
-      `im media store got an illegal ${label} ${JSON.stringify(value)}: only [A-Za-z0-9._-] is allowed and it must name one directory`
-    );
-  }
-  return part;
-}
-function requireExtension(value) {
-  const extension = value.trim().replace(/^\.+/, "").toLowerCase();
-  if (!ALLOWED_EXTENSIONS.has(extension)) {
-    throw new ImMediaStoreError(
-      "IM_MEDIA_BAD_EXTENSION",
-      `im media store refused extension ${JSON.stringify(value)}; allowed extensions: ${IM_MEDIA_EXTENSIONS.join(", ")}`
-    );
-  }
-  return extension;
-}
-async function sweep(directory, cutoff) {
-  let entries;
-  try {
-    entries = await fs20.readdir(directory, { withFileTypes: true });
-  } catch (cause) {
-    if (isErrno(cause, "ENOENT")) return 0;
-    throw new ImMediaStoreError("IM_MEDIA_IO", `failed to list ${directory} while sweeping expired media: ${reasonOf(cause)}`, {
-      cause
-    });
-  }
-  let removed = 0;
-  for (const entry of entries) {
-    const path12 = join24(directory, entry.name);
-    if (entry.isDirectory()) {
-      removed += await sweep(path12, cutoff);
-      continue;
-    }
-    if (!entry.isFile()) continue;
-    try {
-      const stats = await fs20.stat(path12);
-      if (stats.mtimeMs >= cutoff) continue;
-      await fs20.unlink(path12);
-      removed += 1;
-    } catch (cause) {
-      if (isErrno(cause, "ENOENT")) continue;
-      throw new ImMediaStoreError("IM_MEDIA_IO", `failed to delete expired media ${path12}: ${reasonOf(cause)}`, { cause });
-    }
-  }
-  return removed;
-}
-function isErrno(cause, code) {
-  return typeof cause === "object" && cause !== null && cause.code === code;
-}
-function reasonOf(cause) {
-  return cause instanceof Error ? cause.message : String(cause);
-}
-
-// packages/plugin/src/im/media-fetch.ts
-var ImMediaFetchError = class extends Error {
-  code;
-  constructor(code, message, options) {
-    super(message, options);
-    this.name = "ImMediaFetchError";
-    this.code = code;
-  }
-};
-var EXTENSION_BY_TYPE = {
-  "image/png": "png",
-  "image/jpeg": "jpg",
-  "image/jpg": "jpg",
-  "image/gif": "gif",
-  "image/webp": "webp",
-  "image/bmp": "bmp",
-  "video/mp4": "mp4",
-  "video/quicktime": "mov",
-  "audio/mpeg": "mp3",
-  "audio/wav": "wav",
-  "audio/x-wav": "wav",
-  "audio/amr": "amr",
-  "audio/ogg": "ogg",
-  "application/pdf": "pdf",
-  "text/plain": "txt",
-  "application/json": "json",
-  "application/zip": "zip"
-};
-var FALLBACK_EXTENSION = {
-  image: "png",
-  video: "mp4",
-  voice: "mp3",
-  file: "txt"
-};
-async function fetchInboundMedia(ref, options) {
-  if (ref.url === void 0) return ref;
-  const url = parseHttpUrl(ref.url);
-  const controller = new AbortController();
-  const timer = setTimeout(() => {
-    controller.abort();
-  }, options.timeoutMs);
-  timer.unref?.();
-  const onAbort = () => {
-    controller.abort();
-  };
-  if (options.signal !== void 0) {
-    if (options.signal.aborted) controller.abort();
-    else options.signal.addEventListener("abort", onAbort, { once: true });
-  }
-  try {
-    const response = await fetch(url, { signal: controller.signal });
-    if (!response.ok) {
-      throw new ImMediaFetchError(
-        "IM_MEDIA_FETCH_HTTP",
-        `downloading ${ref.kind} ${url.host} failed with HTTP ${response.status}`
-      );
-    }
-    const declared = Number.parseInt(response.headers.get("content-length") ?? "", 10);
-    if (Number.isSafeInteger(declared) && declared > options.maxBytes) {
-      await response.body?.cancel().catch(() => void 0);
-      throw new ImMediaFetchError(
-        "IM_MEDIA_FETCH_TOO_LARGE",
-        `the remote ${ref.kind} declares ${declared} bytes; the cap is ${options.maxBytes} bytes`
-      );
-    }
-    const bytes = await readBoundedBody(response, options.maxBytes, ref.kind);
-    if (bytes.byteLength === 0) {
-      throw new ImMediaFetchError("IM_MEDIA_FETCH_HTTP", `the remote ${ref.kind} is empty`);
-    }
-    const extension = extensionOf(ref, url, response.headers.get("content-type"));
-    const localPath = await options.media.save({
-      channel: options.channel,
-      accountId: options.accountId,
-      bytes,
-      extension,
-      ...ref.name === void 0 ? {} : { originalName: ref.name }
-    });
-    return { ...ref, localPath };
-  } finally {
-    clearTimeout(timer);
-    options.signal?.removeEventListener("abort", onAbort);
-  }
-}
-async function readBoundedBody(response, cap, kind) {
-  const reader = response.body?.getReader();
-  if (reader === void 0) {
-    const buffer = new Uint8Array(await response.arrayBuffer());
-    if (buffer.byteLength > cap) {
-      throw new ImMediaFetchError("IM_MEDIA_FETCH_TOO_LARGE", `the remote ${kind} is ${buffer.byteLength} bytes; the cap is ${cap} bytes`);
-    }
-    return buffer;
-  }
-  const chunks = [];
-  let total = 0;
-  try {
-    for (; ; ) {
-      const next = await reader.read();
-      if (next.done) break;
-      total += next.value.byteLength;
-      if (total > cap) {
-        await reader.cancel().catch(() => void 0);
-        throw new ImMediaFetchError("IM_MEDIA_FETCH_TOO_LARGE", `the remote ${kind} exceeds ${cap} bytes`);
-      }
-      chunks.push(next.value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const merged = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return merged;
-}
-function parseHttpUrl(raw) {
-  let url;
-  try {
-    url = new URL(raw);
-  } catch (cause) {
-    throw new ImMediaFetchError("IM_MEDIA_FETCH_BAD_URL", `media URL '${raw}' is not a valid absolute URL`, { cause });
-  }
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new ImMediaFetchError("IM_MEDIA_FETCH_BAD_URL", `media URL '${raw}' uses protocol '${url.protocol}'; expected http(s)`);
-  }
-  return url;
-}
-function extensionOf(ref, url, contentType) {
-  for (const candidate of [ref.name, decodeURIComponent(url.pathname)]) {
-    if (candidate === void 0 || candidate === "") continue;
-    const match = /\.([A-Za-z0-9]{1,8})$/.exec(candidate);
-    if (match === null) continue;
-    const extension = match[1].toLowerCase();
-    if (isImMediaExtension(extension)) return extension;
-  }
-  const type = contentType?.split(";")[0]?.trim().toLowerCase() ?? "";
-  const byType = EXTENSION_BY_TYPE[type];
-  if (byType !== void 0) return byType;
-  return FALLBACK_EXTENSION[ref.kind];
 }
 
 // packages/plugin/src/im/qq/channel.ts
@@ -61906,7 +61946,8 @@ function createImRuntime(ctx, options) {
     return new OneBotChannel({
       accountId: account.accountId,
       secret,
-      router: { handle: async (inbound) => router.inbound(inbound) },
+      router: { handle: async (inbound, inboundOptions) => router.inbound(inbound, inboundOptions) },
+      media: mediaStore,
       groupRequireMention: async () => ((await db.getState()).imSettings ?? DEFAULT_IM_SETTINGS).groupRequireMention,
       now: () => Date.now(),
       logger
