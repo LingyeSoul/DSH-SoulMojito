@@ -44,7 +44,7 @@
 - **v0-v3 宿主无 preamble**：老宿主上 user 条目走 pre-step 兜底（其 source 带 `presetUserBlock` 成员，属于该通道的既有折衷），assistant 条目在那些宿主上没有位置。
 - **成功压缩保留尾部时的重复块（P3）**：若兜底块刚注入、或压缩范围因 `retainTokens` 保留尾部而未遮蔽它，`compaction/end` 仍会触发一次重注，造成上下文多一份预设块；不产生数据损坏，后续可按 `session.surface.nodes` 的可见性精化判定。
 - **预设修改不重写已 seed 的帧**：预设编辑只影响尚未激活的会话与压缩后的 user 重注；已写入的 preamble 保留原文。
-- **其它预设投影通道**：`renderAgentPresetBlock` 的过滤对写卡工作台 / AgentNovel（`preset-mount.ts`）与标准 DSH Agent 会话（`native-preset.ts`）同样生效——这些通道没有帧化位置，非 system 条目在它们那里完全不投影（此前是错标成 system）。丢弃不再是纯静默：工作台/小说按 `(section, agent, 预设, 条数)`、标准会话按 `(预设, 条数)` 各打一次 `warn`，说明该通道只投影 system 条目。
+- **其它预设投影通道**：`renderAgentPresetBlock` 的过滤对写卡工作台 / AgentNovel（`preset-mount.ts`）与标准 DSH Agent 会话（`native-preset.ts`）同样生效——这些通道没有帧化位置，非 system 条目在它们那里完全不投影（此前是错标成 system）。丢弃不再是纯静默：工作台/小说按 `(section, agent, 预设, 条数)`、标准会话按 `(预设, 条数)` 各打一次 `warn`，说明该通道只投影 system 条目。工作台/小说的告警只在**装配真正读取该 section** 时发出——启动预热会扫描全部既有绑定（含早已不用的工作台会话），在预热期告警会让「没用工作台却看到工作台告警」成为常态（2026-11-13 用户反馈）。
 - **激活时激活预设不可读**：`TavernStore.getPreset` 只吞 `ENOENT`，JSON 损坏或 I/O 错误都会原样抛；激活路径（`session/command.ts`）捕获后跳过 preamble 并 `warn` 一次（带预设 id 与原始错误），绑定与历史导入照常完成。这里不调用 `defaultPreset()`——默认预设只含 system 条目、preamble 同样为空，回落不会产生帧，只会掩盖预设不可读。缺文件（`undefined`）仍走既有默认预设回落。
 
 ## 验证

@@ -78,10 +78,14 @@ function store(): Promise<TavernStore> {
 /**
  * 非 system 条目被丢弃的一次性告警键（决策 2026-11-13-preset-user-role-injection）：
  * renderAgentPresetBlock 只投影 system 条目，工作台/小说没有消息帧位置承载
- * user/assistant 条目，这些条目只能被静默丢弃。写穿重载每次都会重跑装载体，
+ * user/assistant 条目，这些条目只能被静默丢弃。告警只在**装配真正读取该
+ * section** 时发出——预热会扫描全部既有绑定（含早已不用的工作台会话），
+ * 在那里告警会让“没用工作台却看到工作台告警”变成常态（2026-11-13 用户反馈）。
  * 按 (sectionName, agentId, presetId, 条数) 只告警一次，避免刷日志。
  */
 const droppedPreambleWarnings = new Set<string>()
+/** 最近一次装载发现的丢弃条目：等 section 真正被读取时才告警。 */
+const droppedByAgent = new Map<string, { presetId: string; count: number }>()
 
 function warnDroppedPreamble(sectionName: string, agentId: string, presetId: string, count: number): void {
   const key = [sectionName, agentId, presetId, String(count)].join('\u0000')
@@ -90,6 +94,14 @@ function warnDroppedPreamble(sectionName: string, agentId: string, presetId: str
   console.warn(
     `dsh-soulmojito: section '${sectionName}' projects system entries only — agent '${agentId}' dropped ${count} non-system preset '${presetId}' ${count === 1 ? 'entry' : 'entries'}`,
   )
+}
+
+/** 装配读取投影后调用：仅在本次会话确实消费该 section 时把装载期的丢弃事实报出来。 */
+function warnDroppedOnRead(sectionName: string, agentId: string | undefined): void {
+  if (agentId === undefined) return
+  const dropped = droppedByAgent.get(agentId)
+  if (dropped === undefined) return
+  warnDroppedPreamble(sectionName, agentId, dropped.presetId, dropped.count)
 }
 
 /**
@@ -108,6 +120,9 @@ export function mountPresetProjection(options: PresetMountOptions): PresetMount 
   const projection = createLazyProjection<string>({
     getState: async () => (await store()).getState(),
     load: async (agentId, settle) => {
+      // 新装载开始即清掉旧事实：在途装载期间缓存里可能还是上一版文本，不能拿旧
+      // 预设的丢弃记录去告警。
+      droppedByAgent.delete(agentId)
       const db = await store()
       const state = await db.getState()
       const binding = state.sessionBindings[agentId]
@@ -122,9 +137,10 @@ export function mountPresetProjection(options: PresetMountOptions): PresetMount 
       const raw = await db.getPreset(state.activePreset)
       if (raw === undefined) { settle(''); return }
       const ir = parsePreset(raw)
-      // 非 system 条目没有消息帧位置：只告警，不改变投影字节（见上方告警键注释）。
+      // 非 system 条目没有消息帧位置：只记下事实，等 section 真正被装配读取时
+      // 再告警（预热扫描旧绑定不算消费）。
       const dropped = agentPresetPreambleEntries(ir).length
-      if (dropped > 0) warnDroppedPreamble(options.sectionName, agentId, state.activePreset, dropped)
+      if (dropped > 0) droppedByAgent.set(agentId, { presetId: state.activePreset, count: dropped })
       const block = renderAgentPresetBlock(ir, undefined, options.header)
       if (block === undefined) { settle(''); return }
       // 预设内容是 ST 宏（{{char}}/{{user}}）的高频来源：宏展开 + {{...}}
@@ -144,8 +160,21 @@ export function mountPresetProjection(options: PresetMountOptions): PresetMount 
   onAgentPresetChanged(() => projection.refreshWhere((binding) => binding.architecture === options.architecture))
 
   return {
-    section: { name: options.sectionName, order: -75, text: (assembly) => projection.valueOf(assembly?.agent?.id) ?? '' },
-    textOf: (agentId) => projection.valueOf(agentId) ?? '',
+    section: {
+      name: options.sectionName,
+      order: -75,
+      text: (assembly) => {
+        const agentId = assembly?.agent?.id
+        const text = projection.valueOf(agentId)
+        if (text !== undefined) warnDroppedOnRead(options.sectionName, agentId)
+        return text ?? ''
+      },
+    },
+    textOf: (agentId) => {
+      const text = projection.valueOf(agentId)
+      if (text !== undefined) warnDroppedOnRead(options.sectionName, agentId)
+      return text ?? ''
+    },
     preheat: () => projection.preheatWhere((binding) => binding.architecture === options.architecture),
   }
 }

@@ -11438,7 +11438,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.8.1".trim() : "";
-  const commit = true ? normalizeCommit("c7142da") : void 0;
+  const commit = true ? normalizeCommit("853150b") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -12230,6 +12230,7 @@ function store3() {
   return storePromise ??= sharedTavernStore(tavernDataRoot());
 }
 var droppedPreambleWarnings = /* @__PURE__ */ new Set();
+var droppedByAgent = /* @__PURE__ */ new Map();
 function warnDroppedPreamble(sectionName, agentId, presetId, count) {
   const key = [sectionName, agentId, presetId, String(count)].join("\0");
   if (droppedPreambleWarnings.has(key)) return;
@@ -12238,11 +12239,18 @@ function warnDroppedPreamble(sectionName, agentId, presetId, count) {
     `dsh-soulmojito: section '${sectionName}' projects system entries only \u2014 agent '${agentId}' dropped ${count} non-system preset '${presetId}' ${count === 1 ? "entry" : "entries"}`
   );
 }
+function warnDroppedOnRead(sectionName, agentId) {
+  if (agentId === void 0) return;
+  const dropped = droppedByAgent.get(agentId);
+  if (dropped === void 0) return;
+  warnDroppedPreamble(sectionName, agentId, dropped.presetId, dropped.count);
+}
 function mountPresetProjection(options) {
   const freeze = /* @__PURE__ */ new Map();
   const projection = createLazyProjection({
     getState: async () => (await store3()).getState(),
     load: async (agentId, settle) => {
+      droppedByAgent.delete(agentId);
       const db = await store3();
       const state = await db.getState();
       const binding = state.sessionBindings[agentId];
@@ -12261,7 +12269,7 @@ function mountPresetProjection(options) {
       }
       const ir = parsePreset(raw);
       const dropped = agentPresetPreambleEntries(ir).length;
-      if (dropped > 0) warnDroppedPreamble(options.sectionName, agentId, state.activePreset, dropped);
+      if (dropped > 0) droppedByAgent.set(agentId, { presetId: state.activePreset, count: dropped });
       const block = renderAgentPresetBlock(ir, void 0, options.header);
       if (block === void 0) {
         settle("");
@@ -12279,8 +12287,21 @@ function mountPresetProjection(options) {
   });
   onAgentPresetChanged(() => projection.refreshWhere((binding) => binding.architecture === options.architecture));
   return {
-    section: { name: options.sectionName, order: -75, text: (assembly) => projection.valueOf(assembly?.agent?.id) ?? "" },
-    textOf: (agentId) => projection.valueOf(agentId) ?? "",
+    section: {
+      name: options.sectionName,
+      order: -75,
+      text: (assembly) => {
+        const agentId = assembly?.agent?.id;
+        const text = projection.valueOf(agentId);
+        if (text !== void 0) warnDroppedOnRead(options.sectionName, agentId);
+        return text ?? "";
+      }
+    },
+    textOf: (agentId) => {
+      const text = projection.valueOf(agentId);
+      if (text !== void 0) warnDroppedOnRead(options.sectionName, agentId);
+      return text ?? "";
+    },
     preheat: () => projection.preheatWhere((binding) => binding.architecture === options.architecture)
   };
 }

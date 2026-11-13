@@ -345,9 +345,9 @@ pnpm run check
 
 ```
 Test Files  216 passed (216)
-Tests       3518 passed | 2 skipped (3520)
+Tests       3519 passed | 2 skipped (3521)
 21 gates    全部 PASS
-built       v0.8.1 (c7142da)
+built       v0.8.1 (853150b)
 ```
 
 - 2 项跳过都是 `skipIf` 环境条件项：Windows 检出上的 `host-package.spec.ts` POSIX-only 用例，以及 `im-store.spec.ts` 的 0600 权限位用例（Win32 无 POSIX mode）。

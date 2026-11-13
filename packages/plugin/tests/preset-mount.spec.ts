@@ -6,6 +6,7 @@ import { apply } from '../src/index.js'
 import { apply as applyWorkbench } from '../src/card-workbench/agent.js'
 import { apply as applyNovel } from '../src/agent-novel/agent.js'
 import { AGENT_PRESET_BLOCK_HEADER, renderAgentPresetBlock } from '../src/agent-tavern/preset.js'
+import { mountPresetProjection } from '../src/preset-mount.js'
 import { parsePreset } from '../../tavern-format/src/index.js'
 import { TavernStore } from '../../tavern-store/src/index.js'
 
@@ -337,6 +338,42 @@ describe('workbench/novel preset projection mounts', () => {
       expect(restore.statusCode).toBe(200)
     } finally {
       warn.mockRestore()
+    }
+  })
+
+  it('withholds the dropped-entry warning until the section is actually read', async () => {
+    // 用户反馈：没有打开写卡工作台，却因为启动预热扫描旧绑定看到了工作台告警。
+    // 预热只记录事实；真正的装配读取才告警。
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const on = makeResponse()
+      await apiHandler(makeRequest({ activePreset: 'Mount Framed Preset' }, '/api/dsh-soulmojito/state'), on)
+      expect(on.statusCode).toBe(200)
+
+      const mount = mountPresetProjection({
+        sectionName: 'dsh-soulmojito:preheat-probe-preset',
+        architecture: 'card-workbench',
+        stateFlag: 'cardWorkbenchPresetEnabled',
+        header: 'PROBE:',
+        charOf: () => CHARACTER,
+      })
+      await mount.preheat()
+      expect(warn).not.toHaveBeenCalled()
+
+      expect(mount.section.text({ agent: { id: WORKBENCH_AGENT } })).toContain('Terse prose only.')
+      expect(warn).toHaveBeenCalledTimes(1)
+      const message = String(warn.mock.calls[0]![0])
+      expect(message).toContain('dsh-soulmojito:preheat-probe-preset')
+      expect(message).toContain('Mount Framed Preset')
+      expect(message).toContain('dropped 1')
+
+      // 同一 (section, agent, preset, 条数) 的后续装配不重复告警。
+      mount.section.text({ agent: { id: WORKBENCH_AGENT } })
+      expect(warn).toHaveBeenCalledTimes(1)
+    } finally {
+      warn.mockRestore()
+      const back = makeResponse()
+      await apiHandler(makeRequest({ activePreset: 'Mount Preset' }, '/api/dsh-soulmojito/state'), back)
     }
   })
 
