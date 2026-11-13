@@ -604,7 +604,7 @@ describe('order -63 懒提示段（仅活跃会话时注入）', () => {
   it('无活跃会话段摘除 → 开局后段出现（游戏名/sessionId/轮到谁/词汇表/指引）→ 终局后段再摘除', async () => {
     const { emitGamesChanged, resolveGamesService } = await import('../src/games/handle.js')
     const service = resolveGamesService()!
-    const gamesSections = () => agentPromptSectionsFor(AGENT).filter((section) => section.name === 'dsh-soulmojito:agent-games')
+    const gamesSections = () => agentPromptSectionsFor(AGENT, undefined).filter((section) => section.name === 'dsh-soulmojito:agent-games')
 
     // 清场：把此前用例遗留的活跃会话全部认输终结（按当前回合归属走对应入口）。
     const { sessions } = await service.list({ character: CHARACTER, chatId: CHAT })

@@ -146,6 +146,10 @@ var EPUB_ZIP_LIMITS = {
 
 // packages/plugin/src/im/types.ts
 var AGENT_TAVERN_IM_PRESET_ID = "agent-tavern-im";
+var AGENT_TAVERN_IM_NATIVE_PRESET_ID = "agent-tavern-im-native";
+function isAgentTavernImPresetId(presetId) {
+  return presetId === AGENT_TAVERN_IM_PRESET_ID || presetId === AGENT_TAVERN_IM_NATIVE_PRESET_ID;
+}
 
 // packages/plugin/src/im/agent.ts
 var name = "dsh-soulmojito/im-agent";
@@ -199,7 +203,9 @@ function apply(_ctx) {
     order: -90,
     scope: "system",
     // hostPromptSafe：静态提示词里不能出现宿主 {{...}} 宏，否则整轮装配会中止。
-    text: () => hostPromptSafe(IM_MODE_PROMPT)
+    // preset 收窄：注册表是进程级，IM preset 挂载过的文本不得泄漏到普通
+    // AgentTavern 会话（2026-11-13-im-preset-prompt-scope）。
+    text: (_agentId, presetId) => isAgentTavernImPresetId(presetId) ? hostPromptSafe(IM_MODE_PROMPT) : ""
   });
 }
 export {

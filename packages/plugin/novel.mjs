@@ -11438,7 +11438,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.8.1".trim() : "";
-  const commit = true ? normalizeCommit("a45c812") : void 0;
+  const commit = true ? normalizeCommit("c7142da") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -11898,22 +11898,10 @@ function effectiveAgentPresetPrompts(preset, card) {
   return effective;
 }
 function renderAgentPresetBlock(preset, card, header = AGENT_PRESET_BLOCK_HEADER) {
-  const prompts = effectiveAgentPresetPrompts(preset, card).filter((prompt) => prompt.role === "system");
-  if (prompts.length === 0) return void 0;
-  return [header, ...prompts.map((prompt) => prompt.content)].join("\n\n");
-}
-function renderAgentPresetUserBlock(preset, card) {
-  const contents = effectiveAgentPresetPrompts(preset, card).filter((prompt) => prompt.role === "user").map((prompt) => prompt.content);
-  if (contents.length === 0) return void 0;
-  return [AGENT_PRESET_USER_HEADER, ...contents].join("\n\n");
+  return systemBlockText(effectiveAgentPresetPrompts(preset, card), header);
 }
 function agentPresetPreambleEntries(preset, card) {
-  const entries = [];
-  for (const prompt of effectiveAgentPresetPrompts(preset, card)) {
-    if (prompt.role === "system") continue;
-    entries.push({ role: prompt.role, content: prompt.content });
-  }
-  return entries;
+  return preambleEntriesOf(effectiveAgentPresetPrompts(preset, card));
 }
 function presetTemperature(preset) {
   const value = preset.sampler["temperature"];
@@ -11942,9 +11930,10 @@ function projectAgentPreset(preset, card) {
   }
   try {
     const ir = parsePreset(preset);
-    const text = renderAgentPresetBlock(ir, card);
-    const userText = renderAgentPresetUserBlock(ir, card);
-    const preamble = agentPresetPreambleEntries(ir, card);
+    const prompts = effectiveAgentPresetPrompts(ir, card);
+    const text = systemBlockText(prompts, AGENT_PRESET_BLOCK_HEADER);
+    const userText = userBlockText(prompts);
+    const preamble = preambleEntriesOf(prompts);
     const temperature = presetTemperature(ir);
     return {
       ...text === void 0 ? {} : { text },
@@ -11990,6 +11979,24 @@ function defaultPreset() {
 var agentPresetChanged = createGlobalListenerRegistry("dsh-soulmojito:agent-preset-changed-listeners");
 function onAgentPresetChanged(listener) {
   return agentPresetChanged.on(listener);
+}
+function systemBlockText(prompts, header) {
+  const contents = prompts.filter((prompt) => prompt.role === "system").map((prompt) => prompt.content);
+  if (contents.length === 0) return void 0;
+  return [header, ...contents].join("\n\n");
+}
+function userBlockText(prompts) {
+  const contents = prompts.filter((prompt) => prompt.role === "user").map((prompt) => prompt.content);
+  if (contents.length === 0) return void 0;
+  return [AGENT_PRESET_USER_HEADER, ...contents].join("\n\n");
+}
+function preambleEntriesOf(prompts) {
+  const entries = [];
+  for (const prompt of prompts) {
+    if (prompt.role === "system") continue;
+    entries.push({ role: prompt.role, content: prompt.content });
+  }
+  return entries;
 }
 function promptContent(prompt) {
   const content = prompt["content"];
@@ -12222,6 +12229,15 @@ var storePromise;
 function store3() {
   return storePromise ??= sharedTavernStore(tavernDataRoot());
 }
+var droppedPreambleWarnings = /* @__PURE__ */ new Set();
+function warnDroppedPreamble(sectionName, agentId, presetId, count) {
+  const key = [sectionName, agentId, presetId, String(count)].join("\0");
+  if (droppedPreambleWarnings.has(key)) return;
+  droppedPreambleWarnings.add(key);
+  console.warn(
+    `dsh-soulmojito: section '${sectionName}' projects system entries only \u2014 agent '${agentId}' dropped ${count} non-system preset '${presetId}' ${count === 1 ? "entry" : "entries"}`
+  );
+}
 function mountPresetProjection(options) {
   const freeze = /* @__PURE__ */ new Map();
   const projection = createLazyProjection({
@@ -12243,7 +12259,10 @@ function mountPresetProjection(options) {
         settle("");
         return;
       }
-      const block = renderAgentPresetBlock(parsePreset(raw), void 0, options.header);
+      const ir = parsePreset(raw);
+      const dropped = agentPresetPreambleEntries(ir).length;
+      if (dropped > 0) warnDroppedPreamble(options.sectionName, agentId, state.activePreset, dropped);
+      const block = renderAgentPresetBlock(ir, void 0, options.header);
       if (block === void 0) {
         settle("");
         return;

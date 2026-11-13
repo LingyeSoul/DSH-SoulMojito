@@ -165,6 +165,10 @@ export interface HostAgentPresetsService {
   mount?(agentContext: unknown, presetId: string): Promise<unknown>
   recompose?(agentContext: unknown, presetId: string): Promise<{ id: string }>
   compositionInventory?(): Promise<Array<{ id?: unknown }>>
+  /** 会话已记录的 preset id（0.2.1+ projection；创建时 header 的预设也计入）。 */
+  presetForSession?(session: unknown): string | null
+  /** 当前 agent run 的 preset id（未绑定 preset 时 undefined）。 */
+  composedPreset?(agentContext: unknown): string | undefined
 }
 
 export interface HostCompactionService {

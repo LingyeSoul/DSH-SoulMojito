@@ -28,7 +28,7 @@
 
 import { parsePreset } from '../../tavern-format/src/index.js'
 import type { TavernState, TavernStore } from '../../tavern-store/src/index.js'
-import { onAgentPresetChanged, renderAgentPresetBlock } from './agent-tavern/preset.js'
+import { agentPresetPreambleEntries, onAgentPresetChanged, renderAgentPresetBlock } from './agent-tavern/preset.js'
 import type { HostPromptSection } from './host-contract.js'
 import { createLazyProjection } from './lazy-projection.js'
 import { CHAR_FALLBACK } from './preset-mount.js'
@@ -59,6 +59,23 @@ let renderMemo: { key: string; text: string } | undefined
 /** 写穿代数：预设文件内容变化时记忆键不变，靠代数让记忆失效。 */
 let renderGeneration = 0
 
+/**
+ * 非 system 条目被丢弃的一次性告警键（决策 2026-11-13-preset-user-role-injection）：
+ * renderAgentPresetBlock 只投影 system 条目，标准会话没有消息帧位置承载
+ * user/assistant 条目，它们只能被静默丢弃。按 (presetId, 条数) 只告警一次——
+ * 写穿重载每次都会重跑渲染，逐次告警只会刷屏。
+ */
+const droppedPreambleWarnings = new Set<string>()
+
+function warnDroppedPreamble(presetId: string, count: number): void {
+  const key = [presetId, String(count)].join('\u0000')
+  if (droppedPreambleWarnings.has(key)) return
+  droppedPreambleWarnings.add(key)
+  console.warn(
+    `dsh-soulmojito: standard DSH Agent channel '${NATIVE_PRESET_SECTION}' projects system entries only — dropped ${count} non-system preset '${presetId}' ${count === 1 ? 'entry' : 'entries'}`,
+  )
+}
+
 const projection = createLazyProjection<string>({
   getState: async () => (await store()).getState(),
   load: async (agentId, settle, snapshot) => {
@@ -86,7 +103,11 @@ async function renderUnboundBlock(db: TavernStore, state: TavernState): Promise<
   if (typeof state.activePreset !== 'string' || state.activePreset === '') return ''
   const raw = await db.getPreset(state.activePreset)
   if (raw === undefined) return ''
-  const block = renderAgentPresetBlock(parsePreset(raw), undefined, NATIVE_PRESET_HEADER)
+  const ir = parsePreset(raw)
+  // 非 system 条目没有消息帧位置：只告警，不影响渲染记忆与落定文本。
+  const dropped = agentPresetPreambleEntries(ir).length
+  if (dropped > 0) warnDroppedPreamble(state.activePreset, dropped)
+  const block = renderAgentPresetBlock(ir, undefined, NATIVE_PRESET_HEADER)
   if (block === undefined) return ''
   // 预设内容是 ST 宏（{{char}}/{{user}}）的高频来源：宏展开 + {{...}} 中性化后
   // 才能进宿主 section（prompt-safety.ts，宿主 interpolate 会炸装配）。标准会话

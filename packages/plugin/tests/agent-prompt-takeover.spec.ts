@@ -19,16 +19,22 @@ import {
   type AgentContextLike,
 } from '../src/agent-tavern/agent.js'
 import { registerAgentPromptPart } from '../src/agent-tavern/prompt-parts.js'
+import { apply as applyImPrompt } from '../src/im/agent.js'
 import { clearModRegistryForTest, registerModSection } from '../src/mods/cross-bundle.js'
 
 interface CapturedSection {
   name: string
   order: number
   complete?: boolean
-  text: (assembly?: { agent?: { id?: string } }) => string
+  text: (assembly?: { agent?: { id?: string; session?: { id?: string } } }) => string
 }
 
 const UNBOUND_AGENT = 'takeover-unbound-agent'
+
+function sessionIdOf(session: unknown): string | undefined {
+  if (typeof session !== 'object' || session === null || !('id' in session)) return undefined
+  return typeof session.id === 'string' ? session.id : undefined
+}
 
 function mountSection(): CapturedSection {
   let captured: CapturedSection | undefined
@@ -87,6 +93,35 @@ describe('AgentTavern complete system prompt', () => {
     }
   })
 
+  it('scopes the IM part to IM presets in the complete section', () => {
+    // 证据会话 2026-11-13@16h 46m 26s 172ms：普通 agent-tavern 会话的首个
+    // 真实请求带上了进程里残留的 IM 段。装配必须按 session 记录的 preset 收窄，
+    // 而不是信任注册表里“曾经挂过”。
+    applyImPrompt({} as AgentContextLike)
+    let captured: CapturedSection | undefined
+    apply({
+      systemPrompt: {
+        section: (section: CapturedSection) => { captured = section },
+        context: () => {},
+      },
+      tools: { register: () => {} },
+      agentPresets: {
+        presetForSession: (session: unknown) =>
+          sessionIdOf(session) === 'im-session' ? 'agent-tavern-im' : 'agent-tavern',
+      },
+      on: () => undefined,
+      effect: (fn: () => unknown) => { fn(); return () => {} },
+    } as unknown as AgentContextLike)
+    if (captured === undefined) throw new Error('apply() did not register the prompt section')
+
+    const ordinary = captured.text({ agent: { id: UNBOUND_AGENT, session: { id: 'ordinary-session' } } })
+    expect(ordinary).toContain('You are AgentTavern running inside the DSH native AgentLoop.')
+    expect(ordinary).not.toContain('IM 模式（AgentTavernIM）')
+
+    const im = captured.text({ agent: { id: UNBOUND_AGENT, session: { id: 'im-session' } } })
+    expect(im).toContain('IM 模式（AgentTavernIM）')
+  })
+
   it('keeps context-scoped parts out of the system header', () => {
     const section = mountSection()
     const dispose = registerAgentPromptPart({
@@ -97,7 +132,7 @@ describe('AgentTavern complete system prompt', () => {
     })
     try {
       expect(section.text({ agent: { id: UNBOUND_AGENT } })).not.toContain('PROBE CONTEXT ONLY')
-      const piece = agentPromptSectionsFor(UNBOUND_AGENT).find((entry) => entry.name === 'takeover-probe-context')
+      const piece = agentPromptSectionsFor(UNBOUND_AGENT, undefined).find((entry) => entry.name === 'takeover-probe-context')
       expect(piece?.scope).toBe('context')
     } finally {
       dispose()
@@ -112,7 +147,7 @@ describe('AgentTavern complete system prompt', () => {
       expect(text).toContain('MOD STYLE BODY')
       // 宿主变量语法被中性化：complete 段的文本要能安全过 assemble。
       expect(text).not.toContain('{{raw}}')
-      const pieces = agentPromptSectionsFor(UNBOUND_AGENT)
+      const pieces = agentPromptSectionsFor(UNBOUND_AGENT, undefined)
       const mod = pieces.find((piece) => piece.name === 'dsh-soulmojito:mod:takeover-mod:style')!
       expect(mod.order).toBe(0)
       expect(mod.scope).toBe('system')
@@ -126,7 +161,7 @@ describe('AgentTavern complete system prompt', () => {
   })
 
   it('exposes the same pieces to the prompt viewer with their destination', () => {
-    const pieces = agentPromptSectionsFor(UNBOUND_AGENT)
+    const pieces = agentPromptSectionsFor(UNBOUND_AGENT, undefined)
     expect(pieces.map((piece) => piece.name)).toEqual([
       'dsh-soulmojito:agent-kernel',
     ])

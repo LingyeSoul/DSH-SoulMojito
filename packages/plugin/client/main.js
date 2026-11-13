@@ -3279,6 +3279,8 @@ window.__ModuleLoader__.load({
       'nav.noChats': 'No chats',
       'nav.noCharacters': 'No character cards',
       'nav.opening': 'Opening {name}',
+      'nav.importChat': 'Import chat (.jsonl)',
+      'nav.importChatFailed': 'Chat import failed',
       'nav.exportChat': 'Export {name}',
       'nav.duplicateChat': 'Duplicate {name}',
       'nav.rename': 'Rename {name}',
@@ -4554,6 +4556,8 @@ window.__ModuleLoader__.load({
       'nav.noChats': '暂无聊天',
       'nav.noCharacters': '暂无角色卡',
       'nav.opening': '正在打开 {name}',
+      'nav.importChat': '导入聊天（.jsonl）',
+      'nav.importChatFailed': '聊天导入失败',
       'nav.exportChat': '导出 {name}',
       'nav.duplicateChat': '复制 {name}',
       'nav.rename': '重命名 {name}',
@@ -11347,7 +11351,7 @@ window.__ModuleLoader__.load({
       return host
     }
 
-    function ChatList({ ctx, character, currentSession, group = false }) {
+    function ChatList({ ctx, character, currentSession, group = false, allowImport }) {
       const state = useTavernStore()
       const t = useTranslate()
       const chats = state.chatLists[character]
@@ -11388,7 +11392,41 @@ window.__ModuleLoader__.load({
         })
         await loadChatList(character, true)
       })
+      // 聊天导入只在管理面板出现（宿主侧栏保持窄行、不放工具行）：面板的
+      // 「聊天」分区渲染同一份 TavernSidebar，经 allowChatImport 传入。
+      const importChat = (file) => {
+        if (file === undefined) return
+        const name = file.name.replace(/\.jsonl$/i, '')
+        const reader = new FileReader()
+        reader.onerror = () => setError(`${t('nav.importChatFailed')}: ${reader.error instanceof Error ? reader.error.message : String(reader.error)}`)
+        reader.onload = () => {
+          const content = typeof reader.result === 'string' ? reader.result : ''
+          setError('')
+          void api('import/chat', {
+            method: 'POST',
+            headers: jsonHeaders(),
+            body: JSON.stringify({ character, name, content }),
+          }).then(() => loadChatList(character, true)).catch((cause) => {
+            setError(`${t('nav.importChatFailed')}: ${cause instanceof Error ? cause.message : String(cause)}`)
+          })
+        }
+        reader.readAsText(file)
+      }
+      // 组列表不提供导入：`import/chat` 落库前要求同名角色卡存在（组名不是卡，
+      // 会被 404 拒绝），控制项只出现在角色聊天列表里。
       return h('div', { className: 'dt-sidebar-chats' },
+        allowImport && !group ? h('div', { className: 'dt-sidebar-chat-tools' },
+          h('label', { className: 'dt-upload', title: t('nav.importChat') },
+            t('nav.importChat'),
+            h('input', {
+              type: 'file',
+              accept: '.jsonl,application/jsonl,application/json',
+              onChange: (event) => {
+                const file = event.target.files?.[0]
+                event.target.value = ''
+                importChat(file)
+              },
+            }))) : null,
         chats?.map((chatId) => {
           const labels = chatArchitectureLabels(character, chatId, group)
           return h('div', {
@@ -11534,7 +11572,7 @@ window.__ModuleLoader__.load({
           : option.text.length > 260 ? `${option.text.slice(0, 259)}…` : option.text)))))
     }
 
-    function TavernSidebar({ ctx, useSessions, floating, onClose }) {
+    function TavernSidebar({ ctx, useSessions, floating, onClose, allowChatImport }) {
       const state = useTavernStore()
       const t = useTranslate()
       const currentSession = useCurrentSessionId(useSessions)
@@ -11602,7 +11640,7 @@ window.__ModuleLoader__.load({
                   title: t('nav.newChat', { name: character }),
                   onClick: () => startCharacterChat(character),
                 }, h(IconPlusOutline16))),
-              open ? h(ChatList, { ctx, character, currentSession }) : null)
+              open ? h(ChatList, { ctx, character, currentSession, allowImport: allowChatImport }) : null)
           }),
           state.bootstrap.characters.length === 0 ? h('span', { className: 'dt-sidebar-status' }, t('nav.noCharacters')) : null,
           groups.length > 0 ? h('div', { className: 'dt-sidebar-heading dt-sidebar-subheading' },
@@ -11626,7 +11664,7 @@ window.__ModuleLoader__.load({
                     })
                   },
                 }, h(IconPlusOutline16))),
-              open ? h(ChatList, { ctx, character: group.name, currentSession, group: true }) : null)
+              open ? h(ChatList, { ctx, character: group.name, currentSession, group: true, allowImport: allowChatImport }) : null)
           })) : null,
         h('div', { className: 'dt-sidebar-heading dt-sidebar-subheading' },
           headingToggle(workbenchOpen, t('nav.workbench'), '✎ ', 'workbench'),
@@ -13527,7 +13565,7 @@ window.__ModuleLoader__.load({
     for (const definition of [
       { id: 'overview', icon: IconSparkle16, label: (t) => t('panel.section.overview'), component: () => h(PanelOverview) },
       { id: 'characters', group: 'content', icon: IconUserOutline16, label: (t) => t('panel.section.characters'), component: (host) => h(PanelCharacters, { ctx: host.ctx, useSessions: host.useSessions }) },
-      { id: 'chats', group: 'session', icon: IconQueueOutline14, label: (t) => t('panel.section.chats'), component: (host) => h(TavernSidebar, { ctx: host.ctx, useSessions: host.useSessions }) },
+      { id: 'chats', group: 'session', icon: IconQueueOutline14, label: (t) => t('panel.section.chats'), component: (host) => h(TavernSidebar, { ctx: host.ctx, useSessions: host.useSessions, allowChatImport: true }) },
       { id: 'guides', group: 'session', icon: IconListPenOutline16, label: (t) => t('panel.section.guides'), component: (host) => h(PanelGuides, { useSessions: host.useSessions }) },
       // 聊天注记（契约 2026-11-12 §2.4）：Author's Note 与 Summary 写当前聊天
       // 的 chat_metadata。session 组——按聊天生效，换聊天即换内容。
@@ -17987,6 +18025,7 @@ window.__ModuleLoader__.load({
         .dt-prompt-order-row{cursor:grab}
         .dt-prompt-order-dragging{opacity:.6}
         .dt-slash-hints{display:flex;flex-wrap:wrap;gap:4px;padding:6px 0;max-width:min(var(--dsh-composer-card-max-width,780px),100%);margin:0 auto}
+        .dt-sidebar-chat-tools{display:flex;align-items:center;gap:6px;padding:0 0 6px;min-width:0}
         .dt-slash-hint{padding:2px 7px;border:1px solid var(--dsw-alias-border-l2);border-radius:5px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;cursor:pointer}
         .dt-slash-hint:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
       `

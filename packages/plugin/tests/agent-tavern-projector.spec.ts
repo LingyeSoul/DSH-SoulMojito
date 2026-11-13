@@ -1195,14 +1195,16 @@ describe('AgentTavern native event projector', () => {
       .filter((event) => event.type === 'user/message' || event.type === 'assistant/message')
       .map((event) => (event.data.message?.content ?? event.data.content)?.[0]?.text)
     expect(texts).toEqual(['FRAME A', 'SAMPLE B', 'FRAME C', 'Hello.', 'Welcome.'])
-    // preamble 的 user 帧带 presetUserBlock 标记（pre-step 兜底通道据此判已注入）。
+    // preamble 的 user 帧带 presetUserBlock 标记（pre-step 兜底通道据此判已注入）；
+    // source 与激活期通道同源（preset-user-block.ts），额外带诊断 hash。
     const preambleUsers = views.filter((event) => event.type === 'user/message').slice(0, 2)
     for (const event of preambleUsers) {
-      expect(event.data.source).toEqual({
+      expect(event.data.source).toEqual(expect.objectContaining({
         kind: 'plugin:dsh-soulmojito',
         form: 'instructions',
         presetUserBlock: true,
-      })
+        presetUserBlockHash: expect.stringMatching(/^[0-9a-f]{16}$/),
+      }))
     }
     // assistant 帧用预设镜像 model source 对（与历史镜像同类，投影跳过）。
     const presetAssistant = views.find((event) => event.data.message?.content?.[0]?.text === 'SAMPLE B')!

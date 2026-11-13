@@ -762,6 +762,8 @@
       'nav.noChats': '暂无聊天',
       'nav.noCharacters': '暂无角色卡',
       'nav.opening': '正在打开 {name}',
+      'nav.importChat': '导入聊天（.jsonl）',
+      'nav.importChatFailed': '聊天导入失败',
       'nav.exportChat': '导出 {name}',
       'nav.duplicateChat': '复制 {name}',
       'nav.rename': '重命名 {name}',

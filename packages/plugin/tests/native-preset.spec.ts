@@ -243,6 +243,50 @@ describe('standard DSH Agent preset projection', () => {
     expect(textOf(NEW_STANDARD_AGENT)).toContain('Terse prose only.')
   })
 
+  it('warns once about non-system preset entries dropped by the channel', async () => {
+    // 标准会话只有 system 头：user/assistant 条目没有消息帧位置，只能丢弃——
+    // 按 (preset, 条数) 告警一次，渲染记忆与落定文本不受影响。
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const FRAMED = {
+        temperature: 0.8,
+        prompts: [
+          { name: 'Main Prompt', identifier: 'main', role: 'system', content: 'Terse prose only.', system_prompt: true },
+          { name: 'Frame', identifier: 'frame', role: 'user', content: 'Speak as {{char}}.', system_prompt: false },
+        ],
+        prompt_order: [{ character_id: 100001, order: [{ identifier: 'main', enabled: true }, { identifier: 'frame', enabled: true }] }],
+      }
+      const put = makeResponse()
+      await apiHandler(makeRequest({ name: 'Native Framed Preset', data: FRAMED }, `/api/dsh-soulmojito/preset/${encodeURIComponent('Native Framed Preset')}`, 'PUT'), put)
+      expect(put.statusCode).toBe(200)
+      await patchState({ activePreset: 'Native Framed Preset' })
+      await vi.waitFor(() => {
+        expect(textOf(STANDARD_AGENT)).toContain('Terse prose only.')
+      })
+      expect(warn).toHaveBeenCalledTimes(1)
+      const message = String(warn.mock.calls[0]![0])
+      expect(message).toContain('dsh-soulmojito:native-preset')
+      expect(message).toContain('Native Framed Preset')
+      expect(message).toContain('dropped 1')
+      expect(message).toContain('system entries only')
+      // 同一键的第二次装载（同内容 PUT 推进代数、渲染记忆失效）：不重复告警，文本不变
+      const before = textOf(STANDARD_AGENT)
+      const rewrite = makeResponse()
+      await apiHandler(makeRequest({ name: 'Native Framed Preset', data: structuredClone(FRAMED) }, `/api/dsh-soulmojito/preset/${encodeURIComponent('Native Framed Preset')}`, 'PUT'), rewrite)
+      expect(rewrite.statusCode).toBe(200)
+      expect(textOf(STANDARD_AGENT)).toBe(before)
+      expect(warn).toHaveBeenCalledTimes(1)
+      // 全 system 预设：不告警（收尾顺带恢复原激活预设）
+      await patchState({ activePreset: 'Native Preset' })
+      await vi.waitFor(() => {
+        expect(textOf(STANDARD_AGENT)).toContain('Terse prose only.')
+      })
+      expect(warn).toHaveBeenCalledTimes(1)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   it('clears the projection through the switch-off write-through', async () => {
     await patchState({ nativeAgentPreset: false })
     await vi.waitFor(() => {

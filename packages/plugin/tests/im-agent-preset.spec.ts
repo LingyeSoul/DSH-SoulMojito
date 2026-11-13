@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import type { AgentContextLike } from '../src/agent-tavern/agent.js'
 import { agentPromptPieces } from '../src/agent-tavern/prompt-parts.js'
 import { apply, IM_MODE_SECTION, imModePromptText, inject } from '../src/im/agent.js'
+import { AGENT_TAVERN_IM_NATIVE_PRESET_ID, AGENT_TAVERN_IM_PRESET_ID } from '../src/im/types.js'
 
 describe('AgentTavernIM Native preset composition', () => {
   const patch = readFileSync(
@@ -67,7 +68,7 @@ describe('AgentTavernIM prompt', () => {
 
   it('registers one static IM-mode part before the AgentTavern kernel', () => {
     apply({} as AgentContextLike)
-    const pieces = agentPromptPieces(undefined)
+    const pieces = agentPromptPieces(undefined, AGENT_TAVERN_IM_PRESET_ID)
     const part = pieces.find((piece) => piece.name === IM_MODE_SECTION)
     expect(part).toBeDefined()
     // kernel 是 -80；IM 模式必须先于普通角色扮演对话习惯。
@@ -77,6 +78,21 @@ describe('AgentTavernIM prompt', () => {
     // hostPromptSafe：静态提示词里不能出现宿主 {{...}} 宏，否则整轮装配会中止。
     expect(part!.text).not.toContain('{{')
     expect(part!.text).not.toContain('}}')
+  })
+
+  it('keeps the IM contract out of ordinary AgentTavern sessions', () => {
+    // 证据会话 2026-11-13@16h 46m 26s 172ms：进程里挂过 IM preset 后，普通
+    // agent-tavern 会话的首个真实请求也带上了 IM 段。注册表是进程级的，文本必须
+    // 按当前 preset 收窄（2026-11-13-im-preset-prompt-scope）。
+    apply({} as AgentContextLike)
+    for (const presetId of ['agent-tavern', 'agent-novel', 'card-workbench', undefined]) {
+      const piece = agentPromptPieces(undefined, presetId).find((entry) => entry.name === IM_MODE_SECTION)
+      expect(piece).toBeUndefined()
+    }
+    for (const presetId of [AGENT_TAVERN_IM_PRESET_ID, AGENT_TAVERN_IM_NATIVE_PRESET_ID]) {
+      const piece = agentPromptPieces(undefined, presetId).find((entry) => entry.name === IM_MODE_SECTION)
+      expect(piece?.text).toBe(imModePromptText())
+    }
   })
 
   it('never registers its own host section (the complete section would drop it)', () => {

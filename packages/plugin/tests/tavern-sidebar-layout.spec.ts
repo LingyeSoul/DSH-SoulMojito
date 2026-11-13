@@ -199,3 +199,50 @@ describe('sidebar collapse memory', () => {
     expect(warnings).toHaveLength(2)
   })
 })
+
+/**
+ * 聊天导入入口契约（2026-11-13 审查收口）：宿主会话列表上方的侧栏保持窄行，
+ * 不放工具行；导入按钮只出现在管理面板「聊天」分区（同一份 TavernSidebar 的
+ * 另一个挂载点），经 allowChatImport → ChatList.allowImport 门控。锚点用
+ * 分发产物里的源码标记（client-src 逐字拼接），与上方分区高度契约同一纪律。
+ */
+describe('panel-only chat import entry', () => {
+  const PANEL_MOUNT = "h(TavernSidebar, { ctx: host.ctx, useSessions: host.useSessions, allowChatImport: true })"
+  const HOST_MOUNT = 'createPortal(h(TavernSidebar, { ctx: PanelHost.context, useSessions }), host)'
+  const IMPORT_ROW = "allowImport && !group ? h('div', { className: 'dt-sidebar-chat-tools' }"
+  const CHAT_TOOLS_RULE = '.dt-sidebar-chat-tools{display:flex;align-items:center;gap:6px;padding:0 0 6px;min-width:0}'
+
+  it('gates the import row behind the panel-only flag', () => {
+    expect(source).toContain(PANEL_MOUNT)
+    // 宿主侧栏挂载点不得携带该标志（否则工具行回到宿主会话列表，行宽再次溢出）。
+    expect(source).toContain(HOST_MOUNT)
+    expect(source).not.toContain('h(TavernSidebar, { ctx: PanelHost.context, useSessions, allowChatImport')
+    // 工具行只能以条件表达式出现：无条件渲染就是这次回归；组列表也不提供
+    // （import/chat 要求同名角色卡存在）。
+    expect(source).toContain(IMPORT_ROW)
+    expect(source).toContain('allowImport && !group ?')
+    expect(source.match(/className: 'dt-sidebar-chat-tools'/g)).toHaveLength(1)
+    expect(source).toContain(CHAT_TOOLS_RULE)
+  })
+
+  it('threads the flag through both per-character and group chat lists', () => {
+    expect(source.match(/allowImport: allowChatImport/g)).toHaveLength(2)
+    expect(source).toContain('function ChatList({ ctx, character, currentSession, group = false, allowImport })')
+  })
+
+  it('imports the chosen .jsonl into the character the list belongs to', () => {
+    expect(source).toContain("accept: '.jsonl,application/jsonl,application/json',")
+    expect(source).toContain("api('import/chat', {")
+    expect(source).toContain('body: JSON.stringify({ character, name, content }),')
+    expect(source).toContain('}).then(() => loadChatList(character, true)).catch((cause) => {')
+    // 失败必须落到侧栏错误行，且带本地化前缀，不能静默。
+    const localizedImportError = "setError(`${t('nav.importChatFailed')}: "
+    expect(source.split(localizedImportError)).toHaveLength(3)
+    expect(source).toContain('reader.onerror = () =>')
+  })
+
+  it('marker does not match the unconditional form (negative sample)', () => {
+    expect("h('div', { className: 'dt-sidebar-chat-tools' }".includes(IMPORT_ROW)).toBe(false)
+    expect("allowImportX ? h('div', { className: 'dt-sidebar-chat-tools' }".includes(IMPORT_ROW)).toBe(false)
+  })
+})

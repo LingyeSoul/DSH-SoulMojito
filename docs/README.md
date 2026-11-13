@@ -128,6 +128,7 @@
 - [`2026-11-02-agent-prompt-takeover.md`](../decisions/2026-11-02-agent-prompt-takeover.md) — AgentTavern 接管整份 system prompt（complete 段）
 - [`2026-11-02-agent-identity-system-prompt.md`](../decisions/2026-11-02-agent-identity-system-prompt.md) — 用户人设与角色摘要改为 complete 段的 system 部件（不再作为 runtime-context user 消息）
 - [`2026-11-13-preset-user-role-injection.md`](../decisions/2026-11-13-preset-user-role-injection.md) — 预设非 system 条目（user/assistant）改为激活期预装载成真实消息帧；user 条目保留 pre-step 压缩后重注与存量会话兜底
+- [`2026-11-13-im-preset-prompt-scope.md`](../decisions/2026-11-13-im-preset-prompt-scope.md) — IM 模式提示词按会话 preset 收窄：进程级 prompt 注册表里残留的 IM 段不再进入普通 AgentTavern 会话
 
 ### AgentNovel
 

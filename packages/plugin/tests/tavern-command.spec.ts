@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, type Mock, vi } from 'vitest'
 import { apply } from '../src/index.js'
 import { apply as applyAgentTavern, type AgentContextLike } from '../src/agent-tavern/agent.js'
 import { registeredAgentPromptParts } from '../src/agent-tavern/prompt-parts.js'
@@ -122,6 +122,8 @@ describe('internal Tavern session bridge occupation', () => {
   let agents: Map<string, ReturnType<typeof makeAgent>>
   let recomposeCalls: Array<{ agent: unknown; presetId: string }>
   let llmRequests: Array<{ system?: string }>
+  // 宿主 logger 的 warn 通道：激活路径的降级必须留痕，不能静默。
+  let warn: Mock<(message?: unknown) => void>
   let failGeneration = false
   // ST 思考+正文双通道流式：打开后 llm.stream 桩先吐 reasoning-delta 再吐正文。
   let reasoningGeneration = false
@@ -201,8 +203,10 @@ describe('internal Tavern session bridge occupation', () => {
     agents = new Map()
     recomposeCalls = []
     llmRequests = []
+    warn = vi.fn<(message?: unknown) => void>()
     apply({
       systemPrompt: { section: () => {}, context: () => {} },
+      logger: { warn },
       commands: { register: (def) => { definition = def } },
       webServer: { register: (def) => { apiHandler = def.handler; return () => {} } },
       agentPresets: {
@@ -648,6 +652,57 @@ describe('internal Tavern session bridge occupation', () => {
       expect(agent.phase.lastTurn).toBe(4)
     } finally {
       await store.updateState(() => ({ activePreset: previousState.activePreset }))
+    }
+  })
+
+  it('keeps activation alive and skips the preamble when the active preset is corrupt', async () => {
+    // getPreset 原样 JSON.parse（tavern-store），损坏文件会抛错。激活不能因此中止：
+    // 绑定与历史导入才是主路径。这里也不调用 defaultPreset()——默认预设只含
+    // system 条目、preamble 同样为空，回落不会产生帧，只会掩盖预设不可读。
+    const corruptPath = join(store.rootPath, 'presets', 'Corrupt.json')
+    writeFileSync(corruptPath, '{')
+    const previousState = await store.getState()
+    await store.updateState(() => ({ activePreset: 'Corrupt' }))
+    warn.mockClear()
+    try {
+      const now = new Date().toISOString()
+      const corruptChat = await store.createChat(CHARACTER, {
+        user_name: 'unused', character_name: 'unused',
+        chat_metadata: { createdAt: now, timedWorldInfo: {} },
+      }, [{ name: CHARACTER, is_user: false, is_system: false, send_date: now, mes: '早上好。' }])
+      const agent = makeAgent('session-agent-corrupt-preset', 4)
+      const result = await handler({
+        agent,
+        rawInput: base64Url({ character: CHARACTER, chatId: corruptChat, architecture: 'agent-tavern', contextMode: 'dsh-native' }),
+      })
+      expect(result.kind).toBe('success')
+      // 历史导入计划照常：开场白以 agent-tavern-import 的 model source 落地。
+      const events = agent.session.events
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'assistant/message',
+        data: expect.objectContaining({
+          message: expect.objectContaining({
+            content: [expect.objectContaining({ text: '早上好。' })],
+            source: expect.objectContaining({ model: 'agent-tavern-import' }),
+          }),
+        }),
+      }))
+      // 损坏预设不产出任何用户块帧（preamble 为空）。
+      expect(events.filter((event) => event.type === 'user/message')).not.toContainEqual(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            source: expect.objectContaining({ presetUserBlock: true }),
+          }),
+        }),
+      )
+      // 降级留痕：一次 warn，带预设 id 与原错误。
+      expect(warn).toHaveBeenCalledTimes(1)
+      const logged = String(warn.mock.calls[0]?.[0])
+      expect(logged).toContain("active preset 'Corrupt'")
+      expect(logged).toContain('could not be read')
+    } finally {
+      await store.updateState(() => ({ activePreset: previousState.activePreset }))
+      rmSync(corruptPath, { force: true })
     }
   })
 

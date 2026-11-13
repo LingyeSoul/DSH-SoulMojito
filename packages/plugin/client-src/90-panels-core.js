@@ -26,7 +26,7 @@
     for (const definition of [
       { id: 'overview', icon: IconSparkle16, label: (t) => t('panel.section.overview'), component: () => h(PanelOverview) },
       { id: 'characters', group: 'content', icon: IconUserOutline16, label: (t) => t('panel.section.characters'), component: (host) => h(PanelCharacters, { ctx: host.ctx, useSessions: host.useSessions }) },
-      { id: 'chats', group: 'session', icon: IconQueueOutline14, label: (t) => t('panel.section.chats'), component: (host) => h(TavernSidebar, { ctx: host.ctx, useSessions: host.useSessions }) },
+      { id: 'chats', group: 'session', icon: IconQueueOutline14, label: (t) => t('panel.section.chats'), component: (host) => h(TavernSidebar, { ctx: host.ctx, useSessions: host.useSessions, allowChatImport: true }) },
       { id: 'guides', group: 'session', icon: IconListPenOutline16, label: (t) => t('panel.section.guides'), component: (host) => h(PanelGuides, { useSessions: host.useSessions }) },
       // 聊天注记（契约 2026-11-12 §2.4）：Author's Note 与 Summary 写当前聊天
       // 的 chat_metadata。session 组——按聊天生效，换聊天即换内容。

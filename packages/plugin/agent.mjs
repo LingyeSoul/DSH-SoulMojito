@@ -9247,7 +9247,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.8.1".trim() : "";
-  const commit = true ? normalizeCommit("a45c812") : void 0;
+  const commit = true ? normalizeCommit("c7142da") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -10109,6 +10109,18 @@ function sanitizeParams(params) {
     }
   }
   return out;
+}
+
+// packages/plugin/src/session/preset-marker.ts
+function lastSelectedPresetId(session) {
+  const events = sessionEvents(session);
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event?.type !== "agent-preset/selected") continue;
+    const preset = event.data?.agentPreset;
+    if (typeof preset === "string") return preset;
+  }
+  return void 0;
 }
 
 // packages/plugin/src/tool-args.ts
@@ -12281,8 +12293,8 @@ function registerAgentPromptPart(part) {
 function registeredAgentPromptParts() {
   return [...partStore().values()].sort((a, b) => a.order - b.order);
 }
-function agentPromptPieces(agentId) {
-  return registeredAgentPromptParts().map((part) => ({ name: part.name, order: part.order, scope: part.scope, text: part.text(agentId) })).filter((piece) => piece.text !== "");
+function agentPromptPieces(agentId, presetId) {
+  return registeredAgentPromptParts().map((part) => ({ name: part.name, order: part.order, scope: part.scope, text: part.text(agentId, presetId) })).filter((piece) => piece.text !== "");
 }
 
 // packages/plugin/src/agent-tavern/preset.ts
@@ -12325,24 +12337,6 @@ function effectiveAgentPresetPrompts(preset, card) {
   }
   return effective;
 }
-function renderAgentPresetBlock(preset, card, header = AGENT_PRESET_BLOCK_HEADER) {
-  const prompts = effectiveAgentPresetPrompts(preset, card).filter((prompt) => prompt.role === "system");
-  if (prompts.length === 0) return void 0;
-  return [header, ...prompts.map((prompt) => prompt.content)].join("\n\n");
-}
-function renderAgentPresetUserBlock(preset, card) {
-  const contents = effectiveAgentPresetPrompts(preset, card).filter((prompt) => prompt.role === "user").map((prompt) => prompt.content);
-  if (contents.length === 0) return void 0;
-  return [AGENT_PRESET_USER_HEADER, ...contents].join("\n\n");
-}
-function agentPresetPreambleEntries(preset, card) {
-  const entries = [];
-  for (const prompt of effectiveAgentPresetPrompts(preset, card)) {
-    if (prompt.role === "system") continue;
-    entries.push({ role: prompt.role, content: prompt.content });
-  }
-  return entries;
-}
 function presetTemperature(preset) {
   const value = preset.sampler["temperature"];
   return typeof value === "number" && Number.isFinite(value) ? value : void 0;
@@ -12370,9 +12364,10 @@ function projectAgentPreset(preset, card) {
   }
   try {
     const ir = parsePreset(preset);
-    const text = renderAgentPresetBlock(ir, card);
-    const userText = renderAgentPresetUserBlock(ir, card);
-    const preamble = agentPresetPreambleEntries(ir, card);
+    const prompts = effectiveAgentPresetPrompts(ir, card);
+    const text = systemBlockText(prompts, AGENT_PRESET_BLOCK_HEADER);
+    const userText = userBlockText(prompts);
+    const preamble = preambleEntriesOf(prompts);
     const temperature = presetTemperature(ir);
     return {
       ...text === void 0 ? {} : { text },
@@ -12418,6 +12413,24 @@ function defaultPreset() {
 var agentPresetChanged = createGlobalListenerRegistry("dsh-soulmojito:agent-preset-changed-listeners");
 function onAgentPresetChanged(listener) {
   return agentPresetChanged.on(listener);
+}
+function systemBlockText(prompts, header) {
+  const contents = prompts.filter((prompt) => prompt.role === "system").map((prompt) => prompt.content);
+  if (contents.length === 0) return void 0;
+  return [header, ...contents].join("\n\n");
+}
+function userBlockText(prompts) {
+  const contents = prompts.filter((prompt) => prompt.role === "user").map((prompt) => prompt.content);
+  if (contents.length === 0) return void 0;
+  return [AGENT_PRESET_USER_HEADER, ...contents].join("\n\n");
+}
+function preambleEntriesOf(prompts) {
+  const entries = [];
+  for (const prompt of prompts) {
+    if (prompt.role === "system") continue;
+    entries.push({ role: prompt.role, content: prompt.content });
+  }
+  return entries;
 }
 function promptContent(prompt) {
   const content = prompt["content"];
@@ -14828,7 +14841,8 @@ function jsonValueOf2(value) {
 
 // packages/plugin/src/agent-tavern/agent.ts
 var name = "dsh-soulmojito/agent";
-var inject = ["systemPrompt", "tools"];
+var inject = ["systemPrompt", "tools", "agentPresets"];
+var presetService;
 var KERNEL = [
   "You are AgentTavern running inside the DSH native AgentLoop.",
   "The AgentLoop is the only model execution loop. Never claim to call an alternate generator.",
@@ -14878,6 +14892,7 @@ function apply(ctx) {
   } catch {
     agentLogger = void 0;
   }
+  presetService = ctx.agentPresets;
   ctx.systemPrompt?.section?.({
     name: AGENT_PROMPT_SECTION,
     order: -80,
@@ -14887,6 +14902,7 @@ function apply(ctx) {
     // Mirror both into the complete text when the effective scope mode is PTC.
     text: (assembly) => agentSystemPromptTextOf(
       assembly?.agent?.id,
+      agentPresetIdOf(assembly?.agent),
       renderPtcCompleteText(ctx.tools, assembly?.scope, assembly?.toolSet)
     )
   });
@@ -14917,6 +14933,7 @@ function apply(ctx) {
     const resolved = temperature === void 0 ? config : { ...config, temperature };
     void recordAgentTavernPromptViewFor(
       payload?.agent?.id,
+      agentPresetIdOf(payload?.agent),
       resolved,
       ctx.logger,
       () => renderPtcCompleteText(ctx.tools, payload?.agent, void 0)
@@ -15058,9 +15075,6 @@ function agentPresetText(agentId) {
 function agentPresetTemperatureOf(agentId) {
   return presetProjection.valueOf(agentId)?.temperature;
 }
-function agentPresetUserTextOf(agentId) {
-  return presetProjection.valueOf(agentId)?.userText;
-}
 var presetMissingUserText = /* @__PURE__ */ new Set();
 async function ensureAgentPresetUserText(agentId) {
   const cached = presetProjection.valueOf(agentId)?.userText;
@@ -15071,9 +15085,23 @@ async function ensureAgentPresetUserText(agentId) {
   if (text === void 0) presetMissingUserText.add(agentId);
   return text;
 }
-function agentPromptSectionsFor(agentId) {
+function agentPresetIdOf(agent) {
+  if (agent === void 0) return void 0;
+  const presets = presetService;
+  if (presets !== void 0) {
+    const session = agent.session;
+    const recorded = session === void 0 ? null : presets.presetForSession?.(session);
+    if (typeof recorded === "string" && recorded !== "") return recorded;
+    if (agent.ctx !== void 0) {
+      const composed = presets.composedPreset?.(agent.ctx);
+      if (typeof composed === "string" && composed !== "") return composed;
+    }
+  }
+  return lastSelectedPresetId(agent.session);
+}
+function agentPromptSectionsFor(agentId, presetId) {
   const sections = [
-    ...agentPromptPieces(agentId),
+    ...agentPromptPieces(agentId, presetId),
     ...modSectionSnapshot().map((entry) => ({
       name: `dsh-soulmojito:mod:${entry.modId}:${entry.definition.name}`,
       order: clampModSectionOrder(entry.definition.order),
@@ -15083,18 +15111,18 @@ function agentPromptSectionsFor(agentId) {
   ];
   return sections.filter((section) => section.text !== "").sort((a, b) => a.order - b.order);
 }
-function agentSystemPromptTextOf(agentId, ptcText) {
-  const system = agentPromptSectionsFor(agentId).filter((section) => section.scope === "system").map((section) => section.text).join("\n\n");
+function agentSystemPromptTextOf(agentId, presetId, ptcText) {
+  const system = agentPromptSectionsFor(agentId, presetId).filter((section) => section.scope === "system").map((section) => section.text).join("\n\n");
   return [system, ptcText].filter((text) => text.length > 0).join("\n\n");
 }
-async function recordAgentTavernPromptViewFor(agentId, config, logger, ptcText) {
+async function recordAgentTavernPromptViewFor(agentId, presetId, config, logger, ptcText) {
   try {
     if (typeof agentId !== "string" || agentId.trim() === "") return;
     const capture = agentStepCaptureOf(agentId);
     const binding = (await (await tavernStore()).getState()).sessionBindings[agentId];
     if (!binding || binding.architecture !== "agent-tavern" || binding.group === true) return;
-    const sections = agentPromptSectionsFor(agentId);
-    const system = agentSystemPromptTextOf(agentId, ptcText());
+    const sections = agentPromptSectionsFor(agentId, presetId);
+    const system = agentSystemPromptTextOf(agentId, presetId, ptcText());
     recordPromptView({
       character: binding.character,
       chatId: binding.chatId,
@@ -15131,7 +15159,6 @@ function preheatAgentProjections() {
 }
 export {
   AGENT_PROMPT_SECTION,
-  agentPresetUserTextOf,
   agentPromptSectionsFor,
   apply,
   ensureAgentPresetUserText,

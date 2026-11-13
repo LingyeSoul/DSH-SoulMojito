@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { HostSessionEvent } from '../../bind/src/index.js'
-import { agentPresetUserTextOf, apply as applyAgentTavern, type AgentContextLike } from '../src/agent-tavern/agent.js'
+import { apply as applyAgentTavern, ensureAgentPresetUserText, type AgentContextLike } from '../src/agent-tavern/agent.js'
 import { registeredAgentPromptParts } from '../src/agent-tavern/prompt-parts.js'
 import {
   AGENT_PRESET_BLOCK_HEADER,
@@ -278,9 +278,8 @@ describe('AgentTavern preset user block wiring', () => {
   })
 
   it('drives the real projection through agent/pre-step with macros expanded', async () => {
-    await vi.waitFor(() => {
-      expect(agentPresetUserTextOf(AGENT)).toContain('USER FRAME')
-    })
+    const cached = await ensureAgentPresetUserText(AGENT)
+    expect(cached).toContain('USER FRAME')
     const session = makeSession(AGENT)
     const decision = await preStep!({ agent: { session }, turn: 1, step: 1 }, claimedNext)
     const injected = decision.messages[0]!

@@ -141,11 +141,28 @@ export function registerTavernSessionCommand(ctx: PluginContext): void {
             historyImport = undefined
           } else {
             const expand = tavernMacroExpand(currentState, parsed.character, character)
-            const rawPreset = typeof currentState.activePreset === 'string' && currentState.activePreset !== ''
-              ? await db.getPreset(currentState.activePreset)
+            const activePresetId = typeof currentState.activePreset === 'string' && currentState.activePreset !== ''
+              ? currentState.activePreset
               : undefined
-            const preamble = projectAgentPreset(rawPreset ?? defaultPreset(), character?.card).preamble
-              .map((entry) => ({ role: entry.role, content: expand(entry.content) }))
+            // 激活预设读取失败（JSON 损坏或 I/O 错误；TavernStore.tryRead 只吞
+            // ENOENT，其余原样抛）不能中止整条激活：绑定与历史导入才是主路径。
+            // 这里也不调用 defaultPreset()——默认预设只含 system 条目、preamble
+            // 同样为空，回落不会产生帧，只会掩盖用户预设不可读；按无 preamble
+            // 继续，并 warn 一次（预设 id + 原始错误）交给日志暴露问题。
+            let preset: Record<string, unknown> | undefined
+            if (activePresetId === undefined) {
+              preset = defaultPreset()
+            } else {
+              try {
+                preset = (await db.getPreset(activePresetId)) ?? defaultPreset()
+              } catch (error) {
+                ctx.logger?.warn?.(`dsh-soulmojito preset: active preset '${activePresetId}' could not be read, preamble skipped: ${error instanceof Error ? error.message : String(error)}`)
+              }
+            }
+            const preamble = preset === undefined
+              ? []
+              : projectAgentPreset(preset, character?.card).preamble
+                .map((entry) => ({ role: entry.role, content: expand(entry.content) }))
             historyImport = historyImportAppends(
               chat,
               agent.id,

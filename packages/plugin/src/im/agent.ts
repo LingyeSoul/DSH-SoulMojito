@@ -18,7 +18,7 @@
 import type { AgentContextLike } from '../agent-tavern/agent.js'
 import { registerAgentPromptPart } from '../agent-tavern/prompt-parts.js'
 import { hostPromptSafe } from '../prompt-safety.js'
-import { AGENT_TAVERN_IM_PRESET_ID } from './types.js'
+import { AGENT_TAVERN_IM_PRESET_ID, isAgentTavernImPresetId } from './types.js'
 
 export const name = 'dsh-soulmojito/im-agent'
 
@@ -90,6 +90,8 @@ export function apply(_ctx: AgentContextLike): void {
     order: -90,
     scope: 'system',
     // hostPromptSafe：静态提示词里不能出现宿主 {{...}} 宏，否则整轮装配会中止。
-    text: () => hostPromptSafe(IM_MODE_PROMPT),
+    // preset 收窄：注册表是进程级，IM preset 挂载过的文本不得泄漏到普通
+    // AgentTavern 会话（2026-11-13-im-preset-prompt-scope）。
+    text: (_agentId, presetId) => (isAgentTavernImPresetId(presetId) ? hostPromptSafe(IM_MODE_PROMPT) : ''),
   })
 }

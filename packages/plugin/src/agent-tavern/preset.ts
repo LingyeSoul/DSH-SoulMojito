@@ -94,20 +94,14 @@ export function effectiveAgentPresetPrompts(preset: PresetIR, card?: CharacterCa
  *  `agentPresetPreambleEntries` 预装载成真实消息（决策
  *  2026-11-13-preset-user-role-injection）。 */
 export function renderAgentPresetBlock(preset: PresetIR, card?: CharacterCardIR, header: string = AGENT_PRESET_BLOCK_HEADER): string | undefined {
-  const prompts = effectiveAgentPresetPrompts(preset, card).filter((prompt) => prompt.role === 'system')
-  if (prompts.length === 0) return undefined
-  return [header, ...prompts.map((prompt) => prompt.content)].join('\n\n')
+  return systemBlockText(effectiveAgentPresetPrompts(preset, card), header)
 }
 
 /** 渲染 user 角色条目块：只取 `role === 'user'` 的条目，按 prompt_order 顺序
  *  用空行分段。无条目返回 undefined——调用方据此完全不注入，不制造空消息。
  *  这是 pre-step 兜底通道（压缩后重注入 / 存量已启动会话）的渲染体。 */
 export function renderAgentPresetUserBlock(preset: PresetIR, card?: CharacterCardIR): string | undefined {
-  const contents = effectiveAgentPresetPrompts(preset, card)
-    .filter((prompt) => prompt.role === 'user')
-    .map((prompt) => prompt.content)
-  if (contents.length === 0) return undefined
-  return [AGENT_PRESET_USER_HEADER, ...contents].join('\n\n')
+  return userBlockText(effectiveAgentPresetPrompts(preset, card))
 }
 
 /** 一条非 system 预设条目：激活期预装载成真实消息帧的原料。content 是原始文本
@@ -120,12 +114,7 @@ export interface AgentPresetPreambleEntry {
 /** 按 prompt_order 顺序返回全部非 system 条目（user 与 assistant）。空数组 =
  *  本预设没有需要帧化的条目：调用方据此完全不写 preamble。 */
 export function agentPresetPreambleEntries(preset: PresetIR, card?: CharacterCardIR): AgentPresetPreambleEntry[] {
-  const entries: AgentPresetPreambleEntry[] = []
-  for (const prompt of effectiveAgentPresetPrompts(preset, card)) {
-    if (prompt.role === 'system') continue
-    entries.push({ role: prompt.role, content: prompt.content })
-  }
-  return entries
+  return preambleEntriesOf(effectiveAgentPresetPrompts(preset, card))
 }
 
 /** 预设 temperature（唯一投影的采样参数，理由见文件头）。缺失/非法返回 undefined（透传宿主配置）。 */
@@ -206,9 +195,12 @@ export function projectAgentPreset(preset: Record<string, unknown>, card?: Chara
   }
   try {
     const ir = parsePreset(preset)
-    const text = renderAgentPresetBlock(ir, card)
-    const userText = renderAgentPresetUserBlock(ir, card)
-    const preamble = agentPresetPreambleEntries(ir, card)
+    // 一次求值、三处派生：system 块 / user 块 / preamble 原料同源，避免重复遍历
+    // prompt_order（并保证三者的过滤与顺序完全一致）。
+    const prompts = effectiveAgentPresetPrompts(ir, card)
+    const text = systemBlockText(prompts, AGENT_PRESET_BLOCK_HEADER)
+    const userText = userBlockText(prompts)
+    const preamble = preambleEntriesOf(prompts)
     const temperature = presetTemperature(ir)
     return {
       ...(text === undefined ? {} : { text }),
@@ -282,6 +274,32 @@ export function emitAgentPresetChanged(): Promise<void> {
 }
 
 /* ------------------------------ 内部 ------------------------------ */
+
+/** system 块渲染体：只留 `role === 'system'` 的条目，header + 内容按顺序空行
+ *  分段；无条目返回 undefined（调用方据此完全不注入）。 */
+function systemBlockText(prompts: EffectivePresetPrompt[], header: string): string | undefined {
+  const contents = prompts.filter((prompt) => prompt.role === 'system').map((prompt) => prompt.content)
+  if (contents.length === 0) return undefined
+  return [header, ...contents].join('\n\n')
+}
+
+/** user 块渲染体：只留 `role === 'user'` 的条目，固定 user 头标注；无条目返回
+ *  undefined——不制造空消息。 */
+function userBlockText(prompts: EffectivePresetPrompt[]): string | undefined {
+  const contents = prompts.filter((prompt) => prompt.role === 'user').map((prompt) => prompt.content)
+  if (contents.length === 0) return undefined
+  return [AGENT_PRESET_USER_HEADER, ...contents].join('\n\n')
+}
+
+/** preamble 原料：全部非 system 条目，保持原顺序与原文内容（不加 header）。 */
+function preambleEntriesOf(prompts: EffectivePresetPrompt[]): AgentPresetPreambleEntry[] {
+  const entries: AgentPresetPreambleEntry[] = []
+  for (const prompt of prompts) {
+    if (prompt.role === 'system') continue
+    entries.push({ role: prompt.role, content: prompt.content })
+  }
+  return entries
+}
 
 function promptContent(prompt: PresetPrompt): string {
   const content = (prompt as unknown as Record<string, unknown>)['content']

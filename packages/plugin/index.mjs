@@ -16179,7 +16179,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.8.1".trim() : "";
-  const commit = true ? normalizeCommit("a45c812") : void 0;
+  const commit = true ? normalizeCommit("c7142da") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -20764,7 +20764,7 @@ function createDshAgentTavernAdapter(ctx) {
 init_src();
 init_src2();
 init_src3();
-import { randomUUID as randomUUID4 } from "node:crypto";
+import { randomUUID as randomUUID5 } from "node:crypto";
 import { promises as fs14 } from "node:fs";
 import { join as join15 } from "node:path";
 
@@ -26177,6 +26177,16 @@ function eventDate(time, seq, type) {
   return new Date(time).toISOString();
 }
 
+// packages/plugin/src/agent-tavern/preset-user-block.ts
+import { createHash as createHash9, randomUUID as randomUUID4 } from "node:crypto";
+function presetUserBlockSourceOf(session, text) {
+  return hostPluginMessageSource(session, {
+    form: "instructions",
+    presetUserBlock: true,
+    presetUserBlockHash: createHash9("sha256").update(text).digest("hex").slice(0, 16)
+  });
+}
+
 // packages/plugin/src/agent-tavern/projector.ts
 init_mvu();
 
@@ -26186,7 +26196,7 @@ init_src3();
 
 // packages/plugin/src/im/types.ts
 init_src();
-import { createHash as createHash9 } from "node:crypto";
+import { createHash as createHash10 } from "node:crypto";
 var AGENT_TAVERN_IM_PRESET_ID = "agent-tavern-im";
 var AGENT_TAVERN_IM_NATIVE_PRESET_ID = "agent-tavern-im-native";
 function imDedupeKey(channel, accountId, scope, peerId, messageId) {
@@ -26200,7 +26210,7 @@ function imPeerKeyParts(key) {
   return { channel, accountId, scope, peerId: rest.join(":") };
 }
 function imPeerAlias(channel, scope, peerKey) {
-  return `peer-${createHash9("sha256").update(`${channel}:${scope}:${peerKey}`).digest("hex").slice(0, 10)}`;
+  return `peer-${createHash10("sha256").update(`${channel}:${scope}:${peerKey}`).digest("hex").slice(0, 10)}`;
 }
 
 // packages/plugin/src/agent-tavern/im-projection.ts
@@ -26829,10 +26839,10 @@ function historyImportAppends(chat, sessionId, scripts, expand, options) {
         appends.push({
           type: "user/message",
           data: {
-            id: randomUUID4(),
+            id: randomUUID5(),
             role: "user",
             content: [{ type: "text", text: entry.content }],
-            source: hostPluginMessageSource(session, { form: "instructions", presetUserBlock: true })
+            source: presetUserBlockSourceOf(session, entry.content)
           },
           surfaceOp: "append"
         });
@@ -26848,7 +26858,7 @@ function historyImportAppends(chat, sessionId, scripts, expand, options) {
           step,
           ...settlement,
           message: {
-            id: randomUUID4(),
+            id: randomUUID5(),
             role: "assistant",
             content: [{ type: "text", text: entry.content }],
             source: { kind: "model", ...TAVERN_PRESET_MODEL_SOURCE }
@@ -26868,7 +26878,7 @@ function historyImportAppends(chat, sessionId, scripts, expand, options) {
       appends.push({
         type: "user/message",
         data: {
-          id: randomUUID4(),
+          id: randomUUID5(),
           role: "user",
           content: [{ type: "text", text: promptView(message, index) }],
           source: hostPluginMessageSource(session)
@@ -26887,7 +26897,7 @@ function historyImportAppends(chat, sessionId, scripts, expand, options) {
         step,
         ...settlement,
         message: {
-          id: randomUUID4(),
+          id: randomUUID5(),
           role: "assistant",
           content: [{ type: "text", text: promptView(message, index) }],
           // The host rejects assistant messages without a model source; the
@@ -26922,7 +26932,7 @@ function protectedSurfaceHeadAppends() {
         turn: 1,
         step: 1,
         message: {
-          id: randomUUID4(),
+          id: randomUUID5(),
           role: "system",
           content: [],
           source: { kind: "system-prompt" }
@@ -26991,7 +27001,7 @@ import { promises as fs15 } from "node:fs";
 import * as path9 from "node:path";
 
 // packages/plugin/src/memory-embed-local.ts
-import { createHash as createHash10 } from "node:crypto";
+import { createHash as createHash11 } from "node:crypto";
 import { readdirSync as readdirSync3, readFileSync as readFileSync5, realpathSync as realpathSync2, statSync as statSync2 } from "node:fs";
 import { createRequire as createRequire3 } from "node:module";
 import { basename as basename2, dirname as dirname10, join as join16 } from "node:path";
@@ -27065,7 +27075,7 @@ function localModelFingerprint(modelDir) {
       }
     }
     if (parts.length === 0) return "unreadable";
-    return createHash10("sha256").update(parts.join("|")).digest("hex").slice(0, 16);
+    return createHash11("sha256").update(parts.join("|")).digest("hex").slice(0, 16);
   } catch {
     return "unreadable";
   }
@@ -30347,7 +30357,7 @@ function invalidPlan(operation, detail) {
 }
 
 // packages/plugin/src/agent-tavern/body-runtime.ts
-import { randomUUID as randomUUID5 } from "node:crypto";
+import { randomUUID as randomUUID6 } from "node:crypto";
 
 // packages/plugin/src/agent-tavern/body-rollback-prepare.ts
 var BODY_PREPARE_EVENT_TYPE = "plugin:dsh-soulmojito/body-prepare";
@@ -30457,7 +30467,7 @@ async function startRegenerate(deps, request) {
     const previousIndex = existingLedger?.selectedIndex ?? 0;
     const rollbackTarget = rollbackTargetOf(events, existingLedger, previousIndex, request.expectedAnchorId, target.seq);
     const deny = normalizeDenyTools(request.writeToolDeny);
-    const opId = `body-op-${randomUUID5()}`;
+    const opId = `body-op-${randomUUID6()}`;
     const triggerMessageId = `body-trigger-${opId}`;
     const active = {
       opId,
@@ -32114,7 +32124,7 @@ function numberField3(value) {
 
 // packages/plugin/src/agent-tavern/anchor.ts
 init_src();
-import { randomUUID as randomUUID6 } from "node:crypto";
+import { randomUUID as randomUUID7 } from "node:crypto";
 init_dsh_home();
 init_store_handle();
 var ANCHOR_EVERY_TURNS_DEFAULT = 5;
@@ -32146,7 +32156,7 @@ function reminderDue(input, everyTurns, latest, hasUserTurn) {
 }
 function createAnchorMessage(session) {
   return {
-    id: randomUUID6(),
+    id: randomUUID7(),
     role: "user",
     content: [{ type: "text", text: ANCHOR_TEXT }],
     source: hostPluginMessageSource(session)
@@ -32154,7 +32164,7 @@ function createAnchorMessage(session) {
 }
 function createOpeningMessage(session) {
   return {
-    id: randomUUID6(),
+    id: randomUUID7(),
     role: "user",
     content: [{ type: "text", text: OPENING_TEXT }],
     source: hostPluginMessageSource(session)
@@ -32231,7 +32241,7 @@ function registerAgentTavernAnchor(ctx, options = {}) {
 }
 
 // packages/plugin/src/agent-tavern/card-state.ts
-import { createHash as createHash11, randomUUID as randomUUID7 } from "node:crypto";
+import { createHash as createHash12, randomUUID as randomUUID8 } from "node:crypto";
 init_src2();
 
 // packages/plugin/src/prompt-safety.ts
@@ -32351,7 +32361,7 @@ function jsonObjectOf2(value) {
   return JSON.parse(JSON.stringify(value));
 }
 function sectionHash(text) {
-  return createHash11("sha256").update(text).digest("hex").slice(0, 16);
+  return createHash12("sha256").update(text).digest("hex").slice(0, 16);
 }
 function cardStateEntryKey(book, entry) {
   return `${book}#${entry.uid}`;
@@ -32486,7 +32496,7 @@ function registerAgentTavernCardState(ctx, options = {}) {
       const sections = full ? rendered.sections : changed;
       const note = full ? rendered.truncated ? `Card world-info truncated at ${CARD_STATE_MAX_CHARS} characters.` : void 0 : "Only sections that changed since the previous card-state block are repeated; earlier unchanged rules remain in effect.";
       const message = {
-        id: randomUUID7(),
+        id: randomUUID8(),
         role: "user",
         content: [{ type: "text", text: formatCardStateMessage(sections, note) }],
         source: hostPluginMessageSource(payload.agent?.session)
@@ -34298,22 +34308,10 @@ function effectiveAgentPresetPrompts(preset, card) {
   return effective;
 }
 function renderAgentPresetBlock(preset, card, header = AGENT_PRESET_BLOCK_HEADER) {
-  const prompts = effectiveAgentPresetPrompts(preset, card).filter((prompt) => prompt.role === "system");
-  if (prompts.length === 0) return void 0;
-  return [header, ...prompts.map((prompt) => prompt.content)].join("\n\n");
-}
-function renderAgentPresetUserBlock(preset, card) {
-  const contents = effectiveAgentPresetPrompts(preset, card).filter((prompt) => prompt.role === "user").map((prompt) => prompt.content);
-  if (contents.length === 0) return void 0;
-  return [AGENT_PRESET_USER_HEADER, ...contents].join("\n\n");
+  return systemBlockText(effectiveAgentPresetPrompts(preset, card), header);
 }
 function agentPresetPreambleEntries(preset, card) {
-  const entries = [];
-  for (const prompt of effectiveAgentPresetPrompts(preset, card)) {
-    if (prompt.role === "system") continue;
-    entries.push({ role: prompt.role, content: prompt.content });
-  }
-  return entries;
+  return preambleEntriesOf(effectiveAgentPresetPrompts(preset, card));
 }
 function presetTemperature(preset) {
   const value = preset.sampler["temperature"];
@@ -34342,9 +34340,10 @@ function projectAgentPreset(preset, card) {
   }
   try {
     const ir = parsePreset(preset);
-    const text = renderAgentPresetBlock(ir, card);
-    const userText = renderAgentPresetUserBlock(ir, card);
-    const preamble = agentPresetPreambleEntries(ir, card);
+    const prompts = effectiveAgentPresetPrompts(ir, card);
+    const text = systemBlockText(prompts, AGENT_PRESET_BLOCK_HEADER);
+    const userText = userBlockText(prompts);
+    const preamble = preambleEntriesOf(prompts);
     const temperature = presetTemperature(ir);
     return {
       ...text === void 0 ? {} : { text },
@@ -34393,6 +34392,24 @@ function onAgentPresetChanged(listener) {
 }
 function emitAgentPresetChanged() {
   return agentPresetChanged.emit();
+}
+function systemBlockText(prompts, header) {
+  const contents = prompts.filter((prompt) => prompt.role === "system").map((prompt) => prompt.content);
+  if (contents.length === 0) return void 0;
+  return [header, ...contents].join("\n\n");
+}
+function userBlockText(prompts) {
+  const contents = prompts.filter((prompt) => prompt.role === "user").map((prompt) => prompt.content);
+  if (contents.length === 0) return void 0;
+  return [AGENT_PRESET_USER_HEADER, ...contents].join("\n\n");
+}
+function preambleEntriesOf(prompts) {
+  const entries = [];
+  for (const prompt of prompts) {
+    if (prompt.role === "system") continue;
+    entries.push({ role: prompt.role, content: prompt.content });
+  }
+  return entries;
 }
 function promptContent(prompt) {
   const content = prompt["content"];
@@ -41253,7 +41270,7 @@ function unwrapSingleRootDirectory(files) {
 
 // packages/plugin/src/games/sessions.ts
 init_apply();
-import { createHash as createHash12, randomBytes as randomBytes4 } from "node:crypto";
+import { createHash as createHash13, randomBytes as randomBytes4 } from "node:crypto";
 import { promises as fs18 } from "node:fs";
 import { join as join20 } from "node:path";
 var GAME_HISTORY_DEFAULT_LIMIT = 20;
@@ -41284,7 +41301,7 @@ var GameSessionStore = class _GameSessionStore {
   /* ------------------------------ 查询面 ------------------------------ */
   /** 会话目录 name+size+mtimeMs 的 sha256（镜像 tavern-store storeRevision 的便宜纪律：只 stat 不读内容）。 */
   async revision() {
-    const hash = createHash12("sha256");
+    const hash = createHash13("sha256");
     const names = (await fs18.readdir(this.sessionsRoot).catch(() => [])).filter((name2) => name2.endsWith(".json")).sort();
     for (const name2 of names) {
       const stat3 = await fs18.stat(join20(this.sessionsRoot, name2)).catch(() => void 0);
@@ -43040,7 +43057,7 @@ init_src();
 // packages/plugin/src/data-bank.ts
 init_src();
 init_dsh_home();
-import { createHash as createHash13 } from "node:crypto";
+import { createHash as createHash14 } from "node:crypto";
 import { promises as fs19 } from "node:fs";
 import * as path11 from "node:path";
 var DATA_BANK_DIR = "data-bank";
@@ -43084,7 +43101,7 @@ function dataBankPath(root, id, extension) {
   return resolved;
 }
 function dataBankId(content) {
-  return createHash13("sha256").update(content, "utf8").digest("hex").slice(0, 16);
+  return createHash14("sha256").update(content, "utf8").digest("hex").slice(0, 16);
 }
 function normalizeDataBankName(raw) {
   if (typeof raw !== "string") throw new DataBankError(400, "name is required");
@@ -43799,7 +43816,7 @@ init_src();
 init_dsh_home();
 init_errors();
 init_io();
-import { createHash as createHash14 } from "node:crypto";
+import { createHash as createHash15 } from "node:crypto";
 import { promises as fs20 } from "node:fs";
 import * as path12 from "node:path";
 var BACKUP_FORMAT = "soulmojito-backup";
@@ -43840,7 +43857,7 @@ async function handleBackupExportRoute(host, res, options) {
     manifestEntries.push({
       path: relative4,
       bytes: bytes2.byteLength,
-      sha256: createHash14("sha256").update(bytes2).digest("hex")
+      sha256: createHash15("sha256").update(bytes2).digest("hex")
     });
   }
   if (manifestEntries.length + 1 > limits.maxEntries) {
@@ -46748,14 +46765,14 @@ import { join as join24 } from "node:path";
 import { pipeline } from "node:stream/promises";
 
 // packages/tavern-frontend-storage/src/idb-store.ts
-import { createHash as createHash15 } from "node:crypto";
+import { createHash as createHash16 } from "node:crypto";
 import { copyFile, mkdir as mkdir4, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname as dirname15, join as join23 } from "node:path";
 var IDB_MAX_RECORD_BYTES = 1024 * 1024 * 1024;
 var IDB_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
 var databaseLocks = /* @__PURE__ */ new Map();
 function sha256(value) {
-  return createHash15("sha256").update(value).digest("hex");
+  return createHash16("sha256").update(value).digest("hex");
 }
 function databaseDir(root, character, name2) {
   return join23(root, "frontend-idb", sha256(character), sha256(name2));
@@ -47184,7 +47201,7 @@ init_src5();
 init_src4();
 init_src3();
 init_src();
-import { randomUUID as randomUUID9 } from "node:crypto";
+import { randomUUID as randomUUID10 } from "node:crypto";
 init_io();
 init_public_error();
 
@@ -47914,7 +47931,7 @@ async function applyFrontendWorldbookScan(db, state, character, chatId, config) 
 init_dsh_home();
 
 // packages/plugin/src/helper-bindings.ts
-import { randomUUID as randomUUID8 } from "node:crypto";
+import { randomUUID as randomUUID9 } from "node:crypto";
 var HELPER_TOKEN_HEADER = "x-dsh-helper-token";
 var HELPER_BINDING_TTL_MS = 30 * 60 * 1e3;
 var bindings = /* @__PURE__ */ new Map();
@@ -47926,7 +47943,7 @@ function pruneExpired(now) {
 function createHelperBinding(character, chatId) {
   const now = Date.now();
   pruneExpired(now);
-  const token = randomUUID8();
+  const token = randomUUID9();
   bindings.set(token, { character, chatId, createdAt: now });
   return token;
 }
@@ -48937,7 +48954,7 @@ async function resetSessionRegexScripts(db, character, chatId, type) {
 function generationIdOf(config) {
   const record = isPlainObject4(config) ? config : {};
   const value = record["generation_id"];
-  return typeof value === "string" && value.trim() !== "" ? value.trim() : randomUUID9();
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : randomUUID10();
 }
 function requireScriptTrees(value) {
   if (!Array.isArray(value)) throw new Error("scriptTrees must be an array of card script nodes");
@@ -49916,6 +49933,15 @@ var storePromise2;
 function store4() {
   return storePromise2 ??= sharedTavernStore(tavernDataRoot());
 }
+var droppedPreambleWarnings = /* @__PURE__ */ new Set();
+function warnDroppedPreamble(sectionName, agentId, presetId, count) {
+  const key = [sectionName, agentId, presetId, String(count)].join("\0");
+  if (droppedPreambleWarnings.has(key)) return;
+  droppedPreambleWarnings.add(key);
+  console.warn(
+    `dsh-soulmojito: section '${sectionName}' projects system entries only \u2014 agent '${agentId}' dropped ${count} non-system preset '${presetId}' ${count === 1 ? "entry" : "entries"}`
+  );
+}
 function mountPresetProjection(options) {
   const freeze2 = /* @__PURE__ */ new Map();
   const projection2 = createLazyProjection({
@@ -49937,7 +49963,10 @@ function mountPresetProjection(options) {
         settle("");
         return;
       }
-      const block = renderAgentPresetBlock(parsePreset(raw), void 0, options.header);
+      const ir = parsePreset(raw);
+      const dropped = agentPresetPreambleEntries(ir).length;
+      if (dropped > 0) warnDroppedPreamble(options.sectionName, agentId, state.activePreset, dropped);
+      const block = renderAgentPresetBlock(ir, void 0, options.header);
       if (block === void 0) {
         settle("");
         return;
@@ -52396,10 +52425,10 @@ async function handleMvuRoute(db, req, res, route, method) {
 init_dsh_home();
 
 // packages/plugin/src/im/onebot/server.ts
-import { randomUUID as randomUUID12, timingSafeEqual } from "node:crypto";
+import { randomUUID as randomUUID13, timingSafeEqual } from "node:crypto";
 
 // packages/plugin/src/im/media-store.ts
-import { randomUUID as randomUUID10 } from "node:crypto";
+import { randomUUID as randomUUID11 } from "node:crypto";
 import { promises as fs22 } from "node:fs";
 import { join as join26, resolve as resolve7 } from "node:path";
 var IM_MEDIA_ROOT_DIR = "im-media";
@@ -52466,7 +52495,7 @@ function openImMediaStore(options) {
       }
       const extension = requireExtension(request.extension);
       const directory = join26(await root(), `${channel}-${accountId}`);
-      const file = join26(directory, `${randomUUID10()}.${extension}`);
+      const file = join26(directory, `${randomUUID11()}.${extension}`);
       try {
         await fs22.mkdir(directory, { recursive: true });
         await fs22.writeFile(file, request.bytes, { mode: FILE_MODE });
@@ -53004,7 +53033,7 @@ function describeValue(value) {
 }
 
 // packages/plugin/src/im/onebot/ws.ts
-import { createHash as createHash16, randomUUID as randomUUID11 } from "node:crypto";
+import { createHash as createHash17, randomUUID as randomUUID12 } from "node:crypto";
 var WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 var MAX_MESSAGE_BYTES = 1024 * 1024;
 var CONTROL_PAYLOAD_LIMIT = 125;
@@ -53032,7 +53061,7 @@ var WsProtocolError = class extends Error {
 };
 function acceptWebSocket(req, socket, head) {
   const key = requireHandshakeKey(req, socket);
-  const accept = createHash16("sha1").update(`${key}${WS_GUID}`).digest("base64");
+  const accept = createHash17("sha1").update(`${key}${WS_GUID}`).digest("base64");
   socket.write([
     "HTTP/1.1 101 Switching Protocols",
     "Upgrade: websocket",
@@ -53044,7 +53073,7 @@ function acceptWebSocket(req, socket, head) {
   return openConnection(socket, head);
 }
 function openConnection(socket, head) {
-  const id = randomUUID11();
+  const id = randomUUID12();
   const textListeners = [];
   const closeListeners = [];
   const queuedTexts = [];
@@ -53607,7 +53636,7 @@ var OneBotChannel = class {
     return live.find((entry) => entry.role === "Universal") ?? live.find((entry) => entry.role === "API");
   }
   call(live, action, params) {
-    const echo = randomUUID12();
+    const echo = randomUUID13();
     return new Promise((resolve11, reject2) => {
       const timer = setTimeout(() => {
         live.waiters.delete(echo);
@@ -54377,7 +54406,7 @@ function messageOf10(error) {
 }
 
 // packages/plugin/src/im/qq/channel.ts
-import { createHash as createHash17 } from "node:crypto";
+import { createHash as createHash18 } from "node:crypto";
 
 // packages/plugin/src/im/settings.ts
 var IM_CHUNK_DEFAULTS = {
@@ -55098,7 +55127,7 @@ function fallbackDedupeId(input) {
     platformTimestamp,
     input.attachments.map((attachment) => attachmentIdentityOf(attachment))
   ]);
-  return `fallback-${createHash17("sha256").update(canonical).digest("hex").slice(0, 16)}`;
+  return `fallback-${createHash18("sha256").update(canonical).digest("hex").slice(0, 16)}`;
 }
 function attachmentIdentityOf(attachment) {
   const size = attachment.size;
@@ -55363,7 +55392,7 @@ function mergeImSenderEntries(existing, updates, options) {
 }
 
 // packages/plugin/src/im/store.ts
-import { randomUUID as randomUUID13 } from "node:crypto";
+import { randomUUID as randomUUID14 } from "node:crypto";
 import { promises as fs23 } from "node:fs";
 import { dirname as dirname16, join as join29, resolve as resolve8 } from "node:path";
 var ImStoreError = class extends Error {
@@ -55733,7 +55762,7 @@ async function imStoreRemoveFile(file) {
 }
 async function imStoreWriteFile(file, text, mode) {
   await imStoreEnsureDir(dirname16(file));
-  const tmp = `${file}.tmp-${randomUUID13()}`;
+  const tmp = `${file}.tmp-${randomUUID14()}`;
   try {
     await fs23.writeFile(tmp, text, mode === void 0 ? { encoding: "utf8" } : { encoding: "utf8", mode });
     await fs23.rename(tmp, file);
@@ -55772,7 +55801,7 @@ async function imStoreWriteSecret(file, record) {
 
 // packages/plugin/src/im/weixin/api.ts
 init_build_info();
-import { randomBytes as randomBytes5, randomUUID as randomUUID14 } from "node:crypto";
+import { randomBytes as randomBytes5, randomUUID as randomUUID15 } from "node:crypto";
 var WEIXIN_FIXED_BASE_URL = "https://ilinkai.weixin.qq.com";
 var WEIXIN_DEFAULT_CDN_BASE_URL = "https://novac2c.cdn.weixin.qq.com/c2c";
 var WEIXIN_DEFAULT_BOT_TYPE = "3";
@@ -55888,7 +55917,7 @@ async function sendMessageItems(context, options) {
   const msg = {
     from_user_id: "",
     to_user_id: toUserId,
-    client_id: randomUUID14(),
+    client_id: randomUUID15(),
     message_type: 2,
     message_state: 2,
     item_list: [...options.items]
@@ -56545,7 +56574,7 @@ var WeixinChannelError = class extends Error {
 };
 
 // packages/plugin/src/im/weixin/inbound.ts
-import { createHash as createHash18 } from "node:crypto";
+import { createHash as createHash19 } from "node:crypto";
 var PEER_LABEL_LENGTH = 8;
 var WEIXIN_FALLBACK_DEDUPE_BUCKET_MS = 10 * 60 * 1e3;
 function weixinInboundOf(message, accountId, now) {
@@ -56623,7 +56652,7 @@ function fallbackMessageId(message, receivedAt) {
     ]),
     bucket
   ]);
-  return `fallback-${createHash18("sha256").update(canonical).digest("hex").slice(0, 16)}`;
+  return `fallback-${createHash19("sha256").update(canonical).digest("hex").slice(0, 16)}`;
 }
 
 // packages/plugin/src/im/weixin/send-guard.ts
@@ -57071,7 +57100,7 @@ function createTypingTicketCache(options) {
 }
 
 // packages/plugin/src/im/weixin/media.ts
-import { createCipheriv, createDecipheriv, createHash as createHash19, randomBytes as randomBytes6 } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash as createHash20, randomBytes as randomBytes6 } from "node:crypto";
 import { promises as fs24 } from "node:fs";
 import { basename as basename3, extname as extname2 } from "node:path";
 var WEIXIN_MEDIA_MAX_BYTES = 20 * 1024 * 1024;
@@ -57447,7 +57476,7 @@ async function sendWeixinMedia(context, request) {
   return sent.messageId;
 }
 function md5Hex(bytes) {
-  return createHash19("md5").update(bytes).digest("hex");
+  return createHash20("md5").update(bytes).digest("hex");
 }
 async function readLocalMedia(path14, kind) {
   try {
@@ -58949,6 +58978,18 @@ init_cross_bundle();
 // packages/plugin/src/mods/agent-mount.ts
 init_cross_bundle();
 
+// packages/plugin/src/session/preset-marker.ts
+function lastSelectedPresetId(session) {
+  const events = sessionEvents(session);
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event?.type !== "agent-preset/selected") continue;
+    const preset = event.data?.agentPreset;
+    if (typeof preset === "string") return preset;
+  }
+  return void 0;
+}
+
 // packages/plugin/src/agent-tavern/context-injection.ts
 init_src();
 init_dsh_home();
@@ -59897,9 +59938,9 @@ init_capabilities2();
 
 // packages/plugin/src/agent-novel/requirements.ts
 init_src();
-import { createHash as createHash20 } from "node:crypto";
+import { createHash as createHash21 } from "node:crypto";
 function stableMessageKey(sessionId, messageKey) {
-  return createHash20("sha256").update(`${sessionId}\0${messageKey}`).digest("hex");
+  return createHash21("sha256").update(`${sessionId}\0${messageKey}`).digest("hex");
 }
 function isNovelAuthorMessage(event) {
   return extractAuthorMessage(event) !== null;
@@ -59945,20 +59986,6 @@ function textBlocks(content) {
 // packages/plugin/src/http/novel.ts
 init_deduce();
 init_runtime2();
-
-// packages/plugin/src/session/preset-marker.ts
-function lastSelectedPresetId(session) {
-  const events = sessionEvents(session);
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
-    if (event?.type !== "agent-preset/selected") continue;
-    const preset = event.data?.agentPreset;
-    if (typeof preset === "string") return preset;
-  }
-  return void 0;
-}
-
-// packages/plugin/src/http/novel.ts
 init_io();
 var CARD_WORKBENCH_PRESET_ID = "card-workbench";
 var NOVEL_SUBPATHS = [
@@ -60672,7 +60699,7 @@ import { resolve as resolve9 } from "node:path";
 
 // packages/plugin/src/memory-maintenance.ts
 init_src();
-import { randomUUID as randomUUID15 } from "node:crypto";
+import { randomUUID as randomUUID16 } from "node:crypto";
 var MAINTENANCE_MAX_LLM_REQUESTS = 24;
 var MAINTENANCE_OPENING_MAX_CHARS = 1e5;
 var MAINTENANCE_PAGE_RECORDS = 32;
@@ -60700,7 +60727,7 @@ async function startMemoryMaintenance(ctx, deps, scope) {
   const existing = activeRuns.get(key);
   if (existing !== void 0) throw new MaintenanceRunConflictError(scope.character, scope.chatId, existing.runId);
   const active = {
-    runId: randomUUID15(),
+    runId: randomUUID16(),
     character: scope.character,
     chatId: scope.chatId,
     startedAt: (/* @__PURE__ */ new Date()).toISOString(),
@@ -60995,7 +61022,7 @@ async function executeRun(ctx, deps, scope, active) {
     }
     syncRunProgress(active.progress, run);
     const messages = [
-      { role: "user", id: randomUUID15(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
+      { role: "user", id: randomUUID16(), content: [{ type: "text", text: opening }], source: { kind: "user" } }
     ];
     let outcome = "completed";
     let errorMessage7;
@@ -61055,7 +61082,7 @@ async function executeRun(ctx, deps, scope, active) {
         blocks.push({ type: "text", text: textBuffer });
       }
       const toolCalls = blocks.filter((block) => block.type === "tool-call");
-      messages.push({ role: "assistant", id: randomUUID15(), content: blocks, source: { kind: "model", provider: run.provider, model: run.model } });
+      messages.push({ role: "assistant", id: randomUUID16(), content: blocks, source: { kind: "model", provider: run.provider, model: run.model } });
       if (toolCalls.length === 0) {
         report = textBuffer !== "" ? textBuffer : blocks.filter((block) => block.type === "text").map((block) => String(block.text ?? "")).join("");
         break;
@@ -61072,7 +61099,7 @@ async function executeRun(ctx, deps, scope, active) {
         syncRunProgress(active.progress, run);
         messages.push({
           role: "tool",
-          id: randomUUID15(),
+          id: randomUUID16(),
           content: [{ type: "text", text: safeJson(result.payload) }],
           source: { kind: "tool", callId: call.id },
           toolCallId: call.id,
@@ -63366,7 +63393,7 @@ ${reason}`);
 }
 
 // packages/plugin/src/im/weixin/context-tokens.ts
-import { randomUUID as randomUUID16 } from "node:crypto";
+import { randomUUID as randomUUID17 } from "node:crypto";
 import { promises as fs25 } from "node:fs";
 import { dirname as dirname17, join as join30, resolve as resolve10 } from "node:path";
 var WeixinContextTokenError = class extends Error {
@@ -63442,7 +63469,7 @@ async function saveTokens(file, tokens) {
     }
     snapshot2[peerId] = token;
   }
-  const tmp = `${file}.tmp-${randomUUID16()}`;
+  const tmp = `${file}.tmp-${randomUUID17()}`;
   try {
     await fs25.mkdir(dirname17(file), { recursive: true });
     await fs25.writeFile(tmp, `${JSON.stringify(snapshot2, null, 2)}
@@ -63461,7 +63488,7 @@ function reasonOf3(cause) {
 }
 
 // packages/plugin/src/im/router.ts
-import { randomUUID as randomUUID17 } from "node:crypto";
+import { randomUUID as randomUUID18 } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute as isAbsolute3, relative as relative3 } from "node:path";
 
@@ -63488,11 +63515,11 @@ function mergedRelayTextOf(items, alias, channel, scope, options) {
 }
 
 // packages/plugin/src/im/refs.ts
-import { createHash as createHash21 } from "node:crypto";
+import { createHash as createHash22 } from "node:crypto";
 var IM_MESSAGE_REF_TTL_MS = 10 * 6e4;
 var IM_MESSAGE_REF_MAX_ENTRIES = 1e3;
 function imMessageRef(dedupeKey) {
-  return `msg-${createHash21("sha256").update(dedupeKey).digest("hex").slice(0, 10)}`;
+  return `msg-${createHash22("sha256").update(dedupeKey).digest("hex").slice(0, 10)}`;
 }
 function createImMessageRefStore(options) {
   const entries = /* @__PURE__ */ new Map();
@@ -64225,7 +64252,7 @@ function createImRouter(deps) {
     const ref = imMessageRef(message.dedupeKey);
     const text = relayTextOf(message, body, alias, { owner: isOwner });
     deps.log?.note("info", `accepted a ${message.channel}/${message.scope} message from ${alias} (${body.length} chars) for session ${sessionId}`);
-    const messageId = `im-${randomUUID17()}`;
+    const messageId = `im-${randomUUID18()}`;
     try {
       await deps.insert(sessionId, {
         id: messageId,
@@ -64259,7 +64286,7 @@ function createImRouter(deps) {
     const text = mergedRelayTextOf(relayItems, alias, channel, scope, ownerItems.length === ownerFlags.length ? { owner: true } : ownerItems.length > 0 ? { ownerItems } : void 0);
     const chars = relayItems.reduce((total, entry) => total + entry.body.length, 0);
     deps.log?.note("info", `accepted ${relayItems.length} ${channel}/${scope} messages from ${alias} (${chars} chars) for session ${sessionId}`);
-    const messageId = `im-${randomUUID17()}`;
+    const messageId = `im-${randomUUID18()}`;
     try {
       await deps.insert(sessionId, {
         id: messageId,
@@ -64481,7 +64508,7 @@ function sendStatusesOf(channels) {
 }
 
 // packages/plugin/src/im/account-id.ts
-import { createHash as createHash22 } from "node:crypto";
+import { createHash as createHash23 } from "node:crypto";
 var SAFE_ACCOUNT_ID = /^[A-Za-z0-9._-]+$/;
 function imAccountIdOf(channel, raw) {
   const trimmed = raw.trim();
@@ -64490,7 +64517,7 @@ function imAccountIdOf(channel, raw) {
     throw new Error(`cannot derive an IM account id: '${trimmed}' is a path traversal name`);
   }
   if (SAFE_ACCOUNT_ID.test(trimmed)) return trimmed;
-  const digest = createHash22("sha256").update(trimmed, "utf8").digest("hex").slice(0, 12);
+  const digest = createHash23("sha256").update(trimmed, "utf8").digest("hex").slice(0, 12);
   return `${channel}-${digest}`;
 }
 
@@ -65156,6 +65183,15 @@ var NATIVE_PRESET_HEADER = "Active chat completion preset (user-configured promp
 var freeze = { frozenAt: Date.now(), seed: Math.random() * 4294967296 >>> 0 };
 var renderMemo;
 var renderGeneration = 0;
+var droppedPreambleWarnings2 = /* @__PURE__ */ new Set();
+function warnDroppedPreamble2(presetId, count) {
+  const key = [presetId, String(count)].join("\0");
+  if (droppedPreambleWarnings2.has(key)) return;
+  droppedPreambleWarnings2.add(key);
+  console.warn(
+    `dsh-soulmojito: standard DSH Agent channel '${NATIVE_PRESET_SECTION}' projects system entries only \u2014 dropped ${count} non-system preset '${presetId}' ${count === 1 ? "entry" : "entries"}`
+  );
+}
 var projection = createLazyProjection({
   getState: async () => (await store3()).getState(),
   load: async (agentId, settle, snapshot2) => {
@@ -65179,7 +65215,10 @@ async function renderUnboundBlock(db, state) {
   if (typeof state.activePreset !== "string" || state.activePreset === "") return "";
   const raw = await db.getPreset(state.activePreset);
   if (raw === void 0) return "";
-  const block = renderAgentPresetBlock(parsePreset(raw), void 0, NATIVE_PRESET_HEADER);
+  const ir = parsePreset(raw);
+  const dropped = agentPresetPreambleEntries(ir).length;
+  if (dropped > 0) warnDroppedPreamble2(state.activePreset, dropped);
+  const block = renderAgentPresetBlock(ir, void 0, NATIVE_PRESET_HEADER);
   if (block === void 0) return "";
   const expand = createHostPromptExpander(
     state.activeCharacter || CHAR_FALLBACK,
@@ -65753,8 +65792,18 @@ function registerTavernSessionCommand(ctx) {
             historyImport = void 0;
           } else {
             const expand = tavernMacroExpand(currentState, parsed.character, character);
-            const rawPreset = typeof currentState.activePreset === "string" && currentState.activePreset !== "" ? await db.getPreset(currentState.activePreset) : void 0;
-            const preamble = projectAgentPreset(rawPreset ?? defaultPreset(), character?.card).preamble.map((entry) => ({ role: entry.role, content: expand(entry.content) }));
+            const activePresetId = typeof currentState.activePreset === "string" && currentState.activePreset !== "" ? currentState.activePreset : void 0;
+            let preset;
+            if (activePresetId === void 0) {
+              preset = defaultPreset();
+            } else {
+              try {
+                preset = await db.getPreset(activePresetId) ?? defaultPreset();
+              } catch (error) {
+                ctx.logger?.warn?.(`dsh-soulmojito preset: active preset '${activePresetId}' could not be read, preamble skipped: ${error instanceof Error ? error.message : String(error)}`);
+              }
+            }
+            const preamble = preset === void 0 ? [] : projectAgentPreset(preset, character?.card).preamble.map((entry) => ({ role: entry.role, content: expand(entry.content) }));
             historyImport = historyImportAppends(
               chat,
               agent.id,

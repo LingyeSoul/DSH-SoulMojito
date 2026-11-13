@@ -31,7 +31,7 @@
 
 import { parsePreset } from '../../tavern-format/src/index.js'
 import { TavernStore, type TavernSessionBinding, type TavernState } from '../../tavern-store/src/index.js'
-import { onAgentPresetChanged, renderAgentPresetBlock } from './agent-tavern/preset.js'
+import { agentPresetPreambleEntries, onAgentPresetChanged, renderAgentPresetBlock } from './agent-tavern/preset.js'
 import { tavernDataRoot } from './dsh-home.js'
 import { createLazyProjection } from './lazy-projection.js'
 import { createHostPromptExpander, hostPromptSafe, seededRandom } from './prompt-safety.js'
@@ -76,6 +76,23 @@ function store(): Promise<TavernStore> {
 }
 
 /**
+ * 非 system 条目被丢弃的一次性告警键（决策 2026-11-13-preset-user-role-injection）：
+ * renderAgentPresetBlock 只投影 system 条目，工作台/小说没有消息帧位置承载
+ * user/assistant 条目，这些条目只能被静默丢弃。写穿重载每次都会重跑装载体，
+ * 按 (sectionName, agentId, presetId, 条数) 只告警一次，避免刷日志。
+ */
+const droppedPreambleWarnings = new Set<string>()
+
+function warnDroppedPreamble(sectionName: string, agentId: string, presetId: string, count: number): void {
+  const key = [sectionName, agentId, presetId, String(count)].join('\u0000')
+  if (droppedPreambleWarnings.has(key)) return
+  droppedPreambleWarnings.add(key)
+  console.warn(
+    `dsh-soulmojito: section '${sectionName}' projects system entries only — agent '${agentId}' dropped ${count} non-system preset '${presetId}' ${count === 1 ? 'entry' : 'entries'}`,
+  )
+}
+
+/**
  * 建一个预设投影挂载。消费方在模块顶层调用一次（闭包缓存随 bundle 存活），
  * apply() 里展开 mount.section 注册并调用 mount.preheat()；写穿监听在工厂
  * 调用时注册。
@@ -104,7 +121,11 @@ export function mountPresetProjection(options: PresetMountOptions): PresetMount 
       if (typeof state.activePreset !== 'string' || state.activePreset === '') { settle(''); return }
       const raw = await db.getPreset(state.activePreset)
       if (raw === undefined) { settle(''); return }
-      const block = renderAgentPresetBlock(parsePreset(raw), undefined, options.header)
+      const ir = parsePreset(raw)
+      // 非 system 条目没有消息帧位置：只告警，不改变投影字节（见上方告警键注释）。
+      const dropped = agentPresetPreambleEntries(ir).length
+      if (dropped > 0) warnDroppedPreamble(options.sectionName, agentId, state.activePreset, dropped)
+      const block = renderAgentPresetBlock(ir, undefined, options.header)
       if (block === undefined) { settle(''); return }
       // 预设内容是 ST 宏（{{char}}/{{user}}）的高频来源：宏展开 + {{...}}
       // 中性化后才能进宿主 section（prompt-safety.ts，宿主 interpolate 会炸装配）。

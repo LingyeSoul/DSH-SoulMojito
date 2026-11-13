@@ -22,12 +22,17 @@
 /** 部件去向：system 头，还是每步的 runtime snapshot。 */
 export type AgentPromptScope = 'system' | 'context'
 
-/** 一个可拼进 prompt 的部件（文本回调拿装配上下文里的 agent id）。 */
+/**
+ * 一个可拼进 prompt 的部件。文本回调拿装配上下文里的 agent id 与激活 preset
+ * id：注册表是进程级（跨 bundle 互见），部件必须按 preset 自行收窄可见性，
+ * 否则某个 preset 挂载过的部件会泄漏到同进程的所有 AgentTavern 会话
+ * （2026-11-13-im-preset-prompt-scope）。
+ */
 export interface AgentPromptPart {
   name: string
   order: number
   scope: AgentPromptScope
-  text: (agentId: string | undefined) => string
+  text: (agentId: string | undefined, presetId: string | undefined) => string
 }
 
 /** 求值后的部件（空文本已摘除）。 */
@@ -62,10 +67,10 @@ export function registeredAgentPromptParts(): AgentPromptPart[] {
   return [...partStore().values()].sort((a, b) => a.order - b.order)
 }
 
-/** 按 agent 求值全部部件：order 升序，空文本摘除（宿主对空 section 同款语义）。 */
-export function agentPromptPieces(agentId: string | undefined): AgentPromptPiece[] {
+/** 按 agent 与激活 preset 求值全部部件：order 升序，空文本摘除（宿主对空 section 同款语义）。 */
+export function agentPromptPieces(agentId: string | undefined, presetId: string | undefined): AgentPromptPiece[] {
   return registeredAgentPromptParts()
-    .map((part) => ({ name: part.name, order: part.order, scope: part.scope, text: part.text(agentId) }))
+    .map((part) => ({ name: part.name, order: part.order, scope: part.scope, text: part.text(agentId, presetId) }))
     .filter((piece) => piece.text !== '')
 }
 

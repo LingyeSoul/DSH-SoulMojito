@@ -284,6 +284,62 @@ describe('workbench/novel preset projection mounts', () => {
     })
   })
 
+  it('warns once about non-system preset entries dropped by the projection', async () => {
+    // 只有 system 条目进 system 头：user/assistant 条目在工作台/小说没有消息帧
+    // 位置，只能丢弃——按 (section, agent, preset, 条数) 告警一次，投影字节不变。
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      // 小说通道只有一个绑定：告警键唯一，两次装载恰好一次告警。
+      const gate = makeResponse()
+      await apiHandler(makeRequest({ cardWorkbenchPresetEnabled: false, agentNovelPresetEnabled: true }, '/api/dsh-soulmojito/state'), gate)
+      expect(gate.statusCode).toBe(200)
+      const FRAMED = {
+        temperature: 0.8,
+        prompts: [
+          { name: 'Main Prompt', identifier: 'main', role: 'system', content: 'Terse prose only.', system_prompt: true },
+          { name: 'Frame', identifier: 'frame', role: 'user', content: 'Speak as {{char}}.', system_prompt: false },
+        ],
+        prompt_order: [{ character_id: 100001, order: [{ identifier: 'main', enabled: true }, { identifier: 'frame', enabled: true }] }],
+      }
+      const put = makeResponse()
+      await apiHandler(makeRequest({ name: 'Mount Framed Preset', data: FRAMED }, `/api/dsh-soulmojito/preset/${encodeURIComponent('Mount Framed Preset')}`, 'PUT'), put)
+      expect(put.statusCode).toBe(200)
+      const on = makeResponse()
+      await apiHandler(makeRequest({ activePreset: 'Mount Framed Preset' }, '/api/dsh-soulmojito/state'), on)
+      expect(on.statusCode).toBe(200)
+      await vi.waitFor(() => {
+        expect(novelTextOf(NOVEL_AGENT)).toContain('Terse prose only.')
+      })
+      expect(warn).toHaveBeenCalledTimes(1)
+      const message = String(warn.mock.calls[0]![0])
+      expect(message).toContain('dsh-soulmojito:novel-preset')
+      expect(message).toContain('Mount Framed Preset')
+      expect(message).toContain('dropped 1')
+      expect(message).toContain('system entries only')
+      // 同一键的第二次装载（同内容 PUT 写穿重载）：不重复告警，投影字节不变
+      const before = novelTextOf(NOVEL_AGENT)
+      const rewrite = makeResponse()
+      await apiHandler(makeRequest({ name: 'Mount Framed Preset', data: structuredClone(FRAMED) }, `/api/dsh-soulmojito/preset/${encodeURIComponent('Mount Framed Preset')}`, 'PUT'), rewrite)
+      expect(rewrite.statusCode).toBe(200)
+      expect(novelTextOf(NOVEL_AGENT)).toBe(before)
+      expect(warn).toHaveBeenCalledTimes(1)
+      // 全 system 预设：不告警（收尾顺带恢复原激活预设）
+      const back = makeResponse()
+      await apiHandler(makeRequest({ activePreset: 'Mount Preset' }, '/api/dsh-soulmojito/state'), back)
+      expect(back.statusCode).toBe(200)
+      await vi.waitFor(() => {
+        expect(novelTextOf(NOVEL_AGENT)).toContain('Terse prose only.')
+      })
+      expect(warn).toHaveBeenCalledTimes(1)
+      // 收尾：恢复工作台开关，供关断用例。
+      const restore = makeResponse()
+      await apiHandler(makeRequest({ cardWorkbenchPresetEnabled: true }, '/api/dsh-soulmojito/state'), restore)
+      expect(restore.statusCode).toBe(200)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   it('clears the projection through the switch-off write-through', async () => {
     const res = makeResponse()
     await apiHandler(makeRequest({ cardWorkbenchPresetEnabled: false, agentNovelPresetEnabled: false }, '/api/dsh-soulmojito/state'), res)

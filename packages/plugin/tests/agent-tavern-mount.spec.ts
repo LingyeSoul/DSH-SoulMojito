@@ -90,6 +90,9 @@ describe('AgentTavern native module mount', () => {
         context: (context: RegisteredPromptContext) => { contexts.push(context) },
       },
       tools: { register: (tool: ToolLike) => { tools.set(tool.name, tool) } },
+      // agentPresets 是 inject 声明过的宿主服务：装配期按 session 解析 preset，
+      // 给进程级 prompt 注册表收窄部件（2026-11-13-im-preset-prompt-scope）。
+      agentPresets: { presetForSession: () => 'agent-tavern' },
       // Cordis 核心事件面（非 inject 服务）：agent/request 温度投影注册在真机上
       // 走 ctx.on，mock 只需证明 apply 不因未声明属性被拒绝。
       on: () => undefined,

@@ -316,7 +316,7 @@
       return host
     }
 
-    function ChatList({ ctx, character, currentSession, group = false }) {
+    function ChatList({ ctx, character, currentSession, group = false, allowImport }) {
       const state = useTavernStore()
       const t = useTranslate()
       const chats = state.chatLists[character]
@@ -357,7 +357,41 @@
         })
         await loadChatList(character, true)
       })
+      // 聊天导入只在管理面板出现（宿主侧栏保持窄行、不放工具行）：面板的
+      // 「聊天」分区渲染同一份 TavernSidebar，经 allowChatImport 传入。
+      const importChat = (file) => {
+        if (file === undefined) return
+        const name = file.name.replace(/\.jsonl$/i, '')
+        const reader = new FileReader()
+        reader.onerror = () => setError(`${t('nav.importChatFailed')}: ${reader.error instanceof Error ? reader.error.message : String(reader.error)}`)
+        reader.onload = () => {
+          const content = typeof reader.result === 'string' ? reader.result : ''
+          setError('')
+          void api('import/chat', {
+            method: 'POST',
+            headers: jsonHeaders(),
+            body: JSON.stringify({ character, name, content }),
+          }).then(() => loadChatList(character, true)).catch((cause) => {
+            setError(`${t('nav.importChatFailed')}: ${cause instanceof Error ? cause.message : String(cause)}`)
+          })
+        }
+        reader.readAsText(file)
+      }
+      // 组列表不提供导入：`import/chat` 落库前要求同名角色卡存在（组名不是卡，
+      // 会被 404 拒绝），控制项只出现在角色聊天列表里。
       return h('div', { className: 'dt-sidebar-chats' },
+        allowImport && !group ? h('div', { className: 'dt-sidebar-chat-tools' },
+          h('label', { className: 'dt-upload', title: t('nav.importChat') },
+            t('nav.importChat'),
+            h('input', {
+              type: 'file',
+              accept: '.jsonl,application/jsonl,application/json',
+              onChange: (event) => {
+                const file = event.target.files?.[0]
+                event.target.value = ''
+                importChat(file)
+              },
+            }))) : null,
         chats?.map((chatId) => {
           const labels = chatArchitectureLabels(character, chatId, group)
           return h('div', {
@@ -503,7 +537,7 @@
           : option.text.length > 260 ? `${option.text.slice(0, 259)}…` : option.text)))))
     }
 
-    function TavernSidebar({ ctx, useSessions, floating, onClose }) {
+    function TavernSidebar({ ctx, useSessions, floating, onClose, allowChatImport }) {
       const state = useTavernStore()
       const t = useTranslate()
       const currentSession = useCurrentSessionId(useSessions)
@@ -571,7 +605,7 @@
                   title: t('nav.newChat', { name: character }),
                   onClick: () => startCharacterChat(character),
                 }, h(IconPlusOutline16))),
-              open ? h(ChatList, { ctx, character, currentSession }) : null)
+              open ? h(ChatList, { ctx, character, currentSession, allowImport: allowChatImport }) : null)
           }),
           state.bootstrap.characters.length === 0 ? h('span', { className: 'dt-sidebar-status' }, t('nav.noCharacters')) : null,
           groups.length > 0 ? h('div', { className: 'dt-sidebar-heading dt-sidebar-subheading' },
@@ -595,7 +629,7 @@
                     })
                   },
                 }, h(IconPlusOutline16))),
-              open ? h(ChatList, { ctx, character: group.name, currentSession, group: true }) : null)
+              open ? h(ChatList, { ctx, character: group.name, currentSession, group: true, allowImport: allowChatImport }) : null)
           })) : null,
         h('div', { className: 'dt-sidebar-heading dt-sidebar-subheading' },
           headingToggle(workbenchOpen, t('nav.workbench'), '✎ ', 'workbench'),

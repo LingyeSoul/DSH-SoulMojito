@@ -44,7 +44,8 @@
 - **v0-v3 宿主无 preamble**：老宿主上 user 条目走 pre-step 兜底（其 source 带 `presetUserBlock` 成员，属于该通道的既有折衷），assistant 条目在那些宿主上没有位置。
 - **成功压缩保留尾部时的重复块（P3）**：若兜底块刚注入、或压缩范围因 `retainTokens` 保留尾部而未遮蔽它，`compaction/end` 仍会触发一次重注，造成上下文多一份预设块；不产生数据损坏，后续可按 `session.surface.nodes` 的可见性精化判定。
 - **预设修改不重写已 seed 的帧**：预设编辑只影响尚未激活的会话与压缩后的 user 重注；已写入的 preamble 保留原文。
-- **其它预设投影通道**：`renderAgentPresetBlock` 的过滤对写卡工作台 / AgentNovel（`preset-mount.ts`）与标准 DSH Agent 会话（`native-preset.ts`）同样生效——这些通道没有帧化位置，非 system 条目在它们那里完全不投影（此前是错标成 system）。
+- **其它预设投影通道**：`renderAgentPresetBlock` 的过滤对写卡工作台 / AgentNovel（`preset-mount.ts`）与标准 DSH Agent 会话（`native-preset.ts`）同样生效——这些通道没有帧化位置，非 system 条目在它们那里完全不投影（此前是错标成 system）。丢弃不再是纯静默：工作台/小说按 `(section, agent, 预设, 条数)`、标准会话按 `(预设, 条数)` 各打一次 `warn`，说明该通道只投影 system 条目。
+- **激活时激活预设不可读**：`TavernStore.getPreset` 只吞 `ENOENT`，JSON 损坏或 I/O 错误都会原样抛；激活路径（`session/command.ts`）捕获后跳过 preamble 并 `warn` 一次（带预设 id 与原始错误），绑定与历史导入照常完成。这里不调用 `defaultPreset()`——默认预设只含 system 条目、preamble 同样为空，回落不会产生帧，只会掩盖预设不可读。缺文件（`undefined`）仍走既有默认预设回落。
 
 ## 验证
 
@@ -52,6 +53,8 @@
 - `packages/plugin/tests/agent-tavern-body-projector.spec.ts`：同 turn 内预设块先于 `body-regenerate` 触发消息时，重生成正文仍合并进旧楼层，不新增 JSONL 楼层。
 - `packages/plugin/tests/agent-tavern-projector.spec.ts`：preamble 计划序列（head → turn2 user → step assistant → user 开新 turn → 历史）、user 的 `presetUserBlock` 标记与 assistant 的 model 标记、`stream: []`、无 preamble 时计划不变、只有 preamble 时计划合法。
 - `packages/plugin/tests/session-source-dispositions.spec.ts`：v0 宿主忽略 preamble（source 白名单不变）；v4 形状合法。
-- `packages/plugin/tests/tavern-command.spec.ts`：激活计划先写 preamble 再写历史，真实首轮 turn 号顺延、`phase.lastTurn` 推进到计划最后 turn。
+- `packages/plugin/tests/tavern-command.spec.ts`：激活计划先写 preamble 再写历史，真实首轮 turn 号顺延、`phase.lastTurn` 推进到计划最后 turn；损坏的激活预设不中止激活、不产出 `presetUserBlock` 帧并告警一次。
+- `packages/plugin/tests/preset-mount.spec.ts` / `native-preset.spec.ts`：非 system 条目在无帧化通道被丢弃时各按自身 key（工作台/小说含 agent，标准会话按预设）告警一次，全 system 预设不告警。
+- `packages/plugin/tests/tavern-sidebar-layout.spec.ts`：聊天导入工具行只存在于管理面板的角色聊天列表（`allowChatImport`；组列表不提供——`import/chat` 要求同名角色卡存在），宿主侧栏挂载点不带该标志。
 - `packages/plugin/scripts/gates/run.mjs` 的 `v4-session-admission`：新增 preamble 序列必须通过真实宿主的词汇表、settlement 与 turn/step 关系校验（与历史导入同一道门）。
 - `pnpm exec tsc -b`、`pnpm run typecheck:plugin`、`pnpm run typecheck:security`、`node scripts/build-plugin.mjs`、`node packages/plugin/scripts/gates/run.mjs`、全量 `vitest run`。

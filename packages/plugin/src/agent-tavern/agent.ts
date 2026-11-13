@@ -1,11 +1,13 @@
-import { renderPtcCompleteText } from '../../../bind/src/index.js'
+import { renderPtcCompleteText, type HostSessionLog } from '../../../bind/src/index.js'
 import { formatGuidesBlock, onGuidesChanged } from '../guides.js'
 import { onGamesChanged } from '../games/handle.js'
+import type { HostAgentPresetsService } from '../host-contract.js'
 import { createLazyProjection } from '../lazy-projection.js'
 import { clampModSectionOrder, modSectionSnapshot } from '../mods/cross-bundle.js'
 import { mountModExtensions } from '../mods/agent-mount.js'
 import { createHostPromptExpander, hostPromptSafe, seededRandom } from '../prompt-safety.js'
 import { recordPromptView } from '../prompt-viewer.js'
+import { lastSelectedPresetId } from '../session/preset-marker.js'
 import { limitText } from '../tool-args.js'
 import { createAgentContextInjectionChannel } from './context-injection.js'
 import { agentStepCaptureOf } from './prompt-capture.js'
@@ -30,7 +32,14 @@ export { identitySummaryOf }
 
 
 export const name = 'dsh-soulmojito/agent'
-export const inject = ['systemPrompt', 'tools']
+export const inject = ['systemPrompt', 'tools', 'agentPresets']
+
+/**
+ * 宿主 preset registry（apply 注入）。装配回调只拿得到 assembly.agent，不能从
+ * 插件 ctx 反查别的会话；provider 按 session 读取已记录的 preset id，用来给
+ * 进程级 prompt-part 注册表收窄可见性（2026-11-13-im-preset-prompt-scope）。
+ */
+let presetService: HostAgentPresetsService | undefined
 
 const KERNEL = [
   'You are AgentTavern running inside the DSH native AgentLoop.',
@@ -104,6 +113,7 @@ export function apply(ctx: AgentContextLike): void {
   } catch {
     agentLogger = undefined
   }
+  presetService = ctx.agentPresets
   // 唯一 complete 段（决策 2026-11-02-agent-prompt-takeover）：宿主 assemble()
   // 对 complete 段只保留它自己，AgentTavern 会话因此不再携带宿主的 identity /
   // deployment persona / 工具与界面指引。段文本按 prompt-parts 注册表拼装
@@ -120,6 +130,7 @@ export function apply(ctx: AgentContextLike): void {
     // Mirror both into the complete text when the effective scope mode is PTC.
     text: (assembly) => agentSystemPromptTextOf(
       assembly?.agent?.id,
+      agentPresetIdOf(assembly?.agent),
       renderPtcCompleteText(ctx.tools, assembly?.scope, assembly?.toolSet),
     ),
   })
@@ -180,6 +191,7 @@ export function apply(ctx: AgentContextLike): void {
     // 调用配置。fire-and-forget——合成内部整体吞错，绝不反噬请求路径。
     void recordAgentTavernPromptViewFor(
       payload?.agent?.id,
+      agentPresetIdOf(payload?.agent),
       resolved,
       ctx.logger,
       () => renderPtcCompleteText(ctx.tools, payload?.agent, undefined),
@@ -236,12 +248,14 @@ export interface AgentContextLike {
     }) => unknown
   }
   tools?: { register?: (tool: ToolDefinition) => unknown }
+  /** 宿主 preset registry：provider 按 session 解析激活 preset（inject 声明）。 */
+  agentPresets?: HostAgentPresetsService
   /** 宿主事件面（Cordis 核心 API，非 inject 服务）。agent/request 是 waterfall：
    *  next() 取下游配置，返回值为权威结果（预设 temperature 覆盖在此实现）。 */
   on?: (
     event: 'agent/request',
     listener: (
-      payload: { agent?: { id?: string } } | undefined,
+      payload: { agent?: AgentAssemblyAgentLike } | undefined,
       next: () => Promise<LlmCallConfigLike>,
     ) => Promise<LlmCallConfigLike>,
   ) => unknown
@@ -250,8 +264,14 @@ export interface AgentContextLike {
   logger?: { warn?: (message: string) => unknown }
 }
 
+interface AgentAssemblyAgentLike {
+  id?: string
+  session?: HostSessionLog
+  ctx?: unknown
+}
+
 interface AgentAssemblyLike {
-  agent?: { id?: string }
+  agent?: AgentAssemblyAgentLike
   scope?: unknown
   /** Host tool set captured for this assembly; PTC SDK rendering narrows it. */
   toolSet?: unknown
@@ -462,11 +482,6 @@ function agentPresetTemperatureOf(agentId: string | undefined): number | undefin
   return presetProjection.valueOf(agentId)?.temperature
 }
 
-/** 预设 user 条目的注入文本（未装载 / 无条目均为 undefined）。 */
-export function agentPresetUserTextOf(agentId: string): string | undefined {
-  return presetProjection.valueOf(agentId)?.userText
-}
-
 /** 预置**没有 user 条目**的 agent：preheatOne 会强制重载，每 step 一次纯浪费。
  *  负缓存由预设变更监听整体清空（编辑预设可能新增 user 条目），不清空会让新
  *  条目等到下一次压缩后才生效。 */
@@ -485,6 +500,30 @@ export async function ensureAgentPresetUserText(agentId: string): Promise<string
 }
 
 /**
+ * 装配期解析当前 agent 的 preset id，供进程级 prompt 注册表按预设收窄部件
+ * （2026-11-13-im-preset-prompt-scope）。
+ *
+ * 首选宿主 `agentPresets` 的 session 投影（O(1)，覆盖「创建时 header 带预设、
+ * 从未 append 选择事件」的会话）；投影不可用时退回日志里最后一条
+ * `agent-preset/selected`。解析不到时返回 undefined——部件按「非该预设」处理，
+ * 这是安全的收窄方向（IM 规则不会凭空进入普通会话）。
+ */
+function agentPresetIdOf(agent: AgentAssemblyAgentLike | undefined): string | undefined {
+  if (agent === undefined) return undefined
+  const presets = presetService
+  if (presets !== undefined) {
+    const session = agent.session
+    const recorded = session === undefined ? null : presets.presetForSession?.(session)
+    if (typeof recorded === 'string' && recorded !== '') return recorded
+    if (agent.ctx !== undefined) {
+      const composed = presets.composedPreset?.(agent.ctx)
+      if (typeof composed === 'string' && composed !== '') return composed
+    }
+  }
+  return lastSelectedPresetId(agent.session)
+}
+
+/**
  * 预注入面快照（提示词查看器 Agent 模式，决策 2026-11-02-agent-prompt-takeover）：
  * 注册表部件（IM 段 / kernel / preset / identity + 三个 context 通道）+ mod 段快照
  * （cross-bundle 注册表，读时与旧挂载面同式钳制 + hostPromptSafe）。
@@ -493,9 +532,9 @@ export async function ensureAgentPresetUserText(agentId: string): Promise<string
  * `context` 是宿主 runtime snapshot 的组成（每步一条 user 消息）。空文本摘除，
  * 按 order 升序（同 order 保持注册序——取快照即所见）。
  */
-export function agentPromptSectionsFor(agentId: string | undefined): AgentPromptPiece[] {
+export function agentPromptSectionsFor(agentId: string | undefined, presetId: string | undefined): AgentPromptPiece[] {
   const sections: AgentPromptPiece[] = [
-    ...agentPromptPieces(agentId),
+    ...agentPromptPieces(agentId, presetId),
     ...modSectionSnapshot().map((entry) => ({
       name: `dsh-soulmojito:mod:${entry.modId}:${entry.definition.name}`,
       order: clampModSectionOrder(entry.definition.order),
@@ -514,8 +553,8 @@ export function agentPromptSectionsFor(agentId: string | undefined): AgentPrompt
  * drops the separately registered tools:sdk section, so `ptcText` is the only
  * path that gives the model the callable PTC surface.
  */
-function agentSystemPromptTextOf(agentId: string | undefined, ptcText: string): string {
-  const system = agentPromptSectionsFor(agentId)
+function agentSystemPromptTextOf(agentId: string | undefined, presetId: string | undefined, ptcText: string): string {
+  const system = agentPromptSectionsFor(agentId, presetId)
     .filter((section) => section.scope === 'system')
     .map((section) => section.text)
     .join('\n\n')
@@ -535,6 +574,7 @@ function agentSystemPromptTextOf(agentId: string | undefined, ptcText: string): 
  */
 async function recordAgentTavernPromptViewFor(
   agentId: string | undefined,
+  presetId: string | undefined,
   config: unknown,
   logger: { warn?: (message: string) => unknown } | undefined,
   ptcText: () => string,
@@ -545,8 +585,8 @@ async function recordAgentTavernPromptViewFor(
     const capture = agentStepCaptureOf(agentId)
     const binding = (await (await tavernStore()).getState()).sessionBindings[agentId]
     if (!binding || binding.architecture !== 'agent-tavern' || binding.group === true) return
-    const sections = agentPromptSectionsFor(agentId)
-    const system = agentSystemPromptTextOf(agentId, ptcText())
+    const sections = agentPromptSectionsFor(agentId, presetId)
+    const system = agentSystemPromptTextOf(agentId, presetId, ptcText())
     recordPromptView({
       character: binding.character,
       chatId: binding.chatId,

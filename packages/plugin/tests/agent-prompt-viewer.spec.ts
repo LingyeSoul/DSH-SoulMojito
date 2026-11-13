@@ -308,7 +308,7 @@ describe('agentPromptSectionsFor coverage lock', () => {
     // system 读面包含 identity（用户人设 + 角色摘要），且不再走 context。
     expect(registeredAgentPromptParts().filter((part) => part.scope === 'system').map((part) => part.name))
       .toContain('dsh-soulmojito:agent-facts')
-    const pieces = agentPromptSectionsFor('coverage-agent')
+    const pieces = agentPromptSectionsFor('coverage-agent', undefined)
     // system 头只有 complete 段部件 + mod 段；unbound agent 的 preset/facts 恒空摘除。
     const allowed = new Set([
       'dsh-soulmojito:agent-kernel',
@@ -324,7 +324,7 @@ describe('agentPromptSectionsFor coverage lock', () => {
   it('includes mod sections with clamped order and neutralized text', () => {
     const dispose = registerModSection('mymod', { name: 'flavor', order: -999, text: 'MOD SECTION BODY {{raw}}' }, 0)
     try {
-      const sections = agentPromptSectionsFor('coverage-agent')
+      const sections = agentPromptSectionsFor('coverage-agent', undefined)
       const mod = sections.find((section) => section.name === 'dsh-soulmojito:mod:mymod:flavor')
       expect(mod).toBeDefined()
       // 越界 order 钳进 mod 专属区间（-50..0），与 agent-mount 挂载面同式。

@@ -48,7 +48,7 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 - **生成动词** — ST 模式新增 Continue（续写末条，不新增楼层）与 Impersonate（以用户身份代写一条用户楼）；`POST generate` 模式白名单同步。宿主没有 assistant prefill，续写用一次性 system 指令表达。
 - **采样参数** — ST 管线的预设 `top_p`/`top_k`/penalties/`min_p`/`stop`/`seed`/`logit_bias` 不再静默丢弃；直传键优先、兼容 `openai_` 前缀。Agent 模式仍只投影 temperature。
 - **消息面** — 隐藏/取消隐藏贯通生成历史与面板；删除、复制、上移/下移、末条重生成、Continue、Impersonate、Checkpoint 进入动作行；正文使用 Markdown 渲染（完整 HTML 仍走沙箱 iframe）；落盘写 `extra.tokenCount` 估算。
-- **聊天文件** — JSONL 导入/导出、整聊复制、checkpoint（复制到子聊天并写 `checkpoint_parent`）、ST 首楼开场白切换。
+- **聊天文件** — JSONL 导入/导出（导入入口在管理面板「聊天」分区）、整聊复制、checkpoint（复制到子聊天并写 `checkpoint_parent`）、ST 首楼开场白切换。
 - **输入辅助** — Quick Replies（面板 + composer + `/qr`/`/run`，仅 ST 架构执行）、composer `/help` 与命令补全、聊天级 Author's Note 与 Summary（`chat_metadata`，ST 生成按 position/depth/interval 注入）。
 - **STscript** — 新增 `/continue` `/swipe` `/hide` `/unhide` `/move` `/rename` `/branch` `/checkpoint` `/listvar` `/flushvar` `/run` `/times` `/qr`；`/while` 明确报不支持。
 - **世界书** — 全局设置面（递归步数、预算、最小激活、大小写/整词、组计分、名字前缀）；`{{outlet::Name}}` 接通；`{{mesExamplesRaw}}` 与清洗版分离。
@@ -345,9 +345,9 @@ pnpm run check
 
 ```
 Test Files  216 passed (216)
-Tests       3509 passed | 2 skipped (3511)
+Tests       3518 passed | 2 skipped (3520)
 21 gates    全部 PASS
-built       v0.8.1 (a45c812)
+built       v0.8.1 (c7142da)
 ```
 
 - 2 项跳过都是 `skipIf` 环境条件项：Windows 检出上的 `host-package.spec.ts` POSIX-only 用例，以及 `im-store.spec.ts` 的 0600 权限位用例（Win32 无 POSIX mode）。

@@ -43,6 +43,15 @@ export const AGENT_TAVERN_IM_PRESET_ID = 'agent-tavern-im'
  */
 export const AGENT_TAVERN_IM_NATIVE_PRESET_ID = 'agent-tavern-im-native'
 
+/**
+ * Whether a session's recorded preset is one that composes the IM mode prompt.
+ * The prompt-parts registry is process-global, so the IM part must gate its own
+ * text on the current preset (2026-11-13-im-preset-prompt-scope).
+ */
+export function isAgentTavernImPresetId(presetId: string | undefined): boolean {
+  return presetId === AGENT_TAVERN_IM_PRESET_ID || presetId === AGENT_TAVERN_IM_NATIVE_PRESET_ID
+}
+
 export type ImMediaKind = 'image' | 'voice' | 'video' | 'file'
 
 export interface ImMediaRef {

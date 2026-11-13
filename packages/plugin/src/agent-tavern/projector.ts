@@ -21,6 +21,7 @@ import {
 import { isBodyLogEvent, isBodyMergedAssistant, projectBodyEvent, type BodyProjectionStore } from './body-projector.js'
 import { isTavernSessionMarker } from './body-session.js'
 import type { AgentPresetPreambleEntry } from './preset.js'
+import { presetUserBlockSourceOf } from './preset-user-block.js'
 import { collectSessionRegexScripts } from '../regex-session.js'
 import { recordMvuTurnReceipt, snapshotChatVariables } from '../mvu.js'
 import {
@@ -591,7 +592,7 @@ export function historyImportAppends(
             id: randomUUID(),
             role: 'user',
             content: [{ type: 'text', text: entry.content }],
-            source: hostPluginMessageSource(session, { form: 'instructions', presetUserBlock: true }),
+            source: presetUserBlockSourceOf(session, entry.content),
           },
           surfaceOp: 'append',
         })
