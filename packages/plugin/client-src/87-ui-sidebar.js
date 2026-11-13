@@ -357,37 +357,7 @@
         })
         await loadChatList(character, true)
       })
-      const importChat = (file) => {
-        if (file === undefined) return
-        const name = file.name.replace(/\.jsonl$/i, '')
-        const reader = new FileReader()
-        reader.onerror = () => setError(reader.error instanceof Error ? reader.error.message : t('nav.importChatFailed'))
-        reader.onload = () => {
-          const content = typeof reader.result === 'string' ? reader.result : ''
-          setError('')
-          void api('import/chat', {
-            method: 'POST',
-            headers: jsonHeaders(),
-            body: JSON.stringify({ character, name, content }),
-          }).then(() => loadChatList(character, true)).catch((cause) => {
-            setError(cause instanceof Error ? cause.message : String(cause))
-          })
-        }
-        reader.readAsText(file)
-      }
       return h('div', { className: 'dt-sidebar-chats' },
-        h('div', { className: 'dt-sidebar-chat-tools' },
-          h('label', { className: 'dt-upload', title: t('nav.importChat') },
-            t('nav.importChat'),
-            h('input', {
-              type: 'file',
-              accept: '.jsonl,application/jsonl,application/json',
-              onChange: (event) => {
-                const file = event.target.files?.[0]
-                event.target.value = ''
-                importChat(file)
-              },
-            }))),
         chats?.map((chatId) => {
           const labels = chatArchitectureLabels(character, chatId, group)
           return h('div', {
@@ -402,36 +372,37 @@
             onClick: () => open(chatId),
           }, h('span', null, / - branch \d+$/.test(chatId.replace(/\.jsonl$/i, '')) ? '⑂ ' : '', chatId.replace(/\.jsonl$/i, '')),
           h('span', { className: 'dt-chat-architecture' }, labels.join(' / '))),
-          h('button', {
-            type: 'button',
-            title: t('nav.workbenchChat'),
-            disabled: busyChat === chatId,
-            onClick: () => runAction(chatId, () => openWorkbenchSession(ctx, { character, chatId })),
-          }, h(IconSparkle16)),
-          h('button', {
-            type: 'button',
-            title: t('nav.exportChat', { name: chatId.replace(/\.jsonl$/i, '') }),
-            disabled: busyChat === chatId,
-            onClick: () => exportChat(chatId),
-          }, h(IconDownloadOutline16)),
-          h('button', {
-            type: 'button',
-            title: t('nav.duplicateChat', { name: chatId.replace(/\.jsonl$/i, '') }),
-            disabled: busyChat === chatId,
-            onClick: () => duplicateChat(chatId),
-          }, '⧉'),
-          h('button', {
-            type: 'button',
-            title: t('nav.rename', { name: chatId.replace(/\.jsonl$/i, '') }),
-            disabled: busyChat === chatId,
-            onClick: () => runAction(chatId, () => renameTavernChat(ctx, character, chatId)),
-          }, h(IconEditOutline16)),
-          h('button', {
-            type: 'button',
-            title: t('nav.delete', { name: chatId.replace(/\.jsonl$/i, '') }),
-            disabled: busyChat === chatId,
-            onClick: () => runAction(chatId, () => deleteTavernChat(ctx, character, chatId)),
-          }, h(IconTrashOutline16)))
+          h('div', { className: 'dt-sidebar-chat-actions' },
+            h('button', {
+              type: 'button',
+              title: t('nav.workbenchChat'),
+              disabled: busyChat === chatId,
+              onClick: () => runAction(chatId, () => openWorkbenchSession(ctx, { character, chatId })),
+            }, h(IconSparkle16)),
+            h('button', {
+              type: 'button',
+              title: t('nav.exportChat', { name: chatId.replace(/\.jsonl$/i, '') }),
+              disabled: busyChat === chatId,
+              onClick: () => exportChat(chatId),
+            }, h(IconDownloadOutline16)),
+            h('button', {
+              type: 'button',
+              title: t('nav.duplicateChat', { name: chatId.replace(/\.jsonl$/i, '') }),
+              disabled: busyChat === chatId,
+              onClick: () => duplicateChat(chatId),
+            }, '⧉'),
+            h('button', {
+              type: 'button',
+              title: t('nav.rename', { name: chatId.replace(/\.jsonl$/i, '') }),
+              disabled: busyChat === chatId,
+              onClick: () => runAction(chatId, () => renameTavernChat(ctx, character, chatId)),
+            }, h(IconEditOutline16)),
+            h('button', {
+              type: 'button',
+              title: t('nav.delete', { name: chatId.replace(/\.jsonl$/i, '') }),
+              disabled: busyChat === chatId,
+              onClick: () => runAction(chatId, () => deleteTavernChat(ctx, character, chatId)),
+            }, h(IconTrashOutline16))))
         }),
         !chats ? h('span', { className: 'dt-sidebar-status' }, t('nav.loading')) : null,
         chats?.length === 0 ? h('span', { className: 'dt-sidebar-status' }, t('nav.noChats')) : null,
@@ -483,22 +454,23 @@
             disabled: busySession === sessionId,
             onClick: () => openWorkbenchSessionView(ctx, sessionId),
           }, h('span', null, '✎ ', label)),
-          h('button', {
-            type: 'button',
-            title: t('nav.rename', { name: label }),
-            disabled: busySession === sessionId,
-            onClick: () => runAction(sessionId, () => renameWorkbenchSession(ctx, sessionId, label)),
-          }, h(IconEditOutline16)),
-          h('button', {
-            type: 'button',
-            title: t('nav.delete', { name: label }),
-            disabled: busySession === sessionId,
-            onClick: () => {
-              if (window.confirm(t('workbench.deleteConfirm', { name: label }))) {
-                runAction(sessionId, () => deleteWorkbenchSession(ctx, sessionId))
-              }
-            },
-          }, h(IconTrashOutline16)))
+          h('div', { className: 'dt-sidebar-chat-actions' },
+            h('button', {
+              type: 'button',
+              title: t('nav.rename', { name: label }),
+              disabled: busySession === sessionId,
+              onClick: () => runAction(sessionId, () => renameWorkbenchSession(ctx, sessionId, label)),
+            }, h(IconEditOutline16)),
+            h('button', {
+              type: 'button',
+              title: t('nav.delete', { name: label }),
+              disabled: busySession === sessionId,
+              onClick: () => {
+                if (window.confirm(t('workbench.deleteConfirm', { name: label }))) {
+                  runAction(sessionId, () => deleteWorkbenchSession(ctx, sessionId))
+                }
+              },
+            }, h(IconTrashOutline16))))
         }),
         entries.length === 0 ? h('span', { className: 'dt-sidebar-status' }, t('nav.noWorkbench')) : null,
         error ? h('span', { className: 'dt-sidebar-error' }, error) : null)

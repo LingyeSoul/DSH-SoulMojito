@@ -1,7 +1,7 @@
 import { AGENT_TAVERN_PRESET_ID } from '../agent-tavern/capabilities.js'
 import { ensureChatVariables, seedJsrMvuVariables } from '../agent-tavern/mvu-compat.js'
 import { historyImportAppends, isTavernSessionMarker } from '../agent-tavern/projector.js'
-import { emitAgentPresetChanged } from '../agent-tavern/preset.js'
+import { emitAgentPresetChanged, defaultPreset, projectAgentPreset } from '../agent-tavern/preset.js'
 import { confirmSessionAppend, hostPluginMessageSource, sessionEvents } from '../../../bind/src/index.js'
 import type { HostSessionEvent, HostSessionLog } from '../../../bind/src/index.js'
 import type { SessionImportAppend } from '../agent-tavern/projector.js'
@@ -131,9 +131,29 @@ export function registerTavernSessionCommand(ctx: PluginContext): void {
           // 历史文本应用 prompt 层正则与宏展开（{{char}}/{{user}}），模型上下文
           // 与 ST 管线一致。会话已有原生 turn 或导入消息（投影器重放先于
           // 激活完成）时历史已在场，跳过导入防重复。
-          historyImport = sessionStarted || historyImported
-            ? undefined
-            : historyImportAppends(chat, agent.id, character ? await collectSessionRegexScripts(db, currentState, parsed.character, parsed.chatId, character) : [], tavernMacroExpand(currentState, parsed.character, character), agent.session)
+          //
+          // 预设的非 system 条目（user/assistant）在同一份计划里先于历史写成
+          // 真实消息帧（决策 2026-11-13-preset-user-role-injection）：loop 未
+          // 启动时这是唯一能把 assistant 发言放进上下文的位置。宏按与历史同
+          // 一份 tavernMacroExpand 展开，保留未知宏原样（不是 system section，
+          // 不走 hostPromptSafe）。群聊不预装载。
+          if (sessionStarted || historyImported) {
+            historyImport = undefined
+          } else {
+            const expand = tavernMacroExpand(currentState, parsed.character, character)
+            const rawPreset = typeof currentState.activePreset === 'string' && currentState.activePreset !== ''
+              ? await db.getPreset(currentState.activePreset)
+              : undefined
+            const preamble = projectAgentPreset(rawPreset ?? defaultPreset(), character?.card).preamble
+              .map((entry) => ({ role: entry.role, content: expand(entry.content) }))
+            historyImport = historyImportAppends(
+              chat,
+              agent.id,
+              character ? await collectSessionRegexScripts(db, currentState, parsed.character, parsed.chatId, character) : [],
+              expand,
+              { session: agent.session, preamble },
+            )
+          }
         }
         if (shouldPreloadAssets) {
           if (typeof agent.inject !== 'function') {

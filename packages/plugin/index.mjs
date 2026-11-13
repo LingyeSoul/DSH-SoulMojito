@@ -16178,8 +16178,8 @@ function readBuildInfo() {
   return { version, commit };
 }
 function buildTimeStamp() {
-  const version = true ? "0.8.0".trim() : "";
-  const commit = true ? normalizeCommit("9a51b1d") : void 0;
+  const version = true ? "0.8.1".trim() : "";
+  const commit = true ? normalizeCommit("a45c812") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -25376,7 +25376,8 @@ function isTavernSessionMarker(source) {
   const record = source;
   if (record.kind === "model") {
     const provider = record.provider;
-    return (provider === PLUGIN_NAME || provider === LEGACY_PLUGIN_NAME) && record.model === "agent-tavern-import";
+    const model = record.model;
+    return (provider === PLUGIN_NAME || provider === LEGACY_PLUGIN_NAME) && (model === "agent-tavern-import" || model === "agent-tavern-preset");
   }
   if (!isHostPluginMessageSource(record)) return false;
   return !(typeof record.summary === "string" && record.summary.startsWith("AgentTavern preload: "));
@@ -25987,7 +25988,7 @@ function isBodyTriggerTurn(session, turn) {
     if (current !== turn || event.type !== "user/message") continue;
     const source = plainObjectRecord(plainObjectRecord(event.data)?.["source"]);
     const form = source?.["form"];
-    return form === "body-regenerate" || form === "body-restore";
+    if (form === "body-regenerate" || form === "body-restore") return true;
   }
   return false;
 }
@@ -26792,7 +26793,10 @@ function projectMessages(session, event, binding, scripts, imPeerAliases, pendin
   }];
 }
 var TAVERN_MIRROR_MODEL_SOURCE = { provider: PLUGIN_NAME, model: "agent-tavern-import" };
-function historyImportAppends(chat, sessionId, scripts, expand, session) {
+var TAVERN_PRESET_MODEL_SOURCE = { provider: PLUGIN_NAME, model: "agent-tavern-preset" };
+function historyImportAppends(chat, sessionId, scripts, expand, options) {
+  const session = options.session;
+  const preamble = options.preamble;
   const promptScripts = scripts.filter((script) => script.promptOnly && !script.markdownOnly);
   const promptView = (message, index) => {
     const transformed = promptScripts.length === 0 ? message.mes : applyRegexScripts(message.mes, promptScripts, RegexPlacement2.AI_OUTPUT, {}, { depth: chat.messages.length - 1 - index });
@@ -26802,7 +26806,7 @@ function historyImportAppends(chat, sessionId, scripts, expand, session) {
   const hostVersion = hostSessionFormatVersion(session) ?? 0;
   const settlement = hostVersion >= 4 ? { stream: [] } : {};
   const importable = chat.messages.filter((message) => isImportableMessage(message, sessionId));
-  const head = hostVersion >= 4 && importable.length > 0;
+  const head = hostVersion >= 4 && (importable.length > 0 || preamble.length > 0);
   let turn = head ? 1 : 0;
   let step = 0;
   let turnOpen = false;
@@ -26817,6 +26821,45 @@ function historyImportAppends(chat, sessionId, scripts, expand, session) {
     turnOpen = false;
     appends.push({ type: "turn/end", data: { turn, reason: { kind: "completed" } } });
   };
+  if (hostVersion >= 4) {
+    for (const entry of preamble) {
+      if (entry.role === "user") {
+        closeTurn();
+        openTurn();
+        appends.push({
+          type: "user/message",
+          data: {
+            id: randomUUID4(),
+            role: "user",
+            content: [{ type: "text", text: entry.content }],
+            source: hostPluginMessageSource(session, { form: "instructions", presetUserBlock: true })
+          },
+          surfaceOp: "append"
+        });
+        continue;
+      }
+      if (!turnOpen) openTurn();
+      step += 1;
+      appends.push({ type: "step/start", data: { turn, step } });
+      appends.push({
+        type: "assistant/message",
+        data: {
+          turn,
+          step,
+          ...settlement,
+          message: {
+            id: randomUUID4(),
+            role: "assistant",
+            content: [{ type: "text", text: entry.content }],
+            source: { kind: "model", ...TAVERN_PRESET_MODEL_SOURCE }
+          }
+        },
+        surfaceOp: "append"
+      });
+      appends.push({ type: "step/end", data: { turn, step } });
+    }
+    closeTurn();
+  }
   for (const [index, message] of chat.messages.entries()) {
     if (!isImportableMessage(message, sessionId)) continue;
     if (message.is_user === true) {
@@ -34233,6 +34276,7 @@ function pickGroupMember(options) {
 // packages/plugin/src/agent-tavern/preset.ts
 init_cross_bundle_events();
 var AGENT_PRESET_BLOCK_HEADER = "Chat completion preset (user-configured prompt stack; follow these instructions together with the kernel):";
+var AGENT_PRESET_USER_HEADER = "Chat completion preset entries with the user role (instructions for the conversation frame from the preset, not a new chat message from the user):";
 function effectiveAgentPresetPrompts(preset, card) {
   const order = resolvePromptOrder(preset);
   const byId = new Map(preset.prompts.map((prompt) => [prompt.identifier, prompt]));
@@ -34254,9 +34298,22 @@ function effectiveAgentPresetPrompts(preset, card) {
   return effective;
 }
 function renderAgentPresetBlock(preset, card, header = AGENT_PRESET_BLOCK_HEADER) {
-  const prompts = effectiveAgentPresetPrompts(preset, card);
+  const prompts = effectiveAgentPresetPrompts(preset, card).filter((prompt) => prompt.role === "system");
   if (prompts.length === 0) return void 0;
   return [header, ...prompts.map((prompt) => prompt.content)].join("\n\n");
+}
+function renderAgentPresetUserBlock(preset, card) {
+  const contents = effectiveAgentPresetPrompts(preset, card).filter((prompt) => prompt.role === "user").map((prompt) => prompt.content);
+  if (contents.length === 0) return void 0;
+  return [AGENT_PRESET_USER_HEADER, ...contents].join("\n\n");
+}
+function agentPresetPreambleEntries(preset, card) {
+  const entries = [];
+  for (const prompt of effectiveAgentPresetPrompts(preset, card)) {
+    if (prompt.role === "system") continue;
+    entries.push({ role: prompt.role, content: prompt.content });
+  }
+  return entries;
 }
 function presetTemperature(preset) {
   const value = preset.sampler["temperature"];
@@ -34281,19 +34338,24 @@ function presetRefusalReason(kind) {
 function projectAgentPreset(preset, card) {
   const kind = detectPresetKind(preset);
   if (kind !== "chat-completion") {
-    return { refusals: [{ kind, reason: presetRefusalReason(kind) }] };
+    return { preamble: [], refusals: [{ kind, reason: presetRefusalReason(kind) }] };
   }
   try {
     const ir = parsePreset(preset);
     const text = renderAgentPresetBlock(ir, card);
+    const userText = renderAgentPresetUserBlock(ir, card);
+    const preamble = agentPresetPreambleEntries(ir, card);
     const temperature = presetTemperature(ir);
     return {
       ...text === void 0 ? {} : { text },
+      ...userText === void 0 ? {} : { userText },
+      preamble,
       ...temperature === void 0 ? {} : { temperature },
       refusals: []
     };
   } catch (error) {
     return {
+      preamble: [],
       refusals: [{
         kind: "chat-completion",
         reason: `chat completion preset could not be parsed (${error instanceof Error ? error.message : String(error)}); nothing is projected`
@@ -59620,20 +59682,26 @@ var presetProjection = createLazyProjection({
       { now: () => new Date(freeze2.frozenAt), rng: seededRandom(freeze2.seed) }
     );
     for (const refusal of projection2.refusals) warnPresetRefusalOnce(agentId, refusal.kind, refusal.reason);
+    const safeText = projection2.text === void 0 ? "" : hostPromptSafe(projection2.text, expand);
+    const userText = projection2.userText === void 0 ? "" : hostPromptSafe(projection2.userText, expand);
     settle({
-      text: projection2.text === void 0 ? "" : hostPromptSafe(projection2.text, expand),
-      ...projection2.temperature === void 0 ? {} : { temperature: projection2.temperature }
+      text: safeText,
+      ...projection2.temperature === void 0 ? {} : { temperature: projection2.temperature },
+      ...userText === "" ? {} : { userText }
     });
   }
 });
 function agentPresetText(agentId) {
   return presetProjection.valueOf(agentId)?.text ?? "";
 }
+var presetMissingUserText = /* @__PURE__ */ new Set();
 onAgentPresetChanged(() => Promise.all([
   presetProjection.refreshWhere((binding) => binding.architecture === "agent-tavern"),
   factsProjection.refreshWhere((binding) => binding.architecture === "agent-tavern"),
   contextInjection.refreshWhere((binding) => binding.architecture === "agent-tavern")
-]).then(() => void 0));
+]).then(() => {
+  presetMissingUserText.clear();
+}));
 
 // packages/plugin/src/agent-novel/writer.ts
 init_usage();
@@ -65681,7 +65749,20 @@ function registerTavernSessionCommand(ctx) {
           await db.saveChat(parsed.character, parsed.chatId, chat, chatSnapshot.revision);
         }
         if (initializeAgentTavern && parsed.group !== true) {
-          historyImport = sessionStarted || historyImported ? void 0 : historyImportAppends(chat, agent.id, character ? await collectSessionRegexScripts(db, currentState, parsed.character, parsed.chatId, character) : [], tavernMacroExpand(currentState, parsed.character, character), agent.session);
+          if (sessionStarted || historyImported) {
+            historyImport = void 0;
+          } else {
+            const expand = tavernMacroExpand(currentState, parsed.character, character);
+            const rawPreset = typeof currentState.activePreset === "string" && currentState.activePreset !== "" ? await db.getPreset(currentState.activePreset) : void 0;
+            const preamble = projectAgentPreset(rawPreset ?? defaultPreset(), character?.card).preamble.map((entry) => ({ role: entry.role, content: expand(entry.content) }));
+            historyImport = historyImportAppends(
+              chat,
+              agent.id,
+              character ? await collectSessionRegexScripts(db, currentState, parsed.character, parsed.chatId, character) : [],
+              expand,
+              { session: agent.session, preamble }
+            );
+          }
         }
         if (shouldPreloadAssets) {
           if (typeof agent.inject !== "function") {

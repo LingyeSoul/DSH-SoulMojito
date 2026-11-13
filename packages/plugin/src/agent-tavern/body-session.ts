@@ -78,9 +78,14 @@ export function isTavernSessionMarker(source: unknown): boolean {
   const record = source as Record<string, unknown>
   if (record.kind === 'model') {
     // Rename compatibility (2026-10-16): stored mirrors may carry the legacy
-    // provider name; new writes always use the new one.
+    // provider name; new writes always use the new one. `agent-tavern-import`
+    // is the imported-history mirror, `agent-tavern-preset` the preset preamble
+    // (activation-time non-system preset entries); both are Tavern-owned frames
+    // and must never project back into the chat log.
     const provider = record.provider
-    return (provider === PLUGIN_NAME || provider === LEGACY_PLUGIN_NAME) && record.model === 'agent-tavern-import'
+    const model = record.model
+    return (provider === PLUGIN_NAME || provider === LEGACY_PLUGIN_NAME)
+      && (model === 'agent-tavern-import' || model === 'agent-tavern-preset')
   }
   if (!isHostPluginMessageSource(record)) return false
   return !(typeof record.summary === 'string' && record.summary.startsWith('AgentTavern preload: '))

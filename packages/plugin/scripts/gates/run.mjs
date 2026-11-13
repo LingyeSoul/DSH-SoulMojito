@@ -69,6 +69,7 @@ const SOURCE_BUDGET_ALLOWLIST = [
   { path: 'packages/plugin/src/helper.ts', reason: 'single TavernHelper RPC surface; snapshot + session world/script copy ops share the same binding and validation seams' },
   { path: 'packages/plugin/src/agent-tavern/body-runtime-settlement.ts', reason: 'settlement, crash recovery and the deferred post-turn completion share one durable two-phase marker state machine; a split would duplicate the settle/finish decision' },
   { path: 'packages/plugin/src/agent-tavern/body-wiring.ts', reason: 'single host body wiring surface: deps, projection, turn-stopping and turn/end chains share one lifecycle; the deferred settle chain must stay beside the restore chain' },
+  { path: 'packages/plugin/src/agent-tavern/projector.ts', reason: 'native event projection and the import/surface-head plan share one turn-boundary and source-disposition contract pinned by the v4-session-admission gate; splitting would duplicate the import predicate the projector replay must agree with' },
   { path: 'packages/plugin/src/games/builtin/', prefix: true, reason: 'one built-in game engine per file' },
   { path: 'packages/plugin/src/http/novel.ts', reason: 'single AgentNovel HTTP surface; import/revision routes share the same creation gate and error mapping' },
   { path: 'packages/plugin/src/memory-maintenance.ts', reason: 'maintenance run loop and tool surface kept together' },
@@ -3599,8 +3600,20 @@ const gates = [
         }
         // 导入契约面向空白会话（激活流程保证），turn 号从 1 起步。
         const session = { header: { version: 4 } }
-        const importRows = historyImportAppends(chat, 'gate-session', [], undefined, session)
+        const importRows = historyImportAppends(chat, 'gate-session', [], undefined, { session, preamble: [] })
         problems.push(...admissionProblems('history import', importRows))
+
+        // 预设帧化序列：user/assistant preamble 写在受保护头之后、历史之前；
+        // 与历史导入共用同一套 turn/step 边界与 settlement 契约。
+        const preambleRows = historyImportAppends(chat, 'gate-session', [], undefined, {
+          session,
+          preamble: [
+            { role: 'user', content: 'Frame A' },
+            { role: 'assistant', content: 'Sample B' },
+            { role: 'user', content: 'Frame C' },
+          ],
+        })
+        problems.push(...admissionProblems('preset preamble', preambleRows))
 
         // 负控：旧形状（剥掉边界 + turn:0 裸消息 + 无 stream）必须被真实校验拒绝。
         const legacyShape = importRows

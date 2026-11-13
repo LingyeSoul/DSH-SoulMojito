@@ -132,7 +132,7 @@ function admission(validate: (artifact: { header: unknown; events: readonly unkn
 describe.skipIf(!runtimeAvailable)('AgentTavern history import against the real host admission', () => {
   it('is accepted by native V4 admission, materialises every projection unit, and lets the live loop continue', async () => {
     const { assertReleasedV4Relationships, units } = await loadHost()
-    const appends = historyImportAppends(v4Chat(), 'session-gate', [], undefined, { header: { version: 4 } })
+    const appends = historyImportAppends(v4Chat(), 'session-gate', [], undefined, { session: { header: { version: 4 } }, preamble: [] })
     const imported = lastImportedTurn(appends)
     // 受保护头占 turn 1，导入的历史从 turn 2 起。
     expect(imported).toBe(3)
@@ -159,7 +159,7 @@ describe.skipIf(!runtimeAvailable)('AgentTavern history import against the real 
 
   it('reserves the v4 protected surface head so the live system prompt commit stays legal', async () => {
     const { assertReleasedV4Relationships, createSession } = await loadHost()
-    const appends = historyImportAppends(v4Chat(), 'session-gate', [], undefined, { header: { version: 4 } })
+    const appends = historyImportAppends(v4Chat(), 'session-gate', [], undefined, { session: { header: { version: 4 } }, preamble: [] })
     const importedEvents = toEvents(appends)
     // 头是导入序列的第一个 surface 节点：surface 为空时 append，建立 protectedHead。
     expect(appends[2]?.type).toBe('system/message')

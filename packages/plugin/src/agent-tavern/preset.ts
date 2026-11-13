@@ -23,6 +23,12 @@
  *   循环里按 ST 响应长度硬切输出上限会截断 tool-call。
  * - marker（角色卡字段 / 世界书 / 示例对话 / 历史）不进固定 prompt：AgentTavern
  *   由工具、原生历史与可选预载承接（提案 0004 §5）。
+ * - 角色条目按 `prompt.role` 分流，system 块只留 system 条目：user/assistant
+ *   条目是 ST 的对话帧发言，放进 system 头会把发言说成系统规则。它们在会话激活
+ *   （loop 未启动）时由 `agentPresetPreambleEntries` 预装载成真实消息帧；user
+ *   条目另有 `agent/pre-step` 兜底通道（压缩后重注入 / 存量已启动会话），见
+ *   agent-tavern/preset-user-block.ts 与决策
+ *   2026-11-13-preset-user-role-injection。
  * - 分类与不投影清单（契约 2026-11-12 §2.9/§2.10）：导入不再拒绝 instruct /
  *   context / sysprompt / reasoning 预设后，激活到这些类型不会静默留空——
  *   `projectAgentPreset` 返回带原因的 refusals，agent.ts 按 agent/分类去重告警一次；
@@ -43,6 +49,10 @@ import { detectPresetKind, parsePreset, type CharacterCardIR, type PresetIR, typ
 import { entryEnabled, GLOBAL_ORDER_DUMMY_ID, resolvePromptOrder } from '../../../tavern-pipeline/src/index.js'
 
 export const AGENT_PRESET_BLOCK_HEADER = 'Chat completion preset (user-configured prompt stack; follow these instructions together with the kernel):'
+
+/** user 型条目的块首行：这些条目是预设里标记为 user 角色的对话帧发言，不是
+ *  用户此刻的新消息，也不该被当成系统规则。 */
+export const AGENT_PRESET_USER_HEADER = 'Chat completion preset entries with the user role (instructions for the conversation frame from the preset, not a new chat message from the user):'
 
 export interface EffectivePresetPrompt {
   identifier: string
@@ -79,11 +89,43 @@ export function effectiveAgentPresetPrompts(preset: PresetIR, card?: CharacterCa
 
 /** 渲染注入块：首行固定标注 + 各提示词内容按 prompt_order 顺序分段。无有效条目返回 undefined。
  *  header 可覆写：写卡工作台/AgentNovel 的预设投影（preset-mount.ts）复用同一
- *  渲染体但换语义框架（引用式 vs 跟随式），AgentTavern 默认沿用本文件头标注。 */
+ *  渲染体但换语义框架（引用式 vs 跟随式），AgentTavern 默认沿用本文件头标注。
+ *  只收 system 角色条目：user/assistant 条目是对话帧的发言，激活期由
+ *  `agentPresetPreambleEntries` 预装载成真实消息（决策
+ *  2026-11-13-preset-user-role-injection）。 */
 export function renderAgentPresetBlock(preset: PresetIR, card?: CharacterCardIR, header: string = AGENT_PRESET_BLOCK_HEADER): string | undefined {
-  const prompts = effectiveAgentPresetPrompts(preset, card)
+  const prompts = effectiveAgentPresetPrompts(preset, card).filter((prompt) => prompt.role === 'system')
   if (prompts.length === 0) return undefined
   return [header, ...prompts.map((prompt) => prompt.content)].join('\n\n')
+}
+
+/** 渲染 user 角色条目块：只取 `role === 'user'` 的条目，按 prompt_order 顺序
+ *  用空行分段。无条目返回 undefined——调用方据此完全不注入，不制造空消息。
+ *  这是 pre-step 兜底通道（压缩后重注入 / 存量已启动会话）的渲染体。 */
+export function renderAgentPresetUserBlock(preset: PresetIR, card?: CharacterCardIR): string | undefined {
+  const contents = effectiveAgentPresetPrompts(preset, card)
+    .filter((prompt) => prompt.role === 'user')
+    .map((prompt) => prompt.content)
+  if (contents.length === 0) return undefined
+  return [AGENT_PRESET_USER_HEADER, ...contents].join('\n\n')
+}
+
+/** 一条非 system 预设条目：激活期预装载成真实消息帧的原料。content 是原始文本
+ *  （不加任何 header），贴近 ST 逐条发言的帧语义。 */
+export interface AgentPresetPreambleEntry {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+/** 按 prompt_order 顺序返回全部非 system 条目（user 与 assistant）。空数组 =
+ *  本预设没有需要帧化的条目：调用方据此完全不写 preamble。 */
+export function agentPresetPreambleEntries(preset: PresetIR, card?: CharacterCardIR): AgentPresetPreambleEntry[] {
+  const entries: AgentPresetPreambleEntry[] = []
+  for (const prompt of effectiveAgentPresetPrompts(preset, card)) {
+    if (prompt.role === 'system') continue
+    entries.push({ role: prompt.role, content: prompt.content })
+  }
+  return entries
 }
 
 /** 预设 temperature（唯一投影的采样参数，理由见文件头）。缺失/非法返回 undefined（透传宿主配置）。 */
@@ -118,8 +160,15 @@ export interface AgentPresetProjectionRefusal {
 
 /** 一次激活预设投影的结果：可投影的部分 + 明确的不投影清单。 */
 export interface AgentPresetProjection {
-  /** 注入 system 头（order -75）的文本；undefined = 本预设没有可投影的提示词。 */
+  /** 注入 system 头（order -75）的文本；undefined = 本预设没有 system 条目的
+   *  可投影提示词。 */
   text?: string
+  /** user 角色条目的注入文本（pre-step 兜底通道）；undefined = 预设没有 user
+   *  角色条目。 */
+  userText?: string
+  /** 非 system 条目的帧化原料（激活期预装载成真实 user/assistant 消息，按
+   *  prompt_order 顺序）；空数组 = 无需预装载。 */
+  preamble: AgentPresetPreambleEntry[]
   /** 唯一投影的采样参数（见 presetTemperature）。 */
   temperature?: number
   /** 不投影的内容；空数组 = 全部可投影。 */
@@ -153,19 +202,24 @@ function presetRefusalReason(kind: string): string {
 export function projectAgentPreset(preset: Record<string, unknown>, card?: CharacterCardIR): AgentPresetProjection {
   const kind = detectPresetKind(preset) as string
   if (kind !== 'chat-completion') {
-    return { refusals: [{ kind: kind as AgentPresetProjectionKind, reason: presetRefusalReason(kind) }] }
+    return { preamble: [], refusals: [{ kind: kind as AgentPresetProjectionKind, reason: presetRefusalReason(kind) }] }
   }
   try {
     const ir = parsePreset(preset)
     const text = renderAgentPresetBlock(ir, card)
+    const userText = renderAgentPresetUserBlock(ir, card)
+    const preamble = agentPresetPreambleEntries(ir, card)
     const temperature = presetTemperature(ir)
     return {
       ...(text === undefined ? {} : { text }),
+      ...(userText === undefined ? {} : { userText }),
+      preamble,
       ...(temperature === undefined ? {} : { temperature }),
       refusals: [],
     }
   } catch (error) {
     return {
+      preamble: [],
       refusals: [{
         kind: 'chat-completion',
         reason: `chat completion preset could not be parsed (${error instanceof Error ? error.message : String(error)}); nothing is projected`,

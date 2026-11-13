@@ -127,7 +127,7 @@ export async function setup(api) {
   （踩坑实录：[decisions/2026-10-12-story-clock-engines-drift.md](../../decisions/2026-10-12-story-clock-engines-drift.md)）。
 
 ```jsonc
-"engines": { "dsh-soulmojito": "^0.8.0" }   // 宿主 0.8.x 且 ≥0.8.0
+"engines": { "dsh-soulmojito": "^0.8.1" }   // 宿主 0.8.x 且 ≥0.8.1
 ```
 
 ---

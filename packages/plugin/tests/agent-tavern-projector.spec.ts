@@ -1025,7 +1025,7 @@ describe('AgentTavern native event projector', () => {
       ],
     }
     const original = structuredClone(chat)
-    const appends = historyImportAppends(chat, 'session-1', [], undefined, { header: { version: 4 } })
+    const appends = historyImportAppends(chat, 'session-1', [], undefined, { session: { header: { version: 4 } }, preamble: [] })
     // 宿主 v4 准入要求每条 assistant/message 落在「已打开的 turn + step」内：只带
     // payload 坐标（turn 0）不构成边界，`turn/start` 又必须从 1 开始连续编号，
     // 因此导入必须写出完整 turn/step 边界，再由调用方推进 live loop 的轮次基线。
@@ -1090,7 +1090,7 @@ describe('AgentTavern native event projector', () => {
       header: { user_name: 'Alice', character_name: 'Projector Character', chat_metadata: {} },
       messages: [{ name: 'Alice', is_user: true, is_system: false, send_date: '', mes: 'Hello.' }],
     }
-    const appends = historyImportAppends(chat, 'session-1', [], undefined, { header: { version: 4 } })
+    const appends = historyImportAppends(chat, 'session-1', [], undefined, { session: { header: { version: 4 } }, preamble: [] })
     for (const event of appends.filter((item) => item.type === 'user/message')) {
       expect((event.data as { source: Record<string, unknown> }).source).toEqual({
         kind: 'plugin:dsh-soulmojito',
@@ -1114,7 +1114,7 @@ describe('AgentTavern native event projector', () => {
     // stream——v4 加载期的关系校验与 settlement 校验都不留毒（v3 时代的裸消息 +
     // turn:0 已非法）。导入只面向空白会话（激活流程保证），turn 号从 1 起步。
     const session = { header: { version: 4 } }
-    const appends = historyImportAppends(chat, 'session-1', [], undefined, session)
+    const appends = historyImportAppends(chat, 'session-1', [], undefined, { session, preamble: [] })
     expect(appends.map((event) => event.type)).toEqual([
       // v4 受保护头自成 turn 1（历史之前先占 surface 首位）
       'turn/start', 'step/start', 'system/message', 'step/end', 'turn/end',
@@ -1147,7 +1147,80 @@ describe('AgentTavern native event projector', () => {
 
     // 没有任何可导入消息时不开空 turn，日志保持导入前形状。
     const emptyChat: ChatLogIR = { header: chat.header, messages: [] }
-    expect(historyImportAppends(emptyChat, 'session-1', [], undefined, { header: { version: 4 } })).toEqual([])
+    expect(historyImportAppends(emptyChat, 'session-1', [], undefined, { session: { header: { version: 4 } }, preamble: [] })).toEqual([])
+  })
+
+  it('writes the preset preamble between the protected head and the imported history', () => {
+    const chat: ChatLogIR = {
+      header: { user_name: 'Alice', character_name: 'Projector Character', chat_metadata: {} },
+      messages: [
+        { name: 'Alice', is_user: true, is_system: false, send_date: '', mes: 'Hello.' },
+        { name: 'Projector Character', is_user: false, is_system: false, send_date: '', mes: 'Welcome.' },
+      ],
+    }
+    const preamble = [
+      { role: 'user' as const, content: 'FRAME A' },
+      { role: 'assistant' as const, content: 'SAMPLE B' },
+      { role: 'user' as const, content: 'FRAME C' },
+    ]
+    const appends = historyImportAppends(chat, 'session-1', [], undefined, {
+      session: { header: { version: 4 } },
+      preamble,
+    })
+    // SessionImportAppend.data 是宽 record；本测试只读计划自己写出的成员。
+    type AppendView = {
+      type: string
+      data: {
+        turn?: number
+        stream?: unknown
+        content?: Array<{ text?: string }>
+        source?: Record<string, unknown>
+        message?: { content?: Array<{ text?: string }>; source?: Record<string, unknown> }
+      }
+    }
+    const views = appends as AppendView[]
+    expect(views.map((event) => event.type)).toEqual([
+      // 受保护头自成 turn 1
+      'turn/start', 'step/start', 'system/message', 'step/end', 'turn/end',
+      // preamble turn 2：user A 开 turn，assistant B 是该 turn 的 step 1
+      'turn/start', 'user/message', 'step/start', 'assistant/message', 'step/end', 'turn/end',
+      // preamble turn 3：user C 单独开 turn
+      'turn/start', 'user/message', 'turn/end',
+      // 历史 turn 4：user 'Hello.' 开 turn，assistant 'Welcome.' 是其 step 1
+      'turn/start', 'user/message', 'step/start', 'assistant/message', 'step/end', 'turn/end',
+    ])
+    expect(views.filter((event) => event.type === 'turn/start').map((event) => event.data.turn)).toEqual([1, 2, 3, 4])
+    // 角色顺序按预设原序保真，历史在 preamble 之后。
+    const texts = views
+      .filter((event) => event.type === 'user/message' || event.type === 'assistant/message')
+      .map((event) => (event.data.message?.content ?? event.data.content)?.[0]?.text)
+    expect(texts).toEqual(['FRAME A', 'SAMPLE B', 'FRAME C', 'Hello.', 'Welcome.'])
+    // preamble 的 user 帧带 presetUserBlock 标记（pre-step 兜底通道据此判已注入）。
+    const preambleUsers = views.filter((event) => event.type === 'user/message').slice(0, 2)
+    for (const event of preambleUsers) {
+      expect(event.data.source).toEqual({
+        kind: 'plugin:dsh-soulmojito',
+        form: 'instructions',
+        presetUserBlock: true,
+      })
+    }
+    // assistant 帧用预设镜像 model source 对（与历史镜像同类，投影跳过）。
+    const presetAssistant = views.find((event) => event.data.message?.content?.[0]?.text === 'SAMPLE B')!
+    expect(presetAssistant.data.message?.source).toEqual({
+      kind: 'model', provider: 'dsh-soulmojito', model: 'agent-tavern-preset',
+    })
+    expect(presetAssistant.data.stream).toEqual([])
+    expect(lastImportedTurn(appends)).toBe(4)
+
+    // 没有历史、只有 preamble：头之后写 preamble，计划仍然合法（turn 连续）。
+    const preambleOnly = historyImportAppends({ header: chat.header, messages: [] }, 'session-1', [], undefined, {
+      session: { header: { version: 4 } },
+      preamble: [{ role: 'user', content: 'FRAME A' }],
+    })
+    expect(preambleOnly.map((event) => event.type)).toEqual([
+      'turn/start', 'step/start', 'system/message', 'step/end', 'turn/end',
+      'turn/start', 'user/message', 'turn/end',
+    ])
   })
 
   it('recognizes both plugin-source shapes as Tavern session markers', () => {
@@ -1183,8 +1256,8 @@ describe('AgentTavern native event projector', () => {
         },
       ],
     }
-    expect(historyImportAppends(chat, 'session-1', [], undefined)).toEqual([])
-    expect(historyImportAppends({ ...chat, messages: [] }, 'session-1', [], undefined)).toEqual([])
+    expect(historyImportAppends(chat, 'session-1', [], undefined, { preamble: [] })).toEqual([])
+    expect(historyImportAppends({ ...chat, messages: [] }, 'session-1', [], undefined, { preamble: [] })).toEqual([])
   })
 
   it('applies prompt-only regex to imported history without touching stored text', () => {
@@ -1207,7 +1280,7 @@ describe('AgentTavern native event projector', () => {
       script({ scriptName: 'Depth Shout', promptOnly: true, maxDepth: 0, findRegex: 'third', replaceString: 'THIRD' }),
       // 非 promptOnly 脚本已含在落库文本里，导入时不得重复应用
       script({ scriptName: 'Save Wrap', replaceString: '!' }),
-    ], undefined)
+    ], undefined, { preamble: [] })
     const texts = appends
       .filter((item) => item.type === 'user/message' || item.type === 'assistant/message')
       .map((item) => {
@@ -1228,7 +1301,7 @@ describe('AgentTavern native event projector', () => {
       ],
     }
     const appends = historyImportAppends(chat, 'session-1', [], (text) =>
-      text.replaceAll('{{char}}', 'Nova').replaceAll('{{user}}', 'Alice'))
+      text.replaceAll('{{char}}', 'Nova').replaceAll('{{user}}', 'Alice'), { preamble: [] })
     const texts = appends
       .filter((item) => item.type === 'user/message' || item.type === 'assistant/message')
       .map((item) => {

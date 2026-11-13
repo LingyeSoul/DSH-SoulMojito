@@ -82,7 +82,7 @@ describe('session-log source dispositions (v0 hosts)', () => {
         { name: 'Alice', is_user: true, is_system: false, send_date: '', mes: '你好呀。' },
       ],
     }
-    const appends = historyImportAppends(chat, 'session-1', [], undefined)
+    const appends = historyImportAppends(chat, 'session-1', [], undefined, { preamble: [] })
     // 导入现在携带完整 turn/step 边界（v4 准入要求）；source 形状仍然只允许
     // 表内的成员，边界事件不参与 source 校验。
     expect(appends.map((append) => append.type)).toEqual([
@@ -100,6 +100,18 @@ describe('session-log source dispositions (v0 hosts)', () => {
         expectV0LegalSource(((append.data as { message: { source: unknown } }).message).source)
       }
     }
+    // 预设帧化只写 v4：v0 的 plugin source 封闭成员集不允许 presetUserBlock
+    // 标记，计划必须与没有 preamble 时同形（事件类型一致、内容不含条目原文）。
+    const withPreamble = historyImportAppends(chat, 'session-1', [], undefined, {
+      preamble: [
+        { role: 'user', content: 'FRAME A' },
+        { role: 'assistant', content: 'SAMPLE B' },
+      ],
+    })
+    expect(withPreamble.map((append) => append.type)).toEqual(appends.map((append) => append.type))
+    const serialized = withPreamble.map((append) => JSON.stringify(append.data))
+    expect(serialized.some((text) => text.includes('FRAME A'))).toBe(false)
+    expect(serialized.some((text) => text.includes('SAMPLE B'))).toBe(false)
   })
 })
 
@@ -116,7 +128,7 @@ describe('session-log source dispositions (v4 hosts)', () => {
       header: { user_name: 'Alice', character_name: 'Bob', chat_metadata: {} },
       messages: [{ name: 'Alice', is_user: true, is_system: false, send_date: '', mes: '你好呀。' }],
     }
-    const appends = historyImportAppends(chat, 'session-1', [], undefined, v4Session)
+    const appends = historyImportAppends(chat, 'session-1', [], undefined, { session: v4Session, preamble: [] })
     const userAppend = appends.find((append) => append.type === 'user/message')
     expect(userAppend).toBeDefined()
     expect((userAppend!.data as { source: unknown }).source).toEqual({ kind: 'plugin:dsh-soulmojito' })

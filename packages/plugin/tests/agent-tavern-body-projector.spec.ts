@@ -541,6 +541,30 @@ describe('AgentTavern body JSONL projector', () => {
     expect(await projector.status(sessionId)).toMatchObject({ status: 'ok', lastCursor: 9 })
   })
 
+  it('does not append a floor when a preset block precedes the body trigger', async () => {
+    const { root, store, chatId, sessionId } = await fixture()
+    const session = makeSession(sessionId)
+    seedBaseline(session)
+    const projector = await AgentTavernProjector.open(root, store)
+    await projector.replay(session)
+
+    session.events.push(
+      turnStart(4, 2),
+      userEvent(5, 'preset-user-block-1', 'Preset user prompt.', 'instructions'),
+      userEvent(6, 'body-trigger-op-1', 'Regenerate the last reply.', 'body-regenerate'),
+      stepStart(7, 2, 1),
+      assistantEvent(8, 'candidate-1', 'Fresh body.', 2, 2100, undefined),
+      stepEnd(9, 2, 1),
+      turnEnd(10, 2),
+    )
+    await projector.replay(session)
+
+    expect((await snapshotOf(store, chatId)).messages.map((message) => message.mes)).toEqual([
+      'Open the door.', 'Original body.',
+    ])
+    expect(await projector.status(sessionId)).toMatchObject({ status: 'ok', lastCursor: 10 })
+  })
+
   it('updates the selected candidate on select and edit without adding floors', async () => {
     const { root, store, chatId, sessionId } = await fixture()
     const session = makeSession(sessionId)

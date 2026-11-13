@@ -567,6 +567,90 @@ describe('internal Tavern session bridge occupation', () => {
     expect(turnStarts(agent).map((event) => event.data)).toEqual([{ turn: 1 }, { turn: 2 }, { turn: 3 }])
   })
 
+  it('preloads preset non-system entries as message frames before the imported history', async () => {
+    await store.putPreset('Frame Preset', {
+      temperature: 0.7,
+      prompts: [
+        { name: 'Main', identifier: 'main', role: 'system', content: 'SYSTEM RULE for {{char}}.', system_prompt: true },
+        { name: 'Frame A', identifier: 'frameA', role: 'user', content: 'FRAME A for {{char}}.', system_prompt: true },
+        { name: 'Sample B', identifier: 'sampleB', role: 'assistant', content: 'SAMPLE B from {{char}}.', system_prompt: true },
+        { name: 'Frame C', identifier: 'frameC', role: 'user', content: 'FRAME C.', system_prompt: true },
+      ],
+      prompt_order: [{
+        character_id: 100001,
+        order: [
+          { identifier: 'main', enabled: true },
+          { identifier: 'frameA', enabled: true },
+          { identifier: 'sampleB', enabled: true },
+          { identifier: 'frameC', enabled: true },
+        ],
+      }],
+    })
+    const previousState = await store.getState()
+    await store.updateState(() => ({ activePreset: 'Frame Preset' }))
+    try {
+      const now = new Date().toISOString()
+      const framedChat = await store.createChat(CHARACTER, {
+        user_name: 'unused', character_name: 'unused',
+        chat_metadata: { createdAt: now, timedWorldInfo: {} },
+      }, [{ name: CHARACTER, is_user: false, is_system: false, send_date: now, mes: '早上好。' }])
+      const agent = makeAgent('session-agent-preamble', 4)
+      const result = await handler({
+        agent,
+        rawInput: base64Url({ character: CHARACTER, chatId: framedChat, architecture: 'agent-tavern', contextMode: 'dsh-native' }),
+      })
+      expect(result.kind).toBe('success')
+      // 计划顺序：预设非 system 条目先于历史；turn 号从受保护头之后顺延。
+      expect(agent.session.events.map((event) => event.type)).toEqual([
+        'agent-preset/selected',
+        'turn/start', 'step/start', 'system/message', 'step/end', 'turn/end',
+        'turn/start', 'user/message', 'step/start', 'assistant/message', 'step/end', 'turn/end',
+        'turn/start', 'user/message', 'turn/end',
+        'turn/start', 'step/start', 'assistant/message', 'step/end', 'turn/end',
+      ])
+      expect(turnStarts(agent).map((event) => event.data)).toEqual([
+        { turn: 1 }, { turn: 2 }, { turn: 3 }, { turn: 4 },
+      ])
+      const preambleUser = agent.session.events[7]!
+      expect(preambleUser.data).toMatchObject({
+        role: 'user',
+        // 与历史同一份 tavernMacroExpand：{{char}} 已展开，原文不落库。
+        content: [{ type: 'text', text: 'FRAME A for 露西.' }],
+        source: { kind: 'plugin:dsh-soulmojito', form: 'instructions', presetUserBlock: true },
+      })
+      const preambleAssistant = agent.session.events[9]!
+      expect(preambleAssistant.data).toMatchObject({
+        turn: 2,
+        step: 1,
+        stream: [],
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'SAMPLE B from 露西.' }],
+          source: { kind: 'model', provider: 'dsh-soulmojito', model: 'agent-tavern-preset' },
+        },
+      })
+      const secondUser = agent.session.events[13]!
+      expect(secondUser.data).toMatchObject({
+        content: [{ type: 'text', text: 'FRAME C.' }],
+        source: { kind: 'plugin:dsh-soulmojito', form: 'instructions', presetUserBlock: true },
+      })
+      // 历史开场白在 preamble 之后，自成 turn 4。
+      const greeting = agent.session.events[17]!
+      expect(greeting.data).toMatchObject({
+        turn: 4,
+        step: 1,
+        message: {
+          content: [{ type: 'text', text: '早上好。' }],
+          source: { kind: 'model', provider: 'dsh-soulmojito', model: 'agent-tavern-import' },
+        },
+      })
+      // live loop 的轮次基线推进到计划最后一个 turn。
+      expect(agent.phase.lastTurn).toBe(4)
+    } finally {
+      await store.updateState(() => ({ activePreset: previousState.activePreset }))
+    }
+  })
+
   it('does not write turn boundaries when the host loop base cannot be advanced', async () => {
     const now = new Date().toISOString()
     const guardedChat = await store.createChat(CHARACTER, {

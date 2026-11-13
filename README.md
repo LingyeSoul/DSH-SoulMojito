@@ -5,7 +5,7 @@
 <p align="center">把 DSH（deepseek-harness）扩展成兼容 SillyTavern 生态的原生角色扮演工作区。</p>
 
 <p align="center">
-  <strong>v0.8.0</strong> · 面向 DSH <code>0.2.2-rc.1</code>（旧版本宿主随缘） · GPL-3.0
+  <strong>v0.8.1</strong> · 面向 DSH <code>0.2.2-rc.1</code>（旧版本宿主随缘） · GPL-3.0
 </p>
 
 ## 这是什么
@@ -80,6 +80,7 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 - **变量作用域** — `turn`（单轮 scratch，回合结束清空）/ `chat` / `character` / `agent` / `global`（默认关闭，需设置开启）；写入带 expected revision CAS。
 - **宿主分叉收养** — 用宿主会话菜单分叉一个 AgentTavern 会话，子会话首次运行时自动物化新 Tavern 聊天，继承 guides、变量、记忆与向量，并把继承前缀投影回填为新楼层。详见 [`decisions/2026-10-11-agent-tavern-host-fork.md`](decisions/2026-10-11-agent-tavern-host-fork.md)。
 - **锚定提醒** — 首个真实用户轮注入一次性开场装载引导；此后默认每 5 turn 注入周期维护提醒，把工具职责拉回注意力。追加写在 durable log 之后永不改写，对 KV 前缀缓存透明。
+- **预设条目帧化** — 激活预设里 `role` 为 user/assistant 的条目不再混进 system 提示词（避免把发言说成系统规则），而是在会话激活、loop 未启动时按 `prompt_order` 预装载成真实的 user/assistant 消息帧，排在受保护 system 头之后、开场白/历史之前，轮次基线随之顺延。user 条目另有一条 `agent/pre-step` 兜底：存量已启动会话首轮补注一次，宿主 `compaction/end` 之后自动重注一次，防止早期指令被压缩摘要吞掉。预设修改不重写已写入的帧（改写已落盘消息会烧前缀缓存）；assistant 帧在压缩后由摘要承接、不再重注；群聊与 v0-v3 老宿主不预装载。详见 [`decisions/2026-11-13-preset-user-role-injection.md`](decisions/2026-11-13-preset-user-role-injection.md)。
 - **compaction curator** — AgentTavern 会话使用 RP 检查点摘要模板（Story So Far / Characters / World Canon / Open Threads / Current Scene / Memory Maintenance / Critical Context），其余会话原样透传宿主默认摘要。
 - **正文编辑 / 重生成 / 正文候选** — AgentTavern 最后一组正文可在原生会话里编辑、带意见重新生成、生成并左右切换候选；候选以 `plugin:dsh-soulmojito/body` 记录持久化，只有选中正文进入模型上下文，不 fork 会话。重生成写入回滚覆盖 MVU 变量、记忆/变量工具 journal、settle receipt 与记忆向量：旧 turn 写入先回滚，新 turn 失败时先撤销新写入再恢复旧状态，回滚计划随 `op-start` 落盘以支持重启恢复；重生成开始即用 bridge turn 把旧正文与其 turn 的 process 节点移出模型面，重试请求看不到被替换的草稿（避免模型把可见草稿改写成近似副本），失败恢复再把旧正文作为 assistant 副本重新追加并写 `body/restore`（旧版会话 anchor 仍可见时保留不追加副本的兼容路径）；成功结算的 trigger/process hide 在 trigger turn 结束后由 bridge turn 收尾，答案 turn 保持「最后一步是正文」，DSH Chat 因而正常显示本轮用量并默认展开；hide 之后的晚失败由 durable `op-settled` 标记保留新正文、只重试 op-finish，live `turn/end` 的 error/cancelled/aborted 也会异步触发恢复；MVU 正文编辑已按候选级 receipt 放开（legacy receipt 惰性迁移，只由插件 UI 触发，不新增 Agent 工具），MVU 候选切换仍显式拒绝，等候选感知 regenerate 同批实现；脚本推进与游戏落子仍禁用。详见 [提案 0021](docs/proposals/0021-agent-tavern-body-ops.md)、[提案 0022](docs/proposals/0022-agent-tavern-write-rollback.md)、[提案 0023](docs/proposals/0023-agent-tavern-mvu-body-switching.md) 与 [决策](decisions/2026-10-28-agent-tavern-body-plugin-records.md)。
 - **多 Agent 推演** — `tavern_deduce` 为 2-5 个命名角色各派生一个纯推理子 Agent，按 1-3 轮交叉站位，结论由主 Agent 织入叙事，保持单一叙事声音。
@@ -343,10 +344,10 @@ pnpm run check
 当前基线（2026-11-13 实测，宿主 DSH `0.2.2-rc.1`）：
 
 ```
-Test Files  215 passed (215)
-Tests       3497 passed | 2 skipped (3499)
+Test Files  216 passed (216)
+Tests       3509 passed | 2 skipped (3511)
 21 gates    全部 PASS
-built       v0.8.0 (9a51b1d)
+built       v0.8.1 (a45c812)
 ```
 
 - 2 项跳过都是 `skipIf` 环境条件项：Windows 检出上的 `host-package.spec.ts` POSIX-only 用例，以及 `im-store.spec.ts` 的 0600 权限位用例（Win32 无 POSIX mode）。
@@ -364,7 +365,7 @@ GUI 已在桌面与 390x844 移动视口验证，覆盖原生 sidebar、管理�
 | 目录 | 内容 |
 |---|---|
 | [`docs/proposals/`](docs/proposals/) | 23 篇架构级设计契约（提案 0001-0024，0019 未使用），实现后在此登记 |
-| [`decisions/`](decisions/) | 174 篇单次落地决策：问题、方案、否决项、与规格的偏差 |
+| [`decisions/`](decisions/) | 175 篇单次落地决策：问题、方案、否决项、与规格的偏差 |
 | [`docs/exploration/`](docs/exploration/) | 调研归档，结论必须带证据坐标（文件:行号） |
 | [`docs/plans/`](docs/plans/) · [`docs/adr/`](docs/adr/) · [`docs/mods/`](docs/mods/) · [`docs/games/`](docs/games/) | 施工计划 · 架构决策记录 · Mod 开发者文档 · 标准游戏包制作指南 |
 

@@ -769,8 +769,6 @@
       'nav.noChats': 'No chats',
       'nav.noCharacters': 'No character cards',
       'nav.opening': 'Opening {name}',
-      'nav.importChat': 'Import chat (.jsonl)',
-      'nav.importChatFailed': 'Chat import failed',
       'nav.exportChat': 'Export {name}',
       'nav.duplicateChat': 'Duplicate {name}',
       'nav.rename': 'Rename {name}',

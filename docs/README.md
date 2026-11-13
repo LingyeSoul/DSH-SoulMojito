@@ -127,6 +127,7 @@
 - [`2026-11-11-im-read-image.md`](../decisions/2026-11-11-im-read-image.md) — 图片输入两条路：默认 Agent 模式走宿主原生 `image` block，IM 默认预设挂 `read_image`（只读、按路由 `inputModalities` 门控）
 - [`2026-11-02-agent-prompt-takeover.md`](../decisions/2026-11-02-agent-prompt-takeover.md) — AgentTavern 接管整份 system prompt（complete 段）
 - [`2026-11-02-agent-identity-system-prompt.md`](../decisions/2026-11-02-agent-identity-system-prompt.md) — 用户人设与角色摘要改为 complete 段的 system 部件（不再作为 runtime-context user 消息）
+- [`2026-11-13-preset-user-role-injection.md`](../decisions/2026-11-13-preset-user-role-injection.md) — 预设非 system 条目（user/assistant）改为激活期预装载成真实消息帧；user 条目保留 pre-step 压缩后重注与存量会话兜底
 
 ### AgentNovel
 

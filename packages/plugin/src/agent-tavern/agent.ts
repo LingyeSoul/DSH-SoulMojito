@@ -15,6 +15,7 @@ import {
   onAgentPresetChanged,
   projectAgentPreset,
 } from './preset.js'
+import { registerAgentPresetUserBlock, type AgentPresetUserBlockContext } from './preset-user-block.js'
 import { characterTools } from './tools/character.js'
 import { dataBankTools } from './tools/data-bank.js'
 import { deductionTools } from './tools/deduction.js'
@@ -184,6 +185,23 @@ export function apply(ctx: AgentContextLike): void {
       () => renderPtcCompleteText(ctx.tools, payload?.agent, undefined),
     )
     return resolved
+  })
+
+  // 预设 user 角色条目注入（决策 2026-11-13-preset-user-role-injection）：system
+  // 块只收 system/assistant 条目，user 条目改由 pre-step 一次性注入（压缩后重注）。
+  // ctx 的 on 在 AgentContextLike 里只声明了 agent/request 的 waterfall 形态，
+  // 这里按新模块自己的窄类型转换——不把另一种事件签名塞进宿主契约类型。
+  registerAgentPresetUserBlock(ctx as unknown as AgentPresetUserBlockContext, {
+    ensureUserText: ensureAgentPresetUserText,
+    isAgentTavernSession: async (sessionId: string) => {
+      try {
+        const binding = (await (await tavernStore()).getState()).sessionBindings[sessionId]
+        return binding !== undefined && binding.architecture === 'agent-tavern'
+      } catch {
+        return false
+      }
+    },
+    logger: agentLogger,
   })
 
   const tools = createTools()
@@ -398,7 +416,7 @@ function warnPresetRefusalOnce(agentId: string, kind: string, reason: string): v
   agentLogger?.warn?.(`dsh-soulmojito: active preset not projected into AgentTavern prompts (agent ${agentId}, kind ${kind}): ${reason}`)
 }
 
-const presetProjection = createLazyProjection<{ text: string; temperature?: number }>({
+const presetProjection = createLazyProjection<{ text: string; temperature?: number; userText?: string }>({
   getState: async () => (await tavernStore()).getState(),
   load: async (agentId, settle) => {
     const db = await tavernStore()
@@ -423,9 +441,15 @@ const presetProjection = createLazyProjection<{ text: string; temperature?: numb
       { now: () => new Date(freeze.frozenAt), rng: seededRandom(freeze.seed) },
     )
     for (const refusal of projection.refusals) warnPresetRefusalOnce(agentId, refusal.kind, refusal.reason)
+    // user 型条目走 pre-step 注入通道（决策 2026-11-13-preset-user-role-injection）：
+    // 同一个冻结 expander 展开，字节稳定性与 system 块一致；空串不写缓存
+    // （undefined = 本预设没有 user 条目，注入通道据此完全不注入）。
+    const safeText = projection.text === undefined ? '' : hostPromptSafe(projection.text, expand)
+    const userText = projection.userText === undefined ? '' : hostPromptSafe(projection.userText, expand)
     settle({
-      text: projection.text === undefined ? '' : hostPromptSafe(projection.text, expand),
+      text: safeText,
       ...(projection.temperature === undefined ? {} : { temperature: projection.temperature }),
+      ...(userText === '' ? {} : { userText }),
     })
   },
 })
@@ -436,6 +460,28 @@ function agentPresetText(agentId: string | undefined): string {
 
 function agentPresetTemperatureOf(agentId: string | undefined): number | undefined {
   return presetProjection.valueOf(agentId)?.temperature
+}
+
+/** 预设 user 条目的注入文本（未装载 / 无条目均为 undefined）。 */
+export function agentPresetUserTextOf(agentId: string): string | undefined {
+  return presetProjection.valueOf(agentId)?.userText
+}
+
+/** 预置**没有 user 条目**的 agent：preheatOne 会强制重载，每 step 一次纯浪费。
+ *  负缓存由预设变更监听整体清空（编辑预设可能新增 user 条目），不清空会让新
+ *  条目等到下一次压缩后才生效。 */
+const presetMissingUserText = new Set<string>()
+
+/** 确保某 agent 的 user 块已装载并返回当前文本：注入点唯一入口（preheatOne
+ *  强制重载一次，之后命中缓存）。 */
+export async function ensureAgentPresetUserText(agentId: string): Promise<string | undefined> {
+  const cached = presetProjection.valueOf(agentId)?.userText
+  if (cached !== undefined) return cached
+  if (presetMissingUserText.has(agentId)) return undefined
+  await presetProjection.preheatOne(agentId)
+  const text = presetProjection.valueOf(agentId)?.userText
+  if (text === undefined) presetMissingUserText.add(agentId)
+  return text
 }
 
 /**
@@ -530,7 +576,10 @@ onAgentPresetChanged(() => Promise.all([
   presetProjection.refreshWhere((binding) => binding.architecture === 'agent-tavern'),
   factsProjection.refreshWhere((binding) => binding.architecture === 'agent-tavern'),
   contextInjection.refreshWhere((binding) => binding.architecture === 'agent-tavern'),
-]).then(() => undefined))
+]).then(() => {
+  // 预设可能新增 user 条目：清空「无 user 块」负缓存，让下次注入点重读缓存。
+  presetMissingUserText.clear()
+}))
 
 /**
  * 启动预热（apply() 调用）：插件重启后 store 里既有绑定（持续中的会话）不再

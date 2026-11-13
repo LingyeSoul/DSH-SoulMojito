@@ -9246,8 +9246,8 @@ function readBuildInfo() {
   return { version, commit };
 }
 function buildTimeStamp() {
-  const version = true ? "0.8.0".trim() : "";
-  const commit = true ? normalizeCommit("9a51b1d") : void 0;
+  const version = true ? "0.8.1".trim() : "";
+  const commit = true ? normalizeCommit("a45c812") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -9677,10 +9677,32 @@ function readSessionEvents(session) {
   if (Array.isArray(session.log)) return session.log;
   return void 0;
 }
+function sessionEvents(session) {
+  return readSessionEvents(session) ?? [];
+}
 var PLUGIN_NAME = "dsh-soulmojito";
 var LEGACY_PLUGIN_NAME = "dsh-tavern";
 var TAVERN_PLUGIN_SOURCE_KIND = `plugin:${PLUGIN_NAME}`;
 var LEGACY_TAVERN_PLUGIN_SOURCE_KIND = `plugin:${LEGACY_PLUGIN_NAME}`;
+function hostSessionFormatVersion(session) {
+  const version = session?.header?.version;
+  return typeof version === "number" && Number.isSafeInteger(version) ? version : void 0;
+}
+function hostPluginMessageSource(session, members) {
+  const version = hostSessionFormatVersion(session);
+  const kind = version !== void 0 && version >= 4 ? TAVERN_PLUGIN_SOURCE_KIND : "plugin";
+  return {
+    ...kind === "plugin" ? { plugin: PLUGIN_NAME } : {},
+    ...members,
+    kind
+  };
+}
+function isHostPluginMessageSource(source) {
+  if (typeof source !== "object" || source === null) return false;
+  const record = source;
+  if (record.kind === TAVERN_PLUGIN_SOURCE_KIND || record.kind === LEGACY_TAVERN_PLUGIN_SOURCE_KIND) return true;
+  return record.kind === "plugin" && (record.plugin === PLUGIN_NAME || record.plugin === LEGACY_PLUGIN_NAME);
+}
 
 // packages/bind/src/host-package.ts
 import { realpathSync } from "node:fs";
@@ -12282,6 +12304,7 @@ function entryEnabled(slot, prompt) {
 // packages/plugin/src/agent-tavern/preset.ts
 init_cross_bundle_events();
 var AGENT_PRESET_BLOCK_HEADER = "Chat completion preset (user-configured prompt stack; follow these instructions together with the kernel):";
+var AGENT_PRESET_USER_HEADER = "Chat completion preset entries with the user role (instructions for the conversation frame from the preset, not a new chat message from the user):";
 function effectiveAgentPresetPrompts(preset, card) {
   const order = resolvePromptOrder(preset);
   const byId = new Map(preset.prompts.map((prompt) => [prompt.identifier, prompt]));
@@ -12303,9 +12326,22 @@ function effectiveAgentPresetPrompts(preset, card) {
   return effective;
 }
 function renderAgentPresetBlock(preset, card, header = AGENT_PRESET_BLOCK_HEADER) {
-  const prompts = effectiveAgentPresetPrompts(preset, card);
+  const prompts = effectiveAgentPresetPrompts(preset, card).filter((prompt) => prompt.role === "system");
   if (prompts.length === 0) return void 0;
   return [header, ...prompts.map((prompt) => prompt.content)].join("\n\n");
+}
+function renderAgentPresetUserBlock(preset, card) {
+  const contents = effectiveAgentPresetPrompts(preset, card).filter((prompt) => prompt.role === "user").map((prompt) => prompt.content);
+  if (contents.length === 0) return void 0;
+  return [AGENT_PRESET_USER_HEADER, ...contents].join("\n\n");
+}
+function agentPresetPreambleEntries(preset, card) {
+  const entries = [];
+  for (const prompt of effectiveAgentPresetPrompts(preset, card)) {
+    if (prompt.role === "system") continue;
+    entries.push({ role: prompt.role, content: prompt.content });
+  }
+  return entries;
 }
 function presetTemperature(preset) {
   const value = preset.sampler["temperature"];
@@ -12330,19 +12366,24 @@ function presetRefusalReason(kind) {
 function projectAgentPreset(preset, card) {
   const kind = detectPresetKind(preset);
   if (kind !== "chat-completion") {
-    return { refusals: [{ kind, reason: presetRefusalReason(kind) }] };
+    return { preamble: [], refusals: [{ kind, reason: presetRefusalReason(kind) }] };
   }
   try {
     const ir = parsePreset(preset);
     const text = renderAgentPresetBlock(ir, card);
+    const userText = renderAgentPresetUserBlock(ir, card);
+    const preamble = agentPresetPreambleEntries(ir, card);
     const temperature = presetTemperature(ir);
     return {
       ...text === void 0 ? {} : { text },
+      ...userText === void 0 ? {} : { userText },
+      preamble,
       ...temperature === void 0 ? {} : { temperature },
       refusals: []
     };
   } catch (error) {
     return {
+      preamble: [],
       refusals: [{
         kind: "chat-completion",
         reason: `chat completion preset could not be parsed (${error instanceof Error ? error.message : String(error)}); nothing is projected`
@@ -12390,6 +12431,66 @@ function applyCardOverride(identifier, content, card) {
   const override = identifier === "main" ? card?.data.systemPrompt.trim() : identifier === "jailbreak" ? card?.data.postHistoryInstructions.trim() : "";
   if (override === void 0 || override === "") return content;
   return override.replace(/\{\{original\}\}/gi, content);
+}
+
+// packages/plugin/src/agent-tavern/preset-user-block.ts
+import { createHash as createHash6, randomUUID as randomUUID2 } from "node:crypto";
+function presetUserBlockSourceOf(session, text) {
+  return hostPluginMessageSource(session, {
+    form: "instructions",
+    presetUserBlock: true,
+    presetUserBlockHash: createHash6("sha256").update(text).digest("hex").slice(0, 16)
+  });
+}
+function isPresetUserBlockEvent(event) {
+  if (event?.type !== "user/message") return false;
+  const source = event.data?.source;
+  if (!isHostPluginMessageSource(source)) return false;
+  return source["presetUserBlock"] === true;
+}
+function presetUserBlockDue(events) {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event?.type === "compaction/end") {
+      if (event.data?.error !== void 0) continue;
+      return true;
+    }
+    if (isPresetUserBlockEvent(event)) return false;
+  }
+  return true;
+}
+function createPresetUserBlockMessage(session, text) {
+  return {
+    id: randomUUID2(),
+    role: "user",
+    content: [{ type: "text", text }],
+    source: presetUserBlockSourceOf(session, text)
+  };
+}
+function registerAgentPresetUserBlock(ctx, options) {
+  const logger = options.logger;
+  ctx.on?.("agent/pre-step", async (payload, next) => {
+    const decision = await next();
+    try {
+      if (decision?.kind !== "enter" || payload.signal?.aborted === true) return decision;
+      const sessionId = payload.agent?.session?.id;
+      if (typeof sessionId !== "string" || sessionId === "") return decision;
+      if (!presetUserBlockDue(sessionEvents(payload.agent?.session))) return decision;
+      if (!await options.isAgentTavernSession(sessionId)) return decision;
+      const text = await options.ensureUserText(sessionId);
+      if (text === void 0 || text.trim() === "") return decision;
+      return {
+        ...decision,
+        messages: [
+          createPresetUserBlockMessage(payload.agent?.session, text),
+          ...decision.messages ?? []
+        ]
+      };
+    } catch (error) {
+      logger?.warn?.(`dsh-soulmojito: preset user block injection failed: ${error instanceof Error ? error.message : String(error)}`);
+      return decision;
+    }
+  });
 }
 
 // packages/plugin/src/agent-tavern/tools/character.ts
@@ -12968,7 +13069,7 @@ async function restoreSettleIntentItems(variableStore2, scopeId, items) {
 }
 
 // packages/plugin/src/agent-tavern/write-journal.ts
-import { randomUUID as randomUUID2 } from "node:crypto";
+import { randomUUID as randomUUID3 } from "node:crypto";
 var WRITE_JOURNAL_EVENT_TYPE = "plugin:dsh-soulmojito/write";
 function currentTurnOf(events) {
   let open;
@@ -12987,7 +13088,7 @@ function openSettleIntentsOf(session, sessionId) {
   return foldSettleIntents(eventsOfSession(session, sessionId));
 }
 function newJournalId() {
-  return randomUUID2();
+  return randomUUID3();
 }
 async function resolveWriteJournalWriter() {
   let host;
@@ -13031,7 +13132,7 @@ async function openWriteJournal(agent, sessionId) {
   return { journalId: newJournalId(), sessionId, turn, session, writer };
 }
 function newSettleIntentOpId() {
-  return randomUUID2();
+  return randomUUID3();
 }
 async function openSettleIntent(agent, sessionId) {
   if (typeof sessionId !== "string" || sessionId.trim() === "") {
@@ -14069,7 +14170,7 @@ function refreshAllAgentGamesSummaries() {
 
 // packages/plugin/src/agent-tavern/tools/memory.ts
 init_dsh_home();
-import { randomUUID as randomUUID3 } from "node:crypto";
+import { randomUUID as randomUUID4 } from "node:crypto";
 function memoryTools() {
   return [
     tool("memory_search", "Search memories in the current chat, character, agent, or global scope with hybrid lexical and semantic retrieval (semantic requires an embedding endpoint; without one it is lexical only). Use it to recall established facts, promises, or relationship state before they matter on screen.", {
@@ -14141,7 +14242,7 @@ function memoryTools() {
     }, memoryWriteOutput, async (args, exec) => {
       const binding = await bindingFor(exec);
       const target = selectedMemoryScopes(args.scope, binding)[0];
-      const id = randomUUID3();
+      const id = randomUUID4();
       const journalTarget = { id, scope: target.scope, scopeId: target.scopeId };
       await assertMemoryScopeAllowed(exec, binding.agentId, journalTarget, "memory_write");
       const importance = clampScore(args.importance);
@@ -14822,6 +14923,18 @@ function apply(ctx) {
     );
     return resolved;
   });
+  registerAgentPresetUserBlock(ctx, {
+    ensureUserText: ensureAgentPresetUserText,
+    isAgentTavernSession: async (sessionId) => {
+      try {
+        const binding = (await (await tavernStore()).getState()).sessionBindings[sessionId];
+        return binding !== void 0 && binding.architecture === "agent-tavern";
+      } catch {
+        return false;
+      }
+    },
+    logger: agentLogger
+  });
   const tools = createTools();
   for (const tool2 of tools) {
     if (ctx.effect) ctx.effect(() => ctx.tools?.register?.(tool2), `dsh-soulmojito:agent:${tool2.name}`);
@@ -14930,9 +15043,12 @@ var presetProjection = createLazyProjection({
       { now: () => new Date(freeze.frozenAt), rng: seededRandom(freeze.seed) }
     );
     for (const refusal of projection.refusals) warnPresetRefusalOnce(agentId, refusal.kind, refusal.reason);
+    const safeText = projection.text === void 0 ? "" : hostPromptSafe(projection.text, expand);
+    const userText = projection.userText === void 0 ? "" : hostPromptSafe(projection.userText, expand);
     settle({
-      text: projection.text === void 0 ? "" : hostPromptSafe(projection.text, expand),
-      ...projection.temperature === void 0 ? {} : { temperature: projection.temperature }
+      text: safeText,
+      ...projection.temperature === void 0 ? {} : { temperature: projection.temperature },
+      ...userText === "" ? {} : { userText }
     });
   }
 });
@@ -14941,6 +15057,19 @@ function agentPresetText(agentId) {
 }
 function agentPresetTemperatureOf(agentId) {
   return presetProjection.valueOf(agentId)?.temperature;
+}
+function agentPresetUserTextOf(agentId) {
+  return presetProjection.valueOf(agentId)?.userText;
+}
+var presetMissingUserText = /* @__PURE__ */ new Set();
+async function ensureAgentPresetUserText(agentId) {
+  const cached = presetProjection.valueOf(agentId)?.userText;
+  if (cached !== void 0) return cached;
+  if (presetMissingUserText.has(agentId)) return void 0;
+  await presetProjection.preheatOne(agentId);
+  const text = presetProjection.valueOf(agentId)?.userText;
+  if (text === void 0) presetMissingUserText.add(agentId);
+  return text;
 }
 function agentPromptSectionsFor(agentId) {
   const sections = [
@@ -14990,7 +15119,9 @@ onAgentPresetChanged(() => Promise.all([
   presetProjection.refreshWhere((binding) => binding.architecture === "agent-tavern"),
   factsProjection.refreshWhere((binding) => binding.architecture === "agent-tavern"),
   contextInjection.refreshWhere((binding) => binding.architecture === "agent-tavern")
-]).then(() => void 0));
+]).then(() => {
+  presetMissingUserText.clear();
+}));
 function preheatAgentProjections() {
   return Promise.all([
     presetProjection.preheatWhere((binding) => binding.architecture === "agent-tavern"),
@@ -15000,8 +15131,10 @@ function preheatAgentProjections() {
 }
 export {
   AGENT_PROMPT_SECTION,
+  agentPresetUserTextOf,
   agentPromptSectionsFor,
   apply,
+  ensureAgentPresetUserText,
   identitySummaryOf,
   inject,
   name,

@@ -453,7 +453,7 @@ function isRestoredBodyMessage(session: HostSessionLog, messageId: string): bool
   return false
 }
 
-/** Whether the first user message of `turn` is a synthetic body trigger. */
+/** Whether this turn contains a synthetic body trigger user message. */
 function isBodyTriggerTurn(session: HostSessionLog, turn: unknown): boolean {
   if (typeof turn !== 'number' || !Number.isSafeInteger(turn)) return false
   let current: number | undefined
@@ -470,7 +470,10 @@ function isBodyTriggerTurn(session: HostSessionLog, turn: unknown): boolean {
     if (current !== turn || event.type !== 'user/message') continue
     const source = plainObjectRecord(plainObjectRecord(event.data)?.['source'])
     const form = source?.['form']
-    return form === 'body-regenerate' || form === 'body-restore'
+    // A preset user-block injection may precede the synthetic trigger inside the
+    // same turn, so scan every user message instead of assuming the first one is
+    // the trigger. Body triggers are the only messages carrying these forms.
+    if (form === 'body-regenerate' || form === 'body-restore') return true
   }
   return false
 }

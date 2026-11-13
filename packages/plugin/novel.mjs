@@ -11437,8 +11437,8 @@ function readBuildInfo() {
   return { version, commit };
 }
 function buildTimeStamp() {
-  const version = true ? "0.8.0".trim() : "";
-  const commit = true ? normalizeCommit("9a51b1d") : void 0;
+  const version = true ? "0.8.1".trim() : "";
+  const commit = true ? normalizeCommit("a45c812") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -11876,6 +11876,7 @@ function entryEnabled(slot, prompt) {
 // packages/plugin/src/agent-tavern/preset.ts
 init_cross_bundle_events();
 var AGENT_PRESET_BLOCK_HEADER = "Chat completion preset (user-configured prompt stack; follow these instructions together with the kernel):";
+var AGENT_PRESET_USER_HEADER = "Chat completion preset entries with the user role (instructions for the conversation frame from the preset, not a new chat message from the user):";
 function effectiveAgentPresetPrompts(preset, card) {
   const order = resolvePromptOrder(preset);
   const byId = new Map(preset.prompts.map((prompt) => [prompt.identifier, prompt]));
@@ -11897,9 +11898,22 @@ function effectiveAgentPresetPrompts(preset, card) {
   return effective;
 }
 function renderAgentPresetBlock(preset, card, header = AGENT_PRESET_BLOCK_HEADER) {
-  const prompts = effectiveAgentPresetPrompts(preset, card);
+  const prompts = effectiveAgentPresetPrompts(preset, card).filter((prompt) => prompt.role === "system");
   if (prompts.length === 0) return void 0;
   return [header, ...prompts.map((prompt) => prompt.content)].join("\n\n");
+}
+function renderAgentPresetUserBlock(preset, card) {
+  const contents = effectiveAgentPresetPrompts(preset, card).filter((prompt) => prompt.role === "user").map((prompt) => prompt.content);
+  if (contents.length === 0) return void 0;
+  return [AGENT_PRESET_USER_HEADER, ...contents].join("\n\n");
+}
+function agentPresetPreambleEntries(preset, card) {
+  const entries = [];
+  for (const prompt of effectiveAgentPresetPrompts(preset, card)) {
+    if (prompt.role === "system") continue;
+    entries.push({ role: prompt.role, content: prompt.content });
+  }
+  return entries;
 }
 function presetTemperature(preset) {
   const value = preset.sampler["temperature"];
@@ -11924,19 +11938,24 @@ function presetRefusalReason(kind) {
 function projectAgentPreset(preset, card) {
   const kind = detectPresetKind(preset);
   if (kind !== "chat-completion") {
-    return { refusals: [{ kind, reason: presetRefusalReason(kind) }] };
+    return { preamble: [], refusals: [{ kind, reason: presetRefusalReason(kind) }] };
   }
   try {
     const ir = parsePreset(preset);
     const text = renderAgentPresetBlock(ir, card);
+    const userText = renderAgentPresetUserBlock(ir, card);
+    const preamble = agentPresetPreambleEntries(ir, card);
     const temperature = presetTemperature(ir);
     return {
       ...text === void 0 ? {} : { text },
+      ...userText === void 0 ? {} : { userText },
+      preamble,
       ...temperature === void 0 ? {} : { temperature },
       refusals: []
     };
   } catch (error) {
     return {
+      preamble: [],
       refusals: [{
         kind: "chat-completion",
         reason: `chat completion preset could not be parsed (${error instanceof Error ? error.message : String(error)}); nothing is projected`
@@ -14817,20 +14836,26 @@ var presetProjection = createLazyProjection({
       { now: () => new Date(freeze.frozenAt), rng: seededRandom(freeze.seed) }
     );
     for (const refusal of projection.refusals) warnPresetRefusalOnce(agentId, refusal.kind, refusal.reason);
+    const safeText = projection.text === void 0 ? "" : hostPromptSafe(projection.text, expand);
+    const userText = projection.userText === void 0 ? "" : hostPromptSafe(projection.userText, expand);
     settle({
-      text: projection.text === void 0 ? "" : hostPromptSafe(projection.text, expand),
-      ...projection.temperature === void 0 ? {} : { temperature: projection.temperature }
+      text: safeText,
+      ...projection.temperature === void 0 ? {} : { temperature: projection.temperature },
+      ...userText === "" ? {} : { userText }
     });
   }
 });
 function agentPresetText(agentId) {
   return presetProjection.valueOf(agentId)?.text ?? "";
 }
+var presetMissingUserText = /* @__PURE__ */ new Set();
 onAgentPresetChanged(() => Promise.all([
   presetProjection.refreshWhere((binding) => binding.architecture === "agent-tavern"),
   factsProjection.refreshWhere((binding) => binding.architecture === "agent-tavern"),
   contextInjection.refreshWhere((binding) => binding.architecture === "agent-tavern")
-]).then(() => void 0));
+]).then(() => {
+  presetMissingUserText.clear();
+}));
 
 // packages/plugin/src/agent-novel/outline.ts
 init_src3();

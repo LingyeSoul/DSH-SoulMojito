@@ -5190,7 +5190,7 @@ function effectiveAgentPresetPrompts(preset, card) {
   return effective;
 }
 function renderAgentPresetBlock(preset, card, header = AGENT_PRESET_BLOCK_HEADER) {
-  const prompts = effectiveAgentPresetPrompts(preset, card);
+  const prompts = effectiveAgentPresetPrompts(preset, card).filter((prompt) => prompt.role === "system");
   if (prompts.length === 0) return void 0;
   return [header, ...prompts.map((prompt) => prompt.content)].join("\n\n");
 }

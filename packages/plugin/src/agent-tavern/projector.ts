@@ -20,6 +20,7 @@ import {
 } from './checkpoint-batch.js'
 import { isBodyLogEvent, isBodyMergedAssistant, projectBodyEvent, type BodyProjectionStore } from './body-projector.js'
 import { isTavernSessionMarker } from './body-session.js'
+import type { AgentPresetPreambleEntry } from './preset.js'
 import { collectSessionRegexScripts } from '../regex-session.js'
 import { recordMvuTurnReceipt, snapshotChatVariables } from '../mvu.js'
 import {
@@ -467,6 +468,20 @@ export { isTavernSessionMarker }
 /** 导入的镜像消息用合成 provider/model 补足校验，合成 provider/model 对即镜像标记。 */
 const TAVERN_MIRROR_MODEL_SOURCE = { provider: PLUGIN_NAME, model: 'agent-tavern-import' } as const
 
+/** 预设帧化消息（preamble）的 model source 对：与导入镜像同一判定纪律
+ *  （provider/model 对即标记，见 body-session.ts 的 isTavernSessionMarker），
+ *  model 取 `agent-tavern-preset` 以区分「预设预装载的 assistant 发言」与
+ *  「聊天历史镜像」。 */
+const TAVERN_PRESET_MODEL_SOURCE = { provider: PLUGIN_NAME, model: 'agent-tavern-preset' } as const
+
+/** 历史导入计划的可选输入。 */
+export interface HistoryImportOptions {
+  /** 宿主会话：source 形状按 format 版本分支（hostPluginMessageSource）。 */
+  session?: HostSessionLog
+  /** 非 system 预设条目：激活期先于历史写成真实 user/assistant 消息帧。 */
+  preamble: readonly AgentPresetPreambleEntry[]
+}
+
 /**
  * Import saved messages as real turn boundaries. The native AgentLoop then
  * continues ABOVE the imported turns; the caller must advance the live loop's
@@ -500,14 +515,24 @@ const TAVERN_MIRROR_MODEL_SOURCE = { provider: PLUGIN_NAME, model: 'agent-tavern
  * by session format version, see hostPluginMessageSource) prevent projection
  * back into the saved chat. Prompt-only regex and macros never alter stored
  * text.
+ *
+ * Preset preamble (non-system preset entries) is written between the protected
+ * head and the imported history: user entries open a turn like real user
+ * messages, assistant entries are one step inside the current turn. They are
+ * surface nodes like any message and are skipped by the projection (plugin
+ * source / preset model marker), so no floor is duplicated. The preamble keeps
+ * the preset's own role sequence — A(user) → B(assistant) → C(user) stays in
+ * that order.
  */
 export function historyImportAppends(
   chat: ChatLogIR,
   sessionId: string,
   scripts: RegexScriptIR[],
   expand: ((text: string) => string) | undefined,
-  session?: HostSessionLog,
+  options: HistoryImportOptions,
 ): SessionImportAppend[] {
+  const session = options.session
+  const preamble = options.preamble
   const promptScripts = scripts.filter((script) => script.promptOnly && !script.markdownOnly)
   const promptView = (message: ChatMessage, index: number): string => {
     const transformed = promptScripts.length === 0
@@ -530,7 +555,7 @@ export function historyImportAppends(
   // 头与历史共用一个导入谓词：判定「有没有可导入消息」与主循环的跳过条件必须
   // 同源，否则会在没有历史时写出一个只有头的空导入（或反之留下无头的 surface）。
   const importable = chat.messages.filter((message) => isImportableMessage(message, sessionId))
-  const head = hostVersion >= 4 && importable.length > 0
+  const head = hostVersion >= 4 && (importable.length > 0 || preamble.length > 0)
   let turn = head ? 1 : 0
   let step = 0
   let turnOpen = false
@@ -545,6 +570,54 @@ export function historyImportAppends(
     if (!turnOpen) return
     turnOpen = false
     appends.push({ type: 'turn/end', data: { turn, reason: { kind: 'completed' } } })
+  }
+
+  // 预设非 system 条目先于历史写成真实消息帧：user 条目与真实用户发言同形
+  // （开新 turn、plugin source + presetUserBlock 标记），assistant 条目是当前
+  // turn 内的一个 step（model source 对即镜像标记）。角色顺序按预设原序保真，
+  // 写完统一关 turn，历史从下一个 turn 继续。
+  //
+  // 只写 v4：user 帧的 `presetUserBlock` 标记成员在 v0-v3 的 plugin source 封闭
+  // 成员集之外（session-source-dispositions 契约），写入会毒化老工件。v0-v3 宿主
+  // 上 user 条目由 pre-step 兜底通道承载，assistant 条目无位置（见决策已知偏差）。
+  if (hostVersion >= 4) {
+    for (const entry of preamble) {
+      if (entry.role === 'user') {
+        closeTurn()
+        openTurn()
+        appends.push({
+          type: 'user/message',
+          data: {
+            id: randomUUID(),
+            role: 'user',
+            content: [{ type: 'text', text: entry.content }],
+            source: hostPluginMessageSource(session, { form: 'instructions', presetUserBlock: true }),
+          },
+          surfaceOp: 'append',
+        })
+        continue
+      }
+      if (!turnOpen) openTurn()
+      step += 1
+      appends.push({ type: 'step/start', data: { turn, step } })
+      appends.push({
+        type: 'assistant/message',
+        data: {
+          turn,
+          step,
+          ...settlement,
+          message: {
+            id: randomUUID(),
+            role: 'assistant',
+            content: [{ type: 'text', text: entry.content }],
+            source: { kind: 'model', ...TAVERN_PRESET_MODEL_SOURCE },
+          },
+        },
+        surfaceOp: 'append',
+      })
+      appends.push({ type: 'step/end', data: { turn, step } })
+    }
+    closeTurn()
   }
 
   for (const [index, message] of chat.messages.entries()) {
