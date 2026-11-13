@@ -5,7 +5,7 @@
 <p align="center">把 DSH（deepseek-harness）扩展成兼容 SillyTavern 生态的原生角色扮演工作区。</p>
 
 <p align="center">
-  <strong>v0.7.9</strong> · 面向 DSH <code>0.2.2-rc.1</code>（旧版本宿主随缘） · GPL-3.0
+  <strong>v0.8.0</strong> · 面向 DSH <code>0.2.2-rc.1</code>（旧版本宿主随缘） · GPL-3.0
 </p>
 
 ## 这是什么
@@ -346,7 +346,7 @@ pnpm run check
 Test Files  215 passed (215)
 Tests       3497 passed | 2 skipped (3499)
 21 gates    全部 PASS
-built       v0.7.9 (ef12e41)
+built       v0.8.0 (9a51b1d)
 ```
 
 - 2 项跳过都是 `skipIf` 环境条件项：Windows 检出上的 `host-package.spec.ts` POSIX-only 用例，以及 `im-store.spec.ts` 的 0600 权限位用例（Win32 无 POSIX mode）。
