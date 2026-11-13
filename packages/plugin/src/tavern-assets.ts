@@ -184,16 +184,21 @@ export async function buildAgentTavernPreloadSnapshot(
   writer.add('character.scenario', data.scenario, 2_000)
   writer.add('character.first_message', data.firstMes, 2_000)
   writer.add('character.example_dialogue', data.mesExample, 3_000)
-  writer.add('character.system_prompt', data.systemPrompt, 2_000)
-  writer.add('character.post_history_instructions', data.postHistoryInstructions, 2_000)
+  // system_prompt / post_history_instructions are the preset's main/jailbreak card
+  // overrides (preset.ts applyCardOverride); repeating them here would duplicate
+  // the same instruction text in the preload message.
   writer.add('character.alternate_greetings', data.alternateGreetings.join('\n---\n'), 2_000)
 
   for (const book of books) {
     for (const entry of book.entries) {
       if (entry.constant !== true || entry.disable === true) continue
+      const content = typeof entry.content === 'string' ? entry.content : ''
+      // EJS constants are rendered per turn by card-state.ts; the raw template
+      // source must not enter the one-time preload snapshot.
+      if (content.includes('<%')) continue
       const ref = `${book.name ?? 'unnamed'}.${entry.uid}`
       writer.add(`world_info.${ref}.comment`, typeof entry.comment === 'string' ? entry.comment : '', 300)
-      writer.add(`world_info.${ref}.content`, typeof entry.content === 'string' ? entry.content : '', 4_000)
+      writer.add(`world_info.${ref}.content`, content, 4_000)
     }
   }
 

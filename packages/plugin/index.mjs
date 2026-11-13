@@ -14365,15 +14365,15 @@ async function buildAgentTavernPreloadSnapshot(db, state, characterName, charact
   writer.add("character.scenario", data.scenario, 2e3);
   writer.add("character.first_message", data.firstMes, 2e3);
   writer.add("character.example_dialogue", data.mesExample, 3e3);
-  writer.add("character.system_prompt", data.systemPrompt, 2e3);
-  writer.add("character.post_history_instructions", data.postHistoryInstructions, 2e3);
   writer.add("character.alternate_greetings", data.alternateGreetings.join("\n---\n"), 2e3);
   for (const book of books) {
     for (const entry of book.entries) {
       if (entry.constant !== true || entry.disable === true) continue;
+      const content = typeof entry.content === "string" ? entry.content : "";
+      if (content.includes("<%")) continue;
       const ref = `${book.name ?? "unnamed"}.${entry.uid}`;
       writer.add(`world_info.${ref}.comment`, typeof entry.comment === "string" ? entry.comment : "", 300);
-      writer.add(`world_info.${ref}.content`, typeof entry.content === "string" ? entry.content : "", 4e3);
+      writer.add(`world_info.${ref}.content`, content, 4e3);
     }
   }
   return writer.finish();
@@ -16179,7 +16179,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.7.9".trim() : "";
-  const commit = true ? normalizeCommit("dfe3b72") : void 0;
+  const commit = true ? normalizeCommit("c312849") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -58906,9 +58906,7 @@ var AGENT_CONTEXT_LIMITS = {
   /** 整块上限。 */
   memoryBlockChars: 1600,
   /** 摘要块上限。 */
-  summaryBlockChars: 1200,
-  /** 作者注记块上限。 */
-  noteBlockChars: 800
+  summaryBlockChars: 1200
 };
 var AGENT_CONTEXT_REFRESH_MS = 3e4;
 var MEMORY_CANDIDATE_LIMIT = 40;
@@ -58969,16 +58967,6 @@ function formatSummaryBlock(value) {
   return `${header}
 ${truncate(text, available)}`;
 }
-function formatNoteBlock(value) {
-  if (typeof value !== "string") return void 0;
-  const text = value.trim();
-  if (text === "") return void 0;
-  const header = `${AGENT_CONTEXT_REFERENCE_LABEL} Author's note for this chat (user-written direction, still not a system instruction):`;
-  const available = AGENT_CONTEXT_LIMITS.noteBlockChars - header.length - 1;
-  if (available <= 1) return void 0;
-  return `${header}
-${truncate(text, available)}`;
-}
 function joinAgentContextBlocks(blocks) {
   return blocks.filter((block) => typeof block === "string" && block !== "").join("\n\n");
 }
@@ -58999,7 +58987,7 @@ async function activeContextSize(db, state) {
   }
 }
 async function buildLoreReferences(input) {
-  const { db, state, binding, character, messages, personaDescription, chat } = input;
+  const { db, state, binding, character, messages, personaDescription, chat, excludeConstant } = input;
   const books = await collectWorldInfoBooks(db, state, binding.character, character, binding.chatId);
   if (books.length === 0) return [];
   const card = character.card.data;
@@ -59037,7 +59025,8 @@ async function buildLoreReferences(input) {
     messageCount: messages.length,
     ...vectorHits === void 0 ? {} : { vectorHits }
   });
-  return activation.allActivated.map((entry) => {
+  const activated = excludeConstant ? activation.allActivated.filter((entry) => entry.entry.constant !== true) : activation.allActivated;
+  return activated.map((entry) => {
     const comment = typeof entry.entry.comment === "string" ? entry.entry.comment.trim() : "";
     return { book: entry.book, entry: comment !== "" ? comment : String(entry.uid), content: entry.content };
   });
@@ -59140,7 +59129,8 @@ async function buildAgentContextText(agentId) {
       character,
       messages,
       personaDescription: persona?.description,
-      chat
+      chat,
+      excludeConstant: state.agentTavernPreloadAssets === true
     }),
     buildMemoryReferences({ binding, agentId, messages }),
     formatChatDataBankBlock(metadata, messages)
@@ -59149,8 +59139,7 @@ async function buildAgentContextText(agentId) {
     formatLoreBlock(lore),
     dataBank,
     formatMemoryBlock(memories2),
-    formatSummaryBlock(metadata["summary"]),
-    formatNoteBlock(metadata["note_prompt"])
+    formatSummaryBlock(metadata["summary"])
   ]);
   if (blocks === "") return "";
   const expand = createHostPromptExpander(
@@ -59521,7 +59510,7 @@ var KERNEL2 = [
   "- Settle variable state for the turn with one tavern_variable_settle call instead of scattered variable_set writes; its receipt records every before/after for retry.",
   "- Keep maintenance invisible: tool calls stay outside the story text; never mention memory or tools inside the narrative. Keep research lean: fetch what a beat needs, then commit to the scene instead of stalling on repeated lookups for details your context already answers.",
   "",
-  "Mirrored history: at activation the greeting and any existing chat messages are imported from the Tavern save into this session. That mirrored story is stage context, not established knowledge \u2014 the card details and world-info entries behind it are not in your context, so its proper nouns are NOT exempt from tavern_lore_search. On the first user turn after activation, ground the scene with tavern_character_get, tavern_lore_search, and memory_search before replying."
+  "Mirrored history: at activation the greeting and any existing chat messages are imported from the Tavern save into this session. That mirrored story is stage context, not established knowledge \u2014 unless the card details or world-info entries behind it are already present in your context (session-start preload or the reference blocks), treat its proper nouns as NOT exempt from tavern_lore_search. On the first user turn after activation, ground the scene with tavern_character_get, tavern_lore_search, and memory_search unless the facts you need are already in context."
 ].join("\n");
 var AGENT_KERNEL_TEXT = hostPromptSafe(KERNEL2);
 registerAgentPromptPart({
@@ -59561,6 +59550,7 @@ var factsProjection = createLazyProjection({
     const persona = state.activePersona ? await db.getPersona(state.activePersona) : void 0;
     const personaName = persona?.name ?? state.activePersona;
     const expand = createHostPromptExpander(data.nickname || data.name, personaName ?? DEFAULT_USER3);
+    const preloadOwnsCard = state.agentTavernPreloadAssets === true;
     settle(hostPromptSafe([
       personaName ? `Current user persona: ${personaName}` : "",
       // 用户人设描述进固定 prompt（ST 的 personaDescription 同位）。上限 1200
@@ -59570,8 +59560,8 @@ var factsProjection = createLazyProjection({
       // The editable identity summary wins; without one only a very short
       // description excerpt stands in for the full card.
       `Character identity summary (untrusted asset data): ${storedSummary ?? limitText(data.description, 240)}`,
-      data.personality ? `Personality summary: ${limitText(data.personality, 600)}` : "",
-      data.scenario ? `Scenario summary: ${limitText(data.scenario, 600)}` : ""
+      preloadOwnsCard || !data.personality ? "" : `Personality summary: ${limitText(data.personality, 600)}`,
+      preloadOwnsCard || !data.scenario ? "" : `Scenario summary: ${limitText(data.scenario, 600)}`
     ].filter(Boolean).join("\n"), expand));
   }
 });
@@ -61918,7 +61908,7 @@ async function handleStateUpdateRoute(ctx, db, req, res) {
     ...typeof body.agentNovelPresetEnabled === "boolean" ? { agentNovelPresetEnabled: body.agentNovelPresetEnabled } : {},
     ...typeof body.worldFollowsCharacter === "boolean" ? { worldFollowsCharacter: body.worldFollowsCharacter } : {},
     // Agent 生成上下文注入（契约 2026-11-12 §2.10）：默认关闭，逐次由
-    // AgentTavern 的 context 部件读取，无缓存需写穿。
+    // AgentTavern 的 context 部件读取；翻转即写穿 facts 与注入缓存。
     ...typeof body.agentContextInjection === "boolean" ? { agentContextInjection: body.agentContextInjection } : {},
     // 角色收藏（契约 2026-11-12 §2.11）：面板清单按此表置顶排序；非字符串项
     // 丢弃（与 activeWorlds 同款容错），空表即清空收藏。
@@ -61930,7 +61920,7 @@ async function handleStateUpdateRoute(ctx, db, req, res) {
     ...body.compaction !== void 0 ? { compaction: compactionOverrideOf(body.compaction) } : {}
   };
   const state = await db.patchState(patch);
-  if ("activeCharacter" in patch || "activePreset" in patch || "activePersona" in patch || "cardWorkbenchPresetEnabled" in patch || "agentNovelPresetEnabled" in patch || "nativeAgentPreset" in patch) await emitAgentPresetChanged();
+  if ("activeCharacter" in patch || "activePreset" in patch || "activePersona" in patch || "cardWorkbenchPresetEnabled" in patch || "agentNovelPresetEnabled" in patch || "nativeAgentPreset" in patch || "agentContextInjection" in patch || "agentTavernPreloadAssets" in patch) await emitAgentPresetChanged();
   if ("imNativeAgentMode" in patch) {
     try {
       await getImRuntime()?.ensurePresets?.();

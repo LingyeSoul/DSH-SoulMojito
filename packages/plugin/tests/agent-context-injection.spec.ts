@@ -1,9 +1,9 @@
 /**
  * AgentTavern 自动上下文注入（契约 2026-11-12 §2.10，Owner E）。
  *
- * 覆盖四件事：
+ * 覆盖三件事：
  * 1. 开关关闭（默认）不注入；
- * 2. 开启后世界书/记忆/summary/note 各出一块，且每块带 reference data 标注；
+ * 2. 开启后世界书/记忆/summary 各出一块，且每块带 reference data 标注；
  * 3. 没有数据不产出空块（纯格式化 + 未绑定 agent 两条路径）；
  * 4. 字符上限截断生效，以及预设投影对 instruct/context 形态的明确「不投影」。
  *
@@ -21,7 +21,6 @@ import {
   createAgentContextInjectionChannel,
   formatLoreBlock,
   formatMemoryBlock,
-  formatNoteBlock,
   formatSummaryBlock,
   joinAgentContextBlocks,
 } from '../src/agent-tavern/context-injection.js'
@@ -34,7 +33,6 @@ const CHARACTER = 'Context Character'
 const AGENT = 'context-injection-agent'
 const UNBOUND_AGENT = 'context-injection-unbound'
 const SUMMARY_TEXT = 'Earlier the party crossed the salt marsh and met the ferryman.'
-const NOTE_TEXT = 'Keep prose terse and never write dialogue for the user.'
 
 /** 注入块读取面：与宿主装配回调取同一个部件（同源即所见）。 */
 function contextTextOf(agentId: string | undefined): string {
@@ -81,7 +79,6 @@ describe('AgentTavern automatic context injection', () => {
         createdAt: '2026-01-01T00:00:00.000Z',
         timedWorldInfo: {},
         summary: SUMMARY_TEXT,
-        note_prompt: NOTE_TEXT,
       },
     }, [{
       name: 'User', is_user: true, is_system: false, send_date: '2026-01-01T00:00:01.000Z',
@@ -136,8 +133,6 @@ describe('AgentTavern automatic context injection', () => {
       formatMemoryBlock([]),
       formatSummaryBlock(''),
       formatSummaryBlock(undefined),
-      formatNoteBlock('   '),
-      formatNoteBlock(null),
     ])).toBe('')
     // 未绑定 agent：通道侧同样不产出文本（首次装配触发懒装载，refresh 后落定）。
     expect(contextTextOf(UNBOUND_AGENT)).toBe('')
@@ -152,8 +147,8 @@ describe('AgentTavern automatic context injection', () => {
     expect(text).not.toBe('')
 
     const blocks = text.split('\n\n')
-    // 每块都以统一的 reference-data 标注起头：世界书、记忆、summary、note 各一块。
-    expect(blocks).toHaveLength(4)
+    // 每块都以统一的 reference-data 标注起头：世界书、记忆、summary 各一块。
+    expect(blocks).toHaveLength(3)
     for (const block of blocks) expect(block.startsWith(AGENT_CONTEXT_REFERENCE_LABEL)).toBe(true)
 
     const lore = blocks.find((block) => block.includes('World information activated'))!
@@ -171,9 +166,29 @@ describe('AgentTavern automatic context injection', () => {
     expect(memory.indexOf('MEMORY-1')).toBeLessThan(memory.indexOf('MEMORY-2'))
 
     expect(text).toContain(SUMMARY_TEXT)
-    expect(text).toContain(NOTE_TEXT)
     // 宏安全：注入文本不得残留 {{（宿主 interpolate 会中止装配）。
     expect(text).not.toContain('{{')
+  })
+
+  it('lets the session-start preload own constant World Info entries', async () => {
+    // 预载开启：常驻条目只留在会话起点的预载消息里，每步注入只带动态命中。
+    await store.updateState(() => ({ agentTavernPreloadAssets: true } as Partial<TavernState>))
+    await refreshAgentContextInjection(AGENT)
+    const withPreload = contextTextOf(AGENT)
+    const loreWithPreload = withPreload.split('\n\n').find((block) => block.includes('World information activated'))!
+    expect(loreWithPreload).toContain('DRAGONKEY')
+    expect(loreWithPreload).not.toContain('Standing canon')
+    // 记忆与摘要不受通道归属影响。
+    expect(withPreload).toContain('MEMORY-1')
+    expect(withPreload).toContain(SUMMARY_TEXT)
+
+    // 预载关闭：常驻条目回到每步注入，只用注入开关的用户不丢内容。
+    await store.updateState(() => ({ agentTavernPreloadAssets: false } as Partial<TavernState>))
+    await refreshAgentContextInjection(AGENT)
+    const loreWithoutPreload = contextTextOf(AGENT)
+      .split('\n\n').find((block) => block.includes('World information activated'))!
+    expect(loreWithoutPreload).toContain('Standing canon')
+    expect(loreWithoutPreload).toContain('DRAGONKEY')
   })
 
   it('truncates oversized blocks and keeps the source annotation', async () => {

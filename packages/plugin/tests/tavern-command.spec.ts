@@ -724,6 +724,38 @@ describe('internal Tavern session bridge occupation', () => {
     await store.patchState({ agentTavernPreloadAssets: false })
   })
 
+  it('writes behavior flag changes through the agent context cache immediately', async () => {
+    const agent = makeAgent('session-agent-context-refresh')
+    const bindingBody = {
+      sessionId: agent.id,
+      character: CHARACTER,
+      chatId,
+      architecture: 'agent-tavern',
+      contextMode: 'dsh-native',
+    }
+    await apiHandler(makeRequest(bindingBody, '/api/dsh-soulmojito/binding'), makeResponse())
+    const part = registeredAgentPromptParts().find((entry) => entry.name === 'dsh-soulmojito:agent-context')!
+    expect(part.text(agent.id)).toBe('')
+
+    const enabled = makeResponse()
+    await apiHandler(makeRequest({ agentContextInjection: true }, '/api/dsh-soulmojito/state'), enabled)
+    expect(enabled.statusCode).toBe(200)
+    // 写穿后立即可见：没有等待 30s TTL 的空窗。
+    expect(part.text(agent.id)).toContain('World information activated')
+    expect(part.text(agent.id)).toContain('unfiltered active lore')
+
+    const preload = makeResponse()
+    await apiHandler(makeRequest({ agentTavernPreloadAssets: true }, '/api/dsh-soulmojito/state'), preload)
+    expect(preload.statusCode).toBe(200)
+    // 预载拥有常驻条目后，同一注入块不再重复它们。
+    expect(part.text(agent.id)).not.toContain('unfiltered active lore')
+
+    await apiHandler(
+      makeRequest({ agentContextInjection: false, agentTavernPreloadAssets: false }, '/api/dsh-soulmojito/state'),
+      makeResponse(),
+    )
+  })
+
   it('warms the AgentTavern preset projection at activation so the first turn carries it', async () => {
     // 预设投影与 facts/guides 同款异步装载；激活命令必须预热缓存，否则首轮装配
     // 拿到空串——用户看到的现象就是「预设不生效」（见 agent-tavern/preset.ts）。

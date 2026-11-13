@@ -150,7 +150,7 @@ export async function handleStateUpdateRoute(
       ? { worldFollowsCharacter: body.worldFollowsCharacter }
       : {}),
     // Agent 生成上下文注入（契约 2026-11-12 §2.10）：默认关闭，逐次由
-    // AgentTavern 的 context 部件读取，无缓存需写穿。
+    // AgentTavern 的 context 部件读取；翻转即写穿 facts 与注入缓存。
     ...(typeof body.agentContextInjection === 'boolean'
       ? { agentContextInjection: body.agentContextInjection }
       : {}),
@@ -174,7 +174,10 @@ export async function handleStateUpdateRoute(
   // 的监听在同一注册表里）。
   if ('activeCharacter' in patch || 'activePreset' in patch || 'activePersona' in patch
     || 'cardWorkbenchPresetEnabled' in patch || 'agentNovelPresetEnabled' in patch
-    || 'nativeAgentPreset' in patch) await emitAgentPresetChanged()
+    || 'nativeAgentPreset' in patch
+    // 预载开关改变 facts 的归属（性格/场景是否由预载负责）与注入块的常驻条目
+    // 过滤；注入开关改变 context 部件本身。两者都有投影缓存，必须写穿。
+    || 'agentContextInjection' in patch || 'agentTavernPreloadAssets' in patch) await emitAgentPresetChanged()
   if ('imNativeAgentMode' in patch) {
     try {
       await getImRuntime()?.ensurePresets?.()

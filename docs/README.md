@@ -191,6 +191,7 @@
 - [`2026-10-25-deleted-card-regex-cleanup.md`](../decisions/2026-10-25-deleted-card-regex-cleanup.md) — 删除角色卡时清理其卡级正则，并自愈历史孤儿归属脚本（同名新卡不再继承旧脚本）
 - [`2026-10-25-regex-redos-mitigation.md`](../decisions/2026-10-25-regex-redos-mitigation.md) — 正则 ReDoS 缓解：执行前安全门 + 输入上限
 - [`2026-11-12-st-capability-parity.md`](../decisions/2026-11-12-st-capability-parity.md) — ST 原生能力补齐：生成动词、隐藏/消息动作、聊天文件与 checkpoint、QR/AN/summary、世界书设置与 outlet、宏/预设/MANUAL、Agent 自动注入
+- [`2026-11-13-agent-context-preload-ownership.md`](../decisions/2026-11-13-agent-context-preload-ownership.md) — Agent 自动注入通道归属：预载开启时常驻世界书条目不再每步重复、Author’s Note 摘除、KERNEL 措辞条件化
 
 ### 面板与视图
 

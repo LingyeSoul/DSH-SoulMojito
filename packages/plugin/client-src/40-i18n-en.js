@@ -11,7 +11,7 @@
       'settings.nativePersona': 'Use active character in standard DSH Agent chats',
       'settings.nativePreset': 'Use active preset in standard DSH Agent chats',
       'settings.agentContextInjection': 'Inject World Info, memories and the chat summary into the agent context',
-      'settings.agentContextInjectionHint': 'Adds three reference blocks to AgentTavern prompts: the always-on World Info entries, the top memories, and the chat summary plus Author’s Note. Each block is labelled reference data, not instructions. Off by default.',
+      'settings.agentContextInjectionHint': 'Adds three reference blocks to AgentTavern prompts: activated World Info hits, the top memories, and the chat summary. When the session-start preload is on, constant World Info entries are owned by the preload and this block only carries keyword/vector hits. Each block is labelled reference data, not instructions. Off by default.',
       'settings.imNativeAgentMode': 'Give IM mode the full native Agent tool set (AgentTavernIM Native)',
       'settings.imNativeAgentModeHint': 'IM-bound sessions use AgentTavernIM Native: the standard DSH tools (shell, files, search, jobs, schedules, skills, goals, subagents, todo, web, present) plus Tavern and im_* tools. Replies still go through im_send. This is independent of PTC mode: PTC only changes how the tools are presented (run_code plus SDK), not which tools exist. Shell, file and network tools are powerful; enable it only for agents you trust.',
       'settings.ptcMode': 'Enable PTC mode (AgentTavern / Card Workbench / AgentNovel)',

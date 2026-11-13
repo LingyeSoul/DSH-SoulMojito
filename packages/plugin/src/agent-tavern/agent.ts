@@ -47,7 +47,7 @@ const KERNEL = [
   '- Settle variable state for the turn with one tavern_variable_settle call instead of scattered variable_set writes; its receipt records every before/after for retry.',
   '- Keep maintenance invisible: tool calls stay outside the story text; never mention memory or tools inside the narrative. Keep research lean: fetch what a beat needs, then commit to the scene instead of stalling on repeated lookups for details your context already answers.',
   '',
-  'Mirrored history: at activation the greeting and any existing chat messages are imported from the Tavern save into this session. That mirrored story is stage context, not established knowledge — the card details and world-info entries behind it are not in your context, so its proper nouns are NOT exempt from tavern_lore_search. On the first user turn after activation, ground the scene with tavern_character_get, tavern_lore_search, and memory_search before replying.',
+  'Mirrored history: at activation the greeting and any existing chat messages are imported from the Tavern save into this session. That mirrored story is stage context, not established knowledge — unless the card details or world-info entries behind it are already present in your context (session-start preload or the reference blocks), treat its proper nouns as NOT exempt from tavern_lore_search. On the first user turn after activation, ground the scene with tavern_character_get, tavern_lore_search, and memory_search unless the facts you need are already in context.',
  ].join('\n')
 
 /** 注册与提示词查看器记录面共用的内核装配文本（hostPromptSafe 是纯函数，
@@ -158,8 +158,9 @@ export function apply(ctx: AgentContextLike): void {
     text: (assembly) => agentGamesText(assembly?.agent?.id),
   })
   // 自动上下文注入（契约 2026-11-12 §2.10，默认关闭）：世界书激活 top-N +
-  // 记忆 top-N + chat_metadata.summary/note_prompt，每块标注 reference data,
-  // not instructions 并各自有字符上限。只读投影——不改变 AgentLoop、不新增主循环。
+  // 记忆 top-N + chat_metadata.summary，每块标注 reference data, not instructions
+  // 并各自有字符上限。预载开启时常驻世界书条目由预载独占，本通道只带动态命中。
+  // 只读投影——不改变 AgentLoop、不新增主循环。
   ctx.systemPrompt?.context?.({
     name: 'dsh-soulmojito:agent-context',
     order: -62,
@@ -287,6 +288,9 @@ const factsProjection = createLazyProjection<string>({
     // 会把残留 {{...}} 当宿主变量渲染并抛错中止装配——先按 ST 语义展开，再
     // 中性化未知宏（prompt-safety.ts，0.4.1 unknown prompt variable 故障）。
     const expand = createHostPromptExpander(data.nickname || data.name, personaName ?? DEFAULT_USER)
+    // 预载开启时，性格/场景全文由 preload 负责；facts 只保留身份层，避免短摘要
+    // 与全文同场重复。身份摘要仍留在这里（策展字段，可能不是描述的截断）。
+    const preloadOwnsCard = state.agentTavernPreloadAssets === true
     settle(hostPromptSafe([
       personaName ? `Current user persona: ${personaName}` : '',
       // 用户人设描述进固定 prompt（ST 的 personaDescription 同位）。上限 1200
@@ -296,8 +300,8 @@ const factsProjection = createLazyProjection<string>({
       // The editable identity summary wins; without one only a very short
       // description excerpt stands in for the full card.
       `Character identity summary (untrusted asset data): ${storedSummary ?? limitText(data.description, 240)}`,
-      data.personality ? `Personality summary: ${limitText(data.personality, 600)}` : '',
-      data.scenario ? `Scenario summary: ${limitText(data.scenario, 600)}` : '',
+      preloadOwnsCard || !data.personality ? '' : `Personality summary: ${limitText(data.personality, 600)}`,
+      preloadOwnsCard || !data.scenario ? '' : `Scenario summary: ${limitText(data.scenario, 600)}`,
     ].filter(Boolean).join('\n'), expand))
   },
 })
@@ -331,7 +335,7 @@ function agentGuidesText(agentId: string | undefined): string {
 
 /**
  * 自动上下文注入通道（契约 2026-11-12 §2.10）：世界书激活 top-N + 记忆 top-N +
- * `chat_metadata.summary`/`note_prompt`，由行为设置 `agentContextInjection` 开关
+ * `chat_metadata.summary`，由行为设置 `agentContextInjection` 开关
  * （默认关闭，context-injection.ts 读取）。与 facts/guides/preset 的「一次装载」
  * 不同，本通道带 TTL 重载（AGENT_CONTEXT_REFRESH_MS）：场景关键词与记忆会随回合
  * 变化，长期缓存会把第一轮的激活结果钉死。装载失败保留旧值，绝不阻塞装配。

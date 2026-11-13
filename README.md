@@ -53,7 +53,7 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 - **STscript** — 新增 `/continue` `/swipe` `/hide` `/unhide` `/move` `/rename` `/branch` `/checkpoint` `/listvar` `/flushvar` `/run` `/times` `/qr`；`/while` 明确报不支持。
 - **世界书** — 全局设置面（递归步数、预算、最小激活、大小写/整词、组计分、名字前缀）；`{{outlet::Name}}` 接通；`{{mesExamplesRaw}}` 与清洗版分离。
 - **群聊 / 预设 / persona** — 群聊 MANUAL(0) 不再被静默改写为 NATURAL；sysprompt/reasoning 预设可导入（只存储，不参与生成）；预设 prompt_order 支持拖拽与逐项启用；persona 支持头像与 position/depth/role；角色收藏与正则整表导出。
-- **AgentTavern** — 行为设置 `agentContextInjection`（默认关闭）开启后，把世界书激活、记忆 top-N、聊天 summary 与作者注记作为带标注、带字符上限的参考上下文注入；预设投影对不支持的分类显式拒绝并告警。
+- **AgentTavern** — 行为设置 `agentContextInjection`（默认关闭）开启后，把世界书激活命中、记忆 top-N 与聊天 summary 作为带标注、带字符上限的参考上下文注入；`agentTavernPreloadAssets` 开启时常驻世界书条目由会话起点预载独占，注入块只带关键词/向量命中，`agent-facts` 只留身份摘要（性格/场景以预载全文为准）；预载跳过 preset 已覆盖的卡 `system_prompt`/`post_history_instructions` 与需每轮渲染的 EJS 常驻条目；两个开关翻转即时写穿投影缓存；预设投影对不支持的分类显式拒绝并告警。
 - **数据银行与备份** — 文本文件入库、分块、embed/词法检索、聊天附件、Agent 工具与 ST 注入；整库 ZIP 备份/恢复（merge/replace，replace 前自动快照）；事件桥补 `MESSAGE_SWIPE_DELETED`、`MESSAGE_UPDATED` 与 `WORLD_INFO_ACTIVATED`，没有观测面的事件不伪造。
 
 ### 资产与 SillyTavern 兼容

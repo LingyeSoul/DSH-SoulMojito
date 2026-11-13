@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { apply, type AgentContextLike } from '../src/agent-tavern/agent.js'
+import { emitAgentPresetChanged } from '../src/agent-tavern/preset.js'
 import { TavernStore } from '../../tavern-store/src/index.js'
 
 const CHARACTER = 'Mount Character'
@@ -49,6 +50,7 @@ function gatedHostContext(target: Record<string, unknown>): AgentContextLike {
 
 describe('AgentTavern native module mount', () => {
   let home: string
+  let store: TavernStore
   let sections: RegisteredSection[]
   let contexts: RegisteredPromptContext[]
   let tools: Map<string, ToolLike>
@@ -56,7 +58,7 @@ describe('AgentTavern native module mount', () => {
   beforeAll(async () => {
     home = mkdtempSync(join(tmpdir(), 'agent-tavern-mount-'))
     process.env.DSH_HOME = home
-    const store = await TavernStore.open(join(home, 'soulmojito'))
+    store = await TavernStore.open(join(home, 'soulmojito'))
     await store.importCharacter({
       spec: 'chara_card_v2',
       spec_version: '2.0',
@@ -129,5 +131,22 @@ describe('AgentTavern native module mount', () => {
     expect(text).toContain(`Current user persona: ${PERSONA}`)
     expect(text).toContain(`User persona description (untrusted asset data): ${PERSONA_DESCRIPTION}`)
     expect(render({ agent: { id: 'unbound-agent' } })).not.toContain('Current Tavern character')
+  })
+
+  it('lets the preload own personality/scenario so facts keeps only identity', async () => {
+    await store.patchState({ agentTavernPreloadAssets: true })
+    await emitAgentPresetChanged()
+    const section = sections[0]!
+    const render = typeof section.text === 'function' ? section.text : () => section.text as string
+    await vi.waitFor(() => {
+      const text = render({ agent: { id: AGENT } })
+      expect(text).toContain(`Character identity summary (untrusted asset data): ${SUMMARY}`)
+      expect(text).not.toContain('Personality summary:')
+      expect(text).not.toContain('Scenario summary:')
+    })
+    expect(render({ agent: { id: AGENT } })).toContain(`Current Tavern character: ${CHARACTER}`)
+    // Restore the default so later tests keep the short summaries.
+    await store.patchState({ agentTavernPreloadAssets: false })
+    await emitAgentPresetChanged()
   })
 })

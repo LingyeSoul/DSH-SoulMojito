@@ -283,9 +283,9 @@
               onChange: (event) => applyPatch({ nativeAgentPreset: event.target.checked }),
             }),
             h('span', null, t('settings.nativePreset'))),
-          // Agent 生成上下文注入（契约 2026-11-12 §2.10）：常驻世界书 top-N、记忆
-          // top-N、summary/note_prompt 三块 reference data。默认关闭，逐次由
-          // AgentTavern 的 context 部件读取，无缓存需写穿。
+          // Agent 生成上下文注入（契约 2026-11-12 §2.10）：世界书激活 top-N、记忆
+          // top-N、summary 三块 reference data。默认关闭，逐次由 AgentTavern 的
+          // context 部件读取，无缓存需写穿；预载开启时常驻条目由预载独占。
           h('label', { className: 'dt-toggle' },
             h('input', {
               type: 'checkbox',
@@ -518,4 +518,4 @@
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
 
-
+

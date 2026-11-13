@@ -2521,7 +2521,7 @@ window.__ModuleLoader__.load({
       'settings.nativePersona': 'Use active character in standard DSH Agent chats',
       'settings.nativePreset': 'Use active preset in standard DSH Agent chats',
       'settings.agentContextInjection': 'Inject World Info, memories and the chat summary into the agent context',
-      'settings.agentContextInjectionHint': 'Adds three reference blocks to AgentTavern prompts: the always-on World Info entries, the top memories, and the chat summary plus Author’s Note. Each block is labelled reference data, not instructions. Off by default.',
+      'settings.agentContextInjectionHint': 'Adds three reference blocks to AgentTavern prompts: activated World Info hits, the top memories, and the chat summary. When the session-start preload is on, constant World Info entries are owned by the preload and this block only carries keyword/vector hits. Each block is labelled reference data, not instructions. Off by default.',
       'settings.imNativeAgentMode': 'Give IM mode the full native Agent tool set (AgentTavernIM Native)',
       'settings.imNativeAgentModeHint': 'IM-bound sessions use AgentTavernIM Native: the standard DSH tools (shell, files, search, jobs, schedules, skills, goals, subagents, todo, web, present) plus Tavern and im_* tools. Replies still go through im_send. This is independent of PTC mode: PTC only changes how the tools are presented (run_code plus SDK), not which tools exist. Shell, file and network tools are powerful; enable it only for agents you trust.',
       'settings.ptcMode': 'Enable PTC mode (AgentTavern / Card Workbench / AgentNovel)',
@@ -3804,7 +3804,7 @@ window.__ModuleLoader__.load({
       'settings.nativePersona': '在标准 DSH Agent 会话中使用当前角色',
       'settings.nativePreset': '在标准 DSH Agent 会话中使用当前预设',
       'settings.agentContextInjection': '把世界书、记忆与聊天总结注入 Agent 上下文',
-      'settings.agentContextInjectionHint': '给 AgentTavern 的提示词加三块参考数据：常驻世界书条目、最相关的记忆、聊天总结与 Author’s Note。每块都标注为参考数据而非指令。默认关闭。',
+      'settings.agentContextInjectionHint': '给 AgentTavern 的提示词加三块参考数据：世界书激活命中、最相关的记忆与聊天总结。开启「会话开始时预载」后，常驻世界书条目由预载负责，这里只带关键词/向量命中。每块都标注为参考数据而非指令。默认关闭。',
       'settings.imNativeAgentMode': 'IM 模式解锁原生 Agent 全能力（AgentTavernIM Native）',
       'settings.imNativeAgentModeHint': 'IM 绑定会话改用 AgentTavernIM Native：在酒馆工具与 im_* 工具之外，挂载标准 DSH 工具（shell、文件、搜索、任务、定时、技能、目标、子代理、待办、网页、present）。回复仍必须走 im_send。本开关与 PTC 模式正交：PTC 只改变工具呈现方式（run_code + SDK），不改变工具集合。shell、文件写入与联网能力较强，只对信任的会话开启。',
       'settings.ptcMode': '启用 PTC 模式（AgentTavern / 写卡工作台 / AgentNovel）',
@@ -8948,9 +8948,9 @@ window.__ModuleLoader__.load({
               onChange: (event) => applyPatch({ nativeAgentPreset: event.target.checked }),
             }),
             h('span', null, t('settings.nativePreset'))),
-          // Agent 生成上下文注入（契约 2026-11-12 §2.10）：常驻世界书 top-N、记忆
-          // top-N、summary/note_prompt 三块 reference data。默认关闭，逐次由
-          // AgentTavern 的 context 部件读取，无缓存需写穿。
+          // Agent 生成上下文注入（契约 2026-11-12 §2.10）：世界书激活 top-N、记忆
+          // top-N、summary 三块 reference data。默认关闭，逐次由 AgentTavern 的
+          // context 部件读取，无缓存需写穿；预载开启时常驻条目由预载独占。
           h('label', { className: 'dt-toggle' },
             h('input', {
               type: 'checkbox',
@@ -9182,6 +9182,7 @@ window.__ModuleLoader__.load({
         snapshot?.error ? h('p', { className: 'dt-hint' }, t('update.remoteError', { error: snapshot.error })) : null,
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
+
 
 
     function TavernSettings() {
