@@ -222,6 +222,19 @@ describe('STscript command registry (proposal 0015 P0)', () => {
       'stop',
       'cut',
       'regex',
+      'continue',
+      'swipe',
+      'hide',
+      'unhide',
+      'move',
+      'rename',
+      'branch',
+      'checkpoint',
+      'listvar',
+      'flushvar',
+      'run', 'qr',
+      'times',
+      'while',
     ])
   })
 
@@ -289,5 +302,151 @@ describe('STscript command registry (proposal 0015 P0)', () => {
     first() // 旧 disposer：不得摘掉新注册
     const env = makeEnv()
     expect((await runScript('/reused', env)).output).toBe('second')
+  })
+})
+
+describe('chat action commands (contract §2.7)', () => {
+  interface ActionCalls {
+    continued: number
+    swipes: number[]
+    hidden: Array<[number, number]>
+    unhidden: Array<[number, number]>
+    moved: Array<[number, number]>
+    renamed: string[]
+    branched: Array<[number | undefined, string | undefined]>
+    checkpoints: Array<number | undefined>
+    listed: number
+    flushed: number
+    ran: string[]
+  }
+
+  function makeCalls(): ActionCalls {
+    return {
+      continued: 0, swipes: [], hidden: [], unhidden: [], moved: [], renamed: [],
+      branched: [], checkpoints: [], listed: 0, flushed: 0, ran: [],
+    }
+  }
+
+  function makeActionEnv(calls: ActionCalls): ScriptEnv {
+    return makeEnv({
+      continue: () => { calls.continued += 1 },
+      swipe: (delta) => { calls.swipes.push(delta) },
+      hide: (from, to) => { calls.hidden.push([from, to]) },
+      unhide: (from, to) => { calls.unhidden.push([from, to]) },
+      move: (from, to) => { calls.moved.push([from, to]) },
+      rename: (name) => { calls.renamed.push(name) },
+      branch: (messageId, name) => { calls.branched.push([messageId, name]) },
+      checkpoint: (messageId) => { calls.checkpoints.push(messageId) },
+      listVars: () => { calls.listed += 1; return 'a=1\nb=2' },
+      flushVars: () => { calls.flushed += 1 },
+      runQuickReply: (name) => { calls.ran.push(name) },
+    })
+  }
+
+  it('/continue and /swipe forward to the env with the ST defaults', async () => {
+    const calls = makeCalls()
+    const env = makeActionEnv(calls)
+    const continued = await runScript('/continue', env)
+    expect(continued.chatChanged).toBe(true)
+    expect(calls.continued).toBe(1)
+    await runScript('/swipe', env)
+    await runScript('/swipe 2', env)
+    await runScript('/swipe -1', env)
+    expect(calls.swipes).toEqual([1, 2, -1])
+    await expect(runScript('/swipe abc', env)).rejects.toThrow('/swipe expects an integer')
+  })
+
+  it('/hide and /unhide accept ranges, single indices and the last-floor default', async () => {
+    const calls = makeCalls()
+    const env = makeActionEnv(calls)
+    await runScript('/hide 0-4', env)
+    await runScript('/hide 3', env)
+    await runScript('/hide 1 3', env)
+    await runScript('/hide', env)
+    await runScript('/unhide 2', env)
+    expect(calls.hidden).toEqual([[0, 4], [3, 3], [1, 3], [-1, -1]])
+    expect(calls.unhidden).toEqual([[2, 2]])
+    await expect(runScript('/hide abc', env)).rejects.toThrow('/hide expects indices')
+  })
+
+  it('/move requires both indices', async () => {
+    const calls = makeCalls()
+    const env = makeActionEnv(calls)
+    await runScript('/move 1 3', env)
+    expect(calls.moved).toEqual([[1, 3]])
+    await expect(runScript('/move 1', env)).rejects.toThrow('/move expects two indices')
+  })
+
+  it('/rename /branch /checkpoint map positional arguments onto the env', async () => {
+    const calls = makeCalls()
+    const env = makeActionEnv(calls)
+    await runScript('/rename New Title', env)
+    await runScript('/branch', env)
+    await runScript('/branch 4', env)
+    await runScript('/branch 4 alt name', env)
+    await runScript('/branch name only', env)
+    await runScript('/checkpoint', env)
+    await runScript('/checkpoint 3', env)
+    expect(calls.renamed).toEqual(['New Title'])
+    expect(calls.branched).toEqual([
+      [undefined, undefined],
+      [4, undefined],
+      [4, 'alt name'],
+      [undefined, 'name only'],
+    ])
+    expect(calls.checkpoints).toEqual([undefined, 3])
+    await expect(runScript('/rename', env)).rejects.toThrow('/rename requires a name')
+  })
+
+  it('/listvar /flushvar /run forward to the env', async () => {
+    const calls = makeCalls()
+    const env = makeActionEnv(calls)
+    const listed = await runScript('/listvar', env)
+    expect(listed.output).toBe('a=1\nb=2')
+    expect(listed.chatChanged).toBe(false)
+    await runScript('/flushvar', env)
+    await runScript('/run my-set', env)
+    await runScript('/qr other-set', env)
+    expect(calls.listed).toBe(1)
+    expect(calls.flushed).toBe(1)
+    expect(calls.ran).toEqual(['my-set', 'other-set'])
+    await expect(runScript('/run', env)).rejects.toThrow('/run requires a quick reply set name')
+  })
+
+  it('/times repeats the nested command and aggregates output/chatChanged', async () => {
+    const env = makeActionEnv(makeCalls())
+    const counted = await runScript('/times 3 /incvar counter', env)
+    expect(counted.chatChanged).toBe(true)
+    expect(env.getVar('counter')).toBe(3)
+
+    const sent = makeEnv()
+    const repeated = await runScript('/times 2 /send hi', sent)
+    expect(repeated.chatChanged).toBe(true)
+    expect(sent.sent).toEqual(['hi', 'hi'])
+
+    await expect(runScript('/times nope /echo hi', env)).rejects.toThrow('/times expects a count')
+    await expect(runScript('/times', env)).rejects.toThrow('/times expects a count')
+    await expect(runScript('/times 100000 /echo hi', env)).rejects.toThrow('/times count is too large')
+  })
+
+  it('/while reports unsupported instead of half-implementing a loop', async () => {
+    await expect(runScript('/while left=1 right=1 op=== then="/echo hi"', makeEnv()))
+      .rejects.toThrow('/while is not supported')
+  })
+
+  it('new commands report unsupported when the environment lacks the capability', async () => {
+    const env = makeEnv()
+    await expect(runScript('/continue', env)).rejects.toThrow('/continue is not available')
+    await expect(runScript('/swipe', env)).rejects.toThrow('/swipe is not available')
+    await expect(runScript('/hide 0-1', env)).rejects.toThrow('/hide is not available')
+    await expect(runScript('/unhide 0-1', env)).rejects.toThrow('/unhide is not available')
+    await expect(runScript('/move 0 1', env)).rejects.toThrow('/move is not available')
+    await expect(runScript('/rename x', env)).rejects.toThrow('/rename is not available')
+    await expect(runScript('/branch', env)).rejects.toThrow('/branch is not available')
+    await expect(runScript('/checkpoint', env)).rejects.toThrow('/checkpoint is not available')
+    await expect(runScript('/listvar', env)).rejects.toThrow('/listvar is not available')
+    await expect(runScript('/flushvar', env)).rejects.toThrow('/flushvar is not available')
+    await expect(runScript('/run set', env)).rejects.toThrow('/run is not available')
+    await expect(runScript('/qr set', env)).rejects.toThrow('/qr is not available')
   })
 })

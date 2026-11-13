@@ -37,6 +37,8 @@ export interface ScanEntry {
   readonly content: string
   readonly decorators: readonly string[]
   readonly constant: boolean
+  /** ST vectorized 蓝灯：只经向量命中激活，不参与关键词匹配（constant 仍常驻）。 */
+  readonly vectorized: boolean
   readonly disable: boolean
   readonly selective: boolean
   readonly selectiveLogic: SecondaryLogic
@@ -183,6 +185,7 @@ export function toScanEntry(normalized: NormalizedEntry, book: BookRef): Omit<Sc
     content,
     decorators,
     constant: normalized.constant ?? false,
+    vectorized: normalized.vectorized ?? false,
     disable: normalized.disable ?? false,
     selective: normalized.selective ?? true,
     selectiveLogic: normalized.selectiveLogic ?? 0,

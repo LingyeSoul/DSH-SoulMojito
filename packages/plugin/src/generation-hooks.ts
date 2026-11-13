@@ -26,10 +26,13 @@ export type GenerationHookPhase =
   | 'post-output'
   | 'post-save'
 
+/** 生成动词（契约 §2.1）；continue/impersonate 只在 ST 管线出现。 */
+export type GenerationMode = 'send' | 'regenerate' | 'trigger' | 'continue' | 'impersonate'
+
 /** 生成轮次的只读元信息（与 payload 分离，hook 不改写它）。 */
 export interface GenerationHookContext {
   phase: GenerationHookPhase
-  mode: 'send' | 'regenerate' | 'trigger'
+  mode: GenerationMode
   character: string
   chatId: string
   group: boolean
@@ -45,6 +48,17 @@ export interface GenerationLlmRequestPayload {
     reasoningEffort?: string
     temperature?: number
     maxTokens?: number
+    /* ---- 预设采样参数（契约 §2.2；仅 st 管线写入）----
+     * 宿主/provider 是否消费由 dsh-llm 的路由决定——这里只如实透传预设值。 */
+    top_p?: number
+    top_k?: number
+    frequency_penalty?: number
+    presence_penalty?: number
+    repetition_penalty?: number
+    min_p?: number
+    seed?: number
+    stop?: string | string[]
+    logit_bias?: Record<string, number>
   }
 }
 

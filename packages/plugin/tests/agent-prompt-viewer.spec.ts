@@ -291,17 +291,18 @@ describe('agentPromptSectionsFor coverage lock', () => {
       effect: (fn: () => unknown) => { fn(); return () => {} },
     } as unknown as AgentContextLike)
     // 决策 2026-11-02-agent-prompt-takeover：宿主侧只剩一个 complete 段；kernel /
-    // preset / identity 是 system 部件（注册表读取面），guides / script / games 仍是
-    // 宿主 context。
+    // preset / identity 是 system 部件（注册表读取面），guides / script / games /
+    // 自动注入（契约 2026-11-12 §2.10，默认关闭）仍是宿主 context。
     const builtin = [
       { name: 'dsh-soulmojito:agent-prompt', order: -80, kind: 'section', complete: true },
       { name: 'dsh-soulmojito:agent-guides', order: -65, kind: 'context' },
       { name: 'dsh-soulmojito:agent-script', order: -64, kind: 'context' },
       { name: 'dsh-soulmojito:agent-games', order: -63, kind: 'context' },
+      { name: 'dsh-soulmojito:agent-context', order: -62, kind: 'context' },
     ]
     expect(registered).toEqual(builtin)
     // 读面方向：context 部件与宿主 context 注册一一对应（名字/order 漂移即翻红）。
-    // 取注册面而不是求值结果——unbound agent 的四个动态通道恒空，会被摘除。
+    // 取注册面而不是求值结果——unbound agent 的五个动态通道恒空，会被摘除。
     expect(registeredAgentPromptParts().filter((part) => part.scope === 'context').map((part) => ({ name: part.name, order: part.order, kind: 'context' })))
       .toEqual(builtin.filter((entry) => entry.kind === 'context'))
     // system 读面包含 identity（用户人设 + 角色摘要），且不再走 context。

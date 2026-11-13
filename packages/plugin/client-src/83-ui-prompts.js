@@ -283,6 +283,17 @@
               onChange: (event) => applyPatch({ nativeAgentPreset: event.target.checked }),
             }),
             h('span', null, t('settings.nativePreset'))),
+          // Agent 生成上下文注入（契约 2026-11-12 §2.10）：常驻世界书 top-N、记忆
+          // top-N、summary/note_prompt 三块 reference data。默认关闭，逐次由
+          // AgentTavern 的 context 部件读取，无缓存需写穿。
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: bootstrap.state.agentContextInjection === true,
+              onChange: (event) => applyPatch({ agentContextInjection: event.target.checked }),
+            }),
+            h('span', null, t('settings.agentContextInjection'))),
+          h('p', { className: 'dt-hint' }, t('settings.agentContextInjectionHint')),
           // IM 绑定会话的完整原生 Agent 工具面：与 PTC 呈现正交，两者可同时开。
           h('label', { className: 'dt-toggle' },
             h('input', {

@@ -108,6 +108,20 @@
         error ? h('p', { className: 'dt-error' }, error) : null))
     }
 
+    // 本地 JSON 下载（正则导出用）：路径不走服务端 export 路由——正则表是 state
+    // 切片，没有单独导出端点（契约 2026-11-12 §2.11 只要求面板有导出按钮）。
+    function downloadJsonFile(fileName, data) {
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = fileName
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(url)
+    }
+
     function RegexBand({ useSessions }) {
       const state = useTavernStore()
       const t = useTranslate()
@@ -369,7 +383,16 @@
           h(Button, { size: 'sm', variant: 'primary', icon: h(IconPlusOutline16), disabled: editing !== '', onClick: () => { setNewScript(newRegexScript()); setEditing('new') } }, t('settings.regexCreate')),
           h(UploadButton, { kind: 'regex', label: t('settings.importRegex'), accept: '.json,application/json' }),
           h(Button, { size: 'sm', variant: 'ghost', icon: h(IconRefreshOutline16), disabled: syncing !== '', onClick: syncFromCards }, syncing === 'cards' ? t('settings.importing') : t('settings.regexSyncCards')),
-          h(Button, { size: 'sm', variant: 'ghost', icon: h(IconRefreshOutline16), disabled: syncing !== '', onClick: syncFromPresets }, syncing === 'presets' ? t('settings.importing') : t('settings.regexSyncPresets'))),
+          h(Button, { size: 'sm', variant: 'ghost', icon: h(IconRefreshOutline16), disabled: syncing !== '', onClick: syncFromPresets }, syncing === 'presets' ? t('settings.importing') : t('settings.regexSyncPresets')),
+          // 导出（契约 2026-11-12 §2.11）：整表导出（含停用项与归属），换机/备份
+          // 不必再翻 state.json。
+          h(Button, {
+            size: 'sm',
+            variant: 'ghost',
+            icon: h(IconDownloadOutline16),
+            disabled: scripts.length === 0,
+            onClick: () => downloadJsonFile('regex-scripts.json', scripts),
+          }, t('settings.regexExport'))),
         scripts.length > 0 && editing === '' ? h('div', { className: 'dt-filter-row' },
           h(Input, { icon: h(IconSearchOutline16), placeholder: t('panel.filterPlaceholder'), 'aria-label': t('panel.filterPlaceholder'), value: regexFilter, onChange: (event) => setRegexFilter(event.target.value) })) : null,
         scripts.length === 0 && editing !== 'new' ? h('p', { className: 'dt-muted' }, t('settings.regexEmpty')) : visibleCount === 0

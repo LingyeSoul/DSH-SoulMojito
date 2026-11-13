@@ -125,6 +125,8 @@ describe('AgentTavern native tools', () => {
     'game_move',
     'game_wait',
     'game_wait_full',
+    // 数据银行检索（Wave 2 契约 §2.4）：第 26 件内置工具，注册在最后。
+    'data_bank_search',
   ])
     for (const tool of tools.values()) {
       // 游戏桥六件（提案 0018 §4.2）豁免 sessionId 面：其 sessionId 是**会话

@@ -61,6 +61,21 @@ var DEFAULT_ZIP_LIMITS = {
   maxTotalBytes: 128 * 1024 * 1024
 };
 
+// packages/tavern-store/src/world-settings.ts
+var DEFAULT_WORLD_INFO_SETTINGS = {
+  recursive: true,
+  scanDepth: 2,
+  budgetPercent: 25,
+  budgetCap: 0,
+  maxRecursionSteps: 0,
+  minActivations: 0,
+  minActivationsDepthMax: 0,
+  caseSensitive: false,
+  matchWholeWords: false,
+  useGroupScoring: false,
+  includeNames: true
+};
+
 // packages/tavern-store/src/store.ts
 var DEFAULT_STATE = {
   activeWorlds: [],
@@ -78,6 +93,11 @@ var DEFAULT_STATE = {
   worldFollowsCharacter: true,
   disabledAutoWorlds: [],
   modelSelections: {},
+  quickReplies: [],
+  quickRepliesEnabled: true,
+  characterFavorites: [],
+  agentContextInjection: false,
+  worldInfoSettings: structuredClone(DEFAULT_WORLD_INFO_SETTINGS),
   chats: {},
   regexScripts: [],
   scriptGlobals: {},

@@ -50,6 +50,77 @@
         h('p', { className: 'dt-script-hint' }, t('script.hint')))
     }
 
+    // 快速回复（施工契约 2026-11-12 §2.6）：集合名 → 逐行脚本。composer 按钮与
+    // 输入框的 `/qr <name>` 用同一套解析，服务端只收到一条合并后的脚本——同一个
+    // 脚本作用域里按行序执行，多行 `/setvar` 的局部变量因此能跨行生效。
+    const QUICK_REPLY_COMMAND = /^\/qr\s+(.+)$/i
+    const QUICK_REPLY_BARE_COMMAND = /^\/qr\s*$/i
+    // STscript 命令补全列表（与 packages/tavern-script 的注册表人工同步；
+    // /help 与 composer 建议共用）。只列有实际处理器的命令，未知命令服务端
+    // 仍会明确报错，不在前端假装可用。
+    const SLASH_COMMAND_HINTS = [
+      'send', 'sys', 'comment', 'trigger', 'regenerate', 'stop', 'cut',
+      'continue', 'swipe', 'hide', 'unhide', 'move', 'rename', 'branch',
+      'checkpoint', 'listvar', 'flushvar', 'run', 'qr', 'times', 'regex',
+      'setvar', 'getvar', 'addvar', 'incvar', 'decvar', 'hasvar', 'delvar',
+      'setglobalvar', 'getglobalvar', 'delglobalvar', 'if', 'random', 'roll', 'pick',
+    ]
+
+    function quickReplySetByName(sets, name) {
+      const target = String(name || '').trim().toLowerCase()
+      if (target === '') return undefined
+      return (Array.isArray(sets) ? sets : [])
+        .find((set) => String(set?.name || '').trim().toLowerCase() === target)
+    }
+
+    function quickReplyScriptOf(set) {
+      const lines = Array.isArray(set?.commands)
+        ? set.commands.map((line) => String(line || '').trim()).filter((line) => line !== '')
+        : []
+      return lines.join('\n')
+    }
+
+    /** `/qr <name>` → 集合名（允许引号）；不是 /qr 命令返回 undefined。 */
+    function quickReplyCommandName(draft) {
+      const match = QUICK_REPLY_COMMAND.exec(String(draft || ''))
+      if (match === null) return undefined
+      const raw = match[1].trim()
+      return raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw
+    }
+
+    /**
+     * 快速回复按钮行：只在 ST 架构出现。AgentTavern 的生成走 AgentLoop，没有
+     * STscript 通道，`/qr` 在那里无法执行——按钮不渲染（面板「快速回复」分区
+     * 用同一句话说明原因，避免两处措辞漂移）。样式内联：95-ui-styles.js 不在本
+     * 次改动的文件白名单里。
+     */
+    function QuickReplyBar({ binding, disabled, onRun }) {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const values = state.bootstrap.state || {}
+      if (values.quickRepliesEnabled === false) return null
+      if (bindingArchitecture(binding) !== 'st') return null
+      const sets = (Array.isArray(values.quickReplies) ? values.quickReplies : [])
+        .filter((set) => set?.enabled === true && quickReplyScriptOf(set) !== '')
+      if (sets.length === 0) return null
+      const label = (set) => t('quickReplies.runHint', { name: set.name })
+      return h('div', {
+        className: 'dt-quick-reply-bar',
+        role: 'group',
+        'aria-label': t('quickReplies.title'),
+        style: { width: 'min(var(--dsh-composer-card-max-width,780px),100%)', margin: '0 auto', paddingBottom: '6px', display: 'flex', flexWrap: 'wrap', gap: '6px' },
+      }, sets.map((set) => h('button', {
+        key: set.id || set.name,
+        type: 'button',
+        className: 'dt-quick-reply',
+        title: label(set),
+        'aria-label': label(set),
+        disabled: disabled === true,
+        style: { maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '11px', padding: '2px 8px' },
+        onClick: () => onRun(set),
+      }, set.name)))
+    }
+
     function TavernComposer({ sessionId, useInput, inputActions }) {
       const state = useTavernStore()
       const t = useTranslate()
@@ -57,10 +128,54 @@
       const input = useInput((value) => value)
       const run = state.runs[sessionId] || {}
       const [trigger, setTrigger] = useState('')
+      // 快速回复的执行失败面（未知集合名 / 空集合）：与 run.error 同一个状态位
+      // 展示，不新增浮层。
+      const [quickReplyError, setQuickReplyError] = useState('')
+      const [slashNotice, setSlashNotice] = useState('')
+      const runQuickReply = (set) => {
+        const script = quickReplyScriptOf(set)
+        if (script === '') {
+          setQuickReplyError(t('quickReplies.empty', { name: set.name }))
+          return
+        }
+        setQuickReplyError('')
+        void runTavernScriptCommand(sessionId, binding, script)
+      }
       const send = () => {
         const message = input.draft.trim()
         if (!binding || !message || run.busy) return
+        setSlashNotice('')
         if (message.startsWith('/')) {
+          // `/help`：本地列出命令，不发到服务端（服务端没有 /help）。
+          if (/^\/help\b/i.test(message)) {
+            inputActions.setDraft('')
+            setQuickReplyError('')
+            setSlashNotice(t('composer.slashHelp', { commands: SLASH_COMMAND_HINTS.map((name) => `/${name}`).join(' ') }))
+            return
+          }
+          // 裸 `/qr`：列出可用集合（ST 同款发现路径），不要让它落到服务端的
+          // 「未知命令」上——那里的报错讲不清该输入什么。
+          if (QUICK_REPLY_BARE_COMMAND.test(message)) {
+            const names = (Array.isArray(state.bootstrap.state.quickReplies) ? state.bootstrap.state.quickReplies : [])
+              .filter((set) => set?.enabled === true)
+              .map((set) => set.name)
+            setQuickReplyError(names.length === 0
+              ? t('quickReplies.noSets')
+              : t('quickReplies.usage', { names: names.join(' / ') }))
+            return
+          }
+          const quickReplyName = quickReplyCommandName(message)
+          if (quickReplyName !== undefined) {
+            const set = quickReplySetByName(state.bootstrap.state.quickReplies, quickReplyName)
+            if (set === undefined) {
+              // 草稿保留：名字打错时用户能就地改，不用重打整条命令。
+              setQuickReplyError(t('quickReplies.notFound', { name: quickReplyName }))
+              return
+            }
+            inputActions.setDraft('')
+            runQuickReply(set)
+            return
+          }
           inputActions.setDraft('')
           void runTavernScriptCommand(sessionId, binding, message)
           return
@@ -72,6 +187,10 @@
       const placeholder = binding
         ? `${binding.group === true ? '☰ ' : ''}${t('composer.writeTo', { name: binding.character })}`
         : t('composer.unavailable')
+      const slashPrefix = /^\/([a-z]*)$/i.exec(input.draft.trim())
+      const slashSuggestions = slashPrefix === null
+        ? []
+        : SLASH_COMMAND_HINTS.filter((name) => name.startsWith(slashPrefix[1].toLowerCase())).slice(0, 12)
       return h('div', { className: 'dt-composer-wrap', 'data-dsh-soulmojito-surface': 'composer' },
         binding && bindingArchitecture(binding) === 'st' && binding.group !== true
           ? h(TavernCandidates, {
@@ -80,8 +199,19 @@
             onFill: (text) => inputActions.setDraft(text),
           })
           : null,
+        binding ? h(QuickReplyBar, { binding, disabled: run.busy, onRun: runQuickReply }) : null,
         h('div', { className: 'dt-composer' },
           binding?.group === true ? h(MemberPicker, { binding, disabled: run.busy, selected: trigger, onSelect: setTrigger }) : null,
+          slashSuggestions.length > 0 ? h('div', {
+            className: 'dt-slash-hints',
+            role: 'group',
+            'aria-label': t('composer.slashComplete'),
+          }, slashSuggestions.map((name) => h('button', {
+            key: name,
+            type: 'button',
+            className: 'dt-slash-hint',
+            onClick: () => inputActions.setDraft(`/${name} `),
+          }, `/${name}`))) : null,
           h('textarea', {
             value: input.draft,
             disabled: !binding || run.busy,
@@ -96,7 +226,7 @@
             },
           }),
           h('div', { className: 'dt-composer-row' },
-            h('span', { className: run.error ? 'dt-error' : 'dt-muted' }, run.error || (run.status ? t(run.status) : (binding ? binding.character : ''))),
+            h('span', { className: run.error || quickReplyError ? 'dt-error' : 'dt-muted' }, run.error || quickReplyError || slashNotice || (run.status ? t(run.status) : (binding ? binding.character : ''))),
             h('div', { className: 'dt-composer-actions' },
               h(ModelSelect, { sessionId, locked: run.busy || !binding }),
               run.busy
@@ -522,4 +652,4 @@
             onClick: () => openPanel('guides'),
           }, h(IconListPenOutline16))))
     }
-
+

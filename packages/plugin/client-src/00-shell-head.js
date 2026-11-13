@@ -24,6 +24,7 @@ window.__ModuleLoader__.load({
       IconChevronLeftOutline14,
       IconChevronRightOutline14,
       IconCloseOutline16,
+      IconCodeOutline16,
       IconCordisPluginOutline14,
       IconDataOutline16,
       IconDownloadOutline16,
@@ -125,4 +126,4 @@ window.__ModuleLoader__.load({
     function escapeFrontendAttribute(value) {
       return String(value).replaceAll('&', '&amp;').replaceAll('"', '&quot;')
     }
-
+

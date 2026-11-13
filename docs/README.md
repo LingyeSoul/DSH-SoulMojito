@@ -190,6 +190,7 @@
 - [`2026-10-24-jsr-session-regex-writes.md`](../decisions/2026-10-24-jsr-session-regex-writes.md) — JSR 正则会话写面：`replaceTavernRegexes` / `updateTavernRegexesWith` 写入会话覆盖层
 - [`2026-10-25-deleted-card-regex-cleanup.md`](../decisions/2026-10-25-deleted-card-regex-cleanup.md) — 删除角色卡时清理其卡级正则，并自愈历史孤儿归属脚本（同名新卡不再继承旧脚本）
 - [`2026-10-25-regex-redos-mitigation.md`](../decisions/2026-10-25-regex-redos-mitigation.md) — 正则 ReDoS 缓解：执行前安全门 + 输入上限
+- [`2026-11-12-st-capability-parity.md`](../decisions/2026-11-12-st-capability-parity.md) — ST 原生能力补齐：生成动词、隐藏/消息动作、聊天文件与 checkpoint、QR/AN/summary、世界书设置与 outlet、宏/预设/MANUAL、Agent 自动注入
 
 ### 面板与视图
 
@@ -275,6 +276,7 @@
 - [`2026-08-16-dsh-agentloop-native-audit.md`](exploration/2026-08-16-dsh-agentloop-native-audit.md) — DSH AgentLoop 原生注入、compaction 与 Fabric fallback 审计（`agent-managed` 保持关闭的依据）
 - [`2026-10-11-jsr-lwb-reference.md`](exploration/2026-10-11-jsr-lwb-reference.md) — JS-Slash-Runner 与 LittleWhiteBox 竞品参考与不复刻清单
 - [`2026-10-25-plugin-typecheck-baseline.md`](exploration/2026-10-25-plugin-typecheck-baseline.md) — 插件全量类型检查现状（全量 strict 接入 `pnpm check`）
+- [`2026-11-12-st-native-capability-gaps.md`](exploration/2026-11-12-st-native-capability-gaps.md) — ST 原生能力缺口审计：聊天运行时、资产生成语义、前端/扩展面与 AgentTavern 的缺失项、可挂接位置与优先级（除明确排除项外已按 2026-11-12 决策落地）
 
 ## 计划与记录
 
@@ -282,6 +284,8 @@
 - [`plans/2026-08-16-agent-tavern-implementation.md`](plans/2026-08-16-agent-tavern-implementation.md) — AgentTavern 分阶段施工计划、宿主门禁、迁移规则与验证矩阵
 - [`plans/2026-10-17-source-file-split.md`](plans/2026-10-17-source-file-split.md) — 源码大文件拆分（按领域拆小，行为零变化）
 - [`plans/2026-10-30-im-channels-implementation.md`](plans/2026-10-30-im-channels-implementation.md) — IM 通道施工计划（M0–M5 已落地）
+- [`plans/2026-11-12-st-capability-fix.md`](plans/2026-11-12-st-capability-fix.md) — ST 能力补齐 Wave 1 施工契约（生成/消息/聊天文件/输入/Agent/资产）
+- [`plans/2026-11-12-st-capability-fix-wave2.md`](plans/2026-11-12-st-capability-fix-wave2.md) — ST 能力补齐 Wave 2 施工契约（Data Bank/vectorized/备份/事件桥）
 - [`adr/0001-agenttavern-native-agentloop.md`](adr/0001-agenttavern-native-agentloop.md) — ADR：AgentTavern 复用原生 AgentLoop
 
 ## 开发者文档

@@ -2027,7 +2027,9 @@ function parseGroupFile(obj, name2) {
     name: groupName,
     members,
     allowSelfResponses: bool2(obj["allow_self_responses"], false),
-    activationStrategy: strategy === 2 ? 2 : 1,
+    // ST activation_strategy：0 = MANUAL 必须原样保留（旧实现把 0 静默写成 1，
+    // 导出即回不到原文件）；0/1/2 之外的值回落 NATURAL。
+    activationStrategy: strategy === 0 ? 0 : strategy === 2 ? 2 : 1,
     disabledMembers: Array.isArray(obj["disabled_members"]) ? obj["disabled_members"].filter((value) => typeof value === "string") : [],
     chatId: str3(obj["chat_id"]),
     chats,
@@ -2147,6 +2149,47 @@ function numOrNull(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+// packages/tavern-store/src/world-settings.ts
+var DEFAULT_WORLD_INFO_SETTINGS = {
+  recursive: true,
+  scanDepth: 2,
+  budgetPercent: 25,
+  budgetCap: 0,
+  maxRecursionSteps: 0,
+  minActivations: 0,
+  minActivationsDepthMax: 0,
+  caseSensitive: false,
+  matchWholeWords: false,
+  useGroupScoring: false,
+  includeNames: true
+};
+function clampCount(value, max2, fallback) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.min(max2, Math.round(value)));
+}
+function flagOf(value, fallback) {
+  return typeof value === "boolean" ? value : fallback;
+}
+function worldInfoSettingsOf(state) {
+  const raw = state.worldInfoSettings;
+  const settings = typeof raw === "object" && raw !== null && !Array.isArray(raw) ? raw : {};
+  const base = DEFAULT_WORLD_INFO_SETTINGS;
+  return {
+    recursive: flagOf(settings.recursive, base.recursive),
+    // 扫描深度 0 = 只看最新一条（ST 允许）；上限 100 与面板输入框一致。
+    scanDepth: clampCount(settings.scanDepth, 100, base.scanDepth),
+    budgetPercent: clampCount(settings.budgetPercent, 100, base.budgetPercent),
+    budgetCap: clampCount(settings.budgetCap, 1e6, base.budgetCap),
+    maxRecursionSteps: clampCount(settings.maxRecursionSteps, 100, base.maxRecursionSteps),
+    minActivations: clampCount(settings.minActivations, 100, base.minActivations),
+    minActivationsDepthMax: clampCount(settings.minActivationsDepthMax, 1e3, base.minActivationsDepthMax),
+    caseSensitive: flagOf(settings.caseSensitive, base.caseSensitive),
+    matchWholeWords: flagOf(settings.matchWholeWords, base.matchWholeWords),
+    useGroupScoring: flagOf(settings.useGroupScoring, base.useGroupScoring),
+    includeNames: flagOf(settings.includeNames, base.includeNames)
+  };
+}
+
 // packages/tavern-store/src/store.ts
 var LOCAL_EMBED_PRECISIONS = [
   "auto",
@@ -2193,6 +2236,11 @@ var DEFAULT_STATE = {
   worldFollowsCharacter: true,
   disabledAutoWorlds: [],
   modelSelections: {},
+  quickReplies: [],
+  quickRepliesEnabled: true,
+  characterFavorites: [],
+  agentContextInjection: false,
+  worldInfoSettings: structuredClone(DEFAULT_WORLD_INFO_SETTINGS),
   chats: {},
   regexScripts: [],
   scriptGlobals: {},
@@ -3537,6 +3585,13 @@ var TavernStore = class _TavernStore {
       disabledAutoWorlds: normalizeStringList2(parsed.disabledAutoWorlds),
       ...typeof parsed.regexOwnershipVersion === "number" && Number.isFinite(parsed.regexOwnershipVersion) ? { regexOwnershipVersion: parsed.regexOwnershipVersion } : {},
       modelSelections: parsed.modelSelections ?? {},
+      // 快速回复/收藏/Agent 注入（契约 2026-11-12 §2.6/§2.10）：旧 state.json
+      // 缺键即默认（总开关开、收藏空表、注入关）；世界书设置逐键合并默认。
+      quickReplies: normalizeQuickReplySets(parsed.quickReplies),
+      quickRepliesEnabled: parsed.quickRepliesEnabled !== false,
+      characterFavorites: normalizeStringList2(parsed.characterFavorites),
+      agentContextInjection: parsed.agentContextInjection === true,
+      worldInfoSettings: worldInfoSettingsOf(parsed),
       chats: parsed.chats ?? {},
       regexScripts: parsed.regexScripts ?? [],
       ...regexScriptOwners !== void 0 ? { regexScriptOwners: pruneRegexScriptOwners(regexScriptOwners, parsed.regexScripts ?? []) } : {},
@@ -3715,6 +3770,29 @@ function normalizeStringList2(value) {
     if (trimmed === "" || seen.has(trimmed)) continue;
     seen.add(trimmed);
     result.push(trimmed);
+  }
+  return result;
+}
+function normalizeQuickReplySets(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = /* @__PURE__ */ new Set();
+  const result = [];
+  for (const item of value) {
+    if (!isPlainRecord(item)) continue;
+    const name2 = typeof item.name === "string" ? item.name.trim() : "";
+    if (name2 === "") continue;
+    const id = typeof item.id === "string" && item.id.trim() !== "" ? item.id.trim() : `qr-${name2}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const automationId = typeof item.automationId === "string" ? item.automationId.trim() : "";
+    result.push({
+      id,
+      name: name2,
+      enabled: item.enabled === true,
+      isGlobal: item.isGlobal === true,
+      ...automationId === "" ? {} : { automationId },
+      commands: Array.isArray(item.commands) ? item.commands.filter((line) => typeof line === "string" && line.trim() !== "") : []
+    });
   }
   return result;
 }
@@ -4517,6 +4595,7 @@ async function summarizeStoryCheckpoint(ctx, config, curator, input, agent, sign
   if (!summary.some((block) => block.text.trim().length > 0)) {
     throw new Error("AgentTavern story compaction produced no text summary content");
   }
+  await persistChatSummary(ctx, agent.session.id, summary.map((block) => block.text).join("\n"));
   return {
     summary,
     rawOutput,
@@ -4551,6 +4630,22 @@ function finishError(finish) {
 var tavernStorePromise;
 function tavernStore() {
   return tavernStorePromise ??= sharedTavernStore(tavernDataRoot());
+}
+var MAX_STORED_SUMMARY_CHARS = 8e3;
+async function persistChatSummary(ctx, sessionId, text) {
+  const trimmed = text.trim();
+  if (trimmed === "") return;
+  const summary = trimmed.length <= MAX_STORED_SUMMARY_CHARS ? trimmed : `${trimmed.slice(0, MAX_STORED_SUMMARY_CHARS - 1)}\u2026`;
+  try {
+    const db = await tavernStore();
+    const binding = (await db.getState()).sessionBindings[sessionId];
+    if (!binding || binding.architecture !== "agent-tavern" || binding.group === true) return;
+    await db.withChat(binding.character, binding.chatId, (chat) => {
+      chat.header.chat_metadata["summary"] = summary;
+    }, { attempts: 3, delayMs: (attempt) => 25 * (attempt + 1) });
+  } catch (error) {
+    warn(ctx, `chat summary write-back failed (compaction itself succeeded): ${messageOf(error)}`);
+  }
 }
 async function isStorySession(sessionId) {
   try {

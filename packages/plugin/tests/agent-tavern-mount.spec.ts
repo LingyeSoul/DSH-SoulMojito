@@ -111,8 +111,9 @@ describe('AgentTavern native module mount', () => {
     expect([...tools.keys()]).toContain('tavern_character_get')
     // 18 原有 + 游戏桥七件（提案 0018 §4.2；game_wait 为 2026-10-14 修订，
     // game_history 为同日增量修订，game_wait_full 为 2026-10-16 新增）
+    // + 数据银行检索（2026-11-12）。
     // IM tools are mounted by im/agent-mount.ts into every native agent instead.
-    expect(tools.size).toBe(25)
+    expect(tools.size).toBe(26)
   })
 
   it('renders the bound character and user persona inside the complete system prompt', async () => {

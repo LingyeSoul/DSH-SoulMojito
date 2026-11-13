@@ -127,7 +127,7 @@ export async function setup(api) {
   （踩坑实录：[decisions/2026-10-12-story-clock-engines-drift.md](../../decisions/2026-10-12-story-clock-engines-drift.md)）。
 
 ```jsonc
-"engines": { "dsh-soulmojito": "^0.7.8" }   // 宿主 0.7.x 且 ≥0.7.8
+"engines": { "dsh-soulmojito": "^0.7.9" }   // 宿主 0.7.x 且 ≥0.7.9
 ```
 
 ---
@@ -231,7 +231,7 @@ await api.storage.delete('counter')          // boolean（是否存在）
 | `chat-saved` | `{character, chatId, revision, floorCount}` | 聊天落盘后（PUT chat / guides 写入 / 生成两段落盘 / STscript persist）。`floorCount` = 落盘后楼层总数（messages.length 原始计数）——「每 N 楼执行」类调度直接比对这个字段，不必整聊拉取 |
 | `assets-saved` | `{kind, name}` | 资产保存/导入后（character/world/preset/persona/group） |
 | `guides-changed` | `{character, chatId}` | 持续指引变更 |
-| `stream-delta` | `{mode, character, chatId, text, delta}` | ST 生成循环每收到一个正文 text-delta chunk（累积拼接之后）。`mode ∈ send/regenerate/trigger`；`text` = 当前累积全文（fully 通道），`delta` = 本次增量（incrementally 通道）——一个事件双字段，Mod 自选粒度做打字机进度 / 实时 UI |
+| `stream-delta` | `{mode, character, chatId, text, delta}` | ST 生成循环每收到一个正文 text-delta chunk（累积拼接之后）。`mode ∈ send/regenerate/trigger/continue/impersonate`；`text` = 当前累积全文（fully 通道），`delta` = 本次增量（incrementally 通道）——一个事件双字段，Mod 自选粒度做打字机进度 / 实时 UI |
 
 ```js
 const off = api.events.on('chat-saved', async (payload) => { ... })   // 返回反注册
@@ -246,7 +246,7 @@ handler 抛错：吞掉 + `event-error` 审计，不影响其他监听方与宿�
   LLM 调用等重活仍是自找的放大器——累积统计用节流/末次快照，别逐 chunk 落盘。
 - reasoning 增量**不进事件**（v1 只观察正文）；Stop/abort 后停发。
 - 覆盖范围（v1 如实）：只覆盖 **ST 生成循环**（runGeneration 的 llm.stream 消费点，
-  send/regenerate/trigger 三 mode）。AgentTavern 生成走宿主 AgentLoop，本事件**收不到**
+  send/regenerate/trigger/continue/impersonate 五 mode）。AgentTavern 生成走宿主 AgentLoop，本事件**收不到**
   ——流式观察对 AgentTavern 的可达性是 v1 范围外。
 - **不进 §13 的 iframe 下行**（`dsh-soulmojito:mod-event`）：流式高频广播到浏览器面
   弊大于利，iframe UI 需要进度时走自己的 HTTP 子路由拉取。
@@ -346,7 +346,7 @@ pre-llm 改写 `params.provider/model` 后，落盘元数据（`swipe_info[].ext
 宿主会话轨迹）记录**改写后的实参**——与实际发给 llm.stream 的请求一致，不记生成器选择器的
 原值。
 
-context（第二参数，只读）：`{phase, mode: 'send'|'regenerate'|'trigger', character, chatId, group}`。
+context（第二参数，只读）：`{phase, mode: 'send'|'regenerate'|'trigger'|'continue'|'impersonate', character, chatId, group}`。
 
 ```js
 api.hooks.on('post-output', async (text, context) => {

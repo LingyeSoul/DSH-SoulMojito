@@ -20,7 +20,10 @@ export interface MacroCardFields {
   description?: string;
   personality?: string;
   scenario?: string;
-  /** Card `mes_example` -> {{mesExamples}} / {{mesExamplesRaw}} */
+  /**
+   * Card `mes_example` -> {{mesExamplesRaw}}（原文）/ {{mesExamples}}（ST 清洗后：
+   * 按 `<START>` 切块、trim 并重建标题，见 engine 的 formatExampleMessages）。
+   */
   mesExample?: string;
   /** Card `system_prompt` -> {{charPrompt}} */
   systemPrompt?: string;
@@ -47,6 +50,11 @@ export interface MacroEngineInit {
   persona?: string;
   /** Card fields (all optional; unset -> empty string) */
   card?: MacroCardFields;
+  /**
+   * 世界书 outlet 文本（ST getOutletPrompt）：outlet 名 -> 已激活条目内容。
+   * `{{outlet::名称}}` 按名取值；未提供该名字时保持宏原文，不伪造成空串。
+   */
+  outlets?: Record<string, string>;
   /** Preset-level system prompt -> {{systemPrompt}} */
   systemPrompt?: string;
   /** Passthrough -> {{original}} */

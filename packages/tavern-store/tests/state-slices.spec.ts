@@ -31,11 +31,13 @@ const STORAGE_CHARACTER_COUNT = 4
  */
 const PRE_SPLIT_DEFAULT_STATE_KEYS = [
   'activeWorlds',
+  'agentContextInjection',
   'agentNovelPresetEnabled',
   'agentTavernAllowGlobalWrites',
   'agentTavernPreloadAssets',
   'cardScriptsAutoRun',
   'cardWorkbenchPresetEnabled',
+  'characterFavorites',
   'characterVariables',
   'chats',
   'defaultArchitecture',
@@ -54,10 +56,13 @@ const PRE_SPLIT_DEFAULT_STATE_KEYS = [
   'modelSelections',
   'mods',
   'modsEnabled',
+  'quickReplies',
+  'quickRepliesEnabled',
   'regexScripts',
   'scriptGlobals',
   'sessionBindings',
   'worldFollowsCharacter',
+  'worldInfoSettings',
 ]
 
 async function withStore(run: (store: TavernStore, dir: string) => Promise<void>): Promise<void> {

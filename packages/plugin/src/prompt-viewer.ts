@@ -139,6 +139,22 @@ export interface PromptViewerInput {
 
 type HostLogger = { warn?: (message: string) => unknown }
 
+/**
+ * 最近一轮 ST 生成的 world-info 激活轨迹（helper snapshot 用）：按
+ * character+chatId 从环形缓冲从后向前找第一条带 loreTrace 的记录。
+ * 读不到返回 undefined；不制造空轨迹。
+ */
+export function latestPromptViewLoreTrace(character: string, chatId: string): (PromptViewerLoreTrace & { seq: number }) | undefined {
+  const state = viewerState()
+  for (let index = state.records.length - 1; index >= 0; index--) {
+    const record = state.records[index]
+    if (record !== undefined && record.character === character && record.chatId === chatId && record.loreTrace !== undefined) {
+      return { ...record.loreTrace, seq: record.seq }
+    }
+  }
+  return undefined
+}
+
 /* ------------------------------ 环形缓冲 ------------------------------ */
 
 /**

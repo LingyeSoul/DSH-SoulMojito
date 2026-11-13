@@ -205,6 +205,77 @@
             h('a', { href: link.href, target: '_blank', rel: 'noreferrer noopener' }, link.text)))))
     }
 
+    function PanelBackup() {
+      const t = useTranslate()
+      const [mode, setMode] = useState('merge')
+      const [busy, setBusy] = useState(false)
+      const [error, setError] = useState('')
+      const [result, setResult] = useState(null)
+      const importBackup = (file) => {
+        if (file === undefined) return
+        if (mode === 'replace' && !window.confirm(t('backup.confirmReplace'))) return
+        setBusy(true)
+        setError('')
+        setResult(null)
+        const reader = new FileReader()
+        reader.onerror = () => {
+          setBusy(false)
+          setError(reader.error instanceof Error ? reader.error.message : t('backup.failed'))
+        }
+        reader.onload = () => {
+          const value = typeof reader.result === 'string' ? reader.result : ''
+          const base64 = value.includes(',') ? value.slice(value.indexOf(',') + 1) : value
+          void api('import/backup', {
+            method: 'POST',
+            headers: jsonHeaders(),
+            body: JSON.stringify({ zipBase64: base64, mode }),
+          }).then((response) => {
+            setResult(response)
+            return refreshBootstrap()
+          }).catch((cause) => {
+            setError(cause instanceof Error ? cause.message : String(cause))
+          }).finally(() => setBusy(false))
+        }
+        reader.readAsDataURL(file)
+      }
+      return h('section', { className: 'dt-settings-band' },
+        h('h3', null, t('panel.section.backup')),
+        h('p', { className: 'dt-hint' }, t('backup.hint')),
+        h('div', { className: 'dt-editor-toolbar' },
+          h('button', {
+            type: 'button',
+            disabled: busy,
+            onClick: () => downloadAsset('export/backup', 'soulmojito-backup.zip'),
+          }, t('backup.export')),
+          h('label', { className: 'dt-upload', title: t('backup.import') },
+            busy ? t('backup.importing') : t('backup.import'),
+            h('input', {
+              type: 'file',
+              accept: '.zip,application/zip',
+              disabled: busy,
+              onChange: (event) => {
+                const file = event.target.files?.[0]
+                event.target.value = ''
+                importBackup(file)
+              },
+            }))),
+        h('label', { className: 'dt-field' },
+          h('span', { className: 'dt-label' }, t('backup.mode')),
+          h('select', { value: mode, onChange: (event) => setMode(event.target.value === 'replace' ? 'replace' : 'merge') },
+            h('option', { value: 'merge' }, t('backup.mode.merge')),
+            h('option', { value: 'replace' }, t('backup.mode.replace')))),
+        mode === 'replace' ? h('p', { className: 'dt-hint' }, t('backup.replaceHint')) : null,
+        error ? h('p', { className: 'dt-message-error' }, error) : null,
+        result ? h('div', { className: 'dt-hint' },
+          h('p', null, t('backup.done', {
+            imported: String(result.imported ?? 0),
+            skipped: String(result.skipped ?? 0),
+            conflicts: String(result.conflicts ?? 0),
+            rejected: String(result.rejected ?? 0),
+          })),
+          result.snapshot ? h('p', null, t('backup.snapshot', { name: String(result.snapshot) })) : null) : null)
+    }
+
     function TavernPanel({ ctx, useSessions }) {
       const state = useTavernStore()
       const t = useTranslate()
@@ -475,4 +546,4 @@
       }, h(SoulMojitoLogo, { size: wide ? 16 : 18 }), wide ? h('span', { className: 'dt-footer-label' }, 'SoulMojito') : null)
       return wide ? button : h(Tooltip, { label: t('panel.open'), side: 'right' }, button)
     }
-
+

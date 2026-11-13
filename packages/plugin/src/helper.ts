@@ -61,7 +61,8 @@ import { HttpError } from './http/errors.js'
 import { readChatVariables } from './mvu.js'
 import { ensureChatVariables } from './agent-tavern/mvu-compat.js'
 import { emitChatSaved } from './mods/events.js'
-import { DEFAULT_USER } from './prompt-context.js'
+import { DEFAULT_USER, macroCardFieldsOf } from './prompt-context.js'
+import { latestPromptViewLoreTrace } from './prompt-viewer.js'
 import { templatesEnabledFlagValue, variableGateway } from './runtime.js'
 import type { MirrorOutcome, VariableTree } from './variable-gateway.js'
 import { normalizeVariableTree } from './variable-merge.js'
@@ -532,6 +533,7 @@ async function buildSnapshot(db: TavernStore, state: TavernState, character: str
       messages: [],
       messageCount: 0,
       lastMessageId: -1,
+      lore: null,
       variables: {
         global: cloneJson(plainObject(state.scriptGlobals) ?? {}),
         chat: {},
@@ -580,6 +582,7 @@ async function buildSnapshot(db: TavernStore, state: TavernState, character: str
     messages: chat.messages.map((message, index) => toJsrMessage(message, index)),
     messageCount: chat.messages.length,
     lastMessageId: lastIndex,
+    lore: latestPromptViewLoreTrace(character, chatId) ?? null,
     variables: {
       global: cloneJson(plainObject(state.scriptGlobals) ?? {}),
       chat: cloneJson(chatVariables),
@@ -1779,10 +1782,14 @@ async function runHelperSlash(
   // /regex is the SLASH_COMMAND application point; read the same session-aware
   // list the generation pipeline uses so a chat-local regex write applies here.
   const regexScripts = await collectSessionRegexScripts(db, state, character, chatId, file)
+  const cardData = file?.card.data
   const macros = createMacroEngine({
-    char: file?.card.data.nickname || file?.card.data.name || character,
+    char: cardData?.nickname || cardData?.name || character,
     user: state.activePersona ?? DEFAULT_USER,
     persona: state.activePersona ? (await db.getPersona(state.activePersona))?.description : undefined,
+    // 卡字段与 AgentTavern 预载同一映射（macroCardFieldsOf）：卡作者的 STscript 里
+    // {{description}}/{{charPrompt}}/{{mesExamples}} 等必须与生成面同值。
+    ...(cardData === undefined ? {} : { card: macroCardFieldsOf(cardData) }),
     lastMessage: chat.messages[chat.messages.length - 1]?.mes,
     lastUserMessage: [...chat.messages].reverse().find((message) => message.is_user)?.mes,
     lastCharMessage: [...chat.messages].reverse().find((message) => !message.is_user && !message.is_system)?.mes,

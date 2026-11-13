@@ -28,10 +28,19 @@
       { id: 'characters', group: 'content', icon: IconUserOutline16, label: (t) => t('panel.section.characters'), component: (host) => h(PanelCharacters, { ctx: host.ctx, useSessions: host.useSessions }) },
       { id: 'chats', group: 'session', icon: IconQueueOutline14, label: (t) => t('panel.section.chats'), component: (host) => h(TavernSidebar, { ctx: host.ctx, useSessions: host.useSessions }) },
       { id: 'guides', group: 'session', icon: IconListPenOutline16, label: (t) => t('panel.section.guides'), component: (host) => h(PanelGuides, { useSessions: host.useSessions }) },
+      // 聊天注记（契约 2026-11-12 §2.4）：Author's Note 与 Summary 写当前聊天
+      // 的 chat_metadata。session 组——按聊天生效，换聊天即换内容。
+      { id: 'notes', group: 'session', icon: IconEditOutline16, label: (t) => t('panel.section.notes'), component: (host) => h(ChatNotesBand, { useSessions: host.useSessions }) },
       { id: 'novels', group: 'content', icon: IconEditOutline16, label: (t) => t('panel.section.novels'), component: (host) => h(PanelNovels, { ctx: host.ctx }) },
       { id: 'groups', group: 'content', icon: IconPlusOutline16, label: (t) => t('panel.section.groups'), component: () => h(GroupBand) },
       { id: 'personas', group: 'content', icon: IconPersonalizationOutline16, label: (t) => t('panel.section.personas'), component: () => h(PersonaBand) },
       { id: 'worlds', group: 'content', icon: IconBrowseOutline16, label: (t) => t('panel.section.worlds'), component: (host) => h(PanelWorlds, { useSessions: host.useSessions }) },
+      // 快速回复（契约 2026-11-12 §2.6）：集合 CRUD + composer 按钮行总开关。
+      // content 组——它是输入辅助资产，与卡/书/预设同层。
+      { id: 'quickReplies', group: 'content', icon: IconQueueOutline14, label: (t) => t('panel.section.quickReplies'), component: () => h(QuickRepliesBand) },
+      // 数据银行（Wave 2 契约 §2.5）：文本文件入库/列表/删除/附加当前聊天/检索
+      // 测试。content 组——它是可检索的参考资料，与卡/书/预设同层。
+      { id: 'dataBank', group: 'content', icon: IconDataOutline16, label: (t) => t('panel.section.dataBank'), component: (host) => h(DataBankBand, { useSessions: host.useSessions }) },
       // 第 19 个分区「行为设置」（2026-10-21 用户需求「改进管理面板交互」）：
       // 散养在「当前配置」架构分支、世界书清单顶与游戏清单顶的行为开关全部收编
       // 到这里，按行为对应关系分组（会话 / 世界书 / 工具写入 / 前端与卡脚本 / 游戏）。
@@ -58,7 +67,10 @@
       { id: 'memory', group: 'system', icon: IconRefreshOutline16, label: (t) => t('panel.section.memory'), component: () => h(MemoryRetrievalBand) },
       // 第 17 个分区「提示词」（A-6，2026-10-11）：ST 循环实发请求 + 世界书激活
       // 追踪的只读查看器（服务端 prompt-viewer.ts 环形缓冲）。
-      { id: 'prompts', group: 'system', icon: IconDownloadOutline16, label: (t) => t('panel.section.prompts'), component: () => h(PanelPrompts) },
+      { id: 'prompts', group: 'system', icon: IconCodeOutline16, label: (t) => t('panel.section.prompts'), component: () => h(PanelPrompts) },
+      // 第 20 个分区「备份」（2026-11-12）：整库 ZIP 导出/导入（merge/replace，
+      // replace 前服务端自动快照）。数据面见 http/backup-routes.ts。
+      { id: 'backup', group: 'system', icon: IconDownloadOutline16, label: (t) => t('panel.section.backup'), component: () => h(PanelBackup) },
       // 第 19 个分区「关于」（2026-10-12）：插件版本 stamp + 官网/作者/源码
       // 仓库外链，纯静态信息面。自绘 info 图标（宿主清单无此语义图形）。
       { id: 'about', icon: IconInfoOutline16, label: (t) => t('panel.section.about'), component: () => h(PanelAbout) },
@@ -379,9 +391,24 @@
       // 创建中的新卡不受过滤影响（避免「正填着被过滤掉」）。
       const [characterFilter, setCharacterFilter] = useState('')
       const characterQuery = characterFilter.trim().toLowerCase()
+      // 角色收藏（契约 2026-11-12 §2.11）：bootstrap.characters 是字母序，收藏表
+      // 给出置顶顺序（按收藏先后，而不是再排一次字母）。星标即写
+      // state.characterFavorites——与 activeWorlds 同款「数组即顺序」语义。
+      const favorites = Array.isArray(state.bootstrap.state.characterFavorites)
+        ? state.bootstrap.state.characterFavorites
+        : []
+      const orderedCharacters = [
+        ...favorites.filter((name) => characters.includes(name)),
+        ...characters.filter((name) => !favorites.includes(name)),
+      ]
+      const toggleFavorite = (name) => run(patchState({
+        characterFavorites: favorites.includes(name)
+          ? favorites.filter((item) => item !== name)
+          : [...favorites, name],
+      }))
       const visibleCharacters = characterQuery === ''
-        ? characters
-        : characters.filter((name) => name.toLowerCase().includes(characterQuery))
+        ? orderedCharacters
+        : orderedCharacters.filter((name) => name.toLowerCase().includes(characterQuery))
       const characterGrid = h('div', { className: 'dt-card-grid' },
         visibleCharacters.map((name) => {
           const active = activeCharacter === name
@@ -392,7 +419,17 @@
               h('img', { src: `${API}/avatar/${encodeURIComponent(name)}`, alt: '' }),
               h('div', { className: 'dt-card-title' },
                 h('strong', null, name),
-                card?.data?.creator ? h('span', null, t('panel.characters.creator', { name: card.data.creator })) : null)),
+                card?.data?.creator ? h('span', null, t('panel.characters.creator', { name: card.data.creator })) : null),
+              // 星标（收藏）：★ = 已收藏，点击切换；排序在清单层完成。
+              h('button', {
+                type: 'button',
+                className: 'dt-card-favorite',
+                'aria-pressed': favorites.includes(name),
+                title: t(favorites.includes(name) ? 'panel.characters.unfavorite' : 'panel.characters.favorite', { name }),
+                'aria-label': t(favorites.includes(name) ? 'panel.characters.unfavorite' : 'panel.characters.favorite', { name }),
+                onClick: () => toggleFavorite(name),
+                style: { background: 'transparent', border: 0, cursor: 'pointer', fontSize: '15px', lineHeight: 1, padding: '0 2px' },
+              }, favorites.includes(name) ? '★' : '☆')),
             h('div', { className: 'dt-card-actions' },
               active
                 ? h(Pill, { active: true }, t('panel.characters.active'))
@@ -528,12 +565,13 @@
             h(EditorField, { label: t('panel.worlds.keysSecondary'), value: commaList(entry.keysecondary), onChange: (value) => setEntry(entry.uid, 'keysecondary', parseCommaList(value)) }),
             h(EditorField, { label: t('panel.worlds.order'), value: entry.order, type: 'number', onChange: (value) => setEntry(entry.uid, 'order', value) }),
             h(EditorField, { label: t('panel.worlds.depth'), value: entry.depth, type: 'number', min: 0, onChange: (value) => setEntry(entry.uid, 'depth', value) }),
-            h(EditorField, { label: 'Probability', value: entry.probability, type: 'number', min: 0, max: 100, onChange: (value) => setEntry(entry.uid, 'probability', value) }),
+            h(EditorField, { label: t('panel.worlds.probability'), value: entry.probability, type: 'number', min: 0, max: 100, onChange: (value) => setEntry(entry.uid, 'probability', value) }),
             h(EditorField, { label: t('panel.worlds.content'), value: entry.content, onChange: (value) => setEntry(entry.uid, 'content', value), multiline: true, className: 'dt-editor-wide' }),
             h('div', { className: 'dt-editor-toggles dt-editor-wide' },
               h(ToggleField, { label: t('panel.worlds.enabled'), checked: !entry.disable, onChange: (value) => setEntry(entry.uid, 'disable', !value) }),
               h(ToggleField, { label: t('panel.worlds.constant'), checked: entry.constant, onChange: (value) => setEntry(entry.uid, 'constant', value) }),
-              h(ToggleField, { label: t('panel.worlds.selective'), checked: entry.selective, onChange: (value) => setEntry(entry.uid, 'selective', value) })))))),
+              h(ToggleField, { label: t('panel.worlds.selective'), checked: entry.selective, onChange: (value) => setEntry(entry.uid, 'selective', value) })),
+            h(WorldEntryAdvancedFields, { entry, onChange: (key, value) => setEntry(entry.uid, key, value) }))))),
         error ? h('p', { className: 'dt-error' }, error) : null))
     }
 
@@ -696,6 +734,7 @@
                   if (window.confirm(t('panel.worlds.deleteConfirm', { name }))) run(deleteWorldBook(name))
                 },
               }))))),
+         h(WorldInfoSettingsForm),
          viewing !== ''
            ? h(WorldBookView, {
              name: viewing,
@@ -715,4 +754,198 @@
            : null,
          error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
     }
-
+
+    /**
+     * 数据银行分区（Wave 2 契约 §2.5）：文本文件上传/粘贴、列表、删除、附加到
+     * 当前聊天、检索测试。附件是 chat 级开关（默认不附加，写
+     * chat_metadata.dataBankIds）；检索通道如实展示 vector / lexical——词法
+     * fallback 不是语义检索，不能让它看起来像。
+     */
+    function DataBankBand({ useSessions }) {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const sessionId = useCurrentSessionId(useSessions)
+      const binding = sessionId ? state.bootstrap.state.sessionBindings?.[sessionId] : undefined
+      const key = binding ? chatKey(binding.character, binding.chatId) : ''
+      const chat = binding ? state.chats[key] : null
+      const meta = chat?.header?.chat_metadata
+      const attachedIds = Array.isArray(meta?.dataBankIds) ? meta.dataBankIds : []
+      const [files, setFiles] = useState([])
+      const [embedding, setEmbedding] = useState(false)
+      const [loading, setLoading] = useState(true)
+      const [busy, setBusy] = useState(false)
+      const [error, setError] = useState('')
+      const [notice, setNotice] = useState('')
+      const [pasteName, setPasteName] = useState('')
+      const [pasteText, setPasteText] = useState('')
+      const [query, setQuery] = useState('')
+      const [probe, setProbe] = useState(null)
+
+      const reload = () => api('data-bank')
+        .then((result) => {
+          setFiles(Array.isArray(result.files) ? result.files : [])
+          setEmbedding(result.embedding?.configured === true)
+        })
+        .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+        .finally(() => setLoading(false))
+
+      useEffect(() => { void reload() }, [])
+      useEffect(() => {
+        if (!binding) return
+        if (chat === null || chat === undefined) { void loadChat(binding.character, binding.chatId).catch(() => {}) }
+      }, [binding?.character, binding?.chatId, chat === null])
+
+      // 文本一律经 TextEncoder 转字节再 base64：mime 由服务端按扩展名/声明推断，
+      // 二进制文件由服务端拒绝（前端的 accept 只是便利过滤）。
+      const importText = (fileName, content) => {
+        const text = String(content ?? '')
+        if (text.trim() === '') return
+        setBusy(true)
+        setError('')
+        setNotice('')
+        void api('import/data-bank', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ name: fileName, contentBase64: bytesToBase64(new TextEncoder().encode(text)) }),
+        })
+          .then((result) => {
+            setNotice(result.created === false
+              ? t('panel.dataBank.duplicate')
+              : t('panel.dataBank.imported', { count: result.chunks }))
+            return reload()
+          })
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setBusy(false))
+      }
+
+      const toggleAttach = (id, attached) => {
+        if (!binding) return
+        const next = attached ? [...attachedIds, id] : attachedIds.filter((value) => value !== id)
+        setBusy(true)
+        setError('')
+        void api('chat-data-bank', {
+          method: 'PUT',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ character: binding.character, chatId: binding.chatId, ids: next }),
+        })
+          .then(() => loadChat(binding.character, binding.chatId, true))
+          .then(() => setNotice(t('panel.saved')))
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setBusy(false))
+      }
+
+      const remove = (file) => {
+        if (!window.confirm(t('panel.dataBank.deleteConfirm', { name: file.name }))) return
+        setBusy(true)
+        setError('')
+        void api(`data-bank/${encodeURIComponent(file.id)}`, { method: 'DELETE' })
+          .then(() => reload())
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setBusy(false))
+      }
+
+      const runSearch = () => {
+        const text = query.trim()
+        if (text === '') return
+        setBusy(true)
+        setError('')
+        void api('data-bank/search', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ query: text, limit: 5 }),
+        })
+          .then((result) => setProbe({ mode: result.mode, hits: Array.isArray(result.hits) ? result.hits : [] }))
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setBusy(false))
+      }
+
+      return h('section', { className: 'dt-settings-band' },
+        h('h3', null, t('panel.dataBank.title')),
+        h('p', { className: 'dt-hint' }, t('panel.dataBank.hint')),
+        embedding ? null : h('p', { className: 'dt-hint' }, t('panel.dataBank.embeddingOff')),
+        h('div', { className: 'dt-band-actions' },
+          h('label', { className: 'dt-upload', title: t('panel.dataBank.uploadTitle') },
+            busy ? t('settings.importing') : t('panel.dataBank.upload'),
+            h('input', {
+              type: 'file',
+              accept: '.txt,.md,.json,.csv,text/plain,text/markdown,application/json,text/csv',
+              disabled: busy,
+              onChange: (event) => {
+                const file = event.target.files?.[0]
+                event.target.value = ''
+                if (!file) return
+                void readFile(file, false).then((content) => importText(file.name, content))
+              },
+            })),
+          binding
+            ? h('span', { className: 'dt-muted' }, t('panel.dataBank.attachHint', { character: binding.character, chatId: binding.chatId }))
+            : h('span', { className: 'dt-muted' }, t('panel.dataBank.noChat'))),
+        h('div', { className: 'dt-editor-grid' },
+          h(EditorField, { label: t('panel.dataBank.pasteName'), value: pasteName, onChange: setPasteName, hint: t('panel.dataBank.pasteNameHint') }),
+          h(EditorField, { label: t('panel.dataBank.pasteText'), value: pasteText, onChange: setPasteText, multiline: true, className: 'dt-editor-wide' })),
+        h('div', { className: 'dt-band-actions' },
+          h(Button, {
+            size: 'sm',
+            variant: 'outline',
+            icon: h(IconPlusOutline16),
+            disabled: busy || pasteText.trim() === '',
+            onClick: () => importText(pasteName.trim() || t('panel.dataBank.pasteDefaultName'), pasteText),
+          }, t('panel.dataBank.import'))),
+        loading ? h('p', { className: 'dt-muted' }, t('nav.loading')) : null,
+        !loading && files.length === 0 ? h('p', { className: 'dt-muted' }, t('panel.dataBank.empty')) : null,
+        files.length === 0 ? null : h('div', { className: 'dt-editor-entries' }, files.map((file) => h('section', { key: file.id, className: 'dt-editor-entry' },
+          h('div', { className: 'dt-editor-entry-head' },
+            h('strong', null, file.name),
+            h(Button, {
+              size: 'sm',
+              variant: 'ghost',
+              icon: h(IconTrashOutline16),
+              'aria-label': t('panel.dataBank.delete', { name: file.name }),
+              title: t('panel.dataBank.delete', { name: file.name }),
+              disabled: busy,
+              onClick: () => remove(file),
+            })),
+          h('p', { className: 'dt-muted' }, t('panel.dataBank.meta', {
+            chunks: file.chunks,
+            size: Math.max(1, Math.round(Number(file.size || 0) / 1024)),
+            id: file.id,
+          })),
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: attachedIds.includes(file.id),
+              // 聊天还没载入时禁止改写附件：否则空 baseline 会把既有附件冲掉。
+              disabled: busy || !binding || chat === null || chat === undefined,
+              onChange: (event) => toggleAttach(file.id, event.target.checked),
+            }),
+            h('span', null, t('panel.dataBank.attach')))))),
+        h('h4', null, t('panel.dataBank.searchTitle')),
+        h('div', { className: 'dt-editor-grid' },
+          h(EditorField, {
+            label: t('panel.dataBank.searchLabel'),
+            value: query,
+            onChange: setQuery,
+            className: 'dt-editor-wide',
+            hint: t('panel.dataBank.searchHint'),
+          })),
+        h('div', { className: 'dt-band-actions' },
+          h(Button, {
+            size: 'sm',
+            variant: 'primary',
+            icon: h(IconSearchOutline16),
+            disabled: busy || query.trim() === '',
+            onClick: runSearch,
+          }, t('panel.dataBank.search'))),
+        probe === null ? null : h('div', null,
+          h('p', { className: 'dt-muted' }, probe.mode === 'vector' ? t('panel.dataBank.modeVector') : t('panel.dataBank.modeLexical')),
+          probe.hits.length === 0
+            ? h('p', { className: 'dt-muted' }, t('panel.dataBank.searchEmpty'))
+            : h('div', { className: 'dt-editor-entries' }, probe.hits.map((hit, index) => h('section', { key: `${hit.id}-${hit.chunkIndex}-${index}`, className: 'dt-editor-entry' },
+              h('div', { className: 'dt-editor-entry-head' },
+                h('strong', null, hit.name),
+                h('span', { className: 'dt-muted' }, ` · ${Number(hit.score || 0).toFixed(3)}`)),
+              h('p', { className: 'dt-muted' }, String(hit.text ?? '').slice(0, 400)))))),
+        notice ? h('p', { className: 'dt-muted' }, notice) : null,
+        error ? h('p', { className: 'dt-error' }, error) : null)
+    }
+

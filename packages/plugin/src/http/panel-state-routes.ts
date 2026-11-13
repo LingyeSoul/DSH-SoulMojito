@@ -2,7 +2,7 @@
 // list, one session's model selection, and the bulk state patch that drives the
 // panel settings surface.
 
-import type { TavernModelSelection, TavernStore } from '../../../tavern-store/src/index.js'
+import { worldInfoSettingsOf, type TavernModelSelection, type TavernStore, type WorldInfoSettings } from '../../../tavern-store/src/index.js'
 import { agentPtcCapabilitiesForHost, refreshAgentPtcMode } from '../agent-ptc-mode.js'
 import { emitAgentPresetChanged } from '../agent-tavern/preset.js'
 import type { PluginContext } from '../host-contract.js'
@@ -148,6 +148,22 @@ export async function handleStateUpdateRoute(
       : {}),
     ...(typeof body.worldFollowsCharacter === 'boolean'
       ? { worldFollowsCharacter: body.worldFollowsCharacter }
+      : {}),
+    // Agent 生成上下文注入（契约 2026-11-12 §2.10）：默认关闭，逐次由
+    // AgentTavern 的 context 部件读取，无缓存需写穿。
+    ...(typeof body.agentContextInjection === 'boolean'
+      ? { agentContextInjection: body.agentContextInjection }
+      : {}),
+    // 角色收藏（契约 2026-11-12 §2.11）：面板清单按此表置顶排序；非字符串项
+    // 丢弃（与 activeWorlds 同款容错），空表即清空收藏。
+    ...(Array.isArray(body.characterFavorites)
+      ? { characterFavorites: body.characterFavorites.filter((name) => typeof name === 'string') }
+      : {}),
+    // 世界书全局设置（契约 2026-11-12 §2.8）：Partial 落库，用与读路径同一个
+    // worldInfoSettingsOf 归一（非法类型回落默认、数值夹取），不把面板的脏值
+    // 直接写进 state。
+    ...(body.worldInfoSettings !== undefined
+      ? { worldInfoSettings: worldInfoSettingsOf({ worldInfoSettings: body.worldInfoSettings as Partial<WorldInfoSettings> }) }
       : {}),
     ...(body.compaction !== undefined ? { compaction: compactionOverrideOf(body.compaction) } : {}),
   }

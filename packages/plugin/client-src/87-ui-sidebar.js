@@ -336,7 +336,58 @@
         setBusyChat(chatId)
         void action().catch((cause) => setError(cause.message)).finally(() => setBusyChat(''))
       }
+      const exportChat = (chatId) => runAction(chatId, async () => {
+        const result = await api(`export/chat/${encodeURIComponent(character)}/${encodeURIComponent(chatId)}`)
+        const content = typeof result.content === 'string' ? result.content : ''
+        const blob = new Blob([content], { type: 'application/jsonl' })
+        const anchor = document.createElement('a')
+        anchor.href = URL.createObjectURL(blob)
+        anchor.download = chatId
+        document.body.appendChild(anchor)
+        anchor.click()
+        anchor.remove()
+        URL.revokeObjectURL(anchor.href)
+      })
+      const duplicateChat = (chatId) => runAction(chatId, async () => {
+        const snapshot = await api(`chat/${encodeURIComponent(chatId)}?character=${encodeURIComponent(character)}`)
+        await api('duplicate', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ character, chatId, revision: snapshot.revision }),
+        })
+        await loadChatList(character, true)
+      })
+      const importChat = (file) => {
+        if (file === undefined) return
+        const name = file.name.replace(/\.jsonl$/i, '')
+        const reader = new FileReader()
+        reader.onerror = () => setError(reader.error instanceof Error ? reader.error.message : t('nav.importChatFailed'))
+        reader.onload = () => {
+          const content = typeof reader.result === 'string' ? reader.result : ''
+          setError('')
+          void api('import/chat', {
+            method: 'POST',
+            headers: jsonHeaders(),
+            body: JSON.stringify({ character, name, content }),
+          }).then(() => loadChatList(character, true)).catch((cause) => {
+            setError(cause instanceof Error ? cause.message : String(cause))
+          })
+        }
+        reader.readAsText(file)
+      }
       return h('div', { className: 'dt-sidebar-chats' },
+        h('div', { className: 'dt-sidebar-chat-tools' },
+          h('label', { className: 'dt-upload', title: t('nav.importChat') },
+            t('nav.importChat'),
+            h('input', {
+              type: 'file',
+              accept: '.jsonl,application/jsonl,application/json',
+              onChange: (event) => {
+                const file = event.target.files?.[0]
+                event.target.value = ''
+                importChat(file)
+              },
+            }))),
         chats?.map((chatId) => {
           const labels = chatArchitectureLabels(character, chatId, group)
           return h('div', {
@@ -357,6 +408,18 @@
             disabled: busyChat === chatId,
             onClick: () => runAction(chatId, () => openWorkbenchSession(ctx, { character, chatId })),
           }, h(IconSparkle16)),
+          h('button', {
+            type: 'button',
+            title: t('nav.exportChat', { name: chatId.replace(/\.jsonl$/i, '') }),
+            disabled: busyChat === chatId,
+            onClick: () => exportChat(chatId),
+          }, h(IconDownloadOutline16)),
+          h('button', {
+            type: 'button',
+            title: t('nav.duplicateChat', { name: chatId.replace(/\.jsonl$/i, '') }),
+            disabled: busyChat === chatId,
+            onClick: () => duplicateChat(chatId),
+          }, '⧉'),
           h('button', {
             type: 'button',
             title: t('nav.rename', { name: chatId.replace(/\.jsonl$/i, '') }),
@@ -591,4 +654,4 @@
           },
         }) : null)
     }
-
+

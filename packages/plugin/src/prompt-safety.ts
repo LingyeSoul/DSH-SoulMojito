@@ -28,7 +28,13 @@ export interface FrozenMacroContext {
 }
 
 /** ST 宏展开器：{{char}}=char、{{user}}=user（大小写不敏感，对齐 ST）；未知宏保留原样。
- *  frozen 透传确定性时钟/RNG（见 FrozenMacroContext）；缺省沿用实时钟与 Math.random。 */
+ *  frozen 透传确定性时钟/RNG（见 FrozenMacroContext）；缺省沿用实时钟与 Math.random。
+ *
+ *  限制（有意为之，不是遗漏）：本调用点位于宿主 systemPrompt 装配层，只有 char/user
+ *  两个名字可用——拿不到角色卡与预设，因此卡字段宏（{{description}}/{{charPrompt}}/
+ *  {{personality}}/{{mesExamples}}…）在这里保持宏原文；hostPromptSafe 之后会把残留的
+ *  花括号拆开，所以不会把 {{...}} 交给宿主插值。需要卡字段的通道（helper 的 STscript、
+ *  AgentTavern 预载/导入、生成面 pipeline）各自绑定 `card`，不要在这里补空串或假值。 */
 export function createHostPromptExpander(char: string, user: string, frozen?: FrozenMacroContext): (text: string) => string {
   const macros = createMacroEngine({
     char,

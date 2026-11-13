@@ -57,6 +57,7 @@ import {
   type RegexScriptIR,
   type WorldBookIR,
 } from '@dsh-soulmojito/format'
+import { DEFAULT_WORLD_INFO_SETTINGS, worldInfoSettingsOf, type WorldInfoSettings } from './world-settings.js'
 
 export type TavernArchitecture = 'agent-tavern' | 'st' | 'agent-novel'
 export type TavernContextMode = 'dsh-native' | 'agent-managed'
@@ -106,6 +107,26 @@ export interface TavernModelSelection {
   provider: string
   model: string
     reasoningEffort?: string
+}
+
+/**
+ * 快速回复集合（ST Quick Replies 的资产形态；施工契约 2026-11-12 §2.6）。
+ * `commands` 每条是一行 STscript：执行时按行序在同一个脚本作用域里跑，等价于
+ * ST 的一条多行 Quick Reply（`/setvar` 这类局部变量因此能跨行生效）。
+ */
+export interface QuickReplySet {
+  /** 稳定 id（面板/路由按它做 CRUD；同名集合靠 id 区分）。 */
+  id: string
+  /** 显示名，也是 `/qr <name>` 的匹配键（大小写不敏感）。 */
+  name: string
+  /** 停用的集合不出现在 composer 按钮行，也不被 automationId 触发。 */
+  enabled: boolean
+  /** ST 的「全局集合」位：与按角色绑定的集合区分，仅作数据保留与展示。 */
+  isGlobal: boolean
+  /** 世界书条目 `automationId` 命中且集合启用时，ST 生成装配阶段执行一次。 */
+  automationId?: string
+  /** 逐行 STscript。 */
+  commands: string[]
 }
 
 export interface TavernState {
@@ -187,6 +208,29 @@ export interface TavernState {
   worldFollowsCharacter?: boolean
   /** DSH session 到模型选择的持久映射；随 bindings/prune 一同清理。 */
   modelSelections: Record<string, TavernModelSelection>
+  /**
+   * 快速回复集合（契约 2026-11-12 §2.6）。缺省空表：composer 按钮行只在有
+   * 启用的集合时出现，旧 state.json 零迁移。
+   */
+  quickReplies?: QuickReplySet[]
+  /** composer 快速回复按钮行总开关；缺省 true（`!== false` 读取）。 */
+  quickRepliesEnabled?: boolean
+  /**
+   * 角色收藏（★）：面板角色清单把收藏置顶，顺序即本表顺序。存卡名而不是索引，
+   * 卡重命名后由面板侧按名重挂（与 activeWorlds 同款语义）。
+   */
+  characterFavorites?: string[]
+  /**
+   * Agent 生成上下文注入（契约 2026-11-12 §2.10）：常驻世界书 top-N、记忆
+   * top-N、`chat_metadata.summary` / `note_prompt`。默认关闭（`=== true` 读取），
+   * 由 AgentTavern 的 context 部件消费。
+   */
+  agentContextInjection?: boolean
+  /**
+   * 世界书全局设置（契约 2026-11-12 §2.8）：Partial 落库，读取一律经
+   * `worldInfoSettingsOf(state)` 合并默认。ST 生成装配与 Agent 常驻激活共用。
+   */
+  worldInfoSettings?: Partial<WorldInfoSettings>
   /** 每聊天元数据（最后激活时间、swipe 指针等自由袋） */
   chats: Record<string, Record<string, unknown>>
   /** 全局 regex 脚本（ST regex 扩展形态）。 */
@@ -574,6 +618,11 @@ const DEFAULT_STATE: TavernState = {
   worldFollowsCharacter: true,
   disabledAutoWorlds: [],
   modelSelections: {},
+  quickReplies: [],
+  quickRepliesEnabled: true,
+  characterFavorites: [],
+  agentContextInjection: false,
+  worldInfoSettings: structuredClone(DEFAULT_WORLD_INFO_SETTINGS),
   chats: {},
   regexScripts: [],
   scriptGlobals: {},
@@ -2186,6 +2235,13 @@ export class TavernStore {
         ? { regexOwnershipVersion: parsed.regexOwnershipVersion }
         : {}),
       modelSelections: parsed.modelSelections ?? {},
+      // 快速回复/收藏/Agent 注入（契约 2026-11-12 §2.6/§2.10）：旧 state.json
+      // 缺键即默认（总开关开、收藏空表、注入关）；世界书设置逐键合并默认。
+      quickReplies: normalizeQuickReplySets(parsed.quickReplies),
+      quickRepliesEnabled: parsed.quickRepliesEnabled !== false,
+      characterFavorites: normalizeStringList(parsed.characterFavorites),
+      agentContextInjection: parsed.agentContextInjection === true,
+      worldInfoSettings: worldInfoSettingsOf(parsed),
       chats: parsed.chats ?? {},
       regexScripts: parsed.regexScripts ?? [],
       ...(regexScriptOwners !== undefined
@@ -2424,6 +2480,37 @@ function normalizeStringList(value: unknown): string[] {
     if (trimmed === '' || seen.has(trimmed)) continue
     seen.add(trimmed)
     result.push(trimmed)
+  }
+  return result
+}
+
+/**
+ * 快速回复集合读取容错（契约 2026-11-12 §2.6）：集合缺名即丢弃（`/qr <name>`
+ * 没有可匹配的键）；缺 id 用名字派生，id 冲突保留首个；`commands` 只保留非空
+ * 字符串行（空行在脚本解析里就是语法噪音）；`automationId` 空串等价缺省。
+ */
+function normalizeQuickReplySets(value: unknown): QuickReplySet[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  const result: QuickReplySet[] = []
+  for (const item of value) {
+    if (!isPlainRecord(item)) continue
+    const name = typeof item.name === 'string' ? item.name.trim() : ''
+    if (name === '') continue
+    const id = typeof item.id === 'string' && item.id.trim() !== '' ? item.id.trim() : `qr-${name}`
+    if (seen.has(id)) continue
+    seen.add(id)
+    const automationId = typeof item.automationId === 'string' ? item.automationId.trim() : ''
+    result.push({
+      id,
+      name,
+      enabled: item.enabled === true,
+      isGlobal: item.isGlobal === true,
+      ...(automationId === '' ? {} : { automationId }),
+      commands: Array.isArray(item.commands)
+        ? item.commands.filter((line): line is string => typeof line === 'string' && line.trim() !== '')
+        : [],
+    })
   }
   return result
 }

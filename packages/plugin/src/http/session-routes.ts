@@ -15,6 +15,17 @@ import {
   requestedArchitecture,
   requestedContextMode,
 } from '../session/binding.js'
+import {
+  checkpointChatFile,
+  duplicateChatFile,
+  exportChatFile,
+  importChatFile,
+  listCheckpoints,
+  requiredRevision,
+  requiredText,
+  switchGreeting,
+} from '../session/store.js'
+import { HttpError } from './errors.js'
 import { readJson, sendJson, type HttpRequest, type HttpResponse } from './io.js'
 import { asRecord } from './json-records.js'
 
@@ -207,4 +218,102 @@ export async function handleBranchRoute(
   })
   const snapshot = await db.getChatSnapshot(body.character, result.chatId)
   return sendJson(res, 200, { ok: true, id: result.chatId, chat: snapshot?.chat ?? result.chat, revision: snapshot?.revision })
+}
+
+/* ------------------------- 聊天文件（导入/导出/复制/存档） ------------------------- */
+
+// `import/chat` 收到 JSONL 文本，`parseImportedChatLog` 在写盘前挡形状错；同名
+// 不覆盖（409）。响应统一带 `id`（与 branch 同款）与 `chatId`/`name`（UI 提示
+// 文案读这两个），避免客户端为两条路由写两套解包。
+function chatFilePayload(result: { chatId: string; name: string; chat: unknown; revision: string }): Record<string, unknown> {
+  return { ok: true, id: result.chatId, chatId: result.chatId, name: result.name, chat: result.chat, revision: result.revision }
+}
+
+export async function handleChatImportRoute(
+  db: TavernStore,
+  req: HttpRequest,
+  res: HttpResponse,
+): Promise<void> {
+  const body = await readJson(req)
+  const result = await importChatFile(db, {
+    character: requiredText(body.character, 'character'),
+    name: requiredText(body.name, 'name'),
+    content: requiredText(body.content, 'content'),
+  })
+  return sendJson(res, 200, chatFilePayload(result))
+}
+
+export async function handleChatExportRoute(
+  db: TavernStore,
+  res: HttpResponse,
+  route: string,
+): Promise<void> {
+  // `export/chat/<character>/<chatId>`：角色名与聊天 id 都是路径段，逐段解码
+  // （与 `export/character/`/`guides/` 同款）。缺段按 400 报，不猜默认角色。
+  const rest = decodeURIComponent(route.slice('export/chat/'.length))
+  const slash = rest.indexOf('/')
+  if (slash <= 0 || slash === rest.length - 1) {
+    throw new HttpError(400, 'expected export/chat/<character>/<chatId>')
+  }
+  const exported = await exportChatFile(db, rest.slice(0, slash), rest.slice(slash + 1))
+  return sendJson(res, 200, { ok: true, name: exported.name, content: exported.content })
+}
+
+export async function handleChatDuplicateRoute(
+  db: TavernStore,
+  req: HttpRequest,
+  res: HttpResponse,
+): Promise<void> {
+  const body = await readJson(req)
+  const result = await duplicateChatFile(db, {
+    character: requiredText(body.character, 'character'),
+    chatId: requiredText(body.chatId, 'chatId'),
+    revision: requiredRevision(body.revision),
+    ...(typeof body.name === 'string' ? { name: body.name } : {}),
+  })
+  return sendJson(res, 200, chatFilePayload(result))
+}
+
+export async function handleChatCheckpointRoute(
+  db: TavernStore,
+  req: HttpRequest,
+  res: HttpResponse,
+): Promise<void> {
+  const body = await readJson(req)
+  const result = await checkpointChatFile(db, {
+    character: requiredText(body.character, 'character'),
+    chatId: requiredText(body.chatId, 'chatId'),
+    revision: requiredRevision(body.revision),
+    ...(body.messageId === undefined ? {} : { messageId: body.messageId as number }),
+    ...(typeof body.name === 'string' ? { name: body.name } : {}),
+  })
+  return sendJson(res, 200, chatFilePayload(result))
+}
+
+export async function handleChatCheckpointsRoute(
+  db: TavernStore,
+  res: HttpResponse,
+  url: URL,
+): Promise<void> {
+  const character = url.searchParams.get('character')
+  const chatId = url.searchParams.get('chatId')
+  if (!character) throw new HttpError(400, 'character query is required')
+  if (!chatId) throw new HttpError(400, 'chatId query is required')
+  return sendJson(res, 200, { ok: true, checkpoints: await listCheckpoints(db, character, chatId) })
+}
+
+export async function handleChatGreetingRoute(
+  db: TavernStore,
+  req: HttpRequest,
+  res: HttpResponse,
+): Promise<void> {
+  const body = await readJson(req)
+  const result = await switchGreeting(db, {
+    character: requiredText(body.character, 'character'),
+    chatId: requiredText(body.chatId, 'chatId'),
+    revision: requiredRevision(body.revision),
+    index: body.index as number,
+    ...(typeof body.sessionId === 'string' ? { sessionId: body.sessionId } : {}),
+  })
+  return sendJson(res, 200, { ...chatFilePayload(result), mes: result.mes })
 }

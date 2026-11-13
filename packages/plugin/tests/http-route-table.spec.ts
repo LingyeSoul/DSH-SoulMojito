@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { apply } from '../src/index.js'
 import { STORE_ROUTES } from '../src/http/routes.js'
 import { TavernStore } from '../../tavern-store/src/index.js'
+import type { ChatMessage } from '../../tavern-format/src/index.js'
 
 const CHARACTER_A = 'Route Alpha'
 const CHARACTER_B = 'Route Beta'
@@ -240,6 +241,287 @@ describe('HTTP route table (moved routes)', () => {
     expect(body['id']).not.toBe(branchChatId)
   })
 
+  /* ---------------- 聊天文件（契约 2026-11-12 §2.5） ---------------- */
+
+  function jsonl(messages: Array<Record<string, unknown>>, metadata: Record<string, unknown> = {}): string {
+    const header = { user_name: 'unused', character_name: 'unused', chat_metadata: metadata }
+    return [header, ...messages].map((line) => JSON.stringify(line)).join('\n') + '\n'
+  }
+
+  const THREE_MESSAGES: ChatMessage[] = [
+    { name: CHARACTER_A, is_user: false, is_system: false, send_date: '2026-11-12 10:00', mes: 'line one' },
+    { name: 'User', is_user: true, is_system: false, send_date: '2026-11-12 10:01', mes: 'line two' },
+    { name: CHARACTER_A, is_user: false, is_system: false, send_date: '2026-11-12 10:02', mes: 'line three' },
+  ]
+
+  async function createThreeMessageChat(metadata: Record<string, unknown> = {}): Promise<{ chatId: string; revision: string }> {
+    const chatId = await store.createChat(CHARACTER_A, {
+      user_name: 'unused', character_name: 'unused', chat_metadata: metadata,
+    }, THREE_MESSAGES)
+    const snapshot = await store.getChatSnapshot(CHARACTER_A, chatId)
+    if (snapshot === undefined) throw new Error('chat fixture was not persisted')
+    return { chatId, revision: snapshot.revision }
+  }
+
+  it('imports a JSONL chat, exports it back and refuses to overwrite a name', async () => {
+    const content = jsonl(THREE_MESSAGES, { note_prompt: '' })
+    const imported = await call('POST', '/api/dsh-soulmojito/import/chat', {
+      character: CHARACTER_A,
+      name: 'Chat Imported',
+      content,
+    })
+    expect(imported.status).toBe(200)
+    const body = json(imported)
+    expect(body).toMatchObject({ ok: true, chatId: 'Chat Imported.jsonl', name: 'Chat Imported', id: 'Chat Imported.jsonl' })
+    expect(typeof body['revision']).toBe('string')
+
+    const stored = await store.getChatSnapshot(CHARACTER_A, 'Chat Imported.jsonl')
+    expect(stored?.chat.messages.length).toBe(3)
+    expect(stored?.chat.messages[2]?.['mes']).toBe('line three')
+
+    // 重名不覆盖：原文件内容必须原样保留。
+    const replaced = jsonl([{ name: 'User', is_user: true, is_system: false, send_date: '2026-11-12 11:00', mes: 'replacement' }])
+    const clash = await call('POST', '/api/dsh-soulmojito/import/chat', {
+      character: CHARACTER_A,
+      name: 'Chat Imported',
+      content: replaced,
+    })
+    expect(clash.status).toBe(409)
+    expect(json(clash)['message']).toBe("chat 'Chat Imported' already exists")
+    expect((await store.getChatSnapshot(CHARACTER_A, 'Chat Imported.jsonl'))?.chat.messages.length).toBe(3)
+
+    const exported = await call('GET', `/api/dsh-soulmojito/export/chat/${encodeURIComponent(CHARACTER_A)}/${encodeURIComponent('Chat Imported.jsonl')}`)
+    expect(exported.status).toBe(200)
+    expect(json(exported)).toEqual({ ok: true, name: 'Chat Imported.jsonl', content })
+
+    const missing = await call('GET', `/api/dsh-soulmojito/export/chat/${encodeURIComponent(CHARACTER_A)}/${encodeURIComponent('Chat Absent.jsonl')}`)
+    expect(missing.status).toBe(404)
+    expect(json(missing)['message']).toBe("chat 'Chat Absent' not found")
+
+    const unparsable = await call('POST', '/api/dsh-soulmojito/import/chat', {
+      character: CHARACTER_A,
+      name: 'Chat Broken',
+      content: 'not json at all',
+    })
+    expect(unparsable.status).toBe(400)
+
+    const shapeless = await call('POST', '/api/dsh-soulmojito/import/chat', {
+      character: CHARACTER_A,
+      name: 'Chat Broken',
+      content: jsonl([{ name: 'User', is_user: true, is_system: false, send_date: '2026-11-12 10:00' }]),
+    })
+    expect(shapeless.status).toBe(400)
+    expect(String(json(shapeless)['message'])).toContain("message 'mes' must be a string")
+    expect(await store.listChats(CHARACTER_A)).not.toContain('Chat Broken.jsonl')
+
+    const unknownCharacter = await call('POST', '/api/dsh-soulmojito/import/chat', {
+      character: 'Route Ghost',
+      name: 'Chat Ghost',
+      content,
+    })
+    expect(unknownCharacter.status).toBe(404)
+  })
+
+  it('duplicates a whole chat and drops its bookmark link', async () => {
+    const parent = await createThreeMessageChat({
+      bookmark_link: { character: CHARACTER_A, chatId: 'Chat Imported.jsonl', messageId: 1 },
+    })
+
+    const duplicated = await call('POST', '/api/dsh-soulmojito/duplicate', {
+      character: CHARACTER_A,
+      chatId: parent.chatId,
+      revision: parent.revision,
+    })
+    expect(duplicated.status).toBe(200)
+    const body = json(duplicated)
+    expect(body['ok']).toBe(true)
+    expect(body['chatId']).not.toBe(parent.chatId)
+    expect(String(body['name'])).toContain(' - copy 1')
+
+    const copy = await store.getChatSnapshot(CHARACTER_A, String(body['chatId']))
+    expect(copy?.chat.messages.length).toBe(3)
+    expect(copy?.chat.header.chat_metadata['bookmark_link']).toBeUndefined()
+    // 父聊天不受影响。
+    expect((await store.getChatSnapshot(CHARACTER_A, parent.chatId))?.chat.header.chat_metadata['bookmark_link'])
+      .toBeDefined()
+
+    // 同名副本再复制一次：自动递增，不覆盖已有副本。
+    const again = await call('POST', '/api/dsh-soulmojito/duplicate', {
+      character: CHARACTER_A,
+      chatId: parent.chatId,
+      revision: parent.revision,
+    })
+    expect(again.status).toBe(200)
+    expect(json(again)['chatId']).not.toBe(body['chatId'])
+    expect(String(json(again)['name'])).toContain(' - copy 2')
+
+    // 显式名字原样落盘；同名已存在时退化成 `- copy N`，仍不覆盖。
+    const named = await call('POST', '/api/dsh-soulmojito/duplicate', {
+      character: CHARACTER_A,
+      chatId: parent.chatId,
+      revision: parent.revision,
+      name: 'Chat Custom Copy',
+    })
+    expect(named.status).toBe(200)
+    expect(json(named)['chatId']).toBe('Chat Custom Copy.jsonl')
+    const namedClash = await call('POST', '/api/dsh-soulmojito/duplicate', {
+      character: CHARACTER_A,
+      chatId: parent.chatId,
+      revision: parent.revision,
+      name: 'Chat Custom Copy',
+    })
+    expect(namedClash.status).toBe(200)
+    expect(json(namedClash)['chatId']).toBe('Chat Custom Copy - copy 1.jsonl')
+
+    const stale = await call('POST', '/api/dsh-soulmojito/duplicate', {
+      character: CHARACTER_A,
+      chatId: parent.chatId,
+      revision: 'stale-revision',
+    })
+    expect(stale.status).toBe(409)
+    expect(json(stale)['code']).toBe('CHAT_REVISION_CONFLICT')
+
+    const noRevision = await call('POST', '/api/dsh-soulmojito/duplicate', {
+      character: CHARACTER_A,
+      chatId: parent.chatId,
+    })
+    expect(noRevision.status).toBe(400)
+  })
+
+  it('stores checkpoints of a prefix and lists them by parent', async () => {
+    const parent = await createThreeMessageChat()
+
+    const checkpoint = await call('POST', '/api/dsh-soulmojito/checkpoint', {
+      character: CHARACTER_A,
+      chatId: parent.chatId,
+      revision: parent.revision,
+      messageId: 1,
+    })
+    expect(checkpoint.status).toBe(200)
+    const body = json(checkpoint)
+    expect(body['ok']).toBe(true)
+    expect(String(body['name'])).toContain(' - checkpoint 1')
+
+    const stored = await store.getChatSnapshot(CHARACTER_A, String(body['chatId']))
+    expect(stored?.chat.messages.length).toBe(2)
+    expect(stored?.chat.header.chat_metadata['checkpoint_parent']).toEqual({
+      character: CHARACTER_A,
+      chatId: parent.chatId,
+      messageId: 1,
+    })
+
+    // 缺省 messageId 复制全部。
+    const whole = await call('POST', '/api/dsh-soulmojito/checkpoint', {
+      character: CHARACTER_A,
+      chatId: parent.chatId,
+      revision: parent.revision,
+    })
+    expect(whole.status).toBe(200)
+    const wholeSnapshot = await store.getChatSnapshot(CHARACTER_A, String(json(whole)['chatId']))
+    expect(wholeSnapshot?.chat.messages.length).toBe(3)
+    expect(wholeSnapshot?.chat.header.chat_metadata['checkpoint_parent']).toMatchObject({ messageId: 2 })
+
+    const listed = await call('GET', `/api/dsh-soulmojito/checkpoints?character=${encodeURIComponent(CHARACTER_A)}&chatId=${encodeURIComponent(parent.chatId)}`)
+    expect(listed.status).toBe(200)
+    const entries = json(listed)['checkpoints'] as Array<{ chatId: string; name: string; messageId: number }>
+    expect(entries.map((entry) => entry.messageId)).toEqual([1, 2])
+    expect(entries.map((entry) => entry.chatId)).toEqual([String(body['chatId']), String(json(whole)['chatId'])])
+    expect(entries.every((entry) => !entry.name.endsWith('.jsonl'))).toBe(true)
+
+    const missingCharacter = await call('GET', '/api/dsh-soulmojito/checkpoints?chatId=whatever.jsonl')
+    expect(missingCharacter.status).toBe(400)
+
+    const outOfRange = await call('POST', '/api/dsh-soulmojito/checkpoint', {
+      character: CHARACTER_A,
+      chatId: parent.chatId,
+      revision: parent.revision,
+      messageId: 9,
+    })
+    expect(outOfRange.status).toBe(400)
+
+    // 显式名字被占时同样退化成编号命名，不覆盖既有文件。
+    const namedClash = await call('POST', '/api/dsh-soulmojito/checkpoint', {
+      character: CHARACTER_A,
+      chatId: parent.chatId,
+      revision: parent.revision,
+      name: String(body['name']),
+    })
+    expect(namedClash.status).toBe(200)
+    expect(json(namedClash)['chatId']).not.toBe(body['chatId'])
+    expect(String(json(namedClash)['name'])).toContain(' - checkpoint')
+
+    const stale = await call('POST', '/api/dsh-soulmojito/checkpoint', {
+      character: CHARACTER_A,
+      chatId: parent.chatId,
+      revision: 'stale-revision',
+    })
+    expect(stale.status).toBe(409)
+    expect(json(stale)['code']).toBe('CHAT_REVISION_CONFLICT')
+  })
+
+  it('switches the ST opening greeting and refuses on the agent architecture', async () => {
+    const chatId = await store.createChat(CHARACTER_A, {
+      user_name: 'unused', character_name: 'unused', chat_metadata: {},
+    }, [{
+      name: CHARACTER_A, is_user: false, is_system: false, send_date: '2026-11-12 10:00',
+      mes: 'greeting zero', swipe_id: 0, swipes: ['greeting zero', 'greeting one', 'greeting two'],
+      swipe_info: [{ send_date: 'a' }, { send_date: 'b' }, { send_date: 'c' }],
+    }])
+    const revision = (await store.getChatSnapshot(CHARACTER_A, chatId))?.revision ?? ''
+    expect(revision).not.toBe('')
+
+    const switched = await call('POST', '/api/dsh-soulmojito/greeting', {
+      character: CHARACTER_A,
+      chatId,
+      revision,
+      index: 2,
+    })
+    expect(switched.status).toBe(200)
+    expect(json(switched)['mes']).toBe('greeting two')
+    const afterSwitch = await store.getChatSnapshot(CHARACTER_A, chatId)
+    expect(afterSwitch?.chat.messages[0]?.['swipe_id']).toBe(2)
+    expect(afterSwitch?.chat.messages[0]?.['mes']).toBe('greeting two')
+    expect(afterSwitch?.chat.messages[0]?.['swipes']).toEqual(['greeting zero', 'greeting one', 'greeting two'])
+
+    const outOfRange = await call('POST', '/api/dsh-soulmojito/greeting', {
+      character: CHARACTER_A,
+      chatId,
+      revision: afterSwitch?.revision ?? '',
+      index: 7,
+    })
+    expect(outOfRange.status).toBe(400)
+    expect(String(json(outOfRange)['message'])).toContain('out of range')
+
+    const staleRevision = await call('POST', '/api/dsh-soulmojito/greeting', {
+      character: CHARACTER_A,
+      chatId,
+      revision,
+      index: 1,
+    })
+    expect(staleRevision.status).toBe(409)
+    expect(json(staleRevision)['code']).toBe('CHAT_REVISION_CONFLICT')
+
+    // Agent 架构：首楼是宿主会话投影，切 JSONL 无效，按架构冲突 409 拒绝。
+    await store.patchState({
+      sessionBindings: {
+        'route-agent': { architecture: 'agent-tavern', contextMode: 'dsh-native', character: CHARACTER_A, chatId },
+      },
+    })
+    try {
+      const agent = await call('POST', '/api/dsh-soulmojito/greeting', {
+        character: CHARACTER_A,
+        chatId,
+        revision: afterSwitch?.revision ?? '',
+        index: 1,
+      })
+      expect(agent.status).toBe(409)
+      expect(json(agent)['code']).toBe('TAVERN_ARCHITECTURE_CONFLICT')
+      expect(String(json(agent)['message'])).toContain('AgentTavern')
+    } finally {
+      await store.patchState({ sessionBindings: {} })
+    }
+  })
+
   it('exports an imported character with attachment headers', async () => {
     const imported = await call('POST', '/api/dsh-soulmojito/import/character', { card: card(CHARACTER_EXPORT) })
     expect(imported.status).toBe(200)
@@ -289,6 +571,14 @@ describe('HTTP route table (moved routes)', () => {
       'chats-list',
       'chat-create',
       'branch',
+      'chat-import',
+      'chat-export',
+      'chat-duplicate',
+      'chat-checkpoint',
+      'chat-checkpoints',
+      'chat-greeting',
+      'quick-replies-read',
+      'quick-replies-update',
       'candidates',
       'preview',
       'mvu',
@@ -322,6 +612,9 @@ describe('HTTP route table (moved routes)', () => {
       'chat',
       'generate',
       'script-run',
+      'backup-export',
+      'backup-import',
+      'data-bank',
     ])
   })
 
@@ -516,5 +809,21 @@ describe('HTTP route table (moved routes)', () => {
     const getGenerate = await call('GET', '/api/dsh-soulmojito/generate')
     expect(getGenerate.status).toBe(404)
     expect(json(getGenerate)['message']).toBe('route not found: GET generate')
+
+    const getDuplicate = await call('GET', '/api/dsh-soulmojito/duplicate')
+    expect(getDuplicate.status).toBe(404)
+    expect(json(getDuplicate)['message']).toBe('route not found: GET duplicate')
+
+    const putCheckpoints = await call('PUT', '/api/dsh-soulmojito/checkpoints')
+    expect(putCheckpoints.status).toBe(404)
+    expect(json(putCheckpoints)['message']).toBe('route not found: PUT checkpoints')
+
+    const getImportChat = await call('GET', '/api/dsh-soulmojito/import/chat')
+    expect(getImportChat.status).toBe(404)
+    expect(json(getImportChat)['message']).toBe('route not found: GET import/chat')
+
+    const postExportChat = await call('POST', '/api/dsh-soulmojito/export/chat/whatever')
+    expect(postExportChat.status).toBe(404)
+    expect(json(postExportChat)['message']).toBe('route not found: POST export/chat/whatever')
   })
 })

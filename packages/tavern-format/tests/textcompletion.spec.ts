@@ -12,6 +12,9 @@ describe('text completion presets', () => {
     expect(detectPresetKind({ story_string: '{{description}}' })).toBe('context')
     expect(detectPresetKind({ input_prefix: '\nUser: ', output_prefix: '\nAI: ' })).toBe('instruct')
     expect(detectPresetKind({ temp: 0.7, rep_pen: 1.1 })).toBe('textgen-sampler')
+    // ST presets/sysprompt/*.json 与 presets/reasoning/*.json 的形态
+    expect(detectPresetKind({ name: 'Actor', content: 'You are {{char}}.', post_history: '' })).toBe('sysprompt')
+    expect(detectPresetKind({ name: 'DeepSeek', prefix: '<think>\n', suffix: '\n</think>', separator: '\n\n' })).toBe('reasoning')
     expect(detectPresetKind({ unrelated: true })).toBe('unknown')
   })
 

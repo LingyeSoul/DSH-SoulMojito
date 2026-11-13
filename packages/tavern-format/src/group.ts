@@ -4,7 +4,18 @@
  * 差异说明：ST 内部 members 存 chid 索引；本实现以角色名为键（store 按名寻址）。
  * 导入 ST 导出的群文件时，数字成员无法解析，跳过并在 `droppedMembers` 计数，
  * 不视为解析失败。`chats` 里的历史 chat id 列表仅透传。
+ *
+ * activation_strategy 三态全部保留（0/1/2 往返不丢失）；未知数值回落 1（NATURAL），
+ * 只有值域外才归一，不做语义改写。
  */
+
+/**
+ * ST 群聊激活策略：
+ * - 0 = MANUAL：不自动选人，只由显式点名（triggerMember / UI 点选）决定发言者；
+ * - 1 = NATURAL：talkativeness 加权随机；
+ * - 2 = LIST：成员列表顺序轮转。
+ */
+export type GroupActivationStrategy = 0 | 1 | 2
 
 export interface GroupIR {
   id: string
@@ -12,8 +23,8 @@ export interface GroupIR {
   /** 成员角色名列表 */
   members: string[]
   allowSelfResponses: boolean
-  /** 1 = NATURAL（talkativeness 加权），2 = LIST（列表顺序轮转） */
-  activationStrategy: 1 | 2
+  /** 0 = MANUAL（仅显式点名），1 = NATURAL（talkativeness 加权），2 = LIST（列表顺序轮转） */
+  activationStrategy: GroupActivationStrategy
   /** 禁用成员名列表 */
   disabledMembers: string[]
   /** 当前 chat id */
@@ -67,7 +78,9 @@ export function parseGroupFile(obj: Record<string, unknown>, name?: string): Gro
     name: groupName,
     members,
     allowSelfResponses: bool(obj['allow_self_responses'], false),
-    activationStrategy: strategy === 2 ? 2 : 1,
+    // ST activation_strategy：0 = MANUAL 必须原样保留（旧实现把 0 静默写成 1，
+    // 导出即回不到原文件）；0/1/2 之外的值回落 NATURAL。
+    activationStrategy: strategy === 0 ? 0 : strategy === 2 ? 2 : 1,
     disabledMembers: Array.isArray(obj['disabled_members'])
       ? obj['disabled_members'].filter((value): value is string => typeof value === 'string')
       : [],

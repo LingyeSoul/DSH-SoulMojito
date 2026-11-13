@@ -7,7 +7,12 @@
  * 命令集：echo / comment / setvar / getvar / setglobalvar / getglobalvar /
  * addvar / incvar / decvar / hasvar / hasglobalvar / delvar / delglobalvar /
  * if(left/right/op/then/else) / random / roll / pick / send / sys / trigger /
- * regenerate / stop / cut / regex(name=…)。
+ * regenerate / stop / cut / regex(name=…) /
+ * continue / swipe / hide / unhide / move / rename / branch / checkpoint /
+ * listvar / flushvar / run(qr) / times。
+ *
+ * `/while` 需要表达式求值器（当前解析器只有 /if 的二元比较），未实现——命令
+ * 显式报「不支持」，不做半成品（契约 §2.7）。
  *
  * 命令以注册表承载（提案 0015 P0）：内置命令经 registerStscriptCommand 进表，
  * runCommand 做表查找；P1 的 api.stscript.registerCommand 以同一入口落注册。
@@ -40,6 +45,29 @@ export interface ScriptEnv {
    * （ST /regex 命令语义：脚本名大小写不敏感；未找到/禁用/位不符原样返回输入）。
    */
   applyRegex?: (scriptName: string, text: string) => string | Promise<string>
+  /* ---- 聊天动作扩展（契约 §2.7；缺省时命令报「不支持」） ---- */
+  /** /continue：以最后一条 AI 楼层为起点续写（ST Continue）。 */
+  continue?: () => void | Promise<void>
+  /** /swipe：按相对位移切换末条楼层的候选（ST 默认 +1，负值回退）。 */
+  swipe?: (delta: number) => void | Promise<void>
+  /** /hide：隐藏 [from, to] 闭区间楼层（负索引从末尾计，同 /cut）。 */
+  hide?: (from: number, to: number) => void | Promise<void>
+  /** /unhide：取消隐藏 [from, to] 闭区间楼层。 */
+  unhide?: (from: number, to: number) => void | Promise<void>
+  /** /move：把 from 楼层移动到 to 位置。 */
+  move?: (from: number, to: number) => void | Promise<void>
+  /** /rename：重命名当前聊天文件（name 为新的显示名）。 */
+  rename?: (name: string) => void | Promise<void>
+  /** /branch：从 messageId（缺省末条）复制为新分支聊天。 */
+  branch?: (messageId: number | undefined, name: string | undefined) => void | Promise<void>
+  /** /checkpoint：复制 0..messageId（缺省全部）为存档聊天。 */
+  checkpoint?: (messageId: number | undefined) => void | Promise<void>
+  /** /listvar：列出本地变量（实现方决定格式；缺省不支持）。 */
+  listVars?: () => string | Promise<string>
+  /** /flushvar：清空本地变量。 */
+  flushVars?: () => void | Promise<void>
+  /** /run：按名执行一个启用的快速回复集合。 */
+  runQuickReply?: (name: string) => void | Promise<void>
 }
 
 export interface ScriptResult {
@@ -464,6 +492,177 @@ const regexCommand: StscriptCommandSpec = {
   },
 }
 
+/**
+ * 索引范围解析（/hide /unhide /move 共用）：接受 `0-4`、`0 4` 与单值 `4`
+ * （单值时 to = from）。`allowEmpty` 为 true 时无参数表示「末条」(-1)。负索引
+ * 由 env 实现方按 /cut 同款从末尾计。
+ */
+function indexRange(cmd: ScriptCommand, options: { allowEmpty: boolean; requireBoth: boolean }): { from: number; to: number } {
+  const raw = cmd.raw.trim()
+  if (raw === '') {
+    if (options.allowEmpty) return { from: -1, to: -1 }
+    throw new ScriptError(`/${cmd.name} expects a message index`)
+  }
+  const joined = cmd.args.join(' ')
+  const match = /^(-?\d+)(?:\s*(?:[-:,]\s*|\s+)(-?\d+))?$/.exec(joined)
+  if (match === null) throw new ScriptError(`/${cmd.name} expects indices like 0-4 or 0 4, got: ${raw}`)
+  const from = Number(match[1])
+  const to = match[2] === undefined ? from : Number(match[2])
+  if (options.requireBoth && match[2] === undefined) {
+    throw new ScriptError(`/${cmd.name} expects two indices (from and to), got: ${raw}`)
+  }
+  return { from, to }
+}
+
+/** 可选整数参数：缺省 undefined，非法值报错（/branch /checkpoint /swipe 共用）。 */
+function optionalInt(value: string | undefined, command: string): number | undefined {
+  if (value === undefined || value.trim() === '') return undefined
+  if (!/^-?\d+$/.test(value.trim())) throw new ScriptError(`/${command} expects an integer, got: ${value}`)
+  return Number(value.trim())
+}
+
+const continueCommand: StscriptCommandSpec = {
+  name: 'continue',
+  run: async (_cmd, env) => {
+    const action = await requireAction(env.continue, 'continue')
+    await action()
+    return changedResult()
+  },
+}
+
+const swipeCommand: StscriptCommandSpec = {
+  name: 'swipe',
+  run: async (cmd, env) => {
+    const action = await requireAction(env.swipe, 'swipe')
+    await action(optionalInt(cmd.args[0] ?? cmd.raw.trim(), 'swipe') ?? 1)
+    return changedResult()
+  },
+}
+
+const hideCommand: StscriptCommandSpec = {
+  name: 'hide',
+  run: async (cmd, env) => {
+    const action = await requireAction(env.hide, 'hide')
+    const { from, to } = indexRange(cmd, { allowEmpty: true, requireBoth: false })
+    await action(Math.min(from, to), Math.max(from, to))
+    return changedResult()
+  },
+}
+
+const unhideCommand: StscriptCommandSpec = {
+  name: 'unhide',
+  run: async (cmd, env) => {
+    const action = await requireAction(env.unhide, 'unhide')
+    const { from, to } = indexRange(cmd, { allowEmpty: true, requireBoth: false })
+    await action(Math.min(from, to), Math.max(from, to))
+    return changedResult()
+  },
+}
+
+const moveCommand: StscriptCommandSpec = {
+  name: 'move',
+  run: async (cmd, env) => {
+    const action = await requireAction(env.move, 'move')
+    const { from, to } = indexRange(cmd, { allowEmpty: false, requireBoth: true })
+    await action(from, to)
+    return changedResult()
+  },
+}
+
+const renameCommand: StscriptCommandSpec = {
+  name: 'rename',
+  run: async (cmd, env) => {
+    const action = await requireAction(env.rename, 'rename')
+    const name = cmd.raw.trim()
+    if (name === '') throw new ScriptError('/rename requires a name')
+    await action(name)
+    return changedResult()
+  },
+}
+
+const branchCommand: StscriptCommandSpec = {
+  name: 'branch',
+  run: async (cmd, env) => {
+    const action = await requireAction(env.branch, 'branch')
+    // ST 形态：`/branch [messageId] [name]`；首个参数非整数时整体按名字处理。
+    const first = cmd.args[0]
+    const messageId = first !== undefined && /^-?\d+$/.test(first) ? Number(first) : undefined
+    const name = (messageId === undefined ? cmd.args : cmd.args.slice(1)).join(' ').trim()
+    await action(messageId, name === '' ? undefined : name)
+    return changedResult()
+  },
+}
+
+const checkpointCommand: StscriptCommandSpec = {
+  name: 'checkpoint',
+  run: async (cmd, env) => {
+    const action = await requireAction(env.checkpoint, 'checkpoint')
+    await action(optionalInt(cmd.args[0] ?? cmd.raw.trim(), 'checkpoint'))
+    return changedResult()
+  },
+}
+
+const listvarCommand: StscriptCommandSpec = {
+  name: 'listvar',
+  run: async (_cmd, env) => {
+    const action = await requireAction(env.listVars, 'listvar')
+    return { output: await action(), chatChanged: false }
+  },
+}
+
+const flushvarCommand: StscriptCommandSpec = {
+  name: 'flushvar',
+  run: async (_cmd, env) => {
+    const action = await requireAction(env.flushVars, 'flushvar')
+    await action()
+    return changedResult()
+  },
+}
+
+const runCommandSpec: StscriptCommandSpec = {
+  name: 'run',
+  // `/qr <name>` 与 `/run <name>` 同义（ST 两种生态写法，契约 §2.6/§2.7）。
+  aliases: ['qr'],
+  run: async (cmd, env) => {
+    const action = await requireAction(env.runQuickReply, cmd.name)
+    const name = cmd.raw.trim()
+    if (name === '') throw new ScriptError(`/${cmd.name} requires a quick reply set name`)
+    await action(name)
+    return changedResult()
+  },
+}
+
+const timesCommand: StscriptCommandSpec = {
+  name: 'times',
+  run: async (cmd, env, tools) => {
+    const match = /^(\d+)\s+([\s\S]+)$/.exec(cmd.raw.trim())
+    if (match === null) throw new ScriptError(`/times expects a count and a command, got: ${cmd.raw.trim()}`)
+    const count = Number(match[1])
+    // 上限防御：脚本里的循环不该把生成请求挂死（ST 本身也没有取消机制）。
+    if (count > 10_000) throw new ScriptError(`/times count is too large: ${count}`)
+    const script = match[2] ?? ''
+    let output = ''
+    let chatChanged = false
+    for (let i = 0; i < count; i++) {
+      const result = await tools.runNested(script, env)
+      output = result.output
+      chatChanged = chatChanged || result.chatChanged
+    }
+    return { output, chatChanged }
+  },
+}
+
+/**
+ * `/while` 明确不支持：ST 的 /while 需要可执行的布尔表达式与循环体语义，
+ * 现有解析器只有 /if 的二元比较，半实现会静默算错——按契约报错而非降级。
+ */
+const whileCommand: StscriptCommandSpec = {
+  name: 'while',
+  run: () => {
+    throw new ScriptError('/while is not supported: the interpreter has no expression evaluator')
+  },
+}
+
 for (const spec of [
   echoCommand,
   setvarCommand,
@@ -483,6 +682,19 @@ for (const spec of [
   stopCommand,
   cutCommand,
   regexCommand,
+  continueCommand,
+  swipeCommand,
+  hideCommand,
+  unhideCommand,
+  moveCommand,
+  renameCommand,
+  branchCommand,
+  checkpointCommand,
+  listvarCommand,
+  flushvarCommand,
+  runCommandSpec,
+  timesCommand,
+  whileCommand,
 ]) {
   registerStscriptCommand(spec)
 }

@@ -6,17 +6,17 @@ import { clampModSectionOrder, modSectionSnapshot } from '../mods/cross-bundle.j
 import { mountModExtensions } from '../mods/agent-mount.js'
 import { createHostPromptExpander, hostPromptSafe, seededRandom } from '../prompt-safety.js'
 import { recordPromptView } from '../prompt-viewer.js'
-import { parsePreset } from '../../../tavern-format/src/index.js'
 import { limitText } from '../tool-args.js'
+import { createAgentContextInjectionChannel } from './context-injection.js'
 import { agentStepCaptureOf } from './prompt-capture.js'
 import { agentPromptPieces, registerAgentPromptPart, type AgentPromptPiece } from './prompt-parts.js'
 import {
   defaultPreset,
   onAgentPresetChanged,
-  presetTemperature,
-  renderAgentPresetBlock,
+  projectAgentPreset,
 } from './preset.js'
 import { characterTools } from './tools/character.js'
+import { dataBankTools } from './tools/data-bank.js'
 import { deductionTools } from './tools/deduction.js'
 import { gameTools, agentGamesText, refreshAllAgentGamesSummaries } from './tools/games.js'
 import { memoryTools } from './tools/memory.js'
@@ -63,7 +63,7 @@ export const AGENT_PROMPT_SECTION = 'dsh-soulmojito:agent-prompt'
  * - system：IM 段 -90（im-agent bundle 注册）→ kernel -80 → preset -75 →
  *   identity/facts -70 → mod 段 -50..0（agentPromptSectionsFor 从跨 bundle 快照
  *   并入）；
- * - context：guides -65 / script -64 / games -63 仍走宿主
+ * - context：guides -65 / script -64 / games -63 / 自动注入 -62 仍走宿主
  *   `systemPrompt.context()` 的 runtime snapshot（每步一条 user 消息，位于上下文
  *   末尾），不进 complete 段——它们本来就是动态上下文，不是 system 头。
  */
@@ -89,8 +89,20 @@ registerAgentPromptPart({ name: 'dsh-soulmojito:agent-facts', order: -70, scope:
 registerAgentPromptPart({ name: 'dsh-soulmojito:agent-guides', order: -65, scope: 'context', text: (agentId) => agentGuidesText(agentId) })
 registerAgentPromptPart({ name: 'dsh-soulmojito:agent-script', order: -64, scope: 'context', text: (agentId) => agentScriptText(agentId) })
 registerAgentPromptPart({ name: 'dsh-soulmojito:agent-games', order: -63, scope: 'context', text: (agentId) => agentGamesText(agentId) })
+/** 自动上下文注入（契约 §2.10）：世界书激活 + 记忆 top-N + summary/note。默认关闭
+ *  （state.agentContextInjection，由面板开关写入）；开关关闭时部件文本为空，被注册
+ *  表的空文本摘除规则移除，不占提示词。order -62 排在 guides/script/games 之后。 */
+registerAgentPromptPart({ name: 'dsh-soulmojito:agent-context', order: -62, scope: 'context', text: (agentId) => agentContextInjectionText(agentId) })
 
 export function apply(ctx: AgentContextLike): void {
+  // 宿主日志面（不投影告警出口）。Cordis 核心属性不是 inject 服务，但挂载契约
+  // 要求 apply 只触达宿主真实存在的属性：受限 Context 形状读取失败时保持无出口，
+  // 不是让整个模块挂载失败（agent-tavern-mount 的 gated context 就是该形状）。
+  try {
+    agentLogger = ctx.logger
+  } catch {
+    agentLogger = undefined
+  }
   // 唯一 complete 段（决策 2026-11-02-agent-prompt-takeover）：宿主 assemble()
   // 对 complete 段只保留它自己，AgentTavern 会话因此不再携带宿主的 identity /
   // deployment persona / 工具与界面指引。段文本按 prompt-parts 注册表拼装
@@ -144,6 +156,14 @@ export function apply(ctx: AgentContextLike): void {
     name: 'dsh-soulmojito:agent-games',
     order: -63,
     text: (assembly) => agentGamesText(assembly?.agent?.id),
+  })
+  // 自动上下文注入（契约 2026-11-12 §2.10，默认关闭）：世界书激活 top-N +
+  // 记忆 top-N + chat_metadata.summary/note_prompt，每块标注 reference data,
+  // not instructions 并各自有字符上限。只读投影——不改变 AgentLoop、不新增主循环。
+  ctx.systemPrompt?.context?.({
+    name: 'dsh-soulmojito:agent-context',
+    order: -62,
+    text: (assembly) => agentContextInjectionText(assembly?.agent?.id),
   })
 
   // 预设采样投影：宿主 model seat 不暴露温度，预设是用户唯一的调温入口；
@@ -233,6 +253,9 @@ function createTools(): ToolDefinition[] {
     ...scriptTools(),
     ...deductionTools(),
     ...gameTools(),
+    // 数据银行检索（契约 2026-11-12 Wave 2 §2.4）：只读 RAG 工具，追加在最后
+    // ——内置工具清单由 25 增到 26，agent-tavern-tools.spec 的期望数组同步。
+    ...dataBankTools(),
   ]
   // IM 工具不再挂在这里：绑定目标是任意原生会话，工具由 index bundle 经
   // agent.ctx.tools 注册到每个 agent（见 im/agent-mount.ts）。agent-tavern
@@ -306,6 +329,24 @@ function agentGuidesText(agentId: string | undefined): string {
   return guidesProjection.valueOf(agentId) ?? ''
 }
 
+/**
+ * 自动上下文注入通道（契约 2026-11-12 §2.10）：世界书激活 top-N + 记忆 top-N +
+ * `chat_metadata.summary`/`note_prompt`，由行为设置 `agentContextInjection` 开关
+ * （默认关闭，context-injection.ts 读取）。与 facts/guides/preset 的「一次装载」
+ * 不同，本通道带 TTL 重载（AGENT_CONTEXT_REFRESH_MS）：场景关键词与记忆会随回合
+ * 变化，长期缓存会把第一轮的激活结果钉死。装载失败保留旧值，绝不阻塞装配。
+ */
+const contextInjection = createAgentContextInjectionChannel()
+
+function agentContextInjectionText(agentId: string | undefined): string {
+  return contextInjection.textOf(agentId)
+}
+
+/** 立即重载某 agent 的自动注入块并等待落缓存（写穿与测试的精确入口）。 */
+export function refreshAgentContextInjection(agentId: string): Promise<void> {
+  return contextInjection.refreshOne(agentId)
+}
+
 // 模块加载即注册写穿回调：guide 增/删路由成功落库后按 character/chatId 匹配
 // sessionBindings 里绑定的 agentId 刷新缓存（无匹配则是无人装配过的 chat，跳过）。
 onGuidesChanged((character, chatId) =>
@@ -323,7 +364,11 @@ onGamesChanged(() => {
  *  异步装载——首次为某 agent 装配时异步读一次激活预设，装载完成前返回空串；
  *  预设增删改（index.ts 路由、写卡工作台 preset_put）与激活预热经 preset.ts
  *  的跨 bundle 监听表写穿缓存，下一次装配即时生效。temperature 与提示词块
- *  共用同一份装载结果（agent/request 的覆盖值也从这里取）。 */
+ *  共用同一份装载结果（agent/request 的覆盖值也从这里取）。
+ *
+ *  分类与不投影（契约 §2.9/§2.10）：激活预设可以是 instruct/context/sysprompt/
+ *  reasoning 等导入合法的形态，它们不参与生成——`projectAgentPreset` 明确返回
+ *  refusals，这里按 (agent, 分类, 原因) 去重告警一次，绝不静默留空。 */
 /**
  * 缓存冻结记录（决策 2026-10-09-agent-preset-cache-stability）：绑定首次装载
  * 捕获一次时钟与 RNG 种子，此后所有写穿重载都用同一求值上下文重渲染——相同
@@ -334,6 +379,21 @@ onGamesChanged(() => {
  * 在消息流尾部按 append-only 纪律提供。
  */
 const presetFreeze = new Map<string, { frozenAt: number; seed: number }>()
+/** 预设不投影告警去重集（键含 agent 与原因）：长寿命宿主下无界增长没意义，
+ *  满即整体清空，活跃会话至多重新告警一次。 */
+const presetRefusalWarnings = new Set<string>()
+const PRESET_REFUSAL_WARNING_LIMIT = 1024
+/** 宿主日志面（apply 注入）：不投影告警的唯一出口；宿主未提供时保持静默记录面。 */
+let agentLogger: { warn?: (message: string) => unknown } | undefined
+
+function warnPresetRefusalOnce(agentId: string, kind: string, reason: string): void {
+  const key = `${agentId}:${kind}:${reason}`
+  if (presetRefusalWarnings.has(key)) return
+  if (presetRefusalWarnings.size >= PRESET_REFUSAL_WARNING_LIMIT) presetRefusalWarnings.clear()
+  presetRefusalWarnings.add(key)
+  agentLogger?.warn?.(`dsh-soulmojito: active preset not projected into AgentTavern prompts (agent ${agentId}, kind ${kind}): ${reason}`)
+}
+
 const presetProjection = createLazyProjection<{ text: string; temperature?: number }>({
   getState: async () => (await tavernStore()).getState(),
   load: async (agentId, settle) => {
@@ -344,9 +404,9 @@ const presetProjection = createLazyProjection<{ text: string; temperature?: numb
     const character = await db.getCharacter(binding.character)
     const activePreset = state.activePreset ? await db.getPreset(state.activePreset) : undefined
     // 与 ST 生成路径同款回落：未选择激活预设时用内置默认预设（面板显示为
-    // 「内置角色扮演预设」）。预设文件损坏（parse 抛错）由外层 catch 兜底。
-    const preset = parsePreset(activePreset ?? defaultPreset())
-    const block = renderAgentPresetBlock(preset, character?.card)
+    // 「内置角色扮演预设」）。分类判定与非 chat-completion 的明确拒绝都在
+    // projectAgentPreset 内（含解析失败），不会抛出到懒装载的吞错分支。
+    const projection = projectAgentPreset(activePreset ?? defaultPreset(), character?.card)
     // 冻结求值上下文：首次装载建立、重载复用（见 presetFreeze 注释）——写穿重
     // 渲染对相同输入字节稳定，动态宏不再随重载换值烧掉 system 头前缀缓存。
     const freeze = presetFreeze.get(agentId) ?? { frozenAt: Date.now(), seed: (Math.random() * 0x1_0000_0000) >>> 0 }
@@ -358,10 +418,10 @@ const presetProjection = createLazyProjection<{ text: string; temperature?: numb
       state.activePersona ?? DEFAULT_USER,
       { now: () => new Date(freeze.frozenAt), rng: seededRandom(freeze.seed) },
     )
-    const temperature = presetTemperature(preset)
+    for (const refusal of projection.refusals) warnPresetRefusalOnce(agentId, refusal.kind, refusal.reason)
     settle({
-      text: block === undefined ? '' : hostPromptSafe(block, expand),
-      ...(temperature === undefined ? {} : { temperature }),
+      text: projection.text === undefined ? '' : hostPromptSafe(projection.text, expand),
+      ...(projection.temperature === undefined ? {} : { temperature: projection.temperature }),
     })
   },
 })
@@ -460,10 +520,12 @@ async function recordAgentTavernPromptViewFor(
 
 // 模块加载即注册写穿回调：预设写路径（index.ts 的 settings/preset 路由、写卡
 // 工作台 preset_put、会话激活预热）成功后重新装载所有 AgentTavern 绑定；
-// 身份段依赖激活人设与角色卡覆盖，跟着同一信号刷新。无绑定时是 no-op。
+// 身份段依赖激活人设与角色卡覆盖，跟着同一信号刷新；自动注入块同样受激活预设
+// （世界书设置/预算）、人设与卡覆盖影响，一并写穿（无绑定时是 no-op）。
 onAgentPresetChanged(() => Promise.all([
   presetProjection.refreshWhere((binding) => binding.architecture === 'agent-tavern'),
   factsProjection.refreshWhere((binding) => binding.architecture === 'agent-tavern'),
+  contextInjection.refreshWhere((binding) => binding.architecture === 'agent-tavern'),
 ]).then(() => undefined))
 
 /**
@@ -471,11 +533,13 @@ onAgentPresetChanged(() => Promise.all([
  * 走 index.ts 的激活预热，懒装载竞态会让首轮装配拿到空串、装载完成后整块出现
  * ——system 头一次突变，其后全部前缀缓存作废。挂载时主动装载一遍全部
  * agent-tavern 绑定（预设栈与身份段）；模块级幂等（apply 可能被宿主重复调用），
- * 失败由懒装载兜底。
+ * 失败由懒装载兜底。自动注入块也预热：开关关闭时装载只读一次 state 即返回空串，
+ * 成本可忽略；开启时消除首轮空块。
  */
 function preheatAgentProjections(): Promise<void> {
   return Promise.all([
     presetProjection.preheatWhere((binding) => binding.architecture === 'agent-tavern'),
     factsProjection.preheatWhere((binding) => binding.architecture === 'agent-tavern'),
+    contextInjection.preheatWhere((binding) => binding.architecture === 'agent-tavern'),
   ]).then(() => undefined)
 }

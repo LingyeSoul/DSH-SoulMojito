@@ -5,7 +5,7 @@ import { promises as fsPromises } from 'node:fs'
 import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ChatRevisionConflictError, MemoryStore, TavernStore, VariableStore, isChatRevisionConflict, normalizeImPeers, normalizeMemoryEmbedding, writeAtomicText } from '../src/index.js'
+import { ChatRevisionConflictError, DEFAULT_WORLD_INFO_SETTINGS, MemoryStore, TavernStore, VariableStore, isChatRevisionConflict, normalizeImPeers, normalizeMemoryEmbedding, worldInfoSettingsOf, writeAtomicText } from '../src/index.js'
 import { decodeCharacterCard, encodeCharx, encodeCharacterCardPng, normalizeEntry, parseRegexScripts, stableDeepEqual } from '@dsh-soulmojito/format'
 import type { WorldBookIR } from '@dsh-soulmojito/format'
 import { syntheticCardPng, syntheticWorldRaw } from '../../tavern-format/tests/helpers/synthetic.js'
@@ -767,6 +767,14 @@ describe('TavernStore', () => {
       cardWorkbenchPresetEnabled: false, agentNovelPresetEnabled: false,
       // 禁用投降（2026-10-14 用户需求；面板「游戏」分区开关）默认关闭。
       gamesDisableResign: false,
+      // ST 能力补齐（2026-11-12）：快速回复、收藏、Agent 自动注入、世界书设置。
+      quickReplies: [], quickRepliesEnabled: true, characterFavorites: [],
+      agentContextInjection: false,
+      worldInfoSettings: {
+        recursive: true, scanDepth: 2, budgetPercent: 25, budgetCap: 0,
+        maxRecursionSteps: 0, minActivations: 0, minActivationsDepthMax: 0,
+        caseSensitive: false, matchWholeWords: false, useGroupScoring: false, includeNames: true,
+      },
       modelSelections: {}, chats: {}, regexScripts: [], scriptGlobals: {},
       // Frontend character-scope overlay (2026-10-22): empty by default.
       characterVariables: {},
@@ -1266,6 +1274,85 @@ describe('TavernStore', () => {
     expect((state as Record<string, unknown>).pipelineMode).toBeUndefined()
     expect((state as Record<string, unknown>).textCompletion).toBeUndefined()
     expect(state.scriptGlobals['mood']).toBe('calm')
+  }))
+})
+
+/* ------- 快速回复 / 收藏 / Agent 注入 / 世界书设置（契约 2026-11-12） ------- */
+
+describe('quick replies, favorites and world info settings', () => {
+  it('旧 state.json 零迁移：新键按默认补齐，既有键不动', withStore(async (store, dir) => {
+    await writeFile(path.join(dir, 'state.json'), JSON.stringify({ activeWorlds: ['ExampleWorld'] }))
+    const state = await store.getState()
+    expect(state.quickReplies).toEqual([])
+    expect(state.quickRepliesEnabled).toBe(true)
+    expect(state.characterFavorites).toEqual([])
+    expect(state.agentContextInjection).toBe(false)
+    expect(state.worldInfoSettings).toEqual(DEFAULT_WORLD_INFO_SETTINGS)
+    expect(state.activeWorlds).toEqual(['ExampleWorld'])
+  }))
+
+  it('快速回复：写回读一致；缺名/坏行归一时丢弃，重复 id 保留首个', withStore(async (store, dir) => {
+    const saved = await store.patchState({
+      quickReplies: [
+        { id: 'set-a', name: 'Greeting', enabled: true, isGlobal: true, commands: ['/echo hi', '   ', '/send "hello"'] },
+        { id: 'set-b', name: 'Automation', enabled: true, isGlobal: false, automationId: 'wi-42', commands: ['/trigger'] },
+      ],
+      quickRepliesEnabled: false,
+    })
+    expect(saved.quickReplies).toEqual([
+      { id: 'set-a', name: 'Greeting', enabled: true, isGlobal: true, commands: ['/echo hi', '/send "hello"'] },
+      { id: 'set-b', name: 'Automation', enabled: true, isGlobal: false, automationId: 'wi-42', commands: ['/trigger'] },
+    ])
+    expect(saved.quickRepliesEnabled).toBe(false)
+    expect((await store.getState()).quickReplies).toHaveLength(2)
+
+    // 手改 state.json：缺名丢、缺 id 由名派生、非布尔开关回落 false、空
+    // automationId 等价缺省、重复 id 只留首个。
+    await writeFile(path.join(dir, 'state.json'), JSON.stringify({
+      quickReplies: [
+        { name: '   ', enabled: true, commands: ['/echo dropped'] },
+        { name: 'Derived', enabled: 'yes', isGlobal: 1, commands: ['/echo a', 42] },
+        { id: 'dup', name: 'First', commands: [] },
+        { id: 'dup', name: 'Second', commands: ['/echo ignored'] },
+        { id: 'auto', name: 'Auto', enabled: true, automationId: '  ', commands: ['/echo b'] },
+      ],
+    }))
+    expect((await store.getState()).quickReplies).toEqual([
+      { id: 'qr-Derived', name: 'Derived', enabled: false, isGlobal: false, commands: ['/echo a'] },
+      { id: 'dup', name: 'First', enabled: false, isGlobal: false, commands: [] },
+      { id: 'auto', name: 'Auto', enabled: true, isGlobal: false, commands: ['/echo b'] },
+    ])
+    // 非数组按空表（function 安全：不因手改让整个 state 读取失败）。
+    await writeFile(path.join(dir, 'state.json'), JSON.stringify({ quickReplies: { nope: true } }))
+    expect((await store.getState()).quickReplies).toEqual([])
+  }))
+
+  it('角色收藏：去空白去重并保留用户顺序', withStore(async (store) => {
+    const saved = await store.patchState({ characterFavorites: ['B', ' A ', 'B', '', 'C'] })
+    expect(saved.characterFavorites).toEqual(['B', 'A', 'C'])
+    expect((await store.getState()).characterFavorites).toEqual(['B', 'A', 'C'])
+  }))
+
+  it('agentContextInjection 默认关闭，仅显式 true 生效', withStore(async (store, dir) => {
+    expect((await store.getState()).agentContextInjection).toBe(false)
+    expect((await store.patchState({ agentContextInjection: true })).agentContextInjection).toBe(true)
+    await writeFile(path.join(dir, 'state.json'), JSON.stringify({ agentContextInjection: 'yes' }))
+    expect((await store.getState()).agentContextInjection).toBe(false)
+  }))
+
+  it('世界书设置：partial 合并默认、数值夹取、废值只影响自己那一个键', withStore(async (store, dir) => {
+    const saved = await store.patchState({ worldInfoSettings: { scanDepth: 12, recursive: false } })
+    expect(saved.worldInfoSettings).toEqual({ ...DEFAULT_WORLD_INFO_SETTINGS, scanDepth: 12, recursive: false })
+    await writeFile(path.join(dir, 'state.json'), JSON.stringify({
+      worldInfoSettings: { budgetPercent: 250, budgetCap: -5, caseSensitive: 'yes', includeNames: false, scanDepth: 'deep' },
+    }))
+    const merged = worldInfoSettingsOf(await store.getState())
+    expect(merged.budgetPercent).toBe(100)
+    expect(merged.budgetCap).toBe(0)
+    expect(merged.caseSensitive).toBe(false)
+    expect(merged.includeNames).toBe(false)
+    expect(merged.scanDepth).toBe(DEFAULT_WORLD_INFO_SETTINGS.scanDepth)
+    expect(merged.recursive).toBe(DEFAULT_WORLD_INFO_SETTINGS.recursive)
   }))
 })
 

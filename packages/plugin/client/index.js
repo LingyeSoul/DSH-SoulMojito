@@ -4412,6 +4412,7 @@ window.__ModuleLoader__.load({
       IconChevronLeftOutline14,
       IconChevronRightOutline14,
       IconCloseOutline16,
+      IconCodeOutline16,
       IconCordisPluginOutline14,
       IconDataOutline16,
       IconDownloadOutline16,
@@ -4513,6 +4514,7 @@ window.__ModuleLoader__.load({
     function escapeFrontendAttribute(value) {
       return String(value).replaceAll('&', '&amp;').replaceAll('"', '&quot;')
     }
+
 
     // Server-issued helper binding (2026-10-25). The host page owns the session
     // binding; every surface that proxies TavernHelper ops acquires a token for
@@ -4735,6 +4737,24 @@ window.__ModuleLoader__.load({
         .replace(/<!--\s*MVU:OK\s*-->/gi, '')
       if (isFrontendDocument(stripped.trim())) return ''
       return stripped.replace(/\n{3,}/g, '\n\n').trim()
+    }
+
+    // 快照 diff 的元数据比较（事件桥，Wave 2 §4）：JSON.stringify 不能用来判断
+    // 「没变」——服务器重写楼层时对象键顺序可能变，字符串比较会把同一份数据报成
+    // 变化，MESSAGE_UPDATED 就成了噪声事件。数组按序比较、对象按键集合比较。
+    function sameJsonValue(left, right) {
+      if (left === right) return true
+      if (typeof left !== 'object' || typeof right !== 'object' || left === null || right === null) return false
+      if (Array.isArray(left) !== Array.isArray(right)) return false
+      if (Array.isArray(left)) {
+        if (left.length !== right.length) return false
+        return left.every((value, index) => sameJsonValue(value, right[index]))
+      }
+      const leftKeys = Object.keys(left)
+      const rightKeys = Object.keys(right)
+      if (leftKeys.length !== rightKeys.length) return false
+      return leftKeys.every((key) => Object.prototype.hasOwnProperty.call(right, key)
+        && sameJsonValue(left[key], right[key]))
     }
 
     // 高度上报（A-4 升级，JSR §2.1 adjust_iframe_height 的语义复刻）：
@@ -5037,8 +5057,10 @@ window.__ModuleLoader__.load({
     // 追加本会话绑定后转 POST /helper。绑定来自面板/transcript 自己的
     // sessionBindings，iframe 无法自报身份——这是沙箱化 JSR 兼容面的信任边界。
     // 快照比对负责「宿主侧事件」：楼数增加→MESSAGE_RECEIVED，正文变化→
-    // MESSAGE_EDITED，聊天切换→CHAT_CHANGED。只广播能真实观测到的信号，
-    // 不凭空伪造酒馆事件。
+    // MESSAGE_EDITED，候选减少→MESSAGE_SWIPE_DELETED，非正文元数据变化→
+    // MESSAGE_UPDATED，聊天切换→CHAT_CHANGED。只广播能真实观测到的信号，
+    // 不凭空伪造酒馆事件（CHAT_CREATED/DELETED、CHARACTER_*、WORLD_INFO_ACTIVATED
+    // 在本快照里没有可判定的观测面，保持不投递，见兼容文档）。
     // 宿主 composer 写入（2026-10-20 卡兼容；2026-10-21 二次修订）：酒馆卡的表单/
     // 快速选项通过 `window.parent.document.querySelector('#send_textarea')` 写入并
     // 触发 input。iframe 没有 same-origin，shim 把这条老路径映射到宿主的真实输入面。
@@ -5322,6 +5344,14 @@ window.__ModuleLoader__.load({
             return
           }
           if (previous.chatId !== next.chatId) emitEvent(HELPER_TAVERN_EVENTS.CHAT_CHANGED, [next.chatId])
+          // WORLD_INFO_ACTIVATED：helper snapshot 带最近一轮 ST 生成的扫描轨迹
+          // （含记录 seq）。同一轮不重复发；新一轮生成 seq 变化即发一次。
+          const previousLoreSeq = previous.lore && typeof previous.lore === 'object' && typeof previous.lore.seq === 'number' ? previous.lore.seq : -1
+          const nextLoreSeq = next.lore && typeof next.lore === 'object' && typeof next.lore.seq === 'number' ? next.lore.seq : -1
+          if (nextLoreSeq >= 0 && nextLoreSeq !== previousLoreSeq) {
+            const entries = next.lore && typeof next.lore === 'object' && Array.isArray(next.lore.entries) ? next.lore.entries : []
+            emitEvent(HELPER_TAVERN_EVENTS.WORLD_INFO_ACTIVATED, [entries])
+          }
           const previousPreset = previous.presets && typeof previous.presets === 'object' ? previous.presets.active : null
           const nextPreset = next.presets && typeof next.presets === 'object' ? next.presets.active : null
           if (previousPreset !== nextPreset) emitEvent(HELPER_TAVERN_EVENTS.PRESET_CHANGED, [nextPreset])
@@ -5349,8 +5379,14 @@ window.__ModuleLoader__.load({
             const nextSwipes = Array.isArray(message.swipes) ? message.swipes.length : 0
             if (old.swipe_id !== message.swipe_id || oldSwipes !== nextSwipes) {
               emitEvent(HELPER_TAVERN_EVENTS.MESSAGE_SWIPED, [message.message_id])
+              // 只有候选「变少」才是删除：切换 swipe、regenerate 新增候选都只算
+              // MESSAGE_SWIPED。删除与切换可能同帧发生，两者并列投递，不互相替代。
+              if (nextSwipes < oldSwipes) {
+                emitEvent(HELPER_TAVERN_EVENTS.MESSAGE_SWIPE_DELETED, [message.message_id])
+              }
             }
-            if (old.message !== message.message || old.name !== message.name) {
+            const bodyChanged = old.message !== message.message || old.name !== message.name
+            if (bodyChanged) {
               emitEvent(HELPER_TAVERN_EVENTS.MESSAGE_EDITED, [message.message_id])
               if (message.role === 'user') {
                 emitEvent(HELPER_TAVERN_EVENTS.USER_MESSAGE_RENDERED, [message.message_id])
@@ -5358,6 +5394,15 @@ window.__ModuleLoader__.load({
                 emitEvent(HELPER_TAVERN_EVENTS.CHARACTER_MESSAGE_RENDERED, [message.message_id, 'normal'])
                 emitEvent(HELPER_TAVERN_EVENTS.STREAM_TOKEN_RECEIVED, [String(message.message ?? ''), String(message.message_id)])
               }
+            } else if (!sameJsonValue(old.is_hidden, message.is_hidden)
+              || old.role !== message.role
+              || !sameJsonValue(old.extra, message.extra)
+              || !sameJsonValue(old.data, message.data)) {
+              // 只有「正文/发言人没变、其余元数据变了」才发 MESSAGE_UPDATED：
+              // 两者同帧变化时 MESSAGE_EDITED 已经是完整信号，双发只会让卡脚本
+              // 重复渲染（契约 §4 明确择一，不双发）。tokenCount 不在本快照里
+              // （helper.ts toJsrMessage 不导出它），所以这里观测不到、不伪造。
+              emitEvent(HELPER_TAVERN_EVENTS.MESSAGE_UPDATED, [message.message_id])
             }
           }
           const removed = before.filter((message) => !after.some((entry) => entry.message_id === message.message_id))
@@ -6862,6 +6907,8 @@ window.__ModuleLoader__.load({
       'settings.personaEmpty': 'Default user',
       'settings.nativePersona': 'Use active character in standard DSH Agent chats',
       'settings.nativePreset': 'Use active preset in standard DSH Agent chats',
+      'settings.agentContextInjection': 'Inject World Info, memories and the chat summary into the agent context',
+      'settings.agentContextInjectionHint': 'Adds three reference blocks to AgentTavern prompts: the always-on World Info entries, the top memories, and the chat summary plus Author’s Note. Each block is labelled reference data, not instructions. Off by default.',
       'settings.imNativeAgentMode': 'Give IM mode the full native Agent tool set (AgentTavernIM Native)',
       'settings.imNativeAgentModeHint': 'IM-bound sessions use AgentTavernIM Native: the standard DSH tools (shell, files, search, jobs, schedules, skills, goals, subagents, todo, web, present) plus Tavern and im_* tools. Replies still go through im_send. This is independent of PTC mode: PTC only changes how the tools are presented (run_code plus SDK), not which tools exist. Shell, file and network tools are powerful; enable it only for agents you trust.',
       'settings.ptcMode': 'Enable PTC mode (AgentTavern / Card Workbench / AgentNovel)',
@@ -6908,6 +6955,23 @@ window.__ModuleLoader__.load({
       'settings.personaNamePrompt': 'Persona name',
       'settings.personaDescPrompt': 'Persona description',
       'settings.personaNameFixed': 'The persona name cannot be changed after creation.',
+      'settings.personaPosition': 'Injection position',
+      'settings.personaPositionInPrompt': 'In prompt',
+      'settings.personaPositionAtDepth': 'At depth',
+      'settings.personaPositionTopAn': 'Top of Author’s Note',
+      'settings.personaPositionBottomAn': 'Bottom of Author’s Note',
+      'settings.personaPositionNone': 'Do not inject',
+      'settings.personaDepth': 'Depth (messages from the end)',
+      'settings.personaRole': 'Injection role',
+      'settings.personaRoleSystem': 'System',
+      'settings.personaRoleUser': 'User',
+      'settings.personaRoleAssistant': 'Assistant',
+      'settings.personaAvatar': 'Avatar',
+      'settings.personaAvatarPick': 'Upload PNG avatar',
+      'settings.personaAvatarPending': 'New avatar selected (saved with this form)',
+      'settings.personaAvatarCurrent': 'Uploading replaces the current avatar.',
+      'settings.personaAvatarHint': 'PNG only; stored next to the persona definition.',
+      'settings.personaAvatarPngOnly': 'Pick a PNG image.',
       'settings.personaNameRequired': 'Persona name is required.',
       'settings.personaDuplicate': 'Persona "{name}" already exists.',
       'settings.personaEdit': 'Edit {name}',
@@ -6925,6 +6989,7 @@ window.__ModuleLoader__.load({
       'settings.groupStrategy': 'Activation',
       'settings.groupNatural': 'Natural (talkativeness)',
       'settings.groupList': 'List order',
+      'settings.groupManual': 'Manual (mention only)',
       'settings.groupDelete': 'Delete {name}',
       'settings.groupDeleteConfirm': 'Delete group "{name}"? Chats are kept.',
       'settings.groupToggleMember': 'Enable or disable {member}',
@@ -6936,6 +7001,7 @@ window.__ModuleLoader__.load({
       'settings.regexSyncCards': 'Sync from cards',
       'settings.regexSyncDone': 'Scanned {scanned} character cards: {imported} added, {skipped} skipped, {invalid} invalid',
       'settings.regexSyncPresets': 'Sync from presets',
+      'settings.regexExport': 'Export JSON',
       'settings.regexSyncPresetsDone': 'Scanned {scanned} presets: {imported} added, {skipped} skipped, {invalid} invalid',
       'settings.regexEdit': 'Edit {name}',
       'settings.regexDelete': 'Delete {name}',
@@ -7022,9 +7088,74 @@ window.__ModuleLoader__.load({
       'panel.section.characters': 'Characters',
       'panel.section.chats': 'Chats',
       'panel.section.guides': 'Guides',
+      'panel.section.notes': 'Chat notes',
       'panel.section.groups': 'Groups',
       'panel.section.personas': 'Personas',
       'panel.section.worlds': 'World Info',
+      'panel.quickReplies.title': 'Quick reply sets',
+      'panel.quickReplies.hint': 'Each set runs its lines in order inside one script context, so /echo, /send, /trigger, /setvar and the other STscript commands work as expected. The composer shows one button per enabled set, and typing /qr <name> runs a set by name.',
+      'panel.quickReplies.archHint': 'Quick replies run through STscript, so their buttons appear only in ST chats (single and group). AgentTavern generation runs through the agent loop and has no command channel.',
+      'panel.quickReplies.masterToggle': 'Show quick reply buttons in the composer',
+      'panel.quickReplies.add': 'Add set',
+      'panel.quickReplies.newName': 'New set',
+      'panel.quickReplies.remove': 'Delete {name}',
+      'panel.quickReplies.name': 'Name',
+      'panel.quickReplies.enabled': 'Enabled',
+      'panel.quickReplies.isGlobal': 'Global set',
+      'panel.quickReplies.automationId': 'Automation id',
+      'panel.quickReplies.automationIdHint': 'When a World Info entry carries the same automation id, this set runs once during ST generation.',
+      'panel.quickReplies.commands': 'Commands (one STscript line each)',
+      'panel.quickReplies.commandsHint': 'Lines run top to bottom in one script context, so a value set on one line is visible to the next.',
+      'panel.quickReplies.empty': 'No quick reply sets yet.',
+      'panel.section.dataBank': 'Data Bank',
+      'panel.dataBank.title': 'Data bank',
+      'panel.dataBank.hint': 'Import plain text files (.txt, .md, .json, .csv, up to 2 MB) into one searchable bank. Searches use the embedding endpoint when one is configured and fall back to keyword search otherwise. Attached files add a reference block to ST generation and to the agent context.',
+      'panel.dataBank.embeddingOff': 'No embedding endpoint is configured: searches run keyword-only, and vectorized world-info entries stay inactive (they never fall back to keywords).',
+      'panel.dataBank.upload': 'Upload text file',
+      'panel.dataBank.uploadTitle': 'Import a text file into the data bank',
+      'panel.dataBank.pasteName': 'Name',
+      'panel.dataBank.pasteNameHint': 'Keep a .txt, .md, .json or .csv extension so the type is recognised; defaults to pasted.md.',
+      'panel.dataBank.pasteText': 'Paste text',
+      'panel.dataBank.pasteDefaultName': 'pasted.md',
+      'panel.dataBank.import': 'Add to bank',
+      'panel.dataBank.imported': 'Imported: {count} chunk(s).',
+      'panel.dataBank.duplicate': 'That content is already in the bank; the existing entry was reused.',
+      'panel.dataBank.empty': 'The data bank is empty.',
+      'panel.dataBank.meta': '{chunks} chunk(s) · {size} KB · id {id}',
+      'panel.dataBank.attach': 'Attach to this chat',
+      'panel.dataBank.attachHint': 'Attached files are retrieved for {character} / {chatId} on every ST generation.',
+      'panel.dataBank.noChat': 'Open or create a chat to attach files.',
+      'panel.dataBank.delete': 'Delete {name}',
+      'panel.dataBank.deleteConfirm': 'Delete "{name}" from the data bank? The file and its vectors are removed.',
+      'panel.dataBank.searchTitle': 'Retrieval test',
+      'panel.dataBank.searchLabel': 'Query',
+      'panel.dataBank.searchHint': 'Runs the same retrieval path generation uses and reports which channel answered.',
+      'panel.dataBank.search': 'Search',
+      'panel.dataBank.searchEmpty': 'No matching chunks.',
+      'panel.dataBank.modeVector': 'Answered by the vector channel.',
+      'panel.dataBank.modeLexical': 'Answered by the keyword fallback (no embedding endpoint, breaker open, or embedding failed).',
+      'panel.notes.title': 'Chat notes',
+      'panel.notes.hint': 'Author’s Note and summary live in the chat file metadata. Generation reads them; this form only writes.',
+      'panel.notes.chatHint': 'Current chat: {character} · {chatId}',
+      'panel.notes.noChat': 'Open a Tavern chat to edit its notes.',
+      'panel.notes.authorNote': 'Author’s Note',
+      'panel.notes.authorNoteHint': 'Injected while non-empty: inside the prompt, or inside the history at a depth.',
+      'panel.notes.position': 'Injection position',
+      'panel.notes.positionInPrompt': 'In prompt',
+      'panel.notes.positionAtDepth': 'At depth',
+      'panel.notes.depth': 'Depth (messages from the end)',
+      'panel.notes.role': 'Role',
+      'panel.notes.interval': 'Inject every N turns (0 = every turn)',
+      'panel.notes.intervalHint': '0 or empty injects on every turn.',
+      'panel.notes.summary': 'Summary',
+      'panel.notes.summaryHint': 'Injected as a system block while non-empty; AgentTavern also reads it for its context parts.',
+      'quickReplies.title': 'Quick replies',
+      'quickReplies.runHint': 'Run quick reply "{name}"',
+      'quickReplies.empty': 'Quick reply "{name}" has no commands.',
+      'quickReplies.notFound': 'Quick reply "{name}" not found.',
+      'quickReplies.usage': 'Quick replies: {names}',
+      'quickReplies.noSets': 'No quick reply sets are enabled.',
+      'panel.section.quickReplies': 'Quick Replies',
       // Behavior section (2026-10-21 switch consolidation): system-level home of
       // every behavior toggle that used to be scattered across other surfaces.
       'panel.section.behavior': 'Behavior',
@@ -7046,6 +7177,19 @@ window.__ModuleLoader__.load({
       // 关于分区（面板尾部）：插件版本、官网与作者外链。zh/en 键集镜像由
       // gates 的 locale 校验兜底。
       'panel.section.about': 'About',
+      'panel.section.backup': 'Backup',
+      'backup.hint': 'Export the whole library (state, characters, worlds, presets, personas, groups, chats, and data bank) as one ZIP. Import supports merge (skip conflicts) and replace (snapshot first).',
+      'backup.export': 'Export backup',
+      'backup.import': 'Import backup',
+      'backup.importing': 'Importing…',
+      'backup.mode': 'Import mode',
+      'backup.mode.merge': 'Merge (keep existing files)',
+      'backup.mode.replace': 'Replace (overwrite, snapshot first)',
+      'backup.replaceHint': 'Replace overwrites existing files. The server snapshots the current library before writing; a failed import reports the snapshot name.',
+      'backup.confirmReplace': 'Replace the current library from this backup? A snapshot will be created first.',
+      'backup.done': 'Imported {imported}, skipped {skipped}, conflicts {conflicts}, rejected {rejected}.',
+      'backup.snapshot': 'Snapshot: {name}',
+      'backup.failed': 'Import failed',
       'panel.about.tagline': 'SillyTavern-compatible roleplay workspace for DSH.',
       'panel.about.website': 'Official website',
       'panel.about.author': 'Author',
@@ -7206,6 +7350,8 @@ window.__ModuleLoader__.load({
       'panel.characters.firstMes': 'First message',
       'panel.characters.mesExample': 'Dialogue examples',
       'panel.characters.creatorNotes': 'Creator notes',
+      'panel.characters.favorite': 'Add {name} to favorites',
+      'panel.characters.unfavorite': 'Remove {name} from favorites',
       'panel.characters.creator': 'By {name}',
       'panel.characters.loadFailed': 'Failed to load card: {message}',
       'panel.view': 'View',
@@ -7270,6 +7416,33 @@ window.__ModuleLoader__.load({
       'panel.worlds.enabled': 'Enabled',
       'panel.worlds.constant': 'Constant',
       'panel.worlds.selective': 'Selective',
+      'panel.worlds.probability': 'Probability (%)',
+      'panel.worlds.settings': 'World Info settings',
+      'panel.worlds.settingsHint': 'Applies to ST generation and to agent-side World Info activation. 0 means no cap for limits; an entry that leaves a field empty follows these values.',
+      'panel.worlds.scanDepth': 'Scan depth (messages)',
+      'panel.worlds.budgetPercent': 'Budget share of context (%)',
+      'panel.worlds.budgetCap': 'Budget cap (tokens, 0 = no cap)',
+      'panel.worlds.maxRecursionSteps': 'Max recursion steps (0 = unlimited)',
+      'panel.worlds.minActivations': 'Minimum activations (0 = off)',
+      'panel.worlds.minActivationsDepthMax': 'Minimum-activation depth cap (0 = unlimited)',
+      'panel.worlds.recursive': 'Recursive scanning',
+      'panel.worlds.caseSensitive': 'Case-sensitive keys',
+      'panel.worlds.matchWholeWords': 'Match whole words',
+      'panel.worlds.useGroupScoring': 'Weighted group scoring',
+      'panel.worlds.includeNames': 'Prefix scanned messages with the speaker name',
+      'panel.worlds.sticky': 'Sticky (messages)',
+      'panel.worlds.cooldown': 'Cooldown (messages)',
+      'panel.worlds.delay': 'Delay (messages)',
+      'panel.worlds.delayUntilRecursion': 'Delay until recursion',
+      'panel.worlds.group': 'Inclusion group',
+      'panel.worlds.role': 'Injection role',
+      'panel.worlds.outletName': 'Outlet name',
+      'panel.worlds.automationId': 'Automation id',
+      'panel.worlds.automationIdHint': 'A quick reply set with this automation id runs once during ST generation.',
+      'panel.worlds.preventRecursion': 'Prevent recursion',
+      'panel.worlds.excludeRecursion': 'Exclude from recursion',
+      'panel.worlds.ignoreBudget': 'Ignore budget',
+      'panel.worlds.useProbability': 'Use probability roll',
       'panel.worlds.addEntry': 'Add entry',
       'panel.worlds.new': 'New world book',
       'panel.worlds.creating': 'New world book (unsaved)',
@@ -7297,6 +7470,12 @@ window.__ModuleLoader__.load({
       'panel.presets.role': 'Role',
       'panel.presets.content': 'Content',
       'panel.presets.marker': 'Marker',
+      'panel.presets.promptOrder': 'Prompt order',
+      'panel.presets.promptOrderHint': 'Drag a row (or use the arrows) to reorder; the checkbox decides whether that entry is assembled. Entries missing from this list do not participate.',
+      'panel.presets.promptOrderEmpty': 'This preset has no prompt order entries.',
+      'panel.presets.moveUp': 'Move up',
+      'panel.presets.moveDown': 'Move down',
+      'panel.presets.systemPromptFlag': 'System prompt flag',
       'panel.presets.enabled': 'Enabled',
       'panel.presets.addPrompt': 'Add prompt',
       'panel.presets.removePrompt': 'Remove prompt',
@@ -7405,6 +7584,24 @@ window.__ModuleLoader__.load({
       'message.branching': 'Branching…',
       'message.save': 'Save',
       'message.cancel': 'Cancel',
+      'message.copy': 'Copy',
+      'message.copied': 'Copied',
+      'message.copyFailed': 'Copy failed',
+      'message.hide': 'Hide',
+      'message.unhide': 'Show',
+      'message.hidden': 'Hidden',
+      'message.reveal': 'Show content',
+      'message.collapse': 'Collapse',
+      'message.delete': 'Delete',
+      'message.deleteConfirm': 'Confirm delete',
+      'message.moveUp': 'Move up',
+      'message.moveDown': 'Move down',
+      'message.continue': 'Continue',
+      'message.impersonate': 'Impersonate',
+      'message.checkpoint': 'Checkpoint',
+      'message.checkpointing': 'Creating checkpoint…',
+      'message.checkpointCreated': 'Checkpoint created: {name}',
+      'message.tokens': '~{count} tokens',
       'message.thinking': 'Thinking…',
       'message.thoughts': 'Thoughts',
       'view.unbound': 'No Tavern chat is bound to this session.',
@@ -7445,6 +7642,8 @@ window.__ModuleLoader__.load({
       'composer.stop': 'Stop generation',
       'composer.send': 'Send',
       'composer.script': 'Run STscript',
+      'composer.slashHelp': 'Available commands: {commands}',
+      'composer.slashComplete': 'Command suggestions',
       'composer.member': 'Reply as {name}',
       'nav.title': 'Tavern',
       'nav.chats': 'Tavern roleplay chats',
@@ -7467,6 +7666,10 @@ window.__ModuleLoader__.load({
       'nav.noChats': 'No chats',
       'nav.noCharacters': 'No character cards',
       'nav.opening': 'Opening {name}',
+      'nav.importChat': 'Import chat (.jsonl)',
+      'nav.importChatFailed': 'Chat import failed',
+      'nav.exportChat': 'Export {name}',
+      'nav.duplicateChat': 'Duplicate {name}',
       'nav.rename': 'Rename {name}',
       'nav.delete': 'Delete {name}',
       'nav.renamePrompt': 'Rename Tavern chat',
@@ -7987,6 +8190,8 @@ window.__ModuleLoader__.load({
       'settings.personaEmpty': '默认用户',
       'settings.nativePersona': '在标准 DSH Agent 会话中使用当前角色',
       'settings.nativePreset': '在标准 DSH Agent 会话中使用当前预设',
+      'settings.agentContextInjection': '把世界书、记忆与聊天总结注入 Agent 上下文',
+      'settings.agentContextInjectionHint': '给 AgentTavern 的提示词加三块参考数据：常驻世界书条目、最相关的记忆、聊天总结与 Author’s Note。每块都标注为参考数据而非指令。默认关闭。',
       'settings.imNativeAgentMode': 'IM 模式解锁原生 Agent 全能力（AgentTavernIM Native）',
       'settings.imNativeAgentModeHint': 'IM 绑定会话改用 AgentTavernIM Native：在酒馆工具与 im_* 工具之外，挂载标准 DSH 工具（shell、文件、搜索、任务、定时、技能、目标、子代理、待办、网页、present）。回复仍必须走 im_send。本开关与 PTC 模式正交：PTC 只改变工具呈现方式（run_code + SDK），不改变工具集合。shell、文件写入与联网能力较强，只对信任的会话开启。',
       'settings.ptcMode': '启用 PTC 模式（AgentTavern / 写卡工作台 / AgentNovel）',
@@ -8033,6 +8238,23 @@ window.__ModuleLoader__.load({
       'settings.personaNamePrompt': '人设名称',
       'settings.personaDescPrompt': '人设描述',
       'settings.personaNameFixed': '人设名称创建后不可修改',
+      'settings.personaPosition': '注入位置',
+      'settings.personaPositionInPrompt': '提示词内',
+      'settings.personaPositionAtDepth': '对话内深度',
+      'settings.personaPositionTopAn': 'Author’s Note 顶部',
+      'settings.personaPositionBottomAn': 'Author’s Note 底部',
+      'settings.personaPositionNone': '不注入',
+      'settings.personaDepth': '深度（距末尾的消息数）',
+      'settings.personaRole': '注入角色',
+      'settings.personaRoleSystem': '系统',
+      'settings.personaRoleUser': '用户',
+      'settings.personaRoleAssistant': '助手',
+      'settings.personaAvatar': '头像',
+      'settings.personaAvatarPick': '上传 PNG 头像',
+      'settings.personaAvatarPending': '已选择新头像（随本表单保存）',
+      'settings.personaAvatarCurrent': '上传会替换当前头像。',
+      'settings.personaAvatarHint': '仅支持 PNG；头像与 persona 定义存在同一目录。',
+      'settings.personaAvatarPngOnly': '请选择 PNG 图片。',
       'settings.personaNameRequired': '人设名称不能为空',
       'settings.personaDuplicate': '已存在同名用户人设「{name}」',
       'settings.personaEdit': '编辑{name}',
@@ -8050,6 +8272,7 @@ window.__ModuleLoader__.load({
       'settings.groupStrategy': '激活策略',
       'settings.groupNatural': '自然（健谈度）',
       'settings.groupList': '列表顺序',
+      'settings.groupManual': '手动（仅点名）',
       'settings.groupDelete': '删除{name}',
       'settings.groupDeleteConfirm': '删除群组“{name}”？聊天记录会保留。',
       'settings.groupToggleMember': '启用或停用{member}',
@@ -8061,6 +8284,7 @@ window.__ModuleLoader__.load({
       'settings.regexSyncCards': '从角色卡同步',
       'settings.regexSyncDone': '已扫描 {scanned} 张角色卡：新增 {imported} 条，跳过 {skipped} 条，格式非法 {invalid} 条',
       'settings.regexSyncPresets': '从预设同步',
+      'settings.regexExport': '导出 JSON',
       'settings.regexSyncPresetsDone': '已扫描 {scanned} 个预设：新增 {imported} 条，跳过 {skipped} 条，格式非法 {invalid} 条',
       'settings.regexEdit': '编辑{name}',
       'settings.regexDelete': '删除{name}',
@@ -8146,9 +8370,74 @@ window.__ModuleLoader__.load({
       'panel.section.characters': '角色',
       'panel.section.chats': '聊天',
       'panel.section.guides': '指引',
+      'panel.section.notes': '聊天注记',
       'panel.section.groups': '群组',
       'panel.section.personas': '用户人设',
       'panel.section.worlds': '世界书',
+      'panel.quickReplies.title': '快速回复集合',
+      'panel.quickReplies.hint': '每个集合的脚本行按顺序在同一个脚本作用域里执行，/echo、/send、/trigger、/setvar 等 STscript 命令都照常生效。composer 为每个启用的集合显示一个按钮，输入 /qr <名字> 也按名执行。',
+      'panel.quickReplies.archHint': '快速回复走 STscript，因此按钮只出现在 ST 聊天（单聊与群聊）。AgentTavern 的生成走 Agent 循环，没有命令通道。',
+      'panel.quickReplies.masterToggle': '在 composer 显示快速回复按钮',
+      'panel.quickReplies.add': '新增集合',
+      'panel.quickReplies.newName': '新集合',
+      'panel.quickReplies.remove': '删除「{name}」',
+      'panel.quickReplies.name': '名称',
+      'panel.quickReplies.enabled': '启用',
+      'panel.quickReplies.isGlobal': '全局集合',
+      'panel.quickReplies.automationId': '自动化 id',
+      'panel.quickReplies.automationIdHint': '世界书条目带同一个自动化 id 时，本集合在 ST 生成装配阶段自动执行一次。',
+      'panel.quickReplies.commands': '命令（每行一条 STscript）',
+      'panel.quickReplies.commandsHint': '按从上到下的顺序在同一个脚本作用域里执行，前一行设置的变量后一行可见。',
+      'panel.quickReplies.empty': '还没有快速回复集合。',
+      'panel.section.dataBank': '数据银行',
+      'panel.dataBank.title': '数据银行',
+      'panel.dataBank.hint': '把纯文本文件（.txt、.md、.json、.csv，单文件上限 2 MB）导入同一个可检索库。配置了 embed 端点时走向量检索，否则走关键词检索。附加到聊天后，ST 生成与 Agent 上下文都会带上参考块。',
+      'panel.dataBank.embeddingOff': '未配置 embed 端点：检索只走关键词；vectorized 世界书条目保持不激活（不会降级成关键词匹配）。',
+      'panel.dataBank.upload': '上传文本文件',
+      'panel.dataBank.uploadTitle': '把文本文件导入数据银行',
+      'panel.dataBank.pasteName': '文件名',
+      'panel.dataBank.pasteNameHint': '保留 .txt、.md、.json 或 .csv 扩展名以便识别类型；缺省 pasted.md。',
+      'panel.dataBank.pasteText': '粘贴文本',
+      'panel.dataBank.pasteDefaultName': 'pasted.md',
+      'panel.dataBank.import': '入库',
+      'panel.dataBank.imported': '已导入：{count} 个分块。',
+      'panel.dataBank.duplicate': '同内容已在库中，直接复用了既有记录。',
+      'panel.dataBank.empty': '数据银行还是空的。',
+      'panel.dataBank.meta': '{chunks} 个分块 · {size} KB · id {id}',
+      'panel.dataBank.attach': '附加到当前聊天',
+      'panel.dataBank.attachHint': '附加后每次 ST 生成都会为 {character} / {chatId} 检索这些文件。',
+      'panel.dataBank.noChat': '先打开或新建一个聊天才能附加文件。',
+      'panel.dataBank.delete': '删除「{name}」',
+      'panel.dataBank.deleteConfirm': '从数据银行删除「{name}」？文件与向量都会移除。',
+      'panel.dataBank.searchTitle': '检索测试',
+      'panel.dataBank.searchLabel': '查询',
+      'panel.dataBank.searchHint': '走与生成完全相同的检索路径，并如实报告本次是哪条通道命中。',
+      'panel.dataBank.search': '检索',
+      'panel.dataBank.searchEmpty': '没有命中的分块。',
+      'panel.dataBank.modeVector': '由向量通道命中。',
+      'panel.dataBank.modeLexical': '由关键词 fallback 命中（无 embed 端点、熔断打开或嵌入失败）。',
+      'panel.notes.title': '聊天注记',
+      'panel.notes.hint': 'Author’s Note 与总结保存在聊天文件的元数据里；生成侧只读，这里只负责写入。',
+      'panel.notes.chatHint': '当前聊天：{character} · {chatId}',
+      'panel.notes.noChat': '打开一个酒馆聊天后才能编辑它的注记。',
+      'panel.notes.authorNote': 'Author’s Note',
+      'panel.notes.authorNoteHint': '非空时注入：提示词内固定位置，或历史消息内指定深度。',
+      'panel.notes.position': '注入位置',
+      'panel.notes.positionInPrompt': '提示词内',
+      'panel.notes.positionAtDepth': '对话内深度',
+      'panel.notes.depth': '深度（距末尾的消息数）',
+      'panel.notes.role': '角色',
+      'panel.notes.interval': '每 N 轮注入一次（0 = 每轮）',
+      'panel.notes.intervalHint': '0 或留空即每轮都注入。',
+      'panel.notes.summary': '总结',
+      'panel.notes.summaryHint': '非空时作为 system 段注入；AgentTavern 的上下文部件也会读它。',
+      'quickReplies.title': '快速回复',
+      'quickReplies.runHint': '执行快速回复「{name}」',
+      'quickReplies.empty': '快速回复「{name}」没有命令。',
+      'quickReplies.notFound': '找不到快速回复「{name}」。',
+      'quickReplies.usage': '可用的快速回复：{names}',
+      'quickReplies.noSets': '没有启用的快速回复集合。',
+      'panel.section.quickReplies': '快速回复',
       // 行为设置分区（2026-10-21 开关收编）：散养行为开关的系统级归置点。
       'panel.section.behavior': '行为设置',
       'panel.section.presets': '预设',
@@ -8165,6 +8454,19 @@ window.__ModuleLoader__.load({
       // 关于分区（面板尾部）：插件版本、官网与作者外链。zh/en 键集镜像由
       // gates 的 locale 校验兜底。
       'panel.section.about': '关于',
+      'panel.section.backup': '备份',
+      'backup.hint': '把整个资料库（状态、角色卡、世界书、预设、人设、群组、聊天与数据银行）导出为一个 ZIP。导入支持合并（跳过冲突）与替换（先创建快照）。',
+      'backup.export': '导出备份',
+      'backup.import': '导入备份',
+      'backup.importing': '正在导入…',
+      'backup.mode': '导入方式',
+      'backup.mode.merge': '合并（保留已有文件）',
+      'backup.mode.replace': '替换（覆盖，先创建快照）',
+      'backup.replaceHint': '替换会覆盖已有文件。服务端写入前会为当前资料库创建快照；导入失败会报告快照名。',
+      'backup.confirmReplace': '用这份备份替换当前资料库？会先创建快照。',
+      'backup.done': '已导入 {imported}，跳过 {skipped}，冲突 {conflicts}，拒绝 {rejected}。',
+      'backup.snapshot': '快照：{name}',
+      'backup.failed': '导入失败',
       'panel.about.tagline': '面向 DSH 的 SillyTavern 兼容角色扮演工作台。',
       'panel.about.website': '官网',
       'panel.about.author': '作者',
@@ -8325,6 +8627,8 @@ window.__ModuleLoader__.load({
       'panel.characters.firstMes': '开场白',
       'panel.characters.mesExample': '对话示例',
       'panel.characters.creatorNotes': '作者注',
+      'panel.characters.favorite': '收藏「{name}」',
+      'panel.characters.unfavorite': '取消收藏「{name}」',
       'panel.characters.creator': '作者：{name}',
       'panel.characters.loadFailed': '卡面加载失败：{message}',
       'panel.view': '查看',
@@ -8389,6 +8693,33 @@ window.__ModuleLoader__.load({
       'panel.worlds.enabled': '启用',
       'panel.worlds.constant': '常驻',
       'panel.worlds.selective': '选择性匹配',
+      'panel.worlds.probability': '触发概率（%）',
+      'panel.worlds.settings': '世界书设置',
+      'panel.worlds.settingsHint': '对 ST 生成与 Agent 侧世界书激活同时生效。上限类字段 0 = 不限制；条目里留空的字段跟随这里的值。',
+      'panel.worlds.scanDepth': '扫描深度（消息数）',
+      'panel.worlds.budgetPercent': '预算占上下文比例（%）',
+      'panel.worlds.budgetCap': '预算上限（token，0 = 不限）',
+      'panel.worlds.maxRecursionSteps': '最大递归步数（0 = 不限）',
+      'panel.worlds.minActivations': '最少激活条数（0 = 关闭）',
+      'panel.worlds.minActivationsDepthMax': '加深扫描的深度上限（0 = 不限）',
+      'panel.worlds.recursive': '递归扫描',
+      'panel.worlds.caseSensitive': '键名大小写敏感',
+      'panel.worlds.matchWholeWords': '整词匹配',
+      'panel.worlds.useGroupScoring': '组内加权计分',
+      'panel.worlds.includeNames': '扫描时消息带发言者名',
+      'panel.worlds.sticky': '粘滞（消息数）',
+      'panel.worlds.cooldown': '冷却（消息数）',
+      'panel.worlds.delay': '延迟（消息数）',
+      'panel.worlds.delayUntilRecursion': '延迟到递归轮',
+      'panel.worlds.group': '包含组',
+      'panel.worlds.role': '注入角色',
+      'panel.worlds.outletName': '出口名',
+      'panel.worlds.automationId': '自动化 id',
+      'panel.worlds.automationIdHint': '带同一个自动化 id 的快速回复集合在 ST 生成装配阶段自动执行一次。',
+      'panel.worlds.preventRecursion': '不触发递归',
+      'panel.worlds.excludeRecursion': '不被递归激活',
+      'panel.worlds.ignoreBudget': '不计预算',
+      'panel.worlds.useProbability': '使用概率判定',
       'panel.worlds.addEntry': '新增条目',
       'panel.worlds.new': '新建世界书',
       'panel.worlds.creating': '新建世界书（未保存）',
@@ -8416,6 +8747,12 @@ window.__ModuleLoader__.load({
       'panel.presets.role': '角色',
       'panel.presets.content': '内容',
       'panel.presets.marker': '插槽标记',
+      'panel.presets.promptOrder': '提示词顺序',
+      'panel.presets.promptOrderHint': '拖拽行（或用箭头）调整顺序；勾选框决定该条是否参与装配。不在本表里的提示词不会参与装配。',
+      'panel.presets.promptOrderEmpty': '这个预设还没有顺序表条目。',
+      'panel.presets.moveUp': '上移',
+      'panel.presets.moveDown': '下移',
+      'panel.presets.systemPromptFlag': '系统提示词标记',
       'panel.presets.enabled': '启用',
       'panel.presets.addPrompt': '新增提示词',
       'panel.presets.removePrompt': '移除提示词',
@@ -8524,6 +8861,24 @@ window.__ModuleLoader__.load({
       'message.branching': '分支中…',
       'message.save': '保存',
       'message.cancel': '取消',
+      'message.copy': '复制',
+      'message.copied': '已复制',
+      'message.copyFailed': '复制失败',
+      'message.hide': '隐藏',
+      'message.unhide': '取消隐藏',
+      'message.hidden': '已隐藏',
+      'message.reveal': '展开内容',
+      'message.collapse': '收起',
+      'message.delete': '删除',
+      'message.deleteConfirm': '确认删除',
+      'message.moveUp': '上移',
+      'message.moveDown': '下移',
+      'message.continue': '续写',
+      'message.impersonate': '代写',
+      'message.checkpoint': '存档点',
+      'message.checkpointing': '正在创建存档点…',
+      'message.checkpointCreated': '已创建存档点：{name}',
+      'message.tokens': '≈{count} tokens',
       'message.thinking': '思考中…',
       'message.thoughts': '思考过程',
       'view.unbound': '此会话未绑定酒馆聊天。',
@@ -8564,6 +8919,8 @@ window.__ModuleLoader__.load({
       'composer.stop': '停止生成',
       'composer.send': '发送',
       'composer.script': '运行 STscript',
+      'composer.slashHelp': '可用命令：{commands}',
+      'composer.slashComplete': '命令建议',
       'composer.member': '由 {name} 回复',
       'nav.title': '酒馆',
       'nav.chats': '酒馆角色扮演聊天',
@@ -8586,6 +8943,10 @@ window.__ModuleLoader__.load({
       'nav.noChats': '暂无聊天',
       'nav.noCharacters': '暂无角色卡',
       'nav.opening': '正在打开 {name}',
+      'nav.importChat': '导入聊天（.jsonl）',
+      'nav.importChatFailed': '聊天导入失败',
+      'nav.exportChat': '导出 {name}',
+      'nav.duplicateChat': '复制 {name}',
       'nav.rename': '重命名 {name}',
       'nav.delete': '删除 {name}',
       'nav.renamePrompt': '重命名酒馆聊天',
@@ -9393,6 +9754,98 @@ window.__ModuleLoader__.load({
       }
     }
 
+    // 消息级可见性（ST 的 Included / Excluded 眼形开关）：与 helper.ts 的
+    // isHidden 同口径 —— 消息级 `is_hidden` 与 `extra.is_hidden` 两种历史形态
+    // 都算隐藏。服务端生成历史已按同一规则跳过隐藏楼层，面板必须同口径，
+    // 否则"隐藏"只改 JSONL 不改行为。
+    function isMessageHidden(message) {
+      if (!message || typeof message !== 'object') return false
+      if (message.is_hidden === true) return true
+      const extra = message.extra
+      return !!extra && typeof extra === 'object' && extra.is_hidden === true
+    }
+
+    // 写回只保留一种形态：隐藏写消息级 `is_hidden`（ST 原生键，JSR 读取面与
+    // 生成历史都读它）；取消隐藏把 `is_hidden` 键与 `extra.is_hidden` 一并删掉，
+    // 不写 `false` —— 避免取消隐藏后仍被旧形态判为隐藏，也不给没人读的字段
+    // 留垃圾。
+    function withMessageHidden(message, hidden) {
+      const extra = message.extra
+      const hasExtra = !!extra && typeof extra === 'object'
+      if (hidden === true) {
+        return {
+          ...message,
+          is_hidden: true,
+          ...(hasExtra ? { extra: { ...extra, is_hidden: true } } : {}),
+        }
+      }
+      const rest = { ...message }
+      delete rest.is_hidden
+      if (hasExtra && 'is_hidden' in extra) {
+        const cleanExtra = { ...extra }
+        delete cleanExtra.is_hidden
+        rest.extra = cleanExtra
+      }
+      return rest
+    }
+
+    // 消息正文渲染：markdown 走宿主 MarkdownText（与思考块、资产视图同一条
+    // 渲染路径）；宿主原语缺失时退回纯文本，绝不把 markdown 源码当 HTML 注入。
+    // 完整 HTML 文档不经过这里——那些由 extractFrontendDocuments 判定后进沙箱
+    // iframe（FrontendFrame）。放在 store core 而不是 84-ui-chat：84 已贴源码
+    // 行数预算，这里是两处消息面都能复用的叶子工具。
+    function messageBody(text) {
+      return MarkdownText ? h(MarkdownText, { text }) : text
+    }
+
+    // 复制正文：优先异步剪贴板；权限被拒或非安全上下文退回隐藏 textarea +
+    // execCommand，两条都失败才抛错——静默成功是更坏的结果。
+    async function copyMessageText(text) {
+      const value = String(text ?? '')
+      const clipboard = typeof navigator === 'undefined' ? undefined : navigator.clipboard
+      if (clipboard && typeof clipboard.writeText === 'function') {
+        try {
+          await clipboard.writeText(value)
+          return
+        } catch {
+          // 剪贴板权限被拒：继续走 execCommand 兜底，兜底也失败才让调用方报错。
+        }
+      }
+      const area = document.createElement('textarea')
+      area.value = value
+      area.setAttribute('readonly', '')
+      area.style.position = 'fixed'
+      area.style.top = '-1000px'
+      area.style.opacity = '0'
+      document.body.appendChild(area)
+      try {
+        area.select()
+        if (document.execCommand('copy') !== true) throw new Error('clipboard unavailable')
+      } finally {
+        document.body.removeChild(area)
+      }
+    }
+
+    // checkpoint（同聊天存档点）：服务端把 0..messageId 复制进新聊天文件，父
+    // 聊天内容与 revision 都不变 —— 因此这里不碰 revisions[key]，也不自动切换
+    // 会话；只重取聊天列表，让新存档点出现在列表里。
+    async function createChatCheckpoint(binding, messageId, name) {
+      const key = chatKey(binding.character, binding.chatId)
+      const result = await api('checkpoint', {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+          character: binding.character,
+          chatId: binding.chatId,
+          revision: snapshot.revisions[key],
+          ...(typeof messageId === 'number' ? { messageId } : {}),
+          ...(typeof name === 'string' && name !== '' ? { name } : {}),
+        }),
+      })
+      void loadChatList(binding.character, true).catch(() => {})
+      return result
+    }
+
     function setRun(sessionId, patch) {
       update({
         runs: {
@@ -9695,6 +10148,7 @@ window.__ModuleLoader__.load({
     function stopGeneration(sessionId) {
       controllers.get(sessionId)?.abort()
     }
+
 
     function base64Url(value) {
       const bytes = new TextEncoder().encode(value)
@@ -10573,28 +11027,6 @@ window.__ModuleLoader__.load({
       }
     }
 
-    async function createPersona(name, description) {
-      const result = await api('import/persona', {
-        method: 'POST',
-        headers: jsonHeaders(),
-        body: JSON.stringify({ name, description }),
-      })
-      await refreshBootstrap()
-      broadcastModEvent('assets-saved', { kind: 'persona', name })
-      return result.persona
-    }
-
-    async function savePersona(name, description) {
-      const result = await api('persona', {
-        method: 'PUT',
-        headers: jsonHeaders(),
-        body: JSON.stringify({ name, description }),
-      })
-      await refreshBootstrap()
-      broadcastModEvent('assets-saved', { kind: 'persona', name })
-      return result.persona
-    }
-
     async function deletePersona(name) {
       await api(`persona?name=${encodeURIComponent(name)}`, { method: 'DELETE' })
       await refreshBootstrap()
@@ -10983,18 +11415,63 @@ window.__ModuleLoader__.load({
         error ? h('span', { className: 'dt-upload-error', title: error }, '!') : null)
     }
 
+    // persona 注入位置（服务端 generation/pipeline.ts 的读取口径）：0=提示词内、
+    // 4=对话内指定深度（配 depth/role）、2/3=Author's Note 顶/底、9=不注入。
+    const PERSONA_POSITIONS = [
+      { value: 0, key: 'settings.personaPositionInPrompt' },
+      { value: 4, key: 'settings.personaPositionAtDepth' },
+      { value: 2, key: 'settings.personaPositionTopAn' },
+      { value: 3, key: 'settings.personaPositionBottomAn' },
+      { value: 9, key: 'settings.personaPositionNone' },
+    ]
+    const PERSONA_ROLES = [
+      { value: 0, key: 'settings.personaRoleSystem' },
+      { value: 1, key: 'settings.personaRoleUser' },
+      { value: 2, key: 'settings.personaRoleAssistant' },
+    ]
+
     function PersonaEditor({ persona, existingNames, onSave, onCancel }) {
       const t = useTranslate()
       const editing = persona !== null
       const [name, setName] = useState(editing ? String(persona.name || '') : '')
       const [description, setDescription] = useState(editing ? String(persona.description || '') : '')
+      const [position, setPosition] = useState(editing && typeof persona.position === 'number' ? persona.position : 0)
+      const [depth, setDepth] = useState(editing && typeof persona.depth === 'number' ? persona.depth : 4)
+      const [role, setRole] = useState(editing && typeof persona.role === 'number' ? persona.role : 0)
+      // 头像只在用户选了文件时随保存一起提交（PNG base64，服务端校验魔数）。
+      const [avatarPng, setAvatarPng] = useState('')
       const [saving, setSaving] = useState(false)
       const [error, setError] = useState('')
-      const baselineDescription = editing ? String(persona.description || '') : ''
+      const baseline = editing
+        ? {
+            description: String(persona.description || ''),
+            position: typeof persona.position === 'number' ? persona.position : 0,
+            depth: typeof persona.depth === 'number' ? persona.depth : 4,
+            role: typeof persona.role === 'number' ? persona.role : 0,
+          }
+        : null
       const dirty = editing
-        ? description !== baselineDescription
-        : name.trim() !== '' || description !== ''
+        ? description !== baseline.description || position !== baseline.position
+          || depth !== baseline.depth || role !== baseline.role || avatarPng !== ''
+        : name.trim() !== '' || description !== '' || avatarPng !== ''
       const cancel = () => { if (!dirty || window.confirm(`${t('panel.unsaved')}?`)) onCancel() }
+      const pickAvatar = (event) => {
+        const file = event.target.files?.[0]
+        event.target.value = ''
+        if (!file) return
+        if (file.type !== 'image/png') { setError(t('settings.personaAvatarPngOnly')); return }
+        const reader = new FileReader()
+        reader.onload = () => {
+          const data = String(reader.result || '')
+          const separator = data.indexOf(',')
+          const base64 = separator >= 0 ? data.slice(separator + 1) : ''
+          if (base64 === '') { setError(t('settings.personaAvatarPngOnly')); return }
+          setError('')
+          setAvatarPng(base64)
+        }
+        reader.onerror = () => setError(t('settings.personaAvatarPngOnly'))
+        reader.readAsDataURL(file)
+      }
       const save = () => {
         const trimmed = name.trim()
         if (trimmed === '') { setError(t('settings.personaNameRequired')); return }
@@ -11004,7 +11481,15 @@ window.__ModuleLoader__.load({
         }
         setSaving(true)
         setError('')
-        void Promise.resolve(onSave(editing ? { name: persona.name, description } : { name: trimmed, description }))
+        const payload = {
+          name: editing ? persona.name : trimmed,
+          description,
+          position,
+          depth,
+          role,
+          ...(avatarPng === '' ? {} : { pngBase64: avatarPng }),
+        }
+        void Promise.resolve(onSave(payload))
           .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
           .finally(() => setSaving(false))
       }
@@ -11032,7 +11517,74 @@ window.__ModuleLoader__.load({
             multiline: true,
             className: 'dt-editor-wide',
           }),
+          // 注入位置（契约 2026-11-12 §2.11）：位置/深度/角色此前只有数据面，
+          // 面板改不了，等于 persona 永远落在「提示词内」。
+          h('label', { className: 'dt-editor-field' },
+            h('span', { className: 'dt-label' }, t('settings.personaPosition')),
+            h('select', {
+              value: position,
+              onChange: (event) => setPosition(Number(event.target.value)),
+            }, PERSONA_POSITIONS.map((option) => h('option', { key: option.value, value: option.value }, t(option.key))))),
+          position === 4
+            ? h(React.Fragment, null,
+              h(EditorField, {
+                label: t('settings.personaDepth'),
+                value: depth,
+                type: 'number',
+                min: 0,
+                onChange: (value) => setDepth(Math.max(0, Math.round(Number(value) || 0))),
+              }),
+              h('label', { className: 'dt-editor-field' },
+                h('span', { className: 'dt-label' }, t('settings.personaRole')),
+                h('select', {
+                  value: role,
+                  onChange: (event) => setRole(Number(event.target.value)),
+                }, PERSONA_ROLES.map((option) => h('option', { key: option.value, value: option.value }, t(option.key))))))
+            : null,
+          h('div', { className: 'dt-editor-field' },
+            h('span', { className: 'dt-label' }, t('settings.personaAvatar')),
+            h('label', { className: 'dt-upload', title: t('settings.personaAvatarPick') },
+              avatarPng !== '' ? t('settings.personaAvatarPending') : t('settings.personaAvatarPick'),
+              h('input', { type: 'file', accept: 'image/png', onChange: pickAvatar })),
+            h('span', { className: 'dt-hint' },
+              editing && persona.hasAvatar === true ? t('settings.personaAvatarCurrent') : t('settings.personaAvatarHint'))),
           error ? h('p', { className: 'dt-error' }, error) : null))
+    }
+
+    // persona 完整写路径（契约 2026-11-12 §2.11）：create/save 两个 helper 只带
+    // name+description，位置/深度/角色/头像写不进去。新建走 import/persona
+    // （与面板导入同一条落库路径），需要头像时再补一次 PUT——导入会把描述重置成
+    // PNG 内嵌卡文本，所以头像不能借导入顺带写。
+    async function createPersonaRecord({ name, description, position, depth, role, pngBase64 }) {
+      const result = await api('import/persona', {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ name, description, position, depth, role }),
+      })
+      await refreshBootstrap()
+      broadcastModEvent('assets-saved', { kind: 'persona', name })
+      if (typeof pngBase64 === 'string' && pngBase64 !== '') {
+        return savePersonaRecord({ name: result.persona?.name || name, description, position, depth, role, pngBase64 })
+      }
+      return result.persona
+    }
+
+    async function savePersonaRecord({ name, description, position, depth, role, pngBase64 }) {
+      const result = await api('persona', {
+        method: 'PUT',
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+          name,
+          description,
+          position,
+          depth,
+          role,
+          ...(typeof pngBase64 === 'string' && pngBase64 !== '' ? { pngBase64 } : {}),
+        }),
+      })
+      await refreshBootstrap()
+      broadcastModEvent('assets-saved', { kind: 'persona', name })
+      return result.persona
     }
 
     function PersonaBand() {
@@ -11097,9 +11649,9 @@ window.__ModuleLoader__.load({
           ? h(PersonaEditor, {
             persona: editor.persona,
             existingNames: personas.map((persona) => persona.name),
-            onSave: ({ name: nextName, description }) => (editor.persona === null
-              ? createPersona(nextName, description)
-              : savePersona(editor.persona.name, description)).then(() => setEditor(null)),
+            onSave: (payload) => (editor.persona === null
+              ? createPersonaRecord(payload)
+              : savePersonaRecord(payload)).then(() => setEditor(null)),
             onCancel: () => setEditor(null),
           })
           : null,
@@ -11161,6 +11713,9 @@ window.__ModuleLoader__.load({
                 'aria-label': t('settings.groupStrategy'),
                 onChange: (event) => run(updateGroup({ name: group.name, activationStrategy: Number(event.target.value) })),
               },
+              // 0 = MANUAL（契约 2026-11-12 §2.9）：导入时不再被改写成 1，
+              // 面板必须能把它设回去。
+              h('option', { value: 0 }, t('settings.groupManual')),
               h('option', { value: 1 }, t('settings.groupNatural')),
               h('option', { value: 2 }, t('settings.groupList'))),
               h('button', {
@@ -11204,6 +11759,386 @@ window.__ModuleLoader__.load({
               }, '×'))
             }))))),
         error ? h('p', { className: 'dt-error' }, error) : null)
+    }
+
+
+    /* ---------------- 快速回复 / 聊天注记 / 世界书设置（契约 2026-11-12） ---------------- */
+
+    // 快速回复集合的编辑草稿：`commandsText` 是 textarea 的原文（逐行脚本），
+    // 保存时按行切开——行内空白保留，纯空行由服务端丢弃。
+    function quickReplyDraftOf(set) {
+      return {
+        id: typeof set?.id === 'string' ? set.id : '',
+        name: typeof set?.name === 'string' ? set.name : '',
+        enabled: set?.enabled === true,
+        isGlobal: set?.isGlobal === true,
+        automationId: typeof set?.automationId === 'string' ? set.automationId : '',
+        commandsText: Array.isArray(set?.commands) ? set.commands.join('\n') : '',
+      }
+    }
+
+    /**
+     * 快速回复分区（契约 2026-11-12 §2.6）：集合 CRUD + composer 按钮行总开关。
+     * 保存是全量替换（PUT quick-replies），草稿在本地维护、点保存才落盘；服务端
+     * 拒绝重名/重 id，错误原样显示在这一段。
+     */
+    function QuickRepliesBand() {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const remote = Array.isArray(state.bootstrap.state.quickReplies) ? state.bootstrap.state.quickReplies : []
+      const remoteEnabled = state.bootstrap.state.quickRepliesEnabled !== false
+      const [enabled, setEnabled] = useState(remoteEnabled)
+      const [draft, setDraft] = useState(() => remote.map(quickReplyDraftOf))
+      const [baseline, setBaseline] = useState(() => JSON.stringify({ enabled: remoteEnabled, sets: remote.map(quickReplyDraftOf) }))
+      const [saving, setSaving] = useState(false)
+      const [error, setError] = useState('')
+      const [notice, setNotice] = useState('')
+      const serialize = (sets) => sets.map((set) => ({
+        ...(set.id === '' ? {} : { id: set.id }),
+        name: String(set.name || '').trim(),
+        enabled: set.enabled === true,
+        isGlobal: set.isGlobal === true,
+        ...(String(set.automationId || '').trim() === '' ? {} : { automationId: String(set.automationId).trim() }),
+        commands: String(set.commandsText || '').split('\n'),
+      }))
+      const dirty = JSON.stringify({ enabled, sets: draft }) !== baseline
+      const patchSet = (index, patch) => setDraft((current) => current.map((set, at) => at === index ? { ...set, ...patch } : set))
+      const addSet = () => setDraft((current) => [...current, {
+        id: '', name: t('panel.quickReplies.newName'), enabled: true, isGlobal: true, automationId: '', commandsText: '',
+      }])
+      const removeSet = (index) => setDraft((current) => current.filter((_, at) => at !== index))
+      const reload = () => {
+        const sets = (Array.isArray(state.bootstrap.state.quickReplies) ? state.bootstrap.state.quickReplies : []).map(quickReplyDraftOf)
+        const nextEnabled = state.bootstrap.state.quickRepliesEnabled !== false
+        setEnabled(nextEnabled)
+        setDraft(sets)
+        setBaseline(JSON.stringify({ enabled: nextEnabled, sets }))
+        setError('')
+        setNotice('')
+      }
+      const save = () => {
+        setSaving(true)
+        setError('')
+        setNotice('')
+        void api('quick-replies', {
+          method: 'PUT',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ quickReplies: serialize(draft), quickRepliesEnabled: enabled }),
+        })
+          .then(async (result) => {
+            const sets = (Array.isArray(result.quickReplies) ? result.quickReplies : []).map(quickReplyDraftOf)
+            const nextEnabled = result.quickRepliesEnabled !== false
+            setEnabled(nextEnabled)
+            setDraft(sets)
+            setBaseline(JSON.stringify({ enabled: nextEnabled, sets }))
+            await refreshBootstrap()
+            setNotice(t('panel.saved'))
+          })
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setSaving(false))
+      }
+      return h('section', { className: 'dt-settings-band' },
+        h('h3', null, t('panel.quickReplies.title')),
+        h('p', { className: 'dt-hint' }, t('panel.quickReplies.hint')),
+        // 执行面是 STscript：Agent 架构的生成走 AgentLoop，没有命令通道。按钮行
+        // 在那里不渲染，原因写在这里（与 composer 同一句话）。
+        h('p', { className: 'dt-hint' }, t('panel.quickReplies.archHint')),
+        h('label', { className: 'dt-toggle' },
+          h('input', {
+            type: 'checkbox',
+            checked: enabled,
+            onChange: (event) => setEnabled(event.target.checked),
+          }),
+          h('span', null, t('panel.quickReplies.masterToggle'))),
+        h('div', { className: 'dt-band-actions' },
+          h(Button, { size: 'sm', variant: 'outline', icon: h(IconPlusOutline16), disabled: saving, onClick: addSet }, t('panel.quickReplies.add')),
+          h(Button, { size: 'sm', variant: 'primary', disabled: saving || !dirty, onClick: save }, saving ? t('settings.importing') : t('panel.save')),
+          h(Button, { size: 'sm', variant: 'ghost', disabled: saving || !dirty, onClick: reload }, t('panel.cancel'))),
+        draft.length === 0
+          ? h('p', { className: 'dt-muted' }, t('panel.quickReplies.empty'))
+          : h('div', { className: 'dt-editor-entries' }, draft.map((set, index) => h('section', { key: `${set.id || set.name || 'new'}-${index}`, className: 'dt-editor-entry' },
+            h('div', { className: 'dt-editor-entry-head' },
+              h('strong', null, set.name || t('panel.quickReplies.newName')),
+              h(Button, {
+                size: 'sm',
+                variant: 'ghost',
+                icon: h(IconTrashOutline16),
+                'aria-label': t('panel.quickReplies.remove', { name: set.name }),
+                title: t('panel.quickReplies.remove', { name: set.name }),
+                disabled: saving,
+                onClick: () => removeSet(index),
+              })),
+            h('div', { className: 'dt-editor-grid' },
+              h(EditorField, { label: t('panel.quickReplies.name'), value: set.name, onChange: (value) => patchSet(index, { name: value }) }),
+              h(EditorField, { label: t('panel.quickReplies.automationId'), value: set.automationId, onChange: (value) => patchSet(index, { automationId: value }), hint: t('panel.quickReplies.automationIdHint') }),
+              h('div', { className: 'dt-editor-toggles dt-editor-wide' },
+                h(ToggleField, { label: t('panel.quickReplies.enabled'), checked: set.enabled, onChange: (value) => patchSet(index, { enabled: value }) }),
+                h(ToggleField, { label: t('panel.quickReplies.isGlobal'), checked: set.isGlobal, onChange: (value) => patchSet(index, { isGlobal: value }) })),
+              h(EditorField, { label: t('panel.quickReplies.commands'), value: set.commandsText, onChange: (value) => patchSet(index, { commandsText: value }), multiline: true, className: 'dt-editor-wide dt-editor-json', hint: t('panel.quickReplies.commandsHint') }))))),
+        notice ? h('p', { className: 'dt-muted' }, notice) : null,
+        error ? h('p', { className: 'dt-error' }, error) : null)
+    }
+
+    /**
+     * 聊天注记（契约 2026-11-12 §2.4）：Author's Note 与 Summary 写进当前聊天的
+     * `chat_metadata`，走既有 `PUT chat` 的 revision CAS——生成侧只读这两项，本
+     * 分区不改装配。字段形状与契约一致：`note_prompt`/`note_settings`/`summary`。
+     */
+    function ChatNotesBand({ useSessions }) {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const sessionId = useCurrentSessionId(useSessions)
+      const binding = sessionId ? state.bootstrap.state.sessionBindings?.[sessionId] : undefined
+      const key = binding ? chatKey(binding.character, binding.chatId) : ''
+      const chat = binding ? state.chats[key] : null
+      const revision = binding ? state.revisions[key] : undefined
+      const [draft, setDraft] = useState(null)
+      const [saving, setSaving] = useState(false)
+      const [error, setError] = useState('')
+      const [notice, setNotice] = useState('')
+      useEffect(() => {
+        if (!binding) return
+        if (chat === null || chat === undefined) {
+          void loadChat(binding.character, binding.chatId).catch(() => {})
+        }
+      }, [binding?.character, binding?.chatId, chat === null])
+      const meta = chat?.header?.chat_metadata
+      useEffect(() => {
+        if (!chat) { setDraft(null); return }
+        const settings = meta?.note_settings && typeof meta.note_settings === 'object' ? meta.note_settings : {}
+        setDraft({
+          notePrompt: typeof meta?.note_prompt === 'string' ? meta.note_prompt : '',
+          summary: typeof meta?.summary === 'string' ? meta.summary : '',
+          position: settings.position === 'at_depth' ? 'at_depth' : 'in_prompt',
+          depth: typeof settings.depth === 'number' ? settings.depth : 4,
+          role: settings.role === 'user' ? 'user' : settings.role === 'assistant' ? 'assistant' : 'system',
+          interval: typeof settings.interval === 'number' ? settings.interval : 0,
+        })
+      }, [key, revision, chat === undefined])
+      const setField = (patch) => setDraft((current) => ({ ...(current || {}), ...patch }))
+      const save = () => {
+        if (!binding || !chat || !draft) return
+        setSaving(true)
+        setError('')
+        setNotice('')
+        const nextMeta = { ...(meta || {}) }
+        if (draft.notePrompt.trim() === '') {
+          // 清空即删键：生成侧按「非空才注入」判定，留空串会让 state 里多出
+          // 一个没有语义的键。
+          delete nextMeta.note_prompt
+          delete nextMeta.note_settings
+        } else {
+          nextMeta.note_prompt = draft.notePrompt
+          nextMeta.note_settings = {
+            position: draft.position,
+            ...(draft.position === 'at_depth'
+              ? { depth: Math.max(0, Math.round(Number(draft.depth) || 0)), role: draft.role }
+              : {}),
+            ...(Math.round(Number(draft.interval) || 0) > 0 ? { interval: Math.round(Number(draft.interval)) } : {}),
+          }
+        }
+        if (draft.summary.trim() === '') delete nextMeta.summary
+        else nextMeta.summary = draft.summary
+        void saveChat(binding.character, binding.chatId, { ...chat, header: { ...chat.header, chat_metadata: nextMeta } })
+          .then(() => setNotice(t('panel.saved')))
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setSaving(false))
+      }
+      return h('section', { className: 'dt-settings-band' },
+        h('h3', null, t('panel.notes.title')),
+        h('p', { className: 'dt-hint' }, t('panel.notes.hint')),
+        !binding
+          ? h('p', { className: 'dt-muted' }, t('panel.notes.noChat'))
+          : !draft
+            ? h('p', { className: 'dt-muted' }, t('nav.loading'))
+            : h(React.Fragment, null,
+              h('p', { className: 'dt-hint' }, t('panel.notes.chatHint', { character: binding.character, chatId: binding.chatId })),
+              h('div', { className: 'dt-editor-grid' },
+                h(EditorField, {
+                  label: t('panel.notes.authorNote'),
+                  value: draft.notePrompt,
+                  onChange: (value) => setField({ notePrompt: value }),
+                  multiline: true,
+                  className: 'dt-editor-wide',
+                  hint: t('panel.notes.authorNoteHint'),
+                }),
+                h('label', { className: 'dt-editor-field' },
+                  h('span', { className: 'dt-label' }, t('panel.notes.position')),
+                  h('select', {
+                    value: draft.position,
+                    onChange: (event) => setField({ position: event.target.value === 'at_depth' ? 'at_depth' : 'in_prompt' }),
+                  },
+                  h('option', { value: 'in_prompt' }, t('panel.notes.positionInPrompt')),
+                  h('option', { value: 'at_depth' }, t('panel.notes.positionAtDepth')))),
+                draft.position === 'at_depth'
+                  ? h(EditorField, {
+                    label: t('panel.notes.depth'),
+                    value: draft.depth,
+                    type: 'number',
+                    min: 0,
+                    onChange: (value) => setField({ depth: Math.max(0, Math.round(Number(value) || 0)) }),
+                  })
+                  : null,
+                draft.position === 'at_depth'
+                  ? h('label', { className: 'dt-editor-field' },
+                    h('span', { className: 'dt-label' }, t('panel.notes.role')),
+                    h('select', {
+                      value: draft.role,
+                      onChange: (event) => setField({ role: event.target.value }),
+                    },
+                    h('option', { value: 'system' }, 'system'),
+                    h('option', { value: 'user' }, 'user'),
+                    h('option', { value: 'assistant' }, 'assistant')))
+                  : null,
+                h(EditorField, {
+                  label: t('panel.notes.interval'),
+                  value: draft.interval,
+                  type: 'number',
+                  min: 0,
+                  onChange: (value) => setField({ interval: Math.max(0, Math.round(Number(value) || 0)) }),
+                  hint: t('panel.notes.intervalHint'),
+                }),
+                h(EditorField, {
+                  label: t('panel.notes.summary'),
+                  value: draft.summary,
+                  onChange: (value) => setField({ summary: value }),
+                  multiline: true,
+                  className: 'dt-editor-wide',
+                  hint: t('panel.notes.summaryHint'),
+                })),
+              h('div', { className: 'dt-imports' },
+                h(Button, { size: 'sm', variant: 'primary', disabled: saving, onClick: save }, saving ? t('settings.importing') : t('panel.save')))),
+        notice ? h('p', { className: 'dt-muted' }, notice) : null,
+        error ? h('p', { className: 'dt-error' }, error) : null)
+    }
+
+    // 世界书设置的数值字段定义（契约 2026-11-12 §2.8）。读取侧
+    // tavern-store/src/world-settings.ts 已经合并默认并夹取，这里只负责输入面。
+    const WORLD_INFO_NUMBER_FIELDS = [
+      { key: 'scanDepth', label: 'panel.worlds.scanDepth', min: 0, max: 100 },
+      { key: 'budgetPercent', label: 'panel.worlds.budgetPercent', min: 0, max: 100 },
+      { key: 'budgetCap', label: 'panel.worlds.budgetCap', min: 0, max: 1000000 },
+      { key: 'maxRecursionSteps', label: 'panel.worlds.maxRecursionSteps', min: 0, max: 100 },
+      { key: 'minActivations', label: 'panel.worlds.minActivations', min: 0, max: 100 },
+      { key: 'minActivationsDepthMax', label: 'panel.worlds.minActivationsDepthMax', min: 0, max: 1000 },
+    ]
+    const WORLD_INFO_TOGGLE_FIELDS = [
+      { key: 'recursive', label: 'panel.worlds.recursive' },
+      { key: 'caseSensitive', label: 'panel.worlds.caseSensitive' },
+      { key: 'matchWholeWords', label: 'panel.worlds.matchWholeWords' },
+      { key: 'useGroupScoring', label: 'panel.worlds.useGroupScoring' },
+      { key: 'includeNames', label: 'panel.worlds.includeNames' },
+    ]
+
+    /**
+     * 世界书全局设置表单（契约 2026-11-12 §2.8）：引擎实现了这些开关，但唯一
+     * 调用点长期写死 recursive/scanDepth/budgetPercent——没有这张表单它们等于
+     * 死代码。读 bootstrap 里已合并默认的 worldInfoSettings，保存走 PUT state
+     * 的 worldInfoSettings 白名单（服务端用同一个 worldInfoSettingsOf 归一）。
+     */
+    function WorldInfoSettingsForm() {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const remote = state.bootstrap.state.worldInfoSettings || {}
+      const remoteJson = JSON.stringify(remote)
+      const [draft, setDraft] = useState(() => ({ ...remote }))
+      const [saving, setSaving] = useState(false)
+      const [error, setError] = useState('')
+      const [notice, setNotice] = useState('')
+      // 远端变化（保存回写、另一处修改）才重置草稿：typing 只动 draft。
+      useEffect(() => { setDraft({ ...remote }) }, [remoteJson])
+      const dirty = JSON.stringify(draft) !== remoteJson
+      const setField = (patch) => setDraft((current) => ({ ...current, ...patch }))
+      const save = () => {
+        setSaving(true)
+        setError('')
+        setNotice('')
+        void patchState({ worldInfoSettings: draft })
+          .then(() => setNotice(t('panel.saved')))
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setSaving(false))
+      }
+      const reset = () => { setDraft({ ...remote }); setError(''); setNotice('') }
+      return h('section', { className: 'dt-settings-band' },
+        h('h3', null, t('panel.worlds.settings')),
+        h('p', { className: 'dt-hint' }, t('panel.worlds.settingsHint')),
+        h('div', { className: 'dt-editor-grid' },
+          WORLD_INFO_NUMBER_FIELDS.map((field) => h(EditorField, {
+            key: field.key,
+            label: t(field.label),
+            value: draft[field.key] ?? 0,
+            type: 'number',
+            min: field.min,
+            max: field.max,
+            onChange: (value) => setField({ [field.key]: Math.max(field.min, Math.min(field.max, Math.round(Number(value) || 0))) }),
+          })),
+          h('div', { className: 'dt-editor-toggles dt-editor-wide' },
+            WORLD_INFO_TOGGLE_FIELDS.map((field) => h(ToggleField, {
+              key: field.key,
+              label: t(field.label),
+              checked: draft[field.key] === true,
+              onChange: (value) => setField({ [field.key]: value }),
+            })))),
+        h('div', { className: 'dt-imports' },
+          h(Button, { size: 'sm', variant: 'primary', disabled: saving || !dirty, onClick: save }, saving ? t('settings.importing') : t('panel.save')),
+          h(Button, { size: 'sm', variant: 'ghost', disabled: saving || !dirty, onClick: reset }, t('panel.cancel'))),
+        notice ? h('p', { className: 'dt-muted' }, notice) : null,
+        error ? h('p', { className: 'dt-error' }, error) : null)
+    }
+
+    // 世界书条目高级字段（契约 2026-11-12 §2.11）：递归/置顶计时/组/角色/出口/
+    // 自动化 id 此前只能改 advanced JSON。ST 用 null 表示「不设值、跟随全局」，
+    // 所以数值输入清空必须写回 null 而不是 0。
+    const WORLD_ENTRY_NUMBER_FIELDS = [
+      { key: 'sticky', label: 'panel.worlds.sticky' },
+      { key: 'cooldown', label: 'panel.worlds.cooldown' },
+      { key: 'delay', label: 'panel.worlds.delay' },
+      { key: 'delayUntilRecursion', label: 'panel.worlds.delayUntilRecursion' },
+    ]
+    const WORLD_ENTRY_TOGGLE_FIELDS = [
+      { key: 'preventRecursion', label: 'panel.worlds.preventRecursion' },
+      { key: 'excludeRecursion', label: 'panel.worlds.excludeRecursion' },
+      { key: 'ignoreBudget', label: 'panel.worlds.ignoreBudget' },
+      { key: 'useProbability', label: 'panel.worlds.useProbability' },
+    ]
+    const WORLD_ENTRY_ROLES = [
+      { value: 0, key: 'settings.personaRoleSystem' },
+      { value: 1, key: 'settings.personaRoleUser' },
+      { value: 2, key: 'settings.personaRoleAssistant' },
+    ]
+
+    function WorldEntryAdvancedFields({ entry, onChange }) {
+      const t = useTranslate()
+      return h(React.Fragment, null,
+        h('div', { className: 'dt-editor-toggles dt-editor-wide' },
+          WORLD_ENTRY_TOGGLE_FIELDS.map((field) => h(ToggleField, {
+            key: field.key,
+            label: t(field.label),
+            checked: entry[field.key] === true,
+            onChange: (value) => onChange(field.key, value),
+          }))),
+        h(EditorField, { label: t('panel.worlds.group'), value: entry.group, onChange: (value) => onChange('group', value) }),
+        h(EditorField, { label: t('panel.worlds.outletName'), value: entry.outletName, onChange: (value) => onChange('outletName', value) }),
+        h(EditorField, {
+          label: t('panel.worlds.automationId'),
+          value: entry.automationId,
+          onChange: (value) => onChange('automationId', value),
+          hint: t('panel.worlds.automationIdHint'),
+        }),
+        h('label', { className: 'dt-editor-field' },
+          h('span', { className: 'dt-label' }, t('panel.worlds.role')),
+          h('select', {
+            value: typeof entry.role === 'number' ? entry.role : 0,
+            onChange: (event) => onChange('role', Number(event.target.value)),
+          }, WORLD_ENTRY_ROLES.map((option) => h('option', { key: option.value, value: option.value }, t(option.key))))),
+        WORLD_ENTRY_NUMBER_FIELDS.map((field) => h(EditorField, {
+          key: field.key,
+          label: t(field.label),
+          value: entry[field.key] ?? '',
+          type: 'number',
+          min: 0,
+          onChange: (value) => onChange(field.key, value.trim() === '' ? null : Number(value)),
+        })))
     }
 
     const REGEX_PLACEMENTS = [
@@ -11314,6 +12249,20 @@ window.__ModuleLoader__.load({
             h(ToggleField, { label: t('settings.regexRunOnEdit'), checked: draft.runOnEdit === true, onChange: (value) => setField('runOnEdit', value) }),
             h(ToggleField, { label: t('settings.regexSubstitute'), checked: draft.substituteRegex === true, onChange: (value) => setField('substituteRegex', value) }))),
         error ? h('p', { className: 'dt-error' }, error) : null))
+    }
+
+    // 本地 JSON 下载（正则导出用）：路径不走服务端 export 路由——正则表是 state
+    // 切片，没有单独导出端点（契约 2026-11-12 §2.11 只要求面板有导出按钮）。
+    function downloadJsonFile(fileName, data) {
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = fileName
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(url)
     }
 
     function RegexBand({ useSessions }) {
@@ -11577,7 +12526,16 @@ window.__ModuleLoader__.load({
           h(Button, { size: 'sm', variant: 'primary', icon: h(IconPlusOutline16), disabled: editing !== '', onClick: () => { setNewScript(newRegexScript()); setEditing('new') } }, t('settings.regexCreate')),
           h(UploadButton, { kind: 'regex', label: t('settings.importRegex'), accept: '.json,application/json' }),
           h(Button, { size: 'sm', variant: 'ghost', icon: h(IconRefreshOutline16), disabled: syncing !== '', onClick: syncFromCards }, syncing === 'cards' ? t('settings.importing') : t('settings.regexSyncCards')),
-          h(Button, { size: 'sm', variant: 'ghost', icon: h(IconRefreshOutline16), disabled: syncing !== '', onClick: syncFromPresets }, syncing === 'presets' ? t('settings.importing') : t('settings.regexSyncPresets'))),
+          h(Button, { size: 'sm', variant: 'ghost', icon: h(IconRefreshOutline16), disabled: syncing !== '', onClick: syncFromPresets }, syncing === 'presets' ? t('settings.importing') : t('settings.regexSyncPresets')),
+          // 导出（契约 2026-11-12 §2.11）：整表导出（含停用项与归属），换机/备份
+          // 不必再翻 state.json。
+          h(Button, {
+            size: 'sm',
+            variant: 'ghost',
+            icon: h(IconDownloadOutline16),
+            disabled: scripts.length === 0,
+            onClick: () => downloadJsonFile('regex-scripts.json', scripts),
+          }, t('settings.regexExport'))),
         scripts.length > 0 && editing === '' ? h('div', { className: 'dt-filter-row' },
           h(Input, { icon: h(IconSearchOutline16), placeholder: t('panel.filterPlaceholder'), 'aria-label': t('panel.filterPlaceholder'), value: regexFilter, onChange: (event) => setRegexFilter(event.target.value) })) : null,
         scripts.length === 0 && editing !== 'new' ? h('p', { className: 'dt-muted' }, t('settings.regexEmpty')) : visibleCount === 0
@@ -12377,6 +13335,17 @@ window.__ModuleLoader__.load({
               onChange: (event) => applyPatch({ nativeAgentPreset: event.target.checked }),
             }),
             h('span', null, t('settings.nativePreset'))),
+          // Agent 生成上下文注入（契约 2026-11-12 §2.10）：常驻世界书 top-N、记忆
+          // top-N、summary/note_prompt 三块 reference data。默认关闭，逐次由
+          // AgentTavern 的 context 部件读取，无缓存需写穿。
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: bootstrap.state.agentContextInjection === true,
+              onChange: (event) => applyPatch({ agentContextInjection: event.target.checked }),
+            }),
+            h('span', null, t('settings.agentContextInjection'))),
+          h('p', { className: 'dt-hint' }, t('settings.agentContextInjectionHint')),
           // IM 绑定会话的完整原生 Agent 工具面：与 PTC 呈现正交，两者可同时开。
           h('label', { className: 'dt-toggle' },
             h('input', {
@@ -12637,17 +13606,43 @@ window.__ModuleLoader__.load({
         .replace(/\{\{bot\}\}/gi, () => char)
     }
 
-    function MessageRow({ sessionId, character, chatId, chat, message, index, busy, display, persona }) {
+    function MessageRow({ sessionId, binding, character, chatId, chat, message, index, busy, display, persona }) {
       const t = useTranslate()
       const [editing, setEditing] = useState(false)
       const [draft, setDraft] = useState(message.mes || '')
       const [error, setError] = useState('')
+      const [notice, setNotice] = useState('')
       const [branching, setBranching] = useState(false)
+      const [checkpointing, setCheckpointing] = useState(false)
+      // 删除二次确认走行内两步（先确认再执行）：不用原生 confirm，避免模态
+      // 对话框打断流式渲染；失焦即撤销确认态。
+      const [confirmingDelete, setConfirmingDelete] = useState(false)
+      // 隐藏楼层折叠态：正文默认收起，但楼层留在 DOM 里，用户随时能展开或
+      // 取消隐藏（ST 的 Excluded 语义不允许"看不见就再也点不到"）。
+      const [hiddenOpen, setHiddenOpen] = useState(false)
       // 思考块展开态：流式楼层默认展开（用户要看思考实时滚动），保存后重挂载
       // （key 含 'stream'/'saved' 分段）自然回落折叠。
       const [reasoningOpen, setReasoningOpen] = useState(message.streaming === true)
       useEffect(() => setDraft(message.mes || ''), [message.mes])
+      useEffect(() => {
+        if (notice === '') return
+        const timer = setTimeout(() => setNotice(''), 2400)
+        return () => clearTimeout(timer)
+      }, [notice])
       const isUser = message.is_user === true
+      // 只有已落盘楼层支持写操作：流式伪楼层的索引超出 chat.messages，写回会
+      // 撞上服务端"message_id 越界"，动作行对它一律禁用。
+      const persisted = message.streaming !== true && index < chat.messages.length
+      const hidden = persisted && isMessageHidden(message)
+      const collapsed = hidden && !hiddenOpen
+      const lastIndex = chat.messages.length - 1
+      const isLast = persisted && index === lastIndex
+      // Continue / Impersonate / 末条重掷只对 ST 生成入口开放（与重掷按钮、
+      // Tavern 标签页同源判断）；AgentTavern 的回复由主循环产出，没有这些动词。
+      const stGeneration = binding ? bindingArchitecture(binding) === 'st' : false
+      const tokenCount = typeof message.extra?.tokenCount === 'number' && Number.isFinite(message.extra.tokenCount)
+        ? Math.round(message.extra.tokenCount)
+        : null
       const swipes = Array.isArray(message.swipes) && message.swipes.length > 0 ? message.swipes : [message.mes || '']
       const swipeIndex = Math.min(Math.max(Number(message.swipe_id) || 0, 0), swipes.length - 1)
       // 带意见重写（提案 0011）：swipe_info[].extra.feedback 记录该变体是按
@@ -12671,19 +13666,23 @@ window.__ModuleLoader__.load({
       // text, matching Tavern Helper's frontend code-block behavior.
       const frontendDocuments = editing || message.streaming ? [] : extractFrontendDocuments(renderedText)
       const frontendProse = frontendDocuments.length > 0 ? stripFrontendDocuments(renderedText) : ''
-      const persist = async (nextMessage) => {
+      // 整份消息数组写回：隐藏 / 删除 / 换位改的是别的楼层，不能只替换本条。
+      // 走既有全量 PUT chat（revision CAS + 冲突重取由 saveChat 负责）。
+      const persistMessages = async (nextMessages) => {
         setError('')
-        const nextChat = { ...chat, messages: chat.messages.map((item, itemIndex) => itemIndex === index ? nextMessage : item) }
+        setNotice('')
         try {
-          await saveChat(character, chatId, nextChat)
+          await saveChat(character, chatId, { ...chat, messages: nextMessages })
           return true
         } catch (cause) {
-          const message = cause instanceof Error ? cause.message : String(cause)
-          setError(message)
-          setRun(sessionId, { error: message })
+          const failure = cause instanceof Error ? cause.message : String(cause)
+          setError(failure)
+          setRun(sessionId, { error: failure })
           return false
         }
       }
+      const persist = (nextMessage) => persistMessages(
+        chat.messages.map((item, itemIndex) => itemIndex === index ? nextMessage : item))
       const changeSwipe = (delta) => {
         const nextIndex = (swipeIndex + delta + swipes.length) % swipes.length
         void persist({ ...message, swipe_id: nextIndex, mes: swipes[nextIndex] })
@@ -12708,7 +13707,91 @@ window.__ModuleLoader__.load({
           .catch((cause) => setError(cause.message))
           .finally(() => setBranching(false))
       }
-      return h('article', { className: `dt-message ${isUser ? 'dt-message-user' : 'dt-message-character'}` },
+      // 隐藏 / 取消隐藏：写消息级 is_hidden（ST 原生命名），同时清掉
+      // extra.is_hidden 旧形态——只写一半会让"取消隐藏"变成幽灵状态。
+      const toggleHidden = () => {
+        if (!persisted || busy) return
+        void persistMessages(chat.messages.map((item, itemIndex) =>
+          itemIndex === index ? withMessageHidden(item, !hidden) : item))
+      }
+      // 复制用户看得见的文本（含显示层宏展开），不是落库原文。
+      const copyBody = () => {
+        void copyMessageText(renderedText).then(
+          () => setNotice(t('message.copied')),
+          () => setError(t('message.copyFailed')))
+      }
+      // 结构性写（删除 / 换位）会移动楼层下标，而 store 的 displays 是"按
+      // 下标存的 markdown-only 正则渲染文本"：不重取会让别的楼层显示错位的
+      // 渲染结果（只有配了 markdownOnly 脚本时非空，所以按需一次 GET 即可）。
+      const persistStructure = (nextMessages) => {
+        void persistMessages(nextMessages).then((saved) => {
+          if (saved) void loadChat(character, chatId, true).catch(() => {})
+        })
+      }
+      const removeMessage = () => {
+        if (!persisted || busy) return
+        setConfirmingDelete(false)
+        persistStructure(chat.messages.filter((item, itemIndex) => itemIndex !== index))
+      }
+      const moveMessage = (delta) => {
+        const target = index + delta
+        if (!persisted || busy || target < 0 || target > lastIndex) return
+        const nextMessages = [...chat.messages]
+        const moved = nextMessages[index]
+        nextMessages[index] = nextMessages[target]
+        nextMessages[target] = moved
+        persistStructure(nextMessages)
+      }
+      // Continue / Impersonate 与重掷同一入口：mode 走契约白名单
+      // （'regenerate' | 'continue' | 'impersonate'），不带 message——续写不新增
+      // 用户楼，代写由服务端落一条 is_user 楼层。
+      const generate = (mode) => {
+        if (!binding || busy) return
+        setError('')
+        setNotice('')
+        void generateFor(sessionId, binding, mode, '')
+      }
+      // checkpoint：服务端复制 0..index 到新聊天文件，父聊天内容与 revision 都
+      // 不变；这里只提示 + 由 store 层重取聊天列表，不自动切换会话。
+      const createCheckpoint = () => {
+        if (!binding || !persisted || busy || checkpointing) return
+        setCheckpointing(true)
+        setError('')
+        setNotice('')
+        void createChatCheckpoint(binding, index)
+          .then((result) => {
+            const name = typeof result?.name === 'string' && result.name !== ''
+              ? result.name
+              : typeof result?.chatId === 'string' ? result.chatId : ''
+            setNotice(t('message.checkpointCreated', { name }))
+          })
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setCheckpointing(false))
+      }
+      const deleteButton = persisted
+        ? confirmingDelete
+          ? h('button', {
+            type: 'button',
+            className: 'dt-message-delete',
+            title: t('message.delete'),
+            disabled: busy,
+            onClick: removeMessage,
+            onBlur: () => setConfirmingDelete(false),
+          }, t('message.deleteConfirm'))
+          : h('button', {
+            type: 'button',
+            className: 'dt-message-delete',
+            title: t('message.delete'),
+            disabled: busy,
+            onClick: () => setConfirmingDelete(true),
+          }, h(IconTrashOutline16))
+        : null
+      return h('article', {
+        className: `dt-message ${isUser ? 'dt-message-user' : 'dt-message-character'}${hidden ? ' dt-message-hidden' : ''}`,
+        // 隐藏楼层降透明度：类名给样式钩子，当前读感不依赖 95-ui-styles.js
+        // （该文件不由本 owner 改）。
+        ...(hidden ? { style: { opacity: 0.6 } } : {}),
+      },
         !isUser ? h('img', {
           className: 'dt-message-avatar',
           src: `${API}/avatar/${encodeURIComponent(message.name || character)}`,
@@ -12716,32 +13799,51 @@ window.__ModuleLoader__.load({
           onError: (event) => { event.currentTarget.style.visibility = 'hidden' },
         }) : null,
         h('div', { className: 'dt-message-body' },
-          h('div', { className: 'dt-message-name' }, message.name || (isUser ? t('message.user') : character)),
-          reasoningText ? h('div', { className: 'dt-reasoning' },
-            h('button', {
-              type: 'button',
-              className: `dt-reasoning-toggle${reasoningOpen ? ' dt-reasoning-open' : ''}`,
-              title: t(message.streaming ? 'message.thinking' : 'message.thoughts'),
-              onClick: () => setReasoningOpen(!reasoningOpen),
-            }, h(IconChevronDownOutline14), t(message.streaming ? 'message.thinking' : 'message.thoughts')),
-            reasoningOpen ? h('div', { className: 'dt-reasoning-body' }, reasoningText) : null) : null,
-          editing
-            ? h('textarea', { className: 'dt-message-edit', value: draft, disabled: busy, onChange: (event) => setDraft(event.target.value) })
-            : frontendDocuments.length > 0
-              ? h('div', { className: 'dt-message-frontend' },
-                frontendProse !== '' ? h('div', { className: 'dt-message-copy' }, frontendProse) : null,
-                frontendDocuments.map((html, frontendIndex) => h(FrontendFrame, {
-                key: `${index}-${frontendIndex}`,
-                html,
-                token: `tavern-${sessionId}-${index}-${frontendIndex}`,
-                messageId: index,
-                binding: { character, chatId },
-                refreshKey: `${index}-${(message.mes ?? '').length}`,
-              })))
-              : message.streaming && renderedText === ''
-                ? null
-                : h('div', { className: 'dt-message-copy' }, renderedText),
-          h('div', { className: 'dt-message-actions' },
+          h('div', { className: 'dt-message-name' },
+            message.name || (isUser ? t('message.user') : character),
+            // 估算 token（生成落盘写 extra.tokenCount；服务端注释已说明这是字符
+            // 数/3.5 的估算，不是 provider 分词器）。
+            tokenCount !== null
+              ? h('span', {
+                className: 'dt-message-tokens',
+                style: { marginLeft: 6, opacity: 0.8 },
+              }, t('message.tokens', { count: tokenCount }))
+              : null),
+          hidden
+            ? h('div', { className: 'dt-message-actions dt-message-hidden-row' },
+              h('span', { className: 'dt-swipe-feedback' }, t('message.hidden')),
+              h('button', {
+                type: 'button',
+                title: hiddenOpen ? t('message.collapse') : t('message.reveal'),
+                onClick: () => setHiddenOpen(!hiddenOpen),
+              }, hiddenOpen ? t('message.collapse') : t('message.reveal')))
+            : null,
+          collapsed ? null : h(React.Fragment, null,
+            reasoningText ? h('div', { className: 'dt-reasoning' },
+              h('button', {
+                type: 'button',
+                className: `dt-reasoning-toggle${reasoningOpen ? ' dt-reasoning-open' : ''}`,
+                title: t(message.streaming ? 'message.thinking' : 'message.thoughts'),
+                onClick: () => setReasoningOpen(!reasoningOpen),
+              }, h(IconChevronDownOutline14), t(message.streaming ? 'message.thinking' : 'message.thoughts')),
+              reasoningOpen ? h('div', { className: 'dt-reasoning-body' }, reasoningText) : null) : null,
+            editing
+              ? h('textarea', { className: 'dt-message-edit', value: draft, disabled: busy, onChange: (event) => setDraft(event.target.value) })
+              : frontendDocuments.length > 0
+                ? h('div', { className: 'dt-message-frontend' },
+                  frontendProse !== '' ? h('div', { className: 'dt-message-copy' }, messageBody(frontendProse)) : null,
+                  frontendDocuments.map((html, frontendIndex) => h(FrontendFrame, {
+                    key: `${index}-${frontendIndex}`,
+                    html,
+                    token: `tavern-${sessionId}-${index}-${frontendIndex}`,
+                    messageId: index,
+                    binding: { character, chatId },
+                    refreshKey: `${index}-${(message.mes ?? '').length}`,
+                  })))
+                : message.streaming && renderedText === ''
+                  ? null
+                  : h('div', { className: 'dt-message-copy' }, messageBody(renderedText))),
+          h('div', { className: 'dt-message-actions', style: { flexWrap: 'wrap' } },
             swipes.length > 1 ? h(React.Fragment, null,
               h('button', { type: 'button', title: t('message.previousSwipe'), disabled: busy, onClick: () => changeSwipe(-1) }, h(IconChevronLeftOutline14)),
               h('span', null, `${swipeIndex + 1}/${swipes.length}`),
@@ -12752,9 +13854,65 @@ window.__ModuleLoader__.load({
               h('button', { type: 'button', onClick: () => { setDraft(message.mes || ''); setError(''); setEditing(false) } }, t('message.cancel')))
               : h(React.Fragment, null,
                 h('button', { type: 'button', title: t('message.edit'), disabled: busy, onClick: () => setEditing(true) }, h(IconEditOutline16)),
+                persisted ? h('button', {
+                  type: 'button',
+                  className: 'dt-message-copy-btn',
+                  title: t('message.copy'),
+                  disabled: busy,
+                  onClick: copyBody,
+                }, '⧉') : null,
+                persisted ? h('button', {
+                  type: 'button',
+                  className: 'dt-message-hide-btn',
+                  title: hidden ? t('message.unhide') : t('message.hide'),
+                  disabled: busy,
+                  onClick: toggleHidden,
+                }, hidden ? t('message.unhide') : t('message.hide')) : null,
+                persisted ? h('button', {
+                  type: 'button',
+                  title: t('message.moveUp'),
+                  disabled: busy || index === 0,
+                  onClick: () => moveMessage(-1),
+                }, '↑') : null,
+                persisted ? h('button', {
+                  type: 'button',
+                  title: t('message.moveDown'),
+                  disabled: busy || index >= lastIndex,
+                  onClick: () => moveMessage(1),
+                }, '↓') : null,
+                deleteButton,
+                stGeneration && isLast && !isUser ? h(React.Fragment, null,
+                  h('button', {
+                    type: 'button',
+                    title: t('view.regenerate'),
+                    disabled: busy,
+                    onClick: () => generate('regenerate'),
+                  }, h(IconRefreshOutline16)),
+                  h('button', {
+                    type: 'button',
+                    className: 'dt-message-continue-btn',
+                    title: t('message.continue'),
+                    disabled: busy,
+                    onClick: () => generate('continue'),
+                  }, t('message.continue'))) : null,
+                stGeneration && isLast ? h('button', {
+                  type: 'button',
+                  className: 'dt-message-impersonate-btn',
+                  title: t('message.impersonate'),
+                  disabled: busy,
+                  onClick: () => generate('impersonate'),
+                }, t('message.impersonate')) : null,
+                persisted ? h('button', {
+                  type: 'button',
+                  className: 'dt-message-checkpoint-btn',
+                  title: t('message.checkpoint'),
+                  disabled: busy || checkpointing,
+                  onClick: createCheckpoint,
+                }, checkpointing ? t('message.checkpointing') : t('message.checkpoint')) : null,
                 h('button', { type: 'button', className: 'dt-branch-btn', title: t('message.branch'), disabled: busy || branching, onClick: branch }, '⑂'),
                 h('button', { type: 'button', title: t('view.forkArchitecture', { architecture: t('view.architectureAgent') }), disabled: busy || branching, onClick: branchAgent }, h(IconAgentPresetOutline16)))),
           branching ? h('span', { className: 'dt-message-error' }, t('message.branching')) : null,
+          notice ? h('span', { className: 'dt-swipe-feedback', title: notice }, notice) : null,
           error ? h('span', { className: 'dt-message-error' }, error) : null))
     }
 
@@ -12822,6 +13980,7 @@ window.__ModuleLoader__.load({
           messages.map((message, index) => h(MessageRow, {
             key: `${index}-${message.send_date || ''}-${message.streaming ? 'stream' : 'saved'}`,
             sessionId,
+            binding,
             character: binding.character,
             chatId: binding.chatId,
             chat,
@@ -13193,6 +14352,7 @@ window.__ModuleLoader__.load({
             }),
             h('button', { type: 'button', disabled: blocked, onClick: () => generate(true) }, t('candidates.regenerate')))) : null)
     }
+
 
     // MVU 状态与回执（提案 0012 P1）：ST 聊天挂在 TavernView 顶部的常驻面板，
     // AgentTavern 会话改由标题栏按钮弹出同一面板（embedded 变体）——原生
@@ -13611,6 +14771,77 @@ window.__ModuleLoader__.load({
         h('p', { className: 'dt-script-hint' }, t('script.hint')))
     }
 
+    // 快速回复（施工契约 2026-11-12 §2.6）：集合名 → 逐行脚本。composer 按钮与
+    // 输入框的 `/qr <name>` 用同一套解析，服务端只收到一条合并后的脚本——同一个
+    // 脚本作用域里按行序执行，多行 `/setvar` 的局部变量因此能跨行生效。
+    const QUICK_REPLY_COMMAND = /^\/qr\s+(.+)$/i
+    const QUICK_REPLY_BARE_COMMAND = /^\/qr\s*$/i
+    // STscript 命令补全列表（与 packages/tavern-script 的注册表人工同步；
+    // /help 与 composer 建议共用）。只列有实际处理器的命令，未知命令服务端
+    // 仍会明确报错，不在前端假装可用。
+    const SLASH_COMMAND_HINTS = [
+      'send', 'sys', 'comment', 'trigger', 'regenerate', 'stop', 'cut',
+      'continue', 'swipe', 'hide', 'unhide', 'move', 'rename', 'branch',
+      'checkpoint', 'listvar', 'flushvar', 'run', 'qr', 'times', 'regex',
+      'setvar', 'getvar', 'addvar', 'incvar', 'decvar', 'hasvar', 'delvar',
+      'setglobalvar', 'getglobalvar', 'delglobalvar', 'if', 'random', 'roll', 'pick',
+    ]
+
+    function quickReplySetByName(sets, name) {
+      const target = String(name || '').trim().toLowerCase()
+      if (target === '') return undefined
+      return (Array.isArray(sets) ? sets : [])
+        .find((set) => String(set?.name || '').trim().toLowerCase() === target)
+    }
+
+    function quickReplyScriptOf(set) {
+      const lines = Array.isArray(set?.commands)
+        ? set.commands.map((line) => String(line || '').trim()).filter((line) => line !== '')
+        : []
+      return lines.join('\n')
+    }
+
+    /** `/qr <name>` → 集合名（允许引号）；不是 /qr 命令返回 undefined。 */
+    function quickReplyCommandName(draft) {
+      const match = QUICK_REPLY_COMMAND.exec(String(draft || ''))
+      if (match === null) return undefined
+      const raw = match[1].trim()
+      return raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw
+    }
+
+    /**
+     * 快速回复按钮行：只在 ST 架构出现。AgentTavern 的生成走 AgentLoop，没有
+     * STscript 通道，`/qr` 在那里无法执行——按钮不渲染（面板「快速回复」分区
+     * 用同一句话说明原因，避免两处措辞漂移）。样式内联：95-ui-styles.js 不在本
+     * 次改动的文件白名单里。
+     */
+    function QuickReplyBar({ binding, disabled, onRun }) {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const values = state.bootstrap.state || {}
+      if (values.quickRepliesEnabled === false) return null
+      if (bindingArchitecture(binding) !== 'st') return null
+      const sets = (Array.isArray(values.quickReplies) ? values.quickReplies : [])
+        .filter((set) => set?.enabled === true && quickReplyScriptOf(set) !== '')
+      if (sets.length === 0) return null
+      const label = (set) => t('quickReplies.runHint', { name: set.name })
+      return h('div', {
+        className: 'dt-quick-reply-bar',
+        role: 'group',
+        'aria-label': t('quickReplies.title'),
+        style: { width: 'min(var(--dsh-composer-card-max-width,780px),100%)', margin: '0 auto', paddingBottom: '6px', display: 'flex', flexWrap: 'wrap', gap: '6px' },
+      }, sets.map((set) => h('button', {
+        key: set.id || set.name,
+        type: 'button',
+        className: 'dt-quick-reply',
+        title: label(set),
+        'aria-label': label(set),
+        disabled: disabled === true,
+        style: { maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '11px', padding: '2px 8px' },
+        onClick: () => onRun(set),
+      }, set.name)))
+    }
+
     function TavernComposer({ sessionId, useInput, inputActions }) {
       const state = useTavernStore()
       const t = useTranslate()
@@ -13618,10 +14849,54 @@ window.__ModuleLoader__.load({
       const input = useInput((value) => value)
       const run = state.runs[sessionId] || {}
       const [trigger, setTrigger] = useState('')
+      // 快速回复的执行失败面（未知集合名 / 空集合）：与 run.error 同一个状态位
+      // 展示，不新增浮层。
+      const [quickReplyError, setQuickReplyError] = useState('')
+      const [slashNotice, setSlashNotice] = useState('')
+      const runQuickReply = (set) => {
+        const script = quickReplyScriptOf(set)
+        if (script === '') {
+          setQuickReplyError(t('quickReplies.empty', { name: set.name }))
+          return
+        }
+        setQuickReplyError('')
+        void runTavernScriptCommand(sessionId, binding, script)
+      }
       const send = () => {
         const message = input.draft.trim()
         if (!binding || !message || run.busy) return
+        setSlashNotice('')
         if (message.startsWith('/')) {
+          // `/help`：本地列出命令，不发到服务端（服务端没有 /help）。
+          if (/^\/help\b/i.test(message)) {
+            inputActions.setDraft('')
+            setQuickReplyError('')
+            setSlashNotice(t('composer.slashHelp', { commands: SLASH_COMMAND_HINTS.map((name) => `/${name}`).join(' ') }))
+            return
+          }
+          // 裸 `/qr`：列出可用集合（ST 同款发现路径），不要让它落到服务端的
+          // 「未知命令」上——那里的报错讲不清该输入什么。
+          if (QUICK_REPLY_BARE_COMMAND.test(message)) {
+            const names = (Array.isArray(state.bootstrap.state.quickReplies) ? state.bootstrap.state.quickReplies : [])
+              .filter((set) => set?.enabled === true)
+              .map((set) => set.name)
+            setQuickReplyError(names.length === 0
+              ? t('quickReplies.noSets')
+              : t('quickReplies.usage', { names: names.join(' / ') }))
+            return
+          }
+          const quickReplyName = quickReplyCommandName(message)
+          if (quickReplyName !== undefined) {
+            const set = quickReplySetByName(state.bootstrap.state.quickReplies, quickReplyName)
+            if (set === undefined) {
+              // 草稿保留：名字打错时用户能就地改，不用重打整条命令。
+              setQuickReplyError(t('quickReplies.notFound', { name: quickReplyName }))
+              return
+            }
+            inputActions.setDraft('')
+            runQuickReply(set)
+            return
+          }
           inputActions.setDraft('')
           void runTavernScriptCommand(sessionId, binding, message)
           return
@@ -13633,6 +14908,10 @@ window.__ModuleLoader__.load({
       const placeholder = binding
         ? `${binding.group === true ? '☰ ' : ''}${t('composer.writeTo', { name: binding.character })}`
         : t('composer.unavailable')
+      const slashPrefix = /^\/([a-z]*)$/i.exec(input.draft.trim())
+      const slashSuggestions = slashPrefix === null
+        ? []
+        : SLASH_COMMAND_HINTS.filter((name) => name.startsWith(slashPrefix[1].toLowerCase())).slice(0, 12)
       return h('div', { className: 'dt-composer-wrap', 'data-dsh-soulmojito-surface': 'composer' },
         binding && bindingArchitecture(binding) === 'st' && binding.group !== true
           ? h(TavernCandidates, {
@@ -13641,8 +14920,19 @@ window.__ModuleLoader__.load({
             onFill: (text) => inputActions.setDraft(text),
           })
           : null,
+        binding ? h(QuickReplyBar, { binding, disabled: run.busy, onRun: runQuickReply }) : null,
         h('div', { className: 'dt-composer' },
           binding?.group === true ? h(MemberPicker, { binding, disabled: run.busy, selected: trigger, onSelect: setTrigger }) : null,
+          slashSuggestions.length > 0 ? h('div', {
+            className: 'dt-slash-hints',
+            role: 'group',
+            'aria-label': t('composer.slashComplete'),
+          }, slashSuggestions.map((name) => h('button', {
+            key: name,
+            type: 'button',
+            className: 'dt-slash-hint',
+            onClick: () => inputActions.setDraft(`/${name} `),
+          }, `/${name}`))) : null,
           h('textarea', {
             value: input.draft,
             disabled: !binding || run.busy,
@@ -13657,7 +14947,7 @@ window.__ModuleLoader__.load({
             },
           }),
           h('div', { className: 'dt-composer-row' },
-            h('span', { className: run.error ? 'dt-error' : 'dt-muted' }, run.error || (run.status ? t(run.status) : (binding ? binding.character : ''))),
+            h('span', { className: run.error || quickReplyError ? 'dt-error' : 'dt-muted' }, run.error || quickReplyError || slashNotice || (run.status ? t(run.status) : (binding ? binding.character : ''))),
             h('div', { className: 'dt-composer-actions' },
               h(ModelSelect, { sessionId, locked: run.busy || !binding }),
               run.busy
@@ -14084,6 +15374,7 @@ window.__ModuleLoader__.load({
           }, h(IconListPenOutline16))))
     }
 
+
     function nativeTavernTabs() {
       const titles = [MESSAGES_EN['nav.title'], MESSAGES_ZH['nav.title']]
       return [...document.querySelectorAll('[role="tab"]')]
@@ -14422,7 +15713,58 @@ window.__ModuleLoader__.load({
         setBusyChat(chatId)
         void action().catch((cause) => setError(cause.message)).finally(() => setBusyChat(''))
       }
+      const exportChat = (chatId) => runAction(chatId, async () => {
+        const result = await api(`export/chat/${encodeURIComponent(character)}/${encodeURIComponent(chatId)}`)
+        const content = typeof result.content === 'string' ? result.content : ''
+        const blob = new Blob([content], { type: 'application/jsonl' })
+        const anchor = document.createElement('a')
+        anchor.href = URL.createObjectURL(blob)
+        anchor.download = chatId
+        document.body.appendChild(anchor)
+        anchor.click()
+        anchor.remove()
+        URL.revokeObjectURL(anchor.href)
+      })
+      const duplicateChat = (chatId) => runAction(chatId, async () => {
+        const snapshot = await api(`chat/${encodeURIComponent(chatId)}?character=${encodeURIComponent(character)}`)
+        await api('duplicate', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ character, chatId, revision: snapshot.revision }),
+        })
+        await loadChatList(character, true)
+      })
+      const importChat = (file) => {
+        if (file === undefined) return
+        const name = file.name.replace(/\.jsonl$/i, '')
+        const reader = new FileReader()
+        reader.onerror = () => setError(reader.error instanceof Error ? reader.error.message : t('nav.importChatFailed'))
+        reader.onload = () => {
+          const content = typeof reader.result === 'string' ? reader.result : ''
+          setError('')
+          void api('import/chat', {
+            method: 'POST',
+            headers: jsonHeaders(),
+            body: JSON.stringify({ character, name, content }),
+          }).then(() => loadChatList(character, true)).catch((cause) => {
+            setError(cause instanceof Error ? cause.message : String(cause))
+          })
+        }
+        reader.readAsText(file)
+      }
       return h('div', { className: 'dt-sidebar-chats' },
+        h('div', { className: 'dt-sidebar-chat-tools' },
+          h('label', { className: 'dt-upload', title: t('nav.importChat') },
+            t('nav.importChat'),
+            h('input', {
+              type: 'file',
+              accept: '.jsonl,application/jsonl,application/json',
+              onChange: (event) => {
+                const file = event.target.files?.[0]
+                event.target.value = ''
+                importChat(file)
+              },
+            }))),
         chats?.map((chatId) => {
           const labels = chatArchitectureLabels(character, chatId, group)
           return h('div', {
@@ -14443,6 +15785,18 @@ window.__ModuleLoader__.load({
             disabled: busyChat === chatId,
             onClick: () => runAction(chatId, () => openWorkbenchSession(ctx, { character, chatId })),
           }, h(IconSparkle16)),
+          h('button', {
+            type: 'button',
+            title: t('nav.exportChat', { name: chatId.replace(/\.jsonl$/i, '') }),
+            disabled: busyChat === chatId,
+            onClick: () => exportChat(chatId),
+          }, h(IconDownloadOutline16)),
+          h('button', {
+            type: 'button',
+            title: t('nav.duplicateChat', { name: chatId.replace(/\.jsonl$/i, '') }),
+            disabled: busyChat === chatId,
+            onClick: () => duplicateChat(chatId),
+          }, '⧉'),
           h('button', {
             type: 'button',
             title: t('nav.rename', { name: chatId.replace(/\.jsonl$/i, '') }),
@@ -14677,6 +16031,7 @@ window.__ModuleLoader__.load({
           },
         }) : null)
     }
+
 
     // 酒馆美化前端（消息内完整 HTML/JS）在 AgentTavern 架构的展示面
     // （2026-10-20，用户需求）：native conversation 由宿主渲染，插件没有消息
@@ -16545,10 +17900,19 @@ window.__ModuleLoader__.load({
       { id: 'characters', group: 'content', icon: IconUserOutline16, label: (t) => t('panel.section.characters'), component: (host) => h(PanelCharacters, { ctx: host.ctx, useSessions: host.useSessions }) },
       { id: 'chats', group: 'session', icon: IconQueueOutline14, label: (t) => t('panel.section.chats'), component: (host) => h(TavernSidebar, { ctx: host.ctx, useSessions: host.useSessions }) },
       { id: 'guides', group: 'session', icon: IconListPenOutline16, label: (t) => t('panel.section.guides'), component: (host) => h(PanelGuides, { useSessions: host.useSessions }) },
+      // 聊天注记（契约 2026-11-12 §2.4）：Author's Note 与 Summary 写当前聊天
+      // 的 chat_metadata。session 组——按聊天生效，换聊天即换内容。
+      { id: 'notes', group: 'session', icon: IconEditOutline16, label: (t) => t('panel.section.notes'), component: (host) => h(ChatNotesBand, { useSessions: host.useSessions }) },
       { id: 'novels', group: 'content', icon: IconEditOutline16, label: (t) => t('panel.section.novels'), component: (host) => h(PanelNovels, { ctx: host.ctx }) },
       { id: 'groups', group: 'content', icon: IconPlusOutline16, label: (t) => t('panel.section.groups'), component: () => h(GroupBand) },
       { id: 'personas', group: 'content', icon: IconPersonalizationOutline16, label: (t) => t('panel.section.personas'), component: () => h(PersonaBand) },
       { id: 'worlds', group: 'content', icon: IconBrowseOutline16, label: (t) => t('panel.section.worlds'), component: (host) => h(PanelWorlds, { useSessions: host.useSessions }) },
+      // 快速回复（契约 2026-11-12 §2.6）：集合 CRUD + composer 按钮行总开关。
+      // content 组——它是输入辅助资产，与卡/书/预设同层。
+      { id: 'quickReplies', group: 'content', icon: IconQueueOutline14, label: (t) => t('panel.section.quickReplies'), component: () => h(QuickRepliesBand) },
+      // 数据银行（Wave 2 契约 §2.5）：文本文件入库/列表/删除/附加当前聊天/检索
+      // 测试。content 组——它是可检索的参考资料，与卡/书/预设同层。
+      { id: 'dataBank', group: 'content', icon: IconDataOutline16, label: (t) => t('panel.section.dataBank'), component: (host) => h(DataBankBand, { useSessions: host.useSessions }) },
       // 第 19 个分区「行为设置」（2026-10-21 用户需求「改进管理面板交互」）：
       // 散养在「当前配置」架构分支、世界书清单顶与游戏清单顶的行为开关全部收编
       // 到这里，按行为对应关系分组（会话 / 世界书 / 工具写入 / 前端与卡脚本 / 游戏）。
@@ -16575,7 +17939,10 @@ window.__ModuleLoader__.load({
       { id: 'memory', group: 'system', icon: IconRefreshOutline16, label: (t) => t('panel.section.memory'), component: () => h(MemoryRetrievalBand) },
       // 第 17 个分区「提示词」（A-6，2026-10-11）：ST 循环实发请求 + 世界书激活
       // 追踪的只读查看器（服务端 prompt-viewer.ts 环形缓冲）。
-      { id: 'prompts', group: 'system', icon: IconDownloadOutline16, label: (t) => t('panel.section.prompts'), component: () => h(PanelPrompts) },
+      { id: 'prompts', group: 'system', icon: IconCodeOutline16, label: (t) => t('panel.section.prompts'), component: () => h(PanelPrompts) },
+      // 第 20 个分区「备份」（2026-11-12）：整库 ZIP 导出/导入（merge/replace，
+      // replace 前服务端自动快照）。数据面见 http/backup-routes.ts。
+      { id: 'backup', group: 'system', icon: IconDownloadOutline16, label: (t) => t('panel.section.backup'), component: () => h(PanelBackup) },
       // 第 19 个分区「关于」（2026-10-12）：插件版本 stamp + 官网/作者/源码
       // 仓库外链，纯静态信息面。自绘 info 图标（宿主清单无此语义图形）。
       { id: 'about', icon: IconInfoOutline16, label: (t) => t('panel.section.about'), component: () => h(PanelAbout) },
@@ -16896,9 +18263,24 @@ window.__ModuleLoader__.load({
       // 创建中的新卡不受过滤影响（避免「正填着被过滤掉」）。
       const [characterFilter, setCharacterFilter] = useState('')
       const characterQuery = characterFilter.trim().toLowerCase()
+      // 角色收藏（契约 2026-11-12 §2.11）：bootstrap.characters 是字母序，收藏表
+      // 给出置顶顺序（按收藏先后，而不是再排一次字母）。星标即写
+      // state.characterFavorites——与 activeWorlds 同款「数组即顺序」语义。
+      const favorites = Array.isArray(state.bootstrap.state.characterFavorites)
+        ? state.bootstrap.state.characterFavorites
+        : []
+      const orderedCharacters = [
+        ...favorites.filter((name) => characters.includes(name)),
+        ...characters.filter((name) => !favorites.includes(name)),
+      ]
+      const toggleFavorite = (name) => run(patchState({
+        characterFavorites: favorites.includes(name)
+          ? favorites.filter((item) => item !== name)
+          : [...favorites, name],
+      }))
       const visibleCharacters = characterQuery === ''
-        ? characters
-        : characters.filter((name) => name.toLowerCase().includes(characterQuery))
+        ? orderedCharacters
+        : orderedCharacters.filter((name) => name.toLowerCase().includes(characterQuery))
       const characterGrid = h('div', { className: 'dt-card-grid' },
         visibleCharacters.map((name) => {
           const active = activeCharacter === name
@@ -16909,7 +18291,17 @@ window.__ModuleLoader__.load({
               h('img', { src: `${API}/avatar/${encodeURIComponent(name)}`, alt: '' }),
               h('div', { className: 'dt-card-title' },
                 h('strong', null, name),
-                card?.data?.creator ? h('span', null, t('panel.characters.creator', { name: card.data.creator })) : null)),
+                card?.data?.creator ? h('span', null, t('panel.characters.creator', { name: card.data.creator })) : null),
+              // 星标（收藏）：★ = 已收藏，点击切换；排序在清单层完成。
+              h('button', {
+                type: 'button',
+                className: 'dt-card-favorite',
+                'aria-pressed': favorites.includes(name),
+                title: t(favorites.includes(name) ? 'panel.characters.unfavorite' : 'panel.characters.favorite', { name }),
+                'aria-label': t(favorites.includes(name) ? 'panel.characters.unfavorite' : 'panel.characters.favorite', { name }),
+                onClick: () => toggleFavorite(name),
+                style: { background: 'transparent', border: 0, cursor: 'pointer', fontSize: '15px', lineHeight: 1, padding: '0 2px' },
+              }, favorites.includes(name) ? '★' : '☆')),
             h('div', { className: 'dt-card-actions' },
               active
                 ? h(Pill, { active: true }, t('panel.characters.active'))
@@ -17045,12 +18437,13 @@ window.__ModuleLoader__.load({
             h(EditorField, { label: t('panel.worlds.keysSecondary'), value: commaList(entry.keysecondary), onChange: (value) => setEntry(entry.uid, 'keysecondary', parseCommaList(value)) }),
             h(EditorField, { label: t('panel.worlds.order'), value: entry.order, type: 'number', onChange: (value) => setEntry(entry.uid, 'order', value) }),
             h(EditorField, { label: t('panel.worlds.depth'), value: entry.depth, type: 'number', min: 0, onChange: (value) => setEntry(entry.uid, 'depth', value) }),
-            h(EditorField, { label: 'Probability', value: entry.probability, type: 'number', min: 0, max: 100, onChange: (value) => setEntry(entry.uid, 'probability', value) }),
+            h(EditorField, { label: t('panel.worlds.probability'), value: entry.probability, type: 'number', min: 0, max: 100, onChange: (value) => setEntry(entry.uid, 'probability', value) }),
             h(EditorField, { label: t('panel.worlds.content'), value: entry.content, onChange: (value) => setEntry(entry.uid, 'content', value), multiline: true, className: 'dt-editor-wide' }),
             h('div', { className: 'dt-editor-toggles dt-editor-wide' },
               h(ToggleField, { label: t('panel.worlds.enabled'), checked: !entry.disable, onChange: (value) => setEntry(entry.uid, 'disable', !value) }),
               h(ToggleField, { label: t('panel.worlds.constant'), checked: entry.constant, onChange: (value) => setEntry(entry.uid, 'constant', value) }),
-              h(ToggleField, { label: t('panel.worlds.selective'), checked: entry.selective, onChange: (value) => setEntry(entry.uid, 'selective', value) })))))),
+              h(ToggleField, { label: t('panel.worlds.selective'), checked: entry.selective, onChange: (value) => setEntry(entry.uid, 'selective', value) })),
+            h(WorldEntryAdvancedFields, { entry, onChange: (key, value) => setEntry(entry.uid, key, value) }))))),
         error ? h('p', { className: 'dt-error' }, error) : null))
     }
 
@@ -17213,6 +18606,7 @@ window.__ModuleLoader__.load({
                   if (window.confirm(t('panel.worlds.deleteConfirm', { name }))) run(deleteWorldBook(name))
                 },
               }))))),
+         h(WorldInfoSettingsForm),
          viewing !== ''
            ? h(WorldBookView, {
              name: viewing,
@@ -17232,6 +18626,201 @@ window.__ModuleLoader__.load({
            : null,
          error ? h('div', { className: 'dt-settings-band' }, h('p', { className: 'dt-error' }, error)) : null)
     }
+
+    /**
+     * 数据银行分区（Wave 2 契约 §2.5）：文本文件上传/粘贴、列表、删除、附加到
+     * 当前聊天、检索测试。附件是 chat 级开关（默认不附加，写
+     * chat_metadata.dataBankIds）；检索通道如实展示 vector / lexical——词法
+     * fallback 不是语义检索，不能让它看起来像。
+     */
+    function DataBankBand({ useSessions }) {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const sessionId = useCurrentSessionId(useSessions)
+      const binding = sessionId ? state.bootstrap.state.sessionBindings?.[sessionId] : undefined
+      const key = binding ? chatKey(binding.character, binding.chatId) : ''
+      const chat = binding ? state.chats[key] : null
+      const meta = chat?.header?.chat_metadata
+      const attachedIds = Array.isArray(meta?.dataBankIds) ? meta.dataBankIds : []
+      const [files, setFiles] = useState([])
+      const [embedding, setEmbedding] = useState(false)
+      const [loading, setLoading] = useState(true)
+      const [busy, setBusy] = useState(false)
+      const [error, setError] = useState('')
+      const [notice, setNotice] = useState('')
+      const [pasteName, setPasteName] = useState('')
+      const [pasteText, setPasteText] = useState('')
+      const [query, setQuery] = useState('')
+      const [probe, setProbe] = useState(null)
+
+      const reload = () => api('data-bank')
+        .then((result) => {
+          setFiles(Array.isArray(result.files) ? result.files : [])
+          setEmbedding(result.embedding?.configured === true)
+        })
+        .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+        .finally(() => setLoading(false))
+
+      useEffect(() => { void reload() }, [])
+      useEffect(() => {
+        if (!binding) return
+        if (chat === null || chat === undefined) { void loadChat(binding.character, binding.chatId).catch(() => {}) }
+      }, [binding?.character, binding?.chatId, chat === null])
+
+      // 文本一律经 TextEncoder 转字节再 base64：mime 由服务端按扩展名/声明推断，
+      // 二进制文件由服务端拒绝（前端的 accept 只是便利过滤）。
+      const importText = (fileName, content) => {
+        const text = String(content ?? '')
+        if (text.trim() === '') return
+        setBusy(true)
+        setError('')
+        setNotice('')
+        void api('import/data-bank', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ name: fileName, contentBase64: bytesToBase64(new TextEncoder().encode(text)) }),
+        })
+          .then((result) => {
+            setNotice(result.created === false
+              ? t('panel.dataBank.duplicate')
+              : t('panel.dataBank.imported', { count: result.chunks }))
+            return reload()
+          })
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setBusy(false))
+      }
+
+      const toggleAttach = (id, attached) => {
+        if (!binding) return
+        const next = attached ? [...attachedIds, id] : attachedIds.filter((value) => value !== id)
+        setBusy(true)
+        setError('')
+        void api('chat-data-bank', {
+          method: 'PUT',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ character: binding.character, chatId: binding.chatId, ids: next }),
+        })
+          .then(() => loadChat(binding.character, binding.chatId, true))
+          .then(() => setNotice(t('panel.saved')))
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setBusy(false))
+      }
+
+      const remove = (file) => {
+        if (!window.confirm(t('panel.dataBank.deleteConfirm', { name: file.name }))) return
+        setBusy(true)
+        setError('')
+        void api(`data-bank/${encodeURIComponent(file.id)}`, { method: 'DELETE' })
+          .then(() => reload())
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setBusy(false))
+      }
+
+      const runSearch = () => {
+        const text = query.trim()
+        if (text === '') return
+        setBusy(true)
+        setError('')
+        void api('data-bank/search', {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ query: text, limit: 5 }),
+        })
+          .then((result) => setProbe({ mode: result.mode, hits: Array.isArray(result.hits) ? result.hits : [] }))
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setBusy(false))
+      }
+
+      return h('section', { className: 'dt-settings-band' },
+        h('h3', null, t('panel.dataBank.title')),
+        h('p', { className: 'dt-hint' }, t('panel.dataBank.hint')),
+        embedding ? null : h('p', { className: 'dt-hint' }, t('panel.dataBank.embeddingOff')),
+        h('div', { className: 'dt-band-actions' },
+          h('label', { className: 'dt-upload', title: t('panel.dataBank.uploadTitle') },
+            busy ? t('settings.importing') : t('panel.dataBank.upload'),
+            h('input', {
+              type: 'file',
+              accept: '.txt,.md,.json,.csv,text/plain,text/markdown,application/json,text/csv',
+              disabled: busy,
+              onChange: (event) => {
+                const file = event.target.files?.[0]
+                event.target.value = ''
+                if (!file) return
+                void readFile(file, false).then((content) => importText(file.name, content))
+              },
+            })),
+          binding
+            ? h('span', { className: 'dt-muted' }, t('panel.dataBank.attachHint', { character: binding.character, chatId: binding.chatId }))
+            : h('span', { className: 'dt-muted' }, t('panel.dataBank.noChat'))),
+        h('div', { className: 'dt-editor-grid' },
+          h(EditorField, { label: t('panel.dataBank.pasteName'), value: pasteName, onChange: setPasteName, hint: t('panel.dataBank.pasteNameHint') }),
+          h(EditorField, { label: t('panel.dataBank.pasteText'), value: pasteText, onChange: setPasteText, multiline: true, className: 'dt-editor-wide' })),
+        h('div', { className: 'dt-band-actions' },
+          h(Button, {
+            size: 'sm',
+            variant: 'outline',
+            icon: h(IconPlusOutline16),
+            disabled: busy || pasteText.trim() === '',
+            onClick: () => importText(pasteName.trim() || t('panel.dataBank.pasteDefaultName'), pasteText),
+          }, t('panel.dataBank.import'))),
+        loading ? h('p', { className: 'dt-muted' }, t('nav.loading')) : null,
+        !loading && files.length === 0 ? h('p', { className: 'dt-muted' }, t('panel.dataBank.empty')) : null,
+        files.length === 0 ? null : h('div', { className: 'dt-editor-entries' }, files.map((file) => h('section', { key: file.id, className: 'dt-editor-entry' },
+          h('div', { className: 'dt-editor-entry-head' },
+            h('strong', null, file.name),
+            h(Button, {
+              size: 'sm',
+              variant: 'ghost',
+              icon: h(IconTrashOutline16),
+              'aria-label': t('panel.dataBank.delete', { name: file.name }),
+              title: t('panel.dataBank.delete', { name: file.name }),
+              disabled: busy,
+              onClick: () => remove(file),
+            })),
+          h('p', { className: 'dt-muted' }, t('panel.dataBank.meta', {
+            chunks: file.chunks,
+            size: Math.max(1, Math.round(Number(file.size || 0) / 1024)),
+            id: file.id,
+          })),
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: attachedIds.includes(file.id),
+              // 聊天还没载入时禁止改写附件：否则空 baseline 会把既有附件冲掉。
+              disabled: busy || !binding || chat === null || chat === undefined,
+              onChange: (event) => toggleAttach(file.id, event.target.checked),
+            }),
+            h('span', null, t('panel.dataBank.attach')))))),
+        h('h4', null, t('panel.dataBank.searchTitle')),
+        h('div', { className: 'dt-editor-grid' },
+          h(EditorField, {
+            label: t('panel.dataBank.searchLabel'),
+            value: query,
+            onChange: setQuery,
+            className: 'dt-editor-wide',
+            hint: t('panel.dataBank.searchHint'),
+          })),
+        h('div', { className: 'dt-band-actions' },
+          h(Button, {
+            size: 'sm',
+            variant: 'primary',
+            icon: h(IconSearchOutline16),
+            disabled: busy || query.trim() === '',
+            onClick: runSearch,
+          }, t('panel.dataBank.search'))),
+        probe === null ? null : h('div', null,
+          h('p', { className: 'dt-muted' }, probe.mode === 'vector' ? t('panel.dataBank.modeVector') : t('panel.dataBank.modeLexical')),
+          probe.hits.length === 0
+            ? h('p', { className: 'dt-muted' }, t('panel.dataBank.searchEmpty'))
+            : h('div', { className: 'dt-editor-entries' }, probe.hits.map((hit, index) => h('section', { key: `${hit.id}-${hit.chunkIndex}-${index}`, className: 'dt-editor-entry' },
+              h('div', { className: 'dt-editor-entry-head' },
+                h('strong', null, hit.name),
+                h('span', { className: 'dt-muted' }, ` · ${Number(hit.score || 0).toFixed(3)}`)),
+              h('p', { className: 'dt-muted' }, String(hit.text ?? '').slice(0, 400)))))),
+        notice ? h('p', { className: 'dt-muted' }, notice) : null,
+        error ? h('p', { className: 'dt-error' }, error) : null)
+    }
+
 
     // Read-only asset viewers (2026-11-01 user request): viewing a character
     // card, world book or preset opens the same dialog shell as editing, so a
@@ -19703,6 +21292,77 @@ window.__ModuleLoader__.load({
             h('a', { href: link.href, target: '_blank', rel: 'noreferrer noopener' }, link.text)))))
     }
 
+    function PanelBackup() {
+      const t = useTranslate()
+      const [mode, setMode] = useState('merge')
+      const [busy, setBusy] = useState(false)
+      const [error, setError] = useState('')
+      const [result, setResult] = useState(null)
+      const importBackup = (file) => {
+        if (file === undefined) return
+        if (mode === 'replace' && !window.confirm(t('backup.confirmReplace'))) return
+        setBusy(true)
+        setError('')
+        setResult(null)
+        const reader = new FileReader()
+        reader.onerror = () => {
+          setBusy(false)
+          setError(reader.error instanceof Error ? reader.error.message : t('backup.failed'))
+        }
+        reader.onload = () => {
+          const value = typeof reader.result === 'string' ? reader.result : ''
+          const base64 = value.includes(',') ? value.slice(value.indexOf(',') + 1) : value
+          void api('import/backup', {
+            method: 'POST',
+            headers: jsonHeaders(),
+            body: JSON.stringify({ zipBase64: base64, mode }),
+          }).then((response) => {
+            setResult(response)
+            return refreshBootstrap()
+          }).catch((cause) => {
+            setError(cause instanceof Error ? cause.message : String(cause))
+          }).finally(() => setBusy(false))
+        }
+        reader.readAsDataURL(file)
+      }
+      return h('section', { className: 'dt-settings-band' },
+        h('h3', null, t('panel.section.backup')),
+        h('p', { className: 'dt-hint' }, t('backup.hint')),
+        h('div', { className: 'dt-editor-toolbar' },
+          h('button', {
+            type: 'button',
+            disabled: busy,
+            onClick: () => downloadAsset('export/backup', 'soulmojito-backup.zip'),
+          }, t('backup.export')),
+          h('label', { className: 'dt-upload', title: t('backup.import') },
+            busy ? t('backup.importing') : t('backup.import'),
+            h('input', {
+              type: 'file',
+              accept: '.zip,application/zip',
+              disabled: busy,
+              onChange: (event) => {
+                const file = event.target.files?.[0]
+                event.target.value = ''
+                importBackup(file)
+              },
+            }))),
+        h('label', { className: 'dt-field' },
+          h('span', { className: 'dt-label' }, t('backup.mode')),
+          h('select', { value: mode, onChange: (event) => setMode(event.target.value === 'replace' ? 'replace' : 'merge') },
+            h('option', { value: 'merge' }, t('backup.mode.merge')),
+            h('option', { value: 'replace' }, t('backup.mode.replace')))),
+        mode === 'replace' ? h('p', { className: 'dt-hint' }, t('backup.replaceHint')) : null,
+        error ? h('p', { className: 'dt-message-error' }, error) : null,
+        result ? h('div', { className: 'dt-hint' },
+          h('p', null, t('backup.done', {
+            imported: String(result.imported ?? 0),
+            skipped: String(result.skipped ?? 0),
+            conflicts: String(result.conflicts ?? 0),
+            rejected: String(result.rejected ?? 0),
+          })),
+          result.snapshot ? h('p', null, t('backup.snapshot', { name: String(result.snapshot) })) : null) : null)
+    }
+
     function TavernPanel({ ctx, useSessions }) {
       const state = useTavernStore()
       const t = useTranslate()
@@ -19973,6 +21633,7 @@ window.__ModuleLoader__.load({
       }, h(SoulMojitoLogo, { size: wide ? 16 : 18 }), wide ? h('span', { className: 'dt-footer-label' }, 'SoulMojito') : null)
       return wide ? button : h(Tooltip, { label: t('panel.open'), side: 'right' }, button)
     }
+
 
     function installStyle() {
       if (document.querySelector(`style[data-plugin-css="${STYLE_ID}"]`)) return
@@ -20686,9 +22347,24 @@ window.__ModuleLoader__.load({
         @media(max-width:1100px){.dt-im-cards{grid-template-columns:1fr}.dt-im-form{grid-template-columns:repeat(2,minmax(0,1fr))}.dt-im-form>button{grid-column:1/-1;justify-self:start}.dt-im-peer{grid-template-columns:minmax(0,1fr) minmax(180px,280px)}.dt-im-peer>.dt-im-peer-actions{grid-column:1/-1;flex-direction:row;align-items:center;justify-content:flex-start}.dt-im-peer-ownerless>.dt-im-peer-actions{grid-column:2}.dt-im-behavior-form{grid-template-columns:repeat(2,minmax(0,1fr))}.dt-im-behavior-form>button{margin-bottom:0}.dt-im-behavior-form>.dt-field{grid-column:1/-1}.dt-im-global-owner .dt-im-behavior-row{grid-template-columns:1fr}.dt-im-global-owner .dt-im-owner{justify-content:flex-start}}
         @media(max-width:700px){.dt-im-tabs{gap:16px;padding:0 16px}.dt-im-cards{grid-template-columns:1fr}.dt-im-card{padding:14px}.dt-im-bind-layout-with-qr{grid-template-columns:1fr}.dt-im-qr{min-width:0}.dt-im-qr>img{width:180px;height:180px}.dt-im-form{grid-template-columns:1fr}.dt-im-form>button{grid-column:auto;justify-self:stretch}.dt-im-pending-row,.dt-im-peer{grid-template-columns:1fr}.dt-im-peer.dt-im-peer-ownerless{grid-template-columns:1fr}.dt-im-peer-owner{padding:10px 0 0;border-top:1px solid var(--dsw-alias-border-l2);border-left:0}.dt-im-peer>.dt-im-peer-actions{grid-column:1;flex-direction:row;justify-content:flex-start}.dt-im-peer-actions{justify-content:flex-start}.dt-im-allow{grid-template-columns:1fr}.dt-im-behavior-form{grid-template-columns:1fr}.dt-im-behavior-form>.dt-field{grid-column:auto}.dt-im-behavior-row-head{display:flex;flex-wrap:wrap}.dt-im-behavior-row-head>strong{flex:1}.dt-im-log-toolbar{grid-template-columns:minmax(0,1fr)}.dt-im-log-levels{overflow-x:auto;flex-wrap:nowrap}.dt-im-log-actions{justify-content:flex-start}.dt-im-log-list{max-height:280px}.dt-im-log-row{grid-template-columns:58px 40px minmax(0,1fr);gap:6px;padding:4px}.dt-im-log-text{grid-column:1/-1}.dt-im-workspace button,.dt-im-workspace select,.dt-im-workspace input:not([type=checkbox]){min-height:44px}.dt-im-workspace button{min-inline-size:44px}.dt-im-tabs>button{text-align:center}.dt-im-mention>.dt-toggle{min-height:44px}.dt-im-qr-link{display:inline-flex;align-items:center;min-height:44px}}
         @media(prefers-reduced-motion:reduce){.dt-im-light-scanning{animation:none}}
+        .dt-message-hidden{opacity:.6}
+        .dt-message-hidden-row{opacity:1}
+        .dt-message-tokens{margin-left:6px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
+        .dt-quick-reply-bar{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 0}
+        .dt-quick-reply{padding:4px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer}
+        .dt-quick-reply:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+        .dt-card-favorite{flex:none;border:0;background:transparent;color:var(--dsw-alias-status-warning,#e0af68);font-size:15px;line-height:18px;cursor:pointer;padding:0 2px}
+        .dt-card-favorite[data-active="false"]{color:var(--dsw-alias-label-tertiary)}
+        .dt-prompt-order-row{cursor:grab}
+        .dt-prompt-order-dragging{opacity:.6}
+        .dt-slash-hints{display:flex;flex-wrap:wrap;gap:4px;padding:6px 0;max-width:min(var(--dsh-composer-card-max-width,780px),100%);margin:0 auto}
+        .dt-sidebar-chat-tools{display:flex;align-items:center;gap:6px;padding:0 0 6px;min-width:0}
+        .dt-slash-hint{padding:2px 7px;border:1px solid var(--dsw-alias-border-l2);border-radius:5px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;cursor:pointer}
+        .dt-slash-hint:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
       `
       document.head.appendChild(tag)
     }
+
 
     // 预设面板族（2026-10-21 从 90-panels-core.js 拆出）：PresetEditor 表单 +
     // PanelPresets 清单 + 空白模板常量。拆分原因：源文件预算（800 行）——
@@ -20701,6 +22377,20 @@ window.__ModuleLoader__.load({
     // 形态（detectPresetKind 按这两个数组判定），采样字段留空袋由编辑器维护。
     const BLANK_PRESET = { prompts: [], prompt_order: [] }
 
+    /**
+     * 生效的 prompt_order 组（与 tavern-pipeline/src/pipeline.ts 的
+     * resolvePromptOrder 同口径）：优先 global dummy 100001，回落旧 dummy
+     * 100000，再回落首组；返回下标，-1 表示没有可编辑的组。
+     */
+    function resolveOrderIndex(sets) {
+      const list = Array.isArray(sets) ? sets : []
+      for (const dummy of [100001, 100000]) {
+        const index = list.findIndex((item) => Number(item?.character_id) === dummy)
+        if (index >= 0) return index
+      }
+      return list.length > 0 ? 0 : -1
+    }
+
     function PresetEditor({ name, data, kind, onSave, onCancel }) {
       const t = useTranslate()
       const [draft, setDraft] = useState(() => cloneValue(data) || {})
@@ -20710,7 +22400,11 @@ window.__ModuleLoader__.load({
       const [saving, setSaving] = useState(false)
       const prompts = draft.prompts || []
       const chatPreset = kind === 'chat-completion' || Array.isArray(data?.prompts)
-      const dirty = presetName !== name || advanced !== JSON.stringify(Object.fromEntries(Object.entries(data || {}).filter(([key]) => key !== 'prompts' && key !== 'prompt_order')), null, 2) || JSON.stringify(draft.prompts) !== JSON.stringify((data || {}).prompts)
+      const dirty = presetName !== name
+        || advanced !== JSON.stringify(Object.fromEntries(Object.entries(data || {}).filter(([key]) => key !== 'prompts' && key !== 'prompt_order')), null, 2)
+        || JSON.stringify(draft.prompts) !== JSON.stringify((data || {}).prompts)
+        // 顺序表（拖拽/启用）也是草稿的一部分：不加进来，改完顺序点保存会静默丢弃。
+        || JSON.stringify(draft.prompt_order) !== JSON.stringify((data || {}).prompt_order)
       const setPrompt = (index, key, value) => setDraft((current) => {
         const previous = current.prompts?.[index]
         const next = { ...current, prompts: (current.prompts || []).map((prompt, promptIndex) => promptIndex === index ? { ...prompt, [key]: value } : prompt) }
@@ -20727,6 +22421,34 @@ window.__ModuleLoader__.load({
           return { ...current, prompts: [...(current.prompts || []), prompt], prompt_order: order }
         })
       }
+      // prompt_order 编辑（契约 2026-11-12 §2.11）：顺序与启用语义由装配侧
+      // 独占（`prompt_order[].order[].enabled`），这里的拖拽/开关直接改那一份。
+      const resolvedOrder = (current) => {
+        const sets = Array.isArray(current.prompt_order) ? current.prompt_order : []
+        const index = resolveOrderIndex(sets)
+        return { sets, index, order: index >= 0 ? (sets[index].order || []) : [] }
+      }
+      const moveOrderEntry = (from, to) => setDraft((current) => {
+        const { sets, index, order } = resolvedOrder(current)
+        if (index < 0 || from === to) return current
+        if (from < 0 || from >= order.length || to < 0 || to >= order.length) return current
+        const next = [...order]
+        const [moved] = next.splice(from, 1)
+        next.splice(to, 0, moved)
+        return { ...current, prompt_order: sets.map((item, at) => at === index ? { ...item, order: next } : item) }
+      })
+      const setOrderEnabled = (identifier, enabled) => setDraft((current) => {
+        const { sets, index } = resolvedOrder(current)
+        if (index < 0) return current
+        return {
+          ...current,
+          prompt_order: sets.map((item, at) => at !== index ? item : {
+            ...item,
+            order: (item.order || []).map((entry) => entry.identifier === identifier ? { ...entry, enabled } : entry),
+          }),
+        }
+      })
+      const [dragging, setDragging] = useState(-1)
       const removePrompt = (index) => {
         const identifier = prompts[index]?.identifier
         setDraft((current) => ({
@@ -20775,7 +22497,44 @@ window.__ModuleLoader__.load({
             h(EditorField, { label: t('panel.presets.content'), value: prompt.content, onChange: (value) => setPrompt(index, 'content', value), multiline: true, className: 'dt-editor-wide' }),
             h('div', { className: 'dt-editor-toggles dt-editor-wide' },
               h(ToggleField, { label: t('panel.presets.marker'), checked: prompt.marker === true, onChange: (value) => setPrompt(index, 'marker', value) }),
-              h(ToggleField, { label: t('panel.presets.enabled'), checked: prompt.system_prompt !== false, onChange: (value) => setPrompt(index, 'system_prompt', value) })))))) : null,
+              // `system_prompt` 只是「全局/预设提示词」的分类标记，不参与启用
+              // 判定（tavern-pipeline 的 entryEnabled 只认顺序表 enabled）；旧标签
+              // 写作「启用」会让人以为关掉它就不参与装配。
+              h(ToggleField, { label: t('panel.presets.systemPromptFlag'), checked: prompt.system_prompt !== false, onChange: (value) => setPrompt(index, 'system_prompt', value) })))))) : null,
+        // 顺序表：装配只读这一份（不在表里的提示词不参与），因此它是 prompt
+        // manager 的主体；拖拽行 = 调换顺序，勾选框 = 该项是否参与装配。
+        chatPreset
+          ? h(React.Fragment, null,
+            h('div', { className: 'dt-editor-section-title' },
+              h('strong', null, t('panel.presets.promptOrder'))),
+            h('p', { className: 'dt-hint' }, t('panel.presets.promptOrderHint')),
+            resolvedOrder(draft).order.length === 0
+              ? h('p', { className: 'dt-muted' }, t('panel.presets.promptOrderEmpty'))
+              : h('div', { className: 'dt-editor-entries' }, resolvedOrder(draft).order.map((entry, index) => {
+                const prompt = (draft.prompts || []).find((item) => item.identifier === entry.identifier)
+                const label = prompt?.name || entry.identifier
+                const enabled = typeof entry.enabled === 'boolean' ? entry.enabled : prompt?.enabled !== false
+                return h('div', {
+                  key: `${entry.identifier}-${index}`,
+                  className: `dt-editor-entry dt-prompt-order-row${dragging === index ? ' dt-prompt-order-dragging' : ''}`,
+                  draggable: true,
+                  onDragStart: () => setDragging(index),
+                  onDragEnd: () => setDragging(-1),
+                  onDragOver: (event) => event.preventDefault(),
+                  onDrop: (event) => {
+                    event.preventDefault()
+                    moveOrderEntry(dragging, index)
+                    setDragging(-1)
+                  },
+                },
+                h('div', { className: 'dt-editor-entry-head' },
+                  h('strong', { title: entry.identifier }, `${index + 1}. ${label}`),
+                  h('div', { className: 'dt-imports' },
+                    h(Button, { size: 'sm', variant: 'ghost', disabled: index === 0, onClick: () => moveOrderEntry(index, index - 1) }, t('panel.presets.moveUp')),
+                    h(Button, { size: 'sm', variant: 'ghost', disabled: index === resolvedOrder(draft).order.length - 1, onClick: () => moveOrderEntry(index, index + 1) }, t('panel.presets.moveDown')),
+                    h(ToggleField, { label: t('panel.presets.enabled'), checked: enabled, onChange: (value) => setOrderEnabled(entry.identifier, value) }))))
+              })))
+          : null,
         h(EditorField, { label: t('panel.presets.sampler'), value: advanced, onChange: setAdvanced, multiline: true, className: 'dt-editor-wide dt-editor-json' }),
         error ? h('p', { className: 'dt-error' }, error) : null))
     }

@@ -13,7 +13,10 @@
  * - wi_format / scenario_format / personality_format 包裹；
  * - openai_max_context / openai_max_tokens 预算裁剪（保最近消息）；
  * - squash_system_messages：相邻 system 合并；
- * - 用户条目绝对位置注入（injection_position=1 @Depth）MVP 支持深度插入。
+ * - 用户条目绝对位置注入（injection_position=1 @Depth）：预设内容条目的
+ *   injection_position / injection_depth 在本装配里**不消费**，只随 preset.sampler
+ *   原样往返；需要 @Depth 的内容走调用方显式传入的 DepthInjection（世界书 atDepth、
+ *   作者注等的统一通道）。
  *
  * 宏展开与 token 计数经依赖注入（上层接 @dsh-soulmojito/macros）。
  */

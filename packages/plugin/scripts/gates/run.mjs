@@ -64,6 +64,8 @@ const SOURCE_BUDGET_ALLOWLIST = [
   { path: 'packages/plugin/src/agent-novel/driver.ts', reason: 'novel scheduling and recovery state machine kept together' },
   { path: 'packages/plugin/src/card-workbench/tools-world.ts', reason: 'world-book tool family kept together' },
   { path: 'packages/plugin/src/generation/pipeline.ts', reason: 'generation request assembly kept as one unit' },
+  { path: 'packages/plugin/src/data-bank.ts', reason: 'single data-bank domain: chunking, storage, vector/lexical retrieval, chat attachment and vectorized-lore retrieval share one path-safety and embed-breaker contract' },
+  { path: 'packages/plugin/client-src/90-panels-core.js', reason: 'panel registry plus the character/world editors and the quick-reply/notes/data-bank sections share one fragment scope; client fragments rely on declaration hoisting across the concatenated module, so splitting would duplicate the shared editor primitives' },
   { path: 'packages/plugin/src/helper.ts', reason: 'single TavernHelper RPC surface; snapshot + session world/script copy ops share the same binding and validation seams' },
   { path: 'packages/plugin/src/agent-tavern/body-runtime-settlement.ts', reason: 'settlement, crash recovery and the deferred post-turn completion share one durable two-phase marker state machine; a split would duplicate the settle/finish decision' },
   { path: 'packages/plugin/src/agent-tavern/body-wiring.ts', reason: 'single host body wiring surface: deps, projection, turn-stopping and turn/end chains share one lifecycle; the deferred settle chain must stay beside the restore chain' },
@@ -105,6 +107,23 @@ const REQUIRED_SERVER_ROUTES = [
   'bindings/prune',
   'chats',
   'chat/',
+  // 聊天文件（契约 2026-11-12 §2.5）：JSONL 导入/导出、整聊复制、checkpoint、
+  // 开场白切换；quick-replies 为 §2.6 的读写面（C 的模块，B 的注册）。
+  'import/chat',
+  'export/chat/',
+  'duplicate',
+  'checkpoint',
+  'checkpoints',
+  'greeting',
+  'quick-replies',
+  // 整库备份/恢复（契约 2026-11-12 Wave 2 §3）：ZIP 整根目录导出 + merge/replace
+  // 恢复。两条精确路径（非前缀族），缺少即判定打包丢失。
+  'export/backup',
+  'import/backup',
+  // 数据银行（Wave 2 契约 §2）：导入/列表/检索/聊天附件/删除。
+  'import/data-bank',
+  'data-bank',
+  'chat-data-bank',
   'display',
   'branch',
   'agent-tavern/audit',

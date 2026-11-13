@@ -7,7 +7,7 @@
  * packages/plugin/src/games/registry.ts installFromZip).
  */
 
-import { unzipSync } from 'fflate'
+import { unzipSync, zipSync } from 'fflate'
 
 export class ZipArchiveError extends Error {
   constructor(message: string) {
@@ -116,4 +116,93 @@ export function unzipArchive(bytes: Uint8Array, limits?: ZipLimits): Record<stri
     if (cause instanceof ZipArchiveError) throw cause
     throw new ZipArchiveError(`not a valid zip: ${cause instanceof Error ? cause.message : String(cause)}`)
   }
+}
+
+/* ----------------------------- writing ----------------------------- */
+
+/**
+ * Longest entry path in a zip container. The Windows path limit most writers
+ * hit is 260 characters including the extract directory, so a longer entry
+ * cannot be restored on the platforms this repository ships to.
+ */
+const MAX_ENTRY_PATH_LENGTH = 512
+
+/**
+ * Why `name` must not be used as an archive entry path, or `undefined` when it
+ * is usable.
+ *
+ * Entry names are caller-supplied text, and every zip-slip variant is one of
+ * these shapes: a leading `/`, a drive-letter prefix, a backslash separator (so
+ * `a\..\b` survives a POSIX-only split), a `.`/`..` segment, or an empty
+ * segment. The writer below refuses to build such an archive; importers that
+ * materialise an archive call this before placing anything on disk (see
+ * packages/plugin/src/http/backup-routes.ts).
+ */
+export function zipEntryPathProblem(name: string): string | undefined {
+  if (name === '') return 'is empty'
+  if (name.includes('\u0000')) return 'contains a NUL byte'
+  if (name.includes('\\')) return 'contains a backslash separator'
+  if (name.startsWith('/')) return 'is an absolute path'
+  if (/^[A-Za-z]:/.test(name)) return 'starts with a drive letter'
+  if (name.length > MAX_ENTRY_PATH_LENGTH) return `is longer than ${MAX_ENTRY_PATH_LENGTH} characters`
+  for (const segment of name.split('/')) {
+    if (segment === '') return 'has an empty path segment'
+    if (segment === '.') return 'has a "." path segment'
+    if (segment === '..') return 'is a parent-directory path'
+  }
+  return undefined
+}
+
+/** `zipEntryPathProblem` as a throw: the writer's path gate. */
+export function assertZipEntryPath(name: string): void {
+  const problem = zipEntryPathProblem(name)
+  if (problem !== undefined) throw new ZipArchiveError(`zip entry path '${name}' ${problem}`)
+}
+
+/**
+ * Build a zip from `{ entry path: bytes }`.
+ *
+ * Paths are sorted before compression, so the same input always yields the same
+ * bytes (a backup manifest hash stays comparable across runs), and each one is
+ * checked by `zipEntryPathProblem` — an absolute path or a `..` segment is a
+ * writer error, never something the archive silently carries.
+ *
+ * `limits` bounds the archive being produced with the same shape the reader
+ * uses (`DEFAULT_ZIP_LIMITS` unless the caller passes its own): callers that
+ * pack a data root pass a wider bound than the CHARX/EPUB defaults.
+ *
+ * Entries are deflated at a fixed level (6); text such as chat JSONL shrinks by
+ * roughly an order of magnitude, and the fixed level keeps output deterministic.
+ */
+export function zipArchive(entries: Record<string, Uint8Array>, limits?: ZipLimits): Uint8Array {
+  const source = limits ?? DEFAULT_ZIP_LIMITS
+  const maxEntries = requireLimit(source.maxEntries, 'maxEntries')
+  const maxFileBytes = requireLimit(source.maxFileBytes, 'maxFileBytes')
+  const maxTotalBytes = requireLimit(source.maxTotalBytes, 'maxTotalBytes')
+  const names = Object.keys(entries).sort()
+  if (names.length > maxEntries) {
+    throw new ZipArchiveError(`zip would have ${names.length} entries, over the ${maxEntries}-entry limit`)
+  }
+  let totalBytes = 0
+  const files: Record<string, Uint8Array> = {}
+  for (const name of names) {
+    assertZipEntryPath(name)
+    const bytes = entries[name]
+    if (!(bytes instanceof Uint8Array)) {
+      throw new ZipArchiveError(`zip entry '${name}' is not a Uint8Array`)
+    }
+    if (bytes.byteLength > maxFileBytes) {
+      throw new ZipArchiveError(
+        `zip entry '${name}' is ${bytes.byteLength} bytes, over the ${maxFileBytes}-byte per-file limit`,
+      )
+    }
+    totalBytes += bytes.byteLength
+    if (totalBytes > maxTotalBytes) {
+      throw new ZipArchiveError(
+        `zip entries total ${totalBytes} bytes (at '${name}'), over the ${maxTotalBytes}-byte total limit`,
+      )
+    }
+    files[name] = bytes
+  }
+  return zipSync(files, { level: 6 })
 }

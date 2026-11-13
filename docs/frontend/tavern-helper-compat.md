@@ -396,9 +396,12 @@ JSR 卡可以带自己的 OpenAI 兼容 API 源（URL + Key + 模型），并在
 | `tavern_events.MESSAGE_RECEIVED` | `message_received` | 出现新的**非用户**楼层 | `(message_id)` |
 | `tavern_events.MESSAGE_EDITED` | `message_edited` | 已有楼层正文或发言人变化 | `(message_id)` |
 | `tavern_events.MESSAGE_SWIPED` | `message_swiped` | 楼层 `swipe_id` 或 `swipes` 数量变化 | `(message_id)` |
+| `tavern_events.MESSAGE_SWIPE_DELETED` | `message_swipe_deleted` | 某楼 `swipes` 数量**减少**（切换/新增不发） | `(message_id)` |
+| `tavern_events.MESSAGE_UPDATED` | `message_updated` | 正文与发言人都未变，但 `is_hidden`/`role`/`extra`/`data` 变化（与 `MESSAGE_EDITED` 互斥） | `(message_id)` |
 | `tavern_events.MESSAGE_DELETED` | `message_deleted` | 楼层消失 | `(第一个被删的 message_id)` |
 | `tavern_events.CHAT_CHANGED` | `chat_id_changed` | 绑定的聊天切换 | `(chatId)` |
 | `tavern_events.PRESET_CHANGED` | `preset_changed` | 快照里的激活预设变化 | `(presetName)` |
+| `tavern_events.WORLD_INFO_ACTIVATED` | `world_info_activated` | 最近一轮 ST 生成的扫描轨迹 seq 变化 | `(entries[])`；条目含 world/name/matchedKeys/position/depth/reason |
 | `tavern_events.GENERATION_STARTED` | `generation_started` | `TavernHelper.generate` 请求开始 | `(generationId)` |
 | `tavern_events.GENERATION_STOPPED` | `generation_stopped` | `stopGenerationById` / `stopAllGeneration` / `/stop` 中止 | `(generationId)` |
 | `iframe_events.MESSAGE_IFRAME_RENDER_STARTED` | `message_iframe_render_started` | 本 iframe 挂载 | `(token)` |
@@ -413,10 +416,11 @@ JSR 卡可以带自己的 OpenAI 兼容 API 源（URL + Key + 模型），并在
 
 **其余常量**（`tavern_events` 共 82 个名字，`iframe_events` 共 9 个）：
 
-- **名字全部存在**（`WORLD_INFO_ACTIVATED` 等未桥接项也是字符串，`eventOn` 不会因 `undefined` 炸）；2026-10-23 起按 JSR 4.11.3 的完整词汇表安装。
+- **名字全部存在**（`CHAT_CREATED` 等未桥接项也是字符串，`eventOn` 不会因 `undefined` 炸）；2026-10-23 起按 JSR 4.11.3 的完整词汇表安装。
 - **但只有上表列出的会被触发**。这是刻意的：宿主没有该信号的观测面，凭空发事件等于给你的
-  前端假数据，会让「等事件再渲染」的逻辑永久卡住；`WORLD_INFO_ACTIVATED` 仍未桥接，
-  需要世界书激活轨迹时请看提示词查看器或轮询。
+  前端假数据，会让「等事件再渲染」的逻辑永久卡住；`CHAT_CREATED` / `CHAT_DELETED` /
+  `CHARACTER_*` 仍未桥接（iframe 快照只绑定当前聊天/当前角色，无法区分重命名与删除+新建），
+  需要时请看侧栏/面板或轮询。
 
 > 实践建议：**要刷新就轮询自己的数据**（`getVariables` / `getChatMessages` + `setInterval`，
 > 或者像内置状态栏那样在 `eventOn(MESSAGE_RECEIVED)` 之外再加一个 1-2s 的低频 `setInterval`）。

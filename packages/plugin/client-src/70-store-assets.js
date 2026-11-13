@@ -80,28 +80,6 @@
       }
     }
 
-    async function createPersona(name, description) {
-      const result = await api('import/persona', {
-        method: 'POST',
-        headers: jsonHeaders(),
-        body: JSON.stringify({ name, description }),
-      })
-      await refreshBootstrap()
-      broadcastModEvent('assets-saved', { kind: 'persona', name })
-      return result.persona
-    }
-
-    async function savePersona(name, description) {
-      const result = await api('persona', {
-        method: 'PUT',
-        headers: jsonHeaders(),
-        body: JSON.stringify({ name, description }),
-      })
-      await refreshBootstrap()
-      broadcastModEvent('assets-saved', { kind: 'persona', name })
-      return result.persona
-    }
-
     async function deletePersona(name) {
       await api(`persona?name=${encodeURIComponent(name)}`, { method: 'DELETE' })
       await refreshBootstrap()

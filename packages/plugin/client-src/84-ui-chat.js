@@ -33,17 +33,43 @@
         .replace(/\{\{bot\}\}/gi, () => char)
     }
 
-    function MessageRow({ sessionId, character, chatId, chat, message, index, busy, display, persona }) {
+    function MessageRow({ sessionId, binding, character, chatId, chat, message, index, busy, display, persona }) {
       const t = useTranslate()
       const [editing, setEditing] = useState(false)
       const [draft, setDraft] = useState(message.mes || '')
       const [error, setError] = useState('')
+      const [notice, setNotice] = useState('')
       const [branching, setBranching] = useState(false)
+      const [checkpointing, setCheckpointing] = useState(false)
+      // 删除二次确认走行内两步（先确认再执行）：不用原生 confirm，避免模态
+      // 对话框打断流式渲染；失焦即撤销确认态。
+      const [confirmingDelete, setConfirmingDelete] = useState(false)
+      // 隐藏楼层折叠态：正文默认收起，但楼层留在 DOM 里，用户随时能展开或
+      // 取消隐藏（ST 的 Excluded 语义不允许"看不见就再也点不到"）。
+      const [hiddenOpen, setHiddenOpen] = useState(false)
       // 思考块展开态：流式楼层默认展开（用户要看思考实时滚动），保存后重挂载
       // （key 含 'stream'/'saved' 分段）自然回落折叠。
       const [reasoningOpen, setReasoningOpen] = useState(message.streaming === true)
       useEffect(() => setDraft(message.mes || ''), [message.mes])
+      useEffect(() => {
+        if (notice === '') return
+        const timer = setTimeout(() => setNotice(''), 2400)
+        return () => clearTimeout(timer)
+      }, [notice])
       const isUser = message.is_user === true
+      // 只有已落盘楼层支持写操作：流式伪楼层的索引超出 chat.messages，写回会
+      // 撞上服务端"message_id 越界"，动作行对它一律禁用。
+      const persisted = message.streaming !== true && index < chat.messages.length
+      const hidden = persisted && isMessageHidden(message)
+      const collapsed = hidden && !hiddenOpen
+      const lastIndex = chat.messages.length - 1
+      const isLast = persisted && index === lastIndex
+      // Continue / Impersonate / 末条重掷只对 ST 生成入口开放（与重掷按钮、
+      // Tavern 标签页同源判断）；AgentTavern 的回复由主循环产出，没有这些动词。
+      const stGeneration = binding ? bindingArchitecture(binding) === 'st' : false
+      const tokenCount = typeof message.extra?.tokenCount === 'number' && Number.isFinite(message.extra.tokenCount)
+        ? Math.round(message.extra.tokenCount)
+        : null
       const swipes = Array.isArray(message.swipes) && message.swipes.length > 0 ? message.swipes : [message.mes || '']
       const swipeIndex = Math.min(Math.max(Number(message.swipe_id) || 0, 0), swipes.length - 1)
       // 带意见重写（提案 0011）：swipe_info[].extra.feedback 记录该变体是按
@@ -67,19 +93,23 @@
       // text, matching Tavern Helper's frontend code-block behavior.
       const frontendDocuments = editing || message.streaming ? [] : extractFrontendDocuments(renderedText)
       const frontendProse = frontendDocuments.length > 0 ? stripFrontendDocuments(renderedText) : ''
-      const persist = async (nextMessage) => {
+      // 整份消息数组写回：隐藏 / 删除 / 换位改的是别的楼层，不能只替换本条。
+      // 走既有全量 PUT chat（revision CAS + 冲突重取由 saveChat 负责）。
+      const persistMessages = async (nextMessages) => {
         setError('')
-        const nextChat = { ...chat, messages: chat.messages.map((item, itemIndex) => itemIndex === index ? nextMessage : item) }
+        setNotice('')
         try {
-          await saveChat(character, chatId, nextChat)
+          await saveChat(character, chatId, { ...chat, messages: nextMessages })
           return true
         } catch (cause) {
-          const message = cause instanceof Error ? cause.message : String(cause)
-          setError(message)
-          setRun(sessionId, { error: message })
+          const failure = cause instanceof Error ? cause.message : String(cause)
+          setError(failure)
+          setRun(sessionId, { error: failure })
           return false
         }
       }
+      const persist = (nextMessage) => persistMessages(
+        chat.messages.map((item, itemIndex) => itemIndex === index ? nextMessage : item))
       const changeSwipe = (delta) => {
         const nextIndex = (swipeIndex + delta + swipes.length) % swipes.length
         void persist({ ...message, swipe_id: nextIndex, mes: swipes[nextIndex] })
@@ -104,7 +134,91 @@
           .catch((cause) => setError(cause.message))
           .finally(() => setBranching(false))
       }
-      return h('article', { className: `dt-message ${isUser ? 'dt-message-user' : 'dt-message-character'}` },
+      // 隐藏 / 取消隐藏：写消息级 is_hidden（ST 原生命名），同时清掉
+      // extra.is_hidden 旧形态——只写一半会让"取消隐藏"变成幽灵状态。
+      const toggleHidden = () => {
+        if (!persisted || busy) return
+        void persistMessages(chat.messages.map((item, itemIndex) =>
+          itemIndex === index ? withMessageHidden(item, !hidden) : item))
+      }
+      // 复制用户看得见的文本（含显示层宏展开），不是落库原文。
+      const copyBody = () => {
+        void copyMessageText(renderedText).then(
+          () => setNotice(t('message.copied')),
+          () => setError(t('message.copyFailed')))
+      }
+      // 结构性写（删除 / 换位）会移动楼层下标，而 store 的 displays 是"按
+      // 下标存的 markdown-only 正则渲染文本"：不重取会让别的楼层显示错位的
+      // 渲染结果（只有配了 markdownOnly 脚本时非空，所以按需一次 GET 即可）。
+      const persistStructure = (nextMessages) => {
+        void persistMessages(nextMessages).then((saved) => {
+          if (saved) void loadChat(character, chatId, true).catch(() => {})
+        })
+      }
+      const removeMessage = () => {
+        if (!persisted || busy) return
+        setConfirmingDelete(false)
+        persistStructure(chat.messages.filter((item, itemIndex) => itemIndex !== index))
+      }
+      const moveMessage = (delta) => {
+        const target = index + delta
+        if (!persisted || busy || target < 0 || target > lastIndex) return
+        const nextMessages = [...chat.messages]
+        const moved = nextMessages[index]
+        nextMessages[index] = nextMessages[target]
+        nextMessages[target] = moved
+        persistStructure(nextMessages)
+      }
+      // Continue / Impersonate 与重掷同一入口：mode 走契约白名单
+      // （'regenerate' | 'continue' | 'impersonate'），不带 message——续写不新增
+      // 用户楼，代写由服务端落一条 is_user 楼层。
+      const generate = (mode) => {
+        if (!binding || busy) return
+        setError('')
+        setNotice('')
+        void generateFor(sessionId, binding, mode, '')
+      }
+      // checkpoint：服务端复制 0..index 到新聊天文件，父聊天内容与 revision 都
+      // 不变；这里只提示 + 由 store 层重取聊天列表，不自动切换会话。
+      const createCheckpoint = () => {
+        if (!binding || !persisted || busy || checkpointing) return
+        setCheckpointing(true)
+        setError('')
+        setNotice('')
+        void createChatCheckpoint(binding, index)
+          .then((result) => {
+            const name = typeof result?.name === 'string' && result.name !== ''
+              ? result.name
+              : typeof result?.chatId === 'string' ? result.chatId : ''
+            setNotice(t('message.checkpointCreated', { name }))
+          })
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setCheckpointing(false))
+      }
+      const deleteButton = persisted
+        ? confirmingDelete
+          ? h('button', {
+            type: 'button',
+            className: 'dt-message-delete',
+            title: t('message.delete'),
+            disabled: busy,
+            onClick: removeMessage,
+            onBlur: () => setConfirmingDelete(false),
+          }, t('message.deleteConfirm'))
+          : h('button', {
+            type: 'button',
+            className: 'dt-message-delete',
+            title: t('message.delete'),
+            disabled: busy,
+            onClick: () => setConfirmingDelete(true),
+          }, h(IconTrashOutline16))
+        : null
+      return h('article', {
+        className: `dt-message ${isUser ? 'dt-message-user' : 'dt-message-character'}${hidden ? ' dt-message-hidden' : ''}`,
+        // 隐藏楼层降透明度：类名给样式钩子，当前读感不依赖 95-ui-styles.js
+        // （该文件不由本 owner 改）。
+        ...(hidden ? { style: { opacity: 0.6 } } : {}),
+      },
         !isUser ? h('img', {
           className: 'dt-message-avatar',
           src: `${API}/avatar/${encodeURIComponent(message.name || character)}`,
@@ -112,32 +226,51 @@
           onError: (event) => { event.currentTarget.style.visibility = 'hidden' },
         }) : null,
         h('div', { className: 'dt-message-body' },
-          h('div', { className: 'dt-message-name' }, message.name || (isUser ? t('message.user') : character)),
-          reasoningText ? h('div', { className: 'dt-reasoning' },
-            h('button', {
-              type: 'button',
-              className: `dt-reasoning-toggle${reasoningOpen ? ' dt-reasoning-open' : ''}`,
-              title: t(message.streaming ? 'message.thinking' : 'message.thoughts'),
-              onClick: () => setReasoningOpen(!reasoningOpen),
-            }, h(IconChevronDownOutline14), t(message.streaming ? 'message.thinking' : 'message.thoughts')),
-            reasoningOpen ? h('div', { className: 'dt-reasoning-body' }, reasoningText) : null) : null,
-          editing
-            ? h('textarea', { className: 'dt-message-edit', value: draft, disabled: busy, onChange: (event) => setDraft(event.target.value) })
-            : frontendDocuments.length > 0
-              ? h('div', { className: 'dt-message-frontend' },
-                frontendProse !== '' ? h('div', { className: 'dt-message-copy' }, frontendProse) : null,
-                frontendDocuments.map((html, frontendIndex) => h(FrontendFrame, {
-                key: `${index}-${frontendIndex}`,
-                html,
-                token: `tavern-${sessionId}-${index}-${frontendIndex}`,
-                messageId: index,
-                binding: { character, chatId },
-                refreshKey: `${index}-${(message.mes ?? '').length}`,
-              })))
-              : message.streaming && renderedText === ''
-                ? null
-                : h('div', { className: 'dt-message-copy' }, renderedText),
-          h('div', { className: 'dt-message-actions' },
+          h('div', { className: 'dt-message-name' },
+            message.name || (isUser ? t('message.user') : character),
+            // 估算 token（生成落盘写 extra.tokenCount；服务端注释已说明这是字符
+            // 数/3.5 的估算，不是 provider 分词器）。
+            tokenCount !== null
+              ? h('span', {
+                className: 'dt-message-tokens',
+                style: { marginLeft: 6, opacity: 0.8 },
+              }, t('message.tokens', { count: tokenCount }))
+              : null),
+          hidden
+            ? h('div', { className: 'dt-message-actions dt-message-hidden-row' },
+              h('span', { className: 'dt-swipe-feedback' }, t('message.hidden')),
+              h('button', {
+                type: 'button',
+                title: hiddenOpen ? t('message.collapse') : t('message.reveal'),
+                onClick: () => setHiddenOpen(!hiddenOpen),
+              }, hiddenOpen ? t('message.collapse') : t('message.reveal')))
+            : null,
+          collapsed ? null : h(React.Fragment, null,
+            reasoningText ? h('div', { className: 'dt-reasoning' },
+              h('button', {
+                type: 'button',
+                className: `dt-reasoning-toggle${reasoningOpen ? ' dt-reasoning-open' : ''}`,
+                title: t(message.streaming ? 'message.thinking' : 'message.thoughts'),
+                onClick: () => setReasoningOpen(!reasoningOpen),
+              }, h(IconChevronDownOutline14), t(message.streaming ? 'message.thinking' : 'message.thoughts')),
+              reasoningOpen ? h('div', { className: 'dt-reasoning-body' }, reasoningText) : null) : null,
+            editing
+              ? h('textarea', { className: 'dt-message-edit', value: draft, disabled: busy, onChange: (event) => setDraft(event.target.value) })
+              : frontendDocuments.length > 0
+                ? h('div', { className: 'dt-message-frontend' },
+                  frontendProse !== '' ? h('div', { className: 'dt-message-copy' }, messageBody(frontendProse)) : null,
+                  frontendDocuments.map((html, frontendIndex) => h(FrontendFrame, {
+                    key: `${index}-${frontendIndex}`,
+                    html,
+                    token: `tavern-${sessionId}-${index}-${frontendIndex}`,
+                    messageId: index,
+                    binding: { character, chatId },
+                    refreshKey: `${index}-${(message.mes ?? '').length}`,
+                  })))
+                : message.streaming && renderedText === ''
+                  ? null
+                  : h('div', { className: 'dt-message-copy' }, messageBody(renderedText))),
+          h('div', { className: 'dt-message-actions', style: { flexWrap: 'wrap' } },
             swipes.length > 1 ? h(React.Fragment, null,
               h('button', { type: 'button', title: t('message.previousSwipe'), disabled: busy, onClick: () => changeSwipe(-1) }, h(IconChevronLeftOutline14)),
               h('span', null, `${swipeIndex + 1}/${swipes.length}`),
@@ -148,9 +281,65 @@
               h('button', { type: 'button', onClick: () => { setDraft(message.mes || ''); setError(''); setEditing(false) } }, t('message.cancel')))
               : h(React.Fragment, null,
                 h('button', { type: 'button', title: t('message.edit'), disabled: busy, onClick: () => setEditing(true) }, h(IconEditOutline16)),
+                persisted ? h('button', {
+                  type: 'button',
+                  className: 'dt-message-copy-btn',
+                  title: t('message.copy'),
+                  disabled: busy,
+                  onClick: copyBody,
+                }, '⧉') : null,
+                persisted ? h('button', {
+                  type: 'button',
+                  className: 'dt-message-hide-btn',
+                  title: hidden ? t('message.unhide') : t('message.hide'),
+                  disabled: busy,
+                  onClick: toggleHidden,
+                }, hidden ? t('message.unhide') : t('message.hide')) : null,
+                persisted ? h('button', {
+                  type: 'button',
+                  title: t('message.moveUp'),
+                  disabled: busy || index === 0,
+                  onClick: () => moveMessage(-1),
+                }, '↑') : null,
+                persisted ? h('button', {
+                  type: 'button',
+                  title: t('message.moveDown'),
+                  disabled: busy || index >= lastIndex,
+                  onClick: () => moveMessage(1),
+                }, '↓') : null,
+                deleteButton,
+                stGeneration && isLast && !isUser ? h(React.Fragment, null,
+                  h('button', {
+                    type: 'button',
+                    title: t('view.regenerate'),
+                    disabled: busy,
+                    onClick: () => generate('regenerate'),
+                  }, h(IconRefreshOutline16)),
+                  h('button', {
+                    type: 'button',
+                    className: 'dt-message-continue-btn',
+                    title: t('message.continue'),
+                    disabled: busy,
+                    onClick: () => generate('continue'),
+                  }, t('message.continue'))) : null,
+                stGeneration && isLast ? h('button', {
+                  type: 'button',
+                  className: 'dt-message-impersonate-btn',
+                  title: t('message.impersonate'),
+                  disabled: busy,
+                  onClick: () => generate('impersonate'),
+                }, t('message.impersonate')) : null,
+                persisted ? h('button', {
+                  type: 'button',
+                  className: 'dt-message-checkpoint-btn',
+                  title: t('message.checkpoint'),
+                  disabled: busy || checkpointing,
+                  onClick: createCheckpoint,
+                }, checkpointing ? t('message.checkpointing') : t('message.checkpoint')) : null,
                 h('button', { type: 'button', className: 'dt-branch-btn', title: t('message.branch'), disabled: busy || branching, onClick: branch }, '⑂'),
                 h('button', { type: 'button', title: t('view.forkArchitecture', { architecture: t('view.architectureAgent') }), disabled: busy || branching, onClick: branchAgent }, h(IconAgentPresetOutline16)))),
           branching ? h('span', { className: 'dt-message-error' }, t('message.branching')) : null,
+          notice ? h('span', { className: 'dt-swipe-feedback', title: notice }, notice) : null,
           error ? h('span', { className: 'dt-message-error' }, error) : null))
     }
 
@@ -218,6 +407,7 @@
           messages.map((message, index) => h(MessageRow, {
             key: `${index}-${message.send_date || ''}-${message.streaming ? 'stream' : 'saved'}`,
             sessionId,
+            binding,
             character: binding.character,
             chatId: binding.chatId,
             chat,
@@ -589,4 +779,4 @@
             }),
             h('button', { type: 'button', disabled: blocked, onClick: () => generate(true) }, t('candidates.regenerate')))) : null)
     }
-
+

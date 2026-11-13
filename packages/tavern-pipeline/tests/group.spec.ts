@@ -98,4 +98,29 @@ describe('member picking', () => {
     }
     expect(chatty).toBeGreaterThan(700)
   })
+
+  it('never auto-picks under MANUAL (strategy 0)', () => {
+    for (let i = 0; i < 20; i++) {
+      expect(pickGroupMember({
+        strategy: 0, members: ['A', 'B', 'C'], disabled: [], talkativeness: talk,
+        allowSelfResponses: false, rng: () => i / 20,
+      })).toBeUndefined()
+      expect(pickGroupMember({
+        strategy: 0, members: ['A', 'B'], disabled: [], talkativeness: talk,
+        allowSelfResponses: true, lastSpeaker: 'A', rng: () => i / 20,
+      })).toBeUndefined()
+    }
+  })
+
+  it('speaks under MANUAL only for an explicit enabled member', () => {
+    expect(pickGroupMember({
+      strategy: 0, members: ['A', 'B'], disabled: [], talkativeness: talk, allowSelfResponses: false, explicit: 'B',
+    })).toBe('B')
+    expect(pickGroupMember({
+      strategy: 0, members: ['A', 'B'], disabled: ['B'], talkativeness: talk, allowSelfResponses: false, explicit: 'B',
+    })).toBeUndefined()
+    expect(pickGroupMember({
+      strategy: 0, members: ['A', 'B'], disabled: [], talkativeness: talk, allowSelfResponses: false, explicit: 'Z',
+    })).toBeUndefined()
+  })
 })

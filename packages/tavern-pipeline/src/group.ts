@@ -6,7 +6,7 @@
  * - 预设 `group_nudge_prompt` 作为回合末 user nudge（{{char}} = 发言者）。
  */
 
-import type { ChatMessage } from '@dsh-soulmojito/format'
+import type { ChatMessage, GroupActivationStrategy } from '@dsh-soulmojito/format'
 
 export interface GroupTurnInput {
   /** 当前发言者（成员角色名） */
@@ -57,12 +57,14 @@ export function buildGroupTurn(input: GroupTurnInput): GroupTurnResult {
 
 /**
  * 选择下一个发言成员。
+ * - MANUAL（strategy 0）：不自动选人——只有显式传入且启用的成员才会发言，
+ *   其余情况返回 undefined（调用方据此报“无可用成员”，不擅自补一个）；
  * - NATURAL（strategy 1）：talkativeness 加权随机；排除上一发言者（除非
  *   allowSelfResponses）；talkativeness 来自卡扩展 data.extensions.talkativeness。
  * - LIST（strategy 2）：列表顺序轮转，跳过禁用成员。
  */
 export function pickGroupMember(options: {
-  strategy: 1 | 2
+  strategy: GroupActivationStrategy
   members: string[]
   disabled: string[]
   talkativeness: (member: string) => number
@@ -76,6 +78,8 @@ export function pickGroupMember(options: {
   if (options.explicit !== undefined) {
     return enabled.includes(options.explicit) ? options.explicit : undefined
   }
+  // MANUAL：没有显式点名就不选人（ST activation_strategy = 0）。
+  if (options.strategy === 0) return undefined
   if (options.strategy === 2) {
     if (enabled.length === 1) return enabled[0]
     const last = options.lastSpeaker !== undefined ? enabled.indexOf(options.lastSpeaker) : -1

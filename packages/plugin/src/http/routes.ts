@@ -9,6 +9,7 @@ import { handleGamesApi, isGamesRoute } from '../games/http.js'
 import type { PluginContext } from '../host-contract.js'
 import { getGamesServicePromise, getImRuntime } from '../runtime.js'
 import { handleAgentTavernBodyApi } from './body-api.js'
+import { handleDataBankRoute } from './data-bank-routes.js'
 import {
   handleCharacterImportRoute,
   handlePresetImportRoute,
@@ -21,6 +22,7 @@ import {
   handleCharacterExportRoute,
   handleCharacterUpdateRoute,
 } from './character-routes.js'
+import { handleBackupExportRoute, handleBackupImportRoute } from './backup-routes.js'
 import {
   handleChatRoute,
   handleGenerateRoute,
@@ -78,12 +80,19 @@ import {
   handlePersonaUpdateRoute,
 } from './persona-group-routes.js'
 import { handleBootstrapApi, handleStateSlicesApi, handleStoreRevisionApi } from './read-routes.js'
+import { handleQuickRepliesRoute } from './quick-replies-routes.js'
 import {
   handleBindingCreateRoute,
   handleBindingDeleteRoute,
   handleBindingsPruneRoute,
   handleBranchRoute,
+  handleChatCheckpointRoute,
+  handleChatCheckpointsRoute,
   handleChatCreateRoute,
+  handleChatDuplicateRoute,
+  handleChatExportRoute,
+  handleChatGreetingRoute,
+  handleChatImportRoute,
   handleChatsListRoute,
 } from './session-routes.js'
 import {
@@ -389,6 +398,51 @@ export const STORE_ROUTES: readonly RouteEntry<StoreRouteContext>[] = [
     matches: (route, method) => method === 'POST' && route === 'branch',
     handle: ({ db, req, res }) => handleBranchRoute(db, req, res),
   },
+  // ---- 聊天文件（契约 2026-11-12 §2.5）----
+  // 导入/导出/整聊复制/checkpoint/开场白切换。全部 post-store、method gating
+  // 留在 `matches`；顺序紧跟 branch（同一聊天生命周期族），不改动其余条目
+  // 的相对位置。
+  {
+    name: 'chat-import',
+    matches: (route, method) => method === 'POST' && route === 'import/chat',
+    handle: ({ db, req, res }) => handleChatImportRoute(db, req, res),
+  },
+  {
+    name: 'chat-export',
+    matches: (route, method) => method === 'GET' && route.startsWith('export/chat/'),
+    handle: ({ db, res, route }) => handleChatExportRoute(db, res, route),
+  },
+  {
+    name: 'chat-duplicate',
+    matches: (route, method) => method === 'POST' && route === 'duplicate',
+    handle: ({ db, req, res }) => handleChatDuplicateRoute(db, req, res),
+  },
+  {
+    name: 'chat-checkpoint',
+    matches: (route, method) => method === 'POST' && route === 'checkpoint',
+    handle: ({ db, req, res }) => handleChatCheckpointRoute(db, req, res),
+  },
+  {
+    name: 'chat-checkpoints',
+    matches: (route, method) => method === 'GET' && route === 'checkpoints',
+    handle: ({ db, res, url }) => handleChatCheckpointsRoute(db, res, url),
+  },
+  {
+    name: 'chat-greeting',
+    matches: (route, method) => method === 'POST' && route === 'greeting',
+    handle: ({ db, req, res }) => handleChatGreetingRoute(db, req, res),
+  },
+  // Quick Replies（契约 §2.6）：资产读写由 C 的模块独占，这里只按 method 分派。
+  {
+    name: 'quick-replies-read',
+    matches: (route, method) => method === 'GET' && route === 'quick-replies',
+    handle: ({ db, req, res, method }) => handleQuickRepliesRoute(db, req, res, method),
+  },
+  {
+    name: 'quick-replies-update',
+    matches: (route, method) => method === 'PUT' && route === 'quick-replies',
+    handle: ({ db, req, res, method }) => handleQuickRepliesRoute(db, req, res, method),
+  },
   // Generation and MVU surface: candidates, preview, retry/undo/status.
   {
     name: 'candidates',
@@ -568,5 +622,30 @@ export const STORE_ROUTES: readonly RouteEntry<StoreRouteContext>[] = [
     name: 'script-run',
     matches: (route, method) => method === 'POST' && route === 'script',
     handle: ({ ctx, db, req, res }) => handleTavernScriptRoute(ctx, req, res, db),
+  },
+  // ---- 整库备份/恢复（Wave 2 契约 §3）----
+  // 两个精确路径，与其它前缀族无交集；放在表尾，既有条目的相对求值顺序不动。
+  // 导出是整根目录打包（二进制），导入是 base64 body + merge/replace；两者
+  // 都先等 store 的写尾巴排空，不在半截补丁上读写。
+  {
+    name: 'backup-export',
+    matches: (route, method) => method === 'GET' && route === 'export/backup',
+    handle: ({ db, res }) => handleBackupExportRoute(db, res),
+  },
+  {
+    name: 'backup-import',
+    matches: (route, method) => method === 'POST' && route === 'import/backup',
+    handle: ({ db, req, res }) => handleBackupImportRoute(db, req, res),
+  },
+  // ---- 数据银行（Wave 2 契约 §2）----
+  // 精确路径族：导入/列表/检索/聊天附件/删除；表尾，既有条目的相对顺序不动。
+  {
+    name: 'data-bank',
+    matches: (route, method) =>
+      (method === 'POST' && (route === 'import/data-bank' || route === 'data-bank/search'))
+      || (method === 'GET' && route === 'data-bank')
+      || (method === 'PUT' && route === 'chat-data-bank')
+      || (method === 'DELETE' && route.startsWith('data-bank/')),
+    handle: ({ db, req, res, route, method }) => handleDataBankRoute(db, req, res, route, method),
   },
 ]

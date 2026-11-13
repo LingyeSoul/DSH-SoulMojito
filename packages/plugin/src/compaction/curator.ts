@@ -318,6 +318,9 @@ async function summarizeStoryCheckpoint(
   if (!summary.some((block) => block.text.trim().length > 0)) {
     throw new Error('AgentTavern story compaction produced no text summary content')
   }
+  // 检查点写回 chat_metadata.summary（契约 2026-11-12 §2.4）：ST 生成与
+  // AgentTavern 自动注入读同一字段。best-effort——压缩已成功，写摘要失败只告警。
+  await persistChatSummary(ctx, agent.session.id, summary.map((block) => block.text).join('\n'))
   return {
     summary,
     rawOutput,
@@ -359,6 +362,36 @@ let tavernStorePromise: Promise<TavernStore> | undefined
 
 function tavernStore(): Promise<TavernStore> {
   return (tavernStorePromise ??= sharedTavernStore(tavernDataRoot()))
+}
+
+/** 落盘摘要的字符上限：chat header 参与每次聊天读取的解析，注入侧另有 1200 字符
+ *  的块上限；这里只保证一次超长摘要不会让 header 无限膨胀（超限显式带省略号）。 */
+const MAX_STORED_SUMMARY_CHARS = 8000
+
+/**
+ * 剧情压缩摘要写回 `chat_metadata.summary`（契约 2026-11-12 §2.4）：ST 生成
+ * （`pipeline`）与 AgentTavern 自动注入（`agent-tavern/context-injection`）读同一
+ * 字段，压缩检查点因此不再只活在会话历史里。best-effort：写失败只 warn——压缩
+ * 已经完成，摘要落库失败不能反过来把成功的压缩变成错误响应。
+ */
+async function persistChatSummary(ctx: HostCompactionContext, sessionId: string, text: string): Promise<void> {
+  const trimmed = text.trim()
+  if (trimmed === '') return
+  const summary = trimmed.length <= MAX_STORED_SUMMARY_CHARS
+    ? trimmed
+    : `${trimmed.slice(0, MAX_STORED_SUMMARY_CHARS - 1)}…`
+  try {
+    const db = await tavernStore()
+    const binding = (await db.getState()).sessionBindings[sessionId]
+    // 只有 AgentTavern 单聊绑定有可写的 chat（agent-novel 的 character/chatId 是空串，
+    // 群会话的摘要会被多个角色共享，都不是 chat_metadata 的正确归属）。
+    if (!binding || binding.architecture !== 'agent-tavern' || binding.group === true) return
+    await db.withChat(binding.character, binding.chatId, (chat) => {
+      chat.header.chat_metadata['summary'] = summary
+    }, { attempts: 3, delayMs: (attempt) => 25 * (attempt + 1) })
+  } catch (error) {
+    warn(ctx, `chat summary write-back failed (compaction itself succeeded): ${messageOf(error)}`)
+  }
 }
 
 /** 存储缺失、读取失败或绑定不完整时按非剧情会话处理，摘要退回宿主默认行为。 */

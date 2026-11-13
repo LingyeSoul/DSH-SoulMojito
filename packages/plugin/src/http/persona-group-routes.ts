@@ -40,20 +40,35 @@ export async function handlePersonaUpdateRoute(
   req: HttpRequest,
   res: HttpResponse,
 ): Promise<void> {
-  const body = await readJson(req)
+  const body = await readJson(req, 25 * 1024 * 1024)
   if (typeof body.name !== 'string' || typeof body.description !== 'string') throw new Error('expected { name, description }')
   const existing = await db.getPersona(body.name)
   if (!existing) throw new Error(`persona '${body.name}' not found`)
+  // 面板头像上传（契约 2026-11-12 §2.11）：与 import/persona 的 pngBase64 同一
+  // 形状，但保留现有 description/position——导入会把描述重置成卡内嵌文本。
+  // 只接受 PNG 魔数：头像按 image/png 提供，其它字节只会变成坏图。
+  const avatar = typeof body.pngBase64 === 'string'
+    ? new Uint8Array(Buffer.from(body.pngBase64, 'base64'))
+    : undefined
+  if (avatar !== undefined && !isPng(avatar)) throw new Error('pngBase64 must be a PNG image')
   const persona = {
     ...existing,
     description: body.description,
     ...(typeof body.position === 'number' ? { position: body.position } : {}),
     ...(typeof body.depth === 'number' ? { depth: body.depth } : {}),
     ...(typeof body.role === 'number' ? { role: body.role } : {}),
+    ...(avatar !== undefined ? { hasAvatar: true } : {}),
   }
-  await db.putPersona(persona)
+  await db.putPersona(persona, avatar)
   await emitAssetsSaved('persona', body.name)
   return sendJson(res, 200, { ok: true, persona })
+}
+
+/** PNG 魔数（89 50 4E 47 0D 0A 1A 0A）：头像路由以 image/png 提供，非 PNG 是调用方错误。 */
+function isPng(bytes: Uint8Array): boolean {
+  return bytes.length >= 8
+    && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47
+    && bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a
 }
 
 export async function handlePersonaDeleteRoute(
@@ -121,7 +136,9 @@ export async function handleGroupCreateRoute(
     name: body.name,
     members: body.members,
     allowSelfResponses: body.allowSelfResponses === true,
-    activationStrategy: body.activationStrategy === 2 ? 2 : 1,
+    // ST 的 0 = MANUAL 必须原样落库（契约 2026-11-12 §2.9）：旧实现把它静默
+    // 改写成 1，导入再导出就成了另一份文件（静默数据损坏）。只有值域外回落 1。
+    activationStrategy: body.activationStrategy === 0 ? 0 : body.activationStrategy === 2 ? 2 : 1,
     disabledMembers: Array.isArray(body.disabledMembers) ? body.disabledMembers.filter((x) => typeof x === 'string') : [],
     chatId: '',
     chats: [],
@@ -150,7 +167,10 @@ export async function handleGroupUpdateRoute(
     ...group,
     members,
     ...(Array.isArray(body.disabledMembers) ? { disabledMembers: body.disabledMembers.filter((x) => typeof x === 'string' && members.includes(x)) } : {}),
-    ...(typeof body.activationStrategy === 'number' ? { activationStrategy: body.activationStrategy === 2 ? 2 : 1 } : {}),
+    // 同上：0/1/2 三态原样保留，值域外回落 1（NATURAL）。
+    ...(typeof body.activationStrategy === 'number'
+      ? { activationStrategy: body.activationStrategy === 0 ? 0 : body.activationStrategy === 2 ? 2 : 1 }
+      : {}),
     ...(typeof body.allowSelfResponses === 'boolean' ? { allowSelfResponses: body.allowSelfResponses } : {}),
   })
   await emitAssetsSaved('group', body.name)

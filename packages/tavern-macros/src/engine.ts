@@ -17,6 +17,10 @@
  *  - Variable macros follow variables.js exactly: setvar/addvar expand to '',
  *    incvar/decvar expand to the NEW value, numeric-vs-concat add semantics,
  *    numeric-string coercion on read.
+ *  - {{mesExamples}} is the ST-cleaned form (parseMesExamples: `<START>` blocks
+ *    split/trimmed/rejoined), {{mesExamplesRaw}} is the card text verbatim.
+ *  - {{outlet::name}} reads MacroEngineInit.outlets (world info outlet prompt);
+ *    an unknown outlet name stays literal — we never invent content.
  */
 
 import type {
@@ -77,6 +81,21 @@ function coerceRead(v: VariableValue | undefined): VariableValue | undefined {
     return Number(v);
   }
   return v;
+}
+
+/**
+ * ST `parseMesExamples`（chat completion 分支）：空串/仅 `<START>` 去掉；不以
+ * `<START>` 开头时先补标题；按 `<START>` 切块、逐块 trim，再以 `<START>\n` 起头
+ * 重建。`{{mesExamplesRaw}}` 不走这里，保持卡内原文。
+ */
+function formatExampleMessages(raw: string): string {
+  if (raw === '' || raw === '<START>') return '';
+  const source = raw.startsWith('<START>') ? raw : `<START>\n${raw.trim()}`;
+  return source
+    .split(/<START>/gi)
+    .slice(1)
+    .map(block => `<START>\n${block.trim()}\n`)
+    .join('');
 }
 
 export function createMacroEngine(init: MacroEngineInit): MacroEngine {
@@ -181,7 +200,7 @@ export function createMacroEngine(init: MacroEngineInit): MacroEngine {
   regExact('description', () => opt(card.description));
   regExact('personality', () => opt(card.personality));
   regExact('scenario', () => opt(card.scenario));
-  regExact('mesExamples', () => opt(card.mesExample));
+  regExact('mesExamples', () => formatExampleMessages(opt(card.mesExample)));
   regExact('mesExamplesRaw', () => opt(card.mesExample));
   regExact('charPrompt', () => opt(card.systemPrompt));
   regExact('charInstruction', () => opt(card.postHistoryInstructions));
@@ -191,6 +210,18 @@ export function createMacroEngine(init: MacroEngineInit): MacroEngine {
   regExact('charCreatorNotes', () => opt(card.creatorNotes));
   regExact('systemPrompt', () => opt(init.systemPrompt));
   regExact('original', () => opt(init.original));
+
+  // World info outlet (ST getOutletPrompt): `{{outlet::Name}}` -> activated outlet
+  // text. ST 对未知 key 返回空串，但本插件的未知宏策略是保持原文；没有 outlets
+  // 数据源时同样不伪造内容（契约 §2.9）。
+  reg('outlet', ctx => {
+    const arg = colonArg(ctx);
+    if (arg === null) return null;
+    const key = arg.trim();
+    if (key === '') return null;
+    const value = init.outlets?.[key];
+    return value === undefined ? null : value;
+  });
 
   // History (init-provided; unset -> '', mirroring ST `chat[mid]?.mes ?? ''`).
   regExact('lastMessage', () => opt(init.lastMessage));

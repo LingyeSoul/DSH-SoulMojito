@@ -35,7 +35,8 @@ export interface ModEventPayloads {
    * 不在此面（mod-api.md §5 如实标注）。reasoning 增量不进事件（v1 只观察正文）。
    */
   'stream-delta': {
-    mode: 'send' | 'regenerate' | 'trigger'
+    /** ST 生成动词（含 continue/impersonate，与 GenerationMode 同步）。 */
+    mode: 'send' | 'regenerate' | 'trigger' | 'continue' | 'impersonate'
     character: string
     chatId: string
     /** 当前累积全文（fully 通道）。 */

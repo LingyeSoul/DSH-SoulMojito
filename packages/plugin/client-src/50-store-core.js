@@ -291,6 +291,98 @@
       }
     }
 
+    // 消息级可见性（ST 的 Included / Excluded 眼形开关）：与 helper.ts 的
+    // isHidden 同口径 —— 消息级 `is_hidden` 与 `extra.is_hidden` 两种历史形态
+    // 都算隐藏。服务端生成历史已按同一规则跳过隐藏楼层，面板必须同口径，
+    // 否则"隐藏"只改 JSONL 不改行为。
+    function isMessageHidden(message) {
+      if (!message || typeof message !== 'object') return false
+      if (message.is_hidden === true) return true
+      const extra = message.extra
+      return !!extra && typeof extra === 'object' && extra.is_hidden === true
+    }
+
+    // 写回只保留一种形态：隐藏写消息级 `is_hidden`（ST 原生键，JSR 读取面与
+    // 生成历史都读它）；取消隐藏把 `is_hidden` 键与 `extra.is_hidden` 一并删掉，
+    // 不写 `false` —— 避免取消隐藏后仍被旧形态判为隐藏，也不给没人读的字段
+    // 留垃圾。
+    function withMessageHidden(message, hidden) {
+      const extra = message.extra
+      const hasExtra = !!extra && typeof extra === 'object'
+      if (hidden === true) {
+        return {
+          ...message,
+          is_hidden: true,
+          ...(hasExtra ? { extra: { ...extra, is_hidden: true } } : {}),
+        }
+      }
+      const rest = { ...message }
+      delete rest.is_hidden
+      if (hasExtra && 'is_hidden' in extra) {
+        const cleanExtra = { ...extra }
+        delete cleanExtra.is_hidden
+        rest.extra = cleanExtra
+      }
+      return rest
+    }
+
+    // 消息正文渲染：markdown 走宿主 MarkdownText（与思考块、资产视图同一条
+    // 渲染路径）；宿主原语缺失时退回纯文本，绝不把 markdown 源码当 HTML 注入。
+    // 完整 HTML 文档不经过这里——那些由 extractFrontendDocuments 判定后进沙箱
+    // iframe（FrontendFrame）。放在 store core 而不是 84-ui-chat：84 已贴源码
+    // 行数预算，这里是两处消息面都能复用的叶子工具。
+    function messageBody(text) {
+      return MarkdownText ? h(MarkdownText, { text }) : text
+    }
+
+    // 复制正文：优先异步剪贴板；权限被拒或非安全上下文退回隐藏 textarea +
+    // execCommand，两条都失败才抛错——静默成功是更坏的结果。
+    async function copyMessageText(text) {
+      const value = String(text ?? '')
+      const clipboard = typeof navigator === 'undefined' ? undefined : navigator.clipboard
+      if (clipboard && typeof clipboard.writeText === 'function') {
+        try {
+          await clipboard.writeText(value)
+          return
+        } catch {
+          // 剪贴板权限被拒：继续走 execCommand 兜底，兜底也失败才让调用方报错。
+        }
+      }
+      const area = document.createElement('textarea')
+      area.value = value
+      area.setAttribute('readonly', '')
+      area.style.position = 'fixed'
+      area.style.top = '-1000px'
+      area.style.opacity = '0'
+      document.body.appendChild(area)
+      try {
+        area.select()
+        if (document.execCommand('copy') !== true) throw new Error('clipboard unavailable')
+      } finally {
+        document.body.removeChild(area)
+      }
+    }
+
+    // checkpoint（同聊天存档点）：服务端把 0..messageId 复制进新聊天文件，父
+    // 聊天内容与 revision 都不变 —— 因此这里不碰 revisions[key]，也不自动切换
+    // 会话；只重取聊天列表，让新存档点出现在列表里。
+    async function createChatCheckpoint(binding, messageId, name) {
+      const key = chatKey(binding.character, binding.chatId)
+      const result = await api('checkpoint', {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({
+          character: binding.character,
+          chatId: binding.chatId,
+          revision: snapshot.revisions[key],
+          ...(typeof messageId === 'number' ? { messageId } : {}),
+          ...(typeof name === 'string' && name !== '' ? { name } : {}),
+        }),
+      })
+      void loadChatList(binding.character, true).catch(() => {})
+      return result
+    }
+
     function setRun(sessionId, patch) {
       update({
         runs: {
@@ -593,4 +685,4 @@
     function stopGeneration(sessionId) {
       controllers.get(sessionId)?.abort()
     }
-
+

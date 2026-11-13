@@ -9,6 +9,20 @@
     // 形态（detectPresetKind 按这两个数组判定），采样字段留空袋由编辑器维护。
     const BLANK_PRESET = { prompts: [], prompt_order: [] }
 
+    /**
+     * 生效的 prompt_order 组（与 tavern-pipeline/src/pipeline.ts 的
+     * resolvePromptOrder 同口径）：优先 global dummy 100001，回落旧 dummy
+     * 100000，再回落首组；返回下标，-1 表示没有可编辑的组。
+     */
+    function resolveOrderIndex(sets) {
+      const list = Array.isArray(sets) ? sets : []
+      for (const dummy of [100001, 100000]) {
+        const index = list.findIndex((item) => Number(item?.character_id) === dummy)
+        if (index >= 0) return index
+      }
+      return list.length > 0 ? 0 : -1
+    }
+
     function PresetEditor({ name, data, kind, onSave, onCancel }) {
       const t = useTranslate()
       const [draft, setDraft] = useState(() => cloneValue(data) || {})
@@ -18,7 +32,11 @@
       const [saving, setSaving] = useState(false)
       const prompts = draft.prompts || []
       const chatPreset = kind === 'chat-completion' || Array.isArray(data?.prompts)
-      const dirty = presetName !== name || advanced !== JSON.stringify(Object.fromEntries(Object.entries(data || {}).filter(([key]) => key !== 'prompts' && key !== 'prompt_order')), null, 2) || JSON.stringify(draft.prompts) !== JSON.stringify((data || {}).prompts)
+      const dirty = presetName !== name
+        || advanced !== JSON.stringify(Object.fromEntries(Object.entries(data || {}).filter(([key]) => key !== 'prompts' && key !== 'prompt_order')), null, 2)
+        || JSON.stringify(draft.prompts) !== JSON.stringify((data || {}).prompts)
+        // 顺序表（拖拽/启用）也是草稿的一部分：不加进来，改完顺序点保存会静默丢弃。
+        || JSON.stringify(draft.prompt_order) !== JSON.stringify((data || {}).prompt_order)
       const setPrompt = (index, key, value) => setDraft((current) => {
         const previous = current.prompts?.[index]
         const next = { ...current, prompts: (current.prompts || []).map((prompt, promptIndex) => promptIndex === index ? { ...prompt, [key]: value } : prompt) }
@@ -35,6 +53,34 @@
           return { ...current, prompts: [...(current.prompts || []), prompt], prompt_order: order }
         })
       }
+      // prompt_order 编辑（契约 2026-11-12 §2.11）：顺序与启用语义由装配侧
+      // 独占（`prompt_order[].order[].enabled`），这里的拖拽/开关直接改那一份。
+      const resolvedOrder = (current) => {
+        const sets = Array.isArray(current.prompt_order) ? current.prompt_order : []
+        const index = resolveOrderIndex(sets)
+        return { sets, index, order: index >= 0 ? (sets[index].order || []) : [] }
+      }
+      const moveOrderEntry = (from, to) => setDraft((current) => {
+        const { sets, index, order } = resolvedOrder(current)
+        if (index < 0 || from === to) return current
+        if (from < 0 || from >= order.length || to < 0 || to >= order.length) return current
+        const next = [...order]
+        const [moved] = next.splice(from, 1)
+        next.splice(to, 0, moved)
+        return { ...current, prompt_order: sets.map((item, at) => at === index ? { ...item, order: next } : item) }
+      })
+      const setOrderEnabled = (identifier, enabled) => setDraft((current) => {
+        const { sets, index } = resolvedOrder(current)
+        if (index < 0) return current
+        return {
+          ...current,
+          prompt_order: sets.map((item, at) => at !== index ? item : {
+            ...item,
+            order: (item.order || []).map((entry) => entry.identifier === identifier ? { ...entry, enabled } : entry),
+          }),
+        }
+      })
+      const [dragging, setDragging] = useState(-1)
       const removePrompt = (index) => {
         const identifier = prompts[index]?.identifier
         setDraft((current) => ({
@@ -83,7 +129,44 @@
             h(EditorField, { label: t('panel.presets.content'), value: prompt.content, onChange: (value) => setPrompt(index, 'content', value), multiline: true, className: 'dt-editor-wide' }),
             h('div', { className: 'dt-editor-toggles dt-editor-wide' },
               h(ToggleField, { label: t('panel.presets.marker'), checked: prompt.marker === true, onChange: (value) => setPrompt(index, 'marker', value) }),
-              h(ToggleField, { label: t('panel.presets.enabled'), checked: prompt.system_prompt !== false, onChange: (value) => setPrompt(index, 'system_prompt', value) })))))) : null,
+              // `system_prompt` 只是「全局/预设提示词」的分类标记，不参与启用
+              // 判定（tavern-pipeline 的 entryEnabled 只认顺序表 enabled）；旧标签
+              // 写作「启用」会让人以为关掉它就不参与装配。
+              h(ToggleField, { label: t('panel.presets.systemPromptFlag'), checked: prompt.system_prompt !== false, onChange: (value) => setPrompt(index, 'system_prompt', value) })))))) : null,
+        // 顺序表：装配只读这一份（不在表里的提示词不参与），因此它是 prompt
+        // manager 的主体；拖拽行 = 调换顺序，勾选框 = 该项是否参与装配。
+        chatPreset
+          ? h(React.Fragment, null,
+            h('div', { className: 'dt-editor-section-title' },
+              h('strong', null, t('panel.presets.promptOrder'))),
+            h('p', { className: 'dt-hint' }, t('panel.presets.promptOrderHint')),
+            resolvedOrder(draft).order.length === 0
+              ? h('p', { className: 'dt-muted' }, t('panel.presets.promptOrderEmpty'))
+              : h('div', { className: 'dt-editor-entries' }, resolvedOrder(draft).order.map((entry, index) => {
+                const prompt = (draft.prompts || []).find((item) => item.identifier === entry.identifier)
+                const label = prompt?.name || entry.identifier
+                const enabled = typeof entry.enabled === 'boolean' ? entry.enabled : prompt?.enabled !== false
+                return h('div', {
+                  key: `${entry.identifier}-${index}`,
+                  className: `dt-editor-entry dt-prompt-order-row${dragging === index ? ' dt-prompt-order-dragging' : ''}`,
+                  draggable: true,
+                  onDragStart: () => setDragging(index),
+                  onDragEnd: () => setDragging(-1),
+                  onDragOver: (event) => event.preventDefault(),
+                  onDrop: (event) => {
+                    event.preventDefault()
+                    moveOrderEntry(dragging, index)
+                    setDragging(-1)
+                  },
+                },
+                h('div', { className: 'dt-editor-entry-head' },
+                  h('strong', { title: entry.identifier }, `${index + 1}. ${label}`),
+                  h('div', { className: 'dt-imports' },
+                    h(Button, { size: 'sm', variant: 'ghost', disabled: index === 0, onClick: () => moveOrderEntry(index, index - 1) }, t('panel.presets.moveUp')),
+                    h(Button, { size: 'sm', variant: 'ghost', disabled: index === resolvedOrder(draft).order.length - 1, onClick: () => moveOrderEntry(index, index + 1) }, t('panel.presets.moveDown')),
+                    h(ToggleField, { label: t('panel.presets.enabled'), checked: enabled, onChange: (value) => setOrderEnabled(entry.identifier, value) }))))
+              })))
+          : null,
         h(EditorField, { label: t('panel.presets.sampler'), value: advanced, onChange: setAdvanced, multiline: true, className: 'dt-editor-wide dt-editor-json' }),
         error ? h('p', { className: 'dt-error' }, error) : null))
     }

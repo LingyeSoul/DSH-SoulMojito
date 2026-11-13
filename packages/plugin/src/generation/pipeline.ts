@@ -1,17 +1,19 @@
 import { RegexPlacement, parsePreset } from '../../../tavern-format/src/index.js'
 import type { ChatLogIR, ChatMessage, CharacterCardIR, GroupIR, PresetIR, RegexScriptIR } from '../../../tavern-format/src/index.js'
-import { activateWorldInfo } from '../../../tavern-lore/src/index.js'
-import type { TimedEffectsState } from '../../../tavern-lore/src/index.js'
+import { activateWorldInfo, bookRef } from '../../../tavern-lore/src/index.js'
+import type { ActivationResult, TimedEffectsState } from '../../../tavern-lore/src/index.js'
 import { createMacroEngine } from '../../../tavern-macros/src/index.js'
 import { assemblePrompt, buildGroupTurn, pickGroupMember } from '../../../tavern-pipeline/src/index.js'
 import type { AssembleInput, DepthInjection, LlmMessage } from '../../../tavern-pipeline/src/index.js'
 import { applyRegexScript, applyRegexScripts, runScript } from '../../../tavern-script/src/index.js'
-import { ChatRevisionConflictError, boundScriptOf, formatScriptBlock, getScript, isChatRevisionConflict, normalizeScriptProgress, shouldAdvance } from '../../../tavern-store/src/index.js'
+import type { ScriptEnv } from '../../../tavern-script/src/index.js'
+import { ChatRevisionConflictError, boundScriptOf, formatScriptBlock, getScript, isChatRevisionConflict, normalizeMemoryEmbedding, normalizeScriptProgress, shouldAdvance, worldInfoSettingsOf } from '../../../tavern-store/src/index.js'
 import type { CharacterFile, ChatSnapshot, Persona, TavernState, TavernStore } from '../../../tavern-store/src/index.js'
 import { defaultPreset } from '../agent-tavern/preset.js'
 import { isGroupChat } from '../assets.js'
+import { DATA_BANK_ST_BLOCK_CHARS, dataBankIdsOf, formatDataBankBlock, searchDataBank, selectVectorizedLoreEntries } from '../data-bank.js'
 import { tavernDataRoot } from '../dsh-home.js'
-import { generationHooks, type GenerationLlmRequestPayload } from '../generation-hooks.js'
+import { generationHooks, type GenerationLlmRequestPayload, type GenerationMode } from '../generation-hooks.js'
 import { formatGuidesBlock } from '../guides.js'
 import { readJson, sendJson, type HttpRequest, type HttpResponse } from '../http/io.js'
 import { publicError } from '../http/public-error.js'
@@ -22,9 +24,11 @@ import { applyMvuSettlementGuard, readChatVariables, recordMvuTurnReceipt, snaps
 import { applyMvuSettlementRules, mergeMvuRuleNotes } from '../mvu-rules.js'
 import { DEFAULT_USER, presetSamplerValue } from '../prompt-context.js'
 import { recordPromptView } from '../prompt-viewer.js'
+import { findQuickReplySet, quickReplyScript, quickReplySetsForAutomation } from '../quick-replies.js'
 import { formatRewriteBlock, optionalFeedback } from '../rewrite.js'
 import { templatesEnabledFlagValue, templatesEnvEnabled } from '../runtime.js'
 import { assertStGenerationBinding } from '../session/binding.js'
+import { checkpointChatFile } from '../session/store.js'
 import { beginTavernSessionTurn, finishTavernSessionTrace, recordTavernSessionAssistant, startTavernSessionStep } from '../session/trace.js'
 import { collectWorldInfoBooks } from '../tavern-assets.js'
 import { collectSessionRegexScripts } from '../regex-session.js'
@@ -54,7 +58,15 @@ export async function generate(ctx: PluginContext, req: HttpRequest, res: HttpRe
   const characterName = typeof body.character === 'string' ? body.character : state.activeCharacter
   const chatId = body.chatId
   const userText = typeof body.message === 'string' ? body.message.trim() : ''
-  const mode = body.mode === 'regenerate' ? 'regenerate' : 'send'
+  // 生成动词白名单（契约 §2.1）：未知值明确报错，不静默回落 send。`trigger` 只是
+  // STscript 内部相位（/trigger），不接受 HTTP 直传。
+  const rawMode: unknown = body.mode === undefined ? 'send' : body.mode
+  const allowedModes: readonly GenerationMode[] = ['send', 'regenerate', 'continue', 'impersonate']
+  if (typeof rawMode !== 'string' || !allowedModes.some((allowed) => allowed === rawMode)) {
+    throw new Error(`unsupported generation mode: ${typeof rawMode === 'string' ? rawMode : String(rawMode)}`)
+  }
+  // some() 谓词不窄化；此处 rawMode 已确认属于白名单。
+  const mode = rawMode as GenerationMode
   // 带意见重写（提案 0011）：feedback 仅 regenerate 可携带；空串等价普通重掷。
   let feedback: string | undefined
   if (mode === 'regenerate') feedback = optionalFeedback(body.feedback)
@@ -200,6 +212,7 @@ export async function previewGeneration(ctx: PluginContext, req: HttpRequest, re
       ...(request.params.reasoningEffort !== undefined ? { reasoningEffort: request.params.reasoningEffort } : {}),
       temperature: request.params.temperature,
       maxTokens: request.params.maxTokens,
+      ...hostSamplingParams(request.params),
       signal: ac.signal,
     })) {
       if (chunk.type === 'usage') usage = chunk.usage
@@ -236,8 +249,12 @@ export interface GenerationOptions {
   characterName: string
   chatId: string
   snapshot: ChatSnapshot
-  /** send=追加用户消息；regenerate=弹出旧回复重掷；trigger=按现状生成（STscript /trigger） */
-  mode: 'send' | 'regenerate' | 'trigger'
+  /**
+   * send=追加用户消息；regenerate=弹出旧回复重掷；trigger=按现状生成（STscript
+   * /trigger）；continue=不增楼、续写末条 assistant 的 mes 与当前 swipe；
+   * impersonate=以 {{user}} 身份生成一条 is_user 楼层（契约 §2.1）。
+   */
+  mode: GenerationMode
   userText: string
   /** regenerate 专用：带意见重写（提案 0011）；非 regenerate 不允许携带。 */
   feedback?: string
@@ -266,7 +283,7 @@ export async function resolveGenerationSpeaker(
   options: {
     characterName: string
     chat: ChatLogIR
-    mode: 'send' | 'regenerate' | 'trigger'
+    mode: GenerationMode
     group: boolean
     triggerMember?: string
   },
@@ -295,7 +312,7 @@ export async function resolveGenerationSpeaker(
     talkativeness.set(member, typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : 0.5)
   }
   const speakerName = triggerMember
-    ?? (mode === 'regenerate'
+    ?? (mode === 'regenerate' || mode === 'continue'
       ? (lastSpeaker !== undefined && members.includes(lastSpeaker) ? lastSpeaker : undefined)
       : undefined)
     ?? pickGroupMember({
@@ -345,7 +362,7 @@ export interface GenerationAssemblyOptions {
   group: boolean
   groupDef?: GroupIR
   /** 相位：lore 激活 trigger 与 hook 上下文的 mode。 */
-  phase: 'send' | 'regenerate' | 'trigger'
+  phase: GenerationMode
   scripts: RegexScriptIR[]
   userName: string
   feedback?: string
@@ -353,6 +370,12 @@ export interface GenerationAssemblyOptions {
   provider?: string
   model?: string
   reasoningEffort?: string
+  /**
+   * 世界书条目 automationId 命中的快速回复集合（契约 §2.6）是否在本轮装配中
+   * 执行。runGeneration 传 true；试写预览不传——preview 承诺零副作用，脚本写
+   * 变量/全局即副作用，因此不进 preview。
+   */
+  worldInfoAutomations?: boolean
   /** pre-assemble 相位 seam：runGeneration 注入 generationHooks.dispatch；试写预览不传（hook 全跳过）。 */
   onDraft?: (draft: AssembleInput) => AssembleInput | Promise<AssembleInput>
   /** pre-llm 相位 seam：同上。 */
@@ -403,12 +426,46 @@ export async function buildGenerationLlmRequest(
   const persona = state.activePersona ? await db.getPersona(state.activePersona) : undefined
 
   const books = await collectWorldInfoBooks(db, state, speakerName, character, chatId)
+  const dataRoot = tavernDataRoot()
+  const embeddingConfig = normalizeMemoryEmbedding(state.memoryEmbedding)
+  // 最近一条用户消息是查询源（ST 的向量检索口径）：世界书 vectorized 预检索与
+  // 数据银行附件注入共用同一条 query。
+  const latestUserText = [...turnMessages].reverse().find((message) => message.is_user === true)?.mes ?? ''
+  // ---- vectorized 世界书预检索（Wave 2 §2.6）----
+  // 引擎是同步的：这类条目只认 `vectorHits`，不参与关键词匹配。异步 embed 只能
+  // 在调用方做——条目 id 必须与引擎的稳定 id 同构（`${bookLabel}.${uid}`），
+  // 所以这里用 bookRef 生成同样的 label，而不是自己拼书名。
+  const vectorizedEntries = books.flatMap((book, index) => {
+    const label = bookRef(book, index).label
+    return book.entries
+      .filter((entry) => entry.vectorized === true && entry.constant !== true)
+      .map((entry) => ({
+        entryId: `${label}.${entry.uid}`,
+        content: typeof entry.content === 'string' ? entry.content : '',
+      }))
+  })
+  // undefined = 向量通道不可用（无配置/熔断/失败）：引擎给 vector-unavailable，
+  // 不降级为关键词；Set = 检索跑通（可能为空）。
+  const vectorHits = vectorizedEntries.length === 0 || embeddingConfig === undefined
+    ? undefined
+    : await selectVectorizedLoreEntries({
+      root: dataRoot,
+      config: embeddingConfig,
+      query: latestUserText,
+      entries: vectorizedEntries,
+    }).catch(() => undefined)
 
   const lore = activateWorldInfo({
     books,
     chat: turnMessages.map((m) => ({ name: m.name, content: m.mes, isUser: m.is_user })),
     contextSize: Number(preset.sampler.openai_max_context ?? 4096),
-    trigger: options.phase === 'regenerate' ? 'regenerate' : options.phase === 'trigger' ? 'quiet' : 'normal',
+    // 生成动词 → 世界书触发类型（ST GenerationTrigger）：continue/impersonate
+    // 有独立触发位，条目 `triggers` 过滤依赖它；trigger 相位在 ST 里是静默扫描。
+    trigger: options.phase === 'regenerate' ? 'regenerate'
+      : options.phase === 'trigger' ? 'quiet'
+      : options.phase === 'continue' ? 'continue'
+      : options.phase === 'impersonate' ? 'impersonate'
+      : 'normal',
     scanSources: {
       personaDescription: persona?.description,
       characterDescription: character.card.data.description,
@@ -416,9 +473,12 @@ export async function buildGenerationLlmRequest(
       scenario: character.card.data.scenario,
       creatorNotes: character.card.data.creatorNotes,
     },
-    settings: { recursive: true, scanDepth: 2, budgetPercent: 25 },
+    // 世界书全局设置（契约 §2.8）：state 里可配，缺省值由 world-settings.ts 归一；
+    // 引擎已实现 recursive/scanDepth/budget/minActivations/大小写/整词/组计分。
+    settings: worldInfoSettingsOf(state),
     timedState: asTimedEffectsState(chat.header.chat_metadata?.timedWorldInfo),
     messageCount: turnMessages.length,
+    ...(vectorHits === undefined ? {} : { vectorHits }),
   })
   chat.header.chat_metadata.timedWorldInfo = lore.timedState
 
@@ -456,6 +516,17 @@ export async function buildGenerationLlmRequest(
   const enabledMembers = groupDef
     ? groupDef.members.filter((member) => !groupDef.disabledMembers.includes(member))
     : undefined
+  // 世界书 outlet（契约 §2.9）：{{outlet::Name}} 的数据源是激活结果按 outletName
+  // 分组的文本（EntryGroup.text 已按 order 拼接）；没有激活条目时不传——宏保持
+  // 未知原样，不伪造空串来源。
+  const outletTexts: Record<string, string> = {}
+  for (const [name, group] of Object.entries(lore.outlets)) outletTexts[name] = group.text
+  // {{systemPrompt}}（契约 §2.9）：ST 里它来自独立的「系统提示词」预设；本仓库
+  // 尚无该存储面，只有激活预设显式带 sysprompt 字符串时才传（有则传，无则保持
+  // 引擎的未绑定语义）。
+  const macroSystemPrompt = typeof preset.sampler['sysprompt'] === 'string' && preset.sampler['sysprompt'].trim() !== ''
+    ? preset.sampler['sysprompt']
+    : undefined
   const macros = createMacroEngine({
     char: character.card.data.nickname || character.card.data.name,
     user: userName,
@@ -470,6 +541,8 @@ export async function buildGenerationLlmRequest(
       postHistoryInstructions: character.card.data.postHistoryInstructions,
       creatorNotes: character.card.data.creatorNotes,
     },
+    ...(Object.keys(outletTexts).length > 0 ? { outlets: outletTexts } : {}),
+    ...(macroSystemPrompt !== undefined ? { systemPrompt: macroSystemPrompt } : {}),
     lastMessage: turnMessages[turnMessages.length - 1]?.mes,
     lastUserMessage: lastUser?.mes,
     lastCharMessage: lastChar?.mes,
@@ -480,6 +553,13 @@ export async function buildGenerationLlmRequest(
   })
   const expand = (text: string): string => macros.expand(text)
   const countTokens = (text: string): number => Math.ceil(text.length / 3.5)
+
+  // 世界书 automationId（契约 §2.6）：激活条目命中的启用快速回复集合在装配阶段
+  // 执行一次；变量写穿走同一个宏引擎（快照随本轮落盘），执行中的 id 记在模块
+  // 级 Set 里防递归。仅真实生成执行，试写预览（worldInfoAutomations 不传）跳过。
+  if (options.worldInfoAutomations === true) {
+    await runWorldInfoAutomations({ ctx, db, state, lore, macros, characterName: speakerName, chatId })
+  }
 
   // persona 位置：IN_PROMPT（默认）/AT_DEPTH/顶部AN/底部AN
   const personaInjections: DepthInjection[] = []
@@ -498,14 +578,23 @@ export async function buildGenerationLlmRequest(
   }
   if (tpl && personaDescription) personaDescription = await tpl.renderText(personaDescription, 'persona')
 
+  // 聊天级 Author's Note / Summary（契约 §2.4）：数据在 JSONL header 的
+  // chat_metadata.note_prompt / note_settings / summary；宏在此展开（ST
+  // substituteParams 语义）。interval>0 时按楼层数取模跳过（ST 的
+  // `chat.length % interval` 口径）；summary 是聊天级背景块，不受 interval 约束。
+  const authorsNote = resolveAuthorsNote(chat, expand, turnMessages.length)
+
   // ---- promptOnly AI_OUTPUT：历史消息只影响 prompt 的变换 ----
+  // 可见性（契约 §2.3）：is_hidden 楼层（顶层 is_hidden / extra.is_hidden 两种
+  // 形态）不进生成历史；只过滤 prompt 视图，楼层本身与 lore 深度计数不变。
+  const promptTurnMessages = turnMessages.filter((message) => !isHiddenMessage(message))
   const promptOnlyScripts = scripts.filter((script) => script.promptOnly && !script.markdownOnly)
   const historyRegexed = promptOnlyScripts.length > 0
-    ? turnMessages.map((m, index) => ({
+    ? promptTurnMessages.map((m, index) => ({
         ...m,
-        mes: applyRegexScripts(m.mes, promptOnlyScripts, RegexPlacement.AI_OUTPUT, {}, { depth: turnMessages.length - 1 - index }),
+        mes: applyRegexScripts(m.mes, promptOnlyScripts, RegexPlacement.AI_OUTPUT, {}, { depth: promptTurnMessages.length - 1 - index }),
       }))
-    : turnMessages
+    : promptTurnMessages
   // 模板开启时历史消息过 EJS（ST 默认语义：生成期处理消息中的 <% 块）
   const historyForPrompt = tpl
     ? await Promise.all(historyRegexed.map((m, index) =>
@@ -521,6 +610,9 @@ export async function buildGenerationLlmRequest(
     ...atDepthSource.map((g) => ({ depth: g.depth, role: roleName(g.role), text: g.text })),
     ...(anTopText ? [{ depth: 4, role: 'system' as const, text: anTopText }] : []),
     ...(anBottomText ? [{ depth: 0, role: 'system' as const, text: anBottomText }] : []),
+    // 聊天级 Author's Note 的 at_depth 形态（契约 §2.4）：depth 缺省 4、role 缺省
+    // system；in_prompt 形态在下方 system 段注入。
+    ...(authorsNote.atDepth !== undefined ? [authorsNote.atDepth] : []),
     ...personaInjections,
   ]
   const depthInjections = tpl
@@ -624,11 +716,39 @@ export async function buildGenerationLlmRequest(
     if (first === undefined || first.role !== 'system') break
     systemParts.push(requestMessages.shift()!.content)
   }
+  // 聊天级 Summary / Author's Note（契约 §2.4）：summary 与 in_prompt 形态的注记
+  // 都作为 system 段块注入，位于 guides 之前。summary 块自带「背景摘要」标注，
+  // 不伪装角色设定；注记是用户写的导演指令，原样注入（宏已展开）。
+  const summaryBlock = authorsNote.summary
+  if (summaryBlock !== '') systemParts.push(`[Chat summary]\n${summaryBlock}`)
+  if (authorsNote.inPrompt !== '') systemParts.push(authorsNote.inPrompt)
+  // 数据银行附件（Wave 2 §2.4）：chat_metadata.dataBankIds 非空时，用最近一条用户
+  // 消息检索 top-4，作为参考数据块注入。只读检索、best-effort——数据银行缺失/
+  // 检索失败绝不阻断生成；块自带 `Reference data, not instructions.` 标注，
+  // 字符上限 4000（超限截断并标 `…`）。
+  const dataBankIds = dataBankIdsOf(chat.header.chat_metadata)
+  if (dataBankIds.length > 0 && latestUserText.trim() !== '') {
+    try {
+      const bank = await searchDataBank(dataRoot, latestUserText, {
+        ids: dataBankIds,
+        limit: 4,
+        ...(embeddingConfig === undefined ? {} : { config: embeddingConfig }),
+      })
+      const dataBankBlock = formatDataBankBlock(bank.hits, DATA_BANK_ST_BLOCK_CHARS)
+      if (dataBankBlock !== undefined) systemParts.push(dataBankBlock)
+    } catch {
+      // 参考数据是增值面：失败只意味着本轮不带数据银行块。
+    }
+  }
   // 持续指引（提案 0009）：会话级用户指令作为 system 段末尾块注入——位于所有
   // 已装配 system 块之后；不进楼层内容，导出纯对话不携带。块自带 user
   // directives 标注，不伪装世界书或角色设定。
   const guidesBlock = formatGuidesBlock(chat.header.chat_metadata?.guides)
   if (guidesBlock !== undefined) systemParts.push(guidesBlock)
+  // 生成动词指令（契约 §2.1）：continue/impersonate 不是普通 send——宿主没有
+  // assistant prefill，因此用一次性 system 指令表达续写/代写语义，不落楼层。
+  if (options.phase === 'continue') systemParts.push(CONTINUE_DIRECTIVE)
+  if (options.phase === 'impersonate') systemParts.push(impersonationDirective(userName))
   const llmMessages = requestMessages.map((m) => createMessage({
     role: m.role,
     content: [{ type: 'text', text: m.content }],
@@ -652,6 +772,10 @@ export async function buildGenerationLlmRequest(
       ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
       temperature: numberOr(preset.sampler.temperature, undefined),
       maxTokens: numberOr(preset.sampler.openai_max_tokens, undefined),
+      // 预设采样全集（契约 §2.2）：直传键优先、兼容 openai_ 前缀；只写有值且
+      // 类型正确的键，缺省不塞 undefined。宿主/provider 是否消费由 dsh-llm 的
+      // 路由决定——插件只如实透传，不做静默降级。
+      ...samplerParams(preset.sampler),
     },
   }
   const hookedLlmRequest = options.onLlmRequest !== undefined
@@ -721,13 +845,23 @@ export async function runGeneration(ctx: PluginContext, db: TavernStore, options
     // chat-saved（提案 0015 §3.3 P1 的 api.events）：用户消息落盘点。无监听时
     // 是已 resolved 的 promise，零开销。
     await emitChatSaved(characterName, chatId, revision, chat.messages.length)
-  } else {
+  } else if (mode === 'regenerate' || mode === 'trigger') {
+    // trigger 沿用既有语义：末条 assistant 视为重掷目标（弹楼 → 新增 swipe），
+    // 本轮不动它——契约只新增 continue/impersonate，不改变 /trigger 观察行为。
     const last = chat.messages[chat.messages.length - 1]
     if (last?.is_user === false && !last.is_system) {
       regenerated = chat.messages.pop()
       if (group) turnMessages = rebuildGroupTurn(groupDef, speakerName, userName, chat.messages)
     }
+  } else if (mode === 'continue') {
+    // continue（契约 §2.1）：不新增用户楼，末条必须是 assistant——否则明确报错，
+    // 不静默退化成 send 或空生成。
+    const last = chat.messages[chat.messages.length - 1]
+    if (last === undefined || last.is_user !== false || last.is_system === true) {
+      throw new Error('cannot continue: the last message must be an assistant message')
+    }
   }
+  // impersonate / trigger：不增删楼层（前者生成一条 is_user 楼层，后者按现状生成）。
 
   hostTrace = beginTavernSessionTurn(options.hostAgent, hostUserText)
 
@@ -756,6 +890,7 @@ export async function runGeneration(ctx: PluginContext, db: TavernStore, options
     ...(options.reasoningEffort !== undefined ? { reasoningEffort: options.reasoningEffort } : {}),
     onDraft: (draft) => generationHooks.dispatch('pre-assemble', draft, { mode, character: speakerName, chatId, group }),
     onLlmRequest: (request) => generationHooks.dispatch('pre-llm', request, { mode, character: speakerName, chatId, group }),
+    worldInfoAutomations: true,
   })
   const lore = assembly.lore
   const tpl = assembly.tpl
@@ -796,6 +931,7 @@ export async function runGeneration(ctx: PluginContext, db: TavernStore, options
     ...(hookedLlmRequest.params.reasoningEffort !== undefined ? { reasoningEffort: hookedLlmRequest.params.reasoningEffort } : {}),
     temperature: hookedLlmRequest.params.temperature,
     maxTokens: hookedLlmRequest.params.maxTokens,
+    ...hostSamplingParams(hookedLlmRequest.params),
     signal,
   })) {
     // 逐 chunk 事件不落宿主会话：`assistant/chunk` 是 v0 词汇，v4 宿主加载期
@@ -831,26 +967,71 @@ export async function runGeneration(ctx: PluginContext, db: TavernStore, options
     ? applyRegexScripts(reasoning, scripts, RegexPlacement.REASONING, { expand })
     : reasoning
   const now = new Date().toISOString()
-  const oldSwipes = regenerated
-    ? (Array.isArray(regenerated.swipes) && regenerated.swipes.length > 0 ? regenerated.swipes : [regenerated.mes])
-    : []
-  const oldSwipeInfo = regenerated
-    ? (Array.isArray(regenerated.swipe_info) ? regenerated.swipe_info : oldSwipes.map(() => ({})))
-    : []
-  chat.messages.push({
-    ...(regenerated ?? {}),
-    name: character.card.data.nickname || character.card.data.name,
-    is_user: false, is_system: false, send_date: now, mes: finalText,
-    swipe_id: oldSwipes.length,
-    swipes: [...oldSwipes, finalText],
-    swipe_info: [...oldSwipeInfo, { send_date: now, extra: { provider: usedProvider, model: usedModel, reasoning: finalReasoning || undefined, ...(options.feedback ? { feedback: options.feedback } : {}) } }],
-    extra: {
-      ...(regenerated?.extra ?? {}),
+  if (mode === 'continue') {
+    // continue（契约 §2.1）：不新建楼层——生成文本追加到末条 assistant 的 mes，
+    // 并同步当前 swipe（swipes[swipe_id]）。tokenCount 是整条楼层的估算值。
+    const target = chat.messages[chat.messages.length - 1]!
+    const merged = `${target.mes}${finalText}`
+    const swipes = Array.isArray(target.swipes) && target.swipes.length > 0 ? [...target.swipes] : []
+    const currentSwipe = typeof target.swipe_id === 'number' && Number.isInteger(target.swipe_id)
+      && target.swipe_id >= 0 && target.swipe_id < swipes.length
+      ? target.swipe_id
+      : undefined
+    if (currentSwipe !== undefined) {
+      swipes[currentSwipe] = merged
+    } else {
+      swipes.push(merged)
+      target.swipe_id = swipes.length - 1
+    }
+    target.mes = merged
+    target.swipes = swipes
+    target.extra = {
+      ...(target.extra ?? {}),
       api: usedProvider, model: usedModel, reasoning: finalReasoning || undefined,
-      activatedLore: lore.allActivated.map((e) => e.entryId),
-      ...(tpl && tpl.warnings.length > 0 ? { templateWarnings: tpl.warnings } : {}),
-    },
-  })
+      tokenCount: estimateMessageTokens(merged),
+    }
+  } else if (mode === 'impersonate') {
+    // impersonate（契约 §2.1）：以 {{user}} 身份落一条 is_user 楼层，不追加
+    // assistant；swipe 容器与 assistant 楼层同形，便于后续重掷/切换。
+    chat.messages.push({
+      name: userName,
+      is_user: true, is_system: false, send_date: now, mes: finalText,
+      swipe_id: 0,
+      swipes: [finalText],
+      swipe_info: [{
+        send_date: now,
+        extra: { provider: usedProvider, model: usedModel, reasoning: finalReasoning || undefined },
+      }],
+      extra: {
+        api: usedProvider, model: usedModel, reasoning: finalReasoning || undefined,
+        tokenCount: estimateMessageTokens(finalText),
+        activatedLore: lore.allActivated.map((e) => e.entryId),
+        ...(tpl && tpl.warnings.length > 0 ? { templateWarnings: tpl.warnings } : {}),
+      },
+    })
+  } else {
+    const oldSwipes = regenerated
+      ? (Array.isArray(regenerated.swipes) && regenerated.swipes.length > 0 ? regenerated.swipes : [regenerated.mes])
+      : []
+    const oldSwipeInfo = regenerated
+      ? (Array.isArray(regenerated.swipe_info) ? regenerated.swipe_info : oldSwipes.map(() => ({})))
+      : []
+    chat.messages.push({
+      ...(regenerated ?? {}),
+      name: character.card.data.nickname || character.card.data.name,
+      is_user: false, is_system: false, send_date: now, mes: finalText,
+      swipe_id: oldSwipes.length,
+      swipes: [...oldSwipes, finalText],
+      swipe_info: [...oldSwipeInfo, { send_date: now, extra: { provider: usedProvider, model: usedModel, reasoning: finalReasoning || undefined, ...(options.feedback ? { feedback: options.feedback } : {}) } }],
+      extra: {
+        ...(regenerated?.extra ?? {}),
+        api: usedProvider, model: usedModel, reasoning: finalReasoning || undefined,
+        activatedLore: lore.allActivated.map((e) => e.entryId),
+        tokenCount: estimateMessageTokens(finalText),
+        ...(tpl && tpl.warnings.length > 0 ? { templateWarnings: tpl.warnings } : {}),
+      },
+    })
+  }
   // 变量持久化：宏局部快照（原语）+ 模板写穿的 local/initial（chat_metadata live）合并；
   // 模板 global 写穿 state.scriptGlobals，有变化时落 state.json
   const varSnapshot = macros.snapshotVars().local
@@ -940,33 +1121,39 @@ export async function runTavernScript(ctx: PluginContext, req: HttpRequest, res:
     global: state.scriptGlobals,
   })
 
+  // /rename 会把聊天文件换名：脚本执行期间的所有读/写都跟随 currentChatId（原
+  // chatId 只用于 /stop 的 activeStGeneration 注册键）。
+  let currentChatId = chatId
   const persist = async () => {
     stageChatVariables(chat, macros.snapshotVars().local)
-    revision = await db.saveChat(characterName, chatId, chat, revision)
-    await emitChatSaved(characterName, chatId, revision, chat.messages.length)
+    revision = await db.saveChat(characterName, currentChatId, chat, revision)
+    await emitChatSaved(characterName, currentChatId, revision, chat.messages.length)
   }
 
-  const triggerGeneration = async (member: string | undefined): Promise<void> => {
-    const fresh = await db.getChatSnapshot(characterName, chatId)
+  /** STscript 触发的生成（/trigger /regenerate /continue）：内核会保存并替换
+   *  chat 对象，这里同步回本作用域，后续命令看到最新楼层与 revision。 */
+  const generate = async (mode: 'trigger' | 'regenerate' | 'continue', member?: string): Promise<void> => {
+    const latest = await db.getChatSnapshot(characterName, currentChatId)
     const result = await runGeneration(ctx, db, {
       state: await db.getState(),
       characterName,
-      chatId,
-      snapshot: fresh ?? { chat, revision },
-      mode: 'trigger',
+      chatId: currentChatId,
+      snapshot: latest ?? { chat, revision },
+      mode,
       userText: '',
       group,
-      triggerMember: member,
+      ...(member !== undefined ? { triggerMember: member } : {}),
       write: () => {},
       signal: scriptController.signal,
     })
-    // 内核会保存并替换 chat 对象；同步回本作用域
     chat.messages = result.chat.messages
     chat.header = result.chat.header
     revision = result.revision
   }
 
-  const result = await runScript(typeof body.script === 'string' ? body.script : '', {
+  // /run 的防递归栈：同名集合在执行中再次被 /run 时报错，而不是无限递归。
+  const runningQuickReplies = new Set<string>()
+  const scriptEnv: ScriptEnv = {
     expand: (text) => macros.expand(text),
     getVar: (name) => macros.getVar(name),
     setVar: (name, value) => { macros.setVar(name, value) },
@@ -980,30 +1167,97 @@ export async function runTavernScript(ctx: PluginContext, req: HttpRequest, res:
       chat.messages.push({ name: state.activePersona ?? DEFAULT_USER, is_user: true, is_system: false, send_date: new Date().toISOString(), mes: trimmed })
       await persist()
     },
-    trigger: async (member) => { await triggerGeneration(member) },
-    regenerate: async () => {
-      const fresh = await db.getChatSnapshot(characterName, chatId)
-      const regen = await runGeneration(ctx, db, {
-        state: await db.getState(),
-        characterName,
-        chatId,
-        snapshot: fresh ?? { chat, revision },
-        mode: 'regenerate',
-        userText: '',
-        group,
-        write: () => {},
-        signal: scriptController.signal,
+    trigger: async (member) => { await generate('trigger', member) },
+    regenerate: async () => { await generate('regenerate') },
+    continue: async () => { await generate('continue') },
+    swipe: async (delta) => {
+      // ST /swipe：在末条楼层的候选间移动；只有一个候选时是无操作（不报错）。
+      const message = chat.messages[chat.messages.length - 1]
+      if (message === undefined) return
+      const swipes = Array.isArray(message.swipes) && message.swipes.length > 0 ? message.swipes : [message.mes]
+      if (swipes.length < 2) return
+      const currentIndex = typeof message.swipe_id === 'number' ? message.swipe_id : 0
+      const next = ((currentIndex + delta) % swipes.length + swipes.length) % swipes.length
+      message.swipe_id = next
+      message.mes = swipes[next] ?? message.mes
+      await persist()
+    },
+    hide: async (from, to) => {
+      const { start, end } = messageRange(chat.messages, from, to)
+      for (const message of chat.messages.slice(start, end)) message.is_hidden = true
+      await persist()
+    },
+    unhide: async (from, to) => {
+      const { start, end } = messageRange(chat.messages, from, to)
+      for (const message of chat.messages.slice(start, end)) {
+        // 两种历史形态一起清（面板写回口径：顶层 + extra.is_hidden）。
+        Reflect.deleteProperty(message, 'is_hidden')
+        const extra = asRecord(message.extra)
+        if (extra !== undefined) Reflect.deleteProperty(extra, 'is_hidden')
+      }
+      await persist()
+    },
+    move: async (from, to) => {
+      const messages = chat.messages
+      const start = from < 0 ? messages.length + from : from
+      const rawTarget = to < 0 ? messages.length + to : to
+      const target = Math.min(Math.max(rawTarget, 0), messages.length - 1)
+      if (start < 0 || start >= messages.length) throw new Error(`/move: message index ${from} out of range`)
+      const [message] = messages.splice(start, 1)
+      if (message !== undefined) messages.splice(target, 0, message)
+      await persist()
+    },
+    rename: async (name) => {
+      // 聊天 id 即文件名：清掉路径/保留字符，空名明确报错而不是造出 `.jsonl`。
+      const stem = name.replace(/[\\/:*?"<>|]/g, '_').trim().slice(0, 80)
+      if (stem === '') throw new Error('/rename: name is empty')
+      const nextChatId = `${stem}.jsonl`
+      await db.renameChat(characterName, currentChatId, nextChatId, revision)
+      currentChatId = nextChatId
+      const renamed = await db.getChatSnapshot(characterName, currentChatId)
+      if (renamed !== undefined) revision = renamed.revision
+    },
+    branch: async (messageId, name) => {
+      const latest = await db.getChatSnapshot(characterName, currentChatId)
+      const source = latest?.chat ?? chat
+      await db.branchChat(characterName, currentChatId, messageId ?? source.messages.length - 1, latest?.revision, name)
+    },
+    checkpoint: async (messageId) => {
+      // 契约 §2.5：与面板/HTTP 走同一份 chat-file 语义（命名、父链、CAS），
+      // 不在生成内核里复制第二套（`#` 不在聊天 id 安全字符集内）。
+      const latest = await db.getChatSnapshot(characterName, currentChatId)
+      await checkpointChatFile(db, {
+        character: characterName,
+        chatId: currentChatId,
+        revision: latest?.revision ?? revision,
+        ...(messageId === undefined ? {} : { messageId }),
       })
-      chat.messages = regen.chat.messages
-      chat.header = regen.chat.header
-      revision = regen.revision
+    },
+    listVars: () => Object.entries(macros.snapshotVars().local)
+      .map(([name, value]) => `${name}=${String(value)}`)
+      .join('\n'),
+    flushVars: () => {
+      for (const name of Object.keys(macros.snapshotVars().local)) macros.deleteVar(name)
+    },
+    runQuickReply: async (name) => {
+      // /run //qr <name>（契约 §2.6/§2.7）：名字匹配与 composer 按钮同一口径
+      //（findQuickReplySet：去空白、大小写不敏感，停用集合仍可显式调用）。
+      const set = findQuickReplySet(state, name)
+      if (set === undefined) throw new Error(`quick reply set '${name}' is not found`)
+      if (runningQuickReplies.has(set.id)) throw new Error(`/run recursion detected: '${name}'`)
+      const script = quickReplyScript(set)
+      if (script === undefined) return
+      runningQuickReplies.add(set.id)
+      try {
+        await runScript(script, scriptEnv)
+      } finally {
+        runningQuickReplies.delete(set.id)
+      }
     },
     stop: () => { abortStGeneration(characterName, chatId) },
     cut: async (from, to) => {
-      const total = chat.messages.length
-      const start = from < 0 ? total + from : from
-      const end = (to < 0 ? total + to : to) + 1
-      chat.messages.splice(Math.max(0, start), Math.max(0, end - Math.max(0, start)))
+      const { start, end } = messageRange(chat.messages, from, to)
+      chat.messages.splice(start, end - start)
       await persist()
     },
     echo: () => {},
@@ -1016,7 +1270,8 @@ export async function runTavernScript(ctx: PluginContext, req: HttpRequest, res:
       if (!script) return text
       return applyRegexScript(text, script, RegexPlacement.SLASH_COMMAND, { expand: (t) => macros.expand(t) }) ?? text
     },
-  }).finally(() => {
+  }
+  const result = await runScript(typeof body.script === 'string' ? body.script : '', scriptEnv).finally(() => {
     const key = stGenerationKey(characterName, chatId)
     if (activeStGeneration.get(key) === scriptController) activeStGeneration.delete(key)
   })
@@ -1024,7 +1279,7 @@ export async function runTavernScript(ctx: PluginContext, req: HttpRequest, res:
   // 全局变量持久化
   const globals = macros.snapshotVars().global
   await db.updateState(() => ({ scriptGlobals: globals }))
-  const freshSnapshot = await db.getChatSnapshot(characterName, chatId)
+  const freshSnapshot = await db.getChatSnapshot(characterName, currentChatId)
   return sendJson(res, 200, {
     ok: true,
     output: result.output,
@@ -1054,4 +1309,198 @@ function stringArray(value: unknown): string[] | undefined {
 
 function asTimedEffectsState(value: unknown): TimedEffectsState | undefined {
   return asRecord(value) === undefined ? undefined : value as TimedEffectsState
+}
+
+/* ------------- 生成期助手（契约 §2.1/2.2/2.3/2.4/2.6） ------------- */
+
+/**
+ * continue 的 system 指令。宿主 `HostLlmRequest` 没有 assistant prefill 字段，
+ * 因此续写语义靠一次性指令表达：不重复已写内容、不加说话人前缀、保持风格。
+ * 指令只进 system 段，不落楼层。
+ */
+const CONTINUE_DIRECTIVE = '[Continue the last assistant message exactly where it stopped. Do not repeat text that is already written, do not restate the speaker name, and keep the same voice, tense and formatting.]'
+
+function impersonationDirective(userName: string): string {
+  return `[Write the next message as ${userName} (first person). Use the chat history and the persona description as style guidance, and do not write actions or dialogue for other characters.]`
+}
+
+/**
+ * 消息级 token 估算（契约 §2.1）：与装配期的预算近似同一系数（len/3.5），
+ * 只用于展示/参考；它不是 provider tokenizer，落盘值允许与计费口径有偏差。
+ */
+function estimateMessageTokens(text: string): number {
+  return Math.round(text.length / 3.5)
+}
+
+/** 楼层是否被隐藏（契约 §2.3）：顶层 `is_hidden` 与 `extra.is_hidden` 两种形态。 */
+function isHiddenMessage(message: ChatMessage): boolean {
+  if (message.is_hidden === true) return true
+  return asRecord(message.extra)?.['is_hidden'] === true
+}
+
+/** 闭区间 [from, to] → 半开切片 [start, end)；负索引从末尾计（/cut 同款）。 */
+function messageRange(messages: ChatMessage[], from: number, to: number): { start: number; end: number } {
+  const total = messages.length
+  const start = Math.max(0, from < 0 ? total + from : from)
+  const end = Math.min(total, (to < 0 ? total + to : to) + 1)
+  if (start > end) throw new Error(`message range ${from}..${to} is empty`)
+  return { start, end }
+}
+
+interface ResolvedAuthorsNote {
+  /** in_prompt 形态的注记文本（空串 = 不注入）。 */
+  inPrompt: string
+  /** at_depth 形态的注记注入（undefined = 不注入）。 */
+  atDepth: DepthInjection | undefined
+  /** chat_metadata.summary 的 system 段块文本（空串 = 不注入）。 */
+  summary: string
+}
+
+/**
+ * 聊天级 Author's Note / Summary 解析（契约 §2.4）。interval>0 时按楼层数取模
+ * 跳过（ST `chat.length % interval` 口径）；position 缺省 in_prompt，at_depth
+ * 的 depth 缺省 4、role 缺省 system。文本在返回前完成宏展开。
+ */
+function resolveAuthorsNote(chat: ChatLogIR, expand: (text: string) => string, messageCount: number): ResolvedAuthorsNote {
+  const metadata = chat.header.chat_metadata
+  const rawPrompt = typeof metadata.note_prompt === 'string' ? metadata.note_prompt.trim() : ''
+  const settings = asRecord(metadata.note_settings) ?? {}
+  const rawInterval = settings['interval']
+  const interval = typeof rawInterval === 'number' && Number.isFinite(rawInterval) && rawInterval > 0
+    ? Math.floor(rawInterval)
+    : 0
+  const applies = rawPrompt !== '' && (interval === 0 || messageCount % interval === 0)
+  const rawDepth = settings['depth']
+  const depth = typeof rawDepth === 'number' && Number.isFinite(rawDepth) && rawDepth >= 0 ? Math.floor(rawDepth) : 4
+  const rawRole = settings['role']
+  const role: DepthInjection['role'] = rawRole === 'user' ? 'user' : rawRole === 'assistant' ? 'assistant' : 'system'
+  const text = applies ? expand(rawPrompt) : ''
+  const atDepth = text !== '' && settings['position'] === 'at_depth' ? { depth, role, text } : undefined
+  const rawSummary = typeof metadata.summary === 'string' ? metadata.summary.trim() : ''
+  return {
+    inPrompt: text !== '' && atDepth === undefined ? text : '',
+    atDepth,
+    summary: rawSummary === '' ? '' : expand(rawSummary),
+  }
+}
+
+/** 预设采样键：直传键优先，兼容 ST 的 `openai_` 前缀（如 openai_top_p）。 */
+function samplerValue(sampler: Record<string, unknown>, key: string): unknown {
+  const direct = sampler[key]
+  return direct !== undefined ? direct : sampler[`openai_${key}`]
+}
+
+interface SamplerParams {
+  top_p?: number
+  top_k?: number
+  frequency_penalty?: number
+  presence_penalty?: number
+  repetition_penalty?: number
+  min_p?: number
+  seed?: number
+  stop?: string | string[]
+  logit_bias?: Record<string, number>
+}
+
+/**
+ * 预设采样参数 → 请求参数（契约 §2.2）。只写有值且类型正确的键；缺省不写，
+ * 不塞 undefined。宿主/provider 是否消费由 dsh-llm 的路由决定——插件只如实
+ * 透传，不做静默降级。
+ */
+function samplerParams(sampler: Record<string, unknown>): SamplerParams {
+  const params: SamplerParams = {}
+  const numericKeys = ['top_p', 'top_k', 'frequency_penalty', 'presence_penalty', 'repetition_penalty', 'min_p', 'seed'] as const
+  for (const key of numericKeys) {
+    const value = samplerValue(sampler, key)
+    if (typeof value === 'number' && Number.isFinite(value)) params[key] = value
+  }
+  const stop = samplerValue(sampler, 'stop')
+  if (typeof stop === 'string') {
+    if (stop !== '') params.stop = stop
+  } else if (Array.isArray(stop)) {
+    const list = stop.filter((item): item is string => typeof item === 'string' && item !== '')
+    if (list.length > 0 && list.length === stop.length) params.stop = list
+  }
+  const logitBias = asRecord(samplerValue(sampler, 'logit_bias'))
+  if (logitBias !== undefined) {
+    const entries = Object.entries(logitBias)
+      .filter((entry): entry is [string, number] => typeof entry[1] === 'number' && Number.isFinite(entry[1]))
+    if (entries.length > 0) params.logit_bias = Object.fromEntries(entries)
+  }
+  return params
+}
+
+/** 采样参数展开进宿主请求（与 params 同键；provider 消费与否由其路由决定）。 */
+function hostSamplingParams(params: GenerationLlmRequestPayload['params']): Record<string, unknown> {
+  const { top_p, top_k, frequency_penalty, presence_penalty, repetition_penalty, min_p, seed, stop, logit_bias } = params
+  return {
+    ...(top_p !== undefined ? { top_p } : {}),
+    ...(top_k !== undefined ? { top_k } : {}),
+    ...(frequency_penalty !== undefined ? { frequency_penalty } : {}),
+    ...(presence_penalty !== undefined ? { presence_penalty } : {}),
+    ...(repetition_penalty !== undefined ? { repetition_penalty } : {}),
+    ...(min_p !== undefined ? { min_p } : {}),
+    ...(seed !== undefined ? { seed } : {}),
+    ...(stop !== undefined ? { stop } : {}),
+    ...(logit_bias !== undefined ? { logit_bias } : {}),
+  }
+}
+
+/** 执行中的 world info automation（`character\0chatId\0id`）：防同轮递归。 */
+const runningWorldInfoAutomations = new Set<string>()
+
+/**
+ * 世界书 automationId（契约 §2.6）：激活条目命中的启用快速回复集合，在 ST 装配
+ * 阶段每条命令执行一次。环境只开放变量类命令与 echo——自动触发里再触发生成/改
+ * 楼层会让生成不可预期（ST 同样限制自动化命令集）；不可用命令的错误记录到宿主
+ * 日志后继续，不让卡脚本错误中断生成。变量写穿走本轮宏引擎，随本轮落盘。
+ */
+async function runWorldInfoAutomations(options: {
+  ctx: PluginContext
+  db: TavernStore
+  state: TavernState
+  lore: ActivationResult
+  macros: ReturnType<typeof createMacroEngine>
+  characterName: string
+  chatId: string
+}): Promise<void> {
+  const { ctx, db, state, lore, macros, characterName, chatId } = options
+  const automationIds = new Set<string>()
+  for (const activated of lore.allActivated) {
+    const automationId = typeof activated.entry.automationId === 'string' ? activated.entry.automationId.trim() : ''
+    if (automationId !== '') automationIds.add(automationId)
+  }
+  if (automationIds.size === 0) return
+  const globalsBefore = JSON.stringify(macros.snapshotVars().global)
+  const env: ScriptEnv = {
+    expand: (text) => macros.expand(text),
+    getVar: (name) => macros.getVar(name),
+    setVar: (name, value) => { macros.setVar(name, value) },
+    deleteVar: (name) => macros.deleteVar(name),
+    getGlobalVar: (name) => macros.getGlobalVar(name),
+    setGlobalVar: (name, value) => { macros.setGlobalVar(name, value) },
+    deleteGlobalVar: (name) => macros.deleteGlobalVar(name),
+    echo: () => {},
+  }
+  for (const automationId of automationIds) {
+    const key = `${characterName}\u0000${chatId}\u0000${automationId}`
+    if (runningWorldInfoAutomations.has(key)) continue
+    runningWorldInfoAutomations.add(key)
+    try {
+      for (const set of quickReplySetsForAutomation(state, automationId)) {
+        for (const command of set.commands) {
+          try {
+            await runScript(command, env)
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            ctx.logger?.warn?.(`dsh-soulmojito: world info automation '${automationId}' command failed: ${message}`)
+          }
+        }
+      }
+    } finally {
+      runningWorldInfoAutomations.delete(key)
+    }
+  }
+  const globals = macros.snapshotVars().global
+  if (JSON.stringify(globals) !== globalsBefore) await db.updateState(() => ({ scriptGlobals: globals }))
 }

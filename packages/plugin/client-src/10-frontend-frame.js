@@ -91,6 +91,24 @@
       return stripped.replace(/\n{3,}/g, '\n\n').trim()
     }
 
+    // 快照 diff 的元数据比较（事件桥，Wave 2 §4）：JSON.stringify 不能用来判断
+    // 「没变」——服务器重写楼层时对象键顺序可能变，字符串比较会把同一份数据报成
+    // 变化，MESSAGE_UPDATED 就成了噪声事件。数组按序比较、对象按键集合比较。
+    function sameJsonValue(left, right) {
+      if (left === right) return true
+      if (typeof left !== 'object' || typeof right !== 'object' || left === null || right === null) return false
+      if (Array.isArray(left) !== Array.isArray(right)) return false
+      if (Array.isArray(left)) {
+        if (left.length !== right.length) return false
+        return left.every((value, index) => sameJsonValue(value, right[index]))
+      }
+      const leftKeys = Object.keys(left)
+      const rightKeys = Object.keys(right)
+      if (leftKeys.length !== rightKeys.length) return false
+      return leftKeys.every((key) => Object.prototype.hasOwnProperty.call(right, key)
+        && sameJsonValue(left[key], right[key]))
+    }
+
     // 高度上报（A-4 升级，JSR §2.1 adjust_iframe_height 的语义复刻）：
     // - rAF 单帧合并：同一帧内 ResizeObserver 连发只测一次发一次；
     // - 高度去重：数值未变化零消息（宿主 setHeight 幂等，但少发少渲染）；
@@ -391,8 +409,10 @@
     // 追加本会话绑定后转 POST /helper。绑定来自面板/transcript 自己的
     // sessionBindings，iframe 无法自报身份——这是沙箱化 JSR 兼容面的信任边界。
     // 快照比对负责「宿主侧事件」：楼数增加→MESSAGE_RECEIVED，正文变化→
-    // MESSAGE_EDITED，聊天切换→CHAT_CHANGED。只广播能真实观测到的信号，
-    // 不凭空伪造酒馆事件。
+    // MESSAGE_EDITED，候选减少→MESSAGE_SWIPE_DELETED，非正文元数据变化→
+    // MESSAGE_UPDATED，聊天切换→CHAT_CHANGED。只广播能真实观测到的信号，
+    // 不凭空伪造酒馆事件（CHAT_CREATED/DELETED、CHARACTER_*、WORLD_INFO_ACTIVATED
+    // 在本快照里没有可判定的观测面，保持不投递，见兼容文档）。
     // 宿主 composer 写入（2026-10-20 卡兼容；2026-10-21 二次修订）：酒馆卡的表单/
     // 快速选项通过 `window.parent.document.querySelector('#send_textarea')` 写入并
     // 触发 input。iframe 没有 same-origin，shim 把这条老路径映射到宿主的真实输入面。
@@ -676,6 +696,14 @@
             return
           }
           if (previous.chatId !== next.chatId) emitEvent(HELPER_TAVERN_EVENTS.CHAT_CHANGED, [next.chatId])
+          // WORLD_INFO_ACTIVATED：helper snapshot 带最近一轮 ST 生成的扫描轨迹
+          // （含记录 seq）。同一轮不重复发；新一轮生成 seq 变化即发一次。
+          const previousLoreSeq = previous.lore && typeof previous.lore === 'object' && typeof previous.lore.seq === 'number' ? previous.lore.seq : -1
+          const nextLoreSeq = next.lore && typeof next.lore === 'object' && typeof next.lore.seq === 'number' ? next.lore.seq : -1
+          if (nextLoreSeq >= 0 && nextLoreSeq !== previousLoreSeq) {
+            const entries = next.lore && typeof next.lore === 'object' && Array.isArray(next.lore.entries) ? next.lore.entries : []
+            emitEvent(HELPER_TAVERN_EVENTS.WORLD_INFO_ACTIVATED, [entries])
+          }
           const previousPreset = previous.presets && typeof previous.presets === 'object' ? previous.presets.active : null
           const nextPreset = next.presets && typeof next.presets === 'object' ? next.presets.active : null
           if (previousPreset !== nextPreset) emitEvent(HELPER_TAVERN_EVENTS.PRESET_CHANGED, [nextPreset])
@@ -703,8 +731,14 @@
             const nextSwipes = Array.isArray(message.swipes) ? message.swipes.length : 0
             if (old.swipe_id !== message.swipe_id || oldSwipes !== nextSwipes) {
               emitEvent(HELPER_TAVERN_EVENTS.MESSAGE_SWIPED, [message.message_id])
+              // 只有候选「变少」才是删除：切换 swipe、regenerate 新增候选都只算
+              // MESSAGE_SWIPED。删除与切换可能同帧发生，两者并列投递，不互相替代。
+              if (nextSwipes < oldSwipes) {
+                emitEvent(HELPER_TAVERN_EVENTS.MESSAGE_SWIPE_DELETED, [message.message_id])
+              }
             }
-            if (old.message !== message.message || old.name !== message.name) {
+            const bodyChanged = old.message !== message.message || old.name !== message.name
+            if (bodyChanged) {
               emitEvent(HELPER_TAVERN_EVENTS.MESSAGE_EDITED, [message.message_id])
               if (message.role === 'user') {
                 emitEvent(HELPER_TAVERN_EVENTS.USER_MESSAGE_RENDERED, [message.message_id])
@@ -712,6 +746,15 @@
                 emitEvent(HELPER_TAVERN_EVENTS.CHARACTER_MESSAGE_RENDERED, [message.message_id, 'normal'])
                 emitEvent(HELPER_TAVERN_EVENTS.STREAM_TOKEN_RECEIVED, [String(message.message ?? ''), String(message.message_id)])
               }
+            } else if (!sameJsonValue(old.is_hidden, message.is_hidden)
+              || old.role !== message.role
+              || !sameJsonValue(old.extra, message.extra)
+              || !sameJsonValue(old.data, message.data)) {
+              // 只有「正文/发言人没变、其余元数据变了」才发 MESSAGE_UPDATED：
+              // 两者同帧变化时 MESSAGE_EDITED 已经是完整信号，双发只会让卡脚本
+              // 重复渲染（契约 §4 明确择一，不双发）。tokenCount 不在本快照里
+              // （helper.ts toJsrMessage 不导出它），所以这里观测不到、不伪造。
+              emitEvent(HELPER_TAVERN_EVENTS.MESSAGE_UPDATED, [message.message_id])
             }
           }
           const removed = before.filter((message) => !after.some((entry) => entry.message_id === message.message_id))

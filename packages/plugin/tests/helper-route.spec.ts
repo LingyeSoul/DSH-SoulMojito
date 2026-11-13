@@ -407,6 +407,26 @@ describe('helper route e2e (TavernHelper compatibility surface)', () => {
     expect(snapshot?.chat.header.chat_metadata.variables).toMatchObject({ 心情: '平静' })
   })
 
+  it('expands character card macros inside STscript', async () => {
+    // 卡作者的快捷回复/脚本高频依赖 {{description}}/{{mesExamples}}；helper 必须与
+    // 生成面同值，否则同一份卡脚本在两个通道里读到不同文本。
+    const macroChatId = await store.createChat(CHARACTER, HEADER)
+    const expanded = async (macro: string) => {
+      const result = await callFor(macroChatId, {
+        op: 'slash',
+        character: CHARACTER,
+        chatId: macroChatId,
+        command: `/send ${macro}|/trigger`,
+      })
+      expect(result.status).toBe(200)
+      return (result.body?.value as Record<string, unknown>).sentText
+    }
+    expect(await expanded('{{description}}')).toBe('Helper probe card')
+    expect(await expanded('{{mesExamplesRaw}}')).toBe('Example dialogue')
+    // /send trim 掉尾部换行，ST 清洗后的块仍带 <START> 标题
+    expect(await expanded('{{mesExamples}}')).toBe('<START>\nExample dialogue')
+  })
+
   it('reports /trigger in a slash pipeline as a host generation request', async () => {
     // Cards send with `/send …|/trigger` in one STscript call. Generation stays
     // with the host loop: the helper keeps the floor and reports the request,

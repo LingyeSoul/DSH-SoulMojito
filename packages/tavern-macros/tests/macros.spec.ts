@@ -16,8 +16,28 @@ describe('macro engine', () => {
     expect(make({ group: 'A, B' }).expand('{{group}}/{{charIfNotGroup}}')).toBe('A, B/A, B')
   })
   it('card, persona, history and runtime fields', () => {
-    expect(make().expand('{{persona}}|{{description}}|{{personality}}|{{scenario}}|{{charPrompt}}|{{charInstruction}}|{{charDepthPrompt}}|{{charCreatorNotes}}|{{mesExamples}}')).toBe('A traveler|Dryad|gentle|forest|card prompt|stay|depth|notes|example')
+    expect(make().expand('{{persona}}|{{description}}|{{personality}}|{{scenario}}|{{charPrompt}}|{{charInstruction}}|{{charDepthPrompt}}|{{charCreatorNotes}}|{{mesExamplesRaw}}')).toBe('A traveler|Dryad|gentle|forest|card prompt|stay|depth|notes|example')
     expect(make().expand('{{lastMessage}}/{{lastUserMessage}}/{{lastCharMessage}}/{{lastMessageId}}/{{model}}/{{maxPrompt}}/{{maxResponseTokens}}')).toBe('last/user last/char last/8/gpt-test/4096/300')
+  })
+  it('cleans mesExamples like ST and keeps mesExamplesRaw verbatim', () => {
+    const raw = '  Tester: hi\nExampleCard: yo  \n<START>\nTester: again\nExampleCard: yes'
+    const e = make({ card: { mesExample: raw } })
+    expect(e.expand('{{mesExamplesRaw}}')).toBe(raw)
+    // ST parseMesExamples（chat completion）：补标题 → 切块 → trim → 以 <START> 重建
+    expect(e.expand('{{mesExamples}}')).toBe('<START>\nTester: hi\nExampleCard: yo\n<START>\nTester: again\nExampleCard: yes\n')
+    expect(make({ card: { mesExample: '<START>' } }).expand('{{mesExamples}}')).toBe('')
+    expect(make({ card: {} }).expand('{{mesExamples}}')).toBe('')
+    expect(make({ card: {} }).expand('{{mesExamplesRaw}}')).toBe('')
+  })
+  it('expands outlets and leaves unknown outlet names literal', () => {
+    const e = make({ outlets: { Weather: 'It rains.' } })
+    expect(e.expand('{{outlet::Weather}}')).toBe('It rains.')
+    expect(e.expand('{{outlet:: Weather }}')).toBe('It rains.')
+    expect(e.expand('{{outlet::Unknown}}')).toBe('{{outlet::Unknown}}')
+    expect(e.expand('{{outlet::}}')).toBe('{{outlet::}}')
+    expect(e.expand('{{outlet:Weather}}')).toBe('{{outlet:Weather}}')
+    // 没有 outlets 数据源时不伪造内容（保持宏原文）
+    expect(make().expand('{{outlet::Weather}}')).toBe('{{outlet::Weather}}')
   })
   it('time/date formatting fixed clock', () => {
     const out = make().expand('{{time}}|{{date}}|{{isotime}}|{{isodate}}|{{datetimeformat::yyyy-MM-dd HH:mm:ss}}|{{idleDuration}}')

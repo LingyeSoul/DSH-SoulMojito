@@ -1,17 +1,29 @@
 /**
- * ST Text Completion 预设三件套的形态探测与 IR。
+ * ST 预设形态探测与 Text Completion 三件套 IR。
  *
  * - Context 模板（presets/context/*.json）：`story_string`（Handlebars 子集，见
  *   tavern-pipeline 的装配实现）+ story 注入位置/深度/角色等。
  * - Instruct 模板（presets/instruct/*.json）：`input_prefix`/`output_prefix` 等消息
  *   包装序列。
  * - 采样器（presets/textgen/*.json）：temp/rep_pen/top_k… 无 prompts[] 结构。
+ * - sysprompt（`{name, content, post_history?}`）与 reasoning
+ *   （`{name, prefix, suffix, separator?}`）：见 preset.ts，只识别 + 最小校验，
+ *   本插件的生成装配不消费（宿主持有 system prompt 与思考流），导入/导出原样往返。
  *
- * 三者与 Chat Completion preset 共用 presets/ 存储；本模块按内容形态分类，
+ * 全部与 Chat Completion preset 共用 presets/ 存储；本模块按内容形态分类，
  * 不依赖文件名约定。
  */
 
-export type PresetKind = 'chat-completion' | 'context' | 'instruct' | 'textgen-sampler' | 'unknown'
+import { isReasoningTemplateShape, isSystemPromptPresetShape } from './preset.js'
+
+export type PresetKind =
+  | 'chat-completion'
+  | 'context'
+  | 'instruct'
+  | 'textgen-sampler'
+  | 'sysprompt'
+  | 'reasoning'
+  | 'unknown'
 
 export interface ContextTemplateIR {
   storyString: string
@@ -49,7 +61,7 @@ export class TextCompletionFormatError extends Error {
   }
 }
 
-/** 按内容形态分类 preset 对象。 */
+/** 按内容形态分类 preset 对象（顺序即优先级）。 */
 export function detectPresetKind(obj: Record<string, unknown>): PresetKind {
   if (Array.isArray(obj['prompts']) && Array.isArray(obj['prompt_order'])) return 'chat-completion'
   if (typeof obj['story_string'] === 'string') return 'context'
@@ -57,6 +69,10 @@ export function detectPresetKind(obj: Record<string, unknown>): PresetKind {
   if (typeof obj['temp'] === 'number' || typeof obj['rep_pen'] === 'number' || typeof obj['top_k'] === 'number') {
     return 'textgen-sampler'
   }
+  // sysprompt 先于 reasoning：ST 的 sysprompt 只有 content，reasoning 只有 prefix/suffix，
+  // 两者不重叠，但 sysprompt 的形态更宽泛，放前面避免未来字段叠加时误判。
+  if (isSystemPromptPresetShape(obj)) return 'sysprompt'
+  if (isReasoningTemplateShape(obj)) return 'reasoning'
   return 'unknown'
 }
 

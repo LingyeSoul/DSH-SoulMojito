@@ -5,7 +5,7 @@
 <p align="center">把 DSH（deepseek-harness）扩展成兼容 SillyTavern 生态的原生角色扮演工作区。</p>
 
 <p align="center">
-  <strong>v0.7.8</strong> · 面向 DSH <code>0.2.2-rc.1</code>（旧版本宿主随缘） · GPL-3.0
+  <strong>v0.7.9</strong> · 面向 DSH <code>0.2.2-rc.1</code>（旧版本宿主随缘） · GPL-3.0
 </p>
 
 ## 这是什么
@@ -41,6 +41,21 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 
 ## 能力地图
 
+### ST 能力补齐（2026-11-12）
+
+对照 SillyTavern 原生能力的缺口审计（[`docs/exploration/2026-11-12-st-native-capability-gaps.md`](docs/exploration/2026-11-12-st-native-capability-gaps.md)）后补齐：
+
+- **生成动词** — ST 模式新增 Continue（续写末条，不新增楼层）与 Impersonate（以用户身份代写一条用户楼）；`POST generate` 模式白名单同步。宿主没有 assistant prefill，续写用一次性 system 指令表达。
+- **采样参数** — ST 管线的预设 `top_p`/`top_k`/penalties/`min_p`/`stop`/`seed`/`logit_bias` 不再静默丢弃；直传键优先、兼容 `openai_` 前缀。Agent 模式仍只投影 temperature。
+- **消息面** — 隐藏/取消隐藏贯通生成历史与面板；删除、复制、上移/下移、末条重生成、Continue、Impersonate、Checkpoint 进入动作行；正文使用 Markdown 渲染（完整 HTML 仍走沙箱 iframe）；落盘写 `extra.tokenCount` 估算。
+- **聊天文件** — JSONL 导入/导出、整聊复制、checkpoint（复制到子聊天并写 `checkpoint_parent`）、ST 首楼开场白切换。
+- **输入辅助** — Quick Replies（面板 + composer + `/qr`/`/run`，仅 ST 架构执行）、composer `/help` 与命令补全、聊天级 Author's Note 与 Summary（`chat_metadata`，ST 生成按 position/depth/interval 注入）。
+- **STscript** — 新增 `/continue` `/swipe` `/hide` `/unhide` `/move` `/rename` `/branch` `/checkpoint` `/listvar` `/flushvar` `/run` `/times` `/qr`；`/while` 明确报不支持。
+- **世界书** — 全局设置面（递归步数、预算、最小激活、大小写/整词、组计分、名字前缀）；`{{outlet::Name}}` 接通；`{{mesExamplesRaw}}` 与清洗版分离。
+- **群聊 / 预设 / persona** — 群聊 MANUAL(0) 不再被静默改写为 NATURAL；sysprompt/reasoning 预设可导入（只存储，不参与生成）；预设 prompt_order 支持拖拽与逐项启用；persona 支持头像与 position/depth/role；角色收藏与正则整表导出。
+- **AgentTavern** — 行为设置 `agentContextInjection`（默认关闭）开启后，把世界书激活、记忆 top-N、聊天 summary 与作者注记作为带标注、带字符上限的参考上下文注入；预设投影对不支持的分类显式拒绝并告警。
+- **数据银行与备份** — 文本文件入库、分块、embed/词法检索、聊天附件、Agent 工具与 ST 注入；整库 ZIP 备份/恢复（merge/replace，replace 前自动快照）；事件桥补 `MESSAGE_SWIPE_DELETED`、`MESSAGE_UPDATED` 与 `WORLD_INFO_ACTIVATED`，没有观测面的事件不伪造。
+
 ### 资产与 SillyTavern 兼容
 
 - **角色卡 V1/V2/V3** — JSON、PNG `chara`/`ccv3`、CHARX `card.json` 与 `embeded://` 资源；导出尽量保留原始容器与内嵌资源；未知字段原样透传。
@@ -56,7 +71,7 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 
 ### 原生 Agent 模式（AgentTavern）
 
-- **工具面 25 件 + IM 4 件**：角色/世界书/历史/场景读面 4 件、记忆 5 件、变量 5 件、剧本 2 件、多 Agent 推演 1 件、MVU 结算 1 件、游戏 7 件；IM 4 件（`im_identity` / `im_channels` / `im_send` / `im_time`）由 index bundle 挂进**每个原生会话**（`im/agent-mount.ts`，`DSH_SOULMOJITO_DISABLE_IM` 硬关时整组消失）。身份一律来自真实 session binding，模型无法通过参数伪造 `sessionId`、`scopeId`、角色或聊天身份。
+- **工具面 26 件 + IM 4 件**：角色/世界书/历史/场景读面 4 件、记忆 5 件、变量 5 件、剧本 2 件、多 Agent 推演 1 件、MVU 结算 1 件、游戏 7 件、数据银行检索 1 件（`data_bank_search`）；IM 4 件（`im_identity` / `im_channels` / `im_send` / `im_time`）由 index bundle 挂进**每个原生会话**（`im/agent-mount.ts`，`DSH_SOULMOJITO_DISABLE_IM` 硬关时整组消失）。身份一律来自真实 session binding，模型无法通过参数伪造 `sessionId`、`scopeId`、角色或聊天身份。
 - **图片输入两条路** — 默认 `agent-tavern` 不挂文件工具：图片由宿主 composer 作为原生 `image` block 上送，按当前路由的 `inputModalities` 门控（非视觉模型提交即被拒，不静默丢图）。IM 模式没有这条通路（入站图片只落成正文里的本地路径），所以 `agent-tavern-im` 挂宿主 `read_image`（PNG/JPEG/WebP/GIF），`read`/`write`/`edit` 全关；非视觉模型调用得到明确拒绝。
 - **AgentTavernIM 预设**：IM 绑定会话建议使用 `AgentTavernIM`（`agent-tavern-im`）；绑定对端时插件会自动把 live 且空闲的会话切到该预设（未打开/运行中则在会话打开或空闲后补切，novel/workbench/ST 架构不强行切换）。它在 AgentTavern 之上直接写明 IM 模式：所有回复必须用 `im_send`，不要用普通正文；回复要像真人在手机上聊天，短句、一次一两句、长内容拆成多条连续发送；群聊按消息头/发言人区分，附件用 `im_send` 的媒体参数。插件不代建会话，绑定与插入仍按原生 session 语义执行。
 - **AgentTavernIM Native（行为设置 `imNativeAgentMode`）**：开启后 IM 绑定会话改切到 `agent-tavern-im-native`，在 AgentTavern 与 `im_*` 工具之外挂载标准 DSH Agent 工具（shell、文件读写/搜索、后台任务、定时、技能、目标、子代理/工作流、待办、网页、present）。IM 回复规则与 `im_send` 约束不变；与 PTC 模式正交——PTC 只把同一工具集合改由 `run_code` + SDK 呈现，两者可同时开启。默认关闭（shell/文件写入/联网权限较强，只对信任会话开启）；运行中的会话等 idle 后自动切换。
@@ -97,14 +112,16 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 
 ### Tavern 管理面板
 
-两栏布局（左侧导航 + 右侧内容），窄屏折叠为横向滚动栏；导航品牌块常驻不滚，分区清单独占滚动。20 个分区：
+两栏布局（左侧导航 + 右侧内容），窄屏折叠为横向滚动栏；导航品牌块常驻不滚，分区清单独占滚动。27 个分区：
 
 | 分区 | 内容 |
 |---|---|
 | 总览 | 当前角色 / 预设 / 人设 / 世界书开关与各类资产数量 |
 | 角色卡 / 世界书 / 预设 | 导入（PNG / CHARX / JSON）、查看、编辑、搜索、设为当前、导出、删除；保存经服务端格式校验后写回 `$DSH_HOME/soulmojito/`（旧安装写回 `tavern/`） |
-| 聊天 / 群组 / 人设 / 持续指引 / 正则 / 变量 | 各资产的管理面，从设置页统一归位到这里 |
+| 聊天 / 群组 / 人设 / 聊天注记 / 持续指引 / 快速回复 / 正则 / 变量 | 各资产的管理面，从设置页统一归位到这里；聊天注记编辑 Author's Note 与 Summary，快速回复管理 ST 架构的 QR 集合 |
 | 小说 / 剧本 | AgentNovel 小说库；剧本资产的分块、绑定与进度 |
+| 数据银行 | 文本文件入库、分块、embed / 词法检索、附加到当前聊天与检索测试 |
+| 备份 | 整库 ZIP 导出/导入（merge / replace；replace 前服务端自动快照） |
 | 工作台 | 方案确认入口（逐字段 diff → 批准并应用 / 拒绝）与试写 |
 | 行为设置 | 全部系统行为开关，按行为对应关系分组（会话 / 世界书 / 工具写入 / 前端与卡脚本 / 游戏）；设置页同步展示同一面 |
 | 聊天渠道 | QQ / 微信 / OneBot 11 账号、扫码绑定、peer 绑定表与自动绑定设置 |
@@ -322,13 +339,13 @@ Node half 是七个自包含 bundle：`index.mjs` 主入口，加 `agent` / `im-
 pnpm run check
 ```
 
-当前基线（2026-11-11 实测，宿主 DSH `0.2.2-rc.1`）：
+当前基线（2026-11-12 实测，宿主 DSH `0.2.2-rc.1`）：
 
 ```
-Test Files  205 passed (205)
-Tests       3367 passed | 2 skipped (3369)
+Test Files  214 passed (214)
+Tests       3488 passed | 2 skipped (3490)
 21 gates    全部 PASS
-built       v0.7.8 (dccc12b)
+built       v0.7.9 (dfe3b72)
 ```
 
 - 2 项跳过都是 `skipIf` 环境条件项：Windows 检出上的 `host-package.spec.ts` POSIX-only 用例，以及 `im-store.spec.ts` 的 0600 权限位用例（Win32 无 POSIX mode）。

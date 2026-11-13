@@ -92,6 +92,15 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
     if (entry.decorators.some((d) => d.startsWith('@@dont_activate'))) return { matched: false, matchedKeys: [], reason: 'decorator-suppressed' }
     if (entry.decorators.some((d) => d.startsWith('@@activate'))) return { matched: true, matchedKeys: [], reason: 'decorator' }
     if (entry.constant) return { matched: true, matchedKeys: [], reason: 'constant' }
+    // ST vectorized 语义（Wave 2 §2.6）：这类条目**不参与关键词匹配**，只认
+    // 外部向量命中集合。没有 vectorHits = 向量通道不可用：保持不激活并如实
+    // 诊断，绝不回落到关键词（否则「语义专属」条目会静默变成关键词条目）。
+    if (entry.vectorized) {
+      if (input.vectorHits === undefined) return { matched: false, matchedKeys: [], reason: 'vector-unavailable' }
+      return input.vectorHits.has(entry.entryId)
+        ? { matched: true, matchedKeys: [], reason: 'vector' }
+        : { matched: false, matchedKeys: [], reason: 'vector-miss' }
+    }
     if (entry.key.length === 0) return { matched: false, matchedKeys: [], reason: 'no-keys' }
 
     const text = buffer.get(entry, state)
@@ -239,7 +248,7 @@ export function activateWorldInfo(input: ActivationInput): ActivationResult {
 }
 
 function isActivationReason(reason: ActivationReason | SkipReason): reason is ActivationReason {
-  return reason === 'constant' || reason === 'sticky' || reason === 'primary-key' || reason === 'primary-and-secondary' || reason === 'decorator'
+  return reason === 'constant' || reason === 'sticky' || reason === 'primary-key' || reason === 'primary-and-secondary' || reason === 'decorator' || reason === 'vector'
 }
 
 function group(entries: ActivatedEntry[]): EntryGroup {

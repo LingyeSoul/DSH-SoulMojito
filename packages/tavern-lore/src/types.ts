@@ -231,13 +231,16 @@ export interface TimedEffectsState {
 /** 归一化条目（默认值已填充，未知字段原样保留）。 */
 export type NormalizedEntry = Readonly<LoreEntry>
 
-/** 激活原因。 */
+/** 激活原因。
+ *  `vector` = vectorized 条目经外部向量检索命中（引擎本身不做 embed；见
+ *  ActivationInput.vectorHits）。 */
 export type ActivationReason =
   | 'constant'
   | 'sticky'
   | 'primary-key'
   | 'primary-and-secondary'
   | 'decorator'
+  | 'vector'
 
 /** 失败原因（诊断）。 */
 export type SkipReason =
@@ -262,6 +265,11 @@ export type SkipReason =
   | 'group-cooldown'
   | 'group-delay'
   | 'already-activated'
+  /** vectorized 条目未被向量检索命中（vectorHits 已提供，条目不在集合里）。 */
+  | 'vector-miss'
+  /** vectorized 条目需要向量通道，但本次激活没有提供 vectorHits（无 embed
+   *  配置 / 熔断 / 检索失败）——契约要求保持不激活，不降级为关键词匹配。 */
+  | 'vector-unavailable'
 
 /** 结果中的激活条目。 */
 export interface ActivatedEntry {
@@ -374,4 +382,11 @@ export interface ActivationInput {
   rng?: () => number
   /** 可注入 token 计数器，默认 Math.round(len / 3.5) 估算 */
   countTokens?: (text: string) => number
+  /**
+   * vectorized 条目的向量命中集合（稳定 id：引擎的 `entryId`，即
+   * `${bookLabel}.${uid}`）。undefined = 向量通道本次不可用——vectorized 且
+   * 非常驻的条目保持不激活并诊断 `vector-unavailable`，**不降级为关键词匹配**。
+   * 空 Set = 检索跑通但无命中（诊断 `vector-miss`）。
+   */
+  vectorHits?: ReadonlySet<string>
 }

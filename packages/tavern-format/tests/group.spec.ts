@@ -28,9 +28,17 @@ describe('group file', () => {
     expect(ir.droppedMembers).toBe(3)
   })
 
-  it('normalizes unknown activation strategies to natural', () => {
+  it('keeps MANUAL (0) and normalizes only out-of-range strategies', () => {
     expect(parseGroupFile({ name: 'G' }).activationStrategy).toBe(1)
+    expect(parseGroupFile({ name: 'G', activation_strategy: 0 }).activationStrategy).toBe(0)
     expect(parseGroupFile({ name: 'G', activation_strategy: 9 }).activationStrategy).toBe(1)
+  })
+
+  it('round-trips MANUAL without rewriting it to NATURAL', () => {
+    const ir = parseGroupFile({ id: 'm', name: 'Manual Pair', members: ['A', 'B'], activation_strategy: 0 })
+    expect(ir.activationStrategy).toBe(0)
+    expect(serializeGroupFile(ir)['activation_strategy']).toBe(0)
+    expect(parseGroupFile(serializeGroupFile(ir)).activationStrategy).toBe(0)
   })
 
   it('rejects nameless groups', () => {
