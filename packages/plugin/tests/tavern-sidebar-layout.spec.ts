@@ -10,12 +10,18 @@
  * （.dt-sidebar-scroll + 分区类，max-height:min(320px,32vh) + overflow-y:auto），
  * 并把写卡工作台的默认折叠态置为收起（标题行的「+」钮折叠态仍可新建）。
  *
- * 为什么不写行为断言：client half 是宿主 ModuleLoader 的 IIFE，没有模块出口；
+ * 为什么不写布局断言：client half 是宿主 ModuleLoader 的 IIFE，没有模块出口；
  * jsdom 也没有布局引擎（量不出「谁溢出、谁在滚」）。真实几何已在 headless
  * Chromium 里用宿主真实侧栏列（flex 列：本插件插槽 flex:none + 原生会话树
  * flex:1）与插件同一份注入 CSS 量过（插槽高度被上限夹住、分区容器 scrollHeight
  * > clientHeight、原生树保有可视区）。这里锁结构与规则文本；产物层面由 gates
  * frontend-runtime 的对应 marker（含负样本自证）对账。
+ *
+ * 2026-11-13 collapse memory: the localStorage read/write helpers are pure
+ * string/JSON functions with no DOM dependency, so they are extracted from the
+ * shipped bundle and executed against a fake storage — valid, missing, partial,
+ * wrong-typed, corrupt and throwing-storage payloads are all asserted here. The
+ * mount-level wiring stays a source check.
  */
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -27,6 +33,37 @@ const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../cl
 const TAVERN_WRAPPER = "h('div', { className: 'dt-sidebar-scroll dt-sidebar-tavern' }"
 const WORKBENCH_WRAPPER = "h('div', { className: 'dt-sidebar-scroll dt-sidebar-workbench' }"
 const SCROLL_RULE = '.dt-sidebar-scroll{display:flex;flex-direction:column;min-height:0;max-height:min(320px,32vh);overflow-y:auto;overflow-x:hidden}'
+const COLLAPSE_STORAGE_KEY = 'dsh-soulmojito:sidebar-collapsed'
+
+interface CollapseState { tavern: boolean; workbench: boolean }
+interface FakeStorage { getItem(key: string): string | null; setItem(key: string, value: string): void }
+interface CollapseHelpers {
+  readSidebarCollapsed(): CollapseState
+  writeSidebarCollapsed(value: CollapseState): CollapseState
+}
+interface FakeLocalStorage extends FakeStorage { values: Map<string, string> }
+
+function fakeStorage(seed: string | null): FakeLocalStorage {
+  const values = new Map<string, string>()
+  if (seed !== null) values.set(COLLAPSE_STORAGE_KEY, seed)
+  return {
+    values,
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => { values.set(key, value) },
+  }
+}
+
+/** Extracts the shipped storage helpers (key/default/normalize/read/write). */
+function collapseHelpers(storage: FakeStorage, warn: (message: string, error: unknown) => void): CollapseHelpers {
+  const start = source.indexOf('const SIDEBAR_COLLAPSED_STORAGE_KEY')
+  const writeAt = source.indexOf('function writeSidebarCollapsed(value) {', start)
+  expect(start).toBeGreaterThanOrEqual(0)
+  expect(writeAt).toBeGreaterThan(start)
+  const writeEnd = closingBraceOf(source, source.indexOf('{', writeAt))
+  expect(writeEnd).toBeGreaterThan(writeAt)
+  const block = source.slice(start, writeEnd + 1)
+  return new Function('window', 'console', `${block}\nreturn { readSidebarCollapsed, writeSidebarCollapsed }`)({ localStorage: storage }, { warn })
+}
 
 /** h(...) 调用的右括号位置：从 callAt 起按括号配平扫到 depth 归零。 */
 function closingParenOf(text: string, callAt: number): number {
@@ -35,6 +72,20 @@ function closingParenOf(text: string, callAt: number): number {
     const char = text[index]
     if (char === '(') depth += 1
     else if (char === ')') {
+      depth -= 1
+      if (depth === 0) return index
+    }
+  }
+  return -1
+}
+
+/** `{...}` 块的右花括号位置（用于截取函数体）。 */
+function closingBraceOf(text: string, braceAt: number): number {
+  let depth = 0
+  for (let index = braceAt; index < text.length; index += 1) {
+    const char = text[index]
+    if (char === '{') depth += 1
+    else if (char === '}') {
       depth -= 1
       if (depth === 0) return index
     }
@@ -82,10 +133,21 @@ describe('tavern sidebar section height contract', () => {
     expect(source).not.toContain('[data-dsh-soulmojito-sidebar-host]{flex:none;margin:0 0 6px;padding-right:var(--dsh-session-list-edge-inset,8px);max-height')
   })
 
-  it('collapses the workbench section by default', () => {
-    // 默认态进 store 初值（页面重载回到这一份）；酒馆保持展开。
-    expect(source).toContain('sidebarCollapsed: { tavern: false, workbench: true }')
-    expect(source).not.toContain('sidebarCollapsed: { tavern: false, workbench: false }')
+  it('seeds the store from the persisted collapse state, defaulting the workbench to collapsed', () => {
+    // 初值从 localStorage 读（2026-11-13 用户需求：记忆折叠状态）；酒馆默认
+    // 展开、写卡工作台默认收起，作为没有存量值时的那一份。
+    expect(source).toContain('const SIDEBAR_COLLAPSED_STORAGE_KEY = \'dsh-soulmojito:sidebar-collapsed\'')
+    expect(source).toContain('const SIDEBAR_COLLAPSED_DEFAULT = { tavern: false, workbench: true }')
+    expect(source).toContain('sidebarCollapsed: readSidebarCollapsed(),')
+    expect(source).not.toContain('sidebarCollapsed: { tavern: false, workbench: true },')
+  })
+
+  it('writes every toggle through the same normalizer', () => {
+    // 折叠钮是唯一写入口：写前过 normalize，坏掉的存量 payload 会被完整合法
+    // 对象覆盖；两个挂载点仍共享 store 里的同一份值。
+    expect(source).toContain('const next = { ...state.sidebarCollapsed, [section]: !state.sidebarCollapsed[section] }')
+    expect(source).toContain('update({ sidebarCollapsed: writeSidebarCollapsed(next) })')
+    expect(source).toContain('window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, JSON.stringify(normalized))')
   })
 
   it('marker does not match near-miss samples (negative sample)', () => {
@@ -93,6 +155,47 @@ describe('tavern sidebar section height contract', () => {
     expect('.dt-sidebar-scroll{display:flex;flex-direction:column;overflow:visible}'.includes(SCROLL_RULE)).toBe(false)
     expect("className: 'dt-sidebar-tavern-gone'".includes(TAVERN_WRAPPER)).toBe(false)
     expect("className: 'dt-sidebar-workbench-gone'".includes(WORKBENCH_WRAPPER)).toBe(false)
-    expect('sidebarCollapsed: { tavern: false, workbench: false }'.includes('sidebarCollapsed: { tavern: false, workbench: true }')).toBe(false)
+    expect('sidebarCollapsed: { tavern: false, workbench: true },'.includes('sidebarCollapsed: readSidebarCollapsed(),')).toBe(false)
+  })
+})
+
+describe('sidebar collapse memory', () => {
+  it('uses the shipped defaults when nothing is stored', () => {
+    const helpers = collapseHelpers(fakeStorage(null), () => {})
+    expect(helpers.readSidebarCollapsed()).toEqual({ tavern: false, workbench: true })
+  })
+
+  it('keeps valid fields and fills the missing ones from the defaults', () => {
+    const helpers = collapseHelpers(fakeStorage('{"tavern":true}'), () => {})
+    expect(helpers.readSidebarCollapsed()).toEqual({ tavern: true, workbench: true })
+  })
+
+  it('rejects wrong-typed and corrupt payloads with a visible warning', () => {
+    const wrongTypeWarnings: string[] = []
+    const wrongType = collapseHelpers(fakeStorage('{"tavern":"true","workbench":0}'), (message) => { wrongTypeWarnings.push(message) })
+    expect(wrongType.readSidebarCollapsed()).toEqual({ tavern: false, workbench: true })
+    expect(wrongTypeWarnings).toHaveLength(0)
+
+    const corruptWarnings: string[] = []
+    const corrupt = collapseHelpers(fakeStorage('{'), (message) => { corruptWarnings.push(message) })
+    expect(corrupt.readSidebarCollapsed()).toEqual({ tavern: false, workbench: true })
+    expect(corruptWarnings).toHaveLength(1)
+  })
+
+  it('round-trips a toggle and keeps working when the storage rejects writes', () => {
+    const storage = fakeStorage(null)
+    const helpers = collapseHelpers(storage, () => {})
+    expect(helpers.writeSidebarCollapsed({ tavern: true, workbench: false })).toEqual({ tavern: true, workbench: false })
+    expect(JSON.parse(storage.values.get(COLLAPSE_STORAGE_KEY) ?? '')).toEqual({ tavern: true, workbench: false })
+    expect(helpers.readSidebarCollapsed()).toEqual({ tavern: true, workbench: false })
+
+    const warnings: string[] = []
+    const blocked = collapseHelpers({
+      getItem: () => { throw new Error('storage disabled') },
+      setItem: () => { throw new Error('storage disabled') },
+    }, (message) => { warnings.push(message) })
+    expect(blocked.readSidebarCollapsed()).toEqual({ tavern: false, workbench: true })
+    expect(blocked.writeSidebarCollapsed({ tavern: false, workbench: false })).toEqual({ tavern: false, workbench: false })
+    expect(warnings).toHaveLength(2)
   })
 })

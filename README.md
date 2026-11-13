@@ -151,6 +151,7 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 - **每聊天一个正式会话** — 每个 Tavern 聊天绑定一个正式 DSH session；view/composer/标题栏只接管带有效 Tavern marker 的会话，普通 DSH 会话保持原生表面。生成循环把 turn/step、流式 chunk、assistant message 与 provider usage 镜像进同一 session，因此标题栏直接复用宿主的 `sessionStats` / `tokenUsage` projection。
 - **Composer 模型选择** — 复刻 DSH 原生 model seat 的 provider 分组目录与 Effort 二级菜单，按 session 持久化，未选择时回落 DSH 默认模型。
 - **内部工作区** — ST 与 AgentTavern 新聊天共用数据根下 `workspace/`（新装 `$DSH_HOME/soulmojito/workspace/`，旧装 `$DSH_HOME/tavern/workspace/`）的 `Tavern (internal)` 工作区，插件按 workspace 路径/ID 从原生侧边栏隐藏该分组。宿主 `rc.6` 没有可追加到原生 session tree 的正式 list slot，侧栏因此使用一个集中、版本敏感但**失败关闭**的 DOM adapter（只匹配可见左侧 `[role="tree"]`，解绑或卸载时可逆恢复）；面板入口本身走官方 slot，不依赖 adapter 是否挂载成功。
+- **侧边栏分区折叠记忆** — 「酒馆」与「写卡工作台」两个分区的折叠状态写入宿主页 `localStorage`（`dsh-soulmojito:sidebar-collapsed`），页面重载与浏览器重启后保持；首次使用或存储不可用时回默认（酒馆展开、写卡工作台收起）。坏 JSON、部分字段与错误类型逐字段归一，存储失败只在控制台留警告，不阻断侧栏。详见 [`decisions/2026-11-13-sidebar-collapse-memory.md`](decisions/2026-11-13-sidebar-collapse-memory.md)。
 - **语言** — 插件 UI 跟随 DSH 的语言设置（zh/en），切换后无需刷新即时生效。
 - **当前配置与行为设置** — 「当前配置」只留角色 / 预设 / 人设 / 压缩总结模型的快速切换；全部行为开关收进面板「行为设置」分区（system 组置顶，原生设置页同步展示同一个 band），按行为对应关系分组：会话行为（`defaultArchitecture` 新聊天架构、`defaultContextMode` AgentTavern 上下文、`agentTavernPreloadAssets` 新 AgentTavern 会话开始时一次性预载角色信息与常驻世界书条目（默认关闭且不追溯已有会话）、`nativeAgentPersona` 在标准 DSH Agent 会话中使用当前角色（默认关闭）、`nativeAgentPreset` 在标准 DSH Agent 会话中投影当前激活预设（默认关闭）、`imNativeAgentMode` 让 IM 绑定会话改用 `agent-tavern-im-native`（标准 DSH 工具面 + 酒馆/IM 工具，默认关闭）、`agentPtcMode` 让绑定的 AgentTavern / AgentTavernIM / AgentNovel / 写卡工作台以及 IM 绑定的原生会话改用宿主原生 PTC 工具呈现（`run_code` + 生成 SDK，默认关闭；ST 与内部推理子代理不参与））、世界书行为（`worldFollowsCharacter` 世界书跟随角色卡激活——绑定的书只在所属角色卡的会话里自动生效，不写入手动 `activeWorlds`）、工具写入（`agentTavernAllowGlobalWrites` 允许工具写 global 作用域，默认关闭）、前端与卡脚本（`frontendAutoOpen` 美化前端出现时自动打开右侧栏（默认关闭，每聊天一次）、`frontendAllowExternalResources` 允许美化前端加载外部资源（默认关闭）、`cardScriptsAutoRun` 进入聊天自动运行卡内全部启用脚本（默认关闭））、游戏行为（`gamesDisableResign` 禁用投降）。全部开关服务端逐次读取、即时生效。设置页标题下显示当前构建的版本与 commit。
 
@@ -339,13 +340,13 @@ Node half 是七个自包含 bundle：`index.mjs` 主入口，加 `agent` / `im-
 pnpm run check
 ```
 
-当前基线（2026-11-12 实测，宿主 DSH `0.2.2-rc.1`）：
+当前基线（2026-11-13 实测，宿主 DSH `0.2.2-rc.1`）：
 
 ```
-Test Files  214 passed (214)
-Tests       3488 passed | 2 skipped (3490)
+Test Files  215 passed (215)
+Tests       3497 passed | 2 skipped (3499)
 21 gates    全部 PASS
-built       v0.7.9 (dfe3b72)
+built       v0.7.9 (ef12e41)
 ```
 
 - 2 项跳过都是 `skipIf` 环境条件项：Windows 检出上的 `host-package.spec.ts` POSIX-only 用例，以及 `im-store.spec.ts` 的 0600 权限位用例（Win32 无 POSIX mode）。
@@ -363,7 +364,7 @@ GUI 已在桌面与 390x844 移动视口验证，覆盖原生 sidebar、管理�
 | 目录 | 内容 |
 |---|---|
 | [`docs/proposals/`](docs/proposals/) | 23 篇架构级设计契约（提案 0001-0024，0019 未使用），实现后在此登记 |
-| [`decisions/`](decisions/) | 169 篇单次落地决策：问题、方案、否决项、与规格的偏差 |
+| [`decisions/`](decisions/) | 174 篇单次落地决策：问题、方案、否决项、与规格的偏差 |
 | [`docs/exploration/`](docs/exploration/) | 调研归档，结论必须带证据坐标（文件:行号） |
 | [`docs/plans/`](docs/plans/) · [`docs/adr/`](docs/adr/) · [`docs/mods/`](docs/mods/) · [`docs/games/`](docs/games/) | 施工计划 · 架构决策记录 · Mod 开发者文档 · 标准游戏包制作指南 |
 

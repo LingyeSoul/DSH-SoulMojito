@@ -930,7 +930,12 @@ function checkFrontendRuntimeText(text) {
     "className: 'dt-sidebar-scroll dt-sidebar-tavern'",
     "className: 'dt-sidebar-scroll dt-sidebar-workbench'",
     '.dt-sidebar-scroll{display:flex;flex-direction:column;min-height:0;max-height:min(320px,32vh);overflow-y:auto;overflow-x:hidden}',
-    'sidebarCollapsed: { tavern: false, workbench: true }',
+    // 折叠态记忆（2026-11-13）：存 key、默认值、store 初值读取与 toggle 写入
+    // 四段缺一不可——只读不写等于不记忆，只写不读等于每次重载回到默认。
+    "const SIDEBAR_COLLAPSED_STORAGE_KEY = 'dsh-soulmojito:sidebar-collapsed'",
+    'const SIDEBAR_COLLAPSED_DEFAULT = { tavern: false, workbench: true }',
+    'sidebarCollapsed: readSidebarCollapsed(),',
+    'update({ sidebarCollapsed: writeSidebarCollapsed(next) })',
   ]) {
     if (!text.includes(marker)) problems.push(`frontend runtime is missing marker '${marker}'`)
   }
@@ -3018,7 +3023,10 @@ const gates = [
         "className: 'dt-sidebar-scroll dt-sidebar-tavern'",
         "className: 'dt-sidebar-scroll dt-sidebar-workbench'",
         '.dt-sidebar-scroll{display:flex;flex-direction:column;min-height:0;max-height:min(320px,32vh);overflow-y:auto;overflow-x:hidden}',
-        'sidebarCollapsed: { tavern: false, workbench: true }',
+        "const SIDEBAR_COLLAPSED_STORAGE_KEY = 'dsh-soulmojito:sidebar-collapsed'",
+        'const SIDEBAR_COLLAPSED_DEFAULT = { tavern: false, workbench: true }',
+        'sidebarCollapsed: readSidebarCollapsed(),',
+        'update({ sidebarCollapsed: writeSidebarCollapsed(next) })',
       ].join('\n')
       const bad = good.replace("sandbox: 'allow-scripts allow-modals allow-forms'", "sandbox: 'allow-scripts allow-modals'")
       // Frontend default canvas (2026-10-21): a missing host background
@@ -3116,7 +3124,13 @@ const gates = [
       const badSidebarTavernScroll = good.replace("className: 'dt-sidebar-scroll dt-sidebar-tavern'", "className: 'dt-sidebar-tavern-gone'")
       const badSidebarWorkbenchScroll = good.replace("className: 'dt-sidebar-scroll dt-sidebar-workbench'", "className: 'dt-sidebar-workbench-gone'")
       const badSidebarScrollRule = good.replace('.dt-sidebar-scroll{display:flex;flex-direction:column;min-height:0;max-height:min(320px,32vh);overflow-y:auto;overflow-x:hidden}', '.dt-sidebar-scroll{display:flex;flex-direction:column;overflow:visible}')
-      const badSidebarWorkbenchDefault = good.replace('sidebarCollapsed: { tavern: false, workbench: true }', 'sidebarCollapsed: { tavern: false, workbench: false }')
+      // 折叠态记忆（2026-11-13）负样本：store 初值退回硬编码、存储 key 改名、
+      // toggle 绕过持久化写入或默认值翻成展开，各自必须翻红。替换文本逐一
+      // 核对不含原 marker 的子串。
+      const badSidebarWorkbenchDefault = good.replace('const SIDEBAR_COLLAPSED_DEFAULT = { tavern: false, workbench: true }', 'const SIDEBAR_COLLAPSED_DEFAULT = { tavern: false, workbench: false }')
+      const badSidebarStoredSeed = good.replace('sidebarCollapsed: readSidebarCollapsed(),', 'sidebarCollapsed: { tavern: false, workbench: true },')
+      const badSidebarStorageKey = good.replace("'dsh-soulmojito:sidebar-collapsed'", "'dsh-soulmojito:sidebar-collapse-gone'")
+      const badSidebarPersistWrite = good.replace('update({ sidebarCollapsed: writeSidebarCollapsed(next) })', 'update({ sidebarCollapsed: next })')
       return checkFrontendRuntimeText(good).length === 0
         && checkFrontendRuntimeText(bad).length > 0
         && checkFrontendRuntimeText(badFrameCanvas).length > 0
@@ -3183,6 +3197,9 @@ const gates = [
         && checkFrontendRuntimeText(badSidebarWorkbenchScroll).length > 0
         && checkFrontendRuntimeText(badSidebarScrollRule).length > 0
         && checkFrontendRuntimeText(badSidebarWorkbenchDefault).length > 0
+        && checkFrontendRuntimeText(badSidebarStoredSeed).length > 0
+        && checkFrontendRuntimeText(badSidebarStorageKey).length > 0
+        && checkFrontendRuntimeText(badSidebarPersistWrite).length > 0
         ? []
         : ['frontend runtime marker self-test did not distinguish an unsafe sample']
     },

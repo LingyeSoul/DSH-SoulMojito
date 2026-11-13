@@ -209,6 +209,7 @@
 - [`2026-10-14-panel-mobile-navlist-strip-regression.md`](../decisions/2026-10-14-panel-mobile-navlist-strip-regression.md) — 移动端横向按钮条回归：导航清单容器在 700px 断点里的退场
 - [`2026-10-16-sidebar-region-scroll-and-workbench-collapsed.md`](../decisions/2026-10-16-sidebar-region-scroll-and-workbench-collapsed.md) — 侧栏两分区固定高度 + 独占滚动，写卡工作台默认收起
 - [`2026-10-16-soulmojito-brand-mark.md`](../decisions/2026-10-16-soulmojito-brand-mark.md) — 品牌 logo 落四面：面板标题区 + 侧栏按钮 + 设置页入口 + 面板「关于」分区
+- [`2026-11-13-sidebar-collapse-memory.md`](../decisions/2026-11-13-sidebar-collapse-memory.md) — 侧边栏酒馆/写卡工作台折叠状态跨重载记忆（localStorage 首个先例）
 - [`2026-10-21-behavior-settings-section.md`](../decisions/2026-10-21-behavior-settings-section.md) — 面板「行为设置」分区：散养行为开关收编，按行为对应关系分组
 - [`2026-10-21-panel-navigation-ux-rework.md`](../decisions/2026-10-21-panel-navigation-ux-rework.md) — 管理面板导航重做（用户反馈「特别难用」）
 - [`2026-10-23-panel-mobile-group-strip.md`](../decisions/2026-10-23-panel-mobile-group-strip.md) — 移动端标题区挤压：分组容器在 700px 断点里退场 + 活动分区 chip 入视

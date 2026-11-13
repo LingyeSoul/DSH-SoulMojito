@@ -5114,6 +5114,50 @@ window.__ModuleLoader__.load({
       },
     }
     const EMPTY_MODELS = { status: 'idle', groups: [], failures: [], error: '' }
+    // Sidebar collapse memory (2026-11-13 user request): the two section toggles
+    // survive page reloads. The value is a small host-page preference, so it
+    // lives in localStorage next to the rest of the browser UI state instead of
+    // writing state.json for every click. Reads normalize unknown/invalid fields
+    // back to the shipped defaults (tavern open, workbench collapsed); storage
+    // failures are visible warnings, not a reason to blank the sidebar.
+    const SIDEBAR_COLLAPSED_STORAGE_KEY = 'dsh-soulmojito:sidebar-collapsed'
+    const SIDEBAR_COLLAPSED_DEFAULT = { tavern: false, workbench: true }
+
+    function normalizeSidebarCollapsed(value) {
+      const source = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
+      return {
+        tavern: typeof source.tavern === 'boolean' ? source.tavern : SIDEBAR_COLLAPSED_DEFAULT.tavern,
+        workbench: typeof source.workbench === 'boolean' ? source.workbench : SIDEBAR_COLLAPSED_DEFAULT.workbench,
+      }
+    }
+
+    function readSidebarCollapsed() {
+      let raw
+      try {
+        raw = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY)
+      } catch (error) {
+        console.warn('dsh-soulmojito: sidebar collapse state is unreadable', error)
+        return { ...SIDEBAR_COLLAPSED_DEFAULT }
+      }
+      if (raw === null) return { ...SIDEBAR_COLLAPSED_DEFAULT }
+      try {
+        return normalizeSidebarCollapsed(JSON.parse(raw))
+      } catch (error) {
+        console.warn('dsh-soulmojito: sidebar collapse state is corrupt; using defaults', error)
+        return { ...SIDEBAR_COLLAPSED_DEFAULT }
+      }
+    }
+
+    function writeSidebarCollapsed(value) {
+      const normalized = normalizeSidebarCollapsed(value)
+      try {
+        window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, JSON.stringify(normalized))
+      } catch (error) {
+        console.warn('dsh-soulmojito: sidebar collapse state could not be saved', error)
+      }
+      return normalized
+    }
+
     let snapshot = {
       bootstrap: EMPTY_BOOTSTRAP,
       loading: true,
@@ -5132,11 +5176,11 @@ window.__ModuleLoader__.load({
       panelExpanded: false,
       navigationStatus: '',
       // 侧边栏分区折叠（酒馆 / 写卡工作台）：进 store 而非组件 state，docked
-      // 侧栏门户与面板聊天分区两个挂载点共享同一份折叠态（panelSection 同款
-      // UI 状态语义，页面重载随 store 回到默认态）。酒馆默认展开，写卡工作台
-      // 默认收起（2026-10-16）：出卡/自由工作台会话通常多于正在用的那一个，默认
-      // 展开会把宿主会话工作区挤下去；标题行的「+」钮折叠态仍可新建。
-      sidebarCollapsed: { tavern: false, workbench: true },
+      // 侧栏门户与面板聊天分区两个挂载点共享同一份折叠态。初值来自
+      // localStorage（2026-11-13 用户需求：记忆折叠状态）；没有存量值时回默认：
+      // 酒馆展开、写卡工作台收起（2026-10-16：出卡/自由工作台会话通常多于正在
+      // 用的那一个，默认展开会把宿主会话工作区挤下去）。
+      sidebarCollapsed: readSidebarCollapsed(),
       // 剧本库写操作（导入/绑定/解绑）的广播计数：绑定写在卡 extensions 上，
       // 不经过聊天 revision，进度卡靠它感知重取（绑定后出现 / 解绑后隐藏）。
       scriptsRevision: 0,
@@ -11559,7 +11603,10 @@ window.__ModuleLoader__.load({
       const tavernOpen = !state.sidebarCollapsed.tavern
       const workbenchOpen = !state.sidebarCollapsed.workbench
       const toggleSidebarSection = (section) => {
-        update({ sidebarCollapsed: { ...state.sidebarCollapsed, [section]: !state.sidebarCollapsed[section] } })
+        const next = { ...state.sidebarCollapsed, [section]: !state.sidebarCollapsed[section] }
+        // Toggle writes through the same normalizer as the initial read, so a
+        // malformed stored payload is replaced by a complete valid object.
+        update({ sidebarCollapsed: writeSidebarCollapsed(next) })
       }
       const headingToggle = (open, label, icon, section) => h('button', {
         type: 'button',

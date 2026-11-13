@@ -568,7 +568,10 @@
       const tavernOpen = !state.sidebarCollapsed.tavern
       const workbenchOpen = !state.sidebarCollapsed.workbench
       const toggleSidebarSection = (section) => {
-        update({ sidebarCollapsed: { ...state.sidebarCollapsed, [section]: !state.sidebarCollapsed[section] } })
+        const next = { ...state.sidebarCollapsed, [section]: !state.sidebarCollapsed[section] }
+        // Toggle writes through the same normalizer as the initial read, so a
+        // malformed stored payload is replaced by a complete valid object.
+        update({ sidebarCollapsed: writeSidebarCollapsed(next) })
       }
       const headingToggle = (open, label, icon, section) => h('button', {
         type: 'button',
