@@ -89,6 +89,7 @@ var DEFAULT_STATE = {
   frontendAllowExternalResources: false,
   gamesDisableResign: false,
   cardWorkbenchPresetEnabled: false,
+  cardWorkbenchNativeAgentMode: false,
   agentNovelPresetEnabled: false,
   worldFollowsCharacter: true,
   disabledAutoWorlds: [],

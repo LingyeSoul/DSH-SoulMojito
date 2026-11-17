@@ -4,6 +4,7 @@
 
 import { worldInfoSettingsOf, type TavernModelSelection, type TavernStore, type WorldInfoSettings } from '../../../tavern-store/src/index.js'
 import { agentPtcCapabilitiesForHost, refreshAgentPtcMode } from '../agent-ptc-mode.js'
+import { reconcileCardWorkbenchPresets } from '../card-workbench/preset-reconcile.js'
 import { emitAgentPresetChanged } from '../agent-tavern/preset.js'
 import type { PluginContext } from '../host-contract.js'
 import { buildModelCatalog, refreshActivePrompt } from '../model-catalog.js'
@@ -143,6 +144,9 @@ export async function handleStateUpdateRoute(
     ...(typeof body.cardWorkbenchPresetEnabled === 'boolean'
       ? { cardWorkbenchPresetEnabled: body.cardWorkbenchPresetEnabled }
       : {}),
+    ...(typeof body.cardWorkbenchNativeAgentMode === 'boolean'
+      ? { cardWorkbenchNativeAgentMode: body.cardWorkbenchNativeAgentMode }
+      : {}),
     ...(typeof body.agentNovelPresetEnabled === 'boolean'
       ? { agentNovelPresetEnabled: body.agentNovelPresetEnabled }
       : {}),
@@ -190,6 +194,13 @@ export async function handleStateUpdateRoute(
       await refreshAgentPtcMode(ctx)
     } catch (error) {
       ctx.logger?.warn?.(`dsh-soulmojito ptc: live reconcile after IM mode patch failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+  if ('cardWorkbenchNativeAgentMode' in patch) {
+    try {
+      await reconcileCardWorkbenchPresets(ctx)
+    } catch (error) {
+      ctx.logger?.warn?.(`dsh-soulmojito workbench: preset reconcile after state patch failed: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
   if ('agentPtcMode' in patch) {

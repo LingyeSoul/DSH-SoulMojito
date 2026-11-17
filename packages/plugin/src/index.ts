@@ -50,6 +50,7 @@ import { registerTavernSessionCommand } from './session/command.js'
 import { registerSessionBindingReclaim } from './session/reclaim.js'
 import { listLiveAgents } from './im/session-host.js'
 import { mountAgentPtcMode, refreshAgentPtcMode } from './agent-ptc-mode.js'
+import { mountCardWorkbenchPresets } from './card-workbench/preset-reconcile.js'
 import { normalizeAllowedHosts } from './http/trust.js'
 import type { PluginContext } from './host-contract.js'
 import { ensureAgentPresetDeclared, recoverMountedNovels } from './http/novel.js'
@@ -138,6 +139,8 @@ export function apply(ctx: PluginContext, config: { anchorEveryTurns?: unknown, 
   mountSessionEvent(ctx, mountDeps)
   mountAgentCreated(ctx, mountDeps)
   mountAgentPtcMode(ctx)
+  // 写卡工作台原生模式：恢复会话、idle 重试与启动 sweep 收敛到目标 preset。
+  mountCardWorkbenchPresets(ctx)
   // Restored sessions may already have been announced before this plugin
   // mounted; reconcile the persisted switch once so their next step presents
   // PTC. Host-seam probing and module loading live in the bind layer.

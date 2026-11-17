@@ -3040,6 +3040,7 @@ var init_store = __esm({
       frontendAllowExternalResources: false,
       gamesDisableResign: false,
       cardWorkbenchPresetEnabled: false,
+      cardWorkbenchNativeAgentMode: false,
       agentNovelPresetEnabled: false,
       worldFollowsCharacter: true,
       disabledAutoWorlds: [],
@@ -4303,6 +4304,7 @@ var init_store = __esm({
           frontendAllowExternalResources: parsed.frontendAllowExternalResources === true,
           gamesDisableResign: parsed.gamesDisableResign === true,
           cardWorkbenchPresetEnabled: parsed.cardWorkbenchPresetEnabled === true,
+          cardWorkbenchNativeAgentMode: parsed.cardWorkbenchNativeAgentMode === true,
           agentNovelPresetEnabled: parsed.agentNovelPresetEnabled === true,
           worldFollowsCharacter: parsed.worldFollowsCharacter !== false,
           disabledAutoWorlds: normalizeStringList2(parsed.disabledAutoWorlds),
@@ -16181,7 +16183,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.8.1".trim() : "";
-  const commit = true ? normalizeCommit("b14e737") : void 0;
+  const commit = true ? normalizeCommit("6d3199b") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -60208,8 +60210,16 @@ function textBlocks(content) {
 // packages/plugin/src/http/novel.ts
 init_deduce();
 init_runtime2();
-init_io();
+
+// packages/plugin/src/card-workbench/preset-ids.ts
 var CARD_WORKBENCH_PRESET_ID = "card-workbench";
+var CARD_WORKBENCH_NATIVE_PRESET_ID = "card-workbench-native";
+function cardWorkbenchPresetIdFor(state) {
+  return state.cardWorkbenchNativeAgentMode === true ? CARD_WORKBENCH_NATIVE_PRESET_ID : CARD_WORKBENCH_PRESET_ID;
+}
+
+// packages/plugin/src/http/novel.ts
+init_io();
 var NOVEL_SUBPATHS = [
   "novels/outline",
   "novels/body",
@@ -60876,15 +60886,17 @@ async function handleWorkbenchOpenCommand(ctx, agent, payload) {
   if (typeof ctx.agentPresets?.recompose !== "function") {
     throw new TavernArchitectureConflictError("The host cannot recompose a blank session with the CardWorkbench preset.");
   }
-  await ensureAgentPresetDeclared(ctx, CARD_WORKBENCH_PRESET_ID);
+  const db = await store3();
+  const currentState = await db.getState();
+  const targetPresetId = cardWorkbenchPresetIdFor(currentState);
+  await ensureAgentPresetDeclared(ctx, targetPresetId);
   const activationEvents = sessionEvents(agent.session);
   const sessionStarted = activationEvents.some((event) => event.type === "turn/start") || activationEvents.some((event) => {
     if (event.type !== "user/message" && event.type !== "assistant/message") return false;
     const source = event.type === "user/message" ? event.data?.source : event.data?.message?.source;
     return isTavernSessionMarker(source);
   });
-  const db = await store3();
-  const previous = (await db.getState()).sessionBindings[agent.id];
+  const previous = currentState.sessionBindings[agent.id];
   const previousWorkbench = previous?.architecture === "card-workbench" ? previous : void 0;
   const sameWorkbenchSource = previousWorkbench !== void 0 && previousWorkbench.sourceCharacter === payload.sourceCharacter && previousWorkbench.sourceChatId === payload.sourceChatId && previousWorkbench.targetCharacter === payload.targetCharacter && previousWorkbench.targetWorld === payload.targetWorld;
   if (sessionStarted && !sameWorkbenchSource) {
@@ -60912,8 +60924,8 @@ async function handleWorkbenchOpenCommand(ctx, agent, payload) {
     }
   }));
   await emitAgentPresetChanged();
-  if (lastSelectedPresetId(agent.session) !== CARD_WORKBENCH_PRESET_ID) {
-    const preset = await ctx.agentPresets.recompose(agent.ctx, CARD_WORKBENCH_PRESET_ID);
+  if (lastSelectedPresetId(agent.session) !== targetPresetId) {
+    const preset = await ctx.agentPresets.recompose(agent.ctx, targetPresetId);
     agent.session.append("agent-preset/selected", { agentPreset: preset.id });
   }
   const brief = workbenchOpeningBrief(payload);
@@ -62170,6 +62182,94 @@ async function handlePromptsRoute(res, url) {
 
 // packages/plugin/src/http/panel-state-routes.ts
 init_src();
+
+// packages/plugin/src/card-workbench/preset-reconcile.ts
+init_runtime2();
+async function applyCardWorkbenchPreset(ctx, agent, targetPresetId) {
+  const presets = ctx.agentPresets;
+  if (typeof presets?.recompose !== "function") {
+    return { applied: false, preset: targetPresetId, reason: "the host cannot recompose agent presets" };
+  }
+  if (agent.status === "running") {
+    return { applied: false, preset: targetPresetId, reason: "the session is running; the preset will switch when it becomes idle" };
+  }
+  if (lastSelectedPresetId(agent.session) === targetPresetId) {
+    await applyAgentPtcModeBestEffort(agent, ctx.logger);
+    return { applied: true, preset: targetPresetId };
+  }
+  if (typeof agent.session?.append !== "function") {
+    return { applied: false, preset: targetPresetId, reason: "the session does not expose append(); the preset cannot be made durable" };
+  }
+  const preset = await presets.recompose(agent.ctx, targetPresetId);
+  if (preset.id !== targetPresetId) {
+    return { applied: false, preset: targetPresetId, reason: `the host selected preset '${preset.id}' instead of '${targetPresetId}'` };
+  }
+  agent.session.append("agent-preset/selected", { agentPreset: preset.id });
+  await applyAgentPtcModeBestEffort(agent, ctx.logger);
+  return { applied: true, preset: targetPresetId };
+}
+async function reconcileCardWorkbenchPresetForAgent(ctx, agent) {
+  const sessionId = agent.session?.id ?? agent.id;
+  if (typeof sessionId !== "string" || sessionId === "") {
+    return { applied: false, preset: "", reason: "the agent has no session id" };
+  }
+  const state = await (await store3()).getState();
+  if (state.sessionBindings[sessionId]?.architecture !== "card-workbench") {
+    return { applied: false, preset: "", reason: "the session has no CardWorkbench binding" };
+  }
+  return applyCardWorkbenchPreset(ctx, agent, cardWorkbenchPresetIdFor(state));
+}
+async function reconcileCardWorkbenchPresets(ctx) {
+  const state = await (await store3()).getState();
+  const bound = new Set(Object.entries(state.sessionBindings).filter(([, binding]) => binding.architecture === "card-workbench").map(([sessionId]) => sessionId));
+  if (bound.size === 0) return;
+  const target = cardWorkbenchPresetIdFor(state);
+  for (const agent of listLiveAgents2(ctx.agents)) {
+    const sessionId = agent.session?.id ?? agent.id;
+    if (typeof sessionId !== "string" || !bound.has(sessionId)) continue;
+    try {
+      const result = await applyCardWorkbenchPreset(ctx, agent, target);
+      if (!result.applied && result.reason !== void 0 && !result.reason.includes("running")) {
+        ctx.logger?.warn?.(`dsh-soulmojito workbench: ${sessionId} was not switched to ${target}: ${result.reason}`);
+      }
+    } catch (error) {
+      ctx.logger?.warn?.(`dsh-soulmojito workbench: switching ${sessionId} to ${target} failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+}
+function mountCardWorkbenchPresets(ctx) {
+  const reconcileOne = (agent) => {
+    if (typeof agent !== "object" || agent === null) return Promise.resolve();
+    return reconcileCardWorkbenchPresetForAgent(ctx, agent).then((result) => {
+      if (!result.applied && result.reason !== void 0 && !result.reason.includes("running") && !result.reason.includes("no CardWorkbench binding")) {
+        ctx.logger?.warn?.(`dsh-soulmojito workbench: preset reconcile skipped: ${result.reason}`);
+      }
+    }).catch((error) => {
+      ctx.logger?.warn?.(`dsh-soulmojito workbench: preset reconcile failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  };
+  ctx.on?.("agent/created", (payload) => {
+    const agent = payload?.agent;
+    return reconcileOne(agent);
+  });
+  ctx.on?.("agent/status", (payload) => {
+    const record = payload;
+    if ((record?.status ?? record?.agent?.status) !== "idle") return;
+    void reconcileOne(record?.agent);
+  });
+  void reconcileCardWorkbenchPresets(ctx).catch((error) => {
+    ctx.logger?.warn?.(`dsh-soulmojito workbench: startup preset reconcile failed: ${error instanceof Error ? error.message : String(error)}`);
+  });
+}
+async function applyAgentPtcModeBestEffort(agent, logger) {
+  try {
+    await applyAgentPtcMode(agent, logger);
+  } catch (error) {
+    logger?.warn?.(`dsh-soulmojito ptc: workbench preset switch apply failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+// packages/plugin/src/http/panel-state-routes.ts
 init_runtime2();
 init_io();
 async function handleModelsRoute(ctx, res) {
@@ -62257,6 +62357,7 @@ async function handleStateUpdateRoute(ctx, db, req, res) {
     // 写卡工作台/AgentNovel 的预设投影开关（preset-mount.ts）：翻转即写穿
     // 两个 bundle 的投影缓存，下一次装配即时生效。
     ...typeof body.cardWorkbenchPresetEnabled === "boolean" ? { cardWorkbenchPresetEnabled: body.cardWorkbenchPresetEnabled } : {},
+    ...typeof body.cardWorkbenchNativeAgentMode === "boolean" ? { cardWorkbenchNativeAgentMode: body.cardWorkbenchNativeAgentMode } : {},
     ...typeof body.agentNovelPresetEnabled === "boolean" ? { agentNovelPresetEnabled: body.agentNovelPresetEnabled } : {},
     ...typeof body.worldFollowsCharacter === "boolean" ? { worldFollowsCharacter: body.worldFollowsCharacter } : {},
     // Agent 生成上下文注入（契约 2026-11-12 §2.10）：默认关闭，逐次由
@@ -62283,6 +62384,13 @@ async function handleStateUpdateRoute(ctx, db, req, res) {
       await refreshAgentPtcMode(ctx);
     } catch (error) {
       ctx.logger?.warn?.(`dsh-soulmojito ptc: live reconcile after IM mode patch failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  if ("cardWorkbenchNativeAgentMode" in patch) {
+    try {
+      await reconcileCardWorkbenchPresets(ctx);
+    } catch (error) {
+      ctx.logger?.warn?.(`dsh-soulmojito workbench: preset reconcile after state patch failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   if ("agentPtcMode" in patch) {
@@ -64881,7 +64989,7 @@ function createImRuntime(ctx, options) {
     now: () => Date.now(),
     maxBytes: WEIXIN_MEDIA_MAX_BYTES
   });
-  async function applyAgentPtcModeBestEffort(agent) {
+  async function applyAgentPtcModeBestEffort2(agent) {
     try {
       await applyAgentPtcMode(agent, logger);
     } catch (error) {
@@ -64915,7 +65023,7 @@ function createImRuntime(ctx, options) {
         return { applied: false, reason: "the session is running; the preset will switch when it becomes idle" };
       }
       if (lastSelectedPresetId(agent.session) === targetPresetId) {
-        await applyAgentPtcModeBestEffort(agent);
+        await applyAgentPtcModeBestEffort2(agent);
         return { applied: true, preset: targetPresetId };
       }
       const preset = await presets.recompose(agent.ctx, targetPresetId);
@@ -64934,7 +65042,7 @@ function createImRuntime(ctx, options) {
         present: () => lastSelectedPresetId(agent.session) === preset.id
       });
       if (!confirmed) return { applied: false, reason: "the IM preset marker could not be confirmed" };
-      await applyAgentPtcModeBestEffort(agent);
+      await applyAgentPtcModeBestEffort2(agent);
       imLog.note("info", `im bind: switched ${sessionId} to ${targetPresetId}`);
       return { applied: true, preset: targetPresetId };
     } catch (error) {
@@ -66409,6 +66517,7 @@ function apply(ctx, config = {}) {
   mountSessionEvent(ctx, mountDeps);
   mountAgentCreated(ctx, mountDeps);
   mountAgentPtcMode(ctx);
+  mountCardWorkbenchPresets(ctx);
   void refreshAgentPtcMode(ctx).catch((error) => {
     ctx.logger?.warn?.(`dsh-soulmojito ptc: startup reconcile failed: ${error instanceof Error ? error.message : String(error)}`);
   });

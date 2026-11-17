@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { apply as applyPlugin } from '../src/index.js'
 import { apply, type AgentContextLike } from '../src/card-workbench/agent.js'
+import { reconcileCardWorkbenchPresets } from '../src/card-workbench/preset-reconcile.js'
 import { statusTemplateOf } from '../src/mvu.js'
 import {
   TavernStore,
@@ -236,6 +237,52 @@ describe('Card Workbench P3: creation, materials, MVU conversion and chat seedin
   })
 
   /* --------------------- 出卡后会话改名为卡名（补充） --------------------- */
+
+  it('reconciles live workbench sessions to the native preset on toggle', async () => {
+    // 行为设置翻转后的 live 收敛：bound + idle 的工作台会话切到目标 preset；
+    // running 会话不动，等 agent/status(idle) 重试。
+    await store.patchState({ cardWorkbenchNativeAgentMode: true })
+    try {
+      await store.updateState((state) => ({
+        sessionBindings: {
+          ...state.sessionBindings,
+          'wb-live-native': {
+            architecture: 'card-workbench', character: '', chatId: '',
+            sourceCharacter: '', sourceChatId: '', targetCharacter: '', targetWorld: '', createdCard: '',
+          },
+          'wb-live-running': {
+            architecture: 'card-workbench', character: '', chatId: '',
+            sourceCharacter: '', sourceChatId: '', targetCharacter: '', targetWorld: '', createdCard: '',
+          },
+        },
+      }))
+      const marks: Array<{ type: string; data: unknown }> = []
+      const calls: string[] = []
+      const live = {
+        id: 'wb-live-native',
+        status: 'idle',
+        ctx: {},
+        session: { id: 'wb-live-native', append: (type: string, data: unknown) => { marks.push({ type, data }) } },
+      }
+      const running = {
+        id: 'wb-live-running',
+        status: 'running',
+        ctx: {},
+        session: { id: 'wb-live-running', append: () => {} },
+      }
+      await reconcileCardWorkbenchPresets({
+        agents: { list: () => [live, running] },
+        agentPresets: {
+          recompose: async (_agent: unknown, presetId: string) => { calls.push(presetId); return { id: presetId } },
+        },
+        logger: { warn: () => {} },
+      } as never)
+      expect(calls).toEqual(['card-workbench-native'])
+      expect(marks.at(-1)).toEqual({ type: 'agent-preset/selected', data: { agentPreset: 'card-workbench-native' } })
+    } finally {
+      await store.patchState({ cardWorkbenchNativeAgentMode: false })
+    }
+  })
 
   it('card_create renames the hosting workbench session to the card name', async () => {
     const renames: Array<{ session: unknown; title: string }> = []

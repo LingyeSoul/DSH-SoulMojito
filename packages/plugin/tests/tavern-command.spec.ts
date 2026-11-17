@@ -227,7 +227,7 @@ describe('internal Tavern session bridge occupation', () => {
           recomposeCalls.push({ agent, presetId })
           return { id: presetId }
         },
-        compositionInventory: async () => [{ id: 'standard' }, { id: 'agent-tavern' }, { id: 'agent-novel' }, { id: 'card-workbench' }],
+        compositionInventory: async () => [{ id: 'standard' }, { id: 'agent-tavern' }, { id: 'agent-novel' }, { id: 'card-workbench' }, { id: 'card-workbench-native' }],
       },
       tools: { register: () => {} },
       llm: {
@@ -1631,6 +1631,28 @@ describe('internal Tavern session bridge occupation', () => {
     expect(injectedText).toContain('card_create')
     await handler({ agent, rawInput: base64Url({ action: 'workbench-open', opening: 'new-card' }) })
     expect(agent.injections).toHaveLength(1)
+  })
+
+  it('selects the native workbench preset when the behavior switch is on', async () => {
+    // 行为设置 cardWorkbenchNativeAgentMode：workbench-open 的目标 preset 从
+    // 写卡-only 切到标准 DSH 工具面；关闭后新会话回到 card-workbench。
+    await store.patchState({ cardWorkbenchNativeAgentMode: true })
+    try {
+      const agent = makeAgent('session-workbench-native')
+      const result = await handler({ agent, rawInput: base64Url({ action: 'workbench-open', opening: 'new-card' }) })
+      expect(result.kind).toBe('success')
+      expect(recomposeCalls.some((call) => call.agent === agent.ctx && call.presetId === 'card-workbench-native')).toBe(true)
+      expect(agent.session.events.filter((event) => event.type === 'agent-preset/selected').at(-1)).toEqual({
+        type: 'agent-preset/selected',
+        data: { agentPreset: 'card-workbench-native' },
+      })
+      expect((await store.getState()).sessionBindings['session-workbench-native']?.architecture).toBe('card-workbench')
+    } finally {
+      await store.patchState({ cardWorkbenchNativeAgentMode: false })
+    }
+    const fallback = makeAgent('session-workbench-standard')
+    await handler({ agent: fallback, rawInput: base64Url({ action: 'workbench-open' }) })
+    expect(recomposeCalls.some((call) => call.agent === fallback.ctx && call.presetId === 'card-workbench')).toBe(true)
   })
 
   it('re-sends workbench-open on an occupied session idempotently (client stock repair path)', async () => {

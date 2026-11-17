@@ -6911,6 +6911,8 @@ window.__ModuleLoader__.load({
       'settings.agentContextInjectionHint': 'Adds three reference blocks to AgentTavern prompts: activated World Info hits, the top memories, and the chat summary. When the session-start preload is on, constant World Info entries are owned by the preload and this block only carries keyword/vector hits. Each block is labelled reference data, not instructions. Off by default.',
       'settings.imNativeAgentMode': 'Give IM mode the full native Agent tool set (AgentTavernIM Native)',
       'settings.imNativeAgentModeHint': 'IM-bound sessions use AgentTavernIM Native: the standard DSH tools (shell, files, search, jobs, schedules, skills, goals, subagents, todo, web, present) plus Tavern and im_* tools. Replies still go through im_send. This is independent of PTC mode: PTC only changes how the tools are presented (run_code plus SDK), not which tools exist. Shell, file and network tools are powerful; enable it only for agents you trust.',
+      'settings.cardWorkbenchNativeAgentMode': 'Give the Card Workbench the full native Agent tool set (CardWorkbench Native)',
+      'settings.cardWorkbenchNativeAgentModeHint': 'Workbench sessions use CardWorkbench Native: the 24 card/world/preset tools plus files, search, shell, jobs, schedules, skills, goals, subagents, todo, web and present. The plan/confirmation protocol is unchanged — this only widens the tool set. Shell, file writes and network access are powerful; enable it only for workbench sessions you trust. Independent of PTC mode.',
       'settings.ptcMode': 'Enable PTC mode (AgentTavern / Card Workbench / AgentNovel)',
       'settings.ptcModeHint': 'Presents agent tools through the host-native PTC surface: the model sees run_code and the generated tool SDK. The executor mounts when the switch is written; a running turn keeps its current surface until it goes idle.',
       'settings.ptcModeUnavailable': 'PTC mode is unavailable: {reason}',
@@ -8209,6 +8211,8 @@ window.__ModuleLoader__.load({
       'settings.agentContextInjectionHint': '给 AgentTavern 的提示词加三块参考数据：世界书激活命中、最相关的记忆与聊天总结。开启「会话开始时预载」后，常驻世界书条目由预载负责，这里只带关键词/向量命中。每块都标注为参考数据而非指令。默认关闭。',
       'settings.imNativeAgentMode': 'IM 模式解锁原生 Agent 全能力（AgentTavernIM Native）',
       'settings.imNativeAgentModeHint': 'IM 绑定会话改用 AgentTavernIM Native：在酒馆工具与 im_* 工具之外，挂载标准 DSH 工具（shell、文件、搜索、任务、定时、技能、目标、子代理、待办、网页、present）。回复仍必须走 im_send。本开关与 PTC 模式正交：PTC 只改变工具呈现方式（run_code + SDK），不改变工具集合。shell、文件写入与联网能力较强，只对信任的会话开启。',
+      'settings.cardWorkbenchNativeAgentMode': '写卡工作台解锁原生 Agent 全能力（CardWorkbench Native）',
+      'settings.cardWorkbenchNativeAgentModeHint': '工作台会话改用 CardWorkbench Native：在 24 件写卡工具之外，挂载文件、搜索、shell、任务、定时、技能、目标、子代理、待办、网页与 present。写卡方案与确认协议不变，只扩工具集合。shell、文件写入与联网能力较强，只对信任的工作台会话开启。本开关与 PTC 模式正交。',
       'settings.ptcMode': '启用 PTC 模式（AgentTavern / 写卡工作台 / AgentNovel）',
       'settings.ptcModeHint': 'Agent 工具改用宿主原生 PTC 呈现：模型只看到 run_code 与生成的工具 SDK。开关写入时立即挂载执行器；运行中的回合保持当前工具面，空闲后再切换。',
       'settings.ptcModeUnavailable': 'PTC 模式不可用：{reason}',
@@ -13445,6 +13449,16 @@ window.__ModuleLoader__.load({
             }),
             h('span', null, t('settings.imNativeAgentMode'))),
           h('p', { className: 'dt-hint' }, t('settings.imNativeAgentModeHint')),
+          // 写卡工作台的完整原生 Agent 工具面：与 PTC 呈现正交；工作台
+          // 计划/确认协议不变，只扩工具集合。
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: bootstrap.state.cardWorkbenchNativeAgentMode === true,
+              onChange: (event) => applyPatch({ cardWorkbenchNativeAgentMode: event.target.checked }),
+            }),
+            h('span', null, t('settings.cardWorkbenchNativeAgentMode'))),
+          h('p', { className: 'dt-hint' }, t('settings.cardWorkbenchNativeAgentModeHint')),
           // Native PTC presentation for every bound Tavern agent architecture.
           h('label', { className: 'dt-toggle' },
             h('input', {

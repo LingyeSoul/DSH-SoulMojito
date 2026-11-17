@@ -162,6 +162,13 @@ export interface TavernState {
    * 与 `agentPtcMode` 正交：PTC 只决定工具面呈现方式，不改变本开关选择。
    */
   imNativeAgentMode?: boolean
+  /**
+   * 写卡工作台解锁原生 Agent 全能力：工作台会话改用 `card-workbench-native`
+   * 预设（标准 DSH 工具行 + 24 件写卡工具），关闭时维持 `card-workbench`
+   * 的写卡工具 + 只读文件工具面。默认关闭；读取一律 `=== true`。
+   * 与 `agentPtcMode` 正交：PTC 只决定工具呈现方式，不改变目标预设。
+   */
+  cardWorkbenchNativeAgentMode?: boolean
   /** DSH session 到 Tavern 角色/聊天的持久绑定。 */
   sessionBindings: Record<string, TavernSessionBinding>
   /** 新建会话的架构默认值；不影响已有 binding。 */
@@ -619,6 +626,7 @@ const DEFAULT_STATE: TavernState = {
   frontendAllowExternalResources: false,
   gamesDisableResign: false,
   cardWorkbenchPresetEnabled: false,
+  cardWorkbenchNativeAgentMode: false,
   agentNovelPresetEnabled: false,
   worldFollowsCharacter: true,
   disabledAutoWorlds: [],
@@ -2233,6 +2241,7 @@ export class TavernStore {
       frontendAllowExternalResources: parsed.frontendAllowExternalResources === true,
       gamesDisableResign: parsed.gamesDisableResign === true,
       cardWorkbenchPresetEnabled: parsed.cardWorkbenchPresetEnabled === true,
+      cardWorkbenchNativeAgentMode: parsed.cardWorkbenchNativeAgentMode === true,
       agentNovelPresetEnabled: parsed.agentNovelPresetEnabled === true,
       worldFollowsCharacter: parsed.worldFollowsCharacter !== false,
       disabledAutoWorlds: normalizeStringList(parsed.disabledAutoWorlds),

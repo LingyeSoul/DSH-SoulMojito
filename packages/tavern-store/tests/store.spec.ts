@@ -764,7 +764,7 @@ describe('TavernStore', () => {
       cardScriptsAutoRun: false,
       // 允许美化前端加载外部资源（2026-10-21 用户需求）：默认关闭，显式授权才放行。
       frontendAllowExternalResources: false,
-      cardWorkbenchPresetEnabled: false, agentNovelPresetEnabled: false,
+      cardWorkbenchPresetEnabled: false, cardWorkbenchNativeAgentMode: false, agentNovelPresetEnabled: false,
       // 禁用投降（2026-10-14 用户需求；面板「游戏」分区开关）默认关闭。
       gamesDisableResign: false,
       // ST 能力补齐（2026-11-12）：快速回复、收藏、Agent 自动注入、世界书设置。

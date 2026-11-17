@@ -39,6 +39,7 @@ import { emitAgentPresetChanged } from '../agent-tavern/preset.js'
 import { isTavernSessionMarker } from '../agent-tavern/projector.js'
 import { getAgentNovelCapabilities, getNovelDriverPromise, getNovelProjectorPromise, memories, novelStore, store } from '../runtime.js'
 import { applyAgentPtcMode } from '../agent-ptc-mode.js'
+import { cardWorkbenchPresetIdFor } from '../card-workbench/preset-ids.js'
 import { createMessage } from '../message.js'
 import type { PluginContext } from '../host-contract.js'
 import { TavernArchitectureConflictError } from '../session/binding.js'
@@ -46,7 +47,7 @@ import { lastSelectedPresetId } from '../session/preset-marker.js'
 import { occupyHostSession, type WorkbenchOpeningTask } from '../session/trace.js'
 import { readJson, sendJson, sendRouteNotFound, type HttpRequest, type HttpResponse } from './io.js'
 
-const CARD_WORKBENCH_PRESET_ID = 'card-workbench'
+
 
 /* --------------------------- AgentNovel HTTP API --------------------------- */
 
@@ -927,7 +928,10 @@ export async function handleWorkbenchOpenCommand(
   if (typeof ctx.agentPresets?.recompose !== 'function') {
     throw new TavernArchitectureConflictError('The host cannot recompose a blank session with the CardWorkbench preset.')
   }
-  await ensureAgentPresetDeclared(ctx, CARD_WORKBENCH_PRESET_ID)
+  const db: TavernStore = await store()
+  const currentState = await db.getState()
+  const targetPresetId = cardWorkbenchPresetIdFor(currentState)
+  await ensureAgentPresetDeclared(ctx, targetPresetId)
   const activationEvents = sessionEvents(agent.session)
   // 与 novel-open 同款锁定：已开始真实轮次的会话不能再原地换 preset。例外与
   // AgentTavern 的 sameTavernBinding 同因：同来源身份的幂等重发（客户端存量
@@ -938,8 +942,7 @@ export async function handleWorkbenchOpenCommand(
       const source = event.type === 'user/message' ? event.data?.source : event.data?.message?.source
       return isTavernSessionMarker(source)
     })
-  const db: TavernStore = await store()
-  const previous = (await db.getState()).sessionBindings[agent.id]
+  const previous = currentState.sessionBindings[agent.id]
   const previousWorkbench = previous?.architecture === 'card-workbench' ? previous : undefined
   // 会话身份 = 来源聊天 + 目标资产：同一目标幂等复用，换聊天或换资产都算换绑。
   const sameWorkbenchSource = previousWorkbench !== undefined
@@ -978,8 +981,8 @@ export async function handleWorkbenchOpenCommand(
   await emitAgentPresetChanged()
   // 幂等 marker：重复 workbench-open 不叠加 marker 也不重复 recompose。
   // 0.2.1 的 reuseLive 可能把 blank 会话改回宿主默认 preset，因此只认最后一条。
-  if (lastSelectedPresetId(agent.session) !== CARD_WORKBENCH_PRESET_ID) {
-    const preset = await ctx.agentPresets.recompose(agent.ctx, CARD_WORKBENCH_PRESET_ID)
+  if (lastSelectedPresetId(agent.session) !== targetPresetId) {
+    const preset = await ctx.agentPresets.recompose(agent.ctx, targetPresetId)
     agent.session.append('agent-preset/selected', { agentPreset: preset.id })
   }
   // 库存入口的目标/新建提示：只在首次绑定或目标变化时注入一次（同身份重发

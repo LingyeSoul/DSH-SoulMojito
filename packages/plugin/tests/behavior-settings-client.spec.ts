@@ -27,6 +27,8 @@ const BEHAVIOR_I18N_KEYS = [
   'settings.ptcModeUnavailable',
   'settings.imNativeAgentMode',
   'settings.imNativeAgentModeHint',
+  'settings.cardWorkbenchNativeAgentMode',
+  'settings.cardWorkbenchNativeAgentModeHint',
 ]
 
 describe('behavior settings section (main.js source check)', () => {
@@ -50,6 +52,7 @@ describe('behavior settings section (main.js source check)', () => {
       'applyPatch({ nativeAgentPersona: event.target.checked })',
       'applyPatch({ nativeAgentPreset: event.target.checked })',
       'applyPatch({ imNativeAgentMode: event.target.checked })',
+      'applyPatch({ cardWorkbenchNativeAgentMode: event.target.checked })',
       'applyPatch({ agentPtcMode: event.target.checked })',
       'bootstrap.agentPtc?.available !== true',
       "t('settings.ptcModeUnavailable'",

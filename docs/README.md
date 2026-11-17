@@ -161,6 +161,7 @@
 - [`2026-10-11-workbench-reference-read.md`](../decisions/2026-10-11-workbench-reference-read.md) — 写卡工作台读参考文件：挂宿主默认文件工具行（v2）
 - [`2026-10-24-workbench-workspace-heal.md`](../decisions/2026-10-24-workbench-workspace-heal.md) — 写卡工作台内部工作区在每条入口都要能创建
 - [`2026-11-17-workbench-inventory-and-audition.md`](../decisions/2026-11-17-workbench-inventory-and-audition.md) — 写卡工作台库存读取/新建入口与一次性角色试演
+- [`2026-11-17-workbench-native-agent-mode.md`](../decisions/2026-11-17-workbench-native-agent-mode.md) — 行为设置：写卡工作台解锁原生 Agent 全能力（CardWorkbench Native）
 
 ### 剧本游玩
 

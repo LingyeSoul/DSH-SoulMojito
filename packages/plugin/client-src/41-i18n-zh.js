@@ -13,6 +13,8 @@
       'settings.agentContextInjectionHint': '给 AgentTavern 的提示词加三块参考数据：世界书激活命中、最相关的记忆与聊天总结。开启「会话开始时预载」后，常驻世界书条目由预载负责，这里只带关键词/向量命中。每块都标注为参考数据而非指令。默认关闭。',
       'settings.imNativeAgentMode': 'IM 模式解锁原生 Agent 全能力（AgentTavernIM Native）',
       'settings.imNativeAgentModeHint': 'IM 绑定会话改用 AgentTavernIM Native：在酒馆工具与 im_* 工具之外，挂载标准 DSH 工具（shell、文件、搜索、任务、定时、技能、目标、子代理、待办、网页、present）。回复仍必须走 im_send。本开关与 PTC 模式正交：PTC 只改变工具呈现方式（run_code + SDK），不改变工具集合。shell、文件写入与联网能力较强，只对信任的会话开启。',
+      'settings.cardWorkbenchNativeAgentMode': '写卡工作台解锁原生 Agent 全能力（CardWorkbench Native）',
+      'settings.cardWorkbenchNativeAgentModeHint': '工作台会话改用 CardWorkbench Native：在 24 件写卡工具之外，挂载文件、搜索、shell、任务、定时、技能、目标、子代理、待办、网页与 present。写卡方案与确认协议不变，只扩工具集合。shell、文件写入与联网能力较强，只对信任的工作台会话开启。本开关与 PTC 模式正交。',
       'settings.ptcMode': '启用 PTC 模式（AgentTavern / 写卡工作台 / AgentNovel）',
       'settings.ptcModeHint': 'Agent 工具改用宿主原生 PTC 呈现：模型只看到 run_code 与生成的工具 SDK。开关写入时立即挂载执行器；运行中的回合保持当前工具面，空闲后再切换。',
       'settings.ptcModeUnavailable': 'PTC 模式不可用：{reason}',

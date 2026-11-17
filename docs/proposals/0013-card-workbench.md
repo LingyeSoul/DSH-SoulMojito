@@ -26,6 +26,7 @@
 | 原版/工作版 | `tavern-store` 卡目录增加 `.original` 快照（导入时写一次）；工作版即现有文件 |
 | 排错入口 | 面板「交给工作台调试」：引用指定聊天 +楼层范围，工作台会话注入对应记录 |
 | 起始任务 | 修改卡 / 改世界书・预设・剧本 / 新建世界书 / 从素材制卡 / 转 MVU（0012 P3）/ 空白开始。2026-11-17：工作台面板列出插件内已导入的角色卡与世界书库存，逐项打开（同一目标复用同一工作台会话）或新建；角色卡/世界书分区行内同款入口，开场经 `agent.inject` 注入目标提示 |
+| 原生模式 | 行为设置 `cardWorkbenchNativeAgentMode` 选中 `card-workbench-native` preset：24 件写卡工具 + 标准 DSH 工具行（shell、文件、搜索、任务、定时、技能、子代理、待办、网页、present）。live 工作台会话在 `agent/created` / `agent/status(idle)` / 启动 sweep / 状态写入后收敛；写卡方案与确认协议不变，见 `decisions/2026-11-17-workbench-native-agent-mode.md` |
 | 会话命名 | card_create 成功后把所在工作台会话改名为卡名（2026-10-08 补充）：绑定记 `createdCard`（自绘侧边栏「写卡工作台」分组据此显示，最新出卡胜出），宿主会话标题经 agent 作用域 ctx 探测 `sessionTitle` 服务后 `rename` 固定；两路均 best-effort，失败不阻断出卡，非工作台绑定会话不受影响 |
 
 ## 3. 阶段划分

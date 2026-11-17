@@ -172,6 +172,84 @@
           - id: tool-fs
             name: '@deepseek-ai/dsh-tool-fs'
 
+    - id: preset-card-workbench-native
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: card-workbench-native
+        name: CardWorkbench Native
+        description: 写卡工作台加标准 DSH Agent 工具面（shell、文件、搜索、任务、技能、子代理、待办、网页等）。
+        order: 12
+        plugins:
+          - id: dsh-card-workbench
+            name: 'dsh-soulmojito/card-workbench'
+          # 工具行与 preset-agent-tavern-im-native 同款（DSH 0.2.2 线，
+          # 2026-11-10 对齐）；行为设置 cardWorkbenchNativeAgentMode 选中本预设。
+          # file 工具只声明一行 tool-fs（默认 read/write/edit），不再重复
+          # card-workbench 的只读文件行。
+          - id: tool-bash
+            name: '@deepseek-ai/dsh-tool-bash'
+            disabled: !!js process.platform === 'win32'
+          - id: tool-pwsh
+            name: '@deepseek-ai/dsh-tool-pwsh'
+            disabled: !!js process.platform !== 'win32'
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false
+          - id: tool-jobs
+            name: '@deepseek-ai/dsh-tool-jobs'
+          - id: tool-schedule
+            name: '@deepseek-ai/dsh-tool-schedule'
+          - id: skill-filesystem
+            name: '@deepseek-ai/dsh-skill-filesystem'
+          - id: tool-skill
+            name: '@deepseek-ai/dsh-tool-skill'
+          - id: command-goal
+            name: '@deepseek-ai/dsh-command-goal'
+          - id: tool-goal
+            name: '@deepseek-ai/dsh-tool-goal'
+          - id: delegation
+            name: cordis:group
+            group: true
+            isolate:
+              workflowEngine: true
+            config:
+              - id: tool-subagent-control
+                name: '@deepseek-ai/dsh-tool-subagent-control'
+              - id: tool-subagent
+                name: '@deepseek-ai/dsh-tool-subagent'
+                config:
+                  provider: spawn
+                  toolName: subagent
+                  modelSelection: true
+                  modelDiscovery: true
+              - id: tool-subagent-fork
+                name: '@deepseek-ai/dsh-tool-subagent'
+                config:
+                  provider: fork
+                  toolName: subagent_fork
+              - id: workflow-ptc
+                name: '@deepseek-ai/dsh-workflow-ptc'
+                config:
+                  provider: spawn
+              - id: tool-workflow
+                name: '@deepseek-ai/dsh-tool-workflow'
+          - id: tool-ask-user
+            name: '@deepseek-ai/dsh-tool-ask-user'
+          - id: tool-todo
+            name: '@deepseek-ai/dsh-tool-todo'
+            config:
+              allowParallelInProgress: true
+          - id: tool-web
+            name: '@deepseek-ai/dsh-tool-web'
+            config:
+              fetch: true
+              searchTimeoutMs: 60000
+          - id: present
+            name: '@deepseek-ai/dsh-tool-present'
+
     # 内部推理组合（DSH 0.2.1+）：spawn 子代理的 per-spawn toolFilter 被宿主
     # 删除后，无工具隔离改由独立 preset 承担。tavern_deduce 与 AgentNovel 的
     # W1 纯产稿子代理按 id 选择本组合；preset 内只有 reasoning 模块，它在挂载

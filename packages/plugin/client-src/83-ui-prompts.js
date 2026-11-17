@@ -303,6 +303,16 @@
             }),
             h('span', null, t('settings.imNativeAgentMode'))),
           h('p', { className: 'dt-hint' }, t('settings.imNativeAgentModeHint')),
+          // 写卡工作台的完整原生 Agent 工具面：与 PTC 呈现正交；工作台
+          // 计划/确认协议不变，只扩工具集合。
+          h('label', { className: 'dt-toggle' },
+            h('input', {
+              type: 'checkbox',
+              checked: bootstrap.state.cardWorkbenchNativeAgentMode === true,
+              onChange: (event) => applyPatch({ cardWorkbenchNativeAgentMode: event.target.checked }),
+            }),
+            h('span', null, t('settings.cardWorkbenchNativeAgentMode'))),
+          h('p', { className: 'dt-hint' }, t('settings.cardWorkbenchNativeAgentModeHint')),
           // Native PTC presentation for every bound Tavern agent architecture.
           h('label', { className: 'dt-toggle' },
             h('input', {

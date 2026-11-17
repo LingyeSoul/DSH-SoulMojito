@@ -4072,6 +4072,7 @@ var init_store = __esm({
       frontendAllowExternalResources: false,
       gamesDisableResign: false,
       cardWorkbenchPresetEnabled: false,
+      cardWorkbenchNativeAgentMode: false,
       agentNovelPresetEnabled: false,
       worldFollowsCharacter: true,
       disabledAutoWorlds: [],
@@ -5335,6 +5336,7 @@ var init_store = __esm({
           frontendAllowExternalResources: parsed.frontendAllowExternalResources === true,
           gamesDisableResign: parsed.gamesDisableResign === true,
           cardWorkbenchPresetEnabled: parsed.cardWorkbenchPresetEnabled === true,
+          cardWorkbenchNativeAgentMode: parsed.cardWorkbenchNativeAgentMode === true,
           agentNovelPresetEnabled: parsed.agentNovelPresetEnabled === true,
           worldFollowsCharacter: parsed.worldFollowsCharacter !== false,
           disabledAutoWorlds: normalizeStringList2(parsed.disabledAutoWorlds),
@@ -11440,7 +11442,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.8.1".trim() : "";
-  const commit = true ? normalizeCommit("b14e737") : void 0;
+  const commit = true ? normalizeCommit("6d3199b") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
