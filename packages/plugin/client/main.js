@@ -3090,9 +3090,10 @@ window.__ModuleLoader__.load({
       'panel.presets.deleteConfirm': 'Delete preset "{name}"?',
       'panel.presets.edit': 'Edit preset',
       'panel.presets.viewTitle': 'View preset: {name}',
-      'panel.presets.viewHint': 'Read-only preview. Choose Edit to make changes.',
+      'panel.presets.viewHint': 'Read-only preview. "Disabled" follows the prompt order table; "Not assembled" means the entry is outside the active order. Choose Edit to make changes.',
       'panel.presets.noPrompts': 'This preset has no prompt entries.',
       'panel.presets.disabled': 'Disabled',
+      'panel.presets.notInOrder': 'Not assembled',
       'panel.presets.samplerEmpty': 'No extra sampler fields.',
       'panel.presets.prompts': 'Prompt stack',
       'panel.presets.promptName': 'Prompt name',
@@ -3101,7 +3102,7 @@ window.__ModuleLoader__.load({
       'panel.presets.content': 'Content',
       'panel.presets.marker': 'Marker',
       'panel.presets.promptOrder': 'Prompt order',
-      'panel.presets.promptOrderHint': 'Drag a row (or use the arrows) to reorder; the checkbox decides whether that entry is assembled. Entries missing from this list do not participate.',
+      'panel.presets.promptOrderHint': 'Drag a row (or use the arrows) to reorder; the checkbox (or the entry\'s "Enabled" switch) decides whether that entry is assembled. Entries missing from this list do not participate.',
       'panel.presets.promptOrderEmpty': 'This preset has no prompt order entries.',
       'panel.presets.moveUp': 'Move up',
       'panel.presets.moveDown': 'Move down',
@@ -4384,9 +4385,10 @@ window.__ModuleLoader__.load({
       'panel.presets.deleteConfirm': '删除预设“{name}”？',
       'panel.presets.edit': '编辑预设',
       'panel.presets.viewTitle': '查看预设：{name}',
-      'panel.presets.viewHint': '只读预览；需要修改时点「编辑」。',
+      'panel.presets.viewHint': '只读预览；「已停用」按提示词顺序表判定，「未装配」表示不在生效顺序表里。需要修改时点「编辑」。',
       'panel.presets.noPrompts': '这个预设没有提示词条目。',
       'panel.presets.disabled': '已停用',
+      'panel.presets.notInOrder': '未装配',
       'panel.presets.samplerEmpty': '没有额外的采样字段。',
       'panel.presets.prompts': '提示词堆栈',
       'panel.presets.promptName': '提示词名称',
@@ -4395,7 +4397,7 @@ window.__ModuleLoader__.load({
       'panel.presets.content': '内容',
       'panel.presets.marker': '插槽标记',
       'panel.presets.promptOrder': '提示词顺序',
-      'panel.presets.promptOrderHint': '拖拽行（或用箭头）调整顺序；勾选框决定该条是否参与装配。不在本表里的提示词不会参与装配。',
+      'panel.presets.promptOrderHint': '拖拽行（或用箭头）调整顺序；勾选框决定该条是否参与装配，条目区的「启用」是同一个开关。不在本表里的提示词不会参与装配。',
       'panel.presets.promptOrderEmpty': '这个预设还没有顺序表条目。',
       'panel.presets.moveUp': '上移',
       'panel.presets.moveDown': '下移',
@@ -14725,6 +14727,7 @@ window.__ModuleLoader__.load({
         ? Object.fromEntries(Object.entries(data || {}).filter(([key]) => key !== 'prompts' && key !== 'prompt_order'))
         : (data || {})
       const samplerKeys = Object.keys(sampler)
+      const orderEntries = resolveOrderEntries(data?.prompt_order)
       return h(EditorDialog, {
         title: t('panel.presets.viewTitle', { name }),
         onClose,
@@ -14744,19 +14747,24 @@ window.__ModuleLoader__.load({
               h('h4', null, t('panel.presets.prompts')),
               prompts.length === 0
                 ? h('p', { className: 'dt-muted' }, t('panel.presets.noPrompts'))
-                : h('div', { className: 'dt-asset-list' }, prompts.map((prompt, index) => h('article', {
-                  key: `${prompt.identifier || 'prompt'}-${index}`,
-                  className: 'dt-asset-prompt',
-                },
-                h('div', { className: 'dt-asset-prompt-head' },
-                  h('strong', null, prompt.name || prompt.identifier || `#${index + 1}`),
-                  h('span', { className: 'dt-asset-prompt-id' }, prompt.identifier || ''),
-                  h('span', { className: 'dt-asset-prompt-role' }, prompt.role || 'system'),
-                  prompt.marker === true ? h(Pill, null, t('panel.presets.marker')) : null,
-                  prompt.system_prompt === false ? h(Pill, null, t('panel.presets.disabled')) : null),
-                typeof prompt.content === 'string' && prompt.content.trim() !== ''
-                  ? h('div', { className: 'dt-asset-copy' }, h(MarkdownText, { text: prompt.content }))
-                  : null))))
+                : h('div', { className: 'dt-asset-list' }, prompts.map((prompt, index) => {
+                  // 装配状态只认生效顺序表：'missing' = 不在表里，不参与装配。
+                  const state = prompt.marker === true ? 'marker' : orderEntryState(orderEntries, prompt)
+                  return h('article', {
+                    key: `${prompt.identifier || 'prompt'}-${index}`,
+                    className: 'dt-asset-prompt',
+                  },
+                  h('div', { className: 'dt-asset-prompt-head' },
+                    h('strong', null, prompt.name || prompt.identifier || `#${index + 1}`),
+                    h('span', { className: 'dt-asset-prompt-id' }, prompt.identifier || ''),
+                    h('span', { className: 'dt-asset-prompt-role' }, prompt.role || 'system'),
+                    state === 'marker' ? h(Pill, null, t('panel.presets.marker')) : null,
+                    state === 'missing' ? h(Pill, null, t('panel.presets.notInOrder')) : null,
+                    state === 'disabled' ? h(Pill, null, t('panel.presets.disabled')) : null),
+                  typeof prompt.content === 'string' && prompt.content.trim() !== ''
+                    ? h('div', { className: 'dt-asset-copy' }, h(MarkdownText, { text: prompt.content }))
+                    : null)
+                })))
             : null,
           h('section', { className: 'dt-asset-field' },
             h('h4', null, t('panel.presets.sampler')),
@@ -18239,6 +18247,10 @@ window.__ModuleLoader__.load({
     // 形态（detectPresetKind 按这两个数组判定），采样字段留空袋由编辑器维护。
     const BLANK_PRESET = { prompts: [], prompt_order: [] }
 
+    // 新建顺序表组沿用旧 dummy id：与手动新增提示词的归属一致，装配侧回落链
+    // （100001 → 100000 → 首组）可直接解析。
+    const NEW_ORDER_GROUP_ID = 100000
+
     /**
      * 生效的 prompt_order 组（与 tavern-pipeline/src/pipeline.ts 的
      * resolvePromptOrder 同口径）：优先 global dummy 100001，回落旧 dummy
@@ -18251,6 +18263,53 @@ window.__ModuleLoader__.load({
         if (index >= 0) return index
       }
       return list.length > 0 ? 0 : -1
+    }
+
+    /**
+     * 生效组的顺序表条目。编辑器条目区、顺序表与只读面板共用，避免三处各自
+     * 解析 prompt_order 造成口径漂移。
+     */
+    function resolveOrderEntries(sets) {
+      const list = Array.isArray(sets) ? sets : []
+      const index = resolveOrderIndex(list)
+      return index >= 0 ? (list[index].order || []) : []
+    }
+
+    /**
+     * 条目在生效顺序表里的状态：'enabled' | 'disabled' | 'missing'。
+     * 顺序表布尔为权威，缺布尔值时回落 `prompt.enabled !== false`（决策
+     * 2026-10-09）；`system_prompt` 只是分类标记，不参与判定。
+     */
+    function orderEntryState(entries, prompt) {
+      const slot = Array.isArray(entries) ? entries.find((entry) => entry?.identifier === prompt?.identifier) : undefined
+      if (slot === undefined) return 'missing'
+      const enabled = typeof slot.enabled === 'boolean' ? slot.enabled : prompt?.enabled !== false
+      return enabled ? 'enabled' : 'disabled'
+    }
+
+    /**
+     * 顺序表启用写入（纯函数）：条目已在生效组里就改布尔；不在表里时
+     * 开启 = 追加到表尾，关闭 = 原样返回。条目区开关与顺序表勾选共用。
+     */
+    function applyOrderEnabled(current, identifier, enabled) {
+      const sets = Array.isArray(current.prompt_order) ? current.prompt_order : []
+      const index = resolveOrderIndex(sets)
+      if (index < 0) {
+        if (!enabled) return current
+        return { ...current, prompt_order: [...sets, { character_id: NEW_ORDER_GROUP_ID, order: [{ identifier, enabled: true }] }] }
+      }
+      const order = sets[index].order || []
+      if (!order.some((entry) => entry.identifier === identifier)) {
+        if (!enabled) return current
+        return { ...current, prompt_order: sets.map((item, at) => at !== index ? item : { ...item, order: [...order, { identifier, enabled: true }] }) }
+      }
+      return {
+        ...current,
+        prompt_order: sets.map((item, at) => at !== index ? item : {
+          ...item,
+          order: order.map((entry) => entry.identifier === identifier ? { ...entry, enabled } : entry),
+        }),
+      }
     }
 
     function PresetEditor({ name, data, kind, onSave, onCancel }) {
@@ -18279,7 +18338,7 @@ window.__ModuleLoader__.load({
         const identifier = `customPrompt${prompts.length + 1}`
         const prompt = { name: 'New prompt', identifier, role: 'system', content: '', system_prompt: true }
         setDraft((current) => {
-          const order = Array.isArray(current.prompt_order) && current.prompt_order.length > 0 ? current.prompt_order.map((item) => ({ ...item, order: [...(item.order || []), { identifier, enabled: true }] })) : [{ character_id: 100000, order: [{ identifier, enabled: true }] }]
+          const order = Array.isArray(current.prompt_order) && current.prompt_order.length > 0 ? current.prompt_order.map((item) => ({ ...item, order: [...(item.order || []), { identifier, enabled: true }] })) : [{ character_id: NEW_ORDER_GROUP_ID, order: [{ identifier, enabled: true }] }]
           return { ...current, prompts: [...(current.prompts || []), prompt], prompt_order: order }
         })
       }
@@ -18299,18 +18358,11 @@ window.__ModuleLoader__.load({
         next.splice(to, 0, moved)
         return { ...current, prompt_order: sets.map((item, at) => at === index ? { ...item, order: next } : item) }
       })
-      const setOrderEnabled = (identifier, enabled) => setDraft((current) => {
-        const { sets, index } = resolvedOrder(current)
-        if (index < 0) return current
-        return {
-          ...current,
-          prompt_order: sets.map((item, at) => at !== index ? item : {
-            ...item,
-            order: (item.order || []).map((entry) => entry.identifier === identifier ? { ...entry, enabled } : entry),
-          }),
-        }
-      })
+      // 顺序表启用写入（装配唯一权威）：条目已在生效组里就改布尔；不在表里时
+      // 开启 = 追加到表尾，关闭 = 无操作。条目区开关与顺序表勾选共用这一处。
+      const setOrderEnabled = (identifier, enabled) => setDraft((current) => applyOrderEnabled(current, identifier, enabled))
       const [dragging, setDragging] = useState(-1)
+      const orderEntries = resolvedOrder(draft).order
       const removePrompt = (index) => {
         const identifier = prompts[index]?.identifier
         setDraft((current) => ({
@@ -18358,6 +18410,9 @@ window.__ModuleLoader__.load({
             h('label', { className: 'dt-editor-field' }, h('span', { className: 'dt-label' }, t('panel.presets.role')), h('select', { value: prompt.role || 'system', onChange: (event) => setPrompt(index, 'role', event.target.value) }, h('option', { value: 'system' }, 'system'), h('option', { value: 'user' }, 'user'), h('option', { value: 'assistant' }, 'assistant'))),
             h(EditorField, { label: t('panel.presets.content'), value: prompt.content, onChange: (value) => setPrompt(index, 'content', value), multiline: true, className: 'dt-editor-wide' }),
             h('div', { className: 'dt-editor-toggles dt-editor-wide' },
+              // 条目级启用开关与顺序表勾选同源同值：读写 prompt_order[].enabled，
+              // 不在表里时开启 = 追加到表尾（装配只认这张表）。
+              h(ToggleField, { label: t('panel.presets.enabled'), checked: orderEntryState(orderEntries, prompt) === 'enabled', onChange: (value) => setOrderEnabled(prompt.identifier, value) }),
               h(ToggleField, { label: t('panel.presets.marker'), checked: prompt.marker === true, onChange: (value) => setPrompt(index, 'marker', value) }),
               // `system_prompt` 只是「全局/预设提示词」的分类标记，不参与启用
               // 判定（tavern-pipeline 的 entryEnabled 只认顺序表 enabled）；旧标签

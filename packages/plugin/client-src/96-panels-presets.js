@@ -9,6 +9,10 @@
     // 形态（detectPresetKind 按这两个数组判定），采样字段留空袋由编辑器维护。
     const BLANK_PRESET = { prompts: [], prompt_order: [] }
 
+    // 新建顺序表组沿用旧 dummy id：与手动新增提示词的归属一致，装配侧回落链
+    // （100001 → 100000 → 首组）可直接解析。
+    const NEW_ORDER_GROUP_ID = 100000
+
     /**
      * 生效的 prompt_order 组（与 tavern-pipeline/src/pipeline.ts 的
      * resolvePromptOrder 同口径）：优先 global dummy 100001，回落旧 dummy
@@ -21,6 +25,53 @@
         if (index >= 0) return index
       }
       return list.length > 0 ? 0 : -1
+    }
+
+    /**
+     * 生效组的顺序表条目。编辑器条目区、顺序表与只读面板共用，避免三处各自
+     * 解析 prompt_order 造成口径漂移。
+     */
+    function resolveOrderEntries(sets) {
+      const list = Array.isArray(sets) ? sets : []
+      const index = resolveOrderIndex(list)
+      return index >= 0 ? (list[index].order || []) : []
+    }
+
+    /**
+     * 条目在生效顺序表里的状态：'enabled' | 'disabled' | 'missing'。
+     * 顺序表布尔为权威，缺布尔值时回落 `prompt.enabled !== false`（决策
+     * 2026-10-09）；`system_prompt` 只是分类标记，不参与判定。
+     */
+    function orderEntryState(entries, prompt) {
+      const slot = Array.isArray(entries) ? entries.find((entry) => entry?.identifier === prompt?.identifier) : undefined
+      if (slot === undefined) return 'missing'
+      const enabled = typeof slot.enabled === 'boolean' ? slot.enabled : prompt?.enabled !== false
+      return enabled ? 'enabled' : 'disabled'
+    }
+
+    /**
+     * 顺序表启用写入（纯函数）：条目已在生效组里就改布尔；不在表里时
+     * 开启 = 追加到表尾，关闭 = 原样返回。条目区开关与顺序表勾选共用。
+     */
+    function applyOrderEnabled(current, identifier, enabled) {
+      const sets = Array.isArray(current.prompt_order) ? current.prompt_order : []
+      const index = resolveOrderIndex(sets)
+      if (index < 0) {
+        if (!enabled) return current
+        return { ...current, prompt_order: [...sets, { character_id: NEW_ORDER_GROUP_ID, order: [{ identifier, enabled: true }] }] }
+      }
+      const order = sets[index].order || []
+      if (!order.some((entry) => entry.identifier === identifier)) {
+        if (!enabled) return current
+        return { ...current, prompt_order: sets.map((item, at) => at !== index ? item : { ...item, order: [...order, { identifier, enabled: true }] }) }
+      }
+      return {
+        ...current,
+        prompt_order: sets.map((item, at) => at !== index ? item : {
+          ...item,
+          order: order.map((entry) => entry.identifier === identifier ? { ...entry, enabled } : entry),
+        }),
+      }
     }
 
     function PresetEditor({ name, data, kind, onSave, onCancel }) {
@@ -49,7 +100,7 @@
         const identifier = `customPrompt${prompts.length + 1}`
         const prompt = { name: 'New prompt', identifier, role: 'system', content: '', system_prompt: true }
         setDraft((current) => {
-          const order = Array.isArray(current.prompt_order) && current.prompt_order.length > 0 ? current.prompt_order.map((item) => ({ ...item, order: [...(item.order || []), { identifier, enabled: true }] })) : [{ character_id: 100000, order: [{ identifier, enabled: true }] }]
+          const order = Array.isArray(current.prompt_order) && current.prompt_order.length > 0 ? current.prompt_order.map((item) => ({ ...item, order: [...(item.order || []), { identifier, enabled: true }] })) : [{ character_id: NEW_ORDER_GROUP_ID, order: [{ identifier, enabled: true }] }]
           return { ...current, prompts: [...(current.prompts || []), prompt], prompt_order: order }
         })
       }
@@ -69,18 +120,11 @@
         next.splice(to, 0, moved)
         return { ...current, prompt_order: sets.map((item, at) => at === index ? { ...item, order: next } : item) }
       })
-      const setOrderEnabled = (identifier, enabled) => setDraft((current) => {
-        const { sets, index } = resolvedOrder(current)
-        if (index < 0) return current
-        return {
-          ...current,
-          prompt_order: sets.map((item, at) => at !== index ? item : {
-            ...item,
-            order: (item.order || []).map((entry) => entry.identifier === identifier ? { ...entry, enabled } : entry),
-          }),
-        }
-      })
+      // 顺序表启用写入（装配唯一权威）：条目已在生效组里就改布尔；不在表里时
+      // 开启 = 追加到表尾，关闭 = 无操作。条目区开关与顺序表勾选共用这一处。
+      const setOrderEnabled = (identifier, enabled) => setDraft((current) => applyOrderEnabled(current, identifier, enabled))
       const [dragging, setDragging] = useState(-1)
+      const orderEntries = resolvedOrder(draft).order
       const removePrompt = (index) => {
         const identifier = prompts[index]?.identifier
         setDraft((current) => ({
@@ -128,6 +172,9 @@
             h('label', { className: 'dt-editor-field' }, h('span', { className: 'dt-label' }, t('panel.presets.role')), h('select', { value: prompt.role || 'system', onChange: (event) => setPrompt(index, 'role', event.target.value) }, h('option', { value: 'system' }, 'system'), h('option', { value: 'user' }, 'user'), h('option', { value: 'assistant' }, 'assistant'))),
             h(EditorField, { label: t('panel.presets.content'), value: prompt.content, onChange: (value) => setPrompt(index, 'content', value), multiline: true, className: 'dt-editor-wide' }),
             h('div', { className: 'dt-editor-toggles dt-editor-wide' },
+              // 条目级启用开关与顺序表勾选同源同值：读写 prompt_order[].enabled，
+              // 不在表里时开启 = 追加到表尾（装配只认这张表）。
+              h(ToggleField, { label: t('panel.presets.enabled'), checked: orderEntryState(orderEntries, prompt) === 'enabled', onChange: (value) => setOrderEnabled(prompt.identifier, value) }),
               h(ToggleField, { label: t('panel.presets.marker'), checked: prompt.marker === true, onChange: (value) => setPrompt(index, 'marker', value) }),
               // `system_prompt` 只是「全局/预设提示词」的分类标记，不参与启用
               // 判定（tavern-pipeline 的 entryEnabled 只认顺序表 enabled）；旧标签

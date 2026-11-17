@@ -187,12 +187,7 @@ AgentTavern 架构的对话是宿主原生表面，插件没有消息正文 slot
 ### 安装
 
 ```sh
-git clone https://github.com/LingyeSoul/DSH-SoulMojito.git
-cd DSH-SoulMojito
-pnpm install
-pnpm run build:plugin
-dsh plugin --profile web add ./packages/plugin
-dsh --profile web
+dsh plugin --profile web add github:LingyeSoul/DSH-SoulMojito#path:/packages/plugin
 ```
 
 桌面版（`desktop` profile）在「设置 → 插件 → Git 仓库」填子目录 spec：
@@ -341,13 +336,13 @@ Node half 是七个自包含 bundle：`index.mjs` 主入口，加 `agent` / `im-
 pnpm run check
 ```
 
-当前基线（2026-11-13 实测，宿主 DSH `0.2.2-rc.1`）：
+当前基线（2026-11-17 实测，宿主 DSH `0.2.2-rc.1`）：
 
 ```
-Test Files  216 passed (216)
-Tests       3519 passed | 2 skipped (3521)
+Test Files  217 passed (217)
+Tests       3533 passed | 2 skipped (3535)
 21 gates    全部 PASS
-built       v0.8.1 (853150b)
+built       v0.8.1 (d185752)
 ```
 
 - 2 项跳过都是 `skipIf` 环境条件项：Windows 检出上的 `host-package.spec.ts` POSIX-only 用例，以及 `im-store.spec.ts` 的 0600 权限位用例（Win32 无 POSIX mode）。

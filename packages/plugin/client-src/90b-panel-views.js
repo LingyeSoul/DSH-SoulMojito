@@ -138,6 +138,7 @@
         ? Object.fromEntries(Object.entries(data || {}).filter(([key]) => key !== 'prompts' && key !== 'prompt_order'))
         : (data || {})
       const samplerKeys = Object.keys(sampler)
+      const orderEntries = resolveOrderEntries(data?.prompt_order)
       return h(EditorDialog, {
         title: t('panel.presets.viewTitle', { name }),
         onClose,
@@ -157,19 +158,24 @@
               h('h4', null, t('panel.presets.prompts')),
               prompts.length === 0
                 ? h('p', { className: 'dt-muted' }, t('panel.presets.noPrompts'))
-                : h('div', { className: 'dt-asset-list' }, prompts.map((prompt, index) => h('article', {
-                  key: `${prompt.identifier || 'prompt'}-${index}`,
-                  className: 'dt-asset-prompt',
-                },
-                h('div', { className: 'dt-asset-prompt-head' },
-                  h('strong', null, prompt.name || prompt.identifier || `#${index + 1}`),
-                  h('span', { className: 'dt-asset-prompt-id' }, prompt.identifier || ''),
-                  h('span', { className: 'dt-asset-prompt-role' }, prompt.role || 'system'),
-                  prompt.marker === true ? h(Pill, null, t('panel.presets.marker')) : null,
-                  prompt.system_prompt === false ? h(Pill, null, t('panel.presets.disabled')) : null),
-                typeof prompt.content === 'string' && prompt.content.trim() !== ''
-                  ? h('div', { className: 'dt-asset-copy' }, h(MarkdownText, { text: prompt.content }))
-                  : null))))
+                : h('div', { className: 'dt-asset-list' }, prompts.map((prompt, index) => {
+                  // 装配状态只认生效顺序表：'missing' = 不在表里，不参与装配。
+                  const state = prompt.marker === true ? 'marker' : orderEntryState(orderEntries, prompt)
+                  return h('article', {
+                    key: `${prompt.identifier || 'prompt'}-${index}`,
+                    className: 'dt-asset-prompt',
+                  },
+                  h('div', { className: 'dt-asset-prompt-head' },
+                    h('strong', null, prompt.name || prompt.identifier || `#${index + 1}`),
+                    h('span', { className: 'dt-asset-prompt-id' }, prompt.identifier || ''),
+                    h('span', { className: 'dt-asset-prompt-role' }, prompt.role || 'system'),
+                    state === 'marker' ? h(Pill, null, t('panel.presets.marker')) : null,
+                    state === 'missing' ? h(Pill, null, t('panel.presets.notInOrder')) : null,
+                    state === 'disabled' ? h(Pill, null, t('panel.presets.disabled')) : null),
+                  typeof prompt.content === 'string' && prompt.content.trim() !== ''
+                    ? h('div', { className: 'dt-asset-copy' }, h(MarkdownText, { text: prompt.content }))
+                    : null)
+                })))
             : null,
           h('section', { className: 'dt-asset-field' },
             h('h4', null, t('panel.presets.sampler')),
