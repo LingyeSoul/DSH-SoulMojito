@@ -3481,6 +3481,8 @@ function normalizeTavernSessionBinding(value) {
       architecture: "card-workbench",
       sourceCharacter: typeof candidate.sourceCharacter === "string" ? candidate.sourceCharacter : "",
       sourceChatId: typeof candidate.sourceChatId === "string" ? candidate.sourceChatId : "",
+      targetCharacter: typeof candidate.targetCharacter === "string" ? candidate.targetCharacter : "",
+      targetWorld: typeof candidate.targetWorld === "string" ? candidate.targetWorld : "",
       createdCard: typeof candidate.createdCard === "string" ? candidate.createdCard : "",
       ...typeof candidate.title === "string" && candidate.title.trim() !== "" ? { title: candidate.title } : {}
     };
@@ -11438,7 +11440,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.8.1".trim() : "";
-  const commit = true ? normalizeCommit("853150b") : void 0;
+  const commit = true ? normalizeCommit("b14e737") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {

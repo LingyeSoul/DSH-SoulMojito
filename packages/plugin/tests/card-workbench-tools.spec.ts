@@ -15,7 +15,7 @@ const WORKING_DESCRIPTION = 'B'.repeat(100)
 interface RegisteredTool {
   name: string
   parameters: { properties: Record<string, unknown> }
-  execute(args: Record<string, unknown>, exec?: { signal?: AbortSignal }): Promise<any>
+  execute(args: Record<string, unknown>, exec?: { signal?: AbortSignal; agent?: unknown }): Promise<any>
 }
 
 function makeRequest(body: unknown, url: string) {
@@ -124,8 +124,8 @@ describe('Card Workbench tools and original snapshots', () => {
     expect(kernel).toContain('explicit confirmation')
     expect(kernel).toContain('world_create')
     expect([...tools.keys()]).toEqual([
-      'card_get', 'card_put', 'card_original_get', 'card_restore_original',
-      'card_delete', 'card_plan_propose', 'world_plan_propose',
+      'card_list', 'card_get', 'card_put', 'card_original_get', 'card_restore_original',
+      'card_delete', 'card_plan_propose', 'card_audition', 'world_plan_propose',
       'world_list', 'world_get', 'world_put', 'world_create',
       'world_delete', 'world_rename', 'world_bind', 'world_copy',
       'preset_get', 'preset_put', 'chat_log_read',
@@ -157,6 +157,66 @@ describe('Card Workbench tools and original snapshots', () => {
     expect((await store.getCharacter(CHARACTER))!.card.data.description).toBe(WORKING_DESCRIPTION)
     // 快照文件本身是规范 JSON（encodeCharacterCardJson 形态），人可读可 diff。
     expect(JSON.parse(readFileSync(snapshotFile, 'utf8'))).toMatchObject({ spec: 'chara_card_v2' })
+  })
+
+  it('card_list enumerates the imported card library with metadata', async () => {
+    const list = await tools.get('card_list')!.execute({})
+    expect(list.count).toBeGreaterThanOrEqual(1)
+    expect(list.cards).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: CHARACTER,
+        world: 'Workbench Lore',
+        tags: [],
+        alternateGreetings: 0,
+      }),
+    ]))
+  })
+
+  it('card_audition spawns one reasoning-only subagent and returns its reply', async () => {
+    // 宿主 SubAgent seam 无法在单测里真实启动：用 seam 形状的 stub 验证
+    // 派生请求（无工具 preset、单条 prompt、caller delivery）与结果收口。
+    let captured: unknown
+    let disposed = false
+    const runtime = {
+      startActivation: async (spec: unknown) => {
+        captured = spec
+        return {
+          childId: 'audition-child',
+          result: Promise.resolve({
+            output: [{ type: 'text', text: '  In-character reply.  ' }],
+            stopReason: 'completed',
+          }),
+          dispose: async () => { disposed = true },
+        }
+      },
+    }
+    const outcome = await tools.get('card_audition')!.execute(
+      { character: CHARACTER, userMessage: 'Hello there.' },
+      { agent: { ctx: { get: (name: string) => name === 'subagents' ? runtime : undefined } } },
+    )
+    expect(outcome).toEqual({
+      character: CHARACTER,
+      reply: 'In-character reply.',
+      stopReason: 'completed',
+      truncated: false,
+    })
+    expect(disposed).toBe(true)
+    expect(captured).toMatchObject({
+      provider: 'spawn',
+      delivery: 'caller',
+      request: { agentPreset: 'agent-reasoning' },
+    })
+    const serialized = JSON.stringify(captured)
+    expect(serialized).toContain(CHARACTER)
+    expect(serialized).toContain('Hello there.')
+    expect(serialized).toContain('Original personality')
+  })
+
+  it('card_audition fails clearly when the host subagent seam is absent', async () => {
+    await expect(tools.get('card_audition')!.execute(
+      { character: CHARACTER, userMessage: 'Hello there.' },
+      { agent: { ctx: {} } },
+    )).rejects.toThrow('subagent runtime is unavailable')
   })
 
   it('card_get returns a working-copy summary with lengths and extension keys', async () => {

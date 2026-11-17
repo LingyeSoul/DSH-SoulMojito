@@ -2923,6 +2923,19 @@ window.__ModuleLoader__.load({
       'workbench.world.remove': 'remove',
       'workbench.sessionLabel': 'CardWorkbench',
       'workbench.opening': 'Opening workbench…',
+      'workbench.library.cards': 'Character cards in the library',
+      'workbench.library.cardsHint': 'Every imported card can be opened in a workbench session. The agent reads the working copy first; the same card always reopens the same session.',
+      'workbench.library.cardsEmpty': 'No character cards imported yet',
+      'workbench.library.filter': 'Filter character cards…',
+      'workbench.library.newCard': 'New character card',
+      'workbench.library.editCard': 'Open in workbench',
+      'workbench.library.worlds': 'World books in the library',
+      'workbench.library.worldsHint': 'Open an existing book to read or edit it; the agent starts from the book\'s current entries.',
+      'workbench.library.worldsEmpty': 'No world books yet',
+      'workbench.library.newWorld': 'New world book',
+      'workbench.library.editWorld': 'Open in workbench',
+      'workbench.cardSessionLabel': 'Card · {character}',
+      'workbench.worldSessionLabel': 'World · {world}',
       'workbench.chatSessionLabel': 'Card · {character} · {chat}',
       'workbench.bindTimeout': 'Workbench session binding timed out.',
       'workbench.renamePrompt': 'Rename Card Workbench session',
@@ -2948,6 +2961,7 @@ window.__ModuleLoader__.load({
       'panel.filterEmpty': 'No matching items',
       'panel.characters.empty': 'No character cards imported',
       'panel.characters.viewCard': 'View card',
+      'panel.characters.workbench': 'Open "{name}" in the Card Workbench',
       'panel.characters.viewTitle': 'View character: {name}',
       'panel.characters.viewHint': 'Read-only preview. Choose Edit to make changes.',
       'panel.characters.version': 'Card version: {version}',
@@ -3002,6 +3016,7 @@ window.__ModuleLoader__.load({
       'panel.characters.duplicate': 'Character "{name}" already exists; creating it again would overwrite that card. Pick another name or delete the existing card first.',
       'panel.characters.createFailed': 'Failed to create card: {message}',
       'panel.worlds.entries': '{count} entries',
+      'panel.worlds.workbench': 'Open world book "{name}" in the Card Workbench',
       'panel.worlds.view': 'View world book: {name}',
       'panel.worlds.viewTitle': 'View world book: {name}',
       'panel.worlds.viewHint': 'Read-only preview. Choose Edit to make changes.',
@@ -4200,6 +4215,19 @@ window.__ModuleLoader__.load({
       'workbench.world.remove': '删除',
       'workbench.sessionLabel': '写卡工作台',
       'workbench.opening': '正在打开写卡工作台…',
+      'workbench.library.cards': '角色卡库存',
+      'workbench.library.cardsHint': '库存中的每张卡都能在工作台中打开；Agent 先读取工作版，同一张卡始终回到同一个工作台会话。',
+      'workbench.library.cardsEmpty': '还没有导入角色卡',
+      'workbench.library.filter': '筛选角色卡…',
+      'workbench.library.newCard': '新建角色卡',
+      'workbench.library.editCard': '在工作台中修改',
+      'workbench.library.worlds': '世界书库存',
+      'workbench.library.worldsHint': '打开已有世界书读取或修改；Agent 从这本书的当前条目开始。',
+      'workbench.library.worldsEmpty': '还没有世界书',
+      'workbench.library.newWorld': '新建世界书',
+      'workbench.library.editWorld': '在工作台中修改',
+      'workbench.cardSessionLabel': '角色卡 · {character}',
+      'workbench.worldSessionLabel': '世界书 · {world}',
       'workbench.chatSessionLabel': '写卡 · {character} · {chat}',
       'workbench.bindTimeout': '写卡工作台会话绑定超时。',
       'workbench.renamePrompt': '重命名写卡会话',
@@ -4225,6 +4253,7 @@ window.__ModuleLoader__.load({
       'panel.filterEmpty': '没有匹配项',
       'panel.characters.empty': '尚未导入角色卡',
       'panel.characters.viewCard': '查看卡面',
+      'panel.characters.workbench': '在工作台中修改「{name}」',
       'panel.characters.viewTitle': '查看角色卡：{name}',
       'panel.characters.viewHint': '只读预览；需要修改时点「编辑」。',
       'panel.characters.version': '角色卡版本：{version}',
@@ -4279,6 +4308,7 @@ window.__ModuleLoader__.load({
       'panel.characters.duplicate': '已存在同名角色「{name}」，再次创建会覆盖原卡。请换个名字，或先删除已有角色。',
       'panel.characters.createFailed': '新建角色卡失败：{message}',
       'panel.worlds.entries': '{count} 条目',
+      'panel.worlds.workbench': '在工作台中修改世界书「{name}」',
       'panel.worlds.view': '查看世界书：{name}',
       'panel.worlds.viewTitle': '查看世界书：{name}',
       'panel.worlds.viewHint': '只读预览；需要修改时点「编辑」。',
@@ -6266,20 +6296,28 @@ window.__ModuleLoader__.load({
     // workbench-open（提案 0013）：与 novel-open 同款桥接——服务端负责绑定 +
     // recompose card-workbench preset；发送后轮询 bootstrap 直到会话出现在
     // sessionBindings 且 architecture === 'card-workbench'、来源身份匹配。
-    // source 为 null 时匹配自由工作台（sourceCharacter/sourceChatId 均空）。
-    function workbenchBindingMatches(binding, source) {
+    // 会话身份 = 来源聊天（source）+ 库存目标（target）：聊天侧「交给工作台」
+    // 一聊一会话，库存入口一卡/一书一会话；source 为 null 且 target 为空时
+    // 匹配自由工作台（四项身份均空）。target.character / target.world 至少
+    // 一个非空，两者可同时给出。
+    function workbenchBindingMatches(binding, source, target) {
       if (binding?.architecture !== 'card-workbench') return false
-      return source
+      const sourceMatches = source
         ? binding.sourceCharacter === source.character && binding.sourceChatId === source.chatId
         : !binding.sourceCharacter && !binding.sourceChatId
+      const targetCharacter = target?.character || ''
+      const targetWorld = target?.world || ''
+      return sourceMatches
+        && (binding.targetCharacter || '') === targetCharacter
+        && (binding.targetWorld || '') === targetWorld
     }
 
-    async function waitForWorkbenchBinding(sessionId, source) {
+    async function waitForWorkbenchBinding(sessionId, source, target) {
       for (let attempt = 0; attempt < 25; attempt += 1) {
         try {
           const bootstrap = await refreshBootstrap()
           const binding = bootstrap?.state?.sessionBindings?.[sessionId]
-          if (workbenchBindingMatches(binding, source)) return binding
+          if (workbenchBindingMatches(binding, source, target)) return binding
         } catch {
           // Bootstrap may briefly fail while the server binds; keep polling.
         }
@@ -6293,7 +6331,9 @@ window.__ModuleLoader__.load({
     // 与新建角色卡向导走 fresh 每次新建（幂等复用会把新建短路成跳转旧会话，
     // 决策 2026-10-08 workbench-blank-reuse 客户端补充）。工作台会话落在专用
     // 内部工作区（Tavern Workbench (internal)）。
-    function workbenchSessionLabel(source, ordinal = 0) {
+    function workbenchSessionLabel(source, ordinal = 0, target = null) {
+      if (target?.character) return translate('workbench.cardSessionLabel', { character: target.character })
+      if (target?.world) return translate('workbench.worldSessionLabel', { world: target.world })
       return source
         ? translate('workbench.chatSessionLabel', {
           character: source.character,
@@ -6313,16 +6353,17 @@ window.__ModuleLoader__.load({
       void ensureWorkbenchWorkspace(ctx).catch(() => {})
     }
 
-    async function openWorkbenchSession(ctx, source = null, { fresh = false } = {}) {
+    async function openWorkbenchSession(ctx, source = null, { fresh = false, target = null, opening = '' } = {}) {
       update({ navigationStatus: translate('workbench.opening') })
       try {
         // 幂等复用只服务「回到已有工作台」的入口（聊天侧「交给工作台」按来源
-        // 身份复用，一聊一会话）；fresh 入口（侧栏「+」、新建角色卡向导）必须
-        // 跳过——否则同来源会话存活期间点「新建」永远只是跳回旧会话。
+        // 身份复用，一聊一会话；库存入口按目标资产复用，一卡/一书一会话）；
+        // fresh 入口（侧栏「+」、新建向导）必须跳过——否则同来源会话存活期间
+        // 点「新建」永远只是跳回旧会话。
         if (!fresh) {
           const sessions = ctx.sessions.list.getSnapshot()
           const existing = Object.entries(snapshot.bootstrap.state.sessionBindings || {})
-            .find(([sessionId, binding]) => workbenchBindingMatches(binding, source) && sessions.byId[sessionId])
+            .find(([sessionId, binding]) => workbenchBindingMatches(binding, source, target) && sessions.byId[sessionId])
           if (existing) {
             openWorkbenchSessionView(ctx, existing[0])
             return existing[0]
@@ -6336,23 +6377,28 @@ window.__ModuleLoader__.load({
         try {
           const binding = ctx.sessions.binding(sessionId)
           if (!binding) throw new Error(translate('error.noBinding'))
-          const commandPayload = base64Url(JSON.stringify(source
-            ? { action: 'workbench-open', sourceCharacter: source.character, sourceChatId: source.chatId }
-            : { action: 'workbench-open' }))
+          const commandPayload = base64Url(JSON.stringify({
+            action: 'workbench-open',
+            ...(source ? { sourceCharacter: source.character, sourceChatId: source.chatId } : {}),
+            ...(target?.character ? { targetCharacter: target.character } : {}),
+            ...(target?.world ? { targetWorld: target.world } : {}),
+            ...(opening ? { opening } : {}),
+          }))
           const result = await binding.session.command(`/dsh-soulmojito-session ${commandPayload}`)
           if (!result?.ok || !result.value?.matched) {
             throw new Error(result.error?.message || translate('error.activationFailed'))
           }
           reserveTavernSession(ctx, sessionId)
-          const bound = await waitForWorkbenchBinding(sessionId, source)
+          const bound = await waitForWorkbenchBinding(sessionId, source, target)
           if (!bound) throw new Error(translate('workbench.bindTimeout'))
           // 多自由工作台并存时按现存数给宿主标题带序号（第 2 个起），面板列表
-          // WorkbenchList 用同款序号区分同名条目；聊天侧工作台按来源身份天然
-          // 唯一，出卡后统一改名为卡名。
-          const freeOrdinal = source ? 0 : 1 + Object.entries(snapshot.bootstrap.state.sessionBindings || {})
-            .filter(([sid, binding]) => sid !== sessionId && workbenchBindingMatches(binding, null) && ctx.sessions.list.getSnapshot().byId[sid])
+          // WorkbenchList 用同款序号区分同名条目；聊天侧与库存目标工作台按身份
+          // 天然唯一，出卡后统一改名为卡名。
+          const targetBound = target !== null && Boolean(target.character || target.world)
+          const freeOrdinal = source || targetBound ? 0 : 1 + Object.entries(snapshot.bootstrap.state.sessionBindings || {})
+            .filter(([sid, binding]) => sid !== sessionId && workbenchBindingMatches(binding, null, null) && ctx.sessions.list.getSnapshot().byId[sid])
             .length
-          await binding.session.rename(workbenchSessionLabel(source, freeOrdinal)).catch(() => {})
+          await binding.session.rename(workbenchSessionLabel(source, freeOrdinal, target)).catch(() => {})
           openSessionView(ctx, sessionId)
           return sessionId
         } finally {
@@ -11492,14 +11538,18 @@ window.__ModuleLoader__.load({
         .filter(([sessionId, binding]) => binding?.architecture === 'card-workbench' && sessionIds.includes(sessionId))
       // 多自由工作台并存时同名条目按枚举序号区分（第 2 个起带号，与创建时
       // 宿主标题的计数序号同族；删会话后序号重排仅为显示层变化）。
-      const freeTotal = entries.filter(([, binding]) => !binding.sourceCharacter && !binding.sourceChatId).length
+      const freeTotal = entries.filter(([, binding]) => !binding.sourceCharacter && !binding.sourceChatId
+        && !binding.targetCharacter && !binding.targetWorld).length
       let freeOrdinal = 0
       const labels = entries.map(([, binding]) => {
         // 用户显式改的名压过一切派生标签（服务端出卡改名同样让位）。
         if (binding.title) return binding.title
         // 出卡后会话改名为卡名（提案 0013 补充）：createdCard 优先于来源
-        // 聊天/自由工作台标签，与服务端 sessionTitle.rename 固定的宿主标题一致。
+        // 聊天/库存目标/自由工作台标签，与服务端 sessionTitle.rename 固定的
+        // 宿主标题一致。
         if (binding.createdCard) return binding.createdCard
+        if (binding.targetCharacter) return t('workbench.cardSessionLabel', { character: binding.targetCharacter })
+        if (binding.targetWorld) return t('workbench.worldSessionLabel', { world: binding.targetWorld })
         if (binding.sourceCharacter) return `${binding.sourceCharacter} · ${String(binding.sourceChatId).replace(/\.jsonl$/i, '')}`
         freeOrdinal += 1
         return freeTotal > 1 && freeOrdinal > 1 ? `${t('nav.workbenchFree')} ${freeOrdinal}` : t('nav.workbenchFree')
@@ -13573,7 +13623,7 @@ window.__ModuleLoader__.load({
       { id: 'novels', group: 'content', icon: IconEditOutline16, label: (t) => t('panel.section.novels'), component: (host) => h(PanelNovels, { ctx: host.ctx }) },
       { id: 'groups', group: 'content', icon: IconPlusOutline16, label: (t) => t('panel.section.groups'), component: () => h(GroupBand) },
       { id: 'personas', group: 'content', icon: IconPersonalizationOutline16, label: (t) => t('panel.section.personas'), component: () => h(PersonaBand) },
-      { id: 'worlds', group: 'content', icon: IconBrowseOutline16, label: (t) => t('panel.section.worlds'), component: (host) => h(PanelWorlds, { useSessions: host.useSessions }) },
+      { id: 'worlds', group: 'content', icon: IconBrowseOutline16, label: (t) => t('panel.section.worlds'), component: (host) => h(PanelWorlds, { ctx: host.ctx, useSessions: host.useSessions }) },
       // 快速回复（契约 2026-11-12 §2.6）：集合 CRUD + composer 按钮行总开关。
       // content 组——它是输入辅助资产，与卡/书/预设同层。
       { id: 'quickReplies', group: 'content', icon: IconQueueOutline14, label: (t) => t('panel.section.quickReplies'), component: () => h(QuickRepliesBand) },
@@ -13594,7 +13644,7 @@ window.__ModuleLoader__.load({
       { id: 'scripts', group: 'content', icon: IconBookOutline16, label: (t) => t('panel.section.scripts'), component: () => h(PanelScripts) },
       { id: 'regex', group: 'system', icon: IconSearchOutline16, label: (t) => t('panel.section.regex'), component: (host) => h(RegexBand, { useSessions: host.useSessions }) },
       { id: 'variables', group: 'session', icon: IconDataOutline16, label: (t) => t('panel.section.variables'), component: (host) => h(PanelVariables, { useSessions: host.useSessions }) },
-      { id: 'workbench', group: 'system', icon: IconCheckOutline16, label: (t) => t('panel.section.workbench'), component: () => h(PanelWorkbench) },
+      { id: 'workbench', group: 'system', icon: IconCheckOutline16, label: (t) => t('panel.section.workbench'), component: (host) => h(PanelWorkbench, { ctx: host.ctx }) },
       // 第 14 个分区「游戏」（提案 0018 §4.3，P1）：清单 + 开局 + 本聊天对局面
       // （GameSurface 持久 iframe；games/revision 1s 轮询仅在存在未终局会话时
       // 进行，页面不可见停发）。自绘手柄图标（2026-10-14），与总览的 sparkle 区分。
@@ -13919,11 +13969,20 @@ window.__ModuleLoader__.load({
         if (launching) return
         setLaunching(true)
         setError('')
-        // 向导语义是「新建角色卡」：每次拉起都是新的写卡会话，不复用既有绑定。
-        void openWorkbenchSession(ctx, null, { fresh: true })
+        // 向导语义是「新建角色卡」：每次拉起都是新的写卡会话，不复用既有绑定，
+        // 并携带 opening 提示让 agent 直接进入新建卡协议。
+        void openWorkbenchSession(ctx, null, { fresh: true, opening: 'new-card' })
           .then(() => setGuideOpen(false))
           .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
           .finally(() => setLaunching(false))
+      }
+      // 已有库存卡：按卡名打开（或复用）目标工作台。服务端把 targetCharacter
+      // 写进绑定并注入开场提示，agent 首轮就知道要读哪张卡；同一张卡始终回到
+      // 同一个工作台会话。
+      const openCardInWorkbench = (name) => {
+        setError('')
+        void openWorkbenchSession(ctx, null, { target: { character: name } })
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
       }
       const characters = state.bootstrap.characters
       // 名称过滤（2026-10-21 分页 UX）：卡多了以后整屏扫读——过滤框按名匹配，
@@ -13974,6 +14033,14 @@ window.__ModuleLoader__.load({
                 ? h(Pill, { active: true }, t('panel.characters.active'))
                 : h(Button, { size: 'sm', variant: 'outline', onClick: () => run(patchState({ activeCharacter: name })) }, t('panel.characters.setActive')),
               h(Button, { size: 'sm', variant: 'ghost', 'aria-haspopup': 'dialog', onClick: () => viewCard(name) }, t('panel.characters.viewCard')),
+              h(Button, {
+                size: 'sm',
+                variant: 'ghost',
+                icon: h(IconSparkle16),
+                'aria-label': t('panel.characters.workbench', { name }),
+                title: t('panel.characters.workbench', { name }),
+                onClick: () => openCardInWorkbench(name),
+              }),
               h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editCard(name) }, t('panel.edit')),
               h(Button, {
                 size: 'sm',
@@ -14114,7 +14181,7 @@ window.__ModuleLoader__.load({
         error ? h('p', { className: 'dt-error' }, error) : null))
     }
 
-    function PanelWorlds({ useSessions }) {
+    function PanelWorlds({ ctx, useSessions }) {
       const state = useTavernStore()
       const t = useTranslate()
       const [error, setError] = useState('')
@@ -14186,6 +14253,13 @@ window.__ModuleLoader__.load({
               setError(cause instanceof Error ? cause.message : String(cause))
             })
         }
+      }
+      // 已有库存世界书：按书名打开（或复用）目标工作台会话；服务端写
+      // targetWorld 并注入开场提示，agent 首轮先读这本书。
+      const openWorldInWorkbench = (name) => {
+        setError('')
+        void openWorkbenchSession(ctx, null, { target: { world: name } })
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
       }
       const save = (name, book) => saveWorldBook(name, book).then((saved) => {
         const next = saved?.name || name
@@ -14261,6 +14335,14 @@ window.__ModuleLoader__.load({
                 title: t('panel.worlds.view', { name }),
                 onClick: () => viewBook(name),
               }, t('panel.worlds.entries', { count: books[name]?.entries?.length ?? state.bootstrap.worldEntryCounts?.[name] ?? 0 })),
+              h(Button, {
+                size: 'sm',
+                variant: 'ghost',
+                icon: h(IconSparkle16),
+                'aria-label': t('panel.worlds.workbench', { name }),
+                title: t('panel.worlds.workbench', { name }),
+                onClick: () => openWorldInWorkbench(name),
+              }),
               h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editBook(name) }, t('panel.edit')),
               h(Button, { size: 'sm', variant: 'ghost', icon: h(IconDownloadOutline16), 'aria-label': t('panel.exportJson'), title: t('panel.exportJson'), onClick: () => downloadAsset(`export/world/${encodeURIComponent(name)}`, `${name}.json`) }),
               h(Button, {
@@ -16621,7 +16703,99 @@ window.__ModuleLoader__.load({
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
 
-    function PanelWorkbench() {
+    // 库存浏览（2026-11-17 全能工作台）：插件内已导入的角色卡与世界书是
+    // 工作台的资源面——列表直接来自 bootstrap，点「在工作台中修改」按目标
+    // 身份复用/新建工作台会话（服务端把目标写进绑定并注入开场提示）；新建
+    // 入口每次开 fresh 工作台并携带 opening 任务提示，避免复用旧会话把新建
+    // 短路成跳转。
+    function WorkbenchLibraryBand({ ctx }) {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const [characterFilter, setCharacterFilter] = useState('')
+      const [busy, setBusy] = useState('')
+      const [error, setError] = useState('')
+      const launch = (key, action) => {
+        if (busy !== '') return
+        setBusy(key)
+        setError('')
+        void action()
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setBusy(''))
+      }
+      const openTarget = (key, target) => launch(key, () => openWorkbenchSession(ctx, null, { target }))
+      const startNew = (key, opening) => launch(key, () => openWorkbenchSession(ctx, null, { fresh: true, opening }))
+      const characters = state.bootstrap.characters || []
+      const worlds = state.bootstrap.worlds || []
+      const counts = state.bootstrap.worldEntryCounts || {}
+      const query = characterFilter.trim().toLowerCase()
+      const visibleCharacters = query === ''
+        ? characters
+        : characters.filter((name) => name.toLowerCase().includes(query))
+      return h(React.Fragment, null,
+        h('section', { className: 'dt-settings-band' },
+          h('div', { className: 'dt-workbench-library-head' },
+            h('h3', null, t('workbench.library.cards')),
+            h(Button, {
+              size: 'sm',
+              variant: 'primary',
+              icon: h(IconPlusOutline16),
+              disabled: busy !== '',
+              onClick: () => startNew('new-card', 'new-card'),
+            }, t('workbench.library.newCard'))),
+          h('p', { className: 'dt-hint' }, t('workbench.library.cardsHint')),
+          characters.length > 0
+            ? h('div', { className: 'dt-filter-row' },
+              h(Input, {
+                icon: h(IconSearchOutline16),
+                placeholder: t('workbench.library.filter'),
+                'aria-label': t('workbench.library.filter'),
+                value: characterFilter,
+                onChange: (event) => setCharacterFilter(event.target.value),
+              }))
+            : null,
+          characters.length === 0
+            ? h('p', { className: 'dt-muted' }, t('workbench.library.cardsEmpty'))
+            : visibleCharacters.length === 0
+              ? h('p', { className: 'dt-muted' }, t('panel.filterEmpty'))
+              : h('div', { className: 'dt-workbench-library-list' },
+                visibleCharacters.map((name) => h('div', { key: name, className: 'dt-workbench-library-row' },
+                  h('span', { className: 'dt-workbench-library-name', title: name }, name),
+                  h(Button, {
+                    size: 'sm',
+                    variant: 'ghost',
+                    icon: h(IconSparkle16),
+                    disabled: busy !== '',
+                    onClick: () => openTarget(`card:${name}`, { character: name }),
+                  }, t('workbench.library.editCard')))))),
+        h('section', { className: 'dt-settings-band' },
+          h('div', { className: 'dt-workbench-library-head' },
+            h('h3', null, t('workbench.library.worlds')),
+            h(Button, {
+              size: 'sm',
+              variant: 'primary',
+              icon: h(IconPlusOutline16),
+              disabled: busy !== '',
+              onClick: () => startNew('new-world', 'new-world'),
+            }, t('workbench.library.newWorld'))),
+          h('p', { className: 'dt-hint' }, t('workbench.library.worldsHint')),
+          worlds.length === 0
+            ? h('p', { className: 'dt-muted' }, t('workbench.library.worldsEmpty'))
+            : h('div', { className: 'dt-workbench-library-list' },
+              worlds.map((name) => h('div', { key: name, className: 'dt-workbench-library-row' },
+                h('span', { className: 'dt-workbench-library-name', title: name }, name),
+                h('span', { className: 'dt-workbench-library-meta' }, t('panel.worlds.entries', { count: counts[name] ?? 0 })),
+                h(Button, {
+                  size: 'sm',
+                  variant: 'ghost',
+                  icon: h(IconSparkle16),
+                  disabled: busy !== '',
+                  onClick: () => openTarget(`world:${name}`, { world: name }),
+                }, t('workbench.library.editWorld')))))),
+        error ? h('p', { className: 'dt-error' }, error) : null,
+        busy !== '' ? h('p', { className: 'dt-hint' }, t('workbench.opening')) : null)
+    }
+
+    function PanelWorkbench({ ctx }) {
       const t = useTranslate()
       const [plans, setPlans] = useState(null)
       const [error, setError] = useState('')
@@ -16649,6 +16823,7 @@ window.__ModuleLoader__.load({
           .finally(() => setBusyId(''))
       }
       return h(React.Fragment, null,
+        h(WorkbenchLibraryBand, { ctx }),
         h('section', { className: 'dt-settings-band' },
           h('p', { className: 'dt-hint' }, t('workbench.hint')),
           h('div', { className: 'dt-imports' },
@@ -16751,6 +16926,7 @@ window.__ModuleLoader__.load({
           onSaved: () => { setEditing(null); void reload() },
         }) : null)
     }
+
 
     // Mod 管理分区（提案 0015 §3.5 P1）：列表数据来自 bootstrap.mods 投影，
     // 全局开关读 bootstrap.state.modsEnabled；写操作走 /mods 管理路由并重取
@@ -17702,6 +17878,11 @@ window.__ModuleLoader__.load({
         .dt-script-bound-chip>button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
         .dt-script-paste{display:flex;flex-direction:column;gap:8px;margin-top:10px;padding:10px;border:1px dashed var(--dsw-alias-border-l2);border-radius:8px}
         .dt-workbench-list{display:flex;flex-direction:column;gap:10px}
+        .dt-workbench-library-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+        .dt-workbench-library-list{display:flex;flex-direction:column;gap:6px;margin-top:10px}
+        .dt-workbench-library-row{display:flex;align-items:center;gap:8px;min-height:36px;padding:2px 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
+        .dt-workbench-library-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .dt-workbench-library-meta{flex:none;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px}
         .dt-workbench-plan{display:flex;flex-direction:column;gap:8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:10px}
         .dt-workbench-plan.dt-workbench-done{opacity:.75}
         .dt-create-choices{display:flex;flex-direction:column;gap:12px}

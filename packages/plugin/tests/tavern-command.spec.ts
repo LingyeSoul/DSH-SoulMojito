@@ -38,6 +38,18 @@ function makeAgent(id: string, hostFormatVersion?: number) {
   }
 }
 
+// 注入消息是宿主面 unknown：用 in/typeof 逐层收窄文本，避免 unchecked cast。
+function injectedTextOf(value: unknown): string {
+  if (typeof value !== 'object' || value === null || !('content' in value)) throw new Error('injected message has no content')
+  const content = value.content
+  if (!Array.isArray(content)) throw new Error('injected message content is not an array')
+  const first: unknown = content[0]
+  if (typeof first !== 'object' || first === null || !('text' in first) || typeof first.text !== 'string') {
+    throw new Error('injected message has no text part')
+  }
+  return first.text
+}
+
 // DSH 0.1.2 的 Session 形状：事件日志是私有 log + snapshotEvents() 冻结快照，
 // 没有 events 数组属性（激活曾在此形状上抛 reading 'some' of undefined）。
 function makeHostSessionAgent(id: string) {
@@ -1505,6 +1517,8 @@ describe('internal Tavern session bridge occupation', () => {
       chatId: '',
       sourceCharacter: '',
       sourceChatId: '',
+      targetCharacter: '',
+      targetWorld: '',
       createdCard: '',
     })
     // 面板「新建角色卡 → 写卡 Agent」桥：marker + recompose 各一次，并写一对
@@ -1543,6 +1557,8 @@ describe('internal Tavern session bridge occupation', () => {
       chatId: '',
       sourceCharacter: CHARACTER,
       sourceChatId: chatId,
+      targetCharacter: '',
+      targetWorld: '',
       createdCard: '',
     })
     // 同身份重复仍幂等：不叠加 marker、不重复 recompose，也不抹掉出卡后记下的
@@ -1564,6 +1580,57 @@ describe('internal Tavern session bridge occupation', () => {
     // 首次打开已写占位 turn，换来源命令先撞「已启动」锁（同款 fail-closed）。
     await expect(handler({ agent, rawInput: base64Url({ action: 'workbench-open' }) })).rejects.toThrow('already started')
     expect((await store.getState()).sessionBindings['session-workbench-source']).toMatchObject({ sourceCharacter: CHARACTER, sourceChatId: chatId })
+  })
+
+  it('workbench-open carries a library target and injects the opening brief once', async () => {
+    // 库存入口：目标资产写进绑定，开场提示经宿主 inject 面注入（ST preload
+    // 同款）——agent 首轮就知道读哪张卡；同目标重发不重复注入。
+    const agent = makeAgent('session-workbench-target')
+    const payload = { action: 'workbench-open', targetCharacter: 'Library Card' }
+    const result = await handler({ agent, rawInput: base64Url(payload) })
+    expect(result.kind).toBe('success')
+    expect((await store.getState()).sessionBindings['session-workbench-target']).toMatchObject({
+      architecture: 'card-workbench',
+      sourceCharacter: '',
+      sourceChatId: '',
+      targetCharacter: 'Library Card',
+      targetWorld: '',
+    })
+    expect(agent.injections).toHaveLength(1)
+    expect(agent.injections[0]).toMatchObject({ role: 'user', source: { form: 'notice' } })
+    const injectedText = injectedTextOf(agent.injections[0])
+    expect(injectedText).toContain('"Library Card"')
+    expect(injectedText).toContain('card_get')
+    await handler({ agent, rawInput: base64Url(payload) })
+    expect(agent.injections).toHaveLength(1)
+    expect(agent.session.events.filter((event) => event.type === 'agent-preset/selected')).toHaveLength(1)
+  })
+
+  it('refuses retargeting a bound workbench session and keeps the original target', async () => {
+    // 存量 blank 会话（无占位 turn）直接撞换绑守卫：目标与来源共同构成身份，
+    // 静默换目标会把同一工作台的历史和另一张卡混在一起。
+    const agent = makeAgent('session-workbench-retarget')
+    delete (agent as { phase?: unknown }).phase
+    await handler({ agent, rawInput: base64Url({ action: 'workbench-open', targetWorld: 'First Lore' }) })
+    await expect(handler({ agent, rawInput: base64Url({ action: 'workbench-open', targetWorld: 'Second Lore' }) }))
+      .rejects.toThrow('already bound to another chat or asset')
+    expect((await store.getState()).sessionBindings['session-workbench-retarget']).toMatchObject({ targetWorld: 'First Lore' })
+  })
+
+  it('injects the new-card task brief and rejects an unknown opening task', async () => {
+    // 新建入口的 opening 只在首次绑定注入；未知 opening 是脏载荷，整条拒绝。
+    const bad = await handler({ agent: makeAgent('session-workbench-bad-opening'), rawInput: base64Url({ action: 'workbench-open', opening: 'new-preset' }) })
+    expect(bad.kind).toBe('error')
+    expect((await store.getState()).sessionBindings['session-workbench-bad-opening']).toBeUndefined()
+
+    const agent = makeAgent('session-workbench-new-card')
+    await handler({ agent, rawInput: base64Url({ action: 'workbench-open', opening: 'new-card' }) })
+    expect(agent.injections).toHaveLength(1)
+    const injectedText = injectedTextOf(agent.injections[0])
+    expect(injectedText).toContain('create a new character card')
+    expect(injectedText).toContain('card_create')
+    await handler({ agent, rawInput: base64Url({ action: 'workbench-open', opening: 'new-card' }) })
+    expect(agent.injections).toHaveLength(1)
   })
 
   it('re-sends workbench-open on an occupied session idempotently (client stock repair path)', async () => {

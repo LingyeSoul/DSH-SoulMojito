@@ -296,10 +296,19 @@ export function normalizeChatId(name: string): string {
   return `${stem}.jsonl`
 }
 
+export type WorkbenchOpeningTask = '' | 'new-card' | 'new-world'
+
 export type TavernSessionCommand =
   | { action: 'close' }
   | { action: 'novel-open'; novelId: string }
-  | { action: 'workbench-open'; sourceCharacter: string; sourceChatId: string }
+  | {
+      action: 'workbench-open'
+      sourceCharacter: string
+      sourceChatId: string
+      targetCharacter: string
+      targetWorld: string
+      opening: WorkbenchOpeningTask
+    }
   | {
       action: 'open'
       character: string
@@ -332,7 +341,18 @@ export function parseTavernSessionCommand(rawInput: string): TavernSessionComman
       const sourceCharacter = typeof record['sourceCharacter'] === 'string' ? record['sourceCharacter'] : ''
       const sourceChatId = typeof record['sourceChatId'] === 'string' ? record['sourceChatId'] : ''
       if ((sourceCharacter !== '') !== (sourceChatId !== '')) return null
-      return { action: 'workbench-open', sourceCharacter, sourceChatId }
+      const targetCharacter = typeof record['targetCharacter'] === 'string' ? record['targetCharacter'] : ''
+      const targetWorld = typeof record['targetWorld'] === 'string' ? record['targetWorld'] : ''
+      const rawOpening = record['opening']
+      if (rawOpening !== undefined && rawOpening !== 'new-card' && rawOpening !== 'new-world') return null
+      return {
+        action: 'workbench-open',
+        sourceCharacter,
+        sourceChatId,
+        targetCharacter,
+        targetWorld,
+        opening: rawOpening ?? '',
+      }
     }
     const character = record['character']
     const chatId = record['chatId']

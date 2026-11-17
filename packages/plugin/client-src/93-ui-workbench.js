@@ -166,7 +166,99 @@
         error ? h('p', { className: 'dt-error' }, error) : null)
     }
 
-    function PanelWorkbench() {
+    // 库存浏览（2026-11-17 全能工作台）：插件内已导入的角色卡与世界书是
+    // 工作台的资源面——列表直接来自 bootstrap，点「在工作台中修改」按目标
+    // 身份复用/新建工作台会话（服务端把目标写进绑定并注入开场提示）；新建
+    // 入口每次开 fresh 工作台并携带 opening 任务提示，避免复用旧会话把新建
+    // 短路成跳转。
+    function WorkbenchLibraryBand({ ctx }) {
+      const state = useTavernStore()
+      const t = useTranslate()
+      const [characterFilter, setCharacterFilter] = useState('')
+      const [busy, setBusy] = useState('')
+      const [error, setError] = useState('')
+      const launch = (key, action) => {
+        if (busy !== '') return
+        setBusy(key)
+        setError('')
+        void action()
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+          .finally(() => setBusy(''))
+      }
+      const openTarget = (key, target) => launch(key, () => openWorkbenchSession(ctx, null, { target }))
+      const startNew = (key, opening) => launch(key, () => openWorkbenchSession(ctx, null, { fresh: true, opening }))
+      const characters = state.bootstrap.characters || []
+      const worlds = state.bootstrap.worlds || []
+      const counts = state.bootstrap.worldEntryCounts || {}
+      const query = characterFilter.trim().toLowerCase()
+      const visibleCharacters = query === ''
+        ? characters
+        : characters.filter((name) => name.toLowerCase().includes(query))
+      return h(React.Fragment, null,
+        h('section', { className: 'dt-settings-band' },
+          h('div', { className: 'dt-workbench-library-head' },
+            h('h3', null, t('workbench.library.cards')),
+            h(Button, {
+              size: 'sm',
+              variant: 'primary',
+              icon: h(IconPlusOutline16),
+              disabled: busy !== '',
+              onClick: () => startNew('new-card', 'new-card'),
+            }, t('workbench.library.newCard'))),
+          h('p', { className: 'dt-hint' }, t('workbench.library.cardsHint')),
+          characters.length > 0
+            ? h('div', { className: 'dt-filter-row' },
+              h(Input, {
+                icon: h(IconSearchOutline16),
+                placeholder: t('workbench.library.filter'),
+                'aria-label': t('workbench.library.filter'),
+                value: characterFilter,
+                onChange: (event) => setCharacterFilter(event.target.value),
+              }))
+            : null,
+          characters.length === 0
+            ? h('p', { className: 'dt-muted' }, t('workbench.library.cardsEmpty'))
+            : visibleCharacters.length === 0
+              ? h('p', { className: 'dt-muted' }, t('panel.filterEmpty'))
+              : h('div', { className: 'dt-workbench-library-list' },
+                visibleCharacters.map((name) => h('div', { key: name, className: 'dt-workbench-library-row' },
+                  h('span', { className: 'dt-workbench-library-name', title: name }, name),
+                  h(Button, {
+                    size: 'sm',
+                    variant: 'ghost',
+                    icon: h(IconSparkle16),
+                    disabled: busy !== '',
+                    onClick: () => openTarget(`card:${name}`, { character: name }),
+                  }, t('workbench.library.editCard')))))),
+        h('section', { className: 'dt-settings-band' },
+          h('div', { className: 'dt-workbench-library-head' },
+            h('h3', null, t('workbench.library.worlds')),
+            h(Button, {
+              size: 'sm',
+              variant: 'primary',
+              icon: h(IconPlusOutline16),
+              disabled: busy !== '',
+              onClick: () => startNew('new-world', 'new-world'),
+            }, t('workbench.library.newWorld'))),
+          h('p', { className: 'dt-hint' }, t('workbench.library.worldsHint')),
+          worlds.length === 0
+            ? h('p', { className: 'dt-muted' }, t('workbench.library.worldsEmpty'))
+            : h('div', { className: 'dt-workbench-library-list' },
+              worlds.map((name) => h('div', { key: name, className: 'dt-workbench-library-row' },
+                h('span', { className: 'dt-workbench-library-name', title: name }, name),
+                h('span', { className: 'dt-workbench-library-meta' }, t('panel.worlds.entries', { count: counts[name] ?? 0 })),
+                h(Button, {
+                  size: 'sm',
+                  variant: 'ghost',
+                  icon: h(IconSparkle16),
+                  disabled: busy !== '',
+                  onClick: () => openTarget(`world:${name}`, { world: name }),
+                }, t('workbench.library.editWorld')))))),
+        error ? h('p', { className: 'dt-error' }, error) : null,
+        busy !== '' ? h('p', { className: 'dt-hint' }, t('workbench.opening')) : null)
+    }
+
+    function PanelWorkbench({ ctx }) {
       const t = useTranslate()
       const [plans, setPlans] = useState(null)
       const [error, setError] = useState('')
@@ -194,6 +286,7 @@
           .finally(() => setBusyId(''))
       }
       return h(React.Fragment, null,
+        h(WorkbenchLibraryBand, { ctx }),
         h('section', { className: 'dt-settings-band' },
           h('p', { className: 'dt-hint' }, t('workbench.hint')),
           h('div', { className: 'dt-imports' },
@@ -296,4 +389,4 @@
           onSaved: () => { setEditing(null); void reload() },
         }) : null)
     }
-
+

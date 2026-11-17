@@ -1,4 +1,4 @@
-import { sessionEvents, type HostSessionLog } from '../../../bind/src/index.js'
+import { sessionEvents, hostPluginMessageSource, type HostSessionLog } from '../../../bind/src/index.js'
 import {
   NovelCapabilityError,
   NovelConfigError,
@@ -39,10 +39,11 @@ import { emitAgentPresetChanged } from '../agent-tavern/preset.js'
 import { isTavernSessionMarker } from '../agent-tavern/projector.js'
 import { getAgentNovelCapabilities, getNovelDriverPromise, getNovelProjectorPromise, memories, novelStore, store } from '../runtime.js'
 import { applyAgentPtcMode } from '../agent-ptc-mode.js'
+import { createMessage } from '../message.js'
 import type { PluginContext } from '../host-contract.js'
 import { TavernArchitectureConflictError } from '../session/binding.js'
 import { lastSelectedPresetId } from '../session/preset-marker.js'
-import { occupyHostSession } from '../session/trace.js'
+import { occupyHostSession, type WorkbenchOpeningTask } from '../session/trace.js'
 import { readJson, sendJson, sendRouteNotFound, type HttpRequest, type HttpResponse } from './io.js'
 
 const CARD_WORKBENCH_PRESET_ID = 'card-workbench'
@@ -784,6 +785,36 @@ export interface NovelCommandAgent {
   id: string
   ctx: unknown
   session: HostSessionLog & { append: (type: string, data: unknown, opts?: unknown) => void }
+  /** 宿主 AgentLoop 的上下文注入通道（ST preload 同款）：工作台从库存打开
+   *  目标资产时注入一条路由提示，让模型首轮就知道当前目标。 */
+  inject?: (message: unknown) => unknown
+}
+
+export interface WorkbenchOpenPayload {
+  sourceCharacter: string
+  sourceChatId: string
+  targetCharacter: string
+  targetWorld: string
+  opening: WorkbenchOpeningTask
+}
+
+/** 工作台会话开场的结构化提示：目标资产（从库存打开）与任务意图（新建）。
+ *  名字用 JSON.stringify 包裹，避免引号/换行改变提示结构。 */
+export function workbenchOpeningBrief(payload: WorkbenchOpenPayload): string {
+  const lines: string[] = []
+  if (payload.opening === 'new-card') {
+    lines.push('Workbench task: create a new character card. Gather the user\'s idea, material or script, then follow the confirmed card_create protocol.')
+  }
+  if (payload.opening === 'new-world') {
+    lines.push('Workbench task: create a new world book. Check world_list for a free name, discuss the entries, then follow the confirmed world_plan_propose/world_create protocol.')
+  }
+  if (payload.targetCharacter !== '') {
+    lines.push(`Workbench target: character card ${JSON.stringify(payload.targetCharacter)} was opened from the asset library. Read it with card_get before proposing changes; wait for the user's edit request.`)
+  }
+  if (payload.targetWorld !== '') {
+    lines.push(`Workbench target: world book ${JSON.stringify(payload.targetWorld)} was opened from the asset library. Read it with world_get before proposing changes; wait for the user's edit request.`)
+  }
+  return lines.join('\n')
 }
 
 /** Structural check against DriverAgentLike; degrades silently otherwise. */
@@ -891,7 +922,7 @@ async function bindNovelSession(db: TavernStore, sessionId: string, novelId: str
 export async function handleWorkbenchOpenCommand(
   ctx: NovelPluginContext & Pick<PluginContext, 'agentPresets'>,
   agent: NovelCommandAgent,
-  payload: { sourceCharacter: string; sourceChatId: string },
+  payload: WorkbenchOpenPayload,
 ): Promise<{ kind: string; text: string }> {
   if (typeof ctx.agentPresets?.recompose !== 'function') {
     throw new TavernArchitectureConflictError('The host cannot recompose a blank session with the CardWorkbench preset.')
@@ -909,17 +940,20 @@ export async function handleWorkbenchOpenCommand(
     })
   const db: TavernStore = await store()
   const previous = (await db.getState()).sessionBindings[agent.id]
-  const sameWorkbenchSource = previous?.architecture === 'card-workbench'
-    && previous.sourceCharacter === payload.sourceCharacter
-    && previous.sourceChatId === payload.sourceChatId
+  const previousWorkbench = previous?.architecture === 'card-workbench' ? previous : undefined
+  // 会话身份 = 来源聊天 + 目标资产：同一目标幂等复用，换聊天或换资产都算换绑。
+  const sameWorkbenchSource = previousWorkbench !== undefined
+    && previousWorkbench.sourceCharacter === payload.sourceCharacter
+    && previousWorkbench.sourceChatId === payload.sourceChatId
+    && previousWorkbench.targetCharacter === payload.targetCharacter
+    && previousWorkbench.targetWorld === payload.targetWorld
   if (sessionStarted && !sameWorkbenchSource) {
     throw new TavernArchitectureConflictError('This host session already started; recomposing it with the CardWorkbench preset is locked.')
   }
-  if (previous?.architecture === 'card-workbench'
-    && (previous.sourceCharacter !== payload.sourceCharacter || previous.sourceChatId !== payload.sourceChatId)) {
+  if (previousWorkbench !== undefined && !sameWorkbenchSource) {
     // 必须在 marker 幂等检查之前拦截：否则不重复 recompose 但绑定被静默改写
-    // 成另一个聊天的身份，工作台会话与来源聊天的一一对应会被破坏。
-    throw new TavernArchitectureConflictError('This CardWorkbench session is already bound to another chat.')
+    // 成另一个聊天/资产的身份，工作台会话与来源的一一对应会被破坏。
+    throw new TavernArchitectureConflictError('This CardWorkbench session is already bound to another chat or asset.')
   }
   await db.updateState((state) => ({
     sessionBindings: {
@@ -930,10 +964,12 @@ export async function handleWorkbenchOpenCommand(
         chatId: '',
         sourceCharacter: payload.sourceCharacter,
         sourceChatId: payload.sourceChatId,
+        targetCharacter: payload.targetCharacter,
+        targetWorld: payload.targetWorld,
         // 幂等重发不抹掉出卡后记下的卡名（侧边栏分组与会话标题的数据源），
         // 也不抹掉用户侧边栏显式改的名（title 压过一切派生标签）。
-        createdCard: previous?.architecture === 'card-workbench' ? previous.createdCard : '',
-        ...(previous?.architecture === 'card-workbench' && previous.title !== undefined ? { title: previous.title } : {}),
+        createdCard: previousWorkbench?.createdCard ?? '',
+        ...(previousWorkbench?.title !== undefined ? { title: previousWorkbench.title } : {}),
       },
     },
   }))
@@ -945,6 +981,27 @@ export async function handleWorkbenchOpenCommand(
   if (lastSelectedPresetId(agent.session) !== CARD_WORKBENCH_PRESET_ID) {
     const preset = await ctx.agentPresets.recompose(agent.ctx, CARD_WORKBENCH_PRESET_ID)
     agent.session.append('agent-preset/selected', { agentPreset: preset.id })
+  }
+  // 库存入口的目标/新建提示：只在首次绑定或目标变化时注入一次（同身份重发
+  // 保持幂等）。注入是路由信息，不写入会话日志；宿主没有 inject 面时只告警，
+  // 目标仍在绑定里，agent 可用 card_list/world_list 自行定位。
+  const brief = workbenchOpeningBrief(payload)
+  const targetChanged = previousWorkbench === undefined
+    || previousWorkbench.targetCharacter !== payload.targetCharacter
+    || previousWorkbench.targetWorld !== payload.targetWorld
+  if (brief !== '' && targetChanged) {
+    if (typeof agent.inject === 'function') {
+      agent.inject(createMessage({
+        role: 'user',
+        content: [{ type: 'text', text: brief }],
+        source: hostPluginMessageSource(agent.session, {
+          form: 'notice',
+          summary: 'Workbench target',
+        }),
+      }))
+    } else {
+      ctx.logger?.warn?.('dsh-soulmojito workbench: host agent has no inject seam; opening brief not delivered')
+    }
   }
   // The binding exists now, so the persisted PTC switch can land on the agent
   // scope before the first workbench turn.

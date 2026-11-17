@@ -98,6 +98,11 @@ export type TavernSessionBinding =
     architecture: 'card-workbench'
     sourceCharacter: string
     sourceChatId: string
+    /** 面板库存打开的目标资产（卡片/世界书名，空串 = 未指定）。target 与
+     *  source 共同构成会话身份：同一目标复用同一工作台，打开另一目标走新
+     *  会话（换绑被 fail-closed 拒绝）。旧数据缺失时归一化为空串。 */
+    targetCharacter: string
+    targetWorld: string
     createdCard: string
     title?: string
   })
@@ -2411,6 +2416,8 @@ export function normalizeTavernSessionBinding(value: unknown): TavernSessionBind
       architecture: 'card-workbench',
       sourceCharacter: typeof candidate.sourceCharacter === 'string' ? candidate.sourceCharacter : '',
       sourceChatId: typeof candidate.sourceChatId === 'string' ? candidate.sourceChatId : '',
+      targetCharacter: typeof candidate.targetCharacter === 'string' ? candidate.targetCharacter : '',
+      targetWorld: typeof candidate.targetWorld === 'string' ? candidate.targetWorld : '',
       createdCard: typeof candidate.createdCard === 'string' ? candidate.createdCard : '',
       ...(typeof candidate.title === 'string' && candidate.title.trim() !== '' ? { title: candidate.title } : {}),
     }

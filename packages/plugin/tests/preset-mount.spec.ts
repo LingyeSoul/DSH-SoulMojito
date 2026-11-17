@@ -115,8 +115,8 @@ describe('workbench/novel preset projection mounts', () => {
       activePreset: 'Mount Preset',
       activePersona: 'Rin',
       sessionBindings: {
-        [WORKBENCH_AGENT]: { architecture: 'card-workbench', character: '', chatId: '', sourceCharacter: CHARACTER, sourceChatId: '2026-01-01@10h00m00s.jsonl', createdCard: '' },
-        [FREE_WORKBENCH_AGENT]: { architecture: 'card-workbench', character: '', chatId: '', sourceCharacter: '', sourceChatId: '', createdCard: 'Draft Card' },
+        [WORKBENCH_AGENT]: { architecture: 'card-workbench', character: '', chatId: '', sourceCharacter: CHARACTER, sourceChatId: '2026-01-01@10h00m00s.jsonl', targetCharacter: '', targetWorld: '', createdCard: '' },
+        [FREE_WORKBENCH_AGENT]: { architecture: 'card-workbench', character: '', chatId: '', sourceCharacter: '', sourceChatId: '', targetCharacter: '', targetWorld: '', createdCard: 'Draft Card' },
         [NOVEL_AGENT]: { architecture: 'agent-novel', character: '', chatId: '', novelId: 'novel-1' },
         [RP_AGENT]: { architecture: 'agent-tavern', contextMode: 'dsh-native', character: CHARACTER, chatId: '' },
       },

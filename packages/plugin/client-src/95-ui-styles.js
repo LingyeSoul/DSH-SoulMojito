@@ -398,6 +398,11 @@
         .dt-script-bound-chip>button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
         .dt-script-paste{display:flex;flex-direction:column;gap:8px;margin-top:10px;padding:10px;border:1px dashed var(--dsw-alias-border-l2);border-radius:8px}
         .dt-workbench-list{display:flex;flex-direction:column;gap:10px}
+        .dt-workbench-library-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+        .dt-workbench-library-list{display:flex;flex-direction:column;gap:6px;margin-top:10px}
+        .dt-workbench-library-row{display:flex;align-items:center;gap:8px;min-height:36px;padding:2px 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
+        .dt-workbench-library-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .dt-workbench-library-meta{flex:none;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:16px}
         .dt-workbench-plan{display:flex;flex-direction:column;gap:8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:10px}
         .dt-workbench-plan.dt-workbench-done{opacity:.75}
         .dt-create-choices{display:flex;flex-direction:column;gap:12px}

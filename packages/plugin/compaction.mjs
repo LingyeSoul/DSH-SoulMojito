@@ -3727,6 +3727,8 @@ function normalizeTavernSessionBinding(value) {
       architecture: "card-workbench",
       sourceCharacter: typeof candidate.sourceCharacter === "string" ? candidate.sourceCharacter : "",
       sourceChatId: typeof candidate.sourceChatId === "string" ? candidate.sourceChatId : "",
+      targetCharacter: typeof candidate.targetCharacter === "string" ? candidate.targetCharacter : "",
+      targetWorld: typeof candidate.targetWorld === "string" ? candidate.targetWorld : "",
       createdCard: typeof candidate.createdCard === "string" ? candidate.createdCard : "",
       ...typeof candidate.title === "string" && candidate.title.trim() !== "" ? { title: candidate.title } : {}
     };

@@ -29,10 +29,10 @@ describe('panel active character follows the current session binding', () => {
 
   it('passes the host session hook into the characters, worlds and regex sections', () => {
     expect(source).toContain("component: (host) => h(PanelCharacters, { ctx: host.ctx, useSessions: host.useSessions })")
-    expect(source).toContain("component: (host) => h(PanelWorlds, { useSessions: host.useSessions })")
+    expect(source).toContain("component: (host) => h(PanelWorlds, { ctx: host.ctx, useSessions: host.useSessions })")
     expect(source).toContain("component: (host) => h(RegexBand, { useSessions: host.useSessions })")
     expect(source).toContain('function PanelCharacters({ ctx, useSessions })')
-    expect(source).toContain('function PanelWorlds({ useSessions })')
+    expect(source).toContain('function PanelWorlds({ ctx, useSessions })')
     expect(source).toContain('function RegexBand({ useSessions })')
   })
 

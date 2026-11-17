@@ -457,14 +457,18 @@
         .filter(([sessionId, binding]) => binding?.architecture === 'card-workbench' && sessionIds.includes(sessionId))
       // 多自由工作台并存时同名条目按枚举序号区分（第 2 个起带号，与创建时
       // 宿主标题的计数序号同族；删会话后序号重排仅为显示层变化）。
-      const freeTotal = entries.filter(([, binding]) => !binding.sourceCharacter && !binding.sourceChatId).length
+      const freeTotal = entries.filter(([, binding]) => !binding.sourceCharacter && !binding.sourceChatId
+        && !binding.targetCharacter && !binding.targetWorld).length
       let freeOrdinal = 0
       const labels = entries.map(([, binding]) => {
         // 用户显式改的名压过一切派生标签（服务端出卡改名同样让位）。
         if (binding.title) return binding.title
         // 出卡后会话改名为卡名（提案 0013 补充）：createdCard 优先于来源
-        // 聊天/自由工作台标签，与服务端 sessionTitle.rename 固定的宿主标题一致。
+        // 聊天/库存目标/自由工作台标签，与服务端 sessionTitle.rename 固定的
+        // 宿主标题一致。
         if (binding.createdCard) return binding.createdCard
+        if (binding.targetCharacter) return t('workbench.cardSessionLabel', { character: binding.targetCharacter })
+        if (binding.targetWorld) return t('workbench.worldSessionLabel', { world: binding.targetWorld })
         if (binding.sourceCharacter) return `${binding.sourceCharacter} · ${String(binding.sourceChatId).replace(/\.jsonl$/i, '')}`
         freeOrdinal += 1
         return freeTotal > 1 && freeOrdinal > 1 ? `${t('nav.workbenchFree')} ${freeOrdinal}` : t('nav.workbenchFree')

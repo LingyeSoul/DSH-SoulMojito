@@ -104,7 +104,7 @@ describe('standard DSH Agent preset projection', () => {
       activePersona: 'Rin',
       sessionBindings: {
         [RP_AGENT]: { architecture: 'agent-tavern', contextMode: 'dsh-native', character: CHARACTER, chatId: 'rp-chat' },
-        [WORKBENCH_AGENT]: { architecture: 'card-workbench', character: '', chatId: '', sourceCharacter: CHARACTER, sourceChatId: '', createdCard: '' },
+        [WORKBENCH_AGENT]: { architecture: 'card-workbench', character: '', chatId: '', sourceCharacter: CHARACTER, sourceChatId: '', targetCharacter: '', targetWorld: '', createdCard: '' },
       },
     }))
 

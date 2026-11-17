@@ -894,7 +894,7 @@ describe('TavernStore', () => {
       sessionBindings: { ...state.sessionBindings, wb_1: { architecture: 'card-workbench', character: '', chatId: '', sourceCharacter: 'A', sourceChatId: 'a.jsonl', createdCard: 'Hero', title: 'Hero Draft' } },
     }))
     expect((await store.getState()).sessionBindings.wb_1).toEqual({
-      architecture: 'card-workbench', character: '', chatId: '', sourceCharacter: 'A', sourceChatId: 'a.jsonl', createdCard: 'Hero', title: 'Hero Draft',
+      architecture: 'card-workbench', character: '', chatId: '', sourceCharacter: 'A', sourceChatId: 'a.jsonl', targetCharacter: '', targetWorld: '', createdCard: 'Hero', title: 'Hero Draft',
     })
     // 手写 state 文件缺 character/chatId/source 字段时补空串，绝不降级为 st
     // （降级会让客户端把工作台会话误判成 ST 架构、强制接管 composer）；
@@ -912,10 +912,10 @@ describe('TavernStore', () => {
     }))
     const bindings = await store.getState().then((state) => state.sessionBindings)
     expect(bindings.wb_2).toEqual({
-      architecture: 'card-workbench', character: '', chatId: '', sourceCharacter: '', sourceChatId: '', createdCard: '',
+      architecture: 'card-workbench', character: '', chatId: '', sourceCharacter: '', sourceChatId: '', targetCharacter: '', targetWorld: '', createdCard: '',
     })
     expect(bindings.wb_3).toEqual({
-      architecture: 'card-workbench', character: '', chatId: '', sourceCharacter: 'B', sourceChatId: 'b.jsonl', createdCard: '',
+      architecture: 'card-workbench', character: '', chatId: '', sourceCharacter: 'B', sourceChatId: 'b.jsonl', targetCharacter: '', targetWorld: '', createdCard: '',
     })
     expect(bindings.wb_4).toMatchObject({ title: 'Kept Name' })
     expect('title' in bindings.wb_5).toBe(false)

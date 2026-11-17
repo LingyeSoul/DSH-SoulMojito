@@ -148,6 +148,8 @@ describe('agent PTC mode', () => {
           chatId: '',
           sourceCharacter: 'PTC Character',
           sourceChatId: 'ptc-chat',
+          targetCharacter: '',
+          targetWorld: '',
           createdCard: '',
         },
         [ST_AGENT]: { architecture: 'st', character: 'PTC Character', chatId: 'st-chat' },

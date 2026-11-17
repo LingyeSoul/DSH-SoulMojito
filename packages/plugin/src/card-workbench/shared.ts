@@ -43,6 +43,8 @@ export interface WorkbenchExecAgent {
   ctx?: {
     get?: (name: string) => unknown
     sessionTitle?: unknown
+    /** Host SubAgent seam (ctx.subagents): probed by the one-off audition tool. */
+    subagents?: unknown
   }
 }
 

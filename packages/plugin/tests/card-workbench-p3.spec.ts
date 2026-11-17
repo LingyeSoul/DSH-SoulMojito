@@ -245,7 +245,7 @@ describe('Card Workbench P3: creation, materials, MVU conversion and chat seedin
         ...state.sessionBindings,
         'wb-renamed': {
           architecture: 'card-workbench', character: '', chatId: '',
-          sourceCharacter: '', sourceChatId: '', createdCard: '',
+          sourceCharacter: '', sourceChatId: '', targetCharacter: '', targetWorld: '', createdCard: '',
         },
       },
     }))
@@ -292,7 +292,7 @@ describe('Card Workbench P3: creation, materials, MVU conversion and chat seedin
         ...state.sessionBindings,
         'wb-user-title': {
           architecture: 'card-workbench', character: '', chatId: '',
-          sourceCharacter: '', sourceChatId: '', createdCard: '', title: 'My draft corner',
+          sourceCharacter: '', sourceChatId: '', targetCharacter: '', targetWorld: '', createdCard: '', title: 'My draft corner',
         },
       },
     }))
@@ -321,7 +321,7 @@ describe('Card Workbench P3: creation, materials, MVU conversion and chat seedin
         ...state.sessionBindings,
         'wb-renamed': {
           architecture: 'card-workbench', character: '', chatId: '',
-          sourceCharacter: '', sourceChatId: '', createdCard: '',
+          sourceCharacter: '', sourceChatId: '', targetCharacter: '', targetWorld: '', createdCard: '',
         },
       },
     }))
@@ -507,7 +507,7 @@ describe('Card Workbench P3: creation, materials, MVU conversion and chat seedin
         ...state.sessionBindings,
         'wb-api': {
           architecture: 'card-workbench', character: '', chatId: '',
-          sourceCharacter: '', sourceChatId: '', createdCard: '',
+          sourceCharacter: '', sourceChatId: '', targetCharacter: '', targetWorld: '', createdCard: '',
         },
         'st-api': { architecture: 'st', character: LEGACY, chatId: 'chat.jsonl' },
       },

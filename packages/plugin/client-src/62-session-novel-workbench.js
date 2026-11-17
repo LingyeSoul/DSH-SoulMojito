@@ -61,20 +61,28 @@
     // workbench-open（提案 0013）：与 novel-open 同款桥接——服务端负责绑定 +
     // recompose card-workbench preset；发送后轮询 bootstrap 直到会话出现在
     // sessionBindings 且 architecture === 'card-workbench'、来源身份匹配。
-    // source 为 null 时匹配自由工作台（sourceCharacter/sourceChatId 均空）。
-    function workbenchBindingMatches(binding, source) {
+    // 会话身份 = 来源聊天（source）+ 库存目标（target）：聊天侧「交给工作台」
+    // 一聊一会话，库存入口一卡/一书一会话；source 为 null 且 target 为空时
+    // 匹配自由工作台（四项身份均空）。target.character / target.world 至少
+    // 一个非空，两者可同时给出。
+    function workbenchBindingMatches(binding, source, target) {
       if (binding?.architecture !== 'card-workbench') return false
-      return source
+      const sourceMatches = source
         ? binding.sourceCharacter === source.character && binding.sourceChatId === source.chatId
         : !binding.sourceCharacter && !binding.sourceChatId
+      const targetCharacter = target?.character || ''
+      const targetWorld = target?.world || ''
+      return sourceMatches
+        && (binding.targetCharacter || '') === targetCharacter
+        && (binding.targetWorld || '') === targetWorld
     }
 
-    async function waitForWorkbenchBinding(sessionId, source) {
+    async function waitForWorkbenchBinding(sessionId, source, target) {
       for (let attempt = 0; attempt < 25; attempt += 1) {
         try {
           const bootstrap = await refreshBootstrap()
           const binding = bootstrap?.state?.sessionBindings?.[sessionId]
-          if (workbenchBindingMatches(binding, source)) return binding
+          if (workbenchBindingMatches(binding, source, target)) return binding
         } catch {
           // Bootstrap may briefly fail while the server binds; keep polling.
         }
@@ -88,7 +96,9 @@
     // 与新建角色卡向导走 fresh 每次新建（幂等复用会把新建短路成跳转旧会话，
     // 决策 2026-10-08 workbench-blank-reuse 客户端补充）。工作台会话落在专用
     // 内部工作区（Tavern Workbench (internal)）。
-    function workbenchSessionLabel(source, ordinal = 0) {
+    function workbenchSessionLabel(source, ordinal = 0, target = null) {
+      if (target?.character) return translate('workbench.cardSessionLabel', { character: target.character })
+      if (target?.world) return translate('workbench.worldSessionLabel', { world: target.world })
       return source
         ? translate('workbench.chatSessionLabel', {
           character: source.character,
@@ -108,16 +118,17 @@
       void ensureWorkbenchWorkspace(ctx).catch(() => {})
     }
 
-    async function openWorkbenchSession(ctx, source = null, { fresh = false } = {}) {
+    async function openWorkbenchSession(ctx, source = null, { fresh = false, target = null, opening = '' } = {}) {
       update({ navigationStatus: translate('workbench.opening') })
       try {
         // 幂等复用只服务「回到已有工作台」的入口（聊天侧「交给工作台」按来源
-        // 身份复用，一聊一会话）；fresh 入口（侧栏「+」、新建角色卡向导）必须
-        // 跳过——否则同来源会话存活期间点「新建」永远只是跳回旧会话。
+        // 身份复用，一聊一会话；库存入口按目标资产复用，一卡/一书一会话）；
+        // fresh 入口（侧栏「+」、新建向导）必须跳过——否则同来源会话存活期间
+        // 点「新建」永远只是跳回旧会话。
         if (!fresh) {
           const sessions = ctx.sessions.list.getSnapshot()
           const existing = Object.entries(snapshot.bootstrap.state.sessionBindings || {})
-            .find(([sessionId, binding]) => workbenchBindingMatches(binding, source) && sessions.byId[sessionId])
+            .find(([sessionId, binding]) => workbenchBindingMatches(binding, source, target) && sessions.byId[sessionId])
           if (existing) {
             openWorkbenchSessionView(ctx, existing[0])
             return existing[0]
@@ -131,23 +142,28 @@
         try {
           const binding = ctx.sessions.binding(sessionId)
           if (!binding) throw new Error(translate('error.noBinding'))
-          const commandPayload = base64Url(JSON.stringify(source
-            ? { action: 'workbench-open', sourceCharacter: source.character, sourceChatId: source.chatId }
-            : { action: 'workbench-open' }))
+          const commandPayload = base64Url(JSON.stringify({
+            action: 'workbench-open',
+            ...(source ? { sourceCharacter: source.character, sourceChatId: source.chatId } : {}),
+            ...(target?.character ? { targetCharacter: target.character } : {}),
+            ...(target?.world ? { targetWorld: target.world } : {}),
+            ...(opening ? { opening } : {}),
+          }))
           const result = await binding.session.command(`/dsh-soulmojito-session ${commandPayload}`)
           if (!result?.ok || !result.value?.matched) {
             throw new Error(result.error?.message || translate('error.activationFailed'))
           }
           reserveTavernSession(ctx, sessionId)
-          const bound = await waitForWorkbenchBinding(sessionId, source)
+          const bound = await waitForWorkbenchBinding(sessionId, source, target)
           if (!bound) throw new Error(translate('workbench.bindTimeout'))
           // 多自由工作台并存时按现存数给宿主标题带序号（第 2 个起），面板列表
-          // WorkbenchList 用同款序号区分同名条目；聊天侧工作台按来源身份天然
-          // 唯一，出卡后统一改名为卡名。
-          const freeOrdinal = source ? 0 : 1 + Object.entries(snapshot.bootstrap.state.sessionBindings || {})
-            .filter(([sid, binding]) => sid !== sessionId && workbenchBindingMatches(binding, null) && ctx.sessions.list.getSnapshot().byId[sid])
+          // WorkbenchList 用同款序号区分同名条目；聊天侧与库存目标工作台按身份
+          // 天然唯一，出卡后统一改名为卡名。
+          const targetBound = target !== null && Boolean(target.character || target.world)
+          const freeOrdinal = source || targetBound ? 0 : 1 + Object.entries(snapshot.bootstrap.state.sessionBindings || {})
+            .filter(([sid, binding]) => sid !== sessionId && workbenchBindingMatches(binding, null, null) && ctx.sessions.list.getSnapshot().byId[sid])
             .length
-          await binding.session.rename(workbenchSessionLabel(source, freeOrdinal)).catch(() => {})
+          await binding.session.rename(workbenchSessionLabel(source, freeOrdinal, target)).catch(() => {})
           openSessionView(ctx, sessionId)
           return sessionId
         } finally {

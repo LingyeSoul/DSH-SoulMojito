@@ -34,7 +34,7 @@
       { id: 'novels', group: 'content', icon: IconEditOutline16, label: (t) => t('panel.section.novels'), component: (host) => h(PanelNovels, { ctx: host.ctx }) },
       { id: 'groups', group: 'content', icon: IconPlusOutline16, label: (t) => t('panel.section.groups'), component: () => h(GroupBand) },
       { id: 'personas', group: 'content', icon: IconPersonalizationOutline16, label: (t) => t('panel.section.personas'), component: () => h(PersonaBand) },
-      { id: 'worlds', group: 'content', icon: IconBrowseOutline16, label: (t) => t('panel.section.worlds'), component: (host) => h(PanelWorlds, { useSessions: host.useSessions }) },
+      { id: 'worlds', group: 'content', icon: IconBrowseOutline16, label: (t) => t('panel.section.worlds'), component: (host) => h(PanelWorlds, { ctx: host.ctx, useSessions: host.useSessions }) },
       // 快速回复（契约 2026-11-12 §2.6）：集合 CRUD + composer 按钮行总开关。
       // content 组——它是输入辅助资产，与卡/书/预设同层。
       { id: 'quickReplies', group: 'content', icon: IconQueueOutline14, label: (t) => t('panel.section.quickReplies'), component: () => h(QuickRepliesBand) },
@@ -55,7 +55,7 @@
       { id: 'scripts', group: 'content', icon: IconBookOutline16, label: (t) => t('panel.section.scripts'), component: () => h(PanelScripts) },
       { id: 'regex', group: 'system', icon: IconSearchOutline16, label: (t) => t('panel.section.regex'), component: (host) => h(RegexBand, { useSessions: host.useSessions }) },
       { id: 'variables', group: 'session', icon: IconDataOutline16, label: (t) => t('panel.section.variables'), component: (host) => h(PanelVariables, { useSessions: host.useSessions }) },
-      { id: 'workbench', group: 'system', icon: IconCheckOutline16, label: (t) => t('panel.section.workbench'), component: () => h(PanelWorkbench) },
+      { id: 'workbench', group: 'system', icon: IconCheckOutline16, label: (t) => t('panel.section.workbench'), component: (host) => h(PanelWorkbench, { ctx: host.ctx }) },
       // 第 14 个分区「游戏」（提案 0018 §4.3，P1）：清单 + 开局 + 本聊天对局面
       // （GameSurface 持久 iframe；games/revision 1s 轮询仅在存在未终局会话时
       // 进行，页面不可见停发）。自绘手柄图标（2026-10-14），与总览的 sparkle 区分。
@@ -380,11 +380,20 @@
         if (launching) return
         setLaunching(true)
         setError('')
-        // 向导语义是「新建角色卡」：每次拉起都是新的写卡会话，不复用既有绑定。
-        void openWorkbenchSession(ctx, null, { fresh: true })
+        // 向导语义是「新建角色卡」：每次拉起都是新的写卡会话，不复用既有绑定，
+        // 并携带 opening 提示让 agent 直接进入新建卡协议。
+        void openWorkbenchSession(ctx, null, { fresh: true, opening: 'new-card' })
           .then(() => setGuideOpen(false))
           .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
           .finally(() => setLaunching(false))
+      }
+      // 已有库存卡：按卡名打开（或复用）目标工作台。服务端把 targetCharacter
+      // 写进绑定并注入开场提示，agent 首轮就知道要读哪张卡；同一张卡始终回到
+      // 同一个工作台会话。
+      const openCardInWorkbench = (name) => {
+        setError('')
+        void openWorkbenchSession(ctx, null, { target: { character: name } })
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
       }
       const characters = state.bootstrap.characters
       // 名称过滤（2026-10-21 分页 UX）：卡多了以后整屏扫读——过滤框按名匹配，
@@ -435,6 +444,14 @@
                 ? h(Pill, { active: true }, t('panel.characters.active'))
                 : h(Button, { size: 'sm', variant: 'outline', onClick: () => run(patchState({ activeCharacter: name })) }, t('panel.characters.setActive')),
               h(Button, { size: 'sm', variant: 'ghost', 'aria-haspopup': 'dialog', onClick: () => viewCard(name) }, t('panel.characters.viewCard')),
+              h(Button, {
+                size: 'sm',
+                variant: 'ghost',
+                icon: h(IconSparkle16),
+                'aria-label': t('panel.characters.workbench', { name }),
+                title: t('panel.characters.workbench', { name }),
+                onClick: () => openCardInWorkbench(name),
+              }),
               h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editCard(name) }, t('panel.edit')),
               h(Button, {
                 size: 'sm',
@@ -575,7 +592,7 @@
         error ? h('p', { className: 'dt-error' }, error) : null))
     }
 
-    function PanelWorlds({ useSessions }) {
+    function PanelWorlds({ ctx, useSessions }) {
       const state = useTavernStore()
       const t = useTranslate()
       const [error, setError] = useState('')
@@ -647,6 +664,13 @@
               setError(cause instanceof Error ? cause.message : String(cause))
             })
         }
+      }
+      // 已有库存世界书：按书名打开（或复用）目标工作台会话；服务端写
+      // targetWorld 并注入开场提示，agent 首轮先读这本书。
+      const openWorldInWorkbench = (name) => {
+        setError('')
+        void openWorkbenchSession(ctx, null, { target: { world: name } })
+          .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
       }
       const save = (name, book) => saveWorldBook(name, book).then((saved) => {
         const next = saved?.name || name
@@ -722,6 +746,14 @@
                 title: t('panel.worlds.view', { name }),
                 onClick: () => viewBook(name),
               }, t('panel.worlds.entries', { count: books[name]?.entries?.length ?? state.bootstrap.worldEntryCounts?.[name] ?? 0 })),
+              h(Button, {
+                size: 'sm',
+                variant: 'ghost',
+                icon: h(IconSparkle16),
+                'aria-label': t('panel.worlds.workbench', { name }),
+                title: t('panel.worlds.workbench', { name }),
+                onClick: () => openWorldInWorkbench(name),
+              }),
               h(Button, { size: 'sm', variant: 'ghost', icon: h(IconEditOutline16), onClick: () => editBook(name) }, t('panel.edit')),
               h(Button, { size: 'sm', variant: 'ghost', icon: h(IconDownloadOutline16), 'aria-label': t('panel.exportJson'), title: t('panel.exportJson'), onClick: () => downloadAsset(`export/world/${encodeURIComponent(name)}`, `${name}.json`) }),
               h(Button, {
