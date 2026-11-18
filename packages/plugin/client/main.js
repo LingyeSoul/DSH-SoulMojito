@@ -2700,6 +2700,9 @@ window.__ModuleLoader__.load({
       'panel.group.session': 'Sessions',
       'panel.group.system': 'System',
       'panel.section.overview': 'Overview',
+      // User manual section (2026-11-18): pinned beside Overview for onboarding
+      // and the SillyTavern comparison.
+      'panel.section.manual': 'User manual',
       'panel.section.characters': 'Characters',
       'panel.section.chats': 'Chats',
       'panel.section.guides': 'Guides',
@@ -2793,6 +2796,169 @@ window.__ModuleLoader__.load({
       // gates 的 locale 校验兜底。
       'panel.section.about': 'About',
       'panel.section.backup': 'Backup',
+      // User manual body (2026-11-18): onboarding, names, architectures, the ST
+      // comparison, feature map, limits and FAQ. The component lives in
+      // 89c-ui-manual.js; this key set mirrors 41-i18n-zh.js.
+      'manual.title': 'User manual',
+      'manual.tagline': 'A tavern workspace on DSH, not another SillyTavern instance.',
+      'manual.intro': 'The plugin reuses DSH model routing, keys, sessions and the web container. It adds character assets, generation workflows and this management panel. First separate three names: DSH, SillyTavern (ST) and AgentTavern.',
+      'manual.fact.assets': 'ST assets import and export',
+      'manual.fact.architectures': 'Three session architectures, chosen per chat',
+      'manual.fact.models': 'No second model or key setup',
+      'manual.toc.label': 'Manual contents',
+      'manual.toc.start': 'Quick start',
+      'manual.toc.terms': 'Names and architecture',
+      'manual.toc.diff': 'Differences from ST',
+      'manual.toc.features': 'Feature map',
+      'manual.toc.limits': 'Limits and FAQ',
+      'manual.openSection': 'Open {section}',
+      'manual.start.title': 'Five-minute start',
+      'manual.start.hint': 'Do these in order; you do not need to read the whole manual first.',
+      'manual.start.import.title': 'Open the panel and import a character card',
+      'manual.start.import.body': 'Use the SoulMojito button at the bottom of the sidebar, or Settings → DSH-SoulMojito. Character cards accept PNG, CHARX and JSON; world books, presets and personas are imported from the same content sections.',
+      'manual.start.architecture.title': 'Choose the architecture for this chat',
+      'manual.start.architecture.body': 'Single-character new chats default to AgentTavern. Choose ST when you need swipes, regenerate, STscript or group chats. Architecture is per chat; changing the default never migrates existing chats.',
+      'manual.start.chat.title': 'Create a chat and open it',
+      'manual.start.chat.body': 'Pick a character under the Tavern branch in the sidebar and create a chat. AgentTavern opens the native DSH conversation; ST opens the Tavern tab. Greetings come from the card, and ST chats can switch the first message.',
+      'manual.start.talk.title': 'Keep talking in the native composer',
+      'manual.start.talk.body': 'Model choice is saved per session and falls back to the DSH default. Stop, stats and context compaction stay with the host; the plugin does not run a second loop.',
+      'manual.start.extend.title': 'Add workflow only as needed',
+      'manual.start.extend.body': 'Put long-running writing rules into Guides, per-chat setup into Chat notes, precise state into Variables and MVU, and reference material into the Data Bank.',
+      'manual.terms.title': 'Align the names first',
+      'manual.terms.hint': 'These names run through the whole manual and decide where each switch lives.',
+      'manual.term.dsh.name': 'DSH',
+      'manual.term.dsh.body': 'The host (deepseek-harness). It provides model routing, the default model, keys, sessions, the web container and official slots; the plugin does not duplicate them.',
+      'manual.term.st.name': 'SillyTavern / ST',
+      'manual.term.st.body': 'The independent ecosystem and data formats being kept compatible. The ST architecture here reproduces observable semantics (JSONL, swipes, presets, STscript); it does not run a SillyTavern process inside DSH.',
+      'manual.term.agent.name': 'AgentTavern',
+      'manual.term.agent.body': 'A roleplay profile on the native DSH AgentLoop. The model decides when to read characters, world books, memory or dice; the plugin supplies assets and tools only.',
+      'manual.term.assets.name': 'Assets',
+      'manual.term.assets.body': 'Data you maintain: character cards, world books, presets, personas, regex scripts, quick replies and scripts. Assets are decoupled from chat architecture, so all three architectures can use the same asset.',
+      'manual.arch.title': 'Three session architectures, chosen per chat',
+      'manual.arch.hint': 'Architecture decides the generation loop and available actions; it is not a theme. Switching never migrates an existing chat.',
+      'manual.arch.col.name': 'Architecture',
+      'manual.arch.col.loop': 'Generation loop',
+      'manual.arch.col.fit': 'Best for',
+      'manual.arch.col.limit': 'Limits',
+      'manual.arch.agent.name': 'AgentTavern',
+      'manual.arch.agent.loop': 'DSH AgentLoop',
+      'manual.arch.agent.fit': 'Single-character new chats (default); tool-driven research, memory and variables',
+      'manual.arch.agent.limit': 'No group chats; agent-managed context mode stays closed',
+      'manual.arch.st.name': 'ST',
+      'manual.arch.st.loop': 'Plugin-owned /generate',
+      'manual.arch.st.fit': 'Swipes, regenerate, STscript, Quick Replies and group chats',
+      'manual.arch.st.limit': 'Those actions run only in ST; sampling goes through the ST pipeline',
+      'manual.arch.novel.name': 'AgentNovel',
+      'manual.arch.novel.loop': 'DSH AgentLoop (optional writer subagent)',
+      'manual.arch.novel.fit': 'Long-form production from outline to units',
+      'manual.arch.novel.limit': 'Separate novel library and commit protocol; not a chat',
+      'manual.data.title': 'Where data lives, and how to move from ST',
+      'manual.data.storage': 'New installs keep data under $DSH_HOME/soulmojito/; existing installs keep using $DSH_HOME/tavern/, and a non-empty new directory wins. Characters, world books, presets, chats and backups live there; internal sessions use workspace/.',
+      'manual.data.migration': 'The plugin never scans a SillyTavern install automatically. Import assets one by one: cards (PNG/CHARX/JSON), world books, presets, regex scripts and chat JSONL. Export works the same way. For a full move use Backup ZIP; replace takes a server-side snapshot first.',
+      'manual.diff.title': 'Differences from SillyTavern',
+      'manual.diff.hint': 'Asset formats and some observable behavior are shared; the host, generation loop and extension boundary are not.',
+      'manual.diff.col.topic': 'Dimension',
+      'manual.diff.col.st': 'SillyTavern',
+      'manual.diff.col.soul': 'DSH-SoulMojito',
+      'manual.diff.runtime.topic': 'Runtime',
+      'manual.diff.runtime.st': 'Standalone app with its own server, web UI and updater',
+      'manual.diff.runtime.soul': 'DSH plugin bundle on official slots; starts and upgrades with DSH',
+      'manual.diff.models.topic': 'Models and keys',
+      'manual.diff.models.st': 'API endpoints and keys configured inside ST',
+      'manual.diff.models.soul': 'Reuses DSH providers, default model and keys; no second configuration',
+      'manual.diff.loop.topic': 'Generation loop',
+      'manual.diff.loop.st': 'The ST server assembles the prompt and calls the LLM',
+      'manual.diff.loop.soul': 'AgentTavern uses the DSH AgentLoop by default; only ST uses the plugin-owned /generate',
+      'manual.diff.context.topic': 'Context',
+      'manual.diff.context.st': 'Mostly world books, summaries and Author’s Note',
+      'manual.diff.context.soul': 'AgentTavern adds memory retrieval, variable scopes, projection and compaction; context mode only chooses history projection',
+      'manual.diff.surface.topic': 'Interaction',
+      'manual.diff.surface.st': 'One chat UI owns assets and generation',
+      'manual.diff.surface.soul': 'Assets live in this panel; conversation and composer use native DSH surfaces, with actions split by architecture',
+      'manual.diff.groups.topic': 'Group chats',
+      'manual.diff.groups.st': 'Native capability',
+      'manual.diff.groups.soul': 'Group chats stay on ST; no AgentTavern group sessions until the host exposes reliable actor metadata',
+      'manual.diff.extensions.topic': 'Extensions',
+      'manual.diff.extensions.st': 'Third-party ST extensions load directly',
+      'manual.diff.extensions.soul': 'Mod API: disabled by default, declared capabilities, sandboxed panel iframe; arbitrary ST extensions are not loaded',
+      'manual.diff.data.topic': 'Data directory',
+      'manual.diff.data.st': 'ST’s own data directory',
+      'manual.diff.data.soul': '$DSH_HOME/soulmojito/ (tavern/ for older installs); import/export is supported, the ST directory is not shared directly',
+      'manual.diff.scripts.topic': 'Templates and scripts',
+      'manual.diff.scripts.st': 'EJS and STscript follow ST behavior',
+      'manual.diff.scripts.soul': 'EJS is off by default and node:vm is not a zero-trust sandbox; STscript and QR run only on ST',
+      'manual.features.title': 'Feature map: what each section owns',
+      'manual.features.hint': 'Use the button in each card to jump to its section; this manual does not duplicate every form.',
+      'manual.features.group.assets': 'Content assets',
+      'manual.features.group.sessions': 'Session workspace',
+      'manual.features.group.system': 'Agent and system',
+      'manual.feature.characters.name': 'Characters',
+      'manual.feature.characters.body': 'Import, inspect, edit, set current and export; embedded world books, regex and scripts are recognized with the card.',
+      'manual.feature.worlds.name': 'World Info',
+      'manual.feature.worlds.body': 'Entries, activation rules, budgets and linked books; card-linked books show their effective state and session copies stay separate from base assets.',
+      'manual.feature.presets.name': 'Presets',
+      'manual.feature.presets.body': 'prompt_order, sampling parameters and ST-shaped imports; the active preset is projected by entry role in AgentTavern.',
+      'manual.feature.personasGroups.name': 'Personas and groups',
+      'manual.feature.personasGroups.body': 'Persona avatar, description and position/depth/role; group members, talkativeness and group nudge.',
+      'manual.feature.regexQuickReplies.name': 'Regex and Quick Replies',
+      'manual.feature.regexQuickReplies.body': 'Regex is grouped by global, character and preset source; Quick Replies are ST command sets and only show buttons in ST chats.',
+      'manual.feature.scriptsNovels.name': 'Scripts and novels',
+      'manual.feature.scriptsNovels.body': 'Script chunks, binding and progress; AgentNovel outlines, units and immutable commits.',
+      'manual.feature.dataBank.name': 'Data Bank',
+      'manual.feature.dataBank.body': 'Import text, chunk it, retrieve by embedding or keywords; attached files enter ST and Agent reference context.',
+      'manual.feature.chats.name': 'Chats',
+      'manual.feature.chats.body': 'JSONL import/export, branching, checkpoints, copy and swipes; every chat binds one real DSH session.',
+      'manual.feature.notes.name': 'Chat notes',
+      'manual.feature.notes.body': 'Author’s Note and Summary write to chat_metadata; generation only reads them.',
+      'manual.feature.guides.name': 'Guides',
+      'manual.feature.guides.body': 'Long-running writing and pacing directives for this chat, up to 8; never echoed into the body.',
+      'manual.feature.variables.name': 'Variables',
+      'manual.feature.variables.body': 'turn/chat/character/agent/global scopes and CAS writes; MVU receipts can be undone and failed items retried.',
+      'manual.feature.games.name': 'Games',
+      'manual.feature.games.body': 'Nine built-in games plus imported or Mod game packages; human moves wake the agent across bundles without a chat message.',
+      'manual.feature.prompts.name': 'Prompt viewer',
+      'manual.feature.prompts.body': 'Inspect ST’s final request each turn and world-book activation; Agent mode shows only the plugin’s pre-injection surface.',
+      'manual.feature.behavior.name': 'Behavior',
+      'manual.feature.behavior.body': 'One home for new-chat architecture, context mode, preload, tool writes, frontend and game switches.',
+      'manual.feature.memory.name': 'Memory retrieval',
+      'manual.feature.memory.body': 'Keyword baseline; configure remote embeddings or local ONNX to upgrade to hybrid retrieval.',
+      'manual.feature.workbench.name': 'Workbench',
+      'manual.feature.workbench.body': 'Change cards, books and presets by conversation with a diff approval gate; audition characters and debug chats.',
+      'manual.feature.im.name': 'Chat channels',
+      'manual.feature.im.body': 'QQ, WeChat and OneBot accounts, QR binding, peer bindings and auto-binding; IM sessions run on the native agent.',
+      'manual.feature.mods.name': 'Mods',
+      'manual.feature.mods.body': 'Manifests, declared capabilities, two-layer switches and audit counts; read the capability surface before enabling.',
+      'manual.feature.backup.name': 'Backup and About',
+      'manual.feature.backup.body': 'Whole-library ZIP merge or replace (snapshot before replace); About carries the version and source entry.',
+      'manual.limits.title': 'Limits and honest notes',
+      'manual.limit.managed.title': 'agent-managed stays closed',
+      'manual.limit.managed.body': 'AgentTavern + agent-managed still needs a host agent/context history projection. The plugin will not disguise ordinary compaction as active forgetting or silently fall back.',
+      'manual.limit.groups.title': 'Group chats stay on ST',
+      'manual.limit.groups.body': 'AgentTavern does not create group sessions; group actions, member weighting and group nudge go through the ST pipeline.',
+      'manual.limit.stscript.title': 'STscript and QR are ST-only',
+      'manual.limit.stscript.body': 'AgentTavern has no command channel, so do not treat it as an ST automation replacement; choose ST when you need those actions.',
+      'manual.limit.template.title': 'EJS is off by default',
+      'manual.limit.template.body': 'node:vm is not a zero-trust sandbox. Enable templates only for trusted character cards and world books.',
+      'manual.limit.mods.title': 'Mods are disabled by default',
+      'manual.limit.mods.body': 'Enabling shows the declared capabilities; the panel iframe has allow-scripts but no same-origin. Only enable Mods you have read.',
+      'manual.limit.imNative.title': 'IM Native has broad permissions',
+      'manual.limit.imNative.body': 'This mode exposes shell, file and network tools. Enable it only for trusted sessions; running sessions switch after they go idle.',
+      'manual.limit.prompts.title': 'What the prompt viewer can see',
+      'manual.limit.prompts.body': 'ST records the final request; Agent mode records only the plugin pre-injection surface, and host-projected history stays invisible.',
+      'manual.limit.update.title': 'Restart after an update',
+      'manual.limit.update.body': 'The built-in updater replaces the package; DSH must restart because HMR does not watch node_modules.',
+      'manual.faq.title': 'FAQ',
+      'manual.faq.models.question': 'Why can I not find API or model settings?',
+      'manual.faq.models.answer': 'The plugin has no second model configuration. Set providers and keys in native DSH settings; the in-chat model choice only overrides the current session.',
+      'manual.faq.extensions.question': 'Why can I not use my ST extension directly?',
+      'manual.faq.extensions.answer': 'The plugin does not load third-party SillyTavern extensions. Check the frontend and TavernHelper compatibility surface plus the Mod API before migrating; never assume an arbitrary extension works.',
+      'manual.faq.architecture.question': 'Which architecture should a new chat use?',
+      'manual.faq.architecture.answer': 'Start single-character chats on AgentTavern; choose ST when you need swipes, STscript, Quick Replies or groups. Architecture is saved per chat, and changing defaults never migrates existing chats.',
+      'manual.faq.rollback.question': 'How do I roll back a mistake?',
+      'manual.faq.rollback.answer': 'Use Backup for the whole library: replace imports snapshot first. Undo Variables and MVU through receipts. Workbench writes require an approved diff.',
+      'manual.faq.language.question': 'Where are the language and version?',
+      'manual.faq.language.answer': 'Language follows DSH settings and switches immediately; version and commit appear in About and the panel brand block.',
+      'manual.footer': 'This manual matches {version}. The source code and docs remain the authority for implementation and limits.',
       'backup.hint': 'Export the whole library (state, characters, worlds, presets, personas, groups, chats, and data bank) as one ZIP. Import supports merge (skip conflicts) and replace (snapshot first).',
       'backup.export': 'Export backup',
       'backup.import': 'Import backup',
@@ -2958,6 +3124,9 @@ window.__ModuleLoader__.load({
       // Overview stat cards (2026-10-21 per-page UX): hint line + accessible names.
       'panel.overview.statsHint': 'Asset overview — click a number to jump to its section.',
       'panel.overview.statOpen': 'Open the {section} section',
+      'panel.overview.manualTitle': 'New to SoulMojito?',
+      'panel.overview.manualHint': 'The five-minute start, SillyTavern differences, feature map and honest limits all live in the user manual.',
+      'panel.overview.manualOpen': 'Open the manual',
       // List filters (2026-10-21 per-page UX): shared by characters/presets/scripts/regex/personas.
       'panel.filterPlaceholder': 'Filter…',
       'panel.filterEmpty': 'No matching items',
@@ -4000,6 +4169,8 @@ window.__ModuleLoader__.load({
       'panel.group.session': '会话',
       'panel.group.system': '系统',
       'panel.section.overview': '总览',
+      // 使用手册分区（2026-11-18）：与总览同列置顶，承担新手引导与 ST 对照。
+      'panel.section.manual': '使用手册',
       'panel.section.characters': '角色',
       'panel.section.chats': '聊天',
       'panel.section.guides': '指引',
@@ -4088,6 +4259,168 @@ window.__ModuleLoader__.load({
       // gates 的 locale 校验兜底。
       'panel.section.about': '关于',
       'panel.section.backup': '备份',
+      // 使用手册正文（2026-11-18）：新手引导、名词、架构、ST 对照、功能地图、
+      // 边界与 FAQ。组件在 89c-ui-manual.js，键集与 40-i18n-en.js 严格镜像。
+      'manual.title': '使用手册',
+      'manual.tagline': '挂在 DSH 上的酒馆工作区，不是另一套 SillyTavern。',
+      'manual.intro': '插件复用 DSH 的模型路由、密钥、会话与 Web 容器，只补充角色资产、生成工作流和管理面板。第一次使用，先分清 DSH、SillyTavern（ST）与 AgentTavern 三个名字。',
+      'manual.fact.assets': 'ST 资产可导入导出',
+      'manual.fact.architectures': '三种会话架构按聊天选择',
+      'manual.fact.models': '不配置第二套模型与密钥',
+      'manual.toc.label': '手册目录',
+      'manual.toc.start': '快速上手',
+      'manual.toc.terms': '名词与架构',
+      'manual.toc.diff': '与 ST 的区别',
+      'manual.toc.features': '功能地图',
+      'manual.toc.limits': '边界与 FAQ',
+      'manual.openSection': '打开「{section}」',
+      'manual.start.title': '五分钟上手',
+      'manual.start.hint': '按顺序做即可，不需要先读完整本手册。',
+      'manual.start.import.title': '打开面板，导入角色卡',
+      'manual.start.import.body': '入口是侧栏底部的 SoulMojito 按钮，或「设置 → DSH-SoulMojito」。角色卡支持 PNG、CHARX 与 JSON；世界书、预设、人设也都在内容分区导入。',
+      'manual.start.architecture.title': '为这局选架构',
+      'manual.start.architecture.body': '单角色新聊天默认 AgentTavern；需要 swipe、regenerate、STscript 或群聊时选 ST。架构按聊天生效，改默认值不会迁移已有聊天。',
+      'manual.start.chat.title': '新建聊天并开场',
+      'manual.start.chat.body': '从左侧酒馆分支选角色新建聊天。AgentTavern 进入 DSH 原生对话，ST 进入 Tavern tab；开场白来自角色卡，ST 聊天也可以切换首楼。',
+      'manual.start.talk.title': '在原生输入框继续对话',
+      'manual.start.talk.body': '模型选择按会话保存，未选择时回落到 DSH 默认模型。Stop、统计、上下文压缩由宿主接管，插件不另造第二套循环。',
+      'manual.start.extend.title': '按需补齐工作流',
+      'manual.start.extend.body': '长期写作要求写进持续指引；单局设定写进聊天注记；需要精确状态时用变量与 MVU；资料库检索用数据银行。',
+      'manual.terms.title': '先把名字对齐',
+      'manual.terms.hint': '这几个词贯穿整本手册，也决定你在哪个分区找开关。',
+      'manual.term.dsh.name': 'DSH',
+      'manual.term.dsh.body': '宿主（deepseek-harness）。提供模型路由、默认模型、密钥、会话、Web 容器与官方 slot；插件不复制这些能力。',
+      'manual.term.st.name': 'SillyTavern / ST',
+      'manual.term.st.body': '需要兼容的独立生态与数据格式。这里的 ST 架构只复刻可观察语义（JSONL、swipe、preset、STscript），不是把 ST 进程塞进 DSH。',
+      'manual.term.agent.name': 'AgentTavern',
+      'manual.term.agent.body': '跑在 DSH 原生 AgentLoop 上的角色扮演 profile。模型自己决定何时查角色、世界书、记忆或掷骰；插件只提供资产与工具面。',
+      'manual.term.assets.name': '资产',
+      'manual.term.assets.body': '角色卡、世界书、预设、人设、正则、快速回复、剧本等由你维护的数据。资产与聊天架构解耦，同一份资产三种架构都能用。',
+      'manual.arch.title': '三种会话架构，按聊天选',
+      'manual.arch.hint': '架构决定生成循环与可用动作，不是主题皮肤；切换架构不会迁移已有聊天。',
+      'manual.arch.col.name': '架构',
+      'manual.arch.col.loop': '生成循环',
+      'manual.arch.col.fit': '适合',
+      'manual.arch.col.limit': '边界',
+      'manual.arch.agent.name': 'AgentTavern',
+      'manual.arch.agent.loop': 'DSH AgentLoop',
+      'manual.arch.agent.fit': '单角色新聊天（默认）；需要工具查资料、记忆与变量',
+      'manual.arch.agent.limit': '群聊不可用；agent-managed 上下文模式保持关闭',
+      'manual.arch.st.name': 'ST',
+      'manual.arch.st.loop': '插件自建 /generate',
+      'manual.arch.st.fit': 'swipe、regenerate、STscript、Quick Replies、群聊',
+      'manual.arch.st.limit': '这些动作只在 ST 架构执行；采样参数走 ST 管线',
+      'manual.arch.novel.name': 'AgentNovel',
+      'manual.arch.novel.loop': 'DSH AgentLoop（写手子代理可选）',
+      'manual.arch.novel.fit': '先大纲后单元的长篇生产',
+      'manual.arch.novel.limit': '独立小说库与提交协议，不是聊天',
+      'manual.data.title': '数据放在哪，ST 怎么迁',
+      'manual.data.storage': '新装的数据根是 $DSH_HOME/soulmojito/；存量安装继续使用 $DSH_HOME/tavern/，新目录非空时优先新目录。角色卡、世界书、预设、聊天与备份都在这里，内部会话工作区是 workspace/。',
+      'manual.data.migration': '插件不会自动扫描 SillyTavern 安装目录。迁移时逐项导入角色卡（PNG/CHARX/JSON）、世界书、预设、正则与聊天 JSONL；导出同样按资产走。整库搬迁用「备份」ZIP，replace 前服务端会自动快照。',
+      'manual.diff.title': '和 SillyTavern 的区别',
+      'manual.diff.hint': '相同的是资产格式与一部分可观察行为；不同的是宿主、生成循环和扩展边界。',
+      'manual.diff.col.topic': '维度',
+      'manual.diff.col.st': 'SillyTavern',
+      'manual.diff.col.soul': 'DSH-SoulMojito',
+      'manual.diff.runtime.topic': '运行形态',
+      'manual.diff.runtime.st': '独立应用：自带服务端、网页 UI 与更新器',
+      'manual.diff.runtime.soul': 'DSH 插件包：挂在官方 slot 上，随 DSH 启动与升级',
+      'manual.diff.models.topic': '模型与密钥',
+      'manual.diff.models.st': '在 ST 内配置 API 端点与 Key',
+      'manual.diff.models.soul': '复用 DSH 的 provider、默认模型与密钥；插件不建第二套配置',
+      'manual.diff.loop.topic': '生成循环',
+      'manual.diff.loop.st': 'ST 服务端装配 prompt 并调用 LLM',
+      'manual.diff.loop.soul': '默认 AgentTavern 走 DSH AgentLoop；只有 ST 架构走插件自建 /generate',
+      'manual.diff.context.topic': '上下文',
+      'manual.diff.context.st': '世界书、总结、作者注为主',
+      'manual.diff.context.soul': 'AgentTavern 另有记忆检索、变量作用域、投影与压缩；上下文模式只决定历史投影',
+      'manual.diff.surface.topic': '交互面',
+      'manual.diff.surface.st': '单页聊天 UI 包办资产与生成',
+      'manual.diff.surface.soul': '资产在管理面板；对话与输入框用 DSH 原生表面，动作按架构分化',
+      'manual.diff.groups.topic': '群聊',
+      'manual.diff.groups.st': '原生能力',
+      'manual.diff.groups.soul': '群聊固定 ST 架构；宿主提供可靠 actor 元数据前不建 AgentTavern 群聊',
+      'manual.diff.extensions.topic': '扩展',
+      'manual.diff.extensions.st': '第三方 ST 扩展可直接加载',
+      'manual.diff.extensions.soul': 'Mod API：默认禁用、声明能力面、面板 iframe 沙箱；不加载任意 ST 扩展',
+      'manual.diff.data.topic': '数据目录',
+      'manual.diff.data.st': 'ST 自己的 data 目录',
+      'manual.diff.data.soul': '$DSH_HOME/soulmojito/（旧装 tavern/）；兼容导入导出，不直接共用 ST 目录',
+      'manual.diff.scripts.topic': '模板与脚本',
+      'manual.diff.scripts.st': 'EJS 与 STscript 按 ST 行为执行',
+      'manual.diff.scripts.soul': 'EJS 默认关闭且 node:vm 不是零信任沙箱；STscript 与 QR 只在 ST 架构生效',
+      'manual.features.title': '功能地图：每个分区管什么',
+      'manual.features.hint': '点卡片里的按钮直接跳分区；本手册不复制每个分区的完整表单。',
+      'manual.features.group.assets': '内容资产',
+      'manual.features.group.sessions': '会话工位',
+      'manual.features.group.system': 'Agent 与系统',
+      'manual.feature.characters.name': '角色卡',
+      'manual.feature.characters.body': '导入、查看、编辑、设为当前与导出；卡内嵌世界书、正则与脚本随卡识别。',
+      'manual.feature.worlds.name': '世界书',
+      'manual.feature.worlds.body': '条目、激活条件、预算与链接书；卡绑定书按实际生效状态显示，会话副本与基础资产分离。',
+      'manual.feature.presets.name': '预设',
+      'manual.feature.presets.body': 'prompt_order、采样参数与 ST 形态导入；AgentTavern 激活预设按条目 role 投影。',
+      'manual.feature.personasGroups.name': '人设与群组',
+      'manual.feature.personasGroups.body': '人设的头像、描述与 position/depth/role；群聊成员、talkativeness 与 group nudge。',
+      'manual.feature.regexQuickReplies.name': '正则与快速回复',
+      'manual.feature.regexQuickReplies.body': '正则按全局、角色卡与预设来源分区；快速回复是 ST 命令集合，只在 ST 聊天显示按钮。',
+      'manual.feature.scriptsNovels.name': '剧本与小说',
+      'manual.feature.scriptsNovels.body': '剧本分块、绑定与进度；AgentNovel 大纲、单元与不可变提交。',
+      'manual.feature.dataBank.name': '数据银行',
+      'manual.feature.dataBank.body': '文本入库、分块、embed 或词法检索；附加到聊天后进入 ST 与 Agent 参考上下文。',
+      'manual.feature.chats.name': '聊天',
+      'manual.feature.chats.body': 'JSONL 导入导出、分支、checkpoint、复制与 swipe；每聊天绑定一个正式 DSH 会话。',
+      'manual.feature.notes.name': '聊天注记',
+      'manual.feature.notes.body': 'Author’s Note 与 Summary 写入 chat_metadata，生成侧只读。',
+      'manual.feature.guides.name': '持续指引',
+      'manual.feature.guides.body': '本局长期生效的写作与节奏要求，最多 8 条；正文不回显。',
+      'manual.feature.variables.name': '变量',
+      'manual.feature.variables.body': 'turn/chat/character/agent/global 作用域与 CAS 写入；MVU 回执可撤销、失败项可重试。',
+      'manual.feature.games.name': '游戏',
+      'manual.feature.games.body': '九款内置游戏与导入或 Mod 游戏包；人类落子跨 bundle 唤醒 Agent，不必发聊天消息。',
+      'manual.feature.prompts.name': '提示词',
+      'manual.feature.prompts.body': '查看 ST 每轮实发请求与世界书激活；Agent 模式只看插件预注入面。',
+      'manual.feature.behavior.name': '行为设置',
+      'manual.feature.behavior.body': '新聊天架构、上下文模式、预载、工具写入、前端与游戏开关的统一入口。',
+      'manual.feature.memory.name': '记忆检索',
+      'manual.feature.memory.body': '词法基线；配置远程 embed 或本地 ONNX 后升级为混合检索。',
+      'manual.feature.workbench.name': '工作台',
+      'manual.feature.workbench.body': '对话改卡、书与预设，先方案后 diff 确认；可试演角色、排错聊天。',
+      'manual.feature.im.name': '聊天渠道',
+      'manual.feature.im.body': 'QQ、微信、OneBot 账号、扫码、peer 绑定与自动绑定；IM 会话走原生 Agent。',
+      'manual.feature.mods.name': 'Mod',
+      'manual.feature.mods.body': '清单、能力声明、两层开关与审计；启用前确认能力面。',
+      'manual.feature.backup.name': '备份与关于',
+      'manual.feature.backup.body': '整库 ZIP merge 或 replace（replace 前快照）；关于页给版本与源码入口。',
+      'manual.limits.title': '边界与诚实说明',
+      'manual.limit.managed.title': 'agent-managed 保持关闭',
+      'manual.limit.managed.body': 'AgentTavern + agent-managed 还缺宿主 agent/context 历史投影。插件不会把普通 compaction 冒充主动遗忘，也不会静默回退。',
+      'manual.limit.groups.title': '群聊固定 ST',
+      'manual.limit.groups.body': 'AgentTavern 不创建群聊会话；群聊动作、成员加权与 group nudge 走 ST 管线。',
+      'manual.limit.stscript.title': 'STscript 与 QR 只在 ST',
+      'manual.limit.stscript.body': 'AgentTavern 没有命令通道，不要把它当 ST 自动化的替代品；需要这些动作时选 ST 架构。',
+      'manual.limit.template.title': 'EJS 默认关闭',
+      'manual.limit.template.body': 'node:vm 不是零信任沙箱，只对可信角色卡与世界书开启；不信任的卡不要开模板。',
+      'manual.limit.mods.title': 'Mod 默认禁用',
+      'manual.limit.mods.body': '启用前会展示声明的能力面；面板 iframe 只有 allow-scripts，没有 same-origin。只启用你读过的 Mod。',
+      'manual.limit.imNative.title': 'IM Native 权限较强',
+      'manual.limit.imNative.body': '该模式开放 shell、文件读写、联网等标准工具；只对信任会话开启，运行中的会话等 idle 后切换。',
+      'manual.limit.prompts.title': '提示词查看器的可见范围',
+      'manual.limit.prompts.body': 'ST 记录实发最终请求；Agent 模式只记录插件预注入面，宿主投影的历史不可见。',
+      'manual.limit.update.title': '更新后要重启',
+      'manual.limit.update.body': '内置更新替换包后需要重启 DSH；HMR 不监听 node_modules。',
+      'manual.faq.title': '常见问题',
+      'manual.faq.models.question': '为什么找不到 API 或模型设置？',
+      'manual.faq.models.answer': '插件不提供第二套模型配置。到 DSH 原生设置里配 provider 与密钥；聊天里的模型选择只覆盖当前会话。',
+      'manual.faq.extensions.question': '我的 ST 扩展为什么不能直接用？',
+      'manual.faq.extensions.answer': '插件不加载 SillyTavern 第三方扩展。先看美化前端与酒馆助手兼容面以及 Mod API，确认能力后再迁移；不要假设任意扩展可用。',
+      'manual.faq.architecture.question': '新聊天到底选哪个架构？',
+      'manual.faq.architecture.answer': '单角色日常对话先用 AgentTavern；需要 swipe、STscript、Quick Replies 或群聊再选 ST。架构按聊天保存，改默认值不会迁移已有聊天。',
+      'manual.faq.rollback.question': '改坏了怎么回滚？',
+      'manual.faq.rollback.answer': '整库用备份：replace 导入前自动快照。变量与 MVU 用回执撤销。工作台写入必须先批准 diff。',
+      'manual.faq.language.question': '界面语言和版本在哪看？',
+      'manual.faq.language.answer': '语言跟随 DSH 设置，切换即时生效；版本与 commit 在「关于」与面板品牌块。',
+      'manual.footer': '本手册对应 {version}。完整实现与边界以源码和 docs 为准。',
       'backup.hint': '把整个资料库（状态、角色卡、世界书、预设、人设、群组、聊天与数据银行）导出为一个 ZIP。导入支持合并（跳过冲突）与替换（先创建快照）。',
       'backup.export': '导出备份',
       'backup.import': '导入备份',
@@ -4253,6 +4586,9 @@ window.__ModuleLoader__.load({
       // 总览资产速览（2026-10-21 分页 UX）：数字卡片的引导文案与无障碍名。
       'panel.overview.statsHint': '资产一览，点击数字直达对应分区。',
       'panel.overview.statOpen': '打开{section}分区',
+      'panel.overview.manualTitle': '第一次用 SoulMojito？',
+      'panel.overview.manualHint': '五分钟上手、与 SillyTavern 的区别、功能地图和边界说明都在使用手册里。',
+      'panel.overview.manualOpen': '打开使用手册',
       // 清单过滤（2026-10-21 分页 UX）：角色/预设/剧本/正则/人设五处同款过滤框。
       'panel.filterPlaceholder': '筛选…',
       'panel.filterEmpty': '没有匹配项',
@@ -13603,6 +13939,249 @@ window.__ModuleLoader__.load({
       }, TavernBodyActions))
     }
 
+// Management-panel user manual (2026-11-18). All prose lives in the zh/en
+    // locale tables; this fragment only carries section targets and i18n key
+    // references so the manual follows host locale switches like every other
+    // panel section. Content is data-driven to keep the component readable.
+    function IconHelpOutline16({ size, className }) {
+      const dimension = size ?? 16
+      return h('svg', {
+        width: dimension,
+        height: dimension,
+        className,
+        viewBox: '0 0 16 16',
+        fill: 'none',
+        xmlns: 'http://www.w3.org/2000/svg',
+        'aria-hidden': 'true',
+        strokeWidth: 1,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+      },
+      h('circle', { cx: 8, cy: 8, r: 6, stroke: 'currentColor' }),
+      h('circle', { cx: 8, cy: 8, r: 2.1, stroke: 'currentColor' }),
+      h('path', { d: 'M8 2v3.9M8 10.1V14M2 8h3.9M10.1 8H14', stroke: 'currentColor' }))
+    }
+
+    const MANUAL_TOC = [
+      { id: 'start', target: 'dt-manual-start', label: 'manual.toc.start' },
+      { id: 'terms', target: 'dt-manual-terms', label: 'manual.toc.terms' },
+      { id: 'diff', target: 'dt-manual-diff', label: 'manual.toc.diff' },
+      { id: 'features', target: 'dt-manual-features', label: 'manual.toc.features' },
+      { id: 'limits', target: 'dt-manual-limits', label: 'manual.toc.limits' },
+    ]
+
+    const MANUAL_FACTS = [
+      'manual.fact.assets',
+      'manual.fact.architectures',
+      'manual.fact.models',
+    ]
+
+    const MANUAL_STEPS = [
+      { id: 'import', title: 'manual.start.import.title', body: 'manual.start.import.body', sections: ['characters'] },
+      { id: 'architecture', title: 'manual.start.architecture.title', body: 'manual.start.architecture.body', sections: ['behavior', 'chats'] },
+      { id: 'chat', title: 'manual.start.chat.title', body: 'manual.start.chat.body', sections: ['chats'] },
+      { id: 'talk', title: 'manual.start.talk.title', body: 'manual.start.talk.body', sections: [] },
+      { id: 'extend', title: 'manual.start.extend.title', body: 'manual.start.extend.body', sections: ['guides', 'notes', 'variables'] },
+    ]
+
+    const MANUAL_TERMS = [
+      { id: 'dsh', name: 'manual.term.dsh.name', body: 'manual.term.dsh.body' },
+      { id: 'st', name: 'manual.term.st.name', body: 'manual.term.st.body' },
+      { id: 'agent', name: 'manual.term.agent.name', body: 'manual.term.agent.body' },
+      { id: 'assets', name: 'manual.term.assets.name', body: 'manual.term.assets.body' },
+    ]
+
+    const MANUAL_ARCH_HEADERS = [
+      'manual.arch.col.name',
+      'manual.arch.col.loop',
+      'manual.arch.col.fit',
+      'manual.arch.col.limit',
+    ]
+
+    const MANUAL_ARCH_ROWS = [
+      { id: 'agent', cells: ['manual.arch.agent.name', 'manual.arch.agent.loop', 'manual.arch.agent.fit', 'manual.arch.agent.limit'] },
+      { id: 'st', cells: ['manual.arch.st.name', 'manual.arch.st.loop', 'manual.arch.st.fit', 'manual.arch.st.limit'] },
+      { id: 'novel', cells: ['manual.arch.novel.name', 'manual.arch.novel.loop', 'manual.arch.novel.fit', 'manual.arch.novel.limit'] },
+    ]
+
+    const MANUAL_DIFF_HEADERS = [
+      'manual.diff.col.topic',
+      'manual.diff.col.st',
+      'manual.diff.col.soul',
+    ]
+
+    const MANUAL_DIFF_ROWS = [
+      { id: 'diff-runtime', cells: ['manual.diff.runtime.topic', 'manual.diff.runtime.st', 'manual.diff.runtime.soul'] },
+      { id: 'diff-models', cells: ['manual.diff.models.topic', 'manual.diff.models.st', 'manual.diff.models.soul'] },
+      { id: 'diff-loop', cells: ['manual.diff.loop.topic', 'manual.diff.loop.st', 'manual.diff.loop.soul'] },
+      { id: 'diff-context', cells: ['manual.diff.context.topic', 'manual.diff.context.st', 'manual.diff.context.soul'] },
+      { id: 'diff-surface', cells: ['manual.diff.surface.topic', 'manual.diff.surface.st', 'manual.diff.surface.soul'] },
+      { id: 'diff-groups', cells: ['manual.diff.groups.topic', 'manual.diff.groups.st', 'manual.diff.groups.soul'] },
+      { id: 'diff-extensions', cells: ['manual.diff.extensions.topic', 'manual.diff.extensions.st', 'manual.diff.extensions.soul'] },
+      { id: 'diff-data', cells: ['manual.diff.data.topic', 'manual.diff.data.st', 'manual.diff.data.soul'] },
+      { id: 'diff-scripts', cells: ['manual.diff.scripts.topic', 'manual.diff.scripts.st', 'manual.diff.scripts.soul'] },
+    ]
+
+    const MANUAL_FEATURE_GROUPS = [
+      {
+        id: 'assets',
+        title: 'manual.features.group.assets',
+        items: [
+          { id: 'feature-characters', name: 'manual.feature.characters.name', body: 'manual.feature.characters.body', section: 'characters' },
+          { id: 'feature-worlds', name: 'manual.feature.worlds.name', body: 'manual.feature.worlds.body', section: 'worlds' },
+          { id: 'feature-presets', name: 'manual.feature.presets.name', body: 'manual.feature.presets.body', section: 'presets' },
+          { id: 'feature-personasGroups', name: 'manual.feature.personasGroups.name', body: 'manual.feature.personasGroups.body', section: 'personas' },
+          { id: 'feature-regexQuickReplies', name: 'manual.feature.regexQuickReplies.name', body: 'manual.feature.regexQuickReplies.body', section: 'regex' },
+          { id: 'feature-scriptsNovels', name: 'manual.feature.scriptsNovels.name', body: 'manual.feature.scriptsNovels.body', section: 'scripts' },
+          { id: 'feature-dataBank', name: 'manual.feature.dataBank.name', body: 'manual.feature.dataBank.body', section: 'dataBank' },
+        ],
+      },
+      {
+        id: 'sessions',
+        title: 'manual.features.group.sessions',
+        items: [
+          { id: 'feature-chats', name: 'manual.feature.chats.name', body: 'manual.feature.chats.body', section: 'chats' },
+          { id: 'feature-notes', name: 'manual.feature.notes.name', body: 'manual.feature.notes.body', section: 'notes' },
+          { id: 'feature-guides', name: 'manual.feature.guides.name', body: 'manual.feature.guides.body', section: 'guides' },
+          { id: 'feature-variables', name: 'manual.feature.variables.name', body: 'manual.feature.variables.body', section: 'variables' },
+          { id: 'feature-games', name: 'manual.feature.games.name', body: 'manual.feature.games.body', section: 'games' },
+          { id: 'feature-prompts', name: 'manual.feature.prompts.name', body: 'manual.feature.prompts.body', section: 'prompts' },
+        ],
+      },
+      {
+        id: 'system',
+        title: 'manual.features.group.system',
+        items: [
+          { id: 'feature-behavior', name: 'manual.feature.behavior.name', body: 'manual.feature.behavior.body', section: 'behavior' },
+          { id: 'feature-memory', name: 'manual.feature.memory.name', body: 'manual.feature.memory.body', section: 'memory' },
+          { id: 'feature-workbench', name: 'manual.feature.workbench.name', body: 'manual.feature.workbench.body', section: 'workbench' },
+          { id: 'feature-im', name: 'manual.feature.im.name', body: 'manual.feature.im.body', section: 'im' },
+          { id: 'feature-mods', name: 'manual.feature.mods.name', body: 'manual.feature.mods.body', section: 'mods' },
+          { id: 'feature-backup', name: 'manual.feature.backup.name', body: 'manual.feature.backup.body', section: 'backup' },
+        ],
+      },
+    ]
+
+    const MANUAL_LIMITS = [
+      { id: 'limit-managed', title: 'manual.limit.managed.title', body: 'manual.limit.managed.body' },
+      { id: 'limit-groups', title: 'manual.limit.groups.title', body: 'manual.limit.groups.body' },
+      { id: 'limit-stscript', title: 'manual.limit.stscript.title', body: 'manual.limit.stscript.body' },
+      { id: 'limit-template', title: 'manual.limit.template.title', body: 'manual.limit.template.body' },
+      { id: 'limit-mods', title: 'manual.limit.mods.title', body: 'manual.limit.mods.body' },
+      { id: 'limit-imNative', title: 'manual.limit.imNative.title', body: 'manual.limit.imNative.body' },
+      { id: 'limit-prompts', title: 'manual.limit.prompts.title', body: 'manual.limit.prompts.body' },
+      { id: 'limit-update', title: 'manual.limit.update.title', body: 'manual.limit.update.body' },
+    ]
+
+    const MANUAL_FAQ = [
+      { id: 'models', question: 'manual.faq.models.question', answer: 'manual.faq.models.answer' },
+      { id: 'extensions', question: 'manual.faq.extensions.question', answer: 'manual.faq.extensions.answer' },
+      { id: 'architecture', question: 'manual.faq.architecture.question', answer: 'manual.faq.architecture.answer' },
+      { id: 'rollback', question: 'manual.faq.rollback.question', answer: 'manual.faq.rollback.answer' },
+      { id: 'language', question: 'manual.faq.language.question', answer: 'manual.faq.language.answer' },
+    ]
+
+    function ManualSectionTable({ headers, rows }) {
+      const t = useTranslate()
+      return h('div', { className: 'dt-manual-table-wrap' },
+        h('table', { className: 'dt-manual-table' },
+          h('thead', null,
+            h('tr', null, headers.map((key) => h('th', { key, scope: 'col' }, t(key))))),
+          h('tbody', null, rows.map((row) => h('tr', { key: row.id },
+            row.cells.map((key, index) => index === 0
+              ? h('th', { key, scope: 'row' }, t(key))
+              : h('td', { key }, t(key))))))))
+    }
+
+    function ManualOpenButton({ section }) {
+      const t = useTranslate()
+      const target = panelSections.find((item) => item.id === section)
+      const label = target === undefined ? section : target.label(t)
+      return h('button', {
+        type: 'button',
+        className: 'dt-manual-open',
+        onClick: () => update({ panelSection: section }),
+      }, t('manual.openSection', { section: label }))
+    }
+
+    function PanelManual() {
+      const t = useTranslate()
+      const state = useTavernStore()
+      const version = state.bootstrap.version ? `v${state.bootstrap.version}` : 'unknown'
+      const jumpTo = (target) => {
+        const node = document.getElementById(target)
+        if (node !== null) node.scrollIntoView({ block: 'start' })
+      }
+      return h('div', { className: 'dt-manual' },
+        h('section', { className: 'dt-settings-band dt-manual-hero' },
+          h('div', { className: 'dt-manual-hero-head' },
+            h('div', { className: 'dt-manual-hero-copy' },
+              h('h3', null, t('manual.title')),
+              h('p', { className: 'dt-manual-tagline' }, t('manual.tagline')))),
+          h('p', { className: 'dt-hint' }, t('manual.intro')),
+          h('ul', { className: 'dt-manual-facts' },
+            MANUAL_FACTS.map((key) => h('li', { key }, t(key))))),
+        h('nav', { className: 'dt-manual-toc', 'aria-label': t('manual.toc.label') },
+          MANUAL_TOC.map((item) => h('button', {
+            key: item.id,
+            type: 'button',
+            onClick: () => jumpTo(item.target),
+          }, t(item.label)))),
+        h('section', { id: 'dt-manual-start', className: 'dt-settings-band' },
+          h('h3', null, t('manual.start.title')),
+          h('p', { className: 'dt-hint' }, t('manual.start.hint')),
+          h('ol', { className: 'dt-manual-steps' },
+            MANUAL_STEPS.map((step, index) => h('li', { key: step.id },
+              h('span', { className: 'dt-manual-step-num', 'aria-hidden': 'true' }, String(index + 1).padStart(2, '0')),
+              h('div', { className: 'dt-manual-step-copy' },
+                h('strong', null, t(step.title)),
+                h('p', { className: 'dt-hint' }, t(step.body)),
+                step.sections.length > 0
+                  ? h('div', { className: 'dt-manual-actions' },
+                    step.sections.map((section) => h(ManualOpenButton, { key: section, section })))
+                  : null))))),
+        h('section', { id: 'dt-manual-terms', className: 'dt-settings-band' },
+          h('h3', null, t('manual.terms.title')),
+          h('p', { className: 'dt-hint' }, t('manual.terms.hint')),
+          h('dl', { className: 'dt-manual-terms' },
+            MANUAL_TERMS.map((term) => h('div', { key: term.id, className: 'dt-manual-term' },
+              h('dt', null, t(term.name)),
+              h('dd', null, t(term.body))))),
+          h('h4', { className: 'dt-manual-subhead' }, t('manual.arch.title')),
+          h('p', { className: 'dt-hint' }, t('manual.arch.hint')),
+          h(ManualSectionTable, { headers: MANUAL_ARCH_HEADERS, rows: MANUAL_ARCH_ROWS })),
+        h('section', { className: 'dt-settings-band' },
+          h('h3', null, t('manual.data.title')),
+          h('p', { className: 'dt-manual-body' }, t('manual.data.storage')),
+          h('p', { className: 'dt-manual-body' }, t('manual.data.migration'))),
+        h('section', { id: 'dt-manual-diff', className: 'dt-settings-band' },
+          h('h3', null, t('manual.diff.title')),
+          h('p', { className: 'dt-hint' }, t('manual.diff.hint')),
+          h(ManualSectionTable, { headers: MANUAL_DIFF_HEADERS, rows: MANUAL_DIFF_ROWS })),
+        h('section', { id: 'dt-manual-features', className: 'dt-settings-band' },
+          h('h3', null, t('manual.features.title')),
+          h('p', { className: 'dt-hint' }, t('manual.features.hint')),
+          h('div', { className: 'dt-manual-feature-groups' },
+            MANUAL_FEATURE_GROUPS.map((group) => h('div', { key: group.id, className: 'dt-manual-feature-group' },
+              h('h4', null, t(group.title)),
+              h('div', { className: 'dt-manual-feature-grid' },
+                group.items.map((item) => h('article', { key: item.id, className: 'dt-manual-feature' },
+                  h('h5', null, t(item.name)),
+                  h('p', null, t(item.body)),
+                  h(ManualOpenButton, { section: item.section })))))))),
+        h('section', { id: 'dt-manual-limits', className: 'dt-settings-band' },
+          h('h3', null, t('manual.limits.title')),
+          h('ul', { className: 'dt-manual-limits' },
+            MANUAL_LIMITS.map((limit) => h('li', { key: limit.id },
+              h('strong', null, t(limit.title)),
+              h('p', null, t(limit.body))))),
+          h('h4', { className: 'dt-manual-subhead' }, t('manual.faq.title')),
+          h('div', { className: 'dt-manual-faq-list' },
+            MANUAL_FAQ.map((item) => h('details', { key: item.id, className: 'dt-manual-faq' },
+              h('summary', null, t(item.question)),
+              h('p', null, t(item.answer)))))),
+        h('p', { className: 'dt-manual-footer' }, t('manual.footer', { version })))
+    }
     // 面板分区注册表（提案 0015 §3.5 P0）：{id, icon, label, component}。
     // label 是 locale thunk（渲染点传入当前 t，宿主 locale 切换跟随——MVU 侧栏
     // tab 的 title thunk 先例）；component 收 {ctx, useSessions} 统一面板宿主
@@ -13610,7 +14189,7 @@ window.__ModuleLoader__.load({
     // 顺序即注册顺序，行为与常量 + 三元链时代零变化；P1 的 Mod 面板分区
     // （声明式清单 + 通用 ModSurface 渲染器）以同一入口追加。
     // 分区分组（2026-10-21 导航重做，用户反馈「面板特别难用」）：导航按
-    // content/session/system 渲染组标签；无组分区（overview/about）置顶/置底，
+    // content/session/system 渲染组标签；无组分区（overview/manual/about）置顶/置底，
     // Mod 动态分区在 syncModPanelSections 标 group:'system'。组是呈现层概念，
     // 声明顺序即渲染顺序。
     const panelSections = []
@@ -13630,6 +14209,10 @@ window.__ModuleLoader__.load({
 
     for (const definition of [
       { id: 'overview', icon: IconSparkle16, label: (t) => t('panel.section.overview'), component: () => h(PanelOverview) },
+      // User manual: ungrouped and pinned beside Overview so first-time users
+      // hit onboarding before the asset sections. Content lives in
+      // 89c-ui-manual.js and the locale tables.
+      { id: 'manual', icon: IconHelpOutline16, label: (t) => t('panel.section.manual'), component: () => h(PanelManual) },
       { id: 'characters', group: 'content', icon: IconUserOutline16, label: (t) => t('panel.section.characters'), component: (host) => h(PanelCharacters, { ctx: host.ctx, useSessions: host.useSessions }) },
       { id: 'chats', group: 'session', icon: IconQueueOutline14, label: (t) => t('panel.section.chats'), component: (host) => h(TavernSidebar, { ctx: host.ctx, useSessions: host.useSessions, allowChatImport: true }) },
       { id: 'guides', group: 'session', icon: IconListPenOutline16, label: (t) => t('panel.section.guides'), component: (host) => h(PanelGuides, { useSessions: host.useSessions }) },
@@ -13712,6 +14295,15 @@ window.__ModuleLoader__.load({
         h('section', { className: 'dt-settings-band' },
           h('h3', null, t('panel.title')),
           h('p', { className: 'dt-hint' }, t('panel.overview.statsHint')),
+          h('div', { className: 'dt-manual-callout' },
+            h('div', { className: 'dt-manual-callout-copy' },
+              h('strong', null, t('panel.overview.manualTitle')),
+              h('p', { className: 'dt-hint' }, t('panel.overview.manualHint'))),
+            h(Button, {
+              size: 'sm',
+              variant: 'outline',
+              onClick: () => update({ panelSection: 'manual' }),
+            }, t('panel.overview.manualOpen'))),
           h('div', { className: 'dt-stat-grid' },
             stats.map((stat) => h('button', {
               key: stat.section,
@@ -18097,6 +18689,57 @@ window.__ModuleLoader__.load({
         .dt-body-dialog .dt-editor-modal-body>.dt-editor{flex:1;min-height:0}
         .dt-editor-field.dt-body-textarea{flex:1;min-height:0}
         .dt-editor-field.dt-body-textarea textarea{flex:1;height:auto;min-height:120px;max-height:none;resize:none;overflow-y:auto}
+        /* User manual: onboarding, the ST comparison tables, feature cards and FAQ disclosures. */
+        .dt-manual-hero-head{display:flex;align-items:center;gap:12px;margin-bottom:4px}
+        .dt-manual-hero-copy{min-width:0}
+        .dt-manual-hero-copy h3{margin:0}
+        .dt-manual-tagline{margin:2px 0 0;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:20px}
+        .dt-manual-facts{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 0;padding:0;list-style:none}
+        .dt-manual-facts>li{padding:3px 9px;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:16px}
+        .dt-manual-toc{display:flex;flex-wrap:wrap;gap:6px;padding:12px 24px;border-bottom:1px solid var(--dsw-alias-border-l2);background:color-mix(in srgb,var(--dsw-alias-label-primary) 3%,transparent)}
+        .dt-manual-toc>button{min-height:28px;padding:2px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;color:var(--dsw-alias-label-secondary);background:transparent;font:inherit;font-size:11px;line-height:16px;cursor:pointer}
+        .dt-manual-toc>button:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+        .dt-manual-steps{display:flex;flex-direction:column;gap:12px;margin:0;padding:0;list-style:none}
+        .dt-manual-steps>li{display:grid;grid-template-columns:30px minmax(0,1fr);align-items:start;gap:10px}
+        .dt-manual-step-num{display:grid;place-items:center;width:26px;height:26px;border-radius:999px;border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-tertiary);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;line-height:1}
+        .dt-manual-step-copy>strong{display:block;font-size:13px;line-height:20px}
+        .dt-manual-step-copy>.dt-hint{margin:4px 0 0}
+        .dt-manual-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+        .dt-manual-open{align-self:flex-start;min-height:26px;padding:2px 9px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-secondary);background:transparent;font:inherit;font-size:11px;line-height:16px;cursor:pointer}
+        .dt-manual-open:hover{border-color:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-label-primary)}
+        .dt-manual-subhead{margin:20px 0 4px;padding-top:16px;border-top:1px solid var(--dsw-alias-border-l2);font-size:13px;line-height:19px}
+        .dt-manual-terms{display:flex;flex-direction:column;gap:10px;margin:0}
+        .dt-manual-term{display:grid;grid-template-columns:150px minmax(0,1fr);gap:12px;align-items:start}
+        .dt-manual-term>dt{font-size:13px;line-height:19px;font-weight:600}
+        .dt-manual-term>dd{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:19px}
+        .dt-manual-body{margin:0 0 10px;color:var(--dsw-alias-label-secondary);font-size:12.5px;line-height:20px}
+        .dt-manual-table-wrap{margin-top:4px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;overflow-x:auto}
+        .dt-manual-table{width:100%;min-width:640px;border-collapse:collapse;font-size:12px;line-height:18px;text-align:left}
+        .dt-manual-table th,.dt-manual-table td{padding:8px 10px;vertical-align:top;border-bottom:1px solid var(--dsw-alias-border-l2)}
+        .dt-manual-table thead th{color:var(--dsw-alias-label-secondary);background:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent);font-weight:600;white-space:nowrap}
+        .dt-manual-table tbody th{font-weight:600;white-space:nowrap}
+        .dt-manual-table tbody td{color:var(--dsw-alias-label-tertiary)}
+        .dt-manual-table tbody tr:last-child th,.dt-manual-table tbody tr:last-child td{border-bottom:0}
+        .dt-manual-feature-groups{display:flex;flex-direction:column;gap:18px}
+        .dt-manual-feature-group>h4{margin:0 0 8px;font-size:13px;line-height:19px;font-weight:600}
+        .dt-manual-feature-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}
+        .dt-manual-feature{display:flex;flex-direction:column;gap:6px;padding:11px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
+        .dt-manual-feature>h5{margin:0;font-size:13px;line-height:18px}
+        .dt-manual-feature>p{flex:1;margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
+        .dt-manual-limits{display:flex;flex-direction:column;gap:10px;margin:0;padding:0;list-style:none}
+        .dt-manual-limits>li{padding:10px 12px;border-left:2px solid var(--dsw-alias-state-warning-primary,var(--dsw-alias-border-l2));border-radius:0 8px 8px 0;background:color-mix(in srgb,var(--dsw-alias-label-primary) 3%,transparent)}
+        .dt-manual-limits>li>strong{font-size:13px;line-height:19px}
+        .dt-manual-limits>li>p{margin:3px 0 0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:19px}
+        .dt-manual-faq-list{display:flex;flex-direction:column;gap:6px}
+        .dt-manual-faq{padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
+        .dt-manual-faq>summary{color:var(--dsw-alias-label-primary);font-size:12.5px;line-height:18px;cursor:pointer}
+        .dt-manual-faq>p{margin:8px 0 0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:19px}
+        .dt-manual-footer{margin:16px 24px 24px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
+        .dt-manual-callout{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:12px 0;padding:12px 14px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 3%,transparent)}
+        .dt-manual-callout-copy{min-width:0}
+        .dt-manual-callout-copy>strong{font-size:13px;line-height:19px}
+        .dt-manual-callout-copy>.dt-hint{margin:2px 0 0}
+        @media(max-width:700px){.dt-manual-toc{padding:12px 16px}.dt-manual-term{grid-template-columns:1fr;gap:2px}.dt-manual-callout{align-items:flex-start;flex-direction:column}.dt-manual-footer{margin:14px 16px 18px}}
         /* IM views: task-first workspaces, aligned channels and quiet host-token surfaces. */
         .dt-im-workspace{min-width:0;min-height:100%}
         .dt-im-workspace .dt-settings-band>h3::before{display:none}

@@ -5,7 +5,7 @@
     // 顺序即注册顺序，行为与常量 + 三元链时代零变化；P1 的 Mod 面板分区
     // （声明式清单 + 通用 ModSurface 渲染器）以同一入口追加。
     // 分区分组（2026-10-21 导航重做，用户反馈「面板特别难用」）：导航按
-    // content/session/system 渲染组标签；无组分区（overview/about）置顶/置底，
+    // content/session/system 渲染组标签；无组分区（overview/manual/about）置顶/置底，
     // Mod 动态分区在 syncModPanelSections 标 group:'system'。组是呈现层概念，
     // 声明顺序即渲染顺序。
     const panelSections = []
@@ -25,6 +25,10 @@
 
     for (const definition of [
       { id: 'overview', icon: IconSparkle16, label: (t) => t('panel.section.overview'), component: () => h(PanelOverview) },
+      // User manual: ungrouped and pinned beside Overview so first-time users
+      // hit onboarding before the asset sections. Content lives in
+      // 89c-ui-manual.js and the locale tables.
+      { id: 'manual', icon: IconHelpOutline16, label: (t) => t('panel.section.manual'), component: () => h(PanelManual) },
       { id: 'characters', group: 'content', icon: IconUserOutline16, label: (t) => t('panel.section.characters'), component: (host) => h(PanelCharacters, { ctx: host.ctx, useSessions: host.useSessions }) },
       { id: 'chats', group: 'session', icon: IconQueueOutline14, label: (t) => t('panel.section.chats'), component: (host) => h(TavernSidebar, { ctx: host.ctx, useSessions: host.useSessions, allowChatImport: true }) },
       { id: 'guides', group: 'session', icon: IconListPenOutline16, label: (t) => t('panel.section.guides'), component: (host) => h(PanelGuides, { useSessions: host.useSessions }) },
@@ -107,6 +111,15 @@
         h('section', { className: 'dt-settings-band' },
           h('h3', null, t('panel.title')),
           h('p', { className: 'dt-hint' }, t('panel.overview.statsHint')),
+          h('div', { className: 'dt-manual-callout' },
+            h('div', { className: 'dt-manual-callout-copy' },
+              h('strong', null, t('panel.overview.manualTitle')),
+              h('p', { className: 'dt-hint' }, t('panel.overview.manualHint'))),
+            h(Button, {
+              size: 'sm',
+              variant: 'outline',
+              onClick: () => update({ panelSection: 'manual' }),
+            }, t('panel.overview.manualOpen'))),
           h('div', { className: 'dt-stat-grid' },
             stats.map((stat) => h('button', {
               key: stat.section,

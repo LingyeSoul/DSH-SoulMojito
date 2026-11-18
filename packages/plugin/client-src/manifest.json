@@ -29,6 +29,7 @@
     "88b-ui-card-scripts.js",
     "89-ui-assistant.js",
     "89b-ui-body.js",
+    "89c-ui-manual.js",
     "90-panels-core.js",
     "90b-panel-views.js",
     "91-panels-data.js",

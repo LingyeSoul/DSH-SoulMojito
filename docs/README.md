@@ -219,6 +219,7 @@
 - [`2026-10-23-panel-mobile-group-strip.md`](../decisions/2026-10-23-panel-mobile-group-strip.md) — 移动端标题区挤压：分组容器在 700px 断点里退场 + 活动分区 chip 入视
 - [`2026-10-25-panel-editors-as-modals.md`](../decisions/2026-10-25-panel-editors-as-modals.md) — 管理面板编辑器改为弹窗
 - [`2026-11-01-panel-asset-viewers-as-modals.md`](../decisions/2026-11-01-panel-asset-viewers-as-modals.md) — 管理面板资产查看改为弹窗
+- [`2026-11-18-panel-manual.md`](../decisions/2026-11-18-panel-manual.md) — 面板「使用手册」分区：新手引导、ST 九维对照、功能地图与边界 FAQ
 
 ### Mod 扩展
 

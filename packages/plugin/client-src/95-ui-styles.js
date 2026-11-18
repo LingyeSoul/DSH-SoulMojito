@@ -595,6 +595,57 @@
         .dt-body-dialog .dt-editor-modal-body>.dt-editor{flex:1;min-height:0}
         .dt-editor-field.dt-body-textarea{flex:1;min-height:0}
         .dt-editor-field.dt-body-textarea textarea{flex:1;height:auto;min-height:120px;max-height:none;resize:none;overflow-y:auto}
+        /* User manual: onboarding, the ST comparison tables, feature cards and FAQ disclosures. */
+        .dt-manual-hero-head{display:flex;align-items:center;gap:12px;margin-bottom:4px}
+        .dt-manual-hero-copy{min-width:0}
+        .dt-manual-hero-copy h3{margin:0}
+        .dt-manual-tagline{margin:2px 0 0;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:20px}
+        .dt-manual-facts{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 0;padding:0;list-style:none}
+        .dt-manual-facts>li{padding:3px 9px;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:16px}
+        .dt-manual-toc{display:flex;flex-wrap:wrap;gap:6px;padding:12px 24px;border-bottom:1px solid var(--dsw-alias-border-l2);background:color-mix(in srgb,var(--dsw-alias-label-primary) 3%,transparent)}
+        .dt-manual-toc>button{min-height:28px;padding:2px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;color:var(--dsw-alias-label-secondary);background:transparent;font:inherit;font-size:11px;line-height:16px;cursor:pointer}
+        .dt-manual-toc>button:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+        .dt-manual-steps{display:flex;flex-direction:column;gap:12px;margin:0;padding:0;list-style:none}
+        .dt-manual-steps>li{display:grid;grid-template-columns:30px minmax(0,1fr);align-items:start;gap:10px}
+        .dt-manual-step-num{display:grid;place-items:center;width:26px;height:26px;border-radius:999px;border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-tertiary);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;line-height:1}
+        .dt-manual-step-copy>strong{display:block;font-size:13px;line-height:20px}
+        .dt-manual-step-copy>.dt-hint{margin:4px 0 0}
+        .dt-manual-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+        .dt-manual-open{align-self:flex-start;min-height:26px;padding:2px 9px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;color:var(--dsw-alias-label-secondary);background:transparent;font:inherit;font-size:11px;line-height:16px;cursor:pointer}
+        .dt-manual-open:hover{border-color:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-label-primary)}
+        .dt-manual-subhead{margin:20px 0 4px;padding-top:16px;border-top:1px solid var(--dsw-alias-border-l2);font-size:13px;line-height:19px}
+        .dt-manual-terms{display:flex;flex-direction:column;gap:10px;margin:0}
+        .dt-manual-term{display:grid;grid-template-columns:150px minmax(0,1fr);gap:12px;align-items:start}
+        .dt-manual-term>dt{font-size:13px;line-height:19px;font-weight:600}
+        .dt-manual-term>dd{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:19px}
+        .dt-manual-body{margin:0 0 10px;color:var(--dsw-alias-label-secondary);font-size:12.5px;line-height:20px}
+        .dt-manual-table-wrap{margin-top:4px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;overflow-x:auto}
+        .dt-manual-table{width:100%;min-width:640px;border-collapse:collapse;font-size:12px;line-height:18px;text-align:left}
+        .dt-manual-table th,.dt-manual-table td{padding:8px 10px;vertical-align:top;border-bottom:1px solid var(--dsw-alias-border-l2)}
+        .dt-manual-table thead th{color:var(--dsw-alias-label-secondary);background:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent);font-weight:600;white-space:nowrap}
+        .dt-manual-table tbody th{font-weight:600;white-space:nowrap}
+        .dt-manual-table tbody td{color:var(--dsw-alias-label-tertiary)}
+        .dt-manual-table tbody tr:last-child th,.dt-manual-table tbody tr:last-child td{border-bottom:0}
+        .dt-manual-feature-groups{display:flex;flex-direction:column;gap:18px}
+        .dt-manual-feature-group>h4{margin:0 0 8px;font-size:13px;line-height:19px;font-weight:600}
+        .dt-manual-feature-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}
+        .dt-manual-feature{display:flex;flex-direction:column;gap:6px;padding:11px 12px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
+        .dt-manual-feature>h5{margin:0;font-size:13px;line-height:18px}
+        .dt-manual-feature>p{flex:1;margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
+        .dt-manual-limits{display:flex;flex-direction:column;gap:10px;margin:0;padding:0;list-style:none}
+        .dt-manual-limits>li{padding:10px 12px;border-left:2px solid var(--dsw-alias-state-warning-primary,var(--dsw-alias-border-l2));border-radius:0 8px 8px 0;background:color-mix(in srgb,var(--dsw-alias-label-primary) 3%,transparent)}
+        .dt-manual-limits>li>strong{font-size:13px;line-height:19px}
+        .dt-manual-limits>li>p{margin:3px 0 0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:19px}
+        .dt-manual-faq-list{display:flex;flex-direction:column;gap:6px}
+        .dt-manual-faq{padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px}
+        .dt-manual-faq>summary{color:var(--dsw-alias-label-primary);font-size:12.5px;line-height:18px;cursor:pointer}
+        .dt-manual-faq>p{margin:8px 0 0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:19px}
+        .dt-manual-footer{margin:16px 24px 24px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
+        .dt-manual-callout{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:12px 0;padding:12px 14px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 3%,transparent)}
+        .dt-manual-callout-copy{min-width:0}
+        .dt-manual-callout-copy>strong{font-size:13px;line-height:19px}
+        .dt-manual-callout-copy>.dt-hint{margin:2px 0 0}
+        @media(max-width:700px){.dt-manual-toc{padding:12px 16px}.dt-manual-term{grid-template-columns:1fr;gap:2px}.dt-manual-callout{align-items:flex-start;flex-direction:column}.dt-manual-footer{margin:14px 16px 18px}}
         /* IM views: task-first workspaces, aligned channels and quiet host-token surfaces. */
         .dt-im-workspace{min-width:0;min-height:100%}
         .dt-im-workspace .dt-settings-band>h3::before{display:none}

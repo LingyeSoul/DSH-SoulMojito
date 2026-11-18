@@ -113,11 +113,12 @@ DSH-SoulMojito 是一个 DSH 官方 bundle 形态的插件包（`dsh-soulmojito`
 
 ### Tavern 管理面板
 
-两栏布局（左侧导航 + 右侧内容），窄屏折叠为横向滚动栏；导航品牌块常驻不滚，分区清单独占滚动。27 个分区：
+两栏布局（左侧导航 + 右侧内容），窄屏折叠为横向滚动栏；导航品牌块常驻不滚，分区清单独占滚动。28 个分区：
 
 | 分区 | 内容 |
 |---|---|
-| 总览 | 当前角色 / 预设 / 人设 / 世界书开关与各类资产数量 |
+| 总览 | 当前角色 / 预设 / 人设 / 世界书开关与各类资产数量；首次使用的「打开使用手册」入口 |
+| 使用手册 | 五分钟上手、DSH / ST / AgentTavern 名词对齐、三种架构对照、与 SillyTavern 的逐项差异、功能地图与边界 FAQ；卡片可直接跳到对应分区 |
 | 角色卡 / 世界书 / 预设 | 导入（PNG / CHARX / JSON）、查看、编辑、搜索、设为当前、导出、删除；保存经服务端格式校验后写回 `$DSH_HOME/soulmojito/`（旧安装写回 `tavern/`） |
 | 聊天 / 群组 / 人设 / 聊天注记 / 持续指引 / 快速回复 / 正则 / 变量 | 各资产的管理面，从设置页统一归位到这里；聊天注记编辑 Author's Note 与 Summary，快速回复管理 ST 架构的 QR 集合 |
 | 小说 / 剧本 | AgentNovel 小说库；剧本资产的分块、绑定与进度 |
@@ -211,7 +212,7 @@ dsh --profile desktop
 
 ### 首次使用
 
-1. 点击侧栏底部的 SoulMojito 按钮（或「设置 → DSH-SoulMojito」）打开管理面板。
+1. 点击侧栏底部的 SoulMojito 按钮（或「设置 → DSH-SoulMojito」）打开管理面板；第一次使用先看「使用手册」分区。
 2. 在「角色卡 / 世界书 / 预设」分区导入资产；导入后可直接编辑、保存、搜索、设为当前或导出。
 3. 在设置中选择新聊天架构（单角色新聊天默认 AgentTavern/native，群聊始终 ST）。
 4. 在左侧 Tavern 分支展开角色并创建或打开聊天：AgentTavern 使用 DSH 原生 conversation，ST 使用原生 `Tavern` tab。
@@ -336,15 +337,16 @@ Node half 是七个自包含 bundle：`index.mjs` 主入口，加 `agent` / `im-
 pnpm run check
 ```
 
-当前基线（2026-11-17 实测，宿主 DSH `0.2.2-rc.1`）：
+当前基线（2026-11-18 实测，宿主 DSH `0.2.2-rc.1`）：
 
 ```
-Test Files  217 passed (217)
-Tests       3533 passed | 2 skipped (3535)
+Test Files  218（全量并行 217 通过；novel-store 所有权 PID 复用用例在 Windows 并行负载下偶发，单文件 45/45 通过）
+Tests       3540 passed | 2 skipped (3542)
 21 gates    全部 PASS
-built       v0.8.1 (d185752)
+built       v0.8.1 (7ea843f)
 ```
 
+- `tavern-store/tests/novel-store.spec.ts` 的「pid 被非 dsh 进程复用时自动接管」用例依赖子进程启动时序；全量并行时可能误判存活写者，单文件与隔离重跑均通过。该用例不经过面板/客户端代码，与手册改动无关。
 - 2 项跳过都是 `skipIf` 环境条件项：Windows 检出上的 `host-package.spec.ts` POSIX-only 用例，以及 `im-store.spec.ts` 的 0600 权限位用例（Win32 无 POSIX mode）。
 - 21 个 gates 覆盖 update-routes、package-contract、patch-reference、preset-host-rows、im-agent-inject、server-bundle、client-bundle、frontend-runtime、native-header-adapter、mvu-surface、frontend-surface、client-architecture-split、internal-workspace、agent-tavern-isolation、client-vm-mount、node-half-mount、v4-session-admission、mod-loader、im-channels、source-file-budget 与 content-lexicon。
 - 完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用隔离 runtime（`.npm-cache/dsh-runtime`，当前镜像宿主 `0.2.2-rc.1`，受限环境依次回落 `NODE_PATH` 与全局安装）。
