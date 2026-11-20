@@ -53,6 +53,9 @@ import {
   type BodySessionLike,
 } from '../src/agent-tavern/body-runtime.js'
 import { pendingByAgent, settlementEvidenceOf } from '../src/agent-tavern/body-runtime-core.js'
+import { appendHideInBridgeTurn } from '../src/agent-tavern/body-runtime-state.js'
+import type { SessionAppendInput } from '../../bind/src/index.js'
+import { SessionAppendError } from '../../bind/src/index.js'
 import { bodyFailureOf as viewBodyFailureOf, buildBodyView } from '../src/agent-tavern/body-view.js'
 import { settlingDecision, type SettlingDecision } from '../src/agent-tavern/body-settlement-decision.js'
 
@@ -72,6 +75,8 @@ interface HarnessOptions {
   restrictError: unknown
   appendRecord: boolean
   rollback: BodyWriteRollbackPort | undefined
+  batch?: boolean
+  failAppend?: (type: string, data: unknown) => boolean
 }
 
 interface Harness {
@@ -84,6 +89,7 @@ interface Harness {
   denies: string[][]
   readonly activeRestrictions: number
   warnings: string[]
+  batchSizes: number[]
   surface(): number[]
 }
 
@@ -112,9 +118,11 @@ function createHarness(options: HarnessOptions): Harness {
   let openStep: number | undefined
   let maxTurn = 0
   let nextStep = 1
+  const batchSizes: number[] = []
 
-  const append = (type: string, data: unknown, opts?: unknown): unknown => {
+  const appendOne = (type: string, data: unknown, opts?: unknown): unknown => {
     if (!isRecord(data)) throw new Error(`fake session: ${type} data must be an object`)
+    if (options.failAppend?.(type, data) === true) throw new Error(`fake session: injected ${type} failure`)
     const seq = events.length
     const metadata = isRecord(opts) ? opts : undefined
     const surfaceOp = metadata?.surfaceOp
@@ -199,13 +207,41 @@ function createHarness(options: HarnessOptions): Harness {
     return event
   }
 
+  const append = (type: string | readonly SessionAppendInput[], data?: unknown, opts?: unknown): unknown => {
+    if (typeof type === 'string') return appendOne(type, data, opts)
+    const inputs = type as readonly SessionAppendInput[]
+    batchSizes.push(inputs.length)
+    const before = {
+      events: events.length,
+      surface: [...surfaceNodes],
+      openTurn,
+      openStep,
+      maxTurn,
+      nextStep,
+    }
+    try {
+      return inputs.map(([eventType, eventData, eventOpts]) => appendOne(eventType, eventData, eventOpts))
+    } catch (error) {
+      events.length = before.events
+      surfaceNodes.splice(0, surfaceNodes.length, ...before.surface)
+      openTurn = before.openTurn
+      openStep = before.openStep
+      maxTurn = before.maxTurn
+      nextStep = before.nextStep
+      throw error
+    }
+  }
+
   const phase = { kind: options.phaseKind, lastTurn: options.lastTurn }
   const session: BodySessionLike = {
     id: `session-${harnessSequence}`,
     header: { version: 4 },
     events,
     get surface() {
-      return { nodes: [...surfaceNodes] }
+      return {
+        nodes: [...surfaceNodes],
+        ...(options.batch === true ? { prepareBatch: () => undefined } : {}),
+      }
     },
     append,
   }
@@ -255,6 +291,7 @@ function createHarness(options: HarnessOptions): Harness {
       return activeRestrictions
     },
     warnings,
+    batchSizes,
     surface: () => [...surfaceNodes],
   }
 }
@@ -268,6 +305,19 @@ function healthyHarness(): Harness {
     restrictError: undefined,
     appendRecord: true,
     rollback: undefined,
+  })
+}
+
+function batchHarness(): Harness {
+  return createHarness({
+    status: 'idle',
+    phaseKind: 'idle',
+    lastTurn: 0,
+    followupError: undefined,
+    restrictError: undefined,
+    appendRecord: true,
+    rollback: undefined,
+    batch: true,
   })
 }
 
@@ -822,6 +872,61 @@ function projectedText(message: { content: readonly { type: string; text?: unkno
 }
 
 describe('AgentTavern body runtime', () => {
+  it('commits a bridge hide turn as two native batches on rc.5 hosts', () => {
+    const harness = batchHarness()
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    appendHideInBridgeTurn(harness.deps, [anchorSeq])
+    expect(harness.batchSizes).toEqual([2, 2])
+    expect(harness.phase.lastTurn).toBe(2)
+    expect(harness.surface()).not.toContain(anchorSeq)
+    expect(harness.events.filter((event) => event.type === 'developer/message')).toHaveLength(1)
+  })
+
+  it('closes the half-open bridge turn when the sequential step/start fails', () => {
+    const harness = createHarness({
+      status: 'idle',
+      phaseKind: 'idle',
+      lastTurn: 0,
+      followupError: undefined,
+      restrictError: undefined,
+      appendRecord: true,
+      rollback: undefined,
+      failAppend: (type, data) => type === 'step/start' && isRecord(data) && data.turn === 2,
+    })
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    let thrown: unknown
+    try {
+      appendHideInBridgeTurn(harness.deps, [anchorSeq])
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(SessionAppendError)
+    expect((thrown as SessionAppendError).committed).toBe(1)
+    expect(harness.events.filter((event) => event.data.turn === 2).map((event) => event.type))
+      .toEqual(['turn/start', 'turn/end'])
+    expect(harness.phase.lastTurn).toBe(2)
+  })
+
+  it('leaves no bridge turn when the native opening batch fails', () => {
+    const harness = createHarness({
+      status: 'idle',
+      phaseKind: 'idle',
+      lastTurn: 0,
+      followupError: undefined,
+      restrictError: undefined,
+      appendRecord: true,
+      rollback: undefined,
+      batch: true,
+      failAppend: (type, data) => type === 'step/start' && isRecord(data) && data.turn === 2,
+    })
+    const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)
+    const before = harness.events.length
+    expect(() => appendHideInBridgeTurn(harness.deps, [anchorSeq])).toThrow(/injected step\/start failure/)
+    expect(harness.events).toHaveLength(before)
+    expect(harness.batchSizes).toEqual([2])
+    expect(harness.phase.lastTurn).toBe(0)
+  })
+
   it('hides the old anchor before the trigger and settles the new body', async () => {
     const harness = healthyHarness()
     const anchorSeq = seedClosedTurn(harness, 1, 'anchor-1', 'old body', true)

@@ -16183,7 +16183,7 @@ function readBuildInfo() {
 }
 function buildTimeStamp() {
   const version = true ? "0.8.1".trim() : "";
-  const commit = true ? normalizeCommit("7ea843f") : void 0;
+  const commit = true ? normalizeCommit("9ca0709") : void 0;
   return { version, commit: commit ?? "" };
 }
 function resolveTavernCommit(buildFallback) {
@@ -21087,6 +21087,50 @@ function landedPlanAppends(session, plan, baseLength) {
   return landed;
 }
 
+// packages/bind/src/session-append.ts
+var SessionAppendError = class extends Error {
+  mode;
+  committed;
+  events;
+  constructor(mode, committed, events, cause) {
+    super(
+      mode === "batch" ? `session batch append was rejected before commit: ${cause instanceof Error ? cause.message : String(cause)}` : `session append failed after ${committed} committed event(s): ${cause instanceof Error ? cause.message : String(cause)}`,
+      { cause }
+    );
+    this.name = "SessionAppendError";
+    this.mode = mode;
+    this.committed = committed;
+    this.events = events;
+  }
+};
+function committedSessionAppends(error) {
+  return error instanceof SessionAppendError ? error.committed : 0;
+}
+function supportsSessionBatchAppend(session) {
+  return typeof session?.append === "function" && typeof session.surface?.prepareBatch === "function";
+}
+function appendSessionEvents(session, inputs) {
+  const mode = supportsSessionBatchAppend(session) ? "batch" : "sequential";
+  if (inputs.length === 0) return { mode, events: [] };
+  if (mode === "batch") {
+    const batchSession = session;
+    try {
+      return { mode, events: batchSession.append(inputs) };
+    } catch (error) {
+      throw new SessionAppendError(mode, 0, [], error);
+    }
+  }
+  const events = [];
+  for (const [type, data, opts] of inputs) {
+    try {
+      events.push(session.append(type, data, opts));
+    } catch (error) {
+      throw new SessionAppendError(mode, events.length, events, error);
+    }
+  }
+  return { mode, events };
+}
+
 // packages/plugin/src/agent-tavern/mvu-compat.ts
 init_src4();
 var STATUS_PLACEHOLDER = "<StatusPlaceHolderImpl/>";
@@ -23183,17 +23227,19 @@ function beginTavernSessionTurn(agent, userText) {
   const turn = Math.max(0, ...logEvents.filter((event) => event.type === "turn/start" && typeof event.data?.turn === "number" && Number.isSafeInteger(event.data.turn)).map((event) => event.data?.turn)) + 1;
   let started = false;
   try {
-    session.append("turn/start", { turn });
-    started = true;
+    const inputs = [["turn/start", { turn }]];
     if (userText.trim() !== "") {
-      session.append("user/message", createMessage({
+      inputs.push(["user/message", createMessage({
         role: "user",
         content: [{ type: "text", text: userText }],
         source: { kind: "user" }
-      }), { surfaceOp: "append" });
+      }), { surfaceOp: "append" }]);
     }
+    appendSessionEvents(session, inputs);
+    started = true;
     return { session, turn, step: 1, stepOpen: false, turnOpen: true, logging: true, completed: false, ...agent !== null && agent !== void 0 ? { agent } : {} };
-  } catch {
+  } catch (error) {
+    started = committedSessionAppends(error) >= 1;
     if (started) {
       try {
         session.append("turn/end", {
@@ -23246,21 +23292,25 @@ function recordTavernSessionAssistant(trace, text, reasoning, provider, model, u
 }
 function finishTavernSessionTrace(trace) {
   if (!trace?.turnOpen) return;
+  const reason = trace.completed ? { kind: "completed" } : { kind: "error", error: { message: "Tavern generation failed", code: "TAVERN_GENERATION" } };
   if (trace.stepOpen) {
     try {
-      trace.session.append("step/end", { turn: trace.turn, step: trace.step });
+      appendSessionEvents(trace.session, [
+        ["step/end", { turn: trace.turn, step: trace.step }],
+        ["turn/end", { turn: trace.turn, reason }]
+      ]);
     } catch {
       trace.stepOpen = false;
       trace.turnOpen = false;
       return;
     }
     trace.stepOpen = false;
+    trace.turnOpen = false;
+    if (trace.agent !== void 0) advanceHostTurnBase(trace.agent, trace.turn);
+    return;
   }
   try {
-    trace.session.append("turn/end", {
-      turn: trace.turn,
-      reason: trace.completed ? { kind: "completed" } : { kind: "error", error: { message: "Tavern generation failed", code: "TAVERN_GENERATION" } }
-    });
+    trace.session.append("turn/end", { turn: trace.turn, reason });
     if (trace.agent !== void 0) advanceHostTurnBase(trace.agent, trace.turn);
   } catch {
   }
@@ -24188,15 +24238,31 @@ function appendHideInBridgeTurn(deps, targets) {
   let turnOpen = false;
   let stepOpen = false;
   try {
-    deps.session.append("turn/start", { turn });
-    turnOpen = true;
-    deps.session.append("step/start", { turn, step: 1 });
-    stepOpen = true;
+    try {
+      appendSessionEvents(deps.session, [
+        ["turn/start", { turn }],
+        ["step/start", { turn, step: 1 }]
+      ]);
+      turnOpen = true;
+      stepOpen = true;
+    } catch (error) {
+      const committed = committedSessionAppends(error);
+      turnOpen = committed >= 1;
+      stepOpen = committed >= 2;
+      throw error;
+    }
     for (const range of [...ranges].reverse()) appendDeveloperHide(deps, turn, 1, range);
-    deps.session.append("step/end", { turn, step: 1 });
-    stepOpen = false;
-    deps.session.append("turn/end", { turn, reason: { kind: "completed" } });
-    turnOpen = false;
+    try {
+      appendSessionEvents(deps.session, [
+        ["step/end", { turn, step: 1 }],
+        ["turn/end", { turn, reason: { kind: "completed" } }]
+      ]);
+      stepOpen = false;
+      turnOpen = false;
+    } catch (error) {
+      stepOpen = committedSessionAppends(error) < 1;
+      throw error;
+    }
   } catch (error) {
     closeBracketBestEffort(deps, turn, 1, turnOpen, stepOpen, `body hide bridge turn ${turn} failed`);
     throw error;
@@ -25157,10 +25223,19 @@ async function restoreBodyAfterFailureLocked(deps, op) {
   let turnOpen = false;
   let stepOpen = false;
   try {
-    deps.session.append("turn/start", { turn });
-    turnOpen = true;
-    deps.session.append("step/start", { turn, step: 1 });
-    stepOpen = true;
+    try {
+      appendSessionEvents(deps.session, [
+        ["turn/start", { turn }],
+        ["step/start", { turn, step: 1 }]
+      ]);
+      turnOpen = true;
+      stepOpen = true;
+    } catch (error) {
+      const committed = committedSessionAppends(error);
+      turnOpen = committed >= 1;
+      stepOpen = committed >= 2;
+      throw error;
+    }
     const currentSurface = surfaceNodeList(deps.session);
     const ranges = surfaceRanges(currentSurface, targets);
     for (const range of [...ranges].reverse()) appendDeveloperHide(deps, turn, 1, range);
@@ -25182,10 +25257,17 @@ async function restoreBodyAfterFailureLocked(deps, op) {
       // the ledger's strict parser, like `op-start`'s `rollbackPlan`.
       opId: op.opId
     });
-    deps.session.append("step/end", { turn, step: 1 });
-    stepOpen = false;
-    deps.session.append("turn/end", { turn, reason: { kind: "completed" } });
-    turnOpen = false;
+    try {
+      appendSessionEvents(deps.session, [
+        ["step/end", { turn, step: 1 }],
+        ["turn/end", { turn, reason: { kind: "completed" } }]
+      ]);
+      stepOpen = false;
+      turnOpen = false;
+    } catch (error) {
+      stepOpen = committedSessionAppends(error) < 1;
+      throw error;
+    }
   } catch (error) {
     closeBracketBestEffort(deps, turn, 1, turnOpen, stepOpen, `body restore ${op.opId} failed`);
     releaseOperationByOp(deps, op, `body restore ${op.opId}`);
@@ -66039,12 +66121,16 @@ function applyAgentTavernHistoryImport(options) {
   const logger = options.logger;
   const appendable = session;
   const baseLength = sessionEvents(session).length;
-  const appendItem = (item) => {
-    appendable.append(item.type, item.data, item.surfaceOp === void 0 ? void 0 : { surfaceOp: item.surfaceOp });
+  const appendItems = (items) => {
+    appendSessionEvents(appendable, items.map((item) => [
+      item.type,
+      item.data,
+      item.surfaceOp === void 0 ? void 0 : { surfaceOp: item.surfaceOp }
+    ]));
   };
   let attemptError;
   try {
-    for (const item of plan) appendItem(item);
+    appendItems(plan);
   } catch (error) {
     attemptError = error;
   }
@@ -66053,7 +66139,7 @@ function applyAgentTavernHistoryImport(options) {
   let retryRefused = false;
   if (landed < total && attemptError === void 0 && sessionEvents(session).length === baseLength + landed) {
     try {
-      for (const item of plan.slice(landed)) appendItem(item);
+      appendItems(plan.slice(landed));
     } catch (error) {
       attemptError = error;
     }

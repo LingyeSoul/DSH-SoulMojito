@@ -1,4 +1,13 @@
-import { confirmSessionAppend, hostSessionFormatVersion, readSessionEvents, sessionEvents } from '../../../bind/src/index.js'
+import {
+  appendSessionEvents,
+  committedSessionAppends,
+  confirmSessionAppend,
+  hostSessionFormatVersion,
+  readSessionEvents,
+  sessionEvents,
+  type SessionAppendInput,
+  type SessionAppendLike,
+} from '../../../bind/src/index.js'
 import type { HostSessionLog } from '../../../bind/src/index.js'
 import { createMessage } from '../message.js'
 import { requestedArchitecture, requestedContextMode } from './binding.js'
@@ -186,18 +195,22 @@ export function beginTavernSessionTurn(agent: TraceAgentLike | null | undefined,
     .map((event) => event.data?.turn as number)) + 1
   let started = false
   try {
-    session.append('turn/start', { turn })
-    started = true
+    const inputs: SessionAppendInput[] = [['turn/start', { turn }]]
     if (userText.trim() !== '') {
-      session.append('user/message', createMessage({
+      inputs.push(['user/message', createMessage({
         role: 'user',
         content: [{ type: 'text', text: userText }],
         source: { kind: 'user' },
-      }), { surfaceOp: 'append' })
+      }), { surfaceOp: 'append' }])
     }
+    appendSessionEvents(session as SessionAppendLike, inputs)
+    started = true
     // agent 随 trace 走：ST 的 turn 闭合时要用它推进 live loop 轮次基线。
     return { session, turn, step: 1, stepOpen: false, turnOpen: true, logging: true, completed: false, ...(agent !== null && agent !== undefined ? { agent } : {}) }
-  } catch {
+  } catch (error) {
+    // Native batch failures commit nothing; on an old host turn/start may already
+    // be in the log, so only then close the half-opened turn.
+    started = committedSessionAppends(error) >= 1
     if (started) {
       try {
         session.append('turn/end', {
@@ -260,30 +273,33 @@ export function recordTavernSessionAssistant(
 
 export function finishTavernSessionTrace(trace: TavernSessionTrace | null | undefined): void {
   if (!trace?.turnOpen) return
+  const reason = trace.completed
+    ? { kind: 'completed' as const }
+    : { kind: 'error' as const, error: { message: 'Tavern generation failed', code: 'TAVERN_GENERATION' } }
   if (trace.stepOpen) {
+    // Close the step and turn together: a native batch commits both or neither,
+    // while the sequential fallback may commit step/end before turn/end fails —
+    // both outcomes stop the trace without advancing the live turn base.
     try {
-      trace.session.append('step/end', { turn: trace.turn, step: trace.step })
+      appendSessionEvents(trace.session as SessionAppendLike, [
+        ['step/end', { turn: trace.turn, step: trace.step }],
+        ['turn/end', { turn: trace.turn, reason }],
+      ])
     } catch {
-      // step/end 落不下去意味着 open step 仍留在日志里，其后任何 turn/end 都
-      // 会被 v4 关系校验拒绝（"turn/end does not match the open turn with no
-      // open step"）；「未关闭的尾巴」本身合法——宁可留下未关闭的 turn，也
-      // 不追加注定拒载的事件。立即终止 trace。
       trace.stepOpen = false
       trace.turnOpen = false
       return
     }
     trace.stepOpen = false
-  }
-  try {
-    trace.session.append('turn/end', {
-      turn: trace.turn,
-      reason: trace.completed
-        ? { kind: 'completed' }
-        : { kind: 'error', error: { message: 'Tavern generation failed', code: 'TAVERN_GENERATION' } },
-    })
+    trace.turnOpen = false
     // ST trace 的 turn 已闭合：推进 live loop 轮次基线。宿主 AgentLoop 的
     // phase.lastTurn 只在构造时快照、不重扫磁盘——ST 与原生 loop 混用的会话里
     // 不推进则 live 首轮会重复本轮号，v4 关系准入直接判会话损坏。
+    if (trace.agent !== undefined) advanceHostTurnBase(trace.agent, trace.turn)
+    return
+  }
+  try {
+    trace.session.append('turn/end', { turn: trace.turn, reason })
     if (trace.agent !== undefined) advanceHostTurnBase(trace.agent, trace.turn)
   } catch {
   }

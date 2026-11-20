@@ -8,6 +8,8 @@ interface FakeEvent {
   opts?: unknown
 }
 
+type FakeBatchInput = readonly [type: string, data: unknown, opts?: unknown]
+
 interface FakeAgent {
   id: string
   phase?: { kind: string; lastTurn: number }
@@ -72,6 +74,34 @@ describe('applyAgentTavernHistoryImport', () => {
       'turn/start', 'step/start', 'assistant/message', 'step/end', 'turn/end',
     ])
     expect(agent.session?.events?.[2]?.opts).toEqual({ surfaceOp: 'append' })
+    expect(agent.phase?.lastTurn).toBe(1)
+  })
+
+  it('submits the whole plan as one native batch on rc.5 hosts', () => {
+    const agent = fakeAgent('session-batch')
+    const events: FakeEvent[] = []
+    const batchCalls: Array<readonly FakeBatchInput[]> = []
+    agent.session = {
+      events,
+      surface: { prepareBatch: () => undefined },
+      append: (input: string | readonly FakeBatchInput[], data?: unknown, opts?: unknown) => {
+        if (!Array.isArray(input)) throw new Error('native batch host received a single append')
+        batchCalls.push(input as readonly FakeBatchInput[])
+        for (const [type, eventData, eventOpts] of input as readonly FakeBatchInput[]) {
+          events.push(eventOpts === undefined ? { type, data: eventData } : { type, data: eventData, opts: eventOpts })
+        }
+      },
+    } as unknown as NonNullable<FakeAgent['session']>
+    const outcome = applyAgentTavernHistoryImport({ agent, plan: plan() })
+    expect(outcome).toEqual({ status: 'applied', landed: 5, total: 5 })
+    expect(batchCalls).toHaveLength(1)
+    expect(batchCalls[0]?.map(([type]) => type)).toEqual([
+      'turn/start', 'step/start', 'assistant/message', 'step/end', 'turn/end',
+    ])
+    expect(batchCalls[0]?.[2]?.[2]).toEqual({ surfaceOp: 'append' })
+    expect(typesOf(agent)).toEqual([
+      'turn/start', 'step/start', 'assistant/message', 'step/end', 'turn/end',
+    ])
     expect(agent.phase?.lastTurn).toBe(1)
   })
 

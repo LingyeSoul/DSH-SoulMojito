@@ -7,7 +7,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { hostPluginMessageSource, hostSessionFormatVersion } from '../../../bind/src/index.js'
+import { appendSessionEvents, committedSessionAppends, hostPluginMessageSource, hostSessionFormatVersion } from '../../../bind/src/index.js'
 import { advanceHostTurnBase, lastLoggedTurn } from '../session/trace.js'
 import {
   effectiveBodyText,
@@ -260,15 +260,31 @@ export function appendHideInBridgeTurn(deps: BodyRuntimeDeps, targets: ReadonlyS
   let turnOpen = false
   let stepOpen = false
   try {
-    deps.session.append('turn/start', { turn })
-    turnOpen = true
-    deps.session.append('step/start', { turn, step: 1 })
-    stepOpen = true
+    try {
+      appendSessionEvents(deps.session, [
+        ['turn/start', { turn }],
+        ['step/start', { turn, step: 1 }],
+      ])
+      turnOpen = true
+      stepOpen = true
+    } catch (error) {
+      const committed = committedSessionAppends(error)
+      turnOpen = committed >= 1
+      stepOpen = committed >= 2
+      throw error
+    }
     for (const range of [...ranges].reverse()) appendDeveloperHide(deps, turn, 1, range)
-    deps.session.append('step/end', { turn, step: 1 })
-    stepOpen = false
-    deps.session.append('turn/end', { turn, reason: { kind: 'completed' } })
-    turnOpen = false
+    try {
+      appendSessionEvents(deps.session, [
+        ['step/end', { turn, step: 1 }],
+        ['turn/end', { turn, reason: { kind: 'completed' } }],
+      ])
+      stepOpen = false
+      turnOpen = false
+    } catch (error) {
+      stepOpen = committedSessionAppends(error) < 1
+      throw error
+    }
   } catch (error) {
     closeBracketBestEffort(deps, turn, 1, turnOpen, stepOpen, `body hide bridge turn ${turn} failed`)
     throw error

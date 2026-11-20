@@ -97,6 +97,8 @@
 - [`2026-10-11-confirmable-session-writes.md`](../decisions/2026-10-11-confirmable-session-writes.md) — D-2 Confirmable Session Writes：宿主侧「必须成立」写入的读回验证
 - [`2026-10-18-dsh-021-rc2-compat.md`](../decisions/2026-10-18-dsh-021-rc2-compat.md) — DSH 0.2.1-rc.2 深度适配：bind 全 seam 审计、子代理双 API、无工具推理 preset、client 原子表与 JSONL 持久化装载
 - [`2026-11-10-dsh-022-rc1-verification-runtime.md`](../decisions/2026-11-10-dsh-022-rc1-verification-runtime.md) — 验证 runtime 升级到 DSH 0.2.2-rc.1：ToolsService/ToolExecutor 重构审计、全量基线复核与版本口径同步
+- [`2026-11-20-dsh-022-rc5-verification-runtime.md`](../decisions/2026-11-20-dsh-022-rc5-verification-runtime.md) — 验证 runtime 升级到 DSH 0.2.2-rc.5：宿主 API seam 审计、全量基线复核与空洞测试修复
+- [`2026-11-20-batch-session-append.md`](../decisions/2026-11-20-batch-session-append.md) — 采用 rc.5 批量 `Session.append(inputs[])`：bind 能力探测、历史导入原子提交与老宿主逐条回落
 
 ### AgentTavern 与预设投影
 

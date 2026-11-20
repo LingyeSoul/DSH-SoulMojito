@@ -15,7 +15,7 @@
  * 历史仍留在 JSONL 可重放。
  */
 
-import { landedPlanAppends, sessionEvents } from '../../../bind/src/index.js'
+import { appendSessionEvents, landedPlanAppends, sessionEvents, type SessionAppendInput, type SessionAppendLike } from '../../../bind/src/index.js'
 import { lastImportedTurn, type SessionImportAppend } from '../agent-tavern/projector.js'
 import {
   advanceHostTurnBase,
@@ -79,14 +79,18 @@ export function applyAgentTavernHistoryImport(options: ApplyHistoryImportOptions
   // 重试。两次尝试后仍不齐：一行 error 如实报告两次结果，兜底关闭半个
   // 导入，激活继续（既有导入失败降级：历史留在 JSONL 可重放，绑定不阻断）。
   // 轮次基线只推进到读回确认的轮号——以日志为准，不以计划为准。
-  const appendable = session as TraceSession & { append(type: string, data: unknown, opts?: unknown): unknown }
+  const appendable = session as TraceSession & SessionAppendLike
   const baseLength = sessionEvents(session).length
-  const appendItem = (item: SessionImportAppend) => {
-    appendable.append(item.type, item.data, item.surfaceOp === undefined ? undefined : { surfaceOp: item.surfaceOp })
+  const appendItems = (items: readonly SessionImportAppend[]) => {
+    appendSessionEvents(appendable, items.map((item): SessionAppendInput => [
+      item.type,
+      item.data,
+      item.surfaceOp === undefined ? undefined : { surfaceOp: item.surfaceOp },
+    ]))
   }
   let attemptError: unknown
   try {
-    for (const item of plan) appendItem(item)
+    appendItems(plan)
   } catch (error) {
     attemptError = error
   }
@@ -96,7 +100,7 @@ export function applyAgentTavernHistoryImport(options: ApplyHistoryImportOptions
   if (landed < total && attemptError === undefined
     && sessionEvents(session).length === baseLength + landed) {
     try {
-      for (const item of plan.slice(landed)) appendItem(item)
+      appendItems(plan.slice(landed))
     } catch (error) {
       attemptError = error
     }

@@ -90,7 +90,7 @@ export interface BodySessionLike {
   events?: readonly unknown[]
   log?: readonly unknown[]
   snapshotEvents?(...args: unknown[]): unknown
-  surface?: { nodes?: readonly unknown[] }
+  surface?: { nodes?: readonly unknown[]; prepareBatch?: unknown }
   /** Standard host events (turn/step/messages) only; body records never use this. */
   append(type: string, data: unknown, opts?: unknown): unknown
 }

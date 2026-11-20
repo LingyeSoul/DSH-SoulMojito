@@ -36,6 +36,7 @@ const PRE_SPLIT_DEFAULT_STATE_KEYS = [
   'agentTavernAllowGlobalWrites',
   'agentTavernPreloadAssets',
   'cardScriptsAutoRun',
+  'cardWorkbenchNativeAgentMode',
   'cardWorkbenchPresetEnabled',
   'characterFavorites',
   'characterVariables',
@@ -143,7 +144,7 @@ async function mtimeOf(file: string): Promise<number> {
 }
 
 describe('state.json 切片布局', () => {
-  it('存量大 state.json：读出的正则条目、归属与前端存储键与文件完全一致', withStore(async (store, dir) => {
+  it('存量大 state.json：读出的正则条目、归属与前端存储键与文件完全一致', () => withStore(async (store, dir) => {
     await writeFile(stateFile(dir), JSON.stringify(legacyState()))
 
     const state = await store.getState()
@@ -164,7 +165,7 @@ describe('state.json 切片布局', () => {
     })
   }))
 
-  it('存量单文件：getState 只读不写——字节、mtime 不变，切片文件一个都不建', withStore(async (store, dir) => {
+  it('存量单文件：getState 只读不写——字节、mtime 不变，切片文件一个都不建', () => withStore(async (store, dir) => {
     await writeFile(stateFile(dir), JSON.stringify(legacyState()))
     const before = await readFile(stateFile(dir))
     await pinMtime(stateFile(dir))
@@ -181,7 +182,7 @@ describe('state.json 切片布局', () => {
     expect(await exists(frontendFile(dir))).toBe(false)
   }))
 
-  it('首次写触发迁移：切片出现、state.json 去大表，之后的读不再改盘', withStore(async (store, dir) => {
+  it('首次写触发迁移：切片出现、state.json 去大表，之后的读不再改盘', () => withStore(async (store, dir) => {
     await writeFile(stateFile(dir), JSON.stringify(legacyState()))
 
     // 迁移发生在第一次写盘（读路径不迁移）。
@@ -211,7 +212,7 @@ describe('state.json 切片布局', () => {
     expect(await mtimeOf(frontendFile(dir))).toBe(PINNED_MTIME.getTime())
   }))
 
-  it('迁移幂等：同一份值再写一次，三份文件的字节逐字节一致', withStore(async (store, dir) => {
+  it('迁移幂等：同一份值再写一次，三份文件的字节逐字节一致', () => withStore(async (store, dir) => {
     await writeFile(stateFile(dir), JSON.stringify(legacyState()))
     await store.updateState((state) => ({ scriptGlobals: { ...state.scriptGlobals, mood: 'busy' } }))
     const first = {
@@ -235,7 +236,7 @@ describe('state.json 切片布局', () => {
     expect(Object.keys(state.frontendStorage ?? {})).toHaveLength(STORAGE_CHARACTER_COUNT)
   }))
 
-  it('只改轻量键：state.json 重写，两个切片文件的 mtime 不变', withStore(async (store, dir) => {
+  it('只改轻量键：state.json 重写，两个切片文件的 mtime 不变', () => withStore(async (store, dir) => {
     await writeFile(stateFile(dir), JSON.stringify(legacyState()))
     // 先迁移（迁移本身必须发生在写路径上），再钉 mtime 观察后续轻量写。
     await store.updateState(() => ({}))
@@ -253,7 +254,7 @@ describe('state.json 切片布局', () => {
     expect((await readJson(regexFile(dir)))['regexScripts']).toHaveLength(SCRIPT_COUNT)
   }))
 
-  it('只改 regexScripts：前端切片不被碰，state.json 重写且仍不含大表', withStore(async (store, dir) => {
+  it('只改 regexScripts：前端切片不被碰，state.json 重写且仍不含大表', () => withStore(async (store, dir) => {
     await writeFile(stateFile(dir), JSON.stringify(legacyState()))
     await store.updateState(() => ({}))
     await pinMtime(stateFile(dir))
@@ -273,7 +274,7 @@ describe('state.json 切片布局', () => {
     expect((await store.getState()).regexScripts).toHaveLength(1)
   }))
 
-  it('外部手改切片文件后，下一次 getState 读到新值（指纹失效）', withStore(async (store, dir) => {
+  it('外部手改切片文件后，下一次 getState 读到新值（指纹失效）', () => withStore(async (store, dir) => {
     await writeFile(stateFile(dir), JSON.stringify(legacyState()))
     expect((await store.getState()).regexScripts).toHaveLength(SCRIPT_COUNT)
     expect((await store.getState()).regexScripts).toHaveLength(SCRIPT_COUNT)
@@ -286,7 +287,7 @@ describe('state.json 切片布局', () => {
     expect(reread.regexScripts.map((script) => script.scriptName)).toEqual(['Legacy 0', 'Legacy 1', 'Legacy 2'])
   }))
 
-  it('契约：切片存在时 state.json 里的同名大表被忽略（升级窗口，不合并）', withStore(async (store, dir) => {
+  it('契约：切片存在时 state.json 里的同名大表被忽略（升级窗口，不合并）', () => withStore(async (store, dir) => {
     // 旧版本进程写回的大表与新布局的切片同时存在：字节上与「迁移崩在切片已写、
     // state.json 未写」不可区分，所以规则固定为切片优先，绝不合并。
     await writeFile(stateFile(dir), JSON.stringify(legacyState()))
@@ -313,7 +314,7 @@ describe('state.json 切片布局', () => {
     expect((await store.getState()).regexScripts).toHaveLength(3)
   }))
 
-  it('切片写失败：拒绝并抛出，state.json 保持旧内容（不出现"两边都没有"）', withStore(async (store, dir) => {
+  it('切片写失败：拒绝并抛出，state.json 保持旧内容（不出现"两边都没有"）', () => withStore(async (store, dir) => {
     await store.updateState(() => ({
       regexScripts: legacyScripts(2),
       frontendStorage: legacyFrontendStorage(1),
@@ -337,7 +338,7 @@ describe('state.json 切片布局', () => {
     expect((await store.getState()).regexScripts).toHaveLength(2)
   }))
 
-  it('写路径遇到存量单文件：先落切片再重写 state.json，正则一条不丢', withStore(async (store, dir) => {
+  it('写路径遇到存量单文件：先落切片再重写 state.json，正则一条不丢', () => withStore(async (store, dir) => {
     await writeFile(stateFile(dir), JSON.stringify(legacyState()))
 
     // 不先 getState：直接走写路径（写路径同样必须完成迁移）。
@@ -354,7 +355,7 @@ describe('state.json 切片布局', () => {
     expect(state.scriptGlobals).toEqual({ mood: 'busy' })
   }))
 
-  it('迁移崩在切片已写、state.json 未重写时：读出新值且不写盘，下一次写收尾', withStore(async (store, dir) => {
+  it('迁移崩在切片已写、state.json 未重写时：读出新值且不写盘，下一次写收尾', () => withStore(async (store, dir) => {
     const legacy = legacyState()
     await writeFile(stateFile(dir), JSON.stringify(legacy))
     // 崩在中间留下的盘面：切片已按同一份值落盘，state.json 仍带大表。
@@ -389,7 +390,7 @@ describe('state.json 切片布局', () => {
     expect((await readJson(regexFile(dir)))['regexScripts']).toHaveLength(SCRIPT_COUNT)
   }))
 
-  it('只读盘：getState 不抛错、不尝试写盘；写路径仍然抛出且盘面不变', withStore(async (store, dir) => {
+  it('只读盘：getState 不抛错、不尝试写盘；写路径仍然抛出且盘面不变', () => withStore(async (store, dir) => {
     await writeFile(stateFile(dir), JSON.stringify(legacyState()))
     const before = await readFile(stateFile(dir))
     await pinMtime(stateFile(dir))
@@ -426,7 +427,7 @@ describe('state.json 切片布局', () => {
     }
   }))
 
-  it('盘上没有 state.json：返回值的键集合与改动前 DEFAULT_STATE 一致', withStore(async (store) => {
+  it('盘上没有 state.json：返回值的键集合与改动前 DEFAULT_STATE 一致', () => withStore(async (store) => {
     const state = await store.getState()
     expect(Object.keys(state).sort()).toEqual(PRE_SPLIT_DEFAULT_STATE_KEYS)
     // 值为 undefined 的 own key 会通过 Object.keys 泄漏出对外形状。
@@ -439,7 +440,7 @@ describe('state.json 切片布局', () => {
     expect(state).toBe(await store.getState())
   }))
 
-  it('只有切片没有 state.json（首写崩在提交前）：读是全新安装，写会用提交值覆盖孤儿切片', withStore(async (store, dir) => {
+  it('只有切片没有 state.json（首写崩在提交前）：读是全新安装，写会用提交值覆盖孤儿切片', () => withStore(async (store, dir) => {
     await writeFile(regexFile(dir), JSON.stringify({
       version: 1,
       regexScripts: legacyScripts(3),

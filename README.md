@@ -5,7 +5,7 @@
 <p align="center">把 DSH（deepseek-harness）扩展成兼容 SillyTavern 生态的原生角色扮演工作区。</p>
 
 <p align="center">
-  <strong>v0.8.1</strong> · 面向 DSH <code>0.2.2-rc.1</code>（旧版本宿主随缘） · GPL-3.0
+  <strong>v0.8.1</strong> · 面向 DSH <code>0.2.2-rc.5</code>（旧版本宿主随缘） · GPL-3.0
 </p>
 
 ## 这是什么
@@ -337,19 +337,19 @@ Node half 是七个自包含 bundle：`index.mjs` 主入口，加 `agent` / `im-
 pnpm run check
 ```
 
-当前基线（2026-11-18 实测，宿主 DSH `0.2.2-rc.1`）：
+当前基线（2026-11-20 实测，宿主 DSH `0.2.2-rc.5`）：
 
 ```
-Test Files  218（全量并行 217 通过；novel-store 所有权 PID 复用用例在 Windows 并行负载下偶发，单文件 45/45 通过）
-Tests       3540 passed | 2 skipped (3542)
+Test Files  220（全量并行 220 通过；novel-store 所有权 PID 复用用例在 Windows 并行负载下偶发，单文件 45/45 通过）
+Tests       3560 passed | 2 skipped (3562)
 21 gates    全部 PASS
-built       v0.8.1 (7ea843f)
+built       v0.8.1 (9ca0709)
 ```
 
 - `tavern-store/tests/novel-store.spec.ts` 的「pid 被非 dsh 进程复用时自动接管」用例依赖子进程启动时序；全量并行时可能误判存活写者，单文件与隔离重跑均通过。该用例不经过面板/客户端代码，与手册改动无关。
 - 2 项跳过都是 `skipIf` 环境条件项：Windows 检出上的 `host-package.spec.ts` POSIX-only 用例，以及 `im-store.spec.ts` 的 0600 权限位用例（Win32 无 POSIX mode）。
 - 21 个 gates 覆盖 update-routes、package-contract、patch-reference、preset-host-rows、im-agent-inject、server-bundle、client-bundle、frontend-runtime、native-header-adapter、mvu-surface、frontend-surface、client-architecture-split、internal-workspace、agent-tavern-isolation、client-vm-mount、node-half-mount、v4-session-admission、mod-loader、im-channels、source-file-budget 与 content-lexicon。
-- 完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用隔离 runtime（`.npm-cache/dsh-runtime`，当前镜像宿主 `0.2.2-rc.1`，受限环境依次回落 `NODE_PATH` 与全局安装）。
+- 完整 `pnpm run check` 需要可解析 DSH 官方运行时；本仓库验证使用隔离 runtime（`.npm-cache/dsh-runtime`，当前镜像宿主 `0.2.2-rc.5`，受限环境依次回落 `NODE_PATH` 与全局安装）。
 - 会话事件写入的宿主契约（V4 关系准入、assistant 结算 `usage`/`stream`）由 `packages/plugin/tests/agent-tavern-session-admission.spec.ts` 直接对真实宿主代码回归。
 - 示例 Mod 的 engines 与随仓库发布的宿主版本由防漂移守卫锁定（先例：[`decisions/2026-10-12-story-clock-engines-drift.md`](decisions/2026-10-12-story-clock-engines-drift.md)）；面板布局、品牌 logo 与内置游戏规则面同样各有 spec + gate marker 锁定。
 
